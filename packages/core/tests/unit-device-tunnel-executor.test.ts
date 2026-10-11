@@ -2,8 +2,29 @@ import { describe, expect, test } from 'bun:test';
 import { createDeviceTunnelExecutor, type DeviceTransport } from '../src/execution/device-tunnel-executor';
 import type { DeviceStatus } from '../src/execution/device-status';
 import type { JsonValue } from '../src/utils/json';
-import type { ApprovalGrant } from '../src/safety/approval-gate';
 import { DEVICE_ERRORS, deviceFailure } from '../src/execution/device-protocol';
+import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import { renderThrownChain } from '../src/obs/index';
+
+/** The machine's files as the agent's file tools reach them under `/pc`: the executor's own view, consent applied. */
+function filesOf(provider: ReturnType<typeof createDeviceTunnelExecutor>) {
+  const { files } = provider;
+
+  if (files === undefined) throw new Error('the device executor has no files');
+
+  return files;
+}
+
+/** What a file call that failed says, or null when it did not fail. */
+async function failureOf(call: Promise<unknown>): Promise<string | null> {
+  try {
+    await call;
+
+    return null;
+  } catch (cause) {
+    return renderThrownChain({ cause });
+  }
+}
 
 function staticTransport(status: DeviceStatus, rpc: DeviceTransport['rpc']): DeviceTransport {
   return { status: () => status, refreshStatus: async () => status, rpc };
@@ -102,20 +123,20 @@ describe('createDeviceTunnelExecutor', () => {
       scope: async () => 'root',
     });
 
-    const read = await provider.tools.readFile.execute('/etc/passwd');
-    const write = await provider.tools.writeFile.execute('/tmp/out', 'x');
+    const files = filesOf(provider);
+    const read = await failureOf(readText(files, '/etc/passwd'));
+    const write = await failureOf(writeText(files, '/tmp/out', 'x'));
     const exists = await provider.tools.exists.execute('/root/.ssh/id_ed25519');
 
-    for (const answer of [read, write, exists]) {
-      expect(answer).toMatchObject({ error: expect.stringContaining('outside the consented device directory') });
-    }
+    for (const answer of [read, write]) expect(answer).toContain('outside the consented device directory');
+    expect(exists).toMatchObject({ error: expect.stringContaining('outside the consented device directory') });
 
     // Above the consent, a listing holds only the next step toward it, answered without the machine.
     expect(await provider.tools.readdir.execute('/')).toEqual(['home']);
     expect(await provider.tools.readdir.execute('/home/dev')).toEqual(['project']);
 
     expect(t.calls).toEqual([]);
-    expect(await provider.tools.readFile.execute('/home/dev/project/readme.md')).toBe('contents');
+    expect(await readText(files, '/home/dev/project/readme.md')).toBe('contents');
     expect(t.calls).toEqual([{
       method: 'readRange',
       params: ['/home/dev/project/readme.md', 0, 8 * 1024 * 1024, { root: '/home/dev/project' }],
@@ -135,14 +156,16 @@ describe('createDeviceTunnelExecutor', () => {
       scope: async () => 'root',
     });
 
-    // Every file tool refuses without asking the machine anything, above all no `exec`.
+    // Every file call refuses without asking the machine anything, above all no `exec`.
     for (const answer of [
-      await provider.tools.readFile.execute('/home/dev/notes.md'),
       await provider.tools.readdir.execute('/home/dev'),
       await provider.tools.exists.execute('/home/dev/.kinu/config.json'),
-      await provider.tools.writeFile.execute('/home/dev/x', 'y'),
     ]) {
       expect(answer).toMatchObject({ error: expect.stringContaining('reported no consented directory') });
+    }
+
+    for (const answer of [await failureOf(readText(filesOf(provider), '/home/dev/notes.md')), await failureOf(writeText(filesOf(provider), '/home/dev/x', 'y'))]) {
+      expect(answer).toContain('reported no consented directory');
     }
 
     expect(t.calls).toEqual([]);
@@ -219,15 +242,12 @@ describe('createDeviceTunnelExecutor', () => {
       throw new Error(`unexpected method ${method}`);
     });
 
-    // The owner lets the agent replace files there; the write still asks the daemon whether it replaces one.
-    const provider = createDeviceTunnelExecutor(t, undefined, {
-      mode: () => 'strict', granted: (grant: ApprovalGrant) => grant.rule === 'overwrite-user-files',
-    });
+    const provider = createDeviceTunnelExecutor(t);
 
     const path = '/tmp/a; echo PWNED';
 
-    await provider.tools.readFile.execute(path);
-    await provider.tools.writeFile.execute(path, 'hello');
+    await readText(filesOf(provider), path);
+    await writeText(filesOf(provider), path, 'hello');
     await provider.tools.readdir.execute(path);
     await provider.tools.exists.execute(path);
 
@@ -333,11 +353,11 @@ describe('createDeviceTunnelExecutor', () => {
     });
 
     const fromHub = await createDeviceTunnelExecutor(hubRejects).tools.exec.execute('ls');
-    const fromTunnel = await createDeviceTunnelExecutor(tunnelDropped).tools.readFile.execute('/tmp/a');
+    const fromTunnel = await failureOf(readText(filesOf(createDeviceTunnelExecutor(tunnelDropped)), '/tmp/a'));
 
     // `unavailable` classifies an unattached device as platform, not a tool failure.
     expect(fromHub).toMatchObject({ reason: 'unavailable', error: expect.stringContaining('kinu connect') });
-    expect(fromTunnel).toMatchObject({ reason: 'unavailable', error: expect.stringContaining('kinu connect') });
+    expect(fromTunnel).toContain('kinu connect');
     await expect(createDeviceTunnelExecutor(hubRejects).connect()).rejects.toThrow('kinu connect');
   });
 
@@ -384,8 +404,8 @@ describe('createDeviceTunnelExecutor', () => {
       async () => ({ encoding: 'base64', content: 42 }),
     );
 
-    const answer = await createDeviceTunnelExecutor(t).tools.readFile.execute('/tmp/a');
-    expect(answer).not.toBe('');
-    expect(answer).toMatchObject({ reason: 'io' });
+    const answer = await failureOf(readText(filesOf(createDeviceTunnelExecutor(t)), '/tmp/a'));
+
+    expect(answer).not.toBeNull();
   });
 });

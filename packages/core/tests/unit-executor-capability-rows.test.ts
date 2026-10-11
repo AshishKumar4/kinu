@@ -131,7 +131,7 @@ describe('tunneled device capability row', () => {
 
     // Nothing in `device` can keep a process alive between turns or signal one.
     expect(Object.keys(provider.tools).sort())
-      .toEqual(['exec', 'exists', 'readFile', 'readdir', 'writeFile']);
+      .toEqual(['exec', 'exists', 'readdir']);
     expect(line).not.toContain('process_long');
     expect(line).not.toContain('process_signal');
   });

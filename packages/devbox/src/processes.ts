@@ -19,6 +19,14 @@ timeout 10 sh -c 'until [ -s ${CA_PATH} ]; do sleep 0.1; done' && cat ${SYSTEM_B
 
 const ROOT = '/var/tmp/devbox/processes';
 
+const KERNEL_READ = ['/bin/sh', '-c', 'cat /proc/sys/kernel/random/boot_id', 'devbox-incarnation-read'] as const;
+
+// A command queued before stop may be delivered to a replacement kernel. Bind the actual argv, not
+// merely its post-call result, so private file mutations, RUN, UNLAUNCH and KILL all share this fence.
+const IN_KERNEL = `expected=$1; shift
+[ "$(cat /proc/sys/kernel/random/boot_id)" = "$expected" ] || exit 125
+exec "$@"`;
+
 const IdSchema = v.pipe(v.string(), v.regex(/^[a-zA-Z0-9_-]+$/));
 
 const RecordSchema = v.object({ id: IdSchema, command: v.string(), cwd: v.string() });
@@ -30,6 +38,16 @@ export interface ProcessRecord {
   readonly pid: number | undefined;
   readonly status: 'starting' | 'running' | 'completed' | 'failed';
   readonly exitCode: number | undefined;
+}
+
+export function isProcessLive(status: string): boolean {
+  return status === 'starting' || status === 'running';
+}
+
+/** The claim remains held while native I/O settles, but expiry revokes permission to issue a later mutation. */
+function whileCurrent<A>(current: (() => boolean) | undefined, mutate: () => Effect.Effect<A, DevboxError>): Effect.Effect<A, DevboxError> {
+  return current === undefined || current() ? mutate()
+    : Effect.fail(new DevboxError('cancelled', 'process launch reservation was superseded'));
 }
 
 // File-backed identities survive a DO eviction; a process group carries signals. A launch whose exec
@@ -95,15 +113,44 @@ const directory = (id: string) => attemptSync('invalid-input', () => `${ROOT}/${
 
 export class Processes {
   readonly #files: Files;
-  constructor(readonly container: Pick<Container, 'exec' | 'running'>) {
+  constructor(readonly container: Pick<Container, 'exec' | 'running'>, readonly kernel?: string) {
     this.#files = new Files(container);
   }
 
-  start(command: string, options: { readonly cwd?: string; readonly processId: string }): Promise<ProcessRecord> {
+  incarnation(): Promise<string> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const read = yield* attempt('process', () => this.container.exec([...KERNEL_READ]));
+      const output = yield* attempt('process', () => read.output());
+      const kernel = new TextDecoder().decode(output.stdout).trim();
+
+      if (output.exitCode !== 0 || kernel === '') return yield* Effect.fail(new DevboxError('process', 'native kernel identity could not be read'));
+
+      return kernel;
+    }));
+  }
+
+  inIncarnation(kernel: string): Processes {
+    const native = this.container;
+
+    return new Processes({
+      get running() { return native.running; },
+      exec: (argv, options) => native.exec([
+        '/bin/sh', '-c', IN_KERNEL, 'devbox-incarnation', kernel, ...argv,
+      ], options),
+    }, kernel);
+  }
+
+  start(command: string, options: { readonly cwd?: string; readonly processId: string; readonly current?: () => boolean }): Promise<ProcessRecord> {
+    if (this.kernel === undefined) return settle(attempt('process', async () => {
+      const kernel = await this.incarnation();
+
+      return this.inIncarnation(kernel).start(command, options);
+    }));
+
     return settle(Effect.gen({ self: this }, function* () {
       const dir = yield* directory(options.processId);
-      yield* attempt('file', () => this.#files.mkdir(ROOT, { recursive: true }));
-      const made = yield* Effect.result(attempt('file', () => this.#files.mkdir(dir)));
+      yield* whileCurrent(options.current, () => attempt('file', () => this.#files.mkdir(ROOT, { recursive: true })));
+      const made = yield* Effect.result(whileCurrent(options.current, () => attempt('file', () => this.#files.mkdir(dir))));
 
       if (Result.isFailure(made)) {
         const cause = made.failure.cause;
@@ -114,21 +161,21 @@ export class Processes {
         if (held === undefined) return yield* Effect.fail(made.failure);
 
         // A launch with no pid yet is live only if its wrapper claimed it.
-        if (held.status === 'running' || (held.status === 'starting' && !(yield* this.#unlaunched(dir)))) return held;
-        yield* attempt('file', () => this.#files.remove(dir, { recursive: true }));
-        yield* attempt('file', () => this.#files.mkdir(dir));
+        if (held.status === 'running' || (held.status === 'starting' && !(yield* this.#unlaunched(dir, options.current)))) return held;
+        yield* whileCurrent(options.current, () => attempt('file', () => this.#files.remove(dir, { recursive: true })));
+        yield* whileCurrent(options.current, () => attempt('file', () => this.#files.mkdir(dir)));
       }
 
       const record = { id: options.processId, command, cwd: options.cwd ?? '/workspace' };
-      yield* attempt('file', () => this.#files.writeFile(`${dir}/process.json`, JSON.stringify(record)));
+      yield* whileCurrent(options.current, () => attempt('file', () => this.#files.writeFile(`${dir}/process.json`, JSON.stringify(record))));
 
-      const launched = yield* Effect.result(attempt('process', () => this.container.exec(['/bin/sh', '-c', RUN, 'devbox-process', dir, record.cwd, '/bin/bash', '-c', command], {
+      const launched = yield* Effect.result(whileCurrent(options.current, () => attempt('process', () => this.container.exec(['/bin/sh', '-c', RUN, 'devbox-process', dir, record.cwd, '/bin/bash', '-c', command], {
         env: CONTAINER_TRUST_ENV, stdout: 'ignore', stderr: 'ignore',
-      })));
+      }))));
 
       if (Result.isFailure(launched)) {
         // The claim records a launch that never ran, so neither a retry nor a kill adopts it.
-        const decided = yield* Effect.result(this.#unlaunched(dir));
+        const decided = yield* Effect.result(this.#unlaunched(dir, options.current));
 
         return yield* Effect.fail(Result.isSuccess(decided) ? launched.failure : new DevboxError(launched.failure.code,
           `${launched.failure.message}; whether it ran is left to the next start or kill: ${decided.failure.message}`, { cause: launched.failure }));
@@ -165,12 +212,24 @@ export class Processes {
     }));
   }
 
-  kill(id: string): Promise<void> {
+  kill(id: string, options: { readonly current?: () => boolean } = {}): Promise<void> {
+    if (this.kernel === undefined) return settle(attempt('process', async () => {
+      const kernel = await this.incarnation();
+
+      return this.inIncarnation(kernel).kill(id, options);
+    }));
+
     return settle(Effect.gen({ self: this }, function* () {
       const dir = yield* directory(id);
 
-      const ended = yield* attempt('process', () => this.container.exec(['/bin/sh', '-c', `dir=$1
+      const token = yield* Effect.result(attempt('file', async () => (await this.#files.readFile(`${dir}/pid`)).text()));
+      const expected = Result.isSuccess(token) ? token.success.trim() : '';
+
+      if (Result.isFailure(token) && !(SandboxFileError.is(token.failure.cause) && token.failure.cause.code === 'ENOENT')) return yield* Effect.fail(token.failure);
+
+      const ended = yield* whileCurrent(options.current, () => attempt('process', () => this.container.exec(['/bin/sh', '-c', `dir=$1; expected=$2
 [ -f "$dir/process.json" ] || exit 0
+if [ -n "$expected" ]; then [ "$(cat "$dir/pid" 2>/dev/null)" = "$expected" ] || exit 0; fi
 set -- "$dir"
 ${UNLAUNCH} && exit 0
 while [ ! -f "$dir/pid" ] && [ ! -f "$dir/exit" ]; do sleep 0.1; done
@@ -178,7 +237,7 @@ while [ ! -f "$dir/pid" ] && [ ! -f "$dir/exit" ]; do sleep 0.1; done
 ${LIVE}
 pid=$(live "$dir") || exit 0
 ${END_TREE}
-end_tree "$pid" || [ $? -eq 3 ]`, 'devbox-kill', dir]));
+end_tree "$pid" || [ $? -eq 3 ]`, 'devbox-kill', dir, expected])));
 
       const result = yield* attempt('process', () => ended.output());
 
@@ -187,9 +246,9 @@ end_tree "$pid" || [ $? -eq 3 ]`, 'devbox-kill', dir]));
   }
 
   /** `true`: the launch in `dir` never ran, and never will. */
-  #unlaunched(dir: string): Effect.Effect<boolean, DevboxError> {
+  #unlaunched(dir: string, current?: () => boolean): Effect.Effect<boolean, DevboxError> {
     return Effect.gen({ self: this }, function* () {
-      const claim = yield* attempt('process', () => this.container.exec(['/bin/sh', '-c', UNLAUNCH, 'devbox-unlaunch', dir]));
+      const claim = yield* whileCurrent(current, () => attempt('process', () => this.container.exec(['/bin/sh', '-c', UNLAUNCH, 'devbox-unlaunch', dir])));
       const result = yield* attempt('process', () => claim.output());
 
       if (result.exitCode > 1) return yield* Effect.fail(new DevboxError('process', `the launch claim failed: ${new TextDecoder().decode(result.stderr)}`));

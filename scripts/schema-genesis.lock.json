@@ -1123,13 +1123,6 @@
     "card TEXT NOT NULL",
     "PRIMARY KEY (workspace, share_id, recipient_user_id)"
   ],
-  "slate_builds@packages/cf-backend/src/slates/builds.ts": [
-    "slate TEXT PRIMARY KEY",
-    "good_key TEXT",
-    "good_image TEXT",
-    "failed_key TEXT",
-    "failure TEXT"
-  ],
   "slate_file_manifest@packages/core/src/state/workspace-schema.ts": [
     "slate_id TEXT NOT NULL",
     "path TEXT NOT NULL",
@@ -1139,6 +1132,15 @@
     "content TEXT NOT NULL",
     "recorded_at INTEGER NOT NULL",
     "PRIMARY KEY (slate_id, path)"
+  ],
+  "slate_images@packages/cf-backend/src/slates/builds.ts": [
+    "slate TEXT NOT NULL",
+    "authority TEXT NOT NULL",
+    "good_key TEXT",
+    "good_image TEXT",
+    "failed_key TEXT",
+    "failure TEXT",
+    "PRIMARY KEY (slate, authority)"
   ],
   "slate_live_share_users@packages/core/src/slates/live-shares.ts": [
     "share_id TEXT NOT NULL",

@@ -621,7 +621,7 @@ describe('BackgroundJobRunner.cancel — operator hard-cancel', () => {
     const done = runner.create('shell', { done: true }, 'build', new AbortController());
     store.settle(done, 0, '"done"', Date.now());
 
-    expect(new Set(runner.cancelRunning())).toEqual(new Set([id1, id2]));
+    expect(new Set((await runner.cancelRunning()).stopped)).toEqual(new Set([id1, id2]));
 
     expect(store.get(id1)?.status).toBe('cancelled');
     expect(store.get(id2)?.status).toBe('cancelled');
@@ -629,6 +629,16 @@ describe('BackgroundJobRunner.cancel — operator hard-cancel', () => {
     expect(c1.signal.aborted).toBe(true);
     expect(c2.signal.aborted).toBe(true);
   });
+});
+
+test('a head ending with work its owner refuses to stop leaves that job running, not cancelled', async () => {
+  const { runner, store } = setup({ onCancelled: () => { throw new Error('the device did not answer the cancel'); } });
+  const work = new AbortController();
+  const id = runner.create('shell', { remote: true }, 'build', work);
+
+  const ended = await runner.cancelRunning();
+
+  expect({ ended, status: store.get(id)?.status, aborted: work.signal.aborted }).toEqual({ ended: { stopped: [], refused: [id] }, status: 'running', aborted: false });
 });
 
 // Recovery starts from durable rows only; in-memory cancel handles died with the process.

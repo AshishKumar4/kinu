@@ -53,7 +53,25 @@ export function stepLoopJobs(input: {
   const runner = new BackgroundJobRunner(deps);
   const detach = input.seat.attach({ kind: 'step-loop', actorId: input.actor.record.actorId, store, runner });
 
-  return { runner, next: () => wakes.next(() => runner.inFlight > 0), detach };
+  const next = () => wakes.next(() => runner.inFlight > 0);
+
+  /**
+   * The loop ended: its jobs' results have no reader left, so each stops. A job whose owner refused the stop still
+   * runs, so the loop keeps it, and the authority over it, until it settles; only then does the loop let go.
+   */
+  const end = async (): Promise<void> => {
+    const { refused } = await runner.cancelRunning();
+
+    if (refused.length > 0) {
+      while (await next() !== null) {
+        // What the work answers has no reader; its settling is what is awaited.
+      }
+    }
+
+    detach();
+  };
+
+  return { runner, next, end };
 }
 
 export function endedStepLoopJobs(input: {

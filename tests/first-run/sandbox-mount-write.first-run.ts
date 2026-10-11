@@ -22,7 +22,8 @@
  *
  * THE ASSERTIONS, all hard: the file tool's write to a path it just listed as
  * absent answers `created`, a read returns the bytes byte-for-byte, and a
- * `sandbox.listFiles({ path: '' })` inside one program names the file — not a refusal.
+ * `sandbox.readdir({ path: '' })` inside one program names the file — not a refusal. The historical
+ * `listFiles` name above is gone; the native platform listing remains an internal transport method.
  */
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
@@ -123,8 +124,8 @@ describe(SUITE, () => {
             what: 'empty-path-listing',
             reached: program !== undefined,
             detail: program === undefined
-              ? 'no eval call ran sandbox.listFiles({ path: \'\' }) and returned the file\'s name'
-              : `sandbox.listFiles({ path: '' }) inside eval named the written file`,
+              ? 'no eval call ran sandbox.readdir({ path: \'\' }) and returned the file\'s name'
+              : `sandbox.readdir({ path: '' }) inside eval named the written file`,
           },
         ] satisfies EvalSubgoal[];
       },

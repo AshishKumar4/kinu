@@ -76,7 +76,7 @@ async function exec(box: Devbox<unknown>): Promise<void> {
   equal([...new Uint8Array(await new Response(await box.readFileStream(`${SCRATCH}/binary`)).arrayBuffer())], [...binary]);
 }
 
-async function processes(container: Container): Promise<void> {
+async function processes(box: Devbox<unknown>, container: Container): Promise<void> {
   const process = new Processes(container);
   const ready = (id: string) => native(container, `until [ -e ${SCRATCH}/${id} ]; do sleep 0.05; done`);
 
@@ -108,7 +108,7 @@ async function processes(container: Container): Promise<void> {
     const faulted = new Processes({
       get running() { return container.running; },
       exec: async (argv: string[], options?: ContainerExecOptions) => {
-        if (!injected && argv[3] === 'devbox-process') {
+        if (!injected && (argv[3] === 'devbox-process' || argv[8] === 'devbox-process')) {
           injected = true;
 
           if (fault === 'lose') await container.exec(argv, options);
@@ -140,6 +140,63 @@ async function processes(container: Container): Promise<void> {
   equal([(await process.get('restored'))?.status, (await process.get('foreign'))?.status, (await process.get('current'))?.status], ['failed', 'failed', 'running']);
   await native(container, 'kill -0 1');
   await new Files(container).remove(`${ROOT}/current`, { recursive: true });
+
+  // Queue each real mutating boundary before confirmed destroy. Delivery in the successor must not
+  // launch a canceled process, kill its replacement, or overwrite that replacement's private record.
+  for (const operation of ['run-same-id', 'run-successor', 'kill', 'write-record'] as const) {
+    const entered = Promise.withResolvers<void>();
+    const released = Promise.withResolvers<void>();
+    let queued = true;
+    let current = true;
+    const oldId = 'before-generation';
+    const nextId = operation === 'run-successor' ? 'after-generation' : oldId;
+
+    if (operation === 'kill') await process.start('exec sleep 7121', { cwd: '/', processId: oldId });
+
+    const delayed = new Processes({
+      get running() { return container.running; },
+      exec: async (argv: string[], options?: ContainerExecOptions) => {
+        const inner = argv[3] === 'devbox-incarnation' ? argv.slice(5) : argv;
+
+        let selected: boolean;
+
+        if (operation === 'kill') selected = inner[3] === 'devbox-kill';
+        else if (operation === 'write-record') selected = inner[0] === '/usr/local/bin/sandbox-shim' && inner.includes(`${ROOT}/${oldId}/process.json`);
+        else selected = inner[3] === 'devbox-process';
+
+        if (queued && selected) {
+          queued = false;
+          entered.resolve();
+          await released.promise;
+        }
+
+        return container.exec(argv, options);
+      },
+    });
+
+    const obsolete = operation === 'kill' ? delayed.kill(oldId, { current: () => current })
+      : delayed.start('exec sleep 7121', { cwd: '/', processId: oldId, current: () => current });
+
+    await entered.promise;
+
+    try {
+      current = false;
+      await container.destroy();
+      await box.devboxStartup();
+      const successor = new Processes(container);
+
+      await successor.start('exec sleep 7122', { cwd: '/', processId: nextId });
+      released.resolve();
+      await Promise.allSettled([obsolete]);
+      equal(await native(container, "ps -eo args= | awk '$0 == \"sleep 7121\" { n++ } END { print n+0 }'"), '0');
+      equal(await native(container, "ps -eo args= | awk '$0 == \"sleep 7122\" { n++ } END { print n+0 }'"), '1');
+      equal((await successor.get(nextId))?.command, 'exec sleep 7122');
+      await successor.kill(nextId);
+    } finally {
+      released.resolve();
+      await Promise.allSettled([obsolete]);
+    }
+  }
 }
 
 async function kill(box: Devbox<unknown>, container: Container): Promise<void> {
@@ -240,7 +297,7 @@ export async function runContainerContract(kind: ContainerContract, box: Devbox<
   switch (kind) {
     case 'tools': return tools(container, pin);
     case 'exec': return exec(box);
-    case 'processes': return processes(container);
+    case 'processes': return processes(box, container);
     case 'kill': return kill(box, container);
     case 'trust': return trust(container);
   }

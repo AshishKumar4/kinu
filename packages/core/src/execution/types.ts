@@ -1,4 +1,5 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import * as v from 'valibot';
 /**
  * Execution layer types: executors are codemode ToolProviders. docs/EXECUTION-LAYER-SPEC.md
  * Lean formalization: lean/Kinu/Execution/Capabilities.lean
@@ -16,6 +17,9 @@ import type { ShellSession } from './shell-session';
  * fire immediately. Not a policy bound (PLATFORM_CATALOG `worker.wall.http_unlimited`); RPC lanes use `timeoutMs: 0`.
  */
 export const NO_TIMER_DEADLINE_MS = 2_147_483_647;
+
+/** One port contract for codemode declarations and direct executor exposure calls. */
+export const ExecutorPortSchema = v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(65_535));
 
 export type ExecutorToolResult = JsonValue | undefined;
 
@@ -49,7 +53,7 @@ export const EXECUTOR_CAPABILITIES = [
 
 export type ExecutorCapability = (typeof EXECUTOR_CAPABILITIES)[number];
 
-export type ExecutorKind = 'workspace' | 'nimbus' | 'sandbox' | 'device' | 'parent';
+export type ExecutorKind = 'workspace' | 'sandbox' | 'device' | 'parent';
 
 export type ExecutorLifecycleStatus =
   | 'not_configured'
