@@ -467,6 +467,25 @@ interface SlateBuild {
   readonly fs: EsbuildReadFs;
 }
 
+/** The directory holding `path`; `/` holds itself. */
+function parentOf(path: string): string {
+  const at = path.lastIndexOf('/');
+
+  return at <= 0 ? '/' : path.slice(0, at);
+}
+
+/** `path` with its `.` and `..` segments folded. */
+function normalized(path: string): string {
+  const kept: string[] = [];
+
+  for (const segment of path.split('/')) {
+    if (segment === '..') kept.pop();
+    else if (segment !== '' && segment !== '.') kept.push(segment);
+  }
+
+  return `/${kept.join('/')}`;
+}
+
 /**
  * `fs`, noting in `looked` every path a compile looks at: true where it asked whether the path exists and it did not.
  * The resolver's own reads count as the bundled files' do, so a package.json whose `exports` moves is a change. A path
@@ -479,10 +498,30 @@ function looking(fs: NamespaceFs, looked: Map<string, boolean>): EsbuildReadFs {
     if (looked.get(path) !== false) looked.set(path, missing);
   };
 
+  // A missing path under a link that leads nowhere yet: where the link leads is missing too, and so is every directory
+  // above it not written yet, so writing the target is a change to what this compile found missing.
+  const dangling = (path: string) => {
+    for (let link = absolute(path); link !== '/'; link = parentOf(link)) {
+      if (!fs.isSymlink(link)) continue;
+      const to = fs.readlink(link);
+
+      for (let at = normalized(`${to.startsWith('/') ? to : `${parentOf(link)}/${to}`}${absolute(path).slice(link.length)}`); at !== '/' && !fs.exists(at); at = parentOf(at)) {
+        mark(at, true);
+      }
+
+      return;
+    }
+  };
+
   const note = (path: string, missing: boolean) => {
     mark(absolute(path), missing);
 
-    if (missing) return;
+    if (missing) {
+      dangling(path);
+
+      return;
+    }
+
     const target = fs.resolveSymlink(path);
 
     if (target !== null && absolute(target) !== absolute(path)) mark(absolute(target), false);
