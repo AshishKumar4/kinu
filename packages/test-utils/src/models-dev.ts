@@ -1,4 +1,4 @@
-import { WORKERS_AI_FIXTURE_MODEL_ID } from './workers-ai-model-spec';
+import { WORKERS_AI_FIXTURE_MODEL_ID } from '@kinu.run/test-utils/workers-ai-model-spec';
 
 /** models.dev's Workers AI rows for Kinu's preferred models, read 2026-10-05: the platform's live model list. */
 export const WORKERS_AI_MODELS_DEV = {

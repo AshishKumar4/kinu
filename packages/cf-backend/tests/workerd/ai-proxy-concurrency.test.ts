@@ -22,7 +22,7 @@ import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 import * as v from 'valibot';
 import { HELD_PROXY_MODEL } from './ai-proxy-shapes';
-import { WORKERS_AI_FIXTURE_MODEL_ID } from '../../../test-utils/src/workers-ai-model-spec';
+import { WORKERS_AI_FIXTURE_MODEL_ID } from '@kinu.run/test-utils/workers-ai-model-spec';
 
 const PROXY_URL = 'http://localhost/api/user/ai/v1/chat/completions';
 

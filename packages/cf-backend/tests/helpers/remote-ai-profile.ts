@@ -1,7 +1,7 @@
 import { JsonValueSchema, type UserCaller } from '@kinu.run/core';
 import * as v from 'valibot';
 import type { UserDO } from '../../src/user/user-do';
-import { WORKERS_AI_FIXTURE_MODEL_SPEC } from '../../../test-utils/src/workers-ai-model-spec';
+import { WORKERS_AI_FIXTURE_MODEL_SPEC } from '@kinu.run/test-utils/workers-ai-model-spec';
 
 /** Account-owned catalog setup through the product's compare-and-swap write, before any turn resolves a provider snapshot. */
 export async function configureRemoteAiFixture(user: Pick<UserDO, 'getProfileCatalog' | 'putProfileCatalog'>, caller: UserCaller): Promise<void> {
