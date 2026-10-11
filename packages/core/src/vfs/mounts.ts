@@ -345,6 +345,17 @@ type Target =
 	| { readonly namespace: CompositeVFS; readonly files: VFS; readonly at: string }
 	| { readonly namespace: null; readonly files: VFS; readonly at: string };
 
+/** `call` on where `path` lands: the plane's own answer, or ENOTSUP with `reason` where a bare base has none. */
+function optionalOperation<T>(
+	target: () => Promise<{ readonly files: VFS; readonly at: string }>, path: string, reason: string, call: (files: VFS, at: string) => Awaitable<T> | undefined,
+): Effect.Effect<T, VfsError> {
+	return Effect.flatMap(Effect.promise(async () => {
+		const { files, at } = await target();
+
+		return call(files, at);
+	}), (answer) => (answer === undefined ? Effect.fail(new VfsError('ENOTSUP', reason, path)) : Effect.succeed(answer)));
+}
+
 /** `base` extended by `mounts`, a relative path staying in `base`; or a namespace already holding them. */
 export function withMountTable(base: VFS | MountedNamespace, mounts: readonly VfsMount[]): MountedVfs {
 	const declared = checkedMounts(mounts);
@@ -401,9 +412,6 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 		return op(files, at);
 	};
 
-	/** ENOTSUP with `reason`: a bare base without the optional operation (the namespace answers its own). */
-	const unsupported = (path: string, reason: string): Effect.Effect<never, VfsError> => Effect.fail(new VfsError('ENOTSUP', reason, path));
-
 	return {
 		mounts: () => [...mounts],
 		userRoots: () => userRoots,
@@ -454,34 +462,10 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 			return target.namespace === null ? target.at : namespacePath(await routeCreating(target.namespace, target.at, options?.follow ?? true));
 		},
 		// ENOTSUP, not EPERM: callers like the `file` scan fall back on this code; only `readBoundedWithVfsOps` may whole-read.
-		async readRange(path, offset, length) {
-			const answer = await via(path, (files, at) => files.readRange?.(at, offset, length));
-
-			if (answer !== undefined) return answer;
-
-			return settle(unsupported(path, 'this plane serves no ranged read'));
-		},
-		async readlink(path) {
-			const answer = await via(path, (files, at) => files.readlink?.(at));
-
-			if (answer !== undefined) return answer;
-
-			return settle(unsupported(path, 'this plane serves no readlink'));
-		},
-		async readFileAtRevision(path, revision, range) {
-			const answer = await via(path, (files, at) => files.readFileAtRevision?.(at, revision, range));
-
-			if (answer !== undefined) return answer;
-
-			return settle(unsupported(path, 'this file plane does not retain file revisions'));
-		},
-		async writeFileIfRevision(path, data, expected) {
-			const answer = await via(path, (files, at) => files.writeFileIfRevision?.(at, data, expected));
-
-			if (answer !== undefined) return answer;
-
-			return settle(unsupported(path, 'this file plane does not support revision-checked writes'));
-		},
+		readRange: (path, offset, length) => settle(optionalOperation(() => on(path), path, 'this plane serves no ranged read', (files, at) => files.readRange?.(at, offset, length))),
+		readlink: (path) => settle(optionalOperation(() => on(path), path, 'this plane serves no readlink', (files, at) => files.readlink?.(at))),
+		readFileAtRevision: (path, revision, range) => settle(optionalOperation(() => on(path), path, 'this file plane does not retain file revisions', (files, at) => files.readFileAtRevision?.(at, revision, range))),
+		writeFileIfRevision: (path, data, expected) => settle(optionalOperation(() => on(path), path, 'this file plane does not support revision-checked writes', (files, at) => files.writeFileIfRevision?.(at, data, expected))),
 		// A device's own write report, from the backend the write lands on; elsewhere the namespace writes and reports nothing.
 		async writeFileWithReport(path, data) {
 			const target = await on(path);

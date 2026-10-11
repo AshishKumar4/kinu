@@ -5,7 +5,7 @@
  */
 
 import { createWorkspace, storeFiles, workspaceGenerationStorage } from '@kinu.run/core/workspace';
-import type { RuntimeSource, SupervisorOpResult, WorkspaceBundle, WorkspaceFiles, WorkspaceOptions } from '@kinu.run/core/workspace';
+import type { RuntimeSource, SupervisorOpResult, WorkspaceBundle, WorkspaceFiles } from '@kinu.run/core/workspace';
 import { jsonResultOrVoid, sha256Hex } from '@kinu.run/core';
 import type {
   NimbusExecResult, NimbusPortInfo, NimbusSandboxHandle, NimbusStartResult, PreviewRouteCheck, WorkspacePreviewUrl,
@@ -84,8 +84,6 @@ export interface HostedWorkspaceDeps<Id> {
   previewUrl: (port: number, capability: string) => Promise<WorkspacePreviewUrl>;
   onFilesChanged?: (paths: readonly string[]) => void;
   onPortsChanged?: () => void;
-  /** Kinu's egress for the workspace's commands and programs, asked once as the workspace opens. */
-  readonly egress?: WorkspaceOptions['egress'];
   /** Asked before a preview request is routed and by the launch journal after a reset. A refusal says why
      *  the slate cannot serve. */
   ensureSlate?(owner: string): Promise<Refusal | null>;
@@ -242,7 +240,6 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
     // own `ctx`). Without both, `git clone` refuses.
     fabric: HOST_FABRIC_COMPOSITION,
     runtimeSource,
-    ...(deps.egress !== undefined && { egress: deps.egress }),
   });
 
   if (deps.onFilesChanged) bundle.onFilesChanged(deps.onFilesChanged);

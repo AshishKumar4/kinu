@@ -9,7 +9,7 @@ import { nodeRequireAsImport } from '../packages/cf-backend/esbuild-node-require
 
 const ENTRY = `
 import { WorkerEntrypoint } from 'cloudflare:workers';
-import { handleContainerEgress, handleEgressConnect, handleEgressTls } from './packages/cf-backend/src/egress/outbound.ts';
+import { handleContainerEgress, handleEgressConnect } from './packages/cf-backend/src/egress/outbound.ts';
 
 const PARAMS = { workspaceName: 'probe', ownerUserId: 'probe-owner', bindings: [] };
 const VAULT_DOWN = { UserDO: { idFromName: (name) => name, get: () => { throw new Error('no request here names a secret'); } }, CREDENTIAL_ENCRYPTION_KEY: 'egress-probe-credential-key-0123456789' };
@@ -17,7 +17,6 @@ const VAULT_DOWN = { UserDO: { idFromName: (name) => name, get: () => { throw ne
 export class Egress extends WorkerEntrypoint {
   fetch(request) { return handleContainerEgress(request, VAULT_DOWN, PARAMS); }
   connect(socket) { return handleEgressConnect(socket, PARAMS); }
-  connectTls(target) { return handleEgressTls(target, PARAMS); }
 }
 
 const text = (bytes) => new TextDecoder().decode(bytes);
@@ -50,15 +49,17 @@ export default {
       const first = await reader.read();
       return first.done ? 'ended empty' : text(first.value).split('\\r\\n')[0];
     })().catch((error) => 'failed: ' + String(error)), 10000);
+    // A TLS socket as Nimbus's patched node:tls names it: the egress makes the session and carries plaintext.
+    const marked = (name) => [...new TextEncoder().encode(name)].map((b) => b.toString(16).padStart(2, '0')).join('').match(/.{1,62}/g).join('.') + '.tls.nimbus-egress.invalid';
     out.tls = await within((async () => {
-      const tls = await egress.connectTls({ hostname: 'example.com', port: 443 });
-      const writer = tls.writable.getWriter();
+      const socket = egress.connect(marked('example.com') + ':443', { allowHalfOpen: true });
+      const writer = socket.writable.getWriter();
       await writer.write(new TextEncoder().encode(http));
-      const reader = tls.readable.getReader();
+      const reader = socket.readable.getReader();
       const first = await reader.read();
       return first.done ? 'ended empty' : text(first.value).split('\\r\\n')[0];
     })().catch((error) => 'failed: ' + String(error)), 10000);
-    out.tlsPrivate = await within(egress.connectTls({ hostname: '192.168.1.1', port: 443 }).then(() => 'opened', (error) => 'refused: ' + String(error)), 5000);
+    out.tlsPrivate = await within(exchange(egress.connect(marked('192.168.1.1') + ':443', { allowHalfOpen: true }), 'x').then((answer) => 'bytes:' + answer.length, (error) => 'closed: ' + String(error)), 5000);
     out.websocket = await within((async () => {
       const response = await egress.fetch('https://echo.websocket.org/', { headers: { upgrade: 'websocket' } });
       if (response.webSocket === null) return 'status ' + response.status;
