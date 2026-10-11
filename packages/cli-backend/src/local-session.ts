@@ -62,7 +62,7 @@ import { ActorSession, type ActorTurnLease,
   assembleActorTurn, runHeadInference, withCompactionTrigger, conversationKey, metadataTier, vfsTurnSkills, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources, type RunTurnSources,
   branchesTerminalEffect, chatTerminalEffects, subordinateTerminalEffects,
   type OwedReport, type SubordinateReportStatus, type TaskTurnEnding,
-  terminalEffect, improvementLanesOpen, RunEndReasonSchema, WorkModeSchema, JsonValueSchema,
+  terminalEffect, evolutionPassOpen, RunEndReasonSchema, WorkModeSchema, JsonValueSchema,
   type TerminalEffectTable, type TerminalEffectFault,
   type TerminalTurnFacts, type TerminalTurnParts, type OwedEffect,
   buildActorTools, buildMcpToolSet, currentDateForPrompt,
@@ -1875,9 +1875,9 @@ export class LocalAgentSession {
       // The turn's evolution pass, after its review, as the workspace object runs main's. Not joined at exit: the window
       // it would close carries to the next session or the daemon.
       improvement_lanes: terminalEffect({
-        input: v.object({ status: RunEndReasonSchema, turn: JsonValueSchema, workMode: WorkModeSchema }),
-        runSync: ({ status, workMode }) => {
-          if (improvementLanesOpen(status, workMode)) this.actorSession.orchestrator.startEvolution();
+        input: v.object({ status: RunEndReasonSchema, turn: JsonValueSchema, workMode: WorkModeSchema, autoEvolve: v.boolean() }),
+        runSync: ({ status, workMode, autoEvolve }) => {
+          if (evolutionPassOpen(status, workMode, autoEvolve)) this.actorSession.orchestrator.startEvolution();
 
           return { status: 'completed' };
         },

@@ -166,6 +166,7 @@ export function declareTerminalRoster(
       status: facts.status,
       turn: facts.scopedTurn,
       workMode: facts.workMode,
+      autoEvolve: facts.evolutionEnabled,
     },
   });
 

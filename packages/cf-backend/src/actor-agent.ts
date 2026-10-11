@@ -81,7 +81,7 @@ import {
   type PromptFile, PromptFileSchema,
   // Shared turn lifecycle and run_end classifier, so neither backend chooses the string
   // (see turn-failure.ts).
-  TurnAccumulator, AgentOrchestrator, improvementLanesOpen, DynamicContextLedger, actorPolicy, actorReach, type AgentOrchestratorDeps, type BackendHost,
+  TurnAccumulator, AgentOrchestrator, improvementLanesOpen, evolutionPassOpen, DynamicContextLedger, actorPolicy, actorReach, type AgentOrchestratorDeps, type BackendHost,
   type ChatTurnInput, type ComposedRequest,
   type AgentsOp,
   type AgentsToolDeps,
@@ -1319,13 +1319,13 @@ export abstract class ActorAgent extends Agent<Env> {
         },
       }),
       improvement_lanes: terminalEffect({
-        input: v.object({ status: RunEndReasonSchema, turn: JsonValueSchema, workMode: WorkModeSchema }),
+        input: v.object({ status: RunEndReasonSchema, turn: JsonValueSchema, workMode: WorkModeSchema, autoEvolve: v.boolean() }),
         // Lanes read durable queues on re-entry (per-turn snapshots do not survive), and the verdict
         // uses the recorded mode so a fresh activation's default cannot open an unearned lane.
-        runSync: ({ status, workMode }) => {
+        runSync: ({ status, workMode, autoEvolve }) => {
           this.warmUserMcpInBackground();
 
-          if (!improvementLanesOpen(status, workMode)) {
+          if (!evolutionPassOpen(status, workMode, autoEvolve)) {
             return { status: 'completed', detail: 'improvement lanes closed for this turn' };
           }
 

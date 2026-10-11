@@ -97,6 +97,11 @@ export function improvementLanesOpen(status: RunEndReason, workMode: WorkMode): 
   return status === 'completed' && workMode !== 'plan';
 }
 
+/** The evolution pass also follows a failed turn its agent recorded for evolution (`recorded`): the turn's review rates it. */
+export function evolutionPassOpen(status: RunEndReason, workMode: WorkMode, recorded: boolean): boolean {
+  return improvementLanesOpen(status, workMode) || (workMode !== 'plan' && recorded);
+}
+
 export class AgentOrchestrator {
   readonly acc: TurnAccumulator;
   readonly inbox: Inbox;

@@ -1697,7 +1697,7 @@ export type { WorkspaceWork, OwnedPlan, OwnedTask, WorkspaceWorkOwner } from './
 export { openingList, openingListOf, listedOn, type OpeningList } from './read-models/opening';
 
 export {
-  AgentOrchestrator, improvementLanesOpen, type AgentOrchestratorDeps,
+  AgentOrchestrator, improvementLanesOpen, evolutionPassOpen, type AgentOrchestratorDeps,
   type TurnContinuity,
 } from './orchestrator/agent-orchestrator';
 
