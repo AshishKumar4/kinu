@@ -47,14 +47,15 @@ async function connected(served: string | null = SERVED): Promise<TestUserDO & {
   return Object.assign(harness, { deviceId, token });
 }
 
-const hello = (fields: Record<string, JsonValue>): JsonValue => ({ ...CAPABLE_HELLO, arch: 'x64', ...fields });
+/** The runtime the refusing daemon ran on: the launcher's Bun before the pin moved. */
+const REFUSED_ON = 'Bun 1.4.0';
+
+/** The daemon these tests drive runs where the refusing daemon ran, unless a test moves it. */
+const hello = (fields: Record<string, JsonValue>): JsonValue => ({ ...CAPABLE_HELLO, arch: 'x64', runtime: REFUSED_ON, ...fields });
 
 async function devices(harness: TestUserDO) {
   return harness.userDO.listDevices(await testOwner());
 }
-
-/** The runtime the refusing daemon ran on: the launcher's Bun before the pin moved. */
-const REFUSED_ON = 'Bun 1.4.0';
 
 async function refuse(harness: TestUserDO, token: string, version = SERVED, reason = REFUSAL): Promise<Response> {
   return pcRoutes.fetch(new Request('https://kinu.test/pc/update-refused', {

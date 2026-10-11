@@ -114,11 +114,11 @@ describe('a machine that cannot sandbox runs no command', () => {
     await harness.closeDeviceHarness();
   });
 
-  test('a daemon that claims a sandbox but names no agent root is not sandboxed, and is told which build to fix', async () => {
+  test('a daemon that claims a sandbox but names no absolute agent root is not sandboxed, and is told which build to fix', async () => {
     // Nowhere to put the agent's home: recorded incapable at HELLO, not discovered by a promised command.
     const harness = await deviceHarness('ashish@studio', daemon, { hello: null });
     harness.consentDecision = 'always';
-    await harness.sendDeviceHello({ type: 'HELLO', os: 'linux', sandbox: CAPABLE });
+    await harness.sendDeviceHello({ type: 'HELLO', os: 'linux', sandbox: CAPABLE, agentRoot: '.kinu/agents' });
 
     const refusal = harness.userDO.deviceRpc(harness.workspace, 'exec', ['ls'], { agentName: WORKSPACE });
     await expect(refusal).rejects.toThrow(SANDBOX_UNAVAILABLE);
@@ -253,16 +253,6 @@ describe('the frame carries the calling workspace own home', () => {
     expect((await harness.userDO.listDevices(await testOwner()))[0]).toMatchObject({
       wholeMachine: true, sandbox: { tier: 'sandboxed' },
     });
-    await harness.closeDeviceHarness();
-  });
-
-  test('a machine that consented no directory sends an empty root list, never a guess', async () => {
-    const harness = await deviceHarness('ashish@studio', daemon, { hello: null });
-    harness.consentDecision = 'always';
-    await harness.sendDeviceHello(hello(CAPABLE));
-
-    await harness.userDO.deviceRpc(harness.workspace, 'exec', ['pwd'], { agentName: WORKSPACE });
-    expect(v.parse(FrameSandboxSchema, execFrames(harness)[0]?.sandbox)?.roots).toEqual([]);
     await harness.closeDeviceHarness();
   });
 

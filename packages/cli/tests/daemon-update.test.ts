@@ -9,7 +9,7 @@ import { killAndAwaitExit, present, recordedIn, runOk, scratchDir } from '@kinu.
 import { tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import {
-  bunResolutionShell, deviceFiles, DEVICE_EXEC_ACK_METHOD, DEVICE_FRAMES, DEVICE_PROTOCOL_VERSION, DEVICE_TOKEN_ROTATION_ACK, JsonValueSchema,
+  bunResolutionShell, deviceFiles, DEVICE_EXEC_ACK_METHOD, DEVICE_FRAMES, DEVICE_TOKEN_ROTATION_ACK, JsonValueSchema,
   parseJsonObject, type DeviceStatus, type DeviceTransport, type JsonObject,
 } from '@kinu.run/core';
 import {
@@ -251,10 +251,10 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
 
     expect({ protocol: before.protocolVersion, checked: before.features.includes('writeFileIfDigest') }).toEqual({ protocol: 2, checked: false });
     expect({ protocol: after.protocolVersion, checked: after.features.includes('writeFileIfDigest'), version: successor.hello.version })
-      .toEqual({ protocol: DEVICE_PROTOCOL_VERSION, checked: true, version: NEW });
+      .toEqual({ protocol: 3, checked: true, version: NEW });
 
-    // It serves on the new protocol: a digest-checked write lands.
-    const file = join(home, 'landed.txt');
+    // It serves on the new protocol: a digest-checked write lands, outside the Kinu home the tunnel never serves.
+    const file = join(scratchDir('protocol-2-updated'), 'landed.txt');
 
     successor.send({ id: 'checked', method: 'writeFileIfDigest', params: [file, 'after the update', null, {}], sandbox: { tier: 'raw', agentHome: '', roots: [] } });
     expect(v.parse(ReplySchema, await successor.waitForReply('checked'))).toMatchObject({ result: { ok: true } });
