@@ -3,7 +3,9 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
 import { describe, expect, test } from 'bun:test';
-import type { Page } from 'puppeteer';
+import type { HTTPRequest, Page } from 'puppeteer';
+import { Effect } from 'effect';
+import { detach } from '@kinu.run/core/obs';
 import { ONBOARDING_STEPS } from '@kinu.run/core';
 
 import { withGallery, type Gallery } from '../../scripts/gallery-harness';
@@ -23,9 +25,34 @@ async function freshPage(gallery: Gallery, query: string, theme: 'dark' | 'light
 
 const dialogText = (page: Page) => page.$eval('[role="dialog"]', (element) => element.textContent ?? '');
 
-/** Presses the control whose words begin with `words`, as a reader finds it. */
-async function clickByText(page: Page, selector: string, words: string): Promise<void> {
-  await page.waitForFunction((sel, text) => [...document.querySelectorAll(sel)].some((node) => (node.textContent ?? '').trim().startsWith(text)), {}, selector, words);
+/** What the page shows a reader when a step stops: the open dialog's name and words, any alert, and where focus is. */
+async function pageState(page: Page): Promise<string> {
+  return JSON.stringify(await page.evaluate(() => {
+    const dialogs = [...document.querySelectorAll('[role="dialog"]')];
+    const focused = document.activeElement;
+
+    return {
+      dialogs: dialogs.map((dialog) => `${dialog.getAttribute('aria-label') ?? ''}: ${(dialog.textContent ?? '').replace(/\s+/gu, ' ').slice(0, 400)}`),
+      alerts: [...document.querySelectorAll('[role="alert"]')].map((alert) => (alert.textContent ?? '').trim()),
+      focus: focused === null ? 'none' : `${focused.tagName.toLowerCase()}${focused.id === '' ? '' : `#${focused.id}`}`,
+    };
+  }));
+}
+
+/**
+ * Presses the control whose words begin with `words`, as a reader finds it. The step fails at once, with what the page
+ * shows, when the dialog shows an error instead, or when `panel`, the part of the page the control belongs to, is gone.
+ */
+async function clickByText(page: Page, selector: string, words: string, panel?: string): Promise<void> {
+  const seen = await page.waitForFunction((sel, text, within) => {
+    if ([...document.querySelectorAll(sel)].some((node) => (node.textContent ?? '').trim().startsWith(text))) return 'shown';
+
+    if (document.querySelector('[role="dialog"] [role="alert"]') !== null) return 'an error shown in its place';
+
+    return within !== null && document.querySelector(within) === null ? `gone with ${within}` : false;
+  }, {}, selector, words, panel ?? null).then(async (handle) => handle.jsonValue());
+
+  if (seen !== 'shown') throw new Error(`"${words}" (${selector}) never came: ${String(seen)}; the page shows ${await pageState(page)}`);
   await page.$$eval(selector, (nodes, text) => {
     const target = nodes.find((node) => (node.textContent ?? '').trim().startsWith(text));
 
@@ -238,29 +265,62 @@ describe('account panels', () => {
         await page.waitForSelector('[data-chatgpt-connect]');
 
         // No machine is connected: choosing the PC hands the command that installs Kinu and connects it.
-        await clickByText(page, '[data-chatgpt-connect] button', 'Use your PC');
+        await clickByText(page, '[data-chatgpt-connect] button', 'Use your PC', '[data-chatgpt-connect]');
         await page.waitForSelector('[data-chatgpt-way="pc"] [data-connect-command]');
         expect(await page.$eval('[data-connect-command]', (code) => code.textContent ?? '')).toContain('--connect');
-        await clickByText(page, '[data-chatgpt-connect] button', 'Cancel');
+        await clickByText(page, '[data-chatgpt-connect] button', 'Cancel', '[data-chatgpt-connect]');
 
         // Here: the sign-in opens at OpenAI, and the address the browser lands on is pasted back. A sign-in
         // cancelled at OpenAI is spent: starting again fetches a fresh link and clears the old address.
-        await clickByText(page, '[data-chatgpt-connect] button', 'Sign in here');
+        await clickByText(page, '[data-chatgpt-connect] button', 'Sign in here', '[data-chatgpt-connect]');
         await page.waitForSelector('[data-chatgpt-way="here"] input');
         await page.type('[data-chatgpt-way="here"] input', 'http://127.0.0.1:1455/auth/callback?error=access_denied&state=xyz');
-        await clickByText(page, '[data-chatgpt-way="here"] button', 'Finish');
+        await clickByText(page, '[data-chatgpt-way="here"] button', 'Finish', '[data-chatgpt-way="here"]');
         const starts = await page.evaluate(() => Number(document.documentElement.dataset.galleryPasteStarts ?? '0'));
-        await clickByText(page, '[data-chatgpt-way="here"] button', 'Start again');
+        await clickByText(page, '[data-chatgpt-way="here"] button', 'Start again', '[data-chatgpt-way="here"]');
         await page.waitForFunction((before) => Number(document.documentElement.dataset.galleryPasteStarts ?? '0') > before, {}, starts);
         await page.waitForSelector('[data-chatgpt-way="here"] input');
         expect(await page.$eval('[data-chatgpt-way="here"] input', (input) => input.value)).toBe('');
 
         await page.type('[data-chatgpt-way="here"] input', 'http://127.0.0.1:1455/auth/callback?code=abc&state=xyz');
-        await clickByText(page, '[data-chatgpt-way="here"] button', 'Finish');
+        await clickByText(page, '[data-chatgpt-way="here"] button', 'Finish', '[data-chatgpt-way="here"]');
         // Signed in: the row says so at once, before anything else is touched, and the welcome says what it means.
         await page.waitForFunction(() => document.querySelector('[data-provider="ChatGPT"]')?.textContent?.includes('Connected') === true
           && document.querySelector('[data-chatgpt-connect]') === null);
         await page.waitForFunction(() => document.body.textContent?.includes("You're using your ChatGPT plan") === true);
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
+  test('typing in a modal is not taken by the home page arriving behind it', async () => {
+    await withGallery(async (gallery) => {
+      const held: HTTPRequest[] = [];
+      const page = await gallery.newPage();
+
+      // A module only the home page needs is held, so the page behind the modal arrives once the owner is already
+      // typing in the modal.
+      await page.setViewport(VIEWPORTS.desktop);
+      await page.setRequestInterception(true);
+      page.on('request', (request) => detach(Effect.promise(async () => {
+        if (/\/assets\/WorkspaceOverviewCard-[^/]+\.js$/u.test(new URL(request.url()).pathname)) held.push(request);
+        else await request.continue();
+      })));
+      // Not `load`: the held code is preloaded, and the load event waits for it.
+      await page.goto(`${gallery.origin}/gallery.html?frame=setupmodal&panel=providers`, { waitUntil: 'domcontentloaded' });
+
+      try {
+        await page.waitForSelector('[role="dialog"]');
+        await settleAccountFixture(page);
+        await page.waitForSelector('[data-chatgpt-connect]');
+        await clickByText(page, '[data-chatgpt-connect] button', 'Sign in here', '[data-chatgpt-connect]');
+        await page.waitForSelector('[data-chatgpt-way="here"] input');
+        await page.focus('[data-chatgpt-way="here"] input');
+        await Promise.all(held.splice(0).map(async (request) => request.continue()));
+        await page.waitForSelector('#workspace-mission');
+
+        expect(await page.evaluate(() => document.activeElement?.closest('[data-chatgpt-way="here"]') !== null)).toBe(true);
       } finally {
         await page.close();
       }
