@@ -12,7 +12,7 @@ function remoteAiFixtureProfile(input: ProfileAuthorityInputs): ProfileAuthority
   if (fast?.model !== DEFAULT_WORKERS_AI_MODEL_SPEC) return input;
 
   const model = 'workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast';
-  const catalog = { ...input.envelope.catalog, retries: 0, tiers: { ...input.envelope.catalog.tiers, fast: { model } } };
+  const catalog = { ...input.envelope.catalog, tiers: { ...input.envelope.catalog.tiers, fast: { model } } };
 
   return { envelope: { ...input.envelope, catalog, digest: profileCatalogDigest(catalog) },
     provider: { ...input.provider, availableModels: [...new Set([...input.provider.availableModels, model])] } };
