@@ -16,7 +16,8 @@ const OPERATION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
  * Writes `data` at `path` only if the file's bytes hash to `expected` (null: only if no file is there). One guest
  * process reads the new bytes from stdin, compares, and replaces through a temp file and a rename, so the compare and
  * the write are the guest's own instant, and a reader never sees half a file. The guest keeps each `operation`'s
- * answer, so a resend after a lost reply gets the first send's answer rather than a second compare.
+ * answer, and its staged write before the rename publishes it, so a resend after a lost reply or a guest cut at any
+ * point gets the first send's outcome rather than a second compare.
  */
 export function writeFileIfDigest(
   container: Pick<Container, 'exec'>,
@@ -58,19 +59,36 @@ for entry in os.scandir(journal):
     except FileNotFoundError:
         pass
 answered = os.path.join(journal, operation + '.json')
+# The staged write, recorded before its rename publishes it: a resend finds its temp file gone if and only if the rename
+# ran, since a failed attempt drops this record before its temp file.
+intent = os.path.join(journal, operation + '.intent')
 lock = os.open(os.path.join(journal, operation + '.lock'), os.O_RDWR | os.O_CREAT, 0o600)
 fcntl.flock(lock, fcntl.LOCK_EX)
 if os.path.exists(answered):
     with open(answered) as first:
         sys.stdout.write(first.read())
     sys.exit(0)
+def record(target, content):
+    pending = target + '.' + secrets.token_hex(6)
+    with open(pending, 'w') as out:
+        out.write(content)
+    os.rename(pending, target)
 def answer(reply):
     text = json.dumps(reply)
-    pending = answered + '.' + secrets.token_hex(6)
-    with open(pending, 'w') as out:
-        out.write(text)
-    os.rename(pending, answered)
+    record(answered, text)
+    if os.path.exists(intent):
+        os.unlink(intent)
     print(text)
+if os.path.exists(intent):
+    with open(intent) as staged:
+        recorded = json.load(staged)
+    if not os.path.exists(recorded['temporary']):
+        # The first send's rename published its bytes and it was cut before answering: that write stands.
+        answer({'ok': True, 'sha256': recorded['sha256']})
+        sys.exit(0)
+    # It was cut before its rename: nothing was published, so this send starts over.
+    os.unlink(intent)
+    os.unlink(recorded['temporary'])
 try:
     with open(path, 'rb') as held:
         found = hashlib.sha256(held.read()).hexdigest()
@@ -83,6 +101,7 @@ if found != expected:
 directory = os.path.dirname(path) or '/'
 os.makedirs(directory, exist_ok=True)
 temporary = os.path.join(directory, '.' + os.path.basename(path) + '.' + secrets.token_hex(6) + '.kinu-write')
+digest = hashlib.sha256(data).hexdigest()
 try:
     # Created with the replaced file's mode and given the bits the umask cut before any byte is written.
     descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666 if mode is None else mode)
@@ -90,10 +109,13 @@ try:
         if mode is not None:
             os.fchmod(descriptor, mode)
         out.write(data)
+    record(intent, json.dumps({'temporary': temporary, 'sha256': digest}))
     os.rename(temporary, path)
 except BaseException:
+    if os.path.exists(intent):
+        os.unlink(intent)
     if os.path.exists(temporary):
         os.unlink(temporary)
     raise
-answer({'ok': True, 'sha256': hashlib.sha256(data).hexdigest()})
+answer({'ok': True, 'sha256': digest})
 `;
