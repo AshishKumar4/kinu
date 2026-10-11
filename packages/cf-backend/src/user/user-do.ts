@@ -5,7 +5,8 @@
  */
 import { Agent, type AgentContext } from 'agents';
 
-import { USER_DO_RPC_SURFACE, USER_DO_STARTED_RPC, sealRpcSurface } from '../rpc-surface';
+import { USER_DO_RPC_SURFACE, USER_DO_STARTED_RPC } from '../rpc-surface';
+import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from '../activation-gate';
 
 import {

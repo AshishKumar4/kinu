@@ -11,7 +11,8 @@ import { actorReferenceOf, isSubordinateOrigin, ownerCaller, WORKSPACE_ROOT, typ
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { handClock } from '@kinu.run/test-utils/hand-clock';
 import { diagnostics } from '@kinu.run/core/obs';
-import { sealRpcSurface, ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
+import { ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
+import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import type { UserDO } from '../../src/user/user-do';
 import { HIRE_CHILD_MODEL, hireControlUrl, hireModelsBaseUrl, JOB_GATE, REPORT_MARK, type ActorRow, type JobRow, type JobWatchState, type ArchiveSections, type ChildScript, type HireObservation, type LogRow, type RosterRow, type TurnCount } from './hire-shapes';

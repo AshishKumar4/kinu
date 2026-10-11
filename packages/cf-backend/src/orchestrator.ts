@@ -6,7 +6,8 @@ import { PLATFORM_CATALOG, GitHubFactSchema, readGitHubActivity, readGitHubRemot
  */
 
 import { Agent, callable, type AgentContext, type Connection, type ConnectionContext } from "agents";
-import { ORCHESTRATOR_RPC_SURFACE, ORCHESTRATOR_STARTED_RPC, sealRpcSurface } from "./rpc-surface";
+import { ORCHESTRATOR_RPC_SURFACE, ORCHESTRATOR_STARTED_RPC } from "./rpc-surface";
+import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from "./activation-gate";
 import { supervisorEsbuildService } from "@nimbus-sh/worker/facet-host";
 import { listPortReservations } from "@nimbus-sh/worker/port-capability";
