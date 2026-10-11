@@ -5,7 +5,8 @@ import { builtinModules } from 'node:module';
 import { createServer } from 'node:net';
 import { build } from 'esbuild';
 import { nodeRequireAsImport } from '../packages/cf-backend/esbuild-node-require';
-import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
+import { Miniflare, Response as MiniflareResponse, WebSocketPair, convertV4MiniflareOptions } from 'miniflare';
+import { PERF_SECRET, PERF_SECRET_HOST } from './turn-file-io/egress-secret';
 import { ownerCaller, type JsonObject } from '@kinu.run/core';
 import * as v from 'valibot';
 import { workersAiBinding, readAiRun, workersAiAnswer } from '../packages/cf-backend/tests/helpers/workers-ai-binding';
@@ -29,7 +30,7 @@ const isolated = sha !== 'd05ff368d';
 
 const samples = Number(option('samples', '30'));
 
-const COMMAND_HOSTS: readonly string[] = ['github.com', 'codeload.github.com', 'registry.npmjs.org'];
+const COMMAND_HOSTS: readonly string[] = ['github.com', 'codeload.github.com', 'registry.npmjs.org', 'example.com'];
 
 const BuiltConfigSchema = v.object({
   compatibility_date: v.string(), compatibility_flags: v.array(v.string()), vars: v.record(v.string(), v.string()),
@@ -290,6 +291,50 @@ async function ask(path: string, input?: JsonObject): Promise<string> {
   return body;
 }
 
+/** A bare repository the egress subject pushes to, served as git's smart HTTP by `git http-backend`. */
+const gitRoot = join(process.env.TMPDIR ?? '/tmp', `perfio-git-${String(process.pid)}`);
+
+/** `git.perfio.test`: `/echo` says whether its Authorization carried the secret; `/repo.git` is served by `git http-backend`. */
+async function gitServer(request: Request): Promise<Response> {
+  const url = new URL(request.url);
+
+  // Names whether the secret arrived, never the header: the egress scrubs the secret from what it answers.
+  if (url.pathname === '/echo') return new Response(`auth=${request.headers.get('authorization') === `Bearer ${PERF_SECRET}` ? 'secret' : 'other'}\n`);
+
+  const env = {
+    GIT_PROJECT_ROOT: gitRoot, GIT_HTTP_EXPORT_ALL: '1', REMOTE_USER: 'perfio', REQUEST_METHOD: request.method, PATH_INFO: url.pathname,
+    QUERY_STRING: url.search.slice(1), CONTENT_TYPE: request.headers.get('content-type') ?? '', PATH: process.env.PATH ?? '',
+    HTTP_CONTENT_ENCODING: request.headers.get('content-encoding') ?? '',
+  };
+
+  const ran = Bun.spawn(['git', 'http-backend'], { env, stdin: new Uint8Array(await request.arrayBuffer()), stdout: 'pipe', stderr: 'pipe' });
+  const out = new Uint8Array(await new Response(ran.stdout).arrayBuffer());
+  const split = Buffer.from(out).indexOf('\r\n\r\n');
+
+  const headers = new Headers();
+  let status = 200;
+
+  for (const line of new TextDecoder().decode(out.subarray(0, split)).split('\r\n')) {
+    const [name = '', ...rest] = line.split(':');
+
+    if (name.toLowerCase() === 'status') status = Number.parseInt(rest.join(':').trim(), 10);
+    else headers.set(name, rest.join(':').trim());
+  }
+
+  return new Response(out.subarray(split + 4), { status, headers });
+}
+
+/** `echo.perfio.test`: a WebSocket server that answers each message with itself, as a public echo server does. */
+function echoSocket(request: Request): MiniflareResponse {
+  if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') return new MiniflareResponse('a WebSocket echo', { status: 426 });
+  const [client, server] = Object.values(new WebSocketPair());
+
+  server.accept();
+  server.addEventListener('message', (event) => { server.send(event.data); });
+
+  return new MiniflareResponse(null, { status: 101, webSocket: client });
+}
+
 /** `request` answered by the network; Bun's fetch decodes the body and keeps its content-encoding, which workerd would decode again. */
 async function passedThrough(request: Request): Promise<Response> {
   const fetched = await fetch(request);
@@ -328,13 +373,17 @@ async function measureStep(step: number, entered: number, consumed: number): Pro
   if (mode === 'counts') phases.push(v.parse(CutSchema, JSON.parse(await ask(`/cut?label=${label}&resume=1`))));
 }
 
-async function model(request: Request): Promise<Response> {
+async function model(request: Request): Promise<Response | MiniflareResponse> {
   const entered = performance.now();
   const consumed = measuring ? cpu(enginePid) : 0;
   const url = new URL(request.url);
 
-  // Only the commands subject reaches the network: its clone and install are what it measures.
-  if (subject === 'commands' && COMMAND_HOSTS.includes(url.hostname)) return await passedThrough(request);
+  // Only the commands and egress subjects reach the network: their clone and install are what they measure.
+  if ((subject === 'commands' || subject === 'egress') && COMMAND_HOSTS.includes(url.hostname)) return await passedThrough(request);
+
+  if (subject === 'egress' && url.hostname === PERF_SECRET_HOST) return await gitServer(request);
+
+  if (subject === 'egress' && url.hostname === 'echo.perfio.test') return echoSocket(request);
 
   if (url.pathname === '/models') return new Response(SCRIPTED_MODELS_BODY);
 
@@ -410,7 +459,7 @@ const mf = new Miniflare(convertV4MiniflareOptions({
   workers: [product, {
     name: 'driver', ...compat,
     modules: [{ type: 'ESModule', path: join(dist, 'perf-driver.js'), contents: await bundle('driver.ts') }],
-    bindings: { OWNER_TOKEN: owner.ownerToken },
+    bindings: { OWNER_TOKEN: owner.ownerToken, PERF_EGRESS: subject === 'egress' ? '1' : '0' },
     durableObjects: {
       PERF_DRIVER: { className: 'PerfDriver', useSQLite: true },
       OrchestratorAgent: { className: 'OrchestratorAgent', scriptName: 'kinu', useSQLite: true },
@@ -626,6 +675,63 @@ try {
     if (option('cpu', '1') === '0') await run();
     else await profiled(workload, run);
 
+    measured.push(...fileResults);
+  } else if (subject === 'egress') {
+    await ask('/seed');
+    const placeholder = await ask('/placeholder');
+
+    Bun.spawnSync(['git', 'init', '-q', '--bare', join(gitRoot, 'repo.git')]);
+    Bun.spawnSync(['git', '-C', join(gitRoot, 'repo.git'), 'config', 'http.receivepack', 'true']);
+
+    // Every command's network is the workspace egress's: its destination check, its vault, its scrub.
+    await measureOp('egress.curl', () => shell("curl -sS https://example.com/ | grep -o 'Example Domain' | head -1 | sed 's/^/page=/'"), undefined, 'page=Example Domain');
+    await measureOp('egress.clone', (index) => {
+      const at = `/home/main/perfio/eclone-${String(index + 1)}`;
+
+      return shell(`git clone --depth 1 https://github.com/expressjs/express ${at} && ${node(`console.log('name=' + require('${at}/package.json').name)`)}`);
+    }, undefined, 'name=express');
+    await measureOp('egress.push', (index) => {
+      const at = `/home/main/perfio/epush-${String(index + 2)}`;
+
+      return shell(`mkdir -p ${at} && cd ${at} && git init -q && git config user.email p@perfio.test && git config user.name perfio && echo ${String(index)} > a.txt`
+        + ` && git add a.txt && git commit -q -m c${String(index + 2)} && git push https://${PERF_SECRET_HOST}/repo.git HEAD:refs/heads/b${String(index + 2)} 2>&1 | tail -2`);
+    }, undefined, '->');
+    await measureOp('egress.inject', () => shell(`curl -sS -H "Authorization: Bearer ${placeholder}" https://${PERF_SECRET_HOST}/echo`), undefined, 'auth=secret');
+    await measureOp('egress.npm', (index) => {
+      const at = `/home/main/perfio/enpm-${String(index + 2)}`;
+
+      return shell(`mkdir -p ${at} && cd ${at} && echo '{"name":"probe","private":true}' > package.json`
+        + ` && npm install --no-audit --no-fund ms@2.1.3 && ${node("console.log('ms=' + require('ms/package.json').version)")}`);
+    }, undefined, 'ms=2.1.3');
+    await measureOp('egress.tls', () => shell(node(
+      "const s = require('tls').connect(443, 'example.com', () => s.write('HEAD / HTTP/1.0\\r\\nHost: example.com\\r\\n\\r\\n')); s.on('data', (d) => { console.log('tls=' + String(d).split(' ')[0]); s.destroy(); }); s.on('error', (e) => console.log('tls failed: ' + e.message))",
+    )), undefined, 'tls=HTTP/1');
+    await measureOp('egress.wss', () => shell(node(
+      "const w = new WebSocket('wss://echo.perfio.test/'); w.onopen = () => w.send('kinu-ws'); w.onmessage = (e) => { if (String(e.data) === 'kinu-ws') { console.log('ws=echoed'); w.close(); } }; w.onerror = (e) => console.log('ws failed: ' + (e.message ?? 'error'))",
+    )), undefined, 'ws=echoed');
+    await measureOp('egress.upgrade', () => shell(node(
+      "require('https').request({ host: 'echo.perfio.test', path: '/', headers: { Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==', 'Sec-WebSocket-Version': '13' } }).on('upgrade', (res, socket) => { console.log('upgrade=' + res.statusCode); socket.destroy(); }).on('response', (res) => console.log('upgrade failed: ' + res.statusCode)).on('error', (e) => console.log('upgrade failed: ' + e.message)).end()",
+    )), undefined, 'upgrade=101');
+    // STARTTLS (pg, mysql2 and nodemailer upgrade so): a plain socket's TLS session, then a command over it.
+    await measureOp('egress.starttls', () => shell(node([
+      "const net = require('net'), tls = require('tls'); const s = net.connect(587, 'smtp.gmail.com'); let step = 0, heard = '';",
+      "s.on('error', (e) => console.log('starttls failed: ' + e.message));",
+      "s.on('data', (d) => { heard += d; if (!heard.endsWith('\\r\\n')) return; const last = heard.trimEnd().split('\\r\\n').pop(); heard = '';",
+      "  if (step === 0 && last.startsWith('220 ')) { step = 1; s.write('EHLO kinu\\r\\n'); }",
+      "  else if (step === 1 && last.startsWith('250 ')) { step = 2; s.write('STARTTLS\\r\\n'); }",
+      "  else if (step === 2 && last.startsWith('220 ')) { step = 3; s.removeAllListeners('data');",
+      "    try { const t = tls.connect({ socket: s, servername: 'smtp.gmail.com' }, () => t.write('EHLO kinu\\r\\n'));",
+      "      t.on('data', (e) => { console.log('starttls=' + String(e).slice(0, 3)); t.destroy(); }); t.on('error', (e) => console.log('starttls failed: ' + e.message)); }",
+      "    catch (e) { console.log('starttls failed: ' + e.message); s.destroy(); } } });",
+    ].join(' '))), undefined, 'starttls=250');
+    await measureOp('egress.clientcert', () => shell(node(
+      "try { const s = require('tls').connect({ host: 'example.com', port: 443, cert: 'c', key: 'k' }, () => { console.log('clientcert=connected'); s.destroy(); }); s.on('error', (e) => console.log('clientcert=' + (e.code ?? e.message))); } catch (e) { console.log('clientcert=' + (e.code ?? e.message)); }",
+    )), undefined, 'clientcert=connected');
+
+
+    // The egress's own refusal names the address; the isolate's network would time out or reset without one.
+    await measureOp('egress.private', () => shell('curl -sS --max-time 5 http://10.0.0.1/'), undefined, 'blocked');
+    process.stdout.write(`SECRET-LEAK ${String((await shell(`curl -sS -H "Authorization: Bearer ${placeholder}" https://${PERF_SECRET_HOST}/echo`)).includes(PERF_SECRET))}\n`);
     measured.push(...fileResults);
   } else if (subject === 'pipes') {
     await ask('/seed');

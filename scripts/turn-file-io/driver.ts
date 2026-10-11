@@ -4,11 +4,14 @@ import type { OrchestratorAgent } from './product';
 import type { UserDO } from '../../packages/cf-backend/src/user/user-do';
 import type { Slice } from './meter';
 import { SCRIPTED_MODEL_SPEC } from '../../packages/test-utils/src/scripted-model-spec';
+import * as v from 'valibot';
+import { PERF_SECRET, PERF_SECRET_HOST } from './egress-secret';
 
 interface DriverEnv {
   readonly OWNER_TOKEN: string;
   readonly OrchestratorAgent: DurableObjectNamespace<OrchestratorAgent>;
   readonly UserDO: DurableObjectNamespace<UserDO>;
+  readonly PERF_EGRESS: string;
 }
 
 const OWNER = 'fedcba9876543210fedcba9876543211';
@@ -25,6 +28,15 @@ export class PerfDriver extends DurableObject<DriverEnv> {
     const claim = await target.claimOwner(OWNER);
     await users.ensureWorkspaceCapability(workspace, claim.capabilityHash);
     await users.setCredential(caller, 'openai-compat.default', { kind: 'openai-compat', baseURL: 'http://model.invalid', apiKey: 'perf' });
+
+    // The egress subject's vault secret, granted before the workspace opens: its egress is minted with what is granted then.
+    if (this.env.PERF_EGRESS === '1') {
+      const binding = await users.putEgressSecret(caller, { id: 'perfio-git', label: 'perfio git', host: PERF_SECRET_HOST, secret: PERF_SECRET });
+
+      await target.perfGrantEgress(binding.id);
+      await this.ctx.storage.put('placeholder', binding.placeholder);
+    }
+
     await target.setSoul('# Probe\n\nAnswer.');
     await target.setModel(SCRIPTED_MODEL_SPEC);
     await target.getWorkspaceSnapshot();
@@ -50,6 +62,8 @@ export class PerfDriver extends DurableObject<DriverEnv> {
 
   async seed(workspace: string): Promise<void> { await this.target(workspace).perfSeed(); }
 
+  async placeholder(): Promise<string> { return v.parse(v.string(), await this.ctx.storage.get('placeholder')); }
+
   async tool(workspace: string, name: string, input: string): Promise<string> {
     return await this.target(workspace).perfTool(name, input);
   }
@@ -67,6 +81,7 @@ export default {
       case '/begin': await driver.begin(workspace); break;
       case '/cut': return Response.json(await driver.cut(workspace, url.searchParams.get('label') ?? '', url.searchParams.get('resume') === '1'));
       case '/seed': await driver.seed(workspace); break;
+      case '/placeholder': return new Response(await driver.placeholder());
       case '/tool': {
         const input = await request.text();
 

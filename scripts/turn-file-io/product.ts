@@ -2,7 +2,7 @@
 import { OrchestratorAgent as Product, AgentWorkspaceRPC as Relay, UserDO as Account } from 'kinu:product';
 import type { AgentFacet as MeasuredFacet } from './facet';
 import { Meter, instrument, type Slice, type RpcReceiver } from './meter';
-import { JsonObjectSchema } from '@kinu.run/core';
+import { egressSecretRule, JsonObjectSchema } from '@kinu.run/core';
 import type { Tool } from 'ai';
 import * as v from 'valibot';
 import type { ChatSession } from '@kinu.run/core';
@@ -153,6 +153,11 @@ export class OrchestratorAgent extends Product {
 
     await this.rt.storage.vfs.writeFile(`${root}/edit.txt`, encode.encode('anchor-a\n' + 'x'.repeat(4087)));
     await this.perfWarmFiles();
+  }
+
+  /** The workspace may spend vault secret `id` on its egress, as an owner's approval grants it. */
+  async perfGrantEgress(id: string): Promise<void> {
+    this.config.grantShellApproval([{ rule: egressSecretRule(id), executor: 'sandbox' }]);
   }
 
   async perfTool(name: string, input: string): Promise<string> {
