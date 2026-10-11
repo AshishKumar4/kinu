@@ -714,7 +714,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const agent = this.agentOf(actorId);
 
     return {
-      actorId, storageKey: agent.storageKey, workspaceName: this.workspaceName(), shellId: agent.shellId, home: agentHome(agent.homeName),
+      actorId, storageKey: agent.storageKey, workspaceName: this.workspaceName(), home: agentHome(agent.homeName),
       providers: providerBindingsOf(this.env),
     };
   }

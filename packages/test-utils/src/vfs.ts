@@ -1,7 +1,7 @@
 import { Effect } from 'effect';
 import { settle } from '@kinu.run/core/obs';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
-import type { RemoteSessionBox } from '@kinu.run/core';
+import type { NimbusSandboxFiles, NimbusSandboxHandle } from '@kinu.run/core';
 // Map-backed VFS; `mkdir` surfaces EEXIST on repeat unless recursive, like the real backends.
 
 
@@ -65,15 +65,18 @@ export function createMemoryVfs(): MemoryVfs {
   return { vfs, files };
 }
 
+/** A test's Nimbus box with a session's file plane beside it, the plane `nimbusSessionFiles` reads. */
+export type SessionBox = NimbusSandboxHandle & { readonly files: NimbusSandboxFiles };
+
 /** A remote session's file plane over `files`, shaped as the Nimbus SDK's: an absent path answers null. */
-export function sessionFilesOver(files = new Map<string, Uint8Array>()): RemoteSessionBox['files'] {
+export function sessionFilesOver(files = new Map<string, Uint8Array>()): NimbusSandboxFiles {
   const stat = async (path: string) => {
     const bytes = files.get(path);
 
-    return bytes === undefined ? null : { type: 'file', size: bytes.byteLength, mtime: 1 };
+    return bytes === undefined ? null : { type: 'file', size: bytes.byteLength, mtime: 1, mode: 0o644 };
   };
 
-  const plane: RemoteSessionBox['files'] = {
+  const plane: NimbusSandboxFiles = {
     as: () => plane,
     readBytes: async (path) => files.get(path)?.slice() ?? null,
     readRange: async (path, offset, length) => files.get(path)?.slice(offset, offset + length) ?? null,

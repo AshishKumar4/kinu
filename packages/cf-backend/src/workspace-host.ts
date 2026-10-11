@@ -507,13 +507,13 @@ function workspaceBox(deps: {
   namespace: NonNullable<NimbusSandboxHandle['namespace']>;
 }): NimbusSandboxHandle {
   const { runtime, scope } = deps;
-  const shellId = (name: string): string => `agent:${sha256Hex(`${scope}\u0000${name}`)}`;
+  // An agent's shell names are its own: keyed by its scope, two agents' names never meet in the workspace.
+  const keyed = (name: string): string => `agent:${sha256Hex(`${scope}\u0000${name}`)}`;
 
-  const named = <O extends { readonly name?: string }>(options: O | undefined) => {
-    if (options?.name === undefined) return options;
-    const { name, ...rest } = options;
+  const named = <O extends { readonly shellId?: string }>(options: O | undefined) => {
+    if (options?.shellId === undefined) return options;
 
-    return { ...rest, shellId: shellId(name) };
+    return { ...options, shellId: keyed(options.shellId) };
   };
 
   return {
@@ -522,7 +522,7 @@ function workspaceBox(deps: {
     execStream: async (command, options) => await (await runtime()).execStream(command, named(options)),
     startProcess: async (command, options): Promise<NimbusStartResult> => await (await runtime()).startProcess(command, named(options)),
     runCode: async (code, options): Promise<NimbusExecResult> => await (await runtime()).runCode(code, named(options)),
-    shellCwd: async (name) => namedShellCwd(deps.ctx.storage.sql, shellId(name)),
+    shellCwd: async (shellId) => namedShellCwd(deps.ctx.storage.sql, keyed(shellId)),
     runtimes: {
       ensure: async (specs, options) => await jsonResultOrVoid((await runtime()).ensureRuntimes(Array.isArray(specs) ? [...specs] : [specs], options)),
       install: async (spec, options) => await jsonResultOrVoid((await runtime()).installRuntime(spec, options)),

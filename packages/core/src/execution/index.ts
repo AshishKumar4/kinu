@@ -109,8 +109,7 @@ export {
 export {
   nimbusSessionShell,
   type NimbusSandboxHandle,
-  type RemoteSessionBox,
-  type NimbusExecOptions,
+  type NimbusSandboxFiles,
   type NimbusExecResult,
   type NimbusStartResult,
   type NimbusPortInfo,

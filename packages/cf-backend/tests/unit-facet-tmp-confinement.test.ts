@@ -9,7 +9,8 @@ import * as v from 'valibot';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import type { HostedRuntime } from '@nimbus-sh/worker/workspace-host';
 import type { SqlDatabase, VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
-import type { NimbusSandboxHandle, NodeHomeHost, NodeIdentity, RemoteSessionBox } from '@kinu.run/core';
+import type { NimbusSandboxHandle, NodeHomeHost, NodeIdentity } from '@kinu.run/core';
+import type { SessionBox } from '@kinu.run/test-utils/vfs';
 import {
   facetHomeProvisioner, facetHomeReleaser, nimbusSessionFiles, restoreAgentTmpConfinements,
   settleWorkspaceRoot, WORKSPACE_ROOT, actorHomeName, explorationActorKey } from '@kinu.run/core';
@@ -75,6 +76,8 @@ async function openOwner(): Promise<OwnerFixture> {
         exitCode: result.exitCode,
         stdout: result.stdout,
         stderr: result.stderr,
+        duration: result.duration,
+        timestamp: result.timestamp,
       };
     },
   };
@@ -85,7 +88,7 @@ async function openOwner(): Promise<OwnerFixture> {
   };
 }
 
-function sessionBoxFor(f: OwnerFixture, cred: VfsCred): RemoteSessionBox {
+function sessionBoxFor(f: OwnerFixture, cred: VfsCred): SessionBox {
   return credentialedSessionBox(f.runtime, cred);
 }
 
@@ -131,8 +134,8 @@ describe('a hosted node hardcoding /tmp stays private', () => {
       const homeA = await provision(node('aX9'));
       const homeB = await provision(node('bK2'));
       const [a, b] = [credOf(homeA), credOf(homeB)];
-      const asA = nimbusSessionFiles(sessionBoxFor(f, a), { home: homeA.home, cred: a });
-      const asB = nimbusSessionFiles(sessionBoxFor(f, b), { home: homeB.home, cred: b });
+      const asA = nimbusSessionFiles(sessionBoxFor(f, a).files, { home: homeA.home, cred: a });
+      const asB = nimbusSessionFiles(sessionBoxFor(f, b).files, { home: homeB.home, cred: b });
 
       // Includes the stage-and-rename commit, which resolves through the same rewrite.
       await writeText(asA, '/tmp/y', 'from a');
@@ -222,7 +225,7 @@ describe('every facet kind is one home namespace on the owner', () => {
   });
 });
 
-function originFilesBox(f: OwnerFixture): RemoteSessionBox {
+function originFilesBox(f: OwnerFixture): SessionBox {
   const view = f.workspace.vfs.as(ORIGIN);
   const refuse = async (): Promise<never> => { throw new Error('the origin box acts as the origin only'); };
 
@@ -241,7 +244,7 @@ function originFilesBox(f: OwnerFixture): RemoteSessionBox {
   const stat = async (path: string) => present(() => {
     const found = view.stat(path);
 
-    return { type: found.type, size: found.size, mtime: found.mtime };
+    return { type: found.type, size: found.size, mtime: found.mtime, mode: found.mode };
   });
 
   return {
@@ -268,7 +271,7 @@ describe('one box answers both surfaces with the same bytes', () => {
     const f = await openOwner();
 
     try {
-      const files = nimbusSessionFiles(originFilesBox(f), { home: WORKSPACE_ROOT });
+      const files = nimbusSessionFiles(originFilesBox(f).files, { home: WORKSPACE_ROOT });
 
       // A relative shell path and its `/home/main` spelling name the same file; root paths are per-surface.
       expect(await rpcExec(f.host, 'echo live-bytes > tree-probe.md', {}))

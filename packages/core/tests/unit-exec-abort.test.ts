@@ -16,15 +16,14 @@ import {
   nimbusSessionFiles,
   nimbusSessionShell,
   type NimbusExecResult,
-  type RemoteSessionBox,
-} from '../src/execution/nimbus';
+  } from '../src/execution/nimbus';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { createTestRuntime, conversationsFor } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { Shell } from '../src/types/primitives';
 import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
 import type { CommandResult } from '../src/execution/exec-result';
-import { sessionFilesOver } from '@kinu.run/test-utils/vfs';
+import { sessionFilesOver, type SessionBox } from '@kinu.run/test-utils/vfs';
 
 function hangingPromise<T>(): Promise<T> {
   return new Promise<T>(() => {});
@@ -351,7 +350,7 @@ describe('remote executor exec abort', () => {
   });
 
   test('the hosted workspace shell stops waiting and throws AbortError on abort', async () => {
-    const box: RemoteSessionBox = {
+    const box: SessionBox = {
       ready: async () => {},
       exec: () => hangingPromise<NimbusExecResult>(),
       files: sessionFilesOver(),
@@ -360,7 +359,7 @@ describe('remote executor exec abort', () => {
     const { rt } = createTestRuntime();
 
     const provider = createNimbusWorkspaceExecutor({
-      box, inline: { vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), memory: rt.memory, craftStore: rt.craftStore },
+      box, inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), memory: rt.memory, craftStore: rt.craftStore },
     });
 
     const controller = new AbortController();

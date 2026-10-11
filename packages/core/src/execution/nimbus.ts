@@ -5,7 +5,7 @@ import { direntType } from '../vfs/dirent';
 import * as v from 'valibot';
 import { raceAbort } from '@kinu.run/agent-utils';
 import type { OutputSink, Shell, ShellExecOptions, ShellExecResult } from '../types/primitives';
-import { collectExecStream, type ExecChunk, type ExecStream } from '@nimbus-sh/core/runtime/exec-stream.js';
+import { collectExecStream, type ExecChunk, type ExecOutput, type ExecStream } from '@nimbus-sh/core/runtime/exec-stream.js';
 import type { VfsMount, WorkspacePrincipal } from '../vfs/mounts';
 import type { CompositeVFS } from '@nimbus-sh/core/vfs/composite.js';
 import { atVfsPath } from '../vfs/errno';
@@ -18,84 +18,38 @@ import { commandResult, exposedPortText, type CommandResult } from './exec-resul
 import { KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import type { JsonValue } from '../utils/json';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
+import type {
+  SessionDirectoryEntry, SessionExecOptions, SessionFileStat, SessionPort, SessionRunCodeOptions, SessionStartResult,
+} from '@nimbus-sh/core/runtime/session-protocol.js';
 
-export interface NimbusExecOptions {
-  cwd?: string;
-  env?: Record<string, string>;
-  timeoutMs?: number;
-  stdin?: string;
-  /** Identity the command runs as; absent is the session user. Host-injected only: {@link NimbusExecOptionsSchema}
-   *  omits it so an agent cannot choose uid 0. */
-  cred?: VfsCred;
-  /** A named shell, whose directory and exported variables last between the calls naming it; absent keeps nothing. */
-  name?: string;
-  /** The job a call runs as: every process it starts, and theirs, carry it, and a port's listener reports it. */
-  execId?: string;
-}
+/**
+ * A command's options: the shared session contract's, as far as Kinu sets them. `cred` is host-injected only
+ * ({@link NimbusExecOptionsSchema} omits it so an agent cannot choose uid 0); `shellId` names the transport's shell, which
+ * a host keys per agent.
+ */
+type NimbusExecOptions = Pick<SessionExecOptions, 'cwd' | 'env' | 'timeoutMs' | 'stdin' | 'cred' | 'shellId' | 'execId'>;
 
-type NimbusRunCodeOptions = NimbusExecOptions & {
-  language?: 'javascript' | 'typescript' | 'python' | 'ruby' | 'shell';
-  install?: 'never' | 'ifMissing';
-};
+type NimbusRunCodeOptions = NimbusExecOptions & Pick<SessionRunCodeOptions, 'language' | 'install'>;
 
-export interface NimbusExecResult {
-  command: string;
-  success: boolean;
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-  duration?: number;
-  timestamp?: number;
-}
+export type NimbusExecResult = ExecOutput;
 
-interface NimbusProcessInfo {
-  pid: number;
-  command: string;
-  state: string;
-  exitCode: number | null;
-  longRunning: boolean;
-}
+export type NimbusPortInfo = SessionPort;
 
-export interface NimbusPortInfo {
-  port: number;
-  pid?: number;
-  registeredAt?: number;
-  capability?: string;
-  /** The job whose process listens (`NimbusExecOptions.execId`). */
-  execId?: string;
-}
+/** `startProcess` result: the process is still running, so no exit code or output; read `logs`, stop via `killProcess`. */
+export type NimbusStartResult = SessionStartResult;
 
-/** `startProcess` result (SDK ≥0.2.0): the process is still running, so no exit code or output; read `logs`, stop via `killProcess`. */
-export interface NimbusStartResult {
-  command: string;
-  pid: number;
-  process: NimbusProcessInfo;
-  ports: NimbusPortInfo[];
-  startedAt: number;
-}
-
-/** A session file's metadata (`@nimbus-sh/core/runtime/session-protocol.js` SessionFileStat). */
-interface NimbusSessionStat {
-  type: string;
-  size: number;
-  mtime: number;
-  ctime?: number;
-  ino?: number;
-  revision?: number;
-}
-
-/** A remote session's file plane: the SDK's `NimbusSandbox.files`. `as(cred)` binds it to one identity. */
-interface NimbusSandboxFiles {
+/** A remote session's file plane as Kinu reads it: the SDK's `NimbusSandbox.files`. `as(cred)` binds it to one identity. */
+export interface NimbusSandboxFiles {
   as(cred: VfsCred): NimbusSandboxFiles;
   readBytes(path: string): Promise<Uint8Array | null>;
   /** Exactly this window of a file's bytes; null when the path is absent. */
   readRange(path: string, offset: number, length: number): Promise<Uint8Array | null>;
   /** Whole-file write; no precondition, so no compare-and-write. */
   write(path: string, content: string | Uint8Array): Promise<void>;
-  list(path?: string): Promise<Array<{ name: string; type: string }>>;
+  list(path?: string): Promise<SessionDirectoryEntry[]>;
   /** `mtime` and `ctime` are in milliseconds; null when absent. `ino` and `revision` when the backend keeps them. */
-  stat(path: string): Promise<NimbusSessionStat | null>;
-  lstat(path: string): Promise<NimbusSessionStat | null>;
+  stat(path: string): Promise<SessionFileStat | null>;
+  lstat(path: string): Promise<SessionFileStat | null>;
   /** A link's target as written; null when the path is absent or no link. */
   readlink(path: string): Promise<string | null>;
   rename(from: string, to: string): Promise<void>;
@@ -107,12 +61,10 @@ export interface NimbusSandboxHandle {
   ready(): Promise<void>;
   exec(command: string, options?: NimbusExecOptions): Promise<NimbusExecResult>;
   /** A named shell's directory as its last call left it; null before its first call. */
-  shellCwd?(name: string): Promise<string | null>;
+  shellCwd?(shellId: string): Promise<string | null>;
   execStream?: (command: string, options?: NimbusExecOptions) => Promise<ExecStream>;
   startProcess?: (command: string, options?: NimbusExecOptions) => Promise<NimbusStartResult>;
   runCode?: (code: string, options?: NimbusRunCodeOptions) => Promise<NimbusExecResult>;
-  /** A remote session's file plane (the SDK's); a hosted box has none: its files are the store itself (`WorkspaceBundle.files`). */
-  files?: NimbusSandboxFiles;
   runtimes?: {
     ensure?(specs: string | string[], options?: { force?: boolean }): Promise<JsonValue | undefined>;
     install?(spec: string, options?: { force?: boolean }): Promise<JsonValue | undefined>;
@@ -543,7 +495,7 @@ async function sessionCall(
   const kept = name === undefined ? null : await shellCwd?.(name) ?? null;
   const start = startIn(kept ?? home, options.cwd);
   // Absent option must be an absent key: the substrate reads `'cred' in options` to decide whether to inherit.
-  const execOptions: NimbusExecOptions = name === undefined ? { cwd: start } : { name };
+  const execOptions: NimbusExecOptions = name === undefined ? { cwd: start } : { shellId: name };
   const moves = name !== undefined && (kept === null || options.cwd !== undefined);
 
   if (stdin !== undefined) execOptions.stdin = stdin;
@@ -654,20 +606,17 @@ async function heard(stream: ExecStream, output: OutputSink | undefined, stop: A
   return collectExecStream({ output: told, exit: stream.exit });
 }
 
-/** A remote box, which carries its session's file plane. */
-export type RemoteSessionBox = NimbusSandboxHandle & { readonly files: NimbusSandboxFiles };
-
 /**
  * A remote Nimbus session's files in its own absolute paths, a relative one from `home`. With `cred`, the plane is
  * `files.as(cred)`. Absent is the origin.
  */
 export function nimbusSessionFiles(
-  box: RemoteSessionBox,
+  session: NimbusSandboxFiles,
   plane: { readonly home: string; readonly cred?: VfsCred },
 ): VFS & Required<Pick<VFS, 'readlink' | 'removeRecursive' | 'rename' | 'readRange'>> {
   const { home, cred } = plane;
   const at = (path: string): string => workspacePath(path, home);
-  const files = cred === undefined ? box.files : box.files.as(cred);
+  const files = cred === undefined ? session : session.as(cred);
 
   const present = async <T>(path: string, syscall: string, read: (absolute: string) => Promise<T | null>): Promise<T> => {
     const absolute = at(path);

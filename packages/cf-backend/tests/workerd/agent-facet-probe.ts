@@ -17,7 +17,7 @@ import { ROOT_SLATE_CALLER, SlateBinding } from '../../src/slates/bindings';
 import { createRuntimeExecutor, jobContextAnswers } from '../../src/codemode-sandbox';
 import { SLATE_STORAGE_BINDING, type SlateSurfaceResult } from '@kinu.run/core';
 import type { AgentFacet } from './agent-facet-probe-agent';
-import type { AgentFacetAnswer, CraftedFromNodeObservation, NodeJobObservation, OnePlaneObservation, ProbeContention, RelayedAnswer, SwarmFacetObservation } from './agent-facet-shapes';
+import type { CraftedFromNodeObservation, NodeJobObservation, OnePlaneObservation, ProbeContention, RelayedAnswer, SwarmFacetObservation } from './agent-facet-shapes';
 
 export * from '../../src/server';
 
@@ -104,8 +104,6 @@ export class OrchestratorAgent extends ProductionOrchestrator {
     if (homeName === null) throw new Error('a subordinate has a home');
     const home = agentHome(homeName);
     const facet = await this.agentFacetOf<AgentFacet>(child.actorId);
-    const agentShell: AgentFacetAnswer = await facet.exec('pwd; id -u');
-
     await facet.write(`${home}/a`, 'written by the agent');
     const main = this.workspaceBox(hostedActorPlacement(directory.describe(directory.main())).shellId);
     const mainCat = await main.exec(`cat ${home}/a`);
@@ -114,8 +112,8 @@ export class OrchestratorAgent extends ProductionOrchestrator {
 
     return {
       home,
-      agentShell,
       mainRead: await readText(main.store({ home: WORKSPACE_ROOT }), `${home}/a`),
+      writer: (await main.store({ home: WORKSPACE_ROOT }).stat(`${home}/a`))?.uid ?? null,
       mainCat: { exitCode: mainCat.exitCode, stdout: mainCat.stdout, stderr: mainCat.stderr },
       sameIsolate: (await facet.boot()) === bootId,
     };

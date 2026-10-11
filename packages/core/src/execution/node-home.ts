@@ -23,7 +23,7 @@ export function withHostedNodeExecution(box: NimbusSandboxHandle, node: HostedNo
   // An unnamed call starts at home unless told; a named one where its shell is, unless told.
   const optionsFor = (options?: Parameters<NimbusSandboxHandle['exec']>[1]) => ({
     ...options,
-    ...(options?.name === undefined && { cwd: options?.cwd ?? node.home }),
+    ...(options?.shellId === undefined && { cwd: options?.cwd ?? node.home }),
     env: { ...options?.env, HOME: node.home, TMPDIR: node.tmp },
     cred: node.cred,
   });
@@ -31,7 +31,6 @@ export function withHostedNodeExecution(box: NimbusSandboxHandle, node: HostedNo
   // Nothing that runs a command is carried over as it is: a member not bound here is absent, never run as someone else.
   const execution: NimbusSandboxHandle = {
     ready: () => box.ready(),
-    files: box.files,
     ...(box.runtimes !== undefined && { runtimes: box.runtimes }),
     ...(box.processes !== undefined && { processes: box.processes }),
     ...(box.ports !== undefined && { ports: box.ports }),

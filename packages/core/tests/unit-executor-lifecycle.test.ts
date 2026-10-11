@@ -10,11 +10,10 @@ import {
   nimbusSessionFiles,
   nimbusSessionShell,
   isSandboxTransientError,
-  type RemoteSessionBox,
   type SandboxHandle,
   WORKSPACE_ROOT,
 } from "../src/index";
-import { sessionFilesOver } from "@kinu.run/test-utils/vfs";
+import { sessionFilesOver, type SessionBox } from "@kinu.run/test-utils/vfs";
 
 function sandboxHandle(): SandboxHandle & { calls: string[]; execOptions: unknown[] } {
   const calls: string[] = [];
@@ -62,7 +61,7 @@ function sandboxHandle(): SandboxHandle & { calls: string[]; execOptions: unknow
   };
 }
 
-function nimbusBox(): RemoteSessionBox & { calls: string[]; execOptions: unknown[] } {
+function nimbusBox(): SessionBox & { calls: string[]; execOptions: unknown[] } {
   const calls: string[] = [];
   const execOptions: unknown[] = [];
 
@@ -137,11 +136,11 @@ function nimbusBox(): RemoteSessionBox & { calls: string[]; execOptions: unknown
 }
 
 /** The hosted workspace over a Nimbus box, composed as cf-backend composes it. */
-function nimbusWorkspace(box: RemoteSessionBox) {
+function nimbusWorkspace(box: SessionBox) {
   const { rt } = createTestRuntime();
 
   return createNimbusWorkspaceExecutor({
-    box, inline: { vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), memory: rt.memory, craftStore: rt.craftStore },
+    box, inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), memory: rt.memory, craftStore: rt.craftStore },
   });
 }
 

@@ -3,7 +3,7 @@
  * the shipped class name, which the workspace object loads by name.
  */
 import { AgentFacet as ShippedAgentFacet } from '../../src/agent-facet/agent-facet';
-import type { AgentFacetAnswer, AgentFacetClaim } from './agent-facet-shapes';
+import type { AgentFacetClaim } from './agent-facet-shapes';
 
 let bootId: string | null = null;
 
@@ -15,13 +15,7 @@ export class AgentFacet extends ShippedAgentFacet {
   }
 
   async write(path: string, text: string): Promise<void> {
-    await this.workspace().files.write(path, text);
-  }
-
-  async exec(command: string): Promise<AgentFacetAnswer> {
-    const { exitCode, stdout, stderr } = await this.workspace().exec(command);
-
-    return { exitCode, stdout, stderr };
+    await this.workspace().write(path, text);
   }
 
   /** A row in this agent's own SQLite, which only its facet storage holds. */

@@ -9,7 +9,7 @@ import { agentCallsThrough } from '../../src/dynamic-worker-slots';
 import { attemptInItsWords } from '@kinu.run/core/obs';
 import { AgentDatabase } from '../../src/agent-facet/agent-database';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
-import { agentStateShellId, type AgentFacetPlacement, type AgentWorkspaceHost } from '../../src/agent-facets';
+import { type AgentFacetPlacement, type AgentWorkspaceHost } from '../../src/agent-facets';
 import { joinedOnlyByItself } from './agents-sdk';
 
 /**
@@ -204,9 +204,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           reportModelOperation: (event) => host.reportModelOperation(event),
         },
         WORKSPACE_NAME: placement.workspaceName,
-        SHELL_ID: placement.shellId,
         HOME: placement.home,
-        STATE_SHELL_ID: agentStateShellId(placement.storageKey),
         ...placement.providers,
       };
 

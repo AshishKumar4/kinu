@@ -1,15 +1,15 @@
 import { type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 /** One non-main agent in its own loader isolate (D9). */
 import { DurableObject, RpcTarget } from 'cloudflare:workers';
-import { Nimbus, type NimbusSandbox, type NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
+import { Nimbus, type NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
 import type { UIMessage } from 'ai';
 import { Effect } from 'effect';
 import { flight, settle, type KinuError } from '@kinu.run/core/obs';
 import {
-  encodeModelMessageValues, jsonResultOrVoid, readAgentArchivePage,
+  encodeModelMessageValues, readAgentArchivePage,
   type InspectedWork,
   type AgentOwnInspection, type AnsweredEvolutionHelper, type JsonValue, type ArchiveAgentPage, type ArchiveSqlCursor, type ChatHistoryPage,
-  type RemoteSessionBox, type PositionPageRequest, type ProviderEnv, type SerializedMessage, type SubordinateInspectionResult,
+  type NimbusSandboxFiles, type PositionPageRequest, type ProviderEnv, type SerializedMessage, type SubordinateInspectionResult,
   servedContextTree, type ContextEditor, type ContextTreeRemote, type SpendLedger, type StepSpendSource, type TurnRequestIndex, type TurnRequestPage, type ConversationSearchHit, type ConversationScrollResult, type ConversationSummary,
   type SendState,
 } from '@kinu.run/core';
@@ -31,33 +31,10 @@ export type { AgentWorkspace } from './agent-turn';
 export interface AgentFacetEnv {
   readonly WORKSPACE: AgentWorkspaceCalls;
   readonly WORKSPACE_NAME: string;
-  readonly SHELL_ID: string;
   readonly HOME: string;
-  readonly STATE_SHELL_ID: string;
   readonly AI?: ProviderEnv['AI'];
   readonly AI_GATEWAY_URL?: string;
   readonly WORKERS_AI_VIA_BINDING?: string;
-}
-
-function sandboxHandle(sandbox: NimbusSandbox): RemoteSessionBox {
-  return {
-    ready: () => sandbox.ready(),
-    exec: (command, options) => sandbox.exec(command, options),
-    execStream: (command, options) => sandbox.execStream(command, options),
-    startProcess: (command, options) => sandbox.startProcess(command, options),
-    runCode: (code, options) => sandbox.runCode(code, options),
-    files: sandbox.files,
-    runtimes: {
-      ensure: (specs, options) => jsonResultOrVoid(sandbox.runtimes.ensure(specs, options)),
-      install: (spec, options) => jsonResultOrVoid(sandbox.runtimes.install(spec, options)),
-      list: () => jsonResultOrVoid(sandbox.runtimes.list()),
-    },
-    processes: {
-      list: () => jsonResultOrVoid(sandbox.processes.list()),
-      kill: (pid) => jsonResultOrVoid(sandbox.processes.kill(pid)),
-      logs: (pid, options) => jsonResultOrVoid(sandbox.processes.logs(pid, options)),
-    },
-  };
 }
 
 class AgentContextTree extends RpcTarget implements ContextTreeRemote {
@@ -180,9 +157,9 @@ export interface AgentFacetCalls {
 export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFacetCalls {
   private readonly workspaceCalls = workspaceClient(this.env.WORKSPACE);
 
-  private box: RemoteSessionBox | undefined;
+  private box: NimbusSandboxFiles | undefined;
 
-  private stateBox: RemoteSessionBox | undefined;
+  private stateBox: NimbusSandboxFiles | undefined;
 
   private database: AgentDatabase | undefined;
 
@@ -198,18 +175,21 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return createAgentProviderRegistry({ ...deps, env: this.env });
   }
 
-  protected workspace(): RemoteSessionBox {
-    this.box ??= sandboxHandle(Nimbus.fromSession((): NimbusSessionSurface => this.workspaceCalls.session())
-      .sandbox(this.env.WORKSPACE_NAME, { shellId: this.env.SHELL_ID, root: this.env.HOME }));
+  /** Its workspace's files as the agent; a facet runs no command, so its session is only a file plane. */
+  protected workspace(): NimbusSandboxFiles {
+    this.box ??= this.sessionFiles(() => this.workspaceCalls.session());
 
     return this.box;
   }
 
-  private state(): RemoteSessionBox {
-    this.stateBox ??= sandboxHandle(Nimbus.fromSession((): NimbusSessionSurface => this.workspaceCalls.stateSession())
-      .sandbox(this.env.WORKSPACE_NAME, { shellId: this.env.STATE_SHELL_ID }));
+  private state(): NimbusSandboxFiles {
+    this.stateBox ??= this.sessionFiles(() => this.workspaceCalls.stateSession());
 
     return this.stateBox;
+  }
+
+  private sessionFiles(session: () => NimbusSessionSurface): NimbusSandboxFiles {
+    return Nimbus.fromSession(session).sandbox(this.env.WORKSPACE_NAME).files;
   }
 
 

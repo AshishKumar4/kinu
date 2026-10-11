@@ -17,7 +17,8 @@ import {
 import type { PortReservationTransaction } from '@nimbus-sh/worker/port-capability';
 import * as v from 'valibot';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
-import type { RemoteSessionBox } from '@kinu.run/core';
+import type { NimbusSandboxFiles } from '@kinu.run/core';
+import type { SessionBox } from '@kinu.run/test-utils/vfs';
 import type { HostedWorkspaceDeps, WorkspaceHostTarget } from '../../src/workspace-host';
 import { noEntrypoints, workerContext } from './bindings';
 
@@ -441,17 +442,17 @@ export const rpcRouteCapabilityPort = (host: ProgrammaticHost, ...args: Paramete
 
 export type ProgrammaticExecOptions = NonNullable<Parameters<HostedRuntime['exec']>[1]>;
 
-const FileStatSchema = v.object({ type: v.string(), size: v.number(), mtime: v.number(), revision: v.optional(v.number()) });
+const FileStatSchema = v.object({ type: v.string(), size: v.number(), mtime: v.number(), mode: v.number(), revision: v.optional(v.number()) });
 
 /** The credentialed runtime: `exec` carries the credential and `files.as(agent)` answers the bound
  *  file plane; top-level `files` refuse so it never falls back to the session user. Shared to prevent drift. */
 export function credentialedSessionBox(
   runtime: () => Promise<HostedRuntime>,
   cred: VfsCred,
-): RemoteSessionBox {
+): SessionBox {
   const refuse = async (): Promise<never> => { throw new Error('a credentialed plane must not fall back to the session user'); };
 
-  const filesAs = (agent: VfsCred): RemoteSessionBox['files'] => {
+  const filesAs = (agent: VfsCred): NimbusSandboxFiles => {
     const view = async () => (await runtime()).files.as(agent);
 
     // As the session's own stat answers: a zero revision is no revision.
@@ -459,7 +460,7 @@ export function credentialedSessionBox(
       const found = await (await view()).stat(path, { follow });
 
       if (found === null) return null;
-      const answer = v.parse(FileStatSchema, { type: found.type, size: found.size, mtime: found.mtimeMs });
+      const answer = v.parse(FileStatSchema, { type: found.type, size: found.size, mtime: found.mtimeMs, mode: found.mode });
 
       if (typeof found.revision === 'number' && found.revision !== 0) answer.revision = found.revision;
 
@@ -503,6 +504,8 @@ export function credentialedSessionBox(
         exitCode: result.exitCode,
         stdout: result.stdout,
         stderr: result.stderr,
+        duration: result.duration,
+        timestamp: result.timestamp,
       };
     },
     files: {
