@@ -37,12 +37,7 @@ async function runStore(home: string, opts: { local: boolean; origin?: string; e
     const { connectProvider } = await import('./packages/cli/src/commands/provider-connect.ts');
     const answers = ${JSON.stringify(answers)};
     const port = { report: () => {}, ask: async () => answers.shift() ?? '' };
-    try {
-      const outcome = await connectProvider(${JSON.stringify(provider)}, port, { ...${JSON.stringify(model)}, local: ${opts.local} });
-      console.log('WHERE:' + (outcome.summary.includes('your Kinu account') ? 'account' : 'local'));
-    } catch (e) {
-      console.log('THREW:' + e.message);
-    }
+    await connectProvider(${JSON.stringify(provider)}, port, { ...${JSON.stringify(model)}, local: ${opts.local} });
   `;
 
   const env: NodeJS.ProcessEnv = {
@@ -71,31 +66,30 @@ async function runStore(home: string, opts: { local: boolean; origin?: string; e
   return { stdout: stdout + stderr, exitCode };
 }
 
+function accountStore(status = 201) {
+  const received: Array<{ path: string; method: string; auth: string | null; body: JsonObject }> = [];
+
+  const server = Bun.serve({
+    port: 0, hostname: '127.0.0.1',
+    async fetch(request) {
+      received.push({ path: new URL(request.url).pathname, method: request.method, auth: request.headers.get('authorization'), body: parseJsonObject(await request.text()) });
+
+      return Response.json(status === 201 ? { ok: true } : { error: 'credential rejected' }, { status });
+    },
+  });
+
+  return { received, server, origin: `http://127.0.0.1:${server.port}` };
+}
+
 describe('where a provider secret is written', () => {
   test('signed in, it goes to the account and never lands on this disk', async () => {
-    const received: Array<{ path: string; auth: string | null; body: string }> = [];
-
-    const server = Bun.serve({
-      port: 0,
-      hostname: '127.0.0.1',
-      async fetch(request) {
-        const url = new URL(request.url);
-        received.push({ path: url.pathname, auth: request.headers.get('authorization'), body: await request.text() });
-
-        return Response.json({ ok: true }, { status: 201 });
-      },
-    });
-
-    const origin = `http://127.0.0.1:${server.port}`;
+    const { received, server, origin } = accountStore();
     const home = kinuHome({ origin, accessToken: 'ptc_test_token' });
 
     try {
       const res = await runStore(home, { local: false });
-      expect(res.stdout).toContain('WHERE:account');
-      expect(received).toHaveLength(1);
-      expect(received[0]?.path).toBe('/api/cli/credentials/openrouter.bearer');
-      expect(received[0]?.auth).toBe('Bearer ptc_test_token');
-      expect(received[0]?.body).toContain('sk-or-secret');
+      expect(res.exitCode, res.stdout).toBe(0);
+      expect(received).toEqual([{ path: '/api/cli/credentials/openrouter.bearer', method: 'POST', auth: 'Bearer ptc_test_token', body: { kind: 'bearer', token: 'sk-or-secret' } }]);
 
       const config = storedConfig(home);
       expect(JSON.stringify(config)).not.toContain('sk-or-secret');
@@ -109,17 +103,15 @@ describe('where a provider secret is written', () => {
   test('--local keeps it on this machine, for offline use', async () => {
     const home = kinuHome({ origin: 'http://127.0.0.1:1', accessToken: 'ptc_test_token' });
     const res = await runStore(home, { local: true });
-
-    expect(res.stdout).toContain('WHERE:local');
-    expect(JSON.stringify(storedConfig(home))).toContain('sk-or-secret');
+    expect(res.exitCode, res.stdout).toBe(0);
+    expect(storedConfig(home).providers).toMatchObject({ openrouter: { apiKey: 'sk-or-secret' } });
   });
 
   test('signed out, there is nowhere else to put it — the machine keeps working', async () => {
     const home = kinuHome({});
     const res = await runStore(home, { local: false });
-
-    expect(res.stdout).toContain('WHERE:local');
-    expect(JSON.stringify(storedConfig(home))).toContain('sk-or-secret');
+    expect(res.exitCode, res.stdout).toBe(0);
+    expect(storedConfig(home).providers).toMatchObject({ openrouter: { apiKey: 'sk-or-secret' } });
   });
 
   // An endpoint the Worker cannot reach (including fc00::/7 and 100.64.0.0/10) keeps its key local.
@@ -131,48 +123,38 @@ describe('where a provider secret is written', () => {
   ])('an endpoint the proxy cannot reach keeps the key on this machine: %s', async (endpoint) => {
     const home = kinuHome({ origin: 'http://127.0.0.1:1', accessToken: 'ptc_test_token' });
     const res = await runStore(home, { local: false, endpoint });
-
-    expect(res.stdout).toContain('WHERE:local');
-    expect(JSON.stringify(storedConfig(home))).toContain('sk-or-secret');
+    expect(res.exitCode, res.stdout).toBe(0);
+    expect(storedConfig(home).providers).toMatchObject({ openaiCompat: { default: { baseURL: endpoint, apiKey: 'sk-or-secret' } } });
   });
 
   // The window the owner declares travels with the endpoint, to the account or this disk alike.
   test('a declared context window is stored with the endpoint, on the account and on this disk', async () => {
-    const received: string[] = [];
-
-    const server = Bun.serve({
-      port: 0, hostname: '127.0.0.1',
-      fetch: async (request) => {
-        received.push(await request.text());
-
-        return Response.json({ ok: true }, { status: 201 });
-      },
-    });
-
-    const account = kinuHome({ origin: `http://127.0.0.1:${server.port}`, accessToken: 'ptc_test_token' });
+    const { received, server, origin } = accountStore();
+    const account = kinuHome({ origin, accessToken: 'ptc_test_token' });
     const local = kinuHome({});
 
     try {
-      expect((await runStore(account, { local: false, endpoint: 'https://llm.example.com/v1', contextWindow: '131,072' })).stdout).toContain('WHERE:account');
-      expect((await runStore(local, { local: true, endpoint: 'http://localhost:11434/v1', contextWindow: '131072' })).stdout).toContain('WHERE:local');
-      expect(received.map((body) => v.parse(v.object({ contextWindow: v.number() }), JSON.parse(body)).contextWindow)).toEqual([131_072]);
-      expect(JSON.stringify(storedConfig(local))).toContain('"contextWindow":131072');
+      expect((await runStore(account, { local: false, endpoint: 'https://llm.example.com/v1', contextWindow: '131,072' })).exitCode).toBe(0);
+      expect((await runStore(local, { local: true, endpoint: 'http://localhost:11434/v1', contextWindow: '131072' })).exitCode).toBe(0);
+      expect(received).toEqual([{ path: '/api/cli/credentials/openai-compat.default', method: 'POST', auth: 'Bearer ptc_test_token',
+        body: { baseURL: 'https://llm.example.com/v1', apiKey: 'sk-or-secret', contextWindow: 131_072 } }]);
+      expect(JSON.stringify(storedConfig(account))).not.toContain('sk-or-secret');
+      expect(storedConfig(local).providers).toMatchObject({ openaiCompat: { default: { baseURL: 'http://localhost:11434/v1', apiKey: 'sk-or-secret', contextWindow: 131_072 } } });
     } finally {
       await server.stop(true);
     }
   });
 
   test('a public https endpoint lets the account hold the key', async () => {
-    const server = Bun.serve({
-      port: 0, hostname: '127.0.0.1',
-      fetch: () => Response.json({ ok: true }, { status: 201 }),
-    });
-
-    const home = kinuHome({ origin: `http://127.0.0.1:${server.port}`, accessToken: 'ptc_test_token' });
+    const { received, server, origin } = accountStore();
+    const home = kinuHome({ origin, accessToken: 'ptc_test_token' });
 
     try {
       const res = await runStore(home, { local: false, endpoint: 'https://[2606:4700:4700::1111]/v1' });
-      expect(res.stdout).toContain('WHERE:account');
+      expect(res.exitCode, res.stdout).toBe(0);
+      expect(received).toEqual([{ path: '/api/cli/credentials/openai-compat.default', method: 'POST', auth: 'Bearer ptc_test_token',
+        body: { baseURL: 'https://[2606:4700:4700::1111]/v1', apiKey: 'sk-or-secret' } }]);
+      expect(JSON.stringify(storedConfig(home))).not.toContain('sk-or-secret');
     } finally {
       await server.stop(true);
     }
@@ -180,40 +162,33 @@ describe('where a provider secret is written', () => {
 });
 
 describe('when the account will not take it', () => {
-  test('nothing is written anywhere, and the message says what to do', async () => {
-    const server = Bun.serve({
-      port: 0,
-      hostname: '127.0.0.1',
-      fetch: () => new Response('{"error":"credential rejected"}', { status: 400 }),
-    });
-
-    const home = kinuHome({ origin: `http://127.0.0.1:${server.port}`, accessToken: 'ptc_test_token' });
+  test('an account refusal does not save the key or adopt a default on disk', async () => {
+    const { received, server, origin } = accountStore(400);
+    const home = kinuHome({ origin, accessToken: 'ptc_test_token' });
+    const before = storedConfig(home);
 
     try {
       const res = await runStore(home, { local: false });
-      expect(res.stdout).toContain('THREW:');
-      expect(res.stdout).toContain('Nothing was saved');
-      expect(res.stdout).toContain('--local');
-      expect(JSON.stringify(storedConfig(home))).not.toContain('sk-or-secret');
+      expect(res.exitCode).not.toBe(0);
+      expect(received).toHaveLength(1);
+      expect(storedConfig(home)).toEqual(before);
     } finally {
       await server.stop(true);
     }
   });
 
   test('a key already on this disk is removed once the account has it', async () => {
-    const server = Bun.serve({
-      port: 0, hostname: '127.0.0.1',
-      fetch: () => Response.json({ ok: true }, { status: 201 }),
-    });
+    const { received, server, origin } = accountStore();
 
     const home = kinuHome({
-      origin: `http://127.0.0.1:${server.port}`,
+      origin,
       accessToken: 'ptc_test_token',
       providers: { openrouter: { apiKey: 'sk-stale-local' } },
     });
 
     try {
-      expect((await runStore(home, { local: false })).stdout).toContain('WHERE:account');
+      expect((await runStore(home, { local: false })).exitCode).toBe(0);
+      expect(received).toEqual([{ path: '/api/cli/credentials/openrouter.bearer', method: 'POST', auth: 'Bearer ptc_test_token', body: { kind: 'bearer', token: 'sk-or-secret' } }]);
       // A local key wins at resolution time, so a stale one left behind would be the one spent.
       expect(JSON.stringify(storedConfig(home))).not.toContain('sk-stale-local');
     } finally {

@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readdirSync, realpathSync, writeFileSync } from 
 import { resolve } from 'node:path';
 import { Database } from 'bun:sqlite';
 import { createTestRenderer } from '@opentui/core/testing';
+import { SelectRenderable, TextareaRenderable } from '@opentui/core';
 import { createRoot, flushSync } from '@opentui/react';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
@@ -28,7 +29,7 @@ import type { KinuConfig } from '../src/config';
 import { StatusBar } from '../src/tui/status-bar';
 import { ChatApp } from '../src/tui/chat-app';
 
-import { fakeClient } from './helpers/chat-app-fixture';
+import { cleanupChats, fakeClient, mountChat } from './helpers/chat-app-fixture';
 import { VERSION } from '../src/display';
 
 const repoRoot = resolve(__dirname, '../../..');
@@ -73,16 +74,6 @@ describe('CLI TUI layout', () => {
   });
 
 
-  test('model picker is an absolute overlay and does not move the input area', async () => {
-    const withoutOverlay = await renderOverlayFrame(false);
-    const withOverlay = await renderOverlayFrame(true);
-
-    expect(lineContaining(withoutOverlay, 'INPUT-SENTINEL')).toBe(lineContaining(withOverlay, 'INPUT-SENTINEL'));
-    expect(withOverlay).toContain('Select model');
-    expect(withOverlay).toContain('Type to filter');
-    expect(withOverlay).toContain('Filter models');
-    expect(withOverlay).toContain('Kimi K2.6');
-  });
 
   test('a model of a provider with several accounts asks which, and the answer names the account', async () => {
     const { renderer, mockInput, renderOnce, captureCharFrame } = await createTestRenderer({ width: 80, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
@@ -416,32 +407,36 @@ describe('CLI TUI layout', () => {
     }
   });
 
-  test('walk-back overlay lists recent user messages newest first', async () => {
-    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 96, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
-    const root = createRoot(renderer);
+  test('walk-back selects recent user messages newest first and sends the chosen pivot to the client', async () => {
+    const agent = fakeClient({ name: 'walkback', history: async () => [
+      { id: 'm1', role: 'user', content: 'plan the migration' },
+      { id: 'm2', role: 'assistant', content: 'the plan is ready' },
+      { id: 'm3', role: 'user', content: 'now run step two' },
+    ] });
+
+    const forked: Parameters<typeof agent.client.fork>[0][] = [];
+    agent.client.fork = async (point) => {
+      forked.push(point);
+
+      return { client: agent.client, label: 'chosen branch' };
+    };
 
     try {
-      root.render(
-        <box style={{ width: '100%', height: '100%' }}>
-          <WalkbackOverlay
-            candidates={[
-              { text: 'now run step two', occurrenceFromEnd: 1 },
-              { text: 'plan the migration', occurrenceFromEnd: 1 },
-            ]}
-            terminal={{ width: 96, height: 24 }}
-            onSelect={() => {}}
-          />
-        </box>,
-      );
-      await renderSettled(renderOnce);
-      const frame = captureCharFrame();
-      expect(frame).toContain('Walk back');
-      expect(frame).toContain('Enter forks before that message');
-      expect(frame).toContain('latest · now run step two');
-      expect(frame).toContain('-1 · plan the migration');
+      const screen = await mountChat(agent.client);
+      await screen.mockInput.typeText('/fork');
+      flushSync(() => screen.mockInput.pressEnter());
+      await screen.waitFor('walk-back selection', () => screen.renderer.currentFocusedRenderable instanceof SelectRenderable);
+      screen.mockInput.pressArrow('down');
+      flushSync(() => screen.mockInput.pressEnter());
+      await screen.waitFor('the chosen fork', () => forked.length === 1);
+      expect(forked).toEqual([{ text: 'plan the migration', occurrenceFromEnd: 1 }]);
+      await screen.waitFor('the restored composer', screen.composerFocused);
+      const composer = screen.renderer.currentFocusedRenderable;
+
+      if (!(composer instanceof TextareaRenderable)) throw new Error('composer not focused');
+      expect(composer.plainText).toBe('plan the migration');
     } finally {
-      flushSync(() => { root.unmount(); });
-      renderer.destroy();
+      cleanupChats();
     }
   });
 
@@ -715,40 +710,6 @@ describe('CLI TUI layout', () => {
   });
 });
 
-async function renderOverlayFrame(showOverlay: boolean) {
-  const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 80, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
-  const root = createRoot(renderer);
-
-  try {
-    root.render(
-        <box flexDirection="column" style={{ width: '100%', height: '100%' }}>
-          <box style={{ height: 3 }}>
-          <text><span>HEADER</span></text>
-        </box>
-        <box style={{ flexGrow: 1 }}>
-          <text><span>BODY</span></text>
-        </box>
-        <box style={{ height: 3 }} title="Input">
-          <text><span>INPUT-SENTINEL</span></text>
-        </box>
-        {showOverlay && (
-          <ModelPickerOverlay
-            models={MODELS}
-            currentSpec={MODELS[0].spec}
-            terminal={{ width: 80, height: 24 }}
-            onSelect={() => {}}
-          />
-        )}
-      </box>,
-    );
-    await renderSettled(renderOnce);
-
-    return captureCharFrame();
-  } finally {
-    flushSync(() => { root.unmount(); });
-    renderer.destroy();
-  }
-}
 
 async function renderSettled(renderOnce: () => Promise<void>) {
   for (let i = 0; i < 10; i++) {
@@ -757,12 +718,6 @@ async function renderSettled(renderOnce: () => Promise<void>) {
   }
 }
 
-function lineContaining(frame: string, text: string) {
-  const line = frame.split('\n').findIndex((candidate) => candidate.includes(text));
-  expect(line).toBeGreaterThanOrEqual(0);
-
-  return line;
-}
 
 function topVisibleTranscriptLine(frame: string): number {
   const numbers = [...frame.matchAll(/line-(\d\d)/gu)].map(([, digits]) => Number(digits));

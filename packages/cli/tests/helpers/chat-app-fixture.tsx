@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import { createTestRenderer } from '@opentui/core/testing';
+import { InputRenderable, TextareaRenderable } from '@opentui/core';
 import { createRoot, flushSync } from '@opentui/react';
 import { missingSubordinateHistory, type EvolutionConfigView } from '@kinu.run/core';
 
@@ -213,6 +214,7 @@ export async function mountChat(
   client: AgentClient,
   options: {
     tui?: ChatAppOpts['tui'];
+    workspaceSource?: TuiAgentSource;
     listWorkspaces?: () => FixtureWorkspace[];
     onWorkspaceSelect?: (name: string) => Promise<AgentClient>;
     hubData?: TuiHubData;
@@ -237,7 +239,7 @@ export async function mountChat(
 
   const root = createRoot(testRenderer.renderer);
 
-  const workspaceSource: TuiAgentSource | undefined = options.listWorkspaces
+  const workspaceSource: TuiAgentSource | undefined = options.workspaceSource ?? (options.listWorkspaces
     ? {
         load: () => {
           const items = options.listWorkspaces?.() ?? [];
@@ -245,7 +247,7 @@ export async function mountChat(
           return { items, total: items.length, nextCursor: null };
         },
       }
-    : undefined;
+    : undefined);
 
   root.render(
     <ChatApp
@@ -289,8 +291,9 @@ export async function mountChat(
     }
   };
 
-  const settled = options.settled ?? ((view: string) => view.includes('Send a message'));
-  await waitFor('the chat surface to settle', () => settled(frame()));
+  const composerFocused = () => renderer.currentFocusedRenderable instanceof TextareaRenderable;
+  const filterFocused = () => renderer.currentFocusedRenderable instanceof InputRenderable;
+  await waitFor('the chat surface to settle', () => options.settled ? options.settled(frame()) : composerFocused());
   mounted.push(() => {
     // `root.render()` builds a new container per call and destroy unmounts only the last one, so unmount
     // explicitly; on a concurrent root `unmount()` only schedules, so flush it before `destroy()`.
@@ -298,6 +301,6 @@ export async function mountChat(
     testRenderer.renderer.destroy();
   });
 
-  return { ...testRenderer, frame, waitFor };
+  return { ...testRenderer, frame, waitFor, composerFocused, filterFocused };
 }
 

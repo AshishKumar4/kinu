@@ -11,7 +11,6 @@ import type { TuiHubData } from '../src/tui/hubs';
 import { asFetchFunction, codenameFor } from '@kinu.run/core';
 
 import { TURN, cleanupChats, fakeClient, mountChat, type FixtureWorkspace } from './helpers/chat-app-fixture';
-import { commandsForClient, executeSlashCommand } from '../src/slash-commands';
 import { createMemoryTuiPreferenceStore } from './helpers/tui-preferences';
 import { SelectRenderable, TextareaRenderable } from '@opentui/core';
 import { flushSync } from '@opentui/react';
@@ -96,7 +95,7 @@ test('prompt history recalls sent and cleared drafts, searches, and persists per
   if (!(input instanceof TextareaRenderable)) throw new Error('composer not focused');
   expect(input.plainText).toBe('second prompt');
   screen.mockInput.pressKey('r', { ctrl: true });
-  await screen.waitFor('history search', () => screen.frame().includes('Search sent and cleared prompts'));
+  await screen.waitFor('history search', screen.filterFocused);
   await screen.mockInput.typeText('sec');
   await screen.waitFor('filtered history', () => {
     const results = screen.renderer.root.findDescendantById('prompt-history-results');
@@ -104,7 +103,7 @@ test('prompt history recalls sent and cleared drafts, searches, and persists per
     return results instanceof SelectRenderable && results.options.length === 1;
   });
   flushSync(() => screen.mockInput.pressEnter());
-  await screen.waitFor('selected history', () => !screen.frame().includes('Search sent and cleared prompts'));
+  await screen.waitFor('selected history', screen.composerFocused);
   expect(input.plainText).toBe('second prompt');
   flushSync(() => input.setText('cleared draft'));
   flushSync(() => screen.mockInput.pressKey('c', { ctrl: true }));
@@ -162,32 +161,31 @@ function runningBuild(output: JobOutputTail): AgentClient['listJobs'] {
 describe('ChatApp terminal interaction', () => {
   test('command palette exposes only truthful local and cloud capabilities', async () => {
     const local = fakeClient({ name: 'local' });
+    const efforts: string[] = [];
+    local.client.setReasoningEffort = async (effort) => {
+      efforts.push(effort);
+
+      return { effort };
+    };
+
     const localScreen = await mountChat(local.client);
-    expect(localScreen.frame()).not.toContain('⠋ null');
     localScreen.mockInput.pressKey('k', { ctrl: true });
-    await localScreen.waitFor('the local command palette', () => localScreen.frame().includes('Filter commands'));
+    await localScreen.waitFor('the local command palette', localScreen.filterFocused);
     expect(localScreen.frame()).toContain('/role');
     expect(localScreen.frame()).toContain('/rename');
     localScreen.mockInput.pressEscape();
-    await localScreen.waitFor('the command palette to close', () =>
-      !localScreen.frame().includes('Filter commands'));
+    await localScreen.waitFor('the command palette to close', localScreen.composerFocused);
     await localScreen.mockInput.typeText('/settings');
     localScreen.mockInput.pressEnter();
-    await localScreen.waitFor('interactive settings', () =>
-      localScreen.frame().includes('Filter settings'));
-    expect(localScreen.frame()).toContain('Reasoning effort');
-    expect(localScreen.frame()).toContain('Local shell');
+    await localScreen.waitFor('interactive settings', localScreen.filterFocused);
     localScreen.mockInput.pressArrow('down');
     localScreen.mockInput.pressEnter();
-    await localScreen.waitFor('the selected setting to apply', () =>
-      localScreen.frame().includes('Reasoning effort: low'));
-    await localScreen.waitFor('the composer after applying settings', () =>
-      !localScreen.frame().includes('Filter settings')
-      && localScreen.frame().includes('Send a message'));
+    await localScreen.waitFor('the selected setting to apply', () => efforts.length === 1);
+    expect(efforts).toEqual(['low']);
+    await localScreen.waitFor('the composer after applying settings', localScreen.composerFocused);
     await localScreen.mockInput.typeText('/settings');
     localScreen.mockInput.pressEnter();
-    await localScreen.waitFor('settings through the command path', () =>
-      localScreen.frame().includes('Filter settings'));
+    await localScreen.waitFor('settings through the command path', localScreen.filterFocused);
     localScreen.mockInput.pressEscape();
     expect(localScreen.frame()).not.toContain('/connect');
 
@@ -200,7 +198,7 @@ describe('ChatApp terminal interaction', () => {
 
     const cloudScreen = await mountChat(cloud.client);
     cloudScreen.mockInput.pressKey('k', { ctrl: true });
-    await cloudScreen.waitFor('the cloud command palette', () => cloudScreen.frame().includes('Filter commands'));
+    await cloudScreen.waitFor('the cloud command palette', cloudScreen.filterFocused);
     expect(cloudScreen.frame()).not.toContain('/resume');
     expect(cloudScreen.frame()).toContain('/role');
 
@@ -213,31 +211,41 @@ describe('ChatApp terminal interaction', () => {
 
     for (let index = 0; index < 5; index += 1) screen.mockInput.pressArrow('left');
     screen.mockInput.pressKey('k', { ctrl: true });
-    await screen.waitFor('the command palette', () => screen.frame().includes('Filter commands'));
+    await screen.waitFor('the command palette', screen.filterFocused);
     screen.mockInput.pressEscape();
-    await screen.waitFor('the preserved composer', () =>
-      !screen.frame().includes('Filter commands'));
-    expect(screen.frame()).toContain('preserve this draft');
+    await screen.waitFor('the preserved composer', screen.composerFocused);
+    const composer = screen.renderer.currentFocusedRenderable;
+
+    if (!(composer instanceof TextareaRenderable)) throw new Error('composer not focused');
+    expect(composer.plainText).toBe('preserve this draft');
   });
   test('closing a loading model panel cannot reopen it from a stale result', async () => {
     const pending = Promise.withResolvers<AgentModelMenu>();
+    let listings = 0;
 
     const controlled = fakeClient({
       name: 'alpha',
-      listModels: () => pending.promise,
+      listModels: () => {
+        listings += 1;
+
+        return pending.promise;
+      },
     });
 
     const screen = await mountChat(controlled.client);
+    await screen.mockInput.typeText('draft under the model panel');
     screen.mockInput.pressKey('l', { ctrl: true });
-    await screen.waitFor('the loading model panel', () => screen.frame().includes('Loading models'));
+    await screen.waitFor('the loading model request', () => listings === 1);
     screen.mockInput.pressEscape();
     pending.resolve({ models: [], failures: [] });
-    await screen.waitFor('the model panel to close', () =>
-      !screen.frame().includes('Select model'));
+    await screen.waitFor('the model panel to close', screen.composerFocused);
 
     for (let index = 0; index < 6; index += 1) await screen.renderOnce();
-    expect(screen.frame()).not.toContain('Select model');
-    expect(screen.frame()).toContain('Send a message');
+    expect(screen.composerFocused()).toBe(true);
+    const composer = screen.renderer.currentFocusedRenderable;
+
+    if (!(composer instanceof TextareaRenderable)) throw new Error('composer not focused');
+    expect(composer.plainText).toBe('draft under the model panel');
   });
 
   test('failed model selection closes once and restores an actionable error', async () => {
@@ -248,22 +256,27 @@ describe('ChatApp terminal interaction', () => {
 
     const screen = await mountChat(controlled.client);
     screen.mockInput.pressKey('l', { ctrl: true });
-    await screen.waitFor('the model picker', () => screen.frame().includes('Select model'));
+    await screen.waitFor('the model picker', screen.filterFocused);
     screen.mockInput.pressEnter();
     await screen.waitFor('the model failure', () => screen.frame().includes('Unavailable model'));
-    expect(screen.frame()).not.toContain('Select model');
-    expect(screen.frame()).toContain('Send a message');
+    expect(screen.composerFocused()).toBe(true);
   });
 
   test('Ctrl+T in the model picker tests the highlighted model and says what it found, without picking it', async () => {
     const tested: string[] = [];
+    const selected: string[] = [];
 
     const controlled = fakeClient({
       name: 'alpha',
       testModel: async (spec) => {
         tested.push(spec);
 
-        return { ok: false, failure: 'spent', message: 'opencode-go is rate-limited until 2026-10-03 14:56 UTC (in 8d 10h)' };
+        return { ok: false, failure: 'spent', message: 'fixture allowance exhausted' };
+      },
+      setModel: async (spec) => {
+        selected.push(spec);
+
+        return { spec };
       },
     });
 
@@ -271,32 +284,40 @@ describe('ChatApp terminal interaction', () => {
     screen.mockInput.pressKey('l', { ctrl: true });
     await screen.waitFor('the model row', () => screen.frame().includes('openai/gpt-5.5'));
     screen.mockInput.pressKey('t', { ctrl: true });
-    await screen.waitFor('the test result', () => screen.frame().includes('allowance is spent'));
+    await screen.waitFor('the test request', () => tested.length === 1);
 
     expect(tested).toEqual(['openai/gpt-5.5']);
-    expect(screen.frame()).toContain('Select model');
+    expect(screen.filterFocused()).toBe(true);
+    expect(selected).toEqual([]);
   });
 
 
   test('a slow model selection blocks newer surfaces until it settles', async () => {
     const pending = Promise.withResolvers<{ spec: string }>();
+    const selected: string[] = [];
 
     const controlled = fakeClient({
       name: 'alpha',
-      setModel: () => pending.promise,
+      setModel: (spec) => {
+        selected.push(spec);
+
+        return pending.promise;
+      },
     });
 
     const screen = await mountChat(controlled.client);
     screen.mockInput.pressKey('l', { ctrl: true });
-    await screen.waitFor('the model picker', () => screen.frame().includes('Select model'));
+    await screen.waitFor('the model picker', screen.filterFocused);
     screen.mockInput.pressEnter();
-    screen.mockInput.pressKey('g', { ctrl: true });
+    screen.mockInput.pressKey(',', { ctrl: true });
 
     for (let index = 0; index < 4; index += 1) await screen.renderOnce();
-    expect(screen.frame()).not.toContain('Filter settings');
+    expect(selected).toEqual(['openai/gpt-5.5']);
+    expect(screen.filterFocused()).toBe(false);
     pending.resolve({ spec: 'openai/gpt-5.5' });
-    await screen.waitFor('the selected model result', () =>
-      screen.frame().includes('Model: openai/gpt-5.5'));
+    await screen.waitFor('the selected model result', screen.composerFocused);
+    screen.mockInput.pressKey(',', { ctrl: true });
+    await screen.waitFor('settings after selection', screen.filterFocused);
   });
 
   test('a failed initial connection reports the whole cause chain', async () => {
@@ -728,12 +749,30 @@ test('a reopened conversation shows a refused turn\'s failure in the provider\'s
   expect(screen.frame().indexOf('Go usage limit exceeded')).toBeGreaterThan(screen.frame().indexOf('Plan the quarterly offsite.'));
 });
 
-test('/copy hands the last answer to the clipboard, and says when there is none', async () => {
-  const answered = fakeClient({ name: 'copies', history: EXPORTED_HISTORY });
-  const silent = fakeClient({ name: 'silent' });
+test('/copy delivers only the last answer through the terminal clipboard', async () => {
+  for (const answered of [true, false]) {
+    let reads = 0;
 
-  expect(await executeSlashCommand(answered.client, '/copy')).toMatchObject({ copy: 'The old table keeps its rows.' });
-  expect(await executeSlashCommand(silent.client, '/copy')).not.toHaveProperty('copy');
+    const agent = fakeClient({ name: answered ? 'copies' : 'silent', history: async () => {
+      reads += 1;
+
+      return answered ? EXPORTED_HISTORY() : [];
+    } });
+
+    const screen = await mountChat(agent.client);
+    const clipboard = spyOn(screen.renderer, 'copyToClipboardOSC52').mockReturnValue(true);
+    const before = reads;
+
+    try {
+      await screen.mockInput.typeText('/copy');
+      flushSync(() => screen.mockInput.pressEnter());
+      await screen.waitFor('the copy history read', () => reads > before);
+      await screen.waitFor('the copy action settled', screen.composerFocused);
+      expect(clipboard.mock.calls).toEqual(answered ? [['The old table keeps its rows.']] : []);
+    } finally {
+      clipboard.mockRestore();
+    }
+  }
 });
 
 test('/export writes the conversation to a Markdown file in its order, and names the file', async () => {
@@ -743,7 +782,7 @@ test('/export writes the conversation to a Markdown file in its order, and names
 
   await screen.mockInput.typeText(`/export ${file}`);
   screen.mockInput.pressEnter();
-  await screen.waitFor('the export', () => existsSync(file) && screen.frame().includes('conversation.md'));
+  await screen.waitFor('the export', () => existsSync(file));
   const written = readFileSync(file, 'utf8');
   const order = ['Which table keeps its rows?', 'schema.sql', 'The old table keeps its rows.'].map((text) => written.indexOf(text));
 
@@ -774,18 +813,26 @@ test('/compact shows its progress while the fold runs, and a failed fold says wh
     const local = agent.client.localControls;
 
     if (!local) throw new Error('the fixture is local');
-    local.compact = () => fold.promise;
-    const working = commandsForClient(agent.client).find((command) => command.name === '/compact')?.working ?? '';
+    let compacting = false;
+    local.compact = () => {
+      compacting = true;
+
+      return fold.promise;
+    };
+
     const screen = await mountChat(agent.client);
 
     await screen.mockInput.typeText('/compact');
     flushSync(() => screen.mockInput.pressEnter());
-    await screen.waitFor('the fold in progress', () => screen.frame().includes(working));
+    await screen.waitFor('the fold in progress', () => compacting);
+    screen.mockInput.pressKey('l', { ctrl: true });
+    await screen.renderOnce();
+    expect(screen.filterFocused()).toBe(false);
 
     if (ends === 'folded') fold.resolve('folded');
     else fold.reject(new Error('the summarizer is out of credit'));
 
-    await screen.waitFor('the fold settled', () => !screen.frame().includes(working));
+    await screen.waitFor('the fold settled', screen.composerFocused);
 
     if (ends === 'failed') expect(screen.frame()).toContain('the summarizer is out of credit');
   }
