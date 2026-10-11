@@ -11,6 +11,13 @@ function workspaceRpcAnswer<T>(pending: Promise<T>): Effect.Effect<T> {
   return Effect.promise(() => pending).pipe(Effect.onError(() => Effect.sync(() => disposeWorkspaceRpc(pending))));
 }
 
+/** An answer that is data, read whole once it settles: its pipeline is released then too, so a turn's many calls hold
+ *  none of theirs open (2026-10-11, the worker-heap gate: main's isolate allocated 246.8 MB over a 150-step turn, 118.3 MB
+ *  once each was released). */
+function workspaceRpcData<T>(pending: Promise<T>): Effect.Effect<T> {
+  return workspaceRpcAnswer(pending).pipe(Effect.tap(() => Effect.sync(() => { disposeWorkspaceRpc(pending); })));
+}
+
 function disposeWorkspaceRpc<T>(pending: Promise<T>): void {
   // Worker RPC's Promise type omits this native method; ordinary in-isolate promises have no pipeline to release.
   if (Symbol.dispose in pending) {
@@ -106,12 +113,14 @@ class ConsumedMemory implements Memory {
 export function workspaceClient(workspace: AgentWorkspaceCalls): AgentWorkspace {
   let held: Promise<AgentWorkspacePort> | null = null;
 
-  const viaPort = <T>(call: (port: AgentWorkspacePort) => Promise<T>): Effect.Effect<T> => Effect.suspend(() => {
+  /** `owned`: the answer holds live content its consumer reads after (a relayed response's body), so its pipeline is
+   *  the consumer's to release; any other answer is data, released as it settles. */
+  const viaPort = <T>(call: (port: AgentWorkspacePort) => Promise<T>, owned = false): Effect.Effect<T> => Effect.suspend(() => {
     held ??= workspace.port();
     const opened = held;
 
     return workspaceRpcAnswer(opened).pipe(
-      Effect.flatMap((port) => workspaceRpcAnswer(call(port))),
+      Effect.flatMap((port) => (owned ? workspaceRpcAnswer(call(port)) : workspaceRpcData(call(port)))),
       Effect.onError(() => Effect.sync(() => {
         if (held !== opened) return;
         held = null;
@@ -156,7 +165,7 @@ export function workspaceClient(workspace: AgentWorkspaceCalls): AgentWorkspace 
     getAuth: (...args) => settle(viaPort((port) => port.getAuth(...args))),
     listCredentials: () => settle(viaPort((port) => port.listCredentials())),
     relayDevice: (...args) => settle(viaPort((port) => port.relayDevice(...args))),
-    relayModelCall: (...args) => settle(viaPort((port) => port.relayModelCall(...args))),
+    relayModelCall: (...args) => settle(viaPort((port) => port.relayModelCall(...args), true)),
     cancelModelRelay: (...args) => settle(viaPort((port) => port.cancelModelRelay(...args))),
     sayToParent: (...args) => settle(viaPort((port) => port.sayToParent(...args))),
     logActivity: (...args) => settle(viaPort((port) => port.logActivity(...args))),

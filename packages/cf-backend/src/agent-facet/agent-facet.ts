@@ -11,7 +11,7 @@ import {
   type AgentOwnInspection, type AnsweredEvolutionHelper, type JsonValue, type ArchiveAgentPage, type ArchiveSqlCursor, type ChatHistoryPage,
   type NimbusSandboxHandle, type PositionPageRequest, type ProviderEnv, type SerializedMessage, type SubordinateInspectionResult,
   servedContextTree, type ContextEditor, type ContextTreeRemote, type SpendLedger, type StepSpendSource, type TurnRequestIndex, type TurnRequestPage, type ConversationSearchHit, type ConversationScrollResult, type ConversationSummary,
-  type SendState, DeliverySchema, WorkModeSchema, type Delivery, type DeliveryAnswer,
+  type SendState, DeliverySchema, WorkModeSchema, ActorOriginSchema, holdsChat, type Delivery, type DeliveryAnswer,
 } from '@kinu.run/core';
 import * as v from 'valibot';
 import { StepPacer } from './step-pacer';
@@ -325,6 +325,9 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     // A run a death cut off runs again: its workspace's caller still awaits its end.
     for (const owed of this.runs().unended()) this.startRun(snapshot, owed.id, owed.task);
 
+    // A run's agent holds no chat to wake.
+    if (!holdsChat(v.parse(AgentOriginSchema, snapshot.lineage.at(-1)).origin)) return;
+
     return await settle(this.withChat(snapshot, (chat) => chat.wake()));
   }
 
@@ -600,6 +603,9 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 }
 
 const FacetRunRowSchema = v.object({ id: v.string(), task_json: v.string() });
+
+/** The agent's own row, last in its lineage: its origin says whether it holds a chat. */
+const AgentOriginSchema = v.looseObject({ origin: ActorOriginSchema });
 
 const AgentTurnTaskSchema = v.object({ sequenceId: v.string(), body: v.string(), mode: WorkModeSchema });
 

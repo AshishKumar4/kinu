@@ -31,7 +31,7 @@ import {
   type HeadJournalPort, type HeadSplitRequest, type HeadSplitResult, type HostedActor,
   type LoopOrigin, type NimbusSandboxHandle, type NodeHomeHost,
   type SqlExec, type TeamToolDeps, type WorkspaceActor, type WriteObserver,
-  isSubordinateOrigin,
+  isSubordinateOrigin, holdsChat,
   whenActorTakesInput,
   type PlanEdit, type PlanReview, type PlanReviewResult, actorReadHandle,
 } from "@kinu.run/core";
@@ -799,10 +799,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         const calls = await this.agentCalls(reference.actorId);
         const snapshot = this.agentSnapshot(reference.actorId);
 
-        if (turnId === null) await calls.interruptChat(snapshot);
-        else await calls.interrupt(snapshot, turnId);
+        if (turnId !== null) await calls.interrupt(snapshot, turnId);
+        else if (holdsChat(this.agentOf(reference.actorId).origin)) await calls.interruptChat(snapshot);
       },
-      chatOwed: async (reference) => this.agentWakes.armed(reference.actorId) && await (await this.agentCalls(reference.actorId)).owed(this.agentSnapshot(reference.actorId)),
+      chatOwed: async (reference) => holdsChat(this.agentOf(reference.actorId).origin) && this.agentWakes.armed(reference.actorId)
+        && await (await this.agentCalls(reference.actorId)).owed(this.agentSnapshot(reference.actorId)),
       chatIdle: async (reference) => { await (await this.agentCalls(reference.actorId)).idle(); },
       pricing: (spec) => this.modelCatalog.pricing(spec),
       accounts: () => this.config.getProviderAccounts(),
@@ -1116,8 +1117,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   protected override async modelSettingsChanged(): Promise<void> {
     await super.modelSettingsChanged();
 
-    for (const { actorId } of this.workspaceActors().list()) {
-      if (!this.isAgent(actorId)) continue;
+    for (const { actorId, origin } of this.workspaceActors().list()) {
+      // A run's agent holds no chat to park in.
+      if (!this.isAgent(actorId) || !holdsChat(origin)) continue;
       this.detachOwned(logged('agent.settings_release_failed', { doing: "telling an agent's isolate the model settings changed", otherwise: 'unavailable' },
         async () => { await (await this.agentCalls(actorId)).modelSettingsChanged(this.agentSnapshot(actorId)); }, { workspace: this.name, actor: actorId }));
     }

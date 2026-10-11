@@ -86,6 +86,15 @@ test('a fulfilled response owns its stream and neither received disposer is rele
   expect(disposed).toBe(0);
 });
 
+test('a data answer releases its pipeline once it is read, so a turn holds none open', async () => {
+  let disposed = 0;
+  const pending = Object.assign(Promise.resolve(), { [Symbol.dispose]: () => { disposed += 1; } });
+  const workspace = workspaceClient(ported({ paceStep: () => pending }));
+
+  await workspace.paceStep('turn');
+  expect(disposed).toBe(1);
+});
+
 test('an in-process promise has no remote pipeline but keeps its rejection unchanged', async () => {
   const failure = new KinuError('denied', 'local refusal');
   const workspace = workspaceClient(ported({ getAuth: () => Promise.reject(failure) }));
