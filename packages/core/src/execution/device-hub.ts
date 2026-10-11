@@ -15,9 +15,11 @@ import { REAL_CLOCK } from '../types/clock';
 import { deviceToolchainAnswer, freshDeviceToolchain, type DeviceToolchain } from './device-status';
 import { TOOLCHAIN_PROBE_BINARIES } from './toolchain';
 import { EXECUTOR_CAPABILITIES } from './types';
+import { connections, type Connections, type ConnectionSocket, type ConnectionsContext } from '@nimbus-sh/fabric/connections.js';
+import { z } from 'zod/v4';
 import * as v from 'valibot';
 
-/** WebSocket.OPEN; shared with the terminal hub. */
+/** WebSocket.OPEN; also used by the roster's multi-subscriber lane. */
 export const WS_OPEN = 1;
 
 /** Not a platform auto-response: that would also consume a terminal's pasted text. */
@@ -27,38 +29,35 @@ export const DEVICE_KEEPALIVE_PONG = DEVICE_FRAMES.pong;
 
 const DEVICE_WS_TAG_PREFIX = 'device:';
 
-/** Close reason for a replaced daemon socket; read verbatim as `SOCKET_REPLACED_REASON` in packages/pc-agent. */
-const DEVICE_SOCKET_REPLACED_REASON = 'replaced by a new connection';
-
 /** Probe round-trip deadline; short because it runs on turn assembly. A miss leaves the row unmeasured. */
 const PROBE_TIMEOUT_MS = 3_000;
 
 const WhichResultSchema = v.object({ present: v.array(v.string()) });
 
 /** Platform WebSocket surface. `send` accepts bytes because terminal output is binary. */
-export interface DeviceSocket extends TunnelSocket {
+export interface DeviceSocket extends TunnelSocket, ConnectionSocket {
   send(data: string | ArrayBuffer | ArrayBufferView): void;
-  close(code?: number, reason?: string): void;
-  serializeAttachment(attachment: JsonValue): void;
-  deserializeAttachment(): JsonValue | undefined;
 }
 
+/** Structured-cloned numbers have the same domain as the protocol's valibot number. */
+const AttachmentNumberSchema = z.union([z.number(), z.literal(Infinity), z.literal(-Infinity)]);
+
 /** Toolchain answer on the attachment; re-narrowed on read because attachments survive deploys. */
-const DeviceToolchainSchema = v.object({
-  present: v.array(v.picklist(EXECUTOR_CAPABILITIES)),
-  asked: v.array(v.picklist(EXECUTOR_CAPABILITIES)),
-  probedAt: v.number(),
+const DeviceToolchainSchema = z.object({
+  present: z.array(z.enum(EXECUTOR_CAPABILITIES)),
+  asked: z.array(z.enum(EXECUTOR_CAPABILITIES)),
+  probedAt: AttachmentNumberSchema,
 });
 
-const DeviceAttachmentSchema = v.object({
-  device: v.string(),
-  protocolVersion: v.optional(v.number()),
-  features: v.optional(v.array(v.string())),
-  probe: v.optional(DeviceToolchainSchema),
-  relays: v.optional(v.array(v.string())),
+const DeviceAttachmentSchema = z.object({
+  device: z.string(),
+  protocolVersion: AttachmentNumberSchema.optional(),
+  features: z.array(z.string()).optional(),
+  probe: DeviceToolchainSchema.optional(),
+  relays: z.array(z.string()).optional(),
 });
 
-export interface DeviceSocketCtx {
+export interface DeviceSocketCtx extends ConnectionsContext {
   acceptWebSocket(ws: DeviceSocket, tags: string[]): void;
   getWebSockets(tag?: string): DeviceSocket[];
 }
@@ -69,9 +68,9 @@ function deviceTag(deviceId: string): string {
 
 /** Device id of a hibernatable socket, or null for agents-SDK sockets (attachments carry `__pk`). */
 export function deviceIdFromSocket(ws: DeviceSocket): string | null {
-  const attachment = v.safeParse(DeviceAttachmentSchema, ws.deserializeAttachment());
+  const attachment = DeviceAttachmentSchema.safeParse(ws.deserializeAttachment());
 
-  return attachment.success ? attachment.output.device : null;
+  return attachment.success ? attachment.data.device : null;
 }
 
 interface TunnelEntry {
@@ -85,20 +84,21 @@ export class DeviceSocketHub {
 
   private readonly relays = new DeviceRelays();
 
-  constructor(private readonly ctx: DeviceSocketCtx) {}
+  private readonly sockets: Connections<z.infer<typeof DeviceAttachmentSchema>>;
+
+  constructor(private readonly ctx: DeviceSocketCtx) {
+    this.sockets = connections(ctx, DeviceAttachmentSchema);
+  }
 
   /** Accept a daemon socket, replacing any previous one. A replacement is reported, never silent. */
   accept(deviceId: string, server: DeviceSocket): void {
     this.dropTunnel(deviceId);
 
-    for (const old of this.ctx.getWebSockets(deviceTag(deviceId))) {
-      if (old.readyState !== WS_OPEN) continue;
+    for (const _socket of this.sockets.list(deviceTag(deviceId))) {
       diagnostics.event('device.socket_replaced', { device: deviceId });
-      old.close(1000, DEVICE_SOCKET_REPLACED_REASON);
     }
 
-    this.ctx.acceptWebSocket(server, [deviceTag(deviceId)]);
-    server.serializeAttachment({ device: deviceId });
+    this.sockets.accept(server, { key: deviceTag(deviceId), attachment: { device: deviceId } });
   }
 
   hello(deviceId: string, version: number | undefined, features: readonly string[] | undefined): boolean {
@@ -116,6 +116,7 @@ export class DeviceSocketHub {
   }
 
   liveSocket(deviceId: string): DeviceSocket | null {
+    // Nimbus ask (connections socket type): get() erases the socket's send surface.
     for (const ws of this.ctx.getWebSockets(deviceTag(deviceId))) {
       if (ws.readyState === WS_OPEN) return ws;
     }
@@ -167,31 +168,28 @@ export class DeviceSocketHub {
     const ws = this.liveSocket(deviceId);
 
     if (!ws) return null;
-    const attachment = v.safeParse(DeviceAttachmentSchema, ws.deserializeAttachment());
 
-    return attachment.success ? attachment.output.probe ?? null : null;
+    return this.sockets.read(ws)?.probe ?? null;
   }
 
   private recordProbe(deviceId: string, probe: DeviceToolchain): void {
     this.annotate(deviceId, { probe: { present: [...probe.present], asked: [...probe.asked], probedAt: probe.probedAt } });
   }
 
-  private annotate(deviceId: string, patch: { probe?: JsonValue; protocolVersion?: number; features?: string[]; relays?: string[] }): void {
+  private annotate(deviceId: string, patch: Partial<Omit<z.infer<typeof DeviceAttachmentSchema>, 'device'>>): void {
     const ws = this.liveSocket(deviceId);
 
     if (!ws) return;
-    const held = v.safeParse(DeviceAttachmentSchema, ws.deserializeAttachment());
-    const attachment: JsonValue = held.success ? { ...held.output, ...patch } : { device: deviceId, ...patch };
-    ws.serializeAttachment(attachment);
+    this.sockets.write(ws, { ...this.sockets.read(ws) ?? { device: deviceId }, ...patch });
   }
 
   relayDevice(): string | null {
     // A pane names its device too.
     for (const id of this.connectedDeviceIds()) {
       const ws = this.liveSocket(id);
-      const attachment = v.safeParse(DeviceAttachmentSchema, ws?.deserializeAttachment());
+      const attachment = ws === null ? null : this.sockets.read(ws);
 
-      if (attachment.success && attachment.output.features?.includes(DEVICE_METHOD.codexRelay)) return id;
+      if (attachment?.features?.includes(DEVICE_METHOD.codexRelay)) return id;
     }
 
     return null;
@@ -208,8 +206,9 @@ export class DeviceSocketHub {
 
     const params: JsonValue = { method: request.method, url: request.url, headers: request.headers.map(([name, value]) => [name, value]), body: request.body };
 
-    const attachment = v.safeParse(DeviceAttachmentSchema, this.liveSocket(deviceId)?.deserializeAttachment());
-    this.annotate(deviceId, { relays: [...(attachment.success ? attachment.output.relays ?? [] : []), id] });
+    const ws = this.liveSocket(deviceId);
+    const attachment = ws === null ? null : this.sockets.read(ws);
+    this.annotate(deviceId, { relays: [...attachment?.relays ?? [], id] });
 
     return this.relays.open({
       id, deviceId,
@@ -217,8 +216,9 @@ export class DeviceSocketHub {
       answered: async () => {
         const [outcome] = await Promise.allSettled([tunnel.rpc(DEVICE_RELAY.method, [params], { requestId: id, timeoutMs: 0, extra: { deviceId } })]);
 
-        const remaining = v.safeParse(DeviceAttachmentSchema, this.liveSocket(deviceId)?.deserializeAttachment());
-        this.annotate(deviceId, { relays: (remaining.success ? remaining.output.relays ?? [] : []).filter((active) => active !== id) });
+        const live = this.liveSocket(deviceId);
+        const remaining = live === null ? null : this.sockets.read(live);
+        this.annotate(deviceId, { relays: (remaining?.relays ?? []).filter((active) => active !== id) });
 
         return outcome;
       },
@@ -254,10 +254,10 @@ export class DeviceSocketHub {
   connectedDeviceIds(): string[] {
     const ids: string[] = [];
 
-    for (const ws of this.ctx.getWebSockets()) {
-      const id = deviceIdFromSocket(ws);
+    for (const ws of this.sockets.list()) {
+      const id = this.sockets.read(ws)?.device;
 
-      if (id && ws.readyState === WS_OPEN && !ids.includes(id)) ids.push(id);
+      if (id && !ids.includes(id)) ids.push(id);
     }
 
     return ids;
@@ -279,11 +279,11 @@ export class DeviceSocketHub {
     const ws = this.liveSocket(deviceId);
 
     if (!ws) return null;
-    const attachment = v.safeParse(DeviceAttachmentSchema, ws.deserializeAttachment());
+    const attachment = this.sockets.read(ws);
 
-    if (!attachment.success || attachment.output.protocolVersion === undefined) return null;
+    if (attachment?.protocolVersion === undefined) return null;
     const tunnel = new DeviceTunnel(ws, undefined, undefined, REAL_CLOCK);
-    const interrupted = attachment.output.relays ?? [];
+    const interrupted = attachment.relays ?? [];
 
     const recovery = interrupted.length === 0 ? null : Promise.all(interrupted.map(async (id) => {
       diagnostics.event('device.relay_interrupted', { device: deviceId, reason: 'hub_restarted' });
@@ -292,7 +292,7 @@ export class DeviceSocketHub {
 
     this.tunnels.set(deviceId, { tunnel, ws, recovery });
 
-    if (attachment.output.relays?.length) this.annotate(deviceId, { relays: [] });
+    if (attachment.relays?.length) this.annotate(deviceId, { relays: [] });
 
     return tunnel;
   }
@@ -337,8 +337,6 @@ export class DeviceSocketHub {
   close(deviceId: string, reason: string): void {
     this.dropTunnel(deviceId);
 
-    for (const ws of this.ctx.getWebSockets(deviceTag(deviceId))) {
-      if (ws.readyState === WS_OPEN) ws.close(1000, reason);
-    }
+    for (const ws of this.sockets.list(deviceTag(deviceId))) ws.close(1000, reason);
   }
 }

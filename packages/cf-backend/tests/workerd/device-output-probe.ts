@@ -6,7 +6,7 @@
  */
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
-import { DeviceSocketHub, DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION, deviceIdFromSocket, watchedOutput, type DeviceExecOutput, type JsonValue } from '@kinu.run/core';
+import { DeviceSocketHub, DeviceTerminalHub, DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION, deviceIdFromSocket, terminalFromSocket, watchedOutput, type DeviceExecOutput, type JsonValue } from '@kinu.run/core';
 import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
 
 const DEVICE = 'dev-probe';
@@ -15,19 +15,50 @@ const DEVICE = 'dev-probe';
 export class DeviceOutputHubProbeDO extends DurableObject<Cloudflare.Env> {
   private readonly devices = new DeviceSocketHub(this.ctx);
 
-  override async fetch(): Promise<Response> {
+  private readonly terminals = new DeviceTerminalHub(this.ctx, this.devices);
+
+  override async fetch(request: Request): Promise<Response> {
     const pair = new WebSocketPair();
-    this.devices.accept(DEVICE, pair[1]);
-    this.devices.hello(DEVICE, DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
+    const session = new URL(request.url).searchParams.get('session');
+
+    if (session !== null) this.terminals.attach(session, pair[1]);
+    else {
+      this.devices.accept(DEVICE, pair[1]);
+      this.devices.hello(DEVICE, DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
+    }
 
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
   override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    const terminal = terminalFromSocket(ws);
+
+    if (terminal !== null) {
+      this.terminals.fromPane(terminal.session, terminal.device, message);
+
+      return;
+    }
+
     const deviceId = deviceIdFromSocket(ws);
 
     // The daemon sends text frames.
     if (deviceId !== null) this.devices.handleMessage(deviceId, v.parse(v.string(), message));
+  }
+
+  hello(features: string[]): boolean {
+    return this.devices.hello(DEVICE, DEVICE_PROTOCOL_VERSION, features);
+  }
+
+  registerTerminal(session: string): void {
+    this.terminals.register(session, DEVICE, 'workspace-probe');
+  }
+
+  terminalOutput(session: string, bytes: Uint8Array): void {
+    this.terminals.toPane(session, bytes);
+  }
+
+  terminalExit(session: string, exitCode: number): void {
+    this.terminals.paneExit(session, exitCode);
   }
 
   /** The call as `UserDO.deviceRpc` frames it; with `losses`, it answers once that many outputs were logged as unsent. */

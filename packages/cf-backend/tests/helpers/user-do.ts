@@ -4,7 +4,7 @@ import { AwaitedList } from '@kinu.run/test-utils';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import type { AgentContext } from 'agents';
 import { joinHarnessFibers, mockAgentsSdk, rememberMcpManager, inheritedMcpManager } from './agents-sdk';
-import { sha256Hex, DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES } from '@kinu.run/core';
+import { sha256Hex, DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES, deviceIdFromSocket } from '@kinu.run/core';
 import { isJsonObject } from '../../../core/src/utils/json';
 import { ownerCaller, type UserCaller } from '@kinu.run/core';
 import type { WorkspaceEntry, WorkspaceRegistration } from '../../src/user/workspaces';
@@ -473,9 +473,9 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     const accepted = live.find((entry) => entry.ws === ws);
 
     if (accepted) return accepted.tags;
-    const attachment = v.safeParse(v.object({ device: v.nullable(v.string()) }), ws.deserializeAttachment());
+    const device = deviceIdFromSocket(ws);
 
-    return attachment.success && attachment.output.device !== null ? [`device:${attachment.output.device}`] : [];
+    return device === null ? [] : [`device:${device}`];
   };
 
   const kv = new Map<string, JsonValue>();
@@ -523,6 +523,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
       return tag === undefined ? all : all.filter((ws) => tagsOf(ws).includes(tag));
     },
     acceptWebSocket: (ws: typeof socket, tags: string[] = []) => { live.push({ ws, tags }); },
+    getTags: tagsOf,
   };
 
   const env: TestUserEnvironment = {
