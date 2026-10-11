@@ -409,8 +409,13 @@ function longBody(body: OutboundBody): Response {
   const users = (body.messages ?? []).filter((m) => m.role === 'user').map((m) => textOf(m.content));
 
   // The background memory lane, scripted as the tiers' scripted model answers it (scripts/tier-model.ts): no change.
+  // It asks for one JSON completion, not a stream.
   if (users[0]?.startsWith(SLEEP_TIME_PROMPT_OPENING) === true) {
-    return sseResponse([sseChunk({ content: JSON.stringify({ upserts: [], decay: [] }) }), sseChunk({ role: 'assistant' }, 'stop'), sseDone()]);
+    return Response.json({
+      id: 'chatcmpl-probe', object: 'chat.completion', created: 0, model: body.model,
+      choices: [{ index: 0, message: { role: 'assistant', content: JSON.stringify({ upserts: [], decay: [] }) }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    });
   }
 
   const spec = users.filter((u) => u.startsWith('long:')).at(-1) ?? 'long:100';
