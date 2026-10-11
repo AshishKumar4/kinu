@@ -1,6 +1,6 @@
 /**
  * The hub pushes UPDATE on HELLO when the named build differs, the owner allows it, and the daemon
- * has not refused that build; a daemon naming no build keeps `daemon_outdated` and gets nothing.
+ * has not refused that build; a daemon naming no build gets nothing.
  */
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, test } from 'bun:test';
@@ -147,12 +147,11 @@ describe('a daemon reports why it cannot take a served build', () => {
 
   test('a refusal holds while the daemon runs where it refused, and lapses when it reports another runtime', async () => {
     const harness = await connected();
-    await harness.sendDeviceHello(hello({ version: '0.2.0+older', updateCheck: true }));
+    await harness.sendDeviceHello(hello({ version: '0.2.0+older', updateCheck: true, runtime: REFUSED_ON }));
     expect(harness.devicePushes).toHaveLength(1);
     expect((await refuse(harness, harness.token)).status).toBe(200);
 
-    // The daemon that refused on 1.4.0, an older daemon that names no runtime, and the same runtime again.
-    await harness.sendDeviceHello(hello({ version: '0.2.0+older', updateCheck: true }));
+    // The daemon that refused on 1.4.0, connecting again on that runtime.
     await harness.sendDeviceHello(hello({ version: '0.2.0+older', updateCheck: true, runtime: REFUSED_ON }));
     expect(harness.devicePushes).toHaveLength(1);
     expect((await devices(harness))[0]).toMatchObject({ update: 'refused', updateRefusal: REFUSAL });
@@ -290,14 +289,6 @@ describe('the UPDATE frame a HELLO earns', () => {
     const [row] = await devices(harness);
     expect(row).toMatchObject({ hostname: 'studio', version: null, update: 'unreported', servedVersion: SERVED });
     expect(row?.sandbox.capability).toBe('sandboxed');
-  });
-
-  test('a daemon with no sandbox field still reads daemon_outdated, version or not', async () => {
-    const harness = await connected();
-    await harness.sendDeviceHello({ type: 'HELLO', os: 'linux', hostname: 'old' });
-    const [row] = await devices(harness);
-    expect(row?.sandbox).toMatchObject({ capability: 'files_only', reason: 'daemon_outdated' });
-    expect(harness.devicePushes).toEqual([]);
   });
 
   test('a platform no artifact is built for gets nothing', async () => {

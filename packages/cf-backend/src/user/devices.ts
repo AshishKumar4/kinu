@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 import {
-  DEVICE_PTY_OPEN_METHOD, type DeviceExecOutput, NO_DEVICE_CONNECTED, watchedOutput, SEVERAL_DEVICES_CONNECTED, codexEgressAllowed, chatgptEgressAllowed, type RelayedProvider, isWorkspaceName, nanoid, type DeviceCheckpointHint, type DeviceConsentRequest, type JsonObject, type JsonValue, CapabilityDeniedError, ownerCaller, type UserCaller, type ResolvedCaller, DeviceSocketHub, DeviceRequestLedger, type ClaimedDeviceRequest, type DeviceCancelOutcome, randomToken, sha256Hex, type DeviceChatGptStatus, DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED, DEVICE_TOKEN_ROTATION, DEVICE_UPDATE, cliArtifactPath, deviceUpdateState, readBuildStamp, type BuildStamp, type DeviceUpdateFrame, type DeviceUpdateState, DEVICE_CANCEL_METHOD, DEVICE_EXEC_ACK_METHOD, parseDeviceCancelAnswer, nextDeviceRequestId, DEVICE_METHOD, DEVICE_FRAMES, DEVICE_ERRORS, DEVICE_UPDATE_REQUIRED, deviceFailure, deviceMethodHas, type DeviceTunnel, DEVICE_TIERS, SANDBOX_UNAVAILABLE, effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix, sandboxCause, summarizeDeviceAction, type DeviceConsentDecision, type DeviceStatus, type DeviceFileScope, type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
+  DEVICE_PTY_OPEN_METHOD, type DeviceExecOutput, NO_DEVICE_CONNECTED, watchedOutput, SEVERAL_DEVICES_CONNECTED, codexEgressAllowed, chatgptEgressAllowed, type RelayedProvider, isWorkspaceName, nanoid, type DeviceCheckpointHint, type DeviceConsentRequest, type JsonObject, type JsonValue, CapabilityDeniedError, ownerCaller, type UserCaller, type ResolvedCaller, DeviceSocketHub, DeviceRequestLedger, type ClaimedDeviceRequest, type DeviceCancelOutcome, randomToken, sha256Hex, type DeviceChatGptStatus, DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED, DEVICE_TOKEN_ROTATION, DEVICE_UPDATE, cliArtifactPath, deviceUpdateState, readBuildStamp, type BuildStamp, type DeviceUpdateFrame, type DeviceUpdateState, DEVICE_CANCEL_METHOD, DEVICE_EXEC_ACK_METHOD, parseDeviceCancelAnswer, nextDeviceRequestId, DEVICE_METHOD, DEVICE_FRAMES, DEVICE_ERRORS, deviceFailure, deviceMethodHas, type DeviceTunnel, DEVICE_TIERS, SANDBOX_UNAVAILABLE, effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix, sandboxCause, summarizeDeviceAction, type DeviceConsentDecision, type DeviceStatus, type DeviceFileScope, type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
 } from '@kinu.run/core';
 import { attemptInItsWords, diagnostics, KinuError, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -75,41 +75,49 @@ export type DeviceCancellationOutcome = {
 
 const CancelledRequestIdSchema = v.pipe(v.string(), v.minLength(1));
 
-/**
- * Every field past `type` is optional so older daemons still connect. Absent means absent:
- * a daemon that says nothing about sandboxing is refused commands rather than run unconfined.
- */
 /** RFC 1035: a name is at most 255 octets. */
 const HOSTNAME_MAX_LENGTH = 255;
 
-export const DeviceHelloSchema = v.object({
+/** What every HELLO opens with: the protocol it speaks and the methods it answers, which decide the rest. */
+export const DeviceHelloHeadSchema = v.object({
   type: v.literal(DEVICE_FRAMES.hello),
-  protocolVersion: v.optional(v.number()),
-  features: v.optional(v.array(v.string())),
-  os: v.optional(v.string()),
-  hostname: v.optional(v.string()),
+  protocolVersion: v.number(),
+  features: v.array(v.string()),
+});
+
+/**
+ * What a daemon on the protocol before this one is read for: whether, and to which build, it is pushed the update.
+ * `version` is absent on a daemon with no build stamp, which is pushed nothing.
+ */
+export const DeviceUpdateHelloSchema = v.object({
+  ...DeviceHelloHeadSchema.entries,
+  os: v.string(),
+  arch: v.string(),
+  version: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1))),
+  updateCheck: v.boolean(),
+});
+
+/** A current daemon's HELLO, every field it sends. */
+export const DeviceHelloSchema = v.object({
+  ...DeviceUpdateHelloSchema.entries,
+  hostname: v.string(),
   /** The directory `kinu connect` ran in, and the machine's home.
    *  Absolute or ignored: a relative path names nothing the hub can scope a call to. */
-  root: v.optional(v.string()),
-  home: v.optional(v.string()),
+  root: v.string(),
+  home: v.string(),
   /** What the daemon proved at start. Words stay plain strings, narrowed by
    *  `sandboxVerdictFromHello`; a picklist would reject the whole HELLO over one unknown word. */
-  sandbox: v.optional(v.object({
-    capability: v.optional(v.nullable(v.string())),
-    reason: v.optional(v.nullable(v.string())),
+  sandbox: v.object({
+    capability: v.nullable(v.string()),
+    reason: v.nullable(v.string()),
     reasonDetail: v.optional(v.nullable(v.string())),
-    gpu: v.optional(v.array(v.string())),
-  })),
+    gpu: v.array(v.string()),
+  }),
   /** Where this machine keeps agent homes (`<home>/.kinu/agents`); the hub composes
    *  `<agentRoot>/<workspace>/home` per exec and never guesses a path. */
-  agentRoot: v.optional(v.string()),
-  /** Build stamp, `os.arch()`, and whether the owner allows pushed updates. All absent on older
-   *  daemons, which get no UPDATE and keep the `daemon_outdated` reading. */
-  version: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1))),
-  arch: v.optional(v.string()),
-  updateCheck: v.optional(v.boolean()),
+  agentRoot: v.string(),
   /** The daemon's runtime (`Bun 1.4.2`); a refusal holds until it changes. */
-  runtime: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1))),
+  runtime: v.pipe(v.string(), v.trim(), v.minLength(1)),
 });
 
 /** An object type rather than an interface, so it satisfies the row constraint `sqlx` puts
@@ -122,13 +130,12 @@ type SandboxColumns = {
 };
 
 /**
- * Unknown status words stay in the detail. No sandbox field means `daemon_outdated`; a proved
- * sandbox with no agent root cannot build a frame, so no command is promised a sandbox.
+ * Unknown status words stay in the detail. A proved sandbox with no absolute agent root cannot build a frame, so no
+ * command is promised a sandbox.
  */
 function sandboxVerdictFromHello(
   hello: v.InferOutput<typeof DeviceHelloSchema>, agentRoot: string | null,
 ): SandboxVerdict {
-  if (hello.sandbox === undefined) return { capability: 'files_only', reason: 'daemon_outdated', detail: null };
   const claimed = parseSandboxCapability(hello.sandbox.capability);
 
   if (claimed === 'sandboxed' && agentRoot === null) {
@@ -150,7 +157,7 @@ function sandboxVerdictFromHello(
   return { capability: claimed, reason, detail: line };
 }
 
-function absolutePathOrNull(value: string | undefined): string | null {
+function absolutePathOrNull(value: string): string | null {
   const parsed = v.safeParse(AbsolutePathSchema, value);
 
   if (!parsed.success) return null;
@@ -304,23 +311,18 @@ export class UserDevices {
     await this.revokeDevice(caller, reused.device_id);
   }
 
-  /**
-   * Record a daemon's HELLO. Paths and agent root COALESCE so an older daemon can't erase them;
-   * the sandbox verdict is per-boot, so silence overwrites a stale yes.
-   */
+  /** Record a daemon's HELLO: every field is this boot's, and overwrites the last. */
   recordDeviceHello(deviceId: string, hello: v.InferOutput<typeof DeviceHelloSchema>): void {
     const agentRoot = absolutePathOrNull(hello.agentRoot);
     const verdict = sandboxVerdictFromHello(hello, agentRoot);
     this.host.sqlx(
       `UPDATE user_devices
           SET os = ?, hostname = ?, last_seen_at = ?,
-              consented_root = COALESCE(?, consented_root),
-              device_home = COALESCE(?, device_home),
-              agent_root = COALESCE(?, agent_root),
+              consented_root = ?, device_home = ?, agent_root = ?,
               sandbox_capability = ?, sandbox_reason = ?, sandbox_detail = ?, sandbox_gpu = ?
         WHERE id = ?`,
-      hello.os ?? null,
-      hello.hostname !== undefined && hello.hostname.length <= HOSTNAME_MAX_LENGTH ? hello.hostname : null,
+      hello.os,
+      hello.hostname.length <= HOSTNAME_MAX_LENGTH ? hello.hostname : null,
       Date.now(),
       absolutePathOrNull(hello.root),
       absolutePathOrNull(hello.home),
@@ -328,11 +330,11 @@ export class UserDevices {
       verdict.capability,
       verdict.reason,
       verdict.detail,
-      JSON.stringify(hello.sandbox?.gpu ?? []),
+      JSON.stringify(hello.sandbox.gpu),
       deviceId,
     );
 
-    // Per-boot fact like the sandbox verdict: silence overwrites, so an older CLI reads as itself.
+    // Per-boot fact like the sandbox verdict: a daemon with no build stamp reads as having none.
     this.host.sqlx(
       `INSERT INTO user_device_builds (device_id, version, update_check)
          VALUES (?, ?, ?)
@@ -341,12 +343,9 @@ export class UserDevices {
            update_check = excluded.update_check`,
       deviceId,
       hello.version ?? null,
-      hello.updateCheck === false ? 0 : 1,
+      hello.updateCheck ? 1 : 0,
     );
-
-    if (hello.runtime !== undefined) {
-      this.host.sqlx(`DELETE FROM user_device_update_refusals WHERE device_id = ? AND runtime <> ?`, deviceId, hello.runtime);
-    }
+    this.host.sqlx(`DELETE FROM user_device_update_refusals WHERE device_id = ? AND runtime <> ?`, deviceId, hello.runtime);
 
     this.host.sqlx(`DELETE FROM user_device_protocol_refusals WHERE device_id = ?`, deviceId);
   }
@@ -369,7 +368,7 @@ export class UserDevices {
    * UPDATE frame for a daemon behind the served build, when its owner allows the push.
    * Null for no reported build, unbuilt platform, opted-out owner, refused build, or no checksum.
    */
-  async deviceUpdateFrame(deviceId: string, hello: v.InferOutput<typeof DeviceHelloSchema>): Promise<DeviceUpdateFrame | null> {
+  async deviceUpdateFrame(deviceId: string, hello: v.InferOutput<typeof DeviceUpdateHelloSchema>): Promise<DeviceUpdateFrame | null> {
     const stamp = await this.servedStamp();
     const served = stamp?.version ?? null;
 
@@ -378,7 +377,7 @@ export class UserDevices {
     );
 
     const state = deviceUpdateState({
-      version: hello.version ?? null, updateCheck: hello.updateCheck !== false, refusedVersion: refusal?.version,
+      version: hello.version ?? null, updateCheck: hello.updateCheck, refusedVersion: refusal?.version,
     }, served);
 
     if (state !== 'behind' || served === null || stamp === null) return null;
@@ -695,11 +694,6 @@ export class UserDevices {
       const deviceId = yield* this.resolveDeviceForCall(opts?.deviceId, consentAgent);
 
       if (!stopping && !this.isActiveDevice(deviceId)) return yield* Effect.fail(deviceFailure(DEVICE_ERRORS.disconnected, NO_DEVICE_CONNECTED));
-
-      // Before consent: asking leave for a method the daemon cannot run would only end in its refusal.
-      if (!this._devices.supports(deviceId, method)) {
-        return yield* Effect.fail(deviceFailure(DEVICE_ERRORS.unknownMethod, `This machine's daemon is older than ${method}: ${DEVICE_UPDATE_REQUIRED}.`));
-      }
 
       if (consentAgent !== undefined) {
         // Consent is keyed on the proven workspace, never the claimed name, so an agent cannot

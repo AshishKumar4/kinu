@@ -28,7 +28,7 @@ import { type McpPresetAvailability, type McpServerSummary } from './mcp';
 import { acceptRosterSocket, isRosterSocket, unreportedWorkspaces, ROSTER_SOCKET_PATH, type RosterPage, type RosterQuery } from './roster';
 
 import { UserDrive, type DriveAnswer, type DriveChunkWrite } from './drive';
-import { DeviceHelloSchema, UserDevices, type DeviceCancellationOutcome } from './devices';
+import { DeviceHelloHeadSchema, DeviceHelloSchema, DeviceUpdateHelloSchema, UserDevices, type DeviceCancellationOutcome } from './devices';
 import { UserTerminals } from './terminals';
 import { UserChatGptSignIn, type ChatGptMachineSignIn, type ChatGptPlanStatus } from './chatgpt-sign-in';
 import { UserMcpServers, USER_MCP_CLIENT_NAME, type McpToolCall } from './mcp-servers';
@@ -882,11 +882,27 @@ export class UserDO extends Agent<Env> {
     }
 
     // Anything not a HELLO (including non-JSON) is treated as an RPC response.
-    const hello = v.safeParse(DeviceHelloSchema, tolerate(() => JSON.parse(data), 'malformed-input'));
+    const announced = tolerate(() => JSON.parse(data), 'malformed-input');
+    const head = v.safeParse(DeviceHelloHeadSchema, announced);
 
-    if (hello.success) {
-      if (!this.devices._devices.hello(deviceId, hello.output.protocolVersion, hello.output.features)) {
+    if (head.success) {
+      const admitted = this.devices._devices.hello(deviceId, head.output.protocolVersion, head.output.features);
+      const hello = v.safeParse(DeviceHelloSchema, announced);
+
+      if (admitted !== 'serve' || !hello.success) {
         this.sqlx(`INSERT OR IGNORE INTO user_device_protocol_refusals (device_id) VALUES (?)`, deviceId);
+        // The protocol before this one is pushed the build that brings it here, and nothing else.
+        const previous = v.safeParse(DeviceUpdateHelloSchema, announced);
+        const update = admitted === 'update' && previous.success ? await this.devices.deviceUpdateFrame(deviceId, previous.output) : null;
+
+        if (update === null || !previous.success) {
+          this.devices._devices.refuse(deviceId);
+
+          return;
+        }
+
+        diagnostics.event('device.update_pushed', { device: deviceId, from: previous.output.version ?? '', to: update.version });
+        ws.send(JSON.stringify(update));
 
         return;
       }

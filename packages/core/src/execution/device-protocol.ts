@@ -18,7 +18,7 @@ export type DeviceMethod = keyof typeof protocol.methods;
 /** Every method a current daemon answers, as its HELLO lists them. */
 export const DEVICE_FEATURES: readonly string[] = Object.keys(protocol.methods);
 
-const methodFlags: Readonly<Record<string, { consentFree?: boolean; checkpointStore?: boolean; deviceView?: boolean; optional?: boolean }>> = protocol.methods;
+const methodFlags: Readonly<Record<string, { consentFree?: boolean; checkpointStore?: boolean; deviceView?: boolean }>> = protocol.methods;
 
 const failureKinds = new Map<string, ErrorCode>([
   [DEVICE_ERRORS.disconnected, 'unavailable'], [DEVICE_ERRORS.noOwner, 'unavailable'],
@@ -27,7 +27,7 @@ const failureKinds = new Map<string, ErrorCode>([
   [DEVICE_ERRORS.sandboxUnavailable, 'denied'], ['EACCES', 'denied'], ['EPERM', 'denied'], ['ENOENT', 'missing'],
 ]);
 
-export function deviceMethodHas(method: string, flag: 'consentFree' | 'checkpointStore' | 'deviceView' | 'optional'): boolean {
+export function deviceMethodHas(method: string, flag: 'consentFree' | 'checkpointStore' | 'deviceView'): boolean {
   return methodFlags[method]?.[flag] === true;
 }
 

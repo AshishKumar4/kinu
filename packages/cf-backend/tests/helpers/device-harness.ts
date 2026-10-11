@@ -2,13 +2,16 @@
 // like the daemon; without one every call hangs and consent outcomes are indistinguishable.
 import * as v from 'valibot';
 import {
-  DEVICE_CANCEL_METHOD, DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES, type JsonValue,
+  DEVICE_CANCEL_METHOD, type JsonValue,
 } from '@kinu.run/core';
 import {
   createTestUserDO, provisionTestWorkspace, testOwner,
   type DeviceFrame, type TestUserDO,
+  CAPABLE_HELLO,
 } from './user-do';
 import type { UserCaller } from '@kinu.run/core';
+
+export { CAPABLE_HELLO };
 
 export const WORKSPACE = 'workspace-a';
 
@@ -36,17 +39,6 @@ export interface DeviceHarness extends TestUserDO {
 /** Answer now, or later to hold a command's result open across its cancellation; `say` sends a frame first. */
 export type DeviceResponder = (frame: DeviceFrame, say: (frame: JsonValue) => Promise<void>) => JsonValue | Promise<JsonValue>;
 
-/** What a current daemon reports on connect (sandbox proof, agent-home root);
- *  without it the hub refuses to run commands. */
-export const CAPABLE_HELLO = {
-  type: 'HELLO',
-  protocolVersion: DEVICE_PROTOCOL_VERSION,
-  features: [...DEVICE_FEATURES],
-  os: 'linux',
-  hostname: 'studio',
-  agentRoot: '/home/ashish/.kinu/agents',
-  sandbox: { capability: 'sandboxed', reason: null, gpu: [] },
-} satisfies JsonValue;
 
 export interface DeviceHarnessOptions {
   /** What the daemon says on connect; `null` sends nothing. */

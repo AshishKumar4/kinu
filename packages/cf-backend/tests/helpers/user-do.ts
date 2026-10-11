@@ -141,6 +141,22 @@ export interface TestUserDO {
   close(): void;
 }
 
+/** What a current daemon reports on connect, every field it sends: a sandbox it proved and where agent homes live. */
+export const CAPABLE_HELLO = {
+  type: 'HELLO',
+  protocolVersion: DEVICE_PROTOCOL_VERSION,
+  features: [...DEVICE_FEATURES],
+  os: 'linux',
+  arch: 'x64',
+  hostname: 'studio',
+  root: '/home/ashish/project',
+  home: '/home/ashish',
+  updateCheck: true,
+  runtime: 'Bun 1.4.2',
+  agentRoot: '/home/ashish/.kinu/agents',
+  sandbox: { capability: 'sandboxed', reason: null, gpu: [] },
+} satisfies JsonValue;
+
 export const TEST_CREDENTIAL_ENCRYPTION_KEY = 'test-credential-encryption-key-0123456789';
 
 export const TEST_USER_ENV = { CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY };
@@ -644,7 +660,8 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
 
       if (!target) throw new Error(`no fake daemon is attached for ${deviceId}`);
 
-      const frame = isJsonObject(hello) ? { protocolVersion: DEVICE_PROTOCOL_VERSION, features: [...DEVICE_FEATURES], ...hello } : hello;
+      // A test names the fields it is about; the rest are a current daemon's.
+      const frame = isJsonObject(hello) ? { ...CAPABLE_HELLO, ...hello } : hello;
 
       return userDO.webSocketMessage(target, JSON.stringify(frame));
     },
