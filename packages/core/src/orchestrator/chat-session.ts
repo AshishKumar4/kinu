@@ -1372,8 +1372,8 @@ export class ChatSession {
       turnIndex: this.actorSession.orchestrator.sessionTurnIndex,
       // Enough for the next process to re-open the same turn.
       turn: {
-        turnId, messageId: this.messageId, kind: item.kind, text: item.text,
-        ...(item.metadata !== undefined && { metadata: item.metadata }),
+        // Its author stamped, as its opening row is.
+        turnId, messageId: this.messageId, kind: item.kind, text: item.text, metadata: authoredTurnMetadata(item),
         ...(item.pendingSendId !== undefined && { pendingSendId: item.pendingSendId }),
         ...(item.steerIds !== undefined && { steerIds: item.steerIds }),
       },

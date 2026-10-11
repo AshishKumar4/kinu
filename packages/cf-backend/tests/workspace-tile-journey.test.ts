@@ -9,14 +9,14 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  actorConnectionTag, DeviceConsentStore, JsonValueSchema, PlanReviewStore, TURN_AUTHOR_METADATA_KEY, type JsonValue, type WorkspaceOverview,
+  actorConnectionTag, DeviceConsentStore, JsonValueSchema, TURN_AUTHOR_METADATA_KEY, type JsonValue, type WorkspaceOverview,
 } from '@kinu.run/core';
 import { AwaitedList } from '@kinu.run/test-utils';
 import type { Database } from 'bun:sqlite';
 import { TERMINAL_RETRY_JOB } from '../src/wake-jobs';
 import { bindAgentSql } from '../src/runtime';
 import {
-  actorOver, armedWakes, chatSessionTurns, fireSoonestWake, GATEWAY_CATALOG, nextTurn, orchestratorHarness, hostedSubordinateHarness, seedMission,
+  armedWakes, chatSessionTurns, fireSoonestWake, GATEWAY_CATALOG, nextTurn, orchestratorHarness, hostedSubordinateHarness, seedMission,
   until, wakeForDelegatedTask, workspaceFiles, type HarnessOrchestratorAgent, type RecordedUserPlaneCalls,
 } from './helpers/actor-harness';
 import { mockAgentsSdk } from './helpers/agents-sdk';
@@ -185,10 +185,8 @@ describe("a workspace's tile on its owner's home", () => {
       addedAnswer.resolve();
       await until(() => last()?.activity === 'idle', "the added agent's answered turn is pushed");
 
-      // No hosted turn submits a plan in this build, so the one the agent holds is the row an earlier build left; the
-      // next tick of the wake carries it.
-      expect(new PlanReviewStore(bindAgentSql(agent), actorOver(db, added.subordinate.actorId)).submit('default', [{ start: 1, content: '# Repair the ledger' }]).ok).toBe(true);
-      await agent.terminalRetryPass();
+      // The added agent submits a plan into its own isolate, as its Plan turn's tool does: a decision the tile counts.
+      expect((await agent.harnessSubmitAgentPlan(added.subordinate.actorId, [{ start: 1, content: '# Repair the ledger' }])).ok).toBe(true);
       await until(() => last()?.decisionsWaiting === 1, "the child's plan is pushed");
       await tab('dismissSubordinate', added.name, false);
       await until(() => last()?.decisionsWaiting === 0, 'the retired child takes its plan from the tile');

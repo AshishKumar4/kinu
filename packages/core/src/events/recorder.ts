@@ -389,7 +389,7 @@ export class RunEventRecorder {
   private noteOperatorRequest(start: Extract<RunEvent, { type: 'run_start' }>): void {
     if (start.turn === undefined || start.userMessage === undefined) return;
 
-    if (turnAuthor({ id: start.turn.turnId, metadata: start.turn.metadata }) !== 'operator') return;
+    if (turnAuthor({ metadata: start.turn.metadata }) !== 'operator') return;
     void this.sql`INSERT INTO operator_requests (actor_id, text) VALUES (${this.actorId}, ${start.userMessage})
       ON CONFLICT (actor_id) DO UPDATE SET text = excluded.text`;
   }
@@ -526,23 +526,9 @@ export class RunEventRecorder {
     return { status: sealed?.type === 'run_end' ? sealed.reason ?? null : null, userMessage: this.operatorWords() };
   }
 
-  /** Older storage: scanned once, kept ('' for none). */
-  private operatorWords(window = 50): string | null {
-    const [asked] = this.sql<{ text: string }>`SELECT text FROM operator_requests WHERE actor_id = ${this.actorId}`;
-
-    if (asked !== undefined) return asked.text === '' ? null : asked.text;
-
-    const starts = this.sql<{ payload: string }>`
-      SELECT payload FROM run_events WHERE actor_id = ${this.actorId} AND type = ${'run_start'}
-      ORDER BY ts DESC, rowid DESC LIMIT ${window}`;
-
-    const found = starts.map((row) => parseStoredRunEvent(row.payload)).find((start) => start.type === 'run_start'
-      && start.turn !== undefined && turnAuthor({ id: start.turn.turnId, metadata: start.turn.metadata }) === 'operator');
-
-    const text = found?.type === 'run_start' ? found.userMessage ?? '' : '';
-    void this.sql`INSERT INTO operator_requests (actor_id, text) VALUES (${this.actorId}, ${text})`;
-
-    return text === '' ? null : text;
+  /** The person's newest words, as their run's start recorded them; none before they first spoke. */
+  private operatorWords(): string | null {
+    return this.sql<{ text: string }>`SELECT text FROM operator_requests WHERE actor_id = ${this.actorId}`[0]?.text ?? null;
   }
 
   /** Auto-GEPA's durable denominator. Rows without `workMode` count nothing; a turn in the same

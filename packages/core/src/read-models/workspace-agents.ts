@@ -1,7 +1,6 @@
 import type { SqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { isSubordinateOrigin, type WorkspaceActor } from '../identity/workspace-actors';
-import { tableExists } from '../identity/schema';
 import { SubordinateRosterStore, subordinateTitle } from '../subordinates/roster';
 import { codenameFor } from '../identity/naming';
 import type { SubordinateRosterEntry } from '../delegation/agents-tool';
@@ -59,20 +58,16 @@ function chatActivity(sql: SqlExecutor, actorId: string, running: boolean): Agen
 }
 
 function asksThePerson(sql: SqlExecutor, actorId: string): boolean {
-  return (tableExists(sql, 'deferred_approvals')
-      && sql<{ x: number }>`SELECT 1 AS x FROM deferred_approvals WHERE actor_id = ${actorId} AND status = 'queued' LIMIT 1`.length > 0)
-    || (tableExists(sql, 'plan_reviews')
-      && sql<{ x: number }>`SELECT 1 AS x FROM plan_reviews WHERE actor_id = ${actorId} AND status = 'pending' LIMIT 1`.length > 0);
+  return sql<{ x: number }>`SELECT 1 AS x FROM deferred_approvals WHERE actor_id = ${actorId} AND status = 'queued' LIMIT 1`.length > 0
+    || sql<{ x: number }>`SELECT 1 AS x FROM plan_reviews WHERE actor_id = ${actorId} AND status = 'pending' LIMIT 1`.length > 0;
 }
 
 function deviceAsks(sql: SqlExecutor, now: number): boolean {
-  return tableExists(sql, 'device_consent_requests')
-    && sql<{ x: number }>`SELECT 1 AS x FROM device_consent_requests WHERE expires_at > ${now} LIMIT 1`.length > 0;
+  return sql<{ x: number }>`SELECT 1 AS x FROM device_consent_requests WHERE expires_at > ${now} LIMIT 1`.length > 0;
 }
 
 function lastTurnFailed(sql: SqlExecutor, actorId: string): boolean {
-  return tableExists(sql, 'actor_turn_claims')
-    && sql<{ outcome: string | null }>`SELECT outcome FROM actor_turn_claims WHERE actor_id = ${actorId} ORDER BY claimed_at DESC LIMIT 1`[0]?.outcome === 'error';
+  return sql<{ outcome: string | null }>`SELECT outcome FROM actor_turn_claims WHERE actor_id = ${actorId} ORDER BY claimed_at DESC LIMIT 1`[0]?.outcome === 'error';
 }
 
 function subordinateActivity(sql: SqlExecutor, entry: SubordinateRosterEntry, actorId: string, running: boolean): AgentActivity {
@@ -113,15 +108,14 @@ function treeOrder(rootId: string, actors: readonly WorkspaceActor[]): Workspace
 }
 
 function turnOpen(sql: SqlExecutor, actorId: string): boolean {
-  return tableExists(sql, 'actor_turn_claims')
-    && sql<{ x: number }>`SELECT 1 AS x FROM actor_turn_claims WHERE actor_id = ${actorId} AND outcome IS NULL LIMIT 1`.length > 0;
+  return sql<{ x: number }>`SELECT 1 AS x FROM actor_turn_claims WHERE actor_id = ${actorId} AND outcome IS NULL LIMIT 1`.length > 0;
 }
 
 /** Work handed to it it has not said it rests from, or reactions due a drain now. */
-function turnOwed({ sql, exec, now, queued }: Pick<Walk, 'sql' | 'exec' | 'now' | 'queued'>, actor: ActorHandle): boolean {
+function turnOwed({ exec, now, queued }: Pick<Walk, 'exec' | 'now' | 'queued'>, actor: ActorHandle): boolean {
   if (queued(actor.actorId)) return true;
 
-  return tableExists(sql, 'agent_log') && new EventLog(exec, actor).nextPendingDrainAt(now) === now;
+  return new EventLog(exec, actor).nextPendingDrainAt(now) === now;
 }
 
 interface Walk {
@@ -164,7 +158,7 @@ function rosterAgents({ sql, exec, root, actors, paths, handleOf, now, queued }:
     paths.set(row.actorId, path);
     const category = subordinateCategory(entry);
 
-    const running = turnOpen(sql, row.actorId) || turnOwed({ sql, exec, now, queued }, handleOf(row));
+    const running = turnOpen(sql, row.actorId) || turnOwed({ exec, now, queued }, handleOf(row));
 
     agents.push({
       key: row.actorId, label, category, activity: subordinateActivity(sql, entry, row.actorId, running), parent: row.parentActorId === root.actorId ? 'main' : row.parentActorId,
@@ -248,8 +242,8 @@ export async function readWorkspaceAgents(input: {
     handleOf: (row) => handles.get(row.actorId) ?? handles.set(row.actorId, actorReadHandle(sql, row)).get(row.actorId) ?? root,
   };
 
-  const hired = tableExists(sql, 'actor_subordinates') ? rosterAgents(walk) : [];
-  const swarms = tableExists(sql, 'head_journal') ? swarmAgents(walk) : [];
+  const hired = rosterAgents(walk);
+  const swarms = swarmAgents(walk);
 
   const main: Uncoloured = {
     key: 'main', label: root.config.getChatTitle() ?? 'Main', category: 'main', parent: null,

@@ -201,7 +201,7 @@
   "agent_reports@packages/core/src/subordinates/report-sequence.ts": [
     "actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id)",
     "seq INTEGER NOT NULL",
-    "standing_json TEXT"
+    "standing_json TEXT NOT NULL"
   ],
   "agent_sequence@packages/core/src/subordinates/report-sequence.ts": [
     "actor_id TEXT PRIMARY KEY",

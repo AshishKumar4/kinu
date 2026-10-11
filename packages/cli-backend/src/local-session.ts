@@ -183,7 +183,7 @@ type Writable<T> = { -readonly [Key in keyof T]: T[Key] };
  */
 export const LOCAL_MAX_INLINE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 
-/** bun:sqlite with a real `transaction`: approval migration and settled-turn commits need atomicity. */
+/** bun:sqlite with a real `transaction`: approval decisions and settled-turn commits need atomicity. */
 export type LocalSessionDb = Pick<Database, 'query' | 'transaction'>;
 
 /**
@@ -1471,7 +1471,7 @@ export class LocalAgentSession {
   }
 
   /** Re-drive an interrupted background job through core's shared resume gate over the raw surface,
-   *  so it cannot detach a second job. Legacy `fork`/'think' rows map onto search. */
+   *  so it cannot detach a second job. */
   private async resumeBackgroundJob(
     kind: string,
     input: { value: unknown },

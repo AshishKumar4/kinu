@@ -1371,7 +1371,6 @@ export {
   applyPlanEdits,
   formatPlanWithLineNumbers,
   initPlanReviewTable,
-  listPendingPlanReviews,
   workModeUnderReview,
   planHandoffStillOwed,
   approvedTaskPlan,

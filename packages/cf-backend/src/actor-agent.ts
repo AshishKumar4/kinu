@@ -4609,7 +4609,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /** Re-drive an evicted background job from its checkpoint (B6) over the raw surface, so a
-   *  re-drive can't detach a second job. Legacy `fork` and 'think' rows map to the search path. */
+   *  re-drive can't detach a second job. */
   protected async resumeBackgroundJob(
     kind: string,
     input: JsonValue,

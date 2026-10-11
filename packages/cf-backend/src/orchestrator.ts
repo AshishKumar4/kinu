@@ -160,7 +160,7 @@ import {
   // (DO alarm, Worker webhook + email routes, cross-DO RPC).
   acceptWebhookDelivery, registerDurableWebhook, createWebhookSecretStore,
   acceptContainerEvent, type ContainerEventResult,
-  initWebhookIngressTables, initSubordinateRosterTable,
+  initWebhookIngressTables,
   type WebhookDelivery, type WebhookDeliveryResult, type WebhookSecretStore,
   createTimerTrigger, cancelTrigger, listTriggers, fireDueTriggers, type TrustLevel,
   type TriggerView,
@@ -176,7 +176,7 @@ import {
   type RecordObjectiveSummary, type RecordCellSummary,
   type RecordObjectiveHandle, type RecordCellHandle, type ExplorationRecord,
   type HeadStep,
-  buildPendingActions, listPendingPlanReviews, type PendingAction,
+  buildPendingActions, type PendingAction,
   type Page, type PageRequest,
   getRunTimeline, RUN_TIMELINE_MAX, boundedInt, type TimelineSpan,
   getRunEvents, getRunEventText, type RunListEntry, type RunSummary,
@@ -2707,7 +2707,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // Its plans are its own isolate's rows: the reads over them move as each change answers.
     const moved = <A>(answer: A): A => {
-      this.liveReadsMoved(readsOfTables(['plan_reviews']));
+      this.hostedPlansMoved();
 
       return answer;
     };
@@ -2720,15 +2720,26 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
   }
 
+  /**
+   * An agent's plans moved in its own isolate, where this workspace's store revision does not see them: the reads over
+   * them move, and the owner's tile, whose held inputs count its waiting plans, folds them again.
+   */
+  private hostedPlansMoved(): void {
+    this.liveReadsMoved(readsOfTables(['plan_reviews']));
+    this.slowOverview = null;
+    this.overviewChanged();
+  }
+
   /** An agent's Plan turn submits into its own isolate's store, judged by the metadata the agent admitted it under. */
-  private async agentPlanSubmit(actorId: string, edits: readonly PlanEdit[], driving: JsonObject | undefined): Promise<PlanReviewResult> {
+  protected async agentPlanSubmit(actorId: string, edits: readonly PlanEdit[], driving: JsonObject | undefined): Promise<PlanReviewResult> {
     const result = await (await this.agentCalls(actorId)).submitPlan(this.agentSnapshot(actorId), edits, driving);
 
     const record = this.actorDirectoryStore().retained(actorId);
 
     if (result.ok && record !== null) actorReadHandle(this.boundSql, record).config.setHoldsPlans();
 
-    if (result.ok) this.liveReadsMoved(readsOfTables(['plan_reviews']));
+    // A plan waits on the owner: a decision their tile counts.
+    if (result.ok) this.hostedPlansMoved();
 
     return result;
   }
@@ -3765,7 +3776,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // Planes only this root carries (declared in core/conformance/manifest.ts).
     initWebhookIngressTables(this.ctx.storage.sql);
-    initSubordinateRosterTable(this.ctx.storage.sql);
 
     initSleepTimeUpdatesTable(execRaw);
     initTurnBranchesTable(execRaw);
@@ -4287,8 +4297,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         latestAt: unseen[0]?.at ?? Date.now(),
       },
       curriculum: listProposedTasks(this.rt, 'pending'),
-      // Rows an earlier build left in this object still wait beside each agent's own (main's included, in its isolate).
-      pendingPlans: [...listPendingPlanReviews(this.boundSql), ...this.hostedPendingPlans(hostedPlans)].sort((a, b) => b.updatedAt - a.updatedAt),
+      // Each agent's plans are its own isolate's (main's included).
+      pendingPlans: this.hostedPendingPlans(hostedPlans).sort((a, b) => b.updatedAt - a.updatedAt),
     });
   }
 

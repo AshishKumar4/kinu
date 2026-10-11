@@ -10,6 +10,7 @@ import {
   archiveSqlFromDatabase,
   initActorClaimTables,
   initAllTables,
+  initWorkspaceActorTable,
   readAgentArchivePage,
   readWorkspaceArchivePage,
   restoreWorkspaceArchive,
@@ -56,7 +57,17 @@ function fresh(): Workspace {
 /** Actor-local state plus the canonical conversation store, minted beside the claim ledger. */
 function initSchema(ws: Workspace): void {
   initAllTables(ws.execRaw, ws.sql);
+  initWorkspaceActorTable(ws.execRaw);
   initActorClaimTables(ws.execRaw);
+}
+
+/** A source with only the roster every workspace's genesis gives it, beside what a test writes. */
+function sourceWorkspace(): Workspace {
+  const ws = fresh();
+
+  initWorkspaceActorTable(ws.execRaw);
+
+  return ws;
 }
 
 function historyOver(ws: Workspace, actor: ActorHandle): SessionHistory {
@@ -274,7 +285,7 @@ const OWNER_TEXT = '# the owner wrote this\n';
   });
 
   test('external workspace files page in the same stream and restore byte-exactly', async () => {
-    const source = fresh();
+    const source = sourceWorkspace();
     source.execRaw('CREATE TABLE notes (id INTEGER PRIMARY KEY, text TEXT)');
     void source.sql`INSERT INTO notes (text) VALUES (${'database state'})`;
 
@@ -327,7 +338,7 @@ const OWNER_TEXT = '# the owner wrote this\n';
   });
 
   test('a page stops at the first row that fills it, however big the rows are', async () => {
-    const ws = fresh();
+    const ws = sourceWorkspace();
     ws.execRaw(`CREATE TABLE blobs (id INTEGER PRIMARY KEY, data BLOB)`);
     const blob = new ArrayBuffer(64 * 1024);
 
@@ -597,7 +608,7 @@ describe('the table set an export walks is pinned by its first page', () => {
   });
 
   test('a WITHOUT ROWID table pages stably under concurrent writes', async () => {
-    const ws = fresh();
+    const ws = sourceWorkspace();
     ws.execRaw('CREATE TABLE wr (k TEXT PRIMARY KEY, v TEXT) WITHOUT ROWID');
     void ws.sql`INSERT INTO wr (k, v) VALUES (${'b'}, ${'2'})`;
     void ws.sql`INSERT INTO wr (k, v) VALUES (${'a'}, ${'1'})`;
