@@ -34,7 +34,17 @@ fabric and worker, which is why nothing here pins it.
 Core imports fabric directly: `packages/core/src/events/outbox.ts` builds its
 outbox on `@nimbus-sh/fabric/outbox.js`.
 
-No Nimbus package is patched (core 0.16.0, worker 0.14.0, 2026-10-10). The patches 0.15 needed are upstream:
+Two Nimbus packages carry declared patches (package.json `//patchedDependencies:*` names each, and what deletes it):
+- `@nimbus-sh/core@0.16.0`: `CompositeVFS.route` and `mutationRoute` take `{ creating }`, which their own lookup already
+  takes for `writeFile({ parents })`, so the consent gate asks Nimbus where a new nested path lands. Delete once Nimbus
+  ships NIMBUS-ASKS #32.
+- `@nimbus-sh/worker@0.14.0`: a node facet's stdout and stderr writes ride one call while one is in flight (200,000
+  piped lines: 65 s to under 1 s; #39), and under a workspace egress the staged node shims
+  (`public/_assets/runtime/node-shims-*.js`, digest re-pinned in `dist/node-shims-artifact.generated.js`) send a TLS
+  socket over a plaintext carrier whose session Kinu's egress makes, instead of refusing it (#37). Delete each part once
+  Nimbus ships its ask.
+
+The patches 0.15 needed are upstream:
 the rolldown build's JSX and tsconfig settings (NIMBUS-ASKS #19), `runtime/process-files`' access modes as four
 declarations, which Nimbus's publish gate now enforces for every package (#21), each build-facet call in a lane of
 its own, so one rolldown binding serves every Durable Object in an isolate (#22), `CompositeVFS.route(path, { follow })`
@@ -43,9 +53,8 @@ time is dropped too: worker 0.14 bounds each build's gathering, and the measurem
 
 Kinu's file plane (`packages/core/src/vfs/mounts.ts`) is Kinu policy over that namespace: the mount declarations,
 whose principal's view a plane is, the bounded views, and one move rule (within a mount, Nimbus's `move`; across
-mounts, EXDEV). A device's write report is asked of the backend `route` names. `route` refuses a missing ancestor
-with ENOENT, though Nimbus's own lookup can pass one (`creating`), so a gate resolves a new nested path by routing its
-nearest existing ancestor (`routeCreating`, NIMBUS-ASKS #32). A head's file changes come
+mounts, EXDEV). A device's write report is asked of the backend `route` names, and a new nested path is routed with
+`{ creating }` (the core patch above). A head's file changes come
 from `observeWrites`, read while the event holds its content (`packages/core/src/vfs/write-events.ts`,
 `packages/core/tests/unit-namespace-writes.test.ts`).
 
