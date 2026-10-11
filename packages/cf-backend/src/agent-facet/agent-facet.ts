@@ -11,8 +11,9 @@ import {
   type AgentOwnInspection, type AnsweredEvolutionHelper, type JsonValue, type ArchiveAgentPage, type ArchiveSqlCursor, type ChatHistoryPage,
   type NimbusSandboxHandle, type PositionPageRequest, type ProviderEnv, type SerializedMessage, type SubordinateInspectionResult,
   servedContextTree, type ContextEditor, type ContextTreeRemote, type SpendLedger, type StepSpendSource, type TurnRequestIndex, type TurnRequestPage, type ConversationSearchHit, type ConversationScrollResult, type ConversationSummary,
-  type SendState,
+  type SendState, DeliverySchema, type Delivery, type DeliveryAnswer,
 } from '@kinu.run/core';
+import * as v from 'valibot';
 import { StepPacer } from './step-pacer';
 import { AgentDatabase } from './agent-database';
 import { runAgentTask } from './agent-turn';
@@ -20,7 +21,7 @@ import { createAgentProviderRegistry, type AgentProviderDeps, type AgentProvider
 import { FacetChat } from './agent-chat';
 import { workspaceClient, type AgentWorkspaceCalls } from './workspace-rpc';
 import type {
-  AgentAnswer, AgentAnswerTexts, AgentStanding, AgentSteps, AgentRecovery, AgentSnapshot, ConversationProjection, ConversationTurnPair, AgentTurnEnd, AgentTurnTask, EnqueueTurnResult, ProgrammaticTurn, PromptFile, SendLanding, SendOptions, TurnRequestAt,
+  AgentAnswer, AgentAnswerTexts, AgentStanding, AgentSteps, AgentRecovery, AgentSnapshot, ConversationProjection, ConversationTurnPair, AgentTurnEnd, AgentTurnTask, EnqueueTurnResult, ProgrammaticTurn, SendLanding, TurnRequestAt,
   JsonObject, PlanDecisionOutcome, PlanEdit, PlanReview, PlanReviewDecision, PlanReviewResult, ReviewAnnotation, AskedQuestions, OwnerAnswer,
   Page, PageRequest, RunEvent, RunEventQuery, RunListEntry, RunSummary, StoredRunEvent,
   ForkConversationPlan, ForkConversationSection, ForkRowSection, ForkRows,
@@ -81,22 +82,18 @@ export interface PlanVerdict {
   readonly feedback?: string;
 }
 
-export interface AgentSend {
-  readonly text: string;
-  readonly files?: readonly PromptFile[];
-  /** A card's stamp: it is its own turn, never a steer, and it renders from this. */
-  readonly card?: JsonObject;
+/** How the agent answered a delivery, and where a person's words landed when asked. */
+export interface AdmittedDelivery {
+  readonly answer: DeliveryAnswer;
+  readonly landed: SendLanding | null;
 }
 
 export interface AgentFacetCalls {
   run(snapshot: AgentSnapshot, task: AgentTurnTask): Promise<AgentTurnEnd>;
   /** Answered once its chat has processed it. */
   enqueue(snapshot: AgentSnapshot, turn: ProgrammaticTurn): Promise<EnqueueTurnResult>;
-  /** Answered once the turn is queued: the workspace's own agent's wakes, handed over from inside the workspace's settles. */
-  queue(snapshot: AgentSnapshot, turn: ProgrammaticTurn): Promise<EnqueueTurnResult>;
-  send(snapshot: AgentSnapshot, input: AgentSend, opts: SendOptions): Promise<SendLanding>;
-  /** Resolves once its chat has reserved the words, not when they land. */
-  admit(snapshot: AgentSnapshot, input: AgentSend, opts: SendOptions): Promise<void>;
+  /** Resolves once its chat holds the delivery in its own store; with `land`, once a person's words landed. */
+  admit(snapshot: AgentSnapshot, delivery: Delivery, land: boolean): Promise<AdmittedDelivery>;
   retry(snapshot: AgentSnapshot, claim: (turnId: string) => void): Promise<SendLanding>;
   sendState(snapshot: AgentSnapshot, id: string): Promise<SendState>;
   awaitSend(snapshot: AgentSnapshot, id: string): Promise<SendState>;
@@ -295,32 +292,17 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return await settle(this.withChat(snapshot, (chat) => chat.session.enqueueTurn(turn)));
   }
 
-  async queue(snapshot: AgentSnapshot, turn: ProgrammaticTurn): Promise<EnqueueTurnResult> {
+  /** A delivery from the workspace (design v2 §1): in this isolate's store before it is answered, which retires the
+   *  workspace's row; a repeat is answered `duplicate`. `land` answers a person's words once they landed, in the running
+   *  turn or opening one, as the person's client is told. */
+  async admit(snapshot: AgentSnapshot, delivery: Delivery, land: boolean): Promise<AdmittedDelivery> {
     return await settle(this.withChat(snapshot, async (chat) => {
-      const queued = await chat.session.queueTurn(turn);
+      const landing = land ? Promise.withResolvers<SendLanding>() : null;
+      const answer = await chat.session.admitDelivery(v.parse(DeliverySchema, delivery), landing);
 
       await chat.taken();
 
-      return queued;
-    }));
-  }
-
-  async send(snapshot: AgentSnapshot, input: AgentSend, opts: SendOptions): Promise<SendLanding> {
-    return await settle(this.withChat(snapshot, async (chat) => {
-      const landing = await chat.session.send(input.files === undefined ? input.text : { text: input.text, files: input.files }, opts);
-
-      await chat.taken();
-
-      return landing;
-    }));
-  }
-
-  async admit(snapshot: AgentSnapshot, input: AgentSend, opts: SendOptions): Promise<void> {
-    return await settle(this.withChat(snapshot, async (chat) => {
-      const words = input.files === undefined ? input.text : { text: input.text, files: input.files };
-
-      await chat.session.admit(words, input.card === undefined ? opts : { ...opts, metadata: input.card });
-      await chat.taken();
+      return { answer, landed: answer === 'taken' && landing !== null ? await landing.promise : null };
     }));
   }
 

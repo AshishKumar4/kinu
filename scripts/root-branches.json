@@ -213,12 +213,6 @@
     "until": "step 7",
     "why": "An id compared to the root's: the root acting as itself, which design v2 step 7 removes with the census H sites."
   },
-  "packages/cf-backend/src/orchestrator.ts#OrchestratorAgent.takeWords": {
-    "count": 1,
-    "kind": "H",
-    "until": "step 7",
-    "why": "An id compared to the root's: the root acting as itself, which design v2 step 7 removes with the census H sites."
-  },
   "packages/cf-backend/src/orchestrator.ts#OrchestratorAgent.warmingOf": {
     "count": 1,
     "kind": "H",

@@ -4,6 +4,7 @@
 import type { JsonObject } from '../utils/json';
 import type { PlanReview } from './plans';
 import type { OutputChunk } from './primitives';
+import type { TurnAuthorship } from './turn';
 
 /** A typed event fanned out to connected clients. Fire-and-forget. */
 export interface BroadcastEvent {
@@ -52,6 +53,8 @@ export interface ProgrammaticTurn {
   readonly origin?: 'user';
   /** Each send under its own id, in the order `text` joins them. */
   readonly sends?: readonly OperatorSend[];
+  /** Set by the path that validated it (`turn-authorship.ts`); the hirer's where none was. */
+  readonly authorship?: TurnAuthorship;
 }
 
 export interface OperatorSend {

@@ -1795,6 +1795,9 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Main's programmatic turns are handed to its chat, in its own isolate (D9). */
   protected abstract enqueueMainTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult>;
 
+  /** The workspace agent's deliveries: its signals, and its events bound to a turn, committed then crossed. */
+  protected abstract workspaceAgentDeliveries(): NonNullable<AgentOrchestratorDeps['deliveries']>;
+
   /** The owner's Stop of main's chat: unseen steers stay queued and rerun. */
   protected abstract stopMainChat(): Promise<void>;
 
@@ -1858,6 +1861,8 @@ export abstract class ActorAgent extends Agent<Env> {
         engine: this.engine,
         eventLog: this.eventLog,
         budget: this.budget,
+        // The workspace agent runs in its own isolate: what this object hands it is a delivery (design v2 §1).
+        deliveries: this.workspaceAgentDeliveries(),
         // Runs on the single off-turn cadence pass, beside the promotion gate's trials; every actor wires it.
         refinementLane: async () => { await refinementPass(this.refinementDeps); },
         sinks: {
@@ -2446,7 +2451,7 @@ export abstract class ActorAgent extends Agent<Env> {
       // wakes with nobody connected, so spawn-shaped work detaches on unwatched turns too.
       policy: () => invocationBackgroundPolicy(this.turnSurface(), true),
       fiber: (name, fn) => this.rt.schedule.fiber(name, fn),
-      inbox: this.orch.inbox,
+      inbox: this.orch.signals,
       eventLog: this.eventLog,
       scheduleDrain: () => this.orch.scheduleDrain(),
 
@@ -3054,7 +3059,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** The one adapter between a slate's `agent.send` and the turn inbox. */
   private slateInbox(): AgentInbox {
-    return this.orch.inbox;
+    return this.orch.signals;
   }
 
   /**

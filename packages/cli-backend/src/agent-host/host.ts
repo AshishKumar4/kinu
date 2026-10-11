@@ -88,7 +88,7 @@ import type { CLIOpenConfig } from '../open';
 import {
   bindLocalActor, bindLocalActorReference, localActorDirectory,
   adoptLocalActorHandle, cancelLocalCreation, openLocalActor, recoverLocalActorRetirements, registerLocalActor,
-  requireLocalActorWorkspace, turnAuthorship, type LocalActorBinding,
+  requireLocalActorWorkspace, type LocalActorBinding,
 } from '@kinu.run/core';
 import { OS_LEASE_PROCESS } from './lease-process';
 import {
@@ -947,7 +947,7 @@ export class LocalAgentHost {
     const state = child.relay;
 
     if (!state || event.type !== 'turn-start') return;
-    state.ownerDriven = turnAuthorship({ kind: event.kind, ...(event.event !== undefined && { event: event.event }) }) === 'owner';
+    state.ownerDriven = event.authorship === 'owner';
 
     // The owner writing to an agent that waits on input answers that wait, as a message from its hirer does.
     if (state.ownerDriven) {

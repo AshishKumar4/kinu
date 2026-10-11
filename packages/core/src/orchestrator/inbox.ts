@@ -227,6 +227,11 @@ export class PendingSendStore {
       VALUES (${this.actorId}, ${turn.id}, ${turn.text}, ${metadata}, ${turn.yieldsToUserMessage === true ? 1 : 0})`;
   }
 
+  /** Whether a programmatic turn is held under `id`: a delivery repeated before its turn ran is the same one. */
+  hasTurn(id: string): boolean {
+    return this.sql<{ id: string }>`SELECT id FROM queued_turns WHERE actor_id = ${this.actorId} AND id = ${id}`.length > 0;
+  }
+
   /** Its turn settled, ran or not: nothing of it is owed to a later process. */
   retireTurn(id: string): void {
     void this.sql`DELETE FROM queued_turns WHERE actor_id = ${this.actorId} AND id = ${id}`;
@@ -748,3 +753,6 @@ function reportRedeliveryFailure(kind: string) {
     );
   };
 }
+
+/** The metadata a signal's own turn opens under: its event, its reply's drain, its author; a delivery's as the inbox's. */
+export { turnMetadata };

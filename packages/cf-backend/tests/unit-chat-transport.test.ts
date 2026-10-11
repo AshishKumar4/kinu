@@ -205,7 +205,7 @@ function chunks(parts: UIMessageChunk[]): ReadableStream<UIMessageChunk> {
 
 /** A turn's start; its steps before this activation are recorded in run `run-<turnId>`. */
 const turnStart = (turnId: string, messageId: string, carried: readonly string[] = [], finishedSteps = 0): SessionEvent =>
-  ({ type: 'turn-start', kind: 'user', text: 'x', workMode: 'build', turnId, messageId, carried, finishedSteps, runId: `run-${turnId}` });
+  ({ type: 'turn-start', kind: 'user', text: 'x', authorship: 'owner', workMode: 'build', turnId, messageId, carried, finishedSteps, runId: `run-${turnId}` });
 
 /** An answer frame as a line: `R ` marks a chunk of a step restated from the ledger, by the id it is drawn under. */
 function answerLine(frame: v.InferOutput<typeof FrameSchema>): string {

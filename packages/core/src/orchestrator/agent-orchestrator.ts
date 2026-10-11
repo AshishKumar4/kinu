@@ -21,7 +21,8 @@ import type { EventLog } from '../events/hub/log';
 import type { ExecutionRecoveryRecord } from '../events/types';
 import type { PrepareStepContext, KinuExtension } from '../extension';
 import type { BackendHost } from '../types/backend-host';
-import type { AgentSignal, SignalUndeliveredReason } from '../types/signals';
+import type { AgentInbox, AgentSignal, SignalUndeliveredReason } from '../types/signals';
+import { pendingEventsDelivery, type Delivery } from '../subordinates/deliveries';
 import type { EvolutionEngine } from '../evolution/engine';
 import type { ClaimedWindow, DeferredReviewDrain } from '../evolution/session-window';
 import type { RecoveryFinding } from '../evolution/recovery';
@@ -34,7 +35,7 @@ import { workModeForTurnMetadata } from '../prompting/surface';
 import { type WorkMode } from '../types/turn';
 import type { JsonObject } from '../utils/json';
 import { Cause, Effect } from 'effect';
-import { diagnostics, toKinuError, settle, settleLogged, settleLoggedSync } from '../obs/index';
+import { attempt, diagnostics, toKinuError, settle, settleLogged, settleLoggedSync } from '../obs/index';
 
 /**
  * Whether an arriving user message is a genuine follow-up or an independent task invocation.
@@ -75,6 +76,15 @@ export interface AgentOrchestratorDeps {
    *  Independent of {@link TurnContinuity}. */
   oneShot?: boolean;
   /**
+   * Present where this orchestrator's turns run in another store than its signals land (the cloud's workspace, whose
+   * agents run in their own isolates): every signal and every event drain goes out as a delivery (design v2 §1), and
+   * `inbox` is never sent to. `commit` runs `bind` in one synchronous commit with the delivery's row and crosses it.
+   */
+  deliveries?: {
+    readonly signals: AgentInbox;
+    readonly commit: (bind: () => Delivery | null) => Promise<void>;
+  };
+  /**
    * The continual-refinement lane, driven off-turn beside the evolution pass so it never lengthens a turn.
    * Absent: requests stay durable for the next host that wires one.
    */
@@ -84,6 +94,8 @@ export interface AgentOrchestratorDeps {
 export class AgentOrchestrator {
   readonly acc: TurnAccumulator;
   readonly inbox: Inbox;
+  /** Where a signal to this agent goes: its deliveries where it has them, else its own inbox. */
+  readonly signals: AgentInbox;
   /** Per-turn mechanical steering; feeds the durable `turn_steering` rows. */
   readonly steering = new TurnSteering();
   readonly craft: CraftCycle;
@@ -133,6 +145,7 @@ export class AgentOrchestrator {
     this.craft = new CraftCycle(deps.engine.craftLedger, this.acc);
     this.turnEvolutionEnabled = deps.engine.enabled;
     this.inbox = new Inbox(deps.host, (e, d) => this.logActivity(e, d), steers);
+    this.signals = deps.deliveries?.signals ?? this.inbox;
     this.drains = new DrainScheduler(
       () => this.drainPendingEvents(),
       (fn, ms) => deps.host.setTimer(fn, ms),
@@ -450,6 +463,18 @@ export class AgentOrchestrator {
     /** Rethrow selection/binding failures: a durable effect that owes this drain must not report done. */
     opts?: { readonly rethrow?: boolean },
   ): Promise<void> {
+    const { deliveries } = this.deps;
+
+    // Its events bound to their turn in the commit that writes the turn's delivery: nothing to put back.
+    if (deliveries !== undefined) {
+      return settle(attempt({ doing: 'deliver the pending events as one turn', otherwise: 'io' }, () => deliveries.commit(() => pendingEventsDelivery(this.deps.eventLog, Date.now())))
+        .pipe(Effect.catch((failure) => {
+          diagnostics.failure('orchestrator.drain_select_failed', failure);
+
+          return opts?.rethrow === true ? Effect.fail(failure) : Effect.void;
+        })));
+    }
+
     return settle(Effect.gen({ self: this }, function* () {
       const turnId = `evt-${nanoid()}`;
       const bound: string[] = [];

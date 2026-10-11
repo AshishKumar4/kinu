@@ -309,15 +309,24 @@ export class AgentTurns {
     };
 
     if (request.turnId !== null) this.open.set(turnId, turn);
+    const prepared = await this.read(turn);
 
-    return await this.read(turn);
+    // Finished after a later opening took its place, or after its run ended: none of it is the agent's to freeze.
+    if (prepared === null) return settleSync(Effect.fail(new KinuError('denied', `The preparation of turn ${turnId} finished after a later opening of its agent.`)));
+
+    return prepared;
   }
 
   async prepare(actorId: string, turnId: string): Promise<PreparedAgentTurn> {
-    return await this.read(this.turn(actorId, turnId));
+    const prepared = await this.read(this.turn(actorId, turnId));
+
+    if (prepared === null) return settleSync(Effect.fail(new KinuError('denied', `The preparation of task ${turnId} finished after a later opening of its agent.`)));
+
+    return prepared;
   }
 
-  private async read(turn: OpenTurn): Promise<PreparedAgentTurn> {
+  /** Null when the opening it prepares was overtaken while it read: see {@link offeredFacts}. */
+  private async read(turn: OpenTurn): Promise<PreparedAgentTurn | null> {
     const prepared = await prepareHostedTurn(this.deps.seams(), turn.reference, turn.request);
     const run = turn.request.run?.inference;
 
@@ -345,6 +354,9 @@ export class AgentTurns {
     );
 
     const brief = run?.brief?.(callableToolNames(mode, prepared.tools));
+    const facts = this.offeredFacts(turn, prepared);
+
+    if (facts === null) return null;
 
     return {
       input,
@@ -363,7 +375,7 @@ export class AgentTurns {
       ...(prepared.trial !== undefined && { trial: prepared.trial }),
       ...(run?.mission !== undefined && { missionLabels: run.mission.labels }),
       ...(this.chatMission(turn.reference.actorId, turn).length > 0 && { missionLabels: this.chatMission(turn.reference.actorId, turn) }),
-      facts: this.offeredFacts(turn, prepared),
+      facts,
       trace: run?.reportStep !== undefined || run?.reportDelta !== undefined,
       resume: run?.resume !== undefined,
       reportMessages: run?.reportMessages !== undefined,
@@ -452,14 +464,10 @@ export class AgentTurns {
 
   /** A chat run's facts as the workspace first offered them: the agent may die before it froze them, and its recovery
    *  must freeze the same, whatever changed here meanwhile. */
-  private offeredFacts(turn: OpenTurn, prepared: PreparedHostedTurn): TurnFacts {
+  private offeredFacts(turn: OpenTurn, prepared: PreparedHostedTurn): TurnFacts | null {
     const facts = this.facts(turn, prepared);
 
-    if (turn.fenced === undefined) return facts;
-    const offered = new TurnFences(this.deps.sql).offer(turn.reference.actorId, turn.fenced, facts);
-
-    // Finished after a later opening took its place, or after its run ended: none of it is the agent's to freeze.
-    return offered ?? settleSync(Effect.fail(new KinuError('denied', `The preparation of turn ${turn.request.chatTurnId ?? turn.request.sequenceId} finished after a later opening of its agent.`)));
+    return turn.fenced === undefined ? facts : new TurnFences(this.deps.sql).offer(turn.reference.actorId, turn.fenced, facts);
   }
 
   /** Main's chat turn names its missions when it is prepared under any. */

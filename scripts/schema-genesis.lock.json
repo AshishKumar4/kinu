@@ -129,6 +129,14 @@
     "created_by TEXT NOT NULL",
     "created_at INTEGER NOT NULL"
   ],
+  "agent_deliveries@packages/core/src/subordinates/deliveries.ts": [
+    "seq INTEGER PRIMARY KEY AUTOINCREMENT",
+    "actor_id TEXT NOT NULL",
+    "id TEXT NOT NULL",
+    "input_json TEXT NOT NULL",
+    "authorship TEXT NOT NULL CHECK (authorship IN ('owner','hirer'))",
+    "UNIQUE (actor_id, id)"
+  ],
   "agent_fact_history@packages/core/src/memory/facts.ts": [
     "actor_id TEXT NOT NULL",
     "key TEXT NOT NULL",

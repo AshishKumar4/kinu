@@ -22,3 +22,7 @@ export const WorkModeSchema: v.GenericSchema<WorkMode> = v.picklist(['plan', 'bu
 export function isWorkMode<Value>(value: Value): value is Value & WorkMode {
   return v.is(WorkModeSchema, value);
 }
+
+/** Whom a turn answers: the owner's turn runs in the owner's lane; the hirer's in the hirer's, and may `report`. Set by
+ *  the path that admitted it (`orchestrator/turn-authorship.ts`). */
+export type TurnAuthorship = 'owner' | 'hirer';

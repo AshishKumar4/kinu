@@ -6,6 +6,8 @@
 
 import { answeredSummary, resumeMetadata, type OwnerAnswer } from '../plans/owner-questions';
 import { OWNER_ANSWER_SIGNAL } from '../types/owner-questions';
+import { MessageIdSchema, type Delivery, type DeliveryAnswer } from '../subordinates/deliveries';
+import { stampAuthorship, turnAuthorship, type TurnAuthorship } from './turn-authorship';
 import type { TrialTurn } from '../evolution/trial-rules';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
@@ -18,7 +20,7 @@ import type { EventLog } from '../events/hub/log';
 import type { RunEventRecorder } from '../events/recorder';
 import type { RunEvent } from '../events/types';
 import type { CompletedTurn } from '../evolution/types';
-import { attempt, attemptInItsWords, classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle as settleEffect, settleLogged, toKinuError, type Refusal } from '../obs/index';
+import { attempt, attemptInItsWords, classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle as settleEffect, settleLogged, settleSync, toKinuError, type Refusal } from '../obs/index';
 import { contextFill, type ContextFill } from '../read-models/context-fill';
 import { workModeForTurnMetadata } from '../prompting/surface';
 import { runOperationProfile } from '../profiles/operation';
@@ -80,6 +82,8 @@ type TurnCommit = { readonly committed: CommittedTurn } | { readonly failure: Ki
 
 export type SessionEvent =
   | { type: 'turn-start'; kind: 'user' | 'programmatic'; text: string; event?: string; workMode: WorkMode;
+      /** Whom it answers, as its admission stored it (`turn-authorship.ts`). */
+      authorship: TurnAuthorship;
       /** Both minted at admission. */
       turnId: string; messageId: string;
       /** A rerun answers every leftover as one turn; a transport closes their requests with it. */
@@ -305,7 +309,6 @@ export interface CardSend extends SendOptions {
 export type SendLandingWaiter = Pick<ReturnType<typeof Promise.withResolvers<SendLanding>>, 'resolve' | 'reject'>;
 
 /** A caller-named message: the key its row and reservation are stored under. */
-const MessageIdSchema = v.pipe(v.string(), v.nonEmpty(), v.maxLength(128));
 
 function refusedLanding(refusal: Refusal): KinuError {
   return new KinuError(refusal.reason, `${refusal.error}. Close that session, or send this from it.`);
@@ -487,7 +490,8 @@ export class ChatSession {
 
     const item: QueueItem = {
       text: input.text,
-      metadata: input.metadata,
+      // Its authorship is the admitting path's, stored with its input over any a caller put there.
+      metadata: stampAuthorship(input.metadata, input.authorship ?? 'hirer'),
       kind: 'programmatic',
       // The signal seam compensates on anything but 'queued'. 'yielded' is consumed: nothing is retried.
       settle: (failure, yielded, abandoned) => { resolve(settledAnnouncement(failure, yielded, abandoned)); },
@@ -525,7 +529,7 @@ export class ChatSession {
     const key = turn.idempotencyKey;
 
     if (turn.origin !== 'user' && key !== undefined && !this.ended && !this.announcementInFlight(key) && !this.announcementOnDisk(key)) {
-      this.pendingSends.reserveTurn({ ...turn, id: key });
+      this.pendingSends.reserveTurn({ ...turn, id: key, metadata: stampAuthorship(turn.metadata, turn.authorship ?? 'hirer') });
     }
 
     // An answer decided at admission resolves first; a turn still to run answers 'queued'.
@@ -560,8 +564,9 @@ export class ChatSession {
 
       if (this.announcementOnDisk(identity)) questions.markResumed(owed.turnId);
       else if (!this.ended && !this.announcementInFlight(identity)) {
+        // The owner's answer: its turn is the owner's.
         this.queue.unshift({
-          text: answeredSummary(owed.asked), kind: 'programmatic', idempotencyKey: identity, metadata: resumeMetadata(owed), settle: () => {},
+          text: answeredSummary(owed.asked), kind: 'programmatic', idempotencyKey: identity, metadata: stampAuthorship(resumeMetadata(owed), 'owner'), settle: () => {},
         });
         queued = true;
       }
@@ -608,6 +613,38 @@ export class ChatSession {
   /** The one in-flight decision sends, Retry, Clear and Revert take: a Retry between its claim and its queue counts. */
   turnInFlight(): boolean {
     return this.reopening || this.actorSession.inFlight || this.queue.some((item) => item.kind === 'user' || item.yieldsToUserMessage === true);
+  }
+
+  /**
+   * A delivery from the agent's workspace (design v2 §1, v3 A): held in this store before it is answered, so the
+   * workspace retires its row only once nothing of it can be lost. A repeat of its id is answered `duplicate`, whatever
+   * became of the first; a closed session takes nothing, and the workspace delivers again at its next wake.
+   */
+  async admitDelivery(delivery: Delivery, landing: SendLandingWaiter | null = null): Promise<DeliveryAnswer> {
+    const { id, input } = delivery;
+
+    if (this.ended) return settleSync(Effect.fail(new KinuError('unavailable', 'The agent is closing; the delivery is owed to its next start.')));
+
+    if (input.kind === 'words') {
+      if (this.transcript.has(id) || this.pendingSends.has(id)) return 'duplicate';
+      const words = input.files === undefined || input.files.length === 0 ? input.text : { text: input.text, files: input.files };
+
+      await this.admit(words, {
+        id, ...(input.mode !== undefined && { mode: input.mode }), ...(input.tier !== undefined && { tier: input.tier }),
+        ...(input.metadata !== undefined && { metadata: input.metadata }),
+      }, landing);
+
+      return 'taken';
+    }
+
+    if (this.pendingSends.hasTurn(id) || this.announcementInFlight(id) || this.announcementOnDisk(id)) return 'duplicate';
+    await this.queueTurn({
+      text: input.text, idempotencyKey: id, authorship: delivery.authorship,
+      ...(input.metadata !== undefined && { metadata: input.metadata }),
+      ...(input.yieldsToUserMessage === true && { yieldsToUserMessage: true }),
+    });
+
+    return 'taken';
   }
 
   /** Send; resolves where it landed (`'mid-turn'` or `'turn'`), never guessed at admission, and rejects if it did not land. */
@@ -1199,7 +1236,7 @@ export class ChatSession {
     }
 
     this.emit({
-      type: 'turn-start', kind: item.kind, text: item.text, event, workMode: mode, turnId: this.turnId, messageId: this.messageId,
+      type: 'turn-start', kind: item.kind, text: item.text, event, authorship: turnAuthorship(item), workMode: mode, turnId: this.turnId, messageId: this.messageId,
       carried: (item.steerIds ?? []).filter((id) => id !== this.turnId), finishedSteps: item.continuation?.finishedSteps ?? 0, runId: this.runId,
     });
 

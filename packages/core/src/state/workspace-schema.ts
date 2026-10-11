@@ -4,6 +4,7 @@
 import { initAgentOpenTurnsTable } from '../subordinates/open-turns';
 import { initAgentReportsTable, initAgentSequenceTable } from '../subordinates/report-sequence';
 import { initTurnFenceTable } from '../subordinates/turn-fence';
+import { initAgentDeliveriesTable } from '../subordinates/deliveries';
 import { initTurnReportTable } from '../subordinates/turn-reports';
 import { initAgentFiguresTable } from '../read-models/agent-figures';
 import type { RawSqlExec, SqlExec, SqlExecutor, Storage } from '../types/primitives';
@@ -114,6 +115,7 @@ function createWorkspaceTables(db: WorkspaceSchemaSql): void {
   initAgentSequenceTable(execRaw);
   initAgentReportsTable(execRaw);
   initTurnFenceTable(execRaw);
+  initAgentDeliveriesTable(execRaw);
   initAgentFiguresTable(execRaw);
   initActorStateSchema(db);
   execRaw(`CREATE TABLE IF NOT EXISTS slates (

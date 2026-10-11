@@ -1590,8 +1590,7 @@ export class LocalAgentSession {
     const artifacts = turnArtifactBodies(this.rt.storage.sql, this.rt.actor, { ...opening, main: this.rt.actor.parentActorId === null });
     this.turnArtifacts = artifactOverrides(artifacts.bodies);
     // Set before anything reads the tool surface: the report gate is a property of this turn.
-    const event = item.metadata?.kinuEvent;
-    this.turnLaneOf = turnLane({ hirer: this.rt.actor.parentActorId }, turnAuthorship({ kind: item.kind, ...(typeof event === 'string' && { event }) }));
+    this.turnLaneOf = turnLane({ hirer: this.rt.actor.parentActorId }, turnAuthorship(item));
     this.turnLearns = this.engine.recordsTurns;
     this.turnDriving = authoredTurnMetadata(item);
 

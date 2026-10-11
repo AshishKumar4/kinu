@@ -823,7 +823,8 @@ export class PlanReviewActions {
 
     return settle(Effect.catchCause(Effect.gen({ self: this }, function* (): Effect.gen.Return<PlanDecisionOutcome> {
       const attempt = this.store.handoffAttempt(plan.id, plan.revision);
-      const queued = yield* Effect.promise(() => enqueue({ text, metadata, idempotencyKey: planHandoffKey(plan, decision, attempt) }));
+      // The owner's decision: its turn is the owner's.
+      const queued = yield* Effect.promise(() => enqueue({ text, metadata, idempotencyKey: planHandoffKey(plan, decision, attempt), authorship: 'owner' }));
 
       if (queued.status !== 'queued') {
         return { ok: true, plan, queued: false, queueError: queued.reason ?? 'the durable turn submission was skipped' };

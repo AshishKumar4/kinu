@@ -110,6 +110,17 @@ export async function loseNextOpeningAnswer(storageKey: string): Promise<void> {
   await answered.promise;
 }
 
+/** How the next delivery to an isolate is cut: before it reaches the isolate, or after the isolate took it and before
+ *  its answer reaches the workspace. */
+type DeliveryCut = 'before-admit' | 'after-admit';
+
+const deliveryCuts = new Map<string, DeliveryCut>();
+
+/** The next delivery the workspace crosses into the isolate under `storageKey` is cut at `at`, as a death there would. */
+export function cutNextDelivery(storageKey: string, at: DeliveryCut): void {
+  deliveryCuts.set(storageKey, at);
+}
+
 const restingAnswers = new Map<string, (release: () => void) => void>();
 
 /**
@@ -426,7 +437,20 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
       // Untouched unless a hold waits: the answer arrives on the tick it always did.
       const owed = (snapshot: AgentSnapshot): Promise<boolean> => (restingAnswers.has(placement.storageKey) ? heldWhenResting(snapshot) : calls.owed(snapshot));
 
-      return { facet, calls: { ...calls, owed }, lost };
+      const admit: AgentFacetCalls['admit'] = async (snapshot, delivery, land) => {
+        const cut = deliveryCuts.get(placement.storageKey);
+
+        deliveryCuts.delete(placement.storageKey);
+
+        if (cut === 'before-admit') throw new Error('the crossing died before the agent took the delivery');
+        const answered = await calls.admit(snapshot, delivery, land);
+
+        if (cut === 'after-admit') throw new Error("the crossing died after the agent took the delivery, before its answer");
+
+        return answered;
+      };
+
+      return { facet, calls: { ...calls, owed, admit }, lost };
   }
 }
 

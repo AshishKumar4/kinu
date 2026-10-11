@@ -359,8 +359,13 @@ test('a production turn runs no more statements than it was measured at, and ask
  * The close is 55 once it no longer reads main's answer back to announce it to no extension (`facet.answer`,
  * b65abe3ff), over 3 runs on 380d7148e; 52 once main, which has no hirer, asks for no report (`relay.owedReport`,
  * `host.owedReport` and the host it opened), over 3 runs on ceb97fb8e.
+ * The open is 45 with integration ca673ae3f (measured at its merge 5e76f910e against a9e1039fd before it): the account's
+ * auth read as the turn's surface is built (`account.getAuth`, `relay.getAuth`, `host.getAuth`) and one more broadcast
+ * the turn's opening sends its room (`relay.chatEvent`, `host.chatEvent`), each through a host it opened. Deliveries
+ * cross as many times as the queue they replace (`facet.admit` for `facet.queue`). The port (design v2 §8) brings the
+ * open to its target of 12.
  */
-const CROSSINGS = { open: 39, step: 19, close: 52 } as const;
+const CROSSINGS = { open: 45, step: 19, close: 52 } as const;
 
 /**
  * The planted calls (`ObservedOrchestrator.plantCrossings`), each counted once where it lands, and nothing else: the

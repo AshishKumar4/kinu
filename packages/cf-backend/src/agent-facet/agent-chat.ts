@@ -32,9 +32,7 @@ export interface FacetChatDeps {
 
 /** Who wrote a turn: the owner's words and decisions are the owner's, every other programmatic turn its hirer's. */
 function authorshipOf(item: ChatTurnInput): TurnAuthorship {
-  const event = item.metadata?.kinuEvent;
-
-  return turnAuthorship({ kind: item.kind, ...(typeof event === 'string' && { event }) });
+  return turnAuthorship(item);
 }
 
 export class FacetChat {

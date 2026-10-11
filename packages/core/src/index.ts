@@ -1791,7 +1791,11 @@ export {
 
 export { ModelCatalogSession, resolveEffectiveModelSpec, type ModelCatalogRead } from './orchestrator/model-catalog';
 
-export { turnAuthorship, type TurnAuthorship } from './orchestrator/turn-authorship';
+export { stampAuthorship, turnAuthorship, type TurnAuthorship } from './orchestrator/turn-authorship';
+
+export {
+  AgentDeliveries, DeliveryInbox, DeliverySchema, wordsRefusal, initAgentDeliveriesTable, pendingEventsDelivery, type Delivery, type DeliveryAnswer, type DeliveryInput,
+} from './subordinates/deliveries';
 
 export {
   serializeContentForHeads, narrowInheritedRole,

@@ -1,19 +1,28 @@
-/** Whom a turn answers, decided once for every host (design v2 §1.6). */
-
-import { OWNER_ANSWER_SIGNAL } from '../types/owner-questions';
-
-/** The hirer's turn runs in the hirer's lane and may `report`; the owner's does not. */
-export type TurnAuthorship = 'owner' | 'hirer';
-
-/** The owner's decisions a programmatic turn carries out: a plan's feedback or approval, and the answer that resumes a
- *  question. No words of the owner's open them, and they are the owner's all the same. */
-const OWNER_DECISIONS: ReadonlySet<string | undefined> = new Set(['plan_feedback', 'plan_approved', OWNER_ANSWER_SIGNAL]);
-
 /**
- * The owner's words and the owner's decisions are the owner's; every other programmatic turn is its hirer's. `event` is
- * the `kinuEvent` the turn's decision path stamped. The CLI gave every programmatic turn to the hirer, so a hire's
- * question the owner answered could `report`; the cloud agreed with this rule, and now both read it.
+ * Whom a turn answers, decided once for every host (design v2 §1.6, v3 D): set only by the paths that validated it, the
+ * owner's send and the owner's decisions (a plan's review, an answer to a question) for the owner, and every other
+ * admission for the hirer; stored with the turn's input, and read from there by its reach and its settlement.
  */
-export function turnAuthorship(turn: { readonly kind: 'user' | 'programmatic'; readonly event?: string }): TurnAuthorship {
-  return turn.kind === 'user' || OWNER_DECISIONS.has(turn.event) ? 'owner' : 'hirer';
+import * as v from 'valibot';
+import type { JsonObject } from '../utils/json';
+import type { TurnAuthorship } from '../types/turn';
+
+export type { TurnAuthorship };
+
+/** Where the admitting path stores it on the turn's input: written there by the path, never taken from a caller. */
+const TURN_AUTHORSHIP_METADATA_KEY = 'kinuAuthorship';
+
+const AuthorshipSchema = v.picklist(['owner', 'hirer']);
+
+/** `metadata` with the admitting path's own authorship, over any a caller put there. */
+export function stampAuthorship(metadata: JsonObject | undefined, authorship: TurnAuthorship): JsonObject {
+  return { ...metadata, [TURN_AUTHORSHIP_METADATA_KEY]: authorship };
+}
+
+/** A person's words are the owner's; any other turn is what its admission stored, and the hirer's where it stored none. */
+export function turnAuthorship(turn: { readonly kind: 'user' | 'programmatic'; readonly metadata?: JsonObject | undefined }): TurnAuthorship {
+  if (turn.kind === 'user') return 'owner';
+  const stored = v.safeParse(AuthorshipSchema, turn.metadata?.[TURN_AUTHORSHIP_METADATA_KEY]);
+
+  return stored.success ? stored.output : 'hirer';
 }
