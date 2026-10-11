@@ -109,7 +109,9 @@ function preview() {
   const ports = new PortRegistry();
 
   ports.setClientSockets({ opened: () => v.parse(v.function(), hibernation.holdResidentClient(host, () => undefined)) });
+  // A routeable target answers HTTP as well; this one's page is never asked for.
   ports.bindFacetStub(41, {
+    handleHttpRequest: async () => new Response('the preview page'),
     handleWebSocketRequest: async () => {
       const response = new Response(null, { status: 101 });
 
