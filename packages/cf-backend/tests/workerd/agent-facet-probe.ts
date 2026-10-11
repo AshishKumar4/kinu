@@ -10,6 +10,7 @@ import { diagnostics } from '@kinu.run/core/obs';
 import { hostNodeSeat, nodeCodemodeTool } from '../../src/hosted-actors';
 import { HIRE_CHILD_MODEL, hireControlUrl, hireModelsBaseUrl, JOB_MISSION, type JobRow } from './hire-shapes';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
+import { RemoteAiFixtureOrchestrator } from '../helpers/remote-ai-profile';
 import { hostedActorPlacement } from '../../src/actor-hosting';
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
 import { AgentWorkspaceRPC } from '../../src/agent-facets';
@@ -41,7 +42,7 @@ interface MarksReader extends Rpc.DurableObjectBranded {
 
 let bootId: string | null = null;
 
-export class OrchestratorAgent extends ProductionOrchestrator {
+export class OrchestratorAgent extends RemoteAiFixtureOrchestrator {
   constructor(ctx: AgentContext, env: ConstructorParameters<typeof ProductionOrchestrator>[1]) {
     super(ctx, env);
 

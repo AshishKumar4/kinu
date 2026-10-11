@@ -46,6 +46,21 @@ export function aiLane({ model, inputs }: AiRun): (typeof AI_LANES)[number] | nu
 
 let remote: ReturnType<typeof startRemoteProxySession> | undefined;
 
+let runningTest = 'native harness setup';
+
+export function workersAiTestRunning(name: string): void { runningTest = name; }
+
+async function refuseExhaustedQuota(answer: Response, model: string): Promise<void> {
+  if (answer.status !== 429) return;
+
+  const body = await answer.text();
+
+  process.stderr.write(`Workers AI quota exhausted; model=${model}; test=${runningTest}\n${body}\n`);
+  await closeRemoteWorkersAi();
+  process.stderr.write('Wrangler remote AI session disposed; terminating the native run.\n');
+  process.exit(1);
+}
+
 /** The native AI wire is passed to Wrangler's remote binding, never answered by a fixture. */
 export async function remoteWorkersAi(request: Request): Promise<Response> {
   remote ??= startRemoteProxySession({ AI: { type: 'ai' } }, {
@@ -63,6 +78,8 @@ export async function remoteWorkersAi(request: Request): Promise<Response> {
   headers.delete('host');
   headers.delete('content-length');
   const answer = await fetch(session.remoteProxyConnectionString, { method: request.method, headers, body: await request.arrayBuffer(), signal: request.signal });
+
+  await refuseExhaustedQuota(answer, request.headers.get('mf-header-cf-consn-model-id') ?? 'not supplied by the binding');
   // fetch decoded the bytes; the binding must not gunzip them a second time.
   const decoded = new Headers(answer.headers);
   decoded.delete('content-encoding');

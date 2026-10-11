@@ -26,7 +26,7 @@ import { builtinModules } from 'node:module';
 import { spawn } from 'node:child_process';
 import { promptText } from './vite-prompt-text';
 import { AGENT_BUNDLE_ENTRY, buildAgentBundle, workerCompatibility, writeWhole } from './vite-agent-bundle';
-import { closeRemoteWorkersAi, readAiRun, remoteWorkersAi, workersAiBinding } from './tests/helpers/workers-ai-binding';
+import { closeRemoteWorkersAi, readAiRun, remoteWorkersAi, workersAiBinding, workersAiTestRunning } from './tests/helpers/workers-ai-binding';
 import type { Reporter } from 'vitest/reporters';
 import * as v from 'valibot';
 import { HELD_PROXY_MODEL } from './tests/workerd/ai-proxy-shapes';
@@ -44,10 +44,13 @@ function getHireAi(): ReturnType<typeof workersAiBinding> {
 
 let twoTurnAi: ReturnType<typeof workersAiBinding> | undefined;
 
+let twoTurnAiCalls = 0;
+
 /** The two-turn probe reads what the binding was asked through `/log`. */
 function getTwoTurnAi(): ReturnType<typeof workersAiBinding> {
   twoTurnAi ??= workersAiBinding(async (request) => {
     recordAiRun(await readAiRun(request.clone()));
+    twoTurnAiCalls++;
 
     return await remoteWorkersAi(request);
   });
@@ -583,8 +586,22 @@ const suiteWorkers = new Map([...requirements].map(([file, workers]) => [fileURL
 
 let selectedWorkers: AuxiliaryWorker[] = [];
 
+const aiCaseStarts = new Map<string, number>();
+
 const workerSelection: Reporter = {
   onTestRunEnd: closeRemoteWorkersAi,
+  onTestCaseReady(test) {
+    workersAiTestRunning(test.name);
+
+    if (test.module.moduleId.endsWith('/wide/two-turn.test.ts')) aiCaseStarts.set(test.id, twoTurnAiCalls);
+  },
+  onTestCaseResult(test) {
+    const began = aiCaseStarts.get(test.id);
+
+    if (began === undefined) return;
+    process.stdout.write(`Workers AI case requests: ${JSON.stringify({ test: test.name, calls: twoTurnAiCalls - began })}\n`);
+    aiCaseStarts.delete(test.id);
+  },
   async onTestRunStart(specifications) {
     const selected = new Set<string>();
 
