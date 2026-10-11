@@ -126,7 +126,16 @@ export function observeNamespace(namespace: CompositeVFS, observer: WriteObserve
     return settle(Effect.gen(function* () {
       if (waits) yield* Effect.promise(() => before);
 
-      const [was, now] = yield* Effect.all([side(event.before, event.path, observer.needsBaseline(event.path)), side(event.after, event.path, true)]);
+      const asked = observer.needsBaseline(event.path);
+      // A side not asked for is not captured, which is not a backend that would not say; a create replaced nothing.
+      let replaced: VfsContentRef | null | undefined | 'unasked' = event.before;
+
+      if (event.type === 'create') replaced = null;
+      else if (replaced === undefined && !asked) replaced = 'unasked';
+
+      const [was, now] = yield* Effect.all([
+        replaced === 'unasked' ? Effect.succeed<Side>('unasked') : side(replaced, event.path, asked), side(event.after, event.path, true),
+      ]);
 
       if (event.oldPath !== undefined) recorded(observer, event.oldPath, now, null);
       recorded(observer, event.path, was, now);
@@ -134,5 +143,6 @@ export function observeNamespace(namespace: CompositeVFS, observer: WriteObserve
       unsettled -= 1;
       turn.resolve();
     }))));
-  }, { wants: (_path, writer) => mine(writer) });
+    // Each side read only for what records it: what a path replaced once, until the observer holds its baseline.
+  }, { wants: (path, writer) => (mine(writer) ? { before: observer.needsBaseline(path), after: true } : false) });
 }
