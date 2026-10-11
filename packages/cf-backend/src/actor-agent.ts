@@ -2006,24 +2006,33 @@ export abstract class ActorAgent extends Agent<Env> {
 
   private _evolutionSettling: AsyncTaskOwner | null = null;
 
+  /** A turn settled while the lane ran: its pass started before this turn's review, so one more runs after it. */
+  private _evolutionOwed = false;
+
   /**
-   * Settle both evolution lanes (turn lane and cadence session pass) in a durable fiber, detached so the chat queue is
+   * Settle both evolution lanes (turn lane, then the cadence pass) in a durable fiber, detached so the chat queue is
    * not blocked. Inputs are re-read from durable queues, so the row needs no checkpoint: one an earlier activation left
    * is re-driven by the next (`OrchestratorAgent.recoverDeadActivation`). One lane at a time.
    */
   protected settleEvolutionInBackground(): void {
-    if (this._evolutionSettling !== null) return;
+    if (this._evolutionSettling !== null) {
+      this._evolutionOwed = true;
+
+      return;
+    }
+
     const owner: AsyncTaskOwner = { promise: null };
     this._evolutionSettling = owner;
     owner.promise = hold(Effect.ensuring(Effect.catchCause(Effect.promise(() => this.rt.schedule.fiber(EVOLUTION_LANE_FIBER, async () => {
-      const { orchestrator } = (await this.workspaceAgent()).session;
-
-      await orchestrator.settleTracked();
-      await orchestrator.runDueSessionEvolution();
+      await (await this.workspaceAgent()).session.orchestrator.settleEvolution();
     })), recording({ doing: 'settling the turn and session evolution lanes', otherwise: 'unavailable' }, (failure) => {
       diagnostics.failure('evolution.settle_failed', failure);
     })), Effect.sync(() => {
       if (this._evolutionSettling === owner) this._evolutionSettling = null;
+
+      if (!this._evolutionOwed) return;
+      this._evolutionOwed = false;
+      this.settleEvolutionInBackground();
     })));
   }
 

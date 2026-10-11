@@ -62,7 +62,7 @@ import { ActorSession, type ActorTurnLease,
   assembleActorTurn, runHeadInference, withCompactionTrigger, conversationKey, metadataTier, vfsTurnSkills, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources, type RunTurnSources,
   branchesTerminalEffect, chatTerminalEffects, subordinateTerminalEffects,
   type OwedReport, type SubordinateReportStatus, type TaskTurnEnding,
-  terminalEffect,
+  terminalEffect, improvementLanesOpen, RunEndReasonSchema, WorkModeSchema, JsonValueSchema,
   type TerminalEffectTable, type TerminalEffectFault,
   type TerminalTurnFacts, type TerminalTurnParts, type OwedEffect,
   buildActorTools, buildMcpToolSet, currentDateForPrompt,
@@ -1866,12 +1866,21 @@ export class LocalAgentSession {
         },
       }),
       ...chatTerminalEffects({ chat: () => this.chat, orchestrator: () => this.actorSession.orchestrator, engine: this.engine }),
-      // The CLI's lanes run elsewhere (evolution on its own queue); subordinates only report.
       ...subordinateTerminalEffects({
         hireAdvisor: (advisor) => this.actorSession.hireAdvisor(advisor),
         // Awaited so a one-shot close joins it.
         applyTitle: (subject) => this.applyAutoTitle(subject),
         ...(relay !== null && { sendReport: (report) => relay.send(report) }),
+      }),
+      // A root's evolution pass, after the turn's review, as the workspace object runs main's; a subordinate only reports.
+      improvement_lanes: terminalEffect({
+        input: v.object({ status: RunEndReasonSchema, turn: JsonValueSchema, workMode: WorkModeSchema }),
+        runSync: ({ status, workMode }) => {
+          // Not joined at exit: the window it would close carries to the next session or the daemon.
+          if (this.parentRelay === null && improvementLanesOpen(status, workMode)) detach(Effect.promise(() => this.actorSession.orchestrator.settleEvolution()));
+
+          return { status: 'completed' };
+        },
       }),
     };
   }

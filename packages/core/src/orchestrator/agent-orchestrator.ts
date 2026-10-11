@@ -4,9 +4,9 @@
 //   Turn lane (outcome review): `settleTracked()` joins it, and all work a backend `track()`s, with no elapsed bound
 //     (owner ruling, 2026-08).
 //     A `oneShot` host defers it as a durable row drained by `runDeferredTurnReviews` at the next session open.
-//   Cadence lane (session/lifetime chain, the live trial and the proposer): never joined; only started by a host
-//     that can afford to finish it. Safe because the session window closes only after its pass settles
-//     (`CompletedTurnStore.claim`).
+//   Cadence lane (session/lifetime chain, the live trial and the proposer): one pass per settled turn, after the turn
+//     lane (`settleEvolution`), never joined; only started by a host that can afford to finish it. Safe because the
+//     session window closes only after its pass settles (`CompletedTurnStore.claim`).
 // The in-episode clock (`craft`, `recordRecovery`) writes synchronous rows and needs no join.
 
 import type { ModelMessage } from 'ai';
@@ -138,9 +138,6 @@ export class AgentOrchestrator {
   private readonly inFlight = new Map<Promise<void>, string>();
   /** Cadence lane latch: at most one pass, since `claim()` retires nothing until the pass settles. */
   private sessionEvolution: Promise<void> | null = null;
-  /** Cadence lane observer, not a latch: a no-op pass must not hide a window that fills meanwhile.
-   *  Deliberately not joined by `settleTracked`. */
-  private cadencePasses: Promise<void> = Promise.resolve();
   /** Cadence lane: trial-drain latch, separate from the window pass so trials never run twice
    *  and a no-op drain never hides a filled window. */
   private evolutionPass: Promise<void> | null = null;
@@ -263,16 +260,9 @@ export class AgentOrchestrator {
     );
 
     // Promptness on top of durability; the queue's claim keeps it exactly-once.
-    // A one-shot host must not open work it cannot finish.
-    if (!this.deps.oneShot) {
-      if (!awaitsFollowup) {
-        this.detach(this.deps.engine.runDeferredTurnReviews().then(() => undefined), 'Turn review');
-      }
-
-      const cadence = this.runDueSessionEvolution();
-      const previousCadence = this.cadencePasses;
-      this.cadencePasses = settleLogged('orchestrator.detached_work_failed', { doing: 'run detached post-turn work', otherwise: 'unavailable' },
-        async () => { await Promise.all([previousCadence, cadence]); }, { work: 'Session evolution' });
+    // A one-shot host must not open work it cannot finish. The cadence pass waits for this review: `settleEvolution`.
+    if (!this.deps.oneShot && !awaitsFollowup) {
+      this.detach(this.deps.engine.runDeferredTurnReviews().then(() => undefined), 'Turn review');
     }
   }
 
@@ -311,6 +301,17 @@ export class AgentOrchestrator {
     if (this.deps.oneShot) return { reviewed: 0, refused: [] };
 
     return await this.deps.engine.runDeferredTurnReviews();
+  }
+
+  /**
+   * A settled turn's one cadence pass, after the turn lane: the pass reads the ratings and struggles the turn's review
+   * writes. Both hosts start it from the turn's improvement lanes. A one-shot host starts none; its window carries to
+   * the daemon. Never rejects.
+   */
+  async settleEvolution(): Promise<void> {
+    if (this.deps.oneShot) return;
+    await this.settleTracked();
+    await this.runDueSessionEvolution();
   }
 
   /**
