@@ -437,13 +437,13 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
       // Untouched unless a hold waits: the answer arrives on the tick it always did.
       const owed = (snapshot: AgentSnapshot): Promise<boolean> => (restingAnswers.has(placement.storageKey) ? heldWhenResting(snapshot) : calls.owed(snapshot));
 
-      const admit: AgentFacetCalls['admit'] = async (snapshot, delivery, land) => {
+      const admit: AgentFacetCalls['admit'] = async (snapshot, delivery) => {
         const cut = deliveryCuts.get(placement.storageKey);
 
         deliveryCuts.delete(placement.storageKey);
 
         if (cut === 'before-admit') throw new Error('the crossing died before the agent took the delivery');
-        const answered = await calls.admit(snapshot, delivery, land);
+        const answered = await calls.admit(snapshot, delivery);
 
         if (cut === 'after-admit') throw new Error("the crossing died after the agent took the delivery, before its answer");
 

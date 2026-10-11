@@ -57,7 +57,15 @@ describe('a signal as a delivery', () => {
   test("is carded, committed under its key, and answered queued: a person's words are never a signal", async () => {
     const delivered: Delivery[] = [];
     const carded: string[] = [];
-    const inbox = new DeliveryInbox({ deliver: async (delivery) => { delivered.push(delivery); }, broadcast: (event) => { carded.push(event.type); } });
+
+    const inbox = new DeliveryInbox({
+      deliver: async (delivery) => {
+        delivered.push(delivery);
+
+        return 'taken';
+      },
+      broadcast: (event) => { carded.push(event.type); },
+    });
 
     expect(await inbox.send({ kind: 'mcp', text: 'Tally the refunds.', idempotencyKey: 'mcp-1' })).toBe('queued');
     expect(delivered.map((delivery) => [delivery.id, delivery.input.kind, delivery.authorship])).toEqual([['mcp-1', 'turn', 'hirer']]);

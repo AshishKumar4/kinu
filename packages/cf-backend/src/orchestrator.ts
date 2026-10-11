@@ -1,11 +1,12 @@
 import { exists as nimbusExists, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
-import { PLATFORM_CATALOG, GitHubFactSchema, actorPolicy, AgentDeliveries, DeliveryInbox, wordsRefusal, type Delivery, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, codemodeSurface, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type ToolSurfaceNarrowing, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs } from '@kinu.run/core';
+import { PLATFORM_CATALOG, GitHubFactSchema, actorPolicy, AgentDeliveries, DeliveryInbox, wordsRefusal, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, codemodeSurface, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type ToolSurfaceNarrowing, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs } from '@kinu.run/core';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
  */
 
 import { Agent, callable, type AgentContext, type Connection, type ConnectionContext } from "agents";
+import { serialQueue } from "@kinu.run/agent-utils";
 import { ORCHESTRATOR_RPC_SURFACE, ORCHESTRATOR_STARTED_RPC, sealRpcSurface } from "./rpc-surface";
 import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from "./activation-gate";
 import { supervisorEsbuildService } from "@nimbus-sh/worker/facet-host";
@@ -47,7 +48,7 @@ import type { AgentTurnActivity, AgentSnapshot, RunEventRecorder, StoredRow } fr
 import type { SerializedMessage, WebSearchProvider } from '@kinu.run/core';
 import type { CFRuntime } from './runtime';
 import { callOperation, listOperations, type OperationCaller, type OperationListing, type OperationResult } from '@kinu.run/core';
-import type { AdmittedDelivery, AgentFacet, AgentFacetCalls } from "./agent-facet/agent-facet";
+import type { AgentFacet, AgentFacetCalls } from "./agent-facet/agent-facet";
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { isWorkspaceTerminal, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
 import { McpToolSurfaceSchema, ShareViewerClaimSchema, type ShareViewerClaim } from '@kinu.run/core';
@@ -413,7 +414,18 @@ interface HostedTarget {
 }
 
 /** One crossing of a delivery: the agent's answer, or why it did not take it. */
-type CrossedDelivery = { readonly admitted: AdmittedDelivery } | { readonly failure: KinuError };
+type CrossedDelivery = { readonly admitted: Exclude<DeliveryAnswer, object> } | { readonly failure: KinuError };
+
+/** A crossing as a producer that waits on it hears it: its value, or the agent's failure. The delivery stays owed either
+ *  way the agent did not take it. */
+function heard<A>(crossed: CrossedDelivery, value: (admitted: DeliveryAnswer) => A): Promise<A> {
+  const answer = Promise.withResolvers<A>();
+
+  if ('failure' in crossed) answer.reject(crossed.failure);
+  else answer.resolve(value(crossed.admitted));
+
+  return answer.promise;
+}
 
 export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private readonly addressedName: string;
@@ -2447,7 +2459,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           return bound;
         });
 
-        if (delivery !== null) await this.crossDelivery(main, delivery, false);
+        if (delivery !== null) await this.crossingLane(main)(() => this.crossDelivery(main, delivery));
       },
     };
   }
@@ -2461,7 +2473,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * own fact, then crossed once. A commit that holds it already commits nothing new; a crossing that fails leaves it
    * owed, and the agent's wake crosses it again: the producer is done once it committed. Null when it did not cross.
    */
-  protected async deliver(actorId: string, delivery: Delivery, source?: () => void, land = false): Promise<CrossedDelivery> {
+  protected async deliver(actorId: string, delivery: Delivery, source?: () => void): Promise<CrossedDelivery> {
     this.ctx.storage.transactionSync(() => {
       source?.();
       this.deliveries.add(actorId, delivery);
@@ -2470,65 +2482,85 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // The agent reads working from here, as soon as it is owed: its turn claims are its own isolate's.
     this.liveReadsMoved(readsOfTables(['actor_turn_claims']));
 
-    return await this.crossDelivery(actorId, delivery, land);
+    return await this.crossingLane(actorId)(() => this.crossDelivery(actorId, delivery));
   }
 
-  /** The deliveries a producer is crossing now: the wake leaves them to it, so the agent never hears one twice at once. */
-  private readonly crossing = new Set<string>();
+  /** Per agent, one crossing at a time, each released once the agent took it: the agent takes what it is owed in the
+   *  order its producers committed it. */
+  private readonly crossingLanes = new Map<string, ReturnType<typeof serialQueue>>();
+
+  private crossingLane(actorId: string): ReturnType<typeof serialQueue> {
+    const lane = this.crossingLanes.get(actorId) ?? serialQueue();
+
+    this.crossingLanes.set(actorId, lane);
+
+    return lane;
+  }
 
   /**
-   * One crossing of one owed delivery, its wake armed first, retired as the agent answers it. The agent's refusal of it
-   * as it is retires it too; any other failure leaves it owed. An agent retired since cancels what it is owed.
+   * One crossing of one delivery, if still owed, its wake armed first, retired as the agent answers it. The agent's
+   * refusal of it as it is retires it too; any other failure leaves it owed. An agent retired since cancels what it is
+   * owed. Run on the agent's crossing lane.
    */
-  private async crossDelivery(actorId: string, delivery: Delivery, land: boolean): Promise<CrossedDelivery> {
+  private async crossDelivery(actorId: string, delivery: Delivery): Promise<CrossedDelivery> {
     if (!this.liveActor(actorId)) {
       this.deliveries.cancel(actorId);
 
       return { failure: new KinuError('missing', `${actorId} was retired; what it was owed is cancelled.`) };
     }
 
-    const key = `${actorId}\0${delivery.id}`;
+    // Taken already, at a crossing this one waited behind on the lane: the wake's, or its producer's.
+    if (!this.deliveries.unpaid(actorId).some((owed) => owed.id === delivery.id)) return { admitted: 'taken' };
 
-    this.crossing.add(key);
+    const calls = await this.preArmed(actorId, () => this.agentCalls(actorId));
+    // In the agent's own words: its refusal reaches the sender as it said it.
+    const crossed = await hold(attemptInItsWords('unavailable', () => calls.admit(this.agentSnapshot(actorId), delivery)));
 
-    try {
-      const calls = await this.preArmed(actorId, () => this.agentCalls(actorId));
-      // In the agent's own words: its refusal reaches the sender as it said it.
-      const crossed = await hold(attemptInItsWords('unavailable', () => calls.admit(this.agentSnapshot(actorId), delivery, land)));
+    if (Exit.isFailure(crossed)) {
+      const cause = Cause.squash(crossed.cause);
+      const failure = cause instanceof KinuError ? cause : toKinuError({ doing: 'handing the agent what it is owed', cause, otherwise: 'unavailable' });
 
-      if (Exit.isFailure(crossed)) {
-        const cause = Cause.squash(crossed.cause);
-        const failure = cause instanceof KinuError ? cause : toKinuError({ doing: 'handing the agent what it is owed', cause, otherwise: 'unavailable' });
+      // It did not reach the agent: owed still, for the agent's wake to cross again.
+      diagnostics.failure('agent.delivery_crossing_failed', failure, { actorId, deliveryId: delivery.id });
 
-        diagnostics.failure('agent.delivery_crossing_failed', failure, { actorId, deliveryId: delivery.id });
-
-        if (failure.code === 'bad_input') this.deliveries.paid(actorId, delivery.id);
-
-        return { failure };
-      }
-
-      this.deliveries.paid(actorId, delivery.id);
-
-      return { admitted: crossed.value };
-    } finally {
-      this.crossing.delete(key);
+      return { failure };
     }
+
+    this.deliveries.paid(actorId, delivery.id);
+    const answer = crossed.value;
+
+    // The agent's refusal is its answer: retired, and its sender told.
+    if (typeof answer === 'object') {
+      const failure = new KinuError(answer.refused.code, answer.refused.message);
+
+      diagnostics.failure('agent.delivery_refused', failure, { actorId, deliveryId: delivery.id });
+
+      return { failure };
+    }
+
+    return { admitted: answer };
   }
 
   /** At the agent's wake: what it is owed, in the order it was committed, up to a crossing that fails. */
   private async crossOwed(actorId: string): Promise<void> {
-    for (const delivery of this.deliveries.unpaid(actorId)) {
-      if (this.crossing.has(`${actorId}\0${delivery.id}`)) continue;
-      const crossed = await this.crossDelivery(actorId, delivery, false);
+    await this.crossingLane(actorId)(async () => {
+      for (const delivery of this.deliveries.unpaid(actorId)) {
+        const crossed = await this.crossDelivery(actorId, delivery);
 
-      if ('failure' in crossed && crossed.failure.code !== 'bad_input') return;
-    }
+        // A crossing that did not reach the agent stops the sweep: what is behind it waits for the next wake.
+        if ('failure' in crossed && this.deliveries.unpaid(actorId).some((owed) => owed.id === delivery.id)) return;
+      }
+    });
   }
 
   /** What a signal to the agent becomes: a delivery its room hears carded. */
   private deliveryInbox(actorId: string): DeliveryInbox {
     return new DeliveryInbox({
-      deliver: async (delivery) => { await this.deliver(actorId, delivery); },
+      deliver: async (delivery) => {
+        const crossed = await this.deliver(actorId, delivery);
+
+        return 'admitted' in crossed ? crossed.admitted : null;
+      },
       broadcast: (event) => { this.detachOwned(Effect.promise(() => this.hostedChatEvent(actorId, { type: 'broadcast', event }))); },
     });
   }
@@ -2539,19 +2571,21 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * View-only agents take none. A crossing that fails is the sender's to hear, and the words stay owed.
    */
   private async deliverWords(actorId: string, delivery: Delivery, land: boolean): Promise<SendLanding | null> {
-    const answered = Promise.withResolvers<SendLanding | null>();
     const refused = wordsRefusal(delivery);
 
-    if (refused !== null) answered.reject(refused);
-    else {
-      const crossed = await whenActorTakesInput(this.boundSql, actorId, () => this.deliver(actorId, delivery, undefined, land));
+    const crossed: CrossedDelivery = refused === null
+      ? await whenActorTakesInput(this.boundSql, actorId, () => this.deliver(actorId, delivery))
+      : { failure: refused };
 
-      if ('failure' in crossed) answered.reject(crossed.failure);
-      else if (crossed.admitted.answer === 'duplicate') answered.reject(new KinuError('bad_input', `message ${delivery.id} was already sent`));
-      else answered.resolve(crossed.admitted.landed);
+    // An id the agent holds already was sent before: refused, as at the door.
+    if ('admitted' in crossed && crossed.admitted === 'duplicate') {
+      return await heard({ failure: new KinuError('bad_input', `message ${delivery.id} was already sent`) }, () => null);
     }
 
-    return await answered.promise;
+    await heard(crossed, () => null);
+
+    // Heard once a turn took them, off the crossing lane: what waits behind them crosses meanwhile.
+    return land ? await (await this.agentCalls(actorId)).landing(this.agentSnapshot(actorId), delivery.id) : null;
   }
 
   /** Armed before anything crosses into the agent: a delivery, or a decision taken in its own store (an answer, a
@@ -4681,9 +4715,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const holds = async (id: string) => (await (await this.agentCalls(main)).sendState(this.agentSnapshot(main), id)).status !== 'none';
 
     return {
+      // Owed once committed; a crossing the agent refused is the sender's to hear, and its wake delivers them still.
       deliver: async (message) => {
         if (await holds(message.id)) return;
-        await this.deliver(main, { id: message.id, input: { kind: 'words', text: message.text, metadata: message.metadata }, authorship: 'owner' });
+        await heard(await this.deliver(main, { id: message.id, input: { kind: 'words', text: message.text, metadata: message.metadata }, authorship: 'owner' }), () => undefined);
       },
       holds,
     };

@@ -329,6 +329,9 @@ export class ChatSession {
   /** Settled where the fate is decided, never at admission. A send admitted via `admit` has no entry: its fate goes out as steer_status. */
   private readonly landings = new Map<string, SendLandingWaiter>();
 
+  /** The fates of the words this isolate took as deliveries, until their sender asks. */
+  private readonly deliveredLandings = new Map<string, Promise<SendLanding | KinuError>>();
+
   /** A Retry reserved but not yet queued. */
   private reopening = false;
   private readonly eventLog: EventLog;
@@ -342,6 +345,11 @@ export class ChatSession {
   private readonly ports: ChatSessionPorts;
   private readonly mintAnswerId: () => string;
   private ended = false;
+
+  /** Closing: what it is handed now is owed to its next start, not refused. */
+  get closing(): boolean {
+    return this.ended;
+  }
   private runId: string | null = null;
   /** The scope every effect claim this turn makes is keyed to. Null between turns. */
   private turnId: string | null = null;
@@ -620,7 +628,7 @@ export class ChatSession {
    * workspace retires its row only once nothing of it can be lost. A repeat of its id is answered `duplicate`, whatever
    * became of the first; a closed session takes nothing, and the workspace delivers again at its next wake.
    */
-  async admitDelivery(delivery: Delivery, landing: SendLandingWaiter | null = null): Promise<DeliveryAnswer> {
+  async admitDelivery(delivery: Delivery): Promise<DeliveryAnswer> {
     const { id, input } = delivery;
 
     if (this.ended) return settleSync(Effect.fail(new KinuError('unavailable', 'The agent is closing; the delivery is owed to its next start.')));
@@ -629,22 +637,28 @@ export class ChatSession {
       if (this.transcript.has(id) || this.pendingSends.has(id)) return 'duplicate';
       const words = input.files === undefined || input.files.length === 0 ? input.text : { text: input.text, files: input.files };
 
+      // Its fate is heard here as a send's is: where it landed, or why it did not (`awaitLanding`). Held as a value, so a
+      // fate no sender asks for is no unheard rejection.
+      const fate = Promise.withResolvers<SendLanding | KinuError>();
+
+      this.deliveredLandings.set(id, fate.promise);
       await this.admit(words, {
         id, ...(input.mode !== undefined && { mode: input.mode }), ...(input.tier !== undefined && { tier: input.tier }),
         ...(input.metadata !== undefined && { metadata: input.metadata }),
-      }, landing);
+      }, { resolve: fate.resolve, reject: fate.resolve });
 
       return 'taken';
     }
 
     if (this.pendingSends.hasTurn(id) || this.announcementInFlight(id) || this.announcementOnDisk(id)) return 'duplicate';
-    await this.queueTurn({
+
+    const queued = await this.queueTurn({
       text: input.text, idempotencyKey: id, authorship: delivery.authorship,
       ...(input.metadata !== undefined && { metadata: input.metadata }),
       ...(input.yieldsToUserMessage === true && { yieldsToUserMessage: true }),
     });
 
-    return 'taken';
+    return queued.status === 'yielded' ? 'yielded' : 'taken';
   }
 
   /** Send; resolves where it landed (`'mid-turn'` or `'turn'`), never guessed at admission, and rejects if it did not land. */
@@ -659,6 +673,44 @@ export class ChatSession {
   /** Where a send stands, from its durable facts ({@link sendStateOf}). */
   sendState(id: string): Promise<SendState> {
     return sendStateOf({ transcript: this.transcript, pendingSends: this.pendingSends, claims: this.actorSession.claims, runs: this.eventRecorder }, id);
+  }
+
+  /**
+   * Where words under `id` landed once a turn took them: opening it, or read at a running turn's step. Read from durable
+   * facts, so it outlives the isolate that admitted them; refused once they were handed back, or were never sent.
+   */
+  async awaitLanding(id: string): Promise<SendLanding> {
+    const heard = this.deliveredLandings.get(id);
+
+    // This isolate admitted them: their fate as the send's own, a refusal and all.
+    if (heard !== undefined) {
+      const fate = await heard;
+
+      this.deliveredLandings.delete(id);
+
+      if (fate instanceof KinuError) return settleSync(Effect.fail(fate));
+
+      return fate;
+    }
+
+    for (;;) {
+      const moved = Promise.withResolvers<void>();
+      const unobserve = this.actorSession.claims.observe(moved.resolve);
+
+      this.sendsMoved.add(moved.resolve);
+
+      try {
+        const state = await this.sendState(id);
+
+        if (state.status === 'running' || state.status === 'settled') return state.landed;
+
+        if (state.status === 'none') return settleSync(Effect.fail(new KinuError('cancelled', `message ${id} was handed back before a turn took it`)));
+        await moved.promise;
+      } finally {
+        unobserve();
+        this.sendsMoved.delete(moved.resolve);
+      }
+    }
   }
 
   /** Its state once settled or none. A change here wakes a fresh read; the wake is never the answer, so a client

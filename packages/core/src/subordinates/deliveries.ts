@@ -16,7 +16,7 @@ import { SIGNAL_ID_METADATA_KEY, type AgentInbox, type AgentSignal, type SendOut
 import { MISSION_LABELS_METADATA_KEY } from '../mission-budget';
 import { nanoid } from '../utils/nanoid';
 import { Effect } from 'effect';
-import { KinuError, settleSync } from '../obs/index';
+import { KinuError, settleSync, type ErrorCode } from '../obs/index';
 import { TierIdSchema } from '../types/profile';
 import { WorkModeSchema } from '../types/turn';
 import type { TurnAuthorship } from '../orchestrator/turn-authorship';
@@ -62,8 +62,10 @@ export function wordsRefusal(delivery: Delivery): KinuError | null {
   return null;
 }
 
-/** What the agent answered: the input is in its own store now, or already was. */
-export type DeliveryAnswer = 'taken' | 'duplicate';
+/** What the agent answered: the input is in its own store now, or already was; or, an offer that yields to its owner's
+ *  words, it met words that came first and is consumed unrun; or it refused it, as it is, with what it said. A refusal is
+ *  an answer: the delivery is retired and its sender told. Only a crossing that does not reach the agent leaves it owed. */
+export type DeliveryAnswer = 'taken' | 'duplicate' | 'yielded' | { readonly refused: { readonly code: ErrorCode; readonly message: string } };
 
 export function initAgentDeliveriesTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS agent_deliveries (
@@ -130,7 +132,8 @@ export class AgentDeliveries {
  */
 export class DeliveryInbox implements AgentInbox {
   constructor(private readonly deps: {
-    readonly deliver: (delivery: Delivery) => Promise<void>;
+    /** The agent's answer once it crossed; null while it is owed still, as it is until the agent's wake delivers it. */
+    readonly deliver: (delivery: Delivery) => Promise<DeliveryAnswer | null>;
     readonly broadcast: (event: BroadcastEvent) => void;
   }) {}
 
@@ -140,13 +143,18 @@ export class DeliveryInbox implements AgentInbox {
     const metadata: JsonObject = { ...turnMetadata(signal), [SIGNAL_ID_METADATA_KEY]: cardId };
 
     this.deps.broadcast(metadataBroadcastEvent('signal_card', metadata, { id: cardId, state: 'pending', text: signal.text }));
-    await this.deps.deliver({
+
+    const answer = await this.deps.deliver({
       id: signal.idempotencyKey ?? cardId,
       input: { kind: 'turn', text: signal.text, metadata, ...(signal.yieldsToUserMessage === true && { yieldsToUserMessage: true }) },
       authorship: 'hirer',
     });
 
-    return 'queued';
+    // The owner spoke first: a consumed offer, not a failure.
+    if (answer !== 'yielded') return 'queued';
+    this.deps.broadcast(metadataBroadcastEvent('signal_card', metadata, { id: cardId, state: 'undelivered', text: signal.text }));
+
+    return 'yielded';
   }
 }
 

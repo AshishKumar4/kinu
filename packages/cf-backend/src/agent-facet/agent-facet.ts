@@ -4,7 +4,7 @@ import { DurableObject, RpcTarget } from 'cloudflare:workers';
 import { Nimbus, type NimbusSandbox, type NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
 import type { UIMessage } from 'ai';
 import { Effect } from 'effect';
-import { flight, settle, type KinuError } from '@kinu.run/core/obs';
+import { attemptInItsWords, flight, KinuError, settle } from '@kinu.run/core/obs';
 import {
   encodeModelMessageValues, jsonResultOrVoid, readAgentArchivePage,
   type InspectedWork,
@@ -82,18 +82,13 @@ export interface PlanVerdict {
   readonly feedback?: string;
 }
 
-/** How the agent answered a delivery, and where a person's words landed when asked. */
-export interface AdmittedDelivery {
-  readonly answer: DeliveryAnswer;
-  readonly landed: SendLanding | null;
-}
-
 export interface AgentFacetCalls {
   run(snapshot: AgentSnapshot, task: AgentTurnTask): Promise<AgentTurnEnd>;
   /** Answered once its chat has processed it. */
   enqueue(snapshot: AgentSnapshot, turn: ProgrammaticTurn): Promise<EnqueueTurnResult>;
-  /** Resolves once its chat holds the delivery in its own store; with `land`, once a person's words landed. */
-  admit(snapshot: AgentSnapshot, delivery: Delivery, land: boolean): Promise<AdmittedDelivery>;
+  /** Resolves once its chat holds the delivery in its own store. */
+  admit(snapshot: AgentSnapshot, delivery: Delivery): Promise<DeliveryAnswer>;
+  landing(snapshot: AgentSnapshot, id: string): Promise<SendLanding>;
   retry(snapshot: AgentSnapshot, claim: (turnId: string) => void): Promise<SendLanding>;
   sendState(snapshot: AgentSnapshot, id: string): Promise<SendState>;
   awaitSend(snapshot: AgentSnapshot, id: string): Promise<SendState>;
@@ -293,17 +288,21 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
   }
 
   /** A delivery from the workspace (design v2 §1): in this isolate's store before it is answered, which retires the
-   *  workspace's row; a repeat is answered `duplicate`. `land` answers a person's words once they landed, in the running
-   *  turn or opening one, as the person's client is told. */
-  async admit(snapshot: AgentSnapshot, delivery: Delivery, land: boolean): Promise<AdmittedDelivery> {
-    return await settle(this.withChat(snapshot, async (chat) => {
-      const landing = land ? Promise.withResolvers<SendLanding>() : null;
-      const answer = await chat.session.admitDelivery(v.parse(DeliverySchema, delivery), landing);
+   *  workspace's row; a repeat is answered `duplicate`. */
+  async admit(snapshot: AgentSnapshot, delivery: Delivery): Promise<DeliveryAnswer> {
+    return await settle(Effect.flatMap(this.withChat(snapshot, (chat) => chat), (chat) => (chat.session.closing
+      // Closing: owed to its next start, so the crossing fails and the workspace's wake crosses it again.
+      ? Effect.fail(new KinuError('unavailable', 'The agent is closing; the delivery is owed to its next start.'))
+      : attemptInItsWords('io', () => chat.session.admitDelivery(v.parse(DeliverySchema, delivery))).pipe(
+        // Its own refusal is its answer, not a lost crossing.
+        Effect.catch((refusal) => Effect.succeed<DeliveryAnswer>({ refused: { code: refusal.code, message: refusal.message } })),
+        Effect.tap(() => Effect.promise(() => chat.taken())),
+      ))));
+  }
 
-      await chat.taken();
-
-      return { answer, landed: answer === 'taken' && landing !== null ? await landing.promise : null };
-    }));
+  /** Where a person's words landed, once a turn took them: what their client is told. */
+  async landing(snapshot: AgentSnapshot, id: string): Promise<SendLanding> {
+    return await settle(this.withChat(snapshot, (chat) => chat.session.awaitLanding(id)));
   }
 
   async retry(snapshot: AgentSnapshot, claim: (turnId: string) => void): Promise<SendLanding> {

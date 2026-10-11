@@ -36,10 +36,20 @@ export class AgentFacet extends Shipped {
   /** Its tool calls that came back failed, over every step its ledger records. */
   async failedToolCalls(): Promise<number> {
     const failed = new Set<string>();
+    const stepped = new Set<string>();
 
-    // A step's tool results are its transcript's tool messages; a step's run event names them by reference only.
-    for (const row of this.ctx.storage.sql.exec<{ content_json: string }>("SELECT content_json FROM session_messages WHERE role = 'tool' AND content_json IS NOT NULL")) {
-      failedResults(parseJsonValue(row.content_json), failed);
+    // The tool messages the run's finished steps name, by reference: its ledger, not every message the transcript holds.
+    for (const row of this.ctx.storage.sql.exec<{ payload: string }>("SELECT payload FROM run_events WHERE type = 'step_finish'")) {
+      const step = parseJsonValue(row.payload);
+      const parts = typeof step === 'object' && step !== null && !Array.isArray(step) ? step.parts : null;
+
+      for (const part of Array.isArray(parts) ? parts : []) {
+        if (typeof part === 'object' && part !== null && !Array.isArray(part) && typeof part.messageId === 'string') stepped.add(part.messageId);
+      }
+    }
+
+    for (const row of this.ctx.storage.sql.exec<{ message_id: string; content_json: string }>("SELECT message_id, content_json FROM session_messages WHERE role = 'tool' AND content_json IS NOT NULL")) {
+      if (stepped.has(row.message_id)) failedResults(parseJsonValue(row.content_json), failed);
     }
 
     return failed.size;
