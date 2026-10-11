@@ -304,3 +304,17 @@ index c031ebc..6cb0946 100644
        : proxied ? proxiedConnect(...args) : real.connect(...args);
      let closed = false;
      let hold = null;
+diff --git a/dist/hosted/commands.js b/dist/hosted/commands.js
+index fcd0460..376d8dd 100644
+--- a/dist/hosted/commands.js
++++ b/dist/hosted/commands.js
+@@ -818,7 +818,8 @@ export async function registerHostedCommands(self, workspace) {
+                         setUmask: identity.setUmask,
+                     },
+                     runAs: runAsProcess,
+-                    signal: stop.signal,
++                    // Kinu patch (NIMBUS-ASKS #42): the caller's signal (a Stop) as well as this child's own.
++                    signal: options?.signal ? AbortSignal.any([options.signal, stop.signal]) : stop.signal,
+                 });
+                 exitCode = result.exitCode;
+                 return result;
