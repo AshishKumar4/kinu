@@ -324,7 +324,8 @@ describe('ChatApp terminal interaction', () => {
     await screen.waitFor('the picker releases its control', () => !screen.filterFocused());
     screen.mockInput.pressKey(',', { ctrl: true });
 
-    for (let index = 0; index < 4; index += 1) await screen.renderOnce();
+    await new Promise<void>((resolve) => { setImmediate(resolve); });
+    await screen.renderOnce();
     expect(selected).toEqual(['openai/gpt-5.5']);
     expect(screen.filterFocused()).toBe(false);
     pending.resolve({ spec: 'openai/gpt-5.5' });
