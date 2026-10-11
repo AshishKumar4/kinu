@@ -160,15 +160,25 @@ export class OrchestratorAgent extends Product {
     this.config.grantShellApproval([{ rule: egressSecretRule(id), executor: 'sandbox' }]);
   }
 
-  async perfTool(name: string, input: string): Promise<string> {
+  /** Tool `name` called with `input`; with `abortAfterMs`, its call aborted that long in, as a Stop aborts a turn's calls. */
+  async perfTool(name: string, input: string, abortAfterMs?: number): Promise<string> {
     this.acc.context.reset();
     const tool = this.getRawToolsForWorkMode('build')[name];
 
     if (tool?.execute === undefined) throw new Error(`tool ${name} is absent`);
     const callable: Tool = tool;
     const parsed = v.parse(v.pipe(v.string(), v.parseJson(), JsonObjectSchema), input);
-    const result: unknown = await callable.execute?.(parsed, { toolCallId: `perf-${crypto.randomUUID()}`, messages: [], context: undefined });
+    const stop = new AbortController();
+    const timer = abortAfterMs === undefined ? undefined : setTimeout(() => { stop.abort(new Error('perf abort')); }, abortAfterMs);
 
-    return typeof result === 'string' ? result : JSON.stringify(result);
+    try {
+      const result: unknown = await callable.execute?.(parsed, {
+        toolCallId: `perf-${crypto.randomUUID()}`, messages: [], context: undefined, abortSignal: stop.signal,
+      });
+
+      return typeof result === 'string' ? result : JSON.stringify(result);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }

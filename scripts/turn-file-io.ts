@@ -294,12 +294,19 @@ async function ask(path: string, input?: JsonObject): Promise<string> {
 /** A bare repository the egress subject pushes to, served as git's smart HTTP by `git http-backend`. */
 const gitRoot = join(process.env.TMPDIR ?? '/tmp', `perfio-git-${String(process.pid)}`);
 
-/** `git.perfio.test`: `/echo` says whether its Authorization carried the secret; `/repo.git` is served by `git http-backend`. */
-async function gitServer(request: Request): Promise<Response> {
+/**
+ * `git.perfio.test`, the host the probe's secret is bound to: `/echo` and `/ws` reflect the Authorization they were sent,
+ * and `/repo.git` is served by `git http-backend`.
+ */
+async function gitServer(request: Request): Promise<Response | MiniflareResponse> {
   const url = new URL(request.url);
 
-  // Names whether the secret arrived, never the header: the egress scrubs the secret from what it answers.
-  if (url.pathname === '/echo') return new Response(`auth=${request.headers.get('authorization') === `Bearer ${PERF_SECRET}` ? 'secret' : 'other'}\n`);
+  const authorization = request.headers.get('authorization') ?? 'none';
+
+  // Reflects the Authorization it was sent, and says whether that was the secret: the program must read the placeholder.
+  if (url.pathname === '/echo') return new Response(`auth=${authorization}\nsecret=${String(authorization === `Bearer ${PERF_SECRET}`)}\n`);
+
+  if (url.pathname === '/ws') return reflectingSocket(authorization);
 
   const env = {
     GIT_PROJECT_ROOT: gitRoot, GIT_HTTP_EXPORT_ALL: '1', REMOTE_USER: 'perfio', REQUEST_METHOD: request.method, PATH_INFO: url.pathname,
@@ -322,6 +329,17 @@ async function gitServer(request: Request): Promise<Response> {
   }
 
   return new Response(out.subarray(split + 4), { status, headers });
+}
+
+/** A WebSocket that opens by sending the Authorization its upgrade carried, then echoes, as a server leaking it would. */
+function reflectingSocket(authorization: string): MiniflareResponse {
+  const [client, server] = Object.values(new WebSocketPair());
+
+  server.accept();
+  server.send(`auth=${authorization}`);
+  server.addEventListener('message', (event) => { server.send(event.data); });
+
+  return new MiniflareResponse(null, { status: 101, webSocket: client });
 }
 
 /** `echo.perfio.test`: a WebSocket server that answers each message with itself, as a public echo server does. */
@@ -701,7 +719,17 @@ try {
         + ` && echo ${String(index)} > a.txt && git add a.txt && git commit -q -m ${branch} && git branch ${branch}`
         + ` && git remote add origin https://${PERF_SECRET_HOST}/repo.git && git push origin ${branch} && echo pushed=${branch}`);
     }, undefined, 'pushed=b');
-    await measureOp('egress.inject', () => shell(`curl -sS -H "Authorization: Bearer ${placeholder}" https://${PERF_SECRET_HOST}/echo`), undefined, 'auth=secret');
+    // The server gets the secret; the program reads its echo with the placeholder back in its place.
+    const inject = () => shell(`curl -sS -H "Authorization: Bearer ${placeholder}" https://${PERF_SECRET_HOST}/echo`);
+
+    const wsInject = (at: string) => shell(`mkdir -p ${at} && cd ${at} && echo '{"name":"probe","private":true}' > package.json`
+      + ` && npm install --no-audit --no-fund ws@8 > /dev/null && ${node([
+        `const w = new (require('ws'))('wss://${PERF_SECRET_HOST}/ws', { headers: { Authorization: 'Bearer ${placeholder}' } });`,
+        "w.on('message', (d) => { console.log('ws ' + d); w.close(); }); w.on('error', (e) => console.log('ws failed: ' + e.message));",
+      ].join(' '))}`);
+
+    await measureOp('egress.inject', inject, undefined, `auth=Bearer ${placeholder}\nsecret=true`);
+    await measureOp('egress.wsinject', (index) => wsInject(`/home/main/perfio/ews-${String(index + 2)}`), undefined, `ws auth=Bearer ${placeholder}`);
     await measureOp('egress.npm', (index) => {
       const at = `/home/main/perfio/enpm-${String(index + 2)}`;
 
@@ -723,8 +751,45 @@ try {
 
     // The egress's own refusal names the address; the isolate's network would time out or reset without one.
     await measureOp('egress.private', () => shell('curl -sS --max-time 5 http://10.0.0.1/'), undefined, 'blocked');
-    process.stdout.write(`SECRET-LEAK ${String((await shell(`curl -sS -H "Authorization: Bearer ${placeholder}" https://${PERF_SECRET_HOST}/echo`)).includes(PERF_SECRET))}\n`);
+    const seen = `${await inject()}\n${await wsInject('/home/main/perfio/ews-leak')}`;
+
+    process.stdout.write(`SECRET-LEAK ${String(seen.includes(PERF_SECRET))} placeholder-seen ${String(seen.includes(placeholder))}\n`);
     measured.push(...fileResults);
+  } else if (subject === 'abort') {
+    // A busy command aborted as a Stop aborts it: once the call settles, nothing of it may still burn the engine's CPU.
+    await ask('/seed');
+
+    const share = async (ms: number) => {
+      const before = cpu(pid);
+
+      await Bun.sleep(ms);
+
+      return (cpu(pid) - before) / ms;
+    };
+
+    const idle = await share(3000);
+
+    const loops = [
+      { label: 'abort.bash', command: 'bash -c "while :; do :; done"' },
+      { label: 'abort.node', command: node('for (;;) {}') },
+      { label: 'abort.pipe', command: `${node('for (;;) {}')} | cat` },
+    ];
+
+    for (const loop of loops) {
+      const started = performance.now();
+      let answer: string;
+
+      try {
+        answer = await ask('/tool?name=shell&abortAfterMs=1500', { command: loop.command, runtime: 'workspace' });
+      } catch (error) {
+        answer = `threw: ${String(error)}`;
+      }
+
+      const settledMs = performance.now() - started;
+      const after = await share(3000);
+
+      process.stdout.write(JSON.stringify({ event: 'abort', sha, label: loop.label, settledMs, idleShare: idle, cpuShareAfter: after, answer: answer.slice(-300) }) + '\n');
+    }
   } else if (subject === 'boot') {
     // A workspace's cold open: set up fresh (an owner, a credential), then its first command, which boots its engine.
     const fresh = async (name: string, path: string, input?: JsonObject): Promise<string> => {

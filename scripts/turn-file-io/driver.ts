@@ -62,8 +62,8 @@ export class PerfDriver extends DurableObject<DriverEnv> {
     return binding.placeholder;
   }
 
-  async tool(workspace: string, name: string, input: string): Promise<string> {
-    return await this.target(workspace).perfTool(name, input);
+  async tool(workspace: string, name: string, input: string, abortAfterMs?: number): Promise<string> {
+    return await this.target(workspace).perfTool(name, input, abortAfterMs);
   }
 }
 
@@ -83,7 +83,9 @@ export default {
       case '/tool': {
         const input = await request.text();
 
-        return new Response(await driver.tool(workspace, url.searchParams.get('name') ?? 'file', input));
+        const abortAfter = url.searchParams.get('abortAfterMs');
+
+        return new Response(await driver.tool(workspace, url.searchParams.get('name') ?? 'file', input, abortAfter === null ? undefined : Number(abortAfter)));
       }
 
       default: return new Response('not found', { status: 404 });
