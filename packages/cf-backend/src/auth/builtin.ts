@@ -13,7 +13,7 @@ import { builtinSignInOn } from '@kinu.run/core/identity';
 import type { AuthRoutesAuthority, AuthRoutesEnv } from './routes';
 import {
   attemptBuckets as buckets, BUILTIN_ACCOUNTS_OBJECT, CHALLENGE_TTL_MS, checkPassword, grantOf, hashPassword, INVITE_TTL_MS, NOT_ADMITTED,
-  type AttemptBucket, type ChallengePurpose, type Grant, type InvitePurpose, type PasswordAccount, type Reset, type SigningAccount,
+  type AttemptBucket, type ChallengePurpose, type Grant, type InvitePurpose, type Reset, type SigningAccount,
 } from '@kinu.run/core/identity';
 import type { UserDO } from '../user/user-do';
 import type { ApiVariables, FamilyEnv } from '../api/context';
@@ -22,13 +22,12 @@ import type { ObjectNamespace } from '@kinu.run/core';
 type BuiltinAuthority = AuthRoutesAuthority & Pick<UserDO,
   | 'builtinAdmissible' | 'builtinCreateInvite' | 'builtinInvitedEmail' | 'builtinIsOwner' | 'builtinIssueChallenge' | 'builtinPasskeyAccount'
   | 'builtinPasswordAccount' | 'builtinRecordPasskeyUse' | 'builtinRegister' | 'builtinSpendChallenge'
-  | 'builtinReserveAttempt' | 'builtinClearAttempts' | 'builtinReplacePassword'
+  | 'builtinReserveAttempt' | 'builtinClearAttempts'
   | 'builtinResetAccount' | 'builtinApplyReset' | 'builtinListAccounts' | 'raiseCredentialFloor'>;
 
 export interface BuiltinAuthEnv<Id = DurableObjectId> extends Omit<AuthRoutesEnv<Id>, 'UserDO'> {
   UserDO: ObjectNamespace<Id, BuiltinAuthority>;
   KINU_SETUP_TOKEN?: string;
-  CREDENTIAL_ENCRYPTION_KEY_PREVIOUS?: string;
 }
 
 const RP_NAME = 'Kinu';
@@ -38,15 +37,6 @@ export function builtinAccounts<Id, Authority>(env: { UserDO: ObjectNamespace<Id
 }
 
 const accounts = <Id>(env: BuiltinAuthEnv<Id>): BuiltinAuthority => builtinAccounts(env);
-
-async function passwordMatches<Id>(env: BuiltinAuthEnv<Id>, root: string, password: string, stored: PasswordAccount | null): Promise<boolean> {
-  const previous = (env.CREDENTIAL_ENCRYPTION_KEY_PREVIOUS ?? '').split(',').map((key) => key.trim()).filter((key) => key !== '');
-  const check = await checkPassword({ current: root, previous }, password, stored);
-
-  if (stored !== null && check.rehash) await accounts(env).builtinReplacePassword(await ownerCaller(env), stored.userId, check.rehash);
-
-  return check.matched;
-}
 
 function addressKey(request: Request): string {
   const address = (request.headers.get('cf-connecting-ip') ?? '').trim();
@@ -179,7 +169,7 @@ builtinAuthRoutes.post('/api/auth/builtin/password/sign-in', async (c) => {
   const caller = await ownerCaller(c.env);
   const account = await accounts(c.env).builtinPasswordAccount(caller, input.email);
 
-  const matched = await passwordMatches(c.env, root, input.password, account);
+  const matched = await checkPassword(root, input.password, account);
 
   if (account === null || !matched) return refuse('That email and password do not match an account.', 401);
   await accounts(c.env).builtinClearAttempts(caller, attempt.map((bucket) => bucket.key));

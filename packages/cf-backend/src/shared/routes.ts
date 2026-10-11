@@ -29,7 +29,7 @@ function blueprintMessage(workspace: string, share: string): string {
 
 /** Null on a deployment with no signing secret. */
 async function mintBlueprintId(env: Env, workspace: string, share: string): Promise<string | null> {
-  const secret = blueprintSigner.secrets(env)[0];
+  const secret = blueprintSigner.secret(env);
 
   if (secret === undefined) return null;
 

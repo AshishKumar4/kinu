@@ -647,11 +647,10 @@ describe('serving a Nimbus preview host', () => {
     expect(touched()).toBe(false);
   });
 
-  test('a URL minted under a retired secret still verifies while that secret is listed', async () => {
+  test('a root key change invalidates existing URLs and signs new ones', async () => {
     const rotated = {
       ...ENV,
       CREDENTIAL_ENCRYPTION_KEY: 'a-second-credential-encryption-key-9876543210',
-      CREDENTIAL_ENCRYPTION_KEY_PREVIOUS: TEST_CREDENTIAL_ENCRYPTION_KEY,
     };
 
     const minted = (await nimbusPreviewUrl(testEnv(rotated), 'hello', 4321, NIMBUS_CAPABILITY)).url;
@@ -673,10 +672,10 @@ describe('serving a Nimbus preview host', () => {
       },
     });
 
-    expect((await handleNimbusPreviewHostRequest(new Request(NIMBUS_URL), env))?.status).toBe(204);
+    expect((await handleNimbusPreviewHostRequest(new Request(NIMBUS_URL), env))?.status).toBe(404);
     expect((await handleNimbusPreviewHostRequest(new Request(String(minted)), env))?.status).toBe(204);
-    expect(routed).toBe(2);
-    const dropped = untouchableEnv({ ...rotated, CREDENTIAL_ENCRYPTION_KEY_PREVIOUS: '' });
+    expect(routed).toBe(1);
+    const dropped = untouchableEnv(rotated);
     expect((await handleNimbusPreviewHostRequest(new Request(NIMBUS_URL), dropped.env))?.status).toBe(404);
     expect(dropped.touched()).toBe(false);
   });

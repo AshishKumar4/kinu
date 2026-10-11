@@ -5,7 +5,7 @@ import {
 import { diagnostics, KinuError, tolerate, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import {
-  builtinAdmission, createBuiltinInvite, findPasskeyAccount, findPasswordAccount, hasBuiltinOwner, initBuiltinAccounts, invitedEmail, isBuiltinOwner, issuePasskeyChallenge, recordPasskeyUse, registerBuiltinAccount, spendPasskeyChallenge, reserveAttempt, clearAttempts, replacePassword, applyReset, listBuiltinAccounts, resetAccount, type Admission, type AttemptBucket, type BuiltinSql, type ChallengePurpose, type Grant, type NewBuiltinAccount, type NewInvite, type PasskeyAccount, type PasswordAccount, type PasswordHash, type PendingChallenge, type ListedAccount, type Reset, type SigningAccount,
+  builtinAdmission, createBuiltinInvite, findPasskeyAccount, findPasswordAccount, hasBuiltinOwner, initBuiltinAccounts, invitedEmail, isBuiltinOwner, issuePasskeyChallenge, recordPasskeyUse, registerBuiltinAccount, spendPasskeyChallenge, reserveAttempt, clearAttempts, applyReset, listBuiltinAccounts, resetAccount, type Admission, type AttemptBucket, type BuiltinSql, type ChallengePurpose, type Grant, type NewBuiltinAccount, type NewInvite, type PasskeyAccount, type PasswordAccount, type PendingChallenge, type ListedAccount, type Reset, type SigningAccount,
 } from '@kinu.run/core/identity';
 import type { UserProfile } from './profile';
 import { closeEndedRosterSockets, rosterSockets } from './roster';
@@ -184,11 +184,6 @@ export class UserSessions {
     await this.host.requireTier(caller, 'builtin_accounts');
 
     return reserveAttempt(this.builtinSql(), buckets, Date.now());
-  }
-
-  async builtinReplacePassword(caller: UserCaller, userId: string, password: PasswordHash): Promise<void> {
-    await this.host.requireTier(caller, 'builtin_accounts');
-    replacePassword(this.builtinSql(), userId, password);
   }
 
   async builtinResetAccount(caller: UserCaller, grant: Grant): Promise<SigningAccount | null> {
