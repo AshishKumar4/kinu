@@ -136,8 +136,11 @@ function fixturePlan(recovering: ReturnType<typeof recoveryReport>) {
   // The last is a box only the desktop's check opens, so it opens on a fresh box.
   const names = recovering?.boxes ?? [box, `${box}-native`, `${box}-disk`, 'devbox-golden', `${box}-desktop`];
   const app = recovering?.app ?? `${worker}-contractbox`;
+  const owner = recovering?.owner ?? contractOwner(process.env);
+  const { job, index, attempt, vessel, statusUrl } = owner;
+  const reportedOwner = { job, index, attempt, vessel, statusUrl };
 
-  return { run, worker, bucket, box, names, app };
+  return { run, worker, bucket, box, names, app, owner, reportedOwner };
 }
 
 function prepareLedger() {
@@ -189,10 +192,7 @@ async function main(): Promise<void> {
   const identity = tierIdentity(process.env);
   const recoveryArgument = process.argv.indexOf('--cleanup-report');
   const recovering = recoveryReport(recoveryArgument);
-  const { run, worker, bucket, box, names, app } = fixturePlan(recovering);
-  const owner = recovering?.owner ?? contractOwner(process.env);
-  const { job, index, attempt, vessel, statusUrl } = owner;
-  const reportedOwner = { job, index, attempt, vessel, statusUrl };
+  const { run, worker, bucket, box, names, app, owner, reportedOwner } = fixturePlan(recovering);
   const scratch = recovering === undefined ? mkdtempSync(join(tmpdir(), 'kinu-devbox-contracts-')) : dirname(process.argv[recoveryArgument + 1] ?? '');
   process.env['WRANGLER_LOG_PATH'] = join(scratch, 'wrangler');
   const { token, rest } = fixtureTokens();
