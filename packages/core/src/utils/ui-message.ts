@@ -43,14 +43,16 @@ export function authoredTurnMetadata(item: { readonly kind: 'user' | 'programmat
 }
 
 /**
- * Author from the stamp the row was written with, never prose: every machine writer stamps at the row-writing seam
- * ({@link stampTurnAuthor}, `harness` unless declared), and a fork carries each row's metadata. Words with no stamp
- * are a person's own, as their composer shows them before any row is written.
+ * Author from the markers the row was written with, never prose: the stamp every machine writer puts at the row-writing
+ * seam ({@link stampTurnAuthor}, `harness` unless declared), or the event a machine turn names; a fork carries each row's
+ * metadata. Words with neither are a person's own, as their composer shows them before any row is written.
  */
 export function turnAuthor(row: { metadata?: unknown }): TurnAuthor {
   const parsed = v.safeParse(TurnAuthorSchema, row.metadata ?? {});
 
-  return (parsed.success ? parsed.output[TURN_AUTHOR_METADATA_KEY] : undefined) ?? 'operator';
+  if (!parsed.success) return 'operator';
+
+  return parsed.output[TURN_AUTHOR_METADATA_KEY] ?? (parsed.output.kinuEvent === undefined ? 'operator' : 'harness');
 }
 
 /** What a row says: an answer's last text (its earlier texts are narration), anything else's text whole. */
