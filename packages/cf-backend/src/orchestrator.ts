@@ -769,8 +769,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       identity, lineage, config, scaffold, workspaceName: this.workspaceName(),
       installedBuild: this.env.CF_VERSION_METADATA?.id ?? null,
       artifactDirectory: agentArtifactDirectory(agentHome(agent.homeName)),
+      order: { activation: this.snapshotActivation, seq: ++this.snapshotSeq },
     };
   }
+
+  /** The order its snapshots are read in, this activation: an isolate adopts none older than one it holds. */
+  private readonly snapshotActivation = crypto.randomUUID();
+
+  private snapshotSeq = 0;
 
   private _agentTurns: AgentTurns | null = null;
 

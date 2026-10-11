@@ -145,8 +145,14 @@ export class AgentDatabase {
     initTerminalEffectTable((ddl) => { storage.sql.exec(ddl); });
   }
 
-  /** Writes only when the workspace's rows changed, so a read of an unchanged agent writes nothing. */
+  /** Writes only when the workspace's rows changed, so a read of an unchanged agent writes nothing. Rows read before
+   *  ones it already holds are not adopted: a call that reached it late would put back what its workspace changed since
+   *  (the owner's model pin among them). */
   adopt(snapshot: AgentSnapshot): void {
+    const held = this.snapshot?.order;
+
+    if (held !== undefined && held.activation === snapshot.order.activation && snapshot.order.seq < held.seq) return;
+
     const unchanged = holds(this.storage, 'workspace_identity', snapshot.identity)
       && snapshot.lineage.every((row) => holds(this.storage, 'workspace_actors', row) && holdsConfig(this.storage, row.actor_id ?? null, snapshot.config))
       && snapshot.scaffold.every((row) => holds(this.storage, 'scaffold_versions', row));

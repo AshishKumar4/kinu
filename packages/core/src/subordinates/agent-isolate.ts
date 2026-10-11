@@ -19,6 +19,13 @@ import type { SubordinateReportLedger } from './ingress';
 
 export type StoredRow = Readonly<Record<string, string | number | ArrayBuffer | null>>;
 
+/** Where a snapshot falls among those its workspace sent: calls reach an isolate in no promised order, so one read earlier
+ *  in the same activation is older than any it already adopted. */
+export interface SnapshotOrder {
+  readonly activation: string;
+  readonly seq: number;
+}
+
 export interface AgentSnapshot {
   readonly identity: StoredRow;
   readonly lineage: readonly StoredRow[];
@@ -27,6 +34,7 @@ export interface AgentSnapshot {
   readonly workspaceName: string;
   readonly installedBuild: string | null;
   readonly artifactDirectory: string;
+  readonly order: SnapshotOrder;
 }
 
 export interface AgentTurnOpening {
