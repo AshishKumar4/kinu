@@ -506,7 +506,7 @@ const DecideApprovalsSchema = v.object({ decided: v.array(v.string()) });
 const PublicBackgroundJobSchema = v.object({
   id: v.string(),
   kind: v.string(),
-  /** What the job runs, as the Supervise pane names it (`workspace: node server.js`). */
+  /** What the job runs, as the Work tab names it (`workspace: node server.js`). */
   label: v.optional(v.nullable(v.string())),
   status: v.string(),
   result: v.optional(v.nullable(v.string())),
@@ -1412,9 +1412,9 @@ export class KinuPublicSession {
   }
 
   /**
-   * The workspace's background jobs, as the Work tab's Supervise pane reads
-   *   them — `listBackgroundJobs`, the `@callable` the pane's own rpc is bound
-   *   to (pages/SupervisePage.tsx:240). This is how a harness asks what a
+   * The workspace's background jobs, as the Work tab reads them —
+   *   `listBackgroundJobs`, the `@callable` the tab's own rpc is bound to.
+   *   This is how a harness asks what a
    *   detached tool call became: `shell`/`eval` calls that outrun the
    *   foreground window answer a `{jobId}` handle and settle out of turn, so
    *   their result is reachable only through this row — never in the run

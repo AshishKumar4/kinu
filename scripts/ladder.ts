@@ -1637,7 +1637,7 @@ export const LADDER: readonly Gate[] = [
       + 'capability row rendering raw snake_case ids with no reading and no absences. '
       + 'Around them the whole WorkspacePage boundary: chat send admission, terminal '
       + 'workspace denial, the file-preview and history/roster request generations, the '
-      + 'one composite file plane, the supervise view live, a revoked device whose '
+      + 'one composite file plane, a revoked device whose '
       + 'command may still run, machine linking on the surface that asked for it, '
       + 'composer and message continuity, the tool preview redacting through the one '
       + 'canonical policy, WorkTab drawing a section only when it has something to '
