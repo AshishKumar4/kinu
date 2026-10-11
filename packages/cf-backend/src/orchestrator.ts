@@ -1,5 +1,5 @@
 import { exists as nimbusExists, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
-import { PLATFORM_CATALOG, GitHubFactSchema, actorPolicy, AgentDeliveries, DeliveryInbox, pendingEventsDelivery, wordsRefusal, deliveryMetadata, type Delivery, type DeliveryAnswer, type OwedAdmission, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, codemodeSurface, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type ToolSurfaceNarrowing, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs } from '@kinu.run/core';
+import { PLATFORM_CATALOG, GitHubFactSchema, actorPolicy, AgentDeliveries, DeliveryInbox, pendingEventsDelivery, wordsRefusal, deliveryMetadata, handBackCarried, type Delivery, type DeliveryAnswer, type OwedAdmission, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, codemodeSurface, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type ToolSurfaceNarrowing, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs } from '@kinu.run/core';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
@@ -2472,9 +2472,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this.deliveries.paid(actorId, delivery.id);
 
     // An offer the owner's words came before: the events it carried are pending again.
-    if (answer === 'yielded') {
-      for (const event of this.carried(actorId, delivery)?.events ?? []) event.log.unbind(event.id);
-    }
+    if (answer === 'yielded') handBackCarried(new EventLog(this.watchedExec, this.agentBound(actorId).handle), delivery, answer);
 
     return { admitted: answer };
   }
@@ -2494,7 +2492,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       return { failure };
     }
 
-    for (const event of this.carried(actorId, delivery)?.events ?? []) event.log.park(event.id);
+    handBackCarried(new EventLog(this.watchedExec, this.agentBound(actorId).handle), delivery, { refused: { code: failure.code, message: failure.message } });
 
     return { failure };
   }
