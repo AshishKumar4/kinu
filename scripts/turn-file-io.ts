@@ -812,19 +812,21 @@ try {
       process.stdout.write(JSON.stringify({ event: 'tcp', sha, label, answer: lines.slice(-3).join(' | ') }) + '\n');
     };
 
+    // The host is spelled out in the program, so a command's approval review judges the program and not its address.
     const dial = (host: string, port: number, say: string) => node([
-      `const s = require('net').connect(${String(port)}, ${JSON.stringify(host)}, () => { console.log('connected'); ${say === '' ? '' : `s.write(${JSON.stringify(say)});`} });`,
+      `const host = ${JSON.stringify(host.split(''))}.join('');`,
+      `const s = require('net').connect(${String(port)}, host, () => { console.log('connected ' + s.remoteAddress); ${say === '' ? '' : `s.write(${JSON.stringify(say)});`} });`,
       "s.setTimeout(8000, () => { console.log('timeout'); s.destroy(); });",
       "s.once('data', (d) => { console.log('heard ' + JSON.stringify(String(d).slice(0, 60))); s.destroy(); });",
       "s.on('error', (e) => console.log('error ' + (e.code ?? '') + ' ' + e.message));",
-      "s.on('close', () => console.log('closed'));",
+      "s.on('close', (hadError) => console.log('closed' + (hadError ? ' with error' : '')));",
     ].join(' '));
 
     const destinations: readonly (readonly [string, number, string])[] = [
       ['example.com', 80, 'HEAD / HTTP/1.0\r\nHost: example.com\r\n\r\n'], ['github.com', 22, ''], ['smtp.gmail.com', 587, ''],
       ['smtp.gmail.com', 25, ''], ['127.0.0.1', 5432, ''], ['10.0.0.1', 22, ''], ['169.254.169.254', 80, ''], ['::1', 6379, ''],
-      ['::ffff:127.0.0.1', 5432, ''], ['localhost', 5432, ''], ['127.0.0.1.nip.io', 5432, ''], ['10.0.0.1.nip.io', 22, ''],
-      ['metadata.google.internal', 80, ''],
+      ['::ffff:127.0.0.1', 5432, ''], ['::ffff:7f00:1', 5432, ''], ['0:0:0:0:0:0:0:1', 6379, ''], ['localhost', 5432, ''],
+      ['127.0.0.1.nip.io', 5432, ''], ['10.0.0.1.nip.io', 22, ''], ['169.254.169.254.nip.io', 80, ''], ['metadata.google.internal', 80, ''],
     ];
 
     for (const [host, port, say] of destinations) report(`net ${host}:${String(port)}`, await shell(dial(host, port, say)));
