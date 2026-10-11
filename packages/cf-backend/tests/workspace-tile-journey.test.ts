@@ -9,14 +9,15 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  actorConnectionTag, DeviceConsentStore, JsonValueSchema, PlanReviewStore, TURN_AUTHOR_METADATA_KEY, type JsonValue, type WorkspaceOverview,
+  actorConnectionTag, AgentSequence, CHAT_SESSION_ID, DeviceConsentStore, JsonValueSchema, PlanReviewStore, RunEventRecorder, TURN_AUTHOR_METADATA_KEY, type JsonValue, type WorkspaceOverview,
 } from '@kinu.run/core';
+import type { AgentStandingReport } from '@kinu.run/core';
 import { AwaitedList } from '@kinu.run/test-utils';
 import type { Database } from 'bun:sqlite';
 import { TERMINAL_RETRY_JOB } from '../src/wake-jobs';
 import { bindAgentSql } from '../src/runtime';
 import {
-  actorOver, armedWakes, chatSessionTurns, fireSoonestWake, GATEWAY_CATALOG, ledgerOver, nextTurn, orchestratorHarness, hostedSubordinateHarness, seedMission,
+  actorOver, armedWakes, chatSessionTurns, fireSoonestWake, GATEWAY_CATALOG, historyOver, ledgerOver, mainRows, nextTurn, orchestratorHarness, hostedSubordinateHarness, seedMission,
   until, wakeForDelegatedTask, workspaceFiles, workspaceMainActor, type HarnessOrchestratorAgent, type RecordedUserPlaneCalls,
 } from './helpers/actor-harness';
 import { mockAgentsSdk } from './helpers/agents-sdk';
@@ -87,15 +88,23 @@ describe("a workspace's tile on its owner's home", () => {
       await until(() => last()?.awaitsSettings === false, 'the first quiet settings-wait tile lands');
 
       const reportedWork = await agent.agentWorkspace(main);
+      const own = await mainRows(workspace);
+      const sequence = new AgentSequence(own.sql, main);
+      const recorder = new RunEventRecorder(own.sql, own.actor);
 
-      await reportedWork.owes(null, true);
+      const standing: AgentStandingReport = {
+        messageCount: historyOver({ agent, db: own.db }, own.actor).transcript(CHAT_SESSION_ID).count(),
+        measures: recorder.readContextMeasures(), latestRun: recorder.latestRunHeader(), pendingSteers: [],
+      };
+
+      await reportedWork.owes(sequence.next(), null, true, standing);
       await until(() => last()?.awaitsSettings === true, 'a real owed-work report updates the owner');
       const reported = tiles.items.length;
 
-      await reportedWork.owes(null, true);
+      await reportedWork.owes(sequence.next(), null, true, standing);
       await settled();
       expect(tiles.items).toHaveLength(reported);
-      await reportedWork.owes(null, false);
+      await reportedWork.owes(sequence.next(), null, false, standing);
       await until(() => last()?.awaitsSettings === false, 'the cleared owed-work report updates the owner');
 
       // A prior activation's own effect ledger retained this refusal; the live idle fold must read it.
