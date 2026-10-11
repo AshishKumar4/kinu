@@ -145,10 +145,6 @@ async function awaitSettled(target: { settleState(): Promise<SettleState> }): Pr
 export class ObservedOrchestrator extends RemoteAiFixtureOrchestrator {
   private readonly actorState: AgentContext;
   private readonly meter: SqlMeter;
-  /** Queue cases assert admission and recovery, not platform reflection. */
-  async disableUnassertedPlatformEffects(): Promise<void> {
-    this.config.setSleepTimeComputeEnabled(false);
-  }
   /** The database without the meter, for the probe's own reads. */
   private readonly unmetered: SqlStorage['exec'];
   /** Transcript reads the chat transport made while the meter runs. */
@@ -178,7 +174,6 @@ export class ObservedOrchestrator extends RemoteAiFixtureOrchestrator {
     Reflect.deleteProperty(this, 'meterBegin');
     Reflect.deleteProperty(this, 'meterEnd');
     Reflect.deleteProperty(this, 'settleState');
-    Reflect.deleteProperty(this, 'disableUnassertedPlatformEffects');
     Reflect.deleteProperty(this, 'sleepTimeNow');
     Reflect.deleteProperty(this, 'refuseReservations');
     Reflect.deleteProperty(this, 'owedSends');
@@ -194,7 +189,7 @@ export class ObservedOrchestrator extends RemoteAiFixtureOrchestrator {
     Reflect.deleteProperty(this, 'liveTerminal');
     Reflect.deleteProperty(this, 'terminalState');
     Reflect.deleteProperty(this, 'alienEffect');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'disableUnassertedPlatformEffects', 'meterBegin', 'meterEnd', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState', 'strandedWork', 'answerSlates', 'answerPageModes', 'cutTerminal', 'liveTerminal', 'terminalState', 'alienEffect']);
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState', 'strandedWork', 'answerSlates', 'answerPageModes', 'cutTerminal', 'liveTerminal', 'terminalState', 'alienEffect']);
   }
 
   /** `query` over main's own isolate, where its conversation, sends, claims and runs are kept (D9). */
@@ -809,7 +804,6 @@ type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   | 'createSubordinateAgent' | 'readWorkspaceFile'>
   & Pick<ProductionOrchestrator, 'getChangeNotes' | 'saveChangeNotes' | 'sendChangeNotes'>
   & Pick<ObservedOrchestrator, 'refuseReservations' | 'owedSends' | 'latestClaimOutcome' | 'recoveryPass'
-  | 'disableUnassertedPlatformEffects'
   | 'seedOwedReplies' | 'replyLeases' | 'transitionState' | 'strandedWork' | 'answerSlates' | 'answerPageModes' | 'cutTerminal' | 'liveTerminal' | 'terminalState' | 'alienEffect' | 'inspectWork' | 'chatHistoryPage' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
   | 'receivePeerThenEvict' | 'timerTickFinished' | 'runCauses' | 'drainRunClosed' | 'meterBegin' | 'meterEnd' | 'settleState'>;
 
@@ -1089,7 +1083,6 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       kind: 'openai-compat', baseURL: 'http://fake-models.invalid/v1', apiKey: 'probe-fixture-key',
     });
     await target.setModel('openai-compat/probe-queue');
-    await target.disableUnassertedPlatformEffects();
     await target.setSoul('# Queue Probe\n\n## Mission\n\nFollow the owner\'s exact request.');
     await this.httpReset();
     await fetch('http://probe-control.invalid/queue/hold', { method: 'POST' });
@@ -1319,7 +1312,6 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     });
     await target.setModel('openai-compat/probe-queue');
     await target.setSoul('# Queue Probe\n\n## Mission\n\nFollow the owner\'s exact request.');
-    await target.disableUnassertedPlatformEffects();
     await this.httpReset();
 
     return { target, workspace, owner };
