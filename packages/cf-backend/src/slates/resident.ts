@@ -1,6 +1,7 @@
 import { Cause, Effect } from 'effect';
 import * as v from 'valibot';
-import { FACET_IMAGE_DIR, facetImageDigest, facetImagePath } from '@nimbus-sh/fabric/process-fabric.js';
+import { FACET_IMAGE_DIR, facetImagePath } from '@nimbus-sh/fabric/process-fabric.js';
+import { storeContentBlob, type ImageBlobStore } from '@nimbus-sh/fabric/image-store.js';
 import type { EsbuildService } from '@nimbus-sh/core/runtime/esbuild-service.js';
 import type { NamespaceFs } from '@nimbus-sh/core/runtime/process-files.js';
 import { CRED_KERNEL, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -611,16 +612,20 @@ export class ResidentSlateProcesses {
       };
 
       // Every module travels by content-addressed VFS path; the loader verifies bytes against the digest.
-      kernelVfs.mkdir(`/${FACET_IMAGE_DIR}`, { recursive: true, mode: 0o755 });
+      const blobs: ImageBlobStore = {
+        mkdirp: (dir) => kernelVfs.mkdir(`/${dir}`, { recursive: true, mode: 0o755 }),
+        sizeOf: (path) => kernelVfs.statIfPresent(`/${path}`, false)?.size ?? null,
+        writeFile: (path, bytes) => kernelVfs.writeFile(`/${path}`, bytes, { mode: 0o644 }),
+        writeRange: (path, offset, bytes) => kernelVfs.writeRange(`/${path}`, offset, bytes),
+        list: (dir) => kernelVfs.readdir(`/${dir}`).map((entry) => entry.name),
+        unlink: (path) => kernelVfs.unlink(`/${path}`),
+      };
 
-      const held = (contents: string) => Effect.gen(function* () {
-        const digest = yield* Effect.promise(async () => facetImageDigest(contents));
-        const path = facetImagePath(digest);
+      blobs.mkdirp(FACET_IMAGE_DIR);
 
-        if (!kernelVfs.exists(path)) kernelVfs.writeFile(path, contents, { mode: 0o644 });
-
-        return digest;
-      });
+      const held = (contents: string) => Effect.map(
+        Effect.promise(() => storeContentBlob(blobs, contents, facetImagePath)), (image) => image.digest,
+      );
 
       const digests: Record<string, string> = {};
 
