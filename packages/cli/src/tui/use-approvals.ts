@@ -69,6 +69,7 @@ export function useApprovals(client: AgentClient, opts: {
 
   // A turn's start or end ends `later`, and what was read before it is stale until read again.
   useEffect(() => {
+    handled.current = null;
     setPutOff(false);
     setWaiting(null);
   }, [client, opts.running]);
@@ -94,14 +95,14 @@ export function useApprovals(client: AgentClient, opts: {
     sent.current = chosen;
 
     detach(Effect.ensuring(Effect.match(answerWaitingApproval(approvals, chosen.action, chosen.answer), {
-      onSuccess: (said) => {
-        note('decided', said);
-        setWaiting((read) => (read?.client === chosen.client
-          ? { client: read.client, actions: read.actions.filter((queued) => queued.id !== chosen.action.id) }
-          : read));
-      },
+      onSuccess: (said) => { note('decided', said); },
       onFailure: (failure) => { note('error', renderThrownChain({ cause: failure })); },
     }), Effect.sync(() => {
+      // Answered or refused, the drawn row leaves; only a fresh read draws it again, as a prompt no key has answered.
+      handled.current = null;
+      setWaiting((read) => (read?.client === chosen.client
+        ? { client: read.client, actions: read.actions.filter((queued) => queued !== chosen.action) }
+        : read));
       setChosen(null);
       setMoves((count) => count + 1);
     })));
