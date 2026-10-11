@@ -19,6 +19,26 @@ import type { SubordinateReportLedger } from './ingress';
 
 export type StoredRow = Readonly<Record<string, string | number | ArrayBuffer | null>>;
 
+/**
+ * The tables an {@link AgentSnapshot} copies from its workspace into its agent's own isolate. A statement that writes one
+ * moves every copy of them held on either side.
+ */
+const SNAPSHOT_SOURCE_WRITE = /\b(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|REPLACE\s+INTO|UPDATE|DELETE\s+FROM)\s+(?:workspace_actors|workspace_identity|actor_config|scaffold_versions)\b/iu;
+
+const WRITES = new WeakMap<TemplateStringsArray, boolean>();
+
+/** Whether the statement writes a table a snapshot copies; decided once per statement text. */
+export function writesSnapshotRows(strings: TemplateStringsArray): boolean {
+  const known = WRITES.get(strings);
+
+  if (known !== undefined) return known;
+  const writes = SNAPSHOT_SOURCE_WRITE.test(strings.join('?'));
+
+  WRITES.set(strings, writes);
+
+  return writes;
+}
+
 /** Where a snapshot falls among those its workspace sent: calls reach an isolate in no promised order, so one read earlier
  *  in the same activation is older than any it already adopted. */
 interface SnapshotOrder {
