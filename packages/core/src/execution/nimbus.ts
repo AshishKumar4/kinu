@@ -604,14 +604,40 @@ export function nimbusSessionShell(box: NimbusSandboxHandle, place: { readonly h
   return shell;
 }
 
-/** A command's stream read to its end; `stop` cancels the stream, which ends the command. */
+/**
+ * A command's stream read to its end; `stop` cancels the stream, which ends the command. Cancelled by its own reader: on
+ * workerd a pipe's abort signal leaves a source whose read is pending uncancelled, so a silent command ran on after a
+ * Stop (armada 20261011135731-48f44e7b: pipeThrough uncancelled at 5004 ms, reader.cancel at 1502 ms).
+ */
 async function heard(stream: ExecStream, output: OutputSink | undefined, stop: AbortSignal): Promise<NimbusExecResult> {
-  const told = stream.output.pipeThrough(new TransformStream<ExecChunk, ExecChunk>({
-    transform(chunk, forward) {
-      output?.write(chunk.stream, chunk.data);
-      forward.enqueue(chunk);
+  const reader = stream.output.getReader();
+
+  const stopped = new Promise<'stopped'>((resolve) => {
+    if (stop.aborted) resolve('stopped');
+    else stop.addEventListener('abort', () => { resolve('stopped'); }, { once: true });
+  });
+
+  const told = new ReadableStream<ExecChunk>({
+    async pull(forward) {
+      const next = await Promise.race([reader.read(), stopped]);
+
+      if (next === 'stopped') {
+        await reader.cancel(stop.reason);
+        forward.close();
+
+        return;
+      }
+
+      if (next.done) {
+        forward.close();
+
+        return;
+      }
+
+      output?.write(next.value.stream, next.value.data);
+      forward.enqueue(next.value);
     },
-  }), { signal: stop });
+  }, { highWaterMark: 0 });
 
   return collectExecStream({ output: told, exit: stream.exit });
 }
