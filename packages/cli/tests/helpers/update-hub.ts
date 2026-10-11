@@ -21,6 +21,7 @@ export const DAEMON_FILES = {
   'pc-agent.js': DAEMON_SOURCE,
   'sandbox.js': SANDBOX_SOURCE,
   'pty.js': PTY_SOURCE,
+  'proc.js': readFileSync(new URL('../../../pc-agent/src/proc.js', import.meta.url), 'utf8'),
   'update.js': UPDATE_SOURCE,
   'chatgpt.js': CHATGPT_SOURCE,
   'device-protocol.json': JSON.stringify(DEVICE_PROTOCOL),

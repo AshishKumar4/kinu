@@ -32,7 +32,7 @@ import { readProcessOutput, waitForDaemonPid } from './helpers/device-process';
 const repoRoot = resolve(__dirname, '../../..');
 
 /** What the daemon requires beside itself, as this repo ships it: the installer must land each one, byte for byte. */
-const DAEMON_SIBLINGS = { 'sandbox.js': SANDBOX_SOURCE, 'pty.js': PTY_SOURCE, 'update.js': UPDATE_SOURCE, 'chatgpt.js': CHATGPT_SOURCE, 'device-protocol.json': JSON.stringify(DEVICE_PROTOCOL) } as const;
+const DAEMON_SIBLINGS = { 'sandbox.js': SANDBOX_SOURCE, 'pty.js': PTY_SOURCE, 'proc.js': readFileSync(new URL('../../pc-agent/src/proc.js', import.meta.url), 'utf8'), 'update.js': UPDATE_SOURCE, 'chatgpt.js': CHATGPT_SOURCE, 'device-protocol.json': JSON.stringify(DEVICE_PROTOCOL) } as const;
 
 function newProjectDir(): string {
   const dir = scratchDir('test-project');

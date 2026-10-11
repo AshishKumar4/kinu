@@ -48,12 +48,15 @@ const DAEMON_SIBLINGS: readonly { readonly name: string; readonly source: string
 
 /**
  * chatgpt.js is read, not imported as text: the CLI imports it as a module too, and Bun's bundler gives one
- * file one loader (21 of 40 builds failed). The release and the source tree put it beside their daemon.
+ * file one loader (21 of 40 builds failed). proc.js also has a checked module declaration. The release and the
+ * source tree put both beside their daemon.
  */
 function daemonSiblings(): readonly { readonly name: string; readonly source: string }[] {
-  const file = [join(import.meta.dir, 'pc-agent', 'chatgpt.js'), join(import.meta.dir, '..', '..', 'pc-agent', 'src', 'chatgpt.js')].find(existsSync);
+  return [...DAEMON_SIBLINGS, ...['chatgpt.js', 'proc.js'].map((name) => {
+    const file = [join(import.meta.dir, 'pc-agent', name), join(import.meta.dir, '..', '..', 'pc-agent', 'src', name)].find(existsSync);
 
-  return [...DAEMON_SIBLINGS, { name: 'chatgpt.js', source: readFileSync(file ?? join(import.meta.dir, 'pc-agent', 'chatgpt.js'), 'utf8') }];
+    return { name, source: readFileSync(file ?? join(import.meta.dir, 'pc-agent', name), 'utf8') };
+  })];
 }
 
 export const DAEMON_LOG_PATH = join(AGENT_HOME, 'pc-agent.log');
