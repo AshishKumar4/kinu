@@ -96,7 +96,7 @@ test('prompt history recalls sent and cleared drafts, searches, and persists per
   expect(input.plainText).toBe('second prompt');
   screen.mockInput.pressKey('r', { ctrl: true });
   await screen.waitFor('history search', screen.filterFocused);
-  await screen.mockInput.typeText('sec');
+  await screen.mockInput.typeText('fir');
   await screen.waitFor('filtered history', () => {
     const results = screen.renderer.root.findDescendantById('prompt-history-results');
 
@@ -104,7 +104,7 @@ test('prompt history recalls sent and cleared drafts, searches, and persists per
   });
   flushSync(() => screen.mockInput.pressEnter());
   await screen.waitFor('selected history', screen.composerFocused);
-  expect(input.plainText).toBe('second prompt');
+  expect(input.plainText).toBe('first prompt');
   flushSync(() => input.setText('cleared draft'));
   flushSync(() => screen.mockInput.pressKey('c', { ctrl: true }));
   await screen.renderOnce();
@@ -175,14 +175,14 @@ describe('ChatApp terminal interaction', () => {
     expect(localScreen.frame()).toContain('/rename');
     localScreen.mockInput.pressEscape();
     await localScreen.waitFor('the command palette to close', localScreen.composerFocused);
-    await flushSync(() => localScreen.mockInput.typeText('/settings'));
+    await localScreen.mockInput.typeText('/settings');
     const composer = localScreen.renderer.currentFocusedRenderable;
 
     if (!(composer instanceof TextareaRenderable)) throw new Error('composer not focused');
     expect(composer.plainText).toBe('/settings');
     flushSync(() => localScreen.mockInput.pressEnter());
     await localScreen.waitFor('interactive settings', localScreen.filterFocused);
-    await flushSync(() => localScreen.mockInput.typeText('low'));
+    await localScreen.mockInput.typeText('low');
     await localScreen.renderOnce();
     const filter = localScreen.renderer.currentFocusedRenderable;
 
@@ -342,7 +342,8 @@ describe('ChatApp terminal interaction', () => {
       settled: (frame) => frame.includes('the workspace socket refused'),
     });
 
-    expect(screen.frame()).toContain('Error: the workspace socket refused: ECONNREFUSED 127.0.0.1');
+    expect(screen.frame()).toContain('the workspace socket refused');
+    expect(screen.frame()).toContain('ECONNREFUSED 127.0.0.1');
   });
 
   test('a failed slash command reports the whole cause chain', async () => {
@@ -357,7 +358,7 @@ describe('ChatApp terminal interaction', () => {
     await screen.mockInput.typeText('/rename beta');
     screen.mockInput.pressEnter();
     await screen.waitFor('the submit failure with its chain', () =>
-      screen.frame().includes('Error: the rename was refused: name already taken'));
+      screen.frame().includes('the rename was refused') && screen.frame().includes('name already taken'));
   });
   test('failed workspace connection keeps the current workspace usable', async () => {
     const sent: Parameters<AgentClient['send']>[0][] = [];

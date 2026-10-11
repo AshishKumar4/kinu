@@ -309,6 +309,11 @@ export async function mountChat(
   });
   await waitFor('the chat surface to settle', () => options.settled ? options.settled(frame()) : composerFocused());
 
-  return { ...testRenderer, frame, waitFor, composerFocused, filterFocused };
+  const mockInput = {
+    ...testRenderer.mockInput,
+    typeText: (text: string) => flushSync(() => testRenderer.mockInput.typeText(text)),
+  };
+
+  return { ...testRenderer, mockInput, frame, waitFor, composerFocused, filterFocused };
 }
 
