@@ -503,10 +503,8 @@ export class SessionStream {
       return;
     }
 
-    const selected = this.history.context.selected();
-
-    if (selected === null) throw new KinuError('missing', 'stream has no selected context');
-    this.history.context.commit(selected, { cause: 'output', turnId: this.turnId, assertEpoch: () => Effect.sync(() => this.history.assertEpoch(this.turnId, this.epoch)), mutate: entries => {
+    // Inside the fenced write: the commit's own read is the selection this seal joins.
+    this.history.context.commit(null, { cause: 'output', turnId: this.turnId, assertEpoch: () => Effect.sync(() => this.history.assertEpoch(this.turnId, this.epoch)), mutate: entries => {
       this.history.messages.seal(container.id, content, envelope);
 
       if (entries.some(entry => entry.messageId === container.id)) return entries;

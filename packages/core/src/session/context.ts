@@ -11,6 +11,27 @@ export interface ContextEntry extends MessageReference { readonly entryId: strin
 
 interface MemberRow { entry_id: string; position: number; message_id: string }
 
+/** A context's head revision with the rows it opened and the highest live position: whether a kept head still serves. */
+interface HeadRow { revision: number | null; entry_id: string | null; position: number | null; message_id: string | null; last: number | null }
+
+interface HeadProbe { readonly selection: ContextSelection; readonly opened: string; readonly count: number }
+
+function probeOf(contextId: string, rows: readonly HeadRow[]): HeadProbe | null {
+  const first = rows[0];
+
+  if (first === undefined || first.revision === null) return null;
+  const opened: ContextEntry[] = [];
+
+  for (const row of rows) {
+    if (row.entry_id !== null && row.position !== null && row.message_id !== null) opened.push({ entryId: row.entry_id, position: row.position, messageId: row.message_id });
+  }
+
+  return { selection: { contextId, revision: first.revision }, opened: openedKey(opened), count: first.last === null ? 0 : first.last + 1 };
+}
+
+/** A revision this instance just wrote with nothing in it yet. */
+const emptyProbe = (selection: ContextSelection): HeadProbe => ({ selection, opened: '', count: 0 });
+
 /** The rows a revision opened, in one comparable form. */
 function openedKey(opened: readonly ContextEntry[]): string {
   return opened.map(entry => `${entry.entryId}@${String(entry.position)}=${entry.messageId}`).sort().join('\n');
@@ -40,11 +61,14 @@ interface KeptHead {
   readonly ids: Set<string>;
 }
 
-/** `recordUnchanged`: an authored edit is a statement even when it moves nothing. */
+/** `recordUnchanged`: an authored edit is a statement even when it moves nothing. `named`: the entries a caller named a
+ *  message for, each proven an actor-owned semantic message by the row that joins it. */
 interface RevisionOrigin {
   readonly author: string; readonly cause: string; readonly turnId: string | null; readonly proposalId: string | null;
-  readonly recordUnchanged: boolean;
+  readonly recordUnchanged: boolean; readonly named: ReadonlySet<string>;
 }
+
+const NONE: ReadonlySet<string> = new Set();
 
 export interface ContextCommitRequest {
   /** What the revision is recorded as: `input`, `output`, `edit`, `context_transform`. */
@@ -102,37 +126,56 @@ export class SessionContext {
     this.actor.assertCurrent();
     const actorId = this.actor.actorId;
     const { contextId, revision } = selection;
-    const head = this.head(contextId) === revision;
+    const head = this.headOf(contextId);
 
-    if (!head && this.sql`SELECT 1 AS found FROM context_revisions WHERE actor_id=${actorId} AND context_id=${contextId} AND revision=${revision}`.length === 0) {
+    if (head?.selection.revision === revision) return this.keptHead(head).entries;
+
+    if (this.sql`SELECT 1 AS found FROM context_revisions WHERE actor_id=${actorId} AND context_id=${contextId} AND revision=${revision}`.length === 0) {
       throw new KinuError('missing', 'context revision does not exist');
     }
 
-    if (!head) {
-      return Object.freeze(this.sql<MemberRow>`SELECT entry_id,position,message_id FROM context_memberships WHERE actor_id=${actorId} AND context_id=${contextId}
-        AND from_revision<=${revision} AND (to_revision IS NULL OR to_revision>${revision}) ORDER BY position`.map(entryOf));
-    }
-
-    return this.headEntries(selection);
+    return Object.freeze(this.sql<MemberRow>`SELECT entry_id,position,message_id FROM context_memberships WHERE actor_id=${actorId} AND context_id=${contextId}
+      AND from_revision<=${revision} AND (to_revision IS NULL OR to_revision>${revision}) ORDER BY position`.map(entryOf));
   }
 
   /** Selection and membership from one synchronous read boundary; the selection already names the head. */
   snapshot() {
-    const selection = this.selected() ?? this.initialize();
+    const head = this.headOf(null) ?? emptyProbe(this.initialize());
 
-    return { selection, entries: this.headEntries(selection) };
+    return { selection: head.selection, entries: this.keptHead(head).entries };
   }
 
-  private headEntries(selection: ContextSelection): readonly ContextEntry[] {
-    return this.keptHead(selection).entries;
+  /**
+   * The selected context's head, or `contextId`'s, in one read: its revision, the rows that revision opened, and its live
+   * count. Positions are dense, so those tell whether the head this instance kept still serves.
+   */
+  private headOf(contextId: string | null): HeadProbe | null {
+    const actorId = this.actor.actorId;
+
+    if (contextId !== null) {
+      return probeOf(contextId, this.sql<HeadRow>`SELECT h.revision,m.entry_id,m.position,m.message_id,
+          (SELECT MAX(position) FROM context_memberships WHERE actor_id=${actorId} AND context_id=${contextId} AND to_revision IS NULL) AS last
+        FROM (SELECT MAX(revision) AS revision FROM context_revisions WHERE actor_id=${actorId} AND context_id=${contextId}) h
+        LEFT JOIN context_memberships m ON m.actor_id=${actorId} AND m.context_id=${contextId} AND m.from_revision=h.revision`);
+    }
+
+    const rows = this.sql<HeadRow & { context_id: string }>`SELECT h.context_id,h.revision,m.entry_id,m.position,m.message_id,
+        (SELECT MAX(position) FROM context_memberships WHERE actor_id=${actorId} AND context_id=h.context_id AND to_revision IS NULL) AS last
+      FROM (SELECT s.context_id,(SELECT MAX(r.revision) FROM context_revisions r WHERE r.actor_id=s.actor_id AND r.context_id=s.context_id) AS revision
+        FROM actor_context_selection s WHERE s.actor_id=${actorId}) h
+      LEFT JOIN context_memberships m ON m.actor_id=${actorId} AND m.context_id=h.context_id AND m.from_revision=h.revision`;
+
+    const selected = rows[0]?.context_id;
+
+    return selected === undefined ? null : probeOf(selected, rows);
   }
 
-  private keptHead(selection: ContextSelection): KeptHead {
-    const { contextId, revision } = selection;
+  private keptHead(probe: HeadProbe): KeptHead {
+    const { contextId, revision } = probe.selection;
     const actorId = this.actor.actorId;
     const kept = this.heads.get(contextId);
 
-    if (kept?.revision === revision && this.holds(selection, kept)) return kept;
+    if (kept?.revision === revision && kept.entries.length === probe.count && kept.opened === probe.opened) return kept;
 
     const rows = this.sql<MemberRow & { from_revision: number }>`SELECT entry_id,position,message_id,from_revision FROM context_memberships
       WHERE actor_id=${actorId} AND context_id=${contextId} AND to_revision IS NULL ORDER BY position`;
@@ -143,26 +186,6 @@ export class SessionContext {
     this.heads.set(contextId, head);
 
     return head;
-  }
-
-  /** A head revision `kept` still names: the rows it opened, then its live count, both read by index. */
-  private holds(selection: ContextSelection, kept: KeptHead): boolean {
-    const actorId = this.actor.actorId;
-
-    const rows = this.sql<{ entry_id: string | null; position: number | null; message_id: string | null; last: number | null }>`SELECT m.entry_id,m.position,m.message_id,
-      (SELECT MAX(position) FROM context_memberships WHERE actor_id=${actorId} AND context_id=${selection.contextId} AND to_revision IS NULL) AS last
-      FROM (SELECT 1) LEFT JOIN context_memberships m
-        ON m.actor_id=${actorId} AND m.context_id=${selection.contextId} AND m.from_revision=${selection.revision}`;
-
-    const opened: ContextEntry[] = [];
-
-    for (const row of rows) {
-      if (row.entry_id !== null && row.position !== null && row.message_id !== null) opened.push({ entryId: row.entry_id, position: row.position, messageId: row.message_id });
-    }
-
-    const last = rows[0]?.last ?? null;
-
-    return (last === null ? 0 : last + 1) === kept.entries.length && openedKey(opened) === kept.opened;
   }
 
   conversationOf(members: readonly ContextEntry[]): ContextEntry[] {
@@ -177,10 +200,13 @@ export class SessionContext {
     return this.atomic(() => settleSync(Effect.gen({ self: this }, function* () {
       this.actor.assertCurrent();
       yield* assertEpoch();
-      const selected = this.selected() ?? (expected === null ? this.initialize() : null);
+      const probe = this.headOf(null) ?? (expected === null ? emptyProbe(this.initialize()) : null);
 
-      if (selected === null || (expected !== null && (selected.contextId !== expected.contextId || selected.revision !== expected.revision))) throw new KinuError('denied', 'context changed during preparation');
-      const head = this.keptHead(selected);
+      if (probe === null || (expected !== null && (probe.selection.contextId !== expected.contextId || probe.selection.revision !== expected.revision))) {
+        throw new KinuError('denied', 'context changed during preparation');
+      }
+
+      const head = this.keptHead(probe);
       const current = head.entries;
       const next = mutate(current);
       // A sealed step appends one entry to a head of hundreds: only what the mutation changed is checked.
@@ -188,6 +214,7 @@ export class SessionContext {
       const keptIds = kept === current.length ? head.ids : new Set(current.slice(0, kept).map(entry => entry.entryId));
       const ids = new Set<string>();
       const prior = new Map(current.slice(kept).map(entry => [entry.entryId, entry]));
+      const named = new Set<string>();
 
       for (let position = kept; position < next.length; position++) {
         const entry = next[position];
@@ -196,18 +223,13 @@ export class SessionContext {
           throw new KinuError('bad_input', 'context entries must have unique identities and dense positions');
         }
 
-        if (prior.get(entry.entryId)?.messageId !== entry.messageId) {
-          const message = this.sql<{ origin: string }>`SELECT origin FROM session_messages WHERE actor_id=${this.actor.actorId} AND message_id=${entry.messageId}`[0];
-
-          if (message === undefined || message.origin === 'render') throw new KinuError('denied', 'working context requires an actor-owned semantic message');
-        }
-
+        if (prior.get(entry.entryId)?.messageId !== entry.messageId) named.add(entry.entryId);
         ids.add(entry.entryId);
       }
 
       // An empty authored edit is still recorded: an explicitly empty history is a statement.
-      return this.revise(selected, head, next, { author: proposal?.author ?? this.actor.actorId, cause, turnId, proposalId: proposal?.id ?? null,
-        recordUnchanged: proposal !== undefined || cause === 'edit' });
+      return this.revise(probe.selection, head, next, { author: proposal?.author ?? this.actor.actorId, cause, turnId, proposalId: proposal?.id ?? null,
+        recordUnchanged: proposal !== undefined || cause === 'edit', named });
     })));
   }
 
@@ -219,8 +241,8 @@ export class SessionContext {
     return this.atomic(() => settleSync(Effect.gen({ self: this }, function* () {
       this.actor.assertCurrent();
       yield* request.assertEpoch();
-      const selected = this.selected() ?? this.initialize();
-      const head = this.keptHead(selected);
+      const probe = this.headOf(null) ?? emptyProbe(this.initialize());
+      const head = this.keptHead(probe);
       const current = head.entries;
       const kept = at.replaces ? this.conversationOf(current) : current;
       const anchor = kept.findIndex(entry => entry.entryId === at.before);
@@ -228,7 +250,7 @@ export class SessionContext {
       const added = { entryId: crypto.randomUUID(), messageId: reference.messageId, position: index };
       const next = [...kept.slice(0, index), added, ...kept.slice(index)].map((entry, position) => ({ ...entry, position }));
 
-      return this.revise(selected, head, next, { author: this.actor.actorId, cause: 'render', turnId: request.turnId, proposalId: null, recordUnchanged: false });
+      return this.revise(probe.selection, head, next, { author: this.actor.actorId, cause: 'render', turnId: request.turnId, proposalId: null, recordUnchanged: false, named: NONE });
     })));
   }
 
@@ -236,9 +258,8 @@ export class SessionContext {
   record(contextId: string, messages: readonly MessageReference[]): ContextSelection {
     return this.atomic(() => {
       this.actor.assertCurrent();
-      const head = this.head(contextId);
-      const expected = head === null ? this.fork(null, contextId) : { contextId, revision: head };
-      const kept = this.keptHead(expected);
+      const probe = this.headOf(contextId) ?? emptyProbe(this.fork(null, contextId));
+      const kept = this.keptHead(probe);
       const current = kept.entries;
 
       const next = messages.map((message, position) => {
@@ -247,7 +268,7 @@ export class SessionContext {
         return same?.messageId === message.messageId && same.entryId === String(position) ? same : { messageId: message.messageId, entryId: String(position), position };
       });
 
-      return this.revise(expected, kept, next, { author: this.actor.actorId, cause: 'render', turnId: null, proposalId: null, recordUnchanged: false });
+      return this.revise(probe.selection, kept, next, { author: this.actor.actorId, cause: 'render', turnId: null, proposalId: null, recordUnchanged: false, named: NONE });
     });
   }
 
@@ -276,8 +297,17 @@ export class SessionContext {
     }
 
     for (const entry of next.slice(kept)) if (!retained.has(entry.entryId)) {
-      void this.sql`INSERT INTO context_memberships(actor_id,context_id,entry_id,from_revision,position,message_id)
-        VALUES(${actorId},${expected.contextId},${entry.entryId},${revision},${entry.position},${entry.messageId})`;
+      if (!origin.named.has(entry.entryId)) {
+        void this.sql`INSERT INTO context_memberships(actor_id,context_id,entry_id,from_revision,position,message_id)
+          VALUES(${actorId},${expected.contextId},${entry.entryId},${revision},${entry.position},${entry.messageId})`;
+        continue;
+      }
+
+      const joined = this.sql<{ entry_id: string }>`INSERT INTO context_memberships(actor_id,context_id,entry_id,from_revision,position,message_id)
+        SELECT ${actorId},${expected.contextId},${entry.entryId},${revision},${entry.position},message_id FROM session_messages
+        WHERE actor_id=${actorId} AND message_id=${entry.messageId} AND origin!='render' RETURNING entry_id`;
+
+      if (joined.length === 0) throw new KinuError('denied', 'working context requires an actor-owned semantic message');
     }
 
     const ids = kept === current.length ? head.ids : new Set(current.slice(0, kept).map(entry => entry.entryId));
