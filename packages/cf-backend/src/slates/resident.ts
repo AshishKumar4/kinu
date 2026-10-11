@@ -1,7 +1,7 @@
 import { Cause, Effect } from 'effect';
 import * as v from 'valibot';
 import { FACET_IMAGE_DIR, facetImageDigest, facetImagePath } from '@nimbus-sh/fabric/process-fabric.js';
-import { vfsBuildInputs, type EsbuildService } from '@nimbus-sh/core/runtime/esbuild-service.js';
+import type { EsbuildReadFs, EsbuildService } from '@nimbus-sh/core/runtime/esbuild-service.js';
 import type { NamespaceFs } from '@nimbus-sh/core/runtime/process-files.js';
 import { CRED_KERNEL, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { ComposedFacetManager, LongRunningWorkerSpawnOptions } from '@nimbus-sh/worker/workspace-host';
@@ -10,7 +10,7 @@ import {
   SLATE_DRIVEN_MEMBERS, SLATE_METHOD_NAME_SOURCE, SLATE_PAGE_PREAMBLE, slateTitle, type SlateProcess, type SlateProject, slateAuthority,
 } from '@kinu.run/core';
 import { attempt, diagnostics, KinuError, renderCauseChain, settle } from '@kinu.run/core/obs';
-import { SLATE_CLIENT_MODULE, SLATE_SERVER_MODULE, type SlateBuildFailure, type SlateImage } from '@kinu.run/core/slates';
+import { SLATE_CLIENT_MODULE, SLATE_SERVER_MODULE, type SlateBuildFailure, type SlateBuildRead, type SlateImage } from '@kinu.run/core/slates';
 import { BROWSER_CLIENT_MODULE, BROWSER_PRELUDE, browserClientSource } from '../browser-prelude';
 
 interface SlateBootArtifacts {
@@ -463,8 +463,52 @@ interface SlateBuild {
   readonly root: string;
   readonly entries: string;
   readonly provision: (name: string, contents: string) => void;
-  /** Every workspace path a compile of this build read. */
-  readonly reads: Set<string>;
+  /** The workspace as the compiler reads it, noting each path it looks at. */
+  readonly fs: EsbuildReadFs;
+}
+
+/**
+ * `fs`, noting in `looked` every path a compile looks at: true where it asked whether the path exists and it did not.
+ * The resolver's own reads count as the bundled files' do, so a package.json whose `exports` moves is a change.
+ */
+function looking(fs: EsbuildReadFs, looked: Map<string, boolean>): EsbuildReadFs {
+  const note = (path: string, missing: boolean) => {
+    const absolute = path.startsWith('/') ? path : `/${path}`;
+
+    if (looked.get(absolute) !== false) looked.set(absolute, missing);
+  };
+
+  return {
+    exists: async (path) => {
+      const found = await fs.exists(path);
+
+      note(path, !found);
+
+      return found;
+    },
+    isDirectory: (path) => {
+      note(path, false);
+
+      return fs.isDirectory(path);
+    },
+    readFile: (path) => {
+      note(path, false);
+
+      return fs.readFile(path);
+    },
+    readFileString: (path) => {
+      note(path, false);
+
+      return fs.readFileString(path);
+    },
+  };
+}
+
+/** What a compile looked at outside the slate's own tree and the runtime this build generated. */
+function inputsOf(looked: ReadonlyMap<string, boolean>, root: string): SlateBuildRead[] {
+  return [...looked].filter(([path]) => path !== root && !path.startsWith(`${root}/`) && !path.startsWith(`${RUNTIME_DIR}/`))
+    .sort(([a], [b]) => (a < b ? -1 : 1))
+    .map(([path, missing]) => ({ path, missing }));
 }
 
 const COMPILED_JSX = JSON.stringify({ compilerOptions: { jsx: 'react-jsx', jsxImportSource: 'react' } });
@@ -484,11 +528,10 @@ function serverModule(build: SlateBuild, project: SlateProject): Effect.Effect<s
       // Not `alias`: the nimbus-vfs resolver sees a specifier before esbuild applies it.
       external: ['cloudflare:*', 'node:*', 'capnweb', 'kinu:slate', 'react', 'react-dom/client', 'react/jsx-runtime'],
       tsconfigRaw: COMPILED_JSX,
+      fs: build.fs,
     });
 
     if (server.errors.length !== 0) return yield* new KinuError('bad_input', server.errors.map((error) => error.text).join('\n'));
-
-    for (const path of vfsBuildInputs(server.metafile)) build.reads.add(path);
     const compiled = server.outputFiles.find((file) => file.path === '/application.js');
 
     if (compiled === undefined) return yield* new KinuError('io', 'Slate compiler did not produce the server module');
@@ -519,11 +562,10 @@ function browserSurface(build: SlateBuild, id: string, project: SlateProject, re
       bundle: true, format: 'esm', platform: 'browser', outfile: '/__kinu/client.js',
       external: ['react', 'react-dom/client', 'react/jsx-runtime', 'capnweb', 'kinu:slate'],
       tsconfigRaw: COMPILED_JSX,
+      fs: build.fs,
     });
 
     if (client.errors.length !== 0) return yield* new KinuError('bad_input', client.errors.map((error) => error.text).join('\n'));
-
-    for (const path of vfsBuildInputs(client.metafile)) build.reads.add(path);
 
     return { assets: client.outputFiles, shell: slateShell({ title: slateTitle(project, id), assets: client.outputFiles }) };
   });
@@ -552,6 +594,8 @@ export class ResidentSlateProcesses {
    * words, so its caller can keep serving the last image that did.
    */
   build(input: SlateBuildInput): Promise<SlateImage | SlateBuildFailure> {
+    const looked = new Map<string, boolean>();
+
     return settle(Effect.catchIf(Effect.gen({ self: this }, function* () {
       const session = yield* Effect.promise(async () => this.deps.session());
       const main = input.project.main;
@@ -591,7 +635,7 @@ export class ResidentSlateProcesses {
         }
       };
 
-      const build: SlateBuild = { bundler, root: input.root, entries: entriesDir, provision, reads: new Set() };
+      const build: SlateBuild = { bundler, root: input.root, entries: entriesDir, provision, fs: looking(session.filesystem.namespaceFs(input.cred), looked) };
       const application = yield* serverModule(build, input.project);
       const { assets, shell } = yield* browserSurface(build, input.owner, input.project, (entry) => input.read(entry) ?? '');
 
@@ -623,15 +667,14 @@ export class ResidentSlateProcesses {
       for (const [name, contents] of Object.entries(modules)) digests[name] = yield* held(contents);
       const client = assets.find((asset) => asset.path === '/__kinu/client.js');
 
-      // Its own tree is the source's digest already, and the generated entries and runtime are this build's own.
-      const reads = [...build.reads].filter((path) => !path.startsWith(`${input.root}/`) && !path.startsWith(`${RUNTIME_DIR}/`)).sort();
-
       return {
         modules: digests,
         ...(shell !== undefined && client !== undefined && { client: yield* held(client.contents), shell: yield* held(shell) }),
-        ...(reads.length > 0 && { reads }),
+        inputs: inputsOf(looked, input.root),
       };
-    }), (error): error is KinuError => error instanceof KinuError && error.code === 'bad_input', (error) => Effect.succeed({ failed: renderCauseChain(error) })));
+    }), (error): error is KinuError => error instanceof KinuError && error.code === 'bad_input', (error) => Effect.succeed({
+      failed: renderCauseChain(error), inputs: inputsOf(looked, input.root),
+    })));
   }
 
   /** Runs an image: the durable application on its port, or a caller's private process. */

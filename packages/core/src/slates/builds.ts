@@ -17,7 +17,7 @@ import { slateAuthority } from './authority';
  * A workspace path outside the slate's own tree a compile looked at: a file it read, or a path it found missing (a
  * module or package it probed for), which a later creation under it can change.
  */
-export interface SlateBuildInput {
+export interface SlateBuildRead {
   readonly path: string;
   readonly missing: boolean;
 }
@@ -27,17 +27,15 @@ export interface SlateImage {
   readonly modules: Readonly<Record<string, string>>;
   readonly client?: string;
   readonly shell?: string;
-  /** The workspace files outside the slate's own tree the compiler read: a change to one is a change to the build. */
-  readonly reads?: readonly string[];
-  /** What the compile looked at outside the slate's own tree. */
-  readonly inputs?: readonly SlateBuildInput[];
+  /** What the compile looked at outside the slate's own tree; kept beside the image, not in it. */
+  readonly inputs?: readonly SlateBuildRead[];
 }
 
 /** What a build that did not compile says: the compiler's own words, file and line among them. */
 export interface SlateBuildFailure {
   readonly failed: string;
   /** What the compile looked at before it failed, a missing import among them. */
-  readonly inputs?: readonly SlateBuildInput[];
+  readonly inputs?: readonly SlateBuildRead[];
 }
 
 export function initSlateBuildTable(execRaw: RawSqlExec): void {
@@ -50,15 +48,24 @@ export function initSlateBuildTable(execRaw: RawSqlExec): void {
     good_image TEXT,
     failed_key TEXT,
     failure    TEXT,
+    generation INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (slate, authority)
   )`);
+  // What each authority's builds of a slate looked at outside its tree: the last that built, and any failed since.
+  execRaw(`CREATE TABLE IF NOT EXISTS slate_build_inputs (
+    slate     TEXT NOT NULL,
+    authority TEXT NOT NULL,
+    path      TEXT NOT NULL,
+    missing   INTEGER NOT NULL,
+    PRIMARY KEY (slate, authority, path)
+  )`);
+  execRaw('CREATE INDEX IF NOT EXISTS slate_build_inputs_path ON slate_build_inputs (path)');
 }
 
 const SlateImageSchema = v.object({
   modules: v.record(v.string(), v.string()),
   client: v.optional(v.string()),
   shell: v.optional(v.string()),
-  reads: v.optional(v.array(v.string())),
 });
 
 const RowSchema = v.object({
@@ -69,6 +76,15 @@ const RowSchema = v.object({
 export interface FailingSlateBuild {
   readonly slate: string;
   readonly failure: string;
+}
+
+/** Every directory above `path`, nearest first. */
+function ancestors(path: string): string[] {
+  const above: string[] = [];
+
+  for (let at = path.lastIndexOf('/'); at > 0; at = path.lastIndexOf('/', at - 1)) above.push(path.slice(0, at));
+
+  return path.startsWith('/') && path !== '/' ? [...above, '/'] : above;
 }
 
 export class SlateBuilds {
@@ -83,24 +99,79 @@ export class SlateBuilds {
     return row === undefined ? null : v.parse(RowSchema, row);
   }
 
-  /** The source `key` compiled into `image` as `authority`: what the slate serves that authority from now on. */
+  /** The source `key` compiled into `image` as `authority`: what the slate serves that authority from now on, and all
+   *  its next build is stale by. */
   built(slate: string, authority: string, key: string, image: SlateImage): void {
+    const { inputs = [], ...kept } = image;
+
     this.db.exec(
       `INSERT INTO slate_images (slate, authority, good_key, good_image) VALUES (?, ?, ?, ?)
        ON CONFLICT (slate, authority) DO UPDATE SET good_key = excluded.good_key, good_image = excluded.good_image, failed_key = NULL, failure = NULL`,
-      slate, authority, key, JSON.stringify(image),
+      slate, authority, key, JSON.stringify(kept),
     );
+    this.db.exec(`DELETE FROM slate_build_inputs WHERE slate = ? AND authority = ?`, slate, authority);
+    this.looked(slate, authority, inputs);
     this.#failing.clear();
   }
 
-  /** The source `key` did not compile as `authority`. */
-  failed(slate: string, authority: string, key: string, failure: string): void {
+  /** The source `key` did not compile as `authority`: what it looked at joins what the image still served looked at. */
+  failed(slate: string, authority: string, key: string, failure: SlateBuildFailure): void {
     this.db.exec(
       `INSERT INTO slate_images (slate, authority, failed_key, failure) VALUES (?, ?, ?, ?)
        ON CONFLICT (slate, authority) DO UPDATE SET failed_key = excluded.failed_key, failure = excluded.failure`,
-      slate, authority, key, failure,
+      slate, authority, key, failure.failed,
     );
+    this.looked(slate, authority, failure.inputs ?? []);
     this.#failing.clear();
+  }
+
+  private looked(slate: string, authority: string, inputs: readonly SlateBuildRead[]): void {
+    for (const { path, missing } of inputs) {
+      this.db.exec(
+        `INSERT INTO slate_build_inputs (slate, authority, path, missing) VALUES (?, ?, ?, ?)
+         ON CONFLICT (slate, authority, path) DO UPDATE SET missing = excluded.missing`,
+        slate, authority, path, missing ? 1 : 0,
+      );
+    }
+  }
+
+  /** How many times what `authority`'s builds of `slate` looked at has moved: part of what keys its next build. */
+  generation(slate: string, authority: string): number {
+    const [row] = this.db.exec(`SELECT generation FROM slate_images WHERE slate = ? AND authority = ?`, slate, authority).toArray();
+
+    return row === undefined ? 0 : v.parse(v.object({ generation: v.number() }), row).generation;
+  }
+
+  /**
+   * The slates a build of which looked at one of `paths`: a file it read, or a missing path that one of `paths` now is
+   * or lies under. Each such build is stale, and whether it builds is not yet known.
+   */
+  moved(paths: readonly string[]): string[] {
+    const stale = new Map<string, { readonly slate: string; readonly authority: string }>();
+
+    for (const path of paths) {
+      const above = ancestors(path);
+      const marks = above.map(() => '?').join(', ');
+
+      const rows = this.db.exec(
+        `SELECT DISTINCT slate, authority FROM slate_build_inputs WHERE path = ? OR (missing = 1 AND path IN (${marks}))`,
+        path, ...above,
+      ).toArray();
+
+      for (const row of rows) {
+        const pair = v.parse(v.object({ slate: v.string(), authority: v.string() }), row);
+
+        stale.set(JSON.stringify(pair), pair);
+      }
+    }
+
+    for (const { slate, authority } of stale.values()) {
+      this.db.exec(`UPDATE slate_images SET generation = generation + 1, failed_key = NULL, failure = NULL WHERE slate = ? AND authority = ?`, slate, authority);
+    }
+
+    if (stale.size > 0) this.#failing.clear();
+
+    return [...new Set([...stale.values()].map((pair) => pair.slate))];
   }
 
   /** The last source that built as `authority`, and its image; null before any did. */
@@ -141,6 +212,7 @@ export class SlateBuilds {
 
   forget(slate: string): void {
     this.db.exec(`DELETE FROM slate_images WHERE slate = ?`, slate);
+    this.db.exec(`DELETE FROM slate_build_inputs WHERE slate = ?`, slate);
     this.#failing.clear();
   }
 
@@ -182,7 +254,7 @@ export function slateImage(input: {
       return { image: built, key, broken: null };
     }
 
-    if (known === null) builds.failed(slate, authority, key, built.failed);
+    if (known === null) builds.failed(slate, authority, key, built);
     const good = builds.good(slate, authority);
 
     if (good === null) return yield* new KinuError('bad_input', built.failed);

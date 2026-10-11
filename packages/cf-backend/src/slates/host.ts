@@ -690,7 +690,6 @@ export class SlateHost {
         this.state.forget(id);
         this.usage.forget(id);
         this.builds.forget(id);
-        this.processes.forget(id);
       });
       await this.deps.forgetPicture?.(id);
 

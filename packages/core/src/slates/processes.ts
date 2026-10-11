@@ -11,6 +11,7 @@ import { settle } from '../obs/effect';
 import { SLATES_ROOT } from '../vfs/workspace-path';
 import { ephemeralSlateAddress } from './ui-blocks';
 import { slateImage, type SlateBuildFailure, type SlateBuilds, type SlateImage } from './builds';
+import { slateAuthority } from './authority';
 import { slateCallerKey, type SlateCaller } from './caller';
 import type { DurableAppIdentity, DurableApps } from './durable-app';
 import type { EphemeralSlates } from './ephemeral';
@@ -76,13 +77,6 @@ export class SlateProcesses<Source extends RunnableSlateSource, Process extends 
   private readonly running = new Map<string, RunningSlate<Source, Process>>();
   private readonly starting = new Map<string, Promise<RunningSlate<Source, Process>>>();
   private readonly revisions = new Map<string, number>();
-  /** Each slate's builds since it was last told a file it imports from outside its tree moved: part of what keys them. */
-  private readonly importsMoved = new Map<string, number>();
-  /** The files outside its tree each slate's served build read, and the slates that read each. */
-  private readonly readsOf = new Map<string, readonly string[]>();
-  private readonly readersOf = new Map<string, Set<string>>();
-  /** Slates whose latest source does not build: what it failed to read is not known, so any outside change may fix it. */
-  private readonly unbuilt = new Set<string>();
 
   constructor(private readonly ports: SlateProcessPorts<Source, Process>) {}
 
@@ -129,41 +123,18 @@ export class SlateProcesses<Source extends RunnableSlateSource, Process extends 
     }
   }
 
-  /** The slate is gone: what its builds read is no longer anyone's. */
-  forget(id: string): void {
-    this.noteReads(id, [], false);
-    this.importsMoved.delete(id);
-  }
-
   /**
-   * Which slates `paths` changed: their own files, or files outside their trees their builds read. Each one's next boot
-   * builds again, and its latest failure is no longer known to stand.
+   * Which slates `paths` changed: their own files, or anything outside their trees a build of theirs looked at, another
+   * slate's files among them. Each one's next boot builds again, and its latest failure is no longer known to stand.
    */
   filesChanged(paths: readonly string[]): string[] {
-    const ids = new Set<string>();
-    const imported = new Set<string>();
-
-    for (const written of paths) {
-      const path = written.startsWith('/') ? written : `/${written}`;
-      const id = SLATE_FILE.exec(path)?.[1];
-
-      if (id !== undefined) {
-        ids.add(id);
-        continue;
-      }
-
-      for (const reader of [...this.readersOf.get(path) ?? [], ...this.unbuilt]) imported.add(reader);
-    }
-
-    // A file a build read moved: the next boot builds again, though the slate's own tree did not change.
-    for (const id of imported) {
-      this.importsMoved.set(id, (this.importsMoved.get(id) ?? 0) + 1);
-      ids.add(id);
-    }
+    const absolute = paths.map((path) => (path.startsWith('/') ? path : `/${path}`));
+    const own = absolute.flatMap((path) => SLATE_FILE.exec(path)?.[1] ?? []);
+    const ids = new Set([...own, ...this.ports.builds.moved(absolute)]);
 
     for (const id of ids) this.revisions.set(id, (this.revisions.get(id) ?? 0) + 1);
 
-    this.ports.builds.changed([...ids]);
+    this.ports.builds.changed([...new Set(own)]);
 
     return [...ids];
   }
@@ -173,7 +144,8 @@ export class SlateProcesses<Source extends RunnableSlateSource, Process extends 
       const revision = this.revisions.get(id) ?? 0;
       // The loader evaluates boot options only on a cache miss. This identity
       // must not reuse an image created before outbound mediation was supplied.
-      const digest = `${await this.ports.digest(caller.cred, id, source)}:${String(this.importsMoved.get(id) ?? 0)}`;
+      // What the build looked at outside its tree moves its generation, durably and per authority.
+      const digest = `${await this.ports.digest(caller.cred, id, source)}:${String(this.ports.builds.generation(id, slateAuthority(caller.cred)))}`;
       const key = `slate:mediated:${this.ports.workspace}:${held}:${digest}`;
       const running = this.running.get(held);
 
@@ -188,8 +160,6 @@ export class SlateProcesses<Source extends RunnableSlateSource, Process extends 
       const { image, key: built, broken } = await slateImage({
         builds: this.ports.builds, slate: id, key: digest, cred: caller.cred, build: () => this.ports.build(caller, id, source),
       });
-
-      this.noteReads(id, image.reads ?? [], broken !== null);
 
       if (running !== undefined && running.built === built && await running.process.isRunning()) {
         const kept = { ...running, revision, broken };
@@ -242,22 +212,5 @@ export class SlateProcesses<Source extends RunnableSlateSource, Process extends 
 
       await this.ports.apps.remove(retired);
     }
-  }
-
-  /** What the build `id` now serves read outside its tree, and whether its latest source failed to build. */
-  private noteReads(id: string, reads: readonly string[], unbuilt: boolean): void {
-    for (const path of this.readsOf.get(id) ?? []) this.readersOf.get(path)?.delete(id);
-
-    this.readsOf.set(id, reads);
-
-    for (const path of reads) {
-      const readers = this.readersOf.get(path) ?? new Set<string>();
-
-      readers.add(id);
-      this.readersOf.set(path, readers);
-    }
-
-    if (unbuilt) this.unbuilt.add(id);
-    else this.unbuilt.delete(id);
   }
 }
