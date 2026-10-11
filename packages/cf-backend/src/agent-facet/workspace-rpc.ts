@@ -106,61 +106,61 @@ class ConsumedMemory implements Memory {
 export function workspaceClient(workspace: AgentWorkspaceCalls): AgentWorkspace {
   let held: Promise<AgentWorkspacePort> | null = null;
 
-  const viaPort = <T>(call: (port: AgentWorkspacePort) => Promise<T>): Promise<T> => {
+  const viaPort = <T>(call: (port: AgentWorkspacePort) => Promise<T>): Effect.Effect<T> => Effect.suspend(() => {
     held ??= workspace.port();
     const opened = held;
 
-    return settle(workspaceRpcAnswer(opened).pipe(
+    return workspaceRpcAnswer(opened).pipe(
       Effect.flatMap((port) => workspaceRpcAnswer(call(port))),
       Effect.onError(() => Effect.sync(() => {
         if (held !== opened) return;
         held = null;
         disposeWorkspaceRpc(opened);
       })),
-    ));
-  };
+    );
+  });
 
   return {
     session: () => new WorkspaceSession(workspace.session()),
     stateSession: () => new WorkspaceSession(workspace.stateSession()),
     memory: () => new ConsumedMemory(workspace.memory()),
     program: (...args) => settle(workspaceRpcAnswer(workspace.program(...args))),
-    traceTurn: (...args) => viaPort((port) => port.traceTurn(...args)),
-    traceStream: (...args) => viaPort((port) => port.traceStream(...args)),
-    resume: (...args) => viaPort((port) => port.resume(...args)),
-    guard: (...args) => viaPort((port) => port.guard(...args)),
-    debit: (...args) => viaPort((port) => port.debit(...args)),
-    prepareTurn: (...args) => viaPort((port) => port.prepareTurn(...args)),
-    bindProfile: (...args) => viaPort((port) => port.bindProfile(...args)),
-    prepareChat: (...args) => viaPort((port) => port.prepareChat(...args)),
-    chatEvent: (...args) => viaPort((port) => port.chatEvent(...args)),
-    turnEnded: (...args) => viaPort((port) => port.turnEnded(...args)),
-    turnSettled: (...args) => viaPort((port) => port.turnSettled(...args)),
-    owedReport: (...args) => viaPort((port) => port.owedReport(...args)),
-    parentReport: (...args) => viaPort((port) => port.parentReport(...args)),
-    autoTitle: (...args) => viaPort((port) => port.autoTitle(...args)),
-    hireAdvisor: (...args) => viaPort((port) => port.hireAdvisor(...args)),
-    owes: (...args) => viaPort((port) => port.owes(...args)),
-    birthContext: (...args) => viaPort((port) => port.birthContext(...args)),
-    steerSkills: (...args) => viaPort((port) => port.steerSkills(...args)),
-    openWork: () => viaPort((port) => port.openWork()),
-    noteModelRequest: (...args) => viaPort((port) => port.noteModelRequest(...args)),
-    armCacheWarm: (...args) => viaPort((port) => port.armCacheWarm(...args)),
-    advise: (...args) => viaPort((port) => port.advise(...args)),
-    runEnded: (...args) => viaPort((port) => port.runEnded(...args)),
-    enqueueTurn: (...args) => viaPort((port) => port.enqueueTurn(...args)),
-    executeTool: (...args) => viaPort((port) => port.executeTool(...args)),
-    observe: (...args) => viaPort((port) => port.observe(...args)),
-    paceStep: (...args) => viaPort((port) => port.paceStep(...args)),
-    answerMetadata: (...args) => viaPort((port) => port.answerMetadata(...args)),
-    getAuth: (...args) => viaPort((port) => port.getAuth(...args)),
-    listCredentials: () => viaPort((port) => port.listCredentials()),
-    relayDevice: (...args) => viaPort((port) => port.relayDevice(...args)),
-    relayModelCall: (...args) => viaPort((port) => port.relayModelCall(...args)),
-    cancelModelRelay: (...args) => viaPort((port) => port.cancelModelRelay(...args)),
-    sayToParent: (...args) => viaPort((port) => port.sayToParent(...args)),
-    logActivity: (...args) => viaPort((port) => port.logActivity(...args)),
-    reportModelCall: (...args) => viaPort((port) => port.reportModelCall(...args)),
-    reportModelOperation: (...args) => viaPort((port) => port.reportModelOperation(...args)),
+    traceTurn: (...args) => settle(viaPort((port) => port.traceTurn(...args))),
+    traceStream: (...args) => settle(viaPort((port) => port.traceStream(...args))),
+    resume: (...args) => settle(viaPort((port) => port.resume(...args))),
+    guard: (...args) => settle(viaPort((port) => port.guard(...args))),
+    debit: (...args) => settle(viaPort((port) => port.debit(...args))),
+    prepareTurn: (...args) => settle(viaPort((port) => port.prepareTurn(...args))),
+    bindProfile: (...args) => settle(viaPort((port) => port.bindProfile(...args))),
+    prepareChat: (...args) => settle(viaPort((port) => port.prepareChat(...args))),
+    chatEvent: (...args) => settle(viaPort((port) => port.chatEvent(...args))),
+    turnEnded: (...args) => settle(viaPort((port) => port.turnEnded(...args))),
+    turnSettled: (...args) => settle(viaPort((port) => port.turnSettled(...args))),
+    owedReport: (...args) => settle(viaPort((port) => port.owedReport(...args))),
+    parentReport: (...args) => settle(viaPort((port) => port.parentReport(...args))),
+    autoTitle: (...args) => settle(viaPort((port) => port.autoTitle(...args))),
+    hireAdvisor: (...args) => settle(viaPort((port) => port.hireAdvisor(...args))),
+    owes: (...args) => settle(viaPort((port) => port.owes(...args))),
+    birthContext: (...args) => settle(viaPort((port) => port.birthContext(...args))),
+    steerSkills: (...args) => settle(viaPort((port) => port.steerSkills(...args))),
+    openWork: () => settle(viaPort((port) => port.openWork())),
+    noteModelRequest: (...args) => settle(viaPort((port) => port.noteModelRequest(...args))),
+    armCacheWarm: (...args) => settle(viaPort((port) => port.armCacheWarm(...args))),
+    advise: (...args) => settle(viaPort((port) => port.advise(...args))),
+    runEnded: (...args) => settle(viaPort((port) => port.runEnded(...args))),
+    enqueueTurn: (...args) => settle(viaPort((port) => port.enqueueTurn(...args))),
+    executeTool: (...args) => settle(viaPort((port) => port.executeTool(...args))),
+    observe: (...args) => settle(viaPort((port) => port.observe(...args))),
+    paceStep: (...args) => settle(viaPort((port) => port.paceStep(...args))),
+    answerMetadata: (...args) => settle(viaPort((port) => port.answerMetadata(...args))),
+    getAuth: (...args) => settle(viaPort((port) => port.getAuth(...args))),
+    listCredentials: () => settle(viaPort((port) => port.listCredentials())),
+    relayDevice: (...args) => settle(viaPort((port) => port.relayDevice(...args))),
+    relayModelCall: (...args) => settle(viaPort((port) => port.relayModelCall(...args))),
+    cancelModelRelay: (...args) => settle(viaPort((port) => port.cancelModelRelay(...args))),
+    sayToParent: (...args) => settle(viaPort((port) => port.sayToParent(...args))),
+    logActivity: (...args) => settle(viaPort((port) => port.logActivity(...args))),
+    reportModelCall: (...args) => settle(viaPort((port) => port.reportModelCall(...args))),
+    reportModelOperation: (...args) => settle(viaPort((port) => port.reportModelOperation(...args))),
   };
 }

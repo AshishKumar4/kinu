@@ -1719,12 +1719,8 @@ export abstract class ActorAgent extends Agent<Env> {
   private readonly unhostedLedgers: TurnLedgers = new TurnAccumulator();
 
   /** The workspace agent's orchestrator, once hosted: what reads it synchronously hosts the agent first. */
-  protected workspaceAgentOrchestrator(): AgentOrchestrator {
-    const hosted = this.workspaceAgentHosted();
-
-    if (hosted === null) return settleSync(Effect.fail(new KinuError('unavailable', 'The workspace agent is not hosted yet; its effect runs once it is.')));
-
-    return hosted.session.orchestrator;
+  protected workspaceAgentOrchestrator(): AgentOrchestrator | null {
+    return this.workspaceAgentHosted()?.session.orchestrator ?? null;
   }
 
   /** Each slate `agent.ask` reply, fed by main's own turns as they reach this object's room. */

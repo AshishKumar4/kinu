@@ -1,10 +1,10 @@
 [
-  "asymmetry ActorSessionOptions.gateOpen#absent-in-cf",
   "asymmetry ChatSessionPorts.answerMetadata#absent-in-cli",
   "asymmetry ChatSessionPorts.armTurnWake#absent-in-cli",
   "asymmetry ChatSessionPorts.birthContext#absent-in-cli",
   "asymmetry ChatSessionPorts.cacheWarming#absent-in-cli",
   "asymmetry ChatSessionPorts.quiet#absent-in-cli",
+  "asymmetry EffectClaimDeps.elsewhere#absent-in-cli",
   "asymmetry FileDeps.slateBuild#absent-in-cli",
   "asymmetry MemoryDeps.account#absent-in-cli",
   "asymmetry SleepTimeLaneDeps.account#absent-in-cli",

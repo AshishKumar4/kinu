@@ -56,9 +56,14 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   }
 
   private open<T>(answer: () => T | Promise<T>, turnId?: string): Promise<T> {
-    if (turnId !== undefined && !this.fenced(turnId)) return Promise.reject(new KinuError('cancelled', `stale_epoch: turn ${turnId} is no longer this agent's current turn.`));
     const refused = Promise.withResolvers<never>();
     const refuse = (): void => { refused.reject(this.closed.reason); };
+
+    if (turnId !== undefined && !this.fenced(turnId)) {
+      refused.reject(new KinuError('cancelled', `stale_epoch: turn ${turnId} is no longer this agent's current turn.`));
+
+      return refused.promise;
+    }
 
     if (this.closed.aborted) refuse();
     else this.closed.addEventListener('abort', refuse, { once: true });

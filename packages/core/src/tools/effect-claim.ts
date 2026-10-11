@@ -96,7 +96,8 @@ export interface EffectClaimDeps {
   readonly turnId: () => string;
   readonly durable: (callId: string, signal?: AbortSignal) => Promise<void>;
   /** Tools whose effect commits in another store, whose own receipt answers a re-ask: a started receipt here re-asks
-   *  it under the same call, rather than refusing. */
+   *  it under the same call, rather than refusing. Cloud only: an agent's isolate runs its workspace's tools there; the
+   *  CLI runs every tool in the process that keeps its receipt. */
   readonly elsewhere?: (name: string) => boolean;
 }
 

@@ -4,7 +4,7 @@ import { DurableObject, RpcTarget } from 'cloudflare:workers';
 import { Nimbus, type NimbusSandbox, type NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
 import type { UIMessage } from 'ai';
 import { Cause, Effect, Exit } from 'effect';
-import { attempt, attemptInItsWords, diagnostics, flight, KinuError, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
+import { attempt, attemptInItsWords, diagnostics, flight, hold, KinuError, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
 import {
   encodeModelMessageValues, jsonResultOrVoid, readAgentArchivePage,
   type InspectedWork,
@@ -364,11 +364,11 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
       diagnostics.failure('agent.run_report_failed', failure, { runId: id });
     })), Effect.ensuring(Effect.sync(() => { this.runsInFlight.delete(id); })));
 
-    this.runsInFlight.set(id, settle(run));
+    this.runsInFlight.set(id, hold(run));
   }
 
   /** The runs this isolate runs now, by id: a wake starts none twice, and its idle joins them. */
-  private readonly runsInFlight = new Map<string, Promise<void>>();
+  private readonly runsInFlight = new Map<string, Promise<unknown>>();
 
   async modelSettingsChanged(snapshot: AgentSnapshot): Promise<void> {
     return await settle(this.withChat(snapshot, (chat) => chat.modelSettingsChanged()));

@@ -197,8 +197,9 @@ function taskReminderTerminalEffect(queue: () => OwedTurnQueue): TerminalEffect 
 
 /** The recording, the lessons and the drain: owed where the actor's evolution tables and event log are. */
 export function turnRecordingEffects(deps: {
-  /** Read when an effect runs: the recording agent's session may be bound after this table is built. */
-  readonly orchestrator: () => Pick<AgentOrchestrator, 'recordTurn' | 'recordedTurn' | 'drainPendingEvents'>;
+  /** Read when an effect runs: the recording agent's session may be bound after this table is built; null until it is,
+   *  and the effect stays owed. */
+  readonly orchestrator: () => Pick<AgentOrchestrator, 'recordTurn' | 'recordedTurn' | 'drainPendingEvents'> | null;
   readonly engine: Pick<EvolutionEngine, 'learnFromTurn'>;
 }): TerminalEffectTable {
   return {
@@ -211,7 +212,7 @@ export function turnRecordingEffects(deps: {
 /** The bodies every chat backend owes alike: the loop's follow-up turns, the recording, the lessons and the drain. */
 export function chatTerminalEffects(deps: {
   readonly chat: () => OwedTurnQueue;
-  readonly orchestrator: () => Pick<AgentOrchestrator, 'recordTurn' | 'recordedTurn' | 'drainPendingEvents'>;
+  readonly orchestrator: () => Pick<AgentOrchestrator, 'recordTurn' | 'recordedTurn' | 'drainPendingEvents'> | null;
   readonly engine: Pick<EvolutionEngine, 'learnFromTurn'>;
 }): TerminalEffectTable {
   return {
@@ -335,8 +336,11 @@ export function branchesTerminalEffect(deps: {
 }
 
 /** The window append is idempotent on the message's identity. Continuity, mode and the evolution gate come off the row. A plan turn records nothing. */
+/** What an effect over an agent's session says while the session is not bound yet. */
+const UNBOUND_SESSION = { status: 'owed', detail: "the recording agent's session is not bound yet" } as const;
+
 function turnRecordTerminalEffect(
-  orchestrator: () => Pick<AgentOrchestrator, 'recordTurn' | 'recordedTurn'>,
+  orchestrator: () => Pick<AgentOrchestrator, 'recordTurn' | 'recordedTurn'> | null,
 ): TerminalEffect {
   return terminalEffect({
     input: v.object({
@@ -353,6 +357,7 @@ function turnRecordTerminalEffect(
       const recordedId = keyedScope(messageId);
       const orch = orchestrator();
 
+      if (orch === null) return UNBOUND_SESSION;
       orch.recordTurn(
         orch.recordedTurn(status, v.parse(CompletedTurnSchema, turn)),
         continuity,
@@ -382,12 +387,15 @@ function turnLessonsTerminalEffect(engine: Pick<EvolutionEngine, 'learnFromTurn'
 
 /** Idempotent (PENDING, unbound rows only). Rethrows: `completed` over a half-bound batch strands the assignment. */
 function eventDrainTerminalEffect(
-  orchestrator: () => Pick<AgentOrchestrator, 'drainPendingEvents'>,
+  orchestrator: () => Pick<AgentOrchestrator, 'drainPendingEvents'> | null,
 ): TerminalEffect {
   return terminalEffect({
     input: v.object({}),
     run: async () => {
-      await orchestrator().drainPendingEvents({ rethrow: true });
+      const orch = orchestrator();
+
+      if (orch === null) return UNBOUND_SESSION;
+      await orch.drainPendingEvents({ rethrow: true });
 
       return { status: 'completed' };
     },
