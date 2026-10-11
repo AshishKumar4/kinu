@@ -248,13 +248,14 @@ describe('ChatApp terminal interaction', () => {
     screen.mockInput.pressEscape();
     await screen.waitFor('the model panel to close', screen.composerFocused);
     pending.resolve({ models: [], failures: [] });
-
-    for (let index = 0; index < 6; index += 1) await screen.renderOnce();
+    await pending.promise;
+    await screen.mockInput.typeText(' and still typing');
+    await screen.renderOnce();
     expect(screen.composerFocused()).toBe(true);
     const composer = screen.renderer.currentFocusedRenderable;
 
     if (!(composer instanceof TextareaRenderable)) throw new Error('composer not focused');
-    expect(composer.plainText).toBe('draft under the model panel');
+    expect(composer.plainText).toBe('draft under the model panel and still typing');
   });
 
   test('failed model selection closes once and restores an actionable error', async () => {
