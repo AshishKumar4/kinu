@@ -6012,7 +6012,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // Main owns its header; its standing report is the projection, never the parent's actor stores.
     const header = (await this.mainStanding()).latestRun;
     // A settled turn's leftovers still closing are its work, not a durable leftover.
-    const working = this._inFlight || this.agentTurns.inFlight(main) || hostedBusy || this.terminal.closing;
+    const working = this._inFlight || this.deliveries.owes(main) || this.agentTurns.inFlight(main) || hostedBusy || this.terminal.closing;
 
     return buildWorkspaceOverview({
       ...inputs,
