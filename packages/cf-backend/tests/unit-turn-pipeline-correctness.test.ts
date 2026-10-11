@@ -80,6 +80,23 @@ function reboundJudgeRoute(profile: ResolvedTurnProfile): ResolvedTurnProfile {
 }
 
 describe('turn-pipeline correctness wiring', () => {
+  test('claimed toolsets keep their effects separate from other rollouts and the shared chat memo', async () => {
+    const { agent, db } = orchestratorHarness();
+    const shared = agent.harnessRawTools('build');
+    const first = agent.harnessRawTools('build', 'rollout-a');
+    const second = agent.harnessRawTools('build', 'rollout-b');
+    const args = { op: 'add', titles: ['scope-isolated task'] };
+    const options = { toolCallId: 'same-call', messages: [], context: undefined };
+    const add = (tools: ToolSet) => toolExecute<typeof args, unknown>(tools.tasks)(args, options);
+
+    const answer = await add(first);
+    expect(await add(first)).toEqual(answer);
+    await add(second);
+    await add(agent.harnessRawTools('build'));
+    expect(agent.harnessRawTools('build')).toBe(shared);
+    expect(db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM agent_tasks WHERE title = 'scope-isolated task'").get()?.count).toBe(3);
+  });
+
   test('a detached hosted tool retains profile A after release and admission of profile B', async () => {
     const { agent } = orchestratorHarness();
     const started = Promise.withResolvers<void>();

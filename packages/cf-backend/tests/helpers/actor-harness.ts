@@ -578,6 +578,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    *  for another mode (a role imposing Plan) is the actor's own. */
   private _suppliedTools: ToolSet | null = null;
   harnessSupplyTools(tools: ToolSet | undefined): void { this._suppliedTools = tools ?? null; }
+  harnessRawTools(mode: WorkMode, claimScope?: string): ToolSet { return this.getRawToolsForWorkMode(mode, claimScope); }
   protected override actorToolsets(mode: WorkMode, claimScope?: string): ActorToolsets {
     // The requested mode is the message's, never the operation a role bound over it.
     if (this._suppliedTools !== null && mode === workModeForTurnMetadata(this.turnUserMetadata())) {

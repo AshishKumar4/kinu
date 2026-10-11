@@ -4101,8 +4101,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     if (result.ok) {
       // Crafted-tool retirement must drop the cached tool surface.
-      this._cachedTools = null;
-      this._cachedToolsKey = '';
+      this._tools.invalidate();
     }
 
     return result;
@@ -4262,7 +4261,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   async setShellApprovalMode(mode: 'strict' | 'allow_all' | 'deny_all') {
     return setShellApprovalMode({
       config: this.config,
-      onChanged: () => { this._cachedTools = null; this._cachedToolsKey = ''; },
+      onChanged: () => this._tools.invalidate(),
     }, mode);
   }
 
@@ -4353,8 +4352,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         if (names.length > 0) {
           updateCraftScores(this.boundSql, names, ratingQuality(thumbsRating(feedback).score));
           rescored = names.length;
-          this._cachedTools = null;
-          this._cachedToolsKey = '';
+          this._tools.invalidate();
         }
       }
 
@@ -6355,8 +6353,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // An approval changes the next prompt and its `allowed_tools`, so the cached tool surface is dropped.
     if (result.ok) {
-      this._cachedTools = null;
-      this._cachedToolsKey = '';
+      this._tools.invalidate();
     }
 
     return result;
