@@ -109,26 +109,34 @@ export function carryTls(program: CarriedSocket, deps: TlsCarrierDeps): Promise<
       return;
     }
 
-    const server = deps.connect({ hostname: request.host, port: deps.port });
-    // A server named other than its host is checked by that name (workerd's own node:tls does the same).
-    const secure = request.servername === request.host ? server.startTls() : server.startTls({ expectedServerHostname: request.servername });
+    // Connecting, starting TLS and its handshake each fail as the program's answer: a host that does not resolve, a
+    // servername workerd will not check, a certificate the server fails.
+    const made = yield* Effect.matchCause(Effect.promise(async () => {
+      const server = deps.connect({ hostname: request.host, port: deps.port });
+      // A server named other than its host is checked by that name (workerd's own node:tls does the same).
+      const secure = request.servername === request.host ? server.startTls() : server.startTls({ expectedServerHostname: request.servername });
 
-    const failed = yield* Effect.matchCause(Effect.promise(() => secure.opened), {
-      onSuccess: () => null,
-      onFailure: (cause) => Cause.squash(cause),
+      await secure.opened;
+
+      return secure;
+    }), {
+      onSuccess: (secure) => ({ secure }),
+      onFailure: (cause) => ({ failed: Cause.squash(cause) }),
     });
 
-    if (failed !== null) {
-      diagnostics.failure('egress.tls_failed', toKinuError({ doing: `making the TLS session with ${request.servername}`, cause: failed, otherwise: 'io' }), {
+    if ('failed' in made) {
+      diagnostics.failure('egress.tls_failed', toKinuError({ doing: `making the TLS session with ${request.servername}`, cause: made.failed, otherwise: 'io' }), {
         host: request.host, seam: 'workspace-connect',
       });
       yield* Effect.promise(async () => {
-        await writer.write(refusal(`the TLS session with ${request.servername} could not be made: ${renderThrownChain({ cause: failed })}`));
-        await Promise.allSettled([program.close(), secure.close()]);
+        await writer.write(refusal(`the TLS session with ${request.servername} could not be made: ${renderThrownChain({ cause: made.failed })}`));
+        await program.close();
       });
 
       return;
     }
+
+    const { secure } = made;
 
     yield* Effect.promise(async () => {
       await writer.write(Uint8Array.of(1));
