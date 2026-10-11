@@ -237,8 +237,18 @@ const turnStatements = new Map<number, { readonly workspace: OperationCost['tabl
  * 792 once the workspace agent is hosted and built like every agent (no second session over its stores), its signals
  * are deliveries and its tools cross through a held port, at both sizes on 9b596e8d5-c5bab5d48: the workspace's 397, main's
  * isolate's 395. Below the 801 the single-object turn ran in before the isolates.
+ * 704 on 3425a1e7a (the workspace's 397, main's 307: a run's agent asks no chat, deliveries land mid-turn), then by the
+ * statement census's groups, each measured at both sizes with the census instrument: 585 once each isolate's actor
+ * directory holds the rows it read until its own writes (C1, -119: open, describe and validate read one row dozens of
+ * times); 541 once an agent's snapshot rows are held on both sides until a write to their tables (C2, -44); 503 once a
+ * context commit fences in its writes, the sleep window reads its tombstones in one statement, one read takes the
+ * compaction trigger and an evolution pass reads each input once (C5, C12, C14, C9, -38); 465 once each Durable Object
+ * holds one config catalog that its config writers move (C3, -38). The workspace's 245, main's isolate's 220. What
+ * remains, by name, is the census's REQUIRED rows: the turn's claim, fence, stream parts, request and run events it
+ * writes, its four reports and their acceptance, and the owed-work reads each wake decision makes over rows other
+ * writers move (agent_log, terminal_effects, head_journal, roster), which no one statement can stand for.
  */
-const TURN_STATEMENTS = 792;
+const TURN_STATEMENTS = 465;
 
 /** Every count the subject's declarations govern, one value per size. */
 function countersOf(subject: Subject, measured: readonly OperationCost[]): GrowthCounter[] {
