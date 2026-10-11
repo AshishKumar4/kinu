@@ -60,8 +60,7 @@ export interface SandboxHandle {
    * `timeout` absent means no work deadline: native container exec adds none.
    * `signal` cancels the remote work: settle only once the process is gone; a transport with no kill must not accept one.
    */
-  exec(command: string, opts?: SandboxExecOptions):
-    Promise<{ output?: string; stdout?: string; stderr?: string; exitCode?: number }>;
+  exec(command: string, opts?: SandboxExecOptions): Promise<{ stdout: string; stderr: string; exitCode: number }>;
   /** `base64` is the only exact read; without it the content is UTF-8 text. */
   readFile(path: string, opts?: { encoding?: 'utf-8' | 'base64' }):
     Promise<{ content?: string; encoding?: string; isBinary?: boolean; exitCode?: number }>;
@@ -249,8 +248,8 @@ async function withSandboxRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<
   throw lastErr;
 }
 
-function normalize(res: { output?: string; stdout?: string; stderr?: string; exitCode?: number; cwd?: string }): CommandResult {
-  return commandResult({ ...res, stdout: res.stdout ?? res.output ?? '' });
+function normalize(res: { stdout: string; stderr: string; exitCode: number; cwd?: string }): CommandResult {
+  return commandResult(res);
 }
 
 /** Worded distinctly from the adapter's own cancellation, which names the process it killed. */
@@ -361,7 +360,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
               return handle.exec(call.command, opts);
             });
 
-            const settled = call.settle({ ...res, stdout: res.stdout ?? res.output ?? '' });
+            const settled = call.settle(res);
 
             return reportsCwd({ context: args[1] }) ? commandResultAt(settled) : normalize(settled);
           }, (message) => refusalOf(new KinuError('unavailable', message)));
@@ -436,7 +435,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
 
         try {
           const res = await withSandboxRetry(() => touch(() => handle.exec(`test -e ${shellQuote(path)} && echo true || echo false`)));
-          const out = (res.stdout ?? res.output ?? '').trim();
+          const out = res.stdout.trim();
 
           return out.includes('true') ? 'true' : 'false';
         } catch (err) {
@@ -782,10 +781,10 @@ export function sandboxFiles(
       ));
 
       if ((r.exitCode ?? 0) !== 0) {
-        throw syscallError('EIO', 'read', path, { detail: (r.stderr ?? r.output ?? '').trim() || undefined });
+        throw syscallError('EIO', 'read', path, { detail: r.stderr.trim() || undefined });
       }
 
-      return base64ToBytes(r.stdout ?? r.output ?? '');
+      return base64ToBytes(r.stdout);
     },
 
     async writeFile(path, data) {
@@ -810,7 +809,7 @@ export function sandboxFiles(
       const r = await through(() => handle.exec(`mkdir ${opts?.recursive ? '-p ' : ''}-- ${shellQuote(path)}`));
 
       if ((r.exitCode ?? 0) !== 0) {
-        throw syscallError('EIO', 'mkdir', path, { detail: (r.stderr ?? r.output ?? '').trim() || undefined });
+        throw syscallError('EIO', 'mkdir', path, { detail: r.stderr.trim() || undefined });
       }
     },
 

@@ -119,7 +119,7 @@ describe('remote executor exec abort', () => {
 
   test('sandbox exec hands the signal to the container and reports the kill it performed', async () => {
     const { handle, seen } = sandboxHandleThatHonours((_command, opts) => {
-      const { promise, reject } = Promise.withResolvers<{ exitCode?: number }>();
+      const { promise, reject } = Promise.withResolvers<{ stdout: string; stderr: string; exitCode: number }>();
       opts?.signal?.addEventListener('abort', () => {
         reject(new DOMException(
           'sandbox exec cancelled: container process proc-1 was killed',
@@ -144,7 +144,7 @@ describe('remote executor exec abort', () => {
   });
 
   test('a pre-aborted sandbox signal starts no container process at all', async () => {
-    const { handle, seen } = sandboxHandleThatHonours(async () => ({ exitCode: 0 }));
+    const { handle, seen } = sandboxHandleThatHonours(async () => ({ stdout: '', stderr: '', exitCode: 0 }));
     const provider = createSandboxExecutor(handle, { previewHostSuffix: 'preview.example.com' });
     const controller = new AbortController();
     controller.abort();
