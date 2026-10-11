@@ -188,14 +188,16 @@ export class UserWorkspaces {
     await this.host.shareCards.reconcile(name, parsed.shares);
   }
 
-  /** Uncapped enumeration of the active roster for server-side fans, where a page would drop targets. */
-  async listActiveWorkspaces(caller: UserCaller): Promise<Array<Pick<WorkspaceEntry, 'name' | 'displayName' | 'createdAt'>>> {
+  /** Uncapped server fanout. A settings fan tells every possibly waiting workspace, never a known quiet one. */
+  async listActiveWorkspaces(caller: UserCaller, filter?: { readonly awaitsSettings?: boolean }): Promise<Array<Pick<WorkspaceEntry, 'name' | 'displayName' | 'createdAt'>>> {
     await this.host.requireTier(caller, 'workspaces.read');
 
     return this.host.sqlx<{ name: string; display_name: string; created_at: number }>(
-      `SELECT name, display_name, created_at FROM user_workspaces
-       WHERE delete_pending = 0 AND create_pending = 0
-       ORDER BY last_visited DESC`,
+      `SELECT w.name, w.display_name, w.created_at FROM user_workspaces w
+       LEFT JOIN workspace_overviews o ON o.name = w.name
+       WHERE w.delete_pending = 0 AND w.create_pending = 0
+         ${filter?.awaitsSettings ? "AND (o.activity = 'working' OR json_extract(o.overview, '$.awaitsSettings') IS NOT 0)" : ''}
+       ORDER BY w.last_visited DESC`,
     ).map((r) => ({ name: r.name, displayName: r.display_name, createdAt: r.created_at }));
   }
 

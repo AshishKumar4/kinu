@@ -124,7 +124,13 @@ describe('browser profile catalog route', () => {
       ...env,
       OrchestratorAgent: {
         idFromName: name => name,
-        get: name => workspaceObject({ async onModelSettingsChanged() { awakened.push(name); } }),
+        get: name => workspaceObject({
+          async onModelSettingsChanged() {
+            awakened.push(name);
+
+            return { ok: true } as const;
+          },
+        }),
       },
     };
 

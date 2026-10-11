@@ -25,6 +25,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **A model-settings edit leaves unrelated idle workspaces asleep.** A workspace publishes whether a parked refusal or an agent's owed work waits on settings, and updates that obligation on real held-work transitions. Account credential and profile edits notify only those workspaces, plus working or unreported ones for safety. Known quiet workspaces pick up the new settings on their next use instead of waking for another workspace's work.
 - **Memory changes survive a restart before semantic delivery.** The lexical index, file stamp and pending vector revisions commit together. Semantic results must still match the canonical chunk and hash, so a deleted or replaced note cannot return stale text during an outage.
 - **Renewed provider logins own their refusals.** Retry pacing and fallback selection use one deadline record and the credential that answered the actual send, rather than a prospective lookup that may already have changed.
 - **Rate waits hold every model on the same billed route.** Selection remains model-specific under the same refusal owner, overlapping refusals extend their deadlines, and failed canonical memory reads report unavailability instead of an empty corpus. Semantic metadata must match the current projection shape.

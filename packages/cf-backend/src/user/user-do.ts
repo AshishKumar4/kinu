@@ -207,8 +207,8 @@ export class UserDO extends Agent<Env> {
     return this.workspaces.putWorkspaceOverview(caller, name, overview);
   }
 
-  listActiveWorkspaces(caller: UserCaller): Promise<Array<Pick<WorkspaceEntry, 'name' | 'displayName' | 'createdAt'>>> {
-    return this.workspaces.listActiveWorkspaces(caller);
+  listActiveWorkspaces(caller: UserCaller, filter?: { readonly awaitsSettings?: boolean }): Promise<Array<Pick<WorkspaceEntry, 'name' | 'displayName' | 'createdAt'>>> {
+    return this.workspaces.listActiveWorkspaces(caller, filter);
   }
 
   registerWorkspace(caller: UserCaller, name: string, displayName?: string, from?: WorkspaceRegistrationSource): Promise<WorkspaceRegistration> {

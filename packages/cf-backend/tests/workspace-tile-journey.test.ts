@@ -16,8 +16,8 @@ import type { Database } from 'bun:sqlite';
 import { TERMINAL_RETRY_JOB } from '../src/wake-jobs';
 import { bindAgentSql } from '../src/runtime';
 import {
-  actorOver, armedWakes, chatSessionTurns, fireSoonestWake, GATEWAY_CATALOG, nextTurn, orchestratorHarness, hostedSubordinateHarness, seedMission,
-  until, wakeForDelegatedTask, workspaceFiles, type HarnessOrchestratorAgent, type RecordedUserPlaneCalls,
+  actorOver, armedWakes, chatSessionTurns, fireSoonestWake, GATEWAY_CATALOG, ledgerOver, nextTurn, orchestratorHarness, hostedSubordinateHarness, seedMission,
+  until, wakeForDelegatedTask, workspaceFiles, workspaceMainActor, type HarnessOrchestratorAgent, type RecordedUserPlaneCalls,
 } from './helpers/actor-harness';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { socketConnection } from './helpers/bindings';
@@ -74,6 +74,43 @@ const MAPPING = 'Map the failure surface.';
 const NOTING = 'Note what the ledger is missing.';
 
 describe("a workspace's tile on its owner's home", () => {
+  test('an idle settings-wait tile follows real agent owed reports and parked durable refusals, not a cached fold', async () => {
+    const tiles = new AwaitedList<WorkspaceOverview>();
+    const owner: RecordedUserPlaneCalls = { warmConnections: [], failWarm: null, titles: [], overviews: tiles, refuseOverviews: [] };
+    const workspace = orchestratorHarness(owner);
+    const { agent, db } = workspace;
+    const main = workspaceMainActor(db).actorId;
+    const last = () => tiles.items.at(-1);
+
+    try {
+      await agent.installWorkspaceCapability('workspace-capability-token');
+      await until(() => last()?.awaitsSettings === false, 'the first quiet settings-wait tile lands');
+
+      await agent.agentWorkspace(main).owes(null, true);
+      await until(() => last()?.awaitsSettings === true, 'a real owed-work report updates the owner');
+      const reported = tiles.items.length;
+
+      await agent.agentWorkspace(main).owes(null, true);
+      await settled();
+      expect(tiles.items).toHaveLength(reported);
+      await agent.agentWorkspace(main).owes(null, false);
+      await until(() => last()?.awaitsSettings === false, 'the cleared owed-work report updates the owner');
+
+      // A prior activation's own effect ledger retained this refusal; the live idle fold must read it.
+      const ledger = ledgerOver(db);
+      const transition = { turnId: 'settings-wait', messageId: 'answer' };
+
+      ledger.record(transition, [{ name: 'sleep_time', scope: 'settings', input: {}, lane: 'detached' }]);
+      db.prepare("UPDATE terminal_effects SET status = 'parked' WHERE actor_id = ? AND sequence_id = ?")
+        .run(main, ledger.sequenceId(transition));
+      expect((await agent.foldOverview()).awaitsSettings).toBe(true);
+      db.prepare('DELETE FROM terminal_effects WHERE actor_id = ? AND sequence_id = ?').run(main, ledger.sequenceId(transition));
+      expect((await agent.foldOverview()).awaitsSettings).toBe(false);
+    } finally {
+      db.prepare("DELETE FROM terminal_effects WHERE actor_id = ? AND sequence_id = 'settings-wait/answer'").run(main);
+    }
+  });
+
   test('lands though the owner was away, follows work, decisions and children, and drops a child torn down', async () => {
     const tiles = new AwaitedList<WorkspaceOverview>();
     const overviews = tiles.items;

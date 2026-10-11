@@ -865,7 +865,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       owes: async (next, holds) => {
         // A retired agent's answer arms nothing: tearing it down ended its wake.
         if (!this.liveActor(actorId)) return await this.agentWakes.owes(actorId, null);
-        new AgentOwedWork(this.boundSql).held(actorId, holds);
+        this.noteAgentOwedWork(actorId, holds);
         await this.agentWakes.owes(actorId, next);
 
         if (next !== null) return;
@@ -1064,7 +1064,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         if (own) {
           await this.agentWakes.owes(record.actorId, null);
-          new AgentOwedWork(this.boundSql).held(record.actorId, false);
+          this.noteAgentOwedWork(record.actorId, false);
         }
 
         if (own && retirement.destroy) this.dropAgentFacet(record.storageKey);
@@ -5606,10 +5606,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     readonly sqlRevision: number;
     readonly slateRevision: number;
     readonly expiresAt: number;
-    readonly inputs: Omit<WorkspaceOverviewInputs, 'working' | 'unfinished' | 'latestRun'>;
+    readonly inputs: Omit<WorkspaceOverviewInputs, 'working' | 'unfinished' | 'latestRun' | 'awaitsSettings'>;
   } | null = null;
 
-  private async overviewInputs(): Promise<Omit<WorkspaceOverviewInputs, 'working' | 'unfinished' | 'latestRun'>> {
+  private async overviewInputs(): Promise<Omit<WorkspaceOverviewInputs, 'working' | 'unfinished' | 'latestRun' | 'awaitsSettings'>> {
     const sqlRevision = storeRevision(this.boundSql);
     const slateRevision = storeRevision(this.ctx.storage.sql);
     const held = this.slowOverview;
@@ -5654,7 +5654,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return inputs;
   }
 
-  /** Only slow source sections are held; every push folds the turn's current activity and run. */
+  /** Both an agent's report and its retirement publish a changed settings-wait obligation. */
+  private noteAgentOwedWork(actorId: string, holds: boolean): void {
+    if (new AgentOwedWork(this.boundSql).held(actorId, holds)) this.overviewChanged();
+  }
+
+  /** A local parked refusal or an agent's own owed work can depend on changed settings. One read, only while idle. */
+  private awaitsSettings(): boolean {
+    return this.sql<{ awaits: number }>`SELECT EXISTS (SELECT 1 FROM terminal_effects WHERE status = 'parked')
+      OR EXISTS (SELECT 1 FROM agent_owed_work) AS awaits`[0]?.awaits === 1;
+  }
+
+  /** Only slow source sections are held; every push folds current activity, settings wait and run. */
   async foldOverview(): Promise<WorkspaceOverview> {
     const inputs = await this.overviewInputs();
 
@@ -5667,6 +5678,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return buildWorkspaceOverview({
       ...inputs,
       working,
+      ...(!working && { awaitsSettings: this.awaitsSettings() }),
       // Read only when idle: a working tile shows Working whatever is owed.
       unfinished: !working && (this.owedUntimedWork() || this.workOwedAt() !== null),
       latestRun: header === null ? null : { status: header.status, task: header.userMessage },

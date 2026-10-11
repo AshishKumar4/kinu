@@ -45,6 +45,8 @@ export const WorkspaceOverviewSchema = v.object({
   latestRun: v.nullable(WorkspaceOverviewRunSchema),
   slates: v.array(WorkspaceOverviewSlateSchema),
   shares: v.optional(v.array(WorkspaceOverviewShareSchema), []),
+  /** A known settings-wait obligation; absent on an old or working tile, so account fanout stays conservative. */
+  awaitsSettings: v.optional(v.boolean()),
 });
 
 export type WorkspaceOverview = v.InferOutput<typeof WorkspaceOverviewSchema>;
@@ -56,6 +58,8 @@ export type WorkspaceOverviewShare = v.InferOutput<typeof WorkspaceOverviewShare
 export interface WorkspaceOverviewInputs {
   readonly working: boolean;
   readonly unfinished: boolean;
+  /** Folded live only when idle: working workspaces always receive a settings notification. */
+  readonly awaitsSettings?: boolean;
   readonly pendingActions: readonly PendingAction[];
   readonly pendingConsents: readonly PendingDeviceConsent[];
   readonly activePlan: { readonly status: PlanReviewStatus } | null;
@@ -111,6 +115,7 @@ export function buildWorkspaceOverview(inputs: WorkspaceOverviewInputs): Workspa
     activity: activityOf(inputs.working, inputs.unfinished),
     decisionsWaiting,
     hasUpdates,
+    ...(inputs.awaitsSettings !== undefined && { awaitsSettings: inputs.awaitsSettings }),
 
     latestRun: inputs.latestRun === null
       ? null

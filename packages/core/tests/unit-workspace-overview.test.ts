@@ -80,6 +80,16 @@ describe('buildWorkspaceOverview', () => {
     expect(buildWorkspaceOverview(EMPTY).activity).toBe('idle');
   });
 
+  test('a known settings wait survives the persisted wire fold while an unknown tile stays unknown', () => {
+    expect(buildWorkspaceOverview(EMPTY).awaitsSettings).toBeUndefined();
+
+    for (const awaitsSettings of [false, true]) {
+      const overview = buildWorkspaceOverview({ ...EMPTY, awaitsSettings });
+
+      expect(v.parse(WorkspaceOverviewSchema, JSON.parse(JSON.stringify(overview))).awaitsSettings).toBe(awaitsSettings);
+    }
+  });
+
   test('the task preview is trimmed to one card line; the summary stays the wire shape', () => {
     const overview = buildWorkspaceOverview({
       ...EMPTY,
