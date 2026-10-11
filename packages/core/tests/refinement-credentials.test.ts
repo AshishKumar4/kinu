@@ -22,7 +22,7 @@ const FixtureSchema = v.object({
     sealKey: v.string(),
     sealAad: v.string(),
     plaintext: v.string(),
-    openKeys: v.tupleWithRest([v.string()], v.string()),
+    openKey: v.string(),
     openAad: v.string(),
     outcome: v.union([
       v.object({ opens: v.string() }),
@@ -47,19 +47,14 @@ describe('createCredentialCipher refines Credentials.openStored', () => {
   test.each(cases.map((c, i) => [i, c] as const))('case %d', async (_i, c) => {
     const sealer = await createCredentialCipher({ CREDENTIAL_ENCRYPTION_KEY: secret(c.sealKey) });
     const stored = c.plain ? c.plaintext : await sealer.seal(c.sealAad, c.plaintext);
-    const [current, ...retired] = c.openKeys;
-
-    const opener = await createCredentialCipher({
-      CREDENTIAL_ENCRYPTION_KEY: secret(current),
-      CREDENTIAL_ENCRYPTION_KEY_PREVIOUS: retired.map(secret).join(','),
-    });
+    const opener = await createCredentialCipher({ CREDENTIAL_ENCRYPTION_KEY: secret(c.openKey) });
 
     const opened = opener.open(c.openAad, stored);
 
     if ('opens' in c.outcome) {
       expect(await opened).toBe(c.outcome.opens);
     } else if (c.outcome.refused === 'no-key') {
-      await expect(opened).rejects.toThrow('which this deployment no longer has');
+      await expect(opened).rejects.toThrow("not this deployment's");
     } else if (c.outcome.refused === 'not-sealed') {
       await expect(opened).rejects.toThrow('is not a sealed envelope');
     } else {

@@ -6,12 +6,12 @@ import { EGRESS_PLACEHOLDER_PREFIX, isEgressPlaceholder } from '@kinu.run/core';
 import { createCredentialCipher } from '@kinu.run/core';
 import {
   initEgressVaultTables, listEgressSecrets, putEgressSecret,
-  resolveEgressInjection, revokeEgressSecret, rewrapEgressSecrets,
+  resolveEgressInjection, revokeEgressSecret,
   type EgressVaultDeps,
 } from '@kinu.run/core';
 import { USER_DO_RPC_SURFACE } from '../src/rpc-surface';
 import {
-  TEST_CREDENTIAL_ENCRYPTION_KEY, TEST_USER_ENV, createTestUserDO, sqlExec, testOwner,
+  TEST_USER_ENV, createTestUserDO, sqlExec, testOwner,
 } from './helpers/user-do';
 
 const SECRET = ['sk_live_', '0123456789abcdefghij'].join('');
@@ -154,36 +154,6 @@ describe('destination is re-checked on every request', () => {
     );
 
     expect(resolved).toEqual({ kind: 'forward', substitutions: [] });
-  });
-});
-
-describe('key rotation', () => {
-  test('the vault re-seals under a new key and the secret survives', async () => {
-    const deps = await vault();
-    await putEgressSecret(deps, STRIPE);
-
-    const next = await createCredentialCipher({
-      CREDENTIAL_ENCRYPTION_KEY: 'a-second-credential-encryption-key-9876543210',
-      CREDENTIAL_ENCRYPTION_KEY_PREVIOUS: TEST_CREDENTIAL_ENCRYPTION_KEY,
-    });
-
-    const rotated: EgressVaultDeps = { sql: deps.sql, cipher: next, aad: deps.aad };
-    expect(await rewrapEgressSecrets(rotated)).toBe(true);
-    const stored = v.parse(v.string(), deps.sql.exec(`SELECT secret FROM user_egress_secrets`).toArray()[0].secret);
-    expect(stored.startsWith(`pce1.${next.keyId}.`)).toBe(true);
-    expect(await next.open(deps.aad('stripe'), stored)).toBe(SECRET);
-  });
-
-  test('a row that cannot be re-sealed withholds the clean signal', async () => {
-    // The documented rotation drops the retired key on the strength of this marker.
-    const deps = await vault();
-    await putEgressSecret(deps, STRIPE);
-
-    const stranger = await createCredentialCipher({
-      CREDENTIAL_ENCRYPTION_KEY: 'an-unrelated-encryption-key-000000000000000',
-    });
-
-    expect(await rewrapEgressSecrets({ sql: deps.sql, cipher: stranger, aad: deps.aad })).toBe(false);
   });
 });
 

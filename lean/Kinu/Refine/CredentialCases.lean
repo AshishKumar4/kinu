@@ -20,15 +20,15 @@ def outcomeJson : Except OpenError String → Json
   | .error .notSealed => .obj [("refused", .str "not-sealed")]
 
 /-- The sealing deployment's current key seals `plaintext` under `sealAad`, or the
-    row is stored without an envelope; the opening deployment holds `openKeys`,
-    current first, and opens under `openAad`. -/
-def caseOf (plain : Bool) (sealKey sealAad plaintext : String) (openKeys : List String)
+    row is stored without an envelope; the opening deployment holds `openKey` and
+    opens under `openAad`. -/
+def caseOf (plain : Bool) (sealKey sealAad plaintext : String) (openKey : String)
     (openAad : String) : Json :=
   let stored : Stored (String × String × String) :=
     if plain then .plain plaintext else .sealed (transparent.sealAs sealKey sealAad plaintext)
   .obj [("plain", .bool plain), ("sealKey", .str sealKey), ("sealAad", .str sealAad),
-    ("plaintext", .str plaintext), ("openKeys", .arr (openKeys.map Json.str)),
-    ("openAad", .str openAad), ("outcome", outcomeJson (openStored transparent openKeys openAad stored))]
+    ("plaintext", .str plaintext), ("openKey", .str openKey),
+    ("openAad", .str openAad), ("outcome", outcomeJson (openStored transparent openKey openAad stored))]
 
 def keyNames : List String := ["k1", "k2", "k3"]
 
@@ -40,26 +40,21 @@ def genAad : Gen String := do
 def genCase : Gen (Option Json) := do
   let sealAad ← genAad
   let openAad ← if ← chance 1 2 then pure sealAad else genAad
-  let current ← pick keyNames
-  let mut retired := []
-  for k in keyNames do
-    if k != current && (← chance 1 2) then retired := retired ++ [k]
+  let openKey ← pick keyNames
   let plaintext ← pick ["{\"kind\":\"bearer\",\"token\":\"sk-live-1\"}", "secret two", ""]
-  return some (caseOf (← chance 1 6) (← pick keyNames) sealAad plaintext (current :: retired) openAad)
+  return some (caseOf (← chance 1 6) (← pick keyNames) sealAad plaintext openKey openAad)
 
 /-- One row per theorem the deployed envelope is checked against. -/
 def directed : List Json :=
   let aad := credentialAad "d1" "openai.bearer"
-  [ -- `rewrap_keeps_every_readable_secret`: a retired key still opens its rows
-    caseOf false "k1" aad "rotated" ["k2", "k1"] aad,
-    -- a key the deployment no longer has opens nothing
-    caseOf false "k1" aad "orphaned" ["k2"] aad,
+  [ -- a row sealed under another deployment's key opens nothing here
+    caseOf false "k1" aad "another key" "k2" aad,
     -- `an_envelope_opens_only_where_it_was_sealed`: a row moved to another store
-    caseOf false "k1" aad "moved" ["k1"] (credentialAad "d2" "openai.bearer"),
+    caseOf false "k1" aad "moved" "k1" (credentialAad "d2" "openai.bearer"),
     -- `credential_contexts_never_meet_mcp_contexts`
-    caseOf false "k1" (mcpAad "d1" "s1") "mcp headers" ["k1"] aad,
+    caseOf false "k1" (mcpAad "d1" "s1") "mcp headers" "k1" aad,
     -- `an_unsealed_row_opens_nowhere`
-    caseOf true "k1" aad "plain" ["k2"] (credentialAad "d2" "anthropic.bearer") ]
+    caseOf true "k1" aad "plain" "k2" (credentialAad "d2" "anthropic.bearer") ]
 
 def fixture : String :=
   fixtureText [("fixture", .str "credential-envelope"),

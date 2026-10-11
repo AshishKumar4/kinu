@@ -196,7 +196,7 @@
   // privileged UserDO call presents (user/workspace-capability.ts), so a
   // deployment without it cannot serve a signed-in user at all. Set via:
   //   openssl rand -base64 32 | npx wrangler secret put CREDENTIAL_ENCRYPTION_KEY
-  // Rotation uses CREDENTIAL_ENCRYPTION_KEY_PREVIOUS — see docs/DEPLOYMENT.md.
+  // A new key starts from reset stores: nothing sealed under the old one opens.
   //
   // WEBHOOK_ROUTE_SECRET is a REQUIRED Wrangler secret wherever webhook ingress
   // is offered. It signs the route capability every public delivery URL carries

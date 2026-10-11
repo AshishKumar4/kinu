@@ -17,12 +17,11 @@
     (`an_envelope_opens_only_where_it_was_sealed`), credential keys cannot
     collide with MCP header contexts (`credential_contexts_never_meet_mcp_contexts`),
     and no two stores or keys share a context (`one_context_per_store_and_key`);
-  - a deleted credential yields no headers (`a_deleted_credential_yields_no_headers`);
-  - rotation keeps every secret that opened (`rewrap_keeps_every_readable_secret`).
+  - a deleted credential yields no headers (`a_deleted_credential_yields_no_headers`).
 
-  A row without an envelope opens under no context (`an_unsealed_row_opens_nowhere`);
-  only the rotation of a store that was never sealed reads one as plaintext and
-  seals it (`rewrap_seals_plaintext_only_in_a_never_sealed_store`).
+  A deployment holds one key. A row without an envelope opens under no context
+  (`an_unsealed_row_opens_nowhere`), and a row sealed under another key opens
+  under none of this deployment's.
 
   The cipher's guarantees are premises (`Aead`), not axioms: sealing then
   opening under the same context returns the plaintext and under another returns
@@ -71,50 +70,36 @@ inductive OpenError where
   | notSealed
   deriving Repr, DecidableEq
 
-/-- `CredentialCipher.open` with the deployment's keys, current first: a row without
-    an envelope is refused; an envelope opens under the configured key its id names. -/
-def openStored {Key Env : Type} (A : Aead Key Env) (keys : List Key) (aad : String) :
+/-- `CredentialCipher.open` with the deployment's one key: a row without an envelope is
+    refused, and so is an envelope that names another key; else it opens under its context. -/
+def openStored {Key Env : Type} (A : Aead Key Env) (key : Key) (aad : String) :
     Stored Env → Except OpenError String
   | .plain _ => .error .notSealed
   | .sealed e =>
-    match keys.find? (fun k => A.keyId k == A.envKeyId e) with
-    | none => .error .noKey
-    | some k =>
-      match A.openAs k aad e with
+    if A.keyId key = A.envKeyId e then
+      match A.openAs key aad e with
       | some p => .ok p
       | none => .error .mismatch
-
-/-- Configured keys are told apart by their ids. -/
-def DistinctIds {Key Env : Type} (A : Aead Key Env) (keys : List Key) : Prop :=
-  ∀ k₁ ∈ keys, ∀ k₂ ∈ keys, A.keyId k₁ = A.keyId k₂ → k₁ = k₂
+    else .error .noKey
 
 /-- **An envelope opens only where it was sealed.** Opened under any context, it
     yields its own plaintext under its own context and nothing under another. -/
 theorem an_envelope_opens_only_where_it_was_sealed {Key Env : Type} (A : Aead Key Env)
-    (keys : List Key) (hids : DistinctIds A keys) (k : Key) (hk : k ∈ keys)
-    (a a' p p' : String) (h : openStored A keys a' (.sealed (A.sealAs k a p)) = .ok p') :
+    (k : Key) (a a' p p' : String) (h : openStored A k a' (.sealed (A.sealAs k a p)) = .ok p') :
     a' = a ∧ p' = p := by
-  simp only [openStored] at h
-  split at h
-  · cases h
-  · rename_i k' hfind
-    have hk' := List.mem_of_find?_eq_some hfind
-    have hid := List.find?_some hfind
-    simp only [beq_iff_eq, A.sealed_names_its_key] at hid
-    have := hids k' hk' k hk hid
-    subst this
-    by_cases ha : a = a'
-    · subst ha
-      rw [A.open_seal] at h
-      cases h
-      exact ⟨rfl, rfl⟩
-    · rw [A.open_elsewhere k' a a' p ha] at h
-      cases h
+  simp only [openStored, A.sealed_names_its_key, if_true] at h
+  by_cases ha : a = a'
+  · subst ha
+    rw [A.open_seal] at h
+    cases h
+    exact ⟨rfl, rfl⟩
+  · rw [A.open_elsewhere k a a' p ha] at h
+    cases h
 
 /-- **An unsealed row opens nowhere**: `open` refuses a value without the envelope
     prefix under every store, key and context. -/
 theorem an_unsealed_row_opens_nowhere {Key Env : Type} (A : Aead Key Env)
-    (keys : List Key) (a p : String) : openStored A keys a (.plain p) = .error .notSealed := rfl
+    (key : Key) (a p : String) : openStored A key a (.plain p) = .error .notSealed := rfl
 
 /-! ## Contexts -/
 
@@ -288,18 +273,18 @@ theorem clients_cannot_tell_two_stores_apart_by_their_secrets {Key Env : Type}
     obtain ⟨hans, hrest⟩ := clients_cannot_tell_two_stores_apart_by_their_secrets A current ops _ _ hnext
     exact ⟨by simp only [answers, hobs, hans], by simpa [List.foldl_cons] using hrest⟩
 
-/-! ## Egress, deletion and rotation -/
+/-! ## Egress and deletion -/
 
 /-- `getAuthHeaders`' read: the credential under `key`, opened with the
-    deployment's keys, or nothing when the store holds no such row. -/
-def secretFor {Key Env : Type} (A : Aead Key Env) (keys : List Key) (s : Store Env) (key : String) :
+    deployment's key, or nothing when the store holds no such row. -/
+def secretFor {Key Env : Type} (A : Aead Key Env) (current : Key) (s : Store Env) (key : String) :
     Option (Except OpenError String) :=
-  (s.rows.find? (·.key == key)).map fun r => openStored A keys (credentialAad s.doId key) r.value
+  (s.rows.find? (·.key == key)).map fun r => openStored A current (credentialAad s.doId key) r.value
 
 /-- **A deleted credential yields no headers**: no row answers its key. -/
 theorem a_deleted_credential_yields_no_headers {Key Env : Type} (A : Aead Key Env)
-    (keys : List Key) (s : Store Env) (key : String) :
-    secretFor A keys (deleteRow s key) key = none := by
+    (current : Key) (s : Store Env) (key : String) :
+    secretFor A current (deleteRow s key) key = none := by
   unfold secretFor deleteRow
   simp only
   rw [Option.map_eq_none', List.find?_eq_none]
@@ -307,65 +292,5 @@ theorem a_deleted_credential_yields_no_headers {Key Env : Type} (A : Aead Key En
   have := (List.mem_filter.mp hr).2
   simp only [bne_iff_ne, ne_eq] at this
   simpa using this
-
-/-- One row through `rewrapCredentials`. `marked` says the store was ever sealed
-    (its `credential_envelope_key_id` marker exists): only a never-sealed store reads
-    a row without an envelope as plaintext. Every other row is opened with the old
-    keys and resealed under the new current key, or left as it was. -/
-def rewrapRow {Key Env : Type} (A : Aead Key Env) (oldKeys : List Key) (current : Key)
-    (doId : String) (marked : Bool) (r : Row Env) : Row Env :=
-  let reopened : Except OpenError String :=
-    match r.value, marked with
-    | .plain p, false => .ok p
-    | v, _ => openStored A oldKeys (credentialAad doId r.key) v
-  match reopened with
-  | .ok p => { r with value := .sealed (A.sealAs current (credentialAad doId r.key) p) }
-  | .error _ => r
-
-private theorem sealed_opens_under {Key Env : Type} (A : Aead Key Env) (keys : List Key)
-    (current : Key) (hcur : current ∈ keys) (hids : DistinctIds A keys) (aad p : String) :
-    openStored A keys aad (.sealed (A.sealAs current aad p)) = .ok p := by
-  simp only [openStored]
-  split
-  · rename_i hnone
-    exfalso
-    rw [List.find?_eq_none] at hnone
-    exact hnone current hcur (by simp [A.sealed_names_its_key])
-  · rename_i k hfind
-    have hk := List.mem_of_find?_eq_some hfind
-    have hid := List.find?_some hfind
-    simp only [beq_iff_eq, A.sealed_names_its_key] at hid
-    rw [hids k hk current hcur hid, A.open_seal]
-
-/-- **Rotation keeps every secret that opened**: after the rewrap, the row opens
-    to the same secret under the new keys, whatever became of the old ones. -/
-theorem rewrap_keeps_every_readable_secret {Key Env : Type} (A : Aead Key Env)
-    (oldKeys newKeys : List Key) (current : Key) (hcur : current ∈ newKeys)
-    (hids : DistinctIds A newKeys) (doId : String) (marked : Bool) (r : Row Env) (p : String)
-    (h : openStored A oldKeys (credentialAad doId r.key) r.value = .ok p) :
-    openStored A newKeys (credentialAad doId r.key) (rewrapRow A oldKeys current doId marked r).value
-      = .ok p := by
-  cases hv : r.value with
-  | plain q => rw [hv] at h; simp [openStored] at h
-  | sealed e =>
-    rw [hv] at h
-    have hrow : (rewrapRow A oldKeys current doId marked r).value =
-        .sealed (A.sealAs current (credentialAad doId r.key) p) := by
-      cases marked <;> simp [rewrapRow, hv, h]
-    rw [hrow]
-    exact sealed_opens_under A newKeys current hcur hids _ p
-
-/-- **Rotation reads plaintext only in a never-sealed store.** There it seals a
-    legacy plain row for its own store and key; in a store that was ever sealed it
-    leaves the row, which then opens nowhere. -/
-theorem rewrap_seals_plaintext_only_in_a_never_sealed_store {Key Env : Type} (A : Aead Key Env)
-    (oldKeys : List Key) (current : Key) (doId : String) (r : Row Env) (p : String)
-    (h : r.value = .plain p) :
-    (rewrapRow A oldKeys current doId false r).value
-        = .sealed (A.sealAs current (credentialAad doId r.key) p) ∧
-      rewrapRow A oldKeys current doId true r = r := by
-  constructor
-  · simp [rewrapRow, h]
-  · simp [rewrapRow, h, openStored]
 
 end Kinu.Safety.Credentials

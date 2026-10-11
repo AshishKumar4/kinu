@@ -52,7 +52,6 @@ export {
   putEgressSecret,
   revokeEgressSecret,
   resolveEgressInjection,
-  rewrapEgressSecrets,
   type EgressSecretSummary,
   type PutEgressSecretInput,
   type EgressInjection,

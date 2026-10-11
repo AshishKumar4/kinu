@@ -674,12 +674,6 @@ export const SUPPLY = new Map<string, Supply>([
     source: 'https://dash.cloudflare.com/profile/api-tokens — a custom token with '
       + 'Account | Containers | Edit, scoped to this account. The owner mints it.',
   }],
-  ['CREDENTIAL_ENCRYPTION_KEY_PREVIOUS', {
-    handling: 'out-of-band',
-    required: false,
-    absent: 'nothing — this is the read-only side of a key rotation and is set only during one.',
-    source: 'the outgoing CREDENTIAL_ENCRYPTION_KEY, during a rotation. See docs/DEPLOYMENT.md.',
-  }],
   ['JWT_SECRET', {
     handling: 'prompt',
     required: true,

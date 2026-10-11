@@ -142,7 +142,6 @@ This derives from `Env` in `packages/cf-backend/env.d.ts` and from `SUPPLY` in `
 | `DEV_IDENTITY_SECRET` | **prompt**: minted there, 32 random bytes shown once; a pasted value is refused, so no two deployments share one | beside `DEV_USER_EMAIL` | No synthetic identity. The first-run tier and every eval fail to authenticate as `eval-service`. |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | **prompt** | where `GOOGLE_OAUTH_CLIENT_ID` is a var | Google is not on `/login`. Unset on kinu.run. |
 | `GITHUB_OAUTH_CLIENT_SECRET` | **prompt** | where `GITHUB_OAUTH_CLIENT_ID` is a var | GitHub is not on `/login`. Unset on kinu.run. |
-| `CREDENTIAL_ENCRYPTION_KEY_PREVIOUS` | **out of band**: the outgoing key, during a rotation | no | Nothing. It is the read-only half of a rotation. |
 | `GOOGLE_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_ID` | **config var**, beside their secrets | no | That provider is not on `/login`. |
 | `GOOGLE_OAUTH_SCOPES`, `GITHUB_OAUTH_SCOPES`, `CLOUDFLARE_OAUTH_SCOPES` | **config var**: overrides only | no | The provider default applies (`CLOUDFLARE_WORKERS_AI_SCOPES` in `core/src/providers/cloudflare-oauth.ts`). |
 | `MCP_GITHUB_CLIENT_ID`, `MCP_GITHUB_CLIENT_SECRET` | **out of band**: a GitHub OAuth app the owner registers, whose authorization callback URL is `https://<deployment-origin>/api/user/mcp/callback` ([register](https://github.com/settings/applications/new), [remote-server docs](https://github.com/github/github-mcp-server/blob/main/docs/remote-server.md)); the preset asks `repo read:user` | no | The GitHub preset card falls back to a personal-access-token field. |
@@ -233,15 +232,11 @@ printf '<workers-observability-read-token>' | bunx wrangler secret put KINU_OBS_
 
 #### Rotating CREDENTIAL_ENCRYPTION_KEY
 
-Credentials name the key that sealed them. Rotation is a two-key window with no downtime:
+There is one key and no rotation window. A new key starts from reset stores: every credential, MCP header and egress secret sealed under the old one stops opening (each names the key that sealed it), built-in passwords and the labels it signs stop verifying, and every provider is reconnected. I rotate only with a reset.
 
 ```bash
-# 1. keep the outgoing key readable, 2. install the new one
-printf '<outgoing-key>' | bunx wrangler secret put CREDENTIAL_ENCRYPTION_KEY_PREVIOUS
 openssl rand -base64 32 | bunx wrangler secret put CREDENTIAL_ENCRYPTION_KEY
 ```
-
-Each UserDO re-seals on next credential access (`packages/core/src/credentials/envelope.ts`). I delete `PREVIOUS` once every account has been active or after a sweep. It takes comma-separated lists, so an interrupted rotation resumes rather than unwinds. Losing a key with rows still sealed is unrecoverable by design; I reconnect those providers.
 
 #### Rotating WEBHOOK_ROUTE_SECRET
 
@@ -267,7 +262,7 @@ Then open `https://<your-host>/login`, type the token into the "Setup token" fie
 
 After that, people join only through invite links the owner makes in Settings → Account → Invite people. Each link names one email address, works once, and expires after 7 days. Keep the token: it is the owner's recovery. With an owner, "Set up or recover the owner" on `/login` takes the token and resets the owner's sign-in (new password or passkey, every owner session ended), throttled like sign-up. Without the token set, `/login` offers sign-in only.
 
-Built-in accounts have their own ids, unrelated to any OAuth login of the same address: configuring OAuth later makes OAuth sign-in a separate account, and built-in sessions stop working once any provider is declared. Passwords are PBKDF2-SHA256 at 100,000 iterations (the most Cloudflare's runtime runs), salted per account and peppered with a key derived from `CREDENTIAL_ENCRYPTION_KEY`. During a key rotation a password still verifies against `CREDENTIAL_ENCRYPTION_KEY_PREVIOUS` and is re-hashed under the new key at that sign-in. For a forgotten password, a lost passkey, or an account that did not sign in during a rotation, the owner makes a reset link in Settings → Account → Accounts: it works once, within 7 days, for that account's address, replaces its password and passkeys with the one set through it, and signs the account out everywhere. Passkeys need a domain: browsers refuse them on an IP address.
+Built-in accounts have their own ids, unrelated to any OAuth login of the same address: configuring OAuth later makes OAuth sign-in a separate account, and built-in sessions stop working once any provider is declared. Passwords are PBKDF2-SHA256 at 100,000 iterations (the most Cloudflare's runtime runs), salted per account and peppered with a key derived from `CREDENTIAL_ENCRYPTION_KEY`. A new key invalidates every password, since the pepper changes with it. For a forgotten password, a lost passkey, or a password a new key invalidated, the owner makes a reset link in Settings → Account → Accounts: it works once, within 7 days, for that account's address, replaces its password and passkeys with the one set through it, and signs the account out everywhere. Passkeys need a domain: browsers refuse them on an IP address.
 
 ### 3. Build and deploy
 
@@ -406,7 +401,6 @@ Requests follow the preview limits (developers.openai.com/siwc/token-sharing-ope
 | Variable | Where | Description |
 |----------|-------|-------------|
 | `CREDENTIAL_ENCRYPTION_KEY` | Wrangler secret | **Required.** Root secret for the user plane: encrypts `user_credentials` at rest and derives the owner capability. Without it no signed-in surface works. |
-| `CREDENTIAL_ENCRYPTION_KEY_PREVIOUS` | Wrangler secret | Retired encryption keys (comma-separated), read-only, for a rotation window |
 | `WEBHOOK_ROUTE_SECRET` | Wrangler secret | **Required for webhook ingress.** Signs the route capability every public delivery URL carries (`events/webhook-route.ts`). Without it, webhook creation answers 503 and delivery answers 404. Rotating it revokes every issued URL. |
 | `AI_GATEWAY_URL` | wrangler.jsonc `vars` | Platform AI Gateway endpoint, in the Worker's own account. Names the gateway, upstream provider and endpoint prefix the `AI` binding transport addresses. No token needed. |
 | `PREVIEW_HOST_SUFFIX` | wrangler.jsonc `vars` | Zone Workspace and Sandbox previews are served under, one capability hostname per exposed port. Requires a proxied wildcard DNS record on that zone plus a `*.<zone>/*` route; the wrangler.jsonc comment has both steps. Every host under it except the app's own serves previews and nothing else. Empty means previews are unavailable. |
