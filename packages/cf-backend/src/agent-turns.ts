@@ -1,7 +1,7 @@
 /** The workspace half of an agent's turns (D9): their tools and sources. */
 import { asSchema, type ToolSet } from 'ai';
-import { hold, KinuError, logged, settleSync } from '@kinu.run/core/obs';
-import { Effect } from 'effect';
+import { hold, KinuError, logged, settle, settleSync } from '@kinu.run/core/obs';
+import { Effect, Exit } from 'effect';
 import {
   AgentOpenTurns, TurnFences, decodeModelMessageValues, encodeModelMessageValues, materializeTurnSources, callableToolNames, buildHeadMessages, hasPlanPermission, scaffoldProviders, runWorkModeInvocation, toolDescription,
   BUILTIN_TOOL_NAMES, announcementOf, type TurnSurface,
@@ -23,6 +23,8 @@ export interface AgentTurnsDeps {
   chatIdle(reference: ActorReference): Promise<void>;
   pricing(spec: string): ModelPricing | null;
   accounts(): Readonly<Record<string, string>>;
+  /** The account's credentials revision as the turn's open read it; null before one opened. */
+  credentialsRevision(): number | null;
   /** The governor an agent's chat turns spend under, when its missions are the workspace's: main's (D9). */
   missions(actorId: string): MissionGovernor | null;
 }
@@ -117,8 +119,23 @@ export class AgentTurns {
   /** Each agent's newest opening the fence admitted this activation, by its place in the agent's sequence. */
   private readonly newestOpening = new Map<string, number>();
 
-  /** Its turns a Stop cut off: a call bound to one is refused, whatever its opening. */
-  private readonly cancelledTurns = new Set<string>();
+  /** Each open turn's cut: aborted once a Stop, a retirement or the workspace's deletion cut it off. A call bound to it
+   *  that would run more of it is refused, whatever its opening, and one already running here ends with it. */
+  private readonly cuts = new Map<string, AbortController>();
+
+  private cut(turnId: string): AbortController {
+    const cut = this.cuts.get(turnId) ?? new AbortController();
+
+    this.cuts.set(turnId, cut);
+
+    return cut;
+  }
+
+  /** What a call bound to `turnId` that runs more of it races: its turn cut off. None for a turn this activation has not
+   *  opened, which keeps no cut past its own close. */
+  cutOff(turnId: string): AbortSignal | null {
+    return this.open.has(turnId) ? this.cut(turnId).signal : null;
+  }
 
   /**
    * A call bound to `turnId` holds while the turn is the agent's current one (design v2 §3): one a later opening
@@ -127,16 +144,18 @@ export class AgentTurns {
    */
   fenceHolds(actorId: string, turnId: string, call: TurnCall): boolean {
     // A stopped turn closes: only what would run more of it is refused.
-    if (call === 'executes' && this.cancelledTurns.has(turnId)) return false;
+    if (call === 'executes' && this.cuts.get(turnId)?.signal.aborted === true) return false;
     const fenced = this.open.get(turnId)?.fenced;
     const newest = this.newestOpening.get(actorId);
 
     return fenced === undefined || newest === undefined || fenced.seq >= newest;
   }
 
-  /** A Stop cut the turn off: nothing bound to it runs from here. */
-  cancelled(turnId: string): void {
-    this.cancelledTurns.add(turnId);
+  /** The turn is cut off: nothing bound to it runs from here, and what runs now ends. */
+  private cancelled(turnId: string): void {
+    const cut = this.cut(turnId);
+
+    if (!cut.signal.aborted) cut.abort(new KinuError('cancelled', `turn ${turnId} was stopped`));
   }
 
   chatOpened(actorId: string, turnId: string): void {
@@ -179,7 +198,7 @@ export class AgentTurns {
     const turn = this.open.get(turnId);
 
     this.open.delete(turnId);
-    this.cancelledTurns.delete(turnId);
+    this.cuts.delete(turnId);
 
     if (turn === undefined || this.inFlight(turn.reference.actorId)) return;
     this.waiting.get(turn.reference.actorId)?.resolve();
@@ -187,19 +206,29 @@ export class AgentTurns {
   }
 
   private runOf(actorId: string): string | null {
+    return this.openOf(actorId, (request) => request.run !== undefined);
+  }
+
+  /** The agent's open turn `is` picks: its run, or the chat turn it is preparing. */
+  private openOf(actorId: string, is: (request: HostedTurnRequest) => boolean): string | null {
     for (const [turnId, turn] of this.open) {
-      if (turn.reference.actorId === actorId && turn.request.run !== undefined) return turnId;
+      if (turn.reference.actorId === actorId && is(turn.request)) return turnId;
     }
 
     return null;
   }
 
+  /** Its chat turn, from the preparation it asked for until it says the turn ended; else its run. */
   private running(actorId: string): string | null {
-    return this.chats.get(actorId) ?? this.runOf(actorId);
+    return this.chats.get(actorId) ?? this.preparing(actorId) ?? this.runOf(actorId);
+  }
+
+  private preparing(actorId: string): string | null {
+    return this.openOf(actorId, (request) => request.chatTurnId !== undefined);
   }
 
   inFlightAny(): boolean {
-    return this.chats.size > 0 || [...this.open.values()].some((turn) => turn.request.run !== undefined);
+    return this.chats.size > 0 || [...this.open.values()].some((turn) => turn.request.run !== undefined || turn.request.chatTurnId !== undefined);
   }
 
   /** Handed out by this activation and not yet over. */
@@ -235,9 +264,13 @@ export class AgentTurns {
   }
 
   /** The chat is asked whatever the view says: a workspace that reset since its turn began has no view of it. */
+  /** Cuts the agent's turns off, its chat's and its run's: each call of theirs still running here ends with them. */
   async interrupt(actorId: string): Promise<void> {
     const reference = this.deps.reference(actorId);
     const run = this.runOf(actorId);
+    const chat = this.chats.get(actorId);
+
+    for (const turnId of [run, chat]) if (turnId !== null && turnId !== undefined) this.cancelled(turnId);
 
     if (run !== null) await this.deps.interrupt(reference, run);
     await this.deps.interrupt(reference, null);
@@ -322,13 +355,20 @@ export class AgentTurns {
       profile: null,
     };
 
+    // Running from here: the agent is preparing it. A preparation that fails, or that a later opening overtook, leaves
+    // nothing open, as the agent never began it.
     if (request.turnId !== null) this.open.set(turnId, turn);
-    const prepared = await this.read(turn);
 
-    // Finished after a later opening took its place, or after its run ended: none of it is the agent's to freeze.
-    if (prepared === null) return settleSync(Effect.fail(new KinuError('denied', `The preparation of turn ${turnId} finished after a later opening of its agent.`)));
+    return await settle(Effect.gen({ self: this }, function* () {
+      const prepared = yield* Effect.promise(() => this.read(turn));
 
-    return prepared;
+      // Finished after a later opening took its place, or after its run ended: none of it is the agent's to freeze.
+      if (prepared === null) return yield* Effect.fail(new KinuError('denied', `The preparation of turn ${turnId} finished after a later opening of its agent.`));
+
+      return prepared;
+    }).pipe(Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : Effect.sync(() => {
+      if (this.chats.get(actorId) !== turnId) this.close(turnId);
+    })))));
   }
 
   async prepare(actorId: string, turnId: string): Promise<PreparedAgentTurn> {
@@ -379,6 +419,7 @@ export class AgentTurns {
       sources,
       pricing: this.deps.pricing(prepared.model),
       accounts: this.deps.accounts(),
+      credentialsRevision: this.deps.credentialsRevision(),
       scaffold,
       languages: actor.runtime.executor.languages,
       ...(brief !== undefined && { brief }),
@@ -515,7 +556,10 @@ export class AgentTurns {
       toolCalls: capture.toolCalls.length, childHeadIds: capture.childHeadIds.length,
     };
 
-    const output = await runWorkModeInvocation(this.mode(turn, prepared), () => execute(call.input, { toolCallId: call.callId, messages: [], context: undefined }));
+    // Aborted as the turn is cut off, so the tool it runs here stops with it.
+    const output = await runWorkModeInvocation(this.mode(turn, prepared), () => execute(call.input, {
+      toolCallId: call.callId, messages: [], context: undefined, abortSignal: this.cut(call.turnId).signal,
+    }));
 
     return {
       output,

@@ -503,27 +503,35 @@ export interface ProgramToolsetOptions {
 }
 
 /** One read held until dropped; a failed read is not held, so the next need asks again. */
-/** Bounded as an isolate's credentials are (`agent-turn.ts`): an edit the account did not fan out is read this soon. */
-const ACCOUNT_READ_HELD_MS = 5 * 60_000;
-
 class HeldRead<A> {
   #held: Promise<A> | null = null;
-  #at = 0;
+  #value: A | undefined = undefined;
 
   get(read: () => Promise<A>): Promise<A> {
-    if (Date.now() - this.#at >= ACCOUNT_READ_HELD_MS) this.#held = null;
     const held = this.#held ?? read();
 
-    if (this.#held !== held) this.#at = Date.now();
     this.#held = held;
 
-    return settle(attempt({ doing: 'reading what the account says', otherwise: 'unavailable' }, () => held).pipe(Effect.tapError(() => Effect.sync(() => {
-      if (this.#held === held) this.#held = null;
-    }))));
+    return settle(attempt({ doing: 'reading what the account says', otherwise: 'unavailable' }, () => held).pipe(
+      Effect.tap((value) => Effect.sync(() => { if (this.#held === held) this.#value = value; })),
+      Effect.tapError(() => Effect.sync(() => { if (this.#held === held) this.#held = null; })),
+    ));
+  }
+
+  /** What it holds once read; none while unread or still reading. */
+  get current(): A | undefined {
+    return this.#value;
+  }
+
+  /** Holds what the account already said. */
+  hold(value: A): void {
+    this.#held = Promise.resolve(value);
+    this.#value = value;
   }
 
   drop(): void {
     this.#held = null;
+    this.#value = undefined;
   }
 }
 
@@ -1069,12 +1077,8 @@ export abstract class ActorAgent extends Agent<Env> {
     ownerRequired: true,
     getOwnerUserId: () => this.getOwnerUserId(),
     getUserCaller: () => this.userCaller(),
-    // Asked of the same UserDO the registry reads, so a missed fan-out notification self-heals.
-    getCredentialsRevision: () => this.heldRevision.get(async () => {
-      const { stub, caller } = await this.userHub();
-
-      return stub.getCredentialsRevision(caller);
-    }),
+    // Asked of the same UserDO the registry reads; held as `accountSettingsAtOpen` keeps it current.
+    getCredentialsRevision: () => this.credentialsRevision(),
     onProviderWait: (info) => { this.noteProviderWait(info); },
     accountFor: (provider) => this.config.getProviderAccounts()[provider]
       ?? this.workspaceAgentHosted()?.session.profileInputs?.envelope.catalog.accounts?.[provider],
@@ -3429,26 +3433,52 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   protected profileCatalog(): Promise<ProfileCatalogEnvelope> {
-    return this.heldCatalog.get(async () => {
-      const { stub, caller } = await this.userHub();
+    return this.heldCatalog.get(() => this.askAccount((stub, caller) => stub.getWorkspaceProfileCatalog(caller)));
+  }
 
-      return stub.getWorkspaceProfileCatalog(caller);
-    });
+  /** One read of the account, as this workspace: the account's hub and the caller it reads as. */
+  private async askAccount<A>(read: (stub: UserHubClient, caller: UserCaller) => Promise<A>): Promise<A> {
+    const { stub, caller } = await this.userHub();
+
+    return await read(stub, caller);
   }
 
   /**
-   * The account's reads a turn makes, held under their refresh rule (design v2 §3, §8): read at a turn's first need, and
-   * dropped as the account says its settings changed (`accountReadsExpire`) or once {@link ACCOUNT_READ_HELD_MS} old, so an
-   * edit the account did not fan out to it is read that soon.
+   * The account's reads a turn makes, held under their refresh rule (design v2 §3, §8): read at their first need, and read
+   * again only once the account's settings moved: it says so to a workspace awake when they change
+   * (`accountReadsExpire`), and one at rest, which a change does not wake, asks as a turn opens
+   * (`accountSettingsAtOpen`).
    */
   private readonly heldRevision = new HeldRead<number>();
 
   private readonly heldCatalog = new HeldRead<ProfileCatalogEnvelope>();
 
-  /** A turn opens: what the account said before it is read again at its first need. */
+  /** The account says its model settings changed: what it said before is read again at its next need. */
   protected accountReadsExpire(): void {
     this.heldRevision.drop();
     this.heldCatalog.drop();
+  }
+
+  /**
+   * A turn opens: one call asks the account its settings revision, and the catalog held here is read again only if its
+   * version moved; the credentials' revision is the answer itself. A turn opens on what the account says now, though a
+   * change made while this workspace rested never reached it.
+   */
+  protected async accountSettingsAtOpen(): Promise<void> {
+    const now = await this.askAccount((stub, caller) => stub.getSettingsRevision(caller));
+
+    if (this.heldCatalog.current?.version !== now.catalog) this.heldCatalog.drop();
+    this.heldRevision.hold(now.credentials);
+  }
+
+  /** The account's credentials revision a turn's open last read; null before one opened in this activation. */
+  protected openedCredentialsRevision(): number | null {
+    return this.heldRevision.current ?? null;
+  }
+
+  /** The account's credentials revision as this workspace holds it, read at its first need. */
+  protected credentialsRevision(): Promise<number> {
+    return this.heldRevision.get(() => this.askAccount((stub, caller) => stub.getCredentialsRevision(caller)));
   }
 
   protected resolvedTurnProfile(): ResolvedTurnProfile | null {

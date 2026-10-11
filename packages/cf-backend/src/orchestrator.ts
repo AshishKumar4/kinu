@@ -813,6 +813,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       chatIdle: async (reference) => { await (await this.agentCalls(reference.actorId)).idle(); },
       pricing: (spec) => this.modelCatalog.pricing(spec),
       accounts: () => this.config.getProviderAccounts(),
+      credentialsRevision: () => this.openedCredentialsRevision(),
       // The workspace agent's missions are the workspace's: owner-declared here, and charged here as its turns spend.
       missions: (actorId) => (actorPolicy(this.agentOf(actorId)).workspaceAgent ? this.budget : null),
     });
@@ -860,11 +861,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       debit: (turnId, ...args) => this.agentTurns.debit(actorId, turnId, ...args),
       prepareTurn: async (turnId) => {
         this.admitWork();
+        // A turn opens on the account's settings as they are now (`accountSettingsAtOpen`).
+        await this.accountSettingsAtOpen();
 
         return await this.agentTurns.prepare(actorId, turnId);
       },
       prepareChat: async (request) => {
         this.admitWork();
+
+        // A turn opens on the account's settings as they are now; a chat built with no turn reads what is held.
+        if (request.turnId !== null) await this.accountSettingsAtOpen();
 
         return await this.agentTurns.prepareChat(actorId, request);
       },
@@ -983,7 +989,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         // Its hirer hears it as a delivery of its own, whichever agent hired it.
         return await this.agentDeliveries(parentActorId).signals.send(signal);
       },
-    }, this.deleting.signal, (turnId, call) => this.agentTurns.fenceHolds(actorId, turnId, call));
+    }, this.deleting.signal, (turnId, call) => this.agentTurns.fenceHolds(actorId, turnId, call), (turnId) => this.agentTurns.cutOff(turnId));
   }
 
   private agentBound(actorId: string): BoundActor {
@@ -1916,7 +1922,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       if (reconciledEventIds.length > 0) {
         diagnostics.event('event.deliveries_repended', { workspace: this.name, events: reconciledEventIds.length });
-        this.armDurableWake();
+        // Owed again now: delivered to main as any due reaction is, not left to the next alarm.
+        await this.drainAgent(actorReferenceOf(this.liveAgentOf(this.actorHandle().actorId)));
       }
     }, { workspace: this.name });
 
@@ -2642,8 +2649,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * its queued turns, telling their callers, and the turn is aborted. Nothing queued before the Stop runs.
    */
   protected override async stopAgent(actorId: string): Promise<void> {
-    const turnId = this.agentTurns.chatTurn(actorId);
-
     const cancelled = this.ctx.storage.transactionSync(() => {
       new TurnFences(this.boundSql).cancel(actorId, Date.now());
 
@@ -2655,7 +2660,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       for (const event of this.carried(actorId, delivery)?.events ?? []) event.log.dismiss(event.id, 'stopped by the owner', 'system');
     }
 
-    if (turnId !== null) this.agentTurns.cancelled(turnId);
     await this.agentTurns.interrupt(actorId);
 
     // A Stop dismisses the agent's open questions in its own isolate.

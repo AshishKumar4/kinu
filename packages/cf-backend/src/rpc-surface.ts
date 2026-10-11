@@ -230,6 +230,7 @@ const USER_DO_METHODS = [
   'watchDeviceStatus',
   'revokeAllCliTokens',
   'getCredentialsRevision',
+  'getSettingsRevision',
   'shareCards_put',
   'shareCards_remove',
   'shareCards_withdraw',
