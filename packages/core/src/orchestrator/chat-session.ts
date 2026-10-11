@@ -6,7 +6,7 @@
 
 import { answeredSummary, resumeMetadata, type OwnerAnswer } from '../plans/owner-questions';
 import { OWNER_ANSWER_SIGNAL } from '../types/owner-questions';
-import { MessageIdSchema, type Delivery, type DeliveryAnswer } from '../subordinates/deliveries';
+import { deliveredSignal, MessageIdSchema, type Delivery, type DeliveryAnswer, type DeliveryInput, type TurnDeliveryInput } from '../subordinates/deliveries';
 import { stampAuthorship, turnAuthorship, type TurnAuthorship } from './turn-authorship';
 import type { TrialTurn } from '../evolution/trial-rules';
 import type { ModelMessage } from 'ai';
@@ -655,47 +655,44 @@ export class ChatSession {
     // Another process drives this agent: taken here, it would be refused at its turn and lost; owed, the next pass takes it.
     if (gate !== null) return settleSync(Effect.fail(new KinuError('unavailable', `This agent is driven elsewhere (${gate.reason}); the delivery is owed to its next pass.`)));
 
-    if (input.kind === 'words') {
-      if (this.transcript.has(id) || this.pendingSends.has(id)) return 'duplicate';
-      const words = input.files === undefined || input.files.length === 0 ? input.text : { text: input.text, files: input.files };
-
-      // Its fate is heard here as a send's is: where it landed, or why it did not (`awaitLanding`). Held as a value, so a
-      // fate no sender asks for is no unheard rejection.
-      const fate = Promise.withResolvers<SendLanding | KinuError>();
-
-      this.deliveredLandings.set(id, fate.promise);
-      await this.admit(words, {
-        id, ...(input.mode !== undefined && { mode: input.mode }), ...(input.tier !== undefined && { tier: input.tier }),
-        ...(input.metadata !== undefined && { metadata: input.metadata }),
-      }, { resolve: fate.resolve, reject: fate.resolve });
-
-      return 'taken';
-    }
+    if (input.kind === 'words') return await this.admitDeliveredWords(id, input);
 
     // A run is its host's to run beside the chat, never a turn of it.
     if (input.kind === 'run') return settleSync(Effect.fail(new KinuError('unsupported', 'A run is not a turn of the chat; its host runs it.')));
 
+    return await this.admitDeliveredTurn(id, input, delivery.authorship);
+  }
+
+  private async admitDeliveredWords(id: string, input: Extract<DeliveryInput, { kind: 'words' }>): Promise<DeliveryAnswer> {
+    if (this.transcript.has(id) || this.pendingSends.has(id)) return 'duplicate';
+    const words = input.files === undefined || input.files.length === 0 ? input.text : { text: input.text, files: input.files };
+
+    // Its fate is heard here as a send's is: where it landed, or why it did not (`awaitLanding`). Held as a value, so a
+    // fate no sender asks for is no unheard rejection.
+    const fate = Promise.withResolvers<SendLanding | KinuError>();
+
+    this.deliveredLandings.set(id, fate.promise);
+    await this.admit(words, {
+      id, ...(input.mode !== undefined && { mode: input.mode }), ...(input.tier !== undefined && { tier: input.tier }),
+      ...(input.metadata !== undefined && { metadata: input.metadata }),
+    }, { resolve: fate.resolve, reject: fate.resolve });
+
+    return 'taken';
+  }
+
+  private async admitDeliveredTurn(id: string, input: TurnDeliveryInput, authorship: Delivery['authorship']): Promise<DeliveryAnswer> {
     if (this.pendingSends.hasTurn(id) || this.announcementInFlight(id) || this.announcementOnDisk(id)) return 'duplicate';
 
-    // A turn running: what happened reaches it at its next step, as before it was a delivery; an offer that yields to the
-    // owner's words waits for a turn of its own.
-    if (input.yieldsToUserMessage !== true && this.landedMidTurn(id, input.text, input.metadata)) return 'taken';
+    // A turn running: what happened reaches it at its next step, as before it was a delivery.
+    if (input.opensTurn !== true && input.yieldsToUserMessage !== true && this.actorSession.orchestrator.inbox.landMidTurn(deliveredSignal(id, input))) return 'taken';
 
     const queued = await this.queueTurn({
-      text: input.text, idempotencyKey: id, authorship: delivery.authorship,
+      text: input.text, idempotencyKey: id, authorship,
       ...(input.metadata !== undefined && { metadata: input.metadata }),
       ...(input.yieldsToUserMessage === true && { yieldsToUserMessage: true }),
     });
 
     return queued.status === 'yielded' ? 'yielded' : 'taken';
-  }
-
-  private landedMidTurn(id: string, text: string, metadata: JsonObject | undefined): boolean {
-    const kind = v.safeParse(v.string(), metadata?.kinuEvent);
-
-    return this.actorSession.orchestrator.inbox.landMidTurn({
-      kind: kind.success ? kind.output : 'delivery', text, idempotencyKey: id, ...(metadata !== undefined && { metadata }),
-    });
   }
 
   /** Send; resolves where it landed (`'mid-turn'` or `'turn'`), never guessed at admission, and rejects if it did not land. */

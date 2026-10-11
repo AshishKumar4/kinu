@@ -5,11 +5,11 @@ import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import {
   initEventsHubTables, EventLog, ReplyChannelStore,
-  AgentOrchestrator, EvolutionEngine, acceptInboundEmail, historyTurnPairs,
+  AgentOrchestrator, EvolutionEngine, acceptInboundEmail, deliveredSignal, historyTurnPairs, pendingEventsDelivery,
   type BackendHost,
   type SqlExec,
 } from '@kinu.run/core';
-import { createMemoryVfs, createTestActorsOver, createTestRuntime, withHostDeliveries } from '@kinu.run/test-utils';
+import { createMemoryVfs, createTestActorsOver, createTestRuntime, present, withHostDeliveries } from '@kinu.run/test-utils';
 import {
   createEmailThreadDispatcher, dispatchEmailRepliesForTurn,
   sendInboundEmailReceipt, sendOwnerEmail,
@@ -123,7 +123,11 @@ describe('the reply channel at its edges', () => {
       host, eventLog: log, engine: new EvolutionEngine(rt, historyTurnPairs(stores.history), { enabled: false }),
     }));
 
-    await orch.drainPendingEvents();
+    // The drain is the agent's delivery; its chat lands it in the live turn, as a busy chat's admission does.
+    const delivery = present(pendingEventsDelivery(log, Date.now()), 'the drained batch');
+
+    if (delivery.input.kind !== 'turn') throw new Error('a drained batch is a turn delivery');
+    expect(orch.inbox.landMidTurn(deliveredSignal(delivery.id, delivery.input))).toBe(true);
 
     const step = await orch.inbox.prepareStep({ stepNumber: 1, messages: [{ role: 'user', content: 'q' }] });
 

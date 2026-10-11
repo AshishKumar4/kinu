@@ -47,6 +47,7 @@ export async function sessionFixture(input: {
   const tools = input.tools ?? {};
   const sessionKey = actor.handle.actorId;
   const events: SessionEvent[] = [];
+  const eventLog = new EventLog(makeSqlExec(db), actor.handle);
   const transaction = <T>(body: () => T): T => db.transaction(body)();
 
   initPendingSendTables(rt.storage.execRaw);
@@ -73,7 +74,7 @@ export async function sessionFixture(input: {
     sessionId: sessionKey,
     transcript: actor.stores.history.transcript(CHAT_SESSION_ID),
     pendingSends: new PendingSendStore(rt.storage.sql, actor.handle.actorId),
-    eventLog: new EventLog(makeSqlExec(db), actor.handle),
+    eventLog,
     eventRecorder: actor.stores.eventRecorder,
     compactionState: fixtureCompaction(sessionKey).state,
     transaction,
@@ -107,7 +108,7 @@ export async function sessionFixture(input: {
   });
 
   return {
-    chat, actor, events, seats,
+    chat, actor, events, seats, eventLog,
     close: () => { chat.close(); seats.host.releaseAll(); testSql.close(); },
   };
 }

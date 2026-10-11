@@ -29,9 +29,12 @@ const DeliveryInputSchema = v.variant('kind', [
     kind: v.literal('words'), text: v.string(), files: v.optional(v.array(PromptFileSchema)), mode: v.optional(WorkModeSchema),
     tier: v.optional(TierIdSchema), metadata: v.optional(JsonObjectSchema),
   }),
-  /** A turn of the agent's own, opened by what happened: an event, an assignment, a report, an advisor's note. */
+  /** A turn of the agent's own, opened by what happened: an event, an assignment, a report, an advisor's note. A turn
+   *  already running takes it at its next step instead, reading `stepText` when it has one; one that `opensTurn` (an
+   *  assignment, whose answer is keyed by its id) or yields to the owner's words always waits for a turn of its own. */
   v.object({
-    kind: v.literal('turn'), text: v.string(), metadata: v.optional(JsonObjectSchema), yieldsToUserMessage: v.optional(v.boolean()),
+    kind: v.literal('turn'), text: v.string(), stepText: v.optional(v.string()), metadata: v.optional(JsonObjectSchema),
+    opensTurn: v.optional(v.boolean()), yieldsToUserMessage: v.optional(v.boolean()),
   }),
   /** A run its workspace asks of it whole (a head's, a swarm node's): its own task, run to its end and reported. */
   v.object({
@@ -40,6 +43,8 @@ const DeliveryInputSchema = v.variant('kind', [
 ]);
 
 export type DeliveryInput = v.InferOutput<typeof DeliveryInputSchema>;
+
+export type TurnDeliveryInput = Extract<DeliveryInput, { readonly kind: 'turn' }>;
 
 const AuthorshipSchema = v.picklist(['owner', 'hirer']);
 
@@ -51,6 +56,22 @@ export interface Delivery {
   readonly id: string;
   readonly input: DeliveryInput;
   readonly authorship: TurnAuthorship;
+}
+
+/**
+ * A turn delivery as the signal a running turn reads at its next step, as its producer's signal was: its kind, and the
+ * turn its events are bound to, which that turn's end answers, ride its metadata.
+ */
+export function deliveredSignal(id: string, input: TurnDeliveryInput): AgentSignal {
+  const kind = v.safeParse(v.string(), input.metadata?.kinuEvent);
+  const drained = v.safeParse(v.string(), input.metadata?.drainTurnId);
+
+  return {
+    kind: kind.success ? kind.output : 'delivery', text: input.text, idempotencyKey: id,
+    ...(input.stepText !== undefined && { stepText: input.stepText }),
+    ...(drained.success && { replyTurnId: drained.output }),
+    ...(input.metadata !== undefined && { metadata: input.metadata }),
+  };
 }
 
 /** What a delivery's turn was admitted under: none for a run, which opens no turn of the chat. */
@@ -156,7 +177,11 @@ export class DeliveryInbox implements AgentInbox {
 
     const answer = await this.deps.deliver({
       id: signal.idempotencyKey ?? cardId,
-      input: { kind: 'turn', text: signal.text, metadata, ...(signal.yieldsToUserMessage === true && { yieldsToUserMessage: true }) },
+      input: {
+        kind: 'turn', text: signal.text, metadata,
+        ...(signal.stepText !== undefined && { stepText: signal.stepText }),
+        ...(signal.yieldsToUserMessage === true && { yieldsToUserMessage: true }),
+      },
       authorship: 'hirer',
     });
 
@@ -186,7 +211,7 @@ export function pendingEventsDelivery(eventLog: EventLog, now: number): Delivery
     ...(batch.missions.length > 0 && { [MISSION_LABELS_METADATA_KEY]: batch.missions }),
   };
 
-  return { id: turnId, input: { kind: 'turn', text: batch.text, metadata }, authorship: 'hirer' };
+  return { id: turnId, input: { kind: 'turn', text: batch.text, stepText: batch.midTurnText, metadata }, authorship: 'hirer' };
 }
 
 /** An assignment admitted to its agent's log, as the delivery that opens its turn. */
@@ -208,7 +233,7 @@ export function assignmentDelivery(eventLog: EventLog, assignment: DeliveredAssi
 
   return {
     id: assignment.id,
-    input: { kind: 'turn', text: assignment.body, metadata: { ...delegatedTaskMetadata(assignment.from, assignment.mode), drainTurnId: assignment.id } },
+    input: { kind: 'turn', text: assignment.body, metadata: { ...delegatedTaskMetadata(assignment.from, assignment.mode), drainTurnId: assignment.id }, opensTurn: true },
     authorship: 'hirer',
   };
 }

@@ -1238,13 +1238,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /**
    * A programmatic turn for the agent, as its delivery: the words and metadata its producer gave it, under the key the
-   * producer named or one minted for it. Committed, it is queued, owed until the agent takes it; refused, it failed.
+   * producer named or one minted for it, a turn of its own whatever runs. Committed, it is queued, owed until the agent
+   * takes it; refused, it failed.
    */
   private async enqueueHostedTurn(actor: BoundActor, input: ProgrammaticTurn): Promise<EnqueueTurnResult> {
     const crossed = await this.deliver(actor.reference.actorId, {
       id: input.idempotencyKey ?? `turn-${nanoid()}`,
       input: {
-        kind: 'turn', text: input.text,
+        kind: 'turn', text: input.text, opensTurn: true,
         ...(input.metadata !== undefined && { metadata: { ...input.metadata } }),
         ...(input.yieldsToUserMessage === true && { yieldsToUserMessage: true }),
       },
@@ -2594,12 +2595,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.agentChatWire(this.actorHandle().actorId, actorReferenceOf(this.actorHandle()), null);
   }
 
-  /** A turn this object's own session hands the workspace agent: a delivery like any other. */
+  /** A turn this object's own session hands the workspace agent: a delivery like any other, a turn of its own. */
   protected override async enqueueMainTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult> {
     await this.deliver(this.actorHandle().actorId, {
       id: input.idempotencyKey ?? `turn:${crypto.randomUUID()}`,
       input: {
-        kind: 'turn', text: input.text, ...(input.metadata !== undefined && { metadata: input.metadata }),
+        kind: 'turn', text: input.text, opensTurn: true, ...(input.metadata !== undefined && { metadata: input.metadata }),
         ...(input.yieldsToUserMessage === true && { yieldsToUserMessage: true }),
       },
       authorship: input.authorship ?? 'hirer',

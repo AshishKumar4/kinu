@@ -1,15 +1,13 @@
-diff --git a/packages/core/src/orchestrator/agent-orchestrator.ts b/packages/core/src/orchestrator/agent-orchestrator.ts
-index bdbe46235..ccfdcf4e4 100644
---- a/packages/core/src/orchestrator/agent-orchestrator.ts
-+++ b/packages/core/src/orchestrator/agent-orchestrator.ts
-@@ -484,8 +484,8 @@ export class AgentOrchestrator {
+diff --git a/packages/core/src/subordinates/deliveries.ts b/packages/core/src/subordinates/deliveries.ts
+index 53a473055..a633edcdd 100644
+--- a/packages/core/src/subordinates/deliveries.ts
++++ b/packages/core/src/subordinates/deliveries.ts
+@@ -210,7 +210,7 @@ export function pendingEventsDelivery(eventLog: EventLog, now: number): Delivery
+     ...(batch.missions.length > 0 && { [MISSION_LABELS_METADATA_KEY]: batch.missions }),
+   };
  
-       const signal: AgentSignal = {
-         kind: 'event_drain',
--        text: batch.text,
--        stepText: batch.midTurnText,
-+        text: batch.midTurnText,
-+        stepText: batch.text,
-         replyTurnId: turnId,
-         // The rows are already bound to `turnId`, so it routes the queued half through the host's durable
-         // admission ledger; a re-delivery of the same drain collapses to one turn.
+-  return { id: turnId, input: { kind: 'turn', text: batch.text, stepText: batch.midTurnText, metadata }, authorship: 'hirer' };
++  return { id: turnId, input: { kind: 'turn', text: batch.midTurnText, stepText: batch.text, metadata }, authorship: 'hirer' };
+ }
+ 
+ /** An assignment admitted to its agent's log, as the delivery that opens its turn. */

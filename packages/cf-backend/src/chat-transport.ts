@@ -18,7 +18,7 @@ import { Effect } from 'effect';
 import * as v from 'valibot';
 import {
   isWorkMode, INTERRUPTED_TURN, JsonObjectSchema, JsonValueSchema, UIMessageSchema,
-  type ChatTransport, type JsonObject, type PromptFile, type SendLanding, type SendState, type SessionEvent, type WorkMode,
+  type ChatTransport, type JsonObject, type PromptFile, type SendLanding, type SendState, type SessionEvent, type TurnReplies, type WorkMode,
 } from '@kinu.run/core';
 import { attempt, attemptInItsWords, diagnostics, KinuError, refusalOf, settle, toKinuError } from '@kinu.run/core/obs';
 
@@ -45,8 +45,9 @@ export interface ChatWire {
   history(limit?: number): Promise<UIMessage[]>;
   /** A durable row or an accepted send's reservation: the hook resends its whole list per request. */
   admitted(id: string): Promise<boolean>;
-  /** Each slate `agent.ask` reply: fed a turn's text deltas, and told when the turn ends. */
-  readonly replies?: { feed(turnId: string, delta: string): void; ended(turnId: string, failure: string | null): void };
+  /** Each slate `agent.ask` reply: told where its message's card is shown, fed that turn's text deltas, and told when
+   *  the turn ends. */
+  readonly replies?: Pick<TurnReplies, 'card' | 'feed' | 'ended'>;
   /** The open turn's first answer text reached the room: told once a turn, as the text streams in. */
   firstText?(): void;
   /** Rejects when the loop refuses the message: nothing was written and no turn ran. */
@@ -626,6 +627,8 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       }
 
       case 'broadcast':
+        // A message lands where the agent's isolate shows its card: the turn running here then (a slate's ask among them).
+        this.wire.replies?.card(event.event, this.live?.turnId ?? null);
         this.wire.broadcast(JSON.stringify(event.event));
 
         return;

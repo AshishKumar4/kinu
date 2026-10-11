@@ -1793,7 +1793,7 @@ export { ModelCatalogSession, resolveEffectiveModelSpec, type ModelCatalogRead }
 export { stampAuthorship, turnAuthorship, type TurnAuthorship } from './orchestrator/turn-authorship';
 
 export {
-  AgentDeliveries, DeliveryInbox, DeliverySchema, wordsRefusal, initAgentDeliveriesTable, pendingEventsDelivery, assignmentDelivery, deliveryMetadata, handBackCarried, InProcessDeliveries, type DeliveredAssignment, type DeliveryPort, type OwedAdmission, type Delivery, type DeliveryAnswer, type DeliveryInput,
+  AgentDeliveries, DeliveryInbox, DeliverySchema, wordsRefusal, initAgentDeliveriesTable, pendingEventsDelivery, assignmentDelivery, deliveryMetadata, deliveredSignal, handBackCarried, InProcessDeliveries, type DeliveredAssignment, type DeliveryPort, type OwedAdmission, type Delivery, type DeliveryAnswer, type DeliveryInput, type TurnDeliveryInput,
 } from './subordinates/deliveries';
 
 export {
