@@ -236,16 +236,27 @@ describe('the file tool across the /sandbox mount', () => {
 });
 
 describe('the codemode sandbox namespace', () => {
-	test("a program's listFiles({ path: '' }), listFiles({ path: '.' }) and listFiles() list the working directory — the mount's /workspace view", async () => {
+  test('the listing has one name on the declared and runtime surfaces', () => {
+    const { executor } = rig(new ContainerFs());
+    const namespace = executorNamespace(executor);
+
+    expect(executor.tools['listFiles']).toBeUndefined();
+    expect(namespace.tools['listFiles']).toBeUndefined();
+    expect(namespace.tools['readdir']).toBeDefined();
+    expect(namespace.declarations).toHaveProperty('readdir');
+    expect(namespace.declarations).not.toHaveProperty('listFiles');
+  });
+
+	test("a program's readdir({ path: '' }), readdir({ path: '.' }) and readdir() list the working directory — the mount's /workspace view", async () => {
 		const fs = new ContainerFs();
 		const { executor, file } = rig(fs);
 
 		await file({ op: 'write', path: '/sandbox/workspace/a.mjs', content: 'a\n' });
 
-		const listFiles = present(executorNamespace(executor).tools.listFiles, 'sandbox.listFiles');
+		const readDirectory = present(executorNamespace(executor).tools.readdir, 'sandbox.readdir');
 
 		const [empty, dot, absent] = await Promise.all([
-			listFiles.execute({ path: '' }), listFiles.execute({ path: '.' }), listFiles.execute(),
+			readDirectory.execute({ path: '' }), readDirectory.execute({ path: '.' }), readDirectory.execute(),
 		]);
 
 		for (const listing of [empty, dot, absent]) {

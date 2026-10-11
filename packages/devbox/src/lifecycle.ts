@@ -107,7 +107,7 @@ export type StepOutcome<T> =
  *  so a late one leaves no retry collision and costs only readiness, never the container. */
 export async function runRestoreStep<T>(
   allowanceMs: number,
-  work: () => Promise<T>,
+  work: (current: () => boolean) => Promise<T>,
   onLate: (failure: LateStartFailure) => void,
   clock: StartClock = REAL_START_CLOCK,
 ): Promise<StepOutcome<T>> {
@@ -124,7 +124,7 @@ export async function runRestoreStep<T>(
  *  `runRestoreStep` both build on it, so keep one copy of this race. */
 async function raceAllowance<T>(
   allowanceMs: number,
-  work: () => Promise<T>,
+  work: (current: () => boolean) => Promise<T>,
   onLate: (failure: LateStartFailure) => void,
   clock: StartClock,
 ): Promise<StepOutcome<T>> {
@@ -132,7 +132,7 @@ async function raceAllowance<T>(
 
   // `then` is annotated, not cast: inference widens `{ kind: 'done' }` to `{ kind: string }`,
   // and a cast would put a caller-selected type where a constructed one belongs.
-  const started = work().then<StepOutcome<T>, StepOutcome<T>>(
+  const started = work(() => !late).then<StepOutcome<T>, StepOutcome<T>>(
     (value) => ({ kind: 'done', value }),
     (cause: LateStartFailure['cause']) => {
       if (!late) throw cause;
@@ -183,7 +183,7 @@ async function withContainerStartDeadline<T>(
 export interface RestoreSteps {
   /** A post-attach step (process start, listener proof, exposure, boot stamp); reports,
    *  never throws — see {@link runRestoreStep}. */
-  run<T>(work: () => Promise<T>, onLate: (failure: LateStartFailure) => void): Promise<StepOutcome<T>>;
+  run<T>(work: (current: () => boolean) => Promise<T>, onLate: (failure: LateStartFailure) => void): Promise<StepOutcome<T>>;
   /** The attach: the one step whose failure THROWS, because it is the only one
    *  that is mid-mount when it ends. */
   attach<T>(work: () => Promise<T>, onOverrun: (failure: LateStartFailure) => void): Promise<T>;

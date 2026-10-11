@@ -4,6 +4,7 @@
  * Each executor is its own namespace on its own plane, so each member is its own operation.
  */
 import * as v from 'valibot';
+import { ExecutorPortSchema } from '../execution/types';
 import { CRAFTED_TOOL_BODY, WORKSPACE_FILE_BINDINGS } from '../types/codemode';
 import { defineOperation, type Impact, type Operation } from './operation';
 
@@ -12,8 +13,6 @@ const described = <S extends v.GenericSchema>(schema: S, text: string) => v.pipe
 const Path = described(v.pipe(v.string(), v.nonEmpty()), 'Relative paths resolve at the executor\'s home.');
 
 const Command = v.pipe(v.string(), v.nonEmpty());
-
-const Port = v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(65_535));
 
 const Text = v.string();
 
@@ -77,10 +76,10 @@ export const WORKSPACE = {
     input: v.strictObject({ pid: v.number(), lines: v.optional(v.number()), bytes: v.optional(v.number()) }),
   }),
   exposePort: ws({
-    name: 'exposePort', impact: 'administer', input: v.strictObject({ port: Port }), output: Text,
+    name: 'exposePort', impact: 'administer', input: v.strictObject({ port: ExecutorPortSchema }), output: Text,
     help: 'A public URL for a port a process serves, then whether it was reached.',
   }),
-  unexposePort: ws({ name: 'unexposePort', help: 'Withdraw a port\'s public URL.', impact: 'administer', input: v.strictObject({ port: Port }), output: Text }),
+  unexposePort: ws({ name: 'unexposePort', help: 'Withdraw a port\'s public URL.', impact: 'administer', input: v.strictObject({ port: ExecutorPortSchema }), output: Text }),
   listPorts: ws({ name: 'listPorts', help: 'The exposed ports and their URLs.', impact: 'observe', input: v.strictObject({}), output: Text }),
   installRuntime: ws({ name: 'installRuntime', help: 'Install a language runtime, by spec.', impact: 'administer', input: v.strictObject({ spec: v.pipe(v.string(), v.nonEmpty()) }), output: Text }),
   listRuntimes: ws({ name: 'listRuntimes', help: 'The installed language runtimes.', impact: 'observe', input: v.strictObject({}), output: Text }),
@@ -88,7 +87,8 @@ export const WORKSPACE = {
 
 const sb = executorOp('sandbox');
 
-/** The sandbox container's members; `resize` is declared over the host's own size table. */
+/** The sandbox container's members; `resize` is declared over the host's own size table. Its files are read and
+ *  written through the workspace's, under `/sandbox`, as every plane's are. */
 export const SANDBOX = {
   exec: sb({
     name: 'exec', impact: 'execute', input: v.strictObject({ command: Command }), output: Text,
@@ -96,13 +96,10 @@ export const SANDBOX = {
       + 'A sandbox restored after it slept keeps its source and lockfiles but not node_modules or build output: after a failed '
       + 'import there, run `bun install` once.',
   }),
-  readFile: sb({ name: 'readFile', help: 'A file of the sandbox, as text.', impact: 'observe', input: v.strictObject({ path: Path }), output: Text }),
-  writeFile: sb({ name: 'writeFile', help: 'Write a file in the sandbox.', impact: 'mutate', input: v.strictObject({ path: Path, content: v.string() }), output: Text }),
-  listFiles: sb({
-    name: 'listFiles', help: 'A directory\'s entries; the working directory when no path is given.', impact: 'observe',
+  readdir: sb({
+    name: 'readdir', help: 'A directory\'s entries; the working directory when no path is given.', impact: 'observe',
     input: v.strictObject({ path: v.optional(v.string()) }), output: Text,
   }),
-  readdir: sb({ name: 'readdir', help: 'As listFiles.', impact: 'observe', input: v.strictObject({ path: v.optional(v.string()) }), output: Text }),
   deleteFile: sb({ name: 'deleteFile', help: 'Delete a file in the sandbox.', impact: 'mutate', input: v.strictObject({ path: Path }), output: Text }),
   exists: sb({ name: 'exists', help: '"true" or "false".', impact: 'observe', input: v.strictObject({ path: Path }), output: Text }),
   startProcess: sb({
@@ -117,9 +114,9 @@ export const SANDBOX = {
   }),
   exposePort: sb({
     name: 'exposePort', help: 'A public URL for a port the sandbox serves.', impact: 'administer',
-    input: v.strictObject({ port: Port, name: v.optional(v.string()) }), output: Text,
+    input: v.strictObject({ port: ExecutorPortSchema, name: v.optional(v.string()) }), output: Text,
   }),
-  unexposePort: sb({ name: 'unexposePort', help: 'Withdraw a port\'s public URL.', impact: 'administer', input: v.strictObject({ port: Port }), output: Text }),
+  unexposePort: sb({ name: 'unexposePort', help: 'Withdraw a port\'s public URL.', impact: 'administer', input: v.strictObject({ port: ExecutorPortSchema }), output: Text }),
   listPorts: sb({ name: 'listPorts', help: 'The exposed ports and their URLs.', impact: 'observe', input: v.strictObject({}), output: Text }),
 } as const;
 
@@ -136,10 +133,9 @@ export function sandboxResize(sizes: readonly { readonly size: string; readonly 
 
 const parent = executorOp('parent');
 
-/** The parent workspace a hire reads, in the parent's own paths. */
+/** The parent workspace a hire reads, in the parent's own paths. Its files are read and written through the
+ *  workspace's, which share its folder, as every plane's are. */
 export const PARENT = {
-  readFile: parent({ name: 'readFile', help: 'A file of the parent workspace.', impact: 'observe', input: v.strictObject({ path: Path }), output: Text }),
-  writeFile: parent({ name: 'writeFile', help: 'Write a file in the parent workspace.', impact: 'mutate', input: v.strictObject({ path: Path, content: v.string() }), output: Text }),
   readdir: parent({ name: 'readdir', help: 'A directory\'s entry names.', impact: 'observe', input: v.strictObject({ path: Path }), output: v.array(v.string()) }),
   exists: parent({ name: 'exists', help: 'Whether a path exists.', impact: 'observe', input: v.strictObject({ path: Path }), output: v.boolean() }),
   exec: parent({
@@ -153,11 +149,10 @@ const device = executorOp('device');
 
 const Device = v.optional(described(v.string(), 'With several machines connected, which one, by name.'));
 
-/** The user's own machine; `unavailable` means none is attached, and the error says how to attach one. */
+/** The user's own machine; `unavailable` means none is attached, and the error says how to attach one. Its files are
+ *  read and written through the workspace's, under `/pc/<machine>`, as every plane's are. */
 export const DEVICE = {
   exec: device({ name: 'exec', help: 'Run a command on the machine.', impact: 'execute', input: v.strictObject({ command: Command, device: Device }), output: Text }),
-  readFile: device({ name: 'readFile', help: 'A file on the machine.', impact: 'observe', input: v.strictObject({ path: Path, device: Device }), output: Text }),
-  writeFile: device({ name: 'writeFile', help: 'Write a file on the machine.', impact: 'mutate', input: v.strictObject({ path: Path, content: v.string(), device: Device }), output: Text }),
   readdir: device({ name: 'readdir', help: 'A directory\'s entry names.', impact: 'observe', input: v.strictObject({ path: Path, device: Device }), output: v.array(v.string()) }),
   exists: device({ name: 'exists', help: 'Whether a path exists.', impact: 'observe', input: v.strictObject({ path: Path, device: Device }), output: v.boolean() }),
 } as const;

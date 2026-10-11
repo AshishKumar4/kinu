@@ -34,7 +34,7 @@ export function spawnSeatedHead(input: HeadInput, deps: SeatedHeadDeps): Spawned
 
   const run = async (seat: HeadSeat, capture: HeadCapture): Promise<HeadReport> => {
     // Long calls detach into its jobs; a settle wakes it.
-    const { runner, next, detach } = stepLoopJobs({ actor: seat.actor, seat: seat.jobs });
+    const { runner, next, end } = stepLoopJobs({ actor: seat.actor, seat: seat.jobs });
 
     const inference: RunInference = {
       actor: seat.actor,
@@ -63,9 +63,7 @@ export function spawnSeatedHead(input: HeadInput, deps: SeatedHeadDeps): Spawned
     try {
       return await seat.infer(input, inference);
     } finally {
-      // Its jobs' results have no reader left.
-      runner.cancelRunning();
-      detach();
+      await end();
     }
   };
 

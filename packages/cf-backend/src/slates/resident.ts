@@ -7,10 +7,9 @@ import { CRED_KERNEL, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.
 import type { ComposedFacetManager, LongRunningWorkerSpawnOptions } from '@nimbus-sh/worker/workspace-host';
 import type { WorkspaceSession } from '@kinu.run/core/workspace';
 import {
-  SLATE_DRIVEN_MEMBERS, SLATE_METHOD_NAME_SOURCE, SLATE_PAGE_PREAMBLE, slateTitle, type SlateProcess, type SlateProject,
+  SLATE_DRIVEN_MEMBERS, SLATE_METHOD_NAME_SOURCE, SLATE_PAGE_PREAMBLE, slateTitle, type SlateProcess, type SlateProject, slateAuthority,
 } from '@kinu.run/core';
 import { attempt, diagnostics, KinuError, renderCauseChain, settle } from '@kinu.run/core/obs';
-import { slateCredentialKey } from './bindings';
 import { SLATE_CLIENT_MODULE, SLATE_SERVER_MODULE } from '@kinu.run/core/slates';
 import { BROWSER_CLIENT_MODULE, BROWSER_PRELUDE, browserClientSource } from '../browser-prelude';
 
@@ -568,7 +567,7 @@ export class ResidentSlateProcesses {
         }
       }
 
-      const bundlerKey = slateCredentialKey(input.cred);
+      const bundlerKey = slateAuthority(input.cred);
       let bundler = this.bundlers.get(bundlerKey);
 
       if (bundler === undefined) {
