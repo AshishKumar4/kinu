@@ -26,7 +26,8 @@ import { builtinModules } from 'node:module';
 import { spawn } from 'node:child_process';
 import { promptText } from './vite-prompt-text';
 import { AGENT_BUNDLE_ENTRY, buildAgentBundle, workerCompatibility, writeWhole } from './vite-agent-bundle';
-import { closeRemoteWorkersAi, readAiRun, remoteWorkersAi, workersAiBinding, workersAiTestRunning } from './tests/helpers/workers-ai-binding';
+import { readAiRun, remoteWorkersAi, workersAiBinding, workersAiTestRunning } from './tests/helpers/workers-ai-binding';
+import { remoteAiPoolLifecycle } from './tests/helpers/remote-ai-pool';
 import type { Reporter } from 'vitest/reporters';
 import * as v from 'valibot';
 import { HELD_PROXY_MODEL } from './tests/workerd/ai-proxy-shapes';
@@ -589,7 +590,6 @@ let selectedWorkers: AuxiliaryWorker[] = [];
 const aiCaseStarts = new Map<string, number>();
 
 const workerSelection: Reporter = {
-  onTestRunEnd: closeRemoteWorkersAi,
   onTestCaseReady(test) {
     workersAiTestRunning(test.name);
 
@@ -664,7 +664,7 @@ export default defineConfig({
         workers: selectedWorkers,
       },
     };
-  })],
+  }), remoteAiPoolLifecycle()],
   test: {
     ...sharedTestOptions,
     include: ['tests/workerd/**/*.test.ts'],

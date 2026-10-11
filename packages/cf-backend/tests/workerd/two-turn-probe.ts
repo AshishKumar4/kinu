@@ -21,7 +21,7 @@ import {
   type RecordedLog,
 } from '@kinu.run/core/obs';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
-import { RemoteAiFixtureOrchestrator } from '../helpers/remote-ai-profile';
+import { configureRemoteAiFixture } from '../helpers/remote-ai-profile';
 import { KINU_TIMER_JOB, TERMINAL_RETRY_JOB } from '../../src/wake-jobs';
 import { ROOT_SLATE_CALLER } from '../../src/slates/bindings';
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
@@ -143,7 +143,7 @@ async function awaitSettled(target: { settleState(): Promise<SettleState> }): Pr
   }
 }
 
-export class ObservedOrchestrator extends RemoteAiFixtureOrchestrator {
+export class ObservedOrchestrator extends ProductionOrchestrator {
   private readonly actorState: AgentContext;
   private readonly meter: SqlMeter;
   /** The database without the meter, for the probe's own reads. */
@@ -949,6 +949,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       const caller = await ownerCaller(this.env);
       const userDO = this.env.UserDO.get(this.env.UserDO.idFromName('probe-owner'));
 
+      await configureRemoteAiFixture(userDO, caller);
       const register = await userDO.registerWorkspace(caller, 'two-turn-workspace', 'Two-Turn Probe');
       const claim = await target.claimOwner('probe-owner');
 
@@ -1077,6 +1078,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
     const caller = await ownerCaller(this.env);
     const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(owner));
+    await configureRemoteAiFixture(userDO, caller);
     await userDO.registerWorkspace(caller, workspace, 'Queue Probe', { nameOrigin: 'user' });
     const claim = await target.claimOwner(owner);
     await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
@@ -1213,6 +1215,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
     const caller = await ownerCaller(this.env);
     const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(owner));
+    await configureRemoteAiFixture(userDO, caller);
     await userDO.registerWorkspace(caller, workspace, 'Wake Probe');
     const claim = await target.claimOwner(owner);
     await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
@@ -1305,6 +1308,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
     const caller = await ownerCaller(this.env);
     const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(owner));
+    await configureRemoteAiFixture(userDO, caller);
     await userDO.registerWorkspace(caller, workspace, 'Queue Probe', { nameOrigin: 'user' });
     const claim = await target.claimOwner(owner);
     await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
@@ -1883,6 +1887,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
     const caller = await ownerCaller(this.env);
     const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(owner));
+    await configureRemoteAiFixture(userDO, caller);
     await userDO.registerWorkspace(caller, workspace, 'Parity');
     const claim = await target.claimOwner(owner);
     await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
@@ -2089,6 +2094,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
     const caller = await ownerCaller(this.env);
     const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(owner));
+    await configureRemoteAiFixture(userDO, caller);
     await userDO.registerWorkspace(caller, workspace, 'First Chat');
     const claim = await target.claimOwner(owner);
     await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
@@ -2264,6 +2270,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
     const caller = await ownerCaller(this.env);
     const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(owner));
+    await configureRemoteAiFixture(userDO, caller);
     await userDO.registerWorkspace(caller, workspace, 'Raw Chat Probe');
     const claim = await target.claimOwner(owner);
     await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
@@ -2368,6 +2375,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       const caller = await ownerCaller(this.env);
       const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(drive.owner));
 
+      await configureRemoteAiFixture(userDO, caller);
       await userDO.registerWorkspace(caller, drive.workspace, drive.displayName);
       const claim = await target.claimOwner(drive.owner);
 

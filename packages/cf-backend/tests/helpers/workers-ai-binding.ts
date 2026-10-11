@@ -4,6 +4,7 @@ import type { RemoteProxyConnectionString, Response as MiniflareResponse } from 
 import { startRemoteProxySession, unstable_readConfig } from 'wrangler';
 import { fileURLToPath } from 'node:url';
 import { restApiToken } from '../../../../scripts/cloudflare-rest';
+import { remoteSessionHolder } from './remote-session-holder';
 
 /** One `env.AI.run(model, inputs)` as the installed binding sends it: the model in a header, the inputs in the body. */
 export interface AiRun {
@@ -44,7 +45,17 @@ export function aiLane({ model, inputs }: AiRun): (typeof AI_LANES)[number] | nu
   return messages.every((message) => message.role === 'user') ? 'sleep' : null;
 }
 
-let remote: ReturnType<typeof startRemoteProxySession> | undefined;
+/** Wrangler's remote proxy session, shared by every pool worker and ended with the last of them (vitest.config.ts). */
+const remote = remoteSessionHolder(() => startRemoteProxySession({ AI: { type: 'ai' } }, {
+  auth: async () => {
+    const accountId = unstable_readConfig({ config: fileURLToPath(new URL('../../wrangler.jsonc', import.meta.url)), env: 'staging' }).account_id;
+    const apiToken = restApiToken();
+
+    if (accountId === undefined || apiToken === '') throw new Error('Workers AI binding tests require the configured account and KINU_CLOUDFLARE_API_TOKEN from Armada secrets.');
+
+    return { accountId, apiToken: { apiToken } };
+  },
+}));
 
 let runningTest = 'native harness setup';
 
@@ -63,17 +74,7 @@ async function refuseExhaustedQuota(answer: Response, model: string): Promise<vo
 
 /** The native AI wire is passed to Wrangler's remote binding, never answered by a fixture. */
 export async function remoteWorkersAi(request: Request): Promise<Response> {
-  remote ??= startRemoteProxySession({ AI: { type: 'ai' } }, {
-    auth: async () => {
-      const accountId = unstable_readConfig({ config: fileURLToPath(new URL('../../wrangler.jsonc', import.meta.url)), env: 'staging' }).account_id;
-      const apiToken = restApiToken();
-
-      if (accountId === undefined || apiToken === '') throw new Error('Workers AI binding tests require the configured account and KINU_CLOUDFLARE_API_TOKEN from Armada secrets.');
-
-      return { accountId, apiToken: { apiToken } };
-    },
-  });
-  const session = await remote;
+  const session = await remote.current();
   const headers = new Headers(request.headers);
   headers.delete('host');
   headers.delete('content-length');
@@ -89,8 +90,11 @@ export async function remoteWorkersAi(request: Request): Promise<Response> {
 }
 
 export async function closeRemoteWorkersAi(): Promise<void> {
-  if (remote !== undefined) await (await remote).dispose();
-  remote = undefined;
+  await remote.close();
+}
+
+export function reopenRemoteWorkersAi(): void {
+  remote.reopen();
 }
 
 const ProxyUrlSchema = v.custom<RemoteProxyConnectionString>((value) => v.is(v.instance(URL), value));

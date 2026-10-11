@@ -1,6 +1,6 @@
 import * as v from 'valibot';
-import { SLEEP_TIME_PROMPT_OPENING } from '../../../core/src/utils/prompt-sections';
 import { KILL_FILE, WAKE_MARKER, WakeHoldPlacementSchema, type CallRecord, type KillPoint, type WakeHoldPlacement } from './two-turn-shapes';
+import { scriptedLongAnswer } from './long-model-script';
 import { aiLane, type AiRun } from '../helpers/workers-ai-binding';
 import { WORKERS_AI_MODELS_DEV } from '@kinu.run/test-utils/models-dev';
 /**
@@ -405,18 +405,12 @@ async function wakeBody(body: OutboundBody): Promise<Response> {
   return call('call_wake_run_1', 'shell', { runtime: 'workspace', command: `sleep 45 && echo ${WAKE_MARKER}` });
 }
 
-function longBody(body: OutboundBody): Response {
-  const users = (body.messages ?? []).filter((m) => m.role === 'user').map((m) => textOf(m.content));
+function longBody(body: OutboundBody, raw: string): Response {
+  // The background memory pass and the title ask for one completion, not a stream: the shared scripted protocol answers them.
+  const scripted = scriptedLongAnswer(raw);
 
-  // The background memory lane, scripted as the tiers' scripted model answers it (scripts/tier-model.ts): no change.
-  // It asks for one JSON completion, not a stream.
-  if (users[0]?.startsWith(SLEEP_TIME_PROMPT_OPENING) === true) {
-    return Response.json({
-      id: 'chatcmpl-probe', object: 'chat.completion', created: 0, model: body.model,
-      choices: [{ index: 0, message: { role: 'assistant', content: JSON.stringify({ upserts: [], decay: [] }) }, finish_reason: 'stop' }],
-      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-    });
-  }
+  if (scripted !== null) return new Response(scripted.body, { status: scripted.status, headers: { 'content-type': scripted.contentType } });
+  const users = (body.messages ?? []).filter((m) => m.role === 'user').map((m) => textOf(m.content));
 
   const spec = users.filter((u) => u.startsWith('long:')).at(-1) ?? 'long:100';
   const deltas = Number.parseInt(spec.slice('long:'.length), 10);
@@ -837,7 +831,8 @@ export async function probeOutbound(request: Request): Promise<Response> {
 
     if (url.pathname === '/v1/chat/completions' && request.method === 'POST') {
       // SAFETY: the compat SDK posts JSON chat-completion bodies; parsed once against `OutboundBodySchema`.
-      const body = v.parse(OutboundBodySchema, await request.json());
+      const raw = await request.text();
+      const body = v.parse(OutboundBodySchema, JSON.parse(raw));
 
       recordCall(url, request, body);
 
@@ -856,7 +851,7 @@ export async function probeOutbound(request: Request): Promise<Response> {
         }
 
         case 'probe': return echoBody(body);
-        case 'probe-long': return longBody(body);
+        case 'probe-long': return longBody(body, raw);
         case 'probe-parity': return parityBody(body);
         case 'probe-wake': return wakeBody(body);
         case 'probe-early-done': return earlyDoneBody();

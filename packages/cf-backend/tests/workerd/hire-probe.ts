@@ -12,7 +12,6 @@ import { handClock } from '@kinu.run/test-utils/hand-clock';
 import { diagnostics } from '@kinu.run/core/obs';
 import { sealRpcSurface, ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
-import { RemoteAiFixtureOrchestrator } from '../helpers/remote-ai-profile';
 import type { UserDO } from '../../src/user/user-do';
 import { HIRE_CHILD_MODEL, hireControlUrl, hireModelsBaseUrl, JOB_GATE, REPORT_MARK, type ActorRow, type JobRow, type JobWatchState, type ArchiveSections, type ChildScript, type HireObservation, type LogRow, type RosterRow, type TurnCount } from './hire-shapes';
 import { hostedActorPlacement } from '../../src/actor-hosting';
@@ -37,7 +36,7 @@ const ChatTextSchema = v.object({
   parts: v.array(v.looseObject({ type: v.string(), text: v.optional(v.string()) })),
 });
 
-export class HireOrchestrator extends RemoteAiFixtureOrchestrator {
+export class HireOrchestrator extends ProductionOrchestrator {
   private readonly probeState: AgentContext;
 
   constructor(ctx: AgentContext, env: ProbeEnv) {

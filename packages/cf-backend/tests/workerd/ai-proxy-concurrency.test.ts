@@ -22,6 +22,7 @@ import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 import * as v from 'valibot';
 import { HELD_PROXY_MODEL } from './ai-proxy-shapes';
+import { WORKERS_AI_FIXTURE_MODEL_ID } from '../../../test-utils/src/workers-ai-model-spec';
 
 const PROXY_URL = 'http://localhost/api/user/ai/v1/chat/completions';
 
@@ -80,7 +81,7 @@ describe('CLI AI proxy under concurrent requests from one user', () => {
     for (const [left, right] of [[17, 25], [31, 12]]) {
       const response = await env.PUBLIC_SURFACE.fetch(PROXY_URL, {
         method: 'POST', headers: { authorization: `Bearer ${bearer}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast', messages: [
+        body: JSON.stringify({ model: WORKERS_AI_FIXTURE_MODEL_ID, messages: [
           { role: 'system', content: 'Add the two integers supplied by the user. Return only a JSON object with the integer property total; do not return a title.' },
           { role: 'user', content: JSON.stringify({ left, right }) },
         ], response_format: { type: 'json_object' }, max_tokens: 64 }),
