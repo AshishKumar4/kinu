@@ -9,6 +9,7 @@ import { readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node
 import { join } from 'node:path';
 import * as v from 'valibot';
 import { SCRATCH_ROOT_PREFIX } from '../packages/test-utils/src/scratch';
+import { procFile, procStat } from './proc';
 
 export interface ProcessOwner {
   readonly bootId: string;
@@ -35,11 +36,6 @@ function readBootId(): string | undefined {
   return tolerate(() => readFileSync('/proc/sys/kernel/random/boot_id', 'utf8'), 'enoent')?.trim();
 }
 
-/** `/proc/<pid>/<name>`, or undefined once the process is gone: ENOENT after it exits, ESRCH when it exits mid-read. */
-export function procFile(pid: number | string, name: string): string | undefined {
-  return tolerate(() => tolerate(() => readFileSync(`/proc/${String(pid)}/${name}`, 'utf8'), 'esrch'), 'enoent');
-}
-
 /** The uid owning `/proc/<pid>/<name>`, or undefined once the process is gone: it can exit between the listing and
  *  the stat, which answers ESRCH, not ENOENT. */
 export function procUid(pid: number | string, name = ''): number | undefined {
@@ -49,9 +45,9 @@ export function procUid(pid: number | string, name = ''): number | undefined {
 /** Field 22 of `/proc/<pid>/stat`, counted after the parenthesised command name, which may hold
  *  spaces; undefined once the process is gone. */
 export function processStartTicks(pid: number): number | undefined {
-  const stat = procFile(pid, 'stat');
+  const stat = procStat(pid);
 
-  return stat === undefined ? undefined : Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]);
+  return stat === undefined ? undefined : Number(stat.startTicks);
 }
 
 /** Chrome's handlers daemonize outside its group; their database is rooted by the launch's CHROME_CONFIG_HOME. */
@@ -79,11 +75,9 @@ export function crashpadsIn(root: string): { pid: number; startTicks: number }[]
 /** Whether a process of `group` still runs; a zombie has ended and only waits for its parent to collect it. */
 export function groupRuns(group: number): boolean {
   return readdirSync('/proc').some((pid) => {
-    const stat = /^\d+$/u.test(pid) ? procFile(pid, 'stat') : undefined;
-    // After the parenthesised command name, which may hold spaces: state, ppid, process group.
-    const [state, , member] = stat?.slice(stat.lastIndexOf(')') + 2).split(' ') ?? [];
+    const stat = /^\d+$/u.test(pid) ? procStat(pid) : undefined;
 
-    return state !== undefined && state !== 'Z' && Number(member) === group;
+    return stat !== undefined && stat.state !== 'Z' && stat.group === group;
   });
 }
 

@@ -17,6 +17,8 @@ const sandbox = require('./sandbox.js');
 
 const pty = require('./pty.js');
 
+const { createProcReader, procStat, procEntryGone } = require('./proc.js');
+
 const update = require('./update.js');
 
 const protocol = require('./device-protocol.json');
@@ -1008,19 +1010,9 @@ async function psOutput(args) {
   return stdout;
 }
 
-/**
- * Whether a read of `/proc/<pid>/...` failed because that process is gone: no entry (ENOENT), or one reaped between
- * the open and the read, which answers the read ESRCH.
- */
-function procEntryGone(err) {
-  return Boolean(err) && (err.code === 'ENOENT' || err.code === 'ESRCH');
-}
-
 async function processStartIdentity(pid) {
   if (process.platform === 'linux') {
-    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
-    const tail = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
-    const start = tail[19];
+    const start = procStat(pid, 'stat', true).startTicks;
 
     if (!start) throw new Error(`cannot read start identity for supervisor ${pid}`);
 
@@ -1088,15 +1080,9 @@ async function processGroupHasLiveProcess(group) {
     for (const entry of fs.readdirSync('/proc', { withFileTypes: true })) {
       if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue;
 
-      try {
-        const stat = fs.readFileSync(`/proc/${entry.name}/stat`, 'utf8');
-        const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
+      const stat = procStat(entry.name);
 
-        if (Number(fields[2]) === group && fields[0] !== 'Z') return true;
-      } catch (err) {
-        if (procEntryGone(err)) continue;
-        throw err;
-      }
+      if (stat !== undefined && stat.group === group && stat.state !== 'Z') return true;
     }
 
     return false;
@@ -1188,6 +1174,7 @@ const COMMAND_SHELL = 'bash';
 const SUPERVISOR_SCRIPT = `
 'use strict';
 const fs = require('node:fs');
+const { procStat } = (${createProcReader.toString()})(fs);
 const { execFile, spawn } = require('node:child_process');
 
 // fd 4 is the record's \`life\`, handed over at this process's spawn: the kernel closes it however this process exits,
@@ -1216,10 +1203,9 @@ function run(file, args) {
 }
 
 function linuxStartIdentity(pid) {
-  const stat = fs.readFileSync('/proc/' + pid + '/stat', 'utf8');
-  const tail = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\\s+/);
-  if (!tail[19]) throw new Error('cannot read process start identity');
-  return tail[19];
+  const stat = procStat(pid, 'stat', true);
+  if (!stat.startTicks) throw new Error('cannot read process start identity');
+  return stat.startTicks;
 }
 
 /** What the daemon reads back with the same ps; empty once the process is gone (ps exits 1). */
@@ -1280,9 +1266,8 @@ async function processGroupHasLiveProcess(group) {
     for (const entry of fs.readdirSync('/proc', { withFileTypes: true })) {
       if (!entry.isDirectory() || !/^\\d+$/.test(entry.name)) continue;
       try {
-        const stat = fs.readFileSync('/proc/' + entry.name + '/stat', 'utf8');
-        const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\\s+/);
-        if (Number(fields[2]) === group && fields[0] !== 'Z') return true;
+        const stat = procStat(entry.name);
+        if (stat !== undefined && stat.group === group && stat.state !== 'Z') return true;
       } catch {}
     }
     return false;
@@ -3401,9 +3386,7 @@ function processAlive(pid) {
 
 /** The one-letter state `/proc/<pid>/stat` gives; `Z` is a zombie, an exited process not yet reaped. */
 function procState(pid) {
-  const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
-
-  return stat.slice(stat.lastIndexOf(')') + 2, stat.lastIndexOf(')') + 3);
+  return procStat(pid, 'stat', true).state;
 }
 
 /**

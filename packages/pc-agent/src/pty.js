@@ -133,24 +133,14 @@ function sessionGroups(leader, platform = process.platform) {
 
   if (platform !== 'linux') return groups;
   const fs = require('node:fs');
+  const { procStat } = require('./proc.js');
 
   for (const entry of fs.readdirSync('/proc', { withFileTypes: true })) {
     if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue;
-    let stat;
+    const stat = procStat(entry.name);
 
-    try {
-      stat = fs.readFileSync(`/proc/${entry.name}/stat`, 'utf8');
-    } catch (err) {
-      // A process that exited between the listing and this read is not in the
-      // session any more, which is the answer this function wanted.
-      if (!err || (err.code !== 'ENOENT' && err.code !== 'ESRCH')) throw err;
-      continue;
-    }
-
-    const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
-
-    if (Number(fields[3]) !== leader) continue;
-    const group = Number(fields[2]);
+    if (stat === undefined || stat.session !== leader) continue;
+    const group = stat.group;
 
     if (group > 0 && !groups.includes(group)) groups.push(group);
   }
