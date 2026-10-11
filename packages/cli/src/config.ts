@@ -283,7 +283,7 @@ function readWorkspaceIdentityId(dbPath: string): Effect.Effect<string, KinuErro
   return Effect.try({
     try: () => {
       // A WAL database needs its -shm, so the connection is read-write.
-      const db = new Database(dbPath, { create: false });
+      const db = new Database(dbPath, { readwrite: true, create: false });
 
       try {
         const row = db.query<{ id: string }, []>(`SELECT id FROM workspace_identity LIMIT 1`).get();
@@ -304,7 +304,7 @@ export function readWorkspaceDisplayName(dbPath: string): string | null {
   return settleSync(Effect.try({
     try: () => {
       // Read-write: see readWorkspaceIdentityId.
-      const db = new Database(dbPath, { create: false });
+      const db = new Database(dbPath, { readwrite: true, create: false });
 
       try {
         return openWorkspaceMainActor(makeSql(db)).config.getDisplayName();
