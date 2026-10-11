@@ -1305,7 +1305,6 @@ export type { Credential, BearerCredential, OAuthCredential, OpenAICompatCredent
 // Credential store policy
 export {
   createCredentialCipher,
-  isSealedCredential,
   type CredentialCipher,
   type CredentialEncryptionEnv,
 } from './credentials/envelope';

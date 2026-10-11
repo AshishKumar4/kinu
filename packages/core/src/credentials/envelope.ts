@@ -119,7 +119,7 @@ function opened(aad: string, stored: string, current: string): Effect.Effect<str
   });
 }
 
-export function isSealedCredential(stored: string): boolean {
+function isSealedCredential(stored: string): boolean {
   return stored.startsWith(ENVELOPE_PREFIX);
 }
 
