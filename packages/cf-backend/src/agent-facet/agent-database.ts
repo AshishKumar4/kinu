@@ -16,7 +16,7 @@ import {
   initPendingSendTables, initTerminalEffectTable, PendingSendStore, contextFill, announcementOf, classifyRunEnd, closeTurnRun, TurnReports,
   PlanReviewStore, AgentSequence, TurnFactsStore, type PlanReview, type TurnFacts,
   forkArtifactPath, localForkConversationSource, localForkConversationTarget, type ForkConversationSource, type ForkConversationTarget,
-  InProcessDeliveries, type Delivery, type DeliveryAnswer,
+  InProcessDeliveries, type Delivery, type DeliveryAnswer, holdConfig,
 } from '@kinu.run/core';
 import { attempt, detach, diagnostics, hold, KinuError, logged, settle, settleSync } from '@kinu.run/core/obs';
 import { isDeepStrictEqual } from 'node:util';
@@ -129,6 +129,9 @@ export class AgentDatabase {
   /** The rows this database was last made to hold, as the workspace sent them; null once it wrote one of them itself. */
   private adopted: string | null = null;
 
+  /** This database's config, held: its writers are the stores over `sql` and {@link adopt}. */
+  private readonly configs = holdConfig(this.sql);
+
   constructor(
     private readonly storage: DurableObjectStorage,
     private readonly workspace: {
@@ -190,7 +193,10 @@ export class AgentDatabase {
 
         for (const row of snapshot.scaffold) this.selectScaffold(row);
       });
-      this.directory?.forget(snapshot.lineage.map((row) => v.parse(v.string(), row.actor_id)));
+      const adopted = snapshot.lineage.map((row) => v.parse(v.string(), row.actor_id));
+
+      this.directory?.forget(adopted);
+      this.configs.adopt(adopted, snapshot.config);
     }
 
     this.adopted = rows;

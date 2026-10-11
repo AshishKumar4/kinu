@@ -52,7 +52,7 @@ const sandboxFor = (id: string) => {
 const sandboxes = Object.assign(unreachableObjects<KinuDevbox>("KinuDevbox"), { getByName: sandboxFor });
 
 // Must follow the sandbox double: both helpers' module graphs reach the sandbox SDK.
-const { hostedExplorationHarness, orchestratorHarness } = await import("./helpers/actor-harness");
+const { actorOverWorkspace, hostedExplorationHarness, orchestratorHarness } = await import("./helpers/actor-harness");
 
 const { TEST_CREDENTIAL_ENCRYPTION_KEY } = await import('./helpers/user-do');
 
@@ -138,8 +138,7 @@ describe('a head forks its parent workspace', () => {
     restoresPerformed = 0;
     const { rt, head, workspace } = await hostedHead();
     // `kinu-harness-parent` belongs to the workspace; acting on it would roll the shared container back.
-    workspace.db.prepare("INSERT INTO actor_config (actor_id,key,value) VALUES (?,'workspace_backup',?)")
-      .run(head.actor.handle.actorId, JSON.stringify({ id: 'bk-1', dir: '/workspace' }));
+    actorOverWorkspace(workspace.agent, head.actor.handle.actorId).config.set('workspace_backup', JSON.stringify({ id: 'bk-1', dir: '/workspace' }));
 
     const handle = rt.sandboxHandle;
 

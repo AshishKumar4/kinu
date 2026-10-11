@@ -7,13 +7,13 @@ import {
 import {
   MergeOutputSchema, DEFAULT_WORKERS_AI_MODEL_SPEC, DYNAMIC_CONTEXT_OPEN_TAG, mcpToolKey, type JsonValue,
   type ReasoningEffort, type ResolvedTurnProfile,
-  LiveWorkers,
+  LiveWorkers, AGENT_CONFIG_KEYS,
 } from '@kinu.run/core';
 import {
   hostedExplorationHarness, hostedMainActor, improvementLanesRan,
   mainDatabase, orchestratorHarness, reactivateOrchestratorHarness, catalogTurn, gatewayWorkspace, GATEWAY_CATALOG,
   chatSessionTurns, driveUntil, tapDiagnostics, until, type ActorHarness, type HarnessOrchestratorAgent, workspaceFiles,
-  workspaceMainActor, type RecordedUserPlaneCalls,
+  workspaceMainActor, actorOverWorkspace, type RecordedUserPlaneCalls,
 } from './helpers/actor-harness';
 import { answeringGateway, chatCompletion, GATEWAY_MODEL, stubAiBinding } from './helpers/platform-gateway';
 import type { ScriptedAnswer } from './helpers/turn-harness';
@@ -333,7 +333,9 @@ describe('turn-pipeline correctness wiring', () => {
     expect(pinned.model).toEqual({ model: 'workers-ai/pinned-model', source: 'workspace' });
 
     // Unpinned: the role's tier, with source `role`.
-    workspace.db.prepare("DELETE FROM actor_config WHERE key = 'model'").run();
+    for (const actorId of [workspaceMainActor(workspace.db).actorId, present(added.subordinate.actorId, 'the added agent')]) {
+      actorOverWorkspace(workspace.agent, actorId).config.delete(AGENT_CONFIG_KEYS.model);
+    }
 
     const unpinned = await workspace.agent.getActorSnapshot(added.name);
     expect(unpinned.model).toEqual({ model: 'workers-ai/account-default', source: 'role' });
@@ -363,8 +365,7 @@ describe('turn-pipeline correctness wiring', () => {
 
     const effortAs = async (role: string) => {
       const added = await workspace.agent.createSubordinateAgent();
-      workspace.db.prepare("INSERT OR REPLACE INTO actor_config (actor_id, key, value) VALUES (?, 'role_selection', ?)")
-        .run(added.subordinate.actorId, role);
+      actorOverWorkspace(workspace.agent, present(added.subordinate.actorId, 'the added agent')).config.set(AGENT_CONFIG_KEYS.roleSelection, role);
 
       return (await workspace.agent.getActorSnapshot(added.name)).reasoningEffort;
     };

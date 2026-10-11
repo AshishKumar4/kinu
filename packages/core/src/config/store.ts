@@ -2,7 +2,8 @@ import { markStoreChanged } from '@kinu.run/agent-utils';
 // AgentConfigStore: typed accessors over the `actor_config` key/value table.
 import { Effect } from 'effect';
 import { settleSync } from '../obs/effect';
-import type { SqlExecutor, RawSqlExec } from '../types/primitives';
+import type { SqlExecutor, SqlValue, RawSqlExec } from '../types/primitives';
+import * as v from 'valibot';
 import { nameOriginOf, type NameOrigin } from '../identity/naming';
 import { isAccountName, isProviderScope } from '../credentials/accounts';
 import { isReasoningEffort, type ReasoningEffort } from '../providers/reasoning-effort';
@@ -158,18 +159,114 @@ export function initAgentConfigTable(execRaw: RawSqlExec): void {
   )`);
 }
 
+/** Where a database's config stores read `actor_config`. A store says `changed` before each write it makes. */
+interface ConfigReads {
+  value(actorId: string, key: string): string | null;
+  all(actorId: string): Record<string, string>;
+  changed(actorId: string): void;
+}
+
+/** A question per read: a database other processes also write (the CLI's file) can hold nothing between them. */
+function liveConfigReads(sql: SqlExecutor): ConfigReads {
+  return {
+    value: (actorId, key) => sql<{ value: string }>`
+      SELECT value FROM actor_config WHERE actor_id = ${actorId} AND key = ${key} LIMIT 1`[0]?.value ?? null,
+    all: (actorId) => Object.fromEntries(sql<{ key: string; value: string }>`SELECT key, value FROM actor_config WHERE actor_id = ${actorId}`
+      .map((row) => [row.key, row.value])),
+    changed: () => undefined,
+  };
+}
+
+/** One `actor_config` row, as an isolate's snapshot carries it. */
+export type ConfigRow = { readonly actor_id: string; readonly key: string; readonly value: string };
+
+const ConfigRowSchema = v.object({ actor_id: v.string(), key: v.string(), value: v.string() });
+
+/**
+ * Each actor's whole `actor_config`, held from one read: a key it lacks is unset, and its default needs no statement.
+ * Every store over its executor reads through it and drops the actor's rows before it writes; the one other writer, an
+ * isolate adopting its workspace's rows, says what it wrote ({@link adopt}).
+ */
+export class ConfigCatalog implements ConfigReads {
+  private readonly held = new Map<string, ReadonlyMap<string, string>>();
+
+  constructor(private readonly sql: SqlExecutor) {}
+
+  private rows(actorId: string): ReadonlyMap<string, string> {
+    const held = this.held.get(actorId);
+
+    if (held !== undefined) return held;
+
+    const rows = new Map(this.sql<{ key: string; value: string }>`SELECT key, value FROM actor_config WHERE actor_id = ${actorId}`
+      .map((row) => [row.key, row.value]));
+
+    this.held.set(actorId, rows);
+
+    return rows;
+  }
+
+  value(actorId: string, key: string): string | null {
+    return this.rows(actorId).get(key) ?? null;
+  }
+
+  all(actorId: string): Record<string, string> {
+    return Object.fromEntries(this.rows(actorId));
+  }
+
+  changed(actorId: string): void {
+    this.held.delete(actorId);
+  }
+
+  /** The rows of `actorIds`, those not held read in one statement. */
+  stored(actorIds: readonly string[]): ConfigRow[] {
+    const missing = actorIds.filter((actorId) => !this.held.has(actorId));
+
+    if (missing.length > 0) {
+      const read = this.sql<{ actor_id: string; key: string; value: string }>`SELECT actor_id, key, value FROM actor_config
+        WHERE actor_id IN (SELECT value FROM json_each(${JSON.stringify(missing)}))`;
+
+      for (const actorId of missing) this.held.set(actorId, new Map(read.filter((row) => row.actor_id === actorId).map((row) => [row.key, row.value])));
+    }
+
+    return actorIds.flatMap((actorId) => [...this.rows(actorId)].map(([key, value]) => ({ actor_id: actorId, key, value })));
+  }
+
+  /** After an adoption committed: `rows` are now every row of `actorIds`. */
+  adopt(actorIds: readonly string[], rows: readonly Readonly<Record<string, SqlValue>>[]): void {
+    const parsed = rows.map((row) => v.parse(ConfigRowSchema, row));
+
+    for (const actorId of actorIds) this.held.set(actorId, new Map(parsed.filter((row) => row.actor_id === actorId).map((row) => [row.key, row.value])));
+  }
+}
+
+const held = new WeakMap<SqlExecutor, ConfigCatalog>();
+
+/**
+ * The one catalog of the database `sql` executes on, held from now on by every config store over `sql`. Only for a
+ * database `sql` alone writes, a Durable Object's: the CLI's file has other processes, and its stores ask per read.
+ */
+export function holdConfig(sql: SqlExecutor): ConfigCatalog {
+  const catalog = held.get(sql) ?? new ConfigCatalog(sql);
+
+  held.set(sql, catalog);
+
+  return catalog;
+}
+
 export function createAgentConfigStore(sql: SqlExecutor, actorId: string, authorize: () => void): AgentConfigStore {
+  const live = liveConfigReads(sql);
+  // Asked per call: a store made before its database's catalog was held must still drop what it writes.
+  const reads = (): ConfigReads => held.get(sql) ?? live;
+
   const get = (key: string): string | null => {
     authorize();
 
-    const rows = sql<{ value: string }>`
-      SELECT value FROM actor_config WHERE actor_id = ${actorId} AND key = ${key} LIMIT 1`;
-
-    return rows[0]?.value ?? null;
+    return reads().value(actorId, key);
   };
 
   const set = (key: string, value: string): void => {
     authorize();
+    reads().changed(actorId);
     void sql`INSERT INTO actor_config (actor_id, key, value) VALUES (${actorId}, ${key}, ${value})
         ON CONFLICT(actor_id, key) DO UPDATE SET value = excluded.value`;
 
@@ -179,6 +276,7 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
   const remove = (key: string, ...others: string[]): void => {
     authorize();
     const keys = [key, ...others];
+    reads().changed(actorId);
     void sql`DELETE FROM actor_config WHERE actor_id = ${actorId}
       AND key IN (SELECT value FROM json_each(${JSON.stringify(keys)}))`;
 
@@ -198,6 +296,7 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
   /** Single upsert-RETURNING so two stores cannot mint the same value; unparseable rows count as 0. */
   const increment = (key: string): number => {
     authorize();
+    reads().changed(actorId);
 
     const rows = sql<{ value: string }>`
       INSERT INTO actor_config (actor_id, key, value) VALUES (${actorId}, ${key}, ${'1'})
@@ -238,12 +337,8 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     delete: remove,
     all() {
       authorize();
-      const rows = sql<{ key: string; value: string }>`SELECT key, value FROM actor_config WHERE actor_id = ${actorId}`;
-      const out: Record<string, string> = {};
 
-      for (const r of rows) out[r.key] = r.value;
-
-      return out;
+      return reads().all(actorId);
     },
     getModel() { return get(AGENT_CONFIG_KEYS.model); },
     setModel(spec) { set(AGENT_CONFIG_KEYS.model, spec); },
@@ -279,13 +374,14 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     getDisplayName() { return get(AGENT_CONFIG_KEYS.displayName); },
     setDisplayName(name) { set(AGENT_CONFIG_KEYS.displayName, name); },
     getNameOrigin() {
-      const v = get(AGENT_CONFIG_KEYS.nameOrigin);
+      const stored = get(AGENT_CONFIG_KEYS.nameOrigin);
 
-      return v === null ? null : nameOriginOf(v);
+      return stored === null ? null : nameOriginOf(stored);
     },
     setNameOrigin(origin) { set(AGENT_CONFIG_KEYS.nameOrigin, origin); },
     setDisplayNameOrigin(name, origin) {
       authorize();
+      reads().changed(actorId);
       void sql`
         INSERT INTO actor_config (actor_id, key, value) VALUES
           (${actorId}, ${AGENT_CONFIG_KEYS.displayName}, ${name}),
@@ -317,9 +413,9 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
       return settleSync(setValid(AGENT_CONFIG_KEYS.roleChangePolicy, policy, valid, 'role change policy'));
     },
     getShellApprovalMode(): ShellApprovalMode {
-      const v = get(AGENT_CONFIG_KEYS.shellApprovalMode);
+      const stored = get(AGENT_CONFIG_KEYS.shellApprovalMode);
 
-      return v === 'allow_all' || v === 'deny_all' ? v : 'strict';
+      return stored === 'allow_all' || stored === 'deny_all' ? stored : 'strict';
     },
     setShellApprovalMode(mode) {
       const valid = mode === 'strict' || mode === 'allow_all' || mode === 'deny_all';
@@ -360,17 +456,17 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
       return settleSync(setValid(AGENT_CONFIG_KEYS.advisorMinSeverity, severity, isAdvisorSeverity(severity), 'advisor severity'));
     },
     getAlwaysActiveSkills() {
-      const v = get(AGENT_CONFIG_KEYS.alwaysActiveSkills);
+      const stored = get(AGENT_CONFIG_KEYS.alwaysActiveSkills);
 
-      if (!v) return [];
+      if (!stored) return [];
 
-      return v.split(',').map(s => s.trim()).filter(Boolean);
+      return stored.split(',').map(s => s.trim()).filter(Boolean);
     },
     setAlwaysActiveSkills(names) {
-      const v = Array.from(new Set(names.map(n => n.trim()).filter(Boolean))).join(',');
+      const joined = Array.from(new Set(names.map(n => n.trim()).filter(Boolean))).join(',');
 
-      if (v.length === 0) remove(AGENT_CONFIG_KEYS.alwaysActiveSkills);
-      else set(AGENT_CONFIG_KEYS.alwaysActiveSkills, v);
+      if (joined.length === 0) remove(AGENT_CONFIG_KEYS.alwaysActiveSkills);
+      else set(AGENT_CONFIG_KEYS.alwaysActiveSkills, joined);
     },
     getLastActiveExecutor() { return get(AGENT_CONFIG_KEYS.lastActiveExecutor); },
     setLastActiveExecutor(name) {
