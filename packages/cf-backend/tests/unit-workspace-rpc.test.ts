@@ -31,7 +31,6 @@ const unusedWorkspace: AgentWorkspaceCalls = {
   birthContext: unused,
   steerSkills: unused,
   openWork: unused,
-  cacheKeptAliveUntil: unused,
   noteModelRequest: unused,
   armCacheWarm: unused,
   advise: unused,

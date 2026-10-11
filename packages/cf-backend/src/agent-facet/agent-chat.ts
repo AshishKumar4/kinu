@@ -141,8 +141,7 @@ export class FacetChat {
         openWork: () => workspace.openWork(),
         // The lane that keeps its prompt cache warm is the workspace's, which holds the provider keys and the wake.
         cacheWarming: {
-          keptAliveUntil: (lastRequestAt) => workspace.cacheKeptAliveUntil(lastRequestAt),
-          noteRequest: () => workspace.noteModelRequest(),
+          noteRequest: (lastRequestAt) => workspace.noteModelRequest(lastRequestAt),
           armAfterTurn: (input) => workspace.armCacheWarm(input),
         },
         steerSkills: (text) => workspace.steerSkills(text, this.activeSkills),

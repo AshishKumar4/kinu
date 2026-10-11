@@ -289,10 +289,9 @@ export interface CacheWarmArm {
 
 /** A conversation's warming lane as its session tells it, wherever the lane runs: the session knows both instants. */
 export interface CacheWarming {
-  /** Until when the prompt cache stays warm for a request sent at `lastRequestAt`; null when nothing kept it. */
-  keptAliveUntil(lastRequestAt: number): Promise<number | null>;
-  /** A real provider request is starting. */
-  noteRequest(): Promise<void>;
+  /** A real provider request is starting: answers until when the prompt cache stayed warm for the one sent at
+   *  `lastRequestAt` (null when nothing kept it, or none was sent), read before this request voids the lane. */
+  noteRequest(lastRequestAt: number | null): Promise<number | null>;
   /** Consider a warm for the request this turn ended on; null when the policy declined. */
   armAfterTurn(input: CacheWarmArm): Promise<number | null>;
 }
@@ -300,9 +299,13 @@ export interface CacheWarming {
 export class CacheWarmingLane {
   constructor(private readonly seams: CacheWarmSeams) {}
 
-  /** A real provider request is starting. */
-  noteRequest(): void {
+  /** A real provider request is starting: answers until when the cache stayed warm for the last one, read first. */
+  noteRequest(lastRequestAt: number | null = null): number | null {
+    const kept = lastRequestAt === null ? null : this.seams.store.keptAliveUntil(lastRequestAt);
+
     this.seams.store.noteRequest();
+
+    return kept;
   }
 
   keptAliveUntil(lastRequestAt: number): number | null {

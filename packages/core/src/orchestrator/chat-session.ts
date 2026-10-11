@@ -1457,9 +1457,9 @@ export class ChatSession {
       birthContext: async (drainTurnId) => (await this.birthContext(drainTurnId)).map(inheritedAsModelMessage),
     });
 
-    // Before this turn's request voids the lane.
-    const lastRequestAt = this.actorSession.lastRequestAt();
-    const cacheKeptAliveUntil = lastRequestAt === null ? null : await this.ports.cacheWarming?.keptAliveUntil(lastRequestAt) ?? null;
+    // Read as this turn's request voids any armed warm, in one call; the durable counter stops a mid-turn wake from adding
+    // a refresh.
+    const cacheKeptAliveUntil = await this.ports.cacheWarming?.noteRequest(this.actorSession.lastRequestAt()) ?? null;
 
     const prepared = await this.ports.prepareTurn(input, lease, {
       answerId: this.messageId, cacheCold: this.actorSession.promptCacheCold(cacheKeptAliveUntil),
@@ -1477,9 +1477,6 @@ export class ChatSession {
 
     /** A Stop before any output leaves the operator's row alone. */
     let streamed = partial !== null;
-
-    // A real request voids any armed warm; the durable counter stops a mid-turn wake from adding a refresh.
-    await this.ports.cacheWarming?.noteRequest();
 
     const execution = await this.actorSession.execute(lease, {
       task: item.text,

@@ -98,8 +98,7 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   birthContext(drainTurnId: string) { return this.open(() => this.answers.birthContext(drainTurnId)); }
   steerSkills(text: string, alreadyActive: readonly string[]) { return this.open(() => this.answers.steerSkills(text, alreadyActive)); }
   openWork() { return this.open(() => this.answers.openWork()); }
-  cacheKeptAliveUntil(lastRequestAt: number) { return this.open(() => this.answers.cacheKeptAliveUntil(lastRequestAt)); }
-  noteModelRequest() { return this.open(() => this.answers.noteModelRequest()); }
+  noteModelRequest(lastRequestAt: number | null) { return this.open(() => this.answers.noteModelRequest(lastRequestAt)); }
   armCacheWarm(input: CacheWarmArm) { return this.open(() => this.answers.armCacheWarm(input)); }
   getAuth(key: string, opts?: AuthRequest) { return this.open(() => this.answers.getAuth(key, opts)); }
   listCredentials() { return this.open(() => this.answers.listCredentials()); }
@@ -220,8 +219,7 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
   birthContext(drainTurnId: string) { return this.owned((host) => host.birthContext(drainTurnId)); }
   steerSkills(text: string, alreadyActive: readonly string[]) { return this.owned((host) => host.steerSkills(text, alreadyActive)); }
   openWork() { return this.owned((host) => host.openWork()); }
-  cacheKeptAliveUntil(lastRequestAt: number) { return this.owned((host) => host.cacheKeptAliveUntil(lastRequestAt)); }
-  noteModelRequest() { return this.owned((host) => host.noteModelRequest()); }
+  noteModelRequest(lastRequestAt: number | null) { return this.owned((host) => host.noteModelRequest(lastRequestAt)); }
   armCacheWarm(input: CacheWarmArm) { return this.owned((host) => host.armCacheWarm(input)); }
   getAuth(key: string, opts?: AuthRequest) { return this.owned((host) => host.getAuth(key, opts)); }
   listCredentials() { return this.owned((host) => host.listCredentials()); }

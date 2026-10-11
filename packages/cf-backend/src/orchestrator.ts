@@ -916,8 +916,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         alreadyActive: new Set(alreadyActive),
       }),
       // Only main's conversation is kept warm: no other agent has its wake chain.
-      cacheKeptAliveUntil: async (lastRequestAt) => this.warmingOf(actorId).keptAliveUntil(lastRequestAt),
-      noteModelRequest: async () => { this.warmingOf(actorId).noteRequest(); },
+      noteModelRequest: async (lastRequestAt) => this.warmingOf(actorId).noteRequest(lastRequestAt),
       armCacheWarm: async (input) => this.warmingOf(actorId).armAfterTurn(input),
       // Its tasks tool and its jobs run here, over its own rows, main's as any agent's.
       openWork: async () => {

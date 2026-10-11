@@ -79,8 +79,8 @@ export interface AgentWorkspace {
   /** Its open tasks and running jobs, where its tools wrote them. */
   openWork(): Promise<OpenWork>;
   /** The workspace's lane that keeps its prompt cache warm (`CacheWarming`); one an agent has none of keeps nothing. */
-  cacheKeptAliveUntil(lastRequestAt: number): Promise<number | null>;
-  noteModelRequest(): Promise<void>;
+  /** A model request is starting: until when the cache stayed warm for the last one, read before it voids the lane. */
+  noteModelRequest(lastRequestAt: number | null): Promise<number | null>;
   armCacheWarm(input: CacheWarmArm): Promise<number | null>;
   advise(review: AgentReview): Promise<void>;
   /** A delivered run's end, or why it could not run: its workspace's caller awaits it (design v2 §1). */

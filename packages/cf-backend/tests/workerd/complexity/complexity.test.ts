@@ -234,8 +234,11 @@ const turnStatements = new Map<number, { readonly workspace: OperationCost['tabl
  * 810 with the review's third round, over 2 runs at both sizes on 5323f5588: the workspace's 391 (+1, an opening first
  * queues the obligations of openings cut before their claim; the fence, one row an agent ordered by its sequence, opens
  * in one statement where it took two, and ends a run in one).
+ * 792 once the workspace agent is hosted and built like every agent (no second session over its stores), its signals
+ * are deliveries and its tools cross through a held port, at both sizes on 9b596e8d5-c5bab5d48: the workspace's 397, main's
+ * isolate's 395. Below the 801 the single-object turn ran in before the isolates.
  */
-const TURN_STATEMENTS = 810;
+const TURN_STATEMENTS = 792;
 
 /** Every count the subject's declarations govern, one value per size. */
 function countersOf(subject: Subject, measured: readonly OperationCost[]): GrowthCounter[] {
@@ -362,10 +365,15 @@ test('a production turn runs no more statements than it was measured at, and ask
  * The open is 45 with integration ca673ae3f (measured at its merge 5e76f910e against a9e1039fd before it): the account's
  * auth read as the turn's surface is built (`account.getAuth`, `relay.getAuth`, `host.getAuth`) and one more broadcast
  * the turn's opening sends its room (`relay.chatEvent`, `host.chatEvent`), each through a host it opened. Deliveries
- * cross as many times as the queue they replace (`facet.admit` for `facet.queue`). The port (design v2 §8) brings the
- * open to its target of 12.
+ * cross as many times as the queue they replace (`facet.admit` for `facet.queue`).
+ * With the port (design v2 §3, §8), measured at 2a7fa152a on 2026-10-11: the isolate holds the workspace's host, so a
+ * call crosses once; its credentials are held, its activity rides its tool calls and its turn's end. A tool step is 3
+ * (`host.paceStep`, `facet.step`, `host.executeTool`), the first 4 with its room's start (`host.chatEvent`); the open is
+ * 25 and the close 21, by the account reads, room events, standing reports and settlement the phase lists show. The
+ * open loses one (`host.cacheKeptAliveUntil`) as a request's warming is one call. §8's 12 and 6 are not reached: the
+ * account's own reads (profile catalog, credentials revision, overview, MCP descriptors) and the room's events remain.
  */
-const CROSSINGS = { open: 45, step: 19, close: 52 } as const;
+const CROSSINGS = { open: 25, step: 4, close: 21 } as const;
 
 /**
  * The planted calls (`ObservedOrchestrator.plantCrossings`), each counted once where it lands, and nothing else: the

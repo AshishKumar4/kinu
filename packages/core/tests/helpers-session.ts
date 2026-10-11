@@ -115,8 +115,7 @@ export async function sessionFixture(input: {
 /** A lane in this process, as the session asks it: its answers are at hand. */
 function warmingOver(lane: CacheWarmingLane): CacheWarming {
   return {
-    keptAliveUntil: async (lastRequestAt) => lane.keptAliveUntil(lastRequestAt),
-    noteRequest: async () => { lane.noteRequest(); },
+    noteRequest: async (lastRequestAt) => lane.noteRequest(lastRequestAt),
     armAfterTurn: async (input) => lane.armAfterTurn(input),
   };
 }
