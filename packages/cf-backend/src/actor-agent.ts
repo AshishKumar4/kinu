@@ -256,7 +256,7 @@ type UserHubClient = Pick<UserDO, UserDoRpcMethod>;
 
 /** One actor's half of its job runner. */
 type ActorJobSeams = Pick<BackgroundJobRunnerDeps,
-  'store' | 'policy' | 'fiber' | 'inbox' | 'eventLog' | 'scheduleDrain' | 'resume' | 'harvest' | 'scheduleResume'> & {
+  'store' | 'policy' | 'fiber' | 'inbox' | 'resume' | 'harvest' | 'scheduleResume'> & {
   readonly notifySettled?: (job: BackgroundJob) => void;
 };
 
@@ -2477,8 +2477,6 @@ export abstract class ActorAgent extends Agent<Env> {
       policy: () => invocationBackgroundPolicy(this.turnSurface(), true),
       fiber: (name, fn) => this.rt.schedule.fiber(name, fn),
       inbox: this.workspaceAgentDeliveries().signals,
-      eventLog: this.eventLog,
-      scheduleDrain: () => { this.durableWakeOwner()?.(); },
 
       // Notify the owner (email on the orchestrator; skips silently when pieces are absent).
       notifySettled: (job) => {

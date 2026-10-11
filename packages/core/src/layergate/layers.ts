@@ -961,9 +961,9 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'mid-turn-injection/one-delivery-time',
-        asserts: 'every signal lands on the next step when a turn is running, and starts a turn when none is: the kind never changes the answer',
+        asserts: 'every delivery lands on the next step when a turn is running, and is left to its chat to queue when none is: the inbox never opens a turn for one, and the kind never changes the answer',
         observe: async (s) => {
-          const run = async (turnInFlight: boolean) => {
+          const run = (turnInFlight: boolean) => {
             const queued: string[] = [];
 
             const inbox = new s.Inbox(
@@ -971,14 +971,14 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             );
 
             const outcomes = [
-              await inbox.send({ kind: 'event_drain', text: 'wake' }),
-              await inbox.send({ kind: 'background_job', text: 'later' }),
+              inbox.landMidTurn({ kind: 'event_drain', text: 'wake' }),
+              inbox.landMidTurn({ kind: 'background_job', text: 'later' }),
             ];
 
             return { outcomes, queued };
           };
 
-          return { busyAgent: await run(true), idleAgent: await run(false) };
+          return { busyAgent: run(true), idleAgent: run(false) };
         },
       },
       {
@@ -988,14 +988,14 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           const queued: string[] = [];
           const inbox = new s.Inbox(fakeSignalHost(queued, true));
           inbox.beginTurn(false);
-          await inbox.send({ kind: 'event_drain', text: 'turn-1', stepText: 'step-1' });
+          inbox.landMidTurn({ kind: 'event_drain', text: 'turn-1', stepText: 'step-1' });
 
           const spliced = await inbox.prepareStep(
             { stepNumber: 0, messages: shortHistory() },
             [{ kind: 'turn_steering', text: 'nudge' }],
           );
 
-          await inbox.send({ kind: 'event_drain', text: 'turn-2', stepText: 'step-2' });
+          inbox.landMidTurn({ kind: 'event_drain', text: 'turn-2', stepText: 'step-2' });
           const settled = inbox.settle({ completed: true });
           await Promise.resolve();
 
@@ -1008,7 +1008,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'mid-turn-injection/one-card-per-signal',
-        asserts: 'the user\'s card opens where the signal ARRIVED and moves where the agent took it in: one card, both paths, whatever the kind',
+        asserts: 'the user\'s card opens where a delivery ARRIVED in a running turn and moves where the agent took it in; with none running the inbox opens none, its own turn does',
         observe: async (s) => {
           const run = async (turnInFlight: boolean) => {
             const ids: string[] = [];
@@ -1037,7 +1037,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
               setTimer: () => {},
             });
 
-            await inbox.send({ kind: 'event_drain', text: 'wake', stepText: 'mid-turn wake' });
+            inbox.landMidTurn({ kind: 'event_drain', text: 'wake', stepText: 'mid-turn wake' });
             await inbox.prepareStep({ stepNumber: 0, messages: shortHistory() });
             inbox.beginTurn(false, carried);
 

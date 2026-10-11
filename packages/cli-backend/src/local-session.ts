@@ -569,8 +569,6 @@ export class LocalAgentSession {
       policy: () => opts.backgroundPolicy ?? BACKGROUND_POLICY.interactive,
       fiber: (name, fn) => this.trackFiber(name, fn),
       inbox: this.actorSession.orchestrator.signals,
-      eventLog: this.eventLog,
-      scheduleDrain: () => this.actorSession.orchestrator.scheduleDrain(),
       logActivity: (event, detail) => this.emit({ type: 'background', event, message: detail ?? '' }),
       clock: this.clock,
       jobOutput: (frame) => { this.host.broadcast(frame); },

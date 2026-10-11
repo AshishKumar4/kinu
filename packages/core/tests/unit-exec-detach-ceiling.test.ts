@@ -19,7 +19,7 @@ import { followJobOutput, JOB_OUTPUT_EVENT, JobOutputFeeds, type JobOutputFrame,
 import { REAL_CLOCK } from '../src/types/clock';
 import { listBackgroundJobs } from '../src/read-models/background-jobs';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/index';
-import { EventLog, initEventsHubTables } from '../src/events/hub/index';
+import { initEventsHubTables } from '../src/events/hub/index';
 import { Database } from 'bun:sqlite';
 import { conversationsFor, createTestRuntime, makeSql, makeExecRaw, makeSqlExec } from './helpers';
 import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host';
@@ -234,8 +234,7 @@ function wholeChainRunner(deps: (store: BackgroundJobStore) => Partial<Backgroun
   };
 
   const runner = new BackgroundJobRunner({
-    store, fiber, inbox: hostDeliveries(host).signals, eventLog: new EventLog(hubSql, actor),
-    scheduleDrain: () => {}, logActivity: () => {},
+    store, fiber, inbox: hostDeliveries(host).signals, logActivity: () => {},
     // A zero window: the crossing is decided by the command not having finished, not by waiting.
     policy: () => ({ ...BACKGROUND_POLICY.interactive, detachAfterMs: 0 }),
     ...deps(store),
