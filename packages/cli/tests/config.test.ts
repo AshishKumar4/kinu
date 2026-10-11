@@ -371,7 +371,7 @@ async function runNameChecks(): Promise<NameCheck[]> {
     await check(() => agentDir("../outside"));
     await check(() => agentDir("bad/name"));
     await check(() => agentDir(".hidden"));
-    const withAlias = (alias) => () => upsertAgentConfig({ name: "jarvis", mode: "local", alias });
+    const withAlias = (alias) => () => upsertAgentConfig({ name: "jarvis", mode: "cloud", cloudName: "jarvis", displayName: "Jarvis", alias });
     await check(withAlias("jarvis"));
     await check(withAlias("jarvis-2"));
     await check(withAlias("../outside"));

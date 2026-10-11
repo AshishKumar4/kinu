@@ -95,34 +95,39 @@ export interface ConnectOutcomeDescription {
 }
 
 export type ConnectDeviceResult =
-  | { kind: 'connected'; deviceId: string; label: string; sandbox: CloudDeviceSandbox; wholeMachine: boolean }
-  | { kind: 'cancelled'; deviceId: string }
+  | { kind: 'connected'; deviceId: string; label: string; sandbox: CloudDeviceSandbox; wholeMachine: boolean; replacedLocalConfig: boolean }
+  | { kind: 'cancelled'; deviceId: string; replacedLocalConfig: boolean }
   | { kind: 'already-running'; connected: boolean };
 
 export function connectDevice(auth: DeviceAuth, opts: ConnectDeviceOptions = {}): Promise<ConnectDeviceResult> {
   return settle(Effect.gen(function* () {
-    if (opts.session && (yield* runningDaemonPid()) !== null) {
+    const local = yield* readLocalDevice();
+    const replacedLocalConfig = local.kind === 'malformed';
+    const previous = local.kind === 'current' ? deviceOnOrigin(local.config, auth.origin) : undefined;
+
+    if (!replacedLocalConfig && opts.session && (yield* runningDaemonPid()) !== null) {
       // The running daemon owns device.json and its credentials.
       const devices = yield* listDevicesForConnect(auth, 'checking whether the installed daemon is connected');
 
-      return { kind: 'already-running', connected: yield* thisDeviceIn(devices, auth.origin) } satisfies ConnectDeviceResult;
+      return { kind: 'already-running', connected: previous !== undefined && issuedDeviceConnected(devices, previous.device) !== undefined } satisfies ConnectDeviceResult;
     }
 
     yield* assertDaemonPlatformSupported();
     const runtime = yield* daemonRuntime();
-    const previous = yield* localDevice(auth.origin);
     const device = yield* registerDeviceForConnect(auth, opts.label, previous?.token, opts.device);
     yield* installDaemonFiles(device);
+
+    if (replacedLocalConfig && opts.session) yield* stopRunningDaemon();
     const launch = yield* startInstalledDaemon(opts.session === true, runtime);
     // The daemon must show as connected on the server before success is claimed.
     const connected = yield* waitForDeviceConnected(auth, device.deviceId, launch, opts);
 
-    if (connected === undefined) return { kind: 'cancelled', deviceId: device.deviceId } satisfies ConnectDeviceResult;
+    if (connected === undefined) return { kind: 'cancelled', deviceId: device.deviceId, replacedLocalConfig } satisfies ConnectDeviceResult;
     thisDeviceConnected = true;
 
     // The hub is the authority on the machine's name, not the name typed at the prompt.
     return {
-      kind: 'connected', deviceId: device.deviceId, label: connected.label, sandbox: connected.sandbox, wholeMachine: connected.wholeMachine,
+      kind: 'connected', deviceId: device.deviceId, label: connected.label, sandbox: connected.sandbox, wholeMachine: connected.wholeMachine, replacedLocalConfig,
     } satisfies ConnectDeviceResult;
   }));
 }
@@ -217,19 +222,21 @@ export function deviceStatusLine(): Promise<string> {
 }
 
 export function describeConnectOutcome(result: ConnectDeviceResult, session: boolean): ConnectOutcomeDescription {
+  const notice = result.kind !== 'already-running' && result.replacedLocalConfig ? 'Replaced the malformed local device config. ' : '';
+
   switch (result.kind) {
     case 'already-running':
       return result.connected
         ? { ok: true, message: 'This PC is already connected.' }
         : { ok: false, message: 'The daemon is installed here but not connected. Run: kinu connect' };
     case 'cancelled':
-      return { ok: false, message: 'Stopped waiting for the daemon. It keeps trying to connect; check: kinu desktop logs' };
+      return { ok: false, message: `${notice}Stopped waiting for the daemon. It keeps trying to connect; check: kinu desktop logs` };
     case 'connected':
       return {
         ok: true,
-        message: session
+        message: notice + (session
           ? 'Connected for this session. The daemon stops when you leave the CLI.'
-          : 'Connected. This PC stays connected after you leave the CLI.',
+          : 'Connected. This PC stays connected after you leave the CLI.'),
       };
   }
 }
@@ -314,21 +321,39 @@ function listDevicesForConnect(auth: DeviceAuth, doing: string): Effect.Effect<C
  *  replaces, and the device the hub issued it. */
 function localDevice(origin: string): Effect.Effect<v.InferOutput<typeof LocalDeviceSchema> | undefined, KinuError> {
   return Effect.gen(function* () {
+    const local = yield* readLocalDevice();
+
+    if (local.kind === 'malformed') return yield* local.error;
+
+    return local.kind === 'current' ? deviceOnOrigin(local.config, origin) : undefined;
+  });
+}
+
+type LocalDeviceRead =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'current'; readonly config: v.InferOutput<typeof LocalDeviceSchema> }
+  | { readonly kind: 'malformed'; readonly error: KinuError };
+
+function readLocalDevice(): Effect.Effect<LocalDeviceRead, KinuError> {
+  return Effect.gen(function* () {
     const text = yield* io('reading this machine\'s device config', () => tolerate(() => readFileSync(DEVICE_CONFIG_PATH, 'utf-8'), 'enoent'));
 
-    if (text === undefined) return undefined;
+    if (text === undefined) return { kind: 'none' };
 
-    const value = yield* Effect.try({
-      try: () => JSON.parse(text),
-      catch: (cause) => new KinuError('io', `device config at ${DEVICE_CONFIG_PATH} is corrupt; re-run: kinu connect`, { cause }),
-    });
+    const value = yield* io('reading this machine\'s device config JSON', () => tolerate(() => JSON.parse(text), 'malformed-input'));
+
+    if (value === undefined) return { kind: 'malformed', error: new KinuError('io', `device config at ${DEVICE_CONFIG_PATH} is corrupt; re-run: kinu connect`) };
 
     const parsed = v.safeParse(LocalDeviceSchema, value);
 
-    if (!parsed.success) return yield* new KinuError('io', `device config at ${DEVICE_CONFIG_PATH} is missing its user, token or directory; re-run: kinu connect`, { cause: new v.ValiError(parsed.issues) });
-
-    return parsed.output.origin.replace(/\/+$/, '') === origin.replace(/\/+$/, '') ? parsed.output : undefined;
+    return parsed.success
+      ? { kind: 'current', config: parsed.output }
+      : { kind: 'malformed', error: new KinuError('io', `device config at ${DEVICE_CONFIG_PATH} is missing its user, token or directory; re-run: kinu connect`) };
   });
+}
+
+function deviceOnOrigin(config: v.InferOutput<typeof LocalDeviceSchema>, origin: string): v.InferOutput<typeof LocalDeviceSchema> | undefined {
+  return config.origin.replace(/\/+$/, '') === origin.replace(/\/+$/, '') ? config : undefined;
 }
 
 const LocalDeviceSchema = v.object({ origin: v.string(), token: v.string(), device: v.string(), user: v.string(), root: v.string() });

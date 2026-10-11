@@ -102,7 +102,6 @@ describe('CLI explicit endpoint options', () => {
 async function createLocalAgent(home: string, name: string): Promise<string> {
   const dir = join(home, name);
   mkdirSync(dir, { recursive: true });
-  const folder = placeLocalWorkspace(home, name);
   const db = workspaceDatabase(join(dir, "agent.db"));
 
   try {
@@ -143,7 +142,7 @@ async function createLocalAgent(home: string, name: string): Promise<string> {
     db.close();
   }
 
-  return folder;
+  return placeLocalWorkspace(home, name);
 }
 
 test("a genuinely unreadable workspace names its cause instead of hiding it", async () => {

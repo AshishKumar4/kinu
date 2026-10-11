@@ -8,7 +8,7 @@
 import * as v from 'valibot';
 import { Effect } from 'effect';
 import { markStoreChanged } from '@kinu.run/agent-utils';
-import { JsonValueSchema, parseJsonValue, safeJsonParse, type JsonValue } from '../utils/json';
+import { JsonValueSchema, parseJsonValue, type JsonValue } from '../utils/json';
 import { KinuError, settleSync } from '../obs/index';
 import { nanoid } from '../utils/nanoid';
 import { expandedTokenGroups, lexicalGroupRelevance, minimumRelevance } from './lexical-recall';
@@ -154,12 +154,6 @@ interface NoteRow {
   created_at: number;
 }
 
-function originOf(raw: string | null): FactOrigin | null {
-  const parsed = raw === null ? undefined : v.safeParse(FactOriginSchema, safeJsonParse(raw));
-
-  return parsed?.success === true ? parsed.output : null;
-}
-
 function readProposal(row: ProposalRow): Effect.Effect<AccountMemoryProposal, KinuError> {
   return Effect.try({
     try: () => v.parse(AccountMemoryProposalSchema, {
@@ -186,7 +180,9 @@ export class AccountMemoryStore {
   }
 
   searchNotes(query: string, limit: number): AccountNoteHit[] {
-    return rankNotes(this.notes(), query, Math.min(50, Math.max(1, Math.floor(limit))));
+    const take = Math.min(50, Math.max(1, Math.floor(limit)));
+
+    return settleSync(Effect.map(this.notes(), (notes) => rankNotes(notes, query, take)));
   }
 
   /**
@@ -214,11 +210,11 @@ export class AccountMemoryStore {
   }
 
   view(): AccountMemoryView {
-    return {
+    return settleSync(Effect.map(this.notes(), (notes) => ({
       facts: this.factsStore.all().map((fact) => ({ ...fact, history: this.factsStore.history(fact.key) })),
-      notes: this.notes(),
+      notes,
       pending: this.pending(),
-    };
+    })));
   }
 
   /** Accepting writes the proposal with who asked for it; either way it leaves the queue. Answers whether it was pending. */
@@ -279,9 +275,14 @@ export class AccountMemoryStore {
       VALUES (${`acn_${nanoid(12)}`}, ${proposal.content}, ${JSON.stringify(origin)}, ${Date.now()})`;
   }
 
-  private notes(): AccountNote[] {
-    return this.sql<NoteRow>`SELECT id, content, origin_json, created_at FROM account_notes ORDER BY created_at DESC, id`
-      .map((row) => ({ id: row.id, content: row.content, origin: originOf(row.origin_json), createdAt: row.created_at }));
+  private notes(): Effect.Effect<AccountNote[], KinuError> {
+    return Effect.forEach(this.sql<NoteRow>`SELECT id, content, origin_json, created_at FROM account_notes ORDER BY created_at DESC, id`, (row) => Effect.try({
+      try: () => ({
+        id: row.id, content: row.content, createdAt: row.created_at,
+        origin: row.origin_json === null ? null : v.parse(FactOriginSchema, parseJsonValue(row.origin_json)),
+      }),
+      catch: (cause) => new KinuError('io', `Corrupt account memory note ${row.id}`, { cause }),
+    }));
   }
 
   /** What waits on the owner, oldest first: the view's `pending`, for a reader that needs only that. */

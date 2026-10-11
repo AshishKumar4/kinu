@@ -383,14 +383,16 @@ describe('the local roster is one function', () => {
 
     for (const name of ['alpha', 'beta', 'gamma']) {
       mkdirSync(join(home, name));
-      writeFileSync(join(home, name, 'agent.db'), '');
+      const db = workspaceDatabase(join(home, name, 'agent.db'));
+      createCLIRuntime(db, { llm: null, agentName: name, cwd: projectDir });
+      db.close();
     }
 
     const stamp = '2026-06-08T00:00:00.000Z';
 
     const placed = (name: string) => ({
       name, mode: 'local', localName: name, cwd: projectDir, workspaceId: 'shop',
-      createdAt: stamp, updatedAt: stamp,
+      identityId: `ws-${name}`, createdAt: stamp, updatedAt: stamp,
     });
 
     writeFileSync(join(home, 'config.json'), JSON.stringify({

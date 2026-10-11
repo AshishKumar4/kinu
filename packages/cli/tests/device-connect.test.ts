@@ -18,6 +18,7 @@ import {
 import { tolerate } from '@kinu.run/core/obs';
 import { type CloudDevice } from '../src/cloud-api';
 import { describeDeviceSandbox } from '../src/device-connect';
+import { VERSION } from '../src/display';
 import { CloudAgentClient } from '../src/cloud-agent-client';
 import * as v from 'valibot';
 import DAEMON_SOURCE from '../../pc-agent/src/index.js' with { type: 'text' };
@@ -83,6 +84,7 @@ interface StubCloud {
 
 interface StubCloudOptions {
   devices?: () => CloudDevice[];
+  deviceOrigin?: string;
   registerGate?: Promise<void>;
   registrationFailure?: { status: number; error: string };
   onRegister?: (body: { label?: string; replaces?: string }) => void;
@@ -128,7 +130,7 @@ function startStubCloud(opts: StubCloudOptions = {}): StubCloud {
           deviceId: 'dev_1',
           token: 'device-token',
           userId: 'user_1',
-          origin: `http://localhost:${server.port}`,
+          origin: opts.deviceOrigin ?? `http://localhost:${server.port}`,
         });
       }
 
@@ -217,7 +219,7 @@ function connectedDevice(connected: boolean, overrides: Partial<CloudDevice> = {
 }
 
 function connectedResult(label = connectedDevice(true).label) {
-  return { kind: 'connected', deviceId: 'dev_1', label, sandbox: connectedDevice(true).sandbox, wholeMachine: false };
+  return { kind: 'connected', deviceId: 'dev_1', label, sandbox: connectedDevice(true).sandbox, wholeMachine: false, replacedLocalConfig: false };
 }
 
 
@@ -588,26 +590,43 @@ describe('device-connect install hardening', () => {
     expect(existsSync(join(home, POISON_MARKER))).toBe(false);
   });
 
-  test('a tampered daemon on disk is replaced by the bytes this CLI ships', async () => {
-    const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
+  test('kinu connect replaces a malformed local config and starts a working shipped daemon', async () => {
+    const hub = startUpdateHub({ served: VERSION, archive: new Uint8Array() });
+    updateHubs.push(hub);
+
+    const stub = startStubCloud({
+      deviceOrigin: hub.origin,
+      devices: () => [connectedDevice(hub.sockets.items.some((socket) => socket.closed === null))],
+    });
+
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+    daemonHomes.push(home);
     writeFileSync(join(home, 'pc-agent.js'), '// tampered daemon\n', { mode: 0o700 });
     writeFileSync(join(home, 'device.json'), '{"user":"old","token":"old-token","origin":"https://old.example"}\n', { mode: 0o600 });
 
-    const out = await runScript(home, `
-      import { connectDevice } from './packages/cli/src/device-connect.ts';
-      console.log(JSON.stringify(
-        await connectDevice({ origin: ${JSON.stringify(stub.origin)}, token: 'ptc_test' }, { session: true }),
-      ));
-      process.exit(0);
-    `);
+    const cliBin = resolve(repoRoot, 'packages/cli/bin/cli.ts');
 
-    expect(JSON.parse(out.trim())).toEqual(connectedResult());
+    const connected = await runToExit([process.execPath, cliBin, 'connect', '--label=reconnected'], {
+      cwd: repoRoot,
+      env: { ...process.env, KINU_HOME: home, KINU_INFLIGHT_ROOT: join(home, 'inflight') },
+    });
+
+    expect(connected.exitCode, connected.stderr).toBe(0);
+    expect(stub.registrationRequests.items).toHaveLength(1);
+    const registration = v.parse(v.object({ replaces: v.optional(v.string()) }), await stub.registrationRequests.items[0].json());
+    expect(registration.replaces).toBeUndefined();
     expect(readFileSync(join(home, 'pc-agent.js'), 'utf-8')).toBe(DAEMON_SOURCE);
     expect(parseJsonObject(readFileSync(join(home, 'device.json'), 'utf-8')))
-      .toEqual({ user: 'user_1', device: 'dev_1', token: 'device-token', origin: stub.origin, root: repoRoot });
+      .toMatchObject({ user: 'user_1', device: 'dev_1', origin: hub.origin, root: repoRoot });
     expect(statSync(join(home, 'pc-agent.js')).mode & 0o777).toBe(0o700);
     expect(readdirSync(home).filter((entry) => entry.includes('.tmp-'))).toEqual([]);
+    const socket = hub.sockets.items[0];
+
+    if (socket === undefined) throw new Error('the installed daemon never connected');
+    socket.send({ id: 'reconnect-which', method: 'which', params: [['bash']] });
+    const reply = await socket.waitForReply('reconnect-which');
+    expect(reply.error).toBeUndefined();
+    expect(reply.result).toBeDefined();
   });
 
   test('publishes neither install file when the daemon cannot be replaced', async () => {
@@ -793,7 +812,7 @@ describe('device-connect install hardening', () => {
       process.exit(0);
     `);
 
-    expect(JSON.parse(out.trim())).toEqual({ result: { kind: 'cancelled', deviceId: 'dev_1' }, polls: 2 });
+    expect(JSON.parse(out.trim())).toEqual({ result: { kind: 'cancelled', deviceId: 'dev_1', replacedLocalConfig: false }, polls: 2 });
   });
 
   test('never signals an unrelated live process named by a stale pidfile', async () => {
