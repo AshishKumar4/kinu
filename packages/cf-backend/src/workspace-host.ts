@@ -14,7 +14,7 @@ import { diagnostics, KinuError, toKinuError, type Refusal } from '@kinu.run/cor
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
-import type { ObjectNamespace } from '@kinu.run/core';
+import type { ObjectNamespace, ServingScope } from '@kinu.run/core';
 import type { ComposedFacetManager, HostedRuntime, HostedRuntimeOptions, HostedRuntimeTask, HostedSession, HostedSessionScope, WorkerRecipe } from '@nimbus-sh/worker/workspace-host';
 import { clearPortCapability, listPortReservations, readPortReservation, readPortReservationByOwner, releasePortReservation } from '@nimbus-sh/worker/port-capability';
 import type { DurableApps } from '@kinu.run/core/slates';
@@ -118,6 +118,14 @@ export interface WorkspaceTerminal {
 export interface WorkspaceServing {
   readonly held: readonly { readonly port: number; readonly stamp: string | null }[];
   readonly jobs: ReadonlySet<string>;
+}
+
+/**
+ * The recorded serving facts a read of the workspace alone answers for: those of the jobs it runs a process for, by the
+ * job's id. Not by port: a box this activation did not read may serve the same port number for one of its own jobs.
+ */
+export function workspaceServingScope(serving: WorkspaceServing): ServingScope {
+  return (fact) => serving.jobs.has(fact.job);
 }
 
 /** A box over the workspace this object hosts: its store is the database itself, so its files need no session call. */

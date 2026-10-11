@@ -1618,7 +1618,7 @@ export {
   backgroundJobNotice,
   isBackgroundHandle, SPAWN_STARTED_OPTION, readSpawnStarted,
   DEVICE_REQUEST_OPTION, readDeviceRequestChannel, DeviceRequestOwnership, execCallArgs, execContext,
-  BackgroundJobRunner, JobNotResumable, BACKGROUND_POLICY, JOB_STAMP_ENV, MAX_CONCURRENT_DETACHED_JOBS, recordServingJobs, type PortHolders,
+  BackgroundJobRunner, JobNotResumable, BACKGROUND_POLICY, JOB_STAMP_ENV, MAX_CONCURRENT_DETACHED_JOBS, recordServingJobs, type PortHolders, type ServingScope,
   invocationBackgroundPolicy,
   backgroundJobWakeTrigger, BACKGROUND_FIBER_PREFIX,
   type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type ThresholdDeps,

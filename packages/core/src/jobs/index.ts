@@ -77,4 +77,4 @@ export {
 
 export { JOB_STAMP_ENV } from '../types/jobs';
 
-export { recordServingJobs, type PortHolders } from './serving';
+export { recordServingJobs, type PortHolders, type ServingScope } from './serving';

@@ -56,7 +56,7 @@ import { ownerCaller, type UserCaller } from "@kinu.run/core";
 import { adaptMemory, backfillMemoryVectors } from "@kinu.run/core";
 import { actorAffinity } from "@kinu.run/core";
 import { nimbusPreviewConfigured } from "./nimbus-route";
-import type { HostedBox, WorkspaceServing } from "./workspace-host";
+import { workspaceServingScope, type HostedBox, type WorkspaceServing } from "./workspace-host";
 
 /**
  * Every logical actor in a workspace is built over the root object's `name` and `sql`; runtimes
@@ -573,13 +573,8 @@ export function createCFRuntime(
 
           return listened === null ? null : [...listened, ...(await served()).held.filter((held) => ports.includes(held.port))];
         },
-        // Unread, the box's facts stand: the workspace answers for its exposed ports and the jobs it runs a process for.
-        answersFor: async () => {
-          if (box !== null) return null;
-          const { held, jobs } = await served();
-
-          return (fact) => jobs.has(fact.job) || held.some((port) => port.port === fact.port);
-        },
+        // Unread, the box's facts stand: the workspace answers for the jobs it runs a process for.
+        answersFor: async () => (box === null ? workspaceServingScope(await served()) : null),
       };
     },
   };
