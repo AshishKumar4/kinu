@@ -286,6 +286,16 @@ export class InProcessDeliveries implements DeliveryPort {
     return await this.lane(() => this.cross(delivery));
   }
 
+  /** A Stop's cutoff (design v3 C): what the agent was owed and had not taken is cancelled, and the work it carried
+   *  parked; nothing of it crosses after. */
+  cancel(): readonly Delivery[] {
+    const cancelled = this.deps.transaction(() => new AgentDeliveries(this.deps.sql).cancel(this.deps.actorId));
+
+    for (const delivery of cancelled) handBackCarried(this.deps.eventLog, delivery, { refused: { code: 'cancelled', message: 'The agent was stopped before it took this.' } });
+
+    return cancelled;
+  }
+
   /** What the agent was owed and a death kept from it, in commit order, up to a crossing that fails; answers what its chat
    *  took in this sweep. */
   async crossOwed(): Promise<readonly Delivery[]> {

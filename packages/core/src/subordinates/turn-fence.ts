@@ -16,7 +16,8 @@ export function initTurnFenceTable(execRaw: RawSqlExec): void {
     turn_id    TEXT NOT NULL,
     run_id     TEXT NOT NULL,
     ended_at   INTEGER,
-    facts_json TEXT
+    facts_json TEXT,
+    cancelled_at INTEGER
   )`);
 }
 
@@ -40,15 +41,22 @@ export class TurnFences {
    */
   open(actorId: string, opening: FencedOpening): boolean {
     return this.sql<{ seq: number }>`INSERT INTO actor_turn_fence (actor_id, seq, turn_id, run_id) VALUES (${actorId}, ${opening.seq}, ${opening.turnId}, ${opening.runId})
-      ON CONFLICT (actor_id) DO UPDATE SET seq = excluded.seq, turn_id = excluded.turn_id, run_id = excluded.run_id, ended_at = NULL,
+      ON CONFLICT (actor_id) DO UPDATE SET seq = excluded.seq, turn_id = excluded.turn_id, run_id = excluded.run_id, ended_at = NULL, cancelled_at = NULL,
         facts_json = CASE WHEN actor_turn_fence.run_id = excluded.run_id THEN actor_turn_fence.facts_json END
       WHERE excluded.seq > actor_turn_fence.seq RETURNING seq`.length > 0;
   }
 
-  /** The opening now open, or null when the agent's newest run has ended or it never opened one here. */
-  /** The agents with a run admitted here that has not ended: after a reset of this workspace, each is recovered. */
+  /** The agents with a run admitted here that has not ended, nor been stopped: after a reset of this workspace, each is
+   *  recovered. A stopped run's own isolate closes it; nothing of it runs again. */
   openActors(): string[] {
-    return this.sql<{ actor_id: string }>`SELECT actor_id FROM actor_turn_fence WHERE ended_at IS NULL`.map((row) => row.actor_id);
+    return this.sql<{ actor_id: string }>`SELECT actor_id FROM actor_turn_fence WHERE ended_at IS NULL AND cancelled_at IS NULL`.map((row) => row.actor_id);
+  }
+
+  /** A Stop's cutoff (design v3 C): the agent's open run is cancelled, so no opening of it is admitted again and its
+   *  recovery runs only its closes. Answers the opening it cancelled, if one was open. */
+  cancel(actorId: string, at: number): OpenedAt | null {
+    return this.sql<{ seq: number }>`UPDATE actor_turn_fence SET cancelled_at = ${at}
+      WHERE actor_id = ${actorId} AND ended_at IS NULL AND cancelled_at IS NULL RETURNING seq`[0] ?? null;
   }
 
   current(actorId: string): OpenedAt | null {

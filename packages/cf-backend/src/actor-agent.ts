@@ -1807,7 +1807,8 @@ export abstract class ActorAgent extends Agent<Env> {
   protected abstract workspaceAgentDeliveries(): NonNullable<AgentOrchestratorDeps['deliveries']>;
 
   /** The owner's Stop of main's chat: unseen steers stay queued and rerun. */
-  protected abstract stopMainChat(): Promise<void>;
+  /** The owner's Stop of an agent: nothing it was owed or had queued runs after it. */
+  protected abstract stopAgent(actorId: string): Promise<void>;
 
   /** The owner's Clear of main's chat; answers why the emptied request went unmeasured, if it did. */
   protected abstract clearMainConversation(): Promise<string | null>;
@@ -3596,7 +3597,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const turnId = this.durableTurnId();
 
     return await cancelCurrentWork({
-      cancelChats: () => this.stopMainChat(),
+      cancelChats: () => this.stopAgent(this.actorHandle().actorId),
       activeToolControllers: this.jobRunner.foreground,
       broadcast: (payload) => { this.broadcastToActor(null, payload); },
       stopDeviceCommands: turnId === null ? undefined : () => settle(Effect.catchCause(Effect.promise(async () => {

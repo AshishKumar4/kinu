@@ -597,7 +597,11 @@ export class LocalAgentHost {
       },
       cwd: input.ref.cwd,
       onEvent: (event) => this.onSessionEvent(input.key, event),
-      onStop: () => { this.stopSubtree(input.key); },
+      // Stop means stop: what the agent was owed and had not taken is cancelled with its queued turns.
+      onStop: () => {
+        orchestration.deliveries.cancel();
+        this.stopSubtree(input.key);
+      },
       clock: REAL_CLOCK,
     };
 

@@ -2611,13 +2611,30 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return await (await this.agentCalls(main)).clearConversation(this.agentSnapshot(main));
   }
 
-  protected override async stopMainChat(): Promise<void> {
-    const main = this.actorHandle().actorId;
+  /**
+   * One Stop for every agent (design v3 C): what it is owed and its open run are cancelled in one workspace commit, its
+   * port refuses the turn from here, then its isolate's cutoff hands its unread words back to their composer and cancels
+   * its queued turns, telling their callers, and the turn is aborted. Nothing queued before the Stop runs.
+   */
+  protected override async stopAgent(actorId: string): Promise<void> {
+    const turnId = this.agentTurns.chatTurn(actorId);
 
-    await (await this.agentCalls(main)).stopChat(this.agentSnapshot(main));
+    const cancelled = this.ctx.storage.transactionSync(() => {
+      new TurnFences(this.boundSql).cancel(actorId, Date.now());
 
-    // A Stop dismisses main's open questions, in its own isolate.
-    if (this.config.getHoldsQuestions()) this.hostedQuestionsMoved();
+      return this.deliveries.cancel(actorId);
+    });
+
+    // The work its cancelled deliveries carried is dismissed with them.
+    for (const delivery of cancelled) {
+      for (const event of this.carried(actorId, delivery)?.events ?? []) event.log.dismiss(event.id, 'stopped by the owner', 'system');
+    }
+
+    if (turnId !== null) this.agentTurns.cancelled(turnId);
+    await this.agentTurns.interrupt(actorId);
+
+    // A Stop dismisses the agent's open questions in its own isolate.
+    if (this.agentBound(actorId).stores.config.getHoldsQuestions()) this.hostedQuestionsMoved();
   }
 
   protected override mainChatTurn(): string | null {
@@ -2648,12 +2665,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       send: async (input) => await this.deliverWords(actorId, { id: input.id, input: { kind: 'words', text: input.text, files: [...input.files], mode: input.mode }, authorship: 'owner' }, true) ?? 'mid-turn',
       retry: (claim) => whenActorTakesInput(this.boundSql, actorId, async () => await (await facet()).retry(snapshot(), claim)),
       interrupt: () => {
-        this.detachOwned(Effect.promise(async () => {
-          await this.agentTurns.interrupt(actorId);
-
-          // A Stop dismisses the agent's open questions in its own isolate.
-          if (this.agentBound(actorId).stores.config.getHoldsQuestions()) this.hostedQuestionsMoved();
-        }));
+        this.detachOwned(Effect.promise(() => this.stopAgent(actorId)));
         this.stopSubtree(actorId);
       },
       sendState: async (id) => await (await facet()).sendState(snapshot(), id),
@@ -3990,6 +4002,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   async _kinuTimerTick(): Promise<void> {
+    // A workspace being deleted runs no pump: its triggers, drains and warms are fenced with its admission.
+    if (this.admitting.signal.aborted) return;
     const now = Date.now();
     await this.tracing.invocation('alarm', 'tick', async (tick) => {
       // A phase's failure is `fail`ed on its span, not rethrown: the tick continues to the next phase.
@@ -4830,27 +4844,27 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this.admitting.signal.throwIfAborted();
   }
 
+  /**
+   * A deletion's quiet (design v2 §6), alike for every agent, with no first and no last: admission and the pumps are
+   * fenced, what every agent was owed is cancelled, every agent opened here stops and its closes drain while its calls
+   * still reach this object (a settled turn's effects read the registry with the workspace's capability), and only then
+   * is every call revoked.
+   */
   private async quietAgents(): Promise<void> {
     if (!this.admitting.signal.aborted) this.admitting.abort(new KinuError('missing', 'This workspace is being deleted.'));
-    // An object that opened no isolate (one never claimed among them) has no main to stop here.
-    const main = this.openedIsolates.size === 0 ? null : this.actorHandle().actorId;
 
-    // Main stops and closes first, while its calls still reach this object: its settled turn hands its effects here, its
-    // naming among them, which reads the registry with the workspace's capability before the revoke that follows.
-    if (main !== null && !this.deleting.signal.aborted && this.openedIsolates.has(main)) {
-      await this.agentTurns.beforeRetirement(main, true);
-      await this.agentQuiet(main);
-    }
+    this.ctx.storage.transactionSync(() => {
+      for (const actorId of this.deliveries.actors()) this.deliveries.cancel(actorId);
+    });
+
+    await Promise.all([...this.openedIsolates].filter((actorId) => this.liveActor(actorId)).map(async (actorId) => {
+      await this.agentTurns.beforeRetirement(actorId, true);
+      await this.agentQuiet(actorId);
+    }));
 
     await this.terminalClosed();
 
     if (!this.deleting.signal.aborted) this.deleting.abort(new KinuError('missing', 'This workspace was deleted.'));
-
-    for (const actorId of this.openedIsolates) {
-      if (actorId === main || !this.liveActor(actorId)) continue;
-      await this.agentTurns.beforeRetirement(actorId, true);
-      await this.agentQuiet(actorId);
-    }
   }
 
   private async wipeStorage(): Promise<void> {

@@ -92,7 +92,6 @@ export interface AgentFacetCalls {
   awaitSend(snapshot: AgentSnapshot, id: string): Promise<SendState>;
   interruptChat(snapshot: AgentSnapshot): Promise<readonly string[]>;
   /** The owner's Stop: unseen steers stay queued and rerun. */
-  stopChat(snapshot: AgentSnapshot): Promise<void>;
   /** What a reset left owed is taken up; the agent tells its workspace what is left once it rests. */
   wake(snapshot: AgentSnapshot): Promise<void>;
   /** The next request is measured on the new settings, and a refusal only the owner could fix may answer now. */
@@ -326,10 +325,6 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async modelSettingsChanged(snapshot: AgentSnapshot): Promise<void> {
     return await settle(this.withChat(snapshot, (chat) => chat.modelSettingsChanged()));
-  }
-
-  async stopChat(snapshot: AgentSnapshot): Promise<void> {
-    return await settle(this.withChat(snapshot, (chat) => { chat.session.stop(); }));
   }
 
   async revertTo(snapshot: AgentSnapshot, entryId: string): Promise<void> {

@@ -293,8 +293,8 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   }
   /** Main's chat, in its own isolate (D9): a turn is open there. */
   harnessMainTurnInFlight(): boolean { return this.mainChatTurn() !== null; }
-  /** The owner's Stop of main's chat. */
-  harnessStopMain(): Promise<void> { return this.stopMainChat(); }
+  /** The owner's Stop of main's chat, as its window sends it. */
+  async harnessStopMain(): Promise<void> { await this.cancelCurrentWork(); }
   /** The owner's words to main, admitted as its window admits them; resolves once reserved. */
   harnessAdmitMain(text: string, id: string, mode: WorkMode | undefined): Promise<void> {
     return this.hostedAdmit(this.actorHandle().actorId, { text, files: [], id, mode: mode ?? 'build' });

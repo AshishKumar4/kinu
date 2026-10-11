@@ -864,7 +864,14 @@ export class ChatSession {
     if (cancelled.length === 0) return;
     this.queue.splice(0, this.queue.length, ...this.queue.filter((item) => item.kind !== 'programmatic'));
 
-    for (const item of cancelled) this.settleItem(item, new KinuError('cancelled', 'The agent was stopped before this turn ran.'));
+    const failure = new KinuError('cancelled', 'The agent was stopped before this turn ran.');
+
+    for (const item of cancelled) {
+      this.settleItem(item, failure);
+      // Its caller waits on the work, not on a turn: told, as of a turn that never opened.
+      this.actorSession.orchestrator.track(this.toldUnanswered(item, failure), 'telling a cancelled turn\'s caller');
+    }
+
     diagnostics.event('turn.queued_cancelled', { count: cancelled.length });
   }
 
