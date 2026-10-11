@@ -11,10 +11,10 @@ import { supervisorEsbuildService } from '@nimbus-sh/worker/facet-host';
 import { probeDurableApps, probeFacetManager } from './facet-manager';
 import { newWebSocketRpcSession } from 'capnweb';
 import {
-  initSlateStateTable, parseSlateProject, issuedSlateInvocation, routeSlateCall, routeSlateStorageCall,
+  initSlateStateTable, parseSlateProject, issuedSlateInvocation, routeSlateCall, slateStorageCall,
   type JsonValue, type SlateCallResult, type SlateInvocation,
 } from '@kinu.run/core';
-import { SqliteSlateStateStore, type SlateStorageOp } from '@kinu.run/core/slates';
+import { SqliteSlateStateStore } from '@kinu.run/core/slates';
 import { KinuError, renderThrownChain } from '@kinu.run/core/obs';
 import { ResidentSlateProcesses, type ResidentSlateProcess } from '../../src/slates/resident';
 import { slateBatchStub } from '../../src/slates/rpc-transport';
@@ -106,22 +106,10 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
   }
 
   /** A WorkerEntrypoint runs in the caller's request context, where this DO's `ctx.storage` is
-   *  unusable: `__storage` binds this DO's own stub and routes via `routeSlateStorageCall`. */
+   *  unusable: `__storage` binds this DO's own stub and answers through `slateStorageCall`. */
   private storageCall(member: string, args: JsonValue[]): SlateCallResult {
     try {
-      const operation: SlateStorageOp = routeSlateStorageCall({ member, args });
-
-      switch (operation.op) {
-        case 'get': return { ok: true, value: this.state.get('probe', operation.key) };
-        case 'put': {
-          this.state.put('probe', operation.key, operation.value);
-
-          return { ok: true, value: null };
-        }
-
-        case 'delete': return { ok: true, value: this.state.delete('probe', operation.key) };
-        case 'list': return { ok: true, value: this.state.list('probe', { prefix: operation.prefix, limit: operation.limit }) };
-      }
+      return slateStorageCall(this.state, { workMode: 'build' }, 'probe', { member, args });
     } catch (cause) {
       if (!(cause instanceof KinuError)) throw cause;
 

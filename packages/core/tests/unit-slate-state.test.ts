@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import type { Database } from 'bun:sqlite';
 import { KinuError, type ErrorCode } from '../src/obs/error';
-import { initSlateStateTable, routeSlateStorageCall, SqliteSlateStateStore } from '../src/slates/state';
+import { initSlateStateTable, slateStorageCall, SqliteSlateStateStore } from '../src/slates/state';
 import type { JsonValue } from '../src/utils/json';
 import { createTestWorkspace, makeSqlExec } from './helpers';
 
@@ -71,34 +71,42 @@ test('list orders by key and a prefix bounds the range without a LIKE', () => {
   }
 });
 
-test('routeSlateStorageCall refuses by class: bad input versus a member it does not offer', () => {
-  const route = (member: string, args: JsonValue[] = []) =>
-    routeSlateStorageCall({ member, args });
+test('a slate storage call routes by member and refuses by class: bad input versus a member it does not offer', () => {
+  const ws = createTestWorkspace();
 
-  expect(route('get', ['k'])).toEqual({ op: 'get', key: 'k' });
-  expect(route('put', ['k', { a: 1 }])).toEqual({ op: 'put', key: 'k', value: { a: 1 } });
-  expect(route('delete', ['k'])).toEqual({ op: 'delete', key: 'k' });
-  expect(route('list', [{ prefix: 'p', limit: 5 }])).toEqual({ op: 'list', prefix: 'p', limit: 5 });
+  try {
+    const store = storeOn(ws.db);
+    const route = (member: string, args: JsonValue[] = [], workMode: 'plan' | 'build' = 'build') => slateStorageCall(store, { workMode }, 'notes', { member, args });
 
-  const fails = (member: string, args: JsonValue[], code: ErrorCode) => {
-    try {
-      route(member, args);
-      expect.unreachable(`${member} should refuse`);
-    } catch (cause) {
-      if (!(cause instanceof KinuError)) throw cause;
+    expect(route('put', ['k', { a: 1 }])).toEqual({ ok: true, value: null });
+    expect(route('get', ['k'])).toEqual({ ok: true, value: { value: { a: 1 } } });
+    expect(route('list', [{ prefix: 'k', limit: 5 }])).toMatchObject({ ok: true });
+    expect(route('delete', ['k'])).toEqual({ ok: true, value: true });
+    // Plan mode reads, never writes.
+    expect(() => route('put', ['k', 1], 'plan')).toThrow('slate storage write');
 
-      expect(cause.code).toBe(code);
-    }
-  };
+    const fails = (member: string, args: JsonValue[], code: ErrorCode) => {
+      try {
+        route(member, args);
+        expect.unreachable(`${member} should refuse`);
+      } catch (cause) {
+        if (!(cause instanceof KinuError)) throw cause;
 
-  expect(() => route('get', [])).toThrow('one key');
-  fails('get', [], 'bad_input');
-  fails('get', [''], 'bad_input');
-  fails('put', ['k'], 'bad_input');
-  fails('put', ['k', 'v', 'extra'], 'bad_input');
-  fails('put', ['x'.repeat(513), 'v'], 'bad_input');
-  fails('list', [{ limit: 1001 }], 'bad_input');
-  fails('list', ['not-an-object'], 'bad_input');
-  fails('clear', [], 'denied');
-  expect(() => route('clear')).toThrow('storage offers get, put, delete and list');
+        expect(cause.code).toBe(code);
+      }
+    };
+
+    expect(() => route('get', [])).toThrow('one key');
+    fails('get', [], 'bad_input');
+    fails('get', [''], 'bad_input');
+    fails('put', ['k'], 'bad_input');
+    fails('put', ['k', 'v', 'extra'], 'bad_input');
+    fails('put', ['x'.repeat(513), 'v'], 'bad_input');
+    fails('list', [{ limit: 1001 }], 'bad_input');
+    fails('list', ['not-an-object'], 'bad_input');
+    fails('clear', [], 'denied');
+    expect(() => route('clear')).toThrow('storage offers get, put, delete and list');
+  } finally {
+    ws.db.close();
+  }
 });

@@ -294,7 +294,7 @@ export {
   type SlateSummary, type SlateProblem,
 } from './slates/rpc';
 
-export { initSlateStateTable, SLATE_HOST_BINDING, SLATE_STORAGE_BINDING, routeSlateStorageCall, type SlateStorageOp } from './slates/state';
+export { initSlateStateTable, SLATE_HOST_BINDING, SLATE_STORAGE_BINDING, slateStorageCall, type SlateStorageOp } from './slates/state';
 
 // Browser-safe slate vocabulary, so it belongs on this value-imported barrel.
 export {

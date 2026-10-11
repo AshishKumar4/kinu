@@ -4,23 +4,22 @@ import { WorkspaceId } from '@agent-core/core';
 import { SlateId, SlateVersionId } from '@agent-core/core/slates';
 import * as v from 'valibot';
 import { CRED_KERNEL, CRED_SESSION_USER, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
-import { ROOT_SLATE_CALLER, slateCallerKey, shareCaller, type SlateCaller } from '@kinu.run/core/slates';
+import { ROOT_SLATE_CALLER, slateCallerKey, type SlateCaller } from '@kinu.run/core/slates';
 import {
   forgetSlateFiles, SlateFiles, SlateShareStore, WorkspaceSlateContentStore, SqliteSlateStateStore, SqliteSlateStore, WorkspaceBlueprints, WorkspaceSlates, slateDirectory,
   type BlueprintReading, type DurableAppIdentity, type DurableApps, type ShareUser,
 } from '@kinu.run/core/slates';
 import { SlateLiveShareStore, initSlateLiveShareTables, shareLiveSlate } from '@kinu.run/core/slates';
-import { EphemeralSlates, initEphemeralSlateTable, SlateUsageStore, initSlateUsageTable, SlateBuilds, SlateProcesses, heldSlateKey, type FailingSlateBuild, type RunningSlate, type SlateLaunch } from '@kinu.run/core/slates';
+import { EphemeralSlates, initEphemeralSlateTable, SlateUsageStore, initSlateUsageTable, SlateBuilds, SlateProcesses, SlateShareViewers, heldSlateKey, slateStorageCall, type FailingSlateBuild, type RunningSlate, type SlateLaunch } from '@kinu.run/core/slates';
 import {
   ingressAdmitted,
-  parseSlateProject, slateIdFor, slateTitle, routeSlateStorageCall, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING,
+  parseSlateProject, slateIdFor, slateTitle, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING,
   SlateCallRequestSchema, SlateOperationSchema, requireSlateWorkMode, requireWorkModePermission, routeSlateCall, issuedSlateInvocation,
-  routeViewerCall, admitNestedViewerCall, isJsonAnswer, slateCallAddress, slateAddressImpact, JsonValueSchema, projectJsonValue, isSlateMethodName, answeredRefusal, reoriginateRequest,
-  escapeHtml, publicPage, UsageSchema, usageTotal,
-  SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, shareSpendLabel, VIEWER_EXCHANGE_PATH,
+  isJsonAnswer, JsonValueSchema, projectJsonValue, isSlateMethodName, answeredRefusal, reoriginateRequest,
+  escapeHtml, publicPage, VIEWER_EXCHANGE_PATH,
   type BlueprintBundle, type BlueprintFork, type JsonValue, type SlateAnswer, type SlateProject, type SlateShareRecord,
   type SlateRoute, type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateSurfaceValue, type SlateInvocation, type SlateOperation, type SlateSummary, type SlateProblem, type WorkspacePreviewUrl,
-  type SlateSurfaceCatalog, type LiveShareRecord, type SlateViewer, type ViewerCall, type ShareViewerClaim,
+  type SlateSurfaceCatalog, type LiveShareRecord, type SlateViewer, type ShareViewerClaim,
   type MissionGovernor, type WorkspaceOverviewShare, slateCapabilityGraph, type SlateCapabilityGraph,
   ephemeralSlateAddress, type EphemeralSlateAddress,
 } from '@kinu.run/core';
@@ -85,24 +84,15 @@ export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'retained'> {
 }
 
 
-/** A viewer's answer is JSON: routing refuses a viewer every streamed member, so a stream here is a routing fault. */
-function viewerAnswer(result: SlateSurfaceResult): SlateCallResult {
-  if (!result.ok) return result;
-
-  return isJsonAnswer(result.value)
-    ? { ...result, value: result.value }
-    : { ok: false, ...refusalOf(new KinuError('io', 'A share viewer\'s call answered a stream')) };
-}
-
 /** The one surface every slate is given, as its process sees it. */
 const SLATE_SURFACE = 'workspace';
 
-interface ViewerAdmission {
+/** A viewer let in: the caller its calls run as, and the invocation its request carries. */
+interface ViewerAdmitted {
   readonly caller: SlateCaller;
   readonly invocation: string;
   readonly share: LiveShareRecord;
   readonly viewer: SlateViewer;
-  readonly record: (call: ViewerCall) => void;
   readonly settle: (outcome: string) => void;
 }
 
@@ -149,6 +139,7 @@ export class SlateHost {
   private readonly blueprintHeadings = new Map<string, { title: string; description: string }>();
   private readonly usage: SlateUsageStore;
   private readonly builds: SlateBuilds;
+  private readonly viewers: SlateShareViewers;
 
   constructor(private readonly deps: SlateHostDeps) {
     this.resident = new ResidentSlateProcesses({
@@ -165,6 +156,14 @@ export class SlateHost {
     this.builds = new SlateBuilds(deps.ctx.storage.sql);
     this.slateSources = new SlateSources({
       project: (cred, id) => this.project(cred, id), trees: (cred) => this.sources(cred), host: deps,
+    });
+    const kv = deps.kv;
+
+    this.viewers = new SlateShareViewers({
+      live: this.live, shareEntry: (share) => deps.shareEntry(share),
+      ...(deps.budget !== undefined && { budget: deps.budget.bind(deps) }),
+      ...(deps.ownerUserId !== undefined && { ownerUserId: deps.ownerUserId.bind(deps) }),
+      ...(kv !== undefined && { admitted: async (key, perMinute) => ingressAdmitted(kv, 'slate-share', key, perMinute) }),
     });
     this.processes = new SlateProcesses({
       workspace: deps.workspace, builds: this.builds, pages: this.pages, apps: deps.apps,
@@ -252,68 +251,33 @@ export class SlateHost {
     }
   }
 
-  /** Re-reads the share row now (S6: a revoked share refuses before a process starts). */
+  /** The core's admission, answered over HTTP: refusals as their statuses, the consent page, or the viewer let in. */
   async admitViewerRequest(input: {
     readonly handle: string;
     readonly claim: ShareViewerClaim;
     readonly pathname: string;
-  }): Promise<ViewerAdmission | Response> {
-    const share = this.live.byHandle(input.handle);
+  }): Promise<ViewerAdmitted | Response> {
+    const admission = await this.viewers.admit(input);
+    const headers = { 'cache-control': 'no-store' };
 
-    if (share === undefined) return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
+    switch (admission.kind) {
+      case 'missing': return new Response('Not found', { status: 404, headers });
+      case 'sign-in': return new Response(null, { status: 303, headers: { location: admission.entry, ...headers } });
+      case 'too-many': return new Response('Too many requests', { status: 429, headers });
+      case 'consent': return await this.consentPage(admission.share, admission.namespaces);
+      case 'admitted': {
+        const { caller, share, viewer } = admission;
+        const invocation = crypto.randomUUID();
 
-    // A visitor not yet known signs in at the app, whose ticket brings them back as themselves.
-    const entry = share.visibility === 'users' && input.claim.userId === null ? this.deps.shareEntry(share.id) : null;
+        this.invocations.set(invocation, { id: share.slate, chain: [], viewer });
 
-    if (entry !== null) return new Response(null, { status: 303, headers: { location: entry, 'cache-control': 'no-store' } });
-
-    if (share.visibility === 'users' && (input.claim.userId === null || !this.liveShareAdmitsUser(share.id, input.claim.userId))) {
-      return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
+        return { caller, invocation, share, viewer, settle: (outcome) => { this.live.settleRequest(viewer.request, outcome); } };
+      }
     }
-
-    const caller = shareCaller(share.id);
-
-    const subject = input.claim.userId === null ? `source:${input.claim.source}` : `user:${input.claim.userId}`;
-
-    // S2: a viewer past the bound is refused; the share is never paused.
-    if (this.deps.kv !== undefined && !await ingressAdmitted(this.deps.kv, 'slate-share', `${share.id}:${subject}`, SHARE_VIEWER_REQUESTS_PER_MINUTE)) {
-      return new Response('Too many requests', { status: 429, headers: { 'cache-control': 'no-store' } });
-    }
-
-    // D3: the consent page precedes anything of the owner's running, for named viewers too.
-    if (!input.claim.consented) {
-      const page = await this.consentPage(share);
-
-      if (page !== null) return page;
-    }
-
-    const viewer: SlateViewer = {
-      share: share.id,
-      subject,
-      request: this.live.openRequest({
-        share: share.id,
-        viewer: subject,
-        path: input.pathname,
-      }),
-    };
-
-    const invocation = crypto.randomUUID();
-    this.invocations.set(invocation, { id: share.slate, chain: [], viewer });
-
-    return {
-      caller,
-      invocation,
-      share,
-      viewer,
-      record: (call) => { this.live.recordCall(viewer.request, call); },
-      settle: (outcome) => { this.live.settleRequest(viewer.request, outcome); },
-    };
   }
-  /** `null` when the grant reaches nothing of the owner's: nothing to disclose. */
-  private async consentPage(share: LiveShareRecord): Promise<Response | null> {
-    const namespaces = [...new Set(share.grant.members.map((member) => member.namespace))];
 
-    if (namespaces.length === 0) return null;
+  /** What the grant reaches of the owner's, disclosed before anything of theirs runs. */
+  private async consentPage(share: LiveShareRecord, namespaces: readonly string[]): Promise<Response> {
     const project = await this.project(CRED_SESSION_USER, share.slate);
     const owner = (await this.deps.ownerTitle?.()) ?? this.deps.workspace;
     const title = slateTitle(project, share.slate);
@@ -331,37 +295,6 @@ export class SlateHost {
     });
 
     return new Response(html, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
-  }
-
-  /** Reads the ledger row, never `guard`, which stamps exhaustion and fires the once-per-label event. */
-  private sharePaused(share: LiveShareRecord): boolean {
-    const governor = this.deps.budget?.();
-
-    if (governor === undefined) return false;
-
-    return governor.snapshot(shareSpendLabel(share.id)).some((row) => row.exhausted);
-  }
-
-  /** The label carries the UTC day, so the bound renews without a rollover job; unparented so no turn owns it. */
-  private shareGovernor(share: LiveShareRecord): MissionGovernor | undefined {
-    const governor = this.deps.budget?.();
-
-    if (governor === undefined) return undefined;
-    governor.declare(shareSpendLabel(share.id), { usd: SHARE_SPEND_CAP_USD_PER_DAY }, { parent: '' });
-
-    return governor;
-  }
-
-  private debitShare(share: LiveShareRecord, value: JsonValue): void {
-    const governor = this.shareGovernor(share);
-
-    if (governor === undefined) return;
-    const usage = v.safeParse(v.object({ usage: v.optional(UsageSchema) }), value);
-
-    governor.debit(usage.success && usage.output.usage !== undefined ? usageTotal(usage.output.usage) ?? 0 : 0, {
-      labels: [shareSpendLabel(share.id)], calls: 1,
-      usage: usage.success ? usage.output.usage : undefined,
-    });
   }
 
   async routeShare(
@@ -481,7 +414,7 @@ export class SlateHost {
   }
 
   liveShareAdmitsUser(share: string, userId: string): boolean {
-    return userId === this.deps.ownerUserId?.() || this.live.hasUser(share, userId);
+    return this.viewers.admits(share, userId);
   }
 
   /** Admission is checked only by the caller. */
@@ -606,7 +539,7 @@ export class SlateHost {
         return await this.changedShares({ ok: true, value: projectJsonValue({ value: created }) });
       }
 
-      case 'liveShares': return { ok: true, value: projectJsonValue({ value: this.live.list().map((row) => ({ ...row, paused: this.sharePaused(row) })) }) };
+      case 'liveShares': return { ok: true, value: projectJsonValue({ value: this.live.list().map((row) => ({ ...row, paused: this.viewers.paused(row) })) }) };
       case 'viewerRequests': return { ok: true, value: projectJsonValue({ value: this.live.requests(operation.share) }) };
     }
   }
@@ -814,12 +747,17 @@ export class SlateHost {
       if (name === SLATE_HOST_BINDING) return this.releaseInvocation(caller, id, parsed.output);
 
       // Answered here, not dispatched: it carries no actor capability.
-      if (name === SLATE_STORAGE_BINDING) return this.storageCall(caller, id, parsed.output);
+      if (name === SLATE_STORAGE_BINDING) return slateStorageCall(this.state, caller, id, { member: parsed.output.path.join('.'), args: parsed.output.args });
       const issued = issuedSlateInvocation({ invocations: this.invocations, id, invocation: parsed.output.invocation });
       const chain = issued?.chain ?? [];
 
       // The share row is re-read now, so a revoked share refuses mid-flight.
-      if (caller.share !== undefined) return await this.viewerCall({ caller, share: caller.share, id, request: parsed.output, chain, issued });
+      if (caller.share !== undefined) {
+        return await this.viewers.call({
+          share: caller.share, id, request: parsed.output, chain, issued,
+          run: (route, nested) => this.run(caller, route, { nested, ...(parsed.output.authorize && { authorizeOnly: true }) }, issued?.viewer),
+        });
+      }
 
       const source = await this.slateSources.resolve(caller.cred, id);
 
@@ -840,70 +778,6 @@ export class SlateHost {
       return await this.run(callsAs, call.route, { nested: record, ...(parsed.output.authorize && { authorizeOnly: true }) });
     } catch (cause) {
       return { ok: false, ...refusalOf(toKinuError({ doing: `slate ${id} ${name}`, cause, otherwise: 'io' })) };
-    }
-  }
-
-  private storageCall(caller: SlateCaller, id: string, request: SlateCallRequest): SlateCallResult {
-    const operation = routeSlateStorageCall({ member: request.path.join('.'), args: request.args });
-
-    if (operation.op === 'put' || operation.op === 'delete') {
-      requireWorkModePermission(caller.workMode, false, 'slate storage write');
-    }
-
-    switch (operation.op) {
-      case 'get': return { ok: true, value: this.state.get(id, operation.key) };
-      case 'put': {
-        this.state.put(id, operation.key, operation.value);
-
-        return { ok: true, value: null };
-      }
-
-      case 'delete': return { ok: true, value: this.state.delete(id, operation.key) };
-      case 'list': return { ok: true, value: this.state.list(id, { prefix: operation.prefix, limit: operation.limit }) };
-    }
-  }
-
-  /** A viewer's call: the grant decides, every call is audited, and what it spends is the share's. */
-  private async viewerCall(input: {
-    readonly caller: SlateCaller;
-    readonly share: string;
-    readonly id: string;
-    readonly request: SlateCallRequest;
-    readonly chain: readonly string[];
-    readonly issued: SlateInvocation | null;
-  }): Promise<SlateCallResult> {
-    const { caller, id, request, chain, issued } = input;
-
-    if (issued?.viewer === undefined) throw new KinuError('denied', 'A viewer call must name the invocation it was issued under');
-    const viewer = issued.viewer;
-    const named = slateCallAddress(request.path);
-    // What the audit row says, as far as the call got: refused until it is routed and answered.
-    let row: ViewerCall = { slate: id, ...named, impact: slateAddressImpact(named) ?? 'administer', ok: false };
-    // A revoked share refuses here, before there is a call of it to audit.
-    const share = this.live.live(input.share);
-
-    try {
-      // S2: the per-day spend bound refuses as 'budget'.
-      const governor = this.deps.budget?.();
-
-      if (governor !== undefined && governor.guard('model_call', [shareSpendLabel(share.id)]) !== null) {
-        throw new KinuError('budget', 'This share is paused for today');
-      }
-
-      const call = routeViewerCall({ id, request, chain, viewer, grant: share.grant });
-      row = { slate: id, ...call.address, impact: call.impact, ok: false };
-
-      // What the call reaches inside itself meets the grant as it stands then: a revoke mid-call ends it there.
-      const nested = (namespace: string, member: string) => { admitNestedViewerCall(this.live.live(input.share).grant, id, { namespace, member }); };
-
-      const result = viewerAnswer(await this.run(caller, call.route, { nested, ...(request.authorize && { authorizeOnly: true }) }, viewer));
-      row = { ...row, ok: result.ok };
-
-      if (result.ok) this.debitShare(share, result.value);
-
-      return result;
-    } finally {
-      this.live.recordCall(viewer.request, row);
     }
   }
 
