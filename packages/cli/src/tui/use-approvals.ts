@@ -57,17 +57,20 @@ export function useApprovals(client: AgentClient, opts: {
   const { note } = opts;
   /** The last read, kept with the client it was read from so a switch never shows another workspace's. */
   const [waiting, setWaiting] = useState<{ readonly client: AgentClient; readonly actions: readonly DeferredApproval[] } | null>(null);
-  const [putOff, setPutOff] = useState<ReadonlySet<string>>(new Set());
+  /** `later` holds every waiting approval back until a turn starts or ends. */
+  const [putOff, setPutOff] = useState(false);
   /** The answer on its way, kept with the client it is for. */
   const [chosen, setChosen] = useState<{ readonly client: AgentClient; readonly action: DeferredApproval; readonly answer: DeferredApprovalAnswer } | null>(null);
-  /** Set before the render that hides the prompt, so a second key in the same frame answers nothing. */
-  const inFlight = useRef(false);
+  /** The drawn prompt a key already answered: set before the render that hides it, so a second key answers nothing. */
+  const handled = useRef<DeferredApproval | null>(null);
   const sent = useRef<typeof chosen>(null);
   /** Bumped when a frame says the queue moved and after each answer, so the queue is read again. */
   const [moves, setMoves] = useState(0);
 
+  // A turn's start or end ends `later`, and what was read before it is stale until read again.
   useEffect(() => {
-    setPutOff(new Set());
+    setPutOff(false);
+    setWaiting(null);
   }, [client, opts.running]);
 
   useEffect(() => {
@@ -99,14 +102,13 @@ export function useApprovals(client: AgentClient, opts: {
       },
       onFailure: (failure) => { note('error', renderThrownChain({ cause: failure })); },
     }), Effect.sync(() => {
-      inFlight.current = false;
       setChosen(null);
       setMoves((count) => count + 1);
     })));
   }, [chosen, note]);
 
-  const askable = opts.ready && !opts.running && opts.draft === '' && !opts.othersOpen && chosen === null && waiting?.client === client;
-  const action = askable ? waiting.actions.find((queued) => !putOff.has(queued.id)) : undefined;
+  const askable = opts.ready && !opts.running && opts.draft === '' && !opts.othersOpen && !putOff && chosen === null && waiting?.client === client;
+  const action = askable ? waiting.actions[0] : undefined;
   const asking: ApprovalPrompt | null = action === undefined ? null : { kind: 'waiting', action };
   const prompt: ApprovalPrompt | null = live === null ? asking : { kind: 'live', request: live };
 
@@ -116,11 +118,11 @@ export function useApprovals(client: AgentClient, opts: {
       if (prompt?.kind === 'waiting') {
         const choice = WAITING_CHOICE[decision];
 
-        if (choice === 'later') setPutOff(new Set(waiting?.actions.map((queued) => queued.id)));
-        else if (!inFlight.current) {
-          inFlight.current = true;
-          setChosen({ client, action: prompt.action, answer: choice });
-        }
+        if (handled.current === prompt.action) return;
+        handled.current = prompt.action;
+
+        if (choice === 'later') setPutOff(true);
+        else setChosen({ client, action: prompt.action, answer: choice });
 
         return;
       }

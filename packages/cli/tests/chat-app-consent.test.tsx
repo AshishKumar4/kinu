@@ -1,6 +1,5 @@
 /** @jsxImportSource @opentui/react */
 import { afterEach, describe, expect, test } from 'bun:test';
-import { flushSync } from '@opentui/react';
 
 import { cleanupChats, fakeClient, mountChat } from './helpers/chat-app-fixture';
 import { deviceConsentCanApprove } from '../src/tui/overlays';
@@ -278,7 +277,9 @@ describe('waiting approvals', () => {
     expect(screen.frame()).toContain('rewrites history');
     screen.mockInput.pressKey('a');
     await screen.waitFor('the second waiting approval', () => screen.frame().includes('rm -rf build'));
+    // Later takes the prompt at once: an approving key in the same frame answers nothing.
     screen.mockInput.pressKey('l');
+    screen.mockInput.pressKey('y');
     await screen.waitFor('the prompt put off', () => !screen.frame().includes('Run this command?'));
 
     expect(parkedQueue.decided).toEqual([[['park-1'], 'always']]);
@@ -316,8 +317,7 @@ describe('waiting approvals', () => {
   test('a draft holds a newly parked command back, so no keystroke meant for it answers', async () => {
     const parkedQueue = queue([]);
     const agent = fakeClient({ name: 'parked', approvals: parkedQueue.approvals });
-    // Kitty keys, so Ctrl+C reaches the composer as its clear rather than the terminal's interrupt.
-    const screen = await mountChat(agent.client, { kittyKeyboard: true });
+    const screen = await mountChat(agent.client);
 
     await screen.mockInput.typeText('yes, and also');
     parkedQueue.waiting.push(parked('park-1', 'git push --force origin main'));
@@ -326,7 +326,9 @@ describe('waiting approvals', () => {
     await screen.renderOnce();
     expect(screen.frame()).not.toContain('Run this command?');
 
-    flushSync(() => screen.mockInput.pressKey('c', { ctrl: true }));
+    // Emptied key by key: each one is the composer's while it still holds a character.
+    for (let left = 'yes, and also y'.length; left > 0; left -= 1) screen.mockInput.pressBackspace();
+
     await screen.waitFor('the waiting approval once the composer is empty', () => screen.frame().includes('git push --force origin main'));
     screen.mockInput.pressKey('n');
     await screen.waitFor('the denial', () => parkedQueue.decided.length === 1);

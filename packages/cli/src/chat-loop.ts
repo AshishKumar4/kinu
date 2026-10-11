@@ -462,7 +462,8 @@ function ask(rl: readline.Interface, prompt: string, signal?: AbortSignal, prefi
     signal?.addEventListener('abort', onAbort, { once: true });
 
     try {
-      rl.question(prompt, settle);
+      // Cancelled with the signal, so a question taken back leaves readline free for the next one.
+      rl.question(prompt, { signal }, settle);
 
       if (prefill) rl.write(prefill);
     } catch (error) {
