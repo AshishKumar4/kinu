@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { cloudflareTest, getDurableObjectDesignators } from '@cloudflare/vitest-plugin';
-import { build as bundled, stop as stopEsbuild, transform, type BuildOptions } from 'esbuild';
+import { build as bundled, transform, type BuildOptions } from 'esbuild';
 import { nodeRequireAsImport } from './esbuild-node-require';
 import { buildSlateVendor, slateVendor } from './slate-vendor';
 import { configDefaults, defineConfig, type Plugin } from 'vitest/config';
@@ -117,29 +117,23 @@ const probeRuntime = {
 } satisfies BuildOptions;
 
 /**
- * Every esbuild build this process makes, one at a time, its service stopped whenever none is waiting: as buildSync's
- * own process per build did. Builds take the require plugin, so they run in the service, which kept the peak of all
- * running at once (seventeen probes killed it; probes beside test-time agent bundles held 5.9 GiB, armada 2026-10-11).
+ * Every esbuild build this process makes, one at a time, as buildSync made them: builds take the require plugin, so
+ * they run in esbuild's service, which held the peak of all running at once (seventeen probes killed it; probes beside
+ * test-time agent bundles held 5.9 GiB, armada 2026-10-11). The service stays up: standardDecorators' transform uses it.
  */
 let esbuildTurns: Promise<void> = Promise.resolve();
-
-let esbuildWaiting = 0;
 
 async function esbuildTurn<T>(work: () => Promise<T>): Promise<T> {
   const before = esbuildTurns;
   const done = Promise.withResolvers<void>();
 
   esbuildTurns = done.promise;
-  esbuildWaiting += 1;
 
   try {
     await before;
 
     return await work();
   } finally {
-    esbuildWaiting -= 1;
-
-    if (esbuildWaiting === 0) await stopEsbuild();
     done.resolve();
   }
 }
