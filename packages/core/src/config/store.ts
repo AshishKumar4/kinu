@@ -177,9 +177,6 @@ function liveConfigReads(sql: SqlExecutor): ConfigReads {
   };
 }
 
-/** One `actor_config` row, as an isolate's snapshot carries it. */
-type ConfigRow = { readonly actor_id: string; readonly key: string; readonly value: string };
-
 const ConfigRowSchema = v.object({ actor_id: v.string(), key: v.string(), value: v.string() });
 
 /**
@@ -219,20 +216,6 @@ class ConfigCatalog implements ConfigReads {
 
   clear(): void {
     this.held.clear();
-  }
-
-  /** The rows of `actorIds`, those not held read in one statement. */
-  stored(actorIds: readonly string[]): ConfigRow[] {
-    const missing = actorIds.filter((actorId) => !this.held.has(actorId));
-
-    if (missing.length > 0) {
-      const read = this.sql<{ actor_id: string; key: string; value: string }>`SELECT actor_id, key, value FROM actor_config
-        WHERE actor_id IN (SELECT value FROM json_each(${JSON.stringify(missing)}))`;
-
-      for (const actorId of missing) this.held.set(actorId, new Map(read.filter((row) => row.actor_id === actorId).map((row) => [row.key, row.value])));
-    }
-
-    return actorIds.flatMap((actorId) => [...this.rows(actorId)].map(([key, value]) => ({ actor_id: actorId, key, value })));
   }
 
   /** After an adoption committed: `rows` are now every row of `actorIds`. */
