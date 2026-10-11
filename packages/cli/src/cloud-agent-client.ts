@@ -132,15 +132,14 @@ const ChangelogEntrySchema: v.GenericSchema<ChangelogEntry> = v.lazy(() => v.obj
 }));
 
 const ChangelogViewSchema = v.nullable(v.object({
-  entries: v.optional(v.array(ChangelogEntrySchema), []),
-  unseenCount: v.optional(v.number(), 0),
+  entries: v.array(ChangelogEntrySchema),
+  unseenCount: v.number(),
 }));
 
-/** Optional-with-default fields so an older workspace degrades to an empty listing, not a parse failure. */
 const RefinementRouteSchema = v.object({
   kind: v.picklist(REFINEMENT_EDIT_KINDS),
-  owner: v.optional(v.string(), ''),
-  target: v.optional(v.string(), ''),
+  owner: v.string(),
+  target: v.string(),
   disposition: v.picklist(REFINEMENT_DISPOSITIONS),
   reason: v.optional(v.string()),
 });
@@ -150,10 +149,10 @@ const RefinementRequestViewSchema: v.GenericSchema<unknown, RefinementRequestVie
   trigger: v.picklist(REFINEMENT_TRIGGERS),
   scope: v.picklist(REFINEMENT_SCOPES),
   stage: v.picklist(REFINEMENT_STAGES),
-  turnIds: v.optional(v.array(v.string()), []),
-  routes: v.optional(v.array(RefinementRouteSchema), []),
-  detail: v.optional(v.string(), ''),
-  createdAt: v.optional(v.number(), 0),
+  turnIds: v.array(v.string()),
+  routes: v.array(RefinementRouteSchema),
+  detail: v.string(),
+  createdAt: v.number(),
 });
 
 const StagedSkillResultSchema: v.GenericSchema<unknown, StagedSkillResult> = v.variant('ok', [
@@ -165,7 +164,7 @@ const StagedSkillResultSchema: v.GenericSchema<unknown, StagedSkillResult> = v.v
       target: v.string(),
       digest: v.string(),
       source: v.string(),
-      intact: v.optional(v.boolean(), false),
+      intact: v.boolean(),
     }),
   }),
   v.object({ ok: v.literal(false), error: v.string() }),
@@ -180,12 +179,12 @@ const RefinementDecisionResultSchema: v.GenericSchema<unknown, RefinementDecisio
 );
 
 const RefinementViewSchema: v.GenericSchema<unknown, AgentRefinementView> = v.object({
-  requests: v.optional(v.array(RefinementRequestViewSchema), []),
+  requests: v.array(RefinementRequestViewSchema),
   debt: v.object({
-    turnIds: v.optional(v.array(v.string()), []),
-    owed: v.optional(v.boolean(), false),
-    key: v.optional(v.string(), ''),
-    summary: v.optional(v.string(), ''),
+    turnIds: v.array(v.string()),
+    owed: v.boolean(),
+    key: v.string(),
+    summary: v.string(),
   }),
 });
 

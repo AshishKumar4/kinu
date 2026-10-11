@@ -78,20 +78,15 @@ const CloudDeviceSandboxSchema = v.object({
   tier: v.picklist(DEVICE_TIERS),
   capability: v.picklist(DEVICE_SANDBOX_CAPABILITIES),
   reason: v.nullable(v.picklist(DEVICE_SANDBOX_REASONS)),
-  detail: v.optional(v.nullable(v.string()), null),
+  detail: v.nullable(v.string()),
   gpu: v.array(v.string()),
 });
-
-/** A hub too old to report the switch: sandbox on (the default), and not proved capable. */
-const UNREPORTED_SANDBOX: CloudDeviceSandbox = {
-  tier: 'sandboxed', capability: 'files_only', reason: null, detail: null, gpu: [],
-};
 
 const CloudDeviceSchema = v.object({
   id: v.string(), label: v.string(), os: v.nullable(v.string()), hostname: v.nullable(v.string()),
   connected: v.boolean(), createdAt: v.number(), lastSeenAt: v.nullable(v.number()),
-  sandbox: v.optional(CloudDeviceSandboxSchema, UNREPORTED_SANDBOX),
-  wholeMachine: v.optional(v.boolean(), false),
+  sandbox: CloudDeviceSandboxSchema,
+  wholeMachine: v.boolean(),
 });
 
 export type CloudDevice = v.InferOutput<typeof CloudDeviceSchema>;
@@ -198,7 +193,7 @@ const WorkspaceSpendSchema: v.GenericSchema<WorkspaceSpend> = v.object({
   }),
   offTurnShare: v.nullable(v.number()),
   missions: v.array(MissionBudgetSnapshotSchema),
-  accounts: v.optional(v.array(AccountSpendSchema)),
+  accounts: v.array(AccountSpendSchema),
 });
 
 export const ActivitySpendSchema = v.object({ spend: WorkspaceSpendSchema });

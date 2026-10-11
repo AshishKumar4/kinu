@@ -473,7 +473,7 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
                 ))}
               </tbody>
             )}
-            {spend.accounts !== undefined && spend.accounts.length > 0 && (
+            {spend.accounts.length > 0 && (
               <tbody>
                 <tr>
                   <th
