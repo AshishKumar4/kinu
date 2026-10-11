@@ -6,7 +6,6 @@ import {
 } from '@kinu.run/core';
 import type { KinuDevbox } from '../src/kinu-devbox';
 // Static: neither module reaches `cloudflare:email`, so neither needs the mock below.
-import { kinuEgressParams } from '../src/egress/configure';
 import { adaptCloudflareSandbox } from '../src/sandbox-exec-lane';
 import type { ApprovalGrant, EgressInjectionResult, EgressRequestFacts, UserCaller } from '@kinu.run/core';
 import type { ContainerEgressEnv, ContainerEventResolver, EgressWorkspace, KinuEgressParams } from '../src/egress/outbound';
@@ -190,13 +189,6 @@ describe('the secret reaches the upstream and comes back scrubbed', () => {
 });
 
 describe('what the container is configured with', () => {
-  test('the container is configured with its workspace and owner alone: no grant, binding or placeholder', () => {
-    const params = kinuEgressParams({ workspaceName: 'kinu-main', ownerUserId: 'user-1' });
-
-    expect(params).toEqual({ workspaceName: 'kinu-main', ownerUserId: 'user-1' });
-    expect(JSON.stringify(params)).not.toContain(EGRESS_PLACEHOLDER_PREFIX);
-  });
-
   test('params are parsed, so a malformed configuration reads as unconfigured', () => {
     expect(parseEgressParams({ props: PARAMS })).toEqual(PARAMS);
     expect(parseEgressParams({ props: { workspaceName: 'w' } })).toBeUndefined();

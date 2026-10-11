@@ -28,7 +28,6 @@ export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 
 import { diagnostics, toKinuError, detach } from "@kinu.run/core/obs";
 import { Effect } from 'effect';
-import { kinuEgressParams } from "./egress/configure";
 import { BOX_SIZES, BOX_SIZE_ORDER, DEFAULT_BOX_SIZE, type BoxSize } from "@kinu.run/devbox/sizes";
 import { accountSandboxSize, SANDBOX_SIZE_CONFIG_KEY } from "./sandbox-size";
 import { driveBound, tenantDrive } from "./drive/tenant";
@@ -404,10 +403,7 @@ export function createCFRuntime(
         const userId = actor.ownerUserId();
 
         if (!userId) return;
-        await sdk.configureEgress(kinuEgressParams({
-          workspaceName: actor.workspaceName,
-          ownerUserId: userId,
-        }));
+        await sdk.configureEgress({ workspaceName: actor.workspaceName, ownerUserId: userId });
         // Unread, the box keeps its last default.
         const [accountSize] = await Promise.allSettled([ownerSandboxSize(env, actor)]);
 

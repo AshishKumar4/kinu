@@ -35,7 +35,6 @@ import {
   type PlanEdit, type PlanReview, type PlanReviewResult, actorReadHandle,
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedBox, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
-import { kinuEgressParams } from "./egress/configure";
 import type { WorkspaceEgress } from "@nimbus-sh/core/_shared/workspace-network.js";
 import { agentFacet, agentStateShellId, AgentMemory, AgentStoreBroker, AgentWorkspaceHost, headDeltas, uiChunks, type AgentFacetPlacement } from "./agent-facets";
 import { agentCallsThrough, AgentIsolateSlots } from "./dynamic-worker-slots";
@@ -546,7 +545,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     if (ownerUserId === null) return undefined;
 
-    return this.ctx.exports.KinuEgress({ props: kinuEgressParams({ workspaceName: this.name, ownerUserId }) });
+    return this.ctx.exports.KinuEgress({ props: { workspaceName: this.name, ownerUserId } });
   }
 
   private hostedWorkspace(): HostedWorkspace {

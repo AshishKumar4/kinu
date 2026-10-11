@@ -33,7 +33,12 @@ export const CONTAINER_EVENT_HOST = 'events.kinu.internal';
 
 const CONTAINER_EVENT_PATH = '/v1/events';
 
-/** Set by the owning DO; not readable or influenceable from the container. */
+/**
+ * Set by the owning DO; not readable or influenceable from the container. Applied to a container by
+ * `KinuDevbox.configureEgress` before any op that can start it (`sandbox-exec-lane.ts`), so until then it has no network;
+ * minted for a workspace as it opens (`OrchestratorAgent.workspaceEgress`). Neither names a grant, binding or secret:
+ * the egress reads the workspace's grants and the vault for a request that names a placeholder (`WorkspaceGrants`).
+ */
 export interface KinuEgressParams {
   readonly workspaceName: string;
   readonly ownerUserId: string;
