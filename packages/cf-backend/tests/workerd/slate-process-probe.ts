@@ -11,10 +11,10 @@ import { supervisorEsbuildService } from '@nimbus-sh/worker/facet-host';
 import { probeDurableApps, probeFacetManager } from './facet-manager';
 import { newWebSocketRpcSession } from 'capnweb';
 import {
-  initSlateStateTable, parseSlateProject, issuedSlateInvocation, routeSlateCall, slateStorageCall,
+  initSlateStateTable, parseSlateProject, slateAuthority, issuedSlateInvocation, routeSlateCall, slateStorageCall,
   type JsonValue, type SlateCallResult, type SlateInvocation,
 } from '@kinu.run/core';
-import { SqliteSlateStateStore } from '@kinu.run/core/slates';
+import { SlateBuilds, SqliteSlateStateStore, initSlateBuildTable } from '@kinu.run/core/slates';
 import { KinuError, renderThrownChain } from '@kinu.run/core/obs';
 import { ResidentSlateProcesses, type ResidentSlateProcess } from '../../src/slates/resident';
 import { slateBatchStub } from '../../src/slates/rpc-transport';
@@ -202,6 +202,46 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     });
 
     return { refused: 'failed' in built, missing: (built.inputs ?? []).filter((input) => input.missing).map((input) => input.path) };
+  }
+
+  /**
+   * `/slates/chained/lib.ts` links to `/home/chained/alias.ts`, which links to `/home/chained/future/lib.ts`, written
+   * only after a first build is refused. The refusal is stored as the host stores it; writing the final target names
+   * the slate stale, and its next build compiles.
+   */
+  async chainedBuild(): Promise<{ readonly first: string; readonly missing: string[]; readonly stale: string[]; readonly second: string }> {
+    const files = this.vfs.as(CRED_KERNEL);
+
+    files.mkdir('/slates/chained', { recursive: true });
+    files.writeFile('/slates/chained/server.ts', 'import { SlateObject } from "kinu:slate";\nimport { word } from "./lib.ts";\nexport class Slate extends SlateObject { word() { return word; } }\n');
+    files.mkdir('/home/chained', { recursive: true });
+    files.symlink('/home/chained/alias.ts', '/slates/chained/lib.ts');
+    files.symlink('/home/chained/future/lib.ts', '/home/chained/alias.ts');
+    const sql = this.ctx.storage.sql;
+
+    initSlateBuildTable((ddl) => { sql.exec(ddl); });
+    const builds = new SlateBuilds(sql);
+    const authored = this.vfs.as(CRED_SESSION_USER);
+
+    const build = () => this.resident.build({
+      owner: 'chained', root: '/slates/chained', project: parseSlateProject({ main: 'server.ts' }), cred: CRED_SESSION_USER,
+      read: (entry) => (authored.exists(`/slates/chained/${entry}`) ? authored.readFileString(`/slates/chained/${entry}`) : null),
+    });
+
+    const first = await build();
+
+    if ('failed' in first) builds.failed('chained', slateAuthority(CRED_SESSION_USER), 'v1', first);
+    files.mkdir('/home/chained/future', { recursive: true });
+    files.writeFile('/home/chained/future/lib.ts', 'export const word = "chained";\n');
+    const stale = builds.moved(['/home/chained/future/lib.ts']);
+    const second = await build();
+
+    return {
+      first: 'failed' in first ? 'refused' : 'built',
+      missing: (first.inputs ?? []).filter((input) => input.missing).map((input) => input.path),
+      stale,
+      second: 'failed' in second ? second.failed : 'built',
+    };
   }
 
   async facetImages(): Promise<string[]> {

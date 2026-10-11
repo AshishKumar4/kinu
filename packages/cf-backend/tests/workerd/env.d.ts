@@ -221,6 +221,7 @@ interface HireProbeRpc extends Rpc.DurableObjectBranded {
 interface SlateProcessProbeRpc extends Rpc.DurableObjectBranded {
   linkedBuildInputs(): Promise<string[]>;
   danglingBuildInputs(): Promise<{ readonly refused: boolean; readonly missing: string[] }>;
+  chainedBuild(): Promise<{ readonly first: string; readonly missing: string[]; readonly stale: string[]; readonly second: string }>;
   start(start?: {
     source?: string; bindChain?: boolean; cred?: VfsCred;
     browser?: string; project?: Record<string, JsonValue>; app?: { port: number } | null;

@@ -385,3 +385,12 @@ it('a build refused for a link whose target is not written yet watches the targe
   // Writing the target, or the directory it would be in, is a change to a path this build found missing.
   expect(seen.missing).toEqual(expect.arrayContaining(['/home/dangling/lib.ts', '/home/dangling']));
 });
+
+it('a build refused through two links to a file not written yet is built again once that file is written', async () => {
+  const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('chained-inputs'));
+  const seen = await subject.chainedBuild();
+
+  expect(seen).toMatchObject({ first: 'refused', stale: ['chained'], second: 'built' });
+  // Where the whole chain leads, and the directory above it not written yet.
+  expect(seen.missing).toEqual(expect.arrayContaining(['/home/chained/future/lib.ts', '/home/chained/future']));
+});
