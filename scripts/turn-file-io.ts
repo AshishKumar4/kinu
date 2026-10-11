@@ -801,6 +801,74 @@ try {
 
       process.stdout.write(JSON.stringify({ event: 'abort', sha, label: loop.label, settledMs, idleShare: idle, cpuShareAfter: after, answer: answer.slice(-300) }) + '\n');
     }
+  } else if (subject === 'tcp') {
+    // What an owned workspace's program can open through Kinu's egress: plain TCP by destination, the TLS a program
+    // builds or upgrades itself, and the database and mail clients that do, each answered as the program sees it.
+    await ask('/seed');
+
+    const report = (label: string, answer: string) => {
+      const lines = answer.trim().split('\n').filter((line) => !line.startsWith('[Kinu note') && line.trim() !== '');
+
+      process.stdout.write(JSON.stringify({ event: 'tcp', sha, label, answer: lines.slice(-3).join(' | ') }) + '\n');
+    };
+
+    const dial = (host: string, port: number, say: string) => node([
+      `const s = require('net').connect(${String(port)}, ${JSON.stringify(host)}, () => { console.log('connected'); ${say === '' ? '' : `s.write(${JSON.stringify(say)});`} });`,
+      "s.setTimeout(8000, () => { console.log('timeout'); s.destroy(); });",
+      "s.once('data', (d) => { console.log('heard ' + JSON.stringify(String(d).slice(0, 60))); s.destroy(); });",
+      "s.on('error', (e) => console.log('error ' + (e.code ?? '') + ' ' + e.message));",
+      "s.on('close', () => console.log('closed'));",
+    ].join(' '));
+
+    const destinations: readonly (readonly [string, number, string])[] = [
+      ['example.com', 80, 'HEAD / HTTP/1.0\r\nHost: example.com\r\n\r\n'], ['github.com', 22, ''], ['smtp.gmail.com', 587, ''],
+      ['smtp.gmail.com', 25, ''], ['127.0.0.1', 5432, ''], ['10.0.0.1', 22, ''], ['169.254.169.254', 80, ''], ['::1', 6379, ''],
+      ['::ffff:127.0.0.1', 5432, ''], ['localhost', 5432, ''], ['127.0.0.1.nip.io', 5432, ''], ['10.0.0.1.nip.io', 22, ''],
+      ['metadata.google.internal', 80, ''],
+    ];
+
+    for (const [host, port, say] of destinations) report(`net ${host}:${String(port)}`, await shell(dial(host, port, say)));
+
+    report('tls.TLSSocket built by the program', await shell(node([
+      "const tls = require('tls'); try { const t = new tls.TLSSocket(undefined, { servername: 'example.com' });",
+      "t.connect({ port: 443, host: 'example.com' }, () => { console.log('secure ' + t.encrypted); t.destroy(); });",
+      "t.on('error', (e) => console.log('error ' + (e.code ?? '') + ' ' + e.message)); } catch (e) { console.log('threw ' + (e.code ?? '') + ' ' + e.message); }",
+    ].join(' '))));
+    report('STARTTLS by hand (SMTP, tls.connect({ socket }))', await shell(node([
+      "const net = require('net'), tls = require('tls'); const s = net.connect(587, 'smtp.gmail.com'); let step = 0, heard = '';",
+      "s.on('error', (e) => console.log('error ' + e.message));",
+      "s.on('data', (d) => { heard += d; if (!heard.endsWith('\\r\\n')) return; const last = heard.trimEnd().split('\\r\\n').pop(); heard = '';",
+      "  if (step === 0 && last.startsWith('220 ')) { step = 1; s.write('EHLO kinu\\r\\n'); }",
+      "  else if (step === 1 && last.startsWith('250 ')) { step = 2; s.write('STARTTLS\\r\\n'); }",
+      "  else if (step === 2 && last.startsWith('220 ')) { step = 3; s.removeAllListeners('data');",
+      "    const t = tls.connect({ socket: s, servername: 'smtp.gmail.com' }, () => t.write('EHLO kinu\\r\\n'));",
+      "    t.on('data', (e) => { console.log('over TLS ' + String(e).slice(0, 3) + ' encrypted=' + t.encrypted); t.destroy(); });",
+      "    t.on('error', (e) => console.log('tls error ' + (e.code ?? '') + ' ' + e.message)); } });",
+    ].join(' '))));
+
+    const withPackage = async (dir: string, dependency: string, program: string) => await shell(`mkdir -p ${dir} && cd ${dir} && echo '{"name":"probe","private":true}' > package.json`
+      + ` && npm install --no-audit --no-fund ${dependency} > /dev/null && ${node(program)}`);
+
+    // EBI's public read-only databases; the password is the published one, handed in by the run, not committed.
+    const pg = (ssl: string) => [
+      `const { Client } = require('pg'); const c = new Client({ host: 'hh-pgsql-public.ebi.ac.uk', user: 'reader', password: ${JSON.stringify(process.env.PERF_PG_PASSWORD ?? '')}, database: 'pfmegrnargs', ${ssl} connectionTimeoutMillis: 15000 });`,
+      "c.connect().then(() => c.query('select 1 as one')).then((r) => { console.log('pg ' + r.rows[0].one + ' encrypted=' + Boolean(c.connection.stream.encrypted)); return c.end(); }).catch((e) => console.log('pg error ' + (e.code ?? '') + ' ' + e.message));",
+    ].join(' ');
+
+    report('pg, ssl: true (STARTTLS)', await withPackage('/home/main/perfio/tcp-pg', 'pg@8', pg('ssl: true,')));
+    report('pg, no ssl', await withPackage('/home/main/perfio/tcp-pg', 'pg@8', pg('')));
+
+    for (const [label, ssl] of [['mysql2, ssl', 'ssl: {},'], ['mysql2, no ssl', '']] as const) {
+      report(label, await withPackage('/home/main/perfio/tcp-mysql', 'mysql2@3', [
+        `const c = require('mysql2').createConnection({ host: 'mysql-rfam-public.ebi.ac.uk', port: 4497, user: 'rfamro', database: 'Rfam', ${ssl} connectTimeout: 15000 });`,
+        "c.query('select 1 as one', (e, rows) => { console.log(e ? 'mysql error ' + (e.code ?? '') + ' ' + e.message : 'mysql ' + rows[0].one + ' encrypted=' + Boolean(c.stream && c.stream.encrypted)); c.end(); });",
+      ].join(' ')));
+    }
+
+    report('nodemailer verify (STARTTLS on 587)', await withPackage('/home/main/perfio/tcp-mail', 'nodemailer@6', [
+      "require('nodemailer').createTransport({ host: 'smtp.gmail.com', port: 587, secure: false, requireTLS: true, connectionTimeout: 15000 })",
+      ".verify().then((ok) => console.log('nodemailer verified ' + ok)).catch((e) => console.log('nodemailer error ' + (e.code ?? '') + ' ' + e.message));",
+    ].join(' ')));
   } else if (subject === 'boot') {
     // A workspace's cold open: set up fresh (an owner, a credential), then its first command, which boots its engine.
     const fresh = async (name: string, path: string, input?: JsonObject): Promise<string> => {
