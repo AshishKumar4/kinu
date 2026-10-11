@@ -241,7 +241,7 @@ const CLIENT_BUILD: Inputs = { ...AMBIENT_BY_NAME, corpus: true };
  *  names is walked from it (`configNamedModules`, ladder-closure.ts). Measured
  *  by `--audit-closure` 2026-09-24 on the complexity row. */
 function workersPool(base: string): Inputs {
-  return { ...AMBIENT_BY_NAME, reads: [`${base}/`] };
+  return { ...AMBIENT_BY_NAME, env: [...AMBIENT_BY_NAME.env ?? [], ...base === 'packages/cf-backend' ? ['KINU_CLOUDFLARE_API_TOKEN'] : []], reads: [`${base}/`] };
 }
 
 /** Gates that run before the deploy tier. The deploy tier is parsed from

@@ -26,7 +26,7 @@ import { builtinModules } from 'node:module';
 import { spawn } from 'node:child_process';
 import { promptText } from './vite-prompt-text';
 import { AGENT_BUNDLE_ENTRY, buildAgentBundle, workerCompatibility, writeWhole } from './vite-agent-bundle';
-import { readAiRun, workersAiAnswer, workersAiBinding } from './tests/helpers/workers-ai-binding';
+import { closeRemoteWorkersAi, readAiRun, remoteWorkersAi, workersAiBinding } from './tests/helpers/workers-ai-binding';
 import type { Reporter } from 'vitest/reporters';
 import * as v from 'valibot';
 import { HELD_PROXY_MODEL } from './tests/workerd/ai-proxy-shapes';
@@ -37,7 +37,7 @@ import { workerSourceTriggers } from '../../scripts/worker-test-inputs';
 let hireAi: ReturnType<typeof workersAiBinding> | undefined;
 
 function getHireAi(): ReturnType<typeof workersAiBinding> {
-  hireAi ??= workersAiBinding(async (request) => workersAiAnswer(await readAiRun(request)));
+  hireAi ??= workersAiBinding(remoteWorkersAi);
 
   return hireAi;
 }
@@ -47,11 +47,9 @@ let twoTurnAi: ReturnType<typeof workersAiBinding> | undefined;
 /** The two-turn probe reads what the binding was asked through `/log`. */
 function getTwoTurnAi(): ReturnType<typeof workersAiBinding> {
   twoTurnAi ??= workersAiBinding(async (request) => {
-    const run = await readAiRun(request);
+    recordAiRun(await readAiRun(request.clone()));
 
-    recordAiRun(run);
-
-    return workersAiAnswer(run);
+    return await remoteWorkersAi(request);
   });
 
   return twoTurnAi;
@@ -67,7 +65,7 @@ function getSurfaceAi(): ReturnType<typeof workersAiBinding> {
       return Response.json({ response: 'held' });
     }
 
-    return workersAiAnswer(await readAiRun(request));
+    return await remoteWorkersAi(request);
   });
 
   return surfaceAi;
@@ -279,7 +277,7 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           throw new Error('Unmatched test egress is disabled: ' + request.url);
         }, })],
 ["two-turn-probe", async () => ({
-          // `env.AI` is the installed Workers AI binding, answered by request shape on the Node side.
+          // `env.AI` is the installed binding, forwarded to Wrangler's remote Workers AI session.
           ...workerCompatibility,
           workerLoaders: { LOADER: {} },
           modules: probeModules('two-turn-probe.ts', probeRuntime),
@@ -586,6 +584,7 @@ const suiteWorkers = new Map([...requirements].map(([file, workers]) => [fileURL
 let selectedWorkers: AuxiliaryWorker[] = [];
 
 const workerSelection: Reporter = {
+  onTestRunEnd: closeRemoteWorkersAi,
   async onTestRunStart(specifications) {
     const selected = new Set<string>();
 

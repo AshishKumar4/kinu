@@ -1,7 +1,9 @@
 import { createServer } from 'node:http';
 import * as v from 'valibot';
 import type { RemoteProxyConnectionString, Response as MiniflareResponse } from 'miniflare';
-import { CLEF_BINDING_ANSWER } from '../../../test-utils/src/clef-binding-answer';
+import { startRemoteProxySession, unstable_readConfig } from 'wrangler';
+import { fileURLToPath } from 'node:url';
+import { restApiToken } from '../../../../scripts/cloudflare-rest';
 
 /** One `env.AI.run(model, inputs)` as the installed binding sends it: the model in a header, the inputs in the body. */
 export interface AiRun {
@@ -16,7 +18,7 @@ const AiInputsSchema = v.looseObject({
   questions: v.optional(v.record(v.string(), v.unknown())),
 });
 
-export async function readAiRun(request: Request): Promise<AiRun> {
+export async function readAiRun(request: Pick<Request, 'json' | 'headers'>): Promise<AiRun> {
   const { inputs } = v.parse(v.looseObject({ inputs: AiInputsSchema }), await request.json());
 
   return { model: request.headers.get('mf-header-cf-consn-model-id') ?? '', inputs };
@@ -42,18 +44,36 @@ export function aiLane({ model, inputs }: AiRun): (typeof AI_LANES)[number] | nu
   return messages.every((message) => message.role === 'user') ? 'sleep' : null;
 }
 
-/** A rating with what Clef answered on the binding (`CLEF_BINDING_ANSWER`, measured 2026-10-02), a title, an empty
- *  sleep-time update. Any other run is refused with its model and keys, so a new caller fails by name. */
-export function workersAiAnswer(run: AiRun): Response {
-  switch (aiLane(run)) {
-    case 'decision': return Response.json(CLEF_BINDING_ANSWER);
-    case 'title': return Response.json({ response: JSON.stringify({ title: 'Probe Workspace' }) });
-    case 'sleep': return Response.json({ response: JSON.stringify({ upserts: [], decay: [] }) });
-    case null: return Response.json(
-      { errors: [{ message: `no fixture answers ${run.model} with keys ${Object.keys(run.inputs).join(', ')}` }] },
-      { status: 400 },
-    );
-  }
+let remote: ReturnType<typeof startRemoteProxySession> | undefined;
+
+/** The native AI wire is passed to Wrangler's remote binding, never answered by a fixture. */
+export async function remoteWorkersAi(request: Request): Promise<Response> {
+  remote ??= startRemoteProxySession({ AI: { type: 'ai' } }, {
+    auth: async () => {
+      const accountId = unstable_readConfig({ config: fileURLToPath(new URL('../../wrangler.jsonc', import.meta.url)), env: 'staging' }).account_id;
+      const apiToken = restApiToken();
+
+      if (accountId === undefined || apiToken === '') throw new Error('Workers AI binding tests require the configured account and KINU_CLOUDFLARE_API_TOKEN from Armada secrets.');
+
+      return { accountId, apiToken: { apiToken } };
+    },
+  });
+  const session = await remote;
+  const headers = new Headers(request.headers);
+  headers.delete('host');
+  headers.delete('content-length');
+  const answer = await fetch(session.remoteProxyConnectionString, { method: request.method, headers, body: await request.arrayBuffer(), signal: request.signal });
+  // fetch decoded the bytes; the binding must not gunzip them a second time.
+  const decoded = new Headers(answer.headers);
+  decoded.delete('content-encoding');
+  decoded.delete('content-length');
+
+  return new Response(answer.body, { status: answer.status, statusText: answer.statusText, headers: decoded });
+}
+
+export async function closeRemoteWorkersAi(): Promise<void> {
+  if (remote !== undefined) await (await remote).dispose();
+  remote = undefined;
 }
 
 const ProxyUrlSchema = v.custom<RemoteProxyConnectionString>((value) => v.is(v.instance(URL), value));

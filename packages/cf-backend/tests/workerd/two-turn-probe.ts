@@ -1,7 +1,7 @@
 /**
  * Two-turn probe: the real OrchestratorAgent drives two full Think turns over the HTTP model fake, with the installed
- * Workers AI binding answering the lanes that call it (rating, title, sleep-time judge) by request shape, never prompt
- * text. Defends (2026-09-08): a transcript count naming a missing column, and the second turn's request dropping the
+ * remote Workers AI binding answering the lanes that call it (rating, title, sleep-time judge). Defends (2026-09-08):
+ * a transcript count naming a missing column, and the second turn's request dropping the
  * message that started it.
  */
 import { Agent, getAgentByName, getCurrentAgent, type AgentContext } from 'agents';
@@ -9,7 +9,7 @@ import { subscribe } from 'agents/observability';
 import * as v from 'valibot';
 import {
   HOSTED_ACTOR_ID_HEADER, SLEEP_TIME_CADENCE, TerminalEffectInterrupt, hostedActorSocketPath, JsonValueSchema,
-  type SlateAnswer, type TerminalEffectName, type TerminalEffectPhase,
+  profileCatalogDigest, type ProfileAuthorityInputs, type SlateAnswer, type TerminalEffectName, type TerminalEffectPhase,
 } from '@kinu.run/core';
 import {
   createCompositeLogger,
@@ -142,6 +142,19 @@ async function awaitSettled(target: { settleState(): Promise<SettleState> }): Pr
 }
 
 export class ObservedOrchestrator extends ProductionOrchestrator {
+  /** Workers AI Limits and llama-3.3-70b-instruct-fp8-fast docs, read 2026-10-11:
+   * https://developers.cloudflare.com/workers-ai/platform/limits/ — standard text generation: 300 requests/minute.
+   * The fixture owns this fast model and zero retries; product defaults are unchanged.
+   */
+  protected override async profileInputs(): Promise<ProfileAuthorityInputs> {
+    const input = await super.profileInputs();
+    const model = 'workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+    const catalog = { ...input.envelope.catalog, retries: 0, tiers: { ...input.envelope.catalog.tiers, fast: { model } } };
+
+    return { envelope: { ...input.envelope, catalog, digest: profileCatalogDigest(catalog) },
+      provider: { ...input.provider, availableModels: [...new Set([...input.provider.availableModels, model])] } };
+  }
+
   private readonly actorState: AgentContext;
   private readonly meter: SqlMeter;
   /** The database without the meter, for the probe's own reads. */
@@ -396,6 +409,9 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   }
 
   async settleState(): Promise<SettleState> {
+    const refusal = providerRateRefusals.get(this.name);
+
+    if (refusal !== undefined) throw new Error(refusal);
     const busy: string[] = [];
 
     if (this._inFlight) busy.push('a turn in flight');
@@ -796,7 +812,7 @@ const NOTE: ReviewAnnotation = {
 const NOTED: NotedChanges = { source: 'workspace', label: 'Workspace', mode: 'vfs-baseline' };
 
 type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
-  'claimOwner' | 'setModel' | 'setSoul' | 'setEvolutionConfig' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp' | 'evalAbortActivation' | 'workspaceTitle'
+  'claimOwner' | 'setModel' | 'setSoul' | 'setEvolutionConfig' | 'setDisplayName' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp' | 'evalAbortActivation' | 'workspaceTitle'
   | 'createSubordinateAgent' | 'readWorkspaceFile'>
   & Pick<ProductionOrchestrator, 'getChangeNotes' | 'saveChangeNotes' | 'sendChangeNotes'>
   & Pick<ObservedOrchestrator, 'refuseReservations' | 'owedSends' | 'latestClaimOutcome' | 'recoveryPass'
@@ -855,6 +871,8 @@ interface WorkspaceRecording extends Logger {
   until(workspace: string, holds: (emitted: readonly RecordedLog[]) => boolean): Promise<void>;
 }
 
+const providerRateRefusals = new Map<string, string>();
+
 function createWorkspaceRecording(): WorkspaceRecording {
   const recording = createRecordingLogger();
   const emitters: (string | null)[] = [];
@@ -866,7 +884,13 @@ function createWorkspaceRecording(): WorkspaceRecording {
       recording.event(name, fields);
     },
     failure(name, error, fields) {
-      emitters.push(emittingWorkspace());
+      const workspace = emittingWorkspace();
+      emitters.push(workspace);
+
+      if (workspace !== null && name === 'provider.request_failed' && v.safeParse(v.object({ status: v.literal(429) }), fields).success) {
+        providerRateRefusals.set(workspace, renderThrownChain({ cause: error }));
+      }
+
       recording.failure(name, error, fields);
     },
     of: (workspace) => own(recording.emitted, workspace),
@@ -1065,6 +1089,8 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       kind: 'openai-compat', baseURL: 'http://fake-models.invalid/v1', apiKey: 'probe-fixture-key',
     });
     await target.setModel('openai-compat/probe-queue');
+    await target.setEvolutionConfig({ learning: false });
+    await target.setDisplayName('Queue Probe');
     await target.setSoul('# Queue Probe\n\n## Mission\n\nFollow the owner\'s exact request.');
     await this.httpReset();
     await fetch('http://probe-control.invalid/queue/hold', { method: 'POST' });
@@ -1172,7 +1198,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
       // The held genesis and one user-origin rerun of the sends it could not land; a signal or peer
       // event that waited with them rides its first step.
-      await awaitSleepTimeSettled(recording, workspace, { chat: 2, peer: 2, signal: 2, yield: 1, attach: 2 }[mode]);
+
       await awaitSettled(target);
 
       const answers = (await target.chatHistoryPage()).items.filter((message) => message.role === 'assistant').map((message) => message.content);
