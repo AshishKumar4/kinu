@@ -165,10 +165,10 @@ function sandboxHandle(fs: MemFs): SandboxHandle {
       if (command.startsWith('mkdir')) {
         fs.mkdir(p);
 
-        return { exitCode: 0, stdout: '' };
+        return { exitCode: 0, stdout: '', stderr: '' };
       }
 
-      if (command.startsWith('test -e')) return { exitCode: 0, stdout: fs.exists(p) ? 'true' : 'false' };
+      if (command.startsWith('test -e')) return { exitCode: 0, stdout: fs.exists(p) ? 'true' : 'false', stderr: '' };
 
       if (command.startsWith('set -o pipefail; dd ')) {
         const range = /skip=(\d+) count=(\d+)/.exec(command);
@@ -177,11 +177,11 @@ function sandboxHandle(fs: MemFs): SandboxHandle {
         const bytes = fs.read(p)?.subarray(Number(range[1]), Number(range[1]) + Number(range[2]));
 
         return bytes
-          ? { exitCode: 0, stdout: Buffer.from(bytes).toString('base64') }
+          ? { exitCode: 0, stdout: Buffer.from(bytes).toString('base64'), stderr: '' }
           : { exitCode: 1, stdout: '', stderr: 'ENOENT' };
       }
 
-      return { exitCode: 0, stdout: '' };
+      return { exitCode: 0, stdout: '', stderr: '' };
     },
     async exposePort(port, opts) {
       const exposed = { url: `https://preview.invalid/${port}`, port, route: { reached: true } as const };
@@ -223,6 +223,7 @@ function nimbusHandle(fs: MemFs): RemoteSessionBox {
     async list(path?: string) { return fs.list(path ?? '/').map((name) => ({ name, type: fs.stat(`${path ?? ''}/${name}`)?.isDir === true ? 'directory' : 'file' })); },
     stat,
     lstat: stat,
+    async readlink() { return null; },
     async rename(from: string, to: string) {
       const bytes = fs.read(from);
 

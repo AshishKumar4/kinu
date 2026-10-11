@@ -1,4 +1,4 @@
-import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import type { VFS, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 import { direntType } from '../vfs/dirent';
 /** Nimbus executor adapter: maps a backend-supplied workspace box onto Kinu's ExecutorProvider contract. */
 
@@ -74,6 +74,16 @@ export interface NimbusStartResult {
   startedAt: number;
 }
 
+/** A session file's metadata (`@nimbus-sh/core/runtime/session-protocol.js` SessionFileStat). */
+interface NimbusSessionStat {
+  type: string;
+  size: number;
+  mtime: number;
+  ctime?: number;
+  ino?: number;
+  revision?: number;
+}
+
 /** A remote session's file plane: the SDK's `NimbusSandbox.files`. `as(cred)` binds it to one identity. */
 interface NimbusSandboxFiles {
   as(cred: VfsCred): NimbusSandboxFiles;
@@ -83,9 +93,11 @@ interface NimbusSandboxFiles {
   /** Whole-file write; no precondition, so no compare-and-write. */
   write(path: string, content: string | Uint8Array): Promise<void>;
   list(path?: string): Promise<Array<{ name: string; type: string }>>;
-  /** `mtime` and `ctime` are in milliseconds; null when absent. No revision or inode field. */
-  stat(path: string): Promise<{ type: string; size: number; mtime: number; ctime?: number } | null>;
-  lstat(path: string): Promise<{ type: string; size: number; mtime: number; ctime?: number } | null>;
+  /** `mtime` and `ctime` are in milliseconds; null when absent. `ino` and `revision` when the backend keeps them. */
+  stat(path: string): Promise<NimbusSessionStat | null>;
+  lstat(path: string): Promise<NimbusSessionStat | null>;
+  /** A link's target as written; null when the path is absent or no link. */
+  readlink(path: string): Promise<string | null>;
   rename(from: string, to: string): Promise<void>;
   mkdir(path: string): Promise<void>;
   delete(path: string, options?: { recursive?: boolean }): Promise<void>;
@@ -642,11 +654,6 @@ async function heard(stream: ExecStream, output: OutputSink | undefined, stop: A
   return collectExecStream({ output: told, exit: stream.exit });
 }
 
-/** Binds a shell call to the plane's credential; absent must be an absent key (`'cred' in options`). */
-function asCred(cred: VfsCred | undefined): { cred: VfsCred } | Record<string, never> {
-  return cred === undefined ? {} : { cred };
-}
-
 /** A remote box, which carries its session's file plane. */
 export type RemoteSessionBox = NimbusSandboxHandle & { readonly files: NimbusSandboxFiles };
 
@@ -679,32 +686,30 @@ export function nimbusSessionFiles(
 
       await atVfsPath(absolute, 'open', () => files.write(absolute, data));
     },
-    // No `writeFileIfRevision`: the SDK write takes no precondition and stat has no revision, so
-    // `writeExecutorFileOp` answers `unsupported`.
+    // No `writeFileIfRevision`: the SDK write takes no precondition, so `writeExecutorFileOp` answers `unsupported`.
     async readdir(path) {
       const absolute = at(path);
 
       return (await atVfsPath(absolute, 'scandir', () => files.list(absolute))).map((entry) => ({ name: entry.name, type: direntType(entry.type) }));
     },
-    // The SDK's files have no readlink: the session's own `readlink` answers, as the same credential.
-    async readlink(path) {
-      const absolute = at(path);
-      const r = await box.exec(`readlink -- ${shellQuote(absolute)}`, asCred(cred));
-
-      if (!r.success || r.exitCode !== 0) throw syscallError('ENOENT', 'readlink', absolute, { detail: r.stderr.trim() || undefined });
-
-      return r.stdout.replace(/\n$/, '');
-    },
+    readlink: (path) => present(path, 'readlink', (absolute) => files.readlink(absolute)),
     async stat(path, options) {
       const absolute = at(path);
       const stat = await atVfsPath(absolute, options?.follow === false ? 'lstat' : 'stat', () => (options?.follow === false ? files.lstat(absolute) : files.stat(absolute)));
 
       if (stat === null) return null;
       const type = stat.type === 'symlink' ? 'symlink' as const : 'file' as const;
-      // The change time moves on every write and no caller sets it: what a note's stamp is told apart by.
-      const changed = stat.ctime === undefined ? {} : { ctimeMs: stat.ctime };
+      const answer: VfsStat = { size: stat.size, mtimeMs: stat.mtime, type: stat.type === 'directory' ? 'directory' : type };
 
-      return { size: stat.size, mtimeMs: stat.mtime, ...changed, type: stat.type === 'directory' ? 'directory' : type };
+      // The change time moves on every write and no caller sets it: what a note's stamp is told apart by, and the
+      // revision, where the backend keeps one, before it.
+      if (stat.ctime !== undefined) answer.ctimeMs = stat.ctime;
+
+      if (stat.ino !== undefined) answer.ino = stat.ino;
+
+      if (stat.revision !== undefined) answer.revision = stat.revision;
+
+      return answer;
     },
     async unlink(path) { await files.delete(at(path)); },
     async removeRecursive(path) { await files.delete(at(path), { recursive: true }); },

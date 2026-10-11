@@ -441,7 +441,7 @@ export const rpcRouteCapabilityPort = (host: ProgrammaticHost, ...args: Paramete
 
 export type ProgrammaticExecOptions = NonNullable<Parameters<HostedRuntime['exec']>[1]>;
 
-const FileStatSchema = v.object({ type: v.string(), size: v.number(), mtime: v.number() });
+const FileStatSchema = v.object({ type: v.string(), size: v.number(), mtime: v.number(), revision: v.optional(v.number()) });
 
 /** The credentialed runtime: `exec` carries the credential and `files.as(agent)` answers the bound
  *  file plane; top-level `files` refuse so it never falls back to the session user. Shared to prevent drift. */
@@ -454,10 +454,16 @@ export function credentialedSessionBox(
   const filesAs = (agent: VfsCred): RemoteSessionBox['files'] => {
     const view = async () => (await runtime()).files.as(agent);
 
-    const stat = async (path: string) => {
-      const found = await (await view()).stat(path);
+    // As the session's own stat answers: a zero revision is no revision.
+    const stat = (follow: boolean) => async (path: string) => {
+      const found = await (await view()).stat(path, { follow });
 
-      return found === null ? null : v.parse(FileStatSchema, { type: found.type, size: found.size, mtime: found.mtimeMs });
+      if (found === null) return null;
+      const answer = v.parse(FileStatSchema, { type: found.type, size: found.size, mtime: found.mtimeMs });
+
+      if (typeof found.revision === 'number' && found.revision !== 0) answer.revision = found.revision;
+
+      return answer;
     };
 
     return {
@@ -470,8 +476,10 @@ export function credentialedSessionBox(
       },
       write: async (path, content) => { await (await view()).writeFile(path, content); },
       list: async (path) => (await (await view()).readdir(path ?? '/')).map((entry) => ({ name: entry.name, type: entry.type })),
-      stat,
-      lstat: stat,
+      stat: stat(true),
+      lstat: stat(false),
+      // Absent or no link answers null, as the session's readlink does.
+      readlink: async (path) => (await (await view()).isSymlink(path) ? (await view()).readlink(path) : null),
       rename: async (from, to) => { await (await view()).rename(from, to); },
       mkdir: async (path) => { await (await view()).mkdir(path, { recursive: true }); },
       delete: async (path, options) => { await (await view()).remove(path, { recursive: options?.recursive ?? false }); },
@@ -498,7 +506,7 @@ export function credentialedSessionBox(
       };
     },
     files: {
-      as: filesAs, readBytes: refuse, readRange: refuse, write: refuse, list: refuse, stat: refuse, lstat: refuse, rename: refuse, mkdir: refuse, delete: refuse,
+      as: filesAs, readBytes: refuse, readRange: refuse, write: refuse, list: refuse, stat: refuse, lstat: refuse, readlink: refuse, rename: refuse, mkdir: refuse, delete: refuse,
     },
   };
 }

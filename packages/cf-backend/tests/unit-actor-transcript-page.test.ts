@@ -18,7 +18,7 @@ function retainedDatabase() {
 
   const files: RemoteSessionBox['files'] = {
     as: () => files, readBytes: async (path) => created.vfs.readFile(path), readRange: refuse,
-    write: refuse, list: refuse, stat: refuse, lstat: refuse, rename: refuse, mkdir: refuse, delete: refuse,
+    write: refuse, list: refuse, stat: refuse, lstat: refuse, readlink: refuse, rename: refuse, mkdir: refuse, delete: refuse,
   };
 
   const box: RemoteSessionBox = { ready: refuse, exec: refuse, files };

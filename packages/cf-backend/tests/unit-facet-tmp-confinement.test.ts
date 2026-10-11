@@ -255,6 +255,7 @@ function originFilesBox(f: OwnerFixture): RemoteSessionBox {
       list: async (path) => view.readdir(path ?? '/').map((entry) => ({ name: entry.name, type: entry.type })),
       stat,
       lstat: stat,
+      readlink: refuse,
       rename: refuse,
       mkdir: async (path) => { view.mkdir(path, { recursive: true }); },
       delete: async (path) => { view.unlink(path); },
