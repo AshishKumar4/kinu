@@ -103,12 +103,12 @@ const AgentRefFields = {
 
 const KinuAgentConfigSchema = v.variant('mode', [
   v.object({
-    ...AgentRefFields, mode: v.literal('local'), localName: v.string(),
-    cwd: v.string(), workspaceId: v.string(), identityId: v.string(),
+    ...AgentRefFields, mode: v.literal('local'), localName: v.pipe(v.string(), v.nonEmpty()),
+    cwd: v.pipe(v.string(), v.nonEmpty()), workspaceId: v.pipe(v.string(), v.nonEmpty()), identityId: v.pipe(v.string(), v.nonEmpty()),
     cloudName: v.optional(v.never()), displayName: v.optional(v.never()),
   }),
   v.object({
-    ...AgentRefFields, mode: v.literal('cloud'), cloudName: v.string(), displayName: v.string(),
+    ...AgentRefFields, mode: v.literal('cloud'), cloudName: v.pipe(v.string(), v.nonEmpty()), displayName: v.string(),
     localName: v.optional(v.never()), cwd: v.optional(v.never()), workspaceId: v.optional(v.never()), identityId: v.optional(v.never()),
   }),
 ]);
@@ -230,7 +230,7 @@ export interface LocalAgentRef {
 
 /** Null without a recorded folder that still exists: such a workspace is listed nowhere and refused at open. */
 function placedRef(agent: KinuAgentConfig): LocalAgentRef | null {
-  if (agent.mode !== 'local' || !agent.cwd || !agent.workspaceId || !existsSync(agent.cwd)) return null;
+  if (agent.mode !== 'local' || !existsSync(agent.cwd)) return null;
   const name = agent.localName;
 
   if (!KINU_IDENTIFIER_RE.test(name)) return null;
@@ -283,7 +283,7 @@ function readWorkspaceIdentityId(dbPath: string): Effect.Effect<string, KinuErro
   return Effect.try({
     try: () => {
       // A WAL database needs its -shm, so the connection is read-write.
-      const db = new Database(dbPath);
+      const db = new Database(dbPath, { create: false });
 
       try {
         const row = db.query<{ id: string }, []>(`SELECT id FROM workspace_identity LIMIT 1`).get();
@@ -300,14 +300,20 @@ function readWorkspaceIdentityId(dbPath: string): Effect.Effect<string, KinuErro
 /** The only label source for local agents; config.json holds no copy, so renames cannot drift. */
 export function readWorkspaceDisplayName(dbPath: string): string | null {
   if (!existsSync(dbPath)) return null;
-  // Read-write: see `readWorkspaceIdentityId`.
-  const db = new Database(dbPath);
 
-  try {
-    return openWorkspaceMainActor(makeSql(db)).config.getDisplayName();
-  } finally {
-    db.close();
-  }
+  return settleSync(Effect.try({
+    try: () => {
+      // Read-write: see readWorkspaceIdentityId.
+      const db = new Database(dbPath, { create: false });
+
+      try {
+        return openWorkspaceMainActor(makeSql(db)).config.getDisplayName();
+      } finally {
+        db.close();
+      }
+    },
+    catch: (cause) => new KinuError('io', `${dbPath} is corrupt. Reinstall the local workspace.`, { cause }),
+  }));
 }
 
 /** A new local workspace's ref: the folder it works in, and its database's identity (`assertIdentityUnchanged`). */
