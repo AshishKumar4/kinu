@@ -319,6 +319,7 @@ describe('ChatApp terminal interaction', () => {
     await screen.waitFor('the model picker', screen.filterFocused);
     screen.mockInput.pressEnter();
     await screen.waitFor('the model selection request', () => selected.length === 1);
+    await screen.waitFor('the picker releases its control', () => !screen.filterFocused());
     screen.mockInput.pressKey(',', { ctrl: true });
 
     for (let index = 0; index < 4; index += 1) await screen.renderOnce();
