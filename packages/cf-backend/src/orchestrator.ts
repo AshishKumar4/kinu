@@ -860,7 +860,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         return this.agentTurns.bindProfile(actorId, turnId, profile);
       },
       chatEvent: (event) => this.hostedChatEvent(actorId, event),
-      turnEnded: (event, figures) => this.hostedTurnEnded(actorId, event, figures),
+      turnEnded: async (event, figures, activity) => {
+        // What its turn logged that no tool call took rides its end.
+        if (activity.length > 0) this.agentActivity(actorId, activity);
+        await this.hostedTurnEnded(actorId, event, figures);
+      },
       // The turn's report disposition is the agent's own, kept where the turn ran. An agent with no hirer owes none.
       owedReport: async (turn, ended) => (actorPolicy(this.agentOf(actorId)).hirer === null ? null : await hostedOwedReport(this.hostedSeams(), this.agentBound(actorId), turn, ended)),
       parentReport: (report) => hostedParentReport(this.hostedSeams(), this.agentBound(actorId), report),
@@ -961,7 +965,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         // Its hirer hears it as a delivery of its own, whichever agent hired it.
         return await this.agentDeliveries(parentActorId).signals.send(signal);
       },
-    }, this.deleting.signal);
+    }, this.deleting.signal, (turnId) => this.agentTurns.fenceHolds(actorId, turnId));
   }
 
   private agentBound(actorId: string): BoundActor {

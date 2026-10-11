@@ -1,7 +1,7 @@
 // The native lifetime is proved by the Tail oracle; these tests cover rejection identity and ownership at the adapter.
 import { expect, test } from 'bun:test';
 import { KinuError } from '@kinu.run/core/obs';
-import { workspaceClient, type AgentWorkspaceCalls } from '../src/agent-facet/workspace-rpc';
+import { workspaceClient, type AgentWorkspaceCalls, type AgentWorkspacePort } from '../src/agent-facet/workspace-rpc';
 
 function unused(): never {
   throw new Error('the adapter called an unrelated workspace method');
@@ -49,13 +49,19 @@ const unusedWorkspace: AgentWorkspaceCalls = {
   logActivity: unused,
   reportModelCall: unused,
   reportModelOperation: unused,
+  port: unused,
 };
+
+/** A workspace whose port answers with `calls`, as its host does. */
+function ported(calls: Partial<AgentWorkspacePort>): AgentWorkspaceCalls {
+  return { ...unusedWorkspace, port: async () => ({ ...unusedWorkspace, ...calls }) };
+}
 
 test('a rejected outgoing promise releases its pipeline and preserves the exact rejection', async () => {
   for (const failure of [new KinuError('missing', 'retired'), new Error('transport refused')]) {
     let disposed = 0;
     const pending = Object.assign(Promise.reject(failure), { [Symbol.dispose]: () => { disposed += 1; } });
-    const workspace = workspaceClient({ ...unusedWorkspace, paceStep: () => pending });
+    const workspace = workspaceClient(ported({ paceStep: () => pending }));
 
     await expect(workspace.paceStep('turn')).rejects.toBe(failure);
     expect(disposed).toBe(1);
@@ -72,7 +78,7 @@ test('a fulfilled response owns its stream and neither received disposer is rele
 
   const response = Object.assign(new Response(stream), { [Symbol.dispose]: () => { disposed += 1; } });
   const pending = Object.assign(Promise.resolve(response), { [Symbol.dispose]: () => { disposed += 1; } });
-  const workspace = workspaceClient({ ...unusedWorkspace, relayModelCall: () => pending });
+  const workspace = workspaceClient(ported({ relayModelCall: () => pending }));
   const answered = await workspace.relayModelCall('device', 'call', new Request('http://relay.invalid/'));
 
   expect(answered).toBe(response);
@@ -82,7 +88,7 @@ test('a fulfilled response owns its stream and neither received disposer is rele
 
 test('an in-process promise has no remote pipeline but keeps its rejection unchanged', async () => {
   const failure = new KinuError('denied', 'local refusal');
-  const workspace = workspaceClient({ ...unusedWorkspace, getAuth: () => Promise.reject(failure) });
+  const workspace = workspaceClient(ported({ getAuth: () => Promise.reject(failure) }));
 
   await expect(workspace.getAuth('credential')).rejects.toBe(failure);
 });

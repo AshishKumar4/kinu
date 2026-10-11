@@ -24,7 +24,12 @@ export interface AgentWorkspaceCalls extends Omit<AgentWorkspace, 'session' | 's
   session(): Promise<NimbusSessionSurface>;
   stateSession(): Promise<NimbusSessionSurface>;
   memory(): Promise<Memory>;
+  /** The agent's port: its workspace's host, held across calls (design v2 §3). */
+  port(): Promise<AgentWorkspacePort>;
 }
+
+/** What crosses through the held port: every call whose answer is data, not a live capability. */
+export type AgentWorkspacePort = Omit<AgentWorkspaceCalls, 'session' | 'stateSession' | 'memory' | 'program' | 'port'>;
 
 /** Nimbus opens a synchronous session surface; its methods first consume the factory's own RpcPromise. */
 class WorkspaceSession implements NimbusSessionSurface {
@@ -92,49 +97,70 @@ class ConsumedMemory implements Memory {
   tail(...args: Parameters<Memory['tail']>) { return settle(this.call(memory => memory.tail(...args))); }
 }
 
-/** All outgoing WORKSPACE calls cross the same consumption boundary, including chat, tools, pacing and credentials. */
+/**
+ * All outgoing WORKSPACE calls cross the same consumption boundary, including chat, tools, pacing and credentials. Those
+ * whose answer is data cross once, through the agent's port, held across them; one that fails lets the port go, as its
+ * workspace may have reset under it, and the next opens it again. A session, memory or a program's callbacks own live
+ * capabilities: each opens its own host, which lets them go at its edge.
+ */
 export function workspaceClient(workspace: AgentWorkspaceCalls): AgentWorkspace {
+  let held: Promise<AgentWorkspacePort> | null = null;
+
+  const viaPort = <T>(call: (port: AgentWorkspacePort) => Promise<T>): Promise<T> => {
+    held ??= workspace.port();
+    const opened = held;
+
+    return settle(workspaceRpcAnswer(opened).pipe(
+      Effect.flatMap((port) => workspaceRpcAnswer(call(port))),
+      Effect.onError(() => Effect.sync(() => {
+        if (held !== opened) return;
+        held = null;
+        disposeWorkspaceRpc(opened);
+      })),
+    ));
+  };
+
   return {
     session: () => new WorkspaceSession(workspace.session()),
     stateSession: () => new WorkspaceSession(workspace.stateSession()),
     memory: () => new ConsumedMemory(workspace.memory()),
     program: (...args) => settle(workspaceRpcAnswer(workspace.program(...args))),
-    traceTurn: (...args) => settle(workspaceRpcAnswer(workspace.traceTurn(...args))),
-    traceStream: (...args) => settle(workspaceRpcAnswer(workspace.traceStream(...args))),
-    resume: (...args) => settle(workspaceRpcAnswer(workspace.resume(...args))),
-    guard: (...args) => settle(workspaceRpcAnswer(workspace.guard(...args))),
-    debit: (...args) => settle(workspaceRpcAnswer(workspace.debit(...args))),
-    prepareTurn: (...args) => settle(workspaceRpcAnswer(workspace.prepareTurn(...args))),
-    bindProfile: (...args) => settle(workspaceRpcAnswer(workspace.bindProfile(...args))),
-    prepareChat: (...args) => settle(workspaceRpcAnswer(workspace.prepareChat(...args))),
-    chatEvent: (...args) => settle(workspaceRpcAnswer(workspace.chatEvent(...args))),
-    turnEnded: (...args) => settle(workspaceRpcAnswer(workspace.turnEnded(...args))),
-    turnSettled: (...args) => settle(workspaceRpcAnswer(workspace.turnSettled(...args))),
-    owedReport: (...args) => settle(workspaceRpcAnswer(workspace.owedReport(...args))),
-    parentReport: (...args) => settle(workspaceRpcAnswer(workspace.parentReport(...args))),
-    autoTitle: (...args) => settle(workspaceRpcAnswer(workspace.autoTitle(...args))),
-    hireAdvisor: (...args) => settle(workspaceRpcAnswer(workspace.hireAdvisor(...args))),
-    owes: (...args) => settle(workspaceRpcAnswer(workspace.owes(...args))),
-    birthContext: (...args) => settle(workspaceRpcAnswer(workspace.birthContext(...args))),
-    steerSkills: (...args) => settle(workspaceRpcAnswer(workspace.steerSkills(...args))),
-    openWork: () => settle(workspaceRpcAnswer(workspace.openWork())),
-    cacheKeptAliveUntil: (...args) => settle(workspaceRpcAnswer(workspace.cacheKeptAliveUntil(...args))),
-    noteModelRequest: () => settle(workspaceRpcAnswer(workspace.noteModelRequest())),
-    armCacheWarm: (...args) => settle(workspaceRpcAnswer(workspace.armCacheWarm(...args))),
-    advise: (...args) => settle(workspaceRpcAnswer(workspace.advise(...args))),
-    enqueueTurn: (...args) => settle(workspaceRpcAnswer(workspace.enqueueTurn(...args))),
-    executeTool: (...args) => settle(workspaceRpcAnswer(workspace.executeTool(...args))),
-    observe: (...args) => settle(workspaceRpcAnswer(workspace.observe(...args))),
-    paceStep: (...args) => settle(workspaceRpcAnswer(workspace.paceStep(...args))),
-    answerMetadata: (...args) => settle(workspaceRpcAnswer(workspace.answerMetadata(...args))),
-    getAuth: (...args) => settle(workspaceRpcAnswer(workspace.getAuth(...args))),
-    listCredentials: () => settle(workspaceRpcAnswer(workspace.listCredentials())),
-    relayDevice: (...args) => settle(workspaceRpcAnswer(workspace.relayDevice(...args))),
-    relayModelCall: (...args) => settle(workspaceRpcAnswer(workspace.relayModelCall(...args))),
-    cancelModelRelay: (...args) => settle(workspaceRpcAnswer(workspace.cancelModelRelay(...args))),
-    sayToParent: (...args) => settle(workspaceRpcAnswer(workspace.sayToParent(...args))),
-    logActivity: (...args) => settle(workspaceRpcAnswer(workspace.logActivity(...args))),
-    reportModelCall: (...args) => settle(workspaceRpcAnswer(workspace.reportModelCall(...args))),
-    reportModelOperation: (...args) => settle(workspaceRpcAnswer(workspace.reportModelOperation(...args))),
+    traceTurn: (...args) => viaPort((port) => port.traceTurn(...args)),
+    traceStream: (...args) => viaPort((port) => port.traceStream(...args)),
+    resume: (...args) => viaPort((port) => port.resume(...args)),
+    guard: (...args) => viaPort((port) => port.guard(...args)),
+    debit: (...args) => viaPort((port) => port.debit(...args)),
+    prepareTurn: (...args) => viaPort((port) => port.prepareTurn(...args)),
+    bindProfile: (...args) => viaPort((port) => port.bindProfile(...args)),
+    prepareChat: (...args) => viaPort((port) => port.prepareChat(...args)),
+    chatEvent: (...args) => viaPort((port) => port.chatEvent(...args)),
+    turnEnded: (...args) => viaPort((port) => port.turnEnded(...args)),
+    turnSettled: (...args) => viaPort((port) => port.turnSettled(...args)),
+    owedReport: (...args) => viaPort((port) => port.owedReport(...args)),
+    parentReport: (...args) => viaPort((port) => port.parentReport(...args)),
+    autoTitle: (...args) => viaPort((port) => port.autoTitle(...args)),
+    hireAdvisor: (...args) => viaPort((port) => port.hireAdvisor(...args)),
+    owes: (...args) => viaPort((port) => port.owes(...args)),
+    birthContext: (...args) => viaPort((port) => port.birthContext(...args)),
+    steerSkills: (...args) => viaPort((port) => port.steerSkills(...args)),
+    openWork: () => viaPort((port) => port.openWork()),
+    cacheKeptAliveUntil: (...args) => viaPort((port) => port.cacheKeptAliveUntil(...args)),
+    noteModelRequest: () => viaPort((port) => port.noteModelRequest()),
+    armCacheWarm: (...args) => viaPort((port) => port.armCacheWarm(...args)),
+    advise: (...args) => viaPort((port) => port.advise(...args)),
+    enqueueTurn: (...args) => viaPort((port) => port.enqueueTurn(...args)),
+    executeTool: (...args) => viaPort((port) => port.executeTool(...args)),
+    observe: (...args) => viaPort((port) => port.observe(...args)),
+    paceStep: (...args) => viaPort((port) => port.paceStep(...args)),
+    answerMetadata: (...args) => viaPort((port) => port.answerMetadata(...args)),
+    getAuth: (...args) => viaPort((port) => port.getAuth(...args)),
+    listCredentials: () => viaPort((port) => port.listCredentials()),
+    relayDevice: (...args) => viaPort((port) => port.relayDevice(...args)),
+    relayModelCall: (...args) => viaPort((port) => port.relayModelCall(...args)),
+    cancelModelRelay: (...args) => viaPort((port) => port.cancelModelRelay(...args)),
+    sayToParent: (...args) => viaPort((port) => port.sayToParent(...args)),
+    logActivity: (...args) => viaPort((port) => port.logActivity(...args)),
+    reportModelCall: (...args) => viaPort((port) => port.reportModelCall(...args)),
+    reportModelOperation: (...args) => viaPort((port) => port.reportModelOperation(...args)),
   };
 }

@@ -52,7 +52,8 @@ export interface AgentWorkspace {
   prepareChat(request: ChatTurnRequest): Promise<PreparedAgentTurn>;
   chatEvent(event: SessionEvent): Promise<void>;
   /** The turn's end, with the agent's figures as it ends. */
-  turnEnded(event: SessionEvent, figures: AgentFigures): Promise<void>;
+  /** `activity`: the lines its turn logged that no tool call took. */
+  turnEnded(event: SessionEvent, figures: AgentFigures, activity: readonly AgentTurnActivity[]): Promise<void>;
   owedReport(
     /** `taskId`: the assignment this turn answers, if one opened it. */
     turn: { readonly reports: SubordinateReportLedger; readonly ownerDriven: boolean; readonly taskId: string | null },
@@ -172,9 +173,26 @@ class HeadTrace {
 
 const AGENT_CALLER = { workspaceToken: '' };
 
+/** Bounded well below an access token's life (an hour, for the providers whose login the owner holds), so a credential
+ *  held here is refreshed before it could expire; an upstream's refusal refreshes it at once. */
+const CREDENTIAL_HELD_MS = 5 * 60_000;
+
+/** The isolate's credentials, held under their refresh rules (design v2 §8): a step asks its workspace for one only once
+ *  it is older than {@link CREDENTIAL_HELD_MS}, or an upstream refused the one held. */
 function brokeredCredentials(workspace: AgentWorkspace): UserCredentialClient {
+  const held = new Map<string, { readonly at: number; readonly auth: AuthResolution | null }>();
+
   return {
-    getAuth: (_caller, key, opts) => workspace.getAuth(key, opts),
+    getAuth: async (_caller, key, opts) => {
+      const known = held.get(key);
+
+      if (opts?.rejected === undefined && known !== undefined && Date.now() - known.at < CREDENTIAL_HELD_MS) return known.auth;
+      const auth = await workspace.getAuth(key, opts);
+
+      held.set(key, { at: Date.now(), auth });
+
+      return auth;
+    },
     listCredentials: () => workspace.listCredentials(),
     relayDevice: (_caller, provider) => workspace.relayDevice(provider),
     relayModelCall: (_caller, deviceId, callId, request) => workspace.relayModelCall(deviceId, callId, request),

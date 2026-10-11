@@ -294,6 +294,8 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           stateSession: async () => stateSession(),
           memory: async () => host.memory(),
           program: (...args) => host.program(...args),
+          // Its port is the same calls, held as the shipped client holds the workspace's host.
+          port: async () => env.WORKSPACE,
           traceTurn: (...args) => {
             counted('traceTurn');
 
@@ -331,7 +333,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
 
             await host.chatEvent(event);
           },
-          turnEnded: async (event, figures) => {
+          turnEnded: async (event, figures, activity) => {
             if (lostTurnEnds.delete(placement.storageKey)) return;
             const delay = delayedTurnEnds.get(placement.storageKey);
 
@@ -341,11 +343,11 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
               await delay.released;
             }
 
-            await host.turnEnded(event, figures);
+            await host.turnEnded(event, figures, activity);
             const copy = copiedTurnEnds.get(placement.storageKey);
 
             copiedTurnEnds.delete(placement.storageKey);
-            copy?.([event, figures]);
+            copy?.([event, figures, activity]);
           },
           owedReport: (turn, ended) => {
             handNarration(placement.storageKey, ended.narration);

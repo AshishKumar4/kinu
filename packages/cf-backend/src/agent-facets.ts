@@ -46,62 +46,67 @@ export class AgentMemory extends RpcTarget implements Memory {
 }
 
 export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswers {
-  /** `closed` aborts as the workspace is deleted: every call still open is refused then, so its relay hears an end. */
-  constructor(private readonly answers: AgentWorkspaceAnswers, private readonly closed: AbortSignal) {
+  /**
+   * `closed` aborts as the workspace is deleted: every call still open is refused then, so its relay hears an end.
+   * `fenced` answers whether a call bound to a turn is the agent's current one: a turn a later opening superseded, or a
+   * Stop cancelled, is refused before anything runs (design v2 §3).
+   */
+  constructor(private readonly answers: AgentWorkspaceAnswers, private readonly closed: AbortSignal, private readonly fenced: (turnId: string) => boolean = () => true) {
     super();
   }
 
-  private open<T>(answer: T | Promise<T>): Promise<T> {
+  private open<T>(answer: () => T | Promise<T>, turnId?: string): Promise<T> {
+    if (turnId !== undefined && !this.fenced(turnId)) return Promise.reject(new KinuError('cancelled', `stale_epoch: turn ${turnId} is no longer this agent's current turn.`));
     const refused = Promise.withResolvers<never>();
     const refuse = (): void => { refused.reject(this.closed.reason); };
 
     if (this.closed.aborted) refuse();
     else this.closed.addEventListener('abort', refuse, { once: true });
 
-    return Promise.race([answer, refused.promise]).finally(() => { this.closed.removeEventListener('abort', refuse); });
+    return Promise.race([answer(), refused.promise]).finally(() => { this.closed.removeEventListener('abort', refuse); });
   }
 
-  session() { return this.open(this.answers.session()); }
-  stateSession() { return this.open(this.answers.stateSession()); }
+  session() { return this.open(() => this.answers.session()); }
+  stateSession() { return this.open(() => this.answers.stateSession()); }
   memory() { return this.answers.memory(); }
-  program(turnId: string, ...args: Parameters<Executor['execute']>) { return this.open(this.answers.program(turnId, ...args)); }
-  traceTurn(turnId: string, event: AgentTrace) { return this.open(this.answers.traceTurn(turnId, event)); }
-  traceStream(turnId: string, lines: ReadableStream<Uint8Array>) { return this.open(this.answers.traceStream(turnId, lines)); }
-  resume(turnId: string) { return this.open(this.answers.resume(turnId)); }
-  guard(turnId: string, ...args: Parameters<MissionBudgetPort['guard']>) { return this.open(this.answers.guard(turnId, ...args)); }
-  debit(turnId: string, ...args: Parameters<MissionBudgetPort['debit']>) { return this.open(this.answers.debit(turnId, ...args)); }
-  prepareTurn(turnId: string) { return this.open(this.answers.prepareTurn(turnId)); }
-  advise(review: AgentReview) { return this.open(this.answers.advise(review)); }
-  enqueueTurn(input: ProgrammaticTurn) { return this.open(this.answers.enqueueTurn(input)); }
-  executeTool(call: AgentToolCall) { return this.open(this.answers.executeTool(call)); }
-  observe(lines: ReadableStream<Uint8Array>) { return this.open(this.answers.observe(lines)); }
-  paceStep(turnId: string) { return this.open(this.answers.paceStep(turnId)); }
-  answerMetadata(turnId: string, narration: readonly string[] | null) { return this.open(this.answers.answerMetadata(turnId, narration)); }
-  reportModelCall(report: ModelCallReport) { return this.open(this.answers.reportModelCall(report)); }
-  reportModelOperation(event: ModelOperationEvent) { return this.open(this.answers.reportModelOperation(event)); }
-  prepareChat(request: ChatTurnRequest) { return this.open(this.answers.prepareChat(request)); }
-  bindProfile(turnId: string, profile: ResolvedTurnProfile) { return this.open(this.answers.bindProfile(turnId, profile)); }
-  chatEvent(event: SessionEvent) { return this.open(this.answers.chatEvent(event)); }
-  turnEnded(event: SessionEvent, figures: AgentFigures) { return this.open(this.answers.turnEnded(event, figures)); }
-  owedReport(...args: Parameters<AgentWorkspace['owedReport']>) { return this.open(this.answers.owedReport(...args)); }
-  parentReport(report: Parameters<AgentWorkspace['parentReport']>[0]) { return this.open(this.answers.parentReport(report)); }
-  autoTitle(subject: string, title: string | null) { return this.open(this.answers.autoTitle(subject, title)); }
-  turnSettled(settled: HandedOffTurn) { return this.open(this.answers.turnSettled(settled)); }
-  hireAdvisor(advisor: AdvisorRecoverySnapshot) { return this.open(this.answers.hireAdvisor(advisor)); }
-  owes(seq: number, next: number | null, holds: boolean) { return this.open(this.answers.owes(seq, next, holds)); }
-  birthContext(drainTurnId: string) { return this.open(this.answers.birthContext(drainTurnId)); }
-  steerSkills(text: string, alreadyActive: readonly string[]) { return this.open(this.answers.steerSkills(text, alreadyActive)); }
-  openWork() { return this.open(this.answers.openWork()); }
-  cacheKeptAliveUntil(lastRequestAt: number) { return this.open(this.answers.cacheKeptAliveUntil(lastRequestAt)); }
-  noteModelRequest() { return this.open(this.answers.noteModelRequest()); }
-  armCacheWarm(input: CacheWarmArm) { return this.open(this.answers.armCacheWarm(input)); }
-  getAuth(key: string, opts?: AuthRequest) { return this.open(this.answers.getAuth(key, opts)); }
-  listCredentials() { return this.open(this.answers.listCredentials()); }
-  relayDevice(provider: RelayedProvider) { return this.open(this.answers.relayDevice(provider)); }
-  relayModelCall(deviceId: string, callId: string, request: Request) { return this.open(this.answers.relayModelCall(deviceId, callId, request)); }
-  cancelModelRelay(callId: string) { return this.open(this.answers.cancelModelRelay(callId)); }
-  sayToParent(signal: AgentSignal) { return this.open(this.answers.sayToParent(signal)); }
-  logActivity(lines: readonly AgentTurnActivity[]) { return this.open(this.answers.logActivity(lines)); }
+  program(turnId: string, ...args: Parameters<Executor['execute']>) { return this.open(() => this.answers.program(turnId, ...args), turnId); }
+  traceTurn(turnId: string, event: AgentTrace) { return this.open(() => this.answers.traceTurn(turnId, event), turnId); }
+  traceStream(turnId: string, lines: ReadableStream<Uint8Array>) { return this.open(() => this.answers.traceStream(turnId, lines), turnId); }
+  resume(turnId: string) { return this.open(() => this.answers.resume(turnId), turnId); }
+  guard(turnId: string, ...args: Parameters<MissionBudgetPort['guard']>) { return this.open(() => this.answers.guard(turnId, ...args), turnId); }
+  debit(turnId: string, ...args: Parameters<MissionBudgetPort['debit']>) { return this.open(() => this.answers.debit(turnId, ...args), turnId); }
+  prepareTurn(turnId: string) { return this.open(() => this.answers.prepareTurn(turnId), turnId); }
+  advise(review: AgentReview) { return this.open(() => this.answers.advise(review)); }
+  enqueueTurn(input: ProgrammaticTurn) { return this.open(() => this.answers.enqueueTurn(input)); }
+  executeTool(call: AgentToolCall) { return this.open(() => this.answers.executeTool(call), call.turnId); }
+  observe(lines: ReadableStream<Uint8Array>) { return this.open(() => this.answers.observe(lines)); }
+  paceStep(turnId: string) { return this.open(() => this.answers.paceStep(turnId), turnId); }
+  answerMetadata(turnId: string, narration: readonly string[] | null) { return this.open(() => this.answers.answerMetadata(turnId, narration), turnId); }
+  reportModelCall(report: ModelCallReport) { return this.open(() => this.answers.reportModelCall(report)); }
+  reportModelOperation(event: ModelOperationEvent) { return this.open(() => this.answers.reportModelOperation(event)); }
+  prepareChat(request: ChatTurnRequest) { return this.open(() => this.answers.prepareChat(request)); }
+  bindProfile(turnId: string, profile: ResolvedTurnProfile) { return this.open(() => this.answers.bindProfile(turnId, profile), turnId); }
+  chatEvent(event: SessionEvent) { return this.open(() => this.answers.chatEvent(event)); }
+  turnEnded(event: SessionEvent, figures: AgentFigures, activity: readonly AgentTurnActivity[]) { return this.open(() => this.answers.turnEnded(event, figures, activity)); }
+  owedReport(...args: Parameters<AgentWorkspace['owedReport']>) { return this.open(() => this.answers.owedReport(...args)); }
+  parentReport(report: Parameters<AgentWorkspace['parentReport']>[0]) { return this.open(() => this.answers.parentReport(report)); }
+  autoTitle(subject: string, title: string | null) { return this.open(() => this.answers.autoTitle(subject, title)); }
+  turnSettled(settled: HandedOffTurn) { return this.open(() => this.answers.turnSettled(settled)); }
+  hireAdvisor(advisor: AdvisorRecoverySnapshot) { return this.open(() => this.answers.hireAdvisor(advisor)); }
+  owes(seq: number, next: number | null, holds: boolean) { return this.open(() => this.answers.owes(seq, next, holds)); }
+  birthContext(drainTurnId: string) { return this.open(() => this.answers.birthContext(drainTurnId)); }
+  steerSkills(text: string, alreadyActive: readonly string[]) { return this.open(() => this.answers.steerSkills(text, alreadyActive)); }
+  openWork() { return this.open(() => this.answers.openWork()); }
+  cacheKeptAliveUntil(lastRequestAt: number) { return this.open(() => this.answers.cacheKeptAliveUntil(lastRequestAt)); }
+  noteModelRequest() { return this.open(() => this.answers.noteModelRequest()); }
+  armCacheWarm(input: CacheWarmArm) { return this.open(() => this.answers.armCacheWarm(input)); }
+  getAuth(key: string, opts?: AuthRequest) { return this.open(() => this.answers.getAuth(key, opts)); }
+  listCredentials() { return this.open(() => this.answers.listCredentials()); }
+  relayDevice(provider: RelayedProvider) { return this.open(() => this.answers.relayDevice(provider)); }
+  relayModelCall(deviceId: string, callId: string, request: Request) { return this.open(() => this.answers.relayModelCall(deviceId, callId, request)); }
+  cancelModelRelay(callId: string) { return this.open(() => this.answers.cancelModelRelay(callId)); }
+  sayToParent(signal: AgentSignal) { return this.open(() => this.answers.sayToParent(signal)); }
+  logActivity(lines: readonly AgentTurnActivity[]) { return this.open(() => this.answers.logActivity(lines)); }
 }
 
 /** One agent's own stores, in its isolate (D9). */
@@ -175,6 +180,13 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
     return await relayedAnswer(call(host));
   }
 
+  /**
+   * The agent's port (design v2 §3): its workspace's host, which the agent holds across its calls so each crosses once.
+   * A call bound to a turn is fenced there; one that fails lets the port go, and the next call opens it again. The
+   * calls whose answers own live capabilities (a session, memory, a program's callbacks) open a host each, below.
+   */
+  async port() { return await this.host(); }
+
   session() { return this.owned((host) => host.session()); }
   stateSession() { return this.owned((host) => host.stateSession()); }
   memory() { return this.owned((host) => host.memory()); }
@@ -196,7 +208,7 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
   prepareChat(request: ChatTurnRequest) { return this.owned((host) => host.prepareChat(request)); }
   bindProfile(turnId: string, profile: ResolvedTurnProfile) { return this.owned((host) => host.bindProfile(turnId, profile)); }
   chatEvent(event: SessionEvent) { return this.owned((host) => host.chatEvent(event)); }
-  turnEnded(event: SessionEvent, figures: AgentFigures) { return this.owned((host) => host.turnEnded(event, figures)); }
+  turnEnded(event: SessionEvent, figures: AgentFigures, activity: readonly AgentTurnActivity[]) { return this.owned((host) => host.turnEnded(event, figures, activity)); }
   owedReport(...args: Parameters<AgentWorkspace['owedReport']>) { return this.owned((host) => host.owedReport(...args)); }
   parentReport(report: Parameters<AgentWorkspace['parentReport']>[0]) { return this.owned((host) => host.parentReport(report)); }
   autoTitle(subject: string, title: string | null) { return this.owned((host) => host.autoTitle(subject, title)); }

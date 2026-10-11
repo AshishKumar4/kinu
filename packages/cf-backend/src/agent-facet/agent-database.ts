@@ -100,9 +100,10 @@ export class AgentDatabase {
 
   private relayed: Promise<unknown> = Promise.resolve();
 
-  /** A line no tool call or task's end takes first reaches the workspace's log as it is logged, in order: an offer's
-   *  yield, logged with no turn left to end, is never stranded here. */
+  /** A line logged while a turn runs rides its next tool call or its end; one logged with no turn running reaches the
+   *  workspace's log as it is logged, in order: an offer's yield, logged with no turn left to end, is never stranded. */
   private relayActivity(): void {
+    if (this.workspace.turnInFlight()) return;
     this.relayed = this.relayed.then(() => hold(logged('agent.activity_relay_failed', { doing: "relaying an agent's activity to its workspace", otherwise: 'io' }, async () => {
       const lines = this.takeActivity();
 

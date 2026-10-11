@@ -113,6 +113,30 @@ export class AgentTurns {
     await hold(logged('agent.run_interrupt_failed', { doing: 'interrupting a run in its own isolate', otherwise: 'io' }, () => this.deps.interrupt(reference, turnId)));
   }
 
+  /** Each agent's newest opening the fence admitted this activation, by its place in the agent's sequence. */
+  private readonly newestOpening = new Map<string, number>();
+
+  /** Its turns a Stop cut off: a call bound to one is refused, whatever its opening. */
+  private readonly cancelledTurns = new Set<string>();
+
+  /**
+   * A call bound to `turnId` holds while the turn is the agent's current one (design v2 §3): one a later opening
+   * superseded, or a Stop cancelled, is stale. A run (a head's) carries no opening and is not fenced here; a turn a
+   * restarted workspace never opened is refused where it is looked up.
+   */
+  fenceHolds(actorId: string, turnId: string): boolean {
+    if (this.cancelledTurns.has(turnId)) return false;
+    const fenced = this.open.get(turnId)?.fenced;
+    const newest = this.newestOpening.get(actorId);
+
+    return fenced === undefined || newest === undefined || fenced.seq >= newest;
+  }
+
+  /** A Stop cut the turn off: nothing bound to it runs from here. */
+  cancelled(turnId: string): void {
+    this.cancelledTurns.add(turnId);
+  }
+
   chatOpened(actorId: string, turnId: string): void {
     this.chats.set(actorId, turnId);
   }
@@ -153,6 +177,7 @@ export class AgentTurns {
     const turn = this.open.get(turnId);
 
     this.open.delete(turnId);
+    this.cancelledTurns.delete(turnId);
 
     if (turn === undefined || this.inFlight(turn.reference.actorId)) return;
     this.waiting.get(turn.reference.actorId)?.resolve();
@@ -275,6 +300,9 @@ export class AgentTurns {
       && !new TurnFences(this.deps.sql).open(actorId, { turnId, runId: request.runId, seq: request.seq })) {
       return settleSync(Effect.fail(new KinuError('denied', `The opening of turn ${turnId} (${String(request.seq)} in its agent's sequence) is older than the agent's newest.`)));
     }
+
+    // The agent's newest opening: a call bound to an older turn of its is stale from here (`fenceHolds`).
+    if (request.seq !== undefined) this.newestOpening.set(actorId, Math.max(request.seq, this.newestOpening.get(actorId) ?? request.seq));
 
     const hosted: HostedTurnRequest = {
       sequenceId: announcementOf(turnId), ...(request.turnId !== null && { chatTurnId: turnId }),

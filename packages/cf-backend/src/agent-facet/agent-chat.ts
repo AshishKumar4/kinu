@@ -104,7 +104,7 @@ export class FacetChat {
       transport: {
         deliver: (event) => {
           // Its last charge lands before its end is told: nothing the workspace reads of the turn can miss it.
-          if (event.type === 'turn-end') return this.charged().then(async () => { await workspace.turnEnded(event, deps.database.figures()); });
+          if (event.type === 'turn-end') return this.charged().then(async () => { await workspace.turnEnded(event, deps.database.figures(), deps.database.takeActivity()); });
 
           return ROOM_EVENTS.has(event.type) ? workspace.chatEvent(event) : undefined;
         },
