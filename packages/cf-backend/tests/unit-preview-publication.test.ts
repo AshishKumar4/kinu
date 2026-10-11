@@ -179,6 +179,76 @@ describe('revoking a port withdraws its published preview', () => {
   });
 });
 
+describe('a withdrawn port stays withdrawn, whatever the container still reports', () => {
+  const claim = { sandboxId: SANDBOX_ID, port: PORT, token: TOKEN };
+
+  test('a revoke the container did not answer is not undone by the next listing', async () => {
+    const kv = makeKv();
+    const { box } = portBox({ failRevoke: true });
+    await sandboxPreviewExposures(kv, SANDBOX_ID).publish(PORT, TOKEN);
+
+    await expect(lane(kv, box).unexposePort(PORT)).rejects.toThrow('container unreachable');
+    await lane(kv, box).getExposedPorts(SUFFIX);
+
+    expect(await sandboxPreviewExposed(kv, claim)).toBe(false);
+  });
+
+  test('a listing a second after a revoke the container did not answer does not carry the port back', async () => {
+    const kv = makeKv();
+    const { box } = portBox({ failRevoke: true });
+    setSystemTime(new Date('2026-03-01T12:00:00.000Z'));
+    await sandboxPreviewExposures(kv, SANDBOX_ID).publish(PORT, TOKEN);
+
+    await expect(lane(kv, box).unexposePort(PORT)).rejects.toThrow('container unreachable');
+    setSystemTime(new Date('2026-03-01T12:00:01.000Z'));
+    await lane(kv, box).getExposedPorts(SUFFIX);
+
+    expect(await sandboxPreviewExposed(kv, claim)).toBe(false);
+    setSystemTime();
+  });
+
+  test('a listing that read the container before the withdrawal does not vouch for the port after it', async () => {
+    const kv = makeKv();
+    const { box } = portBox();
+    const reached = Promise.withResolvers<void>();
+    const read = Promise.withResolvers<void>();
+    const answered = box.getExposedPorts.bind(box);
+
+    Object.assign(box, {
+      getExposedPorts: async (hostname: string) => {
+        const rows = await answered(hostname);
+        reached.resolve();
+        await read.promise;
+
+        return rows;
+      },
+    });
+    await sandboxPreviewExposures(kv, SANDBOX_ID).publish(PORT, TOKEN);
+
+    const listing = lane(kv, box).getExposedPorts(SUFFIX);
+    await reached.promise;
+    await lane(kv, box).unexposePort(PORT);
+    read.resolve();
+    await listing;
+
+    expect(await sandboxPreviewExposed(kv, claim)).toBe(false);
+  });
+
+  test('exposing the port again publishes it again', async () => {
+    const kv = makeKv();
+    const { box } = portBox();
+    await sandboxPreviewExposures(kv, SANDBOX_ID).publish(PORT, TOKEN);
+    setSystemTime(new Date('2026-03-01T12:00:00.000Z'));
+    await lane(kv, box).unexposePort(PORT);
+    setSystemTime(new Date('2026-03-01T12:00:01.000Z'));
+
+    await lane(kv, box).exposePort(PORT, { hostname: SUFFIX });
+
+    expect(await sandboxPreviewExposed(kv, claim)).toBe(true);
+    setSystemTime();
+  });
+});
+
 describe('listing ports re-observes what the container still reports', () => {
   test('an exposure minted before this record existed is carried into it', async () => {
     const kv = makeKv();

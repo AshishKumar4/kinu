@@ -380,12 +380,41 @@ describe("sandbox transient error classification", () => {
 });
 
 describe("the sandbox namespace a program calls", () => {
+  test('all exposure surfaces refuse fractional ports before any container work', async () => {
+    const handle = sandboxHandle();
+
+    handle.exec = async () => ({ stdout: '200|0', exitCode: 0 });
+
+    const provider = createSandboxExecutor(handle, { previewHostSuffix: 'kinu.example.test' });
+    const direct = present(provider.exposePort, 'sandbox provider exposePort');
+
+    expect(await provider.tools.exposePort.execute(8787.5)).toMatchObject({ reason: 'bad_input' });
+    expect(await direct(8787.5)).toMatchObject({ supported: false, reason: expect.stringContaining('invalid port') });
+    expect(handle.calls).toEqual([]);
+  });
+
+  test('exposure uses the required listener capability and keeps its transport failure', async () => {
+    const fault = new Error('listener RPC disconnected');
+    const refused = async (): Promise<never> => { throw fault; };
+
+    const handle = Object.assign(sandboxHandle(), {
+      exec: refused, probePort: refused,
+    });
+
+    const provider = createSandboxExecutor(handle, { previewHostSuffix: 'kinu.example.test' });
+
+    expect(await provider.tools.exposePort.execute(8787)).toMatchObject({ error: expect.stringContaining('listener RPC disconnected') });
+    expect(await present(provider.exposePort, 'direct sandbox exposure')(8787))
+      .toMatchObject({ supported: false, reason: expect.stringContaining('listener RPC disconnected') });
+    expect(handle.calls).toEqual([]);
+  });
+
   test("exposePort(port, { name }) exposes the port under that name", async () => {
     const handle = sandboxHandle();
     const named: (string | undefined)[] = [];
 
-    // A server answers the port's health probe.
-    handle.exec = async () => ({ stdout: "200|0", exitCode: 0 });
+    // Devbox's required native listener proof says the server answered.
+    handle.probePort = async () => true;
     handle.exposePort = async (port, opts) => {
       named.push(opts?.name);
 

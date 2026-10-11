@@ -15,7 +15,7 @@ import type { SandboxPreviewExposures } from "@kinu.run/core";
 type ContainerOperations = Pick<KinuDevbox,
   "execUntimed" | "execUntimedStream" | "killUntimed" | "releaseUntimed" | "resolveReadiness" | "readFile" | "writeFile" | "listFiles" | "statFile"
   | "deleteFile" | "exposePort" | "getExposedPorts" | "unexposePort" | "startSupervised"
-  | "stopSupervised" | "listSupervised" | "portToken" | "notePortRemoved" | "resize" | "portListeners" | "answerRest">;
+  | "stopSupervised" | "listSupervised" | "portToken" | "probePort" | "notePortRemoved" | "resize" | "portListeners" | "answerRest">;
 
 /** Without AUTH_KV the edge cannot verify a preview hostname, so a minted URL would be dead. */
 const PREVIEWS_UNPUBLISHABLE =
@@ -227,6 +227,7 @@ export function adaptCloudflareSandbox(
     },
     // Not `onContainer`: a read never starts a container.
     portListeners: (stamp, ports) => settle(callDevbox(() => handle.portListeners(stamp, ports))),
+    probePort: (port) => settle(onContainer(() => handle.probePort(port))),
     readFile: (path, opts) => settle(onContainer(() => handle.readFile(path, opts))),
     writeFile: (path, content, opts) =>
       settle(onContainer(() => jsonResultOrVoid(handle.writeFile(path, content, opts)))),
@@ -254,10 +255,11 @@ export function adaptCloudflareSandbox(
         ? { ...exposed, route: { reached: true } }
         : { ...exposed, route: { reached: false, gate: 'exposed' as const, detail: `the container holds no live exposure of port ${port} for this URL` } };
     })),
-    // Withdraw first: a revoked port the edge still admits is unsafe.
+    // Withdraw first: a revoked port the edge still admits is unsafe. The container's own revoke needs no readiness,
+    // and a container that keeps the exposure regardless serves nothing the edge admits.
     unexposePort: (port) => settle(Effect.gen(function* () {
       if (previews !== null) yield* callDevbox(() => previews.withdraw(port));
-      const removed = yield* onContainer(() => jsonResultOrVoid(handle.unexposePort(port)));
+      const removed = yield* callDevbox(() => jsonResultOrVoid(handle.unexposePort(port)));
       yield* recordPortsMoved(portsMoved);
 
       return removed;
@@ -266,6 +268,8 @@ export function adaptCloudflareSandbox(
     // listing stands: the record is already correct, unlike an unpublished URL in `exposePort`.
     // Not `onContainer`: a read never starts a container.
     getExposedPorts: (hostname) => settle(callDevbox(async () => {
+      // Before the read: a withdrawal after it outranks what it saw.
+      const observedAt = Date.now();
       const rows = await handle.getExposedPorts(hostname);
 
       if (previews !== null) {
@@ -276,7 +280,7 @@ export function adaptCloudflareSandbox(
           if (label === null || label.port !== row.port) return;
 
           try {
-            await index.refresh(row.port, label.token);
+            await index.refresh(row.port, label.token, observedAt);
           } catch (cause) {
             diagnostics.failure('preview.refresh_failed', toKinuError({
               doing: 'refreshing a published sandbox preview',

@@ -20,8 +20,8 @@ export type Restoration =
    *  port came back. The only phase that is `ready`. */
   | { readonly phase: 'attached' }
   /** Operations stay admitted: a box refusing `exec` could not be repaired by its agent.
-   *  `incomplete` names what did not come back; a `repair` with nothing incomplete is `attached`. */
-  | { readonly phase: 'repair'; readonly incomplete: string }
+   *  `down` names missing workloads; `bootStamp` owns the stamp repair independently of its user-facing words. */
+  | { readonly phase: 'repair'; readonly down: readonly string[]; readonly bootStamp: StampOutcome }
   /** Operations refuse. `retry` false is terminal until `attachNow()`; it is a field so a lost
    *  arming write cannot leave a box refusing on a retry nothing holds. */
   | { readonly phase: 'unattached'; readonly reason: string; readonly retry: boolean };
@@ -71,30 +71,22 @@ export type RestoreReadiness =
 /** `opened` once, each {@link RestorePhase} as it lands, then `settled` once. */
 export type RestoreClockPhase = 'opened' | RestorePhase | 'settled';
 
-/** `pending` deliberately reports the failed wording: the next repair reads that sentence
- *  to decide it must retry the stamp, so changing it silently disables the retry. */
-const STAMP_MISSING = {
-  late: 'the boot id stamp is still pending',
-  failed: 'the boot id stamp failed',
-  pending: 'the boot id stamp failed',
-} as const;
+const StampOutcomeSchema = v.picklist(['late', 'failed', 'pending', 'done']);
 
-export type StampOutcome = keyof typeof STAMP_MISSING | 'done';
+export type StampOutcome = v.InferOutput<typeof StampOutcomeSchema>;
 
 /** One builder for restore and repair: nothing missing is `attached`, else `repair` names it. */
 export function settledRestoration(down: readonly string[], stamp: StampOutcome): Restoration {
-  const missing = stamp === 'done' ? down : [...down, STAMP_MISSING[stamp]];
+  if (down.length === 0 && stamp === 'done') return { phase: 'attached' };
 
-  if (missing.length === 0) return { phase: 'attached' };
-
-  return { phase: 'repair', incomplete: missing.join('; ') };
+  return { phase: 'repair', down, bootStamp: stamp };
 }
 
 /** Refuses a malformed row rather than adopting it: a half-shaped phase would admit callers
  *  into a state the box never established. Parsed strictly from `StoredValue`, never narrowed. */
 const SettledRestorationSchema = v.variant('phase', [
   v.strictObject({ phase: v.literal('attached') }),
-  v.strictObject({ phase: v.literal('repair'), incomplete: v.string() }),
+  v.strictObject({ phase: v.literal('repair'), down: v.array(v.string()), bootStamp: StampOutcomeSchema }),
   v.strictObject({ phase: v.literal('unattached'), reason: v.string(), retry: v.boolean() }),
 ]);
 
@@ -117,7 +109,17 @@ export function unreadyOf(held: Restoration, hookOpen: boolean): string | undefi
 
   if (held.phase === 'unattached') return held.reason;
 
-  if (held.phase === 'repair') return held.incomplete;
+  if (held.phase === 'repair') {
+    const reasons = [...held.down];
+
+    if (held.bootStamp === 'failed') reasons.push('the boot id stamp failed');
+
+    if (held.bootStamp === 'late') reasons.push('the boot id stamp is still pending');
+
+    if (held.bootStamp === 'pending') reasons.push('the boot id stamp was kept for a settled restoration');
+
+    return reasons.join('; ');
+  }
 
   // An in-flight attempt must not report "nothing has run": a poller would read `pending` forever.
   // The elapsed duration makes the answer actionable.

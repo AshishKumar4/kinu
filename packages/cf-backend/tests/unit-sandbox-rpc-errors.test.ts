@@ -1,5 +1,7 @@
 // The native file boundary carries POSIX errno in Error.cause, which survives JSRPC.
 import { expect, test } from 'bun:test';
+import { readText } from '@nimbus-sh/core/vfs/vfs.js';
+import { present } from '@kinu.run/test-utils';
 import { createSandboxExecutor, sandboxFiles } from '@kinu.run/core';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import type { KinuDevbox } from '../src/kinu-devbox';
@@ -62,7 +64,7 @@ test('a transient failure on the way to the box is retried by the executor', asy
 
   const executor = createSandboxExecutor(adaptCloudflareSandbox(box, async () => {}, null));
 
-  expect({ read: await executor.tools.readFile?.execute('/workspace/kept.txt'), calls }).toEqual({ read: 'kept', calls: 2 });
+  expect({ read: await readText(present(executor.files, 'the sandbox\'s files'), '/workspace/kept.txt'), calls }).toEqual({ read: 'kept', calls: 2 });
 });
 
 // Review 3f6, 2026-09-30: the file view read with no encoding, which the native box answers as

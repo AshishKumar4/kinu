@@ -322,3 +322,81 @@ describe("a seated head's long call becomes its own job, and the settle wakes it
     expect(frames.flatMap((frame) => frame.chunks.map((chunk) => chunk.text)).join('')).toBe('built\n');
   });
 });
+
+// A stop its owner refused leaves the work running, and the head keeps the authority over it until the work settles.
+describe('a seated head whose job its owner refused to stop', () => {
+  test('keeps its seat until the job settles, then lets go', async () => {
+    const { rt, db } = createTestRuntime();
+    const clock = handClock(Date.now());
+    const BUILD_MS = 60_000;
+    const events: string[] = [];
+    const stopRefused = Promise.withResolvers<void>();
+
+    const build = tool({
+      description: 'Run code on the machine.',
+      inputSchema: jsonSchema<{ code: string }>({ type: 'object', required: ['code'], properties: { code: { type: 'string' } } }),
+      execute: async () => {
+        await new Promise<void>((resolve) => { clock.after(BUILD_MS, resolve); });
+        events.push('the build settled');
+
+        return 'built';
+      },
+    });
+
+    const model = scriptedTurnModel({
+      doGenerate: () => ({
+        content: [{ type: 'tool-call', toolCallId: 'eval-1', toolName: 'eval', input: JSON.stringify({ code: 'await build()' }) }],
+        finishReason: { unified: 'tool-calls', raw: undefined }, warnings: [],
+        usage: { inputTokens: { total: 5, noCache: 5, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 2, text: 2, reasoning: undefined } },
+      }),
+    });
+
+    const seats = hostedSeatsOver({ rt, db, model: () => model });
+
+    const head = spawnSeatedHead(headInput({ id: 'head-refused' }), {
+      seat: async () => {
+        const seat = await seats.seat('head-refused', 'swarm');
+
+        return {
+          ...seat,
+          release: async () => { events.push('the seat was released'); },
+          jobs: {
+            ...seat.jobs,
+            ports: {
+              jobOutput: () => {}, clock,
+              onCancelled: () => {
+                stopRefused.resolve();
+                throw new Error('the machine did not answer the stop');
+              },
+            },
+          },
+        };
+      },
+      codemodeTool: () => build,
+      webSearch: stubWeb,
+      split: () => neverSplit,
+      mission: () => null,
+      reportStep: () => {},
+      reportDelta: () => {},
+    });
+
+    const running = head.run();
+    // The call outruns its window and becomes the head's job; then the head is stopped.
+    await clock.whenArmed(1);
+    clock.tick();
+    await clock.whenArmed(2);
+    await head.abort('the owner stopped it');
+
+    // Once the refusal is answered, all the stop does is settle: by the next turn of the event loop it has let go, or not.
+    await stopRefused.promise;
+    await new Promise<void>((resolve) => { setImmediate(resolve); });
+
+    expect(events).toEqual([]);
+
+    clock.advance(BUILD_MS);
+    await running;
+
+    expect(events).toEqual(['the build settled', 'the seat was released']);
+  });
+});
+

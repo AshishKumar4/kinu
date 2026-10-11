@@ -4,7 +4,7 @@ import type { SandboxHandle } from '../../src/index';
 export const sandboxHandleLifecycle: Pick<
   SandboxHandle,
   | 'ensureReady' | 'startSupervisedProcess' | 'stopSupervisedProcess'
-  | 'listSupervisedProcesses' | 'portToken' | 'notePortRemoved' | 'resize' | 'portListeners' | 'answerRest' | 'statFile'
+  | 'listSupervisedProcesses' | 'portToken' | 'probePort' | 'notePortRemoved' | 'resize' | 'portListeners' | 'answerRest' | 'statFile'
 > = {
   ensureReady: async () => {},
   statFile: async () => { throw new Error('this fixture does not read native metadata'); },
@@ -12,6 +12,7 @@ export const sandboxHandleLifecycle: Pick<
   stopSupervisedProcess: async () => ({ stopped: true }),
   listSupervisedProcesses: async () => [],
   portToken: async () => ({ urlToken: 'tok-1' }),
+  probePort: async () => { throw new Error('this fixture does not probe a native listener'); },
   notePortRemoved: async () => {},
   resize: async (size) => ({ kind: 'recorded', size }),
   portListeners: async () => null,

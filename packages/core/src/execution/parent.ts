@@ -1,4 +1,4 @@
-import { readText, type VFS, type VfsDirent, type VfsStat, writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import { type VFS, type VfsDirent, type VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * The `parent` executor: a fork's window onto the workspace it forked, in the parent's own paths.
  * An executor rather than a mount, like the sandbox and device: `parent.exec` runs the parent's real shell.
@@ -112,34 +112,6 @@ export function createParentExecutor(deps: {
     disconnect: async () => {},
     positionalArgs: true,
     tools: {
-      readFile: {
-        planAllowed: true,
-        description: "Read a file from the parent workspace you were forked from, in the parent's own paths.",
-        execute: async (...args: unknown[]) => {
-          const path = parseInput(StringSchema, { value: args[0] });
-
-          if (path === undefined) {
-            return refusalOf(new KinuError('bad_input', 'parent readFile: path must be a string'));
-          }
-
-          return readText(vfs, path);
-        },
-      },
-      writeFile: {
-        description: 'Write a file in the parent workspace. Your changes are attributed to you in the merge.',
-        execute: async (...args: unknown[]) => {
-          const path = parseInput(StringSchema, { value: args[0] });
-
-          if (path === undefined) {
-            return refusalOf(new KinuError('bad_input', 'parent writeFile: path must be a string'));
-          }
-
-          const text = String(args[1]);
-          await writeText(vfs, path, text);
-
-          return `Written ${text.length} bytes to ${path}`;
-        },
-      },
       readdir: {
         planAllowed: true,
         description: 'List a directory of the parent workspace.',

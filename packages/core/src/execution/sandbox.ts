@@ -4,11 +4,12 @@ import type { VFS, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 import * as v from 'valibot';
 import { Effect } from 'effect';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus, PortExposureResult, PreviewRouteCheck, SandboxSize, SandboxSizes } from './types';
+import { ExecutorPortSchema } from './types';
 import { callJob, createShellSession, machineShellCall, reportsCwd, shellExecOptions, type MachineShells } from './shell-session';
 import type { OutputSink } from '../types/primitives';
 import { JOB_STAMP_ENV } from '../types/jobs';
 import { commandResult, commandResultAt, exposedPortText, type CommandResult } from './exec-result';
-import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, settle, tolerateAsync, toKinuError, type Refusal } from '../obs/index';
+import { classifyErrorCode, KinuError, refusalOf, renderThrownChain, settle, tolerateAsync, toKinuError, type Refusal } from '../obs/index';
 import { isVfsError, isVfsErrorCode, syscallError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { shellQuote } from '../utils/shell';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
@@ -17,22 +18,6 @@ import { direntType } from '../vfs/dirent';
 
 /** The container's working directory and default cwd; declared here because core must not depend on @kinu.run/devbox. */
 export const WORKSPACE_BACKUP_DIR = '/workspace';
-
-/** Any HTTP answer counts, even 4xx/5xx; curl exit 7 is a refused connection. */
-function healthProbeCommand(port: number): string {
-  return `curl -sS -o /dev/null -m 3 -w '%{http_code}|%{exitcode}' --connect-timeout 2 `
-    + `--head http://127.0.0.1:${port}/ 2>&1 || true`;
-}
-
-/** An unparsable answer is not evidence of a listener; exposing on that guess yields a URL that 502s. */
-function healthProbeSilent(output: string): boolean {
-  const [codeStr, exitStr] = output.trim().split('|');
-
-  if (exitStr !== undefined && parseInt(exitStr, 10) === 7) return true;
-  const code = codeStr === undefined ? Number.NaN : parseInt(codeStr, 10);
-
-  return !Number.isFinite(code) || code === 0;
-}
 
 interface SandboxExposeOptions {
   hostname: string;
@@ -101,6 +86,8 @@ export interface SandboxHandle {
   }>>;
   /** Asked before the first exposure: restarts re-expose with the stored token, so the first URL must use it too. */
   portToken(port: number, name?: string): Promise<{ urlToken: string }>;
+  /** Required native HTTP listener proof. A transport failure throws rather than answering false. */
+  probePort(port: number): Promise<boolean>;
   /** `stamp` read up holders' ancestry; null while down (never starts it). */
   portListeners(stamp: string, ports?: readonly number[]): Promise<readonly SandboxPortListener[] | null>;
   notePortRemoved(port: number): Promise<void>;
@@ -205,12 +192,10 @@ const PathSchema = v.pipe(v.string(), v.minLength(1));
 
 const OptionalStringSchema = v.optional(v.string());
 
-/** `listFiles({ path? })` and `readdir({ path? })`: the working directory when `path` is absent or empty. */
+/** `readdir({ path? })`: the working directory when `path` is absent or empty. */
 const ListOptionsSchema = v.optional(v.object({ path: v.optional(v.string()) }), {});
 
 const ExposeOptionsSchema = v.optional(v.object({ name: v.optional(v.string()) }), {});
-
-const PortSchema = v.pipe(v.number(), v.minValue(1), v.maxValue(65535));
 
 export function isSandboxTransientError(error: Error | string): boolean {
   const msg = (error instanceof Error ? error.message : error).toLowerCase();
@@ -308,31 +293,11 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
     return fn();
   };
 
-  /** `unprobeable` is not evidence either way; each caller decides what it means. */
-  const probeListener = async (
-    box: SandboxHandle, port: number,
-  ): Promise<{ listening: boolean } | { unprobeable: unknown }> => {
-    try {
-      const probe = await withSandboxRetry(() => touch(() =>
-        box.exec(healthProbeCommand(port), { cwd: WORKSPACE_BACKUP_DIR })));
-
-      const out = (probe.stdout ?? probe.output ?? '').toString().trim();
-
-      return { listening: !healthProbeSilent(out) };
-    } catch (cause) {
-      return { unprobeable: cause };
-    }
-  };
-
-  /** The one exposure path. A probe that cannot run is stepped over: the exposure reports its own error. */
+  /** One exposure path: Devbox owns listener proof; a failed probe is a real failure, never evidence of absence. */
   const exposeOn = async (box: SandboxHandle, suffix: string, port: number, name?: string): Promise<PortExposureResult> => {
-    const probe = await probeListener(box, port);
+    const listening = await withSandboxRetry(() => touch(() => box.probePort(port)));
 
-    if ('unprobeable' in probe) {
-      diagnostics.failure('sandbox.port_probe_failed', toKinuError({
-        doing: 'probe a sandbox port before exposing it', cause: probe.unprobeable, otherwise: 'unavailable',
-      }), { port });
-    } else if (!probe.listening) {
+    if (!listening) {
       return {
         supported: false,
         reason: `nothing is listening on port ${port} inside the sandbox. `
@@ -410,56 +375,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
         }
       },
     },
-    readFile: {
-      planAllowed: true,
-      description: 'Read a file from the sandbox.',
-      execute: async (...args: unknown[]): Promise<string | Refusal> => {
-        if (!handle) return notConfigured();
-        const path = parseInput(PathSchema, { value: args[0] });
-
-        if (path === undefined) {
-          return refusalOf(new KinuError('bad_input', 'sandbox readFile: path must be a non-empty string'));
-        }
-
-        try {
-          const r = await withSandboxRetry(() => touch(() => handle.readFile(path)));
-
-          // A failed read is only an exit code, so `io`: `missing` would over-claim.
-          if (r.exitCode && r.exitCode !== 0) {
-            return refusalOf(new KinuError('io', `sandbox readFile ${path}: exit ${r.exitCode}`));
-          }
-
-          return r.content ?? '';
-        } catch (err) {
-          return refusalOf(sandboxFailure({ doing: `sandbox readFile ${path}`, cause: err }));
-        }
-      },
-    },
-    writeFile: {
-      description: 'Write content to a file in the sandbox. Creates parent dirs.',
-      execute: async (...args: unknown[]): Promise<string | Refusal> => {
-        if (!handle) return notConfigured();
-        const path = parseInput(PathSchema, { value: args[0] });
-        const content = parseInput(StringSchema, { value: args[1] });
-
-        if (path === undefined) {
-          return refusalOf(new KinuError('bad_input', 'sandbox writeFile: path must be a non-empty string'));
-        }
-
-        if (content === undefined) {
-          return refusalOf(new KinuError('bad_input', 'sandbox writeFile: content must be a string'));
-        }
-
-        try {
-          await withSandboxRetry(() => touch(() => handle.writeFile(path, content)));
-
-          return `wrote ${path}`;
-        } catch (err) {
-          return refusalOf(sandboxFailure({ doing: `sandbox writeFile ${path}`, cause: err }));
-        }
-      },
-    },
-    listFiles: {
+    readdir: {
       planAllowed: true,
       description: 'List files in a directory: the working directory when `path` is omitted or empty. Returns newline-separated entries prefixed "d" or "-".',
       execute: async (...args: unknown[]): Promise<string | Refusal> => {
@@ -467,7 +383,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
         const listing = parseInput(ListOptionsSchema, { value: args[0] });
 
         if (listing === undefined) {
-          return refusalOf(new KinuError('bad_input', 'sandbox listFiles: takes its options as one object, `{ path? }`'));
+          return refusalOf(new KinuError('bad_input', 'sandbox readdir: takes its options as one object, `{ path? }`'));
         }
 
         const dir = listing.path === undefined || listing.path === '' ? WORKSPACE_BACKUP_DIR : listing.path;
@@ -483,14 +399,9 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
             })
             .join('\n');
         } catch (err) {
-          return refusalOf(sandboxFailure({ doing: `sandbox listFiles ${dir}`, cause: err }));
+          return refusalOf(sandboxFailure({ doing: `sandbox readdir ${dir}`, cause: err }));
         }
       },
-    },
-    readdir: {
-      planAllowed: true,
-      description: 'Alias for listFiles: list entries in a directory.',
-      execute: async (...args: unknown[]) => tools.listFiles.execute(args[0]),
     },
     deleteFile: {
       description: 'Delete a file or directory.',
@@ -544,7 +455,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
         if (!handle) return notConfigured();
 
         if (!previewHostSuffix) return previewsUnconfigured();
-        const p = parseInput(PortSchema, { value: args[0] });
+        const p = parseInput(ExecutorPortSchema, { value: args[0] });
         const name = parseInput(ExposeOptionsSchema, { value: args[1] })?.name;
 
         if (p === undefined) {
@@ -567,7 +478,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
       description: 'Stop exposing a port.',
       execute: async (...args: unknown[]): Promise<string | Refusal> => {
         if (!handle) return notConfigured();
-        const port = parseInput(PortSchema, { value: args[0] });
+        const port = parseInput(ExecutorPortSchema, { value: args[0] });
 
         if (port === undefined) {
           return refusalOf(new KinuError('bad_input', `sandbox unexposePort: invalid port ${String(args[0])}`));
@@ -730,7 +641,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
   return {
     name: 'sandbox',
     kind: 'sandbox',
-    files: handle ? sandboxFiles(handle) : undefined,
+    files: handle ? sandboxFiles(handle, (call) => withSandboxRetry(() => touch(call))) : undefined,
     homeDir: async () => WORKSPACE_BACKUP_DIR,
     capabilities: new Set(capabilities),
     filesOwner: 'agent',
@@ -760,8 +671,8 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
 
       if (!previewHostSuffix) return { supported: false, reason: PREVIEWS_NOT_CONFIGURED };
 
-      if (!Number.isFinite(port) || port <= 0 || port > 65535) {
-        return { supported: false, reason: `invalid port ${port}` };
+      if (!v.is(ExecutorPortSchema, port)) {
+        return { supported: false, reason: `invalid port ${String(port)}` };
       }
 
       try {
@@ -773,6 +684,8 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
 
     async unexposePort(port) {
       if (!handle) return;
+
+      if (!v.is(ExecutorPortSchema, port)) return settle(Effect.fail(new KinuError('bad_input', `invalid port ${String(port)}`)));
       // No catch: unexposing an unexposed port already succeeds; other errors must surface.
       await withSandboxRetry(() => touch(() => Promise.resolve(handle.unexposePort(Number(port)))));
     },
@@ -792,7 +705,14 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
 }
 
 /** Container files at absolute paths: one batched directory read, or one direct stat/lstat. */
-export function sandboxFiles(handle: SandboxHandle): VFS & Required<Pick<VFS, 'readRange'>> {
+/**
+ * The sandbox's files over its handle: the one path the agent's file tools reach them by, under `/sandbox`. `through`
+ * carries each call, so the executor's retry of a dropped connection and its activity mark cover file calls as they
+ * cover commands.
+ */
+export function sandboxFiles(
+  handle: SandboxHandle, through: <T>(call: () => Promise<T>) => Promise<T> = (call) => call(),
+): VFS & Required<Pick<VFS, 'readRange'>> {
   const statOf = (stat: SandboxFileMetadata): VfsStat => {
     let type: VfsStat['type'] = 'file';
 
@@ -828,7 +748,7 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Required<Pick<VFS, 'r
 
   const serving = async <T>(path: string, syscall: string, op: () => Promise<T>): Promise<T> => {
     try {
-      return await op();
+      return await through(op);
     } catch (cause) {
       if (!(cause instanceof Error)) throw cause;
 
@@ -857,9 +777,9 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Required<Pick<VFS, 'r
         throw syscallError('EIO', 'read', path, { detail: 'range offset and length must be positive safe integers' });
       }
 
-      const r = await handle.exec(
+      const r = await through(() => handle.exec(
         `set -o pipefail; dd if=${shellQuote(path)} bs=1 skip=${String(offset)} count=${String(length)} status=none | base64 -w 0`,
-      );
+      ));
 
       if ((r.exitCode ?? 0) !== 0) {
         throw syscallError('EIO', 'read', path, { detail: (r.stderr ?? r.output ?? '').trim() || undefined });
@@ -887,7 +807,7 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Required<Pick<VFS, 'r
     async unlink(path) { await serving(path, 'unlink', () => handle.deleteFile(path)); },
 
     async mkdir(path, opts) {
-      const r = await handle.exec(`mkdir ${opts?.recursive ? '-p ' : ''}-- ${shellQuote(path)}`);
+      const r = await through(() => handle.exec(`mkdir ${opts?.recursive ? '-p ' : ''}-- ${shellQuote(path)}`));
 
       if ((r.exitCode ?? 0) !== 0) {
         throw syscallError('EIO', 'mkdir', path, { detail: (r.stderr ?? r.output ?? '').trim() || undefined });

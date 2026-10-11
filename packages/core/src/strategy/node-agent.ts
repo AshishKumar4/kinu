@@ -392,7 +392,7 @@ async function runNodeLoop(
     produced: [],
   };
 
-  const { runner: jobRunner, next, detach } = stepLoopJobs({
+  const { runner: jobRunner, next, end } = stepLoopJobs({
     actor: deps.actor,
     seat: deps.jobs,
     policy: deps.backgroundPolicy,
@@ -453,9 +453,7 @@ async function runNodeLoop(
       languages: deps.actor.runtime.executor.languages,
     };
   } finally {
-    // Cancel this runner's jobs: their results have no reader left.
-    jobRunner.cancelRunning();
-    detach();
+    await end();
   }
 }
 

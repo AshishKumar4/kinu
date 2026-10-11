@@ -1,4 +1,4 @@
-import { exists as nimbusExists, readText, type Awaitable, type VFS, type VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
+import { exists as nimbusExists, type Awaitable, type VFS, type VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 import { direntType } from '../vfs/dirent';
 /**
  * DeviceTunnelExecutor (`device.*`): the user's machines via a daemon connected through the UserDO hub.
@@ -12,7 +12,7 @@ import type { CheckpointFiles, OutputSink } from '../types/primitives';
 import { isVfsErrorCode, syscallError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { Effect } from 'effect';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
-import { commandResult, commandResultAt, uncheckpointedSentence, type CommandResult } from './exec-result';
+import { commandResult, commandResultAt, type CommandResult } from './exec-result';
 import { causeCodes, KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import { settle } from '../obs/effect';
 import { DEVICE_METHOD } from './device-protocol';
@@ -30,9 +30,7 @@ import {
   nextDeviceRequestId,
 } from './device-tunnel';
 import { readDeviceOwnershipContext } from './signal';
-import { approveFileAccess, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
 import { callJob, createShellSession, machineShellCall, reportsCwd, shellExecOptions, type MachineShells } from './shell-session';
-import { asBytes } from '../safety/bound-write';
 import { isPrefixName, RESERVED_ROOTS } from '../vfs/resolve';
 import {
   isJsonObject,
@@ -202,7 +200,6 @@ export function createDeviceTunnelExecutor(
   transport: DeviceTransport,
   /** Path-scope for the file view; omit only where the transport is already scoped. */
   consent: DeviceFileConsent = ALWAYS_CONSENTED,
-  policy: ShellApprovalPolicy = STRICT_NO_CHANNEL_POLICY,
   /** Where this agent's named shells keep their state on each machine; without it a name is refused. */
   shells?: MachineShells,
 ): ExecutorProvider {
@@ -422,62 +419,6 @@ export function createDeviceTunnelExecutor(
       },
     },
 
-    readFile: {
-      planAllowed: true,
-      description: 'Read a file from the user\'s local filesystem via the desktop daemon.',
-      execute: async (...args: unknown[]): Promise<string | Refusal> => {
-        const path = parseInput(StringSchema, { value: args[0] });
-
-        if (path === undefined) {
-          return refusalOf(new KinuError('bad_input', 'device readFile: path must be a string'));
-        }
-
-        return settle(deviceCall(`device readFile ${path}`, async () => {
-        const target = filesForCall(transport, consent, readDeviceSelection({ context: args[1] }));
-
-        if (target.kind === 'refusal') return target.refusal;
-        const view = target.view;
-
-        return v.parse(v.string(), await readText(view, path));
-        }));
-      },
-    },
-
-    writeFile: {
-      description: 'Write content to a file on the user\'s local filesystem via the device tunnel.',
-      execute: async (...args: unknown[]): Promise<string | Refusal> => {
-        const path = parseInput(StringSchema, { value: args[0] });
-        const content = parseInput(StringSchema, { value: args[1] });
-
-        if (path === undefined) {
-          return refusalOf(new KinuError('bad_input', 'device writeFile: path must be a string'));
-        }
-
-        if (content === undefined) {
-          return refusalOf(new KinuError('bad_input', 'device writeFile: content must be a string'));
-        }
-
-        return settle(deviceCall(`device writeFile ${path}`, async () => {
-        const target = resolveForCall(transport, readDeviceSelection({ context: args[2] }));
-
-        if (target.kind === 'refusal') return target.refusal;
-        const view = deviceFiles(transport, consent, target.deviceId);
-
-        const written = Effect.andThen(
-          approveOverwrite(policy, transport, target.deviceId, { view, path, content }),
-          Effect.promise(() => view.writeFileWithReport(path, new TextEncoder().encode(content))),
-        );
-
-        const said = `Written ${content.length} bytes to ${path}`;
-
-        return await settle(Effect.match(written, {
-          onFailure: refusalOf,
-          onSuccess: (answer) => answer ? `${said}\n${uncheckpointedSentence(answer.uncheckpointed, 'this write')}` : said,
-        }));
-        }));
-      },
-    },
-
     readdir: {
       planAllowed: true,
       description: 'List directory contents on the user\'s local machine.',
@@ -576,24 +517,6 @@ export function createDeviceTunnelExecutor(
   return provider;
 }
 
-/** Asks as a write onto `/pc` does, and parks under that path; a machine-relative path names no machine, so never parks. */
-function approveOverwrite(
-  policy: ShellApprovalPolicy, transport: DeviceTransport, deviceId: string | undefined,
-  write: { readonly view: DeviceVFS; readonly path: string; readonly content: string },
-): Effect.Effect<void, KinuError> {
-  const { view, path, content } = write;
-  const fleet = transport.status().devices;
-  const device = deviceId === undefined ? undefined : fleet?.find((entry) => entry.id === deviceId);
-  const mounted = device === undefined || !path.startsWith('/') ? null : `/pc/${deviceMountSegment(device, fleet)}${path}`;
-
-  return Effect.flatMap(Effect.promise(() => nimbusExists(view, path)), (exists) => (exists ? approveFileAccess(
-    { op: 'write', path: mounted ?? path, hostPath: mounted ?? path, reaches: 'user-mount', replaces: true }, 'device', policy, {
-      subject: async () => ({ path: mounted ?? path, current: asBytes(await view.readFile(path)), next: asBytes(content) }),
-      parks: mounted !== null,
-    },
-  ) : Effect.void));
-}
-
 /** Named and held → its id; named, not held → `unavailable`; unnamed among several live → `bad_input`; else the sole
  *  live id or none. The snapshot never gates the call itself. */
 function resolveForCall(
@@ -672,7 +595,10 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
       catch: (cause) => {
         const code = [...causeCodes({ cause })].find(isVfsErrorCode);
 
-        return code === undefined ? deviceFailure({ doing: `${method} on the device`, cause }) : new VfsError(code, renderThrownChain({ cause }), path, { cause });
+        if (code !== undefined) return new VfsError(code, renderThrownChain({ cause }), path, { cause });
+
+        // A file call on a machine that is not attached says how to attach it, as a command does.
+        return isDeviceNotConnectedError({ cause }) ? new KinuError('unavailable', NOT_CONNECTED, { cause }) : deviceFailure({ doing: `${method} on the device`, cause });
       },
     });
 

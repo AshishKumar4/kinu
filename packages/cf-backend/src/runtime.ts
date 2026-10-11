@@ -545,7 +545,7 @@ export function createCFRuntime(
         });
       }
     },
-  }, approvalPolicy, machineShells));
+  }, machineShells));
 
   const resolveTurnProfile = hooks.resolveProfile;
 

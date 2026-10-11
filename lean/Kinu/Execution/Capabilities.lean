@@ -38,7 +38,7 @@ inductive Capability where
   deriving DecidableEq, Repr
 
 inductive ExecutorKind where
-  | workspace | nimbus | sandbox | device | parent
+  | workspace | sandbox | device | parent
   deriving DecidableEq, Repr
 
 /-- What a PATH probe can settle: the capabilities of `TOOLCHAIN_PROBE`. The
@@ -105,7 +105,7 @@ def Executor.Probed : Executor → Prop
 /-- The kinds whose executor shares the workspace's files. -/
 def ExecutorKind.sharesFiles : ExecutorKind → Bool
   | .workspace | .parent => true
-  | .nimbus | .sandbox | .device => false
+  | .sandbox | .device => false
 
 private theorem not_probed_of (cs : List Capability) (h : FromProbe cs) (c : Capability)
     (hc : c ∉ probed) : c ∉ cs := fun hm => hc (h c hm)
