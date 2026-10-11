@@ -11,14 +11,16 @@ import {
   validateProfileCatalogEnvelope,
   type JsonValue,
   type ProfileCatalog,
+  type WorkspaceOverview,
 } from '@kinu.run/core';
 import type { AuthIdentity } from '../src/auth/session';
 import { cliRoutes, type CliRoutesEnv } from '../src/cli/routes';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
-import { unreachableAssets, unreachableKv, unreachableNamespace, workerContext } from './helpers/bindings';
+import { unreachableAssets, unreachableKv, unreachableNamespace, workerContext, workspaceObject } from './helpers/bindings';
 import {
   TEST_CREDENTIAL_ENCRYPTION_KEY,
   createTestUserDO,
+  provisionTestWorkspace,
   testOwner,
   type TestUserDO,
 } from './helpers/user-do';
@@ -112,6 +114,44 @@ function cliRequest(token: string, method = 'GET', body?: ProfileCatalogWriteReq
 }
 
 describe('browser profile catalog route', () => {
+  test('a model settings edit leaves an idle workspace asleep unless its persisted overview waits on settings', async () => {
+    const { harness, env } = await setup();
+    const quiet: WorkspaceOverview = { activity: 'idle', decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [], shares: [] };
+    const awakened: string[] = [];
+    const ctx = workerContext();
+
+    const notifyEnv: UserRoutesEnv<string> = {
+      ...env,
+      OrchestratorAgent: {
+        idFromName: name => name,
+        get: name => workspaceObject({ async onModelSettingsChanged() { awakened.push(name); } }),
+      },
+    };
+
+    try {
+      for (const name of ['idle', 'awaiting', 'working', 'unknown', 'unpushed']) {
+        const token = await provisionTestWorkspace(harness, name);
+
+        if (name === 'unpushed') continue;
+        await harness.userDO.putWorkspaceOverview({ workspaceToken: token }, name, { ...quiet, activity: name === 'working' ? 'working' : 'idle' });
+
+        if (name === 'unknown') continue;
+        // The authoritative persisted tile is the fanout input, independent of the producer's current schema.
+        harness.db.prepare('UPDATE workspace_overviews SET overview = ? WHERE name = ?')
+          .run(JSON.stringify({ ...quiet, activity: name === 'working' ? 'working' : 'idle', awaitsSettings: name === 'awaiting' }), name);
+      }
+
+      const response = handled(await serveFamily(userRoutes, { identity: IDENTITY, ctx })(userRequest('PUT', {
+        catalog: CUSTOM_CATALOG, expectedVersion: 0,
+      }), notifyEnv));
+
+      await Promise.all(ctx.retained);
+      expect(response.status).toBe(200);
+      expect(validateProfileCatalogEnvelope({ value: await response.json() }).version).toBe(1);
+      expect(awakened.sort()).toEqual(['awaiting', 'unknown', 'unpushed', 'working']);
+    } finally { harness.close(); }
+  });
+
   test('GET exposes the pristine account envelope and PUT advances it', async () => {
     const { harness, env } = await setup();
 
