@@ -771,6 +771,8 @@ try {
 
     const loops = [
       { label: 'abort.bash', command: 'bash -c "while :; do :; done"' },
+      { label: 'abort.yield', command: node('setInterval(() => { for (let i = 0; i < 1e7; i++); }, 0)') },
+      // Never yields: it holds its isolate's thread, the host's abort timer too, until a CPU limit ends it (ask 41).
       { label: 'abort.node', command: node('for (;;) {}') },
       { label: 'abort.pipe', command: `${node('for (;;) {}')} | cat` },
     ];
