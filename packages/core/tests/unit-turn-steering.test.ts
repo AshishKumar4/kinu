@@ -4,7 +4,7 @@ import { describe, expect, test } from 'bun:test';
 import { isStepCount, tool, type ModelMessage } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
-import { createMemoryVfs, createTestRuntime, present, scriptedTurnModel, toolExecute } from '@kinu.run/test-utils';
+import { createMemoryVfs, createTestRuntime, present, scriptedTurnModel, toolExecute, withHostDeliveries } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { z } from 'zod';
 import {
@@ -104,10 +104,10 @@ function newTurn(): AgentOrchestrator {
   const sql = makeSqlExec(testSql.db);
   initEventsHubTables(sql);
 
-  return new AgentOrchestrator({
+  return new AgentOrchestrator(withHostDeliveries({
     host, engine: new EvolutionEngine(rt, historyTurnPairs(stores.history), { enabled: false }),
     eventLog: new EventLog(sql, rt.actor),
-  });
+  }));
 }
 
 async function step(orch: AgentOrchestrator, stepNumber: number, messages: ModelMessage[]): Promise<ModelMessage[]> {

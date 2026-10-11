@@ -32,7 +32,7 @@ function retainedDatabase() {
   };
 
   const database = new AgentDatabase(context.storage, {
-    agent: () => box, home: WORKSPACE_ROOT, state: refuse, enqueueTurn: refuse, broadcast: refuse,
+    agent: () => box, home: WORKSPACE_ROOT, state: refuse, enqueueTurn: refuse, admitDelivery: refuse, broadcast: refuse,
     turnInFlight: () => false, memory: refuse, program: refuse, sayToParent: refuse, logActivity: refuse,
   });
 

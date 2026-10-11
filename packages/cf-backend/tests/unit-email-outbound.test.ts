@@ -9,7 +9,7 @@ import {
   type BackendHost,
   type SqlExec,
 } from '@kinu.run/core';
-import { createMemoryVfs, createTestActorsOver, createTestRuntime } from '@kinu.run/test-utils';
+import { createMemoryVfs, createTestActorsOver, createTestRuntime, withHostDeliveries } from '@kinu.run/test-utils';
 import {
   createEmailThreadDispatcher, dispatchEmailRepliesForTurn,
   sendInboundEmailReceipt, sendOwnerEmail,
@@ -119,9 +119,9 @@ describe('the reply channel at its edges', () => {
 
     const { rt, stores } = createTestRuntime();
 
-    const orch = new AgentOrchestrator({
+    const orch = new AgentOrchestrator(withHostDeliveries({
       host, eventLog: log, engine: new EvolutionEngine(rt, historyTurnPairs(stores.history), { enabled: false }),
-    });
+    }));
 
     await orch.drainPendingEvents();
 

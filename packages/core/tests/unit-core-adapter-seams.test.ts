@@ -5,7 +5,7 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { jsonSchema, tool, type FinishReason } from 'ai';
 import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
-import { createTestActors, createTestActorsOver, createTestSql } from '@kinu.run/test-utils';
+import { createTestActors, createTestActorsOver, createTestSql, hostDeliveries } from '@kinu.run/test-utils';
 import {
   
   buildModelCallEvent, type ModelCallReport,
@@ -294,7 +294,7 @@ function seamOrchestrator(opts?: { enabled?: boolean }) {
   const eventSql: SqlExec = makeSqlExec(eventDb);
   initEventsHubTables(eventSql);
   const eventActor = createTestActorsOver(eventDb).main;
-  const orch = new AgentOrchestrator({ host, engine, eventLog: new EventLog(eventSql, eventActor) });
+  const orch = new AgentOrchestrator({ host, deliveries: hostDeliveries(host), engine, eventLog: new EventLog(eventSql, eventActor) });
 
   return { orch, recorded };
 }

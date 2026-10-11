@@ -12,8 +12,8 @@ export interface LocalOrchestration {
   readonly engine: EvolutionEngine;
   readonly budget: MissionGovernor;
   readonly eventLog: EventLog;
-  /** What its hirer assigns it: committed with the assignment, then handed to its chat in this process. Its signals and
-   *  drains still go through its inbox, which takes one that arrives mid-turn into the turn. */
+  /** Every signal to the agent, every drain of its events and what its hirer assigns it: committed, then handed to its
+   *  chat in this process (design v2 §1), as the cloud's are. */
   readonly deliveries: InProcessDeliveries;
 }
 
@@ -58,6 +58,7 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
         reconcileDurableWake: null,
       },
       engine, eventLog: input.eventLog, budget, oneShot: input.oneShot,
+      deliveries: { signals: deliveries.signals, commit: deliveries.commit },
       refinementLane: () => input.session.read().runRefinementLane(),
       sinks: runEventSinks({ stores: input.stores }, (event, detail) => input.session.read().logActivity(event, detail)),
     },

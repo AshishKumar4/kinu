@@ -16,6 +16,7 @@ import {
   initPendingSendTables, initTerminalEffectTable, PendingSendStore, contextFill, announcementOf, classifyRunEnd, closeTurnRun, TurnReports,
   PlanReviewStore, AgentSequence, TurnFactsStore, type PlanReview, type TurnFacts,
   forkArtifactPath, localForkConversationSource, localForkConversationTarget, type ForkConversationSource, type ForkConversationTarget,
+  InProcessDeliveries, type Delivery, type DeliveryAnswer,
 } from '@kinu.run/core';
 import { attempt, detach, diagnostics, hold, KinuError, logged, settle, settleSync } from '@kinu.run/core/obs';
 import { isDeepStrictEqual } from 'node:util';
@@ -124,6 +125,8 @@ export class AgentDatabase {
       readonly home: string;
       readonly state: () => NimbusSandboxHandle;
       readonly enqueueTurn: BackendHost['enqueueTurn'];
+      /** A delivery of this isolate's own (a signal it raised, its events' drain), handed to its chat (design v2 §1). */
+      readonly admitDelivery: (delivery: Delivery) => Promise<DeliveryAnswer>;
       readonly broadcast: BackendHost['broadcast'];
       readonly turnInFlight: () => boolean;
       readonly program: AgentWorkspace['program'];
@@ -227,6 +230,13 @@ export class AgentDatabase {
       scaffoldFor: async (bound) => ({ path: actorScaffoldPath(bound.record), vfs: files.state() }),
       loopFor: (bound) => ({ origin: defaultLoopOrigin(bound.record.origin), parent: null }),
       orchestrationFor: (bound) => ({
+        // What it raises for itself is a delivery too, in its own store: one admission path for every agent.
+        deliveries: new InProcessDeliveries({
+          actorId: bound.handle.actorId, sql: bound.runtime.storage.sql, transaction: (body) => storage.transactionSync(body),
+          eventLog: new EventLog({ exec: (query, ...bindings) => storage.sql.exec(query, ...bindings) }, bound.handle),
+          admit: (delivery) => this.workspace.admitDelivery(delivery),
+          broadcast: (event) => { this.workspace.broadcast(event); },
+        }),
         host: this.backendHost(),
         budget: new MissionGovernor({
           storage: bound.runtime.storage,

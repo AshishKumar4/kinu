@@ -14,7 +14,7 @@ import type { BackendHost } from '../src/types/backend-host';
 import type { Schedule } from '../src/types/primitives';
 import { createTestWorkspace, createWorkspaceBundle, makeSql, makeSqlExec } from './helpers';
 import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
-import { seedTranscriptEntry, createTestActors } from '@kinu.run/test-utils';
+import { seedTranscriptEntry, createTestActors, hostDeliveries } from '@kinu.run/test-utils';
 
 const JOB = 'bgjob-y2vlvl1wbli9gan6sh78a';
 
@@ -62,7 +62,7 @@ function activation(db: Database) {
   const runner = new BackgroundJobRunner({
     store: new BackgroundJobStore(sql, openWorkspaceMainActor(sql)),
     fiber,
-    inbox: new Inbox(host),
+    inbox: hostDeliveries(host).signals,
     eventLog: new EventLog(makeSqlExec(db), openWorkspaceMainActor(sql)),
     scheduleDrain: () => {},
   });

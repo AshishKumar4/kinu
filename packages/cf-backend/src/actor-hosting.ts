@@ -92,9 +92,8 @@ export interface WorkspaceHostSeams {
   /** The owner's needs-you queue: one per workspace, which each actor parks on as itself. */
   deferrals(actorId: string): DeferredApprovalChannel | undefined;
   refinementLane(bound: BoundActor & { readonly runtime: AgentRuntime }): () => Promise<void>;
-  /** The agent's deliveries (design v2 §1): every signal to it and every drain of its events, committed then crossed.
-   *  Absent where no workspace delivers to it (a hosting fixture): its own inbox takes them. */
-  deliveries?(actorId: string): NonNullable<AgentOrchestratorDeps['deliveries']>;
+  /** The agent's deliveries (design v2 §1): every signal to it and every drain of its events, committed then crossed. */
+  deliveries(actorId: string): AgentOrchestratorDeps['deliveries'];
   /** The port a hosted actor hires its advisor through, as every hire goes; absent, none is reviewed. */
   advisorPort?(reference: ActorReference): TemporaryAgentPort;
   /** The loop origin a creation site named for this actor, or null for the kind's default. */
@@ -335,7 +334,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
         eventLog: new EventLog(seams.exec, handle),
         budget,
         refinementLane: seams.refinementLane(bound),
-        ...(seams.deliveries !== undefined && { deliveries: seams.deliveries(handle.actorId) }),
+        deliveries: seams.deliveries(handle.actorId),
         sinks: runEventSinks(bound, (event, detail) => { seams.logActivity(handle.actorId, event, detail); }),
       };
     },

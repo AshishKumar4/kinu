@@ -65,3 +65,5 @@ export * from './mossaic';
 export * from './transcript';
 
 export * from './turn-reach';
+
+export * from './deliveries';
