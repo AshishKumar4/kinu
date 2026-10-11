@@ -272,6 +272,7 @@ export async function mountChat(
 
   const waitFor = async (what: string, predicate: () => boolean) => {
     try {
+      await testRenderer.renderOnce();
       await testRenderer.waitFor(predicate);
     } catch (cause) {
       throw new Error(`the chat surface did not reach ${what}`, { cause });
@@ -282,13 +283,13 @@ export async function mountChat(
     && !(renderer.currentFocusedRenderable instanceof InputRenderable);
 
   const filterFocused = () => renderer.currentFocusedRenderable instanceof InputRenderable;
-  await waitFor('the chat surface to settle', () => options.settled ? options.settled(frame()) : composerFocused());
   mounted.push(() => {
     // `root.render()` builds a new container per call and destroy unmounts only the last one, so unmount
     // explicitly; on a concurrent root `unmount()` only schedules, so flush it before `destroy()`.
     flushSync(() => { root.unmount(); });
     testRenderer.renderer.destroy();
   });
+  await waitFor('the chat surface to settle', () => options.settled ? options.settled(frame()) : composerFocused());
 
   return { ...testRenderer, frame, waitFor, composerFocused, filterFocused };
 }
