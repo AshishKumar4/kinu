@@ -97,14 +97,6 @@ export async function prepareTrialAccount(target: EvalTarget, now: number): Prom
   }
 }
 
-/** Prepare the trial's own account before opening its workspace. */
-export async function trialTarget(target: EvalTarget, slot: EvalAccount, now: number): Promise<{ target: EvalTarget; account: EvalAccount }> {
-  const own = { ...target, identity: { ...target.identity, account: slot } };
-
-  await prepareTrialAccount(own, now);
-
-  return { target: own, account: slot };
-}
 
 /** After opening `own` on `target`'s account: a run that opened on it at the same moment with an earlier name keeps it. */
 export async function claimTrialAccount(target: EvalTarget, own: string, now: number): Promise<void> {

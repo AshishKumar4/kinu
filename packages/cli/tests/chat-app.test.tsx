@@ -6,7 +6,7 @@ import { KinuError } from '@kinu.run/core/obs';
 import { runToExit, scratchDir } from '@kinu.run/test-utils';
 
 import type { AgentClient, AgentClientStatus, AgentTranscriptMessage } from '../src/agent-client';
-import { JOB_OUTPUT_EVENT, missingSubordinateHistory, READS_CHANGED_EVENT, TURN_FAILURE_METADATA_KEY, type AgentModelMenu, type JobOutputTail, type SubordinateChild } from '@kinu.run/core';
+import { JOB_OUTPUT_EVENT, missingSubordinateHistory, READS_CHANGED_EVENT, TURN_FAILURE_METADATA_KEY, type AgentModelMenu, type JobOutputTail, type ModelTestResult, type SubordinateChild } from '@kinu.run/core';
 import type { TuiHubData } from '../src/tui/hubs';
 import { asFetchFunction } from '@kinu.run/core';
 
@@ -276,13 +276,14 @@ describe('ChatApp terminal interaction', () => {
   test('Ctrl+T in the model picker tests the highlighted model and says what it found, without picking it', async () => {
     const tested: string[] = [];
     const selected: string[] = [];
+    const response = Promise.withResolvers<ModelTestResult>();
 
     const controlled = fakeClient({
       name: 'alpha',
       testModel: async (spec) => {
         tested.push(spec);
 
-        return { ok: false, failure: 'spent', message: 'fixture allowance exhausted' };
+        return response.promise;
       },
       setModel: async (spec) => {
         selected.push(spec);
@@ -291,13 +292,21 @@ describe('ChatApp terminal interaction', () => {
       },
     });
 
-    const screen = await mountChat(controlled.client);
+    const screen = await mountChat(controlled.client, { width: 140 });
     screen.mockInput.pressKey('l', { ctrl: true });
     await screen.waitFor('the model row', () => screen.frame().includes('openai/gpt-5.5'));
     screen.mockInput.pressKey('t', { ctrl: true });
     await screen.waitFor('the test request', () => tested.length === 1);
-
     expect(tested).toEqual(['openai/gpt-5.5']);
+    response.resolve({ ok: true, firstTokenMs: 731, totalMs: 918 });
+    await response.promise;
+    await new Promise<void>((resolve) => { setImmediate(resolve); });
+    await screen.renderOnce();
+
+    const reported = [...screen.frame().matchAll(/\b(\d+(?:\.\d+)?)\s*(ms|s)\b/gu)]
+      .map(([, value, unit]) => Number(value) * (unit === 's' ? 1_000 : 1));
+
+    expect(reported).toEqual(expect.arrayContaining([731, 918]));
     expect(screen.filterFocused()).toBe(true);
     expect(selected).toEqual([]);
   });
@@ -817,7 +826,14 @@ test('the header shows the size the gate measured the last request at, not the s
 test('/compact shows its progress while the fold runs, and a failed fold says why', async () => {
   for (const ends of ['folded', 'failed'] as const) {
     const fold = Promise.withResolvers<'folded'>();
-    const agent = fakeClient({ name: `compact-${ends}` });
+    const sent: Parameters<AgentClient['send']>[0][] = [];
+
+    const agent = fakeClient({ name: `compact-${ends}`, send: async (input) => {
+      sent.push(input);
+
+      return TURN;
+    } });
+
     const local = agent.client.localControls;
 
     if (!local) throw new Error('the fixture is local');
@@ -833,18 +849,30 @@ test('/compact shows its progress while the fold runs, and a failed fold says wh
     await screen.mockInput.typeText('/compact');
     flushSync(() => screen.mockInput.pressEnter());
     await screen.waitFor('the fold in progress', () => compacting);
-    screen.mockInput.pressKey('l', { ctrl: true });
+    await new Promise<void>((resolve) => { setImmediate(resolve); });
     await screen.renderOnce();
-    expect(screen.filterFocused()).toBe(false);
+    expect(screen.frame()).toMatch(/\p{Script=Braille}/u);
+    screen.mockInput.pressKey('l', { ctrl: true });
+    await new Promise<void>((resolve) => { setImmediate(resolve); });
+    await screen.renderOnce();
+    screen.mockInput.pressEscape();
+    await screen.waitFor('the composer after closing the model picker', screen.composerFocused);
+    expect(sent).toEqual([]);
 
     if (ends === 'folded') fold.resolve('folded');
     else fold.reject(new Error('the summarizer is out of credit'));
 
-    if (ends === 'failed') {
-      await screen.waitFor('the reported fold refusal', () => screen.frame().includes('the summarizer is out of credit'));
-    } else {
-      await fold.promise;
-    }
+    if (ends === 'folded') await fold.promise;
+    else await expect(fold.promise).rejects.toThrow();
+    await new Promise<void>((resolve) => { setImmediate(resolve); });
+    await screen.renderOnce();
+    expect(screen.frame()).not.toMatch(/\p{Script=Braille}/u);
+
+    if (ends === 'failed') expect(screen.frame()).toContain('the summarizer is out of credit');
+    await screen.mockInput.typeText('continue after compaction');
+    flushSync(() => screen.mockInput.pressEnter());
+    await screen.waitFor('the next prompt after compaction', () => sent.length === 1);
+    expect(sent).toEqual(['continue after compaction']);
   }
 });
 

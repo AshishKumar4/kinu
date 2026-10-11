@@ -8,7 +8,7 @@ import { DeploymentAnswer, evalNameSlug, INFRA_FAILURE_MARKER } from '@kinu.run/
 import { gatherEvidence, writeEvidence, type EvidenceReads, type WorkspaceEvidence } from './evidence';
 import { HarnessRunSchema, measurePlanUsage, measurePromptUsage, type ActorLedger } from './results';
 import type { KinuPublicSession } from './session';
-import { claimTrialAccount, trialTarget } from './slot';
+import { claimTrialAccount, prepareTrialAccount } from './slot';
 import { ARMS, deployedBuild, openWorkspace, type EvalArm } from './target';
 import { type EvalTarget } from './workspace-roster';
 import {
@@ -307,17 +307,18 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
 
         const opened = await (async () => {
           try {
-            const trial = await timeline.span('account', () => trialTarget(target, account, Date.now()));
-            productSha = (await timeline.span('build', () => deployedBuild(trial.target))).sha;
+            const own = { ...target, identity: { ...target.identity, account } };
+            await timeline.span('account', () => prepareTrialAccount(own, Date.now()));
+            productSha = (await timeline.span('build', () => deployedBuild(own))).sha;
 
-            const created = await timeline.span('open', () => openWorkspace(trial.target, {
+            const created = await timeline.span('open', () => openWorkspace(own, {
               subject: `${task.id}-${String(input.trial)}`, mission: task.mission, model: input.model,
             }));
 
             session = created;
             say(`workspace ${created.workspace} open on ${account}`);
 
-            if (trial.target !== target) await timeline.span('claim', () => claimTrialAccount(trial.target, created.workspace, Date.now()));
+            await timeline.span('claim', () => claimTrialAccount(own, created.workspace, Date.now()));
             created.onChunk = (type) => {
               timeline.chunk(type);
 

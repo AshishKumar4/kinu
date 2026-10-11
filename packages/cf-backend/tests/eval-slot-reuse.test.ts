@@ -1,9 +1,9 @@
 /** Trial preparation over the browser's account routes and real UserDO storage. */
 import { Database } from 'bun:sqlite';
 import { expect, test } from 'bun:test';
-import { DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER } from '@kinu.run/core';
-import { prepareTrialAccount, trialTarget } from '../../../evals/src/slot';
-import { listWorkspaces, type EvalTarget } from '../../../evals/src/workspace-roster';
+import { DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, parseJsonObject } from '@kinu.run/core';
+import { prepareTrialAccount } from '../../../evals/src/slot';
+import { listWorkspaces, webHeaders, type EvalTarget } from '../../../evals/src/workspace-roster';
 import { accountRoutes, type AccountRoutesEnv } from '../src/user/account-routes';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
 import type { AuthIdentity } from '../src/auth/session';
@@ -42,6 +42,13 @@ test('trial preparation preserves a live slot, deletes stale workspaces and refu
   const target: EvalTarget = { origin: server.url.origin, identity: { kind: 'secret', secret: 'eval-secret', account: 'trial-7' } };
   const listed = async () => (await listWorkspaces(target.origin, target.identity)).map((row) => row.name);
 
+  const held = async () => {
+    const response = await fetch(`${target.origin}/api/user/held-rows`, { headers: webHeaders(target.identity) });
+    expect(response.status).toBe(200);
+
+    return parseJsonObject(await response.text());
+  };
+
   try {
     await provisionTestWorkspace(harness, 'eval-order-book-1-abc123');
     await expect(prepareTrialAccount(target, Date.now())).rejects.toThrow();
@@ -50,26 +57,51 @@ test('trial preparation preserves a live slot, deletes stale workspaces and refu
     expect(requests.some((request) => request.method === 'DELETE')).toBe(false);
 
     db.run('UPDATE user_workspaces SET last_visited = 0');
-    const trial = await trialTarget({ ...target, identity: { kind: 'secret', secret: 'eval-secret' } }, 'trial-7', Date.now());
-    expect(trial).toEqual({ target, account: 'trial-7' });
+    await prepareTrialAccount(target, Date.now());
     expect(await listed()).toEqual([]);
     expect(harness.destroyedWorkspaces).toEqual(['eval-order-book-1-abc123']);
     expect(await harness.userDO.heldRows(owner)).toMatchObject({ user_credentials: 1 });
     expect(requests.filter((request) => request.method === 'DELETE').map((request) => request.path))
       .toEqual(['/api/user/workspaces/eval-order-book-1-abc123']);
 
-    await provisionTestWorkspace(harness, 'eval-order-book-2-def456');
-    db.run('UPDATE user_workspaces SET last_visited = 0');
-    await harness.userDO.setConfig(owner, 'theme', 'dark');
-    db.run("INSERT INTO user_mcp_servers (id, name, server_url, transport) VALUES ('srv-1', 'github', 'https://mcp.example/v1', 'auto')");
-    await harness.userDO.shareCards_put(owner, {
-      ownerUserId: 'f'.repeat(32), workspace: 'their-ws', shareId: 'share-1',
-      card: { kind: 'blueprint', title: 'Board', description: '', createdAt: 1, owner: 'sam@example.test' },
-    });
-    await expect(prepareTrialAccount(target, Date.now())).rejects.toThrow();
+    const contaminants = [
+      {
+        table: 'user_config',
+        put: () => harness.userDO.setConfig(owner, 'theme', 'dark'),
+        clear: async () => { db.run("DELETE FROM user_config WHERE key = 'theme'"); },
+      },
+      {
+        table: 'user_mcp_servers',
+        put: async () => { db.run("INSERT INTO user_mcp_servers (id, name, server_url, transport) VALUES ('srv-1', 'github', 'https://mcp.example/v1', 'auto')"); },
+        clear: () => harness.userDO.userMcp_remove(owner, 'srv-1'),
+      },
+      {
+        table: 'user_share_cards',
+        put: () => harness.userDO.shareCards_put(owner, {
+          ownerUserId: 'f'.repeat(32), workspace: 'their-ws', shareId: 'share-1',
+          card: { kind: 'blueprint', title: 'Board', description: '', createdAt: 1, owner: 'sam@example.test' },
+        }),
+        clear: () => harness.userDO.sharesReceived_forget(owner, 'f'.repeat(32)),
+      },
+    ];
+
+    for (const contaminated of contaminants) {
+      await expect(prepareTrialAccount(target, Date.now())).resolves.toBeUndefined();
+      await contaminated.put();
+      const rows = await held();
+      expect(rows[contaminated.table]).toBe(1);
+
+      for (const other of contaminants) {
+        if (other !== contaminated) expect(rows[other.table]).toBeUndefined();
+      }
+
+      await expect(prepareTrialAccount(target, Date.now())).rejects.toThrow();
+      await contaminated.clear();
+      await expect(prepareTrialAccount(target, Date.now())).resolves.toBeUndefined();
+      expect((await held())[contaminated.table]).toBeUndefined();
+    }
+
     expect(await listed()).toEqual([]);
-    expect(harness.destroyedWorkspaces).toEqual(['eval-order-book-1-abc123', 'eval-order-book-2-def456']);
-    expect(await harness.userDO.heldRows(owner)).toMatchObject({ user_config: 1, user_share_cards: 1, user_mcp_servers: 1 });
     expect(requests.every((request) => request.secret === 'eval-secret' && request.account === 'trial-7')).toBe(true);
     expect(requests.some((request) => request.path === '/api/user/held-rows')).toBe(true);
     await Promise.all(pending);
