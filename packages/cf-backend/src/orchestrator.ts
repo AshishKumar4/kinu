@@ -2378,10 +2378,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
 
     if (delivery === null) return value;
-    // The producer is done once its wake stands: the crossing runs behind it, in commit order, and one that does not
-    // reach the agent leaves it owed to that wake.
-    await this.owedWake(actorId);
-    this.detachOwned(Effect.asVoid(Effect.promise(() => this.crossingLane(actorId)(() => this.crossDelivery(actorId, delivery)))));
+    // Its wake stands from the commit; the crossing runs in commit order, and one that does not reach the agent leaves it
+    // owed to that wake.
+    await this.owedThenCrossed(actorId, delivery);
 
     return value;
   }

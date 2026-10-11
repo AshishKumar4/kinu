@@ -1274,7 +1274,9 @@ export abstract class ActorAgent extends Agent<Env> {
    *  its events drained here, where its evolution tables and event log are; its answer is read from its own isolate. */
   protected sharedTerminalEffects(): TerminalEffectTable {
     return {
-      ...turnRecordingEffects({ orchestrator: () => this.workspaceAgentOrchestrator(), engine: this.engine }),
+      // Hosted before any close of its runs (`replayOwedTerminals`, `mainTurnSettled`), so a replay after an activation reaches
+      // the workspace agent's session as a live turn does.
+      ...turnRecordingEffects({ orchestrator: () => this.hostedWorkspaceAgentOrchestrator(), engine: this.engine }),
       turn_end_extensions: terminalEffect({
         input: v.object({ messageId: v.string() }),
         // Replayed from the recorded message, not a live tree; the row stops a second announcement.
@@ -1441,6 +1443,8 @@ export abstract class ActorAgent extends Agent<Env> {
    * Subclasses prepend extra owed lanes here so all ride one durable wake.
    */
   protected async owedDeliveryWork(): Promise<void> {
+    // Its closes record through the workspace agent's session: hosted first, as a live close is.
+    await this.workspaceAgent();
     // Detached effects close in their own fiber: a title in its provider's backoff must not hold the wake's job.
     await this.terminal.replayOwedAndRearm();
   }
@@ -1742,8 +1746,9 @@ export abstract class ActorAgent extends Agent<Env> {
 
   private readonly unhostedLedgers: TurnLedgers = new TurnAccumulator();
 
-  /** The workspace agent's orchestrator, once hosted: what reads it synchronously hosts the agent first. */
-  protected workspaceAgentOrchestrator(): AgentOrchestrator | null {
+  /** The workspace agent's orchestrator, which a synchronous effect reads: its caller hosts the agent first; unhosted, the
+   *  effect stays owed, to replay once it is. */
+  protected hostedWorkspaceAgentOrchestrator(): AgentOrchestrator | null {
     return this.workspaceAgentHosted()?.session.orchestrator ?? null;
   }
 
