@@ -46,6 +46,11 @@ export class TurnFences {
   }
 
   /** The opening now open, or null when the agent's newest run has ended or it never opened one here. */
+  /** The agents with a run admitted here that has not ended: after a reset of this workspace, each is recovered. */
+  openActors(): string[] {
+    return this.sql<{ actor_id: string }>`SELECT actor_id FROM actor_turn_fence WHERE ended_at IS NULL`.map((row) => row.actor_id);
+  }
+
   current(actorId: string): OpenedAt | null {
     return this.sql<{ seq: number }>`SELECT seq FROM actor_turn_fence WHERE actor_id = ${actorId} AND ended_at IS NULL`[0] ?? null;
   }
@@ -68,14 +73,14 @@ export class TurnFences {
    * a Retry's, or already applied, ends nothing: null. `'unfenced'` for an agent that never opened a turn here, as one
    * whose turn opened before the fence did: its end is applied as told.
    */
-  ended(actorId: string, expected: { readonly runId: string } | OpenedAt): OpenedAt | 'unfenced' | null {
+  ended(actorId: string, expected: { readonly runId: string } | OpenedAt): Pick<FencedOpening, 'seq' | 'turnId'> | 'unfenced' | null {
     const runId = 'runId' in expected ? expected.runId : null;
     const seq = 'seq' in expected ? expected.seq : null;
 
-    const [ended] = this.sql<{ seq: number }>`UPDATE actor_turn_fence SET ended_at = ${Date.now()}, facts_json = NULL
-      WHERE actor_id = ${actorId} AND ended_at IS NULL AND (run_id = ${runId} OR seq = ${seq}) RETURNING seq`;
+    const [ended] = this.sql<{ seq: number; turn_id: string }>`UPDATE actor_turn_fence SET ended_at = ${Date.now()}, facts_json = NULL
+      WHERE actor_id = ${actorId} AND ended_at IS NULL AND (run_id = ${runId} OR seq = ${seq}) RETURNING seq, turn_id`;
 
-    if (ended !== undefined) return ended;
+    if (ended !== undefined) return { seq: ended.seq, turnId: ended.turn_id };
 
     return this.sql<{ seq: number }>`SELECT seq FROM actor_turn_fence WHERE actor_id = ${actorId}`.length === 0 ? 'unfenced' : null;
   }

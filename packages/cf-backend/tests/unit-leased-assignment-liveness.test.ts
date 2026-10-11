@@ -1,19 +1,16 @@
 /**
- * An assignment a dead activation had leased is owed work of the next one. The drain leases a row
- * (`markConsumed`) before its turn admits a claim, so a reset in between left a row that no wake predicate
- * matched: not pending (it holds a turn id), no claim, and the activation owed nothing, so the turn stalled until
- * something unrelated woke the workspace (HardenDurable P1; kinu-logs/onstart/DESIGN.md S2).
+ * An assignment its activation committed is owed work of the next one, whatever that activation saw: its agent's wake,
+ * armed with the commit, crosses it again (design v2 §1); one its agent answered is not run again after a reset.
  */
 import { afterEach, expect, setSystemTime, test } from 'bun:test';
 import type { SQLQueryBindings } from 'bun:sqlite';
-import { admitSubordinateTask, EventLog, TERMINAL_EFFECT_RETRY_BASE_MS, WORKSPACE_TITLE_SYSTEM_PROMPT } from '@kinu.run/core';
+import { EventLog, TERMINAL_EFFECT_RETRY_BASE_MS, WORKSPACE_TITLE_SYSTEM_PROMPT } from '@kinu.run/core';
 import { AwaitedList } from '@kinu.run/test-utils';
-import { makeSqlExec } from '../../core/tests/helpers';
 import {
-  agentSql, alarmDue, armedWakes, catalogTurn, GATEWAY_CATALOG, gatewayWorkspace, hostedSubordinateHarness, nextTurn, reactivateOrchestratorHarness, rosterOver, runDelegatedTask, until,
+  agentSql, alarmDue, catalogTurn, driveUntil, GATEWAY_CATALOG, gatewayWorkspace, hostedSubordinateHarness, nextTurn, reactivateOrchestratorHarness, rosterOver, runDelegatedTask, until,
   wakeForDelegatedTask,
 } from './helpers/actor-harness';
-import { TERMINAL_RETRY_JOB } from '../src/wake-jobs';
+import { cutNextDelivery } from './helpers/agent-facets';
 import { abandonHarnessFibers, joinHarnessFibers } from './helpers/agents-sdk';
 import {
   answeringGateway, chatCompletion, openingOf, requestOf, scriptedGateway, stubAiBinding, toolCallCompletion, type StubbedAiBinding,
@@ -21,10 +18,13 @@ import {
 
 const BRIEF = 'Summarise the release notes.';
 
+/** Past the lap an agent's wake is armed ahead (`RECOVERY_BACKOFF_CEILING_MS`, a minute). */
+const RECOVERY_LAP_MS = 61_000;
+
 /** The deployed build a production reset leaves running on both sides of it. */
 const BUILD = 'build-liveness';
 
-test('an assignment leased by a dead activation runs after the next activation, with nothing else arriving', async () => {
+test("an assignment whose crossing died with its activation runs after the next one, with nothing else arriving", async () => {
   const gateway = answeringGateway('summarised');
   const workspace = gatewayWorkspace(gateway);
 
@@ -32,24 +32,25 @@ test('an assignment leased by a dead activation runs after the next activation, 
     name: 'summariser', displayName: 'Summariser', nameOrigin: 'user', mission: 'summarise',
   });
 
-  // What a reset leaves between the lease and the claim: the row leased one minute ago, no claim, no run.
-  const log = new EventLog(makeSqlExec(workspace.db), child.actor.handle);
-  const admitted = admitSubordinateTask(log, { fromWorkspace: child.actor.handle.workspaceId, kind: 'task', body: BRIEF, mode: 'build', now: Date.now() });
-  log.markConsumed(admitted.id, 'evt-dead-activation', 0, Date.now() - 60_000);
+  // What a reset leaves between the commit and the agent taking it: owed, with the agent's wake armed and nothing run.
+  cutNextDelivery(workspace.agent.agentOf(child.actor.handle.actorId).storageKey, 'before-admit');
+  await wakeForDelegatedTask(workspace, child.actor.handle.actorId, BRIEF);
+  expect(gateway.runs.some((run) => openingOf(run).includes(BRIEF))).toBe(false);
 
-  // The next activation, reached by one call and nothing else.
+  // The next activation, reached by its armed wake and nothing else.
   const next = await reactivateOrchestratorHarness(workspace.db, undefined, {
     world: { aiGateway: gateway },
     beforeStart: (agent) => { agent.harnessInstallCatalog(GATEWAY_CATALOG); },
   });
 
-  await next.agent.accountSpend();
-  await until(() => armedWakes(workspace.db).some((wake) => wake.id === TERMINAL_RETRY_JOB),
-    'the activation armed a wake for the leased assignment');
-  await next.agent.terminalRetryPass();
-  await joinHarnessFibers();
-
-  expect(gateway.runs.some((run) => openingOf(run).includes(BRIEF))).toBe(true);
+  try {
+    // The agent's wake comes due a lap after the commit armed it, and the platform's alarm delivers it.
+    setSystemTime(new Date(Date.now() + RECOVERY_LAP_MS));
+    await next.agent.alarm();
+    await driveUntil(next, 'the owed assignment never ran', () => gateway.runs.some((run) => openingOf(run).includes(BRIEF)));
+  } finally {
+    setSystemTime();
+  }
 });
 
 type Lifetime = 'task' | 'durable';

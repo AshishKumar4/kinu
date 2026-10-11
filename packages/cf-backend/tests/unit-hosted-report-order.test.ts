@@ -70,6 +70,8 @@ for (const { verb, args, notes } of CASES) {
   test(`a helper's ${verb} to its durable hire, while that hire waits on its own task hire${notes ? ' and then reports progress' : ''}, still finishes`, async () => {
     let parked = false;
     const release = Promise.withResolvers<void>();
+    // The durable hire waits on its task hire once that hire's own turn asks its model.
+    const waitingOnLeaf = Promise.withResolvers<void>();
 
     const workspace = gatewayWorkspace(stubAiBinding(async (run) => {
       const { messages } = requestOf(run);
@@ -81,6 +83,9 @@ for (const { verb, args, notes } of CASES) {
         // Counted from its own brief: the helper's history carries the first turn's hire result.
         const brief = messages.map((message) => JSON.stringify(message).includes('Second: ')).lastIndexOf(true);
         const asked = messages.slice(brief).some((message) => message.role === 'tool');
+
+        // The second task reaches the helper at once; it asks only once its durable hire waits inside its own task hire.
+        if (!asked) await waitingOnLeaf.promise;
 
         return !asked ? toolCallCompletion(run, { tool: 'agents', args: args(second) }, 'call_ask') : chatCompletion(run, 'Second done.');
       }
@@ -100,6 +105,8 @@ for (const { verb, args, notes } of CASES) {
 
         return toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', lifetime: 'task', mission: 'Leaf task.' } }, 'call_leaf');
       }
+
+      waitingOnLeaf.resolve();
 
       return chatCompletion(run, 'Leaf done.');
     }));

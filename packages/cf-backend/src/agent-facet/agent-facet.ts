@@ -84,8 +84,6 @@ export interface PlanVerdict {
 
 export interface AgentFacetCalls {
   run(snapshot: AgentSnapshot, task: AgentTurnTask): Promise<AgentTurnEnd>;
-  /** Answered once its chat has processed it. */
-  enqueue(snapshot: AgentSnapshot, turn: ProgrammaticTurn): Promise<EnqueueTurnResult>;
   /** Resolves once its chat holds the delivery in its own store. */
   admit(snapshot: AgentSnapshot, delivery: Delivery): Promise<DeliveryAnswer>;
   landing(snapshot: AgentSnapshot, id: string): Promise<SendLanding>;
@@ -283,6 +281,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return await runAgentTask({ database: this.open(snapshot), workspace: this.workspaceCalls, models: (deps) => this.models(deps), pacer: this.pacer }, task);
   }
 
+  /** A turn its own isolate queues: answered once its chat has processed it. */
   async enqueue(snapshot: AgentSnapshot, turn: ProgrammaticTurn): Promise<EnqueueTurnResult> {
     return await settle(this.withChat(snapshot, (chat) => chat.session.enqueueTurn(turn)));
   }

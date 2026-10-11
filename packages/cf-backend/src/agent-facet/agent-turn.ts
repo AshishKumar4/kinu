@@ -54,7 +54,8 @@ export interface AgentWorkspace {
   /** The turn's end, with the agent's figures as it ends. */
   turnEnded(event: SessionEvent, figures: AgentFigures): Promise<void>;
   owedReport(
-    turn: { readonly reports: SubordinateReportLedger; readonly ownerDriven: boolean },
+    /** `taskId`: the assignment this turn answers, if one opened it. */
+    turn: { readonly reports: SubordinateReportLedger; readonly ownerDriven: boolean; readonly taskId: string | null },
     ended: { readonly ending: TaskTurnEnding; readonly assistantText: string; readonly narration: readonly string[] },
   ): Promise<OwedReport | null>;
   parentReport(report: {

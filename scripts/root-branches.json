@@ -255,7 +255,7 @@
     "kind": "J",
     "why": "The CLI tree: a null parent key is the tree root, a structural fact of the hosted tree."
   },
-  "packages/cli-backend/src/agent-host/host.ts#LocalAgentHost.drainAssignedWork.swept.run.hirer": {
+  "packages/cli-backend/src/agent-host/host.ts#LocalAgentHost.admitChildWork.hirer": {
     "count": 1,
     "kind": "J",
     "why": "The CLI tree: a null parent key is the tree root, a structural fact of the hosted tree."

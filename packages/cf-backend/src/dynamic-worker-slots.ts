@@ -92,7 +92,6 @@ export function agentCallsThrough(through: <A>(call: (isolate: AgentFacetCalls) 
     ownerQuestions: (...args) => settle(through((isolate) => isolate.ownerQuestions(...args))),
     answerOwnerQuestions: (...args) => settle(through((isolate) => isolate.answerOwnerQuestions(...args))),
     dismissOwnerQuestions: (...args) => settle(through((isolate) => isolate.dismissOwnerQuestions(...args))),
-    enqueue: (...args) => settle(through((isolate) => isolate.enqueue(...args))),
     admit: (...args) => settle(through((isolate) => isolate.admit(...args))),
     landing: (...args) => settle(through((isolate) => isolate.landing(...args))),
     retry: (...args) => settle(through((isolate) => isolate.retry(...args))),

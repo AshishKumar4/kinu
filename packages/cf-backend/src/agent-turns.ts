@@ -73,9 +73,6 @@ export class AgentTurns {
   /** Each agent's chat turn as its room last heard it: a view for the overview, never an authority. */
   private readonly chats = new Map<string, string>();
 
-  /** Tasks handed to an agent's chat and not yet answered: its actor stays held while one is out. */
-  private readonly handing = new Map<string, number>();
-
   private readonly waiting = new Map<string, ReturnType<typeof Promise.withResolvers<void>>>();
 
   constructor(private readonly deps: AgentTurnsDeps) {}
@@ -184,20 +181,7 @@ export class AgentTurns {
   }
 
   inFlight(actorId: string): boolean {
-    return this.running(actorId) !== null || (this.handing.get(actorId) ?? 0) > 0;
-  }
-
-  async handOff<A>(actorId: string, work: () => Promise<A>): Promise<A> {
-    this.handing.set(actorId, (this.handing.get(actorId) ?? 0) + 1);
-
-    try {
-      return await work();
-    } finally {
-      const left = (this.handing.get(actorId) ?? 1) - 1;
-
-      if (left > 0) this.handing.set(actorId, left);
-      else this.handing.delete(actorId);
-    }
+    return this.running(actorId) !== null;
   }
 
   /** Its runs have ended and its own chat holds nothing. */

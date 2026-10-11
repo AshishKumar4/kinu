@@ -445,7 +445,7 @@ export class ActorSession {
     return settle(attempt({ doing: `saying the advisor's note on turn ${turnId}`, otherwise: 'unavailable' }, async () => {
       const sent = await sayAdvisorNote(note, {
         turnId,
-        send: (signal) => this.orchestrator.inbox.send(signal),
+        send: (signal) => this.orchestrator.signals.send(signal),
         ...(this.options.advisor !== undefined && { actor: this.runtime.actor, parent: this.options.advisor.parent }),
       });
 

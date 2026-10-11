@@ -10,15 +10,16 @@ import { JsonObjectSchema, type JsonObject } from '../utils/json';
 import { PromptFileSchema, signalCardId, turnMetadata } from '../orchestrator/inbox';
 import { buildDrainBatch } from '../events/hub/drain';
 import type { EventLog } from '../events/hub/log';
-import { metadataBroadcastEvent } from '../read-models/background-event';
+import { delegatedTaskMetadata, metadataBroadcastEvent } from '../read-models/background-event';
 import type { BroadcastEvent } from '../types/backend-host';
 import { SIGNAL_ID_METADATA_KEY, type AgentInbox, type AgentSignal, type SendOutcome } from '../types/signals';
 import { MISSION_LABELS_METADATA_KEY } from '../mission-budget';
 import { nanoid } from '../utils/nanoid';
-import { Effect } from 'effect';
-import { KinuError, settleSync, type ErrorCode } from '../obs/index';
+import { Cause, Effect, Exit } from 'effect';
+import { serialQueue } from '@kinu.run/agent-utils';
+import { attemptInItsWords, CODE_IS_REFUSAL, diagnostics, hold, KinuError, settleSync, toKinuError, type ErrorCode } from '../obs/index';
 import { TierIdSchema } from '../types/profile';
-import { WorkModeSchema } from '../types/turn';
+import { WorkModeSchema, type WorkMode } from '../types/turn';
 import type { TurnAuthorship } from '../orchestrator/turn-authorship';
 
 /** What a delivery asks of its agent. */
@@ -177,4 +178,166 @@ export function pendingEventsDelivery(eventLog: EventLog, now: number): Delivery
   };
 
   return { id: turnId, input: { kind: 'turn', text: batch.text, metadata }, authorship: 'hirer' };
+}
+
+/** An assignment admitted to its agent's log, as the delivery that opens its turn. */
+export interface DeliveredAssignment {
+  /** The assignment's row: the delivery's id, its turn's identity, and what its answer names. */
+  readonly id: string;
+  readonly body: string;
+  readonly mode: WorkMode;
+  /** Who assigned it, as the agent's chat shows it. */
+  readonly from: string;
+}
+
+/**
+ * An assignment as its agent's delivery (design v2 §1): its row bound under its own id inside the commit that admits it,
+ * so its turn reads the brief's inherited context by that id, its answer names it, and its turn's end closes it.
+ */
+export function assignmentDelivery(eventLog: EventLog, assignment: DeliveredAssignment): Delivery {
+  eventLog.markConsumed(assignment.id, assignment.id, 0);
+
+  return {
+    id: assignment.id,
+    input: { kind: 'turn', text: assignment.body, metadata: { ...delegatedTaskMetadata(assignment.from, assignment.mode), drainTurnId: assignment.id } },
+    authorship: 'hirer',
+  };
+}
+
+/** What a producer wrote, and the delivery it owes the agent for it: none when it wrote nothing new. */
+export interface OwedAdmission<A> {
+  readonly value: A;
+  readonly delivery: Delivery | null;
+}
+
+/** An agent's deliveries as a port its orchestrator sends signals and drains through. */
+export interface DeliveryPort {
+  readonly signals: AgentInbox;
+  readonly commit: (bind: () => Delivery | null) => Promise<void>;
+}
+
+/**
+ * The events a delivery carries that its agent did not take go back: yielded to the owner's words, they are pending
+ * again; refused, they wait for the drain something else starts. Taken, they are its turn's, and close with it.
+ */
+function handBackCarried(eventLog: EventLog, delivery: Delivery, answer: Exclude<DeliveryAnswer, 'taken' | 'duplicate'>): void {
+  const drained = v.safeParse(v.string(), delivery.input.metadata?.drainTurnId);
+
+  if (!drained.success) return;
+
+  for (const event of eventLog.query({ turn_id: drained.output })) {
+    if (answer === 'yielded') eventLog.unbind(event.id);
+    else eventLog.park(event.id);
+  }
+}
+
+/**
+ * An agent's deliveries where its chat runs in this process (the CLI): committed with their producer's fact, then handed
+ * to the chat once, in commit order. One a death left unpaid is handed again by {@link crossOwed} when the agent next
+ * opens; its chat answers a repeat `duplicate`. A refusal, the chat's own or one that would recur, is an answer: retired.
+ */
+export class InProcessDeliveries implements DeliveryPort {
+  readonly signals: AgentInbox;
+  private readonly lane = serialQueue();
+
+  constructor(private readonly deps: {
+    readonly actorId: string;
+    readonly sql: SqlExecutor;
+    readonly transaction: <A>(body: () => A) => A;
+    readonly eventLog: EventLog;
+    readonly admit: (delivery: Delivery) => Promise<DeliveryAnswer>;
+    readonly broadcast: (event: BroadcastEvent) => void;
+  }) {
+    this.signals = new DeliveryInbox({ deliver: (delivery) => this.deliver(delivery), broadcast: deps.broadcast });
+  }
+
+  readonly commit = async (bind: () => Delivery | null): Promise<void> => {
+    await this.owe(() => ({ value: undefined, delivery: bind() }));
+  };
+
+  /** What `admit` writes and the delivery it owes the agent, as one commit; then one crossing. */
+  async owe<A>(admit: () => OwedAdmission<A>): Promise<A> {
+    const { value, delivery } = this.committed(admit);
+
+    if (delivery !== null) await this.lane(() => this.cross(delivery));
+
+    return value;
+  }
+
+  /** What `admit` writes and the delivery it owes the agent, as one commit; the agent's next {@link crossOwed} crosses it. */
+  record<A>(admit: () => OwedAdmission<A>): A {
+    return this.committed(admit).value;
+  }
+
+  private committed<A>(admit: () => OwedAdmission<A>): OwedAdmission<A> {
+    return this.deps.transaction(() => {
+      const admitted = admit();
+
+      if (admitted.delivery !== null) new AgentDeliveries(this.deps.sql).add(this.deps.actorId, admitted.delivery);
+
+      return admitted;
+    });
+  }
+
+  /** The agent's answer; null while it is owed still, or once it was refused. */
+  private async deliver(delivery: Delivery): Promise<DeliveryAnswer | null> {
+    this.deps.transaction(() => new AgentDeliveries(this.deps.sql).add(this.deps.actorId, delivery));
+
+    return await this.lane(() => this.cross(delivery));
+  }
+
+  /** What the agent was owed and a death kept from it, in commit order, up to a crossing that fails; answers what its chat
+   *  took in this sweep. */
+  async crossOwed(): Promise<readonly Delivery[]> {
+    return await this.lane(async () => {
+      const taken: Delivery[] = [];
+
+      for (const delivery of new AgentDeliveries(this.deps.sql).unpaid(this.deps.actorId)) {
+        const answer = await this.cross(delivery);
+
+        if (answer === 'taken') taken.push(delivery);
+        // A crossing that did not reach the agent stops the sweep: what is behind it waits for its next open.
+        else if (answer === null && this.owed(delivery)) break;
+      }
+
+      return taken;
+    });
+  }
+
+  private owed(delivery: Delivery): boolean {
+    return new AgentDeliveries(this.deps.sql).unpaid(this.deps.actorId).some((row) => row.id === delivery.id);
+  }
+
+  private async cross(delivery: Delivery): Promise<DeliveryAnswer | null> {
+    if (!this.owed(delivery)) return null;
+    const crossed = await hold(attemptInItsWords('unavailable', () => this.deps.admit(delivery)));
+    const deliveries = new AgentDeliveries(this.deps.sql);
+
+    if (Exit.isFailure(crossed)) {
+      const failure = toKinuError({ doing: 'handing the agent what it is owed', cause: Cause.squash(crossed.cause), otherwise: 'unavailable' });
+
+      // Refused where it would be on every crossing: an answer, as the agent's own; else owed still.
+      if (CODE_IS_REFUSAL[failure.code]) return this.refused(delivery, failure);
+      diagnostics.failure('agent.delivery_crossing_failed', failure, { actorId: this.deps.actorId, deliveryId: delivery.id });
+
+      return null;
+    }
+
+    const answer = crossed.value;
+
+    if (typeof answer === 'object') return this.refused(delivery, new KinuError(answer.refused.code, answer.refused.message));
+    deliveries.paid(this.deps.actorId, delivery.id);
+
+    if (answer === 'yielded') handBackCarried(this.deps.eventLog, delivery, answer);
+
+    return answer;
+  }
+
+  private refused(delivery: Delivery, failure: KinuError): null {
+    diagnostics.failure('agent.delivery_refused', failure, { actorId: this.deps.actorId, deliveryId: delivery.id });
+    new AgentDeliveries(this.deps.sql).paid(this.deps.actorId, delivery.id);
+    handBackCarried(this.deps.eventLog, delivery, { refused: { code: failure.code, message: failure.message } });
+
+    return null;
+  }
 }

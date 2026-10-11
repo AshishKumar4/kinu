@@ -403,7 +403,6 @@ export interface UntimedArms {
   readonly pendingBirths?: boolean;
   readonly pendingDeletions?: boolean;
   readonly unsettledClaims?: boolean;
-  readonly admittedDelegations?: boolean;
   readonly agentTurns?: boolean;
   readonly chatLoop?: boolean;
   readonly changeNotes?: boolean;

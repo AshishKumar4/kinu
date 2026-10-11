@@ -5,8 +5,8 @@
 
 import { lookup } from 'node:dns/promises';
 import { realpathSync } from 'node:fs';
-import { historyTurnPairs, testModel, toolDescription, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
-import type { ActorHandle, JsonObject } from '@kinu.run/core';
+import { historyTurnPairs, testModel, toolDescription, workModeForTurnMetadata, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
+import type { ActorHandle, Delivery, DeliveryAnswer, JsonObject } from '@kinu.run/core';
 import { Effect } from 'effect';
 import { resolve } from 'node:path';
 import type { LanguageModel, ToolSet } from 'ai';
@@ -520,6 +520,17 @@ export class LocalAgentSession {
         owedTerminalEffects: (input) => this.owedTerminalEffects(input),
         // Only the host knows the child's lifetime and whether the parent drove the turn.
         owedReport: async (ending, assistantText, narration) => await this.parentRelay?.owed(ending, assistantText, narration) ?? null,
+        // Its hirer waits on the work, not on a turn: one that ended without an answer is answered to it as blocked, keyed by
+        // the work.
+        unanswered: async (item, failure) => {
+          const relay = this.parentRelay;
+
+          if (relay === null || turnAuthorship(item) !== 'hirer' || item.idempotencyKey === undefined) return;
+          await relay.send({
+            text: `${this.rt.actor.name} failed to run its assigned turn: ${failure.message}`,
+            status: 'blocked', mode: workModeForTurnMetadata(item.metadata), sequenceId: item.idempotencyKey,
+          });
+        },
         // A running job's settle wakes the session; a reminder would race it.
         openWork: async () => ({ tasks: this.taskList.listOpen(), asyncWakePending: this.jobs.listRunning(1).total > 0 }),
         terminal: () => this.terminal,
@@ -701,7 +712,7 @@ export class LocalAgentSession {
       store: new DeferredApprovalStore(this.rt.storage.sql, this.rt.actor),
       wake: (actorId, signal) => {
         if (actorId === this.rt.actor.actorId) {
-          return Effect.asVoid(attempt({ doing: 'waking this agent with the owner\'s decision', otherwise: 'io' }, () => this.actorSession.orchestrator.inbox.send(signal)));
+          return Effect.asVoid(attempt({ doing: 'waking this agent with the owner\'s decision', otherwise: 'io' }, () => this.actorSession.orchestrator.signals.send(signal)));
         }
 
         return wakeHire === undefined ? this.admitDecision(actorId, signal) : wakeHire(actorId, signal);
@@ -1059,6 +1070,11 @@ export class LocalAgentSession {
     return this.chat.enqueueTurn(input);
   }
 
+  /** A delivery for this agent (design v2 §1): in its chat's own store before it is answered. */
+  admitDelivery(delivery: Delivery): Promise<DeliveryAnswer> {
+    return this.chat.admitDelivery(delivery);
+  }
+
   turnInFlight(): boolean {
     return this.chat.turnInFlight();
   }
@@ -1202,6 +1218,11 @@ export class LocalAgentSession {
   /** Run pending drains now, bypassing debounce; the daemon's tick calls this before end(). */
   flushPendingDrains(): Promise<void> {
     return this.chat.flushPendingDrains();
+  }
+
+  /** Once the turn its delivery `id` opened has settled: at once for one already run, or never taken. */
+  deliveredTurnSettled(id: string): Promise<void> {
+    return this.chat.announcementSettled(id);
   }
 
   /** Call once at startup, before the recovery drain. */

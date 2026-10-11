@@ -20,7 +20,7 @@ import type { EventLog } from '../events/hub/log';
 import type { RunEventRecorder } from '../events/recorder';
 import type { RunEvent } from '../events/types';
 import type { CompletedTurn } from '../evolution/types';
-import { attempt, attemptInItsWords, classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle as settleEffect, settleLogged, settleSync, toKinuError, type Refusal } from '../obs/index';
+import { attempt, attemptInItsWords, classifyErrorCode, diagnostics, hold, KinuError, logged, renderThrownChain, settle as settleEffect, settleLogged, settleSync, toKinuError, type Refusal } from '../obs/index';
 import { contextFill, type ContextFill } from '../read-models/context-fill';
 import { workModeForTurnMetadata } from '../prompting/surface';
 import { runOperationProfile } from '../profiles/operation';
@@ -249,6 +249,9 @@ export interface ChatSessionPorts {
   answerMetadata?(turnId: string, texts: () => Promise<readonly string[]>): Promise<JsonObject | null>;
   /** The report this ending owes its caller; narration is read only if the report carries it. */
   owedReport?(ending: TaskTurnEnding, assistantText: string, narration: () => Promise<readonly string[]>): Promise<OwedReport | null>;
+  /** A turn that never opened, or ended on its failure before an answer existed, and why: its caller is told, as it waits
+   *  on the work, not on a turn. */
+  unanswered?(item: ChatTurnInput, failure: KinuError): Promise<void>;
   /** Asked per call: the bodies close over stores built after this session. */
   terminal(): TerminalTransitions;
   /** Asked per item at dequeue and before a drain binds rows; a refusal settles the item to its producer. */
@@ -585,6 +588,15 @@ export class ChatSession {
   }
 
   /** Its producer is told, and so is every caller that joined it: a turn restored after a reset has only joiners. */
+  private async toldUnanswered(item: QueueItem, failure: KinuError): Promise<void> {
+    const { ports } = this;
+
+    if (ports.unanswered === undefined) return;
+    await hold(logged('turn.unanswered_report_failed', { doing: 'telling the caller a turn it is owed ended without an answer', otherwise: 'io' }, async () => {
+      await ports.unanswered?.(item, failure);
+    }));
+  }
+
   private settleItem(item: QueueItem, failure: KinuError | null, yielded?: boolean, abandoned?: string): void {
     item.settle(failure, yielded, abandoned);
     this.wakeSendWaiters();
@@ -605,6 +617,12 @@ export class ChatSession {
     this.joiners.set(identity, [...this.joiners.get(identity) ?? [], joined.resolve]);
 
     return joined.promise;
+  }
+
+  /** Once the turn announced under `identity` has settled, if it is queued or running; at once otherwise. */
+  async announcementSettled(identity: string): Promise<void> {
+    if (!this.announcementInFlight(identity)) return;
+    await this.joinAnnounced(identity);
   }
 
   announcementInFlight(identity: string): boolean {
@@ -632,6 +650,10 @@ export class ChatSession {
     const { id, input } = delivery;
 
     if (this.ended) return settleSync(Effect.fail(new KinuError('unavailable', 'The agent is closing; the delivery is owed to its next start.')));
+    const gate = this.ports.driverGate();
+
+    // Another process drives this agent: taken here, it would be refused at its turn and lost; owed, the next pass takes it.
+    if (gate !== null) return settleSync(Effect.fail(new KinuError('unavailable', `This agent is driven elsewhere (${gate.reason}); the delivery is owed to its next pass.`)));
 
     if (input.kind === 'words') {
       if (this.transcript.has(id) || this.pendingSends.has(id)) return 'duplicate';
@@ -823,6 +845,7 @@ export class ChatSession {
   /** Pending steers are dropped and returned so the surface can restore them. */
   interrupt(): string[] {
     this.abandonQuestions();
+    this.cancelQueued();
     const returned = this.actorSession.interrupt();
     // The returned words' reservation is spent, or a restart would re-deliver them.
     const ids = returned.flatMap((steer) => steer.id === undefined ? [] : [steer.id]);
@@ -831,6 +854,18 @@ export class ChatSession {
     this.wakeSendWaiters();
 
     return returned.map((steer) => steer.text);
+  }
+
+  /** A Stop's cutoff on what waits behind the turn: each queued programmatic turn is cancelled unrun and its producer
+   *  answered so. A person's queued words are not, as {@link interrupt} hands them back. */
+  private cancelQueued(): void {
+    const cancelled = this.queue.filter((item) => item.kind === 'programmatic');
+
+    if (cancelled.length === 0) return;
+    this.queue.splice(0, this.queue.length, ...this.queue.filter((item) => item.kind !== 'programmatic'));
+
+    for (const item of cancelled) this.settleItem(item, new KinuError('cancelled', 'The agent was stopped before this turn ran.'));
+    diagnostics.event('turn.queued_cancelled', { count: cancelled.length });
   }
 
   /** Unseen steers stay queued and rerun; {@link interrupt} hands them back instead. */
@@ -1172,6 +1207,10 @@ export class ChatSession {
           this.runningAnnouncement = null;
           this.settleItem(item, failure, undefined, abandoned ?? undefined);
         }
+
+        const unanswered = failure ?? (abandoned === null ? null : new KinuError('io', abandoned));
+
+        if (unanswered !== null) await this.toldUnanswered(item, unanswered);
       }
     } finally {
       // Cleared synchronously, not in .finally(): the microtask would leave `pumping` stale and orphan a queued turn.

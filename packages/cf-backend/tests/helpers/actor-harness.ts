@@ -14,14 +14,14 @@ import * as v from 'valibot';
 import { scriptedTurnModel, type ModelStreamPart, type ScriptedTurnOptions, type ScriptedTurnResult } from '@kinu.run/test-utils/turn-model';
 import { convertArrayToReadableStream, MockLanguageModelV4 } from 'ai/test';
 import type { PreparedRequest, ScriptedAnswer, SettledTurn, TurnHarness } from './turn-harness';
-import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, BackendHost, Clock, ModelInfo, ModelRouteResolution, ActorToolsets, ReplyToCommentToolDeps } from '@kinu.run/core';
+import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, Clock, ModelInfo, ModelRouteResolution, ActorToolsets, ReplyToCommentToolDeps } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { WorkspaceOverview } from '@kinu.run/core';
 import { OwnedModelServices } from '../../src/owned-model-services';
-import type { HostedTaskProfile, HostedTaskTurn } from '../../src/hosted-actors';
+import { hostedSubordinateRuntime, type HostedTaskProfile, type HostedTaskTurn } from '../../src/hosted-actors';
 import type { ChatWireTransport } from '../../src/chat-transport';
 import { isWorkMode, workModeForTurnMetadata } from '@kinu.run/core';
-import { ActorClaimStore, admitSubordinateTask, agentArtifactDirectory, agentHome, CHAT_SESSION_ID, createParentWorkspaceVfs, EventLog, SubordinateRosterStore, MAIN_AGENT, openWorkspaceMainActor, SessionHistory, TerminalTransitions, WorkspaceActorDirectory } from '@kinu.run/core';
+import { ActorClaimStore, agentArtifactDirectory, agentHome, CHAT_SESSION_ID, createParentWorkspaceVfs, EventLog, SubordinateRosterStore, MAIN_AGENT, openWorkspaceMainActor, SessionHistory, TerminalTransitions, WorkspaceActorDirectory } from '@kinu.run/core';
 import { present, sqlOver } from '@kinu.run/test-utils';
 import {
   createCompositeLogger, createConsoleLogger, renderCauseChain, setDiagnosticsSink, toKinuError, type Logger,
@@ -219,12 +219,22 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   }
 
   /** Work the object still owes: maintenance, untimed owed arms (turn claims, queued deliveries), a due timed ledger, a
-   *  detached task, or a due timer wake (which folds every hired agent's pending reactions). */
+   *  detached task, a due timer wake (which folds every hired agent's pending reactions), or work an agent's isolate holds
+   *  and has not said it rests from (its wake stands). */
   harnessWorkRemains(now = Date.now()): boolean {
     const due = this.nextOwedAt();
 
     return this.maintenanceUnfinished || this.owedUntimedWork() || (due !== null && due <= now) || this._backgroundTasks.size > 0
-      || this.harnessTimerDue(now);
+      || this.harnessTimerDue(now) || this.harnessAgentWakeStands();
+  }
+
+  private harnessAgentWakeStands(): boolean {
+    const sql = this.ctx.storage.sql;
+
+    // The SDK creates its queue table on the first job operation; before it, nothing is armed.
+    if (sql.exec("SELECT 1 FROM sqlite_master WHERE name = 'cf_agents_jobs'").toArray().length === 0) return false;
+
+    return sql.exec("SELECT 1 FROM cf_agents_jobs WHERE capability = 'kinu-agent-wakes' LIMIT 1").toArray().length > 0;
   }
 
   /** Turns running now, the root's and every hosted actor's. */
@@ -400,6 +410,13 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
   /** The child substrate, for lifecycle verbs without a roster row. */
   observeSubordinateRuntime() { return this.subordinateRuntime(); }
+
+  /** The runtime the agent's own hirer assigns it work through, as that hirer's `agents` tool does. */
+  observeHirerRuntime(actorId: string) {
+    const hirer = present(this.agentOf(actorId).parentActorId, `${actorId} has no hirer`);
+
+    return hostedSubordinateRuntime(this.hostedSeams(), () => this.actorHost().bindStores(actorReferenceOf(this.agentOf(hirer))));
+  }
   observeRuntime(): AgentRuntime { return this.rt; }
   setObservedSoul(text: string): void { this._cachedSoulText = text; }
 
@@ -690,20 +707,6 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
   observeActorHost(): ActorHost { return this.actorHost(); }
 
-  /** Every programmatic turn the loop was asked to admit through the host. */
-  readonly harnessEnqueued: ProgrammaticTurn[] = [];
-  protected override get host(): BackendHost {
-    const base = super.host;
-
-    return {
-      ...base,
-      enqueueTurn: (input) => {
-        this.harnessEnqueued.push(input);
-
-        return base.enqueueTurn(input);
-      },
-    };
-  }
   /** Main's isolate restarts, and its wake reopens the turn it was inside. */
   async harnessResumeMain(): Promise<void> {
     this.harnessResetAgentIsolate(this.agentOf(this.actorHandle().actorId).storageKey);
@@ -861,20 +864,19 @@ export async function runDelegatedTask(
 ): Promise<void> {
   await wakeForDelegatedTask(workspace, actorId, task);
   await joinHarnessFibers();
-  // The turn's answer is relayed as its agent's isolate settles it.
+  // The turn's answer is relayed as its agent's isolate settles it; what the turn started here (a job's lane) is joined
+  // after it, and its own answer settled in turn.
+  await workspace.agent.harnessAgentsIdle();
+  await joinHarnessFibers();
   await workspace.agent.harnessAgentsIdle();
 }
 
-/** {@link runDelegatedTask} up to the wake's return: the turn it starts may still be running. */
+/** {@link runDelegatedTask} up to its admission: the task is the agent's, and the turn it opens may still be running. */
 export async function wakeForDelegatedTask(
   workspace: ActorHarness<HarnessOrchestratorAgent>, actorId: string, task: string,
 ): Promise<void> {
-  const child = actorOver(workspace.db, actorId);
-
-  admitSubordinateTask(new EventLog(makeSqlExec(workspace.db), child), {
-    fromWorkspace: child.workspaceId, kind: 'task', body: task, mode: 'build', now: Date.now(),
-  });
-  await workspace.agent.terminalRetryPass();
+  // As its hirer's `agents` tool assigns it: admitted, and owed the agent as its delivery.
+  await workspace.agent.observeHirerRuntime(actorId).assign(workspace.agent.agentOf(actorId).name, { body: task, mode: 'build' });
 }
 
 /** Core's background-job journal over the object's stored rows. */
@@ -1951,6 +1953,11 @@ export async function hostedSubordinateHarness(
   const actor = await workspace.agent.observeActorHost().acquire(reference, { kind: 'actor' });
 
   return { actor, workspace };
+}
+
+/** The same hired agent hosted again: its turn in its own isolate released the workspace's hold on it once it rested. */
+export async function hostedAgain(harness: HostedActorHarness): Promise<HostedActor> {
+  return await harness.workspace.agent.observeActorHost().acquire(harness.actor.reference, { kind: 'actor' });
 }
 
 export async function hostedExplorationHarness(

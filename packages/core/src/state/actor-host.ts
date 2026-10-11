@@ -281,7 +281,7 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
             const parentReference = actorReferenceOf(deps.directory.open(parentId));
             const parent = host.hosted(parentReference) ?? await host.acquire(parentReference, { kind: 'actor' });
 
-            return parent.session.orchestrator.inbox.send(signal);
+            return parent.session.orchestrator.signals.send(signal);
           },
         },
       });

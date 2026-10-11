@@ -4,7 +4,7 @@ import {
   CHAT_SESSION_ID, ChatSession, EventLog, HeadCapture, PendingSendStore, RECOVERY_BACKOFF_CEILING_MS, TerminalTransitions,
   PlanReviewActions, announcementOf, assembleActorTurn, authoredTurnMetadata, chatTerminalEffects, chatTurnParts, declareTerminalRoster, inspectWork,
   planHandoffStillOwed, approvedTaskPlan, missionGate, workModeUnderReview, projectJsonValue, declareHandoffRoster, HandedOffTurnSchema, terminalEffect, turnAuthorship, turnLane, type TurnAuthorship,
-  actorPolicy, metadataTier, reportReadsNarration, subordinateTerminalEffects, withCompactionTrigger, type ActorPolicy,
+  actorPolicy, metadataTier, workModeForTurnMetadata, reportReadsNarration, subordinateTerminalEffects, withCompactionTrigger, type ActorPolicy,
   bindRoute, completeOnRoute, ownProfileChoices, planWorkspaceTitle, resolveAgentTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle,
   type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpening, type JsonObject, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
   type InspectedWork, type PreparedAgentTurn, type PreparedTurn, type TerminalTurnFacts, type TerminalTurnParts,
@@ -118,9 +118,21 @@ export class FacetChat {
         // What the turn already told its hirer is the agent's own record, so a reset of the workspace cannot repeat it.
         // An agent with no hirer owes no report, so it asks the workspace for none.
         owedReport: async (ending, assistantText, narration) => (this.policy.hirer === null ? null : await workspace.owedReport(
-          { reports: this.deps.database.reports(this.session.currentTurnId ?? ''), ownerDriven: !this.parentDriven },
+          {
+            reports: this.deps.database.reports(this.session.currentTurnId ?? ''), ownerDriven: !this.parentDriven,
+            taskId: this.parentDriven ? announcementOf(this.session.currentTurnId ?? '') : null,
+          },
           { ending, assistantText, narration: reportReadsNarration(ending) ? await narration() : [] },
         )),
+        // Its hirer waits on the work, not on a turn: one that ended without an answer is answered to it as blocked, keyed by
+        // the work.
+        unanswered: async (item, failure) => {
+          if (turnLane(this.policy, authorshipOf(item)) !== 'hirer' || item.idempotencyKey === undefined) return;
+          await workspace.parentReport({
+            text: `${this.deps.actor.record.name} failed to run its assigned turn: ${failure.message}`,
+            status: 'blocked', mode: workModeForTurnMetadata(item.metadata), sequenceId: item.idempotencyKey,
+          });
+        },
         terminal: () => this.terminal,
         driverGate: () => null,
         armTurnWake: (atMs) => this.tell(atMs),

@@ -117,11 +117,11 @@ function turnOpen(sql: SqlExecutor, actorId: string): boolean {
     && sql<{ x: number }>`SELECT 1 AS x FROM actor_turn_claims WHERE actor_id = ${actorId} AND outcome IS NULL LIMIT 1`.length > 0;
 }
 
-function turnOwed({ sql, exec, now }: Pick<Walk, 'sql' | 'exec' | 'now'>, actor: ActorHandle): boolean {
-  if (!tableExists(sql, 'agent_log')) return false;
-  const log = new EventLog(exec, actor);
+/** Work handed to it it has not said it rests from, or reactions due a drain now. */
+function turnOwed({ sql, exec, now, queued }: Pick<Walk, 'sql' | 'exec' | 'now' | 'queued'>, actor: ActorHandle): boolean {
+  if (queued(actor.actorId)) return true;
 
-  return log.pending({ variant: 'subordinate_task', limit: 1 }).length > 0 || log.nextPendingDrainAt(now) === now;
+  return tableExists(sql, 'agent_log') && new EventLog(exec, actor).nextPendingDrainAt(now) === now;
 }
 
 interface Walk {
@@ -132,6 +132,7 @@ interface Walk {
   readonly paths: Map<string, string>;
   readonly handleOf: (row: WorkspaceActor) => ActorHandle;
   readonly now: number;
+  readonly queued: (actorId: string) => boolean;
 }
 
 /** A running head's run is listed however old. */
@@ -145,7 +146,7 @@ function swarmRuns(sql: SqlExecutor, owner: ActorHandle): HeadRunView[] {
   return [...older.filter((run) => run !== null), ...recent];
 }
 
-function rosterAgents({ sql, exec, root, actors, paths, handleOf, now }: Walk): Uncoloured[] {
+function rosterAgents({ sql, exec, root, actors, paths, handleOf, now, queued }: Walk): Uncoloured[] {
   const byId = new Map(actors.map((row) => [row.actorId, row]));
   const agents: Uncoloured[] = [];
 
@@ -163,7 +164,7 @@ function rosterAgents({ sql, exec, root, actors, paths, handleOf, now }: Walk): 
     paths.set(row.actorId, path);
     const category = subordinateCategory(entry);
 
-    const running = turnOpen(sql, row.actorId) || turnOwed({ sql, exec, now }, handleOf(row));
+    const running = turnOpen(sql, row.actorId) || turnOwed({ sql, exec, now, queued }, handleOf(row));
 
     agents.push({
       key: row.actorId, label, category, activity: subordinateActivity(sql, entry, row.actorId, running), parent: row.parentActorId === root.actorId ? 'main' : row.parentActorId,
@@ -235,8 +236,8 @@ export async function readWorkspaceAgents(input: {
   readonly root: ActorHandle;
   readonly actors: readonly WorkspaceActor[];
   readonly figures: (actorIds: readonly string[]) => ReadonlyMap<string, AgentFigures> | Promise<ReadonlyMap<string, AgentFigures>>;
-  /** The root's chat holds a turn. */
-  readonly queued: boolean;
+  /** The agent holds work it has not said it rests from: its wake stands. */
+  readonly queued: (actorId: string) => boolean;
 }): Promise<PanelAgent[]> {
   const { sql, root } = input;
   root.assertCurrent();
@@ -253,7 +254,7 @@ export async function readWorkspaceAgents(input: {
   const main: Uncoloured = {
     key: 'main', label: root.config.getChatTitle() ?? 'Main', category: 'main', parent: null,
     // A device's consent request names no actor: it is the workspace's, so Main is the chat that needs the person.
-    activity: deviceAsks(sql, walk.now) ? 'waiting' : chatActivity(sql, root.actorId, turnOpen(sql, root.actorId) || input.queued || turnOwed(walk, root)),
+    activity: deviceAsks(sql, walk.now) ? 'waiting' : chatActivity(sql, root.actorId, turnOpen(sql, root.actorId) || turnOwed(walk, root)),
     open: { kind: 'chat', path: null }, tab: true, input: true, actorId: root.actorId, figures: NO_FIGURES,
   };
 

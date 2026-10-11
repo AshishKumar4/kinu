@@ -5,7 +5,7 @@
  */
 import { expect, test } from 'bun:test';
 import { sqlOver } from '@kinu.run/test-utils';
-import { EventLog, SubordinateRosterStore, actorConnectionTag, admitSubordinateTask } from '@kinu.run/core';
+import { SubordinateRosterStore, actorConnectionTag } from '@kinu.run/core';
 import { createRecordingLogger, KinuError, setDiagnosticsSink } from '@kinu.run/core/obs';
 import { makeSqlExec } from '../../core/tests/helpers';
 import { asPane, joinHarnessFibers, joinHarnessKeepAlives } from './helpers/agents-sdk';
@@ -225,11 +225,12 @@ test("a task agent does not settle while more input is queued for it: its answer
   const turn = catalogTurn(workspace.agent, 'Hire a helper.');
 
   await driveUntil(workspace, 'the task helper never started', () => gateway.runs.some((run) => openingOf(run).includes('Helper brief.')));
-  await turn;
   const helperId = sql<{ id: string }>`SELECT actor_id AS id FROM workspace_actors WHERE origin IN ('user','agent','evolution')`[0]?.id ?? '';
   // More input queues for the helper while its first turn is still out.
   await wakeForDelegatedTask(workspace, helperId, 'Queued note.');
   release.resolve();
+  // The root's turn settles once every agent's isolate rests, its helper's included.
+  await turn;
 
   const rootTold = (): string[] => gateway.runs.map(openingOf).filter((opening) => opening.includes('[subordinate_report]'));
 
@@ -403,11 +404,8 @@ test("a Stop skips a turn the stopped agent's runner had already picked up", asy
   const sql = sqlOver(workspace.db);
   const parent = sql<{ id: string }>`SELECT actor_id AS id FROM workspace_actors WHERE actor_id = ${middleId}`[0]?.id ?? '';
 
-  // Both admitted before the runner reads the queue, so one pass holds both.
-  const child = actorOver(workspace.db, parent);
-  admitSubordinateTask(new EventLog(makeSqlExec(workspace.db), child), {
-    fromWorkspace: child.workspaceId, kind: 'task', body: 'First queued.', mode: 'build', now: Date.now(),
-  });
+  // Both delivered: the first runs, and the second waits in the agent's own queue behind it.
+  await wakeForDelegatedTask(workspace, parent, 'First queued.');
   await wakeForDelegatedTask(workspace, parent, 'Second queued.');
   await driveUntil(workspace, 'the first turn never started', () => firstHeld);
 

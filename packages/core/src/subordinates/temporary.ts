@@ -38,6 +38,8 @@ export function taskAnswerIsLater(input: {
 }): boolean {
   return input.roster.list().some((hire) => hire.status === 'working' && hire.origin !== 'evolution')
     || input.log.pending({ variant: 'subordinate_task' }).some((row) => row.id !== input.turnTaskId)
+    // Delivered to it and not yet answered by a turn of its own: its answer is that turn's.
+    || input.log.openAssignments().some((id) => id !== input.turnTaskId)
     || input.log.pending({ variant: 'subordinate_report' }).length > 0;
 }
 

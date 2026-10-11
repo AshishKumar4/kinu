@@ -61,9 +61,9 @@ export class OrchestratorAgent extends Product {
     await this.terminal.idle();
   }
 
-  /** Hired agents with a delegated turn runner: one ends only after its turn's release has run. */
+  /** Hired agents still working, as the Agents panel reads them: one rests only after its turn's release has run. */
   async delegatedRunners(): Promise<number> {
-    return this.delegatedTurns.actorRunners.size;
+    return (await this.listWorkspaceAgents()).filter((agent) => agent.key !== 'main' && agent.activity === 'working').length;
   }
 
   /** Registers and acquires `count` heads, then releases each: what a swarm's settled nodes leave behind. */

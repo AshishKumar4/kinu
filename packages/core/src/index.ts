@@ -554,8 +554,6 @@ export { SubordinateInheritedContextSchema, type SubordinateInheritedContext } f
 
 export { subordinateForkContext, subordinateTurnContext } from './subordinates/support';
 
-export { drainAssignments, type AdmittedAssignment, type DrainAssignmentsOptions } from './subordinates/assignments';
-
 export { inheritedAsModelMessage } from './heads/head-inference';
 
 export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendants, isSubordinateOrigin, whenActorTakesInput, type ActorOrigin, type ActorProfile, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor } from './identity/workspace-actors';
@@ -656,7 +654,6 @@ export {
   type TemporaryRunRequest,
 } from './subordinates/temporary';
 
-export { DelegatedTurnRunners, type DelegatedTurnRunnerDeps } from './subordinates/delegated-turns';
 
 // The depth cap is derived per child, never stated by one.
 export {
@@ -1794,7 +1791,7 @@ export { ModelCatalogSession, resolveEffectiveModelSpec, type ModelCatalogRead }
 export { stampAuthorship, turnAuthorship, type TurnAuthorship } from './orchestrator/turn-authorship';
 
 export {
-  AgentDeliveries, DeliveryInbox, DeliverySchema, wordsRefusal, initAgentDeliveriesTable, pendingEventsDelivery, type Delivery, type DeliveryAnswer, type DeliveryInput,
+  AgentDeliveries, DeliveryInbox, DeliverySchema, wordsRefusal, initAgentDeliveriesTable, pendingEventsDelivery, assignmentDelivery, InProcessDeliveries, type DeliveredAssignment, type DeliveryPort, type OwedAdmission, type Delivery, type DeliveryAnswer, type DeliveryInput,
 } from './subordinates/deliveries';
 
 export {

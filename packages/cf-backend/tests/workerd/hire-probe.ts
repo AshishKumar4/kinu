@@ -275,7 +275,6 @@ export class HireOrchestrator extends ProductionOrchestrator {
 
   async settled(): Promise<void> {
     await this.agentTurns.idle();
-    await this.delegatedTurns.idle();
 
     for (const actor of this.actorDirectoryStore().list()) {
       if (actor.parentActorId !== null && hostedActorPlacement(actor).homeName !== null) await (await this.agentCalls(actor.actorId)).idle();

@@ -34,7 +34,7 @@ describe('TurnFences', () => {
     fences().open(actor, { turnId: 't1', runId: 'r1', seq: 3 });
     expect(fences().open(actor, { turnId: 't1', runId: 'r1', seq: 3 })).toBe(false);
     expect(fences().open(actor, { turnId: 't0', runId: 'r0', seq: 2 })).toBe(false);
-    expect(fences().ended(actor, { runId: 'r1' })).toEqual({ seq: 3 });
+    expect(fences().ended(actor, { runId: 'r1' })).toEqual({ seq: 3, turnId: 't1' });
   });
 
   test("a run's recovery keeps the facts first offered it, across a reset; its Retry, a new run, is offered afresh", () => {
@@ -45,7 +45,7 @@ describe('TurnFences', () => {
     fences().open(actor, { turnId: 't1', runId: 'r1', seq: 2 });
     expect(fences().offer(actor, { seq: 2 }, NOT_LEARNING)).toEqual(LEARNING);
 
-    expect(fences().ended(actor, { runId: 'r1' })).toEqual({ seq: 2 });
+    expect(fences().ended(actor, { runId: 'r1' })).toEqual({ seq: 2, turnId: 't1' });
     fences().open(actor, { turnId: 't1', runId: 'r1-retry', seq: 3 });
     expect(fences().offer(actor, { seq: 3 }, NOT_LEARNING)).toEqual(NOT_LEARNING);
   });
@@ -81,7 +81,7 @@ describe('TurnFences', () => {
     expect(fences().ended(actor, { runId: 'r1-retry' })).toBeNull();
 
     expect(fences().offer(actor, { seq: 3 }, NOT_LEARNING)).toEqual(NOT_LEARNING);
-    expect(fences().ended(actor, { runId: 'r2' })).toEqual({ seq: 3 });
+    expect(fences().ended(actor, { runId: 'r2' })).toEqual({ seq: 3, turnId: 't2' });
     expect(fences().ended(actor, { runId: 'r2' })).toBeNull();
   });
 

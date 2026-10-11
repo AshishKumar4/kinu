@@ -15,9 +15,10 @@ import {
   ROSTER_READS,
   SubordinateRosterStore,
   admitSubordinateTask,
-  dismissOrphanedAssignments,
-  drainAssignments,
-  delegatedTaskMetadata,
+  AgentDeliveries,
+  announcementOf,
+  assignmentDelivery,
+  type InProcessDeliveries,
   MAIN_AGENT,
   type SubordinateInheritedContext,
   actorReferenceOf,
@@ -107,17 +108,6 @@ import type { LocalModelResolver } from '../model-resolver';
 import type { ProfileEnvelopeSource } from '../profile-authority';
 import type { McpServerConfig } from '../mcp';
 
-/**
- * Budget bounds one pass (a full pass re-wakes, so the lease can change hands); independent of the
- * cloud drain's one turn per pass. Grace is zero for the reason core's `NO_STRANDED_DELIVERY_GRACE`
- * is: every conversion runs under the cross-process driver lease; cloud's `STALE_EVENT_DELIVERY_MS`
- * is ten minutes because a Durable Object activation may race its own predecessor, which this lease
- * rules out.
- */
-const LOCAL_ASSIGNMENT_BUDGET = 8;
-
-const LOCAL_ASSIGNMENT_LEASE_GRACE_MS = 0;
-
 /** Runtime inputs fixed for one bound agent while this host process is alive. */
 export interface LocalHostedAgent {
   rt: CLIRuntime;
@@ -192,6 +182,8 @@ interface HostEntry {
   session: LocalAgentSession;
   config: AgentConfigStore;
   eventLog: EventLog;
+  /** What the agent is owed: its assignments, signals and drains, each committed, then handed to its chat. */
+  deliveries: InProcessDeliveries;
   roster: SubordinateRosterStore;
   /** Built once with the entry: it holds the live waiters `shell` parks on. */
   temporary: TemporaryAgentPort;
@@ -636,6 +628,7 @@ export class LocalAgentHost {
       session,
       config,
       eventLog: orchestration.eventLog,
+      deliveries: orchestration.deliveries,
       roster,
       temporary: createTemporaryAgentPort({
         roster,
@@ -981,7 +974,7 @@ export class LocalAgentHost {
         // A task child always reports its ending, and any child its failure.
         const terminal = await terminalTaskReport({
           lifetime: child.actor.record.lifetime, ending, assistantText, narration,
-          delegating: taskAnswerIsLater({ roster: child.roster, log: child.eventLog }),
+          delegating: taskAnswerIsLater({ roster: child.roster, log: child.eventLog, ...(state.turnId !== null && { turnTaskId: announcementOf(state.turnId) }) }),
         });
 
         if (terminal) return terminal;
@@ -1197,7 +1190,7 @@ export class LocalAgentHost {
   sayToHirer(child: ActorReference, signal: AgentSignal): Promise<SendOutcome> {
     return settle(child.parentActorId === null
       ? Effect.fail(new KinuError('missing', 'A root actor has no hirer to tell.'))
-      : Effect.promise(() => this.requireActorEntry(child.parentActorId ?? '').actor.session.orchestrator.inbox.send(signal)));
+      : Effect.promise(() => this.requireActorEntry(child.parentActorId ?? '').actor.session.orchestrator.signals.send(signal)));
   }
 
   private requireActorEntry(actorId: string): HostEntry {
@@ -1344,15 +1337,26 @@ export class LocalAgentHost {
   ): SubordinateHandoff {
     if (this.closed) throw new Error('LocalAgentHost is closed.');
 
-    const admission = admitSubordinateTask(child.eventLog, {
-      fromWorkspace: parent.name,
-      kind: input.kind,
-      body: input.body,
-      deliverable: input.deliverable,
-      inheritedContext: input.inheritedContext,
-      creationId: input.creationId,
-      mode: input.mode,
-      now: Date.now(),
+    const hirer = parent.parentKey === null ? MAIN_AGENT : parent.name;
+
+    // Admitted and owed to the child as one: the row is the record, the delivery what opens its turn. Its next pass,
+    // under the driver lease, hands it over.
+    const admission = child.deliveries.record(() => {
+      const admitted = admitSubordinateTask(child.eventLog, {
+        fromWorkspace: parent.name,
+        kind: input.kind,
+        body: input.body,
+        deliverable: input.deliverable,
+        inheritedContext: input.inheritedContext,
+        creationId: input.creationId,
+        mode: input.mode,
+        now: Date.now(),
+      });
+
+      return {
+        value: admitted,
+        delivery: admitted.admitted ? assignmentDelivery(child.eventLog, { id: admitted.id, body: input.body.trim(), mode: input.mode, from: hirer }) : null,
+      };
     });
 
     const handoff = describeSubordinateHandoff({
@@ -1534,63 +1538,24 @@ export class LocalAgentHost {
     await parent.tree.host.retire(parent.actor.reference, retirement);
   }
 
-  /**
-   * Run parent-admitted assignments through the child's own turn admission, verbatim, not as a
-   * reactor digest. `drainTurnId` splices the birth context. Roots have no assignments.
-   */
+  /** What the agent is owed and has not taken, handed to its chat and run under the driver lease. The root's pass cancels
+   *  what agents that are gone were owed: no pass of theirs will take it. */
   private async drainAssignedWork(entry: HostEntry): Promise<void> {
-    const { parentKey } = entry;
+    if (entry.parentKey === null) {
+      const live = new Set(entry.tree.directory.list().map((record) => record.actorId));
+      const owed = new AgentDeliveries(entry.ws.rt.storage.sql);
 
-    if (parentKey === null) {
-      const live = entry.tree.directory.list();
-
-      // Any hosted actor can be handed a task; the drain runs hires only.
-      const orphans = dismissOrphanedAssignments(makeSqlExec(entry.tree.db), {
-        live: new Set(live.map((record) => record.actorId)),
-        drained: new Set(live.filter((record) => isSubordinateOrigin(record.origin)).map((record) => record.actorId)),
-      });
-
-      for (const orphan of orphans) {
-        diagnostics.event('subordinate.assignment_orphaned', { agent: entry.key, actor: orphan.actorId, assignment: orphan.id, reason: orphan.reason });
+      for (const actorId of owed.actors()) {
+        if (!live.has(actorId)) diagnostics.event('host.deliveries_cancelled', { agent: entry.key, actor: actorId, count: owed.cancel(actorId).length });
       }
-
-      return;
     }
 
-    const swept = await drainAssignments(entry.eventLog, {
-      now: Date.now(),
-      budget: LOCAL_ASSIGNMENT_BUDGET,
-      staleMs: LOCAL_ASSIGNMENT_LEASE_GRACE_MS,
-      run: async (task) => {
-        const parent = this.entries.get(parentKey);
-        const hirer = parent === undefined || parent.parentKey === null ? MAIN_AGENT : parent.name;
-
-        const admitted = await entry.session.enqueueTurn({
-          text: task.body,
-          metadata: { ...delegatedTaskMetadata(hirer, task.mode), drainTurnId: task.turnId },
-          // The row's id, so a re-delivery lands on the same durable message.
-          idempotencyKey: task.sequenceId,
-        });
-
-        // The turn did not happen; throw so the row's lease stays open and the next pass re-pends it. A turn that opened
-        // and failed did happen: its ending is answered as an errored turn's is.
-        if (admitted.status !== 'queued' && admitted.status !== 'failed') {
-          throw new KinuError('unavailable', `the local turn queue answered "${admitted.status}"`);
-        }
-
-        // The queue owns the turn now; the row is answered by its admission.
-        entry.eventLog.markTurnCompleted(task.turnId);
-      },
-      onFailure: ({ cause }) => {
-        diagnostics.failure(
-          'host.assignment_turn_failed',
-          toKinuError({ doing: 'running an assignment this agent\'s parent admitted', cause, otherwise: 'io' }),
-          { agent: entry.key },
-        );
-      },
-    });
-
-    if (swept.truncated) this.wake(entry, 'assignment backlog');
+    // Each handed over is run in this pass, as its chat takes it, before the pass lets the actor go; its turn's end, however
+    // it ended, closes what it answered.
+    for (const taken of await entry.deliveries.crossOwed()) {
+      await entry.session.deliveredTurnSettled(taken.id);
+      entry.eventLog.markTurnCompleted(taken.id);
+    }
   }
 
   /** Drain after an inbox wake, bracketed like every converting operation. */
