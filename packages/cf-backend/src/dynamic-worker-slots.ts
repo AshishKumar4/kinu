@@ -81,7 +81,6 @@ export class AgentIsolateSlots {
 
 export function agentCallsThrough(through: <A>(call: (isolate: AgentFacetCalls) => Promise<A>) => Effect.Effect<A, KinuError>): AgentFacetCalls {
   return {
-    run: (...args) => settle(through((isolate) => isolate.run(...args))),
     submitPlan: (...args) => settle(through((isolate) => isolate.submitPlan(...args))),
     replyPlanComment: (...args) => settle(through((isolate) => isolate.replyPlanComment(...args))),
     activePlanReview: (...args) => settle(through((isolate) => isolate.activePlanReview(...args))),

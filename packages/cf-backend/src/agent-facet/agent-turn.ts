@@ -8,7 +8,7 @@ import {
   type SubordinateReportLedger, type SubordinateReportStatus, type TaskTurnEnding, type WorkMode, type ResolvedTurnProfile, type DynamicContext,
 } from '@kinu.run/core';
 
-import { attempt, diagnostics, hold, logged, settle } from '@kinu.run/core/obs';
+import { attempt, diagnostics, hold, logged, settle, type ErrorCode } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import type { NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
 import { routedModelReads, type AgentProviderDeps, type AgentProviderRegistry, type UserCredentialClient } from '../providers/agent-registry';
@@ -33,6 +33,9 @@ export async function answerMetadataOf(
 
   return first.owesNarration ? (await workspace.answerMetadata(turnId, await narration())).metadata : first.metadata;
 }
+
+/** How a delivered run ended: its end, or the refusal that kept it from running. */
+export type AgentRunOutcome = { readonly ended: AgentTurnEnd } | { readonly refused: { readonly code: ErrorCode; readonly message: string } };
 
 export interface AgentWorkspace {
   session(): NimbusSessionSurface;
@@ -80,6 +83,8 @@ export interface AgentWorkspace {
   noteModelRequest(): Promise<void>;
   armCacheWarm(input: CacheWarmArm): Promise<number | null>;
   advise(review: AgentReview): Promise<void>;
+  /** A delivered run's end, or why it could not run: its workspace's caller awaits it (design v2 §1). */
+  runEnded(id: string, outcome: AgentRunOutcome): Promise<void>;
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult>;
   executeTool(call: AgentToolCall): Promise<AgentToolAnswer>;
   observe(lines: ReadableStream<Uint8Array>): Promise<void>;

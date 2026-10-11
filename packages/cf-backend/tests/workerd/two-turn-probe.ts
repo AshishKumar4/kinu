@@ -138,10 +138,11 @@ async function awaitSettled(target: { settleState(): Promise<SettleState> }): Pr
 /** The production orchestrator plus fixture reads; adds no production method or state,
  *  only retains DurableObjectState to observe the durable send ledger. */
 /**
- * Calls into this worker while the meter runs: the relay main's isolate calls, the workspace host each relay call opens
- * and calls, and the account. Counted once per worker, for the one workspace a meter runs over.
+ * Calls into this worker while the meter runs: the relay main's isolate opens its port through (and calls that own live
+ * capabilities through), the workspace host that is its port, and the account. Counted once per worker, for the one
+ * workspace a meter runs over; a phase after the first starts with a step's pace, which crosses through the port.
  */
-const crossings = new Crossings('relay.paceStep');
+const crossings = new Crossings('host.paceStep');
 
 /** The facet's calls as the workspace makes them. */
 const FACET_CALLS = Object.keys(agentCallsThrough(() => Effect.die('names only')));

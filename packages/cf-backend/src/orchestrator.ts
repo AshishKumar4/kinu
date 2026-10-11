@@ -1,5 +1,5 @@
 import { exists as nimbusExists, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
-import { PLATFORM_CATALOG, GitHubFactSchema, actorPolicy, AgentDeliveries, DeliveryInbox, pendingEventsDelivery, wordsRefusal, type Delivery, type DeliveryAnswer, type OwedAdmission, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, codemodeSurface, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type ToolSurfaceNarrowing, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs } from '@kinu.run/core';
+import { PLATFORM_CATALOG, GitHubFactSchema, actorPolicy, AgentDeliveries, DeliveryInbox, pendingEventsDelivery, wordsRefusal, deliveryMetadata, type Delivery, type DeliveryAnswer, type OwedAdmission, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, codemodeSurface, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type ToolSurfaceNarrowing, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs } from '@kinu.run/core';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
@@ -185,7 +185,7 @@ import {
   CHANGES_MOVED_EVENT, ChangeSetCache, getWorkspaceDiff, getExecutorDiff, resetWorkspaceBaseline, restoreWorkspaceBaseline,
   type ExecutorDiffResult, type WorkspaceBaselines, type WorkspaceDiffResult, type WorkspaceReviewResult,
   initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes, deliverOwedChangeNotes, owesChangeNotes, type ChangeNotesChat,
-  initTurnBranchesTable, TurnBranchesStore, branchHeadId, TurnSurface, inTurnSurface, turnAuthor, authoredTurnMetadata, workModeForTurnMetadata, type ActorReach, type ChatTurnInput,
+  initTurnBranchesTable, TurnBranchesStore, branchHeadId, type AgentTurnEnd, TurnSurface, inTurnSurface, turnAuthor, authoredTurnMetadata, workModeForTurnMetadata, type ActorReach, type ChatTurnInput,
   type ChangeNotesResult, type NotedChanges, type ReviewAnnotation,
   diffLines, type DiffLine,
   getExecutorFiles, readExecutorFile, listEnvironments,
@@ -779,11 +779,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       sql: this.boundSql,
       seams: () => this.hostedSeams(),
       reference: (actorId) => actorReferenceOf(this.liveAgentOf(actorId)),
+      // A run as its delivery (design v2 §1): committed with the agent's wake, crossed, run in its isolate beside its
+      // chat, and its end reported back; a crossing that does not reach it leaves it owed to that wake.
       run: async (reference, task) => {
-        const end = await (await this.agentCalls(reference.actorId)).run(this.agentSnapshot(reference.actorId), task);
+        const { actorId } = reference;
+        const ended = this.deliveredRuns.expect(task.sequenceId);
+        const crossed = await this.deliver(actorId, { id: task.sequenceId, input: { kind: 'run', task }, authorship: 'hirer' });
 
-        this.agentActivity(reference.actorId, end.activity);
-        recordAgentFigures(this.boundSql, reference.actorId, end.figures);
+        if ('failure' in crossed && !this.deliveries.unpaid(actorId).some((owed) => owed.id === task.sequenceId)) this.deliveredRuns.refused(task.sequenceId, crossed.failure);
+        const end = await ended;
+
+        this.agentActivity(actorId, end.activity);
+        recordAgentFigures(this.boundSql, actorId, end.figures);
 
         return end;
       },
@@ -919,6 +926,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         return { tasks: stores.taskList.listOpen(), asyncWakePending: stores.jobs.listRunning(1).total > 0 };
       },
       advise: (review) => this.agentTurns.advise(actorId, review),
+      runEnded: async (id, outcome) => {
+        if ('ended' in outcome) this.deliveredRuns.ended(id, outcome.ended);
+        else this.deliveredRuns.refused(id, new KinuError(outcome.refused.code, outcome.refused.message));
+      },
       enqueueTurn: (input) => this.enqueueHostedTurn(this.actorHost().bindStores(actorReferenceOf(this.liveAgentOf(actorId))), input),
       executeTool: (call) => {
         this.admitWork();
@@ -1788,6 +1799,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
+  /** Each delivered run's caller, awaiting the end its agent reports; one this activation never delivered is no one's. */
+  private readonly deliveredRuns = new RunEnds();
+
   /** One agent's due reactions; failure rejects with a classified error. */
   drainAgent(reference: ActorReference): Promise<void> {
     return settle(attempt({ doing: 'draining an agent\'s reactions this wake was armed for', otherwise: 'io' }, async () => {
@@ -2465,7 +2479,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private async refusedDelivery(actorId: string, delivery: Delivery, failure: KinuError): Promise<CrossedDelivery> {
     this.deliveries.paid(actorId, delivery.id);
     diagnostics.failure('agent.delivery_refused', failure, { actorId, deliveryId: delivery.id });
-    const assigned = v.safeParse(AssignmentMetadataSchema, delivery.input.metadata);
+    const assigned = v.safeParse(AssignmentMetadataSchema, deliveryMetadata(delivery));
 
     if (assigned.success) {
       await this.hireCouldNotRun(actorId, { sequenceId: delivery.id, mode: assigned.output.kinuMode }, renderThrownChain({ cause: failure }));
@@ -2480,7 +2494,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** The events a delivery carries, bound to it in the agent's log; null for one that carries none. */
   private carried(actorId: string, delivery: Delivery): { readonly events: readonly { readonly id: string; readonly log: EventLog }[] } | null {
-    const drained = v.safeParse(v.string(), delivery.input.metadata?.drainTurnId);
+    const drained = v.safeParse(v.string(), deliveryMetadata(delivery)?.drainTurnId);
 
     if (!drained.success) return null;
     const log = new EventLog(this.watchedExec, this.agentBound(actorId).handle);
@@ -6774,4 +6788,27 @@ function parseArchiveCursor(value: ArchiveCursor | undefined): ArchiveCursor | n
   const parsed = v.safeParse(ArchiveCursorSchema, value);
 
   return parsed.success ? parsed.output : null;
+}
+
+/** The runs this activation delivered and awaits the ends of, by id. */
+class RunEnds {
+  readonly #waiting = new Map<string, ReturnType<typeof Promise.withResolvers<AgentTurnEnd>>>();
+
+  expect(id: string): Promise<AgentTurnEnd> {
+    const waiting = this.#waiting.get(id) ?? Promise.withResolvers<AgentTurnEnd>();
+
+    this.#waiting.set(id, waiting);
+
+    return waiting.promise;
+  }
+
+  ended(id: string, end: AgentTurnEnd): void {
+    this.#waiting.get(id)?.resolve(end);
+    this.#waiting.delete(id);
+  }
+
+  refused(id: string, failure: KinuError): void {
+    this.#waiting.get(id)?.reject(failure);
+    this.#waiting.delete(id);
+  }
 }

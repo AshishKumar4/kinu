@@ -6,7 +6,7 @@ import { decodeModelMessageValues, forkConversationRowSchema, relayedAnswer, rem
 import type { ForkConversationPlan, ForkConversationSection, ForkConversationSource, ForkConversationTarget, ForkRows } from '@kinu.run/core';
 import type { AgentOwnInspection, ArchiveSqlCursor, CacheWarmArm, ContextEditor, ContextTree, StepSpendSource, ConversationRecall, PositionPageRequest, AgentSignal, AuthRequest, RelayedProvider, ProgrammaticTurn, ProviderEnv, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
-import type { AgentWorkspace } from './agent-facet/agent-turn';
+import type { AgentRunOutcome, AgentWorkspace } from './agent-facet/agent-turn';
 import type { AdvisorRecoverySnapshot, AgentFigures, AgentTurnActivity, HandedOffTurn, ResolvedTurnProfile, AgentHeadDelta, AgentReview, AgentSnapshot, AgentToolCall, AgentTrace, SessionEvent, TurnRequestAt, ModelCallReport, ModelOperationEvent } from '@kinu.run/core';
 import type { ChatTurnRequest } from './agent-turns';
 import { attempt, KinuError, settle } from '@kinu.run/core/obs';
@@ -77,6 +77,7 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   debit(turnId: string, ...args: Parameters<MissionBudgetPort['debit']>) { return this.open(() => this.answers.debit(turnId, ...args), turnId); }
   prepareTurn(turnId: string) { return this.open(() => this.answers.prepareTurn(turnId), turnId); }
   advise(review: AgentReview) { return this.open(() => this.answers.advise(review)); }
+  runEnded(id: string, outcome: AgentRunOutcome) { return this.open(() => this.answers.runEnded(id, outcome)); }
   enqueueTurn(input: ProgrammaticTurn) { return this.open(() => this.answers.enqueueTurn(input)); }
   executeTool(call: AgentToolCall) { return this.open(() => this.answers.executeTool(call), call.turnId); }
   observe(lines: ReadableStream<Uint8Array>) { return this.open(() => this.answers.observe(lines)); }
@@ -198,6 +199,7 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
   debit(turnId: string, ...args: Parameters<MissionBudgetPort['debit']>) { return this.owned((host) => host.debit(turnId, ...args)); }
   prepareTurn(turnId: string) { return this.owned((host) => host.prepareTurn(turnId)); }
   advise(review: AgentReview) { return this.owned((host) => host.advise(review)); }
+  runEnded(id: string, outcome: AgentRunOutcome) { return this.owned((host) => host.runEnded(id, outcome)); }
   enqueueTurn(input: ProgrammaticTurn) { return this.owned((host) => host.enqueueTurn(input)); }
   executeTool(call: AgentToolCall) { return this.owned((host) => host.executeTool(call)); }
   observe(lines: ReadableStream<Uint8Array>) { return this.owned((host) => host.observe(lines)); }

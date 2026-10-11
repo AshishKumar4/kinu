@@ -35,7 +35,7 @@ describe('AgentDeliveries', () => {
     expect(deliveries.add(main, turn('d-2', 'second'))).toBe(true);
     expect(deliveries.add(main, turn('d-1', 'first, again'))).toBe(false);
 
-    expect(deliveries.unpaid(main).map((owed) => owed.input.text)).toEqual(['first', 'second']);
+    expect(deliveries.unpaid(main).map((owed) => (owed.input.kind === 'run' ? owed.input.task.body : owed.input.text))).toEqual(['first', 'second']);
     expect(deliveries.owes(main)).toBe(true);
 
     deliveries.paid(main, 'd-1');

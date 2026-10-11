@@ -148,6 +148,7 @@ export function workspaceClient(workspace: AgentWorkspaceCalls): AgentWorkspace 
     noteModelRequest: () => viaPort((port) => port.noteModelRequest()),
     armCacheWarm: (...args) => viaPort((port) => port.armCacheWarm(...args)),
     advise: (...args) => viaPort((port) => port.advise(...args)),
+    runEnded: (...args) => viaPort((port) => port.runEnded(...args)),
     enqueueTurn: (...args) => viaPort((port) => port.enqueueTurn(...args)),
     executeTool: (...args) => viaPort((port) => port.executeTool(...args)),
     observe: (...args) => viaPort((port) => port.observe(...args)),

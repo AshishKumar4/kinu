@@ -672,6 +672,9 @@ export class ChatSession {
       return 'taken';
     }
 
+    // A run is its host's to run beside the chat, never a turn of it.
+    if (input.kind === 'run') return settleSync(Effect.fail(new KinuError('unsupported', 'A run is not a turn of the chat; its host runs it.')));
+
     if (this.pendingSends.hasTurn(id) || this.announcementInFlight(id) || this.announcementOnDisk(id)) return 'duplicate';
 
     const queued = await this.queueTurn({

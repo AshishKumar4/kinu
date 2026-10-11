@@ -33,6 +33,10 @@ const DeliveryInputSchema = v.variant('kind', [
   v.object({
     kind: v.literal('turn'), text: v.string(), metadata: v.optional(JsonObjectSchema), yieldsToUserMessage: v.optional(v.boolean()),
   }),
+  /** A run its workspace asks of it whole (a head's, a swarm node's): its own task, run to its end and reported. */
+  v.object({
+    kind: v.literal('run'), task: v.object({ sequenceId: v.string(), body: v.string(), mode: WorkModeSchema }),
+  }),
 ]);
 
 export type DeliveryInput = v.InferOutput<typeof DeliveryInputSchema>;
@@ -47,6 +51,11 @@ export interface Delivery {
   readonly id: string;
   readonly input: DeliveryInput;
   readonly authorship: TurnAuthorship;
+}
+
+/** What a delivery's turn was admitted under: none for a run, which opens no turn of the chat. */
+export function deliveryMetadata(delivery: Delivery): JsonObject | undefined {
+  return delivery.input.kind === 'run' ? undefined : delivery.input.metadata;
 }
 
 /** A person's message id, as every chat holds them. */
@@ -221,7 +230,7 @@ export interface DeliveryPort {
  * again; refused, they wait for the drain something else starts. Taken, they are its turn's, and close with it.
  */
 function handBackCarried(eventLog: EventLog, delivery: Delivery, answer: Exclude<DeliveryAnswer, 'taken' | 'duplicate'>): void {
-  const drained = v.safeParse(v.string(), delivery.input.metadata?.drainTurnId);
+  const drained = v.safeParse(v.string(), deliveryMetadata(delivery)?.drainTurnId);
 
   if (!drained.success) return;
 

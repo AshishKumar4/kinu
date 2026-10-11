@@ -383,6 +383,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           noteModelRequest: () => host.noteModelRequest(),
           armCacheWarm: (input) => host.armCacheWarm(input),
           advise: (review) => host.advise(review),
+          runEnded: (id, outcome) => host.runEnded(id, outcome),
           enqueueTurn: (input) => host.enqueueTurn(input),
           executeTool: (call) => host.executeTool(call),
           observe: (lines) => host.observe(lines),
