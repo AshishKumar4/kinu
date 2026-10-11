@@ -142,7 +142,6 @@ This derives from `Env` in `packages/cf-backend/env.d.ts` and from `SUPPLY` in `
 | `DEV_IDENTITY_SECRET` | **prompt**: minted there, 32 random bytes shown once; a pasted value is refused, so no two deployments share one | beside `DEV_USER_EMAIL` | No synthetic identity. The first-run tier and every eval fail to authenticate as `eval-service`. |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | **prompt** | where `GOOGLE_OAUTH_CLIENT_ID` is a var | Google is not on `/login`. Unset on kinu.run. |
 | `GITHUB_OAUTH_CLIENT_SECRET` | **prompt** | where `GITHUB_OAUTH_CLIENT_ID` is a var | GitHub is not on `/login`. Unset on kinu.run. |
-| `CREDENTIAL_ENCRYPTION_KEY_PREVIOUS` | **out of band**: the outgoing key, during a rotation | no | Nothing. It is the read-only half of a rotation. |
 | `GOOGLE_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_ID` | **config var**, beside their secrets | no | That provider is not on `/login`. |
 | `GOOGLE_OAUTH_SCOPES`, `GITHUB_OAUTH_SCOPES`, `CLOUDFLARE_OAUTH_SCOPES` | **config var**: overrides only | no | The provider default applies (`CLOUDFLARE_WORKERS_AI_SCOPES` in `core/src/providers/cloudflare-oauth.ts`). |
 | `MCP_GITHUB_CLIENT_ID`, `MCP_GITHUB_CLIENT_SECRET` | **out of band**: a GitHub OAuth app the owner registers, whose authorization callback URL is `https://<deployment-origin>/api/user/mcp/callback` ([register](https://github.com/settings/applications/new), [remote-server docs](https://github.com/github/github-mcp-server/blob/main/docs/remote-server.md)); the preset asks `repo read:user` | no | The GitHub preset card falls back to a personal-access-token field. |
@@ -173,7 +172,7 @@ These dependencies have no field in `wrangler.jsonc`. I verified them against th
 - Browser errors reach structured diagnostics. `ErrorBoundary` sends a bounded report to `POST /api/client-errors`. The route requires the session and CSRF checks. It validates the route, error class, and stack-frame grammar. It labels the browser release as `match`, `stale`, `unreported`, or `undeployed`. It emits `client.render_failed` through `diagnostics` to Workers Logs and Analytics Engine. It returns `202`. It creates no application row. The route keeps the report separate from storage failures such as `storage_unavailable` and `row_write_failed`.
 - `backups/` reclamation, which must not be a lifecycle rule. Each workspace stores an immutable base layer written once plus a cumulative delta (`backups/<uuid>/data.sqsh`, `.../delta.sqsh`). An age rule bricks every workspace older than itself, so I do not set one. The delta replaces in place, so growth is base plus changed set. Deleting a workspace discards both objects before DO death. That discard is the reclamation path. A DO dying first strands both objects, and nothing collects them today. Restore-time TTL covers the extraction path only (local dev).
 - Native Devbox has no Sandbox or Containers patch. It owns `ctx.container` and uses first-party Files and S3Mount. The mount's S3 requests are answered by `DevboxStoreGateway` from the `BACKUP_BUCKET` binding, so no S3 key pair exists for it (D41). D38-D41 record the measurements and remaining deployed checks.
-- No Nimbus package is patched (core 0.16.0, worker 0.14.0, 2026-10-10); the patches 0.15 needed are upstream (docs/NIMBUS-INTEGRATION.md). The hosting Worker carries Nimbus's facet maxima, `limits.cpu_ms` 300000 and `limits.subrequests` 10000000, which a named environment inherits.
+- Nimbus core 0.17.0 and worker 0.15.0 carry declared patches (NIMBUS-ASKS #42, #43, #44), each named with its removal condition in package.json `//patchedDependencies:*` and docs/NIMBUS-INTEGRATION.md. The pinned runtime catalog (`NIMBUS_RUNTIME_CATALOG_SHA256`) is put at `catalog/sha256/<pin>.json` in `nimbus-runtime-cache` by the deploy itself (`scripts/runtime-catalog.ts ensure`), from `catalog/v1.json` when that is the pinned catalog. The hosting Worker carries Nimbus's facet maxima, `limits.cpu_ms` 300000 and `limits.subrequests` 10000000, which a named environment inherits.
 - Workspace storage mode: with `BACKUP_BUCKET`, `/workspace` restores lazy layers at fixed cost regardless of size. Without container outbound interception (local docker), empty workspaces record extraction mode. Workspaces holding chain layers refuse to start rather than degrade silently.
 - The Workers Paid plan, and the account.
 - Feedback lifecycle rule: `kinu-feedback` expires `feedback/` after 90 days, set and read back 2026-08-24. The DO keeps pointer and metadata only.
@@ -233,15 +232,11 @@ printf '<workers-observability-read-token>' | bunx wrangler secret put KINU_OBS_
 
 #### Rotating CREDENTIAL_ENCRYPTION_KEY
 
-Credentials name the key that sealed them. Rotation is a two-key window with no downtime:
+There is one key and no rotation window. A new key starts from reset stores: every credential, MCP header and egress secret sealed under the old one stops opening (each names the key that sealed it), built-in passwords and the labels it signs stop verifying, and every provider is reconnected. I rotate only with a reset.
 
 ```bash
-# 1. keep the outgoing key readable, 2. install the new one
-printf '<outgoing-key>' | bunx wrangler secret put CREDENTIAL_ENCRYPTION_KEY_PREVIOUS
 openssl rand -base64 32 | bunx wrangler secret put CREDENTIAL_ENCRYPTION_KEY
 ```
-
-Each UserDO re-seals on next credential access (`packages/core/src/credentials/envelope.ts`). I delete `PREVIOUS` once every account has been active or after a sweep. It takes comma-separated lists, so an interrupted rotation resumes rather than unwinds. Losing a key with rows still sealed is unrecoverable by design; I reconnect those providers.
 
 #### Rotating WEBHOOK_ROUTE_SECRET
 
@@ -267,7 +262,7 @@ Then open `https://<your-host>/login`, type the token into the "Setup token" fie
 
 After that, people join only through invite links the owner makes in Settings → Account → Invite people. Each link names one email address, works once, and expires after 7 days. Keep the token: it is the owner's recovery. With an owner, "Set up or recover the owner" on `/login` takes the token and resets the owner's sign-in (new password or passkey, every owner session ended), throttled like sign-up. Without the token set, `/login` offers sign-in only.
 
-Built-in accounts have their own ids, unrelated to any OAuth login of the same address: configuring OAuth later makes OAuth sign-in a separate account, and built-in sessions stop working once any provider is declared. Passwords are PBKDF2-SHA256 at 100,000 iterations (the most Cloudflare's runtime runs), salted per account and peppered with a key derived from `CREDENTIAL_ENCRYPTION_KEY`. During a key rotation a password still verifies against `CREDENTIAL_ENCRYPTION_KEY_PREVIOUS` and is re-hashed under the new key at that sign-in. For a forgotten password, a lost passkey, or an account that did not sign in during a rotation, the owner makes a reset link in Settings → Account → Accounts: it works once, within 7 days, for that account's address, replaces its password and passkeys with the one set through it, and signs the account out everywhere. Passkeys need a domain: browsers refuse them on an IP address.
+Built-in accounts have their own ids, unrelated to any OAuth login of the same address: configuring OAuth later makes OAuth sign-in a separate account, and built-in sessions stop working once any provider is declared. Passwords are PBKDF2-SHA256 at 100,000 iterations (the most Cloudflare's runtime runs), salted per account and peppered with a key derived from `CREDENTIAL_ENCRYPTION_KEY`. A new key invalidates every password, since the pepper changes with it. For a forgotten password, a lost passkey, or a password a new key invalidated, the owner makes a reset link in Settings → Account → Accounts: it works once, within 7 days, for that account's address, replaces its password and passkeys with the one set through it, and signs the account out everywhere. Passkeys need a domain: browsers refuse them on an IP address.
 
 ### 3. Build and deploy
 
@@ -406,7 +401,6 @@ Requests follow the preview limits (developers.openai.com/siwc/token-sharing-ope
 | Variable | Where | Description |
 |----------|-------|-------------|
 | `CREDENTIAL_ENCRYPTION_KEY` | Wrangler secret | **Required.** Root secret for the user plane: encrypts `user_credentials` at rest and derives the owner capability. Without it no signed-in surface works. |
-| `CREDENTIAL_ENCRYPTION_KEY_PREVIOUS` | Wrangler secret | Retired encryption keys (comma-separated), read-only, for a rotation window |
 | `WEBHOOK_ROUTE_SECRET` | Wrangler secret | **Required for webhook ingress.** Signs the route capability every public delivery URL carries (`events/webhook-route.ts`). Without it, webhook creation answers 503 and delivery answers 404. Rotating it revokes every issued URL. |
 | `AI_GATEWAY_URL` | wrangler.jsonc `vars` | Platform AI Gateway endpoint, in the Worker's own account. Names the gateway, upstream provider and endpoint prefix the `AI` binding transport addresses. No token needed. |
 | `PREVIEW_HOST_SUFFIX` | wrangler.jsonc `vars` | Zone Workspace and Sandbox previews are served under, one capability hostname per exposed port. Requires a proxied wildcard DNS record on that zone plus a `*.<zone>/*` route; the wrangler.jsonc comment has both steps. Every host under it except the app's own serves previews and nothing else. Empty means previews are unavailable. |

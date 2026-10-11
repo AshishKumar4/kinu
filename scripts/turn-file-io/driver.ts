@@ -4,6 +4,7 @@ import type { OrchestratorAgent } from './product';
 import type { UserDO } from '../../packages/cf-backend/src/user/user-do';
 import type { Slice } from './meter';
 import { SCRIPTED_MODEL_SPEC } from '../../packages/test-utils/src/scripted-model-spec';
+import { PERF_SECRET, PERF_SECRET_HOST } from './egress-secret';
 
 interface DriverEnv {
   readonly OWNER_TOKEN: string;
@@ -25,6 +26,7 @@ export class PerfDriver extends DurableObject<DriverEnv> {
     const claim = await target.claimOwner(OWNER);
     await users.ensureWorkspaceCapability(workspace, claim.capabilityHash);
     await users.setCredential(caller, 'openai-compat.default', { kind: 'openai-compat', baseURL: 'http://model.invalid', apiKey: 'perf' });
+
     await target.setSoul('# Probe\n\nAnswer.');
     await target.setModel(SCRIPTED_MODEL_SPEC);
     await target.getWorkspaceSnapshot();
@@ -50,8 +52,18 @@ export class PerfDriver extends DurableObject<DriverEnv> {
 
   async seed(workspace: string): Promise<void> { await this.target(workspace).perfSeed(); }
 
-  async tool(workspace: string, name: string, input: string): Promise<string> {
-    return await this.target(workspace).perfTool(name, input);
+  /** The egress subject's vault secret, put and granted while the workspace runs: its egress reads grants as they stand. */
+  async grant(workspace: string): Promise<string> {
+    const users = this.env.UserDO.get(this.env.UserDO.idFromName(OWNER));
+    const binding = await users.putEgressSecret({ ownerToken: this.env.OWNER_TOKEN }, { id: 'perfio-git', label: 'perfio git', host: PERF_SECRET_HOST, secret: PERF_SECRET });
+
+    await this.target(workspace).perfGrantEgress(binding.id);
+
+    return binding.placeholder;
+  }
+
+  async tool(workspace: string, name: string, input: string, abortAfterMs?: number): Promise<string> {
+    return await this.target(workspace).perfTool(name, input, abortAfterMs);
   }
 }
 
@@ -67,10 +79,13 @@ export default {
       case '/begin': await driver.begin(workspace); break;
       case '/cut': return Response.json(await driver.cut(workspace, url.searchParams.get('label') ?? '', url.searchParams.get('resume') === '1'));
       case '/seed': await driver.seed(workspace); break;
+      case '/grant': return new Response(await driver.grant(workspace));
       case '/tool': {
         const input = await request.text();
 
-        return new Response(await driver.tool(workspace, url.searchParams.get('name') ?? 'file', input));
+        const abortAfter = url.searchParams.get('abortAfterMs');
+
+        return new Response(await driver.tool(workspace, url.searchParams.get('name') ?? 'file', input, abortAfter === null ? undefined : Number(abortAfter)));
       }
 
       default: return new Response('not found', { status: 404 });

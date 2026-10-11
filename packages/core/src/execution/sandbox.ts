@@ -8,7 +8,7 @@ import { ExecutorPortSchema } from './types';
 import { callJob, createShellSession, machineShellCall, reportsCwd, shellExecOptions, type MachineShells } from './shell-session';
 import type { CheckpointFiles, OutputSink, VfsDigestWrite } from '../types/primitives';
 import { JOB_STAMP_ENV } from '../types/jobs';
-import { commandResult, commandResultAt, exposedPortText, type CommandResult } from './exec-result';
+import { commandResult, commandResultAt, exposedPortText, type CommandResult, type ExecOutcome } from './exec-result';
 import { classifyErrorCode, KinuError, refusalOf, renderThrownChain, settle, tolerateAsync, toKinuError, type Refusal } from '../obs/index';
 import { isVfsError, isVfsErrorCode, syscallError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { shellQuote } from '../utils/shell';
@@ -60,8 +60,7 @@ export interface SandboxHandle {
    * `timeout` absent means no work deadline: native container exec adds none.
    * `signal` cancels the remote work: settle only once the process is gone; a transport with no kill must not accept one.
    */
-  exec(command: string, opts?: SandboxExecOptions):
-    Promise<{ output?: string; stdout?: string; stderr?: string; exitCode?: number }>;
+  exec(command: string, opts?: SandboxExecOptions): Promise<{ stdout: string; stderr: string; exitCode: number }>;
   /** `base64` is the only exact read; without it the content is UTF-8 text. */
   readFile(path: string, opts?: { encoding?: 'utf-8' | 'base64' }):
     Promise<{ content?: string; encoding?: string; isBinary?: boolean; exitCode?: number }>;
@@ -252,8 +251,10 @@ async function withSandboxRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<
   throw lastErr;
 }
 
-function normalize(res: { output?: string; stdout?: string; stderr?: string; exitCode?: number; cwd?: string }): CommandResult {
-  return commandResult({ ...res, stdout: res.stdout ?? res.output ?? '' });
+function normalize(res: { stdout: string; stderr: string; exitCode: number; cwd?: string }): CommandResult {
+  const outcome: ExecOutcome = { ...res };
+
+  return commandResult(outcome);
 }
 
 /** Worded distinctly from the adapter's own cancellation, which names the process it killed. */
@@ -364,7 +365,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
               return handle.exec(call.command, opts);
             });
 
-            const settled = call.settle({ ...res, stdout: res.stdout ?? res.output ?? '' });
+            const settled = call.settle(res);
 
             return reportsCwd({ context: args[1] }) ? commandResultAt(settled) : normalize(settled);
           }, (message) => refusalOf(new KinuError('unavailable', message)));
@@ -439,7 +440,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
 
         try {
           const res = await withSandboxRetry(() => touch(() => handle.exec(`test -e ${shellQuote(path)} && echo true || echo false`)));
-          const out = (res.stdout ?? res.output ?? '').trim();
+          const out = res.stdout.trim();
 
           return out.includes('true') ? 'true' : 'false';
         } catch (err) {
@@ -785,10 +786,10 @@ export function sandboxFiles(
       ));
 
       if ((r.exitCode ?? 0) !== 0) {
-        throw syscallError('EIO', 'read', path, { detail: (r.stderr ?? r.output ?? '').trim() || undefined });
+        throw syscallError('EIO', 'read', path, { detail: r.stderr.trim() || undefined });
       }
 
-      return base64ToBytes(r.stdout ?? r.output ?? '');
+      return base64ToBytes(r.stdout);
     },
 
     async writeFileIfDigest(path, data, expected) {
@@ -820,7 +821,7 @@ export function sandboxFiles(
       const r = await through(() => handle.exec(`mkdir ${opts?.recursive ? '-p ' : ''}-- ${shellQuote(path)}`));
 
       if ((r.exitCode ?? 0) !== 0) {
-        throw syscallError('EIO', 'mkdir', path, { detail: (r.stderr ?? r.output ?? '').trim() || undefined });
+        throw syscallError('EIO', 'mkdir', path, { detail: r.stderr.trim() || undefined });
       }
     },
 

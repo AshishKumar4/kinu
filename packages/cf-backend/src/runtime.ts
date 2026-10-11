@@ -12,7 +12,6 @@ import {
   sharedDriveMount, SHARED_DRIVE_UNCLAIMED, SHARED_DRIVE_UNBOUND, type MossaicVfs,
   withApprovalGatedShell, withApprovalGatedFiles, createInheritedApprovalPolicy, holdsGrant,
   type ShellApprovalPolicy, type ShellApprovalMode, type ApprovalGrant,
-  type EgressSecretBinding,
   createSandboxExecutor, createDeviceTunnelExecutor, type DeviceTransport,
   type WorkspaceFiles,
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore, createSqlFiber,
@@ -29,7 +28,6 @@ export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 
 import { diagnostics, toKinuError, detach } from "@kinu.run/core/obs";
 import { Effect } from 'effect';
-import { kinuEgressParams } from "./egress/configure";
 import { BOX_SIZES, BOX_SIZE_ORDER, DEFAULT_BOX_SIZE, type BoxSize } from "@kinu.run/devbox/sizes";
 import { accountSandboxSize, SANDBOX_SIZE_CONFIG_KEY } from "./sandbox-size";
 import { driveBound, tenantDrive } from "./drive/tenant";
@@ -58,7 +56,7 @@ import { ownerCaller, type UserCaller } from "@kinu.run/core";
 import { adaptMemory, backfillMemoryVectors } from "@kinu.run/core";
 import { actorAffinity } from "@kinu.run/core";
 import { nimbusPreviewConfigured } from "./nimbus-route";
-import type { HostedBox, WorkspaceServing } from "./workspace-host";
+import { workspaceServingScope, type HostedBox, type WorkspaceServing } from "./workspace-host";
 
 /**
  * Every logical actor in a workspace is built over the root object's `name` and `sql`; runtimes
@@ -137,24 +135,6 @@ function userDOStubFor(env: Env, actor: ActorRuntimeIdentity): RuntimeUserDOClie
   const namespace: RuntimeUserDONamespace = env.UserDO;
 
   return namespace.get(namespace.idFromName(userId));
-}
-
-/** An unreadable vault rejects: the sandbox handle memoizes this configuration, so an empty answer would
- *  strip every injectable secret for the handle's life. */
-async function listOwnerEgressVault(
-  env: Env, actor: ActorRuntimeIdentity,
-): Promise<EgressSecretBinding[]> {
-  const userId = actor.ownerUserId();
-
-  if (!userId) return [];
-  // Used, never copied (see `userDOStubFor`).
-  const vault: EgressVaultClient = env.UserDO.get(env.UserDO.idFromName(userId));
-
-  return [...await vault.listEgressSecrets(await ownerCaller(env))];
-}
-
-interface EgressVaultClient {
-  listEgressSecrets(caller: UserCaller): Promise<readonly EgressSecretBinding[]>;
 }
 
 async function ownerSandboxSize(env: Env, actor: ActorRuntimeIdentity): Promise<BoxSize | null> {
@@ -423,12 +403,7 @@ export function createCFRuntime(
         const userId = actor.ownerUserId();
 
         if (!userId) return;
-        await sdk.configureEgress(kinuEgressParams({
-          workspaceName: actor.workspaceName,
-          ownerUserId: userId,
-          vault: await listOwnerEgressVault(env, actor),
-          grants: actor.actor.config.getShellApprovalGrants(),
-        }));
+        await sdk.configureEgress({ workspaceName: actor.workspaceName, ownerUserId: userId });
         // Unread, the box keeps its last default.
         const [accountSize] = await Promise.allSettled([ownerSandboxSize(env, actor)]);
 
@@ -598,13 +573,8 @@ export function createCFRuntime(
 
           return listened === null ? null : [...listened, ...(await served()).held.filter((held) => ports.includes(held.port))];
         },
-        // Unread, the box's facts stand: the workspace answers for its exposed ports and the jobs it runs a process for.
-        answersFor: async () => {
-          if (box !== null) return null;
-          const { held, jobs } = await served();
-
-          return (fact) => jobs.has(fact.job) || held.some((port) => port.port === fact.port);
-        },
+        // Unread, the box's facts stand: the workspace answers for the jobs it runs a process for.
+        answersFor: async () => (box === null ? workspaceServingScope(await served()) : null),
       };
     },
   };

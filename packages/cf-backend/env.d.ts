@@ -7,6 +7,7 @@ import type { ControlPlaneDO } from "./src/control-plane/control-plane-do";
 import type { DeployRunDO } from "./src/deploy/deploy-do";
 import type { CodemodeEgress } from "./src/codemode-egress";
 import type { CodemodeLauncher } from "./src/codemode-sandbox";
+import type { KinuEgress } from "./src/server";
 import type { AgentWorkspaceRPC } from "./src/agent-facets";
 import type { SlateBinding } from "./src/slates/bindings";
 import type { MossaicShardDO, MossaicUserDO } from "./src/server";
@@ -95,7 +96,6 @@ declare global {
      *  signed-in user can be served. Generate with `openssl rand -base64 32`. */
     CREDENTIAL_ENCRYPTION_KEY?: string;
     /** Retired keys for reading only during rotation (user/credential-envelope.ts). */
-    CREDENTIAL_ENCRYPTION_KEY_PREVIOUS?: string;
     /** Signs webhook delivery URLs (secret); without it creation answers 503 and URLs 404. Rotation
      *  revokes every URL (events/webhook-route.ts). */
     WEBHOOK_ROUTE_SECRET?: string;
@@ -146,6 +146,7 @@ declare global {
         AgentWorkspaceRPC: typeof AgentWorkspaceRPC;
         CodemodeEgress: typeof CodemodeEgress;
         CodemodeLauncher: typeof CodemodeLauncher;
+        KinuEgress: typeof KinuEgress;
         SlateBinding: typeof SlateBinding;
         default: ExportedHandler<Env>;
       };

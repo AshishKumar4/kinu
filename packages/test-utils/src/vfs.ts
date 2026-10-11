@@ -80,6 +80,8 @@ export function sessionFilesOver(files = new Map<string, Uint8Array>()): RemoteS
     write: async (path, content) => { files.set(path, content instanceof Uint8Array ? content.slice() : new TextEncoder().encode(content)); },
     stat,
     lstat: stat,
+    // No links in this plane: a present file is no link, as the session answers.
+    readlink: async () => null,
     list: async () => [],
     rename: async (from, to) => {
       const bytes = files.get(from);

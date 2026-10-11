@@ -140,11 +140,11 @@ function container(fs: ContainerFs): SandboxHandle {
 			if (command.startsWith('mkdir')) {
 				fs.dirs.add(target);
 
-				return { exitCode: 0, stdout: '' };
+				return { exitCode: 0, stdout: '', stderr: '' };
 			}
 
 			if (command.startsWith('test -e')) {
-				return { exitCode: 0, stdout: fs.files.has(target) || fs.dirs.has(target) ? 'true' : 'false' };
+				return { exitCode: 0, stdout: fs.files.has(target) || fs.dirs.has(target) ? 'true' : 'false', stderr: '' };
 			}
 
 			// The adapter's ranged read (`dd`); an empty answer would make windowed reads see empty files.
@@ -159,10 +159,10 @@ function container(fs: ContainerFs): SandboxHandle {
 
 				const from = Number(window[1]);
 
-				return { exitCode: 0, stdout: bytesToBase64(bytes.subarray(from, from + Number(window[2]))) };
+				return { exitCode: 0, stdout: bytesToBase64(bytes.subarray(from, from + Number(window[2]))), stderr: '' };
 			}
 
-			return { exitCode: 0, stdout: '' };
+			return { exitCode: 0, stdout: '', stderr: '' };
 		},
 		async exposePort(port) { return { url: `https://preview.invalid/${port}`, port, route: { reached: true } }; },
 		async unexposePort() {},

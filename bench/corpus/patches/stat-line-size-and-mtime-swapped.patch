@@ -1,12 +1,12 @@
 diff --git a/packages/core/src/execution/nimbus.ts b/packages/core/src/execution/nimbus.ts
 --- a/packages/core/src/execution/nimbus.ts
 +++ b/packages/core/src/execution/nimbus.ts
-@@ -678,7 +678,7 @@
-       // The change time moves on every write and no caller sets it: what a note's stamp is told apart by.
-       const changed = stat.ctime === undefined ? {} : { ctimeMs: stat.ctime };
+@@ -699,7 +699,7 @@ export function nimbusSessionFiles(
  
--      return { size: stat.size, mtimeMs: stat.mtime, ...changed, type: stat.type === 'directory' ? 'directory' : type };
-+      return { size: stat.mtime, mtimeMs: stat.size, ...changed, type: stat.type === 'directory' ? 'directory' : type };
-     },
-     async unlink(path) { await files.delete(at(path)); },
-     async removeRecursive(path) { await files.delete(at(path), { recursive: true }); },
+       if (stat === null) return null;
+       const type = stat.type === 'symlink' ? 'symlink' as const : 'file' as const;
+-      const answer: VfsStat = { size: stat.size, mtimeMs: stat.mtime, type: stat.type === 'directory' ? 'directory' : type };
++      const answer: VfsStat = { size: stat.mtime, mtimeMs: stat.size, type: stat.type === 'directory' ? 'directory' : type };
+ 
+       // The change time moves on every write and no caller sets it: what a note's stamp is told apart by, and the
+       // revision, where the backend keeps one, before it.

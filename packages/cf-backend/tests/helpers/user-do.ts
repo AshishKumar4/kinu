@@ -176,7 +176,6 @@ export interface TestUserDOOptions {
    *  can be held open across another. `say` sends a frame first, as the daemon sends live output. */
   deviceResponder?: (frame: DeviceFrame, say: (frame: JsonValue) => Promise<void>) => JsonValue | Promise<JsonValue>;
   credentialEncryptionKey?: string;
-  credentialEncryptionKeyPrevious?: string;
   /** Lets a stored Cloudflare login renew; absent, its refresh fails for want of a client. */
   cloudflareOAuthClientId?: string;
   cloudflareOAuthClientSecret?: string;
@@ -265,7 +264,6 @@ interface TestUserEnvironment {
   SLATE_PICTURES?: PictureBucket;
   CLI_PUBLIC_ORIGIN?: string;
   ASSETS?: { fetch(input: Request): Promise<Response> };
-  CREDENTIAL_ENCRYPTION_KEY_PREVIOUS?: string;
   CLOUDFLARE_OAUTH_CLIENT_ID?: string;
   MCP_GITHUB_CLIENT_ID?: string;
   MCP_GITHUB_CLIENT_SECRET?: string;
@@ -612,10 +610,6 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
       }),
     },
   };
-
-  if (options.credentialEncryptionKeyPrevious) {
-    env.CREDENTIAL_ENCRYPTION_KEY_PREVIOUS = options.credentialEncryptionKeyPrevious;
-  }
 
   for (const preset of options.mcpAppCredentials ?? []) {
     if (preset === 'github') {

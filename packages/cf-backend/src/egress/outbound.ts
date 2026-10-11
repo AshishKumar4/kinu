@@ -9,19 +9,20 @@ import { Hono } from 'hono';
 import { rawPath, rethrow, type FamilyEnv } from '../api/context';
 import {
   createScrubStream,
-  planEgress,
+  egressPlaceholdersIn,
+  scrubBytes,
   refusedHostname,
   scrubText,
   JsonValueSchema,
   type ContainerEventResult,
   type JsonValue,
+  type ApprovalGrant,
   type EgressRequestFacts,
-  type EgressSecretBinding,
   type ScrubReplacement,
 } from '@kinu.run/core';
 import type { OrchestratorAgent } from '../orchestrator';
 import type { ObjectNamespace } from '@kinu.run/core';
-import { ownerCaller, type OwnerCapabilityEnv, type UserCaller } from '@kinu.run/core';
+import { OwnerCapabilityUnavailableError, ownerCaller, type OwnerCapabilityEnv, type UserCaller } from '@kinu.run/core';
 import type { EgressInjection, EgressInjectionResult } from '@kinu.run/core';
 import { kinuUserAgent, observeGitHub, reoriginateRequest, type GitHubFact, type GitHubRecorder } from '@kinu.run/core';
 import {
@@ -33,24 +34,21 @@ export const CONTAINER_EVENT_HOST = 'events.kinu.internal';
 
 const CONTAINER_EVENT_PATH = '/v1/events';
 
-/** Set by the owning DO; not readable or influenceable from the container. */
+/**
+ * Set by the owning DO; not readable or influenceable from the container. Applied to a container by
+ * `KinuDevbox.configureEgress` before any op that can start it (`sandbox-exec-lane.ts`), so until then it has no network;
+ * minted for a workspace as it opens (`OrchestratorAgent.workspaceEgress`). Neither names a grant, binding or secret:
+ * the egress reads the workspace's grants and the vault for a request that names a placeholder (`WorkspaceGrants`).
+ */
 export interface KinuEgressParams {
   readonly workspaceName: string;
   readonly ownerUserId: string;
-  /** Owner's vault ∩ this workspace's approval grants, carrying no secret material; the hot path needs no approval round trip. */
-  readonly bindings: readonly EgressSecretBinding[];
 }
 
-/** Parsed although trusted: a container configured by an older build may predate a field. */
+/** Parsed: `ctx.props` arrives untyped, and a configuration that is not this shape reads as unconfigured (no network). */
 const EgressParamsSchema = v.object({
   workspaceName: v.pipe(v.string(), v.minLength(1)),
   ownerUserId: v.pipe(v.string(), v.minLength(1)),
-  bindings: v.array(v.object({
-    id: v.pipe(v.string(), v.minLength(1)),
-    label: v.string(),
-    host: v.pipe(v.string(), v.minLength(1)),
-    placeholder: v.pipe(v.string(), v.minLength(1)),
-  })),
 });
 
 /** Undefined when the container is not configured yet; both handlers then refuse. */
@@ -65,7 +63,7 @@ interface EgressVaultClient {
   resolveEgressInjection(
     caller: UserCaller,
     facts: EgressRequestFacts,
-    active: readonly EgressSecretBinding[],
+    grants: readonly ApprovalGrant[],
   ): Promise<EgressInjectionResult>;
 }
 
@@ -83,6 +81,15 @@ export interface ContainerEgressEnv<Id> extends OwnerCapabilityEnv {
  * under its own retry (agents@0.26.0 agent-routing.js:176-183, read 2026-10-06).
  */
 export type ContainerEventResolver = (workspaceName: string) => Promise<ContainerEventClient>;
+
+/**
+ * The workspace's egress-secret grants as they stand (`OrchestratorAgent.egressGrants`): asked only for a request that
+ * names a placeholder, so a grant made after the egress was minted is spent without a restart.
+ */
+export type WorkspaceGrants = (workspaceName: string) => Promise<readonly ApprovalGrant[]>;
+
+export const workspaceGrants = (env: Env): WorkspaceGrants =>
+  async (workspaceName) => await (await getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, workspaceName)).egressGrants();
 
 export const containerEventResolver = (env: Env): ContainerEventResolver =>
   async (workspaceName) => await getAgentByName<Env, OrchestratorAgent>(
@@ -106,12 +113,18 @@ export class GitHubEgressRecorder implements GitHubRecorder {
   }
 }
 
+/** What the egress reads of the workspace it serves: its grants, asked for a placeholder; its GitHub work, recorded. */
+export interface EgressWorkspace {
+  readonly grants: WorkspaceGrants;
+  readonly github?: GitHubRecorder | undefined;
+}
+
 /** Catch-all for every host except the event channel. Only a request that carries a placeholder pays for substitution. */
 export function handleContainerEgress<Id>(
   request: Request,
   env: ContainerEgressEnv<Id>,
   params: KinuEgressParams | undefined,
-  github?: GitHubRecorder,
+  workspace: EgressWorkspace,
 ): Promise<Response> {
   return settle(Effect.gen(function* () {
     if (!params) {
@@ -131,19 +144,15 @@ export function handleContainerEgress<Id>(
       headers: [...request.headers],
     };
 
-    const bindings = params.bindings;
-    // The vault plans the same way first; a request that names no secret needs no answer of it, so it costs no round trip.
-    const plan = planEgress(facts, bindings);
-
-    if (plan.kind === 'refuse') return refusal(plan.status, plan.reason);
-
-    if (plan.substitutions.length === 0) return yield* forwarded(request, url, [], github);
+    // A request that names no placeholder needs nothing of the vault, so it costs no round trip.
+    if (egressPlaceholdersIn(facts).size === 0) return yield* forwarded(request, url, [], workspace.github);
 
     // Use the stub, never copy it: `Object.assign` of a JSRPC stub yields `{}` (methods live behind a Proxy).
     const vault: EgressVaultClient = env.UserDO.get(env.UserDO.idFromName(params.ownerUserId));
 
+    // The workspace's grants and the vault's secrets as they stand; the vault plans, so an unbound placeholder is refused there.
     const resolved = yield* Effect.matchCause(Effect.promise(async (): Promise<EgressInjectionResult> => vault.resolveEgressInjection(
-      await ownerCaller(env), facts, bindings,
+      await ownerCaller(env), facts, await workspace.grants(params.workspaceName),
     )), {
       onSuccess: (answer) => ({ answer }),
       onFailure: (failed) => ({ refused: authorityFailure({ cause: Cause.squash(failed), host: url.hostname }) }),
@@ -153,7 +162,7 @@ export function handleContainerEgress<Id>(
 
     if (resolved.answer.kind === 'refuse') return refusal(resolved.answer.status, resolved.answer.reason);
 
-    return yield* forwarded(request, url, resolved.answer.substitutions, github);
+    return yield* forwarded(request, url, resolved.answer.substitutions, workspace.github);
   }));
 }
 
@@ -177,64 +186,39 @@ function socketDestination(address: string): { readonly hostname: string; readon
   return { hostname: address.slice(0, cut), port };
 }
 
-/** The suffix a workspace program's TLS socket names: the session is made here (`tlsDestination`). */
-const TLS_SOCKET_SUFFIX = '.tls.nimbus-egress.invalid';
-
 /**
- * Where a TLS socket asks to go: `<host>[.s.<servername>].tls.nimbus-egress.invalid:<port>`, each name as the hex of its
- * UTF-8 in labels of at most 62 characters (Kinu's Nimbus patch, NIMBUS-ASKS #37). Null for any other address.
- */
-function tlsDestination(address: string): { readonly hostname: string; readonly port: number; readonly servername: string } | null {
-  const plain = socketDestination(address);
-
-  if (plain === null || !plain.hostname.endsWith(TLS_SOCKET_SUFFIX)) return null;
-  const [host, sni, ...rest] = plain.hostname.slice(0, -TLS_SOCKET_SUFFIX.length).split('.s.');
-
-  const named = (labels: string | undefined): string | null => {
-    const hex = labels?.split('.').join('') ?? '';
-
-    if (hex.length === 0 || hex.length % 2 !== 0 || !/^[0-9a-f]+$/.test(hex)) return null;
-
-    return new TextDecoder().decode(Uint8Array.from(hex.match(/../g) ?? [], (pair) => Number.parseInt(pair, 16)));
-  };
-
-  const hostname = named(host);
-  const servername = sni === undefined ? hostname : named(sni);
-
-  return hostname === null || servername === null || rest.length > 0 ? null : { hostname, port: plain.port, servername };
-}
-
-/**
- * A workspace program's socket (its egress's `connect`): the destination judged as a request's host is, then the bytes
- * piped both ways. A TLS socket (`tlsDestination`) has its session made here, with Kinu's own trust, and its plaintext
- * carried; any other is carried as it is. Kinu reads none of it; a secret cannot be put into a stream it does not parse.
- * A refused or unnamed destination closes the socket before anything is sent.
+ * A workspace program's plain socket (its egress's `connect`): the destination judged as a request's host is, then the
+ * bytes piped both ways. Kinu reads none of it; a secret cannot be put into a stream it does not parse. A refused or
+ * unnamed destination closes the socket before anything is sent. Kinu judges the name or literal the program gave; a name
+ * that resolves to a private address is refused by Cloudflare at connect (PLATFORM_CATALOG 'worker.connect.private_address',
+ * as fetch is by 'worker.fetch.private_address'), so the egress resolves nothing itself.
  */
 export function handleEgressConnect(socket: Socket, params: KinuEgressParams | undefined): Promise<void> {
   return settle(Effect.gen(function* () {
     const opened = yield* attempt({ doing: 'reading where a workspace socket goes', otherwise: 'io' }, () => socket.opened);
     const address = opened.localAddress ?? '';
-    const tls = tlsDestination(address);
-    const destination = tls ?? socketDestination(address);
-    const refused = params === undefined || destination === null ? null : refusedHostname(destination.hostname);
+    const destination = socketDestination(address);
 
-    if (params === undefined || destination === null || refused !== null) {
-      const reason = refused?.error ?? (params === undefined ? 'egress is not configured for this workspace yet' : `the socket names no usable destination (${address})`);
+    const refusedHere = (host: string, reason: string) => {
+      diagnostics.failure('egress.socket_refused', new KinuError('denied', reason), { host, seam: 'workspace-connect' });
+    };
 
-      diagnostics.failure('egress.socket_refused', new KinuError('denied', reason), { host: destination?.hostname ?? address, seam: 'workspace-connect' });
+    if (params === undefined || destination === null) {
+      refusedHere(address, params === undefined ? 'egress is not configured for this workspace yet' : `the socket names no usable destination (${address})`);
+
+      return yield* attempt({ doing: `refusing a socket to ${address}`, otherwise: 'io' }, () => socket.close());
+    }
+
+    const refused = refusedHostname(destination.hostname);
+
+    if (refused !== null) {
+      refusedHere(destination.hostname, refused.error);
 
       return yield* attempt({ doing: `refusing a socket to ${address}`, otherwise: 'io' }, () => socket.close());
     }
 
     const { connect } = yield* Effect.promise(() => import('cloudflare:sockets'));
-    const target = { hostname: destination.hostname, port: destination.port };
-
-    // A server named other than its host is checked by that name (workerd's own node:tls does the same).
-    const renamed = tls !== null && tls.servername !== tls.hostname;
-
-    const upstream = renamed
-      ? connect(target, { allowHalfOpen: true, secureTransport: 'starttls' }).startTls({ expectedServerHostname: tls.servername })
-      : connect(target, { allowHalfOpen: true, secureTransport: tls === null ? 'off' : 'on' });
+    const upstream = connect({ hostname: destination.hostname, port: destination.port }, { allowHalfOpen: true, secureTransport: 'off' });
 
     // The program's end of input is not passed on: closing a workerd socket's writable ended its readable too, so a
     // client that half-closed after its request got no answer (scripts/egress-probe.ts, 2026-10-10). The server's own
@@ -247,6 +231,49 @@ export function handleEgressConnect(socket: Socket, params: KinuEgressParams | u
     // A socket either end resets is the program's to see; the egress has nothing left to answer.
     Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('egress.socket_ended', failure, { seam: 'workspace-connect' }); })),
   ));
+}
+
+/**
+ * A workspace program's TLS socket (its egress's `connectTls`, which Nimbus calls since a Fetcher's `connect` carries
+ * no TLS): the host judged as a request's is, the session made here with Kinu's own trust, presenting and checking the
+ * program's servername where it named one other than the host, and its plaintext handed back. A refused host, or a
+ * session that cannot be made, rejects with why: the program's socket fails with it.
+ */
+export function handleEgressTls(target: EgressTlsTarget, params: KinuEgressParams | undefined): Promise<EgressTlsStreams> {
+  return settle(Effect.gen(function* () {
+    const refused = params === undefined ? 'egress is not configured for this workspace yet' : refusedHostname(target.hostname)?.error ?? null;
+
+    if (refused !== null) {
+      diagnostics.failure('egress.socket_refused', new KinuError('denied', refused), { host: target.hostname, seam: 'workspace-tls' });
+
+      return yield* new KinuError('denied', refused);
+    }
+
+    const { connect } = yield* Effect.promise(() => import('cloudflare:sockets'));
+    const destination = { hostname: target.hostname, port: target.port };
+
+    const secure = target.servername === undefined
+      ? connect(destination, { allowHalfOpen: true, secureTransport: 'on' })
+      : connect(destination, { allowHalfOpen: true, secureTransport: 'starttls' }).startTls({ expectedServerHostname: target.servername });
+
+    yield* attempt({ doing: `making the TLS session with ${target.servername ?? target.hostname}`, otherwise: 'io' }, () => secure.opened);
+
+    return { readable: secure.readable, writable: secure.writable };
+  }));
+}
+
+/** Where a program's TLS socket goes (Nimbus's `WorkspaceEgressTls.connectTls` target). */
+export interface EgressTlsTarget {
+  readonly hostname: string;
+  readonly port: number;
+  /** The name to present and check the server by, when the program named one other than the host. */
+  readonly servername?: string;
+}
+
+/** The plaintext of a TLS session the egress made. */
+export interface EgressTlsStreams {
+  readonly readable: ReadableStream<Uint8Array>;
+  readonly writable: WritableStream<Uint8Array>;
 }
 
 /** One classifier refuses at three seams (container hop, `web.fetch`, codemode loopback); one event shape keeps them comparable. */
@@ -299,9 +326,11 @@ function forwardUpstream(
 
     for (const [name, value] of upstream.headers) responseHeaders.set(name, scrubText(value, injected));
 
-    // An accepted WebSocket upgrade keeps its socket; its frames are the program's, as a TLS stream's bytes are.
-    if (upstream.status === 101) {
-      return new Response(null, { status: 101, statusText: scrubText(upstream.statusText, injected), headers: responseHeaders, webSocket: upstream.webSocket });
+    // An upgrade that spent a secret is relayed, so the server's frames and close reason reach the program scrubbed.
+    if (upstream.status === 101 && upstream.webSocket !== null) {
+      return new Response(null, {
+        status: 101, statusText: scrubText(upstream.statusText, injected), headers: responseHeaders, webSocket: scrubbedRelay(upstream.webSocket, injected),
+      });
     }
 
     return new Response(
@@ -311,11 +340,49 @@ function forwardUpstream(
   });
 }
 
+/** Close `socket` as its peer closed: a code that names no frame sent (1005) or a lost connection (1006, 1015) cannot be sent. */
+function closeAs(socket: WebSocket, code: number, reason: string): void {
+  if (socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) return;
+
+  if (code === 1005) socket.close();
+  else socket.close(code === 1006 || code === 1015 ? 1011 : code, reason);
+}
+
+/**
+ * The program's end of a WebSocket whose upgrade spent a secret: the server's text, binary frames and close reason are
+ * scrubbed with the request's pairs reversed, as a response body is; the program's frames go to the server as they are.
+ */
+function scrubbedRelay(server: WebSocket, injected: readonly ScrubReplacement[]): WebSocket {
+  const pair = new WebSocketPair();
+  const program = pair[0];
+  const relay = pair[1];
+
+  server.accept();
+  relay.accept();
+  server.addEventListener('message', (event) => {
+    relay.send(typeof event.data === 'string' ? scrubText(event.data, injected) : scrubBytes(new Uint8Array(event.data), injected));
+  });
+  relay.addEventListener('message', (event) => { server.send(event.data); });
+  server.addEventListener('close', (event) => { closeAs(relay, event.code, scrubText(event.reason, injected)); });
+  relay.addEventListener('close', (event) => { closeAs(server, event.code, event.reason); });
+  server.addEventListener('error', () => { closeAs(relay, 1011, 'the server\'s WebSocket failed'); });
+  relay.addEventListener('error', () => { closeAs(server, 1011, 'the program\'s WebSocket failed'); });
+
+  return program;
+}
+
 /**
  * An outbound handler that throws returns no HTTP response ("Empty reply from server"), so answer 503: the request was
  * not sent and a retry recovers. The cause chain stays in diagnostics only (operator detail).
  */
 function authorityFailure(input: { cause: unknown; host: string }): Response {
+  // A deployment that holds no root secret can open no vault: said as it is, since no retry will change it.
+  if (input.cause instanceof OwnerCapabilityUnavailableError) {
+    diagnostics.failure('egress.authority_unreachable', new KinuError('unavailable', input.cause.message), { host: input.host });
+
+    return refusal(503, `${input.cause.message} This request to ${input.host} names a vault secret, so it was not sent.`);
+  }
+
   const error = toKinuError({
     doing: 'asking the owner vault what this container may spend on its request',
     cause: input.cause,

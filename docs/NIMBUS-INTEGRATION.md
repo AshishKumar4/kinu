@@ -34,18 +34,25 @@ fabric and worker, which is why nothing here pins it.
 Core imports fabric directly: `packages/core/src/events/outbox.ts` builds its
 outbox on `@nimbus-sh/fabric/outbox.js`.
 
-No Nimbus package is patched (core 0.16.0, worker 0.14.0, 2026-10-10). The patches 0.15 needed are upstream:
-the rolldown build's JSX and tsconfig settings (NIMBUS-ASKS #19), `runtime/process-files`' access modes as four
-declarations, which Nimbus's publish gate now enforces for every package (#21), each build-facet call in a lane of
-its own, so one rolldown binding serves every Durable Object in an isolate (#22), `CompositeVFS.route(path, { follow })`
-(#23) and `observeWrites(observer, { wants })` (#24). The worker patch that ran launch prefetch builds one at a
-time is dropped too: worker 0.14 bounds each build's gathering, and the measurement is in AGENTS.md's Waste list.
+Core 0.17.0 and worker 0.15.0 carry declared patches (package.json `//patchedDependencies:*` names each, and what
+deletes it); each part is Nimbus's own build of the source change its ask proposes:
+- a stopped `bash -c` loop ends: core's shell entrypoints forward their AbortSignal to the nested shell, and worker's
+  hosted shell child combines it with its own (NIMBUS-ASKS #42);
+- a client WebSocket open through a preview port holds the resident until it closes, so a quiet HMR socket keeps its dev
+  server (#43: core's `PortRegistry.setClientSockets`, worker's keep-alive);
+- `connectTls` carries the program's servername, which Kinu's egress presents and checks (#44).
+
+0.17 ships what 0.16's patches carried: `route`/`mutationRoute` `{ creating }` (#32), a node facet's batched output
+writes (#39), and TLS through a workspace egress (`WorkspaceEgressTls.connectTls`, #37). It also ships npm's CommonJS as
+ESM (#35) and build-time facet tasks (#38), so Kinu's esbuild require plugin and the Worker's `toplevel: false` are gone.
+The patches 0.15 needed are upstream: the rolldown build's JSX and tsconfig settings (NIMBUS-ASKS #19),
+`runtime/process-files`' access modes as four declarations (#21), each build-facet call in a lane of its own (#22),
+`CompositeVFS.route(path, { follow })` (#23) and `observeWrites(observer, { wants })` (#24).
 
 Kinu's file plane (`packages/core/src/vfs/mounts.ts`) is Kinu policy over that namespace: the mount declarations,
 whose principal's view a plane is, the bounded views, and one move rule (within a mount, Nimbus's `move`; across
-mounts, EXDEV). A device's write report is asked of the backend `route` names. `route` refuses a missing ancestor
-with ENOENT, though Nimbus's own lookup can pass one (`creating`), so a gate resolves a new nested path by routing its
-nearest existing ancestor (`routeCreating`, NIMBUS-ASKS #32). A head's file changes come
+mounts, EXDEV). A device's write report is asked of the backend `route` names, and a new nested path is routed with
+`{ creating }`. A head's file changes come
 from `observeWrites`, read while the event holds its content (`packages/core/src/vfs/write-events.ts`,
 `packages/core/tests/unit-namespace-writes.test.ts`).
 

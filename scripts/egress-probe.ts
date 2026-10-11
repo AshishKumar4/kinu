@@ -1,22 +1,23 @@
 // Kinu's workspace egress in workerd, called as Nimbus would call it: a fake caller in the same Worker reaches
-// `ctx.exports.KinuEgress`-shaped entrypoint by loopback and opens a TCP socket, a TLS socket and a WebSocket through it.
+// `ctx.exports.KinuEgress`-shaped entrypoint by loopback and opens a TCP socket, a TLS session (`connectTls`, as Nimbus
+// 0.17 asks it for a program's TLS socket) and a WebSocket through it.
 // Needs the internet (example.com, echo.websocket.org). Run: bun scripts/egress-probe.ts
 import { builtinModules } from 'node:module';
 import { join } from 'node:path';
 import { build } from 'esbuild';
 import { convertV4MiniflareOptions, Miniflare } from 'miniflare';
-import { nodeRequireAsImport } from '../packages/cf-backend/esbuild-node-require';
 
 const ENTRY = `
 import { WorkerEntrypoint } from 'cloudflare:workers';
-import { handleContainerEgress, handleEgressConnect } from './packages/cf-backend/src/egress/outbound.ts';
+import { handleContainerEgress, handleEgressConnect, handleEgressTls } from './packages/cf-backend/src/egress/outbound.ts';
 
-const PARAMS = { workspaceName: 'probe', ownerUserId: 'probe-owner', bindings: [] };
+const PARAMS = { workspaceName: 'probe', ownerUserId: 'probe-owner' };
 const VAULT_DOWN = { UserDO: { idFromName: (name) => name, get: () => { throw new Error('no request here names a secret'); } }, CREDENTIAL_ENCRYPTION_KEY: 'egress-probe-credential-key-0123456789' };
 
 export class Egress extends WorkerEntrypoint {
-  fetch(request) { return handleContainerEgress(request, VAULT_DOWN, PARAMS); }
+  fetch(request) { return handleContainerEgress(request, VAULT_DOWN, PARAMS, { grants: async () => [] }); }
   connect(socket) { return handleEgressConnect(socket, PARAMS); }
+  connectTls(target) { return handleEgressTls(target, PARAMS); }
 }
 
 const text = (bytes) => new TextDecoder().decode(bytes);
@@ -49,17 +50,20 @@ export default {
       const first = await reader.read();
       return first.done ? 'ended empty' : text(first.value).split('\\r\\n')[0];
     })().catch((error) => 'failed: ' + String(error)), 10000);
-    // A TLS socket as Nimbus's patched node:tls names it: the egress makes the session and carries plaintext.
-    const marked = (name) => [...new TextEncoder().encode(name)].map((b) => b.toString(16).padStart(2, '0')).join('').match(/.{1,62}/g).join('.') + '.tls.nimbus-egress.invalid';
-    out.tls = await within((async () => {
-      const socket = egress.connect(marked('example.com') + ':443', { allowHalfOpen: true });
-      const writer = socket.writable.getWriter();
-      await writer.write(new TextEncoder().encode(http));
-      const reader = socket.readable.getReader();
-      const first = await reader.read();
+    // A TLS socket as Nimbus 0.17 asks for one: the egress makes the session and hands back its plaintext over RPC.
+    const tlsSession = async (hostname, payload, servername) => {
+      const { readable, writable } = await egress.connectTls(servername === undefined ? { hostname, port: 443 } : { hostname, port: 443, servername });
+      const writer = writable.getWriter();
+      await writer.write(new TextEncoder().encode(payload));
+      const first = await readable.getReader().read();
       return first.done ? 'ended empty' : text(first.value).split('\\r\\n')[0];
-    })().catch((error) => 'failed: ' + String(error)), 10000);
-    out.tlsPrivate = await within(exchange(egress.connect(marked('192.168.1.1') + ':443', { allowHalfOpen: true }), 'x').then((answer) => 'bytes:' + answer.length, (error) => 'closed: ' + String(error)), 5000);
+    };
+    out.tls = await within(tlsSession('example.com', http).catch((error) => 'failed: ' + String(error)), 10000);
+    out.tlsExpired = await within(tlsSession('expired.badssl.com', http).catch((error) => 'refused: ' + String(error)), 10000);
+    // A servername the server holds a certificate for is checked by it; one it does not is refused, as Node does.
+    out.tlsNamed = await within(tlsSession('example.com', http, 'www.example.com').catch((error) => 'failed: ' + String(error)), 10000);
+    out.tlsWrongName = await within(tlsSession('example.com', http, 'github.com').catch((error) => 'refused: ' + String(error)), 10000);
+    out.tlsPrivate = await within(tlsSession('192.168.1.1', 'x').catch((error) => 'refused: ' + String(error)), 5000);
     out.websocket = await within((async () => {
       const response = await egress.fetch('https://echo.websocket.org/', { headers: { upgrade: 'websocket' } });
       if (response.webSocket === null) return 'status ' + response.status;
@@ -85,7 +89,7 @@ const bundled = await build({
   stdin: { contents: ENTRY, resolveDir: root, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'neutral', target: 'es2022',
   mainFields: ['module', 'main'], conditions: ['workerd', 'worker', 'browser'],
   alias: Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, `node:${name}`])),
-  external: ['cloudflare:*', 'node:*'], plugins: [nodeRequireAsImport], logLevel: 'error',
+  external: ['cloudflare:*', 'node:*'], logLevel: 'error',
 });
 
 const contents = bundled.outputFiles[0]?.text;

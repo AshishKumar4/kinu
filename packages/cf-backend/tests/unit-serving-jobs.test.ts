@@ -103,6 +103,8 @@ const { catalogTurn, GATEWAY_CATALOG, jobsOver, makeEnv, orchestratorHarness } =
 
 const { TEST_CREDENTIAL_ENCRYPTION_KEY } = await import('./helpers/user-do');
 
+const { workspaceServingScope } = await import('../src/workspace-host');
+
 /** What the agent is asked: to stop exposing `port`. */
 const withdraw = (port: number): string => `Stop exposing port ${String(port)}.`;
 
@@ -213,6 +215,20 @@ test('a read that answers for some facts leaves the others standing, and drops a
   expect(await listed(agent)).toEqual({ 'bgjob-server': 'serving', 'bgjob-build': 'serving' });
 
   jobs.recordServingInWorkspace(new Map(), (fact) => fact.port === SPARE);
+  expect(await listed(agent)).toEqual({ 'bgjob-server': 'serving', 'bgjob-build': 'running' });
+});
+
+// The planes number their ports apart: a workspace process on the port a box job serves answers only for its own job.
+test('a workspace read leaves a box job serving on the same port number as one of its own', async () => {
+  const { agent, jobs } = await workspaceWithJobs();
+  jobs.recordServingInWorkspace(new Map([['bgjob-server', SERVED]]));
+
+  jobs.recordServingInWorkspace(new Map([['bgjob-build', SERVED]]), workspaceServingScope({
+    held: [{ port: SERVED, stamp: 'bgjob-build' }], jobs: new Set(['bgjob-build']),
+  }));
+  expect(await listed(agent)).toEqual({ 'bgjob-server': 'serving', 'bgjob-build': 'serving' });
+
+  jobs.recordServingInWorkspace(new Map(), workspaceServingScope({ held: [{ port: SERVED, stamp: null }], jobs: new Set(['bgjob-build']) }));
   expect(await listed(agent)).toEqual({ 'bgjob-server': 'serving', 'bgjob-build': 'running' });
 });
 

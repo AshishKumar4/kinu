@@ -14,9 +14,9 @@ import { providerProxyRoutes } from '../src/user/provider-proxy';
 import { serveFamily } from './helpers/api';
 import { cliAccount, staticRouteCliEnv } from './helpers/bindings';
 
-const rotatedOwner = () => ownerCaller({ CREDENTIAL_ENCRYPTION_KEY: NEXT_KEY });
+const otherKeyOwner = () => ownerCaller({ CREDENTIAL_ENCRYPTION_KEY: OTHER_KEY });
 
-const NEXT_KEY = 'a-different-credential-encryption-key-9876';
+const OTHER_KEY = 'a-different-credential-encryption-key-9876';
 
 function storedValue(harness: ReturnType<typeof createTestUserDO>, key: string): string | undefined {
   const rows = sqlExec(harness.db).exec('SELECT value FROM user_credentials WHERE key = ?', key).toArray();
@@ -145,25 +145,7 @@ describe('the credential store is sealed at rest', () => {
   });
 });
 
-describe('migration and rotation', () => {
-  test('a plaintext row written before encryption keeps working and stops being plaintext', async () => {
-    const harness = createTestUserDO();
-    sqlExec(harness.db).exec(`
-      CREATE TABLE IF NOT EXISTS user_credentials (
-        key TEXT PRIMARY KEY, kind TEXT NOT NULL, value TEXT NOT NULL,
-        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`);
-    sqlExec(harness.db).exec(
-      `INSERT INTO user_credentials (key, kind, value) VALUES (?, ?, ?)`,
-      'openai.bearer', 'bearer', JSON.stringify({ kind: 'bearer', token: 'sk-legacy' }),
-    );
-
-    expect(await harness.userDO.getAuthHeaders(await testOwner(), 'openai.bearer'))
-      .toEqual({ Authorization: 'Bearer sk-legacy' });
-    const stored = storedValue(harness, 'openai.bearer');
-    expect(stored).not.toContain('sk-legacy');
-    harness.close();
-  });
-
+describe("only an envelope sealed under this deployment's key opens", () => {
   test('a value that is not a sealed envelope does not open, and says why', async () => {
     const cipher = await createCredentialCipher({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
     const plaintext = JSON.stringify({ kind: 'bearer', token: 'sk-planted' });
@@ -172,7 +154,7 @@ describe('migration and rotation', () => {
       .rejects.toMatchObject({ code: 'bad_input', message: expect.stringContaining('not a sealed envelope') });
   });
 
-  test('a plaintext row in a store already sealed is refused, and no rotation launders it', async () => {
+  test('a plaintext row is refused, credential and MCP headers alike', async () => {
     const plaintext = JSON.stringify({ kind: 'bearer', token: 'sk-planted' });
     const plainHeaders = JSON.stringify({ Authorization: 'Bearer mcp-planted' });
     const first = createTestUserDO();
@@ -190,56 +172,13 @@ describe('migration and rotation', () => {
 
     await expect(first.userDO.getAuthHeaders(await testOwner(), 'openai.bearer'))
       .rejects.toThrow('opening the stored credential openai.bearer');
-
-    // The rotation re-seals every row that opens; one that never was sealed stays exactly as planted.
-    const rotated = createTestUserDO({
-      storage: first.db, credentialEncryptionKey: NEXT_KEY, credentialEncryptionKeyPrevious: TEST_CREDENTIAL_ENCRYPTION_KEY,
-    });
-
-    expect(await rotated.userDO.getAuthHeaders(await rotatedOwner(), 'anthropic.bearer')).toMatchObject({ 'x-api-key': 'sk-ok' });
-    await expect(rotated.userDO.getAuthHeaders(await rotatedOwner(), 'openai.bearer'))
-      .rejects.toThrow('opening the stored credential openai.bearer');
-    expect(storedValue(rotated, 'openai.bearer')).toBe(plaintext);
-    expect(sqlExec(rotated.db).exec('SELECT headers FROM user_mcp_servers WHERE id = ?', 'planted').toArray())
-      .toEqual([{ headers: plainHeaders }]);
-    rotated.close();
-  });
-
-  test('a rotation re-seals the store and the retired key stays readable', async () => {
-    const first = createTestUserDO();
-    await first.userDO.setCredential(await testOwner(), 'openai.bearer', { kind: 'bearer', token: 'sk-rotate' });
-    const sealedUnderOldKey = present(storedValue(first, 'openai.bearer'), 'the sealed openai.bearer row');
+    expect(await first.userDO.getAuthHeaders(await testOwner(), 'anthropic.bearer')).toMatchObject({ 'x-api-key': 'sk-ok' });
+    expect(storedValue(first, 'openai.bearer')).toBe(plaintext);
     first.close();
-
-    const rotated = createTestUserDO({
-      credentialEncryptionKey: NEXT_KEY,
-      credentialEncryptionKeyPrevious: TEST_CREDENTIAL_ENCRYPTION_KEY,
-    });
-
-    sqlExec(rotated.db).exec(`
-      CREATE TABLE IF NOT EXISTS user_credentials (
-        key TEXT PRIMARY KEY, kind TEXT NOT NULL, value TEXT NOT NULL,
-        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`);
-    sqlExec(rotated.db).exec(
-      `INSERT INTO user_credentials (key, kind, value) VALUES (?, ?, ?)`,
-      'openai.bearer', 'bearer', sealedUnderOldKey,
-    );
-
-    expect(await rotated.userDO.getAuthHeaders(await rotatedOwner(), 'openai.bearer'))
-      .toEqual({ Authorization: 'Bearer sk-rotate' });
-    const resealed = present(storedValue(rotated, 'openai.bearer'), 'the re-sealed openai.bearer row');
-    expect(resealed).not.toBe(sealedUnderOldKey);
-
-    // Re-sealed under the new key: a deployment that holds only that key reads it.
-    const nextOnly = createTestUserDO({ credentialEncryptionKey: NEXT_KEY, storage: rotated.db });
-    expect(await nextOnly.userDO.getAuthHeaders(await rotatedOwner(), 'openai.bearer'))
-      .toEqual({ Authorization: 'Bearer sk-rotate' });
-    nextOnly.close();
-    rotated.close();
   });
 
-  test('a row sealed under a key this deployment no longer has fails only that credential', async () => {
-    const orphaned = createTestUserDO({ credentialEncryptionKey: NEXT_KEY });
+  test('a row sealed under another key fails only that credential', async () => {
+    const orphaned = createTestUserDO({ credentialEncryptionKey: OTHER_KEY });
     const cipher = await createCredentialCipher({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
     sqlExec(orphaned.db).exec(`
       CREATE TABLE IF NOT EXISTS user_credentials (
@@ -250,11 +189,11 @@ describe('migration and rotation', () => {
       'openai.bearer', 'bearer',
       await cipher.seal('test-user-do:openai.bearer', JSON.stringify({ kind: 'bearer', token: 'sk-lost' })),
     );
-    await orphaned.userDO.setCredential(await rotatedOwner(), 'anthropic.bearer', { kind: 'bearer', token: 'sk-ok' });
+    await orphaned.userDO.setCredential(await otherKeyOwner(), 'anthropic.bearer', { kind: 'bearer', token: 'sk-ok' });
 
-    await expect(orphaned.userDO.getAuthHeaders(await rotatedOwner(), 'openai.bearer'))
+    await expect(orphaned.userDO.getAuthHeaders(await otherKeyOwner(), 'openai.bearer'))
       .rejects.toThrow('opening the stored credential openai.bearer');
-    expect(await orphaned.userDO.getAuthHeaders(await rotatedOwner(), 'anthropic.bearer'))
+    expect(await orphaned.userDO.getAuthHeaders(await otherKeyOwner(), 'anthropic.bearer'))
       .toMatchObject({ 'x-api-key': 'sk-ok' });
     orphaned.close();
   });

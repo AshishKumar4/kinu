@@ -225,6 +225,13 @@
       "decision": "safety"
     },
     {
+      "file": "packages/core/src/safety/egress-gate.ts",
+      "kind": "hand-parser",
+      "owner": "scanScrub",
+      "sourceSha256": "103fb34d733c0a2ced830772ce19c16c4d1d3adf3ece64c5e7ee47c3fd920949",
+      "decision": "traversal"
+    },
+    {
       "file": "packages/core/src/safety/secret-patterns.ts",
       "kind": "regex-literal",
       "owner": "benign",

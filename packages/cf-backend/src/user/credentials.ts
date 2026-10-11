@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 import {
-  type Credential, CLAUDE_CRED_KEY, CODEX_CRED_KEY, MAIN_ACCOUNT, accountCredentialKey, baseCredentialKey, claudeCodeFrom, createClaudeOAuthClient, createCodexOAuthClient, startClaudeSignIn, subscriptionIssuer, rotateLogin, usableLogin, type LoginRenewal, type SubscriptionIssuer, decodeCodexAccountId, tokensToCredential, type DeviceCodeStart, type JsonValue, type OAuthCredential, type EgressRequestFacts, type EgressSecretBinding, parseJsonValue, ownerCaller, type UserCaller, type ResolvedCaller, credentialToHeaders, refusedLogin, type AuthRequest, type AuthResolution, validateCredential, validateCredentialKey, createCredentialCipher, isSealedCredential, type CredentialCipher, listEgressSecrets, putEgressSecret, resolveEgressInjection, revokeEgressSecret, rewrapEgressSecrets, type EgressInjectionResult, type EgressSecretSummary, type EgressVaultDeps, type PutEgressSecretInput, revocationEndpointFor, revokeOAuthGrant, type UnrevokedGrant, isModelInferenceCredentialKey, CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, accountIdFromCloudflareCredential, cloudflareAIGatewayId, cloudflareAccountsFromCredential, cloudflareWorkersAIBaseURL, fetchCloudflareAIGateways, isCloudflareAIGatewayId, isCloudflareCredentialExpiring, isCloudflareCredentialUsable, refreshCloudflareCredential, withCloudflareAccount, type CloudflareAccount, type CloudflareAIGatewaySummary,
+  type Credential, CLAUDE_CRED_KEY, CODEX_CRED_KEY, MAIN_ACCOUNT, accountCredentialKey, baseCredentialKey, claudeCodeFrom, createClaudeOAuthClient, createCodexOAuthClient, startClaudeSignIn, subscriptionIssuer, rotateLogin, usableLogin, type LoginRenewal, type SubscriptionIssuer, decodeCodexAccountId, tokensToCredential, type DeviceCodeStart, type JsonValue, type OAuthCredential, type EgressRequestFacts, type EgressSecretBinding, type ApprovalGrant, grantedEgressBindings, parseJsonValue, ownerCaller, type UserCaller, type ResolvedCaller, credentialToHeaders, refusedLogin, type AuthRequest, type AuthResolution, validateCredential, validateCredentialKey, createCredentialCipher, type CredentialCipher, listEgressSecrets, putEgressSecret, resolveEgressInjection, revokeEgressSecret, type EgressInjectionResult, type EgressSecretSummary, type EgressVaultDeps, type PutEgressSecretInput, revocationEndpointFor, revokeOAuthGrant, type UnrevokedGrant, isModelInferenceCredentialKey, CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, accountIdFromCloudflareCredential, cloudflareAIGatewayId, cloudflareAccountsFromCredential, cloudflareWorkersAIBaseURL, fetchCloudflareAIGateways, isCloudflareAIGatewayId, isCloudflareCredentialExpiring, isCloudflareCredentialUsable, refreshCloudflareCredential, withCloudflareAccount, type CloudflareAccount, type CloudflareAIGatewaySummary,
 } from '@kinu.run/core';
 import { attempt, authoredRefusal, diagnostics, KinuError, renderThrownChain, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -98,7 +98,6 @@ function credentialBaseURL(storedKey: string, cred: Credential): string | null {
   return null;
 }
 
-const CREDENTIAL_ENVELOPE_MARKER = 'credential_envelope_key_id';
 
 const AI_GATEWAY_CONFIG_KEY = 'cloudflare_ai_gateway';
 
@@ -209,7 +208,6 @@ export class UserCredentials {
     );
   }
 
-  private _credentialsRewrapped: Promise<void> | null = null;
 
   private cipher(): Promise<CredentialCipher> {
     return createCredentialCipher(this.host.env);
@@ -228,7 +226,6 @@ export class UserCredentials {
 
   /** The row and its revision, read in one step. */
   private async readCredentialAt(key: string): Promise<{ readonly cred: Credential; readonly revision: number } | null> {
-    await this.rewrapCredentials();
     const row = this.host.sqlx<{ value: string }>(`SELECT value FROM user_credentials WHERE key = ?`, key)[0];
     const revision = this.credentialRevision(key);
 
@@ -288,8 +285,6 @@ export class UserCredentials {
 
   /** Writes nothing, so {@link commitCredential} can be paired with a fence read in one turn. */
   async sealCredential(key: string, cred: Credential): Promise<string> {
-    await this.rewrapCredentials();
-
     return (await this.cipher()).seal(this.credentialAad(key), JSON.stringify(cred));
   }
 
@@ -390,78 +385,6 @@ export class UserCredentials {
     this.dropCredential(key);
   }
 
-  /** Re-seals retired-key rows and a never-sealed store's plaintext once per instance, unless the
-   *  marker matches. Unopenable rows are left so only that credential fails. */
-  private rewrapCredentials(): Promise<void> {
-    this._credentialsRewrapped ??= (async () => {
-      const cipher = await this.cipher();
-
-      const marker = this.host.sqlx<{ value: string }>(
-        `SELECT value FROM user_schema_meta WHERE key = ?`, CREDENTIAL_ENVELOPE_MARKER,
-      )[0];
-
-      if (marker?.value === cipher.keyId) return;
-      let clean = true;
-
-      // Only a never-sealed store holds pre-encryption rows.
-      const reopen = (aad: string, stored: string): Promise<string> => (
-        marker === undefined && !isSealedCredential(stored) ? Promise.resolve(stored) : cipher.open(aad, stored)
-      );
-
-      for (const row of this.host.sqlx<{ key: string; value: string }>(`SELECT key, value FROM user_credentials`)) {
-        const aad = this.credentialAad(row.key);
-
-        try {
-          this.host.sqlx(
-            `UPDATE user_credentials SET value = ? WHERE key = ?`,
-            await cipher.seal(aad, await reopen(aad, row.value)), row.key,
-          );
-        } catch (err) {
-          clean = false;
-          diagnostics.failure('credential.reseal_failed', toKinuError({
-            doing: 'resealing a stored credential under the current key',
-            cause: err,
-            otherwise: 'bad_input',
-          }), { credentialKey: row.key });
-        }
-      }
-
-      for (const row of this.host.sqlx<{ id: string; headers: string }>(
-        `SELECT id, headers FROM user_mcp_servers WHERE headers IS NOT NULL`,
-      )) {
-        const aad = this.mcpHeadersAad(row.id);
-
-        try {
-          this.host.sqlx(
-            `UPDATE user_mcp_servers SET headers = ? WHERE id = ?`,
-            await cipher.seal(aad, await reopen(aad, row.headers)), row.id,
-          );
-        } catch (err) {
-          clean = false;
-          diagnostics.failure('mcp.stored_headers_reseal_failed', toKinuError({
-            doing: "resealing an MCP server's stored headers under the current key",
-            cause: err,
-            otherwise: 'bad_input',
-          }), { serverId: row.id });
-        }
-      }
-
-      // Egress secrets share the cipher and must rotate in the same pass as the marker.
-      if (!await rewrapEgressSecrets(this.egressVaultDeps(cipher))) clean = false;
-
-      // Rotation drops the retired key based on this marker, so only write it if no row was left.
-      if (!clean) return;
-      this.host.sqlx(
-        `INSERT INTO user_schema_meta (key, value) VALUES (?, ?)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-        CREDENTIAL_ENVELOPE_MARKER, cipher.keyId,
-      );
-    })();
-
-    return this._credentialsRewrapped;
-  }
-
-
   /** MCP headers hold bearer tokens, sealed like credentials; AAD is the server id to prevent
    *  cross-server replay. Null passes through. */
   private mcpHeadersAad(serverId: string): string {
@@ -469,7 +392,6 @@ export class UserCredentials {
   }
 
   async sealMcpHeaders(serverId: string, headers: string | null): Promise<string | null> {
-    await this.rewrapCredentials();
 
     return headers === null ? null : (await this.cipher()).seal(this.mcpHeadersAad(serverId), headers);
   }
@@ -477,7 +399,6 @@ export class UserCredentials {
   /** Stored headers that do not open reject: sent without them, the request would reach
    * the server unauthenticated and read as a server wanting a login. */
   async openMcpHeaders(serverId: string, stored: string | null): Promise<string | null> {
-    await this.rewrapCredentials();
 
     if (stored === null) return null;
 
@@ -507,7 +428,6 @@ export class UserCredentials {
    *  keeps its placeholder. */
   async putEgressSecret(caller: UserCaller, input: PutEgressSecretInput): Promise<EgressSecretBinding> {
     await this.host.requireTier(caller, 'egress_secrets.manage');
-    await this.rewrapCredentials();
 
     return putEgressSecret(this.egressVaultDeps(await this.cipher()), input);
   }
@@ -520,16 +440,16 @@ export class UserCredentials {
   }
 
   /**
-   * `active` is already grant-filtered (consent); this decides destination per request.
-   * The outbound handler presents the owner capability.
+   * `grants` are the workspace's consent, read here against the vault as it stands; this decides destination per
+   * request. The outbound handler presents the owner capability, and asks only for a request that names a placeholder.
    */
   async resolveEgressInjection(
     caller: UserCaller,
     facts: EgressRequestFacts,
-    active: readonly EgressSecretBinding[],
+    grants: readonly ApprovalGrant[],
   ): Promise<EgressInjectionResult> {
     await this.host.requireTier(caller, 'egress_secrets.inject');
-    await this.rewrapCredentials();
+    const active = grantedEgressBindings(listEgressSecrets(this.host.ctx.storage.sql), grants);
 
     return resolveEgressInjection(this.egressVaultDeps(await this.cipher()), facts, active);
   }

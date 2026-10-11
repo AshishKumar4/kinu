@@ -27,7 +27,7 @@ function sandboxHandle(): SandboxHandle & { calls: string[]; execOptions: unknow
       calls.push(`exec:${command}`);
       execOptions.push(opts);
 
-      return { stdout: "ok", exitCode: 0 };
+      return { stdout: "ok", stderr: '', exitCode: 0 };
     },
     async readFile(path: string) {
       calls.push(`read:${path}`);
@@ -383,7 +383,7 @@ describe("the sandbox namespace a program calls", () => {
   test('all exposure surfaces refuse fractional ports before any container work', async () => {
     const handle = sandboxHandle();
 
-    handle.exec = async () => ({ stdout: '200|0', exitCode: 0 });
+    handle.exec = async () => ({ stdout: '200|0', stderr: '', exitCode: 0 });
 
     const provider = createSandboxExecutor(handle, { previewHostSuffix: 'kinu.example.test' });
     const direct = present(provider.exposePort, 'sandbox provider exposePort');

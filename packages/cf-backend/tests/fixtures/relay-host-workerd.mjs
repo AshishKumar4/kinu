@@ -2,7 +2,7 @@
 // (green, host disposed): a fulfilled AgentWorkspaceHost stub the relay never disposed kept a callback-bearing codemode
 // program's capability until context shutdown once a collection ran inside it, so its Tail read as hung.
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
-import { build } from 'esbuild';
+import { buildSync } from 'esbuild';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -19,15 +19,12 @@ const { buildSlateVendor } = await import(join(root, 'packages/cf-backend/slate-
 
 writeFileSync(join(dir, 'slate-vendor.js'), `export default ${JSON.stringify(buildSlateVendor())};`);
 
-const { nodeRequireAsImport } = await import(join(root, 'packages/cf-backend/esbuild-node-require.ts'));
-
-// A CommonJS dependency's require of a built-in is an import of it, as production's bundler makes it.
-const bundle = async path => (await build({
+const bundle = path => buildSync({
   entryPoints: [path], bundle: true, format: 'esm', platform: 'neutral', write: false,
   conditions: ['workerd', 'worker', 'browser'], mainFields: ['module', 'main'],
   alias: { 'virtual:kinu-slate-vendor': join(dir, 'slate-vendor.js') },
-  external: ['node:*', 'cloudflare:*'], nodePaths: [join(root, 'node_modules')], logLevel: 'error', plugins: [nodeRequireAsImport],
-})).outputFiles[0].text;
+  external: ['node:*', 'cloudflare:*'], nodePaths: [join(root, 'node_modules')], logLevel: 'error',
+}).outputFiles[0].text;
 
 // The agent's isolate: it calls a program with callbacks through the shipped client, as a turn's codemode does.
 writeFileSync(join(dir, 'client.js'), `
@@ -42,7 +39,7 @@ export class Client extends DurableObject {
 }
 `);
 
-const client = await bundle(join(dir, 'client.js'));
+const client = bundle(join(dir, 'client.js'));
 
 // The workspace: the shipped relay in front of a host whose program runs codemode over the callbacks, under a
 // collection the probe holds it for.
@@ -99,7 +96,7 @@ let released = Promise.withResolvers();
 const options = convertV4MiniflareOptions({
   workers: [{
     name: 'probe', modulesRoot: dir,
-    modules: [{ type: 'ESModule', path: join(dir, 'bundle.js'), contents: await bundle(join(dir, 'worker.js')) }],
+    modules: [{ type: 'ESModule', path: join(dir, 'bundle.js'), contents: bundle(join(dir, 'worker.js')) }],
     compatibilityDate: '2026-09-30', compatibilityFlags: ['nodejs_compat', 'new_module_registry'],
     durableObjects: { OrchestratorAgent: 'Workspace' }, workerLoaders: { LOADER: {} },
     outboundService: async () => {

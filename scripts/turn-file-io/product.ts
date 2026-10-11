@@ -2,7 +2,7 @@
 import { OrchestratorAgent as Product, AgentWorkspaceRPC as Relay, UserDO as Account } from 'kinu:product';
 import type { AgentFacet as MeasuredFacet } from './facet';
 import { Meter, instrument, type Slice, type RpcReceiver } from './meter';
-import { JsonObjectSchema } from '@kinu.run/core';
+import { egressSecretRule, JsonObjectSchema } from '@kinu.run/core';
 import type { Tool } from 'ai';
 import * as v from 'valibot';
 import type { ChatSession } from '@kinu.run/core';
@@ -155,15 +155,30 @@ export class OrchestratorAgent extends Product {
     await this.perfWarmFiles();
   }
 
-  async perfTool(name: string, input: string): Promise<string> {
+  /** The workspace may spend vault secret `id` on its egress, as an owner's approval grants it. */
+  async perfGrantEgress(id: string): Promise<void> {
+    this.config.grantShellApproval([{ rule: egressSecretRule(id), executor: 'sandbox' }]);
+  }
+
+  /** Tool `name` called with `input`; with `abortAfterMs`, its call aborted that long in, as a Stop aborts a turn's calls. */
+  async perfTool(name: string, input: string, abortAfterMs?: number): Promise<string> {
     this.acc.context.reset();
     const tool = this.getRawToolsForWorkMode('build')[name];
 
     if (tool?.execute === undefined) throw new Error(`tool ${name} is absent`);
     const callable: Tool = tool;
     const parsed = v.parse(v.pipe(v.string(), v.parseJson(), JsonObjectSchema), input);
-    const result: unknown = await callable.execute?.(parsed, { toolCallId: `perf-${crypto.randomUUID()}`, messages: [], context: undefined });
+    const stop = new AbortController();
+    const timer = abortAfterMs === undefined ? undefined : setTimeout(() => { stop.abort(new Error('perf abort')); }, abortAfterMs);
 
-    return typeof result === 'string' ? result : JSON.stringify(result);
+    try {
+      const result: unknown = await callable.execute?.(parsed, {
+        toolCallId: `perf-${crypto.randomUUID()}`, messages: [], context: undefined, abortSignal: stop.signal,
+      });
+
+      return typeof result === 'string' ? result : JSON.stringify(result);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }

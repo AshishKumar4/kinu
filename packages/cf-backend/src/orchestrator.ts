@@ -36,6 +36,7 @@ import {
   type PlanEdit, type PlanReview, type PlanReviewResult, actorReadHandle,
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedBox, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
+import type { WorkspaceEgress } from "@nimbus-sh/core/_shared/workspace-network.js";
 import { agentFacet, agentStateShellId, AgentMemory, AgentStoreBroker, AgentWorkspaceHost, headDeltas, uiChunks, type AgentFacetPlacement } from "./agent-facets";
 import { agentCallsThrough, AgentIsolateSlots } from "./dynamic-worker-slots";
 import { providerBindingsOf, routedModelReads } from "./providers/agent-registry";
@@ -196,7 +197,7 @@ import {
   jobRedriveResumeGate, resumableForkRoots,
   type CancelWorkOutcome, type RetryOutcome,
   getAlwaysActiveSkills, getEvolutionConfig, getProviderAccounts, getReasoningEffort,
-  getShellApprovalMode, getShellApprovalGrants, revokeShellApprovalGrants,
+  getShellApprovalMode, getShellApprovalGrants, revokeShellApprovalGrants, egressGrants,
   setAlwaysActiveSkills, setEvolutionConfig,
   setModel, setProviderAccount, setReasoningEffort, setShellApprovalMode,
   type EvolutionConfigView,
@@ -530,12 +531,30 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return rows;
   }
 
+  /**
+   * The workspace's egress: its commands' and programs' requests and sockets leave through Kinu's, as the sandbox's do,
+   * minted with this workspace's owner as it opens. Nothing is asked of the vault or the grants here: the egress asks
+   * for both (`egressGrants`) for a request that names a placeholder. A workspace with no owner keeps the isolate's own
+   * network.
+   */
+  private workspaceEgress(): WorkspaceEgress | undefined {
+    // A store refused at the reset runs nothing that reaches the network (its turns, chat and requests are refused), and
+    // its export reads files: it needs no egress, and its tables are not read for an owner.
+    if (this.storageRefusal !== undefined) return undefined;
+    const ownerUserId = this.getOwnerUserId();
+
+    if (ownerUserId === null) return undefined;
+
+    return this.ctx.exports.KinuEgress({ props: { workspaceName: this.name, ownerUserId } });
+  }
+
   private hostedWorkspace(): HostedWorkspace {
     this._workspace ??= createHostedWorkspace({
       ctx: this.ctx,
       env: this.env,
       tasks: this.nimbusTasks,
       previewUrl: (port, capability) => nimbusPreviewUrl(this.env, this.name, port, capability),
+      egress: () => this.workspaceEgress(),
       onFilesChanged: (paths) => {
         this.changes.touched(paths);
         this.liveReadsMoved(readsMovedByFiles(paths));
@@ -3248,6 +3267,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         return new Map([...readAgentFigures(this.boundSql, [main]), ...reportedAgentFigures(this.boundSql, actorIds.filter((actorId) => actorId !== main))]);
       },
     });
+  }
+
+  /** The grants that let this workspace's egress spend a vault secret, as they stand. Never `@callable`. */
+  async egressGrants(): Promise<ApprovalGrant[]> {
+    return egressGrants(getShellApprovalGrants(this.config).grants);
   }
 
   /** The devbox egress cannot name the agent, so nobody's. Never `@callable`. */

@@ -635,6 +635,22 @@ fi
 bun "$KINU_ROOT/scripts/devbox-tools.ts" check "$KINU_BACKUP_BUCKET" \
   || { publish_red "the devbox tools tarball is missing from $KINU_BACKUP_BUCKET; publish it as the line above says"; return 1; }
 
+# The runtime catalog this build pins (NIMBUS_RUNTIME_CATALOG_SHA256), read by a hosted `nimbus install` from
+# `catalog/sha256/<sha256>.json` in its NIMBUS_RUNTIME_CACHE bucket: put there from the bucket's `catalog/v1.json` when
+# that is the pinned catalog, else refused by name, before the Worker that reads it is uploaded.
+KINU_RUNTIME_CATALOG="$(bun -e '
+  const config = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  const bucket = config.r2_buckets?.find((entry) => entry.binding === "NIMBUS_RUNTIME_CACHE")?.bucket_name ?? "";
+  process.stdout.write(bucket + " " + (config.vars?.NIMBUS_RUNTIME_CATALOG_SHA256 ?? ""));
+' "$KINU_BUILT_CONFIG")"
+read -r KINU_RUNTIME_BUCKET KINU_RUNTIME_CATALOG_SHA256 <<< "$KINU_RUNTIME_CATALOG"
+if [ -z "$KINU_RUNTIME_BUCKET" ] || [ -z "$KINU_RUNTIME_CATALOG_SHA256" ]; then
+  publish_red "$KINU_BUILT_CONFIG binds no NIMBUS_RUNTIME_CACHE or pins no NIMBUS_RUNTIME_CATALOG_SHA256"
+  return 1
+fi
+bun "$KINU_ROOT/scripts/runtime-catalog.ts" ensure "$KINU_RUNTIME_BUCKET" "$KINU_RUNTIME_CATALOG_SHA256" \
+  || { publish_red "the pinned runtime catalog is not in $KINU_RUNTIME_BUCKET, as the line above says"; return 1; }
+
 # ── Step 2b: The reset ────────────────────────────────────────
 # After the build, so a red gate or a failed build deletes nothing; the upload
 # below is then the genesis deploy.

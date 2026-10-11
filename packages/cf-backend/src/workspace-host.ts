@@ -5,7 +5,7 @@
  */
 
 import { createWorkspace, storeFiles, workspaceGenerationStorage } from '@kinu.run/core/workspace';
-import type { RuntimeSource, SupervisorOpResult, WorkspaceBundle, WorkspaceFiles } from '@kinu.run/core/workspace';
+import type { RuntimeSource, SupervisorOpResult, WorkspaceBundle, WorkspaceFiles, WorkspaceOptions } from '@kinu.run/core/workspace';
 import { jsonResultOrVoid, sha256Hex } from '@kinu.run/core';
 import type {
   NimbusExecResult, NimbusPortInfo, NimbusSandboxHandle, NimbusStartResult, PreviewRouteCheck, WorkspacePreviewUrl,
@@ -14,14 +14,13 @@ import { diagnostics, KinuError, toKinuError, type Refusal } from '@kinu.run/cor
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
-import type { ObjectNamespace } from '@kinu.run/core';
+import type { ObjectNamespace, ServingScope } from '@kinu.run/core';
 import type { ComposedFacetManager, HostedRuntime, HostedRuntimeOptions, HostedRuntimeTask, HostedSession, HostedSessionScope, WorkerRecipe } from '@nimbus-sh/worker/workspace-host';
 import { clearPortCapability, listPortReservations, readPortReservation, readPortReservationByOwner, releasePortReservation } from '@nimbus-sh/worker/port-capability';
 import type { DurableApps } from '@kinu.run/core/slates';
 import * as v from 'valibot';
 import type { NimbusTasks } from './nimbus-tasks';
 
-/** `NIMBUS_SESSION` is deliberately not named: the class is gone (wrangler.jsonc migration `v3`). */
 const HOST_FABRIC_COMPOSITION: FabricComposition = {
   supervisorEntrypoint: 'SupervisorRPC',
   hostNamespace: 'OrchestratorAgent',
@@ -84,6 +83,8 @@ export interface HostedWorkspaceDeps<Id> {
   previewUrl: (port: number, capability: string) => Promise<WorkspacePreviewUrl>;
   onFilesChanged?: (paths: readonly string[]) => void;
   onPortsChanged?: () => void;
+  /** Kinu's egress for the workspace's commands and programs, asked once as the workspace opens. */
+  readonly egress?: WorkspaceOptions['egress'];
   /** Asked before a preview request is routed and by the launch journal after a reset. A refusal says why
      *  the slate cannot serve. */
   ensureSlate?(owner: string): Promise<Refusal | null>;
@@ -116,6 +117,14 @@ export interface WorkspaceTerminal {
 export interface WorkspaceServing {
   readonly held: readonly { readonly port: number; readonly stamp: string | null }[];
   readonly jobs: ReadonlySet<string>;
+}
+
+/**
+ * The recorded serving facts a read of the workspace alone answers for: those of the jobs it runs a process for, by the
+ * job's id. Not by port: a box this activation did not read may serve the same port number for one of its own jobs.
+ */
+export function workspaceServingScope(serving: WorkspaceServing): ServingScope {
+  return (fact) => serving.jobs.has(fact.job);
 }
 
 /** A box over the workspace this object hosts: its store is the database itself, so its files need no session call. */
@@ -240,6 +249,7 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
     // own `ctx`). Without both, `git clone` refuses.
     fabric: HOST_FABRIC_COMPOSITION,
     runtimeSource,
+    ...(deps.egress !== undefined && { egress: deps.egress }),
   });
 
   if (deps.onFilesChanged) bundle.onFilesChanged(deps.onFilesChanged);
@@ -471,13 +481,9 @@ class ObservedPortRegistry extends PortRegistry {
   }
 }
 
-/** `@nimbus-sh/worker`'s `SHELL_STATE_KEY_PREFIX`: no public call reads a named shell's directory. */
-const NAMED_SHELL_STATE_PREFIX = 'nimbus_programmatic_shell:';
-
 const NamedShellStateSchema = v.object({ cwd: v.pipe(v.string(), v.startsWith('/')) });
 
-/** Nimbus 0.15 keeps a named shell's state in the workspace's own SQLite; worker 0.13.1 moves an older key there on
- *  the box's first named call. Nimbus has no public read of it yet. */
+/** Where Nimbus keeps a named shell's state, in the workspace's own SQLite (core `SHELLS_TABLE`); it has no public read. */
 const NIMBUS_SHELLS_TABLE = 'vfs_shells';
 
 function namedShellCwd(sql: SqlStorage, id: string): string | null {
@@ -516,14 +522,7 @@ function workspaceBox(deps: {
     execStream: async (command, options) => await (await runtime()).execStream(command, named(options)),
     startProcess: async (command, options): Promise<NimbusStartResult> => await (await runtime()).startProcess(command, named(options)),
     runCode: async (code, options): Promise<NimbusExecResult> => await (await runtime()).runCode(code, named(options)),
-    shellCwd: async (name) => {
-      const kept = namedShellCwd(deps.ctx.storage.sql, shellId(name));
-
-      if (kept !== null) return kept;
-      const saved = v.safeParse(NamedShellStateSchema, await deps.ctx.storage.get(`${NAMED_SHELL_STATE_PREFIX}${shellId(name)}`));
-
-      return saved.success ? saved.output.cwd : null;
-    },
+    shellCwd: async (name) => namedShellCwd(deps.ctx.storage.sql, shellId(name)),
     runtimes: {
       ensure: async (specs, options) => await jsonResultOrVoid((await runtime()).ensureRuntimes(Array.isArray(specs) ? [...specs] : [specs], options)),
       install: async (spec, options) => await jsonResultOrVoid((await runtime()).installRuntime(spec, options)),

@@ -4,8 +4,8 @@ import { join, resolve } from 'node:path';
 import { builtinModules } from 'node:module';
 import { createServer } from 'node:net';
 import { build } from 'esbuild';
-import { nodeRequireAsImport } from '../packages/cf-backend/esbuild-node-require';
-import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
+import { Miniflare, Response as MiniflareResponse, WebSocketPair, convertV4MiniflareOptions } from 'miniflare';
+import { PERF_SECRET, PERF_SECRET_HOST } from './turn-file-io/egress-secret';
 import { ownerCaller, type JsonObject } from '@kinu.run/core';
 import * as v from 'valibot';
 import { workersAiBinding, readAiRun, workersAiAnswer } from '../packages/cf-backend/tests/helpers/workers-ai-binding';
@@ -29,7 +29,7 @@ const isolated = sha !== 'd05ff368d';
 
 const samples = Number(option('samples', '30'));
 
-const COMMAND_HOSTS: readonly string[] = ['github.com', 'codeload.github.com', 'registry.npmjs.org'];
+const COMMAND_HOSTS: readonly string[] = ['github.com', 'codeload.github.com', 'registry.npmjs.org', 'example.com'];
 
 const BuiltConfigSchema = v.object({
   compatibility_date: v.string(), compatibility_flags: v.array(v.string()), vars: v.record(v.string(), v.string()),
@@ -65,7 +65,7 @@ async function bundle(file: string): Promise<string> {
     entryPoints: [join(import.meta.dir, 'turn-file-io', file)], bundle: true, write: false, format: 'esm',
     platform: 'neutral', mainFields: ['module', 'main'], conditions: ['workerd', 'worker', 'browser'], target: 'es2022',
     alias: Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, `node:${name}`])),
-    external: ['cloudflare:*', 'node:*'], plugins: [nodeRequireAsImport, { name: 'product', setup: (plugin) => {
+    external: ['cloudflare:*', 'node:*'], plugins: [{ name: 'product', setup: (plugin) => {
       plugin.onResolve({ filter: /^kinu:product$/ }, () => ({ path: './index.js', external: true }));
     } }],
   });
@@ -269,7 +269,7 @@ const compat = { compatibilityDate: wrangler.compatibility_date, compatibilityFl
 
 const key = btoa('worker-heap-credential-key-32byt');
 
-const agent = (await buildAgentBundle(join(import.meta.dir, 'turn-file-io/facet.ts'))).modules;
+const agent = buildAgentBundle(join(import.meta.dir, 'turn-file-io/facet.ts')).modules;
 
 writeWhole(join(resolve(dist, wrangler.assets.directory), '_agent/modules.json'), JSON.stringify(agent));
 
@@ -288,6 +288,68 @@ async function ask(path: string, input?: JsonObject): Promise<string> {
   if (!response.ok) throw new Error(`${path} returned ${String(response.status)}: ${body}`);
 
   return body;
+}
+
+/** A bare repository the egress subject pushes to, served as git's smart HTTP by `git http-backend`. */
+const gitRoot = join(process.env.TMPDIR ?? '/tmp', `perfio-git-${String(process.pid)}`);
+
+/**
+ * `git.perfio.test`, the host the probe's secret is bound to: `/echo` and `/ws` reflect the Authorization they were sent,
+ * and `/repo.git` is served by `git http-backend`.
+ */
+async function gitServer(request: Request): Promise<Response | MiniflareResponse> {
+  const url = new URL(request.url);
+
+  const authorization = request.headers.get('authorization') ?? 'none';
+
+  // Reflects the Authorization it was sent, and says whether that was the secret: the program must read the placeholder.
+  if (url.pathname === '/echo') return new Response(`auth=${authorization}\nsecret=${String(authorization === `Bearer ${PERF_SECRET}`)}\n`);
+
+  if (url.pathname === '/ws') return reflectingSocket(authorization);
+
+  const env = {
+    GIT_PROJECT_ROOT: gitRoot, GIT_HTTP_EXPORT_ALL: '1', REMOTE_USER: 'perfio', REQUEST_METHOD: request.method, PATH_INFO: url.pathname,
+    QUERY_STRING: url.search.slice(1), CONTENT_TYPE: request.headers.get('content-type') ?? '', PATH: process.env.PATH ?? '',
+    HTTP_CONTENT_ENCODING: request.headers.get('content-encoding') ?? '',
+  };
+
+  const ran = Bun.spawn(['git', 'http-backend'], { env, stdin: new Uint8Array(await request.arrayBuffer()), stdout: 'pipe', stderr: 'pipe' });
+  const out = new Uint8Array(await new Response(ran.stdout).arrayBuffer());
+  const split = Buffer.from(out).indexOf('\r\n\r\n');
+
+  const headers = new Headers();
+  let status = 200;
+
+  for (const line of new TextDecoder().decode(out.subarray(0, split)).split('\r\n')) {
+    const [name = '', ...rest] = line.split(':');
+
+    if (name.toLowerCase() === 'status') status = Number.parseInt(rest.join(':').trim(), 10);
+    else headers.set(name, rest.join(':').trim());
+  }
+
+  return new Response(out.subarray(split + 4), { status, headers });
+}
+
+/** A WebSocket that opens by sending the Authorization its upgrade carried, then echoes, as a server leaking it would. */
+function reflectingSocket(authorization: string): MiniflareResponse {
+  const [client, server] = Object.values(new WebSocketPair());
+
+  server.accept();
+  server.send(`auth=${authorization}`);
+  server.addEventListener('message', (event) => { server.send(event.data); });
+
+  return new MiniflareResponse(null, { status: 101, webSocket: client });
+}
+
+/** `echo.perfio.test`: a WebSocket server that answers each message with itself, as a public echo server does. */
+function echoSocket(request: Request): MiniflareResponse {
+  if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') return new MiniflareResponse('a WebSocket echo', { status: 426 });
+  const [client, server] = Object.values(new WebSocketPair());
+
+  server.accept();
+  server.addEventListener('message', (event) => { server.send(event.data); });
+
+  return new MiniflareResponse(null, { status: 101, webSocket: client });
 }
 
 /** `request` answered by the network; Bun's fetch decodes the body and keeps its content-encoding, which workerd would decode again. */
@@ -328,13 +390,17 @@ async function measureStep(step: number, entered: number, consumed: number): Pro
   if (mode === 'counts') phases.push(v.parse(CutSchema, JSON.parse(await ask(`/cut?label=${label}&resume=1`))));
 }
 
-async function model(request: Request): Promise<Response> {
+async function model(request: Request): Promise<Response | MiniflareResponse> {
   const entered = performance.now();
   const consumed = measuring ? cpu(enginePid) : 0;
   const url = new URL(request.url);
 
-  // Only the commands subject reaches the network: its clone and install are what it measures.
-  if (subject === 'commands' && COMMAND_HOSTS.includes(url.hostname)) return await passedThrough(request);
+  // Only the commands, egress and tcp subjects reach the network: their clone and install are what they measure.
+  if ((subject === 'commands' || subject === 'egress' || subject === 'tcp') && COMMAND_HOSTS.includes(url.hostname)) return await passedThrough(request);
+
+  if (subject === 'egress' && url.hostname === PERF_SECRET_HOST) return await gitServer(request);
+
+  if (subject === 'egress' && url.hostname === 'echo.perfio.test') return echoSocket(request);
 
   if (url.pathname === '/models') return new Response(SCRIPTED_MODELS_BODY);
 
@@ -627,6 +693,205 @@ try {
     else await profiled(workload, run);
 
     measured.push(...fileResults);
+  } else if (subject === 'egress') {
+    await ask('/seed');
+    // The engine boots, and its egress is minted, before the secret is granted: a grant made later is still spent.
+    await shell('true');
+    const placeholder = await ask('/grant');
+
+    Bun.spawnSync(['git', 'init', '-q', '--bare', join(gitRoot, 'repo.git')]);
+    Bun.spawnSync(['git', '-C', join(gitRoot, 'repo.git'), 'config', 'http.receivepack', 'true']);
+
+    // Every command's network is the workspace egress's: its destination check, its vault, its scrub.
+    await measureOp('egress.curl', () => shell("curl -sS https://example.com/ | grep -o 'Example Domain' | head -1 | sed 's/^/page=/'"), undefined, 'page=Example Domain');
+    await measureOp('egress.clone', (index) => {
+      const at = `/home/main/perfio/eclone-${String(index + 1)}`;
+
+      return shell(`git clone --depth 1 https://github.com/expressjs/express ${at} && ${node(`console.log('name=' + require('${at}/package.json').name)`)}`);
+    }, undefined, 'name=express');
+    await measureOp('egress.push', (index) => {
+      const at = `/home/main/perfio/epush-${String(index + 2)}`;
+
+      const branch = `b${String(index + 2)}`;
+
+      return shell(`mkdir -p ${at} && cd ${at} && git init -q && git config user.email p@perfio.test && git config user.name perfio`
+        + ` && echo ${String(index)} > a.txt && git add a.txt && git commit -q -m ${branch} && git branch ${branch}`
+        + ` && git remote add origin https://${PERF_SECRET_HOST}/repo.git && git push origin ${branch} && echo pushed=${branch}`);
+    }, undefined, 'pushed=b');
+    // The server gets the secret; the program reads its echo with the placeholder back in its place.
+    const inject = () => shell(`curl -sS -H "Authorization: Bearer ${placeholder}" https://${PERF_SECRET_HOST}/echo`);
+
+    const wsInject = (at: string) => shell(`mkdir -p ${at} && cd ${at} && echo '{"name":"probe","private":true}' > package.json`
+      + ` && npm install --no-audit --no-fund ws@8 > /dev/null && ${node([
+        `const w = new (require('ws'))('wss://${PERF_SECRET_HOST}/ws', { headers: { Authorization: 'Bearer ${placeholder}' } });`,
+        "w.on('message', (d) => { console.log('ws ' + d); w.close(); }); w.on('error', (e) => console.log('ws failed: ' + e.message));",
+      ].join(' '))}`);
+
+    await measureOp('egress.inject', inject, undefined, `auth=Bearer ${placeholder}\nsecret=true`);
+    await measureOp('egress.wsinject', (index) => wsInject(`/home/main/perfio/ews-${String(index + 2)}`), undefined, `ws auth=Bearer ${placeholder}`);
+    await measureOp('egress.npm', (index) => {
+      const at = `/home/main/perfio/enpm-${String(index + 2)}`;
+
+      return shell(`mkdir -p ${at} && cd ${at} && echo '{"name":"probe","private":true}' > package.json`
+        + ` && npm install --no-audit --no-fund ms@2.1.3 && ${node("console.log('ms=' + require('ms/package.json').version)")}`);
+    }, undefined, 'ms=2.1.3');
+    await measureOp('egress.tls', () => shell(node(
+      "const s = require('tls').connect(443, 'example.com', () => s.write('HEAD / HTTP/1.0\\r\\nHost: example.com\\r\\n\\r\\n')); s.on('data', (d) => { console.log('tls=' + String(d).split(' ')[0]); s.destroy(); }); s.on('error', (e) => console.log('tls failed: ' + e.message))",
+    )), undefined, 'tls=HTTP/1');
+
+    // A servername other than the host is presented and checked (NIMBUS-ASKS #44): right for the server, it connects;
+    // wrong for it, the session is refused, as Node refuses it.
+    const named = (label: string, servername: string) => node(
+      `const s = require('tls').connect({ port: 443, host: 'example.com', servername: '${servername}' }, () => s.write('HEAD / HTTP/1.0\\r\\nHost: ${servername}\\r\\n\\r\\n'));`
+      + ` s.on('data', (d) => { console.log('${label}=' + String(d).split(' ')[0]); s.destroy(); }); s.on('error', (e) => console.log('${label} refused: ' + e.message))`,
+    );
+
+    await measureOp('egress.tlsname', () => shell(named('tlsname', 'www.example.com')), undefined, 'tlsname=HTTP/1');
+    await measureOp('egress.tlswrongname', () => shell(named('tlswrongname', 'github.com')), undefined, 'tlswrongname refused');
+    await measureOp('egress.wss', () => shell(node(
+      "const w = new WebSocket('wss://echo.perfio.test/'); w.onopen = () => w.send('kinu-ws'); w.onmessage = (e) => { if (String(e.data) === 'kinu-ws') { console.log('ws=echoed'); w.close(); } }; w.onerror = (e) => console.log('ws failed: ' + (e.message ?? 'error'))",
+    )), undefined, 'ws=echoed');
+    await measureOp('egress.upgrade', () => shell(node(
+      "require('https').request({ host: 'echo.perfio.test', path: '/', headers: { Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==', 'Sec-WebSocket-Version': '13' } }).on('upgrade', (res, socket) => { console.log('upgrade=' + res.statusCode); socket.destroy(); }).on('response', (res) => console.log('upgrade failed: ' + res.statusCode)).on('error', (e) => console.log('upgrade failed: ' + e.message)).end()",
+    )), undefined, 'upgrade=101');
+    await measureOp('egress.clientcert', () => shell(node(
+      "try { const s = require('tls').connect({ host: 'example.com', port: 443, cert: 'c', key: 'k' }, () => { console.log('clientcert=connected'); s.destroy(); }); s.on('error', (e) => console.log('clientcert=' + (e.code ?? e.message))); } catch (e) { console.log('clientcert=' + (e.code ?? e.message)); }",
+    )), undefined, 'clientcert=connected');
+
+    // The egress's own refusal names the address; the isolate's network would time out or reset without one.
+    await measureOp('egress.private', () => shell('curl -sS --max-time 5 http://10.0.0.1/'), undefined, 'blocked');
+    const seen = `${await inject()}\n${await wsInject('/home/main/perfio/ews-leak')}`;
+
+    process.stdout.write(`SECRET-LEAK ${String(seen.includes(PERF_SECRET))} placeholder-seen ${String(seen.includes(placeholder))}\n`);
+    measured.push(...fileResults);
+  } else if (subject === 'abort') {
+    // A busy command aborted as a Stop aborts it: once the call settles, nothing of it may still burn the engine's CPU.
+    await ask('/seed');
+
+    const share = async (ms: number) => {
+      const before = cpu(pid);
+
+      await Bun.sleep(ms);
+
+      return (cpu(pid) - before) / ms;
+    };
+
+    const idle = await share(3000);
+
+    const loops = [
+      { label: 'abort.bash', command: 'bash -c "while :; do :; done"' },
+      { label: 'abort.yield', command: node('setInterval(() => { for (let i = 0; i < 1e7; i++); }, 0)') },
+      // Never yields: it holds its isolate's thread, the host's abort timer too, until a CPU limit ends it (ask 42).
+      { label: 'abort.node', command: node('for (;;) {}') },
+      { label: 'abort.pipe', command: `${node('for (;;) {}')} | cat` },
+    ];
+
+    for (const loop of loops) {
+      const started = performance.now();
+      let answer: string;
+
+      try {
+        answer = await ask('/tool?name=shell&abortAfterMs=1500', { command: loop.command, runtime: 'workspace' });
+      } catch (error) {
+        answer = `threw: ${String(error)}`;
+      }
+
+      const settledMs = performance.now() - started;
+      const after = await share(3000);
+
+      process.stdout.write(JSON.stringify({ event: 'abort', sha, label: loop.label, settledMs, idleShare: idle, cpuShareAfter: after, answer: answer.slice(-300) }) + '\n');
+    }
+  } else if (subject === 'tcp') {
+    // What an owned workspace's program can open through Kinu's egress: plain TCP by destination, the TLS a program
+    // builds or upgrades itself, and the database and mail clients that do, each answered as the program sees it.
+    await ask('/seed');
+
+    const report = (label: string, answer: string) => {
+      const lines = answer.trim().split('\n').filter((line) => !line.startsWith('[Kinu note') && line.trim() !== '');
+
+      process.stdout.write(JSON.stringify({ event: 'tcp', sha, label, answer: lines.slice(-3).join(' | ') }) + '\n');
+    };
+
+    // The host is spelled out in the program, so a command's approval review judges the program and not its address.
+    const dial = (host: string, port: number, say: string) => node([
+      `const host = ${JSON.stringify(host.split(''))}.join('');`,
+      `const s = require('net').connect(${String(port)}, host, () => { console.log('connected ' + s.remoteAddress); ${say === '' ? '' : `s.write(${JSON.stringify(say)});`} });`,
+      "s.setTimeout(8000, () => { console.log('timeout'); s.destroy(); });",
+      "s.once('data', (d) => { console.log('heard ' + JSON.stringify(String(d).slice(0, 60))); s.destroy(); });",
+      "s.on('error', (e) => console.log('error ' + (e.code ?? '') + ' ' + e.message));",
+      "s.on('close', (hadError) => console.log('closed' + (hadError ? ' with error' : '')));",
+    ].join(' '));
+
+    const destinations: readonly (readonly [string, number, string])[] = [
+      ['example.com', 80, 'HEAD / HTTP/1.0\r\nHost: example.com\r\n\r\n'], ['github.com', 22, ''], ['smtp.gmail.com', 587, ''],
+      ['smtp.gmail.com', 25, ''], ['127.0.0.1', 5432, ''], ['10.0.0.1', 22, ''], ['169.254.169.254', 80, ''], ['::1', 6379, ''],
+      ['::ffff:127.0.0.1', 5432, ''], ['::ffff:7f00:1', 5432, ''], ['0:0:0:0:0:0:0:1', 6379, ''], ['localhost', 5432, ''],
+      ['127.0.0.1.nip.io', 5432, ''], ['10.0.0.1.nip.io', 22, ''], ['169.254.169.254.nip.io', 80, ''], ['metadata.google.internal', 80, ''],
+    ];
+
+    for (const [host, port, say] of destinations) report(`net ${host}:${String(port)}`, await shell(dial(host, port, say)));
+
+    report('tls.TLSSocket built by the program', await shell(node([
+      "const tls = require('tls'); try { const t = new tls.TLSSocket(undefined, { servername: 'example.com' });",
+      "t.connect({ port: 443, host: 'example.com' }, () => { console.log('secure ' + t.encrypted); t.destroy(); });",
+      "t.on('error', (e) => console.log('error ' + (e.code ?? '') + ' ' + e.message)); } catch (e) { console.log('threw ' + (e.code ?? '') + ' ' + e.message); }",
+    ].join(' '))));
+    report('STARTTLS by hand (SMTP, tls.connect({ socket }))', await shell(node([
+      "const net = require('net'), tls = require('tls'); const s = net.connect(587, 'smtp.gmail.com'); let step = 0, heard = '';",
+      "s.on('error', (e) => console.log('error ' + e.message));",
+      "s.on('data', (d) => { heard += d; if (!heard.endsWith('\\r\\n')) return; const last = heard.trimEnd().split('\\r\\n').pop(); heard = '';",
+      "  if (step === 0 && last.startsWith('220 ')) { step = 1; s.write('EHLO kinu\\r\\n'); }",
+      "  else if (step === 1 && last.startsWith('250 ')) { step = 2; s.write('STARTTLS\\r\\n'); }",
+      "  else if (step === 2 && last.startsWith('220 ')) { step = 3; s.removeAllListeners('data');",
+      "    const t = tls.connect({ socket: s, servername: 'smtp.gmail.com' }, () => t.write('EHLO kinu\\r\\n'));",
+      "    t.on('data', (e) => { console.log('over TLS ' + String(e).slice(0, 3) + ' encrypted=' + t.encrypted); t.destroy(); });",
+      "    t.on('error', (e) => console.log('tls error ' + (e.code ?? '') + ' ' + e.message)); } });",
+    ].join(' '))));
+
+    const withPackage = async (dir: string, dependency: string, program: string) => await shell(`mkdir -p ${dir} && cd ${dir} && echo '{"name":"probe","private":true}' > package.json`
+      + ` && npm install --no-audit --no-fund ${dependency} > /dev/null && ${node(program)}`);
+
+    // EBI's public read-only databases; the password is the published one, handed in by the run, not committed.
+    const pg = (ssl: string) => [
+      `const { Client } = require('pg'); const c = new Client({ host: 'hh-pgsql-public.ebi.ac.uk', user: 'reader', password: ${JSON.stringify(process.env.PERF_PG_PASSWORD ?? '')}, database: 'pfmegrnargs', ${ssl} connectionTimeoutMillis: 15000 });`,
+      "c.connect().then(() => c.query('select 1 as one')).then((r) => { console.log('pg ' + r.rows[0].one + ' encrypted=' + Boolean(c.connection.stream.encrypted)); return c.end(); }).catch((e) => console.log('pg error ' + (e.code ?? '') + ' ' + e.message));",
+    ].join(' ');
+
+    report('pg, ssl: true (STARTTLS)', await withPackage('/home/main/perfio/tcp-pg', 'pg@8', pg('ssl: true,')));
+    report('pg, no ssl', await withPackage('/home/main/perfio/tcp-pg', 'pg@8', pg('')));
+
+    for (const [label, ssl] of [['mysql2, ssl', 'ssl: {},'], ['mysql2, no ssl', '']] as const) {
+      report(label, await withPackage('/home/main/perfio/tcp-mysql', 'mysql2@3', [
+        `const c = require('mysql2').createConnection({ host: 'mysql-rfam-public.ebi.ac.uk', port: 4497, user: 'rfamro', database: 'Rfam', ${ssl} connectTimeout: 15000 });`,
+        "c.query('select 1 as one', (e, rows) => { console.log(e ? 'mysql error ' + (e.code ?? '') + ' ' + e.message : 'mysql ' + rows[0].one + ' encrypted=' + Boolean(c.stream && c.stream.encrypted)); c.end(); });",
+      ].join(' ')));
+    }
+
+    report('nodemailer verify (STARTTLS on 587)', await withPackage('/home/main/perfio/tcp-mail', 'nodemailer@6', [
+      "require('nodemailer').createTransport({ host: 'smtp.gmail.com', port: 587, secure: false, requireTLS: true, connectionTimeout: 15000 })",
+      ".verify().then((ok) => console.log('nodemailer verified ' + ok)).catch((e) => console.log('nodemailer error ' + (e.code ?? '') + ' ' + e.message));",
+    ].join(' ')));
+  } else if (subject === 'boot') {
+    // A workspace's cold open: set up fresh (an owner, a credential), then its first command, which boots its engine.
+    const fresh = async (name: string, path: string, input?: JsonObject): Promise<string> => {
+      const response = await driver.fetch(`http://driver.invalid${path}${path.includes('?') ? '&' : '?'}workspace=${name}`, input === undefined ? {} : { method: 'POST', body: JSON.stringify(input) });
+      const body = await response.text();
+
+      if (!response.ok) throw new Error(`${path} returned ${String(response.status)}: ${body}`);
+
+      return body;
+    };
+
+    for (let index = 0; index < samples; index++) {
+      const name = `boot-${String(index)}`;
+      const started = performance.now();
+
+      await fresh(name, '/setup');
+      const setUp = performance.now();
+      const answer = await fresh(name, '/tool?name=shell', { command: 'echo booted', runtime: 'workspace' });
+
+      process.stdout.write(JSON.stringify({ event: 'boot', sha, setupMs: setUp - started, firstCommandMs: performance.now() - setUp, ok: answer.includes('booted') }) + '\n');
+    }
   } else if (subject === 'pipes') {
     await ask('/seed');
 

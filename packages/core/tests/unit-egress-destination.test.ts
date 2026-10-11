@@ -133,6 +133,24 @@ describe('fail closed on anything not fully judged', () => {
     expect(refusedHostname('12345678901')).toMatchObject({ reason: 'denied' });
   });
 
+  // A socket's address and a TLS target name a host as the program wrote it, without the brackets a URL adds.
+  test('an IPv6 literal without brackets is judged as one', () => {
+    for (const host of ['::1', '0:0:0:0:0:0:0:1', '::', '::ffff:127.0.0.1', '::ffff:7f00:1', 'fe80::a', 'fd00::1', '::ffff:169.254.169.254']) {
+      expect(refusedHostname(host)).toMatchObject({ reason: 'denied' });
+    }
+
+    expect(refusedHostname('2606:4700:4700::1111')).toBeNull();
+    expect(refusedHostname('::ffff:8.8.8.8')).toBeNull();
+    expect(refusedHostname('not:an:ipv6:')).toMatchObject({ reason: 'denied' });
+
+    // Whole groups only, and a dotted IPv4 only at the end.
+    for (const host of ['12zz::1', '1.2.3.4::', '::1.2.3', 'fe80::1%eth0', '1:2:3:4:5:6:7:8:9']) {
+      expect(refusedHostname(host)).toMatchObject({ reason: 'denied' });
+    }
+
+    expect(refusedHostname('1:2:3:4:5:6:1.2.3.4')).toBeNull();
+  });
+
   test('an empty hostname is refused', () => {
     expect(refusedHostname('')).toMatchObject({ reason: 'denied' });
   });

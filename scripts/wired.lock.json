@@ -201,7 +201,6 @@
   "packages/core/src/safety/deferred-approval.ts#DEFERRED_APPROVAL_SIGNAL (unreached-export)",
   "packages/core/src/safety/deferred-approval.ts#DENIAL_STANDING_MS (unreached-export)",
   "packages/core/src/safety/egress-gate.ts#egressHostMatches (unreached-export)",
-  "packages/core/src/safety/egress-gate.ts#egressSecretRule (unreached-export)",
   "packages/core/src/safety/egress-gate.ts#findEgressPlaceholders (unreached-export)",
   "packages/core/src/scaffold/bootstrap.ts#INITIAL_SCAFFOLD_SOURCE (unreached-export)",
   "packages/core/src/steer-branch.ts#BRANCH_HEAD_BUDGET (unreached-export)",

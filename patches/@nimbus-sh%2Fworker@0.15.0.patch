@@ -1,0 +1,320 @@
+diff --git a/dist/hosted/runtime.js b/dist/hosted/runtime.js
+index 6fdca7b..4d2c358 100644
+--- a/dist/hosted/runtime.js
++++ b/dist/hosted/runtime.js
+@@ -5,7 +5,7 @@ import { SUPERVISOR_DELIVER_OP } from '@nimbus-sh/core/workspace/supervisor-deli
+ import { openSupervisorDeliveries } from '@nimbus-sh/core/workspace/supervisor-delivery.js';
+ import { WebSocketTerminal } from '../facets/ws-terminal.js';
+ import { answerSupervisorOp, buildSessionSupervisorOps } from '../session/supervisor-op.js';
+-import { armLogJanitor, armResidentKeepalive, installLogPersistence, logJanitorFired, noteResidentClient, residentKeepaliveFired } from '../session/hibernation.js';
++import { armLogJanitor, armResidentKeepalive, holdResidentClient, installLogPersistence, logJanitorFired, noteResidentClient, residentKeepaliveFired } from '../session/hibernation.js';
+ import { takeLegacyResetNotice } from '../session/legacy-reset.js';
+ import { appendScrollback, ensureSessionStateSchema, loadScrollback, loadShellState, persistShellState } from '../session/state-store.js';
+ import { wireProcessLogSocketBroadcast } from '../runtime/process-logs-api.js';
+@@ -35,6 +35,7 @@ class RuntimeOwner {
+     _w1KeepaliveArmed = false;
+     _w1JanitorAt = null;
+     _w1LastClientActivityAt = 0;
++    _w1OpenClientSockets = 0;
+     _viteShimPid = null;
+     _viteShimPort = null;
+     wranglerAliasBannerShown = false;
+@@ -72,6 +73,8 @@ class RuntimeOwner {
+         ensureSessionStateSchema(options.ctx);
+         // A process's answers leave as the rest of its output does: once what it wrote is published.
+         options.ports.setOutput(options.workspace.processes);
++        // A client's WebSocket through a port holds the resident until it closes.
++        options.ports.setClientSockets({ opened: () => holdResidentClient(this, (at) => this.scheduleKeepalive(at)) });
+         this.terminal = new WebSocketTerminal(null, (data) => {
+             appendScrollback(options.ctx, data, Date.now());
+             persistShellState(options.ctx, { cwd: this.shell.getCwd(), env: this.shell.getEnv() });
+diff --git a/dist/node-shims-artifact.generated.js b/dist/node-shims-artifact.generated.js
+index c7484dc..7c8bebb 100644
+--- a/dist/node-shims-artifact.generated.js
++++ b/dist/node-shims-artifact.generated.js
+@@ -10,8 +10,8 @@
+  */
+ /** dist/runtime/node-shims.js generateShimsCode() */
+ export const NODE_SHIMS_ENTRY = "/_assets/runtime/node-shims-6e7186f468bae50a.js";
+-export const NODE_SHIMS_BUILD_ID = "6e7186f468bae50a";
+-export const NODE_SHIMS_SHA256 = "6e7186f468bae50a826c0f3cb45e002865b543cdc5f531dd34ae32ce565e5ab2";
++export const NODE_SHIMS_BUILD_ID = "b2472c0887552324";
++export const NODE_SHIMS_SHA256 = "b2472c088755232491d7ed06ea33d8edb0dd5ef8c690e6db9487d12b03cb0f55";
+ /** @nimbus-sh/core dist/_shared/vfs-write-ledger.js VFS_WRITE_LEDGER_SOURCE */
+ export const VFS_WRITE_LEDGER_ENTRY = "/_assets/runtime/vfs-write-ledger-676daf190edbf75d.js";
+ export const VFS_WRITE_LEDGER_BUILD_ID = "676daf190edbf75d";
+diff --git a/dist/runtime/egress-tls-client.js b/dist/runtime/egress-tls-client.js
+index 457f0ac..f28b364 100644
+--- a/dist/runtime/egress-tls-client.js
++++ b/dist/runtime/egress-tls-client.js
+@@ -1,6 +1,6 @@
+ /** Native TLSSocket owns the Node stream; the egress owns its encrypted session. */
+ export const EGRESS_TLS_CLIENT_SOURCE = String.raw `
+-function __nimbusEgressTlsConnect(real, net, args, notImplemented) {
++function __nimbusEgressTlsConnect(real, net, args) {
+   let options = {}, callback;
+   if (args[0] !== null && typeof args[0] === 'object') { options = { ...args[0] }; callback = args[1]; }
+   else {
+@@ -18,9 +18,10 @@ function __nimbusEgressTlsConnect(real, net, args, notImplemented) {
+     const bound = previous?._handle?.options;
+     const host = options.host ?? bound?.host ?? previous?._host ?? 'localhost';
+     const port = Number(options.port ?? bound?.port);
+-    if (options.servername !== undefined && options.servername !== host) throw notImplemented('options.servername', 'the egress makes TLS with the destination hostname as its SNI');
++    // A servername other than the host is the name the egress presents and checks (Node's tls.connect({ servername })).
++    const servername = typeof options.servername === 'string' && options.servername !== '' && options.servername !== host ? options.servername : undefined;
+     if (previous) previous.destroy();
+-    return { host, port };
++    return servername === undefined ? { host, port } : { host, port, servername };
+   };
+   let reader, writer, resource;
+   let endedRead = false, endedWrite = false, stopped = false;
+diff --git a/dist/runtime/node-shims.js b/dist/runtime/node-shims.js
+index c60cdb9..79ad29a 100644
+--- a/dist/runtime/node-shims.js
++++ b/dist/runtime/node-shims.js
+@@ -7898,7 +7898,7 @@ const __tlsMod = (() => {
+     const proxied = !!(__nimbusReplay && __nimbusReplay.outbound);
+     const egressed = globalThis.__nimbusEgress === true;
+     if (egressed || !proxied) __nimbusReplay?.effect("tls.connect " + describe(args));
+-    const socket = egressed ? __nimbusEgressTlsConnect(real, realNet, args, notImplemented)
++    const socket = egressed ? __nimbusEgressTlsConnect(real, realNet, args)
+       : proxied ? proxiedConnect(...args) : real.connect(...args);
+     let closed = false;
+     let hold = null;
+diff --git a/dist/session/hibernation.d.ts b/dist/session/hibernation.d.ts
+index bec2fc5..b40db41 100644
+--- a/dist/session/hibernation.d.ts
++++ b/dist/session/hibernation.d.ts
+@@ -66,6 +66,11 @@ export interface HibHost extends TimerHost {
+      * process's own traffic must not keep its abandoned session alive.
+      */
+     _w1LastClientActivityAt: number;
++    /**
++     * W1: client WebSockets open through this session's ports (a preview's
++     * HMR socket). Each is a client for as long as it stays open, quiet or not.
++     */
++    _w1OpenClientSockets: number;
+     /** W1: destroyed-session tombstone — never re-arm alarms while set. */
+     _w1SessionDestroyed: boolean;
+ }
+@@ -139,7 +144,7 @@ export declare function armLogJanitor(host: LogJanitorHost, schedule: LogJanitor
+ export declare function logJanitorFired(host: LogJanitorHost): number | null;
+ export declare function ensureLogJanitor(host: HibHost, ctx: TimerContext): void;
+ /** The fields the keep-alive rule reads and keeps; both hosts carry them. */
+-export type ResidentKeepaliveHost = Pick<HibHost, 'processes' | '_w1KeepaliveArmed' | '_w1LastClientActivityAt' | '_w1SessionDestroyed'>;
++export type ResidentKeepaliveHost = Pick<HibHost, 'processes' | '_w1KeepaliveArmed' | '_w1LastClientActivityAt' | '_w1OpenClientSockets' | '_w1SessionDestroyed'>;
+ /** Arm the host's `resident-keepalive` alarm at `at`; resolves false when it could not. */
+ export type ResidentKeepaliveSchedule = (at: number) => Promise<boolean>;
+ /**
+@@ -180,6 +185,12 @@ export declare function residentKeepaliveFired(host: ResidentKeepaliveHost, now:
+  * process, and the next quiet stretch must not idle it out mid-session.
+  */
+ export declare function noteResidentClient(host: ResidentKeepaliveHost, schedule: ResidentKeepaliveSchedule): void;
++/**
++ * W1: a client's WebSocket opened through a port. It holds the resident's
++ * interest until the returned call says it closed, and its close is client
++ * traffic: the idle bound runs from then.
++ */
++export declare function holdResidentClient(host: ResidentKeepaliveHost, schedule: ResidentKeepaliveSchedule): () => void;
+ export declare function ensureResidentKeepalive(host: HibHost, ctx: any): void;
+ /** W9: idempotent SQL schema bootstrap. */
+ export declare function ensureHibSchema(host: Pick<HibHost, '_w9SchemaInit'>, ctx: any): void;
+@@ -188,11 +199,15 @@ export declare function ensureHibSchema(host: Pick<HibHost, '_w9SchemaInit'>, ct
+  * A host's socket table belongs to its embedder, not to Nimbus, and even an
+  * attached runtime terminal cannot renew an alarm forever without traffic.
+  * Attach/input/port requests renew this bounded interest; alarms and facet
+- * supervisor calls never do.
++ * supervisor calls never do. A client WebSocket open through a port
++ * (holdResidentClient) is interest for as long as it stays open: a browser
++ * holding a preview's HMR socket is a client whether or not it speaks.
+  */
+ export declare function residentClientPresent(host: ResidentKeepaliveHost, now: number): boolean;
+ /** W1: a client reached the session DO (see noteResidentClient). */
+ export declare function noteClientActivity(host: HibHost, ctx: any): void;
++/** W1: a client's WebSocket opened through the session DO's ports (see holdResidentClient). */
++export declare function holdClientSocket(host: HibHost, ctx: any): () => void;
+ /**
+  * W1: this session's canonical alarm-reason strings, registered on the
+  * fabric's reason map. Forward-compat: the dispatcher silently drops unknown
+diff --git a/dist/session/hibernation.js b/dist/session/hibernation.js
+index 07e5f4a..61eaefa 100644
+--- a/dist/session/hibernation.js
++++ b/dist/session/hibernation.js
+@@ -356,6 +356,23 @@ export function noteResidentClient(host, schedule) {
+     host._w1LastClientActivityAt = Date.now();
+     armResidentKeepalive(host, schedule);
+ }
++/**
++ * W1: a client's WebSocket opened through a port. It holds the resident's
++ * interest until the returned call says it closed, and its close is client
++ * traffic: the idle bound runs from then.
++ */
++export function holdResidentClient(host, schedule) {
++    host._w1OpenClientSockets += 1;
++    noteResidentClient(host, schedule);
++    let open = true;
++    return () => {
++        if (!open)
++            return;
++        open = false;
++        host._w1OpenClientSockets -= 1;
++        noteResidentClient(host, schedule);
++    };
++}
+ export function ensureResidentKeepalive(host, ctx) {
+     armResidentKeepalive(host, (at) => timers(host, ctx).schedule('resident-keepalive', at));
+ }
+@@ -385,15 +402,21 @@ export function ensureHibSchema(host, ctx) {
+  * A host's socket table belongs to its embedder, not to Nimbus, and even an
+  * attached runtime terminal cannot renew an alarm forever without traffic.
+  * Attach/input/port requests renew this bounded interest; alarms and facet
+- * supervisor calls never do.
++ * supervisor calls never do. A client WebSocket open through a port
++ * (holdResidentClient) is interest for as long as it stays open: a browser
++ * holding a preview's HMR socket is a client whether or not it speaks.
+  */
+ export function residentClientPresent(host, now) {
+-    return now - host._w1LastClientActivityAt < RESIDENT_KEEPALIVE_DETACHED_MS;
++    return host._w1OpenClientSockets > 0 || now - host._w1LastClientActivityAt < RESIDENT_KEEPALIVE_DETACHED_MS;
+ }
+ /** W1: a client reached the session DO (see noteResidentClient). */
+ export function noteClientActivity(host, ctx) {
+     noteResidentClient(host, (at) => timers(host, ctx).schedule('resident-keepalive', at));
+ }
++/** W1: a client's WebSocket opened through the session DO's ports (see holdResidentClient). */
++export function holdClientSocket(host, ctx) {
++    return holdResidentClient(host, (at) => timers(host, ctx).schedule('resident-keepalive', at));
++}
+ /**
+  * W9: ensure the alarm is set for the next flush window. Cheap to
+  * call repeatedly — we only schedule the in-isolate flush timer if
+diff --git a/dist/session/init.js b/dist/session/init.js
+index e418b86..6c04df2 100644
+--- a/dist/session/init.js
++++ b/dist/session/init.js
+@@ -183,6 +183,8 @@ export async function initSession(self, ws, options = {}) {
+     self.runtimeWorkspace = workspace;
+     // A process's answers leave as the rest of its output does: once what it wrote is published.
+     self.portRegistry.setOutput(workspace.processes);
++    // A client's WebSocket through a port holds the resident until it closes.
++    self.portRegistry.setClientSockets({ opened: () => self.holdClientSocket() });
+     self.shellProcessPid = workspace.shellProcessPid;
+     self.kernel = workspace.kernel;
+     self.shell = workspace.shell;
+diff --git a/dist/session/nimbus-session.d.ts b/dist/session/nimbus-session.d.ts
+index 23e2676..6ccaed8 100644
+--- a/dist/session/nimbus-session.d.ts
++++ b/dist/session/nimbus-session.d.ts
+@@ -167,6 +167,8 @@ export declare class NimbusSession extends CloudflareDurableObject<SessionEnv> i
+      *  holds the object only while traffic was observed within
+      *  RESIDENT_KEEPALIVE_DETACHED_MS (hibernation.ts residentClientPresent). */
+     _w1LastClientActivityAt: number;
++    /** W1: client WebSockets open through this session's ports (hibernation.ts holdResidentClient). */
++    _w1OpenClientSockets: number;
+     /** Destroyed-session tombstone (SESSION_DESTROYED_KEY), hydrated at boot.
+      *  While set, log activity never re-arms the janitor alarm cycle. */
+     _w1SessionDestroyed: boolean;
+@@ -692,6 +694,7 @@ export declare class NimbusSession extends CloudflareDurableObject<SessionEnv> i
+         destroyedAt: number;
+         reason: string | null;
+     }>;
++    holdClientSocket(): () => void;
+     fetch(request: Request): Promise<Response>;
+     _handleFetch(request: Request): Promise<Response>;
+     /**
+diff --git a/dist/session/nimbus-session.js b/dist/session/nimbus-session.js
+index b2d4e9e..cfdc369 100644
+--- a/dist/session/nimbus-session.js
++++ b/dist/session/nimbus-session.js
+@@ -44,7 +44,7 @@ import { ATTACH_BOOTSTRAP_JTI_KEY_PREFIX, SESSION_DESTROYED_KEY } from './keys.j
+ import { appendScrollback } from './state-store.js';
+ import { wireProcessLogSocketBroadcast } from '../runtime/process-logs-api.js';
+ import { wireReplicasOnConstruct as _w12WireReplicasOnConstruct, getReplicaState as _w12GetReplicaState } from './replica-routes.js';
+-import { wireHibernationOnConstruct as _w9WireHibernationOnConstruct, wireProcessLogPersist as _w9DoWireProcessLogPersist, ensureHibSchema as _w9DoEnsureHibSchema, scheduleHibFlush as _w9DoScheduleHibFlush, clearDestroyedTombstone as _w1ClearDestroyedTombstone, ensureResidentKeepalive as _w1EnsureResidentKeepalive, dispatchAlarm as _w9DoDispatchAlarm, flushOnClose as _w9DoFlushOnClose, noteClientActivity } from './hibernation.js';
++import { wireHibernationOnConstruct as _w9WireHibernationOnConstruct, wireProcessLogPersist as _w9DoWireProcessLogPersist, ensureHibSchema as _w9DoEnsureHibSchema, scheduleHibFlush as _w9DoScheduleHibFlush, clearDestroyedTombstone as _w1ClearDestroyedTombstone, ensureResidentKeepalive as _w1EnsureResidentKeepalive, dispatchAlarm as _w9DoDispatchAlarm, flushOnClose as _w9DoFlushOnClose, noteClientActivity, holdClientSocket } from './hibernation.js';
+ import { timers } from '@nimbus-sh/fabric/timers.js';
+ import { generation } from '@nimbus-sh/fabric/generation.js';
+ // S6: initSession (1875 LOC of cmd registrations + boot wiring) extracted.
+@@ -324,6 +324,8 @@ export class NimbusSession extends CloudflareDurableObject {
+      *  holds the object only while traffic was observed within
+      *  RESIDENT_KEEPALIVE_DETACHED_MS (hibernation.ts residentClientPresent). */
+     _w1LastClientActivityAt = 0;
++    /** W1: client WebSockets open through this session's ports (hibernation.ts holdResidentClient). */
++    _w1OpenClientSockets = 0;
+     /** Destroyed-session tombstone (SESSION_DESTROYED_KEY), hydrated at boot.
+      *  While set, log activity never re-arms the janitor alarm cycle. */
+     _w1SessionDestroyed = false;
+@@ -947,6 +949,9 @@ export class NimbusSession extends CloudflareDurableObject {
+     }
+     async _rpcDestroy(options) { return _programmatic.rpcDestroy(this, options); }
+     // ── HTTP handler ──────────────────────────────────────────────────────
++    holdClientSocket() {
++        return holdClientSocket(this, this.ctx);
++    }
+     async fetch(request) {
+         // Every client reaches the session through here; facets reach it
+         // through RPC, which is deliberately not counted.
+diff --git a/dist/session/supervisor-calls.js b/dist/session/supervisor-calls.js
+index 939dfa9..52928dc 100644
+--- a/dist/session/supervisor-calls.js
++++ b/dist/session/supervisor-calls.js
+@@ -818,8 +818,9 @@ export function supervisorCalls(base) {
+                     throw new TypeError('netTls: bad target');
+                 if (typeof egress.connectTls !== 'function')
+                     throw Object.assign(new Error(EGRESS_TLS_REFUSAL), { code: 'ERR_NIMBUS_EGRESS_TLS' });
++                const servername = typeof payload.servername === 'string' && payload.servername !== '' && payload.servername !== hostname ? payload.servername : undefined;
+                 try {
+-                    return await egress.connectTls({ hostname, port });
++                    return await egress.connectTls(servername === undefined ? { hostname, port } : { hostname, port, servername });
+                 }
+                 catch (error) {
+                     if (error instanceof TypeError && error.message === 'The RPC receiver does not implement the method "connectTls".') {
+diff --git a/public/_assets/runtime/node-shims-6e7186f468bae50a.js b/public/_assets/runtime/node-shims-6e7186f468bae50a.js
+index c031ebc..6cb0946 100644
+--- a/public/_assets/runtime/node-shims-6e7186f468bae50a.js
++++ b/public/_assets/runtime/node-shims-6e7186f468bae50a.js
+@@ -11231,7 +11231,7 @@ const __diagChannelMod = __nativeBuiltin("diagnostics_channel");
+ // ──  tls module (W3: forward to workerd, override createServer) ─────
+ // ═══════════════════════════════════════════════════════════════════════
+ 
+-function __nimbusEgressTlsConnect(real, net, args, notImplemented) {
++function __nimbusEgressTlsConnect(real, net, args) {
+   let options = {}, callback;
+   if (args[0] !== null && typeof args[0] === 'object') { options = { ...args[0] }; callback = args[1]; }
+   else {
+@@ -11249,9 +11249,10 @@ function __nimbusEgressTlsConnect(real, net, args, notImplemented) {
+     const bound = previous?._handle?.options;
+     const host = options.host ?? bound?.host ?? previous?._host ?? 'localhost';
+     const port = Number(options.port ?? bound?.port);
+-    if (options.servername !== undefined && options.servername !== host) throw notImplemented('options.servername', 'the egress makes TLS with the destination hostname as its SNI');
++    // A servername other than the host is the name the egress presents and checks (Node's tls.connect({ servername })).
++    const servername = typeof options.servername === 'string' && options.servername !== '' && options.servername !== host ? options.servername : undefined;
+     if (previous) previous.destroy();
+-    return { host, port };
++    return servername === undefined ? { host, port } : { host, port, servername };
+   };
+   let reader, writer, resource;
+   let endedRead = false, endedWrite = false, stopped = false;
+@@ -11473,7 +11474,7 @@ const __tlsMod = (() => {
+     const proxied = !!(__nimbusReplay && __nimbusReplay.outbound);
+     const egressed = globalThis.__nimbusEgress === true;
+     if (egressed || !proxied) __nimbusReplay?.effect("tls.connect " + describe(args));
+-    const socket = egressed ? __nimbusEgressTlsConnect(real, realNet, args, notImplemented)
++    const socket = egressed ? __nimbusEgressTlsConnect(real, realNet, args)
+       : proxied ? proxiedConnect(...args) : real.connect(...args);
+     let closed = false;
+     let hold = null;
+diff --git a/dist/hosted/commands.js b/dist/hosted/commands.js
+index fcd0460..376d8dd 100644
+--- a/dist/hosted/commands.js
++++ b/dist/hosted/commands.js
+@@ -818,7 +818,8 @@ export async function registerHostedCommands(self, workspace) {
+                         setUmask: identity.setUmask,
+                     },
+                     runAs: runAsProcess,
+-                    signal: stop.signal,
++                    // Kinu patch (NIMBUS-ASKS #42): the caller's signal (a Stop) as well as this child's own.
++                    signal: options?.signal ? AbortSignal.any([options.signal, stop.signal]) : stop.signal,
+                 });
+                 exitCode = result.exitCode;
+                 return result;

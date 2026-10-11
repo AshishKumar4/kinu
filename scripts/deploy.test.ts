@@ -264,6 +264,9 @@ mock.module(${JSON.stringify(cloudflare)}, () => ({
   return { KINU_DEPLOY_NEWEST_RESET: newestReset, KINU_DEPLOY_INFRA_PRELOAD: account === undefined ? '' : preload };
 }
 
+/** The runtime catalog the fixture build pins (NIMBUS_RUNTIME_CATALOG_SHA256). */
+const FIXTURE_CATALOG = 'c'.repeat(64);
+
 function uploadFixture(fixture: string, uploadRuns: readonly UploadRun[] | undefined): void {
   if (uploadRuns === undefined) return;
   const build = join(fixture, 'packages', 'cf-backend', 'dist');
@@ -275,8 +278,11 @@ function uploadFixture(fixture: string, uploadRuns: readonly UploadRun[] | undef
   mkdirSync(join(fixture, 'packages', 'cli'));
   writeFileSync(join(fixture, 'packages', 'cli', 'package.json'), '{"version":"1.0.0"}');
   writeFileSync(join(build, 'kinu', 'wrangler.json'), JSON.stringify({
-    targetEnvironment: 'staging', name: 'kinu-staging', vars: { CLI_PUBLIC_ORIGIN: 'https://fixture.invalid' },
-    r2_buckets: [{ binding: 'RELEASES_BUCKET', bucket_name: 'fixture-releases' }, { binding: 'BACKUP_BUCKET', bucket_name: 'fixture-backups' }],
+    targetEnvironment: 'staging', name: 'kinu-staging', vars: { CLI_PUBLIC_ORIGIN: 'https://fixture.invalid', NIMBUS_RUNTIME_CATALOG_SHA256: FIXTURE_CATALOG },
+    r2_buckets: [
+      { binding: 'RELEASES_BUCKET', bucket_name: 'fixture-releases' }, { binding: 'BACKUP_BUCKET', bucket_name: 'fixture-backups' },
+      { binding: 'NIMBUS_RUNTIME_CACHE', bucket_name: 'fixture-runtime-cache' },
+    ],
   }));
 
   for (const file of ['kinu-version.json', 'release.json', 'kinu-worker-1.0.0+testsha.tar.gz.sha256',
@@ -1877,6 +1883,24 @@ describe('the smoke test reads the version it deployed', () => {
 const RECORDED_PARTIAL_UPLOAD = 'Uploaded kinu-staging (31.90 sec)\n\n✘ [ERROR] The Worker version was deployed, but Wrangler could not '
   + 'finish applying its Durable Object-managed Container application settings. Re-run the same `wrangler deploy` command to retry '
   + 'and finish deployment.';
+
+describe('the runtime catalog the build pins is in its bucket before the Worker that reads it', () => {
+  const ENSURE = `bun scripts/runtime-catalog.ts ensure fixture-runtime-cache ${FIXTURE_CATALOG}`;
+
+  test('the deploy puts it there, from the bucket and pin its build names, before the upload', async () => {
+    const run = await runDeploy({ uploadRuns: [{ says: 'success', status: 0 }] });
+
+    expect(run.events, run.stdout).toContain(ENSURE);
+    expect(run.uploads).toHaveLength(1);
+  });
+
+  test('a catalog that cannot be put there stops the deploy before anything is uploaded', async () => {
+    const run = await runDeploy({ failingGate: ENSURE, uploadRuns: [{ says: 'success', status: 0 }] });
+
+    expect(run.uploads).toEqual([]);
+    expect(run.status).not.toBe(0);
+  });
+});
 
 describe('the upload runs again once, and only when wrangler asks for it', () => {
   // The recovery wrangler defines for its own failure: the 2026-10-09 deploy that hit it stopped there, and its rerun

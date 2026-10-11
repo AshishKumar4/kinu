@@ -59,25 +59,27 @@ function expandIPv6(host: string): readonly number[] | null {
   const head = sections[0] === '' ? [] : sections[0].split(':');
   const after = sections.at(1);
   const tail = after === undefined || after === '' ? [] : after.split(':');
-
-  if (sections.length === 1 && head.length !== 8) return null;
   const pieces = [...head, ...tail];
+  // A dotted IPv4 may end the address (`::ffff:127.0.0.1`, as written outside a URL): its two groups.
+  const dotted = pieces.at(-1)?.includes('.') === true ? parseIPv4(pieces.at(-1) ?? '') : null;
 
-  if (pieces.length > 8) return null;
-  const groups = pieces.map((piece) => Number.parseInt(piece, 16));
+  // Only the last group may be dotted: before a `::` (`1.2.3.4::`) it is no address.
+  if (pieces.at(-1)?.includes('.') === true && (dotted === null || (sections.length === 2 && tail.length === 0))) return null;
+  const hex = dotted === null ? pieces : pieces.slice(0, -1);
 
-  if (groups.some((group) => Number.isNaN(group))) return null;
+  // Each group is one to four hex digits, whole: `parseInt` would read `12zz` as 0x12.
+  if (hex.some((piece) => !/^[0-9a-f]{1,4}$/.test(piece))) return null;
 
-  if (sections.length === 2) {
-    // Zeros go between head and tail; prepending would turn `fe80::a` into `::a:fe80`.
-    const missing = 8 - pieces.length;
+  const groups = [...hex.map((piece) => Number.parseInt(piece, 16)), ...(dotted === null ? [] : [dotted[0] * 256 + dotted[1], dotted[2] * 256 + dotted[3]])];
 
-    if (missing < 1) return null;
+  if (sections.length === 1) return groups.length === 8 ? groups : null;
 
-    return [...groups.slice(0, head.length), ...Array.from({ length: missing }, () => 0), ...groups.slice(head.length)];
-  }
+  // Zeros go between head and tail; prepending would turn `fe80::a` into `::a:fe80`.
+  const missing = 8 - groups.length;
 
-  return groups;
+  if (missing < 1) return null;
+
+  return [...groups.slice(0, head.length), ...Array.from({ length: missing }, () => 0), ...groups.slice(head.length)];
 }
 
 /** Refuses loopback, unspecified, link-local, ULA, and IPv4-mapped/compatible by embedded IPv4. */
@@ -120,7 +122,8 @@ export function refusedHostname(hostname: string): Refusal | null {
     return refusalOf(new KinuError('denied', `blocked internal host: ${host}`));
   }
 
-  if (host.startsWith('[')) {
+  // A URL brackets an IPv6 literal; a socket's address and a TLS target do not. No hostname holds a colon.
+  if (host.startsWith('[') || bare.includes(':')) {
     const groups = expandIPv6(bare);
 
     if (groups === null) {
