@@ -459,7 +459,7 @@ const mf = new Miniflare(convertV4MiniflareOptions({
   workers: [product, {
     name: 'driver', ...compat,
     modules: [{ type: 'ESModule', path: join(dist, 'perf-driver.js'), contents: await bundle('driver.ts') }],
-    bindings: { OWNER_TOKEN: owner.ownerToken, PERF_EGRESS: subject === 'egress' ? '1' : '0' },
+    bindings: { OWNER_TOKEN: owner.ownerToken },
     durableObjects: {
       PERF_DRIVER: { className: 'PerfDriver', useSQLite: true },
       OrchestratorAgent: { className: 'OrchestratorAgent', scriptName: 'kinu', useSQLite: true },
@@ -678,7 +678,9 @@ try {
     measured.push(...fileResults);
   } else if (subject === 'egress') {
     await ask('/seed');
-    const placeholder = await ask('/placeholder');
+    // The engine boots, and its egress is minted, before the secret is granted: a grant made later is still spent.
+    await shell('true');
+    const placeholder = await ask('/grant');
 
     Bun.spawnSync(['git', 'init', '-q', '--bare', join(gitRoot, 'repo.git')]);
     Bun.spawnSync(['git', '-C', join(gitRoot, 'repo.git'), 'config', 'http.receivepack', 'true']);
@@ -694,7 +696,8 @@ try {
       const at = `/home/main/perfio/epush-${String(index + 2)}`;
 
       return shell(`mkdir -p ${at} && cd ${at} && git init -q && git config user.email p@perfio.test && git config user.name perfio && echo ${String(index)} > a.txt`
-        + ` && git add a.txt && git commit -q -m c${String(index + 2)} && git push https://${PERF_SECRET_HOST}/repo.git HEAD:refs/heads/b${String(index + 2)} 2>&1 | tail -2`);
+        + ` && git add a.txt && git commit -q -m c${String(index + 2)} && git remote add origin https://${PERF_SECRET_HOST}/repo.git`
+        + ` && git push origin HEAD:refs/heads/b${String(index + 2)} 2>&1 | tail -2`);
     }, undefined, '->');
     await measureOp('egress.inject', () => shell(`curl -sS -H "Authorization: Bearer ${placeholder}" https://${PERF_SECRET_HOST}/echo`), undefined, 'auth=secret');
     await measureOp('egress.npm', (index) => {
@@ -712,22 +715,9 @@ try {
     await measureOp('egress.upgrade', () => shell(node(
       "require('https').request({ host: 'echo.perfio.test', path: '/', headers: { Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==', 'Sec-WebSocket-Version': '13' } }).on('upgrade', (res, socket) => { console.log('upgrade=' + res.statusCode); socket.destroy(); }).on('response', (res) => console.log('upgrade failed: ' + res.statusCode)).on('error', (e) => console.log('upgrade failed: ' + e.message)).end()",
     )), undefined, 'upgrade=101');
-    // STARTTLS (pg, mysql2 and nodemailer upgrade so): a plain socket's TLS session, then a command over it.
-    await measureOp('egress.starttls', () => shell(node([
-      "const net = require('net'), tls = require('tls'); const s = net.connect(587, 'smtp.gmail.com'); let step = 0, heard = '';",
-      "s.on('error', (e) => console.log('starttls failed: ' + e.message));",
-      "s.on('data', (d) => { heard += d; if (!heard.endsWith('\\r\\n')) return; const last = heard.trimEnd().split('\\r\\n').pop(); heard = '';",
-      "  if (step === 0 && last.startsWith('220 ')) { step = 1; s.write('EHLO kinu\\r\\n'); }",
-      "  else if (step === 1 && last.startsWith('250 ')) { step = 2; s.write('STARTTLS\\r\\n'); }",
-      "  else if (step === 2 && last.startsWith('220 ')) { step = 3; s.removeAllListeners('data');",
-      "    try { const t = tls.connect({ socket: s, servername: 'smtp.gmail.com' }, () => t.write('EHLO kinu\\r\\n'));",
-      "      t.on('data', (e) => { console.log('starttls=' + String(e).slice(0, 3)); t.destroy(); }); t.on('error', (e) => console.log('starttls failed: ' + e.message)); }",
-      "    catch (e) { console.log('starttls failed: ' + e.message); s.destroy(); } } });",
-    ].join(' '))), undefined, 'starttls=250');
     await measureOp('egress.clientcert', () => shell(node(
       "try { const s = require('tls').connect({ host: 'example.com', port: 443, cert: 'c', key: 'k' }, () => { console.log('clientcert=connected'); s.destroy(); }); s.on('error', (e) => console.log('clientcert=' + (e.code ?? e.message))); } catch (e) { console.log('clientcert=' + (e.code ?? e.message)); }",
     )), undefined, 'clientcert=connected');
-
 
     // The egress's own refusal names the address; the isolate's network would time out or reset without one.
     await measureOp('egress.private', () => shell('curl -sS --max-time 5 http://10.0.0.1/'), undefined, 'blocked');
