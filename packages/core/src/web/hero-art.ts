@@ -182,17 +182,6 @@ interface LayerState {
   generationStart: number;
   regrowAt: number;
   bestId: number;
-  pruned: number;
-  hidden: number;
-}
-
-/** Pulses run forward from the seed and, rarer and dimmer, back from scored tips. */
-export interface SearchTreeFrame extends ArtFrame {
-  readonly generation: number;
-  /** Cumulative branches the search pruned, foreground layer. */
-  readonly pruned: number;
-  /** Cumulative descendants cut with a pruned ancestor, foreground layer. */
-  readonly hidden: number;
 }
 
 export interface SearchTreeOptions {
@@ -293,7 +282,6 @@ export class SearchTree {
 
   private elapsed = 0;
 
-  private generation = 0;
 
   private pointerX: number | null = null;
 
@@ -407,7 +395,7 @@ export class SearchTree {
     this.stepPulses(dt);
   }
 
-  frame(): SearchTreeFrame {
+  frame(): ArtFrame {
     let count = 0;
     let nodeCount = 0;
 
@@ -466,8 +454,6 @@ export class SearchTree {
       });
     }
 
-    const foreground = this.layers[0];
-
     return {
       strokes: this.strokes,
       count,
@@ -476,9 +462,6 @@ export class SearchTree {
       pulses: this.pulseData,
       pulseCount: this.framePulses(),
       time: this.elapsed,
-      generation: this.generation,
-      pruned: foreground?.pruned ?? 0,
-      hidden: foreground?.hidden ?? 0,
     };
   }
 
@@ -582,8 +565,6 @@ export class SearchTree {
       generationStart: 0,
       regrowAt: -1,
       bestId: id,
-      pruned: 0,
-      hidden: 0,
     };
   }
 
@@ -739,11 +720,11 @@ export class SearchTree {
       const failed = parent !== undefined && branch.score < parent.score - FAIL_MARGIN && branch.liveChildren === 0;
       const outrun = branch.value < bestValue - PRUNE_MARGIN;
 
-      if (failed || outrun) this.cut(layer, branch, true);
+      if (failed || outrun) this.cut(layer, branch);
     }
   }
 
-  private cut(layer: LayerState, branch: Branch, counted: boolean): void {
+  private cut(layer: LayerState, branch: Branch): void {
     if (branch.phase === 'ember' || branch.phase === 'ash') return;
     branch.phase = 'ember';
     branch.phaseAge = 0;
@@ -751,14 +732,11 @@ export class SearchTree {
 
     if (parent !== undefined) parent.liveChildren -= 1;
 
-    if (counted) layer.pruned += 1;
-
     for (const child of layer.branches.values()) {
       if (child.parent !== branch.id) continue;
 
       if (child.phase === 'growing' || child.phase === 'alive') {
-        layer.hidden += 1;
-        this.cut(layer, child, false);
+        this.cut(layer, child);
       }
     }
 
@@ -938,10 +916,9 @@ export class SearchTree {
     layer.generationStart = this.elapsed;
     layer.regrowAt = this.elapsed + REGROW_DELAY;
 
-    if (layer.rules.foreground) this.generation += 1;
 
     for (const branch of layer.branches.values()) {
-      if (!branch.onPath) this.cut(layer, branch, true);
+      if (!branch.onPath) this.cut(layer, branch);
     }
 
     const best = layer.branches.get(layer.bestId);
