@@ -1,13 +1,13 @@
 // Public OAuth client with PKCE (docs/SELF-DEPLOY.md): each deployment renews its own
 // refresh token, so no client secret can be shared. The verifier never leaves run storage.
 import { Data, Effect } from 'effect';
+import {
+  NIMBUS_CF_OAUTH_AUTH_URL as CLOUDFLARE_AUTHORIZE_URL,
+  NIMBUS_CF_OAUTH_TOKEN_URL as CLOUDFLARE_TOKEN_URL,
+} from '@nimbus-sh/sdk/oauth';
 import * as v from 'valibot';
 import { settle } from '../obs/index';
 import { JsonObjectSchema } from '../utils/json';
-
-const CLOUDFLARE_AUTHORIZE_URL = 'https://dash.cloudflare.com/oauth2/auth';
-
-const CLOUDFLARE_TOKEN_URL = 'https://dash.cloudflare.com/oauth2/token';
 
 /** Fixed: redirect URIs are pre-registered. Not 8787, which the local door serves on. */
 export const CLI_DEPLOY_REDIRECT_PORT = 8899;

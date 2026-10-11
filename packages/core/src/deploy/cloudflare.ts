@@ -1,11 +1,10 @@
 // Cloudflare v4 API for the deploy flow. Errors carry Cloudflare's message verbatim:
 // it is the only sentence that tells a person what to change.
 import * as v from 'valibot';
+import { NIMBUS_CLOUDFLARE_API as CLOUDFLARE_API_ROOT } from '@nimbus-sh/sdk/oauth';
 import { JsonValueSchema, type JsonObject, type JsonValue } from '../utils/json';
 import { Data, Effect } from 'effect';
 import { settleSync, tolerate } from '../obs/index';
-
-const CLOUDFLARE_API_ROOT = 'https://api.cloudflare.com/client/v4';
 
 type HttpMethod = 'GET' | 'HEAD' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
