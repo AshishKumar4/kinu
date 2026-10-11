@@ -37,6 +37,7 @@ import {
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
 import { agentFacet, agentStateShellId, AgentMemory, AgentStoreBroker, AgentWorkspaceHost, headDeltas, jsonLines, uiChunks, type AgentFacetPlacement } from "./agent-facets";
+import { writesSnapshotRows } from "./snapshot-rows";
 import type { AnswerMetadataReply } from "./agent-facet/agent-turn";
 import { ActorCapabilities } from "./actor-capabilities";
 import { DrawnStepSchema } from "./chat-transport";
@@ -522,6 +523,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     strings: TemplateStringsArray,
     ...values: (string | number | boolean | null)[]
   ): T[] {
+    // Before it runs: a statement that throws may still have written.
+    if (writesSnapshotRows(strings)) this._heldSnapshots?.clear();
     const rows = super.sql<T>(strings, ...values);
     let reads = READS_BY_STATEMENT.get(strings);
 
@@ -742,7 +745,23 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     await (await this.agentCalls(actorId)).idle();
   }
 
+  /**
+   * Each agent's snapshot rows as last read: every write to the tables they copy goes through this object's `sql`, which
+   * drops them all (`writesSnapshotRows`), so rows held here are the rows.
+   */
+  // Lazy: this object's `sql` runs before its fields are initialised (its base's constructor).
+  private _heldSnapshots: Map<string, Omit<AgentSnapshot, 'order'>> | undefined;
+
   agentSnapshot(actorId: string): AgentSnapshot {
+    this._heldSnapshots ??= new Map();
+    const held = this._heldSnapshots.get(actorId) ?? this.readSnapshot(actorId);
+
+    this._heldSnapshots.set(actorId, held);
+
+    return { ...held, order: { activation: this.snapshotActivation, seq: ++this.snapshotSeq } };
+  }
+
+  private readSnapshot(actorId: string): Omit<AgentSnapshot, 'order'> {
     const agent = this.agentOf(actorId);
     const lineage: StoredRow[] = [];
 
@@ -769,7 +788,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       identity, lineage, config, scaffold, workspaceName: this.workspaceName(),
       installedBuild: this.env.CF_VERSION_METADATA?.id ?? null,
       artifactDirectory: agentArtifactDirectory(agentHome(agent.homeName)),
-      order: { activation: this.snapshotActivation, seq: ++this.snapshotSeq },
     };
   }
 
@@ -1725,6 +1743,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     return Number.isFinite(at) ? at : null;
   }
+
   /** One the owner added has its own Stop. */
   protected override stopSubtree(actorId: string): void {
     const seams = this.hostedSeams();
@@ -2201,10 +2220,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private workspaceActors(): WorkspaceActorDirectory {
     if (this._actorDirectory) return this._actorDirectory;
     const owner = () => this.getOwnerUserId() ?? '';
+    // This object is its roster's one writer: the directory holds what it reads.
     this._actorDirectory = new WorkspaceActorDirectory(this.boundSql, {
       workspaceId: this.ctx.id.toString(),
       get ownerUserId() { return owner(); },
-    });
+    }, { holdRows: true });
 
     return this._actorDirectory;
   }

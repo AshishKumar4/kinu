@@ -372,9 +372,11 @@ test('a production turn runs no more statements than it was measured at, and ask
  * 25 and the close 21, by the account reads, room events, standing reports and settlement the phase lists show. The
  * open loses one (`host.cacheKeptAliveUntil`) as a request's warming is one call.
  * 17 and 16, over 3 runs on 3425a1e7a's tree with the reads below held: the isolate's credentials are held across its
- * turns (`host.getAuth`, `account.getAuth`, -2), the account's profile catalog and credentials revision until it fans out
- * a change or 5 minutes pass (`account.getWorkspaceProfileCatalog`, `account.getCredentialsRevision`, -2), and its
- * standing rides each report it sends (`facet.standing`, gone). §8's 12 and 6 are not reached. What remains, by name:
+ * turns (`host.getAuth`, `account.getAuth`, -2), the account's profile catalog and credentials revision until either
+ * moves (`account.getWorkspaceProfileCatalog`, `account.getCredentialsRevision`, -2), and its standing rides each report
+ * it sends (`facet.standing`, gone). 18 at the open since: one `account.getSettingsRevision`, the account's catalog
+ * version and credentials revision in one call, because a settings change does not wake a workspace at rest, so a turn
+ * opens by asking what moved and refetches only that. §8's 12 and 6 are not reached. What remains, by name:
  * the open's account reads the turn's prompt is built from (`accountMemory_facts`, `deviceRuntimeStatus`,
  * `userMcp_toolDescriptors`, `AgentMemory.tail`: four values a turn shows that the account changes without telling the
  * workspace), the owner's tile (`putWorkspaceOverview`, twice at each end: the tile reads working as the turn opens and
@@ -388,7 +390,7 @@ test('a production turn runs no more statements than it was measured at, and ask
  * the title's registry read (`account.getWorkspaceTitle`) and the MCP warm (`account.userMcp_warmConnections`), and the
  * transcript frame the room is sent at its close (`facet.history`, `facet.newestFirst`).
  */
-const CROSSINGS = { open: 17, step: 4, close: 16 } as const;
+const CROSSINGS = { open: 18, step: 4, close: 16 } as const;
 
 /**
  * The planted calls (`ObservedOrchestrator.plantCrossings`), each counted once where it lands, and nothing else: the

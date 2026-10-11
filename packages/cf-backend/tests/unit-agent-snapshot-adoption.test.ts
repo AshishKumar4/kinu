@@ -29,12 +29,13 @@ test("reading a helper's spend ten times writes nothing into its database", asyn
 test("a setting the workspace changed reaches the helper's database on its next read", async () => {
   const { workspace, actorId, sql } = await helper();
 
-  workspace.db.query('INSERT INTO actor_config (actor_id, key, value) VALUES (?, ?, ?)').run(actorId, 'probe.setting', 'on');
+  // Written as the workspace writes its rows: through its own SQL, which every store over them uses.
+  void workspace.agent.sql`INSERT INTO actor_config (actor_id, key, value) VALUES (${actorId}, ${'probe.setting'}, ${'on'})`;
   await workspace.agent.accountSpend();
 
   expect(sql<{ value: string }>`SELECT value FROM actor_config WHERE actor_id = ${actorId} AND key = 'probe.setting'`).toEqual([{ value: 'on' }]);
 
-  workspace.db.query('DELETE FROM actor_config WHERE actor_id = ? AND key = ?').run(actorId, 'probe.setting');
+  void workspace.agent.sql`DELETE FROM actor_config WHERE actor_id = ${actorId} AND key = ${'probe.setting'}`;
   await workspace.agent.accountSpend();
 
   expect(sql<{ value: string }>`SELECT value FROM actor_config WHERE actor_id = ${actorId} AND key = 'probe.setting'`).toEqual([]);
