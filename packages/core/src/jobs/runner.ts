@@ -2,8 +2,7 @@
 // work alive in a platform-supplied durable fiber and wakes the agent via Inbox.send.
 
 import type { Schedule } from '../types/primitives';
-import type { AgentSignal, AgentInbox, SignalUndeliveredReason } from '../types/signals';
-import type { EventLog } from '../events/hub/log';
+import type { AgentSignal, AgentInbox } from '../types/signals';
 import { BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome, type ThresholdDeps } from './threshold';
 import { every, REAL_CLOCK, type Clock } from '../types/clock';
 import type { DeviceRequestOwnership } from './device-ownership';
@@ -118,9 +117,6 @@ export interface BackgroundJobRunnerDeps {
   clock?: Clock;
   fiber: Schedule['fiber'];
   inbox: AgentInbox;
-  /** Durable wake retry plane; both or neither. Absent for agents with no later activation (swarm nodes). */
-  eventLog?: EventLog;
-  scheduleDrain?: () => void;
   logActivity?(event: string, detail?: string): void;
   /** Fires once per settle, before the wake turn. Never throws into the fiber. */
   onSettled?(job: BackgroundJob): void;
@@ -665,73 +661,13 @@ export class BackgroundJobRunner {
     if (!job) return;
     const text = wakeText(job);
 
-    const base = {
+    // A delivery: committed, it is owed until the agent takes it, so a wake needs no retry of its own.
+    await this.deps.inbox.send({
       kind: 'background_job',
       text,
       idempotencyKey: backgroundJobWakeTrigger(jobId),
       metadata: { kinuMode: job.workMode, jobId, kind: job.kind, status: job.status },
-    } as const satisfies Omit<AgentSignal, 'compensate'>;
-
-    // `compensate` is offered only with a durable retry plane behind it.
-    const retry = this.publishWakeRetryIfDurable(job, text);
-    await this.deps.inbox.send(retry ? { ...base, compensate: retry } : base);
-  }
-
-  private publishWakeRetryIfDurable(
-    job: BackgroundJob, text: string,
-  ): ((reason: SignalUndeliveredReason) => void) | null {
-    const eventLog = this.deps.eventLog;
-    const scheduleDrain = this.deps.scheduleDrain;
-
-    if (!eventLog || !scheduleDrain) return null;
-
-    return (reason) => {
-      if (reason === 'preempted') {
-        this.deps.logActivity?.('bg_job_wake_skipped', `${job.id} (${job.status}): wake preempted; result retained`);
-      }
-
-      this.publishWakeRetry(eventLog, scheduleDrain, job, text);
-    };
-  }
-
-  private publishWakeRetry(
-    eventLog: EventLog, scheduleDrain: () => void, job: BackgroundJob, text: string,
-  ): void {
-    try {
-      eventLog.publish({
-        descriptor: {
-          ingress: 'timer_alarm',
-          variant: 'timer',
-          payload: {
-            trigger_id: backgroundJobWakeTrigger(job.id),
-            scheduled_fire_at: job.settledAt ?? job.createdAt,
-            label: text,
-            user_payload: {
-              kinuEvent: 'background_job', kinuMode: job.workMode,
-              jobId: job.id, kind: job.kind, status: job.status,
-            },
-          },
-          trigger_creator_trust: 'self',
-        },
-        now: Date.now(),
-      });
-    } catch (err) {
-      diagnostics.failure(
-        'jobs.retry_publish_failed',
-        toKinuError({ doing: 'publish the background-job wake retry', cause: err, otherwise: 'io' }),
-        { jobId: job.id, kind: job.kind },
-      );
-      throw err;
-    }
-
-    try { scheduleDrain(); }
-    catch (err) {
-      diagnostics.failure(
-        'jobs.retry_drain_schedule_failed',
-        toKinuError({ doing: 'schedule the drain for a background-job wake retry', cause: err, otherwise: 'io' }),
-        { jobId: job.id },
-      );
-    }
+    } satisfies AgentSignal);
   }
 
   /** Abort, mark cancelled, and wake the agent, which was told to wait for this result. */

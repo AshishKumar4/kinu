@@ -43,7 +43,7 @@ export function stepLoopJobs(input: {
     store,
     fiber: input.actor.runtime.schedule.fiber.bind(input.actor.runtime.schedule),
     inbox: inlineResultInbox(store, wakes),
-    // No `eventLog`/`scheduleDrain`/`resume`: no later activation delivers.
+    // No `resume`: no later activation delivers.
   };
 
   // Absent keys stay absent.

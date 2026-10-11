@@ -43,21 +43,16 @@ export function authoredTurnMetadata(item: { readonly kind: 'user' | 'programmat
 }
 
 /**
- * Author from written markers only, never prose. Id fallback exists because fork copies keep keys, not metadata;
- * it resolves to `harness`, the safe direction.
+ * Author from the markers the row was written with, never prose: the stamp every machine writer puts at the row-writing
+ * seam ({@link stampTurnAuthor}, `harness` unless declared), or the event a machine turn names; a fork carries each row's
+ * metadata. Words with neither are a person's own, as their composer shows them before any row is written.
  */
-export function turnAuthor(row: { id?: string; metadata?: unknown }): TurnAuthor {
+export function turnAuthor(row: { metadata?: unknown }): TurnAuthor {
   const parsed = v.safeParse(TurnAuthorSchema, row.metadata ?? {});
 
-  if (parsed.success) {
-    const stamped = parsed.output[TURN_AUTHOR_METADATA_KEY];
+  if (!parsed.success) return 'operator';
 
-    if (stamped) return stamped;
-
-    if (parsed.output.kinuEvent !== undefined) return 'harness';
-  }
-
-  return row.id?.startsWith(PROGRAMMATIC_MESSAGE_ID_PREFIX) ? 'harness' : 'operator';
+  return parsed.output[TURN_AUTHOR_METADATA_KEY] ?? (parsed.output.kinuEvent === undefined ? 'operator' : 'harness');
 }
 
 /** What a row says: an answer's last text (its earlier texts are narration), anything else's text whole. */

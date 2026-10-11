@@ -6,19 +6,18 @@ import {
   BackgroundJobRunner, JobNotResumable, MAX_CONCURRENT_DETACHED_JOBS, newJobId,
   type JobHarvester, type JobHolder, type JobResumer,
 } from '../src/jobs/runner';
-import { Inbox } from '../src/orchestrator/inbox';
 import {
   BackgroundJobStore, initBackgroundJobsTable, BACKGROUND_POLICY, DeviceRequestOwnership,
   type BackgroundPolicy, type BackgroundJob, type InvocationSurface,
 } from '../src/jobs/index';
 import { jobRedriveResumeGate } from '../src/heads/reconcile';
-import { buildDrainBatch, EventLog, initEventsHubTables } from '../src/events/hub/index';
+import { initEventsHubTables } from '../src/events/hub/index';
 import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host';
 import type { Schedule, SqlExecutor, SqlValue } from '../src/types/primitives';
 import type { JsonValue } from '../src/utils/json';
 import { executorLabel } from '../src/read-models/executors';
 import { makeSql, makeExecRaw, makeSqlExec, conversationsFor } from './helpers';
-import { createTestRuntime, createTestActors, toolExecute, workspaceDatabase } from '@kinu.run/test-utils';
+import { createTestRuntime, createTestActors, hostDeliveries, toolExecute, workspaceDatabase } from '@kinu.run/test-utils';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { inWorkMode } from '../src/execution/work-mode';
 import { createSqlFiber } from '../src/execution/fiber';
@@ -47,7 +46,6 @@ function fakeFiber() {
 
 function fakeHost() {
   const enqueued: ProgrammaticTurn[] = [];
-  let status: 'queued' | 'skipped' = 'queued';
   let rejection: Error | null = null;
 
   const host: BackendHost = {
@@ -57,7 +55,7 @@ function fakeHost() {
 
       if (rejection) throw rejection;
 
-      return { status };
+      return { status: 'queued' };
     },
     turnInFlight: () => false,
     setTimer: () => {},
@@ -66,7 +64,6 @@ function fakeHost() {
   return {
     host,
     enqueued,
-    setStatus: (s: 'queued' | 'skipped') => { status = s; rejection = null; },
     setRejection: (error: Error) => { rejection = error; },
   };
 }
@@ -99,18 +96,15 @@ function setup(opts: {
   const store = new BackgroundJobStore(sql, actor);
   const hubSql = makeSqlExec(db);
   initEventsHubTables(hubSql);
-  const eventLog = new EventLog(hubSql, actor);
   const { fiber, stashes, runs, settled } = fakeFiber();
-  const { host, enqueued, setStatus, setRejection } = fakeHost();
+  const { host, enqueued, setRejection } = fakeHost();
   const logs: Array<{ e: string; d?: string }> = [];
   const notified: Array<{ id: string; status: string }> = [];
-  let drainSchedules = 0;
 
   const policy = opts.policy;
 
   const runnerDeps = {
-    store, fiber, inbox: new Inbox(host), eventLog,
-    scheduleDrain: () => { drainSchedules++; },
+    store, fiber, inbox: hostDeliveries(host).signals,
     logActivity: (e: string, d?: string) => logs.push({ e, d }),
     onSettled: (job: BackgroundJob) => notified.push({ id: job.id, status: job.status }),
     onDetached: opts.onDetached,
@@ -127,15 +121,15 @@ function setup(opts: {
   const runner = new BackgroundJobRunner(runnerDeps);
 
   return {
-    runner, runnerDeps, store, eventLog, stashes, runs, settled, host, enqueued,
-    setStatus, setRejection, logs, notified, drainSchedules: () => drainSchedules,
+    runner, runnerDeps, store, stashes, runs, settled, host, enqueued,
+    setRejection, logs, notified,
     storeFault, db, actors,
   };
 }
 
 describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
   test('resolving work settles the job + wakes a synthesis turn (once)', async () => {
-    const { runner, store, eventLog, enqueued, stashes, settled, notified } = setup();
+    const { runner, store, enqueued, stashes, settled, notified } = setup();
     const id = runner.create('think', { q: 1 }, 'build', new AbortController());
     expect(store.get(id)?.status).toBe('running');
 
@@ -155,7 +149,6 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
       { phase: 'settled', jobId: id, kind: 'think' },
     ]);
     expect(notified).toEqual([{ id, status: 'completed' }]);
-    expect(eventLog.pending()).toEqual([]);
   });
 
   test('starts its durable fiber only after external work is transferred to the job', async () => {
@@ -233,58 +226,9 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
     expect(badLog?.d).toBe(`${bad} failed: boom`);
   });
 
-  test('a skipped wake publishes a self-trusted retry event for the standard drain', async () => {
-    const { runner, store, eventLog, setStatus, logs, settled, drainSchedules } = setup();
-    setStatus('skipped');
-    const id = runner.create('think', {}, 'build', new AbortController());
-    runner.detach(id, 'think', Promise.resolve('ok'));
-    await settled();
-
-    expect(store.get(id)?.status).toBe('completed');
-    expect(logs.find((l) => l.e === 'bg_job_wake_skipped')).toBeTruthy();
-    const pending = eventLog.pending();
-    expect(pending).toHaveLength(1);
-    expect(pending[0]).toMatchObject({ variant: 'timer', trust: 'self', priority: 'normal' });
-    const wake = pending[0];
-
-    if (!wake || wake.variant !== 'timer'
-      || (wake.payload_visibility !== 'full' && wake.payload_visibility !== 'redact')) {
-      throw new Error('expected a readable timer wake event');
-    }
-
-    expect(wake.payload.trigger_id).toBe(`background-job-wake:${id}`);
-    expect(buildDrainBatch(pending)?.text).toContain(`agent.jobResult('${id}')`);
-    expect(drainSchedules()).toBe(1);
-  });
-
-  test('a rejected wake publishes the same durable retry event', async () => {
-    const { runner, eventLog, setRejection, settled, drainSchedules } = setup();
-    setRejection(new Error('queue unavailable'));
-    const id = runner.create('shell', {}, 'build', new AbortController());
-    runner.detach(id, 'shell', Promise.resolve('ok'));
-    await settled();
-
-    const pending = eventLog.pending();
-    expect(pending).toHaveLength(1);
-    expect(buildDrainBatch(pending)?.ids).toEqual([pending[0].id]);
-    expect(buildDrainBatch(pending)?.text).toContain(id);
-    expect(drainSchedules()).toBe(1);
-  });
-
-  test('a retry-ledger failure surfaces from wake', async () => {
-    const { runner, store, eventLog, setRejection } = setup();
-    setRejection(new Error('queue unavailable'));
-    const id = runner.create('shell', {}, 'build', new AbortController());
-    store.settle(id, 0, '"saved"', Date.now());
-    eventLog.publish = () => { throw new Error('ledger unavailable'); };
-
-    await expect(runner.wake(id)).rejects.toThrow('ledger unavailable');
-  });
-
   test('an undeliverable wake still drives the fiber to a terminal snapshot', async () => {
-    const { runner, store, eventLog, stashes, settled, setRejection } = setup();
+    const { runner, store, stashes, settled, setRejection } = setup();
     setRejection(new Error('queue unavailable'));
-    eventLog.publish = () => { throw new Error('ledger unavailable'); };
 
     const id = runner.create('think', {}, 'build', new AbortController());
 
@@ -943,7 +887,7 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
         return 'done';
       };
 
-      return { store, settled, holder, runner: new BackgroundJobRunner({ store, fiber, inbox: new Inbox(fakeHost().host), resume, holder }) };
+      return { store, settled, holder, runner: new BackgroundJobRunner({ store, fiber, inbox: hostDeliveries(fakeHost().host).signals, resume, holder }) };
     };
 
     initBackgroundJobsTable(makeExecRaw(first));
@@ -1546,7 +1490,7 @@ describe('a fiber host that cannot start the run', () => {
       const worker = actors.sibling('worker');
       const store = new BackgroundJobStore(sql, worker);
       const { host } = fakeHost();
-      const runner = new BackgroundJobRunner({ store, fiber: createSqlFiber(sql, worker), inbox: new Inbox(host) });
+      const runner = new BackgroundJobRunner({ store, fiber: createSqlFiber(sql, worker), inbox: hostDeliveries(host).signals });
       const id = runner.create('think', { q: 1 }, 'build', new AbortController());
 
       actors.directory.apply(actors.main, [], {

@@ -167,6 +167,12 @@ function actorState(actor: WorkspaceActor): ActorDirectoryResult['state'] {
   return 'active';
 }
 
+/** How a host holds what its directory reads. */
+export interface WorkspaceActorDirectoryOptions {
+  /** Hold each actor's row once read: only for a host whose every roster write goes through this directory. */
+  readonly holdRows?: boolean;
+}
+
 /** Owns membership. A handle issued elsewhere is not authority over this database. */
 export class WorkspaceActorDirectory {
   private readonly handles = new WeakSet<ActorHandle>();
@@ -174,7 +180,17 @@ export class WorkspaceActorDirectory {
   /** Actors this directory retired. It is the only writer of `workspace_actors`, so a handle asks this set, not the row. */
   private readonly ended = new Set<string>();
 
-  constructor(private readonly sql: SqlExecutor, private readonly authority: WorkspaceActorAuthority) {
+  /**
+   * Each row as last read, when its host holds them (`holdRows`): one whose every write goes through this directory, which
+   * drops what they touch before they run, so a row held here is the row; a database whose rows another writer replaces
+   * (an agent's isolate adopting its workspace's) says so through {@link forget}. A host whose database other processes
+   * write (the CLI's) reads each question. Only a present row is held: an absent one is read again.
+   */
+  private readonly rows: Map<string, WorkspaceActor> | null;
+
+  constructor(private readonly sql: SqlExecutor, private readonly authority: WorkspaceActorAuthority, options: WorkspaceActorDirectoryOptions = {}) {
+    this.rows = options.holdRows === true ? new Map() : null;
+
     if (!tableExists(this.sql, 'workspace_identity') || !tableExists(this.sql, 'workspace_actors')) throw new KinuError('missing', 'The workspace actor directory is not initialized.');
     const owner = this.sql<{ id: string; owner_user_id: string | null }>`SELECT id, owner_user_id FROM workspace_identity`[0];
 
@@ -187,11 +203,25 @@ export class WorkspaceActorDirectory {
 
   /** The row in any lifecycle state, or null. Issues no handle, so reading a retained actor cannot start it. */
   retained(actorId: string): WorkspaceActor | null {
+    const held = this.rows?.get(actorId);
+
+    if (held !== undefined) return held;
+
     const row = this.sql<StoredActorRow>`SELECT actor_id AS actorId,
       parent_actor_id AS parentActorId, name, storage_key AS storageKey, origin, tab, input, lifetime, evolves, created_at AS createdAt, creation_id AS creationId, retiring_at AS retiringAt, deleted_at AS deletedAt
       FROM workspace_actors WHERE actor_id = ${actorId}`[0];
 
-    return row === undefined ? null : this.actorOf(row);
+    if (row === undefined) return null;
+    const actor = this.actorOf(row);
+
+    this.rows?.set(actorId, actor);
+
+    return actor;
+  }
+
+  /** Rows another writer replaced: each is read again at its next need. */
+  forget(actorIds: readonly string[]): void {
+    for (const actorId of actorIds) this.rows?.delete(actorId);
   }
 
   /** `also` runs after the directory's own checks and can only refuse further, never authorise. */
@@ -403,6 +433,7 @@ export class WorkspaceActorDirectory {
     const { profile } = row;
     const keyByName = row.keyByName === true ? 1 : 0;
 
+    this.rows?.delete(row.actorId);
     void this.sql`INSERT INTO workspace_actors
       (actor_id, parent_actor_id, name, storage_key, origin, tab, input, lifetime, evolves, created_at, creation_id, retiring_at, deleted_at)
       VALUES (${row.actorId}, ${row.parentActorId}, ${row.name},
@@ -498,6 +529,10 @@ export class WorkspaceActorDirectory {
   }
   private transitionRetirement(actorId: string, action: 'retire' | 'release'): void {
     const now = Date.now();
+
+    // The subtree it moves is known only once it ran: every held row is read again, before it runs so a rollback leaves
+    // none ahead of the database.
+    this.rows?.clear();
 
     const ended = this.sql<{ actor_id: string }>`WITH RECURSIVE subtree(actor_id) AS (
       SELECT actor_id FROM workspace_actors WHERE actor_id = ${actorId}

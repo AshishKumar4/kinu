@@ -43,6 +43,7 @@ import { initGitHubActivityTable } from '../github/activity';
 import { initAlternateTakesTable } from '../mcts/takes';
 import { initMctsSearchTable } from '../mcts/search-store';
 import { initFactsTable } from '../memory/facts';
+import { initSubordinateRosterTable } from '../subordinates/roster';
 import { initTaskListTable } from '../tools/task-store';
 import { initArtifactTables, initTrialTables } from '../evolution/artifact-schema';
 import { initSlateStateTable } from '../slates/state';
@@ -117,6 +118,7 @@ function createWorkspaceTables(db: WorkspaceSchemaSql): void {
   initTurnFenceTable(execRaw);
   initAgentDeliveriesTable(execRaw);
   initAgentFiguresTable(execRaw);
+  initSubordinateRosterTable(db.exec);
   initActorStateSchema(db);
   execRaw(`CREATE TABLE IF NOT EXISTS slates (
     id TEXT NOT NULL, workspace_id TEXT NOT NULL, revision INTEGER NOT NULL, bytes BLOB NOT NULL,

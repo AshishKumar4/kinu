@@ -32,7 +32,7 @@ export function initAgentReportsTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS agent_reports (
     actor_id      TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id),
     seq           INTEGER NOT NULL,
-    standing_json TEXT
+    standing_json TEXT NOT NULL
   )`);
 }
 
@@ -62,8 +62,8 @@ export class AgentReports {
   /** The standing the agent last reported, as it reported it: none before its first report. A read of the workspace's own
    *  rows, so an activation that took no report yet never wakes the agent to learn it. */
   standing(actorId: string): AgentStandingReport | null {
-    const stored = this.sql<{ standing_json: string | null }>`SELECT standing_json FROM agent_reports WHERE actor_id = ${actorId}`[0]?.standing_json;
+    const stored = this.sql<{ standing_json: string }>`SELECT standing_json FROM agent_reports WHERE actor_id = ${actorId}`[0]?.standing_json;
 
-    return stored === undefined || stored === null ? null : v.parse(AgentStandingReportSchema, JSON.parse(stored));
+    return stored === undefined ? null : v.parse(AgentStandingReportSchema, JSON.parse(stored));
   }
 }

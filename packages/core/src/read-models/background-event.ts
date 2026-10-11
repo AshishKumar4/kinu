@@ -62,11 +62,11 @@ const SignalCardEventSchema = v.variant('state', [
  * written markers, never prose; unknown harness events fall back to `system_event`, not operator.
  */
 export function classifyProgrammaticTurn(
-  row: { metadata: unknown; id?: string },
+  row: { metadata: unknown },
 ): ClassifiedProgrammaticTurn | null {
-  const { metadata, id } = row;
+  const { metadata } = row;
 
-  if (turnAuthor({ id, metadata }) === "operator") return null;
+  if (turnAuthor({ metadata }) === "operator") return null;
   const parsed = v.safeParse(ProgrammaticMetadataSchema, metadata);
   const turn = parsed.success ? parsed.output : {};
 

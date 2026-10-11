@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, symlin
 
 import { join, resolve } from 'node:path';
 import {
-  ArchiveCursorSchema, archiveSqlFromDatabase, initActorClaimTables, readWorkspaceArchivePage, workspaceArchiveStore,
+  ArchiveCursorSchema, archiveSqlFromDatabase, initActorClaimTables, initWorkspaceActorTable, readWorkspaceArchivePage, workspaceArchiveStore,
   type ArchiveCursor,
 } from '@kinu.run/core';
 import { JsonArraySchema, JsonObjectSchema, parseJsonObject } from '@kinu.run/core';
@@ -61,6 +61,8 @@ function seedWorkspace(path: string): void {
   // One transaction: a commit per row is a disk sync per row, which took this suite past eight minutes on a busy disk.
   db.transaction(() => {
     db.exec(`CREATE TABLE workspace_identity (id TEXT NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL)`);
+    // The roster every workspace's genesis gives it.
+    initWorkspaceActorTable((ddl) => { db.exec(ddl); });
     initActorClaimTables((ddl) => { db.exec(ddl); });
     db.exec(`CREATE TABLE vfs_files (path TEXT PRIMARY KEY, data BLOB)`);
     db.query(`INSERT INTO workspace_identity (id, name, created_at) VALUES (?, ?, ?)`).run('w1', 'scout', 100);

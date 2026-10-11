@@ -102,22 +102,23 @@ describe('two real turns over the HTTP model seam', () => {
     // A busy socket's pending_steers row drains once the turn settles; the durable-token proof is the cold arm.
   });
 
-  it('a peer event that arrives mid-genesis is answered after the rerun of the sends genesis could not land', async () => {
+  it('a peer event that arrives mid-genesis rides the first step of the rerun of the sends genesis could not land', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('peer-queue-driver'));
 
     const calls = v.parse(QueuedConversationSchema, await root.queuedConversation('peer')).http
       .filter((call) => call.model === 'probe-queue' && !drawsLogo(call));
 
-    // The sends rerun as one turn in main's isolate; the event's drain is the workspace's, run once genesis ends.
-    expect(calls).toHaveLength(3);
+    // The event's drain is a delivery to main, whose genesis turn is running: it lands there, as the sends do, and none
+    // was read before genesis's one step. The sends rerun as one turn, and its first step carries the event beside them.
+    expect(calls).toHaveLength(2);
     const genesis = calls[0]?.users.find((message) => !message.startsWith('<'));
 
     expect(spoken(calls[1])).toEqual([
       { role: 'user', content: genesis },
       { role: 'assistant', content: `echo:${genesis}` },
       { role: 'user', content: 'QUEUE-A\n\nQUEUE-B\n\nQUEUE-C' },
+      { role: 'user', content: expect.stringContaining('QUEUE-PROGRAMMATIC') },
     ]);
-    expect(spoken(calls[2])?.at(-1)).toEqual({ role: 'user', content: expect.stringContaining('QUEUE-PROGRAMMATIC') });
   });
   it('keeps a queued chat on its durable token through a cold reset and replay', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('cold-queue-driver'));

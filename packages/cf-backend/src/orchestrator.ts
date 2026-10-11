@@ -17,7 +17,7 @@ import {
   runExperienceAction, type ExperienceActionDeps, type ExperienceActionInput,
   ArchiveCursorSchema,
   createWorkspaceForkSink, createWorkspaceForkSource, workspaceSoul, workspaceArchiveStore, writeWorkspaceSoul,
-  explorationActorKey, collectDynamicContext, subordinateDelegatesOf,
+  explorationActorKey, collectDynamicContext, subordinateDelegatesOf, writesSnapshotRows,
   HeadController, REAL_CLOCK, runHeadSplit, SubordinateRosterStore,
   EventLog, actorReferenceOf, subordinateDescendants, TEMPORARY_LIFETIME,
   artifactOverrides, currentArtifacts,
@@ -160,7 +160,7 @@ import {
   // (DO alarm, Worker webhook + email routes, cross-DO RPC).
   acceptWebhookDelivery, registerDurableWebhook, createWebhookSecretStore,
   acceptContainerEvent, type ContainerEventResult,
-  initWebhookIngressTables, initSubordinateRosterTable,
+  initWebhookIngressTables,
   type WebhookDelivery, type WebhookDeliveryResult, type WebhookSecretStore,
   createTimerTrigger, cancelTrigger, listTriggers, fireDueTriggers, type TrustLevel,
   type TriggerView,
@@ -176,7 +176,7 @@ import {
   type RecordObjectiveSummary, type RecordCellSummary,
   type RecordObjectiveHandle, type RecordCellHandle, type ExplorationRecord,
   type HeadStep,
-  buildPendingActions, listPendingPlanReviews, type PendingAction,
+  buildPendingActions, type PendingAction,
   type Page, type PageRequest,
   getRunTimeline, RUN_TIMELINE_MAX, boundedInt, type TimelineSpan,
   getRunEvents, getRunEventText, type RunListEntry, type RunSummary,
@@ -522,6 +522,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     strings: TemplateStringsArray,
     ...values: (string | number | boolean | null)[]
   ): T[] {
+    // Before it runs: a statement that throws may still have written.
+    if (writesSnapshotRows(strings)) this._heldSnapshots?.clear();
     const rows = super.sql<T>(strings, ...values);
     let reads = READS_BY_STATEMENT.get(strings);
 
@@ -742,22 +744,51 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     await (await this.agentCalls(actorId)).idle();
   }
 
+  /**
+   * Each agent's snapshot rows as last read: every write to the tables they copy goes through this object's `sql`, which
+   * drops them all (`writesSnapshotRows`), so rows held here are the rows.
+   */
+  // Lazy: this object's `sql` runs before its fields are initialised (its base's constructor).
+  private _heldSnapshots: Map<string, Omit<AgentSnapshot, 'order'>> | undefined;
+
   agentSnapshot(actorId: string): AgentSnapshot {
-    const agent = this.agentOf(actorId);
-    const lineage: StoredRow[] = [];
+    const heldSnapshots = this._heldSnapshots ?? new Map<string, Omit<AgentSnapshot, 'order'>>();
+    const known = heldSnapshots.get(actorId);
+    const read = known === undefined ? this.readSnapshot(actorId) : Effect.succeed(known);
 
-    // Each row names its parent: the walk reads one row a hop.
-    for (let step: string | null = actorId; step !== null;) {
-      const row: StoredRow | undefined = this.ctx.storage.sql.exec<StoredRow>('SELECT * FROM workspace_actors WHERE actor_id = ?', step).toArray()[0];
+    this._heldSnapshots = heldSnapshots;
 
-      if (row === undefined) return settleSync(Effect.fail(new KinuError('missing', `Agent ${actorId} has an ancestor the roster does not hold.`)));
-      lineage.unshift(row);
-      step = v.parse(v.nullable(v.string()), row.parent_actor_id);
-    }
+    return settleSync(read.pipe(Effect.map((held) => {
+      heldSnapshots.set(actorId, held);
 
-    const identity = this.ctx.storage.sql.exec<StoredRow>('SELECT * FROM workspace_identity').toArray()[0];
+      return { ...held, order: { activation: this.snapshotActivation, seq: ++this.snapshotSeq } };
+    })));
+  }
 
-    if (identity === undefined) return settleSync(Effect.fail(new KinuError('missing', 'The workspace has no durable identity to hand an agent.')));
+  private readSnapshot(actorId: string): Effect.Effect<Omit<AgentSnapshot, 'order'>, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const agent = this.agentOf(actorId);
+      const lineage: StoredRow[] = [];
+
+      // Each row names its parent: the walk reads one row a hop.
+      for (let step: string | null = actorId; step !== null;) {
+        const row: StoredRow | undefined = this.ctx.storage.sql.exec<StoredRow>('SELECT * FROM workspace_actors WHERE actor_id = ?', step).toArray()[0];
+
+        if (row === undefined) return yield* Effect.fail(new KinuError('missing', `Agent ${actorId} has an ancestor the roster does not hold.`));
+        lineage.unshift(row);
+        step = v.parse(v.nullable(v.string()), row.parent_actor_id);
+      }
+
+      const identity = this.ctx.storage.sql.exec<StoredRow>('SELECT * FROM workspace_identity').toArray()[0];
+
+      if (identity === undefined) return yield* Effect.fail(new KinuError('missing', 'The workspace has no durable identity to hand an agent.'));
+
+      return this.snapshotRows(agent, lineage, identity);
+    });
+  }
+
+  private snapshotRows(agent: ReturnType<OrchestratorAgent['agentOf']>, lineage: StoredRow[], identity: StoredRow): Omit<AgentSnapshot, 'order'> {
+    const { actorId } = agent;
 
     const config = this.ctx.storage.sql.exec<StoredRow>(
       `SELECT * FROM actor_config WHERE actor_id IN (${lineage.map(() => '?').join(', ')})`, ...lineage.map((row) => row.actor_id),
@@ -769,7 +800,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       identity, lineage, config, scaffold, workspaceName: this.workspaceName(),
       installedBuild: this.env.CF_VERSION_METADATA?.id ?? null,
       artifactDirectory: agentArtifactDirectory(agentHome(agent.homeName)),
-      order: { activation: this.snapshotActivation, seq: ++this.snapshotSeq },
     };
   }
 
@@ -813,6 +843,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       chatIdle: async (reference) => { await (await this.agentCalls(reference.actorId)).idle(); },
       pricing: (spec) => this.modelCatalog.pricing(spec),
       accounts: () => this.config.getProviderAccounts(),
+      credentialsRevision: () => this.openedCredentialsRevision(),
       // The workspace agent's missions are the workspace's: owner-declared here, and charged here as its turns spend.
       missions: (actorId) => (actorPolicy(this.agentOf(actorId)).workspaceAgent ? this.budget : null),
     });
@@ -860,11 +891,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       debit: (turnId, ...args) => this.agentTurns.debit(actorId, turnId, ...args),
       prepareTurn: async (turnId) => {
         this.admitWork();
+        // A turn opens on the account's settings as they are now (`accountSettingsAtOpen`).
+        await this.accountSettingsAtOpen();
 
         return await this.agentTurns.prepare(actorId, turnId);
       },
       prepareChat: async (request) => {
         this.admitWork();
+
+        // A turn opens on the account's settings as they are now; a chat built with no turn reads what is held.
+        if (request.turnId !== null) await this.accountSettingsAtOpen();
 
         return await this.agentTurns.prepareChat(actorId, request);
       },
@@ -983,7 +1019,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         // Its hirer hears it as a delivery of its own, whichever agent hired it.
         return await this.agentDeliveries(parentActorId).signals.send(signal);
       },
-    }, this.deleting.signal, (turnId, call) => this.agentTurns.fenceHolds(actorId, turnId, call));
+    }, this.deleting.signal, (turnId, call) => this.agentTurns.fenceHolds(actorId, turnId, call), (turnId) => this.agentTurns.cutOff(turnId));
   }
 
   private agentBound(actorId: string): BoundActor {
@@ -1719,6 +1755,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     return Number.isFinite(at) ? at : null;
   }
+
   /** One the owner added has its own Stop. */
   protected override stopSubtree(actorId: string): void {
     const seams = this.hostedSeams();
@@ -1916,7 +1953,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       if (reconciledEventIds.length > 0) {
         diagnostics.event('event.deliveries_repended', { workspace: this.name, events: reconciledEventIds.length });
-        this.armDurableWake();
+        // Owed again now: delivered to main as any due reaction is, not left to the next alarm.
+        await this.drainAgent(actorReferenceOf(this.liveAgentOf(this.actorHandle().actorId)));
       }
     }, { workspace: this.name });
 
@@ -2194,10 +2232,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private workspaceActors(): WorkspaceActorDirectory {
     if (this._actorDirectory) return this._actorDirectory;
     const owner = () => this.getOwnerUserId() ?? '';
+    // This object is its roster's one writer: the directory holds what it reads.
     this._actorDirectory = new WorkspaceActorDirectory(this.boundSql, {
       workspaceId: this.ctx.id.toString(),
       get ownerUserId() { return owner(); },
-    });
+    }, { holdRows: true });
 
     return this._actorDirectory;
   }
@@ -2642,8 +2681,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * its queued turns, telling their callers, and the turn is aborted. Nothing queued before the Stop runs.
    */
   protected override async stopAgent(actorId: string): Promise<void> {
-    const turnId = this.agentTurns.chatTurn(actorId);
-
     const cancelled = this.ctx.storage.transactionSync(() => {
       new TurnFences(this.boundSql).cancel(actorId, Date.now());
 
@@ -2655,7 +2692,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       for (const event of this.carried(actorId, delivery)?.events ?? []) event.log.dismiss(event.id, 'stopped by the owner', 'system');
     }
 
-    if (turnId !== null) this.agentTurns.cancelled(turnId);
     await this.agentTurns.interrupt(actorId);
 
     // A Stop dismisses the agent's open questions in its own isolate.
@@ -2707,7 +2743,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // Its plans are its own isolate's rows: the reads over them move as each change answers.
     const moved = <A>(answer: A): A => {
-      this.liveReadsMoved(readsOfTables(['plan_reviews']));
+      this.hostedPlansMoved();
 
       return answer;
     };
@@ -2720,6 +2756,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
   }
 
+  /**
+   * An agent's plans moved in its own isolate, where this workspace's store revision does not see them: the reads over
+   * them move, and the owner's tile, whose held inputs count its waiting plans, folds them again.
+   */
+  private hostedPlansMoved(): void {
+    this.liveReadsMoved(readsOfTables(['plan_reviews']));
+    this.slowOverview = null;
+    this.overviewChanged();
+  }
+
   /** An agent's Plan turn submits into its own isolate's store, judged by the metadata the agent admitted it under. */
   private async agentPlanSubmit(actorId: string, edits: readonly PlanEdit[], driving: JsonObject | undefined): Promise<PlanReviewResult> {
     const result = await (await this.agentCalls(actorId)).submitPlan(this.agentSnapshot(actorId), edits, driving);
@@ -2728,7 +2774,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     if (result.ok && record !== null) actorReadHandle(this.boundSql, record).config.setHoldsPlans();
 
-    if (result.ok) this.liveReadsMoved(readsOfTables(['plan_reviews']));
+    // A plan waits on the owner: a decision their tile counts.
+    if (result.ok) this.hostedPlansMoved();
 
     return result;
   }
@@ -3765,7 +3812,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // Planes only this root carries (declared in core/conformance/manifest.ts).
     initWebhookIngressTables(this.ctx.storage.sql);
-    initSubordinateRosterTable(this.ctx.storage.sql);
 
     initSleepTimeUpdatesTable(execRaw);
     initTurnBranchesTable(execRaw);
@@ -4287,8 +4333,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         latestAt: unseen[0]?.at ?? Date.now(),
       },
       curriculum: listProposedTasks(this.rt, 'pending'),
-      // Rows an earlier build left in this object still wait beside each agent's own (main's included, in its isolate).
-      pendingPlans: [...listPendingPlanReviews(this.boundSql), ...this.hostedPendingPlans(hostedPlans)].sort((a, b) => b.updatedAt - a.updatedAt),
+      // Each agent's plans are its own isolate's (main's included).
+      pendingPlans: this.hostedPendingPlans(hostedPlans).sort((a, b) => b.updatedAt - a.updatedAt),
     });
   }
 

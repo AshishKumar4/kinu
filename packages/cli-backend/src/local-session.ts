@@ -183,7 +183,7 @@ type Writable<T> = { -readonly [Key in keyof T]: T[Key] };
  */
 export const LOCAL_MAX_INLINE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 
-/** bun:sqlite with a real `transaction`: approval migration and settled-turn commits need atomicity. */
+/** bun:sqlite with a real `transaction`: approval decisions and settled-turn commits need atomicity. */
 export type LocalSessionDb = Pick<Database, 'query' | 'transaction'>;
 
 /**
@@ -569,8 +569,6 @@ export class LocalAgentSession {
       policy: () => opts.backgroundPolicy ?? BACKGROUND_POLICY.interactive,
       fiber: (name, fn) => this.trackFiber(name, fn),
       inbox: this.actorSession.orchestrator.signals,
-      eventLog: this.eventLog,
-      scheduleDrain: () => this.actorSession.orchestrator.scheduleDrain(),
       logActivity: (event, detail) => this.emit({ type: 'background', event, message: detail ?? '' }),
       clock: this.clock,
       jobOutput: (frame) => { this.host.broadcast(frame); },
@@ -1473,7 +1471,7 @@ export class LocalAgentSession {
   }
 
   /** Re-drive an interrupted background job through core's shared resume gate over the raw surface,
-   *  so it cannot detach a second job. Legacy `fork`/'think' rows map onto search. */
+   *  so it cannot detach a second job. */
   private async resumeBackgroundJob(
     kind: string,
     input: { value: unknown },

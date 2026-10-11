@@ -54,7 +54,12 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
    * `fenced` answers whether a call bound to a turn is the agent's current one: a turn a later opening superseded, or a
    * Stop cancelled, is refused before anything runs (design v2 §3).
    */
-  constructor(private readonly answers: AgentWorkspaceAnswers, private readonly closed: AbortSignal, private readonly fenced: (turnId: string, call: TurnCall) => boolean = () => true) {
+  constructor(
+    private readonly answers: AgentWorkspaceAnswers,
+    private readonly closed: AbortSignal,
+    private readonly fenced: (turnId: string, call: TurnCall) => boolean = () => true,
+    private readonly cutOff: (turnId: string) => AbortSignal | null = () => null,
+  ) {
     super();
   }
 
@@ -62,7 +67,6 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
    *  turn already did (its answer, its trace, its charges) is not, so the stopped turn closes. */
   private open<T>(answer: () => T | Promise<T>, turnId?: string, call: TurnCall = 'settles'): Promise<T> {
     const refused = Promise.withResolvers<never>();
-    const refuse = (): void => { refused.reject(this.closed.reason); };
 
     if (turnId !== undefined && !this.fenced(turnId, call)) {
       refused.reject(new KinuError('cancelled', `stale_epoch: turn ${turnId} is no longer this agent's current turn.`));
@@ -70,10 +74,15 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
       return refused.promise;
     }
 
-    if (this.closed.aborted) refuse();
-    else this.closed.addEventListener('abort', refuse, { once: true });
+    // A call that runs more of its turn ends as the turn is cut off, as every call does as the workspace is deleted.
+    const cut = turnId !== undefined && call === 'executes' ? this.cutOff(turnId) : null;
+    const ends = cut === null ? this.closed : AbortSignal.any([this.closed, cut]);
+    const refuse = (): void => { refused.reject(ends.reason); };
 
-    return Promise.race([answer(), refused.promise]).finally(() => { this.closed.removeEventListener('abort', refuse); });
+    if (ends.aborted) refuse();
+    else ends.addEventListener('abort', refuse, { once: true });
+
+    return Promise.race([answer(), refused.promise]).finally(() => { ends.removeEventListener('abort', refuse); });
   }
 
   session() { return this.open(() => this.answers.session()); }

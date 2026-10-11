@@ -64,7 +64,7 @@ export function messageTime(message: UIMessage): number | undefined {
 
 /** What a turn nobody typed draws as, to fold the same one in a row; null for a turn a person wrote. */
 export function eventTurnKey(message: UIMessage): string | null {
-  const programmatic = classifyProgrammaticTurn({ metadata: message.metadata, id: message.id });
+  const programmatic = classifyProgrammaticTurn({ metadata: message.metadata });
   const kind = programmatic?.kind ?? (message.role === "system" ? "system" : null);
 
   if (kind === null || kind === "workspace_created") return null;
@@ -584,9 +584,8 @@ export const MessageView = memo(function MessageView({
 
   const callExpanded = (part: AnyToolPart) => callToggles.has(part.toolCallId);
 
-  // Backend-enqueued turns are stored as `user` rows. The id is the provenance marker on rows
-  // written before the author stamp existed.
-  const programmatic = classifyProgrammaticTurn({ metadata: message.metadata, id: message.id });
+  // Backend-enqueued turns are stored as `user` rows, their author stamped in their metadata.
+  const programmatic = classifyProgrammaticTurn({ metadata: message.metadata });
 
   // A kept row with no live card is a turn that ran: its agent has seen it.
   if (programmatic) {

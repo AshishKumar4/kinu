@@ -183,23 +183,39 @@ const AGENT_CALLER = { workspaceToken: '' };
  *  held here is refreshed before it could expire; an upstream's refusal refreshes it at once. */
 const CREDENTIAL_HELD_MS = 5 * 60_000;
 
-/** Each workspace client's broker: the isolate's turns share the credentials one of them read. */
-const brokers = new WeakMap<AgentWorkspace, UserCredentialClient>();
+/** The credentials an isolate holds, and the account revision they were read under. */
+interface CredentialBroker {
+  readonly client: UserCredentialClient;
+  readonly held: Map<string, { readonly at: number; readonly auth: AuthResolution | null }>;
+  revision: number | null;
+}
 
-/** The isolate's credentials, held under their refresh rules (design v2 §8): a step asks its workspace for one only once
- *  it is older than {@link CREDENTIAL_HELD_MS}, or an upstream refused the one held, whichever turn of it asks. */
-function brokeredCredentials(workspace: AgentWorkspace): UserCredentialClient {
+/** Each workspace client's broker: the isolate's turns share the credentials one of them read. */
+const brokers = new WeakMap<AgentWorkspace, CredentialBroker>();
+
+/**
+ * The isolate's credentials, held under their refresh rules (design v2 §8): a step asks its workspace for one only once
+ * the account's credentials moved (the revision its turn opened under), it is older than {@link CREDENTIAL_HELD_MS}, or an
+ * upstream refused the one held, whichever turn of it asks.
+ */
+function brokeredCredentials(workspace: AgentWorkspace, revision: number | null): UserCredentialClient {
   const broker = brokers.get(workspace) ?? heldCredentials(workspace);
+
+  // A preparation that opened no turn read no revision: what is held stands.
+  if (revision !== null && broker.revision !== revision) {
+    broker.held.clear();
+    broker.revision = revision;
+  }
 
   brokers.set(workspace, broker);
 
-  return broker;
+  return broker.client;
 }
 
-function heldCredentials(workspace: AgentWorkspace): UserCredentialClient {
+function heldCredentials(workspace: AgentWorkspace): CredentialBroker {
   const held = new Map<string, { readonly at: number; readonly auth: AuthResolution | null }>();
 
-  return {
+  const client: UserCredentialClient = {
     getAuth: async (_caller, key, opts) => {
       const known = held.get(key);
 
@@ -215,6 +231,8 @@ function heldCredentials(workspace: AgentWorkspace): UserCredentialClient {
     relayModelCall: (_caller, deviceId, callId, request) => workspace.relayModelCall(deviceId, callId, request),
     cancelModelRelay: (_caller, callId) => workspace.cancelModelRelay(callId),
   };
+
+  return { client, held, revision: null };
 }
 
 function lines(chunks: ReadableStream<UIMessageChunk>): ReadableStream<Uint8Array> {
@@ -289,7 +307,7 @@ export type FacetModels = (deps: Omit<AgentProviderDeps, 'env'>) => AgentProvide
 
 function facetModels(actor: HostedActor, workspace: AgentWorkspace, models: FacetModels, prepared: PreparedAgentTurn): AgentProviderRegistry {
   return models({
-    userDO: { stub: brokeredCredentials(workspace), caller: AGENT_CALLER },
+    userDO: { stub: brokeredCredentials(workspace, prepared.credentialsRevision), caller: AGENT_CALLER },
     accountFor: (provider) => actor.stores.config.getProviderAccounts()[provider] ?? prepared.accounts[provider]
       ?? prepared.sources.profileInputs.envelope.catalog.accounts?.[provider],
     appTitle: 'Kinu',

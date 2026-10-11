@@ -12,8 +12,8 @@ import * as v from 'valibot';
 import type { PrepareStepContext } from '../extension';
 import type { BackendHost, EnqueueTurnResult, ProgrammaticTurn, PromptFile } from '../types/backend-host';
 import type {
-  AgentInbox, AgentSignal, SendOutcome, SettledSignals, SignalCardState,
-  SignalUndeliveredReason, UserSignalIdentity,
+  AgentSignal, SendOutcome, SettledSignals, SignalCardState,
+  UserSignalIdentity,
 } from '../types/signals';
 import { SIGNAL_ID_METADATA_KEY, USER_MESSAGE_SIGNAL_KIND } from '../types/signals';
 import { StepInjections } from '../prompting/step-injections';
@@ -101,7 +101,7 @@ export function describeLandedSteers(
     id: steer.id ?? `steer-${nanoid(12)}`,
     text: steer.text,
     atStep,
-    metadata: { [STEER_METADATA_KEY]: true, [STEER_STEP_METADATA_KEY]: atStep },
+    metadata: { [STEER_METADATA_KEY]: true, [STEER_STEP_METADATA_KEY]: atStep, [TURN_AUTHOR_METADATA_KEY]: 'operator' },
     ...(steer.files !== undefined && { files: steer.files }),
   }));
 }
@@ -283,6 +283,11 @@ const SignalIdMetadataSchema = v.object({
   [SIGNAL_ID_METADATA_KEY]: v.optional(v.string()),
 });
 
+/** A person's words as the chat sends them: what the Inbox alone admits (a delivery reaches it through {@link Inbox.landMidTurn}). */
+export interface UserWords extends AgentSignal {
+  readonly user: UserSignalIdentity;
+}
+
 /** Producers never see or set `cardId`. */
 interface DeliveredSignal extends AgentSignal {
   readonly cardId: string;
@@ -314,7 +319,7 @@ export function signalCardId(idempotencyKey: string): string {
   return `sig:${idempotencyKey}`;
 }
 
-export class Inbox implements AgentInbox {
+export class Inbox {
   private pending: DeliveredSignal[] = [];
   private absorbed: DeliveredSignal[] = [];
   /** Previous turn's absorbed events, held one turn so a continuation turn can re-absorb them. */
@@ -357,39 +362,20 @@ export class Inbox implements AgentInbox {
     return this.starting !== null || this.host.turnInFlight();
   }
 
-  /** Settles once the turn being started has reached its host, however the host answered. */
-  async handedOver(): Promise<void> {
-    await Promise.allSettled([this.starting]);
-  }
-
   /**
-   * The busy read and buffer push are synchronous. A signal with `idempotencyKey` derives its card id from it,
-   * so a collapsed re-delivery never opens a second, forever-pending card.
+   * A person's words, as the chat admits them: queued for the running turn's next step, or opening one. Anything else
+   * reaches the agent only as a delivery (design v2 §1), which its chat's admission lands here ({@link landMidTurn}) or
+   * queues as a turn of its own. The busy read and buffer push are synchronous.
    */
-  /**
-   * What lands in this chat once admitted: a person's words, and what a delivery hands its running turn. Spliced into the
-   * running turn at its next step, or opening one. Producers reach it only through the agent's deliveries (design v2 §1):
-   * its chat's admission lands each here.
-   */
-  send(signal: AgentSignal): Promise<SendOutcome> {
-    const cardId = signal.idempotencyKey ? signalCardId(signal.idempotencyKey) : `sig-${nanoid()}`;
-    const delivered: DeliveredSignal = { ...signal, cardId };
-    // Read once, before any await.
-    const { busy } = this;
+  send(words: UserWords): Promise<SendOutcome> {
+    const delivered: DeliveredUserSignal = { ...words, cardId: words.idempotencyKey ? signalCardId(words.idempotencyKey) : `sig-${nanoid()}` };
 
-    if (isUserSignal(delivered)) {
-      if (!busy) return this.queueUsers([delivered], { idempotent: false });
-      this.steers.onAccept?.({ ...toUserSteer(delivered), id: delivered.user.id, mode: delivered.user.mode });
-      this.pending.push(delivered);
-      this.host.broadcast({
-        type: 'steer_status', status: 'queued', steerId: delivered.user.id, text: signal.text,
-      });
-
-      return Promise.resolve('mid-turn');
-    }
-
-    if (!busy) return this.queue(delivered);
-    this.splice(delivered);
+    if (!this.busy) return this.queueUsers([delivered], { idempotent: false });
+    this.steers.onAccept?.({ ...toUserSteer(delivered), id: delivered.user.id, mode: delivered.user.mode });
+    this.pending.push(delivered);
+    this.host.broadcast({
+      type: 'steer_status', status: 'queued', steerId: delivered.user.id, text: words.text,
+    });
 
     return Promise.resolve('mid-turn');
   }
@@ -629,11 +615,12 @@ export class Inbox implements AgentInbox {
     }
   }
 
-  /** Compensation runs outside the enqueue's catch so a failing compensation surfaces instead of re-entering.
-   *  `idempotencyKey` rides to the backend, which derives the queued message id from it. */
+  /**
+   * What a turn left unread, re-delivered as a turn of its own. `idempotencyKey` rides to the backend, which derives the
+   * queued message id from it. One the host does not open is dropped here, its card withdrawn and the failure reported.
+   */
   private async queue(signal: DeliveredSignal): Promise<SendOutcome> {
     this.openCard(signal, signal.text);
-    let reason: SignalUndeliveredReason;
 
     try {
       const metadata = { ...turnMetadata(signal), [SIGNAL_ID_METADATA_KEY]: signal.cardId };
@@ -660,22 +647,19 @@ export class Inbox implements AgentInbox {
       if (result.status === 'queued') return 'queued';
 
       if (result.status === 'failed') {
-        reason = 'turn_failed';
         diagnostics.failure(
           'signal.turn_failed',
           new KinuError('unavailable', `the signal's turn ended on its error: ${result.reason ?? 'unstated'}`),
           { signal: signal.kind },
         );
       } else {
-        reason = 'preempted';
         diagnostics.failure(
           'signal.preempted',
-          new KinuError('unavailable', 'the host pre-empted the signal turn; compensating'),
+          new KinuError('unavailable', 'the host pre-empted the signal turn'),
           { signal: signal.kind },
         );
       }
     } catch (err) {
-      reason = 'failed';
       diagnostics.failure(
         'signal.enqueue_failed',
         toKinuError({ doing: 'enqueue a signal turn', cause: err, otherwise: 'io' }),
@@ -684,7 +668,6 @@ export class Inbox implements AgentInbox {
     }
 
     this.moveCard(signal.cardId, 'undelivered');
-    signal.compensate?.(reason);
 
     return 'undelivered';
   }

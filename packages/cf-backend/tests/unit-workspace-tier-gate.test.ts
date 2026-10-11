@@ -213,6 +213,7 @@ const GATED_CALLS: GatedCall[] = [
     name: 'getCredentialsRevision',
     run: (u, c) => u.getCredentialsRevision(c),
   },
+  { capability: 'credentials.model', name: 'getSettingsRevision', run: (u, c) => u.getSettingsRevision(c) },
 
   { capability: 'subscription_auth', name: 'startCodexDeviceFlow', run: (u, c) => u.startCodexDeviceFlow(c) },
   { capability: 'subscription_auth', name: 'pollCodexDeviceFlow', run: (u, c) => u.pollCodexDeviceFlow(c) },

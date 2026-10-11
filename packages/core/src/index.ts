@@ -1371,7 +1371,6 @@ export {
   applyPlanEdits,
   formatPlanWithLineNumbers,
   initPlanReviewTable,
-  listPendingPlanReviews,
   workModeUnderReview,
   planHandoffStillOwed,
   approvedTaskPlan,
@@ -2637,3 +2636,5 @@ export type {
   AgentTurnActivity, AgentCaptureDelta, AgentTurnOpening, AgentRecovery, AgentAnswer, AgentAnswerTexts, AgentReview, AgentStanding, AgentStandingReport, AgentSteps, AgentSnapshot, AgentTurnTask, AgentToolAnswer,
   AgentToolCall, AgentToolDescriptor, AgentHeadDelta, AgentTrace, AgentTurnEnd, PreparedAgentTurn, StoredRow, TurnRequestAt,
 } from './subordinates/agent-isolate';
+
+export { writesSnapshotRows } from './subordinates/agent-isolate';

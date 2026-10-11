@@ -16,10 +16,6 @@ export interface UserSignalIdentity {
 
 export const USER_MESSAGE_SIGNAL_KIND = 'user_message';
 
-/** 'preempted': a newer turn generation won the queue slot; 'turn_failed': the turn ran and ended on its error before it
- *  answered; 'failed': the enqueue threw. */
-export type SignalUndeliveredReason = 'preempted' | 'turn_failed' | 'failed';
-
 /**
  * 'mid-turn': pending in an existing turn. 'queued': started its own turn. 'yielded': an operator
  * message was admitted first, so the offer was withdrawn.
@@ -48,14 +44,14 @@ export interface AgentSignal {
    * at-least-once producer announces a fact once.
    */
   readonly idempotencyKey?: string;
-  /** Called when the queued turn was pre-empted or enqueue threw; never after a step saw it. */
-  readonly compensate?: (reason: SignalUndeliveredReason) => void;
   /** Set when this signal is the user's own words; `kind` is {@link USER_MESSAGE_SIGNAL_KIND}. */
   readonly user?: UserSignalIdentity;
 }
 
+/** A producer's way to an agent: its deliveries' signals. A property, so a chat's own inbox, which admits only a person's
+ *  words, is never accepted for one. */
 export interface AgentInbox {
-  send(signal: AgentSignal): Promise<SendOutcome>;
+  readonly send: (signal: AgentSignal) => Promise<SendOutcome>;
 }
 
 export interface SettledSignals {

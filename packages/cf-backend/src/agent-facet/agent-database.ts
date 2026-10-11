@@ -17,6 +17,7 @@ import {
   PlanReviewStore, AgentSequence, TurnFactsStore, type PlanReview, type TurnFacts,
   forkArtifactPath, localForkConversationSource, localForkConversationTarget, type ForkConversationSource, type ForkConversationTarget,
   InProcessDeliveries, type Delivery, type DeliveryAnswer,
+  writesSnapshotRows,
 } from '@kinu.run/core';
 import { attempt, detach, diagnostics, hold, KinuError, logged, settle, settleSync } from '@kinu.run/core/obs';
 import { isDeepStrictEqual } from 'node:util';
@@ -87,6 +88,9 @@ export class AgentDatabase {
 
   private host: ActorHost | undefined;
 
+  /** Its host's directory: rows an adoption replaces are read again there (`forget`). */
+  private directory: WorkspaceActorDirectory | undefined;
+
   private readonly stops = new Map<string, AbortController>();
 
   private lines: AgentTurnActivity[] = [];
@@ -115,8 +119,15 @@ export class AgentDatabase {
   private priced: { readonly model: string; readonly pricing: ModelPricing | null } | null = null;
   private execution: Executor | null = null;
 
-  private readonly sql: SqlExecutor = <T,>(query: TemplateStringsArray, ...values: SqlValue[]): T[] =>
-    this.storage.sql.exec<Extract<T, Record<string, SqlStorageValue>>>(query.join('?'), ...values).toArray();
+  private readonly sql: SqlExecutor = <T,>(query: TemplateStringsArray, ...values: SqlValue[]): T[] => {
+    // Before it runs: a statement that throws may still have written.
+    if (writesSnapshotRows(query)) this.adopted = null;
+
+    return this.storage.sql.exec<Extract<T, Record<string, SqlStorageValue>>>(query.join('?'), ...values).toArray();
+  };
+
+  /** The rows this database was last made to hold, as the workspace sent them; null once it wrote one of them itself. */
+  private adopted: string | null = null;
 
   constructor(
     private readonly storage: DurableObjectStorage,
@@ -153,6 +164,15 @@ export class AgentDatabase {
 
     if (held !== undefined && held.activation === snapshot.order.activation && snapshot.order.seq < held.seq) return;
 
+    // The rows it was last made to hold, unwritten since: nothing to read or write.
+    const rows = JSON.stringify([snapshot.identity, snapshot.lineage, snapshot.config, snapshot.scaffold]);
+
+    if (rows === this.adopted) {
+      this.snapshot = snapshot;
+
+      return;
+    }
+
     const unchanged = holds(this.storage, 'workspace_identity', snapshot.identity)
       && snapshot.lineage.every((row) => holds(this.storage, 'workspace_actors', row) && holdsConfig(this.storage, row.actor_id ?? null, snapshot.config))
       && snapshot.scaffold.every((row) => holds(this.storage, 'scaffold_versions', row));
@@ -170,8 +190,10 @@ export class AgentDatabase {
 
         for (const row of snapshot.scaffold) this.selectScaffold(row);
       });
+      this.directory?.forget(snapshot.lineage.map((row) => v.parse(v.string(), row.actor_id)));
     }
 
+    this.adopted = rows;
     this.snapshot = snapshot;
   }
 
@@ -209,10 +231,13 @@ export class AgentDatabase {
     const snapshot = this.current();
     const { workspace } = this.identity();
 
+    // Its rows are written here only by adoption, which says which it replaced.
     const directory = new WorkspaceActorDirectory(this.sql, {
       workspaceId: workspace.id,
       ownerUserId: workspace.owner_user_id,
-    });
+    }, { holdRows: true });
+
+    this.directory = directory;
 
     const files: AgentRuntimeFiles = {
       agent: () => nimbusSessionFiles(this.workspace.agent(), { home: this.workspace.home }),

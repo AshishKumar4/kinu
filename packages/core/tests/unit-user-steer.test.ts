@@ -8,7 +8,7 @@ import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
 import { workspaceGenesisSignal } from '../src/identity/soul';
 import { Inbox } from '../src/orchestrator/inbox';
-import type { UserSteer } from '../src/orchestrator/inbox';
+import type { UserSteer, UserWords } from '../src/orchestrator/inbox';
 import type {
   BackendHost, BroadcastEvent, ProgrammaticTurn, PromptFile,
 } from '../src/types/backend-host';
@@ -65,7 +65,7 @@ const steer = (
   id: string,
   text: string,
   over: { mode?: WorkMode; files?: readonly PromptFile[]; metadata?: AgentSignal['metadata'] } = {},
-): AgentSignal => {
+): UserWords => {
   const user: UserSignalIdentity = {
     id, mode: over.mode ?? 'build',
     ...(over.files !== undefined && { files: over.files }),
@@ -165,7 +165,7 @@ describe('Inbox — the user kind, accepted', () => {
     const { inbox, drained } = setup({ turnInFlight: true });
     inbox.beginTurn(false);
     // A pending event keeps its place; the restored users land ahead of it.
-    await inbox.send(event('still pending'));
+    inbox.landMidTurn(event('still pending'));
     inbox.restorePending([
       { id: 's1', text: 'first' },
       { id: 's2', text: 'second' },
@@ -428,7 +428,7 @@ describe('Inbox — the user kind beside the event kind', () => {
     const { inbox, broadcasts } = setup({ turnInFlight: true });
     inbox.beginTurn(false);
     await inbox.send(steer('s1', 'the user said this'));
-    await inbox.send(event('an event arrived'));
+    inbox.landMidTurn(event('an event arrived'));
 
     const rewritten = await inbox.prepareStep(step(0, HISTORY));
 
@@ -464,8 +464,8 @@ describe('Inbox — the user kind beside the event kind', () => {
     }))).toBe('mid-turn');
 
     // The same kinuMode on an event is a fact too, not a reason to open a second turn.
-    expect(await inbox.send(event('plan result', { metadata: { kinuMode: 'plan' } }))).toBe('mid-turn');
-    expect(await inbox.send(event('other mission', { metadata: { missionLabels: ['gamma'] } }))).toBe('mid-turn');
+    expect(inbox.landMidTurn(event('plan result', { metadata: { kinuMode: 'plan' } }))).toBe(true);
+    expect(inbox.landMidTurn(event('other mission', { metadata: { missionLabels: ['gamma'] } }))).toBe(true);
     expect(queued).toEqual([]);
   });
 
@@ -491,10 +491,10 @@ describe('Inbox — the user kind beside the event kind', () => {
     const { inbox, queued } = setup({ turnInFlight: true });
     inbox.beginTurn(false);
     await inbox.send(steer('s1', 'the model saw me'));
-    await inbox.send(event('absorbed event'));
+    inbox.landMidTurn(event('absorbed event'));
     await inbox.prepareStep(step(0, HISTORY));
     await inbox.send(steer('s2', 'typed too late'));
-    await inbox.send(event('leftover event'));
+    inbox.landMidTurn(event('leftover event'));
 
     inbox.settle({ completed: false });
     await Promise.resolve();
@@ -519,7 +519,7 @@ describe('Inbox — the user kind beside the event kind', () => {
     const { inbox, queued } = setup({ turnInFlight: true });
     inbox.beginTurn(false);
     await inbox.send(steer('s1', 'queued behind the turn'));
-    await inbox.send(event('bound by the tick', { stepText: 'mid-turn: bound by the tick' }));
+    inbox.landMidTurn(event('bound by the tick', { stepText: 'mid-turn: bound by the tick' }));
 
     inbox.settle({ completed: true });
     await Promise.resolve();
@@ -545,7 +545,7 @@ describe('Inbox — the user kind beside the event kind', () => {
     const { inbox, queued, broadcasts } = setup({ turnInFlight: true });
     inbox.beginTurn(false);
     await inbox.send(steer('s1', 'operator words'));
-    await inbox.send(offer);
+    inbox.landMidTurn(offer);
 
     inbox.settle({ completed: true });
     await Promise.resolve();
@@ -564,21 +564,22 @@ describe('Inbox — the user kind beside the event kind', () => {
     expect(cards.filter((card) => card.id === offered?.id).at(-1)?.state).toBe('undelivered');
   });
 
-  test('a closed host opens no rerun, so a wake left over beside users takes its own compensation', async () => {
+  test('a closed host opens no rerun, so a wake left over beside users is offered as its own turn', async () => {
     // The CLI's end() closes the chat, then aborts the turn it cut, which settles still in flight.
     const host = { turnInFlight: true, closed: false };
-    const { inbox, queued } = setup(host);
-    const compensated: string[] = [];
+    const { inbox, queued, broadcasts } = setup(host);
     inbox.beginTurn(false);
     await inbox.send(steer('s1', 'unsent when the session ended'));
-    await inbox.send(event('job 7 finished', { kind: 'background_job', compensate: (reason) => { compensated.push(reason); } }));
+    inbox.landMidTurn(event('job 7 finished', { kind: 'background_job' }));
 
     host.closed = true;
     inbox.settle({ completed: false });
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(compensated).toEqual(['preempted']);
+    // Its own turn, which the closed host declines: its card is withdrawn, never left pending.
+    expect(queued.filter((turn) => turn.origin !== 'user').map((turn) => turn.text)).toEqual(['job 7 finished']);
+    expect(broadcasts.filter((broadcast) => broadcast.type === 'signal_card').at(-1)).toMatchObject({ state: 'undelivered' });
     // The words still reach the host, whose ledger keeps them for the next start.
     expect(queued.filter((turn) => turn.origin === 'user').map((turn) => turn.text)).toEqual(['unsent when the session ended']);
   });
@@ -588,7 +589,7 @@ describe('Inbox — the user kind beside the event kind', () => {
     const { inbox, queued } = setup(host);
     inbox.beginTurn(false);
     await inbox.send(steer('s1', 'refused rerun'));
-    await inbox.send(event('still owed'));
+    inbox.landMidTurn(event('still owed'));
 
     // The turn is over and the host refuses the rerun: no step is coming for the event to ride.
     host.turnInFlight = false;
@@ -606,7 +607,7 @@ describe('Inbox — the user kind beside the event kind', () => {
     const { inbox, queued, broadcasts } = setup({ turnInFlight: true });
     inbox.beginTurn(false);
     await inbox.send(steer('s1', 'give it back'));
-    await inbox.send(event('still owed'));
+    inbox.landMidTurn(event('still owed'));
 
     expect(inbox.interrupt()).toEqual([{ id: 's1', text: 'give it back' }]);
     expect(broadcasts.map((b) => b.type === 'steer_status' ? b.status : b.state))
@@ -634,7 +635,7 @@ describe('Inbox — the user kind beside the event kind', () => {
 
     inbox.beginTurn(false);
     await inbox.send(steer('s1', 'first'));
-    await inbox.send(event('one event'));
+    inbox.landMidTurn(event('one event'));
 
     const preparing = inbox.prepareStep(step(0, HISTORY));
     await Promise.resolve();
