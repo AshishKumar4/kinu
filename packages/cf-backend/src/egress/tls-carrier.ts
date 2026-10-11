@@ -7,7 +7,8 @@
  * so a certificate the server fails reaches the program as its connection's error. The plaintext is carried after.
  */
 
-import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { Cause, Effect } from 'effect';
+import { diagnostics, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
 
 /** The name every TLS carrier connects to: fixed, so a long host never meets workerd's address limit. */
 export const TLS_CARRIER_HOST = 'tls.nimbus-egress.invalid';
@@ -92,48 +93,59 @@ function refusal(reason: string): Uint8Array {
 }
 
 /** Carry one TLS carrier: its request answered, then its plaintext both ways until either end closes. */
-export async function carryTls(program: CarriedSocket, deps: TlsCarrierDeps): Promise<void> {
-  const reader = program.readable.getReader();
-  const writer = program.writable.getWriter();
-  const request = await readRequest(reader);
-  const reason = typeof request === 'string' ? request : deps.refused(request.host);
+export function carryTls(program: CarriedSocket, deps: TlsCarrierDeps): Promise<void> {
+  return settle(Effect.gen(function* () {
+    const reader = program.readable.getReader();
+    const writer = program.writable.getWriter();
+    const request = yield* Effect.promise(() => readRequest(reader));
+    const reason = typeof request === 'string' ? request : deps.refused(request.host);
 
-  if (typeof request === 'string' || reason !== null) {
-    await writer.write(refusal(reason ?? 'the TLS request was refused'));
-    await program.close();
+    if (typeof request === 'string' || reason !== null) {
+      yield* Effect.promise(async () => {
+        await writer.write(refusal(reason ?? 'the TLS request was refused'));
+        await program.close();
+      });
 
-    return;
-  }
+      return;
+    }
 
-  const server = deps.connect({ hostname: request.host, port: deps.port });
-  // A server named other than its host is checked by that name (workerd's own node:tls does the same).
-  const secure = request.servername === request.host ? server.startTls() : server.startTls({ expectedServerHostname: request.servername });
+    const server = deps.connect({ hostname: request.host, port: deps.port });
+    // A server named other than its host is checked by that name (workerd's own node:tls does the same).
+    const secure = request.servername === request.host ? server.startTls() : server.startTls({ expectedServerHostname: request.servername });
 
-  try {
-    await secure.opened;
-  } catch (error) {
-    const failed = toKinuError({ doing: `making the TLS session with ${request.servername}`, cause: error, otherwise: 'io' });
+    const failed = yield* Effect.matchCause(Effect.promise(() => secure.opened), {
+      onSuccess: () => null,
+      onFailure: (cause) => Cause.squash(cause),
+    });
 
-    diagnostics.failure('egress.tls_failed', failed, { host: request.host, seam: 'workspace-connect' });
-    await writer.write(refusal(`the TLS session with ${request.servername} could not be made: ${renderThrownChain({ cause: error })}`));
-    await Promise.allSettled([program.close(), secure.close()]);
+    if (failed !== null) {
+      diagnostics.failure('egress.tls_failed', toKinuError({ doing: `making the TLS session with ${request.servername}`, cause: failed, otherwise: 'io' }), {
+        host: request.host, seam: 'workspace-connect',
+      });
+      yield* Effect.promise(async () => {
+        await writer.write(refusal(`the TLS session with ${request.servername} could not be made: ${renderThrownChain({ cause: failed })}`));
+        await Promise.allSettled([program.close(), secure.close()]);
+      });
 
-    return;
-  }
+      return;
+    }
 
-  await writer.write(Uint8Array.of(1));
-  writer.releaseLock();
-  reader.releaseLock();
+    yield* Effect.promise(async () => {
+      await writer.write(Uint8Array.of(1));
+      writer.releaseLock();
+      reader.releaseLock();
 
-  if (request.after.length > 0) {
-    const early = secure.writable.getWriter();
+      if (request.after.length > 0) {
+        const early = secure.writable.getWriter();
 
-    await early.write(request.after);
-    early.releaseLock();
-  }
+        await early.write(request.after);
+        early.releaseLock();
+      }
 
-  // The program's end of input is not passed on: closing a workerd socket's writable ended its readable too, so a
-  // client that half-closed after its request got no answer (scripts/egress-probe.ts, 2026-10-10). The server's own
-  // close ends the socket.
-  await Promise.all([program.readable.pipeTo(secure.writable, { preventClose: true }), secure.readable.pipeTo(program.writable)]);
+      // The program's end of input is not passed on: closing a workerd socket's writable ended its readable too, so a
+      // client that half-closed after its request got no answer (scripts/egress-probe.ts, 2026-10-10). The server's own
+      // close ends the socket.
+      await Promise.all([program.readable.pipeTo(secure.writable, { preventClose: true }), secure.readable.pipeTo(program.writable)]);
+    });
+  }));
 }
