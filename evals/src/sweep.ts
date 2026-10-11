@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { EVAL_WORKSPACE_PREFIX } from '@kinu.run/test-utils';
-import { WORKSPACE_LEASE_MS, type RosterRow } from './session';
+import { WORKSPACE_LEASE_MS, type RosterRow } from './workspace-roster';
 
 const HeldSchema = v.record(v.string(), v.record(v.string(), v.pipe(v.string(), v.minLength(1))));
 

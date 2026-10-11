@@ -27,7 +27,8 @@ import { tolerate } from '@kinu.run/core/obs';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { evalWorkspaceName, scratchDir } from '@kinu.run/test-utils';
-import { beatWorkspace, webHeaders, type PublicWebIdentity } from '../evals/src/session';
+import { beatWorkspace } from '../evals/src/session';
+import { webHeaders, type PublicWebIdentity } from '../evals/src/workspace-roster';
 import { holdForRelease } from '../packages/test-utils/src/scratch';
 import { DESKTOP } from './live-app-harness';
 import {

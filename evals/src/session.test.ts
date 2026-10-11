@@ -38,10 +38,8 @@ import {
   decodeFrame, encodeChatRequest, encodeRpcRequest,
   recordPublicTurn, HeardStreams, type PublicResponseFrame, type PublicTurnRecorder,
 } from './session-protocol';
-import {
-  resolvePublicSessionPlan, resolveWebIdentity,
-  KinuPublicSession, openPublicSession, WORKSPACE_LEASE_MS, type InspectionAnswer,
-} from './session';
+import { resolvePublicSessionPlan, KinuPublicSession, openPublicSession, type InspectionAnswer } from './session';
+import { resolveWebIdentity, WORKSPACE_LEASE_MS } from './workspace-roster';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import { SubordinateInspectionRequestSchema } from '../../packages/core/src/subordinates/inspection';
 import { measurePromptUsage } from './results';

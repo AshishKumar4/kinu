@@ -9,7 +9,8 @@ import { gatherEvidence, writeEvidence, type EvidenceReads, type WorkspaceEviden
 import { HarnessRunSchema, measurePlanUsage, measurePromptUsage, type ActorLedger } from './results';
 import type { KinuPublicSession } from './session';
 import { claimTrialAccount, trialTarget } from './slot';
-import { ARMS, deployedBuild, openWorkspace, type EvalArm, type EvalTarget } from './target';
+import { ARMS, deployedBuild, openWorkspace, type EvalArm } from './target';
+import { type EvalTarget } from './workspace-roster';
 import {
   taskTurns, type EvalCheck, type EvalRunInput, type EvalRunOutput, type EvalTask, type EvalTurn, type EvalTurnOutcome, type EvalTurnResult,
   type HarnessError, type TurnRun,
@@ -69,12 +70,11 @@ function release(): void {
 const CUT_REPORTED_COMPLETED = 'deployment.cut-reported-completed';
 
 
-/** What a trial is: its task's version, the eval commit, and the account each trial acts as (`slot.ts`); without
- *  `slotOf` every trial acts as eval-service. */
+/** The task version, eval commit and exclusive account of each trial. */
 export type TrialIdentity = {
   readonly taskVersion: string;
   readonly evalCommit: string;
-  readonly slotOf?: (input: EvalRunInput) => EvalAccount;
+  readonly slotOf: (input: EvalRunInput) => EvalAccount;
 };
 
 /** How an isolate memory reset reads when it surfaces (platform catalog `do.isolate.oom_reported`). */
@@ -297,7 +297,7 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
       const errors: HarnessError[] = [];
       let session: KinuPublicSession | undefined;
       let productSha = 'unknown';
-      let account = 'eval-service';
+      const account = identity.slotOf(input);
       let attempted: string | undefined;
       let turnStartedAt = Date.now();
 
@@ -307,12 +307,7 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
 
         const opened = await (async () => {
           try {
-            const { slotOf } = identity;
-
-            const trial = slotOf === undefined ? { target, account }
-              : await timeline.span('account', () => trialTarget(target, slotOf(input), Date.now()));
-
-            account = trial.account;
+            const trial = await timeline.span('account', () => trialTarget(target, account, Date.now()));
             productSha = (await timeline.span('build', () => deployedBuild(trial.target))).sha;
 
             const created = await timeline.span('open', () => openWorkspace(trial.target, {

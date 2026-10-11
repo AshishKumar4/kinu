@@ -17,7 +17,7 @@ import {
   decodeFrame, decodeSocketJson, encodeChatRequest, encodeRpcRequest, HEADER_WEBSOCKET, recordPublicTurn,
   type PublicSendResult, type PublicTurnRecorder,
 } from '../../evals/src/session-protocol';
-import { webHeaders, type PublicWebIdentity } from '../../evals/src/session';
+import { webHeaders, type PublicWebIdentity } from '../../evals/src/workspace-roster';
 
 /** One RPC in flight on a public socket. */
 interface PendingRpc {
