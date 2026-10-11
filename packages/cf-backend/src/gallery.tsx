@@ -349,7 +349,8 @@ const VISIT_FAILS = new URLSearchParams(location.search).get("visit") === "faile
 
 const GALLERY_DEVICE = { id: "dev-1", label: "Owner's laptop" };
 
-let settingsChatGptSignedIn = false;
+/** `&chatgpt=signed-in`: the account holds a ChatGPT sign-in, so its entry offers the disconnect; OpenAI refuses the revoke. */
+let settingsChatGptSignedIn = new URLSearchParams(location.search).get("chatgpt") === "signed-in";
 
 function galleryChatGptStatus() {
   return {
@@ -366,6 +367,14 @@ const settingsSavedCredentials = new Map<string, JsonValue>();
 
 /** `&chatgpt=device`: a machine that signs in; without, none is connected yet. */
 function chatgptFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
+  const [route, query] = path.split("?");
+
+  if (route === "/api/user/chatgpt" && method === "DELETE") {
+    settingsChatGptSignedIn = false;
+
+    return fixtureJson({ unrevoked: query === "revoke=1" ? "OpenAI refused to revoke the refresh_token: The refresh token has already been used." : null });
+  }
+
   if (path === "/api/user/chatgpt") {
     return fixtureJson(CHATGPT_DEVICE
       ? { device: GALLERY_DEVICE, status: galleryChatGptStatus(), account: null, machineSignIn: null }
@@ -421,15 +430,13 @@ async function settingsSectionsFixture(path: string, method: string, body: BodyI
   }
 
   if (path.startsWith("/api/user/credentials/") && method === "DELETE") {
-    const key = decodeURIComponent(path.slice("/api/user/credentials/".length));
+    const key = decodeURIComponent(path.slice("/api/user/credentials/".length).split("?")[0] ?? "");
 
     settingsSavedCredentials.delete(key);
 
-    // The route's own answer: whether the key is gone.
-    return fixtureJson({ ok: !settingsSavedCredentials.has(key) });
+    // The route's own answer: no stored key here can be revoked at its provider.
+    return fixtureJson({ ok: !settingsSavedCredentials.has(key), unrevoked: null });
   }
-
-  if (path === "/api/user/unrevoked-grants") return fixtureJson([]);
 
   if (path === "/api/user/claude/start" && method === "POST") {
     return fixtureJson({ url: "https://claude.ai/oauth/authorize?state=gallery" });

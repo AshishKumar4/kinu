@@ -217,6 +217,35 @@ describe('providers command — disconnect', () => {
     expect((await runProviders(['list'], { home })).stdout).not.toContain('accounts: main, work');
   });
 
+  test('disconnect leaves the grant at OpenAI; --revoke asks OpenAI too and says its refusal in its words', async () => {
+    const signedIn = { accessToken: 'at', refreshToken: 'rt', metadata: { clientId: 'oaiapp_me', subject: 'me-sub', email: 'me@example.com' } };
+
+    const disconnect = (home: string, revoke: boolean) => runToExit([process.execPath, '-e', `
+      const asked = [];
+      globalThis.fetch = async (input) => {
+        asked.push(String(input));
+
+        return Response.json({ error: 'invalid_request', error_description: 'The refresh token has already been used.' }, { status: 400 });
+      };
+      const { providersCommand } = await import('./packages/cli/src/commands/providers.ts');
+      await providersCommand('disconnect', 'chatgpt', undefined, { revoke: ${String(revoke)} });
+      console.log(JSON.stringify({ asked }));
+    `], { cwd: repoRoot, env: { ...process.env, KINU_HOME: home, NO_COLOR: '1' } });
+
+    const AskedSchema = v.object({ asked: v.array(v.string()) });
+    const asked = (stdout: string) => v.parse(AskedSchema, JSON.parse(stdout.trim().split('\n').at(-1) ?? '')).asked;
+
+    const plain = await disconnect(homeWith({ providers: { chatgpt: signedIn } }), false);
+    expect(plain.exitCode, plain.stderr).toBe(0);
+    expect(asked(plain.stdout)).toEqual([]);
+
+    const revoking = await disconnect(homeWith({ providers: { chatgpt: signedIn } }), true);
+    expect(revoking.exitCode, revoking.stderr).toBe(0);
+    expect(asked(revoking.stdout)).toEqual(['https://auth.openai.com/api/accounts/oauth/revoke']);
+    expect(revoking.stdout).toContain('The refresh token has already been used.');
+    expect(revoking.stdout).toContain('Removed the chatgpt credential from this machine');
+  });
+
   test('a signed-out ChatGPT login reads as signed out, not as a sign-in without plan usage', async () => {
     const scopes = ['chatgpt.tokens.use.direct', 'email', 'offline_access', 'openid', 'profile', 'resource.invoke'];
     const home = homeWith({ providers: { chatgpt: { accessToken: 'at', metadata: { clientId: 'oaiapp_me', email: 'me@example.com', scopes } } } });

@@ -2833,7 +2833,7 @@ function answerLaterMethod(msg, ws) {
   if (method === RELAY_METHOD) rpcWhenSettled(ws, id, relayCall(ws, id, params[0]));
   else if (method === CHATGPT_METHODS.status) rpc(ws, id, chatgptSession.status());
   else if (method === CHATGPT_METHODS.signIn) rpcWhenSettled(ws, id, chatgptSession.signIn());
-  else if (method === CHATGPT_METHODS.signOut) rpcWhenSettled(ws, id, chatgptSession.signOut());
+  else if (method === CHATGPT_METHODS.signOut) rpcWhenSettled(ws, id, chatgptSession.signOut({ revoke: params?.[0]?.revoke === true }));
   else rpc(ws, id, null, Object.assign(new Error('unknown method: ' + method), { code: protocol.errors.unknownMethod }));
 }
 

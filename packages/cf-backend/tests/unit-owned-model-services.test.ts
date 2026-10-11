@@ -492,7 +492,7 @@ describe('OwnedModelServices — the provider snapshot', () => {
     const before = await harness.userDO.getCredentialsRevision(owner);
     await harness.userDO.setCredential(owner, 'openrouter.bearer', { kind: 'bearer', token: 'sk-or-1' });
     const afterConnect = await harness.userDO.getCredentialsRevision(owner);
-    await harness.userDO.deleteCredential(owner, 'openrouter.bearer');
+    await harness.userDO.deleteCredential(owner, 'openrouter.bearer', false);
     const afterDisconnect = await harness.userDO.getCredentialsRevision(owner);
 
     expect(afterConnect).toBeGreaterThan(before);

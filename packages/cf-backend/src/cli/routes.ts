@@ -401,7 +401,7 @@ cliRoutes.delete('/api/cli/credentials/:key', (c) => {
 
     yield* Effect.tryPromise({
       try: async () => {
-        await cli.userDO.deleteCredential(await ownerCaller(c.env), c.get('key'));
+        await cli.userDO.deleteCredential(await ownerCaller(c.env), c.get('key'), false);
       },
       catch: (cause) => authoredRefusal({ doing: 'deleting this credential', cause }),
     });

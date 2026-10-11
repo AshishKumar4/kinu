@@ -326,8 +326,6 @@ export function userAccount<Built extends Partial<UserRoutesAuthority>>(
     deleteCredential: refuse('deleteCredential'),
     checkpointCredentials: refuse('checkpointCredentials'),
     restoreCredentials: refuse('restoreCredentials'),
-    listUnrevokedGrants: refuse('listUnrevokedGrants'),
-    dismissUnrevokedGrant: refuse('dismissUnrevokedGrant'),
     getAuth: refuse('getAuth'),
     getAuthHeaders: refuse('getAuthHeaders'),
     relayDevice: refuse('relayDevice'),

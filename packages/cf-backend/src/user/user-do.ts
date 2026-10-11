@@ -9,7 +9,7 @@ import { USER_DO_RPC_SURFACE, USER_DO_STARTED_RPC, sealRpcSurface } from '../rpc
 import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from '../activation-gate';
 
 import {
-  ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, NO_DEVICE_CONNECTED, ORCHESTRATOR_AGENT_SLUG, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type DeviceCodeStart, type JsonValue, type EgressRequestFacts, type EgressSecretBinding, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type EgressSecretSummary, type PutEgressSecretInput, type UnrevokedGrant, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, DEVICE_KEEPALIVE_PING, DEVICE_KEEPALIVE_PONG, DEVICE_TOKEN_ROTATION_ACK, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, } from '@kinu.run/core';
+  ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, NO_DEVICE_CONNECTED, ORCHESTRATOR_AGENT_SLUG, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type DeviceCodeStart, type JsonValue, type EgressRequestFacts, type EgressSecretBinding, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type EgressSecretSummary, type PutEgressSecretInput, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, DEVICE_KEEPALIVE_PING, DEVICE_KEEPALIVE_PONG, DEVICE_TOKEN_ROTATION_ACK, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, } from '@kinu.run/core';
 
 import { DurableObjectOAuthClientProvider, type AgentMcpOAuthProvider } from 'agents/mcp/do-oauth-client-provider';
 
@@ -267,8 +267,8 @@ export class UserDO extends Agent<Env> {
     return this.credentials.setCredential(caller, key, credentialJson);
   }
 
-  deleteCredential(caller: UserCaller, key: string): Promise<void> {
-    return this.credentials.deleteCredential(caller, key);
+  deleteCredential(caller: UserCaller, key: string, revoke: boolean): Promise<DisconnectOutcome> {
+    return this.credentials.deleteCredential(caller, key, revoke);
   }
 
   checkpointCredentials(caller: UserCaller, account: string): Promise<CheckpointedCredential[]> {
@@ -277,14 +277,6 @@ export class UserDO extends Agent<Env> {
 
   restoreCredentials(caller: UserCaller, account: string, checkpoint: readonly CheckpointedCredential[]): Promise<string[]> {
     return this.credentials.restoreCredentials(caller, account, checkpoint);
-  }
-
-  listUnrevokedGrants(caller: UserCaller): Promise<UnrevokedGrant[]> {
-    return this.credentials.listUnrevokedGrants(caller);
-  }
-
-  dismissUnrevokedGrant(caller: UserCaller, key: string): Promise<void> {
-    return this.credentials.dismissUnrevokedGrant(caller, key);
   }
 
   getCredentialsRevision(caller: UserCaller): Promise<number> {
@@ -351,8 +343,8 @@ export class UserDO extends Agent<Env> {
     return this.credentials.finishClaudeSignIn(caller, returned);
   }
 
-  disconnectCodex(caller: UserCaller): Promise<void> {
-    return this.credentials.disconnectCodex(caller);
+  disconnectCodex(caller: UserCaller, revoke: boolean): Promise<DisconnectOutcome> {
+    return this.credentials.disconnectCodex(caller, revoke);
   }
 
   getCodexStatus(caller: UserCaller): Promise<CodexStatus> {
@@ -602,8 +594,8 @@ export class UserDO extends Agent<Env> {
     return this.chatgpt.finishChatGptPasteSignIn(caller, returned);
   }
 
-  signOutChatGpt(caller: UserCaller): ReturnType<UserChatGptSignIn['signOutChatGpt']> {
-    return this.chatgpt.signOutChatGpt(caller);
+  signOutChatGpt(caller: UserCaller, revoke: boolean): ReturnType<UserChatGptSignIn['signOutChatGpt']> {
+    return this.chatgpt.signOutChatGpt(caller, revoke);
   }
 
   openDeviceTerminal(caller: UserCaller, agentName: string, window: { cols: number; rows: number }, deviceId?: string): ReturnType<UserTerminals['openDeviceTerminal']> {

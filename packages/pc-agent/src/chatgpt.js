@@ -293,8 +293,8 @@ async function refreshTokens({ clientId, refreshToken, scopes = [], fetch: fetch
 
 /**
  * Ends the renewable session; an empty 200 is success, including for an already-dead token. Resolves
- * either way: `unconfirmed` says why OpenAI did not confirm it, for the owner to finish in ChatGPT's
- * settings, since the tokens are forgotten regardless.
+ * either way: `unconfirmed` says, in OpenAI's own words when it refused, why the sign-in was not revoked,
+ * since the tokens are forgotten regardless.
  */
 async function revokeSession({ clientId, refreshToken, fetch: fetchImpl = globalThis.fetch }) {
   try {
@@ -304,7 +304,12 @@ async function revokeSession({ clientId, refreshToken, fetch: fetchImpl = global
       body: new URLSearchParams({ token: refreshToken, token_type_hint: 'refresh_token', client_id: clientId }).toString(),
     });
 
-    return { unconfirmed: res.ok ? null : `auth.openai.com answered HTTP ${res.status}` };
+    if (res.ok) return { unconfirmed: null };
+    // RFC 7009 answers a refusal as an OAuth error: its description, else its code, else the status line.
+    const refusal = parseJson(await res.text());
+    const said = [refusal?.error_description, refusal?.error].find((word) => typeof word === 'string') ?? `HTTP ${res.status} ${res.statusText}`.trim();
+
+    return { unconfirmed: `OpenAI refused to revoke the sign-in: ${said}` };
   } catch (err) {
     return { unconfirmed: `auth.openai.com could not be reached: ${messageOf(err)}` };
   }
@@ -715,12 +720,11 @@ function createDeviceSession({ home, fetch: baseFetch = globalThis.fetch, now = 
     },
 
     /**
-     * Revokes the renewable session, then forgets its tokens either way; the registration stays for the
-     * next sign-in. It waits for a rotation in flight, so the token revoked is the newest, and no call gets
-     * a token meanwhile. `unconfirmed` says why the revocation was not confirmed, for the owner to finish in
-     * ChatGPT's settings.
+     * Forgets the tokens, revoking the renewable session first when `revoke` asks; the registration stays for
+     * the next sign-in. It waits for a rotation in flight, so a token revoked is the newest, and no call gets
+     * a token meanwhile. `unconfirmed` says why an asked revocation did not happen.
      */
-    async signOut() {
+    async signOut({ revoke }) {
       signingOut += 1;
 
       try {
@@ -731,7 +735,7 @@ function createDeviceSession({ home, fetch: baseFetch = globalThis.fetch, now = 
 
           if (record === null) return { unconfirmed: null };
 
-          const { unconfirmed } = record.refreshToken !== undefined && record.clientId !== undefined
+          const { unconfirmed } = revoke && record.refreshToken !== undefined && record.clientId !== undefined
             ? await revokeSession({ clientId: record.clientId, refreshToken: record.refreshToken, fetch: fetchImpl })
             : { unconfirmed: null };
 

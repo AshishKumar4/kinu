@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 import {
-  accountCredentialKey, DEVICE_CHATGPT, DeviceChatGptStatusSchema, CHATGPT_CRED_KEY, CHATGPT_PASTE_REDIRECT, MAIN_ACCOUNT, ChatGptPasteSignInSchema, ChatGptRegistrationSchema, chatgptHostId, chatgptRegistrationOf, finishChatGptPasteSignIn, startChatGptPasteSignIn, type ChatGptPasteOutcome, type DeviceChatGptStatus, nanoid, type UserCaller,
+  accountCredentialKey, DEVICE_CHATGPT, DeviceChatGptStatusSchema, CHATGPT_CRED_KEY, CHATGPT_PASTE_REDIRECT, MAIN_ACCOUNT, ChatGptPasteSignInSchema, ChatGptRegistrationSchema, chatgptHostId, chatgptRegistrationOf, finishChatGptPasteSignIn, startChatGptPasteSignIn, type ChatGptPasteOutcome, type DeviceChatGptStatus, type DisconnectOutcome, nanoid, type UserCaller,
 } from '@kinu.run/core';
 import { attempt, attemptInItsWords, KinuError, logged, renderThrownChain, settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -231,32 +231,37 @@ export class UserChatGptSignIn {
   }
 
   /**
-   * Signs ChatGPT out everywhere this account holds it: OpenAI revokes the machine's session and the account's own,
-   * each forgets its tokens, and each keeps its registration for the next sign-in.
+   * Signs ChatGPT out everywhere this account holds it: each forgets its tokens and keeps its registration for the
+   * next sign-in. Asked to revoke, OpenAI first revokes the machine's session and the account's own.
    */
-  async signOutChatGpt(caller: UserCaller): Promise<{ readonly unconfirmed: string | null }> {
+  async signOutChatGpt(caller: UserCaller, revoke: boolean): Promise<DisconnectOutcome> {
     await this.host.requireTier(caller, 'device.manage');
     await this.host.requireTier(caller, 'subscription_auth');
     this.host.ctx.storage.kv.delete(CHATGPT_MACHINE_SIGN_IN_KEY);
     this.host.ctx.storage.kv.delete(CHATGPT_PASTE_SIGN_IN_KEY);
 
-    if ((await this.host.vault.readCredential(CHATGPT_CRED_KEY)) !== null) await this.host.vault.disconnectCredential(CHATGPT_CRED_KEY);
+    const account = (await this.host.vault.readCredential(CHATGPT_CRED_KEY)) === null
+      ? { unrevoked: null }
+      : await this.host.vault.disconnectCredential(CHATGPT_CRED_KEY, revoke);
+
     const holding = (await this.chatgptSignIns()).filter(({ status }) => status?.signedIn === true || status?.pending === true);
 
     const answers = await Promise.allSettled(holding.map(async (machine) => {
-      const answer = v.safeParse(v.object({ unconfirmed: v.nullable(v.string()) }), await this.host.devices._devices.chatgpt(machine.id, DEVICE_CHATGPT.signOut));
+      const answer = v.safeParse(v.object({ unconfirmed: v.nullable(v.string()) }), await this.host.devices._devices.chatgpt(machine.id, DEVICE_CHATGPT.signOut, [{ revoke }]));
 
       return answer.success ? answer.output.unconfirmed : 'it did not say whether OpenAI revoked the sign-in';
     }));
 
     this.noteChatGptSignIn(null, null);
 
-    const unconfirmed = answers.flatMap((answer, at) => {
+    const machines = answers.flatMap((answer, at) => {
       const said = answer.status === 'fulfilled' ? answer.value : renderThrownChain({ cause: answer.reason });
 
       return said === null ? [] : [`${holding[at]?.label ?? ''}: ${said}`];
     });
 
-    return { unconfirmed: unconfirmed.length === 0 ? null : unconfirmed.join('; ') };
+    const left = account.unrevoked === null ? machines : [account.unrevoked, ...machines];
+
+    return { unrevoked: left.length === 0 ? null : left.join('; ') };
   }
 }

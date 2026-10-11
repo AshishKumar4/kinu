@@ -14,7 +14,6 @@ import {
   listAvailableModels, listProviderCatalog, getProfileCatalog, updateProfileCatalog,
   listCloudflareGateways, selectCloudflareGateway,
   listCloudflareAccounts, selectCloudflareAccount,
-  listUnrevokedGrants, dismissUnrevokedGrant, type UnrevokedGrant,
   type CredentialSummary,
   type ProviderCatalogEntry,
   type CloudflareGatewayStatus, type CloudflareAccountStatus,
@@ -29,7 +28,7 @@ import { ChatGptConnect, ChatGptPlanUsage, ChatGptWelcome } from "@/components/a
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { showing, detach } from '@kinu.run/core/obs';
 import {
-  CLAUDE_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, CODEX_CRED_KEY, MAIN_ACCOUNT, accountCredentialKey, accountOf, baseCredentialKey, catalogProviderOfKey, isAccountName, storedAccounts,
+  CHATGPT_CRED_KEY, CLAUDE_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, CODEX_CRED_KEY, MAIN_ACCOUNT, accountCredentialKey, accountOf, baseCredentialKey, catalogProviderOfKey, isAccountName, revokingProviderOf, storedAccounts,
 } from '@kinu.run/core';
 
 function ConnectedBadge({ detail }: { detail?: ReactNode }) {
@@ -43,35 +42,6 @@ function ConnectedBadge({ detail }: { detail?: ReactNode }) {
 
 const dangerQuietCls = "p-btn-quiet inline-flex h-6.5 shrink-0 items-center gap-1 px-2 text-xs p-danger";
 
-const GRANT_PROVIDER = new Map([[CODEX_CRED_KEY, 'ChatGPT'], [CLOUDFLARE_OAUTH_CRED_KEY, 'Cloudflare']]);
-
-/** A disconnect the provider would not revoke: the login is gone from Kinu but may still work there. */
-function UnrevokedGrants({ grants, onChanged }: { grants: readonly UnrevokedGrant[]; onChanged: () => void }) {
-  const [error, setError] = useState<string | null>(null);
-
-  if (grants.length === 0) return null;
-
-  return (
-    <div className="space-y-2 rounded-md px-3 py-2 text-xs p-notice-warning">
-      {grants.map((grant) => (
-        <div key={grant.key} className="flex flex-wrap items-start justify-between gap-2">
-          <div>
-            <div>{GRANT_PROVIDER.get(grant.key) ?? grant.key} did not confirm it revoked the login you disconnected. Revoke Kinu&apos;s access in that account&apos;s settings.</div>
-            <div className="p-meta">{grant.reasons.join(' · ')}</div>
-          </div>
-          <button
-            className="p-btn-quiet inline-flex h-6.5 shrink-0 items-center px-2 text-xs"
-            onClick={() => detach(Effect.catchCause(Effect.gen(function* () { yield* Effect.promise(async () => dismissUnrevokedGrant(grant.key)); onChanged(); }), showing(setError)))}
-          >
-            I revoked it
-          </button>
-        </div>
-      ))}
-      {error && <div className="p-notice-danger rounded-md px-2 py-1">{error}</div>}
-    </div>
-  );
-}
-
 export function ProvidersPanel({ returnTo }: { returnTo: string }) {
   const creds = useAsyncResource(listCredentials);
   const codex = useAsyncResource(codexStatus);
@@ -80,31 +50,28 @@ export function ProvidersPanel({ returnTo }: { returnTo: string }) {
   const catalog = useAsyncResource(listProviderCatalog);
   const gateways = useAsyncResource(listCloudflareGateways);
   const accounts = useAsyncResource(listCloudflareAccounts);
-  const unrevoked = useAsyncResource(listUnrevokedGrants);
 
   const [chatgptWelcome, setChatgptWelcome] = useState(false);
-  const [unconfirmedSignOut, setUnconfirmedSignOut] = useState<string | null>(null);
+  /** The last disconnect that asked its provider to revoke and was refused, in the provider's words. */
+  const [unrevoked, setUnrevoked] = useState<{ readonly name: string; readonly words: string } | null>(null);
+  const answered = (name: string, { unrevoked: words }: { readonly unrevoked: string | null }) => setUnrevoked(words === null ? null : { name, words });
 
-  const reads = [creds, codex, chatgpt, models, catalog, gateways, accounts, unrevoked];
+  const reads = [creds, codex, chatgpt, models, catalog, gateways, accounts];
   // Retry re-reads the whole account: mutators invalidate more than their own row.
   const reloadAll = () => { for (const read of reads) read.reload(); };
 
   return (
     <>
-      <CardSlot resource={unrevoked.resource} what="your disconnected logins" onRetry={reloadAll}>
-        {(grants) => <UnrevokedGrants grants={grants} onChanged={reloadAll} />}
-      </CardSlot>
       {chatgptWelcome && <ChatGptWelcome onClose={() => setChatgptWelcome(false)} />}
-      {unconfirmedSignOut !== null && (
+      {unrevoked !== null && (
         <p role="status" className="rounded-md px-3 py-2 text-xs p-notice-warning">
-          OpenAI did not confirm it revoked the sign-in ({unconfirmedSignOut}). Disconnect Kinu under Apps in ChatGPT settings to be sure.
+          {unrevoked.name} is disconnected from Kinu but not revoked. {unrevoked.words}
         </p>
       )}
       <Card title="Connect a provider" icon={PlugIcon}>
         <CardSlot resource={creds.resource} what="your API keys" onRetry={reloadAll}>
           {(credentials) => {
             const held = new Set(credentials.map((c) => c.key));
-            const forget = (key: string) => async () => { await deleteCredential(key); };
 
             return (
               <div className="space-y-5">
@@ -114,7 +81,10 @@ export function ProvidersPanel({ returnTo }: { returnTo: string }) {
                   )}
                   <ProviderEntry provider="workers-ai" name="Cloudflare AI" method="Cloudflare sign-in"
                     connected={held.has(CLOUDFLARE_OAUTH_CRED_KEY) || (lastValue(models.resource)?.models.some((model) => model.provider === 'workers-ai') ?? false)}
-                    disconnect={held.has(CLOUDFLARE_OAUTH_CRED_KEY) ? forget(CLOUDFLARE_OAUTH_CRED_KEY) : undefined}
+                    disconnect={held.has(CLOUDFLARE_OAUTH_CRED_KEY)
+                      ? async (revoke) => answered('Cloudflare AI', await deleteCredential(CLOUDFLARE_OAUTH_CRED_KEY, revoke))
+                      : undefined}
+                    revokesAt={revokingProviderOf(CLOUDFLARE_OAUTH_CRED_KEY)}
                     onChanged={reloadAll}
                     connect={<CloudflareAIConnectNotice returnTo={returnTo} message="Connect Cloudflare to use your Workers AI quota and AI Gateway." />}>
                     {/* Asked first: the account decides which gateway is reachable. */}
@@ -139,17 +109,8 @@ export function ProvidersPanel({ returnTo }: { returnTo: string }) {
                               method="Sign in with ChatGPT"
                               connected={status.connected || planSignedIn}
                               detail={planSignedIn ? <>{planEmail}{plan.account === null && plan.device !== null ? <> on {plan.device.label}</> : null}</> : codexAccount}
-                              disconnect={async () => {
-                                if (!planSignedIn) {
-                                  await disconnectCodex();
-
-                                  return;
-                                }
-
-                                const { unconfirmed } = await signOutChatGpt();
-
-                                setUnconfirmedSignOut(unconfirmed);
-                              }}
+                              disconnect={async (revoke) => answered('ChatGPT', planSignedIn ? await signOutChatGpt(revoke) : await disconnectCodex(revoke))}
+                              revokesAt={revokingProviderOf(planSignedIn ? CHATGPT_CRED_KEY : CODEX_CRED_KEY)}
                               onChanged={reloadAll}
                               connect={<ChatGptConnect plan={plan} onSignedIn={(first) => { reloadAll(); setChatgptWelcome(first); }} />}>
                               {planSignedIn && <ChatGptPlanUsage />}
@@ -161,7 +122,7 @@ export function ProvidersPanel({ returnTo }: { returnTo: string }) {
                   </CardSlot>
                   <ProviderEntry provider="claude" name="Claude" method="claude.ai sign-in"
                     connected={held.has(CLAUDE_CRED_KEY)}
-                    disconnect={forget(CLAUDE_CRED_KEY)}
+                    disconnect={async () => { await deleteCredential(CLAUDE_CRED_KEY, false); }}
                     onChanged={reloadAll}
                     connect={<ClaudeConnect onChanged={reloadAll} />} />
                   <CardSlot resource={catalog.resource} what="the provider catalog" onRetry={reloadAll}>
@@ -169,7 +130,7 @@ export function ProvidersPanel({ returnTo }: { returnTo: string }) {
                       <ProviderEntry key={entry.key} provider={entry.provider} name={entry.name} method={entry.method}
                         detail={<span className="p-annotation">{entry.key}</span>}
                         connected
-                        disconnect={async () => { await deleteCredential(entry.key); await forgetDefaultAccount(entry.key); }}
+                        disconnect={async () => { await deleteCredential(entry.key, false); await forgetDefaultAccount(entry.key); }}
                         onChanged={reloadAll} />
                     ))}
                   </CardSlot>
@@ -219,13 +180,15 @@ function storedEntries(creds: readonly CredentialSummary[], catalog: readonly Pr
  * One provider in the list: its sign-in method, whether it is connected, and the way in or out. What
  * connecting takes differs per method, so each passes its own `connect`; status and disconnect are this.
  */
-function ProviderEntry({ provider, name, method, connected, detail, disconnect, onChanged, connect, children }: {
+function ProviderEntry({ provider, name, method, connected, detail, disconnect, revokesAt = null, onChanged, connect, children }: {
   provider: string;
   name: string;
   method: string;
   connected: boolean;
   detail?: ReactNode;
-  disconnect?: () => Promise<void>;
+  /** `revoke` asks the provider to end the grant too; offered only where `revokesAt` names who can. */
+  disconnect?: (revoke: boolean) => Promise<void>;
+  revokesAt?: string | null;
   onChanged: () => void;
   connect?: ReactNode;
   /** Settings shown under a connected entry. */
@@ -238,8 +201,13 @@ function ProviderEntry({ provider, name, method, connected, detail, disconnect, 
   const leave = () => {
     if (disconnect === undefined) return;
     ask({
-      title: `Disconnect ${name}?`, body: "Your agents lose its models.", action: "Disconnect", failed: "Could not disconnect",
-      run: async () => { await disconnect(); onChanged(); },
+      title: `Disconnect ${name}?`,
+      body: revokesAt === null
+        ? "Your agents lose its models."
+        : `Your agents lose its models. Disconnect removes Kinu's copy of the sign-in; revoking also asks ${revokesAt} to end the sign-in itself.`,
+      action: "Disconnect", failed: "Could not disconnect",
+      run: async () => { await disconnect(false); onChanged(); },
+      ...(revokesAt !== null && { alternate: { action: `Disconnect and revoke at ${revokesAt}`, run: async () => { await disconnect(true); onChanged(); } } }),
     });
   };
 

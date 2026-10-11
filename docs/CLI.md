@@ -114,6 +114,7 @@ Also: `kinu providers`
 | `--origin <url>` | Kinu app origin |
 | `--model <id>` | Default model for the selected provider |
 | `--local` | Keep the provider key on this machine instead of your Kinu account |
+| `--revoke` | With disconnect chatgpt: also revoke the sign-in at OpenAI, not only remove Kinu's copy |
 
 ```bash
 kinu provider connect openrouter

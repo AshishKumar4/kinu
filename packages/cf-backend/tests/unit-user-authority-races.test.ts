@@ -203,7 +203,7 @@ describe('a credential the owner moved while a provider was answering', () => {
     const owner = await testOwner();
     await connectedCodex(harness);
     tokenEndpoint(
-      () => harness.userDO.disconnectCodex(owner),
+      async () => { await harness.userDO.disconnectCodex(owner, false); },
       { access_token: 'access-rotated', refresh_token: 'refresh-rotated', expires_in: 3600 },
     );
 
@@ -296,7 +296,7 @@ describe('a device-code sign-in the owner superseded', () => {
     const owner = await testOwner();
     codexProvider({
       userCode: () => 'AAAA-BBBB',
-      duringExchange: () => harness.userDO.disconnectCodex(owner),
+      duringExchange: async () => { await harness.userDO.disconnectCodex(owner, false); },
     });
     await harness.userDO.startCodexDeviceFlow(owner);
 

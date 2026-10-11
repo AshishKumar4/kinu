@@ -359,6 +359,7 @@ describe('ChatGPT sign-in through a machine', () => {
   test('signing out signs out every machine that holds the plan, and none carries it after', async () => {
     const owner = await testOwner();
     const signedOut = new Set<string>();
+    const asked: JsonValue[] = [];
 
     const harness = createTestUserDO({
       deviceResponder: (frame): JsonValue => {
@@ -366,6 +367,7 @@ describe('ChatGPT sign-in through a machine', () => {
 
         if (frame.method === DEVICE_CHATGPT.signOut) {
           signedOut.add(device);
+          asked.push(...frame.params);
 
           return { unconfirmed: device === laptop ? 'auth.openai.com answered HTTP 500' : null };
         }
@@ -381,8 +383,10 @@ describe('ChatGPT sign-in through a machine', () => {
     await harness.sendDeviceHello({ type: 'HELLO' }, studio);
     await harness.sendDeviceHello({ type: 'HELLO' }, laptop);
 
-    expect(await harness.userDO.signOutChatGpt(owner)).toEqual({ unconfirmed: 'laptop: auth.openai.com answered HTTP 500' });
+    expect(await harness.userDO.signOutChatGpt(owner, true)).toEqual({ unrevoked: 'laptop: auth.openai.com answered HTTP 500' });
     expect([...signedOut].sort()).toEqual([studio, laptop].sort());
+    // Each machine is told to revoke too, as the owner chose.
+    expect(asked).toEqual([{ revoke: true }, { revoke: true }]);
     expect(await harness.userDO.relayDevice(owner, 'chatgpt')).toBeNull();
     harness.close();
   });

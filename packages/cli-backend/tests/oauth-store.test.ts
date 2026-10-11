@@ -174,7 +174,7 @@ describe('createFileOAuthStore', () => {
     const renewing = createFileOAuthStore(configPath, { fetch }).getAuth(CHATGPT_CRED_KEY);
 
     await reached.promise;
-    const signingOut = signOutChatGptLogin(configPath, 'main', { fetch });
+    const signingOut = signOutChatGptLogin(configPath, 'main', { revoke: true, fetch });
 
     released.resolve();
     expect(await renewing).toMatchObject({ headers: { Authorization: 'Bearer at-new' } });
@@ -200,12 +200,17 @@ describe('createFileOAuthStore', () => {
       return new Response(null, { status: 200 });
     });
 
-    expect(await signOutChatGptLogin(configPath, 'work', { fetch })).toEqual({ removed: true, unconfirmed: null });
+    expect(await signOutChatGptLogin(configPath, 'work', { revoke: true, fetch })).toEqual({ removed: true, unconfirmed: null });
     expect(revoked).toEqual(['oaiapp_work']);
     expect(JSON.parse(readFileSync(configPath, 'utf-8'))).toEqual({
       providers: { chatgpt: { ...main, accounts: { work: { metadata: { clientId: 'oaiapp_work', subject: 'user-sub', email: 'owner@example.com' } } } } },
     });
     expect(createFileOAuthStore(configPath).keys()).toEqual(['chatgpt.oauth']);
+
+    // Disconnect alone forgets the login here and leaves the grant at OpenAI as it is.
+    expect(await signOutChatGptLogin(configPath, 'main', { revoke: false, fetch })).toEqual({ removed: true });
+    expect(revoked).toEqual(['oaiapp_work']);
+    expect(createFileOAuthStore(configPath).keys()).toEqual([]);
   });
 
   // The refresh must run inside the lock: an async callback releases the synchronous helper's lock on its first await,

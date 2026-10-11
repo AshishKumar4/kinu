@@ -64,11 +64,9 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'credentials.other', name: 'getAuth(github)', run: (u, c) => u.getAuth(c, 'github') },
   { capability: 'credentials.other', name: 'getCredentialEndpoint(github)', run: (u, c) => u.getCredentialEndpoint(c, 'github') },
   { capability: 'credentials.other', name: 'setCredential', run: (u, c) => u.setCredential(c, 'github', { kind: 'bearer', token: 'ghp_x' }) },
-  { capability: 'credentials.other', name: 'deleteCredential', run: (u, c) => u.deleteCredential(c, 'github') },
+  { capability: 'credentials.other', name: 'deleteCredential', run: (u, c) => u.deleteCredential(c, 'github', false) },
   { capability: 'credentials.other', name: 'checkpointCredentials', run: (u, c) => u.checkpointCredentials(c, 'account') },
   { capability: 'credentials.other', name: 'restoreCredentials', run: (u, c) => u.restoreCredentials(c, 'account', []) },
-  { capability: 'credentials.other', name: 'listUnrevokedGrants', run: (u, c) => u.listUnrevokedGrants(c) },
-  { capability: 'credentials.other', name: 'dismissUnrevokedGrant', run: (u, c) => u.dismissUnrevokedGrant(c, 'codex') },
 
   // Binding a secret to a host is like storing a credential; unwrapping a placeholder is more privileged still.
   { capability: 'egress_secrets.manage', name: 'listEgressSecrets', run: (u, c) => u.listEgressSecrets(c) },
@@ -216,7 +214,7 @@ const GATED_CALLS: GatedCall[] = [
 
   { capability: 'subscription_auth', name: 'startCodexDeviceFlow', run: (u, c) => u.startCodexDeviceFlow(c) },
   { capability: 'subscription_auth', name: 'pollCodexDeviceFlow', run: (u, c) => u.pollCodexDeviceFlow(c) },
-  { capability: 'subscription_auth', name: 'disconnectCodex', run: (u, c) => u.disconnectCodex(c) },
+  { capability: 'subscription_auth', name: 'disconnectCodex', run: (u, c) => u.disconnectCodex(c, false) },
   { capability: 'subscription_auth', name: 'getCodexStatus', run: (u, c) => u.getCodexStatus(c) },
   { capability: 'subscription_auth', name: 'startClaudeSignIn', run: (u, c) => u.startClaudeSignIn(c) },
   { capability: 'subscription_auth', name: 'finishClaudeSignIn', run: (u, c) => u.finishClaudeSignIn(c, 'code#state') },
@@ -267,7 +265,7 @@ const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
   { capability: 'device.manage', name: 'issueDeviceConnectTicket', run: (u, c) => u.issueDeviceConnectTicket(c, 'pdt_x') },
   { capability: 'device.manage', name: 'recordDeviceUpdateRefusal', run: (u, c) => u.recordDeviceUpdateRefusal(c, 'pdt_x', { version: '0.3.0+served', runtime: 'Bun 1.4.0', reason: 'install failed' }) },
   { capability: 'device.manage', name: 'startChatGptSignIn', run: (u, c) => u.startChatGptSignIn(c) },
-  { capability: 'device.manage', name: 'signOutChatGpt', run: (u, c) => u.signOutChatGpt(c) },
+  { capability: 'device.manage', name: 'signOutChatGpt', run: (u, c) => u.signOutChatGpt(c, false) },
   { capability: 'device.manage', name: 'cancelChatGptSignIn', run: (u, c) => u.cancelChatGptSignIn(c) },
 
   {

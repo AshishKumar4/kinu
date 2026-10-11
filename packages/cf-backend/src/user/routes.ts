@@ -37,7 +37,7 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   | 'fetch' | 'listWorkspaces' | 'touchWorkspace' | 'removeWorkspace' | 'hasWorkspace'
   | 'listDevices' | 'issueDeviceJoin' | 'acknowledgeUnstoppedDevice' | 'revokeDevice' | 'renameDevice' | 'listDeviceConsents'
   | 'setDeviceTier' | 'revokeDeviceConsent'
-  | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'checkpointCredentials' | 'restoreCredentials' | 'listUnrevokedGrants' | 'dismissUnrevokedGrant' | 'listActiveWorkspaces' | 'getAuthHeaders'
+  | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'checkpointCredentials' | 'restoreCredentials' | 'listActiveWorkspaces' | 'getAuthHeaders'
   | 'getCodexStatus' | 'disconnectCodex' | 'startCodexDeviceFlow' | 'pollCodexDeviceFlow' | 'startClaudeSignIn' | 'finishClaudeSignIn'
   | 'chatgptPlan' | 'startChatGptSignIn' | 'cancelChatGptSignIn' | 'startChatGptPasteSignIn' | 'finishChatGptPasteSignIn' | 'signOutChatGpt'
   | 'listConfig' | 'getConfig' | 'setConfig' | 'listConnectedProviders'
@@ -357,18 +357,17 @@ userRoutes.post('/api/user/credentials/:key', (c) => {
   }));
 });
 
+/** `?revoke=1` also has the provider revoke the grant; its refusal answers in its own words. */
 userRoutes.delete('/api/user/credentials/:key', (c) => {
   return settle(Effect.gen(function* () {
-    yield* Effect.tryPromise({
-      try: async () => {
-        await c.get('stub').deleteCredential(c.get('owner'), c.get('key'));
-      },
+    const outcome = yield* Effect.tryPromise({
+      try: async () => c.get('stub').deleteCredential(c.get('owner'), c.get('key'), c.req.query('revoke') === '1'),
       catch: (cause) => authoredRefusal({ doing: 'deleting this credential', cause }),
     });
 
     modelSettingsChanged(c);
 
-    return json({ body: { ok: true } });
+    return json({ body: { ok: true, ...outcome } });
   }));
 });
 
@@ -386,21 +385,13 @@ userRoutes.on(['GET', 'POST'], '/api/user/credential-checkpoint', async (c) => {
   return json({ body: { restored: await c.get('stub').restoreCredentials(c.get('owner'), userId, checkpoint) } });
 });
 
-userRoutes.get('/api/user/unrevoked-grants', async (c) => json({ body: await c.get('stub').listUnrevokedGrants(c.get('owner')) }));
-
-userRoutes.delete('/api/user/unrevoked-grants/:key', async (c) => {
-  await c.get('stub').dismissUnrevokedGrant(c.get('owner'), decodeURIComponent(rawParam(c, 'key')));
-
-  return json({ body: { ok: true } });
-});
-
 userRoutes.get('/api/user/codex', async (c) => json({ body: await c.get('stub').getCodexStatus(c.get('owner')) }));
 
 userRoutes.delete('/api/user/codex', async (c) => {
-  await c.get('stub').disconnectCodex(c.get('owner'));
+  const outcome = await c.get('stub').disconnectCodex(c.get('owner'), c.req.query('revoke') === '1');
   modelSettingsChanged(c);
 
-  return json({ body: { ok: true } });
+  return json({ body: { ok: true, ...outcome } });
 });
 
 /** An empty body signs in the main account; `{ account }` signs in `codex.oauth@<account>`. */
@@ -463,7 +454,7 @@ userRoutes.post('/api/user/chatgpt/paste/finish', async (c) => {
 });
 
 userRoutes.delete('/api/user/chatgpt', async (c) => {
-  const signedOut = await c.get('stub').signOutChatGpt(c.get('owner'));
+  const signedOut = await c.get('stub').signOutChatGpt(c.get('owner'), c.req.query('revoke') === '1');
   modelSettingsChanged(c);
 
   return json({ body: signedOut });

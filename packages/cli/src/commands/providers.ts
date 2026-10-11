@@ -43,10 +43,16 @@ export function providersCommand(
   actionOrProvider: string | undefined,
   providerArg: string | undefined,
   accountArg: string | undefined,
-  opts: { origin?: string; model?: string; local?: boolean },
+  opts: { origin?: string; model?: string; local?: boolean; revoke?: boolean },
 ): Promise<void> {
   return settle(Effect.gen(function* () {
     const { action, provider, raw, account } = yield* parseArgs(actionOrProvider, providerArg, accountArg);
+    const revoke = opts.revoke === true;
+
+    // ChatGPT's is the one sign-in this machine holds that its provider can revoke; Cloudflare's is the account's.
+    if (revoke && (action !== 'disconnect' || provider !== 'chatgpt')) {
+      return yield* Effect.die(new Error('--revoke goes with `disconnect chatgpt`: it is the one sign-in this machine can revoke at its provider.'));
+    }
 
     if (action === 'list') {
       yield* Effect.promise(async () => printProviders());
@@ -71,7 +77,7 @@ export function providersCommand(
     }
 
     if (action === 'disconnect') {
-      yield* (account === MAIN_ACCOUNT ? disconnectProvider(provider) : disconnectAccount(provider, account));
+      yield* (account === MAIN_ACCOUNT ? disconnectProvider(provider, revoke) : disconnectAccount(provider, account, revoke));
 
       return;
     }
@@ -139,14 +145,14 @@ function setDefaultAccount(name: string | undefined, account: string): Effect.Ef
   });
 }
 
-function disconnectAccount(provider: ProviderName, account: string): Effect.Effect<void, KinuError> {
+function disconnectAccount(provider: ProviderName, account: string, revoke: boolean): Effect.Effect<void, KinuError> {
   return Effect.gen(function* () {
     if (!holdsAccounts(provider)) return yield* Effect.die(new Error(`${provider} holds one account.`));
     console.log('');
     let removed = false;
 
     if (provider === 'chatgpt') {
-      removed = yield* Effect.promise(async () => signOutChatGpt(account));
+      removed = yield* Effect.promise(async () => signOutChatGpt(account, revoke));
     } else {
       yield* Effect.promise(async () => updateConfigFile((config) => {
         const accounts = config.providers?.[provider]?.accounts;
@@ -180,16 +186,13 @@ async function forgetDefaultAccount(provider: string, account: string): Promise<
   console.log(`${WARN('!')} ${account} was the default ${provider} account; ${provider} models now run on main, or its only account.`);
 }
 
-/** Revokes at OpenAI and forgets the tokens under the lock the refresh takes; the registration stays. */
-async function signOutChatGpt(account: string): Promise<boolean> {
-  const { removed, unconfirmed } = await signOutChatGptLogin(CONFIG_PATH, account);
+/** Forgets the tokens under the lock the refresh takes, revoking at OpenAI first when asked; the registration stays. */
+async function signOutChatGpt(account: string, revoke: boolean): Promise<boolean> {
+  const { removed, unconfirmed } = await signOutChatGptLogin(CONFIG_PATH, account, { revoke });
 
   if (unconfirmed === null) console.log(`${OK('✓')} OpenAI revoked this machine's ChatGPT sign-in.`);
 
-  if (unconfirmed !== undefined && unconfirmed !== null) {
-    console.log(`${WARN('!')} OpenAI did not confirm the revocation (${unconfirmed}).`);
-    console.log(DIM('  Disconnect Kinu under Apps in ChatGPT settings to be sure.'));
-  }
+  if (unconfirmed !== undefined && unconfirmed !== null) console.log(`${WARN('!')} Not revoked. ${unconfirmed}`);
 
   return removed;
 }
@@ -256,7 +259,7 @@ const MODEL_SPEC_PREFIXES = new Map<ProviderName, readonly string[]>([
 ]);
 
 /** Only credentials Kinu stores; the account is `kinu logout`, and opencode owns its login. */
-function disconnectProvider(provider: ProviderName): Effect.Effect<void, KinuError> {
+function disconnectProvider(provider: ProviderName, revoke: boolean): Effect.Effect<void, KinuError> {
   return Effect.gen(function* () {
     console.log('');
 
@@ -280,7 +283,7 @@ function disconnectProvider(provider: ProviderName): Effect.Effect<void, KinuErr
 
     // No cloud copy and no environment variable: the machine's own sign-in is the whole credential.
     if (provider === 'chatgpt') {
-      if (yield* Effect.promise(async () => signOutChatGpt(MAIN_ACCOUNT))) console.log(`${OK('✓')} Removed the ${ACCENT(provider)} credential from this machine.`);
+      if (yield* Effect.promise(async () => signOutChatGpt(MAIN_ACCOUNT, revoke))) console.log(`${OK('✓')} Removed the ${ACCENT(provider)} credential from this machine.`);
       else console.log(`${WARN('!')} ${provider} was not connected. Nothing to remove.`);
       warnDefaultModelFor(provider);
       yield* Effect.promise(async () => bumpProviderRevision());

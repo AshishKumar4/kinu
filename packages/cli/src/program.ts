@@ -89,6 +89,7 @@ export function buildProgram(): Command {
     .option('--origin <url>', 'Kinu app origin')
     .option(`${MODEL_OPTION_FLAG} <id>`, 'Default model for the selected provider')
     .option('--local', 'Keep the provider key on this machine instead of your Kinu account')
+    .option('--revoke', 'With disconnect chatgpt: also revoke the sign-in at OpenAI, not only remove Kinu\'s copy')
     .action(providersCommand);
 
   program
