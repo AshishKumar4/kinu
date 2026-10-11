@@ -733,6 +733,27 @@ try {
     await measureOp('egress.private', () => shell('curl -sS --max-time 5 http://10.0.0.1/'), undefined, 'blocked');
     process.stdout.write(`SECRET-LEAK ${String((await shell(`curl -sS -H "Authorization: Bearer ${placeholder}" https://${PERF_SECRET_HOST}/echo`)).includes(PERF_SECRET))}\n`);
     measured.push(...fileResults);
+  } else if (subject === 'boot') {
+    // A workspace's cold open: set up fresh (an owner, a credential), then its first command, which boots its engine.
+    const fresh = async (name: string, path: string, input?: JsonObject): Promise<string> => {
+      const response = await driver.fetch(`http://driver.invalid${path}${path.includes('?') ? '&' : '?'}workspace=${name}`, input === undefined ? {} : { method: 'POST', body: JSON.stringify(input) });
+      const body = await response.text();
+
+      if (!response.ok) throw new Error(`${path} returned ${String(response.status)}: ${body}`);
+
+      return body;
+    };
+
+    for (let index = 0; index < samples; index++) {
+      const name = `boot-${String(index)}`;
+      const started = performance.now();
+
+      await fresh(name, '/setup');
+      const setUp = performance.now();
+      const answer = await fresh(name, '/tool?name=shell', { command: 'echo booted', runtime: 'workspace' });
+
+      process.stdout.write(JSON.stringify({ event: 'boot', sha, setupMs: setUp - started, firstCommandMs: performance.now() - setUp, ok: answer.includes('booted') }) + '\n');
+    }
   } else if (subject === 'pipes') {
     await ask('/seed');
 
