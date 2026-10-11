@@ -127,7 +127,7 @@ index b6ce290..b84d9db 100644
        const __task = __rpcWriteChain.then(() => __gate).then(() => __supervisor.stderr(__bytes)).catch((e) => __onRpcDrop(__bytes.byteLength, e));
        __rpcWriteChain = __task.then(() => {}, () => {});
 diff --git a/dist/node-shims-artifact.generated.js b/dist/node-shims-artifact.generated.js
-index 1d84cd3..5d25874 100644
+index 1d84cd3..2f3e72c 100644
 --- a/dist/node-shims-artifact.generated.js
 +++ b/dist/node-shims-artifact.generated.js
 @@ -10,8 +10,8 @@
@@ -136,8 +136,8 @@ index 1d84cd3..5d25874 100644
  export const NODE_SHIMS_ENTRY = "/_assets/runtime/node-shims-20000170722e558a.js";
 -export const NODE_SHIMS_BUILD_ID = "20000170722e558a";
 -export const NODE_SHIMS_SHA256 = "20000170722e558ac6d009b9fe5c4cd054149097e659835e3304bb55cce3c6d8";
-+export const NODE_SHIMS_BUILD_ID = "691afa785d756858";
-+export const NODE_SHIMS_SHA256 = "691afa785d7568580647c4a201b938278650f1c33c25a88cc5b6ea5677606fe8";
++export const NODE_SHIMS_BUILD_ID = "6dac5444266861d8";
++export const NODE_SHIMS_SHA256 = "6dac5444266861d84d818cfa9eacc2e16f41d994c87cb1b2a784b362e43529c0";
  /** @nimbus-sh/core dist/_shared/vfs-write-ledger.js VFS_WRITE_LEDGER_SOURCE */
  export const VFS_WRITE_LEDGER_ENTRY = "/_assets/runtime/vfs-write-ledger-6949e9269dc59d18.js";
  export const VFS_WRITE_LEDGER_BUILD_ID = "6949e9269dc59d18";
@@ -170,7 +170,7 @@ index c3123df..a4d6aa6 100644
      // (\\\`ended\\\`: no more will come): how many it returns, or -1 when it has
      // to wait for more.
 diff --git a/public/_assets/runtime/node-shims-20000170722e558a.js b/public/_assets/runtime/node-shims-20000170722e558a.js
-index 17121b5..1b4ce9c 100644
+index 17121b5..a9329bb 100644
 --- a/public/_assets/runtime/node-shims-20000170722e558a.js
 +++ b/public/_assets/runtime/node-shims-20000170722e558a.js
 @@ -12049,6 +12049,18 @@ const __tlsMod = (() => {
@@ -210,7 +210,7 @@ index 17121b5..1b4ce9c 100644
        if (token === undefined) return Reflect.apply(original, this, arguments);
        const self = this;
        // workerd's TLSSocket has released the carrier's writer and reader and
-@@ -12161,20 +12184,47 @@ const __tlsMod = (() => {
+@@ -12161,20 +12184,72 @@ const __tlsMod = (() => {
      };
      return socket;
    };
@@ -226,6 +226,7 @@ index 17121b5..1b4ce9c 100644
 -      return refused;
 +  // Kinu patch (#37): a TLS socket under an egress. Its options are those
 +  // workerd's node:tls takes: a client certificate is not presented, as there.
++  // A TLSSocket the program builds itself is still refused under an egress.
 +  const egressConnect = (...args) => {
 +    let options = {}, cb;
 +    if (args[0] !== null && typeof args[0] === 'object') { options = { ...args[0] }; cb = args[1]; }
@@ -235,21 +236,44 @@ index 17121b5..1b4ce9c 100644
 +      if (typeof args[i] === 'string') options.host = args[i++];
 +      if (args[i] !== null && typeof args[i] === 'object') Object.assign(options, args[i++]);
 +      cb = args[i];
-     }
++    }
 +    const host = options.host || 'localhost';
 +    const port = Number(options.port);
 +    if (!realNet) throw new Error('tls: node:net is not available');
-+    const servername = options.servername ?? host;
++    // An empty servername names none, as native TLS reads it: the host is checked.
++    const servername = options.servername || host;
 +    const carrierHost = egressLabel(host) + (servername === host ? '' : '.s.' + egressLabel(servername)) + '.tls.nimbus-egress.invalid';
 +    __nimbusReplay?.effect('tls.connect ' + host + ':' + port);
-+    const raw = realNet.connect({ host: carrierHost, port, allowHalfOpen: options.allowHalfOpen === true });
++    // After a resumed read of stdin the carrier opens once the session has
++    // acknowledged, as proxiedConnect's does; the TLS socket stays connecting
++    // until then, so a write made meanwhile is buffered.
++    const notice = __nimbusReplay && __nimbusReplay.afterBoundary();
++    let raw, socket;
++    const fail = (error) => {
++      socket?.destroy(error);
++      raw?.destroy();
++    };
++    __nimbusCarrierOpening = true;
++    __nimbusCarrierGate = notice || null;
++    __nimbusCarrierFailure = fail;
++    try {
++      raw = realNet.connect({ host: carrierHost, port, allowHalfOpen: options.allowHalfOpen === true });
++    } finally {
++      __nimbusCarrierOpening = false;
++      __nimbusCarrierGate = null;
++      __nimbusCarrierFailure = null;
+     }
 +    const name = () => {
++      if (notice && socket && !socket.destroyed) socket.connecting = false;
 +      const native = raw._handle && raw._handle.socket;
 +      if (native) { egressCarried.add(native); carriers.set(native, raw); patchStartTls(native); }
 +    };
 +    name();
 +    raw.once('connect', name);
-+    const socket = real.connect({ ...options, host, port, socket: raw, servername }, cb);
++    socket = real.connect({ ...options, host, port, socket: raw, servername }, cb);
++    if (notice && raw.connecting && !socket.destroyed) socket.connecting = true;
++    // workerd's node:tls applies a timeout only to a socket it opens itself.
++    if (options.timeout) socket.setTimeout(options.timeout);
 +    const destroy = socket.destroy;
 +    socket.destroy = function(...rest) {
 +      raw.destroy();
@@ -263,22 +287,11 @@ index 17121b5..1b4ce9c 100644
 -    const socket = proxied ? proxiedConnect(...args) : real.connect(...args);
 +    const egressed = globalThis.__nimbusEgress === true;
 +    // Over a socket the program opened, workerd's node:tls takes it as it
-+    // does without an egress.
-+    const over = args[0] !== null && typeof args[0] === 'object' && args[0].socket !== undefined;
++    // does without an egress. Its options are the first object, in any form.
++    const given = args.find((arg) => arg !== null && typeof arg === 'object');
++    const over = Boolean(given && given.socket);
 +    if (egressed ? over : !proxied) __nimbusReplay?.effect("tls.connect " + describe(args));
 +    const socket = egressed ? (over ? real.connect(...args) : egressConnect(...args)) : proxied ? proxiedConnect(...args) : real.connect(...args);
      let closed = false;
      let hold = null;
      socket.once('close', () => { closed = true; hold?.(false); });
-@@ -12211,10 +12261,7 @@ const __tlsMod = (() => {
-         counted.set(p, new Proxy(value, {
-           apply(target, self, args) { __nimbusReplay?.effect('tls.' + p); return Reflect.apply(target, self, args); },
-           construct(target, args, newTarget) {
--            if (globalThis.__nimbusEgress === true) {
--              throw nodeError(Error, 'ERR_NIMBUS_EGRESS_TLS', "Nimbus: TLS sockets are not available when the workspace's network goes through an egress (a Fetcher's connect() carries plain TCP only); use fetch() or https for HTTPS");
--            }
--            if (__nimbusReplay && __nimbusReplay.outbound) {
-+            if (__nimbusReplay && __nimbusReplay.outbound && globalThis.__nimbusEgress !== true) {
-               throw notImplemented('tls.' + p, 'a TLS socket the program builds itself is not made in a program whose network goes through Nimbus (one started with its stdin open); use tls.connect');
-             }
-             __nimbusReplay?.effect('new tls.' + p);
