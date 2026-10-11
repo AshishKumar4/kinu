@@ -368,8 +368,7 @@ Core owns the checks: auth, replay window, rate limit, trust, admission. Each
 backend supplies only the transport: on Cloudflare the Worker HTTP and `email()`
 routes plus the DO alarm, locally the process timer. The `IngressKind` union in
 `packages/core/src/events/hub/types.ts` also names `chat_ws`, `sandbox_cb`,
-`process_watch`, `file_watch`, `mcp_streamable`, `self_emit`, and
-`reply_request`. The five above are what wake a sleeping workspace from outside
+`mcp_streamable`, `self_emit`, and `reply_request`. The five above are what wake a sleeping workspace from outside
 its own turn.
 
 ## MCP: user-level auth, no token transfer

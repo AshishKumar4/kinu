@@ -88,8 +88,7 @@ CREATE TABLE IF NOT EXISTS triggers (
                               CHECK(kind IN (
                                 'webhook_durable', 'webhook_ephemeral',
                                 'timer_oneshot', 'timer_cron',
-                                'process_watch', 'file_watch',
-                                'peer_inbox', 'mcp_route', 'email_route'
+                                'email_route'
                               )),
   spec                TEXT    NOT NULL DEFAULT '{}',
   creator_trust       TEXT    NOT NULL

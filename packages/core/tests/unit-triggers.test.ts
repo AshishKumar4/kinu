@@ -28,10 +28,7 @@ class RecordingAlarm implements AlarmScheduler {
 
 const NOW = 1_700_000_000_000;
 
-const TRIGGER_KINDS: TriggerKind[] = [
-  'webhook_durable', 'webhook_ephemeral', 'timer_oneshot', 'timer_cron',
-  'process_watch', 'file_watch', 'peer_inbox', 'mcp_route', 'email_route',
-];
+const TRIGGER_KINDS: TriggerKind[] = ['webhook_durable', 'webhook_ephemeral', 'timer_oneshot', 'timer_cron', 'email_route'];
 
 function timerPayload(event: KinuEvent): TimerPayload {
   if (event.variant !== 'timer') throw new Error('expected timer event');
@@ -101,7 +98,7 @@ describe('TriggerRegistry.register', () => {
 
   test('schedules an alarm only when the trigger has a fire time', async () => {
     const { registry, alarm } = setup();
-    await registry.register(spec({ kind: 'peer_inbox' }), NOW);
+    await registry.register(spec({ kind: 'email_route' }), NOW);
     expect(alarm.requested).toEqual([]);
 
     await registry.register(spec({ next_fire_at: NOW + 60_000 }), NOW);
@@ -124,14 +121,14 @@ describe('TriggerRegistry.get / list', () => {
   test('list filters by kind and by state independently and together', async () => {
     const { registry } = setup();
     const cron = await registry.register(spec({ kind: 'timer_cron' }), NOW);
-    const inbox = await registry.register(spec({ kind: 'peer_inbox' }), NOW);
-    registry.pause(inbox, NOW + 1);
+    const route = await registry.register(spec({ kind: 'email_route' }), NOW);
+    registry.pause(route, NOW + 1);
 
-    expect(registry.list().map(t => t.id).sort()).toEqual([cron, inbox].sort());
-    expect(registry.list({ kind: 'peer_inbox' }).map(t => t.id)).toEqual([inbox]);
+    expect(registry.list().map(t => t.id).sort()).toEqual([cron, route].sort());
+    expect(registry.list({ kind: 'email_route' }).map(t => t.id)).toEqual([route]);
     expect(registry.list({ state: 'active' }).map(t => t.id)).toEqual([cron]);
-    expect(registry.list({ kind: 'peer_inbox', state: 'active' })).toEqual([]);
-    expect(registry.list({ kind: 'peer_inbox', state: 'paused' }).map(t => t.id)).toEqual([inbox]);
+    expect(registry.list({ kind: 'email_route', state: 'active' })).toEqual([]);
+    expect(registry.list({ kind: 'email_route', state: 'paused' }).map(t => t.id)).toEqual([route]);
   });
 
   test('list returns newest first', async () => {
@@ -227,7 +224,7 @@ describe('TriggerRegistry pauseAll / resumeAll', () => {
     await registry.register(spec({ next_fire_at: NOW + 90_000 }), NOW);
     await registry.register(spec({ next_fire_at: NOW + 30_000 }), NOW);
     await registry.register(spec({ next_fire_at: NOW - 5 }), NOW);
-    await registry.register(spec({ kind: 'peer_inbox' }), NOW);
+    await registry.register(spec({ kind: 'email_route' }), NOW);
     registry.pauseAll(NOW + 1);
     alarm.requested.length = 0;
 
@@ -237,7 +234,7 @@ describe('TriggerRegistry pauseAll / resumeAll', () => {
 
   test('resumeAll with nothing pending asks for no alarm', async () => {
     const { registry, alarm } = setup();
-    await registry.register(spec({ kind: 'peer_inbox' }), NOW);
+    await registry.register(spec({ kind: 'email_route' }), NOW);
     registry.pauseAll(NOW);
     alarm.requested.length = 0;
 
@@ -309,7 +306,7 @@ describe('TriggerRegistry alarm wakeup path', () => {
 
   test('due ignores triggers with no fire time', async () => {
     const { registry } = setup();
-    await registry.register(spec({ kind: 'peer_inbox' }), NOW);
+    await registry.register(spec({ kind: 'email_route' }), NOW);
     expect(registry.due(NOW + 10_000)).toEqual([]);
   });
 
@@ -395,8 +392,8 @@ describe('TriggerRegistry.forkPlan', () => {
   test('a per-trigger fork_policy overrides the kind default in both directions', async () => {
     const { registry } = setup();
     const severedCron = await registry.register(spec({ kind: 'timer_cron', fork_policy: 'sever' }), NOW);
-    const copiedRoute = await registry.register(spec({ kind: 'mcp_route', fork_policy: 'copy' }), NOW);
-    const sharedRoute = await registry.register(spec({ kind: 'mcp_route', fork_policy: 'share' }), NOW);
+    const copiedRoute = await registry.register(spec({ kind: 'webhook_durable', fork_policy: 'copy' }), NOW);
+    const sharedRoute = await registry.register(spec({ kind: 'webhook_durable', fork_policy: 'share' }), NOW);
 
     const { copy, share } = registry.forkPlan();
     expect(copy.map(t => t.id)).toEqual([copiedRoute]);
@@ -407,7 +404,7 @@ describe('TriggerRegistry.forkPlan', () => {
   test('only active triggers are inherited — paused and revoked ones are not', async () => {
     const { registry } = setup();
     const paused = await registry.register(spec({ kind: 'timer_cron' }), NOW);
-    const revoked = await registry.register(spec({ kind: 'peer_inbox' }), NOW);
+    const revoked = await registry.register(spec({ kind: 'email_route' }), NOW);
     const live = await registry.register(spec({ kind: 'timer_cron' }), NOW);
     registry.pause(paused, NOW);
     registry.revoke(revoked, NOW);
@@ -492,13 +489,13 @@ describe('timer ingress', () => {
   test('a due trigger that is not a timer is left alone, not published as an alarm', async () => {
     const t = timers();
 
-    const watch = await t.registry.register(
-      { kind: 'file_watch', spec: {}, creator_trust: 'owner', next_fire_at: NOW }, NOW,
+    const webhook = await t.registry.register(
+      { kind: 'webhook_durable', spec: {}, creator_trust: 'owner', next_fire_at: NOW }, NOW,
     );
 
     expect(await t.fire(NOW)).toEqual({ fired: 0 });
     expect(t.fired()).toEqual([]);
-    expect(present(t.registry.get(watch), 'registered trigger').state).toBe('active');
+    expect(present(t.registry.get(webhook), 'registered trigger').state).toBe('active');
   });
 
   test('an unusable schedule is refused at registration, before a row exists', async () => {

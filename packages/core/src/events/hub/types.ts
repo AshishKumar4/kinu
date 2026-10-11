@@ -32,8 +32,6 @@ export type IngressKind =
   | 'webhook_mtls'
   | 'timer_alarm'
   | 'sandbox_cb'      // callback from sandbox.exec(..., {notify_when})
-  | 'process_watch'
-  | 'file_watch'
   | 'peer_async'
   | 'mcp_streamable'
   | 'email_inbound'   // inbound mail via Cloudflare Email Routing → Worker email()
@@ -317,18 +315,6 @@ export type IngressDescriptor =
       launching_head_trust: TrustLevel;  // captured at sandbox.exec time
     }
   | {
-      ingress: 'process_watch';
-      variant: 'process_done';
-      payload: ProcessDonePayload;
-      launching_head_trust: TrustLevel;
-    }
-  | {
-      ingress: 'file_watch';
-      variant: 'file_changed';
-      payload: FileChangedPayload;
-      launching_head_trust: TrustLevel;
-    }
-  | {
       ingress: 'peer_async';
       variant: 'peer_agent';
       payload: PeerAgentPayload;
@@ -386,10 +372,6 @@ export type TriggerKind =
   | 'webhook_ephemeral'
   | 'timer_oneshot'
   | 'timer_cron'
-  | 'process_watch'
-  | 'file_watch'
-  | 'peer_inbox'
-  | 'mcp_route'
   | 'email_route';   // per-agent inbound-email allowlist (owner is always allowed)
 
 export interface TriggerRow {
