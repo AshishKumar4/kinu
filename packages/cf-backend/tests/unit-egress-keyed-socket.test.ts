@@ -266,7 +266,7 @@ describe('STARTTLS through the egress', () => {
     await carried;
   });
 
-  test('TLS asked for while the server is being read is answered with why, and the connection closed', async () => {
+  test('TLS without a go-ahead is refused even while a server reply is waiting for the program', async () => {
     const program = fakeProgram();
     const server = fakeServer();
     const carried = carryKeyed(program.socket, server.socket, 'example.com', KEY);
@@ -274,15 +274,25 @@ describe('STARTTLS through the egress', () => {
     await program.send('PING\r\n');
     await server.heard.take(6);
     await server.send('+PONG\r\n');
-    await program.heard.take(7);
     await program.send(ask());
+    expect(text(await program.heard.take(7))).toBe('+PONG\r\n');
 
-    const head = await program.heard.take(19);
+    const head = await program.heard.take(17);
+    let refusal = '';
 
-    expect(head.subarray(0, 17)).toEqual(Uint8Array.from([...KEY, 0]));
-    expect(text(await program.heard.take(((head[17] ?? 0) << 8) | (head[18] ?? 0)))).toContain('STARTTLS right after');
-    expect(server.upgrades).toEqual([]);
+    if (head[16] === 0) {
+      const length = await program.heard.take(2);
+
+      refusal = text(await program.heard.take(((length[0] ?? 0) << 8) | (length[1] ?? 0)));
+    } else {
+      await program.end();
+      await server.secure().end();
+    }
+
     await carried;
+    expect(head).toEqual(Uint8Array.from([...KEY, 0]));
+    expect(refusal).toContain('STARTTLS right after');
+    expect(server.upgrades).toEqual([]);
   });
 
   test('a TLS session the server refuses is answered with its reason', async () => {
