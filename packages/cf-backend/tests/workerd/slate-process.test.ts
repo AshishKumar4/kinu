@@ -376,3 +376,12 @@ it('a build sees a file its tree links to from outside it', async () => {
 
   expect(await subject.linkedBuildInputs()).toContain('/home/linked/lib.ts');
 });
+
+it('a build refused for a link whose target is not written yet watches the target, so writing it rebuilds the slate', async () => {
+  const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('dangling-inputs'));
+  const seen = await subject.danglingBuildInputs();
+
+  expect(seen.refused).toBe(true);
+  // Writing the target, or the directory it would be in, is a change to a path this build found missing.
+  expect(seen.missing).toEqual(expect.arrayContaining(['/home/dangling/lib.ts', '/home/dangling']));
+});

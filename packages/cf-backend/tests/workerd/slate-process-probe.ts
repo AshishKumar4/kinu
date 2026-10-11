@@ -184,6 +184,26 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     return (built.inputs ?? []).filter((input) => !input.missing).map((input) => input.path);
   }
 
+  /**
+   * A build of `/slates/dangling`, whose `lib.ts` links to `/home/dangling/lib.ts` before that file is written: whether
+   * it was refused, and the paths it found missing outside its tree.
+   */
+  async danglingBuildInputs(): Promise<{ readonly refused: boolean; readonly missing: string[] }> {
+    const files = this.vfs.as(CRED_KERNEL);
+
+    files.mkdir('/slates/dangling', { recursive: true });
+    files.writeFile('/slates/dangling/server.ts', 'import { SlateObject } from "kinu:slate";\nimport { word } from "./lib.ts";\nexport class Slate extends SlateObject { word() { return word; } }\n');
+    files.symlink('/home/dangling/lib.ts', '/slates/dangling/lib.ts');
+    const authored = this.vfs.as(CRED_SESSION_USER);
+
+    const built = await this.resident.build({
+      owner: 'dangling', root: '/slates/dangling', project: parseSlateProject({ main: 'server.ts' }), cred: CRED_SESSION_USER,
+      read: (entry) => (authored.exists(`/slates/dangling/${entry}`) ? authored.readFileString(`/slates/dangling/${entry}`) : null),
+    });
+
+    return { refused: 'failed' in built, missing: (built.inputs ?? []).filter((input) => input.missing).map((input) => input.path) };
+  }
+
   async facetImages(): Promise<string[]> {
     const kernel = this.vfs.as(CRED_KERNEL);
 
