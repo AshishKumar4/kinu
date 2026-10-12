@@ -29,6 +29,7 @@ import { branchableToolCall } from './outcome';
 import { TurnContextBudget } from '../context-budget';
 import type { JsonValue } from '../utils/json';
 import { cloudPlanes, type PathPlanes } from '../vfs/resolve';
+import type { VfsMountRouting } from '../vfs/mounts';
 import { SlateBuildNoteSchema } from '../operations/file';
 
 const StringSchema = v.string();
@@ -62,7 +63,8 @@ interface ShellExec {
 }
 
 export interface InlineExecutorDeps {
-  vfs: VFS;
+  /** The plane the tools reach; `resolve` says where a path landed. */
+  vfs: VFS & Partial<Pick<VfsMountRouting, 'resolve'>>;
   /** Absent: {@link WORKSPACE_ROOT}, the root's. */
   home?: string;
   /** Absent: the cloud's planes over `home`. */

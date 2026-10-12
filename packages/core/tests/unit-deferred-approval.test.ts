@@ -1006,7 +1006,7 @@ async function driveWithQueue(perform: (plane: VFS, write: BoundFileWrite, bytes
   });
 
   const policy: ShellApprovalPolicy = { mode: () => 'strict', deferrals: queue.channel };
-  const files = withApprovalGatedFiles(plane, 'workspace', { planes: cloudPlanes(WORKSPACE_ROOT), resolve: (path, follow) => plane.resolve(path, { follow }), userRoots: () => plane.userRoots(), locate: null, parksWrites: true }, policy);
+  const files = withApprovalGatedFiles(plane, 'workspace', { planes: cloudPlanes(WORKSPACE_ROOT), resolve: (path, follow, creating) => plane.resolve(path, { follow, creating }), userRoots: () => plane.userRoots(), locate: null, parksWrites: true }, policy);
 
   return { drive, files, queue, store, woken, kernel };
 }

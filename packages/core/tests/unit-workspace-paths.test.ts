@@ -55,7 +55,7 @@ test('the file tool reads and writes where the walk lands, past its approval gat
 
   // As the runtime gates it: the gate decides on the path the namespace's own lookup reaches.
   const gated = withApprovalGatedFiles(files, 'workspace', {
-    planes: cloudPlanes(WORKSPACE_ROOT), resolve: (path, follow) => files.resolve(path, { follow }), userRoots: () => files.userRoots(),
+    planes: cloudPlanes(WORKSPACE_ROOT), resolve: (path, follow, creating) => files.resolve(path, { follow, creating }), userRoots: () => files.userRoots(),
     locate: null, parksWrites: true,
   }, { mode: () => 'strict' });
 
@@ -89,4 +89,55 @@ test('the owner\'s file manager opens, saves and uploads where the walk lands', 
   expect(await readText(workspace.vfs, 'deep/target.txt')).toBe('saved');
   expect(await readText(workspace.vfs, 'deep/uploaded.txt')).toBe('uploaded');
   expect(await readText(workspace.vfs, 'target.txt')).toBe('beside the link');
+});
+
+/** The file tool past its approval gate, as the runtime builds it over `workspace`, and the owner's reader beside it. */
+function gatedTool(workspace: ReturnType<typeof createWorkspaceBundle>) {
+  const { files } = workspaceFilePlane(workspace, { mounts: [], principal: {}, home: WORKSPACE_ROOT });
+
+  const gated = withApprovalGatedFiles(files, 'workspace', {
+    planes: cloudPlanes(WORKSPACE_ROOT), resolve: (path, follow, creating) => files.resolve(path, { follow, creating }), userRoots: () => files.userRoots(),
+    locate: null, parksWrites: true,
+  }, { mode: () => 'strict' });
+
+  const file = toolExecute<JsonObject, JsonValue>(createFileTool({
+    home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: gated, ledger: new TurnFileLedger(), budget: new TurnContextBudget(),
+  }));
+
+  const owner = { getProvider: () => ({ files, homeDir: async () => WORKSPACE_ROOT }) };
+
+  return { file, owner };
+}
+
+// 2026-10-12 review: a write through `link/..` landed beside where the link leads but published the lexical reference.
+test('a write or edit through a link names the file it changed, and that reference reads its bytes back', async () => {
+  const workspace = await linkedWorkspace();
+  const { file, owner } = gatedTool(workspace);
+
+  const reference = 'vfs://home/main/deep/written.txt';
+
+  expect(await file({ op: 'write', path: 'link/../written.txt', content: 'through the link' })).toMatchObject({ reference });
+  expect(JSON.stringify(await file({ op: 'read', path: reference }))).toContain('through the link');
+  // The owner opens the path the reference names.
+  expect(await readExecutorFile(owner, 'workspace', '/home/main/deep/written.txt')).toMatchObject({ content: 'through the link' });
+
+  await file({ op: 'read', path: 'link/../target.txt' });
+  const edited = 'vfs://home/main/deep/target.txt';
+
+  expect(await file({ op: 'edit', path: 'link/../target.txt', edits: [{ old_text: 'leads', new_text: 'led' }] })).toMatchObject({ reference: edited });
+  expect(JSON.stringify(await file({ op: 'read', path: edited }))).toContain('beside where the link led');
+  expect(await readExecutorFile(owner, 'workspace', '/home/main/deep/target.txt')).toMatchObject({ content: 'beside where the link led' });
+});
+
+// 2026-10-12 review: the gate resolved every op as a write that makes its parents, so a read passed a missing directory.
+test('the file tool refuses a read through a directory that is not there, as the owner\'s reader does', async () => {
+  const workspace = await linkedWorkspace();
+  const { file, owner } = gatedTool(workspace);
+
+  await expect(file({ op: 'read', path: './missing/../target.txt' })).rejects.toThrow('no such file or directory');
+  expect(await readExecutorFile(owner, 'workspace', '/home/main/missing/../target.txt')).toMatchObject({ error: expect.stringContaining('no such file or directory') });
+
+  // A write still makes the directories it names.
+  await file({ op: 'write', path: 'made/new.txt', content: 'made' });
+  expect(await readText(workspace.vfs, 'made/new.txt')).toBe('made');
 });

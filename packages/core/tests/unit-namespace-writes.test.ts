@@ -87,7 +87,7 @@ describe('observeNamespace', () => {
 
 describe('withMountTable resolve', () => {
   // A link in one backend can lead into another mount: a gate that judges the lexical path judges the wrong one.
-  test('follows a root link into a mount, keeps the last link when asked, and lets missing directories pass as named', async () => {
+  test('follows a root link into a mount, keeps the last link when asked, and lets missing directories pass as named for a write', async () => {
     const namespace = new CompositeVFS(new MemoryVFS());
 
     namespace.mount('/pc', new MemoryVFS(), { resolvesPaths: true });
@@ -101,8 +101,10 @@ describe('withMountTable resolve', () => {
 
     expect(await plane.resolve('/home/main/pc-link/notes.md')).toBe('/pc/laptop/notes.md');
     expect(await plane.resolve('/home/main/pc-link', { follow: false })).toBe('/home/main/pc-link');
-    expect(await plane.resolve('/home/main/missing/deeper/new.txt')).toBe('/home/main/missing/deeper/new.txt');
-    expect(await plane.resolve('/home/main/pc-link/missing/new.txt')).toBe('/pc/laptop/missing/new.txt');
+    expect(await plane.resolve('/home/main/missing/deeper/new.txt', { creating: true })).toBe('/home/main/missing/deeper/new.txt');
+    expect(await plane.resolve('/home/main/pc-link/missing/new.txt', { creating: true })).toBe('/pc/laptop/missing/new.txt');
+    // Any other op's lookup refuses a directory that is not there, as the op itself would.
+    await expect(plane.resolve('/home/main/missing/deeper/new.txt')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   // A write makes its parents through a link whose target is not there yet: the gate must judge where it lands.
@@ -115,9 +117,9 @@ describe('withMountTable resolve', () => {
     await namespace.symlink('/outside/missing/deeper', '/home/main/link');
     await namespace.symlink('relative/target', '/home/main/near');
 
-    expect(await plane.resolve('/home/main/link/file.txt')).toBe('/outside/missing/deeper/file.txt');
-    expect(await plane.resolve('/home/main/link/a/b.txt')).toBe('/outside/missing/deeper/a/b.txt');
-    expect(await plane.resolve('/home/main/near/file.txt')).toBe('/home/main/relative/target/file.txt');
+    expect(await plane.resolve('/home/main/link/file.txt', { creating: true })).toBe('/outside/missing/deeper/file.txt');
+    expect(await plane.resolve('/home/main/link/a/b.txt', { creating: true })).toBe('/outside/missing/deeper/a/b.txt');
+    expect(await plane.resolve('/home/main/near/file.txt', { creating: true })).toBe('/home/main/relative/target/file.txt');
     expect(await plane.resolve('/home/main/link', { follow: false })).toBe('/home/main/link');
   });
 

@@ -10,6 +10,7 @@ import type { FileCheckpoints } from '../checkpoints/types';
 import type { ShellApprovalRequest, ShellApprovalOutcome } from '../safety/approval-gate';
 import type { TurnFileLedger } from '../vfs/file-ledger';
 import type { PathPlanes } from '../vfs/resolve';
+import type { VfsMountRouting } from '../vfs/mounts';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { DecisionPort } from '../providers/decision-model';
 
@@ -25,7 +26,7 @@ export interface AgentRuntime {
    *  must not hold it. Absent when they coincide; readers use `agentStateVfs ?? storage.vfs`. */
   agentStateVfs?: VFS;
   /** `storage.vfs` as the agent's own file tools reach it: gated past its own files. */
-  toolFiles: VFS;
+  toolFiles: VFS & Partial<Pick<VfsMountRouting, 'resolve'>>;
   /** Where each `root://` plane, `~` and a relative path land on this machine. */
   readonly planes: PathPlanes;
   memory: Memory;

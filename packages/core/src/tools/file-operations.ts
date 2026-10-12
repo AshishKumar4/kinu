@@ -20,7 +20,7 @@ import type { TurnFileLedger, FileEditOutcomeReason, FileSeenNeed } from '../vfs
 import { KinuError, renderThrownChain, tolerateAsync } from '../obs/index';
 import { requireBuild } from '../execution/work-mode';
 import { uncheckpointedSentence } from '../execution/exec-result';
-import { RESIDENT_TEXT_MAX_BYTES } from '../vfs/mounts';
+import { RESIDENT_TEXT_MAX_BYTES, type VfsMountRouting } from '../vfs/mounts';
 import { rasterImage } from '../utils/raster-image';
 import { bytesToBase64 } from '../utils/base64';
 import { imageCarrier, type ImageCarrier } from '../types/tool-images';
@@ -122,7 +122,8 @@ async function vfsFailure(vfs: VFS, input: { error: unknown }, action: string, p
 }
 
 export interface FileDeps {
-  readonly vfs: VFS & CheckpointFiles;
+  /** The tool's file plane; its `resolve`, where it has one, says where a path landed, so a result names that file. */
+  readonly vfs: VFS & CheckpointFiles & Partial<Pick<VfsMountRouting, 'resolve'>>;
   readonly home: string;
   readonly ledger: TurnFileLedger;
   /** The turn-cumulative bulk budget; a read the file outran is recorded there. */
@@ -145,7 +146,7 @@ const BrokenSchema = v.object({ broken: v.string() });
 
 /**
  * Whether the slate a written file belongs to still builds; nothing for a file outside one, or where no slate host
- * answers. The slate is the one its path names by spelling.
+ * answers. The slate is the one the path the write landed on names.
  */
 async function slateBuild(deps: FileDeps, path: string): Promise<{ readonly build?: v.InferOutput<typeof SlateBuildNoteSchema> }> {
   const slate = SLATE_FILE.exec(normalizePath(resolvePath(path, deps.planes).absolute))?.[1];
@@ -279,8 +280,16 @@ function fileOps(deps: FileDeps) {
     }
   };
 
-  /** How a result names its file: the reference the live table gives it. */
-  const referenceOf = (path: string): string => formatPath(resolvePath(path, deps.planes).absolute, deps.planes);
+  /**
+   * Where a path landed, links and `..` walked as the operation walked them, and the reference the live table gives
+   * that file: what a result names, so reading the reference back reads the bytes the call read or wrote. A plane with
+   * no namespace to walk (a bare store, as a birth runtime's) lands where the path is named.
+   */
+  const landing = async (path: string): Promise<{ readonly at: string; readonly reference: string }> => {
+    const at = vfs.resolve === undefined ? resolvePath(path, deps.planes).absolute : await vfs.resolve(path);
+
+    return { at, reference: formatPath(at, deps.planes) };
+  };
 
   /** A raster image is shown to the model, as a screenshot is: its text would be noise. Null for anything else. */
   const imageRead = async (path: string): Promise<ImageCarrier | null> => {
@@ -294,7 +303,7 @@ function fileOps(deps: FileDeps) {
         + `${IMAGE_READ_MAX_BYTES} a model is shown; scale it down with the shell first.`);
     }
 
-    const output = `${referenceOf(path)}: ${image.mediaType} ${image.width}x${image.height}, ${bytes.byteLength} bytes`;
+    const output = `${(await landing(path)).reference}: ${image.mediaType} ${image.width}x${image.height}, ${bytes.byteLength} bytes`;
 
     return imageCarrier(output, [{ mediaType: image.mediaType, data: bytesToBase64(bytes) }]);
   };
@@ -372,10 +381,12 @@ function fileOps(deps: FileDeps) {
         return failure(vfsFail.reason, vfsFail.error);
       }
 
+      const where = await landing(path);
+
       return {
-        path, reference: referenceOf(path), bytes: content.length, action: existing === null ? 'created' as const : 'replaced' as const,
+        path, reference: where.reference, bytes: content.length, action: existing === null ? 'created' as const : 'replaced' as const,
         checked: landed.checked, ...undo(landed.report),
-        ...await slateBuild(deps, path),
+        ...await slateBuild(deps, where.at),
       };
     },
     edit: async (path: string, raw: readonly { readonly old_text: string; readonly new_text: string }[]) => {
@@ -434,11 +445,13 @@ function fileOps(deps: FileDeps) {
 
       ledger.recordEdit(path, null);
 
+      const where = await landing(path);
+
       return {
-        path, reference: referenceOf(path),
+        path, reference: where.reference,
         applied: outcome.applied.map((a) => ({ line: a.line, removedLines: a.removedLines, addedLines: a.addedLines })),
         checked: landed.checked, ...undo(landed.report),
-        ...await slateBuild(deps, path),
+        ...await slateBuild(deps, where.at),
       };
     },
   };

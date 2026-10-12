@@ -195,16 +195,17 @@ export function partialTreeRemovalMessage(path: string, removal: PartialRemoval)
 }
 
 /** What the workspace shell reads to serve this table. */
-interface VfsMountRouting {
+export interface VfsMountRouting {
 	/** Every mount, connected or not: each is a mount point on the workspace shell's namespace. */
 	mounts(): readonly VfsMount[];
 	/** The user's writable mount roots, connected or not. */
 	userRoots(): readonly string[];
 	/**
 	 * `path` as the namespace's own lookup resolves it, links followed (the last one unless `follow` is false): the one
-	 * path a gate decides on and the operation then reaches. A path whose directories are not there yet passes as named.
+	 * path a gate decides on and the operation then reaches. A directory on the way that is not there is ENOENT, as the
+	 * operation's own lookup answers, unless `creating` (a write that makes its parents): then it passes as named.
 	 */
-	resolve(path: string, options?: { follow?: boolean }): Promise<string>;
+	resolve(path: string, options?: { follow?: boolean; creating?: boolean }): Promise<string>;
 }
 
 export type MountedVfs = VFS & Required<Pick<VFS, 'rename' | 'removeRecursive' | 'readRange'>> & VfsMountRouting & CheckpointFiles;
@@ -314,6 +315,11 @@ function movable(files: CompositeVFS): MoveFs {
  */
 function routeCreating(namespace: CompositeVFS, at: string, follow: boolean): Promise<VfsRoute> {
 	return namespace.route(at, { follow, creating: true });
+}
+
+/** Where an operation on `at` lands: the operation's own lookup, a directory missing on the way ENOENT. */
+function routeStrict(namespace: CompositeVFS, at: string, follow: boolean): Promise<VfsRoute> {
+	return namespace.route(at, { follow });
 }
 
 /** Whether `from` and `to` are on one mount, the directories a move would make passing as named. */
@@ -459,8 +465,9 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 		},
 		async resolve(path, options) {
 			const target = await on(path);
+			const route = options?.creating === true ? routeCreating : routeStrict;
 
-			return target.namespace === null ? target.at : namespacePath(await routeCreating(target.namespace, target.at, options?.follow ?? true));
+			return target.namespace === null ? target.at : namespacePath(await route(target.namespace, target.at, options?.follow ?? true));
 		},
 		// ENOTSUP, not EPERM: callers like the `file` scan fall back on this code; only `readBoundedWithVfsOps` may whole-read.
 		readRange: (path, offset, length) => settle(optionalOperation(() => on(path), path, 'this plane serves no ranged read', (files, at) => files.readRange?.(at, offset, length))),

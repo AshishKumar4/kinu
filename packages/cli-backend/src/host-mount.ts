@@ -283,7 +283,7 @@ export function localFileReach(input: Pick<LocalFilePlane, 'folder' | 'space'>, 
 
   return {
     planes,
-    resolve: (path, follow) => plane.resolve(path, { follow }),
+    resolve: (path, follow, creating) => plane.resolve(path, { follow, creating }),
     userRoots: () => [],
     locate: (path) => ({ hostPath: path, outside: !roots.some((root) => withinRoot(root, path)) }),
     parksWrites: false,
