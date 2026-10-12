@@ -491,7 +491,10 @@ export class DeferredApprovalQueue {
       park: async (req) => {
         const verdict = await this.park(req, actorId);
 
-        return verdict.outcome === 'queued' ? { ...told(verdict), waiting: verdict.action.id } : told(verdict);
+        if (verdict.outcome !== 'queued') return told(verdict);
+        const rules = this.storeOf(actorId).hits(verdict.action.id).filter((hit) => hit.decision === 'gate').map((hit) => hit.rule);
+
+        return { ...told(verdict), waiting: { id: verdict.action.id, rules } };
       },
       decided: (id, signal) => this.decidedOrAborted(actorId, id, signal),
       decide: async (id, outcome) => { await this.decide([id], ANSWER_OF[outcome]); },

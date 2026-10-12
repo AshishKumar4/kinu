@@ -280,6 +280,7 @@ function nimbusCall(member: 'runCode' | 'startProcess', text: string, options: N
       ...envContext(options?.env),
       ...(options?.stdin !== undefined && { stdinSha256: sha256Hex(options.stdin) }),
       ...(member === 'runCode' && { language: language ?? 'default' }),
+      ...(options?.timeoutMs !== undefined && { timeoutMs: options.timeoutMs }),
       ...(options?.install !== undefined && { install: options.install }),
     },
   };
@@ -685,6 +686,15 @@ function runOnBox(box: NimbusSandboxHandle, call: SessionCall, options: ShellExe
 }
 
 /**
+ * A Nimbus session's state as one unambiguous text, digested in the session: its directory, then each variable `env`
+ * names as `name set|unset length value`, so no value can pass for another variable. Nimbus answers `export -p` with
+ * nothing, and its `env` lists the per-command pid (`$=`), which no name matches. A subshell keeps the read's own
+ * variables out of the session.
+ */
+const SESSION_STATE = '( pwd; for __n in $(env | sed -n \'s/^\\([A-Za-z_][A-Za-z0-9_]*\\)=.*/\\1/p\' | sort -u); do '
+  + '__v="${!__n}"; printf \'%s %s %s %s\\n\' "$__n" "${!__n+set}" "${#__v}" "$__v"; done ) | sha256sum';
+
+/**
  * Shell over the bytes nimbusSessionFiles exposes, its calls starting at `home`. `cred` is fixed at construction,
  * never per call (see {@link NimbusExecOptions.cred}); absent is the session user.
  */
@@ -720,11 +730,10 @@ export function nimbusSessionShell(box: NimbusSandboxHandle, place: { readonly h
   if (shellCwd !== undefined) {
     shell.cwd = shellCwd;
 
-    // What the session restores, read inside it and digested there: its directory and variables. Nimbus answers
-    // `export -p` with nothing; its `env` lists them, with the command's own pid (`$=`), which is left out.
+    // What the session restores, read inside it and digested there: its directory and variables.
     shell.state = async (name) => {
       if (await shellCwd(name) === null) return 'none';
-      const read = await box.exec(`{ pwd; env | grep -v '^[$]=' | sort; } | sha256sum`, { name, ...asCred(place.cred) });
+      const read = await box.exec(SESSION_STATE, { name, ...asCred(place.cred) });
       const digest = read.exitCode === 0 ? /^[0-9a-f]{64}/.exec(read.stdout)?.[0] : undefined;
 
       return digest ?? null;

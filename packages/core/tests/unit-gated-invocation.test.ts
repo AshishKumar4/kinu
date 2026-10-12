@@ -73,6 +73,26 @@ function prompts(count: number) {
   return { asked, ask, shown: shown.promise };
 }
 
+/** A sandbox whose container runs each command through `exec`; supervised starts are recorded in `started`. */
+function sandboxOver(exec: (command: string) => Promise<{ stdout: string; stderr: string; exitCode: number }>, started: string[] = []): SandboxHandle {
+  return {
+    exec: (command) => exec(command),
+    readFile: async () => ({}),
+    writeFile: async () => {},
+    listFiles: async () => ({ files: [] }),
+    deleteFile: async () => {},
+    exposePort: async (port) => ({ url: `https://preview.example.com/${String(port)}`, port, route: { reached: true } }),
+    unexposePort: async () => {},
+    getExposedPorts: async () => [],
+    ...sandboxHandleLifecycle,
+    startSupervisedProcess: async (command) => {
+      started.push(command);
+
+      return { processId: 'proc-1' };
+    },
+  };
+}
+
 describe('the workspace\'s own processes over the user\'s Drive', () => {
   /** The hosted workspace as cf-backend composes it, over a box that records what it was asked to start. */
   function workspace(policy: ShellApprovalPolicy) {
@@ -168,26 +188,11 @@ describe('the member is part of the ask', () => {
     const { policy, queue } = owner('deny');
     const live = prompts(2);
 
-    const handle: SandboxHandle = {
-      exec: async (command) => {
-        ran.push(`exec ${command}`);
+    const handle = sandboxOver(async (command) => {
+      ran.push(`exec ${command}`);
 
-        return { stdout: '', stderr: '', exitCode: 0 };
-      },
-      readFile: async () => ({}),
-      writeFile: async () => {},
-      listFiles: async () => ({ files: [] }),
-      deleteFile: async () => {},
-      exposePort: async (port) => ({ url: `https://preview.example.com/${String(port)}`, port, route: { reached: true } }),
-      unexposePort: async () => {},
-      getExposedPorts: async () => [],
-      ...sandboxHandleLifecycle,
-      startSupervisedProcess: async (command) => {
-        ran.push(`start ${command}`);
-
-        return { processId: 'proc-1' };
-      },
-    };
+      return { stdout: '', stderr: '', exitCode: 0 };
+    }, ran);
 
     const router = new DefaultExecutionRouter({ ...policy, requestApproval: live.ask });
     router.register(createSandboxExecutor(handle));
@@ -203,6 +208,125 @@ describe('the member is part of the ask', () => {
     await Promise.all([foreground, supervised]);
     // The foreground run, in the directory it was asked for; no supervised process was started.
     expect(ran).toEqual([`exec cd -- '/workspace' || exit\n${GATED}`]);
+  });
+
+  test('a run stamped as a background job is another ask than the same run in the foreground', async () => {
+    const { policy, queue } = owner('deny');
+    const router = new DefaultExecutionRouter({ ...policy, requestApproval: null });
+    router.register(createSandboxExecutor(sandboxOver(async () => ({ stdout: '', stderr: '', exitCode: 0 }))));
+    const { exec } = present(router.getProvider('sandbox'), 'the sandbox').tools;
+
+    await exec.execute(GATED);
+    await exec.execute(GATED, { job: 'job-1', detached: new AbortController().signal });
+
+    expect(queue.list().map((row) => row.context.background)).toEqual([undefined, true]);
+  });
+
+  test('two Nimbus programs alike but for their work limit are two asks', async () => {
+    const ran: Array<number | undefined> = [];
+    const { policy, queue } = owner('deny');
+    const live = prompts(2);
+
+    const box: NimbusSandboxHandle = {
+      ready: async () => {},
+      exec: async (command) => ({ command, success: true, stdout: '', stderr: '', exitCode: 0 }),
+      runCode: async (code, options) => {
+        ran.push(options?.timeoutMs);
+
+        return { command: code, success: true, stdout: '', stderr: '', exitCode: 0 };
+      },
+      files: { read: async () => null, write: async () => {}, list: async () => [], stat: async () => null, exists: async () => false, delete: async () => {} },
+    };
+
+    const { rt } = createTestRuntime();
+    const router = new DefaultExecutionRouter({ ...policy, requestApproval: live.ask });
+
+    router.register(createNimbusWorkspaceExecutor({
+      box,
+      shellSession: createShellSession({ home: WORKSPACE_ROOT, userRoots: () => [] }),
+      inline: { vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), memory: rt.memory, craftStore: rt.craftStore },
+    }));
+
+    const runCode = present(present(router.getProvider('workspace'), 'the workspace').tools.runCode, 'runCode');
+    const long = runCode.execute(GATED, { language: 'shell', timeoutMs: 60_000 });
+    const short = runCode.execute(GATED, { language: 'shell', timeoutMs: 1 });
+
+    await live.shown;
+    expect(queue.list()).toHaveLength(2);
+
+    for (const prompt of live.asked) prompt.answer(prompt.request.context.timeoutMs === 1 ? 'allow' : 'deny');
+    await Promise.all([long, short]);
+    expect(ran).toEqual([1]);
+  });
+});
+
+describe('an approval answers the row it shows, and returns when nothing ran', () => {
+  test('a run cancelled while its prompt was answered is not dispatched, and the approval runs the next ask', async () => {
+    const ran: string[] = [];
+    const { policy } = owner('deny');
+    const cancel = new AbortController();
+    let asked = 0;
+
+    const router = new DefaultExecutionRouter({
+      ...policy,
+      requestApproval: async () => {
+        asked += 1;
+        // The caller gives up while the owner is answering.
+        cancel.abort();
+
+        return 'allow';
+      },
+    });
+
+    router.register(createSandboxExecutor(sandboxOver(async (command) => {
+      ran.push(command);
+
+      return { stdout: '', stderr: '', exitCode: 0 };
+    })));
+
+    const { exec } = present(router.getProvider('sandbox'), 'the sandbox').tools;
+
+    expect(JSON.stringify(await exec.execute(GATED, { signal: cancel.signal }))).toContain('NOT RUN');
+    expect(ran).toEqual([]);
+
+    await exec.execute(GATED);
+    expect({ ran, asked }).toEqual({ ran: [GATED], asked: 1 });
+  });
+
+  test('a live prompt shows the rules its row holds, so always-allow grants only what was shown', async () => {
+    const ran: string[] = [];
+    const { policy, queue } = owner('deny');
+    const granted = new Set<string>();
+    const shown: ShellApprovalRequest[] = [];
+    const twoRules = `sudo true; ${GATED}`;
+
+    const asking: ShellApprovalPolicy = {
+      ...policy,
+      granted: (grant) => granted.has(grant.rule),
+      requestApproval: null,
+    };
+
+    const shell = withApprovalGatedShell({
+      exec: async (command) => {
+        ran.push(command);
+
+        return { stdout: '', stderr: '', exitCode: 0 };
+      },
+    }, { filesOwner: 'user' }, asking);
+
+    // Parked with both rules; one is granted standing before the owner gets to the row.
+    await shell.exec(twoRules);
+    granted.add('sudo');
+    asking.requestApproval = async (request) => {
+      shown.push(request);
+
+      return 'deny';
+    };
+
+    await shell.exec(twoRules);
+    expect(queue.list()).toEqual([]);
+    expect(shown.map((request) => request.review.hits.map((hit) => hit.rule).sort())).toEqual([['git-force-push', 'sudo']]);
+    expect(ran).toEqual([]);
   });
 });
 
@@ -307,20 +431,8 @@ describe('a named shell is part of the ask as it was when asked', () => {
     const { policy, queue } = unattended();
     const machine = scratchMachine(home);
 
-    const handle: SandboxHandle = {
-      exec: (command) => machine.exec(command),
-      readFile: async () => ({}),
-      writeFile: async () => {},
-      listFiles: async () => ({ files: [] }),
-      deleteFile: async () => {},
-      exposePort: async (port) => ({ url: `https://preview.example.com/${String(port)}`, port, route: { reached: true } }),
-      unexposePort: async () => {},
-      getExposedPorts: async () => [],
-      ...sandboxHandleLifecycle,
-    };
-
     const router = new DefaultExecutionRouter(policy);
-    router.register(createSandboxExecutor(handle, { shells: SHELLS }));
+    router.register(createSandboxExecutor(sandboxOver((command) => machine.exec(command)), { shells: SHELLS }));
     const exec = present(router.getProvider('sandbox'), 'the sandbox').tools.exec;
 
     await exec.execute('cd sub', { name: 'dev' });

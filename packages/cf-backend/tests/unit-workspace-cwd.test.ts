@@ -264,7 +264,8 @@ describe('an approval in a hosted named session', () => {
     };
   }
 
-  test('covers the variables the session exports, read inside it: one changed after the ask is another ask', async () => {
+  /** A hosted session behind the approval gate, with nobody in front of the owner: every ask parks on the queue. */
+  async function unattendedSession() {
     const storage = openWorkspaceDatabase();
     const workspace = await NimbusWorkspace.create({ ...storage, generation: 1 });
 
@@ -293,17 +294,36 @@ describe('an approval in a hosted named session', () => {
       mode: () => 'strict', deferrals: queue.channel, requestApproval: null,
     });
 
-    const dooming = ['git', 'push --force origin main; rm -r "$TARGET"'].join(' ');
+    return { workspace, queue, gated };
+  }
 
-    await gated.exec('export TARGET=a', { name: 'dev' });
-    expect((await gated.exec(dooming, { name: 'dev' })).exitCode).not.toBe(0);
+  const FORCE_PUSH = ['git', 'push --force origin main'].join(' ');
+
+  /** Parks `asked` in session `dev` after `before`, runs `meanwhile` there, approves the row and asks again. */
+  async function approveAcrossAChange(before: string, asked: string, meanwhile: string) {
+    const { workspace, queue, gated } = await unattendedSession();
+
+    await gated.exec(before, { name: 'dev' });
+    expect((await gated.exec(asked, { name: 'dev' })).exitCode).not.toBe(0);
     expect(queue.list()).toHaveLength(1);
-
-    await gated.exec('export TARGET=b', { name: 'dev' });
+    await gated.exec(meanwhile, { name: 'dev' });
     await queue.decide(queue.list().map((row) => row.id), 'approved');
 
-    expect((await gated.exec(dooming, { name: 'dev' })).exitCode).not.toBe(0);
+    return { again: await gated.exec(asked, { name: 'dev' }), workspace };
+  }
+
+  test('covers the variables the session exports, read inside it: one changed after the ask is another ask', async () => {
+    const { again, workspace } = await approveAcrossAChange('export TARGET=a', `${FORCE_PUSH}; rm -r "$TARGET"`, 'export TARGET=b');
+
+    expect(again.exitCode).not.toBe(0);
     expect(await workspace.fs.exists('/home/main/b')).toBe(true);
     expect(await workspace.fs.exists('/home/main/a')).toBe(true);
+  });
+
+  test('a value holding a newline is not another variable: two sessions that list alike are two states', async () => {
+    const { again, workspace } = await approveAcrossAChange('export A="x\nB=y"', `${FORCE_PUSH}; rm -r b`, 'export A=x; export B=y');
+
+    expect(again.exitCode).not.toBe(0);
+    expect(await workspace.fs.exists('/home/main/b')).toBe(true);
   });
 });

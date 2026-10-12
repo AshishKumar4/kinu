@@ -5,15 +5,20 @@ import type { CommandCall, ExecutionContext, PreparedCall } from '../safety/appr
 import type { ShellExecOptions } from '../types/primitives';
 
 /**
- * A shell call as a command member reads it: its directory and named shell, and, where the member honours it, a
- * digest of its stdin. The one reading of {@link ShellExecOptions} for every machine shell.
+ * A shell call as a command member reads it: its directory and named shell, where the member honours it a digest of
+ * its stdin, whether it runs as a background job, and its cancel. The one reading of {@link ShellExecOptions} for
+ * every machine shell.
  */
 export function shellCall(command: string, options: ShellExecOptions, honours: { readonly stdin: boolean }): CommandCall {
   return {
     text: command,
     ...(options.cwd !== undefined && { cwd: options.cwd }),
     ...(options.name !== undefined && { shell: options.name }),
-    context: honours.stdin && options.stdin !== undefined ? { stdinSha256: sha256Hex(options.stdin) } : {},
+    ...(options.signal !== undefined && { signal: options.signal }),
+    context: {
+      ...(honours.stdin && options.stdin !== undefined && { stdinSha256: sha256Hex(options.stdin) }),
+      ...(options.job !== undefined && { background: true }),
+    },
   };
 }
 

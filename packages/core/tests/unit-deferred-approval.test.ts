@@ -982,6 +982,19 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     expect(queue.list()).toEqual([]);
   });
 
+  test('a machine that throws a failure proving nothing started leaves the grant spendable too', async () => {
+    const { queue, store, exec, executed, answerWith } = deviceSetup();
+    answerWith(notConnected);
+    await exec(GATED);
+    await queue.decide(['defer-1'], 'approved');
+
+    answerWith(() => { throw new KinuError('unavailable', 'No device connected.'); });
+    await Promise.allSettled([exec(GATED)]);
+
+    expect(executed).toEqual([GATED]);
+    expect(store.standing({ command: GATED, executor: 'device', context: { member: 'exec' } }, 1_010)?.id).toBe('defer-1');
+  });
+
   test('the next attempt that DOES reach the machine spends it for good', async () => {
     const { queue, store, exec, executed, audited, answerWith } = deviceSetup();
     answerWith(notConnected);

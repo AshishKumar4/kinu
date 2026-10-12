@@ -2,7 +2,7 @@
 
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import { attempt, CODE_WORK_DID_NOT_START, detach, diagnostics, KinuError, settle, toKinuError, type ErrorCode } from '../obs/index';
+import { attempt, classifyErrorCode, CODE_WORK_DID_NOT_START, detach, diagnostics, KinuError, settle, toKinuError, type ErrorCode } from '../obs/index';
 import { boundWriteCommand, type WriteSubject } from './bound-write';
 import { stableStringify } from './argument-digest';
 import type { JsonObject } from '../utils/json';
@@ -33,6 +33,10 @@ export interface ExecutionContext {
   /** The language a program runs in (`default` for the runtime's own), and whether its runtime may be installed first. */
   readonly language?: string;
   readonly install?: string;
+  /** The work limit the runtime enforces on it, in milliseconds: a run cut short is another invocation. */
+  readonly timeoutMs?: number;
+  /** It runs as a background job (stamped with the job, whose id is Kinu's own label for it, not part of the ask). */
+  readonly background?: true;
   /** What its named shell restores before it (directory and exported variables), as a digest: a call in that shell
    *  after the shell moved is another ask. */
   readonly shellState?: string;
@@ -47,6 +51,8 @@ export const ExecutionContextSchema = v.object({
   stdinSha256: v.optional(v.string()),
   language: v.optional(v.string()),
   install: v.optional(v.string()),
+  timeoutMs: v.optional(v.number()),
+  background: v.optional(v.literal(true)),
   shellState: v.optional(v.string()),
 }) satisfies v.GenericSchema<ExecutionContext>;
 
@@ -63,6 +69,10 @@ export function executionContextKey(context: ExecutionContext): string {
   if (context.machine !== undefined) json.machine = { id: context.machine.id, name: context.machine.name };
 
   if (context.env !== undefined) json.env = { names: [...context.env.names], sha256: context.env.sha256 };
+
+  if (context.timeoutMs !== undefined) json.timeoutMs = context.timeoutMs;
+
+  if (context.background !== undefined) json.background = context.background;
 
   return stableStringify(json);
 }
@@ -87,6 +97,10 @@ export function describeExecutionContext(context: ExecutionContext): string {
 
   if (context.install !== undefined) parts.push(`install ${JSON.stringify(context.install)}`);
 
+  if (context.timeoutMs !== undefined) parts.push(`timeout ${String(context.timeoutMs)}ms`);
+
+  if (context.background !== undefined) parts.push('as a background job');
+
   if (context.shellState !== undefined) parts.push(`shell state sha256:${context.shellState.slice(0, 12)}`);
 
   return parts.join(' · ');
@@ -110,6 +124,9 @@ export interface CommandCall {
   /** Reads the digest of what `shell` restores before a call ({@link namedShellState}). Read only for a call that
    *  waits on an owner's answer, and handed to `run`, which runs only while the shell still restores exactly that. */
   readonly shellState?: () => Promise<string | KinuError>;
+  /** The call's own cancel, where its member never dispatches once it has fired: an approved run whose cancel fired
+   *  first is not dispatched, and its approval returns. Not part of the ask. */
+  readonly signal?: AbortSignal;
 }
 
 /** A call whose named shell no longer restores what it did when the call was asked (or cannot say): NOT RUN, a
@@ -272,7 +289,11 @@ export type ApprovalSpendOutcome =
 type QueueAnswer =
   | { readonly run: true; readonly spent: ApprovalSpend }
   /** `waiting`: the row the owner has yet to decide. */
-  | { readonly run: false; readonly reason: 'denied' | 'unavailable'; readonly message: string; readonly waiting?: string };
+  | {
+    readonly run: false; readonly reason: 'denied' | 'unavailable'; readonly message: string;
+    /** The row the owner has yet to decide, and the rules it holds: what an always-answer to it grants. */
+    readonly waiting?: { readonly id: string; readonly rules: readonly string[] };
+  };
 
 /**
  * The owner's queue (safety/deferred-approval.ts): every gated ask is a row of it, whichever surface answers, so the
@@ -365,17 +386,25 @@ export function gateExec<R>(
     const decision = await decideApproval({ command: call.text, executor: executor.name, context: asked }, review, policy);
 
     if (!decision.run) return denyResult(decision.error);
-    const result = await prepared.run(pinned);
+    const { spent } = decision;
 
-    if (decision.spent) {
-      const code = refusalCode?.(result) ?? null;
-      await policy.deferrals?.settle(
-        decision.spent,
-        code !== null && CODE_WORK_DID_NOT_START[code] ? 'did-not-run' : 'spent',
-      );
+    // An approved run whose cancel fired while the owner answered is not dispatched, and its approval returns.
+    if (spent !== undefined && call.signal?.aborted === true) {
+      await policy.deferrals?.settle(spent, 'did-not-run');
+
+      return denyResult(new KinuError('cancelled', 'NOT RUN: cancelled before it was dispatched; the approval stands for the next ask.'));
     }
 
-    return result;
+    const running = prepared.run(pinned);
+
+    if (spent !== undefined) {
+      // A refusal, or a failure whose code proves nothing started, returns the approval; anything else spent it.
+      const [ran] = await Promise.allSettled([running]);
+      const code = ran?.status === 'fulfilled' ? refusalCode?.(ran.value) ?? null : classifyErrorCode({ cause: ran?.reason });
+      await policy.deferrals?.settle(spent, code !== null && CODE_WORK_DID_NOT_START[code] ? 'did-not-run' : 'spent');
+    }
+
+    return running;
   };
 }
 
@@ -396,6 +425,7 @@ function refuse(reason: ErrorCode, message: string): GateAnswer {
  */
 async function askOwner(
   review: ApprovalResult,
+  rawReview: ApprovalResult,
   policy: ShellApprovalPolicy,
   ask: { readonly mode: ShellApprovalMode; readonly executor: string; readonly parks: boolean; readonly request: (parking: boolean) => Promise<ShellApprovalRequest> },
 ): Promise<GateAnswer> {
@@ -409,9 +439,16 @@ async function askOwner(
 
   // A parked write is decided on its row alone: the queue writes its bytes when approved.
   if (parked.waiting === undefined || !live || (await ask.request(false)).write !== undefined) return refuse(parked.reason, parked.message);
-  const id = parked.waiting;
+  const { id, rules } = parked.waiting;
   const shown = new AbortController();
-  const answering = live({ ...await ask.request(false), approvalId: id }, shown.signal);
+
+  // The row as the queue holds it: the rules a live always-answer grants are the ones its prompt shows.
+  const held: ApprovalResult = {
+    decision: 'gate',
+    hits: rules.map((rule) => rawReview.hits.find((hit) => hit.rule === rule) ?? { rule, decision: 'gate', explanation: rule }),
+  };
+
+  const answering = live({ ...await ask.request(false), review: held, approvalId: id }, shown.signal);
   let retired = false;
 
   // A prompt retired because another surface decided first may still fail after; that is recorded, never thrown.
@@ -524,7 +561,7 @@ async function decideApproval(
 
       if (resolved instanceof KinuError) return { run: false, error: resolved };
       context = resolved;
-      const asked = await askOwner(review, policy, { mode, executor, parks, request });
+      const asked = await askOwner(review, rawReview, policy, { mode, executor, parks, request });
 
       if (!asked.run) return asked;
       spent = asked.spent;

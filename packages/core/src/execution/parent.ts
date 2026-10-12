@@ -140,7 +140,7 @@ export function createParentExecutor(deps: {
 
           // It takes nothing but the words: it starts at the parent workspace's root.
           return {
-            call: { text: command, context: {} },
+            call: { text: command, context: {}, ...(signal !== undefined && { signal }) },
             run: async () => commandResult(await raceAbort(
               () => deps.handle.exec(command),
               signal,
