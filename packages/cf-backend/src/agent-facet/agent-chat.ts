@@ -8,7 +8,7 @@ import {
   bindRoute, completeOnRoute, ownProfileChoices, planWorkspaceTitle, resolveAgentTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle,
   type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpening, type JsonObject, type PlanReview, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
   type InspectedWork, type PreparedAgentTurn, type PreparedTurn, type TerminalTurnFacts, type TerminalTurnParts,
-  type SessionEvent, type TurnAssemblyRequest, type WorkMode, type OwnerQuestionStore, type RunEndOutcome, type DeliveredRun,
+  type SessionEvent, type TurnAssemblyRequest, type WorkMode, type OwnerQuestionStore, type RunEndOutcome, type DeliveredRun, type AgentOwes, type AgentReport,
 } from '@kinu.run/core';
 import { createCompactionStateStore, type CompactionStateStore } from '@kinu.run/compaction';
 import { attempt, diagnostics, hold, logged, renderThrownChain, settle, toKinuError, type KinuError } from '@kinu.run/core/obs';
@@ -462,23 +462,37 @@ export class FacetChat {
     this.resting = hold(logged('agent.owed_report_failed', { doing: 'telling the workspace what an agent still owes', otherwise: 'unavailable' }, () => this.tell()));
   }
 
-  /** Its input taken: what it owes now is told behind every answer it sent before, and has landed. An older rest cannot
-   *  cancel the workspace's arm for the input, and a turn the input ran and ended already leaves no arm behind. */
-  async taken(): Promise<void> {
-    await hold(logged('agent.owed_report_failed', { doing: 'telling the workspace what an agent owes for its input', otherwise: 'unavailable' }, () => this.tell()));
+  /**
+   * Its input taken: what it owes now, numbered behind every report it sent before, for its admission's answer to carry
+   * (taken rides admit). An older rest cannot cancel the workspace's arm for the input, and a turn the input ran and
+   * ended already leaves no arm behind. Its run ends ride the next report it tells, which retires them once it reached.
+   */
+  taken(): Promise<AgentOwes> {
+    const reported = this.telling.then(() => this.owesNow(undefined, []));
+
+    this.telling = hold(attempt({ doing: 'reporting what an agent owes for its input', otherwise: 'unavailable' }, () => reported));
+
+    return reported;
+  }
+
+  /** Numbered as it leaves, in this agent's store: the workspace takes no report older than one it took. */
+  private owesNow(at: number | undefined, runEnds: AgentReport['runEnds']): AgentOwes {
+    const owed = this.owed();
+
+    return {
+      seq: this.deps.database.nextInSequence(), next: at === undefined ? owed : Math.min(at, owed ?? Infinity),
+      holds: owed !== null || this.owedWork().length > 0 || runEnds.length > 0,
+      report: { standing: this.deps.database.standingReport(), runEnds, working: this.session.turnOwed },
+    };
   }
 
   /** `at` asks for a wake no later than it. Carries every run end not yet told, each retired once the report reached. */
   private tell(at?: number): Promise<void> {
     const told = this.telling.then(async () => {
-      const owed = this.owed();
       const ends = [...this.runEnds].map(([id, { outcome }]) => ({ id, outcome }));
+      const { seq, next, holds, report } = this.owesNow(at, ends);
 
-      // Numbered as it leaves, in this agent's store: the workspace takes no report older than one it took.
-      await this.deps.workspace.owes(
-        this.deps.database.nextInSequence(), at === undefined ? owed : Math.min(at, owed ?? Infinity), owed !== null || this.owedWork().length > 0 || ends.length > 0,
-        { standing: this.deps.database.standingReport(), runEnds: ends },
-      );
+      await this.deps.workspace.owes(seq, next, holds, report);
 
       for (const { id } of ends) {
         this.runEnds.get(id)?.retire();
@@ -489,6 +503,13 @@ export class FacetChat {
     this.telling = hold(attempt({ doing: 'telling the workspace what an agent still owes', otherwise: 'unavailable' }, () => told));
 
     return told;
+  }
+
+  /** What it owes, told: a delivery its own isolate admitted has no answer to carry it. A failure is logged, as the rest's. */
+  async told(): Promise<null> {
+    await hold(logged('agent.owed_report_failed', { doing: 'telling the workspace what an agent owes for its input', otherwise: 'unavailable' }, () => this.tell()));
+
+    return null;
   }
 
   /** Its own turns and effects still owed, folded as the workspace's read folds the root's. */

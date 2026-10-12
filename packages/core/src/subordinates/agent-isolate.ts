@@ -18,6 +18,7 @@ import type { ModelPricing } from '../providers/types';
 import type { WorkMode } from '../types/turn';
 import type { TurnSourcesBundle } from '../orchestrator/turn-assembly';
 import type { SubordinateReportLedger } from './ingress';
+import type { DeliveryAnswer } from './deliveries';
 import type { TurnReach } from '../delegation/turn-reach';
 
 export type StoredRow = Readonly<Record<string, string | number | ArrayBuffer | null>>;
@@ -223,11 +224,29 @@ export interface AgentStandingReport extends Omit<AgentStanding, 'context'> {
   readonly measures: ContextMeasures;
 }
 
-/** What each report of an agent tells beside what it owes: its standing, which the workspace reads in place of asking, and
- *  its delivered runs' ends not yet told (D2), each owed its workspace's caller. */
+/** What each report of an agent tells beside what it owes: its standing, which the workspace reads in place of asking,
+ *  its delivered runs' ends not yet told (D2), each owed its workspace's caller, and whether its chat holds a turn owed
+ *  or running: from the input it took to its rest it is working, what it owes no leftover. */
 export interface AgentReport {
   readonly standing: AgentStandingReport;
   readonly runEnds: readonly RunEndReport[];
+  readonly working: boolean;
+}
+
+/** One report of an agent's (design v3 B), numbered in its own sequence: when it next needs waking, if at all, whether it
+ *  holds owed work at all, and what it tells. */
+export interface AgentOwes {
+  readonly seq: number;
+  readonly next: number | null;
+  readonly holds: boolean;
+  readonly report: AgentReport;
+}
+
+/** A delivery's answer, with the report its admission makes: its input taken rides the answer, never a crossing of its own.
+ *  Null where that report was told on its own: a delivery from the agent's own isolate has no answer crossing. */
+export interface AdmittedDelivery {
+  readonly answer: DeliveryAnswer;
+  readonly owes: AgentOwes | null;
 }
 
 /** An agent's recent model steps, for the activity its window reads. */

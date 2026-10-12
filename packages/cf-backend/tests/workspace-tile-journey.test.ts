@@ -100,14 +100,14 @@ describe("a workspace's tile on its owner's home", () => {
         plans: { pending: false, revision: 0 }, questions: 0,
       };
 
-      await reportedWork.owes(sequence.next(), null, true, { standing, runEnds: [] });
+      await reportedWork.owes(sequence.next(), null, true, { standing, runEnds: [], working: false });
       await until(() => last()?.awaitsSettings === true, 'a real owed-work report updates the owner');
       const reported = tiles.items.length;
 
-      await reportedWork.owes(sequence.next(), null, true, { standing, runEnds: [] });
+      await reportedWork.owes(sequence.next(), null, true, { standing, runEnds: [], working: false });
       await settled();
       expect(tiles.items).toHaveLength(reported);
-      await reportedWork.owes(sequence.next(), null, false, { standing, runEnds: [] });
+      await reportedWork.owes(sequence.next(), null, false, { standing, runEnds: [], working: false });
       await until(() => last()?.awaitsSettings === false, 'the cleared owed-work report updates the owner');
 
       // A prior activation's own effect ledger retained this refusal; the live idle fold must read it.

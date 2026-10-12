@@ -11,7 +11,7 @@ import {
   type AgentOwnInspection, type AnsweredEvolutionHelper, type JsonValue, type ArchiveAgentPage, type ArchiveSqlCursor, type ChatHistoryPage,
   type NimbusSandboxHandle, type PositionPageRequest, type ProviderEnv, type SerializedMessage, type SubordinateInspectionResult,
   servedContextTree, type ContextEditor, type ContextTreeRemote, type SpendLedger, type StepSpendSource, type TurnRequestIndex, type TurnRequestPage, type ConversationSearchHit, type ConversationScrollResult, type ConversationSummary,
-  type SendState, DeliverySchema, type Delivery, type DeliveryAnswer, type InputProducer, type OwedDelivery,
+  type SendState, DeliverySchema, type AdmittedDelivery, type Delivery, type DeliveryAnswer, type InputProducer, type OwedDelivery,
 } from '@kinu.run/core';
 import * as v from 'valibot';
 import { StepPacer } from './step-pacer';
@@ -82,8 +82,8 @@ export interface PlanVerdict {
 }
 
 export interface AgentFacetCalls {
-  /** Resolves once its chat holds the delivery in its own store. */
-  admit(snapshot: AgentSnapshot, delivery: Delivery): Promise<DeliveryAnswer>;
+  /** Resolves once its chat holds the delivery in its own store, with the report its admission makes. */
+  admit(snapshot: AgentSnapshot, delivery: Delivery): Promise<AdmittedDelivery>;
   landing(snapshot: AgentSnapshot, id: string): Promise<SendLanding>;
   retry(snapshot: AgentSnapshot, claim: (turnId: string) => void): Promise<SendLanding>;
   sendState(snapshot: AgentSnapshot, id: string): Promise<SendState>;
@@ -237,7 +237,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     this.database ??= new AgentDatabase(this.ctx.storage, {
       agent: () => this.workspace(), home: this.env.HOME, state: () => this.state(),
       enqueueTurn: (input) => this.enqueue(snapshot, input),
-      admitDelivery: (delivery) => this.admit(snapshot, delivery, 'self'),
+      admitDelivery: async (delivery) => (await this.admit(snapshot, delivery, 'self')).answer,
       // A steer's fate rides its chat's events, in order with the turns it names.
       broadcast: (event) => { this.held?.session.emit({ type: 'broadcast', event }); },
       turnInFlight: () => this.held?.session.turnInFlight() ?? false,
@@ -283,19 +283,28 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return await settle(this.withChat(snapshot, (chat) => chat.session.enqueueTurn(turn)));
   }
 
-  /** A delivery from the workspace (design v2 §1), or from a producer in this isolate (`self`): in this isolate's store
-   *  before it is answered, which retires its producer's row; a repeat is answered `duplicate`. */
-  async admit(snapshot: AgentSnapshot, delivery: OwedDelivery, producer: InputProducer = 'workspace'): Promise<DeliveryAnswer> {
+  /**
+   * A delivery from the workspace (design v2 §1), or from a producer in this isolate (`self`): in this isolate's store
+   * before it is answered, which retires its producer's row; a repeat is answered `duplicate`. The workspace's answer
+   * carries the report its admission makes; one of its own has no answer crossing, so that report is told.
+   */
+  async admit(snapshot: AgentSnapshot, delivery: OwedDelivery, producer: InputProducer = 'workspace'): Promise<AdmittedDelivery> {
+    return await settle(Effect.flatMap(this.admission(snapshot, delivery, producer), ({ chat, answer }) => Effect.map(
+      Effect.promise(() => (producer === 'self' ? chat.told() : chat.taken())), (owes) => ({ answer, owes }),
+    )));
+  }
+
+  private admission(snapshot: AgentSnapshot, delivery: OwedDelivery, producer: InputProducer): Effect.Effect<{ readonly chat: FacetChat; readonly answer: DeliveryAnswer }, KinuError> {
     const parsed = v.parse(DeliverySchema, delivery);
 
-    return await settle(Effect.flatMap(this.withChat(snapshot, (chat) => chat), (chat) => (chat.session.closing
+    return Effect.flatMap(this.withChat(snapshot, (chat) => chat), (chat) => (chat.session.closing
       // Closing: owed to its next start, so the crossing fails and the workspace's wake crosses it again.
       ? Effect.fail(new KinuError('unavailable', 'The agent is closing; the delivery is owed to its next start.'))
       : attemptInItsWords('io', () => chat.session.admitDelivery(parsed, producer)).pipe(
         // Its own refusal is its answer, not a lost crossing: told with its whole cause chain.
         Effect.catch((refusal) => Effect.succeed<DeliveryAnswer>({ refused: { code: refusal.code, message: renderThrownChain({ cause: refusal }) } })),
-        Effect.tap(() => Effect.promise(() => chat.taken())),
-      ))));
+        Effect.map((answer) => ({ chat, answer })),
+      )));
   }
 
   /** Where a person's words landed, once a turn took them: what their client is told. */
