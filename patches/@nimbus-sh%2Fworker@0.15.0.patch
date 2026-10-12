@@ -69,7 +69,7 @@ index 6fdca7b..4d2c358 100644
              appendScrollback(options.ctx, data, Date.now());
              persistShellState(options.ctx, { cwd: this.shell.getCwd(), env: this.shell.getEnv() });
 diff --git a/dist/node-shims-artifact.generated.js b/dist/node-shims-artifact.generated.js
-index c7484dc..76e3857 100644
+index c7484dc..f931189 100644
 --- a/dist/node-shims-artifact.generated.js
 +++ b/dist/node-shims-artifact.generated.js
 @@ -10,8 +10,8 @@
@@ -78,8 +78,8 @@ index c7484dc..76e3857 100644
  export const NODE_SHIMS_ENTRY = "/_assets/runtime/node-shims-6e7186f468bae50a.js";
 -export const NODE_SHIMS_BUILD_ID = "6e7186f468bae50a";
 -export const NODE_SHIMS_SHA256 = "6e7186f468bae50a826c0f3cb45e002865b543cdc5f531dd34ae32ce565e5ab2";
-+export const NODE_SHIMS_BUILD_ID = "7c45608c1e6d25f3";
-+export const NODE_SHIMS_SHA256 = "7c45608c1e6d25f3a26ac29a0994354b51461d798f519ad91959d9a370800d46";
++export const NODE_SHIMS_BUILD_ID = "0b875202d5b22434";
++export const NODE_SHIMS_SHA256 = "0b875202d5b22434c10cf2750ee7add4413b75444833d3bd1b9ebf2414787a76";
  /** @nimbus-sh/core dist/_shared/vfs-write-ledger.js VFS_WRITE_LEDGER_SOURCE */
  export const VFS_WRITE_LEDGER_ENTRY = "/_assets/runtime/vfs-write-ledger-676daf190edbf75d.js";
  export const VFS_WRITE_LEDGER_BUILD_ID = "676daf190edbf75d";
@@ -310,7 +310,7 @@ index 939dfa9..52928dc 100644
                  catch (error) {
                      if (error instanceof TypeError && error.message === 'The RPC receiver does not implement the method "connectTls".') {
 diff --git a/public/_assets/runtime/node-shims-6e7186f468bae50a.js b/public/_assets/runtime/node-shims-6e7186f468bae50a.js
-index c031ebc..f08f152 100644
+index c031ebc..c1f306d 100644
 --- a/public/_assets/runtime/node-shims-6e7186f468bae50a.js
 +++ b/public/_assets/runtime/node-shims-6e7186f468bae50a.js
 @@ -351,6 +351,18 @@ function __nimbusNetworkGate() {
@@ -320,19 +320,19 @@ index c031ebc..f08f152 100644
 +// Kinu patch (NIMBUS-ASKS #46): every plain socket a program opens under a
 +// workspace egress is keyed, so a TLS session can later be asked for over it
 +// (STARTTLS: pg, mysql2, nodemailer). It names
-+// <hex(host)>.k.<hex(key)>.tcp.nimbus-egress.invalid:<port>, each name the hex
-+// of its UTF-8 in labels of 62, <key> 16 random bytes; this holds each keyed
-+// net.Socket's key and the host it named.
++// <hex(host)>.k.<hex(tags)>.tcp.nimbus-egress.invalid:<port>, each the hex of
++// its bytes in labels of 62: the host's UTF-8, and 32 random bytes, an ask tag
++// and an answer tag; this holds each keyed net.Socket's tags and its host.
 +const __nimbusEgressKeys = new WeakMap();
-+const __nimbusEgressLabel = (name) => {
++const __nimbusEgressLabel = (bytes) => {
 +  let hex = '';
-+  for (const b of new TextEncoder().encode(name)) hex += (b < 16 ? '0' : '') + b.toString(16);
++  for (const b of bytes) hex += (b < 16 ? '0' : '') + b.toString(16);
 +  return hex.match(/.{1,62}/g).join('.');
 +};
  function __nimbusRawSocket() {
    let bound = null;
    try { bound = typeof __supervisor !== "undefined" ? __supervisor : null; } catch {}
-@@ -384,6 +396,20 @@ function __nimbusRawSocket() {
+@@ -384,6 +396,18 @@ function __nimbusRawSocket() {
        // Already connecting: the native connect refuses it, opening nothing.
        if (this.connecting) return Reflect.apply(__nativeConnect, this, args);
        __nativeConnectChecks((Array.isArray(args[0]) ? args[0] : __realNet._normalizeArgs(args))[0]);
@@ -342,10 +342,8 @@ index c031ebc..f08f152 100644
 +        const options = normalized[0];
 +        const host = options.host || 'localhost';
 +        if (options.path === undefined && !/\.nimbus-(egress|net)\.invalid$/.test(host)) {
-+          const key = crypto.getRandomValues(new Uint8Array(16));
-+          let hex = '';
-+          for (const b of key) hex += (b < 16 ? '0' : '') + b.toString(16);
-+          normalized[0] = { ...options, host: __nimbusEgressLabel(host) + '.k.' + hex + '.tcp.nimbus-egress.invalid' };
++          const key = crypto.getRandomValues(new Uint8Array(32));
++          normalized[0] = { ...options, host: __nimbusEgressLabel(new TextEncoder().encode(host)) + '.k.' + __nimbusEgressLabel(key) + '.tcp.nimbus-egress.invalid' };
 +          args = [normalized];
 +          __nimbusEgressKeys.set(this, { key, host });
 +        }
@@ -353,7 +351,7 @@ index c031ebc..f08f152 100644
        if (globalThis.__nimbusEgress === true) {
          const socket = this;
          let state = __egressSocketHolds.get(socket);
-@@ -11231,7 +11257,7 @@ const __diagChannelMod = __nativeBuiltin("diagnostics_channel");
+@@ -11231,7 +11255,7 @@ const __diagChannelMod = __nativeBuiltin("diagnostics_channel");
  // ──  tls module (W3: forward to workerd, override createServer) ─────
  // ═══════════════════════════════════════════════════════════════════════
  
@@ -362,7 +360,7 @@ index c031ebc..f08f152 100644
    let options = {}, callback;
    if (args[0] !== null && typeof args[0] === 'object') { options = { ...args[0] }; callback = args[1]; }
    else {
-@@ -11249,9 +11275,10 @@ function __nimbusEgressTlsConnect(real, net, args, notImplemented) {
+@@ -11249,9 +11273,10 @@ function __nimbusEgressTlsConnect(real, net, args, notImplemented) {
      const bound = previous?._handle?.options;
      const host = options.host ?? bound?.host ?? previous?._host ?? 'localhost';
      const port = Number(options.port ?? bound?.port);
@@ -375,21 +373,13 @@ index c031ebc..f08f152 100644
    };
    let reader, writer, resource;
    let endedRead = false, endedWrite = false, stopped = false;
-@@ -11356,6 +11383,88 @@ const __tlsMod = (() => {
+@@ -11356,6 +11381,85 @@ const __tlsMod = (() => {
    const notImplemented = (option, why) => {
      return nodeError(Error, 'ERR_OPTION_NOT_IMPLEMENTED', 'The ' + option + ' option is not implemented: ' + why);
    };
 +  // Kinu patch (#46): the native sockets of keyed sockets a program asked
-+  // TLS over, by their key.
++  // TLS over, by their tags.
 +  const keyedNatives = new WeakMap();
-+  const egressKeyAt = (bytes, key) => {
-+    for (let at = bytes.indexOf(key[0]); at >= 0 && at + key.length <= bytes.length; at = bytes.indexOf(key[0], at + 1)) {
-+      let same = true;
-+      for (let i = 1; i < key.length && same; i++) same = bytes[at + i] === key[i];
-+      if (same) return at;
-+    }
-+    return -1;
-+  };
 +  const egressJoin = (first, second) => {
 +    const joined = new Uint8Array(first.length + second.length);
 +    joined.set(first);
@@ -397,34 +387,39 @@ index c031ebc..f08f152 100644
 +    return joined;
 +  };
 +  // The TLS session over a keyed socket, made by the egress: asked for once,
-+  // and answered before anything the program writes over it is sent.
++  // and answered, as the first bytes after the ask, before anything the
++  // program writes over it is sent.
 +  const egressStartTls = (native, options) => {
 +    const key = keyedNatives.get(native);
++    const askTag = key.subarray(0, 16);
++    const answerTag = key.subarray(16);
 +    const name = new TextEncoder().encode(options && typeof options.expectedServerHostname === 'string' ? options.expectedServerHostname : '');
 +    if (name.length > 255) throw new TypeError('tls: a servername longer than 255 bytes is not carried by the egress');
 +    const writer = native.writable.getWriter();
 +    const reader = native.readable.getReader();
 +    let held = new Uint8Array(0);
 +    const answered = (async () => {
-+      const ask = new Uint8Array(key.length + 2 + name.length);
-+      ask.set(key);
-+      ask[key.length] = 0x55;
-+      ask[key.length + 1] = name.length;
-+      ask.set(name, key.length + 2);
++      const ask = new Uint8Array(askTag.length + 2 + name.length);
++      ask.set(askTag);
++      ask[askTag.length] = 0x55;
++      ask[askTag.length + 1] = name.length;
++      ask.set(name, askTag.length + 2);
 +      await writer.write(ask);
-+      for (;;) {
-+        const at = egressKeyAt(held, key);
-+        if (at >= 0 && held.length > at + key.length) {
-+          if (held[at + key.length] === 1) { held = held.subarray(at + key.length + 1); return; }
-+          const length = held.length >= at + key.length + 3 ? (held[at + key.length + 1] << 8) | held[at + key.length + 2] : -1;
-+          if (length >= 0 && held.length >= at + key.length + 3 + length) {
-+            throw new Error(new TextDecoder().decode(held.subarray(at + key.length + 3, at + key.length + 3 + length)));
-+          }
++      const fill = async (count) => {
++        while (held.length < count) {
++          const { value, done } = await reader.read();
++          if (done) throw new Error('the egress closed the connection before the TLS session was made');
++          held = egressJoin(held, value);
 +        }
-+        const { value, done } = await reader.read();
-+        if (done) throw new Error('the egress closed the connection before the TLS session was made');
-+        held = egressJoin(held, value);
-+      }
++      };
++      const tagged = () => answerTag.every((byte, at) => held[at] === byte);
++      await fill(answerTag.length + 1);
++      if (!tagged() || held[answerTag.length] > 1) throw new Error('the egress made no TLS session: the bytes after the ask were not its answer');
++      if (held[answerTag.length] === 1) { held = held.subarray(answerTag.length + 1); return; }
++      await fill(answerTag.length + 3);
++      const length = (held[answerTag.length + 1] << 8) | held[answerTag.length + 2];
++      await fill(answerTag.length + 3 + length);
++      throw new Error(new TextDecoder().decode(held.subarray(answerTag.length + 3, answerTag.length + 3 + length)));
 +    })();
 +    answered.catch(() => {});
 +    const opened = Promise.all([native.opened, answered]).then(([info]) => info);
@@ -464,7 +459,7 @@ index c031ebc..f08f152 100644
    const patchStartTls = (native) => {
      if (startTlsPatched || !native) return;
      startTlsPatched = true;
-@@ -11363,6 +11472,7 @@ const __tlsMod = (() => {
+@@ -11363,6 +11467,7 @@ const __tlsMod = (() => {
      const original = proto.startTls;
      Object.defineProperty(proto, 'startTls', { configurable: true, writable: true, value: function startTls(options) {
        const token = tokens.get(this);
@@ -472,7 +467,7 @@ index c031ebc..f08f152 100644
        if (token === undefined) return Reflect.apply(original, this, arguments);
        const self = this;
        // workerd's TLSSocket has released the carrier's writer and reader and
-@@ -11469,11 +11579,31 @@ const __tlsMod = (() => {
+@@ -11469,11 +11574,31 @@ const __tlsMod = (() => {
      };
      return socket;
    };

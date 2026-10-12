@@ -228,7 +228,7 @@ export function handleEgressConnect(socket: Socket, params: KinuEgressParams | u
     if (keyed !== null) {
       const server = connect({ hostname: destination.hostname, port: destination.port }, { allowHalfOpen: true, secureTransport: 'starttls' });
 
-      return yield* attempt({ doing: `carrying a socket to ${destination.hostname}`, otherwise: 'io' }, () => carryKeyed(socket, server, keyed.hostname, keyed.key));
+      return yield* attempt({ doing: `carrying a socket to ${destination.hostname}`, otherwise: 'io' }, () => carryKeyed(socket, server, keyed.hostname, keyed.tags));
     }
 
     const upstream = connect({ hostname: destination.hostname, port: destination.port }, { allowHalfOpen: true, secureTransport: 'off' });
