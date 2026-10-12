@@ -26,8 +26,8 @@ export class AgentIsolateSlots {
 
   constructor(private readonly ledger: DurableObjectState) {}
 
-  #oursHeld(): boolean {
-    return loaderLedgerStats(this.ledger).inFlightWorkers.some((key) => this.#asked.has(key));
+  #oursHeld(ledger = loaderLedgerStats(this.ledger)): boolean {
+    return ledger.inFlightWorkers.some((key) => this.#asked.has(key));
   }
 
   #ask(key: string, by: number): void {
@@ -48,8 +48,9 @@ export class AgentIsolateSlots {
       for (;;) {
         const ledger = loaderLedgerStats(this.ledger);
 
-        // No headroom during a refusal's pause is not a full ledger: the pause ends by itself.
-        if (!this.#oursHeld() && !ledger.inFlightWorkers.includes(key) && ledger.pauseMs === 0 && ledger.headroom === 0) {
+        // No headroom during a refusal's pause is not a full ledger: the pause ends by itself. Asked last: free room is
+        // the common case, and the ledger is read once a call.
+        if (ledger.headroom === 0 && ledger.pauseMs === 0 && !ledger.inFlightWorkers.includes(key) && !this.#oursHeld(ledger)) {
           return yield* Effect.fail(this.#cap(new Error(`${REFUSED}: every slot is held`)));
         }
 
