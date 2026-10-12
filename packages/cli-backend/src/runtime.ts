@@ -395,7 +395,7 @@ function buildCLIRuntime(
   const ownerPolicy: ShellApprovalPolicy = {
     mode: () => agentConfig.getShellApprovalMode(),
     granted: (grant) => holdsGrant(agentConfig.getShellApprovalGrants(), grant),
-    requestApproval: (request) => approvalChannel?.(request) ?? Promise.resolve(null),
+    requestApproval: (request, signal) => approvalChannel?.(request, signal) ?? Promise.resolve(null),
     get deferrals() { return approvalDeferrals ?? undefined; },
   };
 

@@ -189,10 +189,11 @@ export function fakeClient(options: FakeClientOptions) {
   return {
     client,
     state,
-    requestShellApproval(request: Parameters<NonNullable<typeof shellApprovalHandler>>[0]) {
+    /** `signal` stands for another surface deciding the ask's row first. */
+    requestShellApproval(request: Parameters<NonNullable<typeof shellApprovalHandler>>[0], signal = new AbortController().signal) {
       if (!shellApprovalHandler) throw new Error('No shell approval handler installed');
 
-      return shellApprovalHandler(request);
+      return shellApprovalHandler(request, signal);
     },
     listenerCount: () => listeners.size,
     emit(event: AgentClientEvent) {

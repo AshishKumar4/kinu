@@ -439,7 +439,7 @@ describe('kinu acp — permission', () => {
             command: permission.command,
             executor: 'device',
             review: { decision: 'gate', hits: permission.hits },
-          });
+          }, new AbortController().signal);
         },
         () => permission.answer,
       );
@@ -463,7 +463,7 @@ describe('kinu acp — what the editor shows for approval', () => {
           command: 'rm -rf ./build \u202E\u2066gpj.x\u200B',
           executor: 'device',
           review: { decision: 'gate', hits: [] },
-        });
+        }, new AbortController().signal);
       },
       (request) => {
         titles.push(request.toolCall.title ?? '');

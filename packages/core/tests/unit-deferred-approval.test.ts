@@ -5,7 +5,7 @@ import { describe, test, expect } from 'bun:test';
 import { Effect } from 'effect';
 import { Database } from 'bun:sqlite';
 import { createMemoryVfs, fakeMossaic, toolExecute } from '@kinu.run/test-utils';
-import { DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable, DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, withApprovalGatedShell, buildBuiltinTools, reviewCommand, actorReferenceOf, type DeferredApprovalChannel, formatApprovalGrant, createShellSession, withApprovalGatedFiles, performBoundWrite, withMountTable, sharedDriveMount, mossaicVfs, ParkedWriteFiles, type DeferredApproval, type ShellApprovalPolicy, type ShellApprovalOutcome, type AgentRuntime, type AgentSignal, type FilesOwner, type Shell, WORKSPACE_ROOT } from '../src/index';
+import { DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable, DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, withApprovalGatedShell, buildBuiltinTools, reviewCommand, actorReferenceOf, type DeferredApprovalChannel, formatApprovalGrant, createShellSession, withApprovalGatedFiles, performBoundWrite, withMountTable, sharedDriveMount, mossaicVfs, ParkedWriteFiles, type DeferredApproval, type ShellApprovalPolicy, type ShellApprovalOutcome, type ShellApprovalRequest, type AgentRuntime, type AgentSignal, type FilesOwner, type Shell, WORKSPACE_ROOT } from '../src/index';
 import type { BoundFileWrite } from '../src/safety/bound-write';
 import { CHUNK_SIZE } from '@nimbus-sh/core/constants.js';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -43,7 +43,7 @@ type ShellTool = { execute: (args: { command: string; runtime?: string }) => Pro
 
 function setup(opts: {
   mode?: 'strict' | 'allow_all' | 'deny_all';
-  approve?: () => Promise<ShellApprovalOutcome | null>;
+  approve?: (req: ShellApprovalRequest, signal: AbortSignal) => Promise<ShellApprovalOutcome | null>;
   /** Omit the queue: the no-queue path must behave as if deferral did not exist. */
   noQueue?: boolean;
   /** Whose files the gated shell holds. */
@@ -208,7 +208,7 @@ describe('the standing modes still decide first', () => {
 
   test('a channel that says deny is a decision, not an absence', async () => {
     const { shellTool, queue } = setup({ approve: async () => 'deny' });
-    await expect(shellTool.execute({ command: GATED })).rejects.toMatchObject({ message: expect.stringContaining('Denied by the owner') });
+    await expect(shellTool.execute({ command: GATED })).rejects.toMatchObject({ message: expect.stringContaining('the owner refused this') });
     expect(queue.list()).toEqual([]);
   });
 
@@ -219,36 +219,58 @@ describe('the standing modes still decide first', () => {
     expect(queue.list()).toHaveLength(1);
   });
 
-  test('a live prompt never asks again what the queue holds: its row answers the ask', async () => {
-    let asked = 0;
+  /** A live prompt the test answers: each shows the ask's row, and its signal says another surface decided it. */
+  function livePrompts(shown: number) {
+    const prompts: Array<{ readonly id: string | undefined; readonly signal: AbortSignal; answer(outcome: ShellApprovalOutcome | null): void }> = [];
+    const all = Promise.withResolvers<void>();
 
-    const { shellTool, executed, queue } = setup({
-      approve: async () => {
-        asked += 1;
+    const approve = (req: ShellApprovalRequest, signal: AbortSignal) => new Promise<ShellApprovalOutcome | null>((resolve) => {
+      prompts.push({ id: req.approvalId, signal, answer: resolve });
 
-        return null;
-      },
+      if (prompts.length === shown) all.resolve();
     });
 
-    // Nobody answered the live prompt: the ask parks.
-    await expect(shellTool.execute({ command: GATED })).rejects.toMatchObject({ message: expect.stringContaining('NOT RUN') });
-    expect(asked).toBe(1);
+    return { prompts, approve, shown: all.promise };
+  }
 
-    // Still queued: the same ask is not put to the live prompt a second time.
-    await expect(shellTool.execute({ command: GATED })).rejects.toMatchObject({ message: expect.stringContaining('NOT RUN') });
-    expect(asked).toBe(1);
+  test('two live asks of one command are one row: a prompt that goes away parks it, the other\'s answer runs it once', async () => {
+    const live = livePrompts(2);
+    const { shellTool, executed, queue, delivered } = setup({ approve: live.approve });
+    const first = shellTool.execute({ command: GATED });
+    const second = shellTool.execute({ command: GATED });
 
-    // Approved in the queue: the next ask runs on that approval, spent, without a live prompt.
-    await queue.decide(['defer-1'], 'approved');
-    expect(await shellTool.execute({ command: GATED })).toBe('ran');
-    expect({ asked, executed }).toEqual({ asked: 1, executed: [GATED] });
+    await live.shown;
+    expect(live.prompts.map((prompt) => prompt.id)).toEqual(['defer-1', 'defer-1']);
+    expect(queue.list()).toHaveLength(1);
 
-    // Denied in the queue: the ask is refused with that denial, not put to the live prompt.
-    await expect(shellTool.execute({ command: GATED })).rejects.toMatchObject({ message: expect.stringContaining('NOT RUN') });
-    expect(asked).toBe(2);
-    await queue.decide([queue.list().find((action) => action.status === 'queued')?.id ?? ''], 'denied');
+    // The chat unmounts under the first prompt: that ask is NOT RUN, and the row waits on the queue.
+    live.prompts[0]?.answer(null);
+    await expect(first).rejects.toMatchObject({ message: expect.stringContaining('NOT RUN') });
+    expect(queue.list()).toHaveLength(1);
+
+    // The owner approves on the other prompt: the row is decided once and its ask runs on it, spent.
+    live.prompts[1]?.answer('allow');
+    expect(await second).toBe('ran');
+    expect(executed).toEqual([GATED]);
+    expect(queue.list()).toEqual([]);
+    // The asker heard the answer where it waited; nothing is left to wake it with.
+    expect(delivered).toEqual([]);
+  });
+
+  test('a row decided on another surface retires its live prompt, and a late answer there changes nothing', async () => {
+    const live = livePrompts(1);
+    const { shellTool, executed, queue } = setup({ approve: live.approve });
+    const asking = shellTool.execute({ command: GATED });
+
+    await live.shown;
+    // The web's card answers first.
+    await queue.decide(['defer-1'], 'denied');
+    expect(live.prompts[0]?.signal.aborted).toBe(true);
+    await expect(asking).rejects.toMatchObject({ message: expect.stringContaining('the owner refused this') });
+
+    live.prompts[0]?.answer('allow');
     await expect(shellTool.execute({ command: GATED })).rejects.toMatchObject({ message: expect.stringContaining('the owner refused this') });
-    expect({ asked, executed }).toEqual({ asked: 2, executed: [GATED] });
+    expect(executed).toEqual([]);
   });
 
   test('with no queue wired at all, strict keeps its old explanatory refusal', async () => {

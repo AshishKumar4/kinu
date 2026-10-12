@@ -64,8 +64,9 @@ function toolTitle(name: string, args: JsonObject): string {
   return name;
 }
 
-/** "Don't ask again" grants exactly the asked rules on the asked executor (`wrapShellApprovalHandler`),
- *  never whole-agent `allow_all`. There is deliberately no persistent reject. */
+/** Each answer decides the ask's queue row, as the web's would. "Don't ask again" grants exactly the asked rules on
+ *  the asked executor, never whole-agent `allow_all`; Reject refuses the row, so the same command on that executor is
+ *  refused unasked for the queue's denial window, then asked again. */
 function permissionOptions(req: ShellApprovalRequest): PermissionOption[] {
   const rules = req.review.hits.filter((h) => h.decision === 'gate').map((h) => h.rule).join(', ');
 

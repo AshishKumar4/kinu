@@ -41,9 +41,17 @@ export function useApprovals(client: AgentClient, opts: {
   const [live, setLive] = useState<ShellApprovalRequest | null>(null);
 
   useEffect(() => {
-    const dispose = client.localControls?.setShellApprovalHandler((request) => new Promise((resolve) => {
-      queue.current.push({ request, resolve });
+    const dispose = client.localControls?.setShellApprovalHandler((request, signal) => new Promise((resolve) => {
+      const item = { request, resolve };
+      queue.current.push(item);
       setLive(queue.current[0]?.request ?? null);
+
+      // Decided on another surface first: this prompt is retired, unanswered.
+      signal.addEventListener('abort', () => {
+        queue.current = queue.current.filter((queued) => queued !== item);
+        setLive(queue.current[0]?.request ?? null);
+        resolve(null);
+      }, { once: true });
     }));
 
     return () => {

@@ -43,6 +43,9 @@ opening as you answer the one before. Click a card behind to answer it first.
 Work → Needs you lists the same things. An agent you hired asks the same way:
 its commands wait on you in its own chat (and in the workspace's list), and
 once you approve one, it is told and runs it under its own permissions.
+In the terminal, a command the agent asks about while you are there shows in
+the chat's approval prompt, and it is the same card: whichever answers first,
+the prompt or a card, decides it once, and the other drops it.
 
 ## 2. Day one
 

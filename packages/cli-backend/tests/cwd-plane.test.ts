@@ -383,7 +383,8 @@ describe('addressing the bound directory', () => {
 
         return { run: false, reason: 'unavailable', message: `NOT RUN — queued: ${request.command}` };
       },
-      held: async () => null,
+      decided: async () => {},
+      decide: async () => {},
       settle: async () => {},
     };
 

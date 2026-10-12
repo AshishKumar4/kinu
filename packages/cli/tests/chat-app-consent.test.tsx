@@ -75,6 +75,20 @@ describe('inline shell approval', () => {
     expect(await second).toBe('deny');
   });
 
+  test('a prompt whose row another surface decided goes away unanswered, and the next one is drawn', async () => {
+    const agent = fakeClient({ name: 'shell' });
+    const screen = await mountChat(agent.client);
+    const decidedElsewhere = new AbortController();
+    const first = agent.requestShellApproval(shellRequest, decidedElsewhere.signal);
+    const second = agent.requestShellApproval({ ...shellRequest, command: 'sudo id' });
+    await screen.waitFor('first request', () => screen.frame().includes('sudo whoami'));
+    decidedElsewhere.abort();
+    expect(await first).toBeNull();
+    await screen.waitFor('second request', () => screen.frame().includes('sudo id'));
+    screen.mockInput.pressKey('n');
+    expect(await second).toBe('deny');
+  });
+
   test('an unseen command cannot receive a grant', async () => {
     const agent = fakeClient({ name: 'shell' });
     const screen = await mountChat(agent.client);

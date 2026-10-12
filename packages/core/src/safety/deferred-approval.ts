@@ -17,6 +17,7 @@ import {
   type ApprovalSpend,
   type ApprovalSpendOutcome,
   type DeferredApprovalChannel,
+  type ShellApprovalOutcome,
   type ShellApprovalRequest,
 } from './approval-gate';
 import { boundWriteOf, type ApprovalContent, type BoundFileWrite } from './bound-write';
@@ -41,6 +42,9 @@ export type DeferredApprovalStatus =
 
 /** What the owner can pick. `always` is `approved` plus a standing grant for the tripped rules on that executor. */
 export type DeferredApprovalAnswer = Extract<DeferredApprovalStatus, 'approved' | 'denied'> | 'always';
+
+/** A live prompt's answer, as the queue records it. */
+const ANSWER_OF = { allow: 'approved', allow_always: 'always', deny: 'denied' } as const satisfies Record<ShellApprovalOutcome, DeferredApprovalAnswer>;
 
 /** How long a denial answers before the queue asks again; standing policy lives in actor_config. */
 export const DENIAL_STANDING_MS = 24 * 60 * 60 * 1000;
@@ -413,6 +417,8 @@ export class DeferredApprovalQueue {
   private readonly newId: () => string;
   /** Bytes a park is keeping before its row names them. */
   private readonly parking = new Map<string, number>();
+  /** Asks blocked on a row's decision, by row id: the first answer from any surface releases them. */
+  private readonly awaiting = new Map<string, Set<() => void>>();
   /** One at a time, so a delete's check sees every keep queued before it. */
   private readonly serial = serialQueue();
 
@@ -446,14 +452,38 @@ export class DeferredApprovalQueue {
     };
 
     return {
-      park: async (req) => told(await this.park(req, actorId)),
-      held: async (req) => {
-        const verdict = this.held(req, this.now(), this.storeOf(actorId));
+      park: async (req) => {
+        const verdict = await this.park(req, actorId);
 
-        return verdict === null ? null : told(verdict);
+        return verdict.outcome === 'queued' ? { ...told(verdict), waiting: verdict.action.id } : told(verdict);
       },
+      decided: (id, signal) => this.decidedOrAborted(actorId, id, signal),
+      decide: async (id, outcome) => { await this.decide([id], ANSWER_OF[outcome]); },
       settle: async (spent, outcome) => { await this.settle(spent, outcome, actorId); },
     };
+  }
+
+  /** Resolves once the row no longer waits, or once `signal` aborts. */
+  private decidedOrAborted(actorId: string, id: string, signal: AbortSignal): Promise<void> {
+    const { promise, resolve } = Promise.withResolvers<void>();
+
+    if (signal.aborted || this.storeOf(actorId).get(id)?.status !== 'queued') {
+      resolve();
+
+      return promise;
+    }
+
+    const waiters = this.awaiting.get(id) ?? new Set();
+    this.awaiting.set(id, waiters.add(resolve));
+
+    signal.addEventListener('abort', () => {
+      waiters.delete(resolve);
+
+      if (waiters.size === 0 && this.awaiting.get(id) === waiters) this.awaiting.delete(id);
+      resolve();
+    }, { once: true });
+
+    return promise;
   }
 
   /** Parks an action or answers with the owner's standing decision; a re-ask returns the same row, so the turn's
@@ -606,11 +636,20 @@ export class DeferredApprovalQueue {
 
     const written = await this.performWrites(decided.filter((a) => a.actor === this.deps.store.actorId));
     this.notify({ kind: 'decided', actions: decided });
+    // An ask blocked on its row hears the answer there and runs on it now; only an ask that went away is woken.
+    const blocked = decided.filter((a) => this.awaiting.has(a.id));
+
+    for (const action of blocked) {
+      for (const release of this.awaiting.get(action.id) ?? []) release();
+      this.awaiting.delete(action.id);
+    }
+
+    const told = decided.filter((a) => !blocked.includes(a));
 
     // Each asker once, every one tried: the decision is already durable, and one asker's failed wake (an agent
     // retired meanwhile) is no reason another goes untold. The failures are the answer's, after.
-    const wakes = Effect.forEach(new Set(decided.map((a) => a.actor)), (actorId) => {
-      const own = decided.filter((a) => a.actor === actorId);
+    const wakes = Effect.forEach(new Set(told.map((a) => a.actor)), (actorId) => {
+      const own = told.filter((a) => a.actor === actorId);
 
       return Effect.result(this.deps.wake(actorId, {
         kind: DEFERRED_APPROVAL_SIGNAL,

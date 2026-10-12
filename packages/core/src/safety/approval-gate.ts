@@ -1,7 +1,7 @@
 /** Asks the owner about what review gates, and keeps their grants. */
 
 import { Effect } from 'effect';
-import { CODE_WORK_DID_NOT_START, diagnostics, KinuError, type ErrorCode } from '../obs/index';
+import { CODE_WORK_DID_NOT_START, detach, diagnostics, KinuError, toKinuError, type ErrorCode } from '../obs/index';
 import { boundWriteCommand, type WriteSubject } from './bound-write';
 import { dominant, reviewFileAccess, reviewShellCommand, type ApprovalResult, type FileAccess, type GatedExecutor } from './command-review';
 
@@ -12,6 +12,8 @@ export interface ShellApprovalRequest {
   readonly review: ApprovalResult;
   /** A file write's ask: what it replaces and with what. A parked one is bound to these bytes. */
   readonly write?: WriteSubject;
+  /** The queue row this ask is: a prompt showing it shows that row, and its answer decides that row. */
+  readonly approvalId?: string;
 }
 
 /** A channel's answer. 'allow_always' grants each tripped rule on this executor ({@link ApprovalGrant}). */
@@ -92,8 +94,11 @@ export interface ShellApprovalPolicy {
   mode(): ShellApprovalMode;
   /** Whether the owner granted this rule on this executor; consulted before asking. */
   granted?(grant: ApprovalGrant): boolean;
-  /** The 'gate' channel under 'strict', read live; null: nobody listens, so `deferrals`, else a refusal. */
-  requestApproval?: ((req: ShellApprovalRequest) => Promise<ShellApprovalOutcome | null>) | null;
+  /**
+   * A prompt in front of the owner under 'strict', read live; null: nobody answers there. With a queue it shows the
+   * ask's row and its answer decides that row; `signal` aborts once another surface decided it first.
+   */
+  requestApproval?: ((req: ShellApprovalRequest, signal: AbortSignal) => Promise<ShellApprovalOutcome | null>) | null;
   /** Where an unanswered 'gate' decision is parked on the owner. */
   deferrals?: DeferredApprovalChannel;
   /** Remember 'allow_always' for every rule the command tripped on this executor. */
@@ -120,14 +125,19 @@ export type ApprovalSpendOutcome =
 /** What the queue answers an ask: run on a grant it just spent, or the words to hand the model. */
 type QueueAnswer =
   | { readonly run: true; readonly spent: ApprovalSpend }
-  | { readonly run: false; readonly reason: 'denied' | 'unavailable'; readonly message: string };
+  /** `waiting`: the row the owner has yet to decide. */
+  | { readonly run: false; readonly reason: 'denied' | 'unavailable'; readonly message: string; readonly waiting?: string };
 
-/** Parks an unanswered 'gate' on the owner (safety/deferred-approval.ts). `run: true`: the grant is spent;
- *  `settle` refunds unrun attempts. */
+/**
+ * The owner's queue (safety/deferred-approval.ts): every gated ask is a row of it, whichever surface answers, so the
+ * first answer decides it once. `run: true`: the row's grant is spent; `settle` refunds unrun attempts.
+ */
 export interface DeferredApprovalChannel {
   park(req: ShellApprovalRequest): Promise<QueueAnswer>;
-  /** The answer a row already holds for this ask, parking nothing; null when no row holds one. */
-  held(req: ShellApprovalRequest): Promise<QueueAnswer | null>;
+  /** Resolves once row `id` no longer waits, decided from any surface, or once `signal` aborts. */
+  decided(id: string, signal: AbortSignal): Promise<void>;
+  /** A prompt's answer to row `id`; a row another surface decided first keeps that decision. */
+  decide(id: string, outcome: ShellApprovalOutcome): Promise<void>;
   /** Close out a spend. Called once per spend on every returning path, never when unknown. Idempotent. */
   settle(spent: ApprovalSpend, outcome: ApprovalSpendOutcome): Promise<void>;
 }
@@ -195,9 +205,11 @@ function refuse(reason: ErrorCode, message: string): GateAnswer {
 }
 
 /**
- * A gated ask under 'strict' or 'deny_all'. One ask has one answer: a row the queue holds for it answers first (an
- * approval spent before the run), so the live prompt never asks again what is parked or decided there; else the live
- * prompt; else, unanswered under 'strict', a new row. 'deny_all' never asks or parks.
+ * A gated ask under 'strict' or 'deny_all' ('deny_all' never asks or parks). With a queue, the ask is its row first
+ * (one write per ask): a row already decided answers it, and a waiting one is shown on the live prompt, if one is in
+ * front of the owner, beside every other surface that lists the queue. Whichever answers first decides the row once,
+ * and the ask follows that row: run on its approval, spent, or refused. Without a queue (a bare gate, or a write this
+ * deployment cannot park) the live prompt alone answers.
  */
 async function askOwner(
   review: ApprovalResult,
@@ -205,32 +217,65 @@ async function askOwner(
   ask: { readonly mode: ShellApprovalMode; readonly executor: string; readonly parks: boolean; readonly request: (parking: boolean) => Promise<ShellApprovalRequest> },
 ): Promise<GateAnswer> {
   const deferrals = ask.mode === 'strict' && ask.parks ? policy.deferrals : undefined;
-  const held = policy.requestApproval && deferrals !== undefined ? await deferrals.held(await ask.request(true)) : null;
 
-  if (held !== null) return held.run ? { run: true, spent: held.spent } : refuse(held.reason, held.message);
+  if (deferrals === undefined) return askLive(review, policy, ask);
+  const parked = await deferrals.park(await ask.request(true));
 
-  // Null channel means nobody is listening.
-  const outcome = ask.mode === 'strict' && policy.requestApproval ? await policy.requestApproval(await ask.request(false)) : null;
+  if (parked.run) return { run: true, spent: parked.spent };
+  const live = policy.requestApproval;
 
-  if (outcome !== null) {
-    if (!approvalGrants(outcome)) return refuse('denied', `${APPROVAL_DENIED} by the owner: ${formatApproval(review)}`);
+  // A parked write is decided on its row alone: the queue writes its bytes when approved.
+  if (parked.waiting === undefined || !live || (await ask.request(false)).write !== undefined) return refuse(parked.reason, parked.message);
+  const id = parked.waiting;
+  const shown = new AbortController();
+  const answering = live({ ...await ask.request(false), approvalId: id }, shown.signal);
+  let retired = false;
 
-    if (outcome === 'allow_always') policy.remember?.(gatedGrants(review, ask.executor));
+  // A prompt retired because another surface decided first may still fail after; that is recorded, never thrown.
+  shown.signal.addEventListener('abort', () => {
+    detach(Effect.map(Effect.promise(() => Promise.allSettled([answering])), ([late]) => {
+      if (retired && late?.status === 'rejected') {
+        diagnostics.failure('approval.prompt_failed', toKinuError({ doing: 'showing an approval another surface decided', cause: late.reason, otherwise: 'io' }), { approvalId: id });
+      }
+    }));
+  }, { once: true });
 
-    return { run: true };
-  }
+  const elsewhere = deferrals.decided(id, shown.signal).then(() => 'elsewhere' as const);
+  const first = await Promise.race([answering, elsewhere]).finally(() => { shown.abort(); });
 
-  const parked = deferrals === undefined ? undefined : await deferrals.park(await ask.request(true));
+  if (first === 'elsewhere') retired = true;
+  // Unanswered (the prompt went away): the row waits on the queue, as with nobody in front of the owner.
+  else if (first === null) return refuse(parked.reason, parked.message);
+  // An answer given after another surface decided the row changes nothing there.
+  else await deferrals.decide(id, first);
 
-  // Do not say "nobody to ask" under deny_all; it would invite re-asking.
-  if (parked === undefined) {
+  const decided = await deferrals.park(await ask.request(true));
+
+  return decided.run ? { run: true, spent: decided.spent } : refuse(decided.reason, decided.message);
+}
+
+/** No queue to hold the ask: the live prompt answers it alone, or nobody can. */
+async function askLive(
+  review: ApprovalResult,
+  policy: ShellApprovalPolicy,
+  ask: { readonly mode: ShellApprovalMode; readonly executor: string; readonly request: (parking: boolean) => Promise<ShellApprovalRequest> },
+): Promise<GateAnswer> {
+  const outcome = ask.mode === 'strict' && policy.requestApproval
+    ? await policy.requestApproval(await ask.request(false), new AbortController().signal)
+    : null;
+
+  if (outcome === null) {
+    // Do not say "nobody to ask" under deny_all; it would invite re-asking.
     return ask.mode === 'deny_all'
       ? refuse('denied', `NOT RUN: refused by standing policy (deny_all): ${formatApproval(review)}`)
       : refuse('unavailable', `NOT RUN: needs owner approval, nobody to ask: ${formatApproval(review)}`);
   }
 
-  // A parked grant was just spent; execute and carry the spend out.
-  return parked.run ? { run: true, spent: parked.spent } : refuse(parked.reason, parked.message);
+  if (!approvalGrants(outcome)) return refuse('denied', `${APPROVAL_DENIED} by the owner: ${formatApproval(review)}`);
+
+  if (outcome === 'allow_always') policy.remember?.(gatedGrants(review, ask.executor));
+
+  return { run: true };
 }
 
 /** The mode/grant/channel/deferral ladder; a `run: true` from a replayed park carries a spend the caller settles.
