@@ -26,7 +26,8 @@ import "./index.css";
 import { KINU_MARK, MARK_IDS, mark, codenameFor, mintAgentName, WorkspaceTerminalInputSchema } from "@kinu.run/core";
 import { ephemeralSlateAddress, hostedActorSocketPath, mcpPresetById, READS_CHANGED_EVENT, readsWrittenBy, seededRandom, SLATES_CHANGED_METADATA_KEY } from "@kinu.run/core";
 import { CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT, OwnerAnswersSchema, PositionCursorSchema, sanitizeWorkspaceLogoSvg } from "@kinu.run/core";
-import type { AlternateTakeSet, AskingAgent, OwnerAnswer, ParkedWriteReview, ReasoningEffort, TakePickOutcome } from "@kinu.run/core";
+import type { AlternateTakeSet, AskingAgent, OwedOwnerIntent, OwnerAnswer, ParkedWriteReview, ReasoningEffort, TakePickOutcome } from "@kinu.run/core";
+import { OwedOwnerIntentSchema } from "@kinu.run/core";
 import {
   approvalDocument, authDocument, installDocument, loginDocument,
 } from "@kinu.run/core";
@@ -2007,6 +2008,41 @@ const ASKED_THREAD: UIMessage[] = [
   }),
 ];
 
+const GALLERY_OWED_INTENTS: OwedOwnerIntent[] = [];
+
+/** `&intent=decision|answers|retry` shows an intent waiting for the agent's next wake. Retry uses `transcript=refused`. */
+function galleryOwedIntents(): readonly OwedOwnerIntent[] {
+  const replacement = document.documentElement.dataset.galleryOwedIntents;
+
+  if (replacement !== undefined) return v.parse(v.array(OwedOwnerIntentSchema), JSON.parse(replacement));
+  const kind = new URLSearchParams(location.search).get("intent");
+
+  if (kind === "decision") return [{ id: "owed-decision", kind, target: galleryAgentPlan.id, actor: null }];
+
+  if (kind === "answers") return [{ id: "owed-answers", kind, target: "q-1", actor: null }];
+
+  if (kind === "retry") {
+    const newest = REFUSED_THREAD.find((message) => message.role === "user");
+
+    return newest === undefined ? [] : [{ id: "owed-retry", kind, target: newest.id, actor: null }];
+  }
+
+  return GALLERY_OWED_INTENTS;
+}
+
+function galleryOweIntent(intent: OwedOwnerIntent): JsonValue {
+  GALLERY_OWED_INTENTS.push(intent);
+  galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["listOwedIntents"] }));
+
+  return { owed: intent.id };
+}
+
+window.addEventListener("gallery:owed-intents", (event) => {
+  if (!(event instanceof CustomEvent)) return;
+  document.documentElement.dataset.galleryOwedIntents = JSON.stringify(v.parse(v.array(OwedOwnerIntentSchema), event.detail));
+  galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["listOwedIntents"] }));
+});
+
 function seedFrameTranscript(transcript: string | null): void {
   if (transcript === "revert") seedGalleryChat(REVERT_THREAD);
 
@@ -2712,7 +2748,23 @@ async function galleryDecidePlan(args?: unknown[]): Promise<JsonValue> {
 
   if (asked === "fail-first" && sent === 1) throw new Error("review-fixture-rpc-failed");
 
+  if (asked === "owed") {
+    const [target] = v.parse(v.tuple([v.string(), v.number(), v.picklist(["approve", "request_changes"])]), args);
+
+    return galleryOweIntent({ id: "owed-decision", kind: "decision", target, actor: null });
+  }
+
   return v.parse(JsonValueSchema, galleryPlanRpc("decidePlanReview", args)?.value ?? null);
+}
+
+async function galleryAnswerQuestions(args?: unknown[]): Promise<JsonValue> {
+  const [target, answers, actor] = v.parse(v.tuple([v.string(), OwnerAnswersSchema, v.optional(v.nullable(v.string()))]), args);
+
+  if (new URLSearchParams(location.search).get("answer") === "owed") {
+    return galleryOweIntent({ id: "owed-answers", kind: "answers", target, actor: actor ?? null });
+  }
+
+  return galleryCloseQuestions("answered", answers);
 }
 
 /** Settles a stranded turn as the server does: the claim frame says so, and `data-gallery-recoveries` counts the asks. */
@@ -2797,7 +2849,8 @@ const ASYNC_PAGE_RPC = new Map<string, (args?: unknown[]) => Promise<JsonValue>>
   ["listBackgroundJobs", galleryJobsRead],
   ["listPendingActions", galleryPendingActions],
   ["listOwnerQuestions", async () => v.parse(JsonValueSchema, galleryQuestions())],
-  ["answerOwnerQuestions", async (args) => galleryCloseQuestions("answered", v.parse(v.tuple([v.string(), OwnerAnswersSchema]), args)[1])],
+  ["listOwedIntents", async () => v.parse(JsonValueSchema, galleryOwedIntents())],
+  ["answerOwnerQuestions", galleryAnswerQuestions],
   ["dismissOwnerQuestions", async () => galleryCloseQuestions("dismissed", null)],
   ["decidePlanReview", galleryDecidePlan],
   ["recoverStrandedTurn", galleryRecoverTurn],
@@ -5234,7 +5287,7 @@ const workRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
 function PlanReviewFrame() {
   return (
     <div data-gallery-plan-review className="p-bg p-text h-screen">
-      <PlanReviewView plan={galleryAgentPlan} rpc={workspacePageRpc} />
+      <PlanReviewView plan={galleryAgentPlan} rpc={workspacePageRpc} owedIntents={galleryOwedIntents()} />
     </div>
   );
 }
