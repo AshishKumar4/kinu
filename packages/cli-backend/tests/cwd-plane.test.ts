@@ -386,6 +386,7 @@ describe('addressing the bound directory', () => {
       decided: async () => 'aborted',
       decide: async () => {},
       take: async () => ({ run: false, reason: 'unavailable', message: 'NOT RUN — not decided' }),
+      remember: () => {},
       settle: async () => {},
     };
 

@@ -72,10 +72,13 @@ function setup(opts: {
   });
 
   const executed: string[] = [];
+  /** How many grants the owner held as each command ran. */
+  const grantsAtRun: number[] = [];
 
   const rawShell: Shell = {
     exec: async (command: string) => {
       executed.push(String(command));
+      grantsAtRun.push(granted.length);
 
       return { stdout: 'ran', stderr: '', exitCode: 0 };
     },
@@ -99,7 +102,7 @@ function setup(opts: {
   };
 
   return {
-    queue, store, sql, shell, executed, delivered, granted, audited, shellTool,
+    queue, store, sql, shell, executed, grantsAtRun, delivered, granted, audited, shellTool,
     advance: (ms: number) => { elapsed += ms; },
   };
 }
@@ -287,6 +290,19 @@ describe('the standing modes still decide first', () => {
     expect(await asking).toBe('ran');
     await deciding;
     expect({ executed, delivered }).toEqual({ executed: [GATED], delivered: [] });
+  });
+
+  test('an always-answer from another surface is kept before the ask waiting on it runs', async () => {
+    const live = livePrompts(1);
+    const { shellTool, grantsAtRun, queue } = setup({ approve: live.approve });
+    const asking = shellTool.execute({ command: GATED });
+
+    await live.shown;
+    await queue.decide(['defer-1'], 'always');
+
+    expect(await asking).toBe('ran');
+    expect(grantsAtRun).toHaveLength(1);
+    expect(grantsAtRun[0]).toBeGreaterThan(0);
   });
 
   test('a row decided on another surface retires its live prompt, and a late answer there changes nothing', async () => {

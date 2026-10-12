@@ -101,8 +101,6 @@ export interface ShellApprovalPolicy {
   requestApproval?: ((req: ShellApprovalRequest, signal: AbortSignal) => Promise<ShellApprovalOutcome | null>) | null;
   /** Where an unanswered 'gate' decision is parked on the owner. */
   deferrals?: DeferredApprovalChannel;
-  /** Remember 'allow_always' for every rule the command tripped on this executor. */
-  remember?(grants: readonly ApprovalGrant[]): void;
   /** Refreshes `mode()` and `granted()` before a decision, for facets whose grants are the root's. */
   resolve?(): Promise<void>;
 }
@@ -144,6 +142,8 @@ export interface DeferredApprovalChannel {
   /** The decided row `id`, for the ask that waited on it: its approval spent, its denial, or that another ask of the
    *  same row used its approval. Never a new row. */
   take(id: string): Promise<QueueAnswer>;
+  /** An always-answer to an ask no row holds (a write this deployment cannot park), kept as the queue keeps its own. */
+  remember(grants: readonly ApprovalGrant[]): void;
   /** Close out a spend. Called once per spend on every returning path, never when unknown. Idempotent. */
   settle(spent: ApprovalSpend, outcome: ApprovalSpendOutcome): Promise<void>;
 }
@@ -294,7 +294,7 @@ async function askLive(
 
   if (!approvalGrants(outcome)) return refuse('denied', `${APPROVAL_DENIED} by the owner: ${formatApproval(review)}`);
 
-  if (outcome === 'allow_always') policy.remember?.(gatedGrants(review.hits, ask.executor));
+  if (outcome === 'allow_always') policy.deferrals?.remember(gatedGrants(review.hits, ask.executor));
 
   return { run: true };
 }
@@ -402,7 +402,7 @@ export interface InheritedApprovalSource {
 }
 
 /**
- * A facet's policy: no `remember` or `requestApproval`, so it cannot widen its reach; `strict` with nothing
+ * A facet's policy: no `requestApproval`, so it cannot widen its reach; `strict` with nothing
  * granted until the first resolve. A gated command parks on the owner through the workspace's one queue.
  */
 export function createInheritedApprovalPolicy(

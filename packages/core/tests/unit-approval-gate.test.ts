@@ -4,7 +4,13 @@
  */
 
 import { describe, test, expect } from 'bun:test';
+import { Database } from 'bun:sqlite';
+import { Effect } from 'effect';
+import { createTestActors } from '@kinu.run/test-utils';
 import {
+  DeferredApprovalQueue,
+  DeferredApprovalStore,
+  initDeferredApprovalsTable,
   reviewCommand,
   formatApproval,
   gateExec,
@@ -18,6 +24,7 @@ import {
   type ApprovalDecision,
   type ShellApprovalRequest,
 } from '../src/index';
+import { makeExecRaw, makeSql } from './helpers';
 
 /** The user's files — where every baseline severity applies. */
 const THEIRS: FilesOwner = 'user';
@@ -409,10 +416,23 @@ describe('gateExec', () => {
 });
 
 describe('gateExec — standing grants', () => {
-  /** The owner's remembered answers plus a record of who got asked. */
+  /** The owner's remembered answers, kept by the queue every ask is a row of, plus a record of who got asked. */
   function grantStore(initial: readonly string[] = []) {
     const held = new Set(initial);
     const asked: string[] = [];
+    const db = new Database(':memory:');
+    const sql = makeSql(db);
+    const execRaw = makeExecRaw(db);
+    initDeferredApprovalsTable(execRaw);
+    let seq = 0;
+
+    const queue = new DeferredApprovalQueue({
+      writes: null,
+      store: new DeferredApprovalStore(sql, createTestActors(sql, execRaw).main),
+      wake: () => Effect.void,
+      remember: (grants) => { for (const g of grants) held.add(formatApprovalGrant(g)); },
+      newId: () => `ask-${String(seq += 1)}`,
+    });
 
     return {
       held,
@@ -421,7 +441,7 @@ describe('gateExec — standing grants', () => {
         const policy: ShellApprovalPolicy = {
           mode: () => 'strict',
           granted: (grant) => held.has(formatApprovalGrant(grant)),
-          remember: (grants) => { for (const g of grants) held.add(formatApprovalGrant(g)); },
+          deferrals: queue.channel,
           requestApproval: async () => {
             asked.push(executor.name);
 
@@ -442,7 +462,7 @@ describe('gateExec — standing grants', () => {
 
   test('the grant does not leak to another executor', async () => {
     const store = grantStore(['rm-recursive@device']);
-    expect(await store.on(PARENT, 'deny').run('rm -rf /tmp/scratch')).toContain('Denied by the owner');
+    expect(await store.on(PARENT, 'deny').run('rm -rf /tmp/scratch')).toContain('the owner refused this');
     expect(store.asked).toEqual(['parent']);
   });
 
@@ -455,7 +475,7 @@ describe('gateExec — standing grants', () => {
     test(asks.name, async () => {
       const store = grantStore(['rm-recursive@device']);
 
-      expect(await store.on(DEVICE, 'deny').run(asks.command)).toContain('Denied by the owner');
+      expect(await store.on(DEVICE, 'deny').run(asks.command)).toContain('the owner refused this');
       expect(store.asked).toEqual([DEVICE.name]);
     });
   }
@@ -474,7 +494,7 @@ describe('gateExec — standing grants', () => {
   test('the same command on an executor the owner never granted still asks', async () => {
     const store = grantStore();
     expect(await store.on(DEVICE, 'allow_always').run('rm -rf /tmp/one')).toBe('ran:rm -rf /tmp/one');
-    expect(await store.on(PARENT, 'deny').run('rm -rf /tmp/one')).toContain('Denied by the owner');
+    expect(await store.on(PARENT, 'deny').run('rm -rf /tmp/one')).toContain('the owner refused this');
     expect(store.asked).toEqual([DEVICE.name, PARENT.name]);
   });
 

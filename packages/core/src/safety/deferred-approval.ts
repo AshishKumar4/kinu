@@ -473,6 +473,7 @@ export class DeferredApprovalQueue {
       decided: (id, signal) => this.decidedOrAborted(actorId, id, signal),
       decide: async (id, outcome) => { await this.decide([id], ANSWER_OF[outcome]); },
       take: async (id) => told(this.take(id, actorId)),
+      remember: (grants) => { this.deps.remember(grants); },
       settle: async (spent, outcome) => { await this.settle(spent, outcome, actorId); },
     };
   }
@@ -662,6 +663,12 @@ export class DeferredApprovalQueue {
       if (action) decided.push(action);
     }
 
+    if (answer === 'always' && decided.length > 0) {
+      // Kept as the rows are decided, before any ask runs on them: one that runs settles its row and its hits.
+      // Not re-reviewed: that would lose the call's member and cwd.
+      this.deps.remember(decided.flatMap((a) => gatedGrants(this.storeOf(a.actor).hits(a.id), a.executor)));
+    }
+
     // An ask blocked on its row hears the answer there, at the moment it is recorded, and runs on it now; only an ask
     // that went away before is woken.
     const blocked = decided.filter((action) => this.awaiting.has(action.id));
@@ -674,11 +681,6 @@ export class DeferredApprovalQueue {
     await this.release(boundBytes([...swept, ...decided.filter((a) => a.status === 'denied').map((a) => a.command)]));
 
     if (decided.length === 0) return decided;
-
-    if (answer === 'always') {
-      // Not re-reviewed: that would lose the call's member and cwd.
-      this.deps.remember(decided.flatMap((a) => gatedGrants(this.storeOf(a.actor).hits(a.id), a.executor)));
-    }
 
     const written = await this.performWrites(decided.filter((a) => a.actor === this.deps.store.actorId));
     this.notify({ kind: 'decided', actions: decided });
