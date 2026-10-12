@@ -9,6 +9,7 @@ import { actorConnectionTag } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import { asPane } from './helpers/agents-sdk';
 import { catalogTurn, fireAlarm, gatewayWorkspace, GATEWAY_CATALOG, reactivateOrchestratorHarness, until, workspaceMainActor, type StartedHarness } from './helpers/actor-harness';
+import { copyNextOpening } from './helpers/agent-facets';
 import { chatCompletion, requestOf, stubAiBinding, type StubbedAiBinding } from './helpers/platform-gateway';
 
 afterEach(() => { setSystemTime(); });
@@ -95,5 +96,35 @@ test("a Stop the workspace reset before main's isolate took it cancels what that
   expect({ after: asked.some((prompt) => prompt.includes('AFTER_STOP_MARKER')), queued: asked.some((prompt) => prompt.includes('QUEUED_MARKER')) })
     .toEqual({ after: true, queued: false });
   // The Stop is answered: its isolate took it after the reset, and nothing of it is owed now.
+  expect(restarted.db.query('SELECT generation, retired FROM agent_stops WHERE actor_id = ?').all(main)).toEqual([{ generation: 1, retired: 1 }]);
+});
+
+/** An opening is the agent's isolate asking to begin what it queued: asked while a Stop the workspace reset before the
+ *  isolate took is owed, it was queued before that Stop, so the Stop crosses first and the opening is refused. */
+test("an opening asked while a Stop is owed after the workspace reset is refused, and the Stop crosses first", async () => {
+  const parked = Promise.withResolvers<Response>();
+  let resetting = true;
+  const { gateway, asked } = recordingGateway((prompt) => (resetting && prompt.includes('RUNNING_MARKER') ? parked.promise : null));
+  const workspace = gatewayWorkspace(gateway);
+  const main = workspaceMainActor(workspace.db).actorId;
+  const copied = copyNextOpening(workspace.agent.agentOf(main).storageKey);
+
+  await catalogTurn(workspace.agent, 'Start the ledger.');
+  const template = await copied;
+
+  expect(await workspace.agent.runTaskFromMcp('RUNNING_MARKER')).toEqual({ status: 'queued' });
+  await until(() => asked.some((prompt) => prompt.includes('RUNNING_MARKER')), 'the running task never reached its model');
+  // The Stop commits in the workspace, and the workspace resets before main's isolate takes it.
+  workspace.agent.harnessIsolateRefusal = { refuses: (id) => id === main, error: new KinuError('unavailable', 'the workspace reset') };
+  await expect(workspace.agent.cancelCurrentWork()).rejects.toThrow('the workspace reset');
+  resetting = false;
+  const restarted = await afterReset(workspace, gateway);
+  const port = await restarted.agent.agentWorkspace(main);
+
+  // The isolate, restored with a turn it queued before the Stop, asks to open it before the Stop crossed.
+  await expect(port.prepareChat({ ...template, turnId: 'queued-before-stop', runId: 'run-queued-before-stop', seq: (template.seq ?? 0) + 100 }))
+    .rejects.toMatchObject({ code: 'cancelled' });
+  await restarted.agent.harnessAgentsIdle();
+
   expect(restarted.db.query('SELECT generation, retired FROM agent_stops WHERE actor_id = ?').all(main)).toEqual([{ generation: 1, retired: 1 }]);
 });

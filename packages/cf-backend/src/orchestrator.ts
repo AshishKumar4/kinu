@@ -972,6 +972,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       prepareTurn: async (bound) => {
         this.admitWork();
 
+        // Asked while a Stop of the agent's is owed, it was queued before that Stop, which its isolate takes first.
+        if (await this.stopReplayed(actorId)) return settleSync(Effect.fail(new KinuError('cancelled', `Task ${bound.turnId} was stopped.`)));
         // A turn opens on the account's settings as they are now (`accountSettingsAtOpen`).
         await this.accountSettingsAtOpen();
 
@@ -981,6 +983,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         this.admitWork();
 
         if (request.turnId !== null) {
+          // As a run's: an opening asked while a Stop is owed was queued before it.
+          if (await this.stopReplayed(actorId)) return settleSync(Effect.fail(new KinuError('cancelled', `Turn ${request.turnId} was stopped.`)));
           // A turn opens on the account's settings as they are now; a chat built with no turn reads what is held.
           await this.accountSettingsAtOpen();
         }
