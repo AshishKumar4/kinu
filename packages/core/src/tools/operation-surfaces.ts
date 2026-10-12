@@ -30,15 +30,12 @@ const oneLine = (type: string): string => type.replace(/\s+/gu, ' ');
 /**
  * What each operation is told as, rendered once: its result type and its eval declaration are pure in the operation, a
  * module-level object that never changes, and every turn's tool build asks them again. Keyed by the operation; written
- * by its first rendering; dropped only with the operation, so a held text cannot go stale.
+ * as it is first rendered; dropped only with the operation, so a held text cannot go stale.
  */
 const RENDERED = { returns: new WeakMap<Operation, string>(), declarations: new WeakMap<Operation, string>() };
 
 function rendered(held: WeakMap<Operation, string>, op: Operation, render: (op: Operation) => string): string {
-  const known = held.get(op);
-
-  if (known !== undefined) return known;
-  const text = render(op);
+  const text = held.get(op) ?? render(op);
 
   held.set(op, text);
 
