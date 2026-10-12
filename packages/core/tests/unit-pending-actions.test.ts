@@ -19,7 +19,7 @@ const EMPTY: PendingActionInputs = {
 
 function parked(over: Partial<DeferredApproval> = {}): DeferredApproval {
   return {
-    id: 'defer-1', actor: 'actor-main', command: 'sudo systemctl restart nginx', executor: 'device',
+    id: 'defer-1', actor: 'actor-main', command: 'sudo systemctl restart nginx', executor: 'device', context: '',
     reason: 'Approval review: gate',
     status: 'queued', requestedAt: 2000, decidedAt: null, ...over,
   };

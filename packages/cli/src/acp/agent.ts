@@ -211,18 +211,18 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
             status: 'pending' as const,
             content: [{
               type: 'content' as const,
-              content: { type: 'text' as const, text: req.review.hits.map((h) => h.explanation).join('\n') },
+              content: { type: 'text' as const, text: [req.context === '' ? '' : `Runs ${literalText(req.context)}`, ...req.review.hits.map((h) => h.explanation)].filter(Boolean).join('\n') },
             }],
           },
           options: permissionOptions(req),
         // Retired when another surface decided the row: the editor withdraws its prompt.
         }, { cancellationSignal: signal });
 
-        // 'cancelled' (the turn is going away, or the prompt was withdrawn): unanswered, so the row waits and the tool
-        // stops here without a denial the owner never gave.
+        // Cancelled (the turn is going away, or the prompt was withdrawn) or an option this agent never offered:
+        // unanswered, so the row waits and the tool stops here without a denial the owner never gave.
         if (outcome.outcome.outcome !== 'selected') return null;
 
-        return OUTCOME_BY_OPTION.get(outcome.outcome.optionId) ?? 'deny';
+        return OUTCOME_BY_OPTION.get(outcome.outcome.optionId) ?? null;
       });
 
       return { sessionId: session.id };

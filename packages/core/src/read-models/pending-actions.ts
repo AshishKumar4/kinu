@@ -34,6 +34,8 @@ export interface PendingAction {
   readonly planRef?: { readonly owner: string; readonly id: string; readonly revision: number };
   /** A parked write over the user's file: its review is `reviewParkedWrite` of this id. */
   readonly write?: { readonly path: string };
+  /** Where and how a parked command runs (directory, named shell, environment, stdin), part of what approving allows. */
+  readonly where?: string;
   /** A proposed workspace: the SOUL.md it would start with, exactly as approving writes it. */
   readonly proposal?: { readonly name: string; readonly brief: string; readonly soul: string };
   /** The actor whose ask it is, by id (a parked command, a plan); absent, the workspace's own (a proposal). */
@@ -142,6 +144,7 @@ export function buildPendingActions(input: PendingActionInputs): PendingAction[]
       detail: action.command,
       at: action.requestedAt,
       raisedBy: action.actor,
+      ...(action.context !== '' && { where: action.context }),
     } : {
       id: action.id,
       kind: 'deferred_action',

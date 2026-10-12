@@ -423,6 +423,13 @@ const PERMISSION_CASES: PermissionCase[] = [
     answer: { outcome: { outcome: 'cancelled' } },
     outcome: null,
   },
+  {
+    name: 'an option the agent never offered leaves the command unanswered, not denied',
+    command: 'sudo reboot',
+    hits: [],
+    answer: { outcome: { outcome: 'selected', optionId: 'allow_everything_forever' } },
+    outcome: null,
+  },
 ];
 
 describe('kinu acp — permission', () => {
@@ -438,6 +445,7 @@ describe('kinu acp — permission', () => {
           return present(fake.approval, 'the fake client approval hook')({
             command: permission.command,
             executor: 'device',
+            context: '',
             review: { decision: 'gate', hits: permission.hits },
           }, new AbortController().signal);
         },
@@ -462,6 +470,7 @@ describe('kinu acp — what the editor shows for approval', () => {
         return present(fake.approval, 'the fake client approval hook')({
           command: 'rm -rf ./build \u202E\u2066gpj.x\u200B',
           executor: 'device',
+          context: '',
           review: { decision: 'gate', hits: [] },
         }, new AbortController().signal);
       },

@@ -527,6 +527,7 @@
     "id TEXT NOT NULL",
     "command TEXT NOT NULL",
     "executor TEXT NOT NULL DEFAULT ''",
+    "context TEXT NOT NULL DEFAULT ''",
     "reason TEXT NOT NULL",
     "status TEXT NOT NULL DEFAULT 'queued'",
     "requested_at INTEGER NOT NULL",

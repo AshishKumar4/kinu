@@ -84,6 +84,8 @@ export function waitingApprovalDetails(action: DeferredApproval): string {
   const write = boundWriteOf(action.command);
   const what = write === null ? literalText(action.command || '(command)') : `Replace ${literalText(write.path)}`;
 
-  return [what, `Executor: ${executorLabel(action.executor)}`, literalText(action.reason), `Asked ${timeAgo(action.requestedAt)}`]
+  const where = action.context === '' ? '' : `Runs ${literalText(action.context)}`;
+
+  return [what, `Executor: ${executorLabel(action.executor)}`, where, literalText(action.reason), `Asked ${timeAgo(action.requestedAt)}`]
     .filter(Boolean).join('\n');
 }

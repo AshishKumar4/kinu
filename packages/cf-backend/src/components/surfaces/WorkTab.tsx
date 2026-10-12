@@ -440,6 +440,7 @@ export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: { ac
               onChange={() => flow.toggle(action.id, allIds)} disabled={state.busy} />
             <span className="min-w-0 flex-1">
               <code className="block p-t-code p-text break-all whitespace-pre-wrap">{revealMisrepresenting(action.detail ?? "")}</code>
+              {action.where !== undefined && <span className="block p-meta p-text-2 mt-0.5 break-all">Runs {revealMisrepresenting(action.where)}</span>}
               <span className="block p-meta p-text-3 mt-0.5">{action.title} · queued {timeAgo(action.at)}</span>
             </span>
           </label>

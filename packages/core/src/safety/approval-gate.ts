@@ -9,6 +9,9 @@ export interface ShellApprovalRequest {
   readonly command: string;
   /** The target executor; the same command is a different request on a different machine. */
   readonly executor: string;
+  /** Where and how it runs there (directory, named shell, environment, stdin, language), shown with the command; the
+   *  same command in another context is another request. Empty when the command says it all. */
+  readonly context: string;
   readonly review: ApprovalResult;
   /** A file write's ask: what it replaces and with what. A parked one is bound to these bytes. */
   readonly write?: WriteSubject;
@@ -65,7 +68,8 @@ export function approveFileAccess(
 
   return Effect.gen(function* () {
     const decision = yield* Effect.promise(() => decideApproval(
-      { command: `file ${access.op} ${access.hostPath}`, executor, write: write?.subject, parks: write?.parks ?? false }, review, policy,
+      // The path is the whole of where a file access lands.
+      { command: `file ${access.op} ${access.hostPath}`, executor, context: '', write: write?.subject, parks: write?.parks ?? false }, review, policy,
     ));
 
     if (!decision.run) return yield* Effect.fail(decision.error);
@@ -165,6 +169,8 @@ export interface ExecGateTuning<R> {
   readonly refusalCode?: (result: R) => ErrorCode | null;
   /** Absent: a shell command from the executor's session. */
   readonly review?: (command: string, rest: readonly unknown[]) => Promise<ApprovalResult>;
+  /** The call's execution context from its options ({@link ShellApprovalRequest.context}); absent: none. */
+  readonly context?: (rest: readonly unknown[]) => Promise<string>;
 }
 
 export function gateExec<R>(
@@ -185,7 +191,8 @@ export function gateExec<R>(
       ? reviewShellCommand(executor, cmd, await executor.shellSession?.at(undefined, undefined))
       : await tuning.review(cmd, rest);
 
-    const decision = await decideApproval({ command: cmd, executor: executor.name }, review, policy);
+    const context = await tuning.context?.(rest) ?? '';
+    const decision = await decideApproval({ command: cmd, executor: executor.name, context }, review, policy);
 
     if (!decision.run) return denyResult(decision.error);
     const result = await execute(cmd, ...rest);
@@ -303,13 +310,13 @@ async function askLive(
  *  A write is shown to whoever is asked and parks bound to its bytes; `parks` false refuses an unanswered ask. */
 async function decideApproval(
   subject: {
-    readonly command: string; readonly executor: string;
+    readonly command: string; readonly executor: string; readonly context: string;
     readonly write?: () => Promise<WriteSubject>; readonly parks?: boolean;
   },
   rawReview: ApprovalResult,
   policy: ShellApprovalPolicy,
 ): Promise<GateAnswer> {
-  const { command: cmd, executor, write, parks = true } = subject;
+  const { command: cmd, executor, context, write, parks = true } = subject;
   await policy.resolve?.();
   const mode = policy.mode();
   const review = afterGrants(rawReview, policy, executor);
@@ -320,9 +327,9 @@ async function decideApproval(
     shown ??= write?.() ?? null;
     const bytes = await shown;
 
-    if (bytes === null) return { command: cmd, executor, review };
+    if (bytes === null) return { command: cmd, executor, context, review };
 
-    return { command: parking ? boundWriteCommand(bytes) : cmd, executor, review, write: bytes };
+    return { command: parking ? boundWriteCommand(bytes) : cmd, executor, context, review, write: bytes };
   };
 
   let spent: ApprovalSpend | undefined;
@@ -361,7 +368,8 @@ async function decideApproval(
   return spent === undefined ? { run: true } : { run: true, spent };
 }
 
-/** Grants an 'always' answer buys: each asked rule, on its executor. */
+/** Grants an 'always' answer buys: each asked rule, on its executor. Wider than the ask on purpose: the ask is the
+ *  command in its context, while "always allow" trusts the rules it tripped on that machine, wherever they recur. */
 export function gatedGrants(hits: readonly { readonly rule: string; readonly decision: string }[], executor: string): ApprovalGrant[] {
   return hits.filter((h) => h.decision === 'gate').map((h) => ({ rule: h.rule, executor }));
 }

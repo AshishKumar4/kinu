@@ -45,7 +45,10 @@ its commands wait on you in its own chat (and in the workspace's list), and
 once you approve one, it is told and runs it under its own permissions.
 In the terminal, a command the agent asks about while you are there shows in
 the chat's approval prompt, and it is the same card: whichever answers first,
-the prompt or a card, decides it once, and the other drops it.
+the prompt or a card, decides it once, and the other drops it. A command waits
+with where it runs (its directory, named shell, environment and input):
+approving runs it there and nowhere else. Always allow is wider on purpose: it
+trusts the rules that command tripped on that machine.
 
 ## 2. Day one
 

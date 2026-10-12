@@ -871,7 +871,9 @@ interface DeviceConnectOverlayProps {
 }
 
 function shellApprovalDetails(request: ShellApprovalRequest): string {
-  return `${shownCommand(request.command)}\nExecutor: ${executorLabel(request.executor)}\n${request.review.hits.map((hit) => `${hit.rule}: ${hit.explanation}`).join('\n')}`;
+  const where = request.context === '' ? '' : `\nRuns ${literalText(request.context)}`;
+
+  return `${shownCommand(request.command)}\nExecutor: ${executorLabel(request.executor)}${where}\n${request.review.hits.map((hit) => `${hit.rule}: ${hit.explanation}`).join('\n')}`;
 }
 
 function approvalDetails(prompt: ApprovalPrompt): string {

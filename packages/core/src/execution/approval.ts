@@ -5,6 +5,7 @@ import { exists as nimbusExists, type Awaitable, type VFS } from '@nimbus-sh/cor
 import { commandFilesOwner, literalWords, onUserRoots, reviewProgram, reviewShellCommand, type ApprovalResult, type FileAccess, type GatedExecutor } from '../safety/command-review';
 import { approveFileAccess, gateExec, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
 import { asBytes, currentBytes } from '../safety/bound-write';
+import { sha256Hex } from '../safety/argument-digest';
 import * as v from 'valibot';
 import { answeredRefusal } from './exec-result';
 import type { ExecutorProvider, ExecutorTool, ExecutorToolResult } from './types';
@@ -41,6 +42,11 @@ export function withApprovalGatedShell(
         const { name, cwd } = shellExecOptions({ value: rest[0] });
 
         return reviewShellCommand({ name: 'workspace', ...reach }, command, await session?.at(name, cwd));
+      },
+      context: async (rest) => {
+        const { name, cwd, stdin } = shellExecOptions({ value: rest[0] });
+
+        return executionContext({ cwd, at: await session?.at(name, cwd), name, stdin });
       },
     },
   );
@@ -181,12 +187,51 @@ export function withApprovalGatedFiles(
 /** Tools taking a shell command or a program first; VFS-shaped tools are out of scope. */
 const SHELL_COMMAND_MEMBERS = ['exec', 'startProcess', 'runCode'] as const;
 
-const CallOptionsSchema = v.object({ cwd: v.optional(v.string()), language: v.optional(v.string()) });
+const CallOptionsSchema = v.object({
+  cwd: v.optional(v.string()),
+  language: v.optional(v.string()),
+  env: v.optional(v.record(v.string(), v.string())),
+  stdin: v.optional(v.string()),
+  install: v.optional(v.string()),
+});
 
 function parseCallOptions(input: { value: unknown }): v.InferOutput<typeof CallOptionsSchema> {
   const parsed = v.safeParse(CallOptionsSchema, input.value);
 
   return parsed.success ? parsed.output : {};
+}
+
+/**
+ * What besides its words decides what a call does: where it starts (as the session resolves it; the words asked when
+ * that is not known), the named shell whose state it inherits, its environment, its stdin, its language. Values that
+ * may be secret are named by digest. One canonical spelling, so the same call is the same ask and another is not.
+ */
+function executionContext(call: {
+  readonly cwd?: string;
+  readonly at?: ShellCwd;
+  readonly name?: string;
+  readonly env?: Readonly<Record<string, string>>;
+  readonly stdin?: string;
+  readonly language?: string;
+  readonly install?: string;
+}): string {
+  const parts: string[] = [];
+  const env = Object.entries(call.env ?? {}).sort(([a], [b]) => a.localeCompare(b));
+
+  if (call.at !== undefined && !call.at.mayBeUsers) parts.push(`in ${call.at.cwd}`);
+  else if (call.cwd !== undefined) parts.push(`in ${call.cwd} (unresolved)`);
+
+  if (call.name !== undefined) parts.push(`shell ${call.name}`);
+
+  if (env.length > 0) parts.push(`env ${env.map(([key]) => key).join(',')} sha256:${sha256Hex(JSON.stringify(env))}`);
+
+  if (call.stdin !== undefined) parts.push(`stdin sha256:${sha256Hex(call.stdin)}`);
+
+  if (call.language !== undefined) parts.push(`language ${call.language}`);
+
+  if (call.install !== undefined) parts.push(`install ${call.install}`);
+
+  return parts.join(' · ');
 }
 
 /** `runCode` is a shell command only in the shell language. */
@@ -221,6 +266,11 @@ export function gateProviderExec(provider: ExecutorProvider, policy: ShellApprov
         policy,
         refusalCode: (result) => result === undefined ? null : answeredRefusal(result)?.reason ?? null,
         review: (command, rest) => reviewCall(provider, name, command, rest),
+        context: async (rest) => {
+          const options = parseCallOptions({ value: rest[0] });
+
+          return executionContext({ ...options, at: await provider.shellSession?.at(undefined, options.cwd) });
+        },
       },
     );
 

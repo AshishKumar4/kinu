@@ -59,6 +59,12 @@ export interface DeferredApproval {
   readonly command: string;
   /** The machine it was bound for; a grant for one executor never answers for another. */
   readonly executor: string;
+  /**
+   * Where and how it runs there (directory, named shell, environment, stdin, language), as the gate resolved them;
+   * empty when the command says it all (a file access names its path). Part of the ask: an approval runs this command
+   * in this context only, and the same words elsewhere are another ask.
+   */
+  readonly context: string;
   /** Why the gate stopped it — `formatApproval` of the review that fired. */
   readonly reason: string;
   readonly status: DeferredApprovalStatus;
@@ -70,7 +76,7 @@ const DeferredApprovalStatusSchema = v.picklist(['queued', 'approved', 'denied',
 
 /** A parked action as a surface across a wire reads it: the cloud terminal asks its workspace for the queue. */
 export const DeferredApprovalSchema = v.object({
-  id: v.string(), actor: v.string(), command: v.string(), executor: v.string(), reason: v.string(),
+  id: v.string(), actor: v.string(), command: v.string(), executor: v.string(), context: v.string(), reason: v.string(),
   status: DeferredApprovalStatusSchema, requestedAt: v.number(), decidedAt: v.nullable(v.number()),
 }) satisfies v.GenericSchema<DeferredApproval>;
 
@@ -87,7 +93,7 @@ interface UsedApproval {
 }
 
 interface Row {
-  actor_id: string; id: string; command: string; executor: string; reason: string; status: string;
+  actor_id: string; id: string; command: string; executor: string; context: string; reason: string; status: string;
   requested_at: number; decided_at: number | null;
 }
 
@@ -102,6 +108,7 @@ function toAction(r: Row): DeferredApproval {
     actor: r.actor_id,
     command: r.command,
     executor: r.executor,
+    context: r.context,
     reason: r.reason,
     status: status.success ? status.output : 'queued',
     requestedAt: r.requested_at,
@@ -116,6 +123,7 @@ export function initDeferredApprovalsTable(execRaw: RawSqlExec): void {
     id           TEXT NOT NULL,
     command      TEXT NOT NULL,
     executor     TEXT NOT NULL DEFAULT '',
+    context      TEXT NOT NULL DEFAULT '',
     reason       TEXT NOT NULL,
     status       TEXT NOT NULL DEFAULT 'queued',
     requested_at INTEGER NOT NULL,
@@ -126,7 +134,7 @@ export function initDeferredApprovalsTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE INDEX IF NOT EXISTS idx_deferred_approvals_status
     ON deferred_approvals(actor_id, status, requested_at)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_deferred_approvals_command
-    ON deferred_approvals(actor_id, command, executor, requested_at DESC)`);
+    ON deferred_approvals(actor_id, command, executor, context, requested_at DESC)`);
   // The tripped rules as data: `reason` is display text.
   execRaw(`CREATE TABLE IF NOT EXISTS deferred_approval_hits (
     actor_id    TEXT NOT NULL,
@@ -168,7 +176,7 @@ export class DeferredApprovalStore {
     this.actor.assertCurrent();
 
     return this.sql<Row>`
-      SELECT d.actor_id, d.id, d.command, d.executor, d.reason, d.status, d.requested_at, d.decided_at
+      SELECT d.actor_id, d.id, d.command, d.executor, d.context, d.reason, d.status, d.requested_at, d.decided_at
       FROM deferred_approvals d JOIN workspace_actors a ON a.actor_id = d.actor_id
       WHERE d.status='queued' AND a.retiring_at IS NULL AND a.deleted_at IS NULL
       ORDER BY d.requested_at ASC LIMIT ${limit}`.map(toAction);
@@ -191,14 +199,16 @@ export class DeferredApprovalStore {
       LIMIT 1`.length > 0;
   }
 
-  /** This command's live row on this executor, never 'spent'; a decision outranks an ask, the newest wins. */
-  standing(command: string, executor: string, now: number): DeferredApproval | null {
+  /** This ask's live row (its command, executor and context), never 'spent'; a decision outranks an ask, the newest
+   *  wins. */
+  standing(ask: { readonly command: string; readonly executor: string; readonly context: string }, now: number): DeferredApproval | null {
     this.actor.assertCurrent();
 
     const rows = this.sql<Row>`
-      SELECT actor_id, id, command, executor, reason, status, requested_at, decided_at
+      SELECT actor_id, id, command, executor, context, reason, status, requested_at, decided_at
       FROM deferred_approvals
-      WHERE actor_id = ${this.actorId} AND command = ${command} AND executor = ${executor}
+      WHERE actor_id = ${this.actorId} AND command = ${ask.command} AND executor = ${ask.executor}
+        AND context = ${ask.context}
         AND (status IN ('queued','approved')
           OR (status = 'denied' AND decided_at > ${now - DENIAL_STANDING_MS}))
       ORDER BY CASE WHEN status = 'queued' THEN 1 ELSE 0 END, requested_at DESC
@@ -227,8 +237,8 @@ export class DeferredApprovalStore {
   create(action: Omit<DeferredApproval, 'actor' | 'status' | 'decidedAt'>, hits: readonly DeferredApprovalHit[]): DeferredApproval {
     this.actor.assertCurrent();
     void this.sql`INSERT INTO deferred_approvals
-        (actor_id, id, command, executor, reason, status, requested_at, decided_at)
-      VALUES (${this.actorId}, ${action.id}, ${action.command}, ${action.executor}, ${action.reason},
+        (actor_id, id, command, executor, context, reason, status, requested_at, decided_at)
+      VALUES (${this.actorId}, ${action.id}, ${action.command}, ${action.executor}, ${action.context}, ${action.reason},
         'queued', ${action.requestedAt}, NULL)`;
     markStoreChanged(this.sql);
 
@@ -275,7 +285,7 @@ export class DeferredApprovalStore {
     const rows = this.sql<SpendRow>`
       UPDATE deferred_approvals SET status='spent', spend_seq = spend_seq + 1
       WHERE actor_id = ${this.actorId} AND id = ${id} AND status = 'approved'
-      RETURNING actor_id, id, command, executor, reason, status, requested_at, decided_at, spend_seq`;
+      RETURNING actor_id, id, command, executor, context, reason, status, requested_at, decided_at, spend_seq`;
 
     if (rows.length > 0) markStoreChanged(this.sql);
 
@@ -316,7 +326,7 @@ export class DeferredApprovalStore {
     this.actor.assertCurrent();
 
     const rows = this.sql<Row>`
-      SELECT actor_id, id, command, executor, reason, status, requested_at, decided_at
+      SELECT actor_id, id, command, executor, context, reason, status, requested_at, decided_at
       FROM deferred_approvals WHERE actor_id = ${this.actorId} AND id = ${id} LIMIT 1`;
 
     return rows[0] ? toAction(rows[0]) : null;
@@ -327,7 +337,7 @@ export class DeferredApprovalStore {
     this.actor.assertCurrent();
 
     return this.sql<Row>`
-      SELECT actor_id, id, command, executor, reason, status, requested_at, decided_at
+      SELECT actor_id, id, command, executor, context, reason, status, requested_at, decided_at
       FROM deferred_approvals WHERE actor_id = ${this.actorId} AND status='queued'
       ORDER BY requested_at ASC LIMIT ${limit}`.map(toAction);
   }
@@ -377,7 +387,7 @@ function decisionWakeMessage(decided: readonly DeferredApproval[], written: Read
   const lines: string[] = [];
 
   const section = (title: string, actions: readonly DeferredApproval[]): void => {
-    if (actions.length > 0) lines.push(title, ...actions.map((a) => `  ${a.id}: ${clip(a.command)}`));
+    if (actions.length > 0) lines.push(title, ...actions.map((a) => `  ${a.id}: ${clip(a.command)}${a.context === '' ? '' : ` (${a.context})`}`));
   };
 
   section('WRITTEN on approval: nothing to re-issue:', decided.filter((a) => written.get(a.id) === 'written'));
@@ -561,7 +571,7 @@ export class DeferredApprovalQueue {
 
   /** The answer a row of this ask already holds: its denial, its approval spent, or the row still waiting. */
   private held(req: ShellApprovalRequest, now: number, store: DeferredApprovalStore): DeferredApprovalVerdict | null {
-    const standing = store.standing(req.command, req.executor, now);
+    const standing = store.standing({ command: req.command, executor: req.executor, context: req.context ?? '' }, now);
 
     if (standing?.status === 'denied') return { outcome: 'denied', action: standing };
 
@@ -585,6 +595,7 @@ export class DeferredApprovalQueue {
       id: this.unusedId(),
       command: req.command,
       executor: req.executor,
+      context: req.context ?? '',
       reason: formatApproval(req.review),
       requestedAt: now,
     }, req.review.hits.map(({ rule, decision }) => ({ rule, decision })));
@@ -764,7 +775,7 @@ export class DeferredApprovalQueue {
     return this.storeOf(actorId).listQueued().map((action) => ({
       id: action.id,
       kind: 'queued command (NOT run)',
-      detail: clip(action.command),
+      detail: clip(action.context === '' ? action.command : `${action.command} (${action.context})`),
     }));
   }
 

@@ -367,6 +367,7 @@ function ApprovalRows(
             <span className="p-meta p-text-3">{when(approval.requestedAt)}</span>
           </div>
           <div className="font-mono text-xs p-text whitespace-pre-wrap break-all">{revealMisrepresenting(approval.command)}</div>
+          {approval.context !== '' && <div className="text-xs p-text-2 break-all">Runs {revealMisrepresenting(approval.context)}</div>}
           <div className="p-row-text p-text-3">{approval.reason}</div>
           <div className="flex gap-1.5">
             {APPROVAL_ANSWERS.map(({ decision, label, body }) => (
@@ -380,7 +381,7 @@ function ApprovalRows(
                     ids: [approval.id], decision,
                   },
                   title: `${label} this command`,
-                  body: `${body}\n\n${revealMisrepresenting(approval.command)}\n\non ${executorLabel(approval.executor)}, in ${workspace}.`,
+                  body: `${body}\n\n${revealMisrepresenting(approval.command)}${approval.context === '' ? '' : `\n\nruns ${revealMisrepresenting(approval.context)}`}\n\non ${executorLabel(approval.executor)}, in ${workspace}.`,
                   danger: decision === 'always',
                 })}
               >
