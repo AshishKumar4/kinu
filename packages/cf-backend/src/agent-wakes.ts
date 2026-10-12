@@ -11,6 +11,9 @@ const AGENT_WAKE_JOB = 'agent-wake';
 
 const AgentWakePayloadSchema = v.object({ actorId: v.string() });
 
+/** Answers told back to back differ only by the milliseconds between them. */
+const SAME_LAP_MS = 1000;
+
 function jobId(actorId: string): string {
   return `agent-wake:${actorId}`;
 }
@@ -31,9 +34,20 @@ export class AgentWakes extends LifecycleCapability {
     await this.#push(actorId, atMs);
   }
 
-  /** The agent's answer: the instant it next owes work, or none. */
+  /**
+   * The agent's answer: the instant it next owes work, or none. An answer less than a second after the armed instant is
+   * the same lap told again: it writes nothing, and the wake comes at most that second early, to an agent that answers
+   * again.
+   */
   async owes(actorId: string, next: number | null): Promise<void> {
-    if (next !== null) return await this.#push(actorId, next);
+    if (next !== null) {
+      const current = this.lifecycle.jobs.get(jobId(actorId));
+
+      if (current !== undefined && current.time <= next && next - current.time < SAME_LAP_MS) return;
+
+      return await this.#push(actorId, next);
+    }
+
     await this.lifecycle.jobs.cancel(jobId(actorId));
   }
 
