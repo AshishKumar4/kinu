@@ -930,8 +930,13 @@ the owner, built 2026-10-11 on `lane/main-isolate`.
   `duplicate`, and its answer retires the row; one that fails to cross stays
   owed to the wake. A rest never cancels the wake while a delivery is owed. The
   EventLog is a record, never a queue: `drainAssignments`, the delegation
-  runners and the root's RAM inbox are gone from the cloud. A run is the input
-  `kind: 'run'`, kept in the isolate's `facet_runs` until its end is reported.
+  runners and the root's RAM inbox are gone from the cloud. Every agent has a
+  chat, and a head's or node's run is one of its inputs (`kind: 'run'`): its
+  `ChatSession` admits, holds, queues, stops and restores it as any input, each
+  round runs through core's `driveRun`, and its end rides the agent's next
+  report (`AgentReport.runEnds`). Its held input retires only once its end is
+  told, so a death first runs it again. `facet_runs`, `admitRun`, `startRun`,
+  `runEnded` and `holdsChat` are gone.
 - One factory, `OrchestratorAgent.actorSurface`, builds every agent's turn
   surface, the workspace agent's, a hire's, a head's, a swarm node's and a
   background run's, from core's one reach decision (`surfaceReach`: what the

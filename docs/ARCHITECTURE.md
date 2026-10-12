@@ -120,9 +120,11 @@ builds and runs them, and the workspace only declares them.
 
 Every agent, main included, is a roster row in `workspace_actors` and runs its
 turns in an `AgentFacet` with its own Worker Loader isolate and SQLite (D8/D9).
-Main's chat, and each owner-facing agent's, runs core's `ChatSession` there
-(`FacetChat`); hired tasks, background evolution agents, branching heads, swarm
-nodes and steer branches use the `runHeadInference` loop and the facet queue.
+Every agent's chat runs core's `ChatSession` there (`FacetChat`). A hired task,
+a background evolution agent, a branching head, a swarm node or a steer branch
+is a delivered run, one more input of that chat (`kind: 'run'`): its rounds run
+through core's `driveRun` with `runHeadInference`'s assembly, and its end rides
+the agent's next report.
 
 The workspace prepares every agent's turn from one factory,
 `OrchestratorAgent.actorSurface`: its sources, its resolved profile and its
@@ -222,11 +224,14 @@ orchestrator, the bound profile, and the abort. It runs a turn through
 `startActorTurn` (`packages/core/src/orchestrator/actor-turn.ts`): `runChat`
 (`packages/core/src/chat.ts`) for the builtin program, or `scaffoldChatTransform`
 (`packages/core/src/scaffold/chat-transform.ts`) wrapping it when an evolved
-`agent.js` is the actor's program. Hosted actors run claimed turns on their own
-`ActorSession` through `runHeadInference`
-(`packages/core/src/heads/head-inference.ts`), which decides how many turns a
-head, node, or subordinate run gets. So one `runChat` body serves every actor
-kind on both backends.
+`agent.js` is the actor's program. A delivered run's rounds run on the agent's
+own `ActorSession` through core's `driveRun`
+(`packages/core/src/orchestrator/run-driver.ts`: each round is claimed,
+assembled, bound, executed, settled and finished), and `runHeadInference`
+(`packages/core/src/heads/head-inference.ts`) keeps each round's assembly, its
+projection and the next input, which decide how many rounds a head, node, or
+subordinate run gets. So one `runChat` body serves every actor kind on both
+backends.
 
 ```mermaid
 flowchart TB
