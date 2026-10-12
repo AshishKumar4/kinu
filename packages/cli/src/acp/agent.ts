@@ -106,7 +106,7 @@ class AcpSession {
   get wasCancelled(): boolean { return this.cancelled; }
 
   /** Local sessions only: a cloud turn runs in the DO, with no synchronous path back to this process. */
-  installApprovalChannel(ask: (req: ShellApprovalRequest) => Promise<ShellApprovalOutcome | null>): void {
+  installApprovalChannel(ask: (req: ShellApprovalRequest, signal: AbortSignal) => Promise<ShellApprovalOutcome | null>): void {
     this.detachApproval = this.client.localControls?.setShellApprovalHandler(ask) ?? null;
   }
 
@@ -201,7 +201,7 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
       const session = new AcpSession(client.cliSession.id, client, cwd);
       sessions.set(session.id, session);
 
-      session.installApprovalChannel(async (req) => {
+      session.installApprovalChannel(async (req, signal) => {
         const outcome = await ctx.client.request(CLIENT_METHODS.session_request_permission, {
           sessionId: session.id,
           toolCall: {
@@ -215,10 +215,12 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
             }],
           },
           options: permissionOptions(req),
-        });
+        // Retired when another surface decided the row: the editor withdraws its prompt.
+        }, { cancellationSignal: signal });
 
-        // 'cancelled' — the turn is going away; deny so the tool stops here.
-        if (outcome.outcome.outcome !== 'selected') return 'deny';
+        // 'cancelled' (the turn is going away, or the prompt was withdrawn): unanswered, so the row waits and the tool
+        // stops here without a denial the owner never gave.
+        if (outcome.outcome.outcome !== 'selected') return null;
 
         return OUTCOME_BY_OPTION.get(outcome.outcome.optionId) ?? 'deny';
       });

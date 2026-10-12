@@ -397,6 +397,8 @@ function buildCLIRuntime(
     granted: (grant) => holdsGrant(agentConfig.getShellApprovalGrants(), grant),
     requestApproval: (request, signal) => approvalChannel?.(request, signal) ?? Promise.resolve(null),
     get deferrals() { return approvalDeferrals ?? undefined; },
+    // An always-answer to an ask no queue holds (a file access outside the directory); a queued one the queue grants.
+    remember: (grants) => { agentConfig.grantShellApproval(grants); },
   };
 
   // As on the cloud: grants are written on the root's rows, so a child inherits the root's answers

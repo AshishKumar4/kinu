@@ -80,6 +80,12 @@ export type DeferredApprovalVerdict =
   | { readonly outcome: 'denied'; readonly action: DeferredApproval }
   | { readonly outcome: 'queued'; readonly action: DeferredApproval };
 
+/** A row another ask of the same command already ran on: the owner's one approval is used. */
+interface UsedApproval {
+  readonly outcome: 'used';
+  readonly id: string;
+}
+
 interface Row {
   actor_id: string; id: string; command: string; executor: string; reason: string; status: string;
   requested_at: number; decided_at: number | null;
@@ -341,6 +347,10 @@ function queuedActionMessage(action: DeferredApproval, hits: readonly DeferredAp
 }
 
 /** Result for re-issuing a refused command; mirrors safety/device-consent.ts. */
+function usedApprovalMessage(id: string): string {
+  return `NOT RUN: the owner approved this once (${id}), and another run of the same command used it. Ask again to run it again.`;
+}
+
 function deniedActionMessage(action: DeferredApproval): string {
   return `NOT RUN: the owner refused this (${action.id}). Not a timeout; find another way.`;
 }
@@ -419,7 +429,7 @@ export class DeferredApprovalQueue {
   /** Bytes a park is keeping before its row names them. */
   private readonly parking = new Map<string, number>();
   /** Asks blocked on a row's decision, by row id: the first answer from any surface releases them. */
-  private readonly awaiting = new Map<string, Set<() => void>>();
+  private readonly awaiting = new Map<string, Set<(settled: 'decided') => void>>();
   /** One at a time, so a delete's check sees every keep queued before it. */
   private readonly serial = serialQueue();
 
@@ -439,8 +449,10 @@ export class DeferredApprovalQueue {
 
   /** The gate's view for one actor: run, or the words to hand the model, plus the way back for an unused spend. */
   channelFor(actorId: string): DeferredApprovalChannel {
-    const told = (verdict: DeferredApprovalVerdict) => {
+    const told = (verdict: DeferredApprovalVerdict | UsedApproval) => {
       if (verdict.outcome === 'run') return { run: true, spent: verdict.spend } as const;
+
+      if (verdict.outcome === 'used') return { run: false, reason: 'unavailable', message: usedApprovalMessage(verdict.id) } as const;
 
       return {
         run: false,
@@ -460,16 +472,24 @@ export class DeferredApprovalQueue {
       },
       decided: (id, signal) => this.decidedOrAborted(actorId, id, signal),
       decide: async (id, outcome) => { await this.decide([id], ANSWER_OF[outcome]); },
+      take: async (id) => told(this.take(id, actorId)),
       settle: async (spent, outcome) => { await this.settle(spent, outcome, actorId); },
     };
   }
 
-  /** Resolves once the row no longer waits, or once `signal` aborts. */
-  private decidedOrAborted(actorId: string, id: string, signal: AbortSignal): Promise<void> {
-    const { promise, resolve } = Promise.withResolvers<void>();
+  /** `decided` once the row no longer waits, its decision committed while this ask still waited on it, so the ask is
+   *  told here and not woken; `aborted` when `signal` aborted first, so a later decision wakes it. */
+  private decidedOrAborted(actorId: string, id: string, signal: AbortSignal): Promise<'decided' | 'aborted'> {
+    const { promise, resolve } = Promise.withResolvers<'decided' | 'aborted'>();
 
-    if (signal.aborted || this.storeOf(actorId).get(id)?.status !== 'queued') {
-      resolve();
+    if (this.storeOf(actorId).get(id)?.status !== 'queued') {
+      resolve('decided');
+
+      return promise;
+    }
+
+    if (signal.aborted) {
+      resolve('aborted');
 
       return promise;
     }
@@ -481,10 +501,27 @@ export class DeferredApprovalQueue {
       waiters.delete(resolve);
 
       if (waiters.size === 0 && this.awaiting.get(id) === waiters) this.awaiting.delete(id);
-      resolve();
+      resolve('aborted');
     }, { once: true });
 
     return promise;
+  }
+
+  /** The decided row `id`, finished for the ask that waited on it: its approval spent, its denial, or, when another
+   *  ask of the same row ran on that approval first, a refusal that says so. Never a new row. */
+  private take(id: string, actorId: string): DeferredApprovalVerdict | UsedApproval {
+    const store = this.storeOf(actorId);
+    const action = store.get(id);
+
+    if (action?.status === 'approved') {
+      const spent = store.spend(id);
+
+      if (spent) return { outcome: 'run', action: spent.action, spend: spent.spend };
+    }
+
+    if (action?.status === 'denied') return { outcome: 'denied', action };
+
+    return action?.status === 'queued' ? { outcome: 'queued', action } : { outcome: 'used', id };
   }
 
   /** Parks an action or answers with the owner's standing decision; a re-ask returns the same row, so the turn's
@@ -625,6 +662,15 @@ export class DeferredApprovalQueue {
       if (action) decided.push(action);
     }
 
+    // An ask blocked on its row hears the answer there, at the moment it is recorded, and runs on it now; only an ask
+    // that went away before is woken.
+    const blocked = decided.filter((action) => this.awaiting.has(action.id));
+
+    for (const action of blocked) {
+      for (const resume of this.awaiting.get(action.id) ?? []) resume('decided');
+      this.awaiting.delete(action.id);
+    }
+
     await this.release(boundBytes([...swept, ...decided.filter((a) => a.status === 'denied').map((a) => a.command)]));
 
     if (decided.length === 0) return decided;
@@ -636,14 +682,6 @@ export class DeferredApprovalQueue {
 
     const written = await this.performWrites(decided.filter((a) => a.actor === this.deps.store.actorId));
     this.notify({ kind: 'decided', actions: decided });
-    // An ask blocked on its row hears the answer there and runs on it now; only an ask that went away is woken.
-    const blocked = decided.filter((a) => this.awaiting.has(a.id));
-
-    for (const action of blocked) {
-      for (const resume of this.awaiting.get(action.id) ?? []) resume();
-      this.awaiting.delete(action.id);
-    }
-
     const told = decided.filter((a) => !blocked.includes(a));
 
     // Each asker once, every one tried: the decision is already durable, and one asker's failed wake (an agent

@@ -134,10 +134,16 @@ type QueueAnswer =
  */
 export interface DeferredApprovalChannel {
   park(req: ShellApprovalRequest): Promise<QueueAnswer>;
-  /** Resolves once row `id` no longer waits, decided from any surface, or once `signal` aborts. */
-  decided(id: string, signal: AbortSignal): Promise<void>;
+  /**
+   * `decided` once row `id` no longer waits: decided from any surface while this ask waited on it, so the queue tells
+   * it here and wakes nobody. `aborted` once `signal` aborted first: a decision after that wakes the agent instead.
+   */
+  decided(id: string, signal: AbortSignal): Promise<'decided' | 'aborted'>;
   /** A prompt's answer to row `id`; a row another surface decided first keeps that decision. */
   decide(id: string, outcome: ShellApprovalOutcome): Promise<void>;
+  /** The decided row `id`, for the ask that waited on it: its approval spent, its denial, or that another ask of the
+   *  same row used its approval. Never a new row. */
+  take(id: string): Promise<QueueAnswer>;
   /** Close out a spend. Called once per spend on every returning path, never when unknown. Idempotent. */
   settle(spent: ApprovalSpend, outcome: ApprovalSpendOutcome): Promise<void>;
 }
@@ -240,24 +246,33 @@ async function askOwner(
     }));
   }, { once: true });
 
-  const elsewhere = deferrals.decided(id, shown.signal).then(() => 'elsewhere' as const);
+  const row = deferrals.decided(id, shown.signal);
 
   try {
-    const first = await Promise.race([answering, elsewhere]);
+    const first = await Promise.race([answering, row]);
 
-    if (first === 'elsewhere') retired = true;
-    // Unanswered (the prompt went away): the row waits on the queue, as with nobody in front of the owner.
-    else if (first === null) return refuse(parked.reason, parked.message);
-    // Decided while this ask still waits on the row, so the queue tells it here rather than waking it; an answer
-    // given after another surface decided the row changes nothing there.
-    else await deferrals.decide(id, first);
+    if (first === 'decided' || first === 'aborted') {
+      retired = true;
+    } else if (first === null) {
+      // The prompt went away unanswered: let go of the row. Decided before that, its answer stands for this ask;
+      // decided after, it wakes the agent, and the ask is NOT RUN while the row waits.
+      shown.abort();
+
+      if (await row === 'aborted') return refuse(parked.reason, parked.message);
+    } else {
+      // Recorded while this ask still waits on the row, so the queue tells it here; a row another surface decided
+      // first keeps that decision.
+      await deferrals.decide(id, first);
+    }
   } finally {
     shown.abort();
   }
 
-  const decided = await deferrals.park(await ask.request(true));
+  return finish(await deferrals.take(id));
+}
 
-  return decided.run ? { run: true, spent: decided.spent } : refuse(decided.reason, decided.message);
+function finish(answer: QueueAnswer): GateAnswer {
+  return answer.run ? { run: true, spent: answer.spent } : refuse(answer.reason, answer.message);
 }
 
 /** No queue to hold the ask: the live prompt answers it alone, or nobody can. */

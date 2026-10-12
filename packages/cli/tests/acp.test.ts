@@ -398,7 +398,7 @@ interface PermissionCase {
   command: string;
   hits: ShellApprovalRequest['review']['hits'];
   answer: RequestPermissionResponse;
-  outcome: ShellApprovalOutcome;
+  outcome: ShellApprovalOutcome | null;
 }
 
 const PERMISSION_CASES: PermissionCase[] = [
@@ -417,11 +417,11 @@ const PERMISSION_CASES: PermissionCase[] = [
     outcome: 'deny',
   },
   {
-    name: 'a cancelled permission request denies the command',
+    name: 'a cancelled permission request leaves the command unanswered, not denied',
     command: 'sudo reboot',
     hits: [],
     answer: { outcome: { outcome: 'cancelled' } },
-    outcome: 'deny',
+    outcome: null,
   },
 ];
 

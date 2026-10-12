@@ -195,7 +195,6 @@
   "packages/core/src/read-models/tool-failures.ts#censusToolFailures (unreached-export)",
   "packages/core/src/read-models/tool-failures.ts#classifyToolFailure (unreached-export)",
   "packages/core/src/read-models/tool-failures.ts#toolFailureKey (unreached-export)",
-  "packages/core/src/safety/approval-gate.ts#ShellApprovalPolicy.remember (unsupplied-field)",
   "packages/core/src/safety/approval-gate.ts#grantsAreSubset (unreached-export)",
   "packages/core/src/safety/approval-gate.ts#resolveInheritedGrants (unreached-export)",
   "packages/core/src/safety/deferred-approval.ts#DEFERRED_APPROVAL_SIGNAL (unreached-export)",

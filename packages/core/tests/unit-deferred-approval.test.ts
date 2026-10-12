@@ -257,6 +257,38 @@ describe('the standing modes still decide first', () => {
     expect(delivered).toEqual([]);
   });
 
+  test('two asks waiting on one row: a once-answer runs one of them, the other hears it was used, and no row is added', async () => {
+    const live = livePrompts(2);
+    const { shellTool, executed, queue, delivered } = setup({ approve: live.approve });
+    const first = shellTool.execute({ command: GATED });
+    const second = shellTool.execute({ command: GATED });
+
+    await live.shown;
+    live.prompts[0]?.answer('allow');
+    const answers = await Promise.allSettled([first, second]);
+
+    expect(answers.filter((answer) => answer.status === 'fulfilled')).toHaveLength(1);
+    expect(answers.find((answer) => answer.status === 'rejected')).toMatchObject({ reason: { message: expect.stringContaining('approved this once') } });
+    expect(executed).toEqual([GATED]);
+    expect(queue.list()).toEqual([]);
+    expect(delivered).toEqual([]);
+  });
+
+  test('a decision another surface records as the live prompt goes away stands for the ask', async () => {
+    const live = livePrompts(1);
+    const { shellTool, executed, delivered, queue } = setup({ approve: live.approve });
+    const asking = shellTool.execute({ command: GATED });
+
+    await live.shown;
+    // Both in one tick: the web's approval, then the chat unmounting under the prompt.
+    const deciding = queue.decide(['defer-1'], 'approved');
+    live.prompts[0]?.answer(null);
+
+    expect(await asking).toBe('ran');
+    await deciding;
+    expect({ executed, delivered }).toEqual({ executed: [GATED], delivered: [] });
+  });
+
   test('a row decided on another surface retires its live prompt, and a late answer there changes nothing', async () => {
     const live = livePrompts(1);
     const { shellTool, executed, queue } = setup({ approve: live.approve });
