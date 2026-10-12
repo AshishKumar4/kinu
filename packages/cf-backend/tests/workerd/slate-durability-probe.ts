@@ -1,12 +1,12 @@
 /**
  * Does a durable Nimbus application answer its own URL after its hosting object is aborted?
  * Everything below `handleNimbusPreviewHostRequest` is production code; the probe adds only the
- * trigger and the observation.
+ * trigger and the observation, and for the keep-alive its isolate's clock.
  */
 import { Agent, getAgentByName, type AgentContext } from 'agents';
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import * as v from 'valibot';
-import { newWebSocketRpcSession } from 'capnweb';
+import { newWebSocketRpcSession, type RpcStub } from 'capnweb';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
 import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
@@ -58,10 +58,18 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'runShell');
     Reflect.deleteProperty(this, 'previewTabs');
     Reflect.deleteProperty(this, 'failingSlates');
+    Reflect.deleteProperty(this, 'wakeOnce');
     sealRpcSurface(this, [
       ...ORCHESTRATOR_RPC_SURFACE, 'portReservations', 'runProgram', 'forgetActivation', 'pendingNimbusTasks', 'executorRows', 'runShell', 'previewTabs',
-      'failingSlates',
+      'failingSlates', 'wakeOnce',
     ]);
+  }
+
+  /** The platform's alarm delivery, which runs whichever of Nimbus's tasks are due; the tasks still pending after it. */
+  async wakeOnce(): Promise<string[]> {
+    await this.alarm();
+
+    return (await this.pendingNimbusTasks()).tasks.map((task) => task.id);
   }
 
   /** What the agent's next model step is told of slates that do not build. */
@@ -185,7 +193,8 @@ export { ObservedOrchestrator as OrchestratorAgent };
  *  reaches it through `workspaceOwner()`, as production's actor does. */
 type SlateTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'writeExecutorFileChunk' | 'executeInExecutor' | 'routeSlateShare'> & Pick<ObservedOrchestrator,
-  'portReservations' | 'runProgram' | 'forgetActivation' | 'pendingNimbusTasks' | 'executorRows' | 'runShell' | 'previewTabs' | 'failingSlates'>;
+  'portReservations' | 'runProgram' | 'forgetActivation' | 'pendingNimbusTasks' | 'executorRows' | 'runShell' | 'previewTabs' | 'failingSlates'
+  | 'wakeOnce'>;
 
 /** `ObservedOrchestrator` is installed under the `OrchestratorAgent` name, so every stub carries
  *  the fixture read. */
@@ -194,6 +203,32 @@ interface ProbeRootEnv extends Omit<ProbeEnv, 'OrchestratorAgent'> {
 }
 
 const PreviewValueSchema = v.object({ url: v.string(), port: v.number() });
+
+type PreviewRpc = Record<string, (...input: JsonValue[]) => Promise<JsonValue>>;
+
+/** A page's `/__rpc` socket through the preview edge, and the slate's methods over it. */
+interface PreviewSocket {
+  readonly socket: WebSocket;
+  readonly stub: RpcStub<PreviewRpc>;
+}
+
+async function calledOver(stub: RpcStub<PreviewRpc>, method: string, args: JsonValue[]): Promise<RpcAnswer> {
+  try {
+    const raw = await stub[method](...args);
+
+    return { ok: true, value: v.is(v.string(), raw) ? raw : JSON.stringify(raw) };
+  } catch (cause) {
+    return { ok: false, error: renderThrownChain({ cause }) };
+  }
+}
+
+/**
+ * The clock this isolate's objects read, as a test moves it: Nimbus's keep-alive reads `Date.now()` and is handed no clock,
+ * and the pool's fake timers reach only the runner's isolate.
+ */
+const platformNow = Date.now.bind(Date);
+
+let advancedMs = 0;
 
 type TerminalDrive =
   | { ok: true; frames: string[]; output: string }
@@ -515,6 +550,66 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
 
   /** Uses the WebSocket arm: a 101 cannot cross the RPC boundary the plain drive uses. */
   async rpcPreview(url: string, method: string, args: JsonValue[] = []): Promise<RpcAnswer> {
+    const opened = await this.previewSocket(url);
+
+    if ('refused' in opened) return { ok: false, error: opened.refused };
+
+    try {
+      return await calledOver(opened.stub, method, args);
+    } finally {
+      opened.socket.close();
+    }
+  }
+
+  /** A page's `/__rpc` socket held open across calls, as an open tab holds it. */
+  private heldPreview: PreviewSocket | undefined;
+
+  async holdPreview(url: string): Promise<RpcAnswer> {
+    const opened = await this.previewSocket(url);
+
+    if ('refused' in opened) return { ok: false, error: opened.refused };
+    this.heldPreview = opened;
+
+    return { ok: true };
+  }
+
+  async callHeldPreview(method: string): Promise<RpcAnswer> {
+    if (this.heldPreview === undefined) throw new Error('no preview socket is held');
+
+    return await calledOver(this.heldPreview.stub, method, []);
+  }
+
+  /** Closes the held socket as a closed tab does; answers once the far end's close has come back through the relay. */
+  async closeHeldPreview(): Promise<{ code: number }> {
+    if (this.heldPreview === undefined) throw new Error('no preview socket is held');
+    const { socket } = this.heldPreview;
+
+    const closed = new Promise<number>((resolve) => {
+      socket.addEventListener('close', (event) => { resolve(event.code); });
+    });
+
+    socket.close(1001, 'tab closed');
+    this.heldPreview = undefined;
+
+    return { code: await closed };
+  }
+
+  /** Moves this isolate's clock `ms` ahead, for every object in it; `restoreClock` puts it back. */
+  advanceClock(ms: number): void {
+    advancedMs += ms;
+    Date.now = () => platformNow() + advancedMs;
+  }
+
+  restoreClock(): void {
+    advancedMs = 0;
+    Date.now = platformNow;
+  }
+
+  async wakeOnce(workspace: string): Promise<string[]> {
+    return (await this.workspaceTarget(workspace)).wakeOnce();
+  }
+
+  private async previewSocket(url: string): Promise<PreviewSocket | { refused: string }> {
     const endpoint = new URL(url);
     endpoint.pathname = '/__rpc';
 
@@ -525,22 +620,11 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
 
     const socket = response.webSocket;
 
-    if (socket === null || socket === undefined) {
-      return { ok: false, error: `upgrade refused: ${response.status} ${await response.text()}` };
-    }
+    if (socket === null || socket === undefined) return { refused: `upgrade refused: ${response.status} ${await response.text()}` };
 
     socket.accept();
-    const stub = newWebSocketRpcSession<Record<string, (...input: JsonValue[]) => Promise<JsonValue>>>(socket);
 
-    try {
-      const raw = await stub[method](...args);
-
-      return { ok: true, value: v.is(v.string(), raw) ? raw : JSON.stringify(raw) };
-    } catch (cause) {
-      return { ok: false, error: renderThrownChain({ cause }) };
-    } finally {
-      socket.close();
-    }
+    return { socket, stub: newWebSocketRpcSession<PreviewRpc>(socket) };
   }
 
   async removeSlate(workspace: string, id: string): Promise<RemovedSlate> {

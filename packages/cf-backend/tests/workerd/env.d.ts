@@ -312,6 +312,12 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
   pendingNimbusTasks(workspace: string): Promise<{ tasks: Array<{ id: string; time: number }>; alarm: number | null }>;
   drivePreview(url: string): Promise<PreviewAnswer>;
   rpcPreview(url: string, method: string, args?: JsonValue[]): Promise<RpcAnswer>;
+  holdPreview(url: string): Promise<RpcAnswer>;
+  callHeldPreview(method: string): Promise<RpcAnswer>;
+  closeHeldPreview(): Promise<{ code: number }>;
+  advanceClock(ms: number): Promise<void>;
+  restoreClock(): Promise<void>;
+  wakeOnce(workspace: string): Promise<string[]>;
   removeSlate(workspace: string, id: string): Promise<RemovedSlate>;
   putPicture(workspace: string, slate: string, digest: string): Promise<void>;
   pictureKeys(workspace: string): Promise<string[]>;
