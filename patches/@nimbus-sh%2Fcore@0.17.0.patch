@@ -167,6 +167,76 @@ index 9017e30..2c577d6 100644
              terminalStdin: ctx.terminalStdin,
              onStdout: ctx.stdout.writeBytes ? (bytes) => ctx.stdout.writeBytes(bytes) : textSink((data) => ctx.stdout.write(data)),
              onStderr: ctx.stderr.writeBytes ? (bytes) => ctx.stderr.writeBytes(bytes) : textSink((data) => ctx.stderr.write(data)),
+diff --git a/dist/vfs/composite.js b/dist/vfs/composite.js
+index 79195b4..f6401ea 100644
+--- a/dist/vfs/composite.js
++++ b/dist/vfs/composite.js
+@@ -1969,7 +1969,41 @@ export class CompositeVFS {
+     walkRemove(ops, rel, path) {
+         const at = (r) => (r === rel ? path : path + r.slice(rel === '/' ? 0 : rel.length));
+         const order = [];
+-        const visit = (r) => then(ops.stat(r, { follow: false }), (stat) => {
++        const kept = new Set();
++        const gone = new Set();
++        const failures = [];
++        const keepWithAncestors = (r) => {
++            for (let k = r;; k = parentOf(k)) {
++                kept.add(k);
++                if (k === rel || k === '/')
++                    break;
++            }
++        };
++        // Kinu patch (NIMBUS-ASKS #51): a child the walk cannot read is kept, with the directories holding it, and
++        // reported; the rest of the tree is still removed, as rm -r does. One that went meanwhile is gone.
++        const unread = (r, syscall, cause) => {
++            if (isVfsError(cause, 'ENOENT'))
++                return;
++            keepWithAncestors(r);
++            failures.push({
++                path: at(r),
++                error: syscallError(isVfsError(cause) ? cause.code : 'EIO', syscall, at(r), { detail: isVfsError(cause) ? cause.detail : String(cause), cause }),
++            });
++        };
++        const reading = (r, syscall, read, next) => {
++            let out;
++            try {
++                out = read();
++            }
++            catch (cause) {
++                unread(r, syscall, cause);
++                return undefined;
++            }
++            return isPromise(out) ? out.then(next, (cause) => { unread(r, syscall, cause); }) : next(out);
++        };
++        const visit = (r) => (r === rel ? then(ops.stat(r, { follow: false }), (stat) => entered(r, stat))
++            : reading(r, 'lstat', () => ops.stat(r, { follow: false }), (stat) => entered(r, stat)));
++        const entered = (r, stat) => {
+             if (stat === null) {
+                 if (r === rel)
+                     throw new Refusal('ENOENT', path);
+@@ -1978,20 +2012,10 @@ export class CompositeVFS {
+             order.push({ rel: r, dir: stat.type === 'directory' });
+             if (stat.type !== 'directory')
+                 return undefined;
+-            return then(ops.readdir(r), (entries) => entries.reduce((chain, entry) => then(chain, () => visit(r === '/' ? `/${entry.name}` : `${r}/${entry.name}`)), undefined));
+-        });
++            return reading(r, 'scandir', () => ops.readdir(r), (entries) => entries.reduce((chain, entry) => then(chain, () => visit(r === '/' ? `/${entry.name}` : `${r}/${entry.name}`)), undefined));
++        };
+         return then(visit(rel), () => {
+             order.reverse();
+-            const kept = new Set();
+-            const gone = new Set();
+-            const failures = [];
+-            const keepWithAncestors = (r) => {
+-                for (let k = r;; k = parentOf(k)) {
+-                    kept.add(k);
+-                    if (k === rel || k === '/')
+-                        break;
+-                }
+-            };
+             return then(order.reduce((chain, entry) => then(chain, () => {
+                 if (kept.has(entry.rel))
+                     return undefined;
 diff --git a/src/_shared/workspace-network.ts b/src/_shared/workspace-network.ts
 index 0d4715b..e5d7f03 100644
 --- a/src/_shared/workspace-network.ts
@@ -296,3 +366,66 @@ index dd485e4..5526d89 100644
        terminalStdin: ctx.terminalStdin,
        onStdout: ctx.stdout.writeBytes ? (bytes) => ctx.stdout.writeBytes!(bytes) : textSink((data) => ctx.stdout.write(data)),
        onStderr: ctx.stderr.writeBytes ? (bytes) => ctx.stderr.writeBytes!(bytes) : textSink((data) => ctx.stderr.write(data)),
+diff --git a/src/vfs/composite.ts b/src/vfs/composite.ts
+index ce7f2c4..7aed491 100644
+--- a/src/vfs/composite.ts
++++ b/src/vfs/composite.ts
+@@ -2166,29 +2166,46 @@ export class CompositeVFS implements VFS {
+   private walkRemove(ops: SyncVFS, rel: string, path: string): Awaitable<VfsRemoval> {
+     const at = (r: string): string => (r === rel ? path : path + r.slice(rel === '/' ? 0 : rel.length));
+     const order: Array<{ rel: string; dir: boolean }> = [];
+-    const visit = (r: string): Awaitable<void> => then(ops.stat(r, { follow: false }), (stat) => {
++    const kept = new Set<string>();
++    const gone = new Set<string>();
++    const failures: VfsRemovalFailure[] = [];
++    const keepWithAncestors = (r: string): void => {
++      for (let k = r; ; k = parentOf(k)) {
++        kept.add(k);
++        if (k === rel || k === '/') break;
++      }
++    };
++    // Kinu patch (NIMBUS-ASKS #51): a child the walk cannot read is kept, with the directories holding it, and
++    // reported; the rest of the tree is still removed, as rm -r does. One that went meanwhile is gone.
++    const unread = (r: string, syscall: string, cause: unknown): void => {
++      if (isVfsError(cause, 'ENOENT')) return;
++      keepWithAncestors(r);
++      failures.push({
++        path: at(r),
++        error: syscallError(isVfsError(cause) ? cause.code : 'EIO', syscall, at(r), { detail: isVfsError(cause) ? cause.detail : String(cause), cause }),
++      });
++    };
++    const reading = <T>(r: string, syscall: string, read: () => Awaitable<T>, next: (value: T) => Awaitable<void>): Awaitable<void> => {
++      let out: Awaitable<T>;
++      try { out = read(); } catch (cause) { unread(r, syscall, cause); return undefined; }
++      return isPromise(out) ? out.then(next, (cause: unknown) => { unread(r, syscall, cause); }) : next(out);
++    };
++    const visit = (r: string): Awaitable<void> => (r === rel ? then(ops.stat(r, { follow: false }), (stat) => entered(r, stat))
++      : reading(r, 'lstat', () => ops.stat(r, { follow: false }), (stat) => entered(r, stat)));
++    const entered = (r: string, stat: VfsStat | null): Awaitable<void> => {
+       if (stat === null) {
+         if (r === rel) throw new Refusal('ENOENT', path);
+         return undefined;
+       }
+       order.push({ rel: r, dir: stat.type === 'directory' });
+       if (stat.type !== 'directory') return undefined;
+-      return then(ops.readdir(r), (entries) => entries.reduce<Awaitable<void>>(
++      return reading(r, 'scandir', () => ops.readdir(r), (entries) => entries.reduce<Awaitable<void>>(
+         (chain, entry) => then(chain, () => visit(r === '/' ? `/${entry.name}` : `${r}/${entry.name}`)),
+         undefined,
+       ));
+-    });
++    };
+     return then(visit(rel), () => {
+       order.reverse();
+-      const kept = new Set<string>();
+-      const gone = new Set<string>();
+-      const failures: VfsRemovalFailure[] = [];
+-      const keepWithAncestors = (r: string): void => {
+-        for (let k = r; ; k = parentOf(k)) {
+-          kept.add(k);
+-          if (k === rel || k === '/') break;
+-        }
+-      };
+       return then(order.reduce<Awaitable<void>>((chain, entry) => then(chain, () => {
+         if (kept.has(entry.rel)) return undefined;
+         const fail = (cause: unknown): void => {
