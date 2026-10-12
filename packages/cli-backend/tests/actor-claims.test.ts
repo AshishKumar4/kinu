@@ -314,13 +314,36 @@ test('a stale execution epoch cannot write to the claim a newer one owns', async
   });
 
   expect(live.epoch).toBe(2);
-  await expect(claims.consume(stale, { index: 0, messages: [{ role: 'user', content: 'stale step' }] })).rejects.toThrow(KinuError);
-  expect(() => claims.settle(stale, 'completed')).toThrow(KinuError);
-  await claims.consume(live, { index: 0, messages: [{ role: 'user', content: 'live step' }] });
+  const otherEpoch = { code: 'denied', message: 'actor turn is owned by another execution epoch' };
+  const settled = { code: 'denied', message: 'actor turn is settled and takes no further work' };
+
+  await expect(claims.consume(stale, { index: 0, messages: [{ role: 'user', content: 'stale step' }] })).rejects.toMatchObject(otherEpoch);
+  expect(() => claims.settle(stale, 'completed')).toThrow(otherEpoch.message);
+
+  // Two steps prepared from one revision: the second to commit finds the first's request and writes none.
+  const racing = await Promise.allSettled([
+    claims.consume(live, { index: 0, messages: [{ role: 'user', content: 'live step' }] }),
+    claims.consume(live, { index: 0, messages: [{ role: 'user', content: 'same step again' }] }),
+  ]);
+
+  expect(racing.map((outcome) => outcome.status)).toEqual(['fulfilled', 'rejected']);
+  expect(racing[1]).toMatchObject({ reason: { code: 'denied', message: 'another request consumed this claim during preparation' } });
   expect(claims.read('turn-fence')).toMatchObject({ epoch: 2, runId: 'run-new' });
   expect((await claims.consumedContext('turn-fence'))?.revision).toBe(1);
   claims.settle(live, 'completed');
-  await expect(claims.consume(live, { index: 1, messages: [{ role: 'user', content: 'after settle' }] })).rejects.toThrow(KinuError);
+  expect(claims.read('turn-fence')).toMatchObject({ epoch: 2, status: 'settled', outcome: 'completed' });
+  expect(() => claims.settle(live, 'error')).toThrow(settled.message);
+  expect(claims.read('turn-fence')).toMatchObject({ outcome: 'completed' });
+  await expect(claims.consume(live, { index: 1, messages: [{ role: 'user', content: 'after settle' }] })).rejects.toMatchObject(settled);
+
+  // Two activations admitted from one reading of the turn: the second finds the first's claim and takes none.
+  const context = await selectedInput(left, [{ role: 'user', content: 'third activation' }]);
+  const admit = (runId: string) => claims.admit({ runId, turnId: 'turn-fence', workMode: 'build', program: { kind: 'builtin', version: 0, digest: null, build: null }, context });
+  const admitted = await Promise.allSettled([admit('run-a'), admit('run-b')]);
+
+  expect(admitted.map((outcome) => outcome.status)).toEqual(['fulfilled', 'rejected']);
+  expect(admitted[1]).toMatchObject({ reason: { code: 'denied', message: 'claim changed during admission preparation' } });
+  expect(claims.read('turn-fence')).toMatchObject({ epoch: 3, runId: 'run-a', status: 'admitted' });
 });
 
 test('one actor cannot write another actor\'s claim, and their revisions never mix', async () => {

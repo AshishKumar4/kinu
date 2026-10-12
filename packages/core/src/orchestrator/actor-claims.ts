@@ -132,13 +132,13 @@ export class ActorClaimStore {
     });
 
     const claim = this.transactionSync(() => {
-      this.actor.assertCurrent();
-      const now = this.read(input.turnId);
+      const now = this.guard(input.turnId, epoch);
 
-      if ((now?.epoch ?? 0) !== (previous?.epoch ?? 0)) throw new KinuError('denied', 'claim changed during admission preparation');
-      const selected = this.history.context.selected();
+      if ((now.epoch ?? 0) !== (previous?.epoch ?? 0)) throw new KinuError('denied', 'claim changed during admission preparation');
 
-      if (selected?.contextId !== input.context.contextId || selected.revision !== input.context.revision) throw new KinuError('denied', 'working selection changed during admission preparation');
+      if (now.selected?.contextId !== input.context.contextId || now.selected.revision !== input.context.revision) {
+        throw new KinuError('denied', 'working selection changed during admission preparation');
+      }
 
       const admitted: ActorTurnClaim = Object.freeze({ actorId: this.actorId, runId: input.runId, turnId: input.turnId, epoch,
         workMode: input.workMode, program: Object.freeze({ ...input.program }), workingRevision: input.context.revision, workingContextId: input.context.contextId });
@@ -161,23 +161,25 @@ export class ActorClaimStore {
   }
 
   async consume(claim: ActorTurnClaim, input: { readonly index: number; readonly messages: readonly ModelMessage[]; readonly cache?: PromptCacheRoute | undefined }): Promise<ConsumedContext> {
-    const source = this.history.context.selected();
+    const { selected: source, revision: latest } = this.guard(claim.turnId, claim.epoch);
 
     if (source === null || source.contextId !== claim.workingContextId) throw new KinuError('denied', 'claimed working context is not selected');
-    const latest = this.sql<{ revision: number | null }>`SELECT MAX(revision) AS revision FROM actor_requests WHERE actor_id=${this.actorId} AND turn_id=${claim.turnId} AND epoch=${claim.epoch}`[0]?.revision ?? 0;
 
     const prepared = await this.history.requests.prepareRendered({ id: crypto.randomUUID(), turnId: claim.turnId, runId: claim.runId,
       epoch: claim.epoch, revision: latest + 1, step: input.index, source, messages: input.messages,
       metadata: { program: { ...claim.program }, workMode: claim.workMode, ...(input.cache !== undefined && { cache: { ...input.cache } }) } });
 
     const consumed = this.transactionSync(() => {
-      this.assertLive(claim);
-      const currentRevision = this.sql<{ revision: number | null }>`SELECT MAX(revision) AS revision FROM actor_requests WHERE actor_id=${this.actorId} AND turn_id=${claim.turnId} AND epoch=${claim.epoch}`[0]?.revision ?? 0;
+      const now = this.guard(claim.turnId, claim.epoch);
 
-      if (currentRevision !== latest) throw new KinuError('denied', 'another request consumed this claim during preparation');
-      const selected = this.history.context.selected();
+      assertLiveIn(now, claim);
 
-      if (selected?.contextId !== source.contextId || selected.revision !== source.revision) throw new KinuError('denied', 'working selection changed during request preparation');
+      if (now.revision !== latest) throw new KinuError('denied', 'another request consumed this claim during preparation');
+
+      if (now.selected?.contextId !== source.contextId || now.selected.revision !== source.revision) {
+        throw new KinuError('denied', 'working selection changed during request preparation');
+      }
+
       this.history.requests.recordPrepared(prepared);
       this.markCut(claim, 'provider');
 
@@ -246,7 +248,15 @@ export class ActorClaimStore {
   }
 
   settle(claim: ActorTurnClaim, outcome: ClaimOutcome): void {
-    this.transactionSync(() => { this.assertLive(claim); void this.sql`UPDATE actor_turn_claims SET outcome=${outcome} WHERE actor_id=${this.actorId} AND turn_id=${claim.turnId} AND epoch=${claim.epoch}`; });
+    this.transactionSync(() => {
+      this.actor.assertCurrent();
+
+      // The live claim is the update's own condition; a refused one is read only to say why.
+      const settled = this.sql<{ epoch: number }>`UPDATE actor_turn_claims SET outcome=${outcome}
+        WHERE actor_id=${this.actorId} AND turn_id=${claim.turnId} AND epoch=${claim.epoch} AND outcome IS NULL RETURNING epoch`;
+
+      if (settled.length === 0) assertLiveIn(this.guard(claim.turnId, claim.epoch), claim);
+    });
     this.changed();
   }
 
@@ -300,13 +310,42 @@ export class ActorClaimStore {
       program: Object.freeze({ kind: row.program_kind, version: row.program_version, digest: row.program_digest, build: row.program_build }),
       status: row.outcome === null ? 'admitted' : 'settled', outcome: row.outcome, claimedAt: row.claimed_at });
   }
-  private assertLive(claim: ActorTurnClaim): void {
-    const current = this.read(claim.turnId);
+  /**
+   * What a write's guard compares with what it prepared, in one statement: the turn's claim, its epoch's newest request
+   * revision, and the selected working context as {@link SessionContext.selected} reads it.
+   */
+  private guard(turnId: string, epoch: number): ClaimGuard {
+    this.actor.assertCurrent();
 
-    if (current === null || current.epoch !== claim.epoch) throw new KinuError('denied', 'actor turn is owned by another execution epoch');
+    const row = this.sql<{ epoch: number | null; open: number | null; revision: number | null; context_id: string | null; selected: number | null }>`
+      SELECT c.epoch, c.outcome IS NULL AS open,
+        (SELECT MAX(revision) FROM actor_requests WHERE actor_id=${this.actorId} AND turn_id=${turnId} AND epoch=${epoch}) AS revision,
+        s.context_id, (SELECT MAX(r.revision) FROM context_revisions r WHERE r.actor_id=s.actor_id AND r.context_id=s.context_id) AS selected
+      FROM (SELECT 1)
+        LEFT JOIN actor_turn_claims c ON c.actor_id=${this.actorId} AND c.turn_id=${turnId}
+        LEFT JOIN actor_context_selection s ON s.actor_id=${this.actorId}`[0];
 
-    if (current.status !== 'admitted') throw new KinuError('denied', 'actor turn is settled and takes no further work');
+    return {
+      epoch: row?.epoch ?? null,
+      open: row?.open === 1,
+      revision: row?.revision ?? 0,
+      selected: row?.context_id === null || row?.context_id === undefined || row.selected === null ? null : { contextId: row.context_id, revision: row.selected },
+    };
   }
+}
+
+interface ClaimGuard {
+  /** Null when the turn holds no claim. */
+  readonly epoch: number | null;
+  readonly open: boolean;
+  readonly revision: number;
+  readonly selected: ContextSelection | null;
+}
+
+function assertLiveIn(guard: ClaimGuard, claim: ActorTurnClaim): void {
+  if (guard.epoch !== claim.epoch) throw new KinuError('denied', 'actor turn is owned by another execution epoch');
+
+  if (!guard.open) throw new KinuError('denied', 'actor turn is settled and takes no further work');
 }
 
 export type ClaimRecovery =
