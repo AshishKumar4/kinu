@@ -284,7 +284,7 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
         aria-live="polite">
         <div className="mb-1 flex items-center gap-1.5 p-meta p-text-3">
           <FrontIcon size={12} className="shrink-0 p-warning" weight="fill" aria-hidden />
-          <span>Waiting on you</span>
+          <span>{answerOwed ? "Answer sent" : "Waiting on you"}</span>
           {waiting.length > 1 && <span className="tabular-nums" data-attention-position>· 1 of {waiting.length}</span>}
         </div>
         {front.kind === "consent" && <ConsentBody consent={front.consent} />}

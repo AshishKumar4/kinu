@@ -144,7 +144,7 @@ export function QuestionCard({ asking, busy, owed = false, onAnswer, onDismiss }
 
   return (
     <div data-question-card={id}>
-      <div className="-mx-1 flex max-h-[min(55vh,32rem)] flex-col gap-3 overflow-y-auto px-1">
+      <div className="-mx-1 flex max-h-[min(45vh,32rem)] flex-col gap-3 overflow-y-auto px-1 sm:max-h-[min(55vh,32rem)]">
         {questions.map((question) => (
           <QuestionField key={question.id} question={question} draft={draftOf(question.id)} busy={busy}
             onDraft={(draft) => keep({ ...unsent, drafts: new Map([...unsent.drafts, [question.id, draft]]) })} />

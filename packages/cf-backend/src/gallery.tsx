@@ -2008,8 +2008,6 @@ const ASKED_THREAD: UIMessage[] = [
   }),
 ];
 
-const GALLERY_OWED_INTENTS: OwedOwnerIntent[] = [];
-
 /** `&intent=decision|answers|retry` shows an intent waiting for the agent's next wake. Retry uses `transcript=refused`. */
 function galleryOwedIntents(): readonly OwedOwnerIntent[] {
   const replacement = document.documentElement.dataset.galleryOwedIntents;
@@ -2027,11 +2025,11 @@ function galleryOwedIntents(): readonly OwedOwnerIntent[] {
     return newest === undefined ? [] : [{ id: "owed-retry", kind, target: newest.id, actor: null }];
   }
 
-  return GALLERY_OWED_INTENTS;
+  return [];
 }
 
 function galleryOweIntent(intent: OwedOwnerIntent): JsonValue {
-  GALLERY_OWED_INTENTS.push(intent);
+  document.documentElement.dataset.galleryOwedIntents = JSON.stringify([...galleryOwedIntents(), intent]);
   galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["listOwedIntents"] }));
 
   return { owed: intent.id };

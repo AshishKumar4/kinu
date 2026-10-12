@@ -13,7 +13,7 @@ const directory = resolve(out);
 mkdirSync(directory, { recursive: true });
 
 const STATES = [
-  { kind: 'decision', query: 'frame=planreview&plan=annotated-heading&intent=decision', status: '[data-plan-footer] [role="status"]', controls: '[data-plan-decisions] button' },
+  { kind: 'decision', query: 'frame=planreview&intent=decision', status: '[data-plan-footer] [role="status"]', controls: '[data-plan-decisions] button' },
   { kind: 'answers', query: 'frame=workspacepage&transcript=asked&questions=open&intent=answers', status: '[data-question-card] [role="status"]', controls: '[data-question-card] button, [data-question-card] input, [data-question-card] textarea' },
   { kind: 'retry', query: 'frame=workspacepage&transcript=refused&intent=retry', status: '[data-agent-pane] p[role="status"]', controls: '[data-turn-failure] button' },
 ] as const;
@@ -35,6 +35,11 @@ async function open(gallery: Gallery, query: string, viewport: (typeof VIEWPORTS
 
 async function replaceIntents(page: Page, intents: readonly OwedOwnerIntent[]): Promise<void> {
   await page.evaluate((next) => { window.dispatchEvent(new CustomEvent('gallery:owed-intents', { detail: next })); }, intents);
+  await painted(page);
+}
+
+async function painted(page: Page): Promise<void> {
+  await page.evaluate(() => new Promise<void>((done) => { requestAnimationFrame(() => { requestAnimationFrame(() => { done(); }); }); }));
 }
 
 async function photograph(gallery: Gallery): Promise<void> {
@@ -50,6 +55,7 @@ async function photograph(gallery: Gallery): Promise<void> {
         const measured = await page.$eval(state.status, (line, controls) => {
           const box = line.getBoundingClientRect();
           const buttons = [...document.querySelectorAll(controls)];
+          const send = document.querySelector('[data-composer-root] button[aria-label="Send"]')?.getBoundingClientRect();
 
           return {
             theme: document.documentElement.dataset.mode,
@@ -57,11 +63,13 @@ async function photograph(gallery: Gallery): Promise<void> {
             overflow: document.documentElement.scrollWidth > innerWidth,
             controls: buttons.length,
             disabled: buttons.every((button) => button.matches(':disabled')),
+            sendVisible: send !== undefined && send.top >= 0 && send.bottom <= innerHeight,
           };
         }, state.controls);
 
         if (measured.theme !== theme || !measured.visible || measured.overflow || !measured.disabled
-          || (state.kind === 'retry' ? measured.controls !== 0 : measured.controls === 0)) {
+          || (state.kind === 'retry' ? measured.controls !== 0 : measured.controls === 0)
+          || (state.kind !== 'decision' && !measured.sendVisible)) {
           throw new Error(`${state.kind}/${viewport.name}/${theme}: ${JSON.stringify(measured)}`);
         }
       } finally {
@@ -76,29 +84,29 @@ async function verifyAnswers(gallery: Gallery): Promise<void> {
   const status = STATES[1].status;
 
   try {
-    await page.waitForSelector('[data-question-card] input[type="radio"]');
     await page.click('[data-question-card] input[type="radio"]');
     await page.click('[data-question-answer]');
-    await page.waitForSelector(status);
+    await painted(page);
     const kept = await page.$eval('[data-question-answer]', (button) => button.matches(':disabled'));
 
-    if (!kept) throw new Error('An owed answer left its Answer control live.');
+    if (!kept || await page.$(status) === null) throw new Error('An owed answer did not retain its card with a disabled Answer control.');
 
     for (const unrelated of [
       { id: 'other-actor', kind: 'answers', target: 'q-1', actor: 'another-agent' },
       { id: 'other-question', kind: 'answers', target: 'another-question', actor: null },
     ] satisfies readonly OwedOwnerIntent[]) {
       await replaceIntents(page, [unrelated]);
-      await page.waitForSelector(status, { hidden: true });
       const enabled = await page.$eval('[data-question-answer]', (button) => !button.matches(':disabled'));
 
-      if (!enabled) throw new Error('Another question or actor blocked this answer.');
+      if (!enabled || await page.$(status) !== null) throw new Error('Another question or actor blocked this answer.');
     }
 
     await replaceIntents(page, [{ id: 'matching', kind: 'answers', target: 'q-1', actor: null }]);
-    await page.waitForSelector(status);
+
+    if (await page.$(status) === null) throw new Error('A matching answer did not show its owed line.');
     await replaceIntents(page, []);
-    await page.waitForSelector(status, { hidden: true });
+
+    if (await page.$(status) !== null) throw new Error('A retired answer kept its owed line.');
     process.stdout.write('answers: receipt retains the card; actor/target match; live retirement clears the line\n');
   } finally {
     await page.close();
@@ -110,22 +118,23 @@ async function verifyRetry(gallery: Gallery): Promise<void> {
   const status = STATES[2].status;
 
   try {
-    await page.waitForSelector(status);
+    if (await page.$(status) === null) throw new Error('The owed Retry did not show its line.');
 
     for (const unrelated of [
       { id: 'other-actor', kind: 'retry', target: 'rf-u1', actor: 'another-agent' },
       { id: 'other-turn', kind: 'retry', target: 'an-older-user-message', actor: null },
     ] satisfies readonly OwedOwnerIntent[]) {
       await replaceIntents(page, [unrelated]);
-      await page.waitForSelector(status, { hidden: true });
-      await page.waitForSelector('[data-turn-failure] button');
+
+      if (await page.$(status) !== null || await page.$('[data-turn-failure] button') === null) throw new Error('Another actor or turn blocked Retry.');
     }
 
     await replaceIntents(page, [{ id: 'matching', kind: 'retry', target: 'rf-u1', actor: null }]);
-    await page.waitForSelector(status);
+
+    if (await page.$(status) === null) throw new Error('A matching Retry did not show its owed line.');
     await replaceIntents(page, []);
-    await page.waitForSelector(status, { hidden: true });
-    await page.waitForSelector('[data-turn-failure] button');
+
+    if (await page.$(status) !== null || await page.$('[data-turn-failure] button') === null) throw new Error('A retired Retry did not restore its control.');
     process.stdout.write('retry: actor/newest-user match; live retirement restores Retry\n');
   } finally {
     await page.close();
@@ -138,19 +147,17 @@ async function verifyDecision(gallery: Gallery): Promise<void> {
 
   try {
     const tab = 'nav[aria-label="Pages"] button[aria-label*="applyCoupon"]';
-    await page.waitForSelector(tab);
     await page.click(tab);
     await page.waitForSelector('[data-plan-decisions] button');
     await page.click('[data-plan-decisions] button:last-child');
-    await page.waitForSelector(status);
+    await painted(page);
     const locked = await page.$$eval('[data-plan-decisions] button', (buttons) => buttons.every((button) => button.matches(':disabled')));
 
-    if (!locked) throw new Error('An owed decision left a decision control live.');
+    if (!locked || await page.$(status) === null) throw new Error('An owed decision did not show its line with locked controls.');
     await replaceIntents(page, [{ id: 'other-plan', kind: 'decision', target: 'another-plan', actor: null }]);
-    await page.waitForSelector(status, { hidden: true });
     const enabled = await page.$$eval('[data-plan-decisions] button', (buttons) => buttons.every((button) => !button.matches(':disabled')));
 
-    if (!enabled) throw new Error('Another plan blocked this decision.');
+    if (!enabled || await page.$(status) !== null) throw new Error('Another plan blocked this decision.');
     process.stdout.write('decision: receipt locks both controls; another plan does not\n');
   } finally {
     await page.close();
