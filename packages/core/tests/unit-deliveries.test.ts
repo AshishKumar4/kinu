@@ -173,18 +173,30 @@ describe('deliveries crossed in this process', () => {
 });
 
 describe('DeliveryCoordinator', () => {
-  /** A host that records each wake it arms and each crossing it makes. */
-  function hosted() {
+  /**
+   * A host that writes each wake it intends as a row of its own, records each projection of one it runs and each crossing
+   * it makes; while `host.alive` is false both fail, as after a host died with its commit done.
+   */
+  function hosted(host = { alive: true }) {
     const world = workspace();
     const armed: string[] = [];
     const crossed: string[] = [];
 
     world.db.exec('CREATE TABLE producer_facts (id TEXT PRIMARY KEY)');
+    world.db.exec('CREATE TABLE wake_intents (actor_id TEXT PRIMARY KEY, at INTEGER)');
 
     const coordinator = new DeliveryCoordinator({
       sql: world.sql, transaction: (body) => world.db.transaction(body)(), eventLog: () => world.eventLog, live: () => true,
-      armWake: async (actorId) => { armed.push(actorId); },
+      wake: (actorId, at) => {
+        world.db.run('INSERT INTO wake_intents (actor_id, at) VALUES (?, ?) ON CONFLICT DO UPDATE SET at = MIN(at, excluded.at)', [actorId, at ?? Number.MAX_SAFE_INTEGER]);
+
+        return async () => {
+          if (!host.alive) throw new KinuError('unavailable', 'the host died before it set the alarm');
+          armed.push(actorId);
+        };
+      },
       admit: async (_actorId, delivery) => {
+        if (!host.alive) throw new KinuError('unavailable', 'the host died before it crossed');
         crossed.push(delivery.id);
 
         return 'taken';
@@ -192,12 +204,13 @@ describe('DeliveryCoordinator', () => {
     });
 
     const facts = (): number => world.db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM producer_facts').get()?.n ?? -1;
+    const intents = (): string[] => world.db.query<{ actor_id: string }, []>('SELECT actor_id FROM wake_intents').all().map((row) => row.actor_id);
 
-    return { ...world, coordinator, armed, crossed, facts };
+    return { ...world, coordinator, armed, crossed, facts, intents };
   }
 
   test('a producer whose commit rolls back leaves no delivery and no wake, and crosses nothing', async () => {
-    const { coordinator, deliveries, main, armed, crossed, facts, db } = hosted();
+    const { coordinator, deliveries, main, armed, crossed, facts, intents, db } = hosted();
 
     // Its own fact is written, then it fails inside the same commit.
     await expect(coordinator.deliver(main, turn('d-1', 'first'), () => {
@@ -205,11 +218,60 @@ describe('DeliveryCoordinator', () => {
       throw new KinuError('io', 'the producer failed after its own write');
     })).rejects.toThrow('the producer failed after its own write');
 
-    expect({ owed: deliveries.unpaid(main), facts: facts(), armed, crossed }).toEqual({ owed: [], facts: 0, armed: [], crossed: [] });
+    expect({ owed: deliveries.unpaid(main), facts: facts(), intents: intents(), armed, crossed }).toEqual({ owed: [], facts: 0, intents: [], armed: [], crossed: [] });
 
     // Its next commit, whole, owes and crosses as any does.
     await coordinator.deliver(main, turn('d-2', 'second'), () => { db.run("INSERT INTO producer_facts (id) VALUES ('f-2')"); });
     expect({ owed: deliveries.unpaid(main), facts: facts(), armed, crossed }).toEqual({ owed: [], facts: 1, armed: [main], crossed: ['d-2'] });
+  });
+
+  test("a delivery's wake is intended in its producer's commit, and a start projects one whose projection a death cut off", async () => {
+    const host = { alive: false };
+    const { coordinator, deliveries, main, armed, crossed, facts, intents, db } = hosted(host);
+
+    // The producer's fact, the delivery and its wake intent commit as one; the host dies before it sets the alarm.
+    await expect(coordinator.deliver(main, turn('d-1', 'first'), () => { db.run("INSERT INTO producer_facts (id) VALUES ('f-1')"); }))
+      .rejects.toThrow('the host died before it set the alarm');
+    expect({ owed: deliveries.unpaid(main).map((owed) => owed.id), facts: facts(), intents: intents(), armed })
+      .toEqual({ owed: ['d-1'], facts: 1, intents: [main], armed: [] });
+
+    // Its next start finds the agent owed, intends its wake due now and projects it; that wake crosses the delivery.
+    host.alive = true;
+    expect(await coordinator.reconcile()).toEqual([main]);
+    expect(armed).toEqual([main]);
+    expect(db.query<{ at: number }, [string]>('SELECT at FROM wake_intents WHERE actor_id = ?').get(main)?.at).toBeLessThanOrEqual(Date.now());
+
+    await coordinator.drain(main);
+    expect({ owed: deliveries.unpaid(main), crossed }).toEqual({ owed: [], crossed: ['d-1'] });
+    expect(await coordinator.reconcile()).toEqual([]);
+  });
+
+  test("two agents owed deliveries under the same id each hear their own agent's answer", async () => {
+    const world = workspace();
+    const held = Promise.withResolvers<void>();
+    const answerA = { applied: { kind: 'retry', turnId: 'turn-a' } } as const;
+    const answerB = { applied: { kind: 'retry', turnId: 'turn-b' } } as const;
+
+    const coordinator = new DeliveryCoordinator({
+      sql: world.sql, transaction: (body) => world.db.transaction(body)(), eventLog: () => world.eventLog, live: () => true,
+      wake: () => async () => {},
+      // The first agent's crossing is still out while the second's comes back.
+      admit: async (actorId) => {
+        if (actorId !== 'agent-a') return answerB;
+        await held.promise;
+
+        return answerA;
+      },
+    });
+
+    // The outbox's key is the agent's and the id: one id may be owed to each.
+    const first = coordinator.deliver('agent-a', turn('intent-1', 'retry it'));
+    const second = await coordinator.deliver('agent-b', turn('intent-1', 'retry it'));
+
+    held.resolve();
+
+    expect({ first: await first, second }).toEqual({ first: { admitted: answerA }, second: { admitted: answerB } });
+    expect([...world.deliveries.unpaid('agent-a'), ...world.deliveries.unpaid('agent-b')]).toEqual([]);
   });
 
   test('an admission that rolls back what it recorded owes nothing', async () => {

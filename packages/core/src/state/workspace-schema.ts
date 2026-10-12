@@ -4,7 +4,7 @@
 import { initAgentOpenTurnsTable } from '../subordinates/open-turns';
 import { initAgentReportsTable, initAgentSequenceTable } from '../subordinates/report-sequence';
 import { initTurnFenceTable } from '../subordinates/turn-fence';
-import { initAgentDeliveriesTable } from '../subordinates/deliveries';
+import { initAgentDeliveriesTable, initAgentStopsTable } from '../subordinates/deliveries';
 import { initTurnReportTable } from '../subordinates/turn-reports';
 import { initAgentFiguresTable } from '../read-models/agent-figures';
 import type { RawSqlExec, SqlExec, SqlExecutor, Storage } from '../types/primitives';
@@ -117,6 +117,7 @@ function createWorkspaceTables(db: WorkspaceSchemaSql): void {
   initAgentReportsTable(execRaw);
   initTurnFenceTable(execRaw);
   initAgentDeliveriesTable(execRaw);
+  initAgentStopsTable(execRaw);
   initAgentFiguresTable(execRaw);
   initSubordinateRosterTable(db.exec);
   initActorStateSchema(db);

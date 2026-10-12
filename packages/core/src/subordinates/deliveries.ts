@@ -168,6 +168,60 @@ export function initAgentDeliveriesTable(execRaw: RawSqlExec): void {
   )`);
 }
 
+/** An agent's Stop its own isolate has not yet answered: the newest's generation and the newest cutoff owed. */
+export interface OwedStop {
+  readonly generation: number;
+  readonly cutoff: number | null;
+}
+
+export function initAgentStopsTable(execRaw: RawSqlExec): void {
+  // `retired`: the newest generation the agent's isolate answered; a Stop is owed while a newer one stands.
+  execRaw(`CREATE TABLE IF NOT EXISTS agent_stops (
+    actor_id   TEXT PRIMARY KEY,
+    generation INTEGER NOT NULL,
+    retired    INTEGER NOT NULL DEFAULT 0,
+    cutoff     INTEGER
+  )`);
+}
+
+/**
+ * The Stops a workspace owes its agents' isolates (design v3 C): each written in its Stop's own commit, crossed to the
+ * agent's isolate before anything else of the agent's is driven, and retired once the isolate answers, having committed
+ * the cutoff and cancelled what it had queued. A reset between the two leaves it owed, so the next activation crosses it.
+ */
+export class AgentStops {
+  constructor(private readonly sql: SqlExecutor) {}
+
+  /** Inside the Stop's commit. A Stop still owed is joined: one crossing at the newest of their cutoffs answers both.
+   *  Answers the new generation. */
+  owe(actorId: string, cutoff: number | null): number {
+    const [written] = this.sql<{ generation: number }>`INSERT INTO agent_stops (actor_id, generation, cutoff)
+      VALUES (${actorId}, 1, ${cutoff})
+      ON CONFLICT (actor_id) DO UPDATE SET generation = agent_stops.generation + 1,
+        cutoff = MAX(COALESCE(agent_stops.cutoff, excluded.cutoff), COALESCE(excluded.cutoff, agent_stops.cutoff))
+      RETURNING generation`;
+
+    if (written === undefined) return settleSync(Effect.fail(new KinuError('io', `The Stop of ${actorId} was not written.`)));
+
+    return written.generation;
+  }
+
+  /** The agent's Stop its isolate has not answered, or null. */
+  owed(actorId: string): OwedStop | null {
+    return this.sql<OwedStop>`SELECT generation, cutoff FROM agent_stops WHERE actor_id = ${actorId} AND generation > retired`[0] ?? null;
+  }
+
+  /** Every Stop an isolate has not answered, by its agent, for the start that crosses them again. */
+  owedEach(): (OwedStop & { readonly actorId: string })[] {
+    return this.sql<OwedStop & { actorId: string }>`SELECT actor_id AS actorId, generation, cutoff FROM agent_stops WHERE generation > retired`;
+  }
+
+  /** The isolate answered the Stop of `generation`: it, and any older, is no longer owed. A newer one stays owed. */
+  retire(actorId: string, generation: number): void {
+    void this.sql`UPDATE agent_stops SET retired = MAX(retired, ${generation}) WHERE actor_id = ${actorId}`;
+  }
+}
+
 /** The deliveries a workspace owes its agents, each until the agent answers for it. */
 export class AgentDeliveries {
   constructor(private readonly sql: SqlExecutor) {}

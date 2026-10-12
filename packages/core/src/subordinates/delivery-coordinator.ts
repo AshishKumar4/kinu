@@ -27,9 +27,13 @@ export interface StopCutoff {
 export interface DeliveryHost {
   readonly sql: SqlExecutor;
   readonly transaction: <A>(body: () => A) => A;
-  /** The agent's wake, armed from its owed rows after their commit: an owed row is the durable intent, its alarm the
-   *  projection, so a host that dies between the two finds the row at its next start and arms the wake then. */
-  readonly armWake: (actorId: string) => Promise<void>;
+  /**
+   * The agent's wake, intended inside the caller's commit with the rows that owe it: the intent is written before this
+   * returns, so a delivery and its wake are one fact. Due at `at`, or by default a lap ahead, the fallback of the crossing
+   * that follows the commit. Answers the intent's projection (the alarm), run once the commit is done; a host that died
+   * before it projects at its next start what it finds owed ({@link DeliveryCoordinator.reconcile}).
+   */
+  readonly wake: (actorId: string, at?: number) => () => Promise<void>;
   /** One crossing into the agent's own store. */
   readonly admit: (actorId: string, delivery: OwedDelivery) => Promise<DeliveryAnswer>;
   readonly eventLog: (actorId: string) => EventLog;
@@ -48,8 +52,9 @@ export interface DeliveryHost {
  */
 export class DeliveryCoordinator {
   private readonly lanes = new Map<string, ReturnType<typeof serialQueue>>();
-  /** The answers producers wait on, by delivery id: set by the lane pass that crossed it. */
-  private readonly awaited = new Map<string, CrossedDelivery | null>();
+  /** The answers producers wait on, by agent and then delivery id, the outbox's own key (an id is unique per agent
+   *  only): each set by its agent's lane pass that crossed it, and read and dropped by the producer that waits on it. */
+  private readonly awaited = new Map<string, Map<string, CrossedDelivery | null>>();
 
   constructor(private readonly host: DeliveryHost) {}
 
@@ -57,61 +62,92 @@ export class DeliveryCoordinator {
     return new AgentDeliveries(this.host.sql);
   }
 
-  /** In the producer's commit: `source` and the delivery as one. False when the delivery was owed already. */
-  commit(actorId: string, delivery: Delivery, source?: () => void): boolean {
+  /** In the producer's commit: `source`, the delivery and the agent's wake intent as one. Answers whether the delivery
+   *  is new (one owed already under its id owes nothing new, its intent written with it) and the intent's projection. */
+  private committed(actorId: string, delivery: Delivery, source?: () => void): { readonly added: boolean; readonly projection: () => Promise<void> } {
     return this.host.transaction(() => {
       source?.();
+      const added = this.rows.add(actorId, delivery);
 
-      return this.rows.add(actorId, delivery);
+      return { added, projection: this.host.wake(actorId) };
     });
   }
 
-  /** What `admit` writes and the delivery it owes the agent, as one commit; the agent's next {@link drain} crosses it. */
+  /**
+   * What `admit` writes and the delivery it owes the agent, as one commit, for a host whose own process is the agent's
+   * wake (the CLI's): it intends no wake, and its next {@link drain} crosses the delivery.
+   */
   record<A>(actorId: string, admit: () => OwedAdmission<A>): A {
-    return this.recorded(actorId, admit).value;
-  }
-
-  private recorded<A>(actorId: string, admit: () => OwedAdmission<A>): OwedAdmission<A> {
     return this.host.transaction(() => {
       const admitted = admit();
 
       if (admitted.delivery !== null) this.rows.add(actorId, admitted.delivery);
 
-      return admitted;
+      return admitted.value;
     });
   }
 
-  /** Committed, its wake armed, then crossed behind everything owed before it. Answers where it stands. */
+  /** Committed with its wake intent, the intent projected, then crossed behind everything owed before it. Answers where it
+   *  stands. */
   async deliver(actorId: string, delivery: Delivery, source?: () => void): Promise<CrossedDelivery> {
-    this.commit(actorId, delivery, source);
-
-    return await this.crossed(actorId, delivery.id);
+    return await this.crossed(actorId, delivery.id, this.committed(actorId, delivery, source).projection);
   }
 
   /** As {@link deliver}, for a delivery whose id names one intent: one already owed under that id has its own caller, who
    *  hears its answer, so this one crosses nothing and is answered null. */
   async deliverNew(actorId: string, delivery: Delivery): Promise<CrossedDelivery | null> {
-    if (!this.commit(actorId, delivery)) return null;
+    const { added, projection } = this.committed(actorId, delivery);
 
-    return await this.crossed(actorId, delivery.id);
+    if (!added) {
+      await projection();
+
+      return null;
+    }
+
+    return await this.crossed(actorId, delivery.id, projection);
   }
 
-  /** As {@link record}, then crossed as {@link deliver} crosses. */
+  /** What `admit` writes, the delivery it owes the agent and the agent's wake intent, as one commit; then crossed as
+   *  {@link deliver} crosses. */
   async owe<A>(actorId: string, admit: () => OwedAdmission<A>): Promise<A> {
-    const { value, delivery } = this.recorded(actorId, admit);
+    const { admitted, projection } = this.host.transaction(() => {
+      const owing = admit();
 
-    if (delivery !== null) await this.crossed(actorId, delivery.id);
+      return { admitted: owing, projection: owing.delivery !== null && this.rows.add(actorId, owing.delivery) ? this.host.wake(actorId) : null };
+    });
 
-    return value;
+    if (admitted.delivery !== null) await this.crossed(actorId, admitted.delivery.id, projection ?? (async () => {}));
+
+    return admitted.value;
   }
 
-  /** Its wake armed at once, and the agent's lane drained: neither waits behind the other. */
-  private async crossed(actorId: string, id: string): Promise<CrossedDelivery> {
-    this.awaited.set(id, null);
-    await Promise.all([this.host.armWake(actorId), this.drain(actorId)]);
-    const answer = this.awaited.get(id) ?? null;
+  /**
+   * At the host's start, every agent owed a delivery has its wake intended again and projected: an intent whose projection
+   * a death cut off, or a delivery committed with no intent (one {@link record}ed), wakes its agent all the same. Answers
+   * the agents.
+   */
+  async reconcile(): Promise<readonly string[]> {
+    const owed = this.rows.actors();
+    // Due now: no crossing follows a start, so the wake is the first one.
+    const projections = this.host.transaction(() => owed.map((actorId) => this.host.wake(actorId, Date.now())));
 
-    this.awaited.delete(id);
+    await Promise.all(projections.map((projection) => projection()));
+
+    return owed;
+  }
+
+  /** The intent projected at once, and the agent's lane drained: neither waits behind the other. */
+  private async crossed(actorId: string, id: string, projection: () => Promise<void>): Promise<CrossedDelivery> {
+    const waiting = this.awaited.get(actorId) ?? new Map<string, CrossedDelivery | null>();
+
+    this.awaited.set(actorId, waiting);
+    waiting.set(id, null);
+    await Promise.all([projection(), this.drain(actorId)]);
+    const answer = waiting.get(id) ?? null;
+
+    waiting.delete(id);
+
+    if (waiting.size === 0 && this.awaited.get(actorId) === waiting) this.awaited.delete(actorId);
 
     return answer ?? { failure: new KinuError('unavailable', 'The agent did not take it yet; it is owed to its next wake.') };
   }
@@ -127,8 +163,9 @@ export class DeliveryCoordinator {
 
       for (const delivery of this.rows.unpaid(actorId)) {
         const crossed = await this.cross(actorId, delivery);
+        const waiting = this.awaited.get(actorId);
 
-        if (this.awaited.has(delivery.id)) this.awaited.set(delivery.id, crossed);
+        if (waiting?.has(delivery.id) === true) waiting.set(delivery.id, crossed);
 
         if ('admitted' in crossed) {
           if (crossed.admitted === 'taken') taken.push(delivery);
@@ -223,7 +260,7 @@ export class InProcessDeliveries implements DeliveryPort {
     readonly broadcast: (event: BroadcastEvent) => void;
   }) {
     this.coordinator = new DeliveryCoordinator({
-      sql: deps.sql, transaction: deps.transaction, armWake: async () => {},
+      sql: deps.sql, transaction: deps.transaction, wake: () => async () => {},
       admit: async (_actorId, delivery) => {
         const answer = await deps.admit(delivery);
 
