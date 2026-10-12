@@ -227,8 +227,8 @@ describe('providers command — disconnect', () => {
 
         return Response.json({ error: 'invalid_request', error_description: 'The refresh token has already been used.' }, { status: 400 });
       };
-      const { providersCommand } = await import('./packages/cli/src/commands/providers.ts');
-      await providersCommand('disconnect', 'chatgpt', undefined, { revoke: ${String(revoke)} });
+      const { buildProgram } = await import('./packages/cli/src/program.ts');
+      await buildProgram().parseAsync(['provider', 'disconnect', 'chatgpt', ...(${String(revoke)} ? ['--revoke'] : [])], { from: 'user' });
       console.log(JSON.stringify({ asked }));
     `], { cwd: repoRoot, env: { ...process.env, KINU_HOME: home, NO_COLOR: '1' } });
 
@@ -239,11 +239,13 @@ describe('providers command — disconnect', () => {
     expect(plain.exitCode, plain.stderr).toBe(0);
     expect(asked(plain.stdout)).toEqual([]);
 
-    const revoking = await disconnect(homeWith({ providers: { chatgpt: signedIn } }), true);
+    const revokedHome = homeWith({ providers: { chatgpt: signedIn } });
+    const revoking = await disconnect(revokedHome, true);
     expect(revoking.exitCode, revoking.stderr).toBe(0);
     expect(asked(revoking.stdout)).toEqual(['https://auth.openai.com/api/accounts/oauth/revoke']);
+    // The provider's own words, and the login gone from this machine either way.
     expect(revoking.stdout).toContain('The refresh token has already been used.');
-    expect(revoking.stdout).toContain('Removed the chatgpt credential from this machine');
+    expect(JSON.stringify(readConfig(revokedHome))).not.toContain('"rt"');
   });
 
   test('a signed-out ChatGPT login reads as signed out, not as a sign-in without plan usage', async () => {

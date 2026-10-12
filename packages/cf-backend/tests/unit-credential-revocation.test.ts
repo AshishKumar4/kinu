@@ -105,6 +105,21 @@ describe('disconnecting a provider, and revoking its grant there when asked', ()
     harness.close();
   });
 
+  test('a refusal echoing the client\'s Basic credentials shows none of them', async () => {
+    const harness = createTestUserDO({ durableObjectId: USER_ID, cloudflareOAuthClientId: 'kinu-client', cloudflareOAuthClientSecret: 'kinu-secret' });
+    const owner = await testOwner();
+    await harness.userDO.setCredential(owner, CLOUDFLARE_OAUTH_CRED_KEY, { kind: 'oauth', accessToken: 'cf-access', refreshToken: 'cf-refresh' });
+    const blob = btoa('kinu-client:kinu-secret');
+    provider(harness, () => Response.json({ error: 'invalid_client', error_description: `bad client kinu-secret ${blob}` }, { status: 401 }));
+
+    const { unrevoked } = await harness.userDO.deleteCredential(owner, CLOUDFLARE_OAUTH_CRED_KEY, true);
+
+    expect(unrevoked).toContain('bad client');
+    expect(unrevoked).not.toContain('kinu-secret');
+    expect(unrevoked).not.toContain(blob);
+    harness.close();
+  });
+
   test('Cloudflare: authenticated as this deployment\'s OAuth client', async () => {
     const harness = createTestUserDO({ durableObjectId: USER_ID, cloudflareOAuthClientId: 'kinu-client', cloudflareOAuthClientSecret: 'kinu-secret' });
     const owner = await testOwner();

@@ -72,7 +72,7 @@ function revokeOne(input: Parameters<typeof revokeOAuthGrant>[0], token: string,
   const headers = { 'content-type': 'application/x-www-form-urlencoded', ...endpoint.client.headers };
   // Whatever the call carried that a refusal could echo: the grant's tokens and the client's own secret.
   const clientSecrets = Object.entries(endpoint.client.fields).filter(([field]) => field !== 'client_id').map(([, value]) => value);
-  const submitted = [credential.accessToken, credential.refreshToken ?? '', ...clientSecrets, ...Object.values(endpoint.client.headers)];
+  const submitted = [credential.accessToken, credential.refreshToken ?? '', ...clientSecrets, ...Object.values(endpoint.client.headers).flatMap(authorizationSecrets)];
 
   const sent = attempt({ doing: `revoking the ${hint} at ${endpoint.provider}`, otherwise: 'unavailable' }, async () => {
     const response = await input.fetch(endpoint.url, { method: 'POST', headers, body, redirect: 'error' });
@@ -92,4 +92,15 @@ function revokeOne(input: Parameters<typeof revokeOAuthGrant>[0], token: string,
       : new KinuError(refused.status === 429 ? 'budget' : 'unavailable', `${endpoint.provider} refused to revoke the ${hint}: ${refused.words}`),
     onFailure: (failure) => failure,
   });
+}
+
+/** An authorization header's secret in each form a refusal could echo it: whole, its credentials, and a Basic
+ *  pair decoded with its secret alone (RFC 7617). */
+function authorizationSecrets(header: string): string[] {
+  const [scheme = '', credentials = ''] = header.split(' ');
+
+  if (scheme.toLowerCase() !== 'basic' || credentials === '') return [header, credentials];
+  const pair = tolerate(() => atob(credentials), 'malformed-input') ?? '';
+
+  return [header, credentials, pair, pair.slice(pair.indexOf(':') + 1)];
 }

@@ -4,14 +4,14 @@
  */
 import { useCallback, useState, type ReactNode } from 'react';
 import { Button } from '@cloudflare/kumo';
-import { executorLabel, revealMisrepresenting } from '@kinu.run/core';
+import { DeferredApprovalSchema, executorLabel, revealMisrepresenting, type DeferredApproval } from '@kinu.run/core';
 import { TrashIcon, WarningIcon } from '@phosphor-icons/react';
 import { FilledButton } from '../ui/FilledButton';
 import { Modal } from '../ui/Modal';
 import { inputCls } from '../ui/form';
 import {
-  BackgroundJobRowSchema, DeferredApprovalRowSchema, fetchWorkspaceDetail, panelRows, runAction,
-  type BackgroundJobRow, type ControlAction, type DeferredApprovalRow, type JsonValue,
+  BackgroundJobRowSchema, fetchWorkspaceDetail, panelRows, runAction,
+  type BackgroundJobRow, type ControlAction, type JsonValue,
   type Panel as PanelValue,
 } from '../../lib/control-api';
 import { Notice, Panel, SectionHeader, useControlRead, when } from './panels';
@@ -181,7 +181,7 @@ export function WorkspaceDrilldown(
           // Bind to the owner the server resolved, not the requested one.
           const userId = detail.userId;
           const jobs = panelRows(detail.jobs, BackgroundJobRowSchema);
-          const approvals = panelRows(detail.approvals, DeferredApprovalRowSchema);
+          const approvals = panelRows(detail.approvals, DeferredApprovalSchema);
 
           return (
             <div className="space-y-4">
@@ -344,7 +344,7 @@ function JobRows(
 /** `always` is a standing grant, so each answer is its own button. */
 function ApprovalRows(
   { rows, busy, userId, workspace, onPick }: {
-    rows: DeferredApprovalRow[] | null;
+    rows: DeferredApproval[] | null;
     busy: boolean;
     userId: string;
     workspace: string;

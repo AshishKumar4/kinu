@@ -8,7 +8,7 @@ import { holdsAccounts, readProviderConnections } from './provider-connect';
 import { canonicalProviderName, connectOptions, connectProviderOnConsole } from './setup';
 import * as v from 'valibot';
 import { MAIN_ACCOUNT, accountCredentialKey, catalogCredKey, isAccountName } from '@kinu.run/core';
-import { renderThrownChain, settle, type KinuError } from '@kinu.run/core/obs';
+import { KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
 import { signOutChatGptLogin } from '@kinu.run/cli-backend';
 
 type ProviderAction = 'list' | 'connect' | 'disconnect' | 'default';
@@ -51,7 +51,7 @@ export function providersCommand(
 
     // ChatGPT's is the one sign-in this machine holds that its provider can revoke; Cloudflare's is the account's.
     if (revoke && (action !== 'disconnect' || provider !== 'chatgpt')) {
-      return yield* Effect.die(new Error('--revoke goes with `disconnect chatgpt`: it is the one sign-in this machine can revoke at its provider.'));
+      return yield* Effect.fail(new KinuError('bad_input', '--revoke goes with `disconnect chatgpt`: it is the one sign-in this machine can revoke at its provider.'));
     }
 
     if (action === 'list') {
