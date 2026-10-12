@@ -18,7 +18,7 @@ const WorkspaceOverviewRunSchema = v.object({
   task: v.nullable(v.string()),
 });
 
-/** `picture`: the latest capture's digest. Defaults read older tiles. */
+/** `picture`: the latest capture's digest. */
 const WorkspaceOverviewSlateSchema = v.object({
   id: v.string(),
   title: v.string(),

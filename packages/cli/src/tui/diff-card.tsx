@@ -1,6 +1,6 @@
 /**
- * The file-edit diff card. Rebuilds the diff from the call's recorded spans or written file with the same LCS
- * (`vfs/diff.ts`) as the change-set; an overwrite's prior contents are gone, so `replaced` says "diff unavailable".
+ * The file-edit diff card. Rebuilds the diff from the call's recorded spans or written file with the same line diff
+ * (`vfs/diff.ts`, Nimbus's) as the change-set; an overwrite's prior contents are gone, so `replaced` says "diff unavailable".
  */
 import * as v from 'valibot';
 

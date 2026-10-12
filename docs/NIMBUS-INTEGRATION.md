@@ -7,21 +7,21 @@ describes lives in `packages/cf-backend/src/runtime.ts`,
 
 ## Where the packages come from
 
-The tree carries no Nimbus source. Packages come from the registry at exact
-pinned versions, checked against the package manifests and `bun.lock` on
-2026-09-22:
+The tree carries no Nimbus source. Packages come from the registry, checked against the package manifests and
+`bun.lock` on 2026-10-12:
 
 | Package | Version | Declared in |
 |---|---|---|
-| `@nimbus-sh/core` | 0.12.0 | root, `packages/core`, `packages/cf-backend`, `packages/cli-backend` |
-| `@nimbus-sh/fabric` | 0.7.1 | `packages/core`, `packages/cf-backend` |
-| `@nimbus-sh/sdk` | 0.8.1 | `packages/cf-backend` |
-| `@nimbus-sh/worker` | 0.10.0 | `packages/cf-backend` |
-| `@nimbus-sh/runtime-bash` | 5.2.37 | root, `packages/cli-backend` |
-| `@nimbus-sh/runtime-cpython` | 3.13.14 | root, `packages/cli-backend` |
+| `@nimbus-sh/core` | 0.17.0 | root, `packages/core`, `packages/cf-backend`, `packages/cli-backend`, `packages/cli`, `packages/agent-utils`, `packages/compaction`, `packages/test-utils` |
+| `@nimbus-sh/worker` | 0.15.0 | root, `packages/cf-backend` |
+| `@nimbus-sh/fabric` | ^0.12.0 | `packages/core`, `packages/cf-backend` |
+| `@nimbus-sh/sdk` | ^0.13.0 | `packages/core`, `packages/cf-backend` |
+| `@nimbus-sh/platform` | ^0.8.1 | `packages/cf-backend` |
+| `@nimbus-sh/runtime-bash` | 5.2.37-3 | root |
+| `@nimbus-sh/runtime-cpython` | 3.13.14-1 | root |
 
-The pin is exact, never a caret. Fabric, sdk and worker each declare a range
-on core, and a caret that resolves two of them onto different copies gives the
+Core and worker are pinned exactly: Kinu carries declared patches against those versions (below). Fabric, sdk and
+platform float on a caret; each declares a range on core, so they resolve onto the one pinned copy rather than give the
 composition module two instances to be first-write-wins over (D22).
 
 Every declaration moves together, the root `devDependencies` included. The
@@ -60,7 +60,7 @@ mounts, EXDEV). A device's write report is asked of the backend `route` names, a
 from `observeWrites`, read while the event holds its content (`packages/core/src/vfs/write-events.ts`,
 `packages/core/tests/unit-namespace-writes.test.ts`).
 
-Core 0.12.0 and worker 0.10.0 carry what the earlier patches held: the
+Core 0.12.0 and worker 0.10.0 already carried what the earlier patches held: the
 read-only-open guards in core's `src/vfs/sqlite-vfs.ts` (D21, D22),
 `NPM_REGISTRY` passed from the command's environment to the installer
 (`dist/hosted/commands.js`), `facets()` on `composeHostedRuntime`'s return,
@@ -151,7 +151,7 @@ into the Core interfaces:
 
 | Kinu surface | Nimbus authority |
 |---|---|
-| `Storage.vfs` | `box.files` through `nimbusSessionFiles()` |
+| `Storage.vfs` | the actor's file plane, `workspaceFilePlane()` over the hosted box's store and its mounts |
 | `Shell` and `shell` | `box.exec()` through `nimbusSessionShell()` |
 | `workspace.*` | `createNimbusWorkspaceExecutor()` |
 | background processes | `box.startProcess()` and `box.processes` |
@@ -178,10 +178,11 @@ exported environment state. `ActorRuntimeIdentity.shellId`
 logical actor (subordinate, head, swarm node and branch alike) from
 `hostedActorShellId` in `cf-backend/src/actor-hosting.ts`, keyed on the
 immutable storage key rather than the registered name.
-`HostedWorkspace.box(shellId)` caches one box per key, and that box passes
-`shellId` to the hosted runtime's `exec`, `startProcess` and `runCode`, which
-keep each keyed shell's state separately. The filesystem and the process
-registry stay shared.
+`HostedWorkspace.box(scope)` is one box per actor. A call that names a shell
+(`shellId`) runs in that named shell, keyed by the actor's scope so two actors'
+names never meet; a call that names none runs once, in a shell of its own. The
+filesystem and the process registry stay shared. An agent facet holds no box:
+its session is only the SDK's file plane.
 
 Each actor's automatic scaffold lifecycle targets a distinct path. The main
 actor uses `scaffold/agent.js`; every other actor uses its own
@@ -257,8 +258,8 @@ The Worker needs no workspace Durable Object binding, because there is none. It
 needs the `LOADER` Worker Loader binding. `NIMBUS_RUNTIME_CACHE` is optional in
 `Env` (`cf-backend/env.d.ts`). Without it, a hosted interpreter cannot be
 installed and the Worker reports `NIMBUS_RUNTIME_CACHE binding missing`.
-`packages/cf-backend/package.json` pins the Nimbus core, fabric, SDK and
-worker versions exactly. `bun install --frozen-lockfile` in `scripts/deploy.sh`
+`packages/cf-backend/package.json` pins Nimbus core and worker exactly and
+fabric, SDK and platform by caret. `bun install --frozen-lockfile` in `scripts/deploy.sh`
 stops a local `node_modules` tree from deciding which versions ship.
 
 The generic Core Nimbus factory stays reusable by another backend, which is why
