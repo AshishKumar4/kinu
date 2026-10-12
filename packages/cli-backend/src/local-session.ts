@@ -5,7 +5,7 @@
 
 import { lookup } from 'node:dns/promises';
 import { realpathSync } from 'node:fs';
-import { historyTurnPairs, testModel, toolDescription, workModeForTurnMetadata, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
+import { ASKED, historyTurnPairs, testModel, toolDescription, workModeForTurnMetadata, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
 import type { ActorHandle, Delivery, DeliveryAnswer, InProcessDeliveries, JsonObject } from '@kinu.run/core';
 import { Effect } from 'effect';
 import { resolve } from 'node:path';
@@ -512,6 +512,8 @@ export class LocalAgentSession {
       compactionState: this.compactionState,
       // `rt.storage.sql` and `db` are the same connection.
       transaction: (body) => writeTransaction(this.db, body),
+      // Other processes write this file: nothing is held between reads.
+      holds: ASKED,
       transport: { deliver: (event) => { opts.onEvent(event); } },
       ports: {
         prepareTurn: (item, lease, opening) => this.prepareTurn(item, lease, opening),
@@ -1891,6 +1893,7 @@ export class LocalAgentSession {
   private get terminal(): TerminalTransitions {
     this.terminalTransitions ??= new TerminalTransitions({
         sql: this.rt.storage.sql,
+        holds: ASKED,
         actor: this.rt.actor,
         effects: this.terminalEffectTable(),
         now: () => Date.now() + this.terminalClockSkewMs,

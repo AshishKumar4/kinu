@@ -106,7 +106,7 @@ import {
   // Prices a model_call row only when the rate belongs to that call's own model.
   buildModelCallEvent,
   type FactsStore,
-  createAgentStores, type AgentConfigStore, type SetModelDeps, collectDynamicContext, dynamicReads, type DynamicReads, subordinateDelegatesOf,
+  createAgentStores, type AgentConfigStore, type AgentStores, type SetModelDeps, collectDynamicContext, dynamicReads, type DynamicReads, subordinateDelegatesOf,
   nimbusSessionFiles, agentArtifactDirectory, agentHome, MAIN_AGENT,
   CHAT_SESSION_ID, type SessionTranscript,
   type SqlExecutor,
@@ -4419,12 +4419,20 @@ export abstract class ActorAgent extends Agent<Env> {
     return {};
   }
 
-  private _mainDynamicReads: DynamicReads | undefined;
+  private readonly heldDynamic = new Map<string, DynamicReads>();
   private _heldDelegates: (() => ReturnType<ActorAgent['subordinateDelegates']>) | undefined;
 
-  /** This agent's dynamic-block reads, held across a turn's preparation, binding and tool answers ({@link held}). */
-  protected get mainDynamicReads(): DynamicReads {
-    return this._mainDynamicReads ??= dynamicReads(this.stores, this.rt.storage.sql, this.actorHandle(), this.held);
+  /** An agent's dynamic-block reads, held across its turns' preparation, binding, tool answers and open work
+   *  ({@link held}). One per agent, whichever store bundle asks first: a hold names its tables, not its store. */
+  protected dynamicReadsOf(actor: ActorHandle, stores: AgentStores): DynamicReads {
+    const known = this.heldDynamic.get(actor.actorId);
+
+    if (known !== undefined) return known;
+    const reads = dynamicReads(stores, this.boundSql, actor, this.held);
+
+    this.heldDynamic.set(actor.actorId, reads);
+
+    return reads;
   }
 
   /** Its delegates, held: every SubordinateRosterStore writes over `watchedExec`, the directory's origins over `sql`. */
@@ -4447,7 +4455,7 @@ export abstract class ActorAgent extends Agent<Env> {
     return collectDynamicContext({
       rt: this.rt,
       stores: this.stores,
-      reads: this.mainDynamicReads,
+      reads: this.dynamicReadsOf(this.actorHandle(), this.stores),
       profile,
       tools,
       externalTools,

@@ -836,7 +836,7 @@ export {
   type MediaModality,
 } from './prompting/attachment-sanitizer';
 
-export { HeldReads } from './utils/held-reads';
+export { ASKED, HeldReads } from './utils/held-reads';
 
 export { rasterImage, type RasterImage } from './utils/raster-image';
 

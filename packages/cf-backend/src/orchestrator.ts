@@ -971,13 +971,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       armCacheWarm: async (input) => this.warmingOf(actorId).armAfterTurn(input),
       // Its tasks tool and its jobs run here, over its own rows, main's as any agent's.
       openWork: async () => {
-        // Main's are the rows its dynamic block holds; another agent's are read here.
-        const reads = actorId === this.actorHandle().actorId ? this.mainDynamicReads : null;
-        const { stores } = this.agentBound(actorId);
+        const { stores, handle } = this.agentBound(actorId);
+        const reads = this.dynamicReadsOf(handle, stores);
 
-        return reads === null
-          ? { tasks: stores.taskList.listOpen(), asyncWakePending: stores.jobs.listRunning(1).total > 0 }
-          : { tasks: reads.openTasks(), asyncWakePending: reads.runningJobs().total > 0 };
+        return { tasks: reads.openTasks(), asyncWakePending: reads.runningJobs().total > 0 };
       },
       advise: (review) => this.agentTurns.advise(actorId, review),
       runEnded: async (id, outcome) => {
