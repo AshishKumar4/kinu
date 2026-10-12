@@ -1,3 +1,29 @@
+diff --git a/dist/facets/manager.js b/dist/facets/manager.js
+index fed8c23..4058e6c 100644
+--- a/dist/facets/manager.js
++++ b/dist/facets/manager.js
+@@ -839,6 +839,21 @@ ${RESIDENCY_MISS_REPORT}
+     try { globalThis.process = __processMod; } catch {}
+     try { globalThis.Buffer = __BufferMod; } catch {}
+     try { globalThis.global = globalThis; } catch {}
++    // Kinu patch (NIMBUS-ASKS #47): the realm's navigator answers as Node's,
++    // so a library choosing its transport by userAgent (pg) takes Node's.
++    const __nimbusNodeLanguages = Object.freeze([new Intl.DateTimeFormat().resolvedOptions().locale]);
++    Object.defineProperties(globalThis.navigator, {
++      userAgent: {
++        get: () => 'Node.js/' + __processMod.versions.node.split('.')[0],
++        enumerable: true, configurable: true,
++      },
++      platform: {
++        get: () => 'Linux x86_64',
++        enumerable: true, configurable: true,
++      },
++      language: { get: () => __nimbusNodeLanguages[0], enumerable: true, configurable: true },
++      languages: { get: () => __nimbusNodeLanguages, enumerable: true, configurable: true },
++    });
+     // undici's fetch (bundled by e.g. create-cloudflare) detaches
+     // performance.markResourceTiming and calls it with no receiver,
+     // which workerd rejects with "Illegal invocation" and crashes the
 diff --git a/dist/hosted/commands.js b/dist/hosted/commands.js
 index fcd0460..376d8dd 100644
 --- a/dist/hosted/commands.js
@@ -43,7 +69,7 @@ index 6fdca7b..4d2c358 100644
              appendScrollback(options.ctx, data, Date.now());
              persistShellState(options.ctx, { cwd: this.shell.getCwd(), env: this.shell.getEnv() });
 diff --git a/dist/node-shims-artifact.generated.js b/dist/node-shims-artifact.generated.js
-index c7484dc..b356276 100644
+index c7484dc..76e3857 100644
 --- a/dist/node-shims-artifact.generated.js
 +++ b/dist/node-shims-artifact.generated.js
 @@ -10,8 +10,8 @@
@@ -52,8 +78,8 @@ index c7484dc..b356276 100644
  export const NODE_SHIMS_ENTRY = "/_assets/runtime/node-shims-6e7186f468bae50a.js";
 -export const NODE_SHIMS_BUILD_ID = "6e7186f468bae50a";
 -export const NODE_SHIMS_SHA256 = "6e7186f468bae50a826c0f3cb45e002865b543cdc5f531dd34ae32ce565e5ab2";
-+export const NODE_SHIMS_BUILD_ID = "4d00397397c3694e";
-+export const NODE_SHIMS_SHA256 = "4d00397397c3694eb23121c6d14d943262d9db65735eb01c5066cf257e63d8fd";
++export const NODE_SHIMS_BUILD_ID = "7c45608c1e6d25f3";
++export const NODE_SHIMS_SHA256 = "7c45608c1e6d25f3a26ac29a0994354b51461d798f519ad91959d9a370800d46";
  /** @nimbus-sh/core dist/_shared/vfs-write-ledger.js VFS_WRITE_LEDGER_SOURCE */
  export const VFS_WRITE_LEDGER_ENTRY = "/_assets/runtime/vfs-write-ledger-676daf190edbf75d.js";
  export const VFS_WRITE_LEDGER_BUILD_ID = "676daf190edbf75d";
@@ -284,7 +310,7 @@ index 939dfa9..52928dc 100644
                  catch (error) {
                      if (error instanceof TypeError && error.message === 'The RPC receiver does not implement the method "connectTls".') {
 diff --git a/public/_assets/runtime/node-shims-6e7186f468bae50a.js b/public/_assets/runtime/node-shims-6e7186f468bae50a.js
-index c031ebc..283eef4 100644
+index c031ebc..f08f152 100644
 --- a/public/_assets/runtime/node-shims-6e7186f468bae50a.js
 +++ b/public/_assets/runtime/node-shims-6e7186f468bae50a.js
 @@ -351,6 +351,18 @@ function __nimbusNetworkGate() {
@@ -446,7 +472,7 @@ index c031ebc..283eef4 100644
        if (token === undefined) return Reflect.apply(original, this, arguments);
        const self = this;
        // workerd's TLSSocket has released the carrier's writer and reader and
-@@ -11469,11 +11579,26 @@ const __tlsMod = (() => {
+@@ -11469,11 +11579,31 @@ const __tlsMod = (() => {
      };
      return socket;
    };
@@ -460,7 +486,12 @@ index c031ebc..283eef4 100644
 +    };
 +    name();
 +    if (previous.connecting) previous.once('connect', name);
-+    return real.connect({ ...options, host: options.host ?? keyed.host, servername: options.servername ?? keyed.host }, cb);
++    const socket = real.connect({ ...options, host: options.host ?? keyed.host, servername: options.servername ?? keyed.host }, cb);
++    // The TLS socket now owns the connection: the consumed one must not end the
++    // writer it released, nor keep the program alive once TLS closes.
++    previous.allowHalfOpen = true;
++    previous.unref();
++    return socket;
 +  };
    const connect = (...args) => {
      const proxied = !!(__nimbusReplay && __nimbusReplay.outbound);
