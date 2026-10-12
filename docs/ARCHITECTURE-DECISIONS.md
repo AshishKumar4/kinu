@@ -927,8 +927,12 @@ the owner, built 2026-10-11 on `lane/main-isolate`.
   assignment, a head's or node's run) commits an `agent_deliveries` row with its
   source fact and arms the agent's wake (`agent_wakes`), then crosses `admit`
   once. The isolate stores it under the delivery's id, answers a repeat
-  `duplicate`, and its answer retires the row; one that fails to cross stays
-  owed to the wake. A rest never cancels the wake while a delivery is owed. The
+  `duplicate`, and its answer retires the row and carries the agent's report of
+  what it now owes (`AdmittedDelivery`), taken as a told report is; one that
+  fails to cross stays owed to the wake. Each report says whether the agent's
+  chat holds a turn owed or running (`AgentReport.working`), and the tile reads
+  Working from the input taken to the rest, never Unfinished between. A rest
+  never cancels the wake while a delivery is owed. The
   EventLog is a record, never a queue: `drainAssignments`, the delegation
   runners and the root's RAM inbox are gone from the cloud. Every agent has a
   chat, and a head's or node's run is one of its inputs (`kind: 'run'`): its
@@ -957,10 +961,11 @@ the owner, built 2026-10-11 on `lane/main-isolate`.
   `stale_epoch` before anything runs. A call that settles what the turn already
   did (its answer, its trace, its charges) is never fenced, so a stopped turn
   closes. Credentials are held five minutes and refreshed on an upstream's
-  refusal; activity rides tool calls and the turn's end. Measured on
-  `b90589cad` (armada `20261012074432-4e141094`), four tool steps: the open
-  crosses 17 times, the first step 4 and each later one 3, the close 16; §8's
-  12 and 6 are not reached (the account's reads, room events).
+  refusal; activity rides tool calls and the turn's end, and the profile the
+  isolate assembled on rides its first step's pace. Measured on `c3c87ed3b`
+  over 3 runs (armada `20261012084457-307f361a`), four tool steps: the open
+  crosses 16 times, the first step 4 and each later one 3, the close 16; §8's
+  12 and 6 are not reached (the account's reads, room events, the tile).
 - Profile: the agent's isolate freezes its run's final profile as the turn's
   assembly settles (`actor_turn_facts.profile_json`); a recovery assembles on
   it, the first step's pace carries it to the workspace, and a workspace that
