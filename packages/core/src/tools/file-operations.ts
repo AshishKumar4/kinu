@@ -4,6 +4,7 @@
  */
 import { type VFS, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 import { isVfsError, VfsError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { normalizePath } from '@nimbus-sh/core/vfs/composite.js';
 import { vfsAddressingHint } from '@kinu.run/agent-utils/vfs';
 import * as v from 'valibot';
 import { formatPath, resolvePath, type PathPlanes } from '../vfs/resolve';
@@ -142,9 +143,12 @@ const SLATE_FILE = new RegExp(`^${SLATES_ROOT}/([^/]+)/`);
 
 const BrokenSchema = v.object({ broken: v.string() });
 
-/** Whether the slate a written file belongs to still builds; nothing for a file outside one, or where no slate host answers. */
+/**
+ * Whether the slate a written file belongs to still builds; nothing for a file outside one, or where no slate host
+ * answers. The slate is the one its path names by spelling.
+ */
 async function slateBuild(deps: FileDeps, path: string): Promise<{ readonly build?: v.InferOutput<typeof SlateBuildNoteSchema> }> {
-  const slate = SLATE_FILE.exec(resolvePath(path, deps.planes).absolute)?.[1];
+  const slate = SLATE_FILE.exec(normalizePath(resolvePath(path, deps.planes).absolute))?.[1];
 
   if (slate === undefined || deps.slateBuild === undefined) return {};
   const built = await deps.slateBuild(slate);

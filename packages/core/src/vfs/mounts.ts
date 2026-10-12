@@ -13,11 +13,11 @@ import type { FilesOwner } from '../safety/command-review';
 import type { ExecutorStatus } from '../execution/types';
 import { attempt, hold, KinuError, renderThrownChain, settle, settleSync, tolerateAsync } from '../obs/index';
 import { isVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
-import { CompositeVFS, normalizePath, type Principal, type VfsRoute } from '@nimbus-sh/core/vfs/composite.js';
+import { CompositeVFS, type Principal, type VfsRoute } from '@nimbus-sh/core/vfs/composite.js';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { observeNamespace, type WriteObserver } from './write-events';
 import { move, type MoveFs } from '@nimbus-sh/core/vfs/move.js';
-import { workspacePath } from './workspace-path';
+import { walkedPath } from './workspace-path';
 
 export interface VfsMount {
 	readonly name: string;
@@ -364,11 +364,12 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 	const relative: VFS | { readonly home: string } = 'namespace' in base ? { home: base.home } : base;
 	const userRoots = declared.filter((m) => m.filesOwner === 'user' && m.readOnly !== true).map((m) => m.at ?? `/${m.name}`);
 
+	// The path as written, made absolute: its `..` is the namespace's walk to take, after a link where there is one.
 	const on = async (path: string): Promise<Target> => {
 		if (path.startsWith('/') || 'home' in relative) {
 			const namespace = await plane.namespace();
 
-			return { namespace, files: namespace, at: normalizePath('home' in relative ? workspacePath(path, relative.home) : path) };
+			return { namespace, files: namespace, at: 'home' in relative ? walkedPath(path, relative.home) : path };
 		}
 
 		return { namespace: null, files: relative, at: path };
@@ -476,7 +477,7 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 			if (own?.writeFileWithReport !== undefined && route !== null && !readOnly) {
 				const report = own.writeFileWithReport.bind(own);
 
-				return settle(heard({ source: own, rel: route.path, at: target.at }, data, () => report(route.path, data)));
+				return settle(heard({ source: own, rel: route.path, at: namespacePath(route) }, data, () => report(route.path, data)));
 			}
 
 			await write(target, data);
@@ -499,7 +500,7 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 				return settle(Effect.fail(new VfsError('ENOTSUP', 'this file plane does not support digest-checked writes', path)));
 			}
 
-			return settle(heard({ source: own, rel: route.path, at: target.at }, data, () => replace(route.path, data, expected), (answer) => answer.ok));
+			return settle(heard({ source: own, rel: route.path, at: namespacePath(route) }, data, () => replace(route.path, data, expected), (answer) => answer.ok));
 		},
 	};
 }

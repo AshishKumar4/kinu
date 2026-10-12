@@ -447,6 +447,38 @@ describe('a workspace shell over the user\'s mounts', () => {
     }
   });
 
+  // `..` after a link is the walk's: from a link into /pc/proj/sub it climbs to /pc/proj, never back into the home.
+  test('a write through link/.. into /pc is asked as the user\'s file it lands on', async () => {
+    const { db, workspace, mounted, device } = workspaceOverDevice();
+    const written: string[] = [];
+    const asked: string[] = [];
+
+    device.writeFile = async (path) => { written.push(path); };
+
+    (await workspace.session()).vfs.as(CRED_SESSION_USER).symlink('/pc/proj/sub', `${WORKSPACE_ROOT}/sub-link`);
+
+    const deny = async (request: { command: string }): Promise<'deny'> => {
+      asked.push(request.command);
+
+      return 'deny';
+    };
+
+    const files = withApprovalGatedFiles(mounted, 'workspace', {
+      planes: cloudPlanes(WORKSPACE_ROOT), resolve: (path, follow) => mounted.resolve(path, { follow }),
+      userRoots: () => mounted.userRoots(), locate: null, parksWrites: false,
+    }, { mode: () => 'strict', requestApproval: deny });
+
+    try {
+      await expect(files.writeFile('sub-link/../a.txt', new TextEncoder().encode('forged'))).rejects.toThrow();
+      expect(asked).toHaveLength(1);
+      expect(asked[0]).toContain('/pc/proj/a.txt');
+      expect(written).toEqual([]);
+      expect(await mounted.stat(`${WORKSPACE_ROOT}/a.txt`)).toBeNull();
+    } finally {
+      db.close();
+    }
+  });
+
   test('a command naming /pc is put to the user, while the same delete in the agent\'s home is not', async () => {
     const { db, shell, asked, removed } = workspaceOverDevice();
 

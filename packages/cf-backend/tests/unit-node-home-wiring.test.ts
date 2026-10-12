@@ -7,6 +7,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
+import { Nimbus } from '@nimbus-sh/sdk/sandbox';
 import type { HostedRuntime } from '@nimbus-sh/worker/workspace-host';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
@@ -592,6 +593,27 @@ describe('the in-isolate plane acts as the node on both surfaces', () => {
 
     // One plane per uid: a shell holds cwd, so a second call must not forget the node's `cd`.
     expect(await workspace.asAgent(a)).toBe(asA);
+  });
+});
+
+/** A facet's file tool is the SDK's file plane over its workspace's session (agent-database.ts): a path is walked there as
+ *  the workspace walks it, `..` after a link the parent of where the link leads. */
+describe('the hosted agent view walks a path as its workspace does', () => {
+  test('`..` after a link reads and writes beside where the link leads, never beside the link', async () => {
+    const f = await openFixture();
+    await f.workspace.fs.mkdir('/home/main/deep/inner', { recursive: true });
+    await f.workspace.fs.writeFile('/home/main/target.txt', 'beside the link');
+    await f.workspace.fs.writeFile('/home/main/deep/target.txt', 'beside where the link leads');
+    await f.workspace.fs.symlink('/home/main/deep/inner', '/home/main/link');
+    const runtime = await f.runtime();
+    const view = nimbusSessionFiles(Nimbus.fromSession(() => runtime.session({ cred: ORIGIN })).sandbox('workspace').files, { home: WORKSPACE_ROOT });
+
+    expect(await readText(view, 'link/../target.txt')).toBe('beside where the link leads');
+
+    await writeText(view, 'link/../written.txt', 'through the link');
+
+    expect(await readText(view, '/home/main/deep/written.txt')).toBe('through the link');
+    expect(await exists(view, '/home/main/written.txt')).toBe(false);
   });
 });
 

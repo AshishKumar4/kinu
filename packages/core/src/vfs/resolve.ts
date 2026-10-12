@@ -1,9 +1,10 @@
 /** The one reading of a written path, on both backends: `root://path`, `~`, relative and absolute. */
+import { normalizePath } from '@nimbus-sh/core/vfs/composite.js';
 import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { Effect } from 'effect';
 import { settleSync } from '../obs/effect';
 import { EXECUTOR_MOUNTS } from './mounts';
-import { workspacePath } from './workspace-path';
+import { walkedPath } from './workspace-path';
 
 /** A prefix: the name before `://`, and the subtree of `vfs://`, the one tree an agent sees, that it names. */
 interface PathPrefix {
@@ -120,7 +121,7 @@ export function resolvedPath(path: string, planes: PathPlanes): Effect.Effect<Re
   const reference = REFERENCE.exec(path);
 
   const absolute = reference === null
-    ? Effect.succeed(machinePath(path, planes))
+    ? Effect.succeed(walkedMachinePath(path, planes))
     : Effect.map(vfsPath(reference[1] ?? '', reference[2] ?? '', planes, path), (vfs) => onMachine(vfs, planes));
 
   return Effect.map(absolute, (at) => ({ plane: shortestReference(at, planes)?.prefix ?? null, absolute: at }));
@@ -135,11 +136,17 @@ export function referencedPath(reference: string, planes: PathPlanes): string | 
   ));
 }
 
-/** A plain path as this machine's shell names it: `~` is the home, a relative path starts at `cwd`. */
-export function machinePath(path: string, at: Pick<PathPlanes, 'cwd' | 'home'>): string {
-  if (path === '~' || path.startsWith('~/')) return workspacePath(`.${path.slice(1)}`, at.home);
+/**
+ * A plain path as this machine names it: `~` is the home, a relative path starts at `cwd`, and each `.` and `..` is
+ * left to the walk, which takes `..` after a link: what a file operation and its approval are handed.
+ */
+function walkedMachinePath(path: string, at: Pick<PathPlanes, 'cwd' | 'home'>): string {
+  return path === '~' || path.startsWith('~/') ? walkedPath(path.slice(2), at.home) : walkedPath(path, at.cwd);
+}
 
-  return workspacePath(path, at.cwd);
+/** {@link walkedMachinePath} collapsed by its spelling, as the shell's own `cd` takes a path (logically). */
+export function machinePath(path: string, at: Pick<PathPlanes, 'cwd' | 'home'>): string {
+  return normalizePath(walkedMachinePath(path, at));
 }
 
 /**
@@ -215,12 +222,16 @@ export function formatPath(absolute: string, planes: PathPlanes): string {
   return shortestReference(absolute, planes)?.text ?? absolute;
 }
 
-/** The shortest reference to a machine path: its VFS path is under the mount whose machine root holds it deepest. */
+/**
+ * The shortest reference to a machine path: its VFS path is under the mount whose machine root holds it deepest. A
+ * reference reads its `..` by spelling, so it names the path so read.
+ */
 function shortestReference(absolute: string, planes: PathPlanes): { readonly prefix: string; readonly text: string } | undefined {
-  const mount = deepest(planes.mounts.filter((candidate) => holds(candidate.at, absolute)), (candidate) => candidate.at);
+  const spelled = normalizePath(absolute);
+  const mount = deepest(planes.mounts.filter((candidate) => holds(candidate.at, spelled)), (candidate) => candidate.at);
 
   if (mount === undefined) return undefined;
-  const vfs = under(mount.subtree, relativeTo(mount.at, absolute));
+  const vfs = under(mount.subtree, relativeTo(mount.at, spelled));
 
   const references = planes.prefixes.flatMap((row) => {
     if (!holds(row.subtree, vfs)) return [];

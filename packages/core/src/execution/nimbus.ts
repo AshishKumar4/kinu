@@ -10,7 +10,7 @@ import type { VfsMount, WorkspacePrincipal } from '../vfs/mounts';
 import type { CompositeVFS } from '@nimbus-sh/core/vfs/composite.js';
 import { atVfsPath } from '../vfs/errno';
 import { syscallError } from '@nimbus-sh/core/vfs/vfs-error.js';
-import { workspacePath } from '../vfs/workspace-path';
+import { walkedPath, workspacePath } from '../vfs/workspace-path';
 import { sessionRuntimeBins, workspaceCommandNotFound } from '../vfs/workspace-runtimes';
 import { shellQuote } from '../utils/shell';
 import type { ExecutorCapability, ExecutorProvider, ExecutorStatus, PortExposureResult, PreviewRouteCheck } from './types';
@@ -610,15 +610,15 @@ async function heard(stream: ExecStream, output: OutputSink | undefined, stop: A
 }
 
 /**
- * A remote Nimbus session's files in its own absolute paths, a relative one from `home`. With `cred`, the plane is
- * `files.as(cred)`. Absent is the origin.
+ * A remote Nimbus session's files in its own absolute paths, a relative one from `home`, each `..` the session's walk to
+ * take. With `cred`, the plane is `files.as(cred)`. Absent is the origin.
  */
 export function nimbusSessionFiles(
   session: NimbusSandboxFiles,
   plane: { readonly home: string; readonly cred?: VfsCred },
 ): VFS & Required<Pick<VFS, 'readlink' | 'removeRecursive' | 'rename' | 'readRange'>> {
   const { home, cred } = plane;
-  const at = (path: string): string => workspacePath(path, home);
+  const at = (path: string): string => walkedPath(path, home);
   const files = cred === undefined ? session : session.as(cred);
 
   const present = async <T>(path: string, syscall: string, read: (absolute: string) => Promise<T | null>): Promise<T> => {
