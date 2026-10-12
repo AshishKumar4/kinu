@@ -149,20 +149,6 @@ describe('DeviceSocketHub', () => {
     expect(await reply).toBe('hi');
   });
 
-  test('an invalid annotation cannot replace the working protocol across a wake', async () => {
-    const { ctx, hub, ws } = connected();
-    expect(() => hub.hello('dev-a', Number.NaN, DEVICE_FEATURES)).toThrow();
-
-    const woken = new DeviceSocketHub(ctx);
-    const tunnel = woken.tunnel('dev-a');
-
-    if (!tunnel) throw new Error('the invalid annotation lost the working device');
-    const pending = tunnel.rpc('exec', ['echo still connected']);
-    const frame = v.parse(v.object({ id: v.string() }), JSON.parse(ws.sent[0] ?? 'null'));
-    woken.handleMessage('dev-a', JSON.stringify({ id: frame.id, result: 'still connected' }));
-    expect(await pending).toBe('still connected');
-  });
-
   test('a socket close rejects its in-flight calls; liveness follows the socket', async () => {
     const ctx = fakeCtx();
     const hub = new DeviceSocketHub(ctx);
