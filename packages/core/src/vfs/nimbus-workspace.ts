@@ -184,7 +184,7 @@ export interface WorkspaceAgent {
 /**
  * The store as `cred` (default the session user) sees it, with no mount, relative paths from `home`: an actor's own state.
  * Nimbus's own SqliteFiles, never the workspace `.fs`, which is pinned to the session user; its stat carries the row's
- * revision and inode.
+ * revision and inode. Its `..` is still taken lexically, before any link, as SqliteVFS keys a path (NIMBUS-ASKS #53).
  */
 export function storeFiles(open: () => Promise<SqliteVFS>, plane: { readonly home: string; readonly cred?: VfsCred }): WorkspaceFiles {
   let files: SqliteFiles | undefined;
