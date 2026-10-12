@@ -12,7 +12,7 @@ import type {
   AdmittedInstructionDecision,
   InstructionSourceRow, InstructionSourceView, Page, PageRequest, PositionCursor, PositionPageRequest,
   DeferredApproval, DeferredApprovalAnswer,
-  PlanReview, ReviewAnnotation, PlanDecisionOutcome, PlanReviewDecision, PlanReviewResult, WorkMode, AskingAgent, OwnerAnswer,
+  PlanReview, ReviewAnnotation, PlanDecisionOutcome, PlanReviewDecision, PlanReviewResult, WorkMode, AskingAgent, OwnerAnswer, OwedIntent,
   SubordinateInspectionRequest, SubordinateInspectionResult, ChatHistoryEntry, WorkspaceSpend, WorkspaceWork,
   ModelTestResult, ContextFill,
 } from '@kinu.run/core';
@@ -293,16 +293,17 @@ export interface LocalSessionControls {
 export interface OwnerQuestionSurface {
   /** Recent questions; the open ones wait for an answer. */
   list(): Promise<AskingAgent[]>;
-  /** Rejects with the reason the answer was refused. */
-  answer(id: string, answers: readonly OwnerAnswer[]): Promise<void>;
+  /** Rejects with the reason the answer was refused; owed when it did not reach the agent, whose wake delivers it. */
+  answer(id: string, answers: readonly OwnerAnswer[]): Promise<OwedIntent | null>;
 }
 
 /** The owner's half of Plan mode; both backends serve core's `PlanReviewStore`. */
 export interface PlanReviewSurface {
   active(): Promise<PlanReview | null>;
   saveAnnotations(id: string, revision: number, annotations: ReviewAnnotation[]): Promise<PlanReviewResult>;
-  /** Approving queues the implementation turn, which streams through `subscribe`; `queued` says whether it started. */
-  decide(id: string, revision: number, decision: PlanReviewDecision, feedback?: string): Promise<PlanDecisionOutcome>;
+  /** Approving queues the implementation turn, which streams through `subscribe`; `queued` says whether it started. A
+   *  decision that did not reach the agent is owed, and its wake delivers it. */
+  decide(id: string, revision: number, decision: PlanReviewDecision, feedback?: string): Promise<PlanDecisionOutcome | OwedIntent>;
   dismiss(id: string, revision: number): Promise<PlanReviewResult>;
 }
 

@@ -6,7 +6,7 @@ export const LIVE_READS = [
   'getExposedPorts', 'getToolDescriptions', 'listSlates', 'getEvolutionChangelog', 'listPendingActions',
   'getMemoryContent', 'getExecutors', 'listBackgroundJobs', 'getWorkspaceTabPresence', 'getActivePlanReview',
   'listWorkspaceWork', 'listWorkspaceAgents', 'listSubordinates', 'getQuality', 'getWorkspaceGitHub', 'inspectWork',
-  'listOwnerQuestions',
+  'listOwnerQuestions', 'listOwedIntents',
 ] as const;
 
 export type LiveRead = typeof LIVE_READS[number];
@@ -52,6 +52,8 @@ const READS_BY_TABLE: ReadonlyMap<string, readonly LiveRead[]> = new Map<string,
   ['proposed_tasks', QUEUE],
   ['plan_reviews', ['getActivePlanReview', 'getToolDescriptions', ...QUEUE, 'listWorkspaceWork', ...AGENTS]],
   ['owner_questions', ['listOwnerQuestions', 'getWorkspaceTabPresence', ...AGENTS]],
+  // The owner's intents on their way: each owed delivery row, until the agent's wake delivers it.
+  ['agent_deliveries', ['listOwedIntents']],
   ['background_jobs', ['listBackgroundJobs', 'getWorkspaceTabPresence']],
   ['background_job_serves', ['listBackgroundJobs', 'getWorkspaceTabPresence']],
   ['agent_tasks', WORK],

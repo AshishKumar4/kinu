@@ -15,6 +15,7 @@ export type LiveRefreshSource =
   | "work"
   | "pendingActions"
   | "questions"
+  | "owedIntents"
   | "presence"
   | "memoryContent"
   | "executors"
@@ -38,6 +39,7 @@ const LIVE_REFRESH_DESCRIPTORS: readonly LiveRefreshDescriptor[] = [
   { source: "work", label: "work in progress" },
   { source: "pendingActions", label: "pending actions" },
   { source: "questions", label: "the agent's questions" },
+  { source: "owedIntents", label: "decisions on their way" },
   { source: "memoryContent", label: "memory content" },
   { source: "presence", label: "tab presence" },
   { source: "executors", label: "executors" },

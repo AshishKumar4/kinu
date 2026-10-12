@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Cause, Effect } from "effect";
-import { PlanDecisionOutcomeSchema, planHandoffShortfall, type PlanReview, type Rpc } from "@kinu.run/core";
+import { OwedIntentSchema, PlanDecisionOutcomeSchema, planHandoffShortfall, type PlanReview, type Rpc } from "@kinu.run/core";
 import * as v from "valibot";
 import { attempt, KinuError, renderThrownChain, settle } from "@kinu.run/core/obs";
 
@@ -45,8 +45,11 @@ export function usePlanDecision({ plan, editable, handoffPending, rpc, save, onE
     return settle(Effect.gen(function* () {
       if (editable && !(yield* attempt({ doing: "saving plan annotations", otherwise: "io" }, save))) return;
 
-      const result = v.parse(PlanDecisionOutcomeSchema, yield* attempt({ doing: "deciding a plan review", otherwise: "io" }, () =>
+      const result = v.parse(v.union([OwedIntentSchema, PlanDecisionOutcomeSchema]), yield* attempt({ doing: "deciding a plan review", otherwise: "io" }, () =>
         rpc<unknown>("decidePlanReview", [plan.id, plan.revision, decision])));
+
+      // On its way to the agent's wake: the review shows it so (`owedIntents`) until the agent takes it.
+      if ("owed" in result) return;
 
       if (!result.ok) return yield* Effect.fail(new KinuError("bad_input", result.error));
       const shortfall = planHandoffShortfall(result);

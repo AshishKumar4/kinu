@@ -6,7 +6,11 @@
 
 import { answeredSummary, resumeMetadata, type OwnerAnswer } from '../plans/owner-questions';
 import { OWNER_ANSWER_SIGNAL } from '../types/owner-questions';
-import { deliveredSignal, MessageIdSchema, type Delivery, type DeliveryAnswer, type DeliveryInput, type OwedDelivery, type TurnDeliveryInput } from '../subordinates/deliveries';
+import {
+  deliveredSignal, IntentResultSchema, MessageIdSchema, type Delivery, type DeliveryAnswer, type DeliveryInput, type IntentInput, type IntentResult, type OwedDelivery,
+  type TurnDeliveryInput,
+} from '../subordinates/deliveries';
+import type { PlanDecisionOutcome } from '../types/plans';
 import type { AgentTurnTask } from '../subordinates/agent-isolate';
 import { stampAuthorship, turnAuthorship, type TurnAuthorship } from './turn-authorship';
 import type { TrialTurn } from '../evolution/trial-rules';
@@ -303,6 +307,9 @@ export interface ChatSessionPorts {
     /** Its end without running it (a Stop, a refusal at dequeue), owed as `run` owes one. */
     refuse(run: DeliveredRun, failure: KinuError, retire: () => void): void;
   };
+  /** The owner's decision on a plan the agent submitted, as an intent delivers it (D6): its plans are its host's. Absent
+   *  where no plan is delivered (the CLI decides in its own process). */
+  readonly decidePlan?: (verdict: Pick<Extract<IntentInput, { kind: 'decision' }>, 'decision' | 'feedback'> & { readonly id: string; readonly revision: number }) => Promise<PlanDecisionOutcome>;
 }
 
 export interface ChatSessionOptions {
@@ -696,19 +703,54 @@ export class ChatSession {
     // Its producer crosses in order: one at or below a Stop's cutoff was cancelled there, one at or below what was taken
     // was answered before, its answer lost on the way back.
     const marked = this.pendingSends.markOf(producer, delivery.seq);
+    // An owner's intent applied before is answered with what it did, as its first crossing was: its caller is owed that.
+    const applied = marked === 'duplicate' ? this.pendingSends.applied(producer, delivery.seq) : null;
+
+    if (applied !== null) return { applied: v.parse(IntentResultSchema, JSON.parse(applied)) };
 
     if (marked !== 'new') return marked;
 
     if (input.kind === 'run' && this.ports.runs === undefined) return settleSync(Effect.fail(new KinuError('unsupported', 'This agent takes no delivered run.')));
+
+    // Its producer's mark moves once it is applied, with what it did: a repeat applies nothing, and is answered that.
+    if (input.kind === 'decision' || input.kind === 'answers' || input.kind === 'retry') {
+      return await settleEffect(Effect.map(this.applyIntent(input), (result): DeliveryAnswer => {
+        this.pendingSends.took(producer, delivery.seq, JSON.stringify(result));
+
+        return { applied: result };
+      }));
+    }
+
     let answer: DeliveryAnswer;
 
     if (input.kind === 'words') answer = await this.admitDeliveredWords(id, input);
     else if (input.kind === 'run') answer = this.admitDeliveredRun({ id, task: input.task });
     else answer = await this.admitDeliveredTurn(id, input, delivery.authorship);
 
+    // Its producer's mark moves once it is held: a repeat of it is answered `duplicate`.
     if (answer === 'taken') this.pendingSends.took(producer, delivery.seq);
 
     return answer;
+  }
+
+  /** An owner's intent, applied as it is taken: what it did is its answer. A refusal (a stale plan revision, a newest turn
+   *  that moved, a turn still running) is an answer too, which its producer tells the owner. */
+  private applyIntent(input: IntentInput): Effect.Effect<IntentResult, KinuError> {
+    switch (input.kind) {
+      case 'decision': {
+        const { decidePlan } = this.ports;
+
+        if (decidePlan === undefined) return Effect.fail(new KinuError('unsupported', 'This agent takes no plan decision.'));
+        const verdict = { id: input.plan, revision: input.revision, decision: input.decision, ...(input.feedback !== undefined && { feedback: input.feedback }) };
+
+        return Effect.map(attemptInItsWords('io', () => decidePlan(verdict)), (outcome) => ({ kind: 'decision', outcome }));
+      }
+
+      case 'answers':
+        return Effect.as(this.answerQuestions(input.questions, input.answers), { kind: 'answers' });
+      case 'retry':
+        return Effect.map(this.retryTurn(input.messageId), (turnId) => ({ kind: 'retry', turnId }));
+    }
   }
 
   private async admitDeliveredWords(id: string, input: Extract<DeliveryInput, { kind: 'words' }>): Promise<DeliveryAnswer> {
@@ -1054,36 +1096,55 @@ export class ChatSession {
   /** Reruns the newest turn as its opener (a steer is not resent); `claim` runs before any await. */
   retry(claim: (turnId: string) => void): Promise<SendLanding> {
     return settleEffect(Effect.gen({ self: this }, function* () {
-      if (this.turnInFlight()) return yield* Effect.fail(new KinuError('denied', 'This turn is already running; Retry waits for it to end.'));
-      const opener = this.transcript.reopenNewestTurn();
-
-      if (opener === null) return yield* Effect.fail(new KinuError('bad_input', 'There is no message to retry.'));
-      const turnId = opener.id;
+      const turnId = yield* this.reopenForRetry(null);
       const landing = Promise.withResolvers<SendLanding>();
 
-      this.reopening = true;
       this.landings.set(turnId, landing);
       claim(turnId);
-
-      // Held until the turn is queued, which then holds it: no tick between the two leaves the session idle.
-      yield* Effect.gen({ self: this }, function* () {
-        const message = yield* attemptInItsWords('unavailable', () => this.transcript.message(turnId));
-        const metadata = yield* attemptInItsWords('unavailable', () => this.transcript.metadata(turnId));
-
-        this.queue.push({
-          text: message?.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('') ?? '',
-          kind: 'user', turnId, ...(metadata !== undefined && { metadata }),
-          settle: (failure) => { this.settleLandings([turnId], failure ?? 'turn'); },
-        });
-      }).pipe(
-        // A read that failed queued nothing: its landing goes with it, so no caller waits on a turn that never runs.
-        Effect.tapError((failure) => Effect.sync(() => { this.settleLandings([turnId], failure); })),
-        Effect.ensuring(Effect.sync(() => { this.reopening = false; })),
-      );
-      this.pump();
+      yield* this.queueRetried(turnId);
 
       return yield* attemptInItsWords('unavailable', () => landing.promise);
     }));
+  }
+
+  /** The owner's Retry as its intent delivers it (D6): `messageId`, the newest message they saw, must still be the newest.
+   *  Queued here, its turn tells its own end; nothing waits on it, so the delivery that carried it answers at once, with
+   *  the turn it reopened. */
+  private retryTurn(messageId: string): Effect.Effect<string, KinuError> {
+    return Effect.flatMap(this.reopenForRetry(messageId), (reopened) => Effect.as(this.queueRetried(reopened), reopened));
+  }
+
+  /** The newest turn, reopened: its opener's id. `seen`, when given, must still be the newest message. */
+  private reopenForRetry(seen: string | null): Effect.Effect<string, KinuError> {
+    return Effect.suspend(() => {
+      if (this.turnInFlight()) return Effect.fail(new KinuError('denied', 'This turn is already running; Retry waits for it to end.'));
+
+      if (seen !== null && this.transcript.newestUserId() !== seen) return Effect.fail(new KinuError('bad_input', 'A newer message came since; Retry the newest one.'));
+      const opener = this.transcript.reopenNewestTurn();
+
+      return opener === null ? Effect.fail(new KinuError('bad_input', 'There is no message to retry.')) : Effect.succeed(opener.id);
+    });
+  }
+
+  /** Held until the turn is queued, which then holds it: no tick between the two leaves the session idle. */
+  private queueRetried(turnId: string): Effect.Effect<void, KinuError> {
+    this.reopening = true;
+
+    return Effect.gen({ self: this }, function* () {
+      const message = yield* attemptInItsWords('unavailable', () => this.transcript.message(turnId));
+      const metadata = yield* attemptInItsWords('unavailable', () => this.transcript.metadata(turnId));
+
+      this.queue.push({
+        text: message?.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('') ?? '',
+        kind: 'user', turnId, ...(metadata !== undefined && { metadata }),
+        settle: (failure) => { this.settleLandings([turnId], failure ?? 'turn'); },
+      });
+      this.pump();
+    }).pipe(
+      // A read that failed queued nothing: its landing goes with it, so no caller waits on a turn that never runs.
+      Effect.tapError((failure) => Effect.sync(() => { this.settleLandings([turnId], failure); })),
+      Effect.ensuring(Effect.sync(() => { this.reopening = false; })),
+    );
   }
 
   /** Queue and running turn define "in flight"; delivery is awaited so the redraw precedes the answer. */

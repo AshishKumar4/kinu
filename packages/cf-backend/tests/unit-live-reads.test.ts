@@ -58,6 +58,7 @@ async function liveRead(agent: HarnessOrchestratorAgent, read: LiveRead): Promis
     getWorkspaceGitHub: () => agent.getWorkspaceGitHub(),
     inspectWork: () => agent.inspectWork(),
     listOwnerQuestions: () => agent.listOwnerQuestions(),
+    listOwedIntents: () => agent.listOwedIntents(),
   };
 
   await reads[read]();

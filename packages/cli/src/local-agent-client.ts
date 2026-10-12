@@ -257,7 +257,12 @@ export class LocalAgentClient implements AgentClient {
     };
     this.questions = {
       list: () => this.session.listOwnerQuestions(),
-      answer: (id, answers) => this.session.answerOwnerQuestions(id, answers),
+      // In this process: nothing crosses, so nothing is owed.
+      answer: async (id, answers) => {
+        await this.session.answerOwnerQuestions(id, answers);
+
+        return null;
+      },
     };
     this.plans = {
       active: () => this.session.getActivePlanReview(),

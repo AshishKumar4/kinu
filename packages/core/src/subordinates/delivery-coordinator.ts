@@ -88,6 +88,14 @@ export class DeliveryCoordinator {
     return await this.crossed(actorId, delivery.id);
   }
 
+  /** As {@link deliver}, for a delivery whose id names one intent: one already owed under that id has its own caller, who
+   *  hears its answer, so this one crosses nothing and is answered null. */
+  async deliverNew(actorId: string, delivery: Delivery): Promise<CrossedDelivery | null> {
+    if (!this.commit(actorId, delivery)) return null;
+
+    return await this.crossed(actorId, delivery.id);
+  }
+
   /** As {@link record}, then crossed as {@link deliver} crosses. */
   async owe<A>(actorId: string, admit: () => OwedAdmission<A>): Promise<A> {
     const { value, delivery } = this.recorded(actorId, admit);
@@ -161,7 +169,7 @@ export class DeliveryCoordinator {
 
     const answer = crossed.value;
 
-    if (typeof answer === 'object') return await this.refused(actorId, delivery, new KinuError(answer.refused.code, answer.refused.message));
+    if (typeof answer === 'object' && 'refused' in answer) return await this.refused(actorId, delivery, new KinuError(answer.refused.code, answer.refused.message));
     this.rows.paid(actorId, delivery.id);
 
     if (answer === 'yielded' || answer === 'cancelled') handBackCarried(this.host.eventLog(actorId), delivery, answer);

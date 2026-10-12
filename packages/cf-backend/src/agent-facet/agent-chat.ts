@@ -153,6 +153,8 @@ export class FacetChat {
         steerSkills: (text) => workspace.steerSkills(text, this.activeSkills),
         stillOwed: (metadata) => planHandoffStillOwed(metadata, actor.stores.planReviews),
         birthContext: (drainTurnId) => workspace.birthContext(drainTurnId),
+        // The owner's decision as its intent delivers it: its plans are this store's, and an approval hands off its turn.
+        decidePlan: (verdict) => this.planned((plans) => plans.decideAndHandOff(verdict, (turn) => this.session.enqueueTurn(turn))),
         // A run its workspace delivered: a typed input of this chat (D2), its end owed its workspace's caller.
         runs: {
           run: (run, signal, retire) => this.runDelivered(run, signal, retire),

@@ -18,7 +18,7 @@ import { Effect } from 'effect';
 import * as v from 'valibot';
 import {
   isWorkMode, INTERRUPTED_TURN, JsonObjectSchema, JsonValueSchema, UIMessageSchema,
-  type ChatTransport, type JsonObject, type PromptFile, type SendLanding, type SendState, type SessionEvent, type TurnReplies, type WorkMode,
+  type ChatTransport, type JsonObject, type OwedIntent, type PromptFile, type SendLanding, type SendState, type SessionEvent, type TurnReplies, type WorkMode,
 } from '@kinu.run/core';
 import { attempt, attemptInItsWords, diagnostics, KinuError, refusalOf, settle, toKinuError } from '@kinu.run/core/obs';
 
@@ -52,7 +52,9 @@ export interface ChatWire {
   firstText?(): void;
   /** Rejects when the loop refuses the message: nothing was written and no turn ran. */
   send(input: { readonly text: string; readonly files: readonly PromptFile[]; readonly id: string; readonly mode: WorkMode }): Promise<SendLanding>;
-  retry(claim: (turnId: string) => void): Promise<SendLanding>;
+  /** The owner's Retry of the newest turn, whose newest message they saw is `messageId`, as an intent (D6): the turn its
+   *  agent reopened, which tells its end; owed when the crossing did not reach the agent, whose wake delivers it. */
+  retry(messageId: string): Promise<{ readonly turnId: string } | OwedIntent>;
   interrupt(): void;
   /** Where a send stands, from its durable facts; `awaitSend` once it is settled or none. */
   sendState(id: string): Promise<SendState>;
@@ -142,8 +144,8 @@ interface LiveStream {
   readonly turnId: string;
   /** The run whose ledger holds the steps before `firstStep`. */
   readonly runId: string;
-  /** Requests of the other messages a rerun carried, answered when it closes. */
-  readonly carried: readonly string[];
+  /** Requests of the other messages a rerun carried, and a Retry answered after it opened: each answered when it closes. */
+  readonly carried: string[];
   /** The answer's row id, on every provider call's `start`, so the answer stays one message. */
   readonly messageId: string;
   readonly open: OpenParts;
@@ -208,10 +210,12 @@ function transcriptFrame(history: readonly UIMessage[]): string {
 }
 
 /** `error` and `landed` only when they are facts: the client paints a present `undefined` key as a failure. */
-function doneFrame(requestId: string, extra: { landed?: SendLanding; error?: string }): string {
+/** `owed`: an owner's intent the request carried, on its way to the agent's wake. */
+function doneFrame(requestId: string, extra: { landed?: SendLanding; error?: string; owed?: string }): string {
   return JSON.stringify({
     type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: requestId, body: extra.error ?? '', done: true,
     ...(extra.error !== undefined && { error: true }), ...(extra.landed !== undefined && { landed: extra.landed }),
+    ...(extra.owed !== undefined && { owed: extra.owed }),
   });
 }
 
@@ -455,7 +459,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     }
 
     if (parsed.output.trigger === 'regenerate-message') {
-      await this.retryRequest(requestId);
+      await this.retryRequest(requestId, parsed.output.messages);
 
       return;
     }
@@ -495,30 +499,33 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     if (opener === null) this.done(requestId, taken.length === 0 ? {} : { landed: 'mid-turn' });
   }
 
-  retryRequest(requestId: string): Promise<void> {
+  /** The Retry of the newest turn the client shows: its stream answers under this request once the agent takes it. */
+  retryRequest(requestId: string, shown: readonly UIMessage[]): Promise<void> {
     return settle(Effect.gen({ self: this }, function* () {
-      let claimed: string | null = null;
+      const newestAsked = (messages: readonly UIMessage[]): string | undefined => [...messages].reverse().find((message) => message.role === 'user')?.id;
+      const messageId = newestAsked(shown) ?? newestAsked(yield* attemptInItsWords('io', () => this.wire.history(TRANSCRIPT_WINDOW)));
 
-      const landing = yield* attemptInItsWords('io', () => this.wire.retry((turnId) => {
-        claimed = turnId;
-        this.requests.set(turnId, requestId);
-      })).pipe(Effect.catch((failure) => Effect.sync(() => {
+      if (messageId === undefined) return this.done(requestId, { error: 'There is no message to retry.' });
+
+      const retried = yield* attemptInItsWords('io', () => this.wire.retry(messageId)).pipe(Effect.catch((failure) => Effect.sync(() => {
         diagnostics.failure('chat.retry_refused', failure);
-
-        if (claimed !== null) this.requests.delete(claimed);
         this.done(requestId, { error: refusalOf(failure).error });
 
         return null;
       })));
 
-      if (landing === null || landing === 'turn') return;
+      if (retried === null) return;
 
-      if (claimed !== null) this.requests.delete(claimed);
-      this.done(requestId, { landed: 'mid-turn' });
+      // Owed to the agent's wake: the request ends here, and the turn, once it opens, is followed as any it opens itself.
+      if ('owed' in retried) return this.done(requestId, { owed: retried.owed });
+
+      // The turn it reopened answers this request: from its open, or, opened already, at its end.
+      if (this.live?.turnId === retried.turnId) this.live.carried.push(requestId);
+      else this.requests.set(retried.turnId, requestId);
     }));
   }
 
-  private done(requestId: string, extra: { landed?: SendLanding; error?: string } = {}): void {
+  private done(requestId: string, extra: { landed?: SendLanding; error?: string; owed?: string } = {}): void {
     this.wire.broadcast(doneFrame(requestId, extra));
   }
 
