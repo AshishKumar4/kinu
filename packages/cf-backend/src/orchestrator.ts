@@ -913,7 +913,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // What its turns are built on, seeded as a turn's preparation seeds it; no surface is built for no turn.
       scaffold: async () => {
         this.admitWork();
-        const actor = await this.actorHost().acquire(actorReferenceOf(this.liveAgentOf(actorId)), { kind: 'actor' });
+        const reference = actorReferenceOf(this.liveAgentOf(actorId));
+        // The seat it holds, which a run of its may have taken, as its turn's preparation reads it; else its own.
+        const actor = this.actorHost().hosted(reference) ?? await this.actorHost().acquire(reference, { kind: 'actor' });
 
         // As its turn's sources ask it first: the workspace agent's program is installed before it is read.
         if (actorReach(actorPolicy(actor.record)).lanes) await this.ensureOwnedScaffold();
