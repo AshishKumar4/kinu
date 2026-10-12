@@ -195,6 +195,22 @@ separation is a convention, not an ACL.
 Nimbus process creation is non-blocking and returns a live PID. Process state,
 logs, signals, ports, and runtime availability come from Nimbus.
 
+A Stop ends a shell loop at once, but not a JavaScript loop that never yields
+(`node -e 'for (;;) {}'`). That is the platform's limit, not Nimbus's: JS has no
+preemption, so only the isolate's CPU limit can end that invocation. In
+production a Dynamic Worker invocation runs under the plan's CPU limit unless
+its loader sets a lower `limits.cpuMs`
+(developers.cloudflare.com/dynamic-workers/usage/limits); Nimbus sets none, so
+the plan's limit applies. Locally workerd enforces no CPU limit (its server's
+`NullIsolateLimitEnforcer`) and runs a called worker on its caller's thread
+(workerd README), so the loop holds the whole process and the Stop is never
+answered. Measured on armada, the same on Nimbus 0.15, 0.16 and 0.17: the
+probe's 345–360 s deadline lapses with CPU at 0.999
+(`scripts/turn-file-io.ts --shape=abort`, `abort.node` and `abort.pipe`; 0.15
+in the armada artifacts `art-abort-015-baseline-retry`, 0.16 job
+20261011191439-e93bb139, 0.17 jobs 20261011191123-ca5fcf2c and 20261012022155-90848086),
+while `abort.bash` settles in 1.5 s at CPU 0.0002.
+
 Exposing a port returns a random per-registration capability. Kinu encodes
 the workspace, the port, the capability, and an HMAC in a dedicated preview
 hostname under `PREVIEW_HOST_SUFFIX`. The HMAC is keyed by an HKDF subkey of
