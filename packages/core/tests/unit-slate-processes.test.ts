@@ -119,6 +119,37 @@ test('a first build refused for a missing import is built again once the import 
   expect((await next.booted(ROOT_SLATE_CALLER, 'board')).process.n).toBe(1);
 });
 
+test('a refusal is built again once a directory above what it read is replaced, and not for a name it only begins', async () => {
+  const { processes, compiles, world } = backend();
+
+  compiles.set('board', { tree: 'v1', compiles: false, inputs: [read('/home/main/deps/lib.ts')] });
+  await expect(processes.booted(ROOT_SLATE_CALLER, 'board')).rejects.toMatchObject({ code: 'bad_input' });
+  expect(processes.filesChanged(['/home/main/deps2', '/home/main/dep'])).toEqual([]);
+  await expect(processes.booted(ROOT_SLATE_CALLER, 'board')).rejects.toMatchObject({ code: 'bad_input' });
+  expect(world.builds).toBe(1);
+
+  // `mv deps broken && mv fixed deps`: each rename is one event, naming where the directory went and where it left.
+  compiles.set('board', { tree: 'v1', compiles: true, inputs: [read('/home/main/deps/lib.ts')] });
+
+  expect(processes.filesChanged(['/home/main/broken', '/home/main/deps', '/home/main/deps', '/home/main/fixed'])).toEqual(['board']);
+  expect((await processes.booted(ROOT_SLATE_CALLER, 'board')).process.n).toBe(1);
+});
+
+test('a refusal is built again once the mode of a directory above what it looked at changes, in a later activation too', async () => {
+  const { activation, compiles } = backend();
+
+  compiles.set('board', { tree: 'v1', compiles: false, inputs: [read('/home/main/locked/deps/lib.ts'), missing('/home/main/locked/deps/lib.tsx')] });
+  await expect(activation().booted(ROOT_SLATE_CALLER, 'board')).rejects.toMatchObject({ code: 'bad_input' });
+
+  // `chmod` or `chown` of /home/main/locked: one event, at that directory alone.
+  const next = activation();
+
+  compiles.set('board', { tree: 'v1', compiles: true, inputs: [read('/home/main/locked/deps/lib.ts')] });
+
+  expect(next.filesChanged(['/home/main/locked'])).toEqual(['board']);
+  expect((await next.booted(ROOT_SLATE_CALLER, 'board')).process.n).toBe(1);
+});
+
 test('a restricted caller\'s build does not drop what the owner\'s build read', async () => {
   const { processes, compiles } = backend();
 

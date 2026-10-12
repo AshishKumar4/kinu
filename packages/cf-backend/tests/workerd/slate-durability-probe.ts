@@ -269,6 +269,13 @@ const LILT_BROKEN = 'export default function App() {\n  return <p>lilt</p>\n  <p
 
 const LILT_FIXED = 'export default function App() { return <><p data-words>lilt-fixed</p></>; }';
 
+/** A slate's preview before and after a repair of what it imports (`builds`, or why not), and what it says after. */
+interface SlateRepairSeen {
+  readonly before: string;
+  readonly after: string;
+  readonly says: string;
+}
+
 /** One step of the build flow, as the agent and the user each see it. */
 interface SlateBuildSeen {
   readonly wrote: string | null;
@@ -521,6 +528,45 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     const called = await workspaceOwner(this.env, input.workspace).slateAs(ROOT_SLATE_CALLER, { op: 'call', id: 'exports', method: 'word' });
 
     return called.ok ? v.parse(v.string(), called.value) : `refused: ${called.error}`;
+  }
+
+  /**
+   * A slate whose class imports `imports`, a workspace file outside its tree that `setup`, a shell command, leaves
+   * unbuildable; `repair` mends it without writing that file. Answers the preview after each, and what the slate says.
+   */
+  async slateRepair(input: { workspace: string; owner: string; id: string; imports: string; setup: string; repair: string }): Promise<SlateRepairSeen> {
+    const target = await this.workspaceTarget(input.workspace);
+    const owned = workspaceOwner(this.env, input.workspace);
+
+    const previewed = async () => {
+      const preview = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'preview', id: input.id });
+
+      return preview.ok ? 'builds' : preview.reason;
+    };
+
+    const shell = async (command: string) => {
+      const ran = await this.runInWorkspace(input.workspace, command);
+
+      if (ran.exitCode !== 0) throw new Error(`${command}: exit ${String(ran.exitCode)}: ${ran.stdout}`);
+    };
+
+    await this.claimWorkspace(target, input.workspace, input.owner);
+    await this.writeSlateFile(target, `/slates/${input.id}/package.json`, JSON.stringify({ main: 'server.ts', slate: { title: input.id } }));
+    await this.writeSlateFile(target, `/slates/${input.id}/server.ts`, [
+      'import { SlateObject } from "kinu:slate";',
+      `import { word } from ${JSON.stringify(input.imports)};`,
+      'export class Slate extends SlateObject {',
+      '  async word() { return word; }',
+      '}',
+    ].join('\n'));
+    await shell(input.setup);
+    const before = await previewed();
+
+    await shell(input.repair);
+    const after = await previewed();
+    const called = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'call', id: input.id, method: 'word' });
+
+    return { before, after, says: called.ok ? v.parse(v.string(), called.value) : `refused: ${called.error}` };
   }
 
   async portReservations(workspace: string): Promise<DurabilityReservation[]> {

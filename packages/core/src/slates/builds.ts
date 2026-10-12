@@ -90,6 +90,13 @@ function ancestors(path: string): string[] {
   return path.startsWith('/') && path !== '/' ? [...above, '/'] : above;
 }
 
+/** Every path below `path`, as the range the path index answers: from `path/` up to `path0`, `0` sorting after `/`. */
+function below(path: string): readonly [string, string] {
+  const under = path === '/' ? '/' : `${path}/`;
+
+  return [under, `${under.slice(0, -1)}0`];
+}
+
 export class SlateBuilds {
   /** Read once per activation per authority, as every model step asks; each write below keeps it current. */
   readonly #failing = new Map<string, FailingSlateBuild[]>();
@@ -147,8 +154,10 @@ export class SlateBuilds {
   }
 
   /**
-   * The slates a build of which looked at one of `paths`: a file it read, or a missing path that one of `paths` now is
-   * or lies under. Each such build is stale, and whether it builds is not yet known.
+   * The slates a build of which looked at one of `paths` or below one: a file it read, a missing path that one of
+   * `paths` now is or lies under, or anything under a directory one of `paths` names, which a rename, removal,
+   * replacement or change of mode moves whole in that one path's event. Each such build is stale, and whether it builds
+   * is not yet known.
    */
   moved(paths: readonly string[], only?: { readonly slate: string; readonly authority: string }): string[] {
     const stale = new Map<string, { readonly slate: string; readonly authority: string }>();
@@ -159,8 +168,9 @@ export class SlateBuilds {
       const scoped = only === undefined ? '' : ' AND slate = ? AND authority = ?';
 
       const rows = this.db.exec(
-        `SELECT DISTINCT slate, authority FROM slate_build_inputs WHERE (path = ? OR (missing = 1 AND path IN (${marks})))${scoped}`,
-        path, ...above, ...(only === undefined ? [] : [only.slate, only.authority]),
+        `SELECT DISTINCT slate, authority FROM slate_build_inputs
+         WHERE (path = ? OR (path >= ? AND path < ?) OR (missing = 1 AND path IN (${marks})))${scoped}`,
+        path, ...below(path), ...above, ...(only === undefined ? [] : [only.slate, only.authority]),
       ).toArray();
 
       for (const row of rows) {

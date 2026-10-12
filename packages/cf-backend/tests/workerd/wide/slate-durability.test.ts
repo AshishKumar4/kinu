@@ -88,6 +88,31 @@ it('a slate is rebuilt when a package it imports switches the entry its package.
   expect(await subject.slateExports({ ...at, entry: 'b.js', first: false })).toBe('beta');
 });
 
+it('a slate refused for what it imports is built again once a directory above that is replaced, or its mode repaired', async () => {
+  const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('repairs'));
+  const at = { workspace: 'durability-repairs', owner: 'durability-owner' };
+
+  // The directory the import names is renamed away and a fixed copy renamed in: two events, neither at the file.
+  const replaced = await subject.slateRepair({
+    ...at, id: 'replaced', imports: '/home/main/replaced/deps/lib.ts',
+    setup: 'mkdir -p /home/main/replaced/deps /home/main/replaced/fixed'
+      + ' && echo \'export const word = ;\' > /home/main/replaced/deps/lib.ts'
+      + ' && echo \'export const word = "replaced";\' > /home/main/replaced/fixed/lib.ts',
+    repair: 'mv /home/main/replaced/deps /home/main/replaced/broken && mv /home/main/replaced/fixed /home/main/replaced/deps',
+  });
+
+  expect(replaced).toEqual({ before: 'bad_input', after: 'builds', says: 'replaced' });
+
+  // A directory above the import that its owner may not enter, then may: one event, at that directory.
+  const unlocked = await subject.slateRepair({
+    ...at, id: 'unlocked', imports: '/home/main/locked/deps/lib.ts',
+    setup: 'mkdir -p /home/main/locked/deps && echo \'export const word = "unlocked";\' > /home/main/locked/deps/lib.ts && chmod 000 /home/main/locked',
+    repair: 'chmod 700 /home/main/locked',
+  });
+
+  expect(unlocked).toEqual({ before: 'bad_input', after: 'builds', says: 'unlocked' });
+});
+
 it('a removed slate’s URL is dead even when a new app claims its port', async () => {
   const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('removed'));
 
