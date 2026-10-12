@@ -21,6 +21,7 @@ import {
   type ChatTransport, type JsonObject, type OwedIntent, type PromptFile, type SendLanding, type SendState, type SessionEvent, type TurnReplies, type WorkMode,
 } from '@kinu.run/core';
 import { attempt, attemptInItsWords, diagnostics, KinuError, refusalOf, settle, toKinuError } from '@kinu.run/core/obs';
+import { TRANSCRIPT_WINDOW } from './transcript-window';
 
 export type ChatSocket = Pick<Connection, 'id' | 'send' | 'readyState' | 'close'>;
 
@@ -201,9 +202,6 @@ class OpenParts {
     return chunk.type !== 'tool-input-delta' || this.calls.has(chunk.toolCallId);
   }
 }
-
-/** A frame's newest messages; the pane pages older rows from storage. */
-const TRANSCRIPT_WINDOW = 60;
 
 function transcriptFrame(history: readonly UIMessage[]): string {
   return JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: history });
@@ -563,8 +561,12 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     if (turn.userTurn) this.wire.broadcast(transcriptFrame(await this.wire.history(TRANSCRIPT_WINDOW)));
   }
 
-  /** The answer row is durable before this. A turn that ends before this room opened it releases the tabs waiting on it. */
-  async closeTurn(): Promise<void> {
+  /**
+   * The answer row is durable before this. A turn that ends before this room opened it releases the tabs waiting on it.
+   * `window`: the transcript's newest {@link TRANSCRIPT_WINDOW} messages as the turn ended, told with its end by the
+   * agent that holds them.
+   */
+  closeTurn(window: readonly UIMessage[]): void {
     const live = this.live;
 
     if (live === null) {
@@ -575,14 +577,16 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
     this.live = null;
     this.wire.replies?.ended(live.turnId, live.failure);
-
-    const history = await this.wire.history(TRANSCRIPT_WINDOW);
-
     this.pendingResume.clear();
     this.done(live.requestId, live.failure === null ? {} : { error: live.failure });
 
     for (const request of live.carried) this.done(request);
-    this.wire.broadcast(transcriptFrame(history));
+    this.wire.broadcast(transcriptFrame(window));
+  }
+
+  /** A turn whose agent did not live to tell its end: its window read from the agent's transcript. */
+  async closeLostTurn(): Promise<void> {
+    this.closeTurn(this.live === null ? [] : await this.wire.history(TRANSCRIPT_WINDOW));
   }
 
   async deliver(event: SessionEvent): Promise<void> {
@@ -608,11 +612,6 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
         return;
       }
-
-      case 'turn-end':
-        await this.closeTurn();
-
-        return;
 
       case 'error': {
         const live = this.live;
@@ -646,6 +645,8 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
         return;
 
+      // A turn's end is told with its transcript window (`closeTurn`), never as a bare event.
+      case 'turn-end':
       case 'text-delta':
       case 'reasoning-delta':
       case 'tool-call':

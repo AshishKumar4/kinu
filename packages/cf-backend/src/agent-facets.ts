@@ -1,6 +1,6 @@
 /** The workspace side of an agent's isolate (D9). */
 import { RpcTarget, WorkerEntrypoint, exports } from 'cloudflare:workers';
-import type { UIMessageChunk } from 'ai';
+import type { UIMessage, UIMessageChunk } from 'ai';
 import * as v from 'valibot';
 import { decodeModelMessageValues, forkConversationRowSchema, relayedAnswer, remoteContextTree } from '@kinu.run/core';
 import type { ForkConversationPlan, ForkConversationSection, ForkConversationSource, ForkConversationTarget, ForkRows } from '@kinu.run/core';
@@ -108,7 +108,7 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   prepareChat(request: ChatTurnRequest) { return this.open(() => this.answers.prepareChat(request)); }
   scaffold() { return this.open(() => this.answers.scaffold()); }
   chatEvent(event: SessionEvent) { return this.open(() => this.answers.chatEvent(event)); }
-  turnEnded(event: SessionEvent, figures: AgentFigures, activity: readonly AgentTurnActivity[]) { return this.open(() => this.answers.turnEnded(event, figures, activity)); }
+  turnEnded(event: SessionEvent, figures: AgentFigures, activity: readonly AgentTurnActivity[], window: readonly UIMessage[]) { return this.open(() => this.answers.turnEnded(event, figures, activity, window)); }
   owedReport(...args: Parameters<AgentWorkspace['owedReport']>) { return this.open(() => this.answers.owedReport(...args)); }
   parentReport(report: Parameters<AgentWorkspace['parentReport']>[0]) { return this.open(() => this.answers.parentReport(report)); }
   autoTitle(subject: string, title: string | null) { return this.open(() => this.answers.autoTitle(subject, title)); }
@@ -230,7 +230,7 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
   prepareChat(request: ChatTurnRequest) { return this.owned((host) => host.prepareChat(request)); }
   scaffold() { return this.owned((host) => host.scaffold()); }
   chatEvent(event: SessionEvent) { return this.owned((host) => host.chatEvent(event)); }
-  turnEnded(event: SessionEvent, figures: AgentFigures, activity: readonly AgentTurnActivity[]) { return this.owned((host) => host.turnEnded(event, figures, activity)); }
+  turnEnded(event: SessionEvent, figures: AgentFigures, activity: readonly AgentTurnActivity[], window: readonly UIMessage[]) { return this.owned((host) => host.turnEnded(event, figures, activity, window)); }
   owedReport(...args: Parameters<AgentWorkspace['owedReport']>) { return this.owned((host) => host.owedReport(...args)); }
   parentReport(report: Parameters<AgentWorkspace['parentReport']>[0]) { return this.owned((host) => host.parentReport(report)); }
   autoTitle(subject: string, title: string | null) { return this.owned((host) => host.autoTitle(subject, title)); }

@@ -16,6 +16,7 @@ import { Cause, Effect, Exit } from 'effect';
 import { serialQueue } from '@kinu.run/agent-utils';
 import type { AgentDatabase } from './agent-database';
 import type { StepPacer } from './step-pacer';
+import { TRANSCRIPT_WINDOW } from '../transcript-window';
 import { FacetSpend, answerMetadataOf, deliveredRun, facetTurnSources, facetTurnTools, type AgentWorkspace, type FacetModels, type LiveTurn } from './agent-turn';
 
 /** The words reach the room on the turn's own stream, and a turn's end on its own call. */
@@ -110,7 +111,14 @@ export class FacetChat {
       transport: {
         deliver: (event) => {
           // Its last charge lands before its end is told: nothing the workspace reads of the turn can miss it.
-          if (event.type === 'turn-end') return this.charged().then(async () => { await workspace.turnEnded(event, deps.database.figures(), deps.database.takeActivity()); });
+          if (event.type === 'turn-end') {
+            return this.charged().then(async () => {
+              // Its room is sent the transcript's newest messages with its end: they are this isolate's to read.
+              const window = await deps.database.history(TRANSCRIPT_WINDOW);
+
+              await workspace.turnEnded(event, deps.database.figures(), deps.database.takeActivity(), window);
+            });
+          }
 
           return ROOM_EVENTS.has(event.type) ? workspace.chatEvent(event) : undefined;
         },

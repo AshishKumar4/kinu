@@ -333,7 +333,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
 
             await host.chatEvent(event);
           },
-          turnEnded: async (event, figures, activity) => {
+          turnEnded: async (event, figures, activity, window) => {
             if (lostTurnEnds.delete(placement.storageKey)) return;
             const delay = delayedTurnEnds.get(placement.storageKey);
 
@@ -343,11 +343,11 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
               await delay.released;
             }
 
-            await host.turnEnded(event, figures, activity);
+            await host.turnEnded(event, figures, activity, window);
             const copy = copiedTurnEnds.get(placement.storageKey);
 
             copiedTurnEnds.delete(placement.storageKey);
-            copy?.([event, figures, activity]);
+            copy?.([event, figures, activity, window]);
           },
           owedReport: (turn, ended) => {
             handNarration(placement.storageKey, ended.narration);

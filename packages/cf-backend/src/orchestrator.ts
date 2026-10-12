@@ -84,7 +84,7 @@ import { createCodemodeToolFactory } from "./codemode-tool";
 import { BROWSER_PRELUDE } from './browser-prelude';
 import { compactionDiagnostics, hostedActorCompaction } from "@kinu.run/compaction";
 import { publishSubordinateReport, temporaryRunSettles, type ReportDeps } from "@kinu.run/core";
-import type { ToolSet } from "ai";
+import type { ToolSet, UIMessage } from "ai";
 import {
   webhookRoutePath, webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE,
 } from "@kinu.run/core";
@@ -921,10 +921,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         return this.agentTurns.scaffold(actor, await actor.runtime.identity.scaffold.version());
       },
       chatEvent: (event) => this.hostedChatEvent(actorId, event),
-      turnEnded: async (event, figures, activity) => {
+      turnEnded: async (event, figures, activity, window) => {
         // What its turn logged that no tool call took rides its end.
         if (activity.length > 0) this.agentActivity(actorId, activity);
-        await this.hostedTurnEnded(actorId, event, figures);
+        await this.hostedTurnEnded(actorId, event, figures, window);
       },
       // The turn's report disposition is the agent's own, kept where the turn ran. An agent with no hirer owes none.
       owedReport: async (turn, ended) => (actorPolicy(this.agentOf(actorId)).hirer === null ? null : await hostedOwedReport(this.hostedSeams(), this.agentBound(actorId), turn, ended)),
@@ -1056,7 +1056,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** An end delayed past the agent's later opening, a later turn's or its Retry's, is that earlier run's: it closes
    *  nothing of the run now open, in its room or here. */
-  private async hostedTurnEnded(actorId: string, event: SessionEvent, figures: AgentFigures): Promise<void> {
+  /** `window`: the transcript's newest messages as the turn ended, its room's closing frame. */
+  private async hostedTurnEnded(actorId: string, event: SessionEvent, figures: AgentFigures, window: readonly UIMessage[]): Promise<void> {
     const runId = event.type === 'turn-end' ? event.runId : '';
     const ended = new TurnFences(this.boundSql).ended(actorId, { runId });
 
@@ -1066,7 +1067,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       return;
     }
 
-    await this.hostedChatEvent(actorId, event);
+    this.chatRooms.hostedRoom(actorId)?.closeTurn(window);
     await this.chatTurnClosed(actorId, figures, ended === 'unfenced' ? null : ended, ended === 'unfenced' ? this.agentTurns.chatTurn(actorId) : ended.turnId);
   }
 
@@ -1093,7 +1094,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     diagnostics.event('agent.turn_end_lost', { turnId: open.turnId });
-    await this.chatRooms.hostedRoom(actorId)?.closeTurn();
+    await this.chatRooms.hostedRoom(actorId)?.closeLostTurn();
     await this.chatTurnClosed(actorId, null, expected, open.turnId);
   }
 

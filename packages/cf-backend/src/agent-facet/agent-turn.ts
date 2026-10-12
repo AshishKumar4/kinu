@@ -1,5 +1,5 @@
 /** One delegated turn in the agent's isolate: its model loop here, every tool call back in the workspace. */
-import { jsonSchema, tool, type ModelMessage, type ToolSet, type UIMessageChunk } from 'ai';
+import { jsonSchema, tool, type ModelMessage, type ToolSet, type UIMessage, type UIMessageChunk } from 'ai';
 import {
   CHAT_SESSION_ID, actorAffinity, HeadCapture, ownerLaneTools, toolsInWorkMode, withEffectReceipt, decodeJsonValue, decodeModelMessageValues, encodeModelMessageValues, withEffectPointer, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan, imageModelOutput,
   type AuthRequest, type AuthResolution, type HandedOffTurn, type SettledRun, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type JsonValue, type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind, type AgentSignal, type SendOutcome,
@@ -59,8 +59,9 @@ export interface AgentWorkspace {
   scaffold(): Promise<StoredRow>;
   chatEvent(event: SessionEvent): Promise<void>;
   /** The turn's end, with the agent's figures as it ends. */
-  /** `activity`: the lines its turn logged that no tool call took. */
-  turnEnded(event: SessionEvent, figures: AgentFigures, activity: readonly AgentTurnActivity[]): Promise<void>;
+  /** `activity`: the lines its turn logged that no tool call took. `window`: the transcript's newest messages as it
+   *  ended, the frame its room is sent. */
+  turnEnded(event: SessionEvent, figures: AgentFigures, activity: readonly AgentTurnActivity[], window: readonly UIMessage[]): Promise<void>;
   owedReport(
     /** `taskId`: the assignment this turn answers, if one opened it. */
     turn: { readonly reports: SubordinateReportLedger; readonly ownerDriven: boolean; readonly taskId: string | null },
