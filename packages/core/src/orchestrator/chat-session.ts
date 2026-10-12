@@ -7,6 +7,7 @@
 import { answeredSummary, resumeMetadata, type OwnerAnswer } from '../plans/owner-questions';
 import { OWNER_ANSWER_SIGNAL } from '../types/owner-questions';
 import { deliveredSignal, MessageIdSchema, type Delivery, type DeliveryAnswer, type DeliveryInput, type OwedDelivery, type TurnDeliveryInput } from '../subordinates/deliveries';
+import type { AgentTurnTask } from '../subordinates/agent-isolate';
 import { stampAuthorship, turnAuthorship, type TurnAuthorship } from './turn-authorship';
 import type { TrialTurn } from '../evolution/trial-rules';
 import type { ModelMessage } from 'ai';
@@ -35,7 +36,7 @@ import type {
 } from '../types/backend-host';
 import type { TierId } from '../types/profile';
 import type { SendLanding, SettledSignals } from '../types/signals';
-import type { WorkMode } from '../types/turn';
+import { WorkModeSchema, type WorkMode } from '../types/turn';
 import type { JsonObject } from '../utils/json';
 import { nanoid } from '../utils/nanoid';
 import { ASKED, type Holds } from '../utils/held-reads';
@@ -130,6 +131,9 @@ interface QueueItem {
   yieldsToUserMessage?: boolean;
   /** Re-opened under its own ids, its prior output re-entered ahead of the remaining calls. */
   continuation?: TurnContinuation;
+  /** A run delivered to the agent: a typed input of this queue, which its host runs (D2), never a turn of the
+   *  conversation. Programmatic, keyed by its id, held durably as every programmatic input is. */
+  run?: DeliveredRun;
   /** Exactly once, and told whether the turn ran: a failure must reach the producer, the only one who can put things back.
    *  `abandoned` names why an opened turn ended before it could answer. */
   settle: (failure: KinuError | null, yielded?: boolean, abandoned?: string) => void;
@@ -148,6 +152,15 @@ interface TurnContinuation {
 }
 
 
+
+/** A run delivered to the agent (design v2 §1, D2), keyed by its id. */
+export interface DeliveredRun {
+  readonly id: string;
+  readonly task: AgentTurnTask;
+}
+
+/** Marks a held programmatic input as a delivered run, so a later process restores it as one. */
+const DELIVERED_RUN_EVENT = 'delivered_run';
 
 /** May throw: the session records the failure and the loop continues. */
 export interface ChatTransport {
@@ -279,6 +292,17 @@ export interface ChatSessionPorts {
   /** The session drives it because both instants it needs are the session's; the policy is the lane's. Absent where
    *  no durable wake can replay a warm between turns, as for {@link armTurnWake}: the CLI. */
   readonly cacheWarming?: CacheWarming;
+  /**
+   * Runs delivered to the agent (D2): the session queues each as any input, runs it in its turn on its pump, and stops it
+   * with the chat; its host supplies its assembly, next input and report. Absent where no run is delivered (the CLI).
+   */
+  readonly runs?: {
+    /** Runs it to its end, which its host owes its caller; `retire` retires its held row once that end was told, so a
+     *  death before then runs it again. Never throws. */
+    run(run: DeliveredRun, signal: AbortSignal, retire: () => void): Promise<void>;
+    /** Its end without running it (a Stop, a refusal at dequeue), owed as `run` owes one. */
+    refuse(run: DeliveredRun, failure: KinuError, retire: () => void): void;
+  };
 }
 
 export interface ChatSessionOptions {
@@ -603,13 +627,21 @@ export class ChatSession {
   }
 
   private settleItem(item: QueueItem, failure: KinuError | null, yielded?: boolean, abandoned?: string): void {
+    // A run its host never ran, or whose run threw: its end is the refusal, recorded as the run's own would be.
+    if (item.run !== undefined && (failure !== null || yielded === true)) {
+      const { run } = item;
+
+      if (!this.ended) this.ports.runs?.refuse(run, failure ?? new KinuError('cancelled', 'The run was no longer owed.'), () => { this.pendingSends.retireTurn(run.id); });
+    }
+
     item.settle(failure, yielded, abandoned);
     this.wakeSendWaiters();
 
     if (item.idempotencyKey === undefined) return;
 
-    // A closed session's store may be gone with it: the turn stays owed there, and the next process settles it.
-    if (item.kind === 'programmatic' && !this.ended) this.pendingSends.retireTurn(item.idempotencyKey);
+    // A closed session's store may be gone with it: the turn stays owed there, and the next process settles it. A run's
+    // held row is its host's to retire, once its end has been told.
+    if (item.kind === 'programmatic' && item.run === undefined && !this.ended) this.pendingSends.retireTurn(item.idempotencyKey);
     const result = settledAnnouncement(failure, yielded, abandoned);
 
     for (const joined of this.joiners.get(item.idempotencyKey) ?? []) joined(result);
@@ -667,9 +699,12 @@ export class ChatSession {
 
     if (marked !== 'new') return marked;
 
-    // A run is its host's to run beside the chat, never a turn of it.
-    if (input.kind === 'run') return settleSync(Effect.fail(new KinuError('unsupported', 'A run is not a turn of the chat; its host runs it.')));
-    const answer = input.kind === 'words' ? await this.admitDeliveredWords(id, input) : await this.admitDeliveredTurn(id, input, delivery.authorship);
+    if (input.kind === 'run' && this.ports.runs === undefined) return settleSync(Effect.fail(new KinuError('unsupported', 'This agent takes no delivered run.')));
+    let answer: DeliveryAnswer;
+
+    if (input.kind === 'words') answer = await this.admitDeliveredWords(id, input);
+    else if (input.kind === 'run') answer = this.admitDeliveredRun({ id, task: input.task });
+    else answer = await this.admitDeliveredTurn(id, input, delivery.authorship);
 
     if (answer === 'taken') this.pendingSends.took(producer, delivery.seq);
 
@@ -691,6 +726,47 @@ export class ChatSession {
     }, { resolve: fate.resolve, reject: fate.resolve });
 
     return 'taken';
+  }
+
+  /** Held as its producer's turn is, then queued: a later process restores it from that row ({@link restoreQueuedTurns}). */
+  private admitDeliveredRun(run: DeliveredRun): DeliveryAnswer {
+    if (this.pendingSends.hasTurn(run.id) || this.announcementInFlight(run.id)) return 'duplicate';
+    this.pendingSends.reserveTurn({ id: run.id, text: run.task.body, metadata: runMetadata(run.task) });
+    this.queue.push(runItem(run));
+    this.pump();
+
+    return 'taken';
+  }
+
+  /** Stops one run: unrun, its end is the Stop; running, it is aborted and ends as its host records. */
+  stopRun(id: string): void {
+    const queued = this.queue.findIndex((item) => item.run?.id === id);
+
+    if (queued >= 0) {
+      const [item] = this.queue.splice(queued, 1);
+
+      if (item !== undefined) this.settleItem(item, new KinuError('cancelled', 'The run was stopped before it ran.'));
+
+      return;
+    }
+
+    if (this.runningRun?.id === id) this.runningRun.controller.abort(new KinuError('cancelled', `run ${id} was stopped`));
+  }
+
+  /** The run this session's pump runs now, and its cut. */
+  private runningRun: { readonly id: string; readonly controller: AbortController } | null = null;
+
+  /** Its host runs it to its end, and retires its held row once that end was told. */
+  private async runDelivered(runs: NonNullable<ChatSessionPorts['runs']>, run: DeliveredRun): Promise<void> {
+    const controller = new AbortController();
+
+    this.runningRun = { id: run.id, controller };
+
+    try {
+      await runs.run(run, controller.signal, () => { this.pendingSends.retireTurn(run.id); });
+    } finally {
+      this.runningRun = null;
+    }
   }
 
   private async admitDeliveredTurn(id: string, input: TurnDeliveryInput, authorship: Delivery['authorship']): Promise<DeliveryAnswer> {
@@ -881,6 +957,7 @@ export class ChatSession {
   interrupt(cutoff?: { readonly producer: InputProducer; readonly seq: number }): string[] {
     this.abandonQuestions();
     this.cancelQueued();
+    this.runningRun?.controller.abort(new KinuError('cancelled', 'the agent was stopped'));
     const { steers, cancelled } = this.actorSession.interrupt();
     // The returned words' reservation is spent, or a restart would re-deliver them.
     const ids = steers.flatMap((steer) => steer.id === undefined ? [] : [steer.id]);
@@ -913,8 +990,9 @@ export class ChatSession {
 
     for (const item of cancelled) {
       this.settleItem(item, failure);
-      // Its caller waits on the work, not on a turn: told, as of a turn that never opened.
-      this.actorSession.orchestrator.track(this.toldUnanswered(item, failure), 'telling a cancelled turn\'s caller');
+
+      // Its caller waits on the work, not on a turn: told, as of a turn that never opened. A run's end is its telling.
+      if (item.run === undefined) this.actorSession.orchestrator.track(this.toldUnanswered(item, failure), 'telling a cancelled turn\'s caller');
     }
 
     diagnostics.event('turn.queued_cancelled', { count: cancelled.length });
@@ -1246,9 +1324,16 @@ export class ChatSession {
         let opened: OpenedTurn | null = null;
 
         try {
-          const opening = await this.openTurn(item);
-          opened = opening;
-          abandoned = await this.actorSession.orchestrator.withTurnLearning(() => this.runOpenedTurn(item, opening));
+          const { runs } = this.ports;
+
+          // Restored here with no host to run it: told so, as one refused at its dequeue is.
+          if (item.run !== undefined && runs === undefined) failure = new KinuError('unsupported', 'This agent takes no delivered run.');
+          else if (item.run !== undefined && runs !== undefined) await this.runDelivered(runs, item.run);
+          else {
+            const opening = await this.openTurn(item);
+            opened = opening;
+            abandoned = await this.actorSession.orchestrator.withTurnLearning(() => this.runOpenedTurn(item, opening));
+          }
         } catch (err) {
           diagnostics.failure(
             'turn.processing_failed',
@@ -1265,7 +1350,7 @@ export class ChatSession {
 
         const unanswered = failure ?? (abandoned === null ? null : new KinuError('io', abandoned));
 
-        if (unanswered !== null) await this.toldUnanswered(item, unanswered);
+        if (unanswered !== null && item.run === undefined) await this.toldUnanswered(item, unanswered);
       }
     } finally {
       // Cleared synchronously, not in .finally(): the microtask would leave `pumping` stale and orphan a queued turn.
@@ -1901,7 +1986,9 @@ export class ChatSession {
         continue;
       }
 
-      this.queue.push({
+      const mode = row.metadata?.kinuEvent === DELIVERED_RUN_EVENT ? v.safeParse(WorkModeSchema, row.metadata.kinuMode) : null;
+
+      this.queue.push(mode?.success === true ? runItem({ id: row.id, task: { sequenceId: row.id, body: row.text, mode: mode.output } }) : {
         text: row.text, kind: 'programmatic', idempotencyKey: row.id,
         ...(row.metadata !== undefined && { metadata: row.metadata }),
         ...(row.yieldsToUserMessage === true && { yieldsToUserMessage: true }),
@@ -1985,6 +2072,15 @@ export class ChatSession {
   restoreHistory(): Promise<boolean> {
     return this.actorSession.restoreWorkingHistory();
   }
+}
+
+/** A delivered run's held row: its mode beside the mark that restores it as a run. */
+function runMetadata(task: AgentTurnTask): JsonObject {
+  return { kinuEvent: DELIVERED_RUN_EVENT, kinuMode: task.mode };
+}
+
+function runItem(run: DeliveredRun): QueueItem {
+  return { text: run.task.body, kind: 'programmatic', idempotencyKey: run.id, metadata: runMetadata(run.task), run, settle: () => {} };
 }
 
 interface PromptInputParts {

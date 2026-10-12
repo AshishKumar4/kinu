@@ -13,6 +13,7 @@ import type { HeadCapture } from '../heads/head-inference';
 import type { HeadInput, HeadReport, HeadStep } from '../heads/types';
 import type { HeadStreamKind } from '../heads/head-stream';
 import type { JsonObject, JsonValue } from '../utils/json';
+import type { ErrorCode } from '../obs/error';
 import type { ModelPricing } from '../providers/types';
 import type { WorkMode } from '../types/turn';
 import type { TurnSourcesBundle } from '../orchestrator/turn-assembly';
@@ -205,10 +206,28 @@ export interface AgentStanding {
   readonly questions: number;
 }
 
+/** How a run delivered to an agent ended (design v2 §1, D2): its end, or the refusal that kept it from running (a Stop
+ *  before it ran, or its failure before its first round). */
+export type RunEndOutcome = { readonly ended: AgentTurnEnd } | { readonly refused: { readonly code: ErrorCode; readonly message: string } };
+
+/** A run's end as its agent holds it, carried by each report it makes until one has reached the workspace: its held
+ *  input retires only then, so an agent that dies first runs it again. */
+export interface RunEndReport {
+  readonly id: string;
+  readonly outcome: RunEndOutcome;
+}
+
 /** An agent's standing as it reports it with what it owes (design v2 §8): its context's raw measures, which the workspace
  *  reads against the window it knows, in place of its fill. */
 export interface AgentStandingReport extends Omit<AgentStanding, 'context'> {
   readonly measures: ContextMeasures;
+}
+
+/** What each report of an agent tells beside what it owes: its standing, which the workspace reads in place of asking, and
+ *  its delivered runs' ends not yet told (D2), each owed its workspace's caller. */
+export interface AgentReport {
+  readonly standing: AgentStandingReport;
+  readonly runEnds: readonly RunEndReport[];
 }
 
 /** An agent's recent model steps, for the activity its window reads. */

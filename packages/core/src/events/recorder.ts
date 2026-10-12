@@ -734,7 +734,10 @@ export class RunEventRecorder {
     // An unparseable start row propagates.
     const start = parseStoredRunEvent(row.payload);
 
-    if (start.type !== 'run_start' || start.turn === undefined) return settleSync(Effect.fail(new KinuError('io', `run ${row.run_id} is recorded open without a turn`)));
+    if (start.type !== 'run_start') return settleSync(Effect.fail(new KinuError('io', `run ${row.run_id} is recorded open with no start`)));
+
+    // A delivered run's, which its chat restores from the run's held row and runs again: no turn of the conversation.
+    if (start.turn === undefined) return null;
 
     const recorded = this.finishedSteps(row.run_id);
 

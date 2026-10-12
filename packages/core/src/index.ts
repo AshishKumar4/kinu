@@ -562,7 +562,7 @@ export { subordinateForkContext, subordinateTurnContext } from './subordinates/s
 
 export { inheritedAsModelMessage } from './heads/head-inference';
 
-export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendants, isSubordinateOrigin, holdsChat, whenActorTakesInput, ActorOriginSchema, type ActorOrigin, type ActorProfile, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor } from './identity/workspace-actors';
+export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendants, isSubordinateOrigin, whenActorTakesInput, type ActorOrigin, type ActorProfile, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor } from './identity/workspace-actors';
 
 export type { AnsweredEvolutionHelper } from './identity/evolution-helpers';
 
@@ -1715,7 +1715,7 @@ export { ActorSession, CLEAR_NEEDS_IDLE, type ActorSessionOptions, type ActorTur
 
 export {
   ChatSession, type ChatSessionOptions, type ChatSessionPorts, type OpenWork, type CompactOutcome, type ComposedRequest, type ChatTransport, type ChatTurnInput,
-  type PreparedTurn, type TurnOpening, type OwedTerminalEffectsInput, type SessionEvent, type SendOptions, type SendLandingWaiter,
+  type PreparedTurn, type TurnOpening, type OwedTerminalEffectsInput, type SessionEvent, type SendOptions, type SendLandingWaiter, type DeliveredRun,
 } from './orchestrator/chat-session';
 
 export { startActorTurn, type ActorTurnInput } from './orchestrator/actor-turn';
@@ -2644,7 +2644,7 @@ export {
 } from './mcp/servers';
 
 export type {
-  AgentTurnActivity, AgentCaptureDelta, AgentTurnOpening, AgentRecovery, AgentAnswer, AgentAnswerTexts, AgentReview, AgentStanding, AgentStandingReport, AgentSteps, AgentSnapshot, AgentTurnTask, AgentToolAnswer,
+  AgentTurnActivity, AgentCaptureDelta, AgentTurnOpening, AgentRecovery, AgentAnswer, AgentAnswerTexts, AgentReview, AgentStanding, AgentStandingReport, AgentReport, AgentSteps, RunEndOutcome, RunEndReport, AgentSnapshot, AgentTurnTask, AgentToolAnswer,
   AgentToolCall, AgentToolDescriptor, AgentHeadDelta, AgentTrace, AgentTurnEnd, PreparedAgentTurn, StoredRow, TurnRequestAt,
 } from './subordinates/agent-isolate';
 

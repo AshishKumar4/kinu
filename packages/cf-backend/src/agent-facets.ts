@@ -6,8 +6,8 @@ import { decodeModelMessageValues, forkConversationRowSchema, relayedAnswer, rem
 import type { ForkConversationPlan, ForkConversationSection, ForkConversationSource, ForkConversationTarget, ForkRows } from '@kinu.run/core';
 import type { AgentOwnInspection, ArchiveSqlCursor, CacheWarmArm, ContextEditor, ContextTree, StepSpendSource, ConversationRecall, PositionPageRequest, AgentSignal, AuthRequest, RelayedProvider, ProgrammaticTurn, ProviderEnv, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
-import type { AgentRunOutcome, AgentWorkspace, TurnBound } from './agent-facet/agent-turn';
-import type { AdvisorRecoverySnapshot, AgentFigures, AgentStandingReport, AgentTurnActivity, HandedOffTurn, ResolvedTurnProfile, SettledRun, AgentHeadDelta, AgentReview, AgentSnapshot, AgentToolCall, AgentTrace, SessionEvent, TurnRequestAt, ModelCallReport, ModelOperationEvent } from '@kinu.run/core';
+import type { AgentWorkspace, TurnBound } from './agent-facet/agent-turn';
+import type { AdvisorRecoverySnapshot, AgentFigures, AgentReport, AgentTurnActivity, HandedOffTurn, ResolvedTurnProfile, SettledRun, AgentHeadDelta, AgentReview, AgentSnapshot, AgentToolCall, AgentTrace, SessionEvent, TurnRequestAt, ModelCallReport, ModelOperationEvent } from '@kinu.run/core';
 import type { ChatTurnRequest } from './agent-turns';
 import { attempt, KinuError, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
@@ -97,7 +97,6 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   /** A run's preparation, which only that run's own cut ends. */
   prepareTurn(turnId: string) { return this.open(() => this.answers.prepareTurn(turnId), { turnId, runId: turnId, epoch: null }, 'executes'); }
   advise(review: AgentReview) { return this.open(() => this.answers.advise(review)); }
-  runEnded(id: string, outcome: AgentRunOutcome) { return this.open(() => this.answers.runEnded(id, outcome)); }
   enqueueTurn(input: ProgrammaticTurn) { return this.open(() => this.answers.enqueueTurn(input)); }
   executeTool(call: AgentToolCall) { return this.open(() => this.answers.executeTool(call), call, 'executes'); }
   receipts(turnId: string, runId: string, callIds: readonly string[]) { return this.open(() => this.answers.receipts(turnId, runId, callIds)); }
@@ -115,7 +114,7 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   turnSettled(settled: HandedOffTurn) { return this.open(() => this.answers.turnSettled(settled)); }
   runSettled(run: SettledRun) { return this.open(() => this.answers.runSettled(run)); }
   hireAdvisor(advisor: AdvisorRecoverySnapshot) { return this.open(() => this.answers.hireAdvisor(advisor)); }
-  owes(seq: number, next: number | null, holds: boolean, standing: AgentStandingReport) { return this.open(() => this.answers.owes(seq, next, holds, standing)); }
+  owes(seq: number, next: number | null, holds: boolean, report: AgentReport) { return this.open(() => this.answers.owes(seq, next, holds, report)); }
   birthContext(drainTurnId: string) { return this.open(() => this.answers.birthContext(drainTurnId)); }
   steerSkills(text: string, alreadyActive: readonly string[]) { return this.open(() => this.answers.steerSkills(text, alreadyActive)); }
   openWork() { return this.open(() => this.answers.openWork()); }
@@ -219,7 +218,6 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
   debit(turnId: string, ...args: Parameters<MissionBudgetPort['debit']>) { return this.owned((host) => host.debit(turnId, ...args)); }
   prepareTurn(turnId: string) { return this.owned((host) => host.prepareTurn(turnId)); }
   advise(review: AgentReview) { return this.owned((host) => host.advise(review)); }
-  runEnded(id: string, outcome: AgentRunOutcome) { return this.owned((host) => host.runEnded(id, outcome)); }
   enqueueTurn(input: ProgrammaticTurn) { return this.owned((host) => host.enqueueTurn(input)); }
   executeTool(call: AgentToolCall) { return this.owned((host) => host.executeTool(call)); }
   receipts(turnId: string, runId: string, callIds: readonly string[]) { return this.owned((host) => host.receipts(turnId, runId, callIds)); }
@@ -237,7 +235,7 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
   turnSettled(settled: HandedOffTurn) { return this.owned((host) => host.turnSettled(settled)); }
   runSettled(run: SettledRun) { return this.owned((host) => host.runSettled(run)); }
   hireAdvisor(advisor: AdvisorRecoverySnapshot) { return this.owned((host) => host.hireAdvisor(advisor)); }
-  owes(seq: number, next: number | null, holds: boolean, standing: AgentStandingReport) { return this.owned((host) => host.owes(seq, next, holds, standing)); }
+  owes(seq: number, next: number | null, holds: boolean, report: AgentReport) { return this.owned((host) => host.owes(seq, next, holds, report)); }
   birthContext(drainTurnId: string) { return this.owned((host) => host.birthContext(drainTurnId)); }
   steerSkills(text: string, alreadyActive: readonly string[]) { return this.owned((host) => host.steerSkills(text, alreadyActive)); }
   openWork() { return this.owned((host) => host.openWork()); }

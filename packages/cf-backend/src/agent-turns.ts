@@ -10,7 +10,7 @@ import {
 import type { TurnCall } from './agent-facets';
 import type { TurnBound } from './agent-facet/agent-turn';
 import { prepareHostedTurn, type HostedActorSeams, type HostedTurnRequest, type PreparedHostedTurn } from './hosted-actors';
-import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, Fact, JsonObject, PreparedAgentTurn, StoredRow, TaskPlan, OpenedAt, TurnFacts, TurnOpening } from '@kinu.run/core';
+import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, Fact, JsonObject, PreparedAgentTurn, RunEndReport, StoredRow, TaskPlan, OpenedAt, TurnFacts, TurnOpening } from '@kinu.run/core';
 
 export interface AgentTurnsDeps {
   readonly sql: SqlExecutor;
@@ -18,7 +18,9 @@ export interface AgentTurnsDeps {
   readonly fence: (actorId: string) => FencedRow | null;
   seams(): HostedActorSeams;
   reference(actorId: string): ActorReference;
-  run(reference: ActorReference, task: AgentTurnTask): Promise<AgentTurnEnd>;
+  /** Delivers a run to the agent (design v2 §1, D2), whose report tells its end (`runEnded`). Answers the failure of a
+   *  delivery that neither crossed nor is owed, which is the run's end; null otherwise. */
+  deliver(reference: ActorReference, task: AgentTurnTask): Promise<KinuError | null>;
   /** `cutoff`: the newest delivery its Stop cancelled, which the agent takes nothing at or below after. */
   interrupt(reference: ActorReference, turnId: string | null, cutoff: number | null): Promise<void>;
   /** The agent's own chat answers for itself whether it holds a turn, running or queued; one at rest is not asked. */
@@ -67,6 +69,8 @@ interface OpenTurn {
   accountFacts?: readonly Fact[];
   /** The opening the workspace's fence admitted for it: what it offers and closes must still be that one. */
   readonly fenced?: OpenedAt;
+  /** A run's end, which its agent tells with a report (`runEnded`). */
+  readonly ended?: ReturnType<typeof Promise.withResolvers<AgentTurnEnd>>;
 }
 
 export class AgentTurns {
@@ -86,14 +90,18 @@ export class AgentTurns {
     const cut = () => { interruptions.push(this.interruptRun(reference, input.id)); };
 
     const request: HostedTurnRequest = { sequenceId: input.id, body: input.task, mode: input.mode, parentDriven: false, driving: undefined, awaitsReply: false, run: { input, inference } };
+    const ended = Promise.withResolvers<AgentTurnEnd>();
 
-    this.open.set(input.id, { reference, request, prepared: null, profile: null });
+    this.open.set(input.id, { reference, request, prepared: null, profile: null, ended });
     ledger.open(opened, Date.now());
     inference.signal?.addEventListener('abort', cut, { once: true });
 
     try {
       if (inference.isAborted()) cut();
-      const { activity: _activity, narration: _narration, figures: _figures, produced, errorMessage, ...report } = await this.deps.run(reference, { sequenceId: input.id, body: input.task, mode: input.mode });
+      const refused = await this.deps.deliver(reference, { sequenceId: input.id, body: input.task, mode: input.mode });
+
+      if (refused !== null) ended.reject(refused);
+      const { activity: _activity, narration: _narration, figures: _figures, produced, errorMessage, ...report } = await ended.promise;
 
       if (produced !== undefined) inference.reportMessages?.(decodeModelMessageValues(produced));
 
@@ -109,6 +117,17 @@ export class AgentTurns {
       this.close(input.id);
       await Promise.all(interruptions);
     }
+  }
+
+  /** A run's end as its agent's report told it: its open run's caller hears it; one this activation never ran is gone. */
+  runEnded(report: RunEndReport): void {
+    const waiting = this.open.get(report.id)?.ended;
+
+    if (waiting === undefined) return;
+    const { outcome } = report;
+
+    if ('ended' in outcome) waiting.resolve(outcome.ended);
+    else waiting.reject(new KinuError(outcome.refused.code, outcome.refused.message));
   }
 
   private async interruptRun(reference: ActorReference, turnId: string): Promise<void> {

@@ -4,12 +4,12 @@ import {
   CHAT_SESSION_ID, actorAffinity, HeadCapture, ownerLaneTools, toolsInWorkMode, withEffectReceipt, decodeJsonValue, decodeModelMessageValues, encodeModelMessageValues, withEffectPointer, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan, imageModelOutput,
   type AuthRequest, type AuthResolution, type HandedOffTurn, type SettledRun, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type JsonValue, type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind, type AgentSignal, type SendOutcome,
   turnSourcesFromBundle, captureOperationProfile, type ModelCallReport, type ModelOperationEvent,
-  type AdvisorRecoverySnapshot, type AgentFigures, type AgentStandingReport, type HostedActor, type OwedReport, type SerializedMessage, type SessionEvent,
+  type AdvisorRecoverySnapshot, type AgentFigures, type AgentReport, type HostedActor, type OwedReport, type SerializedMessage, type SessionEvent,
   type SubordinateReportLedger, type SubordinateReportStatus, type TaskTurnEnding, type WorkMode, type ResolvedTurnProfile,
   type RemoteReceipt, type ReplyToCommentToolDeps, type SubmitPlanToolDeps, TurnFactsStore,
 } from '@kinu.run/core';
 
-import { attempt, diagnostics, hold, logged, settle, type ErrorCode } from '@kinu.run/core/obs';
+import { attempt, diagnostics, hold, logged, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import type { NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
 import { routedModelReads, type AgentProviderDeps, type AgentProviderRegistry, type UserCredentialClient } from '../providers/agent-registry';
@@ -35,8 +35,6 @@ export async function answerMetadataOf(
   return first.owesNarration ? (await workspace.answerMetadata(turnId, await narration())).metadata : first.metadata;
 }
 
-/** How a delivered run ended: its end, or the refusal that kept it from running. */
-export type AgentRunOutcome = { readonly ended: AgentTurnEnd } | { readonly refused: { readonly code: ErrorCode; readonly message: string } };
 
 /** What a call that runs more of a turn names (design v2 §3): its turn, its run and its capability's epoch, which the
  *  workspace's fence must still hold; a run the workspace started has none, and only its own cut ends it. */
@@ -78,8 +76,8 @@ export interface AgentWorkspace {
   hireAdvisor(advisor: AdvisorRecoverySnapshot): Promise<void>;
   /** A facet sets no alarm: the instant it next needs waking, or none, and whether it holds owed work at all (a parked
    *  effect needs no wake but is still owed), replacing what it said before. */
-  /** `standing`: the agent's standing as it reports it, which the workspace reads in place of asking. */
-  owes(seq: number, next: number | null, holds: boolean, standing: AgentStandingReport): Promise<void>;
+  /** `report`: its standing and its delivered runs' ends not yet told, each told again until a report reached. */
+  owes(seq: number, next: number | null, holds: boolean, report: AgentReport): Promise<void>;
   birthContext(drainTurnId: string): Promise<SerializedMessage[]>;
   steerSkills(text: string, alreadyActive: readonly string[]): Promise<string | null>;
   /** Its open tasks and running jobs, where its tools wrote them. */
@@ -89,8 +87,6 @@ export interface AgentWorkspace {
   noteModelRequest(lastRequestAt: number | null): Promise<number | null>;
   armCacheWarm(input: CacheWarmArm): Promise<number | null>;
   advise(review: AgentReview): Promise<void>;
-  /** A delivered run's end, or why it could not run: its workspace's caller awaits it (design v2 §1). */
-  runEnded(id: string, outcome: AgentRunOutcome): Promise<void>;
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult>;
   executeTool(call: AgentToolCall): Promise<AgentToolAnswer>;
   /** The workspace's receipts for calls of an execution whose rows here only point there; a call it holds none for is
@@ -429,10 +425,15 @@ export function facetTurnTools(workspace: AgentWorkspace, prepared: PreparedAgen
   };
 }
 
-/** A one-shot run on the shared assembly and step loop. */
-export async function runAgentTask(
+/**
+ * A delivered run's own parts (D2): its assembly, prepared by its workspace over this isolate's models and tools, its
+ * next rounds' input, and the projection of its rounds into its end. Its rounds are core's driver (`driveRun`, through
+ * `runHeadInference`), run in its chat's turn, which `signal` stops.
+ */
+export async function deliveredRun(
   { database, workspace, models, pacer }: { readonly database: AgentDatabase; readonly workspace: AgentWorkspace; readonly models: FacetModels; readonly pacer: StepPacer },
   task: AgentTurnTask,
+  signal: AbortSignal,
 ): Promise<AgentTurnEnd> {
   const prepared = await workspace.prepareTurn(task.sequenceId);
 
@@ -443,7 +444,6 @@ export async function runAgentTask(
   const actor = await database.acquire();
   const live: LiveTurn = { dynamic: prepared.dynamic };
 
-  const stop = database.stop(task.sequenceId).signal;
   const capture = new HeadCapture();
   const runId = prepared.runId;
   const spend = new FacetSpend(workspace);
@@ -458,8 +458,8 @@ export async function runAgentTask(
     tools: facetTurnTools(workspace, prepared, actor, { id: task.sequenceId, runId: prepared.runId, epoch: null, mode: task.mode, parentDriven: false, driving: undefined, live, capture, database }),
     opening: decodeModelMessageValues(prepared.opening),
     capture,
-    isAborted: () => stop.aborted,
-    signal: stop,
+    isAborted: () => signal.aborted,
+    signal,
     advise: async (turn, reachable, mode) => await workspace.advise({ turnId: task.sequenceId, turn, reachable, mode }),
   };
 

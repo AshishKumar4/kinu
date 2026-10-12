@@ -37,8 +37,14 @@ import type { ActorExecutionInput, ActorExecutionResult, ActorSession, ActorTurn
 import type { ChatEvent } from '../chat';
 import type { MessageReference, MessagePartReference } from '../session/messages';
 import { recordExecutionEvent, settleExecutionContext, snapshotCompletedTurn, type CompactionTriggerState } from '../orchestrator/turn-lifecycle';
+import { driveRun } from '../orchestrator/run-driver';
 import { OVERFLOW_RETRY_TEXT } from '../turn-failure';
 import type { CompletedTurn } from '../evolution/types';
+
+/** The claim a run's answer is recorded under: its newest round's that claimed. */
+interface CanonicalAnswer {
+  claim: ActorTurnClaim | null;
+}
 
 /** A head's mutable findings; the backend's tools mutate the same instance runHeadInference reads. */
 export class HeadCapture {
@@ -555,7 +561,8 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   let recorded = 0;
   let lastText = '';
   let lastReasoning = '';
-  let canonicalClaim: ActorTurnClaim | null = null;
+  // Set by a round's projection, which the compiler does not follow into.
+  const canonical: CanonicalAnswer = { claim: null };
   const canonicalOutput: MessageReference[] = [];
   const canonicalParts: MessagePartReference[] = [];
 
@@ -606,42 +613,35 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   let overflowRetry = false;
 
   try {
-    for (let index = 0; ; index++) {
-      if (deps.isAborted()) break;
-
-      // Derived, not minted: a recovered activation re-admits the same turn under the next epoch.
-      const turnId = input.id;
-
-      const lease = session.beginTurn(
-        { runId: deps.runId, turnId: index === 0 ? turnId : `${turnId}#${index}` },
-        input.mode, Date.now(),
-      );
-
-      try {
-        // Per turn: a promotion or a moved profile lands between turns.
+    // The common driver claims, binds, executes, settles and finishes each round; this run supplies its assembly, the
+    // projection of each round into its report, and the next round's input.
+    await driveRun(session, {
+      runId: deps.runId, turnId: input.id, mode: input.mode, isAborted: deps.isAborted,
+      assemble: async () => {
         const assembled = await assembleActorTurn(sources, { userText: input.task, workMode: input.mode, ...(input.model !== undefined && { model: input.model }) });
-        session.bindProfile(lease, assembled.profile, assembled.profileInputs);
-
         const historyLength = session.history.length;
-
         const execution = withCompactionTrigger(assembled.execution, deps.compaction.state, deps.compaction.key, historyLength);
-
         const stopWhen = (): boolean => deps.isAborted();
 
-        const outcome = await session.execute(lease, {
-          ...execution,
-          task: input.task,
-          chat: { ...execution.chat, stopWhen, onStep, ...streamRelay(deps) },
-          assertActive,
-          scaffoldStreamOptions: { onStep, stopWhen },
-        }, (event) => { settled = relayRunEvent(deps, event) || settled; });
-
-        const retry = settleRunContext(deps, { outcome, execution, historyLength, contextWindow: assembled.window.contextWindow, overflowRetry });
+        return {
+          profile: assembled.profile, profileInputs: assembled.profileInputs, execution, historyLength, contextWindow: assembled.window.contextWindow,
+          input: {
+            ...execution,
+            task: input.task,
+            chat: { ...execution.chat, stopWhen, onStep, ...streamRelay(deps) },
+            assertActive,
+            scaffoldStreamOptions: { onStep, stopWhen },
+          },
+          onEvent: (event: ChatEvent) => { settled = relayRunEvent(deps, event) || settled; },
+        };
+      },
+      project: async ({ lease, assembled, outcome }) => {
+        const retry = settleRunContext(deps, { outcome, execution: assembled.execution, historyLength: assembled.historyLength, contextWindow: assembled.contextWindow, overflowRetry });
 
         overflowRetry = retry;
 
         if (outcome.claim !== null) {
-          canonicalClaim = outcome.claim;
+          canonical.claim = outcome.claim;
           canonicalOutput.push(...outcome.outputReferences);
           canonicalParts.push(...outcome.outputPartReferences);
           conversation.push(...await materializeMessages(session, outcome.outputReferences));
@@ -659,18 +659,17 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
 
         if (!turnFailed && !outcome.interrupted) await adviseCompletedTurn({ session, input, deps, lease, outcome });
 
-        session.settleTurnClaim(lease, turnClaimOutcome(turnFailed, outcome.interrupted));
-      } finally {
-        session.finishTurn(lease);
-      }
+        return { claim: turnClaimOutcome(turnFailed, outcome.interrupted), stop: failure !== undefined || refusal !== null };
+      },
+      next: async ({ index }) => {
+        const next = await nextRunInput(deps, overflowRetry);
 
-      if (failure !== undefined || refusal !== null || deps.isAborted()) break;
+        if (next === null) return false;
+        await appendNextTurnInput({ session, deps, conversation, turnId: `${input.id}#${index + 1}`, ...next });
 
-      const next = await nextRunInput(deps, overflowRetry);
-
-      if (next === null) break;
-      await appendNextTurnInput({ session, deps, conversation, turnId: `${turnId}#${index + 1}`, ...next });
-    }
+        return true;
+      },
+    });
   } catch (err) {
     failure = toKinuError({ doing: `run agent ${input.id} to a report`, cause: err, otherwise: 'unavailable' });
   } finally {
@@ -689,6 +688,8 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   const outcome = classifyHeadOutcome(deps, failure);
   const { status, stopReason } = outcome;
   const summary = headSummary({ input, capture, outcome, final: { text: lastText, reasoningText: lastReasoning } });
+
+  const canonicalClaim = canonical.claim;
 
   const canonicalCompletion = canonicalClaim === null ? undefined : {
     turnId: canonicalClaim.turnId, runId: canonicalClaim.runId, outputReferences: canonicalOutput, outputPartReferences: canonicalParts,

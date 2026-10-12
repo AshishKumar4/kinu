@@ -34,7 +34,6 @@ const unusedWorkspace: AgentWorkspaceCalls = {
   noteModelRequest: unused,
   armCacheWarm: unused,
   advise: unused,
-  runEnded: unused,
   enqueueTurn: unused,
   executeTool: unused,
   receipts: unused,

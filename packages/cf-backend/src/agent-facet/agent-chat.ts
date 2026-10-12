@@ -8,15 +8,15 @@ import {
   bindRoute, completeOnRoute, ownProfileChoices, planWorkspaceTitle, resolveAgentTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle,
   type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpening, type JsonObject, type PlanReview, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
   type InspectedWork, type PreparedAgentTurn, type PreparedTurn, type TerminalTurnFacts, type TerminalTurnParts,
-  type SessionEvent, type TurnAssemblyRequest, type WorkMode, type OwnerQuestionStore,
+  type SessionEvent, type TurnAssemblyRequest, type WorkMode, type OwnerQuestionStore, type RunEndOutcome, type DeliveredRun,
 } from '@kinu.run/core';
 import { createCompactionStateStore, type CompactionStateStore } from '@kinu.run/compaction';
-import { attempt, diagnostics, hold, logged, settle, type KinuError } from '@kinu.run/core/obs';
-import { Effect } from 'effect';
+import { attempt, diagnostics, hold, logged, renderThrownChain, settle, toKinuError, type KinuError } from '@kinu.run/core/obs';
+import { Cause, Effect, Exit } from 'effect';
 import { serialQueue } from '@kinu.run/agent-utils';
 import type { AgentDatabase } from './agent-database';
 import type { StepPacer } from './step-pacer';
-import { FacetSpend, answerMetadataOf, facetTurnSources, facetTurnTools, type AgentWorkspace, type FacetModels, type LiveTurn } from './agent-turn';
+import { FacetSpend, answerMetadataOf, deliveredRun, facetTurnSources, facetTurnTools, type AgentWorkspace, type FacetModels, type LiveTurn } from './agent-turn';
 
 /** The words reach the room on the turn's own stream, and a turn's end on its own call. */
 const ROOM_EVENTS: ReadonlySet<SessionEvent['type']> = new Set(['turn-start', 'step-cut', 'error', 'broadcast', 'history-reverted']);
@@ -28,6 +28,11 @@ export interface FacetChatDeps {
   readonly models: FacetModels;
   readonly storage: DurableObjectStorage;
   readonly pacer: StepPacer;
+}
+
+/** Why a delivered run did not run to its end, in its own words. */
+function refusedRun(failure: KinuError): RunEndOutcome {
+  return { refused: { code: failure.code, message: renderThrownChain({ cause: failure }) } };
 }
 
 /** Who wrote a turn: the owner's words and decisions are the owner's, every other programmatic turn its hirer's. */
@@ -148,8 +153,44 @@ export class FacetChat {
         steerSkills: (text) => workspace.steerSkills(text, this.activeSkills),
         stillOwed: (metadata) => planHandoffStillOwed(metadata, actor.stores.planReviews),
         birthContext: (drainTurnId) => workspace.birthContext(drainTurnId),
+        // A run its workspace delivered: a typed input of this chat (D2), its end owed its workspace's caller.
+        runs: {
+          run: (run, signal, retire) => this.runDelivered(run, signal, retire),
+          refuse: (run, failure, retire) => {
+            this.owe(run.id, refusedRun(failure), retire);
+          },
+        },
       },
     });
+  }
+
+  /**
+   * Each delivered run's end not yet told, and how its held input retires (D2). Written as the run ends or is refused;
+   * dropped, its input retired, once a report carrying it reached the workspace (`tell`). An isolate that dies first
+   * restores the run from its held input and runs it again.
+   */
+  private readonly runEnds = new Map<string, { readonly outcome: RunEndOutcome; readonly retire: () => void }>();
+
+  /** A delivered run, run to its end in this chat's turn: its end is owed, and told as it ends, not at rest, since its
+   *  caller awaits it and runs may wait behind it. Never fails: a failure is the run's refusal. */
+  async runDelivered(run: DeliveredRun, signal: AbortSignal, retire: () => void): Promise<void> {
+    const { deps } = this;
+
+    return await settle(Effect.gen({ self: this }, function* () {
+      const exit = yield* Effect.exit(attempt({ doing: "running a delivered task in its agent's isolate", otherwise: 'io' }, () => deliveredRun({
+        database: deps.database, workspace: deps.workspace, models: deps.models, pacer: deps.pacer,
+      }, run.task, signal)));
+
+      const outcome: RunEndOutcome = Exit.isSuccess(exit) ? { ended: exit.value }
+        : refusedRun(toKinuError({ doing: 'running a delivered task', cause: Cause.squash(exit.cause), otherwise: 'io' }));
+
+      this.owe(run.id, outcome, retire);
+      yield* Effect.promise(() => hold(logged('agent.run_end_report_failed', { doing: "telling the workspace a delivered run's end", otherwise: 'unavailable' }, () => this.tell())));
+    }));
+  }
+
+  private owe(id: string, outcome: RunEndOutcome, retire: () => void): void {
+    this.runEnds.set(id, { outcome, retire });
   }
 
   private async assemble(prepared: PreparedAgentTurn, turn: { readonly id: string; readonly mode: WorkMode; readonly runId: string; readonly epoch: number | null }, asked: TurnAssemblyRequest, bind?: Parameters<typeof assembleActorTurn>[0]['settle']) {
@@ -427,16 +468,22 @@ export class FacetChat {
     await hold(logged('agent.owed_report_failed', { doing: 'telling the workspace what an agent owes for its input', otherwise: 'unavailable' }, () => this.tell()));
   }
 
-  /** `at` asks for a wake no later than it. */
+  /** `at` asks for a wake no later than it. Carries every run end not yet told, each retired once the report reached. */
   private tell(at?: number): Promise<void> {
-    const told = this.telling.then(() => {
+    const told = this.telling.then(async () => {
       const owed = this.owed();
+      const ends = [...this.runEnds].map(([id, { outcome }]) => ({ id, outcome }));
 
       // Numbered as it leaves, in this agent's store: the workspace takes no report older than one it took.
-      return this.deps.workspace.owes(
-        this.deps.database.nextInSequence(), at === undefined ? owed : Math.min(at, owed ?? Infinity), owed !== null || this.owedWork().length > 0,
-        this.deps.database.standingReport(),
+      await this.deps.workspace.owes(
+        this.deps.database.nextInSequence(), at === undefined ? owed : Math.min(at, owed ?? Infinity), owed !== null || this.owedWork().length > 0 || ends.length > 0,
+        { standing: this.deps.database.standingReport(), runEnds: ends },
       );
+
+      for (const { id } of ends) {
+        this.runEnds.get(id)?.retire();
+        this.runEnds.delete(id);
+      }
     });
 
     this.telling = hold(attempt({ doing: 'telling the workspace what an agent still owes', otherwise: 'unavailable' }, () => told));
