@@ -1,8 +1,8 @@
 diff --git a/packages/core/src/events/hub/visibility.ts b/packages/core/src/events/hub/visibility.ts
 --- a/packages/core/src/events/hub/visibility.ts
 +++ b/packages/core/src/events/hub/visibility.ts
-@@ -199,7 +199,7 @@
-     case 'file_watch':      return `file (${text('path', '?')})`;
+@@ -207,7 +207,7 @@
+     case 'sandbox_cb':      return `sandbox (${text('command', 'process').slice(0, 40)})`;
      case 'peer_async':      return `peer agent (${text('from_agent_name', '?')})`;
      case 'subordinate':
 -      return event.variant === 'subordinate_report'

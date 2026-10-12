@@ -401,7 +401,7 @@ cliRoutes.delete('/api/cli/credentials/:key', (c) => {
 
     yield* Effect.tryPromise({
       try: async () => {
-        await cli.userDO.deleteCredential(await ownerCaller(c.env), c.get('key'));
+        await cli.userDO.deleteCredential(await ownerCaller(c.env), c.get('key'), false);
       },
       catch: (cause) => authoredRefusal({ doing: 'deleting this credential', cause }),
     });
@@ -827,7 +827,7 @@ case ":$PATH:" in
         say "Added $BIN_DIR to $profile."
       fi
     elif [ ! -w "$profile" ]; then
-      say "Add $BIN_DIR to PATH to use kinu and agent aliases from any directory."
+      say "Add $BIN_DIR to PATH to use kinu from any directory."
     fi
     export PATH="$BIN_DIR:$PATH"
     ;;

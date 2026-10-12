@@ -1,4 +1,4 @@
-/** Third-party text shown as a quotation (an MCP server's prose, an approval's command) reads as what it is. */
+/** Third-party text shown as a quotation (a provider's refusal, an approval's command) reads as what it is. */
 
 /** C0 but tab, LF and CR; DEL, C1, soft hyphen; Arabic letter mark; marks, zero-width, bidi, joiners; BOM. */
 const MISREPRESENTING_RANGES: ReadonlyArray<readonly [number, number]> = [
@@ -17,21 +17,4 @@ const MISREPRESENTING = new RegExp(
 /** Each becomes a visible U+FFFD. */
 export function revealMisrepresenting(text: string): string {
   return text.replace(MISREPRESENTING, '\uFFFD');
-}
-
-const TAG_OPENER = /<(?=[a-zA-Z/!?])/g;
-
-const HEADING_MARKER = /^([ \t]{0,3})(#{1,6})(?=[ \t]|$)/gm;
-
-const THEMATIC_BREAK = /^([ \t]{0,3})([-*_])((?:[ \t]*\2){2,}[ \t]*)$/gm;
-
-const TILDES = /~+/g;
-
-/** Also HTML tags, headings, rules and strikethrough become inert text. */
-export function quoteUntrusted(text: string): string {
-  return revealMisrepresenting(text)
-    .replace(TAG_OPENER, '&lt;')
-    .replace(HEADING_MARKER, (_match, indent: string, marks: string) => `${indent}${marks.replace(/#/g, '\\#')}`)
-    .replace(THEMATIC_BREAK, (_match, indent: string, mark: string, rest: string) => `${indent}\\${mark}${rest}`)
-    .replace(TILDES, (run) => run.replace(/~/g, '\\~'));
 }

@@ -1,7 +1,7 @@
 import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // LocalAgentSession over the real CLI runtime and a fake model: its host lifecycle and turn review.
 import { describe, test, expect } from 'bun:test';
-import { AwaitedList, createMockFetch, handClock, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel, workspaceDatabase } from '@kinu.run/test-utils';
+import { AwaitedList, createMockFetch, fakeCommandMember, handClock, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel, workspaceDatabase } from '@kinu.run/test-utils';
 import { initWorkspaceSchema, JobOutputFrameSchema, processJobHolder, WORKSPACE_SKILLS_DIR, workspaceSkillPath } from '@kinu.run/core';
 import { narrowToolSurface, WORKSPACE_ROOT } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
@@ -54,11 +54,11 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     router.register({
       name: 'sandbox', kind: 'sandbox', capabilities: new Set(['shell']), filesOwner: 'agent', isAvailable: () => true,
       homeDir: async () => '/', connect: async () => {}, disconnect: async () => {},
-      tools: { exec: { description: 'record execution', execute: async (input) => {
-        executed.push(String(input));
+      tools: { exec: fakeCommandMember('record execution', async (input) => {
+        executed.push(input);
 
         return 'executed';
-      } } },
+      }) },
     });
 
     const exec = router.getProvider('sandbox')?.tools.exec;
@@ -78,7 +78,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     if (!sandboxAction) throw new Error('sandbox command was not queued');
 
     expect(executed).toEqual([]);
-    expect(events.items).toContainEqual({ type: 'broadcast', event: { type: 'pending_actions_changed' } });
+    expect(events.items).toContainEqual({ type: 'broadcast', event: { type: 'reads_changed', reads: expect.arrayContaining(['listPendingActions']) } });
     await session.end();
 
     rt.actor.config.setLearning(false);
@@ -131,25 +131,39 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     }
   });
 
-  test('deferred approval retains interactive denial and never queues deny_all commands', async () => {
+  test('an interactive denial decides the ask\'s row, and deny_all never queues', async () => {
     const { rt, session } = setup();
     const shell = rt.shell;
 
     if (!shell) throw new Error('local runtime must expose its shell');
 
     try {
-      const detach = session.setShellApprovalHandler(async () => 'deny');
+      const shown: Array<string | undefined> = [];
+
+      const detach = session.setShellApprovalHandler(async (request) => {
+        shown.push(request.approvalId);
+
+        return 'deny';
+      });
+
       const command = 'git push --force origin main';
+      const another = 'git push --force origin release';
       const denied = await shell.exec(command);
 
       expect(denied.exitCode).not.toBe(0);
+      // The prompt showed the ask's row, and its answer decided it: nothing waits.
+      expect(shown).toHaveLength(1);
+      expect(shown[0]).toBeString();
       expect(await session.listDeferredApprovals()).toEqual([]);
       detach();
       session.setShellApprovalMode('deny_all');
-      expect((await shell.exec(command)).exitCode).not.toBe(0);
+      expect((await shell.exec(another)).exitCode).not.toBe(0);
       expect(await session.listDeferredApprovals()).toEqual([]);
       session.setShellApprovalMode('strict');
+      // The denial stands for the command it answered; another one parks for the owner.
       expect((await shell.exec(command)).exitCode).not.toBe(0);
+      expect(await session.listDeferredApprovals()).toEqual([]);
+      expect((await shell.exec(another)).exitCode).not.toBe(0);
       expect(await session.listDeferredApprovals()).toHaveLength(1);
     } finally {
       await session.end();

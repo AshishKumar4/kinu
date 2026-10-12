@@ -48,10 +48,10 @@ export const OWNER_DESK_CASES: readonly SharedCase[] = [
       const review = reviewCommand(command, 'agent');
       const reason = formatApproval(review);
       const hits = review.hits.map(({ rule, decision }) => ({ rule, decision }));
-      new DeferredApprovalStore(sql, actor).create({ id: 'defer-1', command, executor: 'workspace', reason, requestedAt }, hits);
+      new DeferredApprovalStore(sql, actor).create({ id: 'defer-1', command, executor: 'workspace', context: {}, reason, requestedAt }, hits);
 
       expect(await surface.listDeferredApprovals()).toEqual([{
-        id: 'defer-1', actor: actor.actorId, command, executor: 'workspace', reason, status: 'queued', requestedAt, decidedAt: null,
+        id: 'defer-1', actor: actor.actorId, command, executor: 'workspace', context: {}, reason, status: 'queued', requestedAt, decidedAt: null,
       }]);
 
       // One decision per action, deduplicated; an id nobody parked decides nothing.

@@ -4,6 +4,16 @@ export function isAbortError<Failure>(err: Failure): err is Failure & Error {
 	return err instanceof Error && (err.name === "AbortError" || ('code' in err && err.code === 'cancelled'));
 }
 
+/** An `AbortError` for a cancel that fired before the work started, marked as proof that nothing was dispatched. */
+export function abortedBeforeStart(message: string): DOMException & { readonly dispatched: false } {
+	return Object.assign(new DOMException(message, "AbortError"), { dispatched: false as const });
+}
+
+/** Whether `err` is an abort {@link abortedBeforeStart} raised: one that proves its work was never dispatched. */
+export function wasNotDispatched<Failure>(err: Failure): err is Failure & Error & { readonly dispatched: false } {
+	return isAbortError(err) && "dispatched" in err && err.dispatched === false;
+}
+
 /** Each op after the last has ended; a failure is its caller's and never stops the next. */
 export function serialQueue(): <T>(op: () => Promise<T>) => Promise<T> {
 	let tail: Promise<unknown> = Promise.resolve();
@@ -30,7 +40,7 @@ export async function raceAbort<T>(
 	if (!signal) return work();
 	const abortError = (text: string) => new DOMException(text, "AbortError");
 
-	if (signal.aborted) throw abortError(message);
+	if (signal.aborted) throw abortedBeforeStart(message);
 
 	let aborting = false;
 	let resolveAbort: (value: void | PromiseLike<void>) => void;

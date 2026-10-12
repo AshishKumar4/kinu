@@ -209,29 +209,6 @@ describe("CLI behavior", () => {
     expect(out).not.toContain("-r, --resume");
   });
 
-  test("alias prints the command it wrote, and the listing shows it once the process has exited", async () => {
-    const home = scratchDir("cli-alias");
-    writeConfig(home, {
-      agents: {
-        jarvis: {
-          name: "jarvis",
-          mode: "cloud",
-          cloudName: "jarvis",
-          purpose: "Cloud agent",
-          createdAt: new Date(0).toISOString(),
-          updatedAt: new Date(0).toISOString(),
-        },
-      },
-    });
-
-    const made = await runCli(["alias", "jarvis", "j"], { home });
-    expect(made.exitCode, made.stderr).toBe(0);
-    expect(toText(made.stdout)).toContain(join(home, "bin", "j"));
-
-    const listed = await runCli(["aliases"], { home });
-    expect(toText(listed.stdout)).toContain("j → jarvis");
-  });
-
   test("no-name chat can select a configured cloud agent", async () => {
     const home = scratchDir("cli-chat");
     writeConfig(home, {
@@ -242,13 +219,11 @@ describe("CLI behavior", () => {
           name: "jarvis",
           mode: "cloud",
           cloudName: "jarvis",
-          alias: "jarvis",
           purpose: "Cloud agent",
           createdAt: new Date(0).toISOString(),
           updatedAt: new Date(0).toISOString(),
         },
       },
-      aliases: { jarvis: "jarvis" },
     });
 
     const proc = await runCli(["chat"], { home, stdin: "/exit\n" });

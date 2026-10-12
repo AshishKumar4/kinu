@@ -356,9 +356,10 @@ describe('ChatGPT sign-in through a machine', () => {
     harness.close();
   });
 
-  test('signing out signs out every machine that holds the plan, and none carries it after', async () => {
+  test('signing out signs out every machine that holds a sign-in, plan declined too, and none carries it after', async () => {
     const owner = await testOwner();
     const signedOut = new Set<string>();
+    const asked: JsonValue[] = [];
 
     const harness = createTestUserDO({
       deviceResponder: (frame): JsonValue => {
@@ -366,23 +367,33 @@ describe('ChatGPT sign-in through a machine', () => {
 
         if (frame.method === DEVICE_CHATGPT.signOut) {
           signedOut.add(device);
+          asked.push(...frame.params);
 
           return { unconfirmed: device === laptop ? 'auth.openai.com answered HTTP 500' : null };
         }
 
-        return signedOut.has(device) ? NOT_SIGNED_IN : { ...NOT_SIGNED_IN, signedIn: true, email: 'owner@example.com', planEnabled: true };
+        if (signedOut.has(device)) return NOT_SIGNED_IN;
+
+        // The workbench's login declined plan usage: it holds tokens, though it is not signed in for the plan.
+        return device === workbench
+          ? { ...NOT_SIGNED_IN, email: 'owner@example.com', planDeclined: true }
+          : { ...NOT_SIGNED_IN, signedIn: true, email: 'owner@example.com', planEnabled: true };
       },
     });
 
     const studio = (await harness.userDO.registerDevice(owner, 'studio')).deviceId;
     const laptop = (await harness.userDO.registerDevice(owner, 'laptop')).deviceId;
-    harness.attachDaemon(studio);
-    harness.attachDaemon(laptop);
-    await harness.sendDeviceHello({ type: 'HELLO' }, studio);
-    await harness.sendDeviceHello({ type: 'HELLO' }, laptop);
+    const workbench = (await harness.userDO.registerDevice(owner, 'workbench')).deviceId;
 
-    expect(await harness.userDO.signOutChatGpt(owner)).toEqual({ unconfirmed: 'laptop: auth.openai.com answered HTTP 500' });
-    expect([...signedOut].sort()).toEqual([studio, laptop].sort());
+    for (const device of [studio, laptop, workbench]) {
+      harness.attachDaemon(device);
+      await harness.sendDeviceHello({ type: 'HELLO' }, device);
+    }
+
+    expect(await harness.userDO.signOutChatGpt(owner, true)).toEqual({ unrevoked: 'laptop: auth.openai.com answered HTTP 500' });
+    expect([...signedOut].sort()).toEqual([studio, laptop, workbench].sort());
+    // Each machine is told to revoke too, as the owner chose.
+    expect(asked).toEqual([{ revoke: true }, { revoke: true }, { revoke: true }]);
     expect(await harness.userDO.relayDevice(owner, 'chatgpt')).toBeNull();
     harness.close();
   });

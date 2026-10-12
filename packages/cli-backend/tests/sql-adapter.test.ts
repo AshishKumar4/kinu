@@ -20,7 +20,7 @@ function approvedGrant(db: Database): DeferredApprovalStore {
   store.create({
     id: 'act-1',
     command: 'rm -rf ./build',
-    executor: 'device',
+    executor: 'device', context: {},
     reason: 'the build directory is stale',
     requestedAt: 1,
   }, []);
@@ -45,7 +45,7 @@ describe('the local SQL adapter returns the rows a write produces', () => {
     expect(claimed?.spend).toEqual({ approvalId: 'act-1', spend: 1 });
 
     expect(store.spend('act-1')).toBeNull();
-    expect(store.standing('rm -rf ./build', 'device', Date.now())).toBeNull();
+    expect(store.standing({ command: 'rm -rf ./build', executor: 'device', context: {} }, Date.now())).toBeNull();
 
     if (!claimed) throw new Error('the approved grant must be claimable');
 

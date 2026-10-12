@@ -4,14 +4,14 @@
  */
 import { useCallback, useState, type ReactNode } from 'react';
 import { Button } from '@cloudflare/kumo';
-import { executorLabel, revealMisrepresenting } from '@kinu.run/core';
+import { DeferredApprovalSchema, describeExecutionContext, executorLabel, revealMisrepresenting, type DeferredApproval } from '@kinu.run/core';
 import { TrashIcon, WarningIcon } from '@phosphor-icons/react';
 import { FilledButton } from '../ui/FilledButton';
 import { Modal } from '../ui/Modal';
 import { inputCls } from '../ui/form';
 import {
-  BackgroundJobRowSchema, DeferredApprovalRowSchema, fetchWorkspaceDetail, panelRows, runAction,
-  type BackgroundJobRow, type ControlAction, type DeferredApprovalRow, type JsonValue,
+  BackgroundJobRowSchema, fetchWorkspaceDetail, panelRows, runAction,
+  type BackgroundJobRow, type ControlAction, type JsonValue,
   type Panel as PanelValue,
 } from '../../lib/control-api';
 import { Notice, Panel, SectionHeader, useControlRead, when } from './panels';
@@ -181,7 +181,7 @@ export function WorkspaceDrilldown(
           // Bind to the owner the server resolved, not the requested one.
           const userId = detail.userId;
           const jobs = panelRows(detail.jobs, BackgroundJobRowSchema);
-          const approvals = panelRows(detail.approvals, DeferredApprovalRowSchema);
+          const approvals = panelRows(detail.approvals, DeferredApprovalSchema);
 
           return (
             <div className="space-y-4">
@@ -344,7 +344,7 @@ function JobRows(
 /** `always` is a standing grant, so each answer is its own button. */
 function ApprovalRows(
   { rows, busy, userId, workspace, onPick }: {
-    rows: DeferredApprovalRow[] | null;
+    rows: DeferredApproval[] | null;
     busy: boolean;
     userId: string;
     workspace: string;
@@ -359,38 +359,51 @@ function ApprovalRows(
 
   return (
     <ul className="space-y-2">
-      {rows.map((approval) => (
-        <li key={approval.id} className="space-y-1 border-b p-border last:border-b-0 pb-2 last:pb-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="p-t-status p-text-3">{approval.status}</span>
-            <span className="p-annotation p-text-2">{executorLabel(approval.executor)}</span>
-            <span className="p-meta p-text-3">{when(approval.requestedAt)}</span>
-          </div>
-          <div className="font-mono text-xs p-text whitespace-pre-wrap break-all">{revealMisrepresenting(approval.command)}</div>
-          <div className="p-row-text p-text-3">{approval.reason}</div>
-          <div className="flex gap-1.5">
-            {APPROVAL_ANSWERS.map(({ decision, label, body }) => (
-              <Button
-                key={decision}
-                size="sm" variant="ghost"
-                disabled={busy || approval.status !== 'queued'}
-                onClick={() => onPick({
-                  action: {
-                    action: 'approvals.decide', userId, workspace,
-                    ids: [approval.id], decision,
-                  },
-                  title: `${label} this command`,
-                  body: `${body}\n\n${revealMisrepresenting(approval.command)}\n\non ${executorLabel(approval.executor)}, in ${workspace}.`,
-                  danger: decision === 'always',
-                })}
-              >
-                {label}
-              </Button>
-            ))}
-          </div>
-        </li>
-      ))}
+      {rows.map((approval) => <ApprovalRow key={approval.id} approval={approval} busy={busy} userId={userId} workspace={workspace} onPick={onPick} />)}
     </ul>
+  );
+}
+
+function ApprovalRow({ approval, busy, userId, workspace, onPick }: {
+  approval: DeferredApproval;
+  busy: boolean;
+  userId: string;
+  workspace: string;
+  onPick: (control: PendingControl) => void;
+}): ReactNode {
+  const where = describeExecutionContext(approval.context);
+
+  return (
+    <li className="space-y-1 border-b p-border last:border-b-0 pb-2 last:pb-0">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="p-t-status p-text-3">{approval.status}</span>
+        <span className="p-annotation p-text-2">{executorLabel(approval.executor)}</span>
+        <span className="p-meta p-text-3">{when(approval.requestedAt)}</span>
+      </div>
+      <div className="font-mono text-xs p-text whitespace-pre-wrap break-all">{revealMisrepresenting(approval.command)}</div>
+      {where !== '' && <div className="text-xs p-text-2 break-all">Runs {revealMisrepresenting(where)}</div>}
+      <div className="p-row-text p-text-3">{approval.reason}</div>
+      <div className="flex gap-1.5">
+        {APPROVAL_ANSWERS.map(({ decision, label, body }) => (
+          <Button
+            key={decision}
+            size="sm" variant="ghost"
+            disabled={busy || approval.status !== 'queued'}
+            onClick={() => onPick({
+              action: {
+                action: 'approvals.decide', userId, workspace,
+                ids: [approval.id], decision,
+              },
+              title: `${label} this command`,
+              body: `${body}\n\n${revealMisrepresenting(approval.command)}${where === '' ? '' : `\n\nruns ${revealMisrepresenting(where)}`}\n\non ${executorLabel(approval.executor)}, in ${workspace}.`,
+              danger: decision === 'always',
+            })}
+          >
+            {label}
+          </Button>
+        ))}
+      </div>
+    </li>
   );
 }
 

@@ -4,8 +4,8 @@ import { readText, type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, test, expect } from 'bun:test';
 import { Effect } from 'effect';
 import { Database } from 'bun:sqlite';
-import { createMemoryVfs, fakeMossaic, toolExecute } from '@kinu.run/test-utils';
-import { DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable, DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, withApprovalGatedShell, buildBuiltinTools, reviewCommand, actorReferenceOf, type DeferredApprovalChannel, formatApprovalGrant, createShellSession, withApprovalGatedFiles, performBoundWrite, withMountTable, sharedDriveMount, mossaicVfs, ParkedWriteFiles, type DeferredApproval, type ShellApprovalPolicy, type ShellApprovalOutcome, type AgentRuntime, type AgentSignal, type FilesOwner, type Shell, WORKSPACE_ROOT } from '../src/index';
+import { createMemoryVfs, fakeCommandMember, fakeMossaic, toolExecute } from '@kinu.run/test-utils';
+import { DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable, DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, withApprovalGatedShell, buildBuiltinTools, reviewCommand, actorReferenceOf, type DeferredApprovalChannel, formatApprovalGrant, createShellSession, withApprovalGatedFiles, performBoundWrite, withMountTable, sharedDriveMount, mossaicVfs, ParkedWriteFiles, type DeferredApproval, type ExecutionContext, type ParkedWrites, type ShellApprovalPolicy, type ShellApprovalOutcome, type ShellApprovalRequest, type AgentRuntime, type AgentSignal, type FilesOwner, type Shell, WORKSPACE_ROOT } from '../src/index';
 import type { BoundFileWrite } from '../src/safety/bound-write';
 import { CHUNK_SIZE } from '@nimbus-sh/core/constants.js';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -43,11 +43,13 @@ type ShellTool = { execute: (args: { command: string; runtime?: string }) => Pro
 
 function setup(opts: {
   mode?: 'strict' | 'allow_all' | 'deny_all';
-  approve?: () => Promise<ShellApprovalOutcome | null>;
+  approve?: (req: ShellApprovalRequest, signal: AbortSignal) => Promise<ShellApprovalOutcome | null>;
   /** Omit the queue: the no-queue path must behave as if deferral did not exist. */
   noQueue?: boolean;
   /** Whose files the gated shell holds. */
   filesOwner?: FilesOwner;
+  /** Where parked writes' bytes live; none by default. */
+  writes?: ParkedWrites;
 } = {}) {
   const filesOwner = opts.filesOwner ?? 'agent';
   const { sql, actor } = approvalsDb();
@@ -62,7 +64,7 @@ function setup(opts: {
   const audited: Array<{ approvalId: string; actor: string; command: string; executor: string }> = [];
 
   const queue = new DeferredApprovalQueue({
-    writes: null,
+    writes: opts.writes ?? null,
     store,
     wake: (_actor, signal) => Effect.sync(() => { delivered.push(signal); }),
     remember: (grants) => { for (const g of grants) granted.push(formatApprovalGrant(g)); },
@@ -72,10 +74,18 @@ function setup(opts: {
   });
 
   const executed: string[] = [];
+  /** How many grants the owner held as each command ran. */
+  const grantsAtRun: number[] = [];
+  /** Each command as it ran, with the directory and named shell its call asked for. */
+  const ranWith: Array<{ readonly command: string; readonly cwd?: string; readonly name?: string }> = [];
+  const ran = Promise.withResolvers<void>();
 
   const rawShell: Shell = {
-    exec: async (command: string) => {
+    exec: async (command: string, options) => {
       executed.push(String(command));
+      ranWith.push({ command, ...(typeof options === 'object' && { cwd: options.cwd, name: options.name }) });
+      grantsAtRun.push(granted.length);
+      ran.resolve();
 
       return { stdout: 'ran', stderr: '', exitCode: 0 };
     },
@@ -99,7 +109,7 @@ function setup(opts: {
   };
 
   return {
-    queue, store, sql, shell, executed, delivered, granted, audited, shellTool,
+    queue, store, sql, shell, executed, ranWith, grantsAtRun, ran: ran.promise, delivered, granted, audited, shellTool,
     advance: (ms: number) => { elapsed += ms; },
   };
 }
@@ -208,7 +218,7 @@ describe('the standing modes still decide first', () => {
 
   test('a channel that says deny is a decision, not an absence', async () => {
     const { shellTool, queue } = setup({ approve: async () => 'deny' });
-    await expect(shellTool.execute({ command: GATED })).rejects.toMatchObject({ message: expect.stringContaining('Denied by the owner') });
+    await expect(shellTool.execute({ command: GATED })).rejects.toMatchObject({ message: expect.stringContaining('the owner refused this') });
     expect(queue.list()).toEqual([]);
   });
 
@@ -217,6 +227,160 @@ describe('the standing modes still decide first', () => {
     const { shellTool, queue } = setup({ approve: async () => null });
     await expect(shellTool.execute({ command: GATED })).rejects.toMatchObject({ message: expect.stringContaining('NOT RUN') });
     expect(queue.list()).toHaveLength(1);
+  });
+
+  /** A live prompt the test answers: each shows the ask's row, and its signal says another surface decided it. */
+  function livePrompts(shown: number) {
+    const prompts: Array<{
+      readonly id: string | undefined; readonly context: ExecutionContext; readonly signal: AbortSignal; answer(outcome: ShellApprovalOutcome | null): void;
+    }> = [];
+
+    const all = Promise.withResolvers<void>();
+
+    const approve = (req: ShellApprovalRequest, signal: AbortSignal) => new Promise<ShellApprovalOutcome | null>((resolve) => {
+      prompts.push({ id: req.approvalId, context: req.context, signal, answer: resolve });
+
+      if (prompts.length === shown) all.resolve();
+    });
+
+    return { prompts, approve, shown: all.promise };
+  }
+
+  test('two live asks of one command are one row: a prompt that goes away parks it, the other\'s answer runs it once', async () => {
+    const live = livePrompts(2);
+    const { shellTool, executed, queue, delivered } = setup({ approve: live.approve });
+    const first = shellTool.execute({ command: GATED });
+    const second = shellTool.execute({ command: GATED });
+
+    await live.shown;
+    expect(live.prompts.map((prompt) => prompt.id)).toEqual(['defer-1', 'defer-1']);
+    expect(queue.list()).toHaveLength(1);
+
+    // The chat unmounts under the first prompt: that ask is NOT RUN, and the row waits on the queue.
+    live.prompts[0]?.answer(null);
+    await expect(first).rejects.toMatchObject({ message: expect.stringContaining('NOT RUN') });
+    expect(queue.list()).toHaveLength(1);
+
+    // The owner approves on the other prompt: the row is decided once and its ask runs on it, spent.
+    live.prompts[1]?.answer('allow');
+    expect(await second).toBe('ran');
+    expect(executed).toEqual([GATED]);
+    expect(queue.list()).toEqual([]);
+    // The asker heard the answer where it waited; nothing is left to wake it with.
+    expect(delivered).toEqual([]);
+  });
+
+  test('the same words in two directories are two asks: approving one runs it there and nowhere else', async () => {
+    const live = livePrompts(2);
+    const { shell, ranWith, queue } = setup({ approve: live.approve });
+    const inA = shell.exec(GATED, { cwd: '/repo-a' });
+    const inB = shell.exec(GATED, { cwd: '/repo-b', name: 'release' });
+
+    await live.shown;
+    // Each prompt shows its own row, and says where it runs.
+    expect(new Set(live.prompts.map((prompt) => prompt.id)).size).toBe(2);
+    expect(queue.list()).toHaveLength(2);
+    const [atA, atB] = ['/repo-a', '/repo-b'].map((dir) => live.prompts.find((prompt) => prompt.context.cwd === dir));
+    expect(atB?.context.shell).toBe('release');
+
+    atA?.answer('allow');
+    expect((await inA).exitCode).toBe(0);
+    expect(ranWith).toEqual([{ command: GATED, cwd: '/repo-a', name: undefined }]);
+    // The other place is still the owner's to decide.
+    expect(atB?.signal.aborted).toBe(false);
+    expect(queue.list()).toHaveLength(1);
+
+    atB?.answer('deny');
+    expect((await inB).exitCode).not.toBe(0);
+    expect(ranWith).toHaveLength(1);
+  });
+
+  test('two asks waiting on one row: a once-answer runs one of them, the other hears it was used, and no row is added', async () => {
+    const live = livePrompts(2);
+    const { shellTool, executed, queue, delivered } = setup({ approve: live.approve });
+    const first = shellTool.execute({ command: GATED });
+    const second = shellTool.execute({ command: GATED });
+
+    await live.shown;
+    live.prompts[0]?.answer('allow');
+    const answers = await Promise.allSettled([first, second]);
+
+    expect(answers.filter((answer) => answer.status === 'fulfilled')).toHaveLength(1);
+    expect(answers.find((answer) => answer.status === 'rejected')).toMatchObject({ reason: { message: expect.stringContaining('approved this once') } });
+    expect(executed).toEqual([GATED]);
+    expect(queue.list()).toEqual([]);
+    expect(delivered).toEqual([]);
+  });
+
+  test('a decision another surface records as the live prompt goes away stands for the ask', async () => {
+    const live = livePrompts(1);
+    const { shellTool, executed, delivered, queue } = setup({ approve: live.approve });
+    const asking = shellTool.execute({ command: GATED });
+
+    await live.shown;
+    // Both in one tick: the web's approval, then the chat unmounting under the prompt.
+    const deciding = queue.decide(['defer-1'], 'approved');
+    live.prompts[0]?.answer(null);
+
+    expect(await asking).toBe('ran');
+    await deciding;
+    expect({ executed, delivered }).toEqual({ executed: [GATED], delivered: [] });
+  });
+
+  test('an always-answer from another surface is kept before the ask waiting on it runs, cleanup held or not', async () => {
+    // A write denial that has expired: deciding sweeps it and deletes its parked bytes, which this test holds.
+    const deleting = Promise.withResolvers<void>();
+    const cleanup = Promise.withResolvers<void>();
+
+    const writes: ParkedWrites = {
+      content: {
+        retain: async () => {},
+        read: async () => null,
+        delete: async () => {
+          deleting.resolve();
+          await cleanup.promise;
+        },
+      },
+      perform: async () => 'written',
+    };
+
+    const live = livePrompts(1);
+    const { shellTool, grantsAtRun, granted, ran, queue, store, advance } = setup({ approve: live.approve, writes });
+    const asking = shellTool.execute({ command: GATED });
+
+    await live.shown;
+    store.create({ id: 'old-write', command: `file write /home/main/notes.md sha256:${'a'.repeat(64)} over sha256:${'b'.repeat(64)}`, executor: 'workspace', context: {}, reason: 'overwrite', requestedAt: 0 }, []);
+    store.decide('old-write', 'denied', 0);
+    advance(DENIAL_STANDING_MS + 1);
+
+    const deciding = queue.decide(['defer-1'], 'always');
+
+    // The command runs while the cleanup is held, with the owner's grant already kept.
+    await Promise.all([deleting.promise, ran]);
+    expect(grantsAtRun).toHaveLength(1);
+    expect(grantsAtRun[0]).toBeGreaterThan(0);
+
+    cleanup.resolve();
+    await deciding;
+    expect(await asking).toBe('ran');
+    // Kept once, and not lost when the run settled its row.
+    expect(granted.length).toBe(grantsAtRun[0]);
+  });
+
+  test('a row decided on another surface retires its live prompt, and a late answer there changes nothing', async () => {
+    const live = livePrompts(1);
+    const { shellTool, executed, queue } = setup({ approve: live.approve });
+    const asking = shellTool.execute({ command: GATED });
+
+    await live.shown;
+    // The web's card answers first.
+    await queue.decide(['defer-1'], 'denied');
+    expect(live.prompts[0]?.signal.aborted).toBe(true);
+    await expect(asking).rejects.toMatchObject({ message: expect.stringContaining('the owner refused this') });
+
+    live.prompts[0]?.answer('allow');
+    await expect(shellTool.execute({ command: GATED })).rejects.toMatchObject({ message: expect.stringContaining('the owner refused this') });
+    expect(executed).toEqual([]);
   });
 
   test('with no queue wired at all, strict keeps its old explanatory refusal', async () => {
@@ -469,34 +633,34 @@ describe('the spent grant leaves an audit, and no row the gate did not close', (
     // While spent, the row is invisible to `standing()` and a second spend gets nothing.
     const { sql, actor } = approvalsDb();
     const store = new DeferredApprovalStore(sql, actor);
-    store.create({ id: 'defer-s', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 1 }, []);
+    store.create({ id: 'defer-s', command: GATED, executor: 'workspace', context: {}, reason: 'gate', requestedAt: 1 }, []);
     expect(store.decide('defer-s', 'approved', 2)?.status).toBe('approved');
 
     const spent = store.spend('defer-s');
     expect(spent?.action.id).toBe('defer-s');
     expect(store.spend('defer-s')).toBeNull();
-    expect(store.standing(GATED, 'workspace', 3)).toBeNull();
+    expect(store.standing({ command: GATED, executor: 'workspace', context: {} }, 3)).toBeNull();
 
     if (!spent) throw new Error('an approved grant must be spendable');
 
     expect(store.settle(spent.spend, 'spent')).toBe(true);
     expect(store.get('defer-s')).toBeNull();
     expect(store.settle(spent.spend, 'did-not-run')).toBe(false);
-    expect(store.standing(GATED, 'workspace', 3)).toBeNull();
+    expect(store.standing({ command: GATED, executor: 'workspace', context: {} }, 3)).toBeNull();
   });
 
   test('re-opening the workspace keeps parked and approved rows intact', () => {
     const { db, sql, actor } = approvalsDb();
     const store = new DeferredApprovalStore(sql, actor);
-    store.create({ id: 'defer-parked', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 1 }, []);
-    store.create({ id: 'defer-blessed', command: `${GATED} --twice`, executor: 'workspace', reason: 'gate', requestedAt: 2 }, []);
+    store.create({ id: 'defer-parked', command: GATED, executor: 'workspace', context: {}, reason: 'gate', requestedAt: 1 }, []);
+    store.create({ id: 'defer-blessed', command: `${GATED} --twice`, executor: 'workspace', context: {}, reason: 'gate', requestedAt: 2 }, []);
     expect(store.decide('defer-blessed', 'approved', 3)?.status).toBe('approved');
 
     initDeferredApprovalsTable(makeExecRaw(db));
     const reopened = new DeferredApprovalStore(sql, actor);
     expect(reopened.get('defer-parked')?.status).toBe('queued');
     expect(reopened.get('defer-blessed')?.status).toBe('approved');
-    expect(reopened.standing(GATED, 'workspace', 6)?.id).toBe('defer-parked');
+    expect(reopened.standing({ command: GATED, executor: 'workspace', context: {} }, 6)?.id).toBe('defer-parked');
   });
 });
 
@@ -504,7 +668,7 @@ describe('the parked action stays visible until it is decided', () => {
   test('every step of the turn re-states that it has not happened', () => {
     // The per-step dynamic-context block carries the missing effect until the owner answers.
     const { queue, store } = setup();
-    store.create({ id: 'defer-x', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 10 }, []);
+    store.create({ id: 'defer-x', command: GATED, executor: 'workspace', context: {}, reason: 'gate', requestedAt: 10 }, []);
 
     expect(queue.approvals()).toEqual([
       { id: 'defer-x', kind: 'queued command (NOT run)', detail: GATED },
@@ -541,20 +705,20 @@ describe('durability — the wait is a night, not a prompt window', () => {
     // A parked action must survive DO eviction; a promise map would lose it.
     const { sql, actor } = approvalsDb();
     const first = new DeferredApprovalStore(sql, actor);
-    first.create({ id: 'defer-9', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 5 }, []);
+    first.create({ id: 'defer-9', command: GATED, executor: 'workspace', context: {}, reason: 'gate', requestedAt: 5 }, []);
 
     const reopened = new DeferredApprovalStore(sql, actor);
     const parked = reopened.listQueued();
 
     expect(parked.map((a: DeferredApproval) => a.id)).toEqual(['defer-9']);
-    expect(reopened.standing(GATED, 'workspace', 6)?.status).toBe('queued');
+    expect(reopened.standing({ command: GATED, executor: 'workspace', context: {} }, 6)?.status).toBe('queued');
   });
 
   test('the decision is durable before the wake is attempted', async () => {
     // The row is the record; the signal is only the notification.
     const { sql, actor } = approvalsDb();
     const store = new DeferredApprovalStore(sql, actor);
-    store.create({ id: 'defer-7', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 5 }, []);
+    store.create({ id: 'defer-7', command: GATED, executor: 'workspace', context: {}, reason: 'gate', requestedAt: 5 }, []);
 
     const queue = new DeferredApprovalQueue({
       writes: null,
@@ -589,7 +753,7 @@ describe('a hired agent parks on its workspace\'s one queue, as itself', () => {
     });
 
     const ask = (channel: DeferredApprovalChannel, command: string) => channel.park({
-      command, executor: 'workspace', review: reviewCommand(command, 'agent'),
+      command, executor: 'workspace', context: {}, review: reviewCommand(command, 'agent'),
     });
 
     return { queue, store, root: actors.main, hire, woken, ask, directory: actors.directory };
@@ -633,7 +797,7 @@ describe('a hired agent parks on its workspace\'s one queue, as itself', () => {
 
   test('an id two actors share answers neither; a minted id is one no actor has', async () => {
     const { queue, store, root, hire, ask } = workspaceQueue();
-    const shared = { id: 'defer-1', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 1 };
+    const shared = { id: 'defer-1', command: GATED, executor: 'workspace', context: {}, reason: 'gate', requestedAt: 1 };
 
     store.create(shared, []);
     store.forActor(hire.actorId).create(shared, []);
@@ -685,8 +849,8 @@ describe('"always" grants the rules the owner was shown', () => {
 
     const ran: string[] = [];
 
-    const record = (member: string) => async (...args: unknown[]) => {
-      ran.push(`${member} ${String(args[0])}`);
+    const record = (member: string) => async (command: string) => {
+      ran.push(`${member} ${command}`);
 
       return 'ran';
     };
@@ -702,8 +866,8 @@ describe('"always" grants the rules the owner was shown', () => {
       connect: async () => {},
       disconnect: async () => {},
       tools: {
-        runCode: { description: 'Run a program', execute: record('code') },
-        startProcess: { description: 'Start a background process', execute: record('start') },
+        runCode: fakeCommandMember('Run a program', record('code'), 'program'),
+        startProcess: fakeCommandMember('Start a background process', record('start')),
       },
     };
 
@@ -778,14 +942,11 @@ describe('an approval outlives an attempt that never reached the machine', () =>
       connect: async () => {},
       disconnect: async () => {},
       tools: {
-        exec: {
-          description: 'Run a shell command on the owner\'s machine',
-          execute: async (...args: unknown[]) => {
-            executed.push(String(args[0]));
+        exec: fakeCommandMember('Run a shell command on the owner\'s machine', async (command) => {
+          executed.push(command);
 
-            return answer();
-          },
-        },
+          return answer();
+        }),
       },
     };
 
@@ -816,9 +977,22 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     expect(executed).toEqual([GATED]);
 
     // No run happened, so the grant is still spendable.
-    expect(store.standing(GATED, 'device', 1_010)?.status).toBe('approved');
-    expect(store.standing(GATED, 'device', 1_010)?.id).toBe('defer-1');
+    expect(store.standing({ command: GATED, executor: 'device', context: { member: 'exec' } }, 1_010)?.status).toBe('approved');
+    expect(store.standing({ command: GATED, executor: 'device', context: { member: 'exec' } }, 1_010)?.id).toBe('defer-1');
     expect(queue.list()).toEqual([]);
+  });
+
+  test('a machine that throws a failure proving nothing started leaves the grant spendable too', async () => {
+    const { queue, store, exec, executed, answerWith } = deviceSetup();
+    answerWith(notConnected);
+    await exec(GATED);
+    await queue.decide(['defer-1'], 'approved');
+
+    answerWith(() => { throw new KinuError('unavailable', 'No device connected.'); });
+    await Promise.allSettled([exec(GATED)]);
+
+    expect(executed).toEqual([GATED]);
+    expect(store.standing({ command: GATED, executor: 'device', context: { member: 'exec' } }, 1_010)?.id).toBe('defer-1');
   });
 
   test('the next attempt that DOES reach the machine spends it for good', async () => {
@@ -832,7 +1006,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     expect(await exec(GATED)).toBe('ran');
 
     expect(executed).toEqual([GATED, GATED]);
-    expect(store.standing(GATED, 'device', 1_010)).toBeNull();
+    expect(store.standing({ command: GATED, executor: 'device', context: { member: 'exec' } }, 1_010)).toBeNull();
     expect(store.get('defer-1')).toBeNull();
     expect(audited).toEqual([{ approvalId: 'defer-1', actor: store.actorId, command: GATED, executor: 'device' }]);
     expect(await exec(GATED)).toMatchObject({ reason: 'unavailable', error: expect.stringContaining('defer-2') });
@@ -846,7 +1020,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     await queue.decide(['defer-1'], 'approved');
     expect(await exec(GATED)).toBe(stdout);
     expect(executed).toEqual([GATED]);
-    expect(store.standing(GATED, 'device', 1_010)).toBeNull();
+    expect(store.standing({ command: GATED, executor: 'device', context: { member: 'exec' } }, 1_010)).toBeNull();
   });
 
   test('a command that reached the machine and FAILED there does not refund', async () => {
@@ -859,7 +1033,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     answerWith(() => commandResult({ stdout: '', stderr: 'rejected', exitCode: 1 }));
     expect(await exec(GATED)).toMatchObject({ reason: 'io' });
 
-    expect(store.standing(GATED, 'device', 1_010)).toBeNull();
+    expect(store.standing({ command: GATED, executor: 'device', context: { member: 'exec' } }, 1_010)).toBeNull();
     expect(store.get('defer-1')).toBeNull();
   });
 
@@ -873,7 +1047,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     answerWith(() => refusalOf(new KinuError('io', 'the tunnel closed mid-call')));
     expect(await exec(GATED)).toMatchObject({ reason: 'io' });
 
-    expect(store.standing(GATED, 'device', 1_010)).toBeNull();
+    expect(store.standing({ command: GATED, executor: 'device', context: { member: 'exec' } }, 1_010)).toBeNull();
   });
 
   test('a throw out of the executor does not refund', async () => {
@@ -885,7 +1059,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     answerWith(() => { throw new Error('socket died'); });
     await expect(exec(GATED)).rejects.toThrow('socket died');
 
-    expect(store.standing(GATED, 'device', 1_010)).toBeNull();
+    expect(store.standing({ command: GATED, executor: 'device', context: { member: 'exec' } }, 1_010)).toBeNull();
   });
 
   test('two refunds of one spend change nothing', async () => {
@@ -901,10 +1075,10 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     if (!spend) throw new Error('the approved grant must be spendable');
 
     await queue.channel.settle(spend.spend, 'did-not-run');
-    expect(store.standing(GATED, 'device', 1_010)?.id).toBe('defer-1');
+    expect(store.standing({ command: GATED, executor: 'device', context: { member: 'exec' } }, 1_010)?.id).toBe('defer-1');
 
     await queue.channel.settle(spend.spend, 'did-not-run');
-    expect(store.standing(GATED, 'device', 1_010)?.id).toBe('defer-1');
+    expect(store.standing({ command: GATED, executor: 'device', context: { member: 'exec' } }, 1_010)?.id).toBe('defer-1');
 
     const second = store.spend('defer-1');
     expect(second).not.toBeNull();
@@ -912,7 +1086,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     if (!second) throw new Error('the refunded grant must be spendable again');
     await queue.channel.settle(second.spend, 'spent');
     await queue.channel.settle(spend.spend, 'did-not-run');
-    expect(store.standing(GATED, 'device', 1_010)).toBeNull();
+    expect(store.standing({ command: GATED, executor: 'device', context: { member: 'exec' } }, 1_010)).toBeNull();
     expect(store.get('defer-1')).toBeNull();
   });
 

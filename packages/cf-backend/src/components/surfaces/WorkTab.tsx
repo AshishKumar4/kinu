@@ -44,7 +44,7 @@ type DecidedHere = "deferred_action" | "workspace_proposal";
 const PENDING_HOME = {
   scaffold_version: { surface: "Agent", cta: "decide in Agent → Evolution" },
   unseen_changes: { surface: null, cta: null },
-  curriculum_task: { surface: null, cta: "decide in Supervise" },
+  curriculum_task: { surface: null, cta: null },
   // The row is the deep link: it opens the plan's own page.
   plan_review: { surface: null, cta: "open the review" },
 } satisfies Record<Exclude<PendingActionKind, DecidedHere>, { surface: SurfaceKind | null; cta: string | null }>;
@@ -440,6 +440,7 @@ export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: { ac
               onChange={() => flow.toggle(action.id, allIds)} disabled={state.busy} />
             <span className="min-w-0 flex-1">
               <code className="block p-t-code p-text break-all whitespace-pre-wrap">{revealMisrepresenting(action.detail ?? "")}</code>
+              {action.where !== undefined && <span className="block p-meta p-text-2 mt-0.5 break-all">Runs {revealMisrepresenting(action.where)}</span>}
               <span className="block p-meta p-text-3 mt-0.5">{action.title} · queued {timeAgo(action.at)}</span>
             </span>
           </label>

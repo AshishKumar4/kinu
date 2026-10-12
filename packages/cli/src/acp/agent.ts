@@ -15,7 +15,7 @@ import {
   type StopReason,
   type ToolKind,
 } from '@agentclientprotocol/sdk';
-import type { JsonObject, ShellApprovalOutcome, ShellApprovalRequest } from '@kinu.run/core';
+import { describeExecutionContext, type JsonObject, type ShellApprovalOutcome, type ShellApprovalRequest } from '@kinu.run/core';
 import { settleLogged } from '@kinu.run/core/obs';
 import { literalText } from '@kinu.run/core/tui';
 import { STEP_RESTART_NOTICE, type AgentClient, type AgentClientEvent } from '../agent-client';
@@ -64,8 +64,9 @@ function toolTitle(name: string, args: JsonObject): string {
   return name;
 }
 
-/** "Don't ask again" grants exactly the asked rules on the asked executor (`wrapShellApprovalHandler`),
- *  never whole-agent `allow_all`. There is deliberately no persistent reject. */
+/** Each answer decides the ask's queue row, as the web's would. "Don't ask again" grants exactly the asked rules on
+ *  the asked executor, never whole-agent `allow_all`; Reject refuses the row, so the same command on that executor is
+ *  refused unasked for the queue's denial window, then asked again. */
 function permissionOptions(req: ShellApprovalRequest): PermissionOption[] {
   const rules = req.review.hits.filter((h) => h.decision === 'gate').map((h) => h.rule).join(', ');
 
@@ -105,7 +106,7 @@ class AcpSession {
   get wasCancelled(): boolean { return this.cancelled; }
 
   /** Local sessions only: a cloud turn runs in the DO, with no synchronous path back to this process. */
-  installApprovalChannel(ask: (req: ShellApprovalRequest) => Promise<ShellApprovalOutcome | null>): void {
+  installApprovalChannel(ask: (req: ShellApprovalRequest, signal: AbortSignal) => Promise<ShellApprovalOutcome | null>): void {
     this.detachApproval = this.client.localControls?.setShellApprovalHandler(ask) ?? null;
   }
 
@@ -200,7 +201,9 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
       const session = new AcpSession(client.cliSession.id, client, cwd);
       sessions.set(session.id, session);
 
-      session.installApprovalChannel(async (req) => {
+      session.installApprovalChannel(async (req, signal) => {
+        const where = describeExecutionContext(req.context);
+
         const outcome = await ctx.client.request(CLIENT_METHODS.session_request_permission, {
           sessionId: session.id,
           toolCall: {
@@ -210,16 +213,18 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
             status: 'pending' as const,
             content: [{
               type: 'content' as const,
-              content: { type: 'text' as const, text: req.review.hits.map((h) => h.explanation).join('\n') },
+              content: { type: 'text' as const, text: [where === '' ? '' : `Runs ${literalText(where)}`, ...req.review.hits.map((h) => h.explanation)].filter(Boolean).join('\n') },
             }],
           },
           options: permissionOptions(req),
-        });
+        // Retired when another surface decided the row: the editor withdraws its prompt.
+        }, { cancellationSignal: signal });
 
-        // 'cancelled' — the turn is going away; deny so the tool stops here.
-        if (outcome.outcome.outcome !== 'selected') return 'deny';
+        // Cancelled (the turn is going away, or the prompt was withdrawn) or an option this agent never offered:
+        // unanswered, so the row waits and the tool stops here without a denial the owner never gave.
+        if (outcome.outcome.outcome !== 'selected') return null;
 
-        return OUTCOME_BY_OPTION.get(outcome.outcome.optionId) ?? 'deny';
+        return OUTCOME_BY_OPTION.get(outcome.outcome.optionId) ?? null;
       });
 
       return { sessionId: session.id };

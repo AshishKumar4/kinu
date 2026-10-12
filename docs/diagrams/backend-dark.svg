@@ -77,7 +77,7 @@
   <rect x="602" y="88" width="274" height="56" rx="7" fill="var(--pinkFill)" stroke="var(--pinkLine)"/>
   <text class="b" x="614" y="109" text-anchor="start" fill="var(--pink)">Autonomous ingress</text>
   <text class="s" x="614" y="124" text-anchor="start">webhook · email · timer · MCP</text>
-  <text class="xs" x="614" y="139" text-anchor="start">peer agent · file watch</text>
+  <text class="xs" x="614" y="139" text-anchor="start">peer agent · sandbox callback</text>
   <path d="M161 144 L161 166" fill="none" stroke="var(--blueLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-blue)"/>
   <path d="M450 144 L450 166" fill="none" stroke="var(--blueLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-blue)"/>
   <path d="M739 144 L739 166" fill="none" stroke="var(--pinkLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-pink)"/>

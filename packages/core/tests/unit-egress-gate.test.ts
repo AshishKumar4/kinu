@@ -17,7 +17,7 @@ import {
   type ApprovalGrant,
   type EgressSecretBinding,
   type ShellApprovalMode,
-  type ShellApprovalPolicy,
+  type ShellApprovalPolicy, wordsOnly,
 } from '../src/index';
 
 /** A placeholder of the real shape: prefix + 43 base64url characters. */
@@ -236,11 +236,11 @@ describe('inherited approval policy', () => {
     const ran: string[] = [];
 
     const run = gateExec<string>(
-      async (command) => {
+      wordsOnly(async (command) => {
         ran.push(command);
 
         return `ran:${command}`;
-      },
+      }),
       (error) => error.message,
       { name: 'sandbox', filesOwner: 'agent' },
       { policy },

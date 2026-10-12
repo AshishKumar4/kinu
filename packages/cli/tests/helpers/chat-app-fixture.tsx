@@ -12,6 +12,7 @@ import type {
   LocalSessionControls,
   PlanReviewSurface,
   OwnerQuestionSurface,
+  WaitingApprovalSurface,
 } from '../../src/agent-client';
 import type { AgentModelMenu } from '@kinu.run/core';
 import { createCliSession } from '../../src/session';
@@ -69,6 +70,7 @@ interface FakeClientOptions {
   localControls?: LocalSessionControls;
   plans?: PlanReviewSurface | null;
   questions?: OwnerQuestionSurface | null;
+  approvals?: WaitingApprovalSurface | null;
   listModels?: () => Promise<AgentModelMenu>;
   testModel?: AgentClient['testModel'];
   send?: AgentClient['send'];
@@ -96,6 +98,7 @@ export function fakeClient(options: FakeClientOptions) {
     consents: options.consents ?? null,
     plans: options.plans ?? null,
     questions: options.questions ?? null,
+    approvals: options.approvals ?? null,
     localControls: mode === 'local' ? (options.localControls ?? {
       getAlwaysActiveSkills: () => [],
       setAlwaysActiveSkills: () => {},
@@ -106,8 +109,6 @@ export function fakeClient(options: FakeClientOptions) {
 
         return () => { shellApprovalHandler = null; };
       },
-      listDeferredApprovals: async () => [],
-      decideDeferredApprovals: async () => ({ decided: [] }),
       listModelProviders: async () => [],
       listInstructionApprovals: async () => ({ status: 'end' as const, items: [] }),
       readInstructionApproval: async () => null,
@@ -192,10 +193,11 @@ export function fakeClient(options: FakeClientOptions) {
   return {
     client,
     state,
-    requestShellApproval(request: Parameters<NonNullable<typeof shellApprovalHandler>>[0]) {
+    /** `signal` stands for another surface deciding the ask's row first. */
+    requestShellApproval(request: Parameters<NonNullable<typeof shellApprovalHandler>>[0], signal = new AbortController().signal) {
       if (!shellApprovalHandler) throw new Error('No shell approval handler installed');
 
-      return shellApprovalHandler(request);
+      return shellApprovalHandler(request, signal);
     },
     listenerCount: () => listeners.size,
     emit(event: AgentClientEvent) {

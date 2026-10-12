@@ -125,18 +125,6 @@ export const BackgroundJobRowSchema = v.object({
 
 export type BackgroundJobRow = v.InferOutput<typeof BackgroundJobRowSchema>;
 
-export const DeferredApprovalRowSchema = v.object({
-  id: v.string(),
-  command: v.string(),
-  executor: v.string(),
-  reason: v.string(),
-  status: v.picklist(['queued', 'approved', 'denied']),
-  requestedAt: v.number(),
-  decidedAt: v.nullable(v.number()),
-});
-
-export type DeferredApprovalRow = v.InferOutput<typeof DeferredApprovalRowSchema>;
-
 /** `null` when down or unknown-shaped: an invented empty list would say "no jobs" about a failed load. */
 export function panelRows<Row>(
   panel: Panel, schema: v.GenericSchema<Row>,

@@ -6,6 +6,7 @@ import {
   JsonValueSchema,
   PlanDecisionOutcomeSchema, PlanReviewResultSchema, PlanReviewSchema,
   AskingAgentSchema,
+  DeferredApprovalSchema,
   ChatHistoryEntrySchema, SendStateSchema, type SendState,
   ORCHESTRATOR_AGENT_SLUG,
   hostedActorSocketPath,
@@ -73,6 +74,7 @@ import {
   type PendingDeviceConsent,
   type PlanReviewSurface,
   type OwnerQuestionSurface,
+  type WaitingApprovalSurface,
 } from './agent-client';
 import * as v from 'valibot';
 
@@ -297,6 +299,7 @@ export class CloudAgentClient implements AgentClient {
   readonly checkpoints: FileCheckpointSurface | null;
   readonly plans: PlanReviewSurface | null;
   readonly questions: OwnerQuestionSurface | null;
+  readonly approvals: WaitingApprovalSurface | null;
   readonly inlineAttachmentLimitBytes = CLOUD_MAX_INLINE_ATTACHMENT_BYTES;
   readonly planes = null;
   readonly rename?: (displayName: string) => Promise<{ name: string; displayName: string }>;
@@ -363,6 +366,13 @@ export class CloudAgentClient implements AgentClient {
       // A hosted agent's questions are answered from the web app's stack, where its window is.
       list: async () => v.parse(v.array(AskingAgentSchema), await this.callRpc('listOwnerQuestions', [])).filter((asking) => asking.actor === null),
       answer: async (id, answers) => { await this.callRpc('answerOwnerQuestions', [id, v.parse(JsonValueSchema, answers)]); },
+    };
+    // The workspace's one queue, its hosted agents' commands included, as the web's main stack shows it.
+    this.approvals = subordinateName ? null : {
+      list: async () => v.parse(v.array(DeferredApprovalSchema), await this.callRpc('listDeferredApprovals', [])),
+      decide: async (ids, decision) => v.parse(
+        v.object({ decided: v.array(v.string()) }), await this.callRpc('decideDeferredApprovals', [ids, decision]),
+      ),
     };
     // The sealed plan RPCs (`agent-rpc-access.ts`).
     this.plans = subordinateName ? null : {

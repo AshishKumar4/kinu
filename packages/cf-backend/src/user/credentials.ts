@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 import {
-  type Credential, CLAUDE_CRED_KEY, CODEX_CRED_KEY, MAIN_ACCOUNT, accountCredentialKey, baseCredentialKey, claudeCodeFrom, createClaudeOAuthClient, createCodexOAuthClient, startClaudeSignIn, subscriptionIssuer, rotateLogin, usableLogin, type LoginRenewal, type SubscriptionIssuer, decodeCodexAccountId, tokensToCredential, type DeviceCodeStart, type JsonValue, type OAuthCredential, type EgressRequestFacts, type EgressSecretBinding, parseJsonValue, ownerCaller, type UserCaller, type ResolvedCaller, credentialToHeaders, refusedLogin, type AuthRequest, type AuthResolution, validateCredential, validateCredentialKey, createCredentialCipher, isSealedCredential, type CredentialCipher, listEgressSecrets, putEgressSecret, resolveEgressInjection, revokeEgressSecret, rewrapEgressSecrets, type EgressInjectionResult, type EgressSecretSummary, type EgressVaultDeps, type PutEgressSecretInput, revocationEndpointFor, revokeOAuthGrant, type UnrevokedGrant, isModelInferenceCredentialKey, CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, accountIdFromCloudflareCredential, cloudflareAIGatewayId, cloudflareAccountsFromCredential, cloudflareWorkersAIBaseURL, fetchCloudflareAIGateways, isCloudflareAIGatewayId, isCloudflareCredentialExpiring, isCloudflareCredentialUsable, refreshCloudflareCredential, withCloudflareAccount, type CloudflareAccount, type CloudflareAIGatewaySummary,
+  type Credential, CLAUDE_CRED_KEY, CODEX_CRED_KEY, MAIN_ACCOUNT, accountCredentialKey, baseCredentialKey, claudeCodeFrom, createClaudeOAuthClient, createCodexOAuthClient, startClaudeSignIn, subscriptionIssuer, rotateLogin, usableLogin, type LoginRenewal, type SubscriptionIssuer, decodeCodexAccountId, tokensToCredential, type DeviceCodeStart, type JsonValue, type OAuthCredential, type EgressRequestFacts, type EgressSecretBinding, parseJsonValue, ownerCaller, type UserCaller, type ResolvedCaller, credentialToHeaders, refusedLogin, type AuthRequest, type AuthResolution, validateCredential, validateCredentialKey, createCredentialCipher, isSealedCredential, type CredentialCipher, listEgressSecrets, putEgressSecret, resolveEgressInjection, revokeEgressSecret, rewrapEgressSecrets, type EgressInjectionResult, type EgressSecretSummary, type EgressVaultDeps, type PutEgressSecretInput, revocationEndpointFor, revokeOAuthGrant, type DisconnectOutcome, isModelInferenceCredentialKey, CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, accountIdFromCloudflareCredential, cloudflareAIGatewayId, cloudflareAccountsFromCredential, cloudflareWorkersAIBaseURL, fetchCloudflareAIGateways, isCloudflareAIGatewayId, isCloudflareCredentialExpiring, isCloudflareCredentialUsable, refreshCloudflareCredential, withCloudflareAccount, type CloudflareAccount, type CloudflareAIGatewaySummary,
 } from '@kinu.run/core';
 import { attempt, authoredRefusal, diagnostics, KinuError, renderThrownChain, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -145,38 +145,24 @@ export class UserCredentials {
     if (key === CLOUDFLARE_OAUTH_CRED_KEY) await this.listAIGateways(await ownerCaller(this.host.env));
   }
 
-  async deleteCredential(caller: UserCaller, key: string): Promise<void> {
+  async deleteCredential(caller: UserCaller, key: string, revoke: boolean): Promise<DisconnectOutcome> {
     await this.host.requireTier(caller, 'credentials.other');
     validateCredentialKey(key);
-    await this.disconnectCredential(key);
-  }
 
-  /** Disconnected grants the provider refused to revoke, newest first. */
-  async listUnrevokedGrants(caller: UserCaller): Promise<UnrevokedGrant[]> {
-    await this.host.requireTier(caller, 'credentials.other');
-
-    return this.host.sqlx<{ key: string; reasons_json: string; recorded_at: number }>(
-      `SELECT key, reasons_json, recorded_at FROM user_unrevoked_grants ORDER BY recorded_at DESC`,
-    ).map((row) => ({ key: row.key, reasons: v.parse(v.array(v.string()), JSON.parse(row.reasons_json)), recordedAt: row.recorded_at }));
-  }
-
-  /** The owner revoked it at the provider by hand, or accepts it. */
-  async dismissUnrevokedGrant(caller: UserCaller, key: string): Promise<void> {
-    await this.host.requireTier(caller, 'credentials.other');
-    this.host.sqlx(`DELETE FROM user_unrevoked_grants WHERE key = ?`, key);
+    return this.disconnectCredential(key, revoke);
   }
 
   /**
-   * Removes the credential, then asks its provider to revoke the grant (RFC 7009). Removal comes first so a
-   * slow or failing provider cannot keep it live here; a refused revoke is kept for the owner to see.
+   * Removes the credential; asked to, then has its provider revoke the grant (RFC 7009). Removal comes first so a
+   * slow or failing provider cannot keep it live here; a refusal comes back in the provider's words.
    */
-  async disconnectCredential(key: string): Promise<void> {
-    const endpoint = revocationEndpointFor(key, this.host.env);
+  async disconnectCredential(key: string, revoke: boolean): Promise<DisconnectOutcome> {
+    const endpoint = revoke ? revocationEndpointFor(key, this.host.env) : null;
 
     if (endpoint === null) {
       this.dropCredential(key);
 
-      return;
+      return { unrevoked: revoke ? `Kinu cannot revoke ${key} at its provider; it is disconnected here only.` : null };
     }
 
     let failures: readonly KinuError[];
@@ -186,7 +172,7 @@ export class UserCredentials {
 
       this.dropCredential(key);
 
-      if (credential?.kind !== 'oauth') return;
+      if (credential?.kind !== 'oauth') return { unrevoked: null };
       failures = await revokeOAuthGrant({ endpoint, credential, fetch: globalThis.fetch });
     } catch (cause) {
       // An unopenable row still leaves Kinu; its grant cannot be revoked from here.
@@ -194,19 +180,9 @@ export class UserCredentials {
       failures = [toKinuError({ doing: 'reading the credential to revoke it', cause, otherwise: 'io' })];
     }
 
-    if (failures.length === 0) {
-      this.host.sqlx(`DELETE FROM user_unrevoked_grants WHERE key = ?`, key);
-
-      return;
-    }
-
     for (const failure of failures) diagnostics.failure('credential.revoke_failed', failure, { credentialKey: key });
 
-    this.host.sqlx(
-      `INSERT INTO user_unrevoked_grants (key, reasons_json, recorded_at) VALUES (?, ?, ?)
-       ON CONFLICT(key) DO UPDATE SET reasons_json = excluded.reasons_json, recorded_at = excluded.recorded_at`,
-      key, JSON.stringify(failures.map((failure) => failure.message)), Date.now(),
-    );
+    return { unrevoked: failures.length === 0 ? null : failures.map((failure) => failure.message).join(' · ') };
   }
 
   private _credentialsRewrapped: Promise<void> | null = null;
@@ -926,12 +902,14 @@ export class UserCredentials {
     }));
   }
 
-  async disconnectCodex(caller: UserCaller): Promise<void> {
+  async disconnectCodex(caller: UserCaller, revoke: boolean): Promise<DisconnectOutcome> {
     await this.host.requireTier(caller, 'subscription_auth');
-    await this.disconnectCredential(CODEX_CRED_KEY);
+    const outcome = await this.disconnectCredential(CODEX_CRED_KEY, revoke);
     // Settled, not deleted: the generation must keep rising, and a poll already waiting on OpenAI
     // must find this attempt closed rather than find no row to fence against.
     this.host.sqlx(`UPDATE codex_device_flow SET settled_at = ? WHERE id = 1 AND settled_at IS NULL`, Date.now());
+
+    return outcome;
   }
 
   async getCodexStatus(caller: UserCaller): Promise<CodexStatus> {

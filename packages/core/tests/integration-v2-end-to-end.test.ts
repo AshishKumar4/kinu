@@ -11,7 +11,7 @@ import {
   getPendingScaffold, applyPromotionDecision, readScaffoldVersion,
   initScaffoldTables, modifyScaffold,
   initRunEventTables, RunEventRecorder,
-  reviewCommand, gateExec,
+  reviewCommand, gateExec, wordsOnly,
 } from '../src/index';
 import { present, testActorHandle } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw, createTestRuntime, createTestActor } from './helpers';
@@ -261,11 +261,11 @@ describe('v2 e2e: approval gate', () => {
     const seen: string[] = [];
 
     const gated = gateExec<string>(
-      async (cmd) => {
+      wordsOnly(async (cmd) => {
         seen.push(cmd);
 
         return `ran:${cmd}`;
-      },
+      }),
       (msg) => `DENIED:${msg.message}`,
       { name: 'device', filesOwner: 'user' },
       { policy: { mode: () => 'strict', requestApproval: async () => 'allow' } },
