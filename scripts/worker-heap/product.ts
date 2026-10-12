@@ -9,12 +9,12 @@ export * from 'kinu:product';
 
 export { default } from 'kinu:product';
 
-/** Held for the isolate's life, as a leak would be. */
-const planted: Uint8Array[] = [];
+/** Each buffer the gate plants, under the marker it finds it by: held for the isolate's life, as a leak would be. */
+const planted: Record<string, Uint8Array>[] = [];
 
 /** Main's isolate as the gate loads it (`packages/cf-backend/tests/workerd/heap-plant-agent.ts`). */
 interface PlantingFacet extends Rpc.WorkerEntrypointBranded {
-  plant(bytes: number): Promise<void>;
+  plant(marker: string, bytes: number): Promise<void>;
   failedToolCalls(): Promise<number>;
   idle(): Promise<void>;
 }
@@ -42,10 +42,11 @@ export class OrchestratorAgent extends Product {
     return await (await this.agentFacetOf<PlantingFacet>(this.actorHandle().actorId)).failedToolCalls();
   }
 
-  /** `bytes` held in `isolate` for its life: the gate reads it back to prove it reads that isolate. */
-  async plant(isolate: 'workspace' | 'main', bytes: number): Promise<void> {
-    if (isolate === 'workspace') planted.push(new Uint8Array(bytes).fill(7));
-    else await (await this.agentFacetOf<PlantingFacet>(this.actorHandle().actorId)).plant(bytes);
+  /** `bytes` held in `isolate` for its life under the property `marker`: the gate finds them there, and only there, to
+   *  prove it reads that isolate. */
+  async plant(isolate: 'workspace' | 'main', marker: string, bytes: number): Promise<void> {
+    if (isolate === 'workspace') planted.push({ [marker]: new Uint8Array(bytes).fill(7) });
+    else await (await this.agentFacetOf<PlantingFacet>(this.actorHandle().actorId)).plant(marker, bytes);
   }
 
   /** What it has detached joined: setting a model tells each agent's isolate, which loads main's (D9). */

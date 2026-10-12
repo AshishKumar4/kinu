@@ -22,7 +22,7 @@ interface WorkspaceRpc extends Rpc.DurableObjectBranded {
   /** `worker-heap/product.ts`'s probe RPC. */
   joinDetached(): Promise<void>;
   /** `worker-heap/product.ts`'s probe RPC. */
-  plant(isolate: 'workspace' | 'main', bytes: number): Promise<void>;
+  plant(isolate: 'workspace' | 'main', marker: string, bytes: number): Promise<void>;
   /** `worker-heap/product.ts`'s probe RPC. */
   failedToolCalls(): Promise<number>;
   /** `worker-heap/product.ts`'s probe RPC. */
@@ -81,8 +81,8 @@ export class HeapDriver extends DurableObject<DriverEnv> {
     await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace)).hostHeads(tag, count);
   }
 
-  async plant(workspace: string, isolate: 'workspace' | 'main', bytes: number): Promise<void> {
-    await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace)).plant(isolate, bytes);
+  async plant(workspace: string, isolate: 'workspace' | 'main', marker: string, bytes: number): Promise<void> {
+    await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace)).plant(isolate, marker, bytes);
   }
 
   async mainIdle(workspace: string): Promise<void> {
@@ -326,7 +326,7 @@ export default {
     else if (url.pathname === '/turn') await driver.turn(workspace, url.searchParams.get('text') ?? 'hello');
     else if (url.pathname === '/heads') await driver.heads(workspace, url.searchParams.get('tag') ?? 'head', Number(url.searchParams.get('count')));
     else if (url.pathname === '/quiesce') await driver.quiesce(workspace);
-    else if (url.pathname === '/plant') await driver.plant(workspace, v.parse(v.picklist(['workspace', 'main']), url.searchParams.get('isolate')), Number(url.searchParams.get('bytes')));
+    else if (url.pathname === '/plant') await driver.plant(workspace, v.parse(v.picklist(['workspace', 'main']), url.searchParams.get('isolate')), v.parse(v.string(), url.searchParams.get('marker')), Number(url.searchParams.get('bytes')));
     else return new Response(await driver.setUp(workspace, url.searchParams.get('compat') === '1'));
 
     return new Response(null, { status: 204 });
