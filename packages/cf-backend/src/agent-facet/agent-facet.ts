@@ -21,7 +21,7 @@ import { FacetChat } from './agent-chat';
 import { workspaceClient, type AgentWorkspaceCalls } from './workspace-rpc';
 import type {
   AgentAnswer, AgentAnswerTexts, AgentStanding, AgentSteps, AgentRecovery, AgentSnapshot, ConversationProjection, ConversationTurnPair, EnqueueTurnResult, ProgrammaticTurn, SendLanding, TurnRequestAt,
-  DynamicContext, JsonObject, PlanDecisionOutcome, ResolvedTurnProfile, PlanReview, PlanReviewDecision, PlanReviewResult, ReviewAnnotation, AskedQuestions, OwnerAnswer,
+  DynamicContext, JsonObject, ResolvedTurnProfile, PlanReview, PlanReviewResult, ReviewAnnotation, AskedQuestions,
   Page, PageRequest, RunEvent, RunEventQuery, RunListEntry, RunSummary, StoredRunEvent,
   ForkConversationPlan, ForkConversationSection, ForkRowSection, ForkRows,
 } from '@kinu.run/core';
@@ -73,19 +73,10 @@ class AgentContextTree extends RpcTarget implements ContextTreeRemote {
   writeFileIfRevision(path: string, data: Uint8Array, expected: VfsRevision) { return this.served.writeFileIfRevision(path, data, expected); }
 }
 
-/** The owner's decision on one revision of an agent's plan. */
-export interface PlanVerdict {
-  readonly id: string;
-  readonly revision: number;
-  readonly decision: PlanReviewDecision;
-  readonly feedback?: string;
-}
-
 export interface AgentFacetCalls {
   /** Resolves once its chat holds the delivery in its own store, with the report its admission makes. */
   admit(snapshot: AgentSnapshot, delivery: Delivery): Promise<AdmittedDelivery>;
   landing(snapshot: AgentSnapshot, id: string): Promise<SendLanding>;
-  retry(snapshot: AgentSnapshot, claim: (turnId: string) => void): Promise<SendLanding>;
   sendState(snapshot: AgentSnapshot, id: string): Promise<SendState>;
   awaitSend(snapshot: AgentSnapshot, id: string): Promise<SendState>;
   /** `cutoff`: the newest workspace delivery the Stop cancelled; none at or below it is taken after. */
@@ -172,12 +163,8 @@ export interface AgentFacetCalls {
   planReviews(snapshot: AgentSnapshot): Promise<readonly PlanReview[]>;
   savePlanReviewAnnotations(snapshot: AgentSnapshot, id: string, revision: number, annotations: ReviewAnnotation[]): Promise<PlanReviewResult>;
   dismissPlanReview(snapshot: AgentSnapshot, id: string, revision: number): Promise<PlanReviewResult>;
-  /** The feedback or approval turn is queued in its own chat. */
-  decidePlanReview(snapshot: AgentSnapshot, verdict: PlanVerdict): Promise<PlanDecisionOutcome>;
   /** Its questions to its owner, in its own store: asked on the owner's turns, answered from the workspace's stack. */
   ownerQuestions(snapshot: AgentSnapshot): Promise<readonly AskedQuestions[]>;
-  /** The answer becomes the asking call's result, and the turn that continues from it is queued in its own chat. */
-  answerOwnerQuestions(snapshot: AgentSnapshot, id: string, answers: readonly OwnerAnswer[]): Promise<void>;
   dismissOwnerQuestions(snapshot: AgentSnapshot, id: string): Promise<number>;
 }
 
@@ -312,10 +299,6 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return await settle(this.withChat(snapshot, (chat) => chat.session.awaitLanding(id)));
   }
 
-  async retry(snapshot: AgentSnapshot, claim: (turnId: string) => void): Promise<SendLanding> {
-    return await settle(this.withChat(snapshot, (chat) => chat.session.retry(claim)));
-  }
-
   async sendState(snapshot: AgentSnapshot, id: string): Promise<SendState> {
     return await settle(this.withChat(snapshot, (chat) => chat.session.sendState(id)));
   }
@@ -361,10 +344,6 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return await settle(this.withChat(snapshot, (chat) => chat.planned((plans) => plans.dismiss(id, revision, (prefix) => { chat.session.stopIfRunning(prefix); }))));
   }
 
-  async decidePlanReview(snapshot: AgentSnapshot, verdict: PlanVerdict): Promise<PlanDecisionOutcome> {
-    return await settle(this.withChat(snapshot, (chat) => chat.planned((plans) => plans.decideAndHandOff(verdict, (turn) => chat.session.enqueueTurn(turn)))));
-  }
-
   /** The profile a run froze as it first assembled: a workspace that restarted mid-turn rebuilds its tools on it. */
   async frozenProfile(snapshot: AgentSnapshot, runId: string): Promise<ResolvedTurnProfile | null> {
     return this.open(snapshot).frozenProfile(runId);
@@ -372,10 +351,6 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async ownerQuestions(snapshot: AgentSnapshot): Promise<readonly AskedQuestions[]> {
     return await settle(this.withChat(snapshot, (chat) => chat.questions.recent()));
-  }
-
-  async answerOwnerQuestions(snapshot: AgentSnapshot, id: string, answers: readonly OwnerAnswer[]): Promise<void> {
-    return await settle(Effect.flatMap(this.withChat(snapshot, (chat) => chat), (chat) => chat.session.answerQuestions(id, answers)));
   }
 
   async dismissOwnerQuestions(snapshot: AgentSnapshot, id: string): Promise<number> {

@@ -137,6 +137,8 @@ export function initPendingSendTables(execRaw: RawSqlExec): void {
     producer      TEXT NOT NULL CHECK (producer IN ('workspace','self')),
     taken_through INTEGER NOT NULL DEFAULT 0,
     cutoff        INTEGER NOT NULL DEFAULT 0,
+    applied_seq   INTEGER,
+    applied_json  TEXT,
     PRIMARY KEY (actor_id, producer)
   )`);
   // A programmatic turn its producer heard queued, held until its turn settles: `id` is its idempotency key.
@@ -258,10 +260,22 @@ export class PendingSendStore {
     return seq <= marks.taken_through ? 'duplicate' : 'new';
   }
 
-  /** The delivery `seq` is held in this store now. */
-  took(producer: InputProducer, seq: number): void {
-    void this.sql`INSERT INTO input_marks (actor_id, producer, taken_through) VALUES (${this.actorId}, ${producer}, ${seq})
-      ON CONFLICT (actor_id, producer) DO UPDATE SET taken_through = MAX(taken_through, excluded.taken_through)`;
+  /**
+   * The delivery `seq` is held in this store now, or, an owner's intent, applied, with what it did (`applied`, as JSON).
+   * Only the newest is kept: its producer crosses in order and stops at a crossing that fails, so the one it may cross
+   * again, its answer lost, is the newest taken; one taken after it was answered first.
+   */
+  took(producer: InputProducer, seq: number, applied: string | null = null): void {
+    void this.sql`INSERT INTO input_marks (actor_id, producer, taken_through, applied_seq, applied_json)
+      VALUES (${this.actorId}, ${producer}, ${seq}, ${applied === null ? null : seq}, ${applied})
+      ON CONFLICT (actor_id, producer) DO UPDATE SET taken_through = MAX(taken_through, excluded.taken_through),
+        applied_seq = excluded.applied_seq, applied_json = excluded.applied_json`;
+  }
+
+  /** What the intent `seq` did, as {@link took} kept it: null for any other delivery. */
+  applied(producer: InputProducer, seq: number): string | null {
+    return this.sql<{ applied_json: string | null }>`
+      SELECT applied_json FROM input_marks WHERE actor_id = ${this.actorId} AND producer = ${producer} AND applied_seq = ${seq}`[0]?.applied_json ?? null;
   }
 
   /** A Stop's cutoff: nothing its producer committed at or below `seq` is taken after. */

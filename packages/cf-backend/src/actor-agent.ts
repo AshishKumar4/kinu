@@ -16,7 +16,7 @@ import {
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle,
   resetGuardedExec, StoragePredatesResetError, ERROR_STATUS, LiveWorkers,
   type RunEventInput, type SubordinateInspectionAuthority, type ConversationRecall,
-  isSubordinateOrigin, WORKSPACE_ROOT, PLATFORM_CATALOG, ProgramsInFlight,
+  isSubordinateOrigin, WORKSPACE_ROOT, PLATFORM_CATALOG, ProgramsInFlight, type OwedIntent, type OwedOwnerIntent,
 } from '@kinu.run/core';
 import type { EnqueueTurnResult, ProgrammaticTurn, SendState, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
@@ -325,7 +325,8 @@ function compactionLogDetail(message: string, detail: CompactionDetail): string 
  *  agent's id. */
 export interface HostedOwnerQuestions {
   list(): Promise<AskingAgent[]>;
-  answer(actorId: string, id: string, answers: readonly OwnerAnswer[]): Promise<void>;
+  /** Owed when the crossing did not reach the agent: its wake delivers the answers. */
+  answer(actorId: string, id: string, answers: readonly OwnerAnswer[]): Promise<OwedIntent | null>;
   dismiss(actorId: string, id: string): Promise<number>;
 }
 
@@ -333,7 +334,8 @@ export interface HostedPlanReviews {
   active(): Promise<PlanReview | null>;
   saveAnnotations(id: string, revision: number, annotations: ReviewAnnotation[]): Promise<PlanReviewResult>;
   dismiss(id: string, revision: number): Promise<PlanReviewResult>;
-  decide(id: string, revision: number, decision: PlanReviewDecision, feedback?: string): Promise<PlanDecisionOutcome>;
+  /** Owed when the crossing did not reach the agent: its wake delivers the decision. */
+  decide(id: string, revision: number, decision: PlanReviewDecision, feedback?: string): Promise<PlanDecisionOutcome | OwedIntent>;
 }
 
 /**
@@ -713,7 +715,7 @@ export abstract class ActorAgent extends Agent<Env> {
     revision: number,
     decision: PlanReviewDecision,
     feedback?: string,
-  ): Promise<PlanDecisionOutcome> {
+  ): Promise<PlanDecisionOutcome | OwedIntent> {
     return await settle(Effect.flatMap(this.windowPlans(), (plans) => Effect.promise(async () => await plans.decide(id, revision, decision, feedback))));
   }
 
@@ -727,7 +729,7 @@ export abstract class ActorAgent extends Agent<Env> {
   /** The owner's answer: the asking call's result, and the turn that continues from it, in the agent that asked
    *  (`actor`; null for the workspace agent). */
   @callable()
-  async answerOwnerQuestions(id: string, answers: JsonValue, actor: JsonValue = null): Promise<void> {
+  async answerOwnerQuestions(id: string, answers: JsonValue, actor: JsonValue = null): Promise<OwedIntent | null> {
     const parsed = v.safeParse(v.tuple([OwnerAnswersSchema, v.nullable(v.string())]), [answers, actor]);
 
     return settle(Effect.suspend(() => {
@@ -735,7 +737,18 @@ export abstract class ActorAgent extends Agent<Env> {
       const [answered, asker] = parsed.output;
 
       return attemptInItsWords('unavailable', () => this.hostedQuestions().answer(asker ?? this.actorHandle().actorId, id, answered));
-    }).pipe(Effect.andThen(Effect.sync(() => { this.overviewChanged(); }))));
+    }).pipe(Effect.tap(() => Effect.sync(() => { this.overviewChanged(); }))));
+  }
+
+  /** The owner's decisions, answers and Retries on their way to an agent whose crossing did not reach it: each shown
+   *  where it was made until the agent's wake delivers it. `actor` is null for the workspace's own agent. */
+  @callable()
+  async listOwedIntents(): Promise<readonly OwedOwnerIntent[]> {
+    return this.owedIntents();
+  }
+
+  protected owedIntents(): readonly OwedOwnerIntent[] {
+    return [];
   }
 
   /** Closed unanswered; the agent reads that at its next turn, and what waited behind the questions runs. */

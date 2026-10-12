@@ -36,7 +36,7 @@ import {
   type SqlExec, type TeamToolDeps, type WorkspaceActor, type WriteObserver,
   isSubordinateOrigin,
   whenActorTakesInput,
-  type PlanReview, actorReadHandle, ownerLaneDeclarations,
+  type PlanReview, actorReadHandle, ownerLaneDeclarations, type IntentResult, type OwedIntent, type OwedOwnerIntent,
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
 import { agentFacet, agentStateShellId, AgentMemory, AgentStoreBroker, AgentWorkspaceHost, headDeltas, jsonLines, uiChunks, type AgentFacetPlacement } from "./agent-facets";
@@ -2587,6 +2587,38 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     },
   });
 
+  /**
+   * An owner's intent (D6): committed with the agent's wake, crossed as any input is, and answered with what the agent did
+   * with it, as a direct call was. A crossing that does not reach the agent leaves it owed, answered `owed`: the agent's
+   * wake delivers it once, and the owner's views show it on its way (`listOwedIntents`) until then. One the agent applied
+   * whose answer was lost is answered again with what it did. A refusal is the agent's own, told as it said it.
+   */
+  private async ownerIntent(actorId: string, delivery: Delivery): Promise<IntentResult | OwedIntent> {
+    const crossed = await this.coordinator.deliverNew(actorId, delivery);
+    const answer = Promise.withResolvers<IntentResult | OwedIntent>();
+
+    // The same intent from another view, already on its way: that view hears its answer.
+    if (crossed === null) answer.reject(new KinuError('denied', 'This is already on its way to the agent.'));
+    else if ('failure' in crossed) {
+      if (this.deliveries.unpaid(actorId).some((owed) => owed.id === delivery.id)) answer.resolve({ owed: delivery.id });
+      else answer.reject(crossed.failure);
+    } else if (typeof crossed.admitted === 'object') {
+      answer.resolve(crossed.admitted.applied);
+    } else {
+      // An intent the agent applied is answered with what it did, its repeats too; the rest is a Stop's cutoff.
+      answer.reject(new KinuError('cancelled', 'A Stop came first: the agent did not take it.'));
+    }
+
+    return await answer.promise;
+  }
+
+  /** The owner's intents on their way, each as its view shows it: the workspace's own agent's under no agent id. */
+  protected override owedIntents(): readonly OwedOwnerIntent[] {
+    const main = this.actorHandle().actorId;
+
+    return this.deliveries.ownerIntents().map(({ actorId, ...intent }) => ({ ...intent, actor: actorId === main ? null : actorId }));
+  }
+
   /** One delivery for the agent, committed with `source`, the producer's own fact, then crossed; see {@link coordinator}. */
   protected async deliver(actorId: string, delivery: Delivery, source?: () => void): Promise<CrossedDelivery> {
     return await this.coordinator.deliver(actorId, delivery, source);
@@ -2809,7 +2841,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       history: (limit) => this.agentStores(actorId).history(limit),
       admitted: (id) => this.agentStores(actorId).admitted(id),
       send: async (input) => await this.deliverWords(actorId, { id: input.id, input: { kind: 'words', text: input.text, files: [...input.files], mode: input.mode }, authorship: 'owner' }, true) ?? 'mid-turn',
-      retry: (claim) => whenActorTakesInput(this.boundSql, actorId, async () => await (await facet()).retry(snapshot(), claim)),
+      retry: (messageId) => whenActorTakesInput(this.boundSql, actorId, async () => {
+        const done = await this.ownerIntent(actorId, { id: `retry:${messageId}`, input: { kind: 'retry', messageId }, authorship: 'owner' });
+
+        // Applied, the turn it reopened tells its own end.
+        return 'owed' in done || done.kind !== 'retry' ? { owed: 'owed' in done ? done.owed : messageId } : { turnId: done.turnId };
+      }),
       interrupt: () => {
         this.detachOwned(Effect.promise(() => this.stopAgent(actorId)));
         this.stopSubtree(actorId);
@@ -2831,7 +2868,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       active: async () => await (await facet()).activePlanReview(snapshot()),
       saveAnnotations: async (id, revision, annotations) => await (await facet()).savePlanReviewAnnotations(snapshot(), id, revision, annotations),
       dismiss: async (id, revision) => await (await facet()).dismissPlanReview(snapshot(), id, revision),
-      decide: async (id, revision, decision, feedback) => await (await facet()).decidePlanReview(snapshot(), { id, revision, decision, ...(feedback !== undefined && { feedback }) }),
+      decide: async (id, revision, decision, feedback) => {
+        const done = await this.ownerIntent(actorId, {
+          id: `decision:${id}:${String(revision)}`, input: { kind: 'decision', plan: id, revision, decision, ...(feedback !== undefined && { feedback }) }, authorship: 'owner',
+        });
+
+        return 'owed' in done || done.kind !== 'decision' ? { owed: 'owed' in done ? done.owed : id } : done.outcome;
+      },
     };
   }
 
@@ -2896,10 +2939,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         return asked.flat();
       },
       answer: async (actorId, id, answers) => {
-        const calls = await this.agentCalls(actorId);
+        const done = await this.ownerIntent(actorId, { id: `answers:${id}`, input: { kind: 'answers', questions: id, answers: [...answers] }, authorship: 'owner' });
 
-        await this.preArmed(actorId, async () => { await calls.answerOwnerQuestions(this.agentSnapshot(actorId), id, answers); });
         this.hostedQuestionsMoved();
+
+        return 'owed' in done ? done : null;
       },
       // A dismissal may leave a sibling's answer owed a turn, so it is handed in as an answer is.
       dismiss: async (actorId, id) => {

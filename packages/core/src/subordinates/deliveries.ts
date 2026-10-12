@@ -20,6 +20,9 @@ import { KinuError, settleSync, type ErrorCode } from '../obs/index';
 import { TierIdSchema } from '../types/profile';
 import { WorkModeSchema, type WorkMode } from '../types/turn';
 import type { TurnAuthorship } from '../orchestrator/turn-authorship';
+import { OwnerAnswersSchema } from '../plans/owner-questions';
+import type { PlanDecisionOutcome } from '../types/plans';
+import { PlanDecisionOutcomeSchema } from '../plans/review';
 
 /** What a delivery asks of its agent. */
 const DeliveryInputSchema = v.variant('kind', [
@@ -39,11 +42,60 @@ const DeliveryInputSchema = v.variant('kind', [
   v.object({
     kind: v.literal('run'), task: v.object({ sequenceId: v.string(), body: v.string(), mode: WorkModeSchema }),
   }),
+  /** The owner's intents (D6), each crossed as any input is and answered with what it did: their decision on a plan the
+   *  agent submitted, at the revision they read; */
+  v.object({
+    kind: v.literal('decision'), plan: v.string(), revision: v.number(), decision: v.picklist(['request_changes', 'approve']),
+    feedback: v.optional(v.string()),
+  }),
+  /** their answers to the questions the agent asked in its call `questions`; */
+  v.object({ kind: v.literal('answers'), questions: v.string(), answers: OwnerAnswersSchema }),
+  /** their Retry of the agent's newest turn, whose newest message must still be the one they saw, `messageId`. */
+  v.object({ kind: v.literal('retry'), messageId: v.string() }),
 ]);
 
 export type DeliveryInput = v.InferOutput<typeof DeliveryInputSchema>;
 
 export type TurnDeliveryInput = Extract<DeliveryInput, { readonly kind: 'turn' }>;
+
+/** An owner's intent, which the agent applies as it takes it. */
+export type IntentInput = Extract<DeliveryInput, { readonly kind: 'decision' | 'answers' | 'retry' }>;
+
+/** What an owner's intent did, as its agent applied it: a decision's outcome as a direct decision answered it; a Retry's
+ *  turn, reopened, which tells its own end. */
+export type IntentResult = { readonly kind: 'decision'; readonly outcome: PlanDecisionOutcome } | { readonly kind: 'answers' }
+  | { readonly kind: 'retry'; readonly turnId: string };
+
+/** What the agent kept of an intent it applied, read back from its own store. */
+export const IntentResultSchema: v.GenericSchema<unknown, IntentResult> = v.variant('kind', [
+  v.object({ kind: v.literal('decision'), outcome: PlanDecisionOutcomeSchema }),
+  v.object({ kind: v.literal('answers') }),
+  v.object({ kind: v.literal('retry'), turnId: v.string() }),
+]);
+
+/** An owner's intent on its way: the agent it is owed to, and what it is about (a plan, a call's questions, a turn). */
+export interface OwnerIntent {
+  readonly actorId: string;
+  readonly id: string;
+  readonly kind: IntentInput['kind'];
+  readonly target: string;
+}
+
+/** An owner's intent on its way as their views show it: under its agent's id, null for the workspace's own agent. */
+export interface OwedOwnerIntent extends Omit<OwnerIntent, 'actorId'> {
+  readonly actor: string | null;
+}
+
+export const OwedOwnerIntentSchema = v.object({
+  id: v.string(), kind: v.picklist(['decision', 'answers', 'retry']), target: v.string(), actor: v.nullable(v.string()),
+});
+
+/** An owner's intent whose crossing did not reach the agent: committed, owed to the agent's next wake, which delivers it. */
+export interface OwedIntent {
+  readonly owed: string;
+}
+
+export const OwedIntentSchema = v.object({ owed: v.string() });
 
 const AuthorshipSchema = v.picklist(['owner', 'hirer']);
 
@@ -79,9 +131,9 @@ export function deliveredSignal(id: string, input: TurnDeliveryInput): AgentSign
   };
 }
 
-/** What a delivery's turn was admitted under: none for a run, which opens no turn of the chat. */
+/** What a delivery's turn was admitted under: none for a run or an owner's intent, which open no turn of the chat. */
 export function deliveryMetadata(delivery: Delivery): JsonObject | undefined {
-  return delivery.input.kind === 'run' ? undefined : delivery.input.metadata;
+  return 'metadata' in delivery.input ? delivery.input.metadata : undefined;
 }
 
 /** A person's message id, as every chat holds them. */
@@ -99,9 +151,11 @@ export function wordsRefusal(delivery: Delivery): KinuError | null {
 }
 
 /** What the agent answered: the input is in its own store now, or already was; or, an offer that yields to its owner's
- *  words, it met words that came first and is consumed unrun; or it refused it, as it is, with what it said. A refusal is
- *  an answer: the delivery is retired and its sender told. Only a crossing that does not reach the agent leaves it owed. */
-export type DeliveryAnswer = 'taken' | 'duplicate' | 'yielded' | 'cancelled' | { readonly refused: { readonly code: ErrorCode; readonly message: string } };
+ *  words, it met words that came first and is consumed unrun; or, an owner's intent, it applied it, with what it did; or
+ *  it refused it, as it is, with what it said. A refusal is an answer: the delivery is retired and its sender told. Only a
+ *  crossing that does not reach the agent leaves it owed. */
+export type DeliveryAnswer = 'taken' | 'duplicate' | 'yielded' | 'cancelled' | { readonly applied: IntentResult }
+  | { readonly refused: { readonly code: ErrorCode; readonly message: string } };
 
 export function initAgentDeliveriesTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS agent_deliveries (
@@ -140,6 +194,24 @@ export class AgentDeliveries {
   /** Whether any delivery for the agent is unpaid: its wake stands while one is. */
   owes(actorId: string): boolean {
     return this.sql<{ seq: number }>`SELECT seq FROM agent_deliveries WHERE actor_id = ${actorId} LIMIT 1`.length > 0;
+  }
+
+  /** The owner's intents still owed, oldest first: what the owner's views show on their way. */
+  ownerIntents(): OwnerIntent[] {
+    return this.sql<{ actor_id: string; id: string; input_json: string }>`
+      SELECT actor_id, id, input_json FROM agent_deliveries WHERE authorship = 'owner' ORDER BY seq ASC`
+      .flatMap((row): OwnerIntent[] => {
+        const input = v.parse(DeliveryInputSchema, JSON.parse(row.input_json));
+
+        switch (input.kind) {
+          case 'decision': return [{ actorId: row.actor_id, id: row.id, kind: input.kind, target: input.plan }];
+          case 'answers': return [{ actorId: row.actor_id, id: row.id, kind: input.kind, target: input.questions }];
+          case 'retry': return [{ actorId: row.actor_id, id: row.id, kind: input.kind, target: input.messageId }];
+          case 'words':
+          case 'turn':
+          case 'run': return [];
+        }
+      });
   }
 
   /** Every agent owed a delivery, for the sweep that crosses them again. */
