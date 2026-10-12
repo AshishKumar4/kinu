@@ -312,6 +312,13 @@ describe('an approval in a hosted named session', () => {
     return { again: await gated.exec(asked, { name: 'dev' }), workspace };
   }
 
+  test('runs on the session it was asked on: a read of the state leaves the state as it was', async () => {
+    const { again, workspace } = await approveAcrossAChange('export TARGET=a', `${FORCE_PUSH}; rm -r "$TARGET"`, 'true');
+
+    expect(again.exitCode).toBe(0);
+    expect(await workspace.fs.exists('/home/main/a')).toBe(false);
+  });
+
   test('covers the variables the session exports, read inside it: one changed after the ask is another ask', async () => {
     const { again, workspace } = await approveAcrossAChange('export TARGET=a', `${FORCE_PUSH}; rm -r "$TARGET"`, 'export TARGET=b');
 
