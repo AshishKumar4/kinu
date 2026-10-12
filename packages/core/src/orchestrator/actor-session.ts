@@ -28,6 +28,7 @@ import type { ContextEventRecorder } from '../types/context-plane';
 import type { ContextEntry, ContextSelection } from '../session/context';
 import { projectJsonValue, type JsonObject } from '../utils/json';
 import { recoveryBackoffMs } from '../utils/recovery-backoff';
+import { ASKED, type Holds } from '../utils/held-reads';
 import type { Usage } from '../usage';
 import type { ScaffoldBridgeOpts } from './scaffold-host';
 import type { ModelCallSpend } from '../events/model-call';
@@ -98,6 +99,8 @@ export interface ActorSessionOptions {
   readonly reviewed?: boolean;
   /** The completion gate has asked and not heard back, when the host keeps one: only the CLI's one-shot surface arms it. */
   readonly gateOpen?: () => boolean;
+  /** A Durable Object's held reads; absent, every read asks. */
+  readonly holds?: Holds;
   readonly turns?: () => TurnTracing;
 }
 
@@ -234,12 +237,16 @@ export class ActorSession {
     this.runtime = options.runtime;
     this.canonical = options.history;
     this.questions = new OwnerQuestionStore(options.runtime.storage.sql, options.runtime.actor);
+    // SessionRequests' record, an admission's and a consumed step's, is every actor_requests write, over the actor's `sql`.
+    this.lastStep = (options.holds ?? ASKED).hold(['actor_requests'], () => this.canonical.requests.lastStep());
 
     this.orchestrator = new AgentOrchestrator(options.orchestration, {
       onDrain: (steers, atStep) => this.landSteers(steers, atStep),
       turnId: () => this.active?.lease.turnId ?? null,
     });
   }
+
+  private readonly lastStep: () => ReturnType<SessionHistory['requests']['lastStep']>;
 
   /** Once, at session build; `landed` is recorded after `onDrain` returns, so a failed write leaves no unseen row. */
   bindSteerPersistence(deps: {
@@ -298,12 +305,12 @@ export class ActorSession {
   get turnOpen(): boolean { return this.active !== null; }
 
   lastRequestAt(): number | null {
-    return this.canonical.requests.lastStep()?.recordedAt ?? null;
+    return this.lastStep()?.recordedAt ?? null;
   }
 
   /** Whether the next request finds the prompt cache cold: the one reading the turn's dynamic context and a live trial's segment both use. */
   promptCacheCold(keptAliveUntil: number | null): boolean {
-    const last = this.canonical.requests.lastStep();
+    const last = this.lastStep();
 
     return !promptCacheWarm(last === null ? null : cachedRequestOf(last), Date.now(), keptAliveUntil);
   }

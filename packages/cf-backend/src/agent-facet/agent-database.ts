@@ -278,6 +278,7 @@ export class AgentDatabase {
     };
 
     return createActorHost({
+      holds: this.held,
       storage: {
         sql: this.sql,
         transactionSync: (write) => storage.transactionSync(write),

@@ -38,6 +38,7 @@ import type { SendLanding, SettledSignals } from '../types/signals';
 import type { WorkMode } from '../types/turn';
 import type { JsonObject } from '../utils/json';
 import { nanoid } from '../utils/nanoid';
+import { ASKED, type Holds } from '../utils/held-reads';
 import type { Usage } from '../usage';
 import { announcementOf, authoredTurnMetadata, PROGRAMMATIC_MESSAGE_ID_PREFIX } from '../utils/ui-message';
 import { CLEAR_NEEDS_IDLE, COMPACT_NEEDS_IDLE, REVERT_NEEDS_IDLE } from './actor-session';
@@ -294,6 +295,8 @@ export interface ChatSessionOptions {
   readonly ports: ChatSessionPorts;
   /** The key every durable row of the answer is written under. */
   readonly mintAnswerId: () => string;
+  /** A Durable Object's held reads; absent, every read asks. */
+  readonly holds?: Holds;
 }
 
 export interface SendOptions {
@@ -389,6 +392,8 @@ export class ChatSession {
     this.transport = options.transport;
     this.ports = options.ports;
     this.mintAnswerId = options.mintAnswerId;
+    // Every conversation_entries write is the transcript's record or truncate, or a fork's reset, over the actor's `sql`.
+    this.onDisk = (options.holds ?? ASKED).holdEach(['conversation_entries'], (id: string) => this.transcript.has(id));
 
     // Every acknowledged send is a pending_steers row first. Bound here because the hosted actor's session
     // is built without a view of this workspace's queue.
@@ -631,8 +636,10 @@ export class ChatSession {
   }
 
   announcementOnDisk(identity: string): boolean {
-    return this.transcript.has(`${PROGRAMMATIC_MESSAGE_ID_PREFIX}${identity}`);
+    return this.onDisk(`${PROGRAMMATIC_MESSAGE_ID_PREFIX}${identity}`);
   }
+
+  private readonly onDisk: (entryId: string) => boolean;
 
   /** Settling has no next step. A queued, unopened user turn or genesis offer counts: a message behind it rides its
    *  first step, so an offer is consumed only by a message that arrived before it. */

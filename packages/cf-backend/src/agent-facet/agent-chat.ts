@@ -97,6 +97,7 @@ export class FacetChat {
       sessionId: CHAT_SESSION_ID,
       transcript: actor.stores.history.transcript(CHAT_SESSION_ID),
       pendingSends: new PendingSendStore(sql, actor.handle.actorId),
+      holds: deps.database.held,
       eventLog: new EventLog(deps.database.exec, actor.handle),
       eventRecorder: actor.stores.eventRecorder,
       compactionState: this.trigger.state,

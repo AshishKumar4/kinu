@@ -7,6 +7,7 @@ import { markStoreChanged } from '@kinu.run/agent-utils';
 
 import { KinuError } from '../obs/error';
 import { configReplaced } from '../config/store';
+import type { Holds } from '../utils/held-reads';
 import type { SqlExec, SqlExecutor, Storage } from '../types/primitives';
 import type { AgentRuntime } from '../types/agent-runtime';
 import { ActorSession } from '../orchestrator/actor-session';
@@ -76,6 +77,8 @@ export interface ActorHostDeps {
   readonly workspace?: string;
   /** Whether a hosted turn already gave its hirer the report that answers its assignment. */
   readonly answered?: (turn: ReportedTurn) => boolean;
+  /** A Durable Object's held reads, which its sessions read through; absent, every read asks. */
+  readonly holds?: Holds;
   runtimeFor(bound: BoundActor, seat: ActorSeat): AgentRuntime | Promise<AgentRuntime>;
   filesFor(bound: Pick<BoundActor, 'reference' | 'record' | 'handle'>): Promise<SessionFilePlane>;
   /** Program bytes may live on a state plane distinct from session payloads and tools. */
@@ -264,6 +267,7 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
         runtime, orchestration, claims: bound.stores.claims, installedBuild: deps.installedBuild,
         ...(deps.workspace !== undefined && { workspace: deps.workspace }),
         ...(deps.answered !== undefined && { answered: deps.answered }),
+        ...(deps.holds !== undefined && { holds: deps.holds }),
         turns: tracing && (() => tracing().turns(actor)),
         history: bound.stores.history,
         events: deps.contextEvents(bound),
