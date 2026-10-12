@@ -1681,7 +1681,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       effects: effectStatuses(await target.parityRows()),
       busy: (await target.settleState()).busy,
       logoCalls: calls.filter(drawsLogoCall).length,
-      turnCalls: calls.filter((call) => !drawsLogoCall(call)).length,
+      turnCalls: calls.filter((call) => call.stream).length,
       calls,
       answers: (await target.chatHistoryPage()).items.filter((message) => message.role === 'assistant').length,
       runEnds: await target.runEnds(),
