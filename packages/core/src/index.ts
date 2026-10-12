@@ -133,7 +133,7 @@ export {
   type ConversationTurnPair, type TurnPairReader,
 } from './identity/conversation-store';
 
-export { CHAT_SESSION_ID } from './session/transcript-schema';
+export { CHAT_SESSION_ID, TRANSCRIPT_WINDOW } from './session/transcript-schema';
 
 export {
   forkWorkspace, type ForkTransport, type ForkDriverDeps, type ForkOutcome,

@@ -17,11 +17,10 @@ import type { UIMessage, UIMessageChunk } from 'ai';
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import {
-  isWorkMode, INTERRUPTED_TURN, JsonObjectSchema, JsonValueSchema, UIMessageSchema,
+  isWorkMode, INTERRUPTED_TURN, JsonObjectSchema, JsonValueSchema, TRANSCRIPT_WINDOW, UIMessageSchema,
   type ChatTransport, type JsonObject, type OwedIntent, type PromptFile, type SendLanding, type SendState, type SessionEvent, type TurnReplies, type WorkMode,
 } from '@kinu.run/core';
 import { attempt, attemptInItsWords, diagnostics, KinuError, refusalOf, settle, toKinuError } from '@kinu.run/core/obs';
-import { TRANSCRIPT_WINDOW } from './transcript-window';
 
 export type ChatSocket = Pick<Connection, 'id' | 'send' | 'readyState' | 'close'>;
 
