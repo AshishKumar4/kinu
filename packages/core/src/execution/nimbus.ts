@@ -717,7 +717,11 @@ export function nimbusSessionShell(box: NimbusSandboxHandle, place: { readonly h
     },
   };
 
-  if (shellCwd !== undefined) shell.cwd = shellCwd;
+  if (shellCwd !== undefined) {
+    shell.cwd = shellCwd;
+    // A session keeps its environment out of reach; what it reports, its directory, is what an approval binds.
+    shell.state = async (name) => sha256Hex(`cwd ${await shellCwd(name) ?? ''}`);
+  }
 
   return shell;
 }

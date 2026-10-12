@@ -3,7 +3,7 @@ import { exists as nimbusExists, type Awaitable, type VFS } from '@nimbus-sh/cor
  *  and where the agent's tools reach a file. */
 
 import { literalWords, onUserRoots, type FileAccess, type GatedExecutor } from '../safety/command-review';
-import { approveFileAccess, gateExec, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
+import { approveFileAccess, gateExec, shellMoved, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
 import { shellCall } from './command-call';
 import { asBytes, currentBytes } from '../safety/bound-write';
 import { answeredRefusal } from './exec-result';
@@ -31,9 +31,21 @@ export function withApprovalGatedShell(
 
   // 'workspace' only: gateProviderExec skips the workspace `exec` because it is gated here. The options were read once,
   // by `exec` below; the gate keys and runs those.
+  const notRun = (error: KinuError): ShellExecResult => ({ stdout: '', stderr: error.message, exitCode: 1, refusal: refusalOf(error) });
+
+  // A gated call in a named shell is asked with that shell's state, and runs only while the shell still restores it;
+  // the whole call is inside the shell's hold, so nothing of this agent moves it in between.
   const execute = (command: string, options: ShellExecOptions) => gateExec<ShellExecResult>(
-    () => ({ call: shellCall(command, options, { stdin: true }), run: () => shell.exec(command, options) }),
-    (error) => ({ stdout: '', stderr: error.message, exitCode: 1, refusal: refusalOf(error) }),
+    () => {
+      const { name } = options;
+      const state = name === undefined || shell.state === undefined ? undefined : () => shell.state?.(name) ?? Promise.resolve(null);
+
+      return {
+        call: { ...shellCall(command, options, { stdin: true }), ...(state !== undefined && { shellState: state }) },
+        run: async (pinned) => (pinned === undefined || await state?.() === pinned ? shell.exec(command, options) : notRun(shellMoved(name ?? '', 'changed'))),
+      };
+    },
+    notRun,
     { name: 'workspace', ...reach },
     { policy, refusalCode: (result) => result.refusal?.reason ?? null },
   )();

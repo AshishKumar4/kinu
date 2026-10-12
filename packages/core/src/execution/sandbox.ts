@@ -6,7 +6,8 @@ import { Effect } from 'effect';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus, PortExposureResult, PreviewRouteCheck, SandboxSize, SandboxSizes } from './types';
 import { commandTool, ExecutorPortSchema } from './types';
 import { shellCall } from './command-call';
-import { callJob, createShellSession, machineShellCall, reportsCwd, shellExecOptions, type MachineShells } from './shell-session';
+import { callJob, createShellSession, machineShellCall, machineShellCwd, reportsCwd, shellExecOptions, type MachineShells } from './shell-session';
+import { shellMoved } from '../safety/approval-gate';
 import type { OutputSink } from '../types/primitives';
 import { JOB_STAMP_ENV } from '../types/jobs';
 import { commandResult, commandResultAt, exposedPortText, type CommandResult } from './exec-result';
@@ -340,15 +341,26 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
         }
 
         const call = machineShellCall(command, exec, { home: WORKSPACE_BACKUP_DIR, scope: shells?.scope ?? '', stateDirectory: shells?.stateDirectory ?? '' });
-
         const reportCwd = reportsCwd({ context: args[1] });
+        const { name } = exec;
+
+        // What the named shell restores, read in the container; an approval binds it, and the run checks it again.
+        const state = name === undefined || shells === undefined ? undefined : async () => (await machineShellCwd({
+          exec: async (read) => {
+            const r = await touch(() => handle.exec(read, { cwd: WORKSPACE_BACKUP_DIR }));
+
+            return { stdout: r.stdout ?? r.output ?? '', stderr: r.stderr ?? '', exitCode: r.exitCode ?? 1 };
+          },
+        }, name, shells))?.state ?? null;
 
         // The container takes no stdin from a call.
-        return { call: shellCall(command, exec, { stdin: false }), run: async (): Promise<CommandResult> => {
+        return { call: { ...shellCall(command, exec, { stdin: false }), ...(state !== undefined && { shellState: state }) }, run: async (pinned): Promise<CommandResult> => {
           try {
             // No work deadline: see SandboxHandle.exec. The signal goes to the container; locally it only refuses to
             // dispatch. One call: the handle owns any re-call after a lost reply, under the call's one launch id.
-            return await names.hold(exec.name, callJob(exec), async () => {
+            return await names.hold(name, callJob(exec), async () => {
+              if (pinned !== undefined && await state?.() !== pinned) return refusalOf(shellMoved(name ?? '', 'changed'));
+
               const res = await touch(() => {
                 if (signal?.aborted) throw notDispatched();
                 // The signal is added only when given, so an adapter can tell "none" from "already fired".

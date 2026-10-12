@@ -76,7 +76,7 @@ trap __kinu_save EXIT
 eval "$1"`;
 
 /** The state file's name: hashed, so any name fits a filename. */
-function stateKey(place: MachineShellPlace, name: string): string {
+function stateKey(place: MachineShells, name: string): string {
   return sha256Hex(`${place.scope}\u0000${name}`);
 }
 
@@ -129,18 +129,26 @@ export function machineShellCall(command: string, call: Pick<ShellExecOptions, '
   };
 }
 
-/** A named shell's saved directory on the machine; null when it has none yet or it is unreadable. */
-async function machineShellCwd(raw: Shell, name: string, place: MachineShellPlace): Promise<string | null> {
-  const read = `f="\${2/#\\~/$HOME}/$1.bash"; if [[ -f "$f" ]]; then IFS= read -r line < "$f"; printf '%s' "\${line#\\# cwd:}"; fi`;
+/** A named shell's saved directory on the machine (null before its first call) and the digest of what it restores;
+ *  null when unreadable. */
+export async function machineShellCwd(
+  raw: Pick<Shell, 'exec'>, name: string, place: MachineShells,
+): Promise<{ readonly cwd: string | null; readonly state: string } | null> {
+  // The whole file is what the wrapper restores, so its digest is the state; `N`: no file yet.
+  const read = `f="\${2/#\\~/$HOME}/$1.bash"; if [[ -f "$f" ]]; then printf S; cat -- "$f"; else printf N; fi`;
   const result = await raw.exec(`bash -c ${shellQuote(read)} kinu ${shellQuote(stateKey(place, name))} ${shellQuote(place.stateDirectory)}`);
 
-  return result.refusal === undefined && result.exitCode === 0 && result.stdout.startsWith('/') ? result.stdout : null;
+  if (result.refusal !== undefined || result.exitCode !== 0 || !/^[SN]/.test(result.stdout)) return null;
+  const first = result.stdout.slice(1).split('\n', 1)[0] ?? '';
+
+  return { cwd: first.startsWith('# cwd:/') ? first.slice('# cwd:'.length) : null, state: sha256Hex(result.stdout) };
 }
 
 /** Every call of a machine whose own shell keeps nothing (a host's `sh -c`) through the wrapper. */
 export function createBashShell(raw: Shell, place: MachineShellPlace): Shell {
   return {
-    cwd: (name) => machineShellCwd(raw, name, place),
+    cwd: async (name) => (await machineShellCwd(raw, name, place))?.cwd ?? null,
+    state: async (name) => (await machineShellCwd(raw, name, place))?.state ?? null,
     async exec(command, stdinOrOptions) {
       // The wrapper owns the directory and the name; the machine runs it where it starts every command.
       const { cwd, name, ...rest } = shellExecOptions({ value: stdinOrOptions });

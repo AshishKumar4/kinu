@@ -30,6 +30,9 @@ export interface ExecutionContext {
   /** The language a program runs in, and whether its runtime may be installed first. */
   readonly language?: string;
   readonly install?: string;
+  /** What its named shell restores before it (directory and exported variables), as a digest: a call in that shell
+   *  after the shell moved is another ask. */
+  readonly shellState?: string;
 }
 
 export const ExecutionContextSchema = v.object({
@@ -40,13 +43,14 @@ export const ExecutionContextSchema = v.object({
   stdinSha256: v.optional(v.string()),
   language: v.optional(v.string()),
   install: v.optional(v.string()),
+  shellState: v.optional(v.string()),
 }) satisfies v.GenericSchema<ExecutionContext>;
 
 /** The context's identity: one canonical spelling, so equal contexts are equal keys whatever a value contains. */
 export function executionContextKey(context: ExecutionContext): string {
   const json: JsonObject = {};
 
-  for (const field of ['cwd', 'shell', 'stdinSha256', 'language', 'install'] as const) {
+  for (const field of ['cwd', 'shell', 'stdinSha256', 'language', 'install', 'shellState'] as const) {
     const value = context[field];
 
     if (value !== undefined) json[field] = value;
@@ -77,6 +81,8 @@ export function describeExecutionContext(context: ExecutionContext): string {
 
   if (context.install !== undefined) parts.push(`install ${JSON.stringify(context.install)}`);
 
+  if (context.shellState !== undefined) parts.push(`shell state sha256:${context.shellState.slice(0, 12)}`);
+
   return parts.join(' · ');
 }
 
@@ -94,12 +100,23 @@ export interface CommandCall {
   /** The named shell it runs in. */
   readonly shell?: string;
   /** Everything else the member honours that changes what runs. */
-  readonly context: Omit<ExecutionContext, 'cwd' | 'shell'>;
+  readonly context: Omit<ExecutionContext, 'cwd' | 'shell' | 'shellState'>;
+  /** Reads the digest of what `shell` restores before a call; null: unreadable. Read only for a call the owner may be
+   *  asked about, and handed to `run`, which runs only while the shell still restores exactly that. */
+  readonly shellState?: () => Promise<string | null>;
+}
+
+/** A call whose named shell no longer restores what it did when the call was asked (or cannot say): NOT RUN, so a
+ *  spent approval returns, and the owner is asked again about the shell as it is. */
+export function shellMoved(shell: string, how: 'changed' | 'could not be read'): KinuError {
+  return new KinuError('unavailable', how === 'changed'
+    ? `NOT RUN: shell ${JSON.stringify(shell)} changed (its directory or exported variables) since this was asked, so the approval does not cover it. Ask again.`
+    : `NOT RUN: the state of shell ${JSON.stringify(shell)} could not be read, so this cannot be approved. Ask again.`);
 }
 
 /** A member's reading of one call: what runs and how to run exactly that, or its own refusal before anything runs. */
 export type PreparedCall<R> =
-  | { readonly call: CommandCall; readonly run: () => Promise<R> }
+  | { readonly call: CommandCall; readonly run: (shellState?: string) => Promise<R> }
   | { readonly refused: R };
 
 export interface ShellApprovalRequest {
@@ -296,10 +313,17 @@ export function gateExec<R>(
       ...call.context, ...(cwd !== undefined && { cwd }), ...(call.shell !== undefined && { shell: call.shell }),
     };
 
-    const decision = await decideApproval({ command: call.text, executor: executor.name, context }, review, policy);
+    // A gated call's identity holds its named shell's state; one whose state cannot be read cannot be approved.
+    const shellState = review.decision === 'gate' ? await call.shellState?.() : undefined;
+
+    if (shellState === null) return denyResult(shellMoved(call.shell ?? '', 'could not be read'));
+
+    const decision = await decideApproval({
+      command: call.text, executor: executor.name, context: { ...context, ...(shellState !== undefined && { shellState }) },
+    }, review, policy);
 
     if (!decision.run) return denyResult(decision.error);
-    const result = await prepared.run();
+    const result = await prepared.run(shellState);
 
     if (decision.spent) {
       const code = refusalCode?.(result) ?? null;

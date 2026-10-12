@@ -3,8 +3,11 @@
  * keys that reading, and the member runs it. What the owner was shown is what reached the machine, and the same words
  * anywhere else (another directory, shell, machine) are another ask.
  */
-import { describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Effect } from 'effect';
 import { createTestActors, present } from '@kinu.run/test-utils';
 import {
@@ -12,6 +15,10 @@ import {
   nimbusSessionFiles, nimbusSessionShell, withApprovalGatedShell, WORKSPACE_ROOT,
   type NimbusSandboxHandle, type ShellApprovalOutcome, type ShellApprovalPolicy, type ShellApprovalRequest,
 } from '../src/index';
+import { createBashShell } from '../src/execution/shell-session';
+import { createSandboxExecutor, type SandboxHandle } from '../src/execution/sandbox';
+import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
+import { scratchMachine } from './helpers/scratch-machine';
 import { createDeviceTunnelExecutor, type DeviceTransport } from '../src/execution/device-tunnel-executor';
 import type { DeviceFleetEntry, DeviceStatus } from '../src/execution/device-status';
 import { DefaultExecutionRouter } from '../src/execution/router';
@@ -187,5 +194,163 @@ describe('a context is compared as structure, never as its words', () => {
 
     expect(results.map((result) => result.exitCode === 0)).toEqual([true, false, false]);
     expect(ran).toEqual([{ cwd: '/repo · shell release', name: undefined }]);
+  });
+});
+
+describe('a named shell is part of the ask as it was when asked', () => {
+  const homes: string[] = [];
+
+  afterEach(() => {
+    for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
+  });
+
+  /** A scratch machine home holding `doomed` both at its top and under `sub`. */
+  function scratchHome(): string {
+    const home = mkdtempSync(join(tmpdir(), 'kinu-gated-shell-'));
+    homes.push(home);
+
+    for (const dir of ['doomed', 'sub/doomed', 'a', 'b']) mkdirSync(join(home, dir), { recursive: true });
+
+    return home;
+  }
+
+  const SHELLS = { scope: 'agent:alpha', stateDirectory: '~/.kinu/shells' };
+
+  /** Nobody in front of the owner: every ask parks, and the agent asks again once it is approved. */
+  function unattended() {
+    const { policy, queue } = owner('deny');
+
+    return { policy: { ...policy, requestApproval: null }, queue };
+  }
+
+  /** Parks the ask, lets `between` run in the same named shell, approves the row, and asks again. */
+  async function approveAcrossAMove<R>(
+    queue: DeferredApprovalQueue, ask: () => Promise<R>, between: () => Promise<void>,
+  ): Promise<{ readonly asked: R; readonly again: R }> {
+    const asked = await ask();
+    const parked = queue.list();
+
+    expect(parked).toHaveLength(1);
+    await between();
+    await queue.decide(parked.map((row) => row.id), 'approved');
+
+    return { asked, again: await ask() };
+  }
+
+  test('the host shell: a variable the shell exports changed after the ask, so the approval does not run', async () => {
+    const home = scratchHome();
+    const { policy, queue } = unattended();
+    const bash = createBashShell(scratchMachine(home), { home, ...SHELLS });
+    const session = createShellSession({ home, userRoots: () => [], stored: async (name) => await bash.cwd?.(name) ?? null });
+    const shell = withApprovalGatedShell(bash, { filesOwner: 'agent', shellSession: session }, policy);
+
+    await shell.exec('export DOOMED=a', { name: 'dev' });
+
+    const { again } = await approveAcrossAMove(
+      queue, () => shell.exec('rm -r "$DOOMED"', { name: 'dev' }), async () => { await shell.exec('export DOOMED=b', { name: 'dev' }); },
+    );
+
+    expect(existsSync(join(home, 'b'))).toBe(true);
+    expect(existsSync(join(home, 'a'))).toBe(true);
+    expect(again.exitCode).not.toBe(0);
+  });
+
+  test('the sandbox: its shell moved after the ask, so the approval does not run where it now is', async () => {
+    const home = scratchHome();
+    const { policy, queue } = unattended();
+    const machine = scratchMachine(home);
+
+    const handle: SandboxHandle = {
+      exec: (command) => machine.exec(command),
+      readFile: async () => ({}),
+      writeFile: async () => {},
+      listFiles: async () => ({ files: [] }),
+      deleteFile: async () => {},
+      exposePort: async (port) => ({ url: `https://preview.example.com/${String(port)}`, port, route: { reached: true } }),
+      unexposePort: async () => {},
+      getExposedPorts: async () => [],
+      ...sandboxHandleLifecycle,
+    };
+
+    const router = new DefaultExecutionRouter(policy);
+    router.register(createSandboxExecutor(handle, { shells: SHELLS }));
+    const exec = present(router.getProvider('sandbox'), 'the sandbox').tools.exec;
+
+    await exec.execute('cd sub', { name: 'dev' });
+
+    const { again } = await approveAcrossAMove(
+      queue, () => exec.execute('rm -r doomed', { name: 'dev' }), async () => { await exec.execute('cd ..', { name: 'dev' }); },
+    );
+
+    expect(existsSync(join(home, 'doomed'))).toBe(true);
+    expect(existsSync(join(home, 'sub/doomed'))).toBe(true);
+    expect(JSON.stringify(again)).toContain('NOT RUN');
+  });
+
+  test('a device: its shell moved after the ask, so the approval does not run where it now is', async () => {
+    const home = scratchHome();
+    const { policy, queue } = unattended();
+    const machine = scratchMachine(home);
+    const STUDIO: DeviceFleetEntry = { id: 'dev-studio', name: 'studio', os: 'linux', hostname: 'studio', connected: true };
+    const status = (): DeviceStatus => ({ connected: true, registered: true, toolchain: null, devices: [STUDIO] });
+
+    const transport: DeviceTransport = {
+      status,
+      refreshStatus: async () => status(),
+      rpc: async (method, params): Promise<JsonValue> => {
+        if (method !== 'exec') return null;
+        const { stdout, stderr, exitCode } = await machine.exec(typeof params[0] === 'string' ? params[0] : '');
+
+        return { stdout, stderr, exitCode };
+      },
+    };
+
+    const router = new DefaultExecutionRouter(policy);
+    router.register(createDeviceTunnelExecutor(transport, undefined, SHELLS));
+    const exec = present(router.getProvider('device'), 'the device').tools.exec;
+
+    await exec.execute('cd sub', { name: 'dev' });
+
+    const { again } = await approveAcrossAMove(
+      queue, () => exec.execute('rm -r doomed', { name: 'dev' }), async () => { await exec.execute('cd ..', { name: 'dev' }); },
+    );
+
+    expect(existsSync(join(home, 'doomed'))).toBe(true);
+    expect(existsSync(join(home, 'sub/doomed'))).toBe(true);
+    expect(JSON.stringify(again)).toContain('NOT RUN');
+  });
+
+  test('the hosted workspace: a session moved after the ask is another ask (its directory is the state it reports)', async () => {
+    const { policy, queue } = unattended();
+    const at = new Map<string, string>();
+    const ran: string[] = [];
+
+    const box: NimbusSandboxHandle = {
+      ready: async () => {},
+      exec: async (command, options) => {
+        const name = options?.name;
+        const moved = /^cd (\S+)$/m.exec(command.split('\n').at(-1) ?? '');
+
+        if (name !== undefined && moved?.[1] !== undefined) at.set(name, moved[1]);
+        else ran.push(command);
+
+        return { command, success: true, stdout: '', stderr: '', exitCode: 0 };
+      },
+      shellCwd: async (name) => at.get(name) ?? null,
+      files: { read: async () => null, write: async () => {}, list: async () => [], stat: async () => null, exists: async () => false, delete: async () => {} },
+    };
+
+    const sessionShell = nimbusSessionShell(box, { home: WORKSPACE_ROOT });
+    const session = createShellSession({ home: WORKSPACE_ROOT, userRoots: () => [], stored: async (name) => await sessionShell.cwd?.(name) ?? null });
+    const shell = withApprovalGatedShell(sessionShell, { filesOwner: 'agent', shellSession: session }, policy);
+
+    await shell.exec(`cd ${WORKSPACE_ROOT}/sub`, { name: 'dev' });
+
+    const { again } = await approveAcrossAMove(
+      queue, () => shell.exec('rm -r doomed', { name: 'dev' }), async () => { await shell.exec(`cd ${WORKSPACE_ROOT}`, { name: 'dev' }); },
+    );
+
+    expect(ran).toEqual([]);
+    expect(again.exitCode).not.toBe(0);
   });
 });
