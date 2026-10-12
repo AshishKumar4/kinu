@@ -29,6 +29,18 @@
  * On the same product the old read gave 143-154 MB or 165-170 MB as the race fell (b9c667740, 5724b7472); at settlement
  * it read 171.6-183.0 MB over 15 runs on 0d3f6491a. See {@link LONG_TURN_ALLOCATED_BOUND_BYTES}.
  *
+ * The planting probe proves each session reads the isolate it names: a buffer planted in one is found there, whole, and
+ * in no other. Until 2026-10-12 it subtracted live heap totals, which any work crossing the read moves: red in 4 of 20
+ * runs on 009c51396 and 8 of 20 on 8a71331cb (armada 20261012091025-eb23b0d7, 20261012091030-301e97ae), each reading
+ * main's plant as 1.0 MB in the workspace's isolate. Snapshots of 12 runs (20261012091744-6ac47e5a) put one red at
+ * +1,019,881 bytes there, 1,000,012 of them a transcript string the helpers' sleep-time pass held; with this harness on
+ * 8add33666 the workspace's own plant read 2.49-3.51 MB of 4 (20261012092031-f427bbac). Yet in all 24 plantings those
+ * snapshots caught, the 4,000,000-byte buffer sat in the isolate planted and in no other. So each buffer is now held
+ * under a marker of its own and found by it, in the shape workerd 1.20260926.1 writes (measured 2026-10-12): the
+ * marker's property edge reaches the `Uint8Array`, its internal `buffer` edge the `ArrayBuffer`, and that one's internal
+ * `backing_store` edge a native `system / JSArrayBufferData` node of the buffer's size. A link missing or doubled throws,
+ * so a workerd that writes another shape fails the gate; remeasure on each upgrade.
+ *
  * `--no-build` reads the existing `dist/kinu` (a deploy already built it).
  */
 
@@ -323,10 +335,8 @@ function beyond(after: Isolates<number>, before: Isolates<number>): Isolates<num
   return { workspace: after.workspace - before.workspace, main: after.main - before.main };
 }
 
-/**
- * Planted in each isolate in turn at the end of the run and read back: a gate that read the wrong isolate, or none,
- * would bound nothing there. Bigger than any step's bound, so a misread one is not lost in the noise of a turn.
- */
+/** Planted in each isolate in turn at the end of the run, under a marker of its own, and found by that marker: a gate
+ *  that read the wrong isolate, or none, would bound nothing there. */
 export const PLANTED_BYTES = 4_000_000;
 
 /** The built assets with main's isolate swapped for the shipped facet plus `plant` (`tests/workerd/heap-plant-agent.ts`). */
@@ -372,7 +382,7 @@ export interface HeapMeasurement {
   readonly bindingTurnsAllocated: Isolates<Allocations>;
   /** Each character above U+00FF in the requests, with the text before it; the scripted turns write none. */
   readonly wide: readonly string[];
-  /** For each isolate {@link PLANTED_BYTES} were planted in, the live heap it added in each isolate. */
+  /** For each isolate {@link PLANTED_BYTES} were planted in, the bytes each isolate holds under that plant's marker. */
   readonly planted: Isolates<Isolates<number>>;
 }
 
@@ -618,14 +628,17 @@ export async function measure(): Promise<HeapMeasurement> {
       await nested;
       await noRunners(0);
       await ask('/model?hires=0&nest=0');
+      // Settled as each workload above is before the next: the helpers' sleep-time pass runs in the workspace's isolate.
+      await ask('/main-idle?workspace=helpers');
+      await ask('/quiesce?workspace=helpers');
 
-      // Last, so nothing measured above carries it: each isolate's planted bytes, read in both.
+      // Last, so nothing measured above carries it: each isolate's planted buffer, found by its marker in both.
       const plant = async (isolate: (typeof ISOLATES)[number]): Promise<Isolates<number>> => {
-        const before = await inEach(stepIsolates, async (session) => await session.liveHeap());
+        const marker = `worker-heap-planted-in-${isolate}`;
 
-        await ask(`/plant?workspace=heap&isolate=${isolate}&bytes=${String(PLANTED_BYTES)}`);
+        await ask(`/plant?workspace=heap&isolate=${isolate}&marker=${marker}&bytes=${String(PLANTED_BYTES)}`);
 
-        return beyond(await inEach(stepIsolates, async (session) => await session.liveHeap()), before);
+        return await inEach(stepIsolates, async (session) => await session.markedBytes(marker));
       };
 
       const planted = { workspace: await plant('workspace'), main: await plant('main') };
@@ -708,18 +721,17 @@ function workloadFindings(measured: HeapMeasurement): string[] {
   return out;
 }
 
-/** The gate reads each isolate it bounds: a buffer planted in one shows there, and not in the other. */
+/** The gate reads each isolate it bounds: a buffer planted in one is found there, whole, and not in the other. */
 function plantedFindings(planted: HeapMeasurement['planted']): string[] {
   return ISOLATES.flatMap((isolate) => {
     const other = isolate === 'workspace' ? 'main' : 'workspace';
     const seen = planted[isolate];
-    const read = `${mb(seen[isolate])} there and ${mb(seen[other])} in ${ISOLATE_NAMES[other]}`;
+    const read = `${String(seen[isolate])} bytes there and ${String(seen[other])} in ${ISOLATE_NAMES[other]}`;
+    const what = `${String(PLANTED_BYTES)} bytes planted in ${ISOLATE_NAMES[isolate]} read as ${read}`;
 
-    console.log(`${GATE}: ${mb(PLANTED_BYTES)} planted in ${ISOLATE_NAMES[isolate]} read as ${read}`);
+    console.log(`${GATE}: ${what}`);
 
-    return seen[isolate] < PLANTED_BYTES * 0.9 || seen[other] > PLANTED_BYTES * 0.25
-      ? [`${mb(PLANTED_BYTES)} planted in ${ISOLATE_NAMES[isolate]} read as ${read}: the gate does not read that isolate alone`]
-      : [];
+    return seen[isolate] === PLANTED_BYTES && seen[other] === 0 ? [] : [`${what}: the gate does not read that isolate alone`];
   });
 }
 

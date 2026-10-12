@@ -1,7 +1,8 @@
 /**
  * One isolate of the built Worker as `scripts/worker-heap.ts` reads it over workerd's inspector (the Chrome DevTools
- * Protocol): its heap used and live, the live heap's makeup by kind from a snapshot, and where its allocations were made,
- * sampled. The gate owns the workloads, their order and their bounds; this reads what they leave.
+ * Protocol): its heap used and live, the live heap's makeup by kind from a snapshot, the buffer held under a marker,
+ * and where its allocations were made, sampled. The gate owns the workloads, their order and their bounds; this reads
+ * what they leave.
  */
 import * as v from 'valibot';
 
@@ -13,13 +14,21 @@ const HeapUsageReplySchema = v.object({ result: v.object({ usedSize: v.number() 
 
 const SnapshotChunkSchema = v.object({ method: v.literal('HeapProfiler.addHeapSnapshotChunk'), params: v.object({ chunk: v.string() }) });
 
-const SnapshotSchema = v.object({
-  snapshot: v.object({ meta: v.object({ node_fields: v.array(v.string()), node_types: v.looseTuple([v.array(v.string())]) }) }),
+const MetaSchema = v.object({ node_fields: v.array(v.string()), node_types: v.looseTuple([v.array(v.string())]) });
+
+const SnapshotSchema = v.object({ snapshot: v.object({ meta: MetaSchema }), nodes: v.array(v.number()), strings: v.array(v.string()) });
+
+/** A snapshot with its edges, what holds what: parsed only where a read follows them, since they outnumber the nodes. */
+const GraphSchema = v.object({
+  snapshot: v.object({ meta: v.object({ ...MetaSchema.entries, edge_fields: v.array(v.string()), edge_types: v.looseTuple([v.array(v.string())]) }) }),
   nodes: v.array(v.number()),
+  edges: v.array(v.number()),
   strings: v.array(v.string()),
 });
 
 type Snapshot = v.InferOutput<typeof SnapshotSchema>;
+
+type Graph = v.InferOutput<typeof GraphSchema>;
 
 /** What a live heap is made of: bytes by kind (an object's constructor, compiled code, strings), and its largest strings. */
 export interface HeapMakeup {
@@ -56,6 +65,56 @@ function heapMakeup(snapshot: Snapshot): HeapMakeup {
     kinds: [...kinds].map(([kind, held]) => ({ kind, ...held })).sort((a, b) => b.bytes - a.bytes).slice(0, 15),
     strings: strings.sort((a, b) => b.bytes - a.bytes).slice(0, 5),
   };
+}
+
+/**
+ * The bytes of the buffer that the one property named `marker` holds, in the shape workerd's V8 writes it
+ * (`scripts/worker-heap.ts` names the version measured): the property's edge reaches a typed array, its internal `buffer`
+ * edge the `ArrayBuffer`, and that one's internal `backing_store` edge a native node the data's size. No such property
+ * reads 0; a second one, or a link missing, is a shape this does not read, and throws.
+ */
+function markedBytes(graph: Graph, marker: string, isolate: string): number {
+  const { node_fields: nodeFields, edge_fields: edgeFields, edge_types: [edgeTypes] } = graph.snapshot.meta;
+  const [countAt, sizeAt] = [nodeFields.indexOf('edge_count'), nodeFields.indexOf('self_size')];
+  const [typeAt, nameAt, toAt] = [edgeFields.indexOf('type'), edgeFields.indexOf('name_or_index'), edgeFields.indexOf('to_node')];
+  // Each node's edges follow those of the nodes before it.
+  const firstEdges: number[] = [];
+
+  for (let node = 0, edges = 0; node < graph.nodes.length; node += nodeFields.length) {
+    firstEdges.push(edges);
+    edges += (graph.nodes[node + countAt] ?? 0) * edgeFields.length;
+  }
+
+  /** Each node an edge of `type` named `name` reaches: from the node at `from`, or from any node. */
+  const reached = (type: 'property' | 'internal', name: string, from?: number): number[] => {
+    const kind = edgeTypes.indexOf(type);
+    const start = from === undefined ? 0 : firstEdges[from / nodeFields.length] ?? 0;
+    const end = from === undefined ? graph.edges.length : start + (graph.nodes[from + countAt] ?? 0) * edgeFields.length;
+    const found: number[] = [];
+
+    for (let edge = start; edge < end; edge += edgeFields.length) {
+      if (graph.edges[edge + typeAt] === kind && graph.strings[graph.edges[edge + nameAt] ?? -1] === name) found.push(graph.edges[edge + toAt] ?? 0);
+    }
+
+    return found;
+  };
+
+  const one = (nodes: readonly number[], link: string): number => {
+    const [node, ...more] = nodes;
+
+    if (node === undefined || more.length > 0) {
+      throw new Error(`worker-heap: ${isolate} has ${String(nodes.length)} ${link} edges on the way to ${marker}, where the read follows one`);
+    }
+
+    return node;
+  };
+
+  const marked = reached('property', marker);
+
+  if (marked.length === 0) return 0;
+  const buffer = one(reached('internal', 'buffer', one(marked, `property ${marker}`)), 'internal buffer');
+
+  return graph.nodes[one(reached('internal', 'backing_store', buffer), 'internal backing_store') + sizeAt] ?? 0;
 }
 
 interface ProfileNode {
@@ -109,6 +168,8 @@ export interface Inspector {
   readonly usedHeap: () => Promise<number>;
   readonly liveHeap: () => Promise<number>;
   readonly makeup: () => Promise<HeapMakeup>;
+  /** The bytes of the buffer held under the property `marker`, from a snapshot: {@link markedBytes}. */
+  readonly markedBytes: (marker: string) => Promise<number>;
   readonly sampleAllocations: () => Promise<void>;
   readonly allocations: () => Promise<Allocations>;
   readonly close: () => void;
@@ -159,10 +220,10 @@ export async function inspect(port: number, isolate: string, picks: (id: string)
   await opened.promise;
 
   /** A snapshot collects first, so its node sizes add up to what is live. */
-  const snapshotNow = async (): Promise<Snapshot> => {
+  const snapshotNow = async <Parsed>(schema: v.GenericSchema<Parsed>): Promise<Parsed> => {
     chunks = [];
     await send('HeapProfiler.takeHeapSnapshot');
-    const snapshot = v.parse(SnapshotSchema, JSON.parse(chunks.join('')));
+    const snapshot = v.parse(schema, JSON.parse(chunks.join('')));
     chunks = [];
 
     return snapshot;
@@ -182,9 +243,10 @@ export async function inspect(port: number, isolate: string, picks: (id: string)
     // Uncollected: what the isolate holds at this instant, garbage included.
     usedHeap: async () => v.parse(HeapUsageReplySchema, JSON.parse(await send('Runtime.getHeapUsage'))).result.usedSize,
     // A snapshot collects first, so its node sizes add up to what is live.
-    makeup: async () => heapMakeup(await snapshotNow()),
+    makeup: async () => heapMakeup(await snapshotNow(SnapshotSchema)),
+    markedBytes: async (marker) => markedBytes(await snapshotNow(GraphSchema), marker, isolate),
     liveHeap: async () => {
-      const snapshot = await snapshotNow();
+      const snapshot = await snapshotNow(SnapshotSchema);
       const fields = snapshot.snapshot.meta.node_fields;
       const size = fields.indexOf('self_size');
       let live = 0;

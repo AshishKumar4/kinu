@@ -5,10 +5,9 @@
 import { parseJsonValue, type JsonValue } from '@kinu.run/core';
 import { AgentFacet as Shipped } from '../../src/agent-facet/agent-facet';
 
-/** Held for the isolate's life, as a leak would be. */
-const planted: Uint8Array[] = [];
+/** Each buffer the gate plants, under the marker it finds it by: held for the isolate's life, as a leak would be. */
+const planted: Record<string, Uint8Array>[] = [];
 
-/** The tool results in `value` that carry an error: a call whose execution rejected, as the model was told of it. */
 /** The ids of the failed tool results in `value`: a call is one failure however many times its result is stored. */
 function failedResults(value: JsonValue, into: Set<string>): void {
   if (Array.isArray(value)) {
@@ -29,8 +28,8 @@ function failedResults(value: JsonValue, into: Set<string>): void {
 }
 
 export class AgentFacet extends Shipped {
-  async plant(bytes: number): Promise<void> {
-    planted.push(new Uint8Array(bytes).fill(7));
+  async plant(marker: string, bytes: number): Promise<void> {
+    planted.push({ [marker]: new Uint8Array(bytes).fill(7) });
   }
 
   /** Its tool calls that came back failed, over every step its ledger records. */
