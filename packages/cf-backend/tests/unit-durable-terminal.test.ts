@@ -518,7 +518,7 @@ describe('mid-turn captures are credited to the turn only when it answered', () 
 describe('a turn releases its tool claims only when no response can still run', () => {
   /** A tool call claimed and unsettled: the state a still-executing turn leaves. */
   function claimTool(harness: Harness, turnId: string, callId: string): void {
-    claimToolEffect(sqlOver(harness.db), workspaceMainActor(harness.db), { turnId, callId, digest: 'harness-tool-digest' });
+    claimToolEffect(sqlOver(harness.db), workspaceMainActor(harness.db), { turnId, runId: 'run-1', callId, digest: 'harness-tool-digest' });
   }
 
   const released = [

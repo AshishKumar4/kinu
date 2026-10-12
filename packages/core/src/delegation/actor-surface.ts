@@ -10,7 +10,8 @@ import type { ConversationRecall } from '../memory/conversation-search';
 import type { VectorStore } from '../memory/vector-store';
 import type { AccountMemory } from '../memory/account';
 import type { ProgramStateStore } from '../identity/program-state';
-import type { HostedActor } from '../state/actor-host';
+import type { SeatedActor } from '../state/actor-host';
+import type { TurnLedgers } from '../orchestrator/main-turn-surface';
 import type { Storage } from '../types/primitives';
 import type { CodemodeProvider } from '../types/codemode';
 import type { BrowserSessions, WebSearchProvider } from '../web/provider';
@@ -142,10 +143,14 @@ export function actorNamespaces(actor: SurfaceActor, policy: SurfacePolicy, call
 
 /** Any hosted actor, as every backend describes it: over its own runtime and stores, with no role of its own to switch. */
 export function hostedSurfaceActor(
-  actor: HostedActor,
-  inputs: { readonly web: SurfaceWeb; readonly conversations: ConversationRecall; readonly vectorStore: VectorStore | null; readonly account?: AccountMemory },
+  actor: SeatedActor,
+  inputs: {
+    readonly web: SurfaceWeb; readonly conversations: ConversationRecall; readonly vectorStore: VectorStore | null; readonly account?: AccountMemory;
+    /** The turn a program's files account into: read as its namespaces are built. */
+    readonly ledgers: () => Pick<TurnLedgers, 'files' | 'context'>;
+  },
 ): SurfaceActor {
-  const { runtime, stores, session } = actor;
+  const { runtime, stores } = actor;
   const { account } = inputs;
 
   return {
@@ -155,10 +160,11 @@ export function hostedSurfaceActor(
       memory: runtime.memory, vectorStore: inputs.vectorStore, facts: stores.facts, actor: actor.handle, conversations: inputs.conversations,
       ...(account !== undefined && { account }),
     }),
-    files: () => ({
-      vfs: runtime.toolFiles, home: runtime.storage.home, planes: runtime.planes, memory: runtime.memory,
-      ledger: session.orchestrator.acc.files, budget: session.orchestrator.acc.context,
-    }),
+    files: () => {
+      const ledgers = inputs.ledgers();
+
+      return { vfs: runtime.toolFiles, home: runtime.storage.home, planes: runtime.planes, memory: runtime.memory, ledger: ledgers.files, budget: ledgers.context };
+    },
     tasks: () => ({ list: stores.taskList, config: stores.config, roleSwitch: null }),
     db: stores.appData,
     programState: runtime.actor.programState,

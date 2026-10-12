@@ -12,7 +12,7 @@ import {
   classifyRunEnd, RUN_END_REASONS, type RunEndReason,
   TOOL_CALLS_PENDING, TURN_ENDED_MID_WORK,
   declareTerminalRoster,
-  AgentOrchestrator, type AgentOrchestratorDeps,
+  AgentOrchestrator, recordedTurn, type AgentOrchestratorDeps,
   providerSnapshotOf, ProviderListingCache, type ProviderListing,
   defaultSpecFor, DEFAULT_WORKERS_AI_MODEL_SPEC, workersAiSpec,
   DEFAULT_ROLE_ID, SUBMIT_PLAN_TOOL, DEPS_GATED_TOOLS,
@@ -320,7 +320,7 @@ describe('the settled turn’s recording — every settled turn is recorded', ()
     test(`an ${status === 'error' ? 'errored' : status} turn is recorded`, () => {
       const { orch, recorded } = seamOrchestrator();
 
-      orch.recordTurn(orch.recordedTurn(status, settledTurn()), 'independent_task');
+      orch.recordTurn(recordedTurn(status, settledTurn()), 'independent_task');
       expect(recorded).toHaveLength(1);
     });
   }
@@ -348,7 +348,7 @@ describe('the settled turn’s recording — every settled turn is recorded', ()
       const { orch, recorded } = seamOrchestrator();
 
       orch.recordTurn(
-        orch.recordedTurn(stamp.status, settledTurn({ hadError: false })), 'independent_task',
+        recordedTurn(stamp.status, settledTurn({ hadError: false })), 'independent_task',
       );
       expect(recorded[0]?.hadError).toBe(stamp.hadError);
     });
@@ -356,7 +356,7 @@ describe('the settled turn’s recording — every settled turn is recorded', ()
 
   test('with evolution off nothing is recorded, and the extension end is still owed', () => {
     const { orch, recorded } = seamOrchestrator({ enabled: false });
-    orch.recordTurn(orch.recordedTurn('completed', settledTurn()), 'independent_task');
+    orch.recordTurn(recordedTurn('completed', settledTurn()), 'independent_task');
     expect(recorded).toEqual([]);
     // Extensions are not evolution: `--no-auto-evolve` must not silence the turn-end row.
     expect(roster('completed', { evolutionEnabled: false }).map((effect) => effect.name))

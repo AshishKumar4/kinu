@@ -1349,11 +1349,12 @@
   "tool_effect_claims@packages/core/src/tools/effect-claim.ts": [
     "actor_id TEXT NOT NULL",
     "turn_id TEXT NOT NULL",
+    "run_id TEXT NOT NULL",
     "normalized_call_id TEXT NOT NULL",
     "call_digest TEXT NOT NULL",
     "result_json TEXT",
-    "status TEXT NOT NULL DEFAULT 'started' CHECK (status IN ('started', 'settled', 'indeterminate'))",
-    "PRIMARY KEY (actor_id, turn_id, normalized_call_id, call_digest)"
+    "status TEXT NOT NULL DEFAULT 'started' CHECK (status IN ('started', 'settled', 'indeterminate', 'remote'))",
+    "PRIMARY KEY (actor_id, turn_id, run_id, normalized_call_id, call_digest)"
   ],
   "tool_lessons@packages/core/src/evolution/struggles.ts": [
     "actor_id TEXT NOT NULL",

@@ -4,6 +4,7 @@ import { Database } from 'bun:sqlite';
 import { createTestActors, createTestActorsOver, createTestSql, withHostDeliveries } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { AgentOrchestrator, type AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
+import { recordedTurn } from '../src/orchestrator/evolution-lanes';
 import { RUN_END_REASONS, creditedTurnId } from '../src/orchestrator/turn-lifecycle';
 import { declareTerminalRoster } from '../src/orchestrator/terminal-roster';
 import { MissionGovernor } from '../src/mission-budget';
@@ -418,7 +419,7 @@ describe('AgentOrchestrator — the settle’s claimable parts', () => {
       const { host } = fakeHost();
       const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() }));
       orch.beginTurn(Date.now(), {});
-      const stamped = orch.recordedTurn(status, aTurn(0));
+      const stamped = recordedTurn(status, aTurn(0));
       predicted.push(stamped.hadError);
       orch.recordTurn(stamped, 'conversation');
       recorded.push(present(store.claim(), 'the claimed window').turns[0].hadError);

@@ -10,7 +10,7 @@ import { configReplaced } from '../config/store';
 import type { Holds } from '../utils/held-reads';
 import type { SqlExec, SqlExecutor, Storage } from '../types/primitives';
 import type { AgentRuntime } from '../types/agent-runtime';
-import { ActorSession } from '../orchestrator/actor-session';
+import { ActorSession, type ActorSessionOptions } from '../orchestrator/actor-session';
 import type { AgentOrchestratorDeps } from '../orchestrator/agent-orchestrator';
 import type { StoredActorClaim } from '../orchestrator/actor-claims';
 import type { SessionFilePlane } from '../session/payload';
@@ -36,8 +36,13 @@ export interface BoundActor {
   readonly stores: AgentStores;
 }
 
-export interface HostedActor extends BoundActor {
+/** A bound actor over its runtime: what a host whose actors run their turns elsewhere seats (the cloud workspace's). */
+export interface SeatedActor extends BoundActor {
   readonly runtime: AgentRuntime;
+}
+
+/** A seated actor with its turn session: what a host that runs its actors' turns itself holds. */
+export interface HostedActor extends SeatedActor {
   readonly session: ActorSession;
 }
 
@@ -69,38 +74,44 @@ export interface ActorRetirement {
   readonly interrupt: boolean;
 }
 
-export interface ActorHostDeps {
+/** What every host binds and seats its actors over. */
+export interface SeatHostDeps {
   /** Positional `exec` is needed for the purge, whose table names come from the live schema. */
   readonly storage: Pick<Storage, 'sql' | 'transactionSync'> & SqlExec;
   readonly directory: WorkspaceActorDirectory;
   readonly installedBuild: string | null;
   readonly workspace?: string;
-  /** Whether a hosted turn already gave its hirer the report that answers its assignment. */
-  readonly answered?: (turn: ReportedTurn) => boolean;
-  /** A Durable Object's held reads, which its sessions read through; absent, every read asks. */
-  readonly holds?: Holds;
   runtimeFor(bound: BoundActor, seat: ActorSeat): AgentRuntime | Promise<AgentRuntime>;
   filesFor(bound: Pick<BoundActor, 'reference' | 'record' | 'handle'>): Promise<SessionFilePlane>;
   /** Program bytes may live on a state plane distinct from session payloads and tools. */
   scaffoldFor(bound: Pick<BoundActor, 'reference' | 'record' | 'handle'>): Promise<VersionedScaffoldSource>;
   /** Asked by the host so no hosted actor silently runs the shipped bootstrap loop. */
   loopFor(bound: BoundActor & { readonly runtime: AgentRuntime }): LoopSeed | Promise<LoopSeed>;
+  /** Called after the rows are gone, so a failed reclaim leaves no half-removed readable actor. */
+  discardBytes?(record: WorkspaceActor): Promise<void>;
+  readonly tracing: (() => AgentTracing) | undefined;
+}
+
+export interface ActorHostDeps extends SeatHostDeps {
+  /** Whether a hosted turn already gave its hirer the report that answers its assignment. */
+  readonly answered?: (turn: ReportedTurn) => boolean;
+  /** A Durable Object's held reads, which its sessions read through; absent, every read asks. */
+  readonly holds?: Holds;
   /** Per actor: sharing the root's would let one actor's turn move another's state. */
   orchestrationFor(bound: BoundActor & { readonly runtime: AgentRuntime }): AgentOrchestratorDeps | Promise<AgentOrchestratorDeps>;
   /** `null` only for a host that publishes no run events. */
   contextEvents(bound: BoundActor): ContextEventRecorder | null;
-  /** Called after the rows are gone, so a failed reclaim leaves no half-removed readable actor. */
-  discardBytes?(record: WorkspaceActor): Promise<void>;
   /** The port a hosted actor hires its advisor through; absent, hosted turns are not reviewed. */
   advisorPort?(bound: BoundActor): TemporaryAgentPort | null;
   sayToParent?(child: ActorReference, signal: AgentSignal): Promise<SendOutcome>;
-  readonly tracing: (() => AgentTracing) | undefined;
+  /** Where the receipts of calls whose effects commit in another store are kept; absent, every call commits here. */
+  readonly receipts?: ActorSessionOptions['receipts'];
 }
 
-export interface ActorHost {
-  acquire(reference: ActorReference, seat: ActorSeat): Promise<HostedActor>;
+export interface ActorHost<A extends SeatedActor = HostedActor> {
+  acquire(reference: ActorReference, seat: ActorSeat): Promise<A>;
   /** Never starts anything. */
-  hosted(this: void, reference: ActorReference): HostedActor | null;
+  hosted(this: void, reference: ActorReference): A | null;
   /** Any lifecycle state; builds no session. */
   describe(actorId: string): WorkspaceActor | null;
   /** Host-owned stores, independent of a runtime lease; refuses a retired or re-parented actor. */
@@ -109,9 +120,9 @@ export interface ActorHost {
   readScaffold(this: void, reference: ActorReference, version: number): Promise<string | null>;
   list(): readonly ActorReference[];
   /** Serialized per actor only. Abandoning the promise cancels nothing; use `session.interrupt()`. */
-  run<T>(reference: ActorReference, seat: ActorSeat, work: (actor: HostedActor) => Promise<T>): Promise<T>;
+  run<T>(reference: ActorReference, seat: ActorSeat, work: (actor: A) => Promise<T>): Promise<T>;
   /** Work on an already composed actor, serialized on the same queue; never chooses a different seat. */
-  runHosted<T>(reference: ActorReference, work: (actor: HostedActor) => Promise<T>): Promise<T>;
+  runHosted<T>(reference: ActorReference, work: (actor: A) => Promise<T>): Promise<T>;
   /** Rows stay. Refused while a turn is in flight. */
   release(reference: ActorReference): void;
   releaseAll(): void;
@@ -143,8 +154,8 @@ interface ReleaseFence {
   released: boolean;
 }
 
-interface HostSlot {
-  readonly actor: HostedActor;
+interface HostSlot<A extends SeatedActor> {
+  readonly actor: A;
   readonly seat: ActorSeat;
   readonly fence: ReleaseFence;
   queue: Promise<unknown>;
@@ -170,13 +181,69 @@ function actorScopedTables(sql: SqlExecutor): readonly string[] {
   return names;
 }
 
+/** How a host composes an actor over its seeded runtime, and the turn it runs there, where it runs one. */
+interface Seating<A extends SeatedActor> {
+  compose(seated: SeatedActor, host: ActorHost<A>): Effect.Effect<A, KinuError>;
+  /** Absent for a host that runs no turn of its actors': release and retire wait on none. */
+  readonly turns?: { inFlight(actor: A): boolean; interrupt(actor: A): void };
+}
+
+/** A host whose actors run their turns in their own isolates: it seats them over their runtimes, with no session. */
+export function createSeatHost(deps: SeatHostDeps): ActorHost<SeatedActor> {
+  return hostOver(deps, { compose: (seated) => Effect.succeed(seated) });
+}
+
+/** A host that runs its actors' turns: each is seated with its session. */
 export function createActorHost(deps: ActorHostDeps): ActorHost {
-  const slots = new Map<string, HostSlot>();
+  return hostOver<HostedActor>(deps, {
+    compose: ({ runtime, ...bound }, host) => Effect.gen(function* () {
+      const orchestration = yield* Effect.promise(async () => deps.orchestrationFor({ ...bound, runtime }));
+      const tracing = deps.tracing;
+      const actor = { id: bound.record.actorId, kind: tracedActorKind(bound.record.origin) };
+      const parentId = bound.reference.parentActorId;
+
+      const session = new ActorSession({
+        runtime, orchestration, claims: bound.stores.claims, installedBuild: deps.installedBuild,
+        ...(deps.workspace !== undefined && { workspace: deps.workspace }),
+        ...(deps.answered !== undefined && { answered: deps.answered }),
+        ...(deps.holds !== undefined && { holds: deps.holds }),
+        ...(deps.receipts !== undefined && { receipts: deps.receipts }),
+        turns: tracing && (() => tracing().turns(actor)),
+        history: bound.stores.history,
+        events: deps.contextEvents(bound),
+        recording: bound.stores.eventRecorder,
+        advisorPort: () => deps.advisorPort?.(bound) ?? null,
+        reviewed: bound.record.input,
+        advisor: parentId === null ? undefined : {
+          config: deps.directory.main().config,
+          workspace: async () => {
+            const root = await host.acquire(actorReferenceOf(deps.directory.main()), { kind: 'actor' });
+
+            return root.runtime.agentStateVfs ?? root.runtime.storage.vfs;
+          },
+          parent: async (signal) => {
+            if (deps.sayToParent !== undefined) return await deps.sayToParent(bound.reference, signal);
+            const parentReference = actorReferenceOf(deps.directory.open(parentId));
+            const parent = host.hosted(parentReference) ?? await host.acquire(parentReference, { kind: 'actor' });
+
+            return parent.session.orchestrator.signals.send(signal);
+          },
+        },
+      });
+
+      return { ...bound, runtime, session };
+    }),
+    turns: { inFlight: (actor) => actor.session.inFlight, interrupt: (actor) => { actor.session.interrupt(); } },
+  });
+}
+
+function hostOver<A extends SeatedActor>(deps: SeatHostDeps, seating: Seating<A>): ActorHost<A> {
+  const slots = new Map<string, HostSlot<A>>();
   const bindings = new Map<string, { bound: BoundActor; fence: ReleaseFence }>();
   const ports = new Map<string, TemporaryAgentPort>();
   const opening = new Map<string, { readonly reference: ActorReference; readonly seat: ActorSeat }>();
 
-  const slotFor = (reference: ActorReference): Effect.Effect<HostSlot | null, KinuError> => {
+  const slotFor = (reference: ActorReference): Effect.Effect<HostSlot<A> | null, KinuError> => {
     const slot = slots.get(reference.actorId);
 
     if (!slot) return Effect.succeed(null);
@@ -240,11 +307,11 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
     return created;
   });
 
-  const build = (reference: ActorReference, seat: ActorSeat): Effect.Effect<{ actor: HostedActor; fence: ReleaseFence }, KinuError> => Effect.gen(function* () {
+  const build = (reference: ActorReference, seat: ActorSeat): Effect.Effect<{ actor: A; fence: ReleaseFence }, KinuError> => Effect.gen(function* () {
     const { bound, fence } = yield* bind(reference);
     const runtime = yield* Effect.promise(async () => deps.runtimeFor(bound, seat));
 
-    const session = Effect.gen(function* () {
+    const seated = Effect.gen(function* () {
       // Children need handle identity so release revokes every statement. The root's runtime
       // belongs to its opener and is never released individually, so same actor id suffices.
       const rootBinding = reference.parentActorId === null;
@@ -254,48 +321,17 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
         return yield* new KinuError('denied', 'A hosted runtime must be built over the handle the host bound.');
       }
 
-      // Seeded before the session so no turn is admitted without a program pointer.
+      // Seeded before anything runs on it, so no turn is admitted without a program pointer.
       const seed = yield* Effect.promise(async () => deps.loopFor({ ...bound, runtime }));
       yield* Effect.promise(() => seedActorLoop(runtime, seed.parent, seed.origin));
-      const orchestration = yield* Effect.promise(async () => deps.orchestrationFor({ ...bound, runtime }));
 
-      const tracing = deps.tracing;
-      const actor = { id: bound.record.actorId, kind: tracedActorKind(bound.record.origin) };
-      const parentId = reference.parentActorId;
-
-      return new ActorSession({
-        runtime, orchestration, claims: bound.stores.claims, installedBuild: deps.installedBuild,
-        ...(deps.workspace !== undefined && { workspace: deps.workspace }),
-        ...(deps.answered !== undefined && { answered: deps.answered }),
-        ...(deps.holds !== undefined && { holds: deps.holds }),
-        turns: tracing && (() => tracing().turns(actor)),
-        history: bound.stores.history,
-        events: deps.contextEvents(bound),
-        recording: bound.stores.eventRecorder,
-        advisorPort: () => deps.advisorPort?.(bound) ?? null,
-        reviewed: bound.record.input,
-        advisor: parentId === null ? undefined : {
-          config: deps.directory.main().config,
-          workspace: async () => {
-            const root = await host.acquire(actorReferenceOf(deps.directory.main()), { kind: 'actor' });
-
-            return root.runtime.agentStateVfs ?? root.runtime.storage.vfs;
-          },
-          parent: async (signal) => {
-            if (deps.sayToParent !== undefined) return await deps.sayToParent(reference, signal);
-            const parentReference = actorReferenceOf(deps.directory.open(parentId));
-            const parent = host.hosted(parentReference) ?? await host.acquire(parentReference, { kind: 'actor' });
-
-            return parent.session.orchestrator.signals.send(signal);
-          },
-        },
-      });
+      return yield* seating.compose({ ...bound, runtime }, host);
     });
 
     // A failed build still lets its runtime go.
-    const built = yield* Effect.onError(session, () => Effect.sync(() => runtime.release?.()));
+    const actor = yield* Effect.onError(seated, () => Effect.sync(() => runtime.release?.()));
 
-    return { actor: { ...bound, runtime, session: built }, fence };
+    return { actor, fence };
   });
 
   const opened = flight(({ reference, seat }: { readonly reference: ActorReference; readonly seat: ActorSeat }) => Effect.ensuring(
@@ -307,7 +343,7 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
     Effect.sync(() => { opening.delete(reference.actorId); }),
   ), { key: ({ reference }) => reference.actorId });
 
-  const acquired = (reference: ActorReference, seat: ActorSeat): Effect.Effect<HostedActor, KinuError> => Effect.gen(function* () {
+  const acquired = (reference: ActorReference, seat: ActorSeat): Effect.Effect<A, KinuError> => Effect.gen(function* () {
     const live = yield* slotFor(reference);
     const pending = opening.get(reference.actorId);
     const selected = live?.seat ?? pending?.seat;
@@ -327,17 +363,17 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
     return yield* opened({ reference, seat });
   });
 
-  const drop = (slot: HostSlot): void => {
+  const drop = (slot: HostSlot<A>): void => {
     slot.fence.released = true;
     slots.delete(slot.actor.reference.actorId);
     slot.actor.runtime.release?.();
   };
 
-  const requireSlot = (reference: ActorReference): Effect.Effect<HostSlot, KinuError> => Effect.flatMap(slotFor(reference), (slot) => (!slot || slot.fence.released
+  const requireSlot = (reference: ActorReference): Effect.Effect<HostSlot<A>, KinuError> => Effect.flatMap(slotFor(reference), (slot) => (!slot || slot.fence.released
     ? Effect.fail(new KinuError('missing', 'The actor is not hosted by this root.'))
     : Effect.succeed(slot)));
 
-  const queued = <T>(reference: ActorReference, work: (actor: HostedActor) => Promise<T>): Effect.Effect<T, KinuError> => Effect.gen(function* () {
+  const queued = <T>(reference: ActorReference, work: (actor: A) => Promise<T>): Effect.Effect<T, KinuError> => Effect.gen(function* () {
     const slot = yield* requireSlot(reference);
     // A failed operation cannot poison this actor's queue; other actors have their own tails.
     const result = slot.queue.then(() => work(slot.actor));
@@ -359,7 +395,7 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
       return;
     }
 
-    if (slot.actor.session.inFlight) {
+    if (seating.turns?.inFlight(slot.actor) === true) {
       return yield* new KinuError('denied', 'An actor holding a turn in flight cannot be released; cancel or settle the turn first.');
     }
 
@@ -367,7 +403,7 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
     ports.delete(reference.actorId);
   });
 
-  const host: ActorHost = {
+  const host: ActorHost<A> = {
     acquire: (reference, seat) => settle(acquired(reference, seat)),
     hosted: (reference) => settleSync(Effect.map(slotFor(reference), (slot) => (slot && !slot.fence.released ? slot.actor : null))),
     describe: (actorId) => deps.directory.retained(actorId),
@@ -379,12 +415,12 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
       return yield* Effect.promise(() => readVersionedScaffoldSource(source, version));
     })),
     list: () => [...slots.values()].filter((slot) => !slot.fence.released).map((slot) => slot.actor.reference),
-    run: <T>(reference: ActorReference, seat: ActorSeat, work: (actor: HostedActor) => Promise<T>): Promise<T> => settle(Effect.gen(function* () {
+    run: <T>(reference: ActorReference, seat: ActorSeat, work: (actor: A) => Promise<T>): Promise<T> => settle(Effect.gen(function* () {
       yield* acquired(reference, seat);
 
       return yield* queued(reference, work);
     })),
-    runHosted: <T>(reference: ActorReference, work: (actor: HostedActor) => Promise<T>): Promise<T> => settle(queued(reference, work)),
+    runHosted: <T>(reference: ActorReference, work: (actor: A) => Promise<T>): Promise<T> => settle(queued(reference, work)),
     release: (reference) => settleSync(released(reference)),
     temporary: (reference, portFor) => {
       const known = ports.get(reference.actorId);
@@ -428,13 +464,13 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
       const slot = yield* slotFor(retirement.reference);
 
       if (slot && !slot.fence.released) {
-        if (retirement.destroy || retirement.interrupt) slot.actor.session.interrupt();
+        if (retirement.destroy || retirement.interrupt) seating.turns?.interrupt(slot.actor);
 
-        if (!retirement.destroy && slot.actor.session.inFlight) {
+        if (!retirement.destroy && seating.turns?.inFlight(slot.actor) === true) {
           // A temporary agent reports from inside its turn, so its release waits; the queue settles, never rejects.
           yield* Effect.promise(() => slot.queue);
 
-          if (slot.actor.session.inFlight) {
+          if (seating.turns.inFlight(slot.actor)) {
             return yield* new KinuError('denied', 'This actor holds a turn in flight; retire it once the turn settles.');
           }
         }

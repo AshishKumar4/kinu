@@ -116,6 +116,7 @@ function buildSurface(opts?: {
       backgroundable: CONFINED_BACKGROUNDABLE_TOOLS,
       mode: () => 'build',
     },
+    effectClaims: { sql: rt.storage.sql, actor: rt.actor, execution: () => ({ turnId: 'turn-1', runId: 'run-1' }) },
     split: opts?.split ?? (async () => ({
       narrative: 'merged', decisions: [], unresolvedQuestions: [], blindSpots: [], childHeadIds: [], headCount: 0,
     })),

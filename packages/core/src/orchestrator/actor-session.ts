@@ -1,4 +1,3 @@
-import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import type { ModelMessage, ToolSet } from 'ai';
 
 import * as v from 'valibot';
@@ -13,7 +12,7 @@ import { promptCacheWarm, PromptCacheRouteSchema, type CachedRequest } from '../
 import type { KinuExtension } from '../extension';
 import { ExtensionHost } from '../extension';
 import { Effect } from 'effect';
-import { attempt, diagnostics, KinuError, renderThrownChain, settle, type TurnTrace, type TurnTracing } from '../obs/index';
+import { KinuError, renderThrownChain, settle, type TurnTrace, type TurnTracing } from '../obs/index';
 import { AgentOrchestrator, type AgentOrchestratorDeps } from './agent-orchestrator';
 import { describeLandedSteers, type AcceptedSteer, type Inbox, type LandedSteerRow, type UserSteer } from './inbox';
 import { startActorTurn } from './actor-turn';
@@ -32,20 +31,11 @@ import { ASKED, type Holds } from '../utils/held-reads';
 import type { Usage } from '../usage';
 import type { ScaffoldBridgeOpts } from './scaffold-host';
 import type { ModelCallSpend } from '../events/model-call';
-import type { AgentSignal, SendOutcome } from '../types/signals';
+import type { SendOutcome } from '../types/signals';
 import { USER_MESSAGE_SIGNAL_KIND } from '../types/signals';
 
-import type { AgentConfigStore } from '../config/store';
-import type { CompletedTurn } from '../evolution/types';
-import {
-  ADVISOR_ROLE_ID, advisedTurnOf, advisorLane, buildAdvisorPrompt, judgeAdvisorReply, sayAdvisorNote,
-  type AdvisorNote, type AdvisorRecoverySnapshot,
-} from '../advisor/review';
+import { ActorAdvisor, type ActorAdvisorContext } from '../advisor/actor-advisor';
 import type { TemporaryAgentPort } from '../types/subordinates';
-import type { AnsweredEvolutionHelper } from '../identity/evolution-helpers';
-import { advisorWorkspaceGuidance } from '../prompting/agents-md';
-import { resolveModelRoute } from '../profiles/model-route';
-import { modelWindow } from '../context-window';
 import { SessionHistory, type MaterializedHistory } from '../session/history';
 import { SessionStream } from './session-stream';
 import { steerUserMessage } from './inbox';
@@ -53,7 +43,9 @@ import { recordTurnResumed, sameBuildOf } from './turn-recovery-events';
 import { decideInterruptedTurn, type InterruptedTurnVerdict } from './turn-recovery';
 import { readVersionedScaffoldSource } from '../scaffold/versions';
 import type { ReportedTurn } from '../subordinates/turn-reports';
-import { lostToolCall } from '../tools/effect-claim';
+import { lostRemoteCall, lostToolCall } from '../tools/effect-claim';
+import { unpairedToolCalls } from '../prompting/interrupted-tool-calls';
+import type { ExecutionKey, RemoteReceipt } from './execution';
 import { OwnerQuestionStore } from '../plans/owner-questions';
 import { turnReasonForMetadata } from '../prompting/surface';
 import { metadataTier } from './turn-assembly';
@@ -70,13 +62,6 @@ const RESTORE_REFUSALS: Readonly<Record<Extract<InterruptedTurnVerdict, { kind: 
   stalled: 'This turn made no progress across two runs, so it is not run a third time.',
   unverified: 'The program this turn ran has changed since the last process ended, so it is not run again under another.',
 };
-
-/** A hosted actor shares workspace priorities, but delivers feedback to itself. */
-interface ActorAdvisorContext {
-  readonly config: AgentConfigStore;
-  readonly workspace: () => Promise<VFS>;
-  readonly parent: (signal: AgentSignal) => Promise<SendOutcome>;
-}
 
 export interface ActorSessionOptions {
   readonly runtime: AgentRuntime;
@@ -102,6 +87,9 @@ export interface ActorSessionOptions {
   /** A Durable Object's held reads; absent, every read asks. */
   readonly holds?: Holds;
   readonly turns?: () => TurnTracing;
+  /** What the store a pointed call's effect commits to holds for it (design v2 §4): a call it holds no receipt for is
+   *  absent. Asked once per turn, for the history's unpaired calls this store only points at. */
+  readonly receipts?: (execution: Pick<ExecutionKey, 'turnId' | 'runId'>, callIds: readonly string[]) => Promise<ReadonlyMap<string, RemoteReceipt>>;
 }
 
 /** Live-instance execution token, not a replacement for a durable turn/run claim. */
@@ -200,18 +188,11 @@ export const COMPACT_NEEDS_IDLE = 'Stop the turn that is running before you comp
 
 /** An actor's mutable execution state, apart from its host, which keeps admission, queueing and settlement and
  *  may share immutable catalogs, never this context, orchestrator or abort. */
-function deliveryFailed(turnId: string): (failure: KinuError) => Effect.Effect<boolean> {
-  return (failure) => Effect.sync(() => {
-    diagnostics.failure('advisor.delivery_failed', failure, { turnId });
-
-    return false;
-  });
-}
-
 export class ActorSession {
   readonly actorId: string;
   readonly runtime: AgentRuntime;
   readonly orchestrator: AgentOrchestrator;
+  readonly advisor: ActorAdvisor;
   readonly canonical: SessionHistory;
   /** This actor's questions to its owner, in its own storage: the repair reads their answers synchronously. */
   readonly questions: OwnerQuestionStore;
@@ -243,6 +224,16 @@ export class ActorSession {
     this.orchestrator = new AgentOrchestrator(options.orchestration, {
       onDrain: (steers, atStep) => this.landSteers(steers, atStep),
       turnId: () => this.active?.lease.turnId ?? null,
+    });
+
+    this.advisor = new ActorAdvisor({
+      actor: options.runtime.actor, vfs: () => options.runtime.agentStateVfs ?? options.runtime.storage.vfs,
+      notes: () => options.orchestration.engine, send: (signal) => this.orchestrator.signals.send(signal),
+      profile: () => this.profile, scoped: (turn) => this.orchestrator.scopedTurn(turn),
+      ...(options.advisorPort !== undefined && { port: options.advisorPort }),
+      ...(options.reviewed !== undefined && { reviewed: options.reviewed }),
+      ...(options.advisor !== undefined && { context: options.advisor }),
+      ...(options.gateOpen !== undefined && { gateOpen: options.gateOpen }),
     });
   }
 
@@ -320,152 +311,6 @@ export class ActorSession {
   get claims(): ActorClaimStore { return this.options.claims; }
   /** The revision the open turn's input was placed on. */
   get turnContext(): ContextSelection | null { return this.active?.context?.selection ?? null; }
-
-  get advisorEnabled(): boolean {
-    return (this.options.advisor?.config ?? this.runtime.actor.config).getAdvisorEnabled();
-  }
-
-  advisorSnapshot(turn: CompletedTurn, reachable: readonly string[]): AdvisorRecoverySnapshot {
-    const profile = this.profile;
-
-    return {
-      turn: this.orchestrator.scopedTurn(turn),
-      reachable: [...reachable],
-      model: profile === null || !this.advisorEnabled ? undefined : resolveModelRoute('advisor', profile).model,
-    };
-  }
-
-  /** Off by default: the owner's switch, a reviewed profile and a port to hire the advisor through all decide. */
-  get reviewsTurns(): boolean {
-    return this.options.reviewed !== false && this.advisorEnabled && (this.options.advisorPort?.() ?? null) !== null;
-  }
-
-  /**
-   * Hires the turn's advisor, an evolution agent under the advisor preset, and returns: its answer reaches
-   * {@link deliverAdvisorAnswers} through the ingress. Idempotent per turn, so a replay hires no second one.
-   */
-  async hireAdvisor(snapshot: AdvisorRecoverySnapshot): Promise<void> {
-    const port = this.options.advisorPort?.() ?? null;
-    const turnId = snapshot.turn.turnId;
-
-    // No durable id, no lane to answer on.
-    if (!this.reviewsTurns || port === null || turnId === undefined || turnId === '') return;
-
-    if (this.options.orchestration.engine.hasAdvisorNoteForTurn(turnId) || port.reclaim(advisorLane(turnId)) !== null) return;
-
-    const task = buildAdvisorPrompt(snapshot.turn, snapshot.reachable, await this.advisorGuidance());
-    const hired = await port.start({ role: ADVISOR_ROLE_ID, roleLabel: ADVISOR_ROLE_ID, task, mode: 'build', lane: advisorLane(turnId) });
-
-    if (!('status' in hired) || hired.status === 'failed') {
-      diagnostics.event('advisor.hire_failed', { turnId, reason: 'reason' in hired ? hired.reason ?? 'unknown' : 'unknown' });
-    }
-  }
-
-  /** Notes handed to the conversation and not yet said, by the helper that answered them. */
-  private readonly delivering = new Map<string, Promise<void>>();
-
-  /** Settles once every note handed to the conversation is said, or failed and kept for the next pass. */
-  advisorDeliveries(): Promise<void> {
-    return Promise.allSettled(this.delivering.values()).then(() => undefined);
-  }
-
-  /**
-   * Every advisor answer this actor holds, judged once and said at most once; per-turn feedback never changes the
-   * learning window. A note to be said is handed to the conversation and not awaited: the turn it opens runs as long
-   * as it runs, and the answer is forgotten only once it is said. False while any answer is still held. `deliver`
-   * says it where the actor's notes live, true once said: an agent in its own isolate says it there.
-   */
-  async deliverAdvisorAnswers(deliver?: (helper: AnsweredEvolutionHelper, turnId: string) => Promise<boolean>): Promise<boolean> {
-    const port = this.options.advisorPort?.() ?? null;
-
-    if (port === null) return true;
-    let settled = true;
-
-    for (const helper of port.answered()) {
-      const turnId = advisedTurnOf(helper.lane);
-
-      if (turnId === null) continue;
-
-      if (deliver === undefined) {
-        if (!await this.deliverAdvisorAnswer(port, helper, turnId)) settled = false;
-      } else if (await deliver(helper, turnId)) {
-        port.forget(helper.name);
-      } else {
-        settled = false;
-      }
-    }
-
-    return settled;
-  }
-
-  /** True once the answer is forgotten. */
-  deliverAdvisorAnswer(port: TemporaryAgentPort, helper: AnsweredEvolutionHelper, turnId: string): Promise<boolean> {
-    if (this.delivering.has(helper.name)) return Promise.resolve(false);
-
-    return settle(attempt({ doing: `judging the advisor's review of turn ${turnId}`, otherwise: 'unavailable' }, async () => {
-      const judged = helper.status === 'completed' ? this.judgedAdvice(helper.answer, turnId) : null;
-
-      if (judged === null || !judged.spoken) {
-        port.forget(helper.name);
-
-        return true;
-      }
-
-      this.delivering.set(helper.name, this.handOffAdvice(port, helper.name, judged.note, turnId)
-        .finally(() => { this.delivering.delete(helper.name); }));
-
-      return false;
-    }).pipe(Effect.catch(deliveryFailed(turnId))));
-  }
-
-  /** The note judged for the turn, recorded by its first judgement; a pass after a cut delivery reads it back. */
-  private judgedAdvice(answer: string, turnId: string): { readonly note: AdvisorNote; readonly spoken: boolean } | null {
-    const { engine } = this.options.orchestration;
-    const recorded = engine.advisorNoteForTurn(turnId);
-
-    if (recorded !== null) return recorded;
-
-    const judged = judgeAdvisorReply(answer, {
-      turnId,
-      minSeverity: (this.options.advisor?.config ?? this.runtime.actor.config).getAdvisorMinSeverity(),
-      recent: [...engine.recentAdvisorNotes()],
-      gateOpen: this.options.gateOpen?.() ?? false,
-      record: (note, id, spoken) => { engine.recordAdvisorNote(note, id, spoken); },
-    });
-
-    return judged === null || judged.disposition === 'drop' ? null : { note: judged.note, spoken: judged.disposition === 'deliver' };
-  }
-
-  /** Settles once the note is said and its answer forgotten, or failed and kept for the next pass. */
-  handOffAdvice(port: TemporaryAgentPort, name: string, note: AdvisorNote, turnId: string): Promise<void> {
-    return this.sayAdvice(note, turnId).then((said) => { if (said) port.forget(name); });
-  }
-
-  /** The answer judged and, if it speaks, said here; true once nothing of it is owed. */
-  async sayAdvisorAnswer(helper: AnsweredEvolutionHelper, turnId: string): Promise<boolean> {
-    const judged = helper.status === 'completed' ? this.judgedAdvice(helper.answer, turnId) : null;
-
-    return judged === null || !judged.spoken || await this.sayAdvice(judged.note, turnId);
-  }
-
-  sayAdvice(note: AdvisorNote, turnId: string): Promise<boolean> {
-    return settle(attempt({ doing: `saying the advisor's note on turn ${turnId}`, otherwise: 'unavailable' }, async () => {
-      const sent = await sayAdvisorNote(note, {
-        turnId,
-        send: (signal) => this.orchestrator.signals.send(signal),
-        ...(this.options.advisor !== undefined && { actor: this.runtime.actor, parent: this.options.advisor.parent }),
-      });
-
-      // A signal the host could not take stays owed for the next pass.
-      return sent === 'queued' || sent === 'mid-turn';
-    }).pipe(Effect.catch(deliveryFailed(turnId))));
-  }
-
-  private async advisorGuidance(): Promise<string> {
-    const workspace = await this.options.advisor?.workspace() ?? this.runtime.agentStateVfs ?? this.runtime.storage.vfs;
-
-    return await advisorWorkspaceGuidance({ vfs: workspace, limits: async () => modelWindow(null) });
-  }
 
   /** An active turn stages authored replacement; idle replacement commits immediately. */
   restoreHistory(messages: readonly ModelMessage[]): Promise<string | null> {
@@ -754,6 +599,20 @@ export class ActorSession {
     return this.liveStream?.durable(callId, signal) ?? Promise.resolve();
   }
 
+  /** What became, where their effects commit, of the history's unpaired calls this store only points at. */
+  private async remoteAnswers(lease: ActorTurnLease): Promise<ReadonlyMap<string, RemoteReceipt | 'absent'>> {
+    const ask = this.options.receipts;
+
+    const pointed = ask === undefined ? [] : unpairedToolCalls(this.messages)
+      .filter((call) => lostToolCall(this.runtime.storage.sql, this.runtime.actor, lease, call) === 'remote')
+      .map((call) => call.toolCallId);
+
+    if (ask === undefined || pointed.length === 0) return new Map();
+    const receipts = await ask(lease, pointed);
+
+    return new Map(pointed.map((callId) => [callId, receipts.get(callId) ?? 'absent']));
+  }
+
   private async run(
     lease: ActorTurnLease,
     input: ActorExecutionInput,
@@ -790,7 +649,8 @@ export class ActorSession {
       durableOutput = new SessionStream(this.canonical, lease.turnId, claim.epoch);
       const stream = durableOutput;
       this.liveStream = stream;
-      const events = this.turnEvents({ lease, active, profile, input, program, claim, stream, tally });
+      const remote = await this.remoteAnswers(lease);
+      const events = this.turnEvents({ lease, active, profile, input, program, claim, stream, tally, remote });
 
       for await (const event of events) {
         const parts = await stream.observe(event);
@@ -896,8 +756,9 @@ export class ActorSession {
     readonly claim: ActorTurnClaim;
     readonly stream: SessionStream;
     readonly tally: TurnTally;
+    readonly remote: ReadonlyMap<string, RemoteReceipt | 'absent'>;
   }): AsyncIterable<ChatEvent> {
-    const { lease, active, profile, input, program, claim, stream, tally } = turn;
+    const { lease, active, profile, input, program, claim, stream, tally, remote } = turn;
     const { tools, extensions } = this.turnToolset(input, profile);
     // Activation names the input's entry after its message; an edit keeps the entry.
     const turnInput = this.canonical.admittedInput(claim.turnId);
@@ -915,7 +776,10 @@ export class ActorSession {
         lostToolCall: (call) => {
           const answered = call.toolName === ASK_OWNER_TOOL ? this.questions.outcome({ toolCallId: call.toolCallId, input: projectJsonValue({ value: call.input }) }) : null;
 
-          return answered === null ? lostToolCall(this.runtime.storage.sql, this.runtime.actor, lease.turnId, call) : { state: 'settled', result: answered };
+          if (answered !== null) return { state: 'settled', result: answered };
+          const lost = lostToolCall(this.runtime.storage.sql, this.runtime.actor, lease, call);
+
+          return lost === 'remote' ? lostRemoteCall(remote.get(call.toolCallId), call) : lost;
         },
         onAsk: (calls) => {
           const metadata = this.turnMetadata;

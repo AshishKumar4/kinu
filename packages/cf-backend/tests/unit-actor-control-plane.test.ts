@@ -89,7 +89,6 @@ describe('the workspace root answers the actor control plane', () => {
     });
 
     await orchestrator.agent.cancelCurrentWork();
-    expect(child.actor.session.interrupt()).toEqual({ steers: [], cancelled: [] });
 
     const rootId = workspaceMainActor(orchestrator.db).actorId;
     expect(cancelActivity(orchestrator.db, rootId)).toEqual([{ detail: '0 foreground aborted' }]);

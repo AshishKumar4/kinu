@@ -22,6 +22,7 @@ import { initActorStateSchema, initWorkspaceSchema } from '../src/state/workspac
 import { createAgentStores, type AgentStores } from '../src/state/agent-stores';
 import { BackgroundJobRunner } from '../src/jobs/runner';
 import { initBackgroundJobsTable } from '../src/jobs/store';
+import { initToolEffectClaimTable, type EffectClaimDeps } from '../src/tools/effect-claim';
 import type { ActorJobs } from '../src/jobs/background-wrap';
 import { BACKGROUNDABLE_TOOLS } from '../src/orchestrator/background-tools';
 import { CraftStore as AgentUtilsCraftStore } from '@kinu.run/agent-utils/stores';
@@ -294,6 +295,13 @@ export function storesFor(rt: AgentRuntime): AgentStores {
   runtimeStores.set(rt, stores);
 
   return stores;
+}
+
+/** Each call's receipt in the runtime's own store, under one fixed execution: a run's tools keep theirs where they run. */
+export function effectClaimsFor(rt: AgentRuntime): EffectClaimDeps {
+  initToolEffectClaimTable(rt.storage.execRaw);
+
+  return { sql: rt.storage.sql, actor: rt.actor, execution: () => ({ turnId: 'turn-1', runId: 'run-1' }), transaction: (body) => rt.storage.transactionSync(body) };
 }
 
 /** The runtime's actor's own jobs, as a root chat's: a call that settles inside its window never reaches them. */

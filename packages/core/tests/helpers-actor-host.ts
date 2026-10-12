@@ -35,7 +35,7 @@ import type { Identity } from '../src/types/primitives';
 import type { TemporaryAgentPort } from '../src/types/subordinates';
 import { historyTurnPairs } from '../src/identity/conversation-store';
 
-type FixtureSeat = HostedNodeSeat;
+type FixtureSeat = HostedNodeSeat<HostedActor>;
 
 /** The one role a fixture actor resolves under; no `allowedTools`, so it never narrows a suite's surface. */
 const TESTER: RoleDefinition = {
@@ -80,7 +80,7 @@ export function fixtureCompaction(key = 'fixture-run'): HeadInferenceDeps['compa
 }
 
 /** A run's actor, sources and compaction over `seat`, its turns on `model`. */
-export function runningOn(seat: HostedNodeSeat, model: LanguageModel): Pick<HeadInferenceDeps, 'actor' | 'runId' | 'sources' | 'compaction'> {
+export function runningOn(seat: HostedNodeSeat<HostedActor>, model: LanguageModel): Pick<HeadInferenceDeps, 'actor' | 'runId' | 'sources' | 'compaction'> {
   return {
     actor: seat.actor, runId: seat.runId,
     sources: { ...seat.sources, models: { ...seat.sources.models, resolve: () => model } },
@@ -131,7 +131,7 @@ export interface HostedSeats {
   /** The seat one logical actor's turn runs on; idempotent per name, so a re-hosted node keeps its actor. */
   seat(name: string, origin: 'agent' | 'swarm'): Promise<FixtureSeat>;
   /** `hostNode` over these seats: one actor per node id, all over the one database. */
-  readonly hostNode: (node: NodeIdentity) => Promise<HostedNodeSeat>;
+  readonly hostNode: (node: NodeIdentity) => Promise<FixtureSeat>;
   /** The workspace's job registry every seat's loop attaches to; its root is the caller's runtime's actor. */
   readonly jobs: WorkspaceJobAuthorities;
 }
@@ -268,9 +268,10 @@ export function hostedSeatsOver(input: {
       sources: fixtureRunSources(actor, input.model ?? (() => {
         throw new KinuError('unavailable', `the hosted fixture was given no model, so ${name} cannot run a turn`);
       })),
-      infer: (headInput, inference) => runHeadInference(headInput, { ...inference, compaction }),
+      infer: (headInput, inference) => runHeadInference(headInput, { ...inference, actor, compaction }),
       conversations: actor.stores.conversationSearch,
       jobs: { ports: { jobOutput: () => {} }, attach: (authority) => jobs.attach(authority) },
+      receipts: { sql: actor.runtime.storage.sql, actor: actor.handle, durable: (callId, signal) => actor.session.durableCall(callId, signal) },
     };
 
     seats.set(name, seated);

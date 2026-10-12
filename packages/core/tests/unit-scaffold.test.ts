@@ -145,7 +145,7 @@ describe('scaffold host callTool ids', () => {
     initToolEffectClaimTable(execRaw);
 
     const deps: EffectClaimDeps = {
-      sql, actor: createTestActors(sql, execRaw).main, turnId: () => 'turn-1', durable: () => Promise.resolve(),
+      sql, actor: createTestActors(sql, execRaw).main, execution: () => ({ turnId: 'turn-1', runId: 'run-1' }), durable: () => Promise.resolve(),
     };
 
     const calls: string[] = [];

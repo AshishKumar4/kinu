@@ -37,6 +37,7 @@ const unusedWorkspace: AgentWorkspaceCalls = {
   runEnded: unused,
   enqueueTurn: unused,
   executeTool: unused,
+  receipts: unused,
   observe: unused,
   paceStep: unused,
   answerMetadata: unused,

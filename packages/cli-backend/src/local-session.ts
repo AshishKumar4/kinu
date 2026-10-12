@@ -6,7 +6,7 @@
 import { lookup } from 'node:dns/promises';
 import { realpathSync } from 'node:fs';
 import { ASKED, historyTurnPairs, testModel, toolDescription, workModeForTurnMetadata, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
-import type { ActorHandle, DeliveryAnswer, InProcessDeliveries, JsonObject, OwedDelivery } from '@kinu.run/core';
+import type { ActorHandle, DeliveryAnswer, ExecutionKey, InProcessDeliveries, JsonObject, OwedDelivery } from '@kinu.run/core';
 import { Effect } from 'effect';
 import { resolve } from 'node:path';
 import type { LanguageModel, ToolSet } from 'ai';
@@ -128,7 +128,7 @@ import { ActorSession, type ActorTurnLease,
   recordModelOperations, type ModelOperationSink,
   McpToolSurfaceCache, toolSurfaceTokens, type McpServedSurface, type McpSurfaceBudget,
   defaultLoopOrigin,
-  type ActorHost, type ActorSeat, type HostedActor, type LoopOrigin, type WriteObserver,
+  type ActorHost, type ActorSeat, type HostedActor, type LoopOrigin, type SeatedActor, type TurnLedgers, type WriteObserver,
   PlanReviewActions, SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, ASK_OWNER_TOOL, workModeUnderReview, authoredTurnMetadata, planHandoffStillOwed,
   type PlanDecisionOutcome, type PlanEdit, type PlanReview, type ReviewAnnotation, type PlanReviewDecision,
   type PlanReviewResult,
@@ -1177,7 +1177,7 @@ export class LocalAgentSession {
       effectClaims: {
         sql: this.rt.storage.sql,
         actor: this.rt.actor,
-        turnId: () => currentOperationProfile(this.rt.actor)?.turnId ?? this.chat.currentTurnId ?? WORKSPACE_RUN_ID,
+        execution: () => this.turnExecution(),
         durable: (callId, signal) => this.actorSession.durableCall(callId, signal),
         transaction: (body) => this.rt.storage.transactionSync(body),
       },
@@ -1779,8 +1779,8 @@ export class LocalAgentSession {
     if (gated) parts.completionGate = { text: this.chat.completionGate.task };
 
     // Recorded, not re-read on replay: the tool surface can change. Owed only when the actor reviews turns.
-    if (this.actorSession.reviewsTurns) {
-      parts.advisor = projectJsonValue({ value: this.actorSession.advisorSnapshot(scoped, input.reachableTools) });
+    if (this.actorSession.advisor.reviewsTurns) {
+      parts.advisor = projectJsonValue({ value: this.actorSession.advisor.snapshot(scoped, input.reachableTools) });
     }
 
     // The workspace mission names the root. A child is named once, from its brief (the turn that opened its
@@ -1870,7 +1870,7 @@ export class LocalAgentSession {
       }),
       ...chatTerminalEffects({ chat: () => this.chat, orchestrator: () => this.actorSession.orchestrator, engine: this.engine }),
       ...subordinateTerminalEffects({
-        hireAdvisor: (advisor) => this.actorSession.hireAdvisor(advisor),
+        hireAdvisor: (advisor) => this.actorSession.advisor.hire(advisor),
         // Awaited so a one-shot close joins it.
         applyTitle: (subject) => this.applyAutoTitle(subject),
         ...(relay !== null && { sendReport: (report) => relay.send(report) }),
@@ -2284,7 +2284,7 @@ export class LocalAgentSession {
       reportNodeDelta: () => this.publishHeadStream,
       model: () => this.cachedModel ?? this.defaultModel("an agents swarm"),
       reportModelCall: this.modelCallSink,
-      nodeCodemode: (actor) => hostedCodemodeTool(actor, this.getWebSearchProvider()),
+      nodeCodemode: (actor) => hostedCodemodeTool(actor, this.getWebSearchProvider(), () => this.runLedgers(actor)),
       webSearch: this.getWebSearchProvider(),
       originContext: async () => this.actorSession.history,
       // Only the runner knows which profile snapshot applies (caller's, or frozen on re-drive), so it
@@ -2316,8 +2316,8 @@ export class LocalAgentSession {
    * handed to the turn it opens, never awaited here; tracked, so an exit joins it.
    */
   async deliverAdvisorAnswers(): Promise<void> {
-    await this.actorSession.deliverAdvisorAnswers();
-    this.tracked(() => this.actorSession.advisorDeliveries());
+    await this.actorSession.advisor.deliverAnswers();
+    this.tracked(() => this.actorSession.advisor.deliveries());
   }
 
   /** Installed after construction: roster and peer inbox need the session's broadcast. */
@@ -2548,14 +2548,25 @@ export class LocalAgentSession {
       journal: () => this.headJournal,
       publishHeadStream: this.publishHeadStream,
       hostHead: (input, writes) => this.hostHead(input, writes),
+      ledgers: (actor) => this.runLedgers(actor),
     };
+  }
+
+  /** A run actor's turn ledgers: its session's, which runs its turn in this process while it is hosted. Public beside
+   *  `hostHead`, for a caller seating heads through this session. */
+  runLedgers(actor: SeatedActor): TurnLedgers {
+    const hosted = this.actorHost.hosted(actor.reference);
+
+    if (hosted === null) return settleSync(Effect.fail(new KinuError('missing', `${actor.record.name} is not hosted, so it runs no program`)));
+
+    return hosted.session.orchestrator.acc;
   }
 
   /**
    * Seat one head as a logical actor: its own directory row, runtime objects, claimed loop and, on
    * release, retirement. Public so callers without a session (bench panel, eval arm) can seat heads.
    */
-  async hostHead(input: HeadInput, writes: WriteObserver): Promise<HeadSeat> {
+  async hostHead(input: HeadInput, writes: WriteObserver): Promise<HeadSeat<HostedActor>> {
     // Both named before acquire: the host seeds the loop and builds the runtime while building the actor.
     const { binding, seat } = await this.seatRunActor(input.id, (actorId) => {
       this.loopOrigins.set(actorId, input.loop);
@@ -2599,7 +2610,7 @@ export class LocalAgentSession {
   /** One run actor's seat, for a head or a swarm node; `declare` runs before the host builds it. */
   private async seatRunActor(creationId: string, declare: (actorId: string) => void, seat: ActorSeat): Promise<{
     readonly binding: LocalActorBinding;
-    readonly seat: HostedNodeSeat;
+    readonly seat: HostedNodeSeat<HostedActor>;
   }> {
     const binding = registerLocalActor(this.rt.actor, {
       name: explorationActorKey(creationId), creationId, origin: 'swarm', lifetime: 'task',
@@ -2642,6 +2653,7 @@ export class LocalAgentSession {
 
     const compaction = hostedActorCompaction(actor, {
       logger: compactionDiagnostics, models, report: (_actor, call) => report(call), operations,
+      turn: { profile: () => actor.session.profile, ledger: actor.session.dynamic },
     });
 
     return {
@@ -2650,9 +2662,14 @@ export class LocalAgentSession {
         actor,
         runId,
         sources: this.runActorSources(actor, runId, { extension: compaction.extension, models, report, operations }),
-        infer: (input, inference) => runHeadInference(input, { ...inference, compaction: compaction.trigger }),
+        infer: (input, inference) => runHeadInference(input, { ...inference, actor, compaction: compaction.trigger }),
         conversations: actor.stores.conversationSearch,
         jobs: { ports: this.loopJobPorts(), attach: (authority) => this.jobAuthorities.attach(authority) },
+        receipts: {
+          sql: actor.runtime.storage.sql, actor: actor.handle,
+          durable: (callId, signal) => actor.session.durableCall(callId, signal),
+          transaction: (body) => actor.runtime.storage.transactionSync(body),
+        },
       },
     };
   }
@@ -2661,7 +2678,7 @@ export class LocalAgentSession {
    * Seat one swarm node as a logical actor; a factory per node (see core's `HostedNodeSeat`). No release:
    * retirement belongs to the owning search. Public so an eval can seat nodes through this session.
    */
-  async hostNode(node: NodeIdentity): Promise<HostedNodeSeat> {
+  async hostNode(node: NodeIdentity): Promise<HostedNodeSeat<HostedActor>> {
     return (await this.seatRunActor(node.nodeId, () => {}, { kind: 'node' })).seat;
   }
 
@@ -2729,11 +2746,8 @@ export class LocalAgentSession {
 
   private buildToolSets(): void {
     for (const mode of ['build', 'plan'] as const) {
-      this.toolSets[mode] = buildActorTools(this.actorToolsetDeps(
-        mode,
-        // A closure: this toolset is rebuilt only on model change, but the turn changes every turn.
-        () => currentOperationProfile(this.rt.actor)?.turnId ?? this.chat.currentTurnId ?? WORKSPACE_RUN_ID,
-      ));
+      // A closure: this toolset is rebuilt only on model change, but the turn changes every turn.
+      this.toolSets[mode] = buildActorTools(this.actorToolsetDeps(mode, () => this.turnExecution()));
     }
 
     this.activateToolMode(this.actorSession.workMode);
@@ -2743,14 +2757,19 @@ export class LocalAgentSession {
     return this.stores.conversationSearch;
   }
 
-  /** Tool deps with the effect-claim id as an argument; the id decides what a replay dedupes against. */
-  private actorToolsetDeps(mode: WorkMode, turnId: () => string): ActorToolsetDeps {
+  /** The execution a tool call now claims under: its operation's, else the chat's open turn and run. */
+  private turnExecution(): Pick<ExecutionKey, 'turnId' | 'runId'> {
+    return currentOperationProfile(this.rt.actor) ?? { turnId: this.chat.currentTurnId ?? WORKSPACE_RUN_ID, runId: this.chat.currentRunId ?? WORKSPACE_RUN_ID };
+  }
+
+  /** Tool deps with the effect-claim execution as an argument; it decides what a replay dedupes against. */
+  private actorToolsetDeps(mode: WorkMode, execution: () => Pick<ExecutionKey, 'turnId' | 'runId'>): ActorToolsetDeps {
     const deps: ActorToolsetDeps = {
       rt: this.rt,
       workMode: mode,
       conversations: this.ownConversations(),
       effectClaims: {
-        sql: this.rt.storage.sql, actor: this.rt.actor, turnId,
+        sql: this.rt.storage.sql, actor: this.rt.actor, execution,
         durable: (callId, signal) => this.actorSession.durableCall(callId, signal),
         transaction: (body) => this.rt.storage.transactionSync(body),
       },
@@ -2798,7 +2817,7 @@ export class LocalAgentSession {
   /** Raw tools with the effect-claim id pinned to the rollout, so a live run and a replay claim the
    *  same call once. Raw because backgrounding would key work to the ambient turn. */
   private rolloutTools(callScope: string): ToolSet {
-    return buildActorTools(this.actorToolsetDeps(currentOperationProfile(this.rt.actor)?.profile.workMode ?? 'build', () => callScope)).raw;
+    return buildActorTools(this.actorToolsetDeps(currentOperationProfile(this.rt.actor)?.profile.workMode ?? 'build', () => ({ turnId: callScope, runId: callScope }))).raw;
   }
 
   private activateToolMode(mode: WorkMode): void {

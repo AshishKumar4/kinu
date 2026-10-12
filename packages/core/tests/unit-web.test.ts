@@ -481,7 +481,7 @@ function buildWithWeb(rt: ReturnType<typeof createTestRuntime>['rt'], webSearch?
     rt,
     conversations: conversationsFor(rt),
     codemode: createNodeCodemodeBuilder([createWebCodemodeProvider({ provider, files: rt.storage })]),
-    effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
+    effectClaims: { sql: rt.storage.sql, actor: rt.actor, execution: () => ({ turnId: 'turn-1', runId: 'run-1' }), durable: () => Promise.resolve() },
     webSearch: provider,
     jobs: actorJobsFor(rt),
   }).turn;

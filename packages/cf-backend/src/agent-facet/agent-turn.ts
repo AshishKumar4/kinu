@@ -1,11 +1,12 @@
 /** One delegated turn in the agent's isolate: its model loop here, every tool call back in the workspace. */
 import { jsonSchema, tool, type ModelMessage, type ToolSet, type UIMessageChunk } from 'ai';
 import {
-  ASK_OWNER_TOOL, CHAT_SESSION_ID, actorAffinity, askOwnerTool, HeadCapture, decodeJsonValue, decodeModelMessageValues, encodeModelMessageValues, withEffectReceipt, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan, imageModelOutput,
+  CHAT_SESSION_ID, actorAffinity, HeadCapture, decodeJsonValue, decodeModelMessageValues, encodeModelMessageValues, ownerLaneTools, withEffectPointer, withEffectReceipt, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan, imageModelOutput,
   type AuthRequest, type AuthResolution, type HandedOffTurn, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type JsonValue, type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind, type AgentSignal, type SendOutcome,
   turnSourcesFromBundle, captureOperationProfile, type ModelCallReport, type ModelOperationEvent,
   type AdvisorRecoverySnapshot, type AgentFigures, type AgentStandingReport, type HostedActor, type OwedReport, type SerializedMessage, type SessionEvent,
   type SubordinateReportLedger, type SubordinateReportStatus, type TaskTurnEnding, type WorkMode, type ResolvedTurnProfile, type DynamicContext,
+  type RemoteReceipt, type ReplyToCommentToolDeps, type SubmitPlanToolDeps,
 } from '@kinu.run/core';
 
 import { attempt, diagnostics, hold, logged, settle, type ErrorCode } from '@kinu.run/core/obs';
@@ -88,6 +89,9 @@ export interface AgentWorkspace {
   runEnded(id: string, outcome: AgentRunOutcome): Promise<void>;
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult>;
   executeTool(call: AgentToolCall): Promise<AgentToolAnswer>;
+  /** The workspace's receipts for calls of an execution whose rows here only point there; a call it holds none for is
+   *  absent. Read only, so a closed or stopped turn's repair still asks. */
+  receipts(turnId: string, runId: string, callIds: readonly string[]): Promise<ReadonlyMap<string, RemoteReceipt>>;
   observe(lines: ReadableStream<Uint8Array>): Promise<void>;
   /** Calls the agent's `step` for the turn's waiting step, and answers once that step has ended (`StepPacer`). */
   paceStep(turnId: string): Promise<void>;
@@ -249,15 +253,12 @@ function workspaceTools(
   turn: FacetToolTurn,
 ): ToolSet {
   return Object.fromEntries(prepared.tools.map((descriptor) => {
-    // The owner answers it, nothing executes it: its call parks in this isolate's store, which the repair reads.
-    if (descriptor.name === ASK_OWNER_TOOL) return [descriptor.name, askOwnerTool()];
-
     const entry = tool({
       description: descriptor.description,
       inputSchema: jsonSchema(descriptor.inputSchema),
       execute: async (input, { toolCallId }) => {
         const answer = await workspace.executeTool({
-          activity: turn.database.takeActivity(), turnId: turn.id, mode: turn.mode, parentDriven: turn.parentDriven, ...(turn.driving !== undefined && { driving: turn.driving }),
+          activity: turn.database.takeActivity(), turnId: turn.id, runId: turn.runId, mode: turn.mode, parentDriven: turn.parentDriven, ...(turn.driving !== undefined && { driving: turn.driving }),
           callId: toolCallId, name: descriptor.name, input: decodeJsonValue({ value: input }),
         });
 
@@ -337,6 +338,7 @@ export function facetTurnSources(turn: {
     models: { normalize: (spec) => registry.normalizeSpecSync(spec || prepared.sources.model), resolve: (spec) => registry.resolveModel(spec, affinity) },
     report: (_actor, report) => spend.report(report),
     operations: spend.operations,
+    turn: { profile: () => actor.session.profile, ledger: actor.session.dynamic },
   });
 
   const sources = turnSourcesFromBundle(prepared.sources, {
@@ -359,27 +361,45 @@ export function facetTurnSources(turn: {
   return { sources, trigger: compaction.trigger };
 }
 
-/** A turn's tool calls carry its lane, so a workspace that restarted mid-turn rebuilds the same turn. */
+/** A turn's tool calls carry its execution and its lane, so a workspace that restarted mid-turn rebuilds the same turn. */
 interface FacetToolTurn {
   readonly id: string;
+  readonly runId: string;
   readonly mode: WorkMode;
   readonly parentDriven: boolean;
   readonly driving: JsonObject | undefined;
   readonly live: LiveTurn;
   readonly capture: HeadCapture;
   readonly database: AgentDatabase;
+  /** The agent's own plan store, where the owner's lane submits and replies; a run reaches no owner's lane. */
+  readonly owner?: { readonly submitPlan: SubmitPlanToolDeps; readonly replyToComment: ReplyToCommentToolDeps };
 }
 
+/**
+ * A turn's tools here (design v2 §4): each workspace tool commits in the workspace, which keeps its receipt, so a call
+ * leaves only a pointer here; the owner's lane (its plans, its questions) commits in this store, under a receipt here.
+ */
 export function facetTurnTools(workspace: AgentWorkspace, prepared: PreparedAgentTurn, actor: HostedActor, turn: FacetToolTurn): ToolSet {
-  return withEffectReceipt(workspaceTools(workspace, prepared, turn), {
+  const receipts = {
     actor: actor.handle,
     sql: actor.runtime.storage.sql,
-    turnId: () => turn.id,
-    durable: (callId, signal) => actor.session.durableCall(callId, signal),
-    // Each runs in its workspace, whose receipt, in the store its effect commits to, answers a re-ask: the receipt here
-    // points there (design v2 §4). Asking owners parks here and is not among them.
-    elsewhere: (name) => name !== ASK_OWNER_TOOL,
+    execution: () => ({ turnId: turn.id, runId: turn.runId }),
+    durable: (callId: string, signal?: AbortSignal) => actor.session.durableCall(callId, signal),
+  };
+
+  const { ownerLane } = prepared;
+
+  // The owner answers a question, nothing executes it: its call parks in this isolate's store, which the repair reads.
+  const owned = ownerLaneTools({
+    ...(ownerLane.submitPlan && turn.owner !== undefined && { submitPlan: turn.owner.submitPlan }),
+    ...(ownerLane.replyToComment && turn.owner !== undefined && { replyToComment: turn.owner.replyToComment }),
+    ...(ownerLane.askOwner && { askOwner: true }),
   });
+
+  return {
+    ...withEffectPointer(workspaceTools(workspace, prepared, turn), receipts),
+    ...withEffectReceipt(owned, { ...receipts, transaction: (body) => actor.runtime.storage.transactionSync(body) }),
+  };
 }
 
 /** A one-shot run on the shared assembly and step loop. */
@@ -405,7 +425,7 @@ export async function runAgentTask(
     clock: REAL_CLOCK,
     sources,
     compaction: trigger,
-    tools: facetTurnTools(workspace, prepared, actor, { id: task.sequenceId, mode: task.mode, parentDriven: false, driving: undefined, live, capture, database }),
+    tools: facetTurnTools(workspace, prepared, actor, { id: task.sequenceId, runId: prepared.runId, mode: task.mode, parentDriven: false, driving: undefined, live, capture, database }),
     opening: decodeModelMessageValues(prepared.opening),
     capture,
     isAborted: () => stop.aborted,

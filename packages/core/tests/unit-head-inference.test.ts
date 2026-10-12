@@ -8,7 +8,7 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { ResolvedProvider } from '../src/types/primitives';
 import type { JsonValue } from '../src/utils/json';
-import { actorJobsFor, createTestWorkspace, conversationsFor } from './helpers';
+import { actorJobsFor, createTestWorkspace, conversationsFor, effectClaimsFor } from './helpers';
 import { buildHeadToolSet } from '../src/heads/head-tools';
 import { jsonSchema, tool, type LanguageModel, type ModelMessage } from 'ai';
 import { fixtureCompaction, hostedSeatsOver } from './helpers-actor-host';
@@ -329,6 +329,7 @@ describe('buildHeadAccumulatorTools', () => {
       input, capture, rt, conversations: conversationsFor(rt), codemodeTool: undefined, jobs: actorJobsFor(rt),
       webSearch: { search: async (query) => ({ query, results: [], source: 'duckduckgo' }), fetch: async (url) => ({ url, retrievedAt: '', markdown: '' }), render: async (url) => ({ url, retrievedAt: '', markdown: '' }), screenshot: async (url) => ({ url, retrievedAt: '', bytes: new Uint8Array() }) },
       split: async () => { throw new Error('this head cannot split'); },
+      effectClaims: effectClaimsFor(rt),
     });
 
     const report = await runHeadInference(input, await deps(model, { tools, capture }));

@@ -4,7 +4,7 @@ import type { VFS as CoreVFS } from '@nimbus-sh/core/vfs/vfs.js';
  * workspace; VFS, shell, memory and craft stores all live in the owning actor's `ctx.storage.sql`.
  */
 
-import type { AgentRuntime, ActorHandle, LLM, Schedule, Identity, SqlExecutor, SqlValue, RawSqlExec, FiberCtx, ExecutionRouter, TurnAccumulator, DeferredApprovalChannel, WriteObserver, ModelCallSink, ModelOperationSink, ResolvedTurnProfile, SlateCallResult, SlateOperation, ChildContextResolver, ContextTree } from "@kinu.run/core";
+import type { AgentRuntime, ActorHandle, LLM, Schedule, Identity, SqlExecutor, SqlValue, RawSqlExec, FiberCtx, ExecutionRouter, DeferredApprovalChannel, WriteObserver, ModelCallSink, ModelOperationSink, ResolvedTurnProfile, SlateCallResult, SlateOperation, ChildContextResolver, ContextTree } from "@kinu.run/core";
 import {
   nimbusSessionFiles, nimbusSessionShell, createShellSession,
   DefaultExecutionRouter, createNimbusWorkspaceExecutor,
@@ -34,7 +34,7 @@ import { BOX_SIZES, BOX_SIZE_ORDER, DEFAULT_BOX_SIZE, type BoxSize } from "@kinu
 import { accountSandboxSize, SANDBOX_SIZE_CONFIG_KEY } from "./sandbox-size";
 import { driveBound, tenantDrive } from "./drive/tenant";
 import { adaptCloudflareSandbox } from "./sandbox-exec-lane"
-import { previewHostSuffix } from "@kinu.run/core";
+import { previewHostSuffix, scopedTurnSurface } from "@kinu.run/core";
 import { createDecisionPort } from "@kinu.run/core";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { sandboxPreviewExposures } from "@kinu.run/core";
@@ -73,9 +73,6 @@ export interface CFRuntimeAccess {
   /** One box per workspace: a child composing its own gets a second, empty filesystem
      *  (tests/unit-head-fork.test.ts). Actors are separated by `shellId` and credential. */
   workspaceBox(shellId: string): NimbusSandboxHandle;
-  /** Absent for facets without a budget ledger, or answering none before the agent is hosted; the `workspace` provider
-   *  then uses a private ledger. */
-  readonly acc?: () => Pick<TurnAccumulator, 'files' | 'context'> | undefined;
   getCliCwdForDevice?(): string | null;
   getCheckpointMetaForDevice?(): { turnId: string; sessionId: string } | null;
 }
@@ -399,8 +396,9 @@ export function createCFRuntime(
     inline: {
       vfs: toolFiles, files: agentFileVfs, memory, craftStore, shell, planes,
       sql,
-      ledger: () => access.acc?.()?.files,
-      budget: () => access.acc?.()?.context,
+      // The turn whose call runs the program, every agent's alike; outside one the provider keeps a private ledger.
+      ledger: () => scopedTurnSurface()?.ledgers.files,
+      budget: () => scopedTurnSurface()?.ledgers.context,
       slate: hooks.slate,
       slateBuild: hooks.slateBuild,
     },

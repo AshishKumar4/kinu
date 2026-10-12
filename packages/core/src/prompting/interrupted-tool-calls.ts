@@ -37,6 +37,16 @@ export function trailingUnpairedCalls(history: readonly ModelMessage[], toolName
     ? [{ toolCallId: part.toolCallId, input: part.input }] : []);
 }
 
+/** Every call in the history that no `tool-result` answers, `providerExecuted` ones skipped as the SDK skips them. */
+export function unpairedToolCalls(messages: readonly ModelMessage[]): LostCallQuery[] {
+  const answered = new Set(messages.flatMap((message) => (message.role === 'tool' ? message.content.flatMap((part) => (part.type === 'tool-result' ? [part.toolCallId] : [])) : [])));
+
+  return messages.flatMap((message) => (message.role === 'assistant' && Array.isArray(message.content)
+    ? message.content.flatMap((part) => (part.type === 'tool-call' && part.providerExecuted !== true && !answered.has(part.toolCallId)
+      ? [{ toolCallId: part.toolCallId, toolName: part.toolName, input: part.input }] : []))
+    : []));
+}
+
 /**
  * Give every unpaired tool call a terminal result, inserted right after the
  * asking assistant message (providers validate position). Returns `undefined`

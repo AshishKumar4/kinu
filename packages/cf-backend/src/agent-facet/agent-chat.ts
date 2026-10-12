@@ -3,7 +3,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   CHAT_SESSION_ID, ChatSession, EventLog, HeadCapture, PendingSendStore, RECOVERY_BACKOFF_CEILING_MS, TerminalTransitions,
   PlanReviewActions, announcementOf, assembleActorTurn, authoredTurnMetadata, chatTerminalEffects, chatTurnParts, declareTerminalRoster, inspectWork,
-  planHandoffStillOwed, approvedTaskPlan, missionGate, workModeUnderReview, projectJsonValue, declareHandoffRoster, HandedOffTurnSchema, terminalEffect, turnAuthorship, turnLane, type TurnAuthorship,
+  planHandoffStillOwed, planAwaitingReply, approvedTaskPlan, missionGate, workModeUnderReview, projectJsonValue, declareHandoffRoster, HandedOffTurnSchema, terminalEffect, turnAuthorship, turnLane, type TurnAuthorship,
   actorPolicy, metadataTier, workModeForTurnMetadata, reportReadsNarration, subordinateTerminalEffects, withCompactionTrigger, type ActorPolicy,
   bindRoute, completeOnRoute, ownProfileChoices, planWorkspaceTitle, resolveAgentTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle,
   type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpening, type JsonObject, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
@@ -157,7 +157,12 @@ export class FacetChat {
     const live: LiveTurn = { dynamic: prepared.dynamic };
 
     const tools = facetTurnTools(workspace, prepared, actor, {
-      id: turn.id, mode: turn.mode, parentDriven: this.parentDriven, driving: this.driving, live, capture: new HeadCapture(), database,
+      id: turn.id, runId: turn.runId, mode: turn.mode, parentDriven: this.parentDriven, driving: this.driving, live, capture: new HeadCapture(), database,
+      // Its plans are its own store's, judged by the metadata its turn was admitted under.
+      owner: {
+        submitPlan: { submit: async (edits) => await this.planned((plans) => plans.submit(edits, this.driving)) },
+        replyToComment: { reply: async (comment, text) => await this.planned((plans) => plans.reply(comment, text, this.driving)) },
+      },
     });
 
     const { sources: bundle } = facetTurnSources({ actor, workspace, models, prepared, spend: this.spend, live, runId: turn.runId, turnId: turn.id, pacer });
@@ -209,6 +214,8 @@ export class FacetChat {
 
     const prepared = await workspace.prepareChat({
       turnId: lease.turnId, mode, userText: item.text, parentDriven: this.parentDriven, driving: this.driving, opening,
+      // A plan the owner sent back with comments awaits its answers on the owner's turns alone.
+      awaitsReply: !this.parentDriven && planAwaitingReply(plans.getActive(CHAT_SESSION_ID), this.driving),
       // Its run, which the turn's recovery continues and its Retry starts anew, and its place in this agent's sequence.
       runId: lease.runId, seq: database.nextInSequence(),
       ...(explicitTier !== undefined && { explicitTier }), ...(taskPlan !== null && { taskPlan }),
@@ -254,7 +261,7 @@ export class FacetChat {
 
   private async composeRequest(): Promise<ComposedRequest> {
     const mode = this.deps.actor.session.workMode;
-    const prepared = await this.deps.workspace.prepareChat({ turnId: null, mode, userText: '', parentDriven: false });
+    const prepared = await this.deps.workspace.prepareChat({ turnId: null, mode, userText: '', parentDriven: false, awaitsReply: false });
     const assembled = await this.assemble(prepared, { id: 'measure', mode, runId: prepared.runId }, { userText: '', workMode: mode });
 
     return { execution: assembled.execution, profile: assembled.profile, sessionKey: this.trigger.key };
@@ -302,7 +309,7 @@ export class FacetChat {
       // words ("Continue") are no name for it.
       ...(input.opensConversation() && { autoTitle: { mission: input.userText, standIn: true } }),
       sleepTime: false,
-      ...(this.reviewsTurns && { advisor: projectJsonValue({ value: session.advisorSnapshot(scoped, input.reachableTools) }) }),
+      ...(this.reviewsTurns && { advisor: projectJsonValue({ value: session.advisor.snapshot(scoped, input.reachableTools) }) }),
       ...(report !== null && {
         parentReport: {
           text: report.content,
@@ -442,7 +449,7 @@ export class FacetChat {
   private async suggestTitle(mission: string): Promise<string | null> {
     const { actor, workspace, models, pacer } = this.deps;
     const workMode = actor.session.workMode;
-    const prepared = await workspace.prepareChat({ turnId: null, mode: workMode, userText: '', parentDriven: false });
+    const prepared = await workspace.prepareChat({ turnId: null, mode: workMode, userText: '', parentDriven: false, awaitsReply: false });
     const { sources } = facetTurnSources({ actor, workspace, models, prepared, spend: this.spend, live: { dynamic: prepared.dynamic }, runId: prepared.runId, turnId: 'title', pacer });
     const inputs = await sources.profileInputs();
     const profile = resolveAgentTurnProfile({ ...inputs, ...ownProfileChoices(sources.config, inputs, sources.ancestors?.()), workMode, availableTools: [], activeSkills: [] });

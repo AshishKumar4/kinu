@@ -22,7 +22,7 @@ import { FacetChat } from './agent-chat';
 import { workspaceClient, type AgentWorkspaceCalls } from './workspace-rpc';
 import type {
   AgentAnswer, AgentAnswerTexts, AgentStanding, AgentSteps, AgentRecovery, AgentSnapshot, ConversationProjection, ConversationTurnPair, AgentTurnTask, EnqueueTurnResult, ProgrammaticTurn, SendLanding, TurnRequestAt,
-  JsonObject, PlanDecisionOutcome, PlanEdit, PlanReview, PlanReviewDecision, PlanReviewResult, ReviewAnnotation, AskedQuestions, OwnerAnswer,
+  JsonObject, PlanDecisionOutcome, PlanReview, PlanReviewDecision, PlanReviewResult, ReviewAnnotation, AskedQuestions, OwnerAnswer,
   Page, PageRequest, RunEvent, RunEventQuery, RunListEntry, RunSummary, StoredRunEvent,
   ForkConversationPlan, ForkConversationSection, ForkRowSection, ForkRows,
 } from '@kinu.run/core';
@@ -165,11 +165,7 @@ export interface AgentFacetCalls {
   interrupt(snapshot: AgentSnapshot, turnId: string): Promise<void>;
   recover(snapshot: AgentSnapshot): Promise<AgentRecovery>;
   archivePage(snapshot: AgentSnapshot, cursor: ArchiveSqlCursor | null, maxBytes: number): Promise<ArchiveAgentPage>;
-  /** Its plan reviews, in its own store: submitted by its turn, under that turn's author-stamped metadata, and reviewed by
-   *  the owner through its window. */
-  submitPlan(snapshot: AgentSnapshot, edits: readonly PlanEdit[], driving: JsonObject | undefined): Promise<PlanReviewResult>;
-  /** Its reply in a comment thread of the review the owner sent back. */
-  replyPlanComment(snapshot: AgentSnapshot, comment: string, text: string, driving: JsonObject | undefined): Promise<PlanReviewResult>;
+  /** Its plan reviews, in its own store: submitted by its turn's own tools, and reviewed by the owner through its window. */
   activePlanReview(snapshot: AgentSnapshot): Promise<PlanReview | null>;
   /** Newest first, for Work and the review queue; a retained retired agent answers too. */
   planReviews(snapshot: AgentSnapshot): Promise<readonly PlanReview[]>;
@@ -246,6 +242,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
       turnInFlight: () => this.held?.session.turnInFlight() ?? false,
       memory: () => this.workspaceCalls.memory(), program: (...args) => this.workspaceCalls.program(...args),
       sayToParent: (signal) => this.workspaceCalls.sayToParent(signal),
+      receipts: (...args) => this.workspaceCalls.receipts(...args),
       logActivity: (lines) => this.workspaceCalls.logActivity(lines),
     });
     this.database.adopt(snapshot);
@@ -256,7 +253,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
   private async prepared(snapshot: AgentSnapshot): Promise<FacetChat> {
     const database = this.open(snapshot);
     // The workspace's program first: the actor is built on it.
-    const prepared = await this.workspaceCalls.prepareChat({ turnId: null, mode: 'build', userText: '', parentDriven: false });
+    const prepared = await this.workspaceCalls.prepareChat({ turnId: null, mode: 'build', userText: '', parentDriven: false, awaitsReply: false });
 
     // The rows newest to reach it, not those this call carried: a call adopted while the program was asked for may have
     // brought newer ones (the owner's model pin), and re-adopting older rows would put the old ones back.
@@ -398,14 +395,6 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return await settle(this.withChat(snapshot, async (chat) => (await chat.clear())?.message ?? null));
   }
 
-  async submitPlan(snapshot: AgentSnapshot, edits: readonly PlanEdit[], driving: JsonObject | undefined): Promise<PlanReviewResult> {
-    return await settle(this.withChat(snapshot, (chat) => chat.planned((plans) => plans.submit(edits, driving))));
-  }
-
-  async replyPlanComment(snapshot: AgentSnapshot, comment: string, text: string, driving: JsonObject | undefined): Promise<PlanReviewResult> {
-    return await settle(this.withChat(snapshot, (chat) => chat.planned((plans) => plans.reply(comment, text, driving))));
-  }
-
   async activePlanReview(snapshot: AgentSnapshot): Promise<PlanReview | null> {
     return this.open(snapshot).activePlan();
   }
@@ -533,7 +522,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   /** An advisor's answer on one of this agent's own turns, judged by this isolate's lane and said here. */
   async deliverAdvice(snapshot: AgentSnapshot, helper: AnsweredEvolutionHelper, turnId: string): Promise<boolean> {
-    return await (await this.open(snapshot).acquire()).session.sayAdvisorAnswer(helper, turnId);
+    return await (await this.open(snapshot).acquire()).session.advisor.sayAnswer(helper, turnId);
   }
 
   async idle(): Promise<void> {

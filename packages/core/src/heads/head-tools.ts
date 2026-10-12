@@ -16,6 +16,7 @@ import type { ConversationRecall } from '../memory/conversation-search';
 import type { Decision, HeadId, HeadInput, MergeStrategy } from './types';
 import type { WebSearchProvider } from '../web/index';
 import { wrapToolsForBackground, type ActorJobs } from '../jobs/background-wrap';
+import type { EffectClaimDeps } from '../tools/effect-claim';
 
 export interface HeadSplitRequest {
   readonly rationale: string;
@@ -46,6 +47,8 @@ export interface HeadToolDeps {
   /** The backend owns the spawn substrate; the budget gate lives here. */
   split(request: HeadSplitRequest): Promise<HeadSplitResult>;
   jobs: ActorJobs;
+  /** Each call's receipt, in the store its effect commits to. */
+  effectClaims: EffectClaimDeps;
 }
 
 /** A head's split into child heads; the width is shown, and the backend's split enforces it. */
@@ -109,6 +112,7 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
     extra,
     allowed: input.allowedTools,
     codemodeTool: deps.codemodeTool,
+    effectClaims: deps.effectClaims,
     wrapFinished: (finished) => wrapToolsForBackground(finished, deps.jobs),
   });
 }

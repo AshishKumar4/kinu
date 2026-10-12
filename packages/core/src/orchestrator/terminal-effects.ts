@@ -17,7 +17,8 @@ import type { ActorHandle } from '../identity/actor-handle';
 import { writeActivityLog } from '../identity/activity-log';
 import { OWNER_FIXABLE_REFUSALS, providerRefusalCode, providerStatusOf } from '../providers/util';
 import { statedRetryAfterMs } from '../providers/fallback-cooldown';
-import { improvementLanesOpen, type AgentOrchestrator, type TurnContinuity } from './agent-orchestrator';
+import type { AgentOrchestrator } from './agent-orchestrator';
+import { improvementLanesOpen, recordedTurn, type TurnContinuity } from './evolution-lanes';
 import type { EvolutionEngine } from '../evolution/engine';
 import type { HeadJournal } from '../heads/journal';
 import { CompletedTurnSchema } from '../evolution/session-window';
@@ -342,7 +343,7 @@ export function branchesTerminalEffect(deps: {
 const UNBOUND_SESSION = { status: 'owed', detail: "the recording agent's session is not bound yet" } as const;
 
 /** The recording agent's session, as its effects reach it. */
-type RecordingSession = Pick<AgentOrchestrator, 'recordTurn' | 'recordedTurn' | 'drainPendingEvents'>;
+type RecordingSession = Pick<AgentOrchestrator, 'recordTurn' | 'drainPendingEvents'>;
 
 function turnRecordTerminalEffect(
   orchestrator: () => RecordingSession | null,
@@ -364,7 +365,7 @@ function turnRecordTerminalEffect(
 
       if (orch === null) return UNBOUND_SESSION;
       orch.recordTurn(
-        orch.recordedTurn(status, v.parse(CompletedTurnSchema, turn)),
+        recordedTurn(status, v.parse(CompletedTurnSchema, turn)),
         continuity,
         recordedId === undefined
           ? { recordedAt, enabled: autoEvolve }

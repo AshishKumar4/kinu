@@ -8,7 +8,7 @@ type WebSearchProvider,
 type RouteModelBinder, type ResolvedTurnProfile,
 type PublishHeadStream,
 type MissionGovernor, type ModelCallSink, type ModelOperationSink,
-type HostedActor, type WriteObserver,
+type SeatedActor, type TurnLedgers, type WriteObserver,
 runHeadSplit, HeadController, REAL_CLOCK, type HeadJournal,
 codemodeSurface, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, headMergeLLM, spawnSeatedHead,
 localMissionScope, type ToolSurfaceNarrowing, } from '@kinu.run/core'
@@ -39,13 +39,15 @@ export interface CLIHeadRuntimeDeps {
    * it `fileChanges` reports nothing for a head that rewrote the tree.
    */
   hostHead: (input: HeadInput, writes: WriteObserver) => Promise<HeadSeat>;
+  /** A seated head's turn ledgers, which its programs' files account into. */
+  ledgers: (actor: SeatedActor) => Pick<TurnLedgers, 'files' | 'context'>;
 }
 
 export function createCLIHeadRuntime(deps: CLIHeadRuntimeDeps): HeadRuntime {
   const runtime: HeadRuntime = {
     spawnHead: async (input) => spawnSeatedHead(input, {
       seat: deps.hostHead,
-      codemodeTool: (seat) => hostedCodemodeTool(seat.actor, deps.webSearch),
+      codemodeTool: (seat) => hostedCodemodeTool(seat.actor, deps.webSearch, () => deps.ledgers(seat.actor)),
       webSearch: deps.webSearch,
       split: () => (request) => runHeadSplit(new HeadController(createCLIHeadRuntime(deps), deps.journal(), REAL_CLOCK), input, request),
       mission: () => localMissionScope(deps.governor(), input.missionLabels ?? []),
@@ -69,13 +71,14 @@ export function createCLIHeadRuntime(deps: CLIHeadRuntimeDeps): HeadRuntime {
  * fork must not move its parent's program state), and it never inherits the authority to delegate.
  */
 export function hostedCodemodeTool(
-  actor: HostedActor, search: WebSearchProvider,
+  actor: SeatedActor, search: WebSearchProvider, ledgers: () => Pick<TurnLedgers, 'files' | 'context'>,
 ): (finished: ToolSet, reach: ToolSurfaceNarrowing) => ToolSet[string] {
   // A program here runs in this process, which holds no Browser Run socket client.
   const surface = hostedSurfaceActor(actor, {
     web: { search, files: actor.runtime.storage, browser: null },
     conversations: actor.stores.conversationSearch,
     vectorStore: null,
+    ledgers,
   });
 
   return (finished, reach) => createNodeCodemodeToolFactory({ namespaces: actorNamespaces(surface, SURFACE_POLICY.confined), reach })(codemodeSurface(actor.runtime, finished));

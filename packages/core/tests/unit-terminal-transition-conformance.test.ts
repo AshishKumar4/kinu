@@ -30,7 +30,7 @@ const ANSWER = 'the answer this turn settled on';
 
 /** Same-turn tool claim; `end` must keep it while the turn can still settle. */
 const TOOL_CLAIM: ToolEffectKey = {
-  turnId: TRANSITION.turnId, callId: 'write_file#1', digest: 'conformance-tool-digest',
+  turnId: TRANSITION.turnId, runId: 'run-conformance', callId: 'write_file#1', digest: 'conformance-tool-digest',
 };
 
 const SEQUENCE = [
