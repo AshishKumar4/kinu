@@ -42,9 +42,21 @@ deletes it); each part is Nimbus's own build of the source change its ask propos
   server (#43: core's `PortRegistry.setClientSockets`, worker's keep-alive);
 - `connectTls` carries the program's servername, which Kinu's egress presents and checks (#44);
 - STARTTLS: a program's `tls.connect({ socket })` upgrades that socket through the egress (#46, patched into the staged
-  node shims alone, by `keyed-socket.ts`'s in-band ask);
+  node shims alone: an ask tag and an answer tag in the socket's name, the ask read by `keyed-socket.ts` only at the
+  protocol's go-ahead and answered only from the handshake, first after the ask);
 - a program's `navigator` answers as Node's (userAgent, platform, language), so pg chooses its Node transport (#47, the
-  source hunk as written).
+  source hunk as written);
+- a walked `rm -r` (a backend with no removal of its own) keeps and names a child it cannot read and removes the rest
+  (#51, the hunk as written, dist and source);
+- `set`, `readonly` and `trap` list an ill-formed value or name as `$'…'`, each lone surrogate `\uXXXX`, so two values a
+  named shell keeps apart list apart and an approval of one shell state never covers the other (#52, the hunk as
+  written, dist and source).
+
+Asked of Nimbus and not carried: per-process egress attribution (#45), mysql2's `checkServerIdentity` under workerd's
+TLS (#48), connections keeping the host's socket type (#49), the Cloudflare accounts envelope (#50), a credentialed
+SqliteVFS view walking `..` after a link (#53; Kinu's store planes still key lexically), and the shell resolving an
+operand as POSIX does rather than lexically (#54; a command still reads `./missing/../f` and `f/` where the file plane
+refuses them).
 
 0.17 ships what 0.16's patches carried: `route`/`mutationRoute` `{ creating }` (#32), a node facet's batched output
 writes (#39), and TLS through a workspace egress (`WorkspaceEgressTls.connectTls`, #37). It also ships npm's CommonJS as

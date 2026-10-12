@@ -4540,6 +4540,16 @@ with no reply, and timed out on 22, 2375, 3306, 5432, 6379, 8080, 9000 and 10250
 to private addresses timed out; 10.0.0.1 refused at once. Nothing private answered past the
 interception.
 
+The remainder, measured 2026-10-12 with internet on (job `20261012214210-4c832588`, a full TCP sweep of every
+port with 1,500 connects in flight and a common-UDP sweep — 53, 67, 69, 111, 123, 137, 161, 500, 514, 520, 1900, 4500,
+4789, 5353, 8472, 11211, 51820 — of each address, a public positive control first): 1.1.1.1 answered on 53 and 80 and to
+UDP DNS. 10.0.0.1 is the box's own address (`10.0.0.1/32 host LOCAL` in its fib_trie, job `20261012220713-e5a66ff0`):
+every TCP port reset at once and every UDP port answered ICMP unreachable, its own kernel; two ephemeral-range ports
+(43842, 56364) connected with no banner, self-connects of the sweep's own concurrent sockets, both refused in a second
+box. The gateway 10.0.0.254 and 172.17.0.1 accepted 80 and 443 only, the interception sink, and timed out on every other
+TCP port and every UDP port. fe80::1 on the box's interface was unreachable. Nothing private answered past the
+interception.
+
 The cost is D44's: a container with the internet enabled waits for the platform's first DNS answer,
 about a second, which the wake's store mount meets (D44's paired store-mount phase medians: 2,035 ms
 enabled against 1,910 ms disabled). A workspace with no owner configures no vault, so its web
