@@ -1,12 +1,14 @@
 // Runs the guest program at the native exec boundary: the compare and the replacement are one guest process.
 import { afterAll, expect, test } from 'bun:test';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, chmodSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, chmodSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writeFileIfDigest } from '../src/file-digest-write';
 import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
 import { pipeExec } from './support/native-process';
+import { harness } from './support/devbox-harness';
+import { TestDevbox } from './support/test-devbox';
 import { settle } from '../src/errors';
 
 const root = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}digest-`));
@@ -16,6 +18,22 @@ afterAll(() => { rmSync(root, { recursive: true, force: true }); });
 const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex');
 
 const bytes = (text: string): Uint8Array => new TextEncoder().encode(text);
+
+const base64 = (text: string): string => Buffer.from(text).toString('base64');
+
+class TestBox extends TestDevbox<unknown> {
+  protected override get ambientCheckpoints(): boolean {
+    return false;
+  }
+}
+
+/** A ready box whose digest writes run the guest program over this host's files, behind the box's own resource lane. */
+async function readyBox() {
+  const { box } = harness(TestBox, undefined, pipeExec);
+  await box.devboxStartup();
+
+  return box;
+}
 
 test('a write lands only over the bytes it names, in one guest process, keeping the mode', async () => {
   const path = join(root, 'notes.md');
@@ -93,4 +111,39 @@ test('a write whose guest died after its rename and before its answer is answere
   expect(readFileSync(path, 'utf8')).toBe('the rewrite');
 
   expect(await settle(writeFileIfDigest({ exec: pipeExec }, write))).toEqual({ ok: true, sha256: sha256('the rewrite') });
+});
+
+test('a save through a link replaces the file it leads to and keeps the link; a dangling link gets its file, as a plain write gives it', async () => {
+  const box = await readyBox();
+  const space = mkdtempSync(join(root, 'linked-'));
+  const folder = join(space, 'linked');
+  mkdirSync(folder);
+  const target = join(folder, 'target.md');
+  writeFileSync(target, 'old');
+  chmodSync(target, 0o640);
+  const link = join(space, 'link.md');
+  symlinkSync(target, link);
+  // Relative, so it resolves from the link's own directory.
+  const dangling = join(space, 'dangling.md');
+  symlinkSync('linked/absent.md', dangling);
+  // A plain write refuses this one: its link leads into a directory that is not there.
+  const nowhere = join(space, 'nowhere.md');
+  symlinkSync('missing/absent.md', nowhere);
+
+  const saved = await box.writeFileIfDigest(link, base64('new'), sha256('old'), randomUUID());
+  const stale = await box.writeFileIfDigest(dangling, base64('first'), sha256('old'), randomUUID());
+  const created = await box.writeFileIfDigest(dangling, base64('first'), null, randomUUID());
+  const again = await box.writeFileIfDigest(dangling, base64('second'), null, randomUUID());
+  const [lost] = await Promise.allSettled([box.writeFileIfDigest(nowhere, base64('first'), null, randomUUID())]);
+
+  expect({
+    saved, link: lstatSync(link).isSymbolicLink(), target: readFileSync(target, 'utf8'), mode: statSync(target).mode & 0o777,
+    stale, created, again, dangling: lstatSync(dangling).isSymbolicLink(), throughDangling: readFileSync(dangling, 'utf8'),
+    lost: lost.status, nowhere: lstatSync(nowhere).isSymbolicLink(), left: readdirSync(folder).sort(),
+  }).toEqual({
+    saved: { ok: true, sha256: sha256('new') }, link: true, target: 'new', mode: 0o640,
+    stale: { ok: false, sha256: null }, created: { ok: true, sha256: sha256('first') }, again: { ok: false, sha256: sha256('first') },
+    dangling: true, throughDangling: 'first', lost: 'rejected', nowhere: true, left: ['absent.md', 'target.md'],
+  });
+  await box.destroy();
 });

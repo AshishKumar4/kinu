@@ -14,10 +14,10 @@ const OPERATION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 
 /**
  * Writes `data` at `path` only if the file's bytes hash to `expected` (null: only if no file is there). One guest
- * process reads the new bytes from stdin, compares, and replaces through a temp file and a rename, so the compare and
- * the write are the guest's own instant, and a reader never sees half a file. The guest keeps each `operation`'s
- * answer, and its staged write before the rename publishes it, so a resend after a lost reply or a guest cut at any
- * point gets the first send's outcome rather than a second compare.
+ * process reads the new bytes from stdin, compares the file `path` leads to, and replaces it through a temp file and a
+ * rename, so the compare and the write are the guest's own instant, and a reader never sees half a file. The guest keeps
+ * each `operation`'s answer, and its staged write before the rename publishes it, so a resend after a lost reply or a
+ * guest cut at any point gets the first send's outcome rather than a second compare.
  */
 export function writeFileIfDigest(
   container: Pick<Container, 'exec'>,
@@ -89,33 +89,48 @@ if os.path.exists(intent):
     # It was cut before its rename: nothing was published, so this send starts over.
     os.unlink(intent)
     os.unlink(recorded['temporary'])
+if expected is None:
+    os.makedirs(os.path.dirname(path) or '/', exist_ok=True)
+# The file every link in path leads to, as the read that hashed expected followed them: it is compared and replaced and
+# the links stay, and a dangling link's file is created, as a plain write creates it.
+directory, name = os.path.split(os.path.realpath(path))
 try:
-    with open(path, 'rb') as held:
-        found = hashlib.sha256(held.read()).hexdigest()
-    mode = os.stat(path).st_mode & 0o7777
+    folder = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+except FileNotFoundError:
+    # No directory, so no file. A create gets here through a link into a missing directory, which a plain write refuses.
+    if expected is None:
+        raise
+    answer({'ok': False, 'sha256': None})
+    sys.exit(0)
+try:
+    held = os.open(name, os.O_RDONLY, dir_fd=folder)
 except FileNotFoundError:
     found, mode = None, None
+else:
+    with os.fdopen(held, 'rb') as reading:
+        found = hashlib.sha256(reading.read()).hexdigest()
+        mode = os.fstat(held).st_mode & 0o7777
 if found != expected:
     answer({'ok': False, 'sha256': found})
     sys.exit(0)
-directory = os.path.dirname(path) or '/'
-os.makedirs(directory, exist_ok=True)
-temporary = os.path.join(directory, '.' + os.path.basename(path) + '.' + secrets.token_hex(6) + '.kinu-write')
+temporary = '.' + name + '.' + secrets.token_hex(6) + '.kinu-write'
 digest = hashlib.sha256(data).hexdigest()
 try:
     # Created with the replaced file's mode and given the bits the umask cut before any byte is written.
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666 if mode is None else mode)
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666 if mode is None else mode, dir_fd=folder)
     with os.fdopen(descriptor, 'wb') as out:
         if mode is not None:
             os.fchmod(descriptor, mode)
         out.write(data)
-    record(intent, json.dumps({'temporary': temporary, 'sha256': digest}))
-    os.rename(temporary, path)
+    record(intent, json.dumps({'temporary': os.path.join(directory, temporary), 'sha256': digest}))
+    os.rename(temporary, name, src_dir_fd=folder, dst_dir_fd=folder)
 except BaseException:
     if os.path.exists(intent):
         os.unlink(intent)
-    if os.path.exists(temporary):
-        os.unlink(temporary)
+    try:
+        os.unlink(temporary, dir_fd=folder)
+    except FileNotFoundError:
+        pass
     raise
 answer({'ok': True, 'sha256': digest})
 `;
