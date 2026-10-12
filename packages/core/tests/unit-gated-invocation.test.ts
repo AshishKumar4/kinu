@@ -9,7 +9,7 @@ import { Effect } from 'effect';
 import { createTestActors, present } from '@kinu.run/test-utils';
 import {
   createNimbusWorkspaceExecutor, createShellSession, DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable,
-  describeExecutionContext, nimbusSessionFiles, nimbusSessionShell, withApprovalGatedShell, WORKSPACE_ROOT,
+  nimbusSessionFiles, nimbusSessionShell, withApprovalGatedShell, WORKSPACE_ROOT,
   type NimbusSandboxHandle, type ShellApprovalOutcome, type ShellApprovalPolicy, type ShellApprovalRequest,
 } from '../src/index';
 import { createDeviceTunnelExecutor, type DeviceTransport } from '../src/execution/device-tunnel-executor';
@@ -181,8 +181,6 @@ describe('a context is compared as structure, never as its words', () => {
     await live.shown;
     expect(new Set(live.asked.map((prompt) => prompt.request.approvalId)).size).toBe(3);
     expect(queue.list()).toHaveLength(3);
-    // What the owner reads tells them apart too.
-    expect(new Set(live.asked.map((prompt) => describeExecutionContext(prompt.request.context))).size).toBe(3);
 
     for (const prompt of live.asked) prompt.answer(prompt.request.context.shell === undefined ? 'allow' : 'deny');
     const results = await Promise.all(runs);

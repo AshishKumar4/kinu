@@ -16,6 +16,7 @@ import {
   formatApproval,
   gateExec,
   gatedGrants,
+  describeExecutionContext,
   formatApprovalGrant, holdsGrant,
   parseApprovalGrant,
   type ApprovalGrant,
@@ -505,6 +506,18 @@ describe('gateExec — standing grants', () => {
     expect(await h.run('rm -rf /')).toContain('rm-rf-root');
     expect(await h.run('curl http://169.254.169.254/')).toContain('cloud-metadata-ip');
     expect(h.ran).toEqual([]);
+  });
+});
+
+describe('what the owner reads of where a command runs', () => {
+  test('each value is quoted, so one holding the separator cannot pass for another field', () => {
+    const asOne = describeExecutionContext({ cwd: '/repo · shell release' });
+    const asTwo = describeExecutionContext({ cwd: '/repo', shell: 'release' });
+
+    expect(asOne).not.toBe(asTwo);
+    expect(asOne).toContain('"/repo · shell release"');
+    expect(asTwo).toContain('"/repo"');
+    expect(asTwo).toContain('"release"');
   });
 });
 
