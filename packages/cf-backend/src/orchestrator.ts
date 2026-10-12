@@ -847,6 +847,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       chatOwed: async (reference) => holdsChat(this.agentOf(reference.actorId).origin) && this.agentWakes.armed(reference.actorId)
         && await (await this.agentCalls(reference.actorId)).owed(this.agentSnapshot(reference.actorId)),
       chatIdle: async (reference) => { await (await this.agentCalls(reference.actorId)).idle(); },
+      frozenProfile: async (reference, runId) => await (await this.agentCalls(reference.actorId)).frozenProfile(this.agentSnapshot(reference.actorId), runId),
       pricing: (spec) => this.modelCatalog.pricing(spec),
       accounts: () => this.config.getProviderAccounts(),
       credentialsRevision: () => this.openedCredentialsRevision(),
@@ -885,16 +886,22 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         return actor.runtime.memory;
       }),
-      program: async (turnId, ...args) => {
+      program: async (bound, ...args) => {
         this.admitWork();
 
-        return await this.agentTurns.program(actorId, turnId, ...args);
+        return await this.agentTurns.program(actorId, bound.turnId, ...args);
       },
       traceTurn: (turnId, event) => this.agentTurns.trace(actorId, turnId, event),
       traceStream: (turnId, lines) => this.agentTurns.traceStream(actorId, turnId, headDeltas(lines)),
-      paceStep: async (turnId) => { await (await this.agentCalls(actorId)).step(turnId); },
-      resume: (turnId) => this.agentTurns.resume(actorId, turnId),
-      guard: (turnId, ...args) => this.agentTurns.guard(actorId, turnId, ...args),
+      // Its first step binds the profile its turn assembled on, and the grant carries the live block on it (D5).
+      paceStep: async (bound, profile) => {
+        if (profile !== null) this.boundProfiles.set(actorId, profile);
+        const dynamic = profile === null ? null : this.agentTurns.bind(actorId, bound, profile);
+
+        await (await this.agentCalls(actorId)).step(bound.turnId, dynamic);
+      },
+      resume: (bound) => this.agentTurns.resume(actorId, bound.turnId),
+      guard: (bound, ...args) => this.agentTurns.guard(actorId, bound.turnId, ...args),
       debit: (turnId, ...args) => this.agentTurns.debit(actorId, turnId, ...args),
       prepareTurn: async (turnId) => {
         this.admitWork();
@@ -910,11 +917,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         if (request.turnId !== null) await this.accountSettingsAtOpen();
 
         return await this.agentTurns.prepareChat(actorId, request);
-      },
-      bindProfile: async (turnId, profile) => {
-        this.boundProfiles.set(actorId, profile);
-
-        return this.agentTurns.bindProfile(actorId, turnId, profile);
       },
       chatEvent: (event) => this.hostedChatEvent(actorId, event),
       turnEnded: async (event, figures, activity) => {
@@ -1032,7 +1034,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         // Its hirer hears it as a delivery of its own, whichever agent hired it.
         return await this.agentDeliveries(parentActorId).signals.send(signal);
       },
-    }, this.deleting.signal, (turnId, call) => this.agentTurns.fenceHolds(actorId, turnId, call), (turnId) => this.agentTurns.cutOff(turnId));
+    }, this.deleting.signal, (bound, call) => this.agentTurns.holds(actorId, bound, call), (turnId) => this.agentTurns.cutOff(turnId));
   }
 
   private agentBound(actorId: string): BoundActor {
@@ -3636,7 +3638,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return inspectWork({
       claims: turns.map((turn) => ({ claim: turn.claim, actor: actorName(turn.record.actorId) })),
       agentTurns: agentTurns.map((turn) => ({ turnId: turn.turnId, actor: actorName(turn.actorId) ?? turn.actorId })),
-      executing: new Set(agentTurns.filter((turn) => this.agentTurns.holds(turn.turnId)).map((turn) => turn.turnId)),
+      executing: new Set(agentTurns.filter((turn) => this.agentTurns.isOpen(turn.turnId)).map((turn) => turn.turnId)),
       effects: ledger.pendingSequences().flatMap((sequence) => ledger.owed(sequence)).map((effect) => ({ effect, actor: null })),
       reported: await this.owingAgentsWork(),
       now: Date.now(),

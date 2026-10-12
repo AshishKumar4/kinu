@@ -6,7 +6,7 @@ import { decodeModelMessageValues, forkConversationRowSchema, relayedAnswer, rem
 import type { ForkConversationPlan, ForkConversationSection, ForkConversationSource, ForkConversationTarget, ForkRows } from '@kinu.run/core';
 import type { AgentOwnInspection, ArchiveSqlCursor, CacheWarmArm, ContextEditor, ContextTree, StepSpendSource, ConversationRecall, PositionPageRequest, AgentSignal, AuthRequest, RelayedProvider, ProgrammaticTurn, ProviderEnv, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
-import type { AgentRunOutcome, AgentWorkspace } from './agent-facet/agent-turn';
+import type { AgentRunOutcome, AgentWorkspace, TurnBound } from './agent-facet/agent-turn';
 import type { AdvisorRecoverySnapshot, AgentFigures, AgentStandingReport, AgentTurnActivity, HandedOffTurn, ResolvedTurnProfile, SettledRun, AgentHeadDelta, AgentReview, AgentSnapshot, AgentToolCall, AgentTrace, SessionEvent, TurnRequestAt, ModelCallReport, ModelOperationEvent } from '@kinu.run/core';
 import type { ChatTurnRequest } from './agent-turns';
 import { attempt, KinuError, settle } from '@kinu.run/core/obs';
@@ -57,7 +57,7 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   constructor(
     private readonly answers: AgentWorkspaceAnswers,
     private readonly closed: AbortSignal,
-    private readonly fenced: (turnId: string, call: TurnCall) => boolean = () => true,
+    private readonly fenced: (bound: TurnBound, call: TurnCall) => boolean = () => true,
     private readonly cutOff: (turnId: string) => AbortSignal | null = () => null,
   ) {
     super();
@@ -65,17 +65,17 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
 
   /** `call`: what a turn-bound call does. One that executes is refused for a turn a Stop cut off; one that settles what the
    *  turn already did (its answer, its trace, its charges) is not, so the stopped turn closes. */
-  private open<T>(answer: () => T | Promise<T>, turnId?: string, call: TurnCall = 'settles'): Promise<T> {
+  private open<T>(answer: () => T | Promise<T>, bound?: TurnBound, call: TurnCall = 'settles'): Promise<T> {
     const refused = Promise.withResolvers<never>();
 
-    if (turnId !== undefined && !this.fenced(turnId, call)) {
-      refused.reject(new KinuError('cancelled', `stale_epoch: turn ${turnId} is no longer this agent's current turn.`));
+    if (bound !== undefined && !this.fenced(bound, call)) {
+      refused.reject(new KinuError('cancelled', `stale_epoch: turn ${bound.turnId} is no longer this agent's current turn.`));
 
       return refused.promise;
     }
 
     // A call that runs more of its turn ends as the turn is cut off, as every call does as the workspace is deleted.
-    const cut = turnId !== undefined && call === 'executes' ? this.cutOff(turnId) : null;
+    const cut = bound !== undefined && call === 'executes' ? this.cutOff(bound.turnId) : null;
     const ends = cut === null ? this.closed : AbortSignal.any([this.closed, cut]);
     const refuse = (): void => { refused.reject(ends.reason); };
 
@@ -88,25 +88,25 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   session() { return this.open(() => this.answers.session()); }
   stateSession() { return this.open(() => this.answers.stateSession()); }
   memory() { return this.answers.memory(); }
-  program(turnId: string, ...args: Parameters<Executor['execute']>) { return this.open(() => this.answers.program(turnId, ...args), turnId, 'executes'); }
-  traceTurn(turnId: string, event: AgentTrace) { return this.open(() => this.answers.traceTurn(turnId, event), turnId); }
-  traceStream(turnId: string, lines: ReadableStream<Uint8Array>) { return this.open(() => this.answers.traceStream(turnId, lines), turnId); }
-  resume(turnId: string) { return this.open(() => this.answers.resume(turnId), turnId, 'executes'); }
-  guard(turnId: string, ...args: Parameters<MissionBudgetPort['guard']>) { return this.open(() => this.answers.guard(turnId, ...args), turnId, 'executes'); }
-  debit(turnId: string, ...args: Parameters<MissionBudgetPort['debit']>) { return this.open(() => this.answers.debit(turnId, ...args), turnId); }
-  prepareTurn(turnId: string) { return this.open(() => this.answers.prepareTurn(turnId), turnId, 'executes'); }
+  program(bound: TurnBound, ...args: Parameters<Executor['execute']>) { return this.open(() => this.answers.program(bound, ...args), bound, 'executes'); }
+  traceTurn(turnId: string, event: AgentTrace) { return this.open(() => this.answers.traceTurn(turnId, event)); }
+  traceStream(turnId: string, lines: ReadableStream<Uint8Array>) { return this.open(() => this.answers.traceStream(turnId, lines)); }
+  resume(bound: TurnBound) { return this.open(() => this.answers.resume(bound), bound, 'executes'); }
+  guard(bound: TurnBound, ...args: Parameters<MissionBudgetPort['guard']>) { return this.open(() => this.answers.guard(bound, ...args), bound, 'executes'); }
+  debit(turnId: string, ...args: Parameters<MissionBudgetPort['debit']>) { return this.open(() => this.answers.debit(turnId, ...args)); }
+  /** A run's preparation, which only that run's own cut ends. */
+  prepareTurn(turnId: string) { return this.open(() => this.answers.prepareTurn(turnId), { turnId, runId: turnId, epoch: null }, 'executes'); }
   advise(review: AgentReview) { return this.open(() => this.answers.advise(review)); }
   runEnded(id: string, outcome: AgentRunOutcome) { return this.open(() => this.answers.runEnded(id, outcome)); }
   enqueueTurn(input: ProgrammaticTurn) { return this.open(() => this.answers.enqueueTurn(input)); }
-  executeTool(call: AgentToolCall) { return this.open(() => this.answers.executeTool(call), call.turnId, 'executes'); }
+  executeTool(call: AgentToolCall) { return this.open(() => this.answers.executeTool(call), call, 'executes'); }
   receipts(turnId: string, runId: string, callIds: readonly string[]) { return this.open(() => this.answers.receipts(turnId, runId, callIds)); }
   observe(lines: ReadableStream<Uint8Array>) { return this.open(() => this.answers.observe(lines)); }
-  paceStep(turnId: string) { return this.open(() => this.answers.paceStep(turnId), turnId, 'executes'); }
-  answerMetadata(turnId: string, narration: readonly string[] | null) { return this.open(() => this.answers.answerMetadata(turnId, narration), turnId); }
+  paceStep(bound: TurnBound, profile: ResolvedTurnProfile | null) { return this.open(() => this.answers.paceStep(bound, profile), bound, 'executes'); }
+  answerMetadata(turnId: string, narration: readonly string[] | null) { return this.open(() => this.answers.answerMetadata(turnId, narration)); }
   reportModelCall(report: ModelCallReport) { return this.open(() => this.answers.reportModelCall(report)); }
   reportModelOperation(event: ModelOperationEvent) { return this.open(() => this.answers.reportModelOperation(event)); }
   prepareChat(request: ChatTurnRequest) { return this.open(() => this.answers.prepareChat(request)); }
-  bindProfile(turnId: string, profile: ResolvedTurnProfile) { return this.open(() => this.answers.bindProfile(turnId, profile), turnId); }
   chatEvent(event: SessionEvent) { return this.open(() => this.answers.chatEvent(event)); }
   turnEnded(event: SessionEvent, figures: AgentFigures, activity: readonly AgentTurnActivity[]) { return this.open(() => this.answers.turnEnded(event, figures, activity)); }
   owedReport(...args: Parameters<AgentWorkspace['owedReport']>) { return this.open(() => this.answers.owedReport(...args)); }
@@ -211,11 +211,11 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
   session() { return this.owned((host) => host.session()); }
   stateSession() { return this.owned((host) => host.stateSession()); }
   memory() { return this.owned((host) => host.memory()); }
-  program(turnId: string, ...args: Parameters<Executor['execute']>) { return this.owned((host) => host.program(turnId, ...args)); }
+  program(bound: TurnBound, ...args: Parameters<Executor['execute']>) { return this.owned((host) => host.program(bound, ...args)); }
   traceTurn(turnId: string, event: AgentTrace) { return this.owned((host) => host.traceTurn(turnId, event)); }
   traceStream(turnId: string, lines: ReadableStream<Uint8Array>) { return this.owned((host) => host.traceStream(turnId, lines)); }
-  resume(turnId: string) { return this.owned((host) => host.resume(turnId)); }
-  guard(turnId: string, ...args: Parameters<MissionBudgetPort['guard']>) { return this.owned((host) => host.guard(turnId, ...args)); }
+  resume(bound: TurnBound) { return this.owned((host) => host.resume(bound)); }
+  guard(bound: TurnBound, ...args: Parameters<MissionBudgetPort['guard']>) { return this.owned((host) => host.guard(bound, ...args)); }
   debit(turnId: string, ...args: Parameters<MissionBudgetPort['debit']>) { return this.owned((host) => host.debit(turnId, ...args)); }
   prepareTurn(turnId: string) { return this.owned((host) => host.prepareTurn(turnId)); }
   advise(review: AgentReview) { return this.owned((host) => host.advise(review)); }
@@ -224,12 +224,11 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
   executeTool(call: AgentToolCall) { return this.owned((host) => host.executeTool(call)); }
   receipts(turnId: string, runId: string, callIds: readonly string[]) { return this.owned((host) => host.receipts(turnId, runId, callIds)); }
   observe(lines: ReadableStream<Uint8Array>) { return this.owned((host) => host.observe(lines)); }
-  paceStep(turnId: string) { return this.owned((host) => host.paceStep(turnId)); }
+  paceStep(bound: TurnBound, profile: ResolvedTurnProfile | null) { return this.owned((host) => host.paceStep(bound, profile)); }
   answerMetadata(turnId: string, narration: readonly string[] | null) { return this.owned((host) => host.answerMetadata(turnId, narration)); }
   reportModelCall(report: ModelCallReport) { return this.owned((host) => host.reportModelCall(report)); }
   reportModelOperation(event: ModelOperationEvent) { return this.owned((host) => host.reportModelOperation(event)); }
   prepareChat(request: ChatTurnRequest) { return this.owned((host) => host.prepareChat(request)); }
-  bindProfile(turnId: string, profile: ResolvedTurnProfile) { return this.owned((host) => host.bindProfile(turnId, profile)); }
   chatEvent(event: SessionEvent) { return this.owned((host) => host.chatEvent(event)); }
   turnEnded(event: SessionEvent, figures: AgentFigures, activity: readonly AgentTurnActivity[]) { return this.owned((host) => host.turnEnded(event, figures, activity)); }
   owedReport(...args: Parameters<AgentWorkspace['owedReport']>) { return this.owned((host) => host.owedReport(...args)); }

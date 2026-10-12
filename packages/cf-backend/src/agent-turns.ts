@@ -8,6 +8,7 @@ import {
   type HeadInput, type RunInference, type HeadReport, type SqlExecutor, type MissionBudgetPort, type MissionGovernor, type Executor, readMissionLabels,
 } from '@kinu.run/core';
 import type { TurnCall } from './agent-facets';
+import type { TurnBound } from './agent-facet/agent-turn';
 import { prepareHostedTurn, type HostedActorSeams, type HostedTurnRequest, type PreparedHostedTurn } from './hosted-actors';
 import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, Fact, JsonObject, PreparedAgentTurn, StoredRow, TaskPlan, OpenedAt, TurnFacts, TurnOpening } from '@kinu.run/core';
 
@@ -23,6 +24,8 @@ export interface AgentTurnsDeps {
   /** The agent's own chat answers for itself whether it holds a turn, running or queued; one at rest is not asked. */
   chatOwed(reference: ActorReference): Promise<boolean>;
   chatIdle(reference: ActorReference): Promise<void>;
+  /** The profile a run of the agent froze as it first assembled, in its own store; null before then. */
+  frozenProfile(reference: ActorReference, runId: string): Promise<ResolvedTurnProfile | null>;
   pricing(spec: string): ModelPricing | null;
   accounts(): Readonly<Record<string, string>>;
   /** The account's credentials revision as the turn's open read it; null before one opened. */
@@ -112,9 +115,6 @@ export class AgentTurns {
     await hold(logged('agent.run_interrupt_failed', { doing: 'interrupting a run in its own isolate', otherwise: 'io' }, () => this.deps.interrupt(reference, turnId, null)));
   }
 
-  /** Each agent's newest opening the fence admitted this activation, by its place in the agent's sequence. */
-  private readonly newestOpening = new Map<string, number>();
-
   /** Each open turn's cut: aborted once a Stop, a retirement or the workspace's deletion cut it off. A call bound to it
    *  that would run more of it is refused, whatever its opening, and one already running here ends with it. */
   private readonly cuts = new Map<string, AbortController>();
@@ -134,27 +134,18 @@ export class AgentTurns {
   }
 
   /**
-   * A call bound to `turnId` holds while the turn is the agent's current one (design v2 §3): one a later opening
-   * superseded, or a Stop cancelled, is stale. A run (a head's) carries no opening and is not fenced here; a turn a
-   * restarted workspace never opened is refused where it is looked up.
+   * A call that runs more of a turn holds while its capability does (design v2 §3): a chat turn's, while the durable fence
+   * holds the opening it names (a later opening, a Stop or its end refuses it, before a reset of this workspace as after);
+   * a run's, while the run this workspace started is open and not cut. One that settles what the turn already did (its
+   * answer, its trace, its charges) holds after either, so the turn closes.
    */
-  fenceHolds(actorId: string, turnId: string, call: TurnCall): boolean {
-    // A stopped turn closes: only what would run more of it is refused.
-    if (call === 'executes' && this.cuts.get(turnId)?.signal.aborted === true) return false;
-    const turn = this.open.get(turnId);
+  holds(actorId: string, bound: TurnBound, call: TurnCall): boolean {
+    if (call !== 'executes') return true;
 
-    // Not open in this activation: closed here, or open before a reset of this workspace. Only the turn the durable fence
-    // still holds open is prepared again to run more; a run's loop died with the activation that ran it.
-    if (turn === undefined) {
-      if (call !== 'executes') return true;
-      const fence = this.deps.fence(actorId);
+    if (bound.epoch === null) return this.open.get(bound.turnId)?.request.run !== undefined && this.cuts.get(bound.turnId)?.signal.aborted !== true;
+    const fence = this.deps.fence(actorId);
 
-      return fence !== null && fence.live && fence.turnId === turnId;
-    }
-
-    const newest = this.newestOpening.get(actorId);
-
-    return turn.fenced === undefined || newest === undefined || turn.fenced.seq >= newest;
+    return fence !== null && fence.live && fence.turnId === bound.turnId && fence.runId === bound.runId && fence.seq === bound.epoch;
   }
 
   /** The turn is cut off: nothing bound to it runs from here, and what runs now ends. */
@@ -238,7 +229,7 @@ export class AgentTurns {
   }
 
   /** Handed out by this activation and not yet over. */
-  holds(turnId: string): boolean {
+  isOpen(turnId: string): boolean {
     return this.open.has(turnId);
   }
 
@@ -313,12 +304,20 @@ export class AgentTurns {
     return settleSync(Effect.fail(new KinuError('denied', 'The agent called the workspace before its turn was prepared.')));
   }
 
-  /** A workspace that restarted mid-turn reads a chat turn again, under the same execution. */
-  private async reread(actorId: string, call: Pick<AgentToolCall, 'turnId' | 'runId' | 'mode' | 'parentDriven' | 'driving'>): Promise<void> {
+  /**
+   * A workspace that restarted mid-turn reads a chat turn again under the capability its call carries, which the fence
+   * held (`holds`): nothing is opened again, and its tools bind the profile its agent bound at its first step, resolving
+   * nothing (D5). A run's loop died with the activation that ran it.
+   */
+  private async reread(actorId: string, call: Pick<AgentToolCall, 'turnId' | 'runId' | 'epoch' | 'mode' | 'parentDriven' | 'driving'>): Promise<void> {
     const known = this.open.get(call.turnId);
 
-    if (known !== undefined && (known.prepared !== null || known.request.run !== undefined)) return;
-    await this.prepareChat(actorId, { turnId: call.turnId, runId: call.runId, mode: call.mode, userText: '', parentDriven: call.parentDriven, driving: call.driving, awaitsReply: false });
+    if (call.epoch === null || (known !== undefined && (known.prepared !== null || known.request.run !== undefined))) return;
+
+    await this.prepareChat(actorId, { turnId: call.turnId, runId: call.runId, mode: call.mode, userText: '', parentDriven: call.parentDriven, driving: call.driving, awaitsReply: false }, { seq: call.epoch });
+    const profile = await this.deps.frozenProfile(this.deps.reference(actorId), call.runId);
+
+    if (profile !== null) this.bind(actorId, call, profile);
   }
 
   private mode(turn: OpenTurn, prepared: PreparedHostedTurn): WorkMode {
@@ -333,17 +332,17 @@ export class AgentTurns {
     return sources.dynamic(reads)(turn.profile ?? resolved.profile, offered);
   }
 
-  async prepareChat(actorId: string, request: ChatTurnRequest): Promise<PreparedAgentTurn> {
+  /** `held`: the opening the fence already holds for a turn read again after a restart (`reread`), opened by nothing. */
+  async prepareChat(actorId: string, request: ChatTurnRequest, held?: OpenedAt): Promise<PreparedAgentTurn> {
     const turnId = request.turnId ?? crypto.randomUUID();
 
     // Delayed past the agent's later opening, or sent before the workspace reset: its execution is gone.
-    if (request.turnId !== null && request.runId !== undefined && request.seq !== undefined
+    if (held === undefined && request.turnId !== null && request.runId !== undefined && request.seq !== undefined
       && !new TurnFences(this.deps.sql).open(actorId, { turnId, runId: request.runId, seq: request.seq })) {
       return settleSync(Effect.fail(new KinuError('denied', `The opening of turn ${turnId} (${String(request.seq)} in its agent's sequence) is older than the agent's newest.`)));
     }
 
-    // The agent's newest opening: a call bound to an older turn of its is stale from here (`fenceHolds`).
-    if (request.seq !== undefined) this.newestOpening.set(actorId, Math.max(request.seq, this.newestOpening.get(actorId) ?? request.seq));
+    const fenced = held ?? (request.seq === undefined ? undefined : { seq: request.seq });
 
     const hosted: HostedTurnRequest = {
       sequenceId: announcementOf(turnId), ...(request.turnId !== null && { chatTurnId: turnId }),
@@ -357,7 +356,7 @@ export class AgentTurns {
     const turn: OpenTurn = {
       reference: this.deps.reference(actorId),
       request: hosted,
-      ...(request.seq !== undefined && { fenced: { seq: request.seq } }),
+      ...(fenced !== undefined && { fenced }),
       prepared: null,
       profile: null,
     };
@@ -448,10 +447,13 @@ export class AgentTurns {
     return settleSync(Effect.fail(new KinuError('missing', "The agent's selected scaffold has no stored version.")));
   }
 
-  /** The profile the agent's isolate assembled the turn on: the workspace's tools and live block read it, never a
-   *  resolution of their own. Answers the live block on it. */
-  bindProfile(actorId: string, turnId: string, profile: ResolvedTurnProfile): DynamicContext {
-    const turn = this.turn(actorId, turnId);
+  /**
+   * The profile the agent's isolate assembled the turn on, as its first step's pace carries it, or as its isolate froze
+   * it for a turn read again after a restart (D5): the workspace's tools and live block read it, never a resolution of
+   * their own. Answers the live block on it.
+   */
+  bind(actorId: string, bound: TurnBound, profile: ResolvedTurnProfile): DynamicContext {
+    const turn = this.turn(actorId, bound.turnId);
     const prepared = this.prepared(turn);
 
     turn.profile = profile;

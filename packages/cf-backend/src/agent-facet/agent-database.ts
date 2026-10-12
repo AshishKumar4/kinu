@@ -23,8 +23,8 @@ import { attempt, detach, diagnostics, hold, KinuError, logged, settle, settleSy
 import { isDeepStrictEqual } from 'node:util';
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import type { AgentAnswer, AgentAnswerTexts, AgentStanding, AgentStandingReport, AgentSteps, AgentTurnActivity, ConversationProjection, AgentRecovery, AgentSnapshot, PreparedAgentTurn, StoredRow, TurnRequestAt } from '@kinu.run/core';
-import type { AgentWorkspace } from './agent-turn';
+import type { AgentAnswer, AgentAnswerTexts, AgentStanding, AgentStandingReport, AgentSteps, AgentTurnActivity, ConversationProjection, AgentRecovery, AgentSnapshot, PreparedAgentTurn, ResolvedTurnProfile, StoredRow, TurnRequestAt } from '@kinu.run/core';
+import type { AgentWorkspace, TurnBound } from './agent-turn';
 
 const refused = (what: string) => Effect.fail(new KinuError('unsupported', `${what} runs in the workspace object, not in an agent's own isolate.`));
 
@@ -393,13 +393,16 @@ export class AgentDatabase {
     };
   }
 
-  /** The run's facts are frozen with its first preparation: a later one, its recovery's after a reset, finds them. */
-  prepare(ids: { readonly turnId: string; readonly runId: string }, prepared: PreparedAgentTurn): void {
+  /** The run's facts are frozen with its first preparation: a later one, its recovery's after a reset, finds them, and
+   *  the profile the run froze as it first assembled, which that recovery assembles on (null before then). */
+  prepare(bound: TurnBound, prepared: PreparedAgentTurn): ResolvedTurnProfile | null {
     this.priced = { model: prepared.sources.model, pricing: prepared.pricing };
-    this.execution = { languages: prepared.languages, execute: (...args) => this.workspace.program(ids.turnId, ...args) };
-    this.storage.transactionSync(() => {
+    this.execution = { languages: prepared.languages, execute: (...args) => this.workspace.program(bound, ...args) };
+
+    return this.storage.transactionSync(() => {
       this.selectScaffold(prepared.scaffold);
-      this.turnFacts.freeze(ids.runId, prepared.facts);
+
+      return this.turnFacts.freeze(bound.runId, prepared.facts);
     });
   }
 
@@ -411,6 +414,11 @@ export class AgentDatabase {
   /** What the workspace decided as the run opened, as this isolate froze it then. */
   factsOf(runId: string): TurnFacts {
     return this.turnFacts.of(runId);
+  }
+
+  /** The profile the run first assembled on, for a workspace reading the turn again after a restart; null before then. */
+  frozenProfile(runId: string): ResolvedTurnProfile | null {
+    return this.turnFacts.frozenProfile(runId);
   }
 
   private get turnFacts(): TurnFactsStore {

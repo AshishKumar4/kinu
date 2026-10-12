@@ -251,6 +251,9 @@ const turnStatements = new Map<number, { readonly workspace: OperationCost['tabl
  * the tools' change key), an agent's standing reads a run head its recorder advances and the person's words from their
  * stamped run start (C4, C13 -30), a claim's guards read in one statement (C6 -5) and its session holds its last step
  * and its turns on disk (C11 -3). The workspace's 193, main's isolate's 178, at both sizes on 211d0a4f3.
+ * 373 once each call that runs more of a turn holds only while the workspace's durable fence holds its opening (+1: the
+ * fence read anew after the opening's own writes) and the run's final profile is frozen as it assembles (+1), after the
+ * actor surface factory and the owner's lane moved (-1 and +1): the workspace's 192, main's isolate's 181.
  * What remains, by group. Workspace: the Agents SDK's job queue (65, every arm and alarm asks it, and it is the SDK's);
  * the settle sequence's terminal effects and receipts (25: each attempt is written before its call, and each retry
  * read follows a write of its own); the evolution pass and the turn's review (27); the four reports' acceptance,
@@ -262,7 +265,7 @@ const turnStatements = new Map<number, { readonly workspace: OperationCost['tabl
  * reads of its session (65); the epoch fence every stream write and seal reads, never held (18); its reports' sequence,
  * run events and facts (23); and its own settle sequence (17).
  */
-const TURN_STATEMENTS = 371;
+const TURN_STATEMENTS = 373;
 
 /** Every count the subject's declarations govern, one value per size. */
 function countersOf(subject: Subject, measured: readonly OperationCost[]): GrowthCounter[] {

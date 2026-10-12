@@ -110,6 +110,9 @@ export interface TurnAssemblyRequest {
   readonly explicitTier?: TierId;
   /** Overrides the tier's model. */
   readonly model?: string;
+  /** A recovered run's profile, as it froze at its first assembly: the run assembles on it and resolves nothing, so a
+   *  setting changed since cannot answer it differently. */
+  readonly frozen?: ResolvedTurnProfile;
 }
 
 export interface AssembledTurn {
@@ -165,15 +168,16 @@ async function draftTurn(sources: Pick<TurnAssemblySources, 'profileInputs' | 'c
 /** Effect-free: a measure between turns assembles too. */
 export async function assembleActorTurn(sources: TurnAssemblySources, request: TurnAssemblyRequest): Promise<AssembledTurn> {
   const { models } = sources;
-  // The tier never depends on the tools, so the drafted model is the served one.
-  const { profileInputs, choices, roleSkills, drafted, served: spec, limits } = await draftTurn(sources, request);
+  const { frozen } = request;
+  // The tier never depends on the tools, so the drafted model is the served one; a frozen run's is the one it froze.
+  const { profileInputs, choices, roleSkills, drafted, served: spec, limits } = await draftTurn(sources, frozen === undefined ? request : { ...request, model: frozen.tier.model });
 
   const { available: availableSkills, activeSkills } = await sources.skills(request.userText, roleSkills, limits);
 
   const builtins = filterToolSetBySkills(sources.toolset(drafted.workMode), activeSkills);
   const external = await sources.externalTools(limits);
 
-  const profile = resolveAgentTurnProfile({
+  const profile = frozen ?? resolveAgentTurnProfile({
     ...profileInputs,
     ...choices,
     workMode: request.workMode,

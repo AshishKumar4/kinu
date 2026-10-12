@@ -26,8 +26,8 @@ export interface ExecutionKey {
   readonly runId: string;
 }
 
-/** Carried by an execution's preparation, steps and tool calls. Refused once Stop, its close, or a later epoch of the
- *  same key supersedes it. */
+/** Carried by an execution's preparation, steps and tool calls. Refused once Stop, its close, or a later epoch
+ *  supersedes it. Its epoch is the opening's place in the agent's sequence, minted as the agent prepares its claim. */
 export interface TurnCapability extends ExecutionKey {
   readonly epoch: number;
 }

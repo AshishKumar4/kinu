@@ -152,12 +152,12 @@ export class FacetChat {
     });
   }
 
-  private async assemble(prepared: PreparedAgentTurn, turn: { readonly id: string; readonly mode: WorkMode; readonly runId: string }, asked: TurnAssemblyRequest, bind?: Parameters<typeof assembleActorTurn>[0]['settle']) {
+  private async assemble(prepared: PreparedAgentTurn, turn: { readonly id: string; readonly mode: WorkMode; readonly runId: string; readonly epoch: number | null }, asked: TurnAssemblyRequest, bind?: Parameters<typeof assembleActorTurn>[0]['settle']) {
     const { actor, database, workspace, models, pacer } = this.deps;
     const live: LiveTurn = { dynamic: prepared.dynamic };
 
     const tools = facetTurnTools(workspace, prepared, actor, {
-      id: turn.id, runId: turn.runId, mode: turn.mode, parentDriven: this.parentDriven, driving: this.driving, live, capture: new HeadCapture(), database,
+      id: turn.id, runId: turn.runId, epoch: turn.epoch, mode: turn.mode, parentDriven: this.parentDriven, driving: this.driving, live, capture: new HeadCapture(), database,
       // Its plans are its own store's, judged by the metadata its turn was admitted under.
       owner: {
         submitPlan: { submit: async (edits) => await this.planned((plans) => plans.submit(edits, this.driving)) },
@@ -165,14 +165,17 @@ export class FacetChat {
       },
     });
 
-    const { sources: bundle } = facetTurnSources({ actor, workspace, models, prepared, spend: this.spend, live, runId: turn.runId, turnId: turn.id, pacer });
+    const { sources: bundle } = facetTurnSources({ actor, workspace, models, prepared, spend: this.spend, live, runId: turn.runId, turnId: turn.id, epoch: turn.epoch, pacer });
 
     // A chat turn under a mission of its workspace's spends there, as each model call is guarded and charged.
     const { missionLabels } = prepared;
 
     const mission = missionLabels === undefined ? null : this.missionCharges = missionGate({
       labels: missionLabels,
-      port: { guard: async (seam, labels) => await workspace.guard(turn.id, seam, labels), debit: async (tokens, opts) => { await workspace.debit(turn.id, tokens, opts); } },
+      port: {
+        guard: async (seam, labels) => await workspace.guard({ turnId: turn.id, runId: turn.runId, epoch: turn.epoch }, seam, labels),
+        debit: async (tokens, opts) => { await workspace.debit(turn.id, tokens, opts); },
+      },
     });
 
     return await assembleActorTurn({
@@ -215,19 +218,29 @@ export class FacetChat {
     const explicitTier = metadataTier(item.metadata);
     const taskPlan = approvedTaskPlan(item, plans);
 
+    // The turn's capability (design v2 §3): its opening's place in this agent's sequence, which the workspace's fence
+    // holds while it is this agent's current turn. Every call that runs more of the turn carries it.
+    const bound = { turnId: lease.turnId, runId: lease.runId, epoch: database.nextInSequence() };
+
     const prepared = await workspace.prepareChat({
       turnId: lease.turnId, mode, userText: item.text, parentDriven: this.parentDriven, driving: this.driving, opening,
       // A plan the owner sent back with comments awaits its answers on the owner's turns alone.
       awaitsReply: !this.parentDriven && planAwaitingReply(activePlan(), this.driving),
-      // Its run, which the turn's recovery continues and its Retry starts anew, and its place in this agent's sequence.
-      runId: lease.runId, seq: database.nextInSequence(),
+      // Its run, which the turn's recovery continues and its Retry starts anew.
+      runId: lease.runId, seq: bound.epoch,
       ...(explicitTier !== undefined && { explicitTier }), ...(taskPlan !== null && { taskPlan }),
     });
 
-    database.prepare({ turnId: lease.turnId, runId: lease.runId }, prepared);
+    // A recovered run assembles on the profile it froze as it first assembled, and resolves nothing (D5).
+    const frozen = database.prepare(bound, prepared);
+
     this.reviewsTurns = prepared.reviewsTurns;
 
-    const assembled = await this.assemble(prepared, { id: lease.turnId, mode, runId: lease.runId }, { userText: item.text, workMode: mode, ...(explicitTier !== undefined && { explicitTier }) }, (profile, inputs) => {
+    const asked: TurnAssemblyRequest = {
+      userText: item.text, workMode: mode, ...(explicitTier !== undefined && { explicitTier }), ...(frozen !== null && { frozen }),
+    };
+
+    const assembled = await this.assemble(prepared, { id: lease.turnId, mode, runId: lease.runId, epoch: bound.epoch }, asked, (profile, inputs) => {
       actor.session.bindProfile(lease, profile, inputs);
     });
 
@@ -265,7 +278,7 @@ export class FacetChat {
   private async composeRequest(): Promise<ComposedRequest> {
     const mode = this.deps.actor.session.workMode;
     const prepared = await this.deps.workspace.prepareChat({ turnId: null, mode, userText: '', parentDriven: false, awaitsReply: false });
-    const assembled = await this.assemble(prepared, { id: 'measure', mode, runId: prepared.runId }, { userText: '', workMode: mode });
+    const assembled = await this.assemble(prepared, { id: 'measure', mode, runId: prepared.runId, epoch: null }, { userText: '', workMode: mode });
 
     return { execution: assembled.execution, profile: assembled.profile, sessionKey: this.trigger.key };
   }
@@ -464,7 +477,7 @@ export class FacetChat {
     const { actor, workspace, models, pacer } = this.deps;
     const workMode = actor.session.workMode;
     const prepared = await workspace.prepareChat({ turnId: null, mode: workMode, userText: '', parentDriven: false, awaitsReply: false });
-    const { sources } = facetTurnSources({ actor, workspace, models, prepared, spend: this.spend, live: { dynamic: prepared.dynamic }, runId: prepared.runId, turnId: 'title', pacer });
+    const { sources } = facetTurnSources({ actor, workspace, models, prepared, spend: this.spend, live: { dynamic: prepared.dynamic }, runId: prepared.runId, turnId: 'title', epoch: null, pacer });
     const inputs = await sources.profileInputs();
     const profile = resolveAgentTurnProfile({ ...inputs, ...ownProfileChoices(sources.config, inputs, sources.ancestors?.()), workMode, availableTools: [], activeSkills: [] });
     const route = resolveModelRoute('fast', profile);

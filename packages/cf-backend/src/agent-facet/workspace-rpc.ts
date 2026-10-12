@@ -148,7 +148,6 @@ export function workspaceClient(workspace: AgentWorkspaceCalls): AgentWorkspace 
     guard: (...args) => settle(viaPort((port) => port.guard(...args))),
     debit: (...args) => settle(viaPort((port) => port.debit(...args))),
     prepareTurn: (...args) => settle(viaPort((port) => port.prepareTurn(...args))),
-    bindProfile: (...args) => settle(viaPort((port) => port.bindProfile(...args))),
     prepareChat: (...args) => settle(viaPort((port) => port.prepareChat(...args))),
     chatEvent: (...args) => settle(viaPort((port) => port.chatEvent(...args))),
     turnEnded: (...args) => settle(viaPort((port) => port.turnEnded(...args))),

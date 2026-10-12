@@ -327,7 +327,6 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
 
             return await new Promise<never>(() => {});
           },
-          bindProfile: (turnId, profile) => host.bindProfile(turnId, profile),
           chatEvent: async (event) => {
             if (event.type === 'broadcast' && failedBroadcasts.delete(placement.storageKey)) throw new Error('the workspace refused the broadcast');
 
@@ -388,10 +387,10 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           executeTool: (call) => host.executeTool(call),
           receipts: (turnId, runId, callIds) => host.receipts(turnId, runId, callIds),
           observe: (lines) => host.observe(lines),
-          paceStep: (turnId) => {
+          paceStep: (bound, profile) => {
             counted('paceStep');
 
-            return host.paceStep(turnId);
+            return host.paceStep(bound, profile);
           },
           answerMetadata: (turnId, narration) => {
             handNarration(placement.storageKey, narration);

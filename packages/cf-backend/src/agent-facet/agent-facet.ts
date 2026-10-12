@@ -22,7 +22,7 @@ import { FacetChat } from './agent-chat';
 import { workspaceClient, type AgentWorkspaceCalls } from './workspace-rpc';
 import type {
   AgentAnswer, AgentAnswerTexts, AgentStanding, AgentSteps, AgentRecovery, AgentSnapshot, ConversationProjection, ConversationTurnPair, AgentTurnTask, EnqueueTurnResult, ProgrammaticTurn, SendLanding, TurnRequestAt,
-  JsonObject, PlanDecisionOutcome, PlanReview, PlanReviewDecision, PlanReviewResult, ReviewAnnotation, AskedQuestions, OwnerAnswer,
+  DynamicContext, JsonObject, PlanDecisionOutcome, ResolvedTurnProfile, PlanReview, PlanReviewDecision, PlanReviewResult, ReviewAnnotation, AskedQuestions, OwnerAnswer,
   Page, PageRequest, RunEvent, RunEventQuery, RunListEntry, RunSummary, StoredRunEvent,
   ForkConversationPlan, ForkConversationSection, ForkRowSection, ForkRows,
 } from '@kinu.run/core';
@@ -145,8 +145,10 @@ export interface AgentFacetCalls {
   /** A retirement waits on it. */
   idle(): Promise<void>;
   deliverAdvice(snapshot: AgentSnapshot, helper: AnsweredEvolutionHelper, turnId: string): Promise<boolean>;
-  /** Runs the turn's waiting model step under this call, and answers once it has ended (`StepPacer`). */
-  step(turnId: string): Promise<void>;
+  frozenProfile(snapshot: AgentSnapshot, runId: string): Promise<ResolvedTurnProfile | null>;
+  /** Runs the turn's waiting model step under this call, and answers once it has ended (`StepPacer`). `dynamic`: the live
+   *  block on the profile the step's pace bound, its turn's first. */
+  step(turnId: string, dynamic: DynamicContext | null): Promise<void>;
   history(snapshot: AgentSnapshot, limit?: number): Promise<UIMessage[]>;
   historyPage(snapshot: AgentSnapshot, page: PositionPageRequest): Promise<ChatHistoryPage>;
   messageCount(snapshot: AgentSnapshot): Promise<number>;
@@ -415,6 +417,11 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return await settle(this.withChat(snapshot, (chat) => chat.planned((plans) => plans.decideAndHandOff(verdict, (turn) => chat.session.enqueueTurn(turn)))));
   }
 
+  /** The profile a run froze as it first assembled: a workspace that restarted mid-turn rebuilds its tools on it. */
+  async frozenProfile(snapshot: AgentSnapshot, runId: string): Promise<ResolvedTurnProfile | null> {
+    return this.open(snapshot).frozenProfile(runId);
+  }
+
   async ownerQuestions(snapshot: AgentSnapshot): Promise<readonly AskedQuestions[]> {
     return await settle(this.withChat(snapshot, (chat) => chat.questions.recent()));
   }
@@ -529,8 +536,8 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     await Promise.all([this.held?.idle(), ...this.runsInFlight.values()]);
   }
 
-  async step(turnId: string): Promise<void> {
-    await this.pacer.grant(turnId);
+  async step(turnId: string, dynamic: DynamicContext | null): Promise<void> {
+    await this.pacer.grant(turnId, dynamic);
   }
 
   async history(snapshot: AgentSnapshot, limit?: number): Promise<UIMessage[]> {

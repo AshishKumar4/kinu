@@ -112,6 +112,7 @@
     "actor_id TEXT NOT NULL",
     "run_id TEXT NOT NULL",
     "facts_json TEXT NOT NULL",
+    "profile_json TEXT",
     "PRIMARY KEY(actor_id,run_id)"
   ],
   "actor_turn_fence@packages/core/src/subordinates/turn-fence.ts": [

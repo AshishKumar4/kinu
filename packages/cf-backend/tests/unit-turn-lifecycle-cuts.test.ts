@@ -19,9 +19,10 @@ test("a turn that has closed runs no tool call made under it, and a reset worksp
 
   await catalogTurn(workspace.agent, 'First turn.');
   const actorId = workspaceMainActor(workspace.db).actorId;
-  const closed = v.parse(v.object({ turn_id: v.string() }), workspace.db.query('SELECT turn_id FROM actor_turn_fence WHERE actor_id = ?').get(actorId));
+  const closed = v.parse(v.object({ turn_id: v.string(), run_id: v.string(), seq: v.number() }), workspace.db.query('SELECT turn_id, run_id, seq FROM actor_turn_fence WHERE actor_id = ?').get(actorId));
   const port = await workspace.agent.agentWorkspace(actorId);
-  const late = { activity: [], turnId: closed.turn_id, runId: closed.turn_id, mode: 'build' as const, parentDriven: false, callId: 'late-call', name: 'tasks', input: { op: 'add', titles: ['STALE_RPC_TASK'] } };
+  // Its own capability, as its turn carried it: the turn ended, so the fence no longer holds it.
+  const late = { activity: [], turnId: closed.turn_id, runId: closed.run_id, epoch: closed.seq, mode: 'build' as const, parentDriven: false, callId: 'late-call', name: 'tasks', input: { op: 'add', titles: ['STALE_RPC_TASK'] } };
 
   await expect(port.executeTool(late)).rejects.toMatchObject({ code: 'cancelled' });
   expect(v.parse(Count, workspace.db.query("SELECT COUNT(*) AS n FROM agent_tasks WHERE title = 'STALE_RPC_TASK'").get()).n).toBe(0);

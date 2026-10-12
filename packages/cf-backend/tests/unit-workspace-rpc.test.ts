@@ -18,7 +18,6 @@ const unusedWorkspace: AgentWorkspaceCalls = {
   guard: unused,
   debit: unused,
   prepareTurn: unused,
-  bindProfile: unused,
   prepareChat: unused,
   chatEvent: unused,
   turnEnded: unused,
@@ -65,7 +64,7 @@ test('a rejected outgoing promise releases its pipeline and preserves the exact 
     const pending = Object.assign(Promise.reject(failure), { [Symbol.dispose]: () => { disposed += 1; } });
     const workspace = workspaceClient(ported({ paceStep: () => pending }));
 
-    await expect(workspace.paceStep('turn')).rejects.toBe(failure);
+    await expect(workspace.paceStep({ turnId: 'turn', runId: 'run', epoch: 1 }, null)).rejects.toBe(failure);
     expect(disposed).toBe(1);
   }
 });
@@ -93,7 +92,7 @@ test('a data answer releases its pipeline once it is read, so a turn holds none 
   const pending = Object.assign(Promise.resolve(), { [Symbol.dispose]: () => { disposed += 1; } });
   const workspace = workspaceClient(ported({ paceStep: () => pending }));
 
-  await workspace.paceStep('turn');
+  await workspace.paceStep({ turnId: 'turn', runId: 'run', epoch: 1 }, null);
   expect(disposed).toBe(1);
 });
 
