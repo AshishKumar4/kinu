@@ -4,7 +4,7 @@ import { accountCredentialKey, asFetchFunction, requestUrl } from '@kinu.run/cor
 import { OPENCODE_GO_CATALOG } from '@kinu.run/test-utils';
 import {
   agentSql, catalogTurn, driveUntil, gatewayWorkspace, hostedMainActor, hostedSubordinateHarness, makeEnv, orchestratorHarness, runDelegatedTask,
-  wakeForDelegatedTask,
+  wakeForDelegatedTask, workspaceMainActor,
 } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun, type StubbedAiBinding } from './helpers/platform-gateway';
@@ -87,7 +87,7 @@ test("a turn an agent's isolate loses to its own reset runs again, the workspace
 test("an agent's isolate adopted after its reset is built on the program its turns read, with the same tools", async () => {
   const gateway = stubAiBinding((run) => chatCompletion(run, 'Noted.'));
   const workspace = gatewayWorkspace(gateway);
-  const main = workspace.agent.observeRuntime().actor.actorId;
+  const main = workspaceMainActor(workspace.db).actorId;
   const offered = (index: number): readonly string[] => requestOf(gateway.runs[index] ?? gateway.runs[0]).tools;
 
   await catalogTurn(workspace.agent, 'First.');
