@@ -461,7 +461,7 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
               </time>
               {saving && <span aria-live="polite" className="p-annotation p-info">Saving comments…</span>}
             </div>
-            {editable && roots.length === 0 && (
+            {reviewing && roots.length === 0 && (
               <p className="p-meta p-text-3 mt-2">Select text to comment or mark it for removal.</p>
             )}
           </div>
