@@ -137,6 +137,18 @@ describe('hosted workspace actor shell state', () => {
     expect(await holding('agent:low-again', '\uD800')).toBe(low);
   });
 
+  // The same for a name: a variable named with a lone surrogate lists apart from its neighbour (NIMBUS-ASKS #52).
+  test('names that differ only in a lone surrogate digest differently', async () => {
+    const storage = openWorkspaceDatabase();
+    const workspace = await NimbusWorkspace.create({ ...storage, generation: 1 });
+    const box = sdkBox(workerHost(workspace, new Map()));
+    const state = `( pwd | sha256sum; export '$=0'; set ) | sha256sum`;
+    const named = async (name: string) => (await box.exec(state, { shellId: 'agent:names', env: { [name]: 'same' } })).stdout;
+
+    expect(await named('V\uD800')).not.toBe(await named('V\uD801'));
+    expect(await named('V\uD800')).toBe(await named('V\uD800'));
+  });
+
   test('durable shell state survives worker reconstruction', async () => {
     const storage = openWorkspaceDatabase();
 

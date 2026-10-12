@@ -168,10 +168,30 @@ index 9017e30..2c577d6 100644
              onStdout: ctx.stdout.writeBytes ? (bytes) => ctx.stdout.writeBytes(bytes) : textSink((data) => ctx.stdout.write(data)),
              onStderr: ctx.stderr.writeBytes ? (bytes) => ctx.stderr.writeBytes(bytes) : textSink((data) => ctx.stderr.write(data)),
 diff --git a/dist/substrate/lifo/shell/builtins.js b/dist/substrate/lifo/shell/builtins.js
-index 416bf8b..8477051 100644
+index 416bf8b..db73237 100644
 --- a/dist/substrate/lifo/shell/builtins.js
 +++ b/dist/substrate/lifo/shell/builtins.js
-@@ -808,8 +808,31 @@ function normalizeTrapSignal(raw) {
+@@ -113,7 +113,7 @@ async function builtinExport({ args, stderr, state }) {
+ async function builtinSet({ args, stdout, stderr, state, context }) {
+     if (args.length === 0) {
+         for (const key of Object.keys(state.env).sort()) {
+-            (await stdout.write(`${key}=${quoteSetValue(state.env[key] ?? '')}\n`));
++            (await stdout.write(`${listedName(key)}=${quoteSetValue(state.env[key] ?? '')}\n`));
+         }
+         return 0;
+     }
+@@ -283,8 +283,8 @@ async function builtinReadonly({ args, stdout, stderr, state }) {
+         for (const name of Array.from(state.readonlyNames).sort()) {
+             const value = state.env[name];
+             (await stdout.write(value === undefined
+-                ? `readonly ${name}\n`
+-                : `readonly ${name}=${quoteSetValue(value)}\n`));
++                ? `readonly ${listedName(name)}\n`
++                : `readonly ${listedName(name)}=${quoteSetValue(value)}\n`));
+         }
+         return 0;
+     }
+@@ -808,8 +808,35 @@ function normalizeTrapSignal(raw) {
      return null;
  }
  function quoteSetValue(value) {
@@ -199,6 +219,10 @@ index 416bf8b..8477051 100644
 +        }
 +    }
 +    return `${out}'`;
++}
++/** A variable's name as `set` lists it: as it is, or as `dollarQuote` writes it when ill-formed. */
++function listedName(name) {
++    return name.isWellFormed() ? name : dollarQuote(name);
 +}
  function isPlainSetValue(value) {
      for (let i = 0; i < value.length; i++) {
@@ -403,10 +427,30 @@ index dd485e4..5526d89 100644
        onStdout: ctx.stdout.writeBytes ? (bytes) => ctx.stdout.writeBytes!(bytes) : textSink((data) => ctx.stdout.write(data)),
        onStderr: ctx.stderr.writeBytes ? (bytes) => ctx.stderr.writeBytes!(bytes) : textSink((data) => ctx.stderr.write(data)),
 diff --git a/src/substrate/lifo/shell/builtins.ts b/src/substrate/lifo/shell/builtins.ts
-index f091a96..7f76e6a 100644
+index f091a96..82cd910 100644
 --- a/src/substrate/lifo/shell/builtins.ts
 +++ b/src/substrate/lifo/shell/builtins.ts
-@@ -849,9 +849,30 @@ function normalizeTrapSignal(raw: string): string | null {
+@@ -155,7 +155,7 @@ async function builtinExport({ args, stderr, state }: BuiltinCall): Promise<numb
+ async function builtinSet({ args, stdout, stderr, state, context }: BuiltinCall): Promise<number> {
+   if (args.length === 0) {
+     for (const key of Object.keys(state.env).sort()) {
+-      (await stdout.write(`${key}=${quoteSetValue(state.env[key] ?? '')}\n`));
++      (await stdout.write(`${listedName(key)}=${quoteSetValue(state.env[key] ?? '')}\n`));
+     }
+     return 0;
+   }
+@@ -334,8 +334,8 @@ async function builtinReadonly({ args, stdout, stderr, state }: BuiltinCall): Pr
+     for (const name of Array.from(state.readonlyNames).sort()) {
+       const value = state.env[name];
+       (await stdout.write(value === undefined
+-        ? `readonly ${name}\n`
+-        : `readonly ${name}=${quoteSetValue(value)}\n`));
++        ? `readonly ${listedName(name)}\n`
++        : `readonly ${listedName(name)}=${quoteSetValue(value)}\n`));
+     }
+     return 0;
+   }
+@@ -849,9 +849,35 @@ function normalizeTrapSignal(raw: string): string | null {
  }
  
  function quoteSetValue(value: string): string {
@@ -432,6 +476,11 @@ index f091a96..7f76e6a 100644
 +    }
 +  }
 +  return `${out}'`;
++}
++
++/** A variable's name as `set` lists it: as it is, or as `dollarQuote` writes it when ill-formed. */
++function listedName(name: string): string {
++  return name.isWellFormed() ? name : dollarQuote(name);
 +}
 +
  function isPlainSetValue(value: string): boolean {
