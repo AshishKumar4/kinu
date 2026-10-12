@@ -75,25 +75,44 @@ function heapMakeup(snapshot: Snapshot): HeapMakeup {
  */
 function markedBytes(graph: Graph, marker: string, isolate: string): number {
   const { node_fields: nodeFields, edge_fields: edgeFields, edge_types: [edgeTypes] } = graph.snapshot.meta;
-  const [countAt, sizeAt] = [nodeFields.indexOf('edge_count'), nodeFields.indexOf('self_size')];
-  const [typeAt, nameAt, toAt] = [edgeFields.indexOf('type'), edgeFields.indexOf('name_or_index'), edgeFields.indexOf('to_node')];
+
+  /** Where `name` sits in `names`, or a throw: a snapshot without it is not one this reads. */
+  const indexOf = (names: readonly string[], name: string): number => {
+    const index = names.indexOf(name);
+
+    if (index < 0) throw new Error(`worker-heap: ${isolate}'s snapshot names no ${name} among ${names.join(', ')}`);
+
+    return index;
+  };
+
+  /** The number at `index` in `values`, or a throw: an index past its array is a snapshot this does not read. */
+  const at = (values: readonly number[], index: number): number => {
+    const value = values[index];
+
+    if (value === undefined) throw new Error(`worker-heap: ${isolate}'s snapshot has no entry ${String(index)} on the way to ${marker}`);
+
+    return value;
+  };
+
+  const [countAt, sizeAt] = [indexOf(nodeFields, 'edge_count'), indexOf(nodeFields, 'self_size')];
+  const [typeAt, nameAt, toAt] = [indexOf(edgeFields, 'type'), indexOf(edgeFields, 'name_or_index'), indexOf(edgeFields, 'to_node')];
   // Each node's edges follow those of the nodes before it.
   const firstEdges: number[] = [];
 
   for (let node = 0, edges = 0; node < graph.nodes.length; node += nodeFields.length) {
     firstEdges.push(edges);
-    edges += (graph.nodes[node + countAt] ?? 0) * edgeFields.length;
+    edges += at(graph.nodes, node + countAt) * edgeFields.length;
   }
 
   /** Each node an edge of `type` named `name` reaches: from the node at `from`, or from any node. */
   const reached = (type: 'property' | 'internal', name: string, from?: number): number[] => {
-    const kind = edgeTypes.indexOf(type);
-    const start = from === undefined ? 0 : firstEdges[from / nodeFields.length] ?? 0;
-    const end = from === undefined ? graph.edges.length : start + (graph.nodes[from + countAt] ?? 0) * edgeFields.length;
+    const kind = indexOf(edgeTypes, type);
+    const start = from === undefined ? 0 : at(firstEdges, from / nodeFields.length);
+    const end = from === undefined ? graph.edges.length : start + at(graph.nodes, from + countAt) * edgeFields.length;
     const found: number[] = [];
 
     for (let edge = start; edge < end; edge += edgeFields.length) {
-      if (graph.edges[edge + typeAt] === kind && graph.strings[graph.edges[edge + nameAt] ?? -1] === name) found.push(graph.edges[edge + toAt] ?? 0);
+      if (at(graph.edges, edge + typeAt) === kind && graph.strings[at(graph.edges, edge + nameAt)] === name) found.push(at(graph.edges, edge + toAt));
     }
 
     return found;
@@ -114,7 +133,7 @@ function markedBytes(graph: Graph, marker: string, isolate: string): number {
   if (marked.length === 0) return 0;
   const buffer = one(reached('internal', 'buffer', one(marked, `property ${marker}`)), 'internal buffer');
 
-  return graph.nodes[one(reached('internal', 'backing_store', buffer), 'internal backing_store') + sizeAt] ?? 0;
+  return at(graph.nodes, one(reached('internal', 'backing_store', buffer), 'internal backing_store') + sizeAt);
 }
 
 interface ProfileNode {
