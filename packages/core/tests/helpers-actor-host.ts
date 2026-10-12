@@ -21,7 +21,7 @@ import {
   type ProfileCatalogEnvelope, type RoleDefinition, type TierAssignments,
 } from '../src/profiles/catalog';
 import type { HostedNodeSeat } from '../src/strategy/node-agent';
-import { runHeadInference, type HeadInferenceDeps } from '../src/heads/head-inference';
+import { runHeadInference, preparedHeadRun, type HeadInferenceDeps } from '../src/heads/head-inference';
 import { modelWindow } from '../src/context-window';
 import { conversationKey, vfsTurnSkills, type RunTurnSources } from '../src/orchestrator/turn-assembly';
 import { captureOperationProfile } from '../src/profiles/operation';
@@ -268,7 +268,7 @@ export function hostedSeatsOver(input: {
       sources: fixtureRunSources(actor, input.model ?? (() => {
         throw new KinuError('unavailable', `the hosted fixture was given no model, so ${name} cannot run a turn`);
       })),
-      infer: (headInput, inference) => runHeadInference(headInput, { ...inference, actor, compaction }),
+      infer: (headInput, inference) => runHeadInference(preparedHeadRun(headInput, { ...inference, actor, compaction })),
       conversations: actor.stores.conversationSearch,
       jobs: { ports: { jobOutput: () => {} }, attach: (authority) => jobs.attach(authority) },
       receipts: { sql: actor.runtime.storage.sql, actor: actor.handle, durable: (callId, signal) => actor.session.durableCall(callId, signal) },

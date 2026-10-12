@@ -8,7 +8,7 @@ import * as v from 'valibot';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import { JsonValueSchema, type OwnerAnswer } from '@kinu.run/core';
 import { driveUntil, gatewayWorkspace, workspaceMainActor, type HarnessOrchestratorAgent, type StartedHarness } from './helpers/actor-harness';
-import { cutNextDelivery } from './helpers/agent-facets';
+import { cutNextDelivery, loseNextOpeningAnswer } from './helpers/agent-facets';
 import { socketConnection } from './helpers/bindings';
 import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 
@@ -189,6 +189,29 @@ for (const at of CUTS) {
     expect(ran.retried).toBe(2);
   });
 }
+
+/** A Retry the agent applied holds its turn with its answer (design v3 D): an isolate that died before the reopened turn
+ *  opened runs it on its next wake, once, though the Retry itself is answered and owed no more. */
+test("a Retry whose agent died before its turn opened runs the turn on the agent's next wake, once", async () => {
+  const { gateway, ran } = model();
+  const workspace = gatewayWorkspace(gateway);
+  const turnId = await turn(workspace, RETRIED);
+  const lost = loseNextOpeningAnswer(mainKey(workspace));
+
+  // Answered once the agent applied it; the turn it reopened is the agent's to run.
+  const asked = Promise.resolve(workspace.agent.onMessage(owner, retried(crypto.randomUUID(), turnId, RETRIED))).then(() => 'answered', () => 'refused');
+
+  await lost;
+  expect(await asked).toBe('answered');
+  expect(owed(workspace)).toBe(0);
+
+  workspace.agent.harnessResetAgentIsolate(mainKey(workspace));
+  await workspace.agent.recoverStrandedTurn();
+  await driveUntil(workspace, 'the applied Retry never ran its turn', () => ran.retried > 1);
+  await workspace.agent.harnessAgentsIdle();
+
+  expect(ran.retried).toBe(2);
+});
 
 test('a decision whose crossing reaches the agent is answered as a direct one was, and leaves nothing owed', async () => {
   const { gateway, ran } = model();

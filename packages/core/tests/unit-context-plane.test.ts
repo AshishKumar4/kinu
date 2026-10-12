@@ -4,7 +4,7 @@ import { exists, readText as nimbusReadText, type VFS, writeText } from '@nimbus
 import { expect, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
-import { createTestSql, createTestActors, testActorHandle, createMemoryVfs, toolExecute } from '@kinu.run/test-utils';
+import { createTestSql, createTestActors, testActorHandle, createMemoryVfs, toolExecute, admitTestClaim } from '@kinu.run/test-utils';
 import { ActorClaimStore, initActorClaimTables, type ActorTurnClaim } from '../src/orchestrator/actor-claims';
 import { SessionHistory } from '../src/session/history';
 import type { ContextSelection } from '../src/session/context';
@@ -157,7 +157,7 @@ function revisions(bound: Bound) {
 }
 
 async function admitOn(bound: Bound, ids: { readonly runId: string; readonly turnId: string }): Promise<ActorTurnClaim> {
-  return bound.claims.admit({ ...ids, workMode: 'build', program: PROGRAM, context: selectionOf(bound) });
+  return admitTestClaim(bound.claims, { ...ids, workMode: 'build', program: PROGRAM, context: selectionOf(bound) });
 }
 
 /** Wired as `ActorSession` wires it: staged edits land in `base()`, requests recorded in `consume()`. */

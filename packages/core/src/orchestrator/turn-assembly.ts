@@ -15,6 +15,7 @@ import type { PromptBackend, PromptIdentity } from '../prompting/surface';
 import { withOperationProfile, type OperationProfile } from '../profiles/operation';
 import { effectiveRoleCatalog } from '../profiles/catalog';
 import { ownProfileChoices, resolveAgentTurnProfile, type PinnedProfile, type ProfileAuthorityInputs, type ResolvedTurnProfile } from '../profiles/resolve';
+import type { FrozenAuthority } from './turn-facts';
 import { TierIdSchema, type TierId } from '../types/profile';
 import type { JsonObject } from '../utils/json';
 import * as v from 'valibot';
@@ -110,9 +111,9 @@ export interface TurnAssemblyRequest {
   readonly explicitTier?: TierId;
   /** Overrides the tier's model. */
   readonly model?: string;
-  /** A recovered run's profile, as it froze at its first assembly: the run assembles on it and resolves nothing, so a
-   *  setting changed since cannot answer it differently. */
-  readonly frozen?: ResolvedTurnProfile;
+  /** A recovered execution's authority, as it froze at its bind: it assembles on it and drafts nothing from the current
+   *  settings, so a setting changed since cannot answer it differently. */
+  readonly frozen?: FrozenAuthority;
 }
 
 export interface AssembledTurn {
@@ -152,6 +153,7 @@ interface TurnDraft {
 }
 
 async function draftTurn(sources: Pick<TurnAssemblySources, 'profileInputs' | 'choices' | 'config' | 'ancestors' | 'models'>, request: TurnAssemblyRequest): Promise<TurnDraft> {
+  if (request.frozen !== undefined) return frozenDraft(sources, request.frozen);
   const profileInputs = await sources.profileInputs();
   const ancestors = sources.ancestors?.() ?? [];
   const choices = sources.choices ?? ownProfileChoices(sources.config, profileInputs, ancestors.length === 0 ? undefined : ancestors, request.explicitTier === undefined ? {} : { explicitTier: request.explicitTier });
@@ -161,6 +163,20 @@ async function draftTurn(sources: Pick<TurnAssemblySources, 'profileInputs' | 'c
   return {
     profileInputs, ancestors, choices, drafted, served,
     roleSkills: effectiveRoleCatalog(profileInputs.envelope.catalog)[choices.activeRoleId]?.skills ?? [],
+    limits: sources.models.catalog.window(served),
+  };
+}
+
+/** A recovered execution's draft, read from what it froze alone: its role's skills from the catalog it bound, its
+ *  model the one its tier served. Nothing of the current settings is read. */
+function frozenDraft(sources: Pick<TurnAssemblySources, 'models' | 'choices'>, frozen: FrozenAuthority): TurnDraft {
+  const { profile, inputs } = frozen;
+  const served = sources.models.normalize(profile.tier.model);
+
+  return {
+    profileInputs: inputs, ancestors: [], drafted: profile, served,
+    choices: { activeRoleId: profile.role.id, ...sources.choices },
+    roleSkills: effectiveRoleCatalog(inputs.envelope.catalog)[profile.role.id]?.skills ?? [],
     limits: sources.models.catalog.window(served),
   };
 }
@@ -192,15 +208,15 @@ function resolvedTurnProfile(sources: TurnAssemblySources, turn: Pick<TurnDraft,
 export async function assembleActorTurn(sources: TurnAssemblySources, request: TurnAssemblyRequest): Promise<AssembledTurn> {
   const { models } = sources;
   const { frozen } = request;
-  // The tier never depends on the tools, so the drafted model is the served one; a frozen run's is the one it froze.
-  const { profileInputs, choices, roleSkills, drafted, served: spec, limits } = await draftTurn(sources, frozen === undefined ? request : { ...request, model: frozen.tier.model });
+  // The tier never depends on the tools, so the drafted model is the served one; a frozen execution's is the one it froze.
+  const { profileInputs, choices, roleSkills, drafted, served: spec, limits } = await draftTurn(sources, request);
 
   const { available: availableSkills, activeSkills } = await sources.skills(request.userText, roleSkills, limits);
 
   const builtins = filterToolSetBySkills(sources.toolset(drafted.workMode), activeSkills);
   const external = await sources.externalTools(limits);
 
-  const profile = frozen ?? resolvedTurnProfile(sources, { profileInputs, choices, workMode: request.workMode, drafted, builtins, external, activeSkills });
+  const profile = frozen?.profile ?? resolvedTurnProfile(sources, { profileInputs, choices, workMode: request.workMode, drafted, builtins, external, activeSkills });
 
   const operation = sources.operation(profile, profileInputs);
   await sources.settle?.(profile, profileInputs);

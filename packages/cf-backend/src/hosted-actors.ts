@@ -6,7 +6,7 @@ import type { LanguageModel, ModelMessage, Tool, ToolSet } from 'ai';
 import { EventLog, titleActorFromMessage, spawnSeatedHead, admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus, receiveSubordinateEvent, subordinateRelaysTurnEnd, subordinateForkContext, type SubordinateInheritedContext, inheritedAsModelMessage, explorationActorKey, headStatusUnsettled, storedHeadReportStatus, registeredParent, subordinateDescendants, actorReferenceOf, TEMPORARY_LIFETIME, terminalTaskReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, type ActorHost, type ActorReference, type BoundActor, type DelegationBudget, type HeadId, type HeadInput, type RunInference, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedNodeSeat, type StepLoopJobSeat, type JobRetirement, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubordinateEventResult, type SubordinateHandoff, type SubordinateLifetime, type SubordinateReportOrigin, type SubordinateReportHandoff, type SubordinateReportStatus, type SubordinateRosterStore, type SubordinateRuntime, type SubordinateSeed, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
 import { attempt, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import type {
-  AgentToolDescriptor, ArtifactOverrides, DynamicReads, ExecutionKey, ExecutionLane, HeadCapture, HeadSeat, JsonObject, OperationProfile, OwedReport, PreparedAgentTurn,
+  AgentToolDescriptor, ArtifactOverrides, DynamicReads, ExecutionKey, ExecutionLane, FrozenAuthority, HeadCapture, HeadSeat, JsonObject, OperationProfile, OwedReport, PreparedAgentTurn,
   ReceiptExecution, ReportDeps, RunTurnSources, TaskPlan, TrialTurn, TurnAssemblySources, TurnLedgers,
   TurnOpening, TurnSurface,
 } from '@kinu.run/core';
@@ -38,6 +38,8 @@ export interface SurfaceTurn {
   /** The words that opened it; empty for a turn read again. */
   readonly text: string;
   readonly run?: RunSurface;
+  /** A recovered execution's authority, as it froze at its bind: its profile is this, resolved from nothing current. */
+  readonly frozen?: FrozenAuthority;
 }
 
 /** What an agent's tools are built under: the execution they claim in, the ledgers they account into, the external
@@ -367,6 +369,8 @@ export interface HostedTurnRequest {
   /** Whether a plan of the agent's, sent back with comments, awaits its answers, as its isolate read it. */
   readonly awaitsReply: boolean;
   readonly run?: { readonly input: HeadInput; readonly inference: RunInference };
+  /** A recovered execution's authority, which its surface is built on (D5). */
+  readonly frozen?: FrozenAuthority;
 }
 
 export interface PreparedHostedTurn {
@@ -401,6 +405,7 @@ export function prepareHostedTurn(
       },
       text: task.body,
       ...(run !== undefined && { run: { tools: run.inference.tools, sources: run.inference.sources, capture: run.inference.capture } }),
+      ...(task.frozen !== undefined && { frozen: task.frozen }),
     }));
 
     const input = run?.input ?? delegatedHeadInput(actor.record, task);

@@ -112,4 +112,45 @@ describe('TurnFences', () => {
     expect(fences().open(actor, { turnId: 'stopped-turn', runId: 'stopped-run', seq: 2 })).toBe(false);
     expect(fences().open(actor, { turnId: 'stopped-turn', runId: 'stopped-run-retry', seq: 3 })).toBe(true);
   });
+
+  test("a later execution's opening is neither taken nor cleared by an earlier one's late end, whichever kind each is", () => {
+    const { actor, fences } = fenced();
+    const chat = { turnId: 'chat-turn', runId: 'chat-run', seq: 4 };
+    const run = { turnId: 'node-task', runId: 'node-run', seq: 5 };
+
+    // The run, minted after the chat turn's claim, opens after it; the chat turn's opening, delivered late, is refused.
+    expect(fences().open(actor, chat)).toBe(true);
+    expect(fences().open(actor, run)).toBe(true);
+    expect(fences().open(actor, chat)).toBe(false);
+    // The chat turn's end, told late, ends nothing of the run's; the run's own ends it.
+    expect(fences().ended(actor, { runId: chat.runId })).toBeNull();
+    expect(fences().row(actor)).toEqual({ ...run, live: true });
+    expect(fences().ended(actor, { runId: run.runId })).toEqual({ seq: run.seq, turnId: run.turnId });
+
+    // And the reverse: a chat turn after the run, whose late end ends nothing of the chat turn's.
+    const next = { turnId: 'chat-next', runId: 'chat-next-run', seq: 6 };
+
+    expect(fences().open(actor, next)).toBe(true);
+    expect(fences().ended(actor, { runId: run.runId })).toBeNull();
+    expect(fences().row(actor)).toEqual({ ...next, live: true });
+  });
+
+  test("a close is judged by the opening it names: its own runs after newer ones, another's or a newer one's runs nothing", () => {
+    const { actor, fences } = fenced();
+    const first = { turnId: 't1', runId: 'r1', seq: 1 };
+    const second = { turnId: 't2', runId: 'r2', seq: 2 };
+
+    fences().open(actor, first);
+    fences().open(actor, second);
+
+    expect(fences().closes(actor, first)).toBe(true);
+    expect(fences().closes(actor, { ...first, runId: second.runId })).toBe(false);
+    expect(fences().closes(actor, { turnId: 't9', runId: 'r9', seq: 9 })).toBe(false);
+    // A repeat of its own close runs, as every close write is keyed on its execution; another's naming it still runs nothing.
+    expect(fences().closes(actor, first)).toBe(true);
+    expect(fences().closes(actor, { ...first, turnId: second.turnId })).toBe(false);
+    expect(fences().closes(actor, { ...second, runId: first.runId })).toBe(false);
+    // One never admitted, stopped or failed before its claim was bound, names no opening, and closes nothing of the fence.
+    expect(fences().closes(actor, { turnId: 't3', runId: 'r3', seq: null })).toBe(true);
+  });
 });

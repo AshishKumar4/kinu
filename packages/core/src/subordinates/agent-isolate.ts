@@ -69,6 +69,8 @@ export interface AgentTurnOpening {
 
 export interface AgentTurnTask {
   readonly sequenceId: string;
+  /** The run its workspace started: its first round is claimed under it before it is prepared. */
+  readonly runId: string;
   readonly body: string;
   readonly mode: WorkMode;
 }
@@ -122,8 +124,9 @@ export interface AgentToolCall {
   readonly turnId: string;
   /** The run the call is part of: its receipt keys on the execution, as the agent's pointer to it does. */
   readonly runId: string;
-  /** Its turn's capability (design v2 §3): the opening's place in the agent's sequence, which the workspace's fence holds
-   *  while the turn is the agent's current one. Null for a run the workspace started, which only its own cut ends. */
+  /** Its execution's capability (design v2 §3): the epoch its claim was minted with as it opened, which the workspace's
+   *  fence holds while it is the agent's current execution; a run's every round carries its first round's. Null for a
+   *  measure between turns, which runs nothing. */
   readonly epoch: number | null;
   readonly mode: WorkMode;
   /** The turn's lane and its author-stamped metadata, as the agent admitted it: a workspace that restarted rebuilds

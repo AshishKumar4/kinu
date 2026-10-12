@@ -830,7 +830,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private _agentTurns: AgentTurns | null = null;
 
   protected get agentTurns(): AgentTurns {
-    this._agentTurns ??= new AgentTurns({
+    return this._agentTurns ??= this.openAgentTurns();
+  }
+
+  /** This activation's hold on its agents' open turns: RAM, gone with the activation, while their isolates run on. */
+  protected openAgentTurns(): AgentTurns {
+    return new AgentTurns({
       sql: this.boundSql,
       fence: (actorId) => this.heldFence(actorId),
       seams: () => this.hostedSeams(),
@@ -853,7 +858,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       },
       chatOwed: async (reference) => this.agentWakes.armed(reference.actorId) && await (await this.agentCalls(reference.actorId)).owed(this.agentSnapshot(reference.actorId)),
       chatIdle: async (reference) => { await (await this.agentCalls(reference.actorId)).idle(); },
-      frozenProfile: async (reference, runId) => await (await this.agentCalls(reference.actorId)).frozenProfile(this.agentSnapshot(reference.actorId), runId),
+      frozen: async (reference, key) => await (await this.agentCalls(reference.actorId)).frozen(this.agentSnapshot(reference.actorId), { turnId: key.turnId, runId: key.runId }),
       pricing: (spec) => this.modelCatalog.pricing(spec),
       accounts: () => this.config.getProviderAccounts(),
       credentialsRevision: () => this.openedCredentialsRevision(),
@@ -861,8 +866,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       missions: (actorId) => (actorPolicy(this.agentOf(actorId)).workspaceAgent ? this.budget : null),
       advisor: (actor) => this.actorAdvisor(actor),
     });
-
-    return this._agentTurns;
   }
 
   /**
@@ -897,8 +900,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         return await this.agentTurns.program(actorId, bound.turnId, ...args);
       },
-      traceTurn: (turnId, event) => this.agentTurns.trace(actorId, turnId, event),
-      traceStream: (turnId, lines) => this.agentTurns.traceStream(actorId, turnId, headDeltas(lines)),
+      traceTurn: (close, event) => this.agentTurns.trace(actorId, close.turnId, event),
+      traceStream: (close, lines) => this.agentTurns.traceStream(actorId, close.turnId, headDeltas(lines)),
       // Its first step binds the profile its turn assembled on, and the grant carries the live block on it (D5).
       paceStep: async (bound, profile) => {
         if (profile !== null) this.boundProfiles.set(actorId, profile);
@@ -908,13 +911,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       },
       resume: (bound) => this.agentTurns.resume(actorId, bound.turnId),
       guard: (bound, ...args) => this.agentTurns.guard(actorId, bound.turnId, ...args),
-      debit: (turnId, ...args) => this.agentTurns.debit(actorId, turnId, ...args),
-      prepareTurn: async (turnId) => {
+      debit: (close, ...args) => this.agentTurns.debit(actorId, close.turnId, ...args),
+      prepareTurn: async (bound) => {
         this.admitWork();
         // A turn opens on the account's settings as they are now (`accountSettingsAtOpen`).
         await this.accountSettingsAtOpen();
 
-        return await this.agentTurns.prepare(actorId, turnId);
+        return await this.agentTurns.prepare(actorId, bound);
       },
       prepareChat: async (request) => {
         this.admitWork();
@@ -991,7 +994,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // A repair's question, read only: its calls' effects committed here, under the receipts each kept.
       receipts: async (turnId, runId, callIds) => remoteReceipts(this.boundSql, this.agentBound(actorId).handle, { turnId, runId }, callIds),
       observe: async (lines) => { await this.chatRooms.hostedRoom(actorId)?.observe(uiChunks(lines)); },
-      answerMetadata: (turnId, narration) => this.takeTurnSlates(actorId, turnId, narration),
+      answerMetadata: (close, narration) => this.takeTurnSlates(actorId, close.turnId, narration),
       reportModelCall: async (report) => { this.reportModelCall(report); },
       reportModelOperation: async (event) => { this.modelOperations(event); },
       getAuth: async (key, opts) => {
@@ -1432,7 +1435,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       // Its sources' crossings wait on nothing of its own, so they are in flight beside its profile's resolution.
       const planes = run === undefined ? this.sourcePlanes(runtime, reach.actor, true) : undefined;
-      const resolved = await this.actorProfile({ actor: actor.handle, availableTools: [], workMode: lane.mode });
+      // A recovered execution's is the one it froze: a role or model chosen since cannot answer it differently.
+      const resolved = turn.frozen ?? await this.actorProfile({ actor: actor.handle, availableTools: [], workMode: lane.mode });
 
       surface.resolved(resolved.profile, resolved.inputs);
 

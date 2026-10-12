@@ -12,7 +12,7 @@ import type { SqlExec, SqlExecutor, Storage } from '../types/primitives';
 import type { AgentRuntime } from '../types/agent-runtime';
 import { ActorSession, type ActorSessionOptions } from '../orchestrator/actor-session';
 import type { AgentOrchestratorDeps } from '../orchestrator/agent-orchestrator';
-import type { StoredActorClaim } from '../orchestrator/actor-claims';
+import { claimOfRow, type ClaimRow, type StoredActorClaim } from '../orchestrator/actor-claims';
 import type { SessionFilePlane } from '../session/payload';
 import { actorReferenceOf, sameActorReference, type ActorHandle, type ActorReference } from '../identity/actor-handle';
 import { createAgentStores, type AgentStores } from './agent-stores';
@@ -522,24 +522,10 @@ function purgeActorRows(storage: Pick<Storage, 'sql' | 'transactionSync'> & SqlE
 
 // Read without a handle: a cold root reads these before it hosts anybody.
 function unsettledClaimsOf(sql: SqlExecutor, actorId: string, limit: number): readonly StoredActorClaim[] {
-  const rows = sql<{
-    turn_id: string; run_id: string; epoch: number; work_mode: 'plan' | 'build';
-    program_kind: 'builtin' | 'scaffold'; program_version: number; program_digest: string | null;
-    program_build: string | null; claimed_at: number;
-  }>`SELECT turn_id, run_id, epoch, work_mode, program_kind, program_version, program_digest,
-            program_build, claimed_at
+  return sql<ClaimRow>`SELECT turn_id, run_id, epoch, work_mode, phase, program_kind, program_version, program_digest,
+            program_build, outcome, claimed_at
      FROM actor_turn_claims WHERE actor_id = ${actorId} AND outcome IS NULL
-     ORDER BY claimed_at DESC LIMIT ${limit}`;
-
-  return rows.map((row) => Object.freeze({
-    actorId, turnId: row.turn_id, runId: row.run_id, epoch: row.epoch, workMode: row.work_mode,
-    program: Object.freeze({
-      kind: row.program_kind, version: row.program_version,
-      digest: row.program_digest, build: row.program_build,
-    }),
-    status: 'admitted' as const, outcome: null,
-    claimedAt: row.claimed_at,
-  }));
+     ORDER BY claimed_at DESC LIMIT ${limit}`.map((row) => claimOfRow(actorId, row));
 }
 
 /**

@@ -1,4 +1,5 @@
 import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import { admitTestClaim } from '@kinu.run/test-utils';
 /**
  * One promoted-loop contract for every full actor kind (open-41): the pinned scaffold version is selected and
  * recorded, with the live alias poisoned so an alias read is observable. The model is not driven here.
@@ -55,7 +56,7 @@ async function claimTurnOn(actor: SeatedActor, turnId: string): Promise<{
 
   const context = actor.stores.history.context.selected() ?? actor.stores.history.context.initialize();
 
-  const claim = await actor.stores.claims.admit({
+  const claim = await admitTestClaim(actor.stores.claims, {
     runId: `run-${turnId}`, turnId, workMode: 'build',
     program: programIdentityOf(program, 'harness-build'),
     context,
@@ -135,8 +136,8 @@ describe('the promoted-loop contract holds for every full actor kind', () => {
       // Re-read from the ledger: a promotion mutating the stored claim would pass an in-memory comparison.
       const stored = subject.actor.stores.claims.read(`${subject.label}-inflight`);
       expect(stored).not.toBeNull();
-      expect(stored?.program.kind).toBe('scaffold');
-      expect(stored?.program.version).toBe(1);
+      expect(stored?.program?.kind).toBe('scaffold');
+      expect(stored?.program?.version).toBe(1);
 
       const next = await claimTurnOn(subject.actor, `${subject.label}-next`);
       expect(next.version).toBe(2);

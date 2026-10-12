@@ -19,7 +19,26 @@ export function initTurnFenceTable(execRaw: RawSqlExec): void {
     facts_json TEXT,
     cancelled_at INTEGER
   )`);
+  // Each opening admitted, by its place in the agent's sequence: what a close names is checked against it (`closes`),
+  // its repeats too. A ring of {@link KEPT_OPENINGS} slots an agent: an opening takes its place's slot from the one
+  // {@link KEPT_OPENINGS} places older, in the one statement that admits it.
+  execRaw(`CREATE TABLE IF NOT EXISTS actor_turn_openings (
+    actor_id TEXT NOT NULL REFERENCES workspace_actors(actor_id),
+    slot     INTEGER NOT NULL,
+    seq      INTEGER NOT NULL,
+    turn_id  TEXT NOT NULL,
+    run_id   TEXT NOT NULL,
+    PRIMARY KEY (actor_id, slot)
+  )`);
 }
+
+/** How many of an agent's newest places in its sequence a close is judged against by name: one naming an older opening
+ *  runs, and finds nothing of another execution to change, as every close write is keyed on its own. */
+const KEPT_OPENINGS = 64;
+
+/** What a close names (design v2 §3): the execution it closes and the epoch it opened with; null for one never admitted
+ *  (stopped, or its preparation failed, before its claim was bound), whose close can end nothing of the fence by place. */
+export type ClosedExecution = Pick<FencedOpening, 'turnId' | 'runId'> & { readonly seq: number | null };
 
 /** One opening: the turn, the run it prepares, and its place in the agent's sequence. */
 export interface FencedOpening {
@@ -46,12 +65,40 @@ export class TurnFences {
    * offered its run are kept while it is the same run (its recovery's), and go for any other (a later turn, a Retry).
    */
   open(actorId: string, opening: FencedOpening): boolean {
-    return this.sql<{ seq: number }>`INSERT INTO actor_turn_fence (actor_id, seq, turn_id, run_id) VALUES (${actorId}, ${opening.seq}, ${opening.turnId}, ${opening.runId})
+    const admitted = this.sql<{ seq: number }>`INSERT INTO actor_turn_fence (actor_id, seq, turn_id, run_id) VALUES (${actorId}, ${opening.seq}, ${opening.turnId}, ${opening.runId})
       ON CONFLICT (actor_id) DO UPDATE SET seq = excluded.seq, turn_id = excluded.turn_id, run_id = excluded.run_id, ended_at = NULL, cancelled_at = NULL,
         facts_json = CASE WHEN actor_turn_fence.run_id = excluded.run_id THEN actor_turn_fence.facts_json END
       WHERE excluded.seq > actor_turn_fence.seq
         AND NOT (actor_turn_fence.cancelled_at IS NOT NULL AND actor_turn_fence.run_id = excluded.run_id)
       RETURNING seq`.length > 0;
+
+    if (!admitted) return false;
+    void this.sql`INSERT INTO actor_turn_openings (actor_id, slot, seq, turn_id, run_id)
+      VALUES (${actorId}, ${opening.seq % KEPT_OPENINGS}, ${opening.seq}, ${opening.turnId}, ${opening.runId})
+      ON CONFLICT (actor_id, slot) DO UPDATE SET seq = excluded.seq, turn_id = excluded.turn_id, run_id = excluded.run_id`;
+
+    return true;
+  }
+
+  /**
+   * Whether a close (its trace, charges, answer metadata, end, settle) may run (design v2 §3): its execution's own close
+   * runs after a Stop or a newer opening, so it is judged by the opening it names, never by the fence's current one. One
+   * that names an opening as another execution's, or an opening newer than any admitted, is refused, running nothing.
+   * One older than the kept openings runs, and finds nothing of another execution to change: every close write is keyed
+   * on its own execution.
+   */
+  closes(actorId: string, closed: ClosedExecution): boolean {
+    if (closed.seq === null) return true;
+
+    const opening = this.sql<{ turn_id: string; run_id: string }>`SELECT turn_id, run_id FROM actor_turn_openings
+      WHERE actor_id = ${actorId} AND slot = ${closed.seq % KEPT_OPENINGS} AND seq = ${closed.seq}`[0];
+
+    if (opening !== undefined) return opening.turn_id === closed.turnId && opening.run_id === closed.runId;
+    const newest = this.row(actorId);
+
+    if (newest === null || closed.seq > newest.seq) return false;
+
+    return closed.seq < newest.seq || (newest.turnId === closed.turnId && newest.runId === closed.runId);
   }
 
   /** The agent's newest opening, and whether it still runs: neither ended nor stopped. Null before its first. */

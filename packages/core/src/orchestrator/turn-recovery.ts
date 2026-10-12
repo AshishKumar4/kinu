@@ -50,20 +50,25 @@ export function decideInterruptedTurn(turn: InterruptedTurn): Effect.Effect<Inte
     if (turn.turnOpen()) return { kind: 'active' } as const;
     const stopped = turn.runs?.stopRequested(turn.runId) === true;
 
-    if (claim === null) return stopped ? { kind: 'closed', cause: 'stopped' } as const : { kind: 'continue' } as const;
-
-    const settled = (outcome: ClaimOutcome, cause: ClosedBy): InterruptedTurnVerdict => {
-      stores.claims.settleRecovered(claim.turnId, claim.epoch, outcome);
-      recordRecoverySettled({ workspace: turn.workspace, actor: turn.actor, cause, sameBuild: sameBuildOf(claim.program.build, turn.installedBuild) });
+    const settled = (open: StoredActorClaim, outcome: ClaimOutcome, cause: ClosedBy): InterruptedTurnVerdict => {
+      stores.claims.settleRecovered(open.turnId, open.epoch, outcome);
+      recordRecoverySettled({ workspace: turn.workspace, actor: turn.actor, cause, sameBuild: sameBuildOf(open.program?.build ?? null, turn.installedBuild) });
 
       return { kind: 'closed', cause };
     };
 
+    // Never claimed, or claimed only to prepare: it consumed nothing, so it prepares again under the next epoch.
+    if (claim === null || claim.status === 'preparing') {
+      if (!stopped) return { kind: 'continue' } as const;
+
+      return claim === null ? { kind: 'closed', cause: 'stopped' } as const : settled(claim, 'aborted', 'stopped');
+    }
+
     // The outcome the stopped turn would have settled its claim with.
-    if (stopped) return settled('aborted', 'stopped');
+    if (stopped) return settled(claim, 'aborted', 'stopped');
 
     // Its hirer holds the answer already: run again, it would answer a closed assignment a second time.
-    if (turn.answered?.(claim) === true) return settled('indeterminate', 'answered');
+    if (turn.answered?.(claim) === true) return settled(claim, 'indeterminate', 'answered');
 
     const evidence = yield* consumedEvidence(stores, claim);
 
@@ -72,7 +77,7 @@ export function decideInterruptedTurn(turn: InterruptedTurn): Effect.Effect<Inte
     if ('failure' in evidence) {
       diagnostics.failure('actor.turn_record_unreadable', evidence.failure, { actor: turn.actor, turn: claim.turnId });
 
-      return settled('error', 'record_unreadable');
+      return settled(claim, 'error', 'record_unreadable');
     }
 
     const verdict = yield* Effect.promise(() => verifyClaimedProgram(
@@ -89,13 +94,13 @@ export function decideInterruptedTurn(turn: InterruptedTurn): Effect.Effect<Inte
     if (cuts.work >= POISON_WORK_CUTS || cuts.provider >= STALLED_PROVIDER_CUTS) {
       diagnostics.event('actor.turn_stalled', { actor: turn.actor, turn: claim.turnId, runs: claim.epoch, workCuts: cuts.work, providerCuts: cuts.provider });
 
-      return settled('error', 'stalled');
+      return settled(claim, 'error', 'stalled');
     }
 
     // A host that stamps no build (the CLI) recorded none at admission either: nothing to compare, so nothing changed.
     if (verdict.kind === 'verified' || (verdict.kind === 'build_unknown' && turn.installedBuild === null)) return { kind: 'continue' } as const;
 
-    return settled('indeterminate', 'unverified');
+    return settled(claim, 'indeterminate', 'unverified');
   });
 }
 

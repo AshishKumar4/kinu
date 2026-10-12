@@ -13,7 +13,7 @@ export { AgentOpenTurns, AgentOwedWork, type AgentOpenTurn } from './subordinate
 
 export { AgentReports, AgentSequence } from './subordinates/report-sequence';
 
-export { TurnFences, type FencedRow, type OpenedAt } from './subordinates/turn-fence';
+export { TurnFences, type ClosedExecution, type FencedRow, type OpenedAt } from './subordinates/turn-fence';
 
 export { TurnReports, type ReportedTurn } from './subordinates/turn-reports';
 
@@ -51,11 +51,15 @@ export {
 } from './orchestrator/terminal-effects';
 
 export {
-  initTurnBranchesTable, TurnBranchesStore, TurnFactsSchema, TurnFactsStore, type TurnFacts,
+  driveExecution, type AssembledRound, type ClaimedRound, type DrivenExecution,
+} from './orchestrator/execution-driver';
+
+export {
+  initTurnBranchesTable, TurnBranchesStore, TurnFactsSchema, TurnFactsStore, type TurnFacts, type FrozenAuthority, type FactsKey,
 } from './orchestrator/turn-facts';
 
 export type {
-  CloseCapability, ExecutionKey, ExecutionLane, FrozenTurn, TurnCapability, TurnPort, TurnToolCall,
+  ExecutionKey, ExecutionLane, TurnCapability,
 } from './orchestrator/execution';
 
 export { inTurnSurface, scopedTurnSurface, turnLedgers, TurnSurface, type TurnLedgers, type TurnSurfaceOpening } from './orchestrator/main-turn-surface';
@@ -1628,7 +1632,7 @@ export {
   headMergeLLM,
   type HeadMergePolicyDeps,
   extractFinalText, synthesizeHeadSummary, headProducedFindings,
-  HeadCapture, runHeadInference, buildHeadAccumulatorTools,
+  HeadCapture, runHeadInference, preparedHeadRun, type HeadRun, buildHeadAccumulatorTools,
   buildHeadSystemPrompt, buildHeadMessages, withHeadCaptureRecording,
   type HeadInferenceDeps, type RunInference,
   buildHeadToolSet, HEAD_BUILTIN_TOOLS, spawnSeatedHead, type HeadSeat, type SeatedHeadDeps,
@@ -1715,7 +1719,7 @@ export { ActorSession, CLEAR_NEEDS_IDLE, type ActorSessionOptions, type ActorTur
 
 export {
   ChatSession, type ChatSessionOptions, type ChatSessionPorts, type OpenWork, type CompactOutcome, type ComposedRequest, type ChatTransport, type ChatTurnInput,
-  type PreparedTurn, type TurnOpening, type OwedTerminalEffectsInput, type SessionEvent, type SendOptions, type SendLandingWaiter, type DeliveredRun,
+  type PreparedTurn, type TurnOpening, type OwedTerminalEffectsInput, type SessionEvent, type TurnEndEvent, type SendOptions, type SendLandingWaiter, type DeliveredRun,
 } from './orchestrator/chat-session';
 
 export { startActorTurn, type ActorTurnInput } from './orchestrator/actor-turn';

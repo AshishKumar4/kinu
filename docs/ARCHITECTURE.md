@@ -123,7 +123,8 @@ turns in an `AgentFacet` with its own Worker Loader isolate and SQLite (D8/D9).
 Every agent's chat runs core's `ChatSession` there (`FacetChat`). A hired task,
 a background evolution agent, a branching head, a swarm node or a steer branch
 is a delivered run, one more input of that chat (`kind: 'run'`): its rounds run
-through core's `driveRun` with `runHeadInference`'s assembly, and its end rides
+through core's `driveExecution` with `runHeadInference`'s assembly, as a chat
+turn runs through it with its own, and its end rides
 the agent's next report.
 
 The workspace prepares every agent's turn from one factory,
@@ -131,10 +132,16 @@ The workspace prepares every agent's turn from one factory,
 tools, which run under the turn's `TurnSurface`
 (`packages/core/src/orchestrator/main-turn-surface.ts`, its execution and its
 ledgers), held by `AgentTurns` with the open turn. The agent's isolate
-assembles on it and freezes the run's final profile (`actor_turn_facts`); its
-first step's pace carries that profile to the workspace. Every call that runs
-more of the turn carries its capability (turn, run, epoch) and holds only while
-the workspace's durable fence (`actor_turn_fence`) holds that opening. A tool
+claims the execution (turn, run) as `preparing` before it is prepared, minting
+its epoch (`actor_epochs`, one sequence over the agent's chat turns and runs),
+and binds its final profile with the inputs it was resolved from under that key
+(`actor_turn_facts`, `actor_profile_inputs`) before any model or tool work; its
+first step's pace carries that profile to the workspace, and a workspace that
+reads the turn again after a restart rebuilds its surface from what it froze.
+Every call that runs more of the turn carries its capability (turn, run, epoch)
+and holds only while the workspace's durable fence (`actor_turn_fence`) holds
+that opening; every call that closes it names that opening, and runs only if
+it is the agent's own (`actor_turn_openings`). A tool
 whose effect commits in the workspace returns through
 `AgentWorkspaceRPC.executeTool`, its receipt kept there and a pointer to it in
 the facet; the facet holds conversation, claims, its own effect claims and run
@@ -225,9 +232,10 @@ orchestrator, the bound profile, and the abort. It runs a turn through
 (`packages/core/src/chat.ts`) for the builtin program, or `scaffoldChatTransform`
 (`packages/core/src/scaffold/chat-transform.ts`) wrapping it when an evolved
 `agent.js` is the actor's program. A delivered run's rounds run on the agent's
-own `ActorSession` through core's `driveRun`
-(`packages/core/src/orchestrator/run-driver.ts`: each round is claimed,
-assembled, bound, executed, settled and finished), and `runHeadInference`
+own `ActorSession` through core's `driveExecution`
+(`packages/core/src/orchestrator/execution-driver.ts`: each round is opened,
+claimed as `preparing`, prepared, bound, executed, settled and finished), as
+every chat turn does, and `runHeadInference`
 (`packages/core/src/heads/head-inference.ts`) keeps each round's assembly, its
 projection and the next input, which decide how many rounds a head, node, or
 subordinate run gets. So one `runChat` body serves every actor kind on both

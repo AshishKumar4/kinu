@@ -8,9 +8,9 @@ import {
   type HeadInput, type RunInference, type HeadReport, type SqlExecutor, type MissionBudgetPort, type MissionGovernor, type Executor, readMissionLabels,
 } from '@kinu.run/core';
 import type { TurnCall } from './agent-facets';
-import type { TurnBound } from './agent-facet/agent-turn';
+import type { TurnBound, TurnCapabilityOf } from './agent-facet/agent-turn';
 import { prepareHostedTurn, type HostedActorSeams, type HostedTurnRequest, type PreparedHostedTurn } from './hosted-actors';
-import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, Fact, JsonObject, PreparedAgentTurn, RunEndReport, StoredRow, TaskPlan, OpenedAt, TurnFacts, TurnOpening } from '@kinu.run/core';
+import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, Fact, FrozenAuthority, JsonObject, PreparedAgentTurn, RunEndReport, StoredRow, TaskPlan, OpenedAt, TurnFacts, TurnOpening } from '@kinu.run/core';
 
 export interface AgentTurnsDeps {
   readonly sql: SqlExecutor;
@@ -26,8 +26,8 @@ export interface AgentTurnsDeps {
   /** The agent's own chat answers for itself whether it holds a turn, running or queued; one at rest is not asked. */
   chatOwed(reference: ActorReference): Promise<boolean>;
   chatIdle(reference: ActorReference): Promise<void>;
-  /** The profile a run of the agent froze as it first assembled, in its own store; null before then. */
-  frozenProfile(reference: ActorReference, runId: string): Promise<ResolvedTurnProfile | null>;
+  /** What an execution of the agent froze as it bound, in its own store; null before then. */
+  frozen(reference: ActorReference, key: Pick<TurnBound, 'turnId' | 'runId'>): Promise<FrozenAuthority | null>;
   pricing(spec: string): ModelPricing | null;
   accounts(): Readonly<Record<string, string>>;
   /** The account's credentials revision as the turn's open read it; null before one opened. */
@@ -57,6 +57,9 @@ export interface ChatTurnRequest {
    *  sequence: an opening older than the agent's newest is refused. */
   readonly runId?: string;
   readonly seq?: number;
+  /** A recovered execution's authority, as it froze at its bind (D5): its surface, mode and sources are built on it, and
+   *  nothing of the current settings is resolved. */
+  readonly frozen?: FrozenAuthority;
 }
 
 interface OpenTurn {
@@ -98,7 +101,7 @@ export class AgentTurns {
 
     try {
       if (inference.isAborted()) cut();
-      const refused = await this.deps.deliver(reference, { sequenceId: input.id, body: input.task, mode: input.mode });
+      const refused = await this.deps.deliver(reference, { sequenceId: input.id, runId: inference.runId, body: input.task, mode: input.mode });
 
       if (refused !== null) ended.reject(refused);
       const { activity: _activity, narration: _narration, figures: _figures, produced, errorMessage, ...report } = await ended.promise;
@@ -114,6 +117,8 @@ export class AgentTurns {
     } finally {
       inference.signal?.removeEventListener('abort', cut);
       ledger.close(opened);
+      // Its end, told or not: no call of it holds from here, and a later execution's opening is not touched.
+      new TurnFences(this.deps.sql).ended(reference.actorId, { runId: inference.runId });
       this.close(input.id);
       await Promise.all(interruptions);
     }
@@ -153,15 +158,19 @@ export class AgentTurns {
   }
 
   /**
-   * A call that runs more of a turn holds while its capability does (design v2 §3): a chat turn's, while the durable fence
-   * holds the opening it names (a later opening, a Stop or its end refuses it, before a reset of this workspace as after);
-   * a run's, while the run this workspace started is open and not cut. One that settles what the turn already did (its
-   * answer, its trace, its charges) holds after either, so the turn closes.
+   * A call that runs more of an execution holds while its capability does (design v2 §3): while the durable fence holds
+   * the opening it names, a chat turn's or a run's alike (a later opening, a Stop or its end refuses it, before a reset of
+   * this workspace as after). A measure carries none and runs nothing. One that opens an execution is judged by the
+   * opening itself. A close (its trace, charges, answer metadata, end, settle) is judged by the opening it names, so an
+   * execution's own close runs after its end, a Stop or a newer opening, and one naming another execution runs nothing
+   * (`TurnFences.closes`).
    */
   holds(actorId: string, bound: TurnBound, call: TurnCall): boolean {
-    if (call !== 'executes') return true;
+    if (call === 'opens') return true;
 
-    if (bound.epoch === null) return this.open.get(bound.turnId)?.request.run !== undefined && this.cuts.get(bound.turnId)?.signal.aborted !== true;
+    if (call === 'settles') return new TurnFences(this.deps.sql).closes(actorId, { turnId: bound.turnId, runId: bound.runId, seq: bound.epoch });
+
+    if (bound.epoch === null) return false;
     const fence = this.deps.fence(actorId);
 
     return fence !== null && fence.live && fence.turnId === bound.turnId && fence.runId === bound.runId && fence.seq === bound.epoch;
@@ -325,18 +334,22 @@ export class AgentTurns {
 
   /**
    * A workspace that restarted mid-turn reads a chat turn again under the capability its call carries, which the fence
-   * held (`holds`): nothing is opened again, and its tools bind the profile its agent bound at its first step, resolving
-   * nothing (D5). A run's loop died with the activation that ran it.
+   * held (`holds`): nothing is opened again. What its agent froze as it bound is read first, and the turn's surface, its
+   * mode and its sources are built on it, resolving nothing (D5); one that never bound builds on the settings as they
+   * are. A run's loop died with the activation that ran it.
    */
   private async reread(actorId: string, call: Pick<AgentToolCall, 'turnId' | 'runId' | 'epoch' | 'mode' | 'parentDriven' | 'driving'>): Promise<void> {
     const known = this.open.get(call.turnId);
 
     if (call.epoch === null || (known !== undefined && (known.prepared !== null || known.request.run !== undefined))) return;
+    const frozen = await this.deps.frozen(this.deps.reference(actorId), call);
 
-    await this.prepareChat(actorId, { turnId: call.turnId, runId: call.runId, mode: call.mode, userText: '', parentDriven: call.parentDriven, driving: call.driving, awaitsReply: false }, { seq: call.epoch });
-    const profile = await this.deps.frozenProfile(this.deps.reference(actorId), call.runId);
+    await this.prepareChat(actorId, {
+      turnId: call.turnId, runId: call.runId, mode: call.mode, userText: '', parentDriven: call.parentDriven, driving: call.driving, awaitsReply: false,
+      ...(frozen !== null && { frozen }),
+    }, { seq: call.epoch });
 
-    if (profile !== null) this.bind(actorId, call, profile);
+    if (frozen !== null) this.bind(actorId, call, frozen.profile);
   }
 
   private mode(turn: OpenTurn, prepared: PreparedHostedTurn): WorkMode {
@@ -370,6 +383,7 @@ export class AgentTurns {
       ...(request.opening !== undefined && { opening: request.opening }),
       ...(request.taskPlan !== undefined && { taskPlan: request.taskPlan }),
       ...(request.explicitTier !== undefined && { explicitTier: request.explicitTier }),
+      ...(request.frozen !== undefined && { frozen: request.frozen }),
     };
 
     const turn: OpenTurn = {
@@ -396,10 +410,34 @@ export class AgentTurns {
     })))));
   }
 
-  async prepare(actorId: string, turnId: string): Promise<PreparedAgentTurn> {
-    const prepared = await this.read(this.turn(actorId, turnId));
+  /**
+   * A delivered run's preparation, under its first round's capability: it opens the agent's fence for the run, as a chat
+   * turn's preparation opens it, so a run and a chat turn of the agent are one sequence of executions. A run this
+   * activation did not start (its caller went with a reset) is refused, and its opening ended: nobody here hears it.
+   */
+  async prepare(actorId: string, bound: TurnCapabilityOf): Promise<PreparedAgentTurn> {
+    const fences = new TurnFences(this.deps.sql);
+    const turn = this.open.get(bound.turnId);
+    const run = turn?.request.run;
 
-    if (prepared === null) return settleSync(Effect.fail(new KinuError('denied', `The preparation of task ${turnId} finished after a later opening of its agent.`)));
+    if (turn === undefined || run === undefined || turn.reference.actorId !== actorId || run.inference.runId !== bound.runId) {
+      fences.ended(actorId, { runId: bound.runId });
+
+      return settleSync(Effect.fail(new KinuError('denied', `Task ${bound.turnId} is not a run this workspace awaits.`)));
+    }
+
+    if (this.cuts.get(bound.turnId)?.signal.aborted === true) return settleSync(Effect.fail(new KinuError('cancelled', `Task ${bound.turnId} was stopped.`)));
+
+    if (!fences.open(actorId, { turnId: bound.turnId, runId: bound.runId, seq: bound.epoch })) {
+      return settleSync(Effect.fail(new KinuError('denied', `The opening of task ${bound.turnId} (${String(bound.epoch)} in its agent's sequence) is older than the agent's newest.`)));
+    }
+
+    const opened: OpenTurn = { ...turn, fenced: { seq: bound.epoch } };
+
+    this.open.set(bound.turnId, opened);
+    const prepared = await this.read(opened);
+
+    if (prepared === null) return settleSync(Effect.fail(new KinuError('denied', `The preparation of task ${bound.turnId} finished after a later opening of its agent.`)));
 
     return prepared;
   }
@@ -416,13 +454,15 @@ export class AgentTurns {
 
     const scaffold = this.scaffold(actor, version);
     const mode = this.mode(turn, prepared);
-    const { explicitTier } = turn.request;
+    const { explicitTier, frozen } = turn.request;
 
     const sources = await materializeTurnSources(
       { ...surface.sources, toolset: () => surface.offered, externalTools: async () => ({}) },
       {
         userText: input.task, workMode: mode,
         ...(input.model !== undefined && { model: input.model }), ...(explicitTier !== undefined && { explicitTier }),
+        // A recovered execution's model bundle is the one it froze, whatever the tier says now.
+        ...(frozen !== undefined && { frozen }),
       },
     );
 

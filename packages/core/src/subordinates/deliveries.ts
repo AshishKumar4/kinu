@@ -40,7 +40,7 @@ const DeliveryInputSchema = v.variant('kind', [
   }),
   /** A run its workspace asks of it whole (a head's, a swarm node's): its own task, run to its end and reported. */
   v.object({
-    kind: v.literal('run'), task: v.object({ sequenceId: v.string(), body: v.string(), mode: WorkModeSchema }),
+    kind: v.literal('run'), task: v.object({ sequenceId: v.string(), runId: v.string(), body: v.string(), mode: WorkModeSchema }),
   }),
   /** The owner's intents (D6), each crossed as any input is and answered with what it did: their decision on a plan the
    *  agent submitted, at the revision they read; */

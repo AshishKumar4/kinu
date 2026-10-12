@@ -8,7 +8,7 @@ import {
   bindRoute, completeOnRoute, ownProfileChoices, planWorkspaceTitle, resolveAgentTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle,
   type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpening, type JsonObject, type PlanReview, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
   type InspectedWork, type PreparedAgentTurn, type PreparedTurn, type TerminalTurnFacts, type TerminalTurnParts,
-  type SessionEvent, type TurnAssemblyRequest, type WorkMode, type OwnerQuestionStore, type RunEndOutcome, type DeliveredRun, type AgentOwes, type AgentReport,
+  type SessionEvent, type TurnAssemblyRequest, type WorkMode, type OwnerQuestionStore, type RunEndOutcome, type DeliveredRun, type AgentOwes, type AgentReport, type ClaimedRound,
 } from '@kinu.run/core';
 import { createCompactionStateStore, type CompactionStateStore } from '@kinu.run/compaction';
 import { attempt, diagnostics, hold, logged, renderThrownChain, settle, toKinuError, type KinuError } from '@kinu.run/core/obs';
@@ -124,10 +124,10 @@ export class FacetChat {
       },
       mintAnswerId: () => crypto.randomUUID(),
       ports: {
-        prepareTurn: (item, lease, opening) => this.prepareTurn(item, lease, opening),
+        prepareTurn: (item, lease, opening, round) => this.prepareTurn(item, lease, opening, round),
         composeRequest: () => this.composeRequest(),
         owedTerminalEffects: (input) => this.owedTerminalEffects(input),
-        answerMetadata: async (turnId, texts) => await answerMetadataOf(workspace, turnId, texts),
+        answerMetadata: async (lease, texts) => await answerMetadataOf(workspace, { turnId: lease.turnId, runId: lease.runId, epoch: actor.session.closeEpoch(lease) }, texts),
         // What the turn already told its hirer is the agent's own record, so a reset of the workspace cannot repeat it.
         // An agent with no hirer owes no report, so it asks the workspace for none.
         owedReport: async (ending, assistantText, narration) => (this.policy.hirer === null ? null : await workspace.owedReport(
@@ -224,7 +224,7 @@ export class FacetChat {
       labels: missionLabels,
       port: {
         guard: async (seam, labels) => await workspace.guard({ turnId: turn.id, runId: turn.runId, epoch: turn.epoch }, seam, labels),
-        debit: async (tokens, opts) => { await workspace.debit(turn.id, tokens, opts); },
+        debit: async (tokens, opts) => { await workspace.debit({ turnId: turn.id, runId: turn.runId, epoch: turn.epoch }, tokens, opts); },
       },
     });
 
@@ -252,7 +252,7 @@ export class FacetChat {
     await charges?.settled();
   }
 
-  private async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease, opening: TurnOpening): Promise<PreparedTurn> {
+  private async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease, opening: TurnOpening, round: ClaimedRound): Promise<PreparedTurn> {
     const { actor, database, workspace } = this.deps;
     const plans = actor.stores.planReviews;
     // Read once, by whichever of the review's mode and the reply's lane asks first.
@@ -268,31 +268,30 @@ export class FacetChat {
     const explicitTier = metadataTier(item.metadata);
     const taskPlan = approvedTaskPlan(item, plans);
 
-    // The turn's capability (design v2 §3): its opening's place in this agent's sequence, which the workspace's fence
-    // holds while it is this agent's current turn. Every call that runs more of the turn carries it.
-    const bound = { turnId: lease.turnId, runId: lease.runId, epoch: database.nextInSequence() };
+    // The turn's capability (design v2 §3): the epoch its claim was minted with, which the workspace's fence holds while
+    // it is this agent's current execution. Every call that runs more of the turn carries it.
+    const bound = { turnId: lease.turnId, runId: lease.runId, epoch: round.capability.epoch };
 
     const prepared = await workspace.prepareChat({
       turnId: lease.turnId, mode, userText: item.text, parentDriven: this.parentDriven, driving: this.driving, opening,
       // A plan the owner sent back with comments awaits its answers on the owner's turns alone.
       awaitsReply: !this.parentDriven && planAwaitingReply(activePlan(), this.driving),
-      // Its run, which the turn's recovery continues and its Retry starts anew.
-      runId: lease.runId, seq: bound.epoch,
+      // Its run, which the turn's recovery continues and its Retry starts anew; a recovered run's surface is built on what
+      // it froze as it bound.
+      runId: lease.runId, seq: bound.epoch, ...(round.frozen !== null && { frozen: round.frozen }),
       ...(explicitTier !== undefined && { explicitTier }), ...(taskPlan !== null && { taskPlan }),
     });
 
-    // A recovered run assembles on the profile it froze as it first assembled, and resolves nothing (D5).
-    const frozen = database.prepare(bound, prepared);
-
+    database.prepare(bound, prepared);
     this.reviewsTurns = prepared.reviewsTurns;
+    // A recovered execution assembles on what it froze as it first bound, and resolves nothing (D5).
+    const { frozen } = round;
 
     const asked: TurnAssemblyRequest = {
       userText: item.text, workMode: mode, ...(explicitTier !== undefined && { explicitTier }), ...(frozen !== null && { frozen }),
     };
 
-    const assembled = await this.assemble(prepared, { id: lease.turnId, mode, runId: lease.runId, epoch: bound.epoch }, asked, (profile, inputs) => {
-      actor.session.bindProfile(lease, profile, inputs);
-    });
+    const assembled = await this.assemble(prepared, { id: lease.turnId, mode, runId: lease.runId, epoch: bound.epoch }, asked, round.bind);
 
     this.activeSkills = assembled.activeSkills?.active.map((skill) => skill.name) ?? [];
     const historyLength = actor.session.history.length;
@@ -339,13 +338,14 @@ export class FacetChat {
     const { session } = this.deps.actor;
 
     const turnId = this.session.currentTurnId ?? '';
-    const opened = this.deps.database.factsOf(this.session.currentRunId ?? turnId);
-
     const runId = this.session.currentRunId ?? turnId;
+    const opened = this.deps.database.factsOf({ turnId, runId });
+    // The claim the turn ran under, which its settle names as its close (design v2 §3).
+    const epoch = session.turnClaim?.epoch ?? null;
 
     if (this.policy.workspaceAgent) {
       return declareHandoffRoster(chatTurnParts(input), {
-        turnId, runId, messageId: input.messageId, status: input.status, completed: input.completed,
+        turnId, runId, epoch, messageId: input.messageId, status: input.status, completed: input.completed,
         workMode: session.workMode, userText: input.userText, assistantText: input.assistantText, event: input.event ?? null,
         turn: projectJsonValue({ value: input.turn }), credited: input.credited, answeredDeliveries: [...input.answeredDeliveries],
         reachableTools: [...input.reachableTools], recordedAt: Date.now(), facts: opened,
@@ -390,7 +390,7 @@ export class FacetChat {
     };
 
     // Its tools' receipts were kept in the workspace, which drops them once the run settled.
-    return [...declareTerminalRoster(facts, parts), runSettleEffect(input.messageId, { turnId, runId })];
+    return [...declareTerminalRoster(facts, parts), runSettleEffect(input.messageId, { turnId, runId, epoch })];
   }
 
   private get terminal(): TerminalTransitions {

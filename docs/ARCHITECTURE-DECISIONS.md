@@ -937,7 +937,8 @@ the owner, built 2026-10-11 on `lane/main-isolate`.
   runners and the root's RAM inbox are gone from the cloud. Every agent has a
   chat, and a head's or node's run is one of its inputs (`kind: 'run'`): its
   `ChatSession` admits, holds, queues, stops and restores it as any input, each
-  round runs through core's `driveRun`, and its end rides the agent's next
+  round runs through core's `driveExecution` as a chat turn does, and its end
+  rides the agent's next
   report (`AgentReport.runEnds`). Its held input retires only once its end is
   told, so a death first runs it again. `facet_runs`, `admitRun`, `startRun`,
   `runEnded` and `holdsChat` are gone.
@@ -954,24 +955,37 @@ the owner, built 2026-10-11 on `lane/main-isolate`.
   (`orch`, `acc`), `mainTaskProfile`, `turnCapabilities` and the per-kind
   builders are gone.
 - Port: an isolate holds its workspace's host across calls, so a call crosses
-  once. Every call that runs more of a turn carries its capability (turn, run,
-  epoch) and holds only while the durable fence (`actor_turn_fence`) holds that
-  opening, before a reset of the workspace as after it: once a later opening of
-  the agent, a Stop or the turn's end took its place, it is refused
-  `stale_epoch` before anything runs. A call that settles what the turn already
-  did (its answer, its trace, its charges) is never fenced, so a stopped turn
-  closes. Credentials are held five minutes and refreshed on an upstream's
+  once. An execution is claimed `preparing` before it is prepared, and its
+  epoch, minted there from one sequence over the agent's chat turns and runs
+  (`actor_epochs`), is its capability; a run opens the same fence as a chat
+  turn, and a preparation that fails settles its claim `error`. Every call
+  that runs more of a turn carries its capability (turn, run, epoch) and holds
+  only while the durable fence (`actor_turn_fence`) holds that opening, before
+  a reset of the workspace as after it: once a later opening of the agent, a
+  Stop or the turn's end took its place, it is refused `stale_epoch` before
+  anything runs. A call that closes what the turn already did (its trace, its
+  charges, its answer's metadata, its end, its settle) names its execution and
+  is judged against the openings the workspace admitted
+  (`actor_turn_openings`): its own runs after a newer opening or a Stop, so a
+  stopped turn closes; one naming another execution's opening, or a newer one,
+  is refused `stale_close` and runs nothing. Credentials are held five minutes and refreshed on an upstream's
   refusal; activity rides tool calls and the turn's end, and the profile the
   isolate assembled on rides its first step's pace. Measured on `c3c87ed3b`
   over 3 runs (armada `20261012084457-307f361a`), four tool steps: the open
   crosses 16 times, the first step 4 and each later one 3, the close 16; §8's
   12 and 6 are not reached (the account's reads, room events, the tile).
-- Profile: the agent's isolate freezes its run's final profile as the turn's
-  assembly settles (`actor_turn_facts.profile_json`); a recovery assembles on
-  it, the first step's pace carries it to the workspace, and a workspace that
-  reads the turn again after a restart asks the agent for it. No crossing binds
-  a profile on its own, and a recovered run does not resolve its profile again
-  on settings changed since.
+- Profile: the agent's isolate binds each execution's final profile, with the
+  authority inputs it was resolved from, under the execution's key (turn, run)
+  before any model or tool work (`actor_turn_facts`, `actor_profile_inputs`);
+  a recovery assembles on it, the first step's pace carries it to the
+  workspace, and a workspace that reads the turn again after a restart asks
+  the agent for it first and builds the turn's surface, mode, sources and
+  model on it. No crossing binds a profile on its own, and a recovered
+  execution resolves nothing again on settings changed since; a head's next
+  round and a Retry are new executions and resolve afresh. An applied Retry
+  holds its reopened turn (`queued_turns`) in the commit that marks it
+  applied, so an isolate that dies before the turn opens runs it on its next
+  wake.
 - Receipts: a tool's receipt is `started`, `settled` or `indeterminate`, kept
   where its effect commits and keyed on its run, so a Retry finds none of the
   last run's. A call whose effect commits in the workspace leaves only a

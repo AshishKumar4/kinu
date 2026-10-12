@@ -31,6 +31,7 @@ test('a sweep between a turn\'s answer and its claim settle leaves the claim to 
 
   try {
     const lease = actor.session.beginTurn({ runId: 'run-settling', turnId: 'turn-settling' }, 'build', 0);
+    actor.session.reserveClaim(lease);
     actor.session.bindProfile(lease, profile, inputs);
     await actor.session.openTurnInput(lease, { item: {}, message: { role: 'user', content: 'Read the file.' }, birthContext: async () => [] });
 

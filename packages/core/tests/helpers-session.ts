@@ -24,7 +24,7 @@ export async function sessionFixture(input: {
   readonly actorId?: ReturnType<typeof crypto.randomUUID>;
   readonly main?: boolean;
   /** Ports a case answers itself, in place of the fixture's. */
-  readonly ports?: Partial<Pick<ChatSessionPorts, 'prepareTurn' | 'owedTerminalEffects'>>;
+  readonly ports?: Partial<Pick<ChatSessionPorts, 'prepareTurn' | 'owedTerminalEffects' | 'armTurnWake' | 'runs'>>;
   /** The models and catalog a case's turns are assembled from, in place of the fixture's one model. */
   readonly sources?: Partial<Pick<RunTurnSources, 'models' | 'profileInputs'>>;
   readonly cacheWarming?: (actor: HostedActor) => CacheWarmingLane;
@@ -81,11 +81,11 @@ export async function sessionFixture(input: {
     transport: { deliver: (event) => { events.push(event); } },
     mintAnswerId: () => crypto.randomUUID(),
     ports: {
-      prepareTurn: async (item, lease) => {
+      prepareTurn: async (item, _lease, _opening, round) => {
         const assembled = await assembleActorTurn({
           ...sources,
-          settle: (profile, authority) => actor.session.bindProfile(lease, profile, authority),
-        }, { userText: item.text, workMode: actor.session.workMode });
+          settle: (profile, authority) => { round.bind(profile, authority); },
+        }, { userText: item.text, workMode: actor.session.workMode, ...(round.frozen !== null && { frozen: round.frozen }) });
 
         return {
           execution: assembled.execution,

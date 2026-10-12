@@ -21,7 +21,7 @@ import { FacetChat } from './agent-chat';
 import { workspaceClient, type AgentWorkspaceCalls } from './workspace-rpc';
 import type {
   AgentAnswer, AgentAnswerTexts, AgentStanding, AgentSteps, AgentRecovery, AgentSnapshot, ConversationProjection, ConversationTurnPair, EnqueueTurnResult, ProgrammaticTurn, SendLanding, TurnRequestAt,
-  DynamicContext, JsonObject, ResolvedTurnProfile, PlanReview, PlanReviewResult, ReviewAnnotation, AskedQuestions,
+  DynamicContext, FactsKey, FrozenAuthority, JsonObject, PlanReview, PlanReviewResult, ReviewAnnotation, AskedQuestions,
   Page, PageRequest, RunEvent, RunEventQuery, RunListEntry, RunSummary, StoredRunEvent,
   ForkConversationPlan, ForkConversationSection, ForkRowSection, ForkRows,
 } from '@kinu.run/core';
@@ -135,7 +135,7 @@ export interface AgentFacetCalls {
   /** A retirement waits on it. */
   idle(): Promise<void>;
   deliverAdvice(snapshot: AgentSnapshot, helper: AnsweredEvolutionHelper, turnId: string): Promise<boolean>;
-  frozenProfile(snapshot: AgentSnapshot, runId: string): Promise<ResolvedTurnProfile | null>;
+  frozen(snapshot: AgentSnapshot, key: FactsKey): Promise<FrozenAuthority | null>;
   /** Runs the turn's waiting model step under this call, and answers once it has ended (`StepPacer`). `dynamic`: the live
    *  block on the profile the step's pace bound, its turn's first. */
   step(turnId: string, dynamic: DynamicContext | null): Promise<void>;
@@ -345,8 +345,8 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
   }
 
   /** The profile a run froze as it first assembled: a workspace that restarted mid-turn rebuilds its tools on it. */
-  async frozenProfile(snapshot: AgentSnapshot, runId: string): Promise<ResolvedTurnProfile | null> {
-    return this.open(snapshot).frozenProfile(runId);
+  async frozen(snapshot: AgentSnapshot, key: FactsKey): Promise<FrozenAuthority | null> {
+    return this.open(snapshot).frozen(key);
   }
 
   async ownerQuestions(snapshot: AgentSnapshot): Promise<readonly AskedQuestions[]> {

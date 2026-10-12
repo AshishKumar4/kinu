@@ -6,7 +6,7 @@ import { createTestRuntime, scriptedAdvisorPort, scriptedTurnModel } from '@kinu
 import type { LanguageModel } from 'ai';
 import { jsonSchema, tool } from 'ai';
 import { hostedSeatsOver, runningOn } from './helpers-actor-host';
-import { runHeadInference, HeadCapture } from '../src/heads/head-inference';
+import { runHeadInference, preparedHeadRun, HeadCapture } from '../src/heads/head-inference';
 import type { HeadInput } from '../src/heads/types';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 import { listLessons } from '../src/evolution/lessons';
@@ -111,9 +111,9 @@ describe('a headless actor runs the step clock only', () => {
         const before = windowRows(rt.storage.sql, rt.actor.actorId);
         const asked = requests.length;
 
-        const report = await runHeadInference(headInput(), {
+        const report = await runHeadInference(preparedHeadRun(headInput(), {
           ...runningOn(seat, model), tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
-        });
+        }));
 
         // The run ended on its own answer: the advisor was hired, and nothing waited on it.
         expect(report.status).toBe('completed');
@@ -153,12 +153,12 @@ describe('a headless actor runs the step clock only', () => {
     const seats = hostedSeatsOver({ rt, db: testSql.db, advisorPort: advisor });
     const seat = await seats.seat('node', 'swarm');
 
-    const report = await runHeadInference(headInput(), {
+    const report = await runHeadInference(preparedHeadRun(headInput(), {
       ...runningOn(seat, scriptedTurnModel({ doGenerate: async () => ({
         content: [{ type: 'text', text: 'done' }], finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [],
       }) })),
       tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
-    });
+    }));
 
     expect(report.status).toBe('completed');
     expect(advisor.tasks).toEqual([]);
@@ -177,11 +177,11 @@ describe('a headless actor runs the step clock only', () => {
     const actor = seat.actor.handle;
     const capture = new HeadCapture();
 
-    const report = await runHeadInference(headInput(), {
+    const report = await runHeadInference(preparedHeadRun(headInput(), {
       ...runningOn(seat, probingHead(1)),
       tools: { probe: tool({ inputSchema: PROBE_SCHEMA, execute: async (): Promise<{ ok: boolean }> => { throw new Error('probe exploded'); } }) },
       capture, clock: REAL_CLOCK, isAborted: () => false,
-    });
+    }));
 
     expect(report.status).toBe('completed');
 
@@ -221,15 +221,15 @@ describe('a headless actor runs the step clock only', () => {
 
     const failing = CONSECUTIVE_FAILURES_BEFORE_STEER;
 
-    const report = await runHeadInference(headInput(), {
+    const report = await runHeadInference(preparedHeadRun(headInput(), {
       ...runningOn(seat, probingHead(failing + 1)),
       tools: { probe: tool({ inputSchema: PROBE_SCHEMA, execute: async ({ n }) => {
         if (n < failing) throw new Error(`probe ${String(n)} exploded`);
-
+    
         return { ok: true };
       } }) },
       capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
-    });
+    }));
 
     expect(report.status).toBe('completed');
 

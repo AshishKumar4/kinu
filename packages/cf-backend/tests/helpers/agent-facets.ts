@@ -133,6 +133,18 @@ export async function holdNextDelivery(storageKey: string): Promise<() => void> 
   return await held.promise;
 }
 
+const heldRuns: ((held: { readonly actorId: string; readonly release: () => void }) => void)[] = [];
+
+/** The next run the workspace delivers to any agent is held on its way: the promise settles with the agent it is for and
+ *  `release`, which lets it arrive. */
+export async function holdNextRunDelivery(): Promise<{ readonly actorId: string; readonly release: () => void }> {
+  const held = Promise.withResolvers<{ readonly actorId: string; readonly release: () => void }>();
+
+  heldRuns.push(held.resolve);
+
+  return await held.promise;
+}
+
 const restingAnswers = new Map<string, (release: () => void) => void>();
 
 /**
@@ -321,7 +333,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           resume: (turnId) => host.resume(turnId),
           guard: (...args) => host.guard(...args),
           debit: (...args) => host.debit(...args),
-          prepareTurn: (turnId) => host.prepareTurn(turnId),
+          prepareTurn: (bound) => host.prepareTurn(bound),
           scaffold: () => host.scaffold(),
           prepareChat: async (request) => {
             const copy = copiedOpenings.get(placement.storageKey);
@@ -465,6 +477,15 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           const arrives = Promise.withResolvers<void>();
 
           holding(arrives.resolve);
+          await arrives.promise;
+        }
+
+        const holdingRun = delivery.input.kind === 'run' ? heldRuns.shift() : undefined;
+
+        if (holdingRun !== undefined) {
+          const arrives = Promise.withResolvers<void>();
+
+          holdingRun({ actorId: placement.actorId, release: arrives.resolve });
           await arrives.promise;
         }
 

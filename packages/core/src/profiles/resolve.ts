@@ -44,6 +44,13 @@ const ProviderCatalogSnapshotSchema = v.looseObject({
 /** Input-side on purpose: `unavailableProviders` is optional to emit. */
 export type ProviderCatalogSnapshot = v.InferInput<typeof ProviderCatalogSnapshotSchema>;
 
+/** Authority inputs an execution froze as it bound, read back whole: each half checked as resolution checks it. */
+export function parseProfileAuthorityInputs(input: { value: unknown }): ProfileAuthorityInputs {
+  const { envelope, provider } = v.parse(v.object({ envelope: v.unknown(), provider: ProviderCatalogSnapshotSchema }), input.value);
+
+  return { envelope: validateProfileCatalogEnvelope({ value: envelope }), provider };
+}
+
 export type TierSource = 'explicit' | 'role' | 'default' | 'workspace' | 'actor';
 
 export interface ProfileAuthorityInputs {

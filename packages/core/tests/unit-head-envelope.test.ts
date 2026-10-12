@@ -9,7 +9,7 @@ import type { LanguageModel } from 'ai';
 import { createTestRuntime, scriptedTurnModel } from '@kinu.run/test-utils';
 import type { LanguageModelV4Content } from '@ai-sdk/provider';
 import { deriveChildBudget, type HeadBudget, type HeadInput } from '../src/heads/types';
-import { runHeadInference, HeadCapture, buildHeadAccumulatorTools } from '../src/heads/head-inference';
+import { runHeadInference, preparedHeadRun, HeadCapture, buildHeadAccumulatorTools } from '../src/heads/head-inference';
 import { usageTotal } from '../src/usage';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 import { fixtureCompaction, hostedSeatsOver } from './helpers-actor-host';
@@ -89,9 +89,9 @@ describe('runHeadInference — a fork works until the work is done', () => {
   test('a leaf head finishes its tool work when no split depth remains', async () => {
     const capture = new HeadCapture();
 
-    const report = await runHeadInference(loopInput({ maxDepth: 0 }), { ...await hostedHead(loopingHeadModel({ promptTokens: 100, outputTokens: 10, text: 'Leaf work complete.', stopAfterSteps: 3 })),
+    const report = await runHeadInference(preparedHeadRun(loopInput({ maxDepth: 0 }), { ...await hostedHead(loopingHeadModel({ promptTokens: 100, outputTokens: 10, text: 'Leaf work complete.', stopAfterSteps: 3 })),
     tools: buildHeadAccumulatorTools(capture), capture,
-    clock: REAL_CLOCK, isAborted: () => false, });
+    clock: REAL_CLOCK, isAborted: () => false, }));
 
     expect(report.status).toBe('completed');
     expect(report.stepCount).toBe(4);
@@ -101,12 +101,12 @@ describe('runHeadInference — a fork works until the work is done', () => {
   test('a head completes 61 steps and reports 305,000 output tokens without a private spend cap', async () => {
     const capture = new HeadCapture();
 
-    const report = await runHeadInference(loopInput(), { ...await hostedHead(loopingHeadModel({
+    const report = await runHeadInference(preparedHeadRun(loopInput(), { ...await hostedHead(loopingHeadModel({
       promptTokens: 40_000, outputTokens: 5_000,
       text: 'Here is what I found.', stopAfterSteps: 60,
     })),
     tools: buildHeadAccumulatorTools(capture), capture,
-    clock: REAL_CLOCK, isAborted: () => false, });
+    clock: REAL_CLOCK, isAborted: () => false, }));
 
     expect(report.status).toBe('completed');
     expect(report.stepCount).toBe(61);
@@ -118,9 +118,9 @@ describe('runHeadInference — a fork works until the work is done', () => {
   test('a head spending 28,800 output tokens is not stopped by spend', async () => {
     const capture = new HeadCapture();
 
-    const report = await runHeadInference(loopInput(), { ...await hostedHead(loopingHeadModel({ promptTokens: 20_000, outputTokens: 3_200, stopAfterSteps: 8 })),
+    const report = await runHeadInference(preparedHeadRun(loopInput(), { ...await hostedHead(loopingHeadModel({ promptTokens: 20_000, outputTokens: 3_200, stopAfterSteps: 8 })),
     tools: buildHeadAccumulatorTools(capture), capture,
-    clock: REAL_CLOCK, isAborted: () => false, });
+    clock: REAL_CLOCK, isAborted: () => false, }));
 
     expect(report.status).toBe('completed');
     expect(report.usage.output).toBe(3_200 * 9);
@@ -129,9 +129,9 @@ describe('runHeadInference — a fork works until the work is done', () => {
   test('a head spawned an hour into a long parent turn is not already out of time', async () => {
     const capture = new HeadCapture();
 
-    const report = await runHeadInference(loopInput({ spawnedAt: Date.now() - 60 * 60_000 }), { ...await hostedHead(loopingHeadModel({ promptTokens: 1_000, outputTokens: 100, text: 'Done.', stopAfterSteps: 3 })),
+    const report = await runHeadInference(preparedHeadRun(loopInput({ spawnedAt: Date.now() - 60 * 60_000 }), { ...await hostedHead(loopingHeadModel({ promptTokens: 1_000, outputTokens: 100, text: 'Done.', stopAfterSteps: 3 })),
     tools: buildHeadAccumulatorTools(capture), capture,
-    clock: REAL_CLOCK, isAborted: () => false, });
+    clock: REAL_CLOCK, isAborted: () => false, }));
 
     expect(report.status).toBe('completed');
   });
@@ -139,9 +139,9 @@ describe('runHeadInference — a fork works until the work is done', () => {
   test('gross provider spend is reported in full', async () => {
     const capture = new HeadCapture();
 
-    const report = await runHeadInference(loopInput(), { ...await hostedHead(loopingHeadModel({ promptTokens: 20_000, outputTokens: 400, stopAfterSteps: 9 })),
+    const report = await runHeadInference(preparedHeadRun(loopInput(), { ...await hostedHead(loopingHeadModel({ promptTokens: 20_000, outputTokens: 400, stopAfterSteps: 9 })),
     tools: buildHeadAccumulatorTools(capture), capture,
-    clock: REAL_CLOCK, isAborted: () => false, });
+    clock: REAL_CLOCK, isAborted: () => false, }));
 
     expect(report.usage.input).toBe(20_000 * 10);
     expect(report.usage.output).toBe(400 * 10);
@@ -152,10 +152,10 @@ describe('runHeadInference — a fork works until the work is done', () => {
     const capture = new HeadCapture();
 
     // No default step bound exists; the caller cancels after forty evidence rows.
-    const report = await runHeadInference(loopInput(), { ...await hostedHead(loopingHeadModel({ promptTokens: 4_000, outputTokens: 1 })),
+    const report = await runHeadInference(preparedHeadRun(loopInput(), { ...await hostedHead(loopingHeadModel({ promptTokens: 4_000, outputTokens: 1 })),
     tools: buildHeadAccumulatorTools(capture), capture,
     clock: REAL_CLOCK, isAborted: () => capture.evidence.length >= 40,
-    abortReason: () => 'the parent stopped the head after 40 findings', });
+    abortReason: () => 'the parent stopped the head after 40 findings', }));
 
     expect(report.stepCount).toBe(40);
     expect(report.status).toBe('aborted');
@@ -171,10 +171,10 @@ describe('runHeadInference — a head that stopped never reports a conclusion it
   test("an aborted head's mid-flight prose is not returned as its finding", async () => {
     const capture = new HeadCapture();
 
-    const report = await runHeadInference(loopInput(), { ...await hostedHead(loopingHeadModel({ promptTokens: 4_000, outputTokens: 1_000, text: SPECULATION })),
+    const report = await runHeadInference(preparedHeadRun(loopInput(), { ...await hostedHead(loopingHeadModel({ promptTokens: 4_000, outputTokens: 1_000, text: SPECULATION })),
     tools: buildHeadAccumulatorTools(capture), capture,
     clock: REAL_CLOCK, isAborted: () => capture.evidence.length >= 4,
-    abortReason: () => 'the parent cancelled this head', });
+    abortReason: () => 'the parent cancelled this head', }));
 
     expect(report.status).toBe('aborted');
     expect(report.summary).not.toContain('sandbox provisioning');
@@ -185,8 +185,8 @@ describe('runHeadInference — a head that stopped never reports a conclusion it
   test('an aborted head that banked nothing says exactly that', async () => {
     const capture = new HeadCapture();
 
-    const report = await runHeadInference(loopInput(), { ...await hostedHead(loopingHeadModel({ promptTokens: 1_000, outputTokens: 10, text: SPECULATION })),
-    tools: {}, capture, clock: REAL_CLOCK, isAborted: () => true, abortReason: () => 'the parent turn was cancelled', });
+    const report = await runHeadInference(preparedHeadRun(loopInput(), { ...await hostedHead(loopingHeadModel({ promptTokens: 1_000, outputTokens: 10, text: SPECULATION })),
+    tools: {}, capture, clock: REAL_CLOCK, isAborted: () => true, abortReason: () => 'the parent turn was cancelled', }));
 
     expect(report.status).toBe('aborted');
     expect(report.evidence).toHaveLength(0);
@@ -198,11 +198,11 @@ describe('runHeadInference — a head that stopped never reports a conclusion it
   test('a completed head still reports its own final text', async () => {
     const capture = new HeadCapture();
 
-    const report = await runHeadInference(loopInput(), { ...await hostedHead(loopingHeadModel({
+    const report = await runHeadInference(preparedHeadRun(loopInput(), { ...await hostedHead(loopingHeadModel({
       promptTokens: 500, outputTokens: 10, text: 'Here is what I found.', stopAfterSteps: 3,
     })),
     tools: buildHeadAccumulatorTools(capture), capture,
-    clock: REAL_CLOCK, isAborted: () => false, });
+    clock: REAL_CLOCK, isAborted: () => false, }));
 
     expect(report.status).toBe('completed');
     expect(report.summary).toBe('Here is what I found.');

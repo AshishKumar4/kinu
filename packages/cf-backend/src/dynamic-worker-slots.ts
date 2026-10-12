@@ -123,7 +123,7 @@ export function agentCallsThrough(through: <A>(call: (isolate: AgentFacetCalls) 
     idle: (...args) => settle(through((isolate) => isolate.idle(...args))),
     deliverAdvice: (...args) => settle(through((isolate) => isolate.deliverAdvice(...args))),
     step: (...args) => settle(through((isolate) => isolate.step(...args))),
-    frozenProfile: (...args) => settle(through((isolate) => isolate.frozenProfile(...args))),
+    frozen: (...args) => settle(through((isolate) => isolate.frozen(...args))),
     history: (...args) => settle(through((isolate) => isolate.history(...args))),
     historyPage: (...args) => settle(through((isolate) => isolate.historyPage(...args))),
     messageCount: (...args) => settle(through((isolate) => isolate.messageCount(...args))),

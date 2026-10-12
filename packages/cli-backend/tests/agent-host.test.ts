@@ -45,7 +45,7 @@ import {
   type LocalHostedAgent,
 } from '../src/agent-host';
 import { makeExecRaw, makeSql, makeSqlExec, makeWorkspaceSchemaSql, type CLIRuntime, workspaceHome } from '../src/runtime';
-import { AwaitedList, createMemoryVfs, gatedTools, present, readTranscriptRows, spawnTest, sqlOver, TURN_REACH, workspaceDatabase } from '@kinu.run/test-utils';
+import { AwaitedList, createMemoryVfs, gatedTools, present, readTranscriptRows, spawnTest, sqlOver, TURN_REACH, workspaceDatabase, admitTestClaim } from '@kinu.run/test-utils';
 import { openWorkspaceCLI } from '../src/open';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import type { LocalModelResolver } from '../src/model-resolver';
@@ -2423,7 +2423,7 @@ describe('LocalAgentHost — the driver lease', () => {
     const db = workspaceDatabase(dbPath);
     const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM, cwd: project });
 
-    const claim = await rt.stores.claims.admit({
+    const claim = await admitTestClaim(rt.stores.claims, {
       runId: 'live-run', turnId: 'live-turn', workMode: 'build',
       context: rt.stores.history.context.selected() ?? rt.stores.history.context.initialize(),
       program: { kind: 'builtin', version: 0, digest: null, build: null },

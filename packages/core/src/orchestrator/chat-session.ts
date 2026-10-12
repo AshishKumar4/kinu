@@ -12,6 +12,7 @@ import {
 } from '../subordinates/deliveries';
 import type { PlanDecisionOutcome } from '../types/plans';
 import type { AgentTurnTask } from '../subordinates/agent-isolate';
+import { driveExecution, type AssembledRound, type ClaimedRound } from './execution-driver';
 import { stampAuthorship, turnAuthorship, type TurnAuthorship } from './turn-authorship';
 import type { TrialTurn } from '../evolution/trial-rules';
 import type { ModelMessage } from 'ai';
@@ -25,7 +26,7 @@ import type { EventLog } from '../events/hub/log';
 import type { RunEventRecorder } from '../events/recorder';
 import type { RunEvent } from '../events/types';
 import type { CompletedTurn } from '../evolution/types';
-import { attempt, attemptInItsWords, classifyErrorCode, diagnostics, hold, KinuError, logged, renderThrownChain, settle as settleEffect, settleLogged, settleSync, toKinuError, type Refusal } from '../obs/index';
+import { attempt, attemptInItsWords, classifyErrorCode, inItsWords, diagnostics, hold, KinuError, logged, renderThrownChain, settle as settleEffect, settleLogged, settleSync, toKinuError, type Refusal } from '../obs/index';
 import { contextFill, type ContextFill } from '../read-models/context-fill';
 import { workModeForTurnMetadata } from '../prompting/surface';
 import { runOperationProfile } from '../profiles/operation';
@@ -41,13 +42,14 @@ import type {
 import type { TierId } from '../types/profile';
 import type { SendLanding, SettledSignals } from '../types/signals';
 import { WorkModeSchema, type WorkMode } from '../types/turn';
-import type { JsonObject } from '../utils/json';
+import { JsonObjectSchema, type JsonObject } from '../utils/json';
 import { nanoid } from '../utils/nanoid';
 import { ASKED, type Holds } from '../utils/held-reads';
 import type { Usage } from '../usage';
 import { announcementOf, authoredTurnMetadata, PROGRAMMATIC_MESSAGE_ID_PREFIX } from '../utils/ui-message';
 import { CLEAR_NEEDS_IDLE, COMPACT_NEEDS_IDLE, REVERT_NEEDS_IDLE } from './actor-session';
-import type { ActorSession, ActorTurnLease, ActorExecutionInput } from './actor-session';
+import type { ActorSession, ActorTurnLease, ActorExecutionInput, ActorExecutionResult } from './actor-session';
+import type { ClaimOutcome } from './actor-claims';
 import { CompletionGate, COMPLETION_GATE_EVENT } from './completion-gate';
 import { turnInputMessage, type InputProducer, type LandedSteerRow, type PendingSendRow, type PendingSendStore, type UserSteer } from './inbox';
 import type { OwedEffect } from './terminal-effects';
@@ -103,7 +105,8 @@ export type SessionEvent =
   | { type: 'tool-call'; toolName: string; toolCallId: string; args: ToolCallArguments }
   | ({ type: 'tool-result'; toolName: string; toolCallId: string; result: string } & ToolOutcome)
   // `runId` names the execution that ended: its recovery continues the run, its Retry starts another.
-  | { type: 'turn-end'; turn: CompletedTurn; runId: string }
+  /** `epoch`: the admitted claim the turn ran under, which its close names (design v2 §3); null for one never admitted. */
+  | { type: 'turn-end'; turn: CompletedTurn; turnId: string; runId: string; epoch: number | null }
   | { type: 'error'; message: string }
   | { type: 'evolution'; event: string; message: string }
   // Kept apart from `evolution`: an agent with learning off says no evolution while its jobs may still settle.
@@ -113,6 +116,9 @@ export type SessionEvent =
   | { type: 'history-reverted'; entryId: string }
   /** Forwarded live: a container-scoped database dies with the container. */
   | { type: 'run-event'; event: RunEvent };
+
+/** A turn's end, which names the execution it closes (its turn, its run, its claim's epoch). */
+export type TurnEndEvent = Extract<SessionEvent, { type: 'turn-end' }>;
 
 interface QueueItem {
   text: string;
@@ -138,6 +144,10 @@ interface QueueItem {
   /** A run delivered to the agent: a typed input of this queue, which its host runs (D2), never a turn of the
    *  conversation. Programmatic, keyed by its id, held durably as every programmatic input is. */
   run?: DeliveredRun;
+  /** A Stop that came once the pump took it, before its execution was claimed: it ends unrun (`interrupt`). */
+  cut?: KinuError;
+  /** The row a Retry's intent held it under: its opening retires it, as its settle does if it never opens. */
+  heldAs?: string;
   /** Exactly once, and told whether the turn ran: a failure must reach the producer, the only one who can put things back.
    *  `abandoned` names why an opened turn ended before it could answer. */
   settle: (failure: KinuError | null, yielded?: boolean, abandoned?: string) => void;
@@ -179,6 +189,13 @@ export interface ChatTurnInput {
   readonly metadata?: ProgrammaticTurn['metadata'];
   /** Absent on a user turn. */
   readonly idempotencyKey?: string;
+}
+
+/** A chat turn's round as it assembled: what its projection reads of its preparation. */
+interface ChatRound extends AssembledRound {
+  readonly prepared: PreparedTurn;
+  /** Whether the turn put out anything the owner saw; a Stop before any output leaves their row alone. */
+  readonly streamed: { output: boolean };
 }
 
 export interface PreparedTurn {
@@ -227,11 +244,11 @@ export interface OwedTerminalEffectsInput {
 
 /** `seen`: the splices the agent read mid-answer, kept once here; none from a turn whose events re-deliver. */
 async function answerMetadata(
-  ports: ChatSessionPorts, turnId: string, texts: () => Promise<readonly string[]>,
+  ports: ChatSessionPorts, lease: ActorTurnLease, texts: () => Promise<readonly string[]>,
   { end, seen = [] }: { readonly end: RunEndClassification; readonly seen?: readonly SeenSplice[] },
 ): Promise<JsonObject | null> {
   const metadata: JsonObject = {
-    ...await ports.answerMetadata?.(turnId, texts),
+    ...await ports.answerMetadata?.(lease, texts),
     ...(end.reason === 'incomplete' && { [TURN_END_METADATA_KEY]: end.reason }),
     ...(end.error !== undefined && { [TURN_FAILURE_METADATA_KEY]: end.error }),
     ...(seen.length > 0 && { [SIGNALS_SEEN_METADATA_KEY]: seen.map((splice) => ({ ...splice })) }),
@@ -259,12 +276,13 @@ export interface OpenWork {
 /** Each port is asked per call, never captured. */
 export interface ChatSessionPorts {
   /** Runs after the opening row and run are durable; a throw ends the turn as an error with one `turn-end`. */
-  prepareTurn(item: ChatTurnInput, lease: ActorTurnLease, opening: TurnOpening): Promise<PreparedTurn>;
+  /** Under `round`'s claim: it binds through `round.bind`, and a recovered execution assembles on `round.frozen`. */
+  prepareTurn(item: ChatTurnInput, lease: ActorTurnLease, opening: TurnOpening, round: ClaimedRound): Promise<PreparedTurn>;
   /** Never consumes an armed compaction. */
   composeRequest(): Promise<ComposedRequest>;
   owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[];
   /** The turn's slates, stamped on its answer; absent where there are no slates (the CLI, `FileDeps.slate`). */
-  answerMetadata?(turnId: string, texts: () => Promise<readonly string[]>): Promise<JsonObject | null>;
+  answerMetadata?(lease: ActorTurnLease, texts: () => Promise<readonly string[]>): Promise<JsonObject | null>;
   /** The report this ending owes its caller; narration is read only if the report carries it. */
   owedReport?(ending: TaskTurnEnding, assistantText: string, narration: () => Promise<readonly string[]>): Promise<OwedReport | null>;
   /** A turn that never opened, or ended on its failure before an answer existed, and why: its caller is told, as it waits
@@ -634,6 +652,9 @@ export class ChatSession {
   }
 
   private settleItem(item: QueueItem, failure: KinuError | null, yielded?: boolean, abandoned?: string): void {
+    // A held Retry that never opened (refused, yielded, stopped) is not run by a later process either.
+    if (item.heldAs !== undefined && !this.ended) this.pendingSends.retireTurn(item.heldAs);
+
     // A run its host never ran, or whose run threw: its end is the refusal, recorded as the run's own would be.
     if (item.run !== undefined && (failure !== null || yielded === true)) {
       const { run } = item;
@@ -714,11 +735,9 @@ export class ChatSession {
 
     // Its producer's mark moves once it is applied, with what it did: a repeat applies nothing, and is answered that.
     if (input.kind === 'decision' || input.kind === 'answers' || input.kind === 'retry') {
-      return await settleEffect(Effect.map(this.applyIntent(input), (result): DeliveryAnswer => {
-        this.pendingSends.took(producer, delivery.seq, JSON.stringify(result));
+      const took = (result: IntentResult): void => { this.pendingSends.took(producer, delivery.seq, JSON.stringify(result)); };
 
-        return { applied: result };
-      }));
+      return await settleEffect(Effect.map(this.applyIntent(id, input, took), (result): DeliveryAnswer => ({ applied: result })));
     }
 
     let answer: DeliveryAnswer;
@@ -735,7 +754,10 @@ export class ChatSession {
 
   /** An owner's intent, applied as it is taken: what it did is its answer. A refusal (a stale plan revision, a newest turn
    *  that moved, a turn still running) is an answer too, which its producer tells the owner. */
-  private applyIntent(input: IntentInput): Effect.Effect<IntentResult, KinuError> {
+  /** `took` marks the intent applied with what it did; a Retry commits it with the turn it holds. */
+  private applyIntent(id: string, input: IntentInput, took: (result: IntentResult) => void): Effect.Effect<IntentResult, KinuError> {
+    const marking = (result: IntentResult): Effect.Effect<void> => Effect.sync(() => { took(result); });
+
     switch (input.kind) {
       case 'decision': {
         const { decidePlan } = this.ports;
@@ -743,13 +765,13 @@ export class ChatSession {
         if (decidePlan === undefined) return Effect.fail(new KinuError('unsupported', 'This agent takes no plan decision.'));
         const verdict = { id: input.plan, revision: input.revision, decision: input.decision, ...(input.feedback !== undefined && { feedback: input.feedback }) };
 
-        return Effect.map(attemptInItsWords('io', () => decidePlan(verdict)), (outcome) => ({ kind: 'decision', outcome }));
+        return Effect.tap(Effect.map(attemptInItsWords('io', () => decidePlan(verdict)), (outcome): IntentResult => ({ kind: 'decision', outcome })), marking);
       }
 
       case 'answers':
-        return Effect.as(this.answerQuestions(input.questions, input.answers), { kind: 'answers' });
+        return Effect.tap(Effect.as(this.answerQuestions(input.questions, input.answers), { kind: 'answers' } as const), marking);
       case 'retry':
-        return Effect.map(this.retryTurn(input.messageId), (turnId) => ({ kind: 'retry', turnId }));
+        return this.retryTurn(id, input.messageId, took);
     }
   }
 
@@ -794,6 +816,10 @@ export class ChatSession {
 
     if (this.runningRun?.id === id) this.runningRun.controller.abort(new KinuError('cancelled', `run ${id} was stopped`));
   }
+
+  /** The item the pump took and runs now, from its dequeue to its turn's end: a Stop in between cuts it (`interrupt`).
+   *  Written by `runPump` as it takes the item, dropped as its turn ended; never across a pump. */
+  private taken: QueueItem | null = null;
 
   /** The run this session's pump runs now, and its cut. */
   private runningRun: { readonly id: string; readonly controller: AbortController } | null = null;
@@ -1005,6 +1031,9 @@ export class ChatSession {
   interrupt(cutoff?: { readonly producer: InputProducer; readonly seq: number }): string[] {
     this.abandonQuestions();
     this.cancelQueued();
+
+    // Taken by the pump, its execution not yet claimed: no lease is there to abort, so its driver reads this.
+    if (this.taken !== null) this.taken.cut ??= new KinuError('cancelled', 'The agent was stopped before this turn ran.');
     this.runningRun?.controller.abort(new KinuError('cancelled', 'the agent was stopped'));
     const { steers, cancelled } = this.actorSession.interrupt();
     // The returned words' reservation is spent, or a restart would re-deliver them.
@@ -1110,8 +1139,19 @@ export class ChatSession {
   /** The owner's Retry as its intent delivers it (D6): `messageId`, the newest message they saw, must still be the newest.
    *  Queued here, its turn tells its own end; nothing waits on it, so the delivery that carried it answers at once, with
    *  the turn it reopened. */
-  private retryTurn(messageId: string): Effect.Effect<string, KinuError> {
-    return Effect.flatMap(this.reopenForRetry(messageId), (reopened) => Effect.as(this.queueRetried(reopened), reopened));
+  private retryTurn(id: string, messageId: string, took: (result: IntentResult) => void): Effect.Effect<IntentResult, KinuError> {
+    return Effect.flatMap(this.reopenForRetry(messageId), (turnId) => {
+      const result: IntentResult = { kind: 'retry', turnId };
+
+      // Held as the reopened turn's own row under its intent's id, committed with its marker before the turn is queued:
+      // a process that dies before the turn opens runs it on restart (`restoreQueuedTurns`); its opening retires the row.
+      return Effect.as(this.queueRetried(turnId, { id, commit: (text, metadata) => {
+        this.transaction(() => {
+          this.pendingSends.reserveTurn({ id, text, metadata: { kinuEvent: RETRIED_TURN_EVENT, retryOf: turnId, retried: metadata ?? null } });
+          took(result);
+        });
+      } }), result);
+    });
   }
 
   /** The newest turn, reopened: its opener's id. `seen`, when given, must still be the newest message. */
@@ -1126,17 +1166,19 @@ export class ChatSession {
     });
   }
 
-  /** Held until the turn is queued, which then holds it: no tick between the two leaves the session idle. */
-  private queueRetried(turnId: string): Effect.Effect<void, KinuError> {
+  /** Held until the turn is queued, which then holds it: no tick between the two leaves the session idle. `held`: the row
+   *  an intent's Retry holds it under, committed before it is queued, which its opening retires. */
+  private queueRetried(turnId: string, held?: { readonly id: string; readonly commit: (text: string, metadata: JsonObject | undefined) => void }): Effect.Effect<void, KinuError> {
     this.reopening = true;
 
     return Effect.gen({ self: this }, function* () {
       const message = yield* attemptInItsWords('unavailable', () => this.transcript.message(turnId));
       const metadata = yield* attemptInItsWords('unavailable', () => this.transcript.metadata(turnId));
+      const text = message?.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('') ?? '';
 
+      if (held !== undefined) yield* inItsWords('io', Effect.sync(() => { held.commit(text, metadata); }));
       this.queue.push({
-        text: message?.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('') ?? '',
-        kind: 'user', turnId, ...(metadata !== undefined && { metadata }),
+        text, kind: 'user', turnId, ...(metadata !== undefined && { metadata }), ...(held !== undefined && { heldAs: held.id }),
         settle: (failure) => { this.settleLandings([turnId], failure ?? 'turn'); },
       });
       this.pump();
@@ -1360,6 +1402,7 @@ export class ChatSession {
         const item = this.nextRunnable();
 
         if (item === undefined) break;
+        this.taken = item;
         // Checked per item, immediately before the turn runs. A refusal settles the item, so its producer
         // compensates.
         const refusal = this.ports.driverGate();
@@ -1385,31 +1428,12 @@ export class ChatSession {
         }
 
         this.runningAnnouncement = item.idempotencyKey ?? null;
-        let failure: KinuError | null = null;
-        let abandoned: string | null = null;
+        const { failure, abandoned } = await this.runTaken(item);
 
-        let opened: OpenedTurn | null = null;
-
-        try {
-          if (item.run !== undefined) failure = await this.runDelivered(item.run);
-          else {
-            const opening = await this.openTurn(item);
-            opened = opening;
-            abandoned = await this.actorSession.orchestrator.withTurnLearning(() => this.runOpenedTurn(item, opening));
-          }
-        } catch (err) {
-          diagnostics.failure(
-            'turn.processing_failed',
-            toKinuError({ doing: 'processing a queued turn', cause: err, otherwise: 'io' }),
-          );
-
-          // Nothing reached the caller before the open, so a failure there goes to it in its own words.
-          if (opened === null) failure = new KinuError(classifyErrorCode({ cause: err }) ?? 'io', renderThrownChain({ cause: err }), { cause: err });
-        } finally {
-          await this.flushEvents();
-          this.runningAnnouncement = null;
-          this.settleItem(item, failure, undefined, abandoned ?? undefined);
-        }
+        await this.flushEvents();
+        this.runningAnnouncement = null;
+        this.taken = null;
+        this.settleItem(item, failure, undefined, abandoned ?? undefined);
 
         const unanswered = failure ?? (abandoned === null ? null : new KinuError('io', abandoned));
 
@@ -1421,6 +1445,29 @@ export class ChatSession {
       this.activePump = null;
 
       if (!deferred) this.ports.quiet?.();
+    }
+  }
+
+  /** The taken item, run to its end: the failure its producer is told, and the answer it abandoned. Never throws. */
+  private async runTaken(item: QueueItem): Promise<{ readonly failure: KinuError | null; readonly abandoned: string | null }> {
+    let opened = false;
+
+    try {
+      // A Stop that came as the pump took it: its end is the Stop, unrun.
+      if (item.run !== undefined) return { failure: item.cut ?? await this.runDelivered(item.run), abandoned: null };
+      const opening = await this.openTurn(item);
+
+      opened = true;
+
+      return { failure: null, abandoned: await this.actorSession.orchestrator.withTurnLearning(() => this.runOpenedTurn(item, opening)) };
+    } catch (err) {
+      diagnostics.failure(
+        'turn.processing_failed',
+        toKinuError({ doing: 'processing a queued turn', cause: err, otherwise: 'io' }),
+      );
+
+      // Nothing reached the caller before the open, so a failure there goes to it in its own words.
+      return { failure: opened ? null : new KinuError(classifyErrorCode({ cause: err }) ?? 'io', renderThrownChain({ cause: err }), { cause: err }), abandoned: null };
     }
   }
 
@@ -1465,7 +1512,7 @@ export class ChatSession {
   /** Idempotent per run. Takes the name: `classifyRunEnd` runs once per turn, so a Stop seals `aborted` on both backends. */
   private closeRun(end: RunEndClassification, lease: ActorTurnLease): RunEndReason {
     // Settled before the early return, under the same name as the run.
-    if (this.actorSession.turnClaim !== null) this.actorSession.settleTurnClaim(lease, end.reason);
+    if (this.actorSession.claimOpen(lease)) this.actorSession.settleTurnClaim(lease, end.reason);
 
     if (!this.runId) return end.reason;
 
@@ -1537,56 +1584,71 @@ export class ChatSession {
     return { event, mode, turnId: this.turnId, runId: this.runId };
   }
 
-  /** Null once the turn answered; the reason when it ended before it could. */
+  /**
+   * Null once the turn answered; the reason when it ended before it could. Driven as every execution is
+   * ({@link driveExecution}): the turn supplies its opening, its assembly and the projection of its result.
+   */
   private async runOpenedTurn(item: QueueItem, { event, mode, turnId, runId }: OpenedTurn): Promise<string | null> {
-    const startedAt = Date.now();
     // A re-opened turn continues its run; only a new turn opens one.
-
     if (this.reopenedRunId === this.runId) this.reopenedRunId = null;
+    let unanswered: string | null = null;
 
-    const lease = this.actorSession.beginTurn({ runId, turnId }, mode, startedAt, item.metadata);
+    await driveExecution<ChatRound>(this.actorSession, {
+      runId, turnId, mode, ...(item.metadata !== undefined && { metadata: item.metadata }),
+      // A Stop that came after the pump took it, before its claim: it ends here, unrun.
+      isAborted: () => item.cut !== undefined,
+      within: (body) => runOperationProfile(null, () => runWorkModeInvocation(mode, body)),
+      open: async (lease) => {
+        // A held Retry's row goes with its opening: a later process re-opens the run, never the Retry again.
+        if (item.continuation === undefined) this.transaction(() => {
+          openTurnRun(this.eventRecorder, runId, {
+            agentId: lease.actorId,
+            causedBy: event ?? 'chat',
+            userMessage: item.text,
+            turnIndex: this.actorSession.orchestrator.sessionTurnIndex,
+            // Enough for the next process to re-open the same turn.
+            turn: {
+              // Its author stamped, as its opening row is.
+              turnId, messageId: this.messageId, kind: item.kind, text: item.text, metadata: authoredTurnMetadata(item),
+              ...(item.pendingSendId !== undefined && { pendingSendId: item.pendingSendId }),
+              ...(item.steerIds !== undefined && { steerIds: item.steerIds }),
+            },
+          });
 
-    if (item.continuation === undefined) openTurnRun(this.eventRecorder, runId, {
-      agentId: lease.actorId,
-      causedBy: event ?? 'chat',
-      userMessage: item.text,
-      turnIndex: this.actorSession.orchestrator.sessionTurnIndex,
-      // Enough for the next process to re-open the same turn.
-      turn: {
-        // Its author stamped, as its opening row is.
-        turnId, messageId: this.messageId, kind: item.kind, text: item.text, metadata: authoredTurnMetadata(item),
-        ...(item.pendingSendId !== undefined && { pendingSendId: item.pendingSendId }),
-        ...(item.steerIds !== undefined && { steerIds: item.steerIds }),
+          if (item.heldAs !== undefined) this.pendingSends.retireTurn(item.heldAs);
+        });
+
+        // Armed at the synchronous open, at the recovery ceiling; soonest-wins.
+        await this.ports.armTurnWake?.(Date.now() + RECOVERY_BACKOFF_CEILING_MS);
+
+        // A run a dead process left goes on only if recovery says so; any other ends here as a Stop ends it.
+        if (item.continuation !== undefined) await this.actorSession.resumeOrClose(lease);
+      },
+      assemble: (round) => this.assembleTurn(item, round),
+      project: async ({ lease, assembled, outcome }) => ({ claim: await this.projectTurn(item, event, lease, { round: assembled, execution: outcome }), stop: true }),
+      // Stopped as it opened, or closed by its recovery: it ran nothing, and ends as an interrupted turn does.
+      stopped: async ({ lease, outcome }) => {
+        this.turnTrial = null;
+        await this.projectTurn(item, event, lease, { round: null, execution: outcome });
+      },
+      failed: async ({ lease, failure }) => {
+        const message = renderThrownChain({ cause: failure });
+        const interrupted = lease.signal.aborted || item.cut !== undefined;
+
+        if (!interrupted) this.actorSession.orchestrator.acc.hadError = true;
+        const end = classifyRunEnd({ completed: false, interrupted, errorText: message.slice(0, 500) });
+
+        this.closeRun(end, lease);
+        await this.recordFailure(end, lease);
+        this.emit({ type: 'error', message });
+        this.emit({ type: 'turn-end', turn: this.snapshotTurn(item, ''), turnId: lease.turnId, runId: lease.runId, epoch: this.actorSession.closeEpoch(lease) });
+        unanswered = interrupted ? null : message;
+
+        return end.reason;
       },
     });
 
-    // Armed at the synchronous open, at the recovery ceiling; soonest-wins.
-    await this.ports.armTurnWake?.(Date.now() + RECOVERY_BACKOFF_CEILING_MS);
-
-    try {
-      // A run a dead process left goes on only if recovery says so; any other ends here as a Stop ends it.
-      if (item.continuation !== undefined) await this.actorSession.resumeOrClose(lease);
-
-      await runOperationProfile(null, () => runWorkModeInvocation(mode, () => this.runTurn(item, event, lease)));
-
-      return null;
-    } catch (error) {
-      const message = renderThrownChain({ cause: error });
-      const interrupted = lease.signal.aborted;
-
-      if (!interrupted) this.actorSession.orchestrator.acc.hadError = true;
-      const end = classifyRunEnd({ completed: false, interrupted, errorText: message.slice(0, 500) });
-
-      this.closeRun(end, lease);
-      await this.recordFailure(end, lease);
-      this.emit({ type: 'error', message });
-      this.emit({ type: 'turn-end', turn: this.snapshotTurn(item, ''), runId: lease.runId });
-
-      return interrupted ? null : message;
-    } finally {
-      // Detached lanes retain the runtime profile of the turn they belong to.
-      this.actorSession.finishTurn(lease);
-    }
+    return unanswered;
   }
 
   /** Closes the lease, keeping the binding that stops re-delivery. Reads both `drainTurnId` and `replyTurnId`. */
@@ -1641,7 +1703,9 @@ export class ChatSession {
     });
   }
 
-  private async runTurn(item: QueueItem, eventName: string | undefined, lease: ActorTurnLease): Promise<void> {
+  /** The turn's input opened, its prompt cache asked, then its assembly under the round's claim. */
+  private async assembleTurn(item: QueueItem, round: ClaimedRound): Promise<ChatRound> {
+    const { lease } = round;
     const input: ChatTurnInput = item;
 
     await this.actorSession.openTurnInput(lease, {
@@ -1656,7 +1720,7 @@ export class ChatSession {
 
     const prepared = await this.ports.prepareTurn(input, lease, {
       answerId: this.messageId, cacheCold: this.actorSession.promptCacheCold(cacheKeptAliveUntil),
-    });
+    }, round);
 
     this.turnTrial = prepared.trial ?? null;
 
@@ -1669,37 +1733,49 @@ export class ChatSession {
     }
 
     /** A Stop before any output leaves the operator's row alone. */
-    let streamed = partial !== null;
+    const streamed = { output: partial !== null };
 
-    const execution = await this.actorSession.execute(lease, {
-      task: item.text,
-      ...prepared.execution,
-      cacheKeptAliveUntil,
-      ...(item.continuation !== undefined && {
-        resumedSteps: item.continuation.finishedSteps,
-        resumedUsage: item.continuation.usage,
-        resumedMidStep: partial !== null,
-      }),
-    }, (event) => {
-      // Any tool result is progress on the last reminder.
-      if (event.type === 'tool-result') this.taskReminders.noteToolResult();
+    return {
+      prepared, streamed,
+      input: {
+        task: item.text,
+        ...prepared.execution,
+        cacheKeptAliveUntil,
+        ...(item.continuation !== undefined && {
+          resumedSteps: item.continuation.finishedSteps,
+          resumedUsage: item.continuation.usage,
+          resumedMidStep: partial !== null,
+        }),
+      },
+      onEvent: (event) => {
+        // Any tool result is progress on the last reminder.
+        if (event.type === 'tool-result') this.taskReminders.noteToolResult();
 
-      recordExecutionEvent(this.eventRecorder, this.runId, event);
+        recordExecutionEvent(this.eventRecorder, this.runId, event);
 
-      if (event.type === 'model-fallback') {
-        this.emit({ type: 'broadcast', event: { type: 'model_fallback', message: `${event.to} took over from ${event.from}: ${event.reason}` } });
-      }
+        if (event.type === 'model-fallback') {
+          this.emit({ type: 'broadcast', event: { type: 'model_fallback', message: `${event.to} took over from ${event.from}: ${event.reason}` } });
+        }
 
-      if (event.type === 'text-delta' || event.type === 'tool-call') streamed = true;
+        if (event.type === 'text-delta' || event.type === 'tool-call') streamed.output = true;
 
-      if (event.type === 'text-delta' || event.type === 'reasoning-delta' || event.type === 'tool-call' || event.type === 'tool-result'
-        || event.type === 'error') return this.emit(event);
-    });
+        if (event.type === 'text-delta' || event.type === 'reasoning-delta' || event.type === 'tool-call' || event.type === 'tool-result'
+          || event.type === 'error') return this.emit(event);
+      },
+    };
+  }
 
+  /** The executed turn's answer, committed with its run verdict, and its settled effects: answers its claim's outcome. */
+  private async projectTurn(
+    item: QueueItem, eventName: string | undefined, lease: ActorTurnLease, { round, execution }: { readonly round: ChatRound | null; readonly execution: ActorExecutionResult },
+  ): Promise<ClaimOutcome> {
+    const prepared = round?.prepared ?? null;
+    const streamed = round?.streamed ?? { output: false };
     const fullText = execution.text;
     const interrupted = execution.interrupted;
     const runError = runErrorOf(execution.failure);
-    const overflowRetry = this.settleContext(item, prepared, execution.failure);
+    // A turn that ran nothing measured no context to settle.
+    const overflowRetry = prepared !== null && this.settleContext(item, prepared, execution.failure);
 
     // Classified once: the classifier also files the mid-work defect.
     const facts: RunEndFacts = {
@@ -1717,9 +1793,9 @@ export class ChatSession {
 
     // A failed turn re-queues what it absorbed (`Inbox.settle`), so only a turn without error keeps its splices.
     const seen = runError === null ? this.actorSession.orchestrator.inbox.seenSplices() : [];
-    const metadata = await answerMetadata(this.ports, lease.turnId, () => this.transcript.narration(answerParts(execution.outputPartReferences, finalText)), { end, seen });
+    const metadata = await answerMetadata(this.ports, lease, () => this.transcript.narration(answerParts(execution.outputPartReferences, finalText)), { end, seen });
 
-    const preparedAssistant = streamed || !interrupted ? await this.transcript.prepareAssistant({
+    const preparedAssistant = streamed.output || !interrupted ? await this.transcript.prepareAssistant({
       id: this.messageId, turnId: lease.turnId, runId: lease.runId, parts: execution.outputPartReferences, finalText,
       ...(metadata !== null && { metadata }),
     }) : null;
@@ -1743,7 +1819,7 @@ export class ChatSession {
       runError,
       end,
       trialContext: execution.admittedMessages,
-      reachableTools: Object.keys(prepared.execution.chat.tools ?? {}),
+      reachableTools: Object.keys(prepared?.execution.chat.tools ?? {}),
       overflowRetry,
     });
 
@@ -1764,16 +1840,16 @@ export class ChatSession {
       await this.recordFailure(failed, lease);
       // Not durable, so the terminal event carries no final answer.
       this.emit({ type: 'error', message });
-      this.emit({ type: 'turn-end', turn: this.snapshotTurn(item, ''), runId: lease.runId });
+      this.emit({ type: 'turn-end', turn: this.snapshotTurn(item, ''), turnId: lease.turnId, runId: lease.runId, epoch: this.actorSession.closeEpoch(lease) });
 
-      return;
+      return failed.reason;
     }
 
     const { turn, owed, transition } = commit.committed;
 
     try {
-      // The lane decides whether the prefix is worth keeping.
-      await this.armCacheWarm(prepared);
+      // The lane decides whether the prefix is worth keeping; a turn that ran nothing kept none.
+      if (prepared !== null) await this.armCacheWarm(prepared);
 
       this.closeRun(end, lease);
       // Core drives the settled turn's effects as one state machine; this backend supplies the bodies and
@@ -1785,22 +1861,28 @@ export class ChatSession {
       }
       finally { this.settlingDepth -= 1; }
 
-      this.emit({ type: 'turn-end', turn, runId: lease.runId });
+      this.emit({ type: 'turn-end', turn, turnId: lease.turnId, runId: lease.runId, epoch: this.actorSession.closeEpoch(lease) });
+
+      return end.reason;
     } catch (err) {
       const message = renderThrownChain({ cause: err });
       this.actorSession.orchestrator.acc.hadError = true;
-      this.closeRun(classifyRunEnd({
+
+      const failed = this.closeRun(classifyRunEnd({
         completed: false,
         interrupted: false,
         errorText: runError ?? message.slice(0, 500),
       }), lease);
+
       diagnostics.failure(
         'turn.finalization_failed',
         toKinuError({ doing: 'finalizing the turn', cause: err, otherwise: 'io' }),
       );
       // The answer is durable; only bookkeeping failed. The intent row stays: the transition may never have been claimed.
       this.emit({ type: 'error', message });
-      this.emit({ type: 'turn-end', turn, runId: lease.runId });
+      this.emit({ type: 'turn-end', turn, turnId: lease.turnId, runId: lease.runId, epoch: this.actorSession.closeEpoch(lease) });
+
+      return failed;
     }
   }
 
@@ -1936,7 +2018,7 @@ export class ChatSession {
     if (end.error === undefined || this.transcript.has(this.messageId)) return;
 
     await settleLogged('turn.failure_unrecorded', { doing: 'recording the turn\'s failure on its answer', otherwise: 'io' }, async () => {
-      const metadata = await answerMetadata(this.ports, lease.turnId, async () => [], { end });
+      const metadata = await answerMetadata(this.ports, lease, async () => [], { end });
 
       const answer = await this.transcript.prepareAssistant({
         id: this.messageId, turnId: lease.turnId, runId: lease.runId, parts: [], finalText: null, ...(metadata !== null && { metadata }),
@@ -2049,9 +2131,23 @@ export class ChatSession {
         continue;
       }
 
-      const mode = row.metadata?.kinuEvent === DELIVERED_RUN_EVENT ? v.safeParse(WorkModeSchema, row.metadata.kinuMode) : null;
+      const retried = row.metadata?.kinuEvent === RETRIED_TURN_EVENT ? v.safeParse(HeldRetrySchema, row.metadata) : null;
 
-      this.queue.push(mode?.success === true ? runItem({ id: row.id, task: { sequenceId: row.id, body: row.text, mode: mode.output } }) : {
+      // A Retry its intent held, whose turn never opened: it runs as that turn again.
+      if (retried?.success === true) {
+        const { retryOf, retried: metadata } = retried.output;
+
+        this.queue.push({
+          text: row.text, kind: 'user', turnId: retryOf, heldAs: row.id, ...(metadata !== null && { metadata }),
+          settle: (failure) => { this.settleLandings([retryOf], failure ?? 'turn'); },
+        });
+        queued += 1;
+        continue;
+      }
+
+      const held = row.metadata?.kinuEvent === DELIVERED_RUN_EVENT ? v.safeParse(HeldRunSchema, row.metadata) : null;
+
+      this.queue.push(held?.success === true ? runItem({ id: row.id, task: { sequenceId: row.id, runId: held.output.kinuRun, body: row.text, mode: held.output.kinuMode } }) : {
         text: row.text, kind: 'programmatic', idempotencyKey: row.id,
         ...(row.metadata !== undefined && { metadata: row.metadata }),
         ...(row.yieldsToUserMessage === true && { yieldsToUserMessage: true }),
@@ -2138,8 +2234,16 @@ export class ChatSession {
 }
 
 /** A delivered run's held row: its mode beside the mark that restores it as a run. */
+/** Marks a held row as a Retry's reopened turn, so a later process runs it as that turn again. */
+const RETRIED_TURN_EVENT = 'retried_turn';
+
+const HeldRetrySchema = v.object({ kinuEvent: v.literal(RETRIED_TURN_EVENT), retryOf: v.string(), retried: v.nullable(JsonObjectSchema) });
+
+/** A delivered run's held row, as {@link runMetadata} marks it. */
+const HeldRunSchema = v.object({ kinuMode: WorkModeSchema, kinuRun: v.string() });
+
 function runMetadata(task: AgentTurnTask): JsonObject {
-  return { kinuEvent: DELIVERED_RUN_EVENT, kinuMode: task.mode };
+  return { kinuEvent: DELIVERED_RUN_EVENT, kinuMode: task.mode, kinuRun: task.runId };
 }
 
 function runItem(run: DeliveredRun): QueueItem {

@@ -59,7 +59,7 @@ import { ActorSession, type ActorTurnLease,
   inheritedContextFromTranscript,
   ModelCatalogSession, resolveEffectiveModelSpec,
   TerminalTransitions, initTerminalEffectTable, chatTurnParts, declareTerminalRoster, missionOf, SleepTimeLane, initSleepTimeUpdatesTable,
-  assembleActorTurn, runHeadInference, withCompactionTrigger, conversationKey, metadataTier, vfsTurnSkills, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources, type RunTurnSources,
+  assembleActorTurn, runHeadInference, preparedHeadRun, withCompactionTrigger, conversationKey, metadataTier, vfsTurnSkills, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources, type RunTurnSources,
   branchesTerminalEffect, chatTerminalEffects, subordinateTerminalEffects,
   type OwedReport, type SubordinateReportStatus, type TaskTurnEnding,
   terminalEffect, evolutionPassOpen, RunEndReasonSchema, WorkModeSchema, JsonValueSchema,
@@ -67,7 +67,7 @@ import { ActorSession, type ActorTurnLease,
   type TerminalTurnFacts, type TerminalTurnParts, type OwedEffect,
   buildActorTools, buildMcpToolSet, currentDateForPrompt,
   type ActorToolsetDeps,
-  turnArtifactBodies, artifactOverrides, currentArtifacts, type TurnOpening,
+  turnArtifactBodies, artifactOverrides, currentArtifacts, type TurnOpening, type ClaimedRound,
   turnReasonForMetadata, type TurnReason,
   actorAffinity, bindRoute, routedLlm, type ModelAffinity,
   observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
@@ -518,7 +518,7 @@ export class LocalAgentSession {
       holds: ASKED,
       transport: { deliver: (event) => { opts.onEvent(event); } },
       ports: {
-        prepareTurn: (item, lease, opening) => this.prepareTurn(item, lease, opening),
+        prepareTurn: (item, lease, opening, round) => this.prepareTurn(item, lease, opening, round),
         composeRequest: () => this.composeNextRequest(),
         // Only a root chat can approve a plan; a subordinate's plan is refused at admission.
         stillOwed: (metadata) => planHandoffStillOwed(metadata, this.stores.planReviews),
@@ -1617,7 +1617,7 @@ export class LocalAgentSession {
     return listRuns(this.eventRecorder, request?.cursor ?? null, request?.limit);
   }
 
-  private async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease, opening: TurnOpening): Promise<PreparedTurn> {
+  private async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease, opening: TurnOpening, round: ClaimedRound): Promise<PreparedTurn> {
     this.rt.checkpoints?.beginTurn({ turnId: lease.turnId, sessionId: this.sessionId });
     // Read once per turn: a live trial's arm holds for its whole segment, and the prompt prefix moves only with it.
     const artifacts = turnArtifactBodies(this.rt.storage.sql, this.rt.actor, { ...opening, main: this.rt.actor.parentActorId === null });
@@ -1636,11 +1636,12 @@ export class LocalAgentSession {
       ...this.turnSources(item, lease),
       // Bound before the callable tools are read: the head runtime and `eval`'s reach follow the profile.
       settle: (profile, inputs) => {
-        this.actorSession.bindProfile(lease, profile, inputs);
+        round.bind(profile, inputs);
         this.invalidateModelState();
         this.ensureModelState();
       },
-    }, this.turnRequest(item));
+      // A recovered turn assembles on what it froze as it first bound.
+    }, { ...this.turnRequest(item), ...(round.frozen !== null && { frozen: round.frozen }) });
 
     this.turnActiveSkillNames = assembled.activeSkills?.active.map((skill) => skill.name) ?? [];
     this.activateToolMode(this.actorSession.workMode);
@@ -2664,7 +2665,7 @@ export class LocalAgentSession {
         actor,
         runId,
         sources: this.runActorSources(actor, runId, { extension: compaction.extension, models, report, operations }),
-        infer: (input, inference) => runHeadInference(input, { ...inference, actor, compaction: compaction.trigger }),
+        infer: (input, inference) => runHeadInference(preparedHeadRun(input, { ...inference, actor, compaction: compaction.trigger })),
         conversations: actor.stores.conversationSearch,
         jobs: { ports: this.loopJobPorts(), attach: (authority) => this.jobAuthorities.attach(authority) },
         receipts: {

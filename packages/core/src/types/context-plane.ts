@@ -5,7 +5,7 @@ import type { SessionHistory } from '../session/history';
 export interface ContextTurnClaim {
   readonly turnId: string;
   readonly epoch: number;
-  readonly status: 'admitted' | 'settled';
+  readonly status: 'preparing' | 'admitted' | 'settled';
 }
 
 /** Implemented by `orchestrator/actor-claims.ts`. */

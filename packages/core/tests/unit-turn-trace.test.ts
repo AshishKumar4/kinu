@@ -6,7 +6,7 @@
  */
 import { expect, test } from 'bun:test';
 import { jsonSchema, tool } from 'ai';
-import { scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils';
+import { scriptedTurnModel, type ScriptedTurnResult, admitTestClaim } from '@kinu.run/test-utils';
 import { sessionFixture } from './helpers-session';
 import { recoverActorTurns } from '../src/state/actor-host';
 import { createAgentsTool, ROOT_DELEGATION_BUDGET, type SubordinateHandoff, type SubordinateRosterEntry, type TeamToolDeps } from '../src/index';
@@ -150,7 +150,7 @@ test('a turn a dead process left admitted is recorded settled when recovery clos
   const { actor, seats } = fixture;
 
   try {
-    const admitted = await actor.stores.claims.admit({
+    const admitted = await admitTestClaim(actor.stores.claims, {
       runId: 'run-dead', turnId: 'turn-dead', workMode: 'build',
       context: actor.stores.history.context.selected() ?? actor.stores.history.context.initialize(),
       program: { kind: 'builtin', version: 0, digest: null, build: 'test-build' },

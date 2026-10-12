@@ -226,6 +226,8 @@ function followUpTurns(messageId: string, parts: Pick<TerminalTurnParts, 'overfl
 export const SettledRunSchema = v.object({
   turnId: v.string(),
   runId: v.string(),
+  /** The epoch it was claimed under, which its close names (design v2 §3). */
+  epoch: v.nullable(v.number()),
 });
 
 export type SettledRun = v.InferOutput<typeof SettledRunSchema>;

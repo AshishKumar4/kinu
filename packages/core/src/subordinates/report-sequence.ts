@@ -1,7 +1,7 @@
 /**
- * An agent's sequence, in its own store, which numbers its reports and its turns' openings to the workspace, and the
- * newest report the workspace took from each agent (design v3 B): a report delayed past a later one, or sent before
- * either side reset, changes nothing there.
+ * An agent's sequence, in its own store, which numbers its reports to the workspace, and the newest report the
+ * workspace took from each agent (design v3 B): a report delayed past a later one, or sent before either side reset,
+ * changes nothing there. Its executions' openings are numbered by their claims' epochs (`actor_epochs`).
  */
 import * as v from 'valibot';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';

@@ -4,7 +4,7 @@ import {
   ActorSession, EventLog, EvolutionEngine, historyTurnPairs, WorkspaceActorDirectory,
   BUILTIN_PROFILE_CATALOG, actorReferenceOf, createAgentStores, profileCatalogDigest,
   collectDynamicContext, createActorHost, defaultLoopOrigin, explorationActorKey,
-  captureOperationProfile, initRunEventTables, conversationKey, runHeadInference, vfsTurnSkills,
+  captureOperationProfile, initRunEventTables, conversationKey, runHeadInference, preparedHeadRun, vfsTurnSkills,
   type ActorHost, type AgentRuntime, type BroadcastEvent, type HostedActor, type HostedNodeSeat,
   type ActorHandle, type HeadInput, type NodeIdentity, type ProfileAuthorityInputs, type RunTurnSources,
   type SqlExec, type SqlValue, type WriteObserver,
@@ -167,7 +167,7 @@ export function headSeatFactory(
       actor,
       runId,
       sources: fixtureRunSources(actor, () => authority.inputs(), model, runId),
-      infer: (headInput, inference) => runHeadInference(headInput, { ...inference, actor, compaction }),
+      infer: (headInput, inference) => runHeadInference(preparedHeadRun(headInput, { ...inference, actor, compaction })),
       conversations: actor.stores.conversationSearch,
       // No workspace routes a fixture seat's jobs: nothing here cancels or recovers them.
       jobs: { ports: { jobOutput: () => {} }, attach: () => () => {} },
@@ -258,7 +258,7 @@ export function headLoopSeams(
     runId,
     sources: fixtureRunSources(actor, async () => inputs, model, runId),
     compaction,
-    infer: (headInput: HeadInput, inference: RunInference) => runHeadInference(headInput, { ...inference, actor, compaction }),
+    infer: (headInput: HeadInput, inference: RunInference) => runHeadInference(preparedHeadRun(headInput, { ...inference, actor, compaction })),
     conversations: stores.conversationSearch,
     // No workspace routes a fixture seat's jobs: nothing here cancels or recovers them.
     jobs: { ports: { jobOutput: () => {} }, attach: () => () => {} },

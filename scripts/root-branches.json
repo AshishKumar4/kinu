@@ -64,7 +64,7 @@
     "kind": "J",
     "why": "Hierarchy read from the row (a null parent is the tree root), not an id compared to the root."
   },
-  "packages/cf-backend/src/orchestrator.ts#OrchestratorAgent.agentTurns.missions": {
+  "packages/cf-backend/src/orchestrator.ts#OrchestratorAgent.openAgentTurns.missions": {
     "count": 1,
     "kind": "J",
     "why": "Placement from the policy: the workspace agent spends the workspace's missions."

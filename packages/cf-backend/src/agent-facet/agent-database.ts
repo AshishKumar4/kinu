@@ -23,7 +23,7 @@ import { attempt, detach, diagnostics, hold, KinuError, logged, settle, settleSy
 import { isDeepStrictEqual } from 'node:util';
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import type { AgentAnswer, AgentAnswerTexts, AgentStanding, AgentStandingReport, AgentSteps, AgentTurnActivity, ConversationProjection, AgentRecovery, AgentSnapshot, PreparedAgentTurn, ResolvedTurnProfile, StoredRow, TurnRequestAt } from '@kinu.run/core';
+import type { AgentAnswer, AgentAnswerTexts, AgentStanding, AgentStandingReport, AgentSteps, AgentTurnActivity, ConversationProjection, AgentRecovery, AgentSnapshot, PreparedAgentTurn, StoredRow, TurnRequestAt, FactsKey, FrozenAuthority } from '@kinu.run/core';
 import type { AgentWorkspace, TurnBound } from './agent-turn';
 
 const refused = (what: string) => Effect.fail(new KinuError('unsupported', `${what} runs in the workspace object, not in an agent's own isolate.`));
@@ -391,32 +391,29 @@ export class AgentDatabase {
     };
   }
 
-  /** The run's facts are frozen with its first preparation: a later one, its recovery's after a reset, finds them, and
-   *  the profile the run froze as it first assembled, which that recovery assembles on (null before then). */
-  prepare(bound: TurnBound, prepared: PreparedAgentTurn): ResolvedTurnProfile | null {
+  /** The execution's facts are frozen with its first preparation: a later one, its recovery's after a reset, finds them. */
+  prepare(bound: TurnBound, prepared: PreparedAgentTurn): void {
     this.priced = { model: prepared.sources.model, pricing: prepared.pricing };
     this.execution = { languages: prepared.languages, execute: (...args) => this.workspace.program(bound, ...args) };
-
-    return this.storage.transactionSync(() => {
+    this.storage.transactionSync(() => {
       this.selectScaffold(prepared.scaffold);
-
-      return this.turnFacts.freeze(bound.runId, prepared.facts);
+      this.turnFacts.freeze(bound, prepared.facts);
     });
   }
 
-  /** The next number of this agent's sequence, which orders its openings and reports at the workspace. */
+  /** The next number of this agent's sequence, which orders its reports at the workspace. */
   nextInSequence(): number {
     return new AgentSequence(this.sql, this.reference().actorId).next();
   }
 
-  /** What the workspace decided as the run opened, as this isolate froze it then. */
-  factsOf(runId: string): TurnFacts {
-    return this.turnFacts.of(runId);
+  /** What the workspace decided as the execution opened, as this isolate froze it then. */
+  factsOf(key: FactsKey): TurnFacts {
+    return this.turnFacts.of(key);
   }
 
-  /** The profile the run first assembled on, for a workspace reading the turn again after a restart; null before then. */
-  frozenProfile(runId: string): ResolvedTurnProfile | null {
-    return this.turnFacts.frozenProfile(runId);
+  /** What the execution froze as it bound, for a workspace reading the turn again after a restart; null before then. */
+  frozen(key: FactsKey): FrozenAuthority | null {
+    return this.turnFacts.frozen(key);
   }
 
   private get turnFacts(): TurnFactsStore {

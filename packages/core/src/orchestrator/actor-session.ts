@@ -12,7 +12,7 @@ import { promptCacheWarm, PromptCacheRouteSchema, type CachedRequest } from '../
 import type { KinuExtension } from '../extension';
 import { ExtensionHost } from '../extension';
 import { Effect } from 'effect';
-import { KinuError, renderThrownChain, settle, type TurnTrace, type TurnTracing } from '../obs/index';
+import { KinuError, renderThrownChain, settle, settleSync, type TurnTrace, type TurnTracing } from '../obs/index';
 import { AgentOrchestrator, type AgentOrchestratorDeps } from './agent-orchestrator';
 import { describeLandedSteers, type AcceptedSteer, type Inbox, type LandedSteerRow, type UserSteer } from './inbox';
 import { startActorTurn } from './actor-turn';
@@ -20,8 +20,10 @@ import type { ChatTurnInput } from './chat-session';
 import { captureOperationProfile, currentOperationProfile, operationProfileStream } from '../profiles/operation';
 import { prepareActorProgram, type ActorTurnProgram } from './actor-program';
 import {
-  cutsThrough, programIdentityOf, type ActorClaimStore, type ActorTurnClaim, type ClaimOutcome,
+  cutsThrough, programIdentityOf, type ActorClaimStore, type ActorTurnClaim, type ClaimOutcome, type PreparingClaim,
 } from './actor-claims';
+import type { ExecutionKey, TurnCapability } from './execution';
+import { TurnFactsStore, type FrozenAuthority } from './turn-facts';
 import type { RunEventRecorder } from '../events/recorder';
 import type { ContextEventRecorder } from '../types/context-plane';
 import type { ContextEntry, ContextSelection } from '../session/context';
@@ -156,6 +158,8 @@ interface ActiveTurn {
   context: MaterializedHistory | null;
   profile: ResolvedTurnProfile | null;
   profileInputs: ProfileAuthorityInputs | null;
+  /** The claim minted as it opened (`reserveClaim`): its epoch is the execution's capability. */
+  reserved: PreparingClaim | null;
   /** Never cleared: a settled turn's claim still attributes its late work. */
   claim: ActorTurnClaim | null;
   claimSettled: boolean;
@@ -309,6 +313,9 @@ export class ActorSession {
   get turnClaim(): ActorTurnClaim | null { return this.active?.claim ?? null; }
   /** Read, and observed, by whoever asks where a turn stands. */
   get claims(): ActorClaimStore { return this.options.claims; }
+
+  /** Its executions' facts and frozen authority, beside its claims. */
+  private get turnFacts(): TurnFactsStore { return new TurnFactsStore(this.runtime.storage.sql, this.actorId); }
   /** The revision the open turn's input was placed on. */
   get turnContext(): ContextSelection | null { return this.active?.context?.selection ?? null; }
 
@@ -446,7 +453,7 @@ export class ActorSession {
 
     this.active = {
       lease, abort, phase: 'preparing', context: null, profile: null, profileInputs: null,
-      claim: null, claimSettled: false, trace: null, startedAt: 0, ended: null,
+      reserved: null, claim: null, claimSettled: false, trace: null, startedAt: 0, ended: null,
     };
     this.mode = mode;
     this.turnMetadata = metadata;
@@ -457,12 +464,76 @@ export class ActorSession {
     return lease;
   }
 
+  /**
+   * Claims an execution as `preparing` before anything of it is prepared: its epoch is minted here and is its
+   * {@link TurnCapability}, which every call that runs more of it carries. A delivered run claims its first round so,
+   * before its preparation, which restores its opening while no turn is active; the round adopts it (`reserveClaim`).
+   */
+  reserveExecution(key: Pick<ExecutionKey, 'turnId' | 'runId'>, mode: WorkMode): PreparingClaim {
+    return this.options.claims.reserve({ runId: key.runId, turnId: key.turnId, workMode: mode, installedBuild: this.options.installedBuild });
+  }
+
+  /**
+   * The lease's claim, once, after its recovery decided on the execution it supersedes (`resumeOrClose`): `reserved`,
+   * claimed for it before the lease began (`reserveExecution`), or one minted here. Its admission checks it is still the
+   * turn's newest.
+   */
+  reserveClaim(lease: ActorTurnLease, reserved?: PreparingClaim): TurnCapability {
+    const turn = this.requireTurn(lease);
+
+    if (turn.reserved !== null || turn.phase !== 'preparing') return settleSync(Effect.fail(new KinuError('denied', 'an actor turn is claimed once, as it opens')));
+
+    if (reserved !== undefined && (reserved.turnId !== lease.turnId || reserved.runId !== lease.runId)) {
+      return settleSync(Effect.fail(new KinuError('denied', 'an actor turn adopts only the claim its own execution reserved')));
+    }
+
+    turn.reserved = reserved ?? this.reserveExecution(lease, this.mode);
+
+    return this.capability(lease);
+  }
+
+  /** Settles a claim reserved for an execution whose round never adopted it: its preparation failed, or a Stop came
+   *  first. One a round adopted settles with that round; once settled, this is nothing. */
+  settleReserved(reserved: PreparingClaim, outcome: ClaimOutcome): void {
+    const now = this.options.claims.read(reserved.turnId);
+
+    if (now?.epoch === reserved.epoch && now.status !== 'settled') this.options.claims.settle(reserved, outcome);
+  }
+
+  /** The epoch the execution's close names: its admitted claim's, which its preparation opened at the workspace first;
+   *  null for one never admitted (stopped, or its preparation failed), which names no opening there. */
+  closeEpoch(lease: ActorTurnLease): number | null {
+    return this.requireTurn(lease).claim?.epoch ?? null;
+  }
+
+  /** The execution's capability, as its claim minted it. */
+  capability(lease: ActorTurnLease): TurnCapability {
+    const { reserved } = this.requireTurn(lease);
+
+    if (reserved === null) return settleSync(Effect.fail(new KinuError('denied', 'this actor turn holds no claim yet')));
+
+    return { actorId: lease.actorId, turnId: lease.turnId, runId: lease.runId, epoch: reserved.epoch };
+  }
+
+  /** What the execution froze as it first bound (`bindProfile`), which its recovery binds again; null before then. Read
+   *  only for a recovery, whose turn was claimed for the same run before: a run's first claim has frozen nothing. */
+  frozen(lease: ActorTurnLease): FrozenAuthority | null {
+    const { reserved } = this.requireTurn(lease);
+
+    return reserved?.previous?.runId === lease.runId ? this.turnFacts.frozen(lease) : null;
+  }
+
+  /** The bind transition, once, before any model or tool work: the profile the execution resolved, frozen under its key
+   *  with the inputs it was resolved from. A recovered execution binds what it froze, which this keeps. */
   bindProfile(lease: ActorTurnLease, profile: ResolvedTurnProfile, inputs: ProfileAuthorityInputs): void {
     const turn = this.requireTurn(lease);
 
-    if (turn.phase !== 'preparing' || turn.profile !== null) throw new KinuError('denied', 'an actor turn profile is bound exactly once before execution');
+    if (turn.phase !== 'preparing' || turn.profile !== null || turn.reserved === null) {
+      throw new KinuError('denied', 'an actor turn profile is bound exactly once, under the claim it opened with, before execution');
+    }
 
     if (this.mode === 'plan' && profile.workMode !== 'plan') throw new KinuError('denied', 'an actor profile cannot widen an admitted Plan turn');
+    this.turnFacts.bind(lease, { profile, inputs });
     turn.profile = profile;
     turn.profileInputs = inputs;
     this.mode = profile.workMode;
@@ -544,21 +615,28 @@ export class ActorSession {
 
     if (active.phase === 'running') throw new KinuError('denied', 'cannot release an actor while its program is running');
 
-    if (active.claim !== null && !active.claimSettled) this.settleClaim(active, 'indeterminate');
+    if (active.reserved !== null && !active.claimSettled) this.settleClaim(active, 'indeterminate');
     this.active = null;
   }
 
-  /** Called once the turn's answer is durable. */
+  /** Called once the turn's answer is durable, or as its preparation failed, before any model or tool work. */
   settleTurnClaim(lease: ActorTurnLease, outcome: ClaimOutcome): void {
     const active = this.requireTurn(lease);
 
-    if (active.claim === null) throw new KinuError('denied', 'this actor turn holds no durable claim to settle');
+    if (active.reserved === null) throw new KinuError('denied', 'this actor turn holds no durable claim to settle');
     this.settleClaim(active, outcome);
   }
 
+  /** Whether the turn's claim is still to be settled. */
+  claimOpen(lease: ActorTurnLease): boolean {
+    const active = this.requireTurn(lease);
+
+    return active.reserved !== null && !active.claimSettled;
+  }
+
   private settleClaim(active: ActiveTurn, outcome: ClaimOutcome): void {
-    if (active.claim === null || active.claimSettled) return;
-    this.options.claims.settle(active.claim, outcome);
+    if (active.reserved === null || active.claimSettled) return;
+    this.options.claims.settle(active.reserved, outcome);
     active.claimSettled = true;
     const ended = active.ended;
 
@@ -572,6 +650,22 @@ export class ActorSession {
       if (ended.failure !== null && !ended.interrupted) span.fail(ended.failure);
     });
     active.trace = null;
+  }
+
+  /**
+   * A turn stopped before its claim (a Stop as it opened, or its recovery closing it): it is neither prepared nor run,
+   * and ends interrupted on the output it already had, claiming nothing.
+   */
+  async unexecuted(lease: ActorTurnLease): Promise<ActorExecutionResult> {
+    const active = this.requireTurn(lease);
+
+    if (active.phase !== 'preparing' || active.reserved !== null) return settleSync(Effect.fail(new KinuError('denied', 'only a turn stopped before its claim ends unexecuted')));
+    active.phase = 'settling';
+    const result = await this.turnResult(lease, active, newTurnTally(0), null);
+
+    active.ended = { steps: 0, interrupted: true, failure: null };
+
+    return { ...result, interrupted: true };
   }
 
   /** Prepare, claim durably, then consume: `startActorTurn` runs nothing until the first `next()`, so a crash
@@ -620,8 +714,9 @@ export class ActorSession {
   ): Promise<ActorExecutionResult> {
     const active = this.requireTurn(lease);
 
-    if (active.phase !== 'preparing' || active.profile === null) throw new KinuError('denied', 'a profiled actor turn executes once');
-    const profile = active.profile;
+    // Bound only under its claim (`bindProfile`): a profiled turn holds the claim it executes under.
+    if (active.phase !== 'preparing' || active.profile === null || active.reserved === null) throw new KinuError('denied', 'a profiled actor turn executes once');
+    const { profile, reserved } = active;
     const tally = newTurnTally(input.resumedSteps ?? 0);
 
     // The steps the dead activation finished count once, as their rows did.
@@ -634,7 +729,7 @@ export class ActorSession {
       active.abort.signal.throwIfAborted();
       const prepared = await this.prepareProgram(input.loopVersion, active);
       program = prepared.program;
-      const claim = await this.admitClaim(lease, program, prepared.selection, input);
+      const claim = await this.admitClaim(reserved, program, prepared.selection, input);
       active.claim = claim;
 
       active.trace = this.options.turns?.().admitted({ turnId: claim.turnId, epoch: claim.epoch }, active.startedAt, (span) => {
@@ -685,15 +780,17 @@ export class ActorSession {
     return { program, selection: admitted.selection, messages: admitted.messages };
   }
 
-  /** An unsettled claim: a dead activation left this turn open. */
+  /** Binds the claim the turn opened under; one a dead activation left admitted is resumed. */
   private async admitClaim(
-    lease: ActorTurnLease, program: ActorTurnProgram, context: ContextSelection, input: ActorExecutionInput,
+    reserved: PreparingClaim, program: ActorTurnProgram, context: ContextSelection, input: ActorExecutionInput,
   ): Promise<ActorTurnClaim> {
-    const previous = this.options.claims.read(lease.turnId);
+    const { previous } = reserved;
 
+    // The lease's own: `reserveClaim` adopts only a reservation for its turn and run.
     const claim = await this.options.claims.admit({
-      runId: lease.runId,
-      turnId: lease.turnId,
+      runId: reserved.runId,
+      turnId: reserved.turnId,
+      epoch: reserved.epoch,
       workMode: this.mode,
       program: programIdentityOf(program, this.options.installedBuild),
       context,
@@ -706,7 +803,7 @@ export class ActorSession {
         actor: this.runtime.identity.name,
         stepsKept: input.resumedSteps ?? 0,
         midStep: input.resumedMidStep ?? false,
-        sameBuild: sameBuildOf(previous.program.build, this.options.installedBuild),
+        sameBuild: sameBuildOf(previous.program?.build ?? null, this.options.installedBuild),
       });
     }
 

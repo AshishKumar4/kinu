@@ -200,7 +200,9 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
 
     const admitted = await history.materialize();
 
-    const claim = await claims.admit({ runId: `run-${String(turn)}`, turnId, workMode: 'build', program: PROGRAM, context: admitted.selection });
+    // Claimed as its execution opens, then bound, as a turn's driver claims it.
+    const { epoch } = claims.reserve({ runId: `run-${String(turn)}`, turnId, workMode: 'build' });
+    const claim = await claims.admit({ runId: `run-${String(turn)}`, turnId, epoch, workMode: 'build', program: PROGRAM, context: admitted.selection });
 
     const stream = new SessionStream(history, turnId, claim.epoch);
 

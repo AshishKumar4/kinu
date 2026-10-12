@@ -44,6 +44,16 @@
     "context_id TEXT NOT NULL",
     "PRIMARY KEY(actor_id,context_id)"
   ],
+  "actor_epochs@packages/core/src/orchestrator/actor-claims.ts": [
+    "actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id)",
+    "epoch INTEGER NOT NULL"
+  ],
+  "actor_profile_inputs@packages/core/src/orchestrator/turn-facts.ts": [
+    "actor_id TEXT NOT NULL",
+    "inputs_key TEXT NOT NULL",
+    "inputs_json TEXT NOT NULL",
+    "PRIMARY KEY(actor_id,inputs_key)"
+  ],
   "actor_program_state@packages/core/src/identity/program-state.ts": [
     "actor_id TEXT NOT NULL",
     "key TEXT NOT NULL",
@@ -89,8 +99,9 @@
     "run_id TEXT NOT NULL",
     "epoch INTEGER NOT NULL",
     "work_mode TEXT NOT NULL CHECK(work_mode IN ('plan','build'))",
-    "program_kind TEXT NOT NULL CHECK(program_kind IN (${sqlCheckList(PROGRAM_KINDS)}))",
-    "program_version INTEGER NOT NULL",
+    "phase TEXT NOT NULL CHECK(phase IN ('preparing','admitted'))",
+    "program_kind TEXT CHECK(program_kind IS NULL OR program_kind IN (${sqlCheckList(PROGRAM_KINDS)}))",
+    "program_version INTEGER",
     "program_digest TEXT",
     "program_build TEXT",
     "outcome TEXT CHECK(outcome IS NULL OR outcome IN (${sqlCheckList(CLAIM_OUTCOMES)}))",
@@ -110,10 +121,12 @@
   ],
   "actor_turn_facts@packages/core/src/orchestrator/turn-facts.ts": [
     "actor_id TEXT NOT NULL",
+    "turn_id TEXT NOT NULL",
     "run_id TEXT NOT NULL",
-    "facts_json TEXT NOT NULL",
+    "facts_json TEXT",
     "profile_json TEXT",
-    "PRIMARY KEY(actor_id,run_id)"
+    "inputs_key TEXT",
+    "PRIMARY KEY(actor_id,turn_id,run_id)"
   ],
   "actor_turn_fence@packages/core/src/subordinates/turn-fence.ts": [
     "actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id)",
@@ -123,6 +136,14 @@
     "ended_at INTEGER",
     "facts_json TEXT",
     "cancelled_at INTEGER"
+  ],
+  "actor_turn_openings@packages/core/src/subordinates/turn-fence.ts": [
+    "actor_id TEXT NOT NULL REFERENCES workspace_actors(actor_id)",
+    "slot INTEGER NOT NULL",
+    "seq INTEGER NOT NULL",
+    "turn_id TEXT NOT NULL",
+    "run_id TEXT NOT NULL",
+    "PRIMARY KEY (actor_id, slot)"
   ],
   "agent_data_tables@packages/core/src/tools/db-codemode.ts": [
     "name TEXT PRIMARY KEY",

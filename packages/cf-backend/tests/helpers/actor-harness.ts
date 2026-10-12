@@ -22,9 +22,10 @@ import { bindAgentSql } from '../../src/runtime';
 import { hostedSubordinateRuntime, type ActorSurface, type SurfaceTurn, type ToolScope } from '../../src/hosted-actors';
 import type { CFSeat } from '../../src/actor-hosting';
 import type { ChatWireTransport } from '../../src/chat-transport';
+import type { AgentTurns } from '../../src/agent-turns';
 import { isWorkMode, workModeForTurnMetadata } from '@kinu.run/core';
 import { ActorClaimStore, agentArtifactDirectory, agentHome, CHAT_SESSION_ID, createParentWorkspaceVfs, EventLog, SubordinateRosterStore, MAIN_AGENT, openWorkspaceMainActor, SessionHistory, TerminalTransitions, WorkspaceActorDirectory } from '@kinu.run/core';
-import { present, sqlOver } from '@kinu.run/test-utils';
+import { present, sqlOver, admitTestClaim } from '@kinu.run/test-utils';
 import {
   createCompositeLogger, createConsoleLogger, renderCauseChain, setDiagnosticsSink, toKinuError, type Logger,
 } from '@kinu.run/core/obs';
@@ -210,6 +211,23 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
   harnessResetAgentIsolate(storageKey: string): void {
     this.harnessAgentFacets.reset(storageKey);
+  }
+
+  /** Set by {@link harnessEvictAgentTurns}; from then on, the hold a later activation has on its agents' turns. */
+  private harnessTurnsEvicted = false;
+
+  private harnessLaterTurns: AgentTurns | null = null;
+
+  protected override get agentTurns(): AgentTurns {
+    if (!this.harnessTurnsEvicted) return super.agentTurns;
+
+    return this.harnessLaterTurns ??= this.openAgentTurns();
+  }
+
+  /** The workspace's hold on its agents' open turns goes, as its eviction takes it, while their isolates run on: the
+   *  next call one of them makes finds no turn open here. */
+  harnessEvictAgentTurns(): void {
+    this.harnessTurnsEvicted = true;
   }
 
   harnessAgentTraceCalls(): readonly string[] {
@@ -943,7 +961,7 @@ export async function admittedTurnClaim(
   const history = historyOver(harness);
   const context = history.context.selected() ?? history.context.initialize();
   const claims = new ActorClaimStore(sqlOver(harness.db), workspaceMainActor(harness.db), (write) => write(), history);
-  await claims.admit({
+  await admitTestClaim(claims, {
     runId: `run-${turnId}`, turnId, workMode: 'build',
     program: { kind: 'builtin', version: 0, digest: null, build: null },
     context,
