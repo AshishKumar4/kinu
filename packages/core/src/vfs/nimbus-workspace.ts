@@ -7,6 +7,7 @@ import type { Awaitable, VFS } from '@nimbus-sh/core/vfs/vfs.js';
 // Type-only: the value import stays inside the lazy boot so Nimbus's wasm graph is not
 // loaded at module eval (cold start; workerd test pool cannot load it).
 import type { NimbusWorkspace } from '@nimbus-sh/core/workspace';
+import type { WorkspaceFs } from '@nimbus-sh/core/workspace/workspace-fs.js';
 import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
@@ -77,9 +78,39 @@ function workspaceFiles(open: () => Promise<WorkspaceFiles>, cwd: string): Works
   };
 }
 
-/** The session user's view, the shell process's own, so every write passes the lease check a command's does. */
+/**
+ * The session user's view, the shell process's own, so every write passes the lease check a command's does. A path is
+ * the view's as a process's is: a relative one from its directory, and `..` taken by the walk, after a link, never
+ * collapsed first. An empty path is that directory, as on every other plane of this file. A write makes its parent
+ * directories first.
+ */
 function workspaceVfs(open: () => Promise<NimbusWorkspace>): WorkspaceFiles {
-  return workspaceFiles(async () => (await open()).fs, WORKSPACE_ROOT);
+  const named = (path: string): string => (path === '' ? '.' : path);
+
+  const at = async <T>(path: string, syscall: string, call: (fs: WorkspaceFs, path: string) => Awaitable<T>): Promise<T> => {
+    const { fs } = await open();
+
+    return atVfsPath(fs.resolve(named(path)), syscall, () => call(fs, named(path)));
+  };
+
+  return {
+    readFile: (path) => at(path, 'open', (fs, name) => fs.readFile(name)),
+    writeFile: (path, data) => at(path, 'open', async (fs, name) => {
+      const absolute = fs.resolve(name);
+
+      await fs.mkdir(absolute.slice(0, absolute.lastIndexOf('/')) || '/', { recursive: true });
+
+      return fs.writeFile(name, data);
+    }),
+    readdir: (path) => at(path, 'scandir', (fs, name) => fs.readdir(name)),
+    stat: (path, options) => at(path, options?.follow === false ? 'lstat' : 'stat', (fs, name) => fs.stat(name, options)),
+    readlink: (path) => at(path, 'readlink', (fs, name) => fs.readlink(name)),
+    unlink: (path) => at(path, 'unlink', (fs, name) => fs.unlink(name)),
+    mkdir: (path, opts) => at(path, 'mkdir', (fs, name) => fs.mkdir(name, opts)),
+    removeRecursive: (path) => at(path, 'rm', (fs, name) => fs.removeRecursive(name)),
+    rename: (oldPath, newPath) => at(oldPath, 'rename', (fs, name) => fs.rename(name, named(newPath))),
+    readRange: (path, offset, length) => at(path, 'read', (fs, name) => fs.readRange(name, offset, length)),
+  };
 }
 
 type ShellCall = (workspace: NimbusWorkspace, command: string, options: RunOptions & { readonly cwd: string }) => Promise<CommandResult>;

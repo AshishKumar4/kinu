@@ -7,7 +7,8 @@ import { getAgentByName, type AgentContext } from 'agents';
 import { ownerCaller } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
-import { USER_DO_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
+import { USER_DO_RPC_SURFACE } from '../../src/rpc-surface';
+import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { UserDO } from '../../src/user/user-do';
 import { type UserProfile } from '../../src/user/profile';
 

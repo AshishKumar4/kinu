@@ -5,14 +5,14 @@ import { answeredRefusal, formatExecResult, type CommandResult, type ExecOutcome
 import { KinuError, refusalOf } from '../src/obs/index';
 import { parseJsonValue } from '../src/utils/json';
 import { createInlineExecutor, createNimbusWorkspaceExecutor } from '../src/tools/inline-executor';
-import { nimbusSessionFiles, nimbusSessionShell, type RemoteSessionBox } from '../src/execution/nimbus';
+import { nimbusSessionFiles, nimbusSessionShell } from '../src/execution/nimbus';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { createDeviceTunnelExecutor } from '../src/execution/device-tunnel-executor';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { createTestRuntime, conversationsFor } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { Shell } from '../src/types/primitives';
-import { sessionFilesOver } from '@kinu.run/test-utils/vfs';
+import { sessionFilesOver, type SessionBox } from '@kinu.run/test-utils/vfs';
 
 type ShellTool = { execute: (args: { command: string; runtime?: string }) => Promise<CommandResult> };
 
@@ -139,14 +139,14 @@ describe('the surfaces the model reads', () => {
   test('the hosted workspace, over a Nimbus session, retains a command\'s exit failure and diagnostics', async () => {
     const { rt } = createTestRuntime();
 
-    const box: RemoteSessionBox = {
+    const box: SessionBox = {
       ready: async () => {},
-      exec: async () => ({ ...PYTEST, command: 'pytest', success: false }),
+      exec: async () => ({ ...PYTEST, command: 'pytest', success: false, duration: 0, timestamp: 0 }),
       files: sessionFilesOver(),
     };
 
     const workspace = createNimbusWorkspaceExecutor({
-      box, inline: { vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), memory: rt.memory, craftStore: rt.craftStore },
+      box, inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), memory: rt.memory, craftStore: rt.craftStore },
     });
 
     const out = await workspace.tools.exec?.execute('pytest');

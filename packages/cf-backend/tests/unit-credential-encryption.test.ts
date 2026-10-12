@@ -1,5 +1,5 @@
-// Credential store encryption at rest: sealed envelopes bound to their credential, legacy plaintext re-sealed on
-// access, rotation keeps the retired key readable, and no key is a refusal, never a plaintext fallback.
+// Credential store encryption at rest: sealed envelopes bound to their credential and deployment key,
+// canonical encodings, and no key is a refusal, never a plaintext fallback.
 import { testOwner } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
@@ -74,6 +74,38 @@ describe('the credential store is sealed at rest', () => {
     await expect(harness.userDO.getAuthHeaders(await testOwner(), 'openrouter.bearer'))
       .rejects.toThrow('opening the stored credential openrouter.bearer');
     harness.close();
+  });
+
+  test.each(['padding', 'unused bits', 'whitespace'] as const)('a %s alias cannot open a stored credential', async (alias) => {
+    const harness = createTestUserDO();
+
+    try {
+      const owner = await testOwner();
+      await harness.userDO.setCredential(owner, 'openai.bearer', { kind: 'bearer', token: 'sk-protected' });
+      await harness.userDO.setCredential(owner, 'anthropic.bearer', { kind: 'bearer', token: 'sk-unaffected' });
+      const sealed = present(storedValue(harness, 'openai.bearer'), 'the sealed credential');
+      const parts = sealed.split('.');
+      const ciphertext = present(parts[3], 'the ciphertext');
+
+      if (alias === 'padding') parts[3] = `${ciphertext}=`;
+      else if (alias === 'whitespace') parts[2] = ` ${present(parts[2], 'the IV')}`;
+      else {
+        // This credential and its GCM tag leave two unused bits in the final sextet.
+        const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+        parts[3] = ciphertext.slice(0, -1) + alphabet[alphabet.indexOf(ciphertext.at(-1) ?? '') + 1];
+      }
+
+      sqlExec(harness.db).exec('UPDATE user_credentials SET value = ? WHERE key = ?', parts.join('.'), 'openai.bearer');
+      await expect(harness.userDO.getAuthHeaders(owner, 'openai.bearer')).rejects.toMatchObject({ code: 'bad_input' });
+      expect(await harness.userDO.getAuthHeaders(owner, 'anthropic.bearer')).toEqual({
+        'x-api-key': 'sk-unaffected', 'anthropic-version': '2023-06-01',
+      });
+
+      sqlExec(harness.db).exec('UPDATE user_credentials SET value = ? WHERE key = ?', sealed, 'openai.bearer');
+      expect(await harness.userDO.getAuthHeaders(owner, 'openai.bearer')).toEqual({ Authorization: 'Bearer sk-protected' });
+    } finally {
+      harness.close();
+    }
   });
 
   test('a row that opens and does not decode rejects without quoting what it holds', async () => {

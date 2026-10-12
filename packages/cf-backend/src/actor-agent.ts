@@ -1,4 +1,7 @@
 import { Cause, Effect, Exit } from 'effect';
+import { derived } from '@nimbus-sh/fabric/derived.js';
+import { idempotent } from '@nimbus-sh/fabric/do-calls.js';
+import { logDoCallRetry } from './obs/do-call-retry';
 import type { VfsDirent, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 import { type SlateCaller, type SlateCallerHop } from '@kinu.run/core/slates';
 /**
@@ -44,7 +47,6 @@ import {
   type RpcFrame,
 } from "./cli/rpc-gate";
 import { codemodeSurface, hostedWindowMay, PAGE_KEEPALIVE, readsWrittenBy, requiredRpcAccess, ROSTER_READS, rpcMovesOverview, type LiveRead, type SqlExec } from "@kinu.run/core";
-import { retryTransientDO } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
 import { attempt, attemptInItsWords, createAgentTracing, hold, recording, renderThrownChain, type AgentTracing, settle, settleSync, settleLoggedSync, settleLogged } from "@kinu.run/core/obs";
 import {
@@ -1647,10 +1649,10 @@ export abstract class ActorAgent extends Agent<Env> {
     }
 
     try {
-      const { stub, caller } = await this.userHub();
+      const caller = await this.userCaller();
 
-      const verified = await retryTransientDO('verifySocketSession',
-        () => stub.verifySocketSession(caller, session.tokenHash));
+      const verified = await idempotent('verifySocketSession', () => this.requireOwnerUserDO(),
+        (stub) => stub.verifySocketSession(caller, session.tokenHash), { onRetry: logDoCallRetry });
 
       return verified.live ? null : SESSION_AUTHORITY_REVOKED;
     } catch (cause) {
@@ -1669,10 +1671,10 @@ export abstract class ActorAgent extends Agent<Env> {
     if (!bearer.readable) return 'This connection carries no readable authorization. Reconnect with: kinu auth';
 
     try {
-      const { stub, caller } = await this.userHub();
+      const caller = await this.userCaller();
 
-      const verified = await retryTransientDO('verifyCliSocketBearer',
-        () => stub.verifyCliSocketBearer(caller, bearer.tokenHash));
+      const verified = await idempotent('verifyCliSocketBearer', () => this.requireOwnerUserDO(),
+        (stub) => stub.verifyCliSocketBearer(caller, bearer.tokenHash), { onRetry: logDoCallRetry });
 
       if (verified.live && verified.generation <= bearer.generation) return null;
 
@@ -2153,8 +2155,16 @@ export abstract class ActorAgent extends Agent<Env> {
   }
   /** Debounces the last-active-executor write to one SQL upsert per executor per turn. */
   protected _executorsUsedThisTurn = new Set<string>();
-  protected _cachedTools: ActorToolsets | null = null;
-  protected _cachedToolsKey = "";
+  protected readonly _tools = derived<ActorToolsets, { mode: WorkMode; actorDeps: ActorToolDeps }>(
+    ({ mode, actorDeps }) => {
+      const profileKey = actorActiveTools(actorDeps).join(',');
+      // Quality and the profile affect the tools: owner chat must not reuse an assigned turn's reporting surface.
+
+      return `${mode}:${profileKey}:${this.operationProfile()?.profile.digest ?? ''}:${this._craftCacheKey()}:${String(this._accountSwarms)}:${String(this.submitsPlans(mode))}:${String(actorDeps.replyToComment !== undefined)}`;
+    },
+    ({ mode, actorDeps }) => this.buildActorToolsets(mode, actorDeps),
+    { onRebuild: (previous, next) => this.logActivity("gettools_rebuilding", `${previous ?? ''} -> ${next}`) },
+  );
   // Cached against the content hash of UserDO's MCP descriptor surface, so closures rebuild
   // exactly when the durable rows differ from what this activation last served.
   private _mcpToolsCache: McpToolSurfaceCache<ToolSet> | null = null;
@@ -3775,18 +3785,14 @@ export abstract class ActorAgent extends Agent<Env> {
   /** One build per mode: the turn surface, and the raw one. */
   protected actorToolsets(mode: WorkMode, claimScope?: string): ActorToolsets {
     const actorDeps = this.actorToolDeps();
-    const profileKey = actorActiveTools(actorDeps).join(',');
-    // Key includes crafted_tools quality (score filtering depends on recency) and the actor profile,
-    // so an owner chat never reuses an assigned turn's upward-reporting surface.
-    const cacheKey = `${mode}:${profileKey}:${this.operationProfile()?.profile.digest ?? ''}:${this._craftCacheKey()}:${String(this._accountSwarms)}:${String(this.submitsPlans(mode))}:${String(actorDeps.replyToComment !== undefined)}`;
-
     // Only the chat surface is cached; a scoped rollout's surface is built once per rollout.
-    if (claimScope === undefined && this._cachedTools && cacheKey === this._cachedToolsKey) {
-      return this._cachedTools;
-    }
 
-    this.logActivity("gettools_rebuilding", `${this._cachedToolsKey} -> ${cacheKey}`);
+    return claimScope === undefined
+      ? this._tools.get({ mode, actorDeps })
+      : this.buildActorToolsets(mode, actorDeps, claimScope);
+  }
 
+  private buildActorToolsets(mode: WorkMode, actorDeps: ActorToolDeps, claimScope?: string): ActorToolsets {
     try {
       // No registry sync: the eval sandbox reads craftStore.list() fresh at every execute.
       // See docs/CRAFT-ARCHITECTURE.md §3.
@@ -3835,11 +3841,6 @@ export abstract class ActorAgent extends Agent<Env> {
 
       if (actorDeps.askOwner) builtinDeps.askOwner = true;
       const toolsets = buildActorTools(builtinDeps);
-
-      if (claimScope === undefined) {
-        this._cachedTools = toolsets;
-        this._cachedToolsKey = cacheKey;
-      }
 
       this.logActivity("gettools_end", `rebuilt: ${Object.keys(toolsets.turn).length} tools`);
 
@@ -4134,8 +4135,7 @@ export abstract class ActorAgent extends Agent<Env> {
     this._turnExternalTools = declared;
 
     if (stale) {
-      this._cachedTools = null;
-      this._cachedToolsKey = '';
+      this._tools.invalidate();
     }
 
     const current = stale ? withToolText(this.getTools(), this.turnArtifacts().tools) : tools;

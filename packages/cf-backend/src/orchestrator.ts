@@ -7,7 +7,8 @@ import { ROOT_SLATE_CALLER, type SlateCaller } from '@kinu.run/core/slates';
  */
 
 import { Agent, callable, type AgentContext, type Connection, type ConnectionContext } from "agents";
-import { ORCHESTRATOR_RPC_SURFACE, ORCHESTRATOR_STARTED_RPC, sealRpcSurface } from "./rpc-surface";
+import { ORCHESTRATOR_RPC_SURFACE, ORCHESTRATOR_STARTED_RPC } from "./rpc-surface";
+import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from "./activation-gate";
 import { supervisorEsbuildService } from "@nimbus-sh/worker/facet-host";
 import { listPortReservations } from "@nimbus-sh/worker/port-capability";
@@ -39,7 +40,7 @@ import { createHostedWorkspace, type HostedBox, type HostedWorkspace, type Works
 import type { WorkspaceEgress } from "@nimbus-sh/core/_shared/workspace-network.js";
 import { agentFacet, agentStateShellId, AgentMemory, AgentStoreBroker, AgentWorkspaceHost, headDeltas, uiChunks, type AgentFacetPlacement } from "./agent-facets";
 import { agentCallsThrough, AgentIsolateSlots } from "./dynamic-worker-slots";
-import { providerBindingsOf, routedModelReads } from "./providers/agent-registry";
+import { providerBindingsOf, routedModelReads, userCredentials } from "./providers/agent-registry";
 import { AgentTurns } from "./agent-turns";
 import { AgentWakes } from "./agent-wakes";
 import type { AgentTurnActivity, AgentSnapshot, RunEventRecorder, StoredRow } from '@kinu.run/core';
@@ -556,6 +557,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       previewUrl: (port, capability) => nimbusPreviewUrl(this.env, this.name, port, capability),
       egress: () => this.workspaceEgress(),
       onFilesChanged: (paths) => {
+        if (this.deleting.signal.aborted) return;
         this.changes.touched(paths);
         this.liveReadsMoved(readsMovedByFiles(paths));
         const ids = this.slates.filesChanged(paths);
@@ -714,7 +716,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const agent = this.agentOf(actorId);
 
     return {
-      actorId, storageKey: agent.storageKey, workspaceName: this.workspaceName(), shellId: agent.shellId, home: agentHome(agent.homeName),
+      actorId, storageKey: agent.storageKey, workspaceName: this.workspaceName(), home: agentHome(agent.homeName),
       providers: providerBindingsOf(this.env),
     };
   }
@@ -839,6 +841,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     if (this.deleting.signal.aborted) return settleSync(Effect.fail(new KinuError('missing', 'This workspace was deleted.')));
     this.agentKey(actorId);
     const credentials = async () => await this.userHub();
+    const credentialReads = userCredentials(() => this.requireOwnerUserDO(), () => this.userCaller());
 
     return new AgentWorkspaceHost({
       session: async () => {
@@ -921,16 +924,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       answerMetadata: (turnId, narration) => this.takeTurnSlates(actorId, turnId, async () => narration),
       reportModelCall: async (report) => { this.reportModelCall(report); },
       reportModelOperation: async (event) => { this.modelOperations(event); },
-      getAuth: async (key, opts) => {
-        const { stub, caller } = await credentials();
-
-        return await stub.getAuth(caller, key, opts);
-      },
-      listCredentials: async () => {
-        const { stub, caller } = await credentials();
-
-        return await stub.listCredentials(caller);
-      },
+      getAuth: credentialReads.getAuth,
+      listCredentials: credentialReads.listCredentials,
       relayDevice: async (provider) => {
         const { stub, caller } = await credentials();
 
@@ -4107,8 +4102,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     if (result.ok) {
       // Crafted-tool retirement must drop the cached tool surface.
-      this._cachedTools = null;
-      this._cachedToolsKey = '';
+      this._tools.invalidate();
     }
 
     return result;
@@ -4268,7 +4262,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   async setShellApprovalMode(mode: 'strict' | 'allow_all' | 'deny_all') {
     return setShellApprovalMode({
       config: this.config,
-      onChanged: () => { this._cachedTools = null; this._cachedToolsKey = ''; },
+      onChanged: () => this._tools.invalidate(),
     }, mode);
   }
 
@@ -4359,8 +4353,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         if (names.length > 0) {
           updateCraftScores(this.boundSql, names, ratingQuality(thumbsRating(feedback).score));
           rescored = names.length;
-          this._cachedTools = null;
-          this._cachedToolsKey = '';
+          this._tools.invalidate();
         }
       }
 
@@ -6361,8 +6354,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // An approval changes the next prompt and its `allowed_tools`, so the cached tool surface is dropped.
     if (result.ok) {
-      this._cachedTools = null;
-      this._cachedToolsKey = '';
+      this._tools.invalidate();
     }
 
     return result;

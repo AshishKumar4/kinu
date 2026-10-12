@@ -44,10 +44,10 @@ export class KinuDevbox extends Devbox<Env> {
     this.#nativeExports = ctx.exports;
   }
   /**
-   * No raw sockets: the platform never routes ports other than 80/443 through an outbound handler,
-   * so this is what makes interception cover all egress (git-over-SSH, raw DB sockets refused).
+   * Raw TCP and UDP go straight out (D82): git over SSH, database and mail sockets, DNS. HTTP and HTTPS still enter
+   * `outboundPolicy`'s routes first, so the vault sees every web request and its placeholders.
    */
-  enableInternet = false;
+  enableInternet = true;
 
 
   protected override get store(): DevboxStore | undefined {

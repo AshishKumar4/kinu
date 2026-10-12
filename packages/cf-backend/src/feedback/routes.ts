@@ -7,7 +7,8 @@ import { Hono } from 'hono';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { writeFeedbackMarker, type AnalyticsEnv } from '@kinu.run/core/analytics';
 import { recordFeedback, type FeedbackIngestEnv } from '../control-plane/feedback-ingest';
-import { retryTransientDO } from '@kinu.run/core';
+import { idempotent } from '@nimbus-sh/fabric/do-calls.js';
+import { logDoCallRetry } from '../obs/do-call-retry';
 import type { UserDO } from '../user/user-do';
 import { isWorkspaceName } from '@kinu.run/core';
 import { ownerCaller, type OwnerCapabilityEnv } from '@kinu.run/core';
@@ -44,8 +45,10 @@ async function attributeWorkspace<Id>(
 
   try {
     const caller = await ownerCaller(env);
-    const userDO = env.UserDO.get(env.UserDO.idFromName(userId));
-    const owned = await retryTransientDO('hasWorkspace', () => userDO.hasWorkspace(caller, workspace));
+    const userObject = env.UserDO.idFromName(userId);
+
+    const owned = await idempotent('hasWorkspace', () => env.UserDO.get(userObject),
+      (stub) => stub.hasWorkspace(caller, workspace), { onRetry: logDoCallRetry });
 
     return owned ? { kind: 'owned', workspace } : { kind: 'refused' };
   } catch (cause) {

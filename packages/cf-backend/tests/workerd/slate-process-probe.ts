@@ -5,7 +5,7 @@ import { ProcessFiles } from '@nimbus-sh/core/runtime/process-files.js';
 import { CRED_KERNEL, CRED_SESSION_USER, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
-import { FACET_IMAGE_DIR } from '@nimbus-sh/fabric/process-fabric.js';
+import { FACET_IMAGE_DIR, facetImageDigest, facetImagePath } from '@nimbus-sh/fabric/process-fabric.js';
 import type { EsbuildService } from '@nimbus-sh/core/runtime/esbuild-service.js';
 import { supervisorEsbuildService } from '@nimbus-sh/worker/facet-host';
 import { probeDurableApps, probeFacetManager } from './facet-manager';
@@ -331,6 +331,21 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     const kernel = this.vfs.as(CRED_KERNEL);
 
     return kernel.exists(`/${FACET_IMAGE_DIR}`) ? kernel.readdir(`/${FACET_IMAGE_DIR}`).map((entry) => entry.name).sort() : [];
+  }
+
+  facetImageVersions() {
+    const kernel = this.vfs.as(CRED_KERNEL);
+
+    return kernel.readdir(`/${FACET_IMAGE_DIR}`).map((entry) => ({
+      name: entry.name, generation: kernel.stat(`/${FACET_IMAGE_DIR}/${entry.name}`).gen,
+    })).sort((left, right) => left.name.localeCompare(right.name));
+  }
+
+  async interruptApplicationImage(): Promise<void> {
+    const application = this.started().artifacts.application;
+    const path = facetImagePath(await facetImageDigest(application));
+
+    this.vfs.as(CRED_KERNEL).truncate(path, new TextEncoder().encode(application).byteLength - 1);
   }
 
   async seedPrivateSource(): Promise<void> {

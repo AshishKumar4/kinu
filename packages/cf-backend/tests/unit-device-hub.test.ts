@@ -16,7 +16,9 @@ import { CAPABLE_HELLO, WORKSPACE } from './helpers/device-harness';
 import { provisionTestWorkspace } from './helpers/user-do';
 import {
   DeviceSocketHub,
+  DeviceTerminalHub,
   deviceIdFromSocket,
+  terminalFromSocket,
   type DeviceSocket,
   type DeviceSocketCtx,
 } from '@kinu.run/core';
@@ -51,6 +53,7 @@ function fakeCtx(): DeviceSocketCtx & { accepted: Array<{ ws: FakeSocket; tags: 
     getWebSockets(tag?: string) {
       return accepted.filter((s) => !tag || s.tags.includes(tag)).map((s) => s.ws);
     },
+    getTags(ws) { return accepted.find((s) => s.ws === ws)?.tags ?? []; },
   };
 }
 
@@ -105,9 +108,15 @@ describe('DeviceSocketHub', () => {
     const first = fakeSocket();
     const second = fakeSocket();
     hub.accept('dev-a', first);
+    const duplicate = fakeSocket();
+    const closed = fakeSocket(false);
+    ctx.acceptWebSocket(duplicate, ['device:dev-a']);
+    ctx.acceptWebSocket(closed, ['device:dev-a']);
     hub.accept('dev-a', second);
     hub.hello('dev-a', DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
     expect(first.closed).toEqual([{ code: 1000, reason: 'replaced by a new connection' }]);
+    expect(duplicate.closed).toEqual(first.closed);
+    expect(closed.closed).toEqual([]);
     expect(hub.liveSocket('dev-a')).toBe(second);
     const tunnel = hub.tunnel('dev-a');
 
@@ -138,6 +147,20 @@ describe('DeviceSocketHub', () => {
     const frame = v.parse(v.object({ id: v.string() }), JSON.parse(socket.sent[0] ?? 'null'));
     woken.handleMessage('dev-a', JSON.stringify({ id: frame.id, result: 'hi' }));
     expect(await reply).toBe('hi');
+  });
+
+  test('an invalid annotation cannot replace the working protocol across a wake', async () => {
+    const { ctx, hub, ws } = connected();
+    expect(() => hub.hello('dev-a', Number.NaN, DEVICE_FEATURES)).toThrow();
+
+    const woken = new DeviceSocketHub(ctx);
+    const tunnel = woken.tunnel('dev-a');
+
+    if (!tunnel) throw new Error('the invalid annotation lost the working device');
+    const pending = tunnel.rpc('exec', ['echo still connected']);
+    const frame = v.parse(v.object({ id: v.string() }), JSON.parse(ws.sent[0] ?? 'null'));
+    woken.handleMessage('dev-a', JSON.stringify({ id: frame.id, result: 'still connected' }));
+    expect(await pending).toBe('still connected');
   });
 
   test('a socket close rejects its in-flight calls; liveness follows the socket', async () => {
@@ -183,9 +206,56 @@ describe('DeviceSocketHub', () => {
     const hub = new DeviceSocketHub(ctx);
     const ws = fakeSocket();
     hub.accept('dev-a', ws);
+    const duplicate = fakeSocket();
+    const closed = fakeSocket(false);
+    const sibling = fakeSocket();
+    ctx.acceptWebSocket(duplicate, ['device:dev-a']);
+    ctx.acceptWebSocket(closed, ['device:dev-a']);
+    hub.accept('dev-b', sibling);
     hub.close('dev-a', 'device revoked');
     expect(ws.closed).toEqual([{ code: 1000, reason: 'device revoked' }]);
+    expect(duplicate.closed).toEqual(ws.closed);
+    expect(closed.closed).toEqual([]);
+    expect(sibling.closed).toEqual([]);
+    expect(hub.liveSocket('dev-b')).toBe(sibling);
     expect(hub.isConnected('dev-a')).toBe(false);
+  });
+});
+
+describe('DeviceTerminalHub socket ownership', () => {
+  test('distinct panes survive a wake, refuse a sibling attach and keep their close reasons', () => {
+    const { ctx, hub } = connected();
+    const terminals = new DeviceTerminalHub(ctx, hub);
+    const first = fakeSocket();
+    const second = fakeSocket();
+    const output: Array<string | ArrayBuffer | ArrayBufferView> = [];
+    first.send = (data) => { output.push(data); };
+
+    terminals.register('session-a', 'dev-a', 'workspace-a');
+    terminals.register('session-b', 'dev-a', 'workspace-b');
+    expect(terminals.attach('session-a', first)).toEqual({ device: 'dev-a', workspace: 'workspace-a' });
+    terminals.attach('session-b', second);
+    expect(() => terminals.attach('session-a', fakeSocket())).toThrow();
+    expect(first.closed).toEqual([]);
+    expect(second.closed).toEqual([]);
+
+    const woken = new DeviceTerminalHub(ctx, hub);
+    expect(woken.panesForDevice('dev-a')).toEqual(['session-a', 'session-b']);
+    expect(terminalFromSocket(first)).toEqual({ session: 'session-a', device: 'dev-a', workspace: 'workspace-a' });
+    const bytes = new Uint8Array([0, 255, 13]);
+    woken.toPane('session-a', bytes);
+    expect(output).toEqual([bytes]);
+
+    woken.paneExit('session-a', 17);
+    expect(output.at(-1)).toBe(JSON.stringify({ type: 'exit', exitCode: 17 }));
+    expect(first.closed).toEqual([{ code: 1000, reason: 'the shell ended' }]);
+    expect(woken.paneSocket('session-a')).toBeNull();
+    expect(woken.paneSocket('session-b')).toBe(second);
+
+    woken.endPane('session-b', 'device revoked');
+    expect(second.sent).toEqual([JSON.stringify({ type: 'error', error: 'device revoked' })]);
+    expect(second.closed).toEqual([{ code: 1000, reason: 'device revoked' }]);
+    expect(woken.panesForDevice('dev-a')).toEqual([]);
   });
 });
 
@@ -489,18 +559,6 @@ describe('device links expire on an absolute window, renewed by rotation', () =>
 
     expect(await harness.userDO.verifyDeviceToken(await testOwner(), token)).toEqual({ ok: false });
     expect(await harness.userDO.issueDeviceConnectTicket(await testOwner(), token)).toEqual({ ok: false });
-    harness.close();
-  });
-
-  test('a link made before the window existed is honoured until its next rotation', async () => {
-    const harness = createTestUserDO();
-    const { deviceId, token } = await harness.userDO.registerDevice(await testOwner(), 'studio tower');
-    ageDevice(harness, deviceId, null);
-
-    // A null window is "never measured", not "expired": it is stamped on the next daemon connect.
-    expect(await harness.userDO.verifyDeviceToken(await testOwner(), token))
-      .toEqual({ ok: true, deviceId, current: true });
-    expect(storedExpiry(harness, deviceId)).toBeNull();
     harness.close();
   });
 

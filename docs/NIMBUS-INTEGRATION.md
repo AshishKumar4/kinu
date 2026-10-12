@@ -35,12 +35,16 @@ Core imports fabric directly: `packages/core/src/events/outbox.ts` builds its
 outbox on `@nimbus-sh/fabric/outbox.js`.
 
 Core 0.17.0 and worker 0.15.0 carry declared patches (package.json `//patchedDependencies:*` names each, and what
-deletes it); each part is Nimbus's own build of the source change its ask proposes:
+deletes it); each part is Nimbus's own build of the source change its ask proposes, except where a part says otherwise:
 - a stopped `bash -c` loop ends: core's shell entrypoints forward their AbortSignal to the nested shell, and worker's
   hosted shell child combines it with its own (NIMBUS-ASKS #42);
 - a client WebSocket open through a preview port holds the resident until it closes, so a quiet HMR socket keeps its dev
   server (#43: core's `PortRegistry.setClientSockets`, worker's keep-alive);
-- `connectTls` carries the program's servername, which Kinu's egress presents and checks (#44).
+- `connectTls` carries the program's servername, which Kinu's egress presents and checks (#44);
+- STARTTLS: a program's `tls.connect({ socket })` upgrades that socket through the egress (#46, patched into the staged
+  node shims alone, by `keyed-socket.ts`'s in-band ask);
+- a program's `navigator` answers as Node's (userAgent, platform, language), so pg chooses its Node transport (#47, the
+  source hunk as written).
 
 0.17 ships what 0.16's patches carried: `route`/`mutationRoute` `{ creating }` (#32), a node facet's batched output
 writes (#39), and TLS through a workspace egress (`WorkspaceEgressTls.connectTls`, #37). It also ships npm's CommonJS as

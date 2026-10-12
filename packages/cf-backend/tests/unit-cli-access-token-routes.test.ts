@@ -307,7 +307,7 @@ describe('access token scope enforcement', () => {
     // thenable: the stub is returned from an async function, which would otherwise await it forever.
     const workspace = new Proxy(workspaceObject({ claimOwner }), {
       get: (_target, member) => {
-        if (member === 'then') return undefined;
+        if (member === 'then' || member === Symbol.dispose) return undefined;
 
         if (member === 'claimOwner') return claimOwner;
 

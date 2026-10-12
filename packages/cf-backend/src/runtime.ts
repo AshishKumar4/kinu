@@ -51,6 +51,7 @@ import {
   type AgentProviderRegistry,
   type UserCredentialClient,
   type UserCredentialSource,
+  userCredentials,
 } from "./providers/agent-registry";
 import { ownerCaller, type UserCaller } from "@kinu.run/core";
 import { adaptMemory, backfillMemoryVectors } from "@kinu.run/core";
@@ -178,9 +179,13 @@ interface RootApprovalClient {
 }
 
 function userCredentialSourceFor(env: Env, actor: ActorRuntimeIdentity): UserCredentialSource | null {
-  const stub = userDOStubFor(env, actor);
+  const userId = actor.ownerUserId();
 
-  return stub ? { stub, caller: () => userCallerFor(actor) } : null;
+  if (!userId) return null;
+  const namespace: RuntimeUserDONamespace = env.UserDO;
+  const userObject = namespace.idFromName(userId);
+
+  return userCredentials(() => namespace.get(userObject), () => userCallerFor(actor));
 }
 
 export type CFRuntime = AgentRuntime & {
@@ -316,6 +321,7 @@ export function createCFRuntime(
     home,
     userRoots: () => agentFileVfs.userRoots(),
     stored: async (name) => await sessionShell.cwd?.(name) ?? null,
+    detachFrees: true,
   });
 
   const planes = cloudPlanes(home);
@@ -396,8 +402,8 @@ export function createCFRuntime(
     try {
       const sdk = env.KinuDevbox.getByName(sandboxId);
 
-      // Egress is configured before the container runs anything, not in `onStart` (too late); until then
-      // the container has no network, so it fails closed. Only the owning workspace configures.
+      // Egress is configured before the container runs anything, not in `onStart` (too late): until then its web
+      // requests reach no vault, so no placeholder is spent. Only the owning workspace configures.
       const handle = adaptCloudflareSandbox(sdk, async () => {
         hooks.boxUse.used = true;
         const userId = actor.ownerUserId();

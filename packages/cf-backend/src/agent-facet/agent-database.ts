@@ -11,7 +11,7 @@ localContextTree, type ContextEditor, type ContextTree, type ConversationRecall,
 type ActorHandle, type AgentOwnInspection, type ChatHistoryPage, type PositionPageRequest, type SerializedMessage,
 type SessionTranscriptReader, type SubordinateInspectionResult, type SubordinateReportLedger, type ModelPricing, type SqlExecutor,
 type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HeadReport, type HostedActor,
-type Executor, type JsonObject, type RemoteSessionBox, type SqlValue, WORKSPACE_ROOT, cloudPlanes, answersForDrainTurns,
+type Executor, type JsonObject, type NimbusSandboxFiles, type SqlValue, WORKSPACE_ROOT, cloudPlanes, answersForDrainTurns,
 initPendingSendTables, initTerminalEffectTable, PendingSendStore, contextFill, announcementOf, classifyRunEnd, closeTurnRun, TurnReports,
 PlanReviewStore, type PlanReview, } from '@kinu.run/core'
 import { attempt, detach, diagnostics, hold, KinuError, logged, settle, settleSync } from '@kinu.run/core/obs';
@@ -116,9 +116,9 @@ export class AgentDatabase {
   constructor(
     private readonly storage: DurableObjectStorage,
     private readonly workspace: {
-      readonly agent: () => RemoteSessionBox;
+      readonly agent: () => NimbusSandboxFiles;
       readonly home: string;
-      readonly state: () => RemoteSessionBox;
+      readonly state: () => NimbusSandboxFiles;
       readonly enqueueTurn: BackendHost['enqueueTurn'];
       readonly broadcast: BackendHost['broadcast'];
       readonly turnInFlight: () => boolean;

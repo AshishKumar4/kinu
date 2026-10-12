@@ -4518,6 +4518,33 @@ explicitly drops guest capabilities: native `user: '65534:65534'` alone still re
 0700 directory in job `20261009181805-03542862`. All container and disk contracts, the desktop
 client and cleanup passed. Source limits, full-depth walks and real-model behavior are not timed here.
 
+D82. Kinu's container has raw internet; HTTP and HTTPS still enter the vault first (2026-10-11, the
+owner's decision). This reverses D38's "Kinu starts with raw internet disabled". `KinuDevbox`
+sets `enableInternet = true`; native interception of HTTP and HTTPS and the exact-host routes before
+`KinuEgress` are unchanged, so every web request still meets placeholder resolution and destination
+judgement. Raw TCP and UDP leave directly and carry nothing Kinu resolves.
+
+Both shapes measured on real containers by the contract tier's probe (`--probe` with a box script
+listing destinations; recorder fallback in place of `KinuEgress`). Internet off, job
+`20261011204152-45e72cdb`: HTTP and HTTPS on 80/443 were intercepted; 8080/8443 timed out; raw TCP to
+github.com:22, smtp.gmail.com:587/25, a public PostgreSQL 5432 and MySQL 4497 timed out at 16 s; UDP DNS
+to 1.1.1.1, 8.8.8.8 and 2606:4700:4700::1111 answered. Internet on, job `20261011210628-8de56f35`: HTTP
+and HTTPS on 80/443 still reached the interception (four requests recorded, including
+`http://169.254.169.254/latest/meta-data/` and `http://[fd00::1]`, which `KinuEgress` refuses by
+`refusedHostname`); github.com:22 answered `SSH-2.0`, smtp.gmail.com:587 and :25 answered `220`, MySQL
+its handshake, PostgreSQL connected; UDP DNS answered. Private destinations with internet on, job
+`20261011220601-9435f42c`: 10.0.0.2, 10.0.0.254, 10.1.0.1, 10.255.255.1, 172.16.0.1, 172.31.255.1,
+192.168.0.1, 192.168.1.1, 100.64.0.1, 100.100.100.200, 169.254.169.254, 169.254.170.2, fd00::1 and
+fd00::119:1 answered on 80 only with the interception's own reply, accepted 443 into the interception
+with no reply, and timed out on 22, 2375, 3306, 5432, 6379, 8080, 9000 and 10250; UDP 53, 123 and 161
+to private addresses timed out; 10.0.0.1 refused at once. Nothing private answered past the
+interception.
+
+The cost is D44's: a container with the internet enabled waits for the platform's first DNS answer,
+about a second, which the wake's store mount meets (D44's paired store-mount phase medians: 2,035 ms
+enabled against 1,910 ms disabled). A workspace with no owner configures no vault, so its web
+requests go out unrouted, as its raw sockets do.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean

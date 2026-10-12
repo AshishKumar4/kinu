@@ -14,10 +14,10 @@ import {
   createParentExecutor, createSandboxExecutor,
   DefaultExecutionRouter,
   DEVICE_ERRORS, deviceFailure,
-  type ExecutorProvider, type RemoteSessionBox, type SandboxHandle, type ToolFailureCensus, ToolOutcomeSchema, failedToolOutcome,
+  type ExecutorProvider, type SandboxHandle, type ToolFailureCensus, ToolOutcomeSchema, failedToolOutcome,
   WORKSPACE_ROOT,
 } from '../src/index';
-import { sessionFilesOver } from '@kinu.run/test-utils/vfs';
+import { sessionFilesOver, type SessionBox } from '@kinu.run/test-utils/vfs';
 import {
   classifyErrorCode, createRecordingLogger, ERROR_CODES, KinuError,
   type ErrorCode, type RecordingLogger, refusalOf, renderThrownChain,
@@ -574,12 +574,12 @@ describe('each executor tool files its own failure in the right part', () => {
     // `unsupported`, so `refused`: this handle has no `runCode` and retrying cannot grow one.
     const { rt } = createTestRuntime();
 
-    const box: RemoteSessionBox = { ready: async () => {},
-      exec: async () => ({ command: 'noop', success: true, exitCode: 0, stdout: '', stderr: '' }),
+    const box: SessionBox = { ready: async () => {},
+      exec: async () => ({ command: 'noop', success: true, exitCode: 0, stdout: '', stderr: '', duration: 0, timestamp: 0 }),
       files: sessionFilesOver() };
 
     const narrow = createNimbusWorkspaceExecutor({
-      box, inline: { vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), memory: rt.memory, craftStore: rt.craftStore },
+      box, inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), memory: rt.memory, craftStore: rt.craftStore },
     });
 
     const refusal = await narrow.tools.runCode.execute('print(1)');

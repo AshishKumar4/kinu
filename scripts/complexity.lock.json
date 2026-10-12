@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-11",
-  "files": 3174,
-  "functions": 83234,
+  "files": 3184,
+  "functions": 83554,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -227,10 +227,6 @@
     },
     {
       "key": "packages/core/src/strategy/swarm-resume.ts#outcomeFacts",
-      "complexity": 28
-    },
-    {
-      "key": "packages/core/src/vfs/diff.ts#diffLines",
       "complexity": 28
     },
     {

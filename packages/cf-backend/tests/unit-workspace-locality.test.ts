@@ -347,7 +347,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
 
     const alpha = workspace.box('subordinate:alpha');
     const beta = workspace.box('head:beta');
-    const work = { name: 'work' };
+    const work = { shellId: 'work' };
     expect(await alpha.exec('cd /home/main/alpha', work)).toMatchObject({ exitCode: 0 });
     expect(await alpha.exec('pwd', work)).toMatchObject({ stdout: '/home/main/alpha\n' });
     expect(await alpha.shellCwd?.('work')).toBe('/home/main/alpha');

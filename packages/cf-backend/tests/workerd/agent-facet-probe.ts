@@ -11,14 +11,15 @@ import { hostNodeSeat, nodeCodemodeTool } from '../../src/hosted-actors';
 import { HIRE_CHILD_MODEL, hireControlUrl, hireModelsBaseUrl, JOB_MISSION, type JobRow } from './hire-shapes';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { hostedActorPlacement } from '../../src/actor-hosting';
-import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
+import { ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
+import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { AgentWorkspaceRPC } from '../../src/agent-facets';
 import { SlateBinding } from '../../src/slates/bindings';
 import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 import { createRuntimeExecutor, jobContextAnswers } from '../../src/codemode-sandbox';
 import { SLATE_STORAGE_BINDING, type SlateSurfaceResult } from '@kinu.run/core';
 import type { AgentFacet } from './agent-facet-probe-agent';
-import type { AgentFacetAnswer, CraftedFromNodeObservation, NodeJobObservation, OnePlaneObservation, ProbeContention, RelayedAnswer, SwarmFacetObservation } from './agent-facet-shapes';
+import type { CraftedFromNodeObservation, NodeJobObservation, OnePlaneObservation, ProbeContention, RelayedAnswer, SwarmFacetObservation } from './agent-facet-shapes';
 
 export * from '../../src/server';
 
@@ -105,8 +106,6 @@ export class OrchestratorAgent extends ProductionOrchestrator {
     if (homeName === null) throw new Error('a subordinate has a home');
     const home = agentHome(homeName);
     const facet = await this.agentFacetOf<AgentFacet>(child.actorId);
-    const agentShell: AgentFacetAnswer = await facet.exec('pwd; id -u');
-
     await facet.write(`${home}/a`, 'written by the agent');
     const main = this.workspaceBox(hostedActorPlacement(directory.describe(directory.main())).shellId);
     const mainCat = await main.exec(`cat ${home}/a`);
@@ -115,8 +114,8 @@ export class OrchestratorAgent extends ProductionOrchestrator {
 
     return {
       home,
-      agentShell,
       mainRead: await readText(main.store({ home: WORKSPACE_ROOT }), `${home}/a`),
+      writer: (await main.store({ home: WORKSPACE_ROOT }).stat(`${home}/a`))?.uid ?? null,
       mainCat: { exitCode: mainCat.exitCode, stdout: mainCat.stdout, stderr: mainCat.stderr },
       sameIsolate: (await facet.boot()) === bootId,
     };

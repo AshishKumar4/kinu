@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers';
 import { expect, it } from 'vitest';
 import * as v from 'valibot';
 import { SLATE_PAGE_PREAMBLE } from '@kinu.run/core';
+import { FACET_IMAGE_WRITE_SLICE_BYTES } from '@nimbus-sh/fabric/image-store.js';
 
 it('runs an authored class: the prototype is the surface and the reserved storage round-trips', async () => {
   const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('resident-class'));
@@ -75,6 +76,39 @@ it('a slate edited and rebooted leaves no image of the source it no longer runs'
     expect(await subject.call('which', [])).toEqual({ ok: true, value: '2' });
     expect(second.length).toBe(first.length);
     expect(second).not.toEqual(first);
+  } finally {
+    await subject.stop();
+  }
+});
+
+it('reuses complete images and rebuilds an interrupted one at the same content address', async () => {
+  const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('image-completeness'));
+
+  const source = [
+    'import { SlateObject } from "kinu:slate";',
+    'export class Slate extends SlateObject {',
+    '  which() { return "image café 界 𠮷"; }',
+    '}',
+  ].join('\n');
+
+  const browser = `<!doctype html><html><body>${'café 界 𠮷'.repeat(FACET_IMAGE_WRITE_SLICE_BYTES / 8)}</body></html>`;
+  const boot = { source, browser, project: { main: 'server.ts', browser: 'index.html' } };
+
+  try {
+    await subject.start(boot);
+    const first = await subject.facetImageVersions();
+
+    await subject.start(boot);
+    expect(await subject.facetImageVersions()).toEqual(first);
+
+    await subject.interruptApplicationImage();
+    await subject.start(boot);
+    expect(await subject.call('which', [])).toEqual({ ok: true, value: 'image café 界 𠮷' });
+    expect(await subject.facetImages()).toEqual(first.map((image) => image.name));
+    const page = await subject.route('/');
+
+    expect(page.status).toBe(200);
+    expect(page.body.replace(SLATE_PAGE_PREAMBLE, '')).toBe(browser);
   } finally {
     await subject.stop();
   }

@@ -7,8 +7,7 @@ import { createNimbusWorkspaceExecutor } from '../src/tools/inline-executor';
 import {
   nimbusSessionFiles,
   nimbusSessionShell,
-  type RemoteSessionBox,
-} from '../src/execution/nimbus';
+  } from '../src/execution/nimbus';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { DefaultExecutionRouter } from '../src/execution/router';
 import { createWorkspace, workspaceGenerationStorage } from '../src/vfs/nimbus-workspace';
@@ -16,7 +15,7 @@ import type { SQLQueryBindings } from 'bun:sqlite';
 import type { SqlValue } from '@nimbus-sh/core';
 import type { ExecutorToolResult } from '../src/execution/types';
 import { present } from '@kinu.run/test-utils';
-import { sessionFilesOver } from '@kinu.run/test-utils/vfs';
+import { sessionFilesOver, type SessionBox } from '@kinu.run/test-utils/vfs';
 import { CommandResultSchema } from '../src/execution/exec-result';
 import { executorNamespace } from '../src/tools/executor-operations';
 import { namespaceDeclaration } from '../src/tools/operation-surfaces';
@@ -34,7 +33,7 @@ function fakeBox() {
   const decoder = new TextDecoder();
   const sdkFiles = sessionFilesOver(files);
 
-  const box: RemoteSessionBox = {
+  const box: SessionBox = {
     ready: async () => {},
     exec: async (command) => {
       const match = /^cat (.+)$/.exec(command);
@@ -45,13 +44,15 @@ function fakeBox() {
         stdout: match ? decoder.decode(files.get(match[1]) ?? new Uint8Array()) : '',
         stderr: '',
         exitCode: 0,
+        duration: 0,
+        timestamp: 0,
       };
     },
     startProcess: async (command) => ({
       command,
       pid: 41,
-      process: { pid: 41, command, state: 'running', exitCode: null, longRunning: true },
-      ports: [{ port: 4321, pid: 41 }],
+      process: { pid: 41, command, argv: [command], cwd: '/home/main', state: 'running', exitCode: null, startTime: 1, endTime: null, longRunning: true, attachedTty: false },
+      ports: [{ port: 4321, pid: 41, registeredAt: 1, capability: 'cap' }],
       startedAt: 1,
     }),
     files: sdkFiles,
@@ -74,7 +75,7 @@ describe('hosted Nimbus workspace provider', () => {
   test('one workspace namespace owns both files and the live session', async () => {
     const { rt } = createTestRuntime();
     const box = fakeBox();
-    const vfs = nimbusSessionFiles(box, { home: WORKSPACE_ROOT });
+    const vfs = nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT });
 
     const provider = createNimbusWorkspaceExecutor({
       box,
@@ -126,7 +127,7 @@ describe('hosted Nimbus workspace provider', () => {
     const box = fakeBox();
 
     const inline = {
-      vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }),
+      vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }),
       shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }),
       memory: rt.memory,
       craftStore: rt.craftStore,
@@ -144,7 +145,7 @@ describe('hosted Nimbus workspace provider', () => {
   test('a command the box answers 127 for names itself and the two remedies', async () => {
     const box = fakeBox();
     box.exec = async (command) => ({
-      command, success: false, stdout: '', stderr: 'bun: command not found', exitCode: 127,
+      command, success: false, stdout: '', stderr: 'bun: command not found', exitCode: 127, duration: 0, timestamp: 0,
     });
     box.runtimes = { list: async () => ({ installed: [], available: [{ name: 'bun' }] }) };
 
@@ -162,7 +163,7 @@ describe('hosted Nimbus workspace provider', () => {
     const provider = createNimbusWorkspaceExecutor({
       box,
       inline: {
-        vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }),
+        vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }),
         memory: rt.memory, craftStore: rt.craftStore, sql: rt.storage.sql,
       },
     });
@@ -179,8 +180,8 @@ describe('hosted Nimbus workspace provider', () => {
   test('a box without a runtime catalog still names sandbox, and real failures pass through', async () => {
     const box = fakeBox();
     box.exec = async (command) => command.startsWith('exit')
-      ? { command, success: false, stdout: '', stderr: 'no', exitCode: 2 }
-      : { command, success: false, stdout: '', stderr: 'grep: command not found', exitCode: 127 };
+      ? { command, success: false, stdout: '', stderr: 'no', exitCode: 2, duration: 0, timestamp: 0 }
+      : { command, success: false, stdout: '', stderr: 'grep: command not found', exitCode: 127, duration: 0, timestamp: 0 };
     // Nothing installable: the text may not promise `nimbus install`.
 
     const missed = await nimbusSessionShell(box, { home: WORKSPACE_ROOT }).exec('grep -r thing .');
@@ -197,7 +198,7 @@ describe('hosted Nimbus workspace provider', () => {
   test('a runtime catalog read failure is carried into the refusal, not hidden as "no bins"', async () => {
     const box = fakeBox();
     box.exec = async (command) => ({
-      command, success: false, stdout: '', stderr: 'bun: command not found', exitCode: 127,
+      command, success: false, stdout: '', stderr: 'bun: command not found', exitCode: 127, duration: 0, timestamp: 0,
     });
     box.runtimes = { list: async () => { throw new Error('session box catalog socket closed'); } };
 
@@ -249,7 +250,7 @@ describe('hosted Nimbus workspace provider', () => {
     const provider = createNimbusWorkspaceExecutor({
       box,
       inline: {
-        vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }),
+        vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }),
         memory: rt.memory, craftStore: rt.craftStore, sql: rt.storage.sql,
       },
     });
@@ -275,7 +276,7 @@ describe('hosted Nimbus workspace provider', () => {
     const provider = createNimbusWorkspaceExecutor({
       box,
       inline: {
-        vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }),
+        vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }),
         memory: rt.memory, craftStore: rt.craftStore, sql: rt.storage.sql,
       },
     });
@@ -288,13 +289,13 @@ describe('hosted Nimbus workspace provider', () => {
 
 describe('the workspace process and port surface', () => {
 
-  function blockedProvider(box: RemoteSessionBox) {
+  function blockedProvider(box: SessionBox) {
     const { rt } = createTestRuntime();
 
     return createNimbusWorkspaceExecutor({
       box,
       inline: {
-        vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }),
+        vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }),
         memory: rt.memory, craftStore: rt.craftStore, sql: rt.storage.sql,
       },
     });
@@ -303,7 +304,7 @@ describe('the workspace process and port surface', () => {
   test('a command that exited nonzero retains its execution failure', async () => {
     const box = fakeBox();
     box.exec = async (command) => ({
-      command, success: false, stdout: '', stderr: 'node: boom', exitCode: 1,
+      command, success: false, stdout: '', stderr: 'node: boom', exitCode: 1, duration: 0, timestamp: 0,
     });
     const refusal = await blockedProvider(box).tools.exec.execute('node -e "console.log(1)"');
     expect(refusal).toMatchObject({ reason: 'io', error: expect.stringContaining('node: boom') });

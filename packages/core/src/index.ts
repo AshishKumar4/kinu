@@ -1032,8 +1032,8 @@ export {
   DeviceTerminalHub, terminalFromSocket,
   type TerminalHolder,
   nimbusSessionShell,
-  type NimbusSandboxHandle, type RemoteSessionBox,
-  type NimbusStartResult, type NimbusExecOptions, type NimbusExecResult, type NimbusPortInfo,
+  type NimbusSandboxHandle, type NimbusSandboxFiles,
+  type NimbusStartResult, type NimbusExecResult, type NimbusPortInfo,
   EXECUTOR_CAPABILITIES, NO_TIMER_DEADLINE_MS,
   type ExecutorCapability, type ExecutorKind, type ExecutorProvider, type ExecutorProviderSurface,
   type ExecutorLifecycleStatus, type ExecutorStatus,
@@ -2156,8 +2156,6 @@ export type { NamedSwarmPreset, SwarmNodeAssignment } from './strategy/swarm';
 export { SWARM_PRESET_DOCTRINE } from './strategy/swarm';
 
 export { fmtPct, fmtSpan, fmtTokens, fmtUsd, formatBytes, shortAge, timeAgo } from './utils/format';
-
-export { classifyTransientDO, retryTransientDO, type DOTransientClass } from './utils/do-rpc';
 
 export { relayedAnswer } from './utils/relayed-answer';
 

@@ -13,6 +13,7 @@ import { diagnostics, recording, settle, settleSync } from '@kinu.run/core/obs';
 import { buildCfWebSearchProvider, type BrowserRunQuickActions } from '@kinu.run/core';
 import {
   createAgentProviderRegistry,
+  userCredentials,
   type AgentProviderRegistry, type UserCredentialClient,
 } from './providers/agent-registry';
 import type { ActorReference, ModelCallSink, UserCaller } from '@kinu.run/core';
@@ -84,13 +85,13 @@ export class OwnedModelServices<Id = DurableObjectId> {
         return yield* Effect.die(new Error('Agent has no owner_user_id yet: Worker must call claimOwner before any model use.'));
       }
 
-      const userDOStub = userId
-        ? this.options.env.UserDO.get(this.options.env.UserDO.idFromName(userId))
+      const userObject = userId
+        ? this.options.env.UserDO.idFromName(userId)
         : null;
 
       this.providerRegistryCache = createAgentProviderRegistry({
         env: this.options.env,
-        userDO: userDOStub ? { stub: userDOStub, caller: this.options.getUserCaller } : null,
+        userDO: userObject === null ? null : userCredentials(() => this.options.env.UserDO.get(userObject), this.options.getUserCaller),
         appTitle: this.options.appTitle,
         onProviderWait: this.options.onProviderWait,
         accountFor: this.options.accountFor,

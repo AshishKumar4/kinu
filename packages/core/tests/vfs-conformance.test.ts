@@ -11,12 +11,13 @@ import * as v from 'valibot';
 
 import type { JsonValue } from '../src/utils/json';
 import { present } from '@kinu.run/test-utils';
+import type { SessionBox } from '@kinu.run/test-utils/vfs';
+import type { NimbusSandboxFiles } from '../src/execution/nimbus';
 import {
   sandboxFiles,
   nimbusSessionFiles,
   deviceFiles,
   type DeviceTransport,
-  type RemoteSessionBox,
   type SandboxHandle,
 } from '../src/execution/index';
 import { createWorkspaceBundle } from './helpers';
@@ -203,14 +204,14 @@ function sandboxHandle(fs: MemFs): SandboxHandle {
   return handle;
 }
 
-function nimbusHandle(fs: MemFs): RemoteSessionBox {
+function nimbusHandle(fs: MemFs): SessionBox {
   const stat = async (path: string) => {
     const found = fs.stat(path);
 
-    return found === null ? null : { type: found.isDir ? 'directory' : 'file', size: found.size, mtime: fs.mtimeMs };
+    return found === null ? null : { type: found.isDir ? 'directory' : 'file', size: found.size, mtime: fs.mtimeMs, mode: found.isDir ? 0o40755 : 0o100644 };
   };
 
-  const files: RemoteSessionBox['files'] = {
+  const files: NimbusSandboxFiles = {
     as: () => files,
     async readBytes(path: string) { return fs.read(path); },
     async readRange(path: string, offset: number, length: number) { return fs.read(path)?.slice(offset, offset + length) ?? null; },
@@ -234,11 +235,11 @@ function nimbusHandle(fs: MemFs): RemoteSessionBox {
     async delete(path: string) { fs.del(path); },
   };
 
-  const handle: RemoteSessionBox = {
+  const handle: SessionBox = {
     async ready() {},
     files,
     async exec(cmd: string) {
-      return { command: cmd, success: true, exitCode: 0, stdout: '', stderr: '' };
+      return { command: cmd, success: true, exitCode: 0, stdout: '', stderr: '', duration: 0, timestamp: 0 };
     },
   };
 
@@ -345,7 +346,7 @@ const cases: Case[] = [
   { name: 'sandbox file view',
     make: () => sandboxFiles(sandboxHandle(new MemFs())), path: (s) => `/conf/${s}` },
   { name: 'nimbus session file view',
-    make: () => nimbusSessionFiles(nimbusHandle(new MemFs()), { home: '/' }), path: (s) => `/conf/${s}` },
+    make: () => nimbusSessionFiles(nimbusHandle(new MemFs()).files, { home: '/' }), path: (s) => `/conf/${s}` },
   { name: 'device file view',
     make: () => deviceFiles(deviceTransport(new MemFs()), {
       consentedRoot: async () => '/', deviceHome: async () => '/', scope: async () => 'unconfined',

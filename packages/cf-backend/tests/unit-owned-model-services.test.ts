@@ -3,7 +3,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { testOwner } from './helpers/user-do';
 import { generateText } from 'ai';
-import { createMockFetch, createTestActors, createTestSql, unobservedSpend, WORKERS_AI_MODELS_DEV } from '@kinu.run/test-utils';
+import { createMockFetch, createTestActors, createTestSql, unobservedSpend, OPENAI_RESPONSES_BODY, WORKERS_AI_MODELS_DEV } from '@kinu.run/test-utils';
 import { OwnedModelServices, type OwnedModelEnv } from '../src/owned-model-services';
 import type { ModelRelayHub } from '../src/egress/model-relay-route';
 import { NO_RELAY_MACHINE } from './helpers/user-credentials';
@@ -60,6 +60,61 @@ const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
 
 describe('OwnedModelServices', () => {
+  test('successive model calls and a credential listing own fresh stubs after a dropped auth read', async () => {
+    const issued: number[] = [];
+    const disposed: number[] = [];
+    let dropped = false;
+    const account = fakeUserDO({ 'openai.bearer': { Authorization: 'Bearer fresh-auth' } });
+    const env = fakeEnv();
+    env.UserDO.get = () => {
+      const id = issued.length + 1;
+      issued.push(id);
+      let broken = false;
+
+      return {
+        ...account,
+        [Symbol.dispose]() { broken = true; disposed.push(id); },
+        async getAuth(caller, key) {
+          if (broken) throw new Error('Network connection lost.');
+
+          if (!dropped) {
+            dropped = true;
+            broken = true;
+            throw new Error('Network connection lost.');
+          }
+
+          return await account.getAuth(caller, key);
+        },
+        async listCredentials(caller) {
+          if (broken) throw new Error('disposed credential stub');
+
+          return await account.listCredentials(caller);
+        },
+      };
+    };
+
+    const requests = createMockFetch([{ match: 'api.openai.com', respond: { body: OPENAI_RESPONSES_BODY } }]);
+    globalThis.fetch = requests.fetch;
+
+    const services = new OwnedModelServices({
+      env, agentName: () => 'actor', workspaceId: () => 'workspace', appTitle: 'Kinu', ownerRequired: true,
+      getOwnerUserId: () => 'owner', getUserCaller: testOwner, getCredentialsRevision: async () => 0,
+      reportModelCall: unobservedSpend,
+    });
+
+    const model = services.resolveModel('openai/gpt-5.5');
+
+    await generateText({ model, prompt: 'first' });
+    await generateText({ model, prompt: 'second' });
+    const registry = services.providerRegistry();
+    expect(await registry.deps.listCredentialKeys?.()).toEqual(['openai.bearer']);
+    expect(await registry.deps.listCredentialKeys?.()).toEqual(['openai.bearer']);
+    expect(requests.requests.map((request) => request.headers.authorization)).toEqual(['Bearer fresh-auth', 'Bearer fresh-auth']);
+    // The relay owns the first stub; each auth/listing attempt owns and releases another.
+    expect(disposed).toEqual(issued.slice(1));
+    expect(disposed).toHaveLength(4);
+  });
+
   test('required owners fail with ActorAgent\'s established error', () => {
     const services = new OwnedModelServices({
       env: fakeEnv(),

@@ -6,7 +6,7 @@ import { expect, test } from 'bun:test';
 import { hostedExplorationHarness, orchestratorHarness } from './helpers/actor-harness';
 import { createTestWorkspace } from '../../core/tests/helpers';
 import { createTestActorsOver, seedTranscriptEntry } from '@kinu.run/test-utils';
-import { CHAT_SESSION_ID, PLATFORM_CATALOG, SessionHistory, WORKSPACE_ROOT, actorReferenceOf, type RemoteSessionBox, type StoredRow } from '@kinu.run/core';
+import { CHAT_SESSION_ID, PLATFORM_CATALOG, SessionHistory, WORKSPACE_ROOT, actorReferenceOf, type NimbusSandboxFiles, type StoredRow } from '@kinu.run/core';
 import { AgentDatabase } from '../src/agent-facet/agent-database';
 import { makeCtx } from './helpers/platform-context';
 
@@ -16,12 +16,10 @@ function retainedDatabase() {
   const child = actors.directory.create({ parent: actors.main, name: 'helper', creationId: 'helper', origin: 'user', lifetime: 'task' });
   const refuse = (): never => { throw new Error('a retained inspection invoked a mutating workspace operation'); };
 
-  const files: RemoteSessionBox['files'] = {
+  const files: NimbusSandboxFiles = {
     as: () => files, readBytes: async (path) => created.vfs.readFile(path), readRange: refuse,
     write: refuse, list: refuse, stat: refuse, lstat: refuse, readlink: refuse, rename: refuse, mkdir: refuse, delete: refuse,
   };
-
-  const box: RemoteSessionBox = { ready: refuse, exec: refuse, files };
 
   const context = makeCtx(created.db, 'retained-agent');
   let indexInitializations = 0;
@@ -33,7 +31,7 @@ function retainedDatabase() {
   };
 
   const database = new AgentDatabase(context.storage, {
-    agent: () => box, home: WORKSPACE_ROOT, state: refuse, enqueueTurn: refuse, broadcast: refuse,
+    agent: () => files, home: WORKSPACE_ROOT, state: refuse, enqueueTurn: refuse, broadcast: refuse,
     turnInFlight: () => false, memory: refuse, program: refuse, sayToParent: refuse, logActivity: refuse,
   });
 

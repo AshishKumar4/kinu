@@ -1,5 +1,5 @@
-/** Native container egress policy. D38 records the 2026-09-28/29 runtime measurements:
- * Kinu has no raw internet; HTTP/HTTPS go through the owner vault; generic Devbox stays public.
+/** Native container egress policy. D38 records the 2026-09-28/29 runtime measurements, D82 the 2026-10-11 ones:
+ * every container has raw internet; Kinu's HTTP/HTTPS go through the owner vault first.
  * Configuration and source lineage jointly define the private set: every bound container is a Devbox.
  * Generic classes come from Devbox's source lineage. This is a source proof; its blind spots print
  * on every green run. */
@@ -383,7 +383,7 @@ if (import.meta.main) {
   const fromWrangler = bound;
   const fromSource = declaredSandboxClasses(sources);
   const classes = [...new Set([...fromWrangler, ...fromSource])].sort();
-  const privateAudit = auditInterception(sources, classes);
+  const privateAudit = auditInterception(sources, classes, true);
   const lineage = sandboxLineage(sources);
 
   const generic = [...containerClasses(sources)].filter(([name, cls]) => lineage.has(name)
@@ -411,9 +411,9 @@ if (import.meta.main) {
   }
 
   console.log('egress-interception: ok — ' + measured);
-  console.log('egress-interception: private network denied: ' + classes.join(', ') + '; public network retained: ' + generic.join(', '));
+  console.log('egress-interception: raw network open, web through the vault: ' + classes.join(', ') + '; public network: ' + generic.join(', '));
   console.log('egress-interception: HTTP and HTTPS enter the host router; Kinu binds the owner vault before the public-network fallback');
   console.log('egress-interception: blind spots: this proves literal/inherited policy and explicit native call/binding edges, not arbitrary control-flow equivalence or runtime platform enforcement. Dynamic aliases and metaprogramming are not credited. Vault authorization is covered by its behavioral tests; native routing, TLS trust and platform behavior by D38.');
-  console.log('egress-interception: DNS was measured closed with internet disabled on 0.2.0+28bc79307: UDP/TCP 53 did not escape and nonexistent names resolved to the same private ULA. This is a platform observation, not a source proof.');
+  console.log('egress-interception: D82 measured both shapes on real containers (2026-10-11): with raw internet, TCP and UDP reach public hosts and no private address answers past the interception; a platform observation, not a source proof.');
   process.exit(0);
 }
