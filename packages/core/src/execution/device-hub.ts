@@ -113,7 +113,9 @@ export class DeviceSocketHub {
       return 'serve';
     }
 
+    // Whatever this socket was admitted to before, it serves nothing now: no tunnel, and none rebuilt after a wake.
     this.dropTunnel(deviceId);
+    this.withdraw(deviceId);
 
     if (version === DEVICE_PROTOCOL_VERSION - 1) return 'update';
     this.refuse(deviceId);
@@ -186,6 +188,17 @@ export class DeviceSocketHub {
 
   private recordProbe(deviceId: string, probe: DeviceToolchain): void {
     this.annotate(deviceId, { probe: { present: [...probe.present], asked: [...probe.asked], probedAt: probe.probedAt } });
+  }
+
+  /** The socket's attachment without its serving admission (protocol and methods), so no tunnel is built from it. */
+  private withdraw(deviceId: string): void {
+    const ws = this.liveSocket(deviceId);
+    const attachment = ws === null ? null : this.sockets.read(ws);
+
+    if (ws === null || attachment === null) return;
+    const { protocolVersion: _protocol, features: _features, ...kept } = attachment;
+
+    this.sockets.write(ws, kept);
   }
 
   private annotate(deviceId: string, patch: Partial<Omit<z.infer<typeof DeviceAttachmentSchema>, 'device'>>): void {
@@ -293,7 +306,8 @@ export class DeviceSocketHub {
     if (!ws) return null;
     const attachment = this.sockets.read(ws);
 
-    if (attachment?.protocolVersion === undefined) return null;
+    // Only a socket admitted to serve this protocol carries calls.
+    if (attachment?.protocolVersion !== DEVICE_PROTOCOL_VERSION) return null;
     const tunnel = new DeviceTunnel(ws, undefined, undefined, REAL_CLOCK);
     const interrupted = attachment.relays ?? [];
 

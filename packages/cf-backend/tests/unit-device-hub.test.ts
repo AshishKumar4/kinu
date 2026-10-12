@@ -149,6 +149,17 @@ describe('DeviceSocketHub', () => {
     expect(await reply).toBe('hi');
   });
 
+  test('a daemon admitted only for update keeps no serving tunnel, even on a socket that served before', () => {
+    const { ctx, hub } = connected();
+
+    expect(hub.tunnel('dev-a')).not.toBeNull();
+    expect(hub.hello('dev-a', DEVICE_PROTOCOL_VERSION - 1, DEVICE_FEATURES)).toBe('update');
+    expect(hub.tunnel('dev-a')).toBeNull();
+    expect(hub.relayDevice()).toBeNull();
+    // Nor after a wake, rebuilt from the socket's attachment.
+    expect(new DeviceSocketHub(ctx).tunnel('dev-a')).toBeNull();
+  });
+
   test('a socket close rejects its in-flight calls; liveness follows the socket', async () => {
     const ctx = fakeCtx();
     const hub = new DeviceSocketHub(ctx);
