@@ -507,7 +507,8 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     readonly availableModels?: readonly string[];
     readonly betaSwarms?: boolean;
   } | null = null;
-  /** Answer these specs as the provider catalog would; any other spec asks the real catalog. */
+  /** Answer these specs as the provider catalog would; any other is one it does not list, so no suite reads models.dev
+   *  over the network, whose answer lands after a lap-counted wait gave up. */
   harnessCatalogModels(entries: Readonly<Record<string, Omit<ModelInfo, 'id'>>>): void {
     this._harnessCatalog = new Map(Object.entries(entries));
   }
@@ -515,7 +516,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   protected override async catalogEntry(spec: string): Promise<ModelInfo | null> {
     const entry = this._harnessCatalog.get(spec);
 
-    return entry === undefined ? super.catalogEntry(spec) : { ...entry, id: spec };
+    return entry === undefined ? null : { ...entry, id: spec };
   }
   /** A cold activation: the owner row persists in SQL, in-memory latches do not. */
   /** A further activation through the actor's own `onStart`. */
