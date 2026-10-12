@@ -665,10 +665,10 @@ describe('completedWorkTurns — the auto-GEPA cadence source query', () => {
 });
 
 describe('RunEventRecorder.latestRunHeader', () => {
-  /** A run the person started, recorded as `processTurn` records a user turn: under its own id. */
+  /** A run the person started, recorded as `processTurn` records a user turn: under its own id, stamped theirs. */
   const asked = (text: string) => ({
     type: 'run_start' as const, agentId: 'a', userMessage: text,
-    turn: { turnId: `turn-${text}`, messageId: `msg-${text}`, kind: 'user' as const, text },
+    turn: { turnId: `turn-${text}`, messageId: `msg-${text}`, kind: 'user' as const, text, metadata: { kinuAuthor: 'operator' } },
   });
 
   test('the newest real run leads, over many intervening events and the reserved aggregate', () => {

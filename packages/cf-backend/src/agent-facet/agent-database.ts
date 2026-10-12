@@ -16,7 +16,7 @@ import {
   initPendingSendTables, initTerminalEffectTable, PendingSendStore, contextFill, announcementOf, classifyRunEnd, closeTurnRun, TurnReports,
   PlanReviewStore, AgentSequence, TurnFactsStore, type PlanReview, type TurnFacts,
   forkArtifactPath, localForkConversationSource, localForkConversationTarget, type ForkConversationSource, type ForkConversationTarget,
-  InProcessDeliveries, type Delivery, type DeliveryAnswer, holdConfig,
+  InProcessDeliveries, type Delivery, type DeliveryAnswer, holdConfig, holdRunHeads,
   writesSnapshotRows, HeldReads, type SqlExec,
 } from '@kinu.run/core';
 import { attempt, detach, diagnostics, hold, KinuError, logged, settle, settleSync } from '@kinu.run/core/obs';
@@ -146,6 +146,15 @@ export class AgentDatabase {
   /** This database's config, held: its writers are the stores over `sql` and {@link adopt}. */
   private readonly configs = holdConfig(this.sql);
 
+  /** Its message count, held: SessionTranscript's record and truncate, and a fork's reset and staging, run over `sql`. */
+  private readonly heldMessageCount = this.held.hold(['conversation_entries'], () => this.readable().transcript.count());
+
+  /** Its steers, held: PendingSendStore's reserve and retire run over `sql`. */
+  private readonly steers = this.held.hold(['pending_steers'], () => new PendingSendStore(this.sql, this.readable().actor.actorId).restore()
+    // A steer is a row bound to a turn; an unbound row is the chat's own send, already shown as a message.
+    .filter((row) => row.turnId !== null)
+    .map((row) => ({ id: row.id, text: row.text, state: 'queued' as const, atStep: null })));
+
   constructor(
     private readonly storage: DurableObjectStorage,
     private readonly workspace: {
@@ -163,6 +172,8 @@ export class AgentDatabase {
       readonly logActivity: AgentWorkspace['logActivity'];
     },
   ) {
+    // Run heads, held: every run_events write here is a recorder's persist over `sql`, whose publish advances them.
+    holdRunHeads(this.sql);
     initWorkspaceSchema({
       execRaw: (ddl) => { storage.sql.exec(ddl); },
       sql: this.sql,
@@ -461,17 +472,13 @@ export class AgentDatabase {
 
   /** Its standing as it reports it with what it owes: the workspace reads it in place of asking. */
   standingReport(): AgentStandingReport {
-    const { actor, transcript } = this.readable();
     const { eventRecorder } = this.actorHost().bindStores(this.reference()).stores;
 
     return {
-      messageCount: transcript.count(),
+      messageCount: this.heldMessageCount(),
       measures: eventRecorder.readContextMeasures(),
       latestRun: eventRecorder.latestRunHeader(),
-      // A steer is a row bound to a turn; an unbound row is the chat's own send, already shown as a message.
-      pendingSteers: new PendingSendStore(this.sql, actor.actorId).restore()
-        .filter((row) => row.turnId !== null)
-        .map((row) => ({ id: row.id, text: row.text, state: 'queued' as const, atStep: null })),
+      pendingSteers: this.steers(),
     };
   }
 

@@ -1255,7 +1255,7 @@ export {
   parseStoredRunEvent,
   RunEventSchema,
   recordModelOperations,
-  RunEventRecorder, type StepSpendSource,
+  RunEventRecorder, holdRunHeads, type StepSpendSource,
   boundRunEventQuery,
   RUN_EVENT_LIMIT_MAX,
   summarizeSteps,
