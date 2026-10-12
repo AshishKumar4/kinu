@@ -84,6 +84,27 @@ test("a turn an agent's isolate loses to its own reset runs again, the workspace
   expect(asked).toBe(2);
 });
 
+test("an agent's isolate adopted after its reset is built on the program its turns read, with the same tools", async () => {
+  const gateway = stubAiBinding((run) => chatCompletion(run, 'Noted.'));
+  const workspace = gatewayWorkspace(gateway);
+  const main = workspace.agent.observeRuntime().actor.actorId;
+  const offered = (index: number): readonly string[] => requestOf(gateway.runs[index] ?? gateway.runs[0]).tools;
+
+  await catalogTurn(workspace.agent, 'First.');
+  const host = await workspace.agent.agentWorkspace(main);
+  // The program a turn's preparation reads, and the one the adoption now asks for alone.
+  const prepared = await host.prepareChat({ turnId: null, mode: 'build', userText: '', parentDriven: false, awaitsReply: false });
+
+  expect(await host.scaffold()).toEqual(prepared.scaffold);
+
+  const before = gateway.runs.length;
+  workspace.agent.harnessResetAgentIsolate(workspace.agent.agentOf(main).storageKey);
+  await catalogTurn(workspace.agent, 'Second.');
+
+  expect(gateway.runs.length).toBeGreaterThan(before);
+  expect([...offered(before)].sort()).toEqual([...offered(0)].sort());
+});
+
 const originalFetch = globalThis.fetch;
 
 afterEach(() => { globalThis.fetch = originalFetch; });

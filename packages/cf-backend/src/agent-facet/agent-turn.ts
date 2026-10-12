@@ -6,7 +6,7 @@ import {
   turnSourcesFromBundle, captureOperationProfile, type ModelCallReport, type ModelOperationEvent,
   type AdvisorRecoverySnapshot, type AgentFigures, type AgentReport, type HostedActor, type OwedReport, type SerializedMessage, type SessionEvent,
   type SubordinateReportLedger, type SubordinateReportStatus, type TaskTurnEnding, type WorkMode, type ResolvedTurnProfile,
-  type RemoteReceipt, type ReplyToCommentToolDeps, type SubmitPlanToolDeps, TurnFactsStore,
+  type RemoteReceipt, type ReplyToCommentToolDeps, type StoredRow, type SubmitPlanToolDeps, TurnFactsStore,
 } from '@kinu.run/core';
 
 import { attempt, diagnostics, hold, logged, settle } from '@kinu.run/core/obs';
@@ -54,6 +54,9 @@ export interface AgentWorkspace {
   prepareTurn(turnId: string): Promise<PreparedAgentTurn>;
   /** A null id reads one between turns. */
   prepareChat(request: ChatTurnRequest): Promise<PreparedAgentTurn>;
+  /** The program the agent's isolate is built on, as a turn would read it, with its seat (and so the program) seeded.
+   *  Opens no turn and holds none: an isolate adopted between turns asks it before its chat exists. */
+  scaffold(): Promise<StoredRow>;
   chatEvent(event: SessionEvent): Promise<void>;
   /** The turn's end, with the agent's figures as it ends. */
   /** `activity`: the lines its turn logged that no tool call took. */

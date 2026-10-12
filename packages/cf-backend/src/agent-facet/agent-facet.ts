@@ -241,11 +241,11 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
   private async prepared(snapshot: AgentSnapshot): Promise<FacetChat> {
     const database = this.open(snapshot);
     // The workspace's program first: the actor is built on it.
-    const prepared = await this.workspaceCalls.prepareChat({ turnId: null, mode: 'build', userText: '', parentDriven: false, awaitsReply: false });
+    const scaffold = await this.workspaceCalls.scaffold();
 
     // The rows newest to reach it, not those this call carried: a call adopted while the program was asked for may have
     // brought newer ones (the owner's model pin), and re-adopting older rows would put the old ones back.
-    database.adopt({ ...database.current(), scaffold: [prepared.scaffold] });
+    database.adopt({ ...database.current(), scaffold: [scaffold] });
     const actor = await database.acquire();
     const chat = new FacetChat({ actor, database, workspace: this.workspaceCalls, models: (deps) => this.models(deps), storage: this.ctx.storage, pacer: this.pacer });
 

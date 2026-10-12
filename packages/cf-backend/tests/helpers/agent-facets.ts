@@ -310,6 +310,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           guard: (...args) => host.guard(...args),
           debit: (...args) => host.debit(...args),
           prepareTurn: (turnId) => host.prepareTurn(turnId),
+          scaffold: () => host.scaffold(),
           prepareChat: async (request) => {
             const copy = copiedOpenings.get(placement.storageKey);
 

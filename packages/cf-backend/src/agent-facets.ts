@@ -106,6 +106,7 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   reportModelCall(report: ModelCallReport) { return this.open(() => this.answers.reportModelCall(report)); }
   reportModelOperation(event: ModelOperationEvent) { return this.open(() => this.answers.reportModelOperation(event)); }
   prepareChat(request: ChatTurnRequest) { return this.open(() => this.answers.prepareChat(request)); }
+  scaffold() { return this.open(() => this.answers.scaffold()); }
   chatEvent(event: SessionEvent) { return this.open(() => this.answers.chatEvent(event)); }
   turnEnded(event: SessionEvent, figures: AgentFigures, activity: readonly AgentTurnActivity[]) { return this.open(() => this.answers.turnEnded(event, figures, activity)); }
   owedReport(...args: Parameters<AgentWorkspace['owedReport']>) { return this.open(() => this.answers.owedReport(...args)); }
@@ -227,6 +228,7 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
   reportModelCall(report: ModelCallReport) { return this.owned((host) => host.reportModelCall(report)); }
   reportModelOperation(event: ModelOperationEvent) { return this.owned((host) => host.reportModelOperation(event)); }
   prepareChat(request: ChatTurnRequest) { return this.owned((host) => host.prepareChat(request)); }
+  scaffold() { return this.owned((host) => host.scaffold()); }
   chatEvent(event: SessionEvent) { return this.owned((host) => host.chatEvent(event)); }
   turnEnded(event: SessionEvent, figures: AgentFigures, activity: readonly AgentTurnActivity[]) { return this.owned((host) => host.turnEnded(event, figures, activity)); }
   owedReport(...args: Parameters<AgentWorkspace['owedReport']>) { return this.owned((host) => host.owedReport(...args)); }

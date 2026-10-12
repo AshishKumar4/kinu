@@ -19,6 +19,7 @@ const unusedWorkspace: AgentWorkspaceCalls = {
   debit: unused,
   prepareTurn: unused,
   prepareChat: unused,
+  scaffold: unused,
   chatEvent: unused,
   turnEnded: unused,
   turnSettled: unused,
