@@ -208,6 +208,12 @@
     "actor_id TEXT PRIMARY KEY",
     "seq INTEGER NOT NULL"
   ],
+  "agent_stops@packages/core/src/subordinates/deliveries.ts": [
+    "actor_id TEXT PRIMARY KEY",
+    "generation INTEGER NOT NULL",
+    "retired INTEGER NOT NULL DEFAULT 0",
+    "cutoff INTEGER"
+  ],
   "agent_tasks@packages/core/src/tools/task-store.ts": [
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL",
