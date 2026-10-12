@@ -76,8 +76,41 @@ interface OpenTurn {
   readonly ended?: ReturnType<typeof Promise.withResolvers<AgentTurnEnd>>;
 }
 
+/** Values held per agent's turn: a turn id names a turn only within its agent, whose owner's message ids are its own. */
+class PerTurn<T> {
+  private readonly byActor = new Map<string, Map<string, T>>();
+
+  get(actorId: string, turnId: string): T | undefined {
+    return this.byActor.get(actorId)?.get(turnId);
+  }
+
+  set(actorId: string, turnId: string, value: T): void {
+    const turns = this.byActor.get(actorId) ?? new Map<string, T>();
+
+    turns.set(turnId, value);
+    this.byActor.set(actorId, turns);
+  }
+
+  delete(actorId: string, turnId: string): void {
+    const turns = this.byActor.get(actorId);
+
+    turns?.delete(turnId);
+
+    if (turns?.size === 0) this.byActor.delete(actorId);
+  }
+
+  /** One agent's, by turn id. */
+  of(actorId: string): ReadonlyMap<string, T> {
+    return this.byActor.get(actorId) ?? new Map<string, T>();
+  }
+
+  values(): T[] {
+    return [...this.byActor.values()].flatMap((turns) => [...turns.values()]);
+  }
+}
+
 export class AgentTurns {
-  private readonly open = new Map<string, OpenTurn>();
+  private readonly open = new PerTurn<OpenTurn>();
 
   /** Each agent's chat turn as its room last heard it: a view for the overview, never an authority. */
   private readonly chats = new Map<string, string>();
@@ -95,7 +128,7 @@ export class AgentTurns {
     const request: HostedTurnRequest = { sequenceId: input.id, body: input.task, mode: input.mode, parentDriven: false, driving: undefined, awaitsReply: false, run: { input, inference } };
     const ended = Promise.withResolvers<AgentTurnEnd>();
 
-    this.open.set(input.id, { reference, request, prepared: null, profile: null, ended });
+    this.open.set(reference.actorId, input.id, { reference, request, prepared: null, profile: null, ended });
     ledger.open(opened, Date.now());
     inference.signal?.addEventListener('abort', cut, { once: true });
 
@@ -119,14 +152,14 @@ export class AgentTurns {
       ledger.close(opened);
       // Its end, told or not: no call of it holds from here, and a later execution's opening is not touched.
       new TurnFences(this.deps.sql).ended(reference.actorId, { runId: inference.runId });
-      this.close(input.id);
+      this.close(reference.actorId, input.id);
       await Promise.all(interruptions);
     }
   }
 
   /** A run's end as its agent's report told it: its open run's caller hears it; one this activation never ran is gone. */
-  runEnded(report: RunEndReport): void {
-    const waiting = this.open.get(report.id)?.ended;
+  runEnded(actorId: string, report: RunEndReport): void {
+    const waiting = this.open.get(actorId, report.id)?.ended;
 
     if (waiting === undefined) return;
     const { outcome } = report;
@@ -141,20 +174,20 @@ export class AgentTurns {
 
   /** Each open turn's cut: aborted once a Stop, a retirement or the workspace's deletion cut it off. A call bound to it
    *  that would run more of it is refused, whatever its opening, and one already running here ends with it. */
-  private readonly cuts = new Map<string, AbortController>();
+  private readonly cuts = new PerTurn<AbortController>();
 
-  private cut(turnId: string): AbortController {
-    const cut = this.cuts.get(turnId) ?? new AbortController();
+  private cut(actorId: string, turnId: string): AbortController {
+    const cut = this.cuts.get(actorId, turnId) ?? new AbortController();
 
-    this.cuts.set(turnId, cut);
+    this.cuts.set(actorId, turnId, cut);
 
     return cut;
   }
 
-  /** What a call bound to `turnId` that runs more of it races: its turn cut off. None for a turn this activation has not
-   *  opened, which keeps no cut past its own close. */
-  cutOff(turnId: string): AbortSignal | null {
-    return this.open.has(turnId) ? this.cut(turnId).signal : null;
+  /** What a call bound to the agent's `turnId` that runs more of it races: its turn cut off. None for a turn this
+   *  activation has not opened, which keeps no cut past its own close. */
+  cutOff(actorId: string, turnId: string): AbortSignal | null {
+    return this.open.get(actorId, turnId) === undefined ? null : this.cut(actorId, turnId).signal;
   }
 
   /**
@@ -179,8 +212,8 @@ export class AgentTurns {
   }
 
   /** The turn is cut off: nothing bound to it runs from here, and what runs now ends. */
-  private cancelled(turnId: string): void {
-    const cut = this.cut(turnId);
+  private cancelled(actorId: string, turnId: string): void {
+    const cut = this.cut(actorId, turnId);
 
     if (!cut.signal.aborted) cut.abort(new KinuError('cancelled', `turn ${turnId} was stopped`));
   }
@@ -197,7 +230,7 @@ export class AgentTurns {
   /** The agent's open chat turn and the opening the fence admitted for it. */
   chatOpening(actorId: string): { readonly turnId: string; readonly fenced?: OpenedAt } | null {
     const turnId = this.chats.get(actorId);
-    const fenced = turnId === undefined ? undefined : this.open.get(turnId)?.fenced;
+    const fenced = turnId === undefined ? undefined : this.open.get(actorId, turnId)?.fenced;
 
     return turnId === undefined ? null : { turnId, ...(fenced !== undefined && { fenced }) };
   }
@@ -206,7 +239,7 @@ export class AgentTurns {
   surface(actorId: string): TurnSurface | null {
     const turnId = this.chats.get(actorId);
 
-    return turnId === undefined ? null : this.open.get(turnId)?.prepared?.surface.surface ?? null;
+    return turnId === undefined ? null : this.open.get(actorId, turnId)?.prepared?.surface.surface ?? null;
   }
 
   /** Closes the agent's chat turn if it is still the opening `at` names; null closes whichever is open. A later
@@ -214,22 +247,22 @@ export class AgentTurns {
    *  opening of its own, and is the one the fence held open. */
   chatClosed(actorId: string, at: OpenedAt | null): void {
     const turnId = this.chats.get(actorId);
-    const fenced = turnId === undefined ? undefined : this.open.get(turnId)?.fenced;
+    const fenced = turnId === undefined ? undefined : this.open.get(actorId, turnId)?.fenced;
 
     if (turnId === undefined || (at !== null && fenced !== undefined && fenced.seq !== at.seq)) return;
     this.chats.delete(actorId);
-    this.close(turnId);
+    this.close(actorId, turnId);
   }
 
-  private close(turnId: string): void {
-    const turn = this.open.get(turnId);
+  private close(actorId: string, turnId: string): void {
+    const turn = this.open.get(actorId, turnId);
 
-    this.open.delete(turnId);
-    this.cuts.delete(turnId);
+    this.open.delete(actorId, turnId);
+    this.cuts.delete(actorId, turnId);
 
-    if (turn === undefined || this.inFlight(turn.reference.actorId)) return;
-    this.waiting.get(turn.reference.actorId)?.resolve();
-    this.waiting.delete(turn.reference.actorId);
+    if (turn === undefined || this.inFlight(actorId)) return;
+    this.waiting.get(actorId)?.resolve();
+    this.waiting.delete(actorId);
   }
 
   private runOf(actorId: string): string | null {
@@ -238,8 +271,8 @@ export class AgentTurns {
 
   /** The agent's open turn `is` picks: its run, or the chat turn it is preparing. */
   private openOf(actorId: string, is: (request: HostedTurnRequest) => boolean): string | null {
-    for (const [turnId, turn] of this.open) {
-      if (turn.reference.actorId === actorId && is(turn.request)) return turnId;
+    for (const [turnId, turn] of this.open.of(actorId)) {
+      if (is(turn.request)) return turnId;
     }
 
     return null;
@@ -255,12 +288,12 @@ export class AgentTurns {
   }
 
   inFlightAny(): boolean {
-    return this.chats.size > 0 || [...this.open.values()].some((turn) => turn.request.run !== undefined || turn.request.chatTurnId !== undefined);
+    return this.chats.size > 0 || this.open.values().some((turn) => turn.request.run !== undefined || turn.request.chatTurnId !== undefined);
   }
 
   /** Handed out by this activation and not yet over. */
-  isOpen(turnId: string): boolean {
-    return this.open.has(turnId);
+  isOpen(actorId: string, turnId: string): boolean {
+    return this.open.get(actorId, turnId) !== undefined;
   }
 
   inFlight(actorId: string): boolean {
@@ -287,7 +320,7 @@ export class AgentTurns {
   }
 
   private runActors(): string[] {
-    return [...new Set([...this.open.values()].filter((turn) => turn.request.run !== undefined).map((turn) => turn.reference.actorId))];
+    return [...new Set(this.open.values().filter((turn) => turn.request.run !== undefined).map((turn) => turn.reference.actorId))];
   }
 
   /** The chat is asked whatever the view says: a workspace that reset since its turn began has no view of it. */
@@ -297,7 +330,7 @@ export class AgentTurns {
     const run = this.runOf(actorId);
     const chat = this.chats.get(actorId);
 
-    for (const turnId of [run, chat]) if (turnId !== null && turnId !== undefined) this.cancelled(turnId);
+    for (const turnId of [run, chat]) if (turnId !== null && turnId !== undefined) this.cancelled(actorId, turnId);
 
     if (run !== null) await this.deps.interrupt(reference, run, null);
     await this.deps.interrupt(reference, null, cutoff);
@@ -321,9 +354,9 @@ export class AgentTurns {
   }
 
   turn(actorId: string, turnId: string): OpenTurn {
-    const turn = this.open.get(turnId);
+    const turn = this.open.get(actorId, turnId);
 
-    if (turn !== undefined && turn.reference.actorId === actorId) return turn;
+    if (turn !== undefined) return turn;
 
     return settleSync(Effect.fail(new KinuError('missing', `No turn ${turnId} is open for this agent in the workspace.`)));
   }
@@ -341,7 +374,7 @@ export class AgentTurns {
    * are. A run's loop died with the activation that ran it.
    */
   private async reread(actorId: string, call: Pick<AgentToolCall, 'turnId' | 'runId' | 'epoch' | 'mode' | 'parentDriven' | 'driving'>): Promise<void> {
-    const known = this.open.get(call.turnId);
+    const known = this.open.get(actorId, call.turnId);
 
     if (call.epoch === null || (known !== undefined && (known.prepared !== null || known.request.run !== undefined))) return;
     const frozen = await this.deps.frozen(this.deps.reference(actorId), call);
@@ -398,7 +431,7 @@ export class AgentTurns {
 
     // Running from here: the agent is preparing it. A preparation that fails, or that a later opening overtook, leaves
     // nothing open, as the agent never began it.
-    if (request.turnId !== null) this.open.set(turnId, turn);
+    if (request.turnId !== null) this.open.set(actorId, turnId, turn);
 
     return await settle(Effect.gen({ self: this }, function* () {
       const prepared = yield* Effect.promise(() => this.read(turn));
@@ -408,7 +441,7 @@ export class AgentTurns {
 
       return prepared;
     }).pipe(Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : Effect.sync(() => {
-      if (this.chats.get(actorId) !== turnId) this.close(turnId);
+      if (this.chats.get(actorId) !== turnId) this.close(actorId, turnId);
     })))));
   }
 
@@ -419,16 +452,16 @@ export class AgentTurns {
    */
   async prepare(actorId: string, bound: TurnCapabilityOf): Promise<PreparedAgentTurn> {
     const fences = new TurnFences(this.deps.sql);
-    const turn = this.open.get(bound.turnId);
+    const turn = this.open.get(actorId, bound.turnId);
     const run = turn?.request.run;
 
-    if (turn === undefined || run === undefined || turn.reference.actorId !== actorId || run.inference.runId !== bound.runId) {
+    if (turn === undefined || run === undefined || run.inference.runId !== bound.runId) {
       fences.ended(actorId, { runId: bound.runId });
 
       return settleSync(Effect.fail(new KinuError('denied', `Task ${bound.turnId} is not a run this workspace awaits.`)));
     }
 
-    if (this.cuts.get(bound.turnId)?.signal.aborted === true) return settleSync(Effect.fail(new KinuError('cancelled', `Task ${bound.turnId} was stopped.`)));
+    if (this.cuts.get(actorId, bound.turnId)?.signal.aborted === true) return settleSync(Effect.fail(new KinuError('cancelled', `Task ${bound.turnId} was stopped.`)));
 
     if (!fences.open(actorId, { turnId: bound.turnId, runId: bound.runId, seq: bound.epoch })) {
       return settleSync(Effect.fail(new KinuError('denied', `The opening of task ${bound.turnId} (${String(bound.epoch)} in its agent's sequence) is older than the agent's newest.`)));
@@ -436,7 +469,7 @@ export class AgentTurns {
 
     const opened: OpenTurn = { ...turn, fenced: { seq: bound.epoch } };
 
-    this.open.set(bound.turnId, opened);
+    this.open.set(actorId, bound.turnId, opened);
     const prepared = await this.read(opened);
 
     if (prepared === null) return settleSync(Effect.fail(new KinuError('denied', `The preparation of task ${bound.turnId} finished after a later opening of its agent.`)));
@@ -622,7 +655,7 @@ export class AgentTurns {
 
     // Aborted as the turn is cut off, so the tool it runs here stops with it.
     const output = await runWorkModeInvocation(this.mode(turn, prepared), () => execute(call.input, {
-      toolCallId: call.callId, messages: [], context: undefined, abortSignal: this.cut(call.turnId).signal,
+      toolCallId: call.callId, messages: [], context: undefined, abortSignal: this.cut(actorId, call.turnId).signal,
     }));
 
     return {

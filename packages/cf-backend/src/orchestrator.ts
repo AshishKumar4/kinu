@@ -1095,7 +1095,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         // Its hirer hears it as a delivery of its own, whichever agent hired it.
         return await this.agentDeliveries(parentActorId).signals.send(signal);
       },
-    }, this.deleting.signal, (bound, call) => this.agentTurns.holds(actorId, bound, call), (turnId) => this.agentTurns.cutOff(turnId));
+    }, this.deleting.signal, (bound, call) => this.agentTurns.holds(actorId, bound, call), (turnId) => this.agentTurns.cutOff(actorId, turnId));
   }
 
   private agentBound(actorId: string): BoundActor {
@@ -2820,7 +2820,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         recordAgentFigures(this.boundSql, actorId, ended.outcome.ended.figures);
       }
 
-      this.agentTurns.runEnded(ended);
+      this.agentTurns.runEnded(actorId, ended);
     }
 
     const before = this.reportedStanding(actorId);
@@ -3825,7 +3825,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return inspectWork({
       claims: turns.map((turn) => ({ claim: turn.claim, actor: actorName(turn.record.actorId) })),
       agentTurns: agentTurns.map((turn) => ({ turnId: turn.turnId, actor: actorName(turn.actorId) ?? turn.actorId })),
-      executing: new Set(agentTurns.filter((turn) => this.agentTurns.isOpen(turn.turnId)).map((turn) => turn.turnId)),
+      executing: new Set(agentTurns.filter((turn) => this.agentTurns.isOpen(turn.actorId, turn.turnId)).map((turn) => turn.turnId)),
       effects: ledger.pendingSequences().flatMap((sequence) => ledger.owed(sequence)).map((effect) => ({ effect, actor: null })),
       reported: await this.owingAgentsWork(),
       now: Date.now(),
