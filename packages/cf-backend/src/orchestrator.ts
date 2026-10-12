@@ -973,8 +973,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       armCacheWarm: async (input) => this.warmingOf(actorId).armAfterTurn(input),
       // Its tasks tool and its jobs run here, over its own rows, main's as any agent's.
       openWork: async () => {
-        const { stores, handle } = this.agentBound(actorId);
-        const reads = this.dynamicReadsOf(handle, stores);
+        const reads = this.dynamicReadsOf(actorReferenceOf(this.liveAgentOf(actorId)));
 
         return { tasks: reads.openTasks(), asyncWakePending: reads.runningJobs().total > 0 };
       },
@@ -1464,7 +1463,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       return {
         surface, resolved, tools, raw: run === undefined ? this.turnTools(built.raw, held) : built.raw, capture, reports, descriptors, digest,
         reviewsTurns: this.actorAdvisor(actor).reviewsTurns,
-        reads: this.dynamicReadsOf(actor.handle, actor.stores),
+        reads: this.dynamicReadsOf(actor.reference),
         sources: {
           ...sources,
           // Its MCP and extension tools are reached through eval, so its isolate's profile admits them by name.

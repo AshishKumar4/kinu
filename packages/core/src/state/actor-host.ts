@@ -226,7 +226,7 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
 
       return { ...bound, runtime, session };
     }),
-    turns: { inFlight: (actor) => actor.session.inFlight, interrupt: (actor) => { actor.session.interrupt(); } },
+    turns: { inFlight: ({ session }) => session.inFlight, interrupt: ({ session }) => { session.interrupt(); } },
   };
 
   return createSeatHost(deps, sessions);

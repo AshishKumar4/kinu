@@ -104,7 +104,7 @@ import {
   // Prices a model_call row only when the rate belongs to that call's own model.
   buildModelCallEvent,
   type FactsStore,
-  createAgentStores, type AgentConfigStore, type AgentStores, type SetModelDeps, collectDynamicContext, dynamicReads, type DynamicReads, subordinateDelegatesOf,
+  createAgentStores, type AgentConfigStore, type SetModelDeps, collectDynamicContext, dynamicReads, type DynamicReads, subordinateDelegatesOf,
   nimbusSessionFiles, agentArtifactDirectory, agentHome, MAIN_AGENT,
   type SessionTranscript,
   type SqlExecutor,
@@ -4016,24 +4016,26 @@ export abstract class ActorAgent extends Agent<Env> {
    *  open work ({@link held}). One per agent, whichever store bundle asks first: a hold names its tables, not its store. */
   private readonly heldDynamic = new Map<string, { readonly reads: DynamicReads; readonly delegates: () => readonly DynamicDelegate[] }>();
 
-  private heldDynamicOf(actor: ActorHandle, stores: AgentStores) {
-    const known = this.heldDynamic.get(actor.actorId);
+  private heldDynamicOf(reference: ActorReference) {
+    const known = this.heldDynamic.get(reference.actorId);
 
     if (known !== undefined) return known;
+    // Over its store binding, which outlives its seat: a seat released between turns would revoke what it held.
+    const { handle, stores } = this.actorHost().bindStores(reference);
 
     const held = {
-      reads: dynamicReads(stores, this.boundSql, actor, this.held),
+      reads: dynamicReads(stores, this.boundSql, handle, this.held),
       // Every SubordinateRosterStore writes over `watchedExec`, the directory's origins over `sql`.
-      delegates: this.held.hold(['actor_subordinates', 'workspace_actors'], () => subordinateDelegatesOf(new SubordinateRosterStore(this.watchedExec, actor).list())),
+      delegates: this.held.hold(['actor_subordinates', 'workspace_actors'], () => subordinateDelegatesOf(new SubordinateRosterStore(this.watchedExec, handle).list())),
     };
 
-    this.heldDynamic.set(actor.actorId, held);
+    this.heldDynamic.set(reference.actorId, held);
 
     return held;
   }
 
-  protected dynamicReadsOf(actor: ActorHandle, stores: AgentStores): DynamicReads {
-    return this.heldDynamicOf(actor, stores).reads;
+  protected dynamicReadsOf(reference: ActorReference): DynamicReads {
+    return this.heldDynamicOf(reference).reads;
   }
 
   /**
@@ -4048,7 +4050,7 @@ export abstract class ActorAgent extends Agent<Env> {
     readonly surface: TurnSurface | null;
   }): DynamicContext {
     const { memoryTail, accountFacts, activeSkills } = step.reads;
-    const held = this.heldDynamicOf(actor.handle, actor.stores);
+    const held = this.heldDynamicOf(actor.reference);
     const extras = reach.lanes ? this.extraDynamicContext() : {};
     // The workspace's own agent is told why its turn runs and what its model holds; a hire, its model's name.
     const turn = reach.lanes && step.surface !== null ? turnReasonForMetadata(step.surface.item.metadata) : undefined;
