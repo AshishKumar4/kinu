@@ -1,4 +1,7 @@
-/** The classic chat loop on a terminal, whose workspace parks a command on the owner while the chat sits idle. */
+/**
+ * The classic chat loop on a terminal, whose workspace parks a command on the owner while the chat sits idle. The
+ * test presses Ctrl+G at the empty prompt (a key readline ignores) to say when; the fixture parks then.
+ */
 import type { DeferredApproval } from '@kinu.run/core';
 import { runChatLoop } from '../../src/chat-loop';
 import { fakeClient } from '../helpers/chat-app-fixture';
@@ -18,13 +21,15 @@ const fake = fakeClient({
   },
 });
 
-// After the opening pass found nothing, so only the queue moving can ask it.
-setTimeout(() => {
+const BELL = 0x07;
+
+process.stdin.on('data', (chunk: Buffer) => {
+  if (!chunk.includes(BELL) || waiting.length > 0) return;
   waiting = [{
     id: 'park-1', actor: 'actor-main', command: 'git push --force origin main', executor: 'sandbox',
     reason: 'force push (gate): rewrites history', status: 'queued', requestedAt: Date.now(), decidedAt: null,
   }];
   fake.emit({ type: 'broadcast', event: { type: 'reads_changed', reads: ['listPendingActions'] } });
-}, 1500);
+});
 
 await runChatLoop({ client: fake.client });

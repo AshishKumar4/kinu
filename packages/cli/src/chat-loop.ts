@@ -353,7 +353,8 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
   while (!exiting) {
     await settled();
 
-    if (approvalsDue && tty && client.approvals) {
+    // Again while the queue moved during a pass, until the owner says later; a turn's start or end ends later.
+    while (approvalsDue && !approvalsPutOff && tty && client.approvals) {
       approvalsDue = false;
       approvalPass = new AbortController();
       approvalsPutOff = await askWaitingApprovals(client.approvals, lineApprovalPrompt(rl), approvalPass.signal);
@@ -367,7 +368,8 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     const takenBack = idleQuestion.signal.aborted;
     idleQuestion = null;
 
-    if (takenBack) continue;
+    // Taken back unanswered for the approvals; a line the owner had already entered is theirs.
+    if (line === null && takenBack) continue;
 
     if (line === null) break; // EOF
     const input = line.trim();

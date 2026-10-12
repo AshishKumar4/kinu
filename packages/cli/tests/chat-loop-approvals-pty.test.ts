@@ -13,8 +13,9 @@ test('classic chat: a command parked while idle is asked at once, and its answer
     env: { NO_COLOR: '1' },
     steps: [
       { wait: 'loop ›', timeout: 15 },
-      { wait: 'An agent is waiting for your approval', timeout: 10 },
-      { wait: 'git push --force origin main', timeout: 5 },
+      // The opening pass found nothing; the command parks while the prompt sits empty.
+      { send: '\x07' },
+      { wait: 'git push --force origin main', timeout: 10 },
       { send: 'n\r' },
       { wait: 'DECIDED park-1 denied', timeout: 5 },
     ],

@@ -7,7 +7,7 @@ import {
 } from '../cloud-api';
 import { bumpProviderRevision, loadConfigFile, requireAuthConfig, updateConfigFile } from '../config';
 import { ACCENT, DIM, formatWhen, OK, WARN } from '../display';
-import { renderThrownChain, settle } from '@kinu.run/core/obs';
+import { KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
 import { waitForAnswer } from '@kinu.run/core';
 
 export interface CliAuthCallbacks {
@@ -128,7 +128,7 @@ export function authSessionsCommand(
 
     // The sessions listed and ended are the signed-in deployment's: a different --origin is refused, never ignored.
     if (opts.origin !== undefined && new URL(defaultOrigin(opts)).origin !== new URL(auth.origin).origin) {
-      return yield* Effect.die(new Error(`Signed in to ${auth.origin}, not ${opts.origin}: sign in there first with kinu auth --origin ${opts.origin}`));
+      return yield* Effect.fail(new KinuError('bad_input', `Signed in to ${auth.origin}, not ${opts.origin}: sign in there first with kinu auth --origin ${opts.origin}`));
     }
 
     if (action === 'revoke') {
@@ -139,14 +139,14 @@ export function authSessionsCommand(
         return;
       }
 
-      if (opts.all === true || session === undefined) return yield* Effect.die(new Error(AUTH_USAGE));
+      if (opts.all === true || session === undefined) return yield* Effect.fail(new KinuError('bad_input', AUTH_USAGE));
       yield* Effect.promise(async () => revokeCliSessionByHash(auth.origin, auth.token, session));
       console.log(`${OK('✓')} Session ${ACCENT(session.slice(0, 12))}… revoked`);
 
       return;
     }
 
-    if (action !== 'sessions') return yield* Effect.die(new Error(AUTH_USAGE));
+    if (action !== 'sessions') return yield* Effect.fail(new KinuError('bad_input', AUTH_USAGE));
     const { sessions } = yield* Effect.promise(async () => listCliSessions(auth.origin, auth.token));
 
     if (sessions.length === 0) {

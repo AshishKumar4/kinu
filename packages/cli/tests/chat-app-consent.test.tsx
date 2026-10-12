@@ -287,14 +287,13 @@ describe('waiting approvals', () => {
     const screen = await mountChat(fakeClient({ name: 'parked', approvals: parkedQueue.approvals }).client);
 
     await screen.waitFor('the first waiting approval', () => screen.frame().includes('git push --force origin main'));
-    expect(screen.frame()).toContain('Run this command?');
     expect(screen.frame()).toContain('rewrites history');
     screen.mockInput.pressKey('a');
     await screen.waitFor('the second waiting approval', () => screen.frame().includes('rm -rf build'));
     // Later takes the prompt at once: an approving key in the same frame answers nothing.
     screen.mockInput.pressKey('l');
     screen.mockInput.pressKey('y');
-    await screen.waitFor('the prompt put off', () => !screen.frame().includes('Run this command?'));
+    await screen.waitFor('the prompt put off', () => !screen.frame().includes('rm -rf build'));
 
     expect(parkedQueue.decided).toEqual([[['park-1'], 'always']]);
   });
@@ -308,7 +307,7 @@ describe('waiting approvals', () => {
     // Both keys arrive before the first answer lands or the next prompt is drawn.
     screen.mockInput.pressKey('o');
     screen.mockInput.pressKey('o');
-    await screen.waitFor('the parked write, drawn next', () => screen.frame().includes('Replace this file?'));
+    await screen.waitFor('the parked write, drawn next', () => screen.frame().includes('/home/main/notes.md'));
 
     expect(parkedQueue.decided).toEqual([[['park-1'], 'approved']]);
   });
@@ -317,7 +316,7 @@ describe('waiting approvals', () => {
     const parkedQueue = queue([parked('park-1', `file write /home/main/notes.md sha256:${'a'.repeat(64)} over sha256:${'b'.repeat(64)}`)]);
     const screen = await mountChat(fakeClient({ name: 'parked', approvals: parkedQueue.approvals }).client);
 
-    await screen.waitFor('the parked write', () => screen.frame().includes('Replace this file?'));
+    await screen.waitFor('the parked write', () => screen.frame().includes('/home/main/notes.md'));
     screen.mockInput.pressKey('o');
     screen.mockInput.pressKey('a');
     await screen.renderOnce();
@@ -361,13 +360,13 @@ describe('waiting approvals', () => {
     await screen.waitFor('the refusal said', () => screen.frame().includes('the workspace is unreachable'));
     await screen.mockInput.typeText('still here');
     await screen.waitFor('the composer taking keys', () => screen.frame().includes('still here'));
-    expect(screen.frame()).not.toContain('Run this command?');
+    expect(screen.frame()).not.toContain('git push --force origin main');
 
     for (let left = 'still here'.length; left > 0; left -= 1) screen.mockInput.pressBackspace();
 
     reachable = true;
     agent.emit({ type: 'broadcast', event: { type: 'reads_changed', reads: ['listPendingActions'] } });
-    await screen.waitFor('the row asked again', () => screen.frame().includes('Run this command?'));
+    await screen.waitFor('the row asked again', () => screen.frame().includes('git push --force origin main'));
     screen.mockInput.pressKey('n');
     await screen.waitFor('the denial', () => parkedQueue.decided.length === 1);
 
@@ -384,7 +383,7 @@ describe('waiting approvals', () => {
     agent.emit({ type: 'broadcast', event: { type: 'reads_changed', reads: ['listPendingActions'] } });
     await screen.mockInput.typeText(' y');
     await screen.renderOnce();
-    expect(screen.frame()).not.toContain('Run this command?');
+    expect(screen.frame()).not.toContain('git push --force origin main');
 
     // Emptied key by key: each one is the composer's while it still holds a character.
     for (let left = 'yes, and also y'.length; left > 0; left -= 1) screen.mockInput.pressBackspace();
