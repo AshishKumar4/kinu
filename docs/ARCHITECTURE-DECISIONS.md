@@ -985,7 +985,12 @@ the owner, built 2026-10-11 on `lane/main-isolate`.
   round and a Retry are new executions and resolve afresh. An applied Retry
   holds its reopened turn (`queued_turns`) in the commit that marks it
   applied, so an isolate that dies before the turn opens runs it on its next
-  wake.
+  wake. A Retry of an answered turn withdraws the answer in one commit (the
+  transcript from it, the context back to the turn's last input, and its
+  executions' output, `actor_turn_claims.withdrawn_through`), so the model is
+  asked afresh; a failed or stopped turn's Retry continues its completed
+  steps. The workspace holds each agent's open turns by agent and turn: an
+  owner's message id is unique only within an agent.
 - Receipts: a tool's receipt is `started`, `settled` or `indeterminate`, kept
   where its effect commits and keyed on its run, so a Retry finds none of the
   last run's. A call whose effect commits in the workspace leaves only a
