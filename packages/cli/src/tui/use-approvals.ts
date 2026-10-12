@@ -132,10 +132,13 @@ export function useApprovals(client: AgentClient, opts: {
         return;
       }
 
-      if (prompt === null || decision === 'later') return;
-      const item = queue.current.shift();
+      const head = queue.current[0];
+
+      // Only the drawn request is answered: a second key before the next one is drawn answers nothing.
+      if (prompt === null || decision === 'later' || head?.request !== prompt.request) return;
+      queue.current.shift();
       setLive(queue.current[0]?.request ?? null);
-      item?.resolve(LIVE_OUTCOME[decision]);
+      head.resolve(LIVE_OUTCOME[decision]);
     },
     /** A frame said the queue moved. */
     queueMoved: useCallback(() => { setMoves((count) => count + 1); }, []),

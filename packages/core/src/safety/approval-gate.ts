@@ -117,13 +117,17 @@ export type ApprovalSpendOutcome =
   | 'did-not-run'
   | 'spent';
 
+/** What the queue answers an ask: run on a grant it just spent, or the words to hand the model. */
+type QueueAnswer =
+  | { readonly run: true; readonly spent: ApprovalSpend }
+  | { readonly run: false; readonly reason: 'denied' | 'unavailable'; readonly message: string };
+
 /** Parks an unanswered 'gate' on the owner (safety/deferred-approval.ts). `run: true`: the grant is spent;
  *  `settle` refunds unrun attempts. */
 export interface DeferredApprovalChannel {
-  park(req: ShellApprovalRequest): Promise<
-    | { readonly run: true; readonly spent: ApprovalSpend }
-    | { readonly run: false; readonly reason: 'denied' | 'unavailable'; readonly message: string }
-  >;
+  park(req: ShellApprovalRequest): Promise<QueueAnswer>;
+  /** The answer a row already holds for this ask, parking nothing; null when no row holds one. */
+  held(req: ShellApprovalRequest): Promise<QueueAnswer | null>;
   /** Close out a spend. Called once per spend on every returning path, never when unknown. Idempotent. */
   settle(spent: ApprovalSpend, outcome: ApprovalSpendOutcome): Promise<void>;
 }
@@ -182,6 +186,53 @@ export function gateExec<R>(
   };
 }
 
+type GateAnswer =
+  | { readonly run: true; readonly spent?: ApprovalSpend }
+  | { readonly run: false; readonly error: KinuError };
+
+function refuse(reason: ErrorCode, message: string): GateAnswer {
+  return { run: false, error: new KinuError(reason, message) };
+}
+
+/**
+ * A gated ask under 'strict' or 'deny_all'. One ask has one answer: a row the queue holds for it answers first (an
+ * approval spent before the run), so the live prompt never asks again what is parked or decided there; else the live
+ * prompt; else, unanswered under 'strict', a new row. 'deny_all' never asks or parks.
+ */
+async function askOwner(
+  review: ApprovalResult,
+  policy: ShellApprovalPolicy,
+  ask: { readonly mode: ShellApprovalMode; readonly executor: string; readonly parks: boolean; readonly request: (parking: boolean) => Promise<ShellApprovalRequest> },
+): Promise<GateAnswer> {
+  const deferrals = ask.mode === 'strict' && ask.parks ? policy.deferrals : undefined;
+  const held = policy.requestApproval && deferrals !== undefined ? await deferrals.held(await ask.request(true)) : null;
+
+  if (held !== null) return held.run ? { run: true, spent: held.spent } : refuse(held.reason, held.message);
+
+  // Null channel means nobody is listening.
+  const outcome = ask.mode === 'strict' && policy.requestApproval ? await policy.requestApproval(await ask.request(false)) : null;
+
+  if (outcome !== null) {
+    if (!approvalGrants(outcome)) return refuse('denied', `${APPROVAL_DENIED} by the owner: ${formatApproval(review)}`);
+
+    if (outcome === 'allow_always') policy.remember?.(gatedGrants(review, ask.executor));
+
+    return { run: true };
+  }
+
+  const parked = deferrals === undefined ? undefined : await deferrals.park(await ask.request(true));
+
+  // Do not say "nobody to ask" under deny_all; it would invite re-asking.
+  if (parked === undefined) {
+    return ask.mode === 'deny_all'
+      ? refuse('denied', `NOT RUN: refused by standing policy (deny_all): ${formatApproval(review)}`)
+      : refuse('unavailable', `NOT RUN: needs owner approval, nobody to ask: ${formatApproval(review)}`);
+  }
+
+  // A parked grant was just spent; execute and carry the spend out.
+  return parked.run ? { run: true, spent: parked.spent } : refuse(parked.reason, parked.message);
+}
+
 /** The mode/grant/channel/deferral ladder; a `run: true` from a replayed park carries a spend the caller settles.
  *  A write is shown to whoever is asked and parks bound to its bytes; `parks` false refuses an unanswered ask. */
 async function decideApproval(
@@ -191,15 +242,11 @@ async function decideApproval(
   },
   rawReview: ApprovalResult,
   policy: ShellApprovalPolicy,
-): Promise<
-  | { readonly run: true; readonly spent?: ApprovalSpend }
-  | { readonly run: false; readonly error: KinuError }
-> {
+): Promise<GateAnswer> {
   const { command: cmd, executor, write, parks = true } = subject;
   await policy.resolve?.();
   const mode = policy.mode();
   const review = afterGrants(rawReview, policy, executor);
-  const refuse = (reason: ErrorCode, message: string) => ({ run: false, error: new KinuError(reason, message) } satisfies { run: false; error: KinuError });
   let shown: Promise<WriteSubject> | null = null;
 
   // A parked write's text names its bytes; the one asked now is shown them.
@@ -226,32 +273,10 @@ async function decideApproval(
         { executor, rules: review.hits.map((h) => h.rule).join(',') },
       );
     } else {
-      // 'deny_all' never asks; null channel means nobody is listening.
-      const outcome = mode === 'strict' && policy.requestApproval
-        ? await policy.requestApproval(await request(false))
-        : null;
+      const asked = await askOwner(review, policy, { mode, executor, parks, request });
 
-      if (outcome === null) {
-        // Under 'strict', an unanswered ask parks if a queue is wired, only after the channel declines.
-        const deferrals = mode === 'strict' && parks ? policy.deferrals : undefined;
-        const parked = deferrals === undefined ? undefined : await deferrals.park(await request(true));
-
-        if (parked && !parked.run) return refuse(parked.reason, parked.message);
-
-        if (!parked) {
-          // Do not say "nobody to ask" under deny_all; it would invite re-asking.
-          return mode === 'deny_all'
-            ? refuse('denied', `NOT RUN: refused by standing policy (deny_all): ${formatApproval(review)}`)
-            : refuse('unavailable', `NOT RUN: needs owner approval, nobody to ask: ${formatApproval(review)}`);
-        }
-
-        // A parked grant was just spent; execute and carry the spend out.
-        spent = parked.spent;
-      } else if (!approvalGrants(outcome)) {
-        return refuse('denied', `${APPROVAL_DENIED} by the owner: ${formatApproval(review)}`);
-      } else if (outcome === 'allow_always') {
-        policy.remember?.(gatedGrants(review, executor));
-      }
+      if (!asked.run) return asked;
+      spent = asked.spent;
     }
   }
 

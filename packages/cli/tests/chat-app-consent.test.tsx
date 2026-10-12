@@ -61,6 +61,20 @@ describe('inline shell approval', () => {
     expect(await second).toBeNull();
   });
 
+  test('a second key before the next request is drawn answers nothing', async () => {
+    const agent = fakeClient({ name: 'shell' });
+    const screen = await mountChat(agent.client);
+    const first = agent.requestShellApproval(shellRequest);
+    const second = agent.requestShellApproval({ ...shellRequest, command: 'sudo id' });
+    await screen.waitFor('first request', () => screen.frame().includes('sudo whoami'));
+    screen.mockInput.pressKey('a');
+    screen.mockInput.pressKey('a');
+    expect(await first).toBe('allow_always');
+    await screen.waitFor('second request', () => screen.frame().includes('sudo id'));
+    screen.mockInput.pressKey('n');
+    expect(await second).toBe('deny');
+  });
+
   test('an unseen command cannot receive a grant', async () => {
     const agent = fakeClient({ name: 'shell' });
     const screen = await mountChat(agent.client);

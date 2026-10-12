@@ -219,6 +219,38 @@ describe('the standing modes still decide first', () => {
     expect(queue.list()).toHaveLength(1);
   });
 
+  test('a live prompt never asks again what the queue holds: its row answers the ask', async () => {
+    let asked = 0;
+
+    const { shellTool, executed, queue } = setup({
+      approve: async () => {
+        asked += 1;
+
+        return null;
+      },
+    });
+
+    // Nobody answered the live prompt: the ask parks.
+    await expect(shellTool.execute({ command: GATED })).rejects.toMatchObject({ message: expect.stringContaining('NOT RUN') });
+    expect(asked).toBe(1);
+
+    // Still queued: the same ask is not put to the live prompt a second time.
+    await expect(shellTool.execute({ command: GATED })).rejects.toMatchObject({ message: expect.stringContaining('NOT RUN') });
+    expect(asked).toBe(1);
+
+    // Approved in the queue: the next ask runs on that approval, spent, without a live prompt.
+    await queue.decide(['defer-1'], 'approved');
+    expect(await shellTool.execute({ command: GATED })).toBe('ran');
+    expect({ asked, executed }).toEqual({ asked: 1, executed: [GATED] });
+
+    // Denied in the queue: the ask is refused with that denial, not put to the live prompt.
+    await expect(shellTool.execute({ command: GATED })).rejects.toMatchObject({ message: expect.stringContaining('NOT RUN') });
+    expect(asked).toBe(2);
+    await queue.decide([queue.list().find((action) => action.status === 'queued')?.id ?? ''], 'denied');
+    await expect(shellTool.execute({ command: GATED })).rejects.toMatchObject({ message: expect.stringContaining('the owner refused this') });
+    expect({ asked, executed }).toEqual({ asked: 2, executed: [GATED] });
+  });
+
   test('with no queue wired at all, strict keeps its old explanatory refusal', async () => {
     const { shellTool, executed } = setup({ noQueue: true });
     await expect(shellTool.execute({ command: GATED })).rejects.toMatchObject({ message: expect.stringContaining('needs owner approval, nobody to ask') });

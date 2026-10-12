@@ -432,20 +432,25 @@ export class DeferredApprovalQueue {
 
   /** The gate's view for one actor: run, or the words to hand the model, plus the way back for an unused spend. */
   channelFor(actorId: string): DeferredApprovalChannel {
+    const told = (verdict: DeferredApprovalVerdict) => {
+      if (verdict.outcome === 'run') return { run: true, spent: verdict.spend } as const;
+
+      return {
+        run: false,
+        // A parked action is an absence of decision, not a refusal: the owner can still approve it.
+        reason: verdict.outcome === 'denied' ? 'denied' : 'unavailable',
+        message: verdict.outcome === 'denied'
+          ? deniedActionMessage(verdict.action)
+          : queuedActionMessage(verdict.action, this.storeOf(actorId).hits(verdict.action.id)),
+      } as const;
+    };
+
     return {
-      park: async (req) => {
-        const verdict = await this.park(req, actorId);
+      park: async (req) => told(await this.park(req, actorId)),
+      held: async (req) => {
+        const verdict = this.held(req, this.now(), this.storeOf(actorId));
 
-        if (verdict.outcome === 'run') return { run: true, spent: verdict.spend };
-
-        return {
-          run: false,
-          // A parked action is an absence of decision, not a refusal: the owner can still approve it.
-          reason: verdict.outcome === 'denied' ? 'denied' : 'unavailable',
-          message: verdict.outcome === 'denied'
-            ? deniedActionMessage(verdict.action)
-            : queuedActionMessage(verdict.action, this.storeOf(actorId).hits(verdict.action.id)),
-        };
+        return verdict === null ? null : told(verdict);
       },
       settle: async (spent, outcome) => { await this.settle(spent, outcome, actorId); },
     };
@@ -485,7 +490,8 @@ export class DeferredApprovalQueue {
     return verdict;
   }
 
-  private answer(req: ShellApprovalRequest, now: number, store: DeferredApprovalStore): DeferredApprovalVerdict {
+  /** The answer a row of this ask already holds: its denial, its approval spent, or the row still waiting. */
+  private held(req: ShellApprovalRequest, now: number, store: DeferredApprovalStore): DeferredApprovalVerdict | null {
     const standing = store.standing(req.command, req.executor, now);
 
     if (standing?.status === 'denied') return { outcome: 'denied', action: standing };
@@ -494,11 +500,17 @@ export class DeferredApprovalQueue {
       // Spend before running so a crash loses an approval rather than granting twice.
       const spent = store.spend(standing.id);
 
-      if (spent) return { outcome: 'run', action: spent.action, spend: spent.spend };
-      // Lost the race to a concurrent re-issue: fall through and park again.
+      // Null: a concurrent re-issue won it, and no row holds this ask any more.
+      return spent === null ? null : { outcome: 'run', action: spent.action, spend: spent.spend };
     }
 
-    if (standing?.status === 'queued') return { outcome: 'queued', action: standing };
+    return standing?.status === 'queued' ? { outcome: 'queued', action: standing } : null;
+  }
+
+  private answer(req: ShellApprovalRequest, now: number, store: DeferredApprovalStore): DeferredApprovalVerdict {
+    const held = this.held(req, now, store);
+
+    if (held !== null) return held;
 
     const action = store.create({
       id: this.unusedId(),
