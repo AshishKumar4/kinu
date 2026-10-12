@@ -162,6 +162,49 @@ describe('a machine is part of the ask', () => {
   });
 });
 
+describe('the member is part of the ask', () => {
+  test('the same words and options to exec and to startProcess are two asks: a foreground run is not a supervised process', async () => {
+    const ran: string[] = [];
+    const { policy, queue } = owner('deny');
+    const live = prompts(2);
+
+    const handle: SandboxHandle = {
+      exec: async (command) => {
+        ran.push(`exec ${command}`);
+
+        return { stdout: '', stderr: '', exitCode: 0 };
+      },
+      readFile: async () => ({}),
+      writeFile: async () => {},
+      listFiles: async () => ({ files: [] }),
+      deleteFile: async () => {},
+      exposePort: async (port) => ({ url: `https://preview.example.com/${String(port)}`, port, route: { reached: true } }),
+      unexposePort: async () => {},
+      getExposedPorts: async () => [],
+      ...sandboxHandleLifecycle,
+      startSupervisedProcess: async (command) => {
+        ran.push(`start ${command}`);
+
+        return { processId: 'proc-1' };
+      },
+    };
+
+    const router = new DefaultExecutionRouter({ ...policy, requestApproval: live.ask });
+    router.register(createSandboxExecutor(handle));
+    const { tools } = present(router.getProvider('sandbox'), 'the sandbox');
+    const foreground = tools.exec.execute(GATED, { cwd: '/workspace' });
+    const supervised = present(tools.startProcess, 'startProcess').execute(GATED, { cwd: '/workspace' });
+
+    await live.shown;
+    expect(new Set(live.asked.map((prompt) => prompt.request.approvalId)).size).toBe(2);
+    expect(queue.list()).toHaveLength(2);
+
+    for (const prompt of live.asked) prompt.answer(prompt.request.context.member === 'exec' ? 'allow' : 'deny');
+    await Promise.all([foreground, supervised]);
+    expect(ran).toEqual([`exec ${GATED}`]);
+  });
+});
+
 describe('a context is compared as structure, never as its words', () => {
   test('a directory or shell name that reads like another field is not that field: each ask is its own, run where asked', async () => {
     const ran: Array<{ readonly cwd: string | undefined; readonly name: string | undefined }> = [];
@@ -290,19 +333,30 @@ describe('a named shell is part of the ask as it was when asked', () => {
     expect(JSON.stringify(again)).toContain('NOT RUN');
   });
 
-  test('a device: its shell moved after the ask, so the approval does not run where it now is', async () => {
-    const home = scratchHome();
-    const { policy, queue } = unattended();
+  /**
+   * One device whose machine is a scratch home, counting how often a named shell's state is read on it; reads past
+   * `failAfter` fail as a dropped tunnel would.
+   */
+  function device(home: string, policy: ShellApprovalPolicy) {
     const machine = scratchMachine(home);
     const STUDIO: DeviceFleetEntry = { id: 'dev-studio', name: 'studio', os: 'linux', hostname: 'studio', connected: true };
     const status = (): DeviceStatus => ({ connected: true, registered: true, toolchain: null, devices: [STUDIO] });
+    const reads = { count: 0, failAfter: Number.POSITIVE_INFINITY };
 
     const transport: DeviceTransport = {
       status,
       refreshStatus: async () => status(),
       rpc: async (method, params): Promise<JsonValue> => {
         if (method !== 'exec') return null;
-        const { stdout, stderr, exitCode } = await machine.exec(typeof params[0] === 'string' ? params[0] : '');
+        const command = typeof params[0] === 'string' ? params[0] : '';
+
+        if (command.includes('sha256sum')) {
+          reads.count += 1;
+
+          if (reads.count > reads.failAfter) throw new Error('the tunnel dropped');
+        }
+
+        const { stdout, stderr, exitCode } = await machine.exec(command);
 
         return { stdout, stderr, exitCode };
       },
@@ -310,7 +364,14 @@ describe('a named shell is part of the ask as it was when asked', () => {
 
     const router = new DefaultExecutionRouter(policy);
     router.register(createDeviceTunnelExecutor(transport, undefined, SHELLS));
-    const exec = present(router.getProvider('device'), 'the device').tools.exec;
+
+    return { exec: present(router.getProvider('device'), 'the device').tools.exec, reads };
+  }
+
+  test('a device: its shell moved after the ask, so the approval does not run where it now is', async () => {
+    const home = scratchHome();
+    const { policy, queue } = unattended();
+    const { exec } = device(home, policy);
 
     await exec.execute('cd sub', { name: 'dev' });
 
@@ -323,37 +384,39 @@ describe('a named shell is part of the ask as it was when asked', () => {
     expect(JSON.stringify(again)).toContain('NOT RUN');
   });
 
-  test('the hosted workspace: a session moved after the ask is another ask (its directory is the state it reports)', async () => {
+  test('a state read that fails just before the run is NOT RUN, and the approval comes back for the next ask', async () => {
+    const home = scratchHome();
     const { policy, queue } = unattended();
-    const at = new Map<string, string>();
-    const ran: string[] = [];
+    const { exec, reads } = device(home, policy);
+    const asking = () => exec.execute(`${DOOMING} doomed`, { name: 'dev' });
 
-    const box: NimbusSandboxHandle = {
-      ready: async () => {},
-      exec: async (command, options) => {
-        const name = options?.name;
-        const moved = /^cd (\S+)$/m.exec(command.split('\n').at(-1) ?? '');
+    await exec.execute('cd sub', { name: 'dev' });
+    await asking();
+    await queue.decide(queue.list().map((row) => row.id), 'approved');
 
-        if (name !== undefined && moved?.[1] !== undefined) at.set(name, moved[1]);
-        else ran.push(command);
+    // The re-issue's own read pins the approved state; the next one, just before the run, fails.
+    reads.failAfter = reads.count + 1;
+    const refused = await asking();
 
-        return { command, success: true, stdout: '', stderr: '', exitCode: 0 };
-      },
-      shellCwd: async (name) => at.get(name) ?? null,
-      files: { read: async () => null, write: async () => {}, list: async () => [], stat: async () => null, exists: async () => false, delete: async () => {} },
-    };
+    reads.failAfter = Number.POSITIVE_INFINITY;
+    expect(JSON.stringify(refused)).toContain('NOT RUN');
+    expect(existsSync(join(home, 'sub/doomed'))).toBe(true);
 
-    const sessionShell = nimbusSessionShell(box, { home: WORKSPACE_ROOT });
-    const session = createShellSession({ home: WORKSPACE_ROOT, userRoots: () => [], stored: async (name) => await sessionShell.cwd?.(name) ?? null });
-    const shell = withApprovalGatedShell(sessionShell, { filesOwner: 'agent', shellSession: session }, policy);
+    // Refunded: the same ask runs on the same approval, and nothing new waits.
+    await asking();
+    expect(existsSync(join(home, 'sub/doomed'))).toBe(false);
+    expect(queue.list()).toEqual([]);
+  });
 
-    await shell.exec(`cd ${WORKSPACE_ROOT}/sub`, { name: 'dev' });
+  test('a call no answer is asked for reads no shell state', async () => {
+    const home = scratchHome();
+    const { policy } = unattended();
+    const { exec, reads } = device(home, { ...policy, mode: () => 'allow_all' });
 
-    const { again } = await approveAcrossAMove(
-      queue, () => shell.exec(`${DOOMING} doomed`, { name: 'dev' }), async () => { await shell.exec(`cd ${WORKSPACE_ROOT}`, { name: 'dev' }); },
-    );
+    await exec.execute('cd sub', { name: 'dev' });
+    await exec.execute(`${DOOMING} doomed`, { name: 'dev' });
 
-    expect(ran).toEqual([]);
-    expect(again.exitCode).not.toBe(0);
+    expect(existsSync(join(home, 'sub/doomed'))).toBe(false);
+    expect(reads.count).toBe(0);
   });
 });

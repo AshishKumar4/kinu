@@ -19,7 +19,7 @@ export function fakeCommandMember(
     const command = typeof args[0] === 'string' ? args[0] : '';
     const parsed = v.safeParse(FakeOptionsSchema, args[1]);
     const options = parsed.success ? parsed.output : {};
-    const program = kind === 'program' && options.language !== 'shell' ? options.language ?? 'the default language' : undefined;
+    const program = kind === 'program' && options.language !== 'shell' ? options.language ?? 'default' : undefined;
 
     return {
       call: { text: command, ...(program !== undefined && { program }), ...(options.cwd !== undefined && { cwd: options.cwd }), context: {} },

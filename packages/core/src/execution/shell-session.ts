@@ -134,14 +134,20 @@ export function machineShellCall(command: string, call: Pick<ShellExecOptions, '
 export async function machineShellCwd(
   raw: Pick<Shell, 'exec'>, name: string, place: MachineShells,
 ): Promise<{ readonly cwd: string | null; readonly state: string } | null> {
-  // The whole file is what the wrapper restores, so its digest is the state; `N`: no file yet.
-  const read = `f="\${2/#\\~/$HOME}/$1.bash"; if [[ -f "$f" ]]; then printf S; cat -- "$f"; else printf N; fi`;
+  // The whole file is what the wrapper restores; it is digested on the machine, so the answer is two short lines however
+  // large the file and however the machine bounds output. `N`: no file yet.
+  const read = `f="\${2/#\\~/$HOME}/$1.bash"; if [[ -f "$f" ]]; then IFS= read -r line < "$f"; `
+    + `d=$( { sha256sum || shasum -a 256 || openssl dgst -sha256 -r; } < "$f" 2>/dev/null ) || exit 1; `
+    + `printf 'S%s\\n%s' "\${line#\\# cwd:}" "\${d%% *}"; else printf N; fi`;
+
   const result = await raw.exec(`bash -c ${shellQuote(read)} kinu ${shellQuote(stateKey(place, name))} ${shellQuote(place.stateDirectory)}`);
 
-  if (result.refusal !== undefined || result.exitCode !== 0 || !/^[SN]/.test(result.stdout)) return null;
-  const first = result.stdout.slice(1).split('\n', 1)[0] ?? '';
+  if (result.refusal !== undefined || result.exitCode !== 0) return null;
 
-  return { cwd: first.startsWith('# cwd:/') ? first.slice('# cwd:'.length) : null, state: sha256Hex(result.stdout) };
+  if (result.stdout === 'N') return { cwd: null, state: 'none' };
+  const [cwd = '', digest = ''] = result.stdout.slice(1).split('\n');
+
+  return result.stdout.startsWith('S') && /^[0-9a-f]{64}$/.test(digest) ? { cwd: cwd.startsWith('/') ? cwd : null, state: digest } : null;
 }
 
 /** Every call of a machine whose own shell keeps nothing (a host's `sh -c`) through the wrapper. */

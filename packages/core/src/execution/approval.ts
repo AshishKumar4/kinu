@@ -3,7 +3,7 @@ import { exists as nimbusExists, type Awaitable, type VFS } from '@nimbus-sh/cor
  *  and where the agent's tools reach a file. */
 
 import { literalWords, onUserRoots, type FileAccess, type GatedExecutor } from '../safety/command-review';
-import { approveFileAccess, gateExec, shellMoved, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
+import { approveFileAccess, gateExec, namedShellState, pinnedShellMoved, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
 import { shellCall } from './command-call';
 import { asBytes, currentBytes } from '../safety/bound-write';
 import { answeredRefusal } from './exec-result';
@@ -38,16 +38,21 @@ export function withApprovalGatedShell(
   const execute = (command: string, options: ShellExecOptions) => gateExec<ShellExecResult>(
     () => {
       const { name } = options;
-      const state = name === undefined || shell.state === undefined ? undefined : () => shell.state?.(name) ?? Promise.resolve(null);
+      const read = shell.state?.bind(shell);
+      const state = name === undefined || read === undefined ? undefined : () => namedShellState(() => read(name), name);
 
       return {
         call: { ...shellCall(command, options, { stdin: true }), ...(state !== undefined && { shellState: state }) },
-        run: async (pinned) => (pinned === undefined || await state?.() === pinned ? shell.exec(command, options) : notRun(shellMoved(name ?? '', 'changed'))),
+        run: async (pinned) => {
+          const moved = await pinnedShellMoved(pinned, name ?? '', state);
+
+          return moved === null ? shell.exec(command, options) : notRun(moved);
+        },
       };
     },
     notRun,
     { name: 'workspace', ...reach },
-    { policy, refusalCode: (result) => result.refusal?.reason ?? null },
+    { policy, refusalCode: (result) => result.refusal?.reason ?? null, member: 'exec' },
   )();
 
   const run = async (command: string, options: ShellExecOptions): Promise<ShellExecResult> => {
@@ -210,7 +215,7 @@ export function gateProviderExec(provider: ExecutorProvider, policy: ShellApprov
       (args) => read(args),
       (error) => refusalOf(error),
       provider,
-      { policy, refusalCode: (result) => result === undefined ? null : answeredRefusal(result)?.reason ?? null },
+      { policy, refusalCode: (result) => result === undefined ? null : answeredRefusal(result)?.reason ?? null, member: name },
     );
 
     const execute: CommandTool['execute'] = (...args) => {

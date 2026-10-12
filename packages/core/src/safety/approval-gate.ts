@@ -2,7 +2,7 @@
 
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import { CODE_WORK_DID_NOT_START, detach, diagnostics, KinuError, toKinuError, type ErrorCode } from '../obs/index';
+import { attempt, CODE_WORK_DID_NOT_START, detach, diagnostics, KinuError, settle, toKinuError, type ErrorCode } from '../obs/index';
 import { boundWriteCommand, type WriteSubject } from './bound-write';
 import { stableStringify } from './argument-digest';
 import type { JsonObject } from '../utils/json';
@@ -17,6 +17,9 @@ import {
  * Compared as {@link executionContextKey}, never as its display.
  */
 export interface ExecutionContext {
+  /** The member that runs it (`exec`, `startProcess`, `runCode`): a foreground command, a supervised process that
+   *  restarts, or a program are different invocations of the same words. */
+  readonly member?: string;
   /** The directory it starts in: resolved on the executor's session when the gate can, else as asked. */
   readonly cwd?: string;
   /** The named shell whose directory and exported variables it starts from. */
@@ -27,7 +30,7 @@ export interface ExecutionContext {
   readonly env?: { readonly names: readonly string[]; readonly sha256: string };
   /** A digest of what it reads on stdin. */
   readonly stdinSha256?: string;
-  /** The language a program runs in, and whether its runtime may be installed first. */
+  /** The language a program runs in (`default` for the runtime's own), and whether its runtime may be installed first. */
   readonly language?: string;
   readonly install?: string;
   /** What its named shell restores before it (directory and exported variables), as a digest: a call in that shell
@@ -36,6 +39,7 @@ export interface ExecutionContext {
 }
 
 export const ExecutionContextSchema = v.object({
+  member: v.optional(v.string()),
   cwd: v.optional(v.string()),
   shell: v.optional(v.string()),
   machine: v.optional(v.object({ id: v.string(), name: v.string() })),
@@ -50,7 +54,7 @@ export const ExecutionContextSchema = v.object({
 export function executionContextKey(context: ExecutionContext): string {
   const json: JsonObject = {};
 
-  for (const field of ['cwd', 'shell', 'stdinSha256', 'language', 'install', 'shellState'] as const) {
+  for (const field of ['member', 'cwd', 'shell', 'stdinSha256', 'language', 'install', 'shellState'] as const) {
     const value = context[field];
 
     if (value !== undefined) json[field] = value;
@@ -66,6 +70,8 @@ export function executionContextKey(context: ExecutionContext): string {
 /** What the owner reads of a context: each value quoted, so a delimiter inside one cannot pass for another field. */
 export function describeExecutionContext(context: ExecutionContext): string {
   const parts: string[] = [];
+
+  if (context.member !== undefined) parts.push(`via ${JSON.stringify(context.member)}`);
 
   if (context.machine !== undefined) parts.push(`on ${JSON.stringify(context.machine.name)}`);
 
@@ -101,17 +107,42 @@ export interface CommandCall {
   readonly shell?: string;
   /** Everything else the member honours that changes what runs. */
   readonly context: Omit<ExecutionContext, 'cwd' | 'shell' | 'shellState'>;
-  /** Reads the digest of what `shell` restores before a call; null: unreadable. Read only for a call the owner may be
-   *  asked about, and handed to `run`, which runs only while the shell still restores exactly that. */
-  readonly shellState?: () => Promise<string | null>;
+  /** Reads the digest of what `shell` restores before a call ({@link namedShellState}). Read only for a call that
+   *  waits on an owner's answer, and handed to `run`, which runs only while the shell still restores exactly that. */
+  readonly shellState?: () => Promise<string | KinuError>;
 }
 
-/** A call whose named shell no longer restores what it did when the call was asked (or cannot say): NOT RUN, so a
- *  spent approval returns, and the owner is asked again about the shell as it is. */
-export function shellMoved(shell: string, how: 'changed' | 'could not be read'): KinuError {
+/** A call whose named shell no longer restores what it did when the call was asked (or cannot say): NOT RUN, a
+ *  did-not-start code, so a spent approval returns, and the owner is asked again about the shell as it is. */
+function shellMoved(shell: string, how: 'changed' | 'could not be read', cause?: KinuError): KinuError {
   return new KinuError('unavailable', how === 'changed'
     ? `NOT RUN: shell ${JSON.stringify(shell)} changed (its directory or exported variables) since this was asked, so the approval does not cover it. Ask again.`
-    : `NOT RUN: the state of shell ${JSON.stringify(shell)} could not be read, so this cannot be approved. Ask again.`);
+    : `NOT RUN: the state of shell ${JSON.stringify(shell)} could not be read, so this cannot be approved. Ask again.`, cause === undefined ? undefined : { cause });
+}
+
+/** A named shell's state from its machine's `read` (null: unreadable), or the NOT RUN refusal that says it could not be
+ *  read; a failed read never escapes. */
+export function namedShellState(read: () => Promise<string | null>, shell: string): Promise<string | KinuError> {
+  return settle(Effect.match(attempt({ doing: `reading the state of shell ${JSON.stringify(shell)}`, otherwise: 'unavailable' }, read), {
+    onSuccess: (state): string | KinuError => state ?? shellMoved(shell, 'could not be read'),
+    onFailure: (failure) => shellMoved(shell, 'could not be read', failure),
+  }));
+}
+
+/**
+ * Why a call pinned to its named shell's state (`pinned`, absent when no answer was asked) must not run now: the shell,
+ * read again just before, no longer restores exactly that, or cannot be read. Null: run it. Called inside the shell's
+ * hold, so nothing of this agent moves the shell between this read and the run; the refusal refunds a spent approval.
+ */
+export async function pinnedShellMoved(
+  pinned: string | undefined, shell: string, read: (() => Promise<string | KinuError>) | undefined,
+): Promise<KinuError | null> {
+  if (pinned === undefined) return null;
+  const now = read === undefined ? shellMoved(shell, 'could not be read') : await read();
+
+  if (now instanceof KinuError) return now;
+
+  return now === pinned ? null : shellMoved(shell, 'changed');
 }
 
 /** A member's reading of one call: what runs and how to run exactly that, or its own refusal before anything runs. */
@@ -182,7 +213,7 @@ export function approveFileAccess(
   return Effect.gen(function* () {
     const decision = yield* Effect.promise(() => decideApproval(
       // The path is the whole of where a file access lands.
-      { command: `file ${access.op} ${access.hostPath}`, executor, context: {}, write: write?.subject, parks: write?.parks ?? false }, review, policy,
+      { command: `file ${access.op} ${access.hostPath}`, executor, context: async () => ({}), write: write?.subject, parks: write?.parks ?? false }, review, policy,
     ));
 
     if (!decision.run) return yield* Effect.fail(decision.error);
@@ -280,6 +311,8 @@ function afterGrants(review: ApprovalResult, policy: ShellApprovalPolicy, execut
 export interface ExecGateTuning<R> {
   readonly policy?: ShellApprovalPolicy;
   readonly refusalCode?: (result: R) => ErrorCode | null;
+  /** The member gated ({@link ExecutionContext.member}). */
+  readonly member?: string;
 }
 
 /**
@@ -310,20 +343,29 @@ export function gateExec<R>(
     const cwd = at !== undefined && !at.mayBeUsers ? at.cwd : call.cwd;
 
     const context: ExecutionContext = {
-      ...call.context, ...(cwd !== undefined && { cwd }), ...(call.shell !== undefined && { shell: call.shell }),
+      ...(tuning.member !== undefined && { member: tuning.member }), ...call.context,
+      ...(cwd !== undefined && { cwd }), ...(call.shell !== undefined && { shell: call.shell }),
     };
 
-    // A gated call's identity holds its named shell's state; one whose state cannot be read cannot be approved.
-    const shellState = review.decision === 'gate' ? await call.shellState?.() : undefined;
+    // Read only when the call waits on an owner's answer (after grants and the mode): its named shell's state joins
+    // the ask, and the run is pinned to it. One that cannot be read is not asked.
+    let pinned: string | undefined;
+    const read = call.shellState;
 
-    if (shellState === null) return denyResult(shellMoved(call.shell ?? '', 'could not be read'));
+    const asked = async (): Promise<ExecutionContext | KinuError> => {
+      if (read === undefined) return context;
+      const state = await read();
 
-    const decision = await decideApproval({
-      command: call.text, executor: executor.name, context: { ...context, ...(shellState !== undefined && { shellState }) },
-    }, review, policy);
+      if (state instanceof KinuError) return state;
+      pinned = state;
+
+      return { ...context, shellState: state };
+    };
+
+    const decision = await decideApproval({ command: call.text, executor: executor.name, context: asked }, review, policy);
 
     if (!decision.run) return denyResult(decision.error);
-    const result = await prepared.run(shellState);
+    const result = await prepared.run(pinned);
 
     if (decision.spent) {
       const code = refusalCode?.(result) ?? null;
@@ -438,17 +480,20 @@ async function askLive(
  *  A write is shown to whoever is asked and parks bound to its bytes; `parks` false refuses an unanswered ask. */
 async function decideApproval(
   subject: {
-    readonly command: string; readonly executor: string; readonly context: ExecutionContext;
+    readonly command: string; readonly executor: string;
+    /** Resolved only when an owner's answer is asked for; a refusal there is the answer. */
+    readonly context: () => Promise<ExecutionContext | KinuError>;
     readonly write?: () => Promise<WriteSubject>; readonly parks?: boolean;
   },
   rawReview: ApprovalResult,
   policy: ShellApprovalPolicy,
 ): Promise<GateAnswer> {
-  const { command: cmd, executor, context, write, parks = true } = subject;
+  const { command: cmd, executor, write, parks = true } = subject;
   await policy.resolve?.();
   const mode = policy.mode();
   const review = afterGrants(rawReview, policy, executor);
   let shown: Promise<WriteSubject> | null = null;
+  let context: ExecutionContext = {};
 
   // A parked write's text names its bytes; the one asked now is shown them.
   const request = async (parking: boolean): Promise<ShellApprovalRequest> => {
@@ -474,6 +519,11 @@ async function decideApproval(
         { executor, rules: review.hits.map((h) => h.rule).join(',') },
       );
     } else {
+      // Only 'strict' asks anyone; the context it asks with is read now, once.
+      const resolved = mode === 'strict' ? await subject.context() : context;
+
+      if (resolved instanceof KinuError) return { run: false, error: resolved };
+      context = resolved;
       const asked = await askOwner(review, policy, { mode, executor, parks, request });
 
       if (!asked.run) return asked;

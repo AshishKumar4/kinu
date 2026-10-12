@@ -15,6 +15,12 @@ import {
 } from './helpers/programmatic-host';
 import { clearPortCapability } from '@nimbus-sh/worker/port-capability';
 import { inlineWorkspaceStorage } from '@kinu.run/core/identity';
+import { Effect } from 'effect';
+import {
+  createShellSession, DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable, nimbusSessionShell,
+  withApprovalGatedShell, type NimbusSandboxHandle,
+} from '@kinu.run/core';
+import { createTestActors, sqlOver } from '@kinu.run/test-utils';
 
 const databases: Database[] = [];
 
@@ -239,5 +245,65 @@ describe('hosted workspace preview capabilities', () => {
     const reexposed = await reconstructedBox.ports.expose(4321);
     expect(reexposed.capability).toMatch(/^[a-f0-9]{24}$/);
     expect(reexposed.capability).not.toBe(exposed.capability);
+  });
+});
+
+describe('an approval in a hosted named session', () => {
+  /** The session plane as the hosted workspace adapts the public SDK: a name is a shell id. */
+  function sessionBox(sdk: ReturnType<typeof sdkBox>): NimbusSandboxHandle {
+    return {
+      ready: async () => {},
+      exec: async (command, options) => {
+        const { name, ...rest } = options ?? {};
+        const result = await sdk.exec(command, name === undefined ? rest : { ...rest, shellId: name });
+
+        return { command, success: result.exitCode === 0, stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
+      },
+      shellCwd: async (name) => (await sdk.exec('pwd', shell(name))).stdout.trim() || null,
+      files: { read: async () => null, write: async () => {}, list: async () => [], stat: async () => null, exists: async () => false, delete: async () => {} },
+    };
+  }
+
+  test('covers the variables the session exports, read inside it: one changed after the ask is another ask', async () => {
+    const storage = openWorkspaceDatabase();
+    const workspace = await NimbusWorkspace.create({ ...storage, generation: 1 });
+
+    for (const dir of ['a', 'b']) await workspace.fs.mkdir(`/home/main/${dir}`, { recursive: true });
+
+    const db = new Database(':memory:');
+    databases.push(db);
+    const sql = sqlOver(db);
+    const execRaw = (query: string) => { db.exec(query); };
+
+    initDeferredApprovalsTable(execRaw);
+    let seq = 0;
+
+    const queue = new DeferredApprovalQueue({
+      writes: null,
+      store: new DeferredApprovalStore(sql, createTestActors(sql, execRaw).main),
+      wake: () => Effect.void,
+      remember: () => {},
+      newId: () => `ask-${String(seq += 1)}`,
+    });
+
+    const sessionShell = nimbusSessionShell(sessionBox(sdkBox(workerHost(workspace, new Map()))), { home: '/home/main' });
+    const session = createShellSession({ home: '/home/main', userRoots: () => [], stored: async (name) => await sessionShell.cwd?.(name) ?? null });
+
+    const gated = withApprovalGatedShell(sessionShell, { filesOwner: 'agent', shellSession: session }, {
+      mode: () => 'strict', deferrals: queue.channel, requestApproval: null,
+    });
+
+    const dooming = ['git', 'push --force origin main; rm -r "$TARGET"'].join(' ');
+
+    await gated.exec('export TARGET=a', { name: 'dev' });
+    expect((await gated.exec(dooming, { name: 'dev' })).exitCode).not.toBe(0);
+    expect(queue.list()).toHaveLength(1);
+
+    await gated.exec('export TARGET=b', { name: 'dev' });
+    await queue.decide(queue.list().map((row) => row.id), 'approved');
+
+    expect((await gated.exec(dooming, { name: 'dev' })).exitCode).not.toBe(0);
+    expect(await workspace.fs.exists('/home/main/b')).toBe(true);
+    expect(await workspace.fs.exists('/home/main/a')).toBe(true);
   });
 });

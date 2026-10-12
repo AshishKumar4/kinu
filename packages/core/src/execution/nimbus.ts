@@ -274,12 +274,12 @@ function nimbusCall(member: 'runCode' | 'startProcess', text: string, options: N
 
   return {
     text,
-    ...(member === 'runCode' && language !== 'shell' && { program: language ?? 'the default language' }),
+    ...(member === 'runCode' && language !== 'shell' && { program: language ?? 'default' }),
     ...(options?.cwd !== undefined && { cwd: options.cwd }),
     context: {
       ...envContext(options?.env),
       ...(options?.stdin !== undefined && { stdinSha256: sha256Hex(options.stdin) }),
-      ...(language !== undefined && { language }),
+      ...(member === 'runCode' && { language: language ?? 'default' }),
       ...(options?.install !== undefined && { install: options.install }),
     },
   };
@@ -719,8 +719,15 @@ export function nimbusSessionShell(box: NimbusSandboxHandle, place: { readonly h
 
   if (shellCwd !== undefined) {
     shell.cwd = shellCwd;
-    // A session keeps its environment out of reach; what it reports, its directory, is what an approval binds.
-    shell.state = async (name) => sha256Hex(`cwd ${await shellCwd(name) ?? ''}`);
+
+    // What the session restores, read inside it and digested there: its directory and exported variables.
+    shell.state = async (name) => {
+      if (await shellCwd(name) === null) return 'none';
+      const read = await box.exec('{ pwd; export -p; } | sha256sum', { name, ...asCred(place.cred) });
+      const digest = read.exitCode === 0 ? /^[0-9a-f]{64}/.exec(read.stdout)?.[0] : undefined;
+
+      return digest ?? null;
+    };
   }
 
   return shell;

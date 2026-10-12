@@ -32,7 +32,7 @@ import {
 } from './device-tunnel';
 import { readDeviceOwnershipContext } from './signal';
 import { callJob, createShellSession, machineShellCall, machineShellCwd, reportsCwd, shellExecOptions, type MachineShells } from './shell-session';
-import { shellMoved } from '../safety/approval-gate';
+import { namedShellState, pinnedShellMoved } from '../safety/approval-gate';
 import { isPrefixName, RESERVED_ROOTS } from '../vfs/resolve';
 import {
   isJsonObject,
@@ -387,18 +387,19 @@ export function createDeviceTunnelExecutor(
       const { name } = options;
 
       // What the named shell restores, read on that machine; an approval binds it, and the run checks it again.
-      const state = name === undefined || shells === undefined ? undefined : async () => (await machineShellCwd({
+      const state = name === undefined || shells === undefined ? undefined : () => namedShellState(async () => (await machineShellCwd({
         exec: async (script) => {
           const readOpts: DeviceExecOptions = { timeoutMs: 0, requestId: nextDeviceRequestId(), ...(deviceId !== undefined && { deviceId }) };
 
           return v.parse(DeviceExecResultSchema, await rpc(DEVICE_METHOD.exec, [script], readOpts));
         },
-      }, name, shells))?.state ?? null;
+      }, name, shells))?.state ?? null, name);
 
       return { call: { ...read, context: { ...read.context, ...machine }, ...(state !== undefined && { shellState: state }) }, run: (pinned) => settle(Effect.tryPromise({
         try: () => names.hold(held, callJob(options), async () => {
-          if (pinned !== undefined && await state?.() !== pinned) return refusalOf(shellMoved(name ?? '', 'changed'));
+          const moved = await pinnedShellMoved(pinned, name ?? '', state);
 
+          if (moved !== null) return refusalOf(moved);
           const requestId = nextDeviceRequestId();
           ownership.report?.(requestId);
           const backgroundJobId = ownership.owner?.() ?? null;
