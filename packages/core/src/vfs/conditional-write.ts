@@ -5,7 +5,7 @@
  * and a rename in its own process. Either way the check and the write are one call, so nothing written between a read
  * and the write is lost: it is refused, naming what is there now.
  */
-import type { Awaitable, VFS, VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
+import type { Awaitable, VFS, VfsCasResult, VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { Effect } from 'effect';
 import * as v from 'valibot';
@@ -14,6 +14,7 @@ import { settle } from '../obs/effect';
 import { sha256Hex } from '../safety/argument-digest';
 import { VfsRevisionSchema, type CheckpointFiles, type VfsWriteReport } from '../types/primitives';
 import { FileRefusalError } from '../types/file-edits';
+import { ensureDir, vfsDirname } from '../utils/vfs-helpers';
 
 /**
  * What the write is conditioned on: that no file was there; the file as it was read (its bytes, and its revision where
@@ -26,11 +27,10 @@ export type ObservedFile =
   | { readonly kind: 'digest'; readonly sha256: string };
 
 /**
- * Which check held: the plane's revision, the read bytes' digest compared by the plane, the same compared across the
- * wire where the plane cannot (`/shared`), for a create on the workspace store that nothing was there just before, or
- * none, on a plane that checks neither (`unchecked`).
+ * Which check held: the plane's revision (revision 0 for a create), the read bytes' digest compared by the plane, the
+ * same compared across the wire where the plane cannot (`/shared`), or none, on a plane that checks neither (`unchecked`).
  */
-export type WriteGuarantee = 'revision' | 'digest' | 'digest-remote' | 'absence' | 'none';
+export type WriteGuarantee = 'revision' | 'digest' | 'digest-remote' | 'none';
 
 /** What the file holds now, in the plane's own terms: its revision, or its bytes' digest (null: no file). */
 export type FileNow = { readonly revision: VfsRevision } | { readonly sha256: string | null };
@@ -72,18 +72,21 @@ function made<A>(attempt: () => Awaitable<A>): Effect.Effect<A | null> {
   );
 }
 
+/** A revision-checked write's answer: landed, at its new revision, or refused, naming the one there now. */
+function revisionChecked(path: string, result: VfsCasResult | null): Effect.Effect<ConditionalWrite | null, KinuError> {
+  if (result === null) return Effect.succeed(null);
+
+  return result.ok
+    ? Effect.succeed({ guarantee: 'revision' as const, now: { revision: result.revision }, report: null })
+    : Effect.fail(changed(path, { revision: result.revision }));
+}
+
 function byRevision(vfs: VFS & CheckpointFiles, path: string, data: Uint8Array, expected: VfsRevision): Effect.Effect<ConditionalWrite | null, KinuError> {
   const check = vfs.writeFileIfRevision?.bind(vfs);
 
   if (check === undefined) return Effect.succeed(null);
 
-  return Effect.flatMap(made(() => check(path, data, expected)), (result) => {
-    if (result === null) return Effect.succeed(null);
-
-    return result.ok
-      ? Effect.succeed({ guarantee: 'revision' as const, now: { revision: result.revision }, report: null })
-      : Effect.fail(changed(path, { revision: result.revision }));
-  });
+  return Effect.flatMap(made(() => check(path, data, expected)), (result) => revisionChecked(path, result));
 }
 
 function byDigest(vfs: VFS & CheckpointFiles, path: string, data: Uint8Array, expected: string | null): Effect.Effect<ConditionalWrite | null, KinuError> {
@@ -101,46 +104,30 @@ function byDigest(vfs: VFS & CheckpointFiles, path: string, data: Uint8Array, ex
 }
 
 /**
- * A create where nothing was read: revision 0, the versioned store's own "no file". Nimbus's composite resolves the path
- * before its backend sees that revision and answers ENOENT for a missing file (Nimbus ask 36), so there, until it
- * lands, the create checks that nothing is there and then writes plainly: a file another writer creates between the
- * two is replaced. Every overwrite stays revision-checked.
+ * A create where nothing was read: revision 0, the versioned store's own "no file", made only where none is, so of two
+ * creates one lands and the other is refused, naming it. A directory above it that is not there yet (ENOENT) is made
+ * first, on this plane as its principal, and the create asked again.
  */
 function byAbsence(vfs: VFS & CheckpointFiles, path: string, data: Uint8Array): Effect.Effect<ConditionalWrite | null, KinuError> {
-  return Effect.gen(function* () {
-    const check = vfs.writeFileIfRevision?.bind(vfs);
+  const check = vfs.writeFileIfRevision?.bind(vfs);
 
-    if (check === undefined) return null;
+  if (check === undefined) return Effect.succeed(null);
+  const parent = vfsDirname(path);
+  const create = Effect.tryPromise({ try: async () => check(path, data, ABSENT_REVISION), catch: (cause) => ({ cause }) });
 
-    const created = yield* Effect.tryPromise({ try: async () => check(path, data, ABSENT_REVISION), catch: (cause) => ({ cause }) }).pipe(
-      Effect.catchIf(({ cause }) => isVfsError(cause) && cause.code === 'ENOENT', () => Effect.succeed('unexpressed' as const)),
-      Effect.catchIf(({ cause }) => isVfsError(cause) && cause.code === 'ENOTSUP', () => Effect.succeed(null)),
-      Effect.catch((failed) => Effect.die(failed.cause)),
-    );
+  const created = create.pipe(
+    Effect.catchIf(({ cause }) => parent !== '' && isVfsError(cause, 'ENOENT'), () => Effect.andThen(Effect.promise(async () => ensureDir(vfs, parent)), create)),
+    Effect.catchIf(({ cause }) => isVfsError(cause, 'ENOTSUP'), () => Effect.succeed(null)),
+    Effect.catch((failed) => Effect.die(failed.cause)),
+  );
 
-    if (created === null) return null;
-
-    if (created !== 'unexpressed') {
-      if (!created.ok) return yield* Effect.fail(changed(path, { revision: created.revision }));
-
-      return { guarantee: 'revision' as const, now: { revision: created.revision }, report: null };
-    }
-
-    if ((yield* Effect.promise(async () => vfs.stat(path))) !== null) {
-      return yield* Effect.fail(changed(path, { sha256: sha256Hex(yield* Effect.promise(async () => vfs.readFile(path))) }));
-    }
-
-    yield* Effect.promise(async () => vfs.writeFile(path, data));
-    const written = yield* Effect.promise(async () => vfs.stat(path));
-
-    return { guarantee: 'absence' as const, now: written?.revision === undefined ? { sha256: sha256Hex(data) } : { revision: written.revision }, report: null };
-  });
+  return Effect.flatMap(created, (result) => revisionChecked(path, result));
 }
 
 /**
- * A plane that checks neither a revision nor a digest writes as it did before there was a check, and says so (`none`);
- * a create still finds out first whether a file is there. No plane the agent's file tool or the file manager reaches
- * is one: this keeps a plane without them working, not silently guarded.
+ * A plane that checks neither a revision nor a digest writes unchecked, and says so (`none`); a create still finds out
+ * first whether a file is there. A session's file plane is one (`nimbusSessionFiles`: the SDK's write takes no
+ * precondition), and it is a hosted agent's file tool's, so this is how that agent writes at all.
  */
 function unchecked(vfs: VFS & CheckpointFiles, path: string, data: Uint8Array, observed: ObservedFile): Effect.Effect<ConditionalWrite, KinuError> {
   return Effect.gen(function* () {

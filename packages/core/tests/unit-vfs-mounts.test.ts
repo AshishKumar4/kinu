@@ -6,6 +6,7 @@ import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { fakeMossaic } from '@kinu.run/test-utils/mossaic';
+import { present } from '@kinu.run/test-utils';
 
 import { isVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { removeTree, standardMounts, withMountTable, workspaceFilePlane, type VfsMount, type WorkspacePrincipal } from '../src/vfs/mounts';
@@ -14,6 +15,7 @@ import { mossaicVfs } from '../src/vfs/mossaic-vfs';
 import { deviceFiles, type DeviceFileScope, type DeviceTransport } from '../src/execution/device-tunnel-executor';
 import { createWorkspaceBundle } from './helpers';
 import { storeFiles } from '../src/vfs/nimbus-workspace';
+import { writeExecutorFileOp } from '../src/read-models/files';
 import type { JsonValue } from '../src/utils/json';
 import { agentCred, agentHome, agentTmpRoot, confineAgentTmp, provisionAgentHome } from '../src/vfs/agent-home';
 
@@ -620,6 +622,25 @@ describe('a write on the workspace\'s namespace', () => {
 		expect(await bundle.shell.exec('cat /slates/keeper/package.json /home/main/notes/2026/today.md')).toMatchObject({ stdout: '{"main":"server.ts"}kept', exitCode: 0 });
 		await expect(writeText(files, '/etc/kinu/probe.conf', 'x')).rejects.toMatchObject({ code: 'EACCES' });
 		expect(await exists(files, '/etc/kinu')).toBe(false);
+	});
+
+	// The owner's upload names no revision: a create, which the store makes only where nothing is (revision 0), the
+	// directories above it made first. Two at once beneath a directory not there yet: one lands, the other is told.
+	test('two creates at once beneath a missing directory: one lands, the other is a conflict naming it', async () => {
+		const bundle = createWorkspaceBundle(new Database(':memory:'));
+		const files = shared(bundle, []);
+		const router = { getProvider: () => ({ files, homeDir: async () => WORKSPACE_ROOT }) };
+
+		const answers = await Promise.all(['first', 'second'].map((text) => (
+			writeExecutorFileOp(router, 'workspace', 'not-created/yet/file.txt', { bytes: new TextEncoder().encode(text) }))));
+
+		const landed = answers.flatMap((answer, index) => ('ok' in answer ? [index] : []));
+		const refused = answers.find((answer) => 'conflict' in answer);
+		const kept = await readText(files, 'not-created/yet/file.txt');
+
+		expect(landed).toHaveLength(1);
+		expect(kept).toBe(landed[0] === 0 ? 'first' : 'second');
+		expect(refused).toEqual({ conflict: true, revision: present((await files.stat('not-created/yet/file.txt'))?.revision, 'the landed revision') });
 	});
 });
 

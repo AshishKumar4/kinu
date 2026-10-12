@@ -11,7 +11,7 @@ function editResult(path: string, applied: Array<{ line: number; removedLines: n
 }
 
 function writeResult(path: string, action: 'created' | 'replaced', bytes: number): string {
-  return JSON.stringify({ path, reference: `root://${path}`, bytes, action, checked: action === 'created' ? 'absence' : 'revision' });
+  return JSON.stringify({ path, reference: `root://${path}`, bytes, action, checked: 'revision' });
 }
 
 describe('the file diff card', () => {

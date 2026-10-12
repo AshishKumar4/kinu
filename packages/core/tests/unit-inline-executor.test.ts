@@ -270,8 +270,7 @@ describe('workspace.writeFile over the workspace filesystem — what both backen
     expect(await readText(vfs, 'notes/deep/todo.md')).toBe('from codemode');
   });
 
-  // The versioned store cannot yet create on revision 0 through its namespace (Nimbus ask 36): a create checks that
-  // nothing is there, and every overwrite is checked by the revision read.
+  // The versioned store creates on revision 0 (nothing there), and checks every overwrite by the revision read.
   test('a create is checked by revision 0, an overwrite is checked by the revision read, and a peer\'s write refused', async () => {
     const { rt, vfs } = buildPlane();
     let peer: (() => Promise<void>) | null = null;
