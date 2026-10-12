@@ -19,6 +19,8 @@ export type {
 
 export { EXECUTOR_CAPABILITIES, NO_TIMER_DEADLINE_MS, commandTool } from './types';
 
+export { wordsOnly } from './command-call';
+
 export {
   commandResult, CommandResultSchema, type CommandResult, formatExecResult, answeredRefusal, type ExecOutcome,
 } from './exec-result';

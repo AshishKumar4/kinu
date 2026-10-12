@@ -1034,7 +1034,7 @@ export {
   nimbusSessionShell,
   type NimbusSandboxHandle,
   type NimbusStartResult, type NimbusExecOptions, type NimbusExecResult, type NimbusPortInfo,
-  EXECUTOR_CAPABILITIES, NO_TIMER_DEADLINE_MS, commandTool,
+  EXECUTOR_CAPABILITIES, NO_TIMER_DEADLINE_MS, commandTool, wordsOnly,
   type ExecutorTool, type ExecutorToolResult, type CommandTool,
   type ExecutorCapability, type ExecutorKind, type ExecutorProvider, type ExecutorProviderSurface,
   type ExecutorLifecycleStatus, type ExecutorStatus,

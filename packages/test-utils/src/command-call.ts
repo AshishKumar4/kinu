@@ -1,14 +1,5 @@
 import * as v from 'valibot';
-import { commandTool, type CommandTool, type ExecutorToolResult, type PreparedCall } from '@kinu.run/core';
-
-/** A command member that takes nothing but the words: its one reading of a call is the command, run as given. */
-export function wordsOnly<R>(run: (command: string) => Promise<R>): (args: readonly unknown[]) => PreparedCall<R> {
-  return (args) => {
-    const command = typeof args[0] === 'string' ? args[0] : '';
-
-    return { call: { text: command, context: {} }, run: () => run(command) };
-  };
-}
+import { commandTool, type CommandTool, type ExecutorToolResult } from '@kinu.run/core';
 
 const FakeOptionsSchema = v.object({ cwd: v.optional(v.string()), language: v.optional(v.string()) });
 

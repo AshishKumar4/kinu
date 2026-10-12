@@ -1,6 +1,5 @@
 // Egress gate: a placeholder reveals nothing, a secret reaches only its bound host, a facet never
 // out-reaches its parent, and nothing the container reads carries the secret back.
-import { wordsOnly } from '@kinu.run/test-utils';
 import { describe, expect, test } from 'bun:test';
 import {
   EGRESS_PLACEHOLDER_PREFIX,
@@ -18,7 +17,7 @@ import {
   type ApprovalGrant,
   type EgressSecretBinding,
   type ShellApprovalMode,
-  type ShellApprovalPolicy,
+  type ShellApprovalPolicy, wordsOnly,
 } from '../src/index';
 
 /** A placeholder of the real shape: prefix + 43 base64url characters. */

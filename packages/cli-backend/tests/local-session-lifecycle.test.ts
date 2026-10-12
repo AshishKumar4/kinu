@@ -1,7 +1,7 @@
 import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // LocalAgentSession over the real CLI runtime and a fake model: its host lifecycle and turn review.
 import { describe, test, expect } from 'bun:test';
-import { AwaitedList, createMockFetch, handClock, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel, workspaceDatabase } from '@kinu.run/test-utils';
+import { AwaitedList, createMockFetch, fakeCommandMember, handClock, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel, workspaceDatabase } from '@kinu.run/test-utils';
 import { initWorkspaceSchema, JobOutputFrameSchema, processJobHolder, WORKSPACE_SKILLS_DIR, workspaceSkillPath } from '@kinu.run/core';
 import { narrowToolSurface, WORKSPACE_ROOT } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
@@ -54,11 +54,11 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     router.register({
       name: 'sandbox', kind: 'sandbox', capabilities: new Set(['shell']), filesOwner: 'agent', isAvailable: () => true,
       homeDir: async () => '/', connect: async () => {}, disconnect: async () => {},
-      tools: { exec: { description: 'record execution', execute: async (input) => {
-        executed.push(String(input));
+      tools: { exec: fakeCommandMember('record execution', async (input) => {
+        executed.push(input);
 
         return 'executed';
-      } } },
+      }) },
     });
 
     const exec = router.getProvider('sandbox')?.tools.exec;

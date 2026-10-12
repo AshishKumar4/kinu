@@ -4,7 +4,7 @@ import { exists, readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 // injected clock/RNG, no model calls or I/O, so every slice is byte-reproducible.
 
 import type { ModelMessage } from 'ai';
-import type { PreparedCall } from '../safety/approval-gate';
+import { wordsOnly } from '../execution/command-call';
 import { ExtensionHost } from '../extension';
 import { DynamicContextLedger, type DynamicContext } from '../prompting/volatile-context';
 import { TurnAccumulator } from '../orchestrator/turn-accumulator';
@@ -201,15 +201,6 @@ const COMMANDS = Object.freeze([
 const REVIEW_OWNERS = Object.freeze(['agent', 'user'] as const);
 
 const USER_DEVICE = Object.freeze({ name: 'device', filesOwner: 'user' } as const);
-
-/** A member that takes nothing but the words: what it reads of a call is the command alone. */
-function wordsOnly(run: (command: string) => Promise<string>): (args: readonly unknown[]) => PreparedCall<string> {
-  return (args) => {
-    const command = typeof args[0] === 'string' ? args[0] : '';
-
-    return { call: { text: command, context: {} }, run: () => run(command) };
-  };
-}
 
 const PROVIDERS = Object.freeze([
   ['anthropic', 'claude-sonnet-4-7'],

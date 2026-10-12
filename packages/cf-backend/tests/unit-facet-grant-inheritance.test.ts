@@ -1,12 +1,11 @@
 // Every agent in a workspace shares the container, so it shares the root's grants or a subset, never a superset.
 // Grants are only written to the root DO's `actor_config`; a facet reads them over RPC, and a method missing
 // from the surface is silently unreachable rather than a build error.
-import { wordsOnly } from '@kinu.run/test-utils';
 import { describe, expect, test } from 'bun:test';
 import {
   createInheritedApprovalPolicy, egressSecretRule, gateExec,
   grantsAreSubset, resolveInheritedGrants, AGENT_RPC_ACCESS,
-  type ApprovalGrant, type ShellApprovalMode,
+  type ApprovalGrant, type ShellApprovalMode, wordsOnly,
 } from '@kinu.run/core';
 import { ORCHESTRATOR_RPC_SURFACE } from '../src/rpc-surface';
 import { hostedMainActor, hostedSubordinateHarness, orchestratorHarness, workspaceMainActor } from './helpers/actor-harness';

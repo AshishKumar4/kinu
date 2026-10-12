@@ -3,7 +3,6 @@
  * assertion names the owner; grants and requests name the executor.
  */
 
-import { wordsOnly } from '@kinu.run/test-utils';
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { Effect } from 'effect';
@@ -24,7 +23,7 @@ import {
   type GatedExecutor,
   type ShellApprovalPolicy,
   type ApprovalDecision,
-  type ShellApprovalRequest,
+  type ShellApprovalRequest, wordsOnly,
 } from '../src/index';
 import { makeExecRaw, makeSql } from './helpers';
 

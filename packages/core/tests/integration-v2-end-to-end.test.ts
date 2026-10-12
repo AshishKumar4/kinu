@@ -1,7 +1,6 @@
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** v2 end-to-end: inline executor, branching heads, scaffold proposal and promotion, durable event log, approval gate. */
 
-import { wordsOnly } from '@kinu.run/test-utils';
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
@@ -12,7 +11,7 @@ import {
   getPendingScaffold, applyPromotionDecision, readScaffoldVersion,
   initScaffoldTables, modifyScaffold,
   initRunEventTables, RunEventRecorder,
-  reviewCommand, gateExec,
+  reviewCommand, gateExec, wordsOnly,
 } from '../src/index';
 import { present, testActorHandle } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw, createTestRuntime, createTestActor } from './helpers';

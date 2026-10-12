@@ -1,7 +1,7 @@
 /** How a command member's reading of a call becomes the call the approval gate reviews, keys and runs. */
 
 import { sha256Hex, stableStringify } from '../safety/argument-digest';
-import type { CommandCall, ExecutionContext } from '../safety/approval-gate';
+import type { CommandCall, ExecutionContext, PreparedCall } from '../safety/approval-gate';
 import type { ShellExecOptions } from '../types/primitives';
 
 /**
@@ -23,4 +23,13 @@ export function envContext(env: Readonly<Record<string, string>> | undefined): P
 
   // One spelling however the call ordered its keys; names are unique, so no two compare equal.
   return { env: { names: Object.keys(env).sort((a, b) => (a < b ? -1 : 1)), sha256: sha256Hex(stableStringify({ ...env })) } };
+}
+
+/** A member that takes nothing but the words: its one reading of a call is the command, run as given. */
+export function wordsOnly<R>(run: (command: string) => Promise<R>): (args: readonly unknown[]) => PreparedCall<R> {
+  return (args) => {
+    const command = typeof args[0] === 'string' ? args[0] : '';
+
+    return { call: { text: command, context: {} }, run: () => run(command) };
+  };
 }
