@@ -26,12 +26,22 @@ export class AgentWakes extends LifecycleCapability {
     this.#wake = wake;
   }
 
-  /** Soonest wins. */
-  async arm(actorId: string, atMs: number): Promise<void> {
+  /**
+   * Soonest wins. The wake's row, its durable intent, is written before this returns, with whatever commit its caller is
+   * in: the SDK's queue writes synchronously and only then projects the alarm from its rows, which the answered promise
+   * settles. A write the queue refuses fails that promise and leaves no intent: a start reconciles from what is owed.
+   */
+  arm(actorId: string, atMs: number): Promise<void> {
     const current = this.lifecycle.jobs.get(jobId(actorId));
 
-    if (current !== undefined && current.time <= atMs) return;
-    await this.#push(actorId, atMs);
+    if (current !== undefined && current.time <= atMs) return Promise.resolve();
+
+    return this.#push(actorId, atMs);
+  }
+
+  /** The alarm projected again from every intent the queue holds: a start sets the one a death kept from being set. */
+  async project(): Promise<void> {
+    await this.lifecycle.jobs.rearm();
   }
 
   /**
@@ -68,7 +78,7 @@ export class AgentWakes extends LifecycleCapability {
 
   readonly onJobError = retriedLater("waking an agent's own isolate for what it owes");
 
-  async #push(actorId: string, atMs: number): Promise<void> {
-    await this.lifecycle.jobs.push({ id: jobId(actorId), fn: AGENT_WAKE_JOB, time: atMs, payload: { actorId } });
+  #push(actorId: string, atMs: number): Promise<void> {
+    return this.lifecycle.jobs.push({ id: jobId(actorId), fn: AGENT_WAKE_JOB, time: atMs, payload: { actorId } }).then(() => undefined);
   }
 }

@@ -27,6 +27,9 @@ export function makeCtx(db: Database, id = 'harness-actor', objectName = id): Ag
   // Real KV storage: `_cf_initAsFacet` puts `cf_agents_parent_path` here and the
   // owner's inspection reads it back before traversing the hop.
   const kv = new Map<string, JsonValue>();
+  // This activation's alarm, as the object last set it: a later activation over the same rows starts with none, as one
+  // whose alarm a reset kept from being set does.
+  let alarm: number | null = null;
 
   const context = {
     storage: {
@@ -72,9 +75,9 @@ export function makeCtx(db: Database, id = 'harness-actor', objectName = id): Ag
         for (const { name } of tables) db.exec(`DROP TABLE IF EXISTS "${name}"`);
         kv.clear();
       },
-      setAlarm: async () => {},
-      getAlarm: async () => null,
-      deleteAlarm: async () => {},
+      setAlarm: async (at: number | Date) => { alarm = typeof at === 'number' ? at : at.getTime(); },
+      getAlarm: async () => alarm,
+      deleteAlarm: async () => { alarm = null; },
     },
     id: { toString: () => id, name: objectName },
     waitUntil: () => {},

@@ -1,5 +1,5 @@
 import { exists as nimbusExists, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
-import { PLATFORM_CATALOG, GitHubFactSchema, actorPolicy, AgentDeliveries, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, codemodeSurface, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type ToolSurfaceNarrowing, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type Fact, AGENT_CONFIG_KEYS } from '@kinu.run/core';
+import { PLATFORM_CATALOG, GitHubFactSchema, actorPolicy, AgentDeliveries, AgentStops, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, codemodeSurface, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type ToolSurfaceNarrowing, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type Fact, AGENT_CONFIG_KEYS } from '@kinu.run/core';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
@@ -730,12 +730,69 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   private readonly agentKeys = new Map<string, string>();
 
+  /**
+   * Every call into an agent's isolate. A Stop it has not answered crosses first: any other call joins that crossing,
+   * so nothing more of the agent's is driven before it. A Stop's own crossings (its run's interrupt, its chat's) wait on
+   * none, and the chat's, answered, retires the Stop it owed.
+   */
   protected async agentCalls(actorId: string): Promise<AgentFacetCalls> {
     const key = `kinu-agent:${this.agentKey(actorId)}`;
+    const through = <A>(call: (isolate: AgentFacetCalls) => Promise<A>) => this.agentIsolateSlots.held(key, () => this.agentIsolate(actorId), call);
 
     this.openedIsolates.add(actorId);
+    const stopFirst = attempt({ doing: "crossing the Stop the agent's isolate has not answered", otherwise: 'unavailable' }, () => this.stopReplayed(actorId));
+    const stopping = agentCallsThrough(through);
 
-    return agentCallsThrough((call) => this.agentIsolateSlots.held(key, () => this.agentIsolate(actorId), call));
+    return {
+      ...agentCallsThrough((call) => Effect.andThen(stopFirst, through(call))),
+      interrupt: async (snapshot, turnId) => { await stopping.interrupt(snapshot, turnId); },
+      interruptChat: async (snapshot, cutoff) => await this.stopCrossed(actorId, stopping, snapshot, cutoff),
+    };
+  }
+
+  /** The agents' Stops their isolates have not answered (AgentStops over `sql`). */
+  private get stops(): AgentStops {
+    return new AgentStops(this.boundSql);
+  }
+
+  /** An agent's Stop its isolate has not answered, held per agent: AgentStops' owe and retire run over `sql`, which drops it. */
+  private readonly stopOwed = this.held.holdEach(['agent_stops'], (actorId: string) => this.stops.owed(actorId));
+
+  /** The crossing of an agent's unanswered Stop each caller joins: one at a time per agent, dropped once it settles. */
+  private readonly stopReplays = new Map<string, Promise<boolean>>();
+
+  /**
+   * An agent's Stop its isolate has not answered (the workspace reset before it did), crossed now at its cutoff and
+   * retired once the isolate commits it. Answers whether one was owed. Every call that drives the agent's work joins it
+   * first, and so does an opening its isolate asks for: one asked while a Stop is owed was queued before that Stop.
+   */
+  private async stopReplayed(actorId: string): Promise<boolean> {
+    if (this.stopOwed(actorId) === null) return false;
+    const running = this.stopReplays.get(actorId);
+
+    if (running !== undefined) return await running;
+
+    const replay = (async () => {
+      await (await this.agentCalls(actorId)).interruptChat(this.agentSnapshot(actorId), null);
+
+      return true;
+    })().finally(() => { this.stopReplays.delete(actorId); });
+
+    this.stopReplays.set(actorId, replay);
+
+    return await replay;
+  }
+
+  /** The chat's interrupt, at `cutoff` and at an owed Stop's, read before it crosses: that Stop is retired once the
+   *  isolate answers, having committed the cutoff and cancelled what it queued; a Stop owed meanwhile stays owed. */
+  private async stopCrossed(actorId: string, calls: AgentFacetCalls, snapshot: AgentSnapshot, cutoff: number | null): Promise<readonly string[]> {
+    const owed = this.stopOwed(actorId);
+    const newest = owed?.cutoff ?? null;
+    const handed = await calls.interruptChat(snapshot, cutoff === null || newest === null ? cutoff ?? newest : Math.max(cutoff, newest));
+
+    if (owed !== null) this.stops.retire(actorId, owed.generation);
+
+    return handed;
   }
 
   protected async agentIsolate(actorId: string): Promise<AgentFacetCalls> {
@@ -2609,7 +2666,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private readonly coordinator = new DeliveryCoordinator({
     sql: this.boundSql,
     transaction: (body) => this.ctx.storage.transactionSync(body),
-    armWake: (actorId) => this.owedWake(actorId),
+    wake: (actorId, at) => this.owedWake(actorId, at ?? Date.now() + RECOVERY_BACKOFF_CEILING_MS),
     admit: async (actorId, delivery) => {
       const { answer, owes } = await (await this.preArmed(actorId, () => this.agentCalls(actorId))).admit(this.agentSnapshot(actorId), delivery);
 
@@ -2667,13 +2724,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return await this.coordinator.deliver(actorId, delivery, source);
   }
 
-  /** Armed straight after the commit, before any crossing: only storage writes between, so a reset after the commit
-   *  finds the wake that crosses what it owes. */
-  private async owedWake(actorId: string): Promise<void> {
-    this.admitWork();
-    // The agent reads working from here, as soon as it is owed: its turn claims are its own isolate's.
-    this.liveReadsMoved(readsOfTables(['actor_turn_claims']));
-    await this.agentWakes.arm(actorId, Date.now() + RECOVERY_BACKOFF_CEILING_MS);
+  /** The agent's wake, intended at `at` inside the producer's commit (its row written with the delivery's), and its
+   *  projection after the commit: the agent reads working from there, as soon as it is owed. */
+  private owedWake(actorId: string, at: number): () => Promise<void> {
+    const projected = this.agentWakes.arm(actorId, at);
+
+    return async () => {
+      // Its turn claims are its own isolate's.
+      this.liveReadsMoved(readsOfTables(['actor_turn_claims']));
+      await projected;
+      this.admitWork();
+    };
   }
 
   /** The events a delivery carries, bound to it in the agent's log; null for one that carries none. */
@@ -2843,8 +2904,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   protected override async stopAgent(actorId: string): Promise<void> {
     const { cancelled, cutoff } = this.ctx.storage.transactionSync(() => {
       new TurnFences(this.boundSql).cancel(actorId, Date.now());
+      const stopped = this.coordinator.cancel(actorId);
 
-      return this.coordinator.cancel(actorId);
+      // Owed until the agent's isolate commits it: a reset before then crosses it before anything else of the agent's.
+      this.stops.owe(actorId, stopped.cutoff);
+
+      return stopped;
     });
 
     // The work its cancelled deliveries carried is dismissed with them.
@@ -3995,6 +4060,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this.maintenanceUnfinished = this.maintenanceSweeps();
     // An activation is the only moment a workspace whose wake was lost can notice; the arm is detached.
     this.armDurableWake();
+    this.reconcileAgentWakes();
 
     // The activation only classifies and arms a wake; all dispatch runs under that durable wake,
     // because an activation launches no external work, awaited or detached.
@@ -4009,6 +4075,21 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // stays unstarted and every request fails with the cause until one boots; owed work keeps its wake.
     await this.hostedWorkspace().bundle.session();
     this.activationRecovery = this.recoverDeadActivation();
+  }
+
+  /**
+   * What a death left owed its agents and kept from their wakes: every agent owed a delivery, or owing its isolate a
+   * Stop, has its wake intended now, and the alarm is projected again from every intent once the start is done. The
+   * agent's wake then crosses what it is owed, its Stop first. Detached, as the activation's other arms are.
+   */
+  private reconcileAgentWakes(): void {
+    // A retired agent's isolate is gone with it, and with it what a Stop would cancel.
+    const stopped = this.stops.owedEach().map((stop) => stop.actorId).filter((actorId) => this.liveActor(actorId));
+
+    this.detachOwned(logged('subordinate.agent_wake_reconcile_failed', { doing: "reconciling the wakes of agents owed work a reset left", otherwise: 'io' }, async () => {
+      await Promise.all([this.coordinator.reconcile(), ...stopped.map((actorId) => this.agentWakes.arm(actorId, Date.now()))]);
+      await this.agentWakes.project();
+    }, { workspace: this.name }));
   }
 
   /**

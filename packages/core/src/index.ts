@@ -1801,7 +1801,7 @@ export { ModelCatalogSession, resolveEffectiveModelSpec, type ModelCatalogRead }
 export { stampAuthorship, turnAuthorship, type TurnAuthorship } from './orchestrator/turn-authorship';
 
 export {
-  AgentDeliveries, DeliveryInbox, DeliverySchema, wordsRefusal, initAgentDeliveriesTable, pendingEventsDelivery, assignmentDelivery, deliveryMetadata, deliveredSignal, handBackCarried, type OwedDelivery, type DeliveredAssignment, type DeliveryPort, type OwedAdmission, type Delivery, type DeliveryAnswer, type DeliveryInput, type TurnDeliveryInput, type IntentInput, type IntentResult, type OwedIntent, type OwnerIntent, type OwedOwnerIntent, OwedIntentSchema, OwedOwnerIntentSchema,
+  AgentDeliveries, AgentStops, DeliveryInbox, DeliverySchema, wordsRefusal, initAgentDeliveriesTable, initAgentStopsTable, type OwedStop, pendingEventsDelivery, assignmentDelivery, deliveryMetadata, deliveredSignal, handBackCarried, type OwedDelivery, type DeliveredAssignment, type DeliveryPort, type OwedAdmission, type Delivery, type DeliveryAnswer, type DeliveryInput, type TurnDeliveryInput, type IntentInput, type IntentResult, type OwedIntent, type OwnerIntent, type OwedOwnerIntent, OwedIntentSchema, OwedOwnerIntentSchema,
 } from './subordinates/deliveries';
 
 export { DeliveryCoordinator, InProcessDeliveries, type CrossedDelivery, type DeliveryHost } from './subordinates/delivery-coordinator';

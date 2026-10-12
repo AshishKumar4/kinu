@@ -181,6 +181,11 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     return this.ctx;
   }
 
+  /** The instant this activation's alarm is set for, as its job queue last projected it; null when none is set. */
+  async harnessAlarm(): Promise<number | null> {
+    return await this.ctx.storage.getAlarm();
+  }
+
   /** An isolate the loader refuses to open, for the agents it names. */
   harnessIsolateRefusal: { readonly refuses: (actorId: string) => boolean; readonly error: Error } | null = null;
   /** Joined with the fibers and not with the keep-alives, as production's lanes were fibers before D11. */
@@ -1573,6 +1578,16 @@ export async function fireSoonestWake(agent: Pick<HarnessOrchestratorAgent, 'ala
   await agent.alarm();
 }
 
+
+/** The object's alarm as the platform fires it: at the instant its job queue projected, and never when none is set. */
+export async function fireAlarm(agent: HarnessOrchestratorAgent): Promise<void> {
+  const at = await agent.harnessAlarm();
+
+  if (at === null) throw new Error('no alarm is set');
+
+  setSystemTime(new Date(Math.max(at, Date.now())));
+  await agent.alarm();
+}
 
 /** A recording owner-UserDO binding, in place of the refusing default. */
 export interface RecordedUserPlaneCalls {
