@@ -99,7 +99,7 @@ export class HeapDriver extends DurableObject<DriverEnv> {
 }
 
 /** What the model answers and whether it answers yet; module state, which the entrypoint and fetch share. */
-const model = { answerBytes: 0, holding: false, parked: 0, calls: 0, wide: new Set<string>(), toolSteps: 0, stepBytes: 0, stepping: false, arrived: 0, released: 0, hires: 0, helpersAnswered: 0, holdHelper: false, helperParked: false, nest: false, failingSteps: 0, failingAsked: 0 };
+const model = { answerBytes: 0, holding: false, parked: 0, calls: 0, wide: new Set<string>(), toolSteps: 0, stepBytes: 0, stepping: false, arrived: 0, released: 0, hires: 0, helpersAnswered: 0, holdHelper: false, helperParked: false, nest: false, failingSteps: 0, failingAsked: 0, stepped: { binding: 0, compat: 0 } };
 
 /** Each character above U+00FF in `request`, with the text before it: one of them stores the whole request two bytes each. */
 function noteWide(request: string): void {
@@ -133,8 +133,11 @@ async function scriptedBody(inputs: { readonly stream?: boolean; readonly messag
 
   noteWide(JSON.stringify(inputs));
   model.parked += 1;
-  // Stepping: each call waits until the gate has read the heap at it.
+  // Stepping: each call waits until the gate has read the heap at it. The cursor is every workspace's: which path took
+  // each step is counted, so the gate can tell its turn's steps from another workspace's.
   const seq = model.stepping ? ++model.arrived : 0;
+
+  if (seq > 0) model.stepped.binding += 1;
 
   // A timer is I/O to the runtime; a bare pending promise would be cancelled as a hung request.
   while (model.holding || model.released < seq) await scheduler.wait(seq > 0 ? 2 : 20);
@@ -238,6 +241,8 @@ async function compatAnswer(body: string): Promise<Response> {
     model.parked += 1;
     const seq = model.stepping ? ++model.arrived : 0;
 
+    if (seq > 0) model.stepped.compat += 1;
+
     while (model.holding || model.released < seq) await scheduler.wait(seq > 0 ? 2 : 20);
     model.parked -= 1;
     const page = 'word '.repeat(Math.ceil(model.stepBytes / 5)).slice(0, model.stepBytes);
@@ -275,6 +280,7 @@ function scriptModel(asked: URLSearchParams): Response {
     model.stepping = model.toolSteps > 0;
     model.arrived = 0;
     model.released = 0;
+    model.stepped = { binding: 0, compat: 0 };
   }
 
   if (asked.has('released')) model.released = Number(asked.get('released'));
@@ -299,7 +305,7 @@ function scriptModel(asked: URLSearchParams): Response {
     model.stepping = false;
   }
 
-  return Response.json({ parked: model.parked, calls: model.calls, wide: [...model.wide], arrived: model.arrived, helpersAnswered: model.helpersAnswered, helperParked: model.helperParked, failingSteps: model.failingSteps });
+  return Response.json({ parked: model.parked, calls: model.calls, wide: [...model.wide], arrived: model.arrived, helpersAnswered: model.helpersAnswered, helperParked: model.helperParked, failingSteps: model.failingSteps, stepped: model.stepped });
 }
 
 export default {
