@@ -9,7 +9,7 @@ import { Effect } from 'effect';
 import { createTestActors, present } from '@kinu.run/test-utils';
 import {
   createNimbusWorkspaceExecutor, createShellSession, DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable,
-  nimbusSessionFiles, nimbusSessionShell, withApprovalGatedShell, WORKSPACE_ROOT,
+  describeExecutionContext, nimbusSessionFiles, nimbusSessionShell, withApprovalGatedShell, WORKSPACE_ROOT,
   type NimbusSandboxHandle, type ShellApprovalOutcome, type ShellApprovalPolicy, type ShellApprovalRequest,
 } from '../src/index';
 import { createDeviceTunnelExecutor, type DeviceTransport } from '../src/execution/device-tunnel-executor';
@@ -52,6 +52,20 @@ function owner(answer: ShellApprovalOutcome) {
   return { policy, shown, queue };
 }
 
+/** Live prompts the test answers: resolves `shown` once `count` asks are in front of the owner. */
+function prompts(count: number) {
+  const asked: Array<{ readonly request: ShellApprovalRequest; answer(outcome: ShellApprovalOutcome): void }> = [];
+  const shown = Promise.withResolvers<void>();
+
+  const ask = (request: ShellApprovalRequest) => new Promise<ShellApprovalOutcome | null>((resolve) => {
+    asked.push({ request, answer: resolve });
+
+    if (asked.length === count) shown.resolve();
+  });
+
+  return { asked, ask, shown: shown.promise };
+}
+
 describe('the workspace\'s own processes over the user\'s Drive', () => {
   /** The hosted workspace as cf-backend composes it, over a box that records what it was asked to start. */
   function workspace(policy: ShellApprovalPolicy) {
@@ -84,10 +98,11 @@ describe('the workspace\'s own processes over the user\'s Drive', () => {
     const asking = owner('deny');
     const denied = workspace(asking.policy);
 
-    // `install` is not a startProcess option: the member drops it and still starts in the Drive.
+    // `install` is not a startProcess option: the member drops it and still starts in the Drive, so it is asked there.
     await denied.start.execute('rm -rf build', { cwd: '/shared/project', install: true });
-    expect(asking.shown.map((request) => request.context.cwd)).toEqual(['/shared/project']);
     expect(denied.started).toEqual([]);
+    expect(asking.shown).toHaveLength(1);
+    expect(asking.shown[0]?.context).toEqual({ cwd: '/shared/project' });
 
     const allowing = owner('allow');
     const approved = workspace(allowing.policy);
@@ -121,39 +136,30 @@ describe('a machine is part of the ask', () => {
   test('the same command on two machines is two asks, and approving one runs it there alone', async () => {
     const transport = fleet();
     const { policy, queue } = owner('deny');
-    const answers = new Map<string | undefined, (outcome: ShellApprovalOutcome) => void>();
-    const seen = Promise.withResolvers<void>();
-
-    const router = new DefaultExecutionRouter({
-      ...policy,
-      requestApproval: (request) => new Promise((resolve) => {
-        answers.set(request.context.machine?.name, resolve);
-
-        if (answers.size === 2) seen.resolve();
-      }),
-    });
+    const live = prompts(2);
+    const router = new DefaultExecutionRouter({ ...policy, requestApproval: live.ask });
 
     router.register(createDeviceTunnelExecutor(transport));
     const exec = present(router.getProvider('device'), 'the device').tools.exec;
     const onStudio = exec.execute(GATED, 'studio');
     const onRig = exec.execute(GATED, { device: 'rig' });
 
-    await seen.promise;
-    expect(new Set(queue.list().map((row) => row.context.machine?.id))).toEqual(new Set(['dev-rig', 'dev-studio']));
+    await live.shown;
+    // Each machine's ask is its own row: one answer cannot release the other.
+    expect(new Set(live.asked.map((prompt) => prompt.request.approvalId)).size).toBe(2);
+    expect(queue.list()).toHaveLength(2);
 
-    answers.get('studio')?.('allow');
-    answers.get('rig')?.('deny');
+    for (const prompt of live.asked) prompt.answer(prompt.request.context.machine?.name === 'studio' ? 'allow' : 'deny');
     await Promise.all([onStudio, onRig]);
     expect(transport.ranOn).toEqual(['dev-studio']);
   });
 });
 
 describe('a context is compared as structure, never as its words', () => {
-  test('a directory whose name reads like another field is not that field: two asks, each run where it was asked', async () => {
+  test('a directory or shell name that reads like another field is not that field: each ask is its own, run where asked', async () => {
     const ran: Array<{ readonly cwd: string | undefined; readonly name: string | undefined }> = [];
     const { policy, queue } = owner('deny');
-    const answers = new Map<string, (outcome: ShellApprovalOutcome) => void>();
-    const seen = Promise.withResolvers<void>();
+    const live = prompts(3);
 
     const shell = withApprovalGatedShell({
       exec: async (_command, options) => {
@@ -161,28 +167,27 @@ describe('a context is compared as structure, never as its words', () => {
 
         return { stdout: '', stderr: '', exitCode: 0 };
       },
-    }, { filesOwner: 'user', shellSession: createShellSession({ home: '/home/main', userRoots: () => ['/'] }) }, {
-      ...policy,
-      requestApproval: (request) => new Promise((resolve) => {
-        answers.set(JSON.stringify(request.context), resolve);
+    }, { filesOwner: 'user', shellSession: createShellSession({ home: '/home/main', userRoots: () => ['/'] }) }, { ...policy, requestApproval: live.ask });
 
-        if (answers.size === 2) seen.resolve();
-      }),
-    });
+    // Spelled as one string, the first two both read `in /repo · shell release`; the third's name carries the separator.
+    const calls = [
+      { cwd: '/repo · shell release' },
+      { cwd: '/repo', name: 'release' },
+      { cwd: '/repo', name: 'release · in /repo' },
+    ];
 
-    // Before contexts were structure, both read `in /repo · shell release` and were one ask.
-    const plain = shell.exec(GATED, { cwd: '/repo · shell release' });
-    const named = shell.exec(GATED, { cwd: '/repo', name: 'release' });
+    const runs = calls.map((options) => shell.exec(GATED, options));
 
-    await seen.promise;
-    expect(queue.list()).toHaveLength(2);
+    await live.shown;
+    expect(new Set(live.asked.map((prompt) => prompt.request.approvalId)).size).toBe(3);
+    expect(queue.list()).toHaveLength(3);
+    // What the owner reads tells them apart too.
+    expect(new Set(live.asked.map((prompt) => describeExecutionContext(prompt.request.context))).size).toBe(3);
 
-    answers.get(JSON.stringify({ cwd: '/repo · shell release' }))?.('allow');
-    expect((await plain).exitCode).toBe(0);
+    for (const prompt of live.asked) prompt.answer(prompt.request.context.shell === undefined ? 'allow' : 'deny');
+    const results = await Promise.all(runs);
+
+    expect(results.map((result) => result.exitCode === 0)).toEqual([true, false, false]);
     expect(ran).toEqual([{ cwd: '/repo · shell release', name: undefined }]);
-
-    for (const answer of answers.values()) answer('deny');
-    expect((await named).exitCode).not.toBe(0);
-    expect(ran).toHaveLength(1);
   });
 });
