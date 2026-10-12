@@ -2,6 +2,7 @@ import { exists as nimbusExists, type Awaitable, type VFS } from '@nimbus-sh/cor
 /** Approval gating where a command reaches a shell (the workspace `Shell`, each provider's shell tools on register)
  *  and where the agent's tools reach a file. */
 
+import { wasNotDispatched } from '@kinu.run/agent-utils';
 import { literalWords, onUserRoots, type FileAccess, type GatedExecutor } from '../safety/command-review';
 import { approveFileAccess, gateExec, namedShellState, pinnedShellMoved, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
 import { shellCall } from './command-call';
@@ -65,18 +66,16 @@ export function withApprovalGatedShell(
       return { stdout: '', stderr: refused.message, exitCode: 1, refusal: refusalOf(refused) };
     }
 
-    let result: ShellExecResult | undefined;
+    const running = execute(command, options);
+    const [ran] = await Promise.allSettled([running]);
 
-    try {
-      result = await execute(command, options);
-    } finally {
-      if (options.name !== undefined && result === undefined) session?.lost(options.name);
-    }
+    // A named call that ran leaves its shell where it ended; one that did not run moved nothing; one that failed on
+    // its way may have moved it, unless it was cancelled before it was sent.
+    if (options.name !== undefined && ran.status === 'fulfilled' && ran.value.refusal === undefined) session?.ran(options.name, ran.value.finalCwd ?? null);
 
-    // A named call that ran leaves its shell where it ended; one that did not run moved nothing.
-    if (options.name !== undefined && result.refusal === undefined) session?.ran(options.name, result.finalCwd ?? null);
+    if (options.name !== undefined && ran.status === 'rejected' && !wasNotDispatched(ran.reason)) session?.lost(options.name);
 
-    return result;
+    return running;
   };
 
   const gated: Shell = {
