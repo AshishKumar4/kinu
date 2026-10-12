@@ -3799,21 +3799,25 @@ export abstract class ActorAgent extends Agent<Env> {
   protected abstract readInheritedContext(actor?: ActorHandle): Promise<SerializedMessage[]>;
 
   /**
+   * The owner's MCP descriptors, asked for at once and settled, so the turn that reads them decides what a failed read
+   * means. No owner or no identity, no user-level tools: checked rather than caught, as userCaller() throws only when no
+   * token was issued, and a real read failure must not silently empty the surface.
+   */
+  protected userMcpDescriptors(): Promise<PromiseSettledResult<string>> | null {
+    if (!this.getOwnerUserId() || !this.workspaceCapabilityToken()) return null;
+    const asked = this.userCaller().then(async (caller) => await this.requireOwnerUserDO().userMcp_toolDescriptors(caller));
+
+    return Promise.allSettled([asked]).then(([read]) => read);
+  }
+
+  /**
    * Rebuilds AI-SDK tools from MCP descriptors; cache invalidates on descriptor content hash, and a
    * failed read keeps the last good build. `execute` dispatches as the parent workspace's token.
    */
-  protected async buildUserMcpTools(nativeTools: ToolSet, catalog: Promise<ModelCatalogRead>): Promise<ToolSet> {
-    const userId = this.getOwnerUserId();
-
-    if (!userId) return {};
-
-    // No identity, no user-level tools. Checked rather than caught: userCaller() throws only when no
-    // token was issued, and a real read failure must not silently empty the surface.
-    if (!this.workspaceCapabilityToken()) return {};
-    const caller = await this.userCaller();
+  protected async buildUserMcpTools(nativeTools: ToolSet, catalog: Promise<ModelCatalogRead>, descriptors = this.userMcpDescriptors()): Promise<ToolSet> {
+    if (descriptors === null) return {};
     // Read beside the model's resolution; a failed read reaches the failure arm through `refresh`.
-    const surface = this.requireOwnerUserDO().userMcp_toolDescriptors(caller);
-    const [read] = await Promise.allSettled([catalog, surface]);
+    const [read] = await Promise.allSettled([catalog, descriptors]);
 
     // An unresolved profile fails the turn in `readTurnInputs`.
     if (read.status === 'rejected') return {};
@@ -3822,7 +3826,13 @@ export abstract class ActorAgent extends Agent<Env> {
       // Budget is the resolved model's step context limit minus this actor's own tool definitions, read
       // off the same `ModelCatalogSession` as compaction (`McpSurfaceBudget`).
       const tools = await this.mcpToolsCache.refresh(
-        async () => v.parse(McpToolSurfaceSchema, JSON.parse(await surface)),
+        async () => {
+          const surface = await descriptors;
+
+          if (surface.status === 'rejected') throw surface.reason;
+
+          return v.parse(McpToolSurfaceSchema, JSON.parse(surface.value));
+        },
         {
           ...read.value.window(),
           nativeToolTokens: toolSurfaceTokens(nativeTools),

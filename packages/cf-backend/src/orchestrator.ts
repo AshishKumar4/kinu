@@ -405,6 +405,14 @@ interface HostedTarget {
   readonly entry: NonNullable<ReturnType<SubordinateRosterStore['get']>>;
 }
 
+/** The crossings an agent's sources read that wait on nothing of its turn's own, in flight from the moment they start. */
+interface SourcePlanes {
+  /** The owner's MCP descriptors, settled; null where no turn reaches them. */
+  readonly descriptors: Promise<PromiseSettledResult<string>> | null;
+  /** The hub's device check, which never rejects: a failure keeps the last snapshot. */
+  readonly device: Promise<unknown>;
+}
+
 /** An assignment's delivery, as its metadata names it. */
 const AssignmentMetadataSchema = v.looseObject({ kinuEvent: v.literal('subordinate_task'), kinuMode: WorkModeSchema });
 
@@ -1416,6 +1424,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // Its questions park in its own isolate, as every agent's do: the stack asks it once its turn was offered the tool.
       if (run === undefined && reach.turn.askOwner) this.offerAskOwner(actor.stores.config);
 
+      // Its sources' crossings wait on nothing of its own, so they are in flight beside its profile's resolution.
+      const planes = run === undefined ? this.sourcePlanes(runtime, reach.actor, true) : undefined;
       const resolved = await this.actorProfile({ actor: actor.handle, availableTools: [], workMode: lane.mode });
 
       surface.resolved(resolved.profile, resolved.inputs);
@@ -1443,7 +1453,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       const { workMode } = resolved.profile;
       const build = (): ActorToolsets => (run === undefined ? this.actorTools(actor, reach, workMode, scope) : { turn: run.tools, raw: run.tools });
       let built = build();
-      const sources = run?.sources ?? await this.actorSources(actor, reach.actor, { surface, resolved, artifacts: overrides, tools: built.turn });
+      const sources = run?.sources ?? await this.actorSources(actor, reach.actor, { surface, resolved, artifacts: overrides, tools: built.turn }, planes);
 
       // Eval declares the turn's external tools in the description it is built with, and the tools above were built
       // before this turn read them.
@@ -1652,13 +1662,24 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
+  /** Its sources' crossings that wait on nothing of a turn's own, started at once: the owner's MCP descriptors for a
+   *  `turn` that reaches them, the hub's device check for an agent on the workspace's lanes. */
+  private sourcePlanes(runtime: CFRuntime, reach: ActorReach, turn: boolean): SourcePlanes {
+    return {
+      descriptors: turn && reach.external ? this.userMcpDescriptors() : null,
+      device: reach.lanes ? runtime.deviceTransport.refreshStatus() : Promise.resolve(),
+    };
+  }
+
   /**
    * Where an agent's turns are assembled from, read here (core orchestrator/turn-assembly.ts): its own config, pins and
    * lineage, its own skills over its files, the workspace's soul and instruction files, the dynamic block over its held
    * reads. The workspace's planes (its external tools, its evolved text, its missions) only where its reach names them;
-   * a run's seat asks with no turn.
+   * a run's seat asks with no turn. Its `planes` are started here unless its surface started them.
    */
-  protected async actorSources(actor: CFSeat, reach: ActorReach, turn: SourcesTurn | null): Promise<RunTurnSources> {
+  protected async actorSources(
+    actor: CFSeat, reach: ActorReach, turn: SourcesTurn | null, planes = this.sourcePlanes(actor.runtime, reach, turn !== null),
+  ): Promise<RunTurnSources> {
     const { runtime } = actor;
     const trust = this.instructionTrust();
     const providers = this.providerRegistry();
@@ -1677,8 +1698,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // The remote catalog is admitted against the context budget left after the turn's own tools; a failed read answers
     // no tools and the turn runs on its own. The hub's device check refreshes the workspace's executors.
     const [mcp] = await Promise.all([
-      reach.external && turn !== null ? this.buildUserMcpTools(turn.tools, Promise.resolve(this.modelCatalog.at(providers.normalizeSpecSync(turn.resolved.profile.tier.model)))) : Promise.resolve({}),
-      reach.lanes ? runtime.deviceTransport.refreshStatus() : Promise.resolve(),
+      planes.descriptors !== null && turn !== null
+        ? this.buildUserMcpTools(turn.tools, Promise.resolve(this.modelCatalog.at(providers.normalizeSpecSync(turn.resolved.profile.tier.model))), planes.descriptors)
+        : Promise.resolve({}),
+      planes.device,
     ]);
 
     const external: ToolSet = reach.external ? { ...this.extensions.tools(), ...mcp } : {};
