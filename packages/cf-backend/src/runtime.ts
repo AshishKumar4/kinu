@@ -318,6 +318,7 @@ export function createCFRuntime(
       granted: (grant) => holdsGrant(actor.actor.config.getShellApprovalGrants(), grant),
       requestApproval: null,
       get deferrals() { return hooks.deferrals?.(); },
+      remember: (grants) => { actor.actor.config.grantShellApproval(grants); },
     }
     : createInheritedApprovalPolicy({
       fetchRoot: () => fetchRootApprovalPolicy(env, actor.workspaceName),
