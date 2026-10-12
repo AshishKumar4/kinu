@@ -142,26 +142,33 @@ async function verifyRetry(gallery: Gallery): Promise<void> {
 }
 
 async function verifyDecision(gallery: Gallery): Promise<void> {
-  const page = await open(gallery, 'frame=workspacepage&plan=annotated-heading&decision=owed', VIEWPORTS[0], 'dark');
   const status = STATES[0].status;
 
-  try {
-    const tab = 'nav[aria-label="Pages"] button[aria-label*="applyCoupon"]';
-    await page.click(tab);
-    await page.waitForSelector('[data-plan-decisions] button');
-    await page.click('[data-plan-decisions] button:last-child');
-    await painted(page);
-    const locked = await page.$$eval('[data-plan-decisions] button', (buttons) => buttons.every((button) => button.matches(':disabled')));
+  for (const variant of ['', '&plan=annotated-heading']) {
+    const page = await open(gallery, `frame=workspacepage&decision=owed${variant}`, VIEWPORTS[0], 'dark');
 
-    if (!locked || await page.$(status) === null) throw new Error('An owed decision did not show its line with locked controls.');
-    await replaceIntents(page, [{ id: 'other-plan', kind: 'decision', target: 'another-plan', actor: null }]);
-    const enabled = await page.$$eval('[data-plan-decisions] button', (buttons) => buttons.every((button) => !button.matches(':disabled')));
+    try {
+      const tab = 'nav[aria-label="Pages"] button[aria-label*="applyCoupon"]';
+      await page.click(tab);
+      await page.waitForSelector('[data-plan-decisions] button');
+      const before = await page.$$eval('[data-plan-decisions] button', (buttons) => buttons.map((button) => button.matches(':disabled')));
 
-    if (!enabled || await page.$(status) !== null) throw new Error('Another plan blocked this decision.');
-    process.stdout.write('decision: receipt locks both controls; another plan does not\n');
-  } finally {
-    await page.close();
+      if (before.length !== 2 || before.every(Boolean)) throw new Error('The plan fixture has no available decision.');
+      await page.click('[data-plan-decisions] button:not(:disabled)');
+      await painted(page);
+      const locked = await page.$$eval('[data-plan-decisions] button', (buttons) => buttons.every((button) => button.matches(':disabled')));
+
+      if (!locked || await page.$(status) === null) throw new Error('An owed decision did not show its line with locked controls.');
+      await replaceIntents(page, [{ id: 'other-plan', kind: 'decision', target: 'another-plan', actor: null }]);
+      const restored = await page.$$eval('[data-plan-decisions] button', (buttons) => buttons.map((button) => button.matches(':disabled')));
+
+      if (restored.some((disabled, index) => disabled !== before[index]) || await page.$(status) !== null) throw new Error('Another plan blocked this decision.');
+    } finally {
+      await page.close();
+    }
   }
+
+  process.stdout.write('decision: approval and change request receipts lock both controls; another plan does not\n');
 }
 
 await withGallery(async (gallery) => {
