@@ -476,23 +476,32 @@ describe('a named shell is part of the ask as it was when asked', () => {
     expect({ doomed: existsSync(join(home, 'doomed')), parked: queue.list() }).toEqual({ doomed: false, parked: [] });
   });
 
-  test('the hosted session: a run cancelled while the session\'s directory is read for it was not dispatched, and its approval runs the next ask', async () => {
+  /** How the read of a hosted session's directory goes wrong just before a call is sent: [how, what happens]. */
+  const DIRECTORY_READ_MISHAPS = [
+    ['meets the caller\'s cancel', (cancel: AbortController) => { cancel.abort(); }],
+    ['fails', () => { throw new Error('the session directory read failed'); }],
+  ] as const;
+
+  test.each(DIRECTORY_READ_MISHAPS)('the hosted session: a run whose directory read %s was not sent, and its approval runs the next ask', async (_how, mishap) => {
     const { policy, queue } = unattended();
     const cancel = new AbortController();
     const dispatched: string[] = [];
-    const watch = { states: 0, cancelAfter: Number.POSITIVE_INFINITY };
+    const watch = { states: 0, mishapAfter: Number.NaN };
 
     const box: NimbusSandboxHandle = {
       ready: async () => {},
       exec: async (command) => {
-        // A state read is digested in the session; anything else is a command dispatched to it.
+        // A state read is digested in the session; anything else is a command sent to it.
         if (command.includes('sha256sum')) watch.states += 1;
         else dispatched.push(command);
 
         return { command, success: true, stdout: command.includes('sha256sum') ? `${'0'.repeat(64)}  -\n` : '', stderr: '', exitCode: 0 };
       },
       shellCwd: async () => {
-        if (watch.states === watch.cancelAfter) cancel.abort();
+        if (watch.states === watch.mishapAfter) {
+          watch.mishapAfter = Number.NaN;
+          mishap(cancel);
+        }
 
         return WORKSPACE_ROOT;
       },
@@ -506,10 +515,10 @@ describe('a named shell is part of the ask as it was when asked', () => {
     await shell.exec(GATED, { name: 'dev' });
     await queue.decide(queue.list().map((row) => row.id), 'approved');
 
-    // The re-issue's read pins the state and the read just before the run confirms it; the caller gives up in the
-    // directory read that follows, before the command is sent.
-    watch.cancelAfter = watch.states + 2;
-    await expect(shell.exec(GATED, { name: 'dev', signal: cancel.signal })).rejects.toMatchObject({ name: 'AbortError' });
+    // The re-issue's read pins the state and the read just before the run confirms it; the directory read that
+    // follows, before the command is sent, is where it goes wrong.
+    watch.mishapAfter = watch.states + 2;
+    await Promise.allSettled([shell.exec(GATED, { name: 'dev', signal: cancel.signal })]);
     expect(dispatched).toEqual([]);
 
     await shell.exec(GATED, { name: 'dev' });

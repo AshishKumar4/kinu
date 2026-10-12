@@ -336,6 +336,8 @@ describe('an approval in a hosted named session', () => {
     ...['__n', '__v'].map((helper): SubtleChange => [
       `a variable named as the read's own ${helper}`, `export ${helper}=a`, `${FORCE_PUSH}; rm -r "$${helper}"`, `export ${helper}=b`,
     ]),
+    ['a variable named as a positional parameter', 'export 0=a', `${FORCE_PUSH}; rm -r "$0"`, 'export 0=b'],
+    ['a variable whose name no shell word can spell', 'export A-B=a', `${FORCE_PUSH}; rm -r "$(env | sed -n 's/^A-B=//p')"`, 'export A-B=b'],
   ];
 
   test.each(SUBTLE_CHANGES)('sees %s: the approval does not run on the changed session', async (_what, before, asked, meanwhile) => {

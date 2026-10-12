@@ -643,10 +643,12 @@ interface SessionCall {
  */
 async function sessionCall(
   command: string, options: ShellExecOptions, place: { readonly home: string; readonly cred?: VfsCred }, shellCwd: ((name: string) => Promise<string | null>) | undefined,
-): Promise<SessionCall> {
+): Promise<SessionCall | KinuError> {
   const { home, cred } = place;
   const { name, stdin } = options;
-  const kept = name === undefined ? null : await shellCwd?.(name) ?? null;
+  const kept = name === undefined || shellCwd === undefined ? null : await keptDirectory(shellCwd, name);
+
+  if (kept instanceof KinuError) return kept;
   const start = startIn(kept ?? home, options.cwd);
   // Absent option must be an absent key: the substrate reads `'cred' in options` to decide whether to inherit.
   const execOptions: NimbusExecOptions = name === undefined ? { cwd: start } : { name };
@@ -658,6 +660,15 @@ async function sessionCall(
 
   // Absolute, so no `--`, which Nimbus's `cd` reads as a directory.
   return { run: moves ? `cd ${shellQuote(start)} || exit\n${command}` : command, execOptions, start };
+}
+
+/** A named shell's directory, read before its call is sent; one that cannot be read is NOT RUN, since nothing was sent. */
+async function keptDirectory(shellCwd: (name: string) => Promise<string | null>, name: string): Promise<string | null | KinuError> {
+  const [read] = await Promise.allSettled([shellCwd(name)]);
+
+  return read.status === 'fulfilled'
+    ? read.value
+    : new KinuError('unavailable', `NOT RUN: the directory of shell ${JSON.stringify(name)} could not be read, so the command was not sent.`, { cause: read.reason });
 }
 
 /** A box that streams stops the command on a cancel; one that cannot only stops waiting for it. */
@@ -686,16 +697,12 @@ function runOnBox(box: NimbusSandboxHandle, call: SessionCall, options: ShellExe
 }
 
 /**
- * A Nimbus session's state as one unambiguous text, digested in the session: its directory as a digest, then each
- * variable `env` names as `name set|unset length value`, so no value can pass for another variable or directory.
- * Nimbus answers `export -p` with nothing, and its `env` lists the per-command pid (`$=`), which no name matches. What
- * the read itself uses, `IFS` to split the names and `__n` and `__v` to walk them, is written first, before the read
- * sets it, and left out of the walk; a subshell keeps the read's settings out of the session.
+ * A Nimbus session's state, digested in the session: its directory as a digest, then what `set` lists, every variable
+ * the session keeps, sorted by name, each value quoted, so no value or name can pass for another. A subshell first sets
+ * the pid Nimbus gives each command (`$`) to 0, so the listing holds only what the session keeps. Nimbus keeps no
+ * function, alias, option or array between a named shell's calls, and answers `export -p` with nothing.
  */
-const SESSION_STATE = '( printf \'IFS %s %s %s\\n__n %s %s %s\\n__v %s %s %s\\n\' "${IFS+set}" "${#IFS}" "$IFS" '
-  + '"${__n+set}" "${#__n}" "$__n" "${__v+set}" "${#__v}" "$__v"; IFS=\'\n\'; pwd | sha256sum; '
-  + 'for __n in $(env | sed -n -e \'/^IFS=/d\' -e \'/^__[nv]=/d\' -e \'s/^\\([A-Za-z_][A-Za-z0-9_]*\\)=.*/\\1/p\' | sort -u); do '
-  + '__v="${!__n}"; printf \'%s %s %s %s\\n\' "$__n" "${!__n+set}" "${#__v}" "$__v"; done ) | sha256sum';
+const SESSION_STATE = `( pwd | sha256sum; export '$=0'; set ) | sha256sum`;
 
 /**
  * Shell over the bytes nimbusSessionFiles exposes, its calls starting at `home`. `cred` is fixed at construction,
@@ -708,6 +715,8 @@ export function nimbusSessionShell(box: NimbusSandboxHandle, place: { readonly h
     async exec(command, stdinOrOptions) {
       const options: ShellExecOptions = v.is(v.string(), stdinOrOptions) ? { stdin: stdinOrOptions } : stdinOrOptions ?? {};
       const call = await sessionCall(command, options, place, shellCwd);
+
+      if (call instanceof KinuError) return { stdout: '', stderr: call.message, exitCode: 1, refusal: refusalOf(call) };
       const result = await runOnBox(box, call, options);
       const outcome: ShellExecResult = { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode, cwd: call.start };
       const final = options.name === undefined ? null : await shellCwd?.(options.name) ?? null;
