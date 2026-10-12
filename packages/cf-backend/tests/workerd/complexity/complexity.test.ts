@@ -243,12 +243,26 @@ const turnStatements = new Map<number, { readonly workspace: OperationCost['tabl
  * times); 541 once an agent's snapshot rows are held on both sides until a write to their tables (C2, -44); 503 once a
  * context commit fences in its writes, the sleep window reads its tombstones in one statement, one read takes the
  * compaction trigger and an evolution pass reads each input once (C5, C12, C14, C9, -38); 465 once each Durable Object
- * holds one config catalog that its config writers move (C3, -38). The workspace's 245, main's isolate's 220. What
- * remains, by name, is the census's REQUIRED rows: the turn's claim, fence, stream parts, request and run events it
- * writes, its four reports and their acceptance, and the owed-work reads each wake decision makes over rows other
- * writers move (agent_log, terminal_effects, head_journal, roster), which no one statement can stand for.
+ * holds one config catalog that its config writers move (C3, -38). The workspace's 245, main's isolate's 220.
+ * 470 on 5b41bca71 with the settings fan-out (+5: an idle tile asks whether main is owed a delivery and whether a refusal
+ * waits on settings), then, measured the same way: 371 once each object holds its reads until its own statement writes
+ * their table (C7 -29: the owed-work probes, and no claim arm over a table only agent isolates write; C8 -7: terminal
+ * retry rows and unsettled responses; C10 -25: the dynamic block's store reads, open work, parked commands, delegates and
+ * the tools' change key), an agent's standing reads a run head its recorder advances and the person's words from their
+ * stamped run start (C4, C13 -30), a claim's guards read in one statement (C6 -5) and its session holds its last step
+ * and its turns on disk (C11 -3). The workspace's 193, main's isolate's 178, at both sizes on 211d0a4f3.
+ * What remains, by group. Workspace: the Agents SDK's job queue (65, every arm and alarm asks it, and it is the SDK's);
+ * the settle sequence's terminal effects and receipts (25: each attempt is written before its call, and each retry
+ * read follows a write of its own); the evolution pass and the turn's review (27); the four reports' acceptance,
+ * deliveries, owed work and fence (18); the turn surface's files, scaffold, config and crafted tools (19); wake and
+ * outbox instants (12); the event log, read anew after its own writes (9); run events (8); sleep time (7); and the
+ * activity log (3). The step_finish caption stays one write per step: the activity log is the one trace across every
+ * agent's steps, whose own step events live in each agent's isolate, so no snapshot read could stand for it.
+ * Main: its answer's 51 durable text windows and their opens and ends (55); the admission, seal and context writes and
+ * reads of its session (65); the epoch fence every stream write and seal reads, never held (18); its reports' sequence,
+ * run events and facts (23); and its own settle sequence (17).
  */
-const TURN_STATEMENTS = 465;
+const TURN_STATEMENTS = 371;
 
 /** Every count the subject's declarations govern, one value per size. */
 function countersOf(subject: Subject, measured: readonly OperationCost[]): GrowthCounter[] {

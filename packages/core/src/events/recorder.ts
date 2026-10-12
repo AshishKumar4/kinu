@@ -330,6 +330,27 @@ function newer(candidate: { readonly at: string; readonly seq: number }, held: {
   return held === null || candidate.at > held.at || (candidate.at === held.at && candidate.seq > held.seq);
 }
 
+/** The newest run, as an event of `event.runId` leaves it: a run's first event or its end names it outright; an older
+ *  run's later event leaves whether it ended to its rows. */
+function advanceLatest(slot: RunHead['latest'], event: RunEvent): void {
+  const latest = slot.known;
+
+  if (latest === undefined) return;
+  const status = event.type === 'run_end' ? event.reason ?? null : null;
+
+  if (latest.value !== null && latest.value.runId === event.runId) {
+    if (event.type === 'run_end') slot.known = { value: { runId: event.runId, status } };
+  } else if (event.eventIndex === 0 || event.type === 'run_end') slot.known = { value: { runId: event.runId, status } };
+  else delete slot.known;
+}
+
+/** A held measure moves to `measured` when it is later in `ORDER BY ts DESC, rowid DESC`. */
+function advanceMeasure<M extends { readonly at: string; readonly seq: number }>(slot: HeadSlot<M | null>, measured: M): void {
+  const held = slot.known;
+
+  if (held !== undefined && newer(measured, held.value)) slot.known = { value: measured };
+}
+
 export class RunEventRecorder {
   private publications: (() => void)[] | null = null;
   private readonly listeners = new Set<RunEventListener>();
@@ -353,37 +374,19 @@ export class RunEventRecorder {
     const head = this.head;
 
     if (head === null) return;
-    const latest = head.latest.known;
 
-    if (event.runId !== WORKSPACE_RUN_ID && latest !== undefined) {
-      const status = event.type === 'run_end' ? event.reason ?? null : null;
-
-      if (latest.value !== null && latest.value.runId === event.runId) {
-        if (event.type === 'run_end') head.latest.known = { value: { runId: event.runId, status } };
-      } else if (event.eventIndex === 0 || event.type === 'run_end') head.latest.known = { value: { runId: event.runId, status } };
-      // An older run's later event: whether it ended is its rows' to say.
-      else delete head.latest.known;
-    }
+    if (event.runId !== WORKSPACE_RUN_ID) advanceLatest(head.latest, event);
 
     if (event.type === 'run_start' && event.userMessage !== undefined && event.turn?.metadata?.[TURN_AUTHOR_METADATA_KEY] === 'operator') {
       head.operatorWords.known = { value: event.userMessage };
     }
 
     const input = event.type === 'step_finish' ? event.usage?.input : undefined;
-    const provider = head.provider.known;
 
-    if (input !== undefined && provider !== undefined) {
-      const measured = { tokens: input, at: event.timestamp, seq };
+    if (input !== undefined) advanceMeasure(head.provider, { tokens: input, at: event.timestamp, seq });
 
-      if (newer(measured, provider.value)) head.provider.known = { value: measured };
-    }
-
-    const gate = head.gate.known;
-
-    if (event.type === 'context_admitted' && gate !== undefined) {
-      const measured = { tokens: event.tokens ?? null, contextWindow: event.contextWindow ?? null, at: event.timestamp, seq };
-
-      if (newer(measured, gate.value)) head.gate.known = { value: measured };
+    if (event.type === 'context_admitted') {
+      advanceMeasure(head.gate, { tokens: event.tokens ?? null, contextWindow: event.contextWindow ?? null, at: event.timestamp, seq });
     }
   }
 
