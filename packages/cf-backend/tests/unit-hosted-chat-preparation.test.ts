@@ -1,7 +1,7 @@
 /**
- * An added agent's chat is prepared in its isolate once and kept. A preparation that fails is not kept: pinned to a model
- * the catalog does not serve, the agent cannot prepare its chat, and once the owner corrects the pin the same isolate
- * prepares it and answers.
+ * An added agent's chat is prepared in its isolate once, on its program alone, and kept. Pinned to a model the catalog
+ * does not serve, the turn the agent opens fails as it prepares and asks no model; once the owner corrects the pin, the
+ * same isolate answers.
  */
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
@@ -19,7 +19,7 @@ const ModelSchema = v.looseObject({ model: v.string() });
 /** Whether the corrected pin's model served a request. */
 const servedByPin = (run: RecordedGatewayRun): boolean => GATEWAY_MODEL.endsWith(v.parse(ModelSchema, run.query).model);
 
-test("an agent a bad model pin kept from preparing its chat answers once the owner corrects the pin", async () => {
+test("an agent whose bad model pin failed its turn answers once the owner corrects the pin", async () => {
   const gateway = stubAiBinding((run) => chatCompletion(run, 'Hello.'));
   const workspace = gatewayWorkspace(gateway);
 
@@ -28,12 +28,15 @@ test("an agent a bad model pin kept from preparing its chat answers once the own
   const actorId = v.parse(v.string(), subordinate.actorId);
   const say = () => asPane([actorConnectionTag(actorId)], () => workspace.agent.send(ASK, crypto.randomUUID()));
 
+  const asking = () => gateway.runs.filter((run) => JSON.stringify(requestOf(run).messages).includes(ASK));
+
   await workspace.agent.setActorModel(name, UNSERVED);
-  await expect(say()).rejects.toThrow();
+  await say();
+  await workspace.agent.harnessAgentsIdle();
+  expect(asking()).toEqual([]);
 
   await workspace.agent.setActorModel(name, GATEWAY_MODEL);
   await say();
-  const asking = () => gateway.runs.filter((run) => JSON.stringify(requestOf(run).messages).includes(ASK));
 
   await driveUntil(workspace, 'the agent never asked its model', () => asking().length > 0);
   expect(asking().map(servedByPin)).not.toContain(false);
