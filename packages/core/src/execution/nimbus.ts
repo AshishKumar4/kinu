@@ -698,9 +698,15 @@ function runOnBox(box: NimbusSandboxHandle, call: SessionCall, options: ShellExe
 
 /**
  * A Nimbus session's state, digested in the session: its directory as a digest, then what `set` lists, every variable
- * the session keeps, sorted by name, each value quoted, so no value or name can pass for another. A subshell first sets
- * the pid Nimbus gives each command (`$`) to 0, so the listing holds only what the session keeps. Nimbus keeps no
- * function, alias, option or array between a named shell's calls, and answers `export -p` with nothing.
+ * the session keeps, sorted by name, each value quoted, so no value or name can pass for another (but for the limit
+ * below). A subshell first sets the pid Nimbus gives each command (`$`) to 0, so the listing holds only what the
+ * session keeps. Nimbus keeps no function, alias, option or array between a named shell's calls, and answers
+ * `export -p` with nothing.
+ *
+ * Limit: the listing is text, and Nimbus's pipe encodes it with `TextEncoder`, which turns every lone UTF-16 surrogate
+ * into U+FFFD. Two values that differ only there (U+D800 and U+D801) digest alike, though the session keeps them apart.
+ * No read inside the session can tell them apart, so the fix is Nimbus's: Nimbus ask 52 (`set` escapes ill-formed
+ * strings, or the session exposes a digest of its saved state).
  */
 const SESSION_STATE = `( pwd | sha256sum; export '$=0'; set ) | sha256sum`;
 
