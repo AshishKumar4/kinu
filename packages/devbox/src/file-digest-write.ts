@@ -14,10 +14,11 @@ const OPERATION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 
 /**
  * Writes `data` at `path` only if the file's bytes hash to `expected` (null: only if no file is there). One guest
- * process reads the new bytes from stdin, compares the file `path` leads to, and replaces it through a temp file and a
- * rename, so the compare and the write are the guest's own instant, and a reader never sees half a file. The guest keeps
- * each `operation`'s answer, and its staged write before the rename publishes it, so a resend after a lost reply or a
- * guest cut at any point gets the first send's outcome rather than a second compare.
+ * process reads the new bytes from stdin and, holding the directory of the file `path` leads to, compares that file and
+ * replaces it through a temp file and a rename, so the compare and the write are one instant under every name for the
+ * file, and a reader never sees half a file. The guest keeps each `operation`'s answer, and its staged write before the
+ * rename publishes it, so a resend after a lost reply or a guest cut at any point gets the first send's outcome rather
+ * than a second compare.
  */
 export function writeFileIfDigest(
   container: Pick<Container, 'exec'>,
@@ -92,7 +93,8 @@ if os.path.exists(intent):
 if expected is None:
     os.makedirs(os.path.dirname(path) or '/', exist_ok=True)
 # The file every link in path leads to, as the read that hashed expected followed them: it is compared and replaced and
-# the links stay, and a dangling link's file is created, as a plain write creates it.
+# the links stay, and a dangling link's file is created, as a plain write creates it. Every name for that file is one
+# entry of one directory, so holding the directory from the compare to the rename orders writes under any of them.
 directory, name = os.path.split(os.path.realpath(path))
 try:
     folder = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
@@ -102,6 +104,7 @@ except FileNotFoundError:
         raise
     answer({'ok': False, 'sha256': None})
     sys.exit(0)
+fcntl.flock(folder, fcntl.LOCK_EX)
 try:
     held = os.open(name, os.O_RDONLY, dir_fd=folder)
 except FileNotFoundError:

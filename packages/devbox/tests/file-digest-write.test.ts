@@ -113,6 +113,35 @@ test('a write whose guest died after its rename and before its answer is answere
   expect(await settle(writeFileIfDigest({ exec: pipeExec }, write))).toEqual({ ok: true, sha256: sha256('the rewrite') });
 });
 
+test('saves through different names for one file order: one lands over the bytes they all read, the rest are told its bytes', async () => {
+  const box = await readyBox();
+  const space = mkdtempSync(join(root, 'aliased-'));
+  const folder = join(space, 'folder');
+  mkdirSync(folder);
+  const file = join(folder, 'notes.md');
+
+  // Each directory link is its own spelling, so the box's lane claims each apart and the eight run at once.
+  const names = Array.from({ length: 8 }, (_, at) => {
+    symlinkSync(folder, join(space, `alias-${String(at)}`));
+
+    return join(space, `alias-${String(at)}`, 'notes.md');
+  });
+
+  const rounds = [];
+
+  for (let round = 0; round < 32; round += 1) {
+    writeFileSync(file, `round ${String(round)}`);
+    const answers = await Promise.all(names.map((path, at) => box.writeFileIfDigest(path, base64(`round ${String(round)} by ${String(at)}`), sha256(`round ${String(round)}`), randomUUID())));
+    const landed = answers.filter(answer => answer.ok);
+    const now = sha256(readFileSync(file, 'utf8'));
+
+    rounds.push({ landed: landed.length, now: landed[0]?.sha256 === now, told: answers.filter(answer => !answer.ok).every(answer => answer.sha256 === now) });
+  }
+
+  expect({ rounds, left: readdirSync(folder) }).toEqual({ rounds: rounds.map(() => ({ landed: 1, now: true, told: true })), left: ['notes.md'] });
+  await box.destroy();
+});
+
 test('a save through a link replaces the file it leads to and keeps the link; a dangling link gets its file, as a plain write gives it', async () => {
   const box = await readyBox();
   const space = mkdtempSync(join(root, 'linked-'));
