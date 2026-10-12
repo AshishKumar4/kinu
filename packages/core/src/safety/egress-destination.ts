@@ -34,28 +34,21 @@ function parseIPv4(host: string): [number, number, number, number] | null {
   return octets;
 }
 
-function isRefusedIPv4([a, b, c]: [number, number, number, number]): boolean {
-  if (a === 0) return true; // 0.0.0.0/8 — this network
+/**
+ * The IPv4 ranges untrusted code must never reach, as [base, prefix length]: this network, RFC1918, CGNAT, loopback,
+ * link-local (the metadata address among it), IETF protocol assignments, documentation, benchmarking, and everything
+ * from 224 up (multicast, reserved, broadcast).
+ */
+const REFUSED_IPV4: readonly (readonly [number, number])[] = [
+  [0x00000000, 8], [0x0a000000, 8], [0x64400000, 10], [0x7f000000, 8], [0xa9fe0000, 16], [0xac100000, 12],
+  [0xc0000000, 24], [0xc0000200, 24], [0xc0a80000, 16], [0xc6120000, 15], [0xc6336400, 24], [0xcb007100, 24],
+  [0xe0000000, 3],
+];
 
-  if (a === 10) return true; // 10.0.0.0/8 — RFC1918
+function isRefusedIPv4([a, b, c, d]: [number, number, number, number]): boolean {
+  const address = ((a << 24) >>> 0) + (b << 16) + (c << 8) + d;
 
-  if (a === 127) return true; // 127.0.0.0/8 — loopback
-
-  if (a === 169 && b === 254) return true; // 169.254.0.0/16 — link-local, incl. metadata
-
-  if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12 — RFC1918
-
-  if (a === 192 && b === 168) return true; // 192.168.0.0/16 — RFC1918
-
-  if (a === 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10 — CGNAT
-
-  if (a === 192 && b === 0 && (c === 0 || c === 2)) return true; // 192.0.0.0/24 IETF assignments, 192.0.2.0/24 docs
-
-  if (a === 198 && (b === 18 || b === 19)) return true; // 198.18.0.0/15 — benchmarking
-
-  if ((a === 198 && b === 51 && c === 100) || (a === 203 && b === 0 && c === 113)) return true; // documentation
-
-  return a >= 224; // 224.0.0.0/4 multicast, 240.0.0.0/4 reserved and broadcast
+  return REFUSED_IPV4.some(([base, bits]) => address >>> (32 - bits) === base >>> (32 - bits));
 }
 
 /** Expand a canonical compressed IPv6 literal to eight groups, or null. */
@@ -94,38 +87,50 @@ function embeddedIPv4(high: number, low: number): [number, number, number, numbe
   return [high >> 8, high & 0xff, low >> 8, low & 0xff];
 }
 
+/** Whether `groups` start with the first `bits` bits of `prefix` (its groups, zeros after). */
+function inPrefix(groups: readonly number[], prefix: readonly number[], bits: number): boolean {
+  for (let bit = 0; bit < bits; bit += 16) {
+    const take = Math.min(16, bits - bit);
+    const shift = 16 - take;
+
+    if (((groups[bit / 16] ?? 0) >> shift) !== ((prefix[bit / 16] ?? 0) >> shift)) return false;
+  }
+
+  return true;
+}
+
 /**
- * Refuses loopback, unspecified, link-local, site-local, ULA, multicast, discard and documentation addresses, and any
- * that carries a refused IPv4 a gateway would reach: mapped (::ffff:a.b.c.d), compatible (::a.b.c.d), NAT64
- * (64:ff9b::a.b.c.d; its local-use 64:ff9b:1::/48 whole), 6to4 (2002:aabb:ccdd::) and Teredo (server and client).
+ * IPv6 ranges refused whole, as [groups, prefix length]: link-local and site-local (fe80::/9), ULA (fc00::/7),
+ * multicast (ff00::/8), discard (100::/64), documentation (2001:db8::/32) and local-use NAT64 (64:ff9b:1::/48).
  */
+const REFUSED_IPV6: readonly (readonly [readonly number[], number])[] = [
+  [[0xfe80], 9], [[0xfc00], 7], [[0xff00], 8], [[0x100], 64], [[0x2001, 0xdb8], 32], [[0x64, 0xff9b, 1], 48],
+];
+
+/**
+ * IPv6 ranges that carry an IPv4 a gateway reaches, judged by it, as [groups, prefix length, the groups holding it]:
+ * NAT64 (64:ff9b::/96), 6to4 (2002::/16), mapped (::ffff:0:0/96) and compatible (::/96).
+ */
+const EMBEDDING_IPV6: readonly (readonly [readonly number[], number, number])[] = [
+  [[0x64, 0xff9b], 96, 6], [[0x2002], 16, 1], [[0, 0, 0, 0, 0, 0xffff], 96, 6], [[], 96, 6],
+];
+
+/** Refuses loopback, unspecified and the ranges above, and any address carrying a refused IPv4 (Teredo's two included). */
 function isRefusedIPv6(groups: readonly number[]): boolean {
-  const [g0 = 0, g1 = 0, g2 = 0, g3 = 0, g4 = 0, g5 = 0, g6 = 0, g7 = 0] = groups;
+  const at = (index: number): number => groups[index] ?? 0;
 
-  if (groups.slice(0, 7).every((g) => g === 0) && g7 <= 1) return true; // :: and ::1
+  if (groups.slice(0, 7).every((group) => group === 0) && at(7) <= 1) return true; // :: and ::1
 
-  if (g0 >= 0xfe80 && g0 <= 0xfeff) return true; // fe80::/10 link-local, fec0::/10 site-local
-
-  if (g0 >= 0xfc00 && g0 <= 0xfdff) return true; // fc00::/7 ULA
-
-  if (g0 >= 0xff00) return true; // ff00::/8 multicast
-
-  if (g0 === 0x100 && g1 === 0 && g2 === 0 && g3 === 0) return true; // 100::/64 discard
-
-  if (g0 === 0x2001 && g1 === 0xdb8) return true; // 2001:db8::/32 documentation
-
-  if (g0 === 0x64 && g1 === 0xff9b && g2 === 1) return true; // 64:ff9b:1::/48 local-use NAT64
-
-  if (g0 === 0x64 && g1 === 0xff9b && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0) return isRefusedIPv4(embeddedIPv4(g6, g7));
-
-  if (g0 === 0x2002) return isRefusedIPv4(embeddedIPv4(g1, g2));
+  if (REFUSED_IPV6.some(([prefix, bits]) => inPrefix(groups, prefix, bits))) return true;
 
   // Teredo carries its server, and its client with every bit inverted.
-  if (g0 === 0x2001 && g1 === 0) return isRefusedIPv4(embeddedIPv4(g2, g3)) || isRefusedIPv4(embeddedIPv4(~g6 & 0xffff, ~g7 & 0xffff));
-  const mapped = groups.slice(0, 5).every((g) => g === 0) && g5 === 0xffff;
-  const compatible = groups.slice(0, 6).every((g) => g === 0);
+  if (inPrefix(groups, [0x2001, 0], 32)) {
+    return isRefusedIPv4(embeddedIPv4(at(2), at(3))) || isRefusedIPv4(embeddedIPv4(~at(6) & 0xffff, ~at(7) & 0xffff));
+  }
 
-  return (mapped || compatible) && isRefusedIPv4(embeddedIPv4(g6, g7));
+  const carrying = EMBEDDING_IPV6.find(([prefix, bits]) => inPrefix(groups, prefix, bits));
+
+  return carrying !== undefined && isRefusedIPv4(embeddedIPv4(at(carrying[2]), at(carrying[2] + 1)));
 }
 
 /**

@@ -14,7 +14,7 @@ import { jsrpcStub } from './helpers/jsrpc-stub';
 import {
   createRecordingLogger, setDiagnosticsSink, type RecordedLog,
 } from '@kinu.run/core/obs';
-import { KINU_USER_AGENT, kinuUserAgent, reoriginateRequest } from '@kinu.run/core';
+import { closeReason, KINU_USER_AGENT, kinuUserAgent, reoriginateRequest } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
 
 // `agents` reaches `cloudflare:email`: mock first, then dynamic imports.
@@ -22,7 +22,7 @@ mockAgentsSdk();
 
 const {
   CONTAINER_EVENT_HOST,
-  closeReason, handleContainerEgress, handleContainerEvent, handleEgressConnect, handleEgressTls, parseEgressParams,
+  handleContainerEgress, handleContainerEvent, handleEgressConnect, handleEgressTls, parseEgressParams,
 } = await import('../src/egress/outbound');
 
 const {

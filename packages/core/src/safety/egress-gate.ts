@@ -163,6 +163,22 @@ export interface ScrubReplacement {
   readonly replaceWith: string;
 }
 
+/** The WebSocket close frame's limit on a reason (RFC 6455 §5.5: a 125-byte payload, two of them the code). */
+const CLOSE_REASON_BYTES = 123;
+
+/** `reason` cut to whole code points within a close frame's limit: a scrubbed reason may outgrow the server's own. */
+export function closeReason(reason: string): string {
+  const encoder = new TextEncoder();
+  let kept = '';
+
+  for (const point of reason) {
+    if (encoder.encode(kept + point).byteLength > CLOSE_REASON_BYTES) break;
+    kept += point;
+  }
+
+  return kept;
+}
+
 /** Replace every occurrence in a small string (header value, status message). */
 export function scrubText(text: string, replacements: readonly ScrubReplacement[]): string {
   let out = text;

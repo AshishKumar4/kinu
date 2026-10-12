@@ -37,6 +37,7 @@ export {
   egressHostMatches,
   planEgress,
   scrubBytes,
+  closeReason,
   scrubText,
   createScrubStream,
   type EgressSecretBinding,
