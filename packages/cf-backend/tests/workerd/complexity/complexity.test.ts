@@ -254,6 +254,10 @@ const turnStatements = new Map<number, { readonly workspace: OperationCost['tabl
  * 373 once each call that runs more of a turn holds only while the workspace's durable fence holds its opening (+1: the
  * fence read anew after the opening's own writes) and the run's final profile is frozen as it assembles (+1), after the
  * actor surface factory and the owner's lane moved (-1 and +1): the workspace's 192, main's isolate's 181.
+ * 370, over 6 runs on fba94afab (365 in four, 370 in two: the workspace's 184 or 189, main's isolate's 181), once a
+ * turn's end carries main's transcript window and the room reads none back: the snapshot the room's read refreshed is
+ * read by the next turn's admission instead (+4), and an agent's snapshot holds no count its every turn moves, so main's
+ * isolate adopts its rows again only when they change.
  * What remains, by group. Workspace: the Agents SDK's job queue (65, every arm and alarm asks it, and it is the SDK's);
  * the settle sequence's terminal effects and receipts (25: each attempt is written before its call, and each retry
  * read follows a write of its own); the evolution pass and the turn's review (27); the four reports' acceptance,
@@ -265,7 +269,7 @@ const turnStatements = new Map<number, { readonly workspace: OperationCost['tabl
  * reads of its session (65); the epoch fence every stream write and seal reads, never held (18); its reports' sequence,
  * run events and facts (23); and its own settle sequence (17).
  */
-const TURN_STATEMENTS = 373;
+const TURN_STATEMENTS = 370;
 
 /** Every count the subject's declarations govern, one value per size. */
 function countersOf(subject: Subject, measured: readonly OperationCost[]): GrowthCounter[] {
@@ -415,11 +419,12 @@ test('a production turn runs no more statements than it was measured at, and ask
  * (`host.answerMetadata`), the warming it arms, its open tasks for the reminder (`host.openWork`), its operation
  * record, its end (`host.turnEnded`) and handoff (`host.turnSettled`), its two reports (running, rest), the tile twice,
  * the title's registry read (`account.getWorkspaceTitle`) and the MCP warm (`account.userMcp_warmConnections`), and the
- * transcript frame the room is sent at its close (`facet.history`, `facet.newestFirst`).
+ * sleep-time pass's read of main's transcript (`facet.newestFirst`).
  * 16 at the open on e8826816c: the profile the isolate assembled on rides its first step's pace (`host.bindProfile`,
  * gone), and its report of the input it took rides its admission's answer (`host.owes`, one of two gone).
+ * 15 at the close on fba94afab: the transcript window rides the turn's end (`facet.history`, gone).
  */
-const CROSSINGS = { open: 16, step: 4, close: 16 } as const;
+const CROSSINGS = { open: 16, step: 4, close: 15 } as const;
 
 /**
  * The planted calls (`ObservedOrchestrator.plantCrossings`), each counted once where it lands, and nothing else: the
@@ -482,7 +487,8 @@ test("a task turn crosses between the workspace and main's isolate no more than 
 });
 
 // Runs after the subjects: the orchestrator subject fills `transportReads`.
-test('the chat transport reads the transcript a fixed number of times a turn, never once a delta', () => {
-  // A queued task opens no user turn, so its one read is the transcript frame at its close; 500 deltas stream before it.
-  expect([...transportReads.values()]).toEqual([1, 1]);
+test("the chat transport reads main's transcript no time in a turn, never once a delta", () => {
+  // A queued task opens no user turn, and its close carries the transcript's window from main's isolate, so the room asks
+  // for none, however many deltas streamed before it.
+  expect([...transportReads.values()]).toEqual([0, 0]);
 });
