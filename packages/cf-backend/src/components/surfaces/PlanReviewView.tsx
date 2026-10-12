@@ -120,6 +120,25 @@ const STATUS_TONE = {
   dismissed: "p-badge-neutral",
 } satisfies Record<PlanReview["status"], string>;
 
+/** The owner's decision on `planId`, on its way to the agent's wake: the review holds until the agent takes it. */
+function decisionOwedFor(owedIntents: readonly OwedOwnerIntent[], planId: string | undefined): boolean {
+  return owedIntents.some((intent) => intent.kind === "decision" && intent.target === planId);
+}
+
+/** While a decision is in flight or on its way the review holds; on its way, with no spinner, as the footer says why. */
+function decisionHold(owed: boolean, busy: "request" | "approve" | null): { readonly deciding: "request" | "approve" | null; readonly held: boolean } {
+  return owed ? { deciding: null, held: true } : { deciding: busy, held: busy !== null };
+}
+
+/** The footer's line: the failure that needs reading, or where the review stands. */
+function PlanFooterNote({ error, owed, note }: { error: string | null; owed: boolean; note: string }) {
+  if (error && !owed) return <p role="alert" className="p-notice-danger p-meta px-3 py-2 @[36rem]:mr-auto">{error}</p>;
+
+  return owed
+    ? <p role="status" className="p-meta p-text-3 @[36rem]:mr-auto">Your decision is on its way. The agent takes it when it next wakes.</p>
+    : <p className="p-meta p-text-3 @[36rem]:mr-auto">{note}</p>;
+}
+
 /** States are ordered: read-only history, open revision, unpicked decision, then plan status. */
 function footerNote(
   { readOnly, editable, handoffPending, status }: {
@@ -150,7 +169,8 @@ export interface PlanReviewViewProps {
   readOnly?: boolean;
   /** The agent that wrote the plan, as its replies name it. */
   agentName?: string;
-  owedIntents?: readonly OwedOwnerIntent[];
+  /** The owner's intents on their way: a decision on this plan holds it. */
+  owedIntents: readonly OwedOwnerIntent[];
 }
 
 function DismissPlan({ plan, rpc, readOnly, deciding, saving, owed, onError }: {
@@ -243,7 +263,7 @@ function PlanHeaderActions({ comments, unread, panelOpen, onToggle, mode, onMode
   );
 }
 
-export default function PlanReviewView({ plan, rpc, readOnly = false, agentName = "Kinu", owedIntents = [] }: PlanReviewViewProps) {
+export default function PlanReviewView({ plan, rpc, readOnly = false, agentName = "Kinu", owedIntents }: PlanReviewViewProps) {
   const [notes, setNotes] = useState<ReviewAnnotation[]>(() => notesOf(plan));
   const [selected, setSelected] = useState<string | null>(null);
   const [mode, setMode] = useState<EditorMode>("comment");
@@ -291,7 +311,7 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
   }, [plan?.id, plan?.revision]);
 
   const editable = !readOnly && plan?.status === "pending";
-  const decisionOwed = owedIntents.some((intent) => intent.kind === "decision" && intent.target === plan?.id);
+  const decisionOwed = decisionOwedFor(owedIntents, plan?.id);
   // An open revision is the reviewer's draft; any other follows the review, so the agent's replies arrive as written.
   const shown = editable ? notes : notesOf(plan);
   const roots = useMemo(() => shown.filter(isRoot), [shown]);
@@ -356,7 +376,7 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
   });
 
   const changeNotes = useCallback((next: ReviewAnnotation[]) => detach(Effect.gen(function* () {
-    if (decisionOwed || decisionInFlight()) return;
+    if (decisionInFlight()) return;
     // Decided after the handler so a superseded revision does not read as a failed save.
     let thrown: { readonly cause: unknown } | undefined;
 
@@ -372,7 +392,7 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
 
       if (annotationSaves.pending() === 0) setSaving(false);
     }
-  })), [annotationSaves, decisionInFlight, decisionOwed, planKey, save]);
+  })), [annotationSaves, decisionInFlight, planKey, save]);
 
   const openPanel = useCallback(() => {
     seen.markSeen();
@@ -417,11 +437,8 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
 
   const updatedAt = new Date(plan.updatedAt);
   const retryLabel = plan.status === "approved" ? "Retry implementation" : "Retry revision";
-  const reviewing = editable && !decisionOwed && decisionBusy === null;
-
-  const footerText = decisionOwed
-    ? "Your decision is on its way. The agent takes it when it next wakes."
-    : footerNote({ readOnly, editable, handoffPending, status: plan.status });
+  const { deciding, held } = decisionHold(decisionOwed, decisionBusy);
+  const reviewing = editable && !held;
 
   return (
     <section
@@ -473,7 +490,7 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
             onToggle={() => panelOpen ? closePanel() : openPanel()}
             mode={editable ? mode : null}
             onMode={setMode}
-            busy={decisionBusy !== null || decisionOwed}
+            busy={held}
           />
         </div>
       </header>
@@ -541,13 +558,7 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
           decisions do not fit side by side, Approve wraps above Request changes, each whole, rather than squeeze. */}
       <footer data-plan-footer className="@container p-surface shrink-0 border-t p-border px-4 py-3">
         <div className="flex flex-col gap-2 @[36rem]:flex-row @[36rem]:items-center">
-          {error && !decisionOwed ? (
-            <p role="alert" className="p-notice-danger p-meta px-3 py-2 @[36rem]:mr-auto">{error}</p>
-          ) : (
-            <p role={decisionOwed ? "status" : undefined} className="p-meta p-text-3 @[36rem]:mr-auto">
-              {footerText}
-            </p>
-          )}
+          <PlanFooterNote error={error} owed={decisionOwed} note={footerNote({ readOnly, editable, handoffPending, status: plan.status })} />
           <DismissPlan plan={plan} rpc={rpc} readOnly={readOnly} deciding={decisionBusy} saving={saving} owed={decisionOwed} onError={setError} />
           {editable && (
             <div data-plan-decisions className="flex shrink-0 flex-wrap-reverse justify-end gap-2">
@@ -557,16 +568,16 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
                 variant="secondary"
                 className="shrink-0 grow justify-center whitespace-nowrap @[36rem]:grow-0"
                 onClick={() => detach(Effect.promise(async () => decide("request_changes")))}
-                disabled={decisionOwed || decisionBusy !== null || saving || planDecisionRefusal(shown, "request_changes") !== null}
+                disabled={held || saving || planDecisionRefusal(shown, "request_changes") !== null}
               >
-                {decisionBusy === "request" && !decisionOwed ? <Loader size="sm" /> : "Request changes"}
+                {deciding === "request" ? <Loader size="sm" /> : "Request changes"}
               </Button>
               <FilledButton
                 className="grow justify-center whitespace-nowrap @[36rem]:grow-0"
                 onClick={() => detach(Effect.promise(async () => decide("approve")))}
-                disabled={decisionOwed || decisionBusy !== null || saving || planDecisionRefusal(shown, "approve") !== null}
+                disabled={held || saving || planDecisionRefusal(shown, "approve") !== null}
               >
-                {decisionBusy === "approve" && !decisionOwed ? <Loader size="sm" /> : <><CheckCircleIcon size={14} />Approve &amp; implement</>}
+                {deciding === "approve" ? <Loader size="sm" /> : <><CheckCircleIcon size={14} />Approve &amp; implement</>}
               </FilledButton>
             </div>
           )}
@@ -574,9 +585,9 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
             <FilledButton
               className="justify-center whitespace-nowrap"
               onClick={() => detach(Effect.promise(async () => decide(plan.status === "approved" ? "approve" : "request_changes")))}
-              disabled={decisionOwed || decisionBusy !== null || saving}
+              disabled={held || saving}
             >
-              {decisionBusy && !decisionOwed ? <Loader size="sm" /> : retryLabel}
+              {deciding ? <Loader size="sm" /> : retryLabel}
             </FilledButton>
           )}
         </div>

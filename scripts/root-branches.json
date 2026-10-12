@@ -124,6 +124,11 @@
     "kind": "J",
     "why": "Hierarchy read from the row (a null parent is the tree root), not an id compared to the root."
   },
+  "packages/cf-backend/src/orchestrator.ts#OrchestratorAgent.owedIntents.actor": {
+    "count": 1,
+    "kind": "J",
+    "why": "The owner's views name the workspace's own agent under no agent id, as listOwnerQuestions does: an owed intent of main's shows on main's window."
+  },
   "packages/cf-backend/src/orchestrator.ts#OrchestratorAgent.reactingAgents": {
     "count": 1,
     "kind": "J",
