@@ -351,7 +351,8 @@ describe('a named shell is part of the ask as it was when asked', () => {
         if (method !== 'exec') return null;
         const command = typeof params[0] === 'string' ? params[0] : '';
 
-        if (command.includes('sha256sum')) {
+        // A state read names the file as its first argument; a named call's wrapper names it as its second.
+        if (command.includes('/$1.bash')) {
           reads.count += 1;
 
           if (reads.count > reads.failAfter) throw new Error('the tunnel dropped');
