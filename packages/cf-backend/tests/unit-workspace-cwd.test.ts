@@ -114,6 +114,29 @@ describe('hosted workspace actor shell state', () => {
     });
   });
 
+  // The approval read's own command (surface-cuts' SESSION_STATE): values that differ only in a lone UTF-16 surrogate
+  // are kept apart by the shell, and must be listed apart too, or one approval covers both (NIMBUS-ASKS #52).
+  test('a named shell holding U+D800 and one holding U+D801 digest differently; equal values digest alike', async () => {
+    const storage = openWorkspaceDatabase();
+    const workspace = await NimbusWorkspace.create({ ...storage, generation: 1 });
+    const box = sdkBox(workerHost(workspace, new Map()));
+    const state = `( pwd | sha256sum; export '$=0'; set ) | sha256sum`;
+
+    const holding = async (shellId: string, value: string) => {
+      await box.exec('export A="$B"', { shellId, env: { B: value } });
+
+      return (await box.exec(state, shell(shellId))).stdout;
+    };
+
+    const low = await holding('agent:low', '\uD800');
+    const high = await holding('agent:high', '\uD801');
+
+    expect(await box.exec(`case "$A" in "$B") echo same;; *) echo apart;; esac`, { shellId: 'agent:low', env: { B: '\uD801' } }))
+      .toMatchObject({ stdout: 'apart\n' });
+    expect(low).not.toBe(high);
+    expect(await holding('agent:low-again', '\uD800')).toBe(low);
+  });
+
   test('durable shell state survives worker reconstruction', async () => {
     const storage = openWorkspaceDatabase();
 
