@@ -583,14 +583,16 @@ describe('the refiner — bounded references, prior history, strict typed answer
     expect(fx.facts.all()).toEqual([]);
   });
 
-  test('a refusal before the child exists refuses the request and keeps it recoverable', async () => {
+  test('a refiner that could not start refuses the request and says why', async () => {
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
 
     const deps: RefinementDeps = {
       ...fx.deps(scriptedRefiner('{}').port),
       refiner: {
-        start: async () => ({ reason: 'unavailable', error: 'no roster substrate here' }),
+        start: async () => ({
+          status: 'failed', agent: 'ask-refiner-x', lifetime: 'task', role: 'refiner', answer: 'no roster substrate here', transcript: 'none', reason: 'unavailable',
+        }),
         release: () => {},
         reclaim: () => null,
         answered: () => [],

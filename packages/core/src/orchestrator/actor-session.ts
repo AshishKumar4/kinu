@@ -346,9 +346,7 @@ export class ActorSession {
     const task = buildAdvisorPrompt(snapshot.turn, snapshot.reachable, await this.advisorGuidance());
     const hired = await port.start({ role: ADVISOR_ROLE_ID, roleLabel: ADVISOR_ROLE_ID, task, mode: 'build', lane: advisorLane(turnId) });
 
-    if (!('status' in hired) || hired.status === 'failed') {
-      diagnostics.event('advisor.hire_failed', { turnId, reason: 'reason' in hired ? hired.reason ?? 'unknown' : 'unknown' });
-    }
+    if (hired.status === 'failed') diagnostics.event('advisor.hire_failed', { turnId, reason: hired.reason ?? 'unknown' });
   }
 
   /** Notes handed to the conversation and not yet said, by the helper that answered them. */

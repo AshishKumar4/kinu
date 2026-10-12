@@ -629,7 +629,6 @@ export {
   type SubordinateLifetime,
   type TemporaryAgentPort,
   type TemporaryRunOutcome,
-  type TemporaryRunRefusal,
   type TaskTurnEnding,
   type TemporaryRunRequest,
 } from './subordinates/temporary';

@@ -6,7 +6,7 @@ import type { SubordinateReportStatus } from '../events/hub/types';
 import type { EventLog } from '../events/hub/log';
 import { Cause, Effect } from 'effect';
 import { settle } from '../obs/effect';
-import { renderCauseChain, toKinuError, type ErrorCode } from '../obs/error';
+import { KinuError, renderCauseChain, toKinuError, type ErrorCode } from '../obs/error';
 import type { SubordinateRosterStore } from './roster';
 import type { SubordinateRuntime } from './support';
 import { finishSubordinateBirth, type SubordinateBirth } from './birth';
@@ -20,8 +20,7 @@ import {
 
 export {
   TEMPORARY_LIFETIME,
-  type TemporaryAgentPort, type TemporaryRunOutcome,
-  type TemporaryRunRefusal, type TemporaryRunRequest,
+  type TemporaryAgentPort, type TemporaryRunOutcome, type TemporaryRunRequest,
 } from '../types/subordinates';
 
 /** How long a roster row lives; state cannot tell the two apart. */
@@ -170,11 +169,11 @@ export function createTemporaryAgentPort(deps: {
     start: (request) => settle(Effect.gen(function* () {
       const task = request.task.trim();
 
-      if (!task) return { reason: 'bad_input', error: 'hire requires a non-empty mission' };
+      if (!task) return yield* new KinuError('bad_input', 'hire requires a non-empty mission');
       const refs = request.contextRefs ?? [];
       const roleLabel = request.roleLabel.trim();
 
-      if (!roleLabel) return { reason: 'bad_input', error: 'hire requires a role' };
+      if (!roleLabel) return yield* new KinuError('bad_input', 'hire requires a role');
       // An advisor's brief is written for it, not by anyone, so it is named for its role.
       const name = deps.createName(`ask-${roleLabel}`, request.lane ? null : task);
       const startedAt = deps.now();

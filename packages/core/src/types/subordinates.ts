@@ -57,17 +57,12 @@ export interface TemporaryRunOutcome {
   readonly reason?: ErrorCode;
 }
 
-/** A refusal raised before the child exists, so there is no agent to report on. */
-export interface TemporaryRunRefusal {
-  readonly reason: ErrorCode;
-  readonly error: string;
-}
-
 /** No `active()`/`history()`: the one roster (`agents.list`) already answers both. Required wherever a backend
  *  wires a roster. */
 export interface TemporaryAgentPort {
-  /** Start a child on its brief and return; its settling report reaches the hirer's rail. */
-  start(request: TemporaryRunRequest): Promise<TemporaryRunOutcome | TemporaryRunRefusal>;
+  /** Start a child on its brief and return; its settling report reaches the hirer's rail. A brief with no mission or
+   *  role is refused (`bad_input`) before any child exists. */
+  start(request: TemporaryRunRequest): Promise<TemporaryRunOutcome>;
   /** Called inside the child's turn, so it only schedules the retire. */
   release(name: string): void;
   reclaim(request: EvolutionLaneRequest): EvolutionHelperAnswer | null;
