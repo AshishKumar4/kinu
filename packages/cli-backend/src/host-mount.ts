@@ -68,9 +68,10 @@ async function oneAtATime<T>(path: string, run: () => Promise<T>): Promise<T> {
 }
 
 /**
- * `data` at `path` only if its bytes still hash to `expected` (null: only if none is there), replaced through a temp file
- * and a rename. The compare and the rename run back to back in this process; this host gives no lock against another
- * process's write in that instant, and a reader never sees half a file.
+ * `data` at `path` only if its bytes still hash to `expected` (null: only if none is there), written over the file in
+ * place, as a plain write does: it keeps its inode, owner, group, mode, ACLs and every other link to it, and a file this
+ * user may not write is refused. Each path's compare and write run one at a time in this process (`oneAtATime`); this
+ * host gives no lock against another process's write in between.
  */
 function replaceIfDigest(path: string, data: Uint8Array, expected: string | null): Promise<VfsDigestWrite> {
   return oneAtATime(path, () => replaceNow(path, data, expected));
@@ -81,27 +82,16 @@ async function replaceNow(path: string, data: Uint8Array, expected: string | nul
   const found = held === undefined ? null : sha256Hex(held);
 
   if (found !== expected) return { ok: false, sha256: found };
-  await fs.mkdir(dirname(path), { recursive: true });
-  const temporary = join(dirname(path), `.${basename(path)}.${crypto.randomUUID()}.kinu-write`);
 
-  const mode = held === undefined ? undefined : (await fs.stat(path)).mode & 0o7777;
+  if (held === undefined) await fs.mkdir(dirname(path), { recursive: true });
+  // A create only where nothing is yet; a replacement only of a file still there.
+  const file = await fs.open(path, held === undefined ? 'wx' : 'r+');
 
   try {
-    // Created with the replaced file's mode, which the umask can only narrow, and given the bits it cut before any byte
-    // is written: the new bytes are never readable by anyone the file did not let read them.
-    const file = await fs.open(temporary, 'wx', mode ?? 0o666);
-
-    try {
-      if (mode !== undefined) await file.chmod(mode);
-      await file.writeFile(data);
-    } finally {
-      await file.close();
-    }
-
-    await fs.rename(temporary, path);
+    await file.truncate(0);
+    await file.writeFile(data);
   } finally {
-    // Renamed, it is gone already; a failed write or rename leaves none behind.
-    await fs.rm(temporary, { force: true });
+    await file.close();
   }
 
   return { ok: true, sha256: sha256Hex(data) };

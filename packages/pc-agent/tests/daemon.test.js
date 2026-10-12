@@ -940,6 +940,39 @@ describe('a write that names the bytes it replaces', () => {
     expect({ modes, now: fs.statSync(file).mode & 0o777 }).toEqual({ modes: [0o600], now: 0o600 });
   });
 
+  // 2026-10-12 security review: a temp file and a rename replaced a file its owner had made read-only, and dropped its
+  // owner, group and ACLs; a plain write refuses the first and keeps the rest.
+  test('replaces a file in place, as a plain write does: a read-only one is refused, and every other name keeps it', async () => {
+    const root = scratchDir('daemon-digest-in-place');
+    const file = path.join(root, 'shared.md');
+    const other = path.join(root, 'also-shared.md');
+    fs.writeFileSync(file, 'v1');
+    fs.linkSync(file, other);
+
+    // Another user's file where this test may give one (as root): a replacement made by the daemon must not take it over.
+    if (process.getuid?.() === 0) fs.chownSync(file, 65534, 65534);
+    const before = fs.statSync(file);
+    const ws = fakeWs();
+
+    handle({ id: 'replace', method: 'writeFileIfDigest', sandbox: scoped([root]), params: [file, 'v2', sha256('v1'), {}] }, ws, {});
+    expect((await ws.response('replace')).result).toEqual({ ok: true, sha256: sha256('v2') });
+    // The same file, so its owner, group, mode and ACLs are its own still, and its other name reads the new bytes.
+    expect(fs.statSync(file)).toMatchObject({ ino: before.ino, uid: before.uid, gid: before.gid, mode: before.mode });
+    expect(fs.readFileSync(other, 'utf8')).toBe('v2');
+
+    fs.chmodSync(file, 0o444);
+
+    try {
+      handle({ id: 'read-only', method: 'writeFileIfDigest', sandbox: scoped([root]), params: [file, 'v3', sha256('v2'), {}] }, ws, {});
+
+      // Root writes any file, as a plain write does; anyone else is refused.
+      if (process.getuid?.() === 0) expect((await ws.response('read-only')).result).toMatchObject({ ok: true });
+      else expect((await ws.response('read-only')).error?.message).toContain('EACCES');
+    } finally {
+      fs.chmodSync(file, 0o644);
+    }
+  });
+
   test('with no digest, creates the file only where none is', async () => {
     const root = scratchDir('daemon-digest-create');
     const file = path.join(root, 'new.md');

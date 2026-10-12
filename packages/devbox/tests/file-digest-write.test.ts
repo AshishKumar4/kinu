@@ -1,7 +1,7 @@
 // Runs the guest program at the native exec boundary: the compare and the replacement are one guest process.
 import { afterAll, expect, test } from 'bun:test';
 import { createHash, randomUUID } from 'node:crypto';
-import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, chmodSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chownSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, chmodSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writeFileIfDigest } from '../src/file-digest-write';
@@ -175,4 +175,42 @@ test('a save through a link replaces the file it leads to and keeps the link; a 
     dangling: true, throughDangling: 'first', lost: 'rejected', nowhere: true, left: ['absent.md', 'target.md'],
   });
   await box.destroy();
+});
+
+// 2026-10-12 security review: the replacement dropped the file's owner, group and ACLs, and replaced a read-only file.
+test('a replacement keeps the file\'s owner, group and extended attributes, and a read-only file is refused as a plain write refuses it', async () => {
+  const path = join(root, 'protected.md');
+  writeFileSync(path, 'v1');
+
+  // Another user's file where this test may give one (as root): a replacement made by this process must not take it over.
+  if (process.getuid?.() === 0) chownSync(path, 65534, 65534);
+  const before = statSync(path);
+
+  // An extended attribute where this file system keeps them (ACLs are kept the same way); none is asked of others.
+  const xattr = async (code: string) => {
+    const child = Bun.spawn(['python3', '-c', code, path], { stdout: 'pipe', stderr: 'ignore' });
+
+    return { exitCode: await child.exited, stdout: await new Response(child.stdout).text() };
+  };
+
+  const tagged = (await xattr("import os, sys; os.setxattr(sys.argv[1], 'user.kinu', b'kept')")).exitCode === 0;
+  const operation = (): string => randomUUID();
+
+  expect(await settle(writeFileIfDigest({ exec: pipeExec }, { path, data: bytes('v2'), expected: sha256('v1'), operation: operation() })))
+    .toEqual({ ok: true, sha256: sha256('v2') });
+  expect(statSync(path)).toMatchObject({ uid: before.uid, gid: before.gid, mode: before.mode });
+
+  if (tagged) expect((await xattr("import os, sys; print(os.getxattr(sys.argv[1], 'user.kinu').decode(), end='')")).stdout).toBe('kept');
+
+  chmodSync(path, 0o444);
+
+  try {
+    const readOnly = settle(writeFileIfDigest({ exec: pipeExec }, { path, data: bytes('v3'), expected: sha256('v2'), operation: operation() }));
+
+    // Root writes any file, as a plain write does; anyone else is refused.
+    if (process.getuid?.() === 0) expect(await readOnly).toMatchObject({ ok: true });
+    else await expect(readOnly).rejects.toThrow('Permission denied');
+  } finally {
+    chmodSync(path, 0o644);
+  }
 });

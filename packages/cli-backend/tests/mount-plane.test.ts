@@ -2,7 +2,7 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // Local environments and the mount table: a directory-bound session works on the real bytes through one `workspace`
 // executor, with no `/pc` or `/sandbox` mount.
 import { describe, expect, test } from 'bun:test';
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, chownSync, existsSync, linkSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { open, type FileHandle } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createCLIRuntime, type CLIRuntime } from '../src/runtime';
@@ -117,6 +117,35 @@ describe('a replace the folder checks against what was read', () => {
 
     expect(landed).toHaveLength(1);
     expect(answers.find((answer) => !answer.ok)).toEqual({ ok: false, sha256: sha256(readFileSync(target, 'utf8')) });
+  });
+
+  // 2026-10-12 security review: a temp file and a rename replaced a read-only file and dropped its owner, group and ACLs.
+  test('a replaced file is the same file, as a plain write leaves it, and a read-only one is refused', async () => {
+    const folder = scratchDir('mount-plane-in-place');
+    const target = join(folder, 'shared.md');
+    const other = join(folder, 'also-shared.md');
+    writeFileSync(target, 'v1');
+    linkSync(target, other);
+
+    // Another user's file where this test may give one (as root): a replacement made by this process must not take it over.
+    if (process.getuid?.() === 0) chownSync(target, 65534, 65534);
+    const before = statSync(target);
+    const plane = localFilePlane({ folder, space: join(folder, 'space'), views: [], checkpoints: undefined });
+    const replace = present(plane.writeFileIfDigest?.bind(plane), 'the digest write');
+
+    expect(await replace(target, bytes('v2'), sha256('v1'))).toEqual({ ok: true, sha256: sha256('v2') });
+    expect(statSync(target)).toMatchObject({ ino: before.ino, uid: before.uid, gid: before.gid, mode: before.mode });
+    expect(readFileSync(other, 'utf8')).toBe('v2');
+
+    chmodSync(target, 0o444);
+
+    try {
+      // Root writes any file, as a plain write does; anyone else is refused.
+      if (process.getuid?.() === 0) expect(await replace(target, bytes('v3'), sha256('v2'))).toMatchObject({ ok: true });
+      else await expect(replace(target, bytes('v3'), sha256('v2'))).rejects.toMatchObject({ code: 'EACCES' });
+    } finally {
+      chmodSync(target, 0o644);
+    }
   });
 
   test('a replaced file keeps every mode bit, the ones a umask would cut too', async () => {

@@ -16,7 +16,8 @@ const OPERATION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
  * Writes `data` at `path` only if the file's bytes hash to `expected` (null: only if no file is there). One guest
  * process reads the new bytes from stdin and, holding the directory of the file `path` leads to, compares that file and
  * replaces it through a temp file and a rename, so the compare and the write are one instant under every name for the
- * file, and a reader never sees half a file. The guest keeps each `operation`'s answer, and its staged write before the
+ * file, and a reader never sees half a file. The replacement keeps the file's mode, owner, group and extended
+ * attributes (its ACLs), and a file this user may not write is refused, as a plain write leaves and refuses it. The guest keeps each `operation`'s answer, and its staged write before the
  * rename publishes it, so a resend after a lost reply or a guest cut at any point gets the first send's outcome rather
  * than a second compare.
  */
@@ -46,7 +47,7 @@ export function writeFileIfDigest(
 }
 
 const WRITE_IF_DIGEST = `
-import fcntl, hashlib, json, os, secrets, sys, time
+import errno, fcntl, hashlib, json, os, secrets, sys, time
 path, expected, operation = sys.argv[1], sys.argv[2] or None, sys.argv[3]
 data = sys.stdin.buffer.read()
 # Each operation's answer, kept for its resends: a resend after a lost reply is answered what the first send did, and
@@ -108,22 +109,37 @@ fcntl.flock(folder, fcntl.LOCK_EX)
 try:
     held = os.open(name, os.O_RDONLY, dir_fd=folder)
 except FileNotFoundError:
-    found, mode = None, None
+    found, kept, attributes = None, None, {}
 else:
     with os.fdopen(held, 'rb') as reading:
         found = hashlib.sha256(reading.read()).hexdigest()
-        mode = os.fstat(held).st_mode & 0o7777
+        kept = os.fstat(held)
+        # Its extended attributes, ACLs among them, go with it to the replacement; a file system without them has none.
+        try:
+            attributes = {key: os.getxattr(held, key) for key in os.listxattr(held)}
+        except OSError as unsupported:
+            if unsupported.errno not in (errno.ENOTSUP, errno.EOPNOTSUPP):
+                raise
+            attributes = {}
 if found != expected:
     answer({'ok': False, 'sha256': found})
     sys.exit(0)
+# A file this user may not write is refused, as a plain write refuses it: the rename below needs only the directory.
+if kept is not None and not os.access(name, os.W_OK, dir_fd=folder):
+    raise PermissionError(errno.EACCES, 'Permission denied', path)
 temporary = '.' + name + '.' + secrets.token_hex(6) + '.kinu-write'
 digest = hashlib.sha256(data).hexdigest()
 try:
-    # Created with the replaced file's mode and given the bits the umask cut before any byte is written.
+    # Created with the replaced file's mode and given the bits the umask cut, its owner, group and extended attributes,
+    # before any byte is written: the replacement is the file a plain write would have left, under the same protections.
+    mode = None if kept is None else kept.st_mode & 0o7777
     descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666 if mode is None else mode, dir_fd=folder)
     with os.fdopen(descriptor, 'wb') as out:
-        if mode is not None:
+        if kept is not None:
+            os.fchown(descriptor, kept.st_uid, kept.st_gid)
             os.fchmod(descriptor, mode)
+            for key, value in attributes.items():
+                os.setxattr(descriptor, key, value)
         out.write(data)
     record(intent, json.dumps({'temporary': os.path.join(directory, temporary), 'sha256': digest}))
     os.rename(temporary, name, src_dir_fd=folder, dst_dir_fd=folder)

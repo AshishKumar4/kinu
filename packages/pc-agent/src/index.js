@@ -39,14 +39,15 @@ function checkpointedWrite(msg, { requested, content, options }, checkpoints, wr
 }
 
 /**
- * Writes `data` only if the file's bytes still hash to `expected` (null: only if no file is there). The compare and a
- * temp-file-plus-rename replacement run here, in one synchronous step of this process, so no other write of this
- * daemon interleaves, and a reader never sees half a file. Answers the new digest, or the one found (null: absent).
- * `target` is the judged path; the step runs where it still is (`atJudged`).
+ * Writes `data` only if the file's bytes still hash to `expected` (null: only if no file is there), over the file in
+ * place, as a plain write does: the file keeps its inode, owner, group, mode, ACLs and every other link to it, and a file
+ * this user may not write is refused. The compare and the write run here in one synchronous step of this process, so no
+ * other write of this daemon interleaves. Answers the new digest, or the one found (null: absent). `target` is the
+ * judged path; the step runs where it still is (`atJudged`).
  */
 function replaceIfDigest(view, target, data, expected) {
-  // A raw view's path is the one requested, links and all, and is read through them as before; a judged path names no
-  // link, so one found in its place is refused.
+  // A raw view's path is the one requested, links and all, and is read and written through them as before; a judged
+  // path names no link, so one found in its place is refused.
   const follow = view.raw === true ? 0 : NO_FOLLOW;
 
   return atJudged(view, target, { createParents: true }, (at) => {
@@ -59,26 +60,14 @@ function replaceIfDigest(view, target, data, expected) {
     }
 
     if (found !== expected) return { ok: false, sha256: found };
-    const temporary = path.join(path.dirname(at), `.${path.basename(at)}.${crypto.randomBytes(6).toString('hex')}.kinu-write`);
-
-    const mode = found === null ? null : fs.statSync(at).mode & 0o7777;
+    // A create only where nothing is yet; a replacement only of a file still there.
+    const flags = found === null ? fs.constants.O_CREAT | fs.constants.O_EXCL : fs.constants.O_TRUNC;
+    const fd = fs.openSync(at, fs.constants.O_WRONLY | flags | follow, 0o666);
 
     try {
-      // Created with the replaced file's mode, which the umask can only narrow, and given the bits it cut before any
-      // byte is written: the new bytes are never readable by anyone the file did not let read them.
-      const fd = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | NO_FOLLOW, mode ?? 0o666);
-
-      try {
-        if (mode !== null) fs.fchmodSync(fd, mode);
-        fs.writeFileSync(fd, data);
-      } finally {
-        fs.closeSync(fd);
-      }
-
-      fs.renameSync(temporary, at);
-    } catch (cause) {
-      fs.rmSync(temporary, { force: true });
-      throw cause;
+      fs.writeFileSync(fd, data);
+    } finally {
+      fs.closeSync(fd);
     }
 
     return { ok: true, sha256: sha256Of(data) };
