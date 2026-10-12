@@ -13,6 +13,7 @@ export interface PlanDecisionInput {
   readonly editable: boolean;
   /** Decided revision whose wake is still owed: retry without resaving. */
   readonly handoffPending: boolean;
+  readonly owed?: boolean;
   readonly rpc: Rpc;
   /** False prevents the decision. */
   readonly save: () => Promise<boolean>;
@@ -27,7 +28,7 @@ export interface PlanDecision {
 }
 
 /** Save the comments before the single decision wake; the review renders what they send. */
-export function usePlanDecision({ plan, editable, handoffPending, rpc, save, onError }: PlanDecisionInput): PlanDecision {
+export function usePlanDecision({ plan, editable, handoffPending, owed = false, rpc, save, onError }: PlanDecisionInput): PlanDecision {
   const [busy, setBusy] = useState<DecisionBusy>(null);
   const inFlight = useRef(false);
 
@@ -37,7 +38,7 @@ export function usePlanDecision({ plan, editable, handoffPending, rpc, save, onE
   }, [plan?.id, plan?.revision]);
 
   const decide = useCallback(async (decision: PlanDecisionKind) => {
-    if (!plan || (!editable && !handoffPending) || inFlight.current) return;
+    if (!plan || owed || (!editable && !handoffPending) || inFlight.current) return;
     inFlight.current = true;
     setBusy(decision === "approve" ? "approve" : "request");
     onError(null);
@@ -67,7 +68,7 @@ export function usePlanDecision({ plan, editable, handoffPending, rpc, save, onE
         setBusy(null);
       })),
     ));
-  }, [editable, handoffPending, onError, plan, rpc, save]);
+  }, [editable, handoffPending, owed, onError, plan, rpc, save]);
 
   const isInFlight = useCallback(() => inFlight.current, []);
 

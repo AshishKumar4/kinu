@@ -115,3 +115,28 @@ test('Stop cancels a delivery the stopped turn took and had not read: nothing ru
     fixture.close();
   }
 });
+
+test('a delivery that arrives after the Stop that cut it off, and after new input resumed the agent, is refused and never read', async () => {
+  const { fixture, sent, released, prompts } = await watchedTurn();
+  const delivered = (id: string, seq: number, text: string) => ({ id, seq, authorship: 'hirer' as const, input: { kind: 'turn' as const, text } });
+
+  try {
+    // The workspace's Stop cancelled what it owed through 4, among them one already on its way here.
+    fixture.chat.interrupt({ producer: 'workspace', seq: 4 });
+    released.resolve();
+    await sent;
+
+    // New input resumes the agent, and runs.
+    expect(await fixture.chat.admitDelivery(delivered('after-stop', 5, 'AFTER_STOP_MARKER'), 'workspace')).toBe('taken');
+    await fixture.chat.pumpPromise;
+    // The one on its way arrives only now.
+    expect(await fixture.chat.admitDelivery(delivered('before-stop', 4, 'BEFORE_STOP_MARKER'), 'workspace')).toBe('cancelled');
+    await fixture.chat.pumpPromise;
+
+    expect(prompts.some((prompt) => prompt.includes('AFTER_STOP_MARKER'))).toBe(true);
+    expect(prompts.some((prompt) => prompt.includes('BEFORE_STOP_MARKER'))).toBe(false);
+  } finally {
+    released.resolve();
+    fixture.close();
+  }
+});

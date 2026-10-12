@@ -121,6 +121,18 @@ export function cutNextDelivery(storageKey: string, at: DeliveryCut): void {
   deliveryCuts.set(storageKey, at);
 }
 
+const heldDeliveries = new Map<string, (release: () => void) => void>();
+
+/** The next delivery the workspace crosses into the isolate under `storageKey` is held on its way, as a slow crossing
+ *  would be: the promise settles with `release`, which lets it arrive. */
+export async function holdNextDelivery(storageKey: string): Promise<() => void> {
+  const held = Promise.withResolvers<() => void>();
+
+  heldDeliveries.set(storageKey, held.resolve);
+
+  return await held.promise;
+}
+
 const restingAnswers = new Map<string, (release: () => void) => void>();
 
 /**
@@ -446,6 +458,16 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
         deliveryCuts.delete(placement.storageKey);
 
         if (cut === 'before-admit') throw new Error('the crossing died before the agent took the delivery');
+        const holding = heldDeliveries.get(placement.storageKey);
+
+        if (holding !== undefined) {
+          heldDeliveries.delete(placement.storageKey);
+          const arrives = Promise.withResolvers<void>();
+
+          holding(arrives.resolve);
+          await arrives.promise;
+        }
+
         const answered = await calls.admit(snapshot, delivery);
 
         if (cut === 'after-admit') throw new Error("the crossing died after the agent took the delivery, before its answer");
