@@ -482,16 +482,14 @@ describe('native egress constraints — red in every governed direction', () => 
   }
 
   test('the actual private and public hosts retain their declared network policies', () => {
-    expect(auditInterception(sources, ['KinuDevbox']).violations).toEqual([]);
+    expect(auditInterception(sources, ['KinuDevbox'], true).violations).toEqual([]);
     expect(auditInterception(sources, generic, true).violations).toEqual([]);
     expect(nativeRoutingReasons(sources, entry)).toEqual([]);
   });
 
-  test('giving Kinu raw internet or dropping its override is refused', () => {
-    for (const replacement of ['enableInternet = true;', '']) {
-      const mutated = changed(kinu, 'enableInternet = false;', replacement);
-      expect(auditInterception(mutated, ['KinuDevbox']).violations.map(issue => issue.owner)).toEqual(['KinuDevbox']);
-    }
+  test('closing Kinu\'s raw internet is refused', () => {
+    const mutated = changed(kinu, 'enableInternet = true;', 'enableInternet = false;');
+    expect(auditInterception(mutated, ['KinuDevbox'], true).violations.map(issue => issue.owner)).toEqual(['KinuDevbox']);
   });
 
   test('closing generic Devbox networking closes its inherited hosts and is refused', () => {

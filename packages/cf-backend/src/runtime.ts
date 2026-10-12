@@ -402,8 +402,8 @@ export function createCFRuntime(
     try {
       const sdk = env.KinuDevbox.getByName(sandboxId);
 
-      // Egress is configured before the container runs anything, not in `onStart` (too late); until then
-      // the container has no network, so it fails closed. Only the owning workspace configures.
+      // Egress is configured before the container runs anything, not in `onStart` (too late): until then its web
+      // requests reach no vault, so no placeholder is spent. Only the owning workspace configures.
       const handle = adaptCloudflareSandbox(sdk, async () => {
         hooks.boxUse.used = true;
         const userId = actor.ownerUserId();

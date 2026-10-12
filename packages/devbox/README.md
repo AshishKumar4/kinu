@@ -293,7 +293,7 @@ Kinu turns it into its own `KinuError` in one adapter,
 `example/worker.ts` uses Devbox with no Kinu code. Kinu's `KinuDevbox`
 (`packages/cf-backend/src/kinu-devbox.ts`) adds product egress, previews and
 incident delivery. Generic Devbox classes allow public networking;
-`KinuDevbox` starts with raw internet disabled and routes HTTP and HTTPS
+`KinuDevbox` also has raw internet (D82) and routes HTTP and HTTPS
 through the vault. Native routing uses exact-host gateway capabilities
 before that fallback; `scripts/egress-interception.ts` checks both policies.
 `bun scripts/bench-devbox-standalone.ts` deploys the example on its own Worker,
