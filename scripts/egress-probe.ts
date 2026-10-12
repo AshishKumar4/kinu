@@ -77,12 +77,15 @@ export default {
       socket.close();
       return 'status ' + response.status + ', echoed ' + messages.includes('egress-probe');
     })().catch((error) => 'failed: ' + String(error)), 10000);
-    // STARTTLS over a keyed socket, as the patched node:net names it and node:tls asks: SMTP's EHLO, STARTTLS, then the
-    // ask, the egress's answer, and EHLO again over the session the egress made.
+    // STARTTLS over a keyed socket, as the patched node:net names it and node:tls asks (NIMBUS-ASKS #46): SMTP's EHLO,
+    // STARTTLS, then the ask under the ask tag, the egress's answer under the answer tag as the first bytes after it, and
+    // EHLO again over the session the egress made.
     out.starttls = await within((async () => {
-      const key = crypto.getRandomValues(new Uint8Array(16));
-      const hex = (bytes) => [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
-      const socket = egress.connect(hex(new TextEncoder().encode('smtp.gmail.com')) + '.k.' + hex(key) + '.tcp.nimbus-egress.invalid:587', { allowHalfOpen: true });
+      const tags = crypto.getRandomValues(new Uint8Array(32));
+      const [askTag, answerTag] = [tags.subarray(0, 16), tags.subarray(16)];
+      // Each name the hex of its bytes, in labels of at most 62 characters, as the shims spell it.
+      const labels = (bytes) => [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('').match(/.{1,62}/g).join('.');
+      const socket = egress.connect(labels(new TextEncoder().encode('smtp.gmail.com')) + '.k.' + labels(tags) + '.tcp.nimbus-egress.invalid:587', { allowHalfOpen: true });
       const writer = socket.writable.getWriter();
       const reader = socket.readable.getReader();
       let heard = new Uint8Array(0);
@@ -101,8 +104,9 @@ export default {
       await until(line('250'));
       await writer.write(new TextEncoder().encode('STARTTLS\\r\\n'));
       await until(line('220'));
-      await writer.write(Uint8Array.from([...key, 0x55, 0]));
+      await writer.write(Uint8Array.from([...askTag, 0x55, 0]));
       await until((bytes) => (bytes.length >= 17 ? 0 : null));
+      if (!answerTag.every((byte, at) => heard[at] === byte)) return "no answer: the first bytes after the ask were not the egress's";
       if (heard[16] !== 1) return 'refused: ' + text(heard.subarray(19));
       heard = heard.subarray(17);
       await writer.write(new TextEncoder().encode('EHLO kinu\\r\\n'));

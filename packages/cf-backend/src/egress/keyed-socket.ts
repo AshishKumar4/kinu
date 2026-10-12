@@ -67,30 +67,118 @@ function startsWith(bytes: Uint8Array, prefix: Uint8Array): boolean {
 
 const PG_SSL_REQUEST = [0, 0, 0, 8, 0x04, 0xd2, 0x16, 0x2f];
 
-/** A program's line asking a text protocol for TLS: SMTP and IMAP STARTTLS, POP3 STLS, FTP AUTH TLS. */
-const TEXT_STARTTLS = /^(?:\S+ )?(?:STARTTLS|STLS)\r?$|^AUTH TLS\r?$/i;
+/** The commands that ask a text protocol for TLS: SMTP and IMAP STARTTLS, POP3 STLS, FTP AUTH TLS. */
+const TLS_WORDS = ['STARTTLS', 'STLS'] as const;
 
-/** A server line that is not the reply's last: SMTP/FTP `NNN-`, IMAP's untagged `* `. */
+/** The longest word a TLS command is spelled with; a longer word is no such command, and is not kept. */
+const LONGEST_WORD = 'STARTTLS'.length;
+
+/** A server reply line's first four characters say whether it continues the reply: SMTP/FTP `NNN-`, IMAP's untagged `* `. */
 const CONTINUED_LINE = /^(?:\d{3}-|\* )/;
-
-/** Longer than any STARTTLS line, and than any MySQL greeting's first packet. */
-const LINE_LIMIT = 64;
-
-const GREETING_LIMIT = 1024;
 
 const MYSQL_CLIENT_SSL = 0x0800;
 
 const MYSQL_SSL_REQUEST_LENGTH = 36;
 
-/** A MySQL server's first packet, whole (protocol 10), offering TLS: the client's next move may be its SSLRequest. */
-function mysqlGreetingOffersTls(bytes: Uint8Array): boolean {
-  const version = bytes.indexOf(0, 5);
+/** A line's first two words ask for TLS: `[tag] STARTTLS`, `[tag] STLS`, or `AUTH TLS`. */
+function tlsCommand(first: string | undefined, second: string | undefined): boolean {
+  if (second === undefined) return TLS_WORDS.some((word) => word === first);
 
-  if (version < 0) return false;
-  // Connection id (4), the scramble's first part (8) and a filler (1), then the low capability flags.
-  const flags = version + 1 + 4 + 8 + 1;
+  return TLS_WORDS.some((word) => word === second) || (first === 'AUTH' && second === 'TLS');
+}
 
-  return (((bytes[flags] ?? 0) | ((bytes[flags + 1] ?? 0) << 8)) & MYSQL_CLIENT_SSL) !== 0;
+/**
+ * Whether a program line, read as its words, asks for TLS: `[tag] STARTTLS`, `[tag] STLS` or `AUTH TLS`. A word is
+ * kept only while it may still be one of those (up to `LONGEST_WORD`), and only the first three words count, so a line
+ * of any length is read in bounded state, its tag (an IMAP tag of any length) included.
+ */
+class TlsCommandLine {
+  private words: string[] = [];
+
+  private word = '';
+
+  private overlong = false;
+
+  private tooMany = false;
+
+  /** One more byte of the line, its newline excluded. */
+  add(byte: number): void {
+    if (byte === 0x20) {
+      this.endWord();
+
+      return;
+    }
+
+    if (byte === 0x0d) return;
+
+    if (this.word.length === LONGEST_WORD) this.overlong = true;
+    else this.word += String.fromCharCode(byte).toUpperCase();
+  }
+
+  /** At the line's newline: whether it asked for TLS, the line forgotten. */
+  ends(): boolean {
+    this.endWord();
+
+    const [first, second, ...rest] = this.words;
+    const asked = !this.tooMany && rest.length === 0 && tlsCommand(first, second);
+
+    this.words = [];
+    this.tooMany = false;
+
+    return asked;
+  }
+
+  private endWord(): void {
+    if (this.word === '' && !this.overlong) return;
+
+    // An overlong word counts as a word (a tag) but is never a keyword.
+    if (this.words.length === 3) this.tooMany = true;
+    else this.words.push(this.overlong ? '\u0000' : this.word);
+    this.word = '';
+    this.overlong = false;
+  }
+}
+
+/**
+ * A server's first packet read field by field as it arrives: a MySQL greeting (protocol 10) and whether it offers TLS,
+ * kept as the length its header names, the flags, and where in the packet the bytes are; nothing of it is buffered.
+ */
+class MysqlGreeting {
+  /** Bytes of the packet read so far. */
+  private read = 0;
+
+  private length = 0;
+
+  /** The server version string's terminating NUL seen, at this packet offset; -1 before. */
+  private versionEnd = -1;
+
+  private flags = 0;
+
+  /** No longer a greeting: settled, or not one. */
+  done = false;
+
+  /** One more byte: true where a greeting offering TLS has just ended. */
+  add(byte: number): boolean {
+    const at = this.read;
+
+    this.read += 1;
+
+    if (at < 3) this.length |= byte << (8 * at);
+    else if ((at === 3 && byte !== 0) || (at === 4 && byte !== 0x0a)) this.done = true;
+    else if (at > 4 && this.versionEnd < 0 && byte === 0) this.versionEnd = at;
+    else if (this.versionEnd >= 0) this.flagByte(at - this.versionEnd, byte);
+
+    if (this.done || this.read < 4 + this.length) return false;
+    this.done = true;
+
+    return (this.flags & MYSQL_CLIENT_SSL) !== 0;
+  }
+
+  /** After the version's NUL: connection id (4), the scramble's first part (8) and a filler (1), then the low flags. */
+  private flagByte(past: number, byte: number): void {
+    if (past === 14) this.flags = byte;
+    else if (past === 15) this.flags |= byte << 8;
+  }
 }
 
 /** Whether `bytes` are, or may still become, a MySQL client's SSLRequest: 32 bytes, sequence 1, asking for TLS. */
@@ -124,21 +212,22 @@ function answer(tag: Uint8Array, refusal: string | null): Uint8Array {
 
 /**
  * What the two directions have said that a go-ahead depends on, read a byte at a time so no split or join of the stream
- * changes it: the program's first eight bytes (PostgreSQL's SSLRequest), its lines (a text STARTTLS, and how many replies
- * are owed), and the server's first packet (a MySQL greeting) and reply lines.
+ * changes it, in state the protocols bound: the program's first eight bytes (PostgreSQL's SSLRequest), its lines (a
+ * text STARTTLS, and how many replies are owed), and the server's first packet (a MySQL greeting) and reply lines.
  */
 class GoAheads {
   private readonly head: number[] = [];
 
-  private line = '';
+  private readonly line = new TlsCommandLine();
 
   private lines = 0;
 
   private replies = 0;
 
+  /** The server line's first four characters, all a reply's continuation is told by. */
   private serverLine = '';
 
-  private greeting: number[] | null = [];
+  private readonly greeting = new MysqlGreeting();
 
   /** The server's next byte answers PostgreSQL's SSLRequest. */
   private byte = false;
@@ -158,21 +247,24 @@ class GoAheads {
       }
 
       if (byte !== 0x0a) {
-        this.line = this.line.length > LINE_LIMIT ? this.line : this.line + String.fromCharCode(byte);
+        this.line.add(byte);
         continue;
       }
 
       this.lines += 1;
 
-      if (TEXT_STARTTLS.test(this.line)) this.replyTo = this.lines;
-      this.line = '';
+      if (this.line.ends()) this.replyTo = this.lines;
     }
   }
 
   /** Where in the server's `bytes` a go-ahead ends (exclusive); -1 when none does. */
   goAheadEnd(bytes: Uint8Array): number {
     for (const [at, byte] of bytes.entries()) {
-      if (this.greeting !== null && this.greetingEnds(byte)) return at + 1;
+      if (!this.greeting.done && this.greeting.add(byte)) {
+        this.mysql = true;
+
+        return at + 1;
+      }
 
       if (this.byte) {
         this.byte = false;
@@ -202,26 +294,6 @@ class GoAheads {
     }
 
     return -1;
-  }
-
-  /** The server's first packet, a byte more of it: true where a MySQL greeting offering TLS ends. */
-  private greetingEnds(byte: number): boolean {
-    const greeting = this.greeting ?? [];
-
-    greeting.push(byte);
-    const length = greeting.length >= 3 ? (greeting[0] ?? 0) | ((greeting[1] ?? 0) << 8) | ((greeting[2] ?? 0) << 16) : 0;
-
-    if ((greeting.length === 4 && byte !== 0) || (greeting.length === 5 && byte !== 0x0a) || length + 4 > GREETING_LIMIT) {
-      this.greeting = null;
-
-      return false;
-    }
-
-    if (greeting.length < 5 || greeting.length < length + 4) return false;
-    this.greeting = null;
-    this.mysql = mysqlGreetingOffersTls(Uint8Array.from(greeting));
-
-    return this.mysql;
   }
 }
 
@@ -327,7 +399,11 @@ export async function carryKeyed(program: CarriedSocket, server: UpgradableSocke
     held = new Uint8Array(0);
 
     if (at.gate === null) {
-      // An ask with no go-ahead to answer is refused where it starts a write; anything else is the program's bytes.
+      // An ask with no go-ahead to answer is refused where it starts a write; anything else is the program's bytes, the
+      // start of an ask split across writes included. Holding a write that might begin the tag would stall a program
+      // that sends byte by byte (a 1-byte write matches with odds 1/256) and waits for its answer, and gains nothing:
+      // the server learning the ask tag can forge no answer, since the answer tag never travels to it, and the program's
+      // shim accepts TLS only from that answer, read first after its ask (2026-10-12, Main approved).
       if (startsWith(bytes, tags.ask)) {
         await refuse('Kinu\'s egress makes STARTTLS right after a PostgreSQL, MySQL or text-protocol (SMTP, IMAP, POP3, FTP) '
           + 'go-ahead; this connection\'s server gave no go-ahead when TLS was asked for');

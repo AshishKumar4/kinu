@@ -409,6 +409,54 @@ describe('the carried stream is read in any split', () => {
     }
   }
 
+  /** Every byte apart: `bytes` cut after each one. */
+  const everyByte = (bytes: Uint8Array): number[] => Array.from({ length: bytes.length - 1 }, (_, at) => at + 1);
+
+  // 2026-10-12 review: a line of 64 characters or more (an IMAP tag) was cut off before STARTTLS could be read in it.
+  test('an IMAP STARTTLS under a 200-character tag, sent a byte at a time, gets its go-ahead', async () => {
+    const program = fakeProgram();
+    const server = fakeServer();
+    const carried = carryKeyed(program.socket, server.socket, 'imap.example.com', KEY);
+    const tag = 'a'.repeat(200);
+    const command = bytesOf(`${tag} STARTTLS\r\n`);
+
+    await server.send('* OK ready\r\n');
+    await program.heard.take(12);
+    const sending = inPieces((bytes) => program.send(bytes), command, everyByte(command));
+
+    await server.heard.take(command.length);
+    await sending;
+    const replies = `* CAPABILITY IMAP4rev1\r\n${tag} OK Begin TLS\r\n`;
+
+    await server.send(replies);
+    await program.heard.take(replies.length);
+    await program.send(ask());
+    expect(await program.heard.take(17)).toEqual(Uint8Array.from([...KEY.answer, 1]));
+    await program.end();
+    await server.secure().end();
+    await carried;
+  });
+
+  // 2026-10-12 review: a greeting longer than 1,024 bytes was given up on, so its go-ahead was never seen.
+  test('a MySQL greeting with a long version, sent a byte at a time, is the go-ahead', async () => {
+    const program = fakeProgram();
+    const server = fakeServer();
+    const carried = carryKeyed(program.socket, server.socket, '10.0.0.9', KEY);
+    const body = [0x0a, ...bytesOf(`8.0.36-${'x'.repeat(1500)}`), 0, 1, 0, 0, 0, ...Array.from({ length: 8 }, () => 0x41), 0, 0xff, 0xff, 0x21, 2, 0];
+    const greeting = Uint8Array.from([body.length & 0xff, (body.length >> 8) & 0xff, 0, 0, ...body]);
+
+    const greeted = inPieces((bytes) => server.send(bytes), greeting, everyByte(greeting));
+
+    expect(await program.heard.take(greeting.length)).toEqual(greeting);
+    await greeted;
+    await program.send(Uint8Array.from([...mysqlSslRequest(), ...ask('db.example.com')]));
+    expect(await server.heard.take(36)).toEqual(mysqlSslRequest());
+    expect(await program.heard.take(17)).toEqual(Uint8Array.from([...KEY.answer, 1]));
+    await program.end();
+    await server.secure().end();
+    await carried;
+  });
+
   test('a PostgreSQL SSLRequest split 3/5 still makes the server\'s answer the go-ahead', async () => {
     const program = fakeProgram();
     const server = fakeServer();
