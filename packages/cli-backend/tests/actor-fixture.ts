@@ -11,7 +11,7 @@ import {
   DEFAULT_WORKERS_AI_MODEL_SPEC, WORKSPACE_ROOT, actorHomeName, actorScaffoldPath } from '@kinu.run/core';
 import { bindLocalActor, localActorDirectory, registerLocalActor, retireLocalActor } from '@kinu.run/core';
 import { buildLocalActorRuntime, cleanupFacetScratch, makeSqlExec, type CLIRuntime } from '../src/runtime';
-import { modelWindow, type HeadInferenceDeps, type HeadSeat } from '@kinu.run/core';
+import { modelWindow, type HeadInferenceDeps, type HeadSeat, type RunInference } from '@kinu.run/core';
 import type { LanguageModel } from 'ai';
 
 /** A run's compaction trigger, kept in memory: no fold runs here, but a run measures and arms as every turn does. */
@@ -167,10 +167,11 @@ export function headSeatFactory(
       actor,
       runId,
       sources: fixtureRunSources(actor, () => authority.inputs(), model, runId),
-      infer: (headInput, inference) => runHeadInference(headInput, { ...inference, compaction }),
+      infer: (headInput, inference) => runHeadInference(headInput, { ...inference, actor, compaction }),
       conversations: actor.stores.conversationSearch,
       // No workspace routes a fixture seat's jobs: nothing here cancels or recovers them.
       jobs: { ports: { jobOutput: () => {} }, attach: () => () => {} },
+      receipts: fixtureReceipts(actor),
       release: async () => {
         host.release(binding.reference);
         writes?.delete(binding.reference.actorId);
@@ -257,11 +258,21 @@ export function headLoopSeams(
     runId,
     sources: fixtureRunSources(actor, async () => inputs, model, runId),
     compaction,
-    infer: (headInput: HeadInput, inference: Omit<HeadInferenceDeps, 'compaction'>) => runHeadInference(headInput, { ...inference, compaction }),
+    infer: (headInput: HeadInput, inference: RunInference) => runHeadInference(headInput, { ...inference, actor, compaction }),
     conversations: stores.conversationSearch,
     // No workspace routes a fixture seat's jobs: nothing here cancels or recovers them.
     jobs: { ports: { jobOutput: () => {} }, attach: () => () => {} },
+    receipts: fixtureReceipts(actor),
   } satisfies Omit<HeadSeat, 'release'> & Pick<HeadInferenceDeps, 'compaction'>;
+}
+
+/** A run actor's calls keep their receipts in its own store, as they run in its session. */
+function fixtureReceipts(actor: HostedActor): HostedNodeSeat['receipts'] {
+  return {
+    sql: actor.runtime.storage.sql, actor: actor.handle,
+    durable: (callId, signal) => actor.session.durableCall(callId, signal),
+    transaction: (body) => actor.runtime.storage.transactionSync(body),
+  };
 }
 
 /** Per-node seat factory: each call registers its own node actor, so wave children never share a claim ledger. */
@@ -276,7 +287,7 @@ export function nodeSeatFactory(
     const seams = headLoopSeams(rt, { runId, handle, runtime, model });
 
     return {
-      actor: seams.actor, runId: seams.runId, sources: seams.sources, infer: seams.infer, conversations: seams.conversations, jobs: seams.jobs,
+      actor: seams.actor, runId: seams.runId, sources: seams.sources, infer: seams.infer, conversations: seams.conversations, jobs: seams.jobs, receipts: seams.receipts,
     };
   };
 }

@@ -32,7 +32,7 @@ function claimPlane(turnId = 'turn-1') {
   initToolEffectClaimTable(execRaw);
   const actor = createTestActors(sql, execRaw).main;
   const scope = { turnId };
-  const deps: EffectClaimDeps = { sql, actor, turnId: () => scope.turnId, durable: () => Promise.resolve() };
+  const deps: EffectClaimDeps = { sql, actor, execution: () => ({ turnId: scope.turnId, runId: 'run-1' }), durable: () => Promise.resolve() };
 
   return { sql, actor, deps, scope, db };
 }
@@ -122,15 +122,15 @@ describe('tool effect claims', () => {
   test('a lost call reads back as its claim left it: a stored result, the check-first refusal, or nothing', async () => {
     const { sql, actor } = claimPlane();
 
-    claimToolEffect(sql, actor, { turnId: 'turn-1', callId: 'call-settled', digest: 'd1' });
-    settleToolEffect(sql, actor, { turnId: 'turn-1', callId: 'call-settled', digest: 'd1' }, JSON.stringify({ sent: 'ops' }));
-    claimToolEffect(sql, actor, { turnId: 'turn-1', callId: 'call-lost', digest: 'd2' });
+    claimToolEffect(sql, actor, { turnId: 'turn-1', runId: 'run-1', callId: 'call-settled', digest: 'd1' });
+    settleToolEffect(sql, actor, { turnId: 'turn-1', runId: 'run-1', callId: 'call-settled', digest: 'd1' }, JSON.stringify({ sent: 'ops' }));
+    claimToolEffect(sql, actor, { turnId: 'turn-1', runId: 'run-1', callId: 'call-lost', digest: 'd2' });
 
-    expect(lostToolCall(sql, actor, 'turn-1', { toolCallId: 'call-settled', toolName: 'run' })).toEqual({ state: 'settled', result: { sent: 'ops' } });
-    expect(lostToolCall(sql, actor, 'turn-1', { toolCallId: 'call-lost', toolName: 'run' })).toEqual({
+    expect(lostToolCall(sql, actor, { turnId: 'turn-1', runId: 'run-1' }, { toolCallId: 'call-settled', toolName: 'run' })).toEqual({ state: 'settled', result: { sent: 'ops' } });
+    expect(lostToolCall(sql, actor, { turnId: 'turn-1', runId: 'run-1' }, { toolCallId: 'call-lost', toolName: 'run' })).toEqual({
       state: 'claimed', refusal: expect.stringContaining('may or may not have taken effect'),
     });
-    expect(lostToolCall(sql, actor, 'turn-1', { toolCallId: 'call-never', toolName: 'run' })).toBeNull();
+    expect(lostToolCall(sql, actor, { turnId: 'turn-1', runId: 'run-1' }, { toolCallId: 'call-never', toolName: 'run' })).toBeNull();
 
     // In the request, each unpaired call gets that answer in place of "unknown".
     const repaired = settleUnpairedToolCalls([
@@ -139,7 +139,11 @@ describe('tool effect claims', () => {
         { type: 'tool-call', toolCallId: 'call-lost', toolName: 'run', input: {} },
         { type: 'tool-call', toolCallId: 'call-never', toolName: 'run', input: {} },
       ] },
-    ], (call) => lostToolCall(sql, actor, 'turn-1', call));
+    ], (call) => {
+      const lost = lostToolCall(sql, actor, { turnId: 'turn-1', runId: 'run-1' }, call);
+
+      return lost === 'remote' ? null : lost;
+    });
 
     expect(repaired?.[1]).toEqual({ role: 'tool', content: [
       { type: 'tool-result', toolCallId: 'call-settled', toolName: 'run', output: { type: 'json', value: { sent: 'ops' } } },
@@ -151,14 +155,14 @@ describe('tool effect claims', () => {
   test('a lost call is read in its own turn: a reused provider id in another turn is not its answer', async () => {
     const { sql, actor } = claimPlane();
 
-    claimToolEffect(sql, actor, { turnId: 'turn-earlier', callId: 'call_0', digest: 'd1' });
-    settleToolEffect(sql, actor, { turnId: 'turn-earlier', callId: 'call_0', digest: 'd1' }, JSON.stringify('an earlier answer'));
+    claimToolEffect(sql, actor, { turnId: 'turn-earlier', runId: 'run-1', callId: 'call_0', digest: 'd1' });
+    settleToolEffect(sql, actor, { turnId: 'turn-earlier', runId: 'run-1', callId: 'call_0', digest: 'd1' }, JSON.stringify('an earlier answer'));
 
-    expect(lostToolCall(sql, actor, 'turn-resumed', { toolCallId: 'call_0', toolName: 'run' })).toBeNull();
+    expect(lostToolCall(sql, actor, { turnId: 'turn-resumed', runId: 'run-1' }, { toolCallId: 'call_0', toolName: 'run' })).toBeNull();
 
     // A delegated turn's later round claims under its assignment's id.
-    claimToolEffect(sql, actor, { turnId: 'assignment-1', callId: 'call_0', digest: 'd2' });
-    expect(lostToolCall(sql, actor, 'assignment-1#2', { toolCallId: 'call_0', toolName: 'run' })).toMatchObject({ state: 'claimed' });
+    claimToolEffect(sql, actor, { turnId: 'assignment-1', runId: 'run-1', callId: 'call_0', digest: 'd2' });
+    expect(lostToolCall(sql, actor, { turnId: 'assignment-1#2', runId: 'run-1' }, { toolCallId: 'call_0', toolName: 'run' })).toMatchObject({ state: 'claimed' });
   });
 
   test('a different call in the same turn is not a replay', async () => {
@@ -249,7 +253,7 @@ describe('tool effect claims', () => {
   test('a settle cannot overwrite an outcome another attempt already recorded', async () => {
     // Direct, because the wrapper's re-entry refuses before reaching a second settle.
     const { sql, actor, deps } = claimPlane();
-    const key = { turnId: deps.turnId(), callId: 'call-a1', digest: 'digest-a1' };
+    const key = { ...deps.execution(), callId: 'call-a1', digest: 'digest-a1' };
 
     expect(claimToolEffect(sql, actor, key).kind).toBe('claimed');
     settleToolEffect(sql, actor, key, JSON.stringify({ attempt: 1 }));
@@ -292,7 +296,7 @@ describe('tool effect claims', () => {
 
             return `charged-${Number(args.amount)}`;
           },
-          effectClaims: { sql, actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
+          effectClaims: { sql, actor, execution: () => ({ turnId: 'turn-1', runId: 'run-1' }), durable: () => Promise.resolve() },
           spill: { vfs: createMemoryVfs().vfs, home: WORKSPACE_ROOT },
         },
       );
@@ -319,7 +323,7 @@ describe('tool effect claims', () => {
         [descriptor('zones', { readOnly: true })],
         {
           call: async () => result,
-          effectClaims: { sql, actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
+          effectClaims: { sql, actor, execution: () => ({ turnId: 'turn-1', runId: 'run-1' }), durable: () => Promise.resolve() },
           spill: { vfs: createMemoryVfs().vfs, home: WORKSPACE_ROOT },
         },
       );
@@ -341,7 +345,7 @@ describe('tool effect claims', () => {
         [descriptor('dump')],
         {
           call: async () => ({ content: [{ type: 'text', text: whole }] }),
-          effectClaims: { sql, actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
+          effectClaims: { sql, actor, execution: () => ({ turnId: 'turn-1', runId: 'run-1' }), durable: () => Promise.resolve() },
           spill: { vfs, home: WORKSPACE_ROOT },
         },
       );
@@ -366,7 +370,7 @@ describe('tool effect claims', () => {
         [descriptor('quiet')],
         {
           call: async () => 'ok',
-          effectClaims: { sql, actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
+          effectClaims: { sql, actor, execution: () => ({ turnId: 'turn-1', runId: 'run-1' }), durable: () => Promise.resolve() },
           spill: { vfs: createMemoryVfs().vfs, home: WORKSPACE_ROOT },
         },
       );
@@ -392,7 +396,7 @@ describe('tool effect claims', () => {
 
             return `lookup-${String(dispatched)}`;
           },
-          effectClaims: { sql, actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
+          effectClaims: { sql, actor, execution: () => ({ turnId: 'turn-1', runId: 'run-1' }), durable: () => Promise.resolve() },
           spill: { vfs: createMemoryVfs().vfs, home: WORKSPACE_ROOT },
         },
       );

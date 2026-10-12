@@ -14,12 +14,13 @@ import * as v from 'valibot';
 import { scriptedTurnModel, type ModelStreamPart, type ScriptedTurnOptions, type ScriptedTurnResult } from '@kinu.run/test-utils/turn-model';
 import { convertArrayToReadableStream, MockLanguageModelV4 } from 'ai/test';
 import type { PreparedRequest, ScriptedAnswer, SettledTurn, TurnHarness } from './turn-harness';
-import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, Clock, ModelInfo, ModelRouteResolution, ActorToolsets, ActorReach, TurnReach } from '@kinu.run/core';
+import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, Clock, ModelInfo, ModelRouteResolution, ActorToolsets, SeatedActor, SurfaceReach } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { WorkspaceOverview } from '@kinu.run/core';
 import { OwnedModelServices } from '../../src/owned-model-services';
 import { bindAgentSql } from '../../src/runtime';
-import { hostedSubordinateRuntime, type HostedTaskProfile, type HostedTaskTurn } from '../../src/hosted-actors';
+import { hostedSubordinateRuntime, type ActorSurface, type SurfaceTurn, type ToolScope } from '../../src/hosted-actors';
+import type { CFSeat } from '../../src/actor-hosting';
 import type { ChatWireTransport } from '../../src/chat-transport';
 import { isWorkMode, workModeForTurnMetadata } from '@kinu.run/core';
 import { ActorClaimStore, agentArtifactDirectory, agentHome, CHAT_SESSION_ID, createParentWorkspaceVfs, EventLog, SubordinateRosterStore, MAIN_AGENT, openWorkspaceMainActor, SessionHistory, TerminalTransitions, WorkspaceActorDirectory } from '@kinu.run/core';
@@ -32,9 +33,9 @@ import type { UserProfile } from '../../src/user/profile';
 import type { McpToolCall } from '../../src/user/mcp-servers';
 import type { WorkspaceHostTarget } from '../../src/workspace-host';
 import {
-  actorReferenceOf, announcementOf,
+  actorPolicy, actorReferenceOf, announcementOf,
   type ActorHandle,
-  type ActorHost, type ActorSeat, type HostedActor, type SubordinateSeed,
+  type ActorHost, type ActorSeat, type SubordinateSeed,
 } from '@kinu.run/core';
 import {
   BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest, actorAffinity,
@@ -58,7 +59,6 @@ import {
   TerminalEffectInterrupt,
   type TerminalEffectFault, type TerminalEffectName, type TerminalEffectPhase,
 } from '@kinu.run/core';
-import type { ProgramToolsetOptions } from '../../src/actor-agent';
 import { serveObject } from './programmatic-host';
 import { makeCtx, stubOf } from './platform-context';
 
@@ -241,8 +241,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
   /** Turns running now, the root's and every hosted actor's. */
   harnessTurnsInFlight(): number {
-    const hosted = this.actorHost().list().filter((reference) => this.actorHost().hosted(reference)?.session.inFlight === true
-      || this.currentTurnOf(reference) !== null).length;
+    const hosted = this.actorHost().list().filter((reference) => this.currentTurnOf(reference) !== null).length;
 
     return hosted + (this._inFlight ? 1 : 0);
   }
@@ -575,37 +574,37 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
     return failure;
   }
-  protected override async turnCapabilities(turn: HostedTaskTurn, reach: TurnReach, scope: ActorReach): Promise<HostedTaskProfile> {
-    // The workspace's program surface: the turns the suites read prepared tools of.
-    if (scope.surface !== 'program') return await super.turnCapabilities(turn, reach, scope);
+  protected override async actorSurface(actor: CFSeat, turn: SurfaceTurn): Promise<ActorSurface> {
+    // The workspace agent's: the turns the suites read prepared tools of.
+    if (!actorPolicy(actor.record).workspaceAgent || turn.run !== undefined) return await super.actorSurface(actor, turn);
     this._prepareFailure = null;
 
     try {
-      const profile = await super.turnCapabilities(turn, reach, scope);
+      const surface = await super.actorSurface(actor, turn);
 
-      this._preparedTools.set(turn.turnId, profile.tools);
-      this._lastPreparedTools = profile.tools;
+      this._preparedTools.set(announcementOf(turn.key.turnId), surface.tools);
+      this._lastPreparedTools = surface.tools;
 
-      return profile;
+      return surface;
     } catch (error) {
       this._prepareFailure = error instanceof Error ? error : new Error(String(error));
       throw error;
     } finally {
       // Handed to one turn only: the one it opens, never a measure of the next request.
-      if (turn.opening !== undefined) this._suppliedTools = null;
+      if (turn.lane.opening !== undefined) this._suppliedTools = null;
     }
   }
   /** A tool surface replacing the actor's own for the requested mode; a rebuild
    *  for another mode (a role imposing Plan) is the actor's own. */
   private _suppliedTools: ToolSet | null = null;
   harnessSupplyTools(tools: ToolSet | undefined): void { this._suppliedTools = tools ?? null; }
-  protected override programToolsets(mode: WorkMode, opts?: ProgramToolsetOptions): ActorToolsets {
+  protected override actorTools(actor: CFSeat, reach: SurfaceReach, mode: WorkMode, scope: ToolScope): ActorToolsets {
     // The requested mode is the message's, never the operation a role bound over it.
-    if (this._suppliedTools !== null && mode === workModeForTurnMetadata(this.turnUserMetadata())) {
+    if (this._suppliedTools !== null && reach.actor.lanes && mode === workModeForTurnMetadata(this.turnUserMetadata())) {
       return { turn: this._suppliedTools, raw: this._suppliedTools };
     }
 
-    return super.programToolsets(mode, opts);
+    return super.actorTools(actor, reach, mode, scope);
   }
 
   /** The scripted model the next turns run on; held, not consumed by one turn. */
@@ -709,7 +708,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     });
   }
 
-  observeActorHost(): ActorHost { return this.actorHost(); }
+  observeActorHost(): ActorHost<SeatedActor> { return this.actorHost(); }
 
   /** Main's isolate restarts, and its wake reopens the turn it was inside. */
   async harnessResumeMain(): Promise<void> {
@@ -1088,10 +1087,10 @@ export interface ObservedNaming {
   nameOrigin: 'user' | 'auto' | null;
 }
 
-/** A hosted actor as a suite drives it: the production `HostedActor` from the
- *  workspace's `ActorHost`, sharing its one database. */
+/** A hosted actor as a suite drives it: the production seat from the workspace's `ActorHost`, sharing its one
+ *  database; its turns run in its own isolate. */
 export interface HostedActorHarness {
-  readonly actor: HostedActor;
+  readonly actor: SeatedActor;
   readonly workspace: ActorHarness<HarnessOrchestratorAgent>;
 }
 
@@ -1974,7 +1973,7 @@ export async function hostedSubordinateHarness(
 }
 
 /** The same hired agent hosted again: its turn in its own isolate released the workspace's hold on it once it rested. */
-export async function hostedAgain(harness: HostedActorHarness): Promise<HostedActor> {
+export async function hostedAgain(harness: HostedActorHarness): Promise<SeatedActor> {
   return await harness.workspace.agent.observeActorHost().acquire(harness.actor.reference, { kind: 'actor' });
 }
 

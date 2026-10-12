@@ -85,10 +85,11 @@ export class TerminalTransitions {
     return `${transition.turnId}/${transition.messageId}`;
   }
 
-  /** The digest binds the row to the turn. */
+  /** The digest binds the row to the turn. An answer closes its turn once, whichever run produced it. */
   private key(transition: TerminalTransition): ToolEffectKey {
     return {
       turnId: transition.turnId,
+      runId: TERMINAL_TRANSITION_CALL_ID,
       callId: `${TERMINAL_TRANSITION_CALL_ID}:${transition.messageId}`,
       digest: argumentDigest({
         tool: TERMINAL_TRANSITION_CALL_ID,

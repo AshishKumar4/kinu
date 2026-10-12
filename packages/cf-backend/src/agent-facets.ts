@@ -99,6 +99,7 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   runEnded(id: string, outcome: AgentRunOutcome) { return this.open(() => this.answers.runEnded(id, outcome)); }
   enqueueTurn(input: ProgrammaticTurn) { return this.open(() => this.answers.enqueueTurn(input)); }
   executeTool(call: AgentToolCall) { return this.open(() => this.answers.executeTool(call), call.turnId, 'executes'); }
+  receipts(turnId: string, runId: string, callIds: readonly string[]) { return this.open(() => this.answers.receipts(turnId, runId, callIds)); }
   observe(lines: ReadableStream<Uint8Array>) { return this.open(() => this.answers.observe(lines)); }
   paceStep(turnId: string) { return this.open(() => this.answers.paceStep(turnId), turnId, 'executes'); }
   answerMetadata(turnId: string, narration: readonly string[] | null) { return this.open(() => this.answers.answerMetadata(turnId, narration), turnId); }
@@ -220,6 +221,7 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
   runEnded(id: string, outcome: AgentRunOutcome) { return this.owned((host) => host.runEnded(id, outcome)); }
   enqueueTurn(input: ProgrammaticTurn) { return this.owned((host) => host.enqueueTurn(input)); }
   executeTool(call: AgentToolCall) { return this.owned((host) => host.executeTool(call)); }
+  receipts(turnId: string, runId: string, callIds: readonly string[]) { return this.owned((host) => host.receipts(turnId, runId, callIds)); }
   observe(lines: ReadableStream<Uint8Array>) { return this.owned((host) => host.observe(lines)); }
   paceStep(turnId: string) { return this.owned((host) => host.paceStep(turnId)); }
   answerMetadata(turnId: string, narration: readonly string[] | null) { return this.owned((host) => host.answerMetadata(turnId, narration)); }

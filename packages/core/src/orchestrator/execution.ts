@@ -10,6 +10,7 @@
  */
 import type { ResolvedTurnProfile } from '../profiles/resolve';
 import type { TaskPlan } from '../tools/task-plan-scope';
+import type { RemoteReceipt } from '../tools/effect-claim';
 import type { TierId } from '../types/profile';
 import type { TurnAuthorship, WorkMode } from '../types/turn';
 import type { JsonObject, JsonValue } from '../utils/json';
@@ -61,12 +62,6 @@ export interface FrozenTurn {
   readonly facts: TurnFacts;
   readonly lane: ExecutionLane;
 }
-
-/** A remote effect's receipt, as the store its effect commits to answers for it. An absent receipt never started, so a
- *  re-ask runs it; an indeterminate one started and never settled, so a re-ask is refused. */
-export type RemoteReceipt =
-  | { readonly status: 'settled'; readonly output: JsonValue }
-  | { readonly status: 'indeterminate' };
 
 export interface TurnToolCall {
   readonly callId: string;

@@ -46,7 +46,7 @@ function tools(
     conversations: conversationsFor(rt),
     escalations,
     codemode: nodeCodemodeBuilder,
-    effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
+    effectClaims: { sql: rt.storage.sql, actor: rt.actor, execution: () => ({ turnId: 'turn-1', runId: 'run-1' }), durable: () => Promise.resolve() },
     jobs: actorJobsFor(rt),
   }).turn;
 }
@@ -164,7 +164,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       agents: { mode: 'build', swarms: true, team: stubTeam, peers: stubPeers },
       report: stubReport,
       // Wired over the same SQL the backends use, not a stand-in that records nothing.
-      effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
+      effectClaims: { sql: rt.storage.sql, actor: rt.actor, execution: () => ({ turnId: 'turn-1', runId: 'run-1' }), durable: () => Promise.resolve() },
       jobs: actorJobsFor(rt),
     }).turn;
 
@@ -478,7 +478,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 
           return nodeCodemodeBuilder(surface);
         },
-        effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
+        effectClaims: { sql: rt.storage.sql, actor: rt.actor, execution: () => ({ turnId: 'turn-1', runId: 'run-1' }), durable: () => Promise.resolve() },
         jobs: actorJobsFor(rt),
       });
     } finally {

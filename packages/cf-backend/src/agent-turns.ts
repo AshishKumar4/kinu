@@ -1,16 +1,15 @@
 /** The workspace half of an agent's turns (D9): their tools and sources. */
-import { asSchema, type ToolSet } from 'ai';
 import { hold, KinuError, logged, settle, settleSync } from '@kinu.run/core/obs';
 import { Effect, Exit } from 'effect';
 import {
-  AgentOpenTurns, TurnFences, type FencedRow, decodeModelMessageValues, encodeModelMessageValues, materializeTurnSources, callableToolNames, buildHeadMessages, hasPlanPermission, scaffoldProviders, runWorkModeInvocation, toolDescription,
-  BUILTIN_TOOL_NAMES, announcementOf, type TurnSurface,
+  AgentOpenTurns, TurnFences, type FencedRow, decodeModelMessageValues, encodeModelMessageValues, materializeTurnSources, callableToolNames, buildHeadMessages, scaffoldProviders, runWorkModeInvocation,
+  announcementOf, improvementLanesOpen, type ActorAdvisor, type SeatedActor, type TurnSurface,
   type ActorReference, type DynamicContext, type ModelPricing, type ResolvedTurnProfile, type TierId, type WorkMode,
   type HeadInput, type RunInference, type HeadReport, type SqlExecutor, type MissionBudgetPort, type MissionGovernor, type Executor, readMissionLabels,
 } from '@kinu.run/core';
 import type { TurnCall } from './agent-facets';
 import { prepareHostedTurn, type HostedActorSeams, type HostedTurnRequest, type PreparedHostedTurn } from './hosted-actors';
-import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentToolDescriptor, AgentTrace, AgentTurnEnd, Fact, JsonObject, PreparedAgentTurn, StoredRow, TaskPlan, OpenedAt, TurnFacts, TurnOpening } from '@kinu.run/core';
+import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, Fact, JsonObject, PreparedAgentTurn, StoredRow, TaskPlan, OpenedAt, TurnFacts, TurnOpening } from '@kinu.run/core';
 
 export interface AgentTurnsDeps {
   readonly sql: SqlExecutor;
@@ -30,6 +29,8 @@ export interface AgentTurnsDeps {
   credentialsRevision(): number | null;
   /** The governor an agent's chat turns spend under, when its missions are the workspace's: main's (D9). */
   missions(actorId: string): MissionGovernor | null;
+  /** The agent's advisor, hired through the workspace as every hire is. */
+  advisor(actor: SeatedActor): ActorAdvisor;
 }
 
 export interface ChatTurnRequest {
@@ -45,6 +46,8 @@ export interface ChatTurnRequest {
   readonly opening?: TurnOpening;
   /** The approved plan the turn implements, as the agent's own plan store reads it. */
   readonly taskPlan?: TaskPlan;
+  /** Whether a plan of the agent's, sent back with comments, awaits its answers, as its own plan store reads it. */
+  readonly awaitsReply: boolean;
   /** The run this opening prepares (a recovery continues its run, a Retry starts one) and its place in the agent's
    *  sequence: an opening older than the agent's newest is refused. */
   readonly runId?: string;
@@ -54,7 +57,6 @@ export interface ChatTurnRequest {
 interface OpenTurn {
   readonly reference: ActorReference;
   readonly request: HostedTurnRequest;
-  readonly explicitTier?: TierId;
   prepared: PreparedHostedTurn | null;
   /** Over the turn's own tools, as its isolate resolves it. */
   profile: ResolvedTurnProfile | null;
@@ -62,15 +64,6 @@ interface OpenTurn {
   accountFacts?: readonly Fact[];
   /** The opening the workspace's fence admitted for it: what it offers and closes must still be that one. */
   readonly fenced?: OpenedAt;
-}
-
-async function describe(tools: ToolSet): Promise<AgentToolDescriptor[]> {
-  return await Promise.all(Object.entries(tools).map(async ([name, tool]) => ({
-    name,
-    description: toolDescription(tool) ?? '',
-    inputSchema: await asSchema(tool.inputSchema).jsonSchema,
-    planAllowed: hasPlanPermission(tool),
-  })));
 }
 
 export class AgentTurns {
@@ -89,7 +82,7 @@ export class AgentTurns {
     const interruptions: Promise<void>[] = [];
     const cut = () => { interruptions.push(this.interruptRun(reference, input.id)); };
 
-    const request: HostedTurnRequest = { sequenceId: input.id, body: input.task, mode: input.mode, parentDriven: false, driving: undefined, run: { input, inference } };
+    const request: HostedTurnRequest = { sequenceId: input.id, body: input.task, mode: input.mode, parentDriven: false, driving: undefined, awaitsReply: false, run: { input, inference } };
 
     this.open.set(input.id, { reference, request, prepared: null, profile: null });
     ledger.open(opened, Date.now());
@@ -192,7 +185,7 @@ export class AgentTurns {
   surface(actorId: string): TurnSurface | null {
     const turnId = this.chats.get(actorId);
 
-    return turnId === undefined ? null : this.open.get(turnId)?.prepared?.surface ?? null;
+    return turnId === undefined ? null : this.open.get(turnId)?.prepared?.surface.surface ?? null;
   }
 
   /** Closes the agent's chat turn if it is still the opening `at` names; null closes whichever is open. A later
@@ -320,24 +313,24 @@ export class AgentTurns {
     return settleSync(Effect.fail(new KinuError('denied', 'The agent called the workspace before its turn was prepared.')));
   }
 
-  /** A workspace that restarted mid-turn reads a chat turn again. */
-  private async reread(actorId: string, call: Pick<AgentToolCall, 'turnId' | 'mode' | 'parentDriven' | 'driving'>): Promise<void> {
+  /** A workspace that restarted mid-turn reads a chat turn again, under the same execution. */
+  private async reread(actorId: string, call: Pick<AgentToolCall, 'turnId' | 'runId' | 'mode' | 'parentDriven' | 'driving'>): Promise<void> {
     const known = this.open.get(call.turnId);
 
     if (known !== undefined && (known.prepared !== null || known.request.run !== undefined)) return;
-    await this.prepareChat(actorId, { turnId: call.turnId, mode: call.mode, userText: '', parentDriven: call.parentDriven, driving: call.driving });
+    await this.prepareChat(actorId, { turnId: call.turnId, runId: call.runId, mode: call.mode, userText: '', parentDriven: call.parentDriven, driving: call.driving, awaitsReply: false });
   }
 
   private mode(turn: OpenTurn, prepared: PreparedHostedTurn): WorkMode {
-    return turn.request.mode === 'plan' ? 'plan' : prepared.turn.profile.profile.workMode;
+    return turn.request.mode === 'plan' ? 'plan' : prepared.surface.resolved.profile.workMode;
   }
 
   private dynamic(turn: OpenTurn, prepared: PreparedHostedTurn): DynamicContext {
-    const { tools, sources } = prepared;
+    const { tools, sources, resolved } = prepared.surface;
 
     const reads = { memoryTail: undefined, activeSkills: null, ...(turn.accountFacts !== undefined && { accountFacts: turn.accountFacts }) };
 
-    return sources.dynamic(reads)(turn.profile ?? prepared.turn.profile.profile, tools);
+    return sources.dynamic(reads)(turn.profile ?? resolved.profile, tools);
   }
 
   async prepareChat(actorId: string, request: ChatTurnRequest): Promise<PreparedAgentTurn> {
@@ -354,15 +347,16 @@ export class AgentTurns {
 
     const hosted: HostedTurnRequest = {
       sequenceId: announcementOf(turnId), ...(request.turnId !== null && { chatTurnId: turnId }),
-      body: request.userText, mode: request.mode, parentDriven: request.parentDriven, driving: request.driving,
+      body: request.userText, mode: request.mode, parentDriven: request.parentDriven, driving: request.driving, awaitsReply: request.awaitsReply,
+      ...(request.runId !== undefined && { runId: request.runId }),
       ...(request.opening !== undefined && { opening: request.opening }),
       ...(request.taskPlan !== undefined && { taskPlan: request.taskPlan }),
+      ...(request.explicitTier !== undefined && { explicitTier: request.explicitTier }),
     };
 
     const turn: OpenTurn = {
       reference: this.deps.reference(actorId),
       request: hosted,
-      ...(request.explicitTier !== undefined && { explicitTier: request.explicitTier }),
       ...(request.seq !== undefined && { fenced: { seq: request.seq } }),
       prepared: null,
       profile: null,
@@ -396,38 +390,32 @@ export class AgentTurns {
   private async read(turn: OpenTurn): Promise<PreparedAgentTurn | null> {
     const prepared = await prepareHostedTurn(this.deps.seams(), turn.reference, turn.request);
     const run = turn.request.run?.inference;
+    const { actor, input, surface } = prepared;
 
     turn.prepared = prepared;
-    turn.accountFacts = await prepared.sources.accountFacts?.();
-    const { actor, input } = prepared.turn;
-
+    turn.accountFacts = await surface.sources.accountFacts?.();
     const version = await actor.runtime.identity.scaffold.version();
 
     const scaffold = this.scaffold(actor, version);
     const mode = this.mode(turn, prepared);
+    const { explicitTier } = turn.request;
 
     const sources = await materializeTurnSources(
-      {
-        wiredToolNames: () => Object.keys(prepared.tools).filter((name) => !BUILTIN_TOOL_NAMES.has(name)),
-        codemodeCapabilities: () => [],
-        ...prepared.sources,
-        toolset: () => prepared.tools,
-        externalTools: async () => ({}),
-      },
+      { ...surface.sources, toolset: () => surface.tools, externalTools: async () => ({}) },
       {
         userText: input.task, workMode: mode,
-        ...(input.model !== undefined && { model: input.model }), ...(turn.explicitTier !== undefined && { explicitTier: turn.explicitTier }),
+        ...(input.model !== undefined && { model: input.model }), ...(explicitTier !== undefined && { explicitTier }),
       },
     );
 
-    const brief = run?.brief?.(callableToolNames(mode, prepared.tools));
+    const brief = run?.brief?.(callableToolNames(mode, surface.tools));
     const facts = this.offeredFacts(turn, prepared);
 
     if (facts === null) return null;
 
     return {
       input,
-      runId: run?.runId ?? crypto.randomUUID(),
+      runId: surface.surface.key.runId,
       ...(run === undefined && { birthContext: encodeModelMessageValues(prepared.birthContext) }),
       sources,
       pricing: this.deps.pricing(prepared.model),
@@ -437,10 +425,10 @@ export class AgentTurns {
       languages: actor.runtime.executor.languages,
       ...(brief !== undefined && { brief }),
       opening: encodeModelMessageValues(run === undefined ? [] : run.opening ?? buildHeadMessages(input)),
-      tools: await describe(prepared.tools),
+      tools: surface.descriptors,
       dynamic: this.dynamic(turn, prepared),
-      reviewsTurns: actor.session.reviewsTurns,
-      ...(prepared.trial !== undefined && { trial: prepared.trial }),
+      reviewsTurns: surface.reviewsTurns,
+      ...(surface.trial !== undefined && { trial: surface.trial }),
       ...(run?.mission !== undefined && { missionLabels: run.mission.labels }),
       ...(this.chatMission(turn.reference.actorId, turn).length > 0 && { missionLabels: this.chatMission(turn.reference.actorId, turn) }),
       facts,
@@ -450,7 +438,7 @@ export class AgentTurns {
     };
   }
 
-  scaffold(actor: PreparedHostedTurn['turn']['actor'], version: number): StoredRow {
+  scaffold(actor: SeatedActor, version: number): StoredRow {
     const row = actor.runtime.storage.sql<StoredRow>`
       SELECT * FROM scaffold_versions WHERE actor_id = ${actor.record.actorId} AND version = ${version}`[0];
 
@@ -466,7 +454,7 @@ export class AgentTurns {
     const prepared = this.prepared(turn);
 
     turn.profile = profile;
-    prepared.surface?.bind(profile);
+    prepared.surface.bind(profile);
 
     return this.dynamic(turn, prepared);
   }
@@ -477,11 +465,10 @@ export class AgentTurns {
 
     if (advise !== undefined) return await advise(completed, reachable, mode);
 
-    const { session } = this.prepared(turn).turn.actor;
+    if (!improvementLanesOpen('completed', mode)) return;
+    const advisor = this.deps.advisor(this.prepared(turn).actor);
 
-    if (!session.orchestrator.improvementLanesOpen('completed', mode)) return;
-
-    await session.hireAdvisor(session.advisorSnapshot(completed, reachable));
+    await advisor.hire(advisor.snapshot(completed, reachable));
   }
 
   async trace(actorId: string, turnId: string, event: AgentTrace): Promise<void> {
@@ -522,10 +509,10 @@ export class AgentTurns {
   /** Main's surface decides its continuity and evolution gate; any other agent's turns continue its conversation. A run
    *  spends for its own missions, a chat turn for those its driving message names. */
   private facts(turn: OpenTurn, prepared: PreparedHostedTurn): TurnFacts {
-    const { surface } = prepared;
+    const { surface } = prepared.surface;
 
     return {
-      continuity: surface?.continuity ?? 'conversation', evolutionEnabled: surface?.evolutionEnabled ?? false,
+      continuity: surface.continuity, evolutionEnabled: surface.evolutionEnabled,
       missionLabels: [...turn.request.run?.inference.mission?.labels ?? readMissionLabels(turn.request.driving)],
     };
   }
@@ -546,7 +533,7 @@ export class AgentTurns {
   async program(actorId: string, turnId: string, ...[code, providers, opts]: Parameters<Executor['execute']>) {
     const turn = this.turn(actorId, turnId);
     const prepared = this.prepared(turn);
-    const { actor } = prepared.turn;
+    const { actor } = prepared;
     const supplied = Array.isArray(providers) ? providers : [{ name: 'codemode', fns: providers }];
     const signal = turn.request.run?.inference.signal;
     const control = signal === undefined ? {} : { signal };
@@ -558,11 +545,11 @@ export class AgentTurns {
     await this.reread(actorId, call);
     const turn = this.turn(actorId, call.turnId);
     const prepared = this.prepared(turn);
-    const execute = prepared.tools[call.name]?.execute;
+    const execute = prepared.surface.tools[call.name]?.execute;
 
     if (execute === undefined) return settleSync(Effect.fail(new KinuError('bad_input', `The agent called ${call.name}, which its turn's tool surface does not hold.`)));
 
-    const { capture } = prepared.turn;
+    const { capture } = prepared.surface;
 
     const before = {
       evidence: capture.evidence.length, decisions: capture.decisions.length, artifacts: capture.artifacts.length,
@@ -584,7 +571,7 @@ export class AgentTurns {
         childHeadIds: capture.childHeadIds.slice(before.childHeadIds),
       },
       dynamic: this.dynamic(turn, prepared),
-      reports: { ...prepared.turn.reports },
+      reports: { ...prepared.surface.reports },
     };
   }
 }

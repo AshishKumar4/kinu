@@ -1,23 +1,22 @@
 /**
- * Logical actors hosted in the root DO: the root owns all actor SQL, scoped by
- * `actor_id`; this module supplies each actor's runtime and orchestration.
- * An actor owns its rows, its state subtree and its home uid; it shares the
- * workspace file plane (tests/unit-head-fork.test.ts) and the immutable catalogs.
+ * Logical actors seated in the root DO: the root owns all actor SQL, scoped by `actor_id`; this module supplies each
+ * actor's runtime. Every agent's turns run in its own isolate (D9), so a seat here holds no session: what a turn of its
+ * reaches is built per turn (`OrchestratorAgent.actorSurface`). An actor owns its rows, its state subtree and its home
+ * uid; it shares the workspace file plane (tests/unit-head-fork.test.ts) and the immutable catalogs.
  * Only an explicit cancel RPC cancels hosted work; eviction must leave it resumable.
  * Not facets: `do.facet.cpu_shared` means a facet wave serialises like one isolate.
  */
 
 import type { Agent, AgentContext } from 'agents';
 import {
-  childContextResolver, localContextTree, type ContextEditor, type ContextTree, createActorHost, defaultLoopOrigin, runEventSinks, EvolutionEngine, historyTurnPairs, EventLog, MissionGovernor,
+  childContextResolver, localContextTree, type ContextEditor, type ContextTree, createSeatHost, defaultLoopOrigin,
   facetHomeProvisioner, facetHomeReleaser, actorHomeName, actorStateRoot,
   actorScaffoldPath, nimbusSessionFiles, agentArtifactDirectory, agentHome, MAIN_AGENT, WORKSPACE_ROOT, type ActorHost,
-  type ActorHostDeps, type ActorRetirement, type BoundActor, type ActorHandle, type ActorReference,
-  type AgentOrchestratorDeps, type AgentRuntime, type BackendHost, type BroadcastEvent,
-  type ContextEventRecorder, type DeferredApprovalChannel, type EnqueueTurnResult, type LoopOrigin,
-  type ModelCallReport, type ModelOperationSink, type ModelPricing, type NimbusSandboxHandle,
-  type NodeHomeHost, type NodeWorkspace, type ProfileAuthorityInputs, type ProgrammaticTurn,
-  type ResolvedTurnProfile, type SlateCallResult, type SlateOperation, type SqlExec,
+  type SeatHostDeps, type ActorRetirement, type BoundActor, type ActorHandle, type ActorReference,
+  type AgentRuntime, type ContextEventRecorder, type DeferredApprovalChannel, type LoopOrigin,
+  type ModelCallReport, type ModelOperationSink, type NimbusSandboxHandle,
+  type NodeHomeHost, type NodeWorkspace, type ProfileAuthorityInputs,
+  type ResolvedTurnProfile, type SeatedActor, type SlateCallResult, type SlateOperation, type SqlExec,
   type SqlExecutor, type SqlValue, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory,
   type WriteObserver, actorPolicy, isSubordinateOrigin, type TierRefusals,
 } from '@kinu.run/core';
@@ -25,7 +24,7 @@ import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { flight, KinuError, settle, type AgentTracing } from '@kinu.run/core/obs';
 import { Cause, Effect } from 'effect';
 import { createCFRuntime, type CFRuntime, type CFRuntimeHooks, type WorkspaceBoxUse } from './runtime';
-import type { LiveRead, TemporaryAgentPort } from '@kinu.run/core';
+import type { LiveRead } from '@kinu.run/core';
 
 /** The root agents-SDK members a hosted actor's runtime borrows; projected from `Agent` so upstream drift fails to compile. */
 type HostRootAgent = Pick<Agent<Env>, 'name' | 'sql'>;
@@ -40,11 +39,10 @@ export interface WorkspaceHostSeams {
   /** The root's own runtime: inheriting children read the retained program from it. */
   rootRuntime(): AgentRuntime;
   /**
-   * The workspace agent's placement where the workspace object is its home: hosted over the workspace's own runtime, with
-   * the workspace's engine, event log, missions and host for its lanes. Absent where no object holds them (a fixture),
-   * so it is hosted as any agent is.
+   * The workspace agent's placement where the workspace object is its home: seated over the workspace's own runtime.
+   * Absent where no object holds it (a fixture), so it is seated as any agent is.
    */
-  workspaceAgentHome?(): { readonly runtime: CFRuntime; readonly orchestration: () => AgentOrchestratorDeps };
+  workspaceAgentHome?(): CFRuntime;
   contextTree(actorId: string, editor: ContextEditor): ContextTree;
   readonly sql: SqlExecutor;
   /** Positional executor over the same database; the event log and archive reader need it. */
@@ -71,31 +69,11 @@ export interface WorkspaceHostSeams {
   servingMoved(): Promise<void>;
   readonly boxUse: WorkspaceBoxUse;
   readonly modelOperations: ModelOperationSink;
-  pricing(spec?: string): ModelPricing | null;
-  hostedModel(actor: ActorHandle): string | undefined;
-  /** Client fan-out, stamped with the actor so panes never share one stream. */
-  broadcast(actorId: string, event: BroadcastEvent): void;
-  turnClaimChanged(): void;
-  enqueueTurn(actor: BoundActor, input: ProgrammaticTurn): Promise<EnqueueTurnResult>;
-  /**
-   * Is this actor mid-turn. Takes the bound actor, not an id: the host checks the
-   * whole reference, and an id would make the root's own reads fail `slotFor`.
-   */
-  turnInFlight(actor: BoundActor): boolean;
-  setTimer(fn: () => Promise<void>, ms: number): void;
-  /** Re-derive the root's alarm; a hosted actor has no alarm slot of its own. */
-  reconcileDurableWake(): void;
-  logActivity(actorId: string, event: string, detail?: string): void;
   tracing(): AgentTracing;
   slate(actor: ActorHandle, operation: SlateOperation): Promise<SlateCallResult>;
   slateBuild(actor: ActorHandle, slate: string): Promise<SlateCallResult>;
   /** The owner's needs-you queue: one per workspace, which each actor parks on as itself. */
   deferrals(actorId: string): DeferredApprovalChannel | undefined;
-  refinementLane(bound: BoundActor & { readonly runtime: AgentRuntime }): () => Promise<void>;
-  /** The agent's deliveries (design v2 §1): every signal to it and every drain of its events, committed then crossed. */
-  deliveries(actorId: string): AgentOrchestratorDeps['deliveries'];
-  /** The port a hosted actor hires its advisor through, as every hire goes; absent, none is reviewed. */
-  advisorPort?(reference: ActorReference): TemporaryAgentPort;
   /** The loop origin a creation site named for this actor, or null for the kind's default. */
   chosenLoopOrigin(record: WorkspaceActor): LoopOrigin | null;
   /**
@@ -104,6 +82,9 @@ export interface WorkspaceHostSeams {
    */
   chosenWriteObserver(record: WorkspaceActor): WriteObserver | null;
 }
+
+/** An actor this workspace seats: over a runtime of its own, its turns run in its own isolate. */
+export type CFSeat = SeatedActor<CFRuntime>;
 
 /** Where a hosted actor lives: one reader. */
 export interface HostedActorPlacement {
@@ -164,11 +145,11 @@ export class HostedActorHomes {
   }
 }
 
-export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
+export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost<CFSeat> {
   const runtimes = new WeakMap<ActorHandle, CFRuntime>();
-  let host: ActorHost | null = null;
+  let host: ActorHost<CFSeat> | null = null;
 
-  const deps: ActorHostDeps = {
+  const deps: SeatHostDeps<CFRuntime> = {
     storage: {
       sql: seams.sql,
       transactionSync: <Result>(write: () => Result): Result => seams.ctx.storage.transactionSync(write),
@@ -196,11 +177,11 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
       }));
     },
 
-    runtimeFor: async (bound: BoundActor): Promise<AgentRuntime> => {
+    runtimeFor: async (bound: BoundActor): Promise<CFRuntime> => {
       // Placement from the policy: the workspace agent lives in the workspace's own runtime, which its opener holds.
       const workspaceHome = actorPolicy(bound.record).workspaceAgent ? seams.workspaceAgentHome?.() : undefined;
 
-      if (workspaceHome !== undefined) return workspaceHome.runtime;
+      if (workspaceHome !== undefined) return workspaceHome;
       const held = runtimes.get(bound.handle);
 
       if (held) return held;
@@ -293,56 +274,6 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
       return { origin, parent: live === null ? null : live.runtime };
     },
 
-    /** Per actor: context-edit evidence belongs to the actor whose context moved. */
-    contextEvents: (bound) => contextEventsFor(bound),
-
-    /** The actor's own event log, engine, governor and broadcast, never the root's objects. */
-    orchestrationFor: (bound): AgentOrchestratorDeps => {
-      // Placement from the policy: the workspace agent's lanes are the workspace's.
-      const home = actorPolicy(bound.record).workspaceAgent ? seams.workspaceAgentHome?.() : undefined;
-
-      if (home !== undefined) return home.orchestration();
-      const { runtime, stores, handle } = bound;
-      stores.claims.observe(() => { seams.turnClaimChanged(); });
-
-      const budget = new MissionGovernor({
-        storage: runtime.storage,
-        // Per actor: mission labels are caller prose, so a shared ledger row would let
-        // one actor's spend exhaust another's cap.
-        actor: handle,
-        pricing: (spec) => seams.pricing(spec ?? seams.hostedModel(handle)),
-      });
-
-      const engine = new EvolutionEngine(runtime, historyTurnPairs(stores.history), {
-        transaction: (body) => { seams.ctx.storage.transactionSync(body); },
-        // Review model calls debit the mission the reviewed turn ran under.
-        governor: budget,
-      });
-
-      const backendHost: BackendHost = {
-        broadcast: (event) => { seams.broadcast(handle.actorId, event); },
-        enqueueTurn: (input) => seams.enqueueTurn(bound, input),
-        turnInFlight: () => seams.turnInFlight(bound),
-        // Its queue is its event log, which never ends.
-        closed: () => false,
-        setTimer: (fn, ms) => { seams.setTimer(fn, ms); },
-        reconcileDurableWake: () => { seams.reconcileDurableWake(); },
-      };
-
-      return {
-        host: backendHost,
-        engine,
-        eventLog: new EventLog(seams.exec, handle),
-        budget,
-        refinementLane: seams.refinementLane(bound),
-        deliveries: seams.deliveries(handle.actorId),
-        sinks: runEventSinks(bound, (event, detail) => { seams.logActivity(handle.actorId, event, detail); }),
-      };
-    },
-
-    /** Releases the home and state subtree on destroy only; an archived actor keeps its files. */
-    advisorPort: (bound) => seams.advisorPort?.(bound.reference) ?? null,
-
     discardBytes: (record: WorkspaceActor): Promise<void> => {
       return settle(Effect.gen(function* () {
         const { homeName, shellId } = hostedActorPlacement(record);
@@ -364,7 +295,8 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
     },
   };
 
-  host = createActorHost(deps);
+  // Seated with no session: every agent's turns run in its own isolate (D9).
+  host = createSeatHost<CFSeat, CFRuntime>(deps, { compose: (seated) => Effect.succeed(seated) });
 
   return host;
 }
@@ -379,18 +311,12 @@ export interface ActorRetirementRequest {
   readonly name: string;
   readonly keepHistory: boolean;
   readonly interrupt: boolean;
-  observed?: { readonly turnId: string; readonly epoch: number };
 }
 
-/** `destroy` reclaims rows and bytes; archive keeps both. `observed` is set only when the caller saw a live claim. */
+/** `destroy` reclaims rows and bytes; archive keeps both. An agent's turn claim is its own isolate's, so a retirement
+ *  here observes none. */
 export function actorRetirementFor(input: ActorRetirementRequest): ActorRetirement {
-  const retirement: ActorRetirement = {
-    reference: input.reference, name: input.name, destroy: !input.keepHistory, interrupt: input.interrupt,
-  };
-
-  if (input.observed === undefined) return retirement;
-
-  return { ...retirement, observed: input.observed };
+  return { reference: input.reference, name: input.name, destroy: !input.keepHistory, interrupt: input.interrupt };
 }
 
 /** Interrupted-turn recovery is core's `recoverActorTurns`; this backend calls it from the alarm sweep. */

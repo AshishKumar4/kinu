@@ -124,8 +124,8 @@ describe('a headless actor runs the step clock only', () => {
 
         // Its answer arrives through the ingress, which delivers what the actor holds.
         advisor.answer(JSON.stringify({ note, severity, class: 'wrong-work' }));
-        await seat.actor.session.deliverAdvisorAnswers();
-        await seat.actor.session.deliverAdvisorAnswers();
+        await seat.actor.session.advisor.deliverAnswers();
+        await seat.actor.session.advisor.deliverAnswers();
         expect(notesOf(seat.actor.handle.actorId)).toEqual([{ message: note }]);
       }
 

@@ -167,6 +167,7 @@ export function workspaceClient(workspace: AgentWorkspaceCalls): AgentWorkspace 
     runEnded: (...args) => settle(viaPort((port) => port.runEnded(...args))),
     enqueueTurn: (...args) => settle(viaPort((port) => port.enqueueTurn(...args))),
     executeTool: (...args) => settle(viaPort((port) => port.executeTool(...args))),
+    receipts: (...args) => settle(viaPort((port) => port.receipts(...args))),
     observe: (...args) => settle(viaPort((port) => port.observe(...args))),
     paceStep: (...args) => settle(viaPort((port) => port.paceStep(...args))),
     answerMetadata: (...args) => settle(viaPort((port) => port.answerMetadata(...args))),

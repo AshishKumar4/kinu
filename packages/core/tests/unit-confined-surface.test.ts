@@ -4,7 +4,7 @@ import { describe, expect, test } from 'bun:test';
 import { jsonSchema, tool, type ToolSet } from 'ai';
 import type { LanguageModelV4Content } from '@ai-sdk/provider';
 import { handClock, scriptedTurnModel, toolExecute, unobservedSpend } from '@kinu.run/test-utils';
-import { actorJobsFor, createTestRuntime, conversationsFor } from './helpers';
+import { actorJobsFor, createTestRuntime, conversationsFor, effectClaimsFor } from './helpers';
 import { hostedSeatsOver } from './helpers-actor-host';
 import { createRecordingLogger } from '../src/obs/index';
 import { HeadCapture } from '../src/heads/head-inference';
@@ -108,6 +108,7 @@ describe('head function-form eval resolves over the allowed surface', () => {
       codemodeTool,
       webSearch: stubWeb,
       split: neverSplit,
+      effectClaims: effectClaimsFor(rt),
     });
 
     const runSandbox = toolExecute<{ code: string }, string>(tools.eval);
@@ -140,6 +141,7 @@ describe('head function-form eval resolves over the allowed surface', () => {
       codemodeTool,
       webSearch: stubWeb,
       split: neverSplit,
+      effectClaims: effectClaimsFor(rt),
     });
 
     expect(tools.eval).toBeUndefined();
@@ -159,6 +161,7 @@ describe('head function-form eval resolves over the allowed surface', () => {
       codemodeTool: sandboxEntry('direct-ran'),
       webSearch: stubWeb,
       split: neverSplit,
+      effectClaims: effectClaimsFor(rt),
     });
 
     const runSandbox = toolExecute<{ code: string }, string>(tools.eval);

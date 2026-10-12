@@ -100,7 +100,8 @@ export function getShellApprovalMode(config: AgentConfigStore) {
  * strict (default): ask the owner. allow_all: treat as warn (trusted dev only). deny_all: reject gate and warn.
  */
 export function setShellApprovalMode(
-  deps: { config: AgentConfigStore; onChanged: () => void },
+  /** `onChanged`: a host that holds a built tool surface rebuilds it; one that builds a turn's tools per turn holds none. */
+  deps: { config: AgentConfigStore; onChanged?: () => void },
   mode: string,
 ) {
   return settleSync(Effect.gen(function* () {
@@ -108,7 +109,7 @@ export function setShellApprovalMode(
 
     if (!parsed.success) return yield* Effect.die(new Error(`invalid mode: ${mode}`));
     deps.config.setShellApprovalMode(parsed.output);
-    deps.onChanged();
+    deps.onChanged?.();
 
     return { ok: true, mode: parsed.output };
   }));

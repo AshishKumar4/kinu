@@ -175,6 +175,7 @@ export class AgentDatabase {
       readonly program: AgentWorkspace['program'];
       readonly memory: AgentWorkspace['memory'];
       readonly sayToParent: AgentWorkspace['sayToParent'];
+      readonly receipts: AgentWorkspace['receipts'];
       readonly logActivity: AgentWorkspace['logActivity'];
     },
   ) {
@@ -333,6 +334,8 @@ export class AgentDatabase {
       }),
       contextEvents: () => null,
       sayToParent: (_child, signal) => this.workspace.sayToParent(signal),
+      // Its workspace tools' receipts are the workspace's, where their effects commit (design v2 §4).
+      receipts: (execution, callIds) => this.workspace.receipts(execution.turnId, execution.runId, callIds),
       tracing: undefined,
     });
   }

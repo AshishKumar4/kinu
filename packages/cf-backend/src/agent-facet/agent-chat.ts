@@ -3,10 +3,10 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   CHAT_SESSION_ID, ChatSession, EventLog, HeadCapture, PendingSendStore, RECOVERY_BACKOFF_CEILING_MS, TerminalTransitions,
   PlanReviewActions, announcementOf, assembleActorTurn, authoredTurnMetadata, chatTerminalEffects, chatTurnParts, declareTerminalRoster, inspectWork,
-  planHandoffStillOwed, approvedTaskPlan, missionGate, workModeUnderReview, projectJsonValue, declareHandoffRoster, HandedOffTurnSchema, terminalEffect, turnAuthorship, turnLane, type TurnAuthorship,
+  planHandoffStillOwed, planAwaitingReply, approvedTaskPlan, missionGate, workModeUnderReview, projectJsonValue, declareHandoffRoster, HandedOffTurnSchema, terminalEffect, turnAuthorship, turnLane, type TurnAuthorship,
   actorPolicy, metadataTier, workModeForTurnMetadata, reportReadsNarration, subordinateTerminalEffects, withCompactionTrigger, type ActorPolicy,
   bindRoute, completeOnRoute, ownProfileChoices, planWorkspaceTitle, resolveAgentTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle,
-  type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpening, type JsonObject, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
+  type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpening, type JsonObject, type PlanReview, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
   type InspectedWork, type PreparedAgentTurn, type PreparedTurn, type TerminalTurnFacts, type TerminalTurnParts,
   type SessionEvent, type TurnAssemblyRequest, type WorkMode, type OwnerQuestionStore,
 } from '@kinu.run/core';
@@ -157,7 +157,7 @@ export class FacetChat {
     const live: LiveTurn = { dynamic: prepared.dynamic };
 
     const tools = facetTurnTools(workspace, prepared, actor, {
-      id: turn.id, mode: turn.mode, parentDriven: this.parentDriven, driving: this.driving, live, capture: new HeadCapture(), database,
+      id: turn.id, runId: turn.runId, mode: turn.mode, parentDriven: this.parentDriven, driving: this.driving, live, capture: new HeadCapture(), database,
     });
 
     const { sources: bundle } = facetTurnSources({ actor, workspace, models, prepared, spend: this.spend, live, runId: turn.runId, turnId: turn.id, pacer });
@@ -197,18 +197,23 @@ export class FacetChat {
   private async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease, opening: TurnOpening): Promise<PreparedTurn> {
     const { actor, database, workspace } = this.deps;
     const plans = actor.stores.planReviews;
+    // Read once, by whichever of the review's mode and the reply's lane asks first.
+    let active: PlanReview | null | undefined;
+    const activePlan = (): PlanReview | null => (active === undefined ? (active = plans.getActive(CHAT_SESSION_ID)) : active);
     // The one place a turn's lane is decided; the workspace rebuilds a turn from this, never from its id.
     // A hirer's turn runs in the hirer's lane, with `report`, only for an agent that has a hirer.
     this.parentDriven = turnLane(this.policy, authorshipOf(item)) === 'hirer';
     this.driving = authoredTurnMetadata(item);
     // The owner's words while a plan awaits their decision are read as its review.
-    const mode = workModeUnderReview(actor.session.workMode, this.driving, () => plans.getActive(CHAT_SESSION_ID));
+    const mode = workModeUnderReview(actor.session.workMode, this.driving, activePlan);
     // The workspace reads the turn's sources for the tier it runs on, and the turn is assembled on that same tier.
     const explicitTier = metadataTier(item.metadata);
     const taskPlan = approvedTaskPlan(item, plans);
 
     const prepared = await workspace.prepareChat({
       turnId: lease.turnId, mode, userText: item.text, parentDriven: this.parentDriven, driving: this.driving, opening,
+      // A plan the owner sent back with comments awaits its answers on the owner's turns alone.
+      awaitsReply: !this.parentDriven && planAwaitingReply(activePlan(), this.driving),
       // Its run, which the turn's recovery continues and its Retry starts anew, and its place in this agent's sequence.
       runId: lease.runId, seq: database.nextInSequence(),
       ...(explicitTier !== undefined && { explicitTier }), ...(taskPlan !== null && { taskPlan }),
@@ -254,7 +259,7 @@ export class FacetChat {
 
   private async composeRequest(): Promise<ComposedRequest> {
     const mode = this.deps.actor.session.workMode;
-    const prepared = await this.deps.workspace.prepareChat({ turnId: null, mode, userText: '', parentDriven: false });
+    const prepared = await this.deps.workspace.prepareChat({ turnId: null, mode, userText: '', parentDriven: false, awaitsReply: false });
     const assembled = await this.assemble(prepared, { id: 'measure', mode, runId: prepared.runId }, { userText: '', workMode: mode });
 
     return { execution: assembled.execution, profile: assembled.profile, sessionKey: this.trigger.key };
@@ -302,7 +307,7 @@ export class FacetChat {
       // words ("Continue") are no name for it.
       ...(input.opensConversation() && { autoTitle: { mission: input.userText, standIn: true } }),
       sleepTime: false,
-      ...(this.reviewsTurns && { advisor: projectJsonValue({ value: session.advisorSnapshot(scoped, input.reachableTools) }) }),
+      ...(this.reviewsTurns && { advisor: projectJsonValue({ value: session.advisor.snapshot(scoped, input.reachableTools) }) }),
       ...(report !== null && {
         parentReport: {
           text: report.content,
@@ -442,7 +447,7 @@ export class FacetChat {
   private async suggestTitle(mission: string): Promise<string | null> {
     const { actor, workspace, models, pacer } = this.deps;
     const workMode = actor.session.workMode;
-    const prepared = await workspace.prepareChat({ turnId: null, mode: workMode, userText: '', parentDriven: false });
+    const prepared = await workspace.prepareChat({ turnId: null, mode: workMode, userText: '', parentDriven: false, awaitsReply: false });
     const { sources } = facetTurnSources({ actor, workspace, models, prepared, spend: this.spend, live: { dynamic: prepared.dynamic }, runId: prepared.runId, turnId: 'title', pacer });
     const inputs = await sources.profileInputs();
     const profile = resolveAgentTurnProfile({ ...inputs, ...ownProfileChoices(sources.config, inputs, sources.ancestors?.()), workMode, availableTools: [], activeSkills: [] });

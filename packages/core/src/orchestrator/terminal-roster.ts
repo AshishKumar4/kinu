@@ -5,7 +5,7 @@
 import { JsonValueSchema, type JsonValue } from '../utils/json';
 import { WorkModeSchema, type WorkMode } from '../types/turn';
 import type { RunEndReason } from './turn-lifecycle';
-import type { TurnContinuity } from './agent-orchestrator';
+import type { TurnContinuity } from './evolution-lanes';
 import type { OwedEffect } from './terminal-effects';
 import type { OwedTerminalEffectsInput } from './chat-session';
 import type { SubordinateReportStatus } from '../events/hub/types';

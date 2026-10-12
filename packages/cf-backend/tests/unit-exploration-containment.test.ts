@@ -12,7 +12,7 @@ import {
   HeadCapture,
   HeadController,
   HeadJournal,
-  initHeadsTables,
+  initHeadsTables, initToolEffectClaimTable,
   type HeadInput,
   type HeadReport,
   type HeadRuntime,
@@ -99,6 +99,8 @@ function buildSurface(opts?: {
 }) {
   const { rt, stores } = createTestRuntime();
   const capture = new HeadCapture();
+  // Its calls keep their receipts in its own store, as a seated head's do in its workspace.
+  initToolEffectClaimTable(rt.storage.execRaw);
 
   const codemodeTool = tool({ description: 'eval', inputSchema: jsonSchema<{ code: string }>({
     type: 'object', properties: { code: { type: 'string' } }, required: ['code'],
@@ -116,6 +118,7 @@ function buildSurface(opts?: {
       backgroundable: CONFINED_BACKGROUNDABLE_TOOLS,
       mode: () => 'build',
     },
+    effectClaims: { sql: rt.storage.sql, actor: rt.actor, execution: () => ({ turnId: 'turn-1', runId: 'run-1' }) },
     split: opts?.split ?? (async () => ({
       narrative: 'merged', decisions: [], unresolvedQuestions: [], blindSpots: [], childHeadIds: [], headCount: 0,
     })),

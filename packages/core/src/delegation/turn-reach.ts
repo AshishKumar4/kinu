@@ -7,6 +7,7 @@ import type { WorkMode } from '../types/turn';
 import type { TurnAuthorship } from '../orchestrator/turn-authorship';
 import { planSubmissionReach } from '../plans/review';
 import type { ActorPolicy } from './actor-policy';
+import type { ExecutionLane } from '../orchestrator/execution';
 
 /** Whose lane a turn runs in: its hirer's only when the agent has one; an agent without a hirer answers its owner. */
 export type TurnLane = 'owner' | 'hirer';
@@ -46,23 +47,40 @@ export function turnReach(input: {
   };
 }
 
-/** What an agent reaches by what it is, whatever the turn (design v2 §9): computed once from its policy, and read by the
- *  one builder every agent's turn surface is made by. */
+/** What an agent reaches by what it is, whatever the turn (design v2 §9): computed once from its policy. */
 export interface ActorReach {
   /** Its programs' surface: the workspace's own (its memory, files, tasks, agents and self, its account), or a hire's,
    *  confined to its web, files and state. */
   readonly surface: 'program' | 'confined';
-  /** The workspace's external tools, its owner's MCP servers and its extensions, declared to its eval. */
+  /** What lies outside the workspace: its owner's MCP servers and its extensions, declared to its eval, and its owner's
+   *  other workspaces, as peers. */
   readonly external: boolean;
-  /** The workspace's lanes: its owner's turns are evolution's verdicts and its fresh ones draw trial arms, it spends the
-   *  workspace's missions, its jobs are the workspace's, and the workspace's room streams its turns. */
+  /** The workspace's lanes: its owner's turns are evolution's verdicts and its fresh ones draw trial arms and run the
+   *  evolved tool text, it spends and scopes the workspace's missions and switches the workspace's role, and its jobs
+   *  are the workspace's. */
   readonly lanes: boolean;
-  /** Its owner's other workspaces, as peers. */
-  readonly peers: boolean;
 }
 
 export function actorReach(policy: Pick<ActorPolicy, 'workspaceAgent'>): ActorReach {
   return policy.workspaceAgent
-    ? { surface: 'program', external: true, lanes: true, peers: true }
-    : { surface: 'confined', external: false, lanes: false, peers: false };
+    ? { surface: 'program', external: true, lanes: true }
+    : { surface: 'confined', external: false, lanes: false };
+}
+
+/** What one turn of an agent reaches: what it reaches by what it is, and what the lane it was admitted in adds. Every
+ *  host's turn surface is built from this one decision. */
+export interface SurfaceReach {
+  readonly actor: ActorReach;
+  readonly turn: TurnReach;
+}
+
+export function surfaceReach(
+  policy: ActorPolicy,
+  lane: Pick<ExecutionLane, 'authorship' | 'mode' | 'driving' | 'awaitsReply'>,
+  /** See {@link turnReach}. */
+  ownerSurface: boolean,
+): SurfaceReach {
+  const turn = turnReach({ lane: turnLane(policy, lane.authorship), mode: lane.mode, driving: lane.driving, ownerSurface, awaitsReply: lane.awaitsReply });
+
+  return { actor: actorReach(policy), turn };
 }

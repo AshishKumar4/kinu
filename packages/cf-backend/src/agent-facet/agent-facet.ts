@@ -246,6 +246,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
       turnInFlight: () => this.held?.session.turnInFlight() ?? false,
       memory: () => this.workspaceCalls.memory(), program: (...args) => this.workspaceCalls.program(...args),
       sayToParent: (signal) => this.workspaceCalls.sayToParent(signal),
+      receipts: (...args) => this.workspaceCalls.receipts(...args),
       logActivity: (lines) => this.workspaceCalls.logActivity(lines),
     });
     this.database.adopt(snapshot);
@@ -256,7 +257,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
   private async prepared(snapshot: AgentSnapshot): Promise<FacetChat> {
     const database = this.open(snapshot);
     // The workspace's program first: the actor is built on it.
-    const prepared = await this.workspaceCalls.prepareChat({ turnId: null, mode: 'build', userText: '', parentDriven: false });
+    const prepared = await this.workspaceCalls.prepareChat({ turnId: null, mode: 'build', userText: '', parentDriven: false, awaitsReply: false });
 
     // The rows newest to reach it, not those this call carried: a call adopted while the program was asked for may have
     // brought newer ones (the owner's model pin), and re-adopting older rows would put the old ones back.
@@ -533,7 +534,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   /** An advisor's answer on one of this agent's own turns, judged by this isolate's lane and said here. */
   async deliverAdvice(snapshot: AgentSnapshot, helper: AnsweredEvolutionHelper, turnId: string): Promise<boolean> {
-    return await (await this.open(snapshot).acquire()).session.sayAdvisorAnswer(helper, turnId);
+    return await (await this.open(snapshot).acquire()).session.advisor.sayAnswer(helper, turnId);
   }
 
   async idle(): Promise<void> {

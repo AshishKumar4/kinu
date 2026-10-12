@@ -7,7 +7,7 @@ import { operationTool } from '../tools/operation-surfaces';
 import { defineOperation, serve } from '../operations/operation';
 import { type ToolSet, type ModelMessage, type StepResult, type ToolExecutionOptions } from 'ai';
 import type { ObserveStream } from '../chat';
-import type { HostedActor } from '../state/actor-host';
+import type { HostedActor, SeatedActor } from '../state/actor-host';
 import type { WorkMode } from '../types/turn';
 import {
   EVIDENCE_KINDS,
@@ -400,8 +400,8 @@ function settleRunContext(deps: HeadInferenceDeps, turn: {
   });
 }
 
-/** The seat supplies the compaction state where the actor lives. */
-export type RunInference = Omit<HeadInferenceDeps, 'compaction'>;
+/** The seat supplies the compaction state where the actor lives, and runs it on the actor's session. */
+export type RunInference = Omit<HeadInferenceDeps, 'compaction' | 'actor'> & { readonly actor: SeatedActor };
 
 interface HeadOutcome {
   status: HeadReport['status'];
@@ -447,7 +447,7 @@ async function adviseCompletedTurn({ session, input, deps, lease, outcome }: Com
 
   if (!session.orchestrator.improvementLanesOpen('completed', input.mode)) return;
 
-  await session.hireAdvisor(session.advisorSnapshot(turn, Object.keys(deps.tools)));
+  await session.advisor.hire(session.advisor.snapshot(turn, Object.keys(deps.tools)));
 }
 
 /** `kind` namespaces the canonical ids of the next turn's input. */

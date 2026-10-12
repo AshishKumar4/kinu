@@ -55,10 +55,10 @@ export {
 } from './orchestrator/turn-facts';
 
 export type {
-  CloseCapability, ExecutionKey, ExecutionLane, FrozenTurn, RemoteReceipt, TurnCapability, TurnPort, TurnToolCall,
+  CloseCapability, ExecutionKey, ExecutionLane, FrozenTurn, TurnCapability, TurnPort, TurnToolCall,
 } from './orchestrator/execution';
 
-export { inTurnSurface, scopedTurnSurface, TurnSurface, type TurnSurfaceOpening } from './orchestrator/main-turn-surface';
+export { inTurnSurface, scopedTurnSurface, turnLedgers, TurnSurface, type TurnLedgers, type TurnSurfaceOpening } from './orchestrator/main-turn-surface';
 
 // Records that keyed work happened, kept after its row is retired.
 export {
@@ -572,9 +572,9 @@ export {
 
 // open-38: one physical workspace SQLite for every logical actor.
 export {
-  createActorHost, recoverActorTurns, childContextResolver, hostedChildTree, registeredParent,
+  createActorHost, createSeatHost, recoverActorTurns, childContextResolver, hostedChildTree, registeredParent,
   type ActorHost,
-  type ActorSeat, type ActorHostDeps, type BoundActor, type HostedActor,
+  type ActorSeat, type ActorHostDeps, type SeatHostDeps, type Seating, type BoundActor, type SeatedActor, type HostedActor,
   type LoopSeed, type ActorRetirement, type ResumableActorTurn,
 } from './state/actor-host';
 
@@ -612,7 +612,7 @@ export {
 
 export { actorPolicy, type ActorPolicy } from './delegation/actor-policy';
 
-export { actorReach, turnLane, turnReach, type ActorReach, type TurnLane, type TurnReach } from './delegation/turn-reach';
+export { actorReach, surfaceReach, turnLane, turnReach, type ActorReach, type SurfaceReach, type TurnLane, type TurnReach } from './delegation/turn-reach';
 
 export { AGENTS_OPS, type AgentsOp } from './operations/agents';
 
@@ -695,8 +695,8 @@ export {
 // Applied inside buildActorTools; backends never wrap tools themselves.
 export {
   initToolEffectClaimTable, claimToolEffect, settleToolEffect,
-  withEffectReceipt,
-  type EffectClaimDeps, type ToolEffectClaim, type ToolEffectKey,
+  withEffectReceipt, withEffectPointer, remoteReceipts,
+  type EffectClaimDeps, type ReceiptExecution, type RemoteReceipt, type ToolEffectClaim, type ToolEffectKey,
 } from './tools/effect-claim';
 
 // Web search + fetch
@@ -1702,10 +1702,13 @@ export type { WorkspaceWork, OwnedPlan, OwnedTask, WorkspaceWorkOwner } from './
 
 export { openingList, openingListOf, listedOn, type OpeningList } from './read-models/opening';
 
+export { AgentOrchestrator, drainPendingEvents, type AgentOrchestratorDeps } from './orchestrator/agent-orchestrator';
+
+export { ActorAdvisor, type ActorAdvisorContext, type ActorAdvisorDeps } from './advisor/actor-advisor';
+
 export {
-  AgentOrchestrator, improvementLanesOpen, evolutionPassOpen, type AgentOrchestratorDeps,
-  type TurnContinuity,
-} from './orchestrator/agent-orchestrator';
+  EvolutionLanes, improvementLanesOpen, evolutionPassOpen, recordedTurn, type EvolutionLanesDeps, type TurnContinuity,
+} from './orchestrator/evolution-lanes';
 
 export { ActorSession, CLEAR_NEEDS_IDLE, type ActorSessionOptions, type ActorTurnLease, type ActorExecutionInput, type ActorExecutionResult } from './orchestrator/actor-session';
 
@@ -1839,7 +1842,7 @@ export {
 export {
   artifactOverrides, artifactVersion, bundledArtifact, currentArtifacts, listArtifactVersions,
   sectionArtifact, toolArtifact, writeCandidate,
-  type ArtifactStatus, type ArtifactVersion,
+  type ArtifactOverrides, type ArtifactStatus, type ArtifactVersion,
 } from './evolution/artifacts';
 
 export { judgeAuthoredEdit, runProposer, SCAFFOLD_ARTIFACT, type ProposerOutcome } from './evolution/proposer';
@@ -2646,3 +2649,5 @@ export type {
 } from './subordinates/agent-isolate';
 
 export { writesSnapshotRows } from './subordinates/agent-isolate';
+
+export { describeAgentTools } from './subordinates/tool-descriptors';

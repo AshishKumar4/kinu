@@ -1,6 +1,6 @@
 import type { LanguageModel } from 'ai';
 import type { EnginePorts } from '@better-compact/core';
-import type { HostedActor, ModelCallSpend, ModelCallReport, ModelOperationSink, TurnModelSources } from '@kinu.run/core';
+import { DynamicContextLedger, type ModelCallSpend, type ModelCallReport, type ModelOperationSink, type ResolvedTurnProfile, type SeatedActor, type TurnModelSources } from '@kinu.run/core';
 import { diagnostics, KinuError } from '@kinu.run/core/obs';
 import type { AttachmentDeps } from './attachments';
 import { createCompactionExtension, type CompactionExtension, type EphemeralContextPlane } from './extension';
@@ -43,18 +43,21 @@ export interface HostedActorCompaction {
   readonly trigger: { readonly state: CompactionStateStore; readonly key: string };
 }
 
-export function hostedActorCompaction(actor: HostedActor, deps: {
+/** A seated actor compacts over its own files; the turn it compacts for is its session's, where its turn runs here. */
+export function hostedActorCompaction(actor: SeatedActor, deps: {
   readonly logger: ActorCompactionDeps['logger'];
   readonly models: Pick<TurnModelSources, 'normalize' | 'resolve'>;
-  report(actor: HostedActor, report: ModelCallReport): void;
+  report(actor: SeatedActor, report: ModelCallReport): void;
   readonly operations?: ModelOperationSink;
+  /** The turn's profile and dynamic block, where its turn runs here; elsewhere none, and its own config names its model. */
+  readonly turn?: { readonly profile: () => ResolvedTurnProfile | null; readonly ledger: DynamicContextLedger };
 }): HostedActorCompaction {
   const state = createCompactionStateStore(actor.runtime.storage.sql, actor.handle);
-  const spec = () => deps.models.normalize(actor.session.profile?.tier.model ?? actor.stores.config.getModel() ?? '');
+  const spec = () => deps.models.normalize(deps.turn?.profile()?.tier.model ?? actor.stores.config.getModel() ?? '');
 
   return {
     extension: createActorCompaction({
-      files: () => actor.runtime, state, ledger: actor.session.dynamic, logger: deps.logger,
+      files: () => actor.runtime, state, ledger: deps.turn?.ledger ?? new DynamicContextLedger(), logger: deps.logger,
       summarizer: () => deps.models.resolve(spec()), modelSpec: spec,
       spend: { report: (report) => deps.report(actor, report), operations: deps.operations },
     }),
