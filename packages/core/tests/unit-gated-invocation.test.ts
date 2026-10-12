@@ -216,6 +216,9 @@ describe('a named shell is part of the ask as it was when asked', () => {
 
   const SHELLS = { scope: 'agent:alpha', stateDirectory: '~/.kinu/shells' };
 
+  /** Asked wherever it runs (a force push), and leaves its mark where it ran: `doomed` gone from its directory. */
+  const DOOMING = `${GATED}; rm -r`;
+
   /** Nobody in front of the owner: every ask parks, and the agent asks again once it is approved. */
   function unattended() {
     const { policy, queue } = owner('deny');
@@ -247,7 +250,7 @@ describe('a named shell is part of the ask as it was when asked', () => {
     await shell.exec('export DOOMED=a', { name: 'dev' });
 
     const { again } = await approveAcrossAMove(
-      queue, () => shell.exec('rm -r "$DOOMED"', { name: 'dev' }), async () => { await shell.exec('export DOOMED=b', { name: 'dev' }); },
+      queue, () => shell.exec(`${DOOMING} "$DOOMED"`, { name: 'dev' }), async () => { await shell.exec('export DOOMED=b', { name: 'dev' }); },
     );
 
     expect(existsSync(join(home, 'b'))).toBe(true);
@@ -279,7 +282,7 @@ describe('a named shell is part of the ask as it was when asked', () => {
     await exec.execute('cd sub', { name: 'dev' });
 
     const { again } = await approveAcrossAMove(
-      queue, () => exec.execute('rm -r doomed', { name: 'dev' }), async () => { await exec.execute('cd ..', { name: 'dev' }); },
+      queue, () => exec.execute(`${DOOMING} doomed`, { name: 'dev' }), async () => { await exec.execute('cd ..', { name: 'dev' }); },
     );
 
     expect(existsSync(join(home, 'doomed'))).toBe(true);
@@ -312,7 +315,7 @@ describe('a named shell is part of the ask as it was when asked', () => {
     await exec.execute('cd sub', { name: 'dev' });
 
     const { again } = await approveAcrossAMove(
-      queue, () => exec.execute('rm -r doomed', { name: 'dev' }), async () => { await exec.execute('cd ..', { name: 'dev' }); },
+      queue, () => exec.execute(`${DOOMING} doomed`, { name: 'dev' }), async () => { await exec.execute('cd ..', { name: 'dev' }); },
     );
 
     expect(existsSync(join(home, 'doomed'))).toBe(true);
@@ -347,7 +350,7 @@ describe('a named shell is part of the ask as it was when asked', () => {
     await shell.exec(`cd ${WORKSPACE_ROOT}/sub`, { name: 'dev' });
 
     const { again } = await approveAcrossAMove(
-      queue, () => shell.exec('rm -r doomed', { name: 'dev' }), async () => { await shell.exec(`cd ${WORKSPACE_ROOT}`, { name: 'dev' }); },
+      queue, () => shell.exec(`${DOOMING} doomed`, { name: 'dev' }), async () => { await shell.exec(`cd ${WORKSPACE_ROOT}`, { name: 'dev' }); },
     );
 
     expect(ran).toEqual([]);
