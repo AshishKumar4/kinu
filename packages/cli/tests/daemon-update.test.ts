@@ -262,6 +262,25 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     expect(readFileSync(file, 'utf8')).toBe('after the update');
   });
 
+  test('a protocol-2 daemon whose successor refuses its config at start rolls back and keeps serving', async () => {
+    const served = hub({ served: NEW, archive: await daemonArchive(NEW_FILES, NEW) });
+    const home = installedMachine(served.origin, OLD, {}, PROTOCOL_2_FILES);
+    // Linked before `kinu connect` recorded a directory: protocol 2 serves it; this build refuses it after taking the pidfile.
+    writeFileSync(join(home, 'device.json'), `${JSON.stringify({ user: 'user_1', token: `pdt_${'a'.repeat(32)}`, origin: served.origin }, null, 2)}\n`, { mode: 0o600 });
+    const daemon = startPipedDaemon(home, await releaseSigningEnv());
+    const oldPid = await waitForDaemonPid(home);
+
+    await daemon.waitForLog('device.update_rolled_back');
+
+    expect(daemon.log()).toMatch(/device\.update_successor_exited pid=\d+ code=1\b/);
+    expect(pidfile(home)).toBe(oldPid);
+    expect(installed(home, 'pc-agent.js')).toBe(PROTOCOL_2_FILES['pc-agent.js']);
+    expect(installed(home, 'pc-agent.version').trim()).toBe(OLD);
+    expect(served.sockets.items).toHaveLength(1);
+    expect(served.sockets.items[0]?.closed).toBeNull();
+    await present(served.sockets.items[0], 'the protocol-2 HELLO').settle();
+  });
+
   test('a build that ships a daemon file this one never had lands it, and comes up on it', async () => {
     // The new daemon requires a module the running build does not ship: the archive's own file list says what lands.
     const daemon = `${DAEMON_FILES['pc-agent.js']}\nrequire('./added.js');\n// build ${NEW}\n`;

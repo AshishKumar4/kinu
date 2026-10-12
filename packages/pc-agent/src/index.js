@@ -3953,10 +3953,15 @@ async function refuse(runtime, reason) {
   exitWhenQuiet(1);
 }
 
-/** @param {unknown} err */
+/**
+ * A start that failed ends the process, not just its exit code: a successor's
+ * lifeline (`predecessorExited`) would hold it open, and the updater that
+ * started it rolls back only when it exits.
+ * @param {unknown} err
+ */
 function reportFatal(err) {
   console.error('Kinu PC agent:', err instanceof Error ? err.message : String(err));
-  process.exitCode = 1;
+  exitWhenQuiet(1);
 }
 
 if (require.main === module) {
