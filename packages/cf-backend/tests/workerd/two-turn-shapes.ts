@@ -462,6 +462,7 @@ export interface HeldCloseRecovered {
   readonly busy: readonly string[];
   readonly logoCalls: number;
   readonly turnCalls: number;
+  readonly calls: readonly HttpCall[];
   readonly answers: number;
   readonly runEnds: ReadonlyArray<{ readonly runId: string; readonly reason: string }>;
 }

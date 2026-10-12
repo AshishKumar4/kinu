@@ -1,6 +1,6 @@
 import * as v from 'valibot';
 import { KILL_FILE, WAKE_MARKER, WakeHoldPlacementSchema, type CallRecord, type KillPoint, type WakeHoldPlacement } from './two-turn-shapes';
-import { scriptedLongAnswer } from './long-model-script';
+import { scriptedProbeAnswer } from './probe-model-script';
 import { aiLane, type AiRun } from '../helpers/workers-ai-binding';
 import { WORKERS_AI_MODELS_DEV } from '@kinu.run/test-utils/models-dev';
 /**
@@ -71,8 +71,8 @@ const MODELS_DEV_CATALOG = {
 };
 
 interface HeldGate {
-  readonly arrived: PromiseWithResolvers<void>;
-  readonly release: PromiseWithResolvers<void>;
+  readonly arrived: ReturnType<typeof Promise.withResolvers<void>>;
+  readonly release: ReturnType<typeof Promise.withResolvers<void>>;
 }
 
 /** Armed by `/queue/hold`: the first `probe-queue` call, or every call numbered `from` onward until
@@ -99,7 +99,7 @@ async function holdWakeWindow(where: WakeHoldPlacement): Promise<void> {
  *  every `/proxy/parked` reader still short of its count. Node-side, so no request context owns the wait. */
 let proxyHold: {
   parked: number;
-  readonly release: PromiseWithResolvers<void>;
+  readonly release: ReturnType<typeof Promise.withResolvers<void>>;
   readonly readers: { readonly count: number; readonly resolve: () => void }[];
 } | null = null;
 
@@ -407,7 +407,7 @@ async function wakeBody(body: OutboundBody): Promise<Response> {
 
 function longBody(body: OutboundBody, raw: string): Response {
   // The background memory pass and the title ask for one completion, not a stream: the shared scripted protocol answers them.
-  const scripted = scriptedLongAnswer(raw);
+  const scripted = scriptedProbeAnswer(raw);
 
   if (scripted !== null) return new Response(scripted.body, { status: scripted.status, headers: { 'content-type': scripted.contentType } });
   const users = (body.messages ?? []).filter((m) => m.role === 'user').map((m) => textOf(m.content));
@@ -839,6 +839,10 @@ export async function probeOutbound(request: Request): Promise<Response> {
       switch (body.model) {
         case 'probe-queue': {
           await holdQueuedCall('probe-queue');
+
+          const scripted = scriptedProbeAnswer(raw);
+
+          if (scripted !== null) return new Response(scripted.body, { status: scripted.status, headers: { 'content-type': scripted.contentType } });
 
           return echoBody(body);
         }
