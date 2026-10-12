@@ -167,13 +167,15 @@ export class AgentTurns {
    */
   holds(actorId: string, bound: TurnBound, call: TurnCall): boolean {
     if (call === 'opens') return true;
+    const fence = bound.epoch === null ? null : this.deps.fence(actorId);
+    const named = fence !== null && fence.seq === bound.epoch;
 
-    if (call === 'settles') return new TurnFences(this.deps.sql).closes(actorId, { turnId: bound.turnId, runId: bound.runId, seq: bound.epoch });
+    // A close naming the agent's newest opening is judged by the fence's row, which that opening wrote with its own.
+    if (call === 'settles') {
+      return named ? fence.turnId === bound.turnId && fence.runId === bound.runId : new TurnFences(this.deps.sql).closes(actorId, { turnId: bound.turnId, runId: bound.runId, seq: bound.epoch });
+    }
 
-    if (bound.epoch === null) return false;
-    const fence = this.deps.fence(actorId);
-
-    return fence !== null && fence.live && fence.turnId === bound.turnId && fence.runId === bound.runId && fence.seq === bound.epoch;
+    return named && fence.live && fence.turnId === bound.turnId && fence.runId === bound.runId;
   }
 
   /** The turn is cut off: nothing bound to it runs from here, and what runs now ends. */

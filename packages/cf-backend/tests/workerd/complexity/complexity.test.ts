@@ -258,6 +258,12 @@ const turnStatements = new Map<number, { readonly workspace: OperationCost['tabl
  * turn's end carries main's transcript window and the room reads none back: the snapshot the room's read refreshed is
  * read by the next turn's admission instead (+4), and an agent's snapshot holds no count its every turn moves, so main's
  * isolate adopts its rows again only when they change.
+ * 372, over 6 runs on 93f891556 (367 in four, 372 in two: the workspace's 185 or 190, the five apart the Agents SDK's
+ * job queue; main's isolate's 182), on 2026-10-12, once every execution is claimed before it is prepared under an epoch
+ * minted in the agent's own store (`actor_epochs`, +1; the report sequence numbers no opening, -1), binds the authority
+ * inputs its profile resolved from, kept once per distinct inputs (`actor_profile_inputs`, +1), and each opening is
+ * recorded where the workspace judges the closes that name it (`actor_turn_openings`, +1; a close naming the newest
+ * opening is judged by the held fence row and reads nothing).
  * What remains, by group. Workspace: the Agents SDK's job queue (65, every arm and alarm asks it, and it is the SDK's);
  * the settle sequence's terminal effects and receipts (25: each attempt is written before its call, and each retry
  * read follows a write of its own); the evolution pass and the turn's review (27); the four reports' acceptance,
@@ -269,7 +275,7 @@ const turnStatements = new Map<number, { readonly workspace: OperationCost['tabl
  * reads of its session (65); the epoch fence every stream write and seal reads, never held (18); its reports' sequence,
  * run events and facts (23); and its own settle sequence (17).
  */
-const TURN_STATEMENTS = 370;
+const TURN_STATEMENTS = 372;
 
 /** Every count the subject's declarations govern, one value per size. */
 function countersOf(subject: Subject, measured: readonly OperationCost[]): GrowthCounter[] {
