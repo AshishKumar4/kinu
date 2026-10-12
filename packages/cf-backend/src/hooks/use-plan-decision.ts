@@ -13,6 +13,7 @@ export interface PlanDecisionInput {
   readonly editable: boolean;
   /** Decided revision whose wake is still owed: retry without resaving. */
   readonly handoffPending: boolean;
+  /** A decision on its way to the agent's wake (`owedIntents`): none is made again until the agent takes it. */
   readonly owed?: boolean;
   readonly rpc: Rpc;
   /** False prevents the decision. */
@@ -22,7 +23,7 @@ export interface PlanDecisionInput {
 
 export interface PlanDecision {
   readonly busy: DecisionBusy;
-  /** Synchronous guard before React commits the busy state. */
+  /** Synchronous guard before React commits the busy state; true while a decision is on its way too. */
   readonly inFlight: () => boolean;
   readonly decide: (decision: PlanDecisionKind) => Promise<void>;
 }
@@ -70,7 +71,7 @@ export function usePlanDecision({ plan, editable, handoffPending, owed = false, 
     ));
   }, [editable, handoffPending, owed, onError, plan, rpc, save]);
 
-  const isInFlight = useCallback(() => inFlight.current, []);
+  const isInFlight = useCallback(() => owed || inFlight.current, [owed]);
 
   return { busy, inFlight: isInFlight, decide };
 }

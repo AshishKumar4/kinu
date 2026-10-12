@@ -10,10 +10,22 @@ import { type GeneralNote, type NotedChanges } from '@kinu.run/core';
 import { agentWakes, catalogTurn, driveUntil, fireSoonestWake, gatewayWorkspace, workspaceMainActor } from './helpers/actor-harness';
 import { cutNextDelivery, holdNextDelivery } from './helpers/agent-facets';
 import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
+import { socketConnection } from './helpers/bindings';
+import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 
 afterEach(() => { setSystemTime(); });
 
 const Count = v.object({ n: v.number() });
+
+/** The owner's words, as the pane sends them. */
+function ownerWords(text: string): string {
+  const id = crypto.randomUUID();
+
+  return JSON.stringify({
+    type: CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST, id,
+    init: { method: 'POST', body: JSON.stringify({ messages: [{ id, role: 'user', parts: [{ type: 'text', text }] }], trigger: 'submit-message' }) },
+  });
+}
 
 test("a turn that has closed runs no tool call made under it, and a reset workspace refuses it too", async () => {
   const workspace = gatewayWorkspace(stubAiBinding((run) => chatCompletion(run, 'Done.')));
@@ -132,20 +144,17 @@ test('a delivery on its way when a Stop cut it off arrives cancelled, never runs
   await catalogTurn(workspace.agent, 'Start the ledger.');
   const { agent } = workspace;
   const main = workspaceMainActor(workspace.db).actorId;
+  const owner = socketConnection({ id: 'owner', send: () => {} });
   const held = holdNextDelivery(agent.agentOf(main).storageKey);
-  const before = crypto.randomUUID();
-  const sending = agent.harnessAdmitMain('BEFORE_STOP_MARKER', before, undefined);
+  const sending = agent.onMessage(owner, ownerWords('BEFORE_STOP_MARKER'));
   const release = await held;
 
   // The Stop cancels what the agent is owed, the delivery on its way among them, then the delivery arrives.
-  await agent.harnessStopMain();
+  await agent.cancelCurrentWork();
   release();
   await sending;
 
-  const after = crypto.randomUUID();
-
-  await agent.harnessAdmitMain('AFTER_STOP_MARKER', after, undefined);
-  await agent.harnessMainLanding(after);
+  await agent.onMessage(owner, ownerWords('AFTER_STOP_MARKER'));
   await agent.harnessAgentsIdle();
 
   expect(asked.some((messages) => messages.includes('AFTER_STOP_MARKER'))).toBe(true);

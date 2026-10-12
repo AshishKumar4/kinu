@@ -34,7 +34,7 @@ export function PlanPageList({ pages, rpc, planRpc, onReviewActor, owedIntents }
           <div key={key} className="h-full" hidden={item !== pages.shown}>
             <ErrorBoundary label="Plan">
               <PlanPage item={item} owner={pages.owner} rpc={rpc} planRpc={planRpc ?? rpc} onReviewActor={onReviewActor}
-                resource={resource} onRetry={pages.read.reload} owedIntents={owedIntents} />
+                resource={resource} onRetry={pages.read.reload} owedIntents={owedIntents ?? []} />
             </ErrorBoundary>
           </div>
         );
@@ -52,7 +52,7 @@ function PlanPage({ item, owner, rpc, planRpc, onReviewActor, resource, onRetry,
   onReviewActor?: (name: string, actorId?: string) => void | Promise<void>;
   resource: AsyncResource<WorkspaceWork>;
   onRetry: () => void;
-  owedIntents?: readonly OwedOwnerIntent[];
+  owedIntents: readonly OwedOwnerIntent[];
 }) {
   const mine = item.owner.name === owner;
 
