@@ -14,11 +14,6 @@ const crypto = require('node:crypto');
 const sha256Of = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
 
 /**
- * Writes `data` only if the file's bytes still hash to `expected` (null: only if no file is there). The compare and a
- * temp-file-plus-rename replacement run here, in one synchronous step of this process, so no other write of this
- * daemon interleaves, and a reader never sees half a file. Answers the new digest, or the one found (null: absent).
- */
-/**
  * A write frame: confined as a write and checkpointed as one, then `write` with the decoded bytes. An answer that wrote
  * nothing (`ok: false`) carries no checkpoint note.
  */
@@ -34,7 +29,7 @@ function checkpointedWrite(msg, { requested, content, options }, checkpoints, wr
   const data = options?.encoding === 'base64' ? Buffer.from(String(content), 'base64') : Buffer.from(String(content));
 
   return mutation(checkpoints, msg.checkpoint, coveredBy(verdict), (snapshot) => {
-    const answer = write(confined, data);
+    const answer = write(view, confined, data);
 
     if (answer.ok === false) return answer;
     const skipped = whyUncheckpointed(verdict, snapshot);
@@ -43,40 +38,158 @@ function checkpointedWrite(msg, { requested, content, options }, checkpoints, wr
   });
 }
 
-function replaceIfDigest(target, data, expected) {
-  let found = null;
+/**
+ * Writes `data` only if the file's bytes still hash to `expected` (null: only if no file is there). The compare and a
+ * temp-file-plus-rename replacement run here, in one synchronous step of this process, so no other write of this
+ * daemon interleaves, and a reader never sees half a file. Answers the new digest, or the one found (null: absent).
+ * `target` is the judged path; the step runs where it still is (`atJudged`).
+ */
+function replaceIfDigest(view, target, data, expected) {
+  // A raw view's path is the one requested, links and all, and is read through them as before; a judged path names no
+  // link, so one found in its place is refused.
+  const follow = view.raw === true ? 0 : NO_FOLLOW;
 
-  try {
-    found = sha256Of(fs.readFileSync(target));
-  } catch (cause) {
-    if (cause.code !== 'ENOENT') throw cause;
-  }
-
-  if (found !== expected) return { ok: false, sha256: found };
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  const temporary = path.join(path.dirname(target), `.${path.basename(target)}.${crypto.randomBytes(6).toString('hex')}.kinu-write`);
-
-  const mode = found === null ? null : fs.statSync(target).mode & 0o7777;
-
-  try {
-    // Created with the replaced file's mode, which the umask can only narrow, and given the bits it cut before any byte
-    // is written: the new bytes are never readable by anyone the file did not let read them.
-    const fd = fs.openSync(temporary, 'wx', mode ?? 0o666);
+  return atJudged(view, target, { createParents: true }, (at) => {
+    let found = null;
 
     try {
-      if (mode !== null) fs.fchmodSync(fd, mode);
-      fs.writeFileSync(fd, data);
-    } finally {
-      fs.closeSync(fd);
+      found = sha256Of(readFollowing(at, follow));
+    } catch (cause) {
+      if (cause.code !== 'ENOENT') throw cause;
     }
 
-    fs.renameSync(temporary, target);
-  } catch (cause) {
-    fs.rmSync(temporary, { force: true });
-    throw cause;
+    if (found !== expected) return { ok: false, sha256: found };
+    const temporary = path.join(path.dirname(at), `.${path.basename(at)}.${crypto.randomBytes(6).toString('hex')}.kinu-write`);
+
+    const mode = found === null ? null : fs.statSync(at).mode & 0o7777;
+
+    try {
+      // Created with the replaced file's mode, which the umask can only narrow, and given the bits it cut before any
+      // byte is written: the new bytes are never readable by anyone the file did not let read them.
+      const fd = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | NO_FOLLOW, mode ?? 0o666);
+
+      try {
+        if (mode !== null) fs.fchmodSync(fd, mode);
+        fs.writeFileSync(fd, data);
+      } finally {
+        fs.closeSync(fd);
+      }
+
+      fs.renameSync(temporary, at);
+    } catch (cause) {
+      fs.rmSync(temporary, { force: true });
+      throw cause;
+    }
+
+    return { ok: true, sha256: sha256Of(data) };
+  });
+}
+
+const NO_FOLLOW = fs.constants.O_NOFOLLOW ?? 0;
+
+/** Linux's O_PATH: a directory held by a walk that needs only search permission on it, as a path lookup does. */
+const O_PATH = 0o10000000;
+
+/** A file's bytes; `follow` 0 reads through a link in its last component, NO_FOLLOW refuses one. */
+function readFollowing(at, follow) {
+  const fd = fs.openSync(at, fs.constants.O_RDONLY | follow);
+
+  try {
+    return fs.readFileSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** `data` written over the file at `at`, created if absent; a link in its last component is refused. */
+function writeNoFollow(at, data) {
+  const fd = fs.openSync(at, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | NO_FOLLOW, 0o666);
+
+  try {
+    fs.writeFileSync(fd, data);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** Why a judged path no longer holds: a command on this device swapped a link into it after the frame was judged. */
+function movedUnderneath(judged, cause) {
+  const error = new Error(`device path '${judged}' changed after it was checked: a directory in it is now a link`);
+  error.code = 'EACCES';
+  error.cause = cause;
+
+  return error;
+}
+
+/**
+ * Runs one synchronous mutation `act` on the path a sandboxed view judged, where it still is when the mutation runs: a
+ * frame waits in the checkpoint queue, and a command on this device may meanwhile swap a directory of the path for a
+ * link out of the consented root. On Linux the directory is opened from `/`, one component at a time with O_NOFOLLOW
+ * (creating any that `createParents` allows), and `act` gets `/proc/self/fd/<dir>/<name>`: no later swap moves it. On
+ * macOS, with no such handle, the directory is resolved again and must be the one judged. A raw view judged nothing
+ * the device's commands cannot reach themselves, so its path is used as it is.
+ */
+function atJudged(view, judged, { createParents = false } = {}, act) {
+  if (view.raw === true) {
+    if (createParents) fs.mkdirSync(path.dirname(judged), { recursive: true });
+
+    return act(judged);
   }
 
-  return { ok: true, sha256: sha256Of(data) };
+  const dir = path.dirname(judged);
+
+  if (process.platform !== 'linux') {
+    if (createParents) fs.mkdirSync(dir, { recursive: true });
+
+    if (fs.realpathSync(dir) !== dir) throw movedUnderneath(judged, null);
+
+    return act(judged);
+  }
+
+  const flags = O_PATH | fs.constants.O_DIRECTORY | NO_FOLLOW;
+  let fd = fs.openSync('/', flags);
+
+  try {
+    for (const name of dir.split('/').filter((part) => part !== '')) {
+      const next = `/proc/self/fd/${fd}/${name}`;
+      let opened;
+
+      try {
+        if (createParents && !fs.existsSync(next)) fs.mkdirSync(next);
+        opened = fs.openSync(next, flags);
+      } catch (cause) {
+        if (fs.lstatSync(next, { throwIfNoEntry: false })?.isSymbolicLink()) throw movedUnderneath(judged, cause);
+        throw withPath(cause, judged);
+      }
+
+      fs.closeSync(fd);
+      fd = opened;
+    }
+
+    const held = `/proc/self/fd/${fd}`;
+
+    try {
+      return act(`${held}/${path.basename(judged)}`);
+    } catch (cause) {
+      throw withPath(cause, judged, held, dir);
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** `cause` naming the judged path the caller knows, not the descriptor path it ran on. */
+function withPath(cause, judged, descriptor, dir) {
+  if (descriptor !== undefined && typeof cause.message === 'string') {
+    cause.message = cause.message.split(descriptor).join(dir);
+
+    if (typeof cause.path === 'string') cause.path = cause.path.split(descriptor).join(dir);
+  } else if (typeof cause.message === 'string' && typeof cause.path === 'string') {
+    cause.message = cause.message.split(cause.path).join(judged);
+    cause.path = judged;
+  }
+
+  return cause;
 }
 
 const { spawn } = require('node:child_process');
@@ -2358,8 +2471,7 @@ function statPathAnswer(msg) {
  * The entry rmdir removes, as unlink takes it, so a link is no directory here and rmdir refuses it; the directory
  * itself is judged as well as its parent, so Kinu's own directory is never one a frame removes.
  */
-function rmdirEntry(msg) {
-  const view = viewFromFrame(msg);
+function rmdirEntry(view, msg) {
   const requested = parseString(msg.params[0], 'device paths must be strings');
 
   view.resolvePath(requested, 'write');
@@ -3013,15 +3125,15 @@ function handle(msg, ws, ctx) {
       const bytes = readRangeBytes(confinedDeviceViewPath(viewFromFrame(msg), params[0], 'read'), offset, length);
       rpc(ws, id, { encoding: 'base64', content: bytes.toString('base64') });
     } else if (method === METHODS.writeFile) {
-      rpcWhenSettled(ws, id, checkpointedWrite(msg, { requested: params[0], content: params[1], options: params[2] }, checkpoints, (confined, data) => {
-        fs.mkdirSync(path.dirname(confined), { recursive: true });
-        fs.writeFileSync(confined, data);
+      rpcWhenSettled(ws, id, checkpointedWrite(msg, { requested: params[0], content: params[1], options: params[2] }, checkpoints, (view, confined, data) => {
+        // A raw view's path is the one requested and is written through its links as before; a judged one names none.
+        atJudged(view, confined, { createParents: true }, (at) => { if (view.raw === true) fs.writeFileSync(at, data); else writeNoFollow(at, data); });
 
         return { success: true };
       }));
     } else if (method === METHODS.writeFileIfDigest) {
       rpcWhenSettled(ws, id, checkpointedWrite(msg, { requested: params[0], content: params[1], options: params[3] }, checkpoints,
-        (confined, data) => replaceIfDigest(confined, data, params[2] ?? null)));
+        (view, confined, data) => replaceIfDigest(view, confined, data, params[2] ?? null)));
     } else if (method === METHODS.listFiles) {
       rpc(ws, id, listFilesAnswer(msg));
     } else if (method === METHODS.statPath) {
@@ -3029,27 +3141,30 @@ function handle(msg, ws, ctx) {
     } else if (method === METHODS.unlinkPath) {
       // The ENTRY, not its target: unlink removes the name the caller gave,
       // and following the link would delete a path they never named.
-      const entry = viewFromFrame(msg).resolveEntryPath(parseString(params[0], 'device paths must be strings'), 'write');
+      const view = viewFromFrame(msg);
+      const entry = view.resolveEntryPath(parseString(params[0], 'device paths must be strings'), 'write');
 
       rpcWhenSettled(ws, id, mutation(checkpoints, null, null, () => {
-        fs.unlinkSync(entry);
+        atJudged(view, entry, {}, (at) => { fs.unlinkSync(at); });
 
         return { success: true };
       }));
     } else if (method === METHODS.rmdirPath) {
-      const entry = rmdirEntry(msg);
+      const view = viewFromFrame(msg);
+      const entry = rmdirEntry(view, msg);
 
       rpcWhenSettled(ws, id, mutation(checkpoints, null, null, () => {
-        fs.rmdirSync(entry);
+        atJudged(view, entry, {}, (at) => { fs.rmdirSync(at); });
 
         return { success: true };
       }));
     } else if (method === METHODS.mkdirPath) {
-      const options = params[1] ?? {};
-      const confined = confinedDeviceViewPath(viewFromFrame(msg), params[0], 'write');
+      const recursive = (params[1] ?? {}).recursive === true;
+      const view = viewFromFrame(msg);
+      const confined = confinedDeviceViewPath(view, params[0], 'write');
 
       rpcWhenSettled(ws, id, mutation(checkpoints, null, null, () => {
-        fs.mkdirSync(confined, { recursive: options.recursive === true });
+        atJudged(view, confined, { createParents: recursive }, (at) => { fs.mkdirSync(at, { recursive }); });
 
         return { success: true };
       }));

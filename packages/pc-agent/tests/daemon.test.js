@@ -775,6 +775,59 @@ describe('daemon device path confinement', () => {
     expect((await ws.response('unpaged')).result.map((entry) => entry.name).sort(byName)).toEqual(names.sort(byName));
   });
 
+  // 2026-10-12 security review: a mutation was judged when its frame arrived and run on the path string after the
+  // checkpoint queue, so a command that swapped a judged directory for a link meanwhile moved it out of the root.
+  test.each([
+    ['writeFile', (at) => ['writeFile', [at('inner/target.txt'), 'written', {}]]],
+    ['writeFileIfDigest', (at) => ['writeFileIfDigest', [at('inner/target.txt'), 'written', require('node:crypto').createHash('sha256').update('inside').digest('hex'), {}]]],
+    ['unlinkPath', (at) => ['unlinkPath', [at('inner/target.txt')]]],
+    ['rmdirPath', (at) => ['rmdirPath', [at('inner/empty')]]],
+    ['mkdirPath', (at) => ['mkdirPath', [at('inner/made/deeper'), { recursive: true }]]],
+  ])('%s that waits in the queue acts where it was checked, never through a link swapped in meanwhile', async (_name, frame) => {
+    const root = scratchDir('daemon-swap');
+
+    // Every entry under a tree, with a file's bytes: what a mutation outside the root would change.
+    const snapshotTree = (dir) => fs.readdirSync(dir, { recursive: true }).sort().map((name) => {
+      const full = path.join(dir, String(name));
+
+      return [String(name), fs.lstatSync(full).isFile() ? fs.readFileSync(full, 'utf8') : 'dir'];
+    });
+
+    const project = path.join(root, 'project');
+    const inner = path.join(project, 'inner');
+    const outside = path.join(root, 'outside');
+
+    for (const dir of [path.join(inner, 'empty'), path.join(outside, 'empty')]) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(inner, 'target.txt'), 'inside');
+    fs.writeFileSync(path.join(outside, 'target.txt'), 'inside');
+
+    const before = snapshotTree(outside);
+    let release;
+    const queued = new Promise((resolve) => { release = resolve; });
+
+    // The checkpoint queue, held until the swap is made: a frame's mutation runs only once released.
+    const ctx = {
+      checkpoints: {
+        mutate: async (_request, _covered, apply) => {
+          await queued;
+
+          return apply(null);
+        },
+      },
+    };
+
+    const ws = fakeWs();
+    const [method, params] = frame((relative) => path.join(project, relative));
+
+    handle({ id: 'swap', method, sandbox: scoped([project]), params }, ws, ctx);
+    fs.renameSync(inner, path.join(project, 'inner-old'));
+    fs.symlinkSync(outside, inner);
+    release();
+
+    expect((await ws.response('swap')).error?.message).toContain('changed after it was checked');
+    expect(snapshotTree(outside)).toEqual(before);
+  });
+
   test('scoped native mutations stay inside the resolved root', async () => {
     // Under /tmp rather than TMPDIR: this suite's TMPDIR is inside the real
     // home, which the agent home is mounted over, and a consented directory
