@@ -27,7 +27,25 @@ const typeOf = (schema: JsonSchema): string => jsonSchemaToType(schema, 'T').rep
 
 const oneLine = (type: string): string => type.replace(/\s+/gu, ' ');
 
-const returnsOf = (op: Operation): string => oneLine(typeOf(typeJsonSchema(op.output)));
+/**
+ * What each operation is told as, rendered once: its result type and its eval declaration are pure in the operation, a
+ * module-level object that never changes, and every turn's tool build asks them again. Keyed by the operation; written
+ * by its first rendering; dropped only with the operation, so a held text cannot go stale.
+ */
+const RENDERED = { returns: new WeakMap<Operation, string>(), declarations: new WeakMap<Operation, string>() };
+
+function rendered(held: WeakMap<Operation, string>, op: Operation, render: (op: Operation) => string): string {
+  const known = held.get(op);
+
+  if (known !== undefined) return known;
+  const text = render(op);
+
+  held.set(op, text);
+
+  return text;
+}
+
+const returnsOf = (op: Operation): string => rendered(RENDERED.returns, op, (rendering) => oneLine(typeOf(typeJsonSchema(rendering.output))));
 
 const OPTIONAL_TYPES: ReadonlySet<string> = new Set(['optional', 'nullish', 'exact_optional']);
 
@@ -260,6 +278,10 @@ export function callArgs(op: Operation, input: JsonObject): JsonValue[] {
 
 /** `name(required…, options?): Promise<output | Refusal>`, each type rendered by codemode from the field's own schema. */
 function operationDeclaration(op: Operation): string {
+  return rendered(RENDERED.declarations, op, declarationOf);
+}
+
+function declarationOf(op: Operation): string {
   const { required, optional } = fieldsOf(op);
   const properties = propertiesOf(typeJsonSchema(op.input));
   const typed = (key: string): string => oneLine(typeOf(properties.get(key) ?? {}));
