@@ -361,11 +361,27 @@ function forwardUpstream(
 }
 
 /** Close `socket` as its peer closed: a code that names no frame sent (1005) or a lost connection (1006, 1015) cannot be sent. */
+/** The WebSocket close frame's limit on a reason (RFC 6455 §5.5: a 125-byte payload, two of them the code). */
+const CLOSE_REASON_BYTES = 123;
+
+/** `reason` cut to whole code points within a close frame's limit: a scrubbed reason may outgrow the server's own. */
+export function closeReason(reason: string): string {
+  const encoder = new TextEncoder();
+  let kept = '';
+
+  for (const point of reason) {
+    if (encoder.encode(kept + point).byteLength > CLOSE_REASON_BYTES) break;
+    kept += point;
+  }
+
+  return kept;
+}
+
 function closeAs(socket: WebSocket, code: number, reason: string): void {
   if (socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) return;
 
   if (code === 1005) socket.close();
-  else socket.close(code === 1006 || code === 1015 ? 1011 : code, reason);
+  else socket.close(code === 1006 || code === 1015 ? 1011 : code, closeReason(reason));
 }
 
 /**

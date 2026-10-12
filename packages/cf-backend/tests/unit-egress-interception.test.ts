@@ -22,7 +22,7 @@ mockAgentsSdk();
 
 const {
   CONTAINER_EVENT_HOST,
-  handleContainerEgress, handleContainerEvent, handleEgressConnect, handleEgressTls, parseEgressParams,
+  closeReason, handleContainerEgress, handleContainerEvent, handleEgressConnect, handleEgressTls, parseEgressParams,
 } = await import('../src/egress/outbound');
 
 const {
@@ -893,5 +893,16 @@ describe('a workspace program\'s TLS socket', () => {
 
       expect(dialled).toEqual([{ hostname: 'lb.example.com', port: 8443, secureTransport: 'starttls', checked: 'api.example.com' }]);
     });
+  });
+});
+
+// 2026-10-12 security review: a scrubbed close reason can outgrow the server's, and close() throws past 123 bytes.
+describe('a relayed WebSocket close reason', () => {
+  test('fits a close frame, cut only between whole code points', () => {
+    const bytes = (text: string) => new TextEncoder().encode(text).byteLength;
+
+    expect(closeReason('é'.repeat(100))).toBe('é'.repeat(61));
+    expect(bytes(closeReason(`${'x'.repeat(121)}😀tail`))).toBe(121);
+    expect(closeReason('short reason')).toBe('short reason');
   });
 });
