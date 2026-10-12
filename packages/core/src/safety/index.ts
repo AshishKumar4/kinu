@@ -103,14 +103,17 @@ export {
 
 export {
   SECRET_PATTERNS,
+  redactSecrets,
+  type SecretPattern,
+} from './secret-patterns';
+
+export {
   scanText,
   countDetections,
   secretSightings,
-  redactSecrets,
-  type SecretPattern,
   type SecretFinding,
   type SecretSighting,
-} from './secret-patterns';
+} from './secret-scan';
 
 export {
   InstructionApprovalStore,

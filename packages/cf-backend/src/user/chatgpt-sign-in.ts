@@ -244,7 +244,9 @@ export class UserChatGptSignIn {
       ? { unrevoked: null }
       : await this.host.vault.disconnectCredential(CHATGPT_CRED_KEY, revoke);
 
-    const holding = (await this.chatgptSignIns()).filter(({ status }) => status?.signedIn === true || status?.pending === true);
+    // Every machine that answers: plan availability is not token possession (a plan-declined login holds tokens), and
+    // signing out a machine that holds none changes nothing.
+    const holding = (await this.chatgptSignIns()).filter(({ status }) => status !== null);
 
     const answers = await Promise.allSettled(holding.map(async (machine) => {
       const answer = v.safeParse(v.object({ unconfirmed: v.nullable(v.string()) }), await this.host.devices._devices.chatgpt(machine.id, DEVICE_CHATGPT.signOut, [{ revoke }]));

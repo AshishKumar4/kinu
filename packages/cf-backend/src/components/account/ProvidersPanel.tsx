@@ -130,7 +130,11 @@ export function ProvidersPanel({ returnTo }: { returnTo: string }) {
                       <ProviderEntry key={entry.key} provider={entry.provider} name={entry.name} method={entry.method}
                         detail={<span className="p-annotation">{entry.key}</span>}
                         connected
-                        disconnect={async () => { await deleteCredential(entry.key, false); await forgetDefaultAccount(entry.key); }}
+                        disconnect={async (revoke) => {
+                          answered(entry.name, await deleteCredential(entry.key, revoke));
+                          await forgetDefaultAccount(entry.key);
+                        }}
+                        revokesAt={revokingProviderOf(entry.key)}
                         onChanged={reloadAll} />
                     ))}
                   </CardSlot>

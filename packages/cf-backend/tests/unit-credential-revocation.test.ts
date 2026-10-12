@@ -5,7 +5,7 @@
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { asFetchFunction, CLOUDFLARE_OAUTH_CRED_KEY, CODEX_CRED_KEY, requestUrl } from '@kinu.run/core';
+import { accountCredentialKey, asFetchFunction, CLOUDFLARE_OAUTH_CRED_KEY, CODEX_CRED_KEY, requestUrl } from '@kinu.run/core';
 import { createTestUserDO, testOwner, type TestUserDO } from './helpers/user-do';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
@@ -75,6 +75,33 @@ describe('disconnecting a provider, and revoking its grant there when asked', ()
       [OPENAI_REVOKE, 'access-1', 'access_token', true],
     ]);
     expect(sent.every((request) => !request.storedDuringRevoke)).toBe(true);
+    harness.close();
+  });
+
+  test('a named account revokes as its provider\'s main one does, with its own tokens', async () => {
+    const harness = createTestUserDO({ durableObjectId: USER_ID });
+    const owner = await testOwner();
+    const work = accountCredentialKey(CODEX_CRED_KEY, 'work');
+    await harness.userDO.setCredential(owner, work, { kind: 'oauth', accessToken: 'work-access', refreshToken: 'work-refresh' });
+    const sent = provider(harness, revoked);
+
+    expect(await harness.userDO.deleteCredential(owner, work, true)).toEqual({ unrevoked: null });
+
+    expect(sent.map(({ url, form }) => [url, form.token])).toEqual([[OPENAI_REVOKE, 'work-refresh'], [OPENAI_REVOKE, 'work-access']]);
+    harness.close();
+  });
+
+  test('a refusal echoing a token it was sent shows the provider\'s words without it', async () => {
+    const harness = createTestUserDO({ durableObjectId: USER_ID });
+    const owner = await testOwner();
+    await harness.userDO.setCredential(owner, CODEX_CRED_KEY, { kind: 'oauth', accessToken: 'access-1', refreshToken: 'refresh-1' });
+    provider(harness, () => Response.json({ error: 'invalid_grant', error_description: 'unknown token refresh-1\u001b[2J' }, { status: 400 }));
+
+    const { unrevoked } = await harness.userDO.disconnectCodex(owner, true);
+
+    expect(unrevoked).toContain('unknown token');
+    expect(unrevoked).not.toContain('refresh-1');
+    expect(unrevoked).not.toContain('\u001b');
     harness.close();
   });
 

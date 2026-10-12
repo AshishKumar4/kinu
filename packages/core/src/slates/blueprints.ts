@@ -10,7 +10,7 @@ import * as v from 'valibot';
 import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
 import { settle, settleSync } from '../obs/effect';
-import { secretSightings, type SecretSighting } from '../safety/secret-patterns';
+import { secretSightings, type SecretSighting } from '../safety/secret-scan';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { nanoid } from '../utils/nanoid';
 import type { WorkspaceSlateContentStore } from './content';

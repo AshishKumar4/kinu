@@ -1,9 +1,10 @@
 // RFC 7009; endpoints from each issuer's discovery document, 2026-09-26.
 import type { OAuthCredential } from '../credentials/store';
 import { Effect } from 'effect';
-import * as v from 'valibot';
 import { attempt, KinuError, settle, tolerate } from '../obs/index';
 import { parseJsonValue } from '../utils/json';
+import { refusalWords } from '../safety/provider-refusal';
+import { baseCredentialKey } from '../credentials/accounts';
 import { CODEX_CLIENT_ID } from './codex-oauth';
 import { CODEX_CRED_KEY } from './codex';
 import { CLOUDFLARE_OAUTH_CRED_KEY, cloudflareClientAuth, type CloudflareOAuthEnv } from './cloudflare-oauth';
@@ -30,12 +31,13 @@ const REVOCATION = new Map<string, { readonly provider: string; readonly endpoin
   } }],
 ]);
 
+/** A named account (`codex.oauth@work`) revokes as its provider's main one does, with its own tokens. */
 export function revokingProviderOf(key: string): string | null {
-  return REVOCATION.get(key)?.provider ?? null;
+  return REVOCATION.get(baseCredentialKey(key))?.provider ?? null;
 }
 
 export function revocationEndpointFor(key: string, env: CloudflareOAuthEnv): RevocationEndpoint | null {
-  const revocation = REVOCATION.get(key);
+  const revocation = REVOCATION.get(baseCredentialKey(key));
   const endpoint = revocation?.endpoint(env) ?? null;
 
   return revocation === undefined || endpoint === null ? null : { provider: revocation.provider, ...endpoint };
@@ -64,15 +66,24 @@ export async function revokeOAuthGrant(input: {
 }
 
 function revokeOne(input: Parameters<typeof revokeOAuthGrant>[0], token: string, hint: string): Effect.Effect<KinuError | null> {
-  const { endpoint } = input;
-  const issued = endpoint.issuedClient === true ? chatgptRegistrationOf(input.credential)?.clientId : undefined;
+  const { endpoint, credential } = input;
+  const issued = endpoint.issuedClient === true ? chatgptRegistrationOf(credential)?.clientId : undefined;
   const body = new URLSearchParams({ token, token_type_hint: hint, ...endpoint.client.fields, ...(issued !== undefined && { client_id: issued }) });
   const headers = { 'content-type': 'application/x-www-form-urlencoded', ...endpoint.client.headers };
+  // Whatever the call carried that a refusal could echo: the grant's tokens and the client's own secret.
+  const clientSecrets = Object.entries(endpoint.client.fields).filter(([field]) => field !== 'client_id').map(([, value]) => value);
+  const submitted = [credential.accessToken, credential.refreshToken ?? '', ...clientSecrets, ...Object.values(endpoint.client.headers)];
 
   const sent = attempt({ doing: `revoking the ${hint} at ${endpoint.provider}`, otherwise: 'unavailable' }, async () => {
     const response = await input.fetch(endpoint.url, { method: 'POST', headers, body, redirect: 'error' });
 
-    return response.ok ? null : { status: response.status, words: refusalWords(response, await response.text()) };
+    if (response.ok) return null;
+    const text = await response.text();
+
+    return {
+      status: response.status,
+      words: refusalWords({ status: response.status, statusText: response.statusText, body: tolerate(() => parseJsonValue(text), 'malformed-input') ?? null, submitted }),
+    };
   });
 
   return Effect.match(sent, {
@@ -81,14 +92,4 @@ function revokeOne(input: Parameters<typeof revokeOAuthGrant>[0], token: string,
       : new KinuError(refused.status === 429 ? 'budget' : 'unavailable', `${endpoint.provider} refused to revoke the ${hint}: ${refused.words}`),
     onFailure: (failure) => failure,
   });
-}
-
-const RevocationRefusalSchema = v.looseObject({ error: v.optional(v.string()), error_description: v.optional(v.string()) });
-
-/** RFC 7009 answers a refusal as an OAuth error; its description, else its code, else the status line, in the provider's words. */
-function refusalWords(response: Response, text: string): string {
-  const refusal = v.safeParse(RevocationRefusalSchema, tolerate<unknown>(() => parseJsonValue(text), 'malformed-input'));
-  const said = refusal.success ? refusal.output.error_description ?? refusal.output.error : undefined;
-
-  return said ?? `HTTP ${String(response.status)} ${response.statusText}`.trim();
 }

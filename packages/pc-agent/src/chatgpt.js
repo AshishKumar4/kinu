@@ -154,6 +154,189 @@ function idTokenIdentity(token, expected) {
 
 // END GENERATED
 
+// BEGIN GENERATED from packages/core/src/safety/untrusted-text.ts by `bun scripts/daemon-generated.ts`. Do not edit.
+
+/** Third-party text shown as a quotation (a provider's refusal, an approval's command) reads as what it is. */
+
+/** C0 but tab, LF and CR; DEL, C1, soft hyphen; Arabic letter mark; marks, zero-width, bidi, joiners; BOM. */
+const MISREPRESENTING_RANGES = [
+  [0x00, 0x08], [0x0b, 0x0c], [0x0e, 0x1f], [0x7f, 0x9f], [0xad, 0xad], [0x61c, 0x61c],
+  [0x200b, 0x200f], [0x202a, 0x202e], [0x2060, 0x2064], [0x2066, 0x2069], [0xfeff, 0xfeff],
+];
+
+const MISREPRESENTING = new RegExp(
+  `[${MISREPRESENTING_RANGES.map(([lo, hi]) =>
+    lo === hi
+      ? `\\u{${lo.toString(16)}}`
+      : `\\u{${lo.toString(16)}}-\\u{${hi.toString(16)}}`).join('')}]`,
+  'gu',
+);
+
+/** Each becomes a visible U+FFFD. */
+function revealMisrepresenting(text) {
+  return text.replace(MISREPRESENTING, '\uFFFD');
+}
+
+// END GENERATED
+
+// BEGIN GENERATED from packages/core/src/safety/secret-patterns.ts by `bun scripts/daemon-generated.ts`. Do not edit.
+
+/**
+ * Secret shapes shared by `scripts/secret-scan.ts`, blueprint export (`secret-scan.ts` finds them) and redaction.
+ * The device daemon carries a copy (pc-agent/src/chatgpt.js, generated) to redact a provider's refusal.
+ */
+
+// Built in parts so this source never matches its own detector.
+const CF_INTERNAL_REFERENCE = new RegExp([
+  'wiki\\.cfdata\\.org',
+  'cloudflare' + '/ew\\b',
+  'edge' + 'worker\\b',
+  'metrics\\.c\\+\\+',
+  'cf-(?:primitives|internal)-dossier',
+].join('|'), 'g');
+
+const SECRET_PATTERNS = [
+  {
+    id: 'aws-access-key',
+    regex: /AKIA[A-Z0-9]{16}/g,
+    message: 'AWS access key id',
+  },
+  {
+    id: 'private-key',
+    regex: /-----BEGIN\s+(?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY/g,
+    message: 'private key block',
+  },
+  {
+    id: 'jwt',
+    regex: /eyJ[A-Za-z0-9_-]{20,}\.eyJ[A-Za-z0-9_-]{20,}\./g,
+    message: 'JWT with a payload',
+  },
+  {
+    id: 'aig-bearer',
+    regex: /cf-aig-authorization.*Bearer\s+[A-Za-z0-9_-]{30,}/g,
+    benign: /process\.env\.|<your-/,
+    message: 'hardcoded AI Gateway bearer token',
+  },
+  {
+    // Benign form must be a whole placeholder line, so a placeholder never hides a value.
+    id: 'cloudflare-user-token',
+    regex: /\bcfut_[A-Za-z0-9_-]{48}\b/g,
+    benign: /^\s*cfut_<your-[A-Za-z0-9-]+>\s*$/,
+    message: 'Cloudflare user API token (revoke and replace it immediately)',
+  },
+  {
+    id: 'secret-assignment',
+    regex: /(?:password|secret_key|api_key|api_secret|auth_token|oauth_token)\s*[:=]\s*["'][A-Za-z0-9_/+=-]{8,}["']/gi,
+    benign: /process\.env\.|<your-|^\s*(?:type|interface)\s/,
+    message: 'hardcoded secret assignment',
+  },
+  {
+    // Public repo: internal citations are blocked like credentials.
+    id: 'cf-internal-reference',
+    regex: CF_INTERNAL_REFERENCE,
+    message: 'Cloudflare-internal source reference (public repo: cite the measurement instead)',
+  },
+  {
+    // Fragments (8+ hex after a prefix) count. An ellipsis is benign only
+    // directly after the prefix, i.e. prose naming the shape.
+    id: 'kinu-token',
+    regex: /\bp(?:ta|tc|dt)_[0-9a-f]{8,}/g,
+    benign: /<your-|\bp(?:ta|tc|dt)_(?:\.\.\.|…)/,
+    message: 'Kinu access/CLI/device token (rotate it: a printed-once value that reached a file is compromised)',
+  },
+  {
+    // Mirrors GitHub push protection prefixes so a local pass predicts the push.
+    // Fixtures must assemble such strings at runtime; .secretscanignore cannot exempt GitHub.
+    id: 'provider-secret',
+    regex: /\b(?:[sr]k_live_[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{40,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|npm_[A-Za-z0-9]{36}|sk-ant-[A-Za-z0-9-]{20,}|sk-proj-[A-Za-z0-9_-]{20,})/g,
+    benign: /<your-|example|placeholder/,
+    message: "third-party provider credential, if this is a deliberate test fixture, ASSEMBLE it at runtime rather than declaring it in .secretscanignore: a declaration satisfies THIS scan, but GitHub push protection reads the source text and will block the push anyway",
+  },
+  {
+    id: 'credentialed-url',
+    regex: /(?:mongodb|postgres|mysql|redis|amqp):\/\/[^:\s]+:[^@\s]{8,}@/g,
+    benign: /<your-|localhost/,
+    message: 'connection string with embedded credentials',
+  },
+];
+
+/** Shapes redaction masks but a source scan does not flag: a fixture or a doc legitimately
+ *  spells them, while a stored transcript or a debug bundle never should. */
+const REDACTION_ONLY_PATTERNS = [
+  {
+    // A device token's body is base64url from its first character, so `kinu-token`'s hex body
+    // misses it; the scan keeps the hex shape because fixtures spell whole-token placeholders.
+    id: 'kinu-token-any-body',
+    regex: /\bp(?:ta|tc|dt)_[A-Za-z0-9_-]{16,}/g,
+    message: 'Kinu access/CLI/device token',
+  },
+  {
+    id: 'openai-key',
+    regex: /\bsk-[A-Za-z0-9]{20,}\b/g,
+    message: 'OpenAI-shaped API key',
+  },
+  {
+    id: 'bearer-token',
+    regex: /\bBearer\s+[A-Za-z0-9._-]{15,}/gi,
+    message: 'bearer credential',
+  },
+  {
+    // A JSON pair written as text, the shape a logged request body carries.
+    id: 'json-secret-pair',
+    regex: /("(?:token|secret|password|api[_-]?key|credential|access[_-]?token|refresh[_-]?token)"\s*:\s*")[^"]{4,}(")/gi,
+    message: 'secret-named JSON field in free text',
+    mask: '$1<redacted>$2',
+  },
+];
+
+/** Each pattern with a non-global copy, so a match's mask expands its own groups. */
+const REDACTION_PASSES = [...SECRET_PATTERNS, ...REDACTION_ONLY_PATTERNS].map((pattern) => ({
+  pattern,
+  one: new RegExp(pattern.regex.source, pattern.regex.flags.replace('g', '')),
+}));
+
+/** Applies `SECRET_PATTERNS` and `REDACTION_ONLY_PATTERNS` per line (a match that is itself a
+ *  pattern's `benign` form stays) and masks with `<redacted>`, the marker every redacted line carries. */
+function redactSecrets(text) {
+  return text.split('\n').map((line) => {
+    let redacted = line;
+
+    for (const { pattern, one } of REDACTION_PASSES) {
+      // `benign` judges the match, not the line: prose beside a live key never spares it.
+      redacted = redacted.replaceAll(pattern.regex, (match) =>
+        pattern.benign?.test(match) === true ? match : match.replace(one, pattern.mask ?? '<redacted>'));
+    }
+
+    return redacted;
+  }).join('\n');
+}
+
+// END GENERATED
+
+// BEGIN GENERATED from packages/core/src/safety/provider-refusal.ts by `bun scripts/daemon-generated.ts`. Do not edit.
+
+// A provider's refusal in its own words, safe to log and show; the device daemon carries a copy
+// (pc-agent/src/chatgpt.js, generated). Parsing the body is each side's.
+
+/**
+ * What an OAuth endpoint said when it refused (RFC 6749 §5.2, RFC 7009 §2.2.1): its description, else its code, else
+ * the status line. The secrets the call submitted are masked wherever the words echo them, as is every other secret
+ * shape; controls and bidi marks are drawn, not obeyed, on one line.
+ */
+function refusalWords(input
+
+) {
+  const { body } = input;
+  const fields = typeof body === 'object' && body !== null && !Array.isArray(body) ? body : {};
+  const said = [fields.error_description, fields.error].find((word) => typeof word === 'string' && word.trim() !== '');
+  const words = said ?? `HTTP ${String(input.status)} ${input.statusText}`;
+  const masked = input.submitted.filter((secret) => secret !== '').reduce((text, secret) => text.replaceAll(secret, '<redacted>'), words);
+
+  return revealMisrepresenting(redactSecrets(masked)).replace(/\s+/gu, ' ').trim();
+}
+
+// END GENERATED
+
 /** Only the port of the loopback redirect may vary between sign-ins. */
 const CALLBACK_PATH = '/auth/callback';
 
@@ -305,11 +488,9 @@ async function revokeSession({ clientId, refreshToken, fetch: fetchImpl = global
     });
 
     if (res.ok) return { unconfirmed: null };
-    // RFC 7009 answers a refusal as an OAuth error: its description, else its code, else the status line.
-    const refusal = parseJson(await res.text());
-    const said = [refusal?.error_description, refusal?.error].find((word) => typeof word === 'string') ?? `HTTP ${res.status} ${res.statusText}`.trim();
+    const words = refusalWords({ status: res.status, statusText: res.statusText, body: parseJson(await res.text()), submitted: [refreshToken] });
 
-    return { unconfirmed: `OpenAI refused to revoke the sign-in: ${said}` };
+    return { unconfirmed: `OpenAI refused to revoke the sign-in: ${words}` };
   } catch (err) {
     return { unconfirmed: `auth.openai.com could not be reached: ${messageOf(err)}` };
   }
@@ -610,10 +791,14 @@ function createDeviceSession({ home, fetch: baseFetch = globalThis.fetch, now = 
 
   const admitting = () => !closed && signingOut === 0;
 
-  /** A replacing sign-in or a sign-out: the one waiting is cancelled, and a grant it still gets is revoked. */
-  const cancelSignIn = async () => {
+  /**
+   * A replacing sign-in or a sign-out: the one waiting is cancelled, and a grant it still gets is never kept. It is
+   * revoked when `revoke` says so: always for a replaced attempt, and for a sign-out as the owner chose.
+   */
+  const cancelSignIn = async ({ revoke }) => {
     if (signingIn === null) return;
     signingIn.cancelled = true;
+    signingIn.revokeLanded = revoke;
     signingIn.controller.abort();
     await signingIn.landed;
   };
@@ -629,9 +814,9 @@ function createDeviceSession({ home, fetch: baseFetch = globalThis.fetch, now = 
       }
 
       await serially(async () => {
-        // Cancelled while the browser finished: the grant it made is not kept, so it is not left live either.
+        // Cancelled while the browser finished: the grant it made is not kept, and revoked when that was asked.
         if (attempt.cancelled) {
-          if (result.record.refreshToken !== undefined) await revokeSession({ clientId: result.record.clientId, refreshToken: result.record.refreshToken, fetch: fetchImpl });
+          if (attempt.revokeLanded && result.record.refreshToken !== undefined) await revokeSession({ clientId: result.record.clientId, refreshToken: result.record.refreshToken, fetch: fetchImpl });
 
           return;
         }
@@ -689,7 +874,7 @@ function createDeviceSession({ home, fetch: baseFetch = globalThis.fetch, now = 
     /** Starts a sign-in for the browser the owner holds, replacing one still waiting. */
     async signIn() {
       if (closed) throw new SiwcError('this daemon is handing over to a newer one; sign in again in a moment');
-      await cancelSignIn();
+      await cancelSignIn({ revoke: true });
       const controller = new AbortController();
       const record = current();
       const registration = registrationOf(record) ?? cliRegistration(home);
@@ -698,7 +883,7 @@ function createDeviceSession({ home, fetch: baseFetch = globalThis.fetch, now = 
         home, registration, consent: planDeclined(record), fetch: fetchImpl, now, signal: controller.signal,
       });
 
-      const attempt = { controller, cancelled: false, landed: null };
+      const attempt = { controller, cancelled: false, revokeLanded: false, landed: null };
 
       lastFailure = null;
       signingIn = attempt;
@@ -728,7 +913,7 @@ function createDeviceSession({ home, fetch: baseFetch = globalThis.fetch, now = 
       signingOut += 1;
 
       try {
-        await cancelSignIn();
+        await cancelSignIn({ revoke });
 
         return await serially(async () => {
           const record = current();

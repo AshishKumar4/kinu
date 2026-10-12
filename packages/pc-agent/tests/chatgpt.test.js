@@ -549,6 +549,49 @@ describe('the daemon\'s own sign-in', () => {
     expect(read(home)).toMatchObject({ accessToken: 'at-1', refreshToken: 'rt-1' });
   });
 
+  test('a sign-out keeps no sign-in landing behind it, and revokes that one only when the owner asked', async () => {
+    for (const revoke of [false, true]) {
+      const home = scratchDir(`siwc-device-sign-out-landing-${String(revoke)}`);
+      deviceRecord(home, { accessToken: 'at-old', refreshToken: 'rt-old', expiresAt: Date.now() + 60_000 });
+      const keys = await signer();
+      const released = Promise.withResolvers();
+      const reached = Promise.withResolvers();
+      const exchange = exchangeAnswer(keys);
+
+      const auth = authServer(keys, async (form) => {
+        if (form.grant_type === 'authorization_code') return exchange(form);
+
+        if (form.grant_type !== 'refresh_token') return Response.json({});
+        reached.resolve();
+        await released.promise;
+
+        return Response.json({ access_token: 'at-rotated', refresh_token: 'rt-rotated', expires_in: 3600 });
+      });
+
+      const session = chatgpt.createDeviceSession({ home, fetch: auth.fetch });
+      // A rotation holds the queue, so the sign-in's landing waits behind it.
+      const using = session.bearer();
+
+      await reached.promise;
+      const authorize = new URL((await session.signIn()).authorizeUrl);
+      pendingNonce = authorize.searchParams.get('nonce') ?? '';
+      const callback = new URL(authorize.searchParams.get('redirect_uri') ?? '');
+      callback.searchParams.set('code', 'code-new');
+      callback.searchParams.set('state', authorize.searchParams.get('state') ?? '');
+
+      expect((await fetch(callback)).status).toBe(200);
+      const signingOut = session.signOut({ revoke });
+
+      released.resolve();
+      await using;
+      await signingOut;
+
+      const revoked = auth.calls.filter((call) => call.url === REVOKE_URL).map((call) => call.form.token);
+      expect(revoked).toEqual(revoke ? ['rt-1', 'rt-rotated'] : []);
+      expect(read(home)).not.toHaveProperty('refreshToken');
+    }
+  });
+
   // SIWC-07: an update handoff used to exit with a rotation in flight, leaving the spent token on disk.
   test('a quiesced session lets the rotation in flight land before it lets go, and starts no other', async () => {
     const home = scratchDir('siwc-device-quiesce');
