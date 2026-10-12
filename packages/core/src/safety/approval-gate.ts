@@ -241,13 +241,19 @@ async function askOwner(
   }, { once: true });
 
   const elsewhere = deferrals.decided(id, shown.signal).then(() => 'elsewhere' as const);
-  const first = await Promise.race([answering, elsewhere]).finally(() => { shown.abort(); });
 
-  if (first === 'elsewhere') retired = true;
-  // Unanswered (the prompt went away): the row waits on the queue, as with nobody in front of the owner.
-  else if (first === null) return refuse(parked.reason, parked.message);
-  // An answer given after another surface decided the row changes nothing there.
-  else await deferrals.decide(id, first);
+  try {
+    const first = await Promise.race([answering, elsewhere]);
+
+    if (first === 'elsewhere') retired = true;
+    // Unanswered (the prompt went away): the row waits on the queue, as with nobody in front of the owner.
+    else if (first === null) return refuse(parked.reason, parked.message);
+    // Decided while this ask still waits on the row, so the queue tells it here rather than waking it; an answer
+    // given after another surface decided the row changes nothing there.
+    else await deferrals.decide(id, first);
+  } finally {
+    shown.abort();
+  }
 
   const decided = await deferrals.park(await ask.request(true));
 
