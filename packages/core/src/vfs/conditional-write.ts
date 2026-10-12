@@ -28,7 +28,8 @@ export type ObservedFile =
 
 /**
  * Which check held: the plane's revision (revision 0 for a create), the read bytes' digest compared by the plane, the
- * same compared across the wire where the plane cannot (`/shared`), or none, on a plane that checks neither (`unchecked`).
+ * same compared across the wire where the plane cannot (`/shared`), or none atomically, on a plane that checks neither
+ * (`compared`: read and compared here, then written).
  */
 export type WriteGuarantee = 'revision' | 'digest' | 'digest-remote' | 'none';
 
@@ -124,17 +125,28 @@ function byAbsence(vfs: VFS & CheckpointFiles, path: string, data: Uint8Array): 
   return Effect.flatMap(created, (result) => revisionChecked(path, result));
 }
 
-/**
- * A plane that checks neither a revision nor a digest writes unchecked, and says so (`none`); a create still finds out
- * first whether a file is there. A session's file plane is one (`nimbusSessionFiles`: the SDK's write takes no
- * precondition), and it is a hosted agent's file tool's, so this is how that agent writes at all.
- */
-function unchecked(vfs: VFS & CheckpointFiles, path: string, data: Uint8Array, observed: ObservedFile): Effect.Effect<ConditionalWrite, KinuError> {
-  return Effect.gen(function* () {
-    if (observed.kind === 'absent' && (yield* Effect.promise(async () => vfs.stat(path))) !== null) {
-      return yield* Effect.fail(changed(path, { sha256: sha256Hex(yield* Effect.promise(async () => vfs.readFile(path))) }));
-    }
+/** The digest of what was observed: null for no file, else the read bytes' or the editor's. */
+function observedDigest(observed: Exclude<ObservedFile, { readonly kind: 'revision' }>): string | null {
+  if (observed.kind === 'absent') return null;
 
+  return observed.kind === 'read' ? sha256Hex(observed.bytes) : observed.sha256;
+}
+
+/**
+ * A plane that checks neither a revision nor a digest itself: what it holds now is read and compared with what was
+ * observed (no file, the read bytes, or an editor's digest) before the write, and a change is refused as on any other
+ * plane. The compare and the write are two calls, so only a write landing between them is missed (`none`). A session's
+ * file plane is one (`nimbusSessionFiles`: the SDK's write takes no precondition), a hosted agent's file tool's.
+ */
+function compared(vfs: VFS & CheckpointFiles, path: string, data: Uint8Array, observed: ObservedFile): Effect.Effect<ConditionalWrite, KinuError> {
+  return Effect.gen(function* () {
+    // An editor's revision alone names no bytes to compare; the caller has refused it before this.
+    if (observed.kind === 'revision') return yield* Effect.fail(UNSUPPORTED(path));
+    const expected = observedDigest(observed);
+
+    const there = yield* Effect.promise(async () => ((await vfs.stat(path)) === null ? null : sha256Hex(await vfs.readFile(path))));
+
+    if (there !== expected) return yield* Effect.fail(changed(path, { sha256: there }));
     yield* Effect.promise(async () => vfs.writeFile(path, data));
 
     return { guarantee: 'none' as const, now: { sha256: sha256Hex(data) }, report: null };
@@ -143,7 +155,7 @@ function unchecked(vfs: VFS & CheckpointFiles, path: string, data: Uint8Array, o
 
 /**
  * `data` at `path`, only over what `observed` says was there: by the revision read where the plane checks one, else by
- * the read bytes' digest; a plane that makes neither writes as before (`unchecked`). An editor's revision on a plane
+ * the read bytes' digest; on a plane that makes neither, compared here before the write (`compared`). An editor's revision on a plane
  * with no revision check is refused, as the file manager always refused it.
  */
 export function writeConditionally(
@@ -174,6 +186,6 @@ export function writeConditionally(
 
     const absentByRevision = observed.kind === 'absent' ? yield* byAbsence(vfs, path, data) : null;
 
-    return absentByRevision ?? (yield* unchecked(vfs, path, data, observed));
+    return absentByRevision ?? (yield* compared(vfs, path, data, observed));
   }));
 }
