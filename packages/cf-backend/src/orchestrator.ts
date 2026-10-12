@@ -1,5 +1,5 @@
 import { exists as nimbusExists, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
-import { PLATFORM_CATALOG, GitHubFactSchema, actorPolicy, AgentDeliveries, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, codemodeSurface, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type ToolSurfaceNarrowing, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type Fact } from '@kinu.run/core';
+import { PLATFORM_CATALOG, GitHubFactSchema, actorPolicy, AgentDeliveries, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, codemodeSurface, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type ToolSurfaceNarrowing, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type Fact, AGENT_CONFIG_KEYS } from '@kinu.run/core';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
@@ -800,8 +800,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private snapshotRows(agent: ReturnType<OrchestratorAgent['agentOf']>, lineage: StoredRow[], identity: StoredRow): Omit<AgentSnapshot, 'order'> {
     const { actorId } = agent;
 
+    // Not the evolution engine's count of closed turn windows: it moves with every turn and no agent's isolate reads it, so
+    // held here it would have that isolate adopt its rows again on its first call after each turn.
     const config = this.ctx.storage.sql.exec<StoredRow>(
-      `SELECT * FROM actor_config WHERE actor_id IN (${lineage.map(() => '?').join(', ')})`, ...lineage.map((row) => row.actor_id),
+      `SELECT * FROM actor_config WHERE actor_id IN (${lineage.map(() => '?').join(', ')}) AND key != ?`, ...lineage.map((row) => row.actor_id),
+      AGENT_CONFIG_KEYS.closedTurnWindows,
     ).toArray();
 
     const scaffold = this.ctx.storage.sql.exec<StoredRow>("SELECT * FROM scaffold_versions WHERE actor_id = ? AND status = 'current'", actorId).toArray();
