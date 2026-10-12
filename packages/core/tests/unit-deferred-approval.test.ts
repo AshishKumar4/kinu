@@ -977,8 +977,8 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     expect(executed).toEqual([GATED]);
 
     // No run happened, so the grant is still spendable.
-    expect(store.standing({ command: GATED, executor: 'device', context: {} }, 1_010)?.status).toBe('approved');
-    expect(store.standing({ command: GATED, executor: 'device', context: {} }, 1_010)?.id).toBe('defer-1');
+    expect(store.standing({ command: GATED, executor: 'device', context: { member: 'exec' } }, 1_010)?.status).toBe('approved');
+    expect(store.standing({ command: GATED, executor: 'device', context: { member: 'exec' } }, 1_010)?.id).toBe('defer-1');
     expect(queue.list()).toEqual([]);
   });
 
@@ -993,7 +993,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     expect(await exec(GATED)).toBe('ran');
 
     expect(executed).toEqual([GATED, GATED]);
-    expect(store.standing({ command: GATED, executor: 'device', context: {} }, 1_010)).toBeNull();
+    expect(store.standing({ command: GATED, executor: 'device', context: { member: 'exec' } }, 1_010)).toBeNull();
     expect(store.get('defer-1')).toBeNull();
     expect(audited).toEqual([{ approvalId: 'defer-1', actor: store.actorId, command: GATED, executor: 'device' }]);
     expect(await exec(GATED)).toMatchObject({ reason: 'unavailable', error: expect.stringContaining('defer-2') });
@@ -1007,7 +1007,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     await queue.decide(['defer-1'], 'approved');
     expect(await exec(GATED)).toBe(stdout);
     expect(executed).toEqual([GATED]);
-    expect(store.standing({ command: GATED, executor: 'device', context: {} }, 1_010)).toBeNull();
+    expect(store.standing({ command: GATED, executor: 'device', context: { member: 'exec' } }, 1_010)).toBeNull();
   });
 
   test('a command that reached the machine and FAILED there does not refund', async () => {
@@ -1020,7 +1020,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     answerWith(() => commandResult({ stdout: '', stderr: 'rejected', exitCode: 1 }));
     expect(await exec(GATED)).toMatchObject({ reason: 'io' });
 
-    expect(store.standing({ command: GATED, executor: 'device', context: {} }, 1_010)).toBeNull();
+    expect(store.standing({ command: GATED, executor: 'device', context: { member: 'exec' } }, 1_010)).toBeNull();
     expect(store.get('defer-1')).toBeNull();
   });
 
@@ -1034,7 +1034,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     answerWith(() => refusalOf(new KinuError('io', 'the tunnel closed mid-call')));
     expect(await exec(GATED)).toMatchObject({ reason: 'io' });
 
-    expect(store.standing({ command: GATED, executor: 'device', context: {} }, 1_010)).toBeNull();
+    expect(store.standing({ command: GATED, executor: 'device', context: { member: 'exec' } }, 1_010)).toBeNull();
   });
 
   test('a throw out of the executor does not refund', async () => {
@@ -1046,7 +1046,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     answerWith(() => { throw new Error('socket died'); });
     await expect(exec(GATED)).rejects.toThrow('socket died');
 
-    expect(store.standing({ command: GATED, executor: 'device', context: {} }, 1_010)).toBeNull();
+    expect(store.standing({ command: GATED, executor: 'device', context: { member: 'exec' } }, 1_010)).toBeNull();
   });
 
   test('two refunds of one spend change nothing', async () => {
@@ -1062,10 +1062,10 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     if (!spend) throw new Error('the approved grant must be spendable');
 
     await queue.channel.settle(spend.spend, 'did-not-run');
-    expect(store.standing({ command: GATED, executor: 'device', context: {} }, 1_010)?.id).toBe('defer-1');
+    expect(store.standing({ command: GATED, executor: 'device', context: { member: 'exec' } }, 1_010)?.id).toBe('defer-1');
 
     await queue.channel.settle(spend.spend, 'did-not-run');
-    expect(store.standing({ command: GATED, executor: 'device', context: {} }, 1_010)?.id).toBe('defer-1');
+    expect(store.standing({ command: GATED, executor: 'device', context: { member: 'exec' } }, 1_010)?.id).toBe('defer-1');
 
     const second = store.spend('defer-1');
     expect(second).not.toBeNull();
@@ -1073,7 +1073,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     if (!second) throw new Error('the refunded grant must be spendable again');
     await queue.channel.settle(second.spend, 'spent');
     await queue.channel.settle(spend.spend, 'did-not-run');
-    expect(store.standing({ command: GATED, executor: 'device', context: {} }, 1_010)).toBeNull();
+    expect(store.standing({ command: GATED, executor: 'device', context: { member: 'exec' } }, 1_010)).toBeNull();
     expect(store.get('defer-1')).toBeNull();
   });
 

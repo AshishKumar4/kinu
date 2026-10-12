@@ -130,14 +130,14 @@ export function namedShellState(read: () => Promise<string | null>, shell: strin
 }
 
 /**
- * Why a call pinned to its named shell's state (`pinned`, absent when no answer was asked) must not run now: the shell,
- * read again just before, no longer restores exactly that, or cannot be read. Null: run it. Called inside the shell's
- * hold, so nothing of this agent moves the shell between this read and the run; the refusal refunds a spent approval.
+ * Why a call pinned to its named shell's state must not run now: the shell, read again just before, no longer restores
+ * exactly that, or cannot be read. Null: run it. Called only for a pinned run (one an answer was asked for), inside the
+ * shell's hold, so nothing of this agent moves the shell between this read and the run; the refusal refunds a spent
+ * approval. An unpinned run awaits nothing here, so its dispatch keeps its timing.
  */
 export async function pinnedShellMoved(
-  pinned: string | undefined, shell: string, read: (() => Promise<string | KinuError>) | undefined,
+  pinned: string, shell: string, read: (() => Promise<string | KinuError>) | undefined,
 ): Promise<KinuError | null> {
-  if (pinned === undefined) return null;
   const now = read === undefined ? shellMoved(shell, 'could not be read') : await read();
 
   if (now instanceof KinuError) return now;

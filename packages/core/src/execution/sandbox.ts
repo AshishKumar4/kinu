@@ -359,7 +359,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
             // No work deadline: see SandboxHandle.exec. The signal goes to the container; locally it only refuses to
             // dispatch. One call: the handle owns any re-call after a lost reply, under the call's one launch id.
             return await names.hold(name, callJob(exec), async () => {
-              const moved = await pinnedShellMoved(pinned, name ?? '', state);
+              const moved = pinned === undefined ? null : await pinnedShellMoved(pinned, name ?? '', state);
 
               if (moved !== null) return refusalOf(moved);
 

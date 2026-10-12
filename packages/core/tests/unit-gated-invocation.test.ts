@@ -109,7 +109,7 @@ describe('the workspace\'s own processes over the user\'s Drive', () => {
     await denied.start.execute('rm -rf build', { cwd: '/shared/project', install: true });
     expect(denied.started).toEqual([]);
     expect(asking.shown).toHaveLength(1);
-    expect(asking.shown[0]?.context).toEqual({ cwd: '/shared/project' });
+    expect(asking.shown[0]?.context).toEqual({ member: 'startProcess', cwd: '/shared/project' });
 
     const allowing = owner('allow');
     const approved = workspace(allowing.policy);
@@ -201,7 +201,8 @@ describe('the member is part of the ask', () => {
 
     for (const prompt of live.asked) prompt.answer(prompt.request.context.member === 'exec' ? 'allow' : 'deny');
     await Promise.all([foreground, supervised]);
-    expect(ran).toEqual([`exec ${GATED}`]);
+    // The foreground run, in the directory it was asked for; no supervised process was started.
+    expect(ran).toEqual([`exec cd -- '/workspace' || exit\n${GATED}`]);
   });
 });
 

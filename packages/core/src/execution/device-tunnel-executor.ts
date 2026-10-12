@@ -397,7 +397,7 @@ export function createDeviceTunnelExecutor(
 
       return { call: { ...read, context: { ...read.context, ...machine }, ...(state !== undefined && { shellState: state }) }, run: (pinned) => settle(Effect.tryPromise({
         try: () => names.hold(held, callJob(options), async () => {
-          const moved = await pinnedShellMoved(pinned, name ?? '', state);
+          const moved = pinned === undefined ? null : await pinnedShellMoved(pinned, name ?? '', state);
 
           if (moved !== null) return refusalOf(moved);
           const requestId = nextDeviceRequestId();

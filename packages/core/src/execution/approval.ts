@@ -44,7 +44,7 @@ export function withApprovalGatedShell(
       return {
         call: { ...shellCall(command, options, { stdin: true }), ...(state !== undefined && { shellState: state }) },
         run: async (pinned) => {
-          const moved = await pinnedShellMoved(pinned, name ?? '', state);
+          const moved = pinned === undefined ? null : await pinnedShellMoved(pinned, name ?? '', state);
 
           return moved === null ? shell.exec(command, options) : notRun(moved);
         },

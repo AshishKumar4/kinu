@@ -720,10 +720,11 @@ export function nimbusSessionShell(box: NimbusSandboxHandle, place: { readonly h
   if (shellCwd !== undefined) {
     shell.cwd = shellCwd;
 
-    // What the session restores, read inside it and digested there: its directory and exported variables.
+    // What the session restores, read inside it and digested there: its directory and variables. Nimbus answers
+    // `export -p` with nothing; its `env` lists them, with the command's own pid (`$=`), which is left out.
     shell.state = async (name) => {
       if (await shellCwd(name) === null) return 'none';
-      const read = await box.exec('{ pwd; export -p; } | sha256sum', { name, ...asCred(place.cred) });
+      const read = await box.exec(`{ pwd; env | grep -v '^[$]=' | sort; } | sha256sum`, { name, ...asCred(place.cred) });
       const digest = read.exitCode === 0 ? /^[0-9a-f]{64}/.exec(read.stdout)?.[0] : undefined;
 
       return digest ?? null;
