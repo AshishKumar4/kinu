@@ -14,7 +14,10 @@ import { workspacePath } from '../vfs/workspace-path';
 import { sessionRuntimeBins, workspaceCommandNotFound } from '../vfs/workspace-runtimes';
 import { shellQuote } from '../utils/shell';
 import { base64ToBytes } from '../utils/base64';
-import type { ExecutorCapability, ExecutorProvider, ExecutorStatus, PortExposureResult, PreviewRouteCheck } from './types';
+import { commandTool, type ExecutorCapability, type ExecutorProvider, type ExecutorStatus, type PortExposureResult, type PreviewRouteCheck } from './types';
+import { envContext } from './command-call';
+import { sha256Hex } from '../safety/argument-digest';
+import type { CommandCall } from '../safety/approval-gate';
 import { commandResult, exposedPortText, formatExecResult, type CommandResult } from './exec-result';
 import { KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import type { JsonValue } from '../utils/json';
@@ -264,6 +267,24 @@ const NimbusRunCodeOptionsSchema: v.GenericSchema<NimbusRunCodeOptions> = v.obje
   install: v.optional(v.picklist(['never', 'ifMissing'])),
 });
 
+/** What a Nimbus call runs, from the options its schema kept: `runCode` runs a program unless its language is the
+ *  shell. Nimbus starts one without a directory in the home, and takes no named shell from an agent. */
+function nimbusCall(member: 'runCode' | 'startProcess', text: string, options: NimbusRunCodeOptions | undefined): CommandCall {
+  const language = options?.language;
+
+  return {
+    text,
+    ...(member === 'runCode' && language !== 'shell' && { program: language ?? 'the default language' }),
+    ...(options?.cwd !== undefined && { cwd: options.cwd }),
+    context: {
+      ...envContext(options?.env),
+      ...(options?.stdin !== undefined && { stdinSha256: sha256Hex(options.stdin) }),
+      ...(language !== undefined && { language }),
+      ...(options?.install !== undefined && { install: options.install }),
+    },
+  };
+}
+
 const ProcessInputSchema = v.union([
   v.number(),
   v.object({ pid: v.number(), lines: v.optional(v.number()), bytes: v.optional(v.number()) }),
@@ -358,48 +379,47 @@ export function nimbusSession(opts: NimbusSessionOpts) {
   };
 
   const tools: ExecutorProvider['tools'] = {
-    runCode: {
-      description: 'Run code in Nimbus using the requested language runtime.',
-      execute: async (...args: unknown[]): Promise<CommandResult> => {
-        const runCode = box.runCode;
+    // Each reads its options once, by its own schema; what it runs is that reading (`commandTool`).
+    runCode: commandTool('Run code in Nimbus using the requested language runtime.', (args) => {
+      const runCode = box.runCode;
 
-        if (!runCode) return handleLacks('runCode');
-        const code = parseInput(StringSchema, { value: args[0] });
+      if (!runCode) return { refused: handleLacks('runCode') };
+      const code = parseInput(StringSchema, { value: args[0] });
 
-        if (code === undefined) {
-          return refusalOf(new KinuError('bad_input', 'nimbus runCode: code must be a string'));
-        }
+      if (code === undefined) return { refused: refusalOf(new KinuError('bad_input', 'nimbus runCode: code must be a string')) };
+      const options = parseInput(NimbusRunCodeOptionsSchema, { value: args[1] });
 
-        const options = parseInput(NimbusRunCodeOptionsSchema, { value: args[1] });
+      return {
+        call: nimbusCall('runCode', code, options),
+        run: async (): Promise<CommandResult> => {
+          try {
+            return normalizeExec(await touch(() => runCode(code, options)));
+          } catch (err) {
+            return refusalOf(workspaceExecFailure({ doing: 'nimbus runCode', cause: err }));
+          }
+        },
+      };
+    }),
+    startProcess: commandTool('Start a background process in Nimbus; returns while it is still running.', (args) => {
+      const startProcess = box.startProcess;
 
-        try {
-          return normalizeExec(await touch(() => runCode(code, options)));
-        } catch (err) {
-          return refusalOf(workspaceExecFailure({ doing: 'nimbus runCode', cause: err }));
-        }
-      },
-    },
-    startProcess: {
-      description: 'Start a background process in Nimbus; returns while it is still running.',
-      execute: async (...args: unknown[]): Promise<CommandResult> => {
-        const startProcess = box.startProcess;
+      if (!startProcess) return { refused: handleLacks('startProcess') };
+      const command = parseInput(StringSchema, { value: args[0] });
 
-        if (!startProcess) return handleLacks('startProcess');
-        const command = parseInput(StringSchema, { value: args[0] });
+      if (command === undefined) return { refused: refusalOf(new KinuError('bad_input', 'nimbus startProcess: command must be a string')) };
+      const options = parseInput(NimbusExecOptionsSchema, { value: args[1] });
 
-        if (command === undefined) {
-          return refusalOf(new KinuError('bad_input', 'nimbus startProcess: command must be a string'));
-        }
-
-        const options = parseInput(NimbusExecOptionsSchema, { value: args[1] });
-
-        try {
-          return formatStartResult(await touch(() => startProcess(command, options)));
-        } catch (err) {
-          return refusalOf(workspaceExecFailure({ doing: `nimbus startProcess \`${command}\``, cause: err, command }));
-        }
-      },
-    },
+      return {
+        call: nimbusCall('startProcess', command, options),
+        run: async (): Promise<CommandResult> => {
+          try {
+            return formatStartResult(await touch(() => startProcess(command, options)));
+          } catch (err) {
+            return refusalOf(workspaceExecFailure({ doing: `nimbus startProcess \`${command}\``, cause: err, command }));
+          }
+        },
+      };
+    }),
     killProcess: {
       description: 'Kill a Nimbus process by pid.',
       execute: async (...args: unknown[]): Promise<string | Refusal> => {

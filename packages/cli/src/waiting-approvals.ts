@@ -3,7 +3,9 @@
  * answered as the web's consent cards do. Approving runs nothing here; the agent is told and asks again.
  */
 
-import { boundWriteOf, executorLabel, timeAgo, type DeferredApproval, type DeferredApprovalAnswer } from '@kinu.run/core';
+import {
+  boundWriteOf, describeExecutionContext, executorLabel, timeAgo, type DeferredApproval, type DeferredApprovalAnswer,
+} from '@kinu.run/core';
 import { attempt, renderThrownChain, settle, type KinuError } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import { literalText } from '@kinu.run/core/tui';
@@ -84,7 +86,8 @@ export function waitingApprovalDetails(action: DeferredApproval): string {
   const write = boundWriteOf(action.command);
   const what = write === null ? literalText(action.command || '(command)') : `Replace ${literalText(write.path)}`;
 
-  const where = action.context === '' ? '' : `Runs ${literalText(action.context)}`;
+  const context = describeExecutionContext(action.context);
+  const where = context === '' ? '' : `Runs ${literalText(context)}`;
 
   return [what, `Executor: ${executorLabel(action.executor)}`, where, literalText(action.reason), `Asked ${timeAgo(action.requestedAt)}`]
     .filter(Boolean).join('\n');

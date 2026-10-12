@@ -10,6 +10,7 @@ import type { JsonValue } from '../utils/json';
 import type { CheckpointFiles } from '../types/primitives';
 import type { DeviceSandboxStatus } from './device-status';
 import type { FilesOwner } from '../safety/command-review';
+import type { PreparedCall } from '../safety/approval-gate';
 import type { ShellSession } from './shell-session';
 
 /**
@@ -28,6 +29,32 @@ export interface ExecutorTool {
   /** Explicit producer contract: this operation is safe for Plan inspection/research. */
   planAllowed?: boolean;
   execute: (...args: unknown[]) => Promise<ExecutorToolResult>;
+  /**
+   * How a command member ({@link COMMAND_MEMBERS}) reads a call, once: what runs, and how to run exactly that. The
+   * approval gate reviews and keys this reading and runs only its `run`; it refuses a command member without one.
+   */
+  prepare?: (args: readonly unknown[]) => PreparedCall<ExecutorToolResult>;
+}
+
+export type CommandTool = ExecutorTool & Required<Pick<ExecutorTool, 'prepare'>>;
+
+/** The members the approval gate holds: each must say what it runs. */
+export const COMMAND_MEMBERS = ['exec', 'startProcess', 'runCode'] as const;
+
+/** A command member whose `execute` is its own reading run, so there is no second way to read a call. */
+export function commandTool(
+  description: string, prepare: CommandTool['prepare'], extra: Pick<ExecutorTool, 'planAllowed'> = {},
+): CommandTool {
+  return {
+    ...extra,
+    description,
+    prepare,
+    execute: async (...args) => {
+      const prepared = prepare(args);
+
+      return 'refused' in prepared ? prepared.refused : await prepared.run();
+    },
+  };
 }
 
 

@@ -15,7 +15,7 @@ import {
   type StopReason,
   type ToolKind,
 } from '@agentclientprotocol/sdk';
-import type { JsonObject, ShellApprovalOutcome, ShellApprovalRequest } from '@kinu.run/core';
+import { describeExecutionContext, type JsonObject, type ShellApprovalOutcome, type ShellApprovalRequest } from '@kinu.run/core';
 import { settleLogged } from '@kinu.run/core/obs';
 import { literalText } from '@kinu.run/core/tui';
 import { STEP_RESTART_NOTICE, type AgentClient, type AgentClientEvent } from '../agent-client';
@@ -202,6 +202,8 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
       sessions.set(session.id, session);
 
       session.installApprovalChannel(async (req, signal) => {
+        const where = describeExecutionContext(req.context);
+
         const outcome = await ctx.client.request(CLIENT_METHODS.session_request_permission, {
           sessionId: session.id,
           toolCall: {
@@ -211,7 +213,7 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
             status: 'pending' as const,
             content: [{
               type: 'content' as const,
-              content: { type: 'text' as const, text: [req.context === '' ? '' : `Runs ${literalText(req.context)}`, ...req.review.hits.map((h) => h.explanation)].filter(Boolean).join('\n') },
+              content: { type: 'text' as const, text: [where === '' ? '' : `Runs ${literalText(where)}`, ...req.review.hits.map((h) => h.explanation)].filter(Boolean).join('\n') },
             }],
           },
           options: permissionOptions(req),

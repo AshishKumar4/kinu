@@ -12,9 +12,12 @@ export type {
   PreviewRouteCheck,
   SandboxSize,
   SandboxSizes,
+  ExecutorTool,
+  ExecutorToolResult,
+  CommandTool,
 } from './types';
 
-export { EXECUTOR_CAPABILITIES, NO_TIMER_DEADLINE_MS } from './types';
+export { EXECUTOR_CAPABILITIES, NO_TIMER_DEADLINE_MS, commandTool } from './types';
 
 export {
   commandResult, CommandResultSchema, type CommandResult, formatExecResult, answeredRefusal, type ExecOutcome,

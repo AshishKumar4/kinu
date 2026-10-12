@@ -9,7 +9,7 @@ import type { WaitingApprovalSurface } from '../src/agent-client';
 afterEach(cleanupChats);
 
 const shellRequest: ShellApprovalRequest = {
-  command: 'sudo whoami', executor: 'device', context: 'in /srv/app · shell deploy',
+  command: 'sudo whoami', executor: 'device', context: { cwd: '/srv/app', shell: 'deploy' },
   review: { decision: 'gate', hits: [{ decision: 'gate', rule: 'sudo', explanation: 'Privilege escalation' }] },
 };
 
@@ -278,7 +278,7 @@ describe('ChatApp consent ownership', () => {
 
 describe('waiting approvals', () => {
   function parked(id: string, command: string): DeferredApproval {
-    return { id, actor: 'actor-main', command, executor: 'sandbox', context: '', reason: 'Approval review: gate\n- force push (gate): rewrites history', status: 'queued', requestedAt: 1, decidedAt: null };
+    return { id, actor: 'actor-main', command, executor: 'sandbox', context: {}, reason: 'Approval review: gate\n- force push (gate): rewrites history', status: 'queued', requestedAt: 1, decidedAt: null };
   }
 
   /** The workspace's queue as both backends serve it: a decided row leaves it. */

@@ -40,7 +40,7 @@ describe('the orchestrator dynamic context reads its own planes', () => {
     const parked = new DeferredApprovalStore(sqlOver(db), workspaceMainActor(db)).create({
       id: `defer-${crypto.randomUUID()}`,
       command: 'bun run deploy',
-      executor: 'workspace', context: '',
+      executor: 'workspace', context: {},
       reason: formatApproval({ decision: 'gate', hits: [] }),
       requestedAt: Date.now(),
     }, []);

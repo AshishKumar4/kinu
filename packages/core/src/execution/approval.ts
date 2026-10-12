@@ -2,15 +2,14 @@ import { exists as nimbusExists, type Awaitable, type VFS } from '@nimbus-sh/cor
 /** Approval gating where a command reaches a shell (the workspace `Shell`, each provider's shell tools on register)
  *  and where the agent's tools reach a file. */
 
-import { commandFilesOwner, literalWords, onUserRoots, reviewProgram, reviewShellCommand, type ApprovalResult, type FileAccess, type GatedExecutor } from '../safety/command-review';
+import { literalWords, onUserRoots, type FileAccess, type GatedExecutor } from '../safety/command-review';
 import { approveFileAccess, gateExec, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
+import { shellCall } from './command-call';
 import { asBytes, currentBytes } from '../safety/bound-write';
-import { sha256Hex } from '../safety/argument-digest';
-import * as v from 'valibot';
 import { answeredRefusal } from './exec-result';
-import type { ExecutorProvider, ExecutorTool, ExecutorToolResult } from './types';
+import { COMMAND_MEMBERS, type CommandTool, type ExecutorProvider, type ExecutorToolResult } from './types';
 import type { CheckpointFiles, Shell, ShellExecOptions, ShellExecResult } from '../types/primitives';
-import { busyShell, callJob, shellExecOptions, type ShellCwd } from './shell-session';
+import { busyShell, callJob, shellExecOptions } from './shell-session';
 import { requireBuild } from './work-mode';
 import { resolvedPath, shellReference, type PathPlanes } from '../vfs/resolve';
 import { KinuError, refusalOf } from '../obs/error';
@@ -30,26 +29,14 @@ export function withApprovalGatedShell(
 ): Shell {
   const session = reach.shellSession;
 
-  // 'workspace' only: gateProviderExec skips the workspace `exec` because it is gated here.
-  const execute = gateExec<ShellExecResult>(
-    (command, ...rest) => shell.exec(command, shellExecOptions({ value: rest[0] })),
+  // 'workspace' only: gateProviderExec skips the workspace `exec` because it is gated here. The options were read once,
+  // by `exec` below; the gate keys and runs those.
+  const execute = (command: string, options: ShellExecOptions) => gateExec<ShellExecResult>(
+    () => ({ call: shellCall(command, options, { stdin: true }), run: () => shell.exec(command, options) }),
     (error) => ({ stdout: '', stderr: error.message, exitCode: 1, refusal: refusalOf(error) }),
     { name: 'workspace', ...reach },
-    {
-      policy,
-      refusalCode: (result) => result.refusal?.reason ?? null,
-      review: async (command, rest) => {
-        const { name, cwd } = shellExecOptions({ value: rest[0] });
-
-        return reviewShellCommand({ name: 'workspace', ...reach }, command, await session?.at(name, cwd));
-      },
-      context: async (rest) => {
-        const { name, cwd, stdin } = shellExecOptions({ value: rest[0] });
-
-        return executionContext({ cwd, at: await session?.at(name, cwd), name, stdin });
-      },
-    },
-  );
+    { policy, refusalCode: (result) => result.refusal?.reason ?? null },
+  )();
 
   const run = async (command: string, options: ShellExecOptions): Promise<ShellExecResult> => {
     const planes = reach.planes;
@@ -184,105 +171,52 @@ export function withApprovalGatedFiles(
   return gated;
 }
 
-/** Tools taking a shell command or a program first; VFS-shaped tools are out of scope. */
-const SHELL_COMMAND_MEMBERS = ['exec', 'startProcess', 'runCode'] as const;
-
-const CallOptionsSchema = v.object({
-  cwd: v.optional(v.string()),
-  language: v.optional(v.string()),
-  env: v.optional(v.record(v.string(), v.string())),
-  stdin: v.optional(v.string()),
-  install: v.optional(v.string()),
-});
-
-function parseCallOptions(input: { value: unknown }): v.InferOutput<typeof CallOptionsSchema> {
-  const parsed = v.safeParse(CallOptionsSchema, input.value);
-
-  return parsed.success ? parsed.output : {};
-}
-
-/**
- * What besides its words decides what a call does: where it starts (as the session resolves it; the words asked when
- * that is not known), the named shell whose state it inherits, its environment, its stdin, its language. Values that
- * may be secret are named by digest. One canonical spelling, so the same call is the same ask and another is not.
- */
-function executionContext(call: {
-  readonly cwd?: string;
-  readonly at?: ShellCwd;
-  readonly name?: string;
-  readonly env?: Readonly<Record<string, string>>;
-  readonly stdin?: string;
-  readonly language?: string;
-  readonly install?: string;
-}): string {
-  const parts: string[] = [];
-  const env = Object.entries(call.env ?? {}).sort(([a], [b]) => a.localeCompare(b));
-
-  if (call.at !== undefined && !call.at.mayBeUsers) parts.push(`in ${call.at.cwd}`);
-  else if (call.cwd !== undefined) parts.push(`in ${call.cwd} (unresolved)`);
-
-  if (call.name !== undefined) parts.push(`shell ${call.name}`);
-
-  if (env.length > 0) parts.push(`env ${env.map(([key]) => key).join(',')} sha256:${sha256Hex(JSON.stringify(env))}`);
-
-  if (call.stdin !== undefined) parts.push(`stdin sha256:${sha256Hex(call.stdin)}`);
-
-  if (call.language !== undefined) parts.push(`language ${call.language}`);
-
-  if (call.install !== undefined) parts.push(`install ${call.install}`);
-
-  return parts.join(' · ');
-}
-
-/** `runCode` is a shell command only in the shell language. */
-async function reviewCall(provider: ExecutorProvider, member: string, command: string, rest: readonly unknown[]): Promise<ApprovalResult> {
-  const options = parseCallOptions({ value: rest[0] });
-  const at: ShellCwd | undefined = await provider.shellSession?.at(undefined, options.cwd);
-
-  return member === 'runCode' && options.language !== 'shell'
-    ? reviewProgram(command, commandFilesOwner(provider, command, at))
-    : reviewShellCommand(provider, command, at);
-}
-
 /** Already-wrapped executes, so a provider shared across routers is gated once (idempotent). */
-const GATED_EXECUTES = new WeakSet<ExecutorTool['execute']>();
+const GATED_EXECUTES = new WeakSet<CommandTool['execute']>();
 
 export function gateProviderExec(provider: ExecutorProvider, policy: ShellApprovalPolicy): ExecutorProvider {
   let changed = false;
   const tools = { ...provider.tools };
 
-  for (const name of SHELL_COMMAND_MEMBERS) {
+  for (const name of COMMAND_MEMBERS) {
     if (provider.kind === 'workspace' && name === 'exec') continue;
     const entry = provider.tools[name];
 
     if (!entry || GATED_EXECUTES.has(entry.execute)) continue;
+    const read = entry.prepare;
+    changed = true;
 
-    // Grants name the executor; the call picks the rules.
+    // A member that cannot say what a call runs cannot be approved, so nothing it is asked runs.
+    if (read === undefined) {
+      const unread = new KinuError('unsupported', `${provider.name}.${name} does not say what a call runs, so it cannot be approved: nothing ran`);
+      tools[name] = { ...entry, execute: async () => refusalOf(unread) };
+      continue;
+    }
+
+    // Grants name the executor; the member's own reading of the call picks the rules and is what runs.
     const gated = gateExec<ExecutorToolResult>(
-      (command, ...rest) => entry.execute(command, ...rest),
+      (args) => read(args),
       (error) => refusalOf(error),
       provider,
-      {
-        policy,
-        refusalCode: (result) => result === undefined ? null : answeredRefusal(result)?.reason ?? null,
-        review: (command, rest) => reviewCall(provider, name, command, rest),
-        context: async (rest) => {
-          const options = parseCallOptions({ value: rest[0] });
-
-          return executionContext({ ...options, at: await provider.shellSession?.at(undefined, options.cwd) });
-        },
-      },
+      { policy, refusalCode: (result) => result === undefined ? null : answeredRefusal(result)?.reason ?? null },
     );
 
-    const execute: ExecutorTool['execute'] = (...args) => {
+    const execute: CommandTool['execute'] = (...args) => {
       requireBuild(provider.name + '.' + name);
 
       return gated(...args);
     };
 
     GATED_EXECUTES.add(execute);
-    tools[name] = { ...entry, execute };
-    changed = true;
+
+    // Its reading stays the member's, but what it runs goes through the gate: no ungated `run` leaves here.
+    const prepare: CommandTool['prepare'] = (args) => {
+      const prepared = read(args);
+
+      return 'refused' in prepared ? prepared : { call: prepared.call, run: () => execute(...args) };
+    };
+
+    tools[name] = { ...entry, prepare, execute };
   }
 
   return changed ? { ...provider, tools } : provider;

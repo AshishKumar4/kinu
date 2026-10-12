@@ -19,7 +19,7 @@ import { createShellSession } from '../src/execution/shell-session';
 import { withMountTable, workspaceFilePlane } from '../src/vfs/mounts';
 import { skillsMount } from '../src/skills/view';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
-import { present } from '@kinu.run/test-utils';
+import { fakeCommandMember, present } from '@kinu.run/test-utils';
 import { createWorkspaceBundle } from './helpers';
 
 const DENY = 'rm -rf /';
@@ -42,24 +42,16 @@ function fakeShellProvider(name: string, kind: ExecutorProvider['kind'] = 'devic
     connect: async () => {},
     disconnect: async () => {},
     tools: {
-      exec: {
-        description: 'Run a shell command',
-        execute: async (...args: unknown[]) => {
-          const command = String(args[0]);
-          executed.push(command);
+      exec: fakeCommandMember('Run a shell command', async (command) => {
+        executed.push(command);
 
-          return `ran: ${command}`;
-        },
-      },
-      startProcess: {
-        description: 'Start a long-running process',
-        execute: async (...args: unknown[]) => {
-          const command = String(args[0]);
-          executed.push(command);
+        return `ran: ${command}`;
+      }),
+      startProcess: fakeCommandMember('Start a long-running process', async (command) => {
+        executed.push(command);
 
-          return `started: ${command}`;
-        },
-      },
+        return `started: ${command}`;
+      }),
       readFile: {
         description: 'Read a file — not a shell command, never gated',
         execute: async (...args: unknown[]) => `contents of ${String(args[0])}`,
@@ -482,8 +474,8 @@ describe('a workspace shell over the user\'s mounts', () => {
 function mountedWorkspaceProvider() {
   const ran: string[] = [];
 
-  const record = (label: string) => async (...args: unknown[]) => {
-    ran.push(`${label} ${String(args[0])}`);
+  const record = (label: string) => async (command: string) => {
+    ran.push(`${label} ${command}`);
 
     return 'ok';
   };
@@ -499,8 +491,8 @@ function mountedWorkspaceProvider() {
     connect: async () => {},
     disconnect: async () => {},
     tools: {
-      startProcess: { description: 'Start a background process', execute: record('start') },
-      runCode: { description: 'Run a program', execute: record('code') },
+      startProcess: fakeCommandMember('Start a background process', record('start')),
+      runCode: fakeCommandMember('Run a program', record('code'), 'program'),
     },
   };
 

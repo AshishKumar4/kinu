@@ -12,11 +12,12 @@ import type { CheckpointFiles, OutputSink } from '../types/primitives';
 import { isVfsErrorCode, syscallError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { Effect } from 'effect';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
-import { commandResult, commandResultAt, type CommandResult } from './exec-result';
+import { commandResult, commandResultAt } from './exec-result';
 import { causeCodes, KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import { settle } from '../obs/effect';
 import { DEVICE_METHOD } from './device-protocol';
-import type { ExecutorProvider, ExecutorCapability, ExecutorStatus } from './types';
+import { commandTool, type ExecutorProvider, type ExecutorCapability, type ExecutorStatus } from './types';
+import { shellCall } from './command-call';
 import {
   connectedDevices, deviceFleetAsk, deviceByName, freshDeviceToolchain,
   type DeviceFleetEntry, type DeviceStatus, type DeviceToolchain,
@@ -189,7 +190,7 @@ function readDeviceSelection(input: { context: unknown }): string | undefined {
 }
 
 type CallTarget =
-  | { readonly kind: 'target'; readonly deviceId: string | undefined }
+  | { readonly kind: 'target'; readonly deviceId: string | undefined; readonly name?: string }
   | { readonly kind: 'refusal'; readonly refusal: Refusal };
 
 type CallView =
@@ -356,68 +357,67 @@ export function createDeviceTunnelExecutor(
   };
 
   const tools: ExecutorProvider['tools'] = {
-    exec: {
-      description: 'Execute a command on the user\'s local machine via the device tunnel.',
-      execute: async (...args: unknown[]): Promise<CommandResult> => {
-        const command = parseInput(StringSchema, { value: args[0] });
+    exec: commandTool('Execute a command on the user\'s local machine via the device tunnel.', (args) => {
+      const command = parseInput(StringSchema, { value: args[0] });
 
-        if (command === undefined) {
-          return refusalOf(new KinuError('bad_input', 'device exec: command must be a string'));
-        }
+      if (command === undefined) return { refused: refusalOf(new KinuError('bad_input', 'device exec: command must be a string')) };
+      const options = shellExecOptions({ value: args[1] });
+      const { signal, output } = options;
+      // Undefined lets the hub resolve a one-machine account; several live machines refuse there.
+      const deviceName = readDeviceSelection({ context: args[1] });
+      const device = resolveForCall(transport, deviceName);
 
-        const options = shellExecOptions({ value: args[1] });
-        const { signal, output } = options;
-        // Undefined lets the hub resolve a one-machine account; several live machines refuse there.
-        const deviceName = readDeviceSelection({ context: args[1] });
-        const device = resolveForCall(transport, deviceName);
+      if (device.kind === 'refusal') return { refused: device.refusal };
+      const deviceId = device.deviceId;
 
-        if (device.kind === 'refusal') return device.refusal;
-        const deviceId = device.deviceId;
+      if (options.name !== undefined && shells === undefined) {
+        return { refused: refusalOf(new KinuError('unsupported', 'device exec: this runtime keeps no named shells')) };
+      }
 
-        if (options.name !== undefined && shells === undefined) {
-          return refusalOf(new KinuError('unsupported', 'device exec: this runtime keeps no named shells'));
-        }
+      // A device starts a command in its home, wherever that is on the machine.
+      const call = machineShellCall(command, options, { home: '~', scope: shells?.scope ?? '', stateDirectory: shells?.stateDirectory ?? '' });
+      const held = options.name === undefined ? undefined : `${deviceId ?? ''}\u0000${options.name}`;
+      const ownership = readDeviceOwnershipContext({ context: args[1] });
+      const reportCwd = reportsCwd({ context: args[1] });
+      const read = shellCall(command, options, { stdin: false });
 
-        // A device starts a command in its home, wherever that is on the machine.
-        const call = machineShellCall(command, options, { home: '~', scope: shells?.scope ?? '', stateDirectory: shells?.stateDirectory ?? '' });
-        const held = options.name === undefined ? undefined : `${deviceId ?? ''}\u0000${options.name}`;
+      // The machine it runs on is part of the ask: the same command on another machine is another.
+      const machine = deviceId === undefined ? {} : { machine: { id: deviceId, name: device.name ?? deviceId } };
 
-        return settle(Effect.tryPromise({
-          try: () => names.hold(held, callJob(options), async () => {
-            const requestId = nextDeviceRequestId();
-            const ownership = readDeviceOwnershipContext({ context: args[1] });
-            ownership.report?.(requestId);
-            const backgroundJobId = ownership.owner?.() ?? null;
-            const execOpts: DeviceExecOptions = { timeoutMs: 0, requestId };
+      return { call: { ...read, context: { ...read.context, ...machine } }, run: () => settle(Effect.tryPromise({
+        try: () => names.hold(held, callJob(options), async () => {
+          const requestId = nextDeviceRequestId();
+          ownership.report?.(requestId);
+          const backgroundJobId = ownership.owner?.() ?? null;
+          const execOpts: DeviceExecOptions = { timeoutMs: 0, requestId };
 
-            if (deviceId !== undefined) execOpts.deviceId = deviceId;
+          if (deviceId !== undefined) execOpts.deviceId = deviceId;
 
-            if (output !== undefined) execOpts.output = call.output(output);
+          if (output !== undefined) execOpts.output = call.output(output);
 
-            if (backgroundJobId !== null) execOpts.backgroundJobId = backgroundJobId;
+          if (backgroundJobId !== null) execOpts.backgroundJobId = backgroundJobId;
 
-            const result = await raceAbort(
-              () => rpc(DEVICE_METHOD.exec, [call.command], execOpts), signal, EXEC_NOT_STARTED,
-              () => settle(terminateDeviceExec(rpc, requestId, deviceId)),
-            );
+          const result = await raceAbort(
+            () => rpc(DEVICE_METHOD.exec, [call.command], execOpts), signal, EXEC_NOT_STARTED,
+            () => settle(terminateDeviceExec(rpc, requestId, deviceId)),
+          );
 
-            const settled = call.settle(v.parse(DeviceExecResultSchema, result));
+          const settled = call.settle(v.parse(DeviceExecResultSchema, result));
 
-            return reportsCwd({ context: args[1] }) ? commandResultAt(settled) : commandResult(settled);
-          }, (message) => refusalOf(new KinuError('unavailable', message))),
-          catch: (cause) => ({ cause }),
-        }).pipe(Effect.catch((failed) => {
-          if (isAbortError(failed.cause)) return Effect.die(failed.cause);
+          return reportCwd ? commandResultAt(settled) : commandResult(settled);
+        }, (message) => refusalOf(new KinuError('unavailable', message))),
+        catch: (cause) => ({ cause }),
+      }).pipe(Effect.catch((failed) => {
+        if (isAbortError(failed.cause)) return Effect.die(failed.cause);
 
-          if (isDeviceNotConnectedError(failed)) return Effect.succeed(notConnected());
+        if (isDeviceNotConnectedError(failed)) return Effect.succeed(notConnected());
 
-          // Tier refusal with a named fix, not a transport fault; not prefixed with the command.
-          if (isSandboxUnavailableError(failed)) return Effect.succeed(refusalOf(new KinuError('denied', renderThrownChain(failed))));
+        // Tier refusal with a named fix, not a transport fault; not prefixed with the command.
+        if (isSandboxUnavailableError(failed)) return Effect.succeed(refusalOf(new KinuError('denied', renderThrownChain(failed))));
 
-          return Effect.succeed(refusalOf(deviceFailure({ doing: `device exec \`${command}\``, cause: failed.cause })));
-        })));
-      },
-    },
+        return Effect.succeed(refusalOf(deviceFailure({ doing: `device exec \`${command}\``, cause: failed.cause })));
+      }))) };
+    }),
 
     readdir: {
       planAllowed: true,
@@ -530,7 +530,9 @@ function resolveForCall(
   if (named === undefined) {
     if (live.length > 1) return refuse(new KinuError('bad_input', deviceFleetAsk(fleet)));
 
-    return { kind: 'target', deviceId: live[0]?.id };
+    const only = live[0];
+
+    return only === undefined ? { kind: 'target', deviceId: undefined } : { kind: 'target', deviceId: only.id, name: only.name };
   }
 
   if (fleet === undefined) {
@@ -540,7 +542,7 @@ function resolveForCall(
 
   const entry = deviceByName(fleet, named);
 
-  if (entry) return { kind: 'target', deviceId: entry.id };
+  if (entry) return { kind: 'target', deviceId: entry.id, name: entry.name };
 
   return refuse(new KinuError('unavailable',
     `no connected machine is named "${named}": connected: ${live.map((d) => d.name).join(', ') || 'none'}`));

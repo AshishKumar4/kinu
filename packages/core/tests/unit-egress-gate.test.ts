@@ -1,5 +1,6 @@
 // Egress gate: a placeholder reveals nothing, a secret reaches only its bound host, a facet never
 // out-reaches its parent, and nothing the container reads carries the secret back.
+import { wordsOnly } from '@kinu.run/test-utils';
 import { describe, expect, test } from 'bun:test';
 import {
   EGRESS_PLACEHOLDER_PREFIX,
@@ -236,11 +237,11 @@ describe('inherited approval policy', () => {
     const ran: string[] = [];
 
     const run = gateExec<string>(
-      async (command) => {
+      wordsOnly(async (command) => {
         ran.push(command);
 
         return `ran:${command}`;
-      },
+      }),
       (error) => error.message,
       { name: 'sandbox', filesOwner: 'agent' },
       { policy },

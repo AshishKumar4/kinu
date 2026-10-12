@@ -1,6 +1,7 @@
 // Every agent in a workspace shares the container, so it shares the root's grants or a subset, never a superset.
 // Grants are only written to the root DO's `actor_config`; a facet reads them over RPC, and a method missing
 // from the surface is silently unreachable rather than a build error.
+import { wordsOnly } from '@kinu.run/test-utils';
 import { describe, expect, test } from 'bun:test';
 import {
   createInheritedApprovalPolicy, egressSecretRule, gateExec,
@@ -130,11 +131,11 @@ describe('a facet holds the root set, or a subset of it', () => {
     const ran: string[] = [];
 
     const run = gateExec<string>(
-      async (command) => {
+      wordsOnly(async (command) => {
         ran.push(command);
 
         return `ran:${command}`;
-      },
+      }),
       (error) => error.message,
       { name: 'sandbox', filesOwner: 'agent' },
       { policy: createInheritedApprovalPolicy(probe.deps) },

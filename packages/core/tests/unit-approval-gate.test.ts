@@ -3,6 +3,7 @@
  * assertion names the owner; grants and requests name the executor.
  */
 
+import { wordsOnly } from '@kinu.run/test-utils';
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { Effect } from 'effect';
@@ -332,11 +333,11 @@ function harness(executor: GatedExecutor, policy: ShellApprovalPolicy) {
   const ran: string[] = [];
 
   const gated = gateExec<string>(
-    async (cmd) => {
+    wordsOnly(async (cmd) => {
       ran.push(cmd);
 
       return `ran:${cmd}`;
-    },
+    }),
     (refusal) => `blocked:${refusal.code}:${refusal.message}`,
     executor,
     { policy },

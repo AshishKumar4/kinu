@@ -6,7 +6,7 @@ import { type VFS, type VfsDirent, type VfsStat } from '@nimbus-sh/core/vfs/vfs.
 
 import * as v from 'valibot';
 import { raceAbort } from '@kinu.run/agent-utils';
-import type { ExecutorProvider, ExecutorCapability, ExecutorStatus } from './types';
+import { commandTool, type ExecutorProvider, type ExecutorCapability, type ExecutorStatus } from './types';
 
 import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { vfsErrorFromText } from '../vfs/errno';
@@ -127,28 +127,28 @@ export function createParentExecutor(deps: {
       },
       exists: existsTool(vfs, { description: 'Check whether a path exists in the parent workspace.', operation: 'parent exists' }),
 
-      exec: {
-        description:
-          "Run one command in the parent workspace's real shell: the full coreutils set, pipes, "
+      exec: commandTool(
+        "Run one command in the parent workspace's real shell: the full coreutils set, pipes, "
           + 'redirects and loops. The fast way to search it (grep -rn, find).',
-        execute: async (...args: unknown[]) => {
+        (args) => {
           // DO RPC exposes no kill: the parent's command runs on, but the caller stops waiting.
           // The AbortError classifies as `cancelled`; not rewrapped so its code survives.
           const command = parseInput(StringSchema, { value: args[0] });
 
-          if (command === undefined) {
-            return refusalOf(new KinuError('bad_input', 'parent exec: command must be a string'));
-          }
-
+          if (command === undefined) return { refused: refusalOf(new KinuError('bad_input', 'parent exec: command must be a string')) };
           const signal = readExecSignal({ context: args[1] });
 
-          return commandResult(await raceAbort(
-            () => deps.handle.exec(command),
-            signal,
-            'parent exec aborted: the command may still finish in the parent workspace',
-          ));
+          // It takes nothing but the words: it starts at the parent workspace's root.
+          return {
+            call: { text: command, context: {} },
+            run: async () => commandResult(await raceAbort(
+              () => deps.handle.exec(command),
+              signal,
+              'parent exec aborted: the command may still finish in the parent workspace',
+            )),
+          };
         },
-      },
+      ),
     },
     async exposePort(port) {
       return {

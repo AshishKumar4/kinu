@@ -1,6 +1,7 @@
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** v2 end-to-end: inline executor, branching heads, scaffold proposal and promotion, durable event log, approval gate. */
 
+import { wordsOnly } from '@kinu.run/test-utils';
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
@@ -261,11 +262,11 @@ describe('v2 e2e: approval gate', () => {
     const seen: string[] = [];
 
     const gated = gateExec<string>(
-      async (cmd) => {
+      wordsOnly(async (cmd) => {
         seen.push(cmd);
 
         return `ran:${cmd}`;
-      },
+      }),
       (msg) => `DENIED:${msg.message}`,
       { name: 'device', filesOwner: 'user' },
       { policy: { mode: () => 'strict', requestApproval: async () => 'allow' } },

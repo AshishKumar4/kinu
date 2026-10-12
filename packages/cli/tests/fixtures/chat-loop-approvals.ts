@@ -26,7 +26,7 @@ const BELL = 0x07;
 process.stdin.on('data', (chunk: Buffer) => {
   if (!chunk.includes(BELL) || waiting.length > 0) return;
   waiting = [{
-    id: 'park-1', actor: 'actor-main', command: 'git push --force origin main', executor: 'sandbox', context: '',
+    id: 'park-1', actor: 'actor-main', command: 'git push --force origin main', executor: 'sandbox', context: {},
     reason: 'force push (gate): rewrites history', status: 'queued', requestedAt: Date.now(), decidedAt: null,
   }];
   fake.emit({ type: 'broadcast', event: { type: 'reads_changed', reads: ['listPendingActions'] } });

@@ -1,17 +1,113 @@
 /** Asks the owner about what review gates, and keeps their grants. */
 
 import { Effect } from 'effect';
+import * as v from 'valibot';
 import { CODE_WORK_DID_NOT_START, detach, diagnostics, KinuError, toKinuError, type ErrorCode } from '../obs/index';
 import { boundWriteCommand, type WriteSubject } from './bound-write';
-import { dominant, reviewFileAccess, reviewShellCommand, type ApprovalResult, type FileAccess, type GatedExecutor } from './command-review';
+import { stableStringify } from './argument-digest';
+import type { JsonObject } from '../utils/json';
+import {
+  commandFilesOwner, dominant, reviewFileAccess, reviewProgram, reviewShellCommand,
+  type ApprovalResult, type FileAccess, type GatedExecutor,
+} from './command-review';
+
+/**
+ * Where and how a command runs on its executor, besides its words: part of what an approval answers, so the same words
+ * anywhere else are another ask. Each field is one the running member honours; a value that may be secret is a digest.
+ * Compared as {@link executionContextKey}, never as its display.
+ */
+export interface ExecutionContext {
+  /** The directory it starts in: resolved on the executor's session when the gate can, else as asked. */
+  readonly cwd?: string;
+  /** The named shell whose directory and exported variables it starts from. */
+  readonly shell?: string;
+  /** The machine it runs on, of the several one executor reaches: its id, and its name for the owner. */
+  readonly machine?: { readonly id: string; readonly name: string };
+  /** Its environment: the variable names, and a digest of names and values. */
+  readonly env?: { readonly names: readonly string[]; readonly sha256: string };
+  /** A digest of what it reads on stdin. */
+  readonly stdinSha256?: string;
+  /** The language a program runs in, and whether its runtime may be installed first. */
+  readonly language?: string;
+  readonly install?: string;
+}
+
+export const ExecutionContextSchema = v.object({
+  cwd: v.optional(v.string()),
+  shell: v.optional(v.string()),
+  machine: v.optional(v.object({ id: v.string(), name: v.string() })),
+  env: v.optional(v.object({ names: v.array(v.string()), sha256: v.string() })),
+  stdinSha256: v.optional(v.string()),
+  language: v.optional(v.string()),
+  install: v.optional(v.string()),
+}) satisfies v.GenericSchema<ExecutionContext>;
+
+/** The context's identity: one canonical spelling, so equal contexts are equal keys whatever a value contains. */
+export function executionContextKey(context: ExecutionContext): string {
+  const json: JsonObject = {};
+
+  for (const field of ['cwd', 'shell', 'stdinSha256', 'language', 'install'] as const) {
+    const value = context[field];
+
+    if (value !== undefined) json[field] = value;
+  }
+
+  if (context.machine !== undefined) json.machine = { id: context.machine.id, name: context.machine.name };
+
+  if (context.env !== undefined) json.env = { names: [...context.env.names], sha256: context.env.sha256 };
+
+  return stableStringify(json);
+}
+
+/** What the owner reads of a context: each value quoted, so a delimiter inside one cannot pass for another field. */
+export function describeExecutionContext(context: ExecutionContext): string {
+  const parts: string[] = [];
+
+  if (context.machine !== undefined) parts.push(`on ${JSON.stringify(context.machine.name)}`);
+
+  if (context.cwd !== undefined) parts.push(`in ${JSON.stringify(context.cwd)}`);
+
+  if (context.shell !== undefined) parts.push(`shell ${JSON.stringify(context.shell)}`);
+
+  if (context.env !== undefined) parts.push(`env ${context.env.names.map((name) => JSON.stringify(name)).join(', ')}`);
+
+  if (context.stdinSha256 !== undefined) parts.push(`stdin sha256:${context.stdinSha256.slice(0, 12)}`);
+
+  if (context.language !== undefined) parts.push(`language ${JSON.stringify(context.language)}`);
+
+  if (context.install !== undefined) parts.push(`install ${JSON.stringify(context.install)}`);
+
+  return parts.join(' · ');
+}
+
+/**
+ * What a command-taking member runs, read once from its arguments: the gate reviews and keys exactly this, and the
+ * member's `run` runs exactly this, so what an answer approves is what runs.
+ */
+export interface CommandCall {
+  /** A shell command, or a program's source. */
+  readonly text: string;
+  /** Set when `text` is a program in this language, reviewed as one rather than as a shell command. */
+  readonly program?: string;
+  /** Where it starts, as the member will be told; the gate resolves it on the executor's session. */
+  readonly cwd?: string;
+  /** The named shell it runs in. */
+  readonly shell?: string;
+  /** Everything else the member honours that changes what runs. */
+  readonly context: Omit<ExecutionContext, 'cwd' | 'shell'>;
+}
+
+/** A member's reading of one call: what runs and how to run exactly that, or its own refusal before anything runs. */
+export type PreparedCall<R> =
+  | { readonly call: CommandCall; readonly run: () => Promise<R> }
+  | { readonly refused: R };
 
 export interface ShellApprovalRequest {
   readonly command: string;
   /** The target executor; the same command is a different request on a different machine. */
   readonly executor: string;
-  /** Where and how it runs there (directory, named shell, environment, stdin, language), shown with the command; the
-   *  same command in another context is another request. Empty when the command says it all. */
-  readonly context: string;
+  /** Where and how it runs there; the same command in another context is another request. */
+  readonly context: ExecutionContext;
   readonly review: ApprovalResult;
   /** A file write's ask: what it replaces and with what. A parked one is bound to these bytes. */
   readonly write?: WriteSubject;
@@ -69,7 +165,7 @@ export function approveFileAccess(
   return Effect.gen(function* () {
     const decision = yield* Effect.promise(() => decideApproval(
       // The path is the whole of where a file access lands.
-      { command: `file ${access.op} ${access.hostPath}`, executor, context: '', write: write?.subject, parks: write?.parks ?? false }, review, policy,
+      { command: `file ${access.op} ${access.hostPath}`, executor, context: {}, write: write?.subject, parks: write?.parks ?? false }, review, policy,
     ));
 
     if (!decision.run) return yield* Effect.fail(decision.error);
@@ -167,14 +263,14 @@ function afterGrants(review: ApprovalResult, policy: ShellApprovalPolicy, execut
 export interface ExecGateTuning<R> {
   readonly policy?: ShellApprovalPolicy;
   readonly refusalCode?: (result: R) => ErrorCode | null;
-  /** Absent: a shell command from the executor's session. */
-  readonly review?: (command: string, rest: readonly unknown[]) => Promise<ApprovalResult>;
-  /** The call's execution context from its options ({@link ShellApprovalRequest.context}); absent: none. */
-  readonly context?: (rest: readonly unknown[]) => Promise<string>;
 }
 
+/**
+ * Gates a command-taking member through its own reading of each call (`prepare`): the call it returns is reviewed on
+ * the executor's session and keyed with its context, and only its `run` runs. Nothing here reads the arguments again.
+ */
 export function gateExec<R>(
-  execute: (command: string, ...rest: unknown[]) => Promise<R>,
+  prepare: (args: readonly unknown[]) => PreparedCall<R>,
   denyResult: (error: KinuError) => R,
   executor: GatedExecutor,
   tuning: ExecGateTuning<R> = {},
@@ -184,18 +280,26 @@ export function gateExec<R>(
 
   // Rest args keep this assignable to `ExecutorProvider['tools'][name].execute` and to `Shell.exec`.
   return async (...args) => {
-    const [command, ...rest] = args;
-    const cmd = String(command);
+    const prepared = prepare(args);
 
-    const review = tuning.review === undefined
-      ? reviewShellCommand(executor, cmd, await executor.shellSession?.at(undefined, undefined))
-      : await tuning.review(cmd, rest);
+    if ('refused' in prepared) return prepared.refused;
+    const { call } = prepared;
+    const at = await executor.shellSession?.at(call.shell, call.cwd);
 
-    const context = await tuning.context?.(rest) ?? '';
-    const decision = await decideApproval({ command: cmd, executor: executor.name, context }, review, policy);
+    const review = call.program === undefined
+      ? reviewShellCommand(executor, call.text, at)
+      : reviewProgram(call.text, commandFilesOwner(executor, call.text, at));
+
+    const cwd = at !== undefined && !at.mayBeUsers ? at.cwd : call.cwd;
+
+    const context: ExecutionContext = {
+      ...call.context, ...(cwd !== undefined && { cwd }), ...(call.shell !== undefined && { shell: call.shell }),
+    };
+
+    const decision = await decideApproval({ command: call.text, executor: executor.name, context }, review, policy);
 
     if (!decision.run) return denyResult(decision.error);
-    const result = await execute(cmd, ...rest);
+    const result = await prepared.run();
 
     if (decision.spent) {
       const code = refusalCode?.(result) ?? null;
@@ -310,7 +414,7 @@ async function askLive(
  *  A write is shown to whoever is asked and parks bound to its bytes; `parks` false refuses an unanswered ask. */
 async function decideApproval(
   subject: {
-    readonly command: string; readonly executor: string; readonly context: string;
+    readonly command: string; readonly executor: string; readonly context: ExecutionContext;
     readonly write?: () => Promise<WriteSubject>; readonly parks?: boolean;
   },
   rawReview: ApprovalResult,

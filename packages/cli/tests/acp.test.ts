@@ -445,7 +445,7 @@ describe('kinu acp — permission', () => {
           return present(fake.approval, 'the fake client approval hook')({
             command: permission.command,
             executor: 'device',
-            context: '',
+            context: {},
             review: { decision: 'gate', hits: permission.hits },
           }, new AbortController().signal);
         },
@@ -470,7 +470,7 @@ describe('kinu acp — what the editor shows for approval', () => {
         return present(fake.approval, 'the fake client approval hook')({
           command: 'rm -rf ./build \u202E\u2066gpj.x\u200B',
           executor: 'device',
-          context: '',
+          context: {},
           review: { decision: 'gate', hits: [] },
         }, new AbortController().signal);
       },

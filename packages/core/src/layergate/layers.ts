@@ -4,6 +4,7 @@ import { exists, readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 // injected clock/RNG, no model calls or I/O, so every slice is byte-reproducible.
 
 import type { ModelMessage } from 'ai';
+import type { PreparedCall } from '../safety/approval-gate';
 import { ExtensionHost } from '../extension';
 import { DynamicContextLedger, type DynamicContext } from '../prompting/volatile-context';
 import { TurnAccumulator } from '../orchestrator/turn-accumulator';
@@ -200,6 +201,15 @@ const COMMANDS = Object.freeze([
 const REVIEW_OWNERS = Object.freeze(['agent', 'user'] as const);
 
 const USER_DEVICE = Object.freeze({ name: 'device', filesOwner: 'user' } as const);
+
+/** A member that takes nothing but the words: what it reads of a call is the command alone. */
+function wordsOnly(run: (command: string) => Promise<string>): (args: readonly unknown[]) => PreparedCall<string> {
+  return (args) => {
+    const command = typeof args[0] === 'string' ? args[0] : '';
+
+    return { call: { text: command, context: {} }, run: () => run(command) };
+  };
+}
 
 const PROVIDERS = Object.freeze([
   ['anthropic', 'claude-sonnet-4-7'],
@@ -1123,11 +1133,11 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           const ran: string[] = [];
 
           const gated = s.gateExec<string>(
-            async (cmd) => {
+            wordsOnly(async (cmd) => {
               ran.push(cmd);
 
               return `ran:${cmd}`;
-            },
+            }),
             (error) => `denied:${error.message}`,
             USER_DEVICE,
             { policy: { mode: () => 'strict', requestApproval: async () => 'allow' } },
@@ -1145,11 +1155,11 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           const ran: string[] = [];
 
           const gated = s.gateExec<string>(
-            async (cmd) => {
+            wordsOnly(async (cmd) => {
               ran.push(cmd);
 
               return 'ran';
-            },
+            }),
             (error) => `denied:${error.message}`,
             USER_DEVICE,
           );
@@ -1167,7 +1177,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           const asked: string[] = [];
 
           const build = (name: string) => s.gateExec<string>(
-            async (cmd) => `ran:${cmd}`,
+            wordsOnly(async (cmd) => `ran:${cmd}`),
             (error) => `denied:${error.message}`,
             { name, filesOwner: 'user' },
             {
