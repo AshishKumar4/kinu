@@ -147,8 +147,10 @@ export const FAILING_STEPS = 20;
 /** What each isolate keeps of that turn once its workspace is quiet, beyond before it: a rejected call's pipeline and
  *  callbacks must go with it. Measured 2026-10-10 at 02dab8bc0, three runs alike: 0.2 MB in the workspace's, 1.3 MB in
  *  main's, which keeps the 20 refusals in its conversation. Each a step's worth of room above (`STEP_LIVE_BOUND_BYTES`'s
- *  scale): a pipeline kept per call would pass 20 of them. */
-export const FAILED_PORT_RETAINED_BOUND_BYTES = { workspace: 1_000_000, main: 2_000_000 } as const;
+ *  scale): a pipeline kept per call would pass 20 of them. Until 2026-10-12 the heap step's turns, still queued when their reads came, took half the long turn's scripted steps, so every post-D9 long-turn row measured 75-76 steps (debug/heap-idle 50bb62a22, armada 20261012111719-547cfddc); after the full
+ *  150 steps, 0.24-0.25 MB in the workspace's and 2.02-2.03 MB in main's over 10 runs (armada 20261012110831-e3858893,
+ *  20261012111603-1a3edf49): the refusals' validation issues on a conversation twice as long. */
+export const FAILED_PORT_RETAINED_BOUND_BYTES = { workspace: 1_000_000, main: 2_800_000 } as const;
 
 /** Measured 2026-10-07 at {@link LONG_TURN}: 106.3-112.9 MB used over 3 runs on b0de8580f, 89.2-100.1 MB on
  *  lane/memory-gap 871e789f1. V8 grows the old generation by a factor of what is live, so this row falls only as the
@@ -166,8 +168,10 @@ export const LONG_TURN_PEAK_BOUND_BYTES = { workspace: 115_000_000, main: 115_00
  *  The `file stat` turn this row measured before read 7.7 MB for that defect against 3.6-4.0 MB: its requests shared
  *  the history's strings, where the hosted providers' path copies them for every request.
  *  Since D9 the turn's history is main's: on 2ac877244, 1.2 MB in the workspace's isolate with main's unread; 1.1 MB
- *  there and 6.5 MB in main's over 3 runs once both are read (armada 20261010034927-e852fa06). */
-export const LONG_TURN_GROWTH_BOUND_BYTES = { workspace: 2_500_000, main: 8_000_000 } as const;
+ *  there and 6.5 MB in main's over 3 runs once both are read (armada 20261010034927-e852fa06). Those runs took 75-76 of
+ *  the 150 steps, the heap step's still-queued turns taking the rest; at the full 150, 2026-10-12: 1.93-2.00 MB in the
+ *  workspace's and 8.81-8.83 MB in main's over 10 runs (armada 20261012110831-e3858893, 20261012111603-1a3edf49). */
+export const LONG_TURN_GROWTH_BOUND_BYTES = { workspace: 2_500_000, main: 10_500_000 } as const;
 
 /** Measured 2026-10-07 at {@link LONG_TURN}, sampled from its start to its settlement: 491-499 MB over 3 runs on
  *  b0de8580f, 351-362 MB on lane/memory-gap 9875bab49 once a tool's JSON Schema is built once and only a decode walks the
@@ -190,15 +194,20 @@ export const LONG_TURN_GROWTH_BOUND_BYTES = { workspace: 2_500_000, main: 8_000_
  *  b65abe3ff) and 3.2 MB read its narration for nothing (cut, 8f78f86e9), leaving 10.8-13.1 MB: the transcript frame's
  *  read, the output references decoded from every part, the figures, the commit and about 5 MB of RPC serialization; the
  *  workspace's is mostly that serialization and the 1.7 MB frame. With both cuts, 167.5-175.5 MB over 9 runs on
- *  5a5a155be, 110.7-116.6 MB of it main's. */
-export const LONG_TURN_ALLOCATED_BOUND_BYTES = 195_000_000;
+ *  5a5a155be, 110.7-116.6 MB of it main's. Until 2026-10-12 the heap step's turns, still queued when their reads came, took half the long turn's scripted steps, so every post-D9 long-turn row measured 75-76 steps (debug/heap-idle 50bb62a22, armada 20261012111719-547cfddc): at the full 150, 298.4-313.3 MB
+ *  together over 10 runs, 57.3-64.0 MB in the workspace's and 240.4-250.9 MB in main's (armada 20261012110831-e3858893,
+ *  20261012111603-1a3edf49), against the single isolate's 274.5-285.5 MB before D9. */
+export const LONG_TURN_ALLOCATED_BOUND_BYTES = 335_000_000;
 
 /** Measured 2026-09-26 at {@link STEP} before any copy fix: 13.5 MB, the transcript and, whole, the last request;
  *  11.1 MB (twice) on 2026-09-27 once the root's chat room no longer keeps each answer; 9.8-10.0 MB over 3 runs on
  *  integration 48fa23c62 (2026-09-30), 7.6-7.8 MB over 4 once a turn keeps its origin as a revision, not a clone.
  *  Since D9 the transcript is main's: on 2ac877244, 1.9 MB in the workspace's isolate with main's unread; 1.1 MB
- *  there and 2.6-2.7 MB in main's over 3 runs once setup joins main's load and both are read. */
-export const IDLE_RETAINED_BOUND_BYTES = { workspace: 2_500_000, main: 4_000_000 } as const;
+ *  there and 2.6-2.7 MB in main's over 3 runs once setup joins main's load and both are read. Those reads came before
+ *  the turns ran: an admission answers once its turn is queued, and the read caught the third in flight with nine queued.
+ *  Read once all twelve ended and settled, 2026-10-12: 2.55-2.58 MB in the workspace's and 6.57-6.58 MB in main's over 10
+ *  runs (armada 20261012110831-e3858893, 20261012111603-1a3edf49), main's the twelve answers its conversation keeps. */
+export const IDLE_RETAINED_BOUND_BYTES = { workspace: 4_000_000, main: 7_900_000 } as const;
 
 const WranglerSchema = v.object({
   compatibility_date: v.string(),
@@ -472,7 +481,12 @@ export async function measure(): Promise<HeapMeasurement> {
       await ask(`/model?answerBytes=${String(STEP.answerBytes)}`);
       await inEach(stepIsolates, async (session) => { await session.sampleAllocations(); });
 
+      // An admission answers once its turn is queued, not run: every turn ends and settles before the read, and before the
+      // model's one script changes for the next phase. Until 2026-10-12 the read caught the third turn in flight with nine
+      // queued, and those turns took half the long turn's scripted steps (debug/heap-idle 50bb62a22).
       for (let turn = 0; turn < STEP.turns; turn++) await ask(`/turn?workspace=heap&text=turn-${String(turn)}`);
+      await ask('/main-idle?workspace=heap');
+      await ask('/quiesce?workspace=heap');
       const bindingTurnsAllocated = await inEach(stepIsolates, async (session) => await session.allocations());
       const idle = await inEach(stepIsolates, async (session) => await session.liveHeap());
       const answered = streamsOpened;
@@ -491,6 +505,8 @@ export async function measure(): Promise<HeapMeasurement> {
       const { wide } = v.parse(waiting, JSON.parse(await ask(`/model?answerBytes=${String(STEP.answerBytes)}&holding=1`)));
       await ask(`/model?answerBytes=${String(STEP.answerBytes)}`);
       await parked;
+      await ask('/main-idle?workspace=heap');
+      await ask('/quiesce?workspace=heap');
 
       // The same step, but a fresh workspace's first: its main isolate has run no turn.
       const coldWorkspace = await ask('/?workspace=cold');
@@ -509,6 +525,7 @@ export async function measure(): Promise<HeapMeasurement> {
       const coldStepLive = beyond(await inEach(coldIsolates, async (session) => await session.liveHeap()), coldSetUp);
       await ask(`/model?answerBytes=${String(STEP.answerBytes)}`);
       await coldParked;
+      await ask('/main-idle?workspace=cold');
       await ask('/quiesce?workspace=cold');
 
       await ask('/?workspace=heads');
@@ -551,7 +568,14 @@ export async function measure(): Promise<HeapMeasurement> {
       // Sampled to its settlement: main's isolate and the workspace settle before the profile is read, and a call past the
       // turn's last release is answered rather than left parked.
       await long;
-      await ask('/model?released=1000000');
+      const { stepped } = v.parse(v.object({ stepped: v.object({ binding: v.number(), compat: v.number() }) }), JSON.parse(await ask('/model?released=1000000')));
+
+      // The cursor counts every workspace's steps: the long turn's (compat) must be all of them, or the rows below measure
+      // another workload.
+      if (stepped.binding !== 0 || stepped.compat !== LONG_TURN.steps) {
+        throw new Error(`the long turn took ${String(stepped.compat)} of its ${String(LONG_TURN.steps)} scripted steps, and other turns took ${String(stepped.binding)}`);
+      }
+
       await ask('/main-idle?workspace=long');
       await ask('/quiesce?workspace=long');
       const longTurnAllocated = await inEach(longIsolates, async (session) => await session.allocations());
