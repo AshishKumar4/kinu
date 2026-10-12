@@ -1,6 +1,7 @@
 import { Effect } from 'effect';
 import { settle } from '@kinu.run/core/obs';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import type { NimbusSandboxFiles, NimbusSandboxHandle } from '@kinu.run/core';
 // Map-backed VFS; `mkdir` surfaces EEXIST on repeat unless recursive, like the real backends.
 
@@ -68,7 +69,7 @@ export function createMemoryVfs(): MemoryVfs {
 /** A test's Nimbus box with a session's file plane beside it, the plane `nimbusSessionFiles` reads. */
 export type SessionBox = NimbusSandboxHandle & { readonly files: NimbusSandboxFiles };
 
-/** A remote session's file plane over `files`, shaped as the Nimbus SDK's: an absent path answers null. */
+/** A remote session's file plane over `files`, the Nimbus SDK's contract: an absent path answers null. It keeps no modes. */
 export function sessionFilesOver(files = new Map<string, Uint8Array>()): NimbusSandboxFiles {
   const stat = async (path: string) => {
     const bytes = files.get(path);
@@ -78,7 +79,13 @@ export function sessionFilesOver(files = new Map<string, Uint8Array>()): NimbusS
 
   const plane: NimbusSandboxFiles = {
     as: () => plane,
+    read: async (path) => {
+      const bytes = files.get(path);
+
+      return bytes === undefined ? null : new TextDecoder().decode(bytes);
+    },
     readBytes: async (path) => files.get(path)?.slice() ?? null,
+    exists: async (path) => files.has(path),
     readRange: async (path, offset, length) => files.get(path)?.slice(offset, offset + length) ?? null,
     write: async (path, content) => { files.set(path, content instanceof Uint8Array ? content.slice() : new TextEncoder().encode(content)); },
     stat,
@@ -93,6 +100,7 @@ export function sessionFilesOver(files = new Map<string, Uint8Array>()): NimbusS
       files.delete(from);
     },
     mkdir: async () => {},
+    chmod: (path) => settle(Effect.fail(new VfsError('ENOTSUP', 'this test plane keeps no modes', path))),
     delete: async (path) => { files.delete(path); },
   };
 

@@ -12,7 +12,7 @@ import * as v from 'valibot';
 import type { JsonValue } from '../src/utils/json';
 import { present } from '@kinu.run/test-utils';
 import type { SessionBox } from '@kinu.run/test-utils/vfs';
-import type { NimbusSandboxFiles } from '../src/execution/nimbus';
+import type { NimbusSandboxFiles } from '@nimbus-sh/sdk/sandbox';
 import {
   sandboxFiles,
   nimbusSessionFiles,
@@ -213,7 +213,13 @@ function nimbusHandle(fs: MemFs): SessionBox {
 
   const files: NimbusSandboxFiles = {
     as: () => files,
+    async read(path: string) {
+      const bytes = fs.read(path);
+
+      return bytes === null ? null : new TextDecoder().decode(bytes);
+    },
     async readBytes(path: string) { return fs.read(path); },
+    async exists(path: string) { return fs.stat(path) !== null; },
     async readRange(path: string, offset: number, length: number) { return fs.read(path)?.slice(offset, offset + length) ?? null; },
     async write(path: string, data: string | Uint8Array) {
       const text = v.safeParse(v.string(), data);
@@ -232,6 +238,7 @@ function nimbusHandle(fs: MemFs): SessionBox {
       fs.del(from);
     },
     async mkdir(path: string) { fs.mkdir(path); },
+    async chmod(path: string) { throw new VfsError('ENOTSUP', 'this test plane keeps no modes', path); },
     async delete(path: string) { fs.del(path); },
   };
 

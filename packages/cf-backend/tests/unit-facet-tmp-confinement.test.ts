@@ -252,8 +252,10 @@ function originFilesBox(f: OwnerFixture): SessionBox {
     exec: (command, options) => f.box.exec(command, options),
     files: {
       as: () => { throw new Error('the origin box acts as the origin only'); },
+      read: async (path) => present(() => view.readFileString(path)),
       readBytes: async (path) => present(() => view.readFile(path)),
       readRange: async (path, offset, length) => present(() => view.readRange(path, offset, length)),
+      exists: async (path) => view.exists(path),
       write: async (path, content) => { view.writeFile(path, content); },
       list: async (path) => view.readdir(path ?? '/').map((entry) => ({ name: entry.name, type: entry.type })),
       stat,
@@ -261,6 +263,7 @@ function originFilesBox(f: OwnerFixture): SessionBox {
       readlink: refuse,
       rename: refuse,
       mkdir: async (path) => { view.mkdir(path, { recursive: true }); },
+      chmod: async (path, mode) => { view.chmod(path, mode); },
       delete: async (path) => { view.unlink(path); },
     },
   };

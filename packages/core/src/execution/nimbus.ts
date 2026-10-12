@@ -18,9 +18,8 @@ import { commandResult, exposedPortText, type CommandResult } from './exec-resul
 import { KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import type { JsonValue } from '../utils/json';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
-import type {
-  SessionDirectoryEntry, SessionExecOptions, SessionFileStat, SessionPort, SessionRunCodeOptions, SessionStartResult,
-} from '@nimbus-sh/core/runtime/session-protocol.js';
+import type { SessionExecOptions, SessionPort, SessionRunCodeOptions, SessionStartResult } from '@nimbus-sh/core/runtime/session-protocol.js';
+import type { NimbusSandboxFiles } from '@nimbus-sh/sdk/sandbox';
 
 /**
  * A command's options: the shared session contract's, as far as Kinu sets them. `cred` is host-injected only
@@ -39,23 +38,7 @@ export type NimbusPortInfo = SessionPort;
 export type NimbusStartResult = SessionStartResult;
 
 /** A remote session's file plane as Kinu reads it: the SDK's `NimbusSandbox.files`. `as(cred)` binds it to one identity. */
-export interface NimbusSandboxFiles {
-  as(cred: VfsCred): NimbusSandboxFiles;
-  readBytes(path: string): Promise<Uint8Array | null>;
-  /** Exactly this window of a file's bytes; null when the path is absent. */
-  readRange(path: string, offset: number, length: number): Promise<Uint8Array | null>;
-  /** Whole-file write; no precondition, so no compare-and-write. */
-  write(path: string, content: string | Uint8Array): Promise<void>;
-  list(path?: string): Promise<SessionDirectoryEntry[]>;
-  /** `mtime` and `ctime` are in milliseconds; null when absent. `ino` and `revision` when the backend keeps them. */
-  stat(path: string): Promise<SessionFileStat | null>;
-  lstat(path: string): Promise<SessionFileStat | null>;
-  /** A link's target as written; null when the path is absent or no link. */
-  readlink(path: string): Promise<string | null>;
-  rename(from: string, to: string): Promise<void>;
-  mkdir(path: string): Promise<void>;
-  delete(path: string, options?: { recursive?: boolean }): Promise<void>;
-}
+export type { NimbusSandboxFiles };
 
 export interface NimbusSandboxHandle {
   ready(): Promise<void>;

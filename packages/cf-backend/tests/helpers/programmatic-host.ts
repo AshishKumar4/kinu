@@ -469,7 +469,9 @@ export function credentialedSessionBox(
 
     return {
       as: filesAs,
+      read: async (path) => await (await view()).exists(path) ? (await view()).readFileString(path) : null,
       readBytes: async (path) => await (await view()).exists(path) ? (await view()).readFile(path) : null,
+      exists: async (path) => await (await view()).exists(path),
       readRange: async (path, offset, length) => {
         const vfs = (await runtime()).workspace.vfs.as(agent);
 
@@ -483,6 +485,7 @@ export function credentialedSessionBox(
       readlink: async (path) => (await (await view()).isSymlink(path) ? (await view()).readlink(path) : null),
       rename: async (from, to) => { await (await view()).rename(from, to); },
       mkdir: async (path) => { await (await view()).mkdir(path, { recursive: true }); },
+      chmod: async (path, mode) => { await (await view()).chmod(path, mode); },
       delete: async (path, options) => { await (await view()).remove(path, { recursive: options?.recursive ?? false }); },
     };
   };
@@ -509,7 +512,8 @@ export function credentialedSessionBox(
       };
     },
     files: {
-      as: filesAs, readBytes: refuse, readRange: refuse, write: refuse, list: refuse, stat: refuse, lstat: refuse, readlink: refuse, rename: refuse, mkdir: refuse, delete: refuse,
+      as: filesAs, read: refuse, readBytes: refuse, readRange: refuse, write: refuse, list: refuse, stat: refuse, lstat: refuse, readlink: refuse,
+      rename: refuse, chmod: refuse, mkdir: refuse, exists: refuse, delete: refuse,
     },
   };
 }
