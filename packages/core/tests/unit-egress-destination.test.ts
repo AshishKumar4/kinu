@@ -1,7 +1,7 @@
 // KINU-086 egress destination classifier, a pure judgment over a URL. The CF adapter's
 // boundary is asserted in the cf-backend suite.
 import { describe, expect, test } from 'bun:test';
-import { refusedHostname } from '../src/safety/egress-destination';
+import { egressHost, refusedHostname } from '../src/safety/egress-destination';
 import { present } from '@kinu.run/test-utils';
 
 const judged = (url: string) => refusedHostname(new URL(url).hostname);
@@ -65,8 +65,8 @@ describe('IPv6 literal forms', () => {
     expect(judged('http://[1::]/')).toBeNull();
   });
 
-  test('link-local fe80::/10 — full range, any interface', () => {
-    judgesFamily(['http://[fe80::a]/', 'http://[febf::1]/'], ['http://[fec0::1]/']);
+  test('link-local fe80::/10 and the deprecated site-local fec0::/10 — full range, any interface', () => {
+    judgesFamily(['http://[fe80::a]/', 'http://[febf::1]/', 'http://[fec0::1]/', 'http://[feff::1]/'], ['http://[fe7f::1]/']);
   });
 
   test('unique-local fc00::/7 (the private-fabric ULA)', () => {
@@ -153,5 +153,29 @@ describe('fail closed on anything not fully judged', () => {
 
   test('an empty hostname is refused', () => {
     expect(refusedHostname('')).toMatchObject({ reason: 'denied' });
+  });
+});
+
+// 2026-10-12 security review: a socket's or TLS target's host is a raw string, not a URL's canonical one.
+describe('a host as a program gives a socket', () => {
+  test.each([
+    '0x7f.0.0.1', '0x7f.1', '012.0.0.1', '2130706433', '127.1', '0177.0.0.1',
+    '64:ff9b::7f00:1', '64:ff9b::a00:1', '64:ff9b:1::5', '2002:7f00:1::', '2002:a00:1::', '[2002:c0a8:101::]',
+    '2001:0:4136:e378:8000:63bf:80ff:fffe', '198.18.0.1', '198.19.255.255', '192.0.0.8', '224.0.0.251', '255.255.255.255',
+    'ff02::fb', 'fec0::1', '100::1', '2001:db8::1', 'localhost.', 'LOCALHOST', '[::1]', '::ffff:7f00:1',
+  ])('%p is refused', (host) => {
+    expect(egressHost(host)).toMatchObject({ refusal: { reason: 'denied' } });
+  });
+
+  test.each([
+    ['example.com', 'example.com'], ['Example.COM.', 'example.com'], ['bücher.de', 'xn--bcher-kva.de'],
+    ['1.1.1.1', '1.1.1.1'], ['2606:4700:4700:0:0:0:0:1111', '[2606:4700:4700::1111]'], ['[2606:4700:4700::1111]', '[2606:4700:4700::1111]'],
+    ['64:ff9b::101:101', '[64:ff9b::101:101]'], ['2002:101:101::', '[2002:101:101::]'], ['198.20.0.1', '198.20.0.1'],
+  ])('%p is reached as %p', (host, canonical) => {
+    expect(egressHost(host)).toEqual({ host: canonical });
+  });
+
+  test('a host that is no host is refused', () => {
+    for (const host of ['', 'exa mple.com', 'a.1', '1.2.3.4.5', '[::1', '::g']) expect(egressHost(host)).toMatchObject({ refusal: { reason: 'denied' } });
   });
 });

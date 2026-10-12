@@ -1548,6 +1548,7 @@ export {
 } from './safety/index';
 
 export {
+  egressHost,
   refusedHostname,
 } from './safety/egress-destination';
 

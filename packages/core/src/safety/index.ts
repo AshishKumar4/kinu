@@ -159,6 +159,7 @@ export {
 } from './workspace-proposals';
 
 export {
+  egressHost,
   refusedHostname,
 } from './egress-destination';
 

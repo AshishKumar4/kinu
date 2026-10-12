@@ -1,8 +1,9 @@
 /**
  * Pure hostname classifier for destinations untrusted code must never reach. Shared by backend
  * egress (`cf-backend/src/egress/outbound.ts`) and `assertSafeUrl` so both refuse the same set.
- * Literal-based on WHATWG-canonical hostnames; a name that resolves to a private address is not
- * caught here; see `web/url-safety.ts`.
+ * A host is judged in its WHATWG-canonical form, which `egressHost` makes of any spelling a program
+ * gives a socket and answers, so what is reached is what was judged; a name that resolves to a
+ * private address is not caught here; see `web/url-safety.ts`.
  */
 
 import { refusalOf, KinuError, type Refusal } from '../obs/error';
@@ -33,7 +34,7 @@ function parseIPv4(host: string): [number, number, number, number] | null {
   return octets;
 }
 
-function isRefusedIPv4([a, b]: [number, number, number, number]): boolean {
+function isRefusedIPv4([a, b, c]: [number, number, number, number]): boolean {
   if (a === 0) return true; // 0.0.0.0/8 — this network
 
   if (a === 10) return true; // 10.0.0.0/8 — RFC1918
@@ -48,7 +49,13 @@ function isRefusedIPv4([a, b]: [number, number, number, number]): boolean {
 
   if (a === 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10 — CGNAT
 
-  return false;
+  if (a === 192 && b === 0 && (c === 0 || c === 2)) return true; // 192.0.0.0/24 IETF assignments, 192.0.2.0/24 docs
+
+  if (a === 198 && (b === 18 || b === 19)) return true; // 198.18.0.0/15 — benchmarking
+
+  if ((a === 198 && b === 51 && c === 100) || (a === 203 && b === 0 && c === 113)) return true; // documentation
+
+  return a >= 224; // 224.0.0.0/4 multicast, 240.0.0.0/4 reserved and broadcast
 }
 
 /** Expand a canonical compressed IPv6 literal to eight groups, or null. */
@@ -82,30 +89,69 @@ function expandIPv6(host: string): readonly number[] | null {
   return [...groups.slice(0, head.length), ...Array.from({ length: missing }, () => 0), ...groups.slice(head.length)];
 }
 
-/** Refuses loopback, unspecified, link-local, ULA, and IPv4-mapped/compatible by embedded IPv4. */
-function isRefusedIPv6(groups: readonly number[]): boolean {
-  if (groups.slice(0, 7).every((g) => g === 0) && groups[7] === 1) return true; // ::1
-
-  if (groups.every((g) => g === 0)) return true; // ::
-
-  if (groups[0] >= 0xfe80 && groups[0] <= 0xfebf) return true; // fe80::/10
-
-  if (groups[0] >= 0xfc00 && groups[0] <= 0xfdff) return true; // fc00::/7 ULA
-  // Embedded IPv4: mapped (::ffff:a.b.c.d) or compatible (::a.b.c.d).
-  const mapped = groups.slice(0, 5).every((g) => g === 0) && groups[5] === 0xffff;
-  const compatible = groups.slice(0, 6).every((g) => g === 0);
-
-  if (mapped || compatible) {
-    const high = groups[6];
-    const low = groups[7];
-
-    return isRefusedIPv4([high >> 8, high & 0xff, low >> 8, low & 0xff]);
-  }
-
-  return false;
+/** The IPv4 address two groups carry. */
+function embeddedIPv4(high: number, low: number): [number, number, number, number] {
+  return [high >> 8, high & 0xff, low >> 8, low & 0xff];
 }
 
-/** Refusal payload when untrusted code must not reach `hostname`, else null. */
+/**
+ * Refuses loopback, unspecified, link-local, site-local, ULA, multicast, discard and documentation addresses, and any
+ * that carries a refused IPv4 a gateway would reach: mapped (::ffff:a.b.c.d), compatible (::a.b.c.d), NAT64
+ * (64:ff9b::a.b.c.d; its local-use 64:ff9b:1::/48 whole), 6to4 (2002:aabb:ccdd::) and Teredo (server and client).
+ */
+function isRefusedIPv6(groups: readonly number[]): boolean {
+  const [g0 = 0, g1 = 0, g2 = 0, g3 = 0, g4 = 0, g5 = 0, g6 = 0, g7 = 0] = groups;
+
+  if (groups.slice(0, 7).every((g) => g === 0) && g7 <= 1) return true; // :: and ::1
+
+  if (g0 >= 0xfe80 && g0 <= 0xfeff) return true; // fe80::/10 link-local, fec0::/10 site-local
+
+  if (g0 >= 0xfc00 && g0 <= 0xfdff) return true; // fc00::/7 ULA
+
+  if (g0 >= 0xff00) return true; // ff00::/8 multicast
+
+  if (g0 === 0x100 && g1 === 0 && g2 === 0 && g3 === 0) return true; // 100::/64 discard
+
+  if (g0 === 0x2001 && g1 === 0xdb8) return true; // 2001:db8::/32 documentation
+
+  if (g0 === 0x64 && g1 === 0xff9b && g2 === 1) return true; // 64:ff9b:1::/48 local-use NAT64
+
+  if (g0 === 0x64 && g1 === 0xff9b && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0) return isRefusedIPv4(embeddedIPv4(g6, g7));
+
+  if (g0 === 0x2002) return isRefusedIPv4(embeddedIPv4(g1, g2));
+
+  // Teredo carries its server, and its client with every bit inverted.
+  if (g0 === 0x2001 && g1 === 0) return isRefusedIPv4(embeddedIPv4(g2, g3)) || isRefusedIPv4(embeddedIPv4(~g6 & 0xffff, ~g7 & 0xffff));
+  const mapped = groups.slice(0, 5).every((g) => g === 0) && g5 === 0xffff;
+  const compatible = groups.slice(0, 6).every((g) => g === 0);
+
+  return (mapped || compatible) && isRefusedIPv4(embeddedIPv4(g6, g7));
+}
+
+/**
+ * `hostname` as untrusted code gave it to a socket or a TLS target, in the one form it is judged and reached by: its
+ * WHATWG-canonical host (lowercase, punycode, IPv4 as a dotted quad, IPv6 compressed and bracketed), or the refusal.
+ * An IPv4 written any other way (`0x7f.1`, `012.0.0.1`, `2130706433`) is refused rather than guessed at: resolvers
+ * disagree on those spellings, so the address reached would not be the one judged.
+ */
+export function egressHost(hostname: string): { readonly host: string } | { readonly refusal: Refusal } {
+  const written = hostname.toLowerCase().replace(/\.$/, '');
+  const bare = written.startsWith('[') && written.endsWith(']') ? written.slice(1, -1) : written;
+  const url = `http://${bare.includes(':') ? `[${bare}]` : bare}/`;
+  const host = written === '' || !URL.canParse(url) ? null : new URL(url).hostname;
+
+  if (host === null) return { refusal: refusalOf(new KinuError('denied', `blocked unparseable host: ${hostname}`)) };
+
+  if (parseIPv4(host) !== null && host !== bare) {
+    return { refusal: refusalOf(new KinuError('denied', `blocked non-canonical IPv4 literal: ${hostname} (${host})`)) };
+  }
+
+  const refusal = refusedHostname(host);
+
+  return refusal === null ? { host } : { refusal };
+}
+
+/** Refusal payload when untrusted code must not reach `hostname`, a WHATWG-canonical host, else null. */
 export function refusedHostname(hostname: string): Refusal | null {
   const host = hostname.toLowerCase().replace(/\.$/, '');
 

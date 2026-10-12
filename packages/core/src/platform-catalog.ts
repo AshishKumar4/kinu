@@ -1250,6 +1250,25 @@ export const PLATFORM_CATALOG = {
       + 'to the platform. Miniflare enforces none of it.',
   },
 
+  'worker.connect.address_forms': {
+    subject: "The spellings of an IP address a Worker's connect() reaches",
+    limit: null,
+    origin: 'platform',
+    bounds: null,
+    evidence: 'observed-in-production',
+    provenance: '~/kinu-logs/research/egress-hostforms-2026-10-12.md §2-§3',
+    date: '2026-10-12',
+    trigger: 'connect() to an IPv4 written other than as a dotted quad, an unbracketed IPv6, or an IPv6 that embeds an IPv4',
+    onBreach: 'the socket is refused at open; nothing is sent',
+    observable: [{ context: 'socket.opened rejects', message: 'proxy request failed, cannot connect to the specified address' }],
+    firstPartySignal: true,
+    notes:
+      '8.8.8.8:53 and [2001:4860:4860::8888]:53 opened and answered DNS; 0x8.0x8.0x8.0x8, 0x08080808, 134744072, 8.8.2056, '
+      + '010.010.010.010 and 008.008.008.008 were refused, as were bare 2001:4860:4860::8888, ::ffff:8.8.8.8, [::808:808], '
+      + '[64:ff9b::808:808] (NAT64), [2002:808:808::] (6to4) and Teredo. [64:ff9b:1::808:808] was not refused: its open timed '
+      + 'out. Kinu\'s egress (egressHost) refuses every such spelling itself and connects in the canonical one.',
+  },
+
   'worker.fetch.private_address': {
     subject: "A Worker's fetch() to a private or loopback address, or to a name that resolves to one",
     limit: null,

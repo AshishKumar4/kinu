@@ -11,6 +11,7 @@ import {
   createScrubStream,
   egressPlaceholdersIn,
   scrubBytes,
+  egressHost,
   refusedHostname,
   scrubText,
   JsonValueSchema,
@@ -205,40 +206,46 @@ export function handleEgressConnect(socket: Socket, params: KinuEgressParams | u
     const keyed = named === null ? null : keyedHost(named.hostname);
     const destination = keyed === null || named === null ? named : { hostname: keyed.hostname, port: named.port };
 
-    const refusedHere = (host: string, reason: string) => {
-      diagnostics.failure('egress.socket_refused', new KinuError('denied', reason), { host, seam: 'workspace-connect' });
+    // A keyed socket's name carries its tags; what is logged is only where it goes.
+    const shown = destination === null ? '(no usable destination)' : `${destination.hostname}:${String(destination.port)}`;
+
+    const refusedHere = (reason: string) => {
+      diagnostics.failure('egress.socket_refused', new KinuError('denied', reason), { host: shown, seam: 'workspace-connect' });
     };
 
     if (params === undefined || destination === null) {
-      refusedHere(address, params === undefined ? 'egress is not configured for this workspace yet' : `the socket names no usable destination (${address})`);
+      refusedHere(params === undefined ? 'egress is not configured for this workspace yet' : 'the socket names no usable destination');
 
-      return yield* attempt({ doing: `refusing a socket to ${address}`, otherwise: 'io' }, () => socket.close());
+      return yield* attempt({ doing: `refusing a socket to ${shown}`, otherwise: 'io' }, () => socket.close());
     }
 
-    const refused = refusedHostname(destination.hostname);
+    const judged = egressHost(destination.hostname);
 
-    if (refused !== null) {
-      refusedHere(destination.hostname, refused.error);
+    if ('refusal' in judged) {
+      refusedHere(judged.refusal.error);
 
-      return yield* attempt({ doing: `refusing a socket to ${address}`, otherwise: 'io' }, () => socket.close());
+      return yield* attempt({ doing: `refusing a socket to ${shown}`, otherwise: 'io' }, () => socket.close());
     }
 
     const { connect } = yield* Effect.promise(() => import('cloudflare:sockets'));
+    // The host reached is the one judged, in its canonical form: connect() reaches an IPv6 literal only bracketed, and an
+    // IPv4 only as a dotted quad (PLATFORM_CATALOG 'worker.connect.address_forms').
+    const reached = { hostname: judged.host, port: destination.port };
 
     if (keyed !== null) {
-      const server = connect({ hostname: destination.hostname, port: destination.port }, { allowHalfOpen: true, secureTransport: 'starttls' });
+      const server = connect(reached, { allowHalfOpen: true, secureTransport: 'starttls' });
 
-      return yield* attempt({ doing: `carrying a socket to ${destination.hostname}`, otherwise: 'io' }, () => carryKeyed(socket, server, keyed.hostname, keyed.tags));
+      return yield* attempt({ doing: `carrying a socket to ${shown}`, otherwise: 'io' }, () => carryKeyed(socket, server, judged.host, keyed.tags));
     }
 
-    const upstream = connect({ hostname: destination.hostname, port: destination.port }, { allowHalfOpen: true, secureTransport: 'off' });
+    const upstream = connect(reached, { allowHalfOpen: true, secureTransport: 'off' });
 
     // The program's end of input is not passed on: closing a workerd socket's writable ended its readable too, so a
     // client that half-closed after its request got no answer (scripts/egress-probe.ts, 2026-10-10). The server's own
     // close ends the socket.
     yield* Effect.all([
-      attempt({ doing: `carrying a socket to ${address}`, otherwise: 'io' }, () => socket.readable.pipeTo(upstream.writable, { preventClose: true })),
-      attempt({ doing: `carrying a socket from ${address}`, otherwise: 'io' }, () => upstream.readable.pipeTo(socket.writable)),
+      attempt({ doing: `carrying a socket to ${shown}`, otherwise: 'io' }, () => socket.readable.pipeTo(upstream.writable, { preventClose: true })),
+      attempt({ doing: `carrying a socket from ${shown}`, otherwise: 'io' }, () => upstream.readable.pipeTo(socket.writable)),
     ], { concurrency: 'unbounded' });
   }).pipe(
     // A socket either end resets is the program's to see; the egress has nothing left to answer.
@@ -254,16 +261,16 @@ export function handleEgressConnect(socket: Socket, params: KinuEgressParams | u
  */
 export function handleEgressTls(target: EgressTlsTarget, params: KinuEgressParams | undefined): Promise<EgressTlsStreams> {
   return settle(Effect.gen(function* () {
-    const refused = params === undefined ? 'egress is not configured for this workspace yet' : refusedHostname(target.hostname)?.error ?? null;
+    const judged = params === undefined ? { refusal: { error: 'egress is not configured for this workspace yet' } } : egressHost(target.hostname);
 
-    if (refused !== null) {
-      diagnostics.failure('egress.socket_refused', new KinuError('denied', refused), { host: target.hostname, seam: 'workspace-tls' });
+    if ('refusal' in judged) {
+      diagnostics.failure('egress.socket_refused', new KinuError('denied', judged.refusal.error), { host: target.hostname, seam: 'workspace-tls' });
 
-      return yield* new KinuError('denied', refused);
+      return yield* new KinuError('denied', judged.refusal.error);
     }
 
     const { connect } = yield* Effect.promise(() => import('cloudflare:sockets'));
-    const destination = { hostname: target.hostname, port: target.port };
+    const destination = { hostname: judged.host, port: target.port };
 
     const secure = target.servername === undefined
       ? connect(destination, { allowHalfOpen: true, secureTransport: 'on' })

@@ -778,6 +778,42 @@ describe('a workspace program\'s TCP socket', () => {
     expect(emitted.map((line) => line.event)).toEqual(['egress.socket_refused']);
   });
 
+  // 2026-10-12 security review: the judge saw the raw string and the socket went to whatever the platform made of it.
+  test.each([
+    '0x7f.0.0.1:5432', '0x7f.1:5432', '012.0.0.1:22', '2130706433:80', '64:ff9b::7f00:1:6379', '64:ff9b::a00:1:22',
+    '2002:7f00:1:::80', '2002:a00:1:::22', '198.18.0.1:80', '[64:ff9b::a00:1]:22', '[2001:0:4136:e378:8000:63bf:80ff:fffe]:80',
+  ])('to %p, a private address in another spelling, is refused before anything is dialled', async (address) => {
+    const socket = inboundSocket(address);
+
+    dialled.length = 0;
+    await recordDiagnostics(async () => { await handleEgressConnect(socket, PARAMS); });
+
+    expect(socket.wasClosed()).toBe(true);
+    expect(dialled).toEqual([]);
+  });
+
+  test('to a public host goes where it was judged, in the form it was judged', async () => {
+    // Programs that send nothing and hang up, so each carried socket ends.
+    const quiet = (address: string) => ({ ...inboundSocket(address), readable: ended() });
+
+    dialled.length = 0;
+    await handleEgressConnect(quiet('DB.Example.COM.:5432'), PARAMS);
+    await handleEgressConnect(quiet('[2606:4700:4700:0:0:0:0:1111]:53'), PARAMS);
+
+    // connect() reaches an IPv6 literal only bracketed (PLATFORM_CATALOG 'worker.connect.address_forms').
+    expect(dialled.map(({ hostname, port }) => `${hostname} ${String(port)}`)).toEqual(['db.example.com 5432', '[2606:4700:4700::1111] 53']);
+  });
+
+  test('refused under a keyed name logs where it went, never the name\'s tags', async () => {
+    const tags = 'ab'.repeat(32);
+    const keyed = `${Buffer.from('10.0.0.7').toString('hex')}.k.${tags.slice(0, 62)}.${tags.slice(62)}.tcp.nimbus-egress.invalid:5432`;
+
+    const emitted = await recordDiagnostics(async () => { await handleEgressConnect(inboundSocket(keyed), PARAMS); });
+
+    expect(JSON.stringify(emitted)).not.toContain(tags.slice(0, 16));
+    expect(emitted.map((line) => line.fields?.host)).toEqual(['10.0.0.7:5432']);
+  });
+
   test('from an unconfigured workspace is refused, as its requests are', async () => {
     const socket = inboundSocket('example.com:5432');
 
@@ -806,7 +842,10 @@ interface Dialled {
 /** Every TLS dial this file's stand-in for `cloudflare:sockets` was asked for. */
 const dialled: Dialled[] = [];
 
-const opened = () => ({ readable: new ReadableStream<Uint8Array>(), writable: new WritableStream<Uint8Array>(), opened: Promise.resolve() });
+/** A connection whose server says nothing and hangs up, so a socket carried over it ends. */
+const ended = () => new ReadableStream<Uint8Array>({ start: (controller) => { controller.close(); } });
+
+const opened = () => ({ readable: ended(), writable: new WritableStream<Uint8Array>(), opened: Promise.resolve() });
 
 await mock.module('cloudflare:sockets', () => ({
   connect: (target: { hostname: string; port: number }, options: { secureTransport: string }) => {
@@ -828,7 +867,7 @@ await mock.module('cloudflare:sockets', () => ({
 // A program's TLS socket arrives as Nimbus's connectTls call (NIMBUS-ASKS #44): the host is judged, then the session is
 // made here, checking the server by the program's servername where it named one other than the host, as Node does.
 describe('a workspace program\'s TLS socket', () => {
-  test.each(['127.0.0.1', '10.0.0.7', 'metadata.google.internal'])('to %p is refused before anything is dialled', async (hostname) => {
+  test.each(['127.0.0.1', '10.0.0.7', 'metadata.google.internal', '0x7f.1', '012.0.0.1', '64:ff9b::a00:1', '2002:7f00:1::', '198.18.0.1'])('to %p is refused before anything is dialled', async (hostname) => {
     const emitted = await recordDiagnostics(async () => {
       await expect(handleEgressTls({ hostname, port: 443 }, PARAMS)).rejects.toMatchObject({ code: 'denied' });
     });
