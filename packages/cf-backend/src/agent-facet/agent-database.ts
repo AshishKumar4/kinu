@@ -17,7 +17,7 @@ import {
   PlanReviewStore, AgentSequence, TurnFactsStore, type PlanReview, type TurnFacts,
   forkArtifactPath, localForkConversationSource, localForkConversationTarget, type ForkConversationSource, type ForkConversationTarget,
   InProcessDeliveries, type Delivery, type DeliveryAnswer, holdConfig,
-  writesSnapshotRows,
+  writesSnapshotRows, HeldReads, type SqlExec,
 } from '@kinu.run/core';
 import { attempt, detach, diagnostics, hold, KinuError, logged, settle, settleSync } from '@kinu.run/core/obs';
 import { isDeepStrictEqual } from 'node:util';
@@ -119,11 +119,25 @@ export class AgentDatabase {
   private priced: { readonly model: string; readonly pricing: ModelPricing | null } | null = null;
   private execution: Executor | null = null;
 
+  /** Reads held between this database's statements: `sql` and `exec` drop them. Every write passes one of the two but
+   *  DDL and {@link adopt}'s copied rows (identity, lineage, config, scaffold), which nothing here holds. */
+  readonly held = new HeldReads();
+
   private readonly sql: SqlExecutor = <T,>(query: TemplateStringsArray, ...values: SqlValue[]): T[] => {
     // Before it runs: a statement that throws may still have written.
     if (writesSnapshotRows(query)) this.adopted = null;
+    this.held.written(query);
 
     return this.storage.sql.exec<Extract<T, Record<string, SqlStorageValue>>>(query.join('?'), ...values).toArray();
+  };
+
+  /** For stores that take a raw statement. */
+  readonly exec: SqlExec = {
+    exec: (query, ...bindings) => {
+      this.held.written(query);
+
+      return this.storage.sql.exec(query, ...bindings);
+    },
   };
 
   /** The rows this database was last made to hold, as the workspace sent them; null once it wrote one of them itself. */
@@ -153,7 +167,7 @@ export class AgentDatabase {
       execRaw: (ddl) => { storage.sql.exec(ddl); },
       sql: this.sql,
       transactionSync: (write) => storage.transactionSync(write),
-      exec: { exec: (query, ...bindings) => storage.sql.exec(query, ...bindings) },
+      exec: this.exec,
     });
     initPendingSendTables((ddl) => { storage.sql.exec(ddl); });
     initTerminalEffectTable((ddl) => { storage.sql.exec(ddl); });
@@ -256,7 +270,7 @@ export class AgentDatabase {
       storage: {
         sql: this.sql,
         transactionSync: (write) => storage.transactionSync(write),
-        exec: (query, ...bindings) => storage.sql.exec(query, ...bindings),
+        exec: (query, ...bindings) => this.exec.exec(query, ...bindings),
       },
       directory,
       installedBuild: snapshot.installedBuild,
@@ -270,7 +284,7 @@ export class AgentDatabase {
         // What it raises for itself is a delivery too, in its own store: one admission path for every agent.
         deliveries: new InProcessDeliveries({
           actorId: bound.handle.actorId, sql: bound.runtime.storage.sql, transaction: (body) => storage.transactionSync(body),
-          eventLog: new EventLog({ exec: (query, ...bindings) => storage.sql.exec(query, ...bindings) }, bound.handle),
+          eventLog: new EventLog(this.exec, bound.handle),
           admit: (delivery) => this.workspace.admitDelivery(delivery),
           broadcast: (event) => { this.workspace.broadcast(event); },
         }),
@@ -288,7 +302,7 @@ export class AgentDatabase {
           enabled: false,
           transaction: (body) => { storage.transactionSync(body); },
         }),
-        eventLog: new EventLog({ exec: (query, ...bindings) => storage.sql.exec(query, ...bindings) }, bound.handle),
+        eventLog: new EventLog(this.exec, bound.handle),
       }),
       contextEvents: () => null,
       sayToParent: (_child, signal) => this.workspace.sayToParent(signal),
@@ -403,7 +417,7 @@ export class AgentDatabase {
     const { actor, transcript } = this.readable();
 
     return await readSubordinateInspection({
-      sql: this.sql, raw: { exec: (query, ...bindings) => this.storage.sql.exec(query, ...bindings) }, actor, transcriptFor: () => transcript,
+      sql: this.sql, raw: this.exec, actor, transcriptFor: () => transcript,
     }, request);
   }
 

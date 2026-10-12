@@ -97,7 +97,7 @@ export class FacetChat {
       sessionId: CHAT_SESSION_ID,
       transcript: actor.stores.history.transcript(CHAT_SESSION_ID),
       pendingSends: new PendingSendStore(sql, actor.handle.actorId),
-      eventLog: new EventLog({ exec: (query, ...bindings) => storage.sql.exec(query, ...bindings) }, actor.handle),
+      eventLog: new EventLog(deps.database.exec, actor.handle),
       eventRecorder: actor.stores.eventRecorder,
       compactionState: this.trigger.state,
       transaction: (body) => storage.transactionSync(body),
@@ -321,6 +321,7 @@ export class FacetChat {
 
     this.terminalTransitions ??= new TerminalTransitions({
       sql: actor.runtime.storage.sql,
+      holds: this.deps.database.held,
       actor: actor.handle,
       effects: {
         ...chatTerminalEffects({ chat: () => this.session, orchestrator: () => actor.session.orchestrator, engine: { learnFromTurn: async () => {} } }),

@@ -836,6 +836,8 @@ export {
   type MediaModality,
 } from './prompting/attachment-sanitizer';
 
+export { HeldReads } from './utils/held-reads';
+
 export { rasterImage, type RasterImage } from './utils/raster-image';
 
 export { mediaImage, mediaTokens, UNPRICED_MEDIA_TOKENS, type MediaPart } from './prompting/media-tokens';
@@ -884,7 +886,7 @@ export { createAgentStores } from './state/agent-stores';
 
 export type { AgentStores } from './state/agent-stores';
 
-export { collectDynamicContext, subordinateDelegatesOf } from './state/dynamic-context';
+export { collectDynamicContext, dynamicReads, subordinateDelegatesOf, type DynamicReads } from './state/dynamic-context';
 
 export type { DynamicContextInput } from './state/dynamic-context';
 

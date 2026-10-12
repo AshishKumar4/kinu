@@ -1,4 +1,5 @@
 import { MEMORY_PATH } from '../memory/note';
+import { WRITE } from '../utils/held-reads';
 import { workspacePath, WORKSPACE_ROOT } from '../vfs/workspace-path';
 
 export const LIVE_READS = [
@@ -71,8 +72,6 @@ const READS_BY_MEMBERSHIP: ReadonlyMap<string, readonly LiveRead[]> = new Map<st
   ['head_journal', ['getWorkspaceTabPresence']],
   ['search_nodes', ['getWorkspaceTabPresence']],
 ]);
-
-const WRITE = /\b(INSERT(?:\s+OR\s+\w+)?\s+INTO|REPLACE\s+INTO|UPDATE(?:\s+OR\s+\w+)?|DELETE\s+FROM)\s+["`]?(\w+)/i;
 
 const NONE: readonly LiveRead[] = [];
 

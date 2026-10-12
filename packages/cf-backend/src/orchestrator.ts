@@ -524,6 +524,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   ): T[] {
     // Before it runs: a statement that throws may still have written.
     if (writesSnapshotRows(strings)) this._heldSnapshots?.clear();
+    this.heldWritten(strings);
     const rows = super.sql<T>(strings, ...values);
     let reads = READS_BY_STATEMENT.get(strings);
 
@@ -947,7 +948,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         if (!this.liveActor(actorId)) return await this.agentWakes.owes(actorId, null);
         this.noteAgentOwedWork(actorId, holds);
         // A rest told while a delivery is owed it keeps the wake that crosses it.
-        await this.agentWakes.owes(actorId, next ?? (this.deliveries.owes(actorId) ? Date.now() + RECOVERY_BACKOFF_CEILING_MS : null));
+        await this.agentWakes.owes(actorId, next ?? (this.deliveriesOwed(actorId) ? Date.now() + RECOVERY_BACKOFF_CEILING_MS : null));
 
         if (next !== null) return;
         await this.closeLostChatTurn(actorId);
@@ -970,9 +971,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       armCacheWarm: async (input) => this.warmingOf(actorId).armAfterTurn(input),
       // Its tasks tool and its jobs run here, over its own rows, main's as any agent's.
       openWork: async () => {
+        // Main's are the rows its dynamic block holds; another agent's are read here.
+        const reads = actorId === this.actorHandle().actorId ? this.mainDynamicReads : null;
         const { stores } = this.agentBound(actorId);
 
-        return { tasks: stores.taskList.listOpen(), asyncWakePending: stores.jobs.listRunning(1).total > 0 };
+        return reads === null
+          ? { tasks: stores.taskList.listOpen(), asyncWakePending: stores.jobs.listRunning(1).total > 0 }
+          : { tasks: reads.openTasks(), asyncWakePending: reads.runningJobs().total > 0 };
       },
       advise: (review) => this.agentTurns.advise(actorId, review),
       runEnded: async (id, outcome) => {
@@ -1727,23 +1732,42 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * One `LIMIT 1` read per store, all read so the wake can name them. Runs in the init gate;
    * interpreting a lease is left to {@link owedDeliveryWork}.
    */
+  /**
+   * The owed-work probes over this object's own tables, held across a turn's wake decisions (the open, each report and
+   * the rest ask all of them). Each names its table's writers; their statements pass `sql` or `watchedExec`, which drop it.
+   */
+  private readonly owedProbes = {
+    // EventLog's lease writes (markConsumed, releaseLease, unbindStale), every one over `watchedExec`.
+    openDrainLease: this.held.hold(['agent_log'], () => this.eventLog.hasOpenDrainLease()),
+    // LiveHeadJournal over `sql`.
+    unfinishedHeads: this.held.hold(['head_journal'], () => this.headJournal.hasUnfinishedHeads()),
+    // MctsSearchStore over `sql`.
+    runningSwarms: this.held.hold(['mcts_search_runs'], () => this.mctsSearchStore.hasRunningSwarms()),
+    // WorkspaceActorDirectory's insert and transitionRetirement over `sql`.
+    retirements: this.held.hold(['workspace_actors'], () => this.workspaceActors().hasRetirements()),
+    // Every SubordinateRosterStore over `watchedExec`.
+    pendingBirths: this.held.hold(['actor_subordinates'], () => this.subordinateRoster.hasPendingBirths()),
+    pendingDeletions: this.held.hold(['actor_subordinates'], () => this.subordinateRoster.hasPendingDeletions()),
+    // sendChangeNotes and its retire over the runtime's `sql`.
+    changeNotes: this.held.hold(['change_notes_outbox'], () => owesChangeNotes(this.rt)),
+  };
+
   protected override owedUntimedArms(): Required<UntimedArms> {
+    const probes = this.owedProbes;
+
     return {
-      openDrainLease: this.eventLog.hasOpenDrainLease(),
+      openDrainLease: probes.openDrainLease(),
       // Interrupted terminal sequence with no retry instant; one awaiting a retry is timed (`nextOwedAt`).
       terminalIncomplete: this.terminal.hasIncomplete() && this.terminal.nextRetryAt() === null,
-      unfinishedHeads: this.headJournal.hasUnfinishedHeads(),
-      runningSwarms: this.mctsSearchStore.hasRunningSwarms(),
-      retirements: this.workspaceActors().hasRetirements(),
-      pendingBirths: this.subordinateRoster.hasPendingBirths(),
-      pendingDeletions: this.subordinateRoster.hasPendingDeletions(),
-      // An unsettled hosted claim; without this, a workspace whose only owed work is an interrupted
-      // hosted turn arms no wake and the recovery arm of `maintenanceWork` never runs.
-      unsettledClaims: this.actorHost().resumable(1).length > 0,
+      unfinishedHeads: probes.unfinishedHeads(),
+      runningSwarms: probes.runningSwarms(),
+      retirements: probes.retirements(),
+      pendingBirths: probes.pendingBirths(),
+      pendingDeletions: probes.pendingDeletions(),
       agentTurns: this.agentTurns.inFlightAny(),
       // Main's chat, in its own isolate: work handed to it that it has not yet said it rests from.
       chatLoop: this.agentWakes.armed(this.actorHandle().actorId),
-      changeNotes: owesChangeNotes(this.rt),
+      changeNotes: probes.changeNotes(),
     };
   }
 
@@ -1989,11 +2013,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this._emailOutbox;
   }
 
-  /** Approvals combine consent prompts and parked commands; a parked command's effect has not happened. */
+  /** Parked commands, held: DeferredApprovalStore's create, decide, spend and settle run over `sql`, which drops them. */
+  private readonly queuedApprovals = this.held.hold(['deferred_approvals'], () => this.deferrals.approvals());
+
+  /** Approvals combine consent prompts and parked commands; a parked command's effect has not happened. Consents expire
+   *  with time, so they are read each time. */
   protected override extraDynamicContext(): ActorDynamicContextExtras {
     return {
       approvals: () => {
-        const items = [...this.consents.approvals(), ...this.deferrals.approvals()];
+        const items = [...this.consents.approvals(), ...this.queuedApprovals()];
 
         return { items, total: items.length };
       },
@@ -2442,6 +2470,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private get deliveries(): AgentDeliveries {
     return new AgentDeliveries(this.boundSql);
   }
+
+  /** Whether an agent is owed a delivery, held per agent: AgentDeliveries' add, paid and cancel run over `sql`, which drops it. */
+  private readonly deliveriesOwed = this.held.holdEach(['agent_deliveries'], (actorId: string) => this.deliveries.owes(actorId));
 
   /**
    * One delivery for the agent (design v2 §1, v3 A): committed in one synchronous commit with `source`, the producer's
@@ -6018,7 +6049,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // Main owns its header; its standing report is the projection, never the parent's actor stores.
     const header = (await this.mainStanding()).latestRun;
     // A settled turn's leftovers still closing are its work, not a durable leftover.
-    const working = this._inFlight || this.deliveries.owes(main) || this.agentTurns.inFlight(main) || hostedBusy || this.terminal.closing;
+    const working = this._inFlight || this.deliveriesOwed(main) || this.agentTurns.inFlight(main) || hostedBusy || this.terminal.closing;
 
     return buildWorkspaceOverview({
       ...inputs,

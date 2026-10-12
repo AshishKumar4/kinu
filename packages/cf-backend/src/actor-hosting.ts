@@ -172,7 +172,8 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
     storage: {
       sql: seams.sql,
       transactionSync: <Result>(write: () => Result): Result => seams.ctx.storage.transactionSync(write),
-      exec: (query: string, ...bindings: readonly SqlValue[]) => seams.ctx.storage.sql.exec(query, ...bindings),
+      // The watched executor: an actor's purge moves the reads its tables back (`watchedExec`).
+      exec: (query: string, ...bindings: readonly SqlValue[]) => seams.exec.exec(query, ...bindings),
     },
     directory: seams.directory,
     installedBuild: seams.installedBuild(),

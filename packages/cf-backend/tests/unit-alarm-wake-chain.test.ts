@@ -16,6 +16,7 @@ import { cutNextDelivery } from './helpers/agent-facets';
 import { present } from '@kinu.run/test-utils';
 import { answeringGateway, chatCompletion, openingOf, stubAiBinding } from './helpers/platform-gateway';
 import { KINU_TIMER_JOB, TERMINAL_RETRY_JOB, type WakeJob } from '../src/wake-jobs';
+import type { OrchestratorAgent } from '../src/orchestrator';
 
 /** The longest a recovery waits before it tries again: a minute, stated here rather than asked of the backoff. */
 const RECOVERY_CEILING_MS = 60_000;
@@ -59,11 +60,10 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * next activation sweeps it only once its start is later than `spawned_at`, so a test that needs the
  * sweep moves the clock between activations rather than hoping they land in different milliseconds.
  */
-function liveHead(db: Database, id: string): void {
-  db.prepare(
-    `INSERT INTO head_journal (actor_id, id, root_id, depth, task, status, spawned_at)
-     VALUES (?, ?, ?, 0, 'take a branch', 'running', ?)`,
-  ).run(harnessActorId(db), id, `branch-${id}`, Date.now());
+function liveHead(agent: Pick<OrchestratorAgent, 'sql'>, db: Database, id: string): void {
+  // Through the object's own executor, as its spawn writes it: what the object holds of its heads moves with it.
+  void agent.sql`INSERT INTO head_journal (actor_id, id, root_id, depth, task, status, spawned_at)
+    VALUES (${harnessActorId(db)}, ${id}, ${`branch-${id}`}, 0, 'take a branch', 'running', ${Date.now()})`;
 }
 
 /** The rows one sweep pass settles (`ORPHAN_SEAL_MAX_ROWS`), and a backlog past it. */
@@ -483,7 +483,7 @@ describe('the workspace keeps exactly one wake per job', () => {
         // Every lap is a fresh activation over the same storage, as the platform's idle eviction makes it.
         const { agent } = await reactivateOrchestratorHarness(db);
         // Work still running in this activation keeps the lap unfinished.
-        liveHead(db, `lap-${String(lap)}`);
+        liveHead(agent, db, `lap-${String(lap)}`);
 
         // The first lap starts the chain; each later lap fires the wake the lap before armed.
         if (wakeArmed(db)) await fireSoonestWake(agent, db);
@@ -518,7 +518,7 @@ describe('the workspace keeps exactly one wake per job', () => {
       setSystemTime(new Date(start + ++activations * 60_000));
       const { agent } = await reactivateOrchestratorHarness(db);
 
-      if (running) liveHead(db, `streak-${String(laps++)}`);
+      if (running) liveHead(agent, db, `streak-${String(laps++)}`);
       // Each activation installs its own sink, so the recorder is tapped per activation.
       const untap = tapDiagnostics(recorder);
 

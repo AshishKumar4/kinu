@@ -42,7 +42,7 @@ import {
   type CliSocketBearer,
   type RpcFrame,
 } from "./cli/rpc-gate";
-import { codemodeSurface, hostedWindowMay, PAGE_KEEPALIVE, readsWrittenBy, requiredRpcAccess, ROSTER_READS, rpcMovesOverview, type LiveRead, type SqlExec } from "@kinu.run/core";
+import { codemodeSurface, HeldReads, hostedWindowMay, PAGE_KEEPALIVE, readsWrittenBy, requiredRpcAccess, ROSTER_READS, rpcMovesOverview, type LiveRead, type SqlExec } from "@kinu.run/core";
 import { retryTransientDO } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
 import { attempt, attemptInItsWords, createAgentTracing, hold, recording, renderThrownChain, type AgentTracing, settle, settleSync, settleLoggedSync, settleLogged } from "@kinu.run/core/obs";
@@ -106,7 +106,7 @@ import {
   // Prices a model_call row only when the rate belongs to that call's own model.
   buildModelCallEvent,
   type FactsStore,
-  createAgentStores, type AgentConfigStore, type SetModelDeps, collectDynamicContext, subordinateDelegatesOf,
+  createAgentStores, type AgentConfigStore, type SetModelDeps, collectDynamicContext, dynamicReads, type DynamicReads, subordinateDelegatesOf,
   nimbusSessionFiles, agentArtifactDirectory, agentHome, MAIN_AGENT,
   CHAT_SESSION_ID, type SessionTranscript,
   type SqlExecutor,
@@ -402,7 +402,6 @@ export interface UntimedArms {
   readonly retirements?: boolean;
   readonly pendingBirths?: boolean;
   readonly pendingDeletions?: boolean;
-  readonly unsettledClaims?: boolean;
   readonly agentTurns?: boolean;
   readonly chatLoop?: boolean;
   readonly changeNotes?: boolean;
@@ -860,9 +859,23 @@ export abstract class ActorAgent extends Agent<Env> {
 
   private _subordinateRoster: SubordinateRosterStore | null = null;
 
+  /** Reads held between this object's statements: `sql` and {@link watchedExec}, its two executors, drop them. */
+  // Lazy: this object's statements run before its fields are initialised (its base's constructor).
+  private _held: HeldReads | undefined;
+
+  protected get held(): HeldReads {
+    return this._held ??= new HeldReads();
+  }
+
+  /** Before each statement either executor runs. */
+  protected heldWritten(query: string | TemplateStringsArray): void {
+    this._held?.written(query);
+  }
+
   protected get watchedExec(): SqlExec {
     return {
       exec: (query, ...bindings) => {
+        this.heldWritten(query);
         const cursor = this.ctx.storage.sql.exec(query, ...bindings);
         this.liveReadsMoved(readsWrittenBy(query));
 
@@ -1366,6 +1379,7 @@ export abstract class ActorAgent extends Agent<Env> {
     this._terminalTransitions ??= new TerminalTransitions({
       actor: this.actorHandle(),
       sql: this.boundSql,
+      holds: this.held,
       effects: this.terminalEffectTable(),
       now: () => Date.now(),
       fault: () => this.terminalEffectFault,
@@ -3827,13 +3841,20 @@ export abstract class ActorAgent extends Agent<Env> {
    * Cache key over CraftStore + quality state; includes MAX(last_used_at) because effective-score
    * filtering depends on recency. Unscoped on purpose: crafted_tools has no actor_id column.
    */
-  private _craftCacheKey(): string {
-    const row = this.sql<{ cnt: number; latest: number; lastUsed: number }>`
-      SELECT COUNT(*) as cnt, COALESCE(MAX(updated_at), 0) as latest,
-             COALESCE(MAX(last_used_at), 0) as lastUsed
-      FROM crafted_tools`[0] ?? { cnt: 0, latest: 0, lastUsed: 0 };
+  private _craftKey: (() => string) | undefined;
 
-    return `${row.cnt}:${row.latest}:${row.lastUsed}`;
+  /** Held: CraftStore's create, update and delete, the score updates and a conflict's replacement all run over `sql`. */
+  private _craftCacheKey(): string {
+    this._craftKey ??= this.held.hold(['crafted_tools'], () => {
+      const row = this.sql<{ cnt: number; latest: number; lastUsed: number }>`
+        SELECT COUNT(*) as cnt, COALESCE(MAX(updated_at), 0) as latest,
+               COALESCE(MAX(last_used_at), 0) as lastUsed
+        FROM crafted_tools`[0] ?? { cnt: 0, latest: 0, lastUsed: 0 };
+
+      return `${row.cnt}:${row.latest}:${row.lastUsed}`;
+    });
+
+    return this._craftKey();
   }
 
   getTools(): ToolSet {
@@ -4398,8 +4419,21 @@ export abstract class ActorAgent extends Agent<Env> {
     return {};
   }
 
+  private _mainDynamicReads: DynamicReads | undefined;
+  private _heldDelegates: (() => ReturnType<ActorAgent['subordinateDelegates']>) | undefined;
+
+  /** This agent's dynamic-block reads, held across a turn's preparation, binding and tool answers ({@link held}). */
+  protected get mainDynamicReads(): DynamicReads {
+    return this._mainDynamicReads ??= dynamicReads(this.stores, this.rt.storage.sql, this.actorHandle(), this.held);
+  }
+
+  /** Its delegates, held: every SubordinateRosterStore writes over `watchedExec`, the directory's origins over `sql`. */
+  private get heldDelegates(): () => ReturnType<ActorAgent['subordinateDelegates']> {
+    return this._heldDelegates ??= this.held.hold(['actor_subordinates', 'workspace_actors'], () => this.subordinateDelegates());
+  }
+
   /**
-   * The live state of this agent, read fresh for one model step; holds no state of its own.
+   * The live state of this agent, read for one model step; its store rows are held until a write moves them.
    * Nothing clock-derived: a wall-clock field would re-fingerprint the block every request.
    */
   protected dynamicContextSnapshot(
@@ -4413,6 +4447,7 @@ export abstract class ActorAgent extends Agent<Env> {
     return collectDynamicContext({
       rt: this.rt,
       stores: this.stores,
+      reads: this.mainDynamicReads,
       profile,
       tools,
       externalTools,
@@ -4423,7 +4458,7 @@ export abstract class ActorAgent extends Agent<Env> {
       ...(accountFacts !== undefined && { accountFacts }),
       unavailableMcp: this._mcpUnavailable,
       missingCapabilities: extras.extraMissingCapabilities?.() ?? [],
-      subordinateDelegates: () => this.subordinateDelegates(),
+      subordinateDelegates: this.heldDelegates,
       approvals: extras.approvals,
       ...(extras.failingSlates !== undefined && { failingSlates: extras.failingSlates }),
     });

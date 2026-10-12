@@ -8,6 +8,7 @@ import { Data, Result } from 'effect';
 import * as v from 'valibot';
 
 import { parseJsonValue, JsonValueSchema, type JsonValue } from '../utils/json';
+import { ASKED, type Holds } from '../utils/held-reads';
 import {
   OUTPUT_CONTINUATION_EVENT, OUTPUT_CONTINUATION_TEXT, RUN_END_REASONS,
 } from './turn-lifecycle';
@@ -526,9 +527,30 @@ export class TerminalEffectLedger {
     readonly fault?: () => TerminalEffectFault | null;
     /** Called after every pass that leaves anything owed; a past instant means due now. */
     readonly scheduleRetry: (atMs: number) => Promise<void>;
+    /** A Durable Object's held reads; absent, every read asks. */
+    readonly holds?: Holds;
   }) {
     this.actorId = deps.actor.actorId;
+    const holds = deps.holds ?? ASKED;
+
+    // This ledger's own claim, attempt, record and prune statements are every terminal_effects write, over `deps.sql`,
+    // whose hook drops both.
+    this.retryRows = holds.hold(['terminal_effects'], () => deps.sql<{ sequence_id: string; at: number | null }>`
+      SELECT sequence_id, MIN(next_attempt_at) AS at FROM terminal_effects
+      WHERE actor_id = ${this.actorId} AND status IN ('pending', 'blocked') GROUP BY sequence_id`);
+
+    this.parkedOnly = holds.holdEach(['terminal_effects'], (sequenceId: string) => {
+      const [row] = deps.sql<{ parked: number; other: number }>`
+        SELECT COALESCE(SUM(status = 'parked'), 0) AS parked, COALESCE(SUM(status != 'parked'), 0) AS other
+        FROM terminal_effects
+        WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId} AND status != 'completed'`;
+
+      return row !== undefined && row.parked > 0 && row.other === 0;
+    });
   }
+
+  private readonly retryRows: () => readonly { readonly sequence_id: string; readonly at: number | null }[];
+  private readonly parkedOnly: (sequenceId: string) => boolean;
 
   /**
    * Claims land first, synchronously, read before insert. Each effect runs from the decoded recording,
@@ -600,12 +622,7 @@ export class TerminalEffectLedger {
   waitingOnOwner(sequenceId: string): boolean {
     this.deps.actor.assertCurrent();
 
-    const [row] = this.deps.sql<{ parked: number; other: number }>`
-      SELECT COALESCE(SUM(status = 'parked'), 0) AS parked, COALESCE(SUM(status != 'parked'), 0) AS other
-      FROM terminal_effects
-      WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId} AND status != 'completed'`;
-
-    return row !== undefined && row.parked > 0 && row.other === 0;
+    return this.parkedOnly(sequenceId);
   }
 
   /** `inFlight`: every sequence this process is running now, live; this one is counted in it either way. */
@@ -669,11 +686,7 @@ export class TerminalEffectLedger {
     inFlight: ReadonlySet<string> = new Set(),
   ): number | null {
     this.deps.actor.assertCurrent();
-
-    const rows = this.deps.sql<{ sequence_id: string; at: number | null }>`
-      SELECT sequence_id, MIN(next_attempt_at) AS at FROM terminal_effects
-      WHERE actor_id = ${this.actorId} AND status IN ('pending', 'blocked') GROUP BY sequence_id`;
-
+    const rows = this.retryRows();
     const deferred = this.deps.now() + TERMINAL_EFFECT_RETRY_CEILING_MS;
     let earliest: number | null = null;
 
