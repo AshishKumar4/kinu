@@ -238,7 +238,7 @@ describe('createDeviceTunnelExecutor', () => {
 
       if (method === 'listFiles') return { entries: [{ name: 'a.txt', type: 'file' }], next: null };
 
-      if (method === 'statPath') return { size: 5, mtimeMs: 0, isDir: false };
+      if (method === 'statPath') return { size: 5, mtimeMs: 0, type: 'file' };
       throw new Error(`unexpected method ${method}`);
     });
 

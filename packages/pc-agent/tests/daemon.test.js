@@ -574,6 +574,7 @@ describe('daemon device path confinement', () => {
         ['untiered-stat', 'statPath', [planted]],
         ['untiered-exists', 'exists', [planted]],
         ['untiered-unlink', 'unlinkPath', [planted]],
+        ['untiered-rmdir', 'rmdirPath', [path.dirname(planted)]],
         ['untiered-mkdir', 'mkdirPath', [`${planted}-dir`]],
         ['rpc-untiered00-1', 'exec', [`cat ${JSON.stringify(planted)}`]],
       ];
@@ -785,7 +786,7 @@ describe('daemon device path confinement', () => {
     handle({ id: 'write', method: 'writeFile', sandbox: scoped([project]), params: [file, 'ok', {}] }, ws, {});
     expect((await ws.response('write')).result).toEqual({ success: true });
     handle({ id: 'stat', method: 'statPath', sandbox: scoped([project]), params: [file] }, ws, {});
-    expect((await ws.response('stat')).result).toMatchObject({ size: 2, isDir: false });
+    expect((await ws.response('stat')).result).toMatchObject({ size: 2, type: 'file' });
     handle({ id: 'unlink', method: 'unlinkPath', sandbox: scoped([project]), params: [file] }, ws, {});
     expect((await ws.response('unlink')).result).toEqual({ success: true });
     const target = path.join(project, 'target.txt');
@@ -797,6 +798,17 @@ describe('daemon device path confinement', () => {
     expect(fs.existsSync(target)).toBe(true);
     expect(fs.existsSync(link)).toBe(false);
     expect(fs.existsSync(file)).toBe(false);
+    // A link to a directory is the link to lstat and no directory to rmdir; the emptied directory itself goes.
+    const dirLink = path.join(project, 'nested-link');
+    fs.symlinkSync(dir, dirLink);
+    handle({ id: 'lstat-link', method: 'statPath', sandbox: scoped([project]), params: [dirLink, { follow: false }] }, ws, {});
+    expect((await ws.response('lstat-link')).result).toMatchObject({ type: 'symlink' });
+    handle({ id: 'rmdir-link', method: 'rmdirPath', sandbox: scoped([project]), params: [dirLink] }, ws, {});
+    expect((await ws.response('rmdir-link')).error?.message).toContain('ENOTDIR');
+    expect(fs.existsSync(dir)).toBe(true);
+    handle({ id: 'rmdir', method: 'rmdirPath', sandbox: scoped([project]), params: [dir] }, ws, {});
+    expect((await ws.response('rmdir')).result).toEqual({ success: true });
+    expect(fs.existsSync(dir)).toBe(false);
   });
 });
 
@@ -1574,6 +1586,7 @@ describe('daemon process under Bun against a local hub', () => {
         ['rpc-fence00st-1', 'statPath', [path.join(root, 'device.json')]],
         ['rpc-fence00wr-1', 'writeFile', [path.join(root, 'device.json'), '{"token":"attacker"}']],
         ['rpc-fence00un-1', 'unlinkPath', [path.join(root, 'device.json')]],
+        ['rpc-fence00rm-1', 'rmdirPath', [root]],
         ['rpc-fence00mk-1', 'mkdirPath', [path.join(root, 'planted')]],
       ];
 

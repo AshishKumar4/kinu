@@ -157,7 +157,7 @@ const DEVICE_LIST_PAGE_ENTRIES = 10_000;
 const DeviceStatSchema = v.nullable(v.object({
   size: v.number(),
   mtimeMs: v.number(),
-  isDir: v.boolean(),
+  type: v.picklist(['file', 'directory', 'symlink']),
 }));
 
 function parseInput<TSchema extends v.GenericSchema>(
@@ -352,6 +352,9 @@ export function createDeviceTunnelExecutor(
     },
     unlink(path) {
       return settle(dispatch(path, (view, native) => view.unlink(native)));
+    },
+    rmdir(path) {
+      return settle(dispatch(path, (view, native) => view.rmdir(native)));
     },
     mkdir(path, opts) {
       return settle(dispatch(path, (view, native) => view.mkdir(native, opts)));
@@ -588,7 +591,7 @@ const DeviceDigestWriteSchema = v.variant('ok', [
   v.object({ ok: v.literal(false), sha256: v.nullable(v.string()) }),
 ]);
 
-export type DeviceVFS = VFS & Required<CheckpointFiles> & Pick<ExecutorProvider, 'homeDir'> & Required<Pick<VFS, 'readRange'>>;
+export type DeviceVFS = VFS & Required<CheckpointFiles> & Pick<ExecutorProvider, 'homeDir'> & Required<Pick<VFS, 'readRange' | 'rmdir'>>;
 
 /** The machine's files in its own absolute paths: the daemon resolves root and path, this guard only rejects lexical
  *  escapes, and `homeDir` is HELLO's, never an `exec`'s. */
@@ -786,23 +789,28 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
       });
     })),
 
-    stat: (path) => settle(Effect.gen(function* () {
+    stat: (path, options) => settle(Effect.gen(function* () {
       if ((yield* towardRoot(path)) !== null) return { size: 0, mtimeMs: 0, type: 'directory' as const };
       const root = yield* guarded(path, 'stat');
 
-      const raw = yield* call(DEVICE_METHOD.statPath, [path, { root }], path);
+      const raw = yield* call(DEVICE_METHOD.statPath, [path, { root, follow: options?.follow !== false }], path);
 
       const stat = yield* Effect.try({
         try: () => v.parse(DeviceStatSchema, raw),
         catch: (cause) => new VfsError('EIO', 'device returned an unreadable file status', path, { cause }),
       });
 
-      return stat === null ? null : { size: stat.size, mtimeMs: stat.mtimeMs, type: stat.isDir ? 'directory' as const : 'file' as const };
+      return stat === null ? null : { size: stat.size, mtimeMs: stat.mtimeMs, type: stat.type };
     })),
 
     unlink: (path) => settle(Effect.gen(function* () {
       const root = yield* guarded(path, 'unlink');
       yield* call(DEVICE_METHOD.unlinkPath, [path, { root }], path);
+    })),
+
+    rmdir: (path) => settle(Effect.gen(function* () {
+      const root = yield* guarded(path, 'rmdir');
+      yield* call(DEVICE_METHOD.rmdirPath, [path, { root }], path);
     })),
 
     mkdir: (path, opts) => settle(Effect.gen(function* () {

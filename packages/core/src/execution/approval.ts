@@ -155,6 +155,7 @@ export function withApprovalGatedFiles(
   const readRange = vfs.readRange?.bind(vfs);
   const rename = vfs.rename?.bind(vfs);
   const removeRecursive = vfs.removeRecursive?.bind(vfs);
+  const rmdir = vfs.rmdir?.bind(vfs);
 
   // A write the owner approves still carries what undo cannot restore.
   if (reported) gated.writeFileWithReport = (path, data) => settle(asked('write', path, (absolute) => reported(absolute, data), data));
@@ -179,6 +180,8 @@ export function withApprovalGatedFiles(
   }
 
   if (removeRecursive) gated.removeRecursive = (path) => settle(asked('delete', path, (absolute) => removeRecursive(absolute)));
+
+  if (rmdir) gated.rmdir = (path) => settle(asked('delete', path, (absolute) => rmdir(absolute)));
 
   return gated;
 }

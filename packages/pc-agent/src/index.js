@@ -2340,6 +2340,13 @@ function viewFromFrame(msg) {
   });
 }
 
+/** A stat's kind as the device file contract names it: a link (lstat only), a directory, or a file. */
+function statType(stat) {
+  if (stat.isSymbolicLink()) return 'symlink';
+
+  return stat.isDirectory() ? 'directory' : 'file';
+}
+
 /** One file method's path, through the frame's view. `mode` is what the method
  *  does to the path, and the view refuses exactly what the kernel would. */
 function confinedDeviceViewPath(view, requested, mode) {
@@ -2991,11 +2998,15 @@ function handle(msg, ws, ctx) {
     } else if (method === METHODS.listFiles) {
       rpc(ws, id, listFilesAnswer(msg));
     } else if (method === METHODS.statPath) {
-      const confined = confinedDeviceViewPath(viewFromFrame(msg), params[0], 'read');
+      // `follow: false` is lstat, of the entry as unlink takes it: a link is the link, so a removal walking a tree
+      // takes the name and never goes on into what it leads to.
+      const follow = (params[1] ?? {}).follow !== false;
+      const view = viewFromFrame(msg);
+      const confined = follow ? confinedDeviceViewPath(view, params[0], 'read') : view.resolveEntryPath(parseString(params[0], 'device paths must be strings'), 'read');
+      const stat = follow ? fs.statSync(confined, { throwIfNoEntry: false }) : fs.lstatSync(confined, { throwIfNoEntry: false });
 
-      if (!fs.existsSync(confined)) return rpc(ws, id, null);
-      const stat = fs.statSync(confined);
-      rpc(ws, id, { size: stat.size, mtimeMs: stat.mtimeMs, isDir: stat.isDirectory() });
+      if (stat === undefined) return rpc(ws, id, null);
+      rpc(ws, id, { size: stat.size, mtimeMs: stat.mtimeMs, type: statType(stat) });
     } else if (method === METHODS.unlinkPath) {
       // The ENTRY, not its target: unlink removes the name the caller gave,
       // and following the link would delete a path they never named.
@@ -3003,6 +3014,19 @@ function handle(msg, ws, ctx) {
 
       rpcWhenSettled(ws, id, mutation(checkpoints, null, null, () => {
         fs.unlinkSync(entry);
+
+        return { success: true };
+      }));
+    } else if (method === METHODS.rmdirPath) {
+      // The entry, as unlink takes it, so a link is no directory here and rmdir refuses it; and the directory itself is
+      // judged as well as its parent, so Kinu's own directory is never one a frame removes.
+      const view = viewFromFrame(msg);
+      const requested = parseString(params[0], 'device paths must be strings');
+      view.resolvePath(requested, 'write');
+      const entry = view.resolveEntryPath(requested, 'write');
+
+      rpcWhenSettled(ws, id, mutation(checkpoints, null, null, () => {
+        fs.rmdirSync(entry);
 
         return { success: true };
       }));

@@ -34,7 +34,7 @@ function daemon(files: Map<string, string>) {
     switch (frame.method) {
       case 'which': return { present: [] };
       case 'exists': return files.has(path);
-      case 'statPath': return body === undefined ? null : { size: Buffer.byteLength(body), mtimeMs: 1, isDir: false };
+      case 'statPath': return body === undefined ? null : { size: Buffer.byteLength(body), mtimeMs: 1, type: 'file' };
       case 'readRange': {
         const [, offset, length] = v.parse(RangeParamsSchema, frame.params.slice(0, 3));
 

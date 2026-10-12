@@ -41,7 +41,7 @@ const WORKSPACE_FILE = '/home/main/report.bin';
 /** `which` and the exec ack are consent-free hub bookkeeping; counting them would make every refusal look like a leak. */
 const FILE_METHODS = {
   readFile: true, readRange: true, writeFile: true, listFiles: true,
-  statPath: true, unlinkPath: true, mkdirPath: true, exists: true,
+  statPath: true, unlinkPath: true, rmdirPath: true, mkdirPath: true, exists: true,
 } as const;
 
 const Base64WriteSchema = v.object({ encoding: v.literal('base64') });
@@ -54,9 +54,9 @@ const OkReplySchema = v.object({ ok: v.literal(true) });
 function statOf(files: Map<string, string>, path: string): JsonValue {
   const body = files.get(path);
 
-  if (body !== undefined) return { size: body.length, mtimeMs: 1, isDir: false };
+  if (body !== undefined) return { size: body.length, mtimeMs: 1, type: 'file' };
 
-  return [...files.keys()].some((name) => name.startsWith(`${path}/`)) ? { size: 0, mtimeMs: 1, isDir: true } : null;
+  return [...files.keys()].some((name) => name.startsWith(`${path}/`)) ? { size: 0, mtimeMs: 1, type: 'directory' } : null;
 }
 
 const sha256Of = (text: string): string => new Bun.CryptoHasher('sha256').update(text).digest('hex');

@@ -812,7 +812,7 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 				const path = v.parse(v.string(), params[0]);
 				const content = Object.entries(machine).find(([file]) => file === path)?.[1];
 
-				if (method === 'statPath') return content === undefined ? null : { size: content.length, mtimeMs: 0, isDir: false };
+				if (method === 'statPath') return content === undefined ? null : { size: content.length, mtimeMs: 0, type: 'file' };
 
 				// A range past the end is empty: the shell reads to end of file.
 				if (method === 'readRange' && content !== undefined) {

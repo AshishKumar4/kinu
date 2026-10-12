@@ -220,14 +220,14 @@ describe('the frame carries the calling workspace own home', () => {
 
     for (const [method, params] of [
       ['readFile', [file]], ['readRange', [file, 0, 4]], ['writeFile', [file, 'x']], ['listFiles', ['/home/ashish/projects/kinu']],
-      ['statPath', [file]], ['unlinkPath', [file]], ['mkdirPath', [`${file}.d`]], ['exists', [file]],
+      ['statPath', [file]], ['unlinkPath', [file]], ['rmdirPath', [`${file}.d`]], ['mkdirPath', [`${file}.d`]], ['exists', [file]],
     ] satisfies Array<[string, JsonValue[]]>) {
       await harness.userDO.deviceRpc(harness.workspace, method, params, { agentName: WORKSPACE });
     }
 
     const blocks = harness.deviceFrames.map((frame) => v.parse(FrameSandboxSchema, frame.sandbox));
 
-    expect(blocks).toHaveLength(8);
+    expect(blocks).toHaveLength(9);
 
     for (const block of blocks) {
       expect(block).toEqual({

@@ -45,7 +45,7 @@ function fleet(written: JsonValue): DeviceTransport & { readonly frames: Frame[]
 
       if (method === 'exists') return true;
 
-      if (method === 'statPath') return { size: bytes.length, mtimeMs: 0, isDir: false };
+      if (method === 'statPath') return { size: bytes.length, mtimeMs: 0, type: 'file' };
 
       if (method === 'writeFile') return written;
 

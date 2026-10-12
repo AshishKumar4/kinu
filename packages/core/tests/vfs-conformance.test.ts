@@ -288,7 +288,7 @@ function deviceTransport(fs: MemFs, calls: string[] = []): DeviceTransport {
       if (method === 'statPath') {
         const stat = fs.stat(p);
 
-        return stat === null ? null : { ...stat, mtimeMs: fs.mtimeMs };
+        return stat === null ? null : { size: stat.size, mtimeMs: fs.mtimeMs, type: stat.isDir ? 'directory' : 'file' };
       }
 
       if (method === 'unlinkPath') {

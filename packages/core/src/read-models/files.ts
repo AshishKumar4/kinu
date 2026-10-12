@@ -592,7 +592,8 @@ export function deleteExecutorPathOp(
 
     if (!vfs) return { error: `Executor "${executorId}" has no file plane` };
 
-    const stat = await vfs.stat(path);
+    // The entry itself: a link is removed as a link, dangling or not, never what it leads to.
+    const stat = await vfs.stat(path, { follow: false });
 
     if (!stat) return { error: `no such file or directory: ${path}` };
 
