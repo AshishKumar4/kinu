@@ -94,6 +94,11 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     settleIfIdle();
   };
 
+  /** Takes back an empty idle question so the approvals due are asked now; a running turn or a draft keeps it. */
+  const askWhenIdle = () => {
+    if (!busy() && rl.line === '') idleQuestion?.abort();
+  };
+
   const onClientEvent = (event: AgentClientEvent) => {
     if (event.type === 'turn-start') {
       approvalPass?.abort();
@@ -103,10 +108,10 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
       approvalsDue = true;
       approvalsPutOff = false;
       dispatch({ type: 'turn-settled' });
+      askWhenIdle();
     } else if (event.type === 'broadcast' && event.event.type === READS_CHANGED_EVENT && event.event.reads?.includes('listPendingActions') && !approvalsPutOff) {
       approvalsDue = true;
-
-      if (rl.line === '') idleQuestion?.abort();
+      askWhenIdle();
     }
 
     renderClientEvent({
@@ -353,8 +358,9 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
   while (!exiting) {
     await settled();
 
-    // Again while the queue moved during a pass, until the owner says later; a turn's start or end ends later.
-    while (approvalsDue && !approvalsPutOff && tty && client.approvals) {
+    // Again while the queue moved during a pass, until the owner says later or a turn starts; a turn's start or end
+    // ends later, and its end asks again.
+    while (approvalsDue && !approvalsPutOff && !busy() && tty && client.approvals) {
       approvalsDue = false;
       approvalPass = new AbortController();
       approvalsPutOff = await askWaitingApprovals(client.approvals, lineApprovalPrompt(rl), approvalPass.signal);
