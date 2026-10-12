@@ -494,7 +494,10 @@ async function sessionCall(
   return { run: moves ? `cd ${shellQuote(start)} || exit\n${command}` : command, execOptions, start };
 }
 
-/** A box that streams stops the command on a cancel; one that cannot only stops waiting for it. */
+/**
+ * A box that streams stops the command on a cancel; one that cannot only stops waiting for it. A Stop before the box is
+ * ready sends nothing; one while the command starts waits for it to start, then cancels it and waits for its exit.
+ */
 function runOnBox(box: NimbusSandboxHandle, call: SessionCall, options: ShellExecOptions): Promise<NimbusExecResult> {
   const streamed = box.execStream;
 
@@ -503,17 +506,23 @@ function runOnBox(box: NimbusSandboxHandle, call: SessionCall, options: ShellExe
   }
 
   const stopped = new AbortController();
-  let exit: Promise<unknown> = Promise.resolve();
+  // Absent: not started. Pending: starting, which nothing cancels until the box answers. Fulfilled: running until its exit.
+  let launch: Promise<ExecStream> | undefined;
 
   return raceAbort(async () => {
-    const stream = await streamed(call.run, call.execOptions);
+    await box.ready();
+    options.signal?.throwIfAborted();
+    launch = streamed(call.run, call.execOptions);
 
-    exit = stream.exit;
-
-    return heard(stream, options.output, stopped.signal);
+    return heard(await launch, options.output, stopped.signal);
   }, options.signal, 'workspace exec cancelled before it started', async () => {
     stopped.abort();
-    await Promise.allSettled([exit]);
+
+    if (launch === undefined) return 'workspace exec cancelled before it started';
+    const [launched] = await Promise.allSettled([launch]);
+
+    if (launched.status === 'rejected') return 'workspace exec cancelled before it started';
+    await Promise.allSettled([launched.value.exit]);
 
     return 'workspace exec cancelled: the command was stopped';
   });
