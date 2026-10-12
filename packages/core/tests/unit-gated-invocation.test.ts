@@ -226,15 +226,15 @@ describe('a named shell is part of the ask as it was when asked', () => {
     return { policy: { ...policy, requestApproval: null }, queue };
   }
 
-  /** Parks the ask, lets `between` run in the same named shell, approves the row, and asks again. */
+  /** Parks the ask, lets `meanwhile` run in the same named shell, approves the row, and asks again. */
   async function approveAcrossAMove<R>(
-    queue: DeferredApprovalQueue, ask: () => Promise<R>, between: () => Promise<void>,
+    queue: DeferredApprovalQueue, ask: () => Promise<R>, meanwhile: () => Promise<void>,
   ): Promise<{ readonly asked: R; readonly again: R }> {
     const asked = await ask();
     const parked = queue.list();
 
     expect(parked).toHaveLength(1);
-    await between();
+    await meanwhile();
     await queue.decide(parked.map((row) => row.id), 'approved');
 
     return { asked, again: await ask() };
