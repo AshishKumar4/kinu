@@ -46,6 +46,8 @@ export interface ExecutionLane {
   readonly opening?: TurnOpening;
   readonly taskPlan?: TaskPlan;
   readonly explicitTier?: TierId;
+  /** A plan of this agent's that the owner sent back with comments awaits its replies; decided by the agent at open. */
+  readonly awaitsReply: boolean;
 }
 
 /** What an execution is rebuilt from: frozen in the agent's store before any model or tool work, never resolved again. */
