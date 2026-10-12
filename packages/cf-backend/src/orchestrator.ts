@@ -1589,21 +1589,22 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    */
   protected actorAgentsToolDeps(actor: CFSeat, reach: ActorReach, mode: WorkMode, operation: () => OperationProfile | null): AgentsToolDeps {
     const { runtime } = actor;
-    const model = () => this.ownedModelServices.resolveModel(operation()?.profile.tier.model ?? actor.stores.config.getModel() ?? '');
+    // The workspace agent runs on its running or settled profile; any other on the tier its turn resolved.
+    const model = reach.lanes ? () => this.getModel() : () => this.ownedModelServices.resolveModel(operation()?.profile.tier.model ?? '');
 
-    // Its own ladder over its own files, as its turns compact in its isolate.
-    const compaction = hostedActorCompaction(actor, {
+    // The workspace's own ladder for its agent; any other's own over its own files, as its turns compact in its isolate.
+    const compactShared = reach.lanes ? this.compaction().compactShared : hostedActorCompaction(actor, {
       logger: compactionDiagnostics,
       models: { normalize: (spec) => spec || (operation()?.profile.tier.model ?? ''), resolve: model },
       report: (_actor, report) => this.reportModelCall(report),
       operations: this.modelOperations,
-    });
+    }).extension.compactShared;
 
     const inputs = operation()?.inputs ?? null;
 
     const deps: AgentsToolDeps = {
       mode,
-      swarm: this.swarmDeps(runtime, model, () => this.agentStores(actor.handle.actorId).workingContext(), compaction.extension.compactShared),
+      swarm: this.swarmDeps(runtime, model, () => this.agentStores(actor.handle.actorId).workingContext(), compactShared),
       // The workspace agent's, as its turn read the account's catalog; any other's, as its turn resolved.
       swarms: reach.lanes ? this.accountSwarmsHeld : inputs !== null && betaSwarms(inputs.envelope.catalog),
       budget: this.budget,
