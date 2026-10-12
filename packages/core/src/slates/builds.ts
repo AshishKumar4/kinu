@@ -44,8 +44,6 @@ export interface SlateBuildFailure {
 }
 
 export function initSlateBuildTable(execRaw: RawSqlExec): void {
-  // Its rows were kept per slate alone, whoever compiled them: none is known to be whose, so none is kept.
-  execRaw('DROP TABLE IF EXISTS slate_builds');
   execRaw(`CREATE TABLE IF NOT EXISTS slate_images (
     slate      TEXT NOT NULL,
     authority  TEXT NOT NULL,
