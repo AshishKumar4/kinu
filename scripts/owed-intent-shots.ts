@@ -43,7 +43,9 @@ async function photograph(gallery: Gallery): Promise<void> {
       const page = await open(gallery, state.query, viewport, theme);
 
       try {
-        await page.waitForSelector(state.status, { visible: true });
+        const path = join(directory, `${state.kind}-${viewport.name}-${theme}.png`);
+        await page.screenshot({ path });
+        process.stdout.write(`${path}\n`);
 
         const measured = await page.$eval(state.status, (line, controls) => {
           const box = line.getBoundingClientRect();
@@ -62,10 +64,6 @@ async function photograph(gallery: Gallery): Promise<void> {
           || (state.kind === 'retry' ? measured.controls !== 0 : measured.controls === 0)) {
           throw new Error(`${state.kind}/${viewport.name}/${theme}: ${JSON.stringify(measured)}`);
         }
-
-        const path = join(directory, `${state.kind}-${viewport.name}-${theme}.png`);
-        await page.screenshot({ path });
-        process.stdout.write(`${path}\n`);
       } finally {
         await page.close();
       }
@@ -160,7 +158,12 @@ async function verifyDecision(gallery: Gallery): Promise<void> {
 }
 
 await withGallery(async (gallery) => {
-  await photograph(gallery);
+  if (!process.argv.includes('--verify-only')) {
+    await photograph(gallery);
+
+    return;
+  }
+
   await verifyAnswers(gallery);
   await verifyRetry(gallery);
   await verifyDecision(gallery);
