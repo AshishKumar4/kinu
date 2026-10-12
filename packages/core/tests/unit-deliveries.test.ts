@@ -1,7 +1,7 @@
 /** Deliveries (design v2 §1, v3 A): the workspace's record of what each agent is owed, and how producers write it. */
 import { describe, expect, test } from 'bun:test';
 import { createTestActorsOver, createTestSql } from '@kinu.run/test-utils';
-import { admitSubordinateTask, AgentDeliveries, assignmentDelivery, DeliveryInbox, InProcessDeliveries, initAgentDeliveriesTable, pendingEventsDelivery, subordinateTurnContext, wordsRefusal, type Delivery, type DeliveryAnswer } from '../src/index';
+import { admitSubordinateTask, AgentDeliveries, assignmentDelivery, DeliveryCoordinator, DeliveryInbox, InProcessDeliveries, initAgentDeliveriesTable, pendingEventsDelivery, subordinateTurnContext, wordsRefusal, type Delivery, type DeliveryAnswer } from '../src/index';
 import { initEventsHubTables, EventLog, type IngressDescriptor } from '../src/events/hub/index';
 import { KinuError } from '../src/obs/index';
 import { makeSqlExec } from './helpers';
@@ -169,5 +169,57 @@ describe('deliveries crossed in this process', () => {
     expect(deliveries.unpaid(main)).toEqual([]);
     // Parked: pending to the drain something else starts, never waking one of its own.
     expect(eventLog.pending({}).map((event) => event.variant)).toEqual(['webhook']);
+  });
+});
+
+describe('DeliveryCoordinator', () => {
+  /** A host that records each wake it arms and each crossing it makes. */
+  function hosted() {
+    const world = workspace();
+    const armed: string[] = [];
+    const crossed: string[] = [];
+
+    world.db.exec('CREATE TABLE producer_facts (id TEXT PRIMARY KEY)');
+
+    const coordinator = new DeliveryCoordinator({
+      sql: world.sql, transaction: (body) => world.db.transaction(body)(), eventLog: () => world.eventLog, live: () => true,
+      armWake: async (actorId) => { armed.push(actorId); },
+      admit: async (_actorId, delivery) => {
+        crossed.push(delivery.id);
+
+        return 'taken';
+      },
+    });
+
+    const facts = (): number => world.db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM producer_facts').get()?.n ?? -1;
+
+    return { ...world, coordinator, armed, crossed, facts };
+  }
+
+  test('a producer whose commit rolls back leaves no delivery and no wake, and crosses nothing', async () => {
+    const { coordinator, deliveries, main, armed, crossed, facts, db } = hosted();
+
+    // Its own fact is written, then it fails inside the same commit.
+    await expect(coordinator.deliver(main, turn('d-1', 'first'), () => {
+      db.run("INSERT INTO producer_facts (id) VALUES ('f-1')");
+      throw new KinuError('io', 'the producer failed after its own write');
+    })).rejects.toThrow('the producer failed after its own write');
+
+    expect({ owed: deliveries.unpaid(main), facts: facts(), armed, crossed }).toEqual({ owed: [], facts: 0, armed: [], crossed: [] });
+
+    // Its next commit, whole, owes and crosses as any does.
+    await coordinator.deliver(main, turn('d-2', 'second'), () => { db.run("INSERT INTO producer_facts (id) VALUES ('f-2')"); });
+    expect({ owed: deliveries.unpaid(main), facts: facts(), armed, crossed }).toEqual({ owed: [], facts: 1, armed: [main], crossed: ['d-2'] });
+  });
+
+  test('an admission that rolls back what it recorded owes nothing', async () => {
+    const { coordinator, deliveries, main, armed, crossed, facts, db } = hosted();
+
+    await expect(coordinator.owe(main, () => {
+      db.run("INSERT INTO producer_facts (id) VALUES ('f-1')");
+      throw new KinuError('io', 'the admission failed after its own write');
+    })).rejects.toThrow('the admission failed after its own write');
+
+    expect({ owed: deliveries.unpaid(main), facts: facts(), armed, crossed }).toEqual({ owed: [], facts: 0, armed: [], crossed: [] });
   });
 });

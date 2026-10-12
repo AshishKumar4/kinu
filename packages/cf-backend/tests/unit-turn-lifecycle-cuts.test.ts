@@ -1,13 +1,14 @@
 /**
  * The cuts an agent's lifecycle must survive, each at the boundary production crosses: a call from a turn that has
  * closed, a crossing lost before admission, a note send that fails after its delivery committed, a finished swarm node
- * with nothing left to watch, and main's state as the roster reads it from its own isolate.
+ * with nothing left to watch, main's state as the roster reads it from its own isolate, and a delivery still on its way
+ * when a Stop cut it off.
  */
 import { afterEach, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import { type GeneralNote, type NotedChanges } from '@kinu.run/core';
 import { agentWakes, catalogTurn, driveUntil, fireSoonestWake, gatewayWorkspace, workspaceMainActor } from './helpers/actor-harness';
-import { cutNextDelivery } from './helpers/agent-facets';
+import { cutNextDelivery, holdNextDelivery } from './helpers/agent-facets';
 import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 
 afterEach(() => { setSystemTime(); });
@@ -117,4 +118,37 @@ test("the roster shows main's failed turn as failed once main rests", async () =
   await catalogTurn(workspace.agent, 'This turn fails.');
 
   expect((await workspace.agent.listWorkspaceAgents()).find((agent) => agent.category === 'main')?.activity).toBe('failed');
+});
+
+test('a delivery on its way when a Stop cut it off arrives cancelled, never runs, and the next input runs', async () => {
+  const asked: string[] = [];
+
+  const workspace = gatewayWorkspace(stubAiBinding((run) => {
+    asked.push(JSON.stringify(requestOf(run).messages));
+
+    return chatCompletion(run, 'Done.');
+  }));
+
+  await catalogTurn(workspace.agent, 'Start the ledger.');
+  const { agent } = workspace;
+  const main = workspaceMainActor(workspace.db).actorId;
+  const held = holdNextDelivery(agent.agentOf(main).storageKey);
+  const before = crypto.randomUUID();
+  const sending = agent.harnessAdmitMain('BEFORE_STOP_MARKER', before, undefined);
+  const release = await held;
+
+  // The Stop cancels what the agent is owed, the delivery on its way among them, then the delivery arrives.
+  await agent.harnessStopMain();
+  release();
+  await sending;
+
+  const after = crypto.randomUUID();
+
+  await agent.harnessAdmitMain('AFTER_STOP_MARKER', after, undefined);
+  await agent.harnessMainLanding(after);
+  await agent.harnessAgentsIdle();
+
+  expect(asked.some((messages) => messages.includes('AFTER_STOP_MARKER'))).toBe(true);
+  expect(asked.some((messages) => messages.includes('BEFORE_STOP_MARKER'))).toBe(false);
+  expect(v.parse(Count, workspace.db.query('SELECT COUNT(*) AS n FROM agent_deliveries').get()).n).toBe(0);
 });
