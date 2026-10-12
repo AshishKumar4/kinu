@@ -84,7 +84,7 @@ describe("CLI config safety", () => {
     }
   });
 
-  test("kinu auth lists the account's CLI sessions and revokes one or all of them; a bare revoke ends none", async () => {
+  test("kinu auth lists the account's CLI sessions and revokes one or all of them; a bare revoke or another origin ends none", async () => {
     const hash = "a".repeat(64);
     const seen: string[] = [];
 
@@ -115,6 +115,8 @@ describe("CLI config safety", () => {
       expect(listed.stdout).toContain(`${hash}  studio`);
 
       expect((await auth(["revoke"])).exitCode).not.toBe(0);
+      // Another deployment's sessions are not this sign-in's to end: refused, and nothing is sent.
+      expect((await auth(["revoke", "--all", "--origin", "http://127.0.0.1:9"])).exitCode).not.toBe(0);
       expect((await auth(["revoke", hash])).exitCode).toBe(0);
       const all = await auth(["revoke", "--all"]);
       expect(all.exitCode, all.stderr).toBe(0);

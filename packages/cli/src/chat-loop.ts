@@ -27,7 +27,7 @@ import {
 } from './display';
 import { renderThrownChain, detach } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
-import { initialInputState, reduceInput, type InputMachineEvent, type WorkMode } from '@kinu.run/core';
+import { initialInputState, READS_CHANGED_EVENT, reduceInput, type InputMachineEvent, type WorkMode } from '@kinu.run/core';
 import { clipText } from '@kinu.run/core/tui';
 
 export interface ChatLoopOpts {
@@ -51,10 +51,14 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
   let pendingPrefill: string | null = null;
   /** Answer lines to a consent question must not be read as steering input. */
   let consentAskPending = false;
-  /** Waiting approvals are asked at the start and after each turn, never over one; `later` waits for the next turn. */
+  /** Waiting approvals are asked at the start, after each turn and when the queue moves while idle, never over a
+   *  turn; `later` holds them until a turn starts or ends. */
   let approvalsDue = true;
+  let approvalsPutOff = false;
   /** The approvals being asked; a turn that starts takes the prompt back. */
   let approvalPass: AbortController | null = null;
+  /** The idle chat question; a queue that moves takes it back while it holds no draft. */
+  let idleQuestion: AbortController | null = null;
 
   // A send is owed a turn from the moment it leaves: the machine counts it until it is answered.
   const busy = () => machine.activeTurns > 0 || machine.sending > 0;
@@ -93,10 +97,16 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
   const onClientEvent = (event: AgentClientEvent) => {
     if (event.type === 'turn-start') {
       approvalPass?.abort();
+      approvalsPutOff = false;
       dispatch({ type: 'turn-start' });
     } else if (event.type === 'turn-end') {
       approvalsDue = true;
+      approvalsPutOff = false;
       dispatch({ type: 'turn-settled' });
+    } else if (event.type === 'broadcast' && event.event.type === READS_CHANGED_EVENT && event.event.reads?.includes('listPendingActions') && !approvalsPutOff) {
+      approvalsDue = true;
+
+      if (rl.line === '') idleQuestion?.abort();
     }
 
     renderClientEvent({
@@ -346,13 +356,18 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     if (approvalsDue && tty && client.approvals) {
       approvalsDue = false;
       approvalPass = new AbortController();
-      await askWaitingApprovals(client.approvals, lineApprovalPrompt(rl), approvalPass.signal);
+      approvalsPutOff = await askWaitingApprovals(client.approvals, lineApprovalPrompt(rl), approvalPass.signal);
       approvalPass = null;
     }
 
     const prefill = pendingPrefill;
     pendingPrefill = null;
-    const line = await ask(rl, promptLabel(), undefined, prefill ?? undefined);
+    idleQuestion = new AbortController();
+    const line = await ask(rl, promptLabel(), idleQuestion.signal, prefill ?? undefined);
+    const takenBack = idleQuestion.signal.aborted;
+    idleQuestion = null;
+
+    if (takenBack) continue;
 
     if (line === null) break; // EOF
     const input = line.trim();

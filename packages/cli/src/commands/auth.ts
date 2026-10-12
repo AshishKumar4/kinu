@@ -121,10 +121,15 @@ const AUTH_USAGE = 'Usage: kinu auth [sessions | revoke <session> | revoke --all
 
 /** `kinu auth sessions` and `kinu auth revoke`: the account's CLI sign-ins, so a bearer stored only as a hash can be ended. */
 export function authSessionsCommand(
-  action: string, session: string | undefined, opts: { all?: boolean },
+  action: string, session: string | undefined, opts: { origin?: string; all?: boolean },
 ): Promise<void> {
   return settle(Effect.gen(function* () {
     const auth = requireAuthConfig();
+
+    // The sessions listed and ended are the signed-in deployment's: a different --origin is refused, never ignored.
+    if (opts.origin !== undefined && new URL(defaultOrigin(opts)).origin !== new URL(auth.origin).origin) {
+      return yield* Effect.die(new Error(`Signed in to ${auth.origin}, not ${opts.origin}: sign in there first with kinu auth --origin ${opts.origin}`));
+    }
 
     if (action === 'revoke') {
       if (opts.all === true && session === undefined) {

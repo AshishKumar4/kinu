@@ -44,27 +44,34 @@ export function answerWaitingApproval(
   );
 }
 
-/** Line mode's pass: asks each queued approval once, oldest first, until none is left, `later`, or `signal` aborts. */
+/** Line mode's pass: asks each queued approval once, oldest first, until none is left, `later`, or `signal` aborts.
+ *  True when the owner said later. */
 export function askWaitingApprovals(
   approvals: WaitingApprovalSurface, prompt: WaitingApprovalPrompt, signal: AbortSignal,
-): Promise<void> {
+): Promise<boolean> {
   const pass = Effect.gen(function* () {
     const asked = new Set<string>();
 
     while (!signal.aborted) {
       const action = (yield* readWaitingApprovals(approvals)).find((queued) => !asked.has(queued.id));
 
-      if (action === undefined || signal.aborted) return;
+      if (action === undefined || signal.aborted) return false;
       asked.add(action.id);
       const choice = yield* Effect.promise(() => prompt.present(action, signal));
 
-      if (choice === 'later' || choice === 'cancelled') return;
+      if (choice === 'later' || choice === 'cancelled') return choice === 'later';
       // An answer the owner gave stands, even if a turn started as they gave it.
       prompt.note('decided', yield* answerWaitingApproval(approvals, action, choice));
     }
+
+    return false;
   });
 
-  return settle(Effect.catch(pass, (failure) => Effect.sync(() => { prompt.note('error', renderThrownChain({ cause: failure })); })));
+  return settle(Effect.catch(pass, (failure) => Effect.sync(() => {
+    prompt.note('error', renderThrownChain({ cause: failure }));
+
+    return false;
+  })));
 }
 
 /** A file write's exact bytes are its approval; a terminal cannot show them, so only the web approves one. */
