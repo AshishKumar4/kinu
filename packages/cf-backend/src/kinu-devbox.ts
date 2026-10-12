@@ -44,8 +44,9 @@ export class KinuDevbox extends Devbox<Env> {
     this.#nativeExports = ctx.exports;
   }
   /**
-   * Raw TCP and UDP go straight out (D82): git over SSH, database and mail sockets, DNS. HTTP and HTTPS still enter
-   * `outboundPolicy`'s routes first, so the vault sees every web request and its placeholders.
+   * Raw TCP and UDP go straight out (D82): git over SSH, database and mail sockets, DNS, and HTTP or TLS on any port
+   * but 80 and 443. HTTP and HTTPS on 80 and 443 still enter `outboundPolicy`'s routes first, so the vault sees those
+   * requests and their placeholders.
    */
   enableInternet = true;
 

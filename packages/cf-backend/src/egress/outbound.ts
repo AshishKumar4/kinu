@@ -1,6 +1,6 @@
-/** HTTP and HTTPS leave the native container, and a Nimbus workspace's commands, through Worker entrypoints. The
- *  container's raw sockets stay disabled; a workspace's are judged by destination. Configuration props come only from
- *  the owning Durable Object. */
+/** HTTP and HTTPS on ports 80 and 443 leave the native container, and every socket of a Nimbus workspace's commands,
+ *  through Worker entrypoints, judged by destination. The container's other TCP and UDP go straight out (D82) and meet
+ *  none of this. Configuration props come only from the owning Durable Object. */
 
 import { Cause, Effect } from 'effect';
 import { getAgentByName } from 'agents';
@@ -37,8 +37,8 @@ const CONTAINER_EVENT_PATH = '/v1/events';
 
 /**
  * Set by the owning DO; not readable or influenceable from the container. Applied to a container by
- * `KinuDevbox.configureEgress` before any op that can start it (`sandbox-exec-lane.ts`), so until then it has no network;
- * minted for a workspace as it opens (`OrchestratorAgent.workspaceEgress`). Neither names a grant, binding or secret:
+ * `KinuDevbox.configureEgress` before any op that can start it (`sandbox-exec-lane.ts`), so its first web request already
+ * meets the vault (its raw sockets go straight out regardless, D82); minted for a workspace as it opens (`OrchestratorAgent.workspaceEgress`). Neither names a grant, binding or secret:
  * the egress reads the workspace's grants and the vault for a request that names a placeholder (`WorkspaceGrants`).
  */
 export interface KinuEgressParams {
@@ -46,7 +46,7 @@ export interface KinuEgressParams {
   readonly ownerUserId: string;
 }
 
-/** Parsed: `ctx.props` arrives untyped, and a configuration that is not this shape reads as unconfigured (no network). */
+/** Parsed: `ctx.props` arrives untyped, and a configuration that is not this shape reads as unconfigured (both handlers refuse). */
 const EgressParamsSchema = v.object({
   workspaceName: v.pipe(v.string(), v.minLength(1)),
   ownerUserId: v.pipe(v.string(), v.minLength(1)),
