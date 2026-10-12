@@ -22,7 +22,7 @@ import { FacetChat } from './agent-chat';
 import { workspaceClient, type AgentWorkspaceCalls } from './workspace-rpc';
 import type {
   AgentAnswer, AgentAnswerTexts, AgentStanding, AgentSteps, AgentRecovery, AgentSnapshot, ConversationProjection, ConversationTurnPair, AgentTurnTask, EnqueueTurnResult, ProgrammaticTurn, SendLanding, TurnRequestAt,
-  JsonObject, PlanDecisionOutcome, PlanReview, PlanReviewDecision, PlanReviewResult, ReviewAnnotation, AskedQuestions, OwnerAnswer,
+  JsonObject, PlanDecisionOutcome, PlanEdit, PlanReview, PlanReviewDecision, PlanReviewResult, ReviewAnnotation, AskedQuestions, OwnerAnswer,
   Page, PageRequest, RunEvent, RunEventQuery, RunListEntry, RunSummary, StoredRunEvent,
   ForkConversationPlan, ForkConversationSection, ForkRowSection, ForkRows,
 } from '@kinu.run/core';
@@ -165,7 +165,11 @@ export interface AgentFacetCalls {
   interrupt(snapshot: AgentSnapshot, turnId: string): Promise<void>;
   recover(snapshot: AgentSnapshot): Promise<AgentRecovery>;
   archivePage(snapshot: AgentSnapshot, cursor: ArchiveSqlCursor | null, maxBytes: number): Promise<ArchiveAgentPage>;
-  /** Its plan reviews, in its own store: submitted by its turn's own tools, and reviewed by the owner through its window. */
+  /** Its plan reviews, in its own store: submitted by its turn, under that turn's author-stamped metadata, and reviewed by
+   *  the owner through its window. */
+  submitPlan(snapshot: AgentSnapshot, edits: readonly PlanEdit[], driving: JsonObject | undefined): Promise<PlanReviewResult>;
+  /** Its reply in a comment thread of the review the owner sent back. */
+  replyPlanComment(snapshot: AgentSnapshot, comment: string, text: string, driving: JsonObject | undefined): Promise<PlanReviewResult>;
   activePlanReview(snapshot: AgentSnapshot): Promise<PlanReview | null>;
   /** Newest first, for Work and the review queue; a retained retired agent answers too. */
   planReviews(snapshot: AgentSnapshot): Promise<readonly PlanReview[]>;
@@ -393,6 +397,14 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async clearConversation(snapshot: AgentSnapshot): Promise<string | null> {
     return await settle(this.withChat(snapshot, async (chat) => (await chat.clear())?.message ?? null));
+  }
+
+  async submitPlan(snapshot: AgentSnapshot, edits: readonly PlanEdit[], driving: JsonObject | undefined): Promise<PlanReviewResult> {
+    return await settle(this.withChat(snapshot, (chat) => chat.planned((plans) => plans.submit(edits, driving))));
+  }
+
+  async replyPlanComment(snapshot: AgentSnapshot, comment: string, text: string, driving: JsonObject | undefined): Promise<PlanReviewResult> {
+    return await settle(this.withChat(snapshot, (chat) => chat.planned((plans) => plans.reply(comment, text, driving))));
   }
 
   async activePlanReview(snapshot: AgentSnapshot): Promise<PlanReview | null> {

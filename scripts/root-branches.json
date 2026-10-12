@@ -14,11 +14,6 @@
     "kind": "J",
     "why": "Hierarchy read from the row (a null parent is the tree root), not an id compared to the root."
   },
-  "packages/cf-backend/src/actor-hosting.ts#createWorkspaceActorHost.deps.orchestrationFor.home": {
-    "count": 1,
-    "kind": "J",
-    "why": "Placement from the policy: the workspace agent's lanes are the workspace's own engine, event log and missions."
-  },
   "packages/cf-backend/src/actor-hosting.ts#createWorkspaceActorHost.deps.runtimeFor.hooks.contextPlane.own": {
     "count": 1,
     "kind": "J",
@@ -53,6 +48,11 @@
     "count": 1,
     "kind": "J",
     "why": "Hierarchy from the policy: only a hire's wait is answered by its owner."
+  },
+  "packages/cf-backend/src/orchestrator.ts#OrchestratorAgent.actorSources.workspace": {
+    "count": 1,
+    "kind": "J",
+    "why": "Presentation from the policy: the workspace agent speaks as the workspace and its calls key on the workspace's chat; any other agent speaks as a named agent of it."
   },
   "packages/cf-backend/src/orchestrator.ts#OrchestratorAgent.agentCred": {
     "count": 1,
@@ -269,12 +269,12 @@
     "kind": "J",
     "why": "Hierarchy read from the row (a null parent is the tree root), not an id compared to the root."
   },
-  "packages/core/src/state/actor-host.ts#createActorHost.build.session.rootBinding": {
+  "packages/core/src/state/actor-host.ts#createSeatHost.build.seated.rootBinding": {
     "count": 1,
     "kind": "J",
     "why": "Hierarchy read from the row (a null parent is the tree root), not an id compared to the root."
   },
-  "packages/core/src/state/actor-host.ts#createActorHost.released": {
+  "packages/core/src/state/actor-host.ts#createSeatHost.released": {
     "count": 1,
     "kind": "J",
     "why": "Hierarchy read from the row (a null parent is the tree root), not an id compared to the root."

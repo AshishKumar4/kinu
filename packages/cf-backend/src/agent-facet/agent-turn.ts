@@ -1,12 +1,12 @@
 /** One delegated turn in the agent's isolate: its model loop here, every tool call back in the workspace. */
 import { jsonSchema, tool, type ModelMessage, type ToolSet, type UIMessageChunk } from 'ai';
 import {
-  CHAT_SESSION_ID, actorAffinity, HeadCapture, decodeJsonValue, decodeModelMessageValues, encodeModelMessageValues, ownerLaneTools, withEffectPointer, withEffectReceipt, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan, imageModelOutput,
+  ASK_OWNER_TOOL, CHAT_SESSION_ID, actorAffinity, askOwnerTool, HeadCapture, decodeJsonValue, decodeModelMessageValues, encodeModelMessageValues, withEffectPointer, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan, imageModelOutput,
   type AuthRequest, type AuthResolution, type HandedOffTurn, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type JsonValue, type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind, type AgentSignal, type SendOutcome,
   turnSourcesFromBundle, captureOperationProfile, type ModelCallReport, type ModelOperationEvent,
   type AdvisorRecoverySnapshot, type AgentFigures, type AgentStandingReport, type HostedActor, type OwedReport, type SerializedMessage, type SessionEvent,
   type SubordinateReportLedger, type SubordinateReportStatus, type TaskTurnEnding, type WorkMode, type ResolvedTurnProfile, type DynamicContext,
-  type RemoteReceipt, type ReplyToCommentToolDeps, type SubmitPlanToolDeps,
+  type RemoteReceipt,
 } from '@kinu.run/core';
 
 import { attempt, diagnostics, hold, logged, settle, type ErrorCode } from '@kinu.run/core/obs';
@@ -253,6 +253,9 @@ function workspaceTools(
   turn: FacetToolTurn,
 ): ToolSet {
   return Object.fromEntries(prepared.tools.map((descriptor) => {
+    // The owner answers it, nothing executes it: its call parks in this isolate's store, which the repair reads.
+    if (descriptor.name === ASK_OWNER_TOOL) return [descriptor.name, askOwnerTool()];
+
     const entry = tool({
       description: descriptor.description,
       inputSchema: jsonSchema(descriptor.inputSchema),
@@ -371,35 +374,19 @@ interface FacetToolTurn {
   readonly live: LiveTurn;
   readonly capture: HeadCapture;
   readonly database: AgentDatabase;
-  /** The agent's own plan store, where the owner's lane submits and replies; a run reaches no owner's lane. */
-  readonly owner?: { readonly submitPlan: SubmitPlanToolDeps; readonly replyToComment: ReplyToCommentToolDeps };
 }
 
 /**
- * A turn's tools here (design v2 §4): each workspace tool commits in the workspace, which keeps its receipt, so a call
- * leaves only a pointer here; the owner's lane (its plans, its questions) commits in this store, under a receipt here.
+ * A turn's tools here (design v2 §4): each runs in the workspace, where its effect commits and its receipt is kept, so a
+ * call leaves only a pointer here. Asking the owner has no executor and parks in this isolate's own store.
  */
 export function facetTurnTools(workspace: AgentWorkspace, prepared: PreparedAgentTurn, actor: HostedActor, turn: FacetToolTurn): ToolSet {
-  const receipts = {
+  return withEffectPointer(workspaceTools(workspace, prepared, turn), {
     actor: actor.handle,
     sql: actor.runtime.storage.sql,
     execution: () => ({ turnId: turn.id, runId: turn.runId }),
-    durable: (callId: string, signal?: AbortSignal) => actor.session.durableCall(callId, signal),
-  };
-
-  const { ownerLane } = prepared;
-
-  // The owner answers a question, nothing executes it: its call parks in this isolate's store, which the repair reads.
-  const owned = ownerLaneTools({
-    ...(ownerLane.submitPlan && turn.owner !== undefined && { submitPlan: turn.owner.submitPlan }),
-    ...(ownerLane.replyToComment && turn.owner !== undefined && { replyToComment: turn.owner.replyToComment }),
-    ...(ownerLane.askOwner && { askOwner: true }),
+    durable: (callId, signal) => actor.session.durableCall(callId, signal),
   });
-
-  return {
-    ...withEffectPointer(workspaceTools(workspace, prepared, turn), receipts),
-    ...withEffectReceipt(owned, { ...receipts, transaction: (body) => actor.runtime.storage.transactionSync(body) }),
-  };
 }
 
 /** A one-shot run on the shared assembly and step loop. */

@@ -45,7 +45,7 @@ import { readVersionedScaffoldSource } from '../scaffold/versions';
 import type { ReportedTurn } from '../subordinates/turn-reports';
 import { lostRemoteCall, lostToolCall } from '../tools/effect-claim';
 import { unpairedToolCalls } from '../prompting/interrupted-tool-calls';
-import type { ExecutionKey, RemoteReceipt } from './execution';
+import type { ReceiptExecution, RemoteReceipt } from '../tools/effect-claim';
 import { OwnerQuestionStore } from '../plans/owner-questions';
 import { turnReasonForMetadata } from '../prompting/surface';
 import { metadataTier } from './turn-assembly';
@@ -89,7 +89,7 @@ export interface ActorSessionOptions {
   readonly turns?: () => TurnTracing;
   /** What the store a pointed call's effect commits to holds for it (design v2 §4): a call it holds no receipt for is
    *  absent. Asked once per turn, for the history's unpaired calls this store only points at. */
-  readonly receipts?: (execution: Pick<ExecutionKey, 'turnId' | 'runId'>, callIds: readonly string[]) => Promise<ReadonlyMap<string, RemoteReceipt>>;
+  readonly receipts?: (execution: ReceiptExecution, callIds: readonly string[]) => Promise<ReadonlyMap<string, RemoteReceipt>>;
 }
 
 /** Live-instance execution token, not a replacement for a durable turn/run claim. */

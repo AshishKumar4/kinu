@@ -38,6 +38,11 @@ export interface WorkspaceHostSeams {
   currentTurn(reference: ActorReference): string | null;
   /** The root's own runtime: inheriting children read the retained program from it. */
   rootRuntime(): AgentRuntime;
+  /**
+   * The workspace agent's placement where the workspace object is its home: seated over the workspace's own runtime.
+   * Absent where no object holds it (a fixture), so it is seated as any agent is.
+   */
+  workspaceAgentHome?(): CFRuntime;
   contextTree(actorId: string, editor: ContextEditor): ContextTree;
   readonly sql: SqlExecutor;
   /** Positional executor over the same database; the event log and archive reader need it. */
@@ -77,6 +82,9 @@ export interface WorkspaceHostSeams {
    */
   chosenWriteObserver(record: WorkspaceActor): WriteObserver | null;
 }
+
+/** An actor this workspace seats: over a runtime of its own, its turns run in its own isolate. */
+export type CFSeat = SeatedActor<CFRuntime>;
 
 /** Where a hosted actor lives: one reader. */
 export interface HostedActorPlacement {
@@ -137,11 +145,11 @@ export class HostedActorHomes {
   }
 }
 
-export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost<SeatedActor> {
+export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost<CFSeat> {
   const runtimes = new WeakMap<ActorHandle, CFRuntime>();
-  let host: ActorHost<SeatedActor> | null = null;
+  let host: ActorHost<CFSeat> | null = null;
 
-  const deps: SeatHostDeps = {
+  const deps: SeatHostDeps<CFRuntime> = {
     storage: {
       sql: seams.sql,
       transactionSync: <Result>(write: () => Result): Result => seams.ctx.storage.transactionSync(write),
@@ -169,9 +177,11 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost<S
       }));
     },
 
-    runtimeFor: async (bound: BoundActor): Promise<AgentRuntime> => {
+    runtimeFor: async (bound: BoundActor): Promise<CFRuntime> => {
       // Placement from the policy: the workspace agent lives in the workspace's own runtime, which its opener holds.
-      if (actorPolicy(bound.record).workspaceAgent) return seams.rootRuntime();
+      const workspaceHome = actorPolicy(bound.record).workspaceAgent ? seams.workspaceAgentHome?.() : undefined;
+
+      if (workspaceHome !== undefined) return workspaceHome;
       const held = runtimes.get(bound.handle);
 
       if (held) return held;
@@ -285,7 +295,8 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost<S
     },
   };
 
-  host = createSeatHost(deps);
+  // Seated with no session: every agent's turns run in its own isolate (D9).
+  host = createSeatHost<CFSeat, CFRuntime>(deps, { compose: (seated) => Effect.succeed(seated) });
 
   return host;
 }

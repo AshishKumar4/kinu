@@ -17,7 +17,7 @@ import type { MissionGovernor } from '../mission-budget';
 import { nanoid } from '../utils/nanoid';
 import type { RunEndReason } from './turn-lifecycle';
 import type { WorkMode } from '../types/turn';
-import { diagnostics, toKinuError, settleLogged } from '../obs/index';
+import { diagnostics, settleLogged } from '../obs/index';
 
 /**
  * Whether an arriving user message is a genuine follow-up or an independent task invocation.
@@ -306,20 +306,9 @@ export class EvolutionLanes {
   }
 
   private detach(work: Promise<void>, label: string): void {
-    let tracked: Promise<void> | null = null;
-    tracked = (async (): Promise<void> => {
-      try {
-        await work;
-      } catch (cause) {
-        diagnostics.failure(
-          'orchestrator.detached_work_failed',
-          toKinuError({ doing: 'run detached post-turn work', cause, otherwise: 'unavailable' }),
-          { work: label },
-        );
-      } finally {
-        if (tracked !== null) this.inFlight.delete(tracked);
-      }
-    })();
+    const tracked: Promise<void> = settleLogged('orchestrator.detached_work_failed', { doing: 'run detached post-turn work', otherwise: 'unavailable' },
+      () => work, { work: label }).finally(() => { this.inFlight.delete(tracked); });
+
     this.inFlight.set(tracked, label);
   }
 }

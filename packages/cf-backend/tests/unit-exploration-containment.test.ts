@@ -12,7 +12,7 @@ import {
   HeadCapture,
   HeadController,
   HeadJournal,
-  initHeadsTables,
+  initHeadsTables, initToolEffectClaimTable,
   type HeadInput,
   type HeadReport,
   type HeadRuntime,
@@ -99,6 +99,8 @@ function buildSurface(opts?: {
 }) {
   const { rt, stores } = createTestRuntime();
   const capture = new HeadCapture();
+  // Its calls keep their receipts in its own store, as a seated head's do in its workspace.
+  initToolEffectClaimTable(rt.storage.execRaw);
 
   const codemodeTool = tool({ description: 'eval', inputSchema: jsonSchema<{ code: string }>({
     type: 'object', properties: { code: { type: 'string' } }, required: ['code'],

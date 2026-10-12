@@ -138,7 +138,7 @@ export class ActorAdvisor {
   }
 
   /** True once the answer is forgotten. */
-  private deliverAnswer(port: TemporaryAgentPort, helper: AnsweredEvolutionHelper, turnId: string): Promise<boolean> {
+  deliverAnswer(port: TemporaryAgentPort, helper: AnsweredEvolutionHelper, turnId: string): Promise<boolean> {
     if (this.delivering.has(helper.name)) return Promise.resolve(false);
 
     return settle(attempt({ doing: `judging the advisor's review of turn ${turnId}`, otherwise: 'unavailable' }, async () => {
@@ -184,7 +184,7 @@ export class ActorAdvisor {
     return judged === null || !judged.spoken || await this.say(judged.note, turnId);
   }
 
-  private say(note: AdvisorNote, turnId: string): Promise<boolean> {
+  say(note: AdvisorNote, turnId: string): Promise<boolean> {
     return settle(attempt({ doing: `saying the advisor's note on turn ${turnId}`, otherwise: 'unavailable' }, async () => {
       const sent = await sayAdvisorNote(note, {
         turnId,

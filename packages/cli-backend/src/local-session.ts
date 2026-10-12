@@ -6,7 +6,7 @@
 import { lookup } from 'node:dns/promises';
 import { realpathSync } from 'node:fs';
 import { ASKED, historyTurnPairs, testModel, toolDescription, workModeForTurnMetadata, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
-import type { ActorHandle, DeliveryAnswer, ExecutionKey, InProcessDeliveries, JsonObject, OwedDelivery } from '@kinu.run/core';
+import type { ActorHandle, DeliveryAnswer, InProcessDeliveries, JsonObject, OwedDelivery, ReceiptExecution } from '@kinu.run/core';
 import { Effect } from 'effect';
 import { resolve } from 'node:path';
 import type { LanguageModel, ToolSet } from 'ai';
@@ -2758,12 +2758,12 @@ export class LocalAgentSession {
   }
 
   /** The execution a tool call now claims under: its operation's, else the chat's open turn and run. */
-  private turnExecution(): Pick<ExecutionKey, 'turnId' | 'runId'> {
+  private turnExecution(): ReceiptExecution {
     return currentOperationProfile(this.rt.actor) ?? { turnId: this.chat.currentTurnId ?? WORKSPACE_RUN_ID, runId: this.chat.currentRunId ?? WORKSPACE_RUN_ID };
   }
 
   /** Tool deps with the effect-claim execution as an argument; it decides what a replay dedupes against. */
-  private actorToolsetDeps(mode: WorkMode, execution: () => Pick<ExecutionKey, 'turnId' | 'runId'>): ActorToolsetDeps {
+  private actorToolsetDeps(mode: WorkMode, execution: () => ReceiptExecution): ActorToolsetDeps {
     const deps: ActorToolsetDeps = {
       rt: this.rt,
       workMode: mode,

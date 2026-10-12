@@ -497,12 +497,6 @@ describe('one workspace database, many logical actors', () => {
     await expect(fx.host.retire(fx.main, { reference: a, name: 'not-alpha', destroy: true, interrupt: true }))
       .rejects.toThrow(/alias this actor no longer holds/);
 
-    // A newer epoch admitted the same turn since the caller looked.
-    await alpha.stores.claims.admit({ runId: 'r3', turnId: 'turn-1', workMode: 'build', program: BUILTIN, context: contextOf(alpha) });
-    await expect(fx.host.retire(fx.main, {
-      reference: a, name: 'alpha', destroy: true, interrupt: true, observed: { turnId: 'turn-1', epoch: 1 },
-    })).rejects.toThrow(/epoch 1/);
-
     await fx.host.retire(fx.main, { reference: a, name: 'alpha', destroy: true, interrupt: true });
     expect(fx.sql<{ n: number }>`SELECT COUNT(*) AS n FROM actor_turn_claims WHERE actor_id = ${a.actorId}`[0]?.n).toBe(0);
     expect(fx.sql<{ n: number }>`SELECT COUNT(*) AS n FROM context_revisions WHERE actor_id = ${a.actorId}`[0]?.n).toBe(0);

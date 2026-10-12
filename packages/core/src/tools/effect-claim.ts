@@ -14,15 +14,23 @@ import { KinuError, settle } from '../obs/index';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { parseJsonValue, projectJsonValue, type JsonValue } from '../utils/json';
-import type { ExecutionKey, RemoteReceipt } from '../orchestrator/execution';
 import { replayPolicyFor } from './registry';
 import { isTransactionalCall, TRANSACTIONAL_RECEIPT_OPTION, TransactionalReceipt, type ReceiptCommit } from './transactional-receipt';
 
-/** `turnId` is the durable turn id (the opening message), `runId` the run answering it: a recovery keeps both and finds
- *  its receipts, a Retry is another run and finds none of the last one's. */
-export interface ToolEffectKey {
+/** The execution a receipt is kept under: `turnId` the durable turn id (the opening message), `runId` the run answering
+ *  it. A recovery keeps both and finds its receipts; a Retry is another run and finds none of the last one's. */
+export interface ReceiptExecution {
   readonly turnId: string;
   readonly runId: string;
+}
+
+/** A remote effect's receipt, as the store its effect commits to answers for it. An absent receipt never started, so a
+ *  re-ask runs it; an indeterminate one started and never settled, so a re-ask is refused. */
+export type RemoteReceipt =
+  | { readonly status: 'settled'; readonly output: JsonValue }
+  | { readonly status: 'indeterminate' };
+
+export interface ToolEffectKey extends ReceiptExecution {
   /** The provider's id for this call, normalized by the caller. */
   readonly callId: string;
   /** Tool name + canonical arguments, bound together. */
@@ -100,7 +108,7 @@ export interface EffectClaimDeps {
   /** Claim keys collide across actors of one workspace, so reads are scoped to this actor. */
   readonly actor: ActorHandle;
   /** Read at call time: a toolset is built once and used across many turns. */
-  readonly execution: () => Pick<ExecutionKey, 'turnId' | 'runId'>;
+  readonly execution: () => ReceiptExecution;
   /** Makes the call's part durable before it runs; absent where no model loop runs in this process (a workspace
    *  serving its agents' isolates), whose calls stream no part. */
   readonly durable?: (callId: string, signal?: AbortSignal) => Promise<void>;
@@ -236,7 +244,7 @@ export type LostToolCall =
 /** Per execution: providers reuse call ids; an `<assignment>#<k>` round claims as its assignment. `'remote'`: this
  *  store only points at the call, and the store its effect commits to answers for it ({@link lostRemoteCall}). */
 export function lostToolCall(
-  sql: SqlExecutor, actor: ActorHandle, execution: Pick<ExecutionKey, 'turnId' | 'runId'>, call: { readonly toolCallId: string; readonly toolName: string },
+  sql: SqlExecutor, actor: ActorHandle, execution: ReceiptExecution, call: { readonly toolCallId: string; readonly toolName: string },
 ): LostToolCall | 'remote' | null {
   actor.assertCurrent();
 
@@ -270,7 +278,7 @@ export function lostRemoteCall(answer: RemoteReceipt | 'absent' | undefined, cal
 
 /** The receipts this store keeps for an execution's calls, as its isolate asks for the ones it only points at. */
 export function remoteReceipts(
-  sql: SqlExecutor, actor: ActorHandle, execution: Pick<ExecutionKey, 'turnId' | 'runId'>, callIds: readonly string[],
+  sql: SqlExecutor, actor: ActorHandle, execution: ReceiptExecution, callIds: readonly string[],
 ): ReadonlyMap<string, RemoteReceipt> {
   actor.assertCurrent();
   const receipts = new Map<string, RemoteReceipt>();
@@ -286,11 +294,4 @@ export function remoteReceipts(
   }
 
   return receipts;
-}
-
-/** An execution's receipts go once its turn settles: a later Retry is another run, and a recovery has ended. */
-export function pruneTurnReceipts(sql: SqlExecutor, actor: ActorHandle, execution: Pick<ExecutionKey, 'turnId' | 'runId'>): void {
-  actor.assertCurrent();
-  void sql`DELETE FROM tool_effect_claims
-    WHERE actor_id=${actor.actorId} AND turn_id=${execution.turnId} AND run_id=${execution.runId}`;
 }

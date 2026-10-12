@@ -426,7 +426,6 @@ export class AgentTurns {
       ...(brief !== undefined && { brief }),
       opening: encodeModelMessageValues(run === undefined ? [] : run.opening ?? buildHeadMessages(input)),
       tools: surface.descriptors,
-      ownerLane: surface.ownerLane,
       dynamic: this.dynamic(turn, prepared),
       reviewsTurns: surface.reviewsTurns,
       ...(surface.trial !== undefined && { trial: surface.trial }),

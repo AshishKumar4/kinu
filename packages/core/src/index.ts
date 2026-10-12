@@ -55,7 +55,7 @@ export {
 } from './orchestrator/turn-facts';
 
 export type {
-  CloseCapability, ExecutionKey, ExecutionLane, FrozenTurn, RemoteReceipt, TurnCapability, TurnPort, TurnToolCall,
+  CloseCapability, ExecutionKey, ExecutionLane, FrozenTurn, TurnCapability, TurnPort, TurnToolCall,
 } from './orchestrator/execution';
 
 export { inTurnSurface, scopedTurnSurface, turnLedgers, TurnSurface, type TurnLedgers, type TurnSurfaceOpening } from './orchestrator/main-turn-surface';
@@ -574,7 +574,7 @@ export {
 export {
   createActorHost, createSeatHost, recoverActorTurns, childContextResolver, hostedChildTree, registeredParent,
   type ActorHost,
-  type ActorSeat, type ActorHostDeps, type SeatHostDeps, type BoundActor, type SeatedActor, type HostedActor,
+  type ActorSeat, type ActorHostDeps, type SeatHostDeps, type Seating, type BoundActor, type SeatedActor, type HostedActor,
   type LoopSeed, type ActorRetirement, type ResumableActorTurn,
 } from './state/actor-host';
 
@@ -676,7 +676,6 @@ export {
 export {
   askOwnerTool,
   buildBuiltinTools,
-  ownerLaneTools,
   codemodeSurface,
   type BuiltinToolDeps,
   type CodemodeBuilder, type CodemodeSurface,
@@ -696,8 +695,8 @@ export {
 // Applied inside buildActorTools; backends never wrap tools themselves.
 export {
   initToolEffectClaimTable, claimToolEffect, settleToolEffect,
-  withEffectReceipt, withEffectPointer, remoteReceipts, pruneTurnReceipts,
-  type EffectClaimDeps, type ToolEffectClaim, type ToolEffectKey,
+  withEffectReceipt, withEffectPointer, remoteReceipts,
+  type EffectClaimDeps, type ReceiptExecution, type RemoteReceipt, type ToolEffectClaim, type ToolEffectKey,
 } from './tools/effect-claim';
 
 // Web search + fetch
@@ -2650,3 +2649,5 @@ export type {
 } from './subordinates/agent-isolate';
 
 export { writesSnapshotRows } from './subordinates/agent-isolate';
+
+export { describeAgentTools } from './subordinates/tool-descriptors';

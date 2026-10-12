@@ -170,9 +170,9 @@ import {
 } from "./runtime";
 import {
   hostNodeSeat, nodeCodemodeTool, hostedSubordinateRuntime,
-  type HostedActorSeams,
+  type ActorSurface, type HostedActorSeams, type SurfaceTurn,
 } from "./hosted-actors";
-import type { ActorSurface, SurfaceTurn } from "./actor-capabilities";
+import type { CFSeat } from "./actor-hosting";
 import {
   // Shared retry pace for notice carrier, this tick's re-arm and the job runner's deferral.
   recoveryBackoffMs,
@@ -759,7 +759,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** The workspace's one actor host; every logical actor is acquired from it over this object's SQL.
    * Abstract because it is built from root state this base class does not hold. */
-  protected abstract actorHost(): ActorHost<SeatedActor>;
+  protected abstract actorHost(): ActorHost<CFSeat>;
 
   /** Read directly by the inspection path and slate descent, which resolve actors by name. */
   protected abstract actorDirectoryStore(): WorkspaceActorDirectory;
@@ -3681,6 +3681,7 @@ export abstract class ActorAgent extends Agent<Env> {
   /** The owner changed what decides a tier's model or credential: a parked refusal may answer differently. */
   protected async modelSettingsChanged(): Promise<void> {
     this.modelSettingsChanges += 1;
+    this._accountSwarms = null;
     this.invalidateModelCaches();
     await this.terminal.modelSettingsChanged();
   }
@@ -3712,19 +3713,33 @@ export abstract class ActorAgent extends Agent<Env> {
   protected abstract ownAgentsToolDeps(mode: WorkMode): AgentsToolDeps;
 
   /** Every agent's turn surface (design v2 §2, §9), from the one factory. */
-  protected abstract actorSurface(actor: SeatedActor, turn: SurfaceTurn): Promise<ActorSurface>;
+  protected abstract actorSurface(actor: CFSeat, turn: SurfaceTurn): Promise<ActorSurface>;
 
-  /** "Beta: swarms", as the account's catalog says it now. */
-  protected async accountSwarms(): Promise<boolean> {
-    return betaSwarms((await this.profileCatalog()).catalog);
+  /** "Beta: swarms" as the workspace agent's tools last read it; null until read and after a catalog write. */
+  private _accountSwarms: boolean | null = null;
+
+  /** "Beta: swarms" as held, read once when nothing holds it. */
+  protected async readAccountSwarms(): Promise<boolean> {
+    this._accountSwarms ??= await this.currentAccountSwarms();
+
+    return this._accountSwarms;
   }
 
-  /** Whether swarms are on for a call under `operation`: as its account read said, else as the account's catalog held
-   *  here says; a call before any read sees them off. */
-  protected swarmsOn(operation: OperationProfile | null): boolean {
-    const catalog = operation?.inputs?.envelope.catalog ?? this.heldCatalog.current?.catalog;
+  /** "Beta: swarms" as the account's catalog says it now, held for the workspace agent's tools. */
+  protected async currentAccountSwarms(): Promise<boolean> {
+    this._accountSwarms = betaSwarms((await this.profileCatalog()).catalog);
 
-    return catalog !== undefined && betaSwarms(catalog);
+    return this._accountSwarms;
+  }
+
+  /** A turn of the workspace agent read the account's catalog as it opened: its tools offer what that read says. */
+  protected accountSwarmsRead(catalog: ProfileCatalogEnvelope['catalog']): void {
+    this._accountSwarms = betaSwarms(catalog);
+  }
+
+  /** Whether the workspace agent's tools offer swarms, as the account's catalog was last read for them. */
+  protected get accountSwarmsHeld(): boolean {
+    return this._accountSwarms === true;
   }
 
   /** Built lazily once per DO lifetime; heads need the owner for UserDO auth, so undefined without one. */
@@ -4283,8 +4298,8 @@ export abstract class ActorAgent extends Agent<Env> {
     mode: WorkMode,
     signal: AbortSignal,
   ): Promise<JsonValue | undefined> {
-    // Its swarms are on as the account says now; work outside a turn runs on the profile the actor resolves now.
-    await this.profileCatalog();
+    await this.currentAccountSwarms();
+    // Work outside a turn runs on the profile the actor resolves now.
     await this.currentProfile();
 
     return await resumeBackgroundJob({

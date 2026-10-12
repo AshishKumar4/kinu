@@ -6,7 +6,7 @@ import {
   planHandoffStillOwed, planAwaitingReply, approvedTaskPlan, missionGate, workModeUnderReview, projectJsonValue, declareHandoffRoster, HandedOffTurnSchema, terminalEffect, turnAuthorship, turnLane, type TurnAuthorship,
   actorPolicy, metadataTier, workModeForTurnMetadata, reportReadsNarration, subordinateTerminalEffects, withCompactionTrigger, type ActorPolicy,
   bindRoute, completeOnRoute, ownProfileChoices, planWorkspaceTitle, resolveAgentTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle,
-  type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpening, type JsonObject, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
+  type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpening, type JsonObject, type PlanReview, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
   type InspectedWork, type PreparedAgentTurn, type PreparedTurn, type TerminalTurnFacts, type TerminalTurnParts,
   type SessionEvent, type TurnAssemblyRequest, type WorkMode, type OwnerQuestionStore,
 } from '@kinu.run/core';
@@ -158,11 +158,6 @@ export class FacetChat {
 
     const tools = facetTurnTools(workspace, prepared, actor, {
       id: turn.id, runId: turn.runId, mode: turn.mode, parentDriven: this.parentDriven, driving: this.driving, live, capture: new HeadCapture(), database,
-      // Its plans are its own store's, judged by the metadata its turn was admitted under.
-      owner: {
-        submitPlan: { submit: async (edits) => await this.planned((plans) => plans.submit(edits, this.driving)) },
-        replyToComment: { reply: async (comment, text) => await this.planned((plans) => plans.reply(comment, text, this.driving)) },
-      },
     });
 
     const { sources: bundle } = facetTurnSources({ actor, workspace, models, prepared, spend: this.spend, live, runId: turn.runId, turnId: turn.id, pacer });
@@ -202,12 +197,15 @@ export class FacetChat {
   private async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease, opening: TurnOpening): Promise<PreparedTurn> {
     const { actor, database, workspace } = this.deps;
     const plans = actor.stores.planReviews;
+    // Read once, by whichever of the review's mode and the reply's lane asks first.
+    let active: PlanReview | null | undefined;
+    const activePlan = (): PlanReview | null => (active === undefined ? (active = plans.getActive(CHAT_SESSION_ID)) : active);
     // The one place a turn's lane is decided; the workspace rebuilds a turn from this, never from its id.
     // A hirer's turn runs in the hirer's lane, with `report`, only for an agent that has a hirer.
     this.parentDriven = turnLane(this.policy, authorshipOf(item)) === 'hirer';
     this.driving = authoredTurnMetadata(item);
     // The owner's words while a plan awaits their decision are read as its review.
-    const mode = workModeUnderReview(actor.session.workMode, this.driving, () => plans.getActive(CHAT_SESSION_ID));
+    const mode = workModeUnderReview(actor.session.workMode, this.driving, activePlan);
     // The workspace reads the turn's sources for the tier it runs on, and the turn is assembled on that same tier.
     const explicitTier = metadataTier(item.metadata);
     const taskPlan = approvedTaskPlan(item, plans);
@@ -215,7 +213,7 @@ export class FacetChat {
     const prepared = await workspace.prepareChat({
       turnId: lease.turnId, mode, userText: item.text, parentDriven: this.parentDriven, driving: this.driving, opening,
       // A plan the owner sent back with comments awaits its answers on the owner's turns alone.
-      awaitsReply: !this.parentDriven && planAwaitingReply(plans.getActive(CHAT_SESSION_ID), this.driving),
+      awaitsReply: !this.parentDriven && planAwaitingReply(activePlan(), this.driving),
       // Its run, which the turn's recovery continues and its Retry starts anew, and its place in this agent's sequence.
       runId: lease.runId, seq: database.nextInSequence(),
       ...(explicitTier !== undefined && { explicitTier }), ...(taskPlan !== null && { taskPlan }),

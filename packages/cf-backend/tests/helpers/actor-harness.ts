@@ -19,8 +19,8 @@ import type { KvStore } from '@kinu.run/agent-utils';
 import type { WorkspaceOverview } from '@kinu.run/core';
 import { OwnedModelServices } from '../../src/owned-model-services';
 import { bindAgentSql } from '../../src/runtime';
-import { hostedSubordinateRuntime } from '../../src/hosted-actors';
-import type { ActorSurface, SurfaceTurn, ToolScope } from '../../src/actor-capabilities';
+import { hostedSubordinateRuntime, type ActorSurface, type SurfaceTurn, type ToolScope } from '../../src/hosted-actors';
+import type { CFSeat } from '../../src/actor-hosting';
 import type { ChatWireTransport } from '../../src/chat-transport';
 import { isWorkMode, workModeForTurnMetadata } from '@kinu.run/core';
 import { ActorClaimStore, agentArtifactDirectory, agentHome, CHAT_SESSION_ID, createParentWorkspaceVfs, EventLog, SubordinateRosterStore, MAIN_AGENT, openWorkspaceMainActor, SessionHistory, TerminalTransitions, WorkspaceActorDirectory } from '@kinu.run/core';
@@ -574,7 +574,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
     return failure;
   }
-  protected override async actorSurface(actor: SeatedActor, turn: SurfaceTurn): Promise<ActorSurface> {
+  protected override async actorSurface(actor: CFSeat, turn: SurfaceTurn): Promise<ActorSurface> {
     // The workspace agent's: the turns the suites read prepared tools of.
     if (!actorPolicy(actor.record).workspaceAgent || turn.run !== undefined) return await super.actorSurface(actor, turn);
     this._prepareFailure = null;
@@ -598,7 +598,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    *  for another mode (a role imposing Plan) is the actor's own. */
   private _suppliedTools: ToolSet | null = null;
   harnessSupplyTools(tools: ToolSet | undefined): void { this._suppliedTools = tools ?? null; }
-  protected override actorTools(actor: SeatedActor, reach: SurfaceReach, mode: WorkMode, scope: ToolScope): ActorToolsets {
+  protected override actorTools(actor: CFSeat, reach: SurfaceReach, mode: WorkMode, scope: ToolScope): ActorToolsets {
     // The requested mode is the message's, never the operation a role bound over it.
     if (this._suppliedTools !== null && reach.actor.lanes && mode === workModeForTurnMetadata(this.turnUserMetadata())) {
       return { turn: this._suppliedTools, raw: this._suppliedTools };

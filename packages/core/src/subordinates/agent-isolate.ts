@@ -17,7 +17,6 @@ import type { ModelPricing } from '../providers/types';
 import type { WorkMode } from '../types/turn';
 import type { TurnSourcesBundle } from '../orchestrator/turn-assembly';
 import type { SubordinateReportLedger } from './ingress';
-import type { TurnReach } from '../delegation/turn-reach';
 
 export type StoredRow = Readonly<Record<string, string | number | ArrayBuffer | null>>;
 
@@ -95,8 +94,6 @@ export interface PreparedAgentTurn {
   readonly brief?: string;
   readonly opening: readonly JsonValue[];
   readonly tools: readonly AgentToolDescriptor[];
-  /** The tools the turn reaches whose effects commit in the agent's own store, which its isolate builds and runs. */
-  readonly ownerLane: Pick<TurnReach, 'askOwner' | 'submitPlan' | 'replyToComment'>;
   readonly dynamic: DynamicContext;
   readonly reviewsTurns: boolean;
   /** The live trial's arm the turn runs, when the workspace's own agent runs one; recorded with its completed turn. */

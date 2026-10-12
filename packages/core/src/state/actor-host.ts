@@ -37,8 +37,8 @@ export interface BoundActor {
 }
 
 /** A bound actor over its runtime: what a host whose actors run their turns elsewhere seats (the cloud workspace's). */
-export interface SeatedActor extends BoundActor {
-  readonly runtime: AgentRuntime;
+export interface SeatedActor<R extends AgentRuntime = AgentRuntime> extends BoundActor {
+  readonly runtime: R;
 }
 
 /** A seated actor with its turn session: what a host that runs its actors' turns itself holds. */
@@ -66,8 +66,6 @@ export interface ActorRetirement {
   readonly reference: ActorReference;
   /** Must match the directory row, so a re-created name is not retired. */
   readonly name: string;
-  /** Refused if the turn was since re-admitted under a newer epoch. */
-  readonly observed?: { readonly turnId: string; readonly epoch: number };
   /** `false`: the name goes, the conversation stays readable. */
   readonly destroy: boolean;
   /** End an in-flight turn, not wait for it; `destroy` implies it. */
@@ -75,18 +73,18 @@ export interface ActorRetirement {
 }
 
 /** What every host binds and seats its actors over. */
-export interface SeatHostDeps {
+export interface SeatHostDeps<R extends AgentRuntime = AgentRuntime> {
   /** Positional `exec` is needed for the purge, whose table names come from the live schema. */
   readonly storage: Pick<Storage, 'sql' | 'transactionSync'> & SqlExec;
   readonly directory: WorkspaceActorDirectory;
   readonly installedBuild: string | null;
   readonly workspace?: string;
-  runtimeFor(bound: BoundActor, seat: ActorSeat): AgentRuntime | Promise<AgentRuntime>;
+  runtimeFor(bound: BoundActor, seat: ActorSeat): R | Promise<R>;
   filesFor(bound: Pick<BoundActor, 'reference' | 'record' | 'handle'>): Promise<SessionFilePlane>;
   /** Program bytes may live on a state plane distinct from session payloads and tools. */
   scaffoldFor(bound: Pick<BoundActor, 'reference' | 'record' | 'handle'>): Promise<VersionedScaffoldSource>;
   /** Asked by the host so no hosted actor silently runs the shipped bootstrap loop. */
-  loopFor(bound: BoundActor & { readonly runtime: AgentRuntime }): LoopSeed | Promise<LoopSeed>;
+  loopFor(bound: SeatedActor<R>): LoopSeed | Promise<LoopSeed>;
   /** Called after the rows are gone, so a failed reclaim leaves no half-removed readable actor. */
   discardBytes?(record: WorkspaceActor): Promise<void>;
   readonly tracing: (() => AgentTracing) | undefined;
@@ -182,20 +180,15 @@ function actorScopedTables(sql: SqlExecutor): readonly string[] {
 }
 
 /** How a host composes an actor over its seeded runtime, and the turn it runs there, where it runs one. */
-interface Seating<A extends SeatedActor> {
-  compose(seated: SeatedActor, host: ActorHost<A>): Effect.Effect<A, KinuError>;
+export interface Seating<A extends SeatedActor<R>, R extends AgentRuntime> {
+  compose(seated: SeatedActor<R>, host: ActorHost<A>): Effect.Effect<A, KinuError>;
   /** Absent for a host that runs no turn of its actors': release and retire wait on none. */
   readonly turns?: { inFlight(actor: A): boolean; interrupt(actor: A): void };
 }
 
-/** A host whose actors run their turns in their own isolates: it seats them over their runtimes, with no session. */
-export function createSeatHost(deps: SeatHostDeps): ActorHost<SeatedActor> {
-  return hostOver(deps, { compose: (seated) => Effect.succeed(seated) });
-}
-
 /** A host that runs its actors' turns: each is seated with its session. */
 export function createActorHost(deps: ActorHostDeps): ActorHost {
-  return hostOver<HostedActor>(deps, {
+  const sessions: Seating<HostedActor, AgentRuntime> = {
     compose: ({ runtime, ...bound }, host) => Effect.gen(function* () {
       const orchestration = yield* Effect.promise(async () => deps.orchestrationFor({ ...bound, runtime }));
       const tracing = deps.tracing;
@@ -234,10 +227,14 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
       return { ...bound, runtime, session };
     }),
     turns: { inFlight: (actor) => actor.session.inFlight, interrupt: (actor) => { actor.session.interrupt(); } },
-  });
+  };
+
+  return createSeatHost(deps, sessions);
 }
 
-function hostOver<A extends SeatedActor>(deps: SeatHostDeps, seating: Seating<A>): ActorHost<A> {
+/** A host over actors `seating` composes on their seeded runtimes: with no session where their turns run in their own
+ *  isolates (the cloud workspace's), with one where the host runs them ({@link createActorHost}). */
+export function createSeatHost<A extends SeatedActor<R>, R extends AgentRuntime>(deps: SeatHostDeps<R>, seating: Seating<A, R>): ActorHost<A> {
   const slots = new Map<string, HostSlot<A>>();
   const bindings = new Map<string, { bound: BoundActor; fence: ReleaseFence }>();
   const ports = new Map<string, TemporaryAgentPort>();
@@ -448,17 +445,6 @@ function hostOver<A extends SeatedActor>(deps: SeatHostDeps, seating: Seating<A>
 
       if (record.name !== retirement.name) {
         return yield* new KinuError('denied', 'The retirement names an alias this actor no longer holds.');
-      }
-
-      if (retirement.observed) {
-        const owner = deps.storage.sql<{ epoch: number }>`
-          SELECT epoch FROM actor_turn_claims
-          WHERE actor_id = ${record.actorId} AND turn_id = ${retirement.observed.turnId} LIMIT 1`[0]?.epoch;
-
-        if (owner !== undefined && owner > retirement.observed.epoch) {
-          return yield* new KinuError('denied',
-            `this retirement was formed against execution epoch ${retirement.observed.epoch}, and epoch ${owner} owns the turn`);
-        }
       }
 
       const slot = yield* slotFor(retirement.reference);
