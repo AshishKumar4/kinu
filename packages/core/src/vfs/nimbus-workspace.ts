@@ -81,32 +81,35 @@ function workspaceFiles(open: () => Promise<WorkspaceFiles>, cwd: string): Works
 /**
  * The session user's view, the shell process's own, so every write passes the lease check a command's does. A path is
  * the view's as a process's is: a relative one from its directory, and `..` taken by the walk, after a link, never
- * collapsed first. A write makes its parent directories first.
+ * collapsed first. An empty path is that directory, as on every other plane of this file. A write makes its parent
+ * directories first.
  */
 function workspaceVfs(open: () => Promise<NimbusWorkspace>): WorkspaceFiles {
-  const at = async <T>(path: string, syscall: string, call: (fs: WorkspaceFs) => Awaitable<T>): Promise<T> => {
+  const named = (path: string): string => (path === '' ? '.' : path);
+
+  const at = async <T>(path: string, syscall: string, call: (fs: WorkspaceFs, path: string) => Awaitable<T>): Promise<T> => {
     const { fs } = await open();
 
-    return atVfsPath(fs.resolve(path), syscall, () => call(fs));
+    return atVfsPath(fs.resolve(named(path)), syscall, () => call(fs, named(path)));
   };
 
   return {
-    readFile: (path) => at(path, 'open', (fs) => fs.readFile(path)),
-    writeFile: (path, data) => at(path, 'open', async (fs) => {
-      const absolute = fs.resolve(path);
+    readFile: (path) => at(path, 'open', (fs, name) => fs.readFile(name)),
+    writeFile: (path, data) => at(path, 'open', async (fs, name) => {
+      const absolute = fs.resolve(name);
 
       await fs.mkdir(absolute.slice(0, absolute.lastIndexOf('/')) || '/', { recursive: true });
 
-      return fs.writeFile(path, data);
+      return fs.writeFile(name, data);
     }),
-    readdir: (path) => at(path, 'scandir', (fs) => fs.readdir(path)),
-    stat: (path, options) => at(path, options?.follow === false ? 'lstat' : 'stat', (fs) => fs.stat(path, options)),
-    readlink: (path) => at(path, 'readlink', (fs) => fs.readlink(path)),
-    unlink: (path) => at(path, 'unlink', (fs) => fs.unlink(path)),
-    mkdir: (path, opts) => at(path, 'mkdir', (fs) => fs.mkdir(path, opts)),
-    removeRecursive: (path) => at(path, 'rm', (fs) => fs.removeRecursive(path)),
-    rename: (oldPath, newPath) => at(oldPath, 'rename', (fs) => fs.rename(oldPath, newPath)),
-    readRange: (path, offset, length) => at(path, 'read', (fs) => fs.readRange(path, offset, length)),
+    readdir: (path) => at(path, 'scandir', (fs, name) => fs.readdir(name)),
+    stat: (path, options) => at(path, options?.follow === false ? 'lstat' : 'stat', (fs, name) => fs.stat(name, options)),
+    readlink: (path) => at(path, 'readlink', (fs, name) => fs.readlink(name)),
+    unlink: (path) => at(path, 'unlink', (fs, name) => fs.unlink(name)),
+    mkdir: (path, opts) => at(path, 'mkdir', (fs, name) => fs.mkdir(name, opts)),
+    removeRecursive: (path) => at(path, 'rm', (fs, name) => fs.removeRecursive(name)),
+    rename: (oldPath, newPath) => at(oldPath, 'rename', (fs, name) => fs.rename(name, named(newPath))),
+    readRange: (path, offset, length) => at(path, 'read', (fs, name) => fs.readRange(name, offset, length)),
   };
 }
 

@@ -22,3 +22,11 @@ test('`..` after a link is the parent of where the link leads, for a read and a 
   expect(await readText(workspace.vfs, '/home/main/deep/written.txt')).toBe('through the link');
   expect(await workspace.vfs.stat('written.txt')).toBeNull();
 });
+
+test('an empty path is the home, as on the agent planes', async () => {
+  const workspace = createWorkspaceBundle(new Database(':memory:'));
+  await writeText(workspace.vfs, 'here.txt', 'at home');
+
+  expect((await workspace.vfs.readdir('')).map((entry) => entry.name)).toContain('here.txt');
+  expect((await workspace.vfs.stat(''))?.type).toBe('directory');
+});
