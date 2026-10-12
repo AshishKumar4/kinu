@@ -89,6 +89,16 @@ export class SessionContext {
   constructor(private readonly sql: SqlExecutor, private readonly actor: ActorHandle, private readonly atomic: <T>(operation: () => T) => T,
     private readonly messages: Pick<SessionMessageReader, 'originOf'>) {}
 
+  /** The newest revision `turnId`'s input made, in whichever context it was made; null for a turn that made none. */
+  lastInputOf(turnId: string): ContextSelection | null {
+    this.actor.assertCurrent();
+
+    const row = this.sql<{ context_id: string; revision: number }>`SELECT context_id,revision FROM context_revisions
+      WHERE actor_id=${this.actor.actorId} AND turn_id=${turnId} AND cause='input' ORDER BY recorded_at DESC,revision DESC LIMIT 1`[0];
+
+    return row === undefined ? null : { contextId: row.context_id, revision: row.revision };
+  }
+
   selected(): ContextSelection | null {
     this.actor.assertCurrent();
 

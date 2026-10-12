@@ -326,6 +326,8 @@ describe('Retry on an answered turn', () => {
   /** A model that answers the ask each time it is asked, numbering its answers; `answers` counts them. */
   function answering() {
     let answers = 0;
+    // What each ask sent the model, in order.
+    const asked: string[] = [];
 
     const workspace = gatewayWorkspace(stubAiBinding((run) => {
       if (!JSON.stringify(requestOf(run).messages).includes(ASK) || JSON.stringify(requestOf(run).messages).includes(WORKSPACE_TITLE_SYSTEM_PROMPT)) {
@@ -333,11 +335,12 @@ describe('Retry on an answered turn', () => {
       }
 
       answers += 1;
+      asked.push(JSON.stringify(requestOf(run).messages));
 
       return chatCompletion(run, `Answer ${String(answers)}.`);
     }));
 
-    return { workspace, answers: () => answers };
+    return { workspace, answers: () => answers, asked };
   }
 
   test("on the workspace's chat, runs the turn again and answers it", async () => {
@@ -379,6 +382,27 @@ describe('Retry on an answered turn', () => {
     expect(done(frames.items, 'retry')[0]?.error).toBeUndefined();
     expect(answers()).toBe(2);
     expect(JSON.stringify(frames.items)).toContain('Answer 2.');
+  });
+
+  /** Retry of an answer asks for another (D6): the answer it retries is withdrawn, from the transcript the room is sent
+   *  and from what the model is asked, so the model answers the owner's words afresh and one answer stays. */
+  test('withdraws the answer it retries: the model is asked afresh, and one answer stays', async () => {
+    const { workspace, asked } = answering();
+    const { agent } = workspace;
+    await workspace.started;
+    const { wire, frames } = listen(agent);
+    const gate = agent.harnessChatGate();
+
+    await gate(wire, request('first', 'submit-message'));
+    await frames.until((sent) => done(sent, 'first').length > 0);
+    await gate(wire, request('retry', 'regenerate-message'));
+    await frames.until((sent) => done(sent, 'retry').length > 0);
+    await agent.harnessAgentsIdle();
+
+    expect(asked.at(-1)).not.toContain('Answer 1.');
+    const answered = (await storedChat(workspace)).filter((message) => message.role === 'assistant');
+
+    expect([answered.length, JSON.stringify(answered).includes('Answer 1.'), JSON.stringify(answered).includes('Answer 2.')]).toEqual([1, false, true]);
   });
 
   /** A Retry is a new run (design v2 §2): it opens with what the workspace decides as it is asked, as a turn does. The

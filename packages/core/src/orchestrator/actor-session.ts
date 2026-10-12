@@ -342,6 +342,16 @@ export class ActorSession {
     await this.restoreWorkingHistory();
   }
 
+  /** A Retry of an answered turn: its answer withdrawn from the transcript and the context (`SessionHistory.withdrawAnswer`),
+   *  and its executions so far from its output, in one commit. */
+  async withdrawAnswer(sessionId: string, answer: { readonly turnId: string; readonly entryId: string }, assertIdle: () => Effect.Effect<void, KinuError>): Promise<void> {
+    const within = (): void => { this.options.claims.withdraw(answer.turnId); };
+
+    this.canonical.withdrawAnswer(sessionId, { ...answer, within }, () => this.inFlight ? Effect.fail(new KinuError('denied', REVERT_NEEDS_IDLE)) : assertIdle());
+    this.dynamic.unload();
+    await this.restoreWorkingHistory();
+  }
+
   async clearConversation(sessionId: string, assertIdle: () => Effect.Effect<void, KinuError>): Promise<void> {
     this.canonical.clearConversation(sessionId, () => this.inFlight ? Effect.fail(new KinuError('denied', CLEAR_NEEDS_IDLE)) : assertIdle());
     this.dynamic.unload();
@@ -1003,7 +1013,8 @@ export class ActorSession {
     tally: TurnTally,
     program: ActorTurnProgram | null,
   ): Promise<ActorExecutionResult> {
-    const output = await this.canonical.outputForTurn(lease.turnId);
+    // What a Retry of its answer withdrew is no output of this execution's; the claim it read as it reserved says so.
+    const output = await this.canonical.outputForTurn(lease.turnId, active.reserved?.previous?.withdrawnThrough ?? 0);
     const said = await this.saidText(output.messages, tally.text, tally.answer);
 
     return {

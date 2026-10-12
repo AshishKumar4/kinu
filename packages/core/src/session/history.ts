@@ -11,7 +11,7 @@ import { SessionRequests } from './requests';
 import { KinuError } from '../obs/error';
 import { settleSync } from '../obs/effect';
 import { diagnostics } from '../obs/log';
-import { SessionTranscript } from './transcript';
+import { SessionTranscript, type ConversationEntry } from './transcript';
 import { toolPairingGaps } from './tool-pairing';
 import type { ContextEventRecorder } from '../types/context-plane';
 
@@ -170,6 +170,23 @@ export class SessionHistory {
   /** Continue from before `entryId`: the context of the nearest earlier entry that recorded one branches, and
    *  `entryId` and everything after it is deleted. */
   revertTo(sessionId: string, entryId: string, assertIdle: () => Effect.Effect<void, KinuError>): ContextSelection {
+    return this.rewind(sessionId, entryId, assertIdle, { baseOf: (transcript, entry) => transcript.contextAt(entry.position - 1) });
+  }
+
+  /** A Retry of an answered turn (D6): its answer `entryId` and everything after it is deleted, and the context branches
+   *  at the revision the turn's last input made, so the turn is asked again from what it had when the owner last spoke. */
+  withdrawAnswer(
+    sessionId: string, input: { readonly turnId: string; readonly entryId: string; readonly within: () => void }, assertIdle: () => Effect.Effect<void, KinuError>,
+  ): ContextSelection {
+    return this.rewind(sessionId, input.entryId, assertIdle, { baseOf: () => this.context.lastInputOf(input.turnId), within: input.within });
+  }
+
+  /** `entryId` and everything after it is deleted, and the context `baseOf` names branches and is selected; `within`
+   *  commits with it. */
+  private rewind(
+    sessionId: string, entryId: string, assertIdle: () => Effect.Effect<void, KinuError>,
+    { baseOf, within }: { readonly baseOf: (transcript: SessionTranscript, entry: ConversationEntry) => ContextSelection | null; readonly within?: () => void },
+  ): ContextSelection {
     return this.dependencies.transactionSync(() => settleSync(Effect.gen({ self: this }, function* () {
       this.dependencies.actor.assertCurrent();
       yield* assertIdle();
@@ -177,13 +194,14 @@ export class SessionHistory {
       const entry = transcript.read(entryId);
 
       if (entry === null) throw new KinuError('missing', 'conversation entry does not exist');
-      const base = transcript.contextAt(entry.position - 1);
+      const base = baseOf(transcript, entry);
       const selected = this.context.selected() ?? this.context.initialize();
 
       for (const proposal of this.proposals.pending(selected.contextId)) this.proposals.close(proposal.proposal_id, 'history_rewritten');
       const target = this.context.fork(base);
       this.context.select(selected, target, assertIdle);
       transcript.truncate(entry.position);
+      within?.();
       // The only deletion short of a clear; recorded so it is distinguishable from lost rows.
       diagnostics.event('session.transcript_rewound', { session: sessionId, from: entryId, position: entry.position });
 
@@ -360,13 +378,14 @@ export class SessionHistory {
   }
 
   /** `messages` is the model-facing output; `parts` also carries render-only parts for the public transcript. */
-  async outputForTurn(turnId: string): Promise<TurnOutput> {
+  /** `after`: the epoch through which a Retry of its answer withdrew the turn's executions (`ActorClaimStore.withdraw`). */
+  async outputForTurn(turnId: string, after = 0): Promise<TurnOutput> {
     this.dependencies.actor.assertCurrent();
 
     // CROSS JOIN keeps this turn's requests outer; the other order walked every message (190 ms at 184K rows).
     const rows = this.dependencies.sql<{ message_id: string; origin: string; epoch: number; step: number; output_slot: number }>`SELECT m.message_id,m.origin,r.epoch,COALESCE(r.step_index,m.output_slot/3) AS step,m.output_slot
       FROM actor_requests r CROSS JOIN session_messages m ON m.actor_id=r.actor_id AND m.request_id=r.request_id
-      WHERE r.actor_id=${this.dependencies.actor.actorId} AND r.turn_id=${turnId} AND m.origin IN ('output','render')
+      WHERE r.actor_id=${this.dependencies.actor.actorId} AND r.turn_id=${turnId} AND r.epoch>${after} AND m.origin IN ('output','render')
       ORDER BY r.epoch,step,m.output_slot`;
 
     const parts: (MessagePartReference & { epoch: number; step: number; order: number })[] = [];

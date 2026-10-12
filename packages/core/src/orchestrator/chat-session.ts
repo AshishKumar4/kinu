@@ -705,7 +705,12 @@ export class ChatSession {
    *  first step, so an offer is consumed only by a message that arrived before it. */
   /** The one in-flight decision sends, Retry, Clear and Revert take: a Retry between its claim and its queue counts. */
   turnInFlight(): boolean {
-    return this.reopening || this.actorSession.inFlight || this.queue.some((item) => item.kind === 'user' || item.yieldsToUserMessage === true);
+    return this.reopening || this.running();
+  }
+
+  /** A turn runs or is queued; a Retry claimed but not yet queued aside. */
+  private running(): boolean {
+    return this.actorSession.inFlight || this.queue.some((item) => item.kind === 'user' || item.yieldsToUserMessage === true);
   }
 
   /**
@@ -1154,16 +1159,51 @@ export class ChatSession {
     });
   }
 
-  /** The newest turn, reopened: its opener's id. `seen`, when given, must still be the newest message. */
+  /**
+   * The newest turn, reopened: its opener's id. `seen`, when given, must still be the newest message. A turn that
+   * answered is asked again from what it had when the owner last spoke, its answer withdrawn from the transcript and the
+   * model's context alike; a failed or stopped turn keeps the steps it completed, and its Retry continues them.
+   */
   private reopenForRetry(seen: string | null): Effect.Effect<string, KinuError> {
-    return Effect.suspend(() => {
-      if (this.turnInFlight()) return Effect.fail(new KinuError('denied', 'This turn is already running; Retry waits for it to end.'));
+    return Effect.gen({ self: this }, function* () {
+      if (this.turnInFlight()) return yield* Effect.fail(new KinuError('denied', 'This turn is already running; Retry waits for it to end.'));
 
-      if (seen !== null && this.transcript.newestUserId() !== seen) return Effect.fail(new KinuError('bad_input', 'A newer message came since; Retry the newest one.'));
+      if (seen !== null && this.transcript.newestUserId() !== seen) return yield* Effect.fail(new KinuError('bad_input', 'A newer message came since; Retry the newest one.'));
+      const answer = this.newestAnswer();
+
+      if (answer !== null) yield* this.withdrawAnswer(answer);
       const opener = this.transcript.reopenNewestTurn();
 
-      return opener === null ? Effect.fail(new KinuError('bad_input', 'There is no message to retry.')) : Effect.succeed(opener.id);
+      if (opener !== null) return opener.id;
+      this.reopening = false;
+
+      return yield* Effect.fail(new KinuError('bad_input', 'There is no message to retry.'));
     });
+  }
+
+  /** The newest turn's answer, when the turn answered (its claim settled `completed`) and the answer is the last entry. */
+  private newestAnswer(): { readonly turnId: string; readonly entryId: string } | null {
+    const newest = this.transcript.newestUserId();
+    const opener = newest === null ? null : this.transcript.read(newest);
+    const turnId = opener?.turnId ?? opener?.id ?? null;
+    const last = this.transcript.at(this.transcript.count() - 1);
+
+    if (turnId === null || last?.role !== 'assistant' || last.turnId !== turnId) return null;
+
+    return this.actorSession.claims.read(turnId)?.outcome === 'completed' ? { turnId, entryId: last.id } : null;
+  }
+
+  /** Withdraws the answer (`ActorSession.withdrawAnswer`). Claimed against any other turn from here until the Retry is
+   *  queued (`queueRetried`), or until the withdrawal fails. */
+  private withdrawAnswer(answer: { readonly turnId: string; readonly entryId: string }): Effect.Effect<void, KinuError> {
+    this.reopening = true;
+
+    return attemptInItsWords('io', async () => {
+      await this.actorSession.withdrawAnswer(this.sessionId, answer, () => (this.running() ? Effect.fail(new KinuError('denied', REVERT_NEEDS_IDLE)) : Effect.void));
+      // Its open questions were the withdrawn answer's.
+      this.abandonQuestions();
+      this.emit({ type: 'history-reverted', entryId: answer.entryId });
+    }).pipe(Effect.tapError(() => Effect.sync(() => { this.reopening = false; })));
   }
 
   /** Held until the turn is queued, which then holds it: no tick between the two leaves the session idle. `held`: the row
