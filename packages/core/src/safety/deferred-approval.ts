@@ -13,6 +13,7 @@ import type { ApprovalConsumedRecord } from '../events/types';
 import * as v from 'valibot';
 import {
   formatApproval,
+  gatedGrants,
   type ApprovalGrant,
   type ApprovalSpend,
   type ApprovalSpendOutcome,
@@ -630,8 +631,7 @@ export class DeferredApprovalQueue {
 
     if (answer === 'always') {
       // Not re-reviewed: that would lose the call's member and cwd.
-      this.deps.remember(decided.flatMap((a) => this.storeOf(a.actor).hits(a.id)
-        .filter((hit) => hit.decision === 'gate').map((hit) => ({ rule: hit.rule, executor: a.executor }))));
+      this.deps.remember(decided.flatMap((a) => gatedGrants(this.storeOf(a.actor).hits(a.id), a.executor)));
     }
 
     const written = await this.performWrites(decided.filter((a) => a.actor === this.deps.store.actorId));
@@ -640,7 +640,7 @@ export class DeferredApprovalQueue {
     const blocked = decided.filter((a) => this.awaiting.has(a.id));
 
     for (const action of blocked) {
-      for (const release of this.awaiting.get(action.id) ?? []) release();
+      for (const resume of this.awaiting.get(action.id) ?? []) resume();
       this.awaiting.delete(action.id);
     }
 

@@ -502,12 +502,12 @@ describe('the grant vocabulary', () => {
 
   test('an always-answer buys the gated rules on the asked executor and nothing else', () => {
     const review = reviewCommand('sudo rm -rf /var/tmp/x', THEIRS);
-    expect(gatedGrants(review, 'device')).toEqual([
+    expect(gatedGrants(review.hits, 'device')).toEqual([
       { rule: 'sudo', executor: 'device' },
       { rule: 'rm-recursive', executor: 'device' },
     ]);
     // Warn-tier hits are not questions, so they buy nothing.
-    expect(gatedGrants(reviewCommand('printenv', THEIRS), 'device')).toEqual([]);
+    expect(gatedGrants(reviewCommand('printenv', THEIRS).hits, 'device')).toEqual([]);
   });
 
   test('a grant covers its rule on its executor and nothing wider, on every policy that asks', () => {

@@ -279,7 +279,7 @@ async function askLive(
 
   if (!approvalGrants(outcome)) return refuse('denied', `${APPROVAL_DENIED} by the owner: ${formatApproval(review)}`);
 
-  if (outcome === 'allow_always') policy.remember?.(gatedGrants(review, ask.executor));
+  if (outcome === 'allow_always') policy.remember?.(gatedGrants(review.hits, ask.executor));
 
   return { run: true };
 }
@@ -347,8 +347,8 @@ async function decideApproval(
 }
 
 /** Grants an 'always' answer buys: each asked rule, on its executor. */
-export function gatedGrants(review: ApprovalResult, executor: string): ApprovalGrant[] {
-  return review.hits.filter((h) => h.decision === 'gate').map((h) => ({ rule: h.rule, executor }));
+export function gatedGrants(hits: readonly { readonly rule: string; readonly decision: string }[], executor: string): ApprovalGrant[] {
+  return hits.filter((h) => h.decision === 'gate').map((h) => ({ rule: h.rule, executor }));
 }
 
 /** Whether every grant in `child` is in `parent`: the facet invariant. */
