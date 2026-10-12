@@ -245,10 +245,19 @@ export class AgentDatabase {
     return settleSync(Effect.fail(new KinuError('missing', 'The agent was reached before its workspace sent its rows.')));
   }
 
-  private identity(): v.InferOutput<typeof IdentitySchema> {
-    const snapshot = this.current();
+  /** The identity parsed from the rows {@link adopted} names: an adoption of other rows, or a write to them, moves it. */
+  private parsedIdentity: { readonly rows: string; readonly identity: v.InferOutput<typeof IdentitySchema> } | null = null;
 
-    return v.parse(IdentitySchema, { actor: snapshot.lineage.at(-1), workspace: snapshot.identity });
+  private identity(): v.InferOutput<typeof IdentitySchema> {
+    const rows = this.adopted;
+
+    if (rows !== null && this.parsedIdentity?.rows === rows) return this.parsedIdentity.identity;
+    const snapshot = this.current();
+    const identity = v.parse(IdentitySchema, { actor: snapshot.lineage.at(-1), workspace: snapshot.identity });
+
+    if (rows !== null) this.parsedIdentity = { rows, identity };
+
+    return identity;
   }
 
   reference(): ActorReference {
