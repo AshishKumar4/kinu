@@ -52,7 +52,8 @@ test('a long command held open holds up no other call, its job frees its name, a
     serve: [{ command: 'mkdir -p moved && cd moved && sleep 600', name: 'server' }],
     check: [{ command: 'echo independent' }, { command: 'pwd', name: 'server' }, { command: 'ps' }],
     after: [{ command: 'ps', name: 'server' }],
-    ps: [{ command: 'ps' }],
+    // Waits in the workspace for the stopped command to leave, bounded; the bracket keeps this line out of its own match.
+    gone: [{ command: "n=0; while ps | grep -q 'sleep [6]00' && [ $n -lt 2000 ]; do n=$((n+1)); done; ps" }],
   });
 
   const workspace = gatewayWorkspace(gateway, { jobClock: clock });
@@ -85,13 +86,8 @@ test('a long command held open holds up no other call, its job frees its name, a
 
   expect(after).toStartWith(`cwd: ${WORKSPACE_ROOT}\n`);
 
-  for (let looked = 1; ; looked += 1) {
-    await catalogTurn(workspace.agent, 'ps');
-    const [listed] = answered(gateway, 'ps');
+  await catalogTurn(workspace.agent, 'gone');
+  const [gone] = answered(gateway, 'gone');
 
-    if (!runningLine(listed ?? '', 'sleep 600')) break;
-
-    if (looked === 50) throw new Error(`the cancelled command still runs: ${listed ?? ''}`);
-    await Bun.sleep(100);
-  }
+  expect(runningLine(gone ?? '', 'sleep 600')).toBe(false);
 });
