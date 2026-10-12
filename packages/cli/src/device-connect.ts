@@ -106,7 +106,7 @@ export function connectDevice(auth: DeviceAuth, opts: ConnectDeviceOptions = {})
       // The running daemon owns device.json and its credentials.
       const devices = yield* listDevicesForConnect(auth, 'checking whether the installed daemon is connected');
 
-      return { kind: 'already-running', connected: previous !== undefined && issuedDeviceConnected(devices, previous.device) !== undefined } satisfies ConnectDeviceResult;
+      return { kind: 'already-running', connected: registrationConnected(devices, previous) } satisfies ConnectDeviceResult;
     }
 
     yield* assertDaemonPlatformSupported();
@@ -152,7 +152,13 @@ let thisDeviceConnected: boolean | null = null;
 
 /** Whether this machine's current registration on the hub is connected. */
 function thisDeviceIn(devices: readonly CloudDevice[], origin: string): Effect.Effect<boolean, KinuError> {
-  return Effect.map(localDevice(origin), (device) => device !== undefined && issuedDeviceConnected(devices, device.device) !== undefined);
+  return Effect.map(localDevice(origin), (device) => registrationConnected(devices, device));
+}
+
+/** Whether the registration `config` names is connected. One the previous release linked names none, and cannot be
+ *  confirmed until linking again records it. */
+function registrationConnected(devices: readonly CloudDevice[], config: DeviceConfig | undefined): boolean {
+  return config?.device !== undefined && issuedDeviceConnected(devices, config.device) !== undefined;
 }
 
 /**
@@ -315,7 +321,7 @@ function listDevicesForConnect(auth: DeviceAuth, doing: string): Effect.Effect<C
 }
 
 /** This machine's registration on `origin`, as the daemon's `device.json` holds it: its token, which linking again
- *  replaces, and the device the hub issued it. */
+ *  replaces, and the device the hub issued it, where the CLI that linked it recorded one. */
 function localDevice(origin: string): Effect.Effect<DeviceConfig | undefined, KinuError> {
   return Effect.gen(function* () {
     const local = yield* readLocalDevice();

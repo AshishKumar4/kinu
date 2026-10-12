@@ -270,12 +270,15 @@ describe('daemon startup hardening', () => {
     }
   });
 
-  test('a device config is read whole or refused: every field kinu connect writes, nonempty, and an absolute directory', () => {
+  test('a device config is read whole or refused: every field the daemon runs on, nonempty, and an absolute directory', () => {
     const configPath = path.join(DEVICE_HOME, 'partial-device.json');
-    const whole = { user: 'user-1', device: 'device-1', token: `pdt_${'a'.repeat(32)}`, origin: 'https://kinu.run', root: '/home/u/project' };
+    // As the previous release's kinu connect wrote it: no device, which only the CLI reads.
+    const whole = { user: 'user-1', token: `pdt_${'a'.repeat(32)}`, origin: 'https://kinu.run', root: '/home/u/project' };
 
     fs.writeFileSync(configPath, JSON.stringify(whole), { mode: 0o600 });
-    expect(readDeviceConfig(configPath)).toMatchObject(whole);
+    expect(readDeviceConfig(configPath)).toEqual(whole);
+    fs.writeFileSync(configPath, JSON.stringify({ ...whole, device: 'device-1' }), { mode: 0o600 });
+    expect(readDeviceConfig(configPath)).toEqual({ ...whole, device: 'device-1' });
 
     for (const field of Object.keys(whole)) {
       for (const partial of [{ ...whole, [field]: undefined }, { ...whole, [field]: '' }]) {
@@ -284,8 +287,10 @@ describe('daemon startup hardening', () => {
       }
     }
 
-    fs.writeFileSync(configPath, JSON.stringify({ ...whole, root: 'project' }), { mode: 0o600 });
-    expect(() => readDeviceConfig(configPath)).toThrow('re-run: kinu connect');
+    for (const malformed of [{ ...whole, device: '' }, { ...whole, device: 1 }, { ...whole, root: 'project' }]) {
+      fs.writeFileSync(configPath, JSON.stringify(malformed), { mode: 0o600 });
+      expect(() => readDeviceConfig(configPath)).toThrow('re-run: kinu connect');
+    }
   });
 
   test('redacts rejected device credentials from ticket exchange failures', async () => {

@@ -17,7 +17,8 @@
 /** device.json as `kinu connect` writes it and the daemon reads it; fields beyond these are kept. */
 export interface DeviceConfig {
   readonly user: string;
-  readonly device: string;
+  /** The registration the hub issued, which only the CLI reads; absent where the previous release linked this machine. */
+  readonly device?: string;
   readonly token: string;
   /** One the daemon sends its token to: https, or plain http to this machine. */
   readonly origin: string;

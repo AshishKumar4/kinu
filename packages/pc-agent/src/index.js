@@ -3084,10 +3084,14 @@ function readDeviceConfig(configPath = CONFIG_PATH) {
 
 /**
  * The one schema of device.json, which the CLI reads it by too: JSON naming
- * every field `kinu connect` writes, each a nonempty string; `origin` one this
- * daemon will send its token to; `root`, the directory `kinu connect` ran in,
- * absolute. Fields beyond these are kept, so a rotated token is written back
- * with them. `text` is the file's contents; a parse error never echoes them.
+ * the user, token, origin and root this daemon runs on, each a nonempty
+ * string; `origin` one this daemon will send its token to; `root`, the
+ * directory `kinu connect` ran in, absolute. `device`, the registration the
+ * hub issued, is the CLI's and never read here: a nonempty string where
+ * `kinu connect` wrote one, absent where the previous release linked the
+ * machine, which an update leaves as it is. Fields beyond these are kept, so
+ * a rotated token is written back with them. `text` is the file's contents;
+ * a parse error never echoes them.
  */
 function parseDeviceConfig(text, configPath) {
   let value;
@@ -3102,20 +3106,24 @@ function parseDeviceConfig(text, configPath) {
     throw new Error(`device config at ${configPath} is corrupt; re-run: kinu connect`, { cause: safeCause });
   }
 
-  const expectation = `device config at ${configPath} is missing its user, device, token, origin or directory; re-run: kinu connect`;
+  const expectation = `device config at ${configPath} is missing its user, token, origin or directory; re-run: kinu connect`;
   const cfg = parseRecord(value, expectation);
 
-  const [user, device, token, origin, root] = ['user', 'device', 'token', 'origin', 'root'].map((field) => {
-    const named = parseString(cfg[field], expectation);
+  const nonempty = (field, refusal) => {
+    const named = parseString(cfg[field], refusal);
 
-    if (named.length === 0) throw new Error(expectation);
+    if (named.length === 0) throw new Error(refusal);
 
     return named;
-  });
+  };
+
+  const [user, token, origin, root] = ['user', 'token', 'origin', 'root'].map((field) => nonempty(field, expectation));
 
   if (!path.isAbsolute(root)) throw new Error(`device config at ${configPath} names a directory that is not absolute; re-run: kinu connect`);
 
-  return { ...cfg, user, device, token, origin: trustedOrigin(origin, configPath), root };
+  if (cfg.device !== undefined) nonempty('device', `device config at ${configPath} names a device that is not a nonempty string; re-run: kinu connect`);
+
+  return { ...cfg, user, token, origin: trustedOrigin(origin, configPath), root };
 }
 
 /**

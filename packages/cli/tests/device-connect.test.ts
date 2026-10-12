@@ -394,6 +394,30 @@ describe('device-connect daemon lifecycle', () => {
     expect(bodies.map((body) => body.replaces)).toEqual([undefined, 'device-token']);
   });
 
+  test('a machine the previous release linked names no device: it is offered a connect, and linking replaces its token', async () => {
+    const bodies: Array<{ label?: string; replaces?: string }> = [];
+    const stub = startStubCloud({ devices: () => [connectedDevice(true)], onRegister: (body) => { bodies.push(body); } });
+    const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+    // As beaf28a46's kinu connect wrote it, and as an update leaves it: no device the hub issued, so none to confirm.
+    writeFileSync(join(home, 'device.json'), `${JSON.stringify({ user: 'u', token: 'pdt_this', origin: stub.origin, root: repoRoot }, null, 2)}\n`);
+
+    const out = await runScript(home, `
+      import { connectDevice, shouldOfferDeviceConnect } from './packages/cli/src/device-connect.ts';
+      const offered = await shouldOfferDeviceConnect();
+      const result = await connectDevice({ origin: '${stub.origin}', token: 'ptc_test' }, { session: true });
+      console.log(JSON.stringify({ offered, result }));
+      process.exit(0);
+    `);
+
+    const pidfile = join(home, 'pc-agent.pid');
+
+    if (existsSync(pidfile)) await awaitExit(Number(readFileSync(pidfile, 'utf-8').trim()));
+
+    expect(JSON.parse(out.trim())).toEqual({ offered: true, result: connectedResult() });
+    expect(bodies.map((body) => body.replaces)).toEqual(['pdt_this']);
+    expect(parseJsonObject(readFileSync(join(home, 'device.json'), 'utf-8'))).toMatchObject({ device: 'dev_1', token: 'device-token' });
+  });
+
   // 26244c765: "This PC is already connected" read any connected device of the account as this machine.
   const running: Array<[string, CloudDevice[], boolean]> = [
     ['its own device is not connected', [connectedDevice(false, { id: 'dev_this' })], false],
