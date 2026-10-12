@@ -165,6 +165,29 @@ async function draftTurn(sources: Pick<TurnAssemblySources, 'profileInputs' | 'c
   };
 }
 
+/** The turn's profile over what it can reach: its builtins, its external tools, its wired names and its eval namespaces. */
+function resolvedTurnProfile(sources: TurnAssemblySources, turn: Pick<TurnDraft, 'profileInputs' | 'choices' | 'drafted'> & {
+  readonly workMode: WorkMode;
+  readonly builtins: ToolSet;
+  readonly external: ToolSet;
+  readonly activeSkills: ActiveSkillSet | undefined;
+}): ResolvedTurnProfile {
+  const { drafted } = turn;
+
+  return resolveAgentTurnProfile({
+    ...turn.profileInputs,
+    ...turn.choices,
+    workMode: turn.workMode,
+    availableTools: [
+      ...Object.keys(turn.builtins).filter((name) => BUILTIN_TOOL_NAMES.has(name)),
+      ...Object.keys(turn.external),
+      ...sources.wiredToolNames(drafted.workMode),
+      ...sources.codemodeCapabilities(drafted.workMode),
+    ],
+    activeSkills: turn.activeSkills?.active.map((skill) => skill.name) ?? [],
+  });
+}
+
 /** Effect-free: a measure between turns assembles too. */
 export async function assembleActorTurn(sources: TurnAssemblySources, request: TurnAssemblyRequest): Promise<AssembledTurn> {
   const { models } = sources;
@@ -177,18 +200,7 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
   const builtins = filterToolSetBySkills(sources.toolset(drafted.workMode), activeSkills);
   const external = await sources.externalTools(limits);
 
-  const profile = frozen ?? resolveAgentTurnProfile({
-    ...profileInputs,
-    ...choices,
-    workMode: request.workMode,
-    availableTools: [
-      ...Object.keys(builtins).filter((name) => BUILTIN_TOOL_NAMES.has(name)),
-      ...Object.keys(external),
-      ...sources.wiredToolNames(drafted.workMode),
-      ...sources.codemodeCapabilities(drafted.workMode),
-    ],
-    activeSkills: activeSkills?.active.map((skill) => skill.name) ?? [],
-  });
+  const profile = frozen ?? resolvedTurnProfile(sources, { profileInputs, choices, workMode: request.workMode, drafted, builtins, external, activeSkills });
 
   const operation = sources.operation(profile, profileInputs);
   await sources.settle?.(profile, profileInputs);

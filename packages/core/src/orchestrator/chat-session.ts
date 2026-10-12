@@ -756,8 +756,12 @@ export class ChatSession {
   /** The run this session's pump runs now, and its cut. */
   private runningRun: { readonly id: string; readonly controller: AbortController } | null = null;
 
-  /** Its host runs it to its end, and retires its held row once that end was told. */
-  private async runDelivered(runs: NonNullable<ChatSessionPorts['runs']>, run: DeliveredRun): Promise<void> {
+  /** Its host runs it to its end, and retires its held row once that end was told. One restored where no host takes runs
+   *  is refused, as one refused at its dequeue is. */
+  private async runDelivered(run: DeliveredRun): Promise<KinuError | null> {
+    const { runs } = this.ports;
+
+    if (runs === undefined) return new KinuError('unsupported', 'This agent takes no delivered run.');
     const controller = new AbortController();
 
     this.runningRun = { id: run.id, controller };
@@ -767,6 +771,8 @@ export class ChatSession {
     } finally {
       this.runningRun = null;
     }
+
+    return null;
   }
 
   private async admitDeliveredTurn(id: string, input: TurnDeliveryInput, authorship: Delivery['authorship']): Promise<DeliveryAnswer> {
@@ -1324,11 +1330,7 @@ export class ChatSession {
         let opened: OpenedTurn | null = null;
 
         try {
-          const { runs } = this.ports;
-
-          // Restored here with no host to run it: told so, as one refused at its dequeue is.
-          if (item.run !== undefined && runs === undefined) failure = new KinuError('unsupported', 'This agent takes no delivered run.');
-          else if (item.run !== undefined && runs !== undefined) await this.runDelivered(runs, item.run);
+          if (item.run !== undefined) failure = await this.runDelivered(item.run);
           else {
             const opening = await this.openTurn(item);
             opened = opening;
