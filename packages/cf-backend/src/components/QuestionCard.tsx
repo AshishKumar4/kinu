@@ -107,9 +107,10 @@ interface Unsent {
 /** What the owner chose and has not sent, by questions: the stack shows one card at a time, and one set aside keeps it. */
 const UNSENT = new Map<string, Unsent>();
 
-export function QuestionCard({ asking, busy, onAnswer, onDismiss }: {
+export function QuestionCard({ asking, busy, owed = false, onAnswer, onDismiss }: {
   asking: AskingAgent;
   busy: boolean;
+  owed?: boolean;
   onAnswer: (answers: readonly OwnerAnswer[]) => void;
   onDismiss: () => void;
 }): ReactNode {
@@ -143,20 +144,24 @@ export function QuestionCard({ asking, busy, onAnswer, onDismiss }: {
 
   return (
     <div data-question-card={id}>
-      <div className="-mx-1 flex max-h-[min(55vh,32rem)] flex-col gap-3 overflow-y-auto px-1">
+      <div className="-mx-1 flex max-h-[min(45vh,32rem)] flex-col gap-3 overflow-y-auto px-1 sm:max-h-[min(55vh,32rem)]">
         {questions.map((question) => (
           <QuestionField key={question.id} question={question} draft={draftOf(question.id)} busy={busy}
             onDraft={(draft) => keep({ ...unsent, drafts: new Map([...unsent.drafts, [question.id, draft]]) })} />
         ))}
       </div>
       {unsent.note === null ? (
-        <button type="button" className="mt-1.5 p-meta p-accent hover:underline" onClick={() => keep({ ...unsent, note: "" })}>Add a note</button>
+        <button type="button" disabled={busy} className="mt-1.5 p-meta p-accent hover:underline" onClick={() => keep({ ...unsent, note: "" })}>Add a note</button>
       ) : (
-        <textarea value={unsent.note} onChange={(event) => keep({ ...unsent, note: event.target.value })} rows={2} placeholder="A note for the agent"
+        <textarea disabled={busy} value={unsent.note} onChange={(event) => keep({ ...unsent, note: event.target.value })} rows={2} placeholder="A note for the agent"
           aria-label="A note for the agent"
           className="mt-2 block w-full resize-y rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-ring" />
       )}
-      <div className="mt-1 p-meta p-text-3">{asking.actor === null ? "Asked" : `${asking.agent} asked`} {timeAgo(asking.asked.askedAt)}. The agent waits for your answer.</div>
+      {owed ? (
+        <div role="status" className="mt-1 p-meta p-text-3">Your answer is on its way. The agent takes it when it next wakes.</div>
+      ) : (
+        <div className="mt-1 p-meta p-text-3">{asking.actor === null ? "Asked" : `${asking.agent} asked`} {timeAgo(asking.asked.askedAt)}. The agent waits for your answer.</div>
+      )}
       <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
         <Button size="sm" variant="ghost" disabled={busy} onClick={dismiss} data-question-dismiss>
           <XIcon size={12} weight="bold" aria-hidden />Dismiss
