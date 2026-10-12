@@ -17,8 +17,6 @@ const ACTOR_ORIGINS = ['system', 'user', 'agent', 'swarm', 'evolution'] as const
 
 export type ActorOrigin = (typeof ACTOR_ORIGINS)[number];
 
-export const ActorOriginSchema = v.picklist(ACTOR_ORIGINS);
-
 /** What an agent is, stored on its row; its preset is the default for its origin, and the table's CHECKs hold it. */
 export interface ActorProfile {
   readonly origin: ActorOrigin;
@@ -29,11 +27,6 @@ export interface ActorProfile {
   readonly lifetime: 'durable' | 'task';
   /** Its turns feed the evolution window. */
   readonly evolves: boolean;
-}
-
-/** A run's actor (a head's, a swarm node's) holds its runs alone: it has no chat for anything to open, owe or stop. */
-export function holdsChat(origin: ActorOrigin): boolean {
-  return origin !== 'swarm';
 }
 
 /** A hired agent: a chat of its own, reached by name through the roster. */

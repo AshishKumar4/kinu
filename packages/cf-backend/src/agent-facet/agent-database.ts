@@ -91,8 +91,6 @@ export class AgentDatabase {
   /** Its host's directory: rows an adoption replaces are read again there (`forget`). */
   private directory: WorkspaceActorDirectory | undefined;
 
-  private readonly stops = new Map<string, AbortController>();
-
   private lines: AgentTurnActivity[] = [];
 
   takeActivity(): AgentTurnActivity[] {
@@ -682,18 +680,4 @@ export class AgentDatabase {
     return new TurnReports(this.sql).read({ actorId: this.readable().actor.actorId, turnId });
   }
 
-  interrupt(turnId: string): void {
-    this.stop(turnId).abort();
-  }
-
-  stop(turnId: string): AbortController {
-    const existing = this.stops.get(turnId);
-
-    if (existing !== undefined) return existing;
-    const created = new AbortController();
-
-    this.stops.set(turnId, created);
-
-    return created;
-  }
 }

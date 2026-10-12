@@ -384,7 +384,8 @@ export function prepareHostedTurn(
 ): Promise<PreparedHostedTurn> {
   return settle(Effect.gen(function* () {
     const { run } = task;
-    const seated = run?.inference.actor ?? (yield* Effect.promise(() => seams.host.acquire(reference, { kind: 'actor' })));
+    // A run's actor is its run's seat; a chat's, the seat it holds, which a run of its may have taken.
+    const seated = run?.inference.actor ?? seams.host.hosted(reference) ?? (yield* Effect.promise(() => seams.host.acquire(reference, { kind: 'actor' })));
     // A run's actor is seated here, over a runtime of this backend's.
     const actor: CFSeat = { ...seated, runtime: yield* cfRuntimeOf(seated, 'a hosted agent') };
     const turnId = task.chatTurnId ?? task.sequenceId;

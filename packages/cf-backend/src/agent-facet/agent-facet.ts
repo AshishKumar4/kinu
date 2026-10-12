@@ -3,25 +3,24 @@ import { type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 import { DurableObject, RpcTarget } from 'cloudflare:workers';
 import { Nimbus, type NimbusSandbox, type NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
 import type { UIMessage } from 'ai';
-import { Cause, Effect, Exit } from 'effect';
-import { attempt, attemptInItsWords, diagnostics, flight, hold, KinuError, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
+import { attemptInItsWords, flight, KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
 import {
   encodeModelMessageValues, jsonResultOrVoid, readAgentArchivePage,
   type InspectedWork,
   type AgentOwnInspection, type AnsweredEvolutionHelper, type JsonValue, type ArchiveAgentPage, type ArchiveSqlCursor, type ChatHistoryPage,
   type NimbusSandboxHandle, type PositionPageRequest, type ProviderEnv, type SerializedMessage, type SubordinateInspectionResult,
   servedContextTree, type ContextEditor, type ContextTreeRemote, type SpendLedger, type StepSpendSource, type TurnRequestIndex, type TurnRequestPage, type ConversationSearchHit, type ConversationScrollResult, type ConversationSummary,
-  type SendState, DeliverySchema, WorkModeSchema, ActorOriginSchema, holdsChat, type Delivery, type DeliveryAnswer, type InputProducer, type OwedDelivery,
+  type SendState, DeliverySchema, type Delivery, type DeliveryAnswer, type InputProducer, type OwedDelivery,
 } from '@kinu.run/core';
 import * as v from 'valibot';
 import { StepPacer } from './step-pacer';
 import { AgentDatabase } from './agent-database';
-import { runAgentTask, type AgentRunOutcome } from './agent-turn';
 import { createAgentProviderRegistry, type AgentProviderDeps, type AgentProviderRegistry } from '../providers/agent-registry';
 import { FacetChat } from './agent-chat';
 import { workspaceClient, type AgentWorkspaceCalls } from './workspace-rpc';
 import type {
-  AgentAnswer, AgentAnswerTexts, AgentStanding, AgentSteps, AgentRecovery, AgentSnapshot, ConversationProjection, ConversationTurnPair, AgentTurnTask, EnqueueTurnResult, ProgrammaticTurn, SendLanding, TurnRequestAt,
+  AgentAnswer, AgentAnswerTexts, AgentStanding, AgentSteps, AgentRecovery, AgentSnapshot, ConversationProjection, ConversationTurnPair, EnqueueTurnResult, ProgrammaticTurn, SendLanding, TurnRequestAt,
   DynamicContext, JsonObject, PlanDecisionOutcome, ResolvedTurnProfile, PlanReview, PlanReviewDecision, PlanReviewResult, ReviewAnnotation, AskedQuestions, OwnerAnswer,
   Page, PageRequest, RunEvent, RunEventQuery, RunListEntry, RunSummary, StoredRunEvent,
   ForkConversationPlan, ForkConversationSection, ForkRowSection, ForkRows,
@@ -289,9 +288,6 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
   async admit(snapshot: AgentSnapshot, delivery: OwedDelivery, producer: InputProducer = 'workspace'): Promise<DeliveryAnswer> {
     const parsed = v.parse(DeliverySchema, delivery);
 
-    // A run is this isolate's to run beside its chat, never a turn of it.
-    if (parsed.input.kind === 'run') return this.admitRun(snapshot, parsed.id, parsed.input.task);
-
     return await settle(Effect.flatMap(this.withChat(snapshot, (chat) => chat), (chat) => (chat.session.closing
       // Closing: owed to its next start, so the crossing fails and the workspace's wake crosses it again.
       ? Effect.fail(new KinuError('unavailable', 'The agent is closing; the delivery is owed to its next start.'))
@@ -323,67 +319,10 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return await settle(this.withChat(snapshot, (chat) => chat.session.interrupt(cutoff === null ? undefined : { producer: 'workspace', seq: cutoff })));
   }
 
+  /** Its chat wakes: a run a death cut off is restored from its held input and runs again, as any input is (D2). */
   async wake(snapshot: AgentSnapshot): Promise<void> {
-    // A run a death cut off runs again: its workspace's caller still awaits its end.
-    for (const owed of this.runs().unended()) this.startRun(snapshot, owed.id, owed.task);
-
-    // A run's agent holds no chat to wake: with no run owed, it rests, which ends the wake that woke it.
-    if (!holdsChat(v.parse(AgentOriginSchema, snapshot.lineage.at(-1)).origin)) return await this.restIfNoRun(snapshot);
-
     return await settle(this.withChat(snapshot, (chat) => chat.wake()));
   }
-
-  /** A run's agent with no run owed tells its workspace it rests; one still running tells nothing, as its run's end will. */
-  private async restIfNoRun(snapshot: AgentSnapshot): Promise<void> {
-    if (this.runs().unended().length > 0) return;
-    const database = this.open(snapshot);
-
-    await this.workspaceCalls.owes(database.nextInSequence(), null, false, database.standingReport());
-  }
-
-  private runTable: FacetRuns | null = null;
-
-  private runs(): FacetRuns {
-    this.runTable ??= new FacetRuns(this.ctx.storage.sql);
-
-    return this.runTable;
-  }
-
-
-  /** A delivered run (design v2 §1): in this isolate's store before it is answered, run to its end beside the chat, and its
-   *  end reported to the workspace, whose caller awaits it; a repeat is answered `duplicate`. */
-  private admitRun(snapshot: AgentSnapshot, id: string, task: AgentTurnTask): DeliveryAnswer {
-    if (!this.runs().admit(id, task)) return 'duplicate';
-    this.startRun(snapshot, id, task);
-
-    return 'taken';
-  }
-
-  private startRun(snapshot: AgentSnapshot, id: string, task: AgentTurnTask): void {
-    if (this.runsInFlight.has(id)) return;
-
-    const run = Effect.gen({ self: this }, function* () {
-      const exit = yield* Effect.exit(attempt({ doing: 'running a delivered task in its agent\'s isolate', otherwise: 'io' }, () => runAgentTask({
-        database: this.open(snapshot), workspace: this.workspaceCalls, models: (deps) => this.models(deps), pacer: this.pacer,
-      }, task)));
-
-      const outcome: AgentRunOutcome = Exit.isSuccess(exit)
-        ? { ended: exit.value }
-        : { refused: { code: toKinuError({ doing: 'running a delivered task', cause: Cause.squash(exit.cause), otherwise: 'io' }).code, message: renderThrownChain({ cause: Cause.squash(exit.cause) }) } };
-
-      yield* attempt({ doing: "reporting a delivered run's end to its workspace", otherwise: 'unavailable' }, () => this.workspaceCalls.runEnded(id, outcome));
-      this.runs().ended(id);
-      yield* attempt({ doing: 'telling the workspace a run agent rests', otherwise: 'unavailable' }, () => this.restIfNoRun(snapshot));
-    }).pipe(Effect.catch((failure) => Effect.sync(() => {
-      // Unreported: the next wake runs it again, and its caller hears that end.
-      diagnostics.failure('agent.run_report_failed', failure, { runId: id });
-    })), Effect.ensuring(Effect.sync(() => { this.runsInFlight.delete(id); })));
-
-    this.runsInFlight.set(id, hold(run));
-  }
-
-  /** The runs this isolate runs now, by id: a wake starts none twice, and its idle joins them. */
-  private readonly runsInFlight = new Map<string, Promise<unknown>>();
 
   async modelSettingsChanged(snapshot: AgentSnapshot): Promise<void> {
     return await settle(this.withChat(snapshot, (chat) => chat.modelSettingsChanged()));
@@ -533,7 +472,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
   }
 
   async idle(): Promise<void> {
-    await Promise.all([this.held?.idle(), ...this.runsInFlight.values()]);
+    await this.held?.idle();
   }
 
   async step(turnId: string, dynamic: DynamicContext | null): Promise<void> {
@@ -600,44 +539,13 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return this.open(snapshot).admitted(id);
   }
 
+  /** Stops one run its workspace delivered: queued, it never runs; running, its chat aborts it. */
   async interrupt(snapshot: AgentSnapshot, turnId: string): Promise<void> {
-    this.open(snapshot).interrupt(turnId);
+    return await settle(this.withChat(snapshot, (chat) => { chat.session.stopRun(turnId); }));
   }
 
   async recover(snapshot: AgentSnapshot): Promise<AgentRecovery> {
     return await this.open(snapshot).recover();
   }
 
-}
-
-const FacetRunRowSchema = v.object({ id: v.string(), task_json: v.string() });
-
-/** The agent's own row, last in its lineage: its origin says whether it holds a chat. */
-const AgentOriginSchema = v.looseObject({ origin: ActorOriginSchema });
-
-const AgentTurnTaskSchema = v.object({ sequenceId: v.string(), body: v.string(), mode: WorkModeSchema });
-
-/** The runs delivered to this isolate, durable until each one's end is reported: a death between admitting one and
- *  reporting its end leaves it here, for the next wake to run again. */
-class FacetRuns {
-  constructor(private readonly sql: SqlStorage) {
-    sql.exec('CREATE TABLE IF NOT EXISTS facet_runs (id TEXT PRIMARY KEY, task_json TEXT NOT NULL, ended INTEGER NOT NULL DEFAULT 0)');
-  }
-
-  /** False for one already admitted. */
-  admit(id: string, task: AgentTurnTask): boolean {
-    return this.sql.exec('INSERT OR IGNORE INTO facet_runs (id, task_json) VALUES (?, ?) RETURNING id', id, JSON.stringify(task)).toArray().length > 0;
-  }
-
-  ended(id: string): void {
-    this.sql.exec('UPDATE facet_runs SET ended = 1 WHERE id = ?', id);
-  }
-
-  unended(): { readonly id: string; readonly task: AgentTurnTask }[] {
-    return this.sql.exec('SELECT id, task_json FROM facet_runs WHERE ended = 0').toArray().map((raw) => {
-      const row = v.parse(FacetRunRowSchema, raw);
-
-      return { id: row.id, task: v.parse(AgentTurnTaskSchema, JSON.parse(row.task_json)) };
-    });
-  }
 }

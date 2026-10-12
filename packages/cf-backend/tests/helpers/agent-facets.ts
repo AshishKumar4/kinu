@@ -364,17 +364,17 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           },
           runSettled: (run) => host.runSettled(run),
           hireAdvisor: (advisor) => host.hireAdvisor(advisor),
-          owes: async (seq, next, holds, standing) => {
+          owes: async (seq, next, holds, report) => {
             const catching = heldReports.get(placement.storageKey);
 
             if (catching !== undefined && (holds || next !== null)) {
               heldReports.delete(placement.storageKey);
-              catching(async () => { await host.owes(seq, next, holds, standing); });
+              catching(async () => { await host.owes(seq, next, holds, report); });
 
               return;
             }
 
-            await host.owes(seq, next, holds, standing);
+            await host.owes(seq, next, holds, report);
           },
           birthContext: (drainTurnId) => host.birthContext(drainTurnId),
           steerSkills: (text, alreadyActive) => host.steerSkills(text, alreadyActive),
@@ -382,7 +382,6 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           noteModelRequest: (lastRequestAt) => host.noteModelRequest(lastRequestAt),
           armCacheWarm: (input) => host.armCacheWarm(input),
           advise: (review) => host.advise(review),
-          runEnded: (id, outcome) => host.runEnded(id, outcome),
           enqueueTurn: (input) => host.enqueueTurn(input),
           executeTool: (call) => host.executeTool(call),
           receipts: (turnId, runId, callIds) => host.receipts(turnId, runId, callIds),

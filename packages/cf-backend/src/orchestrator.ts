@@ -34,7 +34,7 @@ import {
   type HeadJournalPort, type HeadSplitRequest, type HeadSplitResult,
   type LoopOrigin, type NimbusSandboxHandle, type NodeHomeHost,
   type SqlExec, type TeamToolDeps, type WorkspaceActor, type WriteObserver,
-  isSubordinateOrigin, holdsChat,
+  isSubordinateOrigin,
   whenActorTakesInput,
   type PlanReview, actorReadHandle, ownerLaneDeclarations,
 } from "@kinu.run/core";
@@ -188,7 +188,7 @@ import {
   CHANGES_MOVED_EVENT, ChangeSetCache, getWorkspaceDiff, getExecutorDiff, resetWorkspaceBaseline, restoreWorkspaceBaseline,
   type ExecutorDiffResult, type WorkspaceBaselines, type WorkspaceDiffResult, type WorkspaceReviewResult,
   initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes, deliverOwedChangeNotes, owesChangeNotes, type ChangeNotesChat,
-  initTurnBranchesTable, TurnBranchesStore, branchHeadId, type AgentTurnEnd, TurnSurface, turnAuthor, authoredTurnMetadata, workModeForTurnMetadata, type ActorReach, type ChatTurnInput,
+  initTurnBranchesTable, TurnBranchesStore, branchHeadId, TurnSurface, turnAuthor, authoredTurnMetadata, workModeForTurnMetadata, type ActorReach, type ChatTurnInput,
   type ChangeNotesResult, type NotedChanges, type ReviewAnnotation,
   diffLines, type DiffLine,
   getExecutorFiles, readExecutorFile, listEnvironments,
@@ -821,20 +821,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       fence: (actorId) => this.heldFence(actorId),
       seams: () => this.hostedSeams(),
       reference: (actorId) => actorReferenceOf(this.liveAgentOf(actorId)),
-      // A run as its delivery (design v2 §1): committed with the agent's wake, crossed, run in its isolate beside its
-      // chat, and its end reported back; a crossing that does not reach it leaves it owed to that wake.
-      run: async (reference, task) => {
+      // A run as its delivery (design v2 §1, D2): committed with the agent's wake, crossed, run as a typed input of its
+      // chat, and its end told with its report; a crossing that does not reach it leaves it owed to that wake.
+      deliver: async (reference, task) => {
         const { actorId } = reference;
-        const ended = this.deliveredRuns.expect(task.sequenceId);
         const crossed = await this.deliver(actorId, { id: task.sequenceId, input: { kind: 'run', task }, authorship: 'hirer' });
 
-        if ('failure' in crossed && !this.deliveries.unpaid(actorId).some((owed) => owed.id === task.sequenceId)) this.deliveredRuns.refused(task.sequenceId, crossed.failure);
-        const end = await ended;
-
-        this.agentActivity(actorId, end.activity);
-        recordAgentFigures(this.boundSql, actorId, end.figures);
-
-        return end;
+        return 'failure' in crossed && !this.deliveries.unpaid(actorId).some((owed) => owed.id === task.sequenceId) ? crossed.failure : null;
       },
       interrupt: async (reference, turnId, cutoff) => {
         for (const call of this.jobAuthorities.live(reference.actorId)?.runner.foreground ?? []) call.abort(new Error('cancelled by operator'));
@@ -842,10 +835,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         const snapshot = this.agentSnapshot(reference.actorId);
 
         if (turnId !== null) await calls.interrupt(snapshot, turnId);
-        else if (holdsChat(this.agentOf(reference.actorId).origin)) await calls.interruptChat(snapshot, cutoff);
+        else await calls.interruptChat(snapshot, cutoff);
       },
-      chatOwed: async (reference) => holdsChat(this.agentOf(reference.actorId).origin) && this.agentWakes.armed(reference.actorId)
-        && await (await this.agentCalls(reference.actorId)).owed(this.agentSnapshot(reference.actorId)),
+      chatOwed: async (reference) => this.agentWakes.armed(reference.actorId) && await (await this.agentCalls(reference.actorId)).owed(this.agentSnapshot(reference.actorId)),
       chatIdle: async (reference) => { await (await this.agentCalls(reference.actorId)).idle(); },
       frozenProfile: async (reference, runId) => await (await this.agentCalls(reference.actorId)).frozenProfile(this.agentSnapshot(reference.actorId), runId),
       pricing: (spec) => this.modelCatalog.pricing(spec),
@@ -942,7 +934,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         await this.actorAdvisor(this.actorHost().hosted(reference) ?? await this.actorHost().acquire(reference, { kind: 'actor' })).hire(advisor);
       },
-      owes: async (seq, next, holds, standing) => {
+      owes: async (seq, next, holds, { standing, runEnds }) => {
+        // Each delivered run's end, whichever report carries it: its caller hears it once, and a repeat finds none.
+        for (const report of runEnds) {
+          if ('ended' in report.outcome) {
+            this.agentActivity(actorId, report.outcome.ended.activity);
+            recordAgentFigures(this.boundSql, actorId, report.outcome.ended.figures);
+          }
+
+          this.agentTurns.runEnded(report);
+        }
+
         const before = this.reportedStanding(actorId);
 
         // Older than a report already taken from it: delayed past that one, or sent before a reset of either side.
@@ -982,10 +984,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         return { tasks: reads.openTasks(), asyncWakePending: reads.runningJobs().total > 0 };
       },
       advise: (review) => this.agentTurns.advise(actorId, review),
-      runEnded: async (id, outcome) => {
-        if ('ended' in outcome) this.deliveredRuns.ended(id, outcome.ended);
-        else this.deliveredRuns.refused(id, new KinuError(outcome.refused.code, outcome.refused.message));
-      },
       enqueueTurn: (input) => this.enqueueHostedTurn(this.actorHost().bindStores(actorReferenceOf(this.liveAgentOf(actorId))), input),
       executeTool: (call) => {
         this.admitWork();
@@ -1175,9 +1173,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   protected override async modelSettingsChanged(): Promise<void> {
     await super.modelSettingsChanged();
 
-    for (const { actorId, origin } of this.workspaceActors().list()) {
-      // A run's agent holds no chat to park in.
-      if (!this.isAgent(actorId) || !holdsChat(origin)) continue;
+    for (const { actorId } of this.workspaceActors().list()) {
+      if (!this.isAgent(actorId)) continue;
       this.detachOwned(logged('agent.settings_release_failed', { doing: "telling an agent's isolate the model settings changed", otherwise: 'unavailable' },
         async () => { await (await this.agentCalls(actorId)).modelSettingsChanged(this.agentSnapshot(actorId)); }, { workspace: this.name, actor: actorId }));
     }
@@ -2016,7 +2013,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** Each delivered run's caller, awaiting the end its agent reports; one this activation never delivered is no one's. */
-  private readonly deliveredRuns = new RunEnds();
 
   /** One agent's due reactions; failure rejects with a classified error. */
   drainAgent(reference: ActorReference): Promise<void> {
@@ -6918,25 +6914,3 @@ function parseArchiveCursor(value: ArchiveCursor | undefined): ArchiveCursor | n
   return parsed.success ? parsed.output : null;
 }
 
-/** The runs this activation delivered and awaits the ends of, by id. */
-class RunEnds {
-  readonly #waiting = new Map<string, ReturnType<typeof Promise.withResolvers<AgentTurnEnd>>>();
-
-  expect(id: string): Promise<AgentTurnEnd> {
-    const waiting = this.#waiting.get(id) ?? Promise.withResolvers<AgentTurnEnd>();
-
-    this.#waiting.set(id, waiting);
-
-    return waiting.promise;
-  }
-
-  ended(id: string, end: AgentTurnEnd): void {
-    this.#waiting.get(id)?.resolve(end);
-    this.#waiting.delete(id);
-  }
-
-  refused(id: string, failure: KinuError): void {
-    this.#waiting.get(id)?.reject(failure);
-    this.#waiting.delete(id);
-  }
-}
