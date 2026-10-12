@@ -1,5 +1,5 @@
 import { exists as nimbusExists, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
-import { PLATFORM_CATALOG, GitHubFactSchema, actorPolicy, AgentDeliveries, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, codemodeSurface, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type ToolSurfaceNarrowing, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs } from '@kinu.run/core';
+import { PLATFORM_CATALOG, GitHubFactSchema, actorPolicy, AgentDeliveries, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, codemodeSurface, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type ToolSurfaceNarrowing, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type Fact } from '@kinu.run/core';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
@@ -411,6 +411,9 @@ interface SourcePlanes {
   readonly descriptors: Promise<PromiseSettledResult<string>> | null;
   /** The hub's device check, which never rejects: a failure keeps the last snapshot. */
   readonly device: Promise<unknown>;
+  /** The account's facts its turn reads once, which never rejects (a failed read is logged and answers none); null with
+   *  no turn, whose every read asks. */
+  readonly facts: Promise<readonly Fact[]> | null;
 }
 
 /** An assignment's delivery, as its metadata names it. */
@@ -1662,12 +1665,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
-  /** Its sources' crossings that wait on nothing of a turn's own, started at once: the owner's MCP descriptors for a
-   *  `turn` that reaches them, the hub's device check for an agent on the workspace's lanes. */
+  /** Its sources' crossings that wait on nothing of a turn's own, started at once: for a `turn`, the account's facts and
+   *  the owner's MCP descriptors where it reaches them; the hub's device check for an agent on the workspace's lanes. */
   private sourcePlanes(runtime: CFRuntime, reach: ActorReach, turn: boolean): SourcePlanes {
     return {
       descriptors: turn && reach.external ? this.userMcpDescriptors() : null,
       device: reach.lanes ? runtime.deviceTransport.refreshStatus() : Promise.resolve(),
+      facts: turn ? this.accountFactsForTurn() : null,
     };
   }
 
@@ -1746,7 +1750,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       scaffoldSpend: { source: 'scaffold', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
       attachmentBudget: turn?.surface.ledgers.context ?? turnLedgers().context,
       extensions: () => (reach.external ? this.extensions.list() : []),
-      accountFacts: () => this.accountFactsForTurn(),
+      accountFacts: () => planes.facts ?? this.accountFactsForTurn(),
       dynamic: (reads) => (profile, tools) => this.actorDynamicContext(actor, reach, { profile, tools, reads, surface: turn?.surface ?? null }),
       operation: (profile, operationInputs) => captureOperationProfile({
         actor: actor.handle, profile, inputs: operationInputs, runId: turn?.surface.key.runId ?? WORKSPACE_RUN_ID, turnId: turn?.surface.key.turnId ?? null,
