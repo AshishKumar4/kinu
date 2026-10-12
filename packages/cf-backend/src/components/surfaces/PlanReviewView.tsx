@@ -182,7 +182,7 @@ function DismissPlan({ plan, rpc, readOnly, deciding, saving, owed, onError }: {
   return (
     // Stacked, it sits under the decisions: the quiet way out after the two that answer the plan.
     <Button type="button" size="sm" variant="ghost" className="order-last self-center whitespace-nowrap @[36rem]:order-none @[36rem]:self-auto" onClick={() => detach(dismiss())} disabled={deciding !== null || saving || owed || busy}>
-      {busy ? <Loader size="sm" /> : "Dismiss"}
+      {busy && !owed ? <Loader size="sm" /> : "Dismiss"}
     </Button>
   );
 }
@@ -559,14 +559,14 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
                 onClick={() => detach(Effect.promise(async () => decide("request_changes")))}
                 disabled={decisionOwed || decisionBusy !== null || saving || planDecisionRefusal(shown, "request_changes") !== null}
               >
-                {decisionBusy === "request" ? <Loader size="sm" /> : "Request changes"}
+                {decisionBusy === "request" && !decisionOwed ? <Loader size="sm" /> : "Request changes"}
               </Button>
               <FilledButton
                 className="grow justify-center whitespace-nowrap @[36rem]:grow-0"
                 onClick={() => detach(Effect.promise(async () => decide("approve")))}
                 disabled={decisionOwed || decisionBusy !== null || saving || planDecisionRefusal(shown, "approve") !== null}
               >
-                {decisionBusy === "approve" ? <Loader size="sm" /> : <><CheckCircleIcon size={14} />Approve &amp; implement</>}
+                {decisionBusy === "approve" && !decisionOwed ? <Loader size="sm" /> : <><CheckCircleIcon size={14} />Approve &amp; implement</>}
               </FilledButton>
             </div>
           )}
@@ -576,7 +576,7 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
               onClick={() => detach(Effect.promise(async () => decide(plan.status === "approved" ? "approve" : "request_changes")))}
               disabled={decisionOwed || decisionBusy !== null || saving}
             >
-              {decisionBusy ? <Loader size="sm" /> : retryLabel}
+              {decisionBusy && !decisionOwed ? <Loader size="sm" /> : retryLabel}
             </FilledButton>
           )}
         </div>
