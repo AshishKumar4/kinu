@@ -5,7 +5,7 @@ import { describe, test, expect } from 'bun:test';
 import { Effect } from 'effect';
 import { Database } from 'bun:sqlite';
 import { createMemoryVfs, fakeMossaic, toolExecute } from '@kinu.run/test-utils';
-import { DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable, DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, withApprovalGatedShell, buildBuiltinTools, reviewCommand, actorReferenceOf, type DeferredApprovalChannel, formatApprovalGrant, createShellSession, withApprovalGatedFiles, performBoundWrite, withMountTable, sharedDriveMount, mossaicVfs, ParkedWriteFiles, type DeferredApproval, type ShellApprovalPolicy, type ShellApprovalOutcome, type ShellApprovalRequest, type AgentRuntime, type AgentSignal, type FilesOwner, type Shell, WORKSPACE_ROOT } from '../src/index';
+import { DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable, DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, withApprovalGatedShell, buildBuiltinTools, reviewCommand, actorReferenceOf, type DeferredApprovalChannel, formatApprovalGrant, createShellSession, withApprovalGatedFiles, performBoundWrite, withMountTable, sharedDriveMount, mossaicVfs, ParkedWriteFiles, type DeferredApproval, type ParkedWrites, type ShellApprovalPolicy, type ShellApprovalOutcome, type ShellApprovalRequest, type AgentRuntime, type AgentSignal, type FilesOwner, type Shell, WORKSPACE_ROOT } from '../src/index';
 import type { BoundFileWrite } from '../src/safety/bound-write';
 import { CHUNK_SIZE } from '@nimbus-sh/core/constants.js';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -48,6 +48,8 @@ function setup(opts: {
   noQueue?: boolean;
   /** Whose files the gated shell holds. */
   filesOwner?: FilesOwner;
+  /** Where parked writes' bytes live; none by default. */
+  writes?: ParkedWrites;
 } = {}) {
   const filesOwner = opts.filesOwner ?? 'agent';
   const { sql, actor } = approvalsDb();
@@ -62,7 +64,7 @@ function setup(opts: {
   const audited: Array<{ approvalId: string; actor: string; command: string; executor: string }> = [];
 
   const queue = new DeferredApprovalQueue({
-    writes: null,
+    writes: opts.writes ?? null,
     store,
     wake: (_actor, signal) => Effect.sync(() => { delivered.push(signal); }),
     remember: (grants) => { for (const g of grants) granted.push(formatApprovalGrant(g)); },
@@ -74,11 +76,13 @@ function setup(opts: {
   const executed: string[] = [];
   /** How many grants the owner held as each command ran. */
   const grantsAtRun: number[] = [];
+  const ran = Promise.withResolvers<void>();
 
   const rawShell: Shell = {
     exec: async (command: string) => {
       executed.push(String(command));
       grantsAtRun.push(granted.length);
+      ran.resolve();
 
       return { stdout: 'ran', stderr: '', exitCode: 0 };
     },
@@ -102,7 +106,7 @@ function setup(opts: {
   };
 
   return {
-    queue, store, sql, shell, executed, grantsAtRun, delivered, granted, audited, shellTool,
+    queue, store, sql, shell, executed, grantsAtRun, ran: ran.promise, delivered, granted, audited, shellTool,
     advance: (ms: number) => { elapsed += ms; },
   };
 }
@@ -292,17 +296,44 @@ describe('the standing modes still decide first', () => {
     expect({ executed, delivered }).toEqual({ executed: [GATED], delivered: [] });
   });
 
-  test('an always-answer from another surface is kept before the ask waiting on it runs', async () => {
+  test('an always-answer from another surface is kept before the ask waiting on it runs, cleanup held or not', async () => {
+    // A write denial that has expired: deciding sweeps it and deletes its parked bytes, which this test holds.
+    const deleting = Promise.withResolvers<void>();
+    const cleanup = Promise.withResolvers<void>();
+
+    const writes: ParkedWrites = {
+      content: {
+        retain: async () => {},
+        read: async () => null,
+        delete: async () => {
+          deleting.resolve();
+          await cleanup.promise;
+        },
+      },
+      perform: async () => 'written',
+    };
+
     const live = livePrompts(1);
-    const { shellTool, grantsAtRun, queue } = setup({ approve: live.approve });
+    const { shellTool, grantsAtRun, granted, ran, queue, store, advance } = setup({ approve: live.approve, writes });
     const asking = shellTool.execute({ command: GATED });
 
     await live.shown;
-    await queue.decide(['defer-1'], 'always');
+    store.create({ id: 'old-write', command: `file write /home/main/notes.md sha256:${'a'.repeat(64)} over sha256:${'b'.repeat(64)}`, executor: 'workspace', reason: 'overwrite', requestedAt: 0 }, []);
+    store.decide('old-write', 'denied', 0);
+    advance(DENIAL_STANDING_MS + 1);
 
-    expect(await asking).toBe('ran');
+    const deciding = queue.decide(['defer-1'], 'always');
+
+    // The command runs while the cleanup is held, with the owner's grant already kept.
+    await Promise.all([deleting.promise, ran]);
     expect(grantsAtRun).toHaveLength(1);
     expect(grantsAtRun[0]).toBeGreaterThan(0);
+
+    cleanup.resolve();
+    await deciding;
+    expect(await asking).toBe('ran');
+    // Kept once, and not lost when the run settled its row.
+    expect(granted.length).toBe(grantsAtRun[0]);
   });
 
   test('a row decided on another surface retires its live prompt, and a late answer there changes nothing', async () => {
