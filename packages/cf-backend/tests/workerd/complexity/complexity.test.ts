@@ -416,8 +416,10 @@ test('a production turn runs no more statements than it was measured at, and ask
  * record, its end (`host.turnEnded`) and handoff (`host.turnSettled`), its two reports (running, rest), the tile twice,
  * the title's registry read (`account.getWorkspaceTitle`) and the MCP warm (`account.userMcp_warmConnections`), and the
  * transcript frame the room is sent at its close (`facet.history`, `facet.newestFirst`).
+ * 16 at the open on e8826816c: the profile the isolate assembled on rides its first step's pace (`host.bindProfile`,
+ * gone), and its report of the input it took rides its admission's answer (`host.owes`, one of two gone).
  */
-const CROSSINGS = { open: 18, step: 4, close: 16 } as const;
+const CROSSINGS = { open: 16, step: 4, close: 16 } as const;
 
 /**
  * The planted calls (`ObservedOrchestrator.plantCrossings`), each counted once where it lands, and nothing else: the
