@@ -54,6 +54,10 @@ export {
   initTurnBranchesTable, TurnBranchesStore, TurnFactsSchema, TurnFactsStore, type TurnFacts,
 } from './orchestrator/turn-facts';
 
+export type {
+  CloseCapability, ExecutionKey, ExecutionLane, FrozenTurn, RemoteReceipt, TurnCapability,
+} from './orchestrator/execution';
+
 export { inTurnSurface, scopedTurnSurface, TurnSurface, type TurnSurfaceOpening } from './orchestrator/main-turn-surface';
 
 // Records that keyed work happened, kept after its row is retired.
