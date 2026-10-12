@@ -327,17 +327,19 @@ describe('an approval in a hosted named session', () => {
     expect(await workspace.fs.exists('/home/main/a')).toBe(true);
   });
 
-  test('covers a variable named as the read\'s own helpers: their values are the session\'s, not the read\'s', async () => {
-    for (const helper of ['__n', '__v']) {
-      const { again, workspace } = await approveAcrossAChange(`export ${helper}=a`, `${FORCE_PUSH}; rm -r "$${helper}"`, `export ${helper}=b`);
+  /** A change a careless listing of the session would miss. */
+  type SubtleChange = readonly [what: string, before: string, asked: string, meanwhile: string];
 
-      expect(again.exitCode).not.toBe(0);
-      expect(await workspace.fs.exists('/home/main/b')).toBe(true);
-    }
-  });
+  const SUBTLE_CHANGES: readonly SubtleChange[] = [
+    ['a value holding a newline, not another variable', 'export A="x\nB=y"', `${FORCE_PUSH}; rm -r b`, 'export A=x; export B=y'],
+    ['a variable of a session that splits words on another separator', 'export IFS=:; export TARGET=a', `${FORCE_PUSH}; rm -r "$TARGET"`, 'export TARGET=b'],
+    ...['__n', '__v'].map((helper): SubtleChange => [
+      `a variable named as the read's own ${helper}`, `export ${helper}=a`, `${FORCE_PUSH}; rm -r "$${helper}"`, `export ${helper}=b`,
+    ]),
+  ];
 
-  test('a value holding a newline is not another variable: two sessions that list alike are two states', async () => {
-    const { again, workspace } = await approveAcrossAChange('export A="x\nB=y"', `${FORCE_PUSH}; rm -r b`, 'export A=x; export B=y');
+  test.each(SUBTLE_CHANGES)('sees %s: the approval does not run on the changed session', async (_what, before, asked, meanwhile) => {
+    const { again, workspace } = await approveAcrossAChange(before, asked, meanwhile);
 
     expect(again.exitCode).not.toBe(0);
     expect(await workspace.fs.exists('/home/main/b')).toBe(true);

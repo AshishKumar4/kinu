@@ -469,11 +469,51 @@ describe('a named shell is part of the ask as it was when asked', () => {
 
     // The re-issue's own read pins the approved state; the caller gives up during the next, inside the shell's hold.
     reads.cancelAt = reads.count + 2;
-    expect(JSON.stringify(await exec.execute(`${DOOMING} doomed`, { name: 'dev', signal: cancel.signal }))).toContain('NOT RUN');
+    await expect(exec.execute(`${DOOMING} doomed`, { name: 'dev', signal: cancel.signal })).rejects.toMatchObject({ name: 'AbortError' });
     expect(existsSync(join(home, 'doomed'))).toBe(true);
 
     await exec.execute(`${DOOMING} doomed`, { name: 'dev' });
     expect({ doomed: existsSync(join(home, 'doomed')), parked: queue.list() }).toEqual({ doomed: false, parked: [] });
+  });
+
+  test('the hosted session: a run cancelled while the session\'s directory is read for it was not dispatched, and its approval runs the next ask', async () => {
+    const { policy, queue } = unattended();
+    const cancel = new AbortController();
+    const dispatched: string[] = [];
+    const watch = { states: 0, cancelAfter: Number.POSITIVE_INFINITY };
+
+    const box: NimbusSandboxHandle = {
+      ready: async () => {},
+      exec: async (command) => {
+        // A state read is digested in the session; anything else is a command dispatched to it.
+        if (command.includes('sha256sum')) watch.states += 1;
+        else dispatched.push(command);
+
+        return { command, success: true, stdout: command.includes('sha256sum') ? `${'0'.repeat(64)}  -\n` : '', stderr: '', exitCode: 0 };
+      },
+      shellCwd: async () => {
+        if (watch.states === watch.cancelAfter) cancel.abort();
+
+        return WORKSPACE_ROOT;
+      },
+      files: { read: async () => null, write: async () => {}, list: async () => [], stat: async () => null, exists: async () => false, delete: async () => {} },
+    };
+
+    const sessionShell = nimbusSessionShell(box, { home: WORKSPACE_ROOT });
+    const session = createShellSession({ home: WORKSPACE_ROOT, userRoots: () => [], stored: async (name) => await sessionShell.cwd?.(name) ?? null });
+    const shell = withApprovalGatedShell(sessionShell, { filesOwner: 'agent', shellSession: session }, policy);
+
+    await shell.exec(GATED, { name: 'dev' });
+    await queue.decide(queue.list().map((row) => row.id), 'approved');
+
+    // The re-issue's read pins the state and the read just before the run confirms it; the caller gives up in the
+    // directory read that follows, before the command is sent.
+    watch.cancelAfter = watch.states + 2;
+    await expect(shell.exec(GATED, { name: 'dev', signal: cancel.signal })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(dispatched).toEqual([]);
+
+    await shell.exec(GATED, { name: 'dev' });
+    expect({ dispatched, parked: queue.list() }).toEqual({ dispatched: [GATED], parked: [] });
   });
 
   /**

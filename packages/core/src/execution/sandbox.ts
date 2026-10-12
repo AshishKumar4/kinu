@@ -2,12 +2,13 @@ import type { VFS, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 /** Native container executor, one durable workspace per agent, exposed as sandbox.*. */
 
 import * as v from 'valibot';
+import { abortedBeforeStart } from '@kinu.run/agent-utils';
 import { Effect } from 'effect';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus, PortExposureResult, PreviewRouteCheck, SandboxSize, SandboxSizes } from './types';
 import { commandTool, ExecutorPortSchema } from './types';
 import { shellCall } from './command-call';
 import { callJob, createShellSession, machineShellCall, machineShellCwd, reportsCwd, shellExecOptions, type MachineShells } from './shell-session';
-import { namedShellState, pinnedRunRefused } from '../safety/approval-gate';
+import { namedShellState, pinnedShellMoved } from '../safety/approval-gate';
 import type { OutputSink } from '../types/primitives';
 import { JOB_STAMP_ENV } from '../types/jobs';
 import { commandResult, commandResultAt, exposedPortText, type CommandResult } from './exec-result';
@@ -261,10 +262,7 @@ function cancelledWhileRunning(command: string): Error {
 }
 
 function notDispatched(): Error {
-  return new DOMException(
-    'sandbox exec cancelled before dispatch: no container process was started',
-    'AbortError',
-  );
+  return abortedBeforeStart('sandbox exec cancelled before dispatch: no container process was started');
 }
 
 export interface SandboxExecutorOptions {
@@ -359,7 +357,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
             // No work deadline: see SandboxHandle.exec. The signal goes to the container; locally it only refuses to
             // dispatch. One call: the handle owns any re-call after a lost reply, under the call's one launch id.
             return await names.hold(name, callJob(exec), async () => {
-              const moved = pinned === undefined ? null : await pinnedRunRefused(pinned, name ?? '', state, signal);
+              const moved = pinned === undefined ? null : await pinnedShellMoved(pinned, name ?? '', state);
 
               if (moved !== null) return refusalOf(moved);
 

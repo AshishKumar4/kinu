@@ -1,5 +1,6 @@
 /** Asks the owner about what review gates, and keeps their grants. */
 
+import { wasNotDispatched } from '@kinu.run/agent-utils';
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import { attempt, classifyErrorCode, CODE_WORK_DID_NOT_START, detach, diagnostics, KinuError, settle, toKinuError, type ErrorCode } from '../obs/index';
@@ -152,21 +153,15 @@ export function namedShellState(read: () => Promise<string | null>, shell: strin
 }
 
 /**
- * Why a call pinned to its named shell's state must not be dispatched now: the shell, read again just before, no longer
- * restores exactly that, or cannot be read, or the call's cancel fired while it waited for the shell. Null: run it.
- * Called only for a pinned run (one an answer was asked for), inside the shell's hold and as the member's last step
- * before it dispatches, so nothing of this agent moves the shell between this read and the run; each refusal is a
- * did-not-start code, so the spent approval returns. An unpinned run awaits nothing here, so its dispatch keeps its
- * timing.
+ * Why a call pinned to its named shell's state must not run now: the shell, read again just before, no longer restores
+ * exactly that, or cannot be read. Null: run it. Called only for a pinned run (one an answer was asked for), inside the
+ * shell's hold, so nothing of this agent moves the shell between this read and the run; the refusal refunds a spent
+ * approval. An unpinned run awaits nothing here, so its dispatch keeps its timing.
  */
-export async function pinnedRunRefused(
-  pinned: string, shell: string, read: (() => Promise<string | KinuError>) | undefined, signal: AbortSignal | undefined,
+export async function pinnedShellMoved(
+  pinned: string, shell: string, read: (() => Promise<string | KinuError>) | undefined,
 ): Promise<KinuError | null> {
   const now = read === undefined ? shellMoved(shell, 'could not be read') : await read();
-
-  if (signal?.aborted === true) {
-    return new KinuError('unavailable', `NOT RUN: cancelled while it waited for shell ${JSON.stringify(shell)}; nothing was dispatched, and the approval stands for the next ask.`);
-  }
 
   if (now instanceof KinuError) return now;
 
@@ -409,14 +404,23 @@ export function gateExec<R>(
     const running = prepared.run(pinned);
 
     if (spent !== undefined) {
-      // A refusal, or a failure whose code proves nothing started, returns the approval; anything else spent it.
       const [ran] = await Promise.allSettled([running]);
-      const code = ran?.status === 'fulfilled' ? refusalCode?.(ran.value) ?? null : classifyErrorCode({ cause: ran?.reason });
-      await policy.deferrals?.settle(spent, code !== null && CODE_WORK_DID_NOT_START[code] ? 'did-not-run' : 'spent');
+      await policy.deferrals?.settle(spent, ran !== undefined && provedNotRun(ran, refusalCode) ? 'did-not-run' : 'spent');
     }
 
     return running;
   };
+}
+
+/**
+ * Whether an approved run proved nothing started, so its approval returns: a refusal, or a failure whose code says so,
+ * or a cancel its member raised before dispatching. Anything else spent it.
+ */
+function provedNotRun<R>(ran: PromiseSettledResult<R>, refusalCode: ((result: R) => ErrorCode | null) | undefined): boolean {
+  if (ran.status === 'rejected' && wasNotDispatched(ran.reason)) return true;
+  const code = ran.status === 'fulfilled' ? refusalCode?.(ran.value) ?? null : classifyErrorCode({ cause: ran.reason });
+
+  return code !== null && CODE_WORK_DID_NOT_START[code];
 }
 
 type GateAnswer =
