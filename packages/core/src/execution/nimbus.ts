@@ -508,11 +508,13 @@ function runOnBox(box: NimbusSandboxHandle, call: SessionCall, options: ShellExe
   const stopped = new AbortController();
   // Absent: not started. Pending: starting, which nothing cancels until the box answers. Fulfilled: running until its exit.
   let launch: Promise<ExecStream> | undefined;
+  // Named before it is sent, so a Stop whose start answer is lost can still find the command by it.
+  const execId = call.execOptions.execId ?? `exec-${crypto.randomUUID()}`;
 
   return raceAbort(async () => {
     await box.ready();
     options.signal?.throwIfAborted();
-    launch = streamed(call.run, call.execOptions);
+    launch = streamed(call.run, { ...call.execOptions, execId });
 
     return heard(await launch, options.output, stopped.signal);
   }, options.signal, 'workspace exec cancelled before it started', async () => {
@@ -521,11 +523,34 @@ function runOnBox(box: NimbusSandboxHandle, call: SessionCall, options: ShellExe
     if (launch === undefined) return 'workspace exec cancelled before it started';
     const [launched] = await Promise.allSettled([launch]);
 
-    if (launched.status === 'rejected') return 'workspace exec cancelled before it started';
+    // A start the box did not answer may still have run: it is stopped by its name, or the stop is not confirmed.
+    if (launched.status === 'rejected') return await stopUnanswered(box, execId);
     await Promise.allSettled([launched.value.exit]);
 
     return 'workspace exec cancelled: the command was stopped';
   });
+}
+
+const RunningProcessesSchema = v.array(v.looseObject({ pid: v.number(), state: v.string(), execId: v.optional(v.string()) }));
+
+/**
+ * The processes of a command whose start the box never answered, found by the exec id it was sent with and killed;
+ * how the stop ended. Without a process list the box cannot be asked, and a command no longer listed may have run.
+ */
+async function stopUnanswered(box: NimbusSandboxHandle, execId: string): Promise<string> {
+  const list = box.processes?.list?.bind(box.processes);
+  const kill = box.processes?.kill?.bind(box.processes);
+  const unconfirmed = `workspace exec stop unconfirmed: the box lost its answer to the start of exec ${execId}`;
+
+  if (list === undefined || kill === undefined) return `${unconfirmed}, and lists no processes to find it by`;
+  const listed = v.safeParse(RunningProcessesSchema, await list());
+
+  if (!listed.success) return `${unconfirmed}, and its process list was unreadable`;
+  const running = listed.output.filter((process) => process.execId === execId && process.state === 'running');
+
+  await Promise.all(running.map(async (process) => await kill(process.pid)));
+
+  return running.length > 0 ? 'workspace exec cancelled: the command was stopped' : `${unconfirmed}, and it is not running now`;
 }
 
 /**

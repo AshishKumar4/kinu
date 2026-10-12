@@ -1,7 +1,7 @@
 /**
  * A Stop of a workspace command, on the hosted workspace's own shell, is confirmed only once nothing of the command can
- * still run. Gated at the box's two start seams as a cold workspace holds them: its readiness, and the command's
- * admission once sent.
+ * still run. Gated at the box's start seams as a cold workspace holds them: its readiness, and the command's admission
+ * once sent; and at the start's answer, lost after the command started.
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -159,4 +159,80 @@ describe('a Stop of a hosted workspace command', () => {
     await expect(pending).rejects.toMatchObject({ name: 'AbortError', message: 'workspace exec cancelled: the command was stopped' });
     expect(seen).toEqual(['started', 'exited', 'answered']);
   });
+
+  test('whose start answer is lost, finds the command by its exec id and kills it before answering', async () => {
+    const box = hostedBox();
+    const start = lostAnswer(box);
+    const controller = new AbortController();
+
+    const pending = nimbusSessionShell({ ...box, execStream: start.execStream }, { home: WORKSPACE_ROOT })
+      .exec('echo started; sleep 3600', { signal: controller.signal });
+
+    try {
+      await start.running;
+      controller.abort();
+      start.drop();
+      // Red: answered as never started, and the command ran on.
+      await expect(pending).rejects.toMatchObject({ name: 'AbortError', message: 'workspace exec cancelled: the command was stopped' });
+      // The command's own stream ends: what the Stop killed is the command it started.
+      await start.ended();
+    } finally {
+      await start.release();
+    }
+  });
+
+  test('whose start answer is lost, on a box that cannot be asked for its processes, says the stop is unconfirmed', async () => {
+    const box = hostedBox();
+    const start = lostAnswer(box);
+    const controller = new AbortController();
+
+    const pending = nimbusSessionShell({
+      ready: async () => { await box.ready(); },
+      exec: async (command, options) => await box.exec(command, options),
+      execStream: start.execStream,
+    }, { home: WORKSPACE_ROOT })
+      .exec('echo started; sleep 3600', { signal: controller.signal });
+
+    try {
+      await start.running;
+      controller.abort();
+      start.drop();
+      // Red: answered as never started, while the command runs.
+      await expect(pending).rejects.toMatchObject({ name: 'AbortError', message: expect.stringMatching(/^workspace exec stop unconfirmed: .* exec \S+/) });
+    } finally {
+      await start.release();
+    }
+  });
 });
+
+/**
+ * The box's own stream behind a start answer that is lost: the command starts and is heard from, then `drop` loses the
+ * answer. `ended` settles once the command's own stream ends; `release` cancels it, so no command outlives the test.
+ */
+function lostAnswer(box: HostedBox) {
+  const { execStream } = box;
+
+  if (execStream === undefined) throw new Error('the hosted box streams no command');
+  const running = Promise.withResolvers<void>();
+  const lost = Promise.withResolvers<void>();
+  const kept: { readonly reader: ReadableStreamDefaultReader<unknown>; readonly exit: Promise<unknown> }[] = [];
+
+  const lose: NonNullable<NimbusSandboxHandle['execStream']> = async (command, options) => {
+    const stream = await execStream(command, options);
+    const reader = stream.output.getReader();
+
+    kept.push({ reader, exit: stream.exit });
+    await reader.read();
+    running.resolve();
+    await lost.promise;
+    throw new Error('the start answer was lost on its way back');
+  };
+
+  return {
+    execStream: lose,
+    running: running.promise,
+    drop: () => { lost.resolve(); },
+    ended: async () => { await Promise.allSettled(kept.map((stream) => stream.exit)); },
+    release: async () => { await Promise.all(kept.map((stream) => stream.reader.cancel())); },
+  };
+}
