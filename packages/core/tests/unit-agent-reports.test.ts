@@ -10,6 +10,8 @@ const RESTING: AgentStandingReport = {
   measures: { provider: { tokens: 1_200, at: '2026-10-11T00:00:00Z', seq: 3 }, gate: null },
   latestRun: { status: 'completed', userMessage: 'List the folders.' },
   pendingSteers: [],
+  plans: { pending: false, revision: 0 },
+  questions: 0,
 };
 
 const TAKEN: AgentStandingReport = { ...RESTING, messageCount: 2, latestRun: { status: null, userMessage: 'List the folders.' } };

@@ -15,7 +15,7 @@ import { ExtensionHost } from '../extension';
 import { Effect } from 'effect';
 import { attempt, diagnostics, KinuError, renderThrownChain, settle, type TurnTrace, type TurnTracing } from '../obs/index';
 import { AgentOrchestrator, type AgentOrchestratorDeps } from './agent-orchestrator';
-import { describeLandedSteers, type AcceptedSteer, type LandedSteerRow, type UserSteer } from './inbox';
+import { describeLandedSteers, type AcceptedSteer, type Inbox, type LandedSteerRow, type UserSteer } from './inbox';
 import { startActorTurn } from './actor-turn';
 import type { ChatTurnInput } from './chat-session';
 import { captureOperationProfile, currentOperationProfile, operationProfileStream } from '../profiles/operation';
@@ -637,7 +637,7 @@ export class ActorSession {
     });
   }
 
-  interrupt(): readonly UserSteer[] {
+  interrupt(): ReturnType<Inbox['interrupt']> {
     const dropped = this.orchestrator.inbox.interrupt();
     this.stop();
 

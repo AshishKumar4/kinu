@@ -97,6 +97,7 @@ describe("a workspace's tile on its owner's home", () => {
       const standing: AgentStandingReport = {
         messageCount: historyOver({ agent, db: own.db }, own.actor).transcript(CHAT_SESSION_ID).count(),
         measures: recorder.readContextMeasures(), latestRun: recorder.latestRunHeader(), pendingSteers: [],
+        plans: { pending: false, revision: 0 }, questions: 0,
       };
 
       await reportedWork.owes(sequence.next(), null, true, standing);

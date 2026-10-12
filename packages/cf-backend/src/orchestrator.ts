@@ -1,12 +1,11 @@
 import { exists as nimbusExists, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
-import { PLATFORM_CATALOG, GitHubFactSchema, actorPolicy, AgentDeliveries, DeliveryInbox, pendingEventsDelivery, wordsRefusal, deliveryMetadata, handBackCarried, actorReach, type Delivery, type DeliveryAnswer, type OwedAdmission, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, codemodeSurface, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type ToolSurfaceNarrowing, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs } from '@kinu.run/core';
+import { PLATFORM_CATALOG, GitHubFactSchema, actorPolicy, AgentDeliveries, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, codemodeSurface, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type ToolSurfaceNarrowing, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs } from '@kinu.run/core';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
  */
 
 import { Agent, callable, type AgentContext, type Connection, type ConnectionContext } from "agents";
-import { serialQueue } from "@kinu.run/agent-utils";
 import { ORCHESTRATOR_RPC_SURFACE, ORCHESTRATOR_STARTED_RPC, sealRpcSurface } from "./rpc-surface";
 import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from "./activation-gate";
 import { supervisorEsbuildService } from "@nimbus-sh/worker/facet-host";
@@ -202,7 +201,7 @@ import {
   setModel, setProviderAccount, setReasoningEffort, setShellApprovalMode,
   type EvolutionConfigView,
   getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
-  planAwaitingReply, ASK_OWNER_TOOL,
+  planAwaitingReply,
   JsonValueSchema, type JsonValue, type JsonObject, type KinuEvent,
   EVENT_VARIANTS,
   boundEventQuery,
@@ -243,8 +242,8 @@ import {
   WorkspacePlanReferenceSchema,
 } from "@kinu.run/core";
 import type { MctsSearchRunSummary, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
-import { Cause, Effect, Exit } from 'effect';
-import { attempt, attemptInItsWords, authoredRefusal, classify, CODE_IS_REFUSAL, diagnostics, hold, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
+import { Cause, Effect } from 'effect';
+import { attempt, authoredRefusal, classify, CODE_IS_REFUSAL, diagnostics, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import type { NameOrigin } from "@kinu.run/core";
 import { deliverCloudFork, type ForkFrameAck } from "./user/workspace-fork";
@@ -403,9 +402,6 @@ interface HostedTarget {
   readonly handle: ActorHandle;
   readonly entry: NonNullable<ReturnType<SubordinateRosterStore['get']>>;
 }
-
-/** One crossing of a delivery: the agent's answer, or why it did not take it. */
-type CrossedDelivery = { readonly admitted: Exclude<DeliveryAnswer, object> } | { readonly failure: KinuError };
 
 /** An assignment's delivery, as its metadata names it. */
 const AssignmentMetadataSchema = v.looseObject({ kinuEvent: v.literal('subordinate_task'), kinuMode: WorkModeSchema });
@@ -820,6 +816,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   protected get agentTurns(): AgentTurns {
     this._agentTurns ??= new AgentTurns({
       sql: this.boundSql,
+      fence: (actorId) => this.heldFence(actorId),
       seams: () => this.hostedSeams(),
       reference: (actorId) => actorReferenceOf(this.liveAgentOf(actorId)),
       // A run as its delivery (design v2 §1): committed with the agent's wake, crossed, run in its isolate beside its
@@ -837,13 +834,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         return end;
       },
-      interrupt: async (reference, turnId) => {
+      interrupt: async (reference, turnId, cutoff) => {
         for (const call of this.jobAuthorities.live(reference.actorId)?.runner.foreground ?? []) call.abort(new Error('cancelled by operator'));
         const calls = await this.agentCalls(reference.actorId);
         const snapshot = this.agentSnapshot(reference.actorId);
 
         if (turnId !== null) await calls.interrupt(snapshot, turnId);
-        else if (holdsChat(this.agentOf(reference.actorId).origin)) await calls.interruptChat(snapshot);
+        else if (holdsChat(this.agentOf(reference.actorId).origin)) await calls.interruptChat(snapshot, cutoff);
       },
       chatOwed: async (reference) => holdsChat(this.agentOf(reference.actorId).origin) && this.agentWakes.armed(reference.actorId)
         && await (await this.agentCalls(reference.actorId)).owed(this.agentSnapshot(reference.actorId)),
@@ -940,9 +937,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         await session.hireAdvisor(advisor);
       },
       owes: async (seq, next, holds, standing) => {
+        const before = this.reportedStanding(actorId);
+
         // Older than a report already taken from it: delayed past that one, or sent before a reset of either side.
         if (!new AgentReports(this.boundSql).accept(actorId, seq, standing)) return;
         this.reportedStandings.set(actorId, standing);
+        this.standingMoved(actorId, before, standing);
 
         // A retired agent's answer arms nothing: tearing it down ended its wake.
         if (!this.liveActor(actorId)) return await this.agentWakes.owes(actorId, null);
@@ -1073,7 +1073,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     await this.hostedChatEvent(actorId, event);
-    await this.chatTurnClosed(actorId, { event, figures }, ended === 'unfenced' ? null : ended, ended === 'unfenced' ? this.agentTurns.chatTurn(actorId) : ended.turnId);
+    await this.chatTurnClosed(actorId, figures, ended === 'unfenced' ? null : ended, ended === 'unfenced' ? this.agentTurns.chatTurn(actorId) : ended.turnId);
   }
 
   /**
@@ -1103,13 +1103,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     await this.chatTurnClosed(actorId, null, expected, open.turnId);
   }
 
-  /** What a turn's end moves in this object, told (`ended`) or lost with its isolate. `closing` is the opening that
-   *  ended, `turnId` its turn: a later one, opened while this one's end was applied, stays open. */
+  /** What a turn's end moves in this object, told (its `figures`) or lost with its isolate. `closing` is the opening
+   *  that ended, `turnId` its turn: a later one, opened while this one's end was applied, stays open. */
   private async chatTurnClosed(
-    actorId: string, ended: { readonly event: SessionEvent; readonly figures: AgentFigures } | null, closing: OpenedAt | null, turnId: string | null,
+    actorId: string, figures: AgentFigures | null, closing: OpenedAt | null, turnId: string | null,
   ): Promise<void> {
-    const event = ended?.event ?? null;
-
     this.agentTurns.chatClosed(actorId, closing);
     // Its claim closed and its sequence opened in its own isolate.
     this.liveReadsMoved(readsOfTables(['actor_turn_claims', 'terminal_effects']));
@@ -1119,10 +1117,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     if (!this.liveActor(actorId)) return;
 
-    // Its questions are written in its own isolate, which the workspace's reads do not watch; a lost end may have moved them.
-    if (this.agentBound(actorId).stores.config.getHoldsQuestions() && (event === null || this.questionsMayHaveMoved(actorId, event))) this.hostedQuestionsMoved();
-
-    if (ended !== null) recordAgentFigures(this.boundSql, actorId, ended.figures);
+    if (figures !== null) recordAgentFigures(this.boundSql, actorId, figures);
 
     // A delivery's turn answered the events it carried: their lease closes with it.
     if (turnId !== null && announcementOf(turnId) !== turnId) await this.answeredBatch(actorId, announcementOf(turnId));
@@ -1328,7 +1323,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       announce: () => { this.liveReadsMoved(ROSTER_READS); },
       // Its durable wake drains it, whichever isolate holds it, and outlives a reset.
       scheduleDrain: () => { this.armDurableWake(); },
-      deliver: (actor, admit) => this.commitDelivery(actor.reference.actorId, admit),
+      deliver: (actor, admit) => this.coordinator.owe(actor.reference.actorId, admit),
       hirerName: (actor) => this.hirerName(actor.record),
       jobSeat: (actorId) => ({ ports: this.workspaceJobPorts(actorId), attach: (authority) => this.jobAuthorities.attach(authority) }),
       retireJobs: (actorId) => this.jobAuthorities.retire(actorId),
@@ -1942,7 +1937,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // A deletion's quiet stops what runs and closes it; it wakes nothing to take up more.
     if (this.admitting.signal.aborted) return;
     // What the agent is owed crosses first: a delivery whose crossing died is taken before the agent drives.
-    await this.crossOwed(actorId);
+    await this.coordinator.drain(actorId);
 
     // A turn its isolate lost is taken up, or, cut off too often, retired and its hirer told.
     if (opts.recover) await this.recoverAgent(actorId, []);
@@ -2439,57 +2434,45 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** An agent's deliveries, whichever agent: its signals, and its pending events bound to their turn as it is written. */
+  /** An agent's deliveries as its orchestrator sends signals through them: each a delivery its room hears carded. */
   private agentDeliveries(actorId: string): NonNullable<AgentOrchestratorDeps['deliveries']> {
-    return {
-      signals: this.deliveryInbox(actorId),
-      commit: (bind) => this.commitDelivery(actorId, () => ({ value: undefined, delivery: bind() })),
-    };
-  }
-
-  /** What `admit` writes and the delivery it owes the agent, as one commit; then the agent's wake, then one crossing. */
-  private async commitDelivery<A>(actorId: string, admit: () => OwedAdmission<A>): Promise<A> {
-    const { value, delivery } = this.ctx.storage.transactionSync(() => {
-      const admitted = admit();
-
-      if (admitted.delivery !== null) this.deliveries.add(actorId, admitted.delivery);
-
-      return admitted;
-    });
-
-    if (delivery === null) return value;
-    // Its wake stands from the commit; the crossing runs in commit order, and one that does not reach the agent leaves it
-    // owed to that wake.
-    await this.owedThenCrossed(actorId, delivery);
-
-    return value;
+    return this.coordinator.port(actorId, (event) => { this.detachOwned(Effect.promise(() => this.hostedChatEvent(actorId, { type: 'broadcast', event }))); });
   }
 
   private get deliveries(): AgentDeliveries {
     return new AgentDeliveries(this.boundSql);
   }
 
+  /** An agent's newest opening, held per agent: TurnFences' open, cancel, offer and ended run over `sql`, which drops it. */
+  private readonly heldFence = this.held.holdEach(['actor_turn_fence'], (actorId: string) => new TurnFences(this.boundSql).row(actorId));
+
   /** Whether an agent is owed a delivery, held per agent: AgentDeliveries' add, paid and cancel run over `sql`, which drops it. */
   private readonly deliveriesOwed = this.held.holdEach(['agent_deliveries'], (actorId: string) => this.deliveries.owes(actorId));
 
   /**
-   * One delivery for the agent (design v2 §1, v3 A): committed in one synchronous commit with `source`, the producer's
-   * own fact, then crossed once. A commit that holds it already commits nothing new; a crossing that fails leaves it
-   * owed, and the agent's wake crosses it again: the producer is done once it committed. Null when it did not cross.
+   * Every delivery this workspace owes its agents (design v2 §1, v3 A), on core's one path: committed with its producer's
+   * fact, its wake armed from the owed row, and crossed behind everything owed before it.
    */
+  private readonly coordinator = new DeliveryCoordinator({
+    sql: this.boundSql,
+    transaction: (body) => this.ctx.storage.transactionSync(body),
+    armWake: (actorId) => this.owedWake(actorId),
+    admit: async (actorId, delivery) => await (await this.preArmed(actorId, () => this.agentCalls(actorId))).admit(this.agentSnapshot(actorId), delivery),
+    eventLog: (actorId) => new EventLog(this.watchedExec, this.agentBound(actorId).handle),
+    live: (actorId) => this.liveActor(actorId),
+    refused: async (actorId, delivery, failure) => {
+      const assigned = v.safeParse(AssignmentMetadataSchema, deliveryMetadata(delivery));
+
+      if (!assigned.success) return false;
+      await this.hireCouldNotRun(actorId, { sequenceId: delivery.id, mode: assigned.output.kinuMode }, renderThrownChain({ cause: failure }));
+
+      return true;
+    },
+  });
+
+  /** One delivery for the agent, committed with `source`, the producer's own fact, then crossed; see {@link coordinator}. */
   protected async deliver(actorId: string, delivery: Delivery, source?: () => void): Promise<CrossedDelivery> {
-    this.ctx.storage.transactionSync(() => {
-      source?.();
-      this.deliveries.add(actorId, delivery);
-    });
-    const [, crossed] = await this.owedThenCrossed(actorId, delivery);
-
-    return crossed;
-  }
-
-  /** Its wake armed at once, and its crossing taken on the lane in commit order: neither waits behind the other, so a
-   *  crossing ahead of it delays no wake, and a slower arm reorders no crossing. */
-  private owedThenCrossed(actorId: string, delivery: Delivery): Promise<[void, CrossedDelivery]> {
-    return Promise.all([this.owedWake(actorId), this.crossingLane(actorId)(() => this.crossDelivery(actorId, delivery))]);
+    return await this.coordinator.deliver(actorId, delivery, source);
   }
 
   /** Armed straight after the commit, before any crossing: only storage writes between, so a reset after the commit
@@ -2499,81 +2482,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // The agent reads working from here, as soon as it is owed: its turn claims are its own isolate's.
     this.liveReadsMoved(readsOfTables(['actor_turn_claims']));
     await this.agentWakes.arm(actorId, Date.now() + RECOVERY_BACKOFF_CEILING_MS);
-  }
-
-  /** Per agent, one crossing at a time, each released once the agent took it: the agent takes what it is owed in the
-   *  order its producers committed it. */
-  private readonly crossingLanes = new Map<string, ReturnType<typeof serialQueue>>();
-
-  private crossingLane(actorId: string): ReturnType<typeof serialQueue> {
-    const lane = this.crossingLanes.get(actorId) ?? serialQueue();
-
-    this.crossingLanes.set(actorId, lane);
-
-    return lane;
-  }
-
-  /**
-   * One crossing of one delivery, if still owed, its wake armed first, retired as the agent answers it. The agent's
-   * refusal of it as it is retires it too; any other failure leaves it owed. An agent retired since cancels what it is
-   * owed. Run on the agent's crossing lane.
-   */
-  private async crossDelivery(actorId: string, delivery: Delivery): Promise<CrossedDelivery> {
-    if (!this.liveActor(actorId)) {
-      this.deliveries.cancel(actorId);
-
-      return { failure: new KinuError('missing', `${actorId} was retired; what it was owed is cancelled.`) };
-    }
-
-    // Taken already, at a crossing this one waited behind on the lane: the wake's, or its producer's.
-    if (!this.deliveries.unpaid(actorId).some((owed) => owed.id === delivery.id)) return { admitted: 'taken' };
-
-    const calls = await this.preArmed(actorId, () => this.agentCalls(actorId));
-    // In the agent's own words: its refusal reaches the sender as it said it.
-    const crossed = await hold(attemptInItsWords('unavailable', () => calls.admit(this.agentSnapshot(actorId), delivery)));
-
-    if (Exit.isFailure(crossed)) {
-      const cause = Cause.squash(crossed.cause);
-      const failure = cause instanceof KinuError ? cause : toKinuError({ doing: 'handing the agent what it is owed', cause, otherwise: 'unavailable' });
-
-      // Refused where it would be on every crossing, as an isolate its loader will not open: an answer, as the agent's own.
-      if (CODE_IS_REFUSAL[failure.code]) return await this.refusedDelivery(actorId, delivery, failure);
-      // It did not reach the agent: owed still, for the agent's wake to cross again.
-      diagnostics.failure('agent.delivery_crossing_failed', failure, { actorId, deliveryId: delivery.id });
-
-      return { failure };
-    }
-
-    const answer = crossed.value;
-
-    // The agent's refusal is its answer: retired, and its sender told.
-    if (typeof answer === 'object') return await this.refusedDelivery(actorId, delivery, new KinuError(answer.refused.code, answer.refused.message));
-    this.deliveries.paid(actorId, delivery.id);
-
-    // An offer the owner's words came before: the events it carried are pending again.
-    if (answer === 'yielded') handBackCarried(new EventLog(this.watchedExec, this.agentBound(actorId).handle), delivery, answer);
-
-    return { admitted: answer };
-  }
-
-  /**
-   * Refused: retired, and what it carried handed back. An assignment's hirer hears its agent could not run it; events
-   * wait for the drain something else starts.
-   */
-  private async refusedDelivery(actorId: string, delivery: Delivery, failure: KinuError): Promise<CrossedDelivery> {
-    this.deliveries.paid(actorId, delivery.id);
-    diagnostics.failure('agent.delivery_refused', failure, { actorId, deliveryId: delivery.id });
-    const assigned = v.safeParse(AssignmentMetadataSchema, deliveryMetadata(delivery));
-
-    if (assigned.success) {
-      await this.hireCouldNotRun(actorId, { sequenceId: delivery.id, mode: assigned.output.kinuMode }, renderThrownChain({ cause: failure }));
-
-      return { failure };
-    }
-
-    handBackCarried(new EventLog(this.watchedExec, this.agentBound(actorId).handle), delivery, { refused: { code: failure.code, message: failure.message } });
-
-    return { failure };
   }
 
   /** The events a delivery carries, bound to it in the agent's log; null for one that carries none. */
@@ -2602,30 +2510,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const replies = await dispatchEmailRepliesForTurn({ log, replies: this.replyChannels }, batchId, '', Date.now());
 
     if (!replies.pending) log.markTurnCompleted(batchId);
-  }
-
-  /** At the agent's wake: what it is owed, in the order it was committed, up to a crossing that fails. */
-  private async crossOwed(actorId: string): Promise<void> {
-    await this.crossingLane(actorId)(async () => {
-      for (const delivery of this.deliveries.unpaid(actorId)) {
-        const crossed = await this.crossDelivery(actorId, delivery);
-
-        // A crossing that did not reach the agent stops the sweep: what is behind it waits for the next wake.
-        if ('failure' in crossed && this.deliveries.unpaid(actorId).some((owed) => owed.id === delivery.id)) return;
-      }
-    });
-  }
-
-  /** What a signal to the agent becomes: a delivery its room hears carded. */
-  private deliveryInbox(actorId: string): DeliveryInbox {
-    return new DeliveryInbox({
-      deliver: async (delivery) => {
-        const crossed = await this.deliver(actorId, delivery);
-
-        return 'admitted' in crossed ? crossed.admitted : null;
-      },
-      broadcast: (event) => { this.detachOwned(Effect.promise(() => this.hostedChatEvent(actorId, { type: 'broadcast', event }))); },
-    });
   }
 
   /**
@@ -2715,10 +2599,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * its queued turns, telling their callers, and the turn is aborted. Nothing queued before the Stop runs.
    */
   protected override async stopAgent(actorId: string): Promise<void> {
-    const cancelled = this.ctx.storage.transactionSync(() => {
+    const { cancelled, cutoff } = this.ctx.storage.transactionSync(() => {
       new TurnFences(this.boundSql).cancel(actorId, Date.now());
 
-      return this.deliveries.cancel(actorId);
+      return this.coordinator.cancel(actorId);
     });
 
     // The work its cancelled deliveries carried is dismissed with them.
@@ -2726,7 +2610,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       for (const event of this.carried(actorId, delivery)?.events ?? []) event.log.dismiss(event.id, 'stopped by the owner', 'system');
     }
 
-    await this.agentTurns.interrupt(actorId);
+    await this.agentTurns.interrupt(actorId, cutoff);
 
     // A Stop dismisses the agent's open questions in its own isolate.
     if (this.agentBound(actorId).stores.config.getHoldsQuestions()) this.hostedQuestionsMoved();
@@ -3575,6 +3459,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       actors: this.workspaceActors().list({ retired: true }),
       // Each agent's own isolate reports them at its turns' ends, main's as any other's: its steps are its isolate's (D9).
       figures: (actorIds) => reportedAgentFigures(this.boundSql, actorIds),
+      chat: (actorId) => {
+        const reported = this.reportedStanding(actorId);
+
+        return reported === undefined ? null : { planPending: reported.plans.pending, lastFailed: reported.latestRun?.status === 'error' };
+      },
     });
   }
 
@@ -4263,7 +4152,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private async mainStanding(opts: { readonly fresh?: boolean } = {}): Promise<AgentStanding> {
     const main = this.actorHandle().actorId;
 
-    if (!this.config.getHoldsTurns()) return { messageCount: 0, context: null, latestRun: null, pendingSteers: [] };
+    if (!this.config.getHoldsTurns()) return { messageCount: 0, context: null, latestRun: null, pendingSteers: [], plans: { pending: false, revision: 0 }, questions: 0 };
     const reported = opts.fresh === true ? undefined : this.reportedStanding(main);
 
     if (reported !== undefined) {
@@ -4291,6 +4180,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Each agent's standing as it last reported it, held as each report is stored. */
   private readonly reportedStandings = new Map<string, AgentStandingReport>();
+
+  /** Its plans and questions are written in its own isolate, which the workspace's reads do not watch: a report whose
+   *  revisions differ from the last one moves what reads them. */
+  private standingMoved(actorId: string, before: AgentStandingReport | undefined, now: AgentStandingReport): void {
+    // An agent that never reported had written none.
+    if ((before?.plans.revision ?? 0) !== now.plans.revision) {
+      if (now.plans.pending) this.agentBound(actorId).stores.config.setHoldsPlans();
+      this.hostedPlansMoved();
+    }
+
+    if ((before?.questions ?? 0) !== now.questions && this.agentBound(actorId).stores.config.getHoldsQuestions()) this.hostedQuestionsMoved();
+  }
 
   async getToolList() {
     return getToolList(this.boundSql);
@@ -4796,13 +4697,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Main's chat, which notes cross to as one card under their message's id. */
   private get changeNotesChat(): ChangeNotesChat {
     const main = this.actorHandle().actorId;
-    const holds = async (id: string) => (await (await this.agentCalls(main)).sendState(this.agentSnapshot(main), id)).status !== 'none';
+    const owed = (id: string) => this.deliveries.unpaid(main).some((delivery) => delivery.id === id);
+    // Held once committed here, as the agent's own store holds it once taken: one owner of the notes' fate either way.
+    const holds = async (id: string) => owed(id) || (await (await this.agentCalls(main)).sendState(this.agentSnapshot(main), id)).status !== 'none';
 
     return {
-      // Owed once committed; a crossing the agent refused is the sender's to hear, and its wake delivers them still.
+      // Owed once committed, under the notes' own id: a crossing that does not reach the agent leaves them queued for
+      // its wake, never a draft again. Only the agent's refusal, which retires them, is the sender's to hear.
       deliver: async (message) => {
         if (await holds(message.id)) return;
-        await heard(await this.deliver(main, { id: message.id, input: { kind: 'words', text: message.text, metadata: message.metadata }, authorship: 'owner' }), () => undefined);
+        const crossed = await this.deliver(main, { id: message.id, input: { kind: 'words', text: message.text, metadata: message.metadata }, authorship: 'owner' });
+
+        await heard(owed(message.id) ? { admitted: 'taken' } : crossed, () => undefined);
       },
       holds,
     };
@@ -5948,14 +5854,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private heldQuestions: AskingAgent[] | null = null;
 
   private questionMoves = 0;
-
-  /** A turn moved its agent's questions if it asked, or if one was open as it ran: the owner's words close them. Unread,
-   *  they may have. */
-  private questionsMayHaveMoved(actorId: string, event: SessionEvent): boolean {
-    if (event.type === 'turn-end' && (event.turn.askedOwner === true || event.turn.toolCalls.some((call) => call.name === ASK_OWNER_TOOL))) return true;
-
-    return this.heldOpenQuestion(actorId) ?? true;
-  }
 
   /** Whether the held list shows the agent with a question open; null when none is held. */
   private heldOpenQuestion(actorId: string): boolean | null {

@@ -48,35 +48,39 @@ function subordinateCategory(entry: SubordinateRosterEntry): AgentCategory {
   return entry.origin === 'evolution' ? 'background' : 'hired';
 }
 
+/** What an agent's own isolate last reported of its chat: its turns and plans are written there, not here. */
+export interface ChatReport {
+  readonly planPending: boolean;
+  readonly lastFailed: boolean;
+}
+
 /** A question only the person can answer outranks a running turn; a failed last turn shows until the next one starts. */
-function chatActivity(sql: SqlExecutor, actorId: string, running: boolean): AgentActivity {
-  if (asksThePerson(sql, actorId)) return 'waiting';
+function chatActivity(walk: Pick<Walk, 'sql' | 'chat'>, actorId: string, running: boolean): AgentActivity {
+  const reported = walk.chat(actorId);
+
+  if (reported?.planPending === true || commandParked(walk.sql, actorId)) return 'waiting';
 
   if (running) return 'working';
 
-  return lastTurnFailed(sql, actorId) ? 'failed' : 'idle';
+  return reported?.lastFailed === true ? 'failed' : 'idle';
 }
 
-function asksThePerson(sql: SqlExecutor, actorId: string): boolean {
-  return sql<{ x: number }>`SELECT 1 AS x FROM deferred_approvals WHERE actor_id = ${actorId} AND status = 'queued' LIMIT 1`.length > 0
-    || sql<{ x: number }>`SELECT 1 AS x FROM plan_reviews WHERE actor_id = ${actorId} AND status = 'pending' LIMIT 1`.length > 0;
+/** A shell command the agent parked for the person: the workspace's own row. */
+function commandParked(sql: SqlExecutor, actorId: string): boolean {
+  return sql<{ x: number }>`SELECT 1 AS x FROM deferred_approvals WHERE actor_id = ${actorId} AND status = 'queued' LIMIT 1`.length > 0;
 }
 
 function deviceAsks(sql: SqlExecutor, now: number): boolean {
   return sql<{ x: number }>`SELECT 1 AS x FROM device_consent_requests WHERE expires_at > ${now} LIMIT 1`.length > 0;
 }
 
-function lastTurnFailed(sql: SqlExecutor, actorId: string): boolean {
-  return sql<{ outcome: string | null }>`SELECT outcome FROM actor_turn_claims WHERE actor_id = ${actorId} ORDER BY claimed_at DESC LIMIT 1`[0]?.outcome === 'error';
-}
-
-function subordinateActivity(sql: SqlExecutor, entry: SubordinateRosterEntry, actorId: string, running: boolean): AgentActivity {
+function subordinateActivity(walk: Pick<Walk, 'sql' | 'chat'>, entry: SubordinateRosterEntry, actorId: string, running: boolean): AgentActivity {
   if (entry.status === 'dismissed') return 'dismissed';
 
   // A hire's blocked report waits on the agent that hired it; a chat the person opened waits on the person.
   if (entry.status === 'awaiting_input' && entry.origin === 'user') return 'waiting';
 
-  return chatActivity(sql, actorId, running);
+  return chatActivity(walk, actorId, running);
 }
 
 function headActivity(status: string, errorMessage: string | null, runRunning: boolean): AgentActivity {
@@ -107,10 +111,6 @@ function treeOrder(rootId: string, actors: readonly WorkspaceActor[]): Workspace
   return ordered;
 }
 
-function turnOpen(sql: SqlExecutor, actorId: string): boolean {
-  return sql<{ x: number }>`SELECT 1 AS x FROM actor_turn_claims WHERE actor_id = ${actorId} AND outcome IS NULL LIMIT 1`.length > 0;
-}
-
 /** Work handed to it it has not said it rests from, or reactions due a drain now. */
 function turnOwed({ exec, now, queued }: Pick<Walk, 'exec' | 'now' | 'queued'>, actor: ActorHandle): boolean {
   if (queued(actor.actorId)) return true;
@@ -127,6 +127,7 @@ interface Walk {
   readonly handleOf: (row: WorkspaceActor) => ActorHandle;
   readonly now: number;
   readonly queued: (actorId: string) => boolean;
+  readonly chat: (actorId: string) => ChatReport | null;
 }
 
 /** A running head's run is listed however old. */
@@ -140,7 +141,8 @@ function swarmRuns(sql: SqlExecutor, owner: ActorHandle): HeadRunView[] {
   return [...older.filter((run) => run !== null), ...recent];
 }
 
-function rosterAgents({ sql, exec, root, actors, paths, handleOf, now, queued }: Walk): Uncoloured[] {
+function rosterAgents(walk: Walk): Uncoloured[] {
+  const { exec, root, actors, paths, handleOf, now, queued } = walk;
   const byId = new Map(actors.map((row) => [row.actorId, row]));
   const agents: Uncoloured[] = [];
 
@@ -158,10 +160,10 @@ function rosterAgents({ sql, exec, root, actors, paths, handleOf, now, queued }:
     paths.set(row.actorId, path);
     const category = subordinateCategory(entry);
 
-    const running = turnOpen(sql, row.actorId) || turnOwed({ exec, now, queued }, handleOf(row));
+    const running = turnOwed({ exec, now, queued }, handleOf(row));
 
     agents.push({
-      key: row.actorId, label, category, activity: subordinateActivity(sql, entry, row.actorId, running), parent: row.parentActorId === root.actorId ? 'main' : row.parentActorId,
+      key: row.actorId, label, category, activity: subordinateActivity(walk, entry, row.actorId, running), parent: row.parentActorId === root.actorId ? 'main' : row.parentActorId,
       open: { kind: 'chat', path }, tab: category === 'user' && row.parentActorId === root.actorId && entry.status !== 'dismissed',
       input: category !== 'background', actorId: row.actorId, figures: NO_FIGURES,
     });
@@ -230,8 +232,10 @@ export async function readWorkspaceAgents(input: {
   readonly root: ActorHandle;
   readonly actors: readonly WorkspaceActor[];
   readonly figures: (actorIds: readonly string[]) => ReadonlyMap<string, AgentFigures> | Promise<ReadonlyMap<string, AgentFigures>>;
-  /** The agent holds work it has not said it rests from: its wake stands. */
+  /** The agent holds work it has not said it rests from: its wake stands. A turn it runs keeps it standing. */
   readonly queued: (actorId: string) => boolean;
+  /** Its chat as its own isolate last reported it; none before its first report. */
+  readonly chat: (actorId: string) => ChatReport | null;
 }): Promise<PanelAgent[]> {
   const { sql, root } = input;
   root.assertCurrent();
@@ -248,7 +252,7 @@ export async function readWorkspaceAgents(input: {
   const main: Uncoloured = {
     key: 'main', label: root.config.getChatTitle() ?? 'Main', category: 'main', parent: null,
     // A device's consent request names no actor: it is the workspace's, so Main is the chat that needs the person.
-    activity: deviceAsks(sql, walk.now) ? 'waiting' : chatActivity(sql, root.actorId, turnOpen(sql, root.actorId) || turnOwed(walk, root)),
+    activity: deviceAsks(sql, walk.now) ? 'waiting' : chatActivity(walk, root.actorId, turnOwed(walk, root)),
     open: { kind: 'chat', path: null }, tab: true, input: true, actorId: root.actorId, figures: NO_FIGURES,
   };
 

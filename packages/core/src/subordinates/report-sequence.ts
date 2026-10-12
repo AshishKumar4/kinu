@@ -47,6 +47,8 @@ const AgentStandingReportSchema = v.object({
   }),
   latestRun: v.nullable(v.object({ status: v.nullable(v.string()), userMessage: v.nullable(v.string()) })),
   pendingSteers: v.array(v.object({ id: v.string(), text: v.string(), state: v.picklist(['queued', 'landed']), atStep: v.nullable(v.number()) })),
+  plans: v.object({ pending: v.boolean(), revision: v.number() }),
+  questions: v.number(),
 });
 
 export class AgentReports {

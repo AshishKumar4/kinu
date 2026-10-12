@@ -6,7 +6,7 @@
 import { lookup } from 'node:dns/promises';
 import { realpathSync } from 'node:fs';
 import { ASKED, historyTurnPairs, testModel, toolDescription, workModeForTurnMetadata, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
-import type { ActorHandle, Delivery, DeliveryAnswer, InProcessDeliveries, JsonObject } from '@kinu.run/core';
+import type { ActorHandle, DeliveryAnswer, InProcessDeliveries, JsonObject, OwedDelivery } from '@kinu.run/core';
 import { Effect } from 'effect';
 import { resolve } from 'node:path';
 import type { LanguageModel, ToolSet } from 'ai';
@@ -217,7 +217,9 @@ export type ShellApprovalHandler =
 
 export interface LocalAgentSessionOpts {
   rt: CLIRuntime;
-  onStop?: () => void;
+  /** Stop's cutoff on what the session owes it: answers the newest delivery it cancelled, which the chat takes nothing
+   *  at or below after. */
+  onStop?: () => number | null;
   db: LocalSessionDb;
   /** Required on a static session (no modelResolver); otherwise only the pre-claim fallback. */
   model?: LanguageModel;
@@ -368,7 +370,7 @@ export class LocalAgentSession {
   private readonly workspaceTitleSource: (() => string | null) | null;
   private readonly ancestors: (() => readonly PinnedProfile[]) | undefined;
 
-  private readonly onStop: (() => void) | undefined;
+  private readonly onStop: (() => number | null) | undefined;
 
   constructor(opts: LocalAgentSessionOpts) {
     this.db = opts.db;
@@ -1072,8 +1074,8 @@ export class LocalAgentSession {
   }
 
   /** A delivery for this agent (design v2 §1): in its chat's own store before it is answered. */
-  admitDelivery(delivery: Delivery): Promise<DeliveryAnswer> {
-    return this.chat.admitDelivery(delivery);
+  admitDelivery(delivery: OwedDelivery): Promise<DeliveryAnswer> {
+    return this.chat.admitDelivery(delivery, 'self');
   }
 
   turnInFlight(): boolean {
@@ -1128,10 +1130,9 @@ export class LocalAgentSession {
 
   /** Returns the dropped steer texts. */
   interrupt(): string[] {
-    const dropped = this.chat.interrupt();
-    this.onStop?.();
+    const cutoff = this.onStop?.() ?? null;
 
-    return dropped;
+    return this.chat.interrupt(cutoff === null ? undefined : { producer: 'self', seq: cutoff });
   }
 
   /** Continue from before `entryId`; refused while a turn is held. */

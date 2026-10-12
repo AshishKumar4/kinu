@@ -362,7 +362,7 @@ describe('Inbox — the user kind, the three load-bearing semantics', () => {
     await inbox.send(steer('s1', 'change of plans'));
 
     // Returned to the composer, not swallowed: the surface already rendered it as sent.
-    expect(inbox.interrupt()).toEqual([{ id: 's1', text: 'change of plans' }]);
+    expect(inbox.interrupt().steers).toEqual([{ id: 's1', text: 'change of plans' }]);
     expect(steerStatuses(broadcasts).at(-1)).toEqual({
       type: 'steer_status', status: 'returned', steerId: 's1', text: 'change of plans',
     });
@@ -377,7 +377,7 @@ describe('Inbox — the user kind, the three load-bearing semantics', () => {
     await inbox.prepareStep(step(0, HISTORY));
 
     // After the drain the model acted on it, so it stays in the history.
-    expect(inbox.interrupt()).toEqual([]);
+    expect(inbox.interrupt().steers).toEqual([]);
     expect(inbox.recordedMessages()).toEqual([{ role: 'user', content: 'also check staging' }]);
   });
 
@@ -603,21 +603,20 @@ describe('Inbox — the user kind beside the event kind', () => {
     ]);
   });
 
-  test('an interrupt returns users only and leaves a pending event to requeue at settle', async () => {
+  test('an interrupt returns users and cancels the delivered signal the turn held: its settle runs nothing', async () => {
     const { inbox, queued, broadcasts } = setup({ turnInFlight: true });
     inbox.beginTurn(false);
     await inbox.send(steer('s1', 'give it back'));
-    inbox.landMidTurn(event('still owed'));
+    inbox.landMidTurn(event('cancelled with the turn'));
 
-    expect(inbox.interrupt()).toEqual([{ id: 's1', text: 'give it back' }]);
+    expect(inbox.interrupt().steers).toEqual([{ id: 's1', text: 'give it back' }]);
     expect(broadcasts.map((b) => b.type === 'steer_status' ? b.status : b.state))
       .toEqual(['queued', 'pending', 'returned']);
 
-    // The event was never returned — it settles as its own turn instead.
+    // Stop is the cutoff (design v3 C): the event is not run as a turn of its own.
     inbox.settle({ completed: false });
     await Promise.resolve();
-    expect(queued.map((turn) => turn.text)).toEqual(['still owed']);
-    expect(queued[0].origin).toBeUndefined();
+    expect(queued).toEqual([]);
   });
 
   test('a failed durable landing restores users AND events ahead of a steer delivered mid-await', async () => {

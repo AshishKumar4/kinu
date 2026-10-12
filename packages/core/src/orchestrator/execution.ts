@@ -13,6 +13,7 @@ import type { TaskPlan } from '../tools/task-plan-scope';
 import type { TierId } from '../types/profile';
 import type { TurnAuthorship, WorkMode } from '../types/turn';
 import type { JsonObject, JsonValue } from '../utils/json';
+import type { AgentToolAnswer, AgentTurnActivity } from '../subordinates/agent-isolate';
 import type { TurnOpening } from './chat-session';
 import type { TurnFacts } from './turn-facts';
 
@@ -66,3 +67,22 @@ export interface FrozenTurn {
 export type RemoteReceipt =
   | { readonly status: 'settled'; readonly output: JsonValue }
   | { readonly status: 'indeterminate' };
+
+export interface TurnToolCall {
+  readonly callId: string;
+  readonly name: string;
+  readonly input: JsonValue;
+  readonly activity: readonly AgentTurnActivity[];
+}
+
+/**
+ * An execution's calls to its workspace, bound to its {@link TurnCapability} (design v2 §3): the workspace refuses each
+ * once Stop, the execution's close or a later epoch of its key supersedes the capability. Receipts are read under its
+ * close and never execute anything.
+ */
+export interface TurnPort {
+  readonly capability: TurnCapability;
+  executeTool(call: TurnToolCall): Promise<AgentToolAnswer>;
+  /** The workspace's receipts for calls whose agent row is a pointer; a call with no receipt is absent. */
+  receipts(callIds: readonly string[]): Promise<ReadonlyMap<string, RemoteReceipt>>;
+}

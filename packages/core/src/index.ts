@@ -13,7 +13,7 @@ export { AgentOpenTurns, AgentOwedWork, type AgentOpenTurn } from './subordinate
 
 export { AgentReports, AgentSequence } from './subordinates/report-sequence';
 
-export { TurnFences, type OpenedAt } from './subordinates/turn-fence';
+export { TurnFences, type FencedRow, type OpenedAt } from './subordinates/turn-fence';
 
 export { TurnReports, type ReportedTurn } from './subordinates/turn-reports';
 
@@ -55,7 +55,7 @@ export {
 } from './orchestrator/turn-facts';
 
 export type {
-  CloseCapability, ExecutionKey, ExecutionLane, FrozenTurn, RemoteReceipt, TurnCapability,
+  CloseCapability, ExecutionKey, ExecutionLane, FrozenTurn, RemoteReceipt, TurnCapability, TurnPort, TurnToolCall,
 } from './orchestrator/execution';
 
 export { inTurnSurface, scopedTurnSurface, TurnSurface, type TurnSurfaceOpening } from './orchestrator/main-turn-surface';
@@ -948,7 +948,7 @@ export {
   describeLandedSteers, initPendingSendTables, PendingSendStore,
   type UserSteerDeps, type AcceptedSteer,
   type UserSteer, type SteerStatusEvent, type SteerStatusDetail,
-  type LandedSteerRow, type PendingSendRow,
+  type LandedSteerRow, type PendingSendRow, type InputProducer,
 } from './orchestrator/inbox';
 
 export { sendLanding, SendStateSchema, type SendRecord, type SendState } from './orchestrator/send-state';
@@ -1798,8 +1798,10 @@ export { ModelCatalogSession, resolveEffectiveModelSpec, type ModelCatalogRead }
 export { stampAuthorship, turnAuthorship, type TurnAuthorship } from './orchestrator/turn-authorship';
 
 export {
-  AgentDeliveries, DeliveryInbox, DeliverySchema, wordsRefusal, initAgentDeliveriesTable, pendingEventsDelivery, assignmentDelivery, deliveryMetadata, deliveredSignal, handBackCarried, InProcessDeliveries, type DeliveredAssignment, type DeliveryPort, type OwedAdmission, type Delivery, type DeliveryAnswer, type DeliveryInput, type TurnDeliveryInput,
+  AgentDeliveries, DeliveryInbox, DeliverySchema, wordsRefusal, initAgentDeliveriesTable, pendingEventsDelivery, assignmentDelivery, deliveryMetadata, deliveredSignal, handBackCarried, type OwedDelivery, type DeliveredAssignment, type DeliveryPort, type OwedAdmission, type Delivery, type DeliveryAnswer, type DeliveryInput, type TurnDeliveryInput,
 } from './subordinates/deliveries';
+
+export { DeliveryCoordinator, InProcessDeliveries, type CrossedDelivery, type DeliveryHost } from './subordinates/delivery-coordinator';
 
 export {
   serializeContentForHeads, narrowInheritedRole,

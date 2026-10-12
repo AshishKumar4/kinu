@@ -15,36 +15,9 @@ const USAGE: ScriptedTurnResult['usage'] = {
 };
 
 test('an ACTIVE turn absorbs the batch mid-turn — no new turn is enqueued', async () => {
-  const watching = Promise.withResolvers<void>();
-  const released = Promise.withResolvers<void>();
-  const prompts: string[] = [];
-
-  const model = scriptedTurnModel({ doGenerate: (options): ScriptedTurnResult => {
-    prompts.push(JSON.stringify(options.prompt));
-
-    return prompts.length === 1
-      ? { content: [{ type: 'tool-call', toolName: 'watch', toolCallId: 'call-watch', input: '{}' }], finishReason: { unified: 'tool-calls', raw: undefined }, usage: USAGE, warnings: [] }
-      : { content: [{ type: 'text', text: 'Deployed; the webhook is handled.' }], finishReason: { unified: 'stop', raw: undefined }, usage: USAGE, warnings: [] };
-  } });
-
-  const tools = {
-    watch: tool({
-      description: 'Watch the deploy', inputSchema: jsonSchema({ type: 'object' }),
-      execute: async () => {
-        watching.resolve();
-        await released.promise;
-
-        return { ok: true };
-      },
-    }),
-  };
-
-  const fixture = await sessionFixture({ model, tools });
+  const { fixture, sent, released, prompts } = await watchedTurn('Deployed; the webhook is handled.');
 
   try {
-    const sent = fixture.chat.send('Watch the deploy.', { id: 'q-1' });
-
-    await watching.promise;
     fixture.eventLog.publish({
       descriptor: {
         ingress: 'webhook_hmac', variant: 'webhook', auth_outcome: 'verified', webhook_id: 'w1',
@@ -54,10 +27,10 @@ test('an ACTIVE turn absorbs the batch mid-turn — no new turn is enqueued', as
     });
     const batch = present(pendingEventsDelivery(fixture.eventLog, Date.now()), 'the drained batch');
 
-    expect(await fixture.chat.admitDelivery(batch)).toBe('taken');
+    expect(await fixture.chat.admitDelivery({ ...batch, seq: 1 }, 'workspace')).toBe('taken');
     released.resolve();
     expect(await sent).toBe('turn');
-    expect(await fixture.chat.awaitSend('q-1')).toMatchObject({ status: 'settled' });
+    expect(await fixture.chat.awaitSend('owner-1')).toMatchObject({ status: 'settled' });
 
     // The live turn's next step read the batch, worded for a turn that is working.
     expect(prompts).toHaveLength(2);
@@ -68,5 +41,77 @@ test('an ACTIVE turn absorbs the batch mid-turn — no new turn is enqueued', as
     // The live turn's end answered the batch: its events stay bound to the batch's turn, their lease closed.
     expect(fixture.actor.runtime.storage.sql<{ consumed_at: number | null }>`
       SELECT consumed_at FROM agent_log WHERE turn_id = ${batch.id} AND kind = 'event'`).toEqual([{ consumed_at: null }]);
-  } finally { fixture.close(); }
+  } finally {
+    released.resolve();
+    fixture.close();
+  }
+});
+
+/** A turn the model asks to `watch`, whose tool holds until released: the window a delivery lands in mid-turn. */
+async function watchedTurn(answer = 'Done.') {
+  const watching = Promise.withResolvers<void>();
+  const released = Promise.withResolvers<void>();
+  const prompts: string[] = [];
+
+  const model = scriptedTurnModel({ doGenerate: (options): ScriptedTurnResult => {
+    prompts.push(JSON.stringify(options.prompt));
+
+    return prompts.length === 1
+      ? { content: [{ type: 'tool-call', toolName: 'watch', toolCallId: 'call-watch', input: '{}' }], finishReason: { unified: 'tool-calls', raw: undefined }, usage: USAGE, warnings: [] }
+      : { content: [{ type: 'text', text: answer }], finishReason: { unified: 'stop', raw: undefined }, usage: USAGE, warnings: [] };
+  } });
+
+  const watch = tool({
+    description: 'Watch', inputSchema: jsonSchema({ type: 'object' }),
+    execute: async () => {
+      watching.resolve();
+      await released.promise;
+
+      return { ok: true };
+    },
+  });
+
+  const fixture = await sessionFixture({ model, tools: { watch } });
+  const sent = fixture.chat.send('Watch.', { id: 'owner-1' });
+
+  await watching.promise;
+
+  return { fixture, sent, released, prompts };
+}
+
+const SIGNAL = { id: 'durable-signal-1', seq: 1, authorship: 'hirer' as const, input: { kind: 'turn' as const, text: 'MIDTURN_DELIVERY_MARKER' } };
+
+test('a delivery a running turn takes is taken once: its replay answers duplicate and the model reads it once', async () => {
+  const { fixture, sent, released, prompts } = await watchedTurn();
+
+  try {
+    expect(await fixture.chat.admitDelivery(SIGNAL, 'workspace')).toBe('taken');
+    // The workspace lost the answer and asks again: the facet already holds it.
+    expect(await fixture.chat.admitDelivery(SIGNAL, 'workspace')).toBe('duplicate');
+    released.resolve();
+    await sent;
+    await fixture.chat.awaitSend('owner-1');
+
+    expect(prompts.reduce((copies, prompt) => copies + (prompt.match(/MIDTURN_DELIVERY_MARKER/g)?.length ?? 0), 0)).toBe(1);
+  } finally {
+    released.resolve();
+    fixture.close();
+  }
+});
+
+test('Stop cancels a delivery the stopped turn took and had not read: nothing runs it after', async () => {
+  const { fixture, sent, released } = await watchedTurn();
+
+  try {
+    expect(await fixture.chat.admitDelivery(SIGNAL, 'workspace')).toBe('taken');
+    fixture.chat.interrupt();
+    released.resolve();
+    await sent;
+    await fixture.chat.awaitSend('owner-1');
+
+    expect(fixture.seats.enqueued.filter((turn) => turn.text.includes('MIDTURN_DELIVERY_MARKER'))).toEqual([]);
+  } finally {
+    released.resolve();
+    fixture.close();
+  }
 });

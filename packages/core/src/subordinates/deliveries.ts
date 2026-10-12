@@ -15,9 +15,8 @@ import type { BroadcastEvent } from '../types/backend-host';
 import { SIGNAL_ID_METADATA_KEY, type AgentInbox, type AgentSignal, type SendOutcome } from '../types/signals';
 import { MISSION_LABELS_METADATA_KEY } from '../mission-budget';
 import { nanoid } from '../utils/nanoid';
-import { Cause, Effect, Exit } from 'effect';
-import { serialQueue } from '@kinu.run/agent-utils';
-import { attemptInItsWords, CODE_IS_REFUSAL, diagnostics, hold, KinuError, settleSync, toKinuError, type ErrorCode } from '../obs/index';
+import { Effect } from 'effect';
+import { KinuError, settleSync, type ErrorCode } from '../obs/index';
 import { TierIdSchema } from '../types/profile';
 import { WorkModeSchema, type WorkMode } from '../types/turn';
 import type { TurnAuthorship } from '../orchestrator/turn-authorship';
@@ -49,13 +48,19 @@ export type TurnDeliveryInput = Extract<DeliveryInput, { readonly kind: 'turn' }
 const AuthorshipSchema = v.picklist(['owner', 'hirer']);
 
 /** One delivery as it crosses, parsed where it lands: its id is the agent's idempotency key for it, which the agent
- *  refuses as it would a person's message id, and its authorship decides its lane. */
-export const DeliverySchema = v.object({ id: v.string(), input: DeliveryInputSchema, authorship: AuthorshipSchema });
+ *  refuses as it would a person's message id, and its authorship decides its lane. `seq` is its producer's order, which a
+ *  Stop's cutoff is drawn at. */
+export const DeliverySchema = v.object({ id: v.string(), input: DeliveryInputSchema, authorship: AuthorshipSchema, seq: v.number() });
 
 export interface Delivery {
   readonly id: string;
   readonly input: DeliveryInput;
   readonly authorship: TurnAuthorship;
+}
+
+/** A delivery as its workspace holds it, owed: in the order its producer committed it. */
+export interface OwedDelivery extends Delivery {
+  readonly seq: number;
 }
 
 /**
@@ -96,7 +101,7 @@ export function wordsRefusal(delivery: Delivery): KinuError | null {
 /** What the agent answered: the input is in its own store now, or already was; or, an offer that yields to its owner's
  *  words, it met words that came first and is consumed unrun; or it refused it, as it is, with what it said. A refusal is
  *  an answer: the delivery is retired and its sender told. Only a crossing that does not reach the agent leaves it owed. */
-export type DeliveryAnswer = 'taken' | 'duplicate' | 'yielded' | { readonly refused: { readonly code: ErrorCode; readonly message: string } };
+export type DeliveryAnswer = 'taken' | 'duplicate' | 'yielded' | 'cancelled' | { readonly refused: { readonly code: ErrorCode; readonly message: string } };
 
 export function initAgentDeliveriesTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS agent_deliveries (
@@ -121,10 +126,11 @@ export class AgentDeliveries {
   }
 
   /** The agent's unpaid deliveries, in the order their producers committed them. */
-  unpaid(actorId: string): Delivery[] {
-    return this.sql<{ id: string; input_json: string; authorship: string }>`
-      SELECT id, input_json, authorship FROM agent_deliveries WHERE actor_id = ${actorId} ORDER BY seq ASC`
+  unpaid(actorId: string): OwedDelivery[] {
+    return this.sql<{ seq: number; id: string; input_json: string; authorship: string }>`
+      SELECT seq, id, input_json, authorship FROM agent_deliveries WHERE actor_id = ${actorId} ORDER BY seq ASC`
       .map((row) => ({
+        seq: row.seq,
         id: row.id,
         input: v.parse(DeliveryInputSchema, JSON.parse(row.input_json)),
         authorship: v.parse(AuthorshipSchema, row.authorship),
@@ -147,7 +153,7 @@ export class AgentDeliveries {
   }
 
   /** A Stop's or a retirement's cutoff: every delivery unpaid at that moment is cancelled, and answered as such. */
-  cancel(actorId: string): Delivery[] {
+  cancel(actorId: string): OwedDelivery[] {
     const cancelled = this.unpaid(actorId);
 
     void this.sql`DELETE FROM agent_deliveries WHERE actor_id = ${actorId}`;
@@ -263,136 +269,5 @@ export function handBackCarried(eventLog: EventLog, delivery: Delivery, answer: 
   for (const event of eventLog.query({ turn_id: drained.output })) {
     if (answer === 'yielded') eventLog.unbind(event.id);
     else eventLog.park(event.id);
-  }
-}
-
-/**
- * An agent's deliveries where its chat runs in this process (the CLI): committed with their producer's fact, then handed
- * to the chat once, in commit order. One a death left unpaid is handed again by {@link crossOwed} when the agent next
- * opens; its chat answers a repeat `duplicate`. A refusal, the chat's own or one that would recur, is an answer: retired.
- */
-export class InProcessDeliveries implements DeliveryPort {
-  readonly signals: AgentInbox;
-  private readonly lane = serialQueue();
-
-  constructor(private readonly deps: {
-    readonly actorId: string;
-    readonly sql: SqlExecutor;
-    readonly transaction: <A>(body: () => A) => A;
-    readonly eventLog: EventLog;
-    readonly admit: (delivery: Delivery) => Promise<DeliveryAnswer>;
-    readonly broadcast: (event: BroadcastEvent) => void;
-  }) {
-    this.signals = new DeliveryInbox({ deliver: (delivery) => this.deliver(delivery), broadcast: deps.broadcast });
-  }
-
-  readonly commit = async (bind: () => Delivery | null): Promise<void> => {
-    await this.owe(() => ({ value: undefined, delivery: bind() }));
-  };
-
-  /** The deliveries taken since it was last asked, by id: a pass that handed them over runs their turns before it ends,
-   *  outside the crossing (a crossing made from a turn's own close never waits on the turn queued behind it). */
-  takenSince(): readonly string[] {
-    return this.taken.splice(0);
-  }
-
-  private readonly taken: string[] = [];
-
-  /** What `admit` writes and the delivery it owes the agent, as one commit; then one crossing. */
-  async owe<A>(admit: () => OwedAdmission<A>): Promise<A> {
-    const { value, delivery } = this.committed(admit);
-
-    if (delivery !== null) await this.lane(() => this.cross(delivery));
-
-    return value;
-  }
-
-  /** What `admit` writes and the delivery it owes the agent, as one commit; the agent's next {@link crossOwed} crosses it. */
-  record<A>(admit: () => OwedAdmission<A>): A {
-    return this.committed(admit).value;
-  }
-
-  private committed<A>(admit: () => OwedAdmission<A>): OwedAdmission<A> {
-    return this.deps.transaction(() => {
-      const admitted = admit();
-
-      if (admitted.delivery !== null) new AgentDeliveries(this.deps.sql).add(this.deps.actorId, admitted.delivery);
-
-      return admitted;
-    });
-  }
-
-  /** The agent's answer; null while it is owed still, or once it was refused. */
-  private async deliver(delivery: Delivery): Promise<DeliveryAnswer | null> {
-    this.deps.transaction(() => new AgentDeliveries(this.deps.sql).add(this.deps.actorId, delivery));
-
-    return await this.lane(() => this.cross(delivery));
-  }
-
-  /** A Stop's cutoff (design v3 C): what the agent was owed and had not taken is cancelled, and the work it carried
-   *  parked; nothing of it crosses after. */
-  cancel(): readonly Delivery[] {
-    const cancelled = this.deps.transaction(() => new AgentDeliveries(this.deps.sql).cancel(this.deps.actorId));
-
-    for (const delivery of cancelled) handBackCarried(this.deps.eventLog, delivery, { refused: { code: 'cancelled', message: 'The agent was stopped before it took this.' } });
-
-    return cancelled;
-  }
-
-  /** What the agent was owed and a death kept from it, in commit order, up to a crossing that fails; answers what its chat
-   *  took in this sweep. */
-  async crossOwed(): Promise<readonly Delivery[]> {
-    return await this.lane(async () => {
-      const taken: Delivery[] = [];
-
-      for (const delivery of new AgentDeliveries(this.deps.sql).unpaid(this.deps.actorId)) {
-        const answer = await this.cross(delivery);
-
-        if (answer === 'taken') taken.push(delivery);
-        // A crossing that did not reach the agent stops the sweep: what is behind it waits for its next open.
-        else if (answer === null && this.owed(delivery)) break;
-      }
-
-      return taken;
-    });
-  }
-
-  private owed(delivery: Delivery): boolean {
-    return new AgentDeliveries(this.deps.sql).unpaid(this.deps.actorId).some((row) => row.id === delivery.id);
-  }
-
-  private async cross(delivery: Delivery): Promise<DeliveryAnswer | null> {
-    if (!this.owed(delivery)) return null;
-    const crossed = await hold(attemptInItsWords('unavailable', () => this.deps.admit(delivery)));
-    const deliveries = new AgentDeliveries(this.deps.sql);
-
-    if (Exit.isFailure(crossed)) {
-      const failure = toKinuError({ doing: 'handing the agent what it is owed', cause: Cause.squash(crossed.cause), otherwise: 'unavailable' });
-
-      // Refused where it would be on every crossing: an answer, as the agent's own; else owed still.
-      if (CODE_IS_REFUSAL[failure.code]) return this.refused(delivery, failure);
-      diagnostics.failure('agent.delivery_crossing_failed', failure, { actorId: this.deps.actorId, deliveryId: delivery.id });
-
-      return null;
-    }
-
-    const answer = crossed.value;
-
-    if (typeof answer === 'object') return this.refused(delivery, new KinuError(answer.refused.code, answer.refused.message));
-    deliveries.paid(this.deps.actorId, delivery.id);
-
-    if (answer === 'yielded') handBackCarried(this.deps.eventLog, delivery, answer);
-
-    if (answer === 'taken') this.taken.push(delivery.id);
-
-    return answer;
-  }
-
-  private refused(delivery: Delivery, failure: KinuError): null {
-    diagnostics.failure('agent.delivery_refused', failure, { actorId: this.deps.actorId, deliveryId: delivery.id });
-    new AgentDeliveries(this.deps.sql).paid(this.deps.actorId, delivery.id);
-    handBackCarried(this.deps.eventLog, delivery, { refused: { code: failure.code, message: failure.message } });
-
-    return null;
   }
 }

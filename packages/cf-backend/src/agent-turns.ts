@@ -3,7 +3,7 @@ import { asSchema, type ToolSet } from 'ai';
 import { hold, KinuError, logged, settle, settleSync } from '@kinu.run/core/obs';
 import { Effect, Exit } from 'effect';
 import {
-  AgentOpenTurns, TurnFences, decodeModelMessageValues, encodeModelMessageValues, materializeTurnSources, callableToolNames, buildHeadMessages, hasPlanPermission, scaffoldProviders, runWorkModeInvocation, toolDescription,
+  AgentOpenTurns, TurnFences, type FencedRow, decodeModelMessageValues, encodeModelMessageValues, materializeTurnSources, callableToolNames, buildHeadMessages, hasPlanPermission, scaffoldProviders, runWorkModeInvocation, toolDescription,
   BUILTIN_TOOL_NAMES, announcementOf, type TurnSurface,
   type ActorReference, type DynamicContext, type ModelPricing, type ResolvedTurnProfile, type TierId, type WorkMode,
   type HeadInput, type RunInference, type HeadReport, type SqlExecutor, type MissionBudgetPort, type MissionGovernor, type Executor, readMissionLabels,
@@ -14,10 +14,13 @@ import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, Agent
 
 export interface AgentTurnsDeps {
   readonly sql: SqlExecutor;
+  /** The agent's newest opening as the durable fence holds it. */
+  readonly fence: (actorId: string) => FencedRow | null;
   seams(): HostedActorSeams;
   reference(actorId: string): ActorReference;
   run(reference: ActorReference, task: AgentTurnTask): Promise<AgentTurnEnd>;
-  interrupt(reference: ActorReference, turnId: string | null): Promise<void>;
+  /** `cutoff`: the newest delivery its Stop cancelled, which the agent takes nothing at or below after. */
+  interrupt(reference: ActorReference, turnId: string | null, cutoff: number | null): Promise<void>;
   /** The agent's own chat answers for itself whether it holds a turn, running or queued; one at rest is not asked. */
   chatOwed(reference: ActorReference): Promise<boolean>;
   chatIdle(reference: ActorReference): Promise<void>;
@@ -113,7 +116,7 @@ export class AgentTurns {
   }
 
   private async interruptRun(reference: ActorReference, turnId: string): Promise<void> {
-    await hold(logged('agent.run_interrupt_failed', { doing: 'interrupting a run in its own isolate', otherwise: 'io' }, () => this.deps.interrupt(reference, turnId)));
+    await hold(logged('agent.run_interrupt_failed', { doing: 'interrupting a run in its own isolate', otherwise: 'io' }, () => this.deps.interrupt(reference, turnId, null)));
   }
 
   /** Each agent's newest opening the fence admitted this activation, by its place in the agent's sequence. */
@@ -145,10 +148,20 @@ export class AgentTurns {
   fenceHolds(actorId: string, turnId: string, call: TurnCall): boolean {
     // A stopped turn closes: only what would run more of it is refused.
     if (call === 'executes' && this.cuts.get(turnId)?.signal.aborted === true) return false;
-    const fenced = this.open.get(turnId)?.fenced;
+    const turn = this.open.get(turnId);
+
+    // Not open in this activation: closed here, or open before a reset of this workspace. Only the turn the durable fence
+    // still holds open is prepared again to run more; a run's loop died with the activation that ran it.
+    if (turn === undefined) {
+      if (call !== 'executes') return true;
+      const fence = this.deps.fence(actorId);
+
+      return fence !== null && fence.live && fence.turnId === turnId;
+    }
+
     const newest = this.newestOpening.get(actorId);
 
-    return fenced === undefined || newest === undefined || fenced.seq >= newest;
+    return turn.fenced === undefined || newest === undefined || turn.fenced.seq >= newest;
   }
 
   /** The turn is cut off: nothing bound to it runs from here, and what runs now ends. */
@@ -265,15 +278,15 @@ export class AgentTurns {
 
   /** The chat is asked whatever the view says: a workspace that reset since its turn began has no view of it. */
   /** Cuts the agent's turns off, its chat's and its run's: each call of theirs still running here ends with them. */
-  async interrupt(actorId: string): Promise<void> {
+  async interrupt(actorId: string, cutoff: number | null): Promise<void> {
     const reference = this.deps.reference(actorId);
     const run = this.runOf(actorId);
     const chat = this.chats.get(actorId);
 
     for (const turnId of [run, chat]) if (turnId !== null && turnId !== undefined) this.cancelled(turnId);
 
-    if (run !== null) await this.deps.interrupt(reference, run);
-    await this.deps.interrupt(reference, null);
+    if (run !== null) await this.deps.interrupt(reference, run, null);
+    await this.deps.interrupt(reference, null, cutoff);
   }
 
   currentTurn(actorId: string): string | null {
@@ -288,7 +301,7 @@ export class AgentTurns {
   async beforeRetirement(actorId: string, interrupt: boolean): Promise<void> {
     if (!await this.holdsTurn(actorId)) return;
 
-    if (interrupt) return await this.interrupt(actorId);
+    if (interrupt) return await this.interrupt(actorId, null);
 
     return settleSync(Effect.fail(new KinuError('denied', 'This actor holds a turn in flight; retire it once the turn settles.')));
   }

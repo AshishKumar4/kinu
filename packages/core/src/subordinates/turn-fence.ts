@@ -28,6 +28,11 @@ export interface FencedOpening {
   readonly seq: number;
 }
 
+/** The agent's newest opening, as the fence holds it. */
+export interface FencedRow extends FencedOpening {
+  readonly live: boolean;
+}
+
 /** The opening a write expects to find open: its place in the sequence, which names it alone. */
 export type OpenedAt = Pick<FencedOpening, 'seq'>;
 
@@ -36,14 +41,25 @@ export class TurnFences {
 
   /**
    * Admits an opening newer in the agent's sequence than every one admitted, and refuses, writing nothing, one that is
-   * not: an earlier turn's, an earlier run's of the same turn, or the same opening delivered again. The facts offered its
-   * run are kept while it is the same run (its recovery's), and go for any other (a later turn, or the turn's Retry).
+   * not: an earlier turn's, an earlier run's of the same turn, the same opening delivered again, or a run a Stop cancelled
+   * reopening in its recovery. Only new input or a Retry, each a new run, opens the agent again after a Stop. The facts
+   * offered its run are kept while it is the same run (its recovery's), and go for any other (a later turn, a Retry).
    */
   open(actorId: string, opening: FencedOpening): boolean {
     return this.sql<{ seq: number }>`INSERT INTO actor_turn_fence (actor_id, seq, turn_id, run_id) VALUES (${actorId}, ${opening.seq}, ${opening.turnId}, ${opening.runId})
       ON CONFLICT (actor_id) DO UPDATE SET seq = excluded.seq, turn_id = excluded.turn_id, run_id = excluded.run_id, ended_at = NULL, cancelled_at = NULL,
         facts_json = CASE WHEN actor_turn_fence.run_id = excluded.run_id THEN actor_turn_fence.facts_json END
-      WHERE excluded.seq > actor_turn_fence.seq RETURNING seq`.length > 0;
+      WHERE excluded.seq > actor_turn_fence.seq
+        AND NOT (actor_turn_fence.cancelled_at IS NOT NULL AND actor_turn_fence.run_id = excluded.run_id)
+      RETURNING seq`.length > 0;
+  }
+
+  /** The agent's newest opening, and whether it still runs: neither ended nor stopped. Null before its first. */
+  row(actorId: string): FencedRow | null {
+    const row = this.sql<{ seq: number; turn_id: string; run_id: string; live: number }>`
+      SELECT seq, turn_id, run_id, (ended_at IS NULL AND cancelled_at IS NULL) AS live FROM actor_turn_fence WHERE actor_id = ${actorId}`[0];
+
+    return row === undefined ? null : { seq: row.seq, turnId: row.turn_id, runId: row.run_id, live: row.live === 1 };
   }
 
   /** The agents with a run admitted here that has not ended, nor been stopped: after a reset of this workspace, each is

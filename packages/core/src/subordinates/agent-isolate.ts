@@ -6,6 +6,7 @@ import type { TrialTurn } from '../evolution/trial-rules';
 import type { TurnFacts } from '../orchestrator/turn-facts';
 import type { ContextFill } from '../read-models/context-fill';
 import type { InlineSteer } from '../read-models/transcript';
+import type { PlanStanding } from '../plans/review';
 import type { RunEvent } from '../events/types';
 import type { DynamicContext } from '../prompting/volatile-context';
 import type { HeadCapture } from '../heads/head-inference';
@@ -190,6 +191,9 @@ export interface AgentStanding {
   readonly latestRun: { readonly status: string | null; readonly userMessage: string | null } | null;
   /** Words sent into a running turn and not yet read by it. */
   readonly pendingSteers: readonly InlineSteer[];
+  readonly plans: PlanStanding;
+  /** Its questions to the owner, counted as they are asked and closed. */
+  readonly questions: number;
 }
 
 /** An agent's standing as it reports it with what it owes (design v2 §8): its context's raw measures, which the workspace

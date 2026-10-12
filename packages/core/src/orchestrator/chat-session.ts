@@ -6,7 +6,7 @@
 
 import { answeredSummary, resumeMetadata, type OwnerAnswer } from '../plans/owner-questions';
 import { OWNER_ANSWER_SIGNAL } from '../types/owner-questions';
-import { deliveredSignal, MessageIdSchema, type Delivery, type DeliveryAnswer, type DeliveryInput, type TurnDeliveryInput } from '../subordinates/deliveries';
+import { deliveredSignal, MessageIdSchema, type Delivery, type DeliveryAnswer, type DeliveryInput, type OwedDelivery, type TurnDeliveryInput } from '../subordinates/deliveries';
 import { stampAuthorship, turnAuthorship, type TurnAuthorship } from './turn-authorship';
 import type { TrialTurn } from '../evolution/trial-rules';
 import type { ModelMessage } from 'ai';
@@ -44,7 +44,7 @@ import { announcementOf, authoredTurnMetadata, PROGRAMMATIC_MESSAGE_ID_PREFIX } 
 import { CLEAR_NEEDS_IDLE, COMPACT_NEEDS_IDLE, REVERT_NEEDS_IDLE } from './actor-session';
 import type { ActorSession, ActorTurnLease, ActorExecutionInput } from './actor-session';
 import { CompletionGate, COMPLETION_GATE_EVENT } from './completion-gate';
-import { turnInputMessage, type LandedSteerRow, type PendingSendRow, type PendingSendStore, type UserSteer } from './inbox';
+import { turnInputMessage, type InputProducer, type LandedSteerRow, type PendingSendRow, type PendingSendStore, type UserSteer } from './inbox';
 import type { OwedEffect } from './terminal-effects';
 import type { TerminalTransition, TerminalTransitions } from './terminal-transition';
 import {
@@ -653,7 +653,7 @@ export class ChatSession {
    * workspace retires its row only once nothing of it can be lost. A repeat of its id is answered `duplicate`, whatever
    * became of the first; a closed session takes nothing, and the workspace delivers again at its next wake.
    */
-  async admitDelivery(delivery: Delivery): Promise<DeliveryAnswer> {
+  async admitDelivery(delivery: OwedDelivery, producer: InputProducer): Promise<DeliveryAnswer> {
     const { id, input } = delivery;
 
     if (this.ended) return settleSync(Effect.fail(new KinuError('unavailable', 'The agent is closing; the delivery is owed to its next start.')));
@@ -661,13 +661,19 @@ export class ChatSession {
 
     // Another process drives this agent: taken here, it would be refused at its turn and lost; owed, the next pass takes it.
     if (gate !== null) return settleSync(Effect.fail(new KinuError('unavailable', `This agent is driven elsewhere (${gate.reason}); the delivery is owed to its next pass.`)));
+    // Its producer crosses in order: one at or below a Stop's cutoff was cancelled there, one at or below what was taken
+    // was answered before, its answer lost on the way back.
+    const marked = this.pendingSends.markOf(producer, delivery.seq);
 
-    if (input.kind === 'words') return await this.admitDeliveredWords(id, input);
+    if (marked !== 'new') return marked;
 
     // A run is its host's to run beside the chat, never a turn of it.
     if (input.kind === 'run') return settleSync(Effect.fail(new KinuError('unsupported', 'A run is not a turn of the chat; its host runs it.')));
+    const answer = input.kind === 'words' ? await this.admitDeliveredWords(id, input) : await this.admitDeliveredTurn(id, input, delivery.authorship);
 
-    return await this.admitDeliveredTurn(id, input, delivery.authorship);
+    if (answer === 'taken') this.pendingSends.took(producer, delivery.seq);
+
+    return answer;
   }
 
   private async admitDeliveredWords(id: string, input: Extract<DeliveryInput, { kind: 'words' }>): Promise<DeliveryAnswer> {
@@ -690,8 +696,13 @@ export class ChatSession {
   private async admitDeliveredTurn(id: string, input: TurnDeliveryInput, authorship: Delivery['authorship']): Promise<DeliveryAnswer> {
     if (this.pendingSends.hasTurn(id) || this.announcementInFlight(id) || this.announcementOnDisk(id)) return 'duplicate';
 
-    // A turn running: what happened reaches it at its next step, as before it was a delivery.
-    if (input.opensTurn !== true && input.yieldsToUserMessage !== true && this.actorSession.orchestrator.inbox.landMidTurn(deliveredSignal(id, input))) return 'taken';
+    // A turn running: what happened reaches it at its next step, held here first, so an isolate that ends before that
+    // step, or a settle that hands it back, runs it as a turn of its own.
+    if (input.opensTurn !== true && input.yieldsToUserMessage !== true && this.actorSession.orchestrator.inbox.busy) {
+      this.pendingSends.reserveTurn({ id, text: input.text, metadata: stampAuthorship(input.metadata, authorship) });
+
+      if (this.actorSession.orchestrator.inbox.landMidTurn(deliveredSignal(id, input))) return 'taken';
+    }
 
     const queued = await this.queueTurn({
       text: input.text, idempotencyKey: id, authorship,
@@ -862,17 +873,32 @@ export class ChatSession {
   }
 
   /** Pending steers are dropped and returned so the surface can restore them. */
-  interrupt(): string[] {
+  /**
+   * Stop (design v3 C): queued programmatic turns and the delivered signals the running turn holds are cancelled, the
+   * person's unread words handed back, and the turn aborted. `cutoff` is the producer's: nothing it committed at or below
+   * it is taken after, even once new input wakes the agent again.
+   */
+  interrupt(cutoff?: { readonly producer: InputProducer; readonly seq: number }): string[] {
     this.abandonQuestions();
     this.cancelQueued();
-    const returned = this.actorSession.interrupt();
+    const { steers, cancelled } = this.actorSession.interrupt();
     // The returned words' reservation is spent, or a restart would re-deliver them.
-    const ids = returned.flatMap((steer) => steer.id === undefined ? [] : [steer.id]);
-    this.pendingSends.retire(ids);
+    const ids = steers.flatMap((steer) => steer.id === undefined ? [] : [steer.id]);
+
+    this.transaction(() => {
+      this.pendingSends.retire(ids);
+
+      // What the turn held of its deliveries is cancelled with it: no restart runs it either.
+      for (const id of cancelled) this.pendingSends.retireTurn(id);
+
+      if (cutoff !== undefined) this.pendingSends.cut(cutoff.producer, cutoff.seq);
+    });
     this.settleLandings(ids, new KinuError('cancelled', 'The turn was stopped before the agent read this message; it is back in the composer.'));
     this.wakeSendWaiters();
 
-    return returned.map((steer) => steer.text);
+    if (cancelled.length > 0) diagnostics.event('turn.delivered_signals_cancelled', { count: cancelled.length });
+
+    return steers.map((steer) => steer.text);
   }
 
   /** A Stop's cutoff on what waits behind the turn: each queued programmatic turn is cancelled unrun and its producer
@@ -1737,6 +1763,9 @@ export class ChatSession {
           ...(item.pendingSendId === undefined ? [] : [item.pendingSendId]),
           ...(item.steerIds ?? []),
         ]);
+
+        // The deliveries its steps read are answered by this commit: no restart runs them as turns of their own.
+        for (const id of this.actorSession.orchestrator.inbox.absorbedDeliveries) this.pendingSends.retireTurn(id);
 
         this.ports.terminal().record(transition, owed);
       });

@@ -35,6 +35,12 @@ function planReviewRowBytes(): number {
   return PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value;
 }
 
+/** Whether a plan waits on the owner, and the agent's plans' write count: a revision a reader elsewhere compares. */
+export interface PlanStanding {
+  readonly pending: boolean;
+  readonly revision: number;
+}
+
 const PlanReviewStatusSchema = v.picklist([
   'pending', 'changes_requested', 'approved', 'superseded', 'dismissed',
 ]);
@@ -146,6 +152,8 @@ export function initPlanReviewTable(execRaw: RawSqlExec): void {
     handoff_attempt  INTEGER NOT NULL DEFAULT 0 CHECK (handoff_attempt >= 0),
     created_at       INTEGER NOT NULL,
     updated_at       INTEGER NOT NULL,
+    -- Every write to the row adds one: an agent's plans, summed, name each change a reader that is not here must see.
+    writes           INTEGER NOT NULL DEFAULT 1,
     PRIMARY KEY (actor_id, id, revision)
   )`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_plan_reviews_session_current
@@ -473,6 +481,17 @@ export class PlanReviewStore {
     return { ok: true, plan };
   }
 
+  /** Whether a plan waits on the owner, and how many writes the agent's plans have taken: what its standing reports. */
+  standing(): PlanStanding {
+    this.actor.assertCurrent();
+
+    const row = this.sql<{ pending: number; revision: number }>`
+      SELECT COALESCE(MAX(status = 'pending'), 0) AS pending, COALESCE(SUM(writes), 0) AS revision FROM plan_reviews
+      WHERE actor_id = ${this.actorId}`[0];
+
+    return { pending: row?.pending === 1, revision: row?.revision ?? 0 };
+  }
+
   /** Includes an approved revision so a reload keeps rendering the accepted plan. */
   getActive(sessionId: string): PlanReview | null {
     this.actor.assertCurrent();
@@ -529,7 +548,7 @@ export class PlanReviewStore {
       markStoreChanged(this.sql);
 
       if (revising) {
-        void this.sql`UPDATE plan_reviews SET status='superseded', updated_at=${now}
+        void this.sql`UPDATE plan_reviews SET writes=writes+1, status='superseded', updated_at=${now}
         WHERE actor_id=${this.actorId} AND id=${revising.id} AND revision=${revising.revision}
           AND status IN ('changes_requested', 'pending')`;
       }
@@ -574,7 +593,7 @@ export class PlanReviewStore {
     const encoded = JSON.stringify(merged);
 
     const now = this.now();
-    void this.sql`UPDATE plan_reviews SET annotations_json=${encoded}, updated_at=${now}
+    void this.sql`UPDATE plan_reviews SET writes=writes+1, annotations_json=${encoded}, updated_at=${now}
       WHERE actor_id=${this.actorId} AND id=${id} AND revision=${revision} AND status='pending'`;
     markStoreChanged(this.sql);
 
@@ -621,7 +640,7 @@ export class PlanReviewStore {
     const status: PlanReviewStatus = decision === 'approve' ? 'approved' : 'changes_requested';
     const now = this.now();
     void this.sql`UPDATE plan_reviews
-      SET status=${status}, feedback=${normalizedFeedback}, updated_at=${now}
+      SET writes=writes+1, status=${status}, feedback=${normalizedFeedback}, updated_at=${now}
       WHERE actor_id=${this.actorId} AND id=${id} AND revision=${revision} AND status='pending'`;
     markStoreChanged(this.sql);
 
@@ -650,7 +669,7 @@ export class PlanReviewStore {
     if (tooBig !== null) return { ok: false, error: `the review holds no more replies: ${tooBig}`, plan: current };
     const encoded = JSON.stringify(notes);
 
-    void this.sql`UPDATE plan_reviews SET annotations_json=${encoded}, updated_at=${reply.createdA}
+    void this.sql`UPDATE plan_reviews SET writes=writes+1, annotations_json=${encoded}, updated_at=${reply.createdA}
       WHERE actor_id=${this.actorId} AND id=${current.id} AND revision=${current.revision} AND status='changes_requested'`;
     markStoreChanged(this.sql);
 
@@ -671,7 +690,7 @@ export class PlanReviewStore {
 
     if (!planReviewAwaitingDecision(current)) return { ok: false, error: `plan revision is already ${current.status}`, plan: current };
     const now = this.now();
-    void this.sql`UPDATE plan_reviews SET status='dismissed', updated_at=${now}
+    void this.sql`UPDATE plan_reviews SET writes=writes+1, status='dismissed', updated_at=${now}
       WHERE actor_id=${this.actorId} AND id=${id} AND revision=${revision} AND status=${current.status}`;
     markStoreChanged(this.sql);
 
@@ -695,7 +714,7 @@ export class PlanReviewStore {
 
     if (!current.handoffAccepted) {
       const now = this.now();
-      void this.sql`UPDATE plan_reviews SET handoff_accepted=1, updated_at=${now}
+      void this.sql`UPDATE plan_reviews SET writes=writes+1, handoff_accepted=1, updated_at=${now}
         WHERE actor_id=${this.actorId} AND id=${id} AND revision=${revision} AND handoff_accepted=0`;
       markStoreChanged(this.sql);
     }
@@ -717,7 +736,7 @@ export class PlanReviewStore {
       const attempt = rows[0]?.handoff_attempt ?? 0;
 
       if (attempt > 0) return attempt;
-      void this.sql`UPDATE plan_reviews SET handoff_attempt=1
+      void this.sql`UPDATE plan_reviews SET writes=writes+1, handoff_attempt=1
         WHERE actor_id=${this.actorId} AND id=${id} AND revision=${revision} AND handoff_attempt=0`;
       markStoreChanged(this.sql);
 

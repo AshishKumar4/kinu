@@ -14,9 +14,9 @@ import {
   type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HeadReport, type HostedActor,
   type Executor, type JsonObject, type NimbusSandboxHandle, type SqlValue, WORKSPACE_ROOT, cloudPlanes, answersForDrainTurns,
   initPendingSendTables, initTerminalEffectTable, PendingSendStore, contextFill, announcementOf, classifyRunEnd, closeTurnRun, TurnReports,
-  PlanReviewStore, AgentSequence, TurnFactsStore, type PlanReview, type TurnFacts,
+  PlanReviewStore, OwnerQuestionStore, AgentSequence, TurnFactsStore, type PlanReview, type TurnFacts,
   forkArtifactPath, localForkConversationSource, localForkConversationTarget, type ForkConversationSource, type ForkConversationTarget,
-  InProcessDeliveries, type Delivery, type DeliveryAnswer, holdConfig, holdRunHeads,
+  InProcessDeliveries, type DeliveryAnswer, type OwedDelivery, holdConfig, holdRunHeads,
   writesSnapshotRows, HeldReads, type SqlExec,
 } from '@kinu.run/core';
 import { attempt, detach, diagnostics, hold, KinuError, logged, settle, settleSync } from '@kinu.run/core/obs';
@@ -149,6 +149,12 @@ export class AgentDatabase {
   /** Its message count, held: SessionTranscript's record and truncate, and a fork's reset and staging, run over `sql`. */
   private readonly heldMessageCount = this.held.hold(['conversation_entries'], () => this.readable().transcript.count());
 
+  /** Its plans and questions as its standing tells them, held: PlanReviewStore's and OwnerQuestionStore's writes run
+   *  over `sql`, and a fork's import of questions too. */
+  private readonly heldPlans = this.held.hold(['plan_reviews'], () => new PlanReviewStore(this.sql, this.readable().actor).standing());
+
+  private readonly heldQuestions = this.held.hold(['owner_questions'], () => new OwnerQuestionStore(this.sql, this.readable().actor).revision());
+
   /** Its steers, held: PendingSendStore's reserve and retire run over `sql`. */
   private readonly steers = this.held.hold(['pending_steers'], () => new PendingSendStore(this.sql, this.readable().actor.actorId).restore()
     // A steer is a row bound to a turn; an unbound row is the chat's own send, already shown as a message.
@@ -163,7 +169,7 @@ export class AgentDatabase {
       readonly state: () => NimbusSandboxHandle;
       readonly enqueueTurn: BackendHost['enqueueTurn'];
       /** A delivery of this isolate's own (a signal it raised, its events' drain), handed to its chat (design v2 §1). */
-      readonly admitDelivery: (delivery: Delivery) => Promise<DeliveryAnswer>;
+      readonly admitDelivery: (delivery: OwedDelivery) => Promise<DeliveryAnswer>;
       readonly broadcast: BackendHost['broadcast'];
       readonly turnInFlight: () => boolean;
       readonly program: AgentWorkspace['program'];
@@ -480,6 +486,8 @@ export class AgentDatabase {
       measures: eventRecorder.readContextMeasures(),
       latestRun: eventRecorder.latestRunHeader(),
       pendingSteers: this.steers(),
+      plans: this.heldPlans(),
+      questions: this.heldQuestions(),
     };
   }
 

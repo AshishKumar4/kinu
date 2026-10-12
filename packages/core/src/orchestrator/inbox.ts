@@ -130,6 +130,15 @@ export function initPendingSendTables(execRaw: RawSqlExec): void {
     media_type TEXT NOT NULL,
     url        TEXT NOT NULL
   )`);
+  // Per producer, the newest delivery it took and the newest a Stop cut off (design v3 C): deliveries cross in their
+  // producer's order, so one at or below either mark was answered before, or was cancelled.
+  execRaw(`CREATE TABLE IF NOT EXISTS input_marks (
+    actor_id      TEXT NOT NULL,
+    producer      TEXT NOT NULL CHECK (producer IN ('workspace','self')),
+    taken_through INTEGER NOT NULL DEFAULT 0,
+    cutoff        INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (actor_id, producer)
+  )`);
   // A programmatic turn its producer heard queued, held until its turn settles: `id` is its idempotency key.
   execRaw(`CREATE TABLE IF NOT EXISTS queued_turns (
     seq           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -237,6 +246,30 @@ export class PendingSendStore {
     void this.sql`DELETE FROM queued_turns WHERE actor_id = ${this.actorId} AND id = ${id}`;
   }
 
+  /** Where a delivery stands against its producer's marks: cut off by a Stop, answered before, or new. */
+  markOf(producer: InputProducer, seq: number): 'cancelled' | 'duplicate' | 'new' {
+    const marks = this.sql<{ taken_through: number; cutoff: number }>`
+      SELECT taken_through, cutoff FROM input_marks WHERE actor_id = ${this.actorId} AND producer = ${producer}`[0];
+
+    if (marks === undefined) return 'new';
+
+    if (seq <= marks.cutoff) return 'cancelled';
+
+    return seq <= marks.taken_through ? 'duplicate' : 'new';
+  }
+
+  /** The delivery `seq` is held in this store now. */
+  took(producer: InputProducer, seq: number): void {
+    void this.sql`INSERT INTO input_marks (actor_id, producer, taken_through) VALUES (${this.actorId}, ${producer}, ${seq})
+      ON CONFLICT (actor_id, producer) DO UPDATE SET taken_through = MAX(taken_through, excluded.taken_through)`;
+  }
+
+  /** A Stop's cutoff: nothing its producer committed at or below `seq` is taken after. */
+  cut(producer: InputProducer, seq: number): void {
+    void this.sql`INSERT INTO input_marks (actor_id, producer, cutoff) VALUES (${this.actorId}, ${producer}, ${seq})
+      ON CONFLICT (actor_id, producer) DO UPDATE SET cutoff = MAX(cutoff, excluded.cutoff)`;
+  }
+
   /** Every held programmatic turn, in the order its producers heard them queued. */
   restoreTurns(): QueuedTurnRow[] {
     return this.sql<{ id: string; text: string; metadata_json: string | null; yields: number }>`
@@ -248,6 +281,15 @@ export class PendingSendStore {
       }));
   }
 }
+
+/** What a Stop takes from the running turn: the steers back to their composer, the delivered signals' ids cancelled. */
+export interface InterruptedInputs {
+  readonly steers: UserSteer[];
+  readonly cancelled: string[];
+}
+
+/** Where a delivery came from, whose order its marks follow: the agent's workspace, or its own process's producers. */
+export type InputProducer = 'workspace' | 'self';
 
 /** A programmatic turn its producer heard queued, as a later process restores it. */
 export interface QueuedTurnRow {
@@ -486,10 +528,16 @@ export class Inbox {
     return { absorbed: absorbedEvents };
   }
 
-  /** Return user signals the model never saw to the composer. Events stay pending and still owe their turn. */
-  interrupt(): UserSteer[] {
+  /**
+   * A Stop's cutoff on the running turn (design v3 C): user signals the model never saw go back to the composer, and
+   * every delivered signal it holds, read or not, is cancelled with the turn rather than re-delivered at its settle.
+   * Answers both: the steers, and the cancelled signals' delivery ids.
+   */
+  interrupt(): InterruptedInputs {
     const returned = this.pending.filter(isUserSignal);
-    this.pending = this.pending.filter((signal) => !isUserSignal(signal));
+    const cancelled = [...this.pending, ...this.absorbed].filter((signal) => !isUserSignal(signal));
+    this.pending = [];
+    this.absorbed = this.absorbed.filter(isUserSignal);
 
     for (const signal of returned) {
       this.host.broadcast({
@@ -497,7 +545,12 @@ export class Inbox {
       });
     }
 
-    return returned.map(toUserSteer);
+    return { steers: returned.map(toUserSteer), cancelled: cancelled.flatMap((signal) => (signal.idempotencyKey === undefined ? [] : [signal.idempotencyKey])) };
+  }
+
+  /** The delivery ids of the signals this turn's steps read: answered by its completed commit. */
+  get absorbedDeliveries(): readonly string[] {
+    return this.absorbed.flatMap((signal) => (isUserSignal(signal) || signal.idempotencyKey === undefined ? [] : [signal.idempotencyKey]));
   }
 
   /** Replace the user queue from its durable authority, ahead of pending events. Called once, as the session

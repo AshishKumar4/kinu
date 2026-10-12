@@ -11,7 +11,7 @@ import {
   type AgentOwnInspection, type AnsweredEvolutionHelper, type JsonValue, type ArchiveAgentPage, type ArchiveSqlCursor, type ChatHistoryPage,
   type NimbusSandboxHandle, type PositionPageRequest, type ProviderEnv, type SerializedMessage, type SubordinateInspectionResult,
   servedContextTree, type ContextEditor, type ContextTreeRemote, type SpendLedger, type StepSpendSource, type TurnRequestIndex, type TurnRequestPage, type ConversationSearchHit, type ConversationScrollResult, type ConversationSummary,
-  type SendState, DeliverySchema, WorkModeSchema, ActorOriginSchema, holdsChat, type Delivery, type DeliveryAnswer,
+  type SendState, DeliverySchema, WorkModeSchema, ActorOriginSchema, holdsChat, type Delivery, type DeliveryAnswer, type InputProducer, type OwedDelivery,
 } from '@kinu.run/core';
 import * as v from 'valibot';
 import { StepPacer } from './step-pacer';
@@ -89,7 +89,8 @@ export interface AgentFacetCalls {
   retry(snapshot: AgentSnapshot, claim: (turnId: string) => void): Promise<SendLanding>;
   sendState(snapshot: AgentSnapshot, id: string): Promise<SendState>;
   awaitSend(snapshot: AgentSnapshot, id: string): Promise<SendState>;
-  interruptChat(snapshot: AgentSnapshot): Promise<readonly string[]>;
+  /** `cutoff`: the newest workspace delivery the Stop cancelled; none at or below it is taken after. */
+  interruptChat(snapshot: AgentSnapshot, cutoff: number | null): Promise<readonly string[]>;
   /** The owner's Stop: unseen steers stay queued and rerun. */
   /** What a reset left owed is taken up; the agent tells its workspace what is left once it rests. */
   wake(snapshot: AgentSnapshot): Promise<void>;
@@ -239,7 +240,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     this.database ??= new AgentDatabase(this.ctx.storage, {
       agent: () => this.workspace(), home: this.env.HOME, state: () => this.state(),
       enqueueTurn: (input) => this.enqueue(snapshot, input),
-      admitDelivery: (delivery) => this.admit(snapshot, delivery),
+      admitDelivery: (delivery) => this.admit(snapshot, delivery, 'self'),
       // A steer's fate rides its chat's events, in order with the turns it names.
       broadcast: (event) => { this.held?.session.emit({ type: 'broadcast', event }); },
       turnInFlight: () => this.held?.session.turnInFlight() ?? false,
@@ -284,9 +285,9 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return await settle(this.withChat(snapshot, (chat) => chat.session.enqueueTurn(turn)));
   }
 
-  /** A delivery from the workspace (design v2 §1): in this isolate's store before it is answered, which retires the
-   *  workspace's row; a repeat is answered `duplicate`. */
-  async admit(snapshot: AgentSnapshot, delivery: Delivery): Promise<DeliveryAnswer> {
+  /** A delivery from the workspace (design v2 §1), or from a producer in this isolate (`self`): in this isolate's store
+   *  before it is answered, which retires its producer's row; a repeat is answered `duplicate`. */
+  async admit(snapshot: AgentSnapshot, delivery: OwedDelivery, producer: InputProducer = 'workspace'): Promise<DeliveryAnswer> {
     const parsed = v.parse(DeliverySchema, delivery);
 
     // A run is this isolate's to run beside its chat, never a turn of it.
@@ -295,7 +296,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return await settle(Effect.flatMap(this.withChat(snapshot, (chat) => chat), (chat) => (chat.session.closing
       // Closing: owed to its next start, so the crossing fails and the workspace's wake crosses it again.
       ? Effect.fail(new KinuError('unavailable', 'The agent is closing; the delivery is owed to its next start.'))
-      : attemptInItsWords('io', () => chat.session.admitDelivery(v.parse(DeliverySchema, delivery))).pipe(
+      : attemptInItsWords('io', () => chat.session.admitDelivery(parsed, producer)).pipe(
         // Its own refusal is its answer, not a lost crossing: told with its whole cause chain.
         Effect.catch((refusal) => Effect.succeed<DeliveryAnswer>({ refused: { code: refusal.code, message: renderThrownChain({ cause: refusal }) } })),
         Effect.tap(() => Effect.promise(() => chat.taken())),
@@ -319,18 +320,26 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return await settle(this.withChat(snapshot, (chat) => chat.session.awaitSend(id)));
   }
 
-  async interruptChat(snapshot: AgentSnapshot): Promise<readonly string[]> {
-    return await settle(this.withChat(snapshot, (chat) => chat.session.interrupt()));
+  async interruptChat(snapshot: AgentSnapshot, cutoff: number | null): Promise<readonly string[]> {
+    return await settle(this.withChat(snapshot, (chat) => chat.session.interrupt(cutoff === null ? undefined : { producer: 'workspace', seq: cutoff })));
   }
 
   async wake(snapshot: AgentSnapshot): Promise<void> {
     // A run a death cut off runs again: its workspace's caller still awaits its end.
     for (const owed of this.runs().unended()) this.startRun(snapshot, owed.id, owed.task);
 
-    // A run's agent holds no chat to wake.
-    if (!holdsChat(v.parse(AgentOriginSchema, snapshot.lineage.at(-1)).origin)) return;
+    // A run's agent holds no chat to wake: with no run owed, it rests, which ends the wake that woke it.
+    if (!holdsChat(v.parse(AgentOriginSchema, snapshot.lineage.at(-1)).origin)) return await this.restIfNoRun(snapshot);
 
     return await settle(this.withChat(snapshot, (chat) => chat.wake()));
+  }
+
+  /** A run's agent with no run owed tells its workspace it rests; one still running tells nothing, as its run's end will. */
+  private async restIfNoRun(snapshot: AgentSnapshot): Promise<void> {
+    if (this.runs().unended().length > 0) return;
+    const database = this.open(snapshot);
+
+    await this.workspaceCalls.owes(database.nextInSequence(), null, false, database.standingReport());
   }
 
   private runTable: FacetRuns | null = null;
@@ -365,6 +374,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
       yield* attempt({ doing: "reporting a delivered run's end to its workspace", otherwise: 'unavailable' }, () => this.workspaceCalls.runEnded(id, outcome));
       this.runs().ended(id);
+      yield* attempt({ doing: 'telling the workspace a run agent rests', otherwise: 'unavailable' }, () => this.restIfNoRun(snapshot));
     }).pipe(Effect.catch((failure) => Effect.sync(() => {
       // Unreported: the next wake runs it again, and its caller hears that end.
       diagnostics.failure('agent.run_report_failed', failure, { runId: id });

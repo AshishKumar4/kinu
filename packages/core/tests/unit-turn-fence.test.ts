@@ -103,4 +103,13 @@ describe('TurnFences', () => {
 
     expect(fences().ended(actor, { runId: 'r1' })).toBe('unfenced');
   });
+
+  test('Stop holds across a recovery of the stopped run: only new input or a Retry opens the agent again', () => {
+    const { actor, fences } = fenced();
+
+    fences().open(actor, { turnId: 'stopped-turn', runId: 'stopped-run', seq: 1 });
+    fences().cancel(actor, Date.now());
+    expect(fences().open(actor, { turnId: 'stopped-turn', runId: 'stopped-run', seq: 2 })).toBe(false);
+    expect(fences().open(actor, { turnId: 'stopped-turn', runId: 'stopped-run-retry', seq: 3 })).toBe(true);
+  });
 });
