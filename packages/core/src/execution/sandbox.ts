@@ -7,7 +7,7 @@ import type { ExecutorProvider, ExecutorCapability, ExecutorStatus, PortExposure
 import { commandTool, ExecutorPortSchema } from './types';
 import { shellCall } from './command-call';
 import { callJob, createShellSession, machineShellCall, machineShellCwd, reportsCwd, shellExecOptions, type MachineShells } from './shell-session';
-import { namedShellState, pinnedShellMoved } from '../safety/approval-gate';
+import { namedShellState, pinnedRunRefused } from '../safety/approval-gate';
 import type { OutputSink } from '../types/primitives';
 import { JOB_STAMP_ENV } from '../types/jobs';
 import { commandResult, commandResultAt, exposedPortText, type CommandResult } from './exec-result';
@@ -359,7 +359,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
             // No work deadline: see SandboxHandle.exec. The signal goes to the container; locally it only refuses to
             // dispatch. One call: the handle owns any re-call after a lost reply, under the call's one launch id.
             return await names.hold(name, callJob(exec), async () => {
-              const moved = pinned === undefined ? null : await pinnedShellMoved(pinned, name ?? '', state);
+              const moved = pinned === undefined ? null : await pinnedRunRefused(pinned, name ?? '', state, signal);
 
               if (moved !== null) return refusalOf(moved);
 

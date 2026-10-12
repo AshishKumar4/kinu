@@ -15,6 +15,11 @@ import {
  * Where and how a command runs on its executor, besides its words: part of what an approval answers, so the same words
  * anywhere else are another ask. Each field is one the running member honours; a value that may be secret is a digest.
  * Compared as {@link executionContextKey}, never as its display.
+ *
+ * A label Kinu assigns to the run, such as the job id the sandbox stamps into a background run's environment as
+ * `KINU_JOB_ID`, is not part of it: the owner answers for the command and where it runs, not for Kinu's bookkeeping,
+ * and the label is fresh on every call, so an ask re-made after its approval could never meet it. Two background runs
+ * alike in every field here are one action, and one answer runs one of them.
  */
 export interface ExecutionContext {
   /** The member that runs it (`exec`, `startProcess`, `runCode`): a foreground command, a supervised process that
@@ -35,7 +40,7 @@ export interface ExecutionContext {
   readonly install?: string;
   /** The work limit the runtime enforces on it, in milliseconds: a run cut short is another invocation. */
   readonly timeoutMs?: number;
-  /** It runs as a background job (stamped with the job, whose id is Kinu's own label for it, not part of the ask). */
+  /** It runs as a background job: it may outlive the turn. The job's id is a Kinu label, outside the ask (see above). */
   readonly background?: true;
   /** What its named shell restores before it (directory and exported variables), as a digest: a call in that shell
    *  after the shell moved is another ask. */
@@ -147,15 +152,21 @@ export function namedShellState(read: () => Promise<string | null>, shell: strin
 }
 
 /**
- * Why a call pinned to its named shell's state must not run now: the shell, read again just before, no longer restores
- * exactly that, or cannot be read. Null: run it. Called only for a pinned run (one an answer was asked for), inside the
- * shell's hold, so nothing of this agent moves the shell between this read and the run; the refusal refunds a spent
- * approval. An unpinned run awaits nothing here, so its dispatch keeps its timing.
+ * Why a call pinned to its named shell's state must not be dispatched now: the shell, read again just before, no longer
+ * restores exactly that, or cannot be read, or the call's cancel fired while it waited for the shell. Null: run it.
+ * Called only for a pinned run (one an answer was asked for), inside the shell's hold and as the member's last step
+ * before it dispatches, so nothing of this agent moves the shell between this read and the run; each refusal is a
+ * did-not-start code, so the spent approval returns. An unpinned run awaits nothing here, so its dispatch keeps its
+ * timing.
  */
-export async function pinnedShellMoved(
-  pinned: string, shell: string, read: (() => Promise<string | KinuError>) | undefined,
+export async function pinnedRunRefused(
+  pinned: string, shell: string, read: (() => Promise<string | KinuError>) | undefined, signal: AbortSignal | undefined,
 ): Promise<KinuError | null> {
   const now = read === undefined ? shellMoved(shell, 'could not be read') : await read();
+
+  if (signal?.aborted === true) {
+    return new KinuError('unavailable', `NOT RUN: cancelled while it waited for shell ${JSON.stringify(shell)}; nothing was dispatched, and the approval stands for the next ask.`);
+  }
 
   if (now instanceof KinuError) return now;
 

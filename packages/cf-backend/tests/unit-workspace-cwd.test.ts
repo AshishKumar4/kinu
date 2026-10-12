@@ -327,6 +327,15 @@ describe('an approval in a hosted named session', () => {
     expect(await workspace.fs.exists('/home/main/a')).toBe(true);
   });
 
+  test('covers a variable named as the read\'s own helpers: their values are the session\'s, not the read\'s', async () => {
+    for (const helper of ['__n', '__v']) {
+      const { again, workspace } = await approveAcrossAChange(`export ${helper}=a`, `${FORCE_PUSH}; rm -r "$${helper}"`, `export ${helper}=b`);
+
+      expect(again.exitCode).not.toBe(0);
+      expect(await workspace.fs.exists('/home/main/b')).toBe(true);
+    }
+  });
+
   test('a value holding a newline is not another variable: two sessions that list alike are two states', async () => {
     const { again, workspace } = await approveAcrossAChange('export A="x\nB=y"', `${FORCE_PUSH}; rm -r b`, 'export A=x; export B=y');
 

@@ -688,10 +688,11 @@ function runOnBox(box: NimbusSandboxHandle, call: SessionCall, options: ShellExe
 /**
  * A Nimbus session's state as one unambiguous text, digested in the session: its directory, then each variable `env`
  * names as `name set|unset length value`, so no value can pass for another variable. Nimbus answers `export -p` with
- * nothing, and its `env` lists the per-command pid (`$=`), which no name matches. A subshell keeps the read's own
- * variables out of the session.
+ * nothing, and its `env` lists the per-command pid (`$=`), which no name matches. The read's own variables, `__n` and
+ * `__v`, are written first, before it assigns them, and left out of the loop; a subshell keeps them out of the session.
  */
-const SESSION_STATE = '( pwd; for __n in $(env | sed -n \'s/^\\([A-Za-z_][A-Za-z0-9_]*\\)=.*/\\1/p\' | sort -u); do '
+const SESSION_STATE = '( pwd; printf \'__n %s %s %s\\n__v %s %s %s\\n\' "${__n+set}" "${#__n}" "$__n" "${__v+set}" "${#__v}" "$__v"; '
+  + 'for __n in $(env | sed -n -e \'/^__[nv]=/d\' -e \'s/^\\([A-Za-z_][A-Za-z0-9_]*\\)=.*/\\1/p\' | sort -u); do '
   + '__v="${!__n}"; printf \'%s %s %s %s\\n\' "$__n" "${!__n+set}" "${#__v}" "$__v"; done ) | sha256sum';
 
 /**

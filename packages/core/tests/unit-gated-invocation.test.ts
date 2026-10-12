@@ -446,6 +446,36 @@ describe('a named shell is part of the ask as it was when asked', () => {
     expect(JSON.stringify(again)).toContain('NOT RUN');
   });
 
+  test('the sandbox: a run cancelled while it waited on its shell was not dispatched, and its approval runs the next ask', async () => {
+    const home = scratchHome();
+    const { policy, queue } = unattended();
+    const machine = scratchMachine(home);
+    const cancel = new AbortController();
+    const reads = { count: 0, cancelAt: Number.POSITIVE_INFINITY };
+
+    const router = new DefaultExecutionRouter(policy);
+
+    router.register(createSandboxExecutor(sandboxOver(async (command) => {
+      // A state read names the file as its first argument; a named call's wrapper names it as its second.
+      if (command.includes('/$1.bash') && (reads.count += 1) === reads.cancelAt) cancel.abort();
+
+      return await machine.exec(command);
+    }), { shells: SHELLS }));
+
+    const exec = present(router.getProvider('sandbox'), 'the sandbox').tools.exec;
+
+    await exec.execute(`${DOOMING} doomed`, { name: 'dev' });
+    await queue.decide(queue.list().map((row) => row.id), 'approved');
+
+    // The re-issue's own read pins the approved state; the caller gives up during the next, inside the shell's hold.
+    reads.cancelAt = reads.count + 2;
+    expect(JSON.stringify(await exec.execute(`${DOOMING} doomed`, { name: 'dev', signal: cancel.signal }))).toContain('NOT RUN');
+    expect(existsSync(join(home, 'doomed'))).toBe(true);
+
+    await exec.execute(`${DOOMING} doomed`, { name: 'dev' });
+    expect({ doomed: existsSync(join(home, 'doomed')), parked: queue.list() }).toEqual({ doomed: false, parked: [] });
+  });
+
   /**
    * One device whose machine is a scratch home, counting how often a named shell's state is read on it; reads past
    * `failAfter` fail as a dropped tunnel would.

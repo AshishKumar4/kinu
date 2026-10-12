@@ -3,7 +3,7 @@ import { exists as nimbusExists, type Awaitable, type VFS } from '@nimbus-sh/cor
  *  and where the agent's tools reach a file. */
 
 import { literalWords, onUserRoots, type FileAccess, type GatedExecutor } from '../safety/command-review';
-import { approveFileAccess, gateExec, namedShellState, pinnedShellMoved, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
+import { approveFileAccess, gateExec, namedShellState, pinnedRunRefused, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
 import { shellCall } from './command-call';
 import { asBytes, currentBytes } from '../safety/bound-write';
 import { answeredRefusal } from './exec-result';
@@ -44,7 +44,7 @@ export function withApprovalGatedShell(
       return {
         call: { ...shellCall(command, options, { stdin: true }), ...(state !== undefined && { shellState: state }) },
         run: async (pinned) => {
-          const moved = pinned === undefined ? null : await pinnedShellMoved(pinned, name ?? '', state);
+          const moved = pinned === undefined ? null : await pinnedRunRefused(pinned, name ?? '', state, options.signal);
 
           return moved === null ? shell.exec(command, options) : notRun(moved);
         },

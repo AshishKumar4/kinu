@@ -32,7 +32,7 @@ import {
 } from './device-tunnel';
 import { readDeviceOwnershipContext } from './signal';
 import { callJob, createShellSession, machineShellCall, machineShellCwd, reportsCwd, shellExecOptions, type MachineShells } from './shell-session';
-import { namedShellState, pinnedShellMoved } from '../safety/approval-gate';
+import { namedShellState, pinnedRunRefused } from '../safety/approval-gate';
 import { isPrefixName, RESERVED_ROOTS } from '../vfs/resolve';
 import {
   isJsonObject,
@@ -397,7 +397,7 @@ export function createDeviceTunnelExecutor(
 
       return { call: { ...read, context: { ...read.context, ...machine }, ...(state !== undefined && { shellState: state }) }, run: (pinned) => settle(Effect.tryPromise({
         try: () => names.hold(held, callJob(options), async () => {
-          const moved = pinned === undefined ? null : await pinnedShellMoved(pinned, name ?? '', state);
+          const moved = pinned === undefined ? null : await pinnedRunRefused(pinned, name ?? '', state, signal);
 
           if (moved !== null) return refusalOf(moved);
           const requestId = nextDeviceRequestId();
