@@ -6,7 +6,8 @@ files and execution state. The workspace also keeps the roster, the shared
 ledgers (evolution, event log, jobs, tasks, missions), main's handed-over turns
 and the branches the owner started during each (`turn_branches`), and tool
 execution. A turn's facts from its preparation are its agent's, frozen beside its
-claims (`actor_turn_facts`) and carried in its handoff. No shadow VFS or file sync path runs between agents.
+claims (`actor_turn_facts`, with the run's final profile once its assembly
+settles) and carried in its handoff. No shadow VFS or file sync path runs between agents.
 
 Every agent, main included, has an `AgentFacet` in a Worker Loader isolate, with
 its own SQLite for its conversation, turn and effect claims, run events, plans
@@ -528,8 +529,8 @@ its own DDL, all of it `IF NOT EXISTS`, all of it run from the same
 | Swarm node content | `swarm_node_records` (what a swarm re-entry reads) | `core/src/strategy/swarm-resume.ts` |
 | Live trials | `artifact_trials`, `trial_turns` | `core/src/evolution/trials.ts` |
 | Turn lifecycle | `actor_turn_claims` and the session tables above | `core/src/orchestrator/actor-claims.ts` |
-| Deliveries and fences (D13) | `agent_deliveries` (what each agent is owed, until its isolate answers), `actor_turn_fence` (one row an agent: its newest opening, its run, `ended_at`, a Stop's `cancelled_at`) | `core/src/subordinates/deliveries.ts`, `core/src/subordinates/turn-fence.ts` |
-| Once-only effects | `tool_effect_claims` (a receipt: `started`, `settled` or `indeterminate`, kept where its effect commits), `effect_tombstones` | `core/src/tools/effect-claim.ts`, `core/src/identity/effect-tombstones.ts` |
+| Deliveries and fences (D13) | `agent_deliveries` (what each agent is owed, until its isolate answers), `actor_turn_fence` (one row an agent: its newest opening, its run, `ended_at`, a Stop's `cancelled_at`; a call that runs more of a turn holds only while it holds that opening) | `core/src/subordinates/deliveries.ts`, `core/src/subordinates/turn-fence.ts` |
+| Once-only effects | `tool_effect_claims` (a receipt: `started`, `settled` or `indeterminate`, kept where its effect commits and keyed on its run; an agent's isolate keeps a `remote` pointer for a call whose effect commits in the workspace, and the workspace prunes a run's receipts as the run settles), `effect_tombstones` | `core/src/tools/effect-claim.ts`, `core/src/identity/effect-tombstones.ts` |
 | Delivered runs (an agent's isolate) | `facet_runs` (a head's or node's run, until its end is reported) | `cf-backend/src/agent-facet/agent-facet.ts` |
 | Facts | `agent_facts`, `agent_fact_history` | `core/src/memory/facts.ts` |
 | Account memory (user object) | `agent_facts`, `agent_fact_history` under `ACCOUNT_FACTS_ACTOR`, `account_notes`, `account_memory_proposals` | `core/src/memory/account.ts`, `cf-backend/src/user/account-memory.ts` |

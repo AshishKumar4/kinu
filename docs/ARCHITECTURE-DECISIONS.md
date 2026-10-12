@@ -932,21 +932,46 @@ the owner, built 2026-10-11 on `lane/main-isolate`.
   EventLog is a record, never a queue: `drainAssignments`, the delegation
   runners and the root's RAM inbox are gone from the cloud. A run is the input
   `kind: 'run'`, kept in the isolate's `facet_runs` until its end is reported.
-- The workspace agent is hosted through the actor host like a hire, over the
-  workspace object's runtime and lanes (`workspaceAgentHome`). Its second
-  session (`orch`, `acc`), `mainTaskProfile` and the builder adapter are gone.
-  One builder (`OrchestratorAgent.turnCapabilities`) makes every turn's
-  surface; what an agent reaches by what it is comes from core `actorReach`, so
-  no hot path compares an id to the root's (`scripts/root-branches.json`: 0 H).
+- One factory, `OrchestratorAgent.actorSurface`, builds every agent's turn
+  surface, the workspace agent's, a hire's, a head's, a swarm node's and a
+  background run's, from core's one reach decision (`surfaceReach`: what the
+  agent reaches by what it is, `actorReach`, and by the lane its turn was
+  admitted in, `turnReach`), so no hot path compares an id to the root's
+  (`scripts/root-branches.json`: 0 H). The workspace seats every agent with no
+  session of its own (`createSeatHost`): the workspace agent over the workspace
+  object's runtime (`workspaceAgentHome`), with its evolution lanes in core
+  `EvolutionLanes` and every agent's advisor in core `ActorAdvisor`. A turn's
+  ledgers are its `TurnSurface`'s. The workspace agent's second session
+  (`orch`, `acc`), `mainTaskProfile`, `turnCapabilities` and the per-kind
+  builders are gone.
 - Port: an isolate holds its workspace's host across calls, so a call crosses
-  once; a call bound to a turn is refused `stale_epoch` once a later opening of
-  the agent, or a Stop, superseded it. Credentials are held five minutes and
-  refreshed on an upstream's refusal; activity rides tool calls and the turn's
-  end. Measured: a tool step crosses 3 times (4 the first), the open 25, the
-  close 21; §8's 12 and 6 are not reached (the account's reads, room events).
+  once. Every call that runs more of a turn carries its capability (turn, run,
+  epoch) and holds only while the durable fence (`actor_turn_fence`) holds that
+  opening, before a reset of the workspace as after it: once a later opening of
+  the agent, a Stop or the turn's end took its place, it is refused
+  `stale_epoch` before anything runs. A call that settles what the turn already
+  did (its answer, its trace, its charges) is never fenced, so a stopped turn
+  closes. Credentials are held five minutes and refreshed on an upstream's
+  refusal; activity rides tool calls and the turn's end. Measured on
+  `b90589cad` (armada `20261012074432-4e141094`), four tool steps: the open
+  crosses 17 times, the first step 4 and each later one 3, the close 16; §8's
+  12 and 6 are not reached (the account's reads, room events).
+- Profile: the agent's isolate freezes its run's final profile as the turn's
+  assembly settles (`actor_turn_facts.profile_json`); a recovery assembles on
+  it, the first step's pace carries it to the workspace, and a workspace that
+  reads the turn again after a restart asks the agent for it. No crossing binds
+  a profile on its own, and a recovered run does not resolve its profile again
+  on settings changed since.
 - Receipts: a tool's receipt is `started`, `settled` or `indeterminate`, kept
-  where its effect commits; one whose effect commits in the workspace is
-  re-asked there under the same call rather than refused in the isolate.
+  where its effect commits and keyed on its run, so a Retry finds none of the
+  last run's. A call whose effect commits in the workspace leaves only a
+  `remote` pointer in the isolate: it is re-asked there under the same call,
+  and a repair asks the workspace's receipts for the unpaired calls it points
+  at. The owner's lane (`submit_plan`, `reply_to_comment`, `ask_owner`) commits
+  in the agent's own store, so its isolate builds and runs it under its own
+  receipt, and the workspace only declares it (`ownerLaneDeclarations`). Every
+  agent's settled run tells the workspace (`run_settle`; main's rides
+  `turnSettled`), which prunes that run's receipts.
 - Stop means stop for every agent and on the CLI: one commit cancels the
   agent's owed deliveries and marks its fence `cancelled_at`, then its isolate
   hands unread words back to their composer, cancels its queued turns (their

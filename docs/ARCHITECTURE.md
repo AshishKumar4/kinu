@@ -90,7 +90,8 @@ the workspace serves every agent: the Cloudflare runtime assembly, the
 and tool caches, and main's tool surface. A subclass supplies the abstract
 members: the actor's identity and host (`getOwnerUserId`, `actorHandle`,
 `actorDirectory`, `actorKind`, `actorHost`, `actorDirectoryStore`,
-`hostedSeams`), its tools and policy (`workspaceBox`, `actorToolDeps`, `engine`,
+`hostedSeams`), its tools and policy (`workspaceBox`, `actorSurface`, `ownTools`,
+`ownAgentsToolDeps`, `engine`,
 `notifyOwner`, `delegationBudget`, `ownMission`, `persistAutoTitle`,
 `promptIdentity`), and the ports every agent's isolate is reached through: its
 room (`mainChatWire`, `hostedChatWire`), its stores (`agentStores`,
@@ -101,15 +102,21 @@ room (`mainChatWire`, `hostedChatWire`), its stores (`agentStores`,
 orchestrator. Every other actor is a logical row the orchestrator's host
 acquires, not a class.
 
-Tool gating is structural; no prompt decides it. The `agents` actions derive
-from the deps the profile wires (`actorAgentsActions` over core's
-`agentsActionsFor`, `packages/core/src/delegation/agents-tool.ts`). Every actor
-has `swarm`. `hire`, `msg`, and `list` need a roster or the peer transport.
-`dismiss` needs the roster. `msg`'s `event_id` target answers an inbound agent
-message. At the depth cap `teamProfile()` returns nothing, so the roster and the
-`hire` rung vanish together. `report` exists only on a subordinate. `release` is
-not a native tool: it is an orchestrator-only codemode provider, left out of the
-Plan-mode set. `submit_plan` exists only on an owner turn in Plan mode.
+Tool gating is structural; no prompt decides it. What a turn reaches is core's
+one decision, `surfaceReach` (`packages/core/src/delegation/turn-reach.ts`):
+what the agent reaches by what it is (`actorReach`) and by the lane its turn was
+admitted in (`turnReach`). The `agents` actions derive from the deps the factory
+wires (`actorAgentsToolDeps`, read by core's `agentsActionsFor`,
+`packages/core/src/delegation/agents-tool.ts`). Every actor has `swarm`.
+`hire`, `msg`, and `list` need a roster or the peer transport. `dismiss` needs
+the roster. `msg`'s `event_id` target answers an inbound agent message. At the
+depth cap `teamProfile()` returns nothing, so the roster and the `hire` rung
+vanish together. `report` exists only on a hirer's lane. `release` is not a
+native tool: it is an orchestrator-only codemode provider, left out of the
+Plan-mode set. The owner's lane is `submit_plan` (an owner turn in Plan mode),
+`reply_to_comment` (while a plan the owner sent back awaits answers) and
+`ask_owner`; their effects commit in the agent's own store, so its isolate
+builds and runs them, and the workspace only declares them.
 
 Every agent, main included, is a roster row in `workspace_actors` and runs its
 turns in an `AgentFacet` with its own Worker Loader isolate and SQLite (D8/D9).
@@ -117,11 +124,19 @@ Main's chat, and each owner-facing agent's, runs core's `ChatSession` there
 (`FacetChat`); hired tasks, background evolution agents, branching heads, swarm
 nodes and steer branches use the `runHeadInference` loop and the facet queue.
 
-The workspace prepares profiles, prompts and tool surfaces; main's tools run
-under the turn's `TurnSurface` (`packages/core/src/orchestrator/main-turn-surface.ts`),
-which `AgentTurns` holds with the open turn. Every tool call returns through
-`AgentWorkspaceRPC.executeTool`; the facet holds conversation, claims, effect
-claims and run events. Main's settled turn crosses back once, as the facet's
+The workspace prepares every agent's turn from one factory,
+`OrchestratorAgent.actorSurface`: its sources, its resolved profile and its
+tools, which run under the turn's `TurnSurface`
+(`packages/core/src/orchestrator/main-turn-surface.ts`, its execution and its
+ledgers), held by `AgentTurns` with the open turn. The agent's isolate
+assembles on it and freezes the run's final profile (`actor_turn_facts`); its
+first step's pace carries that profile to the workspace. Every call that runs
+more of the turn carries its capability (turn, run, epoch) and holds only while
+the workspace's durable fence (`actor_turn_fence`) holds that opening. A tool
+whose effect commits in the workspace returns through
+`AgentWorkspaceRPC.executeTool`, its receipt kept there and a pointer to it in
+the facet; the facet holds conversation, claims, its own effect claims and run
+events. Main's settled turn crosses back once, as the facet's
 durable `workspace_settle` effect: the workspace declares its roster
 (evolution, event log, titles, replies, branches, the fleet row) from that
 handoff, never from what one activation held. The handoff carries the facts the

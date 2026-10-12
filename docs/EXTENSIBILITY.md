@@ -62,7 +62,9 @@ export class MyAgent extends ActorAgent {
   protected getOwnerUserId(): string | null { /* identity bootstrap */ }
   protected actorKind(): AgentKind { /* which kind you are, for the roster */ }
   protected workspaceBox(shellId: string): NimbusSandboxHandle { /* the box behind a shell id */ }
-  protected actorToolDeps(): ActorToolDeps { /* which gated tools you get */ }
+  protected actorSurface(actor: CFSeat, turn: SurfaceTurn): Promise<ActorSurface> { /* every agent's turn surface */ }
+  protected ownTools(mode: WorkMode, scope: string | null): ActorToolsets { /* your own tools outside a turn */ }
+  protected ownAgentsToolDeps(mode: WorkMode): AgentsToolDeps { /* your own delegation, as your programs reach it */ }
   protected get engine(): EvolutionEngine { /* your evolution engine */ }
   protected notifyOwner(subject: string, body: string): void { /* … */ }
   protected delegationBudget(): DelegationBudget { /* depth and spend below you */ }
@@ -92,30 +94,32 @@ for extra sandbox namespaces: the orchestrator adds `agent.*` there, and a
 subordinate does not get it. Override the RPC hook for methods a
 browser socket must not reach.
 
-The tool surface follows from `actorToolDeps()` alone. `DEPS_GATED_TOOLS` lives
-in core (`packages/core/src/tools/registry.ts`) and holds `report`, so renaming
-a builtin moves its gate with it, where a cf-local `['report']` would match
-nothing. `actorActiveTools()` drops `report` when it is unwired. `team` and
-`peers` gate `agents` actions through `actorAgentsActions()`, which always
-passes a `swarm` marker, so every CF actor advertises `swarm`. No flag or
+The tool surface follows from one decision, core's `surfaceReach`
+(`packages/core/src/delegation/turn-reach.ts`): what an agent reaches by what
+it is (`actorReach`, from its roster policy) and by the lane its turn was
+admitted in (`turnReach`). `actorSurface` builds every agent's turn surface from
+it, the workspace agent's, a hire's, a head's, a swarm node's and a background
+run's alike, and gates each plane by it, never by asking what the agent is.
+`DEPS_GATED_TOOLS` lives in core (`packages/core/src/tools/registry.ts`) and
+holds `report`, so renaming a builtin moves its gate with it, where a cf-local
+`['report']` would match nothing. `report` is wired only on a hirer's lane.
+`team` and `peers` gate `agents` actions through `agentsActionsFor`, which
+always sees a `swarm` marker, so every CF actor advertises `swarm`. No flag or
 allowlist decides any of this.
 
-`ActorToolDeps` has `team`, `peers`, `report` and `submitPlan`. `teamProfile()` returns `{ team }` while an actor has tree below
-it and `{}` at the depth cap, so the delegation budget stops recursion, not
-the class. The root builds a hosted subordinate's delegated-turn surface through
-`HostedActorSeams.taskProfile`
-(`packages/cf-backend/src/hosted-actors.ts`), which adds `report` because
-a delegated task is parent-assigned. The surface stays in the root: a hosted
-subordinate's turn runs in its own Worker Loader isolate
-(`packages/cf-backend/src/agent-facet/`), with its conversation, turn claims,
-effect claims and run ledger in that isolate's own SQLite, and it calls each
-tool back into the root through `AgentWorkspaceRPC.executeTool` (D8 in
-`docs/ARCHITECTURE-DECISIONS.md`). Its files and named shell are the
-workspace's, through Nimbus's session surface. `submitPlan` appears only on a turn that
-belongs to the owner, in Plan mode. The narrowing keys on the turn, not on a
-class. The same module builds head and node
-surfaces over that actor's own runtime. An MCTS branch has no tool surface and
-acquires no execution plane, because it is built without one.
+`teamProfile()` returns `{ team }` while an actor has tree below it and `{}` at
+the depth cap, so the delegation budget stops recursion, not the class. The
+surface stays in the workspace: every agent's turn runs in its own Worker
+Loader isolate (`packages/cf-backend/src/agent-facet/`), with its conversation,
+turn claims, effect claims and run ledger in that isolate's own SQLite, and it
+calls each workspace tool back through `AgentWorkspaceRPC.executeTool` (D8, D13
+in `docs/ARCHITECTURE-DECISIONS.md`). Its files and named shell are the
+workspace's, through Nimbus's session surface. The owner's lane
+(`submit_plan` on an owner turn in Plan mode, `reply_to_comment`, `ask_owner`)
+commits in the agent's own store, so the isolate builds and runs it and the
+workspace only declares it. The narrowing keys on the turn, not on a class. An
+MCTS branch has no tool surface and acquires no execution plane, because it is
+built without one.
 
 `OwnedModelServices` (`packages/cf-backend/src/owned-model-services.ts`) holds
 per-actor model and provider state by composition: `providerRegistry()`,
@@ -270,7 +274,8 @@ Effort is the cheapness lever on most paths, not an output-token cap.
 `TOOL_REACH` (`packages/core/src/tools/registry.ts`) is the authoritative map of
 native and codemode-only capabilities and their namespaces. `BUILTIN_TOOLS`
 holds its 8 native tools: `eval`, `shell`, `file`, `agents`, `memory`, `tasks`,
-`web`, `report`. `actorActiveTools()` narrows them per actor. `release`,
+`web`, `report`. Core's `surfaceReach` narrows them per turn (`report` only on
+a hirer's lane). `release`,
 `agent`, `db` and `slate` are codemode-only. `skills` is neither: every skill is
 an ordinary file at `/skills/<name>/SKILL.md`, a read-only view the `file` tool
 and `workspace.*` already address, and a dedicated surface would be a second
