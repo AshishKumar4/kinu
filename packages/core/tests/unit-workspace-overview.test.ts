@@ -15,6 +15,7 @@ function action(kind: PendingAction['kind'], id = kind): PendingAction {
 
 const EMPTY: WorkspaceOverviewInputs = {
   working: false,
+  awaitsSettings: false,
   unfinished: false,
   pendingActions: [],
   pendingConsents: [],
@@ -78,6 +79,33 @@ describe('buildWorkspaceOverview', () => {
     expect(buildWorkspaceOverview({ ...EMPTY, working: true, unfinished: true }).activity).toBe('working');
     expect(buildWorkspaceOverview({ ...EMPTY, unfinished: true }).activity).toBe('unfinished');
     expect(buildWorkspaceOverview(EMPTY).activity).toBe('idle');
+  });
+
+  test('the required settings obligation survives the persisted current wire fold', () => {
+    expect(buildWorkspaceOverview(EMPTY).awaitsSettings).toBe(false);
+
+    for (const awaitsSettings of [false, true]) {
+      const overview = buildWorkspaceOverview({ ...EMPTY, awaitsSettings });
+
+      expect(v.parse(WorkspaceOverviewSchema, JSON.parse(JSON.stringify(overview))).awaitsSettings).toBe(awaitsSettings);
+    }
+  });
+
+  test('the current wire rejects missing settings, shares or slate visibility instead of supplying older defaults', () => {
+    const missingSettings = buildWorkspaceOverview(EMPTY);
+
+    Reflect.deleteProperty(missingSettings, 'awaitsSettings');
+    expect(v.safeParse(WorkspaceOverviewSchema, missingSettings).success).toBe(false);
+    const missingShares = buildWorkspaceOverview(EMPTY);
+
+    Reflect.deleteProperty(missingShares, 'shares');
+    expect(v.safeParse(WorkspaceOverviewSchema, missingShares).success).toBe(false);
+    const slate = { id: 'board', title: 'Board', picture: null, visibility: null };
+    const current = { ...buildWorkspaceOverview(EMPTY), slates: [slate] };
+
+    expect(v.safeParse(WorkspaceOverviewSchema, current).success).toBe(true);
+    Reflect.deleteProperty(slate, 'visibility');
+    expect(v.safeParse(WorkspaceOverviewSchema, current).success).toBe(false);
   });
 
   test('the task preview is trimmed to one card line; the summary stays the wire shape', () => {

@@ -842,30 +842,12 @@ function deviceConnectFixture(path: string, method: string, body: BodyInit | nul
 
 /* One tile per card state; `gallery:overview` ({name, overview}) changes one and the roster socket carries it. */
 const STOCK_OVERVIEWS = new Map(Object.entries({
-  "checkout-fixes": {
-    activity: "working", decisionsWaiting: 2, hasUpdates: true,
-    latestRun: { status: "error", task: "Investigate intermittent checkout failures in the coupon migration" },
-    slates: [{ id: "coupon-board", title: "Coupon board", picture: null, visibility: null }], shares: [],
-  },
-  "perf-audit": {
-    activity: "working", decisionsWaiting: 0, hasUpdates: false,
-    latestRun: { status: null, task: "Make sync resume after a dropped connection" }, slates: [], shares: [],
-  },
-  "email-triage": {
-    activity: "idle", decisionsWaiting: 0, hasUpdates: true,
-    latestRun: { status: "completed", task: "Answer this week's refund requests" }, slates: [], shares: [],
-  },
-  "design-sys": {
-    activity: "unfinished", decisionsWaiting: 0, hasUpdates: false,
-    latestRun: { status: "error", task: "Kinu website" }, slates: [], shares: [],
-  },
-  "handwrought-walnut-4166c321": {
-    activity: "idle", decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [], shares: [],
-  },
-  "audit-sweep": {
-    activity: "unfinished", decisionsWaiting: 0, hasUpdates: false,
-    latestRun: { status: "completed", task: "Recount the quarter's shares against the register" }, slates: [], shares: [],
-  },
+  "checkout-fixes": { activity: "working", awaitsSettings: false, decisionsWaiting: 2, hasUpdates: true, latestRun: { status: "error", task: "Investigate intermittent checkout failures in the coupon migration" }, slates: [{ id: "coupon-board", title: "Coupon board", picture: null, visibility: null }], shares: [] },
+  "perf-audit": { activity: "working", awaitsSettings: false, decisionsWaiting: 0, hasUpdates: false, latestRun: { status: null, task: "Make sync resume after a dropped connection" }, slates: [], shares: [] },
+  "email-triage": { activity: "idle", awaitsSettings: false, decisionsWaiting: 0, hasUpdates: true, latestRun: { status: "completed", task: "Answer this week's refund requests" }, slates: [], shares: [] },
+  "design-sys": { activity: "unfinished", awaitsSettings: false, decisionsWaiting: 0, hasUpdates: false, latestRun: { status: "error", task: "Kinu website" }, slates: [], shares: [] },
+  "handwrought-walnut-4166c321": { activity: "idle", awaitsSettings: false, decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [], shares: [] },
+  "audit-sweep": { activity: "unfinished", awaitsSettings: false, decisionsWaiting: 0, hasUpdates: false, latestRun: { status: "completed", task: "Recount the quarter's shares against the register" }, slates: [], shares: [] },
 } satisfies Record<string, WorkspaceOverview>));
 
 /** A sixth entry whose last run is quiet, so 'Unfinished' can headline; the home roster's pins keep it off the stock five. */

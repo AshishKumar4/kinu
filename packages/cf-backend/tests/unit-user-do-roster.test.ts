@@ -11,6 +11,7 @@ import { WS_OPEN, type UserCaller, type WorkspaceOverview } from '@kinu.run/core
 import type { AuthIdentity } from '../src/auth/session';
 import { SESSION_BEARER_HEADER } from '../src/cli/rpc-gate';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
+import { libraryTiles } from '../src/user/roster';
 import { serveFamily } from './helpers/api';
 import { nextTurn, until } from './helpers/actor-harness';
 import { bootstrappedProfile, userAccount } from './helpers/bindings';
@@ -18,7 +19,7 @@ import { createTestUserDO, provisionTestWorkspace, TEST_CREDENTIAL_ENCRYPTION_KE
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 
-const QUIET: WorkspaceOverview = { activity: 'idle', decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [], shares: [] };
+const QUIET: WorkspaceOverview = { activity: 'idle', awaitsSettings: false, decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [], shares: [] };
 
 const FrameSchema = v.object({
   type: v.literal('workspace'),
@@ -80,6 +81,26 @@ async function workspace(harness: TestUserDO, name: string): Promise<UserCaller>
 }
 
 describe('the pushed tile', () => {
+  test('a current tile lists normally, an absent tile is unreported, and an invalid stored tile fails roster and library reads', async () => {
+    const harness = createTestUserDO({ durableObjectId: USER_ID });
+    const owner = await testOwner();
+    const ledger = await workspace(harness, 'ledger');
+
+    try {
+      await workspace(harness, 'unpushed');
+      await harness.userDO.putWorkspaceOverview(ledger, 'ledger', QUIET);
+      expect((await harness.userDO.listWorkspaces(owner)).entries.find(entry => entry.name === 'unpushed')?.overview).toBeNull();
+      expect(libraryTiles(harness.sql).map(tile => tile.workspace)).toEqual(['ledger']);
+
+      const malformed = { ...QUIET };
+
+      Reflect.deleteProperty(malformed, 'awaitsSettings');
+      harness.db.prepare('UPDATE workspace_overviews SET overview = ? WHERE name = ?').run(JSON.stringify(malformed), 'ledger');
+      await expect(harness.userDO.listWorkspaces(owner)).rejects.toThrow();
+      expect(() => libraryTiles(harness.sql)).toThrow();
+    } finally { harness.close(); }
+  });
+
   test('rides its roster entry, and a waiting decision files it under needs', async () => {
     const harness = createTestUserDO({ durableObjectId: USER_ID });
     const owner = await testOwner();
@@ -115,7 +136,7 @@ describe('the pushed tile', () => {
   });
 });
 
-describe('workspaces from before tiles existed', () => {
+describe('workspaces whose first tile has not landed', () => {
   test('one roster read asks each for its tile, four at a time, so Needs you is right; the next read asks none', async () => {
     const names = ['ledger', 'notes', 'budget', 'garden', 'plans', 'music'];
     const callers = new Map<string, UserCaller>();

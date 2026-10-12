@@ -80,7 +80,7 @@ async function setOverview(page: Page, name: string, overview: JsonValue): Promi
 
 /** A quiet tile. */
 function idleBody(): JsonValue {
-  return { activity: 'idle', decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [] };
+  return { activity: 'idle', awaitsSettings: false, decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [], shares: [] };
 }
 
 /** The mode the tissue reports once the roster's frames reach it. A frozen
@@ -314,13 +314,13 @@ describe('the living background', () => {
 
         // Everyone working at once.
         for (const name of DISPLAYED) {
-          await setOverview(page, name, { activity: 'working', decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [] });
+          await setOverview(page, name, { activity: 'working', awaitsSettings: false, decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [], shares: [] });
         }
 
         await waitForMode(page, 'working');
 
         // One decision waiting: a flash, then back under the working hum.
-        await setOverview(page, 'checkout-fixes', { activity: 'working', decisionsWaiting: 1, hasUpdates: false, latestRun: null, slates: [] });
+        await setOverview(page, 'checkout-fixes', { activity: 'working', awaitsSettings: false, decisionsWaiting: 1, hasUpdates: false, latestRun: null, slates: [], shares: [] });
         await waitForMode(page, 'attention', 1 / 60);
 
         const afterFlash = await page.evaluate(() => {

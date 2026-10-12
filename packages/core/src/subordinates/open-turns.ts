@@ -33,10 +33,10 @@ export class AgentOwedWork {
 
   /** The agent's own answer, replacing what it said before. An unchanged answer writes nothing, so it moves no read:
    *  reading an agent's owed work can make it tell again, and that must not read again. */
-  held(actorId: string, holds: boolean): void {
+  held(actorId: string, holds: boolean): boolean {
     const holders = this.holders();
 
-    if (holds === holders.has(actorId)) return;
+    if (holds === holders.has(actorId)) return false;
 
     if (holds) {
       void this.sql`INSERT INTO agent_owed_work (actor_id) VALUES (${actorId})`;
@@ -45,6 +45,8 @@ export class AgentOwedWork {
       void this.sql`DELETE FROM agent_owed_work WHERE actor_id = ${actorId}`;
       holders.delete(actorId);
     }
+
+    return true;
   }
 
   all(): readonly string[] {

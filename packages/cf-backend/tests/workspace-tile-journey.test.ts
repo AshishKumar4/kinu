@@ -9,15 +9,16 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  actorConnectionTag, DeviceConsentStore, JsonValueSchema, TURN_AUTHOR_METADATA_KEY, type JsonValue, type WorkspaceOverview,
+  actorConnectionTag, AgentSequence, CHAT_SESSION_ID, DeviceConsentStore, JsonValueSchema, RunEventRecorder, TURN_AUTHOR_METADATA_KEY, type JsonValue, type WorkspaceOverview,
 } from '@kinu.run/core';
+import type { AgentStandingReport } from '@kinu.run/core';
 import { AwaitedList } from '@kinu.run/test-utils';
 import type { Database } from 'bun:sqlite';
 import { TERMINAL_RETRY_JOB } from '../src/wake-jobs';
 import { bindAgentSql } from '../src/runtime';
 import {
-  armedWakes, chatSessionTurns, fireSoonestWake, GATEWAY_CATALOG, nextTurn, orchestratorHarness, hostedSubordinateHarness, seedMission,
-  until, wakeForDelegatedTask, workspaceFiles, type HarnessOrchestratorAgent, type RecordedUserPlaneCalls,
+  armedWakes, chatSessionTurns, fireSoonestWake, GATEWAY_CATALOG, historyOver, ledgerOver, mainRows, nextTurn, orchestratorHarness, hostedSubordinateHarness, seedMission,
+  until, wakeForDelegatedTask, workspaceFiles, workspaceMainActor, type HarnessOrchestratorAgent, type RecordedUserPlaneCalls,
 } from './helpers/actor-harness';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { socketConnection } from './helpers/bindings';
@@ -76,6 +77,53 @@ const NOTING = 'Note what the ledger is missing.';
 const PLANNING = 'Plan the ledger repair.';
 
 describe("a workspace's tile on its owner's home", () => {
+  test('an idle settings-wait tile follows real agent owed reports and parked durable refusals, not a cached fold', async () => {
+    const tiles = new AwaitedList<WorkspaceOverview>();
+    const owner: RecordedUserPlaneCalls = { warmConnections: [], failWarm: null, titles: [], overviews: tiles, refuseOverviews: [] };
+    const workspace = orchestratorHarness(owner);
+    const { agent, db } = workspace;
+    const main = workspaceMainActor(db).actorId;
+    const last = () => tiles.items.at(-1);
+
+    try {
+      await agent.installWorkspaceCapability('workspace-capability-token');
+      await until(() => last()?.awaitsSettings === false, 'the first quiet settings-wait tile lands');
+
+      const reportedWork = await agent.agentWorkspace(main);
+      const own = await mainRows(workspace);
+      const sequence = new AgentSequence(own.sql, main);
+      const recorder = new RunEventRecorder(own.sql, own.actor);
+
+      const standing: AgentStandingReport = {
+        messageCount: historyOver({ agent, db: own.db }, own.actor).transcript(CHAT_SESSION_ID).count(),
+        measures: recorder.readContextMeasures(), latestRun: recorder.latestRunHeader(), pendingSteers: [],
+      };
+
+      await reportedWork.owes(sequence.next(), null, true, standing);
+      await until(() => last()?.awaitsSettings === true, 'a real owed-work report updates the owner');
+      const reported = tiles.items.length;
+
+      await reportedWork.owes(sequence.next(), null, true, standing);
+      await settled();
+      expect(tiles.items).toHaveLength(reported);
+      await reportedWork.owes(sequence.next(), null, false, standing);
+      await until(() => last()?.awaitsSettings === false, 'the cleared owed-work report updates the owner');
+
+      // A prior activation's own effect ledger retained this refusal; the live idle fold must read it.
+      const ledger = ledgerOver(db);
+      const transition = { turnId: 'settings-wait', messageId: 'answer' };
+
+      ledger.record(transition, [{ name: 'sleep_time', scope: 'settings', input: {}, lane: 'detached' }]);
+      db.prepare("UPDATE terminal_effects SET status = 'parked' WHERE actor_id = ? AND sequence_id = ?")
+        .run(main, ledger.sequenceId(transition));
+      expect((await agent.foldOverview()).awaitsSettings).toBe(true);
+      db.prepare('DELETE FROM terminal_effects WHERE actor_id = ? AND sequence_id = ?').run(main, ledger.sequenceId(transition));
+      expect((await agent.foldOverview()).awaitsSettings).toBe(false);
+    } finally {
+      db.prepare("DELETE FROM terminal_effects WHERE actor_id = ? AND sequence_id = 'settings-wait/answer'").run(main);
+    }
+  });
+
   test('lands though the owner was away, follows work, decisions and children, and drops a child torn down', async () => {
     const tiles = new AwaitedList<WorkspaceOverview>();
     const overviews = tiles.items;

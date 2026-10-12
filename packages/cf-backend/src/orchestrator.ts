@@ -945,7 +945,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         // A retired agent's answer arms nothing: tearing it down ended its wake.
         if (!this.liveActor(actorId)) return await this.agentWakes.owes(actorId, null);
-        this.owedWork.held(actorId, holds);
+        this.noteAgentOwedWork(actorId, holds);
         // A rest told while a delivery is owed it keeps the wake that crosses it.
         await this.agentWakes.owes(actorId, next ?? (this.deliveries.owes(actorId) ? Date.now() + RECOVERY_BACKOFF_CEILING_MS : null));
 
@@ -1201,7 +1201,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           // Retired: what it was owed and had not taken is cancelled with its wake.
           this.deliveries.cancel(record.actorId);
           await this.agentWakes.owes(record.actorId, null);
-          this.owedWork.held(record.actorId, false);
+          this.noteAgentOwedWork(record.actorId, false);
         }
 
         if (own && retirement.destroy) this.dropAgentFacet(record.storageKey);
@@ -5950,10 +5950,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     readonly sqlRevision: number;
     readonly slateRevision: number;
     readonly expiresAt: number;
-    readonly inputs: Omit<WorkspaceOverviewInputs, 'working' | 'unfinished' | 'latestRun'>;
+    readonly inputs: Omit<WorkspaceOverviewInputs, 'working' | 'unfinished' | 'latestRun' | 'awaitsSettings'>;
   } | null = null;
 
-  private async overviewInputs(): Promise<Omit<WorkspaceOverviewInputs, 'working' | 'unfinished' | 'latestRun'>> {
+  private async overviewInputs(): Promise<Omit<WorkspaceOverviewInputs, 'working' | 'unfinished' | 'latestRun' | 'awaitsSettings'>> {
     const sqlRevision = storeRevision(this.boundSql);
     const slateRevision = storeRevision(this.ctx.storage.sql);
     const held = this.slowOverview;
@@ -5998,19 +5998,32 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return inputs;
   }
 
-  /** Only slow source sections are held; every push folds the turn's current activity and run. */
+  /** Both an agent's report and its retirement publish a changed settings-wait obligation. */
+  private noteAgentOwedWork(actorId: string, holds: boolean): void {
+    if (this.owedWork.held(actorId, holds)) this.overviewChanged();
+  }
+
+  /** A local parked refusal or an agent's own owed work can depend on changed settings. One read, only while idle. */
+  private awaitsSettings(): boolean {
+    return this.sql<{ awaits: number }>`SELECT EXISTS (SELECT 1 FROM terminal_effects WHERE status = 'parked')
+      OR EXISTS (SELECT 1 FROM agent_owed_work) AS awaits`[0]?.awaits === 1;
+  }
+
+  /** Only slow source sections are held; every push folds current activity, settings wait and run. */
   async foldOverview(): Promise<WorkspaceOverview> {
     const inputs = await this.overviewInputs();
 
     const hostedBusy = this.actorHost().list().some((reference) => this.hostedTurnInFlight(reference));
-
+    const main = this.actorHandle().actorId;
+    // Main owns its header; its standing report is the projection, never the parent's actor stores.
     const header = (await this.mainStanding()).latestRun;
     // A settled turn's leftovers still closing are its work, not a durable leftover.
-    const working = this._inFlight || hostedBusy || this.terminal.closing;
+    const working = this._inFlight || this.deliveries.owes(main) || this.agentTurns.inFlight(main) || hostedBusy || this.terminal.closing;
 
     return buildWorkspaceOverview({
       ...inputs,
       working,
+      awaitsSettings: working || this.awaitsSettings(),
       // Read only when idle: a working tile shows Working whatever is owed.
       unfinished: !working && (this.owedUntimedWork() || this.workOwedAt() !== null),
       latestRun: header === null ? null : { status: header.status, task: header.userMessage },

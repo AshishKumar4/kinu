@@ -60,7 +60,8 @@ export interface ModelSettingsFanoutEnv<Id> extends OwnerCapabilityEnv {
   OrchestratorAgent: ObjectNamespace<Id, ModelSettingsFanoutTarget>;
 }
 
-/** Tell active workspaces their owner's credentials or model profile moved: each drops cached provider state
+/** Tell possibly waiting workspaces their owner's credentials or model profile moved: known quiet ones stay asleep;
+ * working and unreported workspaces stay conservative. Each recipient drops cached provider state
  *  and releases the effects a refusal parked. The request's waitUntil owns it. A missed notify heals for the
  *  caches (workspaces check the credential revision) and for parked effects at the workspace's next settled turn. */
 export function notifyWorkspacesModelSettingsChanged<Id>(
@@ -70,7 +71,7 @@ export function notifyWorkspacesModelSettingsChanged<Id>(
 ): void {
   ctx.waitUntil(settle(Effect.gen(function* () {
     const workspaces = yield* Effect.catchCause(
-      Effect.promise(async (): Promise<Array<{ name: string }> | null> => userDO.listActiveWorkspaces(await ownerCaller(env))),
+      Effect.promise(async (): Promise<Array<{ name: string }> | null> => userDO.listActiveWorkspaces(await ownerCaller(env), { awaitsSettings: true })),
       (failed) => Effect.sync(() => {
         diagnostics.failure('workspace.model_settings_fanout_failed', toKinuError({
           doing: 'notifying the user\'s workspaces of a model settings change',
