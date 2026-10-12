@@ -363,6 +363,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
 
             if (lostHandoffAnswers.delete(placement.storageKey)) throw new Error('the workspace took the handoff and was reset before it answered');
           },
+          runSettled: (run) => host.runSettled(run),
           hireAdvisor: (advisor) => host.hireAdvisor(advisor),
           owes: async (seq, next, holds, standing) => {
             const catching = heldReports.get(placement.storageKey);

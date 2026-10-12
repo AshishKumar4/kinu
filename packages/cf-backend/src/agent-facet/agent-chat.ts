@@ -3,7 +3,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   CHAT_SESSION_ID, ChatSession, EventLog, HeadCapture, PendingSendStore, RECOVERY_BACKOFF_CEILING_MS, TerminalTransitions,
   PlanReviewActions, announcementOf, assembleActorTurn, authoredTurnMetadata, chatTerminalEffects, chatTurnParts, declareTerminalRoster, inspectWork,
-  planHandoffStillOwed, planAwaitingReply, approvedTaskPlan, missionGate, workModeUnderReview, projectJsonValue, declareHandoffRoster, HandedOffTurnSchema, terminalEffect, turnAuthorship, turnLane, type TurnAuthorship,
+  planHandoffStillOwed, planAwaitingReply, approvedTaskPlan, missionGate, workModeUnderReview, projectJsonValue, declareHandoffRoster, HandedOffTurnSchema, runSettleEffect, SettledRunSchema, terminalEffect, turnAuthorship, turnLane, type TurnAuthorship,
   actorPolicy, metadataTier, workModeForTurnMetadata, reportReadsNarration, subordinateTerminalEffects, withCompactionTrigger, type ActorPolicy,
   bindRoute, completeOnRoute, ownProfileChoices, planWorkspaceTitle, resolveAgentTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle,
   type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpening, type JsonObject, type PlanReview, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
@@ -158,6 +158,11 @@ export class FacetChat {
 
     const tools = facetTurnTools(workspace, prepared, actor, {
       id: turn.id, runId: turn.runId, mode: turn.mode, parentDriven: this.parentDriven, driving: this.driving, live, capture: new HeadCapture(), database,
+      // Its plans are its own store's, judged by the metadata its turn was admitted under.
+      owner: {
+        submitPlan: { submit: async (edits) => await this.planned((plans) => plans.submit(edits, this.driving)) },
+        replyToComment: { reply: async (comment, text) => await this.planned((plans) => plans.reply(comment, text, this.driving)) },
+      },
     });
 
     const { sources: bundle } = facetTurnSources({ actor, workspace, models, prepared, spend: this.spend, live, runId: turn.runId, turnId: turn.id, pacer });
@@ -273,9 +278,11 @@ export class FacetChat {
     const turnId = this.session.currentTurnId ?? '';
     const opened = this.deps.database.factsOf(this.session.currentRunId ?? turnId);
 
+    const runId = this.session.currentRunId ?? turnId;
+
     if (this.policy.workspaceAgent) {
       return declareHandoffRoster(chatTurnParts(input), {
-        turnId, messageId: input.messageId, status: input.status, completed: input.completed,
+        turnId, runId, messageId: input.messageId, status: input.status, completed: input.completed,
         workMode: session.workMode, userText: input.userText, assistantText: input.assistantText, event: input.event ?? null,
         turn: projectJsonValue({ value: input.turn }), credited: input.credited, answeredDeliveries: [...input.answeredDeliveries],
         reachableTools: [...input.reachableTools], recordedAt: Date.now(), facts: opened,
@@ -319,7 +326,8 @@ export class FacetChat {
       }),
     };
 
-    return declareTerminalRoster(facts, parts);
+    // Its tools' receipts were kept in the workspace, which drops them once the run settled.
+    return [...declareTerminalRoster(facts, parts), runSettleEffect(input.messageId, { turnId, runId })];
   }
 
   private get terminal(): TerminalTransitions {
@@ -340,6 +348,14 @@ export class FacetChat {
           input: HandedOffTurnSchema,
           run: async (settled) => {
             await workspace.turnSettled(settled);
+
+            return { status: 'completed' };
+          },
+        }),
+        run_settle: terminalEffect({
+          input: SettledRunSchema,
+          run: async (run) => {
+            await workspace.runSettled(run);
 
             return { status: 'completed' };
           },

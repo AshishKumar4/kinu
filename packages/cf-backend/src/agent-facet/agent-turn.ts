@@ -1,12 +1,12 @@
 /** One delegated turn in the agent's isolate: its model loop here, every tool call back in the workspace. */
 import { jsonSchema, tool, type ModelMessage, type ToolSet, type UIMessageChunk } from 'ai';
 import {
-  ASK_OWNER_TOOL, CHAT_SESSION_ID, actorAffinity, askOwnerTool, HeadCapture, decodeJsonValue, decodeModelMessageValues, encodeModelMessageValues, withEffectPointer, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan, imageModelOutput,
-  type AuthRequest, type AuthResolution, type HandedOffTurn, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type JsonValue, type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind, type AgentSignal, type SendOutcome,
+  CHAT_SESSION_ID, actorAffinity, HeadCapture, ownerLaneTools, toolsInWorkMode, withEffectReceipt, decodeJsonValue, decodeModelMessageValues, encodeModelMessageValues, withEffectPointer, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan, imageModelOutput,
+  type AuthRequest, type AuthResolution, type HandedOffTurn, type SettledRun, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type JsonValue, type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind, type AgentSignal, type SendOutcome,
   turnSourcesFromBundle, captureOperationProfile, type ModelCallReport, type ModelOperationEvent,
   type AdvisorRecoverySnapshot, type AgentFigures, type AgentStandingReport, type HostedActor, type OwedReport, type SerializedMessage, type SessionEvent,
   type SubordinateReportLedger, type SubordinateReportStatus, type TaskTurnEnding, type WorkMode, type ResolvedTurnProfile, type DynamicContext,
-  type RemoteReceipt,
+  type RemoteReceipt, type ReplyToCommentToolDeps, type SubmitPlanToolDeps,
 } from '@kinu.run/core';
 
 import { attempt, diagnostics, hold, logged, settle, type ErrorCode } from '@kinu.run/core/obs';
@@ -71,6 +71,8 @@ export interface AgentWorkspace {
   /** The workspace's own agent hands its settled turn to the workspace, which owes that turn's lanes. Repeatable: the
    *  workspace keys what it owes on the turn. */
   turnSettled(settled: HandedOffTurn): Promise<void>;
+  /** Any other agent's run settled: the workspace drops the receipts its tools kept under it. Repeatable. */
+  runSettled(run: SettledRun): Promise<void>;
   hireAdvisor(advisor: AdvisorRecoverySnapshot): Promise<void>;
   /** A facet sets no alarm: the instant it next needs waking, or none, and whether it holds owed work at all (a parked
    *  effect needs no wake but is still owed), replacing what it said before. */
@@ -253,9 +255,6 @@ function workspaceTools(
   turn: FacetToolTurn,
 ): ToolSet {
   return Object.fromEntries(prepared.tools.map((descriptor) => {
-    // The owner answers it, nothing executes it: its call parks in this isolate's store, which the repair reads.
-    if (descriptor.name === ASK_OWNER_TOOL) return [descriptor.name, askOwnerTool()];
-
     const entry = tool({
       description: descriptor.description,
       inputSchema: jsonSchema(descriptor.inputSchema),
@@ -374,19 +373,35 @@ interface FacetToolTurn {
   readonly live: LiveTurn;
   readonly capture: HeadCapture;
   readonly database: AgentDatabase;
+  /** The agent's own plan store, where the owner's lane submits and replies; a run reaches no owner's lane. */
+  readonly owner?: { readonly submitPlan: SubmitPlanToolDeps; readonly replyToComment: ReplyToCommentToolDeps };
 }
 
 /**
- * A turn's tools here (design v2 §4): each runs in the workspace, where its effect commits and its receipt is kept, so a
- * call leaves only a pointer here. Asking the owner has no executor and parks in this isolate's own store.
+ * A turn's tools here (design v2 §4): each workspace tool commits in the workspace, which keeps its receipt, so a call
+ * leaves only a pointer here; the owner's lane (its plans, its questions) commits in this store, under a receipt here.
  */
 export function facetTurnTools(workspace: AgentWorkspace, prepared: PreparedAgentTurn, actor: HostedActor, turn: FacetToolTurn): ToolSet {
-  return withEffectPointer(workspaceTools(workspace, prepared, turn), {
+  const receipts = {
     actor: actor.handle,
     sql: actor.runtime.storage.sql,
     execution: () => ({ turnId: turn.id, runId: turn.runId }),
-    durable: (callId, signal) => actor.session.durableCall(callId, signal),
-  });
+    durable: (callId: string, signal?: AbortSignal) => actor.session.durableCall(callId, signal),
+  };
+
+  const { ownerLane } = prepared;
+
+  // Asking the owner has no executor: its call parks in this isolate's store, which the repair reads.
+  const owned = toolsInWorkMode(turn.mode, ownerLaneTools({
+    ...(ownerLane.submitPlan && turn.owner !== undefined && { submitPlan: turn.owner.submitPlan }),
+    ...(ownerLane.replyToComment && turn.owner !== undefined && { replyToComment: turn.owner.replyToComment }),
+    ...(ownerLane.askOwner && { askOwner: true }),
+  }));
+
+  return {
+    ...withEffectPointer(workspaceTools(workspace, prepared, turn), receipts),
+    ...withEffectReceipt(owned, { ...receipts, transaction: (body) => actor.runtime.storage.transactionSync(body) }),
+  };
 }
 
 /** A one-shot run on the shared assembly and step loop. */

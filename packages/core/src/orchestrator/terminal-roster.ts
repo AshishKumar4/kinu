@@ -222,9 +222,17 @@ function followUpTurns(messageId: string, parts: Pick<TerminalTurnParts, 'overfl
   return owed;
 }
 
+/** The run a turn settled on, as its agent tells the workspace that kept its tools' receipts. */
+export const SettledRunSchema = v.object({
+  turnId: v.string(),
+  runId: v.string(),
+});
+
+export type SettledRun = v.InferOutput<typeof SettledRunSchema>;
+
 /** A settled turn as its chat hands it to the object that owes its lanes; that object scopes and declares the rest. */
 export const HandedOffTurnSchema = v.object({
-  turnId: v.string(),
+  ...SettledRunSchema.entries,
   messageId: v.string(),
   status: RunEndReasonSchema,
   completed: v.boolean(),
@@ -254,6 +262,11 @@ export function declareHandoffRoster(
   parts: Pick<TerminalTurnParts, 'overflowRetry' | 'outputContinuation' | 'taskReminder'>, settled: HandedOffTurn,
 ): OwedEffect[] {
   return [...followUpTurns(settled.messageId, parts), { name: 'workspace_settle', scope: settled.messageId, lane: 'detached', input: { ...settled } }];
+}
+
+/** An agent whose lanes are its own tells the workspace its run settled, as {@link declareHandoffRoster}'s handoff does. */
+export function runSettleEffect(messageId: string, run: SettledRun): OwedEffect {
+  return { name: 'run_settle', scope: messageId, lane: 'detached', input: { ...run } };
 }
 
 /** Owed whether or not a reply ever rates the turn, only by a turn with something to learn from (`owesTurnLessons`);

@@ -7,7 +7,7 @@ import type { ForkConversationPlan, ForkConversationSection, ForkConversationSou
 import type { AgentOwnInspection, ArchiveSqlCursor, CacheWarmArm, ContextEditor, ContextTree, StepSpendSource, ConversationRecall, PositionPageRequest, AgentSignal, AuthRequest, RelayedProvider, ProgrammaticTurn, ProviderEnv, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
 import type { AgentRunOutcome, AgentWorkspace } from './agent-facet/agent-turn';
-import type { AdvisorRecoverySnapshot, AgentFigures, AgentStandingReport, AgentTurnActivity, HandedOffTurn, ResolvedTurnProfile, AgentHeadDelta, AgentReview, AgentSnapshot, AgentToolCall, AgentTrace, SessionEvent, TurnRequestAt, ModelCallReport, ModelOperationEvent } from '@kinu.run/core';
+import type { AdvisorRecoverySnapshot, AgentFigures, AgentStandingReport, AgentTurnActivity, HandedOffTurn, ResolvedTurnProfile, SettledRun, AgentHeadDelta, AgentReview, AgentSnapshot, AgentToolCall, AgentTrace, SessionEvent, TurnRequestAt, ModelCallReport, ModelOperationEvent } from '@kinu.run/core';
 import type { ChatTurnRequest } from './agent-turns';
 import { attempt, KinuError, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
@@ -113,6 +113,7 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   parentReport(report: Parameters<AgentWorkspace['parentReport']>[0]) { return this.open(() => this.answers.parentReport(report)); }
   autoTitle(subject: string, title: string | null) { return this.open(() => this.answers.autoTitle(subject, title)); }
   turnSettled(settled: HandedOffTurn) { return this.open(() => this.answers.turnSettled(settled)); }
+  runSettled(run: SettledRun) { return this.open(() => this.answers.runSettled(run)); }
   hireAdvisor(advisor: AdvisorRecoverySnapshot) { return this.open(() => this.answers.hireAdvisor(advisor)); }
   owes(seq: number, next: number | null, holds: boolean, standing: AgentStandingReport) { return this.open(() => this.answers.owes(seq, next, holds, standing)); }
   birthContext(drainTurnId: string) { return this.open(() => this.answers.birthContext(drainTurnId)); }
@@ -235,6 +236,7 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
   parentReport(report: Parameters<AgentWorkspace['parentReport']>[0]) { return this.owned((host) => host.parentReport(report)); }
   autoTitle(subject: string, title: string | null) { return this.owned((host) => host.autoTitle(subject, title)); }
   turnSettled(settled: HandedOffTurn) { return this.owned((host) => host.turnSettled(settled)); }
+  runSettled(run: SettledRun) { return this.owned((host) => host.runSettled(run)); }
   hireAdvisor(advisor: AdvisorRecoverySnapshot) { return this.owned((host) => host.hireAdvisor(advisor)); }
   owes(seq: number, next: number | null, holds: boolean, standing: AgentStandingReport) { return this.owned((host) => host.owes(seq, next, holds, standing)); }
   birthContext(drainTurnId: string) { return this.owned((host) => host.birthContext(drainTurnId)); }

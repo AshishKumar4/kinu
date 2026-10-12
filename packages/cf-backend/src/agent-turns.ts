@@ -326,11 +326,11 @@ export class AgentTurns {
   }
 
   private dynamic(turn: OpenTurn, prepared: PreparedHostedTurn): DynamicContext {
-    const { tools, sources, resolved } = prepared.surface;
+    const { offered, sources, resolved } = prepared.surface;
 
     const reads = { memoryTail: undefined, activeSkills: null, ...(turn.accountFacts !== undefined && { accountFacts: turn.accountFacts }) };
 
-    return sources.dynamic(reads)(turn.profile ?? resolved.profile, tools);
+    return sources.dynamic(reads)(turn.profile ?? resolved.profile, offered);
   }
 
   async prepareChat(actorId: string, request: ChatTurnRequest): Promise<PreparedAgentTurn> {
@@ -401,14 +401,14 @@ export class AgentTurns {
     const { explicitTier } = turn.request;
 
     const sources = await materializeTurnSources(
-      { ...surface.sources, toolset: () => surface.tools, externalTools: async () => ({}) },
+      { ...surface.sources, toolset: () => surface.offered, externalTools: async () => ({}) },
       {
         userText: input.task, workMode: mode,
         ...(input.model !== undefined && { model: input.model }), ...(explicitTier !== undefined && { explicitTier }),
       },
     );
 
-    const brief = run?.brief?.(callableToolNames(mode, surface.tools));
+    const brief = run?.brief?.(callableToolNames(mode, surface.offered));
     const facts = this.offeredFacts(turn, prepared);
 
     if (facts === null) return null;
@@ -426,6 +426,7 @@ export class AgentTurns {
       ...(brief !== undefined && { brief }),
       opening: encodeModelMessageValues(run === undefined ? [] : run.opening ?? buildHeadMessages(input)),
       tools: surface.descriptors,
+      ownerLane: surface.ownerLane,
       dynamic: this.dynamic(turn, prepared),
       reviewsTurns: surface.reviewsTurns,
       ...(surface.trial !== undefined && { trial: surface.trial }),

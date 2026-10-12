@@ -3,7 +3,7 @@
  * turn is driven. Implemented by `chatSessionTurns` (actor-harness) over the agent's own isolate.
  */
 import type { LanguageModel, ModelMessage, ToolSet, UIMessage } from 'ai';
-import type { ChatOptions, JsonObject } from '@kinu.run/core';
+import type { ChatOptions, JsonObject, JsonValue } from '@kinu.run/core';
 
 export interface PreparedRequest {
   readonly identity: SettledTurn;
@@ -17,9 +17,17 @@ export interface PreparedRequest {
   readonly providerOptions: ChatOptions['providerOptions'];
 }
 
+/** A tool call the answer's first step makes, as a model makes it: the agent's own loop runs it. */
+export interface ScriptedCall {
+  readonly name: string;
+  readonly input: JsonValue;
+}
+
 export interface ScriptedAnswer {
   readonly messageId: string;
   readonly text?: string;
+  /** Made at the answer's first step; every later step answers `text`. */
+  readonly calls?: readonly ScriptedCall[];
   readonly parts?: UIMessage['parts'];
   readonly status?: RanTurn['status'];
   readonly error?: string;

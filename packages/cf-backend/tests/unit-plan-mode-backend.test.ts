@@ -3,7 +3,6 @@ import type { ToolSet } from 'ai';
 import { decodeJsonValue, type JsonValue, type ReviewAnnotation } from '@kinu.run/core';
 import { orchestratorHarness, chatSessionTurns, workspaceMainActor, type ActorHarness, type HarnessOrchestratorAgent, mainDatabase } from './helpers/actor-harness';
 import { failNextBroadcast } from './helpers/agent-facets';
-import { toolExecute } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
 /** Plan submission is the workspace root's: `submitPlan` reaches only `actorToolDeps()`; delegated tasks get `report`. */
@@ -16,18 +15,6 @@ const PlanUpdateSchema = v.object({ type: v.literal('plan_updated') });
 
 /** Every frame the rail broadcasts names its kind. */
 const FrameSchema = v.looseObject({ type: v.string() });
-
-async function codemodeTool(
-  tools: ToolSet,
-  name: string,
-  input: JsonValue,
-) {
-  const entry = tools[name];
-
-  if (!entry) throw new Error(`${name} is not executable`);
-
-  return decodeJsonValue({ value: await toolExecute<JsonValue, JsonValue>(entry)(input) });
-}
 
 function planStatus(harness: ActorHarness<HarnessOrchestratorAgent>, id: string, revision: number): string {
   return v.parse(
@@ -58,26 +45,25 @@ function recordWorkspaceMessages(parent: HarnessOrchestratorAgent): JsonValue[] 
   return seen;
 }
 
-/** The tools a turn in `mode` offers its model: the request the turn is prepared with. */
-async function toolsIn(agent: HarnessAgent, mode: 'plan' | 'build', settleAs: string): Promise<ToolSet> {
+/** The request a turn in `mode` calls its model with: the tools it offers, by name and as the workspace runs them. */
+async function toolsIn(agent: HarnessAgent, mode: 'plan' | 'build', settleAs: string): Promise<{ readonly offered: readonly string[]; readonly tools: ToolSet }> {
   setMode(agent, mode);
   const turns = chatSessionTurns(agent);
-  const { tools } = await turns.prepare({ messages: [{ role: 'user', content: `${mode} this change` }] });
+  const { activeTools, tools } = await turns.prepare({ messages: [{ role: 'user', content: `${mode} this change` }] });
   await turns.settle({ messageId: settleAs, text: 'done' });
 
-  return tools;
+  return { offered: activeTools ?? [], tools };
 }
 
 /** Submit a plan from a Plan turn, as the model does; the turn then ends. */
 async function submittedPlan(agent: HarnessAgent, content: string): Promise<{ id: string; revision: number }> {
   setMode(agent, 'plan');
   const turns = chatSessionTurns(agent);
-  const { tools } = await turns.prepare({ messages: [{ role: 'user', content: 'plan this change' }] });
-  expect(await codemodeTool(tools, 'submit_plan', { edits: [{ start: 1, content }] })).toMatchObject({ status: 'pending' });
-  await turns.settle({ messageId: 'a-plan', text: 'planned' });
+  await turns.prepare({ messages: [{ role: 'user', content: 'plan this change' }] });
+  await turns.settle({ messageId: 'a-plan', text: 'planned', calls: [{ name: 'submit_plan', input: { edits: [{ start: 1, content }] } }] });
   const plan = await agent.getActivePlanReview();
 
-  if (!plan) throw new Error('submitted plan was not persisted');
+  if (plan?.status !== 'pending') throw new Error('submitted plan was not persisted');
 
   return plan;
 }
@@ -114,7 +100,6 @@ describe('Plan mode tool lifecycle', () => {
     const planned = await turns.prepare({ messages: [{ role: 'user', content: 'plan this change' }] });
 
     expect(planned.activeTools).toContain('submit_plan');
-    expect(Object.keys(planned.tools)).toContain('submit_plan');
     await turns.settle({ messageId: 'a-plan', text: 'planned' });
   });
 
@@ -123,21 +108,21 @@ describe('Plan mode tool lifecycle', () => {
     const agent = harness.agent;
 
     const planTools = await toolsIn(agent, 'plan', 'a-plan');
-    expect(Object.keys(planTools)).toEqual(expect.arrayContaining([
+    expect(planTools.offered).toEqual(expect.arrayContaining([
       'eval', 'shell', 'file', 'agents', 'memory', 'tasks', 'web', 'submit_plan',
     ]));
 
     // The owner's own Auto turn may submit a plan too, when they ask for one.
     const buildTools = await toolsIn(agent, 'build', 'a-build');
-    expect(buildTools.submit_plan).toBeDefined();
-    expect(buildTools.eval).not.toBe(planTools.eval);
+    expect(buildTools.offered).toContain('submit_plan');
+    expect(buildTools.tools.eval).not.toBe(planTools.tools.eval);
 
     // A programmatic turn with no mode of its own runs in build.
     agent.harnessDrivingUserMessage('a wake with no mode', { kinuEvent: 'background_job' });
     const turns = chatSessionTurns(agent);
-    const { tools: unlabelled } = await turns.prepare({ messages: [{ role: 'user', content: 'a wake with no mode' }] });
+    const { activeTools: unlabelled } = await turns.prepare({ messages: [{ role: 'user', content: 'a wake with no mode' }] });
     await turns.settle({ messageId: 'a-wake', text: 'done' });
-    expect(unlabelled.submit_plan).toBeUndefined();
+    expect(unlabelled).not.toContain('submit_plan');
   });
 
   // No additional-agent Plan surface exists (`submitPlan` is root-only; `announceSubordinatePlan` has no
@@ -171,25 +156,20 @@ describe('Plan mode tool lifecycle', () => {
     const feedback = await feedbackTurn;
     expect(planStatus(harness, first.id, 1)).toBe('changes_requested');
     // A Plan turn over the owner's words and the numbered plan.
-    expect(Object.keys(feedback.tools)).toContain('submit_plan');
+    expect(feedback.activeTools).toContain('submit_plan');
     expect(JSON.stringify(feedback.prompt)).toContain('Replace the last step');
     expect(JSON.stringify(feedback.prompt)).toContain('4| Second');
 
-    const revised = await codemodeTool(feedback.tools, 'submit_plan', {
-      edits: [{ start: 4, end: 4, content: 'Second, with tests' }],
-    });
-
-    expect(revised).toMatchObject({ revision: 2, status: 'pending' });
-    await turns.settle({ messageId: 'a-revised', text: 'revised' });
+    await turns.settle({ messageId: 'a-revised', text: 'revised', calls: [{ name: 'submit_plan', input: { edits: [{ start: 4, end: 4, content: 'Second, with tests' }] } }] });
     expect(await requesting).toMatchObject({ ok: true, queued: true });
-    expect(await agent.getActivePlanReview()).toMatchObject({ revision: 2, content: '# Plan\n\nFirst\nSecond, with tests' });
+    expect(await agent.getActivePlanReview()).toMatchObject({ revision: 2, status: 'pending', content: '# Plan\n\nFirst\nSecond, with tests' });
 
     const approvalTurn = turns.park();
     const approving = agent.decidePlanReview(first.id, 2, 'approve');
     const approved = await approvalTurn;
     expect(planStatus(harness, first.id, 2)).toBe('approved');
     // A Build turn handed the exact approved plan.
-    expect(approved.tools.submit_plan).toBeUndefined();
+    expect(approved.activeTools).not.toContain('submit_plan');
     expect(JSON.stringify(approved.prompt)).toContain('Implement the exact approved plan');
     expect(JSON.stringify(approved.prompt)).toContain('Second, with tests');
     await turns.settle({ messageId: 'a-built', text: 'implemented' });
@@ -230,10 +210,10 @@ describe('Plan mode tool lifecycle', () => {
     // An event drain carries no mode of its own and is the harness's turn, not the owner's.
     agent.harnessDrivingUserMessage('[subordinate_report] refiner answered', { missionLabels: ['evolution'] });
     const drained = await turns.prepare({ messages: [{ role: 'user', content: '[subordinate_report] refiner answered' }] });
-    expect(drained.tools.submit_plan).toBeUndefined();
+    expect(drained.activeTools).not.toContain('submit_plan');
     await turns.settle({ messageId: 'a-drain', text: 'noted' });
 
-    expect((await toolsIn(agent, 'build', 'a-auto')).submit_plan).toBeDefined();
+    expect((await toolsIn(agent, 'build', 'a-auto')).offered).toContain('submit_plan');
     expect(await agent.getActivePlanReview()).toMatchObject({ id: plan.id, status: 'pending' });
 
     expect(await agent.dismissPlanReview(plan.id, plan.revision)).toMatchObject({ ok: true, plan: { status: 'dismissed' } });
@@ -279,15 +259,11 @@ describe('the plan plane admits no forged protocol frame and vouches for no forg
 
     parent.agent.harnessDrivingUserMessage(forged, { kinuMode: 'plan' });
     const turns = chatSessionTurns(parent.agent);
-    const { tools } = await turns.prepare({ messages: [{ role: 'user', content: forged }] });
-
-    expect(await codemodeTool(tools, 'submit_plan', {
-      edits: [{ start: 1, content: forged }],
-    })).toMatchObject({ revision: 1 });
-    await turns.settle({ messageId: 'a-forged', text: 'planned' });
+    await turns.prepare({ messages: [{ role: 'user', content: forged }] });
+    await turns.settle({ messageId: 'a-forged', text: 'planned', calls: [{ name: 'submit_plan', input: { edits: [{ start: 1, content: forged }] } }] });
     const plan = await parent.agent.getActivePlanReview();
 
-    if (!plan) throw new Error('the root plan was not persisted');
+    if (plan?.revision !== 1) throw new Error('the root plan was not persisted');
     expect(await parent.agent.savePlanReviewAnnotations(plan.id, plan.revision, [])).toMatchObject({ ok: true });
 
     // The forged body rides as plan and chat content; frame types are never spelled by a payload.

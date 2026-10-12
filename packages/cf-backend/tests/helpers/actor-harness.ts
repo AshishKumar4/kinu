@@ -13,7 +13,7 @@ import type { LanguageModel, ModelMessage, ToolSet, UIMessage } from 'ai';
 import * as v from 'valibot';
 import { scriptedTurnModel, type ModelStreamPart, type ScriptedTurnOptions, type ScriptedTurnResult } from '@kinu.run/test-utils/turn-model';
 import { convertArrayToReadableStream, MockLanguageModelV4 } from 'ai/test';
-import type { PreparedRequest, ScriptedAnswer, SettledTurn, TurnHarness } from './turn-harness';
+import type { PreparedRequest, ScriptedAnswer, ScriptedCall, SettledTurn, TurnHarness } from './turn-harness';
 import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, Clock, ModelInfo, ModelRouteResolution, ActorToolsets, SeatedActor, SurfaceReach } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { WorkspaceOverview } from '@kinu.run/core';
@@ -1183,6 +1183,15 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
   /** Parks on its first call until scripted, then answers every call with the same text. */
   const parkingModel = (arrived: ReturnType<typeof Promise.withResolvers<ScriptedTurnOptions>>, answer: Promise<ScriptedAnswer>): LanguageModel => {
     let calls = 0;
+    // The answer's tool calls are its first step's alone.
+    let called = false;
+
+    const toolCalls = (scripted: ScriptedAnswer): readonly ScriptedCall[] => {
+      if (called || scripted.calls === undefined) return [];
+      called = true;
+
+      return scripted.calls;
+    };
 
     const usage: ScriptedTurnResult['usage'] = {
       inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
@@ -1217,6 +1226,16 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
           throw Object.assign(new Error('aborted'), { name: 'AbortError' });
         }
 
+        const made = toolCalls(scripted);
+
+        if (made.length > 0) {
+          return {
+            content: made.map((call, index) => ({ type: 'tool-call' as const, toolCallId: `scripted_${String(index)}`, toolName: call.name, input: JSON.stringify(call.input) })),
+            finishReason: { unified: 'tool-calls' as const, raw: undefined },
+            usage, warnings: [],
+          };
+        }
+
         return {
           content: [{ type: 'text', text: textOf(scripted) }],
           finishReason: { unified: scripted.finishReason ?? 'stop', raw: undefined },
@@ -1227,6 +1246,18 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
       doStream: async (options) => {
 
         const scripted = await script(options);
+        const made = toolCalls(scripted);
+
+        if (made.length > 0) {
+          return {
+            stream: convertArrayToReadableStream<ModelStreamPart>([
+              { type: 'stream-start', warnings: [] },
+              ...made.map((call, index): ModelStreamPart => ({ type: 'tool-call', toolCallId: `scripted_${String(index)}`, toolName: call.name, input: JSON.stringify(call.input) })),
+              { type: 'finish', finishReason: { unified: 'tool-calls', raw: undefined }, usage },
+            ]),
+          };
+        }
+
         const text = textOf(scripted);
         const parts: ModelStreamPart[] = [{ type: 'stream-start', warnings: [] }];
 

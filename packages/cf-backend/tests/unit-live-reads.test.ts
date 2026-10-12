@@ -117,15 +117,14 @@ test("the agent's own plan names the plan and the needs-you queue", async () => 
   const named = namedReads(agent);
   agent.harnessDrivingUserMessage('plan this change', { kinuMode: 'plan' });
   const turns = chatSessionTurns(agent);
-  const { tools } = await turns.prepare({ messages: [{ role: 'user', content: 'plan this change' }] });
+  await turns.prepare({ messages: [{ role: 'user', content: 'plan this change' }] });
   endTick(agent);
   named();
 
-  await tools.submit_plan?.execute?.({ edits: [{ start: 1, content: '# Plan' }] }, { toolCallId: 'p', messages: [], context: undefined });
+  await turns.settle({ messageId: 'a-plan', text: 'planned', calls: [{ name: 'submit_plan', input: { edits: [{ start: 1, content: '# Plan' }] } }] });
   endTick(agent);
 
   expect([...named()]).toEqual(expect.arrayContaining(['getActivePlanReview', 'listPendingActions']));
-  await turns.settle({ messageId: 'a-plan', text: 'planned' });
 });
 
 test('a command parked for approval names the needs-you queue', async () => {

@@ -23,8 +23,8 @@ export { inspectDescendant, inspectSubordinateStorage, type AgentOwnInspection, 
 
 // Backend-neutral terminal-turn state machine: the DO and the CLI supply only effect bodies and a wake.
 export {
-  chatTurnParts, declareTerminalRoster, declareHandoffRoster, HandedOffTurnSchema,
-  type HandedOffTurn, type TerminalTurnFacts, type TerminalTurnParts,
+  chatTurnParts, declareTerminalRoster, declareHandoffRoster, HandedOffTurnSchema, runSettleEffect, SettledRunSchema,
+  type HandedOffTurn, type SettledRun, type TerminalTurnFacts, type TerminalTurnParts,
 } from './orchestrator/terminal-roster';
 
 export { SleepTimeLane, initSleepTimeUpdatesTable, type SleepTimeLaneDeps } from './orchestrator/sleep-time-lane';
@@ -674,8 +674,8 @@ export {
 } from './subordinates/depth';
 
 export {
-  askOwnerTool,
   buildBuiltinTools,
+  ownerLaneTools, ownerLaneDeclarations,
   codemodeSurface,
   type BuiltinToolDeps,
   type CodemodeBuilder, type CodemodeSurface,
@@ -695,7 +695,7 @@ export {
 // Applied inside buildActorTools; backends never wrap tools themselves.
 export {
   initToolEffectClaimTable, claimToolEffect, settleToolEffect,
-  withEffectReceipt, withEffectPointer, remoteReceipts,
+  withEffectReceipt, withEffectPointer, remoteReceipts, pruneTurnReceipts,
   type EffectClaimDeps, type ReceiptExecution, type RemoteReceipt, type ToolEffectClaim, type ToolEffectKey,
 } from './tools/effect-claim';
 

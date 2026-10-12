@@ -23,6 +23,7 @@ const unusedWorkspace: AgentWorkspaceCalls = {
   chatEvent: unused,
   turnEnded: unused,
   turnSettled: unused,
+  runSettled: unused,
   owedReport: unused,
   parentReport: unused,
   autoTitle: unused,

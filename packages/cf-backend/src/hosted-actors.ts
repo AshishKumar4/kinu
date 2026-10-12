@@ -6,7 +6,7 @@ import type { LanguageModel, ModelMessage, Tool, ToolSet } from 'ai';
 import { EventLog, titleActorFromMessage, spawnSeatedHead, admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus, receiveSubordinateEvent, subordinateRelaysTurnEnd, subordinateForkContext, type SubordinateInheritedContext, inheritedAsModelMessage, explorationActorKey, headStatusUnsettled, storedHeadReportStatus, registeredParent, subordinateDescendants, actorReferenceOf, TEMPORARY_LIFETIME, terminalTaskReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, type ActorHost, type ActorReference, type BoundActor, type DelegationBudget, type HeadId, type HeadInput, type RunInference, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedNodeSeat, type StepLoopJobSeat, type JobRetirement, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubordinateEventResult, type SubordinateHandoff, type SubordinateLifetime, type SubordinateReportOrigin, type SubordinateReportHandoff, type SubordinateReportStatus, type SubordinateRosterStore, type SubordinateRuntime, type SubordinateSeed, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
 import { attempt, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import type {
-  AgentToolDescriptor, ArtifactOverrides, DynamicReads, ExecutionKey, ExecutionLane, HeadCapture, HeadSeat, JsonObject, OperationProfile, OwedReport,
+  AgentToolDescriptor, ArtifactOverrides, DynamicReads, ExecutionKey, ExecutionLane, HeadCapture, HeadSeat, JsonObject, OperationProfile, OwedReport, PreparedAgentTurn,
   ReceiptExecution, ReportDeps, RunTurnSources, TaskPlan, TrialTurn, TurnAssemblySources, TurnLedgers,
   TurnOpening, TurnSurface,
 } from '@kinu.run/core';
@@ -71,7 +71,11 @@ export interface ActorSurface {
   readonly surface: TurnSurface;
   /** The resolution its tools were built under, until its isolate binds the final one. */
   readonly resolved: ResolvedSurface;
+  /** The tools the workspace runs for it. */
   readonly tools: ToolSet;
+  /** Its turn's whole surface as its model is offered it: `tools`, and its owner's lane declared, which its own isolate
+   *  runs. */
+  readonly offered: ToolSet;
   /** Its tools as a retry of its job runs them: never handed to the background. */
   readonly raw: ToolSet;
   readonly sources: SurfaceSources;
@@ -87,6 +91,8 @@ export interface ActorSurface {
   /** What its isolate is told of its tools, and their digest: it is told them again only when the digest moves. */
   readonly descriptors: readonly AgentToolDescriptor[];
   readonly digest: string;
+  /** The owner's lane its turn reaches, which its isolate builds over its own store; declared in `offered` alone. */
+  readonly ownerLane: PreparedAgentTurn['ownerLane'];
   /** The profile its isolate assembled on: its tools run under it, and its eval reaches what that profile allows. */
   bind(profile: ResolvedTurnProfile): void;
 }

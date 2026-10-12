@@ -26,7 +26,7 @@ import { isMcpToolKey } from './mcp-naming';
 import { selectInjectableCraftedTools, type CraftedToolSource } from './crafted-executor';
 import { TurnEscalationLedger } from '../execution/escalation';
 import { serveMemory } from './memory-operations';
-import { nativeTool, operationInputSchema, operationTool } from './operation-surfaces';
+import { declaredOperationTool, nativeTool, operationInputSchema, operationTool } from './operation-surfaces';
 import { serveTasks, type RoleSwitch } from './tasks-operations';
 import type { WebSearchProvider } from '../web/index';
 import { serveWeb } from './web-operations';
@@ -71,7 +71,7 @@ const ASK_OWNER = defineOperation({
  * `ask_owner`, with no executor: its call stays unpaired, so the loop stops on its step and the owner's answer reaches
  * the model through the repair that pairs interrupted calls (`plans/owner-questions.ts`).
  */
-export function askOwnerTool() {
+function askOwnerTool() {
   return permitInPlan(tool({ description: ASK_OWNER_DESCRIPTION, inputSchema: operationInputSchema(ASK_OWNER) }));
 }
 
@@ -190,15 +190,6 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     tools.report = operationTool(BUILTIN_TOOL_DESCRIPTIONS.report, serveReport(() => report));
   }
 
-  // Outside BUILTIN_TOOLS: the plan review's tools exist only where their deps are wired.
-  const { submitPlan, replyToComment } = deps;
-
-  if (submitPlan) tools.submit_plan = operationTool(PLAN.submit.help, servePlan(submitPlan));
-
-  if (replyToComment) tools.reply_to_comment = operationTool(PLAN.reply.help, servePlanReply(replyToComment));
-
-  if (deps.askOwner) tools[ASK_OWNER_TOOL] = askOwnerTool();
-
   // `mcp_` is reserved for MCP (isMcpToolKey).
   for (const name of Object.keys(tools)) {
     if (isMcpToolKey(name)) {
@@ -209,7 +200,40 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     }
   }
 
-  return toolsInWorkMode(deps.workMode ?? 'build', withCheckedInputs(tools));
+  return toolsInWorkMode(deps.workMode ?? 'build', { ...withCheckedInputs(tools), ...ownerLaneTools(deps) });
+}
+
+/**
+ * The owner's lane, outside BUILTIN_TOOLS: the plan review's tools and the question to the owner, each only where its
+ * deps are wired. Their effects commit in the agent's own store, so an agent in its own isolate builds them there.
+ */
+export function ownerLaneTools(deps: Pick<BuiltinToolDeps, 'submitPlan' | 'replyToComment' | 'askOwner'>): ToolSet {
+  const tools: ToolSet = {};
+  const { submitPlan, replyToComment } = deps;
+
+  if (submitPlan) tools.submit_plan = operationTool(PLAN.submit.help, servePlan(submitPlan));
+
+  if (replyToComment) tools.reply_to_comment = operationTool(PLAN.reply.help, servePlanReply(replyToComment));
+
+  if (deps.askOwner) tools[ASK_OWNER_TOOL] = askOwnerTool();
+
+  return withCheckedInputs(tools);
+}
+
+/**
+ * The owner's lane as a turn offers it, with no executor: what a workspace reads of a turn whose agent's own isolate
+ * builds and runs these tools ({@link ownerLaneTools}), for the facts and lessons its dynamic block states of them.
+ */
+export function ownerLaneDeclarations(lane: { readonly submitPlan: boolean; readonly replyToComment: boolean; readonly askOwner: boolean }): ToolSet {
+  const declared: ToolSet = {};
+
+  if (lane.submitPlan) declared.submit_plan = declaredOperationTool(PLAN.submit.help, PLAN.submit);
+
+  if (lane.replyToComment) declared.reply_to_comment = declaredOperationTool(PLAN.reply.help, PLAN.reply);
+
+  if (lane.askOwner) declared[ASK_OWNER_TOOL] = askOwnerTool();
+
+  return withCheckedInputs(declared);
 }
 
 function isExecutableToolEntry(

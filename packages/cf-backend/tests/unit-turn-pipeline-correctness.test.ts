@@ -416,20 +416,20 @@ describe('turn-pipeline correctness wiring', () => {
   });
 
   test('root mode facts describe submit_plan on the actual provider surface', async () => {
-    // The owner's Auto turn may submit a plan, which the static doctrine's default does not say, so its block does.
-    const cases: readonly { mode: 'build' | 'plan'; installed: boolean; available: boolean; facts: string | null }[] = [
-      { mode: 'build', installed: true, available: true, facts: 'Mode: build; submit_plan: available.' },
-      { mode: 'plan', installed: true, available: true, facts: 'Mode: plan; submit_plan: available.' },
-      { mode: 'plan', installed: false, available: false, facts: 'Mode: plan; submit_plan: unavailable.' },
+    // The owner's Auto turn may submit a plan, which the static doctrine's default does not say, so its block does. The
+    // owner's lane is the turn's reach, which its own isolate builds: no tool surface a caller supplies removes it.
+    const cases: readonly { mode: 'build' | 'plan'; available: boolean; facts: string | null }[] = [
+      { mode: 'build', available: true, facts: 'Mode: build; submit_plan: available.' },
+      { mode: 'plan', available: true, facts: 'Mode: plan; submit_plan: available.' },
     ];
 
-    for (const { mode, installed, available, facts } of cases) {
+    for (const { mode, available, facts } of cases) {
       const { agent } = orchestratorHarness();
       agent.harnessDrivingUserMessage(`Run the ${mode} turn`, { kinuMode: mode });
 
       const handed: ModelMessage[] = [{ role: 'user', content: `Run the ${mode} turn` }];
 
-      const turn = await chatSessionTurns(agent).prepare({ messages: handed, tools: installed ? agent.getTools() : {} });
+      const turn = await chatSessionTurns(agent).prepare({ messages: handed, tools: agent.getTools() });
 
       if (!turn) throw new Error('the root turn must prepare a configuration');
       // The provider call the turn made: its tool surface and its prompt.

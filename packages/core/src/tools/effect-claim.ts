@@ -295,3 +295,11 @@ export function remoteReceipts(
 
   return receipts;
 }
+
+/** A settled run's receipts go: nothing executes under it again, its close has paired every call it lost, and a Retry is
+ *  another run. Its turn's other runs keep theirs. */
+export function pruneTurnReceipts(sql: SqlExecutor, actor: ActorHandle, execution: ReceiptExecution): void {
+  actor.assertCurrent();
+  void sql`DELETE FROM tool_effect_claims
+    WHERE actor_id=${actor.actorId} AND turn_id=${execution.turnId} AND run_id=${execution.runId}`;
+}

@@ -164,6 +164,13 @@ export function operationTool(description: string, served: Served): Tool {
   return nativeCall((fields) => ({ served, fields }), { description: `${description} Returns ${returnsOf(served.op)}.`, parameters: inputJsonSchema(served.op) }, [served]);
 }
 
+/** {@link operationTool} as a turn offers it where another store runs it: its description and input, with no executor. */
+export function declaredOperationTool(description: string, op: Operation): Tool {
+  const declared = tool({ description: `${description} Returns ${returnsOf(op)}.`, inputSchema: operationInputSchema(op) });
+
+  return allowedInPlan(op) ? permitInPlan(declared) : declared;
+}
+
 /** One field across the operations that take it: its schemas, and the operations by what each says of it. */
 interface SharedField {
   readonly schemas: Map<string, JsonSchema>;
