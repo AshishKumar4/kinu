@@ -524,6 +524,7 @@ index a157bac..15c3f9c 100644
      let closed = false;
      let hold = null;
 diff --git a/dist/session/supervisor-calls.js b/dist/session/supervisor-calls.js
+index e4cee53..38f0a93 100644
 --- a/dist/session/supervisor-calls.js
 +++ b/dist/session/supervisor-calls.js
 @@ -53,7 +53,9 @@
