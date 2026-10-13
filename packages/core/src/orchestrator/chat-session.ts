@@ -1606,10 +1606,22 @@ export class ChatSession {
 
   /** Idempotent per run. Takes the name: `classifyRunEnd` runs once per turn, so a Stop seals `aborted` on both backends. */
   private closeRun(end: RunEndClassification, lease: ActorTurnLease): RunEndReason {
-    // Settled before the early return, under the same name as the run.
-    if (this.actorSession.claimOpen(lease)) this.actorSession.settleTurnClaim(lease, end.reason);
+    this.closeRunIn(end, lease)();
 
-    if (!this.runId) return end.reason;
+    return end.reason;
+  }
+
+  /**
+   * The run's close, written now, in the caller's commit where there is one: its claim's verdict and its run's end. The
+   * returned call marks both closed here once that commit holds; until then nothing here says the run closed, so a commit
+   * that rolls back leaves it open on both sides, for the failure's own close.
+   */
+  private closeRunIn(end: RunEndClassification, lease: ActorTurnLease): () => void {
+    // Settled before the early return, under the same name as the run.
+    const claimClosed = this.actorSession.claimOpen(lease) ? this.actorSession.closeTurnClaim(lease, end.reason) : null;
+    const { runId } = this;
+
+    if (!runId) return () => { claimClosed?.(); };
 
     const outcome: Parameters<typeof closeTurnRun>[2] = {
       turnIndex: this.actorSession.orchestrator.sessionTurnIndex,
@@ -1618,17 +1630,22 @@ export class ChatSession {
       files: this.actorSession.orchestrator.acc.files,
       escalations: this.actorSession.orchestrator.acc.escalations,
       steering: this.actorSession.orchestrator.steering.snapshot(),
-      completionGate: this.completionGate.take(),
+      completionGate: this.completionGate.pending,
       craft: this.actorSession.orchestrator.craft.snapshot(),
       recoveries: this.actorSession.orchestrator.recoverySnapshot(),
       reason: end.reason,
     };
 
     if (end.error) outcome.error = end.error;
-    closeTurnRun(this.eventRecorder, this.runId, { ...outcome, workMode: this.actorSession.workMode });
-    this.runId = null;
+    closeTurnRun(this.eventRecorder, runId, { ...outcome, workMode: this.actorSession.workMode });
 
-    return end.reason;
+    return () => {
+      claimClosed?.();
+
+      if (this.runId !== runId) return;
+      this.runId = null;
+      this.completionGate.taken();
+    };
   }
 
   /** A started turn always terminates: exactly one `turn-end` and a closed run, even when assembly throws. */
@@ -2082,7 +2099,7 @@ export class ChatSession {
       });
 
       const transition: TerminalTransition = { turnId, messageId };
-      let published = (): void => {};
+      let closed = (): void => {};
 
       this.transaction(() => {
         this.persist(input.preparedAssistant);
@@ -2097,10 +2114,15 @@ export class ChatSession {
         for (const id of this.actorSession.orchestrator.inbox.absorbedDeliveries) this.pendingSends.retireTurn(id);
 
         this.ports.terminal().record(transition, owed);
-        // Its claim's verdict and its run's end, heard once the commit holds.
-        published = this.eventRecorder.collect(() => this.closeRun(input.end, input.lease)).publish;
+        // Its claim's verdict and its run's end, closed here and heard only once the commit holds.
+        const closing = this.eventRecorder.collect(() => this.closeRunIn(input.end, input.lease));
+
+        closed = () => {
+          closing.value();
+          closing.publish();
+        };
       });
-      published();
+      closed();
 
       return { committed: { turn, owed, transition } };
     } catch (cause) {

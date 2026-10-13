@@ -1,7 +1,8 @@
 /**
  * An execution is claimed as it opens (design v2 §2-§3), before anything of it is prepared: a preparation that fails ends
  * its turn, its room told, and leaves the agent free for the next; a Stop that comes as it opens ends it with nothing
- * asked of the model and the owner's words kept; and a run delivered while a chat turn runs waits for that turn's end.
+ * asked of the model and the owner's words kept; a run delivered while a chat turn runs waits for that turn's end; and
+ * an answer whose commit is refused leaves its execution's close to the turn's failure, durably.
  */
 import { expect, test } from 'bun:test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
@@ -157,5 +158,42 @@ test("words sent while a turn opens, before it runs, come back on a Stop, and no
 
     expect(await handedBack.promise).toEqual(['and the refunds too']);
     expect(prompts.filter((prompt) => prompt.includes('and the refunds too'))).toEqual([]);
+  } finally { fixture.close(); }
+});
+
+test("a turn whose answer's commit is refused closes its claim and its run as the failure it is", async () => {
+  const { model } = answering();
+  let refusals = 1;
+  let endedRuns = (): number => 0;
+  const ended = Promise.withResolvers<void>();
+
+  const fixture = await sessionFixture({
+    model,
+    // The commit that ends the turn's run is refused once, as storage refuses a COMMIT: everything it wrote rolls back.
+    aroundCommit: (commit) => <T>(body: () => T): T => commit(() => {
+      const value = body();
+
+      if (refusals > 0 && endedRuns() > 0) {
+        refusals -= 1;
+        throw new KinuError('io', 'the storage refused the commit');
+      }
+
+      return value;
+    }),
+    onEvent: (event) => { if (event.type === 'turn-end') ended.resolve(); },
+  });
+
+  const { sql } = fixture.actor.runtime.storage;
+
+  endedRuns = () => sql<{ n: number }>`SELECT COUNT(*) AS n FROM run_events WHERE type = 'run_end'`[0]?.n ?? 0;
+
+  try {
+    await fixture.chat.send('close the books', { id: 'refused-commit' });
+    await ended.promise;
+
+    // Its room is told it failed, and its claim and run are closed where a restart reads them: nothing of it runs again.
+    expect(fixture.events.some((event) => event.type === 'error')).toBe(true);
+    expect(fixture.actor.stores.claims.read('refused-commit')).toMatchObject({ status: 'settled', outcome: 'error' });
+    expect([endedRuns(), fixture.actor.stores.eventRecorder.openTurn()]).toEqual([1, null]);
   } finally { fixture.close(); }
 });

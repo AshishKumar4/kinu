@@ -625,16 +625,26 @@ export class ActorSession {
 
     if (active.phase === 'running') throw new KinuError('denied', 'cannot release an actor while its program is running');
 
-    if (active.reserved !== null && !active.claimSettled) this.settleClaim(active, 'indeterminate');
+    if (active.reserved !== null && !active.claimSettled) this.closeClaim(active, 'indeterminate')();
     this.active = null;
   }
 
   /** Called once the turn's answer is durable, or as its preparation failed, before any model or tool work. */
   settleTurnClaim(lease: ActorTurnLease, outcome: ClaimOutcome): void {
+    this.closeTurnClaim(lease, outcome)();
+  }
+
+  /**
+   * The turn's claim settled `outcome`, written now, in the caller's commit where there is one. The returned call, once
+   * that commit holds, marks it settled here, ends its trace and tells its observers: until then nothing here says it
+   * settled, so a commit that rolls back leaves it open on both sides.
+   */
+  closeTurnClaim(lease: ActorTurnLease, outcome: ClaimOutcome): () => void {
     const active = this.requireTurn(lease);
 
     if (active.reserved === null) throw new KinuError('denied', 'this actor turn holds no durable claim to settle');
-    this.settleClaim(active, outcome);
+
+    return this.closeClaim(active, outcome);
   }
 
   /** Whether the turn's claim is still to be settled. */
@@ -644,9 +654,20 @@ export class ActorSession {
     return active.reserved !== null && !active.claimSettled;
   }
 
-  private settleClaim(active: ActiveTurn, outcome: ClaimOutcome): void {
-    if (active.reserved === null || active.claimSettled) return;
-    this.options.claims.settle(active.reserved, outcome);
+  private closeClaim(active: ActiveTurn, outcome: ClaimOutcome): () => void {
+    if (active.reserved === null || active.claimSettled) return () => {};
+
+    const told = this.options.claims.settleIn(active.reserved, outcome);
+
+    return () => {
+      if (active.claimSettled) return;
+
+      this.claimSettled(active, outcome);
+      told();
+    };
+  }
+
+  private claimSettled(active: ActiveTurn, outcome: ClaimOutcome): void {
     active.claimSettled = true;
     const ended = active.ended;
 

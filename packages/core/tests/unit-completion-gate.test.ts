@@ -57,8 +57,9 @@ describe('what the gate reports', () => {
     gate.arm('the task');
     gate.fire();
     gate.settle({ toolCalls: 2 });
-    expect(gate.take()).toEqual({ converted: true });
-    expect(gate.take()).toBeNull();
+    expect(gate.pending).toEqual({ converted: true });
+    gate.taken();
+    expect(gate.pending).toBeNull();
   });
 
   test('a re-look that only confirmed is recorded as an honest non-conversion', () => {
@@ -66,14 +67,14 @@ describe('what the gate reports', () => {
     gate.arm('the task');
     gate.fire();
     gate.settle({ toolCalls: 0 });
-    expect(gate.take()).toEqual({ converted: false });
+    expect(gate.pending).toEqual({ converted: false });
   });
 
   test('a gate that never settled writes no row', () => {
     const gate = new CompletionGate();
     gate.arm('the task');
     gate.fire();
-    expect(gate.take()).toBeNull();
+    expect(gate.pending).toBeNull();
   });
 });
 

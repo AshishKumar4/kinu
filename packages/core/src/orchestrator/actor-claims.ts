@@ -293,6 +293,11 @@ export class ActorClaimStore {
   }
 
   settle(claim: Pick<ActorTurnClaim, 'turnId' | 'epoch'>, outcome: ClaimOutcome): void {
+    this.settleIn(claim, outcome)();
+  }
+
+  /** The claim's verdict, written in the caller's commit; the returned call tells its observers, once that commit holds. */
+  settleIn(claim: Pick<ActorTurnClaim, 'turnId' | 'epoch'>, outcome: ClaimOutcome): () => void {
     this.transactionSync(() => {
       this.actor.assertCurrent();
 
@@ -302,7 +307,8 @@ export class ActorClaimStore {
 
       if (settled.length === 0) assertLiveIn(this.guard(claim.turnId, claim.epoch), claim);
     });
-    this.changed();
+
+    return () => { this.changed(); };
   }
 
   /** A Retry of the turn's answer: what its executions through its answered one produced is no longer its output. */

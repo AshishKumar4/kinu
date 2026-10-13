@@ -32,6 +32,8 @@ export async function sessionFixture(input: {
   readonly cacheWarming?: (actor: HostedActor) => CacheWarmingLane;
   /** Hears each event as the session's room does, the moment it is sent. */
   readonly onEvent?: (event: SessionEvent) => void;
+  /** Wraps the session's commits, for a case that refuses one as its storage would. */
+  readonly aroundCommit?: (commit: <T>(body: () => T) => T) => <T>(body: () => T) => T;
 }) {
   const { rt, testSql } = createTestRuntime();
   const db = testSql.db;
@@ -52,7 +54,8 @@ export async function sessionFixture(input: {
   const sessionKey = actor.handle.actorId;
   const events: SessionEvent[] = [];
   const eventLog = new EventLog(makeSqlExec(db), actor.handle);
-  const transaction = <T>(body: () => T): T => db.transaction(body)();
+  const committed = <T>(body: () => T): T => db.transaction(body)();
+  const transaction = input.aroundCommit?.(committed) ?? committed;
 
   initPendingSendTables(rt.storage.execRaw);
   initTerminalEffectTable(rt.storage.execRaw);

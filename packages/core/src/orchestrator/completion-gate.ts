@@ -120,11 +120,13 @@ export class CompletionGate {
     this.record = { converted: facts.toolCalls > 0 };
   }
 
-  /** Returns the record once. */
-  take(): CompletionGateRecord | null {
-    const record = this.record;
-    this.record = null;
+  /** The record its run's end carries, until that end has committed ({@link taken}). */
+  get pending(): CompletionGateRecord | null {
+    return this.record;
+  }
 
-    return record;
+  /** The run's end that carried the record committed: the next one carries none. */
+  taken(): void {
+    this.record = null;
   }
 }
