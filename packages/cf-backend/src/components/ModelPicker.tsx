@@ -1,5 +1,5 @@
 /** The one model picker for every surface; groups follow server order (connected-provider preference). */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Badge, Combobox, Select } from "@cloudflare/kumo";
 import { ArrowsClockwiseIcon, BrainIcon, EyeIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import {
@@ -15,24 +15,14 @@ import { connectCloudflareInHelper } from "../lib/connect-window";
 import { badgeCapabilities, groupModelMenu, modelMatchesQuery } from "./model-picker-options";
 import { BrandMark, providerBrand } from "./ui/BrandMark";
 import { ChatGptPlanUsage } from "./account/ChatGptConnect";
-import { Cause, Effect } from "effect";
-import { detach, diagnostics, renderThrownChain } from "@kinu.run/core/obs";
-import * as v from 'valibot';
-
-const ModelMenuEntrySchema = v.object({
-  spec: v.string(),
-  label: v.string(),
-  provider: v.string(),
-  capabilities: v.optional(v.array(v.string())),
-  contextWindow: v.optional(v.number()),
-});
+import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
+import { lastValue, useAsyncResource } from "../hooks/use-async-resource";
 
 type PickerValue = ModelMenuEntry | { value: string; items: ModelMenuEntry[] };
 
+/** The combobox hands back an entry or a group; only an entry carries a spec. */
 function modelMenuEntry(input: PickerValue): ModelMenuEntry | null {
-  const parsed = v.safeParse(ModelMenuEntrySchema, input);
-
-  return parsed.success ? parsed.output : null;
+  return 'spec' in input ? input : null;
 }
 
 /** Empty clears the workspace override; the tier's effort applies. */
@@ -234,29 +224,22 @@ export function ModelPicker({
 }
 
 /**
- * Tri-state: null = loading, "error" = retryable failure, [] = no provider connected.
- * Only [] earns the empty-state CTA, which forces an OAuth prompt=login.
+ * Loading, a retryable failure, or the menu; an empty menu means no provider connected.
+ * Only that earns the empty-state CTA, which forces an OAuth prompt=login.
  */
 export function ConnectedModelPicker({
   value, onChange, size, className, clearable, placeholder, renderEmpty, disabled, effort,
 }: Omit<ModelPickerProps, "models" | "test"> & {
   renderEmpty?: () => React.ReactNode;
 }) {
-  const [menu, setMenu] = useState<ModelMenu | null | { error: string }>(null);
+  const { resource, reload } = useAsyncResource(listAvailableModels);
+  const menu = lastValue(resource);
 
-  const fetchModels = useCallback(() => {
-    setMenu(null);
-    detach(Effect.catchCause(Effect.map(Effect.promise(listAvailableModels), setMenu), (failed) => Effect.sync(() => {
-      const error = renderThrownChain({ cause: Cause.squash(failed) });
+  useEffect(() => {
+    if (resource.status === "error") diagnostics.event("model_picker.load_failed", { error: resource.message });
+  }, [resource]);
 
-      diagnostics.event("model_picker.load_failed", { error });
-      setMenu({ error });
-    })));
-  }, []);
-
-  useEffect(() => { fetchModels(); }, [fetchModels]);
-
-  if (menu === null) {
+  if (resource.status === "loading") {
     return (
       <span className="inline-flex items-center rounded-md border p-border px-1.5 py-1 p-t-status p-text-3" aria-label="Loading models">
         …
@@ -264,13 +247,13 @@ export function ConnectedModelPicker({
     );
   }
 
-  if ("error" in menu) {
+  if (menu === null) {
     return (
       <button
         type="button"
-        onClick={fetchModels}
+        onClick={reload}
         className="inline-flex min-w-0 items-center gap-1 rounded-md border p-border px-2 py-1 p-t-control p-text-3 hover:p-text-2"
-        title={menu.error}
+        title={resource.status === "error" ? resource.message : undefined}
       >
         <ArrowsClockwiseIcon size={11} className="shrink-0" />
         <span className="truncate">Couldn't load the model list. Retry</span>
@@ -284,7 +267,7 @@ export function ConnectedModelPicker({
       return (
         <button
           type="button"
-          onClick={fetchModels}
+          onClick={reload}
           className="p-tint-warning p-warning inline-flex items-center gap-1.5 rounded-md border px-2 py-1 p-t-status hover:opacity-80"
           title={failureTitle(menu.failures)}
         >

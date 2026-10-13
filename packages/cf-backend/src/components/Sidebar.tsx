@@ -1,4 +1,4 @@
-import { Cause, Effect } from 'effect';
+import { Effect } from 'effect';
 import { useState, useCallback, useRef, type FormEvent, type RefObject } from "react";
 import { Link, NavLink, useLocation, useMatch, useNavigate } from "react-router-dom";
 import { GearIcon, TrashIcon, SignOutIcon, PencilSimpleIcon, CheckIcon, XIcon, PlusIcon, ShieldCheckIcon, SidebarSimpleIcon,
@@ -14,7 +14,8 @@ import { lastValue } from "../hooks/use-async-resource";
 import { ModeToggle, ThemeToggle } from "./theme-toggle";
 import { FeedbackButton } from "./FeedbackButton";
 import { isPlaceholderWorkspaceTitle, shortAge, workspaceDisplayTitle, type PanelAgent } from "@kinu.run/core";
-import { renderCauseChain, detach } from "@kinu.run/core/obs";
+import { detach } from "@kinu.run/core/obs";
+import { useRename } from "@/hooks/use-rename";
 import { SidebarAgents } from "./SidebarAgents";
 import { ChatMascot, WorkspaceLogo, mascotColour, mascotSeed } from "./Marks";
 import { AgentStatusMark } from "./AgentStatus";
@@ -61,33 +62,19 @@ function RowRenameEditor({ value, label, saveLabel, save, waiting, onDone }: {
   waiting: { readonly text: string; readonly failed: boolean } | null;
   onDone: () => void;
 }) {
-  const [draft, setDraft] = useState(value);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { draft, setDraft, saving, error, commit } = useRename(value, save, onDone);
 
-  const submit = (event: FormEvent) => Effect.gen(function* () {
+  const submit = (event: FormEvent): void => {
     event.preventDefault();
     const name = draft.trim();
 
-    if (!name || saving || waiting !== null) return;
-    setSaving(true);
-    setError(null);
-
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      yield* Effect.promise(async () => save(name));
-      onDone();
-    }), (failed) => Effect.sync(() => {
-      const err = Cause.squash(failed);
-      setError(err instanceof Error ? renderCauseChain(err) : "Rename failed");
-    })), Effect.sync(() => {
-      setSaving(false);
-    }));
-  });
+    if (name !== '' && waiting === null) commit(name);
+  };
 
   const said = error ?? waiting?.text ?? null;
 
   return (
-    <form onSubmit={(event) => detach(submit(event))} className="p-card px-1.5 py-1">
+    <form onSubmit={submit} className="p-card px-1.5 py-1">
       <div className="flex items-center gap-1">
         <input
           autoFocus

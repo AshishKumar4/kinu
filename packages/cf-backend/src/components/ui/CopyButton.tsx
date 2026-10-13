@@ -2,7 +2,7 @@
 import { CheckIcon, CopyIcon, WarningCircleIcon, type Icon } from "@phosphor-icons/react";
 import { useCopy, type CopyStatus } from "@/hooks/use-copy";
 
-export interface CopyButtonProps {
+interface CopyButtonProps {
   value: string;
   what: string;
   size?: number;

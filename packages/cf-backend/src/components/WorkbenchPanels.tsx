@@ -7,7 +7,7 @@ import { needsTheUser, type PersonAsks } from "@kinu.run/core";
 
 import { useInspectorLayout } from "@/hooks/use-inspector-layout";
 
-export interface WorkbenchPanelsProps {
+interface WorkbenchPanelsProps {
   /** `undefined` for a sample workbench: the policy decides on every mount. */
   readonly workspace: string | undefined;
   readonly scope?: string;

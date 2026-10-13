@@ -1,11 +1,10 @@
 /** The workspace's bar: its name, a browser-style tab per chat the person opened, then +. One hairline draws the
  *  bottom rule and the open tab's silhouette, and glides between tabs. */
-import { Effect } from "effect";
-import { useCallback, useRef, useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { PencilSimpleIcon, PlusIcon, XIcon } from "@phosphor-icons/react";
 import type { PanelAgent } from "@kinu.run/core";
-import { detach, showing } from "@kinu.run/core/obs";
+import { useRename } from "@/hooks/use-rename";
 import { composing } from "@/components/ui/form";
 import { TabOutline, useTabOutline } from "@/components/ui/TabOutline";
 import { ChatMascot, WorkspaceLogo, mascotColour, mascotSeed } from "./Marks";
@@ -117,28 +116,16 @@ function BarTab({ item, active, afterActive }: { item: BarItem; active: boolean;
 }
 
 function RenameField({ value, hint, subject, save, done }: { value: string; hint: string; subject: string; save: Rename; done: () => void }) {
-  const [draft, setDraft] = useState(value);
-  const [error, setError] = useState<string | null>(null);
-  const saving = useRef(false);
+  const { draft, setDraft, saving, error, commit: commitName } = useRename(value, save, done);
 
-  const commit = useCallback(() => detach(Effect.gen(function* () {
+  const commit = (): void => {
     const name = draft.trim();
 
-    if (saving.current) return;
+    if (saving) return;
 
-    if (name === "" || name === value) {
-      done();
-
-      return;
-    }
-
-    saving.current = true;
-
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      yield* Effect.promise(async () => save(name));
-      done();
-    }), showing(setError)), Effect.sync(() => { saving.current = false; }));
-  })), [draft, value, save, done]);
+    if (name === "" || name === value) done();
+    else commitName(name);
+  };
 
   return (
     <span className="p-bar-rename">

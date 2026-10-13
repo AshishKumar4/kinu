@@ -211,7 +211,8 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
                   </div>
                 )}
 
-                {s.id === 'model' && <DefaultModelField shown={i === step} />}
+                {/* Mounted only while open, so a revisit reads the providers connected meanwhile. */}
+                {s.id === 'model' && i === step && <DefaultModelField />}
 
                 {s.id === 'tools' && (
                   <div className="space-y-4">

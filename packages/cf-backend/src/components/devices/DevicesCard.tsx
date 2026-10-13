@@ -24,11 +24,10 @@ export function DevicesCard() {
   const [err, setErr] = useState<string | null>(null);
   /** Counts are shown only when this tab observed the revoke; the durable timestamp keeps the row across reloads. */
   const [unstoppedCounts, setUnstoppedCounts] = useState<ReadonlyMap<string, number>>(new Map());
-  /** The DELETE already succeeded; this keeps the row gone across the poll that confirms it. */
-  const [acknowledged, setAcknowledged] = useState<ReadonlySet<string>>(new Set());
 
   const reloadDevices = roster.reload;
-  const devices = (lastValue(roster.resource) ?? []).filter((device) => !acknowledged.has(device.id));
+  const publishDevices = roster.set;
+  const devices = lastValue(roster.resource) ?? [];
   const grants = lastValue(grantRoster.resource) ?? [];
 
   const [flow] = useState(() => new DeviceConnectFlow({
@@ -59,12 +58,13 @@ export function DevicesCard() {
 
         return next;
       });
-      setAcknowledged((current) => new Set(current).add(id));
+      // The DELETE landed: publishing the row's removal retires a poll already in flight with it.
+      publishDevices(devices.filter((device) => device.id !== id));
       reloadDevices();
     }), showing((chain) => {
       setErr(`Could not acknowledge the device warning: ${chain}`);
     }));
-  })), [reloadDevices]);
+  })), [publishDevices, devices, reloadDevices]);
 
   return (
     <>
