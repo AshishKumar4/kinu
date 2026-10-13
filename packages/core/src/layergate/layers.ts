@@ -71,6 +71,7 @@ const SKILL: ActiveSkill = Object.freeze({
   bodyRef: { kind: 'file', path: workspaceSkillPath('deploy-runbook'), chars: 31 } as const,
   ext: {},
   source: 'vfs',
+  reason: { kind: 'explicit', matched_token: 'deploy-runbook' } as const,
 });
 
 const PINNED_SKILL: ActiveSkill = Object.freeze({
@@ -268,7 +269,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             backend: 'cf',
             model: { id: 'claude-sonnet-4-7', provider: 'anthropic' },
             agentsMd: { admitted: [{ path: '/AGENTS.md', content: 'Root rules.', trust: 'approved' }], referenced: [] },
-            activeSkills: { active: [SKILL], reasons: [{ name: SKILL.name, reason: { kind: 'explicit', matched_token: 'deploy-runbook' } }] },
+            activeSkills: { active: [SKILL] },
           });
 
           const prompt = render();
@@ -295,13 +296,13 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           const byPin = s.buildSystemPromptSync({
             ...base,
             availableTools: [...base.availableTools],
-            activeSkills: { active: [SKILL], reasons: [{ name: SKILL.name, reason: { kind: 'always_active', via: 'config' } }] },
+            activeSkills: { active: [{ ...SKILL, reason: { kind: 'always_active', via: 'config' } }] },
           });
 
           const byExplicit = s.buildSystemPromptSync({
             ...base,
             availableTools: [...base.availableTools],
-            activeSkills: { active: [SKILL], reasons: [{ name: SKILL.name, reason: { kind: 'explicit', matched_token: '/deploy-runbook' } }] },
+            activeSkills: { active: [{ ...SKILL, reason: { kind: 'explicit', matched_token: '/deploy-runbook' } }] },
           });
 
           return { identical: byPin === byExplicit, carriesSkill: byPin.includes(SKILL_BODY) };
@@ -360,7 +361,8 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         id: 'context-assembly/skill-activation-precedence',
         asserts: 'a pin outlasts an explicit /name of the same skill, and non-invocable skills stay off',
         observe: (s) => s.resolveActiveSkills({
-          available: [SKILL, PINNED_SKILL],
+          // Discovered, not yet activated: what activation decides is not an input.
+          available: [SKILL, PINNED_SKILL].map(({ reason: _decided, ...discovered }) => discovered),
           explicit: ['house-style'],
           alwaysActive: ['deploy-runbook', 'house-style'],
         }),
@@ -368,7 +370,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       {
         id: 'context-assembly/skill-tool-restriction',
         asserts: 'the rendered skill section states the union tool restriction',
-        observe: (s) => s.renderActiveSkillsSection({ active: [SKILL, PINNED_SKILL], reasons: [] }, 'system'),
+        observe: (s) => s.renderActiveSkillsSection({ active: [SKILL, PINNED_SKILL] }, 'system', 'stable'),
       },
       {
         id: 'context-assembly/unapproved-instructions-are-demoted',
@@ -385,8 +387,8 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           return {
             systemAgentsMd: s.renderAgentsMdSection(agentsMd, 'system'),
             referenceAgentsMd: s.renderAgentsMdSection(agentsMd, 'unverified'),
-            systemSkills: s.renderActiveSkillsSection({ active: [poisoned], reasons: [] }, 'system'),
-            referenceSkills: s.renderActiveSkillsSection({ active: [poisoned], reasons: [] }, 'unverified'),
+            systemSkills: s.renderActiveSkillsSection({ active: [poisoned] }, 'system', 'stable'),
+            referenceSkills: s.renderActiveSkillsSection({ active: [poisoned] }, 'unverified', 'stable'),
           };
         },
       },

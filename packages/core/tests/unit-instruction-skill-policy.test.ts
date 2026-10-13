@@ -220,5 +220,4 @@ body`;
     });
 
     expect(active.active).toEqual([]);
-    expect(active.reasons).toEqual([]);
   });

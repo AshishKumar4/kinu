@@ -298,6 +298,7 @@ function activeSkill(name: string, trust: ActiveSkill['trust'], allowed: string[
     bodyRef: { kind: 'file', path: workspaceSkillPath(name), chars: body.length },
     body,
     trust,
+    reason: { kind: 'always_active', via: 'config' },
   };
 }
 
@@ -824,7 +825,6 @@ describe('routing — every typed edit lands in the store that already owns it',
         activeSkill('brevity', 'unverified', ['read']),
         activeSkill('builtin-one', 'builtin', ['bash']),
       ],
-      reasons: [],
     };
 
     expect(trustedActiveSkills(set).map((skill) => skill.name)).toEqual(['builtin-one']);

@@ -63,7 +63,7 @@ export async function steerSkillsBlock(opts: Parameters<typeof resolveTurnSkills
 
   if (activeSkills === undefined) return null;
 
-  return skillsBlock(STEER_SKILLS_HEADING, onlySkills(activeSkills, (skill) => !opts.alreadyActive.has(skill.name) && skill.body !== null));
+  return skillsBlock(STEER_SKILLS_HEADING, { active: activeSkills.active.filter((skill) => !opts.alreadyActive.has(skill.name) && skill.body !== null) });
 }
 
 /** A pin rides the system prompt every turn; a person's `/name` rides that turn's opening message. */
@@ -74,12 +74,11 @@ export interface TurnSkillPlacement {
 
 export function splitTurnSkills(set: ActiveSkillSet | undefined): TurnSkillPlacement {
   if (set === undefined) return { pinned: undefined, invoked: undefined };
-  const invoked = new Set(set.reasons.filter(({ reason }) => reason.kind === 'explicit').map(({ name }) => name));
-  const nonEmpty = (part: ActiveSkillSet) => part.active.length === 0 ? undefined : part;
+  const part = (active: ActiveSkillSet['active']) => active.length === 0 ? undefined : { active };
 
   return {
-    pinned: nonEmpty(onlySkills(set, (skill) => !invoked.has(skill.name))),
-    invoked: nonEmpty(onlySkills(set, (skill) => invoked.has(skill.name))),
+    pinned: part(set.active.filter((skill) => skill.reason.kind !== 'explicit')),
+    invoked: part(set.active.filter((skill) => skill.reason.kind === 'explicit')),
   };
 }
 
@@ -93,16 +92,10 @@ export function activatedSkillsBlock(set: ActiveSkillSet): string | null {
 
 /** Unapproved bodies ride sealed, as the instruction files do. */
 function skillsBlock(heading: string, set: ActiveSkillSet): string | null {
-  const parts = [renderActiveSkillsSection(set, 'system').trim(), renderUnverifiedInstructions({ activeSkills: set }) ?? '']
+  const parts = [renderActiveSkillsSection(set, 'system', 'reason').trim(), renderUnverifiedInstructions({ activeSkills: set }) ?? '']
     .filter((part) => part !== '');
 
   return parts.length === 0 ? null : `${heading}\n\n${parts.join('\n\n')}`;
-}
-
-function onlySkills(set: ActiveSkillSet, keep: (skill: ActiveSkillSet['active'][number]) => boolean): ActiveSkillSet {
-  const active = set.active.filter(keep);
-
-  return { active, reasons: set.reasons.filter((reason) => active.some((skill) => skill.name === reason.name)) };
 }
 
 async function admitTurnSkills(
