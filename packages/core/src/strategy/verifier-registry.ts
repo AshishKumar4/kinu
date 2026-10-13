@@ -79,7 +79,7 @@ export interface ResolvedVerifier {
   readonly verify: Verifier;
 }
 
-export function unregisteredKindRefusal(): string {
+function unregisteredKindRefusal(): string {
   return `\`kind\` must be one of: ${VERIFIER_KINDS.join(', ')}. `
     + 'Register a verifier kind, or use one of these.';
 }

@@ -349,7 +349,7 @@ export function readNodeReport(input: {
 }
 
 /** The node's system prompt; not the head prompt, whose fork/evidence/split framing is false for a node. */
-export function nodeSystemPrompt(input: {
+function nodeSystemPrompt(input: {
   readonly base: string;
   readonly isolation: NodeIsolation;
   readonly home: string;

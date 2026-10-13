@@ -169,7 +169,6 @@ export {
   WORKSPACE_TITLE_SYSTEM_PROMPT,
   workspaceTitlePrompt,
   applyWorkspaceTitle,
-  deriveWorkspaceTitle,
   fallbackWorkspaceIdentity,
   mintAgentName,
   parseWorkspaceTitle,
@@ -761,9 +760,7 @@ export {
 export {
   buildSystemPromptSync,
   currentDateForPrompt,
-  FALLBACK_PURPOSE,
   renderUnverifiedInstructions,
-  WORKSPACE_INSTRUCTIONS_HEADER,
   type UnverifiedInstructions,
   type SystemPromptOptions,
 } from './prompt';
@@ -923,7 +920,7 @@ export {
 
 // Steer-as-Branch
 export {
-  BRANCH_HEAD_BUDGET, BRANCH_RATIONALE, STEER_BRANCH_RUN_ID_PREFIX,
+  BRANCH_RATIONALE, STEER_BRANCH_RUN_ID_PREFIX,
   newBranchId, isSteerBranchRunId, branchHeadId, admitBranch,
   startBranchHead, settleBranchIntoTakes, settlePendingBranch,
   branchOutcomeFromJournal,
@@ -1902,7 +1899,7 @@ export type {
 
 // Backend conformance gate
 export {
-  BACKEND_CONFORMANCE, CONFORMANCE_PLANES, CONFORMANCE_PRODUCERS, CONFORMANCE_ROOTS, PLANE_UNIVERSE, WIRED,
+  BACKEND_CONFORMANCE, CONFORMANCE_PLANES, CONFORMANCE_PRODUCERS,
   compareSurface, normalizeObservedTables, observedOpEnum, phantomCallables, wiredProducers,
   renderConformanceFindings,
 } from './conformance/index';
@@ -1913,7 +1910,7 @@ export type {
 } from './conformance/index';
 
 export {
-  classifyEvolutionType, getRunTimeline, runEventToSpan, toolKindFor,
+  getRunTimeline,
   RUN_TIMELINE_MAX,
 } from './read-models/timeline';
 
@@ -2114,7 +2111,6 @@ export {
   ADVISOR_SEVERITY_LABEL,
   ADVISOR_SEVERITY_METADATA_KEY,
   ADVISOR_SIGNAL_KIND,
-  CONTENT_FREE_NOTES,
   DEFAULT_ADVISOR_MIN_SEVERITY,
   ADVISOR_DEDUPE_WINDOW,
   ADVISOR_HEADER,

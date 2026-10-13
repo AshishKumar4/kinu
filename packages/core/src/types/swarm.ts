@@ -6,7 +6,7 @@ import type { Refusal } from '../obs/error';
 
 /** What one node produces: `answer` is an agent tool loop; `thought` is one toolless model call.
  *  `generator`/`trajectory`/`step` are refused by name in `tools/swarm-input.ts`. */
-export const SWARM_UNITS = ['answer', 'thought'] as const;
+const SWARM_UNITS = ['answer', 'thought'] as const;
 
 export type SwarmUnit = (typeof SWARM_UNITS)[number];
 
@@ -25,7 +25,7 @@ export const SWARM_EXPANDS = ['sample', 'aggregate'] as const;
 export type SwarmExpand = (typeof SWARM_EXPANDS)[number];
 
 /** How a node is valued. Novelty is an archive admission rule on {@link SwarmAdvanceSetting}. */
-export const SWARM_SCORES = ['verify', 'judge', 'none'] as const;
+const SWARM_SCORES = ['verify', 'judge', 'none'] as const;
 
 export type SwarmScore = (typeof SWARM_SCORES)[number];
 
@@ -37,7 +37,7 @@ export const SWARM_ADVANCES = [
 export type SwarmAdvance = (typeof SWARM_ADVANCES)[number];
 
 /** What survives across iterations; `elites` and `artifacts` land in the records store. */
-export const SWARM_CARRIES = ['none', 'reflections', 'elites', 'artifacts'] as const;
+const SWARM_CARRIES = ['none', 'reflections', 'elites', 'artifacts'] as const;
 
 export type SwarmCarry = (typeof SWARM_CARRIES)[number];
 
