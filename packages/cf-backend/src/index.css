@@ -785,42 +785,291 @@ body { background: var(--c-bg); color: var(--c-text); }
 /* The attention stack: what waits on the owner, attached to the composer's top
    edge. The open card is the composer's own surface, inset so it reads as a
    tab of it; the cards behind it peek above as narrower strips, a deck. */
-.p-attention {
-  display: flex;
-  flex-direction: column;
-  position: relative;
-  z-index: 1;
-  margin-bottom: -1px;
-}
+/* What waits on the owner: a whole card at the prompt box's width, in the stack above it, under the pills. */
+.p-attention { display: flex; flex-direction: column; align-items: stretch; gap: 6px; margin-bottom: 8px; }
 .p-attention-card {
-  margin-inline: 12px;
-  padding: 10px 14px 10px;
+  padding: 11px 14px 12px;
+  border: 1px solid color-mix(in srgb, var(--c-warning) 26%, var(--c-composer-line));
+  border-radius: 18px;
   background: var(--c-composer-bg);
-  border: 1px solid var(--c-composer-line);
-  border-bottom: 0;
-  border-radius: 16px 16px 0 0;
-  box-shadow: 0 -8px 24px -18px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--shadow-menu);
+  animation: fade-in var(--dur-enter) var(--ease-out-strong);
 }
 .p-attention-behind {
-  display: flex;
+  display: inline-flex;
+  max-width: 100%;
+  align-self: flex-start;
   align-items: center;
   gap: 6px;
   height: 26px;
-  margin-bottom: -4px;
-  padding: 0 12px 4px;
-  background: var(--c-elevated);
+  padding: 0 11px;
   border: 1px solid var(--c-composer-line);
-  border-bottom: 0;
-  border-radius: 12px 12px 0 0;
-  color: var(--c-text-2);
+  border-radius: 999px;
+  background: var(--c-composer-bg);
+  color: var(--c-text-3);
   font-size: 12px;
-  text-align: left;
   cursor: pointer;
-  transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
+  transition: color var(--dur-fast) ease-out;
 }
 .p-attention-behind:hover { color: var(--c-text); }
 @media (max-width: 640px) {
-  .p-attention-card { margin-inline: 6px; padding: 9px 11px; }
+  .p-attention-card { padding: 9px 11px; }
+}
+
+/* ── Pills ─────────────────────────────────────────────────────────
+   One family for what the chat says that nobody typed. Above the prompt box a pill is now: what failed, waits or
+   changed, with its one action, dismissible. In the thread a pill is history: an event where it happened, in the
+   same shape and marks, quieter, with no action but opening. A pill opens into a card of the same edge. */
+.p-pills {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+.p-pill {
+  display: inline-flex;
+  max-width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 4px 5px 4px 12px;
+  border: 1px solid var(--c-composer-line);
+  border-radius: 999px;
+  background: var(--c-composer-bg);
+  box-shadow: var(--shadow-menu);
+  color: var(--c-text-2);
+  font-size: 13px;
+  line-height: 20px;
+  letter-spacing: -0.008em;
+  text-align: left;
+  animation: fade-in var(--dur-enter) var(--ease-out-strong);
+}
+.p-pill[data-tone="danger"] {
+  border-color: color-mix(in srgb, var(--c-danger) 34%, transparent);
+  background: color-mix(in srgb, var(--c-danger) 8%, var(--c-composer-bg));
+}
+.p-pill[data-tone="warning"] { border-color: color-mix(in srgb, var(--c-warning) 28%, transparent); }
+.p-pills > .p-pill { width: 100%; }
+.p-pill:not(:has(.p-pill-action, .p-pill-icon)) { padding-right: 14px; }
+.p-pill-mark { display: flex; flex-shrink: 0; align-items: center; justify-content: center; width: 16px; height: 20px; }
+.p-pill-mark[data-tone="danger"] { color: var(--c-danger); }
+.p-pill-mark[data-tone="warning"] { color: var(--c-warning); }
+.p-pill-mark[data-tone="success"] { color: var(--c-success); }
+.p-pill-mark[data-tone="info"] { color: var(--c-info); }
+.p-pill-mark[data-tone="accent"] { color: var(--c-accent-mark); }
+.p-pill-mark[data-tone="quiet"] { color: var(--c-text-3); }
+.p-pill-body { display: flex; min-width: 0; flex: 1 1 auto; align-items: baseline; gap: 6px; }
+.p-pill-source { flex-shrink: 0; color: var(--c-text); font-weight: 600; white-space: nowrap; }
+.p-pill-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.p-pill-dim { flex-shrink: 0; color: var(--c-text-3); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.p-pill-action {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 11px;
+  border-radius: 999px;
+  background: var(--c-neutral-tint);
+  color: var(--c-text);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) ease-out;
+}
+.p-pill-action:hover { background: color-mix(in srgb, var(--c-text) 12%, transparent); }
+.p-pill[data-tone="danger"] .p-pill-action { background: color-mix(in srgb, var(--c-danger) 16%, transparent); }
+.p-pill[data-tone="danger"] .p-pill-action:hover { background: color-mix(in srgb, var(--c-danger) 24%, transparent); }
+.p-pill-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  color: var(--c-text-3);
+  cursor: pointer;
+  transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
+}
+.p-pill-icon:hover { color: var(--c-text); background: var(--c-neutral-tint); }
+/* Opened, a pill is a card of the same edge: its words wrap, its details below, its actions at the foot. */
+.p-pill[data-open] {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  padding: 10px 12px 10px 14px;
+  border-radius: 16px;
+}
+.p-pill[data-open] .p-pill-text { overflow: visible; white-space: normal; }
+.p-pill[data-open] .p-pill-body { flex-wrap: wrap; row-gap: 2px; }
+/* The title row: the mark and both controls sit on its first line, however its words wrap. */
+.p-pill-head { display: flex; min-width: 0; align-items: flex-start; gap: 8px; }
+.p-pill-controls { display: flex; flex-shrink: 0; align-items: center; gap: 2px; margin: -3px -4px -3px 0; }
+/* What the provider's body said, when it parses: a few facts, label beside value. */
+.p-pill-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 14px; margin: 8px 0 0 24px; font-size: 12.5px; line-height: 18px; }
+.p-pill-facts > dt { color: var(--c-text-3); }
+.p-pill-facts > dd { min-width: 0; margin: 0; color: var(--c-text-2); overflow-wrap: anywhere; }
+.p-pill-raw { margin: 8px 0 0 24px; }
+.p-pill-raw > summary { display: inline-flex; align-items: center; gap: 5px; color: var(--c-text-3); font-size: 12px; cursor: pointer; list-style: none; }
+.p-pill-raw > summary::-webkit-details-marker { display: none; }
+.p-pill-raw > summary:hover { color: var(--c-text); }
+.p-pill-detail {
+  margin: 8px 0 0 24px;
+  padding: 8px 10px;
+  max-height: 120px;
+  overflow: auto;
+  border: 1px solid var(--c-border);
+  border-radius: 10px;
+  background: var(--c-recessed);
+  color: var(--c-text-2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.p-pill-raw > .p-pill-detail { margin-left: 0; }
+.p-pill-foot { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-top: 10px; }
+.p-pill-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 11px;
+  border: 1px solid var(--c-composer-line);
+  border-radius: 999px;
+  background: var(--c-composer-bg);
+  color: var(--c-text-3);
+  font-size: 12px;
+  cursor: pointer;
+}
+.p-pill-more:hover { color: var(--c-text); }
+.p-pills > .p-pill-more { align-self: flex-start; }
+/* In the thread: history, so no lift and no tint. Centered, the way the thread marks what nobody said. */
+.p-pill[data-history] {
+  min-height: 30px;
+  padding: 4px 12px;
+  border-color: var(--c-border);
+  background: var(--c-surface);
+  box-shadow: none;
+  color: var(--c-text-3);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
+}
+.p-pill[data-history]:hover { border-color: var(--c-border-strong); }
+.p-pill[data-history]:not([data-open]) { max-width: min(100%, 600px); }
+.p-pill[data-history] .p-pill-source { color: var(--c-text-2); font-weight: 500; }
+.p-pill[data-history][data-open] { width: auto; max-width: min(100%, 560px); padding: 9px 14px 11px; cursor: default; }
+.p-pill-said { display: inline-flex; flex-shrink: 0; align-items: center; gap: 4px; font-size: 11.5px; white-space: nowrap; }
+.p-pill-count {
+  flex-shrink: 0;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--c-neutral-tint);
+  color: var(--c-text-2);
+  font-size: 11px;
+  line-height: 18px;
+  font-weight: 600;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+/* A turn's failure, where it happened: one quiet line. Its words open in place; the pill above the prompt acts. */
+.p-turn-mark { display: flex; min-width: 0; align-items: baseline; gap: 7px; color: var(--c-text-3); font-size: 13px; line-height: 20px; }
+.p-turn-mark > svg { flex-shrink: 0; align-self: center; }
+.p-turn-mark-link { flex-shrink: 0; color: var(--c-text-3); text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 3px; cursor: pointer; }
+.p-turn-mark-link:hover { color: var(--c-text); }
+@media (max-width: 640px) {
+  .p-pill[data-history] { width: auto; }
+}
+
+/* ── Images in the thread ──────────────────────────────────────────
+   A picture the agent made or named, shown where it was named: at its own size up to the column, on the recessed
+   ground so a white page reads as a page, its name and machine beneath. A click opens it whole. */
+.p-shot {
+  display: inline-flex;
+  max-width: 100%;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-card);
+  background: var(--c-recessed);
+  vertical-align: top;
+}
+.p-shot-frame { position: relative; display: flex; justify-content: center; padding: 0; cursor: zoom-in; background: var(--c-recessed); }
+.p-shot-frame > img { display: block; max-width: 100%; max-height: 360px; width: auto; height: auto; object-fit: contain; }
+.p-shot[data-size="thumb"] .p-shot-frame > img { max-height: 200px; }
+.p-shot-caption {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 6px 0 11px;
+  border-top: 1px solid var(--c-border);
+  background: var(--c-surface);
+  color: var(--c-text-3);
+  font-size: 12px;
+}
+.p-shot-name { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); color: var(--c-text-2); }
+.p-shot-where { flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px; padding: 0 7px; height: 20px; border-radius: 999px; background: var(--c-neutral-tint); color: var(--c-text-3); font-size: 11px; }
+.p-shot-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.p-shot-grid .p-shot { display: flex; margin: 0; }
+.p-shot-grid .p-shot-frame > img { width: 100%; height: 190px; max-height: none; object-fit: cover; object-position: top; }
+.p-shot-wait { display: block; width: min(100%, 520px); aspect-ratio: 16 / 10; }
+.p-shot[data-size="thumb"] .p-shot-wait { width: min(100%, 320px); }
+.p-shot-note {
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 6px 8px 6px 11px;
+  border: 1px dashed var(--c-border-strong);
+  border-radius: 12px;
+  color: var(--c-text-3);
+  font-size: 12.5px;
+}
+.p-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  background: color-mix(in srgb, var(--c-bg) 86%, transparent);
+  backdrop-filter: blur(10px);
+  animation: fade-in var(--dur-enter) var(--ease-out-strong);
+}
+.p-lightbox-bar { display: flex; align-items: center; gap: 10px; height: 52px; padding: 0 12px 0 18px; color: var(--c-text-2); font-size: 13px; }
+.p-lightbox-stage { display: flex; min-height: 0; flex: 1; align-items: center; justify-content: center; padding: 8px 56px 40px; }
+.p-lightbox-stage > img { max-width: 100%; max-height: 100%; border-radius: 10px; box-shadow: var(--shadow-overlay); }
+.p-lightbox-step {
+  position: absolute;
+  top: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--c-border);
+  border-radius: 999px;
+  background: var(--c-surface);
+  color: var(--c-text-2);
+  transform: translateY(-50%);
+}
+@media (max-width: 640px) {
+  .p-lightbox-stage { padding: 4px 8px 24px; }
+  .p-lightbox-step { display: none; }
 }
 
 /* The composer's controls are quiet: text and round icons that ink on

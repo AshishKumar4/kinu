@@ -219,7 +219,7 @@ const DEAD_END = `(() => {
     const said = [...document.querySelectorAll('.p-danger')].map((el) => (el.textContent ?? '').trim()).join(' ');
     return 'the welcome page, which the account has not finished' + (said === '' ? '' : ': ' + said);
   }
-  const notice = [...document.querySelectorAll('.p-notice-danger, [data-failure]')]
+  const notice = [...document.querySelectorAll('.p-notice-danger, [data-notice="danger"], [data-failure]')]
     .filter((el) => el.getClientRects().length > 0)
     .map((el) => (el.textContent ?? '').trim())
     .find((text) => text !== '');
@@ -1673,7 +1673,7 @@ const ANSWERS = `[...document.querySelectorAll('#chat .prose-chat')]
   .map((block) => (block.textContent ?? '').trim())
   .filter((text) => text.length > 0)`;
 
-const SHOWN_WARNINGS = `[...document.querySelectorAll('.p-notice-warning')]
+const SHOWN_WARNINGS = `[...document.querySelectorAll('.p-notice-warning, [data-notice="warning"]')]
   .map((notice) => (notice.textContent ?? '').trim()).filter((text) => text !== '').join(' | ')`;
 
 /** The mission the first-answer row creates its workspace with: #21's own. */

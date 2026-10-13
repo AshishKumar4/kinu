@@ -2300,6 +2300,12 @@ export {
   type ClassifiedProgrammaticTurn, type SignalCard, type DrainedEvent,
 } from './read-models/background-event';
 
+export { turnFailureFacts, type TurnFailureFacts } from './read-models/turn-failure-facts';
+
+export { providerName } from './providers/model-test';
+
+export { namedImages, type ImageMachine, type NamedImage } from './read-models/chat-images';
+
 export { linkProse, promoteSlateLinks, type MarkdownNode } from './read-models/markdown-links';
 
 export {

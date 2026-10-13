@@ -331,7 +331,7 @@ async function run(): Promise<Observed> {
       (cards) => cards.map((card) => [
         card.getAttribute('data-chat-error') ?? '',
         {
-          heading: card.querySelector('.font-medium')?.textContent ?? '',
+          heading: card.textContent ?? '',
           retry: [...card.querySelectorAll('button')].some((button) => /retry/i.test(button.textContent ?? '') && !button.disabled),
         },
       ]),
@@ -1341,8 +1341,8 @@ describe('a chat\'s events', () => {
       });
 
       // One line until opened, as every event row is.
-      await page.click('[data-model-fallback] button');
-      await page.waitForFunction(() => document.querySelector('[data-model-fallback] [data-event-brief]')?.classList.contains('whitespace-pre-wrap') === true);
+      await page.click('[data-model-fallback] button[aria-expanded="false"]');
+      await page.waitForSelector('[data-model-fallback] [aria-expanded="true"]');
       await page.close();
     });
   });
@@ -1754,9 +1754,10 @@ describe('how a settled turn ended', () => {
       await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=refused`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('#chat [data-turn-failure]');
 
-      const failure = await page.$eval('#chat [data-turn-failure]', (row) => ({
-        words: row.querySelector('code')?.textContent ?? '',
-        retry: [...row.querySelectorAll('button')].some((button) => /retry/i.test(button.textContent ?? '')),
+      // The thread keeps where it stopped; the notice above the prompt box offers the retry.
+      const failure = await page.evaluate(() => ({
+        words: document.querySelector('#chat [data-turn-failure]')?.textContent ?? '',
+        retry: [...document.querySelectorAll('[data-turn-failure-notice] button')].some((button) => /retry/i.test(button.textContent ?? '')),
       }));
 
       expect(failure.words).toContain('Go usage limit exceeded');

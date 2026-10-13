@@ -1,7 +1,7 @@
 /** A turn the person did not type, drawn as quiet event rows: one line each, open on a click, repeats folded. */
 import { useState, type ReactNode } from "react";
 import {
-  CaretRightIcon, CheckCircleIcon, CheckIcon, ClockIcon, EyeIcon, GearSixIcon, LightningIcon, ProhibitIcon, WarningCircleIcon,
+  CaretUpIcon, CheckCircleIcon, CheckIcon, ClockIcon, EyeIcon, GearSixIcon, LightningIcon, ProhibitIcon, WarningCircleIcon,
   type Icon,
 } from "@phosphor-icons/react";
 import {
@@ -11,21 +11,20 @@ import {
 
 export type CardState = SignalCard["state"];
 
-/** Amber while the event waits or is being shown to the agent, green once the step that read it has ended. */
+/** Amber while the event waits for the agent or is being read, green once the step that read it has ended. */
 const DELIVERY = {
-  pending: { mark: ClockIcon, tone: "p-warning", said: "Waiting to be shown to the agent" },
-  shown: { mark: EyeIcon, tone: "p-warning", said: "Being shown to the agent" },
-  seen: { mark: CheckIcon, tone: "p-success", said: "Seen by the agent" },
-} as const satisfies Record<CardState, { readonly mark: Icon; readonly tone: string; readonly said: string }>;
+  pending: { mark: ClockIcon, tone: "p-warning", word: "waiting", said: "Waiting for the agent to read it" },
+  shown: { mark: ClockIcon, tone: "p-warning", word: "waiting", said: "The agent is reading it" },
+  seen: { mark: CheckIcon, tone: "p-success", word: "seen", said: "Seen by the agent" },
+} as const satisfies Record<CardState, { readonly mark: Icon; readonly tone: string; readonly word: string; readonly said: string }>;
 
-/** Whether the agent has seen the event yet, as a mark: the words sit in its title. */
+/** Whether the agent has seen the event yet, in a word and a mark. */
 function DeliveryMark({ state }: { state: CardState }) {
-  const { mark: Mark, tone, said } = DELIVERY[state];
+  const { mark: Mark, tone, word, said } = DELIVERY[state];
 
   return (
-    <span className={`inline-flex items-center ${tone}`} title={said} data-delivery={state}>
-      <Mark size={11} weight="bold" aria-hidden />
-      <span className="sr-only">{said}</span>
+    <span className={`p-pill-said ${tone}`} title={said} data-delivery={state}>
+      <Mark size={11} weight="bold" aria-hidden />{word}
     </span>
   );
 }
@@ -50,39 +49,54 @@ interface EventRowProps {
   readonly hooks?: Readonly<Record<`data-${string}`, string | undefined>>;
 }
 
-/** One event in a chat, in the chat's own row language: an icon, what happened, from whom, its words, a caret. */
+/** One event where it happened: a quiet pill with what happened, from whom, its words on one line, and whether the
+ *  agent has seen it. A click opens it in place into a card of the same edge. */
 export function EventRow({ icon: Mark, tone, label, source, body, state, count = 1, badge, open: opened = false, action, hooks }: EventRowProps) {
   const [open, setOpen] = useState(opened);
 
+  const tail = (
+    <>
+      {count > 1 && <span className="p-pill-count" data-event-repeats={count}>×{count}</span>}
+      {state !== undefined && <DeliveryMark state={state} />}
+    </>
+  );
+
+  const who = (
+    <span data-event-source className="p-pill-source">
+      {label}
+      {source !== undefined && <span className="ml-1.5 font-normal p-text-3">{source}</span>}
+    </span>
+  );
+
   return (
-    <div className="flex items-start animate-fade-in" {...hooks}>
-      <button
-        type="button"
-        onClick={() => setOpen(!open)}
-        aria-expanded={open}
-        className="grid min-w-0 flex-1 cursor-pointer grid-cols-[20px_minmax(0,1fr)_auto_auto] items-baseline gap-2 rounded-md px-3 py-1 text-left transition-colors hover:bg-[var(--c-elevated)]"
-      >
-        <span className="flex size-5 items-center justify-center self-center">
-          <Mark size={11} weight="fill" className={tone} aria-hidden />
+    <div className="flex justify-center py-0.5 animate-fade-in" {...hooks}>
+      {open ? (
+        <div className="p-pill" data-history data-open>
+          <div className="p-pill-head">
+            <span className="p-pill-mark"><Mark size={14} weight="fill" className={tone} aria-hidden /></span>
+            <span className="p-pill-body">{who}{badge}</span>
+            {tail}
+            <button type="button" className="p-pill-icon -my-1 -mr-1.5" aria-label="Show less" aria-expanded onClick={() => setOpen(false)}>
+              <CaretUpIcon size={12} weight="bold" />
+            </button>
+          </div>
+          <p data-event-brief className="mt-1.5 ml-6 whitespace-pre-wrap break-words p-row-text p-text-2">{body}</p>
+          {action !== undefined && <div className="mt-2 ml-6">{action}</div>}
+        </div>
+      ) : (
+        <span className="flex min-w-0 max-w-full items-center gap-1">
+          <button type="button" className="p-pill" data-history aria-expanded={false} onClick={() => setOpen(true)}>
+            <span className="p-pill-mark"><Mark size={14} weight="fill" className={tone} aria-hidden /></span>
+            <span className="p-pill-body">
+              {who}
+              {badge}
+              <span data-event-brief className="p-pill-text">{body}</span>
+            </span>
+            {tail}
+          </button>
+          {action}
         </span>
-        <span className="flex min-w-0 items-baseline gap-2">
-          {/* Gives way before the words do: on a phone a long sender left the event's words no room. */}
-          <span data-event-source className="min-w-0 max-w-[55%] shrink overflow-hidden text-ellipsis whitespace-nowrap p-row-text font-medium p-text-2">
-            {label}
-            {source !== undefined && <span className="ml-1.5 font-normal p-text-3">{source}</span>}
-          </span>
-          {badge}
-          <span data-event-brief className={`min-w-0 flex-1 p-row-text p-text-3 ${open ? "whitespace-pre-wrap break-words" : "truncate"}`}>
-            {body}
-          </span>
-        </span>
-        <span className="flex shrink-0 items-center gap-1.5 self-center p-meta p-text-4">
-          {count > 1 && <span className="tabular-nums" data-event-repeats={count}>×{count}</span>}
-          {state !== undefined && <DeliveryMark state={state} />}
-        </span>
-        <CaretRightIcon size={10} aria-hidden className={`shrink-0 self-center p-text-4 transition-transform duration-150 ${open ? "rotate-90" : ""}`} />
-      </button>
-      {action}
+      )}
     </div>
   );
 }
