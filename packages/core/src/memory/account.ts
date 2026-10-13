@@ -105,13 +105,12 @@ export function initAccountMemoryTables(execRaw: RawSqlExec): void {
       created_at  INTEGER NOT NULL
     )
   `);
-  // `fingerprint` keeps one pending proposal per subject; `delivery` keeps one proposal per delivery for good.
+  // `delivery` keeps one proposal per delivery for good.
   execRaw(`
     CREATE TABLE IF NOT EXISTS account_memory_proposals (
       id            TEXT PRIMARY KEY,
       proposal_json TEXT NOT NULL,
       origin_json   TEXT NOT NULL,
-      fingerprint   TEXT NOT NULL,
       delivery      TEXT UNIQUE,
       status        TEXT NOT NULL DEFAULT 'pending',
       created_at    INTEGER NOT NULL,
@@ -120,9 +119,11 @@ export function initAccountMemoryTables(execRaw: RawSqlExec): void {
   `);
 }
 
-/** What makes two proposals the same ask. */
-function fingerprintOf(proposal: v.InferOutput<typeof AccountProposalSchema>): string {
-  return proposal.kind === 'fact' ? `fact\n${proposal.key}\n${JSON.stringify(proposal.value)}` : `note\n${proposal.content}`;
+/** Two proposals are the same ask when they name the same fact key and value, or the same note; importance aside. */
+function sameAsk(a: v.InferOutput<typeof AccountProposalSchema>, b: v.InferOutput<typeof AccountProposalSchema>): boolean {
+  if (a.kind === 'fact') return b.kind === 'fact' && a.key === b.key && JSON.stringify(a.value) === JSON.stringify(b.value);
+
+  return b.kind === 'note' && a.content === b.content;
 }
 
 /** mnemopi's lexical recall over the account's notes (lexical-recall.ts), best first, above its noise floor. */
@@ -192,18 +193,18 @@ export class AccountMemoryStore {
   propose(filing: AccountProposalFiling, workspace: string | null): string {
     const proposal = v.parse(AccountProposalSchema, filing.proposal);
     const proposer = v.parse(AccountProposerSchema, filing.proposer);
-    const fingerprint = fingerprintOf(proposal);
     const delivered = filing.delivery === undefined ? undefined : this.sql<{ id: string }>`SELECT id FROM account_memory_proposals WHERE delivery = ${filing.delivery}`[0];
 
     if (delivered !== undefined) return delivered.id;
-    const pending = this.sql<{ id: string }>`SELECT id FROM account_memory_proposals WHERE fingerprint = ${fingerprint} AND status = 'pending' LIMIT 1`[0];
+    // One pending proposal per subject: the owner's queue is short, and its rows are the canonical proposals.
+    const pending = this.pending().find((waiting) => sameAsk(waiting.proposal, proposal));
 
     if (pending !== undefined) return pending.id;
     const origin: FactOrigin = { ...proposer, ...(workspace !== null && { workspace }) };
     const id = `amp_${nanoid(12)}`;
 
-    void this.sql`INSERT INTO account_memory_proposals (id, proposal_json, origin_json, fingerprint, delivery, status, created_at)
-      VALUES (${id}, ${JSON.stringify(proposal)}, ${JSON.stringify(origin)}, ${fingerprint}, ${filing.delivery ?? null}, 'pending', ${Date.now()})`;
+    void this.sql`INSERT INTO account_memory_proposals (id, proposal_json, origin_json, delivery, status, created_at)
+      VALUES (${id}, ${JSON.stringify(proposal)}, ${JSON.stringify(origin)}, ${filing.delivery ?? null}, 'pending', ${Date.now()})`;
     markStoreChanged(this.sql);
 
     return id;
