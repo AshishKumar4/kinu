@@ -2278,9 +2278,9 @@ export const LADDER: readonly Gate[] = [
     run: 'bun test --timeout=0 tests/browser/live-app-provider-wait.test.ts',
     label: 'Live app in a browser: a wait on the provider',
     tier: 'deploy',
-    // 2026-10-13 on armada beside the dev server's boot: 142 s for the logo and turn waits (job 20261013214907-8e6a82ec),
-    // and the minute-limited turn waits 60-120 s more by design; the file with all three is unmeasured.
-    seconds: 360,
+    // Measured 2026-10-13 on armada by `bun scripts/gate-cost-measure.ts --only=<this row>` at 059486671: 218.8 s wall,
+    // the minute-limited turn's 60-120 s of waiting by design among them.
+    seconds: 220,
     catches: 'the shipped workspace page as it waits on a rate-limited provider, on `vite dev` (workerd with real Durable '
       + 'Objects) driven in Chrome against a scripted model that refuses with 429s. A wait shows over the composer only while '
       + 'it holds the chat\'s turn, counting down and never at 0s: the workspace\'s logo, drawn from Settings beside the open '
