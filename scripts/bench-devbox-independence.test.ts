@@ -45,7 +45,7 @@ const REPOSITORY = join(PACKAGE_DIR, '..', '..');
 
 /**
  * Every module of the package that is not a test: an entry of the graph too. A module only scripts or tests import
- * (`bench/c3-result.ts`, `bench/seeded.ts`) is reached by no declared entry, and it still must not import the core.
+ * (`bench/seeded.ts`) is reached by no declared entry, and it still must not import the core.
  */
 function everyModule(): string[] {
   return trackedFiles().filter(path => path.startsWith('packages/devbox/') && isParseable(path) && !isTestFile(path))
