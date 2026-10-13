@@ -104,6 +104,7 @@ describe('hosted Nimbus workspace provider', () => {
       size: 10,
       mtimeMs: 1,
       type: 'file',
+      revision: 2,
     });
     expect(await provider.tools.exec.execute('cat /home/main/proof.txt')).toBe('same bytes');
 

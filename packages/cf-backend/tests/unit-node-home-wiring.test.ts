@@ -617,20 +617,13 @@ describe('the hosted agent view walks a path as its workspace does', () => {
   });
 });
 
-/** The SDK's `files.write` takes no precondition and `stat` reports no revision, so no plane declares
- *  `writeFileIfRevision`: in-place save is `unsupported`, unconditional save lands. */
-describe('a plane with no compare-and-write says so, once, in one voice', () => {
+/** A session's files take a save only over the revision their stat gave, checked and written in one step at the
+ *  session (Kinu's SDK patch, Nimbus ask 55), so the editor gets an edit token and a stale save writes nothing. */
+describe('a session plane checks a save by the revision it was read at', () => {
   const lookupFor = (files: VFS): ExecutorFileLookup => ({ getProvider: () => ({ files, homeDir: async () => '/home/main' }) });
+  const text = (value: string) => new TextEncoder().encode(value);
 
-  test('neither session plane declares a conditional write', async () => {
-    const f = await openFixture();
-    const aHome = await f.provision(node('cw1'));
-    const a = credOf(aHome);
-    expect(nimbusSessionFiles(sessionBox(f, a).files, { home: aHome.home, cred: a })).not.toHaveProperty('writeFileIfRevision');
-    expect(nimbusSessionFiles(sessionBox(f, ORIGIN).files, { home: WORKSPACE_ROOT })).not.toHaveProperty('writeFileIfRevision');
-  });
-
-  test('an in-place save is refused as unsupported and writes nothing; the owner\'s replace lands', async () => {
+  test('the viewer\'s save lands over the revision it was shown, a second at that revision is refused, and a create only where none is', async () => {
     const f = await openFixture();
     const aHome = await f.provision(node('cw2'));
     const a = credOf(aHome);
@@ -638,35 +631,20 @@ describe('a plane with no compare-and-write says so, once, in one voice', () => 
     const target = '/home/head-cw2/report.md';
     await writeText(plane, target, 'the previous file');
 
-    const refused = await writeExecutorFileOp(lookupFor(plane), 'workspace', target, { bytes: new TextEncoder().encode('the replacement'), expectedRevision: 3 });
-
-    if (!('unsupported' in refused)) throw new Error('expected the unsupported refusal');
-    expect(await readText(plane, target)).toBe('the previous file');
-
-    // An upload over it only creates: it is the owner's to replace, and their replace names what they were shown.
-    const create = await writeExecutorFileOp(lookupFor(plane), 'workspace', target, { bytes: new TextEncoder().encode('the replacement') });
-
-    if (!('conflict' in create)) throw new Error('expected the create to find the file there');
-    expect(await writeExecutorFileOp(lookupFor(plane), 'workspace', target, { bytes: new TextEncoder().encode('the replacement'), expectedRevision: create.revision }))
-      .toMatchObject({ ok: true });
-    expect(await readText(plane, target)).toBe('the replacement');
-  });
-
-  test('the viewer is handed the reason rather than an edit token', async () => {
-    const f = await openFixture();
-    const aHome = await f.provision(node('cw3'));
-    const a = credOf(aHome);
-    const plane = nimbusSessionFiles(sessionBox(f, a).files, { home: aHome.home, cred: a });
-    const target = '/home/head-cw3/notes.md';
-    await writeText(plane, target, 'editable text');
-
-    const refused = await writeExecutorFileOp(lookupFor(plane), 'workspace', target, { bytes: new TextEncoder().encode('an edit'), expectedRevision: 7 });
-
-    if (!('unsupported' in refused)) throw new Error('expected the unsupported refusal');
     const viewed = await readExecutorFile(lookupFor(plane), 'workspace', target);
 
-    expect(viewed.content).toBe('editable text');
-    expect(viewed.revision).toBeUndefined();
-    expect(viewed.readOnlyReason).toBe(refused.error);
+    expect([viewed.content, typeof viewed.revision, viewed.readOnlyReason]).toEqual(['the previous file', 'number', undefined]);
+
+    const saved = await writeExecutorFileOp(lookupFor(plane), 'workspace', target, { bytes: text('the replacement'), expectedRevision: viewed.revision });
+    const stale = await writeExecutorFileOp(lookupFor(plane), 'workspace', target, { bytes: text('from a stale tab'), expectedRevision: viewed.revision });
+
+    if (!('ok' in saved) || !('conflict' in stale)) throw new Error(`expected the save to land and the stale one to be refused: ${JSON.stringify({ saved, stale })}`);
+    expect(saved.revision).toBe(stale.revision);
+    expect(await readText(plane, target)).toBe('the replacement');
+
+    // An upload with no token only creates: over a file it is refused, naming the revision there.
+    expect(await writeExecutorFileOp(lookupFor(plane), 'workspace', target, { bytes: text('an upload') })).toMatchObject({ conflict: true, revision: saved.revision });
+    expect(await writeExecutorFileOp(lookupFor(plane), 'workspace', '/home/head-cw2/fresh.md', { bytes: text('an upload') })).toMatchObject({ ok: true });
+    expect([await readText(plane, target), await readText(plane, '/home/head-cw2/fresh.md')]).toEqual(['the replacement', 'an upload']);
   });
 });
