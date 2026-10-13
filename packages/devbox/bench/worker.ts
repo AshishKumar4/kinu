@@ -46,12 +46,10 @@ import {
   Devbox,
   describeThrown,
   GOLDEN_NAME,
-  type BoxPeers,
   type BoxSize,
   type CheckpointKind,
   type CheckpointOutcome,
   type DevboxPolicy,
-  type DevboxStore,
   type RestoreClockPhase,
 } from '../src/index';
 import type { RestorePhaseStamps } from '../src/durability/contracts';
@@ -68,10 +66,10 @@ import { storePrefixOf, strategyIsDeployed } from './strategy-dispatch';
 import { stopContainer } from './container-stop';
 import type { PublicationOperation, PublicationWindow } from './publication-meter';
 import { settle } from '../src/errors';
-import { serveStore, type StoreGatewayProps } from '../src/store-gateway';
+import { serveStore } from '../src/store-gateway';
+import { routeEgress, type GatewayProps } from '../src/gateway';
 import { meterPublicationBucket, observePublicationRequest, type PublicationFinish } from './publication-transport';
 
-export { DevboxOutbound } from "../src/index";
 
 interface BenchEnv {
   BACKUP_BUCKET: R2Bucket;
@@ -453,26 +451,28 @@ export class BenchOpCounter extends DurableObject<BenchEnv> {
 }
 
 /**
- * S3Mount builds each store route's gateway from `ctx.exports.DevboxStoreGateway`, so this class is
- * exported under that name. It serves the store from the counting binding, which puts s3fs traffic
- * and the container's publication on the meter. Request settlement flushes this isolate's batch;
- * /ops cannot drain a different isolate's under-threshold batch.
+ * The host's one gateway export, with each store route served from the counting binding, which puts s3fs traffic and
+ * the container's publication on the meter. Request settlement flushes this isolate's batch; /ops cannot drain a
+ * different isolate's under-threshold batch. Egress is the shipped router's.
  */
-class CountingStoreGateway extends WorkerEntrypoint<BenchEnv, StoreGatewayProps> {
+class CountingGateway extends WorkerEntrypoint<BenchEnv, GatewayProps> {
   override async fetch(request: Request): Promise<Response> {
+    const props = this.ctx.props;
+
+    if (!('store' in props)) return await settle(routeEgress(request, props.outbound));
     flushEnv = this.env;
     const bucket = countingBucket(this.env.BACKUP_BUCKET, this.env);
 
     try {
       return await observePublicationRequest(request, async (forwarded) =>
-        await settle(serveStore(forwarded, this.ctx.props, (name) => name === 'BACKUP_BUCKET' ? bucket : undefined)));
+        await settle(serveStore(forwarded, props.store, (name) => name === 'BACKUP_BUCKET' ? bucket : undefined)));
     } finally {
       await flushOps(this.env);
     }
   }
 }
 
-export { CountingStoreGateway as DevboxStoreGateway };
+export { CountingGateway as DevboxGateway };
 
 // ── the async operation protocol ────────────────────────────────────────────
 //
@@ -565,24 +565,17 @@ class BenchBox extends Devbox<BenchEnv> {
   /** Each entrypoint can run in a different isolate; its local counter must bind
    *  its own flush target or those observations never reach the durable total. */
   constructor(...args: ConstructorParameters<typeof Devbox<BenchEnv>>) {
-    super(...args);
-    this.enableInternet = args[1].BENCH_INTERNET !== 'off';
-    // args[1] is the env the base binds; taking it from the tuple keeps this
-    // constructor's signature identical to the base's rather than restating a
-    // platform type that can drift.
-    flushEnv = args[1];
+    const [ctx, env] = args;
+    // The box reads its store by name, so the meter stands in the env under that name and counts every operation.
+    super(ctx, { ...env, BACKUP_BUCKET: countingBucket(env.BACKUP_BUCKET, env) });
+    this.enableInternet = env.BENCH_INTERNET !== 'off';
+    flushEnv = env;
   }
 
-  protected override get registryToken(): string | undefined {
-    return this.env.DEVBOX_REGISTRY_TOKEN;
-  }
-  protected override get registryAccount(): string { return 'f44999d1ddda7012e9a87729eba250f1'; }
+  protected override get registry(): { readonly token: string; readonly account: string } | undefined {
+    const token = this.env.DEVBOX_REGISTRY_TOKEN;
 
-  protected override get peers(): BoxPeers | undefined {
-    const boxes = this.env.SnapshotChainBox;
-
-    // Named as the router names every box, so `/golden?box=devbox-golden` reaches the same object.
-    return boxes === undefined ? undefined : { golden: () => boxes.get(boxes.idFromName(`${BENCH_ARM}:${GOLDEN_NAME}`)), box: (id) => boxes.get(boxes.idFromString(id)) };
+    return token === undefined ? undefined : { token, account: 'f44999d1ddda7012e9a87729eba250f1' };
   }
 
   protected override get archiveExcludes(): readonly string[] {
@@ -828,8 +821,8 @@ class BenchBox extends Devbox<BenchEnv> {
     return this.env.BENCH_PRODUCTION_SYNC === '1';
   }
 
-  protected override get store(): DevboxStore {
-    return { binding: "BACKUP_BUCKET", bucket: countingBucket(this.env.BACKUP_BUCKET, this.env) };
+  protected override get store(): string {
+    return "BACKUP_BUCKET";
   }
 
   /** Shortened from the shipped defaults so an arm does not sit for half an hour
@@ -929,7 +922,8 @@ function boxOf(
 
   if (binding === undefined) throw new Error(`no durable-object binding for ${strategy}`);
 
-  return binding.get(binding.idFromName(`${strategy}:${name}`));
+  // The golden is the namespace's own, by its plain name (D83); every other box is named per arm.
+  return binding.get(binding.idFromName(name === GOLDEN_NAME ? GOLDEN_NAME : `${strategy}:${name}`));
 }
 
 /** Every field any route reads, all optional, parsed at the edge. One named

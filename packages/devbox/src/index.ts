@@ -1,6 +1,6 @@
 /** Export a type only when a caller must write its name. */
 
-export { Devbox, type BoxPeers, type DevboxState, type PortListener } from './devbox';
+export { Devbox, type DevboxState, type PortListener } from './devbox';
 
 export { GOLDEN_NAME } from './golden';
 
@@ -8,9 +8,8 @@ export { DevboxError, devboxFailure, type DevboxErrorCode } from './errors';
 
 export { collectExecRecords, execRecords } from './exec-stream';
 
-export { DevboxOutbound, type OutboundPolicy } from './gateway';
+export { DevboxGateway, type OutboundPolicy } from './gateway';
 
-export { DevboxStoreGateway } from './store-gateway';
 
 export type { RestoreClockPhase, RestoreStatus } from './restoration';
 
@@ -21,7 +20,6 @@ export type {
   CheckpointKind,
   CheckpointOutcome,
   DevboxStorage,
-  DevboxStore,
 } from './storage';
 
 export { describeThrown } from './lifecycle';

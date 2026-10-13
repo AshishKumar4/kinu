@@ -12,7 +12,7 @@ import {
 import type { StoredValue } from '../src/storage';
 import { handClock } from '../../test-utils/src/hand-clock';
 import {
-  Devbox, FakeSandbox, gate, harness, SandboxFailure, STAMP_COMMAND,
+  Devbox, FakeSandbox, gate, harness, READY_GOLDEN, SandboxFailure, STAMP_COMMAND,
   type FakeStorage, type Harness, type StartFault,
 } from './support/devbox-harness';
 
@@ -213,10 +213,22 @@ describe('the startup kick arms restoration without attaching inline', () => {
     expect((await box.devboxState()).ready).toBe(true);
   });
 
-  test('an unhealthy answer AFTER the container ran is a transient refusal the next drive heals', async () => {
-    // `startFaultAfterRunning` fires after the platform has an instance: the container is up,
-    // but this attempt cannot know it because its admission probe threw.
-    const { box, container, rows } = harness(TestBox);
+  test('an unhealthy answer AFTER the container ran is no verdict on what it started from: the box keeps it and attaches', async () => {
+    // `startFaultAfterRunning` fires after the platform has an instance: the container is up, but the start answered
+    // unavailable. Before D83 the box started the image and refused until the next drive; a box starts from a snapshot
+    // now, and a transient answer must not report that snapshot lost, so the box asks the running container again.
+    const asked: (string | undefined)[] = [];
+
+    const golden = {
+      ...READY_GOLDEN,
+      goldenFor: async (box: string, lost?: string) => {
+        asked.push(lost);
+
+        return await READY_GOLDEN.goldenFor(box, lost);
+      },
+    };
+
+    const { box, container } = harness(TestBox, undefined, undefined, golden);
     await container.stop();
     container.startFaultAfterRunning = new SandboxFailure({
       code: 'CONTAINER_UNAVAILABLE',
@@ -225,22 +237,9 @@ describe('the startup kick arms restoration without attaching inline', () => {
 
     await box.devboxStartup();
 
-    expect((await box.devboxState()).restoration).toBe('unstarted');
-    expect(incidents(rows)).toEqual([
-      expect.objectContaining({
-        stage: 'attach',
-        reason: expect.stringContaining('the container is not healthy'),
-      }),
-    ]);
-    expect(armed(container)).toBe(1);
-
-    // Runs on the row the refusal armed; the fault is one-shot like a transient one,
-    // so the same identity attaches.
-    await box.devboxStartup();
-
     const state = await box.devboxState();
-    expect({ restoration: state.restoration, ready: state.ready })
-      .toEqual({ restoration: 'attached', ready: true });
+    expect({ asked, starts: container.startOptions.length, restoration: state.restoration, ready: state.ready })
+      .toEqual({ asked: [undefined], starts: 1, restoration: 'attached', ready: true });
   });
 
   test('a stopped replacement cannot reuse the prior container attachment after eviction', async () => {
@@ -1265,7 +1264,7 @@ describe('a box whose attach was abandoned', () => {
     // operation in the 30 s before the armed replacement was refused as terminal.
     for (const reset of [false, true]) {
       const harnessed = harness(TightBox);
-      const { container, state } = harnessed;
+      const { container, state, env } = harnessed;
       let box = harnessed.box;
       const slow = gate();
       container.stampGate = slow;
@@ -1277,7 +1276,7 @@ describe('a box whose attach was abandoned', () => {
       container.stampGate = undefined;
 
       if (reset) {
-        box = new TightBox(state, {});
+        box = new TightBox(state, env);
         container.owner = box;
       }
 

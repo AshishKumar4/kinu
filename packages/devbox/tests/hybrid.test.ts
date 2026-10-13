@@ -3,6 +3,7 @@
 import { afterEach, expect, jest, setSystemTime, spyOn, test } from 'bun:test';
 import * as v from 'valibot';
 import { ChainTestBox, asked, chainBox } from './support/chain-box';
+import { HARNESS_GOLDEN } from './support/devbox-harness';
 import type { SnapshotRegistry } from '../src/snapshot-registry';
 
 /** The registry as the box asks it to delete a snapshot: what it deleted, and an answer to give. */
@@ -39,15 +40,6 @@ class HybridBox extends ChainTestBox {
   }
 }
 
-/** The same box after a deploy that changed its image. */
-class ImageChangedBox extends HybridBox {
-  static image = '';
-
-  protected override get containerImage(): string | undefined {
-    return ImageChangedBox.image;
-  }
-}
-
 /** A box that was started, used and rested once. */
 async function rested() {
   asked.length = 0;
@@ -59,8 +51,8 @@ async function rested() {
   return { ...arm, rest };
 }
 
-const startedFrom = (options: { readonly image?: string; readonly containerSnapshot?: { readonly id: string } } | undefined) =>
-  options?.containerSnapshot === undefined ? 'image' : options.containerSnapshot.id;
+const startedFrom = (options: { readonly containerSnapshot?: { readonly id: string } } | undefined) =>
+  options?.containerSnapshot?.id === HARNESS_GOLDEN ? 'golden' : options?.containerSnapshot?.id;
 
 afterEach(() => {
   setSystemTime();
@@ -71,11 +63,11 @@ test('a rest commits the chain, then takes the snapshot the next wake starts fro
   await box.devboxStartup();
 
   expect({ rest: rest.kind, starts: container.startOptions.map(startedFrom), asked, snapshots: [...container.snapshots.keys()] }).toEqual({
-    rest: 'committed', starts: ['image', 'snapshot-1'], asked: ['attach from image', 'commit quiesce', 'attach from snapshot'], snapshots: ['snapshot-1'],
+    rest: 'committed', starts: ['golden', 'snapshot-1'], asked: ['attach from image', 'commit quiesce', 'attach from snapshot'], snapshots: [HARNESS_GOLDEN, 'snapshot-1'],
   });
 });
 
-test('a snapshot wake that is not admitted within the cutover starts from the image and tells the agent when it restored to', async () => {
+test('a snapshot wake that is not admitted within the cutover starts from the golden and tells the agent when it restored to', async () => {
   setSystemTime(new Date('2026-09-30T00:00:00Z'));
   const { box, container, rows } = await rested();
   container.snapshots.set('snapshot-1', 'hang');
@@ -87,12 +79,12 @@ test('a snapshot wake that is not admitted within the cutover starts from the im
     starts: container.startOptions.map(startedFrom), asked, destroyed: container.destroys - destroys, snapshotKept: rows.has('devbox:snapshot'),
     notices: notices.map(row => row.stage), restoredTo: notices[0]?.reason.includes('2026-09-30T00:00'),
   }).toEqual({
-    starts: ['image', 'snapshot-1', 'image'], asked: ['attach from image', 'commit quiesce', 'attach from image'], destroyed: 1, snapshotKept: false,
+    starts: ['golden', 'snapshot-1', 'golden'], asked: ['attach from image', 'commit quiesce', 'attach from image'], destroyed: 1, snapshotKept: false,
     notices: ['recovered'], restoredTo: true,
   });
 });
 
-test('a snapshot the platform no longer has starts from the image at once, and leaves no exec to abort later', async () => {
+test('a snapshot the platform no longer has starts from the golden at once, and leaves no exec to abort later', async () => {
   const { box, container } = await rested();
   container.snapshots.delete('snapshot-1');
   jest.useFakeTimers();
@@ -106,7 +98,7 @@ test('a snapshot the platform no longer has starts from the image at once, and l
   }
 
   expect({ starts: container.startOptions.map(startedFrom), asked, aborted: container.execSignals.filter(signal => signal.aborted).length }).toEqual({
-    starts: ['image', 'snapshot-1', 'image'], asked: ['attach from image', 'commit quiesce', 'attach from image'], aborted: 0,
+    starts: ['golden', 'snapshot-1', 'golden'], asked: ['attach from image', 'commit quiesce', 'attach from image'], aborted: 0,
   });
 });
 
@@ -122,7 +114,7 @@ test('a snapshot the chain has moved past, or one past its 29 days, is not woken
   await old.box.devboxStartup();
 
   expect({ moved: moved.container.startOptions.map(startedFrom), old: old.container.startOptions.map(startedFrom) }).toEqual({
-    moved: ['image', 'snapshot-1', 'image'], old: ['image', 'image'],
+    moved: ['golden', 'snapshot-1', 'golden'], old: ['golden', 'golden'],
   });
 });
 
@@ -134,18 +126,7 @@ test('a child is not woken once its lineage\'s root is past 29 days, however new
   setSystemTime(Date.now() + 10 * 24 * 60 * 60 * 1000);
   await box.devboxStartup();
 
-  expect(container.startOptions.map(startedFrom)).toEqual(['image', 'snapshot-1', 'image']);
-});
-
-test('a snapshot of another image is not woken: the new image starts and recovers the chain', async () => {
-  const { box, container } = await rested();
-  ImageChangedBox.image = 'registry.example/devbox@sha256:next';
-  Object.setPrototypeOf(box, ImageChangedBox.prototype);
-  await box.devboxStartup();
-
-  expect({ starts: container.startOptions.map(startedFrom), asked }).toEqual({
-    starts: ['image', 'image'], asked: ['attach from image', 'commit quiesce', 'attach from image'],
-  });
+  expect(container.startOptions.map(startedFrom)).toEqual(['golden', 'snapshot-1', 'golden']);
 });
 
 // The platform's words when the account's snapshot limit was reached (2026-10-09): the rest committed the chain first,
@@ -164,7 +145,7 @@ test('a rest whose snapshot is refused still rests, says why, and the next wake 
   expect({
     rest: rest.kind, running: container.running.running, starts: container.startOptions.map(startedFrom),
     said: reasons.some(reason => reason.includes(SNAPSHOT_LIMIT)), asked,
-  }).toEqual({ rest: 'committed', running: true, starts: ['image', 'image'], said: true, asked: ['attach from image', 'commit quiesce', 'attach from image'] });
+  }).toEqual({ rest: 'committed', running: true, starts: ['golden', 'golden'], said: true, asked: ['attach from image', 'commit quiesce', 'attach from image'] });
 });
 
 test('a discard empties the box\'s store whether it holds no object or more than one listing of them', async () => {

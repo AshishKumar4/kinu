@@ -2,7 +2,7 @@
 
 Devbox presents an ephemeral Cloudflare container as a machine that stays: its files survive a recycle, its supervised processes start again, and its preview URLs keep their hostname.
 
-<p align="center"><img src="docs/architecture.svg" width="880" alt="Your Worker calls the Devbox Durable Object, which owns the container. The container's web traffic leaves through DevboxOutbound; its backup reaches R2 through DevboxStoreGateway."></p>
+<p align="center"><img src="docs/architecture.svg" width="880" alt="Your Worker calls the Devbox Durable Object, which owns the container. The container's web traffic leaves, and its backup reaches R2, through DevboxGateway."></p>
 
 Every decision in this package, with the measurement that settled it, is in [DEVBOX-DECISIONS.md](../../docs/DEVBOX-DECISIONS.md); the D-numbers below point there. Read it before you change the package.
 
@@ -11,24 +11,15 @@ Every decision in this package, with the measurement that settled it, is in [DEV
 The core of [`example/worker.ts`](example/worker.ts), a complete host with no Kinu code:
 
 ```ts
-import { Devbox, GOLDEN_NAME, type BoxPeers, type DevboxStore } from '@kinu.run/devbox';
+import { Devbox } from '@kinu.run/devbox';
 
-export { DevboxOutbound, DevboxStoreGateway } from '@kinu.run/devbox';
+export { DevboxGateway } from '@kinu.run/devbox';
 
 interface Env {
   readonly Box: DurableObjectNamespace<ExampleBox>;
-  readonly WORKSPACES: R2Bucket;
 }
 
-export class ExampleBox extends Devbox<Env> {
-  protected override get store(): DevboxStore {
-    return { binding: 'WORKSPACES', bucket: this.env.WORKSPACES };
-  }
-
-  protected override get peers(): BoxPeers {
-    return { golden: () => this.env.Box.getByName(GOLDEN_NAME), box: (id) => this.env.Box.get(this.env.Box.idFromString(id)) };
-  }
-}
+export class ExampleBox extends Devbox<Env> {}
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -43,18 +34,18 @@ export default {
 "durable_objects": { "bindings": [{ "class_name": "ExampleBox", "name": "Box" }] },
 "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ExampleBox"] }],
 "containers": [{ "class_name": "ExampleBox", "scheduling_policy": "durable_object" }],
-"r2_buckets": [{ "binding": "WORKSPACES", "bucket_name": "kinu-devbox-example" }]
+"r2_buckets": [{ "binding": "DEVBOX_STORE", "bucket_name": "kinu-devbox-example" }]
 ```
 
-- `store` makes the box durable. Without it the box runs and keeps nothing.
-- `peers` lets a box start from one golden snapshot of `cloudflare/debian-trixie` with the tools installed, built by the object named `GOLDEN_NAME` (D66). Publish the pinned tools to the bucket once: `bun scripts/devbox-tools.ts publish <bucket>`. Without `peers`, a box starts the image named `devbox` in the container's `images` map.
-- The Worker must export `DevboxOutbound`, and `DevboxStoreGateway` when the box has a store. The gateway answers the container's S3 calls from the R2 binding, so no key pair exists (D41).
+- The store is the R2 bucket bound as `DEVBOX_STORE` (override `store` to name another binding). A box keeps its disk there, and starts from one golden snapshot of `cloudflare/debian-trixie` with the pinned tools installed, built by the box named `GOLDEN_NAME` in the same namespace (D66). Publish the pinned tools to the bucket once: `bun scripts/devbox-tools.ts publish <bucket>`. A box with no bucket bound is refused at its first start, naming the binding (D83).
+- The box finds its own namespace among the Worker's exports, the one that accepts its id (D83), so the class must be exported from the Worker.
+- The Worker must export `DevboxGateway`. It routes the container's web traffic, and answers its S3 calls from the R2 binding, so no key pair exists (D41).
 
 ## Lifecycle
 
-<p align="center"><img src="docs/lifecycle.svg" width="880" alt="A call starts a stopped box from its own snapshot, the golden snapshot or the image. The restore attaches /workspace, restarts supervised processes and re-exposes ports. An idle check every 60 s leads to a graceful stop, or to a rest ask when a process still runs."></p>
+<p align="center"><img src="docs/lifecycle.svg" width="880" alt="A call starts a stopped box from its own snapshot, else the golden snapshot, else waits for the golden. The restore attaches /workspace, restarts supervised processes and re-exposes ports. An idle check every 60 s leads to a graceful stop, or to a rest ask when a process still runs."></p>
 
-A box in `repair` still takes calls, so its agent can fix what did not come back. An idle box with a live process records a `rest` incident and holds until `answerRest()`; the default `onIncident` only logs it, so a host that wants the ask overrides `onIncident` (D59). A start that fails the same way every time is refused with code `refused` until its image, size or internet setting changes, or a caller calls `start()` or `attachNow()` (D52).
+A box in `repair` still takes calls, so its agent can fix what did not come back. An idle box with a live process records a `rest` incident and holds until `answerRest()`; the default `onIncident` only logs it, so a host that wants the ask overrides `onIncident` (D59). A start that fails the same way every time is refused with code `refused` until its size, internet setting or store binding changes, or a caller calls `start()` or `attachNow()` (D52).
 
 ## Durability
 
@@ -216,7 +207,7 @@ await box.destroy();        // destroy the container; a later call starts it aga
 
 | Override | Default | Sets |
 | --- | --- | --- |
-| `store`, `peers` | none | the backup bucket; the golden builder |
+| `store` | `'DEVBOX_STORE'` | the binding of the backup bucket, which also holds the pinned tools |
 | `previewHost`, `previewName` | none, the object id | the preview URL |
 | `policy` | 60 s heartbeat, 30 min idle, 10 min quiet, 5 min saves, 25 s restore | the lifecycle's timings |
 | `defaultSize` | `'medium'` | the size nobody chose |
@@ -224,7 +215,7 @@ await box.destroy();        // destroy the container; a later call starts it aga
 | `outboundPolicy()` | `{ routes: {} }` | exact-host routes and a fallback for HTTP on port 80 and HTTPS on 443 |
 | `enableInternet` | `true` | raw internet, which other ports use directly; `false` answers unrouted HTTP and HTTPS with 403 |
 | `onIncident(incident, delivery)` | logs it | where failures and rest asks go |
-| `registryToken`, `registryAccount` | none; the account of a `registry.cloudflare.com` image | together, let the box delete dead snapshots (D65) |
+| `registry` | `DEVBOX_REGISTRY_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` from the env, when both are set | the Containers token and account that let the box delete dead snapshots (D65) |
 
 Devbox's own failures are `DevboxError`s with a `code` (D42). Worker RPC drops the class, so read a caught one with `devboxFailure({ cause: error })`.
 

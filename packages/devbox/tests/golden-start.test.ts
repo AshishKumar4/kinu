@@ -4,7 +4,6 @@ import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import type { GoldenAnswer } from '../src/golden';
 import { TOOLS_STAMP } from '../src/tools';
-import type { BoxPeers } from '../src/devbox';
 import { ChainTestBox, asked, chainBox } from './support/chain-box';
 
 const PARTS = [new Uint8Array([1, 2, 3]), new Uint8Array([4, 5])];
@@ -20,15 +19,17 @@ class Golden {
 
     return Promise.resolve(this.answers.shift() ?? { kind: 'pending', reason: 'the base snapshot is being rebuilt' });
   }
+
+  goldenReady(box: string): Promise<void> {
+    this.asked.push(`told ${box}`);
+
+    return Promise.resolve();
+  }
 }
 
 const golden = new Golden();
 
 class GoldenBox extends ChainTestBox {
-  protected override get peers(): BoxPeers {
-    return { golden: () => golden, box: (id) => ({ goldenReady: async () => { golden.asked.push(`told ${id}`); } }) };
-  }
-
   protected override get toolsPin(): string {
     return PIN;
   }
@@ -45,7 +46,7 @@ function fresh(answers: GoldenAnswer[]) {
   asked.length = 0;
   golden.answers = answers;
   golden.asked.length = 0;
-  const made = chainBox(GoldenBox);
+  const made = chainBox(GoldenBox, golden);
   made.container.addSnapshot('golden-1', new Map([[TOOLS_STAMP, PIN]]));
   made.container.addSnapshot('golden-0', new Map([[TOOLS_STAMP, 'b'.repeat(64)]]));
 

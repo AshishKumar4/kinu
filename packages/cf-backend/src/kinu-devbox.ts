@@ -4,8 +4,8 @@
   */
 
 import {
-  Devbox, GOLDEN_NAME, type BoxPeers, type DevboxState,
-  type DevboxIncident, type DevboxStore, type OutboundPolicy,
+  Devbox, type DevboxState,
+  type DevboxIncident, type OutboundPolicy,
   type IncidentDisposition, type RestoreClockPhase,
 } from "@kinu.run/devbox";
 import { getAgentByName } from "agents";
@@ -49,22 +49,8 @@ export class KinuDevbox extends Devbox<Env> {
   enableInternet = true;
 
 
-  protected override get store(): DevboxStore | undefined {
-    const bucket = this.env.BACKUP_BUCKET;
-
-    return bucket === undefined ? undefined : { binding: 'BACKUP_BUCKET', bucket };
-  }
-
-  protected override get namespaceBinding(): string { return 'KinuDevbox'; }
-
-  protected override get registryToken(): string | undefined { return this.env.DEVBOX_REGISTRY_TOKEN; }
-  protected override get registryAccount(): string | undefined { return this.env.CLOUDFLARE_ACCOUNT_ID; }
-
-  protected override get peers(): BoxPeers {
-    const boxes = this.env.KinuDevbox;
-
-    return { golden: () => boxes.getByName(GOLDEN_NAME), box: (id) => boxes.get(boxes.idFromString(id)) };
-  }
+  /** A mount records its binding as its bucket, so the name stays what the deployed containers recorded (D47). */
+  protected override get store(): string { return 'BACKUP_BUCKET'; }
 
   protected override get previewName(): string {
     const workspaceName = this.ctx.storage.kv.get<KinuEgressParams>(EGRESS_CONFIG_KEY)?.workspaceName;

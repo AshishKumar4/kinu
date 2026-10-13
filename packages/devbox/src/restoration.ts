@@ -35,21 +35,23 @@ export function terminalRefusal(reason: string): string {
   return `this devbox has no attached work directory: ${reason}. That failure is terminal, so nothing retries it.`;
 }
 
+/** What a start refusal is keyed by (D52): the base is the one golden, so a size, the internet policy, or a bound store
+ *  that differs from the refused start's lifts the refusal (D83). */
 export interface StartInputs {
-  readonly image: string;
   readonly size: BoxSize;
   readonly internet: boolean;
+  readonly store: boolean;
 }
 
-const StartRefusalSchema = v.strictObject({ reason: v.string(), image: v.string(), size: BoxSizeSchema, internet: v.boolean() });
+const StartRefusalSchema = v.strictObject({ reason: v.string(), size: BoxSizeSchema, internet: v.boolean(), store: v.boolean() });
 
 export function refusedStart(stored: StoredValue, inputs: StartInputs): string | undefined {
   const row = v.safeParse(StartRefusalSchema, stored);
 
   if (!row.success) return undefined;
-  const { reason, image, size, internet } = row.output;
+  const { reason, size, internet, store } = row.output;
 
-  return image === inputs.image && size === inputs.size && internet === inputs.internet ? reason : undefined;
+  return size === inputs.size && internet === inputs.internet && store === inputs.store ? reason : undefined;
 }
 
 /** Adopted only beside a container boot id that still names this instance, so a row never

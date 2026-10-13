@@ -22,7 +22,7 @@ test('reading the state of a box at rest, and of one whose object reset since, s
   const resting = { state: (await used.box.devboxState()).running, starts: used.container.startOptions.length - startsBefore, armed: armed(used.container) };
 
   // The platform resets the object while its container is down; the successor's first event is the read.
-  const successor = new TestBox(used.state, {});
+  const successor = new TestBox(used.state, used.env);
   used.container.owner = successor;
   const reset = { state: (await successor.devboxState()).running, starts: used.container.startOptions.length - startsBefore, armed: armed(used.container) };
 
