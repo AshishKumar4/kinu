@@ -748,7 +748,13 @@ export class ChatSession {
     let answer: DeliveryAnswer;
 
     if (input.kind === 'words') answer = await this.admitDeliveredWords(id, input);
-    else if (input.kind === 'run') answer = this.admitDeliveredRun({ id, task: input.task });
+    else if (input.kind === 'run') {
+      const ran = this.admitDeliveredRun({ id, task: input.task });
+
+      // Not taken yet: the crossing fails, and the delivery stays owed.
+      if (ran instanceof KinuError) return settleSync(Effect.fail(ran));
+      answer = ran;
+    }
     else answer = await this.admitDeliveredTurn(id, input, delivery.authorship);
 
     // Its producer's mark moves once it is held: a repeat of it is answered `duplicate`.
@@ -798,11 +804,36 @@ export class ChatSession {
   }
 
   /** Held as its producer's turn is, then queued: a later process restores it from that row ({@link restoreQueuedTurns}). */
-  private admitDeliveredRun(run: DeliveredRun): DeliveryAnswer {
+  private admitDeliveredRun(run: DeliveredRun): DeliveryAnswer | KinuError {
+    const held = v.safeParse(HeldRunSchema, this.pendingSends.heldMetadata(run.id));
+
+    // Another generation of a run held here: its workspace reset and re-drove it, so the held one's caller is gone.
+    if (held.success && held.output.kinuRun !== run.task.runId) return this.supersede(run);
+
     if (this.pendingSends.hasTurn(run.id) || this.announcementInFlight(run.id)) return 'duplicate';
     this.pendingSends.reserveTurn({ id: run.id, text: run.task.body, metadata: runMetadata(run.task) });
     this.queue.push(runItem(run));
     this.pump();
+
+    return 'taken';
+  }
+
+  /**
+   * A re-driven run, in place of the generation held under its id: one still queued is replaced, and runs as the newer.
+   * One already taken is cut off, and the newer stays owed until the older's end, which no caller hears, retired its input.
+   */
+  private supersede(run: DeliveredRun): DeliveryAnswer | KinuError {
+    const queued = this.queue.findIndex((item) => item.run?.id === run.id);
+
+    if (queued < 0) {
+      if (this.runningRun?.id === run.id) this.runningRun.controller.abort(new KinuError('cancelled', `run ${run.id} was re-driven by its workspace`));
+
+      return new KinuError('unavailable', `An earlier generation of run ${run.id} is still ending; this one is owed until it has.`);
+    }
+
+    this.pendingSends.retireTurn(run.id);
+    this.pendingSends.reserveTurn({ id: run.id, text: run.task.body, metadata: runMetadata(run.task) });
+    this.queue[queued] = runItem(run);
 
     return 'taken';
   }

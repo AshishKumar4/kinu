@@ -3,11 +3,16 @@
  * epoch, and the workspace admits that round's opening before any of its calls run. Driven as production drives it: the
  * owner's turn starts a one-node search through the main actor's `agents` tool, and every model call is the gateway's.
  */
-import { expect, test } from 'bun:test';
-import { OVERFLOW_RETRY_TEXT, TurnFences } from '@kinu.run/core';
+import { afterEach, expect, setSystemTime, test } from 'bun:test';
+import { OVERFLOW_RETRY_TEXT, RECOVERY_BACKOFF_CEILING_MS, TurnFences } from '@kinu.run/core';
 import { wrapDatabase } from '@kinu.run/core/identity';
 import { handClock } from '@kinu.run/test-utils';
-import { agentSql, catalogTurn, gatewayWorkspace, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import {
+  agentSql, catalogTurn, driveUntil, GATEWAY_CATALOG, gatewayWorkspace, reactivateOrchestratorHarness, workspaceMainActor,
+  type ActorHarness, type HarnessOrchestratorAgent,
+} from './helpers/actor-harness';
+import { abandonHarnessFibers } from './helpers/agents-sdk';
+import { holdNextDelivery, holdNextRunPreparation, keepAgentIsolatesAcrossReset } from './helpers/agent-facets';
 import {
   chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun,
 } from './helpers/platform-gateway';
@@ -17,6 +22,8 @@ import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 const ASK = 'Find a way to speed up the parser.';
 
 const TASK = 'Name one way to tokenize faster.';
+
+afterEach(() => { setSystemTime(); });
 
 /** The main actor starts a one-node search, then says so; `node` answers the node. */
 function searching(node: (run: RecordedGatewayRun) => Response | Promise<Response>) {
@@ -137,4 +144,84 @@ test("a node woken by its own job's settle runs its next round under that round'
   expect(seen[0]?.running?.turnId).toContain('#');
   expect(seen[0]?.admitted).toBe(seen[0]?.running?.epoch ?? null);
   expect(workspace.db.query<{ status: string }, []>('SELECT status FROM head_journal').get()?.status).toBe('completed');
+});
+
+test("a node whose workspace reset while it prepared runs once for the re-driven search, whose end reaches main", async () => {
+  const ANSWER = 'Cache the token table.';
+  let nodeCalls = 0;
+  let mainRead = '';
+
+  // The node answers; main starts the search, and, woken by the search's job, reads its result through `agent.jobResult`.
+  const gateway = stubAiBinding((run) => {
+    if (!openingOf(run).includes(ASK)) {
+      nodeCalls += 1;
+
+      return chatCompletion(run, ANSWER);
+    }
+
+    const { messages } = requestOf(run);
+    const asked = messages.reduce((last, message, index) => (message.role === 'user' ? index : last), -1);
+    const woken = /Background agents job (bgjob-[a-z0-9]+) (completed|failed)/.exec(JSON.stringify(messages[asked]?.content));
+
+    if (woken !== null) {
+      const read = messages.slice(asked).filter((message) => message.role === 'tool');
+
+      if (read.length === 0) return toolCallCompletion(run, { tool: 'eval', args: { code: `return await agent.jobResult('${woken[1]}');` } }, 'read_search');
+      mainRead = JSON.stringify(read);
+
+      return chatCompletion(run, 'Read the search.');
+    }
+
+    return messages.some((message) => message.role === 'tool')
+      ? chatCompletion(run, 'Searching.')
+      : toolCallCompletion(run, { tool: 'agents', args: { op: 'swarm', task: TASK, preset: 'ideate', branches: 1, depth: 1 } }, 'swarm_0');
+  });
+
+  const clock = handClock(Date.now());
+  const workspace = gatewayWorkspace(gateway, { jobClock: clock });
+
+  await workspace.started;
+  // The node runs in an isolate of its own, which the workspace's reset leaves running.
+  keepAgentIsolatesAcrossReset(workspace.db);
+
+  const preparing = holdNextRunPreparation();
+  const owner = catalogTurn(workspace.agent, ASK);
+  const first = await preparing;
+  const node = agentSql(workspace, first.actorId);
+  const main = agentSql(workspace, workspaceMainActor(workspace.db).actorId);
+
+  await driveUntil(workspace, "main's turn that started the search never ended", () => main<{ outcome: string | null }>`SELECT outcome FROM actor_turn_claims`
+    .some((claim) => claim.outcome === 'completed'));
+
+  const storageKey = workspace.db.query<{ storage_key: string }, [string]>('SELECT storage_key FROM workspace_actors WHERE actor_id = ?').get(first.actorId)?.storage_key ?? '';
+  const redriven = holdNextDelivery(storageKey);
+
+  // The workspace resets while the node prepares: its next activation re-drives the search's job, which delivers the
+  // node's run again, under a run of its own.
+  abandonHarnessFibers();
+
+  const restarted = reactivateOrchestratorHarness(workspace.db, undefined, {
+    world: { aiGateway: gateway, jobClock: clock },
+    beforeStart: (agent) => { agent.harnessInstallCatalog(GATEWAY_CATALOG); },
+  });
+
+  // The re-driven run's crossing is answered before the first preparation reaches the workspace.
+  await (await redriven)();
+  first.release();
+
+  const next = await restarted;
+  const settled = () => next.db.query<{ status: string }, []>("SELECT status FROM background_jobs WHERE kind = 'agents'").get()?.status !== 'running';
+
+  await driveUntil(next, "the node's first preparation never settled", () => node<{ n: number }>`SELECT COUNT(*) AS n FROM actor_turn_claims WHERE outcome IS NULL`[0]?.n === 0);
+  // The run its workspace now awaits is owed to the node's wake, which crosses it once the first one's end retired.
+  setSystemTime(new Date(Date.now() + RECOVERY_BACKOFF_CEILING_MS + 1));
+  await driveUntil(next, "the re-driven search never settled", settled);
+  await next.agent.harnessJoinDetachedFibers();
+  await owner;
+  await driveUntil(next, 'main never read the search', () => mainRead !== '');
+
+  // Its model work ran once, its preparation strands no claim, and its end reached main through the search's job.
+  expect(nodeCalls).toBe(1);
+  expect(node<{ outcome: string | null }>`SELECT outcome FROM actor_turn_claims WHERE outcome IS NULL`).toEqual([]);
+  expect(mainRead).toContain(ANSWER);
 });
