@@ -67,9 +67,10 @@ an egress per process (`egressFor`, #45), and a route's traversal report (#41). 
 the agent it acts for: the agent whose own uid it runs under, or the workspace's agent for a session-user process an exec
 named (the owner's terminal names none), so the GitHub work the egress records names that agent. With the report,
 `route(path, { report: true })` names every link its lookup read and, refused, the point it stopped at, so a slate
-build records those as its inputs and a link moved out there builds it again (`packages/cf-backend/src/slates/resident.ts`). The workspace's file listener
-moved from the SQLite engine's event bus, which 0.18 no longer feeds, to the namespace's `watchChanges`, so changes on
-Kinu's mounts reach it too; and the embedded workspace's `npx` installs through the workspace's network, as `npm` does.
+build records those as its inputs and a link moved out there builds it again
+(`packages/cf-backend/src/slates/resident.ts`). The workspace's file listener moved from the SQLite engine's event
+bus, which 0.18 no longer feeds, to the namespace's `watchChanges`, so changes on Kinu's mounts reach it too. Kinu
+registers no npm or npx of its own: the hosted runtime registers both on the same registry when it starts.
 Behaviour 0.18 changes under Kinu (Nimbus's 2026-10-12 changelog): a file a Node program creates has the mode it asked
 for, less the umask, where before it was readable by others; npm stops an install whose required dependency cannot be
 resolved, or that names an option Nimbus does not implement, where before it installed the rest; and a program's ES

@@ -26,7 +26,7 @@ import {
   settleWorkspaceSlates, provisionWorkspaceSoul,
   type HomeRootVfs, type TmpConfiner,
 } from './agent-home';
-import { registerNpm, workspaceCommandNotFound } from './workspace-runtimes';
+import { workspaceCommandNotFound } from './workspace-runtimes';
 import * as v from 'valibot';
 import { ShellExecOptionsSchema, type Shell, type ShellExecOptions } from '../types/primitives';
 import { WORKSPACE_ROOT, workspacePath } from './workspace-path';
@@ -340,7 +340,6 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
     settleWorkspaceSlates(workspace.vfs.as(CRED_KERNEL), (path) => { workspace.vfs.registerSharedDirectory(path); });
     provisionWorkspaceSoul(workspace.vfs.as(CRED_KERNEL));
 
-    await registerNpm(workspace);
     const root = workspace.vfs.as(CRED_KERNEL);
     const main = agentIdentity(opts.sql, MAIN_AGENT);
     provisionAgentHome(root, MAIN_AGENT, main);
