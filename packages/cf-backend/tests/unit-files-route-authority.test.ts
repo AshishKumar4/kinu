@@ -73,9 +73,7 @@ function daemon(files: Map<string, string>) {
     switch (frame.method) {
       case 'which': return { present: [] };
       case 'statPath': return statOf(files, path);
-      case 'readFile': return { encoding: 'base64', content: btoa(body ?? '') };
       case 'readRange': return { encoding: 'base64', content: btoa((body ?? '').slice(0, 64)) };
-      case 'exists': return files.has(path);
       case 'listFiles': return [...files.keys()]
         .filter((name) => name.startsWith(`${path}/`))
         .map((name) => ({ name: name.slice(path.length + 1), type: 'file' }));

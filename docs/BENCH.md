@@ -391,6 +391,10 @@ R2 residue accounting and orphan teardown in `scripts/bench-devbox-fixture.ts`.
 The fixture's deploy, box RPC, armed operations and C3 measurement had no
 driver left after the sync-window, block-attach and devbox-e2e drivers went;
 they left the tree on 2026-10-13, and `bcab9982a` holds them to restore from.
+The per-turn workerd meter (`scripts/turn-file-io.ts`, its `turn-file-io/` driver and
+staging sampler, and the tier model's `KINU_PERF_IO` script) and the egress probe
+(`scripts/egress-probe.ts`) left the tree on 2026-10-13; `9a437a392` holds them
+to restore from.
 
 ## Measured verdicts
 

@@ -18,6 +18,7 @@ import { TurnFileLedger } from '../src/vfs/file-ledger';
 import { TurnContextBudget } from '../src/context-budget';
 import { readExecutorFile, writeExecutorFileOp } from '../src/read-models/files';
 import type { JsonObject, JsonValue } from '../src/utils/json';
+import type { Memory } from '../src/types/primitives';
 
 /** `link` leads to /home/main/deep/inner; a different target.txt beside the link and beside where it leads. */
 async function linkedWorkspace() {
@@ -92,7 +93,7 @@ test('the owner\'s file manager opens, saves and uploads where the walk lands', 
 });
 
 /** The file tool past its approval gate, as the runtime builds it over `workspace`, and the owner's reader beside it. */
-function gatedTool(workspace: ReturnType<typeof createWorkspaceBundle>) {
+function gatedTool(workspace: ReturnType<typeof createWorkspaceBundle>, memory?: Memory) {
   const { files } = workspaceFilePlane(workspace, { mounts: [], principal: {}, home: WORKSPACE_ROOT });
 
   const gated = withApprovalGatedFiles(files, 'workspace', {
@@ -102,6 +103,7 @@ function gatedTool(workspace: ReturnType<typeof createWorkspaceBundle>) {
 
   const file = toolExecute<JsonObject, JsonValue>(createFileTool({
     home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: gated, ledger: new TurnFileLedger(), budget: new TurnContextBudget(),
+    ...(memory !== undefined && { memory }),
   }));
 
   const owner = { getProvider: () => ({ files, homeDir: async () => WORKSPACE_ROOT }) };
@@ -127,6 +129,43 @@ test('a write or edit through a link names the file it changed, and that referen
   expect(await file({ op: 'edit', path: 'link/../target.txt', edits: [{ old_text: 'leads', new_text: 'led' }] })).toMatchObject({ reference: edited });
   expect(JSON.stringify(await file({ op: 'read', path: edited }))).toContain('beside where the link led');
   expect(await readExecutorFile(owner, 'workspace', '/home/main/deep/target.txt')).toMatchObject({ content: 'beside where the link led' });
+});
+
+// #61: the result was the path looked up again after the write's memory index, so a link moved meanwhile named another file.
+test('a write or edit names the file it changed when its link moves while memory indexes it', async () => {
+  const workspace = await linkedWorkspace();
+  const kernel = (await workspace.session()).vfs.as(CRED_KERNEL);
+  await workspace.vfs.mkdir('memory/orig/inner', { recursive: true });
+  await workspace.vfs.mkdir('memory/new/inner', { recursive: true });
+  await writeText(workspace.vfs, 'memory/new/written.txt', 'other file');
+  await kernel.symlink('/home/main/memory/orig/inner', '/home/main/memory/link');
+
+  const indexed: string[] = [];
+
+  const memory: Memory = {
+    chunk: async () => null, write: async () => {}, append: async () => {}, search: async () => [], read: async () => null, tail: async () => null,
+    // Another call repoints the link while this one's index is awaited.
+    async index(path) {
+      indexed.push(path);
+      await kernel.unlink('/home/main/memory/link');
+      await kernel.symlink(indexed.length === 1 ? '/home/main/memory/new/inner' : '/home/main/memory/orig/inner', '/home/main/memory/link');
+    },
+  };
+
+  const { file, owner } = gatedTool(workspace, memory);
+  const written = 'vfs://home/main/memory/orig/written.txt';
+
+  expect(await file({ op: 'write', path: 'memory/link/../written.txt', content: 'the write' })).toMatchObject({ reference: written });
+  expect(await readExecutorFile(owner, 'workspace', '/home/main/memory/orig/written.txt')).toMatchObject({ content: 'the write' });
+
+  // The link now leads to new/inner: the edit changes new/written.txt and names it, though the index moves the link back.
+  await file({ op: 'read', path: 'memory/link/../written.txt' });
+  const edited = 'vfs://home/main/memory/new/written.txt';
+
+  expect(await file({ op: 'edit', path: 'memory/link/../written.txt', edits: [{ old_text: 'other', new_text: 'edited' }] }))
+    .toMatchObject({ reference: edited });
+  expect(await readExecutorFile(owner, 'workspace', '/home/main/memory/new/written.txt')).toMatchObject({ content: 'edited file' });
+  expect(indexed).toEqual(['memory/orig/written.txt', 'memory/new/written.txt']);
 });
 
 // 2026-10-12 review: the gate resolved every op as a write that makes its parents, so a read passed a missing directory.

@@ -58,8 +58,8 @@ test('types, private modes, mtimes and unusual names survive a recursive listing
   expect(listed.files.length).toBe(5);
   expect(entries.get(name)).toMatchObject({ size: 5, type: 'file', mode: 0o100600, mtimeMs: 1_700_000_000_000 });
   expect(entries.get('private')).toMatchObject({ type: 'directory', mode: 0o40700 });
-  expect(entries.get('directory-link')).toMatchObject({ type: 'symlink', size: 7, isDirectory: false });
-  expect(entries.get('dangling')).toMatchObject({ type: 'symlink', size: 7, isDirectory: false });
+  expect(entries.get('directory-link')).toMatchObject({ type: 'symlink', size: 7 });
+  expect(entries.get('dangling')).toMatchObject({ type: 'symlink', size: 7 });
 });
 
 test('directory failures retain their POSIX errno rather than becoming an empty listing', async () => {

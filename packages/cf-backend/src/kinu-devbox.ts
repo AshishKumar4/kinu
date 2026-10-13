@@ -19,9 +19,7 @@ import {
 } from "./egress/outbound";
 import type { KinuEgress, KinuEvents } from './server';
 
-/** Owning workspace; without it no root agent hears the box's notices. */
-const WORKSPACE_NAME_KEY = "kinu:workspace-name";
-
+/** The owning workspace's egress configuration, and its name: without it no root agent hears the box's notices. */
 const EGRESS_CONFIG_KEY = 'kinu:egress-config';
 
 interface KinuState extends DevboxState {
@@ -69,7 +67,7 @@ export class KinuDevbox extends Devbox<Env> {
   }
 
   protected override get previewName(): string {
-    const workspaceName = this.ctx.storage.kv.get<string>(WORKSPACE_NAME_KEY);
+    const workspaceName = this.ctx.storage.kv.get<KinuEgressParams>(EGRESS_CONFIG_KEY)?.workspaceName;
 
     return sandboxIdForWorkspace(workspaceName ?? this.ctx.id.toString());
   }
@@ -109,7 +107,7 @@ export class KinuDevbox extends Devbox<Env> {
   }
 
   async configureEgress(params: KinuEgressParams): Promise<void> {
-    await this.ctx.storage.put({ [WORKSPACE_NAME_KEY]: params.workspaceName, [EGRESS_CONFIG_KEY]: params });
+    await this.ctx.storage.put(EGRESS_CONFIG_KEY, params);
 
     if (this.ctx.container?.running) await this.configureContainer();
   }
@@ -126,7 +124,7 @@ export class KinuDevbox extends Devbox<Env> {
   }
 
   async #rootAgent(): Promise<SandboxRootClient | null> {
-    const workspaceName = await this.ctx.storage.get<string>(WORKSPACE_NAME_KEY);
+    const workspaceName = (await this.ctx.storage.get<KinuEgressParams>(EGRESS_CONFIG_KEY))?.workspaceName;
 
     if (workspaceName === undefined || this.env.OrchestratorAgent === undefined) return null;
 

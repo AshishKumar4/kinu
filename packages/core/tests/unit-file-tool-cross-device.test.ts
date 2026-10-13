@@ -44,8 +44,6 @@ function fleet(written: JsonValue, keepWrites = false): DeviceTransport & { read
       frames.push({ method, path: params[0], deviceId: opts?.deviceId });
       const bytes = bytesOn(opts?.deviceId);
 
-      if (method === 'exists') return true;
-
       if (method === 'statPath') return { size: bytes.length, mtimeMs: 0, type: 'file' };
 
       if (method === 'writeFile') return written;

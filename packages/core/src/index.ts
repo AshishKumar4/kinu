@@ -1463,7 +1463,6 @@ export {
   egressGrants,
   grantedEgressBindings,
   findEgressPlaceholders,
-  egressSecretRule,
   egressHostMatches,
   planEgress,
   scrubBytes,

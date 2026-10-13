@@ -37,7 +37,6 @@ export {
   grantedEgressBindings,
   isEgressPlaceholder,
   findEgressPlaceholders,
-  egressSecretRule,
   egressHostMatches,
   planEgress,
   scrubBytes,

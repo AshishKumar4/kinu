@@ -4,10 +4,10 @@ import type { ListFilesOptions, ListedFile } from './contracts';
 import { attempt, attemptSync, DevboxError } from './errors';
 
 const Entry = v.object({
-  name: v.string(), path: v.string(), absolutePath: v.string(),
+  name: v.string(), path: v.string(),
   type: v.picklist(['file', 'directory', 'symlink', 'blockDevice', 'characterDevice', 'fifo', 'socket']),
   size: v.number(), mode: v.number(), mtimeMs: v.number(), uid: v.number(), gid: v.number(),
-  atimeMs: v.number(), ctimeMs: v.number(), isDirectory: v.boolean(),
+  atimeMs: v.number(), ctimeMs: v.number(),
 });
 
 const Reply = v.union([
@@ -67,10 +67,10 @@ def visit(directory):
             operation, path = 'lstat', absolute
             metadata = entry.stat(follow_symlinks=False)
             kind = kinds[stat.S_IFMT(metadata.st_mode)]
-            files.append({'name': name, 'path': absolute, 'absolutePath': absolute, 'type': kind,
+            files.append({'name': name, 'path': absolute, 'type': kind,
                           'size': metadata.st_size, 'mode': metadata.st_mode, 'mtimeMs': metadata.st_mtime_ns // 1000000,
                           'uid': metadata.st_uid, 'gid': metadata.st_gid, 'atimeMs': metadata.st_atime_ns // 1000000,
-                          'ctimeMs': metadata.st_ctime_ns // 1000000, 'isDirectory': kind == 'directory'})
+                          'ctimeMs': metadata.st_ctime_ns // 1000000})
             if sys.argv[2] == '1' and kind == 'directory':
                 visit(absolute)
             operation, path = 'readDirectory', directory

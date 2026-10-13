@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-13",
-  "files": 3211,
-  "functions": 83900,
+  "files": 3200,
+  "functions": 83735,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -82,10 +82,6 @@
       "complexity": 34
     },
     {
-      "key": "packages/pc-agent/src/index.js#handle",
-      "complexity": 34
-    },
-    {
       "key": "tests/first-run/share-capability-cut.first-run.ts#describe>liveTest>run",
       "complexity": 34
     },
@@ -155,6 +151,10 @@
     },
     {
       "key": "packages/core/src/evolution/refinement-lane.ts#settleRoutes",
+      "complexity": 30
+    },
+    {
+      "key": "packages/pc-agent/src/index.js#handle",
       "complexity": 30
     },
     {

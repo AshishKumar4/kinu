@@ -242,8 +242,8 @@ export function handleEgressConnect(socket: Socket, params: KinuEgressParams | u
     const upstream = connect(reached, { allowHalfOpen: true, secureTransport: 'off' });
 
     // The program's end of input is not passed on: closing a workerd socket's writable ended its readable too, so a
-    // client that half-closed after its request got no answer (scripts/egress-probe.ts, 2026-10-10). The server's own
-    // close ends the socket.
+    // client that half-closed after its request got no answer (scripts/egress-probe.ts at 9a437a392, 2026-10-10).
+    // The server's own close ends the socket.
     yield* Effect.all([
       attempt({ doing: `carrying a socket to ${shown}`, otherwise: 'io' }, () => socket.readable.pipeTo(upstream.writable, { preventClose: true })),
       attempt({ doing: `carrying a socket from ${shown}`, otherwise: 'io' }, () => upstream.readable.pipeTo(socket.writable)),
