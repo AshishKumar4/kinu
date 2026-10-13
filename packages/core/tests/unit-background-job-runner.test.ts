@@ -938,14 +938,24 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
 
   test('a re-drive another runner in this process drives owes the others no wake', async () => {
     const drivenHere = new Set<string>();
-    const driver = setup({ resume: () => new Promise<never>(() => {}), drivenHere });
-    const other = setup({ db: driver.db, drivenHere });
+    const resumed: string[] = [];
+
+    const resume = (_kind: string, input: JsonValue) => {
+      resumed.push(JSON.stringify(input));
+
+      return new Promise<never>(() => {});
+    };
+
+    const driver = setup({ resume, drivenHere });
+    const other = setup({ db: driver.db, resume, drivenHere });
 
     driver.store.create({ id: 'jh', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
-    expect((await driver.runner.recoverOrphans()).map((job) => job.id)).toEqual(['jh']);
+    await driver.runner.recoverOrphans();
+    await other.runner.recoverOrphans();
 
-    expect({ driver: driver.runner.nextResumeAt(), other: other.runner.nextResumeAt(), driven: [...drivenHere] })
-      .toEqual({ driver: null, other: null, driven: ['jh'] });
+    // Driven once, by the runner that took it: the other neither runs it again nor arms a wake for it.
+    expect({ resumed, driver: driver.runner.nextResumeAt(), other: other.runner.nextResumeAt() })
+      .toEqual({ resumed: ['{}'], driver: null, other: null });
   });
 
   /** Two processes on one SQLite file: this one, and a live `sleep` standing in for the other. */

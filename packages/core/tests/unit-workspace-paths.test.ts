@@ -134,10 +134,35 @@ test('the file tool refuses a read through a directory that is not there, as the
   const workspace = await linkedWorkspace();
   const { file, owner } = gatedTool(workspace);
 
-  await expect(file({ op: 'read', path: './missing/../target.txt' })).rejects.toThrow('no such file or directory');
-  expect(await readExecutorFile(owner, 'workspace', '/home/main/missing/../target.txt')).toMatchObject({ error: expect.stringContaining('no such file or directory') });
+  await expect(file({ op: 'read', path: './missing/../target.txt' })).rejects.toMatchObject({ code: 'missing' });
+  const opened = await readExecutorFile(owner, 'workspace', '/home/main/missing/../target.txt');
+
+  expect(opened).toHaveProperty('error');
+  expect(opened).not.toHaveProperty('content');
 
   // A write still makes the directories it names.
   await file({ op: 'write', path: 'made/new.txt', content: 'made' });
   expect(await readText(workspace.vfs, 'made/new.txt')).toBe('made');
+});
+
+// A write makes its parents through a link whose target is not there yet: it lands where the link leads.
+test('the file tool writes through a link whose target is not there yet, where the link leads', async () => {
+  const workspace = await linkedWorkspace();
+  const { file } = gatedTool(workspace);
+  await (await workspace.session()).vfs.as(CRED_KERNEL).symlink('relative/target', '/home/main/near');
+
+  await file({ op: 'write', path: 'near/file.txt', content: 'through a dangling link' });
+
+  expect(await readText(workspace.vfs, 'relative/target/file.txt')).toBe('through a dangling link');
+  expect((await workspace.vfs.stat('near', { follow: false }))?.type).toBe('symlink');
+});
+
+// Its target walks back through a directory that is not there: refused as the namespace's lookup refuses it.
+test('the file tool refuses a read through a link that climbs out of a missing directory, and goes on reading', async () => {
+  const workspace = await linkedWorkspace();
+  const { file } = gatedTool(workspace);
+  await (await workspace.session()).vfs.as(CRED_KERNEL).symlink('missing/../loop', '/home/main/loop');
+
+  await expect(file({ op: 'read', path: 'loop/file.txt' })).rejects.toMatchObject({ code: 'missing' });
+  expect(JSON.stringify(await file({ op: 'read', path: 'target.txt' }))).toContain('beside the link');
 });

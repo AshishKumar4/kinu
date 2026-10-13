@@ -307,7 +307,7 @@ describe('the workspace process and port surface', () => {
       command, success: false, stdout: '', stderr: 'node: boom', exitCode: 1, duration: 0, timestamp: 0,
     });
     const refusal = await blockedProvider(box).tools.exec.execute('node -e "console.log(1)"');
-    expect(refusal).toMatchObject({ reason: 'io', error: expect.stringContaining('node: boom') });
+    expect(refusal).toMatchObject({ success: false, reason: 'io' });
   });
 
   test("a program's workspace.logs(pid, { lines, bytes }) reads the process with both limits", async () => {

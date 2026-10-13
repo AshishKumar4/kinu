@@ -30,10 +30,11 @@ const RIG: DeviceFleetEntry = { id: 'dev-rig', name: 'mrwhite@rig', os: 'linux',
 interface Frame { readonly method: string; readonly path: JsonValue | undefined; readonly deviceId: string | undefined }
 
 /** Two machines holding different bytes at the same path; every frame records the machine it was sent to. */
-function fleet(written: JsonValue): DeviceTransport & { readonly frames: Frame[] } {
+function fleet(written: JsonValue, keepWrites = false): DeviceTransport & { readonly frames: Frame[] } {
   const frames: Frame[] = [];
+  const files = new Map<string, Buffer>();
   const status = (): DeviceStatus => ({ connected: true, registered: true, toolchain: null, devices: [STUDIO, RIG] });
-  const bytesOn = (deviceId: string | undefined) => Buffer.from(`notes kept on ${deviceId ?? 'no machine'}`);
+  const bytesOn = (deviceId: string | undefined) => files.get(deviceId ?? '') ?? Buffer.from(`notes kept on ${deviceId ?? 'no machine'}`);
 
   return {
     frames,
@@ -55,7 +56,10 @@ function fleet(written: JsonValue): DeviceTransport & { readonly frames: Frame[]
         const held = sha256Hex(bytesOn(opts?.deviceId));
 
         if (expected !== held && expected !== null) return { ok: false, sha256: held };
-        const answer: JsonObject = { ok: true, sha256: sha256Hex(Buffer.from(v.parse(v.string(), params[1]), 'base64')) };
+        const next = Buffer.from(v.parse(v.string(), params[1]), 'base64');
+        const answer: JsonObject = { ok: true, sha256: sha256Hex(next) };
+
+        if (keepWrites) files.set(opts?.deviceId ?? '', next);
 
         if (isJsonObject(written)) Object.assign(answer, written);
 
@@ -124,14 +128,14 @@ describe('a file on another machine', () => {
   });
 
   test('is written on that machine and named by its reference', async () => {
-    const { transport, file } = fileToolOverTheFleet();
+    const { file } = fileToolOverTheFleet({ success: true }, false, OWNER_ALLOWS, fleet({ success: true }, true));
 
     await file({ op: 'read', path: '/pc/ashish@studio/home/notes.md' });
 
     expect(await file({ op: 'write', path: '/pc/ashish@studio/home/notes.md', content: 'moved here' }))
       .toMatchObject({ reference: 'ashish@studio://home/notes.md' });
-    expect(transport.frames.filter((frame) => frame.method.startsWith('writeFile')))
-      .toEqual([{ method: 'writeFileIfDigest', path: '/home/notes.md', deviceId: 'dev-studio' }]);
+    expect(await file({ op: 'read', path: '/pc/ashish@studio/home/notes.md' })).toContain('moved here');
+    expect(await file({ op: 'read', path: '/pc/mrwhite@rig/home/notes.md' })).toContain('notes kept on dev-rig');
   });
 
   test('written where no checkpoint covers it, says undo cannot restore the write', async () => {

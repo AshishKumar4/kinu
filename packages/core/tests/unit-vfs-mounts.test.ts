@@ -514,9 +514,10 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 			return realUnlink(path);
 		};
 
-		expect(await removeTree(base, '/build')).toMatchObject({
-			removed: ['/build/deep'], remaining: ['/build', '/build/out.js'], failed: { path: '/build/out.js' },
-		});
+		const kept = await removeTree(base, '/build');
+
+		expect(kept?.failed.path).toBe('/build/out.js');
+		expect(new Set(kept?.remaining)).toEqual(new Set(['/build', '/build/out.js']));
 		expect(await exists(base, '/build/deep')).toBe(false);
 		expect(await exists(base, '/build/out.js')).toBe(true);
 		expect(await exists(base, '/build')).toBe(true);

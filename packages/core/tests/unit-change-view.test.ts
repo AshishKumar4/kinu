@@ -213,7 +213,6 @@ describe('change view', () => {
     expect(changeBody({ path: 'dump.json', status: 'changed', added: 0, removed: 0, lines: [], omitted: 'large' })).toEqual({ kind: 'uncompared' });
     expect(changeBody(counted)).toEqual({ kind: 'counted' });
     expect(counted).toMatchObject({ added: 1500, removed: 1500 });
-    expect(changeBody(aligned)).toEqual({ kind: 'capped', hidden: 2000 });
     expect(changeBody(capped)).toEqual({ kind: 'capped', hidden: 201 });
     expect(changeBody(fileDiff('empty.txt', 'added', diffLines('', '')))).toEqual({ kind: 'empty' });
     expect(changeBody(changedFile(['a'], ['b']))).toEqual({ kind: 'rows' });

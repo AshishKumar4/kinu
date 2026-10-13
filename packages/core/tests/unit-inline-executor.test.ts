@@ -300,7 +300,7 @@ describe('workspace.writeFile over the workspace filesystem — what both backen
     await file({ op: 'read', path: 'plan.md' });
     peer = async () => { await writeText(vfs, 'plan.md', 'the owner saved this\n'); };
 
-    await expect(file({ op: 'write', path: 'plan.md', content: 'third\n' })).rejects.toThrow('changed since it was read: it now holds revision');
+    await expect(file({ op: 'write', path: 'plan.md', content: 'third\n' })).rejects.toMatchObject({ verdict: 'stale' });
     expect(await readText(vfs, 'plan.md')).toBe('the owner saved this\n');
   });
 

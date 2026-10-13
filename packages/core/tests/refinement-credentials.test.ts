@@ -54,7 +54,7 @@ describe('createCredentialCipher refines Credentials.openStored', () => {
     if ('opens' in c.outcome) {
       expect(await opened).toBe(c.outcome.opens);
     } else if (c.outcome.refused === 'no-key') {
-      await expect(opened).rejects.toThrow("not this deployment's");
+      await expect(opened).rejects.toMatchObject({ code: 'bad_input' });
     } else if (c.outcome.refused === 'not-sealed') {
       await expect(opened).rejects.toThrow('is not a sealed envelope');
     } else {

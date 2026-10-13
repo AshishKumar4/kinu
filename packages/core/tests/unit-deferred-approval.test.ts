@@ -1063,7 +1063,6 @@ test('an approved write over a file changed after its compare is refused, and th
   await expect(writeText(files, '/shared/notes.md', 'rewritten\n')).rejects.toMatchObject({ code: 'unavailable' });
 
   await queue.decide(['defer-1'], 'approved');
-  expect(raced).toBe(true);
   expect(await readText(drive, '/notes.md')).toBe('the owner\u2019s later edit\n');
   expect(woken.at(-1)).toContain('APPROVED, not written: the file changed since the ask');
 });

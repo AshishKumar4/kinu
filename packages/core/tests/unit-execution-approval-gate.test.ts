@@ -19,8 +19,13 @@ import { createShellSession } from '../src/execution/shell-session';
 import { withMountTable, workspaceFilePlane } from '../src/vfs/mounts';
 import { skillsMount } from '../src/skills/view';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
-import { present } from '@kinu.run/test-utils';
+import { present, toolExecute } from '@kinu.run/test-utils';
+import { createMemoryVfs } from '@kinu.run/test-utils/vfs';
 import { createWorkspaceBundle } from './helpers';
+import { createFileTool } from '../src/tools/file-operations';
+import { TurnFileLedger } from '../src/vfs/file-ledger';
+import { TurnContextBudget } from '../src/context-budget';
+import type { JsonObject, JsonValue } from '../src/utils/json';
 
 const DENY = 'rm -rf /';
 
@@ -449,31 +454,42 @@ describe('a workspace shell over the user\'s mounts', () => {
 
   // `..` after a link is the walk's: from a link into /pc/proj/sub it climbs to /pc/proj, never back into the home.
   test('a write through link/.. into /pc is asked as the user\'s file it lands on', async () => {
-    const { db, workspace, mounted, device } = workspaceOverDevice();
-    const written: string[] = [];
-    const asked: string[] = [];
+    const db = new Database(':memory:');
+    const workspace = createWorkspaceBundle(db);
+    const { vfs: device } = createMemoryVfs();
+    const asked: ShellApprovalRequest[] = [];
 
-    device.writeFile = async (path) => { written.push(path); };
-
-    (await workspace.session()).vfs.as(CRED_SESSION_USER).symlink('/pc/proj/sub', `${WORKSPACE_ROOT}/sub-link`);
-
-    const deny = async (request: { command: string }): Promise<'deny'> => {
-      asked.push(request.command);
-
-      return 'deny';
-    };
-
-    const files = withApprovalGatedFiles(mounted, 'workspace', {
-      planes: cloudPlanes(WORKSPACE_ROOT), resolve: (path, follow, creating) => mounted.resolve(path, { follow, creating }),
-      userRoots: () => mounted.userRoots(), locate: null, parksWrites: false,
-    }, { mode: () => 'strict', requestApproval: deny });
+    const { files: mounted } = workspaceFilePlane(workspace, {
+      mounts: [{ name: 'pc', files: () => device, absentReason: () => 'no device', filesOwner: 'user' }], principal: {}, home: WORKSPACE_ROOT,
+    });
 
     try {
-      await expect(files.writeFile('sub-link/../a.txt', new TextEncoder().encode('forged'))).rejects.toThrow();
-      expect(asked).toHaveLength(1);
-      expect(asked[0]).toContain('/pc/proj/a.txt');
-      expect(written).toEqual([]);
-      expect(await mounted.stat(`${WORKSPACE_ROOT}/a.txt`)).toBeNull();
+      await device.mkdir('/proj/sub', { recursive: true });
+      await device.writeFile('/proj/a.txt', new TextEncoder().encode('kept by the owner'));
+      (await workspace.session()).vfs.as(CRED_SESSION_USER).symlink('/pc/proj/sub', `${WORKSPACE_ROOT}/sub-link`);
+
+      const files = withApprovalGatedFiles(mounted, 'workspace', {
+        planes: cloudPlanes(WORKSPACE_ROOT), resolve: (path, follow, creating) => mounted.resolve(path, { follow, creating }),
+        userRoots: () => mounted.userRoots(), locate: null, parksWrites: false,
+      }, {
+        mode: () => 'strict',
+        requestApproval: async (request) => {
+          asked.push(request);
+
+          return 'deny';
+        },
+      });
+
+      const file = toolExecute<JsonObject & { readonly op: string }, JsonValue>(createFileTool({
+        home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: files,
+        ledger: new TurnFileLedger(), budget: new TurnContextBudget(),
+      }));
+
+      await file({ op: 'read', path: 'sub-link/../a.txt' });
+      await expect(file({ op: 'write', path: 'sub-link/../a.txt', content: 'forged' })).rejects.toMatchObject({ code: 'denied' });
+      expect(asked.map((request) => request.write?.path)).toContain('/pc/proj/a.txt');
+      expect(await device.readFile('/proj/a.txt')).toEqual(new TextEncoder().encode('kept by the owner'));
+      expect(await workspace.vfs.stat(`${WORKSPACE_ROOT}/a.txt`)).toBeNull();
     } finally {
       db.close();
     }

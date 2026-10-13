@@ -389,6 +389,6 @@ describe('swarm profile snapshot codec', () => {
     // An incomplete frozen profile must not run under invented fallback choices.
     const { fallbacks: _omitted, ...tierBefore } = frozen.profile.tier;
     const before = { ...frozen, profile: { ...frozen.profile, tier: tierBefore } };
-    expect(() => validateSwarmProfileSnapshot({ value: before })).toThrow(/snapshot/);
+    expect(() => validateSwarmProfileSnapshot({ value: before })).toThrow(expect.objectContaining({ code: 'bad_input' }));
   });
 });

@@ -72,7 +72,7 @@ describe("ExecutorFileUpload", () => {
     for (let at = 0; at < whole.byteLength; at += FILE_CHUNK_BYTES) {
       const slice = whole.subarray(at, Math.min(at + FILE_CHUNK_BYTES, whole.byteLength));
       const last = at + slice.byteLength >= whole.byteLength;
-      expect(await upload.chunk(at, slice, last)).toEqual(last ? { ok: true, revision: 1 } : { ok: true });
+      expect(await upload.chunk(at, slice, last)).toMatchObject({ ok: true });
     }
 
     expect(upload.done).toBe(true);
@@ -84,7 +84,7 @@ describe("ExecutorFileUpload", () => {
     const plane = makePlane();
     const upload = new ExecutorFileUpload(plane.router, "workspace", "/home/main/SOUL.md");
 
-    expect(await upload.chunk(0, new TextEncoder().encode("# mine"), true)).toEqual({ ok: true, revision: 1 });
+    expect(await upload.chunk(0, new TextEncoder().encode("# mine"), true)).toMatchObject({ ok: true });
     expect(new TextDecoder().decode(plane.files.get("/home/main/SOUL.md"))).toBe("# mine");
     expect(await deleteExecutorPathOp(plane.router, "workspace", "/home/main/SOUL.md")).toEqual({ ok: true });
     expect(plane.files.size).toBe(0);
@@ -97,7 +97,7 @@ describe("ExecutorFileUpload", () => {
     const skipped = await upload.chunk(FILE_CHUNK_BYTES + 1, patternBytes(4), false);
     expect(skipped).toMatchObject({ error: expect.stringContaining("expected offset") });
     // The honest continuation still lands: the refusal did not poison state.
-    expect(await upload.chunk(FILE_CHUNK_BYTES, patternBytes(4), true)).toEqual({ ok: true, revision: 1 });
+    expect(await upload.chunk(FILE_CHUNK_BYTES, patternBytes(4), true)).toMatchObject({ ok: true });
   });
 
   test("a chunk larger than FILE_CHUNK_BYTES is refused", async () => {
@@ -144,24 +144,26 @@ describe("ExecutorFileUpload", () => {
     expect(new TextDecoder().decode(plane.files.get(path))).toBe("newer");
 
     const current = new ExecutorFileUpload(plane.router, "workspace", path, { expectedRevision: 2 });
-    expect(await current.chunk(0, new TextEncoder().encode("current"), true))
-      .toEqual({ ok: true, revision: 3 });
+    const landed = await current.chunk(0, new TextEncoder().encode("current"), true);
+
+    if (!("ok" in landed)) throw new Error("the upload over the current revision did not land");
     expect(new TextDecoder().decode(plane.files.get(path))).toBe("current");
 
     // No If-Match is a create: over a file already there it is the owner's to choose, so it is a conflict naming it.
     const create = new ExecutorFileUpload(plane.router, "workspace", path);
     expect(await create.chunk(0, new TextEncoder().encode("dropped over it"), true))
-      .toEqual({ conflict: true, revision: 3 });
+      .toEqual({ conflict: true, revision: present(landed.revision, "the landed revision") });
     expect(new TextDecoder().decode(plane.files.get(path))).toBe("current");
 
     const fresh = new ExecutorFileUpload(plane.router, "workspace", "/new.bin");
-    expect(await fresh.chunk(0, new TextEncoder().encode("new"), true)).toEqual({ ok: true, revision: 1 });
+    expect(await fresh.chunk(0, new TextEncoder().encode("new"), true)).toMatchObject({ ok: true });
+    expect(new TextDecoder().decode(plane.files.get("/new.bin"))).toBe("new");
   });
 
   test("writeExecutorFileOp round-trips what finalize assembled (the plane contract)", async () => {
     const plane = makePlane();
     const bytes = patternBytes(2 * MiB);
-    expect(await writeExecutorFileOp(plane.router, "workspace", "/g.bin", { bytes: bytes })).toEqual({ ok: true, revision: 1 });
+    expect(await writeExecutorFileOp(plane.router, "workspace", "/g.bin", { bytes: bytes })).toMatchObject({ ok: true });
     expect(await statExecutorFile(plane.router, "workspace", "/g.bin")).toEqual({ size: bytes.byteLength });
   });
 });

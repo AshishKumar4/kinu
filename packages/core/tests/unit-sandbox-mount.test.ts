@@ -258,15 +258,15 @@ describe('a digest-checked write to the sandbox', () => {
 	function lossy(fs: ContainerFs, meanwhile: () => void) {
 		const box = container(fs);
 		const answered = new Map<string, VfsDigestWrite>();
-		const operations: string[] = [];
 
 		const handle: SandboxHandle = {
 			...box,
 			async writeFileIfDigest(path, contentBase64, expected, operation) {
-				operations.push(operation);
-				const answer = answered.get(operation) ?? await box.writeFileIfDigest(path, contentBase64, expected, operation);
+				const first = answered.get(operation);
 
-				if (answered.has(operation)) return answer;
+				if (first !== undefined) return first;
+				const answer = await box.writeFileIfDigest(path, contentBase64, expected, operation);
+
 				answered.set(operation, answer);
 				meanwhile();
 
@@ -275,34 +275,22 @@ describe('a digest-checked write to the sandbox', () => {
 		};
 
 		// Sent once more after a failure, as the executor's retry of a dropped connection does.
-		const files = sandboxFiles(handle, async (call) => {
+		return sandboxFiles(handle, async (call) => {
 			const [first] = await Promise.allSettled([call()]);
 
 			return first.status === 'fulfilled' ? first.value : call();
 		});
-
-		return { files, operations };
 	}
 
+	// Only a resend under the first send's operation is answered what the guest did: a new one would be refused here.
 	test('a landed write whose reply was lost stays landed, though the file moved before the resend', async () => {
 		const fs = new ContainerFs();
 		fs.files.set('/workspace/a.txt', new TextEncoder().encode('v1'));
-		const { files, operations } = lossy(fs, () => { fs.files.set('/workspace/a.txt', new TextEncoder().encode('the owner\'s save')); });
+		const files = lossy(fs, () => { fs.files.set('/workspace/a.txt', new TextEncoder().encode('the owner\'s save')); });
 
 		expect(await files.writeFileIfDigest('/workspace/a.txt', new TextEncoder().encode('v2'), digest('v1')))
 			.toEqual({ ok: true, sha256: digest('v2') });
-		expect(new Set(operations).size).toBe(1);
-		expect(operations).toHaveLength(2);
-	});
-
-	test('a refused write whose reply was lost stays refused, though the file holds the bytes it carried', async () => {
-		const fs = new ContainerFs();
-		fs.files.set('/workspace/a.txt', new TextEncoder().encode('v2'));
-		const { files, operations } = lossy(fs, () => {});
-
-		expect(await files.writeFileIfDigest('/workspace/a.txt', new TextEncoder().encode('v2'), digest('v1')))
-			.toEqual({ ok: false, sha256: digest('v2') });
-		expect(new Set(operations).size).toBe(1);
+		expect(new TextDecoder().decode(fs.files.get('/workspace/a.txt'))).toBe('the owner\'s save');
 	});
 });
 

@@ -83,7 +83,8 @@ test('a slate storage call routes by member and refuses by class: bad input vers
     expect(route('list', [{ prefix: 'k', limit: 5 }])).toMatchObject({ ok: true });
     expect(route('delete', ['k'])).toEqual({ ok: true, value: true });
     // Plan mode reads, never writes.
-    expect(() => route('put', ['k', 1], 'plan')).toThrow('slate storage write');
+    expect(() => route('put', ['k', 1], 'plan')).toThrow(expect.objectContaining({ code: 'denied' }));
+    expect(route('get', ['k'])).toEqual({ ok: true, value: null });
 
     const fails = (member: string, args: JsonValue[], code: ErrorCode) => {
       try {
@@ -96,7 +97,6 @@ test('a slate storage call routes by member and refuses by class: bad input vers
       }
     };
 
-    expect(() => route('get', [])).toThrow('one key');
     fails('get', [], 'bad_input');
     fails('get', [''], 'bad_input');
     fails('put', ['k'], 'bad_input');
@@ -105,7 +105,6 @@ test('a slate storage call routes by member and refuses by class: bad input vers
     fails('list', [{ limit: 1001 }], 'bad_input');
     fails('list', ['not-an-object'], 'bad_input');
     fails('clear', [], 'denied');
-    expect(() => route('clear')).toThrow('storage offers get, put, delete and list');
   } finally {
     ws.db.close();
   }

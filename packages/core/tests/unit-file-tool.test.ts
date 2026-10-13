@@ -590,7 +590,7 @@ describe('file tool', () => {
     await call({ op: 'read', path: 'a.ts' });
     vfs.racer = () => { vfs.racer = null; vfs.write('a.ts', 'the owner saved this\n'); };
 
-    await expect(call({ op: 'write', path: 'a.ts', content: 'the agent\'s rewrite\n' })).rejects.toThrow('changed since it was read');
+    await expect(call({ op: 'write', path: 'a.ts', content: 'the agent\'s rewrite\n' })).rejects.toMatchObject({ verdict: 'stale' });
     expect(vfs.files.get('a.ts')).toBe('the owner saved this\n');
   });
 
@@ -600,7 +600,7 @@ describe('file tool', () => {
     await call({ op: 'read', path: 'a.ts' });
     vfs.racer = () => { vfs.racer = null; vfs.write('a.ts', 'const x = 1;\nconst y = 2;\n'); };
 
-    await expect(call({ op: 'edit', path: 'a.ts', edits: [{ old_text: 'const x = 1;', new_text: 'const x = 3;' }] })).rejects.toThrow('changed since it was read');
+    await expect(call({ op: 'edit', path: 'a.ts', edits: [{ old_text: 'const x = 1;', new_text: 'const x = 3;' }] })).rejects.toMatchObject({ verdict: 'stale' });
     expect(vfs.files.get('a.ts')).toBe('const x = 1;\nconst y = 2;\n');
   });
 

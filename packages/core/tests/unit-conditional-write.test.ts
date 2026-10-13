@@ -10,14 +10,8 @@ import { sha256Hex } from '../src/safety/argument-digest';
 
 const bytes = (text: string) => new TextEncoder().encode(text);
 
-/** A plane with no revision or digest check of its own. */
-function uncheckedPlane() {
-  const { vfs } = createMemoryVfs();
-
-  expect('writeFileIfRevision' in vfs || 'writeFileIfDigest' in vfs).toBe(false);
-
-  return vfs;
-}
+/** A plane with no revision or digest check of its own, as a hosted session's file plane is. */
+const uncheckedPlane = () => createMemoryVfs().vfs;
 
 // 2026-10-12 security review: such a plane wrote over whatever was there, and the editor reported ok.
 describe('a plane that checks nothing itself', () => {
@@ -28,7 +22,7 @@ describe('a plane that checks nothing itself', () => {
     await writeText(plane, '/notes.md', 'saved by the owner');
 
     await expect(writeConditionally(plane, '/notes.md', bytes('the agent\'s rewrite'), { kind: 'read', bytes: read }))
-      .rejects.toThrow('changed since it was read');
+      .rejects.toMatchObject({ verdict: 'stale' });
     expect(await readText(plane, '/notes.md')).toBe('saved by the owner');
   });
 
@@ -37,9 +31,9 @@ describe('a plane that checks nothing itself', () => {
     await writeText(plane, '/notes.md', 'saved by the owner');
 
     await expect(writeConditionally(plane, '/notes.md', bytes('from a stale tab'), { kind: 'digest', sha256: sha256Hex(bytes('an older save')) }))
-      .rejects.toThrow('changed since it was read');
-    expect(await writeConditionally(plane, '/notes.md', bytes('from the current tab'), { kind: 'digest', sha256: sha256Hex(bytes('saved by the owner')) }))
-      .toMatchObject({ guarantee: 'none' });
+      .rejects.toMatchObject({ verdict: 'stale' });
+    expect(await readText(plane, '/notes.md')).toBe('saved by the owner');
+    await writeConditionally(plane, '/notes.md', bytes('from the current tab'), { kind: 'digest', sha256: sha256Hex(bytes('saved by the owner')) });
     expect(await readText(plane, '/notes.md')).toBe('from the current tab');
   });
 
@@ -47,6 +41,9 @@ describe('a plane that checks nothing itself', () => {
     const plane = uncheckedPlane();
     await writeText(plane, '/notes.md', 'already here');
 
-    await expect(writeConditionally(plane, '/notes.md', bytes('new'), { kind: 'absent' })).rejects.toThrow('changed since it was read');
+    await expect(writeConditionally(plane, '/notes.md', bytes('new'), { kind: 'absent' })).rejects.toMatchObject({ verdict: 'stale' });
+    expect(await readText(plane, '/notes.md')).toBe('already here');
+    await writeConditionally(plane, '/fresh.md', bytes('new'), { kind: 'absent' });
+    expect(await readText(plane, '/fresh.md')).toBe('new');
   });
 });

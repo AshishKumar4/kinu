@@ -133,7 +133,7 @@ describe('automatic workspace titling — the decision', () => {
   test('a stored origin requires the canonical user or auto value', () => {
     expect(nameOriginOf('user')).toBe('user');
     expect(nameOriginOf('auto')).toBe('auto');
-    expect(() => nameOriginOf('provisional')).toThrow('Corrupt workspace name origin');
+    expect(() => nameOriginOf('provisional')).toThrow(expect.objectContaining({ code: 'io' }));
   });
 
   test('a stand-in, the title still the mission\'s own, is replaced only by the model\'s name, and never the owner\'s', () => {

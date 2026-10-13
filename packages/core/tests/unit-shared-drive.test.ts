@@ -52,12 +52,14 @@ describe('the /shared mount', () => {
     const path = `${SHARED_ROOT}/plan.md`;
     const bytes = (text: string) => new TextEncoder().encode(text);
 
-    expect(await writeConditionally(plane, path, bytes('first'), { kind: 'absent' })).toMatchObject({ guarantee: 'digest-remote' });
+    await writeConditionally(plane, path, bytes('first'), { kind: 'absent' });
     const read = await plane.readFile(path);
+
+    expect(new TextDecoder().decode(read)).toBe('first');
 
     await writeText(plane, path, 'the owner saved this');
 
-    await expect(writeConditionally(plane, path, bytes('second'), { kind: 'read', bytes: read })).rejects.toThrow('changed since it was read');
+    await expect(writeConditionally(plane, path, bytes('second'), { kind: 'read', bytes: read })).rejects.toMatchObject({ verdict: 'stale' });
     expect(await readText(plane, path)).toBe('the owner saved this');
   });
 

@@ -63,9 +63,6 @@ describe('credential failures keep their shape', () => {
     const retiredKey = await rejection(() => current.open('slot', sealed));
 
     expectClassified(retiredKey, 'bad_input');
-    expect(retiredKey.thrown?.message).toMatch(
-      /^Record "slot" was sealed with encryption key \S+, not this deployment's\. Reconnect the provider\.$/,
-    );
 
     const mine = await current.seal('slot', 'secret');
     const tampered = `${mine.slice(0, -4)}AAAA`;

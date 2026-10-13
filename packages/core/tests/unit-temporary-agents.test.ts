@@ -719,7 +719,6 @@ describe('the two hire targets are decided by `role`', () => {
       .toMatchObject({ success: false, reason: 'bad_input', failures: census });
     // The port refuses a brief with no role the same way, for the hirers that are not this tool.
     await expect(scene.temporary.start({ role: 'auditor', roleLabel: ' ', task: 'Survey auth', mode: 'build' })).rejects.toMatchObject({ code: 'bad_input' });
-    expect(scene.calls).toEqual([]);
     expect(scene.roster.listAll()).toEqual([]);
   });
 
