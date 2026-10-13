@@ -1,11 +1,11 @@
 /**
- * A turn's answer and its close: main's isolate commits the answer with the roster it owes, and asks the workspace to
- * keep the prompt warm after. An isolate that dies there must leave the turn answered for the next one: not run again,
- * and settled through the roster its answer committed.
+ * A turn's answer and its close: main's isolate commits the answer with the roster it owes, then hands the settled turn
+ * to the workspace (the prompt's warm asked beside it). An isolate that dies before the handoff is taken must leave the
+ * turn answered for the next one: not run again, and settled through the roster its answer committed.
  */
 import { expect, test } from 'bun:test';
 import { driveUntil, gatewayWorkspace, mainDatabase, storedChat, workspaceMainActor } from './helpers/actor-harness';
-import { delayNextCacheWarm } from './helpers/agent-facets';
+import { delayNextHandoff } from './helpers/agent-facets';
 import { chatCompletion, openingOf, stubAiBinding } from './helpers/platform-gateway';
 
 const ASK = 'Summarize the release.';
@@ -21,12 +21,12 @@ test("an isolate that dies after the answer committed does not run the turn agai
 
   const main = workspaceMainActor(workspace.db).actorId;
   const { storageKey } = workspace.agent.agentOf(main);
-  // The cache warm main's isolate asks for once its answer is committed.
-  const warm = delayNextCacheWarm(storageKey);
+  // The handoff main's isolate makes once its answer is committed.
+  const handoff = delayNextHandoff(storageKey);
   // Sent, as the composer sends it: its turn runs in main's isolate.
   await workspace.agent.send(ASK, crypto.randomUUID(), []);
 
-  await warm.reached;
+  await handoff.reached;
   const db = mainDatabase(workspace);
   const open = () => db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM actor_turn_claims WHERE outcome IS NULL').get()?.n ?? 0;
   const owed = () => db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM terminal_effects').get()?.n ?? 0;

@@ -93,15 +93,15 @@ export function delayNextTurnEnd(storageKey: string): HeldCall {
   return { reached: reached.promise, release: released.resolve };
 }
 
-const delayedCacheWarms = new Map<string, { readonly reached: () => void; readonly released: Promise<void> }>();
+const delayedHandoffs = new Map<string, { readonly reached: () => void; readonly released: Promise<void> }>();
 
-/** The isolate under `storageKey` commits its next turn's answer, and the cache warm it asks the workspace for after it
- *  waits on the way until released. */
-export function delayNextCacheWarm(storageKey: string): HeldCall {
+/** The isolate under `storageKey` commits its next turn's answer, and the handoff of that settled turn to the workspace
+ *  waits on the way until released: the answer is durable, and the roster it committed still owed. */
+export function delayNextHandoff(storageKey: string): HeldCall {
   const reached = Promise.withResolvers<void>();
   const released = Promise.withResolvers<void>();
 
-  delayedCacheWarms.set(storageKey, { reached: reached.resolve, released: released.promise });
+  delayedHandoffs.set(storageKey, { reached: reached.resolve, released: released.promise });
 
   return { reached: reached.promise, release: released.resolve };
 }
@@ -429,6 +429,13 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
         autoTitle: (subject, title) => host().autoTitle(subject, title),
         turnSettled: async (settled) => {
           if (lostHandoffs.delete(placement.storageKey)) throw new Error('the workspace was reset before it took the handoff');
+          const delayed = delayedHandoffs.get(placement.storageKey);
+
+          if (delayed !== undefined) {
+            delayedHandoffs.delete(placement.storageKey);
+            delayed.reached();
+            await delayed.released;
+          }
 
           await host().turnSettled(settled);
         },
@@ -458,17 +465,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
         steerSkills: (text, alreadyActive) => host().steerSkills(text, alreadyActive),
         openWork: () => host().openWork(),
         noteModelRequest: (lastRequestAt) => host().noteModelRequest(lastRequestAt),
-        armCacheWarm: async (input) => {
-          const delayed = delayedCacheWarms.get(placement.storageKey);
-
-          if (delayed !== undefined) {
-            delayedCacheWarms.delete(placement.storageKey);
-            delayed.reached();
-            await delayed.released;
-          }
-
-          return await host().armCacheWarm(input);
-        },
+        armCacheWarm: (input) => host().armCacheWarm(input),
         advise: (review) => host().advise(review),
         enqueueTurn: (input) => host().enqueueTurn(input),
         executeTool: (call) => host().executeTool(call),

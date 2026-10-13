@@ -1968,8 +1968,12 @@ export class ChatSession {
 
     try {
       // The lane decides whether the prefix is worth keeping; a turn that ran nothing kept none. Its claim and run closed
-      // with its answer (`commitTurn`).
-      if (prepared !== null) await this.armCacheWarm(prepared);
+      // with its answer (`commitTurn`). Its arming is the lane's advice, not the turn's: it is in flight beside the settle,
+      // sent in the answer's flush rather than a flush of its own, and one that fails is logged and leaves the turn as it
+      // ended.
+      const warmed = prepared === null ? Promise.resolve() : settleLogged(
+        'turn.cache_warm_unarmed', { doing: "arming the prompt cache's warm after the turn", otherwise: 'unavailable' }, () => this.armCacheWarm(prepared),
+      );
 
       // Core drives the settled turn's effects as one state machine; this backend supplies the bodies and
       // the fiber. The ledger already holds the roster committed with the answer.
@@ -1980,6 +1984,7 @@ export class ChatSession {
       }
       finally { this.settlingDepth -= 1; }
 
+      await warmed;
       this.emit({ type: 'turn-end', turn, turnId: lease.turnId, runId: lease.runId, epoch: this.actorSession.closeEpoch(lease) });
 
       return end.reason;
