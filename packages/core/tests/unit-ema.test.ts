@@ -1,10 +1,26 @@
-/** Time decay and the shared injection filter. */
+/** EMA scoring, time decay and the shared injection filter. */
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { effectiveScore, filterByEffectiveScore } from '../src/craft/ema';
+import { effectiveScore, filterByEffectiveScore, updateCraftScores } from '../src/craft/ema';
 import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
 import { makeSql } from './helpers';
+
+describe('EMA scoring', () => {
+  test('a use moves a tool\'s score alpha of the way to the outcome, and leaves an unstored tool unstored', () => {
+    const db = new Database(':memory:');
+    const sql = makeSql(db);
+    initCraftedToolsTables(sql);
+    void sql`INSERT INTO crafted_tools (name, code, score, uses, last_used_at) VALUES ('used', '', 0.2, 1, 0)`;
+
+    updateCraftScores(sql, ['used', 'deleted'], 0.9, 0.3);
+
+    const rows = sql<{ name: string; score: number; uses: number }>`SELECT name, score, uses FROM crafted_tools`;
+    expect(rows.map(({ name, uses }) => ({ name, uses }))).toEqual([{ name: 'used', uses: 2 }]);
+    // 0.7 of the old score and 0.3 of the outcome: 0.14 + 0.27.
+    expect(rows[0]?.score).toBeCloseTo(0.41, 10);
+  });
+});
 
 describe('Time decay', () => {
   test('zero days → full score', () => {
