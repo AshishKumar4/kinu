@@ -459,8 +459,13 @@ export interface SpendGate {
   debit(tokens: number, opts: { readonly calls?: number; readonly usage?: Usage; readonly spec?: string }): void;
 }
 
+/** A run's gate on its mission: `settled` once every debit it took has landed. */
+export interface MissionGate extends SpendGate {
+  settled(): Promise<void>;
+}
+
 /** A debit lands before the next guard reads the ledger. */
-export function missionGate(mission: MissionScope): SpendGate & { settled(): Promise<void> } {
+export function missionGate(mission: MissionScope): MissionGate {
   let charged: Promise<void> = Promise.resolve();
 
   return {
