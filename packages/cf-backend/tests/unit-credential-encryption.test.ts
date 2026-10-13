@@ -247,63 +247,6 @@ describe('the key is not optional', () => {
   });
 });
 
-describe('MCP server headers are sealed too', () => {
-  /** Written like userMcp_add, which would roll back here: this harness has no MCP SDK. */
-  async function seedServer(harness: ReturnType<typeof createTestUserDO>, id: string): Promise<void> {
-    await harness.userDO.userMcp_list(await testOwner());
-    sqlExec(harness.db).exec(
-      `INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools)
-       VALUES (?, ?, ?, ?, NULL, NULL)`,
-      id, id, 'https://mcp.example/sse', 'auto',
-    );
-  }
-
-  function storedHeaders(harness: ReturnType<typeof createTestUserDO>, id: string): string | null {
-    const row = sqlExec(harness.db).exec('SELECT headers FROM user_mcp_servers WHERE id = ?', id).toArray()[0];
-    const parsed = v.safeParse(v.string(), row?.headers);
-
-    return parsed.success ? parsed.output : null;
-  }
-
-  test('a bearer for a private MCP server never lands in SQLite in the clear', async () => {
-    const harness = createTestUserDO();
-    await seedServer(harness, 'srv1');
-    await harness.userDO.userMcp_update(await testOwner(), 'srv1', {
-      headers: { Authorization: 'Bearer mcp-secret' },
-    });
-
-    const stored = storedHeaders(harness, 'srv1');
-    expect(stored).not.toBeNull();
-    expect(stored).not.toContain('mcp-secret');
-    harness.close();
-  });
-
-  test('it opens again under the server it was sealed for, and not under another', async () => {
-    const harness = createTestUserDO();
-    await seedServer(harness, 'srv1');
-    await seedServer(harness, 'srv2');
-    await harness.userDO.userMcp_update(await testOwner(), 'srv1', {
-      headers: { Authorization: 'Bearer mcp-secret' },
-    });
-
-    const cipher = await createCredentialCipher({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
-    const stored = present(storedHeaders(harness, 'srv1'), "the sealed headers of MCP server 'srv1'");
-    expect(JSON.parse(await cipher.open('test-user-do:mcp:srv1', stored)))
-      .toEqual({ Authorization: 'Bearer mcp-secret' });
-    await expect(cipher.open('test-user-do:mcp:srv2', stored)).rejects.toThrow('failed to decrypt');
-    harness.close();
-  });
-
-  test('clearing headers stores null, not an envelope of nothing', async () => {
-    const harness = createTestUserDO();
-    await seedServer(harness, 'srv1');
-    await harness.userDO.userMcp_update(await testOwner(), 'srv1', { headers: { Authorization: 'Bearer x' } });
-    await harness.userDO.userMcp_update(await testOwner(), 'srv1', { headers: null });
-    expect(storedHeaders(harness, 'srv1')).toBeNull();
-    harness.close();
-  });
-});
-
 describe('a sealed value is bound to the store it was written in', () => {
   test("one user's credential does not open inside another user's Durable Object", async () => {
     const mine = createTestUserDO({ durableObjectId: 'user-a' });

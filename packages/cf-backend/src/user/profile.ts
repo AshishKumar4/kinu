@@ -202,20 +202,6 @@ export class UserProfileStore {
     );
   }
 
-  async listConfig(caller: UserCaller): Promise<Record<string, string>> {
-    await this.host.requireTier(caller, 'config');
-
-    const rows = this.host.sqlx<{ key: string; value: string }>(
-      `SELECT key, value FROM user_config WHERE key <> ?`, PROFILE_CATALOG_CONFIG_KEY,
-    );
-
-    const out: Record<string, string> = {};
-
-    for (const r of rows) out[r.key] = r.value;
-
-    return out;
-  }
-
   /**
    * Owner-session only: the role/tier catalog is authority, so even a `full`-tier workspace is
    * refused until the agent runtime adds its narrow read surface.

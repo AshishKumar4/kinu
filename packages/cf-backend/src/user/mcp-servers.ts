@@ -1,6 +1,6 @@
 import { Cause, Effect, Exit } from 'effect';
 import {
-  nanoid, type JsonObject, type JsonValue, JsonObjectSchema, decodeJsonValue, McpProtocolFailureSchema, type UserCaller, compareCodeUnits, type McpPresetId, mcpPresetById, describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor, validateMcpServerInput, validateMcpServerName, readAllowedTools, parseMcpHeaders, type McpTransport, GITHUB_MCP_PRESET, GitHubRefreshAskSchema, refreshGitHub, type GitHubRefreshAnswer, type GitHubRefreshAsk, type McpPresetAvailability, type McpServerSummary,
+  nanoid, type JsonObject, type JsonValue, JsonObjectSchema, decodeJsonValue, McpProtocolFailureSchema, type UserCaller, compareCodeUnits, type McpPresetId, mcpPresetById, describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor, validateMcpServerInput, readAllowedTools, parseMcpHeaders, type McpTransport, GITHUB_MCP_PRESET, GitHubRefreshAskSchema, refreshGitHub, type GitHubRefreshAnswer, type GitHubRefreshAsk, type McpPresetAvailability, type McpServerSummary,
 } from '@kinu.run/core';
 import type { MCPClientManager } from 'agents/mcp/client';
 import type { CallToolResult } from '@modelcontextprotocol/client';
@@ -54,10 +54,6 @@ interface McpHydrationRow extends SqlRow {
   headers: string | null;
   preset_id: string | null;
 }
-
-const NullableStringArraySchema = v.nullable(v.array(v.string()));
-
-const NullableStringRecordSchema = v.nullable(v.record(v.string(), v.string()));
 
 /**
  * `MCPClientManager.onStart` restores connections on every activation before credential closures
@@ -514,82 +510,6 @@ export class UserMcpServers {
 
     this.host.sqlx(`DELETE FROM user_mcp_servers WHERE id = ?`, id);
     this._mcpToolLists.delete(id);
-  }
-
-  /** Patch-update editable fields; nothing reconnects. Rotated `headers` apply on the next request
-   *  via `mcpCredentialTransport`; `serverUrl`/`transport` changes require remove + re-add. */
-  async userMcp_update(caller: UserCaller, id: string, patch: JsonValue): Promise<void> {
-    await this.host.requireTier(caller, 'mcp.manage');
-
-    if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) throw new KinuError('bad_input', 'Invalid server id.');
-    const parsedPatch = v.safeParse(JsonObjectSchema, patch);
-
-    if (!parsedPatch.success) throw new KinuError('bad_input', 'patch must be a JSON object.');
-    const p = parsedPatch.output;
-    const sets: string[] = [];
-    const args: SqlStorageValue[] = [];
-    // Same name rule as add: both claim from the same canonical namespace.
-    const renamed = p.name === undefined ? null : validateMcpServerName(p.name);
-
-    if (renamed !== null) { sets.push('name = ?'); args.push(renamed); }
-
-    if (p.allowedTools !== undefined) {
-      const allowedTools = v.safeParse(NullableStringArraySchema, p.allowedTools);
-
-      if (!allowedTools.success) throw new KinuError('bad_input', 'allowedTools must be string[] or null.');
-
-      if (allowedTools.output === null) {
-        sets.push('allowed_tools = ?'); args.push(null);
-      } else {
-        sets.push('allowed_tools = ?'); args.push(JSON.stringify(allowedTools.output));
-      }
-    }
-
-    if (p.headers !== undefined) {
-      const headers = v.safeParse(NullableStringRecordSchema, p.headers);
-
-      if (!headers.success) throw new KinuError('bad_input', 'headers must be Record<string,string> or null.');
-
-      if (headers.output === null) {
-        sets.push('headers = ?'); args.push(null);
-      } else {
-        sets.push('headers = ?'); args.push(await this.host.vault.sealMcpHeaders(id, JSON.stringify(headers.output)));
-      }
-    }
-
-    // Everything above is validated and sealed; nothing below may await.
-    if (sets.length === 0) return;
-    args.push(id);
-
-    const write = (): void => {
-      this.host.ctx.storage.sql.exec(`UPDATE user_mcp_servers SET ${sets.join(', ')} WHERE id = ?`, ...args);
-    };
-
-    if (renamed === null) write();
-    else this.claimMcpServerName(renamed, id, write);
-
-    if (p.headers !== undefined) {
-      try { await this.reownCredentialTransport(id); }
-      catch (err) {
-        diagnostics.failure('mcp.header_rotation_reown_failed', toKinuError({
-          doing: 'moving an MCP server onto the credential seam after a header change',
-          cause: err,
-          otherwise: 'unavailable',
-        }), { serverId: id });
-      }
-    }
-  }
-
-  /** A first credential needs the seam the activation did not register; the dial it starts is not awaited. */
-  private async reownCredentialTransport(id: string): Promise<void> {
-    await this.joinActivation();
-    const row = this.configuredRows().find((configured) => configured.id === id);
-
-    if (row === undefined || !this.needsOwnedTransport(row)) return;
-    // A dial still out is on the connection this replaces.
-    await this.dials.get(id);
-    await this.registerOwnedMcpTransport(row);
-    this.dial(id, () => this.host.mcp.establishConnection(id));
   }
 
   /** Claim `name` for `serverId` and run `write` atomically; the transaction is the check and holds

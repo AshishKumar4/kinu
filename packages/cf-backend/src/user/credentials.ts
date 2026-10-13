@@ -57,12 +57,6 @@ export interface CodexStatus {
   expiresAt: number | null;
 }
 
-export interface ConnectedProvider {
-  id: string;
-  label: string;
-  credentialKeys: string[];
-}
-
 /** The endpoint a stored credential names, and the window its owner declared; null where its provider's own applies. */
 export interface CredentialEndpoint {
   readonly baseURL: string;
@@ -734,39 +728,5 @@ export class UserCredentials {
     if (cred?.kind === 'oauth') return { connected: true, accountId: decodeCodexAccountId(cred.accessToken), expiresAt: cred.expiresAt ?? null };
 
     return { connected: false, accountId: null, expiresAt: null };
-  }
-
-  async listConnectedProviders(caller: UserCaller): Promise<ConnectedProvider[]> {
-    const creds = this.credentialSummaries(await this.host.requireTier(caller, 'credentials.model'));
-    const byKey = new Map(creds.map((c) => [c.key, c]));
-    const out: ConnectedProvider[] = [];
-
-    // Built-in providers without credentials are listed by the server; only credential-gated ones here.
-    if (byKey.has(CLOUDFLARE_OAUTH_CRED_KEY)) {
-      out.push({ id: 'workers-ai', label: 'Cloudflare Workers AI', credentialKeys: [CLOUDFLARE_OAUTH_CRED_KEY] });
-
-      if (this.selectedAIGatewayId()) {
-        out.push({ id: 'my-gateway', label: 'Your AI Gateway', credentialKeys: [CLOUDFLARE_OAUTH_CRED_KEY] });
-      }
-    }
-
-    if (byKey.has(CODEX_CRED_KEY)) out.push({ id: 'codex', label: 'ChatGPT Codex', credentialKeys: [CODEX_CRED_KEY] });
-
-    for (const c of creds) {
-      // BYO API keys; display names come from the catalog client-side.
-      const bearer = /^([a-z0-9][a-z0-9._-]*)\.bearer$/.exec(c.key);
-
-      if (bearer) {
-        out.push({ id: bearer[1], label: bearer[1], credentialKeys: [c.key] });
-        continue;
-      }
-
-      if (c.key.startsWith('openai-compat.')) {
-        const name = c.key.slice('openai-compat.'.length);
-        out.push({ id: `openai-compat:${name}`, label: `OpenAI-compatible (${name})`, credentialKeys: [c.key] });
-      }
-    }
-
-    return out;
   }
 }

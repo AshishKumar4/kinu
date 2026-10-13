@@ -6,7 +6,7 @@ import {
   type TestUserDO, type TestUserDOOptions,
 } from './helpers/user-do';
 import {
-  closeMcpTransport, dropLiveMcpFetch, failNextMcpRemove, holdMcpRestore, seedMcpAnswer, failNextMcpToolCall, failNextMcpDiscovery, hangMcpEstablish, holdNextMcpToolCall, inheritedMcpManager,
+  closeMcpTransport, holdMcpRestore, seedMcpAnswer, failNextMcpToolCall, failNextMcpDiscovery, hangMcpEstablish, holdNextMcpToolCall, inheritedMcpManager,
   liveMcpFetch, liveMcpTransport, recordedMcpFetch, recordedMcpLifecycle, recordedMcpServers, recordedMcpToolAborts,
   recordedMcpToolCalls, resetRecordedMcp, seedMcpSession, seedMcpTools, seedMcpAuthContinuation, seedSdkMcpServer, seedUndiscoveredMcpTools,
 } from './helpers/agents-sdk';
@@ -65,17 +65,14 @@ async function seedServer(
   fields: { name?: string; url?: string; headers?: Record<string, string> } = {},
 ): Promise<void> {
   await h.userDO.userMcp_list(await testOwner());
+  const cipher = await createCredentialCipher({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
+  // Sealed as the add seals them, for this object and this server.
+  const headers = fields.headers === undefined ? null : await cipher.seal(`test-user-do:mcp:${id}`, JSON.stringify(fields.headers));
   sqlExec(h.db).exec(
     `INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools)
-     VALUES (?, ?, ?, 'auto', NULL, NULL)`,
-    id, fields.name ?? id, fields.url ?? `https://${id}.example/sse`,
+     VALUES (?, ?, ?, 'auto', ?, NULL)`,
+    id, fields.name ?? id, fields.url ?? `https://${id}.example/sse`, headers,
   );
-
-  if (fields.headers) {
-    await h.userDO.userMcp_update(await testOwner(), id, { headers: fields.headers });
-
-    return;
-  }
 
   // A read over a non-empty table hydrates the manager.
   await h.userDO.userMcp_list(await testOwner());
@@ -122,37 +119,13 @@ describe('a server name is one identity, enforced by the database', () => {
     h.close();
   });
 
-  test('a rename onto a taken name answers with the name, not a SQL error', async () => {
-    const h = harness();
-    await seedServer(h, 'srv1', { name: 'github' });
-    await seedServer(h, 'srv2', { name: 'linear' });
-    const refused = await failureOf(h.userDO.userMcp_update(await testOwner(), 'srv2', { name: 'GitHub' }));
-    expect(refused).toContain('GitHub');
-    expect(storedName(h, 'srv2')).toBe('linear');
-    h.close();
-  });
-
-  test('a rename to a free name still works', async () => {
-    const h = harness();
-    await seedServer(h, 'srv1', { name: 'github' });
-    await h.userDO.userMcp_update(await testOwner(), 'srv1', { name: 'gh' });
-    expect(storedName(h, 'srv1')).toBe('gh');
-    h.close();
-  });
-
-  test('a rename obeys the SAME name rule an add does', async () => {
-    // Rename and add share bounds so both writes onto one UNIQUE index agree on what a name is.
+  test('a blank name is refused, and nothing is stored', async () => {
     const h = harness();
     await seedServer(h, 'srv1', { name: 'github' });
     const owner = await testOwner();
 
-    // A blank name is refused by add and rename, and the stored name stays.
-    await expect(h.userDO.userMcp_update(owner, 'srv1', { name: '   ' })).rejects.toThrow();
     await expect(h.userDO.userMcp_add(owner, { name: '   ', serverUrl: 'https://mcp.example/sse' }, 'https://kinu.example')).rejects.toThrow();
-    expect(storedName(h, 'srv1')).toBe('github');
-
-    await h.userDO.userMcp_update(owner, 'srv1', { name: '  spaced  ' });
-    expect(storedName(h, 'srv1')).toBe('spaced');
+    expect(sqlExec(h.db).exec('SELECT id FROM user_mcp_servers').toArray()).toEqual([{ id: 'srv1' }]);
     h.close();
   });
 
@@ -164,30 +137,10 @@ describe('a server name is one identity, enforced by the database', () => {
     expect(storedName(h, 'srv2')).toBe('personal');
     h.close();
   });
-
-  test('two renames racing for one free name: exactly one lands', async () => {
-    // The claim reads and writes in one storage transaction, so the loser gets the named-taken
-    // sentence rather than a raw constraint violation.
-    const h = harness();
-    const owner = await testOwner();
-    await seedServer(h, 'srv1', { name: 'linear' });
-    await seedServer(h, 'srv2', { name: 'notion' });
-
-    const settled = await Promise.allSettled([
-      h.userDO.userMcp_update(owner, 'srv1', { name: 'shared' }),
-      h.userDO.userMcp_update(owner, 'srv2', { name: 'Shared' }),
-    ]);
-
-    expect(settled.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
-    expect(settled.filter((r) => r.status === 'rejected')).toHaveLength(1);
-    expect([storedName(h, 'srv1'), storedName(h, 'srv2')].filter((n) => n?.toLowerCase() === 'shared'))
-      .toHaveLength(1);
-    h.close();
-  });
 });
 
 describe('the management surface completes a round trip', () => {
-  test('create, list, rename and remove', async () => {
+  test('create, list and remove', async () => {
     const h = harness();
     const owner = await testOwner();
     await seedServer(h, 'srv1', { name: 'github' });
@@ -196,9 +149,6 @@ describe('the management surface completes a round trip', () => {
     const listed = await h.userDO.userMcp_list(owner);
     expect(listed.map((s) => s.id)).toEqual(['srv1', 'srv2']);
     expect(listed.every((s) => s.error === null)).toBe(true);
-
-    await h.userDO.userMcp_update(owner, 'srv2', { name: 'linear-work' });
-    expect(storedName(h, 'srv2')).toBe('linear-work');
 
     await h.userDO.userMcp_remove(owner, 'srv2');
     expect((await h.userDO.userMcp_list(owner)).map((s) => s.id)).toEqual(['srv1']);
@@ -466,28 +416,6 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
     first.close();
   });
 
-  test('a rotation is spent by the next request, with no reconnect', async () => {
-    const h = harness();
-    await seedServer(h, 'srv1', { headers: { Authorization: 'Bearer first' } });
-    const established = recordedMcpLifecycle().established.length;
-    const resolve = recordedMcpServers().find((server) => server.id === 'srv1')?.transport.fetch;
-
-    await h.userDO.userMcp_update(await testOwner(), 'srv1', { headers: { Authorization: 'Bearer rotated' } });
-
-    // The seam reads the sealed column per request, so rotation needs no re-register.
-    expect(recordedMcpServers().find((server) => server.id === 'srv1')?.transport.fetch).toBe(resolve);
-    expect(recordedMcpLifecycle().established.length).toBe(established);
-
-    const seen = await authorizationsSeenDuring(async () => {
-      const send = recordedMcpFetch('srv1');
-      expect(send).not.toBeNull();
-      await send?.('https://srv1.example/sse');
-    });
-
-    expect(seen).toEqual(['Bearer rotated']);
-    h.close();
-  });
-
   test('stored headers that no longer open fail the request instead of sending it bare', async () => {
     const h = harness();
     await seedServer(h, 'srv1', { headers: { Authorization: 'Bearer sealed' } });
@@ -508,23 +436,6 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
     h.close();
   });
 
-
-  test('a failed credential-seam teardown cannot claim it installed the seam; the next activation does', async () => {
-    const h = harness();
-    const owner = await testOwner();
-    await seedServer(h, 'srv1', { headers: { Authorization: 'Bearer first' } });
-    dropLiveMcpFetch('srv1');
-    failNextMcpRemove(new Error('close refused'));
-    // The re-registration must stop at the failed teardown rather than register over the stale wire.
-    await h.userDO.userMcp_update(owner, 'srv1', { headers: { Authorization: 'Bearer rotated' } });
-    expect(liveMcpFetch('srv1')).toBeNull();
-
-    const woken = createTestUserDO({ storage: h.db });
-    await woken.userDO.userMcp_warmConnections(owner);
-    expect(liveMcpFetch('srv1')).not.toBeNull();
-    woken.close();
-    h.close();
-  });
 
   test('requests during an activation join its one reconciliation', async () => {
     const first = harness();

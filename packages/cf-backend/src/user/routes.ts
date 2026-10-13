@@ -41,9 +41,9 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'checkpointCredentials' | 'restoreCredentials' | 'listActiveWorkspaces' | 'getAuthHeaders'
   | 'getCodexStatus' | 'disconnectCodex' | 'startClaudeSignIn' | 'finishClaudeSignIn'
   | 'chatgptPlan' | 'startChatGptSignIn' | 'cancelChatGptSignIn' | 'startChatGptPasteSignIn' | 'finishChatGptPasteSignIn' | 'signOutChatGpt'
-  | 'listConfig' | 'getConfig' | 'setConfig' | 'listConnectedProviders'
+  | 'getConfig' | 'setConfig'
   | 'listCloudflareAccounts' | 'selectCloudflareAccount' | 'listAIGateways' | 'selectAIGateway'
-  | 'userMcp_list' | 'userMcp_presets' | 'userMcp_add' | 'userMcp_remove' | 'userMcp_update'
+  | 'userMcp_list' | 'userMcp_presets' | 'userMcp_add' | 'userMcp_remove'
   | 'userMcp_handleOAuthCallback'
   | 'accountMemory_view' | 'accountMemory_decide' | 'accountMemory_put' | 'accountMemory_forget' | 'accountMemory_forgetNote'
 >;
@@ -457,8 +457,6 @@ userRoutes.post('/api/user/claude/finish', async (c) => {
   return json({ body: status });
 });
 
-userRoutes.get('/api/user/config', async (c) => json({ body: await c.get('stub').listConfig(c.get('owner')) }));
-
 // Refused whatever the method.
 userRoutes.all('/api/user/config/:key', async (c, next) => {
   const key = decodeURIComponent(rawParam(c, 'key'));
@@ -487,8 +485,6 @@ userRoutes.put('/api/user/config/:key', async (c) => {
 
   return json({ body: { ok: true } });
 });
-
-userRoutes.get('/api/user/providers', async (c) => json({ body: await c.get('stub').listConnectedProviders(c.get('owner')) }));
 
 userRoutes.get('/api/user/providers/catalog', async (c) => json({
   body: await listProviderCatalog(c.env, c.get('identity').userId, c.get('owner')),
@@ -588,23 +584,6 @@ userRoutes.delete('/api/user/mcp/servers/:id', (c) => settle(Effect.tryPromise({
   },
   catch: (cause) => authoredRefusal({ doing: 'removing this MCP server', cause }),
 })));
-
-userRoutes.patch('/api/user/mcp/servers/:id', (c) => {
-  return settle(Effect.gen(function* () {
-    const body = yield* Effect.promise(async () => safeJson(c.req.raw, JsonValueSchema));
-
-    if (body === null) return err(400, 'Body must be JSON');
-
-    return yield* Effect.tryPromise({
-      try: async () => {
-        await c.get('stub').userMcp_update(c.get('owner'), c.get('key'), body);
-
-        return json({ body: { ok: true } });
-      },
-      catch: (cause) => authoredRefusal({ doing: 'updating this MCP server', cause }),
-    });
-  }));
-});
 
 // The account's memory, owner only (`memory.account.manage`): every fact with its history, every note, what waits.
 userRoutes.get('/api/user/memory', mcpRead((stub, owner) => stub.accountMemory_view(owner)));

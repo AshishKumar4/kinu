@@ -2,8 +2,9 @@
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { describe, expect, test } from 'bun:test';
+import { createCredentialCipher } from '@kinu.run/core';
 import {
-  createTestUserDO, sqlExec, testOwner,
+  createTestUserDO, sqlExec, testOwner, TEST_CREDENTIAL_ENCRYPTION_KEY,
   type TestUserDO, type TestUserDOOptions,
 } from './helpers/user-do';
 import {
@@ -72,7 +73,12 @@ describe('an MCP preset add', () => {
     ).toArray();
 
     expect(row?.preset_id).toBe('github');
-    expect(v.parse(v.string(), row?.headers)).not.toContain('ghp_test');
+    const sealed = v.parse(v.string(), row?.headers);
+    expect(sealed).not.toContain('ghp_test');
+    // Sealed for this server: it opens under its own id and under no other.
+    const cipher = await createCredentialCipher({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
+    expect(JSON.parse(await cipher.open(`test-user-do:mcp:${added.id}`, sealed))).toEqual({ Authorization: 'Bearer ghp_test' });
+    await expect(cipher.open('test-user-do:mcp:another', sealed)).rejects.toThrow('failed to decrypt');
 
     const [listed] = await h.userDO.userMcp_list(await testOwner());
     expect(listed?.presetId).toBe('github');

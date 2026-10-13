@@ -40,7 +40,7 @@ import {
   UserSessions, CLI_AGENT_WEBSOCKET_CAPABILITY, type BrowserSessionIdentity, type CliAgentConnectTicketVerification, type CliTokenVerification, type LiveBrowserSession,
 } from './sessions';
 
-import { UserCredentials, type CheckpointedCredential, type CredentialEndpoint, type CodexStatus, type ConnectedProvider, type CredentialSummary } from './credentials';
+import { UserCredentials, type CheckpointedCredential, type CredentialEndpoint, type CodexStatus, type CredentialSummary } from './credentials';
 import { UserWorkspaces, type WorkspaceEntry, type WorkspaceRegistration, type WorkspaceRegistrationSource } from './workspaces';
 import { UserProfileStore, type ProfileCatalogWriteResult, type UserProfile } from './profile';
 import { ShareCardJobs, type ReceivedShare } from './share-cards';
@@ -158,10 +158,6 @@ export class UserDO extends Agent<Env> {
 
   setConfig(caller: UserCaller, key: string, value: string): Promise<void> {
     return this.profile.setConfig(caller, key, value);
-  }
-
-  listConfig(caller: UserCaller): Promise<Record<string, string>> {
-    return this.profile.listConfig(caller);
   }
 
   getProfileCatalog(caller: UserCaller): Promise<ProfileCatalogEnvelope> {
@@ -361,10 +357,6 @@ export class UserDO extends Agent<Env> {
     return this.credentials.getCodexStatus(caller);
   }
 
-  listConnectedProviders(caller: UserCaller): Promise<ConnectedProvider[]> {
-    return this.credentials.listConnectedProviders(caller);
-  }
-
   registerBrowserSession(caller: UserCaller, tokenHash: string, expiresAt: number, identity: BrowserSessionIdentity & { credentialGeneration?: number }): Promise<void> {
     return this.sessions.registerBrowserSession(caller, tokenHash, expiresAt, identity);
   }
@@ -558,10 +550,6 @@ export class UserDO extends Agent<Env> {
 
   userMcp_remove(caller: UserCaller, id: string): Promise<void> {
     return this.mcpServers.userMcp_remove(caller, id);
-  }
-
-  userMcp_update(caller: UserCaller, id: string, patch: JsonValue): Promise<void> {
-    return this.mcpServers.userMcp_update(caller, id, patch);
   }
 
   userMcp_toolDescriptors(caller: UserCaller): Promise<string> {
