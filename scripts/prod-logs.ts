@@ -278,7 +278,7 @@ const Calculation = v.looseObject({
 
 const TelemetryFields = v.looseObject({
   sequence: v.optional(v.string()), owed: v.optional(v.string()), effect: v.optional(v.string()),
-  workspace: v.optional(v.string()), actor: v.optional(v.string()),
+  workspace: v.optional(v.string()), actor: v.optional(v.string()), object: v.optional(v.string()),
   sameBuild: v.optional(v.string()), midStep: v.optional(v.boolean()),
   stepsKept: v.optional(v.number()), fiber: v.optional(v.string()), fiberId: v.optional(v.string()),
   cause: v.optional(v.string()), activation: v.optional(v.number()),
@@ -843,6 +843,16 @@ export interface TerminalEffectStates {
  * destroyed, if it was. Staging beaf28a46: both sequences the report called owed belonged to eval workspaces deleted
  * a second and a half after the sequence owed its task reminder.
  */
+/**
+ * The object a row is about: its own invocation's, or, for a line an agent's isolate wrote and its workspace's tail
+ * relayed (`AgentIsolateTail`, whose invocation is no object's), the workspace's it names. Staging c6dc27da1,
+ * 2026-10-13: two task reminders read as owed forever because their relayed rows had no object, so the deletions of
+ * their workspaces 1.9 s after they settled never matched them.
+ */
+function objectOf(event: Pick<TelemetryEvent, 'source' | '$workers'>): string {
+  return event.$workers.durableObjectId ?? event.source.fields.object ?? '';
+}
+
 export function terminalEffectStates(
   events: readonly Pick<TelemetryEvent, 'timestamp' | 'source' | '$workers'>[], destroyedAt: ReadonlyMap<string, number> = new Map(),
 ): TerminalEffectStates {
@@ -859,7 +869,7 @@ export function terminalEffectStates(
 
     if (isOwed) observations += 1;
 
-    const object = event.$workers.durableObjectId ?? '';
+    const object = objectOf(event);
     let sequences = states.get(object);
 
     if (sequences === undefined) {
@@ -901,7 +911,7 @@ function effectMarks(events: readonly Pick<TelemetryEvent, 'timestamp' | 'source
 
     if (mark === undefined || sequence === undefined || effect === undefined) continue;
     const at = mark === 'parked' ? parkedAt : failedAt;
-    const key = effectKey(event.$workers.durableObjectId ?? '', sequence, effect);
+    const key = effectKey(objectOf(event), sequence, effect);
 
     at.set(key, Math.max(at.get(key) ?? 0, event.timestamp));
   }
