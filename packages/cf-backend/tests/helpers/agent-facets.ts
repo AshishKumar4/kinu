@@ -318,6 +318,20 @@ export function failNextBroadcast(storageKey: string): void {
   failedBroadcasts.add(storageKey);
 }
 
+let failedOpening: ((storageKey: string) => boolean) | null = null;
+
+/** The workspace fails the next turn opening an isolate `from` asks it for, as one resetting does. */
+export function failNextOpening(from: (storageKey: string) => boolean): void {
+  failedOpening = from;
+}
+
+let lostParentReport: ((storageKey: string) => boolean) | null = null;
+
+/** The next report an isolate `from` sends its hirer is lost on the way, as one sent into a reset is. */
+export function loseNextParentReport(from: (storageKey: string) => boolean): void {
+  lostParentReport = from;
+}
+
 const lostHandoffs = new Set<string>();
 
 /** The isolate under `storageKey` hands its next settled turn to a workspace that is gone before it takes it. */
@@ -492,6 +506,12 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
         },
         scaffold: () => host().scaffold(),
         prepareChat: async (request) => {
+          if (request.turnId !== null && failedOpening?.(placement.storageKey) === true) {
+            failedOpening = null;
+
+            throw new Error('the workspace reset as the turn opened');
+          }
+
           const copy = copiedOpenings.get(placement.storageKey);
 
           if (copy !== undefined && request.turnId !== null) {
@@ -541,7 +561,15 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
 
           return await host().turnReport(turn, ended, relay);
         },
-        parentReport: (report) => host().parentReport(report),
+        parentReport: async (report) => {
+          if (lostParentReport?.(placement.storageKey) === true) {
+            lostParentReport = null;
+
+            throw new Error('the workspace reset before it took the report');
+          }
+
+          return await host().parentReport(report);
+        },
         autoTitle: (subject, title) => host().autoTitle(subject, title),
         turnSettled: async (settled) => {
           if (lostHandoffs.delete(placement.storageKey)) throw new Error('the workspace was reset before it took the handoff');

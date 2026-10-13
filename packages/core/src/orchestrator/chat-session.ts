@@ -312,9 +312,10 @@ export interface ChatSessionPorts {
   failedAnswerSlates?(lease: ActorTurnLease): Promise<JsonObject | null>;
   /** The report this ending owes its caller; narration is read only if the report carries it. */
   owedReport?(ending: TaskTurnEnding, assistantText: string, narration: () => Promise<readonly string[]>): Promise<OwedReport | null>;
-  /** A turn that never opened, or ended on its failure before an answer existed, and why: its caller is told, as it waits
-   *  on the work, not on a turn. */
-  unanswered?(item: ChatTurnInput, failure: KinuError): Promise<void>;
+  /** A turn that never opened, or ended on its failure before an answer existed, and why: the report its caller is owed,
+   *  as it waits on the work, not on a turn; none where it has no such caller. Owed by the commit that ends the turn, or
+   *  by one of its own for a turn that never opened, and driven as a roster is, so a death loses none of it. */
+  unanswered?(item: ChatTurnInput, failure: KinuError): OwedEffect | null;
   /** Asked per call: the bodies close over stores built after this session. */
   terminal(): TerminalTransitions;
   /** Asked per item at dequeue and before a drain binds rows; a refusal settles the item to its producer. */
@@ -680,13 +681,20 @@ export class ChatSession {
     if (queued) this.pump();
   }
 
-  /** Its producer is told, and so is every caller that joined it: a turn restored after a reset has only joiners. */
+  /** A turn that never opened: the report its caller is owed, kept by a commit of its own and driven as a roster is.
+   *  Its producer is told, and so is every caller that joined it: a turn restored after a reset has only joiners. */
   private async toldUnanswered(item: QueueItem, failure: KinuError): Promise<void> {
-    const { ports } = this;
+    const told = this.ports.unanswered?.(item, failure) ?? null;
 
-    if (ports.unanswered === undefined) return;
+    if (told === null) return;
+
+    await this.settleTold({ turnId: item.idempotencyKey ?? item.turnId ?? item.text, messageId: `unanswered:${told.scope}` }, told);
+  }
+
+  /** A report owed its caller, recorded with `transition` (by the turn's end, where it closed one) and driven. */
+  private async settleTold(transition: TerminalTransition, told: OwedEffect): Promise<void> {
     await hold(logged('turn.unanswered_report_failed', { doing: 'telling the caller a turn it is owed ended without an answer', otherwise: 'io' }, async () => {
-      await ports.unanswered?.(item, failure);
+      await this.ports.terminal().settle({ transition, declare: () => [told] });
     }));
   }
 
@@ -1592,9 +1600,8 @@ export class ChatSession {
         this.queuedAtTake = new Set();
         this.settleItem(item, failure, undefined, abandoned ?? undefined);
 
-        const unanswered = failure ?? (abandoned === null ? null : new KinuError('io', abandoned));
-
-        if (unanswered !== null && item.run === undefined) await this.toldUnanswered(item, unanswered);
+        // One that opened owed its caller's report with its end; one that never opened owes it now.
+        if (failure !== null && item.run === undefined) await this.toldUnanswered(item, failure);
       }
     } finally {
       // Cleared synchronously, not in .finally(): the microtask would leave `pumping` stale and orphan a queued turn.
@@ -1805,8 +1812,10 @@ export class ChatSession {
 
         if (!interrupted) this.actorSession.orchestrator.acc.hadError = true;
         const end = classifyRunEnd({ completed: false, interrupted, errorText: message.slice(0, 500) });
+        // Its caller's report rides its end's commit: a turn cut off by a Stop owes none.
+        const told = interrupted ? null : this.ports.unanswered?.(item, new KinuError('io', message)) ?? null;
 
-        await this.endFailed(item, lease, end);
+        await this.endFailed(item, lease, end, told);
         this.emit({ type: 'error', message });
         this.emit({ type: 'turn-end', turn: this.snapshotTurn(item, ''), turnId: lease.turnId, runId: lease.runId, epoch: this.actorSession.closeEpoch(lease) });
         unanswered = interrupted ? null : message;
@@ -2185,8 +2194,10 @@ export class ChatSession {
     readonly answer: PreparedConversationEntry | null;
     /** Only an answered turn's: the effects its answer owes, and the deliveries its steps read, answered by it. */
     readonly roster: { readonly transition: TerminalTransition; readonly owed: readonly OwedEffect[] } | null;
+    /** Only a failed turn's: the report its caller is owed ({@link ChatSessionPorts.unanswered}). */
+    readonly told?: { readonly transition: TerminalTransition; readonly owed: OwedEffect };
   }): void {
-    const { item, roster } = ending;
+    const { item, roster, told } = ending;
     let closed = (): void => {};
 
     this.transaction(() => {
@@ -2197,6 +2208,8 @@ export class ChatSession {
         for (const id of this.actorSession.orchestrator.inbox.absorbedDeliveries) this.pendingSends.retireTurn(id);
         this.ports.terminal().record(roster.transition, roster.owed);
       }
+
+      if (told !== undefined) this.ports.terminal().record(told.transition, [told.owed]);
 
       const closing = this.eventRecorder.collect(() => this.closeRunIn(ending.end, ending.lease));
 
@@ -2213,9 +2226,11 @@ export class ChatSession {
    * reload reads it. One whose answer cannot be written still closes, without it: its room was told. A close that fails
    * even so is logged, and the turn stays open, as a death there would leave it.
    */
-  private async endFailed(item: QueueItem, lease: ActorTurnLease, end: RunEndClassification): Promise<void> {
+  private async endFailed(item: QueueItem, lease: ActorTurnLease, end: RunEndClassification, owed: OwedEffect | null = null): Promise<void> {
     let answer: PreparedConversationEntry | null = null;
     let closed = false;
+    const transition: TerminalTransition = { turnId: lease.turnId, messageId: this.messageId };
+    const told = owed === null ? {} : { told: { transition, owed } };
 
     // Without it, the turn still closes: its failure is told its room, not kept on an answer.
     if (end.error !== undefined && !this.transcript.has(this.messageId)) {
@@ -2232,16 +2247,21 @@ export class ChatSession {
 
     if (failure !== null) {
       settleLoggedSync('turn.failure_unrecorded', { doing: "closing a turn with its failure's answer", otherwise: 'io' }, () => {
-        this.endTurn({ item, lease, end, answer: failure, roster: null });
+        this.endTurn({ item, lease, end, answer: failure, roster: null, ...told });
         closed = true;
       });
     }
 
-    if (closed) return;
+    if (!closed) {
+      settleLoggedSync('turn.persist_failed', { doing: 'closing a turn that ended without its answer', otherwise: 'io' }, () => {
+        this.endTurn({ item, lease, end, answer: null, roster: null, ...told });
+        closed = true;
+      });
+    }
 
-    settleLoggedSync('turn.persist_failed', { doing: 'closing a turn that ended without its answer', otherwise: 'io' }, () => {
-      this.endTurn({ item, lease, end, answer: null, roster: null });
-    });
+    // Its caller's report, kept with its end, is told as a roster's effects are: a death before then tells it at the next
+    // start.
+    if (closed && owed !== null) await this.settleTold(transition, owed);
   }
 
   /** Public rows contain references only; output bytes committed before this terminal transaction. */

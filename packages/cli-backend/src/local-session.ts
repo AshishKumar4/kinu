@@ -535,15 +535,17 @@ export class LocalAgentSession {
         // Only the host knows the child's lifetime and whether the parent drove the turn.
         owedReport: async (ending, assistantText, narration) => await this.parentRelay?.owed(ending, assistantText, narration) ?? null,
         // Its hirer waits on the work, not on a turn: one that ended without an answer is answered to it as blocked, keyed by
-        // the work.
-        unanswered: async (item, failure) => {
-          const relay = this.parentRelay;
+        // the work, by a report its end owes as its roster's are.
+        unanswered: (item, failure) => {
+          if (this.parentRelay === null || turnAuthorship(item) !== 'hirer' || item.idempotencyKey === undefined) return null;
 
-          if (relay === null || turnAuthorship(item) !== 'hirer' || item.idempotencyKey === undefined) return;
-          await relay.send({
-            text: `${this.rt.actor.name} failed to run its assigned turn: ${failure.message}`,
-            status: 'blocked', mode: workModeForTurnMetadata(item.metadata), sequenceId: item.idempotencyKey,
-          });
+          return {
+            name: 'parent_report', scope: item.idempotencyKey, lane: 'detached',
+            input: {
+              text: `${this.rt.actor.name} failed to run its assigned turn: ${failure.message}`,
+              status: 'blocked', mode: workModeForTurnMetadata(item.metadata), sequenceId: item.idempotencyKey, quiet: false,
+            },
+          };
         },
         // A running job's settle wakes the session; a reminder would race it.
         openWork: async () => ({ tasks: this.taskList.listOpen(), asyncWakePending: this.jobs.listRunning(1).total > 0 }),

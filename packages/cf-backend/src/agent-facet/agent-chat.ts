@@ -171,12 +171,16 @@ export class FacetChat {
         },
         // Its hirer waits on the work, not on a turn: one that ended without an answer is answered to it as blocked, keyed by
         // the work.
-        unanswered: async (item, failure) => {
-          if (turnLane(this.policy, authorshipOf(item)) !== 'hirer' || item.idempotencyKey === undefined) return;
-          await workspace.parentReport({
-            text: `${this.deps.actor.record.name} failed to run its assigned turn: ${failure.message}`,
-            status: 'blocked', mode: workModeForTurnMetadata(item.metadata), sequenceId: item.idempotencyKey,
-          });
+        unanswered: (item, failure) => {
+          if (turnLane(this.policy, authorshipOf(item)) !== 'hirer' || item.idempotencyKey === undefined) return null;
+
+          return {
+            name: 'parent_report', scope: item.idempotencyKey, lane: 'detached',
+            input: {
+              text: `${this.deps.actor.record.name} failed to run its assigned turn: ${failure.message}`,
+              status: 'blocked', mode: workModeForTurnMetadata(item.metadata), sequenceId: item.idempotencyKey, quiet: false,
+            },
+          };
         },
         terminal: () => this.terminal,
         driverGate: () => null,

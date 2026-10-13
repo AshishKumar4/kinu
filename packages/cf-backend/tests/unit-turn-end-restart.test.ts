@@ -10,7 +10,10 @@ import { RECOVERY_BACKOFF_CEILING_MS } from '@kinu.run/core';
 import {
   agentSql, driveUntil, gatewayWorkspace, hostedMainActor, mainDatabase, relayedReports, storedChat, workspaceMainActor, type StartedHarness,
 } from './helpers/actor-harness';
-import { delayNextModelReport, delayNextOpenWork, delayNextRunEnd, delayNextRunReview, delayNextTurnReport, failNextAnswerWrite } from './helpers/agent-facets';
+import {
+  delayNextModelReport, delayNextOpenWork, delayNextRunEnd, delayNextRunReview, delayNextTurnReport, failNextAnswerWrite, failNextOpening,
+  loseNextParentReport,
+} from './helpers/agent-facets';
 import { socketConnection } from './helpers/bindings';
 import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 
@@ -296,4 +299,33 @@ test("a node whose end outgrows a stored row keeps it spilled, and its search he
   const [search] = await workspace.agent.getHeadRuns();
 
   expect(search?.heads.map((head) => head.summary)).toEqual([ANSWER]);
+});
+
+test("a hire whose assigned turn fails as it opens tells its hirer once, though its first telling is lost", async () => {
+  const MISSION = 'Catalogue every file under the home directory.';
+  const ASKED = 'Have someone check the ledger.';
+
+  // Main hires a task agent for the mission, then says so; the hire's turn never runs.
+  const workspace = gatewayWorkspace(stubAiBinding((run) => {
+    const { messages, tools } = requestOf(run);
+
+    if (tools.length === 0 || !JSON.stringify(messages).includes(ASKED)) return chatCompletion(run, '{"title":"Ledger Check"}');
+
+    return messages.some((message) => message.role === 'tool')
+      ? chatCompletion(run, 'Handed off.')
+      : toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', lifetime: 'task', mission: MISSION } }, 'hire_0');
+  }));
+
+  // The hire's opening fails, as a workspace resetting fails it, and the report of that is lost on its first way.
+  failNextOpening((key) => key !== mainKey(workspace));
+  loseNextParentReport((key) => key !== mainKey(workspace));
+  const id = crypto.randomUUID();
+  const told = () => relayedReports(workspace.db).filter((report) => report.includes('failed to run its assigned turn'));
+
+  await workspace.agent.onMessage(owner, chatRequest(id, id, 'submit-message', ASKED));
+  setSystemTime(new Date(Date.now() + RECOVERY_BACKOFF_CEILING_MS + 1));
+  await driveUntil(workspace, "the hire's hirer was never told its task failed", () => told().length > 0);
+  await workspace.agent.harnessAgentsIdle();
+
+  expect(told()).toHaveLength(1);
 });
