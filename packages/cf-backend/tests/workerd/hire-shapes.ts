@@ -70,6 +70,8 @@ export interface LogRow {
   readonly turnId: string | null;
   readonly consumedAt: number | null;
   readonly kind: string;
+  /** A report's own status (`completed`, `blocked`, …); null on a task. */
+  readonly status: string | null;
   readonly bodyLength: number;
   /** Tells a re-admission loop apart from distinct tasks. */
   readonly body: string;

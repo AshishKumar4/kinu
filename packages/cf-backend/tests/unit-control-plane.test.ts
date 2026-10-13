@@ -360,6 +360,19 @@ describe('paging', () => {
     close();
   });
 
+  test('a request for more than the ceiling is clamped, not honoured', () => {
+    const { sql, close } = freshStore();
+
+    for (let i = 0; i < 250; i += 1) {
+      store.observeUser(sql, { userId: `u${String(i).padStart(4, '0')}`, email: `u${String(i)}@x`, at: 1_000_000 - i });
+    }
+
+    const page = store.listUsers(sql, { limit: 10_000 });
+    expect(page.items.length).toBe(store.CONTROL_PAGE_MAX);
+    expect(page.status).toBe('more');
+    close();
+  });
+
   test('rows sharing a millisecond are neither skipped nor repeated across a page boundary', () => {
     // A batch writes many rows in one millisecond; a page boundary inside that tie needs the tiebreak.
     const { sql, close } = freshStore();

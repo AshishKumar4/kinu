@@ -63,7 +63,6 @@ interface SurfaceProbe {
    *  is why the two are reported rather than assumed alike. */
   fields: { tag: string; type: string }[];
   control: Region;
-  redacted: number;
 }
 
 /* The secrets `gallery.tsx`'s `FeedbackSecretsFrame` renders. Spelled here as
@@ -597,7 +596,6 @@ async function probeSurface(page: Page, needles: readonly string[]): Promise<Sur
       .filter((node) => node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement)
       .map((node) => ({ tag: node.tagName.toLowerCase(), type: node.getAttribute('type') ?? '' }))),
     control: await readRegion(page, '[data-visible-copy]'),
-    redacted: (await readShot(page)).redacted,
   };
 }
 
@@ -701,9 +699,9 @@ interface Observed {
   };
   annotated: { before: number; afterDrag: number; afterUndo: number; sentAnnotated: string };
   noteOnly: { shotSectionPresent: boolean; sent: Submission[] };
-  oversized: { message: string; sendableWithoutShot: boolean; sent: Submission[] };
+  oversized: { sendableWithoutShot: boolean; sent: Submission[] };
   retry: {
-    errorText: string; buttonLabel: string; canvasSurvived: boolean;
+    errorText: string; canvasSurvived: boolean;
     attempts: number; sizes: number[]; toast: string;
     diagnostics: DiagnosticLine[];
   };
@@ -722,14 +720,13 @@ interface Observed {
    *  reporter scrolled. */
   routed: {
     openedFromRail: boolean;
-    offsets: { outer: number; inner: number };
     panes: Pane[];
     sent: Submission[];
   };
   /** A POST the network never answers. */
   stalled: {
-    whileSending: { cancelHook: string; sendLabel: string; dismissedByEscape: boolean };
-    afterStop: { errorText: string; cancelHook: string; sendLabel: string; canvasSurvived: boolean };
+    whileSending: { dismissedByEscape: boolean };
+    afterStop: { cancelHook: string; canvasSurvived: boolean };
     outcomes: string[];
     retryToast: string;
     diagnostics: DiagnosticLine[];
@@ -852,7 +849,6 @@ async function run(): Promise<Observed> {
     await big.goto(`${origin}/gallery.html?frame=feedback&noise=1`, { waitUntil: 'networkidle0' });
     await openDialog(big);
     await big.waitForSelector('[data-feedback-shot="failed"]');
-    const message = await big.$eval('[data-feedback-shot="failed"]', (node) => node.textContent ?? '');
     await big.type('[data-feedback-note]', 'the page is too big to photograph');
     const sendableWithoutShot = await big.$eval('[data-feedback-send]', (node) => !node.hasAttribute('disabled'));
     await big.click('[data-feedback-send]');
@@ -872,7 +868,6 @@ async function run(): Promise<Observed> {
     await flaky.click('[data-feedback-send]');
     await flaky.waitForSelector('[data-feedback-error]');
     const errorText = await flaky.$eval('[data-feedback-error]', (node) => node.textContent ?? '');
-    const buttonLabel = await flaky.$eval('[data-feedback-send]', (node) => node.textContent ?? '');
     const canvasSurvived = await flaky.$('[data-feedback-canvas]') !== null;
     await flaky.click('[data-feedback-send]');
     await flaky.waitForSelector('[data-feedback-sent]');
@@ -1029,17 +1024,14 @@ async function run(): Promise<Observed> {
     await routedPage.waitForSelector('aside [data-feedback-open]');
     const openedFromRail = await routedPage.$('aside [data-feedback-open]') !== null;
 
-    // Two bands down and two cells across. The offsets are read BACK, so a
-    // fixture that could not scroll fails here instead of passing by accident.
-    const offsets = await routedPage.evaluate(() => {
+    // Two bands down and two cells across.
+    await routedPage.evaluate(() => {
       const outer = document.querySelector<HTMLElement>('[data-scroll-outer]');
       const inner = document.querySelector<HTMLElement>('[data-scroll-inner]');
 
       if (outer === null || inner === null) throw new Error('the nested panes are not in this frame');
       outer.scrollTop = outer.clientHeight * 2;
       inner.scrollLeft = inner.clientWidth * 2;
-
-      return { outer: outer.scrollTop, inner: inner.scrollLeft };
     });
 
     await openDialog(routedPage, 'aside [data-feedback-open]');
@@ -1075,8 +1067,6 @@ async function run(): Promise<Observed> {
     await twoFrames(stalledPage);
 
     const whileSending = {
-      cancelHook: await cancelHook(stalledPage),
-      sendLabel: await textOf(stalledPage, '[data-feedback-send]'),
       dismissedByEscape: await stalledPage.$('[data-feedback-note]') === null,
     };
 
@@ -1084,9 +1074,7 @@ async function run(): Promise<Observed> {
     await stalledPage.waitForSelector('[data-feedback-error]');
 
     const afterStop = {
-      errorText: await textOf(stalledPage, '[data-feedback-error]'),
       cancelHook: await cancelHook(stalledPage),
-      sendLabel: await textOf(stalledPage, '[data-feedback-send]'),
       canvasSurvived: await stalledPage.$('[data-feedback-canvas]') !== null,
     };
 
@@ -1149,9 +1137,9 @@ async function run(): Promise<Observed> {
       desktop: { shot, surface, password, token, control, sent, toast },
       annotated: { before, afterDrag, afterUndo, sentAnnotated },
       noteOnly: { shotSectionPresent, sent: bareSent },
-      oversized: { message, sendableWithoutShot, sent: bigSent },
+      oversized: { sendableWithoutShot, sent: bigSent },
       retry: {
-        errorText, buttonLabel, canvasSurvived, toast: retryToast,
+        errorText, canvasSurvived, toast: retryToast,
         attempts: flakySent.length,
         sizes: flakySent.map((one) => one.screenshot?.size ?? 0),
         diagnostics: [...flakyDiagnostics],
@@ -1170,7 +1158,7 @@ async function run(): Promise<Observed> {
       mobile: { buttonVisible, dialogWithin, captureSucceeded },
       cards,
       dialog,
-      routed: { openedFromRail, offsets, panes, sent: routedSent },
+      routed: { openedFromRail, panes, sent: routedSent },
       stalled: {
         whileSending, afterStop, outcomes, closedAfterStop,
         retryToast: stalledToast,

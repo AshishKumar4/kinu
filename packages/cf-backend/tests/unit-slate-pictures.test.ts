@@ -161,28 +161,15 @@ describe('a shot', () => {
     expect(store.captures(PORT, shot?.handle ?? '', T0 + 30_000)).toBe(false);
   });
 
-  test('captures oldest due first and eventually drains every slate', async () => {
+  test('is three a wake at most, oldest due first; the rest stay due for the next', async () => {
     const store = pictures();
     const bucket = memoryBucket();
-    const slates = ['a', 'b', 'c', 'd'];
-    const shotPorts: number[] = [];
 
-    const shot: PictureCapture = {
-      ...capture(shooting(A, B, new Uint8Array([7]), new Uint8Array([8])), bucket, slates),
-      url: async (port) => {
-        shotPorts.push(port);
+    for (const [index, slate] of ['a', 'b', 'c', 'd'].entries()) store.rendered(slate, PORT + index, T0 + index);
+    await store.captureDue(capture(shooting(A, B, new Uint8Array([7]), new Uint8Array([8])), bucket, ['a', 'b', 'c', 'd']), T0 + 40_000);
 
-        return 'https://preview.test/';
-      },
-    };
-
-    for (const [index, slate] of slates.entries()) store.rendered(slate, PORT + index, T0 + index);
-
-    for (let wake = 0; wake < slates.length; wake += 1) await store.captureDue(shot, T0 + 40_000);
-
-    expect(shotPorts).toEqual(slates.map((_, index) => PORT + index));
-    expect([...store.digests().keys()].sort()).toEqual(slates);
-    expect(store.nextDueAt()).toBeNull();
+    expect([...store.digests().keys()].sort()).toEqual(['a', 'b', 'c']);
+    expect(store.nextDueAt()).not.toBeNull();
   });
 
   test('of a slate removed while it ran keeps nothing', async () => {

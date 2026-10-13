@@ -1396,7 +1396,6 @@ function readsBetween(
 }
 
 export interface PanelVerdict {
-  readonly nodeSurvives: boolean;
   readonly scrollSurvives: boolean;
   readonly scrollMarked: number;
   readonly scrollValue: number;
@@ -1474,12 +1473,8 @@ export async function rightPanelKeepsItsState(target: FlowTarget): Promise<Panel
     const afterBack = counter.counts();
 
     const survives = v.parse(
-      v.object({ same: v.boolean(), scrollTop: v.number() }),
-      await page.evaluate(() => {
-        const node = document.querySelector('[data-live-probe="work-surface"]');
-
-        return { same: node !== null, scrollTop: node?.scrollTop ?? -1 };
-      }),
+      v.object({ scrollTop: v.number() }),
+      await page.evaluate(() => ({ scrollTop: document.querySelector('[data-live-probe="work-surface"]')?.scrollTop ?? -1 })),
     );
 
     await counter.stop();
@@ -1489,7 +1484,6 @@ export async function rightPanelKeepsItsState(target: FlowTarget): Promise<Panel
     const onBack = readsBetween(afterSwitch.sent, afterBack.sent);
 
     return {
-      nodeSurvives: survives.same,
       scrollSurvives: survives.scrollTop === marked.scrollTop,
       scrollMarked: marked.scrollTop,
       scrollValue: survives.scrollTop,
@@ -2463,8 +2457,6 @@ export interface SlateShareVerdict {
   readonly workspace: string;
   /** Whether the dialog drew a Reach row for a slate that reaches nothing. */
   readonly reachRow: boolean;
-  /** Every number the dialog's limits line states before sharing. */
-  readonly limitsStated: readonly number[];
   /** The link the dialog gave once shared; null when it gave none. */
   readonly link: string | null;
   /** What pressing the link's copy control put on the clipboard. */
@@ -2513,9 +2505,6 @@ export async function slateSharesReachingNothing(target: FlowTarget): Promise<Sl
 
     const reachRow = v.parse(v.boolean(), await page.evaluate(`document.querySelector('[data-share-reach]') !== null`));
 
-    const limitsStated = v.parse(v.array(v.number()), await page.$eval('[data-share-limits]',
-      (element) => [...(element.textContent ?? '').matchAll(/\d+(?:\.\d+)?/gu)].map((number) => Number(number[0]))));
-
     const link = await submitPublicSlateShare(page);
     let copied: string | null = null;
 
@@ -2557,7 +2546,7 @@ export async function slateSharesReachingNothing(target: FlowTarget): Promise<Sl
 
     await page.close();
 
-    return { workspace, reachRow, limitsStated, link, copied, sharedByYou, afterStop };
+    return { workspace, reachRow, link, copied, sharedByYou, afterStop };
   } finally {
     if (share !== null && !stopped) {
       const left = await fetch(`${target.origin}/api/shared/revoke`, {

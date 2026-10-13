@@ -17,6 +17,8 @@ const SENT_AT = 1_700_000_000_000;
 /** Five minutes minus the fifteen-second lead, from the REQUEST's send instant. */
 const DUE_AT = SENT_AT + 5 * 60_000 - 15_000;
 
+const REFRESH_LIMIT = 3;
+
 interface LaneProbe {
   readonly sent: Array<{ modelSpec: ModelSpec; body: JsonObject }>;
   readonly spend: ModelCallReport[];
@@ -204,40 +206,41 @@ describe('when the chain stops', () => {
     expect(probe.lane.nextWarmAt()).toBeNull();
   });
 
-  test('an idle warming chain eventually stops scheduling and sending', async () => {
+  test('three refreshes per idle stretch, then nothing', async () => {
     const probe = laneProbe();
-    let at = probe.lane.armAfterTurn({ modelSpec: ANTHROPIC, retention: 'short', lastRequest: lastRequest() });
-    expect(at).not.toBeNull();
+    let at = probe.lane.armAfterTurn({ modelSpec: ANTHROPIC, retention: 'short', lastRequest: lastRequest() }) ?? 0;
 
-    for (let fired = 0; at !== null && fired < 1_000; fired++) {
+    for (let fired = 0; fired < REFRESH_LIMIT; fired++) {
       probe.clock = at;
+
       expect(await probe.lane.runDue(at)).not.toBeNull();
       const next = probe.lane.nextWarmAt();
 
-      if (next !== null) expect(next).toBeGreaterThan(at);
-      at = next;
+      if (fired < REFRESH_LIMIT - 1) {
+        expect(next).toBe(at + 5 * 60_000 - 15_000);
+        at = next ?? 0;
+      } else expect(next).toBeNull();
     }
 
-    expect(at).toBeNull();
-    expect(await probe.lane.runDue(probe.clock + 5 * 60_000)).toBeNull();
+    expect(probe.sent).toHaveLength(REFRESH_LIMIT);
   });
 
   test('the warms keep the entry alive until a TTL past the last one, and no longer once a real request voids them', async () => {
     const probe = laneProbe();
     expect(probe.lane.keptAliveUntil(SENT_AT)).toBeNull();
 
-    let at = probe.lane.armAfterTurn({ modelSpec: ANTHROPIC, retention: 'short', lastRequest: lastRequest() });
-    // An owed warm covers the request's own five-minute lifetime.
+    let at = probe.lane.armAfterTurn({ modelSpec: ANTHROPIC, retention: 'short', lastRequest: lastRequest() }) ?? 0;
+    // Owed a warm: alive until that warm's due time plus the lead, which is the request's own five minutes.
     expect(probe.lane.keptAliveUntil(SENT_AT)).toBe(SENT_AT + 5 * 60_000);
 
-    for (let fired = 0; at !== null && fired < 1_000; fired++) {
+    for (let fired = 0; fired < REFRESH_LIMIT; fired++) {
       probe.clock = at;
       await probe.lane.runDue(at);
-      at = probe.lane.nextWarmAt();
+      at = probe.lane.nextWarmAt() ?? 0;
     }
 
-    expect(at).toBeNull();
-    expect(probe.lane.keptAliveUntil(SENT_AT)).toBe(probe.clock + 5 * 60_000);
+    // The chain has stopped: its third warm went out at SENT_AT + 3 x 4:45, and that entry lives five minutes more.
+    expect(probe.lane.keptAliveUntil(SENT_AT)).toBe(SENT_AT + 3 * (5 * 60_000 - 15_000) + 5 * 60_000);
     probe.lane.noteRequest();
     expect(probe.lane.keptAliveUntil(SENT_AT)).toBeNull();
   });

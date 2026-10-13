@@ -272,6 +272,18 @@ describe('the model stack retries every call once, in one place', () => {
     expect(harness.waits).toEqual([1_998]);
   });
 
+  test('a generated backoff never waits past the per-wait cap', async () => {
+    const harness = retryHarness(
+      [...Array.from({ length: 8 }, () => new Response('limited', { status: 429 })), answer()],
+      { random: () => 0.999 },
+    );
+
+    await harness.call(8);
+
+    expect(harness.waits).toHaveLength(8);
+    expect(harness.waits.every((wait) => wait <= 60_000)).toBe(true);
+  });
+
   test('waits out at most the owner\u2019s retries, then fails with the limit instead of sleeping on', async () => {
     const harness = retryHarness(Array.from({ length: 6 }, () => new Response('limited', { status: 429, headers: { 'Retry-After': '1' } })));
 

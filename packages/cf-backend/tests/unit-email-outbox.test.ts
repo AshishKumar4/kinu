@@ -240,7 +240,8 @@ describe('EmailOutbox — reconciliation of an indeterminate', () => {
 
     if (!row) throw new Error('expected dead-lettered outbox row');
     expect(row.state).toBe('dlq');
-    expect(row.attempt_count).toBe(attempts);
+    expect(row.attempt_count).toBe(8);
+    expect(attempts).toBe(8);              // the 8th is the last one tried
     expect(box.nextRetryAt()).toBeNull();
   });
 

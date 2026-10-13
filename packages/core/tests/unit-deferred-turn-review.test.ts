@@ -148,15 +148,13 @@ describe('EvolutionEngine.deferTurnReview — the one-shot turn-lane exit', () =
       engine.deferTurnReview(makeTurn({ turnId: `msg-${i}` }), `follow-up ${i}`);
     }
 
-    const { reviewed, refused } = await engine.runDeferredTurnReviews();
-    expect(reviewed).toBeGreaterThan(0);
-    expect(reviewed).toBeLessThan(owed);
-    expect(refused).toEqual([]);
-    expect(engine.sessionWindow.countQueuedReviews()).toBe(owed - reviewed);
+    expect(await engine.runDeferredTurnReviews())
+      .toEqual({ reviewed: MAX_TURN_REVIEWS_PER_OPEN, refused: [] });
+    expect(engine.sessionWindow.countQueuedReviews()).toBe(owed - MAX_TURN_REVIEWS_PER_OPEN);   // the rest waits for the next open
+    // Oldest first: a later lesson is worth more with the earlier one in the ledger.
+    const graded = listTurnRatings(rt.storage.sql, rt.actor).map((r) => r.turnId).sort((a, b) => a.localeCompare(b));
 
-    const graded = listTurnRatings(rt.storage.sql, rt.actor).map((r) => r.turnId).sort();
-    const expected = Array.from({ length: reviewed }, (_, i) => `msg-${i}`).sort();
-    expect(graded).toEqual(expected);
+    expect(graded).toEqual(Array.from({ length: MAX_TURN_REVIEWS_PER_OPEN }, (_, i) => `msg-${i}`));
   });
 
   test('the queue refuses past its ceiling rather than growing without bound', () => {

@@ -459,6 +459,7 @@ describe('per-receiver ordering + retry backoff', () => {
 
     const row = outboxRows(alice)[0];
     expect(row.state).toBe('dlq');
+    expect(row.attempt_count).toBe(8);
     expect(alice.hub.nextRetryAt()).toBeNull();
   });
 

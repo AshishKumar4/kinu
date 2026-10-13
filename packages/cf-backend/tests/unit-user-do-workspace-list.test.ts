@@ -418,6 +418,18 @@ describe('listWorkspaces pages', () => {
     harness.close();
   });
 
+  test('a request over the wire bound clamps instead of widening', async () => {
+    const harness = createTestUserDO();
+    const owner = await seedRoster(harness, OVERFLOW);
+    const widest = await harness.userDO.listWorkspaces(owner, { limit: 1000 });
+    const bounded = await harness.userDO.listWorkspaces(owner);
+
+    // The default page is the wire bound: no caller can ask past it.
+    expect(widest.entries.length).toBe(bounded.entries.length);
+    expect(widest.entries.length).toBeLessThan(OVERFLOW);
+    harness.close();
+  });
+
   test('an invalid cursor is an error, never a silent restart from page one', async () => {
     const harness = createTestUserDO();
     const owner = await seedRoster(harness, 2);

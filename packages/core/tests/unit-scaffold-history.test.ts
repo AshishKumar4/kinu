@@ -4,7 +4,7 @@ import { describe, test, expect } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
 import {
-  SCAFFOLD_HISTORY_MAX_LIMIT,
+  SCAFFOLD_HISTORY_MAX_LIMIT, SCAFFOLD_HISTORY_MAX_MESSAGE_CHARS, SCAFFOLD_HISTORY_MAX_PAGE_CHARS,
   createScaffoldHistory, runScaffold,
   type ScaffoldHistoryPage,
 } from '../src/index';
@@ -83,6 +83,8 @@ describe('the budget cannot be argued out of', () => {
   test('a whole page is bounded even at the maximum per-message budget', async () => {
     const long: ModelMessage[] = Array.from({ length: 100 }, () => ({ role: 'user', content: 'x'.repeat(50_000) }));
     const page = await read(long)({ offset: 0, limit: SCAFFOLD_HISTORY_MAX_LIMIT, maxChars: 999_999 });
+    const chars = page.entries.reduce((sum, e) => sum + e.text.length, 0);
+    expect(chars).toBeLessThanOrEqual(SCAFFOLD_HISTORY_MAX_PAGE_CHARS + SCAFFOLD_HISTORY_MAX_MESSAGE_CHARS);
     expect(page.clipped).toBe(true);
     expect(page.entries.length).toBeGreaterThan(0);
     expect(page.entries.length).toBeLessThan(long.length);

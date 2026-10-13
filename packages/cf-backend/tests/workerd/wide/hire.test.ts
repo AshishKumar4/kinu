@@ -122,7 +122,7 @@ describe('hire', () => {
     const observed: HireObservation = await probe(workspace).observe(workspace);
     const answer = observed.reports.join(' ');
 
-    expect(observed.log).toContainEqual(expect.objectContaining({ actorId: observed.rootActorId, variant: 'subordinate_report' }));
+    expect(observed.log).toContainEqual(expect.objectContaining({ actorId: observed.rootActorId, variant: 'subordinate_report', status: 'blocked' }));
     expect(answer).not.toContain(CHILD_ANSWER);
 
     const hired = observed.roster.filter((row) => row.lifetime === 'task');

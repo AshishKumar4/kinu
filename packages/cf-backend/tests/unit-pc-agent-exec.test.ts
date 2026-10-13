@@ -271,7 +271,9 @@ describe('a running command\'s output, for a hub that asked', () => {
     const retained = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk.data, 'base64')));
     const supplied = Buffer.from('early\n' + 'x'.repeat(20_000));
 
+    // The window is the frame-size bound: never empty, never more than 16 KiB.
     expect(retained.length).toBeGreaterThan(0);
+    expect(retained.length).toBeLessThanOrEqual(16 * 1024);
     expect(retained).toEqual(supplied.subarray(supplied.length - retained.length));
     expect(chunks[0]?.omitted ?? 0).toBe(supplied.length - retained.length);
     expect(chunks.at(-1)).toMatchObject({ stream: 'stdout', data: '', omitted: 7 });
@@ -283,14 +285,19 @@ describe('a running command\'s output, for a hub that asked', () => {
     const id = rpcId(410);
     const total = 3_000_000;
     const spill = join(tmpdir(), 'kinu-tool-output', `device-${id}.stdout.log`);
+    const started = performance.now();
 
     handle({ id, method: 'exec', params: [`${JSON.stringify(process.execPath)} -e "process.stdout.write('x'.repeat(${total}))"`], output: true }, ws.socket);
     const reply = await ws.answerTo(id);
+    const elapsed = performance.now() - started;
     rmSync(spill, { force: true });
     const frames = ws.outputsOf(id);
     const sizes = frames.map((frame) => frame.chunks.reduce((sum, chunk) => sum + Buffer.from(chunk.data, 'base64').length, 0));
 
     expect(v.parse(ExecResultSchema, reply.result).exitCode).toBe(0);
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(16 * 1024);
+    // One frame per 250 ms window at most, plus the one that closes the pipe.
+    expect(frames.length).toBeLessThanOrEqual(Math.ceil(elapsed / 250) + 1);
     expect(sizes.reduce((sum, size) => sum + size, 0) + frames.reduce((sum, frame) => sum + frame.dropped, 0)).toBe(total);
     acknowledge(rpcId(411), id, ws.socket);
     await ws.answerTo(rpcId(411));

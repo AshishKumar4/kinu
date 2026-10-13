@@ -680,9 +680,11 @@ describe('HeadJournal.listLive — the live fork roster', () => {
     const read = plans();
 
     // The count and the page must both use the status index.
+    expect(read).toHaveLength(2);
 
     for (const details of read) {
       expect(details).not.toMatch(/\bSCAN\b/);
+      expect(details).toContain('idx_head_journal_status');
     }
   });
 

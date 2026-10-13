@@ -85,6 +85,7 @@ describe('the sidebar drills into a workspace\'s agents', () => {
       const settled = await frames();
 
       // One lookup reads its live parent's roster, and the kept one its hirer's: at most two reads, and then none.
+      expect(settled).toBeLessThanOrEqual(2);
       expect(await frames()).toBe(settled);
       await page.close();
     });
