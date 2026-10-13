@@ -116,10 +116,10 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     const second = await call('build');
     const planned = await call('plan');
     const ledger = new DynamicContextLedger();
-    ledger.weave([{ role: 'user', content: 'inspect' }], { executors: [{ name: 'sandbox', available: true, configured: true, status: 'idle' }] });
+    ledger.weave([{ role: 'user', content: 'inspect' }], { executors: [{ name: 'computer', available: true, configured: true, status: 'idle' }] });
 
     const updated = ledger.weave([{ role: 'user', content: 'inspect' }, { role: 'assistant', content: 'connected' }], {
-      executors: [{ name: 'sandbox', available: true, configured: true, active: true, status: 'active' }],
+      executors: [{ name: 'computer', available: true, configured: true, active: true, status: 'active' }],
     });
 
     return JSON.stringify({ first, second, planned, declarations: { before, after: declarations() }, delta: updated.at(-1)?.content });

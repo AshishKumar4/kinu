@@ -30,7 +30,7 @@ const DEVBOX_FAILURE_CODES: Readonly<Record<DevboxErrorCode, ErrorCode>> = {
 };
 
 /** A terminal refusal names what its reader can do; the owner's own is on the Environment card (D52). */
-const REFUSED_NEXT = 'refused until something changes (choose another size with sandbox.resize(...), or ask the owner to start the computer again)';
+const REFUSED_NEXT = 'refused until something changes (choose another size with computer.resize(...), or ask the owner to start the computer again)';
 
 /** The one conversion from the standalone library's failures to the application's channel. An
  *  unclassified failure, a transport one included, is `io`: `unavailable` is a verdict
@@ -140,7 +140,7 @@ async function execWithoutDeadline(
     const result = await Promise.race([ran, killRefused]);
 
     if (verdict !== undefined && await verdict) {
-      throw new DOMException(`sandbox exec cancelled: its container process tree was ended (exec ${execId})`, "AbortError");
+      throw new DOMException(`computer.exec cancelled: its container process tree was ended (exec ${execId})`, "AbortError");
     }
 
     return result;
@@ -222,7 +222,7 @@ export function adaptCloudflareSandbox(
       return settle(Effect.andThen(ready, run.pipe(
         Effect.catch((failure) => (lost(failure) ? again : Effect.fail(failure))),
         Effect.ensuring(callDevbox(() => handle.releaseUntimed(execId)).pipe(
-          Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('sandbox.exec_release_failed', failure, { execId }); })),
+          Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('computer.exec_release_failed', failure, { execId }); })),
         )),
       )));
     },

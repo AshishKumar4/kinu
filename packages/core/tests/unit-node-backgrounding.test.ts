@@ -72,7 +72,7 @@ function detachStageContent(stage: { reported: boolean; woken: boolean; launched
     type: 'tool-call',
     toolCallId: 'exec-1',
     toolName: 'eval',
-    input: JSON.stringify({ code: 'await sandbox.run()' }),
+    input: JSON.stringify({ code: 'await computer.run()' }),
   }];
 }
 
@@ -274,7 +274,7 @@ describe('a node backgrounds work, ends its turn, and is woken to finish', () =>
     expect(resumed.length).toBeGreaterThan(firstTurn.length);
     expect(resumed.slice(0, firstTurn.length)).toEqual(firstTurn);
     // With the result itself: a node has no `agent.jobResult` to read it with.
-    expect(resumed.at(-1)).toContain('ran await sandbox.run(): exit 0');
+    expect(resumed.at(-1)).toContain('ran await computer.run(): exit 0');
 
     expect(run.report.status).toBe('completed');
     expect(run.reportedItself).toBe(true);

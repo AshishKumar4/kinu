@@ -41,7 +41,7 @@ URL shares that one process.
   (`packages/core/src/safety/egress-vault.ts`). A resident slate's own `fetch`
   is judged by destination and gets nothing injected
   (`packages/cf-backend/src/codemode-egress.ts`).
-- The executors the surface names: `workspace`, `sandbox`, and `device`, which
+- The executors the surface names: `workspace`, `computer`, and `device`, which
   is the owner's own machine.
 
 Each member a slate calls carries agent-core's impact (`slateAddressImpact` in
@@ -77,7 +77,7 @@ two slate runtimes are routed differently:
   removed. A different process binding the port retires the capability, so the
   old URL answers 404.
 - A `slate.runtime: "node"` project is refused when its `package.json` is read
-  (`project.ts`). A Node server runs as a sandbox process with an exposed port:
+  (`project.ts`). A Node server runs as a computer process with an exposed port:
   its URL is `<port>-<sandbox>-<token>.<suffix>`. The token is stored and
   re-exposed byte for byte on recycle, and a supervised process restarts after
   container sleep (`packages/core/src/execution/sandbox.ts`). The edge record

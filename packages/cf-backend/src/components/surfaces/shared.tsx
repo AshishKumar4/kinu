@@ -103,7 +103,7 @@ function MarkdownImage({ src, alt, title }: { src?: string; alt?: string; title?
   );
 }
 
-/** The chat's file links: the planes it names (`vfs`, `sandbox`) and what opens one. Null elsewhere: a reference stays text. */
+/** The chat's file links: the planes it names (`vfs`, `computer`) and what opens one. Null elsewhere: a reference stays text. */
 export const FileLinkContext = createContext<{ readonly roots: readonly string[]; readonly open: (reference: string) => void } | null>(null);
 
 export function SlateLink({ id }: { id: string }) {

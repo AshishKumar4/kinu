@@ -134,7 +134,8 @@ async function processes(box: Devbox<unknown>, container: Container): Promise<vo
 
   await native(container, `for id in restored foreign current; do mkdir -p ${ROOT}/$id; `
     + `printf '{"id":"%s","command":"sleep 1","cwd":"/"}' "$id" >${ROOT}/$id/process.json; ln -sf launched ${ROOT}/$id/launch; done; `
-    + `echo 1 >${ROOT}/restored/pid; touch -d 2020-01-01 ${ROOT}/restored/pid; echo '1 foreign-boot' >${ROOT}/foreign/pid; echo 1 >${ROOT}/current/pid`);
+    // A record with no boot (as no launch writes since 5caa0e84e), one from another boot, and one from this boot.
+    + `echo 1 >${ROOT}/restored/pid; echo '1 foreign-boot' >${ROOT}/foreign/pid; echo "1 $(cat /proc/sys/kernel/random/boot_id)" >${ROOT}/current/pid`);
   await process.kill('restored');
   await process.kill('foreign');
   equal([(await process.get('restored'))?.status, (await process.get('foreign'))?.status, (await process.get('current'))?.status], ['failed', 'failed', 'running']);

@@ -259,7 +259,7 @@ describe('account panels', () => {
     await withGallery(async (gallery) => {
       const control = '[aria-label="Default computer size"]';
 
-      const page = await freshPage(gallery, 'usersettingsstate&section=sandbox', 'dark', 'desktop');
+      const page = await freshPage(gallery, 'usersettingsstate&section=computer', 'dark', 'desktop');
 
       try {
         await page.waitForSelector(control);
@@ -641,15 +641,23 @@ describe('account panels', () => {
         try {
           // Where the tab is sent is the subject, so that document is answered blank rather than loaded.
           const onward = (request: HTTPRequest) => request.isNavigationRequest() && !request.url().includes('frame=connected');
+          const landed = Promise.withResolvers<string>();
+
           await page.setRequestInterception(true);
-          page.on('request', (request) => detach(Effect.promise(async () => (onward(request)
-            ? request.respond({ status: 200, contentType: 'text/html', body: '' })
-            : request.continue()))));
+          // The tab is closed only once the blank document it was sent to has loaded: closed while its answer was
+          // still being fulfilled, `page.close()` waited forever (#78, the account-ux row's silent hangs).
+          page.on('request', (request) => detach(Effect.promise(async () => {
+            if (!onward(request)) return await request.continue();
+            const loaded = page.waitForNavigation({ waitUntil: 'load' });
+
+            await request.respond({ status: 200, contentType: 'text/html', body: '' });
+            await loaded;
+            landed.resolve(request.url());
+          })));
 
           // A page that threw on the input never sends the tab anywhere, and this wait never ends.
-          const sent = page.waitForRequest(onward);
           await Promise.allSettled([page.goto(`${gallery.origin}/gallery.html?frame=connected&next=${encodeURIComponent(next)}`, { waitUntil: 'load' })]);
-          const reached = new URL((await sent).url());
+          const reached = new URL(await landed.promise);
 
           expect({ origin: reached.origin, path: reached.pathname }).toEqual({ origin: gallery.origin, path: '/' });
         } finally {

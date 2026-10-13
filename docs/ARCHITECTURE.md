@@ -22,7 +22,7 @@ the same bytes. The execution plane is an `ExecutionRouter`
 dispatches to whichever other environment is asked for. Commands run
 target-native, not emulated. Every other environment keeps its own filesystem
 at native paths, reached through its namespace. The workspace view mounts a
-live device under `/pc/<name>`, the container under `/sandbox`, the owner's
+live device under `/pc/<name>`, the container under `/computer`, the owner's
 Drive under `/shared` and the actor's own context under `/context`
 (`packages/core/src/vfs/mounts.ts`); a mount reads through that plane's own
 files and never copies them into the workspace. The workspace shell serves the
@@ -37,7 +37,7 @@ graph TB
         Files["Workspace filesystem, in the owning DO's own SQLite<br/>(workspace-host.ts + execution/nimbus.ts), durable, real shell"]
         subgraph Execs["ExecutionRouter, target-native exec, each its own filesystem"]
             W["workspace.*: the file plane above (default runtime)"]
-            S["sandbox.*: Linux container, KinuDevbox (when configured)"]
+            S["computer.*: Linux container, KinuDevbox (when configured)"]
             P["device.*: the user's own machine (connect + consent)"]
         end
         State["Workspace SQL: main session · roster · shared ledgers<br/>Nimbus files: SOUL.md · memory · actor scaffolds"]
@@ -54,7 +54,7 @@ RPC over `listEnvironments(executionRouter)`,
 filesystem: its namespace prefix, whether it is live, and its declared policy
 (`readOnly` and a consistency of `durable | ephemeral | live-shared`). The
 `pc-agent` reverse-WebSocket daemon (`packages/pc-agent`) serves `device` on
-your machine. `sandbox` is a Cloudflare container. Containers are spot
+your machine. `computer` is a Cloudflare container. Containers are spot
 capacity, so `@kinu.run/devbox` (`packages/devbox`) presents one as a machine
 that stays: files survive, supervised processes come back, and preview URLs
 keep their hostnames. `KinuDevbox` (`packages/cf-backend/src/kinu-devbox.ts`)
@@ -420,7 +420,7 @@ rotates the secret.
 Core owns the checks: auth, replay window, rate limit, trust, admission. Each
 backend supplies only the transport: on Cloudflare the Worker HTTP and `email()`
 routes plus the DO alarm, locally the process timer. The `IngressKind` union in
-`packages/core/src/events/hub/types.ts` also names `chat_ws`, `sandbox_cb`,
+`packages/core/src/events/hub/types.ts` also names `chat_ws`, `computer_cb`,
 `mcp_streamable`, `self_emit`, and `reply_request`. The five above are what wake a sleeping workspace from outside
 its own turn.
 

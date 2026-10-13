@@ -16,7 +16,7 @@ function webhook(id: string): KinuEvent {
   };
 }
 
-function internal(id: string, ingress: Extract<IngressKind, 'self_emit' | 'sandbox_cb'>, data: string): KinuEvent {
+function internal(id: string, ingress: Extract<IngressKind, 'self_emit' | 'computer_cb'>, data: string): KinuEvent {
   return {
     ...EVENT_BASE, id, ingress, variant: 'internal', payload_visibility: 'full',
     payload: { kind: 'note', data },
@@ -62,7 +62,7 @@ describe('buildDrainBatch', () => {
   test('excludes self_emit and internal events (anti-self-wake loop)', () => {
     const events = [
       internal('a', 'self_emit', 'x'),
-      internal('b', 'sandbox_cb', 'y'),
+      internal('b', 'computer_cb', 'y'),
     ];
 
     expect(buildDrainBatch(events)).toBeNull();

@@ -66,14 +66,14 @@ async function usedSandbox() {
     ...makeEnv(undefined, userPlane, world), KinuDevbox: sandboxes, PREVIEW_HOST_SUFFIX: SUFFIX, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   });
 
-  expect(await agent.executeInExecutor('sandbox', 'true')).toMatchObject({ exitCode: 0 });
+  expect(await agent.executeInExecutor('computer', 'true')).toMatchObject({ exitCode: 0 });
 
   return agent;
 }
 
 /** The page's state after one poll of the sandbox, over the ports it pinned before. */
 function afterPoll(pinned: readonly PinnedPreviewPort[], result: ExposedPortList) {
-  return reconcilePreviewPorts(pinned, [{ executor: 'sandbox', result }], (url) => isPreviewUrl(url, SUFFIX));
+  return reconcilePreviewPorts(pinned, [{ executor: 'computer', result }], (url) => isPreviewUrl(url, SUFFIX));
 }
 
 const ReadsFrame = v.object({ type: v.literal('reads_changed'), reads: v.array(v.string()) });
@@ -101,29 +101,29 @@ describe('the preview listing of a used sandbox', () => {
 
     readinessAsked = 0;
 
-    const listed = await agent.getExposedPorts('sandbox');
+    const listed = await agent.getExposedPorts('computer');
 
     expect(readinessAsked).toBe(0);
-    expect(afterPoll([], listed)).toMatchObject({ ports: [{ executor: 'sandbox', port: PORT }], error: null });
+    expect(afterPoll([], listed)).toMatchObject({ ports: [{ executor: 'computer', port: PORT }], error: null });
   });
 
   // Owner 2026-09-26: the page shows the sandbox starting as it did when it polled, now from the sandbox's own notice.
   test('while its container restores it is pending, the pinned ports stand, and each edge is pushed', async () => {
     const agent = await usedSandbox();
     const named = framesNamed(agent);
-    const pinned = afterPoll([], await agent.getExposedPorts('sandbox'));
+    const pinned = afterPoll([], await agent.getExposedPorts('computer'));
     named();
 
     await agent.sandboxRestore({ restoring: true, refused: undefined });
     expect(named()).toContain('getExposedPorts');
-    const listed = await agent.getExposedPorts('sandbox');
+    const listed = await agent.getExposedPorts('computer');
 
     expect(listed).toMatchObject({ ports: [], pending: expect.any(String) });
-    expect(afterPoll(pinned.ports, listed)).toEqual({ ports: pinned.ports, error: null, starting: ['sandbox'] });
+    expect(afterPoll(pinned.ports, listed)).toEqual({ ports: pinned.ports, error: null, starting: ['computer'] });
 
     await agent.sandboxRestore({ restoring: false, refused: undefined });
     expect(named()).toContain('getExposedPorts');
-    expect(afterPoll(pinned.ports, await agent.getExposedPorts('sandbox')).starting).toEqual([]);
+    expect(afterPoll(pinned.ports, await agent.getExposedPorts('computer')).starting).toEqual([]);
   });
 
   test('a stop ends the starting line too', async () => {
@@ -132,19 +132,19 @@ describe('the preview listing of a used sandbox', () => {
     await agent.sandboxRestore({ restoring: true, refused: undefined });
     await agent.sandboxStopped();
 
-    expect(await agent.getExposedPorts('sandbox')).not.toHaveProperty('pending');
+    expect(await agent.getExposedPorts('computer')).not.toHaveProperty('pending');
   });
 
   // Owner 2026-09-26: a box that cannot restore shows the listing failure the page used to poll into view.
   test('a terminal refusal is a failure, and the ports the page pinned stand', async () => {
     const agent = await usedSandbox();
-    const pinned = afterPoll([], await agent.getExposedPorts('sandbox'));
+    const pinned = afterPoll([], await agent.getExposedPorts('computer'));
 
     await agent.sandboxRestore({ restoring: false, refused: TERMINAL });
-    const listed = await agent.getExposedPorts('sandbox');
+    const listed = await agent.getExposedPorts('computer');
 
     expect(listed).toEqual({ ports: [], error: TERMINAL });
-    expect(afterPoll(pinned.ports, listed)).toEqual({ ports: pinned.ports, error: `${executorLabel('sandbox')}: ${TERMINAL}`, starting: [] });
+    expect(afterPoll(pinned.ports, listed)).toEqual({ ports: pinned.ports, error: `${executorLabel('computer')}: ${TERMINAL}`, starting: [] });
   });
 
   // A sandbox that dies mid-restore sends no settle; the old poll healed that, so a page's open asks it once.
@@ -158,7 +158,7 @@ describe('the preview listing of a used sandbox', () => {
 
     await until(() => restoreStatusAsked === 1, 'the sandbox asked its restore state');
     await until(() => agent.harnessOwedLiveReads.length > 0, 'the answer applied');
-    expect(await agent.getExposedPorts('sandbox')).not.toHaveProperty('pending');
+    expect(await agent.getExposedPorts('computer')).not.toHaveProperty('pending');
     expect(readinessAsked).toBe(0);
   });
 

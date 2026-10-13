@@ -420,7 +420,7 @@ async function run(): Promise<Observed> {
 
     // The drive opens at the plane's root: the workspace tree beside the
     // mounted folders, each mount wearing its origin badge.
-    await waitForRow('sandbox');
+    await waitForRow('computer');
 
     const filesRoot = {
       crumbs: await crumbs(),
@@ -446,7 +446,7 @@ async function run(): Promise<Observed> {
     // Back to the drive root through the crumb bar, then into the workspace's
     // own tree for the parent row, preview, rename and delete.
     await files.click('[data-files-crumb]');
-    await waitForRow('sandbox');
+    await waitForRow('computer');
     await files.click(rowSelector('home'));
     await waitForRow('main');
     await files.click(rowSelector('main'));
@@ -846,10 +846,10 @@ describe('feedback on a settled turn', () => {
 describe('the drive, browsing the one composite plane', () => {
   test('the root is the workspace tree beside the mounts, badges on the mounted folders', () => {
     expect(observed.filesRoot.crumbs).toBe('/');
-    expect(observed.filesRoot.entries).toEqual(expect.arrayContaining(['home', 'pc', 'sandbox']));
+    expect(observed.filesRoot.entries).toEqual(expect.arrayContaining(['home', 'pc', 'computer']));
     // The origin badge names the machine, not the executor id: the device wears the user's own device name, per the
     // consent naming contract, and the agent's computer wears its product label.
-    expect(observed.filesRoot.badges).toEqual(expect.arrayContaining(["Ashish's MacBook", executorLabel('sandbox')]));
+    expect(observed.filesRoot.badges).toEqual(expect.arrayContaining(["Ashish's MacBook", executorLabel('computer')]));
   });
 
   test('crossing into /pc lists the machines; a machine lands inside its consented directory', () => {
@@ -904,7 +904,7 @@ describe('the Environment tab, as a user reads it', () => {
     expect(byName["Ashish's MacBook"]?.status).toBe('active');
     expect(byName["Ashish's MacBook"]?.mount).toBe('/pc');
     expect(byName['Workspace']?.mount).toBe('/');
-    expect(byName[executorLabel('sandbox')]?.mount).toBe('/sandbox');
+    expect(byName[executorLabel('computer')]?.mount).toBe('/computer');
   });
 
   test("a card's Files action lands the drive", () => {
@@ -2600,7 +2600,7 @@ test('file navigation does not pair a new breadcrumb with the old directory', as
   await withGallery(async ({ newPage, origin }) => {
     const page = await newPage();
     await page.goto(`${origin}/gallery.html?frame=files`, { waitUntil: 'networkidle0' });
-    await page.waitForSelector('[data-files-entry][title="sandbox"]');
+    await page.waitForSelector('[data-files-entry][title="computer"]');
 
     const mismatches = await page.evaluate(async () => {
       const titles = (): string[] => [...document.querySelectorAll('[data-files-entry]')]
@@ -2644,7 +2644,7 @@ test('file navigation does not pair a new breadcrumb with the old directory', as
       // trail and a listing together. Watching only the first and settling on a
       // file two levels down is a condition that cannot arrive: it hung this
       // suite, and with it the row, from 89f3b895d until this line.
-      await cross('pc', 'pc', 'sandbox', "Ashish's MacBook");
+      await cross('pc', 'pc', 'computer', "Ashish's MacBook");
       await cross("Ashish's MacBook", "Ashish's MacBook", "Ashish's MacBook", 'quarterly-report.txt');
 
       return seen;
@@ -4344,7 +4344,7 @@ describe('the Environment cards', () => {
       const page = await newPage();
       await page.setViewport({ width: 340, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=environment`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('[data-env-card="sandbox"] [data-env-size]');
+      await page.waitForSelector('[data-env-card="computer"] [data-env-size]');
 
       // Each card inside the page, and everything drawn in a card inside the card: its size choice ran past it.
       const past = await page.$$eval('[data-env-card]', (cards) => cards.flatMap((card) => {

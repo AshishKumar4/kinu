@@ -250,7 +250,7 @@ describe('workspace.writeFile over the workspace filesystem — what both backen
       dirs,
     };
 
-    // The container is reached only through `sandbox.*`, never from here.
+    // The container is reached only through `computer.*`, never from here.
     const vfs = rt.storage.vfs;
 
     const exec = createInlineExecutor({
@@ -332,10 +332,10 @@ describe('workspace.writeFile over the workspace filesystem — what both backen
     const { exec, sandbox, workspace } = buildPlane();
     // `/` is root's: a top-level directory is the kernel's to make and hand over, as a boot does.
     const { root } = await workspace.privileged();
-    root.mkdir('sandbox');
-    root.chown('sandbox', CRED_SESSION_USER.uid, CRED_SESSION_USER.gid);
-    // "/sandbox/app.ts" is an ordinary local file: no path silently means two places.
-    expect(await exec.tools.writeFile.execute('/sandbox/app.ts', 'top')).toContain('Written');
+    root.mkdir('computer');
+    root.chown('computer', CRED_SESSION_USER.uid, CRED_SESSION_USER.gid);
+    // "/computer/app.ts" is an ordinary local file: no path silently means two places.
+    expect(await exec.tools.writeFile.execute('/computer/app.ts', 'top')).toContain('Written');
     expect(sandbox.files.size).toBe(0);
   });
 });

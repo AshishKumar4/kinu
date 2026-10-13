@@ -31,7 +31,7 @@ describe('tool call summaries — the unified agents tool', () => {
 
 describe('tool call summaries — builtins', () => {
   test('run shows the command', () => {
-    expect(summarizeToolCall('shell', { command: 'git clone https://example.com/repo', runtime: 'sandbox' }))
+    expect(summarizeToolCall('shell', { command: 'git clone https://example.com/repo', runtime: 'computer' }))
       .toBe('git clone https://example.com/repo');
   });
 

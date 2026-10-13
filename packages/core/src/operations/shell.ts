@@ -1,10 +1,10 @@
-/** A shell command in one runtime: the workspace's by default, or the sandbox's, or a user's machine. */
+/** A shell command in one runtime: the workspace's by default, or the computer's, or a user's machine. */
 import * as v from 'valibot';
 import { defineOperation } from './operation';
 
 const described = <S extends v.GenericSchema>(schema: S, text: string) => v.pipe(schema, v.description(text));
 
-const RUNTIME = "Default workspace; or sandbox, or a user's machine by its nickname from the execution status, which is required when several are connected.";
+const RUNTIME = "Default workspace; or computer, or a user's machine by its nickname from the execution status, which is required when several are connected.";
 
 /** `shell.run` over the runtimes a router registered: its schema names them, and any other string is a device nickname. */
 export function shellRun(runtimes: readonly string[]) {

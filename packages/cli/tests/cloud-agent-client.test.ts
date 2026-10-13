@@ -969,7 +969,7 @@ describe('CloudAgentClient — Steer-as-Branch RPC contract', () => {
 
     expect(client.fileLinks.roots).not.toContain('studio');
     await client.connect();
-    expect(client.fileLinks.roots).toEqual(['vfs', 'local', 'sandbox', 'studio']);
+    expect(client.fileLinks.roots).toEqual(['vfs', 'local', 'computer', 'studio']);
     expect(client.fileLinks.href('studio://home/dev/a.md')).toBe(`${mock.origin}/workspace/helios?file=studio%3A%2F%2Fhome%2Fdev%2Fa.md`);
 
     const turn = client.send('connect the rig');
@@ -979,7 +979,7 @@ describe('CloudAgentClient — Steer-as-Branch RPC contract', () => {
     mock.reply({ type: 'reads_changed', reads: ['getExecutors', 'getToolDescriptions'] });
 
     await waitFor(() => events.find((e) => e.type === 'broadcast' && e.event.type === 'reads_changed'), 'the executors moved');
-    expect(client.fileLinks.roots).toEqual(['vfs', 'local', 'sandbox', 'rig']);
+    expect(client.fileLinks.roots).toEqual(['vfs', 'local', 'computer', 'rig']);
 
     mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'connected' }, true));
     await turn;

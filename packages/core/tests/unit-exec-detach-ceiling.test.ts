@@ -84,7 +84,7 @@ const TRAINING = 'python3 train.py --epochs 40 2>&1 | tee /workspace/train.log';
 
 interface ShellToolInput { command: string; runtime?: string }
 
-/** A `shell` tool shaped like the real one at `runtime: 'sandbox'`, dispatching to the router's sandbox provider. */
+/** A `shell` tool shaped like the real one at `runtime: 'computer'`, dispatching to the router's sandbox provider. */
 function runToolOverSandbox(provider: ExecutorProvider): ToolSet[string] {
   return tool({
     description: 'shell',
@@ -154,7 +154,7 @@ describe("the incident replayed: a long tee'd training run through run → sandb
       },
     );
 
-    const out = await wrapShellTool(provider, runner)({ command: TRAINING, runtime: 'sandbox' });
+    const out = await wrapShellTool(provider, runner)({ command: TRAINING, runtime: 'computer' });
 
     expect(isBackgroundHandle(out)).toBe(true);
     expect(detached).toHaveLength(1);
@@ -179,7 +179,7 @@ describe("the incident replayed: a long tee'd training run through run → sandb
     );
 
     container.finish();
-    const out = await wrapShellTool(provider, runner)({ command: TRAINING, runtime: 'sandbox' });
+    const out = await wrapShellTool(provider, runner)({ command: TRAINING, runtime: 'computer' });
 
     expect(crossed).toBe(0);
     expect(out).toContain('epoch 40/40 done');
@@ -195,8 +195,8 @@ describe('every long-capable surface is declared backgroundable', () => {
     const declared: Readonly<Record<string, BackgroundableTool>> = BACKGROUNDABLE_TOOLS;
     expect(declared.shell?.completion).toBe('result');
     expect(declared.eval?.completion).toBe('result');
-    expect(declared.shell?.detachable({ command: 'x', runtime: 'sandbox' })).toBe(true);
-    expect(declared.eval?.detachable({ code: 'await sandbox.exec("x")' })).toBe(true);
+    expect(declared.shell?.detachable({ command: 'x', runtime: 'computer' })).toBe(true);
+    expect(declared.eval?.detachable({ code: 'await computer.exec("x")' })).toBe(true);
   });
 });
 
@@ -259,7 +259,7 @@ describe('the settle wakes the agent — the whole chain, no doubles in the midd
     if (!entry) throw new Error('Expected the shell tool to survive wrapping');
 
     const out = await toolExecute<ShellToolInput, object | string>(entry)({
-      command: TRAINING, runtime: 'sandbox',
+      command: TRAINING, runtime: 'computer',
     });
 
     expect(isBackgroundHandle(out)).toBe(true);
@@ -386,7 +386,7 @@ describe('a sandbox command a job takes', () => {
     );
 
     const run = toolExecute<{ command: string; runtime: string; why: string }, object | string>(present(wrapped.shell, 'the wrapped shell tool'));
-    const detached = await run({ command: 'node server.js', runtime: 'sandbox', why: 'serve the site' });
+    const detached = await run({ command: 'node server.js', runtime: 'computer', why: 'serve the site' });
 
     if (!isBackgroundHandle(detached)) throw new Error(`the server call did not detach: ${JSON.stringify(detached)}`);
     expect(environments).toEqual([{ [JOB_STAMP_ENV]: detached.jobId }]);
@@ -449,7 +449,7 @@ describe('a sandbox command a job takes', () => {
     );
 
     const run = toolExecute<{ command: string; runtime: string; why: string }, object | string>(present(wrapped.shell, 'the wrapped shell tool'));
-    const detached = await run({ command: 'node server.js', runtime: 'sandbox', why: 'serve the site' });
+    const detached = await run({ command: 'node server.js', runtime: 'computer', why: 'serve the site' });
 
     if (!isBackgroundHandle(detached)) throw new Error(`the server call did not detach: ${JSON.stringify(detached)}`);
     expect(listBackgroundJobs(store).map(({ id, status }) => ({ id, status }))).toEqual([{ id: detached.jobId, status: 'serving' }]);
@@ -521,7 +521,7 @@ async function detachedBuild(clock: ReturnType<typeof handClock>) {
   );
 
   const run = toolExecute<{ command: string; runtime: string; why: string }, object | string>(present(wrapped.shell, 'the wrapped shell tool'));
-  const detached = await run({ command: 'bun run build', runtime: 'sandbox', why: 'build the site' });
+  const detached = await run({ command: 'bun run build', runtime: 'computer', why: 'build the site' });
 
   if (!isBackgroundHandle(detached)) throw new Error(`the build did not detach: ${JSON.stringify(detached)}`);
 
@@ -743,7 +743,7 @@ describe("a running job's output", () => {
     );
 
     const run = toolExecute<{ command: string; runtime: string; why: string }, object | string>(present(wrapped.shell, 'the wrapped shell tool'));
-    expect(await run({ command: 'echo ok', runtime: 'sandbox', why: 'check' })).toContain('ok');
+    expect(await run({ command: 'echo ok', runtime: 'computer', why: 'check' })).toContain('ok');
     await Promise.all(bodies);
 
     expect(frames).toEqual([]);

@@ -155,7 +155,7 @@ describe('hosted Nimbus workspace provider', () => {
     expect(shell.exitCode).toBe(127);
     expect(shell.refusal?.reason).toBe('unavailable');
     expect(shell.refusal?.error).toContain('bun');
-    expect(shell.refusal?.error).toContain('sandbox');
+    expect(shell.refusal?.error).toContain('computer');
     expect(shell.refusal?.error).toContain('nimbus install');
     expect(shell.stderr).toContain('command not found');
 
@@ -188,7 +188,7 @@ describe('hosted Nimbus workspace provider', () => {
     const missed = await nimbusSessionShell(box, { home: WORKSPACE_ROOT }).exec('grep -r thing .');
 
     expect(missed.refusal?.reason).toBe('unavailable');
-    expect(missed.refusal?.error).toContain('sandbox');
+    expect(missed.refusal?.error).toContain('computer');
 
     const real = await nimbusSessionShell(box, { home: WORKSPACE_ROOT }).exec('exit 2');
 
@@ -209,7 +209,7 @@ describe('hosted Nimbus workspace provider', () => {
     expect(missed.exitCode).toBe(127);
     expect(missed.refusal?.reason).toBe('unavailable');
     expect(missed.refusal?.error).toContain('bun');
-    expect(missed.refusal?.error).toContain('sandbox');
+    expect(missed.refusal?.error).toContain('computer');
     expect(missed.refusal?.error).toContain('nimbus install bun');
     expect(missed.refusal?.error).toContain('runtime catalog could not be read');
     expect(missed.refusal?.error).toContain('session box catalog socket closed');

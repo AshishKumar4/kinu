@@ -164,11 +164,11 @@ describe('resolvePromptAttachments', () => {
     writeFileSync(join(folder, 'notes.txt'), 'in the folder');
     const planes = localPlanes({ space, folder, home: folder, views: [] });
 
-    const result = await resolvePromptAttachments('see @vfs://slates/board/shot.png and @local://notes.txt not @sandbox://x', { limitBytes: CAP, cwd: folder, planes });
+    const result = await resolvePromptAttachments('see @vfs://slates/board/shot.png and @local://notes.txt not @computer://x', { limitBytes: CAP, cwd: folder, planes });
 
     expect(result.attached.map((a) => a.path)).toEqual([join(space, 'slates', 'board', 'shot.png'), join(folder, 'notes.txt')]);
     expect(result.files).toHaveLength(1);
-    expect(result.text).toBe('see vfs://slates/board/shot.png and local://notes.txt not @sandbox://x');
+    expect(result.text).toBe('see vfs://slates/board/shot.png and local://notes.txt not @computer://x');
     expect(result.errors).toEqual([]);
   });
 

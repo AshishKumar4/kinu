@@ -463,7 +463,7 @@ describe("a workspace's turns are not its box's use", () => {
   test('ten turns after the activation reached its sandbox call no box either', async () => {
     const boxCalls: string[] = [];
     const harness = orchestratorHarness(undefined, { container: true, boxCalls });
-    await harness.agent.prepareTerminal('sandbox');
+    await harness.agent.prepareTerminal('computer');
     const before = boxCalls.length;
     await tenTurns(harness);
 
@@ -491,7 +491,7 @@ describe("a workspace's job settles are not its box's use", () => {
 
     expect(jobs.listRunning(20).total).toBe(0);
     expect(boxCalls).toEqual([]);
-    expect((await agent.getExecutors()).find((executor) => executor.name === 'sandbox')?.status).toBe('idle');
+    expect((await agent.getExecutors()).find((executor) => executor.name === 'computer')?.status).toBe('idle');
   });
 });
 

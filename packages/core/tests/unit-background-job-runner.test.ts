@@ -352,8 +352,8 @@ describe('BackgroundJobRunner.create — descriptive labels', () => {
 
   test('a run call labels the runtime + command', () => {
     const { runner, store } = setup();
-    const id = runner.create('shell', { runtime: 'sandbox', command: 'npm test' }, 'build', new AbortController());
-    expect(store.get(id)?.label).toBe(`${executorLabel('sandbox')}: npm test`);
+    const id = runner.create('shell', { runtime: 'computer', command: 'npm test' }, 'build', new AbortController());
+    expect(store.get(id)?.label).toBe(`${executorLabel('computer')}: npm test`);
   });
 
   test('an eval call labels the code snippet', () => {

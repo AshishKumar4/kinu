@@ -434,7 +434,7 @@ const MESSAGES: UIMessage[] = [
       { type: "tool-file", toolCallId: "t2", state: "output-available", input: { op: "edit", path: "packages/checkout/src/rules.ts" }, output: "ok" },
       { type: "tool-file", toolCallId: "t3", state: "output-available", input: { op: "edit", path: "packages/checkout/migrations/0042_coupon_kind.sql" }, output: "ok" },
       { type: "tool-file", toolCallId: "t4", state: "output-available", input: { op: "write", path: "packages/checkout/tests/coupon-kind.test.ts" }, output: "ok" },
-      { type: "tool-run", toolCallId: "t5", state: "output-available", input: { runtime: "sandbox", command: "bun test packages/checkout" }, output: "18 pass\n0 fail" },
+      { type: "tool-run", toolCallId: "t5", state: "output-available", input: { runtime: "computer", command: "bun test packages/checkout" }, output: "18 pass\n0 fail" },
     ],
   },
   {

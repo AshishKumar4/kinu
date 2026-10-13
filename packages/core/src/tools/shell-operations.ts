@@ -1,4 +1,4 @@
-/** `shell.run` served over the execution router: the workspace's shell by default, or the sandbox's, or a user's machine. */
+/** `shell.run` served over the execution router: the workspace's shell by default, or the computer's, or a user's machine. */
 import * as v from 'valibot';
 import { Effect } from 'effect';
 import { clampToolResult, type ClampToolResultOptions } from './clamp';
@@ -49,7 +49,7 @@ function unprovisionedAdvice(runtimeKey: string): string {
     return 'A machine runtime requires the Kinu PC daemon. Ask the user to install it from the Executors tab.';
   }
 
-  if (runtimeKey === 'sandbox') {
+  if (runtimeKey === 'computer') {
     return 'The computer is not active yet. It provisions on first use: retry.';
   }
 
@@ -109,7 +109,7 @@ export function serveShell({ shell, router, files, budget, escalations, logger }
         // Past here is an escalation; every exit records it, including refusals.
         // Unknown runtime values are device nicknames resolved by the device executor.
         const registered = router?.getProvider(runtimeKey);
-        const nickname = registered === undefined && runtimeKey !== 'sandbox' ? runtimeKey : undefined;
+        const nickname = registered === undefined && runtimeKey !== 'computer' ? runtimeKey : undefined;
         const provider = nickname === undefined ? registered : router?.getProvider('device');
 
         if (!provider) {

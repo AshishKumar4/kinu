@@ -370,7 +370,7 @@ describe('Live Smoke — one real turn per backend', () => {
       }, {}, WEB_SMOKE_MARKER);
       await page.evaluate(() => {
         const sandbox = [...document.querySelectorAll('button')]
-          .find((button) => button.textContent?.includes('sandbox.*') === true);
+          .find((button) => button.textContent?.includes('computer.*') === true);
 
         sandbox?.click();
       });

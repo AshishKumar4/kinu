@@ -315,10 +315,10 @@ export const FIRST_RUN_DEFECTS = {
   },
   'sandbox-mount-write': {
     id: 'sandbox-mount-write',
-    found: 'Writing a new file through the /sandbox mount was refused `io` — '
+    found: 'Writing a new file through the /computer mount was refused `io` — '
       + '"FileNotFoundError: File not found: /workspace/broken.mjs" — while the same '
-      + 'container write through sandbox.writeFile in a program succeeded, and '
-      + 'sandbox.listFiles(\'\') refused on the SDK\'s ValidationFailedError.',
+      + 'container write through computer.writeFile in a program succeeded, and '
+      + 'computer.listFiles(\'\') refused on the SDK\'s ValidationFailedError.',
     missedBecause: 'the conformance double answered a missing read with an exit code, the SDK\'s '
       + 'old contract; the deployed SDK throws FileNotFoundError, which the file view passed '
       + 'through unclassified, so the write path\'s create-vs-overwrite probe read a create as an '

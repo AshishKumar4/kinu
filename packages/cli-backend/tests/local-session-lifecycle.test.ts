@@ -52,7 +52,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const executed: string[] = [];
 
     router.register({
-      name: 'sandbox', kind: 'sandbox', capabilities: new Set(['shell']), filesOwner: 'agent', isAvailable: () => true,
+      name: 'computer', kind: 'computer', capabilities: new Set(['shell']), filesOwner: 'agent', isAvailable: () => true,
       homeDir: async () => '/', connect: async () => {}, disconnect: async () => {},
       tools: { exec: fakeCommandMember('record execution', async (input) => {
         executed.push(input);
@@ -61,9 +61,9 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       }) },
     });
 
-    const exec = router.getProvider('sandbox')?.tools.exec;
+    const exec = router.getProvider('computer')?.tools.exec;
 
-    if (!exec) throw new Error('sandbox.exec is missing');
+    if (!exec) throw new Error('computer.exec is missing');
 
     const first = await shell.exec(command);
     const [parked] = await session.listDeferredApprovals();
@@ -73,7 +73,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(first.exitCode).not.toBe(0);
     await exec.execute(command);
     expect(await session.listDeferredApprovals()).toHaveLength(2);
-    const sandboxAction = (await session.listDeferredApprovals()).find((action) => action.executor === 'sandbox');
+    const sandboxAction = (await session.listDeferredApprovals()).find((action) => action.executor === 'computer');
 
     if (!sandboxAction) throw new Error('sandbox command was not queued');
 

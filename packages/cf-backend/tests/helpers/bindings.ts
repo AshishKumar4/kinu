@@ -291,6 +291,7 @@ export function userAccount<Built extends Partial<UserRoutesAuthority>>(
     hasWorkspace: refuse('hasWorkspace'),
     ensureProfile: refuse('ensureProfile'),
     getProfile: refuse('getProfile'),
+    setDisplayName: refuse('setDisplayName'),
     getProfileCatalog: refuse('getProfileCatalog'),
     getWorkspaceProfileCatalog: refuse('getWorkspaceProfileCatalog'),
     putProfileCatalog: refuse('putProfileCatalog'),

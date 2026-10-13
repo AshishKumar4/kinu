@@ -121,7 +121,7 @@ queue and no new persisted format.
 `file`, workspace `shell`, and `workspace.*` all address `rt.storage.vfs`. On
 hosted, the actor DO owns its Nimbus workspace. On CLI, it is this machine's
 files: the workspace's folder, and its own space at `~/.kinu/<workspace>/`.
-Containers and devices keep separate files, mounted at `/sandbox` and `/pc`.
+Containers and devices keep separate files, mounted at `/computer` and `/pc`.
 
 ### Why it exists
 
@@ -470,8 +470,8 @@ coreutils" the executor advertises (`packages/core/src/tools/inline-executor.ts`
 that number is the executor's claim, not a count. Live executor status defines
 what hosted execution can do. Local execution uses the workspace process.
 
-`runtime` accepts `workspace`, `sandbox`, or a device by the nickname the live
-prompt lists, and defaults to `workspace`. `sandbox` and each device have
+`runtime` accepts `workspace`, `computer`, or a device by the nickname the live
+prompt lists, and defaults to `workspace`. `computer` and each device have
 separate files; each device mounts at `/pc/<name>`. `ExecutionRouter` has no
 fallback: an absent runtime returns `runtime_not_provisioned`. Relative paths
 resolve against `WORKSPACE_ROOT`, `/home/main`. Containers receive
@@ -482,7 +482,7 @@ container's `/workspace`, a device's `~`), and a `cd` or `export` lasts only
 that call; calls run side by side. The answer opens with `cwd: <dir>`, where the
 command started. A `name` keeps its directory and exported variables from call
 to call: Nimbus's own named shells, keyed by agent, in the workspace; on the
-sandbox, a device and the CLI's host shell, one bash wrapper
+computer, a device and the CLI's host shell, one bash wrapper
 (`execution/shell-session.ts`) that restores and saves them in a 0600 file under
 `~/.kinu/shells`, `exit 3` included. A name runs one call at a time. One a
 detached job holds answers at once, `shell <name> is busy with job <id> since

@@ -1,7 +1,7 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import { sha256Hex } from '../src/safety/argument-digest';
 /**
- * The `/sandbox` mount end to end: `file` tool and codemode `sandbox.*` over one container view.
+ * The `/computer` mount end to end: `file` tool and codemode `computer.*` over one container view.
  * The double follows the native file boundary: a miss carries its errno in `Error.cause`, an empty
  * path is refused as the SDK's `Files` refuses it, and relative paths resolve against `/workspace`.
  */
@@ -182,7 +182,7 @@ function container(fs: ContainerFs): SandboxHandle {
 	return handle;
 }
 
-/** The mount table only asks the base for non-`/sandbox` paths. */
+/** The mount table only asks the base for non-`/computer` paths. */
 function basePlane(): VFS {
 	return {
 		readFile: async (path) => { throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' }); },
@@ -198,7 +198,7 @@ function rig(fs: ContainerFs) {
 	const executor = createSandboxExecutor(container(fs));
 
 	const mounted = withMountTable(basePlane(), standardMounts((name) =>
-		name === 'sandbox' ? executor : undefined));
+		name === 'computer' ? executor : undefined));
 
 	const file = toolExecute<FileToolInput, JsonValue>(createFileTool({
 		home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT),
@@ -208,18 +208,18 @@ function rig(fs: ContainerFs) {
 	return { executor, mounted, file };
 }
 
-describe('the file tool across the /sandbox mount', () => {
+describe('the file tool across the /computer mount', () => {
 	test('write of a NEW file creates it, and a read returns the bytes', async () => {
 		const fs = new ContainerFs();
 		const { file } = rig(fs);
 
 		const written = await file({
-			op: 'write', path: '/sandbox/workspace/broken.mjs', content: 'export const x = 1;\n',
+			op: 'write', path: '/computer/workspace/broken.mjs', content: 'export const x = 1;\n',
 		});
 
 		expect(written).toMatchObject({ action: 'created' });
 		expect(new TextDecoder().decode(fs.files.get('/workspace/broken.mjs'))).toBe('export const x = 1;\n');
-		expect(await file({ op: 'read', path: '/sandbox/workspace/broken.mjs' }))
+		expect(await file({ op: 'read', path: '/computer/workspace/broken.mjs' }))
 			.toStartWith('1\texport const x = 1;\n');
 	});
 
@@ -227,14 +227,14 @@ describe('the file tool across the /sandbox mount', () => {
 		const fs = new ContainerFs();
 		const { file } = rig(fs);
 
-		await file({ op: 'write', path: '/sandbox/workspace/broken.mjs', content: 'v1\n' });
+		await file({ op: 'write', path: '/computer/workspace/broken.mjs', content: 'v1\n' });
 
 		const replaced = await file({
-			op: 'write', path: '/sandbox/workspace/broken.mjs', content: 'v2\n',
+			op: 'write', path: '/computer/workspace/broken.mjs', content: 'v2\n',
 		});
 
 		expect(replaced).toMatchObject({ action: 'replaced' });
-		expect(await file({ op: 'read', path: '/sandbox/workspace/broken.mjs' })).toStartWith('1\tv2\n');
+		expect(await file({ op: 'read', path: '/computer/workspace/broken.mjs' })).toStartWith('1\tv2\n');
 	});
 
 	test('a write under a directory the container does not have fails ENOENT, not io', async () => {
@@ -242,7 +242,7 @@ describe('the file tool across the /sandbox mount', () => {
 
 		let error: unknown;
 
-		try { await mounted.readFile('/sandbox/nowhere/x.txt'); } catch (cause) { error = cause; }
+		try { await mounted.readFile('/computer/nowhere/x.txt'); } catch (cause) { error = cause; }
 
 		expect(isVfsError(error) && error.code === 'ENOENT').toBe(true);
 	});
@@ -310,9 +310,9 @@ describe('the codemode sandbox namespace', () => {
 		const fs = new ContainerFs();
 		const { executor, file } = rig(fs);
 
-		await file({ op: 'write', path: '/sandbox/workspace/a.mjs', content: 'a\n' });
+		await file({ op: 'write', path: '/computer/workspace/a.mjs', content: 'a\n' });
 
-		const readDirectory = present(executorNamespace(executor).tools.readdir, 'sandbox.readdir');
+		const readDirectory = present(executorNamespace(executor).tools.readdir, 'computer.readdir');
 
 		const [empty, dot, absent] = await Promise.all([
 			readDirectory.execute({ path: '' }), readDirectory.execute({ path: '.' }), readDirectory.execute(),
@@ -327,18 +327,18 @@ describe('the codemode sandbox namespace', () => {
 			`listFiles:${WORKSPACE_BACKUP_DIR}`, `listFiles:${WORKSPACE_BACKUP_DIR}`, `listFiles:${WORKSPACE_BACKUP_DIR}`,
 		]);
 
-		const root = await file({ op: 'list', path: '/sandbox/workspace' });
+		const root = await file({ op: 'list', path: '/computer/workspace' });
 
-		expect(root).toMatchObject({ path: '/sandbox/workspace', entries: ['a.mjs'] });
+		expect(root).toMatchObject({ path: '/computer/workspace', entries: ['a.mjs'] });
 	});
 
 	test("a program's readdir({ path: '' }) lists the working directory, as listFiles does", async () => {
 		const fs = new ContainerFs();
 		const { executor, file } = rig(fs);
 
-		await file({ op: 'write', path: '/sandbox/workspace/a.mjs', content: 'a\n' });
+		await file({ op: 'write', path: '/computer/workspace/a.mjs', content: 'a\n' });
 
-		const readdir = present(executorNamespace(executor).tools.readdir, 'sandbox.readdir');
+		const readdir = present(executorNamespace(executor).tools.readdir, 'computer.readdir');
 
 		expect(await readdir.execute({ path: '' })).toContain('- a.mjs');
 	});
