@@ -371,8 +371,8 @@ describe('the eval sandbox under workerd', () => {
     expect(copied.result).toBe('HELLO FROM THE WORKSPACE');
   });
 
-  test("child_process, fs and path are Node's over the workspace: output is text, only a refusal fails a call", async () => {
-    // Members answer as the binding delivers them: output as text, a failed command as a refusal carrying its exit.
+  test("child_process, fs and path are Node's over the workspace: a command's own output, and a nonzero exit fails the call", async () => {
+    // Members answer as the binding delivers them: a command's parts, as the program asks for them (#53).
     const read: string[] = [];
 
     const shell = {
@@ -381,9 +381,12 @@ describe('the eval sandbox under workerd', () => {
         exec: async (...args: unknown[]) => {
           const command = text(args, 0);
 
-          if (command.startsWith('false')) return { success: false, reason: 'io', error: 'Error (exit 1)\n--- stderr ---\nnope', execution: { exitCode: 1 } };
+          if (command.startsWith('false')) return { stdout: '', stderr: 'nope', exitCode: 1 };
 
-          return command.startsWith('printf') ? 'Error (exit 3)\n--- stderr ---\nprinted, not failed' : `ran: ${command}`;
+          // Output that reads like the text the model is shown is still only output.
+          return command.startsWith('printf')
+            ? { stdout: 'Error (exit 3)\n--- stderr ---\nprinted, not failed', stderr: '', exitCode: 0 }
+            : { stdout: `ran: ${command}`, stderr: '', exitCode: 0 };
         },
         readFile: async (...args: unknown[]) => {
           read.push(text(args, 0));
@@ -415,7 +418,7 @@ describe('the eval sandbox under workerd', () => {
     expect(ran.ran).toEqual({ stdout: 'ran: ls -la', stderr: '' });
     expect(ran.failed).toMatchObject({ code: 1, stderr: 'nope' });
     expect(ran.viaCallback).toBe('ran: echo hi');
-    expect(ran.looksFailed).toEqual({ stdout: 'Error (exit 3)', stderr: 'printed, not failed' });
+    expect(ran.looksFailed).toEqual({ stdout: 'Error (exit 3)\n--- stderr ---\nprinted, not failed', stderr: '' });
     expect(ran.saved).toBe('{"reason":"io","error":"a saved API error"}');
     expect([ran.joined, ran.prefixed]).toEqual(['a/b', true]);
     expect(ran.missing).toBeTypeOf('string');
