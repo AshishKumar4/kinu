@@ -276,25 +276,42 @@ async function contractRoute(url: URL, name: string, box: DurableObjectStub<Cont
   }
 }
 
+/**
+ * Marks every answer this fixture makes (`scripts/devbox-container-tier.ts` reads it): for a while after a deploy some
+ * edges still answer the route with their own 404 page, and a driver tells those from the fixture's (#81).
+ */
+const FIXTURE_ANSWER = 'x-devbox-fixture';
+
+async function answer(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  if (env.EVAL_IDENTITY === undefined || request.headers.get('authorization') !== `Bearer ${env.EVAL_IDENTITY}`) return new Response('unauthorized', { status: 401 });
+  const url = new URL(request.url);
+
+  if (url.pathname === '/health') return Response.json({ ok: true });
+
+  const desktop = await desktopRoute(request, env, ctx, url);
+
+  if (desktop !== null) return desktop;
+
+  const name = url.searchParams.get('box') ?? '';
+
+  if (!name.startsWith('eval-devbox-') && name !== GOLDEN_NAME) return new Response('only this run\'s eval workspaces', { status: 403 });
+  const box = env.Box.getByName(name);
+  const body = request.method === 'POST' ? v.parse(Body, await request.json()) : {};
+
+  try {
+    return await contractRoute(url, name, box, body);
+  } catch (cause) { return Response.json({ error: describeThrown({ cause }) }, { status: 500 }); }
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    if (env.EVAL_IDENTITY === undefined || request.headers.get('authorization') !== `Bearer ${env.EVAL_IDENTITY}`) return new Response('unauthorized', { status: 401 });
-    const url = new URL(request.url);
+    const answered = await answer(request, env, ctx);
 
-    if (url.pathname === '/health') return Response.json({ ok: true });
+    // A WebSocket's upgrade passes as the box made it.
+    if (answered.webSocket !== null) return answered;
+    const marked = new Response(answered.body, answered);
+    marked.headers.set(FIXTURE_ANSWER, '1');
 
-    const desktop = await desktopRoute(request, env, ctx, url);
-
-    if (desktop !== null) return desktop;
-
-    const name = url.searchParams.get('box') ?? '';
-
-    if (!name.startsWith('eval-devbox-') && name !== GOLDEN_NAME) return new Response('only this run\'s eval workspaces', { status: 403 });
-    const box = env.Box.getByName(name);
-    const body = request.method === 'POST' ? v.parse(Body, await request.json()) : {};
-
-    try {
-      return await contractRoute(url, name, box, body);
-    } catch (cause) { return Response.json({ error: describeThrown({ cause }) }, { status: 500 }); }
+    return marked;
   },
 } satisfies ExportedHandler<Env>;
