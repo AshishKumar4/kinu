@@ -625,7 +625,7 @@ export class UserDO extends Agent<Env> {
   }
 
   deviceRpc(caller: UserCaller, method: string, params: JsonValue[], opts?: {
-      deviceId?: string; agentName?: string; checkpoint?: DeviceCheckpointHint;
+      deviceId?: string; agentName?: string; actorId?: string; checkpoint?: DeviceCheckpointHint;
       timeoutMs?: number; requestId?: string; backgroundJobId?: string;
       onOutput?: (output: DeviceExecOutput) => void | Promise<void>;
     }): Promise<string | undefined> {
@@ -648,8 +648,8 @@ export class UserDO extends Agent<Env> {
     return this.devices.acknowledgeDeviceRequest(caller, requestId);
   }
 
-  cancelDeviceRequestsForTurn(caller: UserCaller, turnId: string): Promise<DeviceCancellationOutcome[]> {
-    return this.devices.cancelDeviceRequestsForTurn(caller, turnId);
+  cancelDeviceRequestsForAgent(caller: UserCaller, actorId: string): Promise<DeviceCancellationOutcome[]> {
+    return this.devices.cancelDeviceRequestsForAgent(caller, actorId);
   }
 
   transferDeviceRequestToBackgroundJob(caller: UserCaller, requestId: string, jobId: string): ReturnType<UserDevices['transferDeviceRequestToBackgroundJob']> {

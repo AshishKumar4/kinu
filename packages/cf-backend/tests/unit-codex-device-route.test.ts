@@ -295,8 +295,8 @@ describe('Codex from the cloud: the owner\'s machine carries every call, or the 
     const owner = await testOwner();
     const machine = await attachMachine('relay');
     // A command still running on the machine, so the revocation sweep waits on its cancellation with the socket open.
-    harness.db.prepare('INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id) VALUES (?, ?, ?, ?)')
-      .run('rpc-held-1', machine.deviceId, 'workspace-a', 'turn-1');
+    harness.db.prepare('INSERT INTO device_inflight_requests (request_id, device_id, workspace, actor_id) VALUES (?, ?, ?, ?)')
+      .run('rpc-held-1', machine.deviceId, 'workspace-a', 'agent-1');
     const body = Promise.withResolvers<void>();
 
     const held = new ReadableStream<Uint8Array>({

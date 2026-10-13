@@ -18,24 +18,24 @@ import {
 /** A stub held across a reset is broken by it; re-acquire from the id, as a real caller does. */
 const probe = (name: string) => env.DEVICE_LEDGER_PROBE.get(env.DEVICE_LEDGER_PROBE.idFromName(name));
 
-const TURN = 'turn-1';
+const AGENT = 'agent-1';
 
 describe('a cancellation claim the activation died holding', () => {
   it('is expired by the next activation, and the request is live work again', async () => {
     const request = 'rpc-workerdprobe-1';
-    await probe('abandoned-claim').admit(request, TURN);
+    await probe('abandoned-claim').admit(request, AGENT);
 
     // A sweep claims the row and is interrupted before storing an answer; the claim hides the row.
-    const claimed = await probe('abandoned-claim').claimTurn(TURN);
+    const claimed = await probe('abandoned-claim').claimAgent(AGENT);
     expect(claimed).toMatchObject([{ requestId: request, settled: null }]);
     expect(claimed[0].claim).not.toBe('');
     // Negative control: the claim is exclusive within one activation.
-    expect(await probe('abandoned-claim').claimTurn(TURN)).toEqual([]);
+    expect(await probe('abandoned-claim').claimAgent(AGENT)).toEqual([]);
 
     await abortAllDurableObjects();
 
     // The fresh activation released the dead claim.
-    const reclaimed = await probe('abandoned-claim').claimTurn(TURN);
+    const reclaimed = await probe('abandoned-claim').claimAgent(AGENT);
     expect(reclaimed).toMatchObject([{ requestId: request, settled: null }]);
     expect(reclaimed[0].claim).not.toBe(claimed[0].claim);
 
@@ -47,8 +47,8 @@ describe('a cancellation claim the activation died holding', () => {
 describe('the first stored answer', () => {
   it('survives the reset, and the next authority reports it instead of killing again', async () => {
     const request = 'rpc-workerdprobe-2';
-    await probe('first-writer').admit(request, TURN);
-    const claimed = await probe('first-writer').claimTurn(TURN);
+    await probe('first-writer').admit(request, AGENT);
+    const claimed = await probe('first-writer').claimAgent(AGENT);
 
     // The answer is stored before the acknowledgement, which is the step that can fail.
     expect(await probe('first-writer').settle(request, claimed[0].claim, 'terminated')).toBe('terminated');
@@ -58,7 +58,7 @@ describe('the first stored answer', () => {
     await abortAllDurableObjects();
 
     // Settled: owes only cleanup and must never be cancelled a second time.
-    const later = await probe('first-writer').claimTurn(TURN);
+    const later = await probe('first-writer').claimAgent(AGENT);
     expect(later).toMatchObject([{ requestId: request, settled: 'terminated' }]);
     expect(await probe('first-writer').held(request, later[0].claim))
       .toEqual({ settled: 'terminated' });
@@ -72,8 +72,8 @@ describe('the first stored answer', () => {
 describe('an answer that lands while the sweep is still waiting on the device', () => {
   it('is the answer reported, not the sweep\'s later guess', async () => {
     const request = 'rpc-workerdprobe-4';
-    await probe('answer-race').admit(request, TURN);
-    const claimed = await probe('answer-race').claimTurn(TURN);
+    await probe('answer-race').admit(request, AGENT);
+    const claimed = await probe('answer-race').claimAgent(AGENT);
     expect(claimed).toMatchObject([{ requestId: request, settled: null }]);
 
     // While the sweep awaits the device, the tool's own abort stores the confirmed kill unclaimed.
@@ -87,7 +87,7 @@ describe('an answer that lands while the sweep is still waiting on the device', 
 
     await abortAllDurableObjects();
 
-    expect(await probe('answer-race').claimTurn(TURN))
+    expect(await probe('answer-race').claimAgent(AGENT))
       .toMatchObject([{ requestId: request, settled: 'terminated' }]);
   });
 });
@@ -95,7 +95,7 @@ describe('an answer that lands while the sweep is still waiting on the device', 
 describe('an acknowledgement interrupted between its read and its delete', () => {
   it('leaves the record intact, so the daemon result stays replayable', async () => {
     const request = 'rpc-workerdprobe-3';
-    await probe('ack-ordering').admit(request, TURN);
+    await probe('ack-ordering').admit(request, AGENT);
 
     // Acknowledged the daemon; the activation ended before the delete.
     const held = await probe('ack-ordering').acknowledgeable(request);
@@ -113,11 +113,11 @@ describe('an acknowledgement interrupted between its read and its delete', () =>
 
   it('never deletes a replacement command that reused the request id', async () => {
     const request = 'rpc-workerdprobe-4';
-    await probe('ack-replacement').admit(request, TURN);
+    await probe('ack-replacement').admit(request, AGENT);
     expect(await probe('ack-replacement').acknowledgeable(request)).toEqual({ deviceId: 'dev-probe' });
 
     // The acknowledgement's delete may not touch a row a cancellation now holds.
-    const claimed = await probe('ack-replacement').claimTurn(TURN);
+    const claimed = await probe('ack-replacement').claimAgent(AGENT);
     await probe('ack-replacement').deleteAcknowledged(request, 'dev-probe');
     expect(await probe('ack-replacement').rows())
       .toEqual([{ requestId: request, claim: claimed[0].claim, settled: null }]);
@@ -244,13 +244,13 @@ describe('a machine that answers a cancellation for another command', () => {
 
     const request = nextDeviceRequestId();
 
-    await account(OWNER).admit(request, at.deviceId, 'ws-mispaired', TURN);
-    const outcomes = await account(OWNER).stopTurn('ws-mispaired', TURN);
+    await account(OWNER).admit(request, at.deviceId, 'ws-mispaired', AGENT);
+    const outcomes = await account(OWNER).stopAgent('ws-mispaired', AGENT);
 
     expect(outcomes).toEqual([expect.objectContaining({ outcome: 'failed' })]);
     expect(await settling(account(OWNER).cancelOwn('ws-mispaired', request))).toMatchObject({ ok: false });
     // Still live work, so the next sweep asks again.
-    expect(await account(OWNER).requests()).toEqual([{ requestId: request, turnId: TURN, outcome: null, claim: null }]);
+    expect(await account(OWNER).requests()).toEqual([{ requestId: request, actorId: AGENT, outcome: null, claim: null }]);
     expect(await account(OWNER).revoke(at.deviceId)).toEqual({ ok: true, unstoppedCommands: 1 });
     expect(await account(OWNER).unstoppedSince(at.deviceId)).not.toBeNull();
     at.close();
@@ -263,10 +263,10 @@ describe('a completion held past its own cancellation', () => {
     // Already finished on the machine, so the daemon holds no control entry for it: the completion boundary.
     const at = await machine(owner, 'ws-held', holding('unknown'));
     const request = nextDeviceRequestId();
-    const running = settling(account(owner).run('ws-held', request, TURN, 'bun run build'));
+    const running = settling(account(owner).run('ws-held', request, AGENT, 'bun run build'));
 
     await at.asked('exec');
-    expect(await account(owner).stopTurn('ws-held', TURN)).toEqual([{ requestId: request, outcome: 'unknown' }]);
+    expect(await account(owner).stopAgent('ws-held', AGENT)).toEqual([{ requestId: request, outcome: 'unknown' }]);
     expect(asked(at, DEVICE_EXEC_ACK_METHOD)).toContain(request);
     expect(await account(owner).requests()).toEqual([]);
     const atSettlement = at.frames.length;
@@ -284,7 +284,7 @@ describe('withdrawing a workspace\'s consent while its command runs', () => {
   it('does not stop it, and the next command waits on the owner, who refuses it', async () => {
     const owner = '0123456789abcdef0123456789abcd03';
     const at = await machine(owner, 'ws-consent', holding('terminated'));
-    const running = settling(account(owner).run('ws-consent', nextDeviceRequestId(), TURN, 'bun run build'));
+    const running = settling(account(owner).run('ws-consent', nextDeviceRequestId(), AGENT, 'bun run build'));
 
     await at.asked('exec');
     expect(await account(owner).withdrawConsent('ws-consent', at.deviceId)).toEqual({ ok: true });
@@ -292,7 +292,7 @@ describe('withdrawing a workspace\'s consent while its command runs', () => {
     at.release();
     expect(answered(await running)).toMatchObject({ exitCode: 0 });
 
-    const next = settling(account(owner).run('ws-consent', nextDeviceRequestId(), TURN, 'bun run deploy'));
+    const next = settling(account(owner).run('ws-consent', nextDeviceRequestId(), AGENT, 'bun run deploy'));
 
     await account(owner).answerConsent('ws-consent', 'deny');
     expect(await next).toMatchObject({ ok: false });
@@ -304,7 +304,7 @@ describe('withdrawing a workspace\'s consent while its command runs', () => {
     const owner = '0123456789abcdef0123456789abcd04';
     const at = await machine(owner, 'ws-revoked', holding('terminated'));
     const request = nextDeviceRequestId();
-    const running = settling(account(owner).run('ws-revoked', request, TURN, 'bun run build'));
+    const running = settling(account(owner).run('ws-revoked', request, AGENT, 'bun run build'));
 
     await at.asked('exec');
     // Revocation stops and confirms the running command, so no unstopped-command incident.
@@ -331,7 +331,7 @@ describe('stopping a turn that runs a command on the owner\'s machine', () => {
     const [row] = await account(owner).requests();
 
     // The command is stamped with the running turn, which is how Stop finds it.
-    expect(row?.turnId).not.toBeNull();
+    expect(row?.actorId).not.toBeNull();
     expect(await account(owner).stopWork('ws-stop')).toEqual([{ requestId: row?.requestId, outcome: 'terminated' }]);
     expect(asked(at, DEVICE_CANCEL_METHOD)).toEqual([row?.requestId]);
     expect(asked(at, DEVICE_EXEC_ACK_METHOD)).toContain(row?.requestId);
@@ -362,12 +362,12 @@ describe('stopping a turn that runs a command on the owner\'s machine', () => {
     await at.asked('exec');
     const [row] = await account(owner).requests();
 
-    expect(row?.turnId).not.toBeNull();
+    expect(row?.actorId).not.toBeNull();
     const [unconfirmed] = await account(owner).stopWork('ws-unconfirmed');
 
     expect(unconfirmed).toMatchObject({ outcome: 'failed', detail: expect.stringContaining('refused the kill') });
     // A failed stop returns its claim, so the row stays for the next sweep.
-    expect(await account(owner).requests()).toEqual([{ requestId: row?.requestId, turnId: row?.turnId, outcome: null, claim: null }]);
+    expect(await account(owner).requests()).toEqual([{ requestId: row?.requestId, actorId: row?.actorId, outcome: null, claim: null }]);
     killWorks = true;
     expect(await account(owner).stopWork('ws-unconfirmed')).toEqual([{ requestId: row?.requestId, outcome: 'terminated' }]);
     expect(await account(owner).requests()).toEqual([]);

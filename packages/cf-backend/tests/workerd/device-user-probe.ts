@@ -21,7 +21,7 @@ import { UserDO } from '../../src/user/user-do';
 export * from '../../src/server';
 
 const PROBE_METHODS = [
-  'pair', 'bindWorkspace', 'admit', 'run', 'cancelOwn', 'stopTurn', 'acknowledge', 'withdrawConsent', 'answerConsent', 'revoke', 'requests',
+  'pair', 'bindWorkspace', 'admit', 'run', 'cancelOwn', 'stopAgent', 'acknowledge', 'withdrawConsent', 'answerConsent', 'revoke', 'requests',
   'unstoppedSince', 'hostWorkspace', 'startParkedTurn', 'runOnMachine', 'stopWork', 'pendingConsents', 'releaseTurn',
 ];
 
@@ -41,7 +41,7 @@ type ConsentTarget = Pick<OrchestratorAgent,
 
 export interface InflightRow {
   readonly requestId: string;
-  readonly turnId: string | null;
+  readonly actorId: string | null;
   readonly outcome: string | null;
   readonly claim: string | null;
 }
@@ -150,17 +150,17 @@ export class DeviceUserProbeDO extends UserDO {
   }
 
   /** A command row as a dispatch leaves it, with no call behind it: what a far end's misanswer is tested against. */
-  admit(requestId: string, deviceId: string, workspace: string, turnId: string): void {
+  admit(requestId: string, deviceId: string, workspace: string, actorId: string): void {
     this.ctx.storage.sql.exec(
-      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id) VALUES (?, ?, ?, ?)`,
-      requestId, deviceId, workspace, turnId,
+      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, actor_id) VALUES (?, ?, ?, ?)`,
+      requestId, deviceId, workspace, actorId,
     );
   }
 
-  /** A command the workspace's turn `turnId` runs on the machine; settles with the machine's answer. */
-  run(workspace: string, requestId: string, turnId: string, command: string): Promise<string | undefined> {
+  /** A command the workspace's agent `actorId` runs on the machine in a turn; settles with the machine's answer. */
+  run(workspace: string, requestId: string, actorId: string, command: string): Promise<string | undefined> {
     return this.deviceRpc(this.callerOf(workspace), 'exec', [command], {
-      agentName: workspace, requestId, checkpoint: { agent: workspace, turnId, sessionId: 'probe-session', dir: null },
+      agentName: workspace, actorId, requestId, checkpoint: { agent: workspace, turnId: 'probe-turn', sessionId: 'probe-session', dir: null },
     });
   }
 
@@ -169,9 +169,9 @@ export class DeviceUserProbeDO extends UserDO {
     return this.deviceRpc(this.callerOf(workspace), DEVICE_CANCEL_METHOD, [requestId], { agentName: workspace });
   }
 
-  /** The composer's Stop, as the workspace sweeps its turn. */
-  stopTurn(workspace: string, turnId: string): Promise<DeviceCancellationOutcome[]> {
-    return this.cancelDeviceRequestsForTurn(this.callerOf(workspace), turnId);
+  /** An agent's Stop, as the workspace sweeps its commands. */
+  stopAgent(workspace: string, actorId: string): Promise<DeviceCancellationOutcome[]> {
+    return this.cancelDeviceRequestsForAgent(this.callerOf(workspace), actorId);
   }
 
   acknowledge(workspace: string, requestId: string): Promise<void> {
@@ -205,10 +205,10 @@ export class DeviceUserProbeDO extends UserDO {
 
   requests(): InflightRow[] {
     return this.ctx.storage.sql.exec(
-      'SELECT request_id, turn_id, cancel_outcome, cancel_claim FROM device_inflight_requests ORDER BY request_id',
+      'SELECT request_id, actor_id, cancel_outcome, cancel_claim FROM device_inflight_requests ORDER BY request_id',
     ).toArray().map((row) => ({
       requestId: v.parse(v.string(), row.request_id),
-      turnId: v.parse(v.nullable(v.string()), row.turn_id),
+      actorId: v.parse(v.nullable(v.string()), row.actor_id),
       outcome: v.parse(v.nullable(v.string()), row.cancel_outcome),
       claim: v.parse(v.nullable(v.string()), row.cancel_claim),
     }));

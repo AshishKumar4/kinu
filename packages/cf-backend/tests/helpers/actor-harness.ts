@@ -1633,8 +1633,8 @@ export interface RecordedUserPlaneCalls {
    *  refused by the email trust gate, distinct from an unauthorized sender. */
   profile?: { email: string } | null;
   titles: string[];
-  /** Set to record the turns the object asks the hub to stop device work for; unset, that ask is unreachable. */
-  turnCancels?: string[];
+  /** Set to record the agents the object asks the hub to stop device work for; unset, that ask is unreachable. */
+  agentCancels?: string[];
   /** Set to record the roster tiles the object pushes, in order; unset, a push lands nowhere. */
   overviews?: { push(overview: WorkspaceOverview): void };
   /** What the owner's object throws at each push, in order, before it takes one. */
@@ -1803,9 +1803,9 @@ export function makeEnv(
             if (refusal !== undefined) throw refusal;
             userPlane?.overviews?.push(overview);
           },
-          ...(userPlane?.turnCancels !== undefined && {
-            cancelDeviceRequestsForTurn: async (_caller: UserCaller, turnId: string): Promise<[]> => {
-              userPlane.turnCancels?.push(turnId);
+          ...(userPlane?.agentCancels !== undefined && {
+            cancelDeviceRequestsForAgent: async (_caller: UserCaller, actorId: string): Promise<[]> => {
+              userPlane.agentCancels?.push(actorId);
 
               return [];
             },

@@ -42,6 +42,8 @@ export interface DeviceHubClient {
 
 export interface DeviceRpcOptions {
   agentName?: string;
+  /** The agent whose call this is: its Stop reaches the command, whichever turn ran it. */
+  actorId?: string;
   checkpoint?: DeviceCheckpointHint;
   timeoutMs?: number;
   /** Canonical call id, so the caller can cancel by it. Minted by core's protocol authority. */
@@ -71,6 +73,7 @@ export interface HubDeviceTransportOpts {
   /** Workspace identity proof to the hub. Rejects without a capability token (fail-closed). */
   caller(): Promise<UserCaller>;
   agentName: string;
+  actorId: string;
   cliCwd(): string | null;
   /** Turn identity for the daemon's pre-mutation shadow-git snapshot. Null outside turns. */
   checkpointMeta?: () => { turnId: string; sessionId: string } | null;
@@ -146,7 +149,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
           } : undefined;
 
           const requestId = method === DEVICE_METHOD.exec ? rpcOpts?.requestId ?? nextDeviceRequestId() : undefined;
-          const deviceOptions: DeviceRpcOptions = { agentName: opts.agentName, checkpoint };
+          const deviceOptions: DeviceRpcOptions = { agentName: opts.agentName, actorId: opts.actorId, checkpoint };
 
           if (rpcOpts?.deviceId !== undefined) deviceOptions.deviceId = rpcOpts.deviceId;
 

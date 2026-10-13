@@ -452,7 +452,7 @@ describe('turn-pipeline correctness wiring', () => {
       answer: { id: 'ISSUE-7' },
     };
 
-    const userPlane: RecordedUserPlaneCalls = { warmConnections: [], failWarm: null, titles: [], turnCancels: [], mcp };
+    const userPlane: RecordedUserPlaneCalls = { warmConnections: [], failWarm: null, titles: [], agentCancels: [], mcp };
     const { agent } = orchestratorHarness(userPlane);
     const key = 'mcp_tracker_find_issue';
     const prepared = await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'find the login issue' }] });

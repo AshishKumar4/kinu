@@ -1330,12 +1330,6 @@ export abstract class ActorAgent extends Agent<Env> {
   /** The turn an agent runs now, as its isolate's room heard it open; null between its turns. */
   protected abstract currentTurnOf(reference: ActorReference): string | null;
 
-  /** Read at the start of a terminal sequence and carried through: the loop's live turn becomes
-   *  the next one as soon as it opens, so a detached re-read could close the wrong claim. */
-  protected durableTurnId(): string | null {
-    return this.mainChatTurn();
-  }
-
   /** Uses `effectiveModelSpec`: the stored spec can be null or an un-normalized alias. */
   private analyticsModel(): ModelDimensions {
     return this.analyticsModelOf(this.effectiveModelSpec());
@@ -3418,29 +3412,37 @@ export abstract class ActorAgent extends Agent<Env> {
       return { ok: true, abortedTools: 0, deviceCommands: [] };
     }
 
-    this.stopSubtree(this.actorHandle().actorId);
+    const actorId = this.actorHandle().actorId;
 
-    const turnId = this.durableTurnId();
+    this.stopSubtree(actorId);
 
     return await cancelCurrentWork({
-      cancelChats: () => this.stopAgent(this.actorHandle().actorId),
+      cancelChats: () => this.stopAgent(actorId),
       activeToolControllers: this.jobRunner.foreground,
       broadcast: (payload) => { this.broadcastToActor(null, payload); },
-      stopDeviceCommands: turnId === null ? undefined : () => settle(Effect.catchCause(Effect.promise(async () => {
-        const { stub, caller } = await this.userHub();
-
-        return stub.cancelDeviceRequestsForTurn(caller, turnId);
-      }), (failed) => Effect.sync(() => {
-        const err = Cause.squash(failed);
-        diagnostics.failure('device.turn_cancel_failed', toKinuError({
-          doing: "cancelling this turn's device commands", cause: err, otherwise: 'unavailable',
-        }), { turnId });
-
-        // Local controllers are already aborted; report the durable device sweep failure explicitly.
-        return [{ outcome: 'failed' as const, detail: renderThrownChain({ cause: err }) }];
-      }))),
+      stopDeviceCommands: () => settle(this.stopAgentDevices(actorId)),
       onCancelled: (outcome) => this.onWorkCancelled(outcome),
     });
+  }
+
+  /**
+   * An agent's device commands stopped, whichever of its turns ran them: one its ended turn's Stop left unconfirmed is
+   * reached by its next Stop (#68), and no other agent's is. A sweep that fails is reported as failed: the Stop's local
+   * part has already run.
+   */
+  protected stopAgentDevices(actorId: string): Effect.Effect<CancelWorkOutcome['deviceCommands']> {
+    return Effect.catchCause(Effect.promise(async () => {
+      const { stub, caller } = await this.userHub();
+
+      return stub.cancelDeviceRequestsForAgent(caller, actorId);
+    }), (failed) => Effect.sync(() => {
+      const err = Cause.squash(failed);
+      diagnostics.failure('device.agent_cancel_failed', toKinuError({
+        doing: "cancelling the agent's device commands", cause: err, otherwise: 'unavailable',
+      }), { actorId });
+
+      return [{ outcome: 'failed' as const, detail: renderThrownChain({ cause: err }) }];
+    }));
   }
 
   /** Per-root hook after cancellation; whether Stop settles turn state is the root's business. */
