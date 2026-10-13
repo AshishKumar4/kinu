@@ -552,7 +552,7 @@ function runOnBox(box: NimbusSandboxHandle, call: SessionCall, options: ShellExe
   }, options.signal, 'workspace exec cancelled before it started', async () => {
     stopped.abort();
 
-    if (launch === undefined) return 'workspace exec cancelled before it started';
+    if (launch === undefined) return null;
     const [launched] = await Promise.allSettled([launch]);
 
     // A start the box did not answer may still have run: it is stopped by its name, or the stop is not confirmed.
