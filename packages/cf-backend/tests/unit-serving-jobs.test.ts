@@ -72,10 +72,10 @@ const sandboxFor = (id: string) => ({
 
     throw new Error(`ENOENT: ${path}`, { cause: { kind: 'devbox.file', code: 'ENOENT', path, operation: 'stat' } });
   },
-  getExposedPorts: async (hostname: string) => {
+  getExposedPorts: async () => {
     box.calls.push('getExposedPorts');
 
-    return [...box.exposed].map((port) => ({ url: `https://${String(port)}-${id}-p${String(port)}_ab12cd34.${hostname}/`, port, status: 'active' }));
+    return [...box.exposed].map((port) => ({ url: `https://${String(port)}-${id}-p${String(port)}_ab12cd34.${SUFFIX}/`, port, status: 'active' }));
   },
   unexposePort: async (port: number) => {
     box.calls.push('unexposePort');

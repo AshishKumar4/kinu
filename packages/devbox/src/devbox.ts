@@ -20,10 +20,12 @@ import { ContainerRoutes, type OutboundPolicy } from './gateway';
 import { terminalSocket, resetTerminal } from './terminal';
 import { bridgeSockets } from './socket-bridge';
 import { DESKTOP_PORT, DESKTOP_START } from './desktop';
+import { LABEL_LIMIT, LABEL_NAME, ZoneSchema, previewAddress, type PreviewAddress } from './preview';
 import { Deferred, Effect, Result } from 'effect';
 
 import {
   DEFAULT_DEVBOX_POLICY,
+  PORT_TOKEN_LENGTH,
   generatePortToken,
   healthProbeCommand,
   healthProbeSilent,
@@ -267,10 +269,13 @@ function logLate(step: string): (failure: LateStartFailure) => void {
   };
 }
 
-interface PortExposeOptions {
-  hostname: string;
-  token: string;
-  name?: string;
+interface PreviewSite {
+  readonly host: string;
+  readonly name: string;
+}
+
+function previewUrl(port: number, site: PreviewSite, token: string): string {
+  return `https://${String(port)}-${site.name}-${token}.${site.host}`;
 }
 
 interface RestoreClock {
@@ -292,8 +297,6 @@ function unawaited(work: Promise<unknown>, lost: string): void {
     console.error(`[devbox] ${lost}: ${describe({ cause })}`);
   });
 }
-
-const DESKTOP_PORT_REFUSED = Effect.fail(new DevboxError('invalid-input', `port ${String(DESKTOP_PORT)} is the desktop's, and is never a preview`));
 
 function fileFault(failure: DevboxError): DevboxError {
   const error = failure.cause;
@@ -317,6 +320,9 @@ export interface DevboxState extends DurableObjectState {
 const SCHEDULE_PREFIX = 'devbox:schedule:';
 
 const EXPOSED_PREFIX = 'devbox:exposed:';
+
+/** The name the box was reached by, kept because a box woken by its id alone has none (D86). */
+const NAME_KEY = 'devbox:name';
 
 /** Constant-time: answer time says nothing of the token. */
 function sameToken(held: string | undefined, given: string): boolean {
@@ -389,6 +395,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   constructor(ctx: DevboxState, env: Env) {
     super(ctx, env);
     this.#gateways = ctx.exports;
+    const name: unknown = ctx.id.name;
+
+    if (typeof name === 'string' && name.length > 0 && ctx.storage.kv.get(NAME_KEY) !== name) ctx.storage.kv.put(NAME_KEY, name);
     this.#activate();
   }
 
@@ -623,10 +632,17 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return DEFAULT_EXCLUDES;
   }
 
-  /** Undefined means previews are unavailable: port forwarding is not re-activated and the box
-   *  reports that rather than returning a URL that cannot resolve. */
+  /** The zone preview hosts are served under, `DEVBOX_PREVIEW_HOST` by default. Without one, exposing a port is
+   *  refused and a restart re-exposes none. */
   protected get previewHost(): string | undefined {
-    return undefined;
+    const zone = v.safeParse(ZoneSchema, this.env);
+
+    return zone.success ? zone.output.DEVBOX_PREVIEW_HOST : undefined;
+  }
+
+  /** The name the box was reached by (`getByName`); a box only ever reached by its id has none, so no host names it. */
+  protected get previewName(): string | undefined {
+    return this.ctx.storage.kv.get<string>(NAME_KEY);
   }
 
   /** The incident is already durable, so a throw is transient and retried by schedule;
@@ -1666,14 +1682,19 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       return true;
     }
 
-    const options: PortExposeOptions = { hostname, token: spec.token };
+    const site = this.#previewSite(spec.port);
 
-    if (spec.name !== undefined) options.name = spec.name;
+    if (site instanceof DevboxError) {
+      steps.skip();
+      await this.#record('port', site.message, { port: spec.port });
+
+      return false;
+    }
 
     const exposed = await steps.run(
-      // `super`: the restoration is the readiness gate, so it must not wait on that gate
+      // The restoration is the readiness gate, so it must not wait on that gate
       // nor queue behind a caller already waiting at it (see `#restartWorkloads`).
-      async () => await this.#expose(spec.port, options),
+      async () => await this.#expose(spec.port, site, { token: spec.token, name: spec.name }),
       logLate(`the exposure of port ${spec.port}`),
     );
 
@@ -2290,7 +2311,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   /** Must be asked before the first exposure: restarts re-expose each port with its stored
    *  token, so the first exposure must use the same token for the preview URL to survive. */
   portToken(port: number, name?: string): Promise<{ urlToken: string }> {
-    return settle(port === DESKTOP_PORT ? DESKTOP_PORT_REFUSED : attempt('io', async () => {
+    const site = this.#previewSite(port);
+
+    return settle(site instanceof DevboxError ? Effect.fail(site) : attempt('io', async () => {
       return await this.#resources.run(portScope(port), () => this.#portToken(port, name));
     }));
   }
@@ -2467,13 +2490,13 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     })).pipe(Effect.mapError(fileFault)));
   }
 
-  async exposePort(
-    port: number,
-    options: { name?: string; hostname: string; token?: string },
-  ) {
-    return await settle(port === DESKTOP_PORT
-      ? DESKTOP_PORT_REFUSED
-      : this.#claimed(portScope(port), attempt("file", () => this.#expose(port, options))).pipe(Effect.mapError(fileFault)));
+  /** Published at `https://<port>-<box name>-<token>.<previewHost>`. Refused before a token is minted, so a port
+   *  the box cannot name leaves no row a restart would re-expose: `configuration` without a preview host or a name,
+   *  `invalid-input` for the desktop's port or a name no host label can carry. */
+  async exposePort(port: number, options: { name?: string; token?: string } = {}) {
+    const site = this.#previewSite(port);
+
+    return await settle(site instanceof DevboxError ? Effect.fail(site) : this.#claimed(portScope(port), attempt('io', () => this.#expose(port, site, options))));
   }
 
   /** Revocation touches only this object's preview rows, never the container, so it skips
@@ -2939,26 +2962,31 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     if (name !== undefined) await nameBox(this.#container(), name);
   }
 
-  getExposedPorts(hostname: string) {
+  getExposedPorts() {
     return settle(attempt('io', async () => {
       if (this.ctx.container?.running !== true) return [];
       const rows = await this.#portSpecs();
       const result: { port: number; name: string | undefined; url: string }[] = [];
 
       for (const spec of rows) {
-        if (this.ctx.storage.kv.get(EXPOSED_PREFIX + spec.port) !== spec.token) continue;
-        result.push({ port: spec.port, name: spec.name, url: `https://${spec.port}-${this.previewName}-${spec.token}.${hostname}` });
+        const site = this.#previewSite(spec.port);
+
+        if (site instanceof DevboxError || this.ctx.storage.kv.get(EXPOSED_PREFIX + spec.port) !== spec.token) continue;
+        result.push({ port: spec.port, name: spec.name, url: previewUrl(spec.port, site, spec.token) });
       }
 
       return result;
     }));
   }
 
-  #preview(request: Request, port: number, token: string): Effect.Effect<Response, DevboxError> {
+  /** The port comes from the host and the path is the visitor's, `/_devbox/terminal` included (D60). */
+  #preview(request: Request, { port, name, token }: PreviewAddress): Effect.Effect<Response, DevboxError> {
     return Effect.gen({ self: this }, function* () {
       const spec = yield* attempt('io', () => this.ctx.storage.get<PortExposureSpec>(`${PORT_SPEC_PREFIX}${port}`));
 
-      if (port === DESKTOP_PORT || spec === undefined || !sameToken(spec.token, token)) return new Response('Preview not exposed', { status: 404 });
+      if (port === DESKTOP_PORT || name !== this.previewName || spec === undefined || !sameToken(spec.token, token)) {
+        return new Response('Preview not exposed', { status: 404 });
+      }
 
       return yield* this.#withActiveCaller(attempt('io', async () => {
         await this.ensureReady();
@@ -3064,15 +3092,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   override fetch(request: Request): Promise<Response> {
     return settle(Effect.gen({ self: this }, function* () {
       const url = yield* attemptSync('invalid-input', () => new URL(request.url));
-      const preview = /^\/_devbox\/preview\/(\d+)\/([^/]+)(\/.*)$/.exec(url.pathname);
+      const preview = previewAddress(url.hostname, this.previewHost);
 
-      if (preview !== null) {
-        url.pathname = preview[3];
-        const token = yield* attemptSync('invalid-input', () => decodeURIComponent(preview[2]));
-        const forwarded = yield* attemptSync('invalid-input', () => new Request(url.toString(), request));
-
-        return yield* this.#preview(forwarded, Number(preview[1]), token);
-      }
+      if (preview !== null) return yield* this.#preview(request, preview);
 
       if (url.pathname === '/_devbox/desktop') return yield* this.#desktop(request);
 
@@ -3164,13 +3186,30 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     await this.#files().writeFile(path, bytes);
   }
 
-  protected get previewName(): string { return this.ctx.id.toString(); }
-
-  async #expose(port: number, options: { hostname: string; token?: string; name?: string }) {
+  async #expose(port: number, site: PreviewSite, options: { token?: string; name?: string }) {
     const token = options.token ?? (await this.#portToken(port, options.name)).urlToken;
     this.ctx.storage.kv.put(EXPOSED_PREFIX + port, token);
 
-    return { port, name: options.name, url: `https://${port}-${this.previewName}-${token}.${options.hostname}` };
+    return { port, name: options.name, url: previewUrl(port, site, token) };
+  }
+
+  /** `<port>-<name>-<token>` is one DNS label, so a name gets what the port and a token leave of 63 (D86). */
+  #previewSite(port: number): PreviewSite | DevboxError {
+    const host = this.previewHost;
+    const name = this.previewName;
+
+    if (port === DESKTOP_PORT) return new DevboxError('invalid-input', `port ${String(DESKTOP_PORT)} is the desktop's, and is never a preview`);
+
+    if (host === undefined || host.length === 0) return new DevboxError('configuration', 'previews are off: set `DEVBOX_PREVIEW_HOST` to the zone a wildcard route serves, or override `previewHost`');
+
+    if (name === undefined) return new DevboxError('configuration', 'no preview host can name this box: it was never reached by `getByName`');
+    const budget = LABEL_LIMIT - String(port).length - 2 - PORT_TOKEN_LENGTH;
+
+    if (!LABEL_NAME.test(name) || name.length > budget) {
+      return new DevboxError('invalid-input', `the box name \`${name}\` cannot be a preview host label: a label holds 63 characters, which leaves a name ${String(budget)} lowercase letters, digits or hyphens`);
+    }
+
+    return { host: host.toLowerCase(), name };
   }
 
   protected async armAlarm(callback: string, delaySeconds: number): Promise<void> {

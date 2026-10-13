@@ -46,7 +46,7 @@ interface PortBox {
   readonly box: KinuDevbox;
 }
 
-/** Answers the four port methods only; `exposePort` returns the minted URL, like the SDK. */
+/** Answers the four port methods only; `exposePort` returns the URL the box mints under its own zone. */
 function portBox(options: { token?: string; failRevoke?: boolean } = {}): PortBox {
   const exposed: number[] = [];
   const revoked: number[] = [];
@@ -54,11 +54,11 @@ function portBox(options: { token?: string; failRevoke?: boolean } = {}): PortBo
 
   const box: KinuDevbox = Object.create({
     resolveReadiness: async () => ({ kind: 'restored' as const }),
-    exposePort: async (port: number, opts: { hostname: string }) => {
+    exposePort: async (port: number) => {
       exposed.push(port);
 
       return {
-        url: `https://${String(port)}-${SANDBOX_ID}-${token}.${opts.hostname}/`,
+        url: `https://${String(port)}-${SANDBOX_ID}-${token}.${SUFFIX}/`,
         port,
       };
     },
@@ -68,8 +68,8 @@ function portBox(options: { token?: string; failRevoke?: boolean } = {}): PortBo
 
       return undefined;
     },
-    getExposedPorts: async (hostname: string) => [{
-      url: `https://${String(PORT)}-${SANDBOX_ID}-${token}.${hostname}/`,
+    getExposedPorts: async () => [{
+      url: `https://${String(PORT)}-${SANDBOX_ID}-${token}.${SUFFIX}/`,
       port: PORT,
       status: 'active',
     }],
@@ -80,11 +80,9 @@ function portBox(options: { token?: string; failRevoke?: boolean } = {}): PortBo
 
 /** `writer` is built when the object woke; pass one in when it must predate a revocation. */
 function lane(kv: FakeKv | null, box: KinuDevbox, writer?: SandboxPreviewExposures) {
-  return adaptCloudflareSandbox(
-    box,
-    async () => {},
-    writer ?? (kv === null ? null : sandboxPreviewExposures(kv, SANDBOX_ID)),
-  );
+  const exposures = writer ?? (kv === null ? null : sandboxPreviewExposures(kv, SANDBOX_ID));
+
+  return adaptCloudflareSandbox(box, async () => {}, exposures === null ? null : { exposures, zone: SUFFIX });
 }
 
 describe('exposing a port publishes the preview the edge will be asked about', () => {
@@ -92,7 +90,7 @@ describe('exposing a port publishes the preview the edge will be asked about', (
     const kv = makeKv();
     const { box, exposed } = portBox();
 
-    const result = await lane(kv, box).exposePort(PORT, { hostname: SUFFIX });
+    const result = await lane(kv, box).exposePort(PORT, {});
 
     expect(exposed).toEqual([PORT]);
     expect(result.url).toBe(`https://${String(PORT)}-${SANDBOX_ID}-${TOKEN}.${SUFFIX}/`);
@@ -106,7 +104,7 @@ describe('exposing a port publishes the preview the edge will be asked about', (
     const { box } = portBox();
     const stale: KinuDevbox = Object.create(box, { getExposedPorts: { value: async () => [] } });
 
-    const result = await lane(makeKv(), stale).exposePort(PORT, { hostname: SUFFIX });
+    const result = await lane(makeKv(), stale).exposePort(PORT, {});
 
     expect(result.route).toEqual({
       reached: false, gate: 'exposed', detail: `the container holds no live exposure of port ${String(PORT)} for this URL`,
@@ -118,7 +116,7 @@ describe('exposing a port publishes the preview the edge will be asked about', (
     const kv = makeKv();
     const { box } = portBox({ token: 'p8080_reused99' });
 
-    await lane(kv, box).exposePort(PORT, { hostname: SUFFIX, token: 'p8080_asked00' });
+    await lane(kv, box).exposePort(PORT, { token: 'p8080_asked00' });
 
     expect(await sandboxPreviewExposed(kv, {
       sandboxId: SANDBOX_ID, port: PORT, token: 'p8080_reused99',
@@ -131,7 +129,7 @@ describe('exposing a port publishes the preview the edge will be asked about', (
   test('a deployment that cannot publish refuses to mint a URL', async () => {
     const { box, exposed } = portBox();
 
-    await expect(lane(null, box).exposePort(PORT, { hostname: SUFFIX }))
+    await expect(lane(null, box).exposePort(PORT, {}))
       .rejects.toThrow('AUTH_KV');
     // Refused before the container is asked.
     expect(exposed).toEqual([]);
@@ -145,7 +143,7 @@ describe('exposing a port publishes the preview the edge will be asked about', (
       exposePort: async () => ({ url: 'https://preview.elsewhere.example/8080', port: PORT }),
     });
 
-    await expect(lane(kv, box).exposePort(PORT, { hostname: SUFFIX })).rejects.toThrow('cannot publish');
+    await expect(lane(kv, box).exposePort(PORT, {})).rejects.toThrow('cannot publish');
     expect(kv.keys()).toEqual([]);
   });
 });
@@ -175,7 +173,7 @@ test('a port exposed again while its unexpose is still settling stays exposed', 
   const notified = Promise.withResolvers<void>();
   let holding = false;
 
-  const handle = adaptCloudflareSandbox(box, async () => {}, sandboxPreviewExposures(kv, SANDBOX_ID), {
+  const handle = adaptCloudflareSandbox(box, async () => {}, { exposures: sandboxPreviewExposures(kv, SANDBOX_ID), zone: SUFFIX }, {
     // The unexpose's own notification is held until the port is exposed again; every other one passes.
     portsMoved: async () => {
       if (!holding) return;
@@ -187,13 +185,13 @@ test('a port exposed again while its unexpose is still settling stays exposed', 
 
   // A second apart, as the withdrawal record is (`exposing the port again publishes it again`).
   setSystemTime(new Date('2026-03-01T12:00:00.000Z'));
-  await handle.exposePort(PORT, { hostname: SUFFIX });
+  await handle.exposePort(PORT, {});
   holding = true;
   const unexpose = present(createSandboxExecutor(handle).tools.unexposePort, 'unexposePort').execute(PORT);
 
   await notified.promise;
   setSystemTime(new Date('2026-03-01T12:00:01.000Z'));
-  await handle.exposePort(PORT, { hostname: SUFFIX });
+  await handle.exposePort(PORT, {});
   setSystemTime(new Date('2026-03-01T12:00:02.000Z'));
   moved.resolve();
   await unexpose;
@@ -211,7 +209,7 @@ describe('a withdrawn port stays withdrawn, whatever the container still reports
     await sandboxPreviewExposures(kv, SANDBOX_ID).publish(PORT, TOKEN);
 
     await expect(lane(kv, box).unexposePort(PORT)).rejects.toThrow('container unreachable');
-    await lane(kv, box).getExposedPorts(SUFFIX);
+    await lane(kv, box).getExposedPorts();
 
     expect(await sandboxPreviewExposed(kv, claim)).toBe(false);
   });
@@ -224,7 +222,7 @@ describe('a withdrawn port stays withdrawn, whatever the container still reports
 
     await expect(lane(kv, box).unexposePort(PORT)).rejects.toThrow('container unreachable');
     setSystemTime(new Date('2026-03-01T12:00:01.000Z'));
-    await lane(kv, box).getExposedPorts(SUFFIX);
+    await lane(kv, box).getExposedPorts();
 
     expect(await sandboxPreviewExposed(kv, claim)).toBe(false);
     setSystemTime();
@@ -238,8 +236,8 @@ describe('a withdrawn port stays withdrawn, whatever the container still reports
     const answered = box.getExposedPorts.bind(box);
 
     Object.assign(box, {
-      getExposedPorts: async (hostname: string) => {
-        const rows = await answered(hostname);
+      getExposedPorts: async () => {
+        const rows = await answered();
         reached.resolve();
         await read.promise;
 
@@ -248,7 +246,7 @@ describe('a withdrawn port stays withdrawn, whatever the container still reports
     });
     await sandboxPreviewExposures(kv, SANDBOX_ID).publish(PORT, TOKEN);
 
-    const listing = lane(kv, box).getExposedPorts(SUFFIX);
+    const listing = lane(kv, box).getExposedPorts();
     await reached.promise;
     await lane(kv, box).unexposePort(PORT);
     read.resolve();
@@ -265,7 +263,7 @@ describe('a withdrawn port stays withdrawn, whatever the container still reports
     await lane(kv, box).unexposePort(PORT);
     setSystemTime(new Date('2026-03-01T12:00:01.000Z'));
 
-    await lane(kv, box).exposePort(PORT, { hostname: SUFFIX });
+    await lane(kv, box).exposePort(PORT, {});
 
     expect(await sandboxPreviewExposed(kv, claim)).toBe(true);
     setSystemTime();
@@ -278,7 +276,7 @@ describe('listing ports re-observes what the container still reports', () => {
     const { box } = portBox();
     expect(kv.keys()).toEqual([]);
 
-    const rows = await lane(kv, box).getExposedPorts(SUFFIX);
+    const rows = await lane(kv, box).getExposedPorts();
 
     expect(rows.map((row) => row.port)).toEqual([PORT]);
     expect(await sandboxPreviewExposed(kv, {
@@ -294,7 +292,7 @@ describe('listing ports re-observes what the container still reports', () => {
     await sandboxPreviewExposures(kv, SANDBOX_ID).publish(PORT, TOKEN);
 
     setSystemTime(new Date(Date.now() + (EXPOSURE_LIFETIME_MS * 2) / 3));
-    await lane(kv, box).getExposedPorts(SUFFIX);
+    await lane(kv, box).getExposedPorts();
     // Past the first expiry: the preview resolves only because the listing refreshed it.
     setSystemTime(new Date(Date.now() + (EXPOSURE_LIFETIME_MS * 2) / 3));
 
@@ -312,8 +310,8 @@ describe('listing ports re-observes what the container still reports', () => {
     const key = `sandbox-preview:${SANDBOX_ID}:${String(PORT)}`;
     const published = await kv.get(key);
 
-    await lane(kv, box).getExposedPorts(SUFFIX);
-    await lane(kv, box).getExposedPorts(SUFFIX);
+    await lane(kv, box).getExposedPorts();
+    await lane(kv, box).getExposedPorts();
 
     expect(await kv.get(key)).toBe(published);
   });
@@ -336,8 +334,8 @@ describe('listing ports re-observes what the container still reports', () => {
 
     const emitted = await recordDiagnostics(async () => {
       const rows = await adaptCloudflareSandbox(
-        box, async () => {}, sandboxPreviewExposures(refusing, SANDBOX_ID),
-      ).getExposedPorts(SUFFIX);
+        box, async () => {}, { exposures: sandboxPreviewExposures(refusing, SANDBOX_ID), zone: SUFFIX },
+      ).getExposedPorts();
 
       expect(rows.map((row) => row.port)).toEqual([PORT]);
     });
@@ -361,7 +359,7 @@ describe('a revoked exposure is never resurrected by the lane that published it'
     setSystemTime(new Date(Date.now() + (EXPOSURE_LIFETIME_MS * 2) / 3));
     await writer.revokeAll();
     setSystemTime(new Date(Date.now() + 1));
-    const rows = await lane(kv, box, writer).getExposedPorts(SUFFIX);
+    const rows = await lane(kv, box, writer).getExposedPorts();
 
     expect(rows.map((row) => row.port)).toEqual([PORT]);
     expect(await sandboxPreviewExposed(kv, claim)).toBe(false);
@@ -376,7 +374,7 @@ describe('a revoked exposure is never resurrected by the lane that published it'
     await writer.revokeAll();
     setSystemTime(new Date(Date.now() + 1));
 
-    await lane(kv, box, writer).getExposedPorts(SUFFIX);
+    await lane(kv, box, writer).getExposedPorts();
 
     expect(await sandboxPreviewExposed(kv, claim)).toBe(false);
     setSystemTime();
@@ -390,7 +388,7 @@ describe('a revoked exposure is never resurrected by the lane that published it'
     await writer.revokeAll();
     setSystemTime(new Date(Date.now() + 1));
 
-    await expect(lane(kv, box, writer).exposePort(PORT, { hostname: SUFFIX }))
+    await expect(lane(kv, box, writer).exposePort(PORT, {}))
       .rejects.toThrow('revoked');
 
     expect(await sandboxPreviewExposed(kv, claim)).toBe(false);
@@ -404,7 +402,7 @@ describe('a revoked exposure is never resurrected by the lane that published it'
     await sandboxPreviewExposures(kv, SANDBOX_ID).revokeAll();
     setSystemTime(new Date(Date.now() + 1));
 
-    await lane(kv, box).exposePort(PORT, { hostname: SUFFIX });
+    await lane(kv, box).exposePort(PORT, {});
 
     expect(await sandboxPreviewExposed(kv, claim)).toBe(true);
     setSystemTime();

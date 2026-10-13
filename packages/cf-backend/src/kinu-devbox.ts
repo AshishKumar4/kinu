@@ -10,7 +10,7 @@ import {
 } from "@kinu.run/devbox";
 import { getAgentByName } from "agents";
 import { settleLogged } from "@kinu.run/core/obs";
-import { sandboxIdForWorkspace } from '@kinu.run/core';
+import { previewHostSuffix } from '@kinu.run/core';
 import type { OrchestratorAgent } from "./orchestrator";
 import { lifecycleIncident, restoreNotices } from "./sandbox-lifecycle";
 import {
@@ -55,15 +55,10 @@ export class KinuDevbox extends Devbox<Env> {
   /** What the product calls the box (`executorLabel`), in its prompt and on its desktop. */
   protected override get hostname(): string { return 'computer'; }
 
-  protected override get previewName(): string {
-    const workspaceName = this.ctx.storage.kv.get<KinuEgressParams>(EGRESS_CONFIG_KEY)?.workspaceName;
-
-    return sandboxIdForWorkspace(workspaceName ?? this.ctx.id.toString());
-  }
-
-  /** Absent turns port publishing off; exec and files keep working. */
+  /** The zone the edge serves, read as the edge reads it; absent turns port publishing off, and exec and files keep
+   *  working. */
   protected override get previewHost(): string | undefined {
-    return this.env.PREVIEW_HOST_SUFFIX;
+    return previewHostSuffix(this.env) ?? undefined;
   }
 
   readonly #restoreNotice = restoreNotices(

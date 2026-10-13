@@ -61,7 +61,7 @@ export function serverBox(clock: HandClock, killed: string[] = []) {
     resolveReadiness: async () => ({ kind: 'restored' as const }),
     configureEgress: async () => {},
     restoreStatus: async () => ({ restoring: false, refused: undefined }),
-    getExposedPorts: async (hostname: string) => (stamps.size === 0 ? [] : [{ port: SERVED_PORT, name: undefined, url: `https://${String(SERVED_PORT)}-box-token.${hostname}` }]),
+    getExposedPorts: async () => (stamps.size === 0 ? [] : [{ port: SERVED_PORT, name: undefined, url: `https://${String(SERVED_PORT)}-box-token.preview.test` }]),
     portListeners: async () => [...stamps.values()].map((stamp) => ({ port: SERVED_PORT, pid: 1, stamp, command: 'node server.js' })),
     // Whole, as the runtime answers a call that streams nothing.
     execUntimed: (_command: string, exec: BoxExec) => new Promise((resolve) => {

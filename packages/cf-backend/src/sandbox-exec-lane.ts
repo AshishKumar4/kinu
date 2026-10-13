@@ -163,10 +163,16 @@ function recordPortsMoved(portsMoved: (() => Promise<void>) | undefined): Effect
     .pipe(Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('jobs.serving_unread', failure); })));
 }
 
+/** The edge's record of published previews, and the zone their hosts are under. */
+export interface LanePreviews {
+  readonly exposures: SandboxPreviewExposures;
+  readonly zone: string;
+}
+
 export function adaptCloudflareSandbox(
   handle: ContainerOperations,
   configure: () => Promise<void>,
-  previews: SandboxPreviewExposures | null,
+  previews: LanePreviews | null,
   { portsMoved, clock = REAL_CLOCK }: {
     readonly portsMoved?: () => Promise<void>;
     /** Times a hold for the box's base snapshot (D79). */
@@ -241,17 +247,17 @@ export function adaptCloudflareSandbox(
     exposePort: (port, opts) => settle(Effect.gen(function* () {
       if (previews === null) return yield* Effect.fail(new KinuError('unavailable', PREVIEWS_UNPUBLISHABLE));
       const exposed = yield* onContainer(() => handle.exposePort(port, opts));
-      const label = yield* Effect.try({ try: () => sandboxPreviewLabelOf(new URL(exposed.url), { PREVIEW_HOST_SUFFIX: opts.hostname }), catch: (cause) => fromDevbox({ cause }) });
+      const label = yield* Effect.try({ try: () => sandboxPreviewLabelOf(new URL(exposed.url), { PREVIEW_HOST_SUFFIX: previews.zone }), catch: (cause) => fromDevbox({ cause }) });
 
       if (label === null || label.port !== port) return yield* Effect.fail(new KinuError('io', `the container minted a preview URL this deployment cannot publish: ${exposed.url}`));
-      yield* callDevbox(() => previews.publish(port, label.token));
+      yield* callDevbox(() => previews.exposures.publish(port, label.token));
       yield* recordPortsMoved(portsMoved);
 
-      if (!(yield* callDevbox(() => previews.exposed(port, label.token)))) {
+      if (!(yield* callDevbox(() => previews.exposures.exposed(port, label.token)))) {
         return { ...exposed, route: { reached: false, gate: 'published' as const, detail: 'the edge holds no published record for this URL' } };
       }
 
-      const live = yield* onContainer(() => handle.getExposedPorts(opts.hostname));
+      const live = yield* onContainer(() => handle.getExposedPorts());
 
       return live.some(row => row.port === port && row.url === exposed.url)
         ? { ...exposed, route: { reached: true } }
@@ -260,7 +266,7 @@ export function adaptCloudflareSandbox(
     // Withdraw first: a revoked port the edge still admits is unsafe. The container's own revoke needs no readiness,
     // and a container that keeps the exposure regardless serves nothing the edge admits.
     unexposePort: (port) => settle(Effect.gen(function* () {
-      if (previews !== null) yield* callDevbox(() => previews.withdraw(port));
+      if (previews !== null) yield* callDevbox(() => previews.exposures.withdraw(port));
       const removed = yield* callDevbox(() => jsonResultOrVoid(handle.unexposePort(port)));
       yield* recordPortsMoved(portsMoved);
 
@@ -269,13 +275,13 @@ export function adaptCloudflareSandbox(
     // Renewing what was published keeps long-lived previews from ageing out; what the container reports publishes
     // nothing. A failed renewal is reported and the listing stands: the record is already correct.
     // Not `onContainer`: a read never starts a container.
-    getExposedPorts: (hostname) => settle(callDevbox(async () => {
-      const rows = await handle.getExposedPorts(hostname);
+    getExposedPorts: () => settle(callDevbox(async () => {
+      const rows = await handle.getExposedPorts();
 
       if (previews !== null) {
-        const index = previews;
+        const { exposures: index, zone } = previews;
         await Promise.all(rows.map(async (row) => {
-          const label = sandboxPreviewLabelOf(new URL(row.url), { PREVIEW_HOST_SUFFIX: hostname });
+          const label = sandboxPreviewLabelOf(new URL(row.url), { PREVIEW_HOST_SUFFIX: zone });
 
           if (label === null || label.port !== row.port) return;
 

@@ -1192,6 +1192,8 @@ export const READY_GOLDEN: TestSiblings = {
 export interface BoxStateParts {
   readonly storage: DurableObjectStorage;
   readonly id: string;
+  /** The name the box was reached by (`getByName`); absent for a box reached by its id alone. */
+  readonly name?: string;
   readonly container?: { running: boolean };
   readonly blockConcurrencyWhile: <T>(closure: () => Promise<T>) => Promise<T>;
   readonly siblings?: TestSiblings;
@@ -1226,7 +1228,7 @@ function workerExports(siblings: TestSiblings): BoxState['exports'] {
  *  Only the members the class reads are supplied; every other one refuses by name. */
 export function boxState(parts: BoxStateParts): BoxState {
   return {
-    id: { toString: () => parts.id, equals: () => unreached('state.id.equals') },
+    id: { toString: () => parts.id, name: parts.name, equals: () => unreached('state.id.equals') },
     storage: parts.storage,
     container: parts.container === undefined ? undefined : containerHandle(parts.container),
     blockConcurrencyWhile: parts.blockConcurrencyWhile,
@@ -1366,8 +1368,9 @@ export function harness<Box extends PlatformServed>(
   const objects = new Map<string, Uint8Array>();
   const env: TestEnv = { DEVBOX_STORE: memoryBucket(objects) };
 
+  // Reached by its name, as a host reaches a box.
   const state = boxState({
-    storage: storage.handle, id, siblings,
+    storage: storage.handle, id, name: id, siblings,
     blockConcurrencyWhile: <T>(closure: () => Promise<T>): Promise<T> => {
       const previous = container.initGate;
       const completed = Promise.withResolvers<void>();
