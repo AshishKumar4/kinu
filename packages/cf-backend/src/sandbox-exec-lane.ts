@@ -15,7 +15,7 @@ import type { SandboxPreviewExposures } from "@kinu.run/core";
 type ContainerOperations = Pick<KinuDevbox,
   "execUntimed" | "execUntimedStream" | "killUntimed" | "releaseUntimed" | "resolveReadiness" | "readFile" | "writeFile" | "writeFileIfDigest" | "listFiles" | "statFile"
   | "deleteFile" | "exposePort" | "getExposedPorts" | "unexposePort" | "startSupervised"
-  | "stopSupervised" | "listSupervised" | "portToken" | "probePort" | "notePortRemoved" | "resize" | "portListeners" | "answerRest">;
+  | "stopSupervised" | "listSupervised" | "portToken" | "probePort" | "resize" | "portListeners" | "answerRest">;
 
 /** Without AUTH_KV the edge cannot verify a preview hostname, so a minted URL would be dead. */
 const PREVIEWS_UNPUBLISHABLE =
@@ -310,9 +310,5 @@ export function adaptCloudflareSandbox(
     answerRest: (answer) => settle(callDevbox(() => handle.answerRest(answer))),
     // DO rows only: no egress, no attach wait, since the token must be mintable before its exposure.
     portToken: (port, name) => settle(callDevbox(() => handle.portToken(port, name))),
-    notePortRemoved: (port) => settle(callDevbox(async () => {
-      await previews?.withdraw(port);
-      await handle.notePortRemoved(port);
-    })),
   };
 }

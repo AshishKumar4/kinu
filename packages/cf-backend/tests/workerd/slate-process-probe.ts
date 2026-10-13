@@ -305,6 +305,12 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     this.process = undefined;
   }
 
+  /** Ends the running process as Nimbus does, outside Kinu's stop: its own process table kills it. */
+  async endInNimbus(): Promise<void> {
+    this.processes.kill(Number(this.started().id));
+    this.process = undefined;
+  }
+
   private started(): ResidentSlateProcess {
     const process = this.process;
 

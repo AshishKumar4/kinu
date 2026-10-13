@@ -7,7 +7,7 @@ import { shellCall } from '../execution/command-call';
 import { nimbusSession, type NimbusSessionOpts } from '../execution/nimbus';
 import type { FilesOwner } from '../safety/command-review';
 import type { ShellSession } from '../execution/shell-session';
-import type { Memory, SqlExecutor } from '../types/primitives';
+import type { Memory, ShellExecResult, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { CraftStore } from '../types/agent-runtime';
 import { vfsAddressingHint } from '@kinu.run/agent-utils/vfs';
@@ -35,6 +35,9 @@ import { SlateBuildNoteSchema } from '../operations/file';
 
 const StringSchema = v.string();
 
+/** `exec`'s options asking for the command's own output, not the text built from it. */
+const PartsSchema = v.object({ parts: v.literal(true) });
+
 const OptionalPathSchema = v.optional(v.string());
 
 const FileWriteSuccessSchema = v.object({
@@ -60,7 +63,7 @@ function parseInput<TSchema extends v.GenericSchema>(
 }
 
 interface ShellExec {
-  exec(command: string, opts?: { signal?: AbortSignal }): Promise<{ stdout: string; stderr: string; exitCode: number }>;
+  exec(command: string, opts?: { signal?: AbortSignal }): Promise<ShellExecResult>;
 }
 
 export interface InlineExecutorDeps {
@@ -205,14 +208,26 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       'Run a command in the workspace shell, over the SAME files readFile/readdir address. '
         + 'A real POSIX shell with ~95 coreutils, pipes, redirects, loops and variables; each call starts fresh in `cwd` (default: your home) '
         + 'unless it names a shell, which keeps its directory and exported variables. '
+        + 'Pass `parts: true` among the options to get `{ stdout, stderr, exitCode }` as the command wrote them, instead of the text. '
         + 'Available binaries and process features are listed in this workspace provider\'s capabilities; use sandbox or device only when the task needs that separate machine.',
       (args) => {
         const command = parseInput(StringSchema, { value: args[0] });
 
         if (command === undefined) return { refused: refusalOf(new KinuError('bad_input', 'workspace.exec: command must be a string')) };
         const options = shellExecOptions({ value: args[1] });
+        const parts = v.is(PartsSchema, args[1]);
 
-        return { call: shellCall(command, options, { stdin: true }), run: async () => commandResult(await shell.exec(command, options)) };
+        return {
+          call: shellCall(command, options, { stdin: true }),
+          run: async () => {
+            const outcome = await shell.exec(command, options);
+
+            // A program reads what the command wrote; the text the model is shown is built from it, never parsed back.
+            return parts && outcome.refusal === undefined
+              ? { stdout: outcome.stdout, stderr: outcome.stderr, exitCode: outcome.exitCode }
+              : commandResult(outcome);
+          },
+        };
       },
     ),
 
