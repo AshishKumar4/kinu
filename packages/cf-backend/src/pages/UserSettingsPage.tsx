@@ -151,7 +151,7 @@ export default function UserSettingsPage() {
 
         {section === "models" && <ProfileCatalogSettings />}
 
-        {section === "sandbox" && <SandboxSizeSettings />}
+        {section === "computer" && <SandboxSizeSettings />}
 
         {section === "beta" && <BetaSettings />}
 

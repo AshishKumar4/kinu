@@ -10,7 +10,7 @@
  * lost. The lane is now the container runtime's own exec: 0 of 1200.
  *
  * THE ASSERTION, hard: one program runs its commands, many at a time, through
- * `sandbox.exec` with no deadline (the lane the defect lived in), and every
+ * `computer.exec` with no deadline (the lane the defect lived in), and every
  * command's mark comes back.
  *
  * WHERE THE LINE ARRIVES. A program that outruns the 30 s foreground window is

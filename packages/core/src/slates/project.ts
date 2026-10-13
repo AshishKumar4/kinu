@@ -9,8 +9,8 @@ const Name = v.pipe(v.string(), v.minLength(1));
 const SourcePath = v.pipe(Name, v.check((path) => !path.startsWith('/') && !path.includes('\0') && !path.split('/').includes('..'), 'must name a file inside this Slate'));
 
 /** `title` is the one name a person sees for a slate: its tab, its card, its shares, and what saving a page writes. */
-/** A slate runs in the workspace's worker runtime; a Node server is a sandbox process with an exposed port. */
-const NODE_ELSEWHERE = 'slates run in the workspace\'s worker runtime: run a Node server through the sandbox and expose its port';
+/** A slate runs in the workspace's worker runtime; a Node server is a computer process with an exposed port. */
+const NODE_ELSEWHERE = 'slates run in the workspace\'s worker runtime: run a Node server through the computer and expose its port';
 
 const SlateMetadata = v.strictObject({
   runtime: v.optional(v.literal('worker', NODE_ELSEWHERE), 'worker'),

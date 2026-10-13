@@ -61,6 +61,30 @@ interface FixtureSecrets {
   PROBE_SECRET_ACCESS_KEY?: string;
 }
 
+/** The header the fixture sets on every answer it makes (`devbox-contracts.ts`). */
+const FIXTURE_ANSWER = 'x-devbox-fixture';
+
+/** How long after a deploy an edge may still answer the fixture's route with its own 404 page. */
+const ROUTE_ROLLOUT_MS = 180_000;
+
+/**
+ * A request to the fixture, answered by the fixture. For minutes after `wrangler deploy` some edges answer the new
+ * workers.dev route with Cloudflare's own 404 page, authorized or not, between answers from the fixture
+ * (armada 20261013191147-e27c45c5: 401, 401, then a 404 page, then 401 again), so one answer is not the route serving.
+ * An answer without the fixture's mark is asked again until the rollout's bound; past it, it is the answer.
+ */
+async function fixtureFetch(url: string | URL, init?: RequestInit): Promise<Response> {
+  const until = Date.now() + ROUTE_ROLLOUT_MS;
+
+  for (;;) {
+    const reply = await fetch(url, init);
+
+    if (reply.headers.has(FIXTURE_ANSWER) || Date.now() >= until) return reply;
+    await reply.body?.cancel();
+    await delay(3_000);
+  }
+}
+
 function writeFixtureConfig(worker: string, scratch: string, priorDeclared?: string) {
   const config = join(scratch, 'wrangler.jsonc');
   const imageArgument = process.argv.indexOf('--declared-image');
@@ -211,7 +235,7 @@ async function main(): Promise<void> {
     // again; a contract asks again, as an agent does, rather than read a platform refusal as the contract broken
     // (390ad4e4c's disk-chain: "Network connection lost." after /lose-snapshot).
     for (let asked = 1; ; asked += 1) {
-      const reply = await fetch(url, { headers: { authorization: `Bearer ${identity}`, 'content-type': 'application/json' }, method: body === undefined ? 'GET' : 'POST', body: body === undefined ? undefined : JSON.stringify(body) });
+      const reply = await fixtureFetch(url, { headers: { authorization: `Bearer ${identity}`, 'content-type': 'application/json' }, method: body === undefined ? 'GET' : 'POST', body: body === undefined ? undefined : JSON.stringify(body) });
       const value: unknown = await reply.json();
 
       if (reply.ok) return v.parse(schema, value);
@@ -263,7 +287,7 @@ async function main(): Promise<void> {
     };
 
     const outcome = await completeTeardown({
-      health: async () => origin === undefined ? null : (await fetch(`${origin}/health`, { headers: { authorization: `Bearer ${identity}` } })).status,
+      health: async () => origin === undefined ? null : (await fixtureFetch(`${origin}/health`, { headers: { authorization: `Bearer ${identity}` } })).status,
       beforeDelete: async (health) => {
       learnApplication();
       await writeReport();
@@ -517,18 +541,10 @@ async function main(): Promise<void> {
     if (origin === undefined) throw new Error('the fixture deploy printed no origin');
     await writeReport();
     // D17's fixture readiness: deploy returns before the workers.dev route answers.
-    const readyBy = Date.now() + 180_000;
+    const ready = await fixtureFetch(`${origin}/health`, { headers: { authorization: `Bearer ${identity}` } });
 
-    for (;;) {
-      const ready = await fetch(`${origin}/health`, { headers: { authorization: `Bearer ${identity}` } });
-
-      if (ready.status === 200) break;
-
-      if (Date.now() >= readyBy) throw new Error(`the fixture route did not become ready: ${String(ready.status)}`);
-      await delay(3_000);
-    }
-
-    requireEqual((await fetch(`${origin}/health`)).status, 401);
+    if (ready.status !== 200) throw new Error(`the fixture route did not become ready: ${String(ready.status)}`);
+    requireEqual((await fixtureFetch(`${origin}/health`)).status, 401);
     await step('golden', () => call('/golden', v.object({ id: v.string() }), {}, 'devbox-golden'));
     await collectSnapshots('devbox-golden');
     await step('declared-image-use', () => call('/inspection', v.unknown()));

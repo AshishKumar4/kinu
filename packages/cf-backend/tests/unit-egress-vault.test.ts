@@ -164,7 +164,7 @@ describe('the owner object reads its vault against the grants a request carries'
     const binding = await userDO.putEgressSecret(owner, STRIPE);
     const facts = { host: 'api.stripe.com', url: 'https://api.stripe.com/v1/charges', headers: [['authorization', `Bearer ${binding.placeholder}`]] as const };
 
-    expect(await userDO.resolveEgressInjection(owner, facts, [{ rule: 'egress-secret:stripe', executor: 'sandbox' }]))
+    expect(await userDO.resolveEgressInjection(owner, facts, [{ rule: 'egress-secret:stripe', executor: 'computer' }]))
       .toEqual({ kind: 'forward', substitutions: [{ placeholder: binding.placeholder, secret: SECRET }] });
     expect(await userDO.resolveEgressInjection(owner, facts, [{ rule: 'egress-secret:stripe', executor: 'device' }]))
       .toMatchObject({ kind: 'refuse' });

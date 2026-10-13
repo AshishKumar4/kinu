@@ -178,7 +178,7 @@ function humanizeFact(key: string, value: string): string {
   const segments = normalizedKey.split('.').filter(Boolean);
   const leaf = segments.at(-1) ?? normalizedKey;
 
-  if (segments[0] === 'sandbox' && leaf.endsWith('_version')) {
+  if (segments[0] === 'computer' && leaf.endsWith('_version')) {
     const software = leaf.slice(0, -'_version'.length).replace(/_/g, ' ');
 
     const runs = value.toLowerCase().startsWith(software.toLowerCase())

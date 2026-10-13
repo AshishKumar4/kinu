@@ -621,6 +621,12 @@ export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, opt
 
       page.goto = async (url, gotoOptions) => recorded({ condition: `load of ${url}`, page, requests, faults, lastInput: () => lastInput }, () => untilEnded(goto(url, gotoOptions)));
 
+      // A close is a wait too: one that never ends is named when the row's silence nears its bound (#78, a tab closed
+      // while its own intercepted navigation was being answered).
+      const close = page.close.bind(page);
+
+      page.close = async (closeOptions) => recorded({ condition: `close of ${page.url()}`, page, requests, faults, lastInput: () => lastInput }, () => close(closeOptions));
+
       return page;
     };
 

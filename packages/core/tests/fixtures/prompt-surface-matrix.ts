@@ -15,8 +15,8 @@ const WORKSPACE: PromptExecutorInfo = {
   name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active',
 };
 
-const SANDBOX: PromptExecutorInfo = {
-  name: 'sandbox', kind: 'sandbox', capabilities: ['net_inbound'], available: true, configured: true, active: true, status: 'active',
+const COMPUTER: PromptExecutorInfo = {
+  name: 'computer', kind: 'computer', capabilities: ['net_inbound'], available: true, configured: true, active: true, status: 'active',
 };
 
 const DEVICE: PromptExecutorInfo = {
@@ -85,7 +85,7 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
     opts: {
       soulOverride: 'You are Kinu.',
       availableTools: ALL_TOOLS,
-      executors: [WORKSPACE, SANDBOX, DEVICE],
+      executors: [WORKSPACE, COMPUTER, DEVICE],
       backend: 'cf',
       temporaryAsk: true,
       model: { id: 'claude-sonnet-4-7', provider: 'anthropic' },
@@ -170,7 +170,7 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
   },
   {
     name: 'executors-preview-capable',
-    opts: { availableTools: ['shell'], executors: [WORKSPACE, SANDBOX], backend: 'cf' },
+    opts: { availableTools: ['shell'], executors: [WORKSPACE, COMPUTER], backend: 'cf' },
   },
   {
     name: 'executors-unnamed-namespace',

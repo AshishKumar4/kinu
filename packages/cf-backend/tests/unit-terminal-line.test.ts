@@ -270,6 +270,6 @@ describe('when the shell is still reading', () => {
 describe('the line driver runs only where there is no pseudo-terminal', () => {
   test('the sandbox lane still asks for the PTY driver', () => {
     // A container PTY sends its own CR LF, so `newTerminal` must stay free of `convertEol` for this lane.
-    expect(terminalLane('sandbox')).toEqual({ mode: 'pty' });
+    expect(terminalLane('computer')).toEqual({ mode: 'pty' });
   });
 });

@@ -90,28 +90,28 @@ const DOCS_READ = '2026-08-17';
 
 export const PLATFORM_CATALOG = {
   'container.instance.vcpu': {
-    subject: 'vCPU allocated to each Kinu sandbox container',
+    subject: 'vCPU allocated to each Kinu computer',
     limit: { value: 2, unit: 'count' },
     origin: 'self-imposed',
     bounds: 'count',
     evidence: 'proven-by-source',
     provenance: 'packages/cf-backend/wrangler.jsonc:121-124',
     date: '2026-08-22',
-    trigger: 'a sandbox workload needs more than 2 CPU cores',
+    trigger: 'a computer workload needs more than 2 CPU cores',
     onBreach: 'the workload receives no additional cores and remains bounded by the container allocation',
     observable: [],
     firstPartySignal: false,
   },
 
   'container.instance.memory': {
-    subject: 'Memory allocated to each Kinu sandbox container',
+    subject: 'Memory allocated to each Kinu computer',
     limit: { value: 6_144 * MiB, unit: 'bytes' },
     origin: 'self-imposed',
     bounds: 'peak-resident',
     evidence: 'proven-by-source',
     provenance: 'packages/cf-backend/wrangler.jsonc:121-124',
     date: '2026-08-22',
-    trigger: 'sandbox resident memory exceeds the configured 6144 MiB allocation',
+    trigger: 'computer resident memory exceeds the configured 6144 MiB allocation',
     onBreach: 'the container process is terminated by its memory limit',
     observable: [],
     firstPartySignal: false,
@@ -122,14 +122,14 @@ export const PLATFORM_CATALOG = {
 
 
   'container.instance.disk': {
-    subject: 'Disk allocated to each Kinu sandbox container',
+    subject: 'Disk allocated to each Kinu computer',
     limit: { value: 8_000 * MB, unit: 'bytes' },
     origin: 'self-imposed',
     bounds: 'storage',
     evidence: 'proven-by-source',
     provenance: 'packages/cf-backend/wrangler.jsonc:121-124',
     date: '2026-08-22',
-    trigger: 'sandbox files consume the configured 8000 MB disk allocation',
+    trigger: 'computer files consume the configured 8000 MB disk allocation',
     onBreach: 'writes fail because the container disk is full',
     observable: [],
     firstPartySignal: false,

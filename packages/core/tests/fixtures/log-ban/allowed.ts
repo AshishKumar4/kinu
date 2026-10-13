@@ -18,7 +18,7 @@ const log = createRecordingLogger();
 log.event('shell.escalated');
 
 // Scalars, inline.
-log.event('shell.escalated', { runtime: 'sandbox', attempts: 2, reused: true });
+log.event('shell.escalated', { runtime: 'computer', attempts: 2, reused: true });
 
 // A fields object held in an annotated variable, which is what most call sites
 // that build their fields conditionally end up with.
@@ -27,7 +27,7 @@ interface EscalationFields {
   readonly attempts: number;
 }
 
-const fields: EscalationFields = { runtime: 'sandbox', attempts: 1 };
+const fields: EscalationFields = { runtime: 'computer', attempts: 1 };
 
 log.event('shell.escalated', fields);
 
@@ -53,4 +53,4 @@ const failure = new KinuError('unavailable', 'runtime_not_provisioned');
 
 log.failure('shell.escalation_refused', failure);
 
-log.failure('shell.escalation_refused', failure, { runtime: 'sandbox' });
+log.failure('shell.escalation_refused', failure, { runtime: 'computer' });

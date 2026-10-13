@@ -8,7 +8,7 @@
  *  the assistant's transcript. */
 export const SETTLE_MARKER = 'KINU_SETTLED_AFTER_DETACH';
 
-export const SETTLE_ASK = `Use your shell tool with runtime 'sandbox' to execute exactly: sleep 45 && echo ${SETTLE_MARKER}. `
+export const SETTLE_ASK = `Use your shell tool with runtime 'computer' to execute exactly: sleep 45 && echo ${SETTLE_MARKER}. `
   + 'The command sleeps before it prints — let it run to completion, do not kill it. '
   + 'When it has finished, tell me the marker it printed.';
 
@@ -114,7 +114,7 @@ export const DEVICE_JOB_ASK = `Use the shell tool with runtime "device" to run t
   + 'Then reply with one line: JOB <the job id it was given>, or NONE if it did not start.';
 
 /** sandbox-mount-write: the mounted path the defect named, and the bytes this case chose. */
-export const MOUNT_TARGET = '/sandbox/workspace/first-run-mount.mjs';
+export const MOUNT_TARGET = '/computer/workspace/first-run-mount.mjs';
 
 export const MOUNT_BYTES = 'export const firstRun = "KINU_SANDBOX_MOUNT_OK";\n';
 
@@ -123,7 +123,7 @@ export const MOUNT_BYTES = 'export const firstRun = "KINU_SANDBOX_MOUNT_OK";\n';
 export const MOUNT_MARK = 'MOUNT-WRITE-PROBE';
 
 /** sandbox-mount-write: the empty-path namespace listing the failed run made. */
-export const MOUNT_LISTING_PROGRAM = 'const ls = await sandbox.readdir({ path: \'\' }); return ls;';
+export const MOUNT_LISTING_PROGRAM = 'const ls = await computer.readdir({ path: \'\' }); return ls;';
 
 /** One turn that does the whole defect: the listing, the create, the read-back and the empty-path namespace
  *  listing, the same calls the failed run made. */
@@ -151,7 +151,7 @@ export const EXEC_OUTPUT_PROGRAM = [
   `await Promise.all(Array.from({ length: ${EXEC_OUTPUT_AT_ONCE} }, async () => {`,
   '  while (next < marks.length) {',
   '    const mark = marks[next++];',
-  '    const ran = await sandbox.exec(`sleep 0.3 && echo ${mark}`);',
+  '    const ran = await computer.exec(`sleep 0.3 && echo ${mark}`);',
   '    if (!String(ran?.stdout ?? ran).includes(mark)) lost.push(mark);',
   '  }',
   '}));',

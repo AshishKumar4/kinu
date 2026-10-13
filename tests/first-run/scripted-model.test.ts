@@ -1,10 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { Effect } from 'effect';
 import * as v from 'valibot';
 import {
-  buildDrainBatch, EventLog, initEventsHubTables, steerSkillsBlock, workspaceGenesisSignal, type JsonObject,
+  buildDrainBatch, DeferredApprovalQueue, DeferredApprovalStore, EventLog, initDeferredApprovalsTable, initEventsHubTables,
+  reviewCommand, steerSkillsBlock, workspaceGenesisSignal, type JsonObject,
 } from '@kinu.run/core';
-import { createTestActorsOver } from '@kinu.run/test-utils';
+import { createTestActors, createTestActorsOver, createTestSql } from '@kinu.run/test-utils';
 import { makeSqlExec } from '../../packages/core/tests/helpers';
 import { createMemoryVfs } from '../../packages/test-utils/src/vfs';
 import {
@@ -239,13 +241,44 @@ const ReplySchema = v.object({ choices: v.tuple([v.object({ message: v.object({
   tool_calls: v.optional(v.array(v.object({ id: v.string(), function: v.object({ name: v.string(), arguments: v.string() }) }))),
 }) })]) });
 
+/** Where the workspace shell runs a call, as its ask records it: the member, the directory, and a background job. */
+const WORKSPACE_CALL = { member: 'exec', cwd: '/home/main', background: true } as const;
+
+/** The wake the product sends when the owner decides `command`, parked where the workspace shell runs it. */
+async function decisionWake(command: string, answer: 'approved' | 'denied'): Promise<string> {
+  const db = createTestSql();
+  const { sql, execRaw } = db;
+  const woken: string[] = [];
+
+  try {
+    initDeferredApprovalsTable(execRaw);
+
+    const queue = new DeferredApprovalQueue({
+      writes: null, store: new DeferredApprovalStore(sql, createTestActors(sql, execRaw).main), remember: () => {},
+      wake: (_actor, signal) => Effect.sync(() => { woken.push(signal.text); }),
+    });
+
+    await queue.park({ command, executor: 'workspace', context: WORKSPACE_CALL, review: reviewCommand(command, 'agent') });
+    await queue.decide(queue.list().map((action) => action.id), answer);
+  } finally {
+    db.close();
+  }
+
+  const [text] = woken;
+
+  if (text === undefined) throw new Error(`deciding ${command} woke nobody`);
+
+  return text;
+}
+
 describe('the approval flow acknowledges only the current unanswered decisions', () => {
-  const approved = `APPROVED, still not run: re-issue once:\n  approved-id: ${PARKED_COMMANDS[1]}`;
-  const denied = `DENIED: do not re-issue:\n  denied-id: ${PARKED_COMMANDS[0]}`;
   const parked = [{ role: 'user', content: APPROVALS_ASK }, { role: 'assistant', content: 'BOTH PARKED' }];
 
   test('Approve then immediate Deny both reach the answer without re-issuing a command', async () => {
-    const answered = await reply([...parked, { role: 'user', content: approved }, { role: 'user', content: denied }]);
+    const answered = await reply([
+      ...parked, { role: 'user', content: await decisionWake(PARKED_COMMANDS[1], 'approved') },
+      { role: 'user', content: await decisionWake(PARKED_COMMANDS[0], 'denied') },
+    ]);
 
     expect(answered.tool_calls).toBeUndefined();
     expect(answered.content).toBe(`${DECISION_HEARD} approved denied`);
@@ -253,8 +286,9 @@ describe('the approval flow acknowledges only the current unanswered decisions',
 
   test('an approval acknowledged in an earlier answer is not counted by the next turn', async () => {
     const answered = await reply([
-      ...parked, { role: 'user', content: approved }, { role: 'assistant', content: `${DECISION_HEARD} approved` },
-      { role: 'user', content: denied },
+      ...parked, { role: 'user', content: await decisionWake(PARKED_COMMANDS[1], 'approved') },
+      { role: 'assistant', content: `${DECISION_HEARD} approved` },
+      { role: 'user', content: await decisionWake(PARKED_COMMANDS[0], 'denied') },
     ]);
 
     expect(answered.content).toBe(`${DECISION_HEARD} denied`);
@@ -262,8 +296,8 @@ describe('the approval flow acknowledges only the current unanswered decisions',
 
   test('a decision for a different fixture is not claimed by this flow', async () => {
     const answered = await reply([
-      ...parked, { role: 'user', content: 'APPROVED, still not run: re-issue once:\n  foreign-id: echo unrelated' },
-      { role: 'user', content: denied },
+      ...parked, { role: 'user', content: await decisionWake(`${PARKED_COMMANDS[0]}-elsewhere`, 'approved') },
+      { role: 'user', content: await decisionWake(PARKED_COMMANDS[0], 'denied') },
     ]);
 
     expect(answered.content).toBe(`${DECISION_HEARD} denied`);

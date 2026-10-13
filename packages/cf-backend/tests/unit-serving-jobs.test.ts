@@ -118,7 +118,7 @@ const gateway = stubAiBinding((run) => {
 
   return messages.slice(asked).some((message) => message.role === 'tool')
     ? chatCompletion(run, `Port ${String(port)} is no longer exposed.`)
-    : toolCallCompletion(run, { tool: 'eval', args: { code: `return await sandbox.unexposePort(${String(port)});` } }, 'eval_0');
+    : toolCallCompletion(run, { tool: 'eval', args: { code: `return await computer.unexposePort(${String(port)});` } }, 'eval_0');
 });
 
 /** A workspace whose agent has used its sandbox, with a server job and a build job running. */
@@ -131,7 +131,7 @@ async function workspaceWithJobs() {
   });
 
   harnessed.agent.harnessInstallCatalog(GATEWAY_CATALOG);
-  expect(await harnessed.agent.executeInExecutor('sandbox', 'true')).toMatchObject({ exitCode: 0 });
+  expect(await harnessed.agent.executeInExecutor('computer', 'true')).toMatchObject({ exitCode: 0 });
   const jobs = jobsOver(harnessed.db);
 
   for (const id of ['bgjob-server', 'bgjob-build']) jobs.create({ id, kind: 'shell', workMode: 'build', now: Date.now(), label: id, input: '{}' });

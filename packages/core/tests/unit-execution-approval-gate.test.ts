@@ -1,7 +1,7 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * The executor-seam approval gate: a command gated via `shell` must also be gated via codemode
- * (`nimbus.exec`, `sandbox.exec`, `device.exec`). Fails if `ExecutionRouter.register()` stops gating.
+ * (`nimbus.exec`, `computer.exec`, `device.exec`). Fails if `ExecutionRouter.register()` stops gating.
  */
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -188,10 +188,10 @@ describe('DefaultExecutionRouter — closes the codemode bypass', () => {
 
   test('BUG REPRO: getProviders() — what eval is actually built from on both backends — returns the gated tool too', async () => {
     const router = new DefaultExecutionRouter(strictNoChannelPolicy());
-    const { provider, executed } = fakeShellProvider('sandbox', 'sandbox', 'agent');
+    const { provider, executed } = fakeShellProvider('computer', 'computer', 'agent');
     router.register(provider);
 
-    const fromGetProviders = present(router.getProviders().find((p) => p.name === 'sandbox'), 'the sandbox provider from getProviders()');
+    const fromGetProviders = present(router.getProviders().find((p) => p.name === 'computer'), 'the sandbox provider from getProviders()');
     const result = await fromGetProviders.tools.exec.execute(DENY);
     expect(result).toMatchObject({ error: expect.stringContaining('rm-rf-root') });
     expect(executed).toEqual([]);
@@ -265,7 +265,7 @@ describe('the executor reaches the gate', () => {
   test("cf's sandbox holds the agent's own files: commands that could wreck a user's machine are not put to them", async () => {
     const { router, asked } = askingRouter();
     router.register(createSandboxExecutor());
-    const exec = present(router.getProvider('sandbox'), 'the registered sandbox').tools.exec;
+    const exec = present(router.getProvider('computer'), 'the registered sandbox').tools.exec;
 
     for (const command of ['sudo -n true', 'rm -rf ~/x', 'git reset --hard', 'chmod u+s tool']) {
       expect(await exec.execute(command)).not.toMatchObject({ error: expect.stringContaining('Denied by the owner') });
@@ -276,10 +276,10 @@ describe('the executor reaches the gate', () => {
 
   test("an executor holding the user's files is asked, whatever it is named", async () => {
     const { router, asked } = askingRouter();
-    const { provider, executed } = fakeShellProvider('sandbox', 'sandbox', 'user');
+    const { provider, executed } = fakeShellProvider('computer', 'computer', 'user');
     router.register(provider);
 
-    const result = await present(router.getProvider('sandbox'), 'the registered provider').tools.exec.execute(HOUSEKEEPING);
+    const result = await present(router.getProvider('computer'), 'the registered provider').tools.exec.execute(HOUSEKEEPING);
 
     expect(result).toMatchObject({ error: expect.stringContaining('Denied by the owner') });
     expect(executed).toEqual([]);
@@ -298,10 +298,10 @@ describe('the executor reaches the gate', () => {
       },
     });
 
-    const { provider, executed } = fakeShellProvider('sandbox', 'sandbox', 'agent');
+    const { provider, executed } = fakeShellProvider('computer', 'computer', 'agent');
     router.register(provider);
 
-    const result = await present(router.getProvider('sandbox'), 'the registered sandbox provider').tools.exec.execute(HOUSEKEEPING);
+    const result = await present(router.getProvider('computer'), 'the registered sandbox provider').tools.exec.execute(HOUSEKEEPING);
 
     expect(result).toBe(`ran: ${HOUSEKEEPING}`);
     expect(executed).toEqual([HOUSEKEEPING]);

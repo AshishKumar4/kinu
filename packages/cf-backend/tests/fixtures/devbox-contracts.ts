@@ -69,7 +69,7 @@ export class ContractBox extends Devbox<Env> {
       transactions: { storage: { transactionSync: work => this.ctx.storage.transactionSync(work) } },
     });
 
-    workspace.filesystem.vfs.mount('/sandbox', sandboxFiles(adaptCloudflareSandbox(this, async () => {}, null)), { resolvesPaths: true });
+    workspace.filesystem.vfs.mount('/computer', sandboxFiles(adaptCloudflareSandbox(this, async () => {}, null)), { resolvesPaths: true });
     const listing: { width: number; calls: number; ms: number }[] = [];
     const find: { command: string; calls: number; ms: number; entries: number }[] = [];
 
@@ -87,10 +87,10 @@ export class ContractBox extends Devbox<Env> {
     const native = await this.exec('find /usr/share -maxdepth 1');
 
     if (native.exitCode !== 0) throw new Error(`the native find failed: ${native.stderr}`);
-    const expected = native.stdout.trim().split('\n').map(path => `/sandbox${path}`).sort().join('\n');
+    const expected = native.stdout.trim().split('\n').map(path => `/computer${path}`).sort().join('\n');
 
     for (let repeat = 0; repeat < 3; repeat += 1) {
-      const command = 'find /sandbox/usr/share -maxdepth 1';
+      const command = 'find /computer/usr/share -maxdepth 1';
       const calls = this.#remoteCalls;
       const at = Date.now();
       const ran = await workspace.exec(command);
@@ -276,25 +276,42 @@ async function contractRoute(url: URL, name: string, box: DurableObjectStub<Cont
   }
 }
 
+/**
+ * Marks every answer this fixture makes (`scripts/devbox-container-tier.ts` reads it): for a while after a deploy some
+ * edges still answer the route with their own 404 page, and a driver tells those from the fixture's (#81).
+ */
+const FIXTURE_ANSWER = 'x-devbox-fixture';
+
+async function answer(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  if (env.EVAL_IDENTITY === undefined || request.headers.get('authorization') !== `Bearer ${env.EVAL_IDENTITY}`) return new Response('unauthorized', { status: 401 });
+  const url = new URL(request.url);
+
+  if (url.pathname === '/health') return Response.json({ ok: true });
+
+  const desktop = await desktopRoute(request, env, ctx, url);
+
+  if (desktop !== null) return desktop;
+
+  const name = url.searchParams.get('box') ?? '';
+
+  if (!name.startsWith('eval-devbox-') && name !== GOLDEN_NAME) return new Response('only this run\'s eval workspaces', { status: 403 });
+  const box = env.Box.getByName(name);
+  const body = request.method === 'POST' ? v.parse(Body, await request.json()) : {};
+
+  try {
+    return await contractRoute(url, name, box, body);
+  } catch (cause) { return Response.json({ error: describeThrown({ cause }) }, { status: 500 }); }
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    if (env.EVAL_IDENTITY === undefined || request.headers.get('authorization') !== `Bearer ${env.EVAL_IDENTITY}`) return new Response('unauthorized', { status: 401 });
-    const url = new URL(request.url);
+    const answered = await answer(request, env, ctx);
 
-    if (url.pathname === '/health') return Response.json({ ok: true });
+    // A WebSocket's upgrade passes as the box made it.
+    if (answered.webSocket !== null) return answered;
+    const marked = new Response(answered.body, answered);
+    marked.headers.set(FIXTURE_ANSWER, '1');
 
-    const desktop = await desktopRoute(request, env, ctx, url);
-
-    if (desktop !== null) return desktop;
-
-    const name = url.searchParams.get('box') ?? '';
-
-    if (!name.startsWith('eval-devbox-') && name !== GOLDEN_NAME) return new Response('only this run\'s eval workspaces', { status: 403 });
-    const box = env.Box.getByName(name);
-    const body = request.method === 'POST' ? v.parse(Body, await request.json()) : {};
-
-    try {
-      return await contractRoute(url, name, box, body);
-    } catch (cause) { return Response.json({ error: describeThrown({ cause }) }, { status: 500 }); }
+    return marked;
   },
 } satisfies ExportedHandler<Env>;

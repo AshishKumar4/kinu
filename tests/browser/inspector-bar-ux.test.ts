@@ -5,11 +5,11 @@
  */
 import { describe, expect, test } from 'bun:test';
 import type { ElementHandle, Page } from 'puppeteer';
-import { executorLabel } from '@kinu.run/core';
 import { withGallery } from '../../scripts/gallery-harness';
 
 /** The agent's own machine, by the one label every surface gives it. */
-const COMPUTER = executorLabel('sandbox');
+// The owner reads the computer's own name, not the namespace (d052cd645 rendered `computer`).
+const COMPUTER = 'Computer';
 
 const TOOL_NAMES = ['Work', 'Changes', 'Files', 'Swarms', 'Agent', 'Environment', 'Activity'];
 
@@ -156,14 +156,14 @@ describe('the Environment panel', () => {
       try {
         await page.setViewport({ width: 1280, height: 1000 });
         await page.goto(`${origin}/gallery.html?frame=environment`, { waitUntil: 'networkidle0' });
-        await page.waitForSelector('[data-env-card="sandbox"]', SOON);
+        await page.waitForSelector('[data-env-card="computer"]', SOON);
 
-        const card = await required(page, '[data-env-card="sandbox"]', 'button', COMPUTER);
+        const card = await required(page, '[data-env-card="computer"]', 'button', COMPUTER);
 
         // From the keyboard: the control takes focus and Enter selects it, so its pane offers its terminal and screen.
         await card.focus();
         await page.keyboard.press('Enter');
-        await page.waitForSelector('[data-env-card="sandbox"] [aria-pressed="true"]', SOON);
+        await page.waitForSelector('[data-env-card="computer"] [aria-pressed="true"]', SOON);
         expect(await control(page, 'body', 'tab', 'Terminal')).not.toBeNull();
         expect(await control(page, 'body', 'tab', 'Desktop')).not.toBeNull();
       } finally { await page.close(); }
@@ -194,8 +194,8 @@ describe('the Environment panel', () => {
       try {
         await page.setViewport({ width: 1280, height: 1000 });
         await page.goto(`${origin}/gallery.html?frame=environment`, { waitUntil: 'networkidle0' });
-        await page.waitForSelector('[data-env-card="sandbox"]', SOON);
-        await (await required(page, '[data-env-card="sandbox"]', 'button', COMPUTER)).click();
+        await page.waitForSelector('[data-env-card="computer"]', SOON);
+        await (await required(page, '[data-env-card="computer"]', 'button', COMPUTER)).click();
         await (await required(page, 'body', 'tab', 'Desktop')).click();
 
         const frame = await page.waitForSelector(`iframe[title="${COMPUTER}'s desktop"]`, SOON);

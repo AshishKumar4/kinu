@@ -49,7 +49,7 @@ describe('dedupeKeyFor — process_done', () => {
   test('keyed by process_id', () => {
     const e: KinuEvent = {
       ...base(),
-      ingress: 'sandbox_cb',
+      ingress: 'computer_cb',
       variant: 'process_done',
       payload: { process_id: 'pid-42', command: 'ls', exit_code: 0, stdout_excerpt: '', stderr_excerpt: '', duration_ms: 0 },
     };

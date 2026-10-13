@@ -54,7 +54,7 @@ function filesRootFor(name: string): string | null {
 const ENVIRONMENT_ICONS = {
   workspace: SquaresFourIcon,
   device: DesktopTowerIcon,
-  sandbox: DesktopIcon,
+  computer: DesktopIcon,
   parent: GitForkIcon,
 } satisfies Record<string, Icon>;
 
@@ -198,7 +198,7 @@ function SelectedEnvironmentPane({ mount, exec, workspace, executorOutputs, onEx
   const name = exec?.label ?? executorLabel(mount.name);
   const KindIcon = environmentIcon(mount.name);
   // Only the computer has a screen.
-  const desktop = exec?.name === "sandbox" ? desktopClientUrl(location, workspace) : null;
+  const desktop = exec?.name === "computer" ? desktopClientUrl(location, workspace) : null;
   const shown = desktop === null ? "terminal" : view;
 
   return (
@@ -302,13 +302,13 @@ function EnvironmentCard({ rpc, mount, exec, active, onSelect, onOpenFiles }: {
           ><FolderOpenIcon size={12} />Files</button>
         )}
       </div>
-      {executor === "sandbox" && <div className="relative pt-1"><SandboxSizeRow rpc={rpc} /></div>}
+      {executor === "computer" && <div className="relative pt-1"><SandboxSizeRow rpc={rpc} /></div>}
     </div>
   );
 }
 
 function UnavailableMount({ mount, exec }: { mount: MountInfo; exec: ExecutorInfo | undefined }) {
-  const docs = mount.name === "sandbox"
+  const docs = mount.name === "computer"
       ? { text: "This deployment has no computer. Use the Workspace shell instead.", href: "https://github.com/AshishKumar4/kinu/blob/main/docs/EXECUTION-LAYER-SPEC.md" }
       : { text: mount.reason ?? exec?.reason ?? "This environment is not enabled here.", href: "https://github.com/AshishKumar4/kinu/blob/main/docs/EXECUTION-LAYER-SPEC.md" };
 

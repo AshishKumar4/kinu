@@ -22,7 +22,7 @@ const DEVICE_EXECUTOR = "device";
 
 const WORKSPACE_EXECUTOR = "workspace";
 
-const SANDBOX_EXECUTOR = "sandbox";
+const COMPUTER_EXECUTOR = "computer";
 
 /** Each lane's report when its executor is not ready for an attach. */
 const NOT_READY = {
@@ -415,10 +415,10 @@ export function terminalRoutes<Bindings extends object>(
 
   routes.all(`${LITERAL_WORKSPACE}/desktop`, async (c) => {
     const { name: agentName, request } = c.get('workspace');
-    const scope = { workspace: agentName, executor: SANDBOX_EXECUTOR };
+    const scope = { workspace: agentName, executor: COMPUTER_EXECUTOR };
 
     return sandboxTerminal({
-      request, url: new URL(request.url), deps: depsFor(c.env), agentName, executor: SANDBOX_EXECUTOR, verb: "attach", scope, surface: "desktop",
+      request, url: new URL(request.url), deps: depsFor(c.env), agentName, executor: COMPUTER_EXECUTOR, verb: "attach", scope, surface: "desktop",
     }, c.executionCtx);
   });
 

@@ -77,7 +77,7 @@ const PRIORITY_ORDER = {
 
 const IngressSchema = v.picklist([
   'chat_ws', 'webhook_hmac', 'webhook_bearer', 'webhook_mtls', 'timer_alarm',
-  'sandbox_cb', 'peer_async', 'mcp_streamable',
+  'computer_cb', 'peer_async', 'mcp_streamable',
   'email_inbound', 'subordinate', 'self_emit', 'reply_request',
 ]);
 

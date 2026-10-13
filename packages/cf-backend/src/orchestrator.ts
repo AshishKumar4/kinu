@@ -3621,7 +3621,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     if (namespace === undefined) return;
 
     if (this.config.get(SANDBOX_STARTING) == null && this.config.get(SANDBOX_REFUSED) == null) return;
-    this.detachOwned(logged('sandbox.restore_recheck_failed', { doing: "reading the sandbox's restore state", otherwise: 'unavailable' }, async () => {
+    this.detachOwned(logged('computer.restore_recheck_failed', { doing: "reading the computer's restore state", otherwise: 'unavailable' }, async () => {
       await this.sandboxRestore(await namespace.getByName(sandboxIdForWorkspace(this.name)).restoreStatus());
     }, { workspace: this.name }));
   }
@@ -6048,16 +6048,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.rt.executionRouter ? listEnvironments(this.rt.executionRouter) : [];
   }
 
-  @callable() async getSandboxSize(): Promise<SandboxSizeState | null> {
+  @callable() async getComputerSize(): Promise<SandboxSizeState | null> {
     return await this.withSizedBox(async () => {});
   }
 
   /** The owner's try-again for a refused start: the box's one start path, which clears the refusal. */
-  @callable() async startSandbox(): Promise<SandboxSizeState | null> {
+  @callable() async startComputer(): Promise<SandboxSizeState | null> {
     return await this.withSizedBox(async (box) => { await box.start(); });
   }
 
-  @callable() async resizeSandbox(size: string | null): Promise<SandboxSizeState | null> {
+  @callable() async resizeComputer(size: string | null): Promise<SandboxSizeState | null> {
     return await this.withSizedBox(async (box) => { await box.resize(size); });
   }
 
@@ -6673,7 +6673,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         return (yield* terminalStep(Effect.promise(async () => this.hostedWorkspace().terminal()), 'composing the workspace runtime for a terminal')) ?? { ok: true };
       }
 
-      if (executorId !== 'sandbox') return { error: `${executorId} has no terminal` };
+      if (executorId !== 'computer') return { error: `${executorId} has no terminal` };
       const handle = this.rt.sandboxHandle;
 
       if (!handle) return { error: 'this workspace has no computer configured' };
@@ -6706,18 +6706,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Workspace port registrations live in Nimbus, so they stay authoritative after a restart. */
   @callable() async getExposedPorts(executorId: string): Promise<ExposedPortList> {
-    const refused = executorId === 'sandbox' ? this.config.get(SANDBOX_REFUSED) : null;
+    const refused = executorId === 'computer' ? this.config.get(SANDBOX_REFUSED) : null;
 
     if (refused != null) return { ports: [], error: refused };
 
-    if (executorId === 'sandbox' && this.config.get(SANDBOX_STARTING) != null) {
-      return { ports: [], pending: "the sandbox's container is still restoring" };
+    if (executorId === 'computer' && this.config.get(SANDBOX_STARTING) != null) {
+      return { ports: [], pending: "the computer is still restoring" };
     }
 
     const provider = this.rt.executionRouter?.getProvider(executorId);
 
     if (!provider) {
-      return executorId === 'sandbox'
+      return executorId === 'computer'
         ? { ports: [] }
         : { ports: [], error: `${executorId} preview provider is unavailable` };
     }

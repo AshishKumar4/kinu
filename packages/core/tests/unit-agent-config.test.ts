@@ -46,19 +46,19 @@ describe('AgentConfigStore — lastActiveExecutor', () => {
   test('round-trips a valid executor name', () => {
     const c = setup();
     expect(c.getLastActiveExecutor()).toBeNull();
-    c.setLastActiveExecutor('sandbox');
-    expect(c.getLastActiveExecutor()).toBe('sandbox');
+    c.setLastActiveExecutor('computer');
+    expect(c.getLastActiveExecutor()).toBe('computer');
     c.setLastActiveExecutor('workspace');
     expect(c.getLastActiveExecutor()).toBe('workspace');
   });
 
   test('rejects values that are not plausible executor namespaces', () => {
     const c = setup();
-    c.setLastActiveExecutor('sandbox');
+    c.setLastActiveExecutor('computer');
     c.setLastActiveExecutor('; DROP TABLE actor_config; --');
     c.setLastActiveExecutor('');
     c.setLastActiveExecutor('a'.repeat(40));
-    expect(c.getLastActiveExecutor()).toBe('sandbox'); // unchanged by the bad writes
+    expect(c.getLastActiveExecutor()).toBe('computer'); // unchanged by the bad writes
   });
 });
 
@@ -255,7 +255,7 @@ describe('AgentConfigStore — every key has a write path', () => {
     (c) => c.setAdvisorEnabled(true),
     (c) => c.setAdvisorMinSeverity('blocker'),
     (c) => c.setAlwaysActiveSkills(['research']),
-    (c) => c.setLastActiveExecutor('sandbox'),
+    (c) => c.setLastActiveExecutor('computer'),
     (c) => c.setChangelogSeenAt(1_750_000_000_000),
     (c) => c.countClosedTurnWindow(),
     (c) => c.countIsolateGeneration(),

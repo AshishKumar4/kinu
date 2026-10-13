@@ -88,7 +88,7 @@ export class KinuDevbox extends Devbox<Env> {
   override async onStop(): Promise<void> {
     await super.onStop();
 
-    await settleLogged("sandbox.stop_notice_failed", { doing: "telling the workspace its sandbox stopped", otherwise: "unavailable" }, async () => {
+    await settleLogged("computer.stop_notice_failed", { doing: "telling the workspace its computer stopped", otherwise: "unavailable" }, async () => {
       await (await this.#rootAgent())?.sandboxStopped();
     });
   }

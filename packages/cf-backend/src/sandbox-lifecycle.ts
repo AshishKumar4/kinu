@@ -1,7 +1,7 @@
 /**
  * Sandbox lifecycle failures, announced to the agent through the inbox. The ledger, keyed by
  * `incidentId` and written before delivery, makes it exactly-once: announced incidents are answered
- * from the row, undelivered ones re-delivered. The reason is not scrubbed; the sandbox must put no secrets there.
+ * from the row, undelivered ones re-delivered. The reason is not scrubbed; the computer must put no secrets there.
  * `waitUntil` is a no-op in a DO, so ledger write and delivery run inside the answering invocation.
  */
 
@@ -26,7 +26,7 @@ const SANDBOX_LIFECYCLE_SIGNAL_KIND = 'sandbox_lifecycle_failure';
 const STAGE_CONSEQUENCE = {
   attach: 'The container came up without its workspace, or with an incomplete one. '
     + 'Files you expect to be there may be absent even though they were written earlier, '
-    + 'and sandbox tools are refused until an attach succeeds. '
+    + 'and computer tools are refused until an attach succeeds. '
     + 'The reported cause names the recovery the container chose for this failure, '
     + 'so read it before you decide whether to wait or to try again. '
     + 'Verify the workspace contents before you trust or overwrite anything in it.',
@@ -40,10 +40,10 @@ const STAGE_CONSEQUENCE = {
   quiesce: 'The container could not read its own process list, so it may rest without knowing '
     + 'whether a command you started is still running. If a command matters, check its result '
     + 'before you rely on it, and re-run it if it is missing.',
-  rest: 'Answer with sandbox.rest(\'now\') or sandbox.rest(\'keep\'). \'now\' saves the workspace and stops the '
+  rest: 'Answer with computer.rest(\'now\') or computer.rest(\'keep\'). \'now\' saves the workspace and stops the '
     + 'container: an unsupervised process listed ends and does not come back, and a supervised server restarts '
     + 'cold on its next use, without its in-memory state. Until you answer, the container keeps running.',
-  recovered: 'Every sandbox tool works: the workspace is as it was at that time. Rebuild the folders named above '
+  recovered: 'Every computer tool works: the workspace is as it was at that time. Rebuild the folders named above '
     + 'before you rely on them, and redo any edit made after that time that you still need.',
 } satisfies Record<IncidentStage, string>;
 
@@ -229,7 +229,7 @@ export function acceptSandboxLifecycleIncident(
     };
 
     // Passed on so the container retries; the unannounced row makes that safe.
-    const outcome: SendOutcome = yield* attempt({ doing: 'announcing a sandbox lifecycle failure to the agent', otherwise: 'io' }, () => deps.inbox.send(signal)).pipe(
+    const outcome: SendOutcome = yield* attempt({ doing: 'announcing a computer lifecycle failure to the agent', otherwise: 'io' }, () => deps.inbox.send(signal)).pipe(
       Effect.tapError((error) => Effect.sync(() => { recordSettlement('failed', error.code); })),
     );
 
@@ -281,7 +281,7 @@ export function restoreNotices(tell: () => Promise<void>): (phase: RestoreClockP
     if (phase !== 'opened' && phase !== 'settled') return;
 
     told = told.then(async () => {
-      await settleLogged('sandbox.starting_notice_failed', { doing: 'telling the workspace its sandbox is starting or ready', otherwise: 'unavailable' }, () => tell());
+      await settleLogged('computer.starting_notice_failed', { doing: 'telling the workspace its computer is starting or ready', otherwise: 'unavailable' }, () => tell());
     });
   };
 }

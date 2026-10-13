@@ -199,7 +199,7 @@ export interface RecoveryRowInput {
 export function recordSandboxRecovery(env: AnalyticsEnv, input: RecoveryRowInput): void {
   return settleSync(emit(analyticsPlane(env).agent, agentRow({
     kind: 'event',
-    event: 'sandbox.recovery_settled',
+    event: 'computer.recovery_settled',
     workspace: input.workspace,
     agentKind: 'orchestrator',
     source: input.stage,

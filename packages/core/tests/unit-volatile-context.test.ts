@@ -17,11 +17,11 @@ import type {
 } from '../src/index';
 import { present } from '@kinu.run/test-utils';
 
-const idleSandbox: PromptExecutorInfo = { name: 'sandbox', available: true, configured: true, active: false, status: 'idle' };
+const idleSandbox: PromptExecutorInfo = { name: 'computer', available: true, configured: true, active: false, status: 'idle' };
 
 const roster = <T>(items: T[]) => ({ items, total: items.length });
 
-const activeSandbox: PromptExecutorInfo = { name: 'sandbox', available: true, configured: true, active: true, status: 'active' };
+const activeSandbox: PromptExecutorInfo = { name: 'computer', available: true, configured: true, active: true, status: 'active' };
 
 const connectedDevice: PromptExecutorInfo = { name: 'device', available: true, configured: true, active: true, status: 'active' };
 
@@ -33,13 +33,13 @@ const workspace: PromptExecutorInfo = { name: 'workspace', available: true, conf
 test('the execution status names a configured runtime that is down, and leaves out one never configured', () => {
   const block = present(renderDynamicContextBlock({ executors: [
     { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
-    { name: 'sandbox', kind: 'sandbox', available: false, configured: true, active: false, status: 'error' },
+    { name: 'computer', kind: 'computer', available: false, configured: true, active: false, status: 'error' },
     { name: 'device', kind: 'device', available: false, configured: true, active: false, status: 'disconnected' },
-    { name: 'gpu', kind: 'sandbox', available: false, configured: false, active: false, status: 'not_configured' },
+    { name: 'gpu', kind: 'computer', available: false, configured: false, active: false, status: 'not_configured' },
   ] }), 'the block');
 
   expect(block).toContain('workspace');
-  expect(block).toContain('sandbox');
+  expect(block).toContain('computer');
   expect(block).toContain('device');
   expect(block).not.toContain('gpu');
 });
@@ -554,7 +554,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     const delta = messageText(present(second.at(-1), 'woven tail'));
 
     expect(second[0]).toBe(first[0]);
-    expect(delta).toContain('sandbox');
+    expect(delta).toContain('computer');
     expect(delta).toContain('active');
     expect(delta).not.toContain('unchanged = yes');
     expect(delta).not.toContain('- workspace:');
@@ -598,7 +598,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     const fresh = { factsBlock: '- fresh = yes' };
     const revived = ledger.weave(history, fresh);
     expect(revived.at(-1)?.content).toContain('- fresh = yes');
-    expect(revived.at(-1)?.content).not.toContain('sandbox');
+    expect(revived.at(-1)?.content).not.toContain('computer');
   });
 
   test('executor deltas use immutable structured identities, including punctuation', () => {
@@ -632,7 +632,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
 
     expect(delta).toContain('- old: gpu: removed from execution status.');
     expect(delta).toContain('- new, gpu: available, runs: native_binary');
-    expect(delta).toContain('- sandbox: active, files at /sandbox, runs: python, not measured here: docker');
+    expect(delta).toContain('- computer: active, files at /computer, runs: python, not measured here: docker');
 
     expect(delta).not.toContain('- workspace:');
   });
@@ -645,8 +645,8 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     const delta = messageText(present(ledger.weave(history, { factsBlock: '- unchanged = yes', executors: [workspace, connectedDevice] }).at(-1), 'woven tail'));
 
     expect(delta).toContain('- device: connected, files at /pc');
-    expect(delta).toContain('- sandbox: removed from execution status.');
-    expect(delta).not.toContain('/sandbox');
+    expect(delta).toContain('- computer: removed from execution status.');
+    expect(delta).not.toContain('/computer');
     expect(delta).not.toContain('- workspace:');
     expect(delta).not.toContain('unchanged = yes');
   });

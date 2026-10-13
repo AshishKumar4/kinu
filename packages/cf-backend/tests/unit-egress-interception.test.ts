@@ -39,7 +39,7 @@ const PLACEHOLDER = `${EGRESS_PLACEHOLDER_PREFIX}${'Q'.repeat(43)}`;
 
 const PARAMS: KinuEgressParams = { workspaceName: 'kinu-main', ownerUserId: 'user-1' };
 
-const STRIPE_GRANT: ApprovalGrant = { rule: 'egress-secret:stripe', executor: 'sandbox' };
+const STRIPE_GRANT: ApprovalGrant = { rule: 'egress-secret:stripe', executor: 'computer' };
 
 /** The workspace's grants as the egress asks for them: Stripe's, for every request that names a placeholder. */
 const WORKSPACE: EgressWorkspace = { grants: async () => [STRIPE_GRANT] };

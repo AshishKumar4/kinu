@@ -9,7 +9,7 @@ import type { ExecutorProviderSurface } from '../execution/types';
 import { answeredRefusal } from '../execution/exec-result';
 import { KinuError, settleSync } from '../obs/index';
 import { serve, type Operation, type Served } from '../operations/operation';
-import { DEVICE, PARENT, SANDBOX, WORKSPACE, sandboxResize } from '../operations/executors';
+import { COMPUTER, computerResize, DEVICE, PARENT, WORKSPACE } from '../operations/executors';
 import { JsonObjectSchema, projectJsonValue, type JsonValue } from '../utils/json';
 import { programExecContext } from './outcome';
 import type { CodemodeProvider } from '../types/codemode';
@@ -18,7 +18,7 @@ import { callArgs, codemodeNamespace } from './operation-surfaces';
 /** Each executor's declared members and what it is, by the executor's name. */
 const DECLARED = new Map<string, { readonly ops: Readonly<Record<string, Operation>>; readonly summary: string }>([
   ['workspace', { ops: WORKSPACE, summary: 'Your workspace: its files and shell, the tools you save, and its slates.' }],
-  ['sandbox', { ops: SANDBOX, summary: 'The sandbox container, with files and a shell of its own.' }],
+  ['computer', { ops: COMPUTER, summary: 'Your computer, a Linux machine with files and a shell of its own.' }],
   ['parent', { ops: PARENT, summary: 'The workspace that hired you.' }],
   ['device', { ops: DEVICE, summary: 'The user\'s machine.' }],
 ]);
@@ -61,14 +61,14 @@ const SLATES_DECLARATION = {
   call: 'slates.<id>.<member>(...)',
 };
 
-/** An executor's members as programs call them; a sandbox with sizes adds `resize` over them. */
+/** An executor's members as programs call them; a computer with sizes adds `resize` over them. */
 export function executorNamespace(provider: ExecutorProviderSurface): CodemodeProvider {
   const declared = DECLARED.get(provider.name);
 
   if (declared === undefined) return settleSync(Effect.die(new Error(`executor ${provider.name} has no declared members`)));
-  // Only a sandbox with sizes has `resize`, declared over them.
+  // Only a computer with sizes has `resize`, declared over them.
   const sizes = provider.tools.resize === undefined ? undefined : provider.getStatus?.().sizes;
-  const ops = sizes === undefined ? Object.values(declared.ops) : [...Object.values(declared.ops), sandboxResize(sizes.sizes)];
+  const ops = sizes === undefined ? Object.values(declared.ops) : [...Object.values(declared.ops), computerResize(sizes.sizes)];
   const namespace = codemodeNamespace(provider.name, declared.summary, forwarded(provider, ops));
   const slates = provider.tools.slates;
 

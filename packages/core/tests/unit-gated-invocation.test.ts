@@ -200,7 +200,7 @@ describe('the member is part of the ask', () => {
 
     const router = new DefaultExecutionRouter({ ...policy, requestApproval: live.ask });
     router.register(createSandboxExecutor(handle));
-    const { tools } = present(router.getProvider('sandbox'), 'the sandbox');
+    const { tools } = present(router.getProvider('computer'), 'the sandbox');
     const foreground = tools.exec.execute(GATED, { cwd: '/workspace' });
     const supervised = present(tools.startProcess, 'startProcess').execute(GATED, { cwd: '/workspace' });
 
@@ -218,7 +218,7 @@ describe('the member is part of the ask', () => {
     const { policy, queue } = owner('deny');
     const router = new DefaultExecutionRouter({ ...policy, requestApproval: null });
     router.register(createSandboxExecutor(sandboxOver(async () => ({ stdout: '', stderr: '', exitCode: 0 }))));
-    const { exec } = present(router.getProvider('sandbox'), 'the sandbox').tools;
+    const { exec } = present(router.getProvider('computer'), 'the sandbox').tools;
 
     await exec.execute(GATED);
     await exec.execute(GATED, { job: 'job-1', detached: new AbortController().signal });
@@ -288,7 +288,7 @@ describe('an approval answers the row it shows, and returns when nothing ran', (
       return { stdout: '', stderr: '', exitCode: 0 };
     })));
 
-    const { exec } = present(router.getProvider('sandbox'), 'the sandbox').tools;
+    const { exec } = present(router.getProvider('computer'), 'the sandbox').tools;
 
     expect(JSON.stringify(await exec.execute(GATED, { signal: cancel.signal }))).toContain('NOT RUN');
     expect(ran).toEqual([]);
@@ -437,7 +437,7 @@ describe('a named shell is part of the ask as it was when asked', () => {
 
     const router = new DefaultExecutionRouter(policy);
     router.register(createSandboxExecutor(sandboxOver((command) => machine.exec(command)), { shells: SHELLS }));
-    const exec = present(router.getProvider('sandbox'), 'the sandbox').tools.exec;
+    const exec = present(router.getProvider('computer'), 'the sandbox').tools.exec;
 
     await exec.execute('cd sub', { name: 'dev' });
 
@@ -465,7 +465,7 @@ describe('a named shell is part of the ask as it was when asked', () => {
       return await machine.exec(command);
     }), { shells: SHELLS }));
 
-    const exec = present(router.getProvider('sandbox'), 'the sandbox').tools.exec;
+    const exec = present(router.getProvider('computer'), 'the sandbox').tools.exec;
 
     await exec.execute(`${DOOMING} doomed`, { name: 'dev' });
     await queue.decide(queue.list().map((row) => row.id), 'approved');

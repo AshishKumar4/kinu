@@ -187,7 +187,7 @@ describe('a program reaches another plane\'s files', () => {
       return [provider.name, members.filter((member) => member === 'readFile' || member === 'writeFile')];
     });
 
-    expect(ownFileMembers).toEqual([['device', []], ['sandbox', []], ['parent', []]]);
+    expect(ownFileMembers).toEqual([['device', []], ['computer', []], ['parent', []]]);
   });
 
   test('and a secret on the machine is refused there as the file tool refuses it', async () => {

@@ -1,5 +1,5 @@
 import type { VFS, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
-/** Native container executor, one durable workspace per agent, exposed as sandbox.*. */
+/** Native container executor, one durable workspace per agent, exposed as computer.*. */
 
 import * as v from 'valibot';
 import { abortedBeforeStart } from '@kinu.run/agent-utils';
@@ -111,13 +111,13 @@ export type SandboxRestAnswer =
 function restText(answered: SandboxRestAnswer): string | Refusal {
   switch (answered.kind) {
     case 'resting':
-      return 'The sandbox saved its workspace and stopped. The next sandbox call starts it again.';
+      return 'The computer saved its workspace and stopped. The next computer call starts it again.';
     case 'kept':
-      return `The sandbox keeps running. It asks again after about ${String(Math.round(answered.askAgainAfterMs / 60_000))} minutes without use.`;
+      return `The computer keeps running. It asks again after about ${String(Math.round(answered.askAgainAfterMs / 60_000))} minutes without use.`;
     case 'refused':
-      return refusalOf(new KinuError('bad_input', `sandbox rest: ${answered.reason}`));
+      return refusalOf(new KinuError('bad_input', `computer.rest: ${answered.reason}`));
     case 'failed':
-      return refusalOf(new KinuError('io', `sandbox rest: the sandbox could not save its workspace, so it keeps running: ${answered.reason}`));
+      return refusalOf(new KinuError('io', `computer.rest: the computer could not save its workspace, so it keeps running: ${answered.reason}`));
   }
 }
 
@@ -141,24 +141,24 @@ function labelOf(sizes: SandboxSizes, size: string | undefined): string {
   return row === undefined ? String(size) : sandboxSizeLabel(row);
 }
 
-/** The answer to `sandbox.resize`, in the terms its declaration uses. */
+/** The answer to `computer.resize`, in the terms its declaration uses. */
 function resizedText(resized: SandboxResize, sizes: SandboxSizes): string | Refusal {
   const size = labelOf(sizes, resized.size);
 
   switch (resized.kind) {
     case 'recorded':
-      return `The sandbox is not running; it starts at ${size}.`;
+      return `The computer is not running; it starts at ${size}.`;
     case 'unchanged':
-      return `The sandbox already runs at ${size}.`;
+      return `The computer already runs at ${size}.`;
     case 'restarted': {
       const ended = resized.endedCommands === 0 ? '' : `; ${String(resized.endedCommands)} running command${resized.endedCommands === 1 ? '' : 's'} ended`;
 
-      return `The sandbox restarted at ${size}${resized.previous === undefined ? '' : `, from ${labelOf(sizes, resized.previous)}`}. `
+      return `The computer restarted at ${size}${resized.previous === undefined ? '' : `, from ${labelOf(sizes, resized.previous)}`}. `
         + `Files are kept, and supervised servers and exposed ports came back${ended}.`;
     }
 
     case 'failed':
-      return refusalOf(new KinuError('io', `The sandbox still runs at ${labelOf(sizes, resized.previous)}: its final checkpoint failed `
+      return refusalOf(new KinuError('io', `The computer still runs at ${labelOf(sizes, resized.previous)}: its final checkpoint failed `
         + `(${resized.reason}). It starts at ${size} next time.`));
   }
 }
@@ -255,11 +255,11 @@ function normalize(res: { stdout: string; stderr: string; exitCode: number; cwd?
 
 /** Worded distinctly from the adapter's own cancellation, which names the process it killed. */
 function cancelledWhileRunning(command: string): Error {
-  return new DOMException(`sandbox exec \`${command}\` cancelled while it ran`, 'AbortError');
+  return new DOMException(`computer.exec \`${command}\` cancelled while it ran`, 'AbortError');
 }
 
 function notDispatched(): Error {
-  return abortedBeforeStart('sandbox exec cancelled before dispatch: no container process was started');
+  return abortedBeforeStart('computer.exec cancelled before dispatch: no container process was started');
 }
 
 export interface SandboxExecutorOptions {
@@ -302,10 +302,10 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
     if (!listening) {
       return {
         supported: false,
-        reason: `nothing is listening on port ${port} inside the sandbox. `
-          + `Start your server FIRST with a SUPERVISED process, then call sandbox.exposePort again. Examples:\n`
-          + `  - Static site: await sandbox.startProcess("python3 -m http.server ${port} --directory /workspace/<app-dir>")\n`
-          + `  - Node:        await sandbox.startProcess("node server.js", {cwd:"/workspace/<app-dir>"})\n`
+        reason: `nothing is listening on port ${port} inside the computer. `
+          + `Start your server FIRST with a SUPERVISED process, then call computer.exposePort again. Examples:\n`
+          + `  - Static site: await computer.startProcess("python3 -m http.server ${port} --directory /workspace/<app-dir>")\n`
+          + `  - Node:        await computer.startProcess("node server.js", {cwd:"/workspace/<app-dir>"})\n`
           + `Supervision is what makes the process survive a container restart; a bare \`nohup ... &\` does not and will be lost.`,
       };
     }
@@ -321,7 +321,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
 
   const tools: ExecutorProvider['tools'] = {
     exec: commandTool(
-      'Run a shell command in the sandbox container. '
+      'Run a shell command on your computer. '
         + 'BUN IS THE DEFAULT toolchain here (bun 1.3.12 ships in the image): use `bun install`, '
         + '`bun run`, `bun x` and `bun test` rather than npm, npx, yarn or pnpm unless a project '
         + 'genuinely requires one of those. '
@@ -332,12 +332,12 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
         if (!handle) return { refused: notConfigured() };
         const command = parseInput(StringSchema, { value: args[0] });
 
-        if (command === undefined) return { refused: refusalOf(new KinuError('bad_input', 'sandbox exec: command must be a string')) };
+        if (command === undefined) return { refused: refusalOf(new KinuError('bad_input', 'computer.exec: command must be a string')) };
         const exec = shellExecOptions({ value: args[1] });
         const { signal, job, output } = exec;
 
         if (exec.name !== undefined && shells === undefined) {
-          return { refused: refusalOf(new KinuError('unsupported', 'sandbox exec: this runtime keeps no named shells')) };
+          return { refused: refusalOf(new KinuError('unsupported', 'computer.exec: this runtime keeps no named shells')) };
         }
 
         const call = machineShellCall(command, exec, { home: WORKSPACE_BACKUP_DIR, scope: shells?.scope ?? '', stateDirectory: shells?.stateDirectory ?? '' });
@@ -387,7 +387,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
             // The caller's cancel wins over what the call it cut short answered.
             if (own || signal?.aborted === true) throw own ? err : cancelledWhileRunning(command);
 
-            return refusalOf(sandboxFailure({ doing: `sandbox exec \`${command}\``, cause: err }));
+            return refusalOf(sandboxFailure({ doing: `computer.exec \`${command}\``, cause: err }));
           }
         } };
       },
@@ -400,7 +400,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
         const listing = parseInput(ListOptionsSchema, { value: args[0] });
 
         if (listing === undefined) {
-          return refusalOf(new KinuError('bad_input', 'sandbox readdir: takes its options as one object, `{ path? }`'));
+          return refusalOf(new KinuError('bad_input', 'computer.readdir: takes its options as one object, `{ path? }`'));
         }
 
         const dir = listing.path === undefined || listing.path === '' ? WORKSPACE_BACKUP_DIR : listing.path;
@@ -416,7 +416,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
             })
             .join('\n');
         } catch (err) {
-          return refusalOf(sandboxFailure({ doing: `sandbox readdir ${dir}`, cause: err }));
+          return refusalOf(sandboxFailure({ doing: `computer.readdir ${dir}`, cause: err }));
         }
       },
     },
@@ -427,7 +427,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
         const path = parseInput(PathSchema, { value: args[0] });
 
         if (path === undefined) {
-          return refusalOf(new KinuError('bad_input', 'sandbox deleteFile: path must be a non-empty string'));
+          return refusalOf(new KinuError('bad_input', 'computer.deleteFile: path must be a non-empty string'));
         }
 
         try {
@@ -435,7 +435,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
 
           return `deleted ${path}`;
         } catch (err) {
-          return refusalOf(sandboxFailure({ doing: `sandbox deleteFile ${path}`, cause: err }));
+          return refusalOf(sandboxFailure({ doing: `computer.deleteFile ${path}`, cause: err }));
         }
       },
     },
@@ -448,7 +448,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
 
         // Answering 'false' would claim absence when the container could not be asked.
         if (path === undefined) {
-          return refusalOf(new KinuError('bad_input', 'sandbox exists: path must be a non-empty string'));
+          return refusalOf(new KinuError('bad_input', 'computer.exists: path must be a non-empty string'));
         }
 
         try {
@@ -457,16 +457,16 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
 
           return out.includes('true') ? 'true' : 'false';
         } catch (err) {
-          return refusalOf(sandboxFailure({ doing: `sandbox exists ${path}`, cause: err }));
+          return refusalOf(sandboxFailure({ doing: `computer.exists ${path}`, cause: err }));
         }
       },
     },
     exposePort: {
       description:
-        'Expose a TCP port from the sandbox. Returns the public preview URL, then one line: "verified" when a ' +
+        'Expose a TCP port from the computer. Returns the public preview URL, then one line: "verified" when a ' +
         'request to the URL reaches the container port, or "not reached" naming the preview-route gate that ' +
         'refused; that check never calls your server. PRE-REQUISITE: a SUPERVISED server must already be ' +
-        'listening on the port: start it with sandbox.startProcess, never a bare `nohup ... &` (unsupervised ' +
+        'listening on the port: start it with computer.startProcess, never a bare `nohup ... &` (unsupervised ' +
         'children die with the container and do not come back). Nothing listening is refused with the fix.',
       execute: async (...args: unknown[]): Promise<string | Refusal> => {
         if (!handle) return notConfigured();
@@ -476,7 +476,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
         const name = parseInput(ExposeOptionsSchema, { value: args[1] })?.name;
 
         if (p === undefined) {
-          return refusalOf(new KinuError('bad_input', `sandbox exposePort: invalid port ${String(args[0])}`));
+          return refusalOf(new KinuError('bad_input', `computer.exposePort: invalid port ${String(args[0])}`));
         }
 
         try {
@@ -487,7 +487,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
             ? exposedPortText(exposed.url, p, exposed.route)
             : refusalOf(new KinuError('bad_input', exposed.reason));
         } catch (err) {
-          return refusalOf(sandboxFailure({ doing: `sandbox exposePort ${p}`, cause: err }));
+          return refusalOf(sandboxFailure({ doing: `computer.exposePort ${p}`, cause: err }));
         }
       },
     },
@@ -498,7 +498,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
         const port = parseInput(ExecutorPortSchema, { value: args[0] });
 
         if (port === undefined) {
-          return refusalOf(new KinuError('bad_input', `sandbox unexposePort: invalid port ${String(args[0])}`));
+          return refusalOf(new KinuError('bad_input', `computer.unexposePort: invalid port ${String(args[0])}`));
         }
 
         try {
@@ -507,7 +507,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
 
           return `unexposed ${port}`;
         } catch (err) {
-          return refusalOf(sandboxFailure({ doing: `sandbox unexposePort ${port}`, cause: err }));
+          return refusalOf(sandboxFailure({ doing: `computer.unexposePort ${port}`, cause: err }));
         }
       },
     },
@@ -525,12 +525,12 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
 
           return JSON.stringify((ports ?? []).map(p => ({ port: p.port, status: p.status, url: p.url })));
         } catch (err) {
-          return refusalOf(sandboxFailure({ doing: 'sandbox listPorts', cause: err }));
+          return refusalOf(sandboxFailure({ doing: 'computer.listPorts', cause: err }));
         }
       },
     },
     startProcess: commandTool(
-      'Start a SUPERVISED background process in the sandbox. Supervision records a restart ' +
+      'Start a SUPERVISED background process in the computer. Supervision records a restart ' +
         'spec, so the process COMES BACK when the container restarts; a bare `nohup ... &` does ' +
         'not and is lost. Returns JSON {processId}. Prefer this over `exec "cmd &"` for any ' +
         'long-running server.',
@@ -538,7 +538,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
         if (!handle) return { refused: notConfigured() };
         const command = parseInput(StringSchema, { value: args[0] });
 
-        if (command === undefined) return { refused: refusalOf(new KinuError('bad_input', 'sandbox startProcess: command must be a string')) };
+        if (command === undefined) return { refused: refusalOf(new KinuError('bad_input', 'computer.startProcess: command must be a string')) };
 
         const rawOpts = parseInput(
           v.union([v.string(), v.object({ cwd: v.optional(v.string()) })]),
@@ -561,7 +561,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
 
             return JSON.stringify({ ...started, cwd, restartable: true });
           } catch (err) {
-            return refusalOf(sandboxFailure({ doing: `sandbox startProcess \`${command}\``, cause: err }));
+            return refusalOf(sandboxFailure({ doing: `computer.startProcess \`${command}\``, cause: err }));
           }
         } };
       },
@@ -573,7 +573,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
         const processId = parseInput(StringSchema, { value: args[0] });
 
         if (processId === undefined) {
-          return refusalOf(new KinuError('bad_input', 'sandbox stopProcess: processId must be a string'));
+          return refusalOf(new KinuError('bad_input', 'computer.stopProcess: processId must be a string'));
         }
 
         try {
@@ -582,24 +582,24 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
 
           return JSON.stringify({ processId, ...result });
         } catch (err) {
-          return refusalOf(sandboxFailure({ doing: `sandbox stopProcess ${processId}`, cause: err }));
+          return refusalOf(sandboxFailure({ doing: `computer.stopProcess ${processId}`, cause: err }));
         }
       },
     },
     rest: {
       description:
-        'Answer the sandbox\'s rest ask. When it has gone unused while processes still run in it, it asks you: ' +
+        'Answer the computer\'s rest ask. When it has gone unused while processes still run in it, it asks you: ' +
         '"now" saves it and stops it, ending what runs (supervised servers restart cold on their next use); ' +
         '"keep" leaves it running until it asks again.',
       execute: async (...args: unknown[]): Promise<string | Refusal> => {
         if (!handle) return notConfigured();
         const answer = parseInput(v.picklist(['now', 'keep']), { value: args[0] });
 
-        if (answer === undefined) return refusalOf(new KinuError('bad_input', 'sandbox rest: the answer must be "now" or "keep"'));
+        if (answer === undefined) return refusalOf(new KinuError('bad_input', 'computer.rest: the answer must be "now" or "keep"'));
 
         return settle(Effect.match(Effect.tryPromise({
           try: () => handle.answerRest(answer),
-          catch: (cause) => sandboxFailure({ doing: `sandbox rest ${answer}`, cause }),
+          catch: (cause) => sandboxFailure({ doing: `computer.rest ${answer}`, cause }),
         }), { onSuccess: restText, onFailure: refusalOf }));
       },
     },
@@ -619,7 +619,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
 
           return JSON.stringify(rows);
         } catch (err) {
-          return refusalOf(sandboxFailure({ doing: 'sandbox listProcesses', cause: err }));
+          return refusalOf(sandboxFailure({ doing: 'computer.listProcesses', cause: err }));
         }
       },
     },
@@ -627,20 +627,20 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
 
   if (sizes !== undefined) {
     tools.resize = {
-      description: 'Change the sandbox\'s size. A running sandbox at another size restarts: files stay, '
+      description: 'Change the computer\'s size. A running computer at another size restarts: files stay, '
         + 'supervised servers and exposed ports come back, and a running command ends.',
       execute: async (...args: unknown[]): Promise<string | Refusal> => {
         if (!handle) return notConfigured();
         const size = parseInput(v.picklist(sizes.sizes.map((row) => row.size)), { value: args[0] });
 
         if (size === undefined) {
-          return refusalOf(new KinuError('bad_input', `sandbox resize: size must be one of ${sizes.sizes.map((row) => row.size).join(', ')}`));
+          return refusalOf(new KinuError('bad_input', `computer.resize: size must be one of ${sizes.sizes.map((row) => row.size).join(', ')}`));
         }
 
         // Retried: a resize repeated after a lost answer finds its size already applied.
         return settle(Effect.match(Effect.tryPromise({
           try: () => withSandboxRetry(() => touch(() => handle.resize(size))),
-          catch: (cause) => sandboxFailure({ doing: `sandbox resize ${size}`, cause }),
+          catch: (cause) => sandboxFailure({ doing: `computer.resize ${size}`, cause }),
         }), { onSuccess: (resized) => resizedText(resized, sizes), onFailure: refusalOf }));
       },
     };
@@ -656,8 +656,8 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
   ];
 
   return {
-    name: 'sandbox',
-    kind: 'sandbox',
+    name: 'computer',
+    kind: 'computer',
     files: handle ? sandboxFiles(handle, (call) => withSandboxRetry(() => touch(call))) : undefined,
     homeDir: async () => WORKSPACE_BACKUP_DIR,
     capabilities: new Set(capabilities),
@@ -724,7 +724,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
 
 /** Container files at absolute paths: one batched directory read, or one direct stat/lstat. */
 /**
- * The sandbox's files over its handle: the one path the agent's file tools reach them by, under `/sandbox`. `through`
+ * The computer's files over its handle: the one path the agent's file tools reach them by, under `/computer`. `through`
  * carries each call, so the executor's retry of a dropped connection and its activity mark cover file calls as they
  * cover commands.
  */

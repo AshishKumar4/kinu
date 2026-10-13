@@ -226,7 +226,7 @@ const JOB = {
 /** One command parked on the owner. `queued` is the only status whose answers
  *  are offered — a decided one has nothing left to decide. */
 const APPROVAL = {
-  id: 'ap-1', actor: 'actor-main', command: 'rm -rf /tmp/build', executor: 'sandbox', context: {},
+  id: 'ap-1', actor: 'actor-main', command: 'rm -rf /tmp/build', executor: 'computer', context: {},
   reason: 'a destructive path outside the workspace', status: 'queued',
   requestedAt: 1_700_000_000_000, decidedAt: null,
 };

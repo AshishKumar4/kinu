@@ -84,9 +84,9 @@ const FLEET_BOUNDARIES: readonly FleetBoundary[] = [
       + 'its deletion visible.',
   },
   {
-    id: 'sandbox.recovery',
+    id: 'computer.recovery',
     family: 'error',
-    event: 'sandbox.recovery_settled',
+    event: 'computer.recovery_settled',
     site: 'packages/cf-backend/src/orchestrator.ts',
     mechanism: 'writer',
     emitter: 'recordSandboxRecovery',
