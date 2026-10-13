@@ -1905,6 +1905,7 @@ export class ChatSession {
     // One commit — see {@link commitTurn}.
     const commit = this.commitTurn({
       item,
+      lease,
       turnId: lease.turnId,
       event: eventName,
       assistantText: fullText,
@@ -1943,10 +1944,10 @@ export class ChatSession {
     const { turn, owed, transition } = commit.committed;
 
     try {
-      // The lane decides whether the prefix is worth keeping; a turn that ran nothing kept none.
+      // The lane decides whether the prefix is worth keeping; a turn that ran nothing kept none. Its claim and run closed
+      // with its answer (`commitTurn`).
       if (prepared !== null) await this.armCacheWarm(prepared);
 
-      this.closeRun(end, lease);
       // Core drives the settled turn's effects as one state machine; this backend supplies the bodies and
       // the fiber. The ledger already holds the roster committed with the answer.
       this.settlingDepth += 1;
@@ -1996,9 +1997,11 @@ export class ChatSession {
     });
   }
 
-  /** Answer, run verdict and frozen roster in one commit, since `resumeAll()` finds claims. Never throws. */
+  /** Answer, run verdict and frozen roster in one commit, since `resumeAll()` finds claims: an isolate that dies after it
+   *  finds the turn answered and closed, never one to run again. Never throws. */
   private commitTurn(input: {
     readonly item: QueueItem;
+    readonly lease: ActorTurnLease;
     readonly turnId: string;
     readonly event: string | undefined;
     readonly assistantText: string;
@@ -2079,6 +2082,7 @@ export class ChatSession {
       });
 
       const transition: TerminalTransition = { turnId, messageId };
+      let published = (): void => {};
 
       this.transaction(() => {
         this.persist(input.preparedAssistant);
@@ -2093,7 +2097,10 @@ export class ChatSession {
         for (const id of this.actorSession.orchestrator.inbox.absorbedDeliveries) this.pendingSends.retireTurn(id);
 
         this.ports.terminal().record(transition, owed);
+        // Its claim's verdict and its run's end, heard once the commit holds.
+        published = this.eventRecorder.collect(() => this.closeRun(input.end, input.lease)).publish;
       });
+      published();
 
       return { committed: { turn, owed, transition } };
     } catch (cause) {
