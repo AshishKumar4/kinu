@@ -4092,6 +4092,8 @@ interface CreateProbe {
 declare global {
   interface Window {
     __createProbe: CreateProbe;
+    /** Create requests the unlisted-account probe answered. */
+    __creates: number;
     /** Every `input` frame the pane sent the gallery's workspace shell (`gallery-terminal.ts`). */
     __kinuTerminalInput?: string[];
     /** Listener counts by target and type, kept by the patched `EventTarget`. */
@@ -4201,6 +4203,57 @@ describe('the home creation form, as a browser submits it', () => {
         () => document.querySelector('.p-notice-danger') === null
           && document.body.innerText.includes('Probe created'));
       expect(await page.evaluate(() => window.__createProbe.posts)).toBe(2);
+      await page.close();
+    });
+  });
+
+  test('a model listing that failed leaves the create to the backend, which admits it', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 1100 });
+
+      // The only listing failed, so nothing is listed; `defaultSpecFor` counts that provider's models as servable and the
+      // create succeeds. Installed before the gallery loads, since the page may read the listing on mount.
+      await page.evaluateOnNewDocument(() => {
+        localStorage.setItem('theme', 'dark');
+        const native = window.fetch;
+        let gallery: typeof window.fetch | null = null;
+        window.__creates = 0;
+
+        const answer = Object.assign((input: RequestInfo | URL, init?: RequestInit) => {
+          const url = new URL(input instanceof Request ? input.url : input.toString(), location.origin);
+
+          if (url.pathname === '/api/user/models') {
+            return Promise.resolve(Response.json({ models: [], failures: [{ provider: 'workers-ai', reason: 'the listing timed out' }] }));
+          }
+
+          if (init?.method === 'POST' && url.pathname === '/api/user/workspaces') {
+            window.__creates += 1;
+
+            return Promise.resolve(Response.json({ name: 'probe-created', displayName: 'Probe created', createdAt: 1, lastVisited: 1 }));
+          }
+
+          return (gallery ?? native)(input, init);
+        }, { preconnect: native.preconnect });
+
+        // The gallery keeps the fetch it finds for the network, then assigns its own, which this answer fronts.
+        Object.defineProperty(window, 'fetch', {
+          configurable: true,
+          get: () => (gallery === null ? native : answer),
+          set: (next: typeof window.fetch) => { gallery = next; },
+        });
+      });
+
+      await page.goto(`${origin}/gallery.html?frame=home`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('#workspace-mission');
+      await page.type('#workspace-mission', 'Own the checkout service.');
+
+      // Whatever the page made of the failed listing is painted by now: the create must still be offered.
+      expect(await page.$eval('button[type="submit"]', (button) => button instanceof HTMLButtonElement && button.disabled)).toBe(false);
+      await page.click('button[type="submit"]');
+
+      // The created entry lands in the roster the page reads.
+      await page.waitForFunction(() => window.__creates === 1 && document.body.innerText.includes('Probe created'));
       await page.close();
     });
   });

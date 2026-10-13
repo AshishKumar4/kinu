@@ -100,6 +100,32 @@ function wrangler(args: readonly string[]) {
   return { ok: ran.status === 0, out: `${ran.stdout}${ran.stderr}` };
 }
 
+/** Uploads the pinned tarball's parts from `bytes`, refusing bytes that are not the pin. */
+export function uploadPinnedTools(bucket: string, bytes: Uint8Array, progress: (key: string, bytes: number) => void = () => {}): void {
+  const pinned = pinnedTools();
+  const sha256 = createHash('sha256').update(bytes).digest('hex');
+
+  if (sha256 !== pinned.sha256 || bytes.byteLength !== pinned.bytes) {
+    throw new Error(`the tools are ${sha256} (${String(bytes.byteLength)} bytes), not the pinned ${pinned.sha256} (${String(pinned.bytes)}): build and pin again`);
+  }
+
+  const dir = mkdtempSync(join(tmpdir(), 'kinu-devbox-tools-'));
+
+  try {
+    for (const [index, part] of partsOf(pinned).entries()) {
+      const file = join(dir, `part-${String(index)}`);
+      writeFileSync(file, bytes.subarray(index * TOOLS_PART_BYTES, index * TOOLS_PART_BYTES + part.bytes));
+      const put = wrangler(['r2', 'object', 'put', `${bucket}/${part.key}`, '--file', file, '--content-type', 'application/octet-stream', '--remote']);
+
+      if (!put.ok) throw new Error(`uploading ${bucket}/${part.key} failed:\n${put.out.slice(-1500)}`);
+      rmSync(file);
+      progress(part.key, part.bytes);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 async function main(): Promise<number> {
   const [command, bucket] = process.argv.slice(2);
 
@@ -131,24 +157,9 @@ async function main(): Promise<number> {
       return 0;
     }
 
-    const { bytes, sha256 } = await buildTools();
-
-    if (sha256 !== pinned.sha256) throw new Error(`the tools stage built ${sha256}, not the pinned ${pinned.sha256}: build and pin again`);
-    const dir = mkdtempSync(join(tmpdir(), 'kinu-devbox-tools-'));
-
-    try {
-      for (const [index, part] of partsOf(pinned).entries()) {
-        const file = join(dir, `part-${String(index)}`);
-        writeFileSync(file, bytes.subarray(index * TOOLS_PART_BYTES, index * TOOLS_PART_BYTES + part.bytes));
-        const put = wrangler(['r2', 'object', 'put', `${bucket}/${part.key}`, '--file', file, '--content-type', 'application/octet-stream', '--remote']);
-
-        if (!put.ok) throw new Error(`uploading ${bucket}/${part.key} failed:\n${put.out.slice(-1500)}`);
-        rmSync(file);
-        process.stdout.write(`${bucket}/${part.key} uploaded, ${String(part.bytes)} bytes\n`);
-      }
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    uploadPinnedTools(bucket, (await buildTools()).bytes, (key, bytes) => {
+      process.stdout.write(`${bucket}/${key} uploaded, ${String(bytes)} bytes\n`);
+    });
 
     return 0;
   }

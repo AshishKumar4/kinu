@@ -23,9 +23,8 @@ import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 
 /**
- * The objective identity is denormalised beside `objective_id`, which is its digest,
- * so the two cannot disagree (a test re-hashes stored rows). Nullable columns carry no
- * default: NULL means the run reported nothing. `displacements` defaults to 0.
+ * Nullable columns carry no default: NULL means the run reported nothing. `displacements`
+ * defaults to 0. What `objective_id` measures is its row in `exploration_objectives`.
  */
 const EXPLORATION_RECORDS_DDL = `CREATE TABLE IF NOT EXISTS exploration_records (
   actor_id          TEXT NOT NULL,
@@ -49,12 +48,19 @@ const EXPLORATION_RECORDS_DDL = `CREATE TABLE IF NOT EXISTS exploration_records 
   cost_tokens       INTEGER,
   first_recorded_at INTEGER NOT NULL,
   displacements     INTEGER NOT NULL DEFAULT 0,
-  metric            TEXT,
-  unit              TEXT,
-  direction         TEXT,
-  scale             TEXT,
-  verifier_digest   TEXT,
   PRIMARY KEY (actor_id, record_key)
+)`;
+
+/** One row per objective: `objective_id` is the digest of these columns ({@link objectiveIdOf}). */
+const EXPLORATION_OBJECTIVES_DDL = `CREATE TABLE IF NOT EXISTS exploration_objectives (
+  actor_id        TEXT NOT NULL,
+  objective_id    TEXT NOT NULL,
+  metric          TEXT NOT NULL,
+  unit            TEXT NOT NULL,
+  direction       TEXT NOT NULL,
+  scale           TEXT NOT NULL,
+  verifier_digest TEXT NOT NULL,
+  PRIMARY KEY (actor_id, objective_id)
 )`;
 
 const EXPLORATION_SEALS_DDL = `CREATE TABLE IF NOT EXISTS exploration_seals (
@@ -67,6 +73,7 @@ const EXPLORATION_SEALS_DDL = `CREATE TABLE IF NOT EXISTS exploration_seals (
 
 export function initExplorationRecordsTable(execRaw: RawSqlExec): void {
   execRaw(EXPLORATION_RECORDS_DDL);
+  execRaw(EXPLORATION_OBJECTIVES_DDL);
   execRaw(EXPLORATION_SEALS_DDL);
   // Scoped by identity and floor, like every read below.
   execRaw('CREATE INDEX IF NOT EXISTS idx_er_cell ON exploration_records'
@@ -319,9 +326,8 @@ export function recordsInCell(
 }
 
 /**
- * The identity the store holds for a handle, and its row count. `identity: null` with
- * `rows > 0` means rows of unknown unit/direction, which reads refuse. An out-of-union
- * stored `direction` or `scale` throws.
+ * The identity the store holds for a handle, and its row count; `identity` is null exactly
+ * when no row is under the handle. An out-of-union stored `direction` or `scale` throws.
  */
 export interface StoredObjective {
   readonly identity: ObjectiveIdentity | null;
@@ -342,18 +348,14 @@ export function describeObjective(
   actor.assertCurrent();
 
   const row = sql<{
-    row_count: number; metric: string | null; unit: string | null;
-    direction: string | null; scale: string | null; verifier_digest: string | null;
-  }>`SELECT COUNT(*) AS row_count, MAX(metric) AS metric, MAX(unit) AS unit,
-            MAX(direction) AS direction, MAX(scale) AS scale,
-            MAX(verifier_digest) AS verifier_digest
-       FROM exploration_records
-       WHERE actor_id = ${actor.actorId} AND objective_id = ${handle.objectiveId}
-         AND floor_digest IS ${handle.floorDigest}`[0];
+    row_count: number; metric: string; unit: string; direction: string; scale: string; verifier_digest: string;
+  }>`SELECT COUNT(r.record_key) AS row_count, o.metric, o.unit, o.direction, o.scale, o.verifier_digest
+       FROM exploration_objectives o
+       LEFT JOIN exploration_records r ON r.actor_id = o.actor_id AND r.objective_id = o.objective_id
+         AND r.floor_digest IS ${handle.floorDigest}
+       WHERE o.actor_id = ${actor.actorId} AND o.objective_id = ${handle.objectiveId}`[0];
 
   if (!row || row.row_count === 0) return { identity: null, rows: 0 };
-
-  if (row.metric === null) return { identity: null, rows: row.row_count };
 
   return {
     identity: v.parse(StoredIdentitySchema, {
@@ -469,36 +471,33 @@ export function recordExploration(
 
   const measuredJson = write.measured === null ? null : JSON.stringify(write.measured);
 
-  const identity = write.identity;
-
   if (existing) {
-    // `first_recorded_at` is untouched. Identity columns are re-written (same values
-        // on any row whose `record_key` matches).
+    // `first_recorded_at` is untouched.
     void sql`UPDATE exploration_records SET
         artifact = ${write.artifact}, value = ${write.value}, detail = ${write.detail},
         measured_json = ${measuredJson}, preset = ${write.preset}, label = ${write.label},
         root_id = ${write.rootId}, config_digest = ${write.configDigest},
         depth = ${write.depth}, branches = ${write.branches},
         floor_value = ${write.floor?.value ?? null}, floor_proof = ${write.floor?.proof ?? null},
-        cost_tokens = ${write.costTokens},
-        metric = ${identity.metric}, unit = ${identity.unit}, direction = ${identity.direction},
-        scale = ${identity.scale}, verifier_digest = ${identity.verifierDigest}
+        cost_tokens = ${write.costTokens}
       WHERE actor_id = ${actorId} AND record_key = ${recordKey}`;
   } else {
+    const { identity } = write;
+    void sql`INSERT INTO exploration_objectives (actor_id, objective_id, metric, unit, direction, scale, verifier_digest)
+      VALUES (${actorId}, ${objectiveId}, ${identity.metric}, ${identity.unit}, ${identity.direction},
+        ${identity.scale}, ${identity.verifierDigest})
+      ON CONFLICT (actor_id, objective_id) DO NOTHING`;
     void sql`INSERT INTO exploration_records (
         actor_id, record_key, objective_id, floor_digest, descriptor, artifact_digest, artifact,
         value, detail, measured_json, preset, label, root_id, config_digest, depth,
-        branches, floor_value, floor_proof, cost_tokens, first_recorded_at,
-        displacements, metric, unit, direction, scale, verifier_digest
+        branches, floor_value, floor_proof, cost_tokens, first_recorded_at, displacements
       ) VALUES (
         ${actorId}, ${recordKey}, ${objectiveId}, ${floorDigest}, ${write.descriptor},
         ${artifactDigest},
         ${write.artifact}, ${write.value}, ${write.detail}, ${measuredJson}, ${write.preset},
         ${write.label}, ${write.rootId}, ${write.configDigest}, ${write.depth},
         ${write.branches}, ${write.floor?.value ?? null}, ${write.floor?.proof ?? null},
-        ${write.costTokens}, ${write.at}, 0,
-        ${identity.metric}, ${identity.unit}, ${identity.direction}, ${identity.scale},
-        ${identity.verifierDigest}
+        ${write.costTokens}, ${write.at}, 0
       )`;
   }
 

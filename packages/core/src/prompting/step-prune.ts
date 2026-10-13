@@ -15,6 +15,7 @@
 
 import type { AssistantModelMessage, ModelMessage, ToolModelMessage, ToolResultPart } from 'ai';
 import { renderThrownChain } from '../obs/index';
+import { binaryReplacer } from '../utils/json';
 import { StableCopies } from './stable-copies';
 import { stepContextLimit, type ModelWindow } from '../context-window';
 
@@ -245,11 +246,3 @@ function jsonLength(input: { value: unknown }): number {
   return safeStringify(input).length;
 }
 
-/** Binary payloads flatten to a size placeholder rather than serializing to measure. */
-function binaryReplacer<Value>(_key: string, value: Value): Value | string {
-  if (value instanceof Uint8Array) return `[binary ${value.byteLength} bytes]`;
-
-  if (value instanceof ArrayBuffer) return `[binary ${value.byteLength} bytes]`;
-
-  return value;
-}

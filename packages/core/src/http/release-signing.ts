@@ -6,6 +6,7 @@
 import { Effect } from 'effect';
 import { settle } from '../obs/effect';
 import * as v from 'valibot';
+import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { compareCodeUnits } from '../utils/text';
 
 /** Hex. A rotation must ship under the old key first: older machines verify with the key they carry. */
@@ -46,18 +47,6 @@ function hexToBytes(hex: string): Uint8Array<ArrayBuffer> {
   if (!/^[0-9a-f]{64}$/.test(clean)) throw new Error('an Ed25519 public key is 32 bytes of hex');
 
   return Uint8Array.from(clean.match(/../g) ?? [], (pair) => Number.parseInt(pair, 16));
-}
-
-function base64ToBytes(text: string): Uint8Array<ArrayBuffer> {
-  return Uint8Array.from(atob(text), (char) => char.charCodeAt(0));
-}
-
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = '';
-
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-
-  return btoa(binary);
 }
 
 /** A malformed signature is false, never a throw. */

@@ -1,4 +1,5 @@
-// Imports nothing so the browser client and the Worker handler enforce the same limits without sharing a graph.
+// Imports only valibot, so the browser client and the Worker handler enforce the same limits without sharing a graph.
+import * as v from 'valibot';
 
 export const FEEDBACK_ENDPOINT = '/api/feedback';
 
@@ -36,15 +37,17 @@ export interface FeedbackAccepted {
 
 /** Authoritative column list for the control-plane table. Screenshot columns are null together
  *  for note-only reports; bytes live in R2, `objectKey` points there. */
-export interface FeedbackRecord {
-  id: string;
-  createdAt: number;
-  userId: string;
-  email: string;
+export const FeedbackRecordSchema = v.object({
+  id: v.string(),
+  createdAt: v.number(),
+  userId: v.string(),
+  email: v.string(),
   /** Trimmed; may be empty when a screenshot carries the report. */
-  note: string;
-  route: string;
-  workspace: string | null;
-  objectKey: string | null;
-  bytes: number | null;
-}
+  note: v.string(),
+  route: v.string(),
+  workspace: v.nullable(v.string()),
+  objectKey: v.nullable(v.string()),
+  bytes: v.nullable(v.number()),
+});
+
+export type FeedbackRecord = v.InferOutput<typeof FeedbackRecordSchema>;

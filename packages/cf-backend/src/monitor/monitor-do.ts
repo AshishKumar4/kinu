@@ -13,18 +13,10 @@ import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
 import { openAnalyticsWindow } from '@kinu.run/core/analytics';
 import { KinuError, settle } from '@kinu.run/core/obs';
 import { listConfiguredOAuthProviders } from '../auth/providers';
+import type { MonitorIncident } from '../lib/control-api';
 
 export const MONITOR_SINGLETON = 'site';
 
-/** The camelCase RPC projection of a ledger row; declared here because this class is its only producer. */
-export interface MonitorIncident {
-  probe: string;
-  detail: string;
-  openedAt: number;
-  /** Null while the alert is still owed. */
-  alertedAt: number | null;
-  failures: number;
-}
 
 export class MonitorDO extends DurableObject<Env> {
   private readonly outbox: EmailOutbox;

@@ -847,7 +847,6 @@ export {
 export {
   extractJsonArray,
   extractJsonObject,
-  generateJson,
   jsonArrayOnlyInstruction,
   jsonObjectOnlyInstruction,
   stripMarkdownFences,
@@ -1202,7 +1201,7 @@ export {
 export {
   JsonValueSchema, JsonObjectSchema, JsonArraySchema,
   parseJsonValue, parseJsonObject, parseJsonArray, safeJsonParse, decodeJsonValue, jsonResultOrVoid, projectJsonValue, nonEmptyString,
-  type JsonPrimitive, type JsonObject, type JsonValue,
+  binaryReplacer, type JsonPrimitive, type JsonObject, type JsonValue,
 } from './utils/json';
 
 export { MarkdownFrontmatterError, parseMarkdownFrontmatter } from './utils/markdown-frontmatter';
@@ -1783,7 +1782,7 @@ export {
 
 export {
   parseSkillFile, skillNameProblem,
-  discoverSkills, readSkillFile, workspaceSkillPath, compareSkillNames, skillBodyChars,
+  discoverSkills, readSkillFile, workspaceSkillPath, skillBodyChars,
   BUILTIN_SKILLS, BUILTIN_SKILL_FILES, BUILTIN_SKILL_HEADERS, BUILTIN_SKILL_NAMES, skillsMount,
   resolveActiveSkills, extractExplicitInvocations, admitSkillsIndex, admitActiveSkills,
   renderActiveSkillsSection, renderSkillsIndexSection, skillIndexLine, unreadSkillLine,
@@ -1801,9 +1800,9 @@ export type {
 
 // GEPA (Agrawal et al., ICLR 2026, arxiv 2507.19457)
 export {
-  applyScaffoldDecision, createJsonJudge, createLlmJsonJudge, getEvolutionStatus, listScaffoldVersions,
+  applyScaffoldDecision, getEvolutionStatus, listScaffoldVersions,
   previewScaffoldLive, proposeScaffold, runOptimization, runScaffoldOnce,
-  type EvolutionStatus, type JsonGenerator, type ScaffoldControl,
+  type EvolutionStatus, type ScaffoldControl,
   type ScaffoldDecisionResult, type ScaffoldReplayContext, type ScaffoldSurface, type ScaffoldVersionView,
 } from './evolution/control';
 
@@ -2154,7 +2153,7 @@ export {
 
 export type { ReasoningEffort } from './providers/effort';
 
-export { REASONING_EFFORTS, REASONING_EFFORT_FOR_STAGE } from './providers/effort';
+export { REASONING_EFFORTS } from './providers/effort';
 
 export type { NamedSwarmPreset, SwarmNodeAssignment } from './strategy/swarm';
 
@@ -2493,6 +2492,7 @@ export {
   type ReportedRoute,
   REPORTED_ROUTES,
   routeTemplateOf,
+  sanitizeReturnTo,
 } from './read-models/app-routes';
 
 export {

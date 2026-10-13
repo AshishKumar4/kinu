@@ -263,6 +263,7 @@ equality in both directions.
 for the same objective and floor before expansion, then write their result.
 `none` and `reflections` do neither. A row keys on objective identity and floor
 digest. An objective-only key would collapse a corrected floor with a wrong one.
+`exploration_objectives` holds each objective's identity once, keyed by its digest.
 
 A re-record keeps the better measurement. Lowering one refuses with
 `cause: 'not-better'` and preserves the stored value. The writer checks the

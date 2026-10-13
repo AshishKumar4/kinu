@@ -24,7 +24,7 @@ export interface SteerActionsDeps {
   steerRuns: readonly InlineSteer[];
 }
 
-export interface SteerActions {
+interface SteerActions {
   notice: ComposerNotice | null;
   send: () => void;
   stop: () => void;

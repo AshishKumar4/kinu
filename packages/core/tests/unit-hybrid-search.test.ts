@@ -30,7 +30,6 @@ const lexicalFn = async (_q: string, limit: number) => lexicalCorpus.slice(0, li
 
 const vectorStore = (semantic: VectorSearchHit[]): VectorStore => ({
   available: true,
-  async upsertChunk() {},
   async upsertChunks() {},
   async deleteChunks() {},
   async search(_q, limit = 10) { return semantic.slice(0, limit); },
@@ -73,7 +72,6 @@ describe('hybridSearch', () => {
   test('handles semantic failure gracefully (vectorStore.search throws)', async () => {
     const failingStore: VectorStore = {
       available: true,
-      async upsertChunk() {},
       async upsertChunks() {},
       async deleteChunks() {},
       async search() { throw new Error('vectorize down'); },
@@ -88,11 +86,9 @@ describe('hybridSearch', () => {
   test('a dead index behind the real store does not read as "no matches" when FTS is down too', async () => {
     const store = createCloudflareVectorStore({
       index: {
-        async insert() { return {}; },
         async upsert() { return {}; },
         async query() { throw new Error('vectorize down'); },
         async deleteByIds() { return {}; },
-        async getByIds() { return []; },
       },
       embedder: { dimensions: 1, async embed() { return [1]; } },
     });

@@ -1,19 +1,14 @@
 /** The scaffold evolution control plane: backend-neutral drivers over the evolution primitives. A backend
  *  supplies only a {@link ScaffoldSurface}. */
 
-import type { LanguageModel, ModelMessage } from 'ai';
-import * as v from 'valibot';
+import type { ModelMessage } from 'ai';
 
 import type { AgentRuntime } from '../types/agent-runtime';
-import type { LLM, SqlExecutor } from '../types/primitives';
-import type { ModelCallSink, ModelOperationSink } from '../events/model-call';
-import { effortFor } from '../providers/effort';
-import { extractJsonObject, generateJson, jsonObjectOnlyInstruction } from '../providers/structured';
+import type { SqlExecutor } from '../types/primitives';
 import { runScaffold, type ScaffoldRunOptions, type ScaffoldRunResult } from '../scaffold/executor';
 import { modifyScaffold } from '../scaffold/modify';
 import type { ScaffoldVersionView } from '../types/scaffold';
 import type { ActorHandle } from '../identity/actor-handle';
-import type { SessionHistory } from '../session/history';
 import { listScaffoldArchive } from '../scaffold/archive';
 import {
   applyPromotionDecision, getPendingScaffold, readScaffoldVersion, type PendingScaffold, type ScaffoldDecisionEvents,
@@ -44,17 +39,10 @@ export interface ScaffoldSurface {
  *  reconstructs one from the task alone. */
 export type ScaffoldReplayContext = readonly ModelMessage[];
 
-export type JsonGenerator = <T>(opts: {
-  schema: v.GenericSchema<unknown, T>;
-  prompt: string;
-}) => Promise<T>;
-
 export interface ScaffoldControl {
   readonly rt: AgentRuntime;
   readonly events: ScaffoldDecisionEvents;
   readonly sql: SqlExecutor;
-  /** The host's conversation store; eval splits read graded turns' text from it. */
-  readonly history: SessionHistory;
   /** Resolved per call against the task being run. `context` is the conversation the
      *  task was asked in, empty for one-shot operations. */
   /** `callScope` makes the rollout's tool call ids reproducible so the effect claim
@@ -62,16 +50,6 @@ export interface ScaffoldControl {
   readonly surface: (
     task: string, context?: ScaffoldReplayContext, callScope?: string,
   ) => ScaffoldSurface;
-  readonly model: () => LanguageModel | Promise<LanguageModel>;
-  /**
-     * Must not be the chat model: a model grading its own candidates is
-     * self-enhancement bias (arXiv:2306.05685).
-     */
-  readonly judge: JsonGenerator;
-  /** Reports the reflection LM's calls as `reflection` spend; rollouts and judge report elsewhere. */
-  readonly reportModelCall: ModelCallSink;
-  /** Operation lifecycle sink. Absent means in-flight work is unattributable. */
-  readonly operations?: ModelOperationSink;
 }
 
 function scaffoldRunOptions(
@@ -203,26 +181,4 @@ export async function runOptimization(control: ScaffoldControl, target: string =
   const decide = control.rt.decide ?? (() => settle(Effect.fail(new KinuError('unavailable', 'no decision model is wired, so no edit can be judged'))));
 
   return runProposer({ rt: control.rt, decide, reflect: control.rt.judgeModel ?? control.rt.llm, now: Date.now() }, target);
-}
-
-
-export function createJsonJudge(
-  model: () => LanguageModel | Promise<LanguageModel>,
-  reportModelCall: ModelCallSink,
-  operations?: ModelOperationSink,
-): JsonGenerator {
-  return async (opts) => generateJson({
-    model: await model(),
-    schema: opts.schema,
-    prompt: opts.prompt,
-    providerOptions: effortFor('judge').providerOptions,
-    spend: { source: 'judge', report: reportModelCall, operations },
-  });
-}
-
-/** Structured output over core's `LLM`. No sink: the `LLM` reports its own spend,
- *  and a second channel would double-count. */
-export function createLlmJsonJudge(llm: LLM): JsonGenerator {
-  return async (opts) =>
-    v.parse(opts.schema, extractJsonObject(await llm.complete(`${opts.prompt}\n\n${jsonObjectOnlyInstruction()}`)));
 }

@@ -8,16 +8,15 @@ import * as v from 'valibot';
 import { EVAL_WIDTH_POOLS, EVAL_TASK_TIMEOUT_SECONDS, MUSE_CALLS_AT_ONCE, evalMatrix, type EvalMatrix } from '../evals/src/config';
 import { collectEvalTasks } from '../evals/src/eval';
 import type { EvalCallWidth, EvalTask } from '../evals/src/task';
-import { ARMS } from '../evals/src/target';
+import { ARMS, deployedBuild } from '../evals/src/target';
 import { evalTargetVerdict, evalWebIdentityEnv } from '../packages/test-utils/src/eval-identity';
 import { gitEnv } from '../packages/test-utils/src/git-env';
 import { MapResultSchema, type EvalRun, type MapResult, type TrialItem } from './evals-artifacts';
+import { drainArmadaProgress } from './armada-progress';
 import { LOCAL_CHECK, processEvals } from './evals-post';
 import { isEvalTask, trackedFiles } from './sources';
 
 const ROOT = join(import.meta.dirname, '..');
-
-const HEALTH = v.object({ build: v.object({ sha: v.pipe(v.string(), v.regex(/^[0-9a-f]{7,40}$/u)) }) });
 
 /** Keep each cell's whole matrix for trialSlot: selection does not renumber its account. */
 export function evalItems(taskFiles: readonly string[], matrix: EvalMatrix, origins: readonly { leg: 'candidate' | 'baseline'; origin: string }[], pass: boolean): TrialItem[] {
@@ -104,7 +103,6 @@ async function mapTrials(argv: string[], items: readonly TrialItem[]) {
   const child = Bun.spawn(argv, { cwd: ROOT, env, stdin: new Blob([JSON.stringify(items)]), stdout: 'pipe', stderr: 'pipe' });
 
   const outcomes: MapResult[] = [];
-  let progress = '';
   let pending = '';
   const decode = new TextDecoder();
 
@@ -115,16 +113,11 @@ async function mapTrials(argv: string[], items: readonly TrialItem[]) {
   process.once('SIGINT', interrupt);
   process.once('SIGTERM', terminate);
 
-  try {
-    await Promise.all([
-      (async () => {
-        for await (const bytes of child.stderr) {
-          const text = new TextDecoder().decode(bytes);
+  let progress: Awaited<ReturnType<typeof drainArmadaProgress>>;
 
-          progress += text;
-          process.stderr.write(text);
-        }
-      })(),
+  try {
+    [progress] = await Promise.all([
+      drainArmadaProgress(child.stderr),
       (async () => {
         for await (const bytes of child.stdout) {
           pending += decode.decode(bytes, { stream: true });
@@ -164,9 +157,9 @@ async function mapTrials(argv: string[], items: readonly TrialItem[]) {
   }
 
   const exitCode = await child.exited;
-  const job = /^job (\S+)$/mu.exec(progress)?.[1];
+  const { job } = progress;
 
-  if (job === undefined) throw new Error(`armada map exited ${String(exitCode)} without naming its job: ${progress}`);
+  if (job === undefined) throw new Error(`armada map exited ${String(exitCode)} without naming its job: ${progress.said}`);
 
   return { job, outcomes, exitCode };
 }
@@ -194,13 +187,7 @@ async function main(): Promise<number> {
 
   if (!values.pass) origins.push({ leg: 'baseline', origin: 'https://kinu.run' });
 
-  const builds = await Promise.all(origins.map(async ({ origin }) => {
-    const response = await fetch(`${origin}/api/health`);
-
-    if (!response.ok) throw new Error(`${origin}/api/health answered ${String(response.status)}`);
-
-    return v.parse(HEALTH, await response.json()).build.sha;
-  }));
+  const builds = await Promise.all(origins.map(async ({ origin }) => (await deployedBuild({ origin })).sha));
 
   const candidateBuild = builds[0] ?? '';
   const baselineBuild = builds[1] ?? '';

@@ -386,12 +386,11 @@ research record named above.
 The devbox storage strategy comparison (`scripts/bench-devbox-strategies.ts`)
 was removed on 2026-09-25 when the strategy search closed (D27 in
 `docs/DEVBOX-DECISIONS.md` names the files and the commit to restore them
-from). The live drivers that remain (`bench-devbox-standalone.ts`,
-`bench-devbox-sync-window.ts`, `bench-devbox-block-attach.ts`,
-`devbox-e2e.ts`) share the deployed fixture in `scripts/bench-devbox-fixture.ts`
-and keep the rules the comparison learned from failed runs: one box per arm,
-`/ops/flush` at every phase boundary, wake numbers only from deployed runs, and
-minute-scale work as a polled operation, not a blocking exec.
+from). `bench-devbox-standalone.ts` and `devbox-container-tier.ts` share the
+R2 residue accounting and orphan teardown in `scripts/bench-devbox-fixture.ts`.
+The fixture's deploy, box RPC, armed operations and C3 measurement had no
+driver left after the sync-window, block-attach and devbox-e2e drivers went;
+they left the tree on 2026-10-13, and `bcab9982a` holds them to restore from.
 
 ## Measured verdicts
 

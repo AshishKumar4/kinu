@@ -1,6 +1,6 @@
 /** Shared fixtures: ModelMessage builders and in-memory engine ports. */
 
-import { deflateSync } from 'node:zlib';
+import { crc32, deflateSync } from 'node:zlib';
 import type { AssistantModelMessage, ModelMessage, ToolCallPart, ToolModelMessage, ToolResultPart } from 'ai';
 import * as v from 'valibot';
 import type { PathPlanes, Storage } from '@kinu.run/core';
@@ -138,24 +138,12 @@ export function validSummary(tag: string): string {
   ].join('\n');
 }
 
-const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
-  let c = n;
-
-  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-
-  return c >>> 0;
-});
-
 function pngChunk(type: string, data: Uint8Array): Buffer {
   const body = Buffer.concat([Buffer.from(type, 'latin1'), data]);
-  let crc = 0xffffffff;
-
-  for (const byte of body) crc = (CRC_TABLE[(crc ^ byte) & 0xff] ?? 0) ^ (crc >>> 8);
-
   const framed = Buffer.alloc(body.length + 8);
   framed.writeUInt32BE(data.length, 0);
   body.copy(framed, 4);
-  framed.writeUInt32BE((crc ^ 0xffffffff) >>> 0, body.length + 4);
+  framed.writeUInt32BE(crc32(body), body.length + 4);
 
   return framed;
 }

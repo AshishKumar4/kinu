@@ -12,6 +12,7 @@ import { parseSkillFile, skillNameProblem } from './parse';
 import { BUILTIN_SKILLS } from './builtins';
 
 import { SHARED_SKILLS_DIR } from '../vfs/shared-drive';
+import { compareCodeUnits } from '../utils/text';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import {
   SKILL_FOLDER_FILE, WORKSPACE_SKILLS_DIR, workspaceSkillIndexLine,
@@ -51,14 +52,6 @@ const SKILL_ROOTS = [
   { dir: SHARED_SKILLS_DIR, source: 'shared' },
 ] as const;
 
-/** Name order by code unit, not `localeCompare`: the prompt prefix must be byte-identical across hosts. */
-export function compareSkillNames(a: string, b: string): number {
-  if (a < b) return -1;
-
-  if (a > b) return 1;
-
-  return 0;
-}
 
 /** Built-in headers; also the fallback when the VFS walk fails. */
 export const BUILTIN_SKILL_HEADERS: ReadonlyArray<DiscoveredSkill> = Object.freeze(
@@ -213,8 +206,8 @@ export function discoverSkills(
     }
 
     return {
-      skills: [...byName.values()].sort((a, b) => compareSkillNames(a.name, b.name)),
-      unread: unread.sort((a, b) => compareSkillNames(a.name, b.name)),
+      skills: [...byName.values()].sort((a, b) => compareCodeUnits(a.name, b.name)),
+      unread: unread.sort((a, b) => compareCodeUnits(a.name, b.name)),
       omitted,
     };
   }));
@@ -248,7 +241,7 @@ function listSkillCandidates(vfs: VFS, dir: string): Effect.Effect<Omit<SkillFil
     }
 
     // Sorted before anything opens: the bound decides what is read.
-    return candidates.sort((a, b) => compareSkillNames(a.name, b.name) || Number(a.folder === null) - Number(b.folder === null));
+    return candidates.sort((a, b) => compareCodeUnits(a.name, b.name) || Number(a.folder === null) - Number(b.folder === null));
   });
 }
 

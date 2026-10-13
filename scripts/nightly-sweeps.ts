@@ -16,6 +16,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { connect } from 'armada';
+import { drainArmadaProgress } from './armada-progress';
 
 const ROOT = join(import.meta.dir, '..');
 
@@ -67,17 +68,8 @@ export function mapArgv(sweep: Sweep, rev: string): string[] {
 async function runSweep(sweep: Sweep, rev: string): Promise<number> {
   const parts = Array.from({ length: sweep.parts }, (_, index) => index + 1);
   const map = Bun.spawn(mapArgv(sweep, rev), { cwd: ROOT, stdin: new Blob([JSON.stringify(parts)]), stdout: 'inherit', stderr: 'pipe' });
-  let said = '';
-
-  for await (const chunk of map.stderr) {
-    const text = new TextDecoder().decode(chunk);
-
-    said += text;
-    process.stderr.write(text);
-  }
-
+  const { job } = await drainArmadaProgress(map.stderr);
   const code = await map.exited;
-  const job = /^job (\S+)$/mu.exec(said)?.[1];
 
   if (job === undefined) return code === 0 ? 2 : code;
   const directory = join(REPORTS, rev);

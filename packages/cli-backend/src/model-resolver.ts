@@ -30,6 +30,7 @@ import {
   type AgentModelEntry,
   type ModelAffinity,
   type ModelInfo,
+  CLOUD_PROXY_PROVIDER_IDS,
   cloudProxyBaseURL,
   createWireModel,
   gatewayWireModel,
@@ -201,7 +202,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
 
   const menu = () => listings ? cloudAnswer<CloudMenu>(
     () => listings.menu(),
-    (reason) => ({ entries: [], failures: new Map(CLOUD_PROVIDERS.map((provider) => [provider, `Could not reach your Kinu account to list its models (${reason}).`])) }),
+    (reason) => ({ entries: [], failures: new Map(CLOUD_PROXY_PROVIDER_IDS.map((provider) => [provider, `Could not reach your Kinu account to list its models (${reason}).`])) }),
   ) : Promise.resolve({ entries: [], failures: new Map<string, string>() });
 
   const cloudProvider = (readMenu: () => Promise<CloudMenu>, provider: { id: CloudProxyProviderId; label: string; unavailableReason: string; defaultModel?: string }): ModelProvider => {
@@ -433,8 +434,6 @@ interface CloudMenu {
   readonly failures: ReadonlyMap<string, string>;
 }
 
-const CLOUD_PROVIDERS = ['workers-ai', 'my-gateway'] as const;
-
 class LocalCloudListings {
   constructor(private readonly cloud: LocalCloudSession, private readonly fetchImpl: typeof fetch | undefined) {}
 
@@ -493,7 +492,7 @@ interface ProxiedCredentials {
  *  match the hosted backend exactly. */
 class CloudProxyProvider implements ModelProvider {
   constructor(private readonly opts: {
-    id: 'workers-ai' | 'my-gateway';
+    id: CloudProxyProviderId;
     label: string;
     cloud: LocalCloudSession;
     menu: () => Promise<CloudMenu>;

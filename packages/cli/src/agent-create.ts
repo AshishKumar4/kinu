@@ -4,7 +4,6 @@ import { Database } from 'bun:sqlite';
 import {
   changeRoleAsOwner, openWorkspaceMainActor,
   DEFAULT_ROLE_ID,
-  fallbackWorkspaceIdentity,
   initWorkspaceSchema,
   missionOf,
   workspaceSlug,
@@ -31,11 +30,7 @@ import {
   validateWorkspaceId,
   type AgentMode,
 } from './config';
-import {
-  createCloudAgent,
-  type CloudAgent,
-  type CreateCloudAgentInput,
-} from './cloud-api';
+import { createCloudAgent, type CreateCloudAgentInput } from './cloud-api';
 import { authCommand } from './commands/auth';
 import { ensureLocalDaemonRunning } from './commands/daemon';
 
@@ -71,34 +66,23 @@ export interface CreatedCliAgent {
   peers?: string[];
 }
 
-export interface CreateCloudAgentFromMissionOptions {
-  id?: string;
-  create: (input: CreateCloudAgentInput) => Promise<CloudAgent>;
-}
+/** Pins only what was named, as the web creates it. Only the owner's own name is sent: the server reads a sent name as
+ *  theirs, so an unnamed workspace is named there, with a stand-in title the first turn's `auto_title` replaces. */
+function cloudCreateInput(input: CreateCliAgentInput, purpose: string): CreateCloudAgentInput {
+  const cloudInput: CreateCloudAgentInput = { purpose };
 
-export async function createCloudAgentFromMission(
-  input: Pick<CreateCliAgentInput, 'name' | 'displayName' | 'nameOrigin' | 'purpose' | 'model' | 'baseUrl' | 'auth' | 'reasoningEffort' | 'role'>,
-  options: CreateCloudAgentFromMissionOptions,
-): Promise<CloudAgent> {
-  const userNamed = Boolean(input.name) && input.nameOrigin !== 'auto';
+  if (input.name && input.nameOrigin !== 'auto') {
+    cloudInput.name = input.name;
+    cloudInput.displayName = input.displayName ?? input.name;
+  }
 
-  const identity = userNamed
-    ? { name: input.name, displayName: input.displayName ?? input.name }
-    : fallbackWorkspaceIdentity(input.purpose, options.id ?? crypto.randomUUID());
+  if (input.model) cloudInput.model = input.model;
 
-  const createInput: CreateCloudAgentInput = {
-    name: identity.name,
-    displayName: identity.displayName,
-    purpose: input.purpose,
-  };
+  if (input.reasoningEffort) cloudInput.reasoningEffort = input.reasoningEffort;
 
-  if (input.model) createInput.model = input.model;
+  if (input.role) cloudInput.role = input.role;
 
-  if (input.reasoningEffort) createInput.reasoningEffort = input.reasoningEffort;
-
-  if (input.role) createInput.role = input.role;
-
-  return options.create(createInput);
+  return cloudInput;
 }
 
 export function isCloudAuthConfigured(): boolean {
@@ -131,10 +115,7 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   if (input.mode === 'cloud') {
     const auth = await resolveCloudAuth(input.origin, input.allowInteractiveAuth === true);
 
-    // Pins only what was named, as the web creates it.
-    const agent = await createCloudAgentFromMission({ ...input, purpose }, {
-      create: (cloudInput) => createCloudAgent(auth.origin, auth.token, cloudInput),
-    });
+    const agent = await createCloudAgent(auth.origin, auth.token, cloudCreateInput(input, purpose));
 
     await upsertAgentConfig({
       name: agent.name,

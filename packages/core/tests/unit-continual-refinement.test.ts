@@ -6,8 +6,6 @@ import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
  */
 
 import { describe, expect, test } from 'bun:test';
-import type { LanguageModelV3Prompt } from '@ai-sdk/provider';
-import { MockLanguageModelV3 } from 'ai/test';
 import * as v from 'valibot';
 
 import {
@@ -16,7 +14,6 @@ import {
 } from '../src/index';
 import { initAllTables } from '../src/state/workspace-schema';
 import { EvolutionEngine } from '../src/evolution/engine';
-import type { SessionHistory } from '../src/session/history';
 import { initLessonTables } from '../src/evolution/lessons';
 import { initTurnRatingTables } from '../src/evolution/ratings';
 import { buildChangelog } from '../src/evolution/changelog';
@@ -59,7 +56,7 @@ import {
   decideRefinementRoute, showRefinementRoute,
 } from '../src/evolution/refinement-skill';
 import { refinementPass } from '../src/evolution/refinement-host';
-import { createMemoryVfs, createTestSql, present, unobservedSpend } from '@kinu.run/test-utils';
+import { createMemoryVfs, createTestSql, present } from '@kinu.run/test-utils';
 import { renderThrownChain } from '../src/obs/index';
 import { RunEventRecorder } from '../src/events/recorder';
 import { Database } from 'bun:sqlite';
@@ -89,46 +86,13 @@ const overrides = (rt: AgentRuntime) => artifactOverrides(currentArtifacts(rt.st
 
 const sectionVersions = (rt: AgentRuntime) => listArtifactVersions(rt.storage.sql, rt.actor, ARTIFACT);
 
-function promptText(prompt: LanguageModelV3Prompt): string {
-  const text: string[] = [];
-
-  for (const message of prompt) {
-    if (!Array.isArray(message.content)) { text.push(message.content); continue; }
-
-    for (const part of message.content) if (part.type === 'text') text.push(part.text);
-  }
-
-  return text.join('\n');
-}
-
 /** `surface` throws: a refinement pass must never run a scaffold. */
-function scriptedControl(rt: AgentRuntime, history: SessionHistory, score: (candidate: string) => number): ScaffoldControl {
-  const usage = {
-    inputTokens: { total: 5, noCache: 5, cacheRead: undefined, cacheWrite: undefined },
-    outputTokens: { total: 7, text: 7, reasoning: undefined },
-  };
-
+function scriptedControl(rt: AgentRuntime): ScaffoldControl {
   return {
-    reportModelCall: unobservedSpend,
     events: new RunEventRecorder(rt.storage.sql, rt.actor),
     rt,
     sql: rt.storage.sql,
-    history,
     surface: () => { throw new Error('a refinement pass must not roll out a scaffold'); },
-    model: () => new MockLanguageModelV3({
-      provider: 'fake',
-      modelId: 'fake-reflection',
-      doGenerate: async (options) => ({
-        content: [{ type: 'text' as const, text: promptText(options.prompt).slice(0, 8) }],
-        finishReason: { unified: 'stop' as const, raw: undefined },
-        usage,
-        warnings: [],
-      }),
-    }),
-    judge: async ({ prompt, schema }) => v.parse(schema, {
-      score: score(prompt.includes(CANDIDATE) ? CANDIDATE : INCUMBENT),
-      feedback: 'the wording decides it',
-    }),
   };
 }
 
@@ -265,7 +229,7 @@ function fixture(): Fixture {
         return { answers: { fixes: { type: 'noul', noul: better ? 0.9 : 0.1 }, harms: { type: 'noul', noul: better ? 0.1 : 0.9 } }, usage: { input: 1, output: 1 } };
       };
 
-      return { control: scriptedControl(rt, stores.history, score), facts, refiner, approvals };
+      return { control: scriptedControl(rt), facts, refiner, approvals };
     },
   };
 }

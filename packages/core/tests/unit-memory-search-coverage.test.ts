@@ -24,7 +24,6 @@ import type { JsonObject } from '../src/utils/json';
 
 const unavailableIndex: VectorStore = {
   available: false,
-  upsertChunk: async () => { throw new Error('unavailable index must not be used'); },
   upsertChunks: async () => { throw new Error('unavailable index must not be used'); },
   deleteChunks: async () => { throw new Error('unavailable index must not be used'); },
   search: async () => { throw new Error('unavailable index must not be used'); },
@@ -32,7 +31,6 @@ const unavailableIndex: VectorStore = {
 
 const emptyIndex: VectorStore = {
   available: true,
-  upsertChunk: async () => {},
   upsertChunks: async () => {},
   deleteChunks: async () => {},
   search: async () => [],

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ClockCounterClockwiseIcon, NotebookIcon, SealCheckIcon } from "@phosphor-icons/react";
 import { Effect } from "effect";
 import * as v from "valibot";
@@ -7,8 +7,9 @@ import { attempt, detach, renderThrownChain, tolerate } from "@kinu.run/core/obs
 import { Card } from "@/components/ui/form";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
+import { useAsyncResource } from "@/hooks/use-async-resource";
 import {
-  decideAccountMemory, forgetAccountFact, forgetAccountNote, putAccountFact,
+  decideAccountMemory, forgetAccountFact, forgetAccountNote, getAccountMemory, putAccountFact,
   type AccountMemoryState, type MemoryOrigin,
 } from "../../lib/user-api";
 
@@ -51,8 +52,17 @@ type Busy = { readonly what: string } | null;
 
 /** Settings → Memory: what every workspace and agent of the account reads, what waits on the owner, and every revision. */
 export function AccountMemoryCard() {
-  // The shell's one account memory: what waits is the account socket's newest, the list the attention stack shows.
-  const { resource, reload } = useWorkspaceRoster().accountMemory;
+  const { resource, reload } = useAsyncResource(getAccountMemory);
+  // What waits is the account socket's newest, the list the attention stack shows; a proposal decided anywhere can keep
+  // a fact or a note, so each frame reads the whole memory again.
+  const { accountProposals } = useWorkspaceRoster();
+  const framed = useRef(accountProposals);
+
+  useEffect(() => {
+    if (framed.current === accountProposals) return;
+    framed.current = accountProposals;
+    reload();
+  }, [accountProposals, reload]);
   const [busy, setBusy] = useState<Busy>(null);
   const [failure, setFailure] = useState<string | null>(null);
 
@@ -74,7 +84,7 @@ export function AccountMemoryCard() {
         {(state) => (
           <div className="space-y-4" data-account-memory>
             {failure !== null && <div className="p-meta p-danger">{failure}</div>}
-            <Pending pending={state.pending} busy={busy} act={act} />
+            <Pending pending={accountProposals ?? state.pending} busy={busy} act={act} />
             <Facts state={state} busy={busy} act={act} />
             <Notes state={state} busy={busy} act={act} />
           </div>

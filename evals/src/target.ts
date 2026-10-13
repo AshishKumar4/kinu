@@ -49,7 +49,7 @@ export interface Served {
   readonly sha: string;
 }
 
-export function deployedBuild(target: EvalTarget): Promise<Served> {
+export function deployedBuild(target: Pick<EvalTarget, 'origin'>): Promise<Served> {
   return infraBoundary(`GET ${target.origin}/api/health`, async () => {
     const response = await fetch(`${target.origin}/api/health`);
 

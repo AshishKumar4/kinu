@@ -3,6 +3,10 @@ export type { ControlPlaneSql, ControlPlaneSqlRow, ControlPlaneSqlValue } from '
 
 export {
   AUDIT_OUTCOMES,
+  ControlAuditRowSchema,
+  ControlOverviewSchema,
+  ControlUserRowSchema,
+  ControlWorkspaceRowSchema,
   CONTROL_PAGE_DEFAULT,
   CONTROL_PAGE_MAX,
   appendAudit,
@@ -50,6 +54,7 @@ export {
 } from './capability';
 
 export {
+  AnalyticsResultSchema,
   analyticsMissingSettings,
   runAnalyticsBatch,
   type AnalyticsPanels,
@@ -59,7 +64,10 @@ export {
   type AnalyticsSqlEnv,
 } from './analytics-sql';
 
+export { FeedbackRecordSchema } from '../feedback/contract';
+
 export {
+  ControlMetricsSchema,
   METRICS_WINDOWS,
   controlPlaneMetrics,
   type ControlMetrics,

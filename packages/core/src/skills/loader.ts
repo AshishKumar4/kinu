@@ -15,9 +15,10 @@ import { estimateTokens } from '../token-estimate';
 import { Effect, Result } from 'effect';
 import { attempt, diagnostics, settle } from '../obs/index';
 import {
-  readSkillFile, compareSkillNames,
+  readSkillFile,
   type SkillsDiscovery,
 } from './discover';
+import { compareCodeUnits } from '../utils/text';
 import { parseSkillFile } from './parse';
 import { skillIndexLine, unreadSkillLine } from './render';
 import {
@@ -80,7 +81,7 @@ export function resolveActiveSkills(opts: LoadActiveSkillsOpts): ActivatedSkill[
 
   return activated.sort((a, b) =>
     REASON_PRIORITY[a.reason.kind] - REASON_PRIORITY[b.reason.kind]
-    || compareSkillNames(a.skill.name, b.skill.name));
+    || compareCodeUnits(a.skill.name, b.skill.name));
 }
 
 /** Charge the ambient index; entries are priced as printed, in name order. */

@@ -29,47 +29,6 @@ export interface ModelsDevProviderInfo {
   api?: string;
 }
 
-interface ModelsDevProvider {
-  id?: string;
-  name?: string;
-  doc?: string;
-  env?: string[];
-  npm?: string;
-  api?: string;
-  models?: Record<string, ModelsDevModel>;
-}
-
-interface ModelsDevModel {
-  id?: string;
-  name?: string;
-  provider?: v.InferOutput<typeof ModelProviderOverrideSchema>;
-  tool_call?: boolean;
-  reasoning?: boolean;
-  /** How a model's reasoning is steered; only `effort` rows name levels. Absent or empty means no effort. */
-  reasoning_options?: ModelsDevReasoningOption[];
-  status?: string;
-  limit?: {
-    context?: number;
-    output?: number;
-  };
-  modalities?: {
-    input?: string[];
-    output?: string[];
-  };
-  /** USD per 1M tokens. */
-  cost?: {
-    input?: number;
-    output?: number;
-    cache_read?: number;
-    cache_write?: number;
-  };
-}
-
-interface ModelsDevReasoningOption {
-  type?: string;
-  values?: (string | null)[];
-}
-
 interface ModelsDevCache {
   at: number;
   fetchFn: typeof fetch;
@@ -87,6 +46,7 @@ const ModelsDevModelSchema = v.object({
   provider: v.optional(ModelProviderOverrideSchema),
   tool_call: v.optional(v.boolean()),
   reasoning: v.optional(v.boolean()),
+  /** How a model's reasoning is steered; only `effort` rows name levels. Absent or empty means no effort. */
   reasoning_options: v.optional(v.array(v.object({
     type: v.optional(v.string()),
     values: v.optional(v.array(v.nullable(v.string()))),
@@ -100,6 +60,7 @@ const ModelsDevModelSchema = v.object({
     input: v.optional(v.array(v.string())),
     output: v.optional(v.array(v.string())),
   })),
+  /** USD per 1M tokens. */
   cost: v.optional(v.object({
     input: v.optional(v.number()),
     output: v.optional(v.number()),
@@ -119,6 +80,10 @@ const ModelsDevProviderSchema = v.object({
 });
 
 const ModelsDevCatalogSchema = v.record(v.string(), ModelsDevProviderSchema);
+
+type ModelsDevProvider = v.InferOutput<typeof ModelsDevProviderSchema>;
+
+type ModelsDevModel = v.InferOutput<typeof ModelsDevModelSchema>;
 
 /**
  * The last catalog read, settled: data any request may read. A read in flight is never shared. A stateless Worker
@@ -336,7 +301,7 @@ function readModelsDevCatalog(fetchImpl: typeof fetch): Effect.Effect<Record<str
       return yield* Effect.fail(new KinuError('bad_input', `models.dev rejected ${v.getDotPath(issue) ?? 'catalog'}: ${issue.message}`));
     }
 
-    const data: Record<string, ModelsDevProvider> = body.output;
+    const data = body.output;
     cache = { at: Date.now(), fetchFn: fetchImpl, data };
 
     return data;

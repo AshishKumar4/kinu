@@ -1,10 +1,11 @@
 // Only a missing path may read as absence; other failures must reach the caller.
 import { describe, test, expect } from "bun:test";
 import { MemoryStore } from "../src/memory/store";
-import { createTestDb, createMemoryVfs } from "./helpers";
+import { createTestSql } from "@kinu.run/test-utils";
+import { createMemoryVfs } from "./helpers";
 
 function createStore(seed: Record<string, string>) {
-	const { sql, transactionSync } = createTestDb()
+	const { sql, transactionSync } = createTestSql()
 	const fs = createMemoryVfs(seed);
 	const store = new MemoryStore(fs, sql, transactionSync);
 	store.ensureSchema();

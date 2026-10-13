@@ -1,6 +1,7 @@
+import * as v from 'valibot';
 import {
-  analyticsMissingSettings, runAnalyticsBatch,
-  type AnalyticsPanels, type AnalyticsSqlEnv,
+  AnalyticsResultSchema, analyticsMissingSettings, runAnalyticsBatch,
+  type AnalyticsSqlEnv,
 } from './analytics-sql';
 import { analyticsDigest } from '../obs/analytics/privacy';
 import { controlPlaneMetricsQueries } from '../obs/analytics/query';
@@ -20,12 +21,14 @@ export interface MetricsRequest {
   workspace?: string;
 }
 
-export interface ControlMetrics {
+export const ControlMetricsSchema = v.object({
   /** After clamping. */
-  windowHours: number;
-  missing: readonly string[];
-  panels: AnalyticsPanels;
-}
+  windowHours: v.number(),
+  missing: v.pipe(v.array(v.string()), v.readonly()),
+  panels: v.record(v.string(), AnalyticsResultSchema),
+});
+
+export type ControlMetrics = v.InferOutput<typeof ControlMetricsSchema>;
 
 export const METRICS_WINDOWS: readonly number[] = WINDOWS;
 

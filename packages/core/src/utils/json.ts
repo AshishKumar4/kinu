@@ -198,3 +198,11 @@ export function nonEmptyString(input: { value: unknown }): string | undefined {
 
   return parsed.success ? parsed.output : undefined;
 }
+
+/** A `JSON.stringify` replacer for previews and size estimates: a binary body becomes its size. Lossy on purpose; the
+ *  lossless codec is `session/message-codec.ts`. */
+export function binaryReplacer<Value>(_key: string, value: Value): Value | string {
+  if (value instanceof Uint8Array || value instanceof ArrayBuffer) return `[binary ${value.byteLength} bytes]`;
+
+  return value;
+}

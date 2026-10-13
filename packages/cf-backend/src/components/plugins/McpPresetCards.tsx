@@ -16,7 +16,8 @@ import { inputCls } from "@/components/ui/form";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { SECRET_REGION } from "@/components/ui/SecretValue";
 import { BrandMark, type BrandName } from "@/components/ui/BrandMark";
-import { PluginRow, PLUGIN_ACTION, PLUGIN_PILL } from "@/components/plugins/PluginRow";
+import { DOT_BY_TONE, PluginRow, PLUGIN_ACTION, PLUGIN_PILL } from "@/components/plugins/PluginRow";
+import { mcpServerStatus } from "@/components/plugins/mcp-status";
 import { renderThrownChain, detach } from "@kinu.run/core/obs";
 
 const PRESET_MARK: Record<McpPresetId, BrandName> = {
@@ -32,28 +33,15 @@ export function presetBrand(presetId: string | null): BrandName | undefined {
   return preset === undefined ? undefined : PRESET_MARK[preset.id];
 }
 
-function presetWord(server: McpServerSummary | undefined) {
-  switch (server?.status) {
-    case undefined:
-      return { word: 'Not added', dot: 'p-dot-neutral' };
-    case 'ready':
-    case 'connected':
-      return { word: 'Connected', dot: 'p-dot-success' };
-    case 'authenticating':
-      return { word: 'Needs sign-in', dot: 'p-dot-warning' };
-    case 'failed':
-      return { word: 'Failed', dot: 'bg-[var(--c-danger)]' };
-    case 'connecting':
-    case 'discovering':
-    case 'unknown':
-      return { word: 'Connecting', dot: 'p-dot-warning' };
-  }
-}
+/** A preset card's own words for a server's state; the tone is every view's (`mcpServerStatus`). */
+const PRESET_WORDS = {
+  ready: 'Connected', connected: 'Connected', authenticating: 'Needs sign-in', failed: 'Failed',
+  connecting: 'Connecting', discovering: 'Connecting', unknown: 'Unknown',
+} satisfies Record<McpServerSummary['status'], string>;
 
-function PresetMenu({ preset, word, dot, onRemove }: {
+function PresetMenu({ preset, status, onRemove }: {
   preset: McpPreset;
-  word: string;
-  dot: string;
+  status: McpServerSummary['status'];
   onRemove: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -68,8 +56,8 @@ function PresetMenu({ preset, word, dot, onRemove }: {
       <button type="button" data-plugin-menu aria-haspopup="menu" aria-expanded={open}
         aria-label={`${preset.title} options`} onClick={() => setOpen((value) => !value)}
         className={`${PLUGIN_PILL} transition-colors hover:bg-[var(--c-elevated)] hover:p-text`}>
-        <span className={`size-1.5 shrink-0 rounded-full ${dot}`} />
-        {word}
+        <span className={`size-1.5 shrink-0 rounded-full ${DOT_BY_TONE[mcpServerStatus(status).tone]}`} />
+        {PRESET_WORDS[status]}
         <CaretDownIcon size={9} />
       </button>
       {open && (
@@ -100,7 +88,6 @@ function PresetRow({ preset, server, appConfigured, onChanged }: {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const { word, dot } = presetWord(server);
   const brand = PRESET_MARK[preset.id];
   const added = server !== undefined;
 
@@ -154,8 +141,8 @@ function PresetRow({ preset, server, appConfigured, onChanged }: {
 
   let trailing: ReactNode;
 
-  if (added) {
-    trailing = <PresetMenu preset={preset} word={word} dot={dot} onRemove={remove} />;
+  if (server !== undefined) {
+    trailing = <PresetMenu preset={preset} status={server.status} onRemove={remove} />;
   } else if (asking) {
     trailing = (
       <button type="button" data-plugin-cancel onClick={() => setOpenToken(false)}
@@ -176,7 +163,7 @@ function PresetRow({ preset, server, appConfigured, onChanged }: {
   return (
     <>
     {dialog}
-    <PluginRow source={preset.id} state={word}
+    <PluginRow source={preset.id} state={server === undefined ? 'Not added' : PRESET_WORDS[server.status]}
       name={preset.title} description={preset.description}
       tile={<BrandMark brand={brand} size={22} />}
       trailing={trailing}

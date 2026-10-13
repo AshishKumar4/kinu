@@ -650,6 +650,16 @@
     "published_at INTEGER NOT NULL",
     "UNIQUE (source_workspace, kind, key)"
   ],
+  "exploration_objectives@packages/core/src/strategy/records.ts": [
+    "actor_id TEXT NOT NULL",
+    "objective_id TEXT NOT NULL",
+    "metric TEXT NOT NULL",
+    "unit TEXT NOT NULL",
+    "direction TEXT NOT NULL",
+    "scale TEXT NOT NULL",
+    "verifier_digest TEXT NOT NULL",
+    "PRIMARY KEY (actor_id, objective_id)"
+  ],
   "exploration_records@packages/core/src/strategy/records.ts": [
     "actor_id TEXT NOT NULL",
     "record_key TEXT NOT NULL",
@@ -672,11 +682,6 @@
     "cost_tokens INTEGER",
     "first_recorded_at INTEGER NOT NULL",
     "displacements INTEGER NOT NULL DEFAULT 0",
-    "metric TEXT",
-    "unit TEXT",
-    "direction TEXT",
-    "scale TEXT",
-    "verifier_digest TEXT",
     "PRIMARY KEY (actor_id, record_key)"
   ],
   "exploration_seals@packages/core/src/strategy/records.ts": [
