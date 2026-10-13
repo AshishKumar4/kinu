@@ -46,7 +46,7 @@ export interface EgressSecretBinding {
 const EGRESS_SECRET_RULE_PREFIX = 'egress-secret:';
 
 /** Executor egress grants are scoped to; the grant writer and the binding filter must agree on this string. */
-const EGRESS_EXECUTOR = 'sandbox';
+const EGRESS_EXECUTOR = 'computer';
 
 /** The grants that let an egress spend a vault secret: what it carries, so the vault can be read when a request asks. */
 export function egressGrants(grants: readonly ApprovalGrant[]): ApprovalGrant[] {

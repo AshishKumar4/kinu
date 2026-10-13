@@ -204,7 +204,7 @@ function friendlySource(event: KinuEvent): string {
     }
 
     case 'timer_alarm':     return `schedule (${text('label', 'unlabeled')})`;
-    case 'sandbox_cb':      return `sandbox (${text('command', 'process').slice(0, 40)})`;
+    case 'computer_cb':      return `computer (${text('command', 'process').slice(0, 40)})`;
     case 'peer_async':      return `peer agent (${text('from_agent_name', '?')})`;
     case 'subordinate':
       return event.variant === 'subordinate_report'

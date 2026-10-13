@@ -567,7 +567,7 @@ describe('mutations', () => {
   });
 
   test('revoking shell grants reads them first, so the audited count is real', async () => {
-    const grants = [{ rule: 'git', executor: 'workspace' }, { rule: 'npm', executor: 'sandbox' }];
+    const grants = [{ rule: 'git', executor: 'workspace' }, { rule: 'npm', executor: 'computer' }];
     const h = harness({ behaviour: { grants: { grants } } });
     await control(
       post('/actions', { action: 'shell_grants.revoke', userId: USER_ID, workspace: 'alpha' }),

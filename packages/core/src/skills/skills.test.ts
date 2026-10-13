@@ -447,7 +447,7 @@ describe('renderActiveSkillsSection + tool gating', () => {
   test('toolAllowedBySkills: glob-suffix `workspace.*` matches namespace', () => {
     expect(toolAllowedBySkills('workspace.readFile', ['workspace.*'])).toBe(true);
     expect(toolAllowedBySkills('workspace.readFile', ['workspace'])).toBe(true);
-    expect(toolAllowedBySkills('sandbox.exec', ['workspace.*'])).toBe(false);
+    expect(toolAllowedBySkills('computer.exec', ['workspace.*'])).toBe(false);
   });
 
   test('toolAllowedBySkills: a spec-dialect `Bash(git:*)` pattern restricts its own family', () => {

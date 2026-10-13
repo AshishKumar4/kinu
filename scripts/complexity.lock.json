@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-13",
-  "files": 3200,
-  "functions": 83735,
+  "files": 3256,
+  "functions": 85000,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -415,10 +415,6 @@
     },
     {
       "key": "packages/core/tests/unit-fork-transfer.test.ts#framesFor",
-      "complexity": 26
-    },
-    {
-      "key": "scripts/devbox-container-tier.ts#main",
       "complexity": 26
     },
     {

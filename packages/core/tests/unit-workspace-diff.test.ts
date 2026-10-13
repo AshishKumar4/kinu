@@ -55,7 +55,7 @@ const ONE_MILLISECOND = Date.parse('2026-09-24T00:00:00.000Z');
  *  under a git hook the inherited GIT_DIR points at the developer's checkout. */
 function shellIn(cwd: string): ExecutionRouter {
   const provider: ExecutorProvider = {
-    name: 'sandbox', kind: 'sandbox', capabilities: new Set(['git']), filesOwner: 'agent',
+    name: 'computer', kind: 'computer', capabilities: new Set(['git']), filesOwner: 'agent',
     homeDir: async () => '/workspace',
     isAvailable: () => true, connect: async () => {}, disconnect: async () => {},
     tools: {
@@ -73,7 +73,7 @@ function shellIn(cwd: string): ExecutionRouter {
 
   return {
     register: () => {}, unregister: () => {},
-    getProvider: (name) => name === 'sandbox' ? provider : undefined,
+    getProvider: (name) => name === 'computer' ? provider : undefined,
     getProviders: () => [], listExecutors: () => [],
   };
 }
@@ -607,7 +607,7 @@ describe('workspace diff lifecycle', () => {
     const responses: CommandResult[] = [{ success: false, reason: 'io', error: 'Error (exit 128)\nfatal: index corrupt' }];
 
     const provider: ExecutorProvider = {
-      name: 'sandbox', kind: 'sandbox', capabilities: new Set(['git']), filesOwner: 'agent',
+      name: 'computer', kind: 'computer', capabilities: new Set(['git']), filesOwner: 'agent',
       homeDir: async () => '/workspace',
       isAvailable: () => true, connect: async () => {}, disconnect: async () => {},
       tools: {
@@ -620,14 +620,14 @@ describe('workspace diff lifecycle', () => {
 
     const router: ExecutionRouter = {
       register: () => {}, unregister: () => {},
-      getProvider: (name) => name === 'sandbox' ? provider : undefined,
+      getProvider: (name) => name === 'computer' ? provider : undefined,
       getProviders: () => [], listExecutors: () => [],
     };
 
     const { rt } = createTestRuntime();
     rt.executionRouter = router;
 
-    const result = await getExecutorDiff(rt, 'sandbox', noWorkspace);
+    const result = await getExecutorDiff(rt, 'computer', noWorkspace);
 
     expect(result.files).toEqual([]);
     expect(result.error).toContain('index corrupt');
@@ -646,8 +646,8 @@ describe('workspace diff lifecycle', () => {
     rt.executionRouter = shellIn(repo);
     const before = readFileSync(join(repo, '.git/index'));
 
-    const first = await getExecutorDiff(rt, 'sandbox', noWorkspace);
-    const second = await getExecutorDiff(rt, 'sandbox', noWorkspace);
+    const first = await getExecutorDiff(rt, 'computer', noWorkspace);
+    const second = await getExecutorDiff(rt, 'computer', noWorkspace);
     const after = readFileSync(join(repo, '.git/index'));
     const folder = basename(repo);
 
@@ -697,7 +697,7 @@ describe('workspace diff lifecycle', () => {
 
     const { rt } = createTestRuntime();
     rt.executionRouter = shellIn(cwd);
-    const view = await getExecutorDiff(rt, 'sandbox', noWorkspace);
+    const view = await getExecutorDiff(rt, 'computer', noWorkspace);
 
     expect(view.error).toBeUndefined();
     expect(view.repositories).toEqual(['api', 'api/vendor/lib', 'web']);
@@ -706,7 +706,7 @@ describe('workspace diff lifecycle', () => {
     ]);
 
     rt.executionRouter = shellIn(join(cwd, 'notes'));
-    expect(await getExecutorDiff(rt, 'sandbox', noWorkspace)).toEqual({ files: [], mode: 'git', notGitRepo: true });
+    expect(await getExecutorDiff(rt, 'computer', noWorkspace)).toEqual({ files: [], mode: 'git', notGitRepo: true });
   });
 
   test('a working directory inside a repository shows that repository, and the ones below it', async () => {
@@ -724,7 +724,7 @@ describe('workspace diff lifecycle', () => {
 
     const { rt } = createTestRuntime();
     rt.executionRouter = shellIn(join(mono, 'sub'));
-    const view = await getExecutorDiff(rt, 'sandbox', noWorkspace);
+    const view = await getExecutorDiff(rt, 'computer', noWorkspace);
 
     expect(view.error).toBeUndefined();
     expect(view.repositories).toEqual(['mono', 'mono/sub/inner']);
@@ -751,7 +751,7 @@ describe('workspace diff lifecycle', () => {
 
     const { rt } = createTestRuntime();
     rt.executionRouter = shellIn(cwd);
-    const view = await getExecutorDiff(rt, 'sandbox', noWorkspace);
+    const view = await getExecutorDiff(rt, 'computer', noWorkspace);
 
     expect(view.error).toBeUndefined();
     expect(view.files.map((file) => `${file.status} ${file.path} +${String(file.added)}`).sort()).toEqual([
@@ -769,7 +769,7 @@ describe('workspace diff lifecycle', () => {
 
     const { rt } = createTestRuntime();
     rt.executionRouter = shellIn(cwd);
-    const view = await getExecutorDiff(rt, 'sandbox', noWorkspace);
+    const view = await getExecutorDiff(rt, 'computer', noWorkspace);
 
     expect(view.error).toBeUndefined();
     expect(view.repositories).toEqual(['nl\nname/r2']);

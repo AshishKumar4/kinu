@@ -31,7 +31,7 @@ export type IngressKind =
   | 'webhook_bearer'  // bearer secret in header or path
   | 'webhook_mtls'
   | 'timer_alarm'
-  | 'sandbox_cb'      // callback from sandbox.exec(..., {notify_when})
+  | 'computer_cb'      // callback from computer.exec(..., {notify_when})
   | 'peer_async'
   | 'mcp_streamable'
   | 'email_inbound'   // inbound mail via Cloudflare Email Routing → Worker email()
@@ -303,16 +303,16 @@ export type IngressDescriptor =
       trigger_creator_trust: TrustLevel;
     }
   | {
-      ingress: 'sandbox_cb';
+      ingress: 'computer_cb';
       variant: 'process_done';
       payload: ProcessDonePayload;
-      launching_head_trust: TrustLevel;  // captured at sandbox.exec time
+      launching_head_trust: TrustLevel;  // captured at computer.exec time
     }
   | {
-      ingress: 'sandbox_cb';
+      ingress: 'computer_cb';
       variant: 'file_changed';
       payload: FileChangedPayload;
-      launching_head_trust: TrustLevel;  // captured at sandbox.exec time
+      launching_head_trust: TrustLevel;  // captured at computer.exec time
     }
   | {
       ingress: 'peer_async';

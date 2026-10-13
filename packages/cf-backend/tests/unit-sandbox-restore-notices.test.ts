@@ -73,7 +73,7 @@ test('a notice the workspace refuses is logged, and the next one still goes out'
     notice('settled');
     await second.promise;
 
-    expect(log.emitted.map((line) => line.event)).toEqual(['sandbox.starting_notice_failed']);
+    expect(log.emitted.map((line) => line.event)).toEqual(['computer.starting_notice_failed']);
   } finally {
     restore();
   }

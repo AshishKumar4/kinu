@@ -1,18 +1,18 @@
 /**
- * FIRST RUN: a file written through the `/sandbox` mount is a file in the
+ * FIRST RUN: a file written through the `/computer` mount is a file in the
  * container's working directory, and an empty path lists it.
  *
  * THE DEFECT. In the trajectory run public-failure-recovery (kinu.run at
  * 96c3fa2b0, run-6k2kglxfvqag1l0hwg8o8, 2026-09-14) the agent listed
- * `/sandbox/workspace` — empty — then asked the file tool to write
- * `/sandbox/workspace/broken.mjs` and was refused `io`:
+ * `/computer/workspace` — empty — then asked the file tool to write
+ * `/computer/workspace/broken.mjs` and was refused `io`:
  * `FileNotFoundError: File not found: /workspace/broken.mjs`. A CREATE through
  * the mount demanded the file already exist: the write path reads first to
  * tell create from overwrite, the sandbox file view passed the SDK's typed
  * miss through untranslated instead of answering ENOENT, and the refusal
- * classed it as an I/O failure. The same program's `sandbox.writeFile(
+ * classed it as an I/O failure. The same program's `computer.writeFile(
  * 'broken.mjs', …)` — the codemode namespace, no read-first — wrote fine, and
- * its `sandbox.listFiles('')` came back a `ValidationFailedError` because the
+ * its `computer.listFiles('')` came back a `ValidationFailedError` because the
  * SDK refuses the empty path the namespace passed straight through.
  *
  * WHY EVERY GATE STAYED GREEN. The conformance double answered a missing read
@@ -22,7 +22,7 @@
  *
  * THE ASSERTIONS, all hard: the file tool's write to a path it just listed as
  * absent answers `created`, a read returns the bytes byte-for-byte, and a
- * `sandbox.readdir({ path: '' })` inside one program names the file — not a refusal. The historical
+ * `computer.readdir({ path: '' })` inside one program names the file — not a refusal. The historical
  * `listFiles` name above is gone; the native platform listing remains an internal transport method.
  */
 import { afterAll, describe, test } from 'vitest';
@@ -102,7 +102,7 @@ describe(SUITE, () => {
         // path — the second half of the defect — inside an eval call.
         const program = calls.find((call) =>
           call.name === 'eval' && answered(call)
-          && JSON.stringify(call.args ?? {}).includes("listFiles({ path: '' })")
+          && JSON.stringify(call.args ?? {}).includes("computer.readdir({ path: '' })")
           && JSON.stringify(call.result ?? '').includes('first-run-mount.mjs'));
 
         return [
@@ -124,8 +124,8 @@ describe(SUITE, () => {
             what: 'empty-path-listing',
             reached: program !== undefined,
             detail: program === undefined
-              ? 'no eval call ran sandbox.readdir({ path: \'\' }) and returned the file\'s name'
-              : `sandbox.readdir({ path: '' }) inside eval named the written file`,
+              ? 'no eval call ran computer.readdir({ path: \'\' }) and returned the file\'s name'
+              : `computer.readdir({ path: '' }) inside eval named the written file`,
           },
         ] satisfies EvalSubgoal[];
       },

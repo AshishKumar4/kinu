@@ -33,7 +33,7 @@ import {
   ROLE_SECTION,
   OUTPUT_FORMAT_SECTION,
   PERSISTENCE_SECTION,
-  SANDBOX_EXECUTOR_LINE,
+  COMPUTER_EXECUTOR_LINE,
   TOOLS_SECTION,
   VERIFICATION_SECTION,
   WORKSPACE_EXECUTOR_LINE,
@@ -166,8 +166,8 @@ function renderExecutorLine(
         return render(WORKSPACE_EXECUTOR_LINE, {
           cliLocal: backend === 'cli-local', memoryMb: String(WORKSPACE_MEMORY_MB),
         });
-      case 'sandbox':
-        return render(SANDBOX_EXECUTOR_LINE, sandboxSizeSlots(exec.sizes));
+      case 'computer':
+        return render(COMPUTER_EXECUTOR_LINE, sandboxSizeSlots(exec.sizes));
       case 'device':
         return render(DEVICE_EXECUTOR_LINE, {});
       default:
@@ -200,7 +200,7 @@ function renderExecutorSection(surface: PromptSurface, render: RenderSection): s
     workspaceRoot: WORKSPACE_ROOT,
     hasFolder: surface.backend === 'cli-local',
     hasDevices: devices.length > 0,
-    hasSandbox: devices.some((exec) => exec.name === 'sandbox'),
+    hasComputer: devices.some((exec) => exec.name === 'computer'),
     deviceNamespaces: devices.map((exec) => `\`${exec.name}.*\``).join(', '),
     hasPreview: previewExecutors.length > 0,
     // The slate route exists only on workspaces that can publish a preview on their own origin.

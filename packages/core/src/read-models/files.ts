@@ -387,11 +387,12 @@ export function getExecutorFiles(
       : yield* mountLanding(router, normalizePath(path));
 
     return yield* step(async () => {
-    const listed = await listWithVfsOps(vfs, dir);
+    // A machine's mount point lists as the directory it is: a stat of it asks the machine, and a computer asked starts.
+    const listed = await listWithVfsOps(vfs, dir, (child) => MOUNT_EXECUTORS[child] === undefined);
 
-    // A null `stat` is one unreadable child, not a failed listing.
-    const entries: DirEntry[] = listed.filter(({ name }) => !isSystemManaged(name)).map(({ name, stat }) => ({
-      name, type: stat?.type === 'directory' ? 'dir' : 'file', size: stat?.size, mtimeMs: stat?.mtimeMs,
+    // A null `stat` is one unreadable child, or a mount point, not a failed listing.
+    const entries: DirEntry[] = listed.filter(({ name }) => !isSystemManaged(name)).map(({ name, type, stat }) => ({
+      name, type: (stat?.type ?? type) === 'directory' ? 'dir' : 'file', size: stat?.size, mtimeMs: stat?.mtimeMs,
     }));
 
     // Each ancestor of home lists the next segment down: on a fresh workspace nothing above home

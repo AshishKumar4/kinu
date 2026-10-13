@@ -143,7 +143,7 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
     return (await this.nimbus()).vfs;
   }
 
-  /** The agent's file plane, as `createCFRuntime` mounts it (no /pc, no /sandbox here). */
+  /** The agent's file plane, as `createCFRuntime` mounts it (no /pc, no /computer here). */
   private agentFiles(): VFS {
     return withMountTable(storeFiles(() => this.workspace(), { home: WORKSPACE_ROOT }), standardMounts(() => undefined));
   }

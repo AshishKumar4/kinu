@@ -278,7 +278,7 @@ describe('ChatApp consent ownership', () => {
 
 describe('waiting approvals', () => {
   function parked(id: string, command: string): DeferredApproval {
-    return { id, actor: 'actor-main', command, executor: 'sandbox', context: {}, reason: 'Approval review: gate\n- force push (gate): rewrites history', status: 'queued', requestedAt: 1, decidedAt: null };
+    return { id, actor: 'actor-main', command, executor: 'computer', context: {}, reason: 'Approval review: gate\n- force push (gate): rewrites history', status: 'queued', requestedAt: 1, decidedAt: null };
   }
 
   /** The workspace's queue as both backends serve it: a decided row leaves it. */

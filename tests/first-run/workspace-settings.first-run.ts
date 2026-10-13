@@ -55,7 +55,7 @@ const SIZES = ['small', 'medium', 'large'] as const;
 
 const SizeSchema = v.picklist(SIZES);
 
-/** What the Environment card reads (`getSandboxSize`); a deployment with no sandbox answers null. */
+/** What the Environment card reads (`getComputerSize`); a deployment with no sandbox answers null. */
 const SandboxSizeSchema = v.nullable(v.object({
   account: v.nullable(SizeSchema), chosen: v.nullable(SizeSchema), size: SizeSchema, running: v.nullable(SizeSchema), startRefused: v.nullable(v.string()),
 }));
@@ -170,9 +170,9 @@ async function sandboxSizeSubgoals(socket: PublicSocket, account: ReturnType<typ
   const refused = await account.write('huge');
   const written = await account.write(probe);
   const reread = await account.read();
-  const followed = await read(socket, SandboxSizeSchema, 'getSandboxSize', []);
-  const chosen = await read(socket, SandboxSizeSchema, 'resizeSandbox', [own]);
-  const cleared = await read(socket, SandboxSizeSchema, 'resizeSandbox', [null]);
+  const followed = await read(socket, SandboxSizeSchema, 'getComputerSize', []);
+  const chosen = await read(socket, SandboxSizeSchema, 'resizeComputer', [own]);
+  const cleared = await read(socket, SandboxSizeSchema, 'resizeComputer', [null]);
   const restored = await account.write(prior ?? 'medium');
 
   return [
@@ -190,7 +190,7 @@ async function sandboxSizeSubgoals(socket: PublicSocket, account: ReturnType<typ
       what: 'stopped-box-sized-apart',
       reached: chosen.value?.chosen === own && chosen.value.size === own && chosen.value.running === null
         && cleared.value?.chosen === null && cleared.value.size === probe,
-      detail: `resizeSandbox(${own}): ${chosen.detail}; resizeSandbox(null): ${cleared.detail}`,
+      detail: `resizeComputer(${own}): ${chosen.detail}; resizeComputer(null): ${cleared.detail}`,
     },
     { what: 'account-size-restored', reached: restored.status === 200, detail: `PUT ${prior ?? 'medium'} answered ${String(restored.status)} ${restored.body}` },
   ];

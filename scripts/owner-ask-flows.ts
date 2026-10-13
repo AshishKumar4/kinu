@@ -336,6 +336,8 @@ const PLAN_MODE = `[...document.querySelectorAll('#chat [aria-label="Turn mode"]
 
 const GLOBAL_COMMENT_DIALOG = '[role="dialog"][aria-label="Global plan comment"]';
 
+const COMMENTS_TOGGLE = `document.querySelector('#inspector [data-plan-comments-toggle]')`;
+
 /** Each reply the comment threads show, by its text. */
 const THREAD_REPLIES = `[...document.querySelectorAll('[data-annotation-panel="true"] [data-comment-reply]')].map((reply) => (reply.textContent ?? '').trim())`;
 
@@ -374,7 +376,8 @@ export async function planCommentReachesTheAgent(target: FlowTarget): Promise<Pl
 
     const heard = (await chatText(page)).split('\n').find((line) => line.includes(FEEDBACK_HEARD))?.trim() ?? '';
 
-    await page.click('#inspector [data-plan-comments-toggle]');
+    // Writing the comment opened the comments, and a mounted review keeps them open: a click now would close them.
+    if (await page.evaluate(`${COMMENTS_TOGGLE}?.getAttribute('aria-expanded')`) !== 'true') await page.click('#inspector [data-plan-comments-toggle]');
     await until(page, "the comment's thread, answered", `${THREAD_REPLIES}.some((reply) => reply.includes(${JSON.stringify(THREAD_REPLY)}))`);
 
     return { commentAdmitted, heard, threadReplies: v.parse(v.array(v.string()), await page.evaluate(THREAD_REPLIES)) };

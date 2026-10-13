@@ -47,7 +47,7 @@ test('resizing a box that has never started records the size and starts nothing;
   expect(await box.resize('large')).toEqual({ kind: 'recorded', size: 'large', previous: undefined });
   expect({ starts: container.startOptions.length, running: container.running.running }).toEqual({ starts: 0, running: false });
 
-  // The /sandbox mount's first file call starts the box.
+  // The /computer mount's first file call starts the box.
   await box.writeFile('/workspace/first.txt', 'first');
 
   expect(container.startOptions.map((options) => options?.instance)).toEqual([instance('large')]);

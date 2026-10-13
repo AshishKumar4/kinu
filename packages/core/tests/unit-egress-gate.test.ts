@@ -156,8 +156,8 @@ describe('planEgress', () => {
 
 describe('grants are the workspace set, or a subset', () => {
   const root: ApprovalGrant[] = [
-    { rule: 'rm-rf', executor: 'sandbox' },
-    { rule: 'egress-secret:bind-stripe', executor: 'sandbox' },
+    { rule: 'rm-rf', executor: 'computer' },
+    { rule: 'egress-secret:bind-stripe', executor: 'computer' },
   ];
 
   test('a facet that has recorded nothing inherits the whole root set', () => {
@@ -167,19 +167,19 @@ describe('grants are the workspace set, or a subset', () => {
   });
 
   test('a facet that narrowed itself keeps only what it kept', () => {
-    const own = [{ rule: 'rm-rf', executor: 'sandbox' }];
+    const own = [{ rule: 'rm-rf', executor: 'computer' }];
     expect(resolveInheritedGrants({ root, own })).toEqual(own);
   });
 
   test('a facet can never hold a grant its root lacks', () => {
     const own = [
-      { rule: 'rm-rf', executor: 'sandbox' },
-      { rule: 'egress-secret:bind-prod-db', executor: 'sandbox' },
+      { rule: 'rm-rf', executor: 'computer' },
+      { rule: 'egress-secret:bind-prod-db', executor: 'computer' },
       { rule: 'rm-rf', executor: 'device' },
     ];
 
     const resolved = resolveInheritedGrants({ root, own });
-    expect(resolved).toEqual([{ rule: 'rm-rf', executor: 'sandbox' }]);
+    expect(resolved).toEqual([{ rule: 'rm-rf', executor: 'computer' }]);
     expect(grantsAreSubset(resolved, root)).toBe(true);
   });
 
@@ -210,16 +210,16 @@ describe('inherited approval policy', () => {
   test('before the root has been reached it fails CLOSED', () => {
     const policy = createInheritedApprovalPolicy(rootSource('allow_all', []).source);
     expect(policy.mode()).toBe('strict');
-    expect(policy.granted?.({ rule: 'rm-rf', executor: 'sandbox' })).toBe(false);
+    expect(policy.granted?.({ rule: 'rm-rf', executor: 'computer' })).toBe(false);
   });
 
   test('after resolving, the root\'s mode and grants apply', async () => {
-    const grant = { rule: 'egress-secret:bind-stripe', executor: 'sandbox' };
+    const grant = { rule: 'egress-secret:bind-stripe', executor: 'computer' };
     const policy = createInheritedApprovalPolicy(rootSource('allow_all', [grant]).source);
     await policy.resolve?.();
     expect(policy.mode()).toBe('allow_all');
     expect(policy.granted?.(grant)).toBe(true);
-    expect(policy.granted?.({ rule: 'other', executor: 'sandbox' })).toBe(false);
+    expect(policy.granted?.({ rule: 'other', executor: 'computer' })).toBe(false);
   });
 
   test('a facet cannot record a grant — there is nothing to remember with', () => {
@@ -228,7 +228,7 @@ describe('inherited approval policy', () => {
     expect(policy.requestApproval).toBeUndefined();
   });
 
-  /** `gateExec` over a command reviewed on the agent's container; `sandbox` does not exempt a force-push. */
+  /** `gateExec` over a command reviewed on the agent's container; `computer` does not exempt a force-push. */
   const GATED = 'git push --force origin main';
   const GATED_RULE = 'git-force-push';
 
@@ -242,7 +242,7 @@ describe('inherited approval policy', () => {
         return `ran:${command}`;
       }),
       (error) => error.message,
-      { name: 'sandbox', filesOwner: 'agent' },
+      { name: 'computer', filesOwner: 'agent' },
       { policy },
     );
 
@@ -250,7 +250,7 @@ describe('inherited approval policy', () => {
   }
 
   test('the ladder resolves the root before reading, so a granted facet does not re-ask', async () => {
-    const probe = rootSource('strict', [{ rule: GATED_RULE, executor: 'sandbox' }]);
+    const probe = rootSource('strict', [{ rule: GATED_RULE, executor: 'computer' }]);
     const gate = ladder(createInheritedApprovalPolicy(probe.source));
     expect(await gate.run()).toBe(`ran:${GATED}`);
     expect(probe.calls()).toBe(1);
@@ -267,7 +267,7 @@ describe('inherited approval policy', () => {
     expect(gate.ran).toEqual([]);
     // And the cached answer never widened.
     expect(policy.mode()).toBe('strict');
-    expect(policy.granted?.({ rule: GATED_RULE, executor: 'sandbox' })).toBe(false);
+    expect(policy.granted?.({ rule: GATED_RULE, executor: 'computer' })).toBe(false);
   });
 });
 

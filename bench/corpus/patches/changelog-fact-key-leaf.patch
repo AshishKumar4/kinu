@@ -9,5 +9,5 @@ index d02fa80cd..7f1cbf58c 100644
 -  const leaf = segments.at(-1) ?? normalizedKey;
 +  const leaf = segments.at(0) ?? normalizedKey;
  
-   if (segments[0] === 'sandbox' && leaf.endsWith('_version')) {
+   if (segments[0] === 'computer' && leaf.endsWith('_version')) {
      const software = leaf.slice(0, -'_version'.length).replace(/_/g, ' ');

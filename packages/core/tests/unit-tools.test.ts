@@ -366,7 +366,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const t = tools(rt);
     const shellTool = { execute: toolExecute<{ command: string; runtime?: string }, string>(t.shell) };
 
-    for (const runtime of ['sandbox', 'parent', 'device'] as const) {
+    for (const runtime of ['computer', 'parent', 'device'] as const) {
       const pending = shellTool.execute({ command: 'echo hi', runtime });
       await expect(pending).rejects.toMatchObject({ code: 'unavailable' });
       await expect(pending).rejects.toThrow('runtime_not_provisioned');
@@ -384,9 +384,9 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     };
 
     // Unprovisioned: the `refused` branch, not a failed command.
-    await expect(shellTool.execute({ command: 'echo hi', runtime: 'sandbox', why: 'needs an inbound port' })).rejects.toMatchObject({ code: 'unavailable' });
+    await expect(shellTool.execute({ command: 'echo hi', runtime: 'computer', why: 'needs an inbound port' })).rejects.toMatchObject({ code: 'unavailable' });
     expect(escalations.snapshot().escalations).toEqual([
-      { runtime: 'sandbox', reason: 'needs an inbound port', outcome: 'refused', count: 1 },
+      { runtime: 'computer', reason: 'needs an inbound port', outcome: 'refused', count: 1 },
     ]);
 
     // The workspace shell is the default, not an escalation: the ledger stays unchanged.

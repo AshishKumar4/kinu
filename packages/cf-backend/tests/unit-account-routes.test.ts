@@ -29,7 +29,6 @@ function setup(deleteOutcome: 'ok' | 'destroyed' | 'io') {
   const userDO: AccountRoutesEnv<string>['UserDO'] extends ObjectNamespace<string, infer Stub>
     ? Stub : never = {
     completeOnboarding: refuse('completeOnboarding'),
-    setDisplayName: refuse('setDisplayName'),
     sharesReceived_forget: refuse('sharesReceived_forget'),
     async shareCards_withdraw(_caller: UserCaller) {
       calls.push('cards:withdraw');

@@ -399,13 +399,13 @@ export function writeOutputRow(term: TerminalWriter, out: TerminalPaneOutput) {
 
 /**
  * Per-environment terminal capability:
- * `sandbox` — the devbox container runs a real PTY (`@kinu.run/devbox` `terminal.ts`).
+ * `computer` — the devbox container runs a real PTY (`@kinu.run/devbox` `terminal.ts`).
  * `workspace` — Nimbus `WebSocketTerminal`, a line editor with no raw mode (no real TTY in the substrate).
  * `device` — a real PTY per session via `packages/pc-agent/src/pty.js`, gated by `UserDO.deviceRpc`.
  * `parent` — a fork's origin exec plane, one call per command, no session.
  */
 export function terminalLane(executor: string): TerminalLane {
-  if (executor === 'sandbox' || executor === 'device') return { mode: 'pty' };
+  if (executor === 'computer' || executor === 'device') return { mode: 'pty' };
 
   return executor === 'workspace' ? { mode: 'shell' } : { mode: 'line' };
 }

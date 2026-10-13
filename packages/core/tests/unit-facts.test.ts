@@ -24,16 +24,16 @@ describe('agent_facts', () => {
 
   test('same-value re-observation preserves the changelog timestamp', () => {
     const { facts, testSql } = createTestFactsStore();
-    facts.upsert('sandbox.npm_version', 'npm v10');
+    facts.upsert('computer.npm_version', 'npm v10');
     void testSql.sql`UPDATE agent_facts SET last_observed_at = 1000
-                WHERE key = 'sandbox.npm_version'`;
+                WHERE key = 'computer.npm_version'`;
 
-    expect(facts.upsert('sandbox.npm_version', 'npm v10', {
+    expect(facts.upsert('computer.npm_version', 'npm v10', {
       confidence: 0.9,
       source: 'sleep-time-compute',
     })).toBe('unchanged');
 
-    const fact = facts.recall('sandbox.npm_version');
+    const fact = facts.recall('computer.npm_version');
     expect(fact?.lastObservedAt).toBe(1000);
     expect(fact?.confidence).toBe(0.9);
     expect(fact?.source).toBe('sleep-time-compute');
@@ -41,12 +41,12 @@ describe('agent_facts', () => {
 
   test('value change advances the changelog timestamp', () => {
     const { facts, testSql } = createTestFactsStore();
-    facts.upsert('sandbox.npm_version', 'npm v9');
+    facts.upsert('computer.npm_version', 'npm v9');
     void testSql.sql`UPDATE agent_facts SET last_observed_at = 1000
-                WHERE key = 'sandbox.npm_version'`;
+                WHERE key = 'computer.npm_version'`;
 
-    expect(facts.upsert('sandbox.npm_version', 'npm v10')).toBe('changed');
-    expect(facts.recall('sandbox.npm_version')?.lastObservedAt).toBeGreaterThan(1000);
+    expect(facts.upsert('computer.npm_version', 'npm v10')).toBe('changed');
+    expect(facts.recall('computer.npm_version')?.lastObservedAt).toBeGreaterThan(1000);
   });
 
   test('forget removes the key', () => {
@@ -103,11 +103,11 @@ describe('agent_facts', () => {
 
   test('variant key spellings share one row across upsert, recall and forget', () => {
     const { facts } = createTestFactsStore();
-    facts.upsert('  Sandbox.NPM   Version  ', 'npm v10');
-    expect(facts.recall('sandbox.npm_version')?.value).toBe('npm v10');
-    expect(facts.recall('SANDBOX.npm VERSION')?.value).toBe('npm v10');
+    facts.upsert('  Computer.NPM   Version  ', 'npm v10');
+    expect(facts.recall('computer.npm_version')?.value).toBe('npm v10');
+    expect(facts.recall('COMPUTER.npm VERSION')?.value).toBe('npm v10');
     expect(facts.all().length).toBe(1);
-    facts.forget('SANDBOX.npm   VERSION');
-    expect(facts.recall('sandbox.npm_version')).toBeNull();
+    facts.forget('COMPUTER.npm   VERSION');
+    expect(facts.recall('computer.npm_version')).toBeNull();
   });
 });

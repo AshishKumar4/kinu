@@ -90,7 +90,8 @@ export async function inspectDescendant(
     return readSubordinateInspection({ sql: access.sql, raw: access.raw, actor: kept.actor, transcriptFor: () => kept.transcript }, input);
   }
 
-  if (ownView(input) && target.parentActorId !== null) return await access.ownRows(target, input);
+  // Every agent's chat and runs are its own rows, main's too: where they are is its host's (`ownRows`).
+  if (ownView(input)) return await access.ownRows(target, input);
 
   return readSubordinateInspection({ sql: access.sql, raw: access.raw, actor: target, transcriptFor: access.transcriptFor }, input);
 }

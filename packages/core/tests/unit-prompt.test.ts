@@ -52,11 +52,11 @@ describe('buildSystemPromptSync', () => {
       executors: [
         { name: 'workspace', available: true, configured: true, active: true, status: 'active' },
         { name: 'device', available: false, configured: true, active: false, status: 'disconnected' },
-        { name: 'sandbox', available: false, configured: false, active: false, status: 'not_configured' },
+        { name: 'computer', available: false, configured: false, active: false, status: 'not_configured' },
       ],
     });
 
-    expect(surface.executors.map((exec) => exec.name)).toEqual(['device', 'sandbox', 'workspace']);
+    expect(surface.executors.map((exec) => exec.name)).toEqual(['device', 'computer', 'workspace']);
     expect(surface.configuredExecutors.map((exec) => exec.name)).toEqual(['device', 'workspace']);
   });
 

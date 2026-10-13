@@ -275,7 +275,7 @@ Inside `eval`, the LLM also sees:
 - `workspace.*`: VFS, including exact-match `editFile`, shell, memory,
   `createTool`, and `slate`. It is always available. `shell` and `file`
   project here.
-- `sandbox.*`: Linux container exec and port preview when bound.
+- `computer.*`: Linux container exec and port preview when bound.
 - `agents.*`, `memory.*`, `tasks.*`, `web.*`, `report.*`: codemode projections
   sharing one dispatcher with their native tool. Scripts and direct calls
   see identical state.

@@ -399,3 +399,17 @@ test("a hire whose answer cannot commit tells its hirer its turn failed, once", 
 
   expect(told()).toHaveLength(1);
 });
+
+test("the owner's inspector reads main's step output where main's turns now run, its own isolate", async () => {
+  const { workspace } = answering();
+  const id = crypto.randomUUID();
+
+  await workspace.agent.onMessage(owner, chatRequest(id, id, 'submit-message'));
+  await workspace.agent.harnessAgentsIdle();
+
+  const [run] = (await workspace.agent.getRunSummaries()).items;
+  const step = (await workspace.agent.getRunEvents(run?.runId ?? '')).find((event) => event.type === 'step_finish');
+  const read = await workspace.agent.inspectSubordinate({ path: [], view: 'step', runId: run?.runId ?? '', eventIndex: step?.eventIndex ?? -1 });
+
+  expect(read).toMatchObject({ view: 'step', runId: run?.runId, eventIndex: step?.eventIndex });
+});

@@ -180,7 +180,7 @@ export const FAULTS: readonly Fault[] = Object.freeze([
     inject: (s) => ({
       ...s,
       buildDrainBatch: (events) =>
-        s.buildDrainBatch(events.map((e) => (e.ingress === 'self_emit' ? { ...e, ingress: 'sandbox_cb' } : e))),
+        s.buildDrainBatch(events.map((e) => (e.ingress === 'self_emit' ? { ...e, ingress: 'computer_cb' } : e))),
       renderForLLM: (event) => ({ ...s.renderForLLM(event), is_self_caused: false }),
     }),
   },

@@ -15,9 +15,9 @@ A workspace holds the state. Agents are the actors that work inside it.
 │              ownership root, read on every model call                    │
 │   file plane one authoritative Nimbus filesystem, durable, with a real   │
 │              shell, runtimes, processes and ports over the base bytes.   │
-│              A mount table adds live `/pc` and `/sandbox` views.          │
+│              A mount table adds live `/pc` and `/computer` views.          │
 │   exec plane ExecutionRouter: every environment keeps its native path:   │
-│                sandbox.*   full Linux container   (when configured)      │
+│                computer.*   full Linux container   (when configured)      │
 │                device.*    the user's own machine  (connect + consent)   │
 │                parent.*    a hosted head's view of its hiring workspace  │
 │   state      conversations · SOUL.md · memory · scaffold · craft store · │
@@ -55,7 +55,7 @@ A workspace holds the state. Agents are the actors that work inside it.
   chosen with `kinu create <name>`, the REST `name` field or a fork dialog is
   refused at creation with the limit, never truncated, because a truncated
   name would address a different workspace. Workspaces created before this
-  rule under a name a label cannot carry keep their shell, files and sandbox
+  rule under a name a label cannot carry keep their shell, files and computer
   previews. Their workspace previews have no URL, and the Ports surface and the
   `expose` refusal say why (`packages/core/src/preview/nimbus-preview-host.ts`).
 - Ownership is per workspace. `workspace_identity.owner_user_id` is the one
@@ -99,7 +99,7 @@ A workspace holds the state. Agents are the actors that work inside it.
   native working directory. `git clone` destinations use `/home/main`, not
   a symbolic link.
   The mount table adds each connected device at `/pc/<name>`, a container at
-  `/sandbox`, and each actor's own working context at `/context`.
+  `/computer`, and each actor's own working context at `/context`.
 
   `/context` is the only editable surface over an agent's history.
   `/context/working.jsonl` is writable: line 1 is a header naming the actor and
@@ -208,7 +208,7 @@ A workspace holds the state. Agents are the actors that work inside it.
   - Subordinates (`agents`, `action: 'hire'`) are durable. Each is a logical
     actor with its own `actor_id`-scoped history in the canonical conversation
     store (`conversation_entries`) and a full turn loop, using the canonical
-    workspace files and the parent's sandbox and device planes. Locally it
+    workspace files and the parent's computer and device planes. Locally it
     opens over its root's stored directory, sharing the parent's plane while
     memory, craft store and conversation stay its own. Assigned tasks and
     reports travel on the `subordinate` ingress. Owner-driven chat is private,

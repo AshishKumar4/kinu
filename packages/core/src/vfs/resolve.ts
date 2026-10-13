@@ -62,7 +62,7 @@ const PATH_PREFIXES = {
   cloud: [
     { prefix: VFS_PREFIX, subtree: '/' },
     { prefix: 'local', subtree: '/' },
-    { prefix: 'sandbox', subtree: EXECUTOR_MOUNTS.sandbox },
+    { prefix: 'computer', subtree: EXECUTOR_MOUNTS.computer },
     { prefix: DEVICE_PREFIX, subtree: EXECUTOR_MOUNTS.device },
   ],
   local: [

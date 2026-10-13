@@ -93,7 +93,7 @@ test('ai.run routes one model call, the tier the call names', () => {
 });
 
 test('what only the agent does is refused before it is routed', () => {
-  for (const path of [['agent', 'hire'], ['workspace', 'createTool'], ['sandbox', 'createTool'], ['workspace', 'slates'], ['report', 'send'], ['tasks', 'switchRole']]) {
+  for (const path of [['agent', 'hire'], ['workspace', 'createTool'], ['computer', 'createTool'], ['workspace', 'slates'], ['report', 'send'], ['tasks', 'switchRole']]) {
     expect(() => call(path), path.join('.')).toThrow(expect.objectContaining({ code: 'denied' }));
   }
 

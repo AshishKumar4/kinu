@@ -1,6 +1,6 @@
-import { type Awaitable, type VFS, type VfsCred, type VfsRemoval, type VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
+import { type Awaitable, type VFS, type VfsCred, type VfsDirentType, type VfsRemoval, type VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 /**
- * Workspace plane mount table: the durable workspace tree extended by `/pc` (device tunnel) and `/sandbox`
+ * Workspace plane mount table: the durable workspace tree extended by `/pc` (device tunnel) and `/computer`
  * (container), each read through that executor's own `files` VFS so its boundaries still apply. Nimbus's
  * CompositeVFS does the namespace (lookup, links, read-only, parents, EXDEV, recursive removal); this file holds
  * Kinu's policy over it: the declarations, whose principal's view a plane is, the move rule and bounded views.
@@ -37,7 +37,7 @@ export interface VfsMount {
 
 export const EXECUTOR_MOUNTS = {
 	device: '/pc',
-	sandbox: '/sandbox',
+	computer: '/computer',
 } as const satisfies Record<string, string>;
 
 export const MOUNT_EXECUTORS: Record<string, string> = Object.fromEntries(
@@ -69,17 +69,19 @@ export function standardMounts(provider: (name: string) => MountableProvider | u
 			filesOwner: 'user',
 		},
 		{
-			name: EXECUTOR_MOUNTS.sandbox.slice(1),
-			files: () => provider('sandbox')?.files ?? null,
+			name: EXECUTOR_MOUNTS.computer.slice(1),
+			files: () => provider('computer')?.files ?? null,
 			absentReason: () => 'this workspace has no computer bound',
 			filesOwner: 'agent',
 		},
 	];
 }
 
-/** `stat` is null for an entry that vanished between the listing and its metadata. */
+/** `stat` is null for an entry that vanished between the listing and its metadata, or one the listing did not ask. */
 export interface VfsListedEntry {
 	readonly name: string;
+	/** What its directory says it is. */
+	readonly type: VfsDirentType;
 	readonly stat: VfsStat | null;
 }
 
@@ -128,19 +130,22 @@ export async function readTailWithVfsOps(
 }
 
 /**
- * Stats run concurrently; ENOENT on a child answers `stat: null`, any other error propagates.
+ * Stats run concurrently; ENOENT on a child answers `stat: null`, any other error propagates. A child `asks` declines is
+ * not statted: it lists by its directory entry alone.
  */
-export async function listWithVfsOps(files: VFS, dir: string): Promise<VfsListedEntry[]> {
+export async function listWithVfsOps(files: VFS, dir: string, asks: (child: string) => boolean = () => true): Promise<VfsListedEntry[]> {
 	const entries = await files.readdir(dir);
 
-	return Promise.all(entries.map(async (entry) => {
-		const child = dir === '/' ? `/${entry.name}` : `${dir}/${entry.name}`;
+	return Promise.all(entries.map(async ({ name, type, stat }) => {
+		const child = dir === '/' ? `/${name}` : `${dir}/${name}`;
+
+		if (stat === undefined && !asks(child)) return { name, type, stat: null };
 
 		try {
-			return { name: entry.name, stat: entry.stat ?? await files.stat(child) };
+			return { name, type, stat: stat ?? await files.stat(child) };
 		} catch (cause) {
 			// The plane's own code, never prose matching.
-			if (isVfsError(cause) && cause.code === 'ENOENT') return { name: entry.name, stat: null };
+			if (isVfsError(cause) && cause.code === 'ENOENT') return { name, type, stat: null };
 			throw cause;
 		}
 	}));
@@ -450,7 +455,7 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 			if (Exit.isSuccess(renamed)) return;
 
 			// Kinu's move rule: within one mount, mv's move (Nimbus's carry where the backend cannot rename in place); across
-			// mounts EXDEV stands, so nothing crosses into or out of /pc or /sandbox as a side effect.
+			// mounts EXDEV stands, so nothing crosses into or out of /pc or /computer as a side effect.
 			if (!isVfsError(Cause.squash(renamed.cause), 'EXDEV') || !await sameMount(namespace, source.at, target.at)) {
 				return settle(Effect.failCause(renamed.cause));
 			}

@@ -7,7 +7,7 @@ import { combinatorsJourney } from './combinators-journey';
 import { boardHolds } from './work-board';
 
 // DeepSWE v1.1's true-myth-iterable-collection-combinators, worked the way a lead would: the library cloned and
-// installed in the sandbox, three helpers adding the Maybe, Result and Task combinators at once while the lead plans
+// installed on the computer, three helpers adding the Maybe, Result and Task combinators at once while the lead plans
 // them on its task board, then the cross-type toolbelt helpers as a change request. The same trial continues through
 // a live release desk, its two slates, reusable calculator, dual previews, independent review branches, web
 // provenance, archive handoff and remembered release code before naming the commit that holds the work.
@@ -114,11 +114,11 @@ async function graded(verifier: EvalVerifier, scope: 'without-toolbelt' | 'whole
 
   const staged: [string, string][] = [['test.sh', testSh], ['grader.py', grader], ['test.patch', testPatch], ['config.json', turnConfig]];
 
-  // The files route writes into the container through the workspace's /sandbox mount.
-  await verifier.execute('sandbox', 'rm -rf /app /tests /logs && mkdir -p /tests /logs/verifier /logs/artifacts');
-  await Promise.all(staged.map(([name, content]) => verifier.writeFile(`/sandbox/tests/${name}`, content)));
+  // The files route writes into the container through the workspace's /computer mount.
+  await verifier.execute('computer', 'rm -rf /app /tests /logs && mkdir -p /tests /logs/verifier /logs/artifacts');
+  await Promise.all(staged.map(([name, content]) => verifier.writeFile(`/computer/tests/${name}`, content)));
 
-  const lines = (await verifier.execute('sandbox', GRADE)).split('\n');
+  const lines = (await verifier.execute('computer', GRADE)).split('\n');
   const rewardLine = lines.find((line) => line.startsWith(REWARD_LINE)) ?? 'null';
   const reward = v.safeParse(v.pipe(v.string(), v.parseJson(), RewardSchema), rewardLine.slice(REWARD_LINE.length));
 
@@ -133,19 +133,19 @@ async function graded(verifier: EvalVerifier, scope: 'without-toolbelt' | 'whole
 const combinators: EvalPart = {
   id: 'combinators',
   objectives: [
-    'Clone true-myth in the sandbox, plan one board task per module, and have three hired helpers each build one module at once; the tests pass and the work is committed.',
+    'Clone true-myth on the computer, plan one board task per module, and have three hired helpers each build one module at once; the tests pass and the work is committed.',
     'Add the cross-type toolbelt, mark it done and commit it; the DeepSWE verifier passes.',
   ],
   turns: [{
     prompt: `true-myth needs new collection combinators. Build them with three helpers working at once.
 
-1. In the sandbox, clone ${REPOSITORY} into ${CHECKOUT}, check out commit ${BASE_COMMIT}
+1. On the computer, clone ${REPOSITORY} into ${CHECKOUT}, check out commit ${BASE_COMMIT}
    as the main branch, and install its dependencies.
 2. Plan the work on your task board: one task for each of ${MODULES.map((module) => `src/${module}.ts`).join(', ')},
    titled exactly with that path. Mark each one done once its module works.
 3. Hire three helpers and give each helper one of those files, so all three work at once. A helper
    changes only its own file and does not commit. When all three have finished, run the tests in the
-   sandbox with \`npx vitest run --coverage=false\` and commit, as the job says.
+   computer with \`npx vitest run --coverage=false\` and commit, as the job says.
 
 The job:
 
@@ -193,14 +193,14 @@ const release: EvalPart = {
     'Record the live npm provenance on the board, and keep the private handoff in memory, then its correction.',
     'Run independent review branches as a swarm, keep a report calculator as a tool, and record the boundary review.',
     'In a fresh conversation, recall the corrected handoff, rerun the tests, reuse the calculator and build the two live views.',
-    'Serve the dashboard from the workspace and the sandbox, hand off a ZIP of the required sources, and name the commit that holds the work.',
+    'Serve the dashboard from the workspace and the computer, hand off a ZIP of the required sources, and name the commit that holds the work.',
   ],
   turns: [...combinatorsJourney(CHECKOUT), {
     prompt: 'Which commit holds the finished work? Reply with just its full 40-character sha.',
     verify: async (verifier) => {
       await verifier.check('names-the-commit-that-holds-the-work', async () => {
         const answer = verifier.bareAnswer(/^([0-9a-f]{40})$/);
-        const head = (await verifier.execute('sandbox', `git -C ${CHECKOUT} rev-parse HEAD`)).trim();
+        const head = (await verifier.execute('computer', `git -C ${CHECKOUT} rev-parse HEAD`)).trim();
 
         // Evidence redacts a full sha, so it shows the first 12 digits: enough to tell a stale commit from the head.
         return { pass: answer === head, evidence: { answer: answer?.slice(0, 12) ?? null, head: head.slice(0, 12), replies: verifier.recentReplies() } };

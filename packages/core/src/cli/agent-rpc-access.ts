@@ -67,11 +67,11 @@ export const AGENT_RPC_ACCESS = {
   latestAlternateTakes: 'interactive',
   listFileCheckpoints: 'interactive',
   listMounts: 'interactive',
-  getSandboxSize: 'interactive',
+  getComputerSize: 'interactive',
   // Restarts a running sandbox, ending its commands: the owner's call.
-  resizeSandbox: 'interactive',
+  resizeComputer: 'interactive',
   // A start refused for good retries only at the owner's word: the same start fails the same way.
-  startSandbox: 'interactive',
+  startComputer: 'interactive',
   planFileRestore: 'interactive',
   clearBackgroundJobs: 'interactive',
   createTimerTrigger: 'interactive',
