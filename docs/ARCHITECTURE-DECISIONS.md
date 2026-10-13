@@ -1072,6 +1072,22 @@ the owner, built 2026-10-11 on `lane/main-isolate`.
   agent's settled run tells the workspace (`run_settle`; main's rides
   `turnSettled`), which prunes that run's receipts; a delivered run's are
   pruned as the workspace takes its end, whichever generation it was.
+  Rejected 2026-10-13: making the workspace's receipt the call's record so
+  the isolate sends a call before its part is durable. On deployed objects
+  a tool step paid three flushes: the isolate's before the model call, the
+  isolate's again before the call crossed (its part, 43 ms), and the
+  workspace's before its answer (48.5 ms), against batch 66's one
+  (cmp-kinu-mst, 40 steps, flush probes 35 and 38.5 ms; a step 150 ms
+  against 64). Done safely, the receipt carries the call's whole native
+  part (provider metadata and signatures through the part codec, spilled
+  when large), its request and position, and model or nested origin; the
+  fence is checked again at the claim, so an older execution cannot claim
+  after a recovery's snapshot; and a recovery adopts the receipts it holds
+  no part of in one idempotent commit. That is a schema, protocol, fence and
+  recovery change on the crash path, with nine test families, for at most
+  one isolate flush per remote step: about 25 to 45 ms, a quarter to a third
+  of a zero-inference step and 1 to 4 percent of a real model's. Retried
+  only with new measurements that move that balance.
 - Stop means stop for every agent and on the CLI: one commit cancels the
   agent's owed deliveries and marks its fence `cancelled_at`, then its isolate
   hands unread words back to their composer, cancels its queued turns (their
