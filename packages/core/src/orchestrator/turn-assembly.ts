@@ -5,7 +5,6 @@ import type { LanguageModel, ToolSet } from 'ai';
 import { Effect } from 'effect';
 import type { ModelWindow } from '../context-window';
 import type { KinuExtension } from '../extension';
-import { readMemoryTail } from '../memory/note';
 import type { Fact } from '../memory/facts';
 import type { SpendGate } from '../mission-budget';
 import { buildSystemPromptParts, renderUnverifiedInstructions, systemPromptText, type SystemPromptOptions } from '../prompt';
@@ -91,6 +90,8 @@ export interface TurnAssemblySources {
   /** The account's facts, read once per turn so every step renders the same block; absent where no account is wired.
    *  A read that fails answers none, and the turn goes on. */
   accountFacts?(): Promise<readonly Fact[]>;
+  /** MEMORY.md's tail, read once per turn so every step renders the same block. */
+  memoryTail(): Promise<string | undefined>;
   operation(profile: ResolvedTurnProfile, inputs: ProfileAuthorityInputs): OperationProfile;
   /** Binds the resolved profile; `toolset` is read again after it. */
   settle?(profile: ResolvedTurnProfile, inputs: ProfileAuthorityInputs): void | Promise<void>;
@@ -233,7 +234,7 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
   const { pinned, invoked } = splitTurnSkills(activeSkills);
 
   const [window, agentsMd, soul, identity, memoryTail, accountFacts] = await Promise.all([
-    models.catalog.windowFor(spec), sources.agentsMd(limits), sources.soul(), sources.identity(), readMemoryTail(sources.rt.memory),
+    models.catalog.windowFor(spec), sources.agentsMd(limits), sources.soul(), sources.identity(), sources.memoryTail(),
     sources.accountFacts?.(),
     models.catalog.warm(profile.tier.fallbacks.map((fallback) => fallback.model)),
   ]);
@@ -359,6 +360,7 @@ export interface TurnSourcesBundle {
   readonly soul: string | null;
   readonly identity: PromptIdentity;
   readonly agentsMd: AgentsMdSources;
+  readonly memoryTail: string | null;
   readonly artifacts: ReturnType<TurnAssemblySources['artifacts']>;
   readonly conversationKey: string;
   readonly models: Readonly<Record<string, { readonly window: ModelWindow; readonly media: readonly MediaModality[] }>>;
@@ -370,8 +372,8 @@ export async function materializeTurnSources(sources: TurnAssemblySources, reque
   const specs = [served, ...tier.fallbacks.map((fallback) => models.normalize(fallback.model))];
   await models.catalog.warm(specs);
 
-  const [skills, soul, identity, agentsMd, windows] = await Promise.all([
-    sources.skills(request.userText, roleSkills, limits), sources.soul(), sources.identity(), sources.agentsMd(limits),
+  const [skills, soul, identity, agentsMd, memoryTail, windows] = await Promise.all([
+    sources.skills(request.userText, roleSkills, limits), sources.soul(), sources.identity(), sources.agentsMd(limits), sources.memoryTail(),
     Promise.all(specs.map(async (spec) => [spec, { window: await models.catalog.windowFor(spec), media: [...models.catalog.acceptedMedia(spec)] }] as const)),
   ]);
 
@@ -391,6 +393,7 @@ export async function materializeTurnSources(sources: TurnAssemblySources, reque
     soul: soul ?? null,
     identity,
     agentsMd,
+    memoryTail: memoryTail ?? null,
     artifacts: sources.artifacts(),
     conversationKey: sources.conversationKey(),
     models: Object.fromEntries(windows),
@@ -400,7 +403,7 @@ export async function materializeTurnSources(sources: TurnAssemblySources, reque
 /** What the assembling isolate supplies itself. */
 export type LocalTurnSources = Omit<TurnAssemblySources,
   'backend' | 'executors' | 'profileInputs' | 'ancestors' | 'skills' | 'wiredToolNames' | 'codemodeCapabilities' | 'agentsActions' | 'temporaryAsk'
-  | 'soul' | 'identity' | 'agentsMd' | 'artifacts' | 'conversationKey' | 'models' | 'toolset' | 'externalTools'> & {
+  | 'soul' | 'identity' | 'agentsMd' | 'memoryTail' | 'artifacts' | 'conversationKey' | 'models' | 'toolset' | 'externalTools'> & {
   readonly models: Omit<TurnModelSources, 'catalog'>;
 };
 
@@ -451,6 +454,7 @@ export function turnSourcesFromBundle(bundle: TurnSourcesBundle, local: LocalTur
     soul: async () => bundle.soul ?? undefined,
     identity: async () => bundle.identity,
     agentsMd: async () => bundle.agentsMd,
+    memoryTail: async () => bundle.memoryTail ?? undefined,
     artifacts: () => bundle.artifacts,
     conversationKey: () => bundle.conversationKey,
   };

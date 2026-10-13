@@ -6,6 +6,7 @@ import { makeSqlExec, storesFor } from './helpers';
 import { WorkspaceJobAuthorities } from '../src/jobs/authorities';
 import { BackgroundJobRunner } from '../src/jobs/runner';
 import { initBackgroundJobsTable } from '../src/jobs/store';
+import { readMemoryTail } from '../src/memory/note';
 import { KinuError } from '../src/obs/error';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
@@ -111,6 +112,7 @@ export function fixtureRunSources(actor: HostedActor, model: (spec: string) => L
     soul: async () => undefined,
     agentsMd: async () => ({ admitted: [], referenced: [] }),
     identity: async () => ({ agent: actor.record.name }),
+    memoryTail: () => readMemoryTail(actor.runtime.memory),
     artifacts: () => ({ sections: {}, tools: { descriptions: {}, fields: {} } }),
     taskPlan: () => null,
     conversationKey: () => conversationKey('fixture', actor.record.actorId),

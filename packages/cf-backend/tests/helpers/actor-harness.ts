@@ -16,7 +16,7 @@ import { convertArrayToReadableStream, MockLanguageModelV4 } from 'ai/test';
 import type { PreparedRequest, ScriptedAnswer, ScriptedCall, SettledTurn, TurnHarness } from './turn-harness';
 import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, Clock, ModelInfo, ModelRouteResolution, ActorToolsets, SeatedActor, SurfaceReach } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
-import type { WorkspaceOverview } from '@kinu.run/core';
+import type { Memory, WorkspaceOverview } from '@kinu.run/core';
 import { OwnedModelServices } from '../../src/owned-model-services';
 import { bindAgentSql } from '../../src/runtime';
 import { hostedSubordinateRuntime, type ActorSurface, type SurfaceTurn, type ToolScope } from '../../src/hosted-actors';
@@ -180,6 +180,11 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   /** This object's Dynamic Worker ledger, as Nimbus keeps it. */
   harnessDynamicWorkerLedger(): DurableObjectState {
     return this.ctx;
+  }
+
+  /** The workspace's memory, MEMORY.md among it, as its agents write it. */
+  harnessMemory(): Memory {
+    return this.rt.memory;
   }
 
   /** The instant this activation's alarm is set for, as its job queue last projected it; null when none is set. */
