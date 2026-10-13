@@ -4564,6 +4564,16 @@ kernel keeps a name for one boot, so `configureContainer`, which every start and
 exec, names the box again: the kernel's name, `/etc/hostname`, and a `127.0.1.1` line in `/etc/hosts`. A `Devbox`
 names nothing unless its class says a name (`hostname`); `KinuDevbox` says the product's word for it.
 
+D84. The terminal's tmux shows none of its own chrome (2026-10-13, the owner: "the user must never see tmux's chrome or
+keys unless they choose to"). The PTY stays a tmux client of one session, so the shell and its screen outlive the
+socket. The attach now writes and loads a config before it joins the session: no status line (it was green, and named
+the session and the container id), no prefix key (Ctrl-B reaches the shell), no wait after Escape, 50,000 lines of
+history, and `smcup@:rmcup@` for the outer terminal, so tmux draws on the page terminal's own screen and what scrolls
+by lands in its scrollback. A server already running loads it at the next attach. Measured on staging `71d06f4a9`
+(an eval box, the config written by hand, attached through the product's terminal route by an xterm in the page): the
+stock attach drew `[devbox] 0:bash* "<container id>"` on the last row; the configured attach drew only the prompt, and
+after `seq 1 120` a reattach showed 74 to 120 and the prompt, with the earlier lines in the page terminal's scrollback.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean
