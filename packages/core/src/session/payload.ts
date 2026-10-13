@@ -9,6 +9,7 @@ import { JsonObjectSchema, type JsonValue, type JsonObject } from '../utils/json
 import { PLATFORM_CATALOG } from '../platform-catalog';
 import { SPILL_DIRS } from '../context-budget';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
+import { BinaryEnvelopeSchema } from './message-codec';
 
 export type SessionPayload =
   | { readonly json: string; readonly path: null; readonly digest: null }
@@ -26,8 +27,6 @@ export function storedPayload(json: string | null, path: string | null, digest: 
 
 // Payload leaves half the platform row bound for keys/metadata; independent of model token policy.
 const INLINE_BYTES = Math.floor(PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value / 2);
-
-const BinaryValue = v.object({ $binary: v.string(), bytes: v.number(), buffer: v.optional(v.boolean()) });
 
 const StringAttachmentReference = v.object({ $sessionStringAttachment: v.object({ path: v.string(), digest: v.string() }) });
 
@@ -154,7 +153,7 @@ export class SessionPayloads extends SessionPayloadReader {
           continue;
         }
 
-        const binary = v.safeParse(BinaryValue, stored[field]);
+        const binary = v.safeParse(BinaryEnvelopeSchema, stored[field]);
 
         if (!binary.success) continue;
         const bytes = base64ToBytes(binary.output.$binary);

@@ -93,7 +93,7 @@ function fakeHost(over: Partial<AgentSelfHost> = {}): AgentSelfHost & { calls: s
         corrected: { mean: 0.2, lo: 0.04, hi: 0.6, n: 5 }, rated: 5, thumbs: 1, turns: 7,
       }];
     },
-    armCompactNow: () => { calls.push("compactNow"); },
+    armCompactNow: async () => { calls.push("compactNow"); },
     jobResult: async (id) => {
       calls.push(`jobResult:${id}`);
 

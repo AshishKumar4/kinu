@@ -8,12 +8,12 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { ResolvedProvider } from '../src/types/primitives';
 import type { JsonValue } from '../src/utils/json';
-import { actorJobsFor, createTestWorkspace, conversationsFor } from './helpers';
+import { actorJobsFor, createTestWorkspace, conversationsFor, effectClaimsFor } from './helpers';
 import { buildHeadToolSet } from '../src/heads/head-tools';
 import { jsonSchema, tool, type LanguageModel, type ModelMessage } from 'ai';
 import { fixtureCompaction, hostedSeatsOver } from './helpers-actor-host';
 import {
-  runHeadInference, HeadCapture, buildHeadAccumulatorTools,
+  runHeadInference, preparedHeadRun, HeadCapture, buildHeadAccumulatorTools,
   buildHeadSystemPrompt, buildHeadMessages, type HeadInferenceDeps,
 } from '../src/heads/head-inference';
 import type { Decision, Evidence, HeadInput, HeadStep, SerializedMessage } from '../src/heads/types';
@@ -83,7 +83,7 @@ const deps = async (
 
 describe('runHeadInference — report assembly', () => {
   test('a completed head: final text → summary, usage summed, steps captured', async () => {
-    const report = await runHeadInference(headInput(), await deps(fakeHeadModel('The lexer handles UTF-8 correctly.')));
+    const report = await runHeadInference(preparedHeadRun(headInput(), await deps(fakeHeadModel('The lexer handles UTF-8 correctly.'))));
     expect(report.status).toBe('completed');
     expect(report.summary).toBe('The lexer handles UTF-8 correctly.');
     expect(report.usage).toEqual({ input: 10, output: 20 });
@@ -112,24 +112,21 @@ describe('runHeadInference — report assembly', () => {
       },
     });
 
-    const report = await runHeadInference(headInput(), await deps(model));
+    const report = await runHeadInference(preparedHeadRun(headInput(), await deps(model)));
     expect(report.status).toBe('completed');
     expect(calls).toBe(2);
     expect(report.summary).toBe('The lexer handles UTF-8 correctly.');
   });
 
   test('aborted → status aborted + errorMessage from abortReason', async () => {
-    const report = await runHeadInference(
-      headInput(),
-      await deps(fakeHeadModel('text'), { clock: REAL_CLOCK, isAborted: () => true, abortReason: () => 'operator cancelled' }),
-    );
+    const report = await runHeadInference(preparedHeadRun(headInput(), await deps(fakeHeadModel('text'), { clock: REAL_CLOCK, isAborted: () => true, abortReason: () => 'operator cancelled' })));
 
     expect(report.status).toBe('aborted');
     expect(report.errorMessage).toBe('operator cancelled');
   });
 
   test('model throw → status errored, no steps, message preserved', async () => {
-    const report = await runHeadInference(headInput(), await deps(fakeHeadModel('', { throwError: 'model exploded' })));
+    const report = await runHeadInference(preparedHeadRun(headInput(), await deps(fakeHeadModel('', { throwError: 'model exploded' }))));
     expect(report.status).toBe('errored');
     expect(report.errorMessage).toContain('model exploded');
     expect(report.stepCount).toBe(0);
@@ -165,7 +162,7 @@ describe('runHeadInference — report assembly', () => {
       } },
     };
 
-    const report = await runHeadInference(headInput(), { ...base, sources });
+    const report = await runHeadInference(preparedHeadRun(headInput(), { ...base, sources }));
 
     expect(report.status).toBe('completed');
     expect(served).toEqual(['fake/test-model']);
@@ -178,7 +175,7 @@ describe('runHeadInference — report assembly', () => {
     const capture = new HeadCapture();
     capture.recordEvidence({ id: 'e1', kind: 'fact', body: 'Postgres has mature JSONB' });
     capture.recordDecision({ question: 'Which DB?', choice: 'Postgres', rationale: 'JSONB' });
-    const report = await runHeadInference(headInput(), await deps(fakeHeadModel(''), { capture }));
+    const report = await runHeadInference(preparedHeadRun(headInput(), await deps(fakeHeadModel(''), { capture })));
     expect(report.status).toBe('completed');
     expect(report.summary).toContain('Postgres');     // synthesizeHeadSummary fallback
     expect(report.evidence).toHaveLength(1);
@@ -223,10 +220,10 @@ describe('a head step as the node view reads it', () => {
 
     const steps: HeadStep[] = [];
 
-    await runHeadInference(headInput({ inheritedContext: [] }), await deps(model, {
+    await runHeadInference(preparedHeadRun(headInput({ inheritedContext: [] }), await deps(model, {
       tools: { probe: tool({ inputSchema: jsonSchema<Record<string, never>>({ type: 'object', properties: {} }), execute: async (): Promise<string> => { throw new Error('the probe broke'); } }) },
       reportStep: (_seq, step) => { steps.push(step); },
-    }));
+    })));
 
     // Each step holds its own parts alone: the call in the first, the answer in the second.
     expect(steps.map((step) => step.parts)).toEqual([
@@ -271,7 +268,7 @@ describe('a head step as the node view reads it', () => {
       return await host.llmStream({ system: 's', messages: [{ role: 'user', content: 'probe' }] });
     });
 
-    const report = await runHeadInference(headInput({ inheritedContext: [] }), inference);
+    const report = await runHeadInference(preparedHeadRun(headInput({ inheritedContext: [] }), inference));
 
     expect({ status: report.status, steps: steps.map((step) => step.parts) }).toEqual({ status: 'completed', steps: [
       [{ type: 'text', text: 'first look', state: 'done' }],
@@ -329,9 +326,10 @@ describe('buildHeadAccumulatorTools', () => {
       input, capture, rt, conversations: conversationsFor(rt), codemodeTool: undefined, jobs: actorJobsFor(rt),
       webSearch: { search: async (query) => ({ query, results: [], source: 'duckduckgo' }), fetch: async (url) => ({ url, retrievedAt: '', markdown: '' }), render: async (url) => ({ url, retrievedAt: '', markdown: '' }), screenshot: async (url) => ({ url, retrievedAt: '', bytes: new Uint8Array() }) },
       split: async () => { throw new Error('this head cannot split'); },
+      effectClaims: effectClaimsFor(rt),
     });
 
-    const report = await runHeadInference(input, await deps(model, { tools, capture }));
+    const report = await runHeadInference(preparedHeadRun(input, await deps(model, { tools, capture })));
     expect(report.toolCalls).toHaveLength(2);
 
     expect(report.toolCalls).toEqual(expect.arrayContaining([
@@ -428,6 +426,7 @@ describe('durable delegated turn opening', () => {
     try {
       await session.restoreWorkingHistory();
       const lease = session.beginTurn({ runId: 'run-empty', turnId: 'assignment-a' }, 'build', Date.now());
+      session.reserveClaim(lease);
 
       await session.openDelegatedTurn(lease, {
         messages: [{ role: 'user', content: 'New assignment.' }],
@@ -443,8 +442,8 @@ describe('durable delegated turn opening', () => {
   test('an exploration re-drive re-seeds its branch instead of appending its inherited prefix again', async () => {
     const input = headInput();
     const execution = await deps(fakeHeadModel('Exploration answer.'));
-    expect((await runHeadInference(input, execution)).status).toBe('completed');
-    expect((await runHeadInference(input, execution)).status).toBe('completed');
+    expect((await runHeadInference(preparedHeadRun(input, execution))).status).toBe('completed');
+    expect((await runHeadInference(preparedHeadRun(input, execution))).status).toBe('completed');
     expect(execution.actor.session.history).toEqual([
       ...buildHeadMessages(input),
       { role: 'assistant', content: [{ type: 'text', text: 'Exploration answer.' }] },
@@ -456,6 +455,7 @@ describe('durable delegated turn opening', () => {
     session: ActorSession, turnId: string, text: string, birth: string,
   ): Promise<void> {
     const lease = session.beginTurn({ runId: `run-${turnId}`, turnId }, 'build', Date.now());
+    session.reserveClaim(lease);
 
     try {
       await session.openDelegatedTurn(lease, { messages: [{ role: 'user', content: text }], birthContext: async () => [{ role: 'user', content: birth }] });
@@ -501,6 +501,23 @@ describe('durable delegated turn opening', () => {
       await openDelegated(session, 'assignment-c', 'assignment-c', 'Original birth prefix.');
 
       expect(textsOf(session.history)).toEqual(['Edited working prefix.', 'assignment-b', 'assignment-c']);
+    } finally {
+      testSql.close();
+    }
+  });
+
+  /** Restorations and admission share one serial lane; a rejection was the lane's, and refused every later admission. */
+  test('a restoration that rejects fails alone, and the next admission opens', async () => {
+    const { rt, testSql } = createTestRuntime();
+    const { session } = (await hostedSeatsOver({ rt, db: testSql.db }).seat('restoring', 'agent')).actor;
+
+    try {
+      testSql.db.exec(`CREATE TRIGGER probe_refuse_restore BEFORE INSERT ON session_messages WHEN NEW.origin = 'edit'
+        BEGIN SELECT RAISE(ABORT, 'the restoration failed'); END`);
+      await expect(session.restoreHistory([{ role: 'user', content: 'Restored prefix.' }])).rejects.toThrow('the restoration failed');
+      testSql.db.exec('DROP TRIGGER probe_refuse_restore');
+      await openDelegated(session, 'assignment-after', 'assignment-after', 'Birth prefix.');
+      expect(textsOf(session.history)).toEqual(['Birth prefix.', 'assignment-after']);
     } finally {
       testSql.close();
     }
@@ -566,7 +583,7 @@ describe('buildHeadMessages — a fork inherits real messages, not prose', () =>
       },
     });
 
-    const report = await runHeadInference(headInput({ inheritedContext: [...multiTurn] }), await deps(model));
+    const report = await runHeadInference(preparedHeadRun(headInput({ inheritedContext: [...multiTurn] }), await deps(model)));
 
     expect(report.status).toBe('completed');
     expect(prompts).toHaveLength(1);

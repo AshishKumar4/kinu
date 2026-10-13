@@ -1,5 +1,5 @@
 import * as v from 'valibot';
-import type { HostedActor } from '../state/actor-host';
+import type { SeatedActor } from '../state/actor-host';
 import type { AgentInbox } from '../types/signals';
 import type { Schedule } from '../types/primitives';
 import type { JobAuthority } from './authorities';
@@ -28,7 +28,7 @@ export function inlineResultInbox(store: BackgroundJobStore, inbox: AgentInbox):
 
 /** A node's or seated head's own jobs, woken in process; `next` is its loop's resume. */
 export function stepLoopJobs(input: {
-  readonly actor: HostedActor;
+  readonly actor: SeatedActor;
   readonly seat: StepLoopJobSeat;
   readonly policy?: (() => BackgroundPolicy) | undefined;
   readonly logActivity?: ((event: string, detail?: string) => void) | undefined;
@@ -43,7 +43,7 @@ export function stepLoopJobs(input: {
     store,
     fiber: input.actor.runtime.schedule.fiber.bind(input.actor.runtime.schedule),
     inbox: inlineResultInbox(store, wakes),
-    // No `eventLog`/`scheduleDrain`/`resume`: no later activation delivers.
+    // No `resume`: no later activation delivers.
   };
 
   // Absent keys stay absent.

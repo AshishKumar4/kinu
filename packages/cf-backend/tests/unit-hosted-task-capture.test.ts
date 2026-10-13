@@ -1,5 +1,5 @@
 /**
- * A hire's advisor: the main actor hires through its `agents` tool, the wake runs the hire's assignment, and the
+ * A hire's advisor: the main actor hires through its `agents` tool, the hire takes its assignment as it is admitted, and the
  * advice lands where its severity sends it; every model call is the platform gateway's.
  */
 import type { Database } from 'bun:sqlite';
@@ -53,8 +53,9 @@ test('a hosted subordinate hires its advisor, whose note opens its next turn, wi
   const workspace = gatewayWorkspace(gateway);
   const root = workspaceMainActor(workspace.db);
 
-  await catalogTurn(workspace.agent, 'Have someone check the probe.');
+  // On before the hire is: its turn runs as soon as its assignment is admitted.
   root.config.setAdvisorEnabled(true);
+  await catalogTurn(workspace.agent, 'Have someone check the probe.');
   // The root's own window grows with the turns the relays open; no hosted actor's ever does.
   const hostedTurns = () => workspace.db.query<{ n: number }, [string]>('SELECT COUNT(*) AS n FROM completed_turns WHERE actor_id != ?').get(root.actorId)?.n ?? 0;
 
@@ -103,9 +104,9 @@ function advisedWorkspace(severity: 'concern' | 'blocker') {
 test("a hire's advice is judged against the owner's severity floor", async () => {
   const { workspace, root, hireRequests, judged } = advisedWorkspace('concern');
 
-  await catalogTurn(workspace.agent, 'Have someone check the probe.');
   root.config.setAdvisorEnabled(true);
   root.config.setAdvisorMinSeverity('blocker');
+  await catalogTurn(workspace.agent, 'Have someone check the probe.');
   await driveUntil(workspace, "the hire's advice was never judged", () => judged().length > 0);
   await joinHarnessFibers();
 
@@ -115,16 +116,17 @@ test("a hire's advice is judged against the owner's severity floor", async () =>
 
 test("a hire's blocker advice reaches its hirer, not the hire again", async () => {
   const { gateway, workspace, root } = advisedWorkspace('blocker');
-  const toHirer = () => workspace.agent.harnessEnqueued.filter((turn) => turn.text.includes('[Actor advised]'));
-
   const ask = 'Have someone check the probe.';
+  const requests = () => gateway.runs.map((run) => JSON.stringify(requestOf(run).messages));
+  // The hirer's conversation holds its own ask; a hire's never does.
+  const toHirer = () => requests().filter((request) => request.includes('[Actor advised]') && request.includes(ask));
 
   // The hire's conversation never holds the root's ask; a review quotes the turn it reviews.
-  const hireToldAgain = () => gateway.runs.map((run) => JSON.stringify(requestOf(run).messages)).filter((request) =>
+  const hireToldAgain = () => requests().filter((request) =>
     request.includes('[Actor advised]') && !request.includes(ask) && !request.includes('You are reviewing one finished turn'));
 
-  await catalogTurn(workspace.agent, ask);
   root.config.setAdvisorEnabled(true);
+  await catalogTurn(workspace.agent, ask);
   await driveUntil(workspace, "the blocker never reached the hirer's turns", () => toHirer().length > 0);
   await joinHarnessFibers();
 
@@ -144,8 +146,8 @@ test('a task hire whose advisor has nothing to say still answers its hirer', asy
 
   const workspace = gatewayWorkspace(gateway);
 
-  await catalogTurn(workspace.agent, 'Have someone check the probe.');
   workspaceMainActor(workspace.db).config.setAdvisorEnabled(true);
+  await catalogTurn(workspace.agent, 'Have someone check the probe.');
 
   await driveUntil(workspace, 'the task hire answered its hirer', () => relayedReports(workspace.db).length > 0);
   expect(relayedReports(workspace.db)).toEqual(['The probe succeeded.']);

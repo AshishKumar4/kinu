@@ -9,7 +9,7 @@ import {
 import {
   catalogTurn, gatewayWorkspace, hostedSubordinateHarness, chatSessionTurns, orchestratorHarness, reactivateOrchestratorHarness, storedChat, workspaceFiles,
 } from './helpers/actor-harness';
-import { chatCompletion, wordByWordCompletion, GATEWAY_MODEL, openingOf, requestOf, stubAiBinding, textThenToolCompletion } from './helpers/platform-gateway';
+import { chatCompletion, wordByWordCompletion, GATEWAY_MODEL, openingOf, requestOf, stubAiBinding, textThenToolCompletion, type RecordedGatewayRun } from './helpers/platform-gateway';
 import { createWorkspaceBundle } from '../../core/tests/helpers';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
 import { recordedMcpToolCalls, resetRecordedMcp, seedMcpTools, seedMcpAnswer } from './helpers/agents-sdk';
@@ -503,6 +503,11 @@ test('the owner\'s own slate hires a helper and lists it as the owner does; a hi
   }
 });
 
+/** A model step that answers nothing until the turn is stopped, then fails as the Stop aborted it. */
+function untilStopped(run: RecordedGatewayRun): Promise<Response> {
+  return new Promise<Response>((_answer, refuse) => { run.signal?.addEventListener('abort', () => { refuse(run.signal?.reason); }); });
+}
+
 /** A reply as its reader holds it once it ends: the pieces read, and why it ended when it did not end cleanly. */
 async function readReply(answer: SlateSurfaceResult): Promise<{ pieces: string[]; failure: string | null }> {
   if (!answer.ok || answer.value instanceof ReadableStream || isJsonAnswer(answer.value)) throw new Error(`agent.ask answered no reply: ${JSON.stringify(answer)}`);
@@ -574,13 +579,38 @@ describe('a slate asking the agent', () => {
     expect(await readReply(await asked.promise)).toEqual({ pieces: ['The ', 'newest ', 'is ', 'Launch.'], failure: null });
   });
 
+  test('a message asked mid-turn and let go by a Stop before the turn read it ends its reply', async () => {
+    const asked = Promise.withResolvers<SlateSurfaceResult>();
+    let chat: Awaited<ReturnType<typeof chatSlate>> | null = null;
+
+    const gateway = stubAiBinding(async (run) => {
+      if (!openingOf(run).includes('Tidy the board.')) return chatCompletion(run, 'unexpected');
+      // The slate asks while this turn's step runs: its message waits for the next step, which a Stop takes away.
+      asked.resolve(await present(chat, 'the chat slate')(['agent', 'ask'], [{ text: 'Which card is newest?' }]));
+
+      return await untilStopped(run);
+    });
+
+    const workspace = gatewayWorkspace(gateway);
+    chat = await chatSlate(workspace);
+    const turn = catalogTurn(workspace.agent, 'Tidy the board.');
+    const answer = await asked.promise;
+
+    await workspace.agent.cancelCurrentWork();
+    await Promise.allSettled([turn]);
+    await workspace.agent.harnessAgentsIdle();
+
+    // Ended, as its reader reads it: a reply left open would hold its reader past every piece of work.
+    expect(await readReply(answer)).toMatchObject({ pieces: [], failure: expect.any(String) });
+  });
+
   test('a stopped turn ends the reply with why', async () => {
     const started = Promise.withResolvers<void>();
 
     const gateway = stubAiBinding((run) => {
       started.resolve();
 
-      return new Promise<Response>((_answer, refuse) => { run.signal?.addEventListener('abort', () => { refuse(run.signal?.reason); }); });
+      return untilStopped(run);
     });
 
     const workspace = gatewayWorkspace(gateway);

@@ -70,12 +70,13 @@ test('a planner role records Plan authority for deferred work even when the mess
   await agent.setRole('planner');
   agent.harnessDrivingUserMessage('Inspect the project.', { kinuMode: 'build' });
   const configured = await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'Inspect the project.' }] });
-  const submitted = configured.tools.submit_plan;
 
-  if (submitted === undefined) throw new Error('Role-imposed Plan has no plan submission operation');
-  expect(await toolExecute(submitted)({ edits: [{ start: 1, content: '# Plan\nInspect the source before implementation.' }] })).toMatchObject({ status: 'pending' });
+  expect(configured.activeTools).toContain('submit_plan');
+  await chatSessionTurns(agent).settle({
+    messageId: 'role-plan-answer', text: 'Plan ready.', requestId: 'role-plan-answer',
+    calls: [{ name: 'submit_plan', input: { edits: [{ start: 1, content: '# Plan\nInspect the source before implementation.' }] } }],
+  });
   expect(await agent.getActivePlanReview()).toMatchObject({ status: 'pending' });
-  await chatSessionTurns(agent).settle({ messageId: 'role-plan-answer', text: 'Plan ready.', requestId: 'role-plan-answer' });
   const runs = await agent.listRuns();
   const run = runs.items[0];
 

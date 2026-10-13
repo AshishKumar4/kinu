@@ -9,19 +9,20 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  actorConnectionTag, DeviceConsentStore, JsonValueSchema, PlanReviewStore, TURN_AUTHOR_METADATA_KEY, type JsonValue, type WorkspaceOverview,
+  actorConnectionTag, AgentSequence, CHAT_SESSION_ID, DeviceConsentStore, JsonValueSchema, RunEventRecorder, TURN_AUTHOR_METADATA_KEY, type JsonValue, type WorkspaceOverview,
 } from '@kinu.run/core';
+import type { AgentStandingReport } from '@kinu.run/core';
 import { AwaitedList } from '@kinu.run/test-utils';
 import type { Database } from 'bun:sqlite';
 import { TERMINAL_RETRY_JOB } from '../src/wake-jobs';
 import { bindAgentSql } from '../src/runtime';
 import {
-  actorOver, armedWakes, chatSessionTurns, fireSoonestWake, GATEWAY_CATALOG, nextTurn, orchestratorHarness, hostedSubordinateHarness, seedMission,
-  until, wakeForDelegatedTask, workspaceFiles, type HarnessOrchestratorAgent, type RecordedUserPlaneCalls,
+  armedWakes, chatSessionTurns, fireSoonestWake, GATEWAY_CATALOG, historyOver, ledgerOver, mainRows, nextTurn, orchestratorHarness, hostedSubordinateHarness, seedMission,
+  until, wakeForDelegatedTask, workspaceFiles, workspaceMainActor, type HarnessOrchestratorAgent, type RecordedUserPlaneCalls,
 } from './helpers/actor-harness';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { socketConnection } from './helpers/bindings';
-import { chatCompletion, openingOf, stubAiBinding } from './helpers/platform-gateway';
+import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 
 mockAgentsSdk();
 
@@ -73,7 +74,57 @@ const MAPPING = 'Map the failure surface.';
 
 const NOTING = 'Note what the ledger is missing.';
 
+const PLANNING = 'Plan the ledger repair.';
+
 describe("a workspace's tile on its owner's home", () => {
+  test('an idle settings-wait tile follows real agent owed reports and parked durable refusals, not a cached fold', async () => {
+    const tiles = new AwaitedList<WorkspaceOverview>();
+    const owner: RecordedUserPlaneCalls = { warmConnections: [], failWarm: null, titles: [], overviews: tiles, refuseOverviews: [] };
+    const workspace = orchestratorHarness(owner);
+    const { agent, db } = workspace;
+    const main = workspaceMainActor(db).actorId;
+    const last = () => tiles.items.at(-1);
+
+    try {
+      await agent.installWorkspaceCapability('workspace-capability-token');
+      await until(() => last()?.awaitsSettings === false, 'the first quiet settings-wait tile lands');
+
+      const reportedWork = await agent.agentWorkspace(main);
+      const own = await mainRows(workspace);
+      const sequence = new AgentSequence(own.sql, main);
+      const recorder = new RunEventRecorder(own.sql, own.actor);
+
+      const standing: AgentStandingReport = {
+        messageCount: historyOver({ agent, db: own.db }, own.actor).transcript(CHAT_SESSION_ID).count(),
+        measures: recorder.readContextMeasures(), latestRun: recorder.latestRunHeader(), pendingSteers: [],
+        plans: { pending: false, revision: 0 }, questions: 0,
+      };
+
+      await reportedWork.owes(sequence.next(), null, true, { standing, runEnds: [], working: false });
+      await until(() => last()?.awaitsSettings === true, 'a real owed-work report updates the owner');
+      const reported = tiles.items.length;
+
+      await reportedWork.owes(sequence.next(), null, true, { standing, runEnds: [], working: false });
+      await settled();
+      expect(tiles.items).toHaveLength(reported);
+      await reportedWork.owes(sequence.next(), null, false, { standing, runEnds: [], working: false });
+      await until(() => last()?.awaitsSettings === false, 'the cleared owed-work report updates the owner');
+
+      // A prior activation's own effect ledger retained this refusal; the live idle fold must read it.
+      const ledger = ledgerOver(db);
+      const transition = { turnId: 'settings-wait', messageId: 'answer' };
+
+      ledger.record(transition, [{ name: 'sleep_time', scope: 'settings', input: {}, lane: 'detached' }]);
+      db.prepare("UPDATE terminal_effects SET status = 'parked' WHERE actor_id = ? AND sequence_id = ?")
+        .run(main, ledger.sequenceId(transition));
+      expect((await agent.foldOverview()).awaitsSettings).toBe(true);
+      db.prepare('DELETE FROM terminal_effects WHERE actor_id = ? AND sequence_id = ?').run(main, ledger.sequenceId(transition));
+      expect((await agent.foldOverview()).awaitsSettings).toBe(false);
+    } finally {
+      db.prepare("DELETE FROM terminal_effects WHERE actor_id = ? AND sequence_id = 'settings-wait/answer'").run(main);
+    }
+  });
+
   test('lands though the owner was away, follows work, decisions and children, and drops a child torn down', async () => {
     const tiles = new AwaitedList<WorkspaceOverview>();
     const overviews = tiles.items;
@@ -84,9 +135,19 @@ describe("a workspace's tile on its owner's home", () => {
     const scoutAnswer = Promise.withResolvers<void>();
     const addedAsked = Promise.withResolvers<void>();
     const addedAnswer = Promise.withResolvers<void>();
+    let planned = false;
 
     const gateway = stubAiBinding(async (run) => {
       const opening = openingOf(run);
+      const said = JSON.stringify(requestOf(run).messages);
+
+      // Its Plan turn submits the plan with its own tool, once, then says so: a later turn of the same chat, whose opening
+      // is still the first words.
+      if (said.includes(PLANNING) && !planned) {
+        planned = true;
+
+        return toolCallCompletion(run, { tool: 'submit_plan', args: { edits: [{ start: 1, content: '# Repair the ledger' }] } }, 'call_plan');
+      }
 
       if (opening.includes(MAPPING)) {
         scoutAsked.resolve();
@@ -185,10 +246,8 @@ describe("a workspace's tile on its owner's home", () => {
       addedAnswer.resolve();
       await until(() => last()?.activity === 'idle', "the added agent's answered turn is pushed");
 
-      // No hosted turn submits a plan in this build, so the one the agent holds is the row an earlier build left; the
-      // next tick of the wake carries it.
-      expect(new PlanReviewStore(bindAgentSql(agent), actorOver(db, added.subordinate.actorId)).submit('default', [{ start: 1, content: '# Repair the ledger' }]).ok).toBe(true);
-      await agent.terminalRetryPass();
+      // The added agent's Plan turn submits a plan into its own isolate: a decision the tile counts.
+      await addedWindow('send', PLANNING, crypto.randomUUID(), [], 'plan');
       await until(() => last()?.decisionsWaiting === 1, "the child's plan is pushed");
       await tab('dismissSubordinate', added.name, false);
       await until(() => last()?.decisionsWaiting === 0, 'the retired child takes its plan from the tile');

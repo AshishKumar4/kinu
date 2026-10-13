@@ -370,12 +370,12 @@ describe('comments and their threads', () => {
     await sentBack(store, 1);
 
     // The owner's turn and the revision's own feedback turn answer; a drain, or the feedback of another revision, does not.
-    const feedback = { kinuEvent: 'plan_feedback', planId: 'plan-1', revision: 1 };
+    const feedback = { kinuEvent: 'plan_feedback', planId: 'plan-1', revision: 1, kinuAuthor: 'harness' };
     expect(actions.awaitingReply(owner)).toBe(true);
     expect(actions.awaitingReply(feedback)).toBe(true);
-    expect(actions.awaitingReply({ kinuEvent: 'subordinate_report' })).toBe(false);
+    expect(actions.awaitingReply({ kinuEvent: 'subordinate_report', kinuAuthor: 'harness' })).toBe(false);
     expect(actions.awaitingReply({ ...feedback, revision: 7 })).toBe(false);
-    expect(actions.reply('c1', 'From a drain', { kinuEvent: 'subordinate_report' })).toMatchObject({ ok: false });
+    expect(actions.reply('c1', 'From a drain', { kinuEvent: 'subordinate_report', kinuAuthor: 'harness' })).toMatchObject({ ok: false });
 
     expect(actions.reply('c1', '   ', feedback)).toMatchObject({ ok: false });
     expect(actions.reply('c1', 'The harbour office tide chart.', feedback)).toMatchObject({ ok: true });

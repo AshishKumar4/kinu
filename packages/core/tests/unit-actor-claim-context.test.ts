@@ -42,6 +42,7 @@ for (const withTail of [true, false]) {
 
     try {
       const lease = actor.session.beginTurn({ runId: 'run-claim', turnId: 'turn-claim' }, 'build', 0);
+      actor.session.reserveClaim(lease);
       actor.session.bindProfile(lease, profile, inputs);
       await actor.session.openTurnInput(lease, { item: {}, message: { role: 'user', content: 'What does the file say?' }, birthContext: async () => [] });
 

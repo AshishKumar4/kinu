@@ -312,6 +312,7 @@ export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
   private toolKey(call: ProbeToolCall): ToolEffectKey {
     return {
       turnId: call.turnId,
+      runId: call.turnId,
       callId: call.callId,
       digest: argumentDigest({ tool: call.tool, args: call.args }),
     };

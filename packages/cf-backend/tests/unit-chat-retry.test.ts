@@ -6,7 +6,8 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { AwaitedList } from '@kinu.run/test-utils';
 import { actorConnectionTag, agentHome, WORKSPACE_TITLE_SYSTEM_PROMPT } from '@kinu.run/core';
-import { gatewayWorkspace, storedChat, workspaceFiles, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { gatewayWorkspace, storedChat, workspaceFiles, workspaceMainActor, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { copyNextOpening, copyNextTurnEnd } from './helpers/agent-facets';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 import { socketConnection } from './helpers/bindings';
@@ -315,5 +316,165 @@ describe('Retry on a failed turn', () => {
 
     expect(['tab-a', 'tab-b'].filter((id) => done(frames.items, id)[0]?.error === true)).toHaveLength(1);
     expect(calls() - before).toBe(1);
+  });
+});
+
+/** The workspace's fence on a turn ends with it, for every agent; Retry re-opens it as a new execution at the agent's
+ *  next claim epoch (design v3 B), after an answer as after a failure. */
+describe('Retry on an answered turn', () => {
+  /** A model that answers the ask each time it is asked, numbering its answers; `answers` counts them. */
+  function answering() {
+    let answers = 0;
+    // What each ask sent the model, in order.
+    const asked: string[] = [];
+
+    const workspace = gatewayWorkspace(stubAiBinding((run) => {
+      if (!JSON.stringify(requestOf(run).messages).includes(ASK) || JSON.stringify(requestOf(run).messages).includes(WORKSPACE_TITLE_SYSTEM_PROMPT)) {
+        return chatCompletion(run, '{"title":"Deploy notes"}');
+      }
+
+      answers += 1;
+      asked.push(JSON.stringify(requestOf(run).messages));
+
+      return chatCompletion(run, `Answer ${String(answers)}.`);
+    }));
+
+    return { workspace, asked };
+  }
+
+  test("on the workspace's chat, runs the turn again and answers it", async () => {
+    const { workspace } = answering();
+    const { agent } = workspace;
+    await workspace.started;
+    const { wire, frames } = listen(agent);
+    const gate = agent.harnessChatGate();
+
+    await gate(wire, request('first', 'submit-message'));
+    await frames.until((sent) => done(sent, 'first').length > 0);
+    await gate(wire, request('retry', 'regenerate-message'));
+    await frames.until((sent) => done(sent, 'retry').length > 0);
+
+    expect(done(frames.items, 'retry')[0]?.error).toBeUndefined();
+    expect(JSON.stringify(frames.items)).toContain('Answer 2.');
+  });
+
+  test("on a hosted agent's chat, runs the turn again and answers it", async () => {
+    const { workspace } = answering();
+    const { agent } = workspace;
+    await workspace.started;
+    await agent.setSoul('# Purpose\n\nDo each task asked.');
+    const { subordinate } = await agent.createSubordinateAgent();
+
+    if (subordinate.actorId === null) throw new Error('the added agent has no actor');
+    const { wire, frames } = listen(agent, subordinate.actorId);
+
+    const ask = async (id: string, trigger: 'submit-message' | 'regenerate-message') => {
+      await agent.onMessage(wire, request(id, trigger));
+      await joinHarnessFibers();
+      await frames.until((sent) => done(sent, id).length > 0);
+    };
+
+    await ask('first', 'submit-message');
+    await ask('retry', 'regenerate-message');
+
+    expect(done(frames.items, 'retry')[0]?.error).toBeUndefined();
+    expect(JSON.stringify(frames.items)).toContain('Answer 2.');
+  });
+
+  /** Retry of an answer asks for another (D6): the answer it retries is withdrawn, from the transcript the room is sent
+   *  and from what the model is asked, so the model answers the owner's words afresh and one answer stays. */
+  test('withdraws the answer it retries: the model is asked afresh, and one answer stays', async () => {
+    const { workspace, asked } = answering();
+    const { agent } = workspace;
+    await workspace.started;
+    const { wire, frames } = listen(agent);
+    const gate = agent.harnessChatGate();
+
+    await gate(wire, request('first', 'submit-message'));
+    await frames.until((sent) => done(sent, 'first').length > 0);
+    await gate(wire, request('retry', 'regenerate-message'));
+    await frames.until((sent) => done(sent, 'retry').length > 0);
+    await agent.harnessAgentsIdle();
+
+    expect(asked.at(-1)).not.toContain('Answer 1.');
+    const answered = (await storedChat(workspace)).filter((message) => message.role === 'assistant');
+
+    expect([answered.length, JSON.stringify(answered).includes('Answer 1.'), JSON.stringify(answered).includes('Answer 2.')]).toEqual([1, false, true]);
+  });
+
+  /** A Retry's run is a new execution: the run it superseded, its tool call or its end delivered late while the Retry
+   *  runs, reaches nothing of it, and the Retry goes on to answer with its own work done. */
+  test('the run a Retry superseded, calling late while the Retry runs, reaches nothing of it', async () => {
+    const reached = Promise.withResolvers<void>();
+    const released = Promise.withResolvers<void>();
+    let asked = 0;
+
+    const workspace = gatewayWorkspace(stubAiBinding(async (run) => {
+      const sent = requestOf(run).messages;
+
+      if (!JSON.stringify(sent).includes(ASK) || JSON.stringify(sent).includes(WORKSPACE_TITLE_SYSTEM_PROMPT)) return chatCompletion(run, '{"title":"Deploy notes"}');
+      asked += 1;
+
+      if (asked === 1) return chatCompletion(run, 'Answer 1.');
+
+      if (sent.some((message) => message.role === 'tool')) return chatCompletion(run, 'Answer 2.');
+      reached.resolve();
+      await released.promise;
+
+      return toolCallCompletion(run, { tool: 'tasks', args: { op: 'add', titles: ['RETRY_TASK'] } }, 'retry_task');
+    }));
+
+    const { agent } = workspace;
+    await workspace.started;
+    const main = workspaceMainActor(workspace.db).actorId;
+    const opened = copyNextOpening(agent.agentOf(main).storageKey);
+    const ended = copyNextTurnEnd(agent.agentOf(main).storageKey);
+    const { wire, frames } = listen(agent);
+    const gate = agent.harnessChatGate();
+
+    await gate(wire, request('first', 'submit-message'));
+    await frames.until((sent) => done(sent, 'first').length > 0);
+    const [first, firstEnd] = [await opened, await ended];
+    const retrying = gate(wire, request('retry', 'regenerate-message'));
+
+    await reached.promise;
+    const port = await agent.agentWorkspace(main);
+
+    await expect(port.executeTool({
+      activity: [], turnId: first.turnId ?? '', runId: first.runId ?? '', epoch: first.seq ?? 0, mode: 'build', parentDriven: false,
+      callId: 'superseded-call', name: 'tasks', input: { op: 'add', titles: ['SUPERSEDED_TASK'] },
+    })).rejects.toMatchObject({ code: 'cancelled' });
+    await port.turnEnded(...firstEnd);
+    released.resolve();
+    await retrying;
+    await frames.until((sent) => done(sent, 'retry').length > 0);
+
+    const work = await agent.listWorkspaceWork();
+    const titles = [...work.plans, ...work.tasks].flatMap((owned) => owned.tasks.map((task) => task.title));
+
+    expect(done(frames.items, 'retry')[0]?.error).toBeUndefined();
+    expect([titles.includes('RETRY_TASK'), titles.includes('SUPERSEDED_TASK')]).toEqual([true, false]);
+    expect(JSON.stringify(frames.items)).toContain('Answer 2.');
+  });
+
+  /** The close is every agent's: a hired agent's fence stayed open after its turn, until its next turn opened. */
+  test("a hosted agent's opening, delivered again once its turn ended, is refused", async () => {
+    const { workspace } = answering();
+    const { agent } = workspace;
+    await workspace.started;
+    await agent.setSoul('# Purpose\n\nDo each task asked.');
+    const { subordinate } = await agent.createSubordinateAgent();
+
+    if (subordinate.actorId === null) throw new Error('the added agent has no actor');
+    const { actorId } = subordinate;
+    const { wire, frames } = listen(agent, actorId);
+    const copied = copyNextOpening(agent.agentOf(actorId).storageKey);
+
+    await agent.onMessage(wire, request('first', 'submit-message'));
+    await joinHarnessFibers();
+    await frames.until((sent) => done(sent, 'first').length > 0);
+    await agent.harnessAgentsIdle();
+
+    await expect((await agent.agentWorkspace(actorId)).prepareChat(await copied)).rejects.toMatchObject({ code: 'denied' });
   });
 });

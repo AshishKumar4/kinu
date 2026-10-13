@@ -4,7 +4,7 @@ import { exists, readText, type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.j
 // only their own rows, through the production binder and directory.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { createMemoryVfs, createTestRuntime } from '@kinu.run/test-utils';
+import { createMemoryVfs, createTestRuntime, withHostDeliveries, admitTestClaim } from '@kinu.run/test-utils';
 import { makeSqlExec } from './helpers';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { actorScaffoldPath, WorkspaceActorDirectory, type WorkspaceActor } from '../src/identity/workspace-actors';
@@ -90,7 +90,7 @@ function build(donor?: Database, unreadableActor?: string, automatic = false, in
     return orchestrationFor0(bound);
   };
 
-  const orchestrationFor0 = (bound: BoundActor & { runtime: AgentRuntime }): AgentOrchestratorDeps => ({
+  const orchestrationFor0 = (bound: BoundActor & { runtime: AgentRuntime }): AgentOrchestratorDeps => (withHostDeliveries({
     // Its own broadcast, event log and session window.
     host: {
       broadcast: () => { throw new Error(`${bound.record.name} broadcast outside a turn`); },
@@ -101,7 +101,7 @@ function build(donor?: Database, unreadableActor?: string, automatic = false, in
     },
     engine: new EvolutionEngine(bound.runtime, historyTurnPairs(bound.stores.history), { enabled: automatic }),
     eventLog: new EventLog(exec, bound.handle),
-  });
+  }));
 
   // Memoized per actor so the session store and runtime address the same bytes.
   const planeFor = (actorId: string): VFS => {
@@ -189,6 +189,7 @@ describe('one workspace database, many logical actors', () => {
 
     try {
       const lease = actor.session.beginTurn({ runId: 'run', turnId: 'turn' }, 'build', 0);
+      actor.session.reserveClaim(lease);
       actor.session.finishTurn(lease);
       actor.handle.config.setLiveTrials(true);
       const section = PROMPT_SECTIONS[0];
@@ -226,6 +227,7 @@ describe('one workspace database, many logical actors', () => {
         const turnId = `learning-${index}`;
         actor.session.orchestrator.withTurnLearning(() => {
           const lease = actor.session.beginTurn({ runId: `run-${index}`, turnId }, 'build', index);
+          actor.session.reserveClaim(lease);
           actor.handle.config.setLearning(policy.after);
           actor.session.orchestrator.recordTurn({
             userMessage: `assignment ${index}`, assistantResponse: 'done', toolCalls: [],
@@ -268,6 +270,7 @@ describe('one workspace database, many logical actors', () => {
 
           for (const index of [0, 1]) {
             const lease = actor.session.beginTurn({ runId: `run-${index}`, turnId: `turn-${index}` }, policy.mode, index);
+            actor.session.reserveClaim(lease);
             const extension = actor.session.orchestrator.turnExtension;
 
             if (extension.onToolResult === undefined) throw new Error('the acquired actor has no step observation');
@@ -310,8 +313,8 @@ describe('one workspace database, many logical actors', () => {
     const beta = await fx.host.acquire(fx.child('beta', 'c-beta', 'agent'), { kind: 'actor' });
     expect(alpha.handle.actorId).not.toBe(beta.handle.actorId);
 
-    await alpha.stores.claims.admit({ runId: 'run-a', turnId: 'turn-1', workMode: 'build', program: BUILTIN, context: contextOf(alpha) });
-    await beta.stores.claims.admit({ runId: 'run-b', turnId: 'turn-1', workMode: 'build', program: BUILTIN, context: contextOf(beta) });
+    await admitTestClaim(alpha.stores.claims, { runId: 'run-a', turnId: 'turn-1', workMode: 'build', program: BUILTIN, context: contextOf(alpha) });
+    await admitTestClaim(beta.stores.claims, { runId: 'run-b', turnId: 'turn-1', workMode: 'build', program: BUILTIN, context: contextOf(beta) });
 
     expect(alpha.stores.claims.read('turn-1')?.runId).toBe('run-a');
     expect(beta.stores.claims.read('turn-1')?.runId).toBe('run-b');
@@ -325,7 +328,7 @@ describe('one workspace database, many logical actors', () => {
     const ref = fx.child('alpha', 'c-alpha', 'agent');
     const alpha = await fx.host.acquire(ref, { kind: 'actor' });
     const claims = alpha.stores.claims;
-    await claims.admit({ runId: 'r', turnId: 't', workMode: 'build', program: BUILTIN, context: contextOf(alpha) });
+    await admitTestClaim(claims, { runId: 'r', turnId: 't', workMode: 'build', program: BUILTIN, context: contextOf(alpha) });
     expect(claims.read('t')?.runId).toBe('r');
 
     fx.host.release(ref);
@@ -413,7 +416,7 @@ describe('one workspace database, many logical actors', () => {
     const second = await fx.host.acquire(ref, { kind: 'actor' });
     expect(second.handle).not.toBe(first.handle);
     // The new binding works…
-    await second.stores.claims.admit({ runId: 'r2', turnId: 't2', workMode: 'build', program: BUILTIN, context: contextOf(second) });
+    await admitTestClaim(second.stores.claims, { runId: 'r2', turnId: 't2', workMode: 'build', program: BUILTIN, context: contextOf(second) });
     expect(second.stores.claims.read('t2')?.runId).toBe('r2');
     // …and the old one stays dead: the fence is keyed on the binding, not the actor id.
     expect(() => staleClaims.read('t2')).toThrow(/released by its root/);
@@ -423,7 +426,7 @@ describe('one workspace database, many logical actors', () => {
     const fx = build();
     const ref = fx.child('gone', 'c-gone', 'agent');
     const hosted = await fx.host.acquire(ref, { kind: 'actor' });
-    await hosted.stores.claims.admit({ runId: 'r', turnId: 't', workMode: 'build', program: BUILTIN, context: contextOf(hosted) });
+    await admitTestClaim(hosted.stores.claims, { runId: 'r', turnId: 't', workMode: 'build', program: BUILTIN, context: contextOf(hosted) });
     fx.host.release(ref);
 
     const cold = fx.rebuild();
@@ -491,18 +494,12 @@ describe('one workspace database, many logical actors', () => {
     const b = fx.child('beta', 'c-beta', 'agent');
     const alpha = await fx.host.acquire(a, { kind: 'actor' });
     const beta = await fx.host.acquire(b, { kind: 'actor' });
-    const claim = await alpha.stores.claims.admit({ runId: 'r1', turnId: 'turn-1', workMode: 'build', program: BUILTIN, context: contextOf(alpha) });
-    await beta.stores.claims.admit({ runId: 'r2', turnId: 'turn-1', workMode: 'build', program: BUILTIN, context: contextOf(beta) });
+    const claim = await admitTestClaim(alpha.stores.claims, { runId: 'r1', turnId: 'turn-1', workMode: 'build', program: BUILTIN, context: contextOf(alpha) });
+    await admitTestClaim(beta.stores.claims, { runId: 'r2', turnId: 'turn-1', workMode: 'build', program: BUILTIN, context: contextOf(beta) });
     alpha.stores.claims.settle(claim, 'completed');
 
     await expect(fx.host.retire(fx.main, { reference: a, name: 'not-alpha', destroy: true, interrupt: true }))
       .rejects.toThrow(/alias this actor no longer holds/);
-
-    // A newer epoch admitted the same turn since the caller looked.
-    await alpha.stores.claims.admit({ runId: 'r3', turnId: 'turn-1', workMode: 'build', program: BUILTIN, context: contextOf(alpha) });
-    await expect(fx.host.retire(fx.main, {
-      reference: a, name: 'alpha', destroy: true, interrupt: true, observed: { turnId: 'turn-1', epoch: 1 },
-    })).rejects.toThrow(/epoch 1/);
 
     await fx.host.retire(fx.main, { reference: a, name: 'alpha', destroy: true, interrupt: true });
     expect(fx.sql<{ n: number }>`SELECT COUNT(*) AS n FROM actor_turn_claims WHERE actor_id = ${a.actorId}`[0]?.n).toBe(0);
@@ -517,7 +514,7 @@ describe('one workspace database, many logical actors', () => {
     const fx = build();
     const a = fx.child('alpha', 'c-alpha', 'agent');
     const alpha = await fx.host.acquire(a, { kind: 'actor' });
-    await alpha.stores.claims.admit({ runId: 'r', turnId: 't', workMode: 'build', program: BUILTIN, context: contextOf(alpha) });
+    await admitTestClaim(alpha.stores.claims, { runId: 'r', turnId: 't', workMode: 'build', program: BUILTIN, context: contextOf(alpha) });
     alpha.stores.claims.settle(claimOf({ actorId: a.actorId, turnId: 't', epoch: 1, runId: 'r', context: contextOf(alpha) }), 'completed');
 
     await fx.host.retire(fx.main, { reference: a, name: 'alpha', destroy: false, interrupt: false });
@@ -535,8 +532,8 @@ describe('one workspace database, many logical actors', () => {
     const alpha = await fx.host.acquire(a, { kind: 'actor' });
     const beta = await fx.host.acquire(b, { kind: 'actor' });
     const program: ActorProgramIdentity = { kind: 'scaffold', version: 3, digest: 'digest-3', build: null };
-    await alpha.stores.claims.admit({ runId: 'run-a', turnId: 'turn-live', workMode: 'build', program, context: contextOf(alpha) });
-    const settled = await beta.stores.claims.admit({ runId: 'run-b', turnId: 'turn-done', workMode: 'build', program, context: contextOf(beta) });
+    await admitTestClaim(alpha.stores.claims, { runId: 'run-a', turnId: 'turn-live', workMode: 'build', program, context: contextOf(alpha) });
+    const settled = await admitTestClaim(beta.stores.claims, { runId: 'run-b', turnId: 'turn-done', workMode: 'build', program, context: contextOf(beta) });
     beta.stores.claims.settle(settled, 'completed');
 
     // Eviction: every session, queue and in-memory object is gone.
@@ -555,7 +552,7 @@ describe('one workspace database, many logical actors', () => {
     const source = 'export default async function main() { return "retained"; }';
     await writeText(actor.runtime.storage.vfs, `${actor.runtime.identity.scaffold.path}.v1`, source);
 
-    const admitted = await actor.stores.claims.admit({
+    const admitted = await admitTestClaim(actor.stores.claims, {
       runId: 'run-a', turnId: 'turn-a', workMode: 'build', context: contextOf(actor),
       program: { kind: 'scaffold', version: 1, digest: sha256Hex(source), build: null },
     });
@@ -574,7 +571,7 @@ describe('one workspace database, many logical actors', () => {
     const source = 'export default async function main() { return "retained"; }';
     await writeText(actor.runtime.storage.vfs, `${actor.runtime.identity.scaffold.path}.v1`, source);
 
-    await actor.stores.claims.admit({
+    await admitTestClaim(actor.stores.claims, {
       runId: 'run-a', turnId: 'turn-a', workMode: 'build', context: contextOf(actor),
       program: { kind: 'scaffold', version: 1, digest: sha256Hex(source), build: null },
     });
@@ -601,7 +598,7 @@ describe('one workspace database, many logical actors', () => {
       actor, fx,
       // Each run ends where `cut` says: waiting on the provider for its last step, or running that step's own work.
       run: async (steps, installedBuild = fx.host.installedBuild, cut = 'provider') => {
-        const claim = await actor.stores.claims.admit({
+        const claim = await admitTestClaim(actor.stores.claims, {
           runId: crypto.randomUUID(), turnId: 'turn-a', workMode: 'build', context: contextOf(actor), program, installedBuild,
         });
 
@@ -652,7 +649,7 @@ describe('one workspace database, many logical actors', () => {
     }
 
     // The next run finishes its step: the cuts before it say nothing about the next one.
-    const claim = await actor.stores.claims.admit({
+    const claim = await admitTestClaim(actor.stores.claims, {
       runId: crypto.randomUUID(), turnId: 'turn-a', workMode: 'build', context: contextOf(actor),
       program: actor.stores.claims.read('turn-a')?.program ?? { kind: 'builtin', version: 0, digest: null, build: null },
       installedBuild: fx.host.installedBuild,
@@ -708,7 +705,7 @@ describe('one workspace database, many logical actors', () => {
     const source = 'export default async function main() { return "retained"; }';
 
     await writeText(actor.runtime.storage.vfs, `${actor.runtime.identity.scaffold.path}.v1`, source);
-    await actor.stores.claims.admit({ runId: 'run-a', turnId: 'turn-a', workMode: 'build', context: contextOf(actor),
+    await admitTestClaim(actor.stores.claims, { runId: 'run-a', turnId: 'turn-a', workMode: 'build', context: contextOf(actor),
       program: { kind: 'scaffold', version: 1, digest: sha256Hex(source), build: null } });
     const cold = build(fx.db, 'alpha');
 
@@ -724,7 +721,7 @@ describe('one workspace database, many logical actors', () => {
   test('recovery refuses changed program bytes once but does not settle a live actor', async () => {
     const fx = build();
     const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'agent'), { kind: 'actor' });
-    await actor.stores.claims.admit({
+    await admitTestClaim(actor.stores.claims, {
       runId: 'run-a', turnId: 'turn-a', workMode: 'build', context: contextOf(actor),
       program: { kind: 'scaffold', version: 1, digest: sha256Hex('missing'), build: null },
     });
@@ -745,7 +742,7 @@ describe('one workspace database, many logical actors', () => {
     const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'agent'), { kind: 'actor' });
     const path = `${actor.runtime.identity.scaffold.path}.v1`;
     await writeText(actor.runtime.storage.vfs, path, 'changed source');
-    await actor.stores.claims.admit({
+    await admitTestClaim(actor.stores.claims, {
       runId: 'run-a', turnId: 'turn-a', workMode: 'build', context: contextOf(actor),
       program: { kind: 'scaffold', version: 1, digest: sha256Hex('expected source'), build: null },
     });
@@ -779,7 +776,7 @@ describe('one workspace database, many logical actors', () => {
   test('a claim whose consumed step has lost its list settles error once, and the failure names the request', async () => {
     const fx = build();
     const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'agent'), { kind: 'actor' });
-    const claim = await actor.stores.claims.admit({ runId: 'run-a', turnId: 'turn-a', workMode: 'build', context: contextOf(actor), program: BUILTIN });
+    const claim = await admitTestClaim(actor.stores.claims, { runId: 'run-a', turnId: 'turn-a', workMode: 'build', context: contextOf(actor), program: BUILTIN });
     const step = await actor.stores.claims.consume(claim, { index: 0, messages: [{ role: 'user', content: 'go' }] });
     // The row naming the step's list, which no request written before the requests lineage has.
     void fx.sql`DELETE FROM request_renders WHERE actor_id=${claim.actorId} AND request_id=${step.requestId}`;
@@ -807,8 +804,8 @@ describe('one workspace database, many logical actors', () => {
     const b = fx.child('beta', 'c-beta', 'agent');
     const alpha = await fx.host.acquire(a, { kind: 'actor' });
     const beta = await fx.host.acquire(b, { kind: 'actor' });
-    await alpha.stores.claims.admit({ runId: 'r-a', turnId: 't-a', workMode: 'build', program: BUILTIN, context: contextOf(alpha) });
-    await beta.stores.claims.admit({ runId: 'r-b', turnId: 't-b', workMode: 'build', program: BUILTIN, context: contextOf(beta) });
+    await admitTestClaim(alpha.stores.claims, { runId: 'r-a', turnId: 't-a', workMode: 'build', program: BUILTIN, context: contextOf(alpha) });
+    await admitTestClaim(beta.stores.claims, { runId: 'r-b', turnId: 't-b', workMode: 'build', program: BUILTIN, context: contextOf(beta) });
     // A table grown after the host was built: the purge reads its table set off the
     // live schema, so it is swept without a hand-kept list.
     fx.db.exec(`CREATE TABLE actor_late_notes (actor_id TEXT NOT NULL, note TEXT NOT NULL)`);

@@ -26,11 +26,10 @@ describe('turnRecordTerminalEffect', () => {
 
     const effect = present(chatTerminalEffects({
       chat: () => { throw new Error('the recording owes no turn'); },
-      orchestrator: {
-        recordedTurn: (status, turn) => ({ ...turn, status }),
+      orchestrator: () => ({
         recordTurn: (turn, continuity, options) => { recorded.push({ turn, continuity, options }); },
         drainPendingEvents: () => Promise.reject(new Error('the recording drains nothing')),
-      },
+      }),
       engine: { learnFromTurn: () => Promise.reject(new Error('the recording learns nothing')) },
     }).turn_record, 'the recording body');
 

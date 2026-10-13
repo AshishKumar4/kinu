@@ -1,7 +1,7 @@
 /** A plan's own page in the inspector: its newest revision, reviewed where it is read. */
 import { lazy, Suspense } from "react";
 import { Loader } from "@cloudflare/kumo";
-import type { OwnedPlan, Rpc, WorkspaceWork } from "@kinu.run/core";
+import type { OwedOwnerIntent, OwnedPlan, Rpc, WorkspaceWork } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import type { AsyncResource } from "@/hooks/use-async-resource";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -13,11 +13,12 @@ const PlanReviewView = lazy(() => import("./PlanReviewView"));
  * Every plan page shown this visit that still has a tab, the shown one visible: a page left for another tab keeps its
  * unsent comments and its save queue. A page asked for before the read holds its plan shows the read's loading or failure.
  */
-export function PlanPageList({ pages, rpc, planRpc, onReviewActor }: {
+export function PlanPageList({ pages, rpc, planRpc, onReviewActor, owedIntents }: {
   pages: PlanPages;
   rpc: Rpc;
   planRpc: Rpc | undefined;
   onReviewActor?: (name: string, actorId?: string) => void | Promise<void>;
+  owedIntents?: readonly OwedOwnerIntent[];
 }) {
   const { resource } = pages.read;
 
@@ -33,7 +34,7 @@ export function PlanPageList({ pages, rpc, planRpc, onReviewActor }: {
           <div key={key} className="h-full" hidden={item !== pages.shown}>
             <ErrorBoundary label="Plan">
               <PlanPage item={item} owner={pages.owner} rpc={rpc} planRpc={planRpc ?? rpc} onReviewActor={onReviewActor}
-                resource={resource} onRetry={pages.read.reload} />
+                resource={resource} onRetry={pages.read.reload} owedIntents={owedIntents ?? []} />
             </ErrorBoundary>
           </div>
         );
@@ -43,7 +44,7 @@ export function PlanPageList({ pages, rpc, planRpc, onReviewActor }: {
 }
 
 /** Its owner decides it from its own pane; anyone else reads it. */
-function PlanPage({ item, owner, rpc, planRpc, onReviewActor, resource, onRetry }: {
+function PlanPage({ item, owner, rpc, planRpc, onReviewActor, resource, onRetry, owedIntents }: {
   item: OwnedPlan;
   owner: string;
   rpc: Rpc;
@@ -51,6 +52,7 @@ function PlanPage({ item, owner, rpc, planRpc, onReviewActor, resource, onRetry 
   onReviewActor?: (name: string, actorId?: string) => void | Promise<void>;
   resource: AsyncResource<WorkspaceWork>;
   onRetry: () => void;
+  owedIntents: readonly OwedOwnerIntent[];
 }) {
   const mine = item.owner.name === owner;
 
@@ -66,7 +68,7 @@ function PlanPage({ item, owner, rpc, planRpc, onReviewActor, resource, onRetry 
       )}
       <div className="min-h-0 flex-1">
         <Suspense fallback={<div className="flex justify-center py-8"><Loader size="sm" /></div>}>
-          <PlanReviewView plan={item.plan} rpc={item.owner.name === "main" ? rpc : planRpc} readOnly={!mine || item.owner.retired || item.plan.status !== "pending"}
+          <PlanReviewView plan={item.plan} rpc={item.owner.name === "main" ? rpc : planRpc} readOnly={!mine || item.owner.retired || item.plan.status !== "pending"} owedIntents={owedIntents}
             {...(item.owner.name !== "main" && { agentName: item.owner.name })} />
         </Suspense>
       </div>

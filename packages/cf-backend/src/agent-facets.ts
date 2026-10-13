@@ -1,16 +1,18 @@
 /** The workspace side of an agent's isolate (D9). */
 import { RpcTarget, WorkerEntrypoint, exports } from 'cloudflare:workers';
-import type { UIMessageChunk } from 'ai';
+import type { UIMessage, UIMessageChunk } from 'ai';
 import * as v from 'valibot';
-import { decodeModelMessageValues, relayedAnswer, remoteContextTree } from '@kinu.run/core';
-import type { AgentOwnInspection, ArchiveSqlCursor, ContextEditor, ContextTree, StepSpendSource, ConversationRecall, PositionPageRequest, AgentSignal, AuthRequest, RelayedProvider, ProgrammaticTurn, ProviderEnv, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
+import { decodeModelMessageValues, forkConversationRowSchema, relayedAnswer, remoteContextTree } from '@kinu.run/core';
+import type { ForkConversationPlan, ForkConversationSection, ForkConversationSource, ForkConversationTarget, ForkRows } from '@kinu.run/core';
+import type { AgentOwnInspection, ArchiveSqlCursor, CacheWarmArm, ContextEditor, ContextTree, StepSpendSource, ConversationRecall, PositionPageRequest, AgentSignal, AuthRequest, RelayedProvider, ProgrammaticTurn, ProviderEnv, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
-import type { AgentWorkspace } from './agent-facet/agent-turn';
-import type { AdvisorRecoverySnapshot, AgentFigures, AgentTurnActivity, HandedOffTurn, ResolvedTurnProfile, AgentHeadDelta, AgentReview, AgentSnapshot, AgentToolCall, AgentTrace, SessionEvent, TurnRequestAt, ModelCallReport, ModelOperationEvent } from '@kinu.run/core';
+import type { AgentWorkspace, TurnBound, TurnCapabilityOf } from './agent-facet/agent-turn';
+import type { AdvisorRecoverySnapshot, AgentFigures, AgentReport, AgentTurnActivity, HandedOffTurn, ResolvedTurnProfile, SettledRun, AgentHeadDelta, AgentReview, AgentSnapshot, AgentToolCall, AgentTrace, SessionEvent, TurnEndEvent, TurnRequestAt, ModelCallReport, ModelOperationEvent } from '@kinu.run/core';
 import type { ChatTurnRequest } from './agent-turns';
 import { attempt, KinuError, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import type { AgentFacet, AgentFacetCalls, AgentFacetEnv } from './agent-facet/agent-facet';
+import { ASSETS_HOSTS } from './assets-hosts';
 
 export const AGENT_BUNDLE_DIRECTORY = '/_agent';
 
@@ -43,59 +45,92 @@ export class AgentMemory extends RpcTarget implements Memory {
   async tail(path: string, bytes: number) { return await (await this.open()).tail(path, bytes); }
 }
 
+/** What a turn-bound call does: opens an execution under its capability (a run's preparation), runs something of it,
+ *  or settles what it did. */
+export type TurnCall = 'opens' | 'executes' | 'settles';
+
 export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswers {
-  /** `closed` aborts as the workspace is deleted: every call still open is refused then, so its relay hears an end. */
-  constructor(private readonly answers: AgentWorkspaceAnswers, private readonly closed: AbortSignal) {
+  /**
+   * `closed` aborts as the workspace is deleted: every call still open is refused then, so its relay hears an end.
+   * `fenced` answers whether a call bound to a turn is the agent's current one: a turn a later opening superseded, or a
+   * Stop cancelled, is refused before anything runs (design v2 §3).
+   */
+  constructor(
+    private readonly answers: AgentWorkspaceAnswers,
+    private readonly closed: AbortSignal,
+    private readonly fenced: (bound: TurnBound, call: TurnCall) => boolean = () => true,
+    private readonly cutOff: (turnId: string) => AbortSignal | null = () => null,
+  ) {
     super();
   }
 
-  private open<T>(answer: T | Promise<T>): Promise<T> {
+  /** `call`: what a turn-bound call does. One that executes is refused for a turn a Stop cut off; one that settles what the
+   *  turn already did (its answer, its trace, its charges) is not, so the stopped turn closes. */
+  private open<T>(answer: () => T | Promise<T>, bound?: TurnBound, call: TurnCall = 'settles'): Promise<T> {
     const refused = Promise.withResolvers<never>();
-    const refuse = (): void => { refused.reject(this.closed.reason); };
 
-    if (this.closed.aborted) refuse();
-    else this.closed.addEventListener('abort', refuse, { once: true });
+    if (bound !== undefined && !this.fenced(bound, call)) {
+      refused.reject(call === 'settles'
+        ? new KinuError('denied', `stale_close: the close of turn ${bound.turnId} names an execution this agent never opened as such.`)
+        : new KinuError('cancelled', `stale_epoch: turn ${bound.turnId} is no longer this agent's current turn.`));
 
-    return Promise.race([answer, refused.promise]).finally(() => { this.closed.removeEventListener('abort', refuse); });
+      return refused.promise;
+    }
+
+    // A call that runs more of its turn ends as the turn is cut off, as every call does as the workspace is deleted.
+    const cut = bound !== undefined && call !== 'settles' ? this.cutOff(bound.turnId) : null;
+    const ends = cut === null ? this.closed : AbortSignal.any([this.closed, cut]);
+    const refuse = (): void => { refused.reject(ends.reason); };
+
+    if (ends.aborted) refuse();
+    else ends.addEventListener('abort', refuse, { once: true });
+
+    return Promise.race([answer(), refused.promise]).finally(() => { ends.removeEventListener('abort', refuse); });
   }
 
-  session() { return this.open(this.answers.session()); }
-  stateSession() { return this.open(this.answers.stateSession()); }
+  session() { return this.open(() => this.answers.session()); }
+  stateSession() { return this.open(() => this.answers.stateSession()); }
   memory() { return this.answers.memory(); }
-  program(turnId: string, ...args: Parameters<Executor['execute']>) { return this.open(this.answers.program(turnId, ...args)); }
-  traceTurn(turnId: string, event: AgentTrace) { return this.open(this.answers.traceTurn(turnId, event)); }
-  traceStream(turnId: string, lines: ReadableStream<Uint8Array>) { return this.open(this.answers.traceStream(turnId, lines)); }
-  resume(turnId: string) { return this.open(this.answers.resume(turnId)); }
-  guard(turnId: string, ...args: Parameters<MissionBudgetPort['guard']>) { return this.open(this.answers.guard(turnId, ...args)); }
-  debit(turnId: string, ...args: Parameters<MissionBudgetPort['debit']>) { return this.open(this.answers.debit(turnId, ...args)); }
-  prepareTurn(turnId: string) { return this.open(this.answers.prepareTurn(turnId)); }
-  advise(review: AgentReview) { return this.open(this.answers.advise(review)); }
-  enqueueTurn(input: ProgrammaticTurn) { return this.open(this.answers.enqueueTurn(input)); }
-  executeTool(call: AgentToolCall) { return this.open(this.answers.executeTool(call)); }
-  observe(lines: ReadableStream<Uint8Array>) { return this.open(this.answers.observe(lines)); }
-  paceStep(turnId: string) { return this.open(this.answers.paceStep(turnId)); }
-  answerMetadata(turnId: string, narration: readonly string[]) { return this.open(this.answers.answerMetadata(turnId, narration)); }
-  reportModelCall(report: ModelCallReport) { return this.open(this.answers.reportModelCall(report)); }
-  reportModelOperation(event: ModelOperationEvent) { return this.open(this.answers.reportModelOperation(event)); }
-  prepareChat(request: ChatTurnRequest) { return this.open(this.answers.prepareChat(request)); }
-  bindProfile(turnId: string, profile: ResolvedTurnProfile) { return this.open(this.answers.bindProfile(turnId, profile)); }
-  chatEvent(event: SessionEvent) { return this.open(this.answers.chatEvent(event)); }
-  turnEnded(event: SessionEvent, figures: AgentFigures) { return this.open(this.answers.turnEnded(event, figures)); }
-  owedReport(...args: Parameters<AgentWorkspace['owedReport']>) { return this.open(this.answers.owedReport(...args)); }
-  parentReport(report: Parameters<AgentWorkspace['parentReport']>[0]) { return this.open(this.answers.parentReport(report)); }
-  autoTitle(subject: string, title: string | null) { return this.open(this.answers.autoTitle(subject, title)); }
-  turnSettled(settled: HandedOffTurn) { return this.open(this.answers.turnSettled(settled)); }
-  hireAdvisor(advisor: AdvisorRecoverySnapshot) { return this.open(this.answers.hireAdvisor(advisor)); }
-  owes(next: number | null, holds: boolean) { return this.open(this.answers.owes(next, holds)); }
-  birthContext(drainTurnId: string) { return this.open(this.answers.birthContext(drainTurnId)); }
-  steerSkills(text: string, alreadyActive: readonly string[]) { return this.open(this.answers.steerSkills(text, alreadyActive)); }
-  getAuth(key: string, opts?: AuthRequest) { return this.open(this.answers.getAuth(key, opts)); }
-  listCredentials() { return this.open(this.answers.listCredentials()); }
-  relayDevice(provider: RelayedProvider) { return this.open(this.answers.relayDevice(provider)); }
-  relayModelCall(deviceId: string, callId: string, request: Request) { return this.open(this.answers.relayModelCall(deviceId, callId, request)); }
-  cancelModelRelay(callId: string) { return this.open(this.answers.cancelModelRelay(callId)); }
-  sayToParent(signal: AgentSignal) { return this.open(this.answers.sayToParent(signal)); }
-  logActivity(lines: readonly AgentTurnActivity[]) { return this.open(this.answers.logActivity(lines)); }
+  program(bound: TurnBound, ...args: Parameters<Executor['execute']>) { return this.open(() => this.answers.program(bound, ...args), bound, 'executes'); }
+  traceTurn(close: TurnBound, event: AgentTrace) { return this.open(() => this.answers.traceTurn(close, event), close); }
+  traceStream(close: TurnBound, lines: ReadableStream<Uint8Array>) { return this.open(() => this.answers.traceStream(close, lines), close); }
+  resume(bound: TurnBound) { return this.open(() => this.answers.resume(bound), bound, 'executes'); }
+  guard(bound: TurnBound, ...args: Parameters<MissionBudgetPort['guard']>) { return this.open(() => this.answers.guard(bound, ...args), bound, 'executes'); }
+  debit(close: TurnBound, ...args: Parameters<MissionBudgetPort['debit']>) { return this.open(() => this.answers.debit(close, ...args), close); }
+  /** A run's preparation, which only that run's own cut ends. */
+  prepareTurn(bound: TurnCapabilityOf) { return this.open(() => this.answers.prepareTurn(bound), bound, 'opens'); }
+  advise(review: AgentReview) { return this.open(() => this.answers.advise(review)); }
+  enqueueTurn(input: ProgrammaticTurn) { return this.open(() => this.answers.enqueueTurn(input)); }
+  executeTool(call: AgentToolCall) { return this.open(() => this.answers.executeTool(call), call, 'executes'); }
+  receipts(turnId: string, runId: string, callIds: readonly string[]) { return this.open(() => this.answers.receipts(turnId, runId, callIds)); }
+  observe(lines: ReadableStream<Uint8Array>) { return this.open(() => this.answers.observe(lines)); }
+  paceStep(bound: TurnBound, profile: ResolvedTurnProfile | null) { return this.open(() => this.answers.paceStep(bound, profile), bound, 'executes'); }
+  answerMetadata(close: TurnBound, narration: readonly string[] | null) { return this.open(() => this.answers.answerMetadata(close, narration), close); }
+  reportModelCall(report: ModelCallReport) { return this.open(() => this.answers.reportModelCall(report)); }
+  reportModelOperation(event: ModelOperationEvent) { return this.open(() => this.answers.reportModelOperation(event)); }
+  prepareChat(request: ChatTurnRequest) { return this.open(() => this.answers.prepareChat(request)); }
+  scaffold() { return this.open(() => this.answers.scaffold()); }
+  chatEvent(event: SessionEvent) { return this.open(() => this.answers.chatEvent(event)); }
+  turnEnded(ended: TurnEndEvent, figures: AgentFigures, activity: readonly AgentTurnActivity[], window: readonly UIMessage[]) { return this.open(() => this.answers.turnEnded(ended, figures, activity, window), ended); }
+  owedReport(...args: Parameters<AgentWorkspace['owedReport']>) { return this.open(() => this.answers.owedReport(...args)); }
+  parentReport(report: Parameters<AgentWorkspace['parentReport']>[0]) { return this.open(() => this.answers.parentReport(report)); }
+  autoTitle(subject: string, title: string | null) { return this.open(() => this.answers.autoTitle(subject, title)); }
+  turnSettled(settled: HandedOffTurn) { return this.open(() => this.answers.turnSettled(settled), settled); }
+  runSettled(run: SettledRun) { return this.open(() => this.answers.runSettled(run), run); }
+  hireAdvisor(advisor: AdvisorRecoverySnapshot) { return this.open(() => this.answers.hireAdvisor(advisor)); }
+  owes(seq: number, next: number | null, holds: boolean, report: AgentReport) { return this.open(() => this.answers.owes(seq, next, holds, report)); }
+  birthContext(drainTurnId: string) { return this.open(() => this.answers.birthContext(drainTurnId)); }
+  steerSkills(text: string, alreadyActive: readonly string[]) { return this.open(() => this.answers.steerSkills(text, alreadyActive)); }
+  openWork() { return this.open(() => this.answers.openWork()); }
+  noteModelRequest(lastRequestAt: number | null) { return this.open(() => this.answers.noteModelRequest(lastRequestAt)); }
+  armCacheWarm(input: CacheWarmArm) { return this.open(() => this.answers.armCacheWarm(input)); }
+  getAuth(key: string, opts?: AuthRequest) { return this.open(() => this.answers.getAuth(key, opts)); }
+  listCredentials() { return this.open(() => this.answers.listCredentials()); }
+  relayDevice(provider: RelayedProvider) { return this.open(() => this.answers.relayDevice(provider)); }
+  relayModelCall(deviceId: string, callId: string, request: Request) { return this.open(() => this.answers.relayModelCall(deviceId, callId, request)); }
+  cancelModelRelay(callId: string) { return this.open(() => this.answers.cancelModelRelay(callId)); }
+  sayToParent(signal: AgentSignal) { return this.open(() => this.answers.sayToParent(signal)); }
+  logActivity(lines: readonly AgentTurnActivity[]) { return this.open(() => this.answers.logActivity(lines)); }
 }
 
 /** One agent's own stores, in its isolate (D9). */
@@ -125,6 +160,32 @@ export class AgentStoreBroker {
       browse: async (limit) => await (await this.calls()).browseConversations(this.snapshot(), limit),
     };
   }
+
+  /** Its conversation as a fork of its workspace reads it: a section's rows are pulled from its isolate as the fork's
+   *  frames go out. */
+  forkSource(): ForkConversationSource {
+    const { calls, snapshot } = this;
+
+    return {
+      has: async (messageId) => await (await calls()).forkHas(snapshot(), messageId),
+      plan: async (untilMessageId, artifactDirectory) => await (await calls()).forkPlan(snapshot(), untilMessageId, artifactDirectory),
+      count: async (kind, plan, artifactDirectory) => await (await calls()).forkCount(snapshot(), kind, plan, artifactDirectory),
+      rows: async function* <K extends ForkConversationSection>(kind: K, plan: ForkConversationPlan, artifactDirectory: string): AsyncIterable<ForkRows[K]> {
+        const lines = await (await calls()).forkRows(snapshot(), kind, plan, artifactDirectory);
+
+        yield* jsonLines(lines, forkConversationRowSchema(kind));
+      },
+    };
+  }
+
+  /** A fork of its workspace landing its conversation in its isolate, carried payloads re-rooted under `artifactDirectory`. */
+  forkTarget(artifactDirectory: string): ForkConversationTarget {
+    return {
+      clear: async () => { await (await this.calls()).forkClear(this.snapshot(), artifactDirectory); },
+      stage: async (kind, rows) => { await (await this.calls()).forkStage(this.snapshot(), artifactDirectory, kind, rows); },
+      publish: async (cutMessageId) => { await (await this.calls()).forkPublish(this.snapshot(), artifactDirectory, cutMessageId); },
+    };
+  }
 }
 
 export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps> {
@@ -143,48 +204,22 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
     return await relayedAnswer(call(host));
   }
 
+  /**
+   * The agent's port (design v2 §3): its workspace's host, which the agent holds across its calls so each crosses once.
+   * A call bound to a turn is fenced there; one that fails lets the port go, and the next call opens it again. Only the
+   * calls whose answers own live capabilities (a session, memory, a program's callbacks) open a host each, below.
+   */
+  async port() { return await this.host(); }
+
   session() { return this.owned((host) => host.session()); }
   stateSession() { return this.owned((host) => host.stateSession()); }
   memory() { return this.owned((host) => host.memory()); }
-  program(turnId: string, ...args: Parameters<Executor['execute']>) { return this.owned((host) => host.program(turnId, ...args)); }
-  traceTurn(turnId: string, event: AgentTrace) { return this.owned((host) => host.traceTurn(turnId, event)); }
-  traceStream(turnId: string, lines: ReadableStream<Uint8Array>) { return this.owned((host) => host.traceStream(turnId, lines)); }
-  resume(turnId: string) { return this.owned((host) => host.resume(turnId)); }
-  guard(turnId: string, ...args: Parameters<MissionBudgetPort['guard']>) { return this.owned((host) => host.guard(turnId, ...args)); }
-  debit(turnId: string, ...args: Parameters<MissionBudgetPort['debit']>) { return this.owned((host) => host.debit(turnId, ...args)); }
-  prepareTurn(turnId: string) { return this.owned((host) => host.prepareTurn(turnId)); }
-  advise(review: AgentReview) { return this.owned((host) => host.advise(review)); }
-  enqueueTurn(input: ProgrammaticTurn) { return this.owned((host) => host.enqueueTurn(input)); }
-  executeTool(call: AgentToolCall) { return this.owned((host) => host.executeTool(call)); }
-  observe(lines: ReadableStream<Uint8Array>) { return this.owned((host) => host.observe(lines)); }
-  paceStep(turnId: string) { return this.owned((host) => host.paceStep(turnId)); }
-  answerMetadata(turnId: string, narration: readonly string[]) { return this.owned((host) => host.answerMetadata(turnId, narration)); }
-  reportModelCall(report: ModelCallReport) { return this.owned((host) => host.reportModelCall(report)); }
-  reportModelOperation(event: ModelOperationEvent) { return this.owned((host) => host.reportModelOperation(event)); }
-  prepareChat(request: ChatTurnRequest) { return this.owned((host) => host.prepareChat(request)); }
-  bindProfile(turnId: string, profile: ResolvedTurnProfile) { return this.owned((host) => host.bindProfile(turnId, profile)); }
-  chatEvent(event: SessionEvent) { return this.owned((host) => host.chatEvent(event)); }
-  turnEnded(event: SessionEvent, figures: AgentFigures) { return this.owned((host) => host.turnEnded(event, figures)); }
-  owedReport(...args: Parameters<AgentWorkspace['owedReport']>) { return this.owned((host) => host.owedReport(...args)); }
-  parentReport(report: Parameters<AgentWorkspace['parentReport']>[0]) { return this.owned((host) => host.parentReport(report)); }
-  autoTitle(subject: string, title: string | null) { return this.owned((host) => host.autoTitle(subject, title)); }
-  turnSettled(settled: HandedOffTurn) { return this.owned((host) => host.turnSettled(settled)); }
-  hireAdvisor(advisor: AdvisorRecoverySnapshot) { return this.owned((host) => host.hireAdvisor(advisor)); }
-  owes(next: number | null, holds: boolean) { return this.owned((host) => host.owes(next, holds)); }
-  birthContext(drainTurnId: string) { return this.owned((host) => host.birthContext(drainTurnId)); }
-  steerSkills(text: string, alreadyActive: readonly string[]) { return this.owned((host) => host.steerSkills(text, alreadyActive)); }
-  getAuth(key: string, opts?: AuthRequest) { return this.owned((host) => host.getAuth(key, opts)); }
-  listCredentials() { return this.owned((host) => host.listCredentials()); }
-  relayDevice(provider: RelayedProvider) { return this.owned((host) => host.relayDevice(provider)); }
-  relayModelCall(deviceId: string, callId: string, request: Request) { return this.owned((host) => host.relayModelCall(deviceId, callId, request)); }
-  cancelModelRelay(callId: string) { return this.owned((host) => host.cancelModelRelay(callId)); }
-  sayToParent(signal: AgentSignal) { return this.owned((host) => host.sayToParent(signal)); }
-  logActivity(lines: readonly AgentTurnActivity[]) { return this.owned((host) => host.logActivity(lines)); }
+  program(bound: TurnBound, ...args: Parameters<Executor['execute']>) { return this.owned((host) => host.program(bound, ...args)); }
 }
 
 const UIChunkSchema = v.custom<UIMessageChunk>((value) => v.is(v.looseObject({ type: v.string() }), value), 'a UI message chunk');
 
-function jsonLines<T>(lines: ReadableStream<Uint8Array>, schema: v.GenericSchema<unknown, T>): ReadableStream<T> {
+export function jsonLines<T>(lines: ReadableStream<Uint8Array>, schema: v.GenericSchema<unknown, T>): ReadableStream<T> {
   const decoder = new TextDecoder();
   let partial = '';
 
@@ -222,7 +257,7 @@ export interface AgentFacetPlacement {
 }
 
 function agentBundle(assets: Fetcher): Effect.Effect<Response, KinuError> {
-  return attempt({ doing: 'fetching the agent bundle', otherwise: 'unavailable' }, () => assets.fetch(new URL(AGENT_BUNDLE_PATH, 'https://assets.invalid')))
+  return attempt({ doing: 'fetching the agent bundle', otherwise: 'unavailable' }, () => assets.fetch(new URL(AGENT_BUNDLE_PATH, `https://${ASSETS_HOSTS.agentBundle}`)))
     .pipe(Effect.flatMap((response) => {
       const type = response.headers.get('content-type') ?? '';
 
@@ -230,7 +265,7 @@ function agentBundle(assets: Fetcher): Effect.Effect<Response, KinuError> {
         ? Effect.succeed(response)
         : Effect.fail(new KinuError(
           'unavailable', `The agent bundle is missing from this deployment (${AGENT_BUNDLE_PATH} answered ${response.status} ${type}). `
-            + 'Under `vite dev` the ASSETS binding serves only HTML, so agent turns need a deployed Worker.',
+            + 'Under `vite dev` the dev server refuses a host vite.config.ts does not admit (src/assets-hosts.ts).',
         ));
     }));
 }
@@ -239,7 +274,7 @@ const CompatibilitySchema = v.object({ compatibilityDate: v.string(), compatibil
 
 function agentCompatibility(assets: Fetcher) {
   return attempt({ doing: 'reading deployment compatibility', otherwise: 'unavailable' }, async () => {
-    const response = await assets.fetch(new URL(`${AGENT_BUNDLE_DIRECTORY}/compatibility.json`, 'https://assets.invalid'));
+    const response = await assets.fetch(new URL(`${AGENT_BUNDLE_DIRECTORY}/compatibility.json`, `https://${ASSETS_HOSTS.agentBundle}`));
 
     return v.parse(CompatibilitySchema, await response.json());
   });

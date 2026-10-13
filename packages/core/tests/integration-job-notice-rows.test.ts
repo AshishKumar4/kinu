@@ -4,8 +4,7 @@ import { describe, test, expect } from 'bun:test';
 import type { Database } from 'bun:sqlite';
 import { BackgroundJobRunner, backgroundJobWakeTrigger } from '../src/jobs/runner';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store';
-import { Inbox } from '../src/orchestrator/inbox';
-import { EventLog, initEventsHubTables } from '../src/events/hub/index';
+import { initEventsHubTables } from '../src/events/hub/index';
 import { getChatHistoryPage } from '../src/read-models/status';
 import { SessionHistory } from '../src/session/history';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
@@ -14,7 +13,7 @@ import type { BackendHost } from '../src/types/backend-host';
 import type { Schedule } from '../src/types/primitives';
 import { createTestWorkspace, createWorkspaceBundle, makeSql, makeSqlExec } from './helpers';
 import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
-import { seedTranscriptEntry, createTestActors } from '@kinu.run/test-utils';
+import { hostDeliveries, seedTranscriptEntry, createTestActors } from '@kinu.run/test-utils';
 
 const JOB = 'bgjob-y2vlvl1wbli9gan6sh78a';
 
@@ -62,9 +61,7 @@ function activation(db: Database) {
   const runner = new BackgroundJobRunner({
     store: new BackgroundJobStore(sql, openWorkspaceMainActor(sql)),
     fiber,
-    inbox: new Inbox(host),
-    eventLog: new EventLog(makeSqlExec(db), openWorkspaceMainActor(sql)),
-    scheduleDrain: () => {},
+    inbox: hostDeliveries(host).signals,
   });
 
   return { runner, sql };
@@ -173,7 +170,7 @@ describe('a settled background job announces itself once, and not as the owner',
   test('NEGATIVE CONTROL: the same delivery without an announcement identity duplicates', async () => {
     const ws = evictedWorkspace();
     const { host } = chatStore(ws.db);
-    const inbox = new Inbox(host);
+    const inbox = hostDeliveries(host).signals;
 
     for (let start = 0; start < 6; start++) {
       await inbox.send({ kind: 'background_job', text: `Background agents job ${JOB} completed.` });
@@ -189,44 +186,13 @@ describe('a settled background job announces itself once, and not as the owner',
     // `fork_interrupted` (heads/reconcile.ts) is an unkeyed writer; authorship is fixed at the seam.
     const ws = evictedWorkspace();
     const { host } = chatStore(ws.db);
-    await new Inbox(host).send({
+    await hostDeliveries(host).signals.send({
       kind: 'fork_interrupted',
       text: '23 head(s) across 6 fork run(s) were still marked running…',
     });
 
     const history = (await getChatHistoryPage(chatStore(ws.db).transcript)).items;
     expect(history.map((row) => row.role)).toEqual(['system']);
-  });
-
-  test('the wake and its durable retry breadcrumb name the same announcement', async () => {
-    const ws = evictedWorkspace();
-    ws.store.settle(JOB, 0, '"done"', ws.now + 1_000);
-    const sql = makeSql(ws.db);
-
-    // Pre-empting host: the breadcrumb's trigger_id must equal the queued turn's identity.
-    const preempting: BackendHost = {
-      broadcast: () => {},
-      enqueueTurn: async () => ({ status: 'skipped' }),
-      turnInFlight: () => false,
-      setTimer: () => {},
-    };
-
-    const fiber: Schedule['fiber'] = async (_name, fn) => fn({ stash: () => {}, snapshot: null });
-
-    const runner = new BackgroundJobRunner({
-      store: new BackgroundJobStore(sql, openWorkspaceMainActor(sql)),
-      fiber,
-      inbox: new Inbox(preempting),
-      eventLog: new EventLog(makeSqlExec(ws.db), openWorkspaceMainActor(sql)),
-      scheduleDrain: () => {},
-    });
-
-    await runner.wake(JOB);
-    await runner.wake(JOB);
-
-    const events = sql<{ payload: string }>`SELECT payload FROM agent_log WHERE kind = 'event'`;
-    expect(events).toHaveLength(1);
-    expect(events[0].payload).toContain(backgroundJobWakeTrigger(JOB));
   });
 
   test('the entry carries the stamp at rest, and the paged read serves it', async () => {

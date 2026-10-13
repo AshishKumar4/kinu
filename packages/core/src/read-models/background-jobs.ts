@@ -162,22 +162,21 @@ export interface CancelWorkDeps {
 }
 
 /**
- * Stop the displayed turn: abort the LLM request, then its foreground tool calls. Queued steers
- * stay queued. Never calls `jobRunner.cancelRunning()`: detached jobs outlive their turn and
- * stop only through {@link cancelBackgroundJob} by id.
+ * Stop the displayed turn: abort the LLM request, then its foreground tool calls; its unread steers go back to their
+ * composer (design v3 C). Never calls `jobRunner.cancelRunning()`: detached jobs outlive their turn and stop only through
+ * {@link cancelBackgroundJob} by id. The calls counted are those running as the Stop came, whichever step aborts them.
  */
 export async function cancelCurrentWork(deps: CancelWorkDeps): Promise<CancelWorkOutcome> {
+  const running = [...deps.activeToolControllers].filter((controller) => !controller.signal.aborted);
+
   await deps.cancelChats?.();
-  let abortedTools = 0;
 
   for (const controller of deps.activeToolControllers) {
-    if (!controller.signal.aborted) {
-      controller.abort(new Error('cancelled by operator'));
-      abortedTools++;
-    }
-
+    if (!controller.signal.aborted) controller.abort(new Error('cancelled by operator'));
     deps.activeToolControllers.delete(controller);
   }
+
+  const abortedTools = running.length;
 
   // One awaited sweep before one frame; device unavailability is a failed outcome, never a throw.
   const deviceCommands = await deps.stopDeviceCommands?.() ?? [];

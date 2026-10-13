@@ -44,6 +44,23 @@
     "context_id TEXT NOT NULL",
     "PRIMARY KEY(actor_id,context_id)"
   ],
+  "actor_epochs@packages/core/src/orchestrator/actor-claims.ts": [
+    "actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id)",
+    "epoch INTEGER NOT NULL"
+  ],
+  "actor_executions@packages/core/src/subordinates/turn-fence.ts": [
+    "actor_id TEXT NOT NULL REFERENCES workspace_actors(actor_id)",
+    "turn_id TEXT NOT NULL",
+    "run_id TEXT NOT NULL",
+    "epoch INTEGER NOT NULL",
+    "PRIMARY KEY (actor_id, turn_id, run_id)"
+  ],
+  "actor_profile_inputs@packages/core/src/orchestrator/turn-facts.ts": [
+    "actor_id TEXT NOT NULL",
+    "inputs_key TEXT NOT NULL",
+    "inputs_json TEXT NOT NULL",
+    "PRIMARY KEY(actor_id,inputs_key)"
+  ],
   "actor_program_state@packages/core/src/identity/program-state.ts": [
     "actor_id TEXT NOT NULL",
     "key TEXT NOT NULL",
@@ -89,12 +106,14 @@
     "run_id TEXT NOT NULL",
     "epoch INTEGER NOT NULL",
     "work_mode TEXT NOT NULL CHECK(work_mode IN ('plan','build'))",
-    "program_kind TEXT NOT NULL CHECK(program_kind IN (${sqlCheckList(PROGRAM_KINDS)}))",
-    "program_version INTEGER NOT NULL",
+    "phase TEXT NOT NULL CHECK(phase IN ('preparing','admitted'))",
+    "program_kind TEXT CHECK(program_kind IS NULL OR program_kind IN (${sqlCheckList(PROGRAM_KINDS)}))",
+    "program_version INTEGER",
     "program_digest TEXT",
     "program_build TEXT",
     "outcome TEXT CHECK(outcome IS NULL OR outcome IN (${sqlCheckList(CLAIM_OUTCOMES)}))",
     "claimed_at INTEGER NOT NULL",
+    "withdrawn_through INTEGER NOT NULL DEFAULT 0",
     "PRIMARY KEY(actor_id,turn_id)"
   ],
   "actor_turn_cuts@packages/core/src/orchestrator/actor-claims.ts": [
@@ -108,12 +127,38 @@
     "provider_cuts INTEGER NOT NULL",
     "PRIMARY KEY(actor_id,turn_id)"
   ],
+  "actor_turn_facts@packages/core/src/orchestrator/turn-facts.ts": [
+    "actor_id TEXT NOT NULL",
+    "turn_id TEXT NOT NULL",
+    "run_id TEXT NOT NULL",
+    "facts_json TEXT",
+    "profile_json TEXT",
+    "inputs_key TEXT",
+    "PRIMARY KEY(actor_id,turn_id,run_id)"
+  ],
+  "actor_turn_fence@packages/core/src/subordinates/turn-fence.ts": [
+    "actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id)",
+    "seq INTEGER NOT NULL",
+    "turn_id TEXT NOT NULL",
+    "run_id TEXT NOT NULL",
+    "ended_at INTEGER",
+    "facts_json TEXT",
+    "cancelled_at INTEGER"
+  ],
   "agent_data_tables@packages/core/src/tools/db-codemode.ts": [
     "name TEXT PRIMARY KEY",
     "scope TEXT NOT NULL CHECK(scope IN ('actor','workspace'))",
     "columns TEXT NOT NULL",
     "created_by TEXT NOT NULL",
     "created_at INTEGER NOT NULL"
+  ],
+  "agent_deliveries@packages/core/src/subordinates/deliveries.ts": [
+    "seq INTEGER PRIMARY KEY AUTOINCREMENT",
+    "actor_id TEXT NOT NULL",
+    "id TEXT NOT NULL",
+    "input_json TEXT NOT NULL",
+    "authorship TEXT NOT NULL CHECK (authorship IN ('owner','hirer'))",
+    "UNIQUE (actor_id, id)"
   ],
   "agent_fact_history@packages/core/src/memory/facts.ts": [
     "actor_id TEXT NOT NULL",
@@ -137,6 +182,11 @@
     "veracity TEXT NOT NULL DEFAULT 'stated'",
     "origin_json TEXT",
     "PRIMARY KEY (actor_id, key)"
+  ],
+  "agent_figure_folds@packages/core/src/read-models/agent-figures.ts": [
+    "actor_id TEXT PRIMARY KEY",
+    "through INTEGER NOT NULL",
+    "totals TEXT NOT NULL"
   ],
   "agent_figures@packages/core/src/read-models/agent-figures.ts": [
     "actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id)",
@@ -167,8 +217,30 @@
     "opened_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, turn_id)"
   ],
-  "agent_owed_work@packages/core/src/subordinates/open-turns.ts": [
-    "actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id)"
+  "agent_report_steers@packages/core/src/subordinates/report-sequence.ts": [
+    "actor_id TEXT NOT NULL REFERENCES workspace_actors(actor_id)",
+    "ord INTEGER NOT NULL",
+    "id TEXT NOT NULL",
+    "text TEXT NOT NULL",
+    "state TEXT NOT NULL CHECK (state IN ('queued', 'landed'))",
+    "at_step INTEGER",
+    "PRIMARY KEY (actor_id, ord)"
+  ],
+  "agent_reports@packages/core/src/subordinates/report-sequence.ts": [
+    "actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id)",
+    "seq INTEGER NOT NULL",
+    "standing_json TEXT NOT NULL",
+    "holds INTEGER NOT NULL CHECK (holds IN (0, 1))"
+  ],
+  "agent_sequence@packages/core/src/subordinates/report-sequence.ts": [
+    "actor_id TEXT PRIMARY KEY",
+    "seq INTEGER NOT NULL"
+  ],
+  "agent_stops@packages/core/src/subordinates/deliveries.ts": [
+    "actor_id TEXT PRIMARY KEY",
+    "generation INTEGER NOT NULL",
+    "retired INTEGER NOT NULL DEFAULT 0",
+    "cutoff INTEGER"
   ],
   "agent_tasks@packages/core/src/tools/task-store.ts": [
     "actor_id TEXT NOT NULL",
@@ -187,7 +259,6 @@
   "agent_turn_reports@packages/core/src/subordinates/turn-reports.ts": [
     "actor_id TEXT NOT NULL",
     "turn_id TEXT NOT NULL",
-    "spoke INTEGER NOT NULL",
     "settled INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, turn_id)"
   ],
@@ -309,6 +380,16 @@
     "model_id TEXT",
     "retention TEXT",
     "body TEXT"
+  ],
+  "change_notes_outbox@packages/core/src/read-models/change-notes.ts": [
+    "seq INTEGER PRIMARY KEY AUTOINCREMENT",
+    "actor_id TEXT NOT NULL",
+    "id TEXT NOT NULL",
+    "source TEXT NOT NULL",
+    "notes_json TEXT NOT NULL",
+    "text TEXT NOT NULL",
+    "metadata_json TEXT NOT NULL",
+    "UNIQUE (actor_id, id)"
   ],
   "change_notes@packages/core/src/read-models/change-notes.ts": [
     "actor_id TEXT NOT NULL",
@@ -858,6 +939,14 @@
     "corroborated_at INTEGER",
     "PRIMARY KEY (actor_id, id)"
   ],
+  "input_marks@packages/core/src/orchestrator/inbox.ts": [
+    "actor_id TEXT NOT NULL",
+    "producer TEXT NOT NULL CHECK (producer IN ('workspace','self'))",
+    "taken_through INTEGER NOT NULL DEFAULT 0",
+    "cutoff INTEGER NOT NULL DEFAULT 0",
+    "applied_json TEXT",
+    "PRIMARY KEY (actor_id, producer)"
+  ],
   "instruction_approvals@packages/core/src/safety/instruction-trust.ts": [
     "actor_id TEXT NOT NULL",
     "scope TEXT NOT NULL",
@@ -945,9 +1034,12 @@
     "opened_at TEXT NOT NULL",
     "PRIMARY KEY (actor_id, run_id)"
   ],
-  "operator_requests@packages/core/src/events/recorder.ts": [
-    "actor_id TEXT PRIMARY KEY",
-    "text TEXT NOT NULL"
+  "opened_turns@packages/core/src/evolution/session-window.ts": [
+    "actor_id TEXT NOT NULL",
+    "turn_id TEXT NOT NULL",
+    "review_id TEXT",
+    "followup TEXT",
+    "PRIMARY KEY (actor_id, turn_id)"
   ],
   "owner_questions@packages/core/src/plans/owner-questions.ts": [
     "actor_id TEXT NOT NULL",
@@ -1003,6 +1095,7 @@
     "handoff_attempt INTEGER NOT NULL DEFAULT 0 CHECK (handoff_attempt >= 0)",
     "created_at INTEGER NOT NULL",
     "updated_at INTEGER NOT NULL",
+    "writes INTEGER NOT NULL DEFAULT 1",
     "PRIMARY KEY (actor_id, id, revision)"
   ],
   "proposed_tasks@packages/core/src/curriculum/proposer.ts": [
@@ -1015,6 +1108,15 @@
     "proposed_at INTEGER NOT NULL",
     "status TEXT NOT NULL DEFAULT 'pending'",
     "PRIMARY KEY (actor_id, id)"
+  ],
+  "queued_turns@packages/core/src/orchestrator/inbox.ts": [
+    "seq INTEGER PRIMARY KEY AUTOINCREMENT",
+    "actor_id TEXT NOT NULL",
+    "id TEXT NOT NULL",
+    "text TEXT NOT NULL",
+    "metadata_json TEXT",
+    "yields INTEGER NOT NULL DEFAULT 0",
+    "UNIQUE (actor_id, id)"
   ],
   "refinement_lane_holds@packages/core/src/evolution/refinement.ts": [
     "actor_id TEXT PRIMARY KEY",
@@ -1251,7 +1353,6 @@
     "message_id TEXT NOT NULL",
     "part_no INTEGER NOT NULL",
     "segment INTEGER NOT NULL",
-    "kind TEXT NOT NULL",
     "stream_order INTEGER NOT NULL",
     "descriptor_json TEXT",
     "descriptor_path TEXT",
@@ -1291,10 +1392,12 @@
   "tool_effect_claims@packages/core/src/tools/effect-claim.ts": [
     "actor_id TEXT NOT NULL",
     "turn_id TEXT NOT NULL",
+    "run_id TEXT NOT NULL",
     "normalized_call_id TEXT NOT NULL",
     "call_digest TEXT NOT NULL",
     "result_json TEXT",
-    "PRIMARY KEY (actor_id, turn_id, normalized_call_id, call_digest)"
+    "status TEXT NOT NULL DEFAULT 'started' CHECK (status IN ('started', 'settled', 'indeterminate', 'remote'))",
+    "PRIMARY KEY (actor_id, turn_id, run_id, normalized_call_id, call_digest)"
   ],
   "tool_lessons@packages/core/src/evolution/struggles.ts": [
     "actor_id TEXT NOT NULL",
@@ -1335,6 +1438,12 @@
     "last_fire_at INTEGER",
     "fire_count INTEGER NOT NULL DEFAULT 0",
     "PRIMARY KEY (actor_id, id)"
+  ],
+  "turn_branches@packages/core/src/orchestrator/turn-facts.ts": [
+    "actor_id TEXT NOT NULL",
+    "turn_id TEXT NOT NULL",
+    "head_id TEXT NOT NULL",
+    "PRIMARY KEY(actor_id,turn_id,head_id)"
   ],
   "turn_craft_usage@packages/cf-backend/src/orchestrator.ts": [
     "actor_id TEXT NOT NULL",
@@ -1511,11 +1620,6 @@
     "card TEXT NOT NULL",
     "PRIMARY KEY (owner_user_id, workspace, share_id)"
   ],
-  "user_unrevoked_grants@packages/core/src/state/user-schema.ts": [
-    "key TEXT PRIMARY KEY",
-    "reasons_json TEXT NOT NULL",
-    "recorded_at INTEGER NOT NULL"
-  ],
   "user_workspaces@packages/core/src/state/user-schema.ts": [
     "name TEXT PRIMARY KEY",
     "display_name TEXT NOT NULL",
@@ -1562,10 +1666,7 @@
     "name TEXT NOT NULL",
     "storage_key TEXT NOT NULL",
     "origin TEXT NOT NULL CHECK (origin IN ('system','user','agent','swarm','evolution'))",
-    "tab INTEGER NOT NULL CHECK (tab IN (0,1))",
-    "input INTEGER NOT NULL CHECK (input IN (0,1))",
     "lifetime TEXT NOT NULL CHECK (lifetime IN ('durable','task'))",
-    "evolves INTEGER NOT NULL CHECK (evolves IN (0,1))",
     "created_at INTEGER NOT NULL",
     "creation_id TEXT NOT NULL",
     "retiring_at INTEGER",
@@ -1573,17 +1674,7 @@
     "UNIQUE (parent_actor_id, creation_id)",
     "UNIQUE (parent_actor_id, storage_key)",
     "CHECK ((origin = 'system') = (parent_actor_id IS NULL))",
-    "CHECK (evolves = 0 OR origin = 'system')",
-    "CHECK (tab = 0 OR origin IN ('system','user'))",
-    "CHECK (origin NOT IN ('swarm','evolution') OR (input = 0 AND lifetime = 'task'))",
-    "CHECK (origin IN ('swarm','evolution') OR input = 1)"
-  ],
-  "workspace_capability_reconcile@packages/core/src/safety/workspace-capability.ts": [
-    "workspace_name TEXT PRIMARY KEY",
-    "token_hash TEXT NOT NULL",
-    "attempts INTEGER NOT NULL DEFAULT 1",
-    "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
-    "updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)"
+    "CHECK (origin IN ('system','agent') OR lifetime = (CASE origin WHEN 'user' THEN 'durable' ELSE 'task' END))"
   ],
   "workspace_capability_tokens@packages/core/src/safety/workspace-capability.ts": [
     "workspace_name TEXT PRIMARY KEY",

@@ -48,7 +48,7 @@ function actorTools(rt: ActorToolsetDeps['rt'], deps: Pick<ActorToolsetDeps, 'co
   return buildActorTools({
     rt,
     conversations: conversationsFor(rt),
-    effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
+    effectClaims: { sql: rt.storage.sql, actor: rt.actor, execution: () => ({ turnId: 'turn-1', runId: 'run-1' }), durable: () => Promise.resolve() },
     jobs: actorJobsFor(rt),
     ...deps,
   }).turn;

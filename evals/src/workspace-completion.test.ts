@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  BackgroundJobRunner, BackgroundJobStore, Inbox, initBackgroundJobsTable, listBackgroundJobs, silenceBoundMs, waitOn,
+  BackgroundJobRunner, BackgroundJobStore, initBackgroundJobsTable, listBackgroundJobs, silenceBoundMs, waitOn,
   withBackgroundThreshold, type RunEvent,
 } from '@kinu.run/core';
-import { createTestActorsOver, createTestSql, handClock, present, type HandClock } from '@kinu.run/test-utils';
+import { createTestActorsOver, createTestSql, handClock, hostDeliveries, present, type HandClock } from '@kinu.run/test-utils';
 import type { BackendHost } from '../../packages/core/src/types/backend-host';
 import type { PublicAgent, PublicBackgroundJob, PublicSubordinate } from './session';
 import {
@@ -332,7 +332,7 @@ function detachedCommand(hand: HandClock, never: boolean): DetachedCommand {
     setTimer: () => undefined,
   };
 
-  const runner = new BackgroundJobRunner({ store, fiber: (_name, body) => body({ stash: () => undefined, snapshot: null }), inbox: new Inbox(host) });
+  const runner = new BackgroundJobRunner({ store, fiber: (_name, body) => body({ stash: () => undefined, snapshot: null }), inbox: hostDeliveries(host).signals });
   const command = never ? () => new Promise<never>(() => undefined) : () => waitOn(hand, 10 * MINUTE).then(() => 'made');
 
   const lead = withBackgroundThreshold('shell', command, {

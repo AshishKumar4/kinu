@@ -8,18 +8,15 @@ import { initHeadsTables } from '../src/heads/schema';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initMctsSearchTable } from '../src/mcts/search-store';
 import { initSwarmNodeRecords } from '../src/strategy/swarm-resume';
-import { initActorClaimTables } from '../src/orchestrator/actor-claims';
 import { SubordinateRosterStore } from '../src/subordinates/roster';
 import { actorReferenceOf, type ActorHandle } from '../src/identity/actor-handle';
 import type { SubordinateRosterEntry } from '../src/delegation/agents-tool';
-import { readWorkspaceAgents, type PanelAgent } from '../src/read-models/workspace-agents';
+import { readWorkspaceAgents, type ChatReport, type PanelAgent } from '../src/read-models/workspace-agents';
 import { OWNER_STOPPED } from '../src/heads/types';
 import { initRunEventTables, RunEventRecorder } from '../src/events/recorder';
-import { readAgentFigures } from '../src/read-models/agent-figures';
+import { initAgentFiguresTable, readAgentFigures } from '../src/read-models/agent-figures';
 import { EventLog, initEventsHubTables, type EmailPayload } from '../src/events/hub/index';
-import { admitSubordinateTask } from '../src/subordinates/support';
 import { initDeferredApprovalsTable } from '../src/safety/deferred-approval';
-import { initPlanReviewTable } from '../src/plans/review';
 import { initDeviceConsentRequestsTable } from '../src/safety/device-consent';
 
 const EMAIL: EmailPayload = {
@@ -36,9 +33,12 @@ function workspace() {
   initMctsSearchTable(execRaw);
   initHeadsTables(execRaw);
   initSwarmNodeRecords(execRaw);
-  initActorClaimTables(execRaw);
   initEventsHubTables(exec);
   initRunEventTables(execRaw);
+  initAgentFiguresTable(execRaw);
+  // The read model's tables, as the workspace's genesis creates them.
+  initDeferredApprovalsTable(execRaw);
+  initDeviceConsentRequestsTable(execRaw);
   const actors = createTestActors(sql, execRaw);
   new SubordinateRosterStore(exec, actors.main).ensureSchema();
 
@@ -54,14 +54,23 @@ function workspace() {
     return child;
   };
 
-  const read = (queued = false): Promise<PanelAgent[]> => readWorkspaceAgents({
+  /** Each agent's chat as its own isolate last reported it, and the agents running a turn (their wake stands). */
+  const reports = new Map<string, ChatReport>();
+  const running = new Set<string>();
+
+  /** `queued`: the agents whose wake stands, each holding work it has not said it rests from. */
+  const read = (queued: readonly string[] = []): Promise<PanelAgent[]> => readWorkspaceAgents({
     sql, exec, root: actors.main, actors: actors.directory.list({ retired: true }),
-    figures: (actorIds) => readAgentFigures(sql, actorIds), queued,
+    figures: (actorIds) => readAgentFigures(sql, actorIds), queued: (actorId) => queued.includes(actorId) || running.has(actorId),
+    chat: (actorId) => reports.get(actorId) ?? null,
   });
 
-  const openTurn = (actor: ActorHandle): void => {
-    db.query(`INSERT INTO actor_turn_claims (actor_id, turn_id, run_id, epoch, work_mode, program_kind, program_version, outcome, claimed_at)
-      VALUES (?, ?, 'run', 0, 'build', 'builtin', 1, NULL, 1)`).run(actor.actorId, `turn-${actor.name}`);
+  const openTurn = (actor: ActorHandle): void => { running.add(actor.actorId); };
+
+  /** The agent rests, reporting its chat as `report` says. */
+  const rests = (actor: ActorHandle, report: Partial<ChatReport> = {}): void => {
+    running.delete(actor.actorId);
+    reports.set(actor.actorId, { planPending: false, lastFailed: false, ...report });
   };
 
   /** One turn through the real recorder: each step's usage and price, `minutes` of wall clock from its start to its end. */
@@ -79,7 +88,7 @@ function workspace() {
     setSystemTime();
   };
 
-  return { db, exec, main: actors.main, hire, read, openTurn, turn };
+  return { db, exec, main: actors.main, hire, read, openTurn, rests, turn };
 }
 
 const byLabel = <T extends { label: string }>(rows: T[]): T[] => rows.sort((a, b) => a.label.localeCompare(b.label));
@@ -146,33 +155,21 @@ describe('the Agents panel lists every agent in the workspace', () => {
     ]);
   });
 
-  test('an agent is working while it holds an open turn, whatever its roster row last said', async () => {
-    const { db, main, hire, read, openTurn } = workspace();
-    const chatting = hire(main, 'chatting', { origin: 'user', status: 'idle' });
-    openTurn(chatting);
-
-    expect((await read()).find((agent) => agent.label === 'chatting')?.activity).toBe('working');
-
-    db.query("UPDATE actor_turn_claims SET outcome = 'indeterminate' WHERE turn_id = 'turn-chatting'").run();
-    expect((await read()).find((agent) => agent.label === 'chatting')?.activity).toBe('idle');
-  });
-
   // Staging f75f06932, 2026-10-01: the eval's settle called five trials quiet on two idle reads a second apart, while
   // each owed a turn it had not claimed (a helper's admitted task, its report to the lead, a job's wake). From the
   // moment a turn is owed, the agent it is owed to reads working.
   test('an agent owed a turn it has not claimed reads working', async () => {
     const { exec, main, hire, read } = workspace();
     const helper = hire(main, 'counter-1', { lifetime: 'task' });
-    const activity = async (queued = false) => Object.fromEntries((await read(queued)).map((agent) => [agent.label, agent.activity]));
+    const activity = async (queued: readonly string[] = []) => Object.fromEntries((await read(queued)).map((agent) => [agent.label, agent.activity]));
 
     expect(await activity()).toEqual({ Main: 'idle', 'counter-1': 'idle' });
 
     // The lead's chat queued a turn (a job's wake) it has not claimed.
-    expect((await activity(true)).Main).toBe('working');
+    expect((await activity([main.actorId])).Main).toBe('working');
 
-    // The helper was handed a task its drain has not run.
-    admitSubordinateTask(new EventLog(exec, helper), { fromWorkspace: helper.workspaceId, kind: 'task', body: 'Count the files.', mode: 'build', now: Date.now() });
-    expect((await activity())['counter-1']).toBe('working');
+    // The helper was handed a task its turn has not claimed: its wake stands until it says it rests.
+    expect((await activity([helper.actorId]))['counter-1']).toBe('working');
 
     // An email reached the lead, and the drain that takes it has not run.
     new EventLog(exec, main).publish({ descriptor: { ingress: 'email_inbound', variant: 'email', sender_class: 'owner', payload: EMAIL }, now: Date.now() });
@@ -180,30 +177,25 @@ describe('the Agents panel lists every agent in the workspace', () => {
   });
 
   test('a chat that asks the person reads waiting, even mid-turn, and one whose last turn failed reads failed until the next starts', async () => {
-    const { db, main, hire, read, openTurn } = workspace();
+    const { db, main, hire, read, openTurn, rests } = workspace();
     const alice = hire(main, 'alice', { origin: 'user' });
     const scout = hire(main, 'scout', {});
     const activity = async () => Object.fromEntries((await read()).map((agent) => [agent.label, agent.activity]));
 
-    const claim = db.query(`INSERT INTO actor_turn_claims (actor_id, turn_id, run_id, epoch, work_mode, program_kind, program_version, outcome, claimed_at)
-      VALUES (?, ?, 'run', 0, 'build', 'builtin', 1, ?, ?)`);
-
-    initDeferredApprovalsTable(makeExecRaw(db));
-    initPlanReviewTable(makeExecRaw(db));
     openTurn(alice);
     db.query(`INSERT INTO deferred_approvals (actor_id, id, command, reason, status, requested_at) VALUES (?, 'd1', 'rm -rf build', 'deletes files', 'queued', 1)`).run(alice.actorId);
-    db.query(`INSERT INTO plan_reviews (actor_id, id, session_id, revision, content, status, created_at, updated_at) VALUES (?, 'p1', 's', 1, '# Plan', 'pending', 1, 1)`).run(main.actorId);
-    claim.run(scout.actorId, 't1', 'error', 5);
+    rests(main, { planPending: true });
+    rests(scout, { lastFailed: true });
 
     expect(await activity()).toEqual({ Main: 'waiting', alice: 'waiting', scout: 'failed' });
 
     db.query(`UPDATE deferred_approvals SET status = 'approved'`).run();
-    db.query(`UPDATE plan_reviews SET status = 'approved'`).run();
-    claim.run(scout.actorId, 't2', null, 6);
+    rests(main);
+    openTurn(scout);
 
     expect(await activity()).toEqual({ Main: 'idle', alice: 'working', scout: 'working' });
 
-    db.query(`UPDATE actor_turn_claims SET outcome = 'completed' WHERE turn_id = 't2'`).run();
+    rests(scout);
     expect((await activity()).scout).toBe('idle');
   });
 
@@ -211,7 +203,6 @@ describe('the Agents panel lists every agent in the workspace', () => {
     const { db, read } = workspace();
     const main = async () => (await read()).find((agent) => agent.key === 'main')?.activity;
 
-    initDeviceConsentRequestsTable(makeExecRaw(db));
     db.query(`INSERT INTO device_consent_requests (consent_id, device_id, device_label, method, command, workspace_name, created_at, expires_at)
       VALUES ('c1', 'd1', 'laptop', 'exec', 'bun test', 'kiln', ?, ?)`).run(Date.now(), Date.now() + 60_000);
 

@@ -19,11 +19,11 @@ export function initSessionContextTables(exec: RawSqlExec): void {
   exec(`CREATE UNIQUE INDEX IF NOT EXISTS session_message_ingress ON session_messages(actor_id,ingress_id) WHERE ingress_id IS NOT NULL`);
   // `sealAbandoned` names the literal `sealed_at IS NULL` at every admission.
   exec(`CREATE INDEX IF NOT EXISTS session_open_messages ON session_messages(actor_id) WHERE sealed_at IS NULL`);
-  // An open message's parts while its answer streams, deleted when it seals into `content_*`. Long text
-  // continues in the next segment so no row reaches the platform row limit.
+  // An open message's parts while its answer streams, deleted when it seals into `content_*`. Each flushed
+  // window is the part's next segment, so a flush writes only its own text and no row reaches the platform row limit.
   exec(`CREATE TABLE IF NOT EXISTS stream_parts (
     actor_id TEXT NOT NULL, message_id TEXT NOT NULL, part_no INTEGER NOT NULL, segment INTEGER NOT NULL,
-    kind TEXT NOT NULL, stream_order INTEGER NOT NULL,
+    stream_order INTEGER NOT NULL,
     descriptor_json TEXT, descriptor_path TEXT, descriptor_digest TEXT,
     text TEXT NOT NULL DEFAULT '', ended INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY(actor_id,message_id,part_no,segment),

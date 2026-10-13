@@ -9,7 +9,6 @@ export function initTurnReportTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS agent_turn_reports (
     actor_id TEXT NOT NULL,
     turn_id  TEXT NOT NULL,
-    spoke    INTEGER NOT NULL,
     settled  INTEGER NOT NULL,
     PRIMARY KEY (actor_id, turn_id)
   )`);
@@ -24,11 +23,12 @@ export interface ReportedTurn {
 export class TurnReports {
   constructor(private readonly sql: SqlExecutor) {}
 
+  /** A turn that spoke has a row; whether it settled only ever turns on. */
   record(turn: ReportedTurn, reports: SubordinateReportLedger): void {
     if (!reports.spoke) return;
-    void this.sql`INSERT INTO agent_turn_reports (actor_id, turn_id, spoke, settled)
-      VALUES (${turn.actorId}, ${turn.turnId}, 1, ${reports.settled ? 1 : 0})
-      ON CONFLICT(actor_id, turn_id) DO UPDATE SET spoke = 1, settled = MAX(settled, excluded.settled)`;
+    void this.sql`INSERT INTO agent_turn_reports (actor_id, turn_id, settled)
+      VALUES (${turn.actorId}, ${turn.turnId}, ${reports.settled ? 1 : 0})
+      ON CONFLICT(actor_id, turn_id) DO UPDATE SET settled = MAX(settled, excluded.settled)`;
   }
 
   read(turn: ReportedTurn): SubordinateReportLedger {

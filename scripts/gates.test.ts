@@ -537,4 +537,3 @@ describe('native egress constraints — red in every governed direction', () => 
     });
   }
 });
-

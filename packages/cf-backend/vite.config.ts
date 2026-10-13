@@ -14,6 +14,7 @@ import { kinuTheme } from './vite-theme';
 import { slateVendor } from './slate-vendor';
 import { workerLoadCost } from './vite-worker-bundle';
 import { agentBundle } from './vite-agent-bundle';
+import { ASSETS_HOSTS } from './src/assets-hosts';
 import { DEV_PREVIEW_SUFFIX, devPreviewPort, devPreviewTlsDir, devPreviewZone } from './vite-preview-zone';
 
 /** Nimbus loads its runtime artifacts from `env.ASSETS` `/_assets/*`; symlink the pinned package's tree
@@ -137,9 +138,9 @@ export default defineConfig(({ command }) => ({
     tailwindcss(),
     landingPrerender(),
   ],
-  // The zone's requests reach vite with their preview host. Nimbus fetches its staged napi assets from ASSETS under a
-  // fixed synthetic host (@nimbus-sh/worker runtime/staged-source.js); refused, a TS slate cannot build under dev.
-  server: { allowedHosts: [`.${DEV_PREVIEW_SUFFIX}`, "nimbus-internal.invalid"] },
+  // The zone's requests reach vite with their preview host, and the Worker's own ASSETS fetches with theirs: refused,
+  // no agent's turn runs and no TS slate builds under dev.
+  server: { allowedHosts: [`.${DEV_PREVIEW_SUFFIX}`, ...Object.values(ASSETS_HOSTS)] },
   // The fabric outbox imports a stubbed builtin, so it is served as source; the UMD-only highlighter
   // has no `default` export as source, so it is prebundled.
   optimizeDeps: {

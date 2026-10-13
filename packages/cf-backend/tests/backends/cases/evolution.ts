@@ -148,7 +148,7 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
 
       expect(decided).toMatchObject({ ok: true, queued: true, plan: { status: 'changes_requested', handoffAccepted: true } });
 
-      for (const said of ['a-1', 'Which branch?', 'a-2', 'smaller steps']) expect(decided.plan?.feedback).toContain(said);
+      for (const said of ['a-1', 'Which branch?', 'a-2', 'smaller steps']) expect('plan' in decided ? decided.plan?.feedback : null).toContain(said);
 
       // The handoff was accepted: repeating the verdict does not submit a second turn.
       expect(await surface.decidePlanReview(id, revision, 'request_changes', 'smaller steps')).toMatchObject({

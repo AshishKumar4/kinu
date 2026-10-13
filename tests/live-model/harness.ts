@@ -141,7 +141,7 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
     model: () => model,
     reportModelCall: liveModelCallSink(sql, rt.actor),
     // A node's eval as the CLI session builds it.
-    nodeCodemode: (actor) => hostedCodemodeTool(actor, webSearch),
+    nodeCodemode: (actor) => hostedCodemodeTool(actor, webSearch, () => ({ files: new TurnFileLedger(), context: new TurnContextBudget() })),
     webSearch,
     hostNode: () => Promise.reject(new Error(
       'this eval surface builds tools without a session, so it cannot seat a swarm node; '
@@ -174,7 +174,7 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
     codemode: createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), namespaces: actorNamespaces(surface, SURFACE_POLICY.program) }),
     agents,
     // No session stream persists this harness's calls, so none is waited for.
-    effectClaims: { sql, actor: rt.actor, turnId: () => WORKSPACE_RUN_ID, durable: () => Promise.resolve() },
+    effectClaims: { sql, actor: rt.actor, execution: () => ({ turnId: WORKSPACE_RUN_ID, runId: WORKSPACE_RUN_ID }) },
     facts,
     webSearch,
     jobs: {

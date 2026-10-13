@@ -1,10 +1,10 @@
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
-import { afterEach, expect, test } from 'bun:test';
+import { afterEach, expect, setSystemTime, test } from 'bun:test';
 import { accountCredentialKey, asFetchFunction, requestUrl } from '@kinu.run/core';
 import { OPENCODE_GO_CATALOG } from '@kinu.run/test-utils';
 import {
   agentSql, catalogTurn, driveUntil, gatewayWorkspace, hostedMainActor, hostedSubordinateHarness, makeEnv, orchestratorHarness, runDelegatedTask,
-  wakeForDelegatedTask,
+  wakeForDelegatedTask, workspaceMainActor,
 } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun, type StubbedAiBinding } from './helpers/platform-gateway';
@@ -70,9 +70,39 @@ test("a turn an agent's isolate loses to its own reset runs again, the workspace
   await driveUntil(workspace, "the agent's model was never asked", () => asked === 1);
   workspace.agent.harnessResetAgentIsolate(workspace.db.query<{ key: string }, [string]>(
     'SELECT storage_key AS key FROM workspace_actors WHERE actor_id = ?').get(middleId)?.key ?? '');
-  await driveUntil(workspace, 'the lost turn never ran again', () => ended() > 0);
+
+  // Nothing tells the workspace its isolate went: the agent's wake, standing a lap ahead while it owed the task, comes due
+  // and takes the turn up.
+  try {
+    setSystemTime(new Date(Date.now() + 61_000));
+    await workspace.agent.alarm();
+    await driveUntil(workspace, 'the lost turn never ran again', () => ended() > 0);
+  } finally {
+    setSystemTime();
+  }
 
   expect(asked).toBe(2);
+});
+
+test("an agent's isolate adopted after its reset is built on the program its turns read, with the same tools", async () => {
+  const gateway = stubAiBinding((run) => chatCompletion(run, 'Noted.'));
+  const workspace = gatewayWorkspace(gateway);
+  const main = workspaceMainActor(workspace.db).actorId;
+  const offered = (index: number): readonly string[] => requestOf(gateway.runs[index] ?? gateway.runs[0]).tools;
+
+  await catalogTurn(workspace.agent, 'First.');
+  const host = await workspace.agent.agentWorkspace(main);
+  // The program a turn's preparation reads, and the one the adoption now asks for alone.
+  const prepared = await host.prepareChat({ turnId: null, mode: 'build', userText: '', parentDriven: false, awaitsReply: false });
+
+  expect(await host.scaffold()).toEqual(prepared.scaffold);
+
+  const before = gateway.runs.length;
+  workspace.agent.harnessResetAgentIsolate(workspace.agent.agentOf(main).storageKey);
+  await catalogTurn(workspace.agent, 'Second.');
+
+  expect(gateway.runs.length).toBeGreaterThan(before);
+  expect([...offered(before)].sort()).toEqual([...offered(0)].sort());
 });
 
 const originalFetch = globalThis.fetch;
@@ -127,7 +157,14 @@ test("a hired agent's model call to OpenCode Go names the agent's own conversati
 
   globalThis.fetch = asFetchFunction(async (input, init) => {
     if (requestUrl(input).includes('models.dev')) return Response.json(OPENCODE_GO_CATALOG);
-    sessions.push(new Headers(init?.headers).get('x-opencode-session'));
+
+    // The hire's own turn: its calls to OpenCode Go carry its brief and offer its tools. A title's offers none; the turn its
+    // hirer opens on hearing the hire failed carries the report, and the hirer's own model may not be this one at all.
+    const body = typeof init?.body === 'string' ? init.body : '';
+
+    if (body.includes(MODEL.slice('opencode-go/'.length)) && body.includes('"tools"') && body.includes('Write it.') && !body.includes('[subordinate_report]')) {
+      sessions.push(new Headers(init?.headers).get('x-opencode-session'));
+    }
 
     return new Response('refused by the test', { status: 400 });
   });

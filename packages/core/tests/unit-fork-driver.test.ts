@@ -8,7 +8,7 @@ import {
 } from '../src/index';
 import { createTestWorkspace, type TestWorkspace } from './helpers';
 import { seedForkSource, SOURCE_ARTIFACTS, TARGET_ARTIFACTS } from './helpers/fork-conversation';
-import { streamFork } from './helpers/fork-stream';
+import { streamFork, conversationIn } from './helpers/fork-stream';
 import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
 import type { ActorHandle } from '../src/identity/actor-handle';
 
@@ -31,6 +31,7 @@ async function sourceWorkspace(): Promise<ForkSourceFixture> {
 function deps(source: ForkSourceFixture, transport: ForkTransport, busy = false): ForkDriverDeps {
   return {
     sql: source.workspace.sql,
+    conversation: conversationIn(source.workspace.sql),
     actor: source.actor,
     vfs: source.workspace.forkSource,
     artifactDirectory: SOURCE_ARTIFACTS,

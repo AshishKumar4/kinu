@@ -585,6 +585,8 @@ async function planCommand({ client, command, arg, rest }: SlashContext): Promis
       feedback || undefined,
     );
 
+    if ('owed' in decided) return { kind: 'text', text: 'Your decision is on its way: the agent takes it when it next wakes.' };
+
     if (!decided.ok) return { kind: 'text', text: `The plan was not decided: ${decided.error}` };
 
     const done = sub === 'approve'

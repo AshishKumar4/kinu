@@ -16,7 +16,6 @@ export {
   reviewFeedbackText,
   formatPlanWithLineNumbers,
   initPlanReviewTable,
-  listPendingPlanReviews,
   workModeUnderReview,
   planHandoffStillOwed,
   approvedTaskPlan,

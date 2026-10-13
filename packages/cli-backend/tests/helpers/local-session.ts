@@ -116,7 +116,7 @@ export const agentSelfRest = {
   listScaffoldVersions: async () => [],
   getQuality: async () => [],
   budget: new MissionGovernor(governorDeps()),
-  armCompactNow: () => {},
+  armCompactNow: async () => {},
 };
 
 export const DUMMY_LLM: LLMProviderConfig = {

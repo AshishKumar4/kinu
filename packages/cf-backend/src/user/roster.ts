@@ -110,13 +110,13 @@ function decodeRosterCursor(cursor?: string | null): Effect.Effect<{ v: number; 
   });
 }
 
-/** A tile a later schema cannot read shows as none until the workspace pushes again. */
+/** No tile is unreported; a stored tile must have the current shape. */
 function rosterEntry(row: RosterRow): RosterEntry {
-  const stored = row.overview === null ? null : v.safeParse(WorkspaceOverviewSchema, JSON.parse(row.overview));
+  const stored = row.overview === null ? null : v.parse(WorkspaceOverviewSchema, JSON.parse(row.overview));
 
   return {
     name: row.name, displayName: row.displayName, createdAt: row.createdAt, lastVisited: row.lastVisited,
-    overview: stored?.success === true ? { ...stored.output, decisionsWaiting: row.decisions } : null,
+    overview: stored === null ? null : { ...stored, decisionsWaiting: row.decisions },
     decisions: row.decisions,
     logo: row.logo,
   };
@@ -136,14 +136,14 @@ function searchClause(query: string) {
 
 const TileRowSchema = v.object({ name: v.string(), overview: v.string() });
 
-/** An unreadable tile lists nothing until it pushes again. */
+/** Library cards read only current stored tiles; an invalid tile is not an empty library. */
 export function libraryTiles(sql: SqlExec): Array<{ workspace: string; overview: WorkspaceOverview }> {
   return sql.exec(`SELECT w.name, o.overview FROM user_workspaces w JOIN workspace_overviews o ON o.name = w.name
-    WHERE ${ACTIVE} ORDER BY w.last_visited DESC, w.name`).toArray().flatMap((raw) => {
+    WHERE ${ACTIVE} ORDER BY w.last_visited DESC, w.name`).toArray().map((raw) => {
     const row = v.parse(TileRowSchema, raw);
-    const tile = v.safeParse(WorkspaceOverviewSchema, JSON.parse(row.overview));
+    const tile = v.parse(WorkspaceOverviewSchema, JSON.parse(row.overview));
 
-    return tile.success ? [{ workspace: row.name, overview: tile.output }] : [];
+    return { workspace: row.name, overview: tile };
   });
 }
 

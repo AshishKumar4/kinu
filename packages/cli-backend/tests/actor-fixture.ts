@@ -1,16 +1,17 @@
 import type { Database } from 'bun:sqlite';
+import { withHostDeliveries } from '@kinu.run/test-utils';
 import {
   ActorSession, EventLog, EvolutionEngine, historyTurnPairs, WorkspaceActorDirectory,
   BUILTIN_PROFILE_CATALOG, actorReferenceOf, createAgentStores, profileCatalogDigest,
   collectDynamicContext, createActorHost, defaultLoopOrigin, explorationActorKey,
-  captureOperationProfile, initRunEventTables, conversationKey, runHeadInference, vfsTurnSkills,
+  captureOperationProfile, initRunEventTables, conversationKey, runHeadInference, preparedHeadRun, vfsTurnSkills,
   type ActorHost, type AgentRuntime, type BroadcastEvent, type HostedActor, type HostedNodeSeat,
   type ActorHandle, type HeadInput, type NodeIdentity, type ProfileAuthorityInputs, type RunTurnSources,
   type SqlExec, type SqlValue, type WriteObserver,
   DEFAULT_WORKERS_AI_MODEL_SPEC, WORKSPACE_ROOT, actorHomeName, actorScaffoldPath } from '@kinu.run/core';
 import { bindLocalActor, localActorDirectory, registerLocalActor, retireLocalActor } from '@kinu.run/core';
 import { buildLocalActorRuntime, cleanupFacetScratch, makeSqlExec, type CLIRuntime } from '../src/runtime';
-import { modelWindow, type HeadInferenceDeps, type HeadSeat } from '@kinu.run/core';
+import { modelWindow, type HeadInferenceDeps, type HeadSeat, type RunInference } from '@kinu.run/core';
 import type { LanguageModel } from 'ai';
 
 /** A run's compaction trigger, kept in memory: no fold runs here, but a run measures and arms as every turn does. */
@@ -21,12 +22,12 @@ export function fixtureCompaction(key = 'fixture-run'): HeadInferenceDeps['compa
   return {
     key,
     state: {
-      loadPromptTokens: (sessionKey, historyLength) => {
+      takeTrigger: (sessionKey, historyLength) => {
         const saved = tokens.get(sessionKey);
+        const trigger = armed.delete(sessionKey) ? 'force' : 'auto';
 
-        return saved !== undefined && saved.historyLength === historyLength ? saved.tokens : null;
+        return saved !== undefined && saved.historyLength === historyLength ? { trigger, providerReportedTokens: saved.tokens } : { trigger };
       },
-      takeArmedCompaction: (sessionKey) => armed.delete(sessionKey),
       savePromptTokens: (sessionKey, saved, historyLength) => { tokens.set(sessionKey, { tokens: saved, historyLength }); },
       armCompaction: (sessionKey) => { armed.add(sessionKey); },
     },
@@ -122,7 +123,7 @@ export function localTestActorHost(
     installedBuild: null,
     runtimeFor: (bound, seat) => buildLocalActorRuntime(parent, bound, seat.kind === 'node' ? 'node' : 'head', seat.writes ?? writes?.get(bound.reference.actorId)),
     loopFor: (bound) => ({ origin: defaultLoopOrigin(bound.record.origin), parent }),
-    orchestrationFor: (bound) => ({
+    orchestrationFor: (bound) => (withHostDeliveries({
       host: {
         broadcast: (event) => { broadcasts.push(event); },
         enqueueTurn: async () => ({ status: 'skipped' }),
@@ -131,7 +132,7 @@ export function localTestActorHost(
       },
       engine: new EvolutionEngine(bound.runtime, historyTurnPairs(bound.stores.history), { enabled: false }),
       eventLog: new EventLog(exec, bound.handle),
-    }),
+    })),
     contextEvents: (bound) => bound.stores.eventRecorder,
   });
 }
@@ -166,10 +167,11 @@ export function headSeatFactory(
       actor,
       runId,
       sources: fixtureRunSources(actor, () => authority.inputs(), model, runId),
-      infer: (headInput, inference) => runHeadInference(headInput, { ...inference, compaction }),
+      infer: (headInput, inference) => runHeadInference(preparedHeadRun(headInput, { ...inference, actor, compaction })),
       conversations: actor.stores.conversationSearch,
       // No workspace routes a fixture seat's jobs: nothing here cancels or recovers them.
       jobs: { ports: { jobOutput: () => {} }, attach: () => () => {} },
+      receipts: fixtureReceipts(actor),
       release: async () => {
         host.release(binding.reference);
         writes?.delete(binding.reference.actorId);
@@ -217,7 +219,7 @@ export function headLoopSeams(
   const session: ActorSession = new ActorSession({ history: stores.history, runtime,
   claims: stores.claims,
   installedBuild: null,
-  orchestration: {
+  orchestration: withHostDeliveries({
     host: {
       broadcast: () => {},
       enqueueTurn: async () => ({ status: 'skipped' }),
@@ -226,7 +228,7 @@ export function headLoopSeams(
     },
     engine: new EvolutionEngine(rt, historyTurnPairs(stores.history), { enabled: false }),
     eventLog: new EventLog(execOver(rt), handle),
-  }, });
+  }), });
 
   const inputs: ProfileAuthorityInputs = {
     envelope: {
@@ -256,11 +258,21 @@ export function headLoopSeams(
     runId,
     sources: fixtureRunSources(actor, async () => inputs, model, runId),
     compaction,
-    infer: (headInput: HeadInput, inference: Omit<HeadInferenceDeps, 'compaction'>) => runHeadInference(headInput, { ...inference, compaction }),
+    infer: (headInput: HeadInput, inference: RunInference) => runHeadInference(preparedHeadRun(headInput, { ...inference, actor, compaction })),
     conversations: stores.conversationSearch,
     // No workspace routes a fixture seat's jobs: nothing here cancels or recovers them.
     jobs: { ports: { jobOutput: () => {} }, attach: () => () => {} },
+    receipts: fixtureReceipts(actor),
   } satisfies Omit<HeadSeat, 'release'> & Pick<HeadInferenceDeps, 'compaction'>;
+}
+
+/** A run actor's calls keep their receipts in its own store, as they run in its session. */
+function fixtureReceipts(actor: HostedActor): HostedNodeSeat['receipts'] {
+  return {
+    sql: actor.runtime.storage.sql, actor: actor.handle,
+    durable: (callId, signal) => actor.session.durableCall(callId, signal),
+    transaction: (body) => actor.runtime.storage.transactionSync(body),
+  };
 }
 
 /** Per-node seat factory: each call registers its own node actor, so wave children never share a claim ledger. */
@@ -275,7 +287,7 @@ export function nodeSeatFactory(
     const seams = headLoopSeams(rt, { runId, handle, runtime, model });
 
     return {
-      actor: seams.actor, runId: seams.runId, sources: seams.sources, infer: seams.infer, conversations: seams.conversations, jobs: seams.jobs,
+      actor: seams.actor, runId: seams.runId, sources: seams.sources, infer: seams.infer, conversations: seams.conversations, jobs: seams.jobs, receipts: seams.receipts,
     };
   };
 }

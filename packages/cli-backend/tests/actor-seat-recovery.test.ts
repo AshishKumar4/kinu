@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { HeadCapture, REAL_CLOCK, sha256Hex, type HeadInput, type HostedActor } from '@kinu.run/core';
-import { scratchDir, scriptedTurnModel, workspaceDatabase } from '@kinu.run/test-utils';
+import { scratchDir, scriptedTurnModel, workspaceDatabase, admitTestClaim } from '@kinu.run/test-utils';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { workspaceHome, type CLIRuntime } from '../src/runtime';
 import { LocalAgentHost, type LocalAgentHostOptions } from '../src/agent-host/host';
@@ -57,7 +57,7 @@ async function interrupted(actor: HostedActor): Promise<void> {
   const version = await actor.runtime.identity.scaffold.version();
   const source = await actor.runtime.identity.scaffold.read();
 
-  await actor.stores.claims.admit({ runId: 'retained-run', turnId: 'retained-turn', workMode: 'build', context,
+  await admitTestClaim(actor.stores.claims, { runId: 'retained-run', turnId: 'retained-turn', workMode: 'build', context,
     program: { kind: version === 0 ? 'builtin' : 'scaffold', version, digest: version === 0 ? null : sha256Hex(source), build: null } });
 }
 

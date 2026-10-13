@@ -24,6 +24,20 @@ export function effectAlreadyDone(
     WHERE actor_id = ${actor.actorId} AND scope = ${scope} AND key = ${key} LIMIT 1`.length > 0;
 }
 
+/** Which of `keys` this actor has recorded under `scope`: one index seek per key, in one statement. */
+export function effectsAlreadyDone(
+  sql: SqlExecutor, actor: ActorHandle, scope: string, keys: readonly string[],
+): ReadonlySet<string> {
+  actor.assertCurrent();
+
+  if (keys.length === 0) return new Set();
+
+  return new Set(sql<{ key: string }>`
+    SELECT key FROM effect_tombstones
+    WHERE actor_id = ${actor.actorId} AND scope = ${scope} AND key IN (SELECT value FROM json_each(${JSON.stringify(keys)}))`
+    .map((row) => row.key));
+}
+
 export interface EffectKey {
   readonly scope: string;
   readonly key: string;

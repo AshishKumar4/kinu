@@ -14,7 +14,6 @@ import { configureRemoteAiFixture } from '../helpers/remote-ai-profile';
 import { hostedActorPlacement } from '../../src/actor-hosting';
 import { ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
 import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
-import { AgentWorkspaceRPC } from '../../src/agent-facets';
 import { SlateBinding } from '../../src/slates/bindings';
 import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 import { createRuntimeExecutor, jobContextAnswers } from '../../src/codemode-sandbox';
@@ -338,34 +337,6 @@ export class AgentFacetProbeRoot extends DurableObject<ProbeRootEnv> {
   }
 
   // Each relay is built here, in this isolate, so the answer read is the one it hands the platform.
-  async agentWorkspaceAnswer(workspace: string, agent: string): Promise<RelayedAnswer<Readonly<Record<string, string>> | null>> {
-    const root = await this.target(workspace);
-    const owner = await ownerCaller(this.env);
-    const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(PROBE_OWNER_ID));
-    await userDO.setCredential(owner, 'openai-compat.default', {
-      kind: 'openai-compat', baseURL: hireModelsBaseUrl(workspace), apiKey: 'relay-probe-key',
-    });
-    const props = { workspace: this.env.OrchestratorAgent.idFromName(workspace).toString(), actorId: await root.agentFor(agent) };
-    const relay = new AgentWorkspaceRPC(Object.create(this.ctx, { props: { value: props } }), this.env);
-    const auth = await relay.getAuth('openai-compat.default');
-
-    return { answer: auth === null ? null : { ...auth.headers }, carriesDisposer: auth !== null && Symbol.dispose in auth };
-  }
-
-  async agentWorkspaceListing(workspace: string, agent: string): Promise<RelayedAnswer<readonly { readonly key: string; readonly kind: string }[]>> {
-    const root = await this.target(workspace);
-    const owner = await ownerCaller(this.env);
-    const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(PROBE_OWNER_ID));
-    await userDO.setCredential(owner, 'openai-compat.default', {
-      kind: 'openai-compat', baseURL: hireModelsBaseUrl(workspace), apiKey: 'relay-probe-key',
-    });
-    const props = { workspace: this.env.OrchestratorAgent.idFromName(workspace).toString(), actorId: await root.agentFor(agent) };
-    const relay = new AgentWorkspaceRPC(Object.create(this.ctx, { props: { value: props } }), this.env);
-    const listing = await relay.listCredentials();
-
-    return { answer: listing.map(({ key, kind }) => ({ key, kind })), carriesDisposer: Symbol.dispose in listing };
-  }
-
   async slateBindingAnswer(workspace: string): Promise<RelayedAnswer<SlateSurfaceResult>> {
     await this.target(workspace);
     const props = { workspace, id: 'relay-probe', name: SLATE_STORAGE_BINDING, caller: ROOT_SLATE_CALLER };

@@ -4,7 +4,7 @@ import type { VFS as CoreVFS } from '@nimbus-sh/core/vfs/vfs.js';
  * workspace; VFS, shell, memory and craft stores all live in the owning actor's `ctx.storage.sql`.
  */
 
-import type { AgentRuntime, ActorHandle, LLM, Schedule, Identity, SqlExecutor, SqlValue, RawSqlExec, FiberCtx, ExecutionRouter, TurnAccumulator, DeferredApprovalChannel, WriteObserver, ModelCallSink, ModelOperationSink, ResolvedTurnProfile, SlateCallResult, SlateOperation, ChildContextResolver, ContextTree } from "@kinu.run/core";
+import type { AgentRuntime, ActorHandle, LLM, Schedule, Identity, SqlExecutor, SqlValue, RawSqlExec, FiberCtx, ExecutionRouter, DeferredApprovalChannel, WriteObserver, ModelCallSink, ModelOperationSink, ResolvedTurnProfile, SlateCallResult, SlateOperation, ChildContextResolver, ContextTree } from "@kinu.run/core";
 import {
   nimbusSessionShell, createShellSession,
   DefaultExecutionRouter, createNimbusWorkspaceExecutor,
@@ -21,7 +21,7 @@ import {
   type VectorStore,
 } from "@kinu.run/core";
 import type { DeviceFileScope, LiveRead, SandboxHandle } from "@kinu.run/core";
-import { JOB_STAMP_ENV, withHostedNodeExecution, WORKSPACE_ROOT, type PortHolders, cloudPlanes } from '@kinu.run/core';
+import { JOB_STAMP_ENV, withHostedNodeExecution, WORKSPACE_ROOT, type Holds, type PortHolders, cloudPlanes, holdConfig } from '@kinu.run/core';
 import type { ActorReference, HostedNodeHome, TierRefusals } from '@kinu.run/core';
 
 export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
@@ -32,7 +32,7 @@ import { BOX_SIZES, BOX_SIZE_ORDER, DEFAULT_BOX_SIZE, type BoxSize } from "@kinu
 import { accountSandboxSize, SANDBOX_SIZE_CONFIG_KEY } from "./sandbox-size";
 import { driveBound, tenantDrive } from "./drive/tenant";
 import { adaptCloudflareSandbox } from "./sandbox-exec-lane"
-import { previewHostSuffix } from "@kinu.run/core";
+import { previewHostSuffix, scopedTurnSurface } from "@kinu.run/core";
 import { createDecisionPort } from "@kinu.run/core";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { sandboxPreviewExposures } from "@kinu.run/core";
@@ -75,8 +75,6 @@ export interface CFRuntimeAccess {
   workspaceBox(shellId: string): HostedBox;
   /** The workspace's exposed ports, the jobs listening on them, and the jobs it runs (`HostedWorkspace.serving`). */
   workspaceServing(): Promise<WorkspaceServing>;
-  /** Absent for facets without a budget ledger; the `workspace` provider then uses a private ledger. */
-  readonly acc?: () => Pick<TurnAccumulator, 'files' | 'context'>;
   getCliCwdForDevice?(): string | null;
   getCheckpointMetaForDevice?(): { turnId: string; sessionId: string } | null;
 }
@@ -88,14 +86,17 @@ interface AgentSqlSource {
 
 const boundSql = new WeakMap<AgentSqlSource, SqlExecutor>();
 
-/** The workspace's stores share one executor identity, including hosted actors' runtimes. */
-export function bindAgentSql(agent: AgentSqlSource): SqlExecutor {
+/** The workspace's stores share one executor identity, including hosted actors' runtimes. Given the object's held
+ *  reads (it is its database's one writer), its config stores hold what they read (`holdConfig`). */
+export function bindAgentSql(agent: AgentSqlSource, holds?: Holds): SqlExecutor {
   let sql = boundSql.get(agent);
 
   if (sql === undefined) {
     sql = agent.sql.bind(agent);
     boundSql.set(agent, sql);
   }
+
+  if (holds !== undefined) holdConfig(sql, holds);
 
   return sql;
 }
@@ -385,8 +386,9 @@ export function createCFRuntime(
     inline: {
       vfs: toolFiles, files: agentFileVfs, memory, craftStore, shell, planes,
       sql,
-      ledger: () => access.acc?.().files,
-      budget: () => access.acc?.().context,
+      // The turn whose call runs the program, every agent's alike; outside one the provider keeps a private ledger.
+      ledger: () => scopedTurnSurface()?.ledgers.files,
+      budget: () => scopedTurnSurface()?.ledgers.context,
       slate: hooks.slate,
       slateBuild: hooks.slateBuild,
     },

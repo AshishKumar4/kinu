@@ -1,28 +1,25 @@
 // The native lifetime is proved by the Tail oracle; these tests cover rejection identity and ownership at the adapter.
 import { expect, test } from 'bun:test';
 import { KinuError } from '@kinu.run/core/obs';
-import { workspaceClient, type AgentWorkspaceCalls } from '../src/agent-facet/workspace-rpc';
+import { workspaceClient, type AgentWorkspaceCalls, type AgentWorkspacePort } from '../src/agent-facet/workspace-rpc';
 
 function unused(): never {
   throw new Error('the adapter called an unrelated workspace method');
 }
 
-const unusedWorkspace: AgentWorkspaceCalls = {
-  session: unused,
-  stateSession: unused,
-  memory: unused,
-  program: unused,
+const unusedPort: AgentWorkspacePort = {
   traceTurn: unused,
   traceStream: unused,
   resume: unused,
   guard: unused,
   debit: unused,
   prepareTurn: unused,
-  bindProfile: unused,
   prepareChat: unused,
+  scaffold: unused,
   chatEvent: unused,
   turnEnded: unused,
   turnSettled: unused,
+  runSettled: unused,
   owedReport: unused,
   parentReport: unused,
   autoTitle: unused,
@@ -30,9 +27,13 @@ const unusedWorkspace: AgentWorkspaceCalls = {
   owes: unused,
   birthContext: unused,
   steerSkills: unused,
+  openWork: unused,
+  noteModelRequest: unused,
+  armCacheWarm: unused,
   advise: unused,
   enqueueTurn: unused,
   executeTool: unused,
+  receipts: unused,
   observe: unused,
   paceStep: unused,
   answerMetadata: unused,
@@ -47,13 +48,20 @@ const unusedWorkspace: AgentWorkspaceCalls = {
   reportModelOperation: unused,
 };
 
+const unusedWorkspace: AgentWorkspaceCalls = { session: unused, stateSession: unused, memory: unused, program: unused, port: unused };
+
+/** A workspace whose port answers with `calls`, as its host does. */
+function ported(calls: Partial<AgentWorkspacePort>): AgentWorkspaceCalls {
+  return { ...unusedWorkspace, port: async () => ({ ...unusedPort, ...calls }) };
+}
+
 test('a rejected outgoing promise releases its pipeline and preserves the exact rejection', async () => {
   for (const failure of [new KinuError('missing', 'retired'), new Error('transport refused')]) {
     let disposed = 0;
     const pending = Object.assign(Promise.reject(failure), { [Symbol.dispose]: () => { disposed += 1; } });
-    const workspace = workspaceClient({ ...unusedWorkspace, paceStep: () => pending });
+    const workspace = workspaceClient(ported({ paceStep: () => pending }));
 
-    await expect(workspace.paceStep('turn')).rejects.toBe(failure);
+    await expect(workspace.paceStep({ turnId: 'turn', runId: 'run', epoch: 1 }, null)).rejects.toBe(failure);
     expect(disposed).toBe(1);
   }
 });
@@ -68,7 +76,7 @@ test('a fulfilled response owns its stream and neither received disposer is rele
 
   const response = Object.assign(new Response(stream), { [Symbol.dispose]: () => { disposed += 1; } });
   const pending = Object.assign(Promise.resolve(response), { [Symbol.dispose]: () => { disposed += 1; } });
-  const workspace = workspaceClient({ ...unusedWorkspace, relayModelCall: () => pending });
+  const workspace = workspaceClient(ported({ relayModelCall: () => pending }));
   const answered = await workspace.relayModelCall('device', 'call', new Request('http://relay.invalid/'));
 
   expect(answered).toBe(response);
@@ -78,7 +86,7 @@ test('a fulfilled response owns its stream and neither received disposer is rele
 
 test('an in-process promise has no remote pipeline but keeps its rejection unchanged', async () => {
   const failure = new KinuError('denied', 'local refusal');
-  const workspace = workspaceClient({ ...unusedWorkspace, getAuth: () => Promise.reject(failure) });
+  const workspace = workspaceClient(ported({ getAuth: () => Promise.reject(failure) }));
 
   await expect(workspace.getAuth('credential')).rejects.toBe(failure);
 });

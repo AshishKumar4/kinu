@@ -229,8 +229,8 @@ A workspace holds the state. Agents are the actors that work inside it.
     workspace's durable subordinates. Swarm nodes are left off because they
     live only for the search that spawned them.
 
-  An export carries every retained non-main agent's conversation and turn tables,
-  including retired swarm and background agents, as that agent's database section (`agentArchiveSource` in
+  An export carries every retained agent's conversation and turn tables, main's
+  included, and retired swarm and background agents', as that agent's database section (`agentArchiveSource` in
   `packages/cf-backend/src/orchestrator.ts`, `readAgentArchivePage` in
   `packages/core/src/identity/archive.ts`); `kinu import` refuses an archive
   that lists an agent whose section is missing or short.

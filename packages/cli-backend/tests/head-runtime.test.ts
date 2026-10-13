@@ -25,7 +25,7 @@ import * as v from 'valibot';
 import { createCLIHeadRuntime, type CLIHeadRuntimeDeps } from '../src/head-runtime';
 import { makeSql, makeExecRaw, makeWorkspaceSchemaSql, createCLIRuntime, type CLIRuntime } from '../src/runtime';
 import { createHeadRuntime, headSeatFactory, localTestActorHost } from './actor-fixture';
-import { openLocalActor } from '@kinu.run/core';
+import { initToolEffectClaimTable, openLocalActor } from '@kinu.run/core';
 import { tierAuthority, toolSequenceModel } from './helpers/local-session';
 import { LocalAgentSession } from '../src/local-session';
 
@@ -103,10 +103,14 @@ function headDeps(
   // One slot shared by caller and host (the fixture's `LocalAgentSession.actorWrites`), filled per run before `acquire`.
   const writes = new Map<string, WriteObserver>();
 
+  // The genuine host: heads acquired from it run the production session, stores and claimed loop.
+  const host = localTestActorHost(parent, parent.db, [], writes);
+
   return {
     parentRuntime: parent,
-    // The genuine host: heads acquired from it run the production session, stores and claimed loop.
-    hostHead: headSeatFactory(parent, localTestActorHost(parent, parent.db, [], writes), 'fixture-run', { writes, model: resolve }),
+    hostHead: headSeatFactory(parent, host, 'fixture-run', { writes, model: resolve }),
+    // A seated head's programs account into its own session's turn.
+    ledgers: (actor) => present(host.hosted(actor.reference), 'the hosted head').session.orchestrator.acc,
     profile: async () => mergePolicyProfile(),
     bindMergeModel: (route) => {
       probe?.asked.push({ spec: route.model, effort: route.reasoningEffort });
@@ -570,8 +574,10 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
         mode: () => 'build',
       },
       split: async () => ({ narrative: '', decisions: [], unresolvedQuestions: [], blindSpots: [], childHeadIds: [], headCount: 0 }),
+      effectClaims: { sql: rt.storage.sql, actor: rt.actor, execution: () => ({ turnId: 'turn-1', runId: 'run-1' }) },
     });
 
+    initToolEffectClaimTable(rt.storage.execRaw);
     const run = toolExecute<{ command: string; runtime?: string }, string>(tools.shell);
     expect(String(await run({ command: 'cat note.txt' }))).toContain('real file content');
     await expect(run({ command: 'cat note.txt', runtime: 'device' })).rejects.toMatchObject({ code: 'unavailable' });

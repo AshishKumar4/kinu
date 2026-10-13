@@ -5,7 +5,7 @@ import { type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
  */
 
 
-import { SPILL_DIRS, type ActorHandle, type SqlExecutor } from '@kinu.run/core';
+import { SPILL_DIRS, type ActorHandle, type CompactionTriggerReader, type CompactionTriggerState, type SqlExecutor } from '@kinu.run/core';
 import { settle } from '@kinu.run/core/obs';
 import { Cause, Effect } from 'effect';
 import type { PlanSnapshot, PlanStore, TranscriptStore } from '@better-compact/core';
@@ -50,19 +50,10 @@ export function createVfsTranscriptStore(getVfs: () => VFS): VfsTranscriptStore 
   };
 }
 
-/**
- * Durable per-session plan snapshot and last prompt-token measurement. A measurement taken against a
- * longer history than the current one reads as absent: history is append-only, so shorter means rewritten.
- */
-export interface CompactionStateStore {
+/** Durable per-session plan snapshot, last prompt-token measurement and force arm, one row per session. */
+export interface CompactionStateStore extends CompactionTriggerReader, CompactionTriggerState {
   plans: PlanStore;
   archive: ArchiveIndexStore;
-  /** Null when none reported or `historyLength` is shorter than at measurement. */
-  loadPromptTokens(sessionKey: string, historyLength: number): number | null;
-  savePromptTokens(sessionKey: string, tokens: number, historyLength: number): void;
-  armCompaction(sessionKey: string): void;
-  /** At most once per arm, so a rebuild cannot loop. */
-  takeArmedCompaction(sessionKey: string): boolean;
 }
 
 interface ArchiveRangeRow {
@@ -192,22 +183,27 @@ export function createCompactionStateStore(
           WHERE actor_id = ${actorId} AND session_key = ${sessionKey}`;
       },
     },
-    loadPromptTokens(sessionKey, historyLength) {
+    takeTrigger(sessionKey, historyLength) {
       authorize();
 
-      const rows = sql<{ last_prompt_tokens: number | null; measured_at_length: number | null }>`
-        SELECT last_prompt_tokens, measured_at_length FROM compaction_state
-        WHERE actor_id = ${actorId} AND session_key = ${sessionKey} LIMIT 1`;
+      const row = sql<{ last_prompt_tokens: number | null; measured_at_length: number | null; force_compaction: number | null }>`
+        SELECT last_prompt_tokens, measured_at_length, force_compaction FROM compaction_state
+        WHERE actor_id = ${actorId} AND session_key = ${sessionKey} LIMIT 1`[0];
 
-      const row = rows[0];
-      const tokens = row?.last_prompt_tokens;
+      const forced = row?.force_compaction === 1;
 
-      if (tokens == null || tokens <= 0) return null;
-      const measuredAt = row?.measured_at_length;
+      if (forced) {
+        void sql`UPDATE compaction_state SET force_compaction = NULL
+          WHERE actor_id = ${actorId} AND session_key = ${sessionKey}`;
+      }
 
-      if (measuredAt != null && historyLength < measuredAt) return null;
+      const tokens = row?.last_prompt_tokens ?? null;
+      const measuredAt = row?.measured_at_length ?? null;
+      const trigger = forced ? 'force' : 'auto';
 
-      return tokens;
+      return tokens === null || tokens <= 0 || (measuredAt !== null && historyLength < measuredAt)
+        ? { trigger }
+        : { trigger, providerReportedTokens: tokens };
     },
     savePromptTokens(sessionKey, tokens, historyLength) {
       authorize();
@@ -227,19 +223,6 @@ export function createCompactionStateStore(
       void sql`INSERT INTO compaction_state (actor_id, session_key, force_compaction)
           VALUES (${actorId}, ${sessionKey}, 1)
           ON CONFLICT(actor_id, session_key) DO UPDATE SET force_compaction = 1`;
-    },
-    takeArmedCompaction(sessionKey) {
-      authorize();
-
-      const rows = sql<{ force_compaction: number | null }>`
-        SELECT force_compaction FROM compaction_state
-        WHERE actor_id = ${actorId} AND session_key = ${sessionKey} LIMIT 1`;
-
-      if (rows[0]?.force_compaction !== 1) return false;
-      void sql`UPDATE compaction_state SET force_compaction = NULL
-        WHERE actor_id = ${actorId} AND session_key = ${sessionKey}`;
-
-      return true;
     },
   };
 }
