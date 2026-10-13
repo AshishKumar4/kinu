@@ -224,6 +224,7 @@ interface SlateProcessProbeRpc extends Rpc.DurableObjectBranded {
     browser?: string; project?: Record<string, JsonValue>; app?: { port: number } | null;
   }): Promise<void>;
   stop(): Promise<void>;
+  endInNimbus(): Promise<void>;
   esbuildInThisIsolate(): Promise<boolean>;
   facetImages(): Promise<string[]>;
   interruptApplicationImage(): Promise<void>;
