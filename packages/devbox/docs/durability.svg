@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="300" viewBox="0 0 880 300" role="img" aria-labelledby="title">
+  <title id="title">The workspace is the container's disk. quiesce() takes a platform snapshot of the whole disk; a save every 5 minutes and at quiesce() adds what changed to the disk chain in R2, which skips rebuildable folders. The next start uses the snapshot when no save came after it, else the chain, whose layers mount at once.</title>
+  <style>
+    .bg { fill: #ffffff; }
+    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; }
+    .t { font-size: 16px; font-weight: 600; fill: #1f2328; }
+    .s { font-size: 13px; fill: #59636e; }
+    .k { font-size: 13px; fill: #1f2328; }
+    .c { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; font-size: 12px; fill: #59636e; }
+    .line { stroke: #818b98; stroke-width: 1.5; fill: none; }
+    .head { fill: #818b98; }
+    .green { fill: #dafbe1; stroke: #4ac26b; stroke-width: 1.5; }
+    .orange { fill: #fff1e5; stroke: #fb8f44; stroke-width: 1.5; }
+    .purple { fill: #fbefff; stroke: #c297ff; stroke-width: 1.5; }
+    .blue { fill: #ddf4ff; stroke: #54aeff; stroke-width: 1.5; }
+    .inner { fill: #ffffff; stroke: #4ac26b; stroke-width: 1; }
+    .skip { fill: #ffffff; stroke: #818b98; stroke-width: 1; stroke-dasharray: 4 3; }
+    .bar { fill: #fb8f44; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #0d1117; }
+      .t, .k { fill: #f0f6fc; }
+      .s, .c { fill: #9198a1; }
+      .line { stroke: #6e7681; }
+      .head { fill: #6e7681; }
+      .green { fill: #12261e; stroke: #3fb950; }
+      .orange { fill: #2c1f1a; stroke: #db6d28; }
+      .purple { fill: #252139; stroke: #ab7df8; }
+      .blue { fill: #132339; stroke: #4493f8; }
+      .inner { fill: #0d1117; stroke: #3fb950; }
+      .skip { fill: #0d1117; stroke: #6e7681; }
+      .bar { fill: #db6d28; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+      <path class="head" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+  </defs>
+  <rect class="bg" width="880" height="300" rx="12"/>
+
+  <!-- The disk -->
+  <rect class="green" x="16" y="24" width="190" height="258" rx="10"/>
+  <text class="t" x="111" y="52" text-anchor="middle">The container's disk</text>
+  <text class="c" x="111" y="72" text-anchor="middle">/workspace</text>
+  <rect class="inner" x="27" y="88" width="168" height="64" rx="8"/>
+  <text class="k" x="111" y="116" text-anchor="middle">your files</text>
+  <text class="c" x="111" y="136" text-anchor="middle">src/  .git/  …</text>
+  <rect class="skip" x="27" y="166" width="168" height="100" rx="8"/>
+  <text class="c" x="111" y="194" text-anchor="middle">node_modules/  .cache/</text>
+  <text class="c" x="111" y="212" text-anchor="middle">dist/  target/  .venv/  …</text>
+  <text class="s" x="111" y="246" text-anchor="middle">in the snapshot only</text>
+
+  <!-- The two saves -->
+  <rect class="purple" x="326" y="24" width="228" height="84" rx="10"/>
+  <text class="t" x="440" y="52" text-anchor="middle">Container snapshot</text>
+  <text class="s" x="440" y="76" text-anchor="middle">the whole disk, kept by the</text>
+  <text class="s" x="440" y="94" text-anchor="middle">platform; used for 29 days</text>
+
+  <rect class="orange" x="326" y="128" width="228" height="154" rx="10"/>
+  <text class="t" x="440" y="156" text-anchor="middle">Disk chain in R2</text>
+  <text class="c" x="342" y="183">base.sqsh</text>
+  <rect class="bar" x="454" y="173" width="84" height="12" rx="3"/>
+  <text class="c" x="342" y="205">delta-1-….sqsh</text>
+  <rect class="bar" x="454" y="195" width="34" height="12" rx="3"/>
+  <text class="c" x="342" y="227">delta-2-….sqsh</text>
+  <rect class="bar" x="454" y="217" width="12" height="12" rx="3"/>
+  <text class="s" x="440" y="254" text-anchor="middle">each save adds what changed;</text>
+  <text class="s" x="440" y="272" text-anchor="middle">deltas merge as a binary counter</text>
+
+  <line class="line" x1="206" y1="66" x2="326" y2="66" marker-end="url(#arrow)"/>
+  <text class="s" x="266" y="56" text-anchor="middle">at <tspan class="c">quiesce()</tspan></text>
+
+  <line class="line" x1="206" y1="196" x2="326" y2="196" marker-end="url(#arrow)"/>
+  <text class="s" x="266" y="186" text-anchor="middle">every 5 min</text>
+  <text class="s" x="266" y="214" text-anchor="middle">and at <tspan class="c">quiesce()</tspan></text>
+
+  <!-- The next start -->
+  <rect class="blue" x="640" y="24" width="224" height="258" rx="10"/>
+  <text class="t" x="752" y="52" text-anchor="middle">Next start</text>
+  <text class="k" x="656" y="80" font-weight="600">1  the snapshot</text>
+  <text class="s" x="656" y="100">if no save came after it</text>
+  <text class="s" x="656" y="118">and the image is the same:</text>
+  <text class="s" x="656" y="136">the disk as it was</text>
+  <text class="k" x="656" y="172" font-weight="600">2  else the chain</text>
+  <text class="s" x="656" y="192">layers mount at once;</text>
+  <text class="s" x="656" y="210">a copy to disk, if it fits,</text>
+  <text class="s" x="656" y="228">takes over at the next start.</text>
+  <text class="s" x="656" y="252">An incident names what</text>
+  <text class="s" x="656" y="270">to rebuild.</text>
+
+  <line class="line" x1="554" y1="66" x2="640" y2="66" marker-end="url(#arrow)"/>
+  <line class="line" x1="554" y1="196" x2="640" y2="196" marker-end="url(#arrow)"/>
+</svg>

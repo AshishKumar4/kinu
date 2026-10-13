@@ -26,11 +26,11 @@ const ROOT = canonicalProjectRoot();
 /** The cloud roster reuses the name `audit`: the duplicate the grouping must keep apart. */
 const GROUPED_ITEMS: readonly TuiAgentSummary[] = [
   {
-    name: 'audit', label: 'audit', mode: 'local', cwd: ROOT, workspaceId: 'shop', status: 'running',
+    name: 'audit', label: 'audit', mode: 'local', localName: 'audit', cwd: ROOT, workspaceId: 'shop', status: 'running',
     subordinates: [{ id: 'sub-reviewer', label: 'reviewer', status: 'idle', roleId: 'auditor' }],
   },
-  { name: 'fixer', label: 'fixer', mode: 'local', cwd: ROOT, workspaceId: 'shop' },
-  { name: 'writer', label: 'writer', mode: 'local', cwd: ROOT, workspaceId: 'docs' },
+  { name: 'fixer', label: 'fixer', mode: 'local', localName: 'fixer', cwd: ROOT, workspaceId: 'shop' },
+  { name: 'writer', label: 'writer', mode: 'local', localName: 'writer', cwd: ROOT, workspaceId: 'docs' },
   { name: 'jarvis', label: 'Jarvis', mode: 'cloud', cloudName: 'jarvis' },
   { name: 'audit', label: 'audit', mode: 'cloud', cloudName: 'audit' },
 ];
@@ -286,13 +286,12 @@ describe('grouped workspace navigator', () => {
 
   test('page keys move by the navigator viewport and drive paging at the end (40-column mobile overlay)', async () => {
     const many: TuiAgentSummary[] = [
-      ...Array.from({ length: 6 }, (_, i) => ({
-        name: `shop-${i}`, label: `shop-${i}`, mode: 'local' as const, cwd: ROOT, workspaceId: 'shop',
+      ...['shop', 'docs'].flatMap((workspaceId) => Array.from({ length: 6 }, (_, i) => {
+        const name = `${workspaceId}-${i}`;
+
+        return { name, label: name, mode: 'local' as const, localName: name, cwd: ROOT, workspaceId };
       })),
-      ...Array.from({ length: 6 }, (_, i) => ({
-        name: `docs-${i}`, label: `docs-${i}`, mode: 'local' as const, cwd: ROOT, workspaceId: 'docs',
-      })),
-      { name: 'jarvis', label: 'Jarvis', mode: 'cloud' as const },
+      { name: 'jarvis', label: 'Jarvis', mode: 'cloud' as const, cloudName: 'jarvis' },
     ];
 
     let loaded = 0;
@@ -449,10 +448,10 @@ function ShellProbe(props: {
     page: {
       items: [
         {
-          name: 'checkout', label: 'checkout', mode: 'local', cwd: ROOT, workspaceId: 'checkout', status: 'running',
+          name: 'checkout', label: 'checkout', mode: 'local', localName: 'checkout', cwd: ROOT, workspaceId: 'checkout', status: 'running',
           subordinates: [{ id: 'reviewer', label: 'Reviewer', status: 'idle', roleId: 'auditor' }],
         },
-        { name: 'jarvis', label: 'Jarvis', mode: 'cloud', status: 'idle' },
+        { name: 'jarvis', label: 'Jarvis', mode: 'cloud', cloudName: 'jarvis', status: 'idle' },
       ],
       total: 4,
       nextCursor: 'page-2',
@@ -556,7 +555,7 @@ async function mountRosterProbe(source: TuiAgentSource) {
 }
 
 const rosterItem = (name: string): TuiAgentSummary => ({
-  name, label: name, mode: 'local', cwd: ROOT, workspaceId: 'shop',
+  name, label: name, mode: 'local', localName: name, cwd: ROOT, workspaceId: 'shop',
 });
 
 describe('agent roster failure ownership', () => {

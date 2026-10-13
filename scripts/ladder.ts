@@ -391,14 +391,12 @@ export const LADDER: readonly Gate[] = [
     tier: 'local',
     // Measured 2026-09-05 on the 24-thread box (load 2.3): 0.73 s. Replaces 0.1 s.
     seconds: 0.73,
-    catches: 'a container class that lost `enableInternet = false` or '
-      + '`interceptHttps = true`, a Worker entry that stopped exporting '
-      + 'ContainerProxy, or a catch-all egress handler nobody binds — each one an '
-      + 'un-intercepted way out of a container whose secrets have been replaced '
-      + 'by placeholders.',
-    blind: 'whether interception actually engages at runtime, and DNS, which '
-      + 'leaves regardless and which the gate reports as a known residual '
-      + 'rather than closing.',
+    catches: 'a container class whose `enableInternet` left D82\'s policy, HTTP or '
+      + 'HTTPS without total interception, or a Kinu container whose web requests '
+      + 'no longer enter the vault first — each one a web request that skips '
+      + 'placeholder resolution and destination judgement.',
+    blind: 'whether interception actually engages at runtime, and raw TCP and UDP, '
+      + 'which leave directly by D82\'s policy and carry no placeholder Kinu resolves.',
     inputs: { kind: 'derived', imports: CF_BACKEND_SOURCES },
   },
   {
@@ -1116,7 +1114,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/credential-checkpoint.test.ts scripts/reset.test.ts scripts/prod-logs.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts',
+    run: 'bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/credential-checkpoint.test.ts scripts/reset.test.ts scripts/prod-logs.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts scripts/runtime-catalog.test.ts',
     label: 'Production deploy contract',
     tier: 'push',
     // Measured 2026-09-05 on the 24-thread box: 86.8/86.5s (33 tests). The 1s

@@ -642,12 +642,9 @@ describe('executor file plane', () => {
     const { rt, db } = createTestRuntime();
     const r = router(rt.storage.vfs);
     expect(await writeExecutorFileOp(r, 'workspace', 'up.txt', { bytes: new TextEncoder().encode('hi') }))
-      .toEqual({ ok: true });
-    // No compare-and-write on this plane, so the read carries the reason instead of an edit token.
-    expect(await readExecutorFile(r, 'workspace', 'up.txt')).toEqual({
-      content: 'hi',
-      readOnlyReason: expect.any(String),
-    });
+      .toMatchObject({ ok: true });
+    // The workspace store checks revisions, so the read carries the edit token its save names.
+    expect(await readExecutorFile(r, 'workspace', 'up.txt')).toEqual({ content: 'hi', revision: expect.anything() });
     expect(await writeExecutorFileOp(r, 'workspace', 'dir/', { bytes: new Uint8Array() }))
       .toMatchObject({ error: expect.any(String) });
     db.close();

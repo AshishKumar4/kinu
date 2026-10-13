@@ -390,6 +390,9 @@ function WorkspaceTerminal({ workspace, executor }: { workspace: string; executo
           setState("connected");
           term.focus();
           break;
+        // Prompt and command marks: nothing on the pane reads them yet.
+        case "shell-integration":
+          break;
       }
     };
 

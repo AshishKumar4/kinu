@@ -86,7 +86,7 @@ export {
   type DeviceCancelResult, type DeviceExecOutput, watchedOutput,
 } from './device-tunnel';
 
-export { DEVICE_METHOD, DEVICE_FRAMES, DEVICE_ERRORS, DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION, DEVICE_UPDATE_REQUIRED, deviceMethodHas, deviceFailure, type DeviceMethod } from './device-protocol';
+export { DeviceHelloHeadSchema, DeviceUpdateHelloSchema, DeviceHelloSchema, DEVICE_METHOD, DEVICE_FRAMES, DEVICE_ERRORS, DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION, DEVICE_UPDATE_REQUIRED, deviceMethodHas, deviceFailure, type DeviceMethod } from './device-protocol';
 
 export {
   DeviceSocketHub, deviceIdFromSocket, WS_OPEN,
@@ -114,7 +114,7 @@ export {
 export {
   nimbusSessionShell,
   type NimbusSandboxHandle,
-  type NimbusExecOptions,
+  type NimbusSandboxFiles,
   type NimbusExecResult,
   type NimbusStartResult,
   type NimbusPortInfo,

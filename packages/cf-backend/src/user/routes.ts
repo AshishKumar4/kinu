@@ -20,7 +20,8 @@ import {
 import type { CloudWorkspaceRegistry } from './workspace-create';
 import type { ObjectNamespace } from '@kinu.run/core';
 import { err, isWorkspaceName, json, safeJson, safeJsonParse } from '@kinu.run/core';
-import { retryTransientDO } from '@kinu.run/core';
+import { idempotent } from '@nimbus-sh/fabric/do-calls.js';
+import { logDoCallRetry } from '../obs/do-call-retry';
 import type { UserCaller } from '@kinu.run/core';
 import { isControlPlaneOperator, type AdminGateEnv } from '../control-plane/admin-caller';
 import { ownerGate, rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
@@ -142,11 +143,12 @@ export const userRoutes = new Hono<FamilyEnv<UserRoutesEnv<unknown>, UserVariabl
 userRoutes.use('/api/user/*', ownerGate(), async (c, next) => {
   const identity = c.get('identity');
   const owner = c.get('owner');
-  const stub = c.env.UserDO.get(c.env.UserDO.idFromName(identity.userId));
+  const userObject = c.env.UserDO.idFromName(identity.userId);
   // Every /api/user route passes through this upsert; it is idempotent, so transient
   // DO failures are retried rather than failing the request.
-  await retryTransientDO('ensureProfile',
-    () => stub.ensureProfile(owner, identity.email, identity.displayName ?? undefined));
+  await idempotent('ensureProfile', () => c.env.UserDO.get(userObject),
+    (stub) => stub.ensureProfile(owner, identity.email, identity.displayName ?? undefined), { onRetry: logDoCallRetry });
+  const stub = c.env.UserDO.get(userObject);
 
   // waitUntil is a no-op only in a DO (`do.wait_until.no_op`). A failed warm removes the user from
   // the set so the next request retries.

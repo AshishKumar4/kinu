@@ -13,7 +13,7 @@ import { sandboxPreviewLabelOf } from "@kinu.run/core";
 import type { SandboxPreviewExposures } from "@kinu.run/core";
 
 type ContainerOperations = Pick<KinuDevbox,
-  "execUntimed" | "execUntimedStream" | "killUntimed" | "releaseUntimed" | "resolveReadiness" | "readFile" | "writeFile" | "listFiles" | "statFile"
+  "execUntimed" | "execUntimedStream" | "killUntimed" | "releaseUntimed" | "resolveReadiness" | "readFile" | "writeFile" | "writeFileIfDigest" | "listFiles" | "statFile"
   | "deleteFile" | "exposePort" | "getExposedPorts" | "unexposePort" | "startSupervised"
   | "stopSupervised" | "listSupervised" | "portToken" | "probePort" | "notePortRemoved" | "resize" | "portListeners" | "answerRest">;
 
@@ -152,9 +152,10 @@ async function execWithoutDeadline(
 /** No conflict queue here: `Devbox` serializes resource conflicts for every caller of the container. */
 
 /**
- * Every container-touching method goes through `onContainer`: egress first (until bound the
- * container has no network, so it fails closed), then attach (pre-attach reads/writes hit a blank disk
- * that the overlay hides). Methods writing only this DO's rows skip it.
+ * Every container-touching method goes through `onContainer`: egress first (until bound, the
+ * container's web requests reach no vault, so a placeholder would go out unresolved; its raw sockets go
+ * straight out regardless, D82), then attach (pre-attach reads/writes hit a blank disk that the overlay
+ * hides). Methods writing only this DO's rows skip it.
  */
 /** What a moved exposure owes is recorded before the call returns; its failure is reported, never the exposure's. */
 function recordPortsMoved(portsMoved: (() => Promise<void>) | undefined): Effect.Effect<void> {
@@ -231,6 +232,7 @@ export function adaptCloudflareSandbox(
     readFile: (path, opts) => settle(onContainer(() => handle.readFile(path, opts))),
     writeFile: (path, content, opts) =>
       settle(onContainer(() => jsonResultOrVoid(handle.writeFile(path, content, opts)))),
+    writeFileIfDigest: (path, content, expected, operation) => settle(onContainer(() => handle.writeFileIfDigest(path, content, expected, operation))),
     listFiles: (path, opts) => settle(onContainer(() => handle.listFiles(path, opts))),
     statFile: (path, opts) => settle(onContainer(() => handle.statFile(path, opts))),
     deleteFile: (path) => settle(onContainer(() => jsonResultOrVoid(handle.deleteFile(path)))),
@@ -264,12 +266,10 @@ export function adaptCloudflareSandbox(
 
       return removed;
     })),
-    // Re-publishing keeps long-lived previews from ageing out. A failed refresh is reported and the
-    // listing stands: the record is already correct, unlike an unpublished URL in `exposePort`.
+    // Renewing what was published keeps long-lived previews from ageing out; what the container reports publishes
+    // nothing. A failed renewal is reported and the listing stands: the record is already correct.
     // Not `onContainer`: a read never starts a container.
     getExposedPorts: (hostname) => settle(callDevbox(async () => {
-      // Before the read: a withdrawal after it outranks what it saw.
-      const observedAt = Date.now();
       const rows = await handle.getExposedPorts(hostname);
 
       if (previews !== null) {
@@ -280,7 +280,7 @@ export function adaptCloudflareSandbox(
           if (label === null || label.port !== row.port) return;
 
           try {
-            await index.refresh(row.port, label.token, observedAt);
+            await index.refresh(row.port, label.token);
           } catch (cause) {
             diagnostics.failure('preview.refresh_failed', toKinuError({
               doing: 'refreshing a published sandbox preview',

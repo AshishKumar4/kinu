@@ -10,6 +10,7 @@ import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import type { HostedRuntime } from '@nimbus-sh/worker/workspace-host';
 import type { SqlDatabase, VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { NimbusSandboxHandle, NodeHomeHost, NodeIdentity } from '@kinu.run/core';
+import type { SessionBox } from '@kinu.run/test-utils/vfs';
 import {
   facetHomeProvisioner, facetHomeReleaser, nimbusSessionFiles, restoreAgentTmpConfinements,
   settleWorkspaceRoot, WORKSPACE_ROOT, actorHomeName, explorationActorKey } from '@kinu.run/core';
@@ -75,14 +76,9 @@ async function openOwner(): Promise<OwnerFixture> {
         exitCode: result.exitCode,
         stdout: result.stdout,
         stderr: result.stderr,
+        duration: result.duration,
+        timestamp: result.timestamp,
       };
-    },
-    files: {
-      read: async () => { throw new Error('the owner box execs; it never falls back to the session user'); },
-      write: async () => { throw new Error('the owner box execs; it never falls back to the session user'); },
-      list: async () => { throw new Error('the owner box execs; it never falls back to the session user'); },
-      exists: async () => { throw new Error('the owner box execs; it never falls back to the session user'); },
-      delete: async () => { throw new Error('the owner box execs; it never falls back to the session user'); },
     },
   };
 
@@ -92,7 +88,7 @@ async function openOwner(): Promise<OwnerFixture> {
   };
 }
 
-function sessionBoxFor(f: OwnerFixture, cred: VfsCred): NimbusSandboxHandle {
+function sessionBoxFor(f: OwnerFixture, cred: VfsCred): SessionBox {
   return credentialedSessionBox(f.runtime, cred);
 }
 
@@ -138,8 +134,8 @@ describe('a hosted node hardcoding /tmp stays private', () => {
       const homeA = await provision(node('aX9'));
       const homeB = await provision(node('bK2'));
       const [a, b] = [credOf(homeA), credOf(homeB)];
-      const asA = nimbusSessionFiles(sessionBoxFor(f, a), { home: homeA.home, cred: a });
-      const asB = nimbusSessionFiles(sessionBoxFor(f, b), { home: homeB.home, cred: b });
+      const asA = nimbusSessionFiles(sessionBoxFor(f, a).files, { home: homeA.home, cred: a });
+      const asB = nimbusSessionFiles(sessionBoxFor(f, b).files, { home: homeB.home, cred: b });
 
       // Includes the stage-and-rename commit, which resolves through the same rewrite.
       await writeText(asA, '/tmp/y', 'from a');
@@ -229,31 +225,46 @@ describe('every facet kind is one home namespace on the owner', () => {
   });
 });
 
-function originFilesBox(f: OwnerFixture): NimbusSandboxHandle {
+function originFilesBox(f: OwnerFixture): SessionBox {
   const view = f.workspace.vfs.as(ORIGIN);
+  const refuse = async (): Promise<never> => { throw new Error('the origin box acts as the origin only'); };
+
+  // Absent is null, as the session's own files answer it.
+  const present = <T>(read: () => T): T | null => {
+    try {
+      return read();
+    } catch (error) {
+      const code = v.safeParse(v.object({ code: v.string() }), error);
+
+      if (code.success && code.output.code === 'ENOENT') return null;
+      throw error;
+    }
+  };
+
+  const stat = async (path: string) => present(() => {
+    const found = view.stat(path);
+
+    return { type: found.type, size: found.size, mtime: found.mtime, mode: found.mode };
+  });
 
   return {
     ready: async () => undefined,
     exec: (command, options) => f.box.exec(command, options),
     files: {
-      read: async (path) => {
-        try {
-          return view.readFileString(path);
-        } catch (error) {
-          const code = v.safeParse(v.object({ code: v.string() }), error);
-
-          if (code.success && code.output.code === 'ENOENT') return null;
-          throw error;
-        }
-      },
-      write: async (path, content) => {
-        view.writeFile(path, content);
-      },
-      list: async (path) => view.readdir(path ?? '/').map((entry) => ({ name: entry.name })),
+      as: () => { throw new Error('the origin box acts as the origin only'); },
+      read: async (path) => present(() => view.readFileString(path)),
+      readBytes: async (path) => present(() => view.readFile(path)),
+      readRange: async (path, offset, length) => present(() => view.readRange(path, offset, length)),
       exists: async (path) => view.exists(path),
-      delete: async (path) => {
-        view.unlink(path);
-      },
+      write: async (path, content) => { view.writeFile(path, content); },
+      list: async (path) => view.readdir(path ?? '/').map((entry) => ({ name: entry.name, type: entry.type })),
+      stat,
+      lstat: stat,
+      readlink: refuse,
+      rename: refuse,
+      mkdir: async (path) => { view.mkdir(path, { recursive: true }); },
+      chmod: async (path, mode) => { view.chmod(path, mode); },
+      delete: async (path) => { view.unlink(path); },
     },
   };
 }
@@ -263,7 +274,7 @@ describe('one box answers both surfaces with the same bytes', () => {
     const f = await openOwner();
 
     try {
-      const files = nimbusSessionFiles(originFilesBox(f), { home: WORKSPACE_ROOT });
+      const files = nimbusSessionFiles(originFilesBox(f).files, { home: WORKSPACE_ROOT });
 
       // A relative shell path and its `/home/main` spelling name the same file; root paths are per-surface.
       expect(await rpcExec(f.host, 'echo live-bytes > tree-probe.md', {}))

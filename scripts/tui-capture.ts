@@ -70,7 +70,7 @@ const { fakeClient, soloHub } = await import('../packages/cli/tests/helpers/chat
 const { createMemoryTuiPreferenceStore } = await import('../packages/cli/tests/helpers/tui-preferences');
 
 const workspaceSource = agentSourceFromList(() => ['checkout', 'pricing-guard', 'docs-sweep', 'infra-audit']
-  .map((name) => ({ name, label: name, mode: 'local' as const })));
+  .map((name) => ({ name, label: name, mode: 'local' as const, localName: name, cwd: home, workspaceId: 'capture' })));
 
 function captureRuntime() {
   const preferenceStore = createMemoryTuiPreferenceStore();

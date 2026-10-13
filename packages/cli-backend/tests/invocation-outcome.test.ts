@@ -72,7 +72,7 @@ test('a handled nested command refusal does not fail its enclosing program', asy
       exec: { description: 'Refuse the command', execute: async () => {
         calls++;
 
-        return { reason: 'denied', error: 'not run' };
+        return { success: false, reason: 'denied', error: 'not run' };
       } },
     },
   }]);

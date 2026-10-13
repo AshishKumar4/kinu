@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="568" viewBox="0 0 880 568" role="img" aria-labelledby="title">
+  <title id="title">Two request paths. exec: your Worker calls box.exec, Devbox starts and restores the box or refuses, runs bash in /workspace and returns stdout, stderr and the exit code. Preview: a browser asks your Worker for a preview host, the Worker forwards it to the box under /_devbox/preview, and Devbox checks the token and proxies to the container port.</title>
+  <style>
+    .bg { fill: #ffffff; }
+    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; }
+    .t { font-size: 15px; font-weight: 600; fill: #1f2328; }
+    .h { font-size: 13px; font-weight: 600; fill: #59636e; letter-spacing: 0.06em; }
+    .s { font-size: 13px; fill: #59636e; }
+    .c { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; font-size: 12px; fill: #1f2328; }
+    .life { stroke: #d1d9e0; stroke-width: 1.5; stroke-dasharray: 4 4; }
+    .rule { stroke: #d1d9e0; stroke-width: 1; }
+    .line { stroke: #818b98; stroke-width: 1.5; fill: none; }
+    .back { stroke: #818b98; stroke-width: 1.5; fill: none; stroke-dasharray: 6 4; }
+    .head { fill: #818b98; }
+    .blue { fill: #ddf4ff; stroke: #54aeff; stroke-width: 1.5; }
+    .purple { fill: #fbefff; stroke: #c297ff; stroke-width: 1.5; }
+    .green { fill: #dafbe1; stroke: #4ac26b; stroke-width: 1.5; }
+    .gray { fill: #f6f8fa; stroke: #d1d9e0; stroke-width: 1.5; }
+    .note { fill: #ffffff; stroke: #c297ff; stroke-width: 1; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #0d1117; }
+      .t, .c { fill: #f0f6fc; }
+      .h, .s { fill: #9198a1; }
+      .life, .rule { stroke: #3d444d; }
+      .line, .back { stroke: #6e7681; }
+      .head { fill: #6e7681; }
+      .blue { fill: #132339; stroke: #4493f8; }
+      .purple { fill: #252139; stroke: #ab7df8; }
+      .green { fill: #12261e; stroke: #3fb950; }
+      .gray { fill: #171b22; stroke: #3d444d; }
+      .note { fill: #0d1117; stroke: #ab7df8; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+      <path class="head" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+  </defs>
+  <rect class="bg" width="880" height="568" rx="12"/>
+
+  <!-- Lifelines -->
+  <line class="life" x1="110" y1="54" x2="110" y2="536"/>
+  <line class="life" x1="330" y1="54" x2="330" y2="536"/>
+  <line class="life" x1="590" y1="54" x2="590" y2="536"/>
+  <line class="life" x1="800" y1="54" x2="800" y2="536"/>
+  <rect class="gray" x="56" y="16" width="108" height="38" rx="8"/>
+  <text class="t" x="110" y="40" text-anchor="middle">Browser</text>
+  <rect class="blue" x="260" y="16" width="140" height="38" rx="8"/>
+  <text class="t" x="330" y="40" text-anchor="middle">Your Worker</text>
+  <rect class="purple" x="530" y="16" width="120" height="38" rx="8"/>
+  <text class="t" x="590" y="40" text-anchor="middle">Devbox</text>
+  <rect class="green" x="740" y="16" width="120" height="38" rx="8"/>
+  <text class="t" x="800" y="40" text-anchor="middle">Container</text>
+
+  <!-- exec -->
+  <text class="h" x="16" y="86">EXEC</text>
+  <line class="line" x1="330" y1="102" x2="590" y2="102" marker-end="url(#arrow)"/>
+  <text class="c" x="460" y="94" text-anchor="middle">box.exec('npm test')</text>
+
+  <rect class="note" x="450" y="116" width="280" height="30" rx="6"/>
+  <text class="s" x="590" y="136" text-anchor="middle"><tspan class="c">ensureReady()</tspan>: start, restore, or refuse</text>
+
+  <line class="line" x1="590" y1="194" x2="800" y2="194" marker-end="url(#arrow)"/>
+  <text class="c" x="695" y="170" text-anchor="middle">bash -c 'npm test'</text>
+  <text class="s" x="695" y="186" text-anchor="middle">in /workspace</text>
+
+  <line class="back" x1="800" y1="232" x2="590" y2="232" marker-end="url(#arrow)"/>
+  <text class="s" x="695" y="224" text-anchor="middle">stdout, stderr, exit code</text>
+
+  <line class="back" x1="590" y1="264" x2="330" y2="264" marker-end="url(#arrow)"/>
+  <text class="c" x="460" y="256" text-anchor="middle">ExecResult</text>
+
+  <line class="rule" x1="16" y1="288" x2="864" y2="288"/>
+
+  <!-- preview -->
+  <text class="h" x="16" y="312">PREVIEW</text>
+  <line class="line" x1="110" y1="348" x2="330" y2="348" marker-end="url(#arrow)"/>
+  <text class="s" x="220" y="324" text-anchor="middle">GET /app on</text>
+  <text class="c" x="220" y="340" text-anchor="middle">3000-&lt;name&gt;-&lt;token&gt;.&lt;host&gt;</text>
+
+  <line class="line" x1="330" y1="392" x2="590" y2="392" marker-end="url(#arrow)"/>
+  <text class="c" x="460" y="368" text-anchor="middle">box.fetch()</text>
+  <text class="c" x="460" y="384" text-anchor="middle">/_devbox/preview/3000/&lt;token&gt;/app</text>
+
+  <rect class="note" x="470" y="406" width="240" height="30" rx="6"/>
+  <text class="s" x="590" y="426" text-anchor="middle">check the token, <tspan class="c">ensureReady()</tspan></text>
+
+  <line class="line" x1="590" y1="468" x2="800" y2="468" marker-end="url(#arrow)"/>
+  <text class="c" x="695" y="460" text-anchor="middle">getTcpPort(3000).fetch()</text>
+
+  <line class="back" x1="800" y1="498" x2="590" y2="498" marker-end="url(#arrow)"/>
+  <text class="s" x="695" y="490" text-anchor="middle">the app's response</text>
+
+  <line class="back" x1="590" y1="528" x2="110" y2="528" marker-end="url(#arrow)"/>
+  <text class="s" x="350" y="520" text-anchor="middle">response; WebSockets are bridged</text>
+  <text class="s" x="350" y="556" text-anchor="middle">404 unknown token · 503 port not re-exposed · 502 nothing listens</text>
+</svg>

@@ -17,6 +17,7 @@ import type {
 import type { AgentModelMenu } from '@kinu.run/core';
 import { createCliSession } from '../../src/session';
 import { ChatApp, type ChatAppOpts } from '../../src/tui/chat-app';
+import type { ListedAgent } from '../../src/agent-list';
 import type { TuiHubData } from '../../src/tui/hubs';
 import type { TuiAgentSource } from '../../src/tui/tui-shell';
 import { createMemoryTuiPreferenceStore } from './tui-preferences';
@@ -206,14 +207,7 @@ export function fakeClient(options: FakeClientOptions) {
   };
 }
 
-export interface FixtureWorkspace {
-  name: string;
-  label: string;
-  mode: 'local' | 'cloud';
-  cloudName?: string;
-  cwd?: string;
-  workspaceId?: string;
-}
+export type FixtureWorkspace = ListedAgent;
 
 export async function mountChat(
   client: AgentClient,

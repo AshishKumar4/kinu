@@ -350,10 +350,6 @@ async function askRefiner(
 
     const outcome = await refiner.start(brief);
 
-    if (!('status' in outcome)) {
-      return Result.fail(`the refiner could not start: ${outcome.error}`);
-    }
-
     if (outcome.status === 'failed') {
       return Result.fail(`the refiner could not start (${outcome.reason ?? 'unknown'}): ${outcome.answer}`);
     }

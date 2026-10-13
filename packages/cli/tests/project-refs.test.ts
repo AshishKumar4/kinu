@@ -234,7 +234,7 @@ describe('renaming changes no identity and moves no database', () => {
 describe('a backend is stated, not inferred from a file', () => {
   test('a configured cloud ref wins over a local database of the same name', async () => {
     bareWorkspace('twin', 'ws-twin');
-    await upsertAgentConfig({ name: 'twin', mode: 'cloud', cloudName: 'twin' });
+    await upsertAgentConfig({ name: 'twin', mode: 'cloud', cloudName: 'twin', displayName: 'Twin' });
 
     expect(resolveAgentTarget('twin').mode).toBe('cloud');
     expect(await messageOf(() => resolveLocalAgent('twin'))).toContain('this needs a local one');
@@ -242,7 +242,7 @@ describe('a backend is stated, not inferred from a file', () => {
 
   test('an unconfigured name addressing both is refused, naming both candidates', async () => {
     const dbPath = bareWorkspace('both-ways', 'ws-both');
-    await upsertAgentConfig({ name: 'remote-key', mode: 'cloud', cloudName: 'both-ways' });
+    await upsertAgentConfig({ name: 'remote-key', mode: 'cloud', cloudName: 'both-ways', displayName: 'Both ways' });
 
     const message = await messageOf(() => resolveAgentTarget('both-ways'));
     expect(message).toContain(dbPath);
@@ -250,7 +250,7 @@ describe('a backend is stated, not inferred from a file', () => {
   });
 
   test('a backend the caller states cannot contradict the configured ref', async () => {
-    await upsertAgentConfig({ name: 'cloud-only', mode: 'cloud' });
+    await upsertAgentConfig({ name: 'cloud-only', mode: 'cloud', cloudName: 'cloud-only', displayName: 'Cloud only' });
 
     expect(await messageOf(() => resolveAgentTarget('cloud-only', { backend: 'local' })))
       .toContain('cannot be opened as local');

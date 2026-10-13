@@ -107,7 +107,7 @@ function standardDecorators(): Plugin {
   };
 }
 
-// Raw `buildSync` runs no plugins, so `virtual:kinu-slate-vendor` aliases to this materialized module.
+// `virtual:kinu-slate-vendor` aliases to this materialized module, built once for every probe that bundles the vendor.
 const slateVendorModulePath = fileURLToPath(new URL('../../node_modules/.cache/kinu/slate-vendor.js', import.meta.url));
 
 let vendorMaterialized = false;
@@ -521,7 +521,6 @@ const runnerOptions = {
           FORK_SOURCE: { className: 'ForkSourceProbeDO', useSQLite: true },
           FORK_TARGET: { className: 'ForkTargetProbeDO', useSQLite: true },
           STREAM_LIFECYCLE: { className: 'StreamLifecycleDO', useSQLite: true },
-          FILES_EIO_PROBE: { className: 'FilesEioProbeDO', useSQLite: true },
           PARKED_WRITES_PROBE: { className: 'ParkedWritesProbeDO', useSQLite: true },
           COMPLEXITY_PROBE: { className: 'ComplexityProbeDO', useSQLite: true },
           EFFECT_ATOMICITY_PROBE: { className: 'EffectAtomicityProbeDO', useSQLite: true },

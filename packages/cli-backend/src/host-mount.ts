@@ -6,10 +6,10 @@ import type { VFS, VfsDirentType } from '@nimbus-sh/core/vfs/vfs.js';
 
 import { lstatSync, mkdirSync, readlinkSync, realpathSync, rmSync, symlinkSync, type Dirent } from 'node:fs';
 import * as fs from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { Effect } from 'effect';
-import type { FileCheckpoints, FileReach, MountedVfs, PathPlanes, VfsMount } from '@kinu.run/core';
-import { agentHome, FOLDER_SUBTREE, MAIN_AGENT, withMountTable, workspacePath } from '@kinu.run/core';
+import type { CheckpointFiles, FileCheckpoints, FileReach, MountedVfs, PathPlanes, VfsDigestWrite, VfsMount, WriteObserver } from '@kinu.run/core';
+import { agentHome, FOLDER_SUBTREE, MAIN_AGENT, sha256Hex, withMountTable, workspacePath } from '@kinu.run/core';
 import { CompositeVFS } from '@nimbus-sh/core/vfs/composite.js';
 import { syscallError, toVfsError, type VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { settle, tolerate, tolerateAsync } from '@kinu.run/core/obs';
@@ -35,7 +35,67 @@ function throwVfsError(input: { error: unknown; syscall: string; path: string })
   throw toVfsError(input.error, input.syscall, input.path);
 }
 
-type HostFiles = VFS & Required<Pick<VFS, 'readRange' | 'rmdir' | 'rename' | 'readlink'>>;
+type HostFiles = VFS & Required<Pick<VFS, 'readRange' | 'rmdir' | 'rename' | 'readlink'>> & Required<Pick<CheckpointFiles, 'writeFileIfDigest'>>;
+
+/**
+ * Each path's compare-through-rename, one at a time in this process: every head's plane over the machine shares this
+ * table, so two of them cannot both pass a compare and the later rename lose the first write. Keyed by the path's real
+ * directory, so a link to it is the same file.
+ */
+const replacing = new Map<string, Promise<unknown>>();
+
+async function oneAtATime<T>(path: string, run: () => Promise<T>): Promise<T> {
+  const directory = await tolerateAsync(() => fs.realpath(dirname(path)), 'enoent') ?? dirname(path);
+  const key = join(directory, basename(path));
+  const before = replacing.get(key);
+
+  const mine = (async () => {
+    await before;
+
+    return run();
+  })();
+
+  // What the next one waits on: this one settled, whether it landed or failed.
+  const settled = Promise.allSettled([mine]);
+
+  replacing.set(key, settled);
+
+  try {
+    return await mine;
+  } finally {
+    if (replacing.get(key) === settled) replacing.delete(key);
+  }
+}
+
+/**
+ * `data` at `path` only if its bytes still hash to `expected` (null: only if none is there), written over the file in
+ * place, as a plain write does: it keeps its inode, owner, group, mode, ACLs and every other link to it, and a file this
+ * user may not write is refused. Each path's compare and write run one at a time in this process (`oneAtATime`); this
+ * host gives no lock against another process's write in between.
+ */
+function replaceIfDigest(path: string, data: Uint8Array, expected: string | null): Promise<VfsDigestWrite> {
+  return oneAtATime(path, () => replaceNow(path, data, expected));
+}
+
+async function replaceNow(path: string, data: Uint8Array, expected: string | null): Promise<VfsDigestWrite> {
+  const held = await tolerateAsync(() => fs.readFile(path), 'enoent');
+  const found = held === undefined ? null : sha256Hex(held);
+
+  if (found !== expected) return { ok: false, sha256: found };
+
+  if (held === undefined) await fs.mkdir(dirname(path), { recursive: true });
+  // A create only where nothing is yet; a replacement only of a file still there.
+  const file = await fs.open(path, held === undefined ? 'wx' : 'r+');
+
+  try {
+    await file.truncate(0);
+    await file.writeFile(data);
+  } finally {
+    await file.close();
+  }
+
+  return { ok: true, sha256: sha256Hex(data) };
+}
 
 async function hostIo<T>(syscall: string, path: string, op: () => Promise<T>): Promise<T> {
   try {
@@ -58,6 +118,11 @@ function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefin
         await fs.mkdir(dirname(path), { recursive: true });
         await fs.writeFile(path, data);
       });
+    },
+    async writeFileIfDigest(path, data, expected) {
+      await snapshot(path, 'file write');
+
+      return await hostIo('open', path, () => replaceIfDigest(path, data, expected));
     },
     readdir: (path) => hostIo('scandir', path, async () => (await fs.readdir(path, { withFileTypes: true }))
       .map((entry) => ({ name: entry.name, type: hostDirentType(entry) }))),
@@ -106,6 +171,7 @@ function rootedFiles(root: string, files: HostFiles): HostFiles {
   return {
     readFile: (path) => files.readFile(at(path)),
     writeFile: (path, data) => files.writeFile(at(path), data),
+    writeFileIfDigest: (path, data, expected) => files.writeFileIfDigest(at(path), data, expected),
     readdir: (path) => files.readdir(at(path)),
     stat: (path, options) => files.stat(at(path), options),
     unlink: (path) => files.unlink(at(path)),
@@ -151,6 +217,8 @@ export interface LocalFilePlane {
   readonly space: string;
   readonly views: readonly VfsMount[];
   readonly checkpoints: FileCheckpoints | undefined;
+  /** Hears a write that lands on the host past the namespace (a digest-checked one); the namespace's own it hears itself. */
+  readonly observer?: WriteObserver;
 }
 
 /** `composite`, not `namespace`: `withMountTable` reads a `namespace` member as the opener of a mounted namespace. */
@@ -178,7 +246,9 @@ export function localFilePlane(input: LocalFilePlane): LocalPlane {
     });
   }
 
-  const files = withMountTable({ namespace: async () => namespace, home: input.folder, writesParents: true }, views);
+  const files = withMountTable({
+    namespace: async () => namespace, home: input.folder, writesParents: true, ...(input.observer !== undefined && { observer: input.observer }),
+  }, views);
 
   const removable = (path: string, syscall: string): Effect.Effect<string, VfsError> => (workspacePath(path, input.folder) === input.folder
     ? Effect.fail(syscallError('EACCES', syscall, path, { detail: 'the workspace\'s folder cannot be removed' }))
@@ -193,33 +263,21 @@ export function localFilePlane(input: LocalFilePlane): LocalPlane {
   };
 }
 
-/** The folder and the own space are the agent's; past them, the user is asked. A link in either is judged by where it points. */
+/**
+ * The folder and the own space are the agent's; past them, the user is asked. The gate hands over the path the
+ * namespace resolved, its links followed as node:fs follows them; a root is matched as named and as its real path,
+ * since a mount point (the space) keeps its name while the folder's links resolve.
+ */
 export function localFileReach(input: Pick<LocalFilePlane, 'folder' | 'space'>, planes: PathPlanes, plane: Pick<LocalPlane, 'resolve'>): FileReach {
+  const roots = [input.folder, input.space].flatMap((root) => [root, tolerate(() => realpathSync(root), 'enoent') ?? root]);
+
   return {
     planes,
-    resolve: (path, follow) => plane.resolve(path, { follow }),
+    resolve: (path, follow, creating) => plane.resolve(path, { follow, creating }),
     userRoots: () => [],
-    locate: (path, op) => {
-      const at = workspacePath(path, input.folder);
-      // A removal acts on the entry itself, so its own name is not followed.
-      const hostPath = op === 'delete' ? join(landing(dirname(at)), basename(at)) : landing(at);
-
-      return { hostPath, outside: ![input.folder, input.space].some((root) => withinRoot(landing(root), hostPath)) };
-    },
+    locate: (path) => ({ hostPath: path, outside: !roots.some((root) => withinRoot(root, path)) }),
     parksWrites: false,
   };
-}
-
-/** Where `path` lands on this machine: its links followed, as node:fs follows them, and what is not there yet as named. */
-function landing(path: string): string {
-  const real = tolerate(() => realpathSync(path), 'enoent');
-
-  if (real !== undefined) return real;
-
-  // A dangling link is written where it points; anything else missing lands under its nearest existing parent.
-  if (lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink() === true) return landing(resolve(dirname(path), readlinkSync(path)));
-
-  return dirname(path) === path ? path : join(landing(dirname(path)), basename(path));
 }
 
 function withinRoot(root: string, candidate: string): boolean {

@@ -1,0 +1,551 @@
+diff --git a/dist/_shared/workspace-network.d.ts b/dist/_shared/workspace-network.d.ts
+index 157648c..0997f83 100644
+--- a/dist/_shared/workspace-network.d.ts
++++ b/dist/_shared/workspace-network.d.ts
+@@ -26,9 +26,15 @@
+  * An egress that carries no TCP at all refuses in its `connect`.
+  */
+ export interface WorkspaceEgressTls {
++    /**
++     * `servername`, when the program named one other than `hostname`, is the
++     * name the session presents (SNI) and checks the server's certificate by,
++     * as Node's `tls.connect({ servername })` does; absent, `hostname`.
++     */
+     connectTls(target: {
+         hostname: string;
+         port: number;
++        servername?: string;
+     }): Promise<{
+         readable: ReadableStream<Uint8Array>;
+         writable: WritableStream<Uint8Array>;
+diff --git a/dist/runtime/port-registry.d.ts b/dist/runtime/port-registry.d.ts
+index 38afa0b..926cffe 100644
+--- a/dist/runtime/port-registry.d.ts
++++ b/dist/runtime/port-registry.d.ts
+@@ -62,6 +62,11 @@ export declare function createPortCapability(): string;
+  * handler sees the request; any other target would hand it to user code.
+  */
+ export declare const DELIVERED_ACQUIRE_HEADER = "X-Nimbus-Vfs-Acquired";
++/** What holds a resident awake while a client's WebSocket through one of its ports is open. */
++export interface ClientSocketHold {
++    /** A client socket opened; the returned call says it closed (at most once). */
++    opened(): () => void;
++}
+ export declare class PortRegistry {
+     private readonly deliveredAcquire;
+     private ports;
+@@ -73,6 +78,8 @@ export declare class PortRegistry {
+     private portWaitersByPid;
+     /** Where a process's answers leave (setOutput). */
+     private output;
++    /** Who a client's WebSocket through a port holds awake while it is open (setClientSockets). */
++    private clientSockets;
+     /**
+      * @param deliveredAcquire What the owner of the filesystem attaches to a
+      *   request routed to process `pid`: the ACQUIRE answer the process applies
+@@ -89,6 +96,12 @@ export declare class PortRegistry {
+      * hands it is one nothing there sees, which `output` is told. One slot.
+      */
+     setOutput(output: ProcessOutput | null): void;
++    /**
++     * Hold `hold` for each client WebSocket an upgrade opens through a port, until
++     * it closes. The socket is relayed here, so its close is seen; without a
++     * hold, the target's socket is handed over as it is. One slot.
++     */
++    setClientSockets(hold: ClientSocketHold | null): void;
+     /**
+      * Remember the available facet capabilities for a running process.
+      * `deliversAcquire`: the target strips DELIVERED_ACQUIRE_HEADER before user
+diff --git a/dist/runtime/port-registry.js b/dist/runtime/port-registry.js
+index ccea7e1..9bcae6f 100644
+--- a/dist/runtime/port-registry.js
++++ b/dist/runtime/port-registry.js
+@@ -137,6 +137,41 @@ export function createPortCapability() {
+  * handler sees the request; any other target would hand it to user code.
+  */
+ export const DELIVERED_ACQUIRE_HEADER = 'X-Nimbus-Vfs-Acquired';
++/** Close `socket` as its peer closed: a code no frame can carry (1005, 1006, 1015) closes it plainly or as an error. */
++function closeAs(socket, code, reason) {
++    if (socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING)
++        return;
++    if (code === 1005)
++        socket.close();
++    else
++        socket.close(code === 1006 || code === 1015 ? 1011 : code, reason);
++}
++/**
++ * An upgrade's socket relayed through this hop, so the hold sees it open and
++ * close: frames pass unchanged both ways, and either side's close closes the
++ * other with its code and reason.
++ */
++function heldWebSocket(response, target, hold) {
++    const pair = new WebSocketPair();
++    const client = pair[0];
++    const relay = pair[1];
++    const release = hold.opened();
++    const ended = (other, code, reason) => {
++        closeAs(other, code, reason);
++        release();
++    };
++    target.accept();
++    relay.accept();
++    target.addEventListener('message', (event) => { if (relay.readyState === WebSocket.OPEN)
++        relay.send(event.data); });
++    relay.addEventListener('message', (event) => { if (target.readyState === WebSocket.OPEN)
++        target.send(event.data); });
++    target.addEventListener('close', (event) => ended(relay, event.code, event.reason));
++    relay.addEventListener('close', (event) => ended(target, event.code, event.reason));
++    target.addEventListener('error', () => ended(relay, 1011, 'the port target\'s socket failed'));
++    relay.addEventListener('error', () => ended(target, 1011, 'the client\'s socket failed'));
++    return new Response(null, { status: 101, statusText: response.statusText, headers: response.headers, webSocket: client });
++}
+ export class PortRegistry {
+     deliveredAcquire;
+     ports = new Map();
+@@ -148,6 +183,8 @@ export class PortRegistry {
+     portWaitersByPid = new Map();
+     /** Where a process's answers leave (setOutput). */
+     output = null;
++    /** Who a client's WebSocket through a port holds awake while it is open (setClientSockets). */
++    clientSockets = null;
+     /**
+      * @param deliveredAcquire What the owner of the filesystem attaches to a
+      *   request routed to process `pid`: the ACQUIRE answer the process applies
+@@ -168,6 +205,14 @@ export class PortRegistry {
+     setOutput(output) {
+         this.output = output;
+     }
++    /**
++     * Hold `hold` for each client WebSocket an upgrade opens through a port, until
++     * it closes. The socket is relayed here, so its close is seen; without a
++     * hold, the target's socket is handed over as it is. One slot.
++     */
++    setClientSockets(hold) {
++        this.clientSockets = hold;
++    }
+     /**
+      * Remember the available facet capabilities for a running process.
+      * `deliversAcquire`: the target strips DELIVERED_ACQUIRE_HEADER before user
+@@ -444,6 +489,8 @@ export class PortRegistry {
+                     headers: { 'Content-Type': 'application/json' },
+                 });
+             }
++            if (response.webSocket && this.clientSockets !== null)
++                return heldWebSocket(response, response.webSocket, this.clientSockets);
+             // A navigation's answer is the document the browser will isolate (or
+             // not) by these headers; a redirect is not a document.
+             if (request.headers.get('Sec-Fetch-Mode') === 'navigate' && (response.status < 300 || response.status > 399)) {
+diff --git a/dist/shell/shell-entrypoints.d.ts b/dist/shell/shell-entrypoints.d.ts
+index d0295e6..cf4199e 100644
+--- a/dist/shell/shell-entrypoints.d.ts
++++ b/dist/shell/shell-entrypoints.d.ts
+@@ -13,6 +13,7 @@ type ShellCommandContext = {
+     cwd?: string;
+     env?: Record<string, string>;
+     stdin?: unknown;
++    signal?: AbortSignal;
+     terminalStdin?: TerminalInputStream;
+     isFdTerminal?: (fd: number) => boolean;
+     pid: number;
+@@ -28,6 +29,7 @@ export type ShellEntrypointExecutor = {
+         onStdout?: (data: Uint8Array) => void | Promise<void>;
+         onStderr?: (data: Uint8Array) => void | Promise<void>;
+         stdin?: string | CommandInputStream;
++        signal?: AbortSignal;
+         terminalStdin?: TerminalInputStream;
+         runExitTrap?: boolean;
+         isolateShellState?: boolean;
+diff --git a/dist/shell/shell-entrypoints.js b/dist/shell/shell-entrypoints.js
+index 9017e30..2c577d6 100644
+--- a/dist/shell/shell-entrypoints.js
++++ b/dist/shell/shell-entrypoints.js
+@@ -50,6 +50,7 @@ function makeShellEntrypoint(shellName, shell) {
+             shellOptions: program.options,
+             scriptMode: true,
+             stdin: inheritedStdin.stdin,
++            signal: ctx.signal,
+             terminalStdin: ctx.terminalStdin,
+             onStdout: ctx.stdout.writeBytes ? (bytes) => ctx.stdout.writeBytes(bytes) : textSink((data) => ctx.stdout.write(data)),
+             onStderr: ctx.stderr.writeBytes ? (bytes) => ctx.stderr.writeBytes(bytes) : textSink((data) => ctx.stderr.write(data)),
+diff --git a/dist/substrate/lifo/shell/builtins.js b/dist/substrate/lifo/shell/builtins.js
+index 416bf8b..db73237 100644
+--- a/dist/substrate/lifo/shell/builtins.js
++++ b/dist/substrate/lifo/shell/builtins.js
+@@ -113,7 +113,7 @@ async function builtinExport({ args, stderr, state }) {
+ async function builtinSet({ args, stdout, stderr, state, context }) {
+     if (args.length === 0) {
+         for (const key of Object.keys(state.env).sort()) {
+-            (await stdout.write(`${key}=${quoteSetValue(state.env[key] ?? '')}\n`));
++            (await stdout.write(`${listedName(key)}=${quoteSetValue(state.env[key] ?? '')}\n`));
+         }
+         return 0;
+     }
+@@ -283,8 +283,8 @@ async function builtinReadonly({ args, stdout, stderr, state }) {
+         for (const name of Array.from(state.readonlyNames).sort()) {
+             const value = state.env[name];
+             (await stdout.write(value === undefined
+-                ? `readonly ${name}\n`
+-                : `readonly ${name}=${quoteSetValue(value)}\n`));
++                ? `readonly ${listedName(name)}\n`
++                : `readonly ${listedName(name)}=${quoteSetValue(value)}\n`));
+         }
+         return 0;
+     }
+@@ -808,8 +808,35 @@ function normalizeTrapSignal(raw) {
+     return null;
+ }
+ function quoteSetValue(value) {
++    // Kinu patch (NIMBUS-ASKS #52): an ill-formed value is listed losslessly, so the listing tells it from any other.
++    if (!value.isWellFormed())
++        return dollarQuote(value);
+     return value.length > 0 && isPlainSetValue(value) ? value : singleQuote(value);
+ }
++/** `value` as bash's `$'…'`, each lone surrogate `\uXXXX`: text TextEncoder keeps whole. */
++function dollarQuote(value) {
++    let out = "$'";
++    for (let i = 0; i < value.length; i++) {
++        const code = value.charCodeAt(i);
++        const paired = code >= 0xd800 && code <= 0xdbff && i + 1 < value.length
++            && value.charCodeAt(i + 1) >= 0xdc00 && value.charCodeAt(i + 1) <= 0xdfff;
++        if (paired) {
++            out += value.slice(i, i + 2);
++            i++;
++        }
++        else if (code >= 0xd800 && code <= 0xdfff) {
++            out += `\\u${code.toString(16)}`;
++        }
++        else {
++            out += value[i] === '\\' || value[i] === "'" ? `\\${value[i]}` : value[i];
++        }
++    }
++    return `${out}'`;
++}
++/** A variable's name as `set` lists it: as it is, or as `dollarQuote` writes it when ill-formed. */
++function listedName(name) {
++    return name.isWellFormed() ? name : dollarQuote(name);
++}
+ function isPlainSetValue(value) {
+     for (let i = 0; i < value.length; i++) {
+         const code = value.charCodeAt(i);
+diff --git a/dist/vfs/composite.js b/dist/vfs/composite.js
+index 79195b4..f6401ea 100644
+--- a/dist/vfs/composite.js
++++ b/dist/vfs/composite.js
+@@ -1969,7 +1969,41 @@ export class CompositeVFS {
+     walkRemove(ops, rel, path) {
+         const at = (r) => (r === rel ? path : path + r.slice(rel === '/' ? 0 : rel.length));
+         const order = [];
+-        const visit = (r) => then(ops.stat(r, { follow: false }), (stat) => {
++        const kept = new Set();
++        const gone = new Set();
++        const failures = [];
++        const keepWithAncestors = (r) => {
++            for (let k = r;; k = parentOf(k)) {
++                kept.add(k);
++                if (k === rel || k === '/')
++                    break;
++            }
++        };
++        // Kinu patch (NIMBUS-ASKS #51): a child the walk cannot read is kept, with the directories holding it, and
++        // reported; the rest of the tree is still removed, as rm -r does. One that went meanwhile is gone.
++        const unread = (r, syscall, cause) => {
++            if (isVfsError(cause, 'ENOENT'))
++                return;
++            keepWithAncestors(r);
++            failures.push({
++                path: at(r),
++                error: syscallError(isVfsError(cause) ? cause.code : 'EIO', syscall, at(r), { detail: isVfsError(cause) ? cause.detail : String(cause), cause }),
++            });
++        };
++        const reading = (r, syscall, read, next) => {
++            let out;
++            try {
++                out = read();
++            }
++            catch (cause) {
++                unread(r, syscall, cause);
++                return undefined;
++            }
++            return isPromise(out) ? out.then(next, (cause) => { unread(r, syscall, cause); }) : next(out);
++        };
++        const visit = (r) => (r === rel ? then(ops.stat(r, { follow: false }), (stat) => entered(r, stat))
++            : reading(r, 'lstat', () => ops.stat(r, { follow: false }), (stat) => entered(r, stat)));
++        const entered = (r, stat) => {
+             if (stat === null) {
+                 if (r === rel)
+                     throw new Refusal('ENOENT', path);
+@@ -1978,20 +2012,10 @@ export class CompositeVFS {
+             order.push({ rel: r, dir: stat.type === 'directory' });
+             if (stat.type !== 'directory')
+                 return undefined;
+-            return then(ops.readdir(r), (entries) => entries.reduce((chain, entry) => then(chain, () => visit(r === '/' ? `/${entry.name}` : `${r}/${entry.name}`)), undefined));
+-        });
++            return reading(r, 'scandir', () => ops.readdir(r), (entries) => entries.reduce((chain, entry) => then(chain, () => visit(r === '/' ? `/${entry.name}` : `${r}/${entry.name}`)), undefined));
++        };
+         return then(visit(rel), () => {
+             order.reverse();
+-            const kept = new Set();
+-            const gone = new Set();
+-            const failures = [];
+-            const keepWithAncestors = (r) => {
+-                for (let k = r;; k = parentOf(k)) {
+-                    kept.add(k);
+-                    if (k === rel || k === '/')
+-                        break;
+-                }
+-            };
+             return then(order.reduce((chain, entry) => then(chain, () => {
+                 if (kept.has(entry.rel))
+                     return undefined;
+diff --git a/src/_shared/workspace-network.ts b/src/_shared/workspace-network.ts
+index 0d4715b..e5d7f03 100644
+--- a/src/_shared/workspace-network.ts
++++ b/src/_shared/workspace-network.ts
+@@ -27,7 +27,12 @@
+  * An egress that carries no TCP at all refuses in its `connect`.
+  */
+ export interface WorkspaceEgressTls {
+-  connectTls(target: { hostname: string; port: number }): Promise<{
++  /**
++   * `servername`, when the program named one other than `hostname`, is the
++   * name the session presents (SNI) and checks the server's certificate by,
++   * as Node's `tls.connect({ servername })` does; absent, `hostname`.
++   */
++  connectTls(target: { hostname: string; port: number; servername?: string }): Promise<{
+     readable: ReadableStream<Uint8Array>;
+     writable: WritableStream<Uint8Array>;
+   }>;
+diff --git a/src/runtime/port-registry.ts b/src/runtime/port-registry.ts
+index dda6950..4ecbc65 100644
+--- a/src/runtime/port-registry.ts
++++ b/src/runtime/port-registry.ts
+@@ -174,6 +174,44 @@ export function createPortCapability(): string {
+  */
+ export const DELIVERED_ACQUIRE_HEADER = 'X-Nimbus-Vfs-Acquired';
+ 
++/** What holds a resident awake while a client's WebSocket through one of its ports is open. */
++export interface ClientSocketHold {
++  /** A client socket opened; the returned call says it closed (at most once). */
++  opened(): () => void;
++}
++
++/** Close `socket` as its peer closed: a code no frame can carry (1005, 1006, 1015) closes it plainly or as an error. */
++function closeAs(socket: WebSocket, code: number, reason: string): void {
++  if (socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) return;
++  if (code === 1005) socket.close();
++  else socket.close(code === 1006 || code === 1015 ? 1011 : code, reason);
++}
++
++/**
++ * An upgrade's socket relayed through this hop, so the hold sees it open and
++ * close: frames pass unchanged both ways, and either side's close closes the
++ * other with its code and reason.
++ */
++function heldWebSocket(response: Response, target: WebSocket, hold: ClientSocketHold): Response {
++  const pair = new WebSocketPair();
++  const client = pair[0];
++  const relay = pair[1];
++  const release = hold.opened();
++  const ended = (other: WebSocket, code: number, reason: string) => {
++    closeAs(other, code, reason);
++    release();
++  };
++  target.accept();
++  relay.accept();
++  target.addEventListener('message', (event) => { if (relay.readyState === WebSocket.OPEN) relay.send(event.data); });
++  relay.addEventListener('message', (event) => { if (target.readyState === WebSocket.OPEN) target.send(event.data); });
++  target.addEventListener('close', (event) => ended(relay, event.code, event.reason));
++  relay.addEventListener('close', (event) => ended(target, event.code, event.reason));
++  target.addEventListener('error', () => ended(relay, 1011, 'the port target\'s socket failed'));
++  relay.addEventListener('error', () => ended(target, 1011, 'the client\'s socket failed'));
++  return new Response(null, { status: 101, statusText: response.statusText, headers: response.headers, webSocket: client });
++}
++
+ export class PortRegistry {
+   private ports = new Map<number, PortEntry>();
+   private facetStubsByPid = new Map<number, RouteableFacetTarget>();
+@@ -184,6 +222,8 @@ export class PortRegistry {
+   private portWaitersByPid = new Map<number, Set<() => void>>();
+   /** Where a process's answers leave (setOutput). */
+   private output: ProcessOutput | null = null;
++  /** Who a client's WebSocket through a port holds awake while it is open (setClientSockets). */
++  private clientSockets: ClientSocketHold | null = null;
+ 
+   /**
+    * @param deliveredAcquire What the owner of the filesystem attaches to a
+@@ -207,6 +247,15 @@ export class PortRegistry {
+     this.output = output;
+   }
+ 
++  /**
++   * Hold `hold` for each client WebSocket an upgrade opens through a port, until
++   * it closes. The socket is relayed here, so its close is seen; without a
++   * hold, the target's socket is handed over as it is. One slot.
++   */
++  setClientSockets(hold: ClientSocketHold | null): void {
++    this.clientSockets = hold;
++  }
++
+   /**
+    * Remember the available facet capabilities for a running process.
+    * `deliversAcquire`: the target strips DELIVERED_ACQUIRE_HEADER before user
+@@ -506,6 +555,8 @@ export class PortRegistry {
+         );
+       }
+ 
++      if (response.webSocket && this.clientSockets !== null) return heldWebSocket(response, response.webSocket, this.clientSockets);
++
+       // A navigation's answer is the document the browser will isolate (or
+       // not) by these headers; a redirect is not a document.
+       if (request.headers.get('Sec-Fetch-Mode') === 'navigate' && (response.status < 300 || response.status > 399)) {
+diff --git a/src/shell/shell-entrypoints.ts b/src/shell/shell-entrypoints.ts
+index dd485e4..5526d89 100644
+--- a/src/shell/shell-entrypoints.ts
++++ b/src/shell/shell-entrypoints.ts
+@@ -14,6 +14,7 @@ type ShellCommandContext = {
+   cwd?: string;
+   env?: Record<string, string>;
+   stdin?: unknown;
++  signal?: AbortSignal;
+   terminalStdin?: TerminalInputStream;
+   isFdTerminal?: (fd: number) => boolean;
+   pid: number;
+@@ -30,6 +31,7 @@ export type ShellEntrypointExecutor = {
+     onStdout?: (data: Uint8Array) => void | Promise<void>;
+     onStderr?: (data: Uint8Array) => void | Promise<void>;
+     stdin?: string | CommandInputStream;
++    signal?: AbortSignal;
+     terminalStdin?: TerminalInputStream;
+     runExitTrap?: boolean;
+     isolateShellState?: boolean;
+@@ -114,6 +116,7 @@ function makeShellEntrypoint(
+       shellOptions: program.options,
+       scriptMode: true,
+       stdin: inheritedStdin.stdin,
++      signal: ctx.signal,
+       terminalStdin: ctx.terminalStdin,
+       onStdout: ctx.stdout.writeBytes ? (bytes) => ctx.stdout.writeBytes!(bytes) : textSink((data) => ctx.stdout.write(data)),
+       onStderr: ctx.stderr.writeBytes ? (bytes) => ctx.stderr.writeBytes!(bytes) : textSink((data) => ctx.stderr.write(data)),
+diff --git a/src/substrate/lifo/shell/builtins.ts b/src/substrate/lifo/shell/builtins.ts
+index f091a96..82cd910 100644
+--- a/src/substrate/lifo/shell/builtins.ts
++++ b/src/substrate/lifo/shell/builtins.ts
+@@ -155,7 +155,7 @@ async function builtinExport({ args, stderr, state }: BuiltinCall): Promise<numb
+ async function builtinSet({ args, stdout, stderr, state, context }: BuiltinCall): Promise<number> {
+   if (args.length === 0) {
+     for (const key of Object.keys(state.env).sort()) {
+-      (await stdout.write(`${key}=${quoteSetValue(state.env[key] ?? '')}\n`));
++      (await stdout.write(`${listedName(key)}=${quoteSetValue(state.env[key] ?? '')}\n`));
+     }
+     return 0;
+   }
+@@ -334,8 +334,8 @@ async function builtinReadonly({ args, stdout, stderr, state }: BuiltinCall): Pr
+     for (const name of Array.from(state.readonlyNames).sort()) {
+       const value = state.env[name];
+       (await stdout.write(value === undefined
+-        ? `readonly ${name}\n`
+-        : `readonly ${name}=${quoteSetValue(value)}\n`));
++        ? `readonly ${listedName(name)}\n`
++        : `readonly ${listedName(name)}=${quoteSetValue(value)}\n`));
+     }
+     return 0;
+   }
+@@ -849,9 +849,35 @@ function normalizeTrapSignal(raw: string): string | null {
+ }
+ 
+ function quoteSetValue(value: string): string {
++  // Kinu patch (NIMBUS-ASKS #52): an ill-formed value is listed losslessly, so the listing tells it from any other.
++  if (!value.isWellFormed()) return dollarQuote(value);
+   return value.length > 0 && isPlainSetValue(value) ? value : singleQuote(value);
+ }
+ 
++/** `value` as bash's `$'…'`, each lone surrogate `\uXXXX`: text TextEncoder keeps whole. */
++function dollarQuote(value: string): string {
++  let out = "$'";
++  for (let i = 0; i < value.length; i++) {
++    const code = value.charCodeAt(i);
++    const paired = code >= 0xd800 && code <= 0xdbff && i + 1 < value.length
++      && value.charCodeAt(i + 1) >= 0xdc00 && value.charCodeAt(i + 1) <= 0xdfff;
++    if (paired) {
++      out += value.slice(i, i + 2);
++      i++;
++    } else if (code >= 0xd800 && code <= 0xdfff) {
++      out += `\\u${code.toString(16)}`;
++    } else {
++      out += value[i] === '\\' || value[i] === "'" ? `\\${value[i]}` : value[i];
++    }
++  }
++  return `${out}'`;
++}
++
++/** A variable's name as `set` lists it: as it is, or as `dollarQuote` writes it when ill-formed. */
++function listedName(name: string): string {
++  return name.isWellFormed() ? name : dollarQuote(name);
++}
++
+ function isPlainSetValue(value: string): boolean {
+   for (let i = 0; i < value.length; i++) {
+     const code = value.charCodeAt(i);
+diff --git a/src/vfs/composite.ts b/src/vfs/composite.ts
+index ce7f2c4..7aed491 100644
+--- a/src/vfs/composite.ts
++++ b/src/vfs/composite.ts
+@@ -2166,29 +2166,46 @@ export class CompositeVFS implements VFS {
+   private walkRemove(ops: SyncVFS, rel: string, path: string): Awaitable<VfsRemoval> {
+     const at = (r: string): string => (r === rel ? path : path + r.slice(rel === '/' ? 0 : rel.length));
+     const order: Array<{ rel: string; dir: boolean }> = [];
+-    const visit = (r: string): Awaitable<void> => then(ops.stat(r, { follow: false }), (stat) => {
++    const kept = new Set<string>();
++    const gone = new Set<string>();
++    const failures: VfsRemovalFailure[] = [];
++    const keepWithAncestors = (r: string): void => {
++      for (let k = r; ; k = parentOf(k)) {
++        kept.add(k);
++        if (k === rel || k === '/') break;
++      }
++    };
++    // Kinu patch (NIMBUS-ASKS #51): a child the walk cannot read is kept, with the directories holding it, and
++    // reported; the rest of the tree is still removed, as rm -r does. One that went meanwhile is gone.
++    const unread = (r: string, syscall: string, cause: unknown): void => {
++      if (isVfsError(cause, 'ENOENT')) return;
++      keepWithAncestors(r);
++      failures.push({
++        path: at(r),
++        error: syscallError(isVfsError(cause) ? cause.code : 'EIO', syscall, at(r), { detail: isVfsError(cause) ? cause.detail : String(cause), cause }),
++      });
++    };
++    const reading = <T>(r: string, syscall: string, read: () => Awaitable<T>, next: (value: T) => Awaitable<void>): Awaitable<void> => {
++      let out: Awaitable<T>;
++      try { out = read(); } catch (cause) { unread(r, syscall, cause); return undefined; }
++      return isPromise(out) ? out.then(next, (cause: unknown) => { unread(r, syscall, cause); }) : next(out);
++    };
++    const visit = (r: string): Awaitable<void> => (r === rel ? then(ops.stat(r, { follow: false }), (stat) => entered(r, stat))
++      : reading(r, 'lstat', () => ops.stat(r, { follow: false }), (stat) => entered(r, stat)));
++    const entered = (r: string, stat: VfsStat | null): Awaitable<void> => {
+       if (stat === null) {
+         if (r === rel) throw new Refusal('ENOENT', path);
+         return undefined;
+       }
+       order.push({ rel: r, dir: stat.type === 'directory' });
+       if (stat.type !== 'directory') return undefined;
+-      return then(ops.readdir(r), (entries) => entries.reduce<Awaitable<void>>(
++      return reading(r, 'scandir', () => ops.readdir(r), (entries) => entries.reduce<Awaitable<void>>(
+         (chain, entry) => then(chain, () => visit(r === '/' ? `/${entry.name}` : `${r}/${entry.name}`)),
+         undefined,
+       ));
+-    });
++    };
+     return then(visit(rel), () => {
+       order.reverse();
+-      const kept = new Set<string>();
+-      const gone = new Set<string>();
+-      const failures: VfsRemovalFailure[] = [];
+-      const keepWithAncestors = (r: string): void => {
+-        for (let k = r; ; k = parentOf(k)) {
+-          kept.add(k);
+-          if (k === rel || k === '/') break;
+-        }
+-      };
+       return then(order.reduce<Awaitable<void>>((chain, entry) => then(chain, () => {
+         if (kept.has(entry.rel)) return undefined;
+         const fail = (cause: unknown): void => {

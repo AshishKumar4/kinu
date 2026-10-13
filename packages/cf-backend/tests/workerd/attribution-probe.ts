@@ -14,7 +14,8 @@ import * as v from 'valibot';
 import { ownerCaller } from '@kinu.run/core';
 import { diagnostics } from '@kinu.run/core/obs';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
-import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
+import { ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
+import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import type { AttributedLine } from './attribution-shapes';
 
 export * from '../../src/server';

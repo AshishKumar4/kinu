@@ -1,8 +1,10 @@
 /**
  * The hub pushes UPDATE on HELLO when the named build differs, the owner allows it, and the daemon
- * has not refused that build; a daemon naming no build keeps `daemon_outdated` and gets nothing.
+ * has not refused that build; a daemon naming no build gets nothing.
  */
+import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, test } from 'bun:test';
+import * as v from 'valibot';
 import { Database } from 'bun:sqlite';
 import { DEVICE_PROTOCOL_VERSION, DEVICE_UPDATE, decodeJsonValue, type JsonValue } from '@kinu.run/core';
 import { createTestUserDO, provisionTestWorkspace, testOwner, TEST_USER_ENV, type TestUserDO } from './helpers/user-do';
@@ -13,6 +15,9 @@ import { makeKv } from './helpers/kv';
 import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
 
 const SERVED = '0.3.0+served1';
+
+/** The device protocol the previous release's daemon speaks (packages/pc-agent/tests/fixtures/protocol-2). */
+const PROTOCOL_2_PROTOCOL = new URL('../../pc-agent/tests/fixtures/protocol-2/device-protocol.json.txt', import.meta.url);
 
 const LINUX_X64 = '/downloads/kinu-cli-linux-x64.tar.gz';
 
@@ -42,14 +47,15 @@ async function connected(served: string | null = SERVED): Promise<TestUserDO & {
   return Object.assign(harness, { deviceId, token });
 }
 
-const hello = (fields: Record<string, JsonValue>): JsonValue => ({ ...CAPABLE_HELLO, arch: 'x64', ...fields });
+/** The runtime the refusing daemon ran on: the launcher's Bun before the pin moved. */
+const REFUSED_ON = 'Bun 1.4.0';
+
+/** The daemon these tests drive runs where the refusing daemon ran, unless a test moves it. */
+const hello = (fields: Record<string, JsonValue>): JsonValue => ({ ...CAPABLE_HELLO, arch: 'x64', runtime: REFUSED_ON, ...fields });
 
 async function devices(harness: TestUserDO) {
   return harness.userDO.listDevices(await testOwner());
 }
-
-/** The runtime the refusing daemon ran on: the launcher's Bun before the pin moved. */
-const REFUSED_ON = 'Bun 1.4.0';
 
 async function refuse(harness: TestUserDO, token: string, version = SERVED, reason = REFUSAL): Promise<Response> {
   return pcRoutes.fetch(new Request('https://kinu.test/pc/update-refused', {
@@ -142,12 +148,11 @@ describe('a daemon reports why it cannot take a served build', () => {
 
   test('a refusal holds while the daemon runs where it refused, and lapses when it reports another runtime', async () => {
     const harness = await connected();
-    await harness.sendDeviceHello(hello({ version: '0.2.0+older', updateCheck: true }));
+    await harness.sendDeviceHello(hello({ version: '0.2.0+older', updateCheck: true, runtime: REFUSED_ON }));
     expect(harness.devicePushes).toHaveLength(1);
     expect((await refuse(harness, harness.token)).status).toBe(200);
 
-    // The daemon that refused on 1.4.0, an older daemon that names no runtime, and the same runtime again.
-    await harness.sendDeviceHello(hello({ version: '0.2.0+older', updateCheck: true }));
+    // The daemon that refused on 1.4.0, connecting again on that runtime.
     await harness.sendDeviceHello(hello({ version: '0.2.0+older', updateCheck: true, runtime: REFUSED_ON }));
     expect(harness.devicePushes).toHaveLength(1);
     expect((await devices(harness))[0]).toMatchObject({ update: 'refused', updateRefusal: REFUSAL });
@@ -287,14 +292,6 @@ describe('the UPDATE frame a HELLO earns', () => {
     expect(row?.sandbox.capability).toBe('sandboxed');
   });
 
-  test('a daemon with no sandbox field still reads daemon_outdated, version or not', async () => {
-    const harness = await connected();
-    await harness.sendDeviceHello({ type: 'HELLO', os: 'linux', hostname: 'old' });
-    const [row] = await devices(harness);
-    expect(row?.sandbox).toMatchObject({ capability: 'files_only', reason: 'daemon_outdated' });
-    expect(harness.devicePushes).toEqual([]);
-  });
-
   test('a platform no artifact is built for gets nothing', async () => {
     const harness = await connected();
     await harness.sendDeviceHello(hello({ version: '0.2.0+older', updateCheck: true, arch: 'riscv64' }));
@@ -355,12 +352,40 @@ describe('the Devices read model carries the version and the served build', () =
 
   test('a daemon the hub refuses for its protocol reads as needing an update, until a HELLO the hub accepts', async () => {
     const harness = await connected();
-    await harness.sendDeviceHello(hello({ version: '0.2.0+older', updateCheck: true, protocolVersion: DEVICE_PROTOCOL_VERSION - 1 }));
+    await harness.sendDeviceHello(hello({ version: '0.2.0+older', updateCheck: true, protocolVersion: DEVICE_PROTOCOL_VERSION - 2 }));
     expect((await devices(harness))[0]).toMatchObject({ connected: false, update: 'required' });
 
     harness.attachDevice(harness.deviceId);
     await harness.sendDeviceHello(hello({ version: SERVED, updateCheck: true }));
     expect((await devices(harness))[0]).toMatchObject({ connected: true, update: 'current' });
+  });
+
+  test('a protocol-2 daemon from the previous release is pushed the update and given nothing else', async () => {
+    const harness = await connected();
+    const previous = v.parse(v.object({ version: v.number(), methods: v.record(v.string(), v.unknown()) }), JSON.parse(readFileSync(PROTOCOL_2_PROTOCOL, 'utf8')));
+
+    await harness.sendDeviceHello(hello({ version: '0.2.0+older', updateCheck: true, protocolVersion: previous.version, features: Object.keys(previous.methods) }));
+    expect(harness.devicePushes).toEqual([expect.objectContaining({ type: DEVICE_UPDATE, version: SERVED })]);
+    expect((await devices(harness))[0]).toMatchObject({ update: 'required' });
+
+    // No call reaches it: no command, no file, no tunnel.
+    const workspace = { workspaceToken: await provisionTestWorkspace(harness, 'previous-daemon-workspace') };
+    const sent = harness.deviceFrames.length;
+
+    for (const [method, params] of [['exec', ['echo hi']], ['readFile', ['/home/me/a.txt']], ['writeFile', ['/home/me/a.txt', 'x']]] as const) {
+      await expect(harness.userDO.deviceRpc(workspace, method, [...params], { agentName: 'previous-daemon-workspace' })).rejects.toMatchObject({ code: expect.any(String) });
+    }
+
+    expect(harness.deviceFrames.slice(sent)).toEqual([]);
+  });
+
+  test('a protocol-2 daemon whose owner turned updates off is refused outright', async () => {
+    const harness = await connected();
+    const previous = v.parse(v.object({ version: v.number() }), JSON.parse(readFileSync(PROTOCOL_2_PROTOCOL, 'utf8')));
+
+    await harness.sendDeviceHello(hello({ version: '0.2.0+older', updateCheck: false, protocolVersion: previous.version }));
+    expect(harness.devicePushes).toEqual([]);
+    expect((await devices(harness))[0]).toMatchObject({ connected: false, update: 'required' });
   });
 
   test('a later HELLO without a version overwrites: the row says what THIS daemon said', async () => {

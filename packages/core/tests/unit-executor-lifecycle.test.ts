@@ -10,10 +10,10 @@ import {
   nimbusSessionFiles,
   nimbusSessionShell,
   isSandboxTransientError,
-  type NimbusSandboxHandle,
   type SandboxHandle,
   WORKSPACE_ROOT,
 } from "../src/index";
+import { sessionFilesOver, type SessionBox } from "@kinu.run/test-utils/vfs";
 
 function sandboxHandle(): SandboxHandle & { calls: string[]; execOptions: unknown[] } {
   const calls: string[] = [];
@@ -26,7 +26,7 @@ function sandboxHandle(): SandboxHandle & { calls: string[]; execOptions: unknow
       calls.push(`exec:${command}`);
       execOptions.push(opts);
 
-      return { stdout: "ok", exitCode: 0 };
+      return { stdout: "ok", stderr: '', exitCode: 0 };
     },
     async readFile(path: string) {
       calls.push(`read:${path}`);
@@ -61,7 +61,7 @@ function sandboxHandle(): SandboxHandle & { calls: string[]; execOptions: unknow
   };
 }
 
-function nimbusBox(): NimbusSandboxHandle & { calls: string[]; execOptions: unknown[] } {
+function nimbusBox(): SessionBox & { calls: string[]; execOptions: unknown[] } {
   const calls: string[] = [];
   const execOptions: unknown[] = [];
 
@@ -85,32 +85,7 @@ function nimbusBox(): NimbusSandboxHandle & { calls: string[]; execOptions: unkn
         timestamp: Date.now(),
       };
     },
-    files: {
-      async read(path: string) {
-        calls.push(`read:${path}`);
-
-        return "hello";
-      },
-      async write(path: string, content: string | Uint8Array) {
-        calls.push(`write:${path}:${content instanceof Uint8Array ? content.byteLength : content}`);
-      },
-      async list(path: string) {
-        calls.push(`list:${path}`);
-
-        return [{ name: "a.txt", type: "file" }];
-      },
-      async exists(path: string) {
-        calls.push(`exists:${path}`);
-
-        return true;
-      },
-      async mkdir(path: string) {
-        calls.push(`mkdir:${path}`);
-      },
-      async delete(path: string) {
-        calls.push(`delete:${path}`);
-      },
-    },
+    files: sessionFilesOver(),
     runtimes: {
       async ensure(specs: string | string[]): Promise<undefined> {
         calls.push(`ensure:${Array.isArray(specs) ? specs.join(",") : specs}`);
@@ -161,11 +136,11 @@ function nimbusBox(): NimbusSandboxHandle & { calls: string[]; execOptions: unkn
 }
 
 /** The hosted workspace over a Nimbus box, composed as cf-backend composes it. */
-function nimbusWorkspace(box: NimbusSandboxHandle) {
+function nimbusWorkspace(box: SessionBox) {
   const { rt } = createTestRuntime();
 
   return createNimbusWorkspaceExecutor({
-    box, inline: { vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), memory: rt.memory, craftStore: rt.craftStore },
+    box, inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), memory: rt.memory, craftStore: rt.craftStore },
   });
 }
 
@@ -407,7 +382,7 @@ describe("the sandbox namespace a program calls", () => {
   test('all exposure surfaces refuse fractional ports before any container work', async () => {
     const handle = sandboxHandle();
 
-    handle.exec = async () => ({ stdout: '200|0', exitCode: 0 });
+    handle.exec = async () => ({ stdout: '200|0', stderr: '', exitCode: 0 });
 
     const provider = createSandboxExecutor(handle, { previewHostSuffix: 'kinu.example.test' });
     const direct = present(provider.exposePort, 'sandbox provider exposePort');

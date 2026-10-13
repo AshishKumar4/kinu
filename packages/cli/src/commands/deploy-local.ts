@@ -15,7 +15,7 @@ import {
   renderLocalConfig, renderWorkerdConfig, unhostedBindings, workerdDirectories,
   type LocalConfig, type LocalLayout, type TarArtifact,
 } from '@kinu.run/core/deploy';
-import { tolerate, settle } from '@kinu.run/core/obs';
+import { KinuError, tolerate, settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { AGENT_HOME, ensureAgentHome } from '../config';
 import { ACCENT, DIM, OK, WARN } from '../display';
@@ -34,7 +34,7 @@ const HEALTH_MS = 2_000;
 type PidFile =
   | { readonly kind: 'none' }
   | { readonly kind: 'foreign'; readonly pid: number }
-  | { readonly kind: 'ours'; readonly pid: number; readonly startedAt: string | null };
+  | { readonly kind: 'ours'; readonly pid: number; readonly startedAt: string };
 
 type Readiness = 'serving' | 'exited' | 'foreign' | 'silent';
 
@@ -153,12 +153,12 @@ async function layMembers(artifact: TarArtifact, wanted: ReadonlySet<string>, di
 
 /** The address is returned only once the child lives and `/api/health` answered: another process's address
  * printed as ours is worse than an error. */
-function startLocalInstance(): Effect.Effect<LocalInstance | null> {
+function startLocalInstance(): Effect.Effect<LocalInstance | null, KinuError> {
   return Effect.gen(function* () {
     const layout = layoutOf();
     const config = yield* localConfig();
 
-    if ((yield* Effect.promise(async () => readPidFile(layout))).kind === 'ours') return null;
+    if ((yield* readPidFile(layout)).kind === 'ours') return null;
 
     const binary = existsSync(layout.workerd) ? layout.workerd : 'workerd';
     const log = openSync(layout.log, 'a');
@@ -222,10 +222,10 @@ async function unserved(
 }
 
 /** A pidfile naming a process this command does not own is a refusal, not a kill. */
-function stopLocalInstance(): Effect.Effect<number | null> {
+function stopLocalInstance(): Effect.Effect<number | null, KinuError> {
   return Effect.gen(function* () {
     const layout = layoutOf();
-    const state = yield* Effect.promise(async () => readPidFile(layout));
+    const state = yield* readPidFile(layout);
 
     if (state.kind === 'none') return null;
 
@@ -251,7 +251,7 @@ function stopLocalInstance(): Effect.Effect<number | null> {
   });
 }
 
-function report(): Effect.Effect<void> {
+function report(): Effect.Effect<void, KinuError> {
   return Effect.gen(function* () {
     const layout = layoutOf();
 
@@ -262,7 +262,7 @@ function report(): Effect.Effect<void> {
     }
 
     const config = yield* localConfig();
-    const state = yield* Effect.promise(async () => readPidFile(layout));
+    const state = yield* readPidFile(layout);
 
     if (state.kind !== 'ours') {
       console.log(`${DIM('Local Kinu')} ${ACCENT(config.version)} ${DIM('is installed and not running')} ${DIM(layout.root)}`);
@@ -270,7 +270,7 @@ function report(): Effect.Effect<void> {
       return;
     }
 
-    const since = state.startedAt === null ? '' : ` ${DIM(`since ${state.startedAt}`)}`;
+    const since = ` ${DIM(`since ${state.startedAt}`)}`;
 
     console.log(`${OK('✓')} Local Kinu ${ACCENT(config.version)} on ${ACCENT(config.address)} `
       + `${DIM(`pid ${String(state.pid)}`)}${since}`);
@@ -306,30 +306,34 @@ function readPort(given: string | undefined): Effect.Effect<number> {
   return Effect.succeed(port);
 }
 
-/** Older installs left pid-only files, so the start time is a separate second line. */
 function renderPidFile(pid: number, at: Date): string {
   return `${String(pid)}\n${at.toISOString()}\n`;
 }
 
 /** Clears the file unless argv names `workerd` and this layout's capnp path; a reused pid must never be signalled. */
-async function readPidFile(layout: LocalLayout): Promise<PidFile> {
-  const text = tolerate(() => readFileSync(layout.pid, 'utf8'), 'enoent');
+function readPidFile(layout: LocalLayout): Effect.Effect<PidFile, KinuError> {
+  return Effect.gen(function* () {
+    const text = tolerate(() => readFileSync(layout.pid, 'utf8'), 'enoent');
 
-  if (text === undefined) return { kind: 'none' };
-  const lines = text.split('\n');
-  const pid = Number.parseInt((lines[0] ?? '').trim(), 10);
+    if (text === undefined) return { kind: 'none' };
 
-  if (!Number.isInteger(pid) || pid <= 0) return cleared(layout, { kind: 'none' });
+    const parsed = v.safeParse(v.tuple([
+      v.pipe(v.string(), v.regex(/^[1-9]\d*$/u), v.transform(Number), v.safeInteger()),
+      v.pipe(v.string(), v.isoTimestamp()), v.literal(''),
+    ]), text.split('\n'));
 
-  // `/proc/<pid>` vanishes on reap, and `ps -p` refuses a pid nothing holds.
-  const args = await processArgs(pid);
+    if (!parsed.success) return yield* new KinuError('io', `Malformed local daemon PID file ${layout.pid}. Remove it and reinstall with kinu deploy local.`, { cause: new v.ValiError(parsed.issues) });
+    const [pid, startedAt] = parsed.output;
 
-  if (args === null) return cleared(layout, { kind: 'none' });
+    // `/proc/<pid>` vanishes on reap, and `ps -p` refuses a pid nothing holds.
+    const args = yield* Effect.promise(async () => processArgs(pid));
 
-  if (!(args.includes('workerd') && args.includes(layout.capnp))) return cleared(layout, { kind: 'foreign', pid });
-  const startedAt = (lines[1] ?? '').trim();
+    if (args === null) return cleared(layout, { kind: 'none' });
 
-  return { kind: 'ours', pid, startedAt: startedAt === '' ? null : startedAt };
+    if (!(args.includes('workerd') && args.includes(layout.capnp))) return cleared(layout, { kind: 'foreign', pid });
+
+    return { kind: 'ours', pid, startedAt };
+  });
 }
 
 function cleared<Answer extends PidFile>(layout: LocalLayout, answer: Answer): Answer {

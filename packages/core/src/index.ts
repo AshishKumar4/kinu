@@ -260,7 +260,7 @@ export { parseSlateProject, slateTitle, type SlateProject } from './slates/proje
 export { slateAuthority } from './slates/authority';
 
 export {
-  SHARE_KINDS, SHARE_VIEWER_REQUESTS_PER_MINUTE, SHARE_SPEND_CAP_USD_PER_DAY, shareSpendLabel, VIEWER_EXCHANGE_PATH,
+  SHARE_VIEWER_REQUESTS_PER_MINUTE, SHARE_SPEND_CAP_USD_PER_DAY, shareSpendLabel, VIEWER_EXCHANGE_PATH,
   formatBlueprintId, parseBlueprintId, blueprintPagePath, liveSharePagePath,
   BlueprintInspectionSchema, BlueprintViewSchema, BlueprintForkSchema, BlueprintBundleSchema, PublishedBlueprintSchema,
   SharedLibrarySchema, SlateShareRecordSchema,
@@ -294,7 +294,7 @@ export {
   type SlateSummary, type SlateProblem,
 } from './slates/rpc';
 
-export { initSlateStateTable, SLATE_HOST_BINDING, SLATE_STORAGE_BINDING, routeSlateStorageCall, type SlateStorageOp } from './slates/state';
+export { initSlateStateTable, SLATE_HOST_BINDING, SLATE_STORAGE_BINDING, slateStorageCall, type SlateStorageOp } from './slates/state';
 
 // Browser-safe slate vocabulary, so it belongs on this value-imported barrel.
 export {
@@ -629,7 +629,6 @@ export {
   type SubordinateLifetime,
   type TemporaryAgentPort,
   type TemporaryRunOutcome,
-  type TemporaryRunRefusal,
   type TaskTurnEnding,
   type TemporaryRunRequest,
 } from './subordinates/temporary';
@@ -1019,7 +1018,7 @@ export {
   DEVICE_PTY_OPEN_METHOD, DEVICE_PTY_INPUT, DEVICE_PTY_RESIZE,
   DEVICE_PTY_OUTPUT, DEVICE_PTY_EXIT, DEVICE_PTY_MAX_AXIS,
   type DeviceCancelResult, type DeviceExecOutput, watchedOutput,
-  DEVICE_METHOD, DEVICE_FRAMES, DEVICE_ERRORS, DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION, DEVICE_UPDATE_REQUIRED, deviceMethodHas, deviceFailure, type DeviceMethod,
+  DeviceHelloHeadSchema, DeviceUpdateHelloSchema, DeviceHelloSchema, DEVICE_METHOD, DEVICE_FRAMES, DEVICE_ERRORS, DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION, DEVICE_UPDATE_REQUIRED, deviceMethodHas, deviceFailure, type DeviceMethod,
   DeviceSocketHub, deviceIdFromSocket, WS_OPEN,
   DEVICE_CHATGPT, DEVICE_RELAY, DeviceChatGptStatusSchema, EGRESS_ROUTE_HEADER,
   type DeviceChatGptMethod, type DeviceChatGptStatus, type DeviceRelayRequest, type RelayedProvider,
@@ -1031,8 +1030,8 @@ export {
   DeviceTerminalHub, terminalFromSocket,
   type TerminalHolder,
   nimbusSessionShell,
-  type NimbusSandboxHandle,
-  type NimbusStartResult, type NimbusExecOptions, type NimbusExecResult, type NimbusPortInfo,
+  type NimbusSandboxHandle, type NimbusSandboxFiles,
+  type NimbusStartResult, type NimbusExecResult, type NimbusPortInfo,
   EXECUTOR_CAPABILITIES, NO_TIMER_DEADLINE_MS, commandTool, wordsOnly,
   type ExecutorTool, type ExecutorToolResult, type CommandTool,
   type ExecutorCapability, type ExecutorKind, type ExecutorProvider, type ExecutorProviderSurface,
@@ -1072,11 +1071,11 @@ export {
   settleWorkspaceSlates,
   actorHomeName,
   MAIN_AGENT, AGENT_HOME_MODE, AGENT_TMP_MODE, SESSION_UID, AGENT_UID_FLOOR,
-  type AgentIdentity, type HomeRootVfs, type RootMoveVfs, type SlatesMoveVfs, type TmpConfiner,
+  type AgentIdentity, type HomeRootVfs, type TmpConfiner,
 } from './vfs/agent-home';
 
 export type {
-  WorkspaceAgent, WorkspaceAgentPlane, WorkspaceBundle, WorkspaceOptions,
+  WorkspaceAgent, WorkspaceAgentPlane, WorkspaceBundle, WorkspaceFiles, WorkspaceOptions,
   WorkspaceSession,
 } from './vfs/nimbus-workspace';
 
@@ -1305,7 +1304,6 @@ export type { Credential, BearerCredential, OAuthCredential, OpenAICompatCredent
 // Credential store policy
 export {
   createCredentialCipher,
-  isSealedCredential,
   type CredentialCipher,
   type CredentialEncryptionEnv,
 } from './credentials/envelope';
@@ -1444,11 +1442,15 @@ export {
   EGRESS_PLACEHOLDER_PREFIX,
   PLACEHOLDER_BODY_LENGTH,
   isEgressPlaceholder,
+  egressPlaceholdersIn,
+  egressGrants,
   grantedEgressBindings,
   findEgressPlaceholders,
   egressSecretRule,
   egressHostMatches,
   planEgress,
+  scrubBytes,
+  closeReason,
   scrubText,
   createScrubStream,
   type EgressSecretBinding,
@@ -1473,7 +1475,6 @@ export {
   putEgressSecret,
   revokeEgressSecret,
   resolveEgressInjection,
-  rewrapEgressSecrets,
   type EgressSecretSummary,
   type PutEgressSecretInput,
   type EgressInjection,
@@ -1553,6 +1554,7 @@ export {
 } from './safety/index';
 
 export {
+  egressHost,
   refusedHostname,
 } from './safety/egress-destination';
 
@@ -1621,7 +1623,7 @@ export {
   backgroundJobNotice,
   isBackgroundHandle, SPAWN_STARTED_OPTION, readSpawnStarted,
   DEVICE_REQUEST_OPTION, readDeviceRequestChannel, DeviceRequestOwnership, execCallArgs, execContext,
-  BackgroundJobRunner, JobNotResumable, BACKGROUND_POLICY, JOB_STAMP_ENV, MAX_CONCURRENT_DETACHED_JOBS, recordServingJobs, type PortHolders,
+  BackgroundJobRunner, JobNotResumable, BACKGROUND_POLICY, JOB_STAMP_ENV, MAX_CONCURRENT_DETACHED_JOBS, recordServingJobs, type PortHolders, type ServingScope,
   invocationBackgroundPolicy,
   backgroundJobWakeTrigger, BACKGROUND_FIBER_PREFIX,
   type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type ThresholdDeps,
@@ -1970,7 +1972,7 @@ export {
 } from './read-models/files';
 
 export type {
-  DirEntry, ExecutorFileLookup, ExecutorRowLookup, ExecutorWriteResult,
+  DirEntry, ExecutorFileLookup, ExecutorRowLookup, ExecutorTextFile, ExecutorWriteResult,
   EnvironmentInfo, MountInfo,
 } from './read-models/files';
 
@@ -2160,8 +2162,6 @@ export type { NamedSwarmPreset, SwarmNodeAssignment } from './strategy/swarm';
 export { SWARM_PRESET_DOCTRINE } from './strategy/swarm';
 
 export { fmtPct, fmtSpan, fmtTokens, fmtUsd, formatBytes, shortAge, timeAgo } from './utils/format';
-
-export { classifyTransientDO, retryTransientDO, type DOTransientClass } from './utils/do-rpc';
 
 export { relayedAnswer } from './utils/relayed-answer';
 

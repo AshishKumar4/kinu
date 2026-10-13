@@ -4369,6 +4369,10 @@ Medians (min–max), ms:
 - 18 GB has no row: its base save ran out of disk on the Medium box's
   20 GB (`mksquashfs`: no space left), before either arm differed.
 
+2026-10-11 (`b81fbc551`): the pre-D77 delta branch is deleted; a reset deletes
+every chain (`scripts/reset.ts:383-394`), and every current delta writes its
+paths list (`packages/devbox/src/disk-delta.ts:177-179`).
+
 D78. The tools tarball is built on armada, and this machine builds no
 Devbox artifact with Docker (2026-10-07, m1966b). D66's golden installs
 the pinned tools tarball onto `cloudflare/debian-trixie`; D72 kept the
@@ -4513,6 +4517,43 @@ ENOENT, ENOTDIR, ELOOP and EACCES matched the SDK's code, path and operation. Th
 explicitly drops guest capabilities: native `user: '65534:65534'` alone still read a root-owned
 0700 directory in job `20261009181805-03542862`. All container and disk contracts, the desktop
 client and cleanup passed. Source limits, full-depth walks and real-model behavior are not timed here.
+
+D82. Kinu's container has raw internet; HTTP and HTTPS still enter the vault first (2026-10-11, the
+owner's decision). This reverses D38's "Kinu starts with raw internet disabled". `KinuDevbox`
+sets `enableInternet = true`; native interception of HTTP and HTTPS and the exact-host routes before
+`KinuEgress` are unchanged, so every web request still meets placeholder resolution and destination
+judgement. Raw TCP and UDP leave directly and carry nothing Kinu resolves.
+
+Both shapes measured on real containers by the contract tier's probe (`--probe` with a box script
+listing destinations; recorder fallback in place of `KinuEgress`). Internet off, job
+`20261011204152-45e72cdb`: HTTP and HTTPS on 80/443 were intercepted; 8080/8443 timed out; raw TCP to
+github.com:22, smtp.gmail.com:587/25, a public PostgreSQL 5432 and MySQL 4497 timed out at 16 s; UDP DNS
+to 1.1.1.1, 8.8.8.8 and 2606:4700:4700::1111 answered. Internet on, job `20261011210628-8de56f35`: HTTP
+and HTTPS on 80/443 still reached the interception (four requests recorded, including
+`http://169.254.169.254/latest/meta-data/` and `http://[fd00::1]`, which `KinuEgress` refuses by
+`refusedHostname`); github.com:22 answered `SSH-2.0`, smtp.gmail.com:587 and :25 answered `220`, MySQL
+its handshake, PostgreSQL connected; UDP DNS answered. Private destinations with internet on, job
+`20261011220601-9435f42c`: 10.0.0.2, 10.0.0.254, 10.1.0.1, 10.255.255.1, 172.16.0.1, 172.31.255.1,
+192.168.0.1, 192.168.1.1, 100.64.0.1, 100.100.100.200, 169.254.169.254, 169.254.170.2, fd00::1 and
+fd00::119:1 answered on 80 only with the interception's own reply, accepted 443 into the interception
+with no reply, and timed out on 22, 2375, 3306, 5432, 6379, 8080, 9000 and 10250; UDP 53, 123 and 161
+to private addresses timed out; 10.0.0.1 refused at once. Nothing private answered past the
+interception.
+
+The remainder, measured 2026-10-12 with internet on (job `20261012214210-4c832588`, a full TCP sweep of every
+port with 1,500 connects in flight and a common-UDP sweep — 53, 67, 69, 111, 123, 137, 161, 500, 514, 520, 1900, 4500,
+4789, 5353, 8472, 11211, 51820 — of each address, a public positive control first): 1.1.1.1 answered on 53 and 80 and to
+UDP DNS. 10.0.0.1 is the box's own address (`10.0.0.1/32 host LOCAL` in its fib_trie, job `20261012220713-e5a66ff0`):
+every TCP port reset at once and every UDP port answered ICMP unreachable, its own kernel; two ephemeral-range ports
+(43842, 56364) connected with no banner, self-connects of the sweep's own concurrent sockets, both refused in a second
+box. The gateway 10.0.0.254 and 172.17.0.1 accepted 80 and 443 only, the interception sink, and timed out on every other
+TCP port and every UDP port. fe80::1 on the box's interface was unreachable. Nothing private answered past the
+interception.
+
+The cost is D44's: a container with the internet enabled waits for the platform's first DNS answer,
+about a second, which the wake's store mount meets (D44's paired store-mount phase medians: 2,035 ms
+enabled against 1,910 ms disabled). A workspace with no owner configures no vault, so its web
+requests go out unrouted, as its raw sockets do.
 
 ## Open
 

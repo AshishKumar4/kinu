@@ -176,6 +176,9 @@ interface HostTree {
   readonly orchestrations: Map<string, LocalOrchestration>;
   /** Every write to the file names the reads it moves, to the root's clients. */
   readonly liveReads: LiveReadsNotice;
+  /** Every job a session of this tree drives now: the root's and each hire's runners share it, so none counts another's
+   *  re-drive as work owed to it. */
+  readonly jobsDriven: Set<string>;
 }
 
 interface HostEntry {
@@ -520,7 +523,7 @@ export class LocalAgentHost {
     });
 
     return {
-      db, host, directory, runtimes, orchestrations, liveReads, driving: 0,
+      db, host, directory, runtimes, orchestrations, liveReads, driving: 0, jobsDriven: new Set(),
       hold: new DriverLeaseHold({ sql, execRaw: makeExecRaw(db), proc: OS_LEASE_PROCESS }, this.driverKind),
     };
   }
@@ -598,6 +601,7 @@ export class LocalAgentHost {
         actor: input.actor,
         host: input.tree.host,
         orchestration,
+        jobsDriven: input.tree.jobsDriven,
         // One queue per workspace: a hire parks on its root's, and the root's wakes the hire it answers.
         ...(input.parentKey === null
           ? { wakeHire: (actorId: string, signal: AgentSignal) => this.wakeHire(input.tree, actorId, signal) }

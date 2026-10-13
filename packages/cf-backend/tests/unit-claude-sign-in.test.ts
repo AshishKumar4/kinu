@@ -22,7 +22,7 @@ const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
 
 /** Claude's token endpoint, answering every exchange with `answer`; the requests it saw, in order. */
-function claudeTokenEndpoint(answer: () => Response): v.InferOutput<typeof TokenRequestSchema>[] {
+function claudeTokenEndpoint(answer: () => Response | Promise<Response>): v.InferOutput<typeof TokenRequestSchema>[] {
   const seen: v.InferOutput<typeof TokenRequestSchema>[] = [];
 
   globalThis.fetch = asFetchFunction(async (input, init) => {
@@ -31,7 +31,7 @@ function claudeTokenEndpoint(answer: () => Response): v.InferOutput<typeof Token
     expect(request.url).toBe(TOKEN_URL);
     seen.push(v.parse(TokenRequestSchema, await request.json()));
 
-    return answer();
+    return await answer();
   });
 
   return seen;
@@ -143,12 +143,13 @@ describe('Claude sign-in on the web', () => {
     }
   });
 
+  // The restart lands while Claude is still answering: before the first sign-in's credential is committed.
   test('a sign-in started again while Claude answered the first one stores nothing', async () => {
     const harness = createTestUserDO();
     const web = routes(harness);
-    let restarted: Promise<unknown> = Promise.resolve();
-    claudeTokenEndpoint(() => {
-      restarted = web.start();
+
+    claudeTokenEndpoint(async () => {
+      await web.start();
 
       return Response.json({ access_token: 'at', refresh_token: 'rt' });
     });
@@ -156,7 +157,6 @@ describe('Claude sign-in on the web', () => {
     try {
       const state = (await web.start()).searchParams.get('state') ?? '';
       const finished = await web.call('/claude/finish', { code: `the-code#${state}` });
-      await restarted;
 
       expect(v.parse(FinishedSchema, await finished.json()).connected).toBe(false);
       expect(await storedKeys(harness)).toEqual([]);

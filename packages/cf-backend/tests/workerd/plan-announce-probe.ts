@@ -5,7 +5,8 @@
  */
 import { getAgentByName, type AgentContext } from 'agents';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
-import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
+import { ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
+import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import * as v from 'valibot';
 
 // A root claims an owner and reaches `env.UserDO` for the device plane, so this worker binds the class.

@@ -1,12 +1,12 @@
 diff --git a/packages/core/src/evolution/changelog.ts b/packages/core/src/evolution/changelog.ts
 --- a/packages/core/src/evolution/changelog.ts
 +++ b/packages/core/src/evolution/changelog.ts
-@@ -501,7 +501,7 @@
-     ? entries.filter((e) => e.kind !== 'ratings' && e.noChange !== true)
-     : entries;
+@@ -483,7 +483,7 @@
+       const kept = opts.changesOnly === true
+         ? entries.filter((e) => e.kind !== 'ratings' && e.noChange !== true)
+         : entries;
  
--  return kept.slice(0, limit);
-+  return kept.slice(0, limit - 1);
- }
- 
- /** Unseen badge ceiling. */
+-      return kept.slice(0, limit);
++      return kept.slice(0, limit - 1);
+     },
+     catch: (cause) => cause instanceof KinuError ? cause : new KinuError('io', 'Corrupt stored evolution changelog', { cause }),

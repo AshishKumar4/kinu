@@ -9,6 +9,8 @@ import { diagnostics } from '../obs/log';
 import { KinuError } from '../obs/error';
 import { bytesToBase64 } from '../utils/base64';
 import * as v from 'valibot';
+import { connections, type Connections } from '@nimbus-sh/fabric/connections.js';
+import { z } from 'zod/v4';
 import type { DeviceSocket, DeviceSocketCtx, DeviceSocketHub } from './device-hub';
 import { WS_OPEN } from './device-hub';
 import {
@@ -26,10 +28,10 @@ const TERMINAL_SESSION_UNKNOWN = 'that terminal is no longer open; open a new on
 const TERMINAL_ALREADY_ATTACHED = 'that terminal is already open in another tab';
 
 /** Attachment JSON outlives the code that wrote it, so it is narrowed on read. */
-const TerminalAttachmentSchema = v.object({
-  terminal: v.string(),
-  device: v.string(),
-  workspace: v.string(),
+const TerminalAttachmentSchema = z.object({
+  terminal: z.string(),
+  device: z.string(),
+  workspace: z.string(),
 });
 
 const PaneControlSchema = v.object({
@@ -44,14 +46,14 @@ function terminalTag(session: string): string {
 
 /** Null when the socket is a device's or the agents SDK's. */
 export function terminalFromSocket(ws: DeviceSocket): { session: string; device: string; workspace: string } | null {
-  const attachment = v.safeParse(TerminalAttachmentSchema, ws.deserializeAttachment());
+  const attachment = TerminalAttachmentSchema.safeParse(ws.deserializeAttachment());
 
   if (!attachment.success) return null;
 
   return {
-    session: attachment.output.terminal,
-    device: attachment.output.device,
-    workspace: attachment.output.workspace,
+    session: attachment.data.terminal,
+    device: attachment.data.device,
+    workspace: attachment.data.workspace,
   };
 }
 
@@ -67,11 +69,15 @@ interface PendingSession extends TerminalHolder {
 export class DeviceTerminalHub {
   private readonly unattached = new Map<string, PendingSession>();
 
+  private readonly sockets: Connections<z.infer<typeof TerminalAttachmentSchema>>;
+
   constructor(
     private readonly ctx: DeviceSocketCtx,
     private readonly devices: DeviceSocketHub,
     private readonly now: () => number = Date.now,
-  ) {}
+  ) {
+    this.sockets = connections(ctx, TerminalAttachmentSchema);
+  }
 
   /** Holding the unguessable name is the authority to attach; the first attach spends it. */
   register(session: string, device: string, workspace: string): void {
@@ -99,14 +105,16 @@ export class DeviceTerminalHub {
 
       if (this.paneSocket(session)) return yield* new KinuError('denied', TERMINAL_ALREADY_ATTACHED);
       this.unattached.delete(session);
-      this.ctx.acceptWebSocket(server, [terminalTag(session)]);
-      server.serializeAttachment({ terminal: session, device: pending.device, workspace: pending.workspace });
+      this.sockets.accept(server, {
+        key: terminalTag(session), attachment: { terminal: session, device: pending.device, workspace: pending.workspace },
+      });
 
       return { device: pending.device, workspace: pending.workspace };
     }));
   }
 
   paneSocket(session: string): DeviceSocket | null {
+    // Nimbus ask (connections socket type): get() erases the socket's send surface.
     for (const ws of this.ctx.getWebSockets(terminalTag(session))) {
       if (ws.readyState === WS_OPEN) return ws;
     }
@@ -190,11 +198,10 @@ export class DeviceTerminalHub {
   panesForDevice(device: string): string[] {
     const sessions: string[] = [];
 
-    for (const ws of this.ctx.getWebSockets()) {
-      if (ws.readyState !== WS_OPEN) continue;
-      const held = terminalFromSocket(ws);
+    for (const ws of this.sockets.list()) {
+      const held = this.sockets.read(ws);
 
-      if (held && held.device === device) sessions.push(held.session);
+      if (held && held.device === device) sessions.push(held.terminal);
     }
 
     for (const [session, pending] of this.unattached) {

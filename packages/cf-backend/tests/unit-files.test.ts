@@ -9,6 +9,24 @@ import {
 } from "@kinu.run/core";
 import { requestUrl } from '@kinu.run/core';
 import { VfsError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
+import type { CheckpointFiles } from '@kinu.run/core';
+
+/** A plane that compares a write's digest itself, as the host folder, a machine and the sandbox do. */
+function digestChecked(files: VFS): VFS & CheckpointFiles {
+  const digest = (bytes: Uint8Array) => new Bun.CryptoHasher('sha256').update(bytes).digest('hex');
+
+  return {
+    ...files,
+    writeFileIfDigest: async (path, data, expected) => {
+      const held = await files.stat(path) === null ? null : digest(await files.readFile(path));
+
+      if (held !== expected) return { ok: false, sha256: held };
+      await files.writeFile(path, data);
+
+      return { ok: true, sha256: digest(data) };
+    },
+  };
+}
 
 describe("sortDirEntries", () => {
   test("dirs before files, alphabetical within each group", () => {
@@ -52,7 +70,7 @@ describe("writeExecutorFileOp", () => {
       mkdir: async () => undefined,
     };
 
-    const deps = { getProvider: () => ({ files, homeDir: async () => "/home/main" }) };
+    const deps = { getProvider: () => ({ files: digestChecked(files), homeDir: async () => "/home/main" }) };
 
     return { deps, written };
   }
@@ -61,7 +79,7 @@ describe("writeExecutorFileOp", () => {
     const { deps, written } = makeDeps();
     const bytes = new Uint8Array([0, 1, 2, 255, 0, 128]);
     const result = await writeExecutorFileOp(deps, "workspace", "/uploads/blob.bin", { bytes: bytes });
-    expect(result).toEqual({ ok: true });
+    expect(result).toMatchObject({ ok: true });
     expect(written.get("/uploads/blob.bin")).toEqual(bytes);
   });
 
@@ -69,14 +87,28 @@ describe("writeExecutorFileOp", () => {
     const { deps, written } = makeDeps();
     const bin = new Uint8Array([0x89, 0x50, 0x00, 0xff, 0xfe]);
     // Each environment gets the path in its own namespace: nothing prefixed or stripped.
-    expect(await writeExecutorFileOp(deps, "sandbox", "/workspace/logo.png", { bytes: bin })).toEqual({ ok: true });
+    expect(await writeExecutorFileOp(deps, "sandbox", "/workspace/logo.png", { bytes: bin })).toMatchObject({ ok: true });
     expect(written.get("/workspace/logo.png")).toEqual(bin);
 
-    expect(await writeExecutorFileOp(deps, "nimbus", "/home/main/a.bin", { bytes: bin })).toEqual({ ok: true });
+    expect(await writeExecutorFileOp(deps, "nimbus", "/home/main/a.bin", { bytes: bin })).toMatchObject({ ok: true });
     expect(written.get("/home/main/a.bin")).toEqual(bin);
 
-    expect(await writeExecutorFileOp(deps, "device", "/home/me/proj/b.bin", { bytes: bin })).toEqual({ ok: true });
+    expect(await writeExecutorFileOp(deps, "device", "/home/me/proj/b.bin", { bytes: bin })).toMatchObject({ ok: true });
     expect(written.get("/home/me/proj/b.bin")).toEqual(bin);
+  });
+
+  test("a file deleted while the owner was asked to replace it: the conflict names it gone, and the next Replace creates it", async () => {
+    const { deps, written } = makeDeps();
+    const bytes = new TextEncoder().encode("the owner's upload");
+    written.set("/home/main/a.txt", new TextEncoder().encode("was here"));
+    const shown = `sha256:${new Bun.CryptoHasher("sha256").update("was here").digest("hex")}`;
+
+    written.delete("/home/main/a.txt");
+    const gone = await writeExecutorFileOp(deps, "workspace", "/home/main/a.txt", { bytes, expectedRevision: shown });
+
+    if (!("conflict" in gone)) throw new Error("expected the conflict over the deleted file");
+    expect(await writeExecutorFileOp(deps, "workspace", "/home/main/a.txt", { bytes, expectedRevision: gone.revision })).toMatchObject({ ok: true });
+    expect(written.get("/home/main/a.txt")).toEqual(bytes);
   });
 
   test("an unavailable environment surfaces its own honest reason", async () => {
@@ -109,7 +141,7 @@ describe("writeExecutorFileOp", () => {
     // Uploads are HTTP with raw bytes and the VFS chunks storage, so no app-level size cap applies.
     const { deps, written } = makeDeps();
     const big = new Uint8Array(3 * 1024 * 1024);
-    expect(await writeExecutorFileOp(deps, "workspace", "/uploads/big.bin", { bytes: big })).toEqual({ ok: true });
+    expect(await writeExecutorFileOp(deps, "workspace", "/uploads/big.bin", { bytes: big })).toMatchObject({ ok: true });
     const stored = written.get("/uploads/big.bin");
 
     if (!(stored instanceof Uint8Array)) throw new Error("binary upload was not stored as bytes");
@@ -175,7 +207,7 @@ function makeTree(seed: Record<string, string>, opts: { native?: boolean; unlink
     }
     : {};
 
-  const deps = { getProvider: () => ({ files: { ...vfs, ...native }, homeDir: async () => "/home/main" }) };
+  const deps = { getProvider: () => ({ files: { ...digestChecked(vfs), ...native }, homeDir: async () => "/home/main" }) };
 
   return { deps, files, dirs, renames, removed };
 }
@@ -255,7 +287,8 @@ describe("deleteExecutorPathOp", () => {
   });
 
   test("a tree removal that fails mid-tree reports what was removed and what remains", async () => {
-    // KINU-013: removal fails closed and the refusal carries both entry sets.
+    // KINU-013: the refusal carries both entry sets. Nimbus's walk goes on past a refused entry, as `rm -r` does, and
+    // keeps the directories that hold it.
     const { deps, files, dirs } = makeTree({
       "/home/main/build/out.js": "x",
       "/home/main/build/deep/two.js": "y",
@@ -266,13 +299,13 @@ describe("deleteExecutorPathOp", () => {
     expect("ok" in out).toBe(false);
     expect("error" in out && out.error).toContain("/home/main/build/deep");
     expect("error" in out && out.error).toContain("still present");
-    expect(out).toMatchObject({
-      removed: ["/home/main/build/deep/two.js"],
-      remaining: ["/home/main/build/deep", "/home/main/build/out.js", "/home/main/build"],
-    });
+
+    if (!("removed" in out) || !("remaining" in out)) throw new Error("the partial removal did not name its entries");
+    expect(new Set(out.removed)).toEqual(new Set(["/home/main/build/deep/two.js", "/home/main/build/out.js"]));
+    expect(new Set(out.remaining)).toEqual(new Set(["/home/main/build", "/home/main/build/deep"]));
     expect(files.has("/home/main/build/deep/two.js")).toBe(false);
     expect(dirs.has("/home/main/build/deep")).toBe(true);
-    expect(files.has("/home/main/build/out.js")).toBe(true);
+    expect(files.has("/home/main/build/out.js")).toBe(false);
   });
 
   test("a missing path and the root both refuse", async () => {

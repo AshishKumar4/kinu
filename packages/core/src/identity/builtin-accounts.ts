@@ -289,10 +289,6 @@ export function clearAttempts(sql: BuiltinSql, keys: readonly string[]): void {
   for (const key of keys) void sql`DELETE FROM builtin_attempts WHERE bucket = ${key}`;
 }
 
-export function replacePassword(sql: BuiltinSql, userId: string, password: PasswordHash): void {
-  void sql`UPDATE builtin_accounts SET password_hash = ${password.hash}, password_salt = ${password.salt},
-    password_iterations = ${password.iterations} WHERE user_id = ${userId}`;
-}
 
 const AccountRowSchema = v.object({ user_id: v.string(), email: v.string(), generation: v.number() });
 

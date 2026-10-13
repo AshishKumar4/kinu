@@ -9,9 +9,9 @@ import { commandTool, ExecutorPortSchema } from './types';
 import { shellCall } from './command-call';
 import { callJob, createShellSession, machineShellCall, machineShellCwd, reportsCwd, shellExecOptions, type MachineShells } from './shell-session';
 import { namedShellState, pinnedShellMoved } from '../safety/approval-gate';
-import type { OutputSink } from '../types/primitives';
+import type { CheckpointFiles, OutputSink, VfsDigestWrite } from '../types/primitives';
 import { JOB_STAMP_ENV } from '../types/jobs';
-import { commandResult, commandResultAt, exposedPortText, type CommandResult } from './exec-result';
+import { commandResult, commandResultAt, exposedPortText, type CommandResult, type ExecOutcome } from './exec-result';
 import { classifyErrorCode, KinuError, refusalOf, renderThrownChain, settle, tolerateAsync, toKinuError, type Refusal } from '../obs/index';
 import { isVfsError, isVfsErrorCode, syscallError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { shellQuote } from '../utils/shell';
@@ -63,12 +63,14 @@ export interface SandboxHandle {
    * `timeout` absent means no work deadline: native container exec adds none.
    * `signal` cancels the remote work: settle only once the process is gone; a transport with no kill must not accept one.
    */
-  exec(command: string, opts?: SandboxExecOptions):
-    Promise<{ output?: string; stdout?: string; stderr?: string; exitCode?: number }>;
+  exec(command: string, opts?: SandboxExecOptions): Promise<{ stdout: string; stderr: string; exitCode: number }>;
   /** `base64` is the only exact read; without it the content is UTF-8 text. */
   readFile(path: string, opts?: { encoding?: 'utf-8' | 'base64' }):
     Promise<{ content?: string; encoding?: string; isBinary?: boolean; exitCode?: number }>;
   writeFile(path: string, content: string, opts?: { encoding?: 'utf-8' | 'base64' }): Promise<JsonValue | void>;
+  /** Lands `contentBase64` only over the bytes whose sha256 is `expected` (null: no file there), in one guest step.
+   *  `operation` names this write across every send of it. */
+  writeFileIfDigest(path: string, contentBase64: string, expected: string | null, operation: string): Promise<VfsDigestWrite>;
   listFiles(path: string, opts?: { recursive?: boolean }):
     Promise<{ files: Array<SandboxFileMetadata & { name: string }> }>;
   /** Native stat; `follow: false` reads the entry itself, never its siblings. */
@@ -252,8 +254,10 @@ async function withSandboxRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<
   throw lastErr;
 }
 
-function normalize(res: { output?: string; stdout?: string; stderr?: string; exitCode?: number; cwd?: string }): CommandResult {
-  return commandResult({ ...res, stdout: res.stdout ?? res.output ?? '' });
+function normalize(res: { stdout: string; stderr: string; exitCode: number; cwd?: string }): CommandResult {
+  const outcome: ExecOutcome = { ...res };
+
+  return commandResult(outcome);
 }
 
 /** Worded distinctly from the adapter's own cancellation, which names the process it killed. */
@@ -347,7 +351,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
           exec: async (read) => {
             const r = await touch(() => handle.exec(read, { cwd: WORKSPACE_BACKUP_DIR }));
 
-            return { stdout: r.stdout ?? r.output ?? '', stderr: r.stderr ?? '', exitCode: r.exitCode ?? 1 };
+            return { stdout: r.stdout, stderr: r.stderr, exitCode: r.exitCode };
           },
         }, name, shells))?.state ?? null, name);
 
@@ -375,7 +379,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
                 return handle.exec(call.command, opts);
               });
 
-              const settled = call.settle({ ...res, stdout: res.stdout ?? res.output ?? '' });
+              const settled = call.settle(res);
 
               return reportCwd ? commandResultAt(settled) : normalize(settled);
             }, (message) => refusalOf(new KinuError('unavailable', message)));
@@ -451,7 +455,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
 
         try {
           const res = await withSandboxRetry(() => touch(() => handle.exec(`test -e ${shellQuote(path)} && echo true || echo false`)));
-          const out = (res.stdout ?? res.output ?? '').trim();
+          const out = res.stdout.trim();
 
           return out.includes('true') ? 'true' : 'false';
         } catch (err) {
@@ -726,7 +730,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
  */
 export function sandboxFiles(
   handle: SandboxHandle, through: <T>(call: () => Promise<T>) => Promise<T> = (call) => call(),
-): VFS & Required<Pick<VFS, 'readRange'>> {
+): VFS & Required<Pick<VFS, 'readRange'>> & Required<Pick<CheckpointFiles, 'writeFileIfDigest'>> {
   const statOf = (stat: SandboxFileMetadata): VfsStat => {
     let type: VfsStat['type'] = 'file';
 
@@ -796,10 +800,17 @@ export function sandboxFiles(
       ));
 
       if ((r.exitCode ?? 0) !== 0) {
-        throw syscallError('EIO', 'read', path, { detail: (r.stderr ?? r.output ?? '').trim() || undefined });
+        throw syscallError('EIO', 'read', path, { detail: r.stderr.trim() || undefined });
       }
 
-      return base64ToBytes(r.stdout ?? r.output ?? '');
+      return base64ToBytes(r.stdout);
+    },
+
+    async writeFileIfDigest(path, data, expected) {
+      // One name for every send: a retry after a lost reply is answered what the guest did the first time.
+      const operation = crypto.randomUUID();
+
+      return await serving(path, 'open', () => handle.writeFileIfDigest(path, bytesToBase64(data), expected, operation));
     },
 
     async writeFile(path, data) {
@@ -824,7 +835,7 @@ export function sandboxFiles(
       const r = await through(() => handle.exec(`mkdir ${opts?.recursive ? '-p ' : ''}-- ${shellQuote(path)}`));
 
       if ((r.exitCode ?? 0) !== 0) {
-        throw syscallError('EIO', 'mkdir', path, { detail: (r.stderr ?? r.output ?? '').trim() || undefined });
+        throw syscallError('EIO', 'mkdir', path, { detail: r.stderr.trim() || undefined });
       }
     },
 

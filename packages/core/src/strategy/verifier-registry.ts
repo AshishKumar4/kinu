@@ -91,11 +91,8 @@ export function registeredVerifierKind(kind: string): VerifierKind | null {
 
 export function unregisteredKindRefusalFor(kind: string): SwarmRefusal {
   return {
+    ...refusalOf(new KinuError('bad_input', `no verifier kind "${kind}" is registered. ${unregisteredKindRefusal()}`)),
     reason: 'bad_input',
-    error: refusalOf(new KinuError(
-      'bad_input',
-      `no verifier kind "${kind}" is registered. ${unregisteredKindRefusal()}`,
-    )).error,
   };
 }
 
@@ -116,13 +113,13 @@ export function resolveVerifier(source: VerifierSpec): ResolvedVerifier | SwarmR
 
   if (!parsed.success) {
     return {
-      reason: 'bad_input',
-      error: refusalOf(new KinuError(
+      ...refusalOf(new KinuError(
         'bad_input',
         `\`spec\` does not describe a "${kind}" measurement: ${renderIssues(parsed.issues)}. Every field is `
         + 'required: one that is missing is a quantity the floor and its margin checks '
         + 'would otherwise have to invent.',
-      )).error,
+      )),
+      reason: 'bad_input',
     };
   }
 

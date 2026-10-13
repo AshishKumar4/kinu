@@ -1,4 +1,5 @@
 import { exists as nimbusExists, type Awaitable, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 /** Approval gating where a command reaches a shell (the workspace `Shell`, each provider's shell tools on register)
  *  and where the agent's tools reach a file. */
 
@@ -13,6 +14,7 @@ import type { CheckpointFiles, Shell, ShellExecOptions, ShellExecResult } from '
 import { busyShell, callJob, shellExecOptions } from './shell-session';
 import { requireBuild } from './work-mode';
 import { resolvedPath, shellReference, type PathPlanes } from '../vfs/resolve';
+import type { VfsMountRouting } from '../vfs/mounts';
 import { KinuError, refusalOf } from '../obs/error';
 import { Effect } from 'effect';
 import { settle } from '../obs/effect';
@@ -101,7 +103,7 @@ export interface FileReach {
    * Then through the plane's own lookup, its links followed (the last one unless `follow` is false): the gate decides on
    * the path the operation reaches, and the operation runs there, so a link cannot turn the user's file into the agent's.
    */
-  readonly resolve: ((path: string, follow: boolean) => Promise<string>) | null;
+  readonly resolve: ((path: string, follow: boolean, creating: boolean) => Promise<string>) | null;
   readonly userRoots: () => readonly string[];
   /** Where `op` on `path` lands on the machine, and whether that is past the agent's own files. */
   readonly locate: ((path: string, op: FileAccess['op']) => { readonly hostPath: string; readonly outside: boolean }) | null;
@@ -114,7 +116,7 @@ type Approve = (op: FileAccess['op'], path: string, bytes?: string | Uint8Array)
 /** A change past the agent's own files is asked; a secret-looking read follows `cat`'s rule. */
 export function withApprovalGatedFiles(
   vfs: VFS & CheckpointFiles, executor: string, reach: FileReach, policy: ShellApprovalPolicy,
-): VFS & CheckpointFiles {
+): VFS & CheckpointFiles & Pick<VfsMountRouting, 'resolve'> {
   const approve: Approve = (op, path, bytes) => Effect.gen(function* () {
     const onUser = onUserRoots(path, reach.userRoots());
     const at = onUser ? undefined : reach.locate?.(path, op);
@@ -132,26 +134,33 @@ export function withApprovalGatedFiles(
     yield* approveFileAccess({ op, path, hostPath, reaches, replaces }, executor, policy, write);
   });
 
-  // A removal acts on the entry itself, so its own name is not followed; every other op reaches what a link names.
-  const at = (path: string, follow = true) => Effect.flatMap(resolvedPath(path, reach.planes), ({ absolute }) => (reach.resolve === null
+  // A removal acts on the entry itself, so its own name is not followed; every other op reaches what a link names. Only an
+  // op that makes its parents (`creating`) passes a missing directory on the way; any other is handed the path as named,
+  // and its own walk answers it as the plane does (a read ENOENT, a stat null), never a path the missing one collapsed to.
+  const at = (path: string, follow = true, creating = false) => Effect.flatMap(resolvedPath(path, reach.planes), ({ absolute }) => (reach.resolve === null
     ? Effect.succeed(absolute)
-    : Effect.tryPromise({ try: async () => reach.resolve?.(absolute, follow) ?? absolute, catch: (cause) => cause }).pipe(Effect.orDie)));
+    : Effect.tryPromise({ try: async () => reach.resolve?.(absolute, follow, creating) ?? absolute, catch: (cause) => cause }).pipe(
+      Effect.catchIf((cause) => !creating && isVfsError(cause, 'ENOENT'), () => Effect.succeed(absolute)),
+      Effect.orDie,
+    )));
 
   /** The path the agent named, asked for as `op`, then run there. */
   const asked = <T>(op: FileAccess['op'], written: string, run: (path: string) => Awaitable<T>, bytes?: string | Uint8Array) =>
-    Effect.flatMap(at(written, op !== 'delete'), (path) => Effect.andThen(approve(op, path, bytes), Effect.promise(async () => run(path))));
+    Effect.flatMap(at(written, op !== 'delete', op === 'write'), (path) => Effect.andThen(approve(op, path, bytes), Effect.promise(async () => run(path))));
 
   const unasked = <T>(written: string, run: (path: string) => Awaitable<T>, follow = true) =>
     Effect.flatMap(at(written, follow), (path) => Effect.promise(async () => run(path)));
 
-  const gated: VFS & CheckpointFiles = {
+  const gated: VFS & CheckpointFiles & Pick<VfsMountRouting, 'resolve'> = {
+    // Where a path lands, as every op here resolves it: what a result names a file by.
+    resolve: (path, options) => settle(at(path, options?.follow ?? true, options?.creating === true)),
     readFile: (path) => settle(asked('read', path, (absolute) => vfs.readFile(absolute))),
     writeFile: (path, data) => settle(asked('write', path, (absolute) => vfs.writeFile(absolute, data), data)),
     readdir: (path) => settle(unasked(path, (absolute) => vfs.readdir(absolute))),
     stat: (path, options) => settle(unasked(path, (absolute) => vfs.stat(absolute, options), options?.follow !== false)),
     unlink: (path) => settle(asked('delete', path, (absolute) => vfs.unlink(absolute))),
     // An existing one changes nothing; the file tool makes each write's parent.
-    mkdir: (written, opts) => settle(Effect.flatMap(at(written), (path) => Effect.andThen(
+    mkdir: (written, opts) => settle(Effect.flatMap(at(written, true, opts?.recursive === true), (path) => Effect.andThen(
       Effect.flatMap(Effect.promise(async () => nimbusExists(vfs, path)), (exists) => (exists ? Effect.void : approve('mkdir', path))),
       Effect.promise(async () => vfs.mkdir(path, opts)),
     ))),
@@ -159,10 +168,12 @@ export function withApprovalGatedFiles(
 
   const reported = vfs.writeFileWithReport?.bind(vfs);
   const conditional = vfs.writeFileIfRevision?.bind(vfs);
+  const digestChecked = vfs.writeFileIfDigest?.bind(vfs);
   const atRevision = vfs.readFileAtRevision?.bind(vfs);
   const readRange = vfs.readRange?.bind(vfs);
   const rename = vfs.rename?.bind(vfs);
   const removeRecursive = vfs.removeRecursive?.bind(vfs);
+  const rmdir = vfs.rmdir?.bind(vfs);
 
   // A write the owner approves still carries what undo cannot restore.
   if (reported) gated.writeFileWithReport = (path, data) => settle(asked('write', path, (absolute) => reported(absolute, data), data));
@@ -171,18 +182,24 @@ export function withApprovalGatedFiles(
     gated.writeFileIfRevision = (path, data, expected) => settle(asked('write', path, (absolute) => conditional(absolute, data, expected), data));
   }
 
+  if (digestChecked) {
+    gated.writeFileIfDigest = (path, data, expected) => settle(asked('write', path, (absolute) => digestChecked(absolute, data, expected), data));
+  }
+
   if (atRevision) gated.readFileAtRevision = (path, revision, range) => settle(asked('read', path, (absolute) => atRevision(absolute, revision, range)));
 
   if (readRange) gated.readRange = (path, offset, length) => settle(asked('read', path, (absolute) => readRange(absolute, offset, length)));
 
   if (rename) {
-    gated.rename = (writtenFrom, writtenTo) => settle(Effect.flatMap(Effect.all([at(writtenFrom, false), at(writtenTo, false)]), ([from, to]) => Effect.andThen(
+    gated.rename = (writtenFrom, writtenTo) => settle(Effect.flatMap(Effect.all([at(writtenFrom, false), at(writtenTo, false, true)]), ([from, to]) => Effect.andThen(
       Effect.andThen(approve('delete', from), approve('write', to)),
       Effect.promise(async () => rename(from, to)),
     )));
   }
 
   if (removeRecursive) gated.removeRecursive = (path) => settle(asked('delete', path, (absolute) => removeRecursive(absolute)));
+
+  if (rmdir) gated.rmdir = (path) => settle(asked('delete', path, (absolute) => rmdir(absolute)));
 
   return gated;
 }

@@ -38,10 +38,11 @@ export {
   CODE_WORK_DID_NOT_START,
   ERROR_CODES,
   KinuError,
-  OVERLOADED_SIGNATURE,
+
   publicMessage,
   authoredRefusal,
   refusalOf,
+  RefusalSchema,
   refusedInput,
   renderCauseChain,
   renderThrownChain,

@@ -1,4 +1,5 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import { sha256Hex } from '../src/safety/argument-digest';
 /**
  * The `/sandbox` mount end to end: `file` tool and codemode `sandbox.*` over one container view.
  * The double follows the native file boundary: a miss carries its errno in `Error.cause`, an empty
@@ -9,7 +10,7 @@ import { describe, test, expect } from 'bun:test';
 import { present, toolExecute } from '@kinu.run/test-utils';
 import { executorNamespace } from '../src/tools/executor-operations';
 import { TurnContextBudget } from '../src/context-budget';
-import { createSandboxExecutor, WORKSPACE_BACKUP_DIR, type SandboxHandle } from '../src/execution/sandbox';
+import { createSandboxExecutor, sandboxFiles, WORKSPACE_BACKUP_DIR, type SandboxHandle } from '../src/execution/sandbox';
 import { nativeFileRead } from './helpers/sandbox-handle-lifecycle';
 import { TurnFileLedger } from '../src/vfs/file-ledger';
 import { createFileTool } from '../src/tools/file-operations';
@@ -21,6 +22,7 @@ import { standardMounts, withMountTable } from '../src/vfs/mounts';
 import { bytesToBase64 } from '../src/utils/base64';
 
 import type { JsonValue, JsonObject } from '../src/utils/json';
+import type { VfsDigestWrite } from '../src/types/primitives';
 import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { cloudPlanes } from '../src/vfs/resolve';
@@ -59,6 +61,7 @@ class ContainerFs {
 
 function container(fs: ContainerFs): SandboxHandle {
 	const handle: SandboxHandle = {
+		...sandboxHandleLifecycle,
 		async readFile(path, opts) {
 			const resolved = fs.resolve(path);
 
@@ -81,6 +84,17 @@ function container(fs: ContainerFs): SandboxHandle {
 			fs.files.set(resolved, opts?.encoding === 'base64'
 				? new Uint8Array(Buffer.from(content, 'base64'))
 				: new TextEncoder().encode(content));
+		},
+		// The guest compares what it holds against the digest named, then replaces, as the devbox's guest process does.
+		async writeFileIfDigest(path, contentBase64, expected) {
+			const resolved = fs.resolve(path);
+			const held = fs.files.get(resolved);
+			const found = held === undefined ? null : sha256Hex(held);
+
+			if (found !== expected) return { ok: false, sha256: found };
+			await handle.writeFile(path, contentBase64, { encoding: 'base64' });
+
+			return { ok: true, sha256: sha256Hex(Buffer.from(contentBase64, 'base64')) };
 		},
 		async listFiles(path) {
 			const resolved = fs.resolve(path);
@@ -126,11 +140,11 @@ function container(fs: ContainerFs): SandboxHandle {
 			if (command.startsWith('mkdir')) {
 				fs.dirs.add(target);
 
-				return { exitCode: 0, stdout: '' };
+				return { exitCode: 0, stdout: '', stderr: '' };
 			}
 
 			if (command.startsWith('test -e')) {
-				return { exitCode: 0, stdout: fs.files.has(target) || fs.dirs.has(target) ? 'true' : 'false' };
+				return { exitCode: 0, stdout: fs.files.has(target) || fs.dirs.has(target) ? 'true' : 'false', stderr: '' };
 			}
 
 			// The adapter's ranged read (`dd`); an empty answer would make windowed reads see empty files.
@@ -145,15 +159,14 @@ function container(fs: ContainerFs): SandboxHandle {
 
 				const from = Number(window[1]);
 
-				return { exitCode: 0, stdout: bytesToBase64(bytes.subarray(from, from + Number(window[2]))) };
+				return { exitCode: 0, stdout: bytesToBase64(bytes.subarray(from, from + Number(window[2]))), stderr: '' };
 			}
 
-			return { exitCode: 0, stdout: '' };
+			return { exitCode: 0, stdout: '', stderr: '' };
 		},
 		async exposePort(port) { return { url: `https://preview.invalid/${port}`, port, route: { reached: true } }; },
 		async unexposePort() {},
 		async getExposedPorts() { return []; },
-		...sandboxHandleLifecycle,
 		async statFile(path) {
 			const resolved = fs.resolve(path);
 			const bytes = fs.files.get(resolved);
@@ -232,6 +245,52 @@ describe('the file tool across the /sandbox mount', () => {
 		try { await mounted.readFile('/sandbox/nowhere/x.txt'); } catch (cause) { error = cause; }
 
 		expect(isVfsError(error) && error.code === 'ENOENT').toBe(true);
+	});
+});
+
+describe('a digest-checked write to the sandbox', () => {
+	const digest = (text: string): string => new Bun.CryptoHasher('sha256').update(text).digest('hex');
+
+	/**
+	 * A container whose guest answers a repeated operation what it answered first, as the devbox's guest program
+	 * does, and whose first reply is lost after the guest acted; `meanwhile` runs between the two sends.
+	 */
+	function lossy(fs: ContainerFs, meanwhile: () => void) {
+		const box = container(fs);
+		const answered = new Map<string, VfsDigestWrite>();
+
+		const handle: SandboxHandle = {
+			...box,
+			async writeFileIfDigest(path, contentBase64, expected, operation) {
+				const first = answered.get(operation);
+
+				if (first !== undefined) return first;
+				const answer = await box.writeFileIfDigest(path, contentBase64, expected, operation);
+
+				answered.set(operation, answer);
+				meanwhile();
+
+				throw new Error('Network connection lost.');
+			},
+		};
+
+		// Sent once more after a failure, as the executor's retry of a dropped connection does.
+		return sandboxFiles(handle, async (call) => {
+			const [first] = await Promise.allSettled([call()]);
+
+			return first.status === 'fulfilled' ? first.value : call();
+		});
+	}
+
+	// Only a resend under the first send's operation is answered what the guest did: a new one would be refused here.
+	test('a landed write whose reply was lost stays landed, though the file moved before the resend', async () => {
+		const fs = new ContainerFs();
+		fs.files.set('/workspace/a.txt', new TextEncoder().encode('v1'));
+		const files = lossy(fs, () => { fs.files.set('/workspace/a.txt', new TextEncoder().encode('the owner\'s save')); });
+
+		expect(await files.writeFileIfDigest('/workspace/a.txt', new TextEncoder().encode('v2'), digest('v1')))
+			.toEqual({ ok: true, sha256: digest('v2') });
+		expect(new TextDecoder().decode(fs.files.get('/workspace/a.txt'))).toBe('the owner\'s save');
 	});
 });
 

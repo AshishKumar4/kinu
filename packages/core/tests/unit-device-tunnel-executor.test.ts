@@ -238,7 +238,7 @@ describe('createDeviceTunnelExecutor', () => {
 
       if (method === 'listFiles') return { entries: [{ name: 'a.txt', type: 'file' }], next: null };
 
-      if (method === 'statPath') return { size: 5, mtimeMs: 0, isDir: false };
+      if (method === 'statPath') return { size: 5, mtimeMs: 0, type: 'file' };
       throw new Error(`unexpected method ${method}`);
     });
 
@@ -368,6 +368,7 @@ describe('createDeviceTunnelExecutor', () => {
 
     // `io`, not `unavailable`: the device answered and its filesystem refused.
     expect(await createDeviceTunnelExecutor(t).tools.exec.execute('ls')).toEqual({
+      success: false,
       reason: 'io',
       error: 'device exec `ls`: permission denied',
     });

@@ -10,7 +10,7 @@ import {
   requestUrl,
 } from '@kinu.run/core';
 import { createMockFetch, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, present } from '@kinu.run/test-utils';
-import { createAgentProviderRegistry, type UserCredentialClient } from '../src/providers/agent-registry';
+import { createAgentProviderRegistry, userCredentials, type UserCredentialClient } from '../src/providers/agent-registry';
 import type { ModelMenuEntry } from '../src/user/available-models';
 import type { CredentialSummary } from '../src/user/credentials';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
@@ -228,7 +228,7 @@ describe('what a model call asks of the account', () => {
     };
 
     const mock = createMockFetch([{ match: 'api.openai.com', respond: { body: OPENAI_RESPONSES_BODY } }]);
-    const reg = createAgentProviderRegistry({ env: {}, userDO: { stub: counted, caller: owner }, fetch: mock.fetch });
+    const reg = createAgentProviderRegistry({ env: {}, userDO: userCredentials(() => counted, owner), fetch: mock.fetch });
 
     try {
       await generateText({ model: reg.resolveModel('openai/gpt-5.5', { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' }), prompt: 'hello' });

@@ -80,6 +80,37 @@ it('a slate edited and rebooted leaves no image of the source it no longer runs'
   }
 });
 
+it('reuses complete images and rebuilds an interrupted one at the same content address', async () => {
+  const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('image-completeness'));
+
+  const source = [
+    'import { SlateObject } from "kinu:slate";',
+    'export class Slate extends SlateObject {',
+    '  which() { return "image café 界 𠮷"; }',
+    '}',
+  ].join('\n');
+
+  // A page larger than one write of an image, in characters of every UTF-8 width.
+  const browser = `<!doctype html><html><body>${'café 界 𠮷'.repeat(200_000)}</body></html>`;
+  const boot = { source, browser, project: { main: 'server.ts', browser: 'index.html' } };
+
+  try {
+    await subject.start(boot);
+    await subject.start(boot);
+    expect(await subject.call('which', [])).toEqual({ ok: true, value: 'image café 界 𠮷' });
+
+    await subject.interruptApplicationImage();
+    await subject.start(boot);
+    expect(await subject.call('which', [])).toEqual({ ok: true, value: 'image café 界 𠮷' });
+    const page = await subject.route('/');
+
+    expect(page.status).toBe(200);
+    expect(page.body.replace(SLATE_PAGE_PREAMBLE, '')).toBe(browser);
+  } finally {
+    await subject.stop();
+  }
+});
+
 it('a private process gets an ephemeral facet: this.storage survives, this.sql does not', async () => {
   const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('storage-survival-private'));
 

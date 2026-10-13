@@ -77,6 +77,28 @@ describe('Cloudflare account selection', () => {
     }
   });
 
+  test('selected-account metadata cannot supply the missing list of visible accounts', async () => {
+    const restore = stubGatewayNetwork();
+    const harness = createTestUserDO();
+
+    try {
+      const owner = await testOwner();
+      await harness.userDO.setCredential(owner, CLOUDFLARE_OAUTH_CRED_KEY, {
+        kind: 'oauth', accessToken: 'cf-access',
+        metadata: { accountId: PERSONAL.id, accountName: PERSONAL.name },
+      });
+      expect(await harness.userDO.listCloudflareAccounts(owner)).toEqual({
+        connected: true, selectedId: PERSONAL.id, accounts: [],
+      });
+      await expect(harness.userDO.selectCloudflareAccount(owner, PERSONAL.id)).rejects.toMatchObject({ code: 'bad_input' });
+      expect(await harness.userDO.getCredentialEndpoint(owner, CLOUDFLARE_OAUTH_CRED_KEY))
+        .toEqual({ baseURL: `https://api.cloudflare.com/client/v4/accounts/${PERSONAL.id}/ai/v1` });
+    } finally {
+      harness.close();
+      restore();
+    }
+  });
+
   test('selecting the entitlement-bearing account moves inference to it', async () => {
     const restore = stubGatewayNetwork();
     const harness = createTestUserDO();

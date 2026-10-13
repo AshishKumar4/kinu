@@ -11,7 +11,7 @@ import {
 import { attempt, diagnostics, hold, logged, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import type { NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
-import { routedModelReads, type AgentProviderDeps, type AgentProviderRegistry, type UserCredentialClient } from '../providers/agent-registry';
+import { routedModelReads, type AgentProviderDeps, type AgentProviderRegistry, type UserCredentialClient, type UserCredentialSource } from '../providers/agent-registry';
 import { compactionDiagnostics, hostedActorCompaction } from '@kinu.run/compaction';
 import type { AgentDatabase } from './agent-database';
 import type { StepPacer } from './step-pacer';
@@ -147,13 +147,16 @@ class HeadTrace {
 
 const AGENT_CALLER = { workspaceToken: '' };
 
-function brokeredCredentials(workspace: AgentWorkspace): UserCredentialClient {
+function brokeredCredentials(workspace: AgentWorkspace): UserCredentialSource {
   return {
-    getAuth: (_caller, key, opts) => workspace.getAuth(key, opts),
+    caller: async () => AGENT_CALLER,
+    getAuth: (key, opts) => workspace.getAuth(key, opts),
     listCredentials: () => workspace.listCredentials(),
-    relayDevice: (_caller, provider) => workspace.relayDevice(provider),
-    relayModelCall: (_caller, deviceId, callId, request) => workspace.relayModelCall(deviceId, callId, request),
-    cancelModelRelay: (_caller, callId) => workspace.cancelModelRelay(callId),
+    hub: () => ({
+      relayDevice: (_caller, provider) => workspace.relayDevice(provider),
+      relayModelCall: (_caller, deviceId, callId, request) => workspace.relayModelCall(deviceId, callId, request),
+      cancelModelRelay: (_caller, callId) => workspace.cancelModelRelay(callId),
+    }),
   };
 }
 
@@ -229,7 +232,7 @@ export type FacetModels = (deps: Omit<AgentProviderDeps, 'env'>) => AgentProvide
 
 function facetModels(actor: HostedActor, workspace: AgentWorkspace, models: FacetModels, prepared: PreparedAgentTurn): AgentProviderRegistry {
   return models({
-    userDO: { stub: brokeredCredentials(workspace), caller: AGENT_CALLER },
+    userDO: brokeredCredentials(workspace),
     accountFor: (provider) => actor.stores.config.getProviderAccounts()[provider] ?? prepared.accounts[provider]
       ?? prepared.sources.profileInputs.envelope.catalog.accounts?.[provider],
     appTitle: 'Kinu',

@@ -49,7 +49,7 @@ export async function slateShareUrl(env: Env, workspace: string, handle: string)
   const suffix = previewHostSuffix(env);
 
   if (suffix === null) return null;
-  const secret = shareSigner.secrets(env)[0];
+  const secret = shareSigner.secret(env);
 
   if (secret === undefined) return null;
 
@@ -62,7 +62,7 @@ export async function slateShareUrl(env: Env, workspace: string, handle: string)
 
 async function mintViewerTicket(env: Env, workspace: string, handle: string, userId: string): Promise<string | null> {
   if (!USER_ID_RE.test(userId)) return null;
-  const secret = viewerSigner.secrets(env)[0];
+  const secret = viewerSigner.secret(env);
 
   if (secret === undefined) return null;
   const expiresAt = Date.now() + 5 * 60 * 1000;
@@ -129,7 +129,7 @@ async function ticketUser(
 }
 
 async function viewerSource(env: Env, request: Request): Promise<string> {
-  const secret = viewerSigner.secrets(env)[0];
+  const secret = viewerSigner.secret(env);
 
   // Reached only after the share-token check, so a missing secret is a fault.
   if (secret === undefined) throw new Error('viewer source signed with no secret');
@@ -169,7 +169,7 @@ shareHostRoutes.all(VIEWER_EXCHANGE_PATH, async (c) => {
 
   const expiresAt = Date.now() + 12 * 60 * 60 * 1000;
 
-  const secret = viewerSigner.secrets(env)[0];
+  const secret = viewerSigner.secret(env);
 
   if (secret === undefined) {
     return new Response('Share authentication is unavailable.', { status: 503, headers: { 'cache-control': 'no-store' } });
@@ -232,7 +232,7 @@ export async function handleSlateShareHostRequest(request: Request, env: Env): P
   if (share === null) return null;
   const { handle, token, workspace } = share;
 
-  if (shareSigner.secrets(env).length === 0) {
+  if (shareSigner.secret(env) === undefined) {
     return new Response('Share authentication is unavailable.', { status: 503, headers: { 'cache-control': 'no-store' } });
   }
 

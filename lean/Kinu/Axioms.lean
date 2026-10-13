@@ -134,8 +134,6 @@ import Kinu
 #print axioms Kinu.Safety.Credentials.credential_contexts_never_meet_mcp_contexts
 #print axioms Kinu.Safety.Credentials.clients_cannot_tell_two_stores_apart_by_their_secrets
 #print axioms Kinu.Safety.Credentials.a_deleted_credential_yields_no_headers
-#print axioms Kinu.Safety.Credentials.rewrap_keeps_every_readable_secret
-#print axioms Kinu.Safety.Credentials.rewrap_seals_plaintext_only_in_a_never_sealed_store
 
 /-! ## Kinu/Safety/DeviceView.lean -/
 

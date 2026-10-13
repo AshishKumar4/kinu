@@ -784,7 +784,7 @@ describe('LocalAgentSession — a pending send is durable before it is acknowled
 
   test('a refused send retires its reservation — a restart cannot re-deliver what was rejected', async () => {
     const { db, rt, session } = setup('unused');
-    session.setDriverGate(() => ({ reason: 'unavailable', error: 'another process is driving' }));
+    session.setDriverGate(() => ({ success: false, reason: 'unavailable', error: 'another process is driving' }));
 
     // Acknowledged before the lease refused, so the reservation dies with the refusal the caller saw.
     await expect(session.send('not mine to run', { id: crypto.randomUUID() })).rejects.toThrow('another process is driving');

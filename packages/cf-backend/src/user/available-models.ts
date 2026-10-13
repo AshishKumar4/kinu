@@ -4,7 +4,7 @@ import {
   catalogCredKey, listModelsDevProviders, modelsDevCompatBaseURL, testModel,
   type ModelTestResult, type ModelsDevProviderInfo, type ProviderFailure, type ReasoningEffort,
 } from '@kinu.run/core';
-import { createAgentProviderRegistry, type UserCredentialClient } from '../providers/agent-registry';
+import { createAgentProviderRegistry, userCredentials, type UserCredentialClient } from '../providers/agent-registry';
 import type { ObjectNamespace } from '@kinu.run/core';
 import type { ProviderEnv } from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';
@@ -35,11 +35,9 @@ export interface AvailableModelsEnv<Id> extends ProviderEnv {
 export async function listAvailableModels<Id>(
   env: AvailableModelsEnv<Id>, userId: string, caller: UserCaller,
 ): Promise<ModelMenuResponse> {
-  const stub = env.UserDO.get(env.UserDO.idFromName(userId));
-
   const { registry, deps } = createAgentProviderRegistry({
     env,
-    userDO: { stub, caller },
+    userDO: userCredentials(() => env.UserDO.get(env.UserDO.idFromName(userId)), caller),
     fetch,
   });
 
@@ -96,8 +94,7 @@ function buildProviderCatalog(
 export async function listProviderCatalog<Id>(
   env: AvailableModelsEnv<Id>, userId: string, caller: UserCaller,
 ): Promise<ProviderCatalogEntry[]> {
-  const stub = env.UserDO.get(env.UserDO.idFromName(userId));
-  const { registry, deps } = createAgentProviderRegistry({ env, userDO: { stub, caller }, fetch });
+  const { registry, deps } = createAgentProviderRegistry({ env, userDO: userCredentials(() => env.UserDO.get(env.UserDO.idFromName(userId)), caller), fetch });
 
   const [providers, keys] = await Promise.all([
     listModelsDevProviders({ fetch }),
@@ -119,8 +116,7 @@ export async function testAvailableModel<Id>(input: {
   readonly signal: AbortSignal;
 }): Promise<ModelTestResult> {
   const { env, userId, caller } = input;
-  const stub = env.UserDO.get(env.UserDO.idFromName(userId));
-  const registry = createAgentProviderRegistry({ env, userDO: { stub, caller }, fetch });
+  const registry = createAgentProviderRegistry({ env, userDO: userCredentials(() => env.UserDO.get(env.UserDO.idFromName(userId)), caller), fetch });
 
   return testModel({ spec: input.spec, resolve: (spec, affinity) => registry.resolveModel(spec, affinity), signal: input.signal });
 }

@@ -127,7 +127,26 @@ describe("CLI config safety", () => {
   });
 
   test("one invalid field is reported, not replaced by defaults that would read as a first run", async () => {
-    expect(await runInvalidFieldLoad()).toContain('is not a valid Kinu config');
+    const kinuHome = scratchDir("cli-invalid-field");
+    const configPath = join(kinuHome, "config.json");
+    const malformed = JSON.stringify({ updateCheck: "sometimes" });
+
+    const list = () => runToExit([process.execPath, "packages/cli/bin/cli.ts", "list"], {
+      cwd: resolve(__dirname, "../../.."),
+      env: { ...process.env, KINU_HOME: kinuHome, KINU_TOKEN: "", NO_COLOR: "1" },
+    });
+
+    writeFileSync(configPath, malformed, { mode: 0o600 });
+    const proc = await list();
+
+    expect(proc.exitCode).not.toBe(0);
+    expect(readFileSync(configPath, "utf8")).toBe(malformed);
+
+    const valid = JSON.stringify({ updateCheck: false });
+
+    writeFileSync(configPath, valid, { mode: 0o600 });
+    expect((await list()).exitCode).toBe(0);
+    expect(readFileSync(configPath, "utf8")).toBe(valid);
   });
 
   test("a published workspace is readable once its WAL sidecars are gone", () => {
@@ -229,16 +248,16 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
     expect(local).toMatchObject({ name: "openai-compat", baseURL: "http://localhost:11434/v1", model: "gpt-oss:20b" });
   });
 
-  test("an openai-compatible endpoint's headers: the key's Authorization over `headers`, `extraHeaders` over both", async () => {
+  test("an openai-compatible endpoint's extraHeaders overrides the API key's Authorization", async () => {
     const sends = async (compat: JsonObject, headers: Record<string, string>) => expect(await runResolveLLM({
       providers: { openaiCompat: { default: { baseURL: "http://localhost:11434/v1", ...compat } } },
     }, { defaultModel: "openai-compat/gpt-oss:20b" })).toEqual({ name: "openai-compat", baseURL: "http://localhost:11434/v1", headers, model: "gpt-oss:20b" });
 
     const base = { Authorization: "Bearer base", "X-Base": "b" };
 
-    await sends({ headers: base }, base);
-    await sends({ headers: base, apiKey: "k" }, { Authorization: "Bearer k", "X-Base": "b" });
-    await sends({ headers: base, apiKey: "k", extraHeaders: { Authorization: "Bearer extra" } }, { Authorization: "Bearer extra", "X-Base": "b" });
+    await sends({ extraHeaders: base }, base);
+    await sends({ apiKey: "k", extraHeaders: { "X-Base": "b" } }, { Authorization: "Bearer k", "X-Base": "b" });
+    await sends({ apiKey: "k", extraHeaders: base }, base);
   });
 
   test("a default tier on a BYO provider overrides the signed-in proxy", async () => {
@@ -413,26 +432,6 @@ async function runNameChecks(): Promise<NameCheck[]> {
   expect(proc.exitCode).toBe(0);
 
   return JSON.parse(proc.stdout);
-}
-
-/** Loads a config.json whose one field has the wrong type; answers the rejection. */
-async function runInvalidFieldLoad(): Promise<string> {
-  const kinuHome = scratchDir("cli-invalid-field");
-  writeFileSync(join(kinuHome, "config.json"), JSON.stringify({ updateCheck: "sometimes" }), { mode: 0o600 });
-
-  const script = `
-    import { loadConfigFile } from './packages/cli/src/config.ts';
-    try { loadConfigFile(); console.log('loaded'); } catch (error) { console.log(error instanceof Error ? error.message : String(error)); }
-  `;
-
-  const proc = await runToExit([process.execPath, "-e", script], {
-    cwd: resolve(__dirname, "../../.."),
-    env: { ...process.env, KINU_HOME: kinuHome },
-  });
-
-  expect(proc.exitCode).toBe(0);
-
-  return proc.stdout;
 }
 
 // The raw CLI token is the only copy (the server stores a hash), so a failed revoke must keep it.

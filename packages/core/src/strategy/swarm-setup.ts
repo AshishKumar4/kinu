@@ -728,8 +728,8 @@ export async function createRoot(input: {
 
 /**
  * Accumulators seeded from durable rows so a re-entry continues one search, including the winner
- * and the seal. Resumed inherit-children lack their seed message (never durable). A tree row with
- * no record (older workspaces) is a selectable parent, not a candidate.
+ * and the seal. Resumed inherit-children lack their seed message (never durable). Unsettled nodes
+ * remain in the journal's pending list; every non-root tree row requires its durable record.
  */
 export interface ResumedSearchSeed {
   readonly candidates: SwarmCandidate[];
@@ -751,56 +751,58 @@ export function seedResumedSearch(input: {
   readonly rankDirection: ObjectiveDirection;
   readonly spentBy: Map<string, number | null>;
 }): ResumedSearchSeed {
-  const { reentry, nodes, rankDirection, spentBy } = input;
-  const candidates: SwarmCandidate[] = [];
-  let best: SwarmCandidate | null = null;
-  let bestValue: number | null = null;
-  const ensembles: number[] = [];
-  let publication: PublicationState = { kind: 'open' };
-  // Pending expansions are re-run, not re-bought; they are not in `reentry.nodes`.
-  let inheritedExpansions = reentry?.pending.length ?? 0;
-  let inheritedTokens: number | null = null;
+  return settleSync(Effect.gen(function* () {
+    const { reentry, nodes, rankDirection, spentBy } = input;
+    const candidates: SwarmCandidate[] = [];
+    let best: SwarmCandidate | null = null;
+    let bestValue: number | null = null;
+    const ensembles: number[] = [];
+    let publication: PublicationState = { kind: 'open' };
+    // Pending expansions are re-run, not re-bought; they are not in `reentry.nodes`.
+    let inheritedExpansions = reentry?.pending.length ?? 0;
+    let inheritedTokens: number | null = null;
 
-  for (const node of reentry?.nodes ?? []) {
-    if (node.parentId === null) continue;
-    inheritedExpansions += 1;
-    const { record } = node;
-    const { breach, rank, ensemble, ...facts } = outcomeFacts(record?.outcome ?? null);
-    nodes.set(node.id, {
-      id: node.id, parentId: node.parentId, depth: node.depth,
-      artifact: node.artifact,
-      measurement: facts.measured, score: facts.score, pareto: facts.pareto,
-      // Named losses in `swarm-resume.ts`: the grant is refunded because nothing was created.
-      proposal: null, proposalError: null, granted: null,
-      conclusion: record?.conclusion ?? null,
-      transcript: [...(nodes.get(node.parentId)?.transcript ?? []), ...node.produced],
-      compacted: null,
-      aggregated: record?.aggregated ?? [],
-    });
+    for (const node of reentry?.nodes ?? []) {
+      if (node.parentId === null) continue;
+      inheritedExpansions += 1;
+      const { record } = node;
 
-    if (!record) continue;
+      if (record === null) return yield* new KinuError('io', `Corrupt search node ${node.id}: its durable record is missing`);
+      const { breach, rank, ensemble, ...facts } = outcomeFacts(record.outcome);
+      nodes.set(node.id, {
+        id: node.id, parentId: node.parentId, depth: node.depth,
+        artifact: node.artifact,
+        measurement: facts.measured, score: facts.score, pareto: facts.pareto,
+        // Named losses in `swarm-resume.ts`: the grant is refunded because nothing was created.
+        proposal: null, proposalError: null, granted: null,
+        conclusion: record.conclusion,
+        transcript: [...(nodes.get(node.parentId)?.transcript ?? []), ...node.produced],
+        compacted: null,
+        aggregated: record.aggregated,
+      });
 
-    const candidate: SwarmCandidate = { id: node.id, artifact: node.artifact, ...facts };
+      const candidate: SwarmCandidate = { id: node.id, artifact: node.artifact, ...facts };
 
-    candidates.push(candidate);
-    spentBy.set(node.id, record.tokens);
+      candidates.push(candidate);
+      spentBy.set(node.id, record.tokens);
 
-    if (record.tokens !== null) inheritedTokens = (inheritedTokens ?? 0) + record.tokens;
+      if (record.tokens !== null) inheritedTokens = (inheritedTokens ?? 0) + record.tokens;
 
-    if (ensemble > 0) ensembles.push(ensemble);
+      if (ensemble > 0) ensembles.push(ensemble);
 
-    if (breach !== null) publication = { kind: 'sealed', breach };
+      if (breach !== null) publication = { kind: 'sealed', breach };
 
-    if (rank !== null && (bestValue === null || isBetter(rank, bestValue, rankDirection))) {
-      best = candidate;
-      bestValue = rank;
+      if (rank !== null && (bestValue === null || isBetter(rank, bestValue, rankDirection))) {
+        best = candidate;
+        bestValue = rank;
+      }
     }
-  }
 
-  return {
-    candidates, ensembles, publication, best, bestValue,
-    inheritedExpansions, inheritedTokens,
-  };
+    return {
+      candidates, ensembles, publication, best, bestValue,
+      inheritedExpansions, inheritedTokens,
+    };
+  }));
 }
 
 /**

@@ -8,7 +8,10 @@ import { Cause, Effect, Result } from "effect";
 import { routeAgentRequest } from "agents";
 import { tracing, WorkerEntrypoint } from 'cloudflare:workers';
 import { adoptTracing } from '@nimbus-sh/platform/tracing.js';
-import { containerEventResolver, GitHubEgressRecorder, handleContainerEgress, handleContainerEvent, parseEgressParams, type KinuEgressParams } from './egress/outbound';
+import {
+  containerEventResolver, GitHubEgressRecorder, handleContainerEgress, handleContainerEvent, handleEgressConnect, handleEgressTls,
+  parseEgressParams, workspaceGrants, type EgressTlsStreams, type EgressTlsTarget, type KinuEgressParams,
+} from './egress/outbound';
 import { ORCHESTRATOR_AGENT_SLUG } from "@kinu.run/core";
 import { diagnostics, settle, toKinuError, type ErrorCode, type KinuError, settleLogged } from "@kinu.run/core/obs";
 import {
@@ -65,11 +68,22 @@ export { SlateBinding } from "./slates/bindings";
 
 export { DevboxOutbound, DevboxStoreGateway } from '@kinu.run/devbox';
 
+/** The sandbox container's outbound HTTP, and a Nimbus workspace's egress (`NimbusWorkspaceOptions.egress`). */
 export class KinuEgress extends WorkerEntrypoint<Env, KinuEgressParams> {
   override fetch(request: Request): Promise<Response> {
     const params = parseEgressParams(this.ctx);
 
-    return handleContainerEgress(request, this.env, params, params && new GitHubEgressRecorder(this.env, this.ctx, params.workspaceName));
+    return handleContainerEgress(request, this.env, params, { grants: workspaceGrants(this.env), github: params && new GitHubEgressRecorder(this.env, this.ctx, params.workspaceName) });
+  }
+
+  /** A Nimbus workspace program's plain socket (`handleEgressConnect`); a container's raw sockets go straight out (D82). */
+  override connect(socket: Socket): Promise<void> {
+    return handleEgressConnect(socket, parseEgressParams(this.ctx));
+  }
+
+  /** A workspace program's TLS socket, made here (`handleEgressTls`); Nimbus calls it for each one. */
+  connectTls(target: EgressTlsTarget): Promise<EgressTlsStreams> {
+    return handleEgressTls(target, parseEgressParams(this.ctx));
   }
 }
 
