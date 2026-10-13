@@ -643,17 +643,20 @@ function valueOf<T>(answer: () => Promise<ContextAnswer<T>>): Effect.Effect<T> {
   return Effect.flatMap(Effect.promise(answer), (settled) => ('value' in settled ? Effect.succeed(settled.value) : Effect.die(rebuilt(settled.failure))));
 }
 
-export function remoteContextTree(remote: () => Promise<ContextTreeRemote>): ContextTree {
+/** A context tree served from another isolate, which `remote` opens for each call and lets go once it answers. */
+export type ContextTreeOpener = <T>(call: (tree: ContextTreeRemote) => Promise<ContextAnswer<T>>) => Promise<ContextAnswer<T>>;
+
+export function remoteContextTree(remote: ContextTreeOpener): ContextTree {
   const refused = (path: string): Effect.Effect<never> => valueOf(async () => ({ failure: contextFailure(readOnly(path)) }));
 
   return {
-    readFile: (path) => settle(valueOf(async () => await (await remote()).readFile(path))),
-    readFileAtRevision: (path, revision, range) => settle(valueOf(async () => await (await remote()).readFileAtRevision(path, revision, range))),
-    readRange: (path, offset, length) => settle(valueOf(async () => await (await remote()).readRange(path, offset, length))),
-    readdir: (path) => settle(valueOf(async () => await (await remote()).readdir(path))),
-    stat: (path, options) => settle(valueOf(async () => await (await remote()).stat(path, options))),
-    writeFile: (path, data) => settle(valueOf(async () => await (await remote()).writeFile(path, data)).pipe(Effect.asVoid)),
-    writeFileIfRevision: (path, data, expected) => settle(valueOf(async () => await (await remote()).writeFileIfRevision(path, data, expected))),
+    readFile: (path) => settle(valueOf(() => remote((tree) => tree.readFile(path)))),
+    readFileAtRevision: (path, revision, range) => settle(valueOf(() => remote((tree) => tree.readFileAtRevision(path, revision, range)))),
+    readRange: (path, offset, length) => settle(valueOf(() => remote((tree) => tree.readRange(path, offset, length)))),
+    readdir: (path) => settle(valueOf(() => remote((tree) => tree.readdir(path)))),
+    stat: (path, options) => settle(valueOf(() => remote((tree) => tree.stat(path, options)))),
+    writeFile: (path, data) => settle(valueOf(() => remote((tree) => tree.writeFile(path, data))).pipe(Effect.asVoid)),
+    writeFileIfRevision: (path, data, expected) => settle(valueOf(() => remote((tree) => tree.writeFileIfRevision(path, data, expected)))),
     unlink: (path) => settle(refused(path)),
     mkdir: (path) => settle(refused(path)),
   };
