@@ -15,7 +15,7 @@ The tree carries no Nimbus source. Packages come from the registry, checked agai
 | `@nimbus-sh/core` | 0.18.0 | root, `packages/core`, `packages/cf-backend`, `packages/cli-backend`, `packages/cli`, `packages/agent-utils`, `packages/compaction`, `packages/test-utils` |
 | `@nimbus-sh/worker` | 0.16.0 | `packages/cf-backend` |
 | `@nimbus-sh/fabric` | ^0.13.0 | `packages/core`, `packages/cf-backend` |
-| `@nimbus-sh/sdk` | ^0.13.1 | `packages/core`, `packages/cf-backend` |
+| `@nimbus-sh/sdk` | 0.13.1 | `packages/core`, `packages/cf-backend` |
 | `@nimbus-sh/platform` | ^0.8.2 | `packages/cf-backend` |
 | `@nimbus-sh/runtime-bash` | 5.2.37-3 | root |
 | `@nimbus-sh/runtime-cpython` | 3.13.14-1 | root |
@@ -32,7 +32,7 @@ nests the workspaces' copy below, so the copy that runs is the stale one.
 Core imports fabric directly: `packages/core/src/events/outbox.ts` builds its
 outbox on `@nimbus-sh/fabric/outbox.js`.
 
-Core 0.18.0 and worker 0.16.0 carry declared patches (package.json `//patchedDependencies:*` names each, and what
+Core 0.18.0, worker 0.16.0 and sdk 0.13.1 carry declared patches (package.json `//patchedDependencies:*` names each, and what
 deletes it); each part is Nimbus's own build of the source change its ask proposes, except where a part says otherwise:
 - a stopped `bash -c` loop ends: core's shell entrypoints forward their AbortSignal to the nested shell, and worker's
   hosted shell child combines it with its own (NIMBUS-ASKS #42);
@@ -49,7 +49,12 @@ deletes it); each part is Nimbus's own build of the source change its ask propos
   (#51, the hunk as written, dist and source);
 - `set`, `readonly` and `trap` list an ill-formed value or name as `$'…'`, each lone surrogate `\uXXXX`, so two values a
   named shell keeps apart list apart and an approval of one shell state never covers the other (#52, the hunk as
-  written, dist and source).
+  written, dist and source);
+- a session's files write only over the revision their stat gave (sdk `files.writeIfRevision`, worker
+  `_rpcWriteFileIfRevision`, core's `writeFileIfRevision` supervisor op: stat and write in one synchronous step, absent
+  is 0, a mount's file refused ENOTSUP), so a hosted agent's or the editor's save over a session is checked where it
+  was read and written in two calls (#55, the hunks as written). A plane that checks neither a revision nor the bytes
+  is refused rather than compared and written.
 
 Asked of Nimbus and not carried: mysql2's `checkServerIdentity` under workerd's
 TLS (#48), connections keeping the host's socket type (#49), the Cloudflare accounts envelope (#50), a credentialed
@@ -60,9 +65,9 @@ refuses them).
 0.18 ships the servername `connectTls` carries (#44, the patch is gone; Kinu's egress takes Nimbus's `EgressTlsTarget`),
 an egress per process (`egressFor`, #45), and a route's traversal report (#41). Kinu mints each process's egress with
 the agent it acts for: the agent whose own uid it runs under, or the workspace's agent for a session-user process an exec
-named (the owner's terminal names none), so the GitHub work the egress records names that agent. With the report, `route(path, { report: true })` names
-every link its lookup read and, refused, the point it stopped at, so a slate build records those as its inputs and a
-link moved out there builds it again (`packages/cf-backend/src/slates/resident.ts`). The workspace's file listener
+named (the owner's terminal names none), so the GitHub work the egress records names that agent. With the report,
+`route(path, { report: true })` names every link its lookup read and, refused, the point it stopped at, so a slate
+build records those as its inputs and a link moved out there builds it again (`packages/cf-backend/src/slates/resident.ts`). The workspace's file listener
 moved from the SQLite engine's event bus, which 0.18 no longer feeds, to the namespace's `watchChanges`, so changes on
 Kinu's mounts reach it too; and the embedded workspace's `npx` installs through the workspace's network, as `npm` does.
 Behaviour 0.18 changes under Kinu (Nimbus's 2026-10-12 changelog): a file a Node program creates has the mode it asked

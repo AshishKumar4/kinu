@@ -1,9 +1,9 @@
 /**
  * The one way an agent or the owner replaces or creates a file: conditioned on what was read, on the plane's own side.
- * A plane that versions its files (the workspace's SQLite store, the context tree) checks the revision read; every other
- * plane (the CLI's folder, a machine under /pc, the sandbox) compares the bytes' sha256 and replaces through a temp file
- * and a rename in its own process. Either way the check and the write are one call, so nothing written between a read
- * and the write is lost: it is refused, naming what is there now.
+ * A plane that versions its files (the workspace's SQLite store, a session's files through the SDK, the context tree)
+ * checks the revision read; every other plane (the CLI's folder, a machine under /pc, the sandbox) compares the bytes'
+ * sha256 and writes in its own process. Either way the check and the write are one call, so nothing written between a
+ * read and the write is lost: it is refused, naming what is there now. A plane that checks neither is refused.
  */
 import type { Awaitable, VFS, VfsCasResult, VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
@@ -27,11 +27,10 @@ export type ObservedFile =
   | { readonly kind: 'digest'; readonly sha256: string };
 
 /**
- * Which check held: the plane's revision (revision 0 for a create), the read bytes' digest compared by the plane, the
- * same compared across the wire where the plane cannot (`/shared`), or none atomically, on a plane that checks neither
- * (`compared`: read and compared here, then written).
+ * Which check held: the plane's revision (revision 0 for a create), the read bytes' digest compared by the plane, or the
+ * same compared across the wire where the plane cannot (`/shared`).
  */
-export type WriteGuarantee = 'revision' | 'digest' | 'digest-remote' | 'none';
+export type WriteGuarantee = 'revision' | 'digest' | 'digest-remote';
 
 /** What the file holds now, in the plane's own terms: its revision, or its bytes' digest (null: no file). */
 export type FileNow = { readonly revision: VfsRevision } | { readonly sha256: string | null };
@@ -63,6 +62,8 @@ function changed(path: string, now: FileNow): FileRefusalError {
 }
 
 const UNSUPPORTED = (path: string) => new KinuError('unsupported', `${path}: this file plane keeps no revisions, so a save over the one you opened cannot be checked`);
+
+const UNCHECKED = (path: string) => new KinuError('unsupported', `${path}: this file plane checks neither a revision nor the bytes, so a write over what was read cannot be checked`);
 
 /** A plane's own refusal of a check it does not make (ENOTSUP): the other check may still be its. Null for that. */
 function made<A>(attempt: () => Awaitable<A>): Effect.Effect<A | null> {
@@ -125,38 +126,10 @@ function byAbsence(vfs: VFS & CheckpointFiles, path: string, data: Uint8Array): 
   return Effect.flatMap(created, (result) => revisionChecked(path, result));
 }
 
-/** The digest of what was observed: null for no file, else the read bytes' or the editor's. */
-function observedDigest(observed: Exclude<ObservedFile, { readonly kind: 'revision' }>): string | null {
-  if (observed.kind === 'absent') return null;
-
-  return observed.kind === 'read' ? sha256Hex(observed.bytes) : observed.sha256;
-}
-
-/**
- * A plane that checks neither a revision nor a digest itself: what it holds now is read and compared with what was
- * observed (no file, the read bytes, or an editor's digest) before the write, and a change is refused as on any other
- * plane. The compare and the write are two calls, so only a write landing between them is missed (`none`). A session's
- * file plane is one (`nimbusSessionFiles`: the SDK's write takes no precondition), a hosted agent's file tool's.
- */
-function compared(vfs: VFS & CheckpointFiles, path: string, data: Uint8Array, observed: ObservedFile): Effect.Effect<ConditionalWrite, KinuError> {
-  return Effect.gen(function* () {
-    // An editor's revision alone names no bytes to compare; the caller has refused it before this.
-    if (observed.kind === 'revision') return yield* Effect.fail(UNSUPPORTED(path));
-    const expected = observedDigest(observed);
-
-    const there = yield* Effect.promise(async () => ((await vfs.stat(path)) === null ? null : sha256Hex(await vfs.readFile(path))));
-
-    if (there !== expected) return yield* Effect.fail(changed(path, { sha256: there }));
-    yield* Effect.promise(async () => vfs.writeFile(path, data));
-
-    return { guarantee: 'none' as const, now: { sha256: sha256Hex(data) }, report: null };
-  });
-}
-
 /**
  * `data` at `path`, only over what `observed` says was there: by the revision read where the plane checks one, else by
- * the read bytes' digest; on a plane that makes neither, compared here before the write (`compared`). An editor's revision on a plane
- * with no revision check is refused, as the file manager always refused it.
+ * the read bytes' digest. A plane that makes neither is refused, and so is an editor's revision on a plane with no
+ * revision check, as the file manager always refused it.
  */
 export function writeConditionally(
   vfs: VFS & CheckpointFiles, path: string, data: Uint8Array, observed: ObservedFile,
@@ -186,6 +159,6 @@ export function writeConditionally(
 
     const absentByRevision = observed.kind === 'absent' ? yield* byAbsence(vfs, path, data) : null;
 
-    return absentByRevision ?? (yield* compared(vfs, path, data, observed));
+    return absentByRevision ?? (yield* Effect.fail(UNCHECKED(path)));
   }));
 }

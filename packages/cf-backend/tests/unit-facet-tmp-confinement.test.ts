@@ -257,6 +257,7 @@ function originFilesBox(f: OwnerFixture): SessionBox {
       readRange: async (path, offset, length) => present(() => view.readRange(path, offset, length)),
       exists: async (path) => view.exists(path),
       write: async (path, content) => { view.writeFile(path, content); },
+      writeIfRevision: refuse,
       list: async (path) => view.readdir(path ?? '/').map((entry) => ({ name: entry.name, type: entry.type })),
       stat,
       lstat: stat,

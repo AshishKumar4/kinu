@@ -68,6 +68,42 @@ index 1bd1b4d..c09fb3c 100644
          this.terminal = new WebSocketTerminal(null, (data) => {
              appendScrollback(options.ctx, data, Date.now());
              persistShellState(options.ctx, { cwd: this.shell.getCwd(), env: this.shell.getEnv() });
+diff --git a/dist/hosted/session.d.ts b/dist/hosted/session.d.ts
+index ea1c019..83dae14 100644
+--- a/dist/hosted/session.d.ts
++++ b/dist/hosted/session.d.ts
+@@ -21,6 +21,7 @@ import { RpcTarget } from 'cloudflare:workers';
+ import { type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
+ import type { SessionRpc, SessionReadyOptions, SessionExecOptions, SessionRunCodeOptions, SessionExposeOptions, SessionDurableAppOptions, SessionRuntimeInstallOptions, SessionTerminalSize, SessionProcessLogsOptions, SessionAppTarget } from '@nimbus-sh/core/runtime/session-protocol.js';
+ import * as operations from '../session/programmatic.js';
++import type { VfsCasResult } from '@nimbus-sh/core/vfs/vfs.js';
+ export interface HostedSessionScope {
+     /** The only named shell a command may run in; every command must name it (`sandbox(id, { shellId })`). */
+     readonly shellId?: string;
+@@ -88,6 +89,8 @@ export declare class HostedSession extends RpcTarget implements SessionRpc {
+     _rpcReadFile(path: string, _pid?: undefined, cred?: VfsCred): Promise<string | null>;
+     _rpcReadFileBytes(path: string, _pid?: undefined, cred?: VfsCred): Promise<Uint8Array | null>;
+     _rpcWriteFile(path: string, content: string | Uint8Array, _pid?: undefined, cred?: VfsCred): Promise<number>;
++    /** Kinu patch (NIMBUS-ASKS #55). */
++    _rpcWriteFileIfRevision(path: string, content: string | Uint8Array, expected: number, _pid?: undefined, cred?: VfsCred): Promise<VfsCasResult>;
+     _rpcStat(path: string, _pid?: undefined, cred?: VfsCred): Promise<{
+         type: string;
+         size: number;
+diff --git a/dist/hosted/session.js b/dist/hosted/session.js
+index 8b98f3f..cb8d309 100644
+--- a/dist/hosted/session.js
++++ b/dist/hosted/session.js
+@@ -86,6 +86,10 @@ export class HostedSession extends RpcTarget {
+     async _rpcWriteFile(path, content, _pid, cred) {
+         return rpc._rpcWriteFile(this.client(), path, content, undefined, this.cred(cred));
+     }
++    // Kinu patch (NIMBUS-ASKS #55).
++    async _rpcWriteFileIfRevision(path, content, expected, _pid, cred) {
++        return rpc._rpcWriteFileIfRevision(this.client(), path, content, expected, undefined, this.cred(cred));
++    }
+     async _rpcStat(path, _pid, cred) { return rpc._rpcStat(this.client(), path, undefined, this.cred(cred)); }
+     async _rpcLstat(path, _pid, cred) { return rpc._rpcLstat(this.client(), path, undefined, this.cred(cred)); }
+     async _rpcReadlink(path, _pid, cred) { return rpc._rpcReadlink(this.client(), path, undefined, this.cred(cred)); }
 diff --git a/dist/node-shims-artifact.generated.js b/dist/node-shims-artifact.generated.js
 index 5b1c786..93f0df8 100644
 --- a/dist/node-shims-artifact.generated.js
@@ -204,10 +240,18 @@ index fb43d14..702e94c 100644
      self.kernel = workspace.kernel;
      self.shell = workspace.shell;
 diff --git a/dist/session/nimbus-session.d.ts b/dist/session/nimbus-session.d.ts
-index 04bb622..3e99c3c 100644
+index 04bb622..7aa022e 100644
 --- a/dist/session/nimbus-session.d.ts
 +++ b/dist/session/nimbus-session.d.ts
-@@ -170,6 +170,8 @@ export declare class NimbusSession extends CloudflareDurableObject<SessionEnv> i
+@@ -53,6 +53,7 @@ import type { FanoutShardOptions } from '@nimbus-sh/fabric/fanout.js';
+ import { WebSocketRelay } from './ws-relay.js';
+ import * as _portCapability from './port-capability.js';
+ import { ServedReads } from '../facets/read-profile.js';
++import type { VfsCasResult } from '@nimbus-sh/core/vfs/vfs.js';
+ export { filterWranglerFlags, detectBundlerBin, checkNodeModulesGuard, detectUnsupportedWranglerConfig, renderNoDevServerHtml, BUNDLER_BIN_PREFIXES, NIMBUS_UNSUPPORTED_BINS, WRANGLER_IGNORED_FLAGS, WRANGLER_IGNORED_FLAGS_WITH_VALUE, WRANGLER_UNSUPPORTED_CONFIG_FIELDS, } from './helpers.js';
+ export { detectCloudflareWorkersProject } from '@nimbus-sh/core/runtime/project-detect.js';
+ /**
+@@ -170,6 +171,8 @@ export declare class NimbusSession extends CloudflareDurableObject<SessionEnv> i
       *  holds the object only while traffic was observed within
       *  RESIDENT_KEEPALIVE_DETACHED_MS (hibernation.ts residentClientPresent). */
      _w1LastClientActivityAt: number;
@@ -216,7 +260,16 @@ index 04bb622..3e99c3c 100644
      /** Destroyed-session tombstone (SESSION_DESTROYED_KEY), hydrated at boot.
       *  While set, log activity never re-arms the janitor alarm cycle. */
      _w1SessionDestroyed: boolean;
-@@ -711,6 +713,7 @@ export declare class NimbusSession extends CloudflareDurableObject<SessionEnv> i
+@@ -370,6 +373,8 @@ export declare class NimbusSession extends CloudflareDurableObject<SessionEnv> i
+     _rpcInnerDoFetch(req: any): Promise<any>;
+     _rpcInnerDoCall(req: any): Promise<unknown>;
+     _rpcWriteFile(path: string, content: string | Uint8Array, pid?: number, cred?: VfsCred): Promise<number>;
++    /** Kinu patch (NIMBUS-ASKS #55). */
++    _rpcWriteFileIfRevision(path: string, content: string | Uint8Array, expected: number, pid?: number, cred?: VfsCred): Promise<VfsCasResult>;
+     _rpcWriteProtectedRootFile(rootPath: string, path: string, content: string | Uint8Array): Promise<void>;
+     _rpcStat(path: string, pid?: number, cred?: VfsCred): Promise<SessionFileStat | null>;
+     _rpcLstat(path: string, pid?: number, cred?: VfsCred): Promise<SessionFileStat | null>;
+@@ -711,6 +716,7 @@ export declare class NimbusSession extends CloudflareDurableObject<SessionEnv> i
          destroyedAt: number;
          reason: string | null;
      }>;
@@ -225,7 +278,7 @@ index 04bb622..3e99c3c 100644
      _handleFetch(request: Request): Promise<Response>;
      /**
 diff --git a/dist/session/nimbus-session.js b/dist/session/nimbus-session.js
-index 08c7e8d..f11e2e3 100644
+index 08c7e8d..75481d8 100644
 --- a/dist/session/nimbus-session.js
 +++ b/dist/session/nimbus-session.js
 @@ -44,7 +44,7 @@ import { ATTACH_BOOTSTRAP_JTI_KEY_PREFIX, SESSION_DESTROYED_KEY } from './keys.j
@@ -246,7 +299,16 @@ index 08c7e8d..f11e2e3 100644
      /** Destroyed-session tombstone (SESSION_DESTROYED_KEY), hydrated at boot.
       *  While set, log activity never re-arms the janitor alarm cycle. */
      _w1SessionDestroyed = false;
-@@ -968,6 +970,9 @@ export class NimbusSession extends CloudflareDurableObject {
+@@ -756,6 +758,8 @@ export class NimbusSession extends CloudflareDurableObject {
+     async _rpcInnerDoFetch(req) { return _rpc._rpcInnerDoFetch(this, req); }
+     async _rpcInnerDoCall(req) { return _rpc._rpcInnerDoCall(this, req); }
+     async _rpcWriteFile(path, content, pid, cred) { return _rpc._rpcWriteFile(this, path, content, pid, cred); }
++    // Kinu patch (NIMBUS-ASKS #55).
++    async _rpcWriteFileIfRevision(path, content, expected, pid, cred) { return _rpc._rpcWriteFileIfRevision(this, path, content, expected, pid, cred); }
+     async _rpcWriteProtectedRootFile(rootPath, path, content) {
+         return _rpc._rpcWriteProtectedRootFile(this, rootPath, path, content);
+     }
+@@ -968,6 +972,9 @@ export class NimbusSession extends CloudflareDurableObject {
      }
      async _rpcDestroy(options) { return _programmatic.rpcDestroy(this, options); }
      // ── HTTP handler ──────────────────────────────────────────────────────
@@ -256,6 +318,42 @@ index 08c7e8d..f11e2e3 100644
      async fetch(request) {
          // Every client reaches the session through here; facets reach it
          // through RPC, which is deliberately not counted.
+diff --git a/dist/session/rpc.d.ts b/dist/session/rpc.d.ts
+index fe61b6b..8cdaca7 100644
+--- a/dist/session/rpc.d.ts
++++ b/dist/session/rpc.d.ts
+@@ -31,6 +31,7 @@ import { z } from 'zod/v4';
+ import type { NimbusSession } from './nimbus-session.js';
+ import type { WsRelayHeaders, WsRelayOpened } from './ws-relay.js';
+ import type { HmrEvent } from '../facets/real-vite-hmr.js';
++import type { VfsCasResult } from '@nimbus-sh/core/vfs/vfs.js';
+ type RpcHost = any;
+ export declare function _rpcGetCachedTarball(_self: RpcHost, _integrity: string, _pid?: number, _run?: string): Promise<{
+     readOnly: boolean;
+@@ -96,6 +97,8 @@ export declare function _rpcInnerDoCall(self: RpcHost, req: {
+     args: unknown[] | null;
+ }): Promise<unknown>;
+ export declare function _rpcWriteFile(self: RpcHost, path: string, content: string | Uint8Array, pid?: number, cred?: VfsCred): Promise<number>;
++/** Kinu patch (NIMBUS-ASKS #55): writeFile only over `expected`, the revision read (0: no file). */
++export declare function _rpcWriteFileIfRevision(self: RpcHost, path: string, content: string | Uint8Array, expected: number, pid?: number, cred?: VfsCred): Promise<VfsCasResult>;
+ /**
+  * Write one host-governed file at a session root and let ordinary Unix
+  * permissions keep it that way: the root becomes a sticky 1777 directory owned
+diff --git a/dist/session/rpc.js b/dist/session/rpc.js
+index f601507..98a823e 100644
+--- a/dist/session/rpc.js
++++ b/dist/session/rpc.js
+@@ -300,6 +300,10 @@ export async function _rpcWriteFile(self, path, content, pid, cred) {
+     // clone.
+     return self.supervisorOp({ op: 'writeFile', args: [path, content], pid, cred });
+ }
++/** Kinu patch (NIMBUS-ASKS #55): writeFile only over `expected`, the revision read (0: no file). */
++export async function _rpcWriteFileIfRevision(self, path, content, expected, pid, cred) {
++    return self.supervisorOp({ op: 'writeFileIfRevision', args: [path, content, expected], pid, cred });
++}
+ /**
+  * Write one host-governed file at a session root and let ordinary Unix
+  * permissions keep it that way: the root becomes a sticky 1777 directory owned
 diff --git a/public/_assets/runtime/node-shims-7fb968320d7d0418.js b/public/_assets/runtime/node-shims-7fb968320d7d0418.js
 index a157bac..15c3f9c 100644
 --- a/public/_assets/runtime/node-shims-7fb968320d7d0418.js

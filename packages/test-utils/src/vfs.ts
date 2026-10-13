@@ -69,12 +69,25 @@ export function createMemoryVfs(): MemoryVfs {
 /** A test's Nimbus box with a session's file plane beside it, the plane `nimbusSessionFiles` reads. */
 export type SessionBox = NimbusSandboxHandle & { readonly files: NimbusSandboxFiles };
 
-/** A remote session's file plane over `files`, the Nimbus SDK's contract: an absent path answers null. It keeps no modes. */
+/**
+ * A remote session's file plane over `files`, the Nimbus SDK's contract: an absent path answers null, and each write
+ * moves the file's revision, which a revision-checked write is checked against (0: no file). It keeps no modes.
+ */
 export function sessionFilesOver(files = new Map<string, Uint8Array>()): NimbusSandboxFiles {
+  const revisions = new Map<string, number>();
+  // A file seeded into `files` is at revision 1.
+  let clock = 1;
+
   const stat = async (path: string) => {
     const bytes = files.get(path);
 
-    return bytes === undefined ? null : { type: 'file', size: bytes.byteLength, mtime: 1, mode: 0o644 };
+    return bytes === undefined ? null : { type: 'file', size: bytes.byteLength, mtime: 1, mode: 0o644, revision: revisions.get(path) ?? 1 };
+  };
+
+  const write = (path: string, content: string | Uint8Array): void => {
+    files.set(path, content instanceof Uint8Array ? content.slice() : new TextEncoder().encode(content));
+    clock += 1;
+    revisions.set(path, clock);
   };
 
   const plane: NimbusSandboxFiles = {
@@ -87,7 +100,15 @@ export function sessionFilesOver(files = new Map<string, Uint8Array>()): NimbusS
     readBytes: async (path) => files.get(path)?.slice() ?? null,
     exists: async (path) => files.has(path),
     readRange: async (path, offset, length) => files.get(path)?.slice(offset, offset + length) ?? null,
-    write: async (path, content) => { files.set(path, content instanceof Uint8Array ? content.slice() : new TextEncoder().encode(content)); },
+    write: async (path, content) => { write(path, content); },
+    writeIfRevision: async (path, content, expected) => {
+      const current = files.has(path) ? revisions.get(path) ?? 1 : 0;
+
+      if (current !== expected) return { ok: false, revision: current };
+      write(path, content);
+
+      return { ok: true, revision: revisions.get(path) ?? 1 };
+    },
     stat,
     lstat: stat,
     // No links in this plane: a present file is no link, as the session answers.
@@ -96,12 +117,16 @@ export function sessionFilesOver(files = new Map<string, Uint8Array>()): NimbusS
     rename: async (from, to) => {
       const bytes = files.get(from);
 
-      if (bytes !== undefined) files.set(to, bytes);
+      if (bytes !== undefined) write(to, bytes);
       files.delete(from);
+      revisions.delete(from);
     },
     mkdir: async () => {},
     chmod: (path) => settle(Effect.fail(new VfsError('ENOTSUP', 'this test plane keeps no modes', path))),
-    delete: async (path) => { files.delete(path); },
+    delete: async (path) => {
+      files.delete(path);
+      revisions.delete(path);
+    },
   };
 
   return plane;

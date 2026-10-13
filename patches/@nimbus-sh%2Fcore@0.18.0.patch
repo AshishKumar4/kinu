@@ -115,6 +115,26 @@ index ccea7e1..9bcae6f 100644
              // A navigation's answer is the document the browser will isolate (or
              // not) by these headers; a redirect is not a document.
              if (request.headers.get('Sec-Fetch-Mode') === 'navigate' && (response.status < 300 || response.status > 399)) {
+diff --git a/dist/runtime/session-protocol.d.ts b/dist/runtime/session-protocol.d.ts
+index 4eaa12f..46ddcea 100644
+--- a/dist/runtime/session-protocol.d.ts
++++ b/dist/runtime/session-protocol.d.ts
+@@ -1,5 +1,6 @@
+ import { z } from 'zod/v4';
+ import type { VfsCred } from './os-contracts.js';
++import type { VfsCasResult } from '../vfs/vfs.js';
+ import type { ProcessTerminalSize } from './process-io-protocol.js';
+ export declare const SessionProcessSchema: z.ZodObject<{
+     pid: z.ZodNumber;
+@@ -572,6 +573,8 @@ export interface SessionRpc {
+     _rpcReadFile(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'readFile'>>;
+     _rpcReadFileBytes(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'readFileBytes'>>;
+     _rpcWriteFile(path: string, content: string | Uint8Array, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'writeFile'>>;
++    /** Kinu patch (NIMBUS-ASKS #55): writeFile only over `expected`, the revision read (0: no file); refused, naming the one there. */
++    _rpcWriteFileIfRevision(path: string, content: string | Uint8Array, expected: number, pid?: undefined, cred?: VfsCred): Promise<VfsCasResult>;
+     _rpcStat(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'stat'>>;
+     _rpcLstat(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'lstat'>>;
+     _rpcReadlink(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'readlink'>>;
 diff --git a/dist/shell/shell-entrypoints.d.ts b/dist/shell/shell-entrypoints.d.ts
 index d0295e6..cf4199e 100644
 --- a/dist/shell/shell-entrypoints.d.ts
@@ -277,6 +297,71 @@ index bf67463..1b524ec 100644
              return andThen(order.reduce((chain, entry) => andThen(chain, () => {
                  if (kept.has(entry.rel))
                      return undefined;
+diff --git a/dist/workspace/supervisor-op.js b/dist/workspace/supervisor-op.js
+index f34b3ff..5edc91a 100644
+--- a/dist/workspace/supervisor-op.js
++++ b/dist/workspace/supervisor-op.js
+@@ -6,6 +6,7 @@ import { traced } from '@nimbus-sh/platform/tracing.js';
+ import { WAVE_EPOCH_TTL_MS } from '@nimbus-sh/platform/lost-call.js';
+ import { CRED_SESSION_USER, requireVfsCred } from '../runtime/os-contracts.js';
+ import { ProcessFiles } from '../runtime/process-files.js';
++import { syscallError } from '../vfs/vfs-error.js';
+ import { supervisorDeliveredOp, supervisorDeliveryAnswer, supervisorJoinedReadOp, SUPERVISOR_DELIVER_OP, } from './supervisor-delivery.js';
+ const FsPath = z.union([
+     z.string(),
+@@ -271,6 +272,27 @@ const NATIVE_OPS = {
+     fsReadRangeUncached: (e, t) => readRange(e, t, { cached: false }),
+     fsRevision: (e, t) => fsFor(e, t).revision(e.args?.[0] === undefined ? undefined : stringArg(e, 0)),
+     writeFile: (e, t) => fsFor(e, t).writeFile(FsPath.parse(e.args?.[0]), contentArg(e, 1)),
++    // Kinu patch (NIMBUS-ASKS #55): a whole-file write only over the revision
++    // the caller read (0: nothing there), answered as
++    // SqliteFiles.writeFileIfRevision answers. The stat and the write are one
++    // synchronous step, so nothing commits between them. A file with no
++    // revision of its own (a mount's) cannot be checked by one: ENOTSUP.
++    writeFileIfRevision: (e, t) => {
++        const fs = fsFor(e, t).synchronous;
++        const path = FsPath.parse(e.args?.[0]);
++        const named = typeof path === 'string' ? path : path.path;
++        if (fs === undefined)
++            throw syscallError('ENOTSUP', 'open', named);
++        const expected = numberArg(e, 2);
++        const held = fs.stat(path, { followSymlinks: true });
++        if (held !== null && held.revision === 0)
++            throw syscallError('ENOTSUP', 'open', named);
++        const current = held === null ? 0 : held.revision;
++        if (current !== expected)
++            return { ok: false, revision: current };
++        fs.writeFile(path, contentArg(e, 1));
++        return { ok: true, revision: fs.stat(path, { followSymlinks: true })?.revision ?? 0 };
++    },
+     // writeFile, answering with the path's own stat as the write left it: a
+     // process keeps that stat for its sync view, and asked for it in a second
+     // call before (node-shims _writeFileAsync). The write is committed before
+diff --git a/dist/workspace/supervisor-ops.d.ts b/dist/workspace/supervisor-ops.d.ts
+index 7aaae83..5ac7fc8 100644
+--- a/dist/workspace/supervisor-ops.d.ts
++++ b/dist/workspace/supervisor-ops.d.ts
+@@ -22,6 +22,7 @@ export declare const SUPERVISOR_OP_TABLE: {
+     readonly readFileBytes: "joined";
+     readonly writeFile: "once";
+     readonly writeFileStat: "once";
++    readonly writeFileIfRevision: "once";
+     readonly stat: "joined";
+     readonly lstat: "joined";
+     readonly utimes: "once";
+diff --git a/dist/workspace/supervisor-ops.js b/dist/workspace/supervisor-ops.js
+index 68bb5e4..a556ef7 100644
+--- a/dist/workspace/supervisor-ops.js
++++ b/dist/workspace/supervisor-ops.js
+@@ -22,6 +22,8 @@ export const SUPERVISOR_OP_TABLE = {
+     readFileBytes: 'joined',
+     writeFile: 'once',
+     writeFileStat: 'once',
++    // Kinu patch (NIMBUS-ASKS #55): writeFile only over the revision the caller read.
++    writeFileIfRevision: 'once',
+     stat: 'joined',
+     lstat: 'joined',
+     utimes: 'once',
 diff --git a/src/runtime/port-registry.ts b/src/runtime/port-registry.ts
 index dda6950..4ecbc65 100644
 --- a/src/runtime/port-registry.ts
@@ -360,6 +445,26 @@ index dda6950..4ecbc65 100644
        // A navigation's answer is the document the browser will isolate (or
        // not) by these headers; a redirect is not a document.
        if (request.headers.get('Sec-Fetch-Mode') === 'navigate' && (response.status < 300 || response.status > 399)) {
+diff --git a/src/runtime/session-protocol.ts b/src/runtime/session-protocol.ts
+index 5348b43..951774e 100644
+--- a/src/runtime/session-protocol.ts
++++ b/src/runtime/session-protocol.ts
+@@ -1,5 +1,6 @@
+ import { z } from 'zod/v4';
+ import type { VfsCred } from './os-contracts.js';
++import type { VfsCasResult } from '../vfs/vfs.js';
+ import type { ProcessTerminalSize } from './process-io-protocol.js';
+ import { ExecOutputSchema } from './exec-stream.js';
+ 
+@@ -268,6 +269,8 @@ export interface SessionRpc {
+   _rpcReadFile(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'readFile'>>;
+   _rpcReadFileBytes(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'readFileBytes'>>;
+   _rpcWriteFile(path: string, content: string | Uint8Array, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'writeFile'>>;
++  /** Kinu patch (NIMBUS-ASKS #55): writeFile only over `expected`, the revision read (0: no file); refused, naming the one there. */
++  _rpcWriteFileIfRevision(path: string, content: string | Uint8Array, expected: number, pid?: undefined, cred?: VfsCred): Promise<VfsCasResult>;
+   _rpcStat(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'stat'>>;
+   _rpcLstat(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'lstat'>>;
+   _rpcReadlink(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'readlink'>>;
 diff --git a/src/shell/shell-entrypoints.ts b/src/shell/shell-entrypoints.ts
 index dd485e4..5526d89 100644
 --- a/src/shell/shell-entrypoints.ts
@@ -511,3 +616,54 @@ index 0f6641a..b2111b7 100644
        return andThen(order.reduce<Awaitable<void>>((chain, entry) => andThen(chain, () => {
          if (kept.has(entry.rel)) return undefined;
          const fail = (cause: unknown): void => {
+diff --git a/src/workspace/supervisor-op.ts b/src/workspace/supervisor-op.ts
+index ca903c3..d8fe0ea 100644
+--- a/src/workspace/supervisor-op.ts
++++ b/src/workspace/supervisor-op.ts
+@@ -9,6 +9,8 @@ import { traced, type SpanRecorder } from '@nimbus-sh/platform/tracing.js';
+ import { WAVE_EPOCH_TTL_MS } from '@nimbus-sh/platform/lost-call.js';
+ import { CRED_SESSION_USER, requireVfsCred, type VfsCred } from '../runtime/os-contracts.js';
+ import { ProcessFiles } from '../runtime/process-files.js';
++import { syscallError } from '../vfs/vfs-error.js';
++import type { VfsCasResult } from '../vfs/vfs.js';
+ import type { NimbusFilesystemAuthority, NimbusHostFilesystemLease, RuntimeFsBridge, RuntimeFsPath, RuntimeMutationOwner, RuntimeVfsStat } from '../runtime/os-contracts.js';
+ import type { SessionProcessSupervisor } from '../runtime/session-process-supervisor.js';
+ import {
+@@ -441,6 +443,24 @@ const NATIVE_OPS = {
+   fsReadRangeUncached: (e, t) => readRange(e, t, { cached: false }),
+   fsRevision: (e, t) => fsFor(e, t).revision(e.args?.[0] === undefined ? undefined : stringArg(e, 0)),
+   writeFile: (e, t) => fsFor(e, t).writeFile(FsPath.parse(e.args?.[0]), contentArg(e, 1)),
++  // Kinu patch (NIMBUS-ASKS #55): a whole-file write only over the revision
++  // the caller read (0: nothing there), answered as
++  // SqliteFiles.writeFileIfRevision answers. The stat and the write are one
++  // synchronous step, so nothing commits between them. A file with no
++  // revision of its own (a mount's) cannot be checked by one: ENOTSUP.
++  writeFileIfRevision: (e, t): VfsCasResult => {
++    const fs = fsFor(e, t).synchronous;
++    const path = FsPath.parse(e.args?.[0]);
++    const named = typeof path === 'string' ? path : path.path;
++    if (fs === undefined) throw syscallError('ENOTSUP', 'open', named);
++    const expected = numberArg(e, 2);
++    const held = fs.stat(path, { followSymlinks: true });
++    if (held !== null && held.revision === 0) throw syscallError('ENOTSUP', 'open', named);
++    const current = held === null ? 0 : held.revision;
++    if (current !== expected) return { ok: false, revision: current };
++    fs.writeFile(path, contentArg(e, 1));
++    return { ok: true, revision: fs.stat(path, { followSymlinks: true })?.revision ?? 0 };
++  },
+   // writeFile, answering with the path's own stat as the write left it: a
+   // process keeps that stat for its sync view, and asked for it in a second
+   // call before (node-shims _writeFileAsync). The write is committed before
+diff --git a/src/workspace/supervisor-ops.ts b/src/workspace/supervisor-ops.ts
+index ca50df2..15b4a0c 100644
+--- a/src/workspace/supervisor-ops.ts
++++ b/src/workspace/supervisor-ops.ts
+@@ -22,6 +22,8 @@ export const SUPERVISOR_OP_TABLE = {
+   readFileBytes: 'joined',
+   writeFile: 'once',
+   writeFileStat: 'once',
++  // Kinu patch (NIMBUS-ASKS #55): writeFile only over the revision the caller read.
++  writeFileIfRevision: 'once',
+   stat: 'joined',
+   lstat: 'joined',
+   utimes: 'once',

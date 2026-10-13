@@ -452,6 +452,9 @@ const FileStatSchema = v.object({ type: v.string(), size: v.number(), mtime: v.n
 
 /** The credentialed runtime: `exec` carries the credential and `files.as(agent)` answers the bound
  *  file plane; top-level `files` refuse so it never falls back to the session user. Shared to prevent drift. */
+/** A revision-checked write's answer, as the session gives it. */
+const CasSchema = v.variant('ok', [v.object({ ok: v.literal(true), revision: v.number() }), v.object({ ok: v.literal(false), revision: v.number() })]);
+
 export function credentialedSessionBox(
   runtime: () => Promise<HostedRuntime>,
   cred: VfsCred,
@@ -484,6 +487,9 @@ export function credentialedSessionBox(
         return vfs.exists(path) ? vfs.readRange(path, offset, length) : null;
       },
       write: async (path, content) => { await (await view()).writeFile(path, content); },
+      // The session's own revision-checked write, the op the SDK's sends.
+      writeIfRevision: async (path, content, expected) => v.parse(CasSchema,
+        await (await runtime()).supervisorOp({ op: 'writeFileIfRevision', args: [path, content, expected], cred: agent })),
       list: async (path) => (await (await view()).readdir(path ?? '/')).map((entry) => ({ name: entry.name, type: entry.type })),
       stat: stat(true),
       lstat: stat(false),
@@ -518,8 +524,8 @@ export function credentialedSessionBox(
       };
     },
     files: {
-      as: filesAs, read: refuse, readBytes: refuse, readRange: refuse, write: refuse, list: refuse, stat: refuse, lstat: refuse, readlink: refuse,
-      rename: refuse, chmod: refuse, mkdir: refuse, exists: refuse, delete: refuse,
+      as: filesAs, read: refuse, readBytes: refuse, readRange: refuse, write: refuse, writeIfRevision: refuse, list: refuse, stat: refuse, lstat: refuse,
+      readlink: refuse, rename: refuse, chmod: refuse, mkdir: refuse, exists: refuse, delete: refuse,
     },
   };
 }

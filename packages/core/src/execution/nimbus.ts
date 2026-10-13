@@ -713,7 +713,12 @@ export function nimbusSessionFiles(
 
       await atVfsPath(absolute, 'open', () => files.write(absolute, data));
     },
-    // No `writeFileIfRevision`: the SDK write takes no precondition, so `writeExecutorFileOp` answers `unsupported`.
+    // Over the revision its stat gave, checked and written in one step at the session (Kinu's SDK patch, Nimbus ask 55).
+    writeFileIfRevision: (path, data, expected) => {
+      const absolute = at(path);
+
+      return atVfsPath(absolute, 'open', () => files.writeIfRevision(absolute, data, Number(expected)));
+    },
     async readdir(path) {
       const absolute = at(path);
 
