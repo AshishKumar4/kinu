@@ -107,10 +107,10 @@ describe('a machine that cannot sandbox runs no command', () => {
     harness.consentDecision = 'always';
     await harness.sendDeviceHello(hello({ capability: 'files_only', reason: 'no_bwrap', gpu: [] }));
 
-    await harness.userDO.deviceRpc(harness.workspace, 'readFile', ['/home/ashish/notes.md'], {
+    await harness.userDO.deviceRpc(harness.workspace, 'readRange', ['/home/ashish/notes.md', 0, 64], {
       agentName: WORKSPACE,
     });
-    expect(harness.deviceFrames.map((frame) => frame.method)).toContain('readFile');
+    expect(harness.deviceFrames.map((frame) => frame.method)).toContain('readRange');
     await harness.closeDeviceHarness();
   });
 
@@ -219,8 +219,8 @@ describe('the frame carries the calling workspace own home', () => {
     const file = '/home/ashish/projects/kinu/notes.md';
 
     for (const [method, params] of [
-      ['readFile', [file]], ['readRange', [file, 0, 4]], ['writeFile', [file, 'x']], ['listFiles', ['/home/ashish/projects/kinu']],
-      ['statPath', [file]], ['unlinkPath', [file]], ['rmdirPath', [`${file}.d`]], ['mkdirPath', [`${file}.d`]], ['exists', [file]],
+      ['readRange', [file, 0, 4]], ['writeFile', [file, 'x']], ['listFiles', ['/home/ashish/projects/kinu']],
+      ['statPath', [file]], ['unlinkPath', [file]], ['rmdirPath', [`${file}.d`]], ['mkdirPath', [`${file}.d`]],
     ] satisfies Array<[string, JsonValue[]]>) {
       await harness.userDO.deviceRpc(harness.workspace, method, params, { agentName: WORKSPACE });
     }
@@ -244,7 +244,7 @@ describe('the frame carries the calling workspace own home', () => {
     harness.consentDecision = 'always';
     await harness.sendDeviceHello(hello({ capability: 'files_only', reason: 'no_bwrap', gpu: [] }, { root: '/' }));
 
-    await harness.userDO.deviceRpc(harness.workspace, 'readFile', ['/etc/hostname'], { agentName: WORKSPACE });
+    await harness.userDO.deviceRpc(harness.workspace, 'readRange', ['/etc/hostname', 0, 64], { agentName: WORKSPACE });
     await harness.userDO.deviceRpc(harness.workspace, 'listFiles', ['/'], { agentName: WORKSPACE });
 
     expect(harness.deviceFrames.map((frame) => v.parse(FrameSandboxSchema, frame.sandbox)?.tier)).toEqual(['raw', 'raw']);

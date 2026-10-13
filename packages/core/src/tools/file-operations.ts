@@ -121,6 +121,20 @@ async function vfsFailure(vfs: VFS, input: { error: unknown }, action: string, p
   return { reason, error: `${err.message}${hint}` };
 }
 
+/**
+ * Where one call's path lands, links and `..` walked as the operation walks them, resolved once before the call touches
+ * the file: it reads, writes and indexes there, and its result names that file, so a link moved while the call waits
+ * cannot turn its answer into another file's.
+ */
+interface Landing {
+  readonly at: string;
+  /** What the call hands the plane: `at`, or, on a plane with no namespace to walk (a bare store, as a birth runtime's), the path as named. */
+  readonly path: string;
+  /** The memory note the file is, keyed as a relative path from the call's start names it; null outside `memory/`. */
+  readonly note: string | null;
+  readonly reference: string;
+}
+
 export interface FileDeps {
   /** The tool's file plane; its `resolve`, where it has one, says where a path landed, so a result names that file. */
   readonly vfs: VFS & CheckpointFiles & Partial<Pick<VfsMountRouting, 'resolve'>>;
@@ -218,17 +232,16 @@ function fileOps(deps: FileDeps) {
   /** The one write path: conditioned on what was read (`vfs/conditional-write.ts`). `observe` runs as soon as the
    *  bytes land, so a later failure cannot leave the ledger denying content already on disk. */
   const persist = async (
-    path: string, content: string, observe: (revision?: VfsRevision) => void, observed: ObservedFile,
+    target: Landing, content: string, observe: (revision?: VfsRevision) => void, observed: ObservedFile,
   ): Promise<{ readonly report: VfsWriteReport | null; readonly checked: WriteGuarantee }> => {
-    const dir = vfsDirname(path);
+    const dir = vfsDirname(target.path);
 
     if (dir) await ensureDir(vfs, dir);
-    const written = await writeConditionally(vfs, path, new TextEncoder().encode(content), observed);
+    const written = await writeConditionally(vfs, target.path, new TextEncoder().encode(content), observed);
 
     observe('revision' in written.now ? written.now.revision : undefined);
-    const indexed = memoryIndexPath(path);
 
-    if (deps.memory && indexed) await deps.memory.index(indexed);
+    if (deps.memory && target.note !== null) await deps.memory.index(target.note);
 
     return { report: written.report, checked: written.guarantee };
   };
@@ -280,20 +293,24 @@ function fileOps(deps: FileDeps) {
     }
   };
 
-  /**
-   * Where a path landed, links and `..` walked as the operation walked them, and the reference the live table gives
-   * that file: what a result names, so reading the reference back reads the bytes the call read or wrote. A plane with
-   * no namespace to walk (a bare store, as a birth runtime's) lands where the path is named.
-   */
-  const landing = async (path: string): Promise<{ readonly at: string; readonly reference: string }> => {
-    const at = vfs.resolve === undefined ? resolvePath(path, deps.planes).absolute : await vfs.resolve(path);
+  /** Where a call's path lands, walked once before the call touches the file (`creating` for a write that makes its parents). */
+  const landing = async (path: string, creating: boolean): Promise<Landing> => {
+    if (vfs.resolve === undefined) {
+      const at = resolvePath(path, deps.planes).absolute;
 
-    return { at, reference: formatPath(at, deps.planes) };
+      return { at, path, note: memoryIndexPath(path), reference: formatPath(at, deps.planes) };
+    }
+
+    const at = await vfs.resolve(path, { creating });
+    const { cwd } = deps.planes;
+
+    return { at, path: at, note: at.startsWith(`${cwd}/`) ? memoryIndexPath(at.slice(cwd.length + 1)) : null, reference: formatPath(at, deps.planes) };
   };
 
   /** A raster image is shown to the model, as a screenshot is: its text would be noise. Null for anything else. */
   const imageRead = async (path: string): Promise<ImageCarrier | null> => {
-    const bytes = await vfs.readFile(path);
+    const target = await landing(path, false);
+    const bytes = await vfs.readFile(target.path);
     const image = rasterImage(bytes);
 
     if (image === null) return null;
@@ -303,7 +320,7 @@ function fileOps(deps: FileDeps) {
         + `${IMAGE_READ_MAX_BYTES} a model is shown; scale it down with the shell first.`);
     }
 
-    const output = `${(await landing(path)).reference}: ${image.mediaType} ${image.width}x${image.height}, ${bytes.byteLength} bytes`;
+    const output = `${target.reference}: ${image.mediaType} ${image.width}x${image.height}, ${bytes.byteLength} bytes`;
 
     return imageCarrier(output, [{ mediaType: image.mediaType, data: bytesToBase64(bytes) }]);
   };
@@ -354,11 +371,13 @@ function fileOps(deps: FileDeps) {
     }),
     write: async (path: string, content: string) => {
       requireBuild('file.write');
+      let target: Landing;
       let existing: string | null;
       let observed: ObservedFile;
 
       try {
-        ({ text: existing, observed } = await readObserved(path));
+        target = await landing(path, true);
+        ({ text: existing, observed } = await readObserved(target.path));
       } catch (err) {
         const vfsFail = await vfsFailure(vfs, { error: err }, 'write', path);
 
@@ -374,37 +393,37 @@ function fileOps(deps: FileDeps) {
       let landed: { readonly report: VfsWriteReport | null; readonly checked: WriteGuarantee };
 
       try {
-        landed = await persist(path, content, (revision) => ledger.observeWhole(path, content, revision), observed);
+        landed = await persist(target, content, (revision) => ledger.observeWhole(path, content, revision), observed);
       } catch (err) {
         const vfsFail = await vfsFailure(vfs, { error: err }, 'write', path);
 
         return failure(vfsFail.reason, vfsFail.error);
       }
 
-      const where = await landing(path);
-
       return {
-        path, reference: where.reference, bytes: content.length, action: existing === null ? 'created' as const : 'replaced' as const,
+        path, reference: target.reference, bytes: content.length, action: existing === null ? 'created' as const : 'replaced' as const,
         checked: landed.checked, ...undo(landed.report),
-        ...await slateBuild(deps, where.at),
+        ...await slateBuild(deps, target.at),
       };
     },
     edit: async (path: string, raw: readonly { readonly old_text: string; readonly new_text: string }[]) => {
       requireBuild('file.edit');
       const edits: FileEdit[] = raw.map((edit) => ({ oldText: edit.old_text, newText: edit.new_text }));
 
+      let target: Landing;
       let current: string;
       let observed: ObservedFile;
 
       try {
+        target = await landing(path, false);
         // The revision the agent read, where the plane keeps it: the edit applies to what was read.
         let held;
 
         try {
-          held = await readObserved(path, ledger.readRevision(path));
+          held = await readObserved(target.path, ledger.readRevision(path));
         } catch (cause) {
           if (!isVfsError(cause) || cause.code !== 'ENOTSUP') throw cause;
-          held = await readObserved(path);
+          held = await readObserved(target.path);
         }
 
         if (held.text === null) throw new VfsError('ENOENT', 'no such file, open', path);
@@ -435,7 +454,7 @@ function fileOps(deps: FileDeps) {
       let landed: { readonly report: VfsWriteReport | null; readonly checked: WriteGuarantee };
 
       try {
-        landed = await persist(path, outcome.content, (writtenRevision) => ledger.observeEdited(path, current, outcome, writtenRevision), observed);
+        landed = await persist(target, outcome.content, (writtenRevision) => ledger.observeEdited(path, current, outcome, writtenRevision), observed);
       } catch (err) {
         const vfsFail = await vfsFailure(vfs, { error: err }, 'edit', path);
         ledger.recordEdit(path, vfsFail.reason);
@@ -445,13 +464,11 @@ function fileOps(deps: FileDeps) {
 
       ledger.recordEdit(path, null);
 
-      const where = await landing(path);
-
       return {
-        path, reference: where.reference,
+        path, reference: target.reference,
         applied: outcome.applied.map((a) => ({ line: a.line, removedLines: a.removedLines, addedLines: a.addedLines })),
         checked: landed.checked, ...undo(landed.report),
-        ...await slateBuild(deps, where.at),
+        ...await slateBuild(deps, target.at),
       };
     },
   };

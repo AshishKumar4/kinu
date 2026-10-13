@@ -41,7 +41,5 @@ export interface FileMetadata {
 export interface ListedFile extends FileMetadata {
   readonly name: string;
   readonly path: string;
-  readonly absolutePath: string;
-  readonly isDirectory: boolean;
 }
 

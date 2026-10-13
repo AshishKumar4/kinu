@@ -8,7 +8,6 @@ import { firstRunScript } from '../tests/first-run/scripted';
 import { sleepTimeScript } from './sleep-time-script';
 import { canaryScript } from './canary-script';
 import { flowsScript } from './flows-script';
-import { perfIoModel } from './turn-file-io-model';
 import { FALLBACK_ANSWER, type ScriptedModel } from './scripted-protocol';
 
-export const tierModel: ScriptedModel = (request) => sleepTimeScript(request) ?? perfIoModel(request) ?? canaryScript(request) ?? flowsScript(request) ?? firstRunScript(request) ?? { text: FALLBACK_ANSWER };
+export const tierModel: ScriptedModel = (request) => sleepTimeScript(request) ?? canaryScript(request) ?? flowsScript(request) ?? firstRunScript(request) ?? { text: FALLBACK_ANSWER };

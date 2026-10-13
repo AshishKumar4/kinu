@@ -3083,12 +3083,6 @@ function handle(msg, ws, ctx) {
       rpcWhenSettled(ws, id, method === CANCEL_METHOD
         ? cancelWork(target, ctx)
         : inFlight.acknowledge(target));
-    } else if (method === METHODS.readFile) {
-      const options = params[1] ?? {};
-      const confined = confinedDeviceViewPath(viewFromFrame(msg), params[0], 'read');
-
-      if (options.encoding === 'base64') rpc(ws, id, { content: fs.readFileSync(confined).toString('base64'), encoding: 'base64' });
-      else rpc(ws, id, fs.readFileSync(confined, 'utf8'));
     } else if (method === METHODS.readRange) {
       const offset = params[1], length = params[2];
 
@@ -3142,9 +3136,6 @@ function handle(msg, ws, ctx) {
 
         return { success: true };
       }));
-    } else if (method === METHODS.exists) {
-      const confined = confinedDeviceViewPath(viewFromFrame(msg), params[0], 'read');
-      rpc(ws, id, fs.existsSync(confined));
     } else if (method === METHODS.which) {
       rpc(ws, id, { present: whichAll(params[0]) });
     } else if (method === METHODS.checkpointStatus) {

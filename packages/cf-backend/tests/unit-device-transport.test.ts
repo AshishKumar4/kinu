@@ -220,7 +220,7 @@ describe('createHubDeviceTransport', () => {
     expect(v.parse(v.string(), params[0])).toContain('make');
     expect(opts?.requestId).toBe(requestId);
     // No handle sent: the tunnel mints its own.
-    await transport.rpc('readFile', ['/home/me/project/readme.md']);
+    await transport.rpc('statPath', ['/home/me/project/readme.md']);
     expect(requiredCall(hub.rpcCalls, 1)[2]?.requestId).toBeUndefined();
   });
 
@@ -278,7 +278,7 @@ describe('createHubDeviceTransport', () => {
 
     await transport.rpc('exec', ['make build']);
     await transport.rpc('writeFile', ['/home/u/proj/a.txt', 'data']);
-    await transport.rpc('readFile', ['/home/u/proj/a.txt']);
+    await transport.rpc('statPath', ['/home/u/proj/a.txt']);
 
     expect(requiredCall(hub.rpcCalls, 0)[2]?.checkpoint).toEqual({
       agent: 'agent-1', turnId: 'msg-42', sessionId: 'default', dir: '/home/u/proj',
@@ -333,7 +333,7 @@ describe('createHubDeviceTransport', () => {
     });
 
     await transport.rpc('exec', ['git status']);
-    await transport.rpc('readFile', ['/tmp/a']);
+    await transport.rpc('statPath', ['/tmp/a']);
     expect(hub.rpcCalls.map((c) => c[3])).toEqual([FAKE_CALLER, FAKE_CALLER]);
     expect(hub.rpcCalls[0]?.[1]).toEqual(["cd '/home/u/my proj' && git status"]);
     expect(hub.rpcCalls[1]?.[1]).toEqual(['/tmp/a']); // only exec is cwd-rewritten
