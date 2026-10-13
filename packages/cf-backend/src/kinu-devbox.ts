@@ -52,6 +52,9 @@ export class KinuDevbox extends Devbox<Env> {
   /** A mount records its binding as its bucket, so the name stays what the deployed containers recorded (D47). */
   protected override get store(): string { return 'BACKUP_BUCKET'; }
 
+  /** What the product calls the box (`executorLabel`), in its prompt and on its desktop. */
+  protected override get hostname(): string { return 'computer'; }
+
   protected override get previewName(): string {
     const workspaceName = this.ctx.storage.kv.get<KinuEgressParams>(EGRESS_CONFIG_KEY)?.workspaceName;
 

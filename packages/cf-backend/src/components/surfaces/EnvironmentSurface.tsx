@@ -23,6 +23,7 @@ import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { SandboxSizeRow } from "@/components/SandboxSize";
 import { Segmented } from "@/components/ui/Segmented";
+import { DesktopScreen } from "./DesktopScreen";
 
 /** The terminal (xterm, 333 KB of the workspace's first chunk on 2026-10-08) loads with a command lane's first view. */
 const TerminalPane = lazyRoute<TerminalPaneProps>(async () => {
@@ -200,6 +201,7 @@ function SelectedEnvironmentPane({ mount, exec, workspace, executorOutputs, onEx
   // Only the computer has a screen.
   const desktop = exec?.name === "computer" ? desktopClientUrl(location, workspace) : null;
   const shown = desktop === null ? "terminal" : view;
+  const desktopTitle = `${name}'s desktop`;
 
   return (
     <div className="flex flex-col flex-1 min-h-0 gap-1.5 px-3 pt-2.5 pb-3">
@@ -209,7 +211,7 @@ function SelectedEnvironmentPane({ mount, exec, workspace, executorOutputs, onEx
         {desktop !== null && (
           <div className="ml-auto flex shrink-0 items-center gap-1.5">
             {shown === "desktop" && (
-              <a href={desktop} target="_blank" rel="noreferrer" data-desktop-open aria-label={`Open ${name}'s desktop in a new tab`}
+              <a href={`/workspace/${encodeURIComponent(workspace)}/desktop`} target="_blank" rel="noreferrer" data-desktop-open aria-label={`Open ${desktopTitle} in a new tab`}
                 title="Open in a new tab"
                 className="inline-flex size-7 items-center justify-center rounded-md p-text-3 hover:p-text hover:p-fill">
                 <ArrowSquareOutIcon size={14} />
@@ -220,12 +222,7 @@ function SelectedEnvironmentPane({ mount, exec, workspace, executorOutputs, onEx
         )}
       </div>
       <div className="flex-1 min-h-0">
-        {shown === "desktop" && desktop !== null && (
-          // Framed as the terminal is: the remote screen scales into a bordered well, never bleeding to the panel's edge.
-          <div data-desktop-frame className="h-full rounded-lg border p-border overflow-hidden bg-black">
-            <iframe data-desktop title={`${name}'s desktop`} src={desktop} className="block w-full h-full border-0" />
-          </div>
-        )}
+        {shown === "desktop" && desktop !== null && <DesktopScreen src={desktop} title={desktopTitle} />}
         {shown === "terminal" && (exec ? (
           <Suspense fallback={<div className="h-full flex items-center justify-center"><Loader size="sm" /></div>}>
             <TerminalPane

@@ -2,7 +2,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
 import { Files, SandboxFileError } from '@cloudflare/sandbox';
-import { Processes, isProcessLive, CONTAINER_TRUST_ENV, END_TREE } from "./processes";
+import { Processes, isProcessLive, nameBox, CONTAINER_TRUST_ENV, END_TREE } from "./processes";
 import { nativeStartClock } from './native-clock';
 import type { DevboxExecOptions, ExecResult, ReadOptions, FileResult, ListFilesOptions, FileMetadata, GatewayBindings } from './contracts';
 import { listFiles as readDirectory } from './file-listing';
@@ -2927,10 +2927,16 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   protected async outboundPolicy(): Promise<OutboundPolicy> { return { routes: {} }; }
+  /** The name the box answers to in its prompt, its desktop and its processes; unset, the platform's container id. */
+  protected get hostname(): string | undefined { return undefined; }
 
   protected async configureContainer(reused = this.#adoptionPending || this.#restoration.phase === 'attached' || this.#restoration.phase === 'repair'): Promise<void> {
     await this.#routes().configure(await this.outboundPolicy(), this.store, reused);
     this.#renewContainer();
+    const name = this.hostname;
+
+    // The kernel keeps a name for the boot alone, so each start names the box again (D83).
+    if (name !== undefined) await nameBox(this.#container(), name);
   }
 
   getExposedPorts(hostname: string) {

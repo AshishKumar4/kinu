@@ -38,7 +38,7 @@ export class ErrorBoundary extends Component<Props, State> {
     owner.promise = (async () => {
       try {
         await reportRenderFailure(error, info.componentStack ?? "", {
-          release: await pageDeployedBuildSha(),
+          release: pageDeployedBuildSha(),
           route: routeTemplateOf(location.pathname),
         });
       } catch (cause) {

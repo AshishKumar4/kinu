@@ -7,6 +7,15 @@ import { describe, expect, test } from 'bun:test';
 import type { ElementHandle, Page } from 'puppeteer';
 import { withGallery } from '../../scripts/gallery-harness';
 
+declare global {
+  interface Window {
+    /** The window the gallery's shell was last told (gallery.tsx `GalleryShellSocket`). */
+    __kinuTerminalWindow?: { cols: number; rows: number };
+    /** Opens the terminal sockets a `terminalopen=held` frame is holding. */
+    __kinuOpenTerminals?: () => void;
+  }
+}
+
 /** The agent's own machine, by the one label every surface gives it. */
 // The owner reads the computer's own name, not the namespace (d052cd645 rendered `computer`).
 const COMPUTER = 'Computer';
@@ -170,6 +179,27 @@ describe('the Environment panel', () => {
     });
   });
 
+  test('a shell that connects while its pane settles draws for the window the pane shows', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+
+      try {
+        await page.setViewport({ width: 1280, height: 1000 });
+        await page.goto(`${origin}/gallery.html?frame=environment&terminalopen=held`, { waitUntil: 'networkidle0' });
+        await (await required(page, '[data-env-card]', 'button', COMPUTER)).click();
+        await page.waitForSelector('.xterm-rows > div', SOON);
+
+        // The pane changes size while its socket still connects, as it does when a wide inspector restores its width.
+        const rowsAtBirth = await page.$$eval('.xterm-rows > div', (rows) => rows.length);
+
+        await page.setViewport({ width: 1280, height: 760 });
+        await page.waitForFunction((before) => document.querySelectorAll('.xterm-rows > div').length !== before, SOON, rowsAtBirth);
+        await page.evaluate(() => { window.__kinuOpenTerminals?.(); });
+        await page.waitForFunction(() => window.__kinuTerminalWindow?.rows === document.querySelectorAll('.xterm-rows > div').length, SOON);
+      } finally { await page.close(); }
+    });
+  });
+
   test('a PC that is not connected is offered, not listed, and the offer opens the connect panel in place', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
@@ -187,7 +217,7 @@ describe('the Environment panel', () => {
     });
   });
 
-  test('the computer\'s desktop shows in a frame, and opens in a tab of its own at the same address', async () => {
+  test('the computer\'s desktop shows in a frame, and opens in a tab of its own', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
 
@@ -203,14 +233,12 @@ describe('the Environment panel', () => {
 
         if (frame === null) throw new Error('the desktop is not framed');
 
-        const [src, href, target] = await Promise.all([
+        const [src, target] = await Promise.all([
           frame.evaluate((element) => (element instanceof HTMLIFrameElement ? element.src : '')),
-          link.evaluate((element) => (element instanceof HTMLAnchorElement ? element.href : '')),
           link.evaluate((element) => element.getAttribute('target')),
         ]);
 
         expect(src).toContain('/kasmvnc/vnc.html?');
-        expect(href).toBe(src);
         expect(target).toBe('_blank');
       } finally { await page.close(); }
     });

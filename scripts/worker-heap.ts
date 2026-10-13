@@ -56,7 +56,7 @@ import { builtinModules } from 'node:module';
 import { createServer } from 'node:net';
 import { dirname, join, normalize, resolve as resolvePath } from 'node:path';
 import { literalString, parse, walk } from './syntax';
-import { build } from 'esbuild';
+import { build, stop as stopEsbuild } from 'esbuild';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import * as v from 'valibot';
 import { ownerCaller } from '../packages/core/src/safety/workspace-capability';
@@ -455,6 +455,9 @@ export async function measure(): Promise<HeapMeasurement> {
       },
     }],
   }));
+
+  // Both bundles are built. esbuild's service process otherwise outlives the run, and armada fails a task that leaves one.
+  await stopEsbuild();
 
   try {
     driver = await mf.getWorker('driver');

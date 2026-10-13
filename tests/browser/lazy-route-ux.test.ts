@@ -15,8 +15,9 @@
  *   4. A reader whose failure is NOT a stale chunk, and a reader whose reload has
  *      already been spent, both get the error screen rather than a round trip.
  *
- * The origin's build stamp is moved between load and navigation, which is what
- * makes the skew real rather than declared.
+ * The page names its own build in its head, as the release build stamps it, and the
+ * origin's `/api/health` names another, which is what makes the skew real rather than
+ * declared.
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
 import { Effect } from 'effect';
@@ -26,6 +27,7 @@ import { renderThrownChain, detach } from '@kinu.run/core/obs';
 import { withGallery, type Gallery } from '../../scripts/gallery-harness';
 import { CHUNK_FIXED_KEY } from '../../packages/cf-backend/src/lazy-route';
 import { CHUNK_RELOAD_KEY } from '../../packages/core/src/utils/chunk-recovery';
+import { PAGE_BUILD_META } from '../../packages/core/src/web/page-build';
 
 const LOADED_SHA = 'abc1234';
 
@@ -62,34 +64,37 @@ interface Observed {
 }
 
 /**
- * Serve `/api/health`, optionally moving the build under the page.
- *
- * `moves` answers the FIRST read with the old build and every later one with the
- * new, which is not a trick: the first read is `index.tsx`'s baseline capture at
- * load, and the later one is the recovery asking what the origin is serving now.
- * Ordering it by request rather than by a wall-clock flip from this process is
- * what makes the skew deterministic — the chunk fails during the first render,
- * microseconds after the baseline read, and no timer could land between them.
+ * Serve the page as the release does, its head naming the build it is (`LOADED_SHA`), and `/api/health` naming the
+ * build the origin serves now: the same one, or with `moved` a newer one.
  */
-/** `absent`: the origin names no build at all. `blind`: the load-time read fails, so the page never learns its own. */
-type Served = 'stable' | 'moves' | 'absent' | 'blind';
+/** `absent`: the origin names no build at all. `blind`: the page names no build of its own, as a dev build does. */
+type Served = 'stable' | 'moved' | 'absent' | 'blind';
 
 async function serve(page: Page, mode: Served, served: { count: number }): Promise<void> {
   await page.setRequestInterception(true);
   page.on('request', (request: HTTPRequest) => detach(Effect.promise(async () => {
-    if (new URL(request.url()).pathname !== '/api/health') {
-      return request.continue();
+    const url = new URL(request.url());
+
+    if (url.pathname === '/gallery.html' && request.isNavigationRequest() && mode !== 'blind') {
+      const html = await (await fetch(url)).text();
+
+      return request.respond({
+        status: 200,
+        contentType: 'text/html',
+        body: html.replace('<head>', `<head><meta name="${PAGE_BUILD_META}" content="${LOADED_SHA}">`),
+      });
     }
+
+    if (url.pathname !== '/api/health') return request.continue();
 
     served.count += 1;
 
-    if (mode === 'absent' || (mode === 'blind' && served.count === 1)) return request.respond({ status: 503, body: '' });
-    const sha = mode !== 'stable' && served.count > 1 ? LATER_SHA : LOADED_SHA;
+    if (mode === 'absent') return request.respond({ status: 503, body: '' });
 
     return request.respond({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ ok: true, build: { ...STAMP, sha } }),
+      body: JSON.stringify({ ok: true, build: { ...STAMP, sha: mode === 'stable' ? LOADED_SHA : LATER_SHA } }),
     });
   })));
 }
@@ -123,7 +128,7 @@ async function readAttempt(page: Page, which: 'lazyStaleAttempts' | 'lazyHealthy
 interface Scenario {
   /** What `/api/health` answers: by default the build the page loaded, and with `skew` a newer one after load. */
   served?: Served;
-  /** Move the origin to a new build after the document has loaded. */
+  /** The origin serves a newer build than the page. */
   skew?: boolean;
   /** Spend the one reload before the page even loads, on this build. */
   claimSpent?: string;
@@ -141,7 +146,7 @@ async function drive(gallery: Gallery, options: Scenario): Promise<Observed> {
   let navigations = 0;
   page.on('pageerror', (error) => pageErrors.push(renderThrownChain({ cause: error })));
   page.on('framenavigated', (frame) => { if (frame === page.mainFrame()) navigations += 1; });
-  await serve(page, options.served ?? (options.skew === true ? 'moves' : 'stable'), served);
+  await serve(page, options.served ?? (options.skew === true ? 'moved' : 'stable'), served);
 
   // The guard is per-origin session storage, so it has to be seeded on the
   // origin — which means a document first, then the seed, then the real drive.
@@ -257,10 +262,10 @@ describe('a stale chunk with the origin unchanged', () => {
   });
 
   test('the origin is asked about the build once, not once per render attempt', () => {
-    // One baseline read at load plus one examination. React re-invokes a rejected
-    // lazy's loader on later render attempts, and an unbounded examination turned
-    // that into 47 reads in five seconds before `lazyRoute` bounded it.
-    expect(noSkew.healthReads).toBeLessThanOrEqual(2);
+    // One examination. React re-invokes a rejected lazy's loader on later render
+    // attempts, and an unbounded examination turned that into 47 reads in five
+    // seconds before `lazyRoute` bounded it.
+    expect(noSkew.healthReads).toBeLessThanOrEqual(1);
   });
 
   test('the rest of the page keeps working', () => {
@@ -316,12 +321,11 @@ describe('a reload already spent on this build', () => {
   });
 
   test('having been recognised and confirmed first, so the GUARD is what stopped it', () => {
-    // The paired discriminator. Two reads — the load-time baseline and one
-    // examination — prove this failure was recognised AND the origin was asked
-    // and found to have moved. Only then did the claim already on record refuse
-    // the reload. One read would mean recognition rejected it, which is the
-    // different refusal tested above.
-    expect(spent.healthReads).toBe(2);
+    // The paired discriminator. One read, the examination, proves this failure
+    // was recognised AND the origin was asked and found to have moved. Only then
+    // did the claim already on record refuse the reload. No read would mean
+    // recognition rejected it, which is the different refusal tested above.
+    expect(spent.healthReads).toBe(1);
   });
 });
 
@@ -336,11 +340,11 @@ describe('a failure that is not a chunk at all', () => {
   test('and RECOGNITION is what refused it, not a missing skew', () => {
     // THE DISCRIMINATOR. "Not reloaded" is what both worlds look like, so without
     // this the test would pass on a drive that simply had no skew and would prove
-    // nothing about recognition. One health read is the load-time baseline alone:
-    // the recovery never even asked what the origin is serving, because the
-    // message gate rejected the failure first. The spent-claim drive below asks
-    // twice, which is what tells the two refusals apart.
-    expect(appError.healthReads).toBe(1);
+    // nothing about recognition. No health read: the recovery never even asked
+    // what the origin is serving, because the message gate rejected the failure
+    // first. The spent-claim drive above asks once, which is what tells the two
+    // refusals apart.
+    expect(appError.healthReads).toBe(0);
   });
 
   test('and reaches the boundary as the error it is', () => {
@@ -361,11 +365,11 @@ describe('a stale chunk with no build to compare', () => {
   test('an origin that names no build is not reloaded at, and the reader gets the error screen', () => {
     expect([unnamed.navigations, unnamed.reloadClaim, unnamed.fallbackVisible]).toEqual([1, null, true]);
     // Asked, and answered with nothing: recognition passed and the missing build is what refused it.
-    expect(unnamed.healthReads).toBe(2);
+    expect(unnamed.healthReads).toBe(1);
   });
 
-  test('a page that never learned its own build is not reloaded at either, though the origin has moved', () => {
+  test('a page that names no build of its own is not reloaded at either, though the origin names one', () => {
     expect([blind.navigations, blind.reloadClaim, blind.fallbackVisible]).toEqual([1, null, true]);
-    expect(blind.healthReads).toBe(2);
+    expect(blind.healthReads).toBe(1);
   });
 });

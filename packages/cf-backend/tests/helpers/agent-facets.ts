@@ -140,6 +140,19 @@ export function delayNextHandoff(storageKey: string): HeldCall {
   return { reached: reached.promise, release: released.resolve };
 }
 
+const delayedCacheWarms = new Map<string, { readonly reached: () => void; readonly released: Promise<void> }>();
+
+/** The isolate under `storageKey` settles its next turn, and the cache warm it asks the workspace for after it waits on
+ *  the way until released. */
+export function delayNextCacheWarm(storageKey: string): HeldCall {
+  const reached = Promise.withResolvers<void>();
+  const released = Promise.withResolvers<void>();
+
+  delayedCacheWarms.set(storageKey, { reached: reached.resolve, released: released.promise });
+
+  return { reached: reached.promise, release: released.resolve };
+}
+
 let delayedRunEnd: { readonly reached: () => void; readonly released: Promise<void> } | null = null;
 
 /** The next report any isolate sends that carries a delivered run's end waits on the way until released; released
@@ -660,7 +673,17 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
 
           return await host().openWork();
         },
-        armCacheWarm: (input) => host().armCacheWarm(input),
+        armCacheWarm: async (input) => {
+          const delayed = delayedCacheWarms.get(placement.storageKey);
+
+          if (delayed !== undefined) {
+            delayedCacheWarms.delete(placement.storageKey);
+            delayed.reached();
+            await delayed.released;
+          }
+
+          return await host().armCacheWarm(input);
+        },
         enqueueTurn: (input) => host().enqueueTurn(input),
         executeTool: async (call) => {
           const answer = await host().executeTool(call);
