@@ -3,7 +3,7 @@
  * its turn, its room told, and leaves the agent free for the next; a Stop that comes as it opens ends it with nothing
  * asked of the model and the owner's words kept; and a run delivered while a chat turn runs waits for that turn's end.
  */
-import { expect, spyOn, test } from 'bun:test';
+import { expect, test } from 'bun:test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import { KinuError } from '../src/obs/error';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
@@ -133,7 +133,7 @@ test('a run delivered while a chat turn runs starts only once that turn has answ
   } finally { fixture.close(); }
 });
 
-test("words sent while a turn opens are the turn's own: a Stop then hands them back, and no turn runs them", async () => {
+test("words sent while a turn opens, before it runs, come back on a Stop, and no turn runs them", async () => {
   const { model, prompts } = answering();
   const handedBack = Promise.withResolvers<string[]>();
   const second = Promise.withResolvers<void>();
@@ -141,24 +141,13 @@ test("words sent while a turn opens are the turn's own: a Stop then hands them b
 
   const fixture = await sessionFixture({
     model,
-    // The first turn is announced as it opens, before anything of it reached the model: the owner writes again.
+    // The first turn is announced as it opens, before anything of it ran: the owner writes again, then stops.
     onEvent: (event) => {
       if (event.type !== 'turn-start' || opened) return;
       opened = true;
       void fixture.chat.send('and the refunds too', { id: 'o-2' }).then(() => { second.resolve(); }, () => { second.resolve(); });
+      handedBack.resolve(fixture.chat.interrupt());
     },
-  });
-
-  const { session } = fixture.actor;
-  const steer = session.send.bind(session);
-
-  // The owner stops once those words are taken, as the opening turn's own.
-  spyOn(session, 'send').mockImplementation(async (words) => {
-    const outcome = await steer(words);
-
-    handedBack.resolve(fixture.chat.interrupt());
-
-    return outcome;
   });
 
   try {

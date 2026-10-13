@@ -708,13 +708,9 @@ export class ChatSession {
     return this.reopening || this.running();
   }
 
-  /** A turn runs or is queued, the owner's own turn counted from the moment the pump takes it, while it opens: words sent
-   *  then are its own, as they are while it waits in the queue, so a Stop hands them back. A Retry claimed but not yet
-   *  queued aside. */
+  /** A turn runs or is queued; a Retry claimed but not yet queued aside. */
   private running(): boolean {
-    const opening = this.taken !== null && this.taken.kind === 'user' && this.taken.run === undefined;
-
-    return this.actorSession.inFlight || opening || this.queue.some((item) => item.kind === 'user' || item.yieldsToUserMessage === true);
+    return this.actorSession.inFlight || this.queue.some((item) => item.kind === 'user' || item.yieldsToUserMessage === true);
   }
 
   /**
@@ -829,6 +825,10 @@ export class ChatSession {
   /** The item the pump took and runs now, from its dequeue to its turn's end: a Stop in between cuts it (`interrupt`).
    *  Written by `runPump` as it takes the item, dropped as its turn ended; never across a pump. */
   private taken: QueueItem | null = null;
+
+  /** What waited in the queue as the pump took {@link taken}: a person's words queued after it, before its turn began,
+   *  had no turn to steer. Written with `taken`, dropped with it. */
+  private queuedAtTake: ReadonlySet<QueueItem> = new Set();
 
   /** The run this session's pump runs now, and its cut. */
   private runningRun: { readonly id: string; readonly controller: AbortController } | null = null;
@@ -1044,6 +1044,7 @@ export class ChatSession {
     // Taken by the pump, its execution not yet claimed: no lease is there to abort, so its driver reads this.
     if (this.taken !== null) this.taken.cut ??= new KinuError('cancelled', 'The agent was stopped before this turn ran.');
     this.runningRun?.controller.abort(new KinuError('cancelled', 'the agent was stopped'));
+    const opened = this.handBackOpeningWords();
     const { steers, cancelled } = this.actorSession.interrupt();
     // The returned words' reservation is spent, or a restart would re-deliver them.
     const ids = steers.flatMap((steer) => steer.id === undefined ? [] : [steer.id]);
@@ -1061,7 +1062,24 @@ export class ChatSession {
 
     if (cancelled.length > 0) diagnostics.event('turn.delivered_signals_cancelled', { count: cancelled.length });
 
-    return steers.map((steer) => steer.text);
+    return [...opened, ...steers.map((steer) => steer.text)];
+  }
+
+  /**
+   * A person's words sent while the turn the pump took was opening, before its execution began: no turn ran to steer, so
+   * they were queued as a turn of their own. A Stop then hands them back with the turn's unread steers; words queued
+   * before it was taken wait their turn as ever.
+   */
+  private handBackOpeningWords(): string[] {
+    if (this.taken === null || this.actorSession.inFlight) return [];
+    const sent = this.queue.filter((item) => item.kind === 'user' && item.continuation === undefined && !this.queuedAtTake.has(item));
+
+    if (sent.length === 0) return [];
+    this.queue.splice(0, this.queue.length, ...this.queue.filter((item) => !sent.includes(item)));
+
+    for (const item of sent) item.settle(new KinuError('cancelled', 'The turn was stopped before the agent read this message; it is back in the composer.'));
+
+    return sent.map((item) => item.text);
   }
 
   /** A Stop's cutoff on what waits behind the turn: each queued programmatic turn is cancelled unrun and its producer
@@ -1447,6 +1465,7 @@ export class ChatSession {
 
         if (item === undefined) break;
         this.taken = item;
+        this.queuedAtTake = new Set(this.queue);
         // Checked per item, immediately before the turn runs. A refusal settles the item, so its producer
         // compensates.
         const refusal = this.ports.driverGate();
@@ -1477,6 +1496,7 @@ export class ChatSession {
         await this.flushEvents();
         this.runningAnnouncement = null;
         this.taken = null;
+        this.queuedAtTake = new Set();
         this.settleItem(item, failure, undefined, abandoned ?? undefined);
 
         const unanswered = failure ?? (abandoned === null ? null : new KinuError('io', abandoned));
