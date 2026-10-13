@@ -92,9 +92,8 @@ export interface AgentWorkspace {
   steerSkills(text: string, alreadyActive: readonly string[]): Promise<string | null>;
   /** Its open tasks and running jobs, where its tools wrote them. */
   openWork(): Promise<OpenWork>;
-  /** The workspace's lane that keeps its prompt cache warm (`CacheWarming`); one an agent has none of keeps nothing. */
-  /** A model request is starting: until when the cache stayed warm for the last one, read before it voids the lane. */
-  noteModelRequest(lastRequestAt: number | null): Promise<number | null>;
+  /** The workspace's lane that keeps its prompt cache warm (`CacheWarming`): a chat turn's preparation notes its request
+   *  there (`TurnOpeningAsk`), and its end arms the warm it earned. */
   armCacheWarm(input: CacheWarmArm): Promise<number | null>;
   advise(review: AgentReview): Promise<void>;
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult>;

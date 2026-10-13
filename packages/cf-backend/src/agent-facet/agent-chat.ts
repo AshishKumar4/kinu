@@ -6,7 +6,7 @@ import {
   planHandoffStillOwed, planAwaitingReply, approvedTaskPlan, missionGate, workModeUnderReview, projectJsonValue, declareHandoffRoster, HandedOffTurnSchema, runSettleEffect, SettledRunSchema, terminalEffect, turnAuthorship, turnLane, type TurnAuthorship,
   actorPolicy, metadataTier, workModeForTurnMetadata, reportReadsNarration, subordinateTerminalEffects, withCompactionTrigger, type ActorPolicy,
   bindRoute, completeOnRoute, ownProfileChoices, planWorkspaceTitle, resolveAgentTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle,
-  type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpening, type JsonObject, type PlanReview, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
+  type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpeningAsk, type JsonObject, type PlanReview, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
   type InspectedWork, type PreparedAgentTurn, type PreparedTurn, type TerminalTurnFacts, type TerminalTurnParts,
   type SessionEvent, type TurnAssemblyRequest, type WorkMode, type OwnerQuestionStore, type RunEndOutcome, type DeliveredRun, type AgentOwes, type AgentReport, type ClaimedRound,
   refusedRun, turnAttemptOf,
@@ -153,7 +153,6 @@ export class FacetChat {
         openWork: () => workspace.openWork(),
         // The lane that keeps its prompt cache warm is the workspace's, which holds the provider keys and the wake.
         cacheWarming: {
-          noteRequest: (lastRequestAt) => workspace.noteModelRequest(lastRequestAt),
           armAfterTurn: (input) => workspace.armCacheWarm(input),
         },
         steerSkills: (text) => workspace.steerSkills(text, this.activeSkills),
@@ -239,7 +238,7 @@ export class FacetChat {
     await charges?.settled();
   }
 
-  private async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease, opening: TurnOpening, round: ClaimedRound): Promise<PreparedTurn> {
+  private async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease, opening: TurnOpeningAsk, round: ClaimedRound): Promise<PreparedTurn> {
     const { actor, database, workspace } = this.deps;
     const plans = actor.stores.planReviews;
     // Read once, by whichever of the review's mode and the reply's lane asks first.
@@ -287,6 +286,7 @@ export class FacetChat {
     return {
       execution: withCompactionTrigger(assembled.execution, state, key, historyLength),
       sessionKey: key, contextWindow: assembled.window.contextWindow, historyLength, trial: prepared.trial ?? null,
+      cacheKeptAliveUntil: prepared.cacheKeptAliveUntil,
     };
   }
 

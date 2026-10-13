@@ -76,6 +76,9 @@ export async function sessionFixture(input: {
     ...input.sources,
   };
 
+  // The conversation's warming lane, where a suite keeps one: in this process, as the CLI's would be.
+  const lane = input.cacheWarming?.(actor);
+
   const chat = new ChatSession({
     actorSession: actor.session,
     sessionId: sessionKey,
@@ -88,7 +91,10 @@ export async function sessionFixture(input: {
     transport: { deliver: (event) => { events.push(event); input.onEvent?.(event); } },
     mintAnswerId: () => crypto.randomUUID(),
     ports: {
-      prepareTurn: (input.aroundPrepare ?? ((own) => own))(async (item, _lease, _opening, round) => {
+      prepareTurn: (input.aroundPrepare ?? ((own) => own))(async (item, _lease, opening, round) => {
+        // The request is noted on the lane where it lives, here: its keep read first.
+        const cacheKeptAliveUntil = lane?.noteRequest(opening.lastRequestAt) ?? null;
+
         const assembled = await assembleActorTurn({
           ...sources,
           settle: (profile, authority) => { round.bind(profile, authority); },
@@ -97,7 +103,7 @@ export async function sessionFixture(input: {
         return {
           execution: assembled.execution,
           sessionKey, contextWindow: assembled.window.contextWindow,
-          historyLength: actor.session.history.length,
+          historyLength: actor.session.history.length, cacheKeptAliveUntil,
         };
       }),
       composeRequest: async () => {
@@ -109,7 +115,7 @@ export async function sessionFixture(input: {
       driverGate: () => null,
       openWork: async () => ({ tasks: actor.stores.taskList.listOpen(), asyncWakePending: false }),
       steerSkills: async () => null, stillOwed: () => true,
-      ...(input.cacheWarming !== undefined && { cacheWarming: warmingOver(input.cacheWarming(actor)) }),
+      ...(lane !== undefined && { cacheWarming: warmingOver(lane) }),
       ...input.ports,
     },
   });
@@ -122,8 +128,5 @@ export async function sessionFixture(input: {
 
 /** A lane in this process, as the session asks it: its answers are at hand. */
 function warmingOver(lane: CacheWarmingLane): CacheWarming {
-  return {
-    noteRequest: async (lastRequestAt) => lane.noteRequest(lastRequestAt),
-    armAfterTurn: async (input) => lane.armAfterTurn(input),
-  };
+  return { armAfterTurn: async (input) => lane.armAfterTurn(input) };
 }

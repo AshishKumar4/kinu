@@ -6,11 +6,12 @@ import {
   announcementOf, improvementLanesOpen, type ActorAdvisor, type SeatedActor, type TurnSurface,
   type ActorReference, type DynamicContext, type ModelPricing, type ResolvedTurnProfile, type TierId, type WorkMode,
   type HeadInput, type RunInference, type HeadReport, type SqlExecutor, type MissionBudgetPort, type MissionGovernor, type Executor, readMissionLabels,
+  openingCacheCold,
 } from '@kinu.run/core';
 import type { TurnCall } from './agent-facets';
 import type { TurnBound, TurnCapabilityOf } from './agent-facet/agent-turn';
 import { prepareHostedTurn, type HostedActorSeams, type HostedTurnRequest, type PreparedHostedTurn } from './hosted-actors';
-import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, Fact, FrozenAuthority, JsonObject, PreparedAgentTurn, RunEndReport, StoredRow, TaskPlan, OpenedAt, TurnFacts, TurnOpening } from '@kinu.run/core';
+import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, Fact, FrozenAuthority, JsonObject, PreparedAgentTurn, RunEndReport, StoredRow, TaskPlan, OpenedAt, TurnFacts, TurnOpeningAsk } from '@kinu.run/core';
 
 export interface AgentTurnsDeps {
   readonly sql: SqlExecutor;
@@ -30,6 +31,9 @@ export interface AgentTurnsDeps {
   frozen(reference: ActorReference, key: Pick<TurnBound, 'turnId' | 'runId'>): Promise<FrozenAuthority | null>;
   pricing(spec: string): ModelPricing | null;
   accounts(): Readonly<Record<string, string>>;
+  /** A real provider request of the agent's is starting: noted on its warming lane, which answers until when it kept the
+   *  cache warm for the one sent at `lastRequestAt` (`CacheWarmingLane.noteRequest`). */
+  noteRequest(actorId: string, lastRequestAt: number | null): number | null;
   /** The account's credentials revision as the turn's open read it; null before one opened. */
   credentialsRevision(): number | null;
   /** The governor an agent's chat turns spend under, when its missions are the workspace's: main's (D9). */
@@ -47,8 +51,9 @@ export interface ChatTurnRequest {
   readonly driving?: JsonObject | undefined;
   /** The tier the agent's chat runs the turn on, when the turn names one; its sources are read for that tier's models. */
   readonly explicitTier?: TierId;
-  /** Where the agent's chat opened the turn. */
-  readonly opening?: TurnOpening;
+  /** Where the agent's chat opened the turn, and what it knows of its prompt cache: the workspace notes the turn's request
+   *  on the agent's warming lane as it prepares it (`AgentTurnsDeps.noteRequest`). */
+  readonly opening?: TurnOpeningAsk;
   /** The approved plan the turn implements, as the agent's own plan store reads it. */
   readonly taskPlan?: TaskPlan;
   /** Whether a plan of the agent's, sent back with comments, awaits its answers, as its own plan store reads it. */
@@ -412,12 +417,15 @@ export class AgentTurns {
     }
 
     const fenced = held ?? (request.seq === undefined ? undefined : { seq: request.seq });
+    // Its request noted on the agent's warming lane as it opens, the lane's keep read first; a turn read again opens none.
+    const ask = request.opening;
+    const kept = ask === undefined ? null : this.deps.noteRequest(actorId, ask.lastRequestAt);
 
     const hosted: HostedTurnRequest = {
       sequenceId: announcementOf(turnId), ...(request.turnId !== null && { chatTurnId: turnId }),
       body: request.userText, mode: request.mode, parentDriven: request.parentDriven, driving: request.driving, awaitsReply: request.awaitsReply,
       ...(request.runId !== undefined && { runId: request.runId }),
-      ...(request.opening !== undefined && { opening: request.opening }),
+      ...(ask !== undefined && { opening: { answerId: ask.answerId, cacheCold: openingCacheCold(ask, kept) } }),
       ...(request.taskPlan !== undefined && { taskPlan: request.taskPlan }),
       ...(request.explicitTier !== undefined && { explicitTier: request.explicitTier }),
       ...(request.frozen !== undefined && { frozen: request.frozen }),
@@ -441,7 +449,7 @@ export class AgentTurns {
       // Finished after a later opening took its place, or after its run ended: none of it is the agent's to freeze.
       if (prepared === null) return yield* Effect.fail(new KinuError('denied', `The preparation of turn ${turnId} finished after a later opening of its agent.`));
 
-      return prepared;
+      return { ...prepared, cacheKeptAliveUntil: kept };
     }).pipe(Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : Effect.sync(() => {
       if (this.chats.get(actorId) !== turnId) this.close(actorId, turnId);
     })))));
@@ -541,6 +549,7 @@ export class AgentTurns {
       trace: run?.reportStep !== undefined || run?.reportDelta !== undefined,
       resume: run?.resume !== undefined,
       reportMessages: run?.reportMessages !== undefined,
+      cacheKeptAliveUntil: null,
     };
   }
 

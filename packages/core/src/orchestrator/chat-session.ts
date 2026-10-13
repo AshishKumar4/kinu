@@ -205,12 +205,34 @@ export interface PreparedTurn {
   readonly historyLength: number;
   /** The live trial's arm this turn ran (`turnArtifactBodies`), recorded with the completed turn. */
   readonly trial?: TrialTurn | null;
+  /** Until when the conversation's warming lane kept the prompt cache warm for its last request, as the preparation
+   *  noted this one ({@link TurnOpeningAsk}); null when nothing kept it. */
+  readonly cacheKeptAliveUntil: number | null;
 }
 
 /** What a backend's turn assembly knows of the turn it opens: the answer's id and whether the prompt cache is cold. */
 export interface TurnOpening {
   readonly answerId: string;
   readonly cacheCold: boolean;
+}
+
+/**
+ * What the session knows of the turn it asks its backend to prepare. A real provider request is starting: where the
+ * conversation's warming lane lives, the preparation notes it there, reading first until when the lane kept the cache warm
+ * for the last request (`CacheWarmingLane.noteRequest`), and the turn opens cold unless that, or the last request's own
+ * lifetime, still holds ({@link openingCacheCold}).
+ */
+export interface TurnOpeningAsk {
+  readonly answerId: string;
+  /** When the conversation's last request was sent; null before its first. */
+  readonly lastRequestAt: number | null;
+  /** Whether the cache is cold unless the warming lane kept it: the last request's own lifetime has run out. */
+  readonly coldUnlessKept: boolean;
+}
+
+/** Whether a turn asked so opens on a cold cache, its warming lane having kept it until `keptAliveUntil`. */
+export function openingCacheCold(ask: TurnOpeningAsk, keptAliveUntil: number | null, now = Date.now()): boolean {
+  return ask.coldUnlessKept && !(keptAliveUntil !== null && now < keptAliveUntil);
 }
 
 /** Taken while the turn is still in memory. */
@@ -277,7 +299,7 @@ export interface OpenWork {
 export interface ChatSessionPorts {
   /** Runs after the opening row and run are durable; a throw ends the turn as an error with one `turn-end`. */
   /** Under `round`'s claim: it binds through `round.bind`, and a recovered execution assembles on `round.frozen`. */
-  prepareTurn(item: ChatTurnInput, lease: ActorTurnLease, opening: TurnOpening, round: ClaimedRound): Promise<PreparedTurn>;
+  prepareTurn(item: ChatTurnInput, lease: ActorTurnLease, opening: TurnOpeningAsk, round: ClaimedRound): Promise<PreparedTurn>;
   /** Never consumes an armed compaction. */
   composeRequest(): Promise<ComposedRequest>;
   owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[];
@@ -1833,13 +1855,13 @@ export class ChatSession {
       birthContext: async (drainTurnId) => (await this.birthContext(drainTurnId)).map(inheritedAsModelMessage),
     });
 
-    // Read as this turn's request voids any armed warm, in one call; the durable counter stops a mid-turn wake from adding
-    // a refresh.
-    const cacheKeptAliveUntil = await this.ports.cacheWarming?.noteRequest(this.actorSession.lastRequestAt()) ?? null;
-
+    // The preparation notes this turn's request where the warming lane lives, reading its keep first: the durable counter
+    // it bumps voids any armed warm, and stops a mid-turn wake from adding a refresh.
     const prepared = await this.ports.prepareTurn(input, lease, {
-      answerId: this.messageId, cacheCold: this.actorSession.promptCacheCold(cacheKeptAliveUntil),
+      answerId: this.messageId, lastRequestAt: this.actorSession.lastRequestAt(), coldUnlessKept: this.actorSession.promptCacheCold(null),
     }, round);
+
+    const { cacheKeptAliveUntil } = prepared;
 
     this.turnTrial = prepared.trial ?? null;
 

@@ -457,7 +457,6 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
         birthContext: (drainTurnId) => host().birthContext(drainTurnId),
         steerSkills: (text, alreadyActive) => host().steerSkills(text, alreadyActive),
         openWork: () => host().openWork(),
-        noteModelRequest: (lastRequestAt) => host().noteModelRequest(lastRequestAt),
         armCacheWarm: async (input) => {
           const delayed = delayedCacheWarms.get(placement.storageKey);
 

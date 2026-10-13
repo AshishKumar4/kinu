@@ -67,7 +67,7 @@ import { ActorSession, type ActorTurnLease,
   type TerminalTurnFacts, type TerminalTurnParts, type OwedEffect,
   buildActorTools, buildMcpToolSet, currentDateForPrompt,
   type ActorToolsetDeps,
-  turnArtifactBodies, artifactOverrides, currentArtifacts, type TurnOpening, type ClaimedRound,
+  turnArtifactBodies, artifactOverrides, currentArtifacts, openingCacheCold, type TurnOpeningAsk, type ClaimedRound,
   turnReasonForMetadata, type TurnReason,
   actorAffinity, bindRoute, routedLlm, type ModelAffinity,
   observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
@@ -1602,10 +1602,15 @@ export class LocalAgentSession {
     return listRuns(this.eventRecorder, request?.cursor ?? null, request?.limit);
   }
 
-  private async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease, opening: TurnOpening, round: ClaimedRound): Promise<PreparedTurn> {
+  private async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease, opening: TurnOpeningAsk, round: ClaimedRound): Promise<PreparedTurn> {
     this.rt.checkpoints?.beginTurn({ turnId: lease.turnId, sessionId: this.sessionId });
-    // Read once per turn: a live trial's arm holds for its whole segment, and the prompt prefix moves only with it.
-    const artifacts = turnArtifactBodies(this.rt.storage.sql, this.rt.actor, { ...opening, main: this.rt.actor.parentActorId === null });
+
+    // Read once per turn: a live trial's arm holds for its whole segment, and the prompt prefix moves only with it. No
+    // warming lane keeps a local conversation's cache.
+    const artifacts = turnArtifactBodies(this.rt.storage.sql, this.rt.actor, {
+      answerId: opening.answerId, cacheCold: openingCacheCold(opening, null), main: this.rt.actor.parentActorId === null,
+    });
+
     this.turnArtifacts = artifactOverrides(artifacts.bodies);
     // Set before anything reads the tool surface: the report gate is a property of this turn.
     this.turnLaneOf = turnLane({ hirer: this.rt.actor.parentActorId }, turnAuthorship(item));
@@ -1638,7 +1643,7 @@ export class LocalAgentSession {
 
     return {
       execution: withCompactionTrigger(assembled.execution, this.compactionState, sessionKey, historyLength),
-      sessionKey, contextWindow: assembled.window.contextWindow, historyLength, trial: artifacts.trial,
+      sessionKey, contextWindow: assembled.window.contextWindow, historyLength, trial: artifacts.trial, cacheKeptAliveUntil: null,
     };
   }
 

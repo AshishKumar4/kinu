@@ -957,6 +957,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       frozen: async (reference, key) => await (await this.agentCalls(reference.actorId)).frozen(this.agentSnapshot(reference.actorId), { turnId: key.turnId, runId: key.runId }),
       pricing: (spec) => this.modelCatalog.pricing(spec),
       accounts: () => this.config.getProviderAccounts(),
+      noteRequest: (actorId, lastRequestAt) => this.warmingOf(actorId).noteRequest(lastRequestAt),
       credentialsRevision: () => this.openedCredentialsRevision(),
       // The workspace agent's missions are the workspace's: owner-declared here, and charged here as its turns spend.
       missions: (actorId) => (actorPolicy(this.agentOf(actorId)).workspaceAgent ? this.budget : null),
@@ -1084,7 +1085,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         alreadyActive: new Set(alreadyActive),
       }),
       // Only main's conversation is kept warm: no other agent has its wake chain.
-      noteModelRequest: async (lastRequestAt) => this.warmingOf(actorId).noteRequest(lastRequestAt),
       armCacheWarm: async (input) => this.warmingOf(actorId).armAfterTurn(input),
       // Its tasks tool and its jobs run here, over its own rows, main's as any agent's.
       openWork: async () => {

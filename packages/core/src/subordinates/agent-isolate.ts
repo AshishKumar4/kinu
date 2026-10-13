@@ -106,6 +106,9 @@ export interface PreparedAgentTurn {
   readonly trace: boolean;
   readonly resume: boolean;
   readonly reportMessages: boolean;
+  /** A chat turn's request, noted on the workspace's warming lane as it was prepared: until when the lane kept the cache
+   *  warm for the last one (`TurnOpeningAsk`). Null for a preparation that noted none. */
+  readonly cacheKeptAliveUntil: number | null;
 }
 
 export interface AgentTurnActivity {
