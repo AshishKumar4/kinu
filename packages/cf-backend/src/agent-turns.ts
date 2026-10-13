@@ -79,6 +79,8 @@ interface OpenTurn {
   profile: ResolvedTurnProfile | null;
   /** The account's facts, read once when the turn is read, so every step's block is the same bytes. */
   accountFacts?: readonly Fact[];
+  /** MEMORY.md's tail, read with its sources for the same reason. */
+  memoryTail?: string;
   /** The opening the workspace's fence admitted for it: what it offers and closes must still be that one. */
   readonly fenced?: OpenedAt;
   /** A run's end, which its agent tells with a report (`runEnded`). */
@@ -410,7 +412,7 @@ export class AgentTurns {
   private dynamic(turn: OpenTurn, prepared: PreparedHostedTurn): DynamicContext {
     const { offered, sources, resolved } = prepared.surface;
 
-    const reads = { memoryTail: undefined, activeSkills: null, ...(turn.accountFacts !== undefined && { accountFacts: turn.accountFacts }) };
+    const reads = { memoryTail: turn.memoryTail, activeSkills: null, ...(turn.accountFacts !== undefined && { accountFacts: turn.accountFacts }) };
 
     return sources.dynamic(reads)(turn.profile ?? resolved.profile, offered);
   }
@@ -530,6 +532,7 @@ export class AgentTurns {
       },
     );
 
+    turn.memoryTail = sources.memoryTail ?? undefined;
     const brief = run?.brief?.(callableToolNames(mode, surface.offered));
     const facts = this.offeredFacts(turn, prepared);
 

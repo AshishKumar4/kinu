@@ -11,7 +11,7 @@ import {
   DEFAULT_WORKERS_AI_MODEL_SPEC, WORKSPACE_ROOT, actorHomeName, actorScaffoldPath } from '@kinu.run/core';
 import { bindLocalActor, localActorDirectory, registerLocalActor, retireLocalActor } from '@kinu.run/core';
 import { buildLocalActorRuntime, cleanupFacetScratch, makeSqlExec, type CLIRuntime } from '../src/runtime';
-import { modelWindow, type HeadInferenceDeps, type HeadSeat, type RunInference } from '@kinu.run/core';
+import { modelWindow, readMemoryTail, type HeadInferenceDeps, type HeadSeat, type RunInference } from '@kinu.run/core';
 import type { LanguageModel } from 'ai';
 
 /** A run's compaction trigger, kept in memory: no fold runs here, but a run measures and arms as every turn does. */
@@ -58,6 +58,7 @@ export function fixtureRunSources(
     soul: async () => undefined,
     agentsMd: async () => ({ admitted: [], referenced: [] }),
     identity: async () => ({ agent: actor.record.name }),
+    memoryTail: () => readMemoryTail(actor.runtime.memory),
     artifacts: () => ({ sections: {}, tools: { descriptions: {}, fields: {} } }),
     taskPlan: () => null,
     conversationKey: () => conversationKey('fixture', actor.record.actorId),

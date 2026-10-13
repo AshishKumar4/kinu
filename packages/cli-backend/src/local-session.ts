@@ -148,7 +148,7 @@ import { discoverAgentsMd } from './agents-md';
 import { OS_LEASE_PROCESS } from './agent-host/lease-process';
 import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
 import { createCLIHeadRuntime, hostedCodemodeTool, type CLIHeadRuntimeDeps } from './head-runtime';
-import { detectOrphanedFibers } from '@kinu.run/core';
+import { detectOrphanedFibers, readMemoryTail } from '@kinu.run/core';
 import { connectMcpServers, type McpServerConfig } from './mcp';
 import type { LocalModelResolver } from './model-resolver';
 import {
@@ -1713,6 +1713,7 @@ export class LocalAgentSession {
       // Re-statted each turn; only files fitting the model window are read, each classified by owner approval.
       agentsMd: (window) => discoverAgentsMd(this.cwd, window, this.instructionTrust),
       identity: async () => this.promptIdentity(),
+      memoryTail: () => readMemoryTail(this.rt.memory),
       artifacts: () => this.currentTurnArtifacts(),
       taskPlan: () => null,
       conversationKey: () => this.compactionKey(),
@@ -2685,6 +2686,7 @@ export class LocalAgentSession {
       agentsMd: (window) => discoverAgentsMd(this.cwd, window, this.instructionTrust),
       // Addressed as a named agent of this workspace, not the workspace's own chat.
       identity: async () => ({ ...(await this.promptIdentity()), agent: actor.stores.config.getDisplayName() ?? actor.record.name }),
+      memoryTail: () => readMemoryTail(actor.runtime.memory),
       artifacts: () => artifactOverrides(currentArtifacts(this.rt.storage.sql, actor.handle)),
       taskPlan: () => null,
       conversationKey: () => conversationKey(actorAffinity(actor.record).sessionAffinity, actor.record.actorId),

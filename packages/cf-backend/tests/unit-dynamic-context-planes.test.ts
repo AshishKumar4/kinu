@@ -2,10 +2,10 @@
 // splice after `collectDynamicContext` would drop planes for actors that do not re-splice. Observed where
 // the model reads them: the request a turn prepares.
 import { describe, expect, test } from 'bun:test';
-import { DeferredApprovalStore, formatApproval, SubordinateRosterStore } from '@kinu.run/core';
+import { appendMemoryNote, DeferredApprovalStore, formatApproval, SubordinateRosterStore } from '@kinu.run/core';
 import { makeSqlExec } from '../../core/tests/helpers';
 import {
-  chatSessionTurns, orchestratorHarness, workspaceMainActor, type HarnessOrchestratorAgent,
+  chatSessionTurns, hostedSubordinateHarness, orchestratorHarness, workspaceMainActor, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 import { wrapDatabase } from '@kinu.run/core/identity';
 
@@ -48,6 +48,17 @@ describe('the orchestrator dynamic context reads its own planes', () => {
     expect(parked.status).toBe('queued');
 
     expect(await modelContext(agent)).toContain('bun run deploy');
+  });
+
+  // The block is the workspace's to render (its reads), so the agent's own isolate reads no memory of its own.
+  test("the workspace's MEMORY.md tail is in its agent's block", async () => {
+    const workspace = orchestratorHarness();
+    const hire = await hostedSubordinateHarness(workspace, { name: 'scribe-1', displayName: 'Scribe', nameOrigin: 'user', roleId: 'task', mission: 'take notes' });
+
+    // A hire's note lands in the workspace's MEMORY.md, which every agent of it reads.
+    await appendMemoryNote(hire.actor.runtime.memory, 'the build needs node 22', { heading: 'Lesson' });
+
+    expect(await modelContext(workspace.agent)).toContain('the build needs node 22');
   });
 
   test('a raised device consent waits on the user in the block', async () => {
