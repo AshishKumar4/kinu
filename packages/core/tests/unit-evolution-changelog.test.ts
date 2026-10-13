@@ -8,7 +8,7 @@ import { describe, test, expect } from 'bun:test';
 import { renderChangelogText } from '../src/tui/index';
 import {
   buildChangelog, countUnseenChangelog, listUnseenChangelog,
-  executeChangelogRevert, revertChangelogEntryById,
+  revertChangelogEntryById,
   initScaffoldTables, initTurnRatingTables,
   initFactsTable, createFactsStore, initGepaTables, initRunEventTables,
   startGepaRun, finishGepaRun,
@@ -17,6 +17,7 @@ import {
   EvolutionEngine,
   type AgentRuntime, type EvolutionEvent,
 } from '../src/index';
+import { executeChangelogRevert } from '../src/evolution/changelog';
 import { describePathology } from '../src/evolution/pathology';
 import { createRefinementStore, initRefinementTables } from '../src/evolution/refinement';
 import { createTestRuntime } from './helpers';

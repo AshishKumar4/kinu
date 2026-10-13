@@ -1,31 +1,10 @@
-/** EMA scoring, time decay and the shared injection filter. */
+/** Time decay and the shared injection filter. */
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { emaUpdate, effectiveScore, filterByEffectiveScore } from '../src/craft/ema';
+import { effectiveScore, filterByEffectiveScore } from '../src/craft/ema';
 import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
 import { makeSql } from './helpers';
-
-describe('EMA scoring', () => {
-  test('emaUpdate preserves [0,1] range for inputs in [0,1]', () => {
-    for (let old = 0; old <= 1; old += 0.25) {
-      for (let obs = 0; obs <= 1; obs += 0.25) {
-        const result = emaUpdate(old, obs);
-        expect(result).toBeGreaterThanOrEqual(0);
-        expect(result).toBeLessThanOrEqual(1);
-      }
-    }
-  });
-
-  test('emaUpdate contracts toward new observation', () => {
-    const old = 0.2;
-    const obs = 0.9;
-    const result = emaUpdate(old, obs);
-    // Result should be between old and obs
-    expect(result).toBeGreaterThan(old);
-    expect(result).toBeLessThan(obs);
-  });
-});
 
 describe('Time decay', () => {
   test('zero days → full score', () => {

@@ -31,7 +31,7 @@ export function toolCallEffect(toolName: string, input: JsonValue | undefined): 
 }
 
 /** Collapse whitespace and clip, marking the clip. */
-export function clip(value: string, max: number = MAX): string {
+function clip(value: string, max: number = MAX): string {
   const flat = value.replace(/\s+/g, " ").trim();
 
   return flat.length <= max ? flat : `${flat.slice(0, max - 3).trimEnd()}...`;
@@ -206,7 +206,7 @@ const RUN_VERBS: ReadonlyArray<readonly [test: (word: string) => boolean, verb: 
   [(w) => w === "psql" || w === "sqlite3" || w === "mysql" || w === "redis-cli", "Queried a database"],
 ];
 
-export function describeCommand(command: string): string {
+function describeCommand(command: string): string {
   const commandWords = argv(command);
 
   if (commandWords.length === 0) return "";

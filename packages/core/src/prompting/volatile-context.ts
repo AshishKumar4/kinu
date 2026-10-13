@@ -106,7 +106,7 @@ export interface DynamicContext {
 
 /** The search roster as delegates, in the surface's words (`agents({op:'swarm'})`, nodes), never `fork` or
  *  "head", which the model cannot invoke. */
-export function searchDelegates(
+function searchDelegates(
   runs: ReadonlyArray<{ rootId: string; rationale: string; running: number; total: number }>,
 ): DynamicDelegate[] {
   return runs.map((run) => ({
@@ -221,7 +221,7 @@ const REMOVED_ROW = 'removed:';
 
 const APPENDED = '(appended)';
 
-export const DYNAMIC_CONTEXT_HEADER =
+const DYNAMIC_CONTEXT_HEADER =
   'Kinu runtime state, not conversation or user text. A full block replaces prior state; a delta changes only what it names.\n'
   + `A delta section replaces its section. Under "${CHANGED_ROWS}", a row replaces the row with its id or is added at the end,\n`
   + `and "${REMOVED_ROW} <id>" drops one; a task's, job's or delegate's id is its first word, any other row's its whole text.\n`
@@ -251,7 +251,7 @@ function renderTurnReason(turn: TurnReason): string {
 }
 
 /** Volatile, so rendered in the dynamic-context block, never the cacheable prefix. */
-export function executorAvailabilityLabel(exec: PromptExecutorInfo): string {
+function executorAvailabilityLabel(exec: PromptExecutorInfo): string {
   // Up, but unreachable until the owner consents: the device executor's 'idle' with no grant (device-tunnel-executor.ts).
   if (exec.granted === false && exec.status === 'idle') {
     return 'connected, no grant yet for this workspace: the first call asks the owner once';
