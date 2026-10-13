@@ -4597,6 +4597,28 @@ start is keyed by its size, its internet setting and whether a store is bound (D
 stays the source. Every store mount unmounts first. The real-container gate (`gate:devbox-e2e`) passed on
 `fbb799b40`, armada `20261013215648-98491a33`, the golden built in 75 s.
 
+D86. A box serves its own preview hosts, under the name it was reached by (2026-10-13, issue #104). `previewName`
+defaulted to the object id, 64 hex characters, so the default URL's first label, `<port>-<id>-<token>`, was 86
+characters where a DNS label holds 63 (RFC 1035 §2.3.4). The Worker rebuilt each preview request as
+`/_devbox/preview/<port>/<token><path>` (D60's mechanism), and passed `exposePort` and `getExposedPorts` the zone the box
+already had. Now `previewHost` defaults to `DEVBOX_PREVIEW_HOST` and `previewName` to the name the box was reached by,
+kept the first time the box sees it: a box woken by its id alone, as the golden wakes a waiting box, has no name
+(`ctx.id.name` is null for an id not made from a name, armada `20261013154734-f35cf2e6`).
+
+The box's `fetch` serves a request whose host is `<port>-<name>-<token>.<previewHost>` when the name is its own, the
+token is the port's (constant time) and the port is exposed and not the desktop's; the path form is gone. D60's
+invariant stands: the port comes from the host, and a visitor's path, `/_devbox/terminal` and
+`/_devbox/preview/8080/…` included, reaches the label's port as a path (`preview-route.test.ts`). `exposePort` and
+`portToken` refuse before a token is minted: `configuration` without a zone or a name, `invalid-input` for the desktop's
+port or a name a label cannot carry. A 4-digit port and the 16-character token leave a name 41 characters, of lowercase
+letters, digits and hyphens: a host is lowercased on its way in, so a name with capitals would reach another box.
+
+A Worker routes its zone with `previewBox(request, env.Box)`. It reads `DEVBOX_PREVIEW_HOST` from the Worker's env and
+returns the box a host of that shape names, or null for any other host, so a guess outside the zone creates no object;
+the box checks the rest. A host that overrides `previewHost` routes its own zone. Kinu does: its edge checks the
+published capability first (`preview-proxy.ts`) and now forwards the visitor's request unchanged, and its `previewName`
+override is gone, since every Kinu stub is `getByName(sandboxIdForWorkspace(workspace))`, the name it computed.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean

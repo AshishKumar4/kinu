@@ -214,7 +214,7 @@ describe('the start hook owns restoration', () => {
     await box.start();
     expect(stamps(container)).toBe(1);
     expect(container.starts).toHaveLength(1);
-    expect(await box.getExposedPorts('preview.test')).toEqual([{ port: 3000, url: 'https://3000-devbox-under-test-tok3000.preview.test', name: 'web' }]);
+    expect(await box.getExposedPorts()).toEqual([{ port: 3000, url: 'https://3000-devbox-under-test-tok3000.preview.test', name: 'web' }]);
     expect((await deliver(container, () => box.exec('echo hi'))).exitCode).toBe(0);
     expect(container.execs.findIndex(command => command.includes(STAMP_COMMAND)))
       .toBeLessThan(container.execs.findIndex(command => command.includes('echo hi')));
@@ -487,7 +487,7 @@ describe('every ending is a named state, and no ending rejects into the platform
         ready: false,
         unready: expect.any(String),
       });
-    expect(await box.getExposedPorts('preview.test')).toEqual([]);
+    expect(await box.getExposedPorts()).toEqual([]);
     expect((await box.exec('echo fixing')).exitCode).toBe(0);
     expect([...rows.keys()].some((key) => key.startsWith('devbox:incident:'))).toBe(true);
   });

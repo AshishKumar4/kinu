@@ -10,6 +10,8 @@ export { collectExecRecords, execRecords } from './exec-stream';
 
 export { DevboxGateway, type OutboundPolicy } from './gateway';
 
+export { previewBox } from './preview';
+
 
 export type { RestoreClockPhase, RestoreStatus } from './restoration';
 

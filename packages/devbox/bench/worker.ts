@@ -944,7 +944,6 @@ const DriverBodySchema = v.object({
   prefix: v.optional(v.string()),
   whole: v.optional(v.boolean()),
   processId: v.optional(v.string()),
-  port: v.optional(v.number()),
   kill: v.optional(v.boolean()),
   fault: v.optional(v.picklist(['refuse', 'stall'])),
 });
@@ -1091,9 +1090,8 @@ async function serveInstrumentRoutes(
 async function serveProcessRoutes(route: string, box: BenchStub, input: DriverBody, started: number): Promise<Response | null> {
   if (route === 'POST /supervise') {
     const { processId } = await box.startSupervised(input.command ?? 'true');
-    const exposed = input.port === undefined ? null : await box.exposePort(input.port, { hostname: 'bench.invalid' });
 
-    return json({ payload: { ok: true, processId, exposed: exposed?.port ?? null, ms: Date.now() - started } });
+    return json({ payload: { ok: true, processId, ms: Date.now() - started } });
   }
 
   if (route !== 'POST /process') return null;

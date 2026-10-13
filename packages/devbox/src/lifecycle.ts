@@ -493,8 +493,10 @@ export interface PortExposureSpec {
  *  shape of an auto-generated one. */
 const PORT_TOKEN_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
 
+export const PORT_TOKEN_LENGTH = 16;
+
 export function generatePortToken(random: (n: number) => Uint8Array): string {
-  const bytes = random(16);
+  const bytes = random(PORT_TOKEN_LENGTH);
   let token = '';
 
   for (const byte of bytes) token += PORT_TOKEN_ALPHABET[byte % PORT_TOKEN_ALPHABET.length];

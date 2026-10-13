@@ -402,7 +402,7 @@ describe('a startup attempt owns a generation, and a superseded one is inert', (
     await successor;
     parked.release();
     await stale;
-    expect(await box.getExposedPorts('preview.test')).toEqual([{ port: 3000, url: 'https://3000-devbox-under-test-tok3000.preview.test', name: 'web' }]);
+    expect(await box.getExposedPorts()).toEqual([{ port: 3000, url: 'https://3000-devbox-under-test-tok3000.preview.example', name: 'web' }]);
   });
 
   test('quiesce drains a pending admission before leaving the container stopped', async () => {
@@ -584,7 +584,7 @@ describe('a failed restored service is never exposed and never reported ready', 
     await box.devboxStartup();
     expect(container.starts)
       .toEqual([{ command: 'bun run server.ts', cwd: '/workspace', processId: 'p1' }]);
-    expect(await box.getExposedPorts('preview.test')).toEqual([{ port: 3000, url: 'https://3000-devbox-under-test-tok3000.preview.test', name: 'web' }]);
+    expect(await box.getExposedPorts()).toEqual([{ port: 3000, url: 'https://3000-devbox-under-test-tok3000.preview.example', name: 'web' }]);
     const state = await box.devboxState();
     expect({ ready: state.ready, unready: state.unready })
       .toEqual({ ready: true, unready: undefined });
@@ -595,7 +595,7 @@ describe('a failed restored service is never exposed and never reported ready', 
     const { box, rows } = harnessed;
     port(rows, 3000, 'tok3000');
     await box.devboxStartup();
-    expect(await box.getExposedPorts('preview.test')).toEqual([]);
+    expect(await box.getExposedPorts()).toEqual([]);
     const state = await box.devboxState();
     expect(state.ready).toBe(false);
     expect(state.unready).toContain('3000');
@@ -613,7 +613,7 @@ describe('a failed restored service is never exposed and never reported ready', 
     container.listening.add(3000).add(8080);
     container.startFaults.push(refused('COMMAND_NOT_FOUND'));
     await box.devboxStartup();
-    expect(await box.getExposedPorts('preview.test')).toEqual([]);
+    expect(await box.getExposedPorts()).toEqual([]);
     const state = await box.devboxState();
     expect(state.ready).toBe(false);
     expect(state.unready).toContain('p1');
@@ -1050,7 +1050,7 @@ describe('one budget, two policies: the attach may replace, the phases after it 
     for (const value of [3000, 8080, 9000]) port(rows, value, `tok${String(value)}`);
     await box.devboxStartup();
     // A slow app is no reason to destroy a working box: no port answered, so none is exposed.
-    expect(await box.getExposedPorts('preview.test')).toEqual([]);
+    expect(await box.getExposedPorts()).toEqual([]);
     expect(container.destroys).toBe(0);
     expect(container.running.running).toBe(true);
     const state = await box.devboxState();
@@ -1076,7 +1076,7 @@ describe('one budget, two policies: the attach may replace, the phases after it 
 
       expect(container.destroys).toBe(0);
       expect(container.running.running).toBe(true);
-      expect(await box.getExposedPorts('preview.test')).toEqual([]);
+      expect(await box.getExposedPorts()).toEqual([]);
       const stalled = await box.devboxState();
       expect(stalled.ready).toBe(false);
       expect(stalled.unready).toContain('p1');
@@ -1093,7 +1093,7 @@ describe('one budget, two policies: the attach may replace, the phases after it 
       const repaired = await box.devboxState();
       expect({ ready: repaired.ready, unready: repaired.unready })
         .toEqual({ ready: true, unready: undefined });
-      expect(await box.getExposedPorts('preview.test')).toEqual([{ port: 3000, url: 'https://3000-devbox-under-test-tok3000.preview.test', name: 'web' }]);
+      expect(await box.getExposedPorts()).toEqual([{ port: 3000, url: 'https://3000-devbox-under-test-tok3000.preview.example', name: 'web' }]);
     });
 
   test('a process the container already holds is not started twice by the retry', async () => {
@@ -1221,7 +1221,7 @@ describe('the fakes can fail, so the assertions above are not vacuous', () => {
     port(fixture.rows, 7000, 'tok7000');
     fixture.container.listening.add(7000);
     await fixture.box.devboxStartup();
-    expect(await fixture.box.getExposedPorts('preview.test')).toHaveLength(1);
+    expect(await fixture.box.getExposedPorts()).toHaveLength(1);
   });
 
   test('the durable owner check really refuses a write, so the fence is not vacuous', async () => {

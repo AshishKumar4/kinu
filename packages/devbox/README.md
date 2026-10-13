@@ -40,6 +40,7 @@ export default {
 - The store is the R2 bucket bound as `DEVBOX_STORE` (override `store` to name another binding). A box keeps its disk there, and starts from one golden snapshot of `cloudflare/debian-trixie` with the pinned tools installed, built by the box named `GOLDEN_NAME` in the same namespace (D66). Publish the pinned tools to the bucket once: `bun scripts/devbox-tools.ts publish <bucket>`. A box with no bucket bound is refused at its first start, naming the binding (D85).
 - The box finds its own namespace among the Worker's exports, the one that accepts its id (D85), so the class must be exported from the Worker.
 - The Worker must export `DevboxGateway`. It routes the container's web traffic, and answers its S3 calls from the R2 binding, so no key pair exists (D41).
+- Previews are optional: set `DEVBOX_PREVIEW_HOST` to a zone routed to the Worker, and route it with `previewBox` ([Ports and previews](#ports-and-previews)).
 
 ## Lifecycle
 
@@ -56,7 +57,7 @@ A box in `repair` still takes calls, so its agent can fix what did not come back
 | Files in `/workspace`, `.git` included | as at the last `quiesce()` | as at the last save |
 | `archiveExcludes`: `node_modules`, caches, build output | yes | no; an incident names them |
 | Supervised processes | restarted, without their memory | restarted, without their memory |
-| Exposed ports, with `previewHost` set | same URL | same URL |
+| Exposed ports, with a preview zone | same URL | same URL |
 | Other processes | no | no |
 
 Only a graceful stop takes a snapshot: `quiesce()`, a running `resize()`, or `answerRest('now')`. `stop()` and `destroy()` save nothing. Snapshots serve for 29 days from the first one in their lineage (D65). A snapshot start that fails or is not admitted within 10 s falls back to a fresh start and the chain; a capacity refusal retries the snapshot instead. The chain's layout and its deltas, merged like a binary counter, are D57 and D77; the block layer is [DEVBOX-BLOCK-LAYER.md](../../docs/DEVBOX-BLOCK-LAYER.md).
@@ -113,16 +114,18 @@ A supervised process has a durable spec, so every start runs it again. A `startP
 ### Ports and previews
 
 ```ts
-const { url } = await box.exposePort(3000, { hostname: 'preview.example.com' });
-// https://3000-<previewName>-<token>.preview.example.com
+// DEVBOX_PREVIEW_HOST = "preview.example.com", with a wildcard route *.preview.example.com/* to this Worker
+const { url } = await env.Box.getByName('demo').exposePort(3000);
+// https://3000-demo-<token>.preview.example.com
 
-// In your Worker, with port and token read from the preview host:
-const target = new URL(request.url);
-target.pathname = `/_devbox/preview/${port}/${token}${target.pathname}`;
-return box.fetch(new Request(target.toString(), request));
+// In your Worker's fetch, before anything else:
+const preview = previewBox(request, env.Box);
+if (preview !== null) return preview.fetch(request);
 ```
 
-The token is kept per port. Override `previewHost` and every start re-exposes the port at the same URL. `previewName` defaults to the object id. To pass `token` yourself, take it from `portToken(port)`.
+`previewBox` reaches the box a host under `DEVBOX_PREVIEW_HOST` names, and the box serves the request: it checks that the name is its own, that the token is the port's, and that the port is exposed. The port comes from the host; the visitor's path reaches the port as it is (D60). The token is kept per port, so every start re-exposes the port at the same URL. To pass `token` yourself, take it from `portToken(port)`.
+
+The name is the one the box was reached by with `getByName`, kept the first time the box sees it. A host label holds 63 characters, so a name gets 41 with a 4-digit port, in lowercase letters, digits and hyphens. A box reached only by its id, a name that does not fit, or no preview zone is refused at `exposePort`.
 
 ### Resize and sizes
 
@@ -183,9 +186,9 @@ await box.destroy();        // destroy the container; a later call starts it aga
 | `stopSupervised(processId)`, `listSupervised()` | Stops one; lists them | `{ stopped }`, rows |
 | `startProcess(command, { cwd, processId })` | Starts a process that is not restored | `{ id, pid, status, … }` |
 | `getProcess(id)`, `listProcesses()`, `killProcess(id)` | Native processes | a record or `null`, records, `void` |
-| `portToken(port, name?)` | The port's stable token | `{ urlToken }`; `invalid-input` for 6080 |
-| `exposePort(port, { hostname, name, token })` | Publishes a port; `token` must come from `portToken()` | `{ port, name, url }`; `invalid-input` for 6080 |
-| `getExposedPorts(hostname)` | Lists published ports | `{ port, name, url }[]`; `[]` when stopped |
+| `portToken(port, name?)` | The port's stable token | `{ urlToken }`; refused as `exposePort` is |
+| `exposePort(port, { name, token })` | Publishes a port; `token` must come from `portToken()` | `{ port, name, url }`; `configuration` without a zone or a name, `invalid-input` for 6080 or a name no host label holds |
+| `getExposedPorts()` | Lists published ports | `{ port, name, url }[]`; `[]` when stopped |
 | `unexposePort(port)` | Revokes a port, also on a stopped box | `void` |
 | `probePort(port)` | Asks whether anything answers HTTP | `boolean` |
 | `portListeners(stamp, ports?)` | Lists listening sockets and their processes | `PortListener[]`; `null` when stopped |
@@ -199,7 +202,7 @@ await box.destroy();        // destroy the container; a later call starts it aga
 | `discardState()` | Deletes the backup and drops its snapshots (D65) | `void` |
 | `destroy()` | Destroys the container without a save and ends the box's starts | `void` |
 | `devboxState()`, `devboxIncidentReasons()` | Reads the box and its incidents | a report, incident rows |
-| `fetch(request)` | Serves `/_devbox/preview/…`, `/_devbox/terminal` and `/_devbox/desktop` | `Response`; 404 |
+| `fetch(request)` | Serves its preview hosts, `/_devbox/terminal` and `/_devbox/desktop` | `Response`; 404 |
 | `resetShell()`, `noteTerminalActivity()` | Ends the terminal session; counts terminal use | `void` |
 | `ensureGolden()` | Builds the golden snapshot if needed | its snapshot id |
 
@@ -208,7 +211,7 @@ await box.destroy();        // destroy the container; a later call starts it aga
 | Override | Default | Sets |
 | --- | --- | --- |
 | `store` | `'DEVBOX_STORE'` | the binding of the backup bucket, which also holds the pinned tools |
-| `previewHost`, `previewName` | none, the object id | the preview URL |
+| `previewHost`, `previewName` | `DEVBOX_PREVIEW_HOST`, the name the box was reached by | the preview URL; a host that overrides `previewHost` routes its own zone |
 | `policy` | 60 s heartbeat, 30 min idle, 10 min quiet, 5 min saves, 25 s restore | the lifecycle's timings |
 | `defaultSize` | `'medium'` | the size nobody chose |
 | `archiveExcludes` | `node_modules`, `*.log`, `.cache`, `.bun`, `__pycache__`, `.venv`, `target`, `.next`, `.turbo`, `dist` | what the chain skips |
