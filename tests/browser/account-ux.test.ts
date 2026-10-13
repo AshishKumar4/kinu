@@ -125,7 +125,7 @@ async function checkWorkspacesView(page: Page, view: 'list' | 'tiled', viewport:
   // the count is a tabular "N of M", not a sentence.
   const tabs = await page.$$eval('[aria-label="Workspace state"] [role="tab"]', (els) => els.map((el) => el.getAttribute('data-segment')));
   expect(tabs).toEqual(['all', 'needs', 'working', 'idle']);
-  expect(await page.$$eval('main button', (buttons) => buttons.filter((button) => button.textContent?.trim() === 'New workspace').length)).toBe(1);
+  expect(await page.$$eval('main :is(a, button)', (controls) => controls.filter((control) => control.textContent?.trim() === 'New workspace').length)).toBe(1);
   expect(body2).toContain('5 of 5');
 
   if (viewport === 'desktop') expect(await activeNavRow(page)).toBe('Workspaces');
