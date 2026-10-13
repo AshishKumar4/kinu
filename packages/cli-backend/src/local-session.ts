@@ -84,7 +84,7 @@ import { ActorSession, type ActorTurnLease,
   InstructionApprovalStore, InstructionApprovalDesk, type AdmittedInstructionDecision,
   type InstructionSourceRow, type InstructionSourceView,
   type InstructionTrustResolver,
-  applyScaffoldDecision, createLlmJsonJudge, getEvolutionStatus, runOptimization,
+  applyScaffoldDecision, getEvolutionStatus, runOptimization,
   type ProposerOutcome, type ScaffoldControl,
   type ScaffoldDecisionResult, createScaffoldCandidateSurface,
   type EvolutionStatus,
@@ -2020,7 +2020,6 @@ export class LocalAgentSession {
       rt: this.rt,
       events: this.eventRecorder,
       sql: this.rt.storage.sql,
-      history: this.stores.history,
       surface: (task, context, callScope) => createScaffoldCandidateSurface({
         rt: this.rt,
         compose: () => this.composeNextRequest(),
@@ -2032,14 +2031,6 @@ export class LocalAgentSession {
         history: this.makeScaffoldHistory(),
         spend: { source: 'scaffold', report: this.modelCallSink, operations: this.modelOperations },
       }, task, context),
-      model: async () => {
-        const route = resolveModelRoute('scaffold', await this.routingProfile());
-
-        return this.bindRouteModel(route).model;
-      },
-      judge: createLlmJsonJudge(this.rt.judgeModel ?? this.rt.llm),
-      reportModelCall: this.modelCallSink,
-      operations: this.modelOperations,
     };
   }
 

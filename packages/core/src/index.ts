@@ -847,7 +847,6 @@ export {
 export {
   extractJsonArray,
   extractJsonObject,
-  generateJson,
   jsonArrayOnlyInstruction,
   jsonObjectOnlyInstruction,
   stripMarkdownFences,
@@ -1801,9 +1800,9 @@ export type {
 
 // GEPA (Agrawal et al., ICLR 2026, arxiv 2507.19457)
 export {
-  applyScaffoldDecision, createJsonJudge, createLlmJsonJudge, getEvolutionStatus, listScaffoldVersions,
+  applyScaffoldDecision, getEvolutionStatus, listScaffoldVersions,
   previewScaffoldLive, proposeScaffold, runOptimization, runScaffoldOnce,
-  type EvolutionStatus, type JsonGenerator, type ScaffoldControl,
+  type EvolutionStatus, type ScaffoldControl,
   type ScaffoldDecisionResult, type ScaffoldReplayContext, type ScaffoldSurface, type ScaffoldVersionView,
 } from './evolution/control';
 
@@ -2154,7 +2153,7 @@ export {
 
 export type { ReasoningEffort } from './providers/effort';
 
-export { REASONING_EFFORTS, REASONING_EFFORT_FOR_STAGE } from './providers/effort';
+export { REASONING_EFFORTS } from './providers/effort';
 
 export type { NamedSwarmPreset, SwarmNodeAssignment } from './strategy/swarm';
 

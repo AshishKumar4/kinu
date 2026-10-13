@@ -1,9 +1,5 @@
-import type { LanguageModel } from 'ai';
 import { Effect } from 'effect';
-import * as v from 'valibot';
 import { settleSync } from '../obs/effect';
-import type { ModelCallSpend } from '../events/model-call';
-import { generateReported, type GenerateRequest } from './model-invocation';
 import { parseJsonArray, parseJsonObject, type JsonObject, type JsonValue } from '../utils/json';
 
 const JSON_FENCE = /```json\s*([\s\S]*?)```/i;
@@ -71,21 +67,3 @@ function balancedJson(text: string, open: '{' | '[', close: '}' | ']'): Effect.E
   return Effect.die(new SyntaxError(`unterminated JSON ${open === '{' ? 'object' : 'array'} in model output`));
 }
 
-/** Uses plain `generateText` + extraction because `generateObject`'s synthetic tool call fails on some
- *  Workers AI models (Kimi). Throws on malformed output or schema mismatch. */
-export async function generateJson<TOutput>(opts: {
-  model: LanguageModel;
-  schema: v.GenericSchema<unknown, TOutput>;
-  prompt: string;
-  providerOptions?: GenerateRequest['providerOptions'];
-  spend: ModelCallSpend;
-}): Promise<TOutput> {
-  // Reported before validation: the call was billed even if its output fails the schema.
-  const result = await generateReported({
-    model: opts.model,
-    prompt: `${opts.prompt}\n\n${jsonObjectOnlyInstruction()}`,
-    providerOptions: opts.providerOptions,
-  }, { spend: opts.spend }, 'generate_json');
-
-  return v.parse(opts.schema, extractJsonObject(result.text));
-}
