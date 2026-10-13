@@ -111,8 +111,9 @@ class TlsCommandLine {
 
     if (byte === 0x0d) return;
 
+    // One character per byte, ASCII letters folded: a Unicode fold ('ß' is 'SS') would step past the bound.
     if (this.word.length === LONGEST_WORD) this.overlong = true;
-    else this.word += String.fromCharCode(byte).toUpperCase();
+    else this.word += String.fromCharCode(byte >= 0x61 && byte <= 0x7a ? byte - 0x20 : byte);
   }
 
   /** At the line's newline: whether it asked for TLS, the line forgotten. */
