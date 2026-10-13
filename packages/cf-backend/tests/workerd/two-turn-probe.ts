@@ -1122,12 +1122,16 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     const target: QueueTarget = await this.queueTarget(workspace);
     const caller = await ownerCaller(this.env);
     const userDO = this.env.UserDO.get(this.env.UserDO.idFromName('crossings-owner'));
-    await userDO.registerWorkspace(caller, workspace, 'Crossings');
+    await userDO.registerWorkspace(caller, workspace, 'Crossings', { nameOrigin: 'user' });
     const claim = await target.claimOwner('crossings-owner');
     await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
     await userDO.setCredential(caller, 'openai-compat.default', {
       kind: 'openai-compat', baseURL: 'http://fake-models.invalid/v1', apiKey: 'probe-fixture-key',
     });
+    const catalog = await userDO.getProfileCatalog(caller);
+
+    // Every lane, the background passes included, on the scripted model, as `longTurnCost` runs: the count is Kinu's.
+    await userDO.putProfileCatalog(caller, { roles: {}, tiers: { default: { model: 'openai-compat/probe-steps' }, fast: { model: 'openai-compat/probe-steps' } } }, catalog.version);
     await target.setModel('openai-compat/probe-steps');
     await this.httpReset();
     const recording = createWorkspaceRecording();

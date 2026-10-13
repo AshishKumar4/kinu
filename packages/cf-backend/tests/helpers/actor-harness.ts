@@ -25,7 +25,7 @@ import type { ChatWireTransport } from '../../src/chat-transport';
 import type { AgentTurns } from '../../src/agent-turns';
 import { isWorkMode, workModeForTurnMetadata } from '@kinu.run/core';
 import { ActorClaimStore, agentArtifactDirectory, agentHome, CHAT_SESSION_ID, createParentWorkspaceVfs, EventLog, SubordinateRosterStore, MAIN_AGENT, openWorkspaceMainActor, SessionHistory, TerminalTransitions, WorkspaceActorDirectory } from '@kinu.run/core';
-import { present, sqlOver, admitTestClaim } from '@kinu.run/test-utils';
+import { present, admitTestClaim } from '@kinu.run/test-utils';
 import {
   createCompositeLogger, createConsoleLogger, renderCauseChain, setDiagnosticsSink, toKinuError, type Logger,
 } from '@kinu.run/core/obs';
@@ -62,6 +62,7 @@ import {
 } from '@kinu.run/core';
 import { serveObject } from './programmatic-host';
 import { makeCtx, stubOf } from './platform-context';
+import { wrapDatabase } from '@kinu.run/core/identity';
 
 mockAgentsSdk();
 
@@ -850,7 +851,7 @@ export async function until(holds: () => boolean, what: string): Promise<void> {
  */
 export function ledgerOver(db: Database): TerminalTransitions {
   return new TerminalTransitions({
-    actor: workspaceMainActor(db), sql: sqlOver(db), effects: {}, now: () => Date.now(),
+    actor: workspaceMainActor(db), sql: wrapDatabase(db).sql, effects: {}, now: () => Date.now(),
     scheduleRetry: async () => {}, transaction: (body) => body(), turnIsLive: () => false, settled: async () => {},
     hold: (close) => close(),
   });
@@ -862,7 +863,7 @@ export function historyOver(
   harness: Pick<ActorHarness<HarnessOrchestratorAgent>, 'agent' | 'db'>, actor: ActorHandle = workspaceMainActor(harness.db),
 ): SessionHistory {
   return new SessionHistory({
-    sql: sqlOver(harness.db), actor, transactionSync: (write) => harness.db.transaction(write)(),
+    sql: wrapDatabase(harness.db).sql, actor, transactionSync: (write) => harness.db.transaction(write)(),
     files: async () => ({ vfs: workspaceFiles(harness.agent), artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)) }),
   });
 }
@@ -908,7 +909,7 @@ export async function wakeForDelegatedTask(
 
 /** Core's background-job journal over the object's stored rows. */
 export function jobsOver(db: Database): BackgroundJobStore {
-  return new BackgroundJobStore(sqlOver(db), workspaceMainActor(db));
+  return new BackgroundJobStore(wrapDatabase(db).sql, workspaceMainActor(db));
 }
 
 /** The owner's words through the public send, resolved once the turn they open has run, as the CLI's send resolves:
@@ -965,7 +966,7 @@ export async function admittedTurnClaim(
 ): Promise<void> {
   const history = historyOver(harness);
   const context = history.context.selected() ?? history.context.initialize();
-  const claims = new ActorClaimStore(sqlOver(harness.db), workspaceMainActor(harness.db), (write) => write(), history);
+  const claims = new ActorClaimStore(wrapDatabase(harness.db).sql, workspaceMainActor(harness.db), (write) => write(), history);
   await admitTestClaim(claims, {
     runId: `run-${turnId}`, turnId, workMode: 'build',
     program: { kind: 'builtin', version: 0, digest: null, build: null },
@@ -980,7 +981,7 @@ export function ownDatabase(harness: Pick<ActorHarness<HarnessOrchestratorAgent>
 
 /** A non-main agent's own runs, claims and conversation in its facet database. */
 export function agentSql(harness: Pick<ActorHarness<HarnessOrchestratorAgent>, 'agent' | 'db'>, actorId: string): SqlExecutor {
-  return sqlOver(ownDatabase(harness, actorId));
+  return wrapDatabase(ownDatabase(harness, actorId)).sql;
 }
 
 /**
@@ -1005,7 +1006,7 @@ export async function mainRows(harness: Pick<ActorHarness<HarnessOrchestratorAge
   await harness.agent.harnessMainHistory();
   const db = mainDatabase(harness);
 
-  return { db, sql: sqlOver(db), actor: actorOver(db, workspaceMainActor(harness.db).actorId) };
+  return { db, sql: wrapDatabase(db).sql, actor: actorOver(db, workspaceMainActor(harness.db).actorId) };
 }
 
 /** An actor's conversation as its store holds it: main's, in its own isolate, unless another actor is named. */
@@ -1075,7 +1076,7 @@ export function seedOrphanFiber(db: Database, name: string, snapshot: JsonValue)
 
 /** A hired actor's handle over the object's stored rows, whether or not it is hosted now. */
 export function actorOver(db: Database, actorId: string): ActorHandle {
-  const sql = sqlOver(db);
+  const sql = wrapDatabase(db).sql;
   const [identity] = sql<{ id: string; owner_user_id: string | null }>`SELECT id, owner_user_id FROM workspace_identity`;
 
   if (identity === undefined) throw new Error('the workspace has no identity row');
@@ -1094,13 +1095,13 @@ export function actorOverWorkspace(agent: HarnessOrchestratorAgent, actorId: str
 }
 
 export function workspaceMainActor(db: Database): ActorHandle {
-  return openWorkspaceMainActor(sqlOver(db));
+  return openWorkspaceMainActor(wrapDatabase(db).sql);
 }
 
 /** A pending scaffold proposal, seeded under `runtime.actor`: the pointer is per-actor. */
 export function declareShadowCandidate(db: Database): void {
   const actor = workspaceMainActor(db);
-  void sqlOver(db)`INSERT OR REPLACE INTO scaffold_versions
+  void wrapDatabase(db).sql`INSERT OR REPLACE INTO scaffold_versions
     (actor_id, version, written_at, rationale, status)
     VALUES (${actor.actorId}, 1, ${Date.now()}, 'a harness candidate', 'pending')`;
 }

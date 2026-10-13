@@ -4,7 +4,7 @@ import { exists, readText, type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.j
 // only their own rows, through the production binder and directory.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { sqlOver, createMemoryVfs, createTestRuntime, withHostDeliveries, admitTestClaim } from '@kinu.run/test-utils';
+import { createMemoryVfs, createTestRuntime, withHostDeliveries, admitTestClaim } from '@kinu.run/test-utils';
 import { makeSqlExec } from './helpers';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { actorScaffoldPath, WorkspaceActorDirectory, type WorkspaceActor } from '../src/identity/workspace-actors';
@@ -30,6 +30,7 @@ import { sha256Hex } from '../src/safety/argument-digest';
 import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { historyTurnPairs } from '../src/identity/conversation-store';
+import { wrapDatabase } from '../src/identity/inline-primitives';
 
 const BUILTIN: ActorProgramIdentity = { kind: 'builtin', version: 0, digest: null, build: 'test-build' };
 
@@ -65,7 +66,7 @@ function scaffoldIdentity(record: WorkspaceActor, vfs: VFS, sql: SqlExecutor, ac
 
 function build(donor?: Database, unreadableActor?: string, automatic = false, installedBuild: string | null = 'test-build'): Fixture {
   const db = donor ?? new Database(':memory:');
-  const sql = sqlOver(db);
+  const sql = wrapDatabase(db).sql;
   const execRaw = (ddl: string): void => { db.exec(ddl); };
 
   const exec = makeSqlExec(db);

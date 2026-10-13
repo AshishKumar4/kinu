@@ -708,10 +708,13 @@ export class ChatSession {
     return this.reopening || this.running();
   }
 
-  /** A turn runs (its lease begun before it opens, so words sent while it opens are its own) or is queued; a Retry
-   *  claimed but not yet queued aside. */
+  /** A turn runs or is queued, the owner's own turn counted from the moment the pump takes it, while it opens: words sent
+   *  then are its own, as they are while it waits in the queue, so a Stop hands them back. A Retry claimed but not yet
+   *  queued aside. */
   private running(): boolean {
-    return this.actorSession.inFlight || this.queue.some((item) => item.kind === 'user' || item.yieldsToUserMessage === true);
+    const opening = this.taken !== null && this.taken.kind === 'user' && this.taken.run === undefined;
+
+    return this.actorSession.inFlight || opening || this.queue.some((item) => item.kind === 'user' || item.yieldsToUserMessage === true);
   }
 
   /**
@@ -1491,22 +1494,24 @@ export class ChatSession {
 
   /** The taken item, run to its end: the failure its producer is told, and the answer it abandoned. Never throws. */
   private async runTaken(item: QueueItem): Promise<{ readonly failure: KinuError | null; readonly abandoned: string | null }> {
-    const opening: TurnOpeningOutcome = { announced: false, failure: null };
+    let opened = false;
 
     try {
       // A Stop that came as the pump took it: its end is the Stop, unrun.
       if (item.run !== undefined) return { failure: item.cut ?? await this.runDelivered(item.run), abandoned: null };
-      const abandoned = await this.actorSession.orchestrator.withTurnLearning(() => this.runOpenedTurn(item, this.identifyTurn(item), opening));
+      const opening = await this.openTurn(item);
 
-      // A failure before the turn was announced goes to its caller in its own words.
-      return opening.failure === null ? { failure: null, abandoned } : { failure: opening.failure, abandoned: null };
+      opened = true;
+
+      return { failure: null, abandoned: await this.actorSession.orchestrator.withTurnLearning(() => this.runOpenedTurn(item, opening)) };
     } catch (err) {
       diagnostics.failure(
         'turn.processing_failed',
         toKinuError({ doing: 'processing a queued turn', cause: err, otherwise: 'io' }),
       );
 
-      return { failure: null, abandoned: null };
+      // Nothing reached the caller before the open, so a failure there goes to it in its own words.
+      return { failure: opened ? null : new KinuError(classifyErrorCode({ cause: err }) ?? 'io', renderThrownChain({ cause: err }), { cause: err }), abandoned: null };
     }
   }
 
@@ -1575,9 +1580,9 @@ export class ChatSession {
     return end.reason;
   }
 
-  /** The turn's identity, decided as the pump takes it and before anything of it is written. A started turn always
-   *  terminates: exactly one `turn-end` and a closed run, even when assembly throws. */
-  private identifyTurn(item: QueueItem): OpenedTurn {
+  /** A started turn always terminates: exactly one `turn-end` and a closed run, even when assembly throws. */
+  /** Through the announced start. */
+  private async openTurn(item: QueueItem): Promise<OpenedTurn> {
     const parsedEvent = v.safeParse(v.string(), item.metadata?.kinuEvent);
     const event = parsedEvent.success ? parsedEvent.output : undefined;
     const mode = workModeForTurnMetadata(item.metadata);
@@ -1589,14 +1594,7 @@ export class ChatSession {
     this.messageId = item.continuation?.messageId ?? this.mintAnswerId();
 
     this.runId = item.continuation?.runId ?? `run-${crypto.randomUUID()}`;
-
-    return { event, mode, turnId: this.turnId, runId: this.runId };
-  }
-
-  /** Its input admitted and published, and its start announced: under its execution's lease, so words sent meanwhile are
-   *  the turn's own, and a Stop meanwhile hands them back. */
-  private async openTurn(item: QueueItem, { event, mode, turnId, runId }: OpenedTurn): Promise<void> {
-    const inputReference = await this.actorSession.canonical.admitInput({ id: turnId, turnId, message: turnInputMessage(item), assertOwner: () => this.actorSession.runtime.actor.assertCurrent() });
+    const inputReference = await this.actorSession.canonical.admitInput({ id: this.turnId, turnId: this.turnId, message: turnInputMessage(item), assertOwner: () => this.actorSession.runtime.actor.assertCurrent() });
     const { questions } = this.actorSession;
 
     // The owner wrote instead of choosing: their message answers the open questions, and the answers given ride it.
@@ -1609,32 +1607,32 @@ export class ChatSession {
 
     const metadata = authoredTurnMetadata(item);
 
-    const opening = await this.transcript.prepareUser({ id: turnId, turnId, runId, message: inputReference, metadata });
+    const opening = await this.transcript.prepareUser({ id: this.turnId, turnId: this.turnId, runId: this.runId, message: inputReference, metadata });
 
     this.openingRow = item.kind === 'programmatic' ? opening : null;
 
     if (item.kind === 'user') {
       // A rerun carrying several sends publishes each under its own id, over the one input they were joined into.
       const entries = item.sends !== undefined && item.sends.length > 1
-        ? await this.transcript.prepareSteers({ rows: item.sends.map((send) => ({ ...send, atStep: 0, metadata })), reference: inputReference, turnId, runId })
+        ? await this.transcript.prepareSteers({ rows: item.sends.map((send) => ({ ...send, atStep: 0, metadata })), reference: inputReference, turnId: this.turnId, runId: this.runId })
         : [opening];
 
       for (const entry of entries) this.transcript.appendUser(entry);
     }
 
     this.emit({
-      type: 'turn-start', kind: item.kind, text: item.text, event, authorship: turnAuthorship(item), workMode: mode, turnId, messageId: this.messageId,
-      carried: (item.steerIds ?? []).filter((id) => id !== turnId), finishedSteps: item.continuation?.finishedSteps ?? 0, runId,
+      type: 'turn-start', kind: item.kind, text: item.text, event, authorship: turnAuthorship(item), workMode: mode, turnId: this.turnId, messageId: this.messageId,
+      carried: (item.steerIds ?? []).filter((id) => id !== this.turnId), finishedSteps: item.continuation?.finishedSteps ?? 0, runId: this.runId,
     });
+
+    return { event, mode, turnId: this.turnId, runId: this.runId };
   }
 
   /**
    * Null once the turn answered; the reason when it ended before it could. Driven as every execution is
    * ({@link driveExecution}): the turn supplies its opening, its assembly and the projection of its result.
    */
-  private async runOpenedTurn(item: QueueItem, identity: OpenedTurn, opening: TurnOpeningOutcome): Promise<string | null> {
-    const { event, mode, turnId, runId } = identity;
-
+  private async runOpenedTurn(item: QueueItem, { event, mode, turnId, runId }: OpenedTurn): Promise<string | null> {
     // A re-opened turn continues its run; only a new turn opens one.
     if (this.reopenedRunId === this.runId) this.reopenedRunId = null;
     let unanswered: string | null = null;
@@ -1645,10 +1643,6 @@ export class ChatSession {
       isAborted: () => item.cut !== undefined,
       within: (body) => runOperationProfile(null, () => runWorkModeInvocation(mode, body)),
       open: async (lease) => {
-        // Opened under its lease (`openTurn`); one that failed there is its caller's to hear, in its own words.
-        await this.openTurn(item, identity);
-        opening.announced = true;
-
         // A held Retry's row goes with its opening: a later process re-opens the run, never the Retry again.
         if (item.continuation === undefined) this.transaction(() => {
           openTurnRun(this.eventRecorder, runId, {
@@ -1682,13 +1676,6 @@ export class ChatSession {
         await this.projectTurn(item, event, lease, { round: null, execution: outcome });
       },
       failed: async ({ lease, failure }) => {
-        // Never announced: no run opened, and its caller hears why, in its own words (`runTaken`).
-        if (!opening.announced) {
-          opening.failure = new KinuError(classifyErrorCode({ cause: failure }) ?? 'io', renderThrownChain({ cause: failure }), { cause: failure });
-
-          return 'error';
-        }
-
         const message = renderThrownChain({ cause: failure });
         const interrupted = lease.signal.aborted || item.cut !== undefined;
 
@@ -2291,13 +2278,6 @@ export class ChatSession {
 }
 
 /** A delivered run's held row: its mode beside the mark that restores it as a run. */
-/** How a turn's opening (`openTurn`) went: `announced` once it opened; `failure`, set when it failed before that, is what
- *  its caller hears, in its own words, as nothing else of the turn ran. */
-interface TurnOpeningOutcome {
-  announced: boolean;
-  failure: KinuError | null;
-}
-
 /** Marks a held row as a Retry's reopened turn, so a later process runs it as that turn again. */
 const RETRIED_TURN_EVENT = 'retried_turn';
 

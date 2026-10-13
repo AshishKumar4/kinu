@@ -45,7 +45,7 @@ import {
   type LocalHostedAgent,
 } from '../src/agent-host';
 import { makeExecRaw, makeSql, makeSqlExec, makeWorkspaceSchemaSql, type CLIRuntime, workspaceHome } from '../src/runtime';
-import { AwaitedList, createMemoryVfs, gatedTools, present, readTranscriptRows, spawnTest, sqlOver, TURN_REACH, workspaceDatabase, admitTestClaim } from '@kinu.run/test-utils';
+import { AwaitedList, createMemoryVfs, gatedTools, present, readTranscriptRows, spawnTest, TURN_REACH, workspaceDatabase, admitTestClaim } from '@kinu.run/test-utils';
 import { openWorkspaceCLI } from '../src/open';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import type { LocalModelResolver } from '../src/model-resolver';
@@ -2631,7 +2631,7 @@ describe('LocalAgentHost — the driver lease', () => {
     const db = workspaceDatabase(dbPath);
 
     try {
-      const owed = new AgentDeliveries(sqlOver(db));
+      const owed = new AgentDeliveries(makeSql(db));
 
       owed.add('gone-actor', { id: 'orphan-task', input: { kind: 'turn', text: 'brief' }, authorship: 'hirer' });
     } finally {
@@ -2649,7 +2649,7 @@ describe('LocalAgentHost — the driver lease', () => {
     const view = new Database(dbPath, { readonly: true });
 
     try {
-      expect(new AgentDeliveries(sqlOver(view)).actors()).toEqual([]);
+      expect(new AgentDeliveries(makeSql(view)).actors()).toEqual([]);
     } finally {
       view.close();
     }

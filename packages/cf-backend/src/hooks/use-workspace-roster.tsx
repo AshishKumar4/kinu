@@ -15,11 +15,11 @@ import {
 import { rosterBucket, rosterMatches } from "@kinu.run/core";
 import type { AccountMemoryProposal } from "@kinu.run/core";
 import {
-  AccountMemoryFrameSchema, listWorkspaces, RosterFrameSchema, ROSTER_SOCKET_ROUTE,
+  AccountMemoryFrameSchema, getAccountMemory, listWorkspaces, RosterFrameSchema, ROSTER_SOCKET_ROUTE,
   type RosterCounts, type RosterEntry, type RosterFilterBucket, type RosterFrame, type RosterPage, type WorkspaceEntry,
 } from "@/lib/user-api";
 import { ApiError } from "@/lib/http";
-import { detach, renderThrownChain, tolerate, settleSync } from "@kinu.run/core/obs";
+import { detach, diagnostics, renderThrownChain, tolerate, settleSync } from "@kinu.run/core/obs";
 
 const ROSTER_PAGE = 50;
 
@@ -234,6 +234,21 @@ export function WorkspaceRosterProvider({ children, live = openRosterSocket }: {
   const listeners = useRef(new Set<FrameListener>());
   const [epoch, setEpoch] = useState(0);
   const [accountProposals, setAccountProposals] = useState<readonly AccountMemoryProposal[] | null>(null);
+  // Counts the socket's memory frames, so the first read cannot overwrite a newer frame.
+  const memoryFrames = useRef(0);
+
+  // What waits is read once, so a socket that never opens still shows it; every frame after is newer.
+  useEffect(() => {
+    const since = memoryFrames.current;
+    let current = true;
+
+    detach(Effect.matchCause(Effect.promise(getAccountMemory), {
+      onSuccess: (memory) => { if (current && memoryFrames.current === since) setAccountProposals(memory.pending); },
+      onFailure: (failed) => { diagnostics.event("account_memory.read_failed", { reason: renderThrownChain({ cause: Cause.squash(failed) }) }); },
+    }));
+
+    return () => { current = false; };
+  }, []);
 
   const subscribe = useCallback((listener: FrameListener): () => void => {
     listeners.current.add(listener);
@@ -279,6 +294,7 @@ export function WorkspaceRosterProvider({ children, live = openRosterSocket }: {
         const memory = v.safeParse(AccountMemoryFrameSchema, parsed);
 
         if (memory.success) {
+          memoryFrames.current += 1;
           setAccountProposals(memory.output.pending);
 
           return;

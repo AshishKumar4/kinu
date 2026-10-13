@@ -849,6 +849,24 @@ describe('sanitizeReturnTo (single strict implementation)', () => {
     expect(sanitizeReturnTo('', ORIGIN)).toBe('/');
   });
 
+  test('rejects a dot segment, spelled or encoded, that normalizes into a second leading slash', () => {
+    for (const next of ['/a/..//evil.example', '/a/%2e%2e//evil.example', '/a/%2E%2e//evil.example', '/a/b/../..//evil.example']) {
+      expect(sanitizeReturnTo(next, ORIGIN)).toBe('/');
+    }
+
+    // Decoded, these climb or double the slash for whatever reads the path next.
+    expect(sanitizeReturnTo('/a/%2e%2e%2f%2fevil.example', ORIGIN)).toBe('/');
+    expect(sanitizeReturnTo('/%5cevil.example', ORIGIN)).toBe('/');
+    expect(sanitizeReturnTo('/%2f%2fevil.example', ORIGIN)).toBe('/');
+    expect(sanitizeReturnTo('/%2e%2e/auth/logout', ORIGIN)).toBe('/');
+    expect(sanitizeReturnTo('/workspaces/a/../b', ORIGIN)).toBe('/workspaces/b');
+    expect(sanitizeReturnTo('/workspaces/my%20space', ORIGIN)).toBe('/workspaces/my%20space');
+  });
+
+  test('refuses a path no URL parser can read, rather than throwing', () => {
+    for (const next of ['//', '//evil.example:65536', '/a/..//', '/a/%2e%2e//']) expect(sanitizeReturnTo(next, ORIGIN)).toBe('/');
+  });
+
   test('rejects a tab or newline that a URL parser strips into another host', () => {
     expect(sanitizeReturnTo(decodeURIComponent('/%09/evil.example'), ORIGIN)).toBe('/');
     expect(sanitizeReturnTo(decodeURIComponent('/%0a/evil.example'), ORIGIN)).toBe('/');

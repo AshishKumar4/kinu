@@ -15,8 +15,8 @@ import {
   surfaceHasContent,
 } from '@kinu.run/core';
 import { BackgroundJobStore, openWorkspaceMainActor, PlanReviewStore, TaskListStore } from '@kinu.run/core';
-import { sqlOver } from '@kinu.run/test-utils';
 import { orchestratorHarness, workspaceFiles } from './helpers/actor-harness';
+import { wrapDatabase } from '@kinu.run/core/identity';
 
 
 const EMPTY_TREES: ReadonlyMap<string, ForkNode> = new Map();
@@ -186,7 +186,7 @@ describe('the presence read over real ledgers', () => {
   test('a completed task still counts — settled history is content', async () => {
     const { agent, db } = orchestratorHarness();
     await agent.activateActor();
-    const sql = sqlOver(db);
+    const sql = wrapDatabase(db).sql;
     const tasks = new TaskListStore(sql, openWorkspaceMainActor(sql), (write) => write());
     const [task] = tasks.add(['done already'], null, 1).added;
 
@@ -199,7 +199,7 @@ describe('the presence read over real ledgers', () => {
   test('a plan with zero tasks counts — the plan IS the content', async () => {
     const { agent, db } = orchestratorHarness();
     await agent.activateActor();
-    const sql = sqlOver(db);
+    const sql = wrapDatabase(db).sql;
     const plans = new PlanReviewStore(sql, openWorkspaceMainActor(sql));
     const submitted = plans.submit('default', [{ start: 1, content: '# Empty plan' }]);
 
@@ -211,7 +211,7 @@ describe('the presence read over real ledgers', () => {
   test('a settled job counts — its record is in the journal the tab draws', async () => {
     const { agent, db } = orchestratorHarness();
     await agent.activateActor();
-    const sql = sqlOver(db);
+    const sql = wrapDatabase(db).sql;
     const jobs = new BackgroundJobStore(sql, openWorkspaceMainActor(sql));
     jobs.create({
       id: 'bgjob-settled', kind: 'search', workMode: 'build',
@@ -225,7 +225,7 @@ describe('the presence read over real ledgers', () => {
   test('a changelog entry counts even once seen', async () => {
     const { agent, db } = orchestratorHarness();
     await agent.activateActor();
-    const sql = sqlOver(db);
+    const sql = wrapDatabase(db).sql;
     const actor = openWorkspaceMainActor(sql);
     void sql`INSERT OR REPLACE INTO scaffold_versions
       (actor_id, version, written_at, rationale, status)

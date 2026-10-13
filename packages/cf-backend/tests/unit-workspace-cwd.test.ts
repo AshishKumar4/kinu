@@ -14,13 +14,13 @@ import {
   type TestProgrammaticHost,
 } from './helpers/programmatic-host';
 import { clearPortCapability } from '@nimbus-sh/worker/port-capability';
-import { inlineWorkspaceStorage } from '@kinu.run/core/identity';
+import { inlineWorkspaceStorage, wrapDatabase } from '@kinu.run/core/identity';
 import { Effect } from 'effect';
 import {
   createShellSession, DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable, nimbusSessionShell,
   withApprovalGatedShell, type NimbusSandboxHandle,
 } from '@kinu.run/core';
-import { createTestActors, sqlOver } from '@kinu.run/test-utils';
+import { createTestActors } from '@kinu.run/test-utils';
 
 const databases: Database[] = [];
 
@@ -273,7 +273,7 @@ describe('an approval in a hosted named session', () => {
 
     const db = new Database(':memory:');
     databases.push(db);
-    const sql = sqlOver(db);
+    const sql = wrapDatabase(db).sql;
     const execRaw = (query: string) => { db.exec(query); };
 
     initDeferredApprovalsTable(execRaw);

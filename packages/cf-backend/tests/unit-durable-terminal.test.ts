@@ -13,7 +13,6 @@ import {
   type TerminalEffectName, type TerminalEffectPhase,
 } from '@kinu.run/core';
 import { createRecordingLogger } from '@kinu.run/core/obs';
-import { sqlOver } from '@kinu.run/test-utils';
 import {
   agentWakes, chatSessionTurns, driveUntil, ledgerOver, mainRows, orchestratorHarness,
   reactivateOrchestratorHarness,
@@ -23,6 +22,7 @@ import {
 import { joinHarnessFibers } from './helpers/agents-sdk';
 import { catchNextOwingReport, loseNextHandoff } from './helpers/agent-facets';
 import type { SettledTurn, TurnHarness } from './helpers/turn-harness';
+import { wrapDatabase } from '@kinu.run/core/identity';
 
 type Harness = ActorHarness<HarnessOrchestratorAgent>;
 
@@ -184,7 +184,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
    */
   test('a fact update whose tombstone fails leaves no half-applied prefix', async () => {
     const harness = orchestratorHarness();
-    const facts = () => createFactsStore(sqlOver(harness.db), workspaceMainActor(harness.db));
+    const facts = () => createFactsStore(wrapDatabase(harness.db).sql, workspaceMainActor(harness.db));
     facts().upsert('deploy_target', 'staging', { confidence: 0.6 });
     turns(harness).open('u-one');
     await turns(harness).settle({ messageId: 'a-one' });
@@ -380,7 +380,7 @@ describe("an agent's reports reach its workspace newest first", () => {
 
     laterBy(1);
     const restarted = await reactivateOrchestratorHarness(harness.db);
-    const owes = () => new AgentReports(sqlOver(restarted.db)).holding().includes(main) || agentWakes(restarted.db).includes(main);
+    const owes = () => new AgentReports(wrapDatabase(restarted.db).sql).holding().includes(main) || agentWakes(restarted.db).includes(main);
     const { db } = await mainRows(restarted);
     const handedOver = () => db.query("SELECT 1 FROM terminal_effects WHERE effect_key LIKE 'v1:workspace_settle:%'").get() === null;
 
@@ -485,7 +485,7 @@ describe('mid-turn captures are credited to the turn only when it answered', () 
 describe('a turn releases its tool claims only when no response can still run', () => {
   /** A tool call claimed and unsettled: the state a still-executing turn leaves. */
   function claimTool(harness: Harness, turnId: string, callId: string): void {
-    claimToolEffect(sqlOver(harness.db), workspaceMainActor(harness.db), { turnId, runId: 'run-1', callId, digest: 'harness-tool-digest' });
+    claimToolEffect(wrapDatabase(harness.db).sql, workspaceMainActor(harness.db), { turnId, runId: 'run-1', callId, digest: 'harness-tool-digest' });
   }
 
   const released = [

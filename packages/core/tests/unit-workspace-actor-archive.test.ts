@@ -2,8 +2,8 @@ import { seedTranscriptEntry } from '@kinu.run/test-utils';
 // One SQL snapshot is the workspace for every actor (open-38); the archive declares its roster's actor
 // count and restore refuses a rebuilt roster that disagrees.
 import { describe, test, expect } from 'bun:test';
-import { Database, type SQLQueryBindings } from 'bun:sqlite';
-import { makeSqlExec } from './helpers';
+import { Database } from 'bun:sqlite';
+import { makeSql, makeSqlExec } from './helpers';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 import { restoreWorkspaceArchive, writeWorkspaceArchive } from '../src/identity/archive';
@@ -11,7 +11,7 @@ import { SessionHistory } from '../src/session/history';
 import { readSessionTranscript, type SessionTranscriptReader } from '../src/session/transcript';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import type { ActorHandle } from '../src/identity/actor-handle';
-import type { SqlExecutor, SqlValue } from '../src/types/primitives';
+import type { SqlExecutor } from '../src/types/primitives';
 
 interface Workspace {
   readonly db: Database;
@@ -20,19 +20,9 @@ interface Workspace {
   readonly main: ActorHandle;
 }
 
-/** Local rather than test-utils' `sqlOver`: that pulls the core barrel and with it the context plane. */
-function sqlOver(db: Database): SqlExecutor {
-  return <Row = unknown>(strings: TemplateStringsArray, ...values: readonly SqlValue[]): Row[] => {
-    const query = strings.reduce((acc, part, index) => acc + part + (index < values.length ? '?' : ''), '');
-    const bound = values.map((value) => (value instanceof ArrayBuffer ? new Uint8Array(value) : value));
-
-    return db.prepare<Row, SQLQueryBindings[]>(query).all(...bound);
-  };
-}
-
 function workspace(): Workspace {
   const db = new Database(':memory:');
-  const sql = sqlOver(db);
+  const sql = makeSql(db);
   initWorkspaceSchema({ execRaw: (ddl) => { db.exec(ddl); }, sql, exec: makeSqlExec(db), transactionSync: (write) => db.transaction(write)() });
   const workspaceId = crypto.randomUUID();
   void sql`INSERT INTO workspace_identity (id, name) VALUES (${workspaceId}, 'hosted')`;
@@ -98,7 +88,7 @@ describe('a workspace snapshot covers every actor', () => {
     const target = new Database(':memory:');
     const restored = await restoreWorkspaceArchive(makeSqlExec(target), lines);
     expect(restored.actors).toBe(3);
-    const there = sqlOver(target);
+    const there = makeSql(target);
     expect(there<{ n: number }>`SELECT COUNT(*) AS n FROM workspace_actors`[0]?.n).toBe(3);
 
     for (const [actor, text, runId, version] of [
@@ -134,7 +124,7 @@ describe('a workspace snapshot covers every actor', () => {
     const target = new Database(':memory:');
     const restored = await restoreWorkspaceArchive(makeSqlExec(target), lines);
     expect(restored.actors).toBe(2);
-    expect(await spoken(sqlOver(target), gone.actorId)).toBe('beta said this before it was dismissed');
+    expect(await spoken(makeSql(target), gone.actorId)).toBe('beta said this before it was dismissed');
   });
 
   test('an archive that lost one actor is refused even when its row total agrees', async () => {

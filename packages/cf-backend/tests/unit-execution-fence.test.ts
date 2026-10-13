@@ -7,8 +7,8 @@
  */
 import { expect, test } from 'bun:test';
 import { TurnFences } from '@kinu.run/core';
+import { wrapDatabase } from '@kinu.run/core/identity';
 import type { TurnBound } from '../src/agent-facet/agent-turn';
-import { sqlOver } from '@kinu.run/test-utils';
 import { catalogTurn, gatewayWorkspace, type StartedHarness } from './helpers/actor-harness';
 import { holdNextRunDelivery } from './helpers/agent-facets';
 import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun } from './helpers/platform-gateway';
@@ -48,7 +48,7 @@ function held() {
 
 /** The capability the running run's calls carry: the opening its preparation made at the workspace. */
 function runningCapability(workspace: StartedHarness, actorId: string): TurnBound {
-  const opening = new TurnFences(sqlOver(workspace.db)).row(actorId);
+  const opening = new TurnFences(wrapDatabase(workspace.db).sql).row(actorId);
 
   if (opening === null) throw new Error(`the run of ${actorId} opened nothing`);
 

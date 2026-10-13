@@ -5,8 +5,8 @@ import {
   recordExploration,
   type ExplorationWrite, type Floor, type ObjectiveIdentity, type PublicationState,
 } from '@kinu.run/core';
-import { sqlOver } from '@kinu.run/test-utils';
 import { orchestratorHarness, workspaceMainActor } from './helpers/actor-harness';
+import { wrapDatabase } from '@kinu.run/core/identity';
 
 const OPEN: PublicationState = { kind: 'open' };
 
@@ -61,7 +61,7 @@ function write(over: Partial<ExplorationWrite>): ExplorationWrite {
 function seededWorkspace() {
   const harness = orchestratorHarness();
   // The harness's own database: a second connection would seed another store.
-  const sql = sqlOver(harness.db);
+  const sql = wrapDatabase(harness.db).sql;
   // `listRecordObjectives` answers as this actor; rows under any other read back as an empty page.
   const actor = workspaceMainActor(harness.db);
 

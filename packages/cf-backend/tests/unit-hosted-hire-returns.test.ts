@@ -4,7 +4,6 @@
  * agents a stopped agent hired.
  */
 import { expect, test } from 'bun:test';
-import { sqlOver } from '@kinu.run/test-utils';
 import { SubordinateRosterStore, actorConnectionTag } from '@kinu.run/core';
 import { createRecordingLogger, KinuError, setDiagnosticsSink } from '@kinu.run/core/obs';
 import { makeSqlExec } from '../../core/tests/helpers';
@@ -13,6 +12,7 @@ import {
   actorOver, agentSql, catalogTurn, driveUntil, gatewayWorkspace, hostedSubordinateHarness, runDelegatedTask, wakeForDelegatedTask, workspaceMainActor,
 } from './helpers/actor-harness';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun } from './helpers/platform-gateway';
+import { wrapDatabase } from '@kinu.run/core/identity';
 
 /** A model call's own user turns, without the runtime's context blocks (which list other agents' briefs). */
 const openingOf = (run: RecordedGatewayRun): string => JSON.stringify(requestOf(run).messages.filter((message) =>
@@ -57,7 +57,7 @@ async function helperWorkspace(respond: (run: RecordedGatewayRun) => Response | 
     name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate',
   });
 
-  const sql = sqlOver(workspace.db);
+  const sql = wrapDatabase(workspace.db).sql;
 
   // A hire's runs are in its own database.
   const count = (actorId: string, type: 'run_start' | 'run_end'): number => agentSql(workspace, actorId)<{ n: number }>`
@@ -219,7 +219,7 @@ test("a task agent does not settle while more input is queued for it: its answer
   });
 
   const workspace = gatewayWorkspace(gateway);
-  const sql = sqlOver(workspace.db);
+  const sql = wrapDatabase(workspace.db).sql;
   await workspace.agent.setSoul('# Purpose\n\nDo each task asked.');
 
   const turn = catalogTurn(workspace.agent, 'Hire a helper.');
@@ -260,7 +260,7 @@ test("an agent the owner added keeps its own Stop: a root Stop skips it, and its
   });
 
   const workspace = gatewayWorkspace(gateway);
-  const sql = sqlOver(workspace.db);
+  const sql = wrapDatabase(workspace.db).sql;
   await workspace.agent.setSoul('# Purpose\n\nDo each task asked.');
   const { subordinate } = await workspace.agent.createSubordinateAgent();
   const added = subordinate.actorId ?? '';
@@ -300,7 +300,7 @@ test("archiving an agent the owner added retires the durable agent it hired", as
   });
 
   const workspace = gatewayWorkspace(gateway);
-  const sql = sqlOver(workspace.db);
+  const sql = wrapDatabase(workspace.db).sql;
   await workspace.agent.setSoul('# Purpose\n\nDo each task asked.');
   const { subordinate } = await workspace.agent.createSubordinateAgent();
   const added = subordinate.actorId ?? '';
@@ -401,7 +401,7 @@ test("a Stop skips a turn the stopped agent's runner had already picked up", asy
     return chatCompletion(run, 'ok');
   });
 
-  const sql = sqlOver(workspace.db);
+  const sql = wrapDatabase(workspace.db).sql;
   const parent = sql<{ id: string }>`SELECT actor_id AS id FROM workspace_actors WHERE actor_id = ${middleId}`[0]?.id ?? '';
 
   // Both delivered: the first runs, and the second waits in the agent's own queue behind it.

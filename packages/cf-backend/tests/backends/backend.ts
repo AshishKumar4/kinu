@@ -9,7 +9,7 @@ import { copyFileSync, cpSync } from 'node:fs';
 import type { LanguageModel } from 'ai';
 import { type ActorHandle, type SleepTimeUpdate, type CheckpointTurnMeta, type EvolutionChangelogView, type LLMProviderConfig, type RefinementRequestView, type SessionHistory, type SqlExecutor, type WorkMode } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
-import { scratchDir, scratchPath, scriptedTurnModel, sqlOver, type ScriptedTurnResult, workspaceDatabase } from '@kinu.run/test-utils';
+import { scratchDir, scratchPath, scriptedTurnModel, type ScriptedTurnResult, workspaceDatabase } from '@kinu.run/test-utils';
 import {
   actorOverWorkspace, agentHistory, mainDatabase, orchestratorHarness, scriptedSleepTime, sentTurn, workspaceFiles, workspaceMainActor,
 } from '../helpers/actor-harness';
@@ -23,6 +23,7 @@ import { createHostCheckpoints } from '../../../cli-backend/src/checkpoints';
 import { createLocalModelResolver, type LocalModelResolver } from '../../../cli-backend/src/model-resolver';
 import { openWorkspaceCLI } from '../../../cli-backend/src/open';
 import { workspaceHome } from '../../../cli-backend/src/runtime';
+import { wrapDatabase } from '@kinu.run/core/identity';
 
 export const TEST_BACKEND_ENV = 'KINU_TEST_BACKEND';
 
@@ -171,11 +172,11 @@ async function cloudflare(opens: BackendOpening): Promise<SharedBackend> {
 
   return {
     name: 'cf',
-    sql: sqlOver(db),
+    sql: wrapDatabase(db).sql,
     actor,
     files: workspaceFiles(agent),
     history: main.history,
-    chat: { sql: sqlOver(mainDatabase(harness)), actor: main.actor },
+    chat: { sql: wrapDatabase(mainDatabase(harness)).sql, actor: main.actor },
     snapshot: (dir, turn) => daemon.snapshot({ agent: WORKSPACE, dir, ...turn }),
     holdTurn: (text, mode) => gate.hold(() => sentTurn(agent, text, crypto.randomUUID(), mode)),
     sleepTime: (answer, enabled) => {

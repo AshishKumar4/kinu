@@ -13,8 +13,8 @@ import {
   type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 import { RunEventRecorder } from '@kinu.run/core';
-import { sqlOver } from '@kinu.run/test-utils';
 import { socketConnection } from './helpers/bindings';
+import { wrapDatabase } from '@kinu.run/core/identity';
 
 function scriptedAnswer(text: string): LanguageModel {
   return scriptedTurnModel({ doGenerate: () => ({
@@ -133,7 +133,7 @@ describe('a chat request through the production gate', () => {
     await dead.agent.activateActor();
 
     // A run_start with no run_end from the dying activation; the reconcile on wake seals it.
-    new RunEventRecorder(sqlOver(dead.db), workspaceMainActor(dead.db)).emit('run-dead-activation', {
+    new RunEventRecorder(wrapDatabase(dead.db).sql, workspaceMainActor(dead.db)).emit('run-dead-activation', {
       type: 'run_start', agentId: 'harness-actor', caused_by: 'chat',
       userMessage: 'the turn the last process died inside',
     });
@@ -149,7 +149,7 @@ describe('a chat request through the production gate', () => {
     agent.harnessOpenFleetWindow();
     await agent.terminalRetryPass();
 
-    expect(new RunEventRecorder(sqlOver(dead.db), workspaceMainActor(dead.db)).unterminatedRuns()).toEqual([]);
+    expect(new RunEventRecorder(wrapDatabase(dead.db).sql, workspaceMainActor(dead.db)).unterminatedRuns()).toEqual([]);
     expect(fleetRowKinds(agent)).not.toContain('turn');
   });
 
