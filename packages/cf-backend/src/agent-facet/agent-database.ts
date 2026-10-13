@@ -13,7 +13,7 @@ import {
   type SessionTranscriptReader, type SubordinateInspectionResult, type SubordinateReportLedger, type ModelPricing, type SqlExecutor,
   type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HeadReport, type HostedActor,
   type Executor, type JsonObject, type NimbusSandboxFiles, type SqlValue, WORKSPACE_ROOT, cloudPlanes, answersForDrainTurns,
-  initPendingSendTables, initTerminalEffectTable, PendingSendStore, contextFill, announcementOf, classifyRunEnd, closeTurnRun, TurnReports,
+  initPendingSendTables, initTerminalEffectTable, PendingSendStore, contextFill, announcementOf, TurnReports,
   PlanReviewStore, OwnerQuestionStore, AgentSequence, TurnFactsStore, type PlanReview, type TurnFacts,
   forkArtifactPath, localForkConversationSource, localForkConversationTarget, type ForkConversationSource, type ForkConversationTarget,
   InProcessDeliveries, type DeliveryAnswer, type OwedDelivery, holdConfig, holdRunHeads,
@@ -630,15 +630,8 @@ export class AgentDatabase {
       hosted: host.hosted,
     });
 
-    // A stalled turn's run is closed, so the agent's chat does not take it up again when it next opens.
-    for (const turn of recovered.stalled) {
-      const { eventRecorder } = host.bindStores(turn.reference).stores;
-      const open = eventRecorder.openTurn();
-
-      if (open?.turn.turnId !== turn.claim.turnId) continue;
-      closeTurnRun(eventRecorder, open.runId, { turnIndex: 0, ...classifyRunEnd({ completed: false, interrupted: false, errorText: 'stalled: cut off at one step too many times' }) });
-    }
-
+    // A stalled turn's claim is settled; its run stays open for the agent's chat, which closes it as it next opens, with
+    // the input it answered (`ChatSession.endTurn`), so no later start runs its words again.
     // Named for the hirer's assignment row the turn answered, which its retirement dismisses.
     return {
       stalled: recovered.stalled.map((turn) => ({ turnId: announcementOf(turn.claim.turnId), workMode: turn.claim.workMode })),
