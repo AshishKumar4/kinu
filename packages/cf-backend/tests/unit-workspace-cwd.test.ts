@@ -114,39 +114,29 @@ describe('hosted workspace actor shell state', () => {
     });
   });
 
-  // The approval read's own command (surface-cuts' SESSION_STATE): values that differ only in a lone UTF-16 surrogate
-  // are kept apart by the shell, and must be listed apart too, or one approval covers both (NIMBUS-ASKS #52).
-  test('a named shell holding U+D800 and one holding U+D801 digest differently; equal values digest alike', async () => {
+  // A named shell's listing of its state tells apart what the shell keeps apart, so a read of it (an approval's) never
+  // takes one state for another: values, or names, that differ only in a lone UTF-16 surrogate (NIMBUS-ASKS #52).
+  test('a named shell lists apart values and names the shell keeps apart, and alike what is the same', async () => {
     const storage = openWorkspaceDatabase();
     const workspace = await NimbusWorkspace.create({ ...storage, generation: 1 });
     const box = sdkBox(workerHost(workspace, new Map()));
-    const state = `( pwd | sha256sum; export '$=0'; set ) | sha256sum`;
+    // `$` is the only variable two shells in the same state list differently.
+    const listing = `( export '$=0'; set )`;
 
     const holding = async (shellId: string, value: string) => {
       await box.exec('export A="$B"', { shellId, env: { B: value } });
 
-      return (await box.exec(state, shell(shellId))).stdout;
+      return (await box.exec(listing, shell(shellId))).stdout;
     };
 
-    const low = await holding('agent:low', '\uD800');
-    const high = await holding('agent:high', '\uD801');
+    const named = async (name: string) => (await box.exec(listing, { shellId: 'agent:names', env: { [name]: 'same' } })).stdout;
 
-    expect(await box.exec(`case "$A" in "$B") echo same;; *) echo apart;; esac`, { shellId: 'agent:low', env: { B: '\uD801' } }))
+    expect(await box.exec(`case "$A" in "$B") echo same;; *) echo apart;; esac`, { env: { A: '\uD800', B: '\uD801' } }))
       .toMatchObject({ stdout: 'apart\n' });
-    expect(low).not.toBe(high);
-    expect(await holding('agent:low-again', '\uD800')).toBe(low);
-  });
-
-  // The same for a name: a variable named with a lone surrogate lists apart from its neighbour (NIMBUS-ASKS #52).
-  test('names that differ only in a lone surrogate digest differently', async () => {
-    const storage = openWorkspaceDatabase();
-    const workspace = await NimbusWorkspace.create({ ...storage, generation: 1 });
-    const box = sdkBox(workerHost(workspace, new Map()));
-    const state = `( pwd | sha256sum; export '$=0'; set ) | sha256sum`;
-    const named = async (name: string) => (await box.exec(state, { shellId: 'agent:names', env: { [name]: 'same' } })).stdout;
-
-    expect(await named('V\uD800')).not.toBe(await named('V\uD801'));
-    expect(await named('V\uD800')).toBe(await named('V\uD800'));
+    expect(await holding('agent:low', '\uD800')).not.toBe(await holding('agent:high', '\uD801'));
+    expect(await holding('agent:low-again', '\uD800')).toBe(await holding('agent:low', '\uD800'));
+    expect(await named('N\uD800')).not.toBe(await named('N\uD801'));
+    expect(await named('N\uD800')).toBe(await named('N\uD800'));
   });
 
   test('durable shell state survives worker reconstruction', async () => {

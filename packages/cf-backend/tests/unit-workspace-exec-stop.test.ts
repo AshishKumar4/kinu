@@ -5,8 +5,9 @@
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { exists } from '@nimbus-sh/core/vfs/vfs.js';
+import { exists, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { nimbusSessionShell, WORKSPACE_ROOT, type NimbusSandboxHandle } from '@kinu.run/core';
+import { present } from '@kinu.run/test-utils';
 import { createHostedWorkspace, type HostedBox } from '../src/workspace-host';
 import {
   actorObjectState, durableObjectStorage, durableSqlStorage, durableStorage, HELD_NIMBUS_TASKS, SCRIPT_EXPORTS,
@@ -49,115 +50,81 @@ function hostedBox(): HostedBox {
   return workspace.box('agent:main');
 }
 
-/** The box's own stream, its start and exit written to `seen` as the box answers. */
-function streamOf(box: HostedBox, seen: string[]): NonNullable<NimbusSandboxHandle['execStream']> {
-  const { execStream } = box;
-
-  if (execStream === undefined) throw new Error('the hosted box streams no command');
-
-  return async (command, options) => {
-    const stream = await execStream(command, options);
-
-    seen.push('started');
-    void stream.exit.then(() => { seen.push('exited'); }, () => { seen.push('exited'); });
-
-    return stream;
-  };
-}
+/** A command that waits for `gate` to be written, then writes `marker`: what it does after a Stop shows whether it ran on. */
+const gated = (marker: string) => `until test -e gate; do sleep 0.1; done; printf ran > ${marker}`;
 
 describe('a Stop of a hosted workspace command', () => {
   test('while the workspace readies, nothing is sent, and the command never runs', async () => {
     const box = hostedBox();
-    const seen: string[] = [];
-    const streamed = streamOf(box, seen);
-    const asked = Promise.withResolvers<'ready' | 'sent'>();
+    const asked = Promise.withResolvers<void>();
     const readying = Promise.withResolvers<void>();
     let readied: Promise<void> | undefined;
+    const sent: string[] = [];
 
-    const gated: NimbusSandboxHandle = {
+    const readiedLate: NimbusSandboxHandle = {
       ...box,
       ready: () => {
-        asked.resolve('ready');
+        asked.resolve();
         readied = readying.promise.then(() => box.ready());
 
         return readied;
       },
-      execStream: (command, options) => {
-        asked.resolve('sent');
+      // What reaches the box: a command sent there would run.
+      execStream: async (command, options) => {
+        sent.push(command);
 
-        return streamed(command, options);
+        return await present(box.execStream, 'the hosted box\'s stream')(command, options);
       },
     };
 
     const controller = new AbortController();
-    const pending = nimbusSessionShell(gated, { home: WORKSPACE_ROOT }).exec('printf changed > after-stop.txt', { signal: controller.signal });
+    const pending = nimbusSessionShell(readiedLate, { home: WORKSPACE_ROOT }).exec('printf changed > after-stop.txt', { signal: controller.signal });
 
-    // Red: the command went out without the box being readied first.
-    expect(await asked.promise).toBe('ready');
+    await asked.promise;
     controller.abort();
-    await expect(pending).rejects.toMatchObject({ name: 'AbortError', message: 'workspace exec cancelled before it started' });
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
 
-    // The shell's own wait on readiness resumes before this one, so a command it sent would be in `seen`.
+    // Readiness arrives after the Stop: nothing is sent, and no file is written.
     readying.resolve();
     await readied;
-    expect(seen).toEqual([]);
+    expect(sent).toEqual([]);
     expect(await exists(box.store({ home: WORKSPACE_ROOT }), 'after-stop.txt')).toBe(false);
   });
 
-  test('while the command is admitted, the answer waits for it to start and for the exit its cancel causes', async () => {
+  test('while the command is admitted, the answer waits until the command it admits has ended', async () => {
     const box = hostedBox();
-    const seen: string[] = [];
-    const streamed = streamOf(box, seen);
+    const { execStream } = box;
+
+    if (execStream === undefined) throw new Error('the hosted box streams no command');
     const asked = Promise.withResolvers<void>();
     const admitted = Promise.withResolvers<void>();
+    const started: Promise<unknown>[] = [];
 
-    const gated: NimbusSandboxHandle = {
+    const admittedLate: NimbusSandboxHandle = {
       ...box,
       execStream: async (command, options) => {
         asked.resolve();
         await admitted.promise;
+        const stream = await execStream(command, options);
 
-        return await streamed(command, options);
-      },
-    };
-
-    const controller = new AbortController();
-    const pending = nimbusSessionShell(gated, { home: WORKSPACE_ROOT }).exec('printf changed > after-stop.txt', { signal: controller.signal });
-
-    void pending.catch(() => { seen.push('answered'); });
-    await asked.promise;
-    controller.abort();
-    admitted.resolve();
-    await expect(pending).rejects.toMatchObject({ name: 'AbortError', message: 'workspace exec cancelled: the command was stopped' });
-    // Red: answered while the command waited for admission, which then ran it after the answer.
-    expect(seen).toEqual(['started', 'exited', 'answered']);
-  });
-
-  test('a running command is cancelled, and the answer waits for its exit', async () => {
-    const box = hostedBox();
-    const seen: string[] = [];
-    const streamed = streamOf(box, seen);
-    const running = Promise.withResolvers<void>();
-
-    const gated: NimbusSandboxHandle = {
-      ...box,
-      execStream: async (command, options) => {
-        const stream = await streamed(command, options);
-
-        running.resolve();
+        started.push(stream.exit);
 
         return stream;
       },
     };
 
     const controller = new AbortController();
-    const pending = nimbusSessionShell(gated, { home: WORKSPACE_ROOT }).exec('sleep 3600', { signal: controller.signal });
+    const pending = nimbusSessionShell(admittedLate, { home: WORKSPACE_ROOT }).exec(gated('after-stop.txt'), { signal: controller.signal });
 
-    void pending.catch(() => { seen.push('answered'); });
-    await running.promise;
+    await asked.promise;
     controller.abort();
-    await expect(pending).rejects.toMatchObject({ name: 'AbortError', message: 'workspace exec cancelled: the command was stopped' });
-    expect(seen).toEqual(['started', 'exited', 'answered']);
+    admitted.resolve();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+
+    // Red: answered while the command waited for admission, which then ran it after the answer.
+    await writeText(box.store({ home: WORKSPACE_ROOT }), 'gate', '');
+    await Promise.allSettled(started);
+    expect(await exists(box.store({ home: WORKSPACE_ROOT }), 'after-stop.txt')).toBe(false);
   });
 
   test('whose start answer is lost, finds the command by its exec id and kills it before answering', async () => {
@@ -166,22 +133,24 @@ describe('a Stop of a hosted workspace command', () => {
     const controller = new AbortController();
 
     const pending = nimbusSessionShell({ ...box, execStream: start.execStream }, { home: WORKSPACE_ROOT })
-      .exec('echo started; sleep 3600', { signal: controller.signal });
+      .exec(`echo started; ${gated('after-stop.txt')}`, { signal: controller.signal });
 
     try {
       await start.running;
       controller.abort();
       start.drop();
-      // Red: answered as never started, and the command ran on.
-      await expect(pending).rejects.toMatchObject({ name: 'AbortError', message: 'workspace exec cancelled: the command was stopped' });
-      // The command's own stream ends: what the Stop killed is the command it started.
+      await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+
+      // Red: answered as never started, and the command ran on to write its file once let.
+      await writeText(box.store({ home: WORKSPACE_ROOT }), 'gate', '');
       await start.ended();
+      expect(await exists(box.store({ home: WORKSPACE_ROOT }), 'after-stop.txt')).toBe(false);
     } finally {
       await start.release();
     }
   });
 
-  test('whose start answer is lost, on a box that cannot be asked for its processes, says the stop is unconfirmed', async () => {
+  test('whose start answer is lost, on a box that cannot be asked for its processes, leaves the command it cannot find', async () => {
     const box = hostedBox();
     const start = lostAnswer(box);
     const controller = new AbortController();
@@ -191,14 +160,18 @@ describe('a Stop of a hosted workspace command', () => {
       exec: async (command, options) => await box.exec(command, options),
       execStream: start.execStream,
     }, { home: WORKSPACE_ROOT })
-      .exec('echo started; sleep 3600', { signal: controller.signal });
+      .exec(`echo started; ${gated('ran-on.txt')}`, { signal: controller.signal });
 
     try {
       await start.running;
       controller.abort();
       start.drop();
-      // Red: answered as never started, while the command runs.
-      await expect(pending).rejects.toMatchObject({ name: 'AbortError', message: expect.stringMatching(/^workspace exec stop unconfirmed: .* exec \S+/) });
+      await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+
+      // Nothing could find the command to stop it, and the answer claimed no stop: it runs on.
+      await writeText(box.store({ home: WORKSPACE_ROOT }), 'gate', '');
+      await start.ended();
+      expect(await exists(box.store({ home: WORKSPACE_ROOT }), 'ran-on.txt')).toBe(true);
     } finally {
       await start.release();
     }

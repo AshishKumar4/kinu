@@ -25,22 +25,34 @@ afterAll(() => {
   }
 });
 
-test('a Replace pressed after browsing elsewhere writes the file the conflict named, over the revision it named', async () => {
-  const puts: Array<{ target: string; revision: VfsRevision | undefined }> = [];
+/** Folders of files, each with its revision: a write with no revision is a create, one with a revision lands over it. */
+function revisionedFolders(seed: Record<string, string>) {
+  const files = new Map(Object.entries(seed).map(([path, text]) => [path, { text, revision: 1 }]));
 
-  const put = async (target: string, _file: File, revision?: VfsRevision): Promise<void> => {
-    puts.push({ target, revision });
+  const put = async (target: string, file: File, revision?: VfsRevision): Promise<void> => {
+    const held = files.get(target);
 
-    if (revision === undefined) throw new FileWriteConflict('rev-7');
+    if (held !== undefined && held.revision !== revision) throw new FileWriteConflict(held.revision);
+
+    files.set(target, { text: await file.text(), revision: (held?.revision ?? 0) + 1 });
   };
 
+  return { put, text: (path: string) => files.get(path)?.text, write: (path: string, text: string) => {
+    const held = files.get(path);
+
+    files.set(path, { text, revision: (held?.revision ?? 0) + 1 });
+  } };
+}
+
+test.each([false, true])('a Replace after browsing elsewhere writes the dropped file where it was dropped (edited meanwhile: %p)', async (edited) => {
+  const folders = revisionedFolders({ '/home/main/a.txt': 'was here', '/home/other/a.txt': 'the other folder\'s' });
   const listens = { addEventListener() {}, removeEventListener() {} };
   const container: Element = Object.create(null, Object.getOwnPropertyDescriptors({ nodeType: 1, tagName: 'DIV', namespaceURI: null, ownerDocument: listens, ...listens }));
   const root = createRoot(container);
   let current: Uploads | undefined;
 
   function Probe(): null {
-    current = useUploads({ put, reload: async () => {} });
+    current = useUploads({ put: folders.put, reload: async () => {} });
 
     return null;
   }
@@ -51,16 +63,33 @@ test('a Replace pressed after browsing elsewhere writes the file the conflict na
     return current;
   };
 
-  await act(async () => { root.render(createElement(Probe)); });
-  await act(async () => { await uploads().upload([{ file: new File(['mine'], 'a.txt'), target: '/home/main/a.txt' }]); });
+  const held = (): Extract<Uploads['uploads'][number], { status: 'exists' }> => {
+    const [first] = uploads().uploads;
 
-  const [held] = uploads().uploads;
+    if (first?.status !== 'exists') throw new Error('expected the upload to wait for the owner');
 
-  if (held?.status !== 'exists') throw new Error('expected the upload to wait for the owner');
-  // The owner browses to another folder holding its own a.txt; nothing about the held upload follows them.
-  await act(async () => { await uploads().replace(held); });
+    return first;
+  };
 
-  expect(puts).toEqual([{ target: '/home/main/a.txt', revision: undefined }, { target: '/home/main/a.txt', revision: 'rev-7' }]);
-  expect(uploads().uploads).toEqual([]);
-  await act(async () => { root.unmount(); });
+  try {
+    await act(async () => { root.render(createElement(Probe)); });
+    await act(async () => { await uploads().upload([{ file: new File(['mine'], 'a.txt'), target: '/home/main/a.txt' }]); });
+    expect(folders.text('/home/main/a.txt')).toBe('was here');
+
+    // The owner browses to another folder holding its own a.txt; nothing about the held upload follows them. A save
+    // there meanwhile is not written over: the owner is asked again, over the newer bytes.
+    if (edited) {
+      folders.write('/home/main/a.txt', 'edited meanwhile');
+      await act(async () => { await uploads().replace(held()); });
+      expect(folders.text('/home/main/a.txt')).toBe('edited meanwhile');
+    }
+
+    await act(async () => { await uploads().replace(held()); });
+
+    expect(folders.text('/home/main/a.txt')).toBe('mine');
+    expect(folders.text('/home/other/a.txt')).toBe('the other folder\'s');
+    expect(uploads().uploads).toEqual([]);
+  } finally {
+    await act(async () => { root.unmount(); });
+  }
 });

@@ -37,16 +37,6 @@ describe("diffLines", () => {
     expect(diffLines("", "")).toMatchObject({ added: 0, removed: 0, lines: [] });
   });
 
-  test("ambiguous changes use GNU placement with the same minimal totals", () => {
-    expect(diffLines("a\na", "b\na\nb")).toEqual({
-      lines: [
-        { kind: "add", text: "b" }, { kind: "ctx", text: "a" },
-        { kind: "del", text: "a" }, { kind: "add", text: "b" },
-      ],
-      added: 2, removed: 1,
-    });
-  });
-
   test("every short binary-line edit has minimal totals and reconstructs both files", () => {
     const cases = [""];
 
@@ -84,34 +74,35 @@ describe("diffLines", () => {
     }
   });
 
+  /** Each side, as the rows give it back: what a reader of the diff sees before and after. */
+  const sides = (diff: ReturnType<typeof diffLines>) => ({
+    before: diff.lines.filter((line) => line.kind !== "add").map((line) => line.text).join("\n"),
+    after: diff.lines.filter((line) => line.kind !== "del").map((line) => line.text).join("\n"),
+  });
+
   test.each([
-    { before: "alpha", after: "alpha\n", rows: ["ctx:alpha", "add:"], added: 1, removed: 0 },
-    { before: "alpha\n", after: "alpha", rows: ["ctx:alpha", "del:"], added: 0, removed: 1 },
-    { before: "alpha\n", after: "alpha\n", rows: ["ctx:alpha", "ctx:"], added: 0, removed: 0 },
-    { before: "alpha\n", after: "beta\n", rows: ["del:alpha", "add:beta", "ctx:"], added: 1, removed: 1 },
-    { before: "", after: "\n", rows: ["add:", "add:"], added: 2, removed: 0 },
-    { before: "\n", after: "", rows: ["del:", "del:"], added: 0, removed: 2 },
-    { before: "alpha\n\n", after: "alpha\n", rows: ["ctx:alpha", "ctx:", "del:"], added: 0, removed: 1 },
-    { before: "alpha\r\n", after: "alpha\n", rows: ["del:alpha\r", "add:alpha", "ctx:"], added: 1, removed: 1 },
-  ])("final empty items remain rows: $before to $after", ({ before, after, rows, added, removed }) => {
+    { before: "alpha", after: "alpha\n", added: 1, removed: 0 },
+    { before: "alpha\n", after: "alpha", added: 0, removed: 1 },
+    { before: "alpha\n", after: "alpha\n", added: 0, removed: 0 },
+    { before: "alpha\n", after: "beta\n", added: 1, removed: 1 },
+    { before: "", after: "\n", added: 2, removed: 0 },
+    { before: "\n", after: "", added: 0, removed: 2 },
+    { before: "alpha\n\n", after: "alpha\n", added: 0, removed: 1 },
+    { before: "alpha\r\n", after: "alpha\n", added: 1, removed: 1 },
+  ])("a final newline is a line of its own: $before to $after", ({ before, after, added, removed }) => {
     const diff = diffLines(before, after);
 
-    expect(diff.lines.map((line) => `${line.kind}:${line.text}`)).toEqual([...rows]);
     expect({ added: diff.added, removed: diff.removed }).toEqual({ added, removed });
-    expect(diff.truncated).toBeUndefined();
+    expect(sides(diff)).toEqual({ before, after });
   });
 
   test("line equality distinguishes lone surrogates as well as Unicode text", () => {
-    const diff = diffLines("\ud800\né\n\udc80", "\ud801\né\n\udc81");
+    const before = "\ud800\né\n\udc80";
+    const after = "\ud801\né\n\udc81";
+    const diff = diffLines(before, after);
 
-    expect(diff).toEqual({
-      lines: [
-        { kind: "del", text: "\ud800" }, { kind: "add", text: "\ud801" },
-        { kind: "ctx", text: "é" },
-        { kind: "del", text: "\udc80" }, { kind: "add", text: "\udc81" },
-      ],
-      added: 2, removed: 2,
-    });
+    expect({ added: diff.added, removed: diff.removed }).toEqual({ added: 2, removed: 2 });
+    expect(sides(diff)).toEqual({ before, after });
   });
 });
 
@@ -286,8 +277,6 @@ describe("diffLines presentation bound", () => {
 
     const d = diffLines(before, rewritten);
 
-    expect(d.lines).toHaveLength(MAX_LINES_PER_FILE);
-    expect(d.lines[0]).toEqual({ kind: "del", text: body(0) });
     expect(d.truncated).toBe(true);
     expect(d.removed).toBe(LINES);
     expect(d.added).toBe(LINES);

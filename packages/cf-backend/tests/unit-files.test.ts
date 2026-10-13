@@ -299,10 +299,10 @@ describe("deleteExecutorPathOp", () => {
     expect("ok" in out).toBe(false);
     expect("error" in out && out.error).toContain("/home/main/build/deep");
     expect("error" in out && out.error).toContain("still present");
-    expect(out).toMatchObject({
-      removed: ["/home/main/build/deep/two.js", "/home/main/build/out.js"],
-      remaining: ["/home/main/build", "/home/main/build/deep"],
-    });
+
+    if (!("removed" in out) || !("remaining" in out)) throw new Error("the partial removal did not name its entries");
+    expect(new Set(out.removed)).toEqual(new Set(["/home/main/build/deep/two.js", "/home/main/build/out.js"]));
+    expect(new Set(out.remaining)).toEqual(new Set(["/home/main/build", "/home/main/build/deep"]));
     expect(files.has("/home/main/build/deep/two.js")).toBe(false);
     expect(dirs.has("/home/main/build/deep")).toBe(true);
     expect(files.has("/home/main/build/out.js")).toBe(false);

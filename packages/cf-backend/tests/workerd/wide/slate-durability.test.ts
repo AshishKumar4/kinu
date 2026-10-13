@@ -113,6 +113,35 @@ it('a slate refused for what it imports is built again once a directory above th
   expect(unlocked).toEqual({ before: 'bad_input', after: 'builds', says: 'unlocked' });
 });
 
+// The slate's own lib.ts is a link out of its tree: what it resolves to is what is built, and a repair out there,
+// wherever along the links it lands, builds it again.
+it.each([
+  ['the link\'s target is fixed', 'mkdir -p /home/main/linked && echo \'export const word = ;\' > /home/main/linked/lib.ts'
+    + ' && ln -s /home/main/linked/lib.ts /slates/linked/lib.ts',
+  'echo \'export const word = "linked";\' > /home/main/linked/lib.ts', 'linked'],
+  ['the link\'s target is written', 'ln -s /home/main/dangling/lib.ts /slates/dangling/lib.ts',
+    'mkdir -p /home/main/dangling && echo \'export const word = "dangling";\' > /home/main/dangling/lib.ts', 'dangling'],
+  ['a second link\'s target is written', 'mkdir -p /home/main/chained && ln -s /home/main/chained/alias.ts /slates/chained/lib.ts'
+    + ' && ln -s /home/main/chained/future/lib.ts /home/main/chained/alias.ts',
+  'mkdir -p /home/main/chained/future && echo \'export const word = "chained";\' > /home/main/chained/future/lib.ts', 'chained'],
+  ['a second link is pointed elsewhere', 'mkdir -p /home/main/alias && ln -s /home/main/alias/alias.ts /slates/alias/lib.ts'
+    + ' && ln -s /home/main/alias/future.ts /home/main/alias/alias.ts',
+  'echo \'export const word = "alias";\' > /home/main/alias/real.ts && rm /home/main/alias/alias.ts'
+    + ' && ln -s /home/main/alias/real.ts /home/main/alias/alias.ts', 'alias'],
+  ['a file where a directory belongs is replaced', 'mkdir -p /home/main/obstruct && echo blocked > /home/main/obstruct/block'
+    + ' && ln -s /home/main/obstruct/block/lib.ts /slates/obstruction/lib.ts',
+  'rm /home/main/obstruct/block && mkdir /home/main/obstruct/block && echo \'export const word = "obstruction";\' > /home/main/obstruct/block/lib.ts',
+  'obstruction'],
+  ['a link loop is broken', 'mkdir -p /home/main/loop && ln -s /home/main/loop/b /home/main/loop/a && ln -s /home/main/loop/a /home/main/loop/b'
+    + ' && ln -s /home/main/loop/a/lib.ts /slates/loop/lib.ts',
+  'rm /home/main/loop/a && mkdir /home/main/loop/a && echo \'export const word = "loop";\' > /home/main/loop/a/lib.ts', 'loop'],
+])('a slate whose lib.ts links out of its tree is built again once %s', async (_how, setup, repair, id) => {
+  const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName(`links-${id}`));
+  const seen = await subject.slateRepair({ workspace: `durability-links-${id}`, owner: 'durability-owner', id, imports: './lib.ts', setup, repair });
+
+  expect(seen).toEqual({ before: 'bad_input', after: 'builds', says: id });
+});
+
 it('a removed slate’s URL is dead even when a new app claims its port', async () => {
   const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('removed'));
 

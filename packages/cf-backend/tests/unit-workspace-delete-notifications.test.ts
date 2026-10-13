@@ -16,9 +16,11 @@ test('a file notification delivered after deletion creates no slate state', asyn
     const owner = '0123456789abcdef0123456789abcdef';
     const workspace = orchestratorHarness(undefined, { ownerUserId: owner });
     await workspace.started;
-    expect(listeners.length).toBeGreaterThan(0);
+
+    if (listeners.length === 0) throw new Error('no file notification was held to deliver late');
     await workspace.agent.quietForDeletion(owner);
     await workspace.agent.destroyAgent(owner);
+    // A deleted workspace's storage holds nothing, before the late notification and after it.
     expect(workspace.tableNames().filter((name) => name !== 'sqlite_sequence')).toEqual([]);
 
     for (const listener of listeners) listener([{ type: 'change', path: '/home/main/late.txt', timestamp: Date.now() }]);

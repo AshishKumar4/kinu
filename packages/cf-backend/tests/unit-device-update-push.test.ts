@@ -376,7 +376,7 @@ describe('the Devices read model carries the version and the served build', () =
       await expect(harness.userDO.deviceRpc(workspace, method, [...params], { agentName: 'previous-daemon-workspace' })).rejects.toMatchObject({ code: expect.any(String) });
     }
 
-    expect(harness.deviceFrames.length).toBe(sent);
+    expect(harness.deviceFrames.slice(sent)).toEqual([]);
   });
 
   test('a protocol-2 daemon whose owner turned updates off is refused outright', async () => {

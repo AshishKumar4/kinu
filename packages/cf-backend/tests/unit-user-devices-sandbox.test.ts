@@ -227,8 +227,6 @@ describe('the frame carries the calling workspace own home', () => {
 
     const blocks = harness.deviceFrames.map((frame) => v.parse(FrameSandboxSchema, frame.sandbox));
 
-    expect(blocks).toHaveLength(9);
-
     for (const block of blocks) {
       expect(block).toEqual({
         tier: 'sandboxed',

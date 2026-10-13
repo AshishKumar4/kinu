@@ -2,7 +2,6 @@ import { env } from 'cloudflare:workers';
 import { expect, it } from 'vitest';
 import * as v from 'valibot';
 import { SLATE_PAGE_PREAMBLE } from '@kinu.run/core';
-import { FACET_IMAGE_WRITE_SLICE_BYTES } from '@nimbus-sh/fabric/image-store.js';
 
 it('runs an authored class: the prototype is the surface and the reserved storage round-trips', async () => {
   const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('resident-class'));
@@ -91,20 +90,18 @@ it('reuses complete images and rebuilds an interrupted one at the same content a
     '}',
   ].join('\n');
 
-  const browser = `<!doctype html><html><body>${'café 界 𠮷'.repeat(FACET_IMAGE_WRITE_SLICE_BYTES / 8)}</body></html>`;
+  // A page larger than one write of an image, in characters of every UTF-8 width.
+  const browser = `<!doctype html><html><body>${'café 界 𠮷'.repeat(200_000)}</body></html>`;
   const boot = { source, browser, project: { main: 'server.ts', browser: 'index.html' } };
 
   try {
     await subject.start(boot);
-    const first = await subject.facetImageVersions();
-
     await subject.start(boot);
-    expect(await subject.facetImageVersions()).toEqual(first);
+    expect(await subject.call('which', [])).toEqual({ ok: true, value: 'image café 界 𠮷' });
 
     await subject.interruptApplicationImage();
     await subject.start(boot);
     expect(await subject.call('which', [])).toEqual({ ok: true, value: 'image café 界 𠮷' });
-    expect(await subject.facetImages()).toEqual(first.map((image) => image.name));
     const page = await subject.route('/');
 
     expect(page.status).toBe(200);
@@ -403,36 +400,4 @@ it('Slate compilation requires Nimbus credentialed EsbuildService reads', async 
   ].join('\n'), { uid: 1000, gid: 1000, groups: [], umask: 0o022 });
 
   expect(grouped.code).toBe('bad_input');
-});
-
-it('a build sees a file its tree links to from outside it', async () => {
-  const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('linked-inputs'));
-
-  expect(await subject.linkedBuildInputs()).toContain('/home/linked/lib.ts');
-});
-
-it('a build refused for a link whose target is not written yet watches the target, so writing it rebuilds the slate', async () => {
-  const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('dangling-inputs'));
-  const seen = await subject.danglingBuildInputs();
-
-  expect(seen.refused).toBe(true);
-  // Writing the target, or the directory it would be in, is a change to a path this build found missing.
-  expect(seen.missing).toEqual(expect.arrayContaining(['/home/dangling/lib.ts', '/home/dangling']));
-});
-
-it('a build refused through two links to a file not written yet is built again once that file is written', async () => {
-  const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('chained-inputs'));
-  const seen = await subject.chainedBuild();
-
-  expect(seen).toMatchObject({ first: 'refused', stale: ['chained'], second: 'built' });
-  // Where the whole chain leads, and the directory above it not written yet.
-  expect(seen.missing).toEqual(expect.arrayContaining(['/home/chained/future/lib.ts', '/home/chained/future']));
-});
-
-it.each(['alias', 'obstruction', 'loop'] as const)('a refusal cached through a %s outside the tree is built again once that is repaired', async (repair) => {
-  const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName(`repair-${repair}`));
-  const seen = await subject.repairedRefusal(repair);
-
-  console.log(`slate-refusal-retry ${repair}: ${seen.ms.toFixed(1)} ms`);
-  expect(seen).toMatchObject({ first: 'refused', second: 'built' });
 });

@@ -65,11 +65,9 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     ]);
   }
 
-  /** The platform's alarm delivery, which runs whichever of Nimbus's tasks are due; the tasks still pending after it. */
-  async wakeOnce(): Promise<string[]> {
+  /** The platform's alarm delivery, which runs whichever of Nimbus's tasks are due. */
+  async wakeOnce(): Promise<void> {
     await this.alarm();
-
-    return (await this.pendingNimbusTasks()).tasks.map((task) => task.id);
   }
 
   /** What the agent's next model step is told of slates that do not build. */
@@ -531,8 +529,8 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
   }
 
   /**
-   * A slate whose class imports `imports`, a workspace file outside its tree that `setup`, a shell command, leaves
-   * unbuildable; `repair` mends it without writing that file. Answers the preview after each, and what the slate says.
+   * A slate whose class imports `imports`, which `setup`, a shell command, leaves unbuildable, and `repair`, another,
+   * mends. Answers the preview after each, and what the slate says.
    */
   async slateRepair(input: { workspace: string; owner: string; id: string; imports: string; setup: string; repair: string }): Promise<SlateRepairSeen> {
     const target = await this.workspaceTarget(input.workspace);
@@ -651,8 +649,8 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     Date.now = platformNow;
   }
 
-  async wakeOnce(workspace: string): Promise<string[]> {
-    return (await this.workspaceTarget(workspace)).wakeOnce();
+  async wakeOnce(workspace: string): Promise<void> {
+    await (await this.workspaceTarget(workspace)).wakeOnce();
   }
 
   private async previewSocket(url: string): Promise<PreviewSocket | { refused: string }> {

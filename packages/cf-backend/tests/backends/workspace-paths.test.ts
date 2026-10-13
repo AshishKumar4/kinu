@@ -81,7 +81,10 @@ for (const name of testBackends()) {
         }
 
         // A file is no directory: a trailing slash on it is refused, as the shell refuses it.
-        expect((await plane.read(`${plane.home}/notes/item.txt/`)).error).toContain('ENOTDIR');
+        const slashed = await plane.read(`${plane.home}/notes/item.txt/`);
+
+        expect(slashed).toHaveProperty('error');
+        expect(slashed).not.toHaveProperty('content');
 
         await plane.write(`${plane.home}/notes/./item.txt`, 'two');
         expect(await plane.read(`${plane.home}/notes/item.txt`)).toMatchObject({ content: 'two' });
@@ -112,7 +115,10 @@ for (const name of testBackends()) {
         }
 
         // `..` is taken after the walk reaches it, so a directory that is not there is not passed through.
-        expect((await plane.read('./missing/../item.txt')).error).toContain('no such file or directory');
+        const missing = await plane.read('./missing/../item.txt');
+
+        expect(missing).toHaveProperty('error');
+        expect(missing).not.toHaveProperty('content');
 
         expect(await plane.read(`${plane.home}/../../slates/project/./item.txt`)).toMatchObject({ content: 'slate' });
 

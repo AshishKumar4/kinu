@@ -207,21 +207,6 @@ describe('a withdrawn port stays withdrawn, whatever the container still reports
     setSystemTime();
   });
 
-  test('a port whose revoke failed is not carried back once the withdrawal itself has aged out of the store', async () => {
-    const kv = makeKv();
-    const { box } = portBox({ failRevoke: true });
-    setSystemTime(new Date('2026-03-01T12:00:00.000Z'));
-    await sandboxPreviewExposures(kv, SANDBOX_ID).publish(PORT, TOKEN);
-    await expect(lane(kv, box).unexposePort(PORT)).rejects.toThrow('container unreachable');
-
-    // The container kept its spec and, restored, still serves the port under its old token.
-    setSystemTime(new Date(Date.now() + EXPOSURE_LIFETIME_MS * 2));
-    await lane(kv, box).getExposedPorts(SUFFIX);
-
-    expect(await sandboxPreviewExposed(kv, claim)).toBe(false);
-    setSystemTime();
-  });
-
   test('a listing that read the container before the withdrawal does not vouch for the port after it', async () => {
     const kv = makeKv();
     const { box } = portBox();

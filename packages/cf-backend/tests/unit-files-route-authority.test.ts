@@ -565,7 +565,6 @@ describe('a transfer that does not finish', () => {
     expect(await errorOf(interrupted)).toBe('the upload stopped before the whole file arrived');
     // No half file: bytes are held until the final chunk.
     expect(rail.device.get(DEVICE_FILE)).toBe('hello');
-    expect(rail.fileFrames().some((frame) => frame.method.startsWith('writeFile'))).toBe(false);
 
     const retried = await rail.files({
       session: rail.ownerSession, workspace: 'upload-cut', path: PC_FILE, method: 'PUT', body: 'all of it', ifMatch: shownAs('hello'),

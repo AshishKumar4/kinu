@@ -219,10 +219,6 @@ interface HireProbeRpc extends Rpc.DurableObjectBranded {
 }
 
 interface SlateProcessProbeRpc extends Rpc.DurableObjectBranded {
-  linkedBuildInputs(): Promise<string[]>;
-  danglingBuildInputs(): Promise<{ readonly refused: boolean; readonly missing: string[] }>;
-  chainedBuild(): Promise<{ readonly first: string; readonly missing: string[]; readonly stale: string[]; readonly second: string }>;
-  repairedRefusal(repair: 'alias' | 'obstruction' | 'loop'): Promise<{ readonly first: string; readonly second: string; readonly ms: number }>;
   start(start?: {
     source?: string; bindChain?: boolean; cred?: VfsCred;
     browser?: string; project?: Record<string, JsonValue>; app?: { port: number } | null;
@@ -230,7 +226,6 @@ interface SlateProcessProbeRpc extends Rpc.DurableObjectBranded {
   stop(): Promise<void>;
   esbuildInThisIsolate(): Promise<boolean>;
   facetImages(): Promise<string[]>;
-  facetImageVersions(): Promise<{ name: string; generation: number | undefined }[]>;
   interruptApplicationImage(): Promise<void>;
   call(method: string, args?: JsonValue[], chain?: string[]): Promise<{ ok: true; value: string } | { ok: false; error: string }>;
   socket(method: string, args?: JsonValue[], surface?: string[]): Promise<{ ok?: boolean; value?: string; error?: string }>;
@@ -318,7 +313,7 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
   closeHeldPreview(): Promise<{ code: number }>;
   advanceClock(ms: number): Promise<void>;
   restoreClock(): Promise<void>;
-  wakeOnce(workspace: string): Promise<string[]>;
+  wakeOnce(workspace: string): Promise<void>;
   removeSlate(workspace: string, id: string): Promise<RemovedSlate>;
   putPicture(workspace: string, slate: string, digest: string): Promise<void>;
   pictureKeys(workspace: string): Promise<string[]>;

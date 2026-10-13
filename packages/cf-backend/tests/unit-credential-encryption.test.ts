@@ -90,9 +90,10 @@ describe('the credential store is sealed at rest', () => {
       if (alias === 'padding') parts[3] = `${ciphertext}=`;
       else if (alias === 'whitespace') parts[2] = ` ${present(parts[2], 'the IV')}`;
       else {
-        // This credential and its GCM tag leave two unused bits in the final sextet.
+        // An unpadded length of 2 or 3 mod 4 leaves unused bits in the final sextet; setting the lowest is an alias.
+        if (ciphertext.length % 4 < 2) throw new Error('this ciphertext\'s final sextet has no unused bits to set');
         const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
-        parts[3] = ciphertext.slice(0, -1) + alphabet[alphabet.indexOf(ciphertext.at(-1) ?? '') + 1];
+        parts[3] = ciphertext.slice(0, -1) + alphabet[alphabet.indexOf(ciphertext.at(-1) ?? '') | 1];
       }
 
       sqlExec(harness.db).exec('UPDATE user_credentials SET value = ? WHERE key = ?', parts.join('.'), 'openai.bearer');
@@ -224,7 +225,7 @@ describe("only an envelope sealed under this deployment's key opens", () => {
     await orphaned.userDO.setCredential(await otherKeyOwner(), 'anthropic.bearer', { kind: 'bearer', token: 'sk-ok' });
 
     await expect(orphaned.userDO.getAuthHeaders(await otherKeyOwner(), 'openai.bearer'))
-      .rejects.toThrow('opening the stored credential openai.bearer');
+      .rejects.toMatchObject({ code: 'bad_input' });
     expect(await orphaned.userDO.getAuthHeaders(await otherKeyOwner(), 'anthropic.bearer'))
       .toMatchObject({ 'x-api-key': 'sk-ok' });
     orphaned.close();

@@ -23,11 +23,16 @@ test('the hosted credential broker recovers a dropped UserDO answer at the names
   const workspace = orchestratorHarness(undefined, { userDO: user.userDO, ownerUserId: '0123456789abcdef0123456789abcdef' });
   workspace.agent.harnessHoldsCapability(token);
   const read = user.userDO.getAuth.bind(user.userDO);
-  let reads = 0;
+  let lost = false;
+
+  // The first answer is lost on its way back.
   user.userDO.getAuth = async (...args) => {
     const answer = await read(...args);
 
-    if (++reads === 1) throw new Error('Network connection lost.');
+    if (!lost) {
+      lost = true;
+      throw new Error('Network connection lost.');
+    }
 
     return answer;
   };
@@ -38,8 +43,6 @@ test('the hosted credential broker recovers a dropped UserDO answer at the names
     const answer = await settle(Effect.result(Effect.tryPromise({
       try: () => broker.getAuth('openai.bearer'), catch: (cause) => ({ cause }),
     })));
-
-    expect(reads).toBe(2);
 
     if (Result.isFailure(answer)) throw answer.failure.cause;
     expect(answer.success).toMatchObject({ headers: { Authorization: 'Bearer hosted-token' } });

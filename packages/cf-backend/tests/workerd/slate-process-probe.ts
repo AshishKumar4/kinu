@@ -11,10 +11,10 @@ import { supervisorEsbuildService } from '@nimbus-sh/worker/facet-host';
 import { probeDurableApps, probeFacetManager } from './facet-manager';
 import { newWebSocketRpcSession } from 'capnweb';
 import {
-  initSlateStateTable, parseSlateProject, slateAuthority, issuedSlateInvocation, routeSlateCall, slateStorageCall,
+  initSlateStateTable, parseSlateProject, issuedSlateInvocation, routeSlateCall, slateStorageCall,
   type JsonValue, type SlateCallResult, type SlateInvocation,
 } from '@kinu.run/core';
-import { SlateBuilds, SqliteSlateStateStore, initSlateBuildTable, slateImage } from '@kinu.run/core/slates';
+import { SqliteSlateStateStore } from '@kinu.run/core/slates';
 import { KinuError, renderThrownChain } from '@kinu.run/core/obs';
 import { ResidentSlateProcesses, type ResidentSlateProcess } from '../../src/slates/resident';
 import { slateBatchStub } from '../../src/slates/rpc-transport';
@@ -162,183 +162,10 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
       : { ...boot, bindings: { __storage: storageStub } });
   }
 
-  /**
-   * The paths a build of `/slates/linked` looked at outside its tree, where its `lib.ts` is a link to `/home/linked/lib.ts`
-   * and its class imports `./lib.ts`.
-   */
-  async linkedBuildInputs(): Promise<string[]> {
-    const files = this.vfs.as(CRED_KERNEL);
-
-    files.mkdir('/home/linked', { recursive: true });
-    files.writeFile('/home/linked/lib.ts', 'export const word = "linked";\n');
-    files.mkdir('/slates/linked', { recursive: true });
-    files.writeFile('/slates/linked/server.ts', 'import { SlateObject } from "kinu:slate";\nimport { word } from "./lib.ts";\nexport class Slate extends SlateObject { word() { return word; } }\n');
-    files.symlink('/home/linked/lib.ts', '/slates/linked/lib.ts');
-    const authored = this.vfs.as(CRED_SESSION_USER);
-
-    const built = await this.resident.build({
-      owner: 'linked', root: '/slates/linked', project: parseSlateProject({ main: 'server.ts' }), cred: CRED_SESSION_USER,
-      read: (entry) => (authored.exists(`/slates/linked/${entry}`) ? authored.readFileString(`/slates/linked/${entry}`) : null),
-    });
-
-    return (built.inputs ?? []).filter((input) => !input.missing).map((input) => input.path);
-  }
-
-  /**
-   * A build of `/slates/dangling`, whose `lib.ts` links to `/home/dangling/lib.ts` before that file is written: whether
-   * it was refused, and the paths it found missing outside its tree.
-   */
-  async danglingBuildInputs(): Promise<{ readonly refused: boolean; readonly missing: string[] }> {
-    const files = this.vfs.as(CRED_KERNEL);
-
-    files.mkdir('/slates/dangling', { recursive: true });
-    files.writeFile('/slates/dangling/server.ts', 'import { SlateObject } from "kinu:slate";\nimport { word } from "./lib.ts";\nexport class Slate extends SlateObject { word() { return word; } }\n');
-    files.symlink('/home/dangling/lib.ts', '/slates/dangling/lib.ts');
-    const authored = this.vfs.as(CRED_SESSION_USER);
-
-    const built = await this.resident.build({
-      owner: 'dangling', root: '/slates/dangling', project: parseSlateProject({ main: 'server.ts' }), cred: CRED_SESSION_USER,
-      read: (entry) => (authored.exists(`/slates/dangling/${entry}`) ? authored.readFileString(`/slates/dangling/${entry}`) : null),
-    });
-
-    return { refused: 'failed' in built, missing: (built.inputs ?? []).filter((input) => input.missing).map((input) => input.path) };
-  }
-
-  /**
-   * `/slates/chained/lib.ts` links to `/home/chained/alias.ts`, which links to `/home/chained/future/lib.ts`, written
-   * only after a first build is refused. The refusal is stored as the host stores it; writing the final target names
-   * the slate stale, and its next build compiles.
-   */
-  async chainedBuild(): Promise<{ readonly first: string; readonly missing: string[]; readonly stale: string[]; readonly second: string }> {
-    const files = this.vfs.as(CRED_KERNEL);
-
-    files.mkdir('/slates/chained', { recursive: true });
-    files.writeFile('/slates/chained/server.ts', 'import { SlateObject } from "kinu:slate";\nimport { word } from "./lib.ts";\nexport class Slate extends SlateObject { word() { return word; } }\n');
-    files.mkdir('/home/chained', { recursive: true });
-    files.symlink('/home/chained/alias.ts', '/slates/chained/lib.ts');
-    files.symlink('/home/chained/future/lib.ts', '/home/chained/alias.ts');
-    const sql = this.ctx.storage.sql;
-
-    initSlateBuildTable((ddl) => { sql.exec(ddl); });
-    const builds = new SlateBuilds(sql);
-    const authored = this.vfs.as(CRED_SESSION_USER);
-
-    const build = () => this.resident.build({
-      owner: 'chained', root: '/slates/chained', project: parseSlateProject({ main: 'server.ts' }), cred: CRED_SESSION_USER,
-      read: (entry) => (authored.exists(`/slates/chained/${entry}`) ? authored.readFileString(`/slates/chained/${entry}`) : null),
-    });
-
-    const first = await build();
-
-    if ('failed' in first) builds.failed('chained', slateAuthority(CRED_SESSION_USER), 'v1', first);
-    files.mkdir('/home/chained/future', { recursive: true });
-    files.writeFile('/home/chained/future/lib.ts', 'export const word = "chained";\n');
-    const stale = builds.moved(['/home/chained/future/lib.ts']);
-    const second = await build();
-
-    return {
-      first: 'failed' in first ? 'refused' : 'built',
-      missing: (first.inputs ?? []).filter((input) => input.missing).map((input) => input.path),
-      stale,
-      second: 'failed' in second ? second.failed : 'built',
-    };
-  }
-
-  /**
-   * A slate whose `lib.ts` reaches outside its tree through a resolution that cannot build yet, refused through the
-   * build cache as the host asks it; then the resolution is repaired outside the tree, the host is told what was
-   * written, and the cache is asked again. `alias`: lib.ts links to alias.ts, which links to a file not written, and
-   * alias.ts is replaced by a link to a written library. `obstruction`: lib.ts links under a regular file, which is
-   * replaced by a directory holding the library. `loop`: lib.ts links under a pair of links that point at each other,
-   * one replaced by a directory holding the library. Answers each attempt's outcome and how long the second took.
-   */
-  async repairedRefusal(repair: 'alias' | 'obstruction' | 'loop'): Promise<{ readonly first: string; readonly second: string; readonly ms: number }> {
-    const files = this.vfs.as(CRED_KERNEL);
-    const root = `/slates/repair-${repair}`;
-    const outside = `/home/repair-${repair}`;
-    const library = 'export const word = "repaired";\n';
-
-    files.mkdir(root, { recursive: true });
-    files.writeFile(`${root}/server.ts`, 'import { SlateObject } from "kinu:slate";\nimport { word } from "./lib.ts";\nexport class Slate extends SlateObject { word() { return word; } }\n');
-    files.mkdir(outside, { recursive: true });
-
-    // A directory where the obstruction or the loop stood, holding the library.
-    const replaceWithLibrary = (at: string) => () => {
-      files.unlink(at);
-      files.mkdir(at);
-      files.writeFile(`${at}/lib.ts`, library);
-
-      return [at, `${at}/lib.ts`];
-    };
-
-    const written = ((): () => string[] => {
-      switch (repair) {
-        case 'alias': {
-          files.symlink(`${outside}/alias.ts`, `${root}/lib.ts`);
-          files.symlink(`${outside}/future.ts`, `${outside}/alias.ts`);
-
-          return () => {
-            files.writeFile(`${outside}/real.ts`, library);
-            files.unlink(`${outside}/alias.ts`);
-            files.symlink(`${outside}/real.ts`, `${outside}/alias.ts`);
-
-            return [`${outside}/real.ts`, `${outside}/alias.ts`];
-          };
-        }
-
-        case 'obstruction': {
-          files.writeFile(`${outside}/block`, 'a file where a directory belongs\n');
-          files.symlink(`${outside}/block/lib.ts`, `${root}/lib.ts`);
-
-          return replaceWithLibrary(`${outside}/block`);
-        }
-
-        case 'loop': {
-          files.symlink(`${outside}/b`, `${outside}/a`);
-          files.symlink(`${outside}/a`, `${outside}/b`);
-          files.symlink(`${outside}/a/lib.ts`, `${root}/lib.ts`);
-
-          return replaceWithLibrary(`${outside}/a`);
-        }
-      }
-    })();
-
-    const sql = this.ctx.storage.sql;
-
-    initSlateBuildTable((ddl) => { sql.exec(ddl); });
-    const builds = new SlateBuilds(sql);
-    const authored = this.vfs.as(CRED_SESSION_USER);
-    const slate = `repair-${repair}`;
-
-    const attempt = async () => (await Promise.allSettled([slateImage({
-      builds, slate, key: 'v1', cred: CRED_SESSION_USER,
-      build: () => this.resident.build({
-        owner: slate, root, project: parseSlateProject({ main: 'server.ts' }), cred: CRED_SESSION_USER,
-        read: (entry) => (authored.exists(`${root}/${entry}`) ? authored.readFileString(`${root}/${entry}`) : null),
-      }),
-    })]))[0].status === 'fulfilled' ? 'built' : 'refused';
-
-    const first = await attempt();
-
-    builds.moved(written());
-    const started = performance.now();
-    const second = await attempt();
-
-    return { first, second, ms: performance.now() - started };
-  }
-
   async facetImages(): Promise<string[]> {
     const kernel = this.vfs.as(CRED_KERNEL);
 
     return kernel.exists(`/${FACET_IMAGE_DIR}`) ? kernel.readdir(`/${FACET_IMAGE_DIR}`).map((entry) => entry.name).sort() : [];
-  }
-
-  facetImageVersions() {
-    const kernel = this.vfs.as(CRED_KERNEL);
-
-    return kernel.readdir(`/${FACET_IMAGE_DIR}`).map((entry) => ({
-      name: entry.name, generation: kernel.stat(`/${FACET_IMAGE_DIR}/${entry.name}`).gen,
-    })).sort((left, right) => left.name.localeCompare(right.name));
   }
 
   async interruptApplicationImage(): Promise<void> {
