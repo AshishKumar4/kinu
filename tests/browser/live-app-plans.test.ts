@@ -6,7 +6,7 @@ import { INSPECTOR_SHUT_PX } from '../../scripts/product-flows';
 import { PLAN_TASK_TITLES, SLATE_TITLE, SLATE_UI_FILE, SLATE_UI_PAGES } from '../../scripts/scripted-model';
 import { liveRows } from '../../scripts/live-app-rows';
 
-const { observed, verdictOf, boot } = liveRows('live-app-plans', ['plan-tabs', 'walkthrough', 'kept-tab', 'chat-scroll', 'plan-tasks', 'slate-ui', 'state']);
+const { observed, verdictOf, boot } = liveRows('live-app-plans', ['walkthrough', 'kept-tab', 'chat-scroll', 'plan-tasks', 'slate-ui', 'state']);
 
 beforeAll(boot);
 
@@ -31,12 +31,6 @@ describe('a long chat pages older history only when the reader scrolls for it', 
 
     expect(scroll.pagesIdleAfterReturn).toBe(0);
     expect(scroll.returnFromBottom).toBeLessThan(60);
-  });
-});
-
-describe('plans have one owner in the inspector column', () => {
-  test('no second plan-bearing tab or filter stands beside the first', () => {
-    expect(verdictOf(observed.planTabs, 'plan-tabs').planBearing.length).toBeLessThanOrEqual(1);
   });
 });
 

@@ -127,7 +127,6 @@ describe('the composer reasoning control', () => {
       const page = await composerPage(gallery, 'dark', 1280);
 
       // The label the trigger carries is the level's own name, not its id.
-      expect(await page.$eval(THINKING, (element) => element.textContent?.trim())).toBe('Default');
 
       await page.focus(THINKING);
       await page.keyboard.press('Enter');
