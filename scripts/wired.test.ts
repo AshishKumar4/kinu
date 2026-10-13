@@ -212,6 +212,10 @@ describe('awaited dynamic import consumers', () => {
     expect(inspect('const module = await import("./lazy"); return module.highlightCode();')).toEqual([unused]);
     expect(inspect('const module = await import("./lazy"); return module["highlightCode"]();')).toEqual([unused]);
   });
+  // 2026-10-13: the device daemon reads core's modules through `require`, which reached nothing it named.
+  test('a CommonJS require reaches what it destructures', () => {
+    expect(inspect('await import("./lazy"); const { highlightCode } = require("./lazy"); return highlightCode();')).toEqual([unused]);
+  });
   test('side effects and unused bindings reach no exports', () => {
     expect(inspect('await import("./lazy");')).toEqual([highlight, unused]);
     expect(inspect('const { highlightCode } = await import("./lazy");')).toEqual([highlight, unused]);

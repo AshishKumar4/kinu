@@ -898,8 +898,12 @@ export function importUses(
 
     bind(raw.id, target);
 
-    const imported = raw.init?.type === 'AwaitExpression' && raw.init.argument.type === 'ImportExpression'
-      ? literalString(raw.init.argument.source) : undefined;
+    // `await import('…')`, or CommonJS's `require('…')` (the device daemon reads core's modules so).
+    let imported: string | undefined;
+
+    if (raw.init?.type === 'AwaitExpression' && raw.init.argument.type === 'ImportExpression') imported = literalString(raw.init.argument.source);
+    else if (raw.init?.type === 'CallExpression' && raw.init.callee.type === 'Identifier' && raw.init.callee.name === 'require'
+      && raw.init.arguments.length === 1 && raw.init.arguments[0] !== undefined) imported = literalString(raw.init.arguments[0]);
 
     if (imported === undefined) return;
 
