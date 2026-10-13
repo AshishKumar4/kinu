@@ -55,6 +55,23 @@ describe('what one deployed version did, as a deploy reports it', () => {
     expect(read.owed.map((sample) => `${sample.object}/${sample.sequence}`)).toEqual(['object-a/refused-then-broke', 'live-workspace/reminder']);
   });
 
+  // Staging c6dc27da1, 2026-10-13: both "still owed" task reminders had settled, their eval workspaces deleted 1.9 s
+  // later; their owed rows were an agent isolate's lines its workspace's tail relayed, a row no object's invocation
+  // wrote, so the workspace they name is the object a deletion matches.
+  test("a relayed line is its named workspace's, so that workspace's deletion ends its sequence", () => {
+    const relayed = (timestamp: number, event: string, sequence: string, object: string) => ({
+      timestamp, $workers: {}, source: { event, code: '', cause: '', fields: { sequence, owed: 'v1:task_reminder:a', workspace: 'eval-first-run', actor: 'agent-1', object } },
+    });
+
+    const read = terminalEffectStates([
+      relayed(10, 'turn.terminal_effects_owed', 'reminder', 'deleted-workspace'),
+      relayed(10, 'turn.terminal_effects_owed', 'reminder', 'live-workspace'),
+    ], new Map([['deleted-workspace', 12]]));
+
+    expect(read.deleted.map((sample) => `${sample.object}/${sample.sequence}`)).toEqual(['deleted-workspace/reminder']);
+    expect(read.owed.map((sample) => `${sample.object}/${sample.sequence}`)).toEqual(['live-workspace/reminder']);
+  });
+
   // Staging's versions f62dfcb9 and b39035fc, 2026-09-30: 19 hung SupervisorRPC calls made by one orchestrator, and a
   // sleep_time effect failed and left owed, while 609 canceled sandbox calls were callers going away.
   test('an uncaught exception, a platform kill and a failed or owed effect are each a finding, with what a fixer starts from', () => {

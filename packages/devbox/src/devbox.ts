@@ -1905,10 +1905,10 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     if (execId !== undefined && !this.#claimLaunch(execId)) return settle(Effect.fail(launchUnknown(execId)));
     const id = execId ?? crypto.randomUUID();
     const running: RunningExec = { cancelled: false };
-    const answer = Deferred.makeUnsafe<ExecResult, DevboxError>();
+    const answer = execId === undefined ? undefined : Deferred.makeUnsafe<ExecResult, DevboxError>();
     this.#running.set(id, running);
 
-    if (execId !== undefined) this.#answers.set(execId, answer);
+    if (answer !== undefined) this.#answers.set(id, answer);
 
     return settle(this.#withActiveCaller(Effect.gen({ self: this }, function* () {
       const process = yield* this.#spawn(command, options, running);
@@ -1916,7 +1916,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       return decoded(yield* attempt('process', () => process.output()));
     })).pipe(
       Effect.exit,
-      Effect.tap((exit) => Deferred.done(answer, exit)),
+      Effect.tap((exit) => (answer === undefined ? Effect.void : Deferred.done(answer, exit))),
       Effect.flatten,
       Effect.ensuring(Effect.sync(() => { this.#running.delete(id); })),
     ));

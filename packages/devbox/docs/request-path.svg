@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="880" height="568" viewBox="0 0 880 568" role="img" aria-labelledby="title">
-  <title id="title">Two request paths. exec: your Worker calls box.exec, Devbox starts and restores the box or refuses, runs bash in /workspace and returns stdout, stderr and the exit code. Preview: a browser asks your Worker for a preview host, the Worker forwards it to the box under /_devbox/preview, and Devbox checks the token and proxies to the container port.</title>
+  <title id="title">Two request paths. exec: your Worker calls box.exec, Devbox starts and restores the box or refuses, runs setsid bash in /workspace and returns stdout, stderr and the exit code. Preview: a browser asks your Worker for a preview host, previewBox finds the box the host names and the Worker forwards the request unchanged, and Devbox checks the name and the token and proxies to the container port.</title>
   <style>
     .bg { fill: #ffffff; }
     text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; }
@@ -61,8 +61,8 @@
   <text class="s" x="590" y="136" text-anchor="middle"><tspan class="c">ensureReady()</tspan>: start, restore, or refuse</text>
 
   <line class="line" x1="590" y1="194" x2="800" y2="194" marker-end="url(#arrow)"/>
-  <text class="c" x="695" y="170" text-anchor="middle">bash -c 'npm test'</text>
-  <text class="s" x="695" y="186" text-anchor="middle">in /workspace</text>
+  <text class="c" x="695" y="170" text-anchor="middle">setsid -w bash -c</text>
+  <text class="s" x="695" y="186" text-anchor="middle"><tspan class="c">'npm test'</tspan> in /workspace</text>
 
   <line class="back" x1="800" y1="232" x2="590" y2="232" marker-end="url(#arrow)"/>
   <text class="s" x="695" y="224" text-anchor="middle">stdout, stderr, exit code</text>
@@ -79,11 +79,11 @@
   <text class="c" x="220" y="340" text-anchor="middle">3000-&lt;name&gt;-&lt;token&gt;.&lt;host&gt;</text>
 
   <line class="line" x1="330" y1="392" x2="590" y2="392" marker-end="url(#arrow)"/>
-  <text class="c" x="460" y="368" text-anchor="middle">box.fetch()</text>
-  <text class="c" x="460" y="384" text-anchor="middle">/_devbox/preview/3000/&lt;token&gt;/app</text>
+  <text class="c" x="460" y="368" text-anchor="middle">previewBox(request, env.Box)</text>
+  <text class="c" x="460" y="384" text-anchor="middle">.fetch(request)</text>
 
-  <rect class="note" x="470" y="406" width="240" height="30" rx="6"/>
-  <text class="s" x="590" y="426" text-anchor="middle">check the token, <tspan class="c">ensureReady()</tspan></text>
+  <rect class="note" x="440" y="406" width="300" height="30" rx="6"/>
+  <text class="s" x="590" y="426" text-anchor="middle">check the name and token, <tspan class="c">ensureReady()</tspan></text>
 
   <line class="line" x1="590" y1="468" x2="800" y2="468" marker-end="url(#arrow)"/>
   <text class="c" x="695" y="460" text-anchor="middle">getTcpPort(3000).fetch()</text>
@@ -93,5 +93,5 @@
 
   <line class="back" x1="590" y1="528" x2="110" y2="528" marker-end="url(#arrow)"/>
   <text class="s" x="350" y="520" text-anchor="middle">response; WebSockets are bridged</text>
-  <text class="s" x="350" y="556" text-anchor="middle">404 unknown token · 503 port not re-exposed · 502 nothing listens</text>
+  <text class="s" x="350" y="556" text-anchor="middle">404 another box or an unknown token · 503 port not re-exposed · 502 nothing listens</text>
 </svg>
