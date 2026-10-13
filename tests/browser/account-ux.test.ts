@@ -259,7 +259,7 @@ describe('account panels', () => {
     await withGallery(async (gallery) => {
       const control = '[aria-label="Default computer size"]';
 
-      const page = await freshPage(gallery, 'usersettingsstate&section=sandbox', 'dark', 'desktop');
+      const page = await freshPage(gallery, 'usersettingsstate&section=computer', 'dark', 'desktop');
 
       try {
         await page.waitForSelector(control);
