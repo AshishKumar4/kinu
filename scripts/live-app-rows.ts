@@ -1749,7 +1749,8 @@ async function measureProviderWait(newPage: LiveApp['newPage'], origin: string, 
 
     await page.evaluate(RECORD_NOTICES);
     await sendInChat(page, MINUTE_LIMITED_ASK);
-    await until(page, 'the minute-limited turn to settle', MINUTE_SETTLED);
+    // A stopped turn is an outcome here, not a dead end: `until` would end the row on it.
+    await named('the minute-limited turn to settle', () => page.waitForFunction(MINUTE_SETTLED, { polling: 100 }));
 
     const minute = {
       answered: v.parse(v.boolean(), await page.evaluate(MINUTE_ANSWERED)),
