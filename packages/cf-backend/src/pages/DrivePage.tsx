@@ -9,7 +9,7 @@ import {
 } from "@phosphor-icons/react";
 import * as v from "valibot";
 import {
-  APP_ROUTES, BUILTIN_SKILL_FILES, DRIVE_SKILLS_DIR, blueprintPagePath, compareSkillNames, liveSharePagePath, entryRevision, formatBytes, joinDir, parseSkillFile, shortAge,
+  APP_ROUTES, BUILTIN_SKILL_FILES, DRIVE_SKILLS_DIR, blueprintPagePath, compareCodeUnits, liveSharePagePath, entryRevision, formatBytes, joinDir, parseSkillFile, shortAge,
   skillViewPath, workspaceDisplayTitle,
   type DriveEntry, type DriveListing, type FileText, type LiveShareVisibility, type OwnedSlate, type SharedLibrary, type SharedRow,
   type SkillFileRefusal,
@@ -685,7 +685,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
   const skillTiles = (): ReactNode[] => [
     ...contents.builtins.map((name) => ({ name, tile: builtinTile(name) })),
     ...contents.folders.map((entry) => ({ name: entry.name, tile: folderTile(entry) })),
-  ].sort((a, b) => compareSkillNames(a.name, b.name)).map((each) => each.tile);
+  ].sort((a, b) => compareCodeUnits(a.name, b.name)).map((each) => each.tile);
 
   const fileTile = (entry: DriveEntry): ReactNode => {
     const full = joinDir(path, entry.name);

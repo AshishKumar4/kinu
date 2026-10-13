@@ -9,7 +9,8 @@ import { settle } from '../obs/effect';
 import { SHARED_SKILLS_DIR } from '../vfs/shared-drive';
 import { vfsReference } from '../vfs/resolve';
 import { BUILTIN_SKILL_FILES } from './builtins';
-import { compareSkillNames, listSkillFiles, resolveSkillFile, type SkillFile } from './discover';
+import { listSkillFiles, resolveSkillFile, type SkillFile } from './discover';
+import { compareCodeUnits } from '../utils/text';
 import { SKILL_FOLDER_FILE, SKILLS_VIEW, WORKSPACE_SKILLS_DIR } from './types';
 
 const FOLDER_STAT: VfsStat = { size: 0, mtimeMs: 0, type: 'directory' };
@@ -102,7 +103,7 @@ export function skillsMount(plane: () => VFS): VfsMount {
           if (path.split('/').some((segment) => segment !== '')) return yield* Effect.fail(absent(path, 'scandir'));
           const names = [...Object.keys(BUILTIN_SKILL_FILES), ...(yield* Effect.promise(() => listSkillFiles(plane()))).map((file) => file.name)];
 
-          return names.sort(compareSkillNames).map((name) => ({ name, type: 'directory' }));
+          return names.sort(compareCodeUnits).map((name) => ({ name, type: 'directory' }));
         }
 
         if (located.rest === '' && (located.kind === 'builtin' || located.file.folder === null)) return [{ name: SKILL_FOLDER_FILE, type: 'file' }];

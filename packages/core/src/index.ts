@@ -1782,7 +1782,7 @@ export {
 
 export {
   parseSkillFile, skillNameProblem,
-  discoverSkills, readSkillFile, workspaceSkillPath, compareSkillNames, skillBodyChars,
+  discoverSkills, readSkillFile, workspaceSkillPath, skillBodyChars,
   BUILTIN_SKILLS, BUILTIN_SKILL_FILES, BUILTIN_SKILL_HEADERS, BUILTIN_SKILL_NAMES, skillsMount,
   resolveActiveSkills, extractExplicitInvocations, admitSkillsIndex, admitActiveSkills,
   renderActiveSkillsSection, renderSkillsIndexSection, skillIndexLine, unreadSkillLine,

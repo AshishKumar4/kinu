@@ -10,7 +10,7 @@
           "file": "packages/core/src/skills/render.ts",
           "edits": [
             [
-              ".sort((a, b) => compareSkillNames(a.name, b.name))",
+              ".sort((a, b) => compareCodeUnits(a.name, b.name))",
               ".sort(() => 0)"
             ]
           ]
