@@ -599,6 +599,8 @@ describe("deploy gate", () => {
   // startup (code 10021) and staging served its placeholder. The validator now reads the build first, uploaded as a
   // version and not deployed, while what the reset would delete still serves.
   describe('the validator reads a reset build before the reset deletes anything', () => {
+    /** Wrangler 4.145's refusal of 89759ebcc on staging, 2026-10-13 (release-deploy-staging.log, lines 897-902). */
+    const STARTUP_REFUSED = '✘ [ERROR] Your Worker failed validation because it exceeded startup limits.\n   - Error: Script startup exceeded CPU time limit.\n   [code: 10021]';
     const VALIDATE = 'MUTATE npx wrangler versions upload --tag testsha --message kinu staging testsha';
     const DEPLOY = 'MUTATE npx wrangler deploy --tag testsha --message kinu staging testsha';
     const CHECK = 'bun scripts/worker-startup.ts check packages/cf-backend/dist/kinu/wrangler.json';
@@ -618,14 +620,36 @@ describe("deploy gate", () => {
     test('a version the validator refuses deletes nothing and deploys nothing', async () => {
       const run = await runDeploy({
         option: '--reset', account: resetAccount(), uploadRuns: [{ says: 'success', status: 0 }],
-        validation: { says: '✘ [ERROR] Your Worker failed validation because it exceeded startup limits.\n   - Error: Script startup exceeded CPU time limit.\n   [code: 10021]', status: 1 },
+        validation: { says: STARTUP_REFUSED, status: 1 },
       });
 
       expect(run.status).not.toBe(0);
-      expect(run.events).toContain(VALIDATE);
+      // Refused three times: the validator refuses the same bytes at random, so one refusal is no verdict.
+      expect(run.events.filter((event) => event === VALIDATE)).toHaveLength(3);
       expect(wipe(run.events)).toBe(-1);
       expect(run.uploads).toEqual([]);
       expect(run.report).toContain('startup validated refused');
+    });
+
+    // After the wipe the target serves its placeholder until an upload lands: a startup refused at random there is
+    // uploaded again, not left for a rerun.
+    test('a deploy refused after the reset is made again and lands, the placeholder serving only meanwhile', async () => {
+      const run = await runDeploy({ option: '--reset', account: resetAccount(), uploadRuns: [{ says: STARTUP_REFUSED, status: 1 }, { says: 'success', status: 0 }] });
+
+      expect(run.uploads, run.stdout).toHaveLength(2);
+      expect(wipe(run.events)).toBeLessThan(run.events.indexOf(DEPLOY));
+      expect(run.report).toContain('startup deployed none');
+      expect(run.events).toContain('bun scripts/infra-verify.ts --phase=post-deploy');
+    });
+
+    test('a startup refused three times after the reset ends the upload red', async () => {
+      const refused = { says: STARTUP_REFUSED, status: 1 };
+      const run = await runDeploy({ option: '--reset', account: resetAccount(), uploadRuns: [refused, refused, refused, { says: 'success', status: 0 }] });
+
+      expect(run.uploads).toHaveLength(3);
+      expect(run.status).not.toBe(0);
+      expect(run.report).toContain('startup deployed refused');
+      expect(run.events).not.toContain('bun scripts/infra-verify.ts --phase=post-deploy');
     });
 
     test('a build above the startup bound uploads nothing, validated or deployed, and deletes nothing', async () => {

@@ -668,18 +668,18 @@ bun "$KINU_ROOT/scripts/runtime-catalog.ts" ensure "$KINU_RUNTIME_BUCKET" "$KINU
 # needs the target's container application, gone once the reset ran). On
 # 2026-10-13 the reset ran first, staging's upload was refused, and staging
 # served its placeholder. The deploy after the reset is still `wrangler
-# deploy`, of the same build: only it applies the Durable Object migrations
-# that recreate what the reset deleted (wrangler 4.145, "Durable Object
-# migrations must be applied with `wrangler deploy`"). A reset finishing an
-# earlier one has a placeholder serving and nothing left to keep up, so the
-# upload below is its first reading.
+# deploy` of the same build, never the validated version by id, which serves
+# with none of the classes the reset deleted (L26); the validator refuses the
+# same bytes at random, so either upload is made again on a refused startup
+# (`upload`). A reset finishing an earlier one has a placeholder serving and
+# nothing left to keep up, so its deploy is its first reading.
 bun "$KINU_ROOT/scripts/worker-startup.ts" check "$KINU_BUILT_CONFIG" \
   || { publish_red "the built Worker's startup is above its bound, as the line above says; nothing was uploaded"; return 1; }
 if [ "$KINU_RESET" = "1" ] && [ "${KINU_PENDING_RESET:-none}" = "none" ]; then
   KINU_VALIDATE_LOG="$(mktemp -t kinu-validate.XXXXXX.log)"
   echo "Running: npx wrangler versions upload ${KINU_WRANGLER_ARGS[*]} (log → $KINU_VALIDATE_LOG)"
-  npx wrangler versions upload "${KINU_WRANGLER_ARGS[@]}" 2>&1 | tee "$KINU_VALIDATE_LOG"
-  KINU_VALIDATED="${PIPESTATUS[0]}"
+  upload "$KINU_VALIDATE_LOG" npx wrangler versions upload "${KINU_WRANGLER_ARGS[@]}"
+  KINU_VALIDATED=$?
   report startup validated "$(startup_reading "$KINU_VALIDATE_LOG")"
   if [ "$KINU_VALIDATED" -ne 0 ]; then
     publish_red "$KINU_WORKER refused this build's version before the reset, so nothing was deleted and it still serves what it did; the log is $KINU_VALIDATE_LOG"
