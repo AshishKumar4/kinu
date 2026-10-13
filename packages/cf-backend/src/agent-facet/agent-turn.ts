@@ -3,13 +3,13 @@ import { jsonSchema, tool, type ModelMessage, type ToolSet, type UIMessage, type
 import {
   actorAffinity, HeadCapture, ownerLaneTools, toolsInWorkMode, withEffectReceipt, decodeJsonValue, decodeModelMessageValues, encodeModelMessageValues, replayPolicyFor, REAL_CLOCK, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan, imageModelOutput,
   type AuthRequest, type AuthResolution, type HandedOffTurn, type SettledRun, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type JsonValue, type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind, type AgentSignal, type SendOutcome,
-  turnSourcesFromBundle, captureOperationProfile, type ModelCallReport, type ModelOperationEvent,
+  turnSourcesFromBundle, captureOperationProfile, PROVIDER_WAIT_PART, type ModelCallReport, type ModelOperationEvent, type ProviderWaitInfo,
   type AdvisorRecoverySnapshot, type AgentFigures, type AgentReport, type HostedActor, type SerializedMessage, type SessionEvent, type TurnEndEvent,
   type SubordinateReportLedger, type SubordinateReportStatus, type TaskTurnEnding, type WorkMode, type ResolvedTurnProfile,
   type RemoteReceipt, type ReplyToCommentToolDeps, type StoredRow, type SubmitPlanToolDeps,
 } from '@kinu.run/core';
 
-import { attempt, diagnostics, hold, logged, settle } from '@kinu.run/core/obs';
+import { attempt, diagnostics, hold, logged, settle, settleLoggedSync } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import type { NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
 import { routedModelReads, type AgentProviderDeps, type AgentProviderRegistry, type UserCredentialClient, type UserCredentialSource } from '../providers/agent-registry';
@@ -349,13 +349,43 @@ export class FacetSpend {
 /** The registry an agent's isolate resolves its models through, over its own providers (`AgentFacet.models`). */
 export type FacetModels = (deps: Omit<AgentProviderDeps, 'env'>) => AgentProviderRegistry;
 
-function facetModels(actor: HostedActor, workspace: AgentWorkspace, models: FacetModels, prepared: PreparedAgentTurn): AgentProviderRegistry {
-  return models({
-    userDO: brokeredCredentials(workspace, prepared.credentialsRevision),
-    accountFor: (provider) => actor.stores.config.getProviderAccounts()[provider] ?? prepared.accounts[provider]
-      ?? prepared.sources.profileInputs.envelope.catalog.accounts?.[provider],
-    appTitle: 'Kinu',
-  });
+/** A turn's provider waits, told on the answer stream its words already cross to the room (AGENTS.md Waste), so a wait
+ *  costs no call of its own. One while no answer streams (its compaction's, its title's) is the ledger's alone. */
+class TurnWaits {
+  private told: ReadableStreamDefaultController<UIMessageChunk> | null = null;
+
+  constructor(private readonly actor: HostedActor, private readonly runId: string) {}
+
+  readonly wait = (info: ProviderWaitInfo): void => {
+    settleLoggedSync('event.provider_wait_emit_failed', { doing: 'recording a provider_wait run event', otherwise: 'io' }, () => {
+      this.actor.stores.eventRecorder.emit(this.runId, { type: 'provider_wait', ...info });
+    }, { provider: info.provider });
+    this.told?.enqueue({ type: PROVIDER_WAIT_PART, data: info, transient: true });
+  };
+
+  around(chunks: ReadableStream<UIMessageChunk>): ReadableStream<UIMessageChunk> {
+    const answer = chunks.getReader();
+
+    return new ReadableStream<UIMessageChunk>({
+      start: (controller) => { this.told = controller; },
+      pull: async (controller) => {
+        const next = await answer.read();
+
+        if (!next.done) {
+          controller.enqueue(next.value);
+
+          return;
+        }
+
+        this.told = null;
+        controller.close();
+      },
+      cancel: async (reason) => {
+        this.told = null;
+        await answer.cancel(reason);
+      },
+    });
+  }
 }
 
 /** A turn in this isolate, assembled as every actor's is: from what its workspace read of it (core turnSourcesFromBundle)
@@ -376,7 +406,16 @@ export function facetTurnSources(turn: {
   const bound: TurnBound = { turnId: turn.turnId, runId: turn.runId, epoch: turn.epoch };
   // The profile the turn assembled on, until its first step's pace carries it to the workspace (D5).
   let unbound: ResolvedTurnProfile | null = null;
-  const registry = facetModels(actor, turn.workspace, turn.models, prepared);
+  const waits = new TurnWaits(actor, turn.runId);
+
+  const registry = turn.models({
+    userDO: brokeredCredentials(turn.workspace, prepared.credentialsRevision),
+    accountFor: (provider) => actor.stores.config.getProviderAccounts()[provider] ?? prepared.accounts[provider]
+      ?? prepared.sources.profileInputs.envelope.catalog.accounts?.[provider],
+    appTitle: 'Kinu',
+    onProviderWait: waits.wait,
+  });
+
   // Its calls are routed under its own conversation, as a CLI hire's are, in its workspace's cache.
   const affinity = actorAffinity(actor.record);
 
@@ -394,7 +433,7 @@ export function facetTurnSources(turn: {
     models: { normalize: (spec) => registry.normalizeSpecSync(spec), resolve: (spec) => registry.resolveModel(spec, affinity), routed: routedModelReads(registry) },
     scaffoldSpend: { source: 'scaffold', report: spend.report, operations: spend.operations },
     operations: spend.operations,
-    observeStream: async (chunks) => { await turn.workspace.observe(lines(chunks)); },
+    observeStream: async (chunks) => { await turn.workspace.observe(lines(waits.around(chunks))); },
     paceStep: async (signal) => {
       const profile = unbound;
 

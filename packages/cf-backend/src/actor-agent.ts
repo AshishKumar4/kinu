@@ -150,7 +150,7 @@ import {
   JsonObjectSchema, JsonValueSchema, changeRoleAsOwner,
   loadProfileAuthorityInputs,
   resolveAgentTurnProfile, resolveRoutingProfile, ownProfileChoices, ancestorPins, createAgentConfigStore, type PinnedProfile,
-  captureOperationProfile, currentOperationProfile, runOperationProfile, withOperationProfile,
+  activeOperationProfile, captureOperationProfile, currentOperationProfile, runOperationProfile, withOperationProfile,
   inTurnSurface, scopedTurnSurface, TurnSurface,
   type OperationProfile,
   agentRoleSwitch, toolsNamespace, runWorkModeInvocation, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost,
@@ -2145,7 +2145,8 @@ export abstract class ActorAgent extends Agent<Env> {
     () => currentOperationProfile(this.actorHandle())?.runId ?? (this._currentRunId || WORKSPACE_RUN_ID),
   );
 
-  /** Records a provider-mandated wait to the ledger (`provider_wait`) and the workspace socket.
+  /** Records a provider-mandated wait to the ledger (`provider_wait`), and tells the windows of the turn it holds: a call
+   *  a turn's tool made here. A call no turn made (a title, a logo, upkeep) holds no turn, so no window hears it.
    *  Recorder faults are contained so a ledger write never kills the sleep. */
   private noteProviderWait(info: ProviderWaitInfo): void {
     const runId = currentOperationProfile(this.actorHandle())?.runId ?? (this._currentRunId || WORKSPACE_RUN_ID);
@@ -2162,15 +2163,13 @@ export abstract class ActorAgent extends Agent<Env> {
       });
     }, { provider: info.provider });
 
-    this.broadcast(JSON.stringify({
-      type: 'provider_wait',
-      actorId: this.actorHandle().actorId,
-      provider: info.provider,
-      modelId: info.modelId,
-      waitMs: info.waitMs,
-      attempt: info.attempt,
-      source: info.source,
-      status: info.status,
+    const turn = activeOperationProfile();
+
+    if (turn === undefined || turn.turnId === WORKSPACE_RUN_ID) return;
+    const room = turn.actor.actorId === this.actorHandle().actorId ? null : turn.actor.actorId;
+
+    this.broadcastToActor(room, JSON.stringify({
+      type: 'provider_wait', provider: info.provider, modelId: info.modelId, waitMs: info.waitMs, attempt: info.attempt, source: info.source, status: info.status,
     }));
   }
 

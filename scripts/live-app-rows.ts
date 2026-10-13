@@ -31,7 +31,7 @@ import {
   SLEPT_TURN_ASK, TOLD_BACK_ANSWER, TOLD_BACK_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK,
   laterReconnectTurn, toldBackTurn, unsentFirstTurn,
   DROPPED_FILE_ASK, DROPPED_FILE_ROW, droppedFileTurn, heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, registerScriptedModel,
-  startScriptedModel, type HeldCall, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, planTasksProbe, SLATE_ID, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, slateUiTurn,
+  startScriptedModel, type HeldCall, ProviderWaitProbe, providerWaitTurn, TITLE_WAITED_MISSION, WAITED_TURN_ASK, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, planTasksProbe, SLATE_ID, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, slateUiTurn,
 } from './scripted-model';
 import { FALLBACK_ANSWER, type ScriptedRequest } from './scripted-protocol';
 import { openPublicSocket } from '../tests/first-run/public-socket';
@@ -174,6 +174,7 @@ export interface TierVerdicts {
   cleared: ClearedVerdict | null;
   planTasks: PlanTasksVerdict | null;
   slateUi: SlateUiVerdict | null;
+  providerWait: ProviderWaitVerdict | null;
   state: StateVerdict | null;
 }
 
@@ -1629,6 +1630,60 @@ async function measureCleared(newPage: LiveApp['newPage'], origin: string, held:
   }
 }
 
+/** What the composer's status notices said while a turn or a background call waited on its provider. */
+export interface ProviderWaitVerdict {
+  /** After the first answer, until its workspace's title had been refused twice more and waited out each refusal. */
+  readonly afterAnswer: readonly string[];
+  /** While a turn's own call waited on its provider. */
+  readonly duringTurn: readonly string[];
+  /** As that turn's answer ended. */
+  readonly afterTurn: readonly string[];
+}
+
+const COMPOSER_NOTICES = `[...document.querySelectorAll('#chat [data-composer-root] [role="status"]')].map((notice) => (notice.textContent ?? '').trim())`;
+
+/** Every distinct notice text the composer shows, sampled every 50 ms from install into `window.__notices`. */
+const RECORD_NOTICES = `(() => {
+  window.__notices = [];
+  setInterval(() => {
+    for (const text of ${COMPOSER_NOTICES}) if (text !== '' && !window.__notices.includes(text)) window.__notices.push(text);
+  }, 50);
+})()`;
+
+async function noticesRead(page: Page, expression: string): Promise<readonly string[]> {
+  return v.parse(v.array(v.string()), await page.evaluate(expression));
+}
+
+/** #88: a background call's provider wait (the workspace's title, owed once the first turn settles) never stands over
+ *  the composer as if a turn were blocked; a turn's own wait does, counting down to its end and never reading 0s. */
+async function measureProviderWait(newPage: LiveApp['newPage'], origin: string, probe: ProviderWaitProbe): Promise<ProviderWaitVerdict> {
+  const titled = await createWorkspace(origin, { name: `live-row-title-wait-${RUN_ID}`, purpose: TITLE_WAITED_MISSION, model: SCRIPTED_MODEL_SPEC });
+  const background = await openRecorded(newPage, origin, titled);
+  let afterAnswer: readonly string[];
+
+  try {
+    await background.evaluate(RECORD_NOTICES);
+    // The second refusal comes once the first one's wait is over: that wait was told, or never.
+    await named('the title to be refused twice more', () => probe.titleRefused(2));
+    afterAnswer = await noticesRead(background, 'window.__notices');
+  } finally {
+    await background.close();
+  }
+
+  const waited = await createWorkspace(origin, { name: `live-row-turn-wait-${RUN_ID}`, purpose: 'turn wait probe', model: SCRIPTED_MODEL_SPEC });
+  const page = await openRecorded(newPage, origin, waited);
+
+  try {
+    await page.evaluate(RECORD_NOTICES);
+    await sendInChat(page, WAITED_TURN_ASK);
+    await until(page, 'the waited turn to answer', TURN_ANSWERED);
+
+    return { afterAnswer, duringTurn: await noticesRead(page, 'window.__notices'), afterTurn: await noticesRead(page, COMPOSER_NOTICES) };
+  } finally {
+    await page.close();
+  }
+}
+
 /** Row 7: the run's own state directory, measured on the LOCAL server in both
  *  modes — the question is what the harness booted on, not what a deployment
  *  holds. The roster read goes through UserDO, so its namespace directory is
@@ -1648,7 +1703,7 @@ async function measureState(app: LiveApp): Promise<StateVerdict> {
 export const LIVE_ROWS = [
   'live-indicator', 'opened-mid-turn', 'reconnect', 'observed-reconnect', 'slept', 'watched-slept', 'answered',
   'unsent-answer', 'controls', 'walkthrough', 'own-server', 'kept-tab', 'chat-scroll', 'mid-thought', 'dropped-file', 'cleared', 'plan-tasks',
-  'slate-ui', 'state',
+  'slate-ui', 'provider-wait', 'state',
 ] as const;
 
 export type LiveRow = (typeof LIVE_ROWS)[number];
@@ -1670,7 +1725,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
   const observed: TierVerdicts = {
     liveIndicator: null, openedMidTurn: null, reconnect: null, observedReconnect: null, slept: null, watchedSlept: null, answered: null,
     unsentAnswer: null, bootFailure: null,
-    controls: null, walkthrough: null, ownServer: null, keptTab: null, chatScroll: null, midThought: null, droppedFile: null, cleared: null, planTasks: null, slateUi: null, state: null,
+    controls: null, walkthrough: null, ownServer: null, keptTab: null, chatScroll: null, midThought: null, droppedFile: null, cleared: null, planTasks: null, slateUi: null, providerWait: null, state: null,
   };
 
   // Set once the dev server is up: a row that breaks names the file its server's output is kept in.
@@ -1691,9 +1746,10 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
     const clearedHeld = heldCall();
     const toldBack = Promise.withResolvers<ScriptedRequest>();
     const slateHeard = Promise.withResolvers<ScriptedRequest>();
+    const waitProbe = new ProviderWaitProbe();
 
     // The watched turn follows the answered one in its conversation, so it is matched first, by the latest ask.
-    const model = await startScriptedModel((request) => droppedFileTurn(request) ?? toldBackTurn(request, toldBack.resolve) ?? pacedTurn(request)
+    const model = await startScriptedModel((request) => providerWaitTurn(request, waitProbe) ?? droppedFileTurn(request) ?? toldBackTurn(request, toldBack.resolve) ?? pacedTurn(request)
       ?? laterReconnectTurn(request, WATCHED_ANSWER_TURN_ASK, watchedAnswerHeld)
       ?? pacedFirstTurn(request, firstTurn) ?? reconnectTurn(request, ANSWERED_TURN_ASK, answeredHeld)
       ?? reconnectTurn(request, RECONNECT_TURN_ASK, reconnectHeld) ?? reconnectTurn(request, OBSERVED_TURN_ASK, observedHeld)
@@ -1730,6 +1786,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
         'cleared': async () => { observed.cleared = await attempt('cleared', () => measureCleared(newPage, origin, clearedHeld)); },
         'plan-tasks': async () => { observed.planTasks = await attempt('plan-tasks', () => measurePlanTasks(newPage, origin)); },
         'slate-ui': async () => { observed.slateUi = await attempt('slate-ui', () => measureSlateUi(newPage, origin, slateHeard.promise)); },
+        'provider-wait': async () => { observed.providerWait = await attempt('provider-wait', () => measureProviderWait(newPage, origin, waitProbe)); },
         'state': async () => { observed.state = await attempt('state', () => measureState(app)); },
       };
 
