@@ -1096,7 +1096,7 @@ export {
 } from './vfs/workspace-path';
 
 export {
-  agentHome, agentArtifactDirectory, agentTmpRoot, agentCred, agentIdentity,
+  agentHome, agentArtifactDirectory, agentTmpRoot, agentCred, agentIdentity, agentNameOfUid,
   provisionAgentHome, confineAgentTmp, releaseAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot,
   settleWorkspaceSlates,
   actorHomeName,

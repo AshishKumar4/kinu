@@ -74,7 +74,7 @@ export class KinuEgress extends WorkerEntrypoint<Env, KinuEgressParams> {
   override fetch(request: Request): Promise<Response> {
     const params = parseEgressParams(this.ctx);
 
-    return handleContainerEgress(request, this.env, params, { grants: workspaceGrants(this.env), github: params && new GitHubEgressRecorder(this.env, this.ctx, params.workspaceName) });
+    return handleContainerEgress(request, this.env, params, { grants: workspaceGrants(this.env), github: params && new GitHubEgressRecorder(this.env, this.ctx, params) });
   }
 
   /** A Nimbus workspace program's plain socket (`handleEgressConnect`); a container's raw sockets go straight out (D82). */

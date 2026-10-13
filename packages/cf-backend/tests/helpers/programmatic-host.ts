@@ -254,6 +254,9 @@ const NO_VAULT = {
  * binding: the entrypoint over the script's env, which finds its host by `props.doId`. Its throwing members assert the
  * supervisor schedules no background work and swallows no exception.
  */
+/** Each request an owned workspace's egress served: where it went, and the agent the egress was minted for. */
+export const EGRESS_FETCHES: Array<{ readonly url: string; readonly actorId: string | null }> = [];
+
 export const SCRIPT_EXPORTS = {
   SupervisorRPC: ({ props }: { readonly props: SupervisorProps }) => new SupervisorRPC(Object.assign(workerContext(), {
     props,
@@ -267,8 +270,11 @@ export const SCRIPT_EXPORTS = {
   KinuEgress: ({ props }: { readonly props: unknown }) => ({
     fetch: async (request: Request): Promise<Response> => {
       const { handleContainerEgress, parseEgressParams } = await import('../../src/egress/outbound');
+      const params = parseEgressParams({ props });
 
-      return await handleContainerEgress(request, NO_VAULT, parseEgressParams({ props }), {
+      EGRESS_FETCHES.push({ url: request.url, actorId: params?.actorId ?? null });
+
+      return await handleContainerEgress(request, NO_VAULT, params, {
         grants: async () => { throw new Error('no suite over this host reads workspace grants through the egress'); },
       });
     },
