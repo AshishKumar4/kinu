@@ -1845,3 +1845,10 @@ body > .annotation-toolbar {
   background: var(--c-accent-mark);
   box-shadow: 0 0 0 2px var(--c-bg);
 }
+
+/* The computer's screen while its session is not up: the recessed ground with the accent's glow rising from the foot. */
+.p-desktop-veil {
+  background:
+    radial-gradient(90% 70% at 50% 115%, color-mix(in srgb, var(--c-accent) 14%, transparent), transparent 70%),
+    var(--c-recessed);
+}

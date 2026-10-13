@@ -13,7 +13,7 @@ export const APP_ROUTES = {
   workspace: '/workspace/:agentId',
   workspaceAgent: '/workspace/:agentId/agents/:subName',
   workspaceAgentPath: '/workspace/:agentId/agents/:subName/*',
-  /** `overview`, `settings` or `new`: the workspace's own pages, under the bar the chats share. */
+  /** `overview`, `settings`, `new` or `desktop`: the workspace's own pages, under the bar the chats share. */
   workspaceView: '/workspace/:agentId/:view',
   explore: '/swarm/:agentId',
   control: '/control',

@@ -187,7 +187,7 @@ describe('the Environment panel', () => {
     });
   });
 
-  test('the computer\'s desktop shows in a frame, and opens in a tab of its own at the same address', async () => {
+  test('the computer\'s desktop shows in a frame, and opens in a tab of its own', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
 
@@ -203,14 +203,12 @@ describe('the Environment panel', () => {
 
         if (frame === null) throw new Error('the desktop is not framed');
 
-        const [src, href, target] = await Promise.all([
+        const [src, target] = await Promise.all([
           frame.evaluate((element) => (element instanceof HTMLIFrameElement ? element.src : '')),
-          link.evaluate((element) => (element instanceof HTMLAnchorElement ? element.href : '')),
           link.evaluate((element) => element.getAttribute('target')),
         ]);
 
         expect(src).toContain('/kasmvnc/vnc.html?');
-        expect(href).toBe(src);
         expect(target).toBe('_blank');
       } finally { await page.close(); }
     });

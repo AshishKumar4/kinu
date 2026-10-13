@@ -22,7 +22,7 @@
  */
 import type { Browser, ElementHandle, Page } from 'puppeteer';
 import * as v from 'valibot';
-import { AccountMemoryProposalSchema, hostedActorSocketPath, JsonValueSchema, redactSecrets, SLATES_ROOT, type AccountMemoryProposal, type JsonValue } from '@kinu.run/core';
+import { AccountMemoryProposalSchema, executorLabel, hostedActorSocketPath, JsonValueSchema, redactSecrets, SLATES_ROOT, type AccountMemoryProposal, type JsonValue } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -31,6 +31,7 @@ import { beatWorkspace } from '../evals/src/session';
 import { webHeaders, type PublicWebIdentity } from '../evals/src/workspace-roster';
 import { holdForRelease } from '../packages/test-utils/src/scratch';
 import { DESKTOP } from './live-app-harness';
+import { DESKTOP_COLOURS, DESKTOP_PANEL, DESKTOP_SIZE } from '../packages/devbox/src/desktop';
 import {
   AGENT_PLAN_ASK, FLOW_MEMORY_NOTE, FLOW_SHELL_PROBE, FLOW_SLATE, MEMORY_ASK, SLATE_ASK, STORM_ASK, STORM_DIR, STORM_FILES, STORM_SEED_ASK, WRITE_FILE_ASK,
   APPROVALS_ASK, DECISION_HEARD, HIRE_APPROVAL_ASK, HIRE_RAN, PROPOSAL_LINK_REPLY, WORKSPACE_PROPOSAL_ASK, ACCOUNT_FACT, ACCOUNT_FACT_ASK,
@@ -68,22 +69,24 @@ export async function signedInPage(browser: Browser, identity: PublicWebIdentity
 /** Records, on `window`, every turn the workspace's socket reports ended in
  *  error (the frame the chat renders its error from), which ends a page's
  *  chances for good. Installed before each document's scripts run, so the
- *  socket the app opens is the recorded one. */
+ *  socket the app opens is the recorded one. Each socket is a plain WebSocket:
+ *  the desktop's client refuses one whose prototype is not WebSocket's
+ *  ("Raw channel missing property: send", staging 2026-10-13). */
 const RECORD_TURN_ERRORS = `(() => {
   window.__turnErrors = [];
-  const Socket = window.WebSocket;
-  window.WebSocket = class extends Socket {
-    constructor(url, protocols) {
-      super(url, protocols);
-      this.addEventListener('message', (event) => {
+  window.WebSocket = new Proxy(window.WebSocket, {
+    construct(Socket, args) {
+      const socket = Reflect.construct(Socket, args);
+      socket.addEventListener('message', (event) => {
         if (typeof event.data !== 'string' || !event.data.includes('"error":true')) return;
         try {
           const frame = JSON.parse(event.data);
           if (frame.type === 'cf_agent_use_chat_response' && frame.error === true) window.__turnErrors.push(String(frame.body).slice(0, 300));
         } catch {}
       });
-    }
-  };
+      return socket;
+    },
+  });
 })()`;
 
 /** Records what ends `page`'s chances for good on every document it loads: each app script that failed to load
@@ -2558,6 +2561,83 @@ export async function slateSharesReachingNothing(target: FlowTarget): Promise<Sl
       if (!left.ok) console.warn(`product-flows: revoking ${share} answered ${String(left.status)}`);
     }
 
+    await removeFlowWorkspace(target, workspace);
+  }
+}
+
+export interface DesktopResizeVerdict {
+  readonly workspace: string;
+  /** The size the computer ran at, and the one the reader chose. */
+  readonly from: string;
+  readonly to: string;
+  /** Seconds from the choice until the desktop drew again: its session up and its panel at the foot. */
+  readonly backAfterS: number;
+}
+
+/** The computer's desktop as its client draws it: a session up over no Kinu veil, and the panel at the screen's foot,
+ *  read off the client's canvas in its same-origin frame. */
+const DESKTOP_DRAWN = `(() => {
+  const screen = document.querySelector('#inspector [data-desktop-frame]');
+  const doc = screen?.querySelector('iframe')?.contentDocument;
+  if (!doc || screen.querySelector('[role="status"]') !== null) return false;
+  const canvas = [...doc.querySelectorAll('canvas')].filter((c) => c.getBoundingClientRect().width > 0)
+    .sort((a, b) => b.width * b.height - a.width * a.height)[0];
+  if (canvas === undefined || canvas.width < 640) return false;
+  const foot = canvas.getContext('2d')?.getImageData(canvas.width / 2, canvas.height * ${String(1 - DESKTOP_PANEL.height / 2 / DESKTOP_SIZE.height)}, 1, 1).data;
+  const panel = ${JSON.stringify([1, 3, 5].map((at) => Number.parseInt(DESKTOP_COLOURS.panel.slice(at, at + 2), 16)))};
+  return foot !== undefined && panel.every((value, channel) => Math.abs(foot[channel] - value) <= 12);
+})()`;
+
+/**
+ * Row: a computer resized while its desktop is open shows a working desktop again.
+ *
+ * The reader opens the computer's desktop, waits for its panel, and picks another size on the computer's own control.
+ * The resize restarts the computer, which ends the desktop's session; on 71d06f4a9 the client then sat on its own blue
+ * splash with nothing on it until the page was reloaded (staging, 2026-10-13).
+ */
+export async function computerDesktopSurvivesAResize(target: FlowTarget): Promise<DesktopResizeVerdict> {
+  const workspace = await createFlowWorkspace(target, 'desktop-resize');
+
+  try {
+    const page = await openWorkspacePage(target, `/workspace/${workspace}`);
+
+    await openInspector(page);
+    await page.evaluate(stripTab('Environment'));
+    const computer = executorLabel('sandbox');
+
+    await until(page, 'the computer in the Environment panel', `[...document.querySelectorAll('#inspector button')].some((b) => (b.textContent ?? '').trim() === ${JSON.stringify(computer)})`);
+    await page.evaluate(`[...document.querySelectorAll('#inspector button')].find((b) => (b.textContent ?? '').trim() === ${JSON.stringify(computer)}).click()`);
+    await until(page, "the computer's Desktop tab", `document.querySelector('#inspector [role="tab"][data-segment="desktop"]') !== null`);
+    await page.click('#inspector [role="tab"][data-segment="desktop"]');
+    await until(page, "the computer's desktop", DESKTOP_DRAWN);
+
+    const size = await page.waitForSelector(`#inspector [aria-label="${computer} size"]`);
+
+    if (size === null) throw new Error(`no ${computer} size control`);
+    const from = v.parse(v.string(), await size.evaluate((element) => (element.textContent ?? '').trim()));
+
+    await size.click();
+    await until(page, 'the size choices', `document.querySelector('[role="option"][aria-selected="false"]') !== null`);
+
+    const to = v.parse(v.string(), await page.$eval('[role="option"][aria-selected="false"]', (option) => {
+      if (!(option instanceof HTMLElement)) throw new Error('a size choice is not an element');
+      option.click();
+
+      return (option.textContent ?? '').trim();
+    }));
+
+    const chosen = performance.now();
+
+    // The restart ends the session: the desktop stops drawing before it can be drawn again.
+    await until(page, 'the restart to end the desktop\'s session', `!(${DESKTOP_DRAWN})`);
+    await until(page, "the resized computer's desktop", DESKTOP_DRAWN);
+
+    const backAfterS = Math.round((performance.now() - chosen) / 100) / 10;
+
+    await page.close();
+
+    return { workspace, from, to, backAfterS };
+  } finally {
     await removeFlowWorkspace(target, workspace);
   }
 }
