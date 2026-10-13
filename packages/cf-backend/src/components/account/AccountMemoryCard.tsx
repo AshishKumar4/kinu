@@ -9,7 +9,7 @@ import { CardSlot } from "@/components/ui/CardSlot";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import {
-  decideAccountMemory, forgetAccountFact, forgetAccountNote, getAccountMemory, putAccountFact,
+  forgetAccountFact, forgetAccountNote, getAccountMemory, putAccountFact,
   type AccountMemoryState, type MemoryOrigin,
 } from "../../lib/user-api";
 
@@ -55,7 +55,7 @@ export function AccountMemoryCard() {
   const { resource, reload } = useAsyncResource(getAccountMemory);
   // What waits is the account socket's newest, the list the attention stack shows; a proposal decided anywhere can keep
   // a fact or a note, so each frame reads the whole memory again.
-  const { accountProposals } = useWorkspaceRoster();
+  const { accountProposals, decideAccountProposal } = useWorkspaceRoster();
   const framed = useRef(accountProposals);
 
   useEffect(() => {
@@ -84,7 +84,7 @@ export function AccountMemoryCard() {
         {(state) => (
           <div className="space-y-4" data-account-memory>
             {failure !== null && <div className="p-meta p-danger">{failure}</div>}
-            <Pending pending={accountProposals ?? state.pending} busy={busy} act={act} />
+            <Pending pending={accountProposals ?? state.pending} busy={busy} act={act} decide={decideAccountProposal} />
             <Facts state={state} busy={busy} act={act} />
             <Notes state={state} busy={busy} act={act} />
           </div>
@@ -100,7 +100,10 @@ interface SectionProps {
   readonly act: (what: string, run: () => Promise<void>) => Effect.Effect<void>;
 }
 
-function Pending({ pending, busy, act }: Omit<SectionProps, "state"> & { readonly pending: readonly AccountMemoryProposal[] }) {
+function Pending({ pending, busy, act, decide }: Omit<SectionProps, "state"> & {
+  readonly pending: readonly AccountMemoryProposal[];
+  readonly decide: (id: string, decision: "accept" | "decline") => Promise<void>;
+}) {
   if (pending.length === 0) return null;
 
   return (
@@ -114,9 +117,9 @@ function Pending({ pending, busy, act }: Omit<SectionProps, "state"> & { readonl
           <div className="p-meta p-text-3">{originText(item.origin)}</div>
           <div className="flex gap-1.5">
             <button type="button" disabled={busy !== null} className="px-2 py-1 rounded-md p-t-control p-accent-fill"
-              onClick={() => detach(act("keeping this for every workspace", async () => { await decideAccountMemory(item.id, "accept"); }))}>Keep for every workspace</button>
+              onClick={() => detach(act("keeping this for every workspace", () => decide(item.id, "accept")))}>Keep for every workspace</button>
             <button type="button" disabled={busy !== null} className="px-2 py-1 rounded-md p-t-control p-text-2 p-fill hover:p-text"
-              onClick={() => detach(act("declining this proposal", async () => { await decideAccountMemory(item.id, "decline"); }))}>Decline</button>
+              onClick={() => detach(act("declining this proposal", () => decide(item.id, "decline")))}>Decline</button>
           </div>
         </div>
       ))}

@@ -27,7 +27,7 @@ import { usePendingAttachments } from "@/hooks/use-pending-attachments";
 import { useFileDrop } from "@/hooks/use-file-drop";
 import { useWorkbenchSurfaces } from "@/hooks/use-workbench-surfaces";
 import { useTurnAnnotations } from "@/hooks/use-turn-annotations";
-import { decideAccountMemory, touchWorkspace } from "@/lib/user-api";
+import { touchWorkspace } from "@/lib/user-api";
 import { describeError, useAsyncResource } from "@/hooks/use-async-resource";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { ConnectedModelPicker } from "@/components/ModelPicker";
@@ -856,7 +856,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
   // The stack answers through the workspace's own calls on every pane: one queue, whichever pane asks. The account's
   // memory proposals come from the owner's user object, on the roster's socket the shell already holds.
   const { rpc: workspaceRpc, resolveConsent, refreshPendingActions } = state;
-  const { accountProposals } = useWorkspaceRoster();
+  const { accountProposals, decideAccountProposal } = useWorkspaceRoster();
 
   // The workspace agent's questions, for each call's record in the transcript.
   const asked = useMemo(() => askedBy(state.ownerQuestions, null), [state.ownerQuestions]);
@@ -866,8 +866,8 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
     resolveConsent,
     onDecided: refreshPendingActions,
     onReview: (plan) => show(planSurface(plan)),
-    decideMemory: async (id, decision) => { await decideAccountMemory(id, decision); },
-  }), [workspaceRpc, resolveConsent, refreshPendingActions, show]);
+    decideMemory: decideAccountProposal,
+  }), [workspaceRpc, resolveConsent, refreshPendingActions, show, decideAccountProposal]);
 
   const ui = useConversationUiState(`${agentId ?? ""}/main`);
   const setChatMode = ui.setMode;
