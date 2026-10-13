@@ -1185,6 +1185,10 @@ const PROMPT = "$ ";
 declare global {
   interface Window {
     __kinuTerminalInput?: string[];
+    /** The window the shell was last told: the query's at the socket's birth, then each resize frame. */
+    __kinuTerminalWindow?: { cols: number; rows: number };
+    /** With `terminalopen=held`, opens the terminal sockets the frame is holding. */
+    __kinuOpenTerminals?: () => void;
   }
 }
 
@@ -1211,19 +1215,37 @@ class GalleryShellSocket extends EventTarget {
     super();
     this.url = String(url);
     window.__kinuTerminalInput = [];
+    const query = new URL(this.url, location.href).searchParams;
+    window.__kinuTerminalWindow = { cols: Number(query.get("cols")), rows: Number(query.get("rows")) };
+
     // The runtime replays its screen before ready; here the screen is empty.
-    queueMicrotask(() => {
+    const open = () => {
       this.readyState = 1;
-      this.onopen?.(new Event("open"));
+      const opened = new Event("open");
+      this.onopen?.(opened);
+      this.dispatchEvent(opened);
       this.emit({ type: "output", data: PROMPT });
       this.emit({ type: "ready" });
-    });
+    };
+
+    // Held, a socket connects for as long as the page's layout takes to settle around it.
+    if (new URLSearchParams(location.search).get("terminalopen") === "held") window.__kinuOpenTerminals = open;
+    else queueMicrotask(open);
   }
 
-  send(raw: string): void {
+  send(raw: string | ArrayBufferLike | Blob | ArrayBufferView): void {
+    // A native PTY's keystrokes are bytes; this shell reads the workspace's JSON frames.
+    if (typeof raw !== "string") return;
     const parsed = v.safeParse(WorkspaceTerminalInputSchema, JSON.parse(raw));
 
-    if (!parsed.success || parsed.output.type !== "input") return;
+    if (!parsed.success) return;
+
+    if (parsed.output.type === "resize") {
+      window.__kinuTerminalWindow = { cols: parsed.output.cols, rows: parsed.output.rows };
+
+      return;
+    }
+
     window.__kinuTerminalInput?.push(parsed.output.data);
 
     for (const char of parsed.output.data) {
