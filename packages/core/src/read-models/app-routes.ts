@@ -71,17 +71,42 @@ export function routeTemplateOf(pathname: string): ReportedRoute {
   return UNMATCHED_ROUTE;
 }
 
-/** A path on `origin`, never the auth flow. A parser strips tab or newline (`/\t/evil.example` is another host). */
+/**
+ * A path on `origin`, never the auth flow, that the browser still reads as one when it resolves it again. A parser
+ * strips tab or newline (`/\t/evil.example` is another host) and reads a backslash as a slash, and a dot segment,
+ * spelled or percent-encoded, normalizes `/a/..//evil.example` to `//evil.example`, another host too. The path is
+ * also checked decoded, for whatever reads it next.
+ */
 export function sanitizeReturnTo(input: string, origin: string): string {
   const raw = input.trim();
+  const here = new URL(origin).origin;
 
-  if (!raw.startsWith('/') || Array.from(raw, (ch) => ch.codePointAt(0) ?? 0).some((code) => code < 0x20 || code === 0x7f || code === 0x5c)) return '/';
-  const resolved = new URL(raw, origin);
-
-  if (resolved.origin !== new URL(origin).origin) return '/';
+  if (!raw.startsWith('/') || hasControlOrBackslash(raw)) return '/';
+  const resolved = new URL(raw, here);
   const path = `${resolved.pathname}${resolved.search}${resolved.hash}`;
+  const again = new URL(path, here);
+  const decoded = percentDecoded(resolved.pathname);
 
-  if (path.startsWith('/auth/') || resolved.pathname === '/login' || resolved.pathname === '/logout') return '/';
+  if (resolved.origin !== here || again.origin !== here || `${again.pathname}${again.search}${again.hash}` !== path) return '/';
+
+  if (!isOnePath(resolved.pathname) || !isOnePath(decoded) || decoded.includes('\\')) return '/';
+
+  if (decoded.startsWith('/auth/') || decoded === '/login' || decoded === '/logout') return '/';
 
   return path;
+}
+
+/** A path with one leading slash and no dot segment to climb with. */
+function isOnePath(path: string): boolean {
+  return path.startsWith('/') && !path.startsWith('//') && path.split('/').every((segment) => segment !== '.' && segment !== '..');
+}
+
+/** A control character, or a backslash a URL parser reads as a slash. */
+function hasControlOrBackslash(text: string): boolean {
+  return Array.from(text, (ch) => ch.codePointAt(0) ?? 0).some((code) => code < 0x20 || code === 0x7f || code === 0x5c);
+}
+
+/** Each `%XX` as its byte; a malformed escape stays as written rather than throwing. */
+function percentDecoded(text: string): string {
+  return text.replace(/%([0-9a-f]{2})/giu, (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)));
 }
