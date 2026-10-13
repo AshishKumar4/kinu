@@ -268,8 +268,10 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
       // Closing: owed to its next start, so the crossing fails and the workspace's wake crosses it again.
       ? Effect.fail(new KinuError('unavailable', 'The agent is closing; the delivery is owed to its next start.'))
       : attemptInItsWords('io', () => chat.session.admitDelivery(parsed, producer)).pipe(
-        // Its own refusal is its answer, not a lost crossing: told with its whole cause chain.
-        Effect.catch((refusal) => Effect.succeed<DeliveryAnswer>({ refused: { code: refusal.code, message: renderThrownChain({ cause: refusal }) } })),
+        // Its own refusal is its answer, not a lost crossing: told with its whole cause chain. Not taken yet is no answer:
+        // the crossing fails, and the delivery stays owed to the workspace's wake, as a closing agent's does.
+        Effect.catch((refusal) => (refusal.code === 'unavailable' ? Effect.fail(refusal)
+          : Effect.succeed<DeliveryAnswer>({ refused: { code: refusal.code, message: renderThrownChain({ cause: refusal }) } }))),
         Effect.map((answer) => ({ chat, answer })),
       )));
   }
