@@ -19,7 +19,7 @@ import {
   toolModelMessageSchema,
   userModelMessageSchema,
 } from 'ai';
-import { CHARS_PER_TOKEN, fnv1a64, UNPRICED_MEDIA_TOKENS } from '@kinu.run/core';
+import { binaryReplacer, CHARS_PER_TOKEN, fnv1a64, UNPRICED_MEDIA_TOKENS } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import {
@@ -756,14 +756,6 @@ function previewJson(input: { value: unknown }): string {
   } catch (error) {
     return truncate(`unserializable turn part: ${renderThrownChain({ cause: error })}`, TRANSCRIPT_PREVIEW_CHARS);
   }
-}
-
-function binaryReplacer<Value>(_key: string, value: Value): Value | string {
-  if (value instanceof Uint8Array) return `[binary ${value.byteLength} bytes]`;
-
-  if (value instanceof ArrayBuffer) return `[binary ${value.byteLength} bytes]`;
-
-  return value;
 }
 
 const StringSchema = v.string();
