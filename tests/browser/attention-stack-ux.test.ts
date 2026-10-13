@@ -124,6 +124,19 @@ test('an account-memory proposal waits in the stack as the user object sends it,
   });
 });
 
+// A roster socket a proxy will not upgrade leaves the page on HTTP reads: what waits on the owner comes from the
+// memory read then, and must still wait in the stack.
+test('an account-memory proposal still waits in the stack when the roster socket cannot open', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await opened(page, origin, '&asks=two&memory=waiting&rosterSocket=refused');
+    await page.waitForSelector('[data-attention-card="memory:amp_city"], [data-attention-behind="memory:amp_city"]', { timeout: 10_000 });
+
+    expect(await stacked(page)).toEqual(['action:park-publish', 'memory:amp_city', 'action:park-push']);
+    await page.close();
+  });
+});
+
 // Staging d930f2537 (2026-10-09): the product flow answered the next card 0.2 s after it opened, while the queue's
 // re-read after the first answer was still in flight, and the click was dropped: the answer was never sent.
 test('the next card answers at once, while the queue is still being read again after the first answer', async () => {
