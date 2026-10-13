@@ -4,7 +4,8 @@
  */
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { agentSql, catalogTurn, gatewayWorkspace, mainDatabase, workspaceMainActor } from './helpers/actor-harness';
+import { RunEventRecorder, type AgentTurnEnd } from '@kinu.run/core';
+import { agentSql, catalogTurn, gatewayWorkspace, mainDatabase, mainRows, workspaceMainActor } from './helpers/actor-harness';
 import {
   GATEWAY_MODEL, chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun,
 } from './helpers/platform-gateway';
@@ -27,6 +28,88 @@ const StepSpendSchema = v.looseObject({ usd: v.optional(v.number()) });
 function onTheFastTier(run: RecordedGatewayRun): boolean {
   return FAST_MODEL.endsWith(v.parse(QueryModelSchema, run.query).model);
 }
+
+/** A streamed step's one delta: its text, or the tool calls it makes. */
+interface StreamedDelta {
+  readonly content?: string;
+  readonly tool_calls?: ReadonlyArray<{ readonly index: number; readonly id: string; readonly type: 'function'; readonly function: { readonly name: string; readonly arguments: string } }>;
+}
+
+/** What the step's last frame reports it cost. */
+interface StreamedUsage {
+  readonly prompt_tokens: number;
+  readonly completion_tokens: number;
+  readonly total_tokens: number;
+  readonly prompt_tokens_details: { readonly cached_tokens: number };
+}
+
+/** One streamed step whose last frame reports `usage`, as the gateway's compat endpoint streams it. */
+function streamedStep(delta: StreamedDelta, finish: 'tool_calls' | 'stop', usage: StreamedUsage): Response {
+  const frames = [
+    { id: 'counted', model: 'harness', choices: [{ index: 0, delta, finish_reason: null }] },
+    { id: 'counted', model: 'harness', choices: [{ index: 0, delta: {}, finish_reason: finish }], usage },
+  ];
+
+  return new Response(frames.map((frame) => 'data: ' + JSON.stringify(frame) + '\n\n').join('') + 'data: [DONE]\n\n', {
+    headers: { 'content-type': 'text/event-stream' },
+  });
+}
+
+/** Every step answered with the same counted usage: 2,100 tokens, 1,800 of them cached. */
+function countingGateway() {
+  return stubAiBinding(() => streamedStep({ content: 'Counted.' }, 'stop', {
+    prompt_tokens: 2000, completion_tokens: 100, total_tokens: 2100, prompt_tokens_details: { cached_tokens: 1800 },
+  }));
+}
+
+test("the agents panel reads main's tokens and cache from its own facet", async () => {
+  const gateway = countingGateway();
+
+  const workspace = gatewayWorkspace(gateway);
+
+  workspace.agent.harnessCatalogModels({ [GATEWAY_MODEL]: { cost: { input: 2, output: 3, cacheRead: 0.5 } } });
+  await catalogTurn(workspace.agent, 'Count the parser paths.');
+  await workspace.agent.terminalRetryPass();
+  await joinHarnessFibers();
+
+  const main = (await workspace.agent.listWorkspaceAgents()).find((agent) => agent.category === 'main');
+
+  expect(main?.figures.tokens).toBe(2100);
+  expect(main?.figures.cacheEma).not.toBeNull();
+});
+
+/** A report delayed past a newer one, carrying a run's end with the figures it held then, changes no figure the panel
+ *  reads: the agent's figures are cumulative, and the newer report already carried the later ones. */
+test("a stale report's run end leaves the panel on the newer figures", async () => {
+  const gateway = countingGateway();
+
+  const workspace = gatewayWorkspace(gateway);
+
+  await catalogTurn(workspace.agent, 'Count the parser paths.');
+  await workspace.agent.terminalRetryPass();
+  await joinHarnessFibers();
+  const tokens = async () => (await workspace.agent.listWorkspaceAgents()).find((agent) => agent.category === 'main')?.figures.tokens;
+  const before = await tokens();
+  const main = workspaceMainActor(workspace.db).actorId;
+  const own = await mainRows(workspace);
+  const recorder = new RunEventRecorder(own.sql, own.actor);
+
+  const ended: AgentTurnEnd = {
+    id: 'stale-run', status: 'completed', summary: '', evidence: [], decisions: [], artifactRefs: [], fileChanges: [], childHeadIds: [],
+    toolCalls: [], stepCount: 0, usage: {}, wallClockMs: 0, activity: [], errorMessage: null,
+    figures: { tokens: 1, activeMs: 0, cacheEma: null },
+  };
+
+  await (await workspace.agent.agentWorkspace(main)).owes(0, null, false, {
+    standing: {
+      messageCount: 0, measures: recorder.readContextMeasures(), latestRun: null, pendingSteers: [], plans: { pending: false, revision: 0 }, questions: 0,
+    },
+    runEnds: [{ id: 'stale-run', outcome: { ended } }],
+    working: false,
+  });
+
+  expect([before, await tokens()]).toEqual([2100, 2100]);
+});
 
 test('a researcher hire\'s steps are priced at its fast tier\'s rate, not the root\'s', async () => {
   const gateway = stubAiBinding((run) => {
@@ -89,18 +172,11 @@ for (const kind of ['hire', 'swarm'] as const) {
         ? { prompt_tokens: 1000, completion_tokens: 200, total_tokens: 1200, prompt_tokens_details: { cached_tokens: 0 } }
         : { prompt_tokens: 2000, completion_tokens: 100, total_tokens: 2100, prompt_tokens_details: { cached_tokens: 1800 } };
 
-      const delta = step === 0
+      const delta: StreamedDelta = step === 0
         ? { tool_calls: [{ index: 0, id: 'inspect', type: 'function', function: { name: 'tasks', arguments: '{"op":"list"}' } }] }
         : { content: 'Counted.' };
 
-      const frames = [
-        { id: 'counted', model: 'harness', choices: [{ index: 0, delta, finish_reason: null }] },
-        { id: 'counted', model: 'harness', choices: [{ index: 0, delta: {}, finish_reason: step === 0 ? 'tool_calls' : 'stop' }], usage },
-      ];
-
-      return new Response(frames.map((frame) => 'data: ' + JSON.stringify(frame) + '\n\n').join('') + 'data: [DONE]\n\n', {
-        headers: { 'content-type': 'text/event-stream' },
-      });
+      return streamedStep(delta, step === 0 ? 'tool_calls' : 'stop', usage);
     });
 
     const workspace = gatewayWorkspace(gateway);

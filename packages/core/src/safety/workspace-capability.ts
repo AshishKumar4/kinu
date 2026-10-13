@@ -169,54 +169,15 @@ export function initWorkspaceCapabilityTables(sql: SqlExec): void {
   `);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_workspace_capability_token_hash
               ON workspace_capability_tokens (token_hash)`);
-
-  // A rotation whose subtree push missed a replica; not a second authority. Every reconcile retries the push until a full
-  // push clears it, because the hash comparison alone passes when only the root agrees.
-  sql.exec(`
-    CREATE TABLE IF NOT EXISTS workspace_capability_reconcile (
-      workspace_name TEXT PRIMARY KEY,
-      token_hash     TEXT NOT NULL,
-      attempts       INTEGER NOT NULL DEFAULT 1,
-      created_at     INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-      updated_at     INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
-    )
-  `);
-}
-
-type CapabilityHashTable = 'workspace_capability_tokens' | 'workspace_capability_reconcile';
-
-/** Table name is a literal of the pair above, never caller text. */
-function registeredTokenHash(sql: SqlExec, table: CapabilityHashTable, workspaceName: string): string | null {
-  const row = v.safeParse(v.object({ token_hash: v.string() }), sql.exec(
-    `SELECT token_hash FROM ${table} WHERE workspace_name = ? LIMIT 1`, workspaceName,
-  ).toArray()[0]);
-
-  return row.success ? row.output.token_hash : null;
-}
-
-export function pendingCapabilityReconcile(sql: SqlExec, workspaceName: string): string | null {
-  return registeredTokenHash(sql, 'workspace_capability_reconcile', workspaceName);
-}
-
-/** `attempts` rises on every retry so a stuck replica shows as a growing count. */
-export function armCapabilityReconcile(sql: SqlExec, workspaceName: string, tokenHash: string): void {
-  const now = Date.now();
-  sql.exec(
-    `INSERT INTO workspace_capability_reconcile (workspace_name, token_hash, attempts, created_at, updated_at)
-     VALUES (?, ?, 1, ?, ?)
-     ON CONFLICT(workspace_name) DO UPDATE SET
-       token_hash = excluded.token_hash, attempts = attempts + 1, updated_at = excluded.updated_at`,
-    workspaceName, tokenHash, now, now,
-  );
-}
-
-export function clearCapabilityReconcile(sql: SqlExec, workspaceName: string): void {
-  sql.exec(`DELETE FROM workspace_capability_reconcile WHERE workspace_name = ?`, workspaceName);
 }
 
 /** Null when never issued. Any mismatch with the workspace's reported hash is repaired by re-minting. */
 export function workspaceCapabilityHash(sql: SqlExec, workspaceName: string): string | null {
-  return registeredTokenHash(sql, 'workspace_capability_tokens', workspaceName);
+  const row = v.safeParse(v.object({ token_hash: v.string() }), sql.exec(
+    `SELECT token_hash FROM workspace_capability_tokens WHERE workspace_name = ? LIMIT 1`, workspaceName,
+  ).toArray()[0]);
+
+  return row.success ? row.output.token_hash : null;
 }
 
 /** A fresh secret and hash, written nowhere: a DO interleaves across awaits, so the caller re-checks admission and

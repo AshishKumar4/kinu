@@ -109,10 +109,7 @@ export function initWorkspaceActorTable(execRaw: RawSqlExec): void {
     name TEXT NOT NULL,
     storage_key TEXT NOT NULL,
     origin TEXT NOT NULL CHECK (origin IN ('system','user','agent','swarm','evolution')),
-    tab INTEGER NOT NULL CHECK (tab IN (0,1)),
-    input INTEGER NOT NULL CHECK (input IN (0,1)),
     lifetime TEXT NOT NULL CHECK (lifetime IN ('durable','task')),
-    evolves INTEGER NOT NULL CHECK (evolves IN (0,1)),
     created_at INTEGER NOT NULL,
     creation_id TEXT NOT NULL,
     retiring_at INTEGER,
@@ -120,10 +117,7 @@ export function initWorkspaceActorTable(execRaw: RawSqlExec): void {
     UNIQUE (parent_actor_id, creation_id),
     UNIQUE (parent_actor_id, storage_key),
     CHECK ((origin = 'system') = (parent_actor_id IS NULL)),
-    CHECK (evolves = 0 OR origin = 'system'),
-    CHECK (tab = 0 OR origin IN ('system','user')),
-    CHECK (origin NOT IN ('swarm','evolution') OR (input = 0 AND lifetime = 'task')),
-    CHECK (origin IN ('swarm','evolution') OR input = 1)
+    CHECK (origin IN ('system','agent') OR lifetime = (CASE origin WHEN 'user' THEN 'durable' ELSE 'task' END))
   )`);
   execRaw(`CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_actors_main
     ON workspace_actors(origin) WHERE origin = 'system'`);
@@ -143,12 +137,16 @@ function mayCreate(owner: WorkspaceActor, child: { readonly origin: ActorOrigin 
   return owner.origin !== 'swarm' || child.origin === 'swarm';
 }
 
-/** Booleans as SQLite stores them. */
-type StoredActorRow = Omit<WorkspaceActor, 'workspaceId' | 'tab' | 'input' | 'evolves'> & { tab: number; input: number; evolves: number };
+/** As SQLite stores it: its origin and lifetime, from which the rest of its profile follows (`profileOf`). */
+type StoredActorRow = Omit<WorkspaceActor, 'workspaceId' | 'tab' | 'input' | 'evolves'>;
 
 function sameProfile(row: ActorProfile, profile: ActorProfile): boolean {
-  return row.origin === profile.origin && row.tab === profile.tab && row.input === profile.input
-    && row.lifetime === profile.lifetime && row.evolves === profile.evolves;
+  return row.origin === profile.origin && row.lifetime === profile.lifetime;
+}
+
+/** An actor's whole profile, which its origin decides but for an agent-made hire's chosen lifetime. */
+function profileOf(origin: ActorOrigin, lifetime: ActorProfile['lifetime']): ActorProfile {
+  return origin === 'system' ? MAIN_PROFILE : actorPreset(origin, lifetime);
 }
 
 /** Deletion outranks retirement. */
@@ -160,6 +158,12 @@ function actorState(actor: WorkspaceActor): ActorDirectoryResult['state'] {
   return 'active';
 }
 
+/** How a host holds what its directory reads. */
+export interface WorkspaceActorDirectoryOptions {
+  /** Hold each actor's row once read: only for a host whose every roster write goes through this directory. */
+  readonly holdRows?: boolean;
+}
+
 /** Owns membership. A handle issued elsewhere is not authority over this database. */
 export class WorkspaceActorDirectory {
   private readonly handles = new WeakSet<ActorHandle>();
@@ -167,7 +171,17 @@ export class WorkspaceActorDirectory {
   /** Actors this directory retired. It is the only writer of `workspace_actors`, so a handle asks this set, not the row. */
   private readonly ended = new Set<string>();
 
-  constructor(private readonly sql: SqlExecutor, private readonly authority: WorkspaceActorAuthority) {
+  /**
+   * Each row as last read, when its host holds them (`holdRows`): one whose every write goes through this directory, which
+   * drops what they touch before they run, so a row held here is the row; a database whose rows another writer replaces
+   * (an agent's isolate adopting its workspace's) says so through {@link forget}. A host whose database other processes
+   * write (the CLI's) reads each question. Only a present row is held: an absent one is read again.
+   */
+  private readonly rows: Map<string, WorkspaceActor> | null;
+
+  constructor(private readonly sql: SqlExecutor, private readonly authority: WorkspaceActorAuthority, options: WorkspaceActorDirectoryOptions = {}) {
+    this.rows = options.holdRows === true ? new Map() : null;
+
     if (!tableExists(this.sql, 'workspace_identity') || !tableExists(this.sql, 'workspace_actors')) throw new KinuError('missing', 'The workspace actor directory is not initialized.');
     const owner = this.sql<{ id: string; owner_user_id: string | null }>`SELECT id, owner_user_id FROM workspace_identity`[0];
 
@@ -180,11 +194,25 @@ export class WorkspaceActorDirectory {
 
   /** The row in any lifecycle state, or null. Issues no handle, so reading a retained actor cannot start it. */
   retained(actorId: string): WorkspaceActor | null {
+    const held = this.rows?.get(actorId);
+
+    if (held !== undefined) return held;
+
     const row = this.sql<StoredActorRow>`SELECT actor_id AS actorId,
-      parent_actor_id AS parentActorId, name, storage_key AS storageKey, origin, tab, input, lifetime, evolves, created_at AS createdAt, creation_id AS creationId, retiring_at AS retiringAt, deleted_at AS deletedAt
+      parent_actor_id AS parentActorId, name, storage_key AS storageKey, origin, lifetime, created_at AS createdAt, creation_id AS creationId, retiring_at AS retiringAt, deleted_at AS deletedAt
       FROM workspace_actors WHERE actor_id = ${actorId}`[0];
 
-    return row === undefined ? null : this.actorOf(row);
+    if (row === undefined) return null;
+    const actor = this.actorOf(row);
+
+    this.rows?.set(actorId, actor);
+
+    return actor;
+  }
+
+  /** Rows another writer replaced: each is read again at its next need. */
+  forget(actorIds: readonly string[]): void {
+    for (const actorId of actorIds) this.rows?.delete(actorId);
   }
 
   /** `also` runs after the directory's own checks and can only refuse further, never authorise. */
@@ -218,13 +246,13 @@ export class WorkspaceActorDirectory {
   /** Oldest first, main included. */
   list(options?: { readonly retired?: boolean }): readonly WorkspaceActor[] {
     return this.sql<StoredActorRow>`SELECT actor_id AS actorId,
-      parent_actor_id AS parentActorId, name, storage_key AS storageKey, origin, tab, input, lifetime, evolves, created_at AS createdAt, creation_id AS creationId, retiring_at AS retiringAt, deleted_at AS deletedAt
+      parent_actor_id AS parentActorId, name, storage_key AS storageKey, origin, lifetime, created_at AS createdAt, creation_id AS creationId, retiring_at AS retiringAt, deleted_at AS deletedAt
       FROM workspace_actors WHERE ${options?.retired === true ? 1 : 0} = 1 OR (deleted_at IS NULL AND retiring_at IS NULL)
       ORDER BY created_at, actor_id`.map((row) => this.actorOf(row));
   }
 
   private actorOf(row: StoredActorRow): WorkspaceActor {
-    return { ...row, tab: row.tab === 1, input: row.input === 1, evolves: row.evolves === 1, workspaceId: this.authority.workspaceId };
+    return { ...row, ...profileOf(row.origin, row.lifetime), workspaceId: this.authority.workspaceId };
   }
 
   main(): ActorHandle {
@@ -396,13 +424,13 @@ export class WorkspaceActorDirectory {
     const { profile } = row;
     const keyByName = row.keyByName === true ? 1 : 0;
 
+    this.rows?.delete(row.actorId);
     void this.sql`INSERT INTO workspace_actors
-      (actor_id, parent_actor_id, name, storage_key, origin, tab, input, lifetime, evolves, created_at, creation_id, retiring_at, deleted_at)
+      (actor_id, parent_actor_id, name, storage_key, origin, lifetime, created_at, creation_id, retiring_at, deleted_at)
       VALUES (${row.actorId}, ${row.parentActorId}, ${row.name},
         CASE WHEN ${keyByName} = 1 AND NOT EXISTS (SELECT 1 FROM workspace_actors WHERE name = ${row.name} OR storage_key = ${row.name})
           THEN ${row.name} ELSE ${row.storageKey} END,
-        ${profile.origin}, ${profile.tab ? 1 : 0},
-        ${profile.input ? 1 : 0}, ${profile.lifetime}, ${profile.evolves ? 1 : 0}, ${row.ended ?? Date.now()}, ${row.creationId},
+        ${profile.origin}, ${profile.lifetime}, ${row.ended ?? Date.now()}, ${row.creationId},
         ${row.ended}, ${row.ended})`;
   }
 
@@ -492,6 +520,10 @@ export class WorkspaceActorDirectory {
   private transitionRetirement(actorId: string, action: 'retire' | 'release'): void {
     const now = Date.now();
 
+    // The subtree it moves is known only once it ran: every held row is read again, before it runs so a rollback leaves
+    // none ahead of the database.
+    this.rows?.clear();
+
     const ended = this.sql<{ actor_id: string }>`WITH RECURSIVE subtree(actor_id) AS (
       SELECT actor_id FROM workspace_actors WHERE actor_id = ${actorId}
       UNION ALL SELECT child.actor_id FROM workspace_actors child JOIN subtree ON child.parent_actor_id = subtree.actor_id
@@ -547,6 +579,24 @@ export function subordinateDescendants(actors: readonly WorkspaceActor[], actorI
 }
 
 /**
+ * What an agent's Stop stops below it (design v3 C): every hired agent under it, but one its owner added, or one hired
+ * under such an agent, which answers to its owner's own Stop.
+ */
+export function stoppedBelow(actors: readonly WorkspaceActor[], actorId: string): readonly WorkspaceActor[] {
+  const byId = new Map(actors.map((actor) => [actor.actorId, actor]));
+
+  const ownerMade = (actor: WorkspaceActor): boolean => {
+    for (let step: WorkspaceActor | undefined = actor; step !== undefined && step.actorId !== actorId; step = byId.get(step.parentActorId ?? '')) {
+      if (step.origin === 'user') return true;
+    }
+
+    return false;
+  };
+
+  return subordinateDescendants(actors, actorId).filter((actor) => !ownerMade(actor));
+}
+
+/**
  * Keyed by the immutable storage key: a hire's name only when no actor of the workspace had it before (`create`), so
  * renames and reused names never share a directory.
  */
@@ -561,11 +611,11 @@ export function actorScaffoldPath(record: Pick<WorkspaceActor, 'origin' | 'stora
   return `${actorStateRoot(record.storageKey)}/scaffold/agent.js`;
 }
 
-/** Runs `send` only if the owner may message `actorId`: a view-only agent's `input` is off. */
+/** Runs `send` only if the owner may message `actorId`: a view-only agent (a swarm's or evolution's) takes no input. */
 export function whenActorTakesInput<Result>(sql: SqlExecutor, actorId: string, send: () => Promise<Result>): Promise<Result> {
-  const input = sql<{ input: number }>`SELECT input FROM workspace_actors WHERE actor_id = ${actorId}`[0]?.input;
+  const origin = sql<{ origin: string }>`SELECT origin FROM workspace_actors WHERE actor_id = ${actorId}`[0]?.origin;
 
-  return settle(input === 0
+  return settle(origin === 'swarm' || origin === 'evolution'
     ? Effect.fail(new KinuError('denied', 'This agent is view-only: it takes no messages. You can watch it or stop it.'))
     : Effect.promise(send));
 }

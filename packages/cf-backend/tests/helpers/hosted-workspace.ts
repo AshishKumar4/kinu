@@ -5,7 +5,7 @@ import {
   BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC,
   initWorkspaceSchema, profileCatalogDigest, resolveTurnProfile,
   WorkspaceActorDirectory, actorReferenceOf, localContextTree, tierRefusals,
-  type ActorHost, type ActorReference, type AgentRuntime, type HostedActor, type LoopOrigin,
+  type ActorHost, type ActorReference, type AgentRuntime, type SeatedActor, type LoopOrigin,
   type ProfileAuthorityInputs, type SqlExecutor,
 } from '@kinu.run/core';
 import { createAgentTracing, createRecordingTracer } from '@kinu.run/core/obs';
@@ -28,10 +28,10 @@ export function resetDatabases(): void {
 export interface HostedWorkspaceFixture {
   readonly db: Database;
   readonly sql: SqlExecutor;
-  readonly host: ActorHost;
+  readonly host: ActorHost<SeatedActor>;
   readonly directory: WorkspaceActorDirectory;
   readonly main: ActorReference;
-  hire(parent: ActorReference, name: string, origin: 'agent' | 'swarm', loop?: LoopOrigin): Promise<HostedActor>;
+  hire(parent: ActorReference, name: string, origin: 'agent' | 'swarm', loop?: LoopOrigin): Promise<SeatedActor>;
 }
 
 /** Fixed authority inputs, so digest assertions never depend on a model choice. */
@@ -142,20 +142,10 @@ export async function hostedWorkspace(
     servingMoved: () => Promise.resolve(),
     boxUse: { used: false },
     modelOperations: () => undefined,
-    pricing: () => null,
-    hostedModel: () => undefined,
-    broadcast: () => undefined,
-    turnClaimChanged: () => undefined,
-    enqueueTurn: () => Promise.resolve({ status: 'queued' }),
-    turnInFlight: () => false,
-    setTimer: () => undefined,
-    reconcileDurableWake: () => undefined,
-    logActivity: () => undefined,
     tracing: () => createAgentTracing({ tracer: createRecordingTracer(), isolateGen: 1, selfPath: [], actor: { id: main.actorId, kind: 'main' } }),
     slate: () => Promise.resolve({ ok: false, success: false, reason: 'unavailable', error: 'no slate host in this fixture' }),
     slateBuild: () => Promise.resolve({ ok: false, success: false, reason: 'unavailable', error: 'no slate host in this fixture' }),
     deferrals: () => undefined,
-    refinementLane: () => () => Promise.resolve(),
     chosenLoopOrigin: (record) => chosen.get(record.actorId) ?? null,
     chosenWriteObserver: () => null,
     ...overrides,

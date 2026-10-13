@@ -1,12 +1,5 @@
-// Backend-agnostic per-turn agent logic: turn accounting, evolution cadence, and the event→turn reactor.
-//
-// Evolution exit contract. Every dispatch is detached; `end()` decides what to wait for.
-//   Turn lane (outcome review): `settleTracked()` joins it, and all work a backend `track()`s, with no elapsed bound
-//     (owner ruling, 2026-08).
-//     A `oneShot` host defers it as a durable row drained by `runDeferredTurnReviews` at the next session open.
-//   Cadence lane (session/lifetime chain, the live trial and the proposer): never joined; only started by a host
-//     that can afford to finish it. Safe because the session window closes only after its pass settles
-//     (`CompletedTurnStore.claim`).
+// Backend-agnostic per-turn agent logic: turn accounting and the event→turn reactor, over the agent's evolution lanes
+// (`EvolutionLanes`, whose exit contract covers everything this dispatches).
 // The in-episode clock (`craft`, `recordRecovery`) writes synchronous rows and needs no join.
 
 import type { ModelMessage } from 'ai';
@@ -16,52 +9,30 @@ import { TurnSteering } from './turn-steering';
 import { CraftCycle } from './craft-cycle';
 import { DrainScheduler } from './drain-scheduler';
 import { Inbox, readSignalId, type UserSteerDeps } from './inbox';
-import { buildDrainBatch } from '../events/hub/drain';
+import { EvolutionLanes, improvementLanesOpen, type EvolutionLanesDeps } from './evolution-lanes';
 import type { EventLog } from '../events/hub/log';
 import type { ExecutionRecoveryRecord } from '../events/types';
 import type { PrepareStepContext, KinuExtension } from '../extension';
 import type { BackendHost } from '../types/backend-host';
-import type { AgentSignal, SignalUndeliveredReason } from '../types/signals';
+import type { AgentInbox } from '../types/signals';
+import { pendingEventsDelivery, type Delivery } from '../subordinates/deliveries';
 import type { EvolutionEngine } from '../evolution/engine';
-import type { ClaimedWindow, DeferredReviewDrain } from '../evolution/session-window';
 import type { RecoveryFinding } from '../evolution/recovery';
-import type { CompletedTurn } from '../evolution/types';
-import {
-  MISSION_LABELS_METADATA_KEY, readMissionLabels, type MissionGovernor,
-} from '../mission-budget';
-import { nanoid } from '../utils/nanoid';
+import { readMissionLabels } from '../mission-budget';
 import { workModeForTurnMetadata } from '../prompting/surface';
 import { type WorkMode } from '../types/turn';
 import type { JsonObject } from '../utils/json';
-import { Cause, Effect } from 'effect';
-import { diagnostics, toKinuError, settle, settleLogged, settleLoggedSync } from '../obs/index';
+import { Effect } from 'effect';
+import { attempt, diagnostics, settle, settleLoggedSync } from '../obs/index';
 
-/**
- * Whether an arriving user message is a genuine follow-up or an independent task invocation.
- * An independent task prompt must never grade the previous turn as accepted.
- */
-export type TurnContinuity = 'conversation' | 'independent_task';
-
-/** Turns between session-level evolution passes; deliberately not a host option. */
-const DEFAULT_SESSION_REFLECTION_INTERVAL = 5;
-
-export interface AgentOrchestratorDeps {
+export interface AgentOrchestratorDeps extends EvolutionLanesDeps {
   host: BackendHost;
-  engine: Pick<
+  engine: EvolutionLanesDeps['engine'] & Pick<
     EvolutionEngine,
-    | 'enabled'
     | 'withTurnLearning'
-    | 'recordsTurns'
-    | 'recoverInterruptedWork'
-    | 'sessionWindow'
     | 'craftLedger'
     | 'recordRecovery'
     | 'reviewTurn'
-    | 'runStoredTurnReview'
-    | 'deferTurnReview'
-    | 'runDeferredTurnReviews'
-    | 'onSessionComplete'
-    | 'runDueEvolution'
     | 'recentAdvisorNotes'
     | 'recordAdvisorNote'
     | 'hasAdvisorNoteForTurn'
@@ -69,21 +40,22 @@ export interface AgentOrchestratorDeps {
   >;
   eventLog: EventLog;
   sinks?: TurnSinks;
-  /** Absent: no governor wired. Present-but-unscoped is the normal uncapped turn. */
-  budget?: MissionGovernor;
-  /** This process runs one task turn and exits, so it never starts the cadence lane (see exit contract).
-   *  Independent of {@link TurnContinuity}. */
-  oneShot?: boolean;
   /**
-   * The continual-refinement lane, driven off-turn beside the evolution pass so it never lengthens a turn.
-   * Absent: requests stay durable for the next host that wires one.
+   * The one admission path (design v2 §1): every signal to this agent and every drain of its events goes out as a
+   * delivery, committed with its source, then handed to the agent's chat; `inbox` takes only a person's words while a
+   * turn runs. `commit` runs `bind` in one synchronous commit with the delivery's row and crosses it.
    */
-  refinementLane?: () => Promise<void>;
+  deliveries: {
+    readonly signals: AgentInbox;
+    readonly commit: (bind: () => Delivery | null) => Promise<void>;
+  };
 }
 
-export class AgentOrchestrator {
+export class AgentOrchestrator extends EvolutionLanes {
   readonly acc: TurnAccumulator;
   readonly inbox: Inbox;
+  /** Where a signal to this agent goes: its deliveries. */
+  readonly signals: AgentInbox;
   /** Per-turn mechanical steering; feeds the durable `turn_steering` rows. */
   readonly steering = new TurnSteering();
   readonly craft: CraftCycle;
@@ -114,43 +86,27 @@ export class AgentOrchestrator {
   private turnEvolutionEnabled = false;
   private activeWorkMode: WorkMode = 'build';
   private activeMissions: readonly string[] = [];
-  private readonly reflectionInterval = DEFAULT_SESSION_REFLECTION_INTERVAL;
   private readonly drains: DrainScheduler;
-  /** Tracked and unsettled: the turn lane's evolution and what a backend tracks (a scaffold bootstrap, a history
-   *  restore, a context measure), joined by settleTracked. */
-  private readonly inFlight = new Map<Promise<void>, string>();
-  /** Cadence lane latch: at most one pass, since `claim()` retires nothing until the pass settles. */
-  private sessionEvolution: Promise<void> | null = null;
-  /** Cadence lane observer, not a latch: a no-op pass must not hide a window that fills meanwhile.
-   *  Deliberately not joined by `settleTracked`. */
-  private cadencePasses: Promise<void> = Promise.resolve();
-  /** Cadence lane: trial-drain latch, separate from the window pass so trials never run twice
-   *  and a no-op drain never hides a filled window. */
-  private evolutionPass: Promise<void> | null = null;
 
   constructor(private readonly deps: AgentOrchestratorDeps, steers?: UserSteerDeps) {
+    super(deps);
     this.acc = new TurnAccumulator(deps.sinks, deps.budget);
     this.craft = new CraftCycle(deps.engine.craftLedger, this.acc);
     this.turnEvolutionEnabled = deps.engine.enabled;
     this.inbox = new Inbox(deps.host, (e, d) => this.logActivity(e, d), steers);
+    this.signals = deps.deliveries.signals;
     this.drains = new DrainScheduler(
       () => this.drainPendingEvents(),
       (fn, ms) => deps.host.setTimer(fn, ms),
     );
   }
 
-  /** Durable: neither backend's instance outlives the window. */
-  private get window() {
-    return this.deps.engine.sessionWindow;
+  protected override turnGate(): boolean {
+    return this.turnEvolutionEnabled;
   }
 
-  /** Turns buffered in the open window; zero while auto-evolution is off. */
-  get sessionTurnIndex(): number {
-    return this.window.size();
-  }
-
-  /** Reset per-turn accounting from the turn's metadata. `continuation` re-admits the previous turn's signals. */
-  beginTurn(now: number, metadata?: JsonObject, continuation = false): void {
+  /** Reset per-turn accounting from the turn's metadata. */
+  beginTurn(now: number, metadata?: JsonObject): void {
     this.deps.engine.recoverInterruptedWork();
     this.acc.reset(now);
     this.steering.reset();
@@ -163,7 +119,7 @@ export class AgentOrchestrator {
     this.craft.reset(evolutionEnabled);
     this.turnRecoveries = [];
     this.observeRecoveries = evolutionEnabled;
-    this.inbox.beginTurn(continuation, readSignalId(metadata));
+    this.inbox.beginTurn(readSignalId(metadata));
     this.deps.budget?.activate(this.activeMissions);
   }
 
@@ -195,217 +151,6 @@ export class AgentOrchestrator {
     };
   }
 
-  /**
-   * A new user message arrived: dispatch the previous turn's detached outcome review. Programmatic turns must
-   * not call this. Only a `'conversation'` message counts as follow-up evidence; otherwise no follow-up is passed.
-   */
-  observeUserTurn(userText: string, continuity: TurnContinuity): void {
-    if (!this.turnEvolutionEnabled) return;
-    const previous = this.window.claimPendingReview();
-
-    if (!previous) return;
-    const followup = continuity === 'conversation' ? userText : null;
-    this.dispatchReview(previous.turn, followup, previous.rowId);
-  }
-
-  /**
-   * Buffer the turn in the durable window, run due session evolution, and queue a review for any turn with no
-   * conversational follow-up coming. Detached; does not drain events. Records nothing with auto-evolution off.
-   * `opts.id` makes the append idempotent for a backend that may replay this recording.
-   */
-  recordTurn(
-    turn: CompletedTurn,
-    continuity: TurnContinuity,
-    opts?: {
-      readonly id?: string;
-      readonly recordedAt?: number;
-      /** The producing session's evolution gate, replacing the ambient one when replaying a recorded turn. */
-      readonly enabled?: boolean;
-    },
-  ): void {
-    // The recorded gate wins: a recovery is not the session the turn ran under.
-    if (!(opts?.enabled ?? (this.turnEvolutionEnabled && this.deps.engine.recordsTurns))) return;
-    const scoped = this.scopeTurn(turn);
-    const awaitsFollowup = turn.origin !== 'programmatic' && continuity === 'conversation';
-
-    // An independent task proves the parked follow-up will never come; its review demotes to the queue.
-    if (continuity === 'independent_task') {
-      // Bounded by when this turn ended, so a late replay cannot demote a newer parked review.
-      this.window.expireAwaitingReviews(
-        opts?.recordedAt === undefined ? undefined : { before: opts.recordedAt },
-      );
-    }
-
-    // The append carries the review obligation; never dispatch inline here, or an eviction loses it and a
-    // replay runs it twice.
-    const appendOpts = { awaitsFollowup, id: opts?.id };
-    this.window.append(
-      scoped,
-      opts?.recordedAt === undefined ? appendOpts : { ...appendOpts, now: opts.recordedAt },
-    );
-
-    // Promptness on top of durability; the queue's claim keeps it exactly-once.
-    // A one-shot host must not open work it cannot finish.
-    if (!this.deps.oneShot) {
-      if (!awaitsFollowup) {
-        this.detach(this.deps.engine.runDeferredTurnReviews().then(() => undefined), 'Turn review');
-      }
-
-      const cadence = this.runDueSessionEvolution();
-      const previousCadence = this.cadencePasses;
-      this.cadencePasses = settleLogged('orchestrator.detached_work_failed', { doing: 'run detached post-turn work', otherwise: 'unavailable' },
-        async () => { await Promise.all([previousCadence, cadence]); }, { work: 'Session evolution' });
-    }
-  }
-
-  /**
-   * Stamp the turn's mission scope now, the last moment it is knowable (the next `beginTurn` replaces it).
-   * An unscoped turn is returned untouched: absent means ungoverned.
-   */
-  private scopeTurn(turn: CompletedTurn): CompletedTurn {
-    // A replay already carries the scope captured at turn end; a cold-start governor must not overwrite it.
-    if (turn.missionLabels !== undefined) return turn;
-    const labels = this.deps.budget?.scope ?? [];
-
-    return labels.length === 0 ? turn : { ...turn, missionLabels: [...labels] };
-  }
-
-  scopedTurn(turn: CompletedTurn): CompletedTurn {
-    return this.scopeTurn(turn);
-  }
-
-  /** Turn-lane decision point: a `oneShot` host defers the review as a durable row; others detach and join at exit. */
-  private dispatchReview(turn: CompletedTurn, followup: string | null, storedRowId?: string): void {
-    if (this.deps.oneShot) {
-      this.deps.engine.deferTurnReview(turn, followup, { storedRowId });
-
-      return;
-    }
-
-    this.detach(this.deps.engine.runStoredTurnReview(storedRowId ?? '', turn, followup), 'Turn review');
-  }
-
-  /**
-   * Re-drive reviews one-shot hosts deferred, at session open on hosts that can afford it. One-shot hosts do not
-   * re-drive (see MAX_QUEUED_TURN_REVIEWS). Never rejects.
-   */
-  async runDeferredTurnReviews(): Promise<DeferredReviewDrain> {
-    if (this.deps.oneShot) return { reviewed: 0, refused: [] };
-
-    return await this.deps.engine.runDeferredTurnReviews();
-  }
-
-  /**
-   * Cadence lane: the evolution pass (trial, then proposer), then the session/lifetime chain once the window reaches the interval.
-   * The window is closed only after the chain settles. Never rejects. The window is claimed before any await:
-   * `claim()` marks nothing, so a single tick is what keeps a second pass off it.
-   */
-  runDueSessionEvolution(): Promise<void> {
-    this.deps.engine.recoverInterruptedWork();
-
-    if (this.sessionEvolution) return this.sessionEvolution;
-
-    const claimed = this.deps.engine.recordsTurns && this.window.size() >= this.reflectionInterval
-      ? this.window.claim()
-      : null;
-
-    let pass = this.runCadencePass(claimed);
-
-    // Only a pass that claimed a window latches, or it would hide a window that filled while it ran.
-    if (claimed) {
-      pass = pass.finally(() => { this.sessionEvolution = null; });
-      this.sessionEvolution = pass;
-    }
-
-    return pass;
-  }
-
-  /**
-   * The live trial's look first, so a decided trial frees the proposer this pass. The refinement lane runs last,
-   * whether or not a window was claimed; its trigger is durable debt.
-   */
-  private async runCadencePass(claimed: ClaimedWindow | null): Promise<void> {
-    await this.runDueEvolution();
-
-    if (claimed) {
-      await settleLogged('evolution.session_pass_failed', { doing: 'run the session evolution pass', otherwise: 'unavailable' }, () => this.deps.engine.onSessionComplete({
-          sessionId: `sess-${nanoid()}`,
-          turns: claimed.turns,
-          startedAt: claimed.startedAt,
-          endedAt: Date.now(),
-        }));
-
-      // Settled either way: retrying a persistently failing window would livelock. Carry-forward is for a dead host.
-      claimed.settle();
-    }
-
-    await this.drainRefinementLane();
-  }
-
-  /** At most one step; failures are absorbed since the request rows are durable. */
-  private async drainRefinementLane(): Promise<void> {
-    const lane = this.deps.refinementLane;
-
-    if (!lane) return;
-
-    await settleLogged('evolution.refinement_lane_failed', { doing: 'advance the continual-refinement lane', otherwise: 'unavailable' }, () => lane());
-  }
-
-  private runDueEvolution(): Promise<void> {
-    if (this.evolutionPass) return this.evolutionPass;
-
-    const pass = this.deps.engine.runDueEvolution()
-      .finally(() => { this.evolutionPass = null; });
-
-    this.evolutionPass = pass;
-
-    return pass;
-  }
-
-  /**
-   * Join all tracked work with no elapsed bound; unjoined work is killed at process exit.
-   * The cadence lane is deliberately not joined (see module header).
-   */
-  async settleTracked(): Promise<void> {
-    const started = Date.now();
-    // Named on the success path too: a slow exit tail is otherwise silent.
-    const waitedOn = [...new Set(this.inFlight.values())];
-
-    while (this.inFlight.size > 0) {
-      // Work dispatched during the await is joined by the next lap.
-      await Promise.all(this.inFlight.keys());
-    }
-
-    const waitedMs = Date.now() - started;
-
-    if (waitedMs > 1_000) {
-      diagnostics.event('orchestrator.tracked_settled', { waitedMs, waitedOn: waitedOn.join(', ') });
-    }
-  }
-
-  /** Joined by settleTracked, as the turn lane is. */
-  track(work: Promise<void>, label: string): void {
-    this.detach(work, label);
-  }
-
-  private detach(work: Promise<void>, label: string): void {
-    let tracked: Promise<void> | null = null;
-    tracked = (async (): Promise<void> => {
-      try {
-        await work;
-      } catch (cause) {
-        diagnostics.failure(
-          'orchestrator.detached_work_failed',
-          toKinuError({ doing: 'run detached post-turn work', cause, otherwise: 'unavailable' }),
-          { work: label },
-        );
-      } finally {
-        if (tracked !== null) this.inFlight.delete(tracked);
-      }
-    })();
-    this.inFlight.set(tracked, label);
-  }
-
   logActivity(event: string, detail?: string): void {
     this.deps.sinks?.logActivity?.(event, detail);
   }
@@ -424,105 +169,35 @@ export class AgentOrchestrator {
     });
   }
 
-  /**
-   * Compensation: put a refused signal's events back, then re-arm, or pending rows are unreachable.
-   * Uses the durable wake, not `scheduleDrain`: the debounce would spin against the same pre-emption.
-   * Events whose turn ran and failed go back parked: a wake would only fail them again, so they ride the next drain
-   * something else starts (a settled turn, a new event).
-   */
-  private returnEventsToPending(ids: readonly string[], reason: SignalUndeliveredReason): void {
-    for (const id of ids) {
-      settleLoggedSync('event.unbind_failed', { doing: 'return a bound event to pending', otherwise: 'io' }, () => {
-        if (reason === 'turn_failed') this.deps.eventLog.park(id);
-        else this.deps.eventLog.unbind(id);
-      }, { eventId: id });
-    }
-
-    this.reconcileDurableWake();
+  drainPendingEvents(opts?: { readonly rethrow?: boolean }): Promise<void> {
+    return drainPendingEvents(this.deps, opts);
   }
 
-  /**
-   * The reactor: bind pending events to a synthetic turn (markConsumed is synchronous, so a concurrent drain
-   * sees them consumed), then send the batch as one signal bound to `replyTurnId`. An undelivered signal
-   * puts its events back. No-op when nothing is pending.
-   */
-  drainPendingEvents(
-    /** Rethrow selection/binding failures: a durable effect that owes this drain must not report done. */
-    opts?: { readonly rethrow?: boolean },
-  ): Promise<void> {
-    return settle(Effect.gen({ self: this }, function* () {
-      const turnId = `evt-${nanoid()}`;
-      const bound: string[] = [];
-
-      const batch = yield* Effect.catchCause(Effect.sync(() => {
-        const pending = this.deps.eventLog.pending({ resolve_deferred: { now: Date.now(), phase: 'idle' } });
-        const selected = buildDrainBatch(pending, this.deps.eventLog.isEvolutionReport);
-
-        for (const id of selected?.ids ?? []) {
-          this.deps.eventLog.markConsumed(id, turnId, 0);
-          bound.push(id);
-        }
-
-        return selected;
-      }), (failed) => {
-        // Unbind the prefix so the retry sees the whole batch; otherwise it strands with no signal or wake.
-        for (const id of bound) {
-          settleLoggedSync('orchestrator.drain_unbind_failed', { doing: 'release an event bound by a drain that failed', otherwise: 'io' }, () => {
-            this.deps.eventLog.unbind(id);
-          }, { turnId, event: id });
-        }
-
-        const failure = toKinuError({
-          doing: 'select the pending events for a drain turn', cause: Cause.squash(failed), otherwise: 'io',
-        });
-
-        diagnostics.failure('orchestrator.drain_select_failed', failure, { turnId });
-
-        return opts?.rethrow === true ? Effect.fail(failure) : Effect.succeed(null);
-      });
-
-      if (!batch) return;
-      const ids = batch.ids;
-      let metadata: JsonObject | undefined;
-
-      if (batch.mode !== null || batch.missions.length > 0) {
-        metadata = {};
-
-        if (batch.mode !== null) metadata.kinuMode = batch.mode;
-
-        if (batch.missions.length > 0) metadata[MISSION_LABELS_METADATA_KEY] = batch.missions;
-      }
-
-      const signal: AgentSignal = {
-        kind: 'event_drain',
-        text: batch.text,
-        stepText: batch.midTurnText,
-        replyTurnId: turnId,
-        // The rows are already bound to `turnId`, so it routes the queued half through the host's durable
-        // admission ledger; a re-delivery of the same drain collapses to one turn.
-        idempotencyKey: turnId,
-        compensate: (reason) => this.returnEventsToPending(ids, reason),
-        metadata,
-      };
-
-      yield* Effect.promise(() => this.inbox.send(signal));
-    }));
-  }
-
-  // The settle spine is `declareTerminalRoster` (orchestrator/terminal-roster.ts). The pure rules below are
-  // public so a backend claiming the sub-effects separately asks them without re-spelling them.
+  // The settle spine is `declareTerminalRoster` (orchestrator/terminal-roster.ts). The pure rule below is public so a
+  // backend claiming the sub-effects separately asks it without re-spelling it.
 
   /** Completed-only improvement lanes (advisor review, auto-title) open only after a completed build turn. */
   improvementLanesOpen(status: RunEndReason, workMode?: WorkMode): boolean {
     // `workMode` is for a replay on a fresh activation; absent means the live turn.
-    return status === 'completed' && (workMode ?? this.activeWorkMode) !== 'plan';
+    return improvementLanesOpen(status, workMode ?? this.activeWorkMode);
   }
+}
 
-  /**
-   * The turn to record for this verdict: `'error'` forces `hadError` (a throw can escape the accumulator);
-   * an abort is deliberately not an error.
-   */
-  recordedTurn(status: RunEndReason, turn: CompletedTurn): CompletedTurn {
-    return status === 'error' && !turn.hadError ? { ...turn, hadError: true } : turn;
-  }
+/**
+ * The reactor: bind pending events to a synthetic turn (markConsumed is synchronous, so a concurrent drain
+ * sees them consumed), then send the batch as one signal bound to `replyTurnId`. An undelivered signal
+ * puts its events back. No-op when nothing is pending.
+ */
+export function drainPendingEvents(
+  { eventLog, deliveries }: Pick<AgentOrchestratorDeps, 'eventLog' | 'deliveries'>,
+  /** Rethrow selection/binding failures: a durable effect that owes this drain must not report done. */
+  opts?: { readonly rethrow?: boolean },
+): Promise<void> {
+  // Its events bound to their turn in the commit that writes the turn's delivery: nothing to put back.
+  return settle(attempt({ doing: 'deliver the pending events as one turn', otherwise: 'io' }, () => deliveries.commit(() => pendingEventsDelivery(eventLog, Date.now())))
+    .pipe(Effect.catch((failure) => {
+      diagnostics.failure('orchestrator.drain_select_failed', failure);
+
+      return opts?.rethrow === true ? Effect.fail(failure) : Effect.void;
+    })));
 }

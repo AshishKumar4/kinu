@@ -1,11 +1,12 @@
 import { MEMORY_PATH } from '../memory/note';
+import { WRITE } from '../utils/held-reads';
 import { workspacePath, WORKSPACE_ROOT } from '../vfs/workspace-path';
 
 export const LIVE_READS = [
   'getExposedPorts', 'getToolDescriptions', 'listSlates', 'getEvolutionChangelog', 'listPendingActions',
   'getMemoryContent', 'getExecutors', 'listBackgroundJobs', 'getWorkspaceTabPresence', 'getActivePlanReview',
   'listWorkspaceWork', 'listWorkspaceAgents', 'listSubordinates', 'getQuality', 'getWorkspaceGitHub', 'inspectWork',
-  'listOwnerQuestions',
+  'listOwnerQuestions', 'listOwedIntents',
 ] as const;
 
 export type LiveRead = typeof LIVE_READS[number];
@@ -51,6 +52,8 @@ const READS_BY_TABLE: ReadonlyMap<string, readonly LiveRead[]> = new Map<string,
   ['proposed_tasks', QUEUE],
   ['plan_reviews', ['getActivePlanReview', 'getToolDescriptions', ...QUEUE, 'listWorkspaceWork', ...AGENTS]],
   ['owner_questions', ['listOwnerQuestions', 'getWorkspaceTabPresence', ...AGENTS]],
+  // The owner's intents on their way: each owed delivery row, until the agent's wake delivers it.
+  ['agent_deliveries', ['listOwedIntents']],
   ['background_jobs', ['listBackgroundJobs', 'getWorkspaceTabPresence']],
   ['background_job_serves', ['listBackgroundJobs', 'getWorkspaceTabPresence']],
   ['agent_tasks', WORK],
@@ -60,7 +63,8 @@ const READS_BY_TABLE: ReadonlyMap<string, readonly LiveRead[]> = new Map<string,
   ['actor_turn_claims', [...AGENTS, ...OWED]],
   ['terminal_effects', OWED],
   ['agent_open_turns', OWED],
-  ['agent_owed_work', OWED],
+  // An agent's report says whether its isolate holds owed work.
+  ['agent_reports', OWED],
   ['agent_log', AGENTS],
   ['head_journal', AGENTS],
   ['head_runs', AGENTS],
@@ -71,8 +75,6 @@ const READS_BY_MEMBERSHIP: ReadonlyMap<string, readonly LiveRead[]> = new Map<st
   ['head_journal', ['getWorkspaceTabPresence']],
   ['search_nodes', ['getWorkspaceTabPresence']],
 ]);
-
-const WRITE = /\b(INSERT(?:\s+OR\s+\w+)?\s+INTO|REPLACE\s+INTO|UPDATE(?:\s+OR\s+\w+)?|DELETE\s+FROM)\s+["`]?(\w+)/i;
 
 const NONE: readonly LiveRead[] = [];
 

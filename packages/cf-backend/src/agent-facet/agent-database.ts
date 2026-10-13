@@ -1,25 +1,30 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** An agent's own SQLite, under the core stores; its roster rows are copies the workspace sends on each call. */
 import type { ModelMessage, UIMessage } from 'ai';
-import { CHAT_SESSION_ID, EventLog, EvolutionEngine, WorkspaceActorDirectory, runEventSinks, historyTurnPairs, conversationTurnPair, type ConversationTurnPair,
-actorReferenceOf, actorScaffoldPath, createActorHost, createScaffoldSurface, defaultLoopOrigin,
-initWorkspaceSchema, nimbusSessionFiles, recoverActorTurns, MissionGovernor, actorReadHandle, readSessionTranscript, readSubordinateInspection,
-getChatHistoryPage, inheritedContextFromTranscript, turnRequestIndex, turnRequestPage,
-type TurnRequestIndex, type TurnRequestPage, RunEventRecorder, spendLedger, type SpendLedger, type StepSpendSource,
-readAgentFigures, NO_FIGURES, type AgentFigures,
-localContextTree, type ContextEditor, type ContextTree, type ConversationRecall,
-type ActorHandle, type AgentOwnInspection, type ChatHistoryPage, type PositionPageRequest, type SerializedMessage,
-type SessionTranscriptReader, type SubordinateInspectionResult, type SubordinateReportLedger, type ModelPricing, type SqlExecutor,
-type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HeadReport, type HostedActor,
-type Executor, type JsonObject, type NimbusSandboxFiles, type SqlValue, WORKSPACE_ROOT, cloudPlanes, answersForDrainTurns,
-initPendingSendTables, initTerminalEffectTable, PendingSendStore, contextFill, announcementOf, classifyRunEnd, closeTurnRun, TurnReports,
-PlanReviewStore, type PlanReview, } from '@kinu.run/core'
+import {
+  CHAT_SESSION_ID, EventLog, EvolutionEngine, WorkspaceActorDirectory, runEventSinks, historyTurnPairs, conversationTurnPair, type ConversationTurnPair,
+  actorReferenceOf, actorScaffoldPath, createActorHost, createScaffoldSurface, defaultLoopOrigin,
+  initAgentIsolateSchema, nimbusSessionFiles, recoverActorTurns, MissionGovernor, actorReadHandle, readSessionTranscript, readSubordinateInspection,
+  drawnStep, getChatHistoryPage, inheritedContextFromTranscript, turnRequestIndex, turnRequestPage,
+  type TurnRequestIndex, type TurnRequestPage, RunEventRecorder, spendLedger, type SpendLedger, type StepSpendSource,
+  readAgentFigures, NO_FIGURES, type AgentFigures,
+  localContextTree, type ContextEditor, type ContextTree, type ConversationRecall,
+  type ActorHandle, type AgentOwnInspection, type ChatHistoryPage, type PositionPageRequest, type SerializedMessage,
+  type SessionTranscriptReader, type SubordinateInspectionResult, type SubordinateReportLedger, type ModelPricing, type SqlExecutor,
+  type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HeadReport, type HostedActor,
+  type Executor, type JsonObject, type NimbusSandboxFiles, type SqlValue, WORKSPACE_ROOT, cloudPlanes, answersForDrainTurns,
+  initPendingSendTables, initTerminalEffectTable, PendingSendStore, contextFill, announcementOf, classifyRunEnd, closeTurnRun, TurnReports,
+  PlanReviewStore, OwnerQuestionStore, AgentSequence, TurnFactsStore, type PlanReview, type TurnFacts,
+  forkArtifactPath, localForkConversationSource, localForkConversationTarget, type ForkConversationSource, type ForkConversationTarget,
+  InProcessDeliveries, type DeliveryAnswer, type OwedDelivery, holdConfig, holdRunHeads,
+  writesSnapshotRows, HeldReads, type SqlExec,
+} from '@kinu.run/core';
 import { attempt, detach, diagnostics, hold, KinuError, logged, settle, settleSync } from '@kinu.run/core/obs';
 import { isDeepStrictEqual } from 'node:util';
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import type { AgentAnswer, AgentAnswerTexts, AgentStanding, AgentSteps, AgentTurnActivity, ConversationProjection, AgentRecovery, AgentSnapshot, PreparedAgentTurn, StoredRow, TurnRequestAt } from '@kinu.run/core';
-import type { AgentWorkspace } from './agent-turn';
+import type { AgentAnswer, AgentAnswerTexts, AgentStanding, AgentStandingReport, AgentSteps, AgentTurnActivity, ConversationProjection, AgentRecovery, AgentSnapshot, PreparedAgentTurn, StoredRow, TurnRequestAt, FactsKey, FrozenAuthority } from '@kinu.run/core';
+import type { AgentWorkspace, TurnBound } from './agent-turn';
 
 const refused = (what: string) => Effect.fail(new KinuError('unsupported', `${what} runs in the workspace object, not in an agent's own isolate.`));
 
@@ -83,7 +88,8 @@ export class AgentDatabase {
 
   private host: ActorHost | undefined;
 
-  private readonly stops = new Map<string, AbortController>();
+  /** Its host's directory: rows an adoption replaces are read again there (`forget`). */
+  private directory: WorkspaceActorDirectory | undefined;
 
   private lines: AgentTurnActivity[] = [];
 
@@ -97,9 +103,10 @@ export class AgentDatabase {
 
   private relayed: Promise<unknown> = Promise.resolve();
 
-  /** A line no tool call or task's end takes first reaches the workspace's log as it is logged, in order: an offer's
-   *  yield, logged with no turn left to end, is never stranded here. */
+  /** A line logged while a turn runs rides its next tool call or its end; one logged with no turn running reaches the
+   *  workspace's log as it is logged, in order: an offer's yield, logged with no turn left to end, is never stranded. */
   private relayActivity(): void {
+    if (this.workspace.turnInFlight()) return;
     this.relayed = this.relayed.then(() => hold(logged('agent.activity_relay_failed', { doing: "relaying an agent's activity to its workspace", otherwise: 'io' }, async () => {
       const lines = this.takeActivity();
 
@@ -110,8 +117,46 @@ export class AgentDatabase {
   private priced: { readonly model: string; readonly pricing: ModelPricing | null } | null = null;
   private execution: Executor | null = null;
 
-  private readonly sql: SqlExecutor = <T,>(query: TemplateStringsArray, ...values: SqlValue[]): T[] =>
-    this.storage.sql.exec<Extract<T, Record<string, SqlStorageValue>>>(query.join('?'), ...values).toArray();
+  /** Reads held between this database's statements: `sql` and `exec` drop them. Every write passes one of the two but
+   *  DDL and {@link adopt}'s copied rows (identity, lineage, scaffold), which nothing here holds; its config rows follow
+   *  a delete through `exec`, which drops the held config. */
+  readonly held = new HeldReads();
+
+  private readonly sql: SqlExecutor = <T,>(query: TemplateStringsArray, ...values: SqlValue[]): T[] => {
+    // Before it runs: a statement that throws may still have written.
+    if (writesSnapshotRows(query)) this.adopted = null;
+    this.held.written(query);
+
+    return this.storage.sql.exec<Extract<T, Record<string, SqlStorageValue>>>(query.join('?'), ...values).toArray();
+  };
+
+  /** For stores that take a raw statement. */
+  readonly exec: SqlExec = {
+    exec: (query, ...bindings) => {
+      this.held.written(query);
+
+      return this.storage.sql.exec(query, ...bindings);
+    },
+  };
+
+  /** The rows this database was last made to hold, as the workspace sent them; null once it wrote one of them itself. */
+  private adopted: string | null = null;
+
+
+  /** Its message count, held: SessionTranscript's record and truncate, and a fork's reset and staging, run over `sql`. */
+  private readonly heldMessageCount = this.held.hold(['conversation_entries'], () => this.readable().transcript.count());
+
+  /** Its plans and questions as its standing tells them, held: PlanReviewStore's and OwnerQuestionStore's writes run
+   *  over `sql`, and a fork's import of questions too. */
+  private readonly heldPlans = this.held.hold(['plan_reviews'], () => new PlanReviewStore(this.sql, this.readable().actor).standing());
+
+  private readonly heldQuestions = this.held.hold(['owner_questions'], () => new OwnerQuestionStore(this.sql, this.readable().actor).revision());
+
+  /** Its steers, held: PendingSendStore's reserve and retire run over `sql`. */
+  private readonly steers = this.held.hold(['pending_steers'], () => new PendingSendStore(this.sql, this.readable().actor.actorId).restore()
+    // A steer is a row bound to a turn; an unbound row is the chat's own send, already shown as a message.
+    .filter((row) => row.turnId !== null)
+    .map((row) => ({ id: row.id, text: row.text, state: 'queued' as const, atStep: null })));
 
   constructor(
     private readonly storage: DurableObjectStorage,
@@ -120,26 +165,48 @@ export class AgentDatabase {
       readonly home: string;
       readonly state: () => NimbusSandboxFiles;
       readonly enqueueTurn: BackendHost['enqueueTurn'];
+      /** A delivery of this isolate's own (a signal it raised, its events' drain), handed to its chat (design v2 §1). */
+      readonly admitDelivery: (delivery: OwedDelivery) => Promise<DeliveryAnswer>;
       readonly broadcast: BackendHost['broadcast'];
       readonly turnInFlight: () => boolean;
       readonly program: AgentWorkspace['program'];
       readonly memory: AgentWorkspace['memory'];
       readonly sayToParent: AgentWorkspace['sayToParent'];
+      readonly receipts: AgentWorkspace['receipts'];
       readonly logActivity: AgentWorkspace['logActivity'];
     },
   ) {
-    initWorkspaceSchema({
+    // Run heads, held: every run_events write here is a recorder's persist over `sql`, whose publish advances them.
+    holdRunHeads(this.sql);
+    // Its config, held: every actor_config write passes `sql` or `exec` (the stores, and adopt's replacement).
+    holdConfig(this.sql, this.held);
+    initAgentIsolateSchema({
       execRaw: (ddl) => { storage.sql.exec(ddl); },
       sql: this.sql,
       transactionSync: (write) => storage.transactionSync(write),
-      exec: { exec: (query, ...bindings) => storage.sql.exec(query, ...bindings) },
+      exec: this.exec,
     });
     initPendingSendTables((ddl) => { storage.sql.exec(ddl); });
     initTerminalEffectTable((ddl) => { storage.sql.exec(ddl); });
   }
 
-  /** Writes only when the workspace's rows changed, so a read of an unchanged agent writes nothing. */
+  /** Writes only when the workspace's rows changed, so a read of an unchanged agent writes nothing. Rows read before
+   *  ones it already holds are not adopted: a call that reached it late would put back what its workspace changed since
+   *  (the owner's model pin among them). */
   adopt(snapshot: AgentSnapshot): void {
+    const held = this.snapshot?.order;
+
+    if (held !== undefined && held.activation === snapshot.order.activation && snapshot.order.seq < held.seq) return;
+
+    // The rows it was last made to hold, unwritten since: nothing to read or write.
+    const rows = JSON.stringify([snapshot.identity, snapshot.lineage, snapshot.config, snapshot.scaffold]);
+
+    if (rows === this.adopted) {
+      this.snapshot = snapshot;
+
+      return;
+    }
+
     const unchanged = holds(this.storage, 'workspace_identity', snapshot.identity)
       && snapshot.lineage.every((row) => holds(this.storage, 'workspace_actors', row) && holdsConfig(this.storage, row.actor_id ?? null, snapshot.config))
       && snapshot.scaffold.every((row) => holds(this.storage, 'scaffold_versions', row));
@@ -150,15 +217,20 @@ export class AgentDatabase {
 
         for (const row of snapshot.lineage) {
           upsertRow(this.storage, 'workspace_actors', row);
-          this.storage.sql.exec('DELETE FROM actor_config WHERE actor_id = ?', row.actor_id ?? null);
+          // Through `exec`, which drops the held config (`holdConfig`) before the copied rows replace it.
+          this.exec.exec('DELETE FROM actor_config WHERE actor_id = ?', row.actor_id ?? null);
         }
 
         for (const row of snapshot.config) upsertRow(this.storage, 'actor_config', row);
 
         for (const row of snapshot.scaffold) this.selectScaffold(row);
       });
+      const adopted = snapshot.lineage.map((row) => v.parse(v.string(), row.actor_id));
+
+      this.directory?.forget(adopted);
     }
 
+    this.adopted = rows;
     this.snapshot = snapshot;
   }
 
@@ -173,10 +245,19 @@ export class AgentDatabase {
     return settleSync(Effect.fail(new KinuError('missing', 'The agent was reached before its workspace sent its rows.')));
   }
 
-  private identity(): v.InferOutput<typeof IdentitySchema> {
-    const snapshot = this.current();
+  /** The identity parsed from the rows {@link adopted} names: an adoption of other rows, or a write to them, moves it. */
+  private parsedIdentity: { readonly rows: string; readonly identity: v.InferOutput<typeof IdentitySchema> } | null = null;
 
-    return v.parse(IdentitySchema, { actor: snapshot.lineage.at(-1), workspace: snapshot.identity });
+  private identity(): v.InferOutput<typeof IdentitySchema> {
+    const rows = this.adopted;
+
+    if (rows !== null && this.parsedIdentity?.rows === rows) return this.parsedIdentity.identity;
+    const snapshot = this.current();
+    const identity = v.parse(IdentitySchema, { actor: snapshot.lineage.at(-1), workspace: snapshot.identity });
+
+    if (rows !== null) this.parsedIdentity = { rows, identity };
+
+    return identity;
   }
 
   reference(): ActorReference {
@@ -196,10 +277,13 @@ export class AgentDatabase {
     const snapshot = this.current();
     const { workspace } = this.identity();
 
+    // Its rows are written here only by adoption, which says which it replaced.
     const directory = new WorkspaceActorDirectory(this.sql, {
       workspaceId: workspace.id,
       ownerUserId: workspace.owner_user_id,
-    });
+    }, { holdRows: true });
+
+    this.directory = directory;
 
     const files: AgentRuntimeFiles = {
       agent: () => nimbusSessionFiles(this.workspace.agent(), { home: this.workspace.home }),
@@ -209,10 +293,11 @@ export class AgentDatabase {
     };
 
     return createActorHost({
+      holds: this.held,
       storage: {
         sql: this.sql,
         transactionSync: (write) => storage.transactionSync(write),
-        exec: (query, ...bindings) => storage.sql.exec(query, ...bindings),
+        exec: (query, ...bindings) => this.exec.exec(query, ...bindings),
       },
       directory,
       installedBuild: snapshot.installedBuild,
@@ -223,6 +308,13 @@ export class AgentDatabase {
       scaffoldFor: async (bound) => ({ path: actorScaffoldPath(bound.record), vfs: files.state() }),
       loopFor: (bound) => ({ origin: defaultLoopOrigin(bound.record.origin), parent: null }),
       orchestrationFor: (bound) => ({
+        // What it raises for itself is a delivery too, in its own store: one admission path for every agent.
+        deliveries: new InProcessDeliveries({
+          actorId: bound.handle.actorId, sql: bound.runtime.storage.sql, transaction: (body) => storage.transactionSync(body),
+          eventLog: new EventLog(this.exec, bound.handle),
+          admit: (delivery) => this.workspace.admitDelivery(delivery),
+          broadcast: (event) => { this.workspace.broadcast(event); },
+        }),
         host: this.backendHost(),
         budget: new MissionGovernor({
           storage: bound.runtime.storage,
@@ -237,10 +329,12 @@ export class AgentDatabase {
           enabled: false,
           transaction: (body) => { storage.transactionSync(body); },
         }),
-        eventLog: new EventLog({ exec: (query, ...bindings) => storage.sql.exec(query, ...bindings) }, bound.handle),
+        eventLog: new EventLog(this.exec, bound.handle),
       }),
       contextEvents: () => null,
       sayToParent: (_child, signal) => this.workspace.sayToParent(signal),
+      // Its workspace tools' receipts are the workspace's, where their effects commit (design v2 §4).
+      receipts: (execution, callIds) => this.workspace.receipts(execution.turnId, execution.runId, callIds),
       tracing: undefined,
     });
   }
@@ -298,10 +392,33 @@ export class AgentDatabase {
     };
   }
 
-  prepare(turnId: string, prepared: PreparedAgentTurn): void {
+  /** The execution's facts are frozen with its first preparation: a later one, its recovery's after a reset, finds them. */
+  prepare(bound: TurnBound, prepared: PreparedAgentTurn): void {
     this.priced = { model: prepared.sources.model, pricing: prepared.pricing };
-    this.execution = { languages: prepared.languages, execute: (...args) => this.workspace.program(turnId, ...args) };
-    this.storage.transactionSync(() => { this.selectScaffold(prepared.scaffold); });
+    this.execution = { languages: prepared.languages, execute: (...args) => this.workspace.program(bound, ...args) };
+    this.storage.transactionSync(() => {
+      this.selectScaffold(prepared.scaffold);
+      this.turnFacts.freeze(bound, prepared.facts);
+    });
+  }
+
+  /** The next number of this agent's sequence, which orders its reports at the workspace. */
+  nextInSequence(): number {
+    return new AgentSequence(this.sql, this.reference().actorId).next();
+  }
+
+  /** What the workspace decided as the execution opened, as this isolate froze it then. */
+  factsOf(key: FactsKey): TurnFacts {
+    return this.turnFacts.of(key);
+  }
+
+  /** What the execution froze as it bound, for a workspace reading the turn again after a restart; null before then. */
+  frozen(key: FactsKey): FrozenAuthority | null {
+    return this.turnFacts.frozen(key);
+  }
+
+  private get turnFacts(): TurnFactsStore {
+    return new TurnFactsStore(this.sql, this.reference().actorId);
   }
 
   async acquire(): Promise<HostedActor> {
@@ -334,7 +451,7 @@ export class AgentDatabase {
     const { actor, transcript } = this.readable();
 
     return await readSubordinateInspection({
-      sql: this.sql, raw: { exec: (query, ...bindings) => this.storage.sql.exec(query, ...bindings) }, actor, transcriptFor: () => transcript,
+      sql: this.sql, raw: this.exec, actor, transcriptFor: () => transcript,
     }, request);
   }
 
@@ -371,17 +488,22 @@ export class AgentDatabase {
 
   /** Where its chat stands between turns; `contextWindow` is the catalog's for its model. */
   standing(contextWindow: number | null): AgentStanding {
-    const { actor, transcript } = this.readable();
+    const { measures, ...standing } = this.standingReport();
+
+    return { ...standing, context: contextFill(measures, contextWindow) };
+  }
+
+  /** Its standing as it reports it with what it owes: the workspace reads it in place of asking. */
+  standingReport(): AgentStandingReport {
     const { eventRecorder } = this.actorHost().bindStores(this.reference()).stores;
 
     return {
-      messageCount: transcript.count(),
-      context: contextFill(eventRecorder.readContextMeasures(), contextWindow),
+      messageCount: this.heldMessageCount(),
+      measures: eventRecorder.readContextMeasures(),
       latestRun: eventRecorder.latestRunHeader(),
-      // A steer is a row bound to a turn; an unbound row is the chat's own send, already shown as a message.
-      pendingSteers: new PendingSendStore(this.sql, actor.actorId).restore()
-        .filter((row) => row.turnId !== null)
-        .map((row) => ({ id: row.id, text: row.text, state: 'queued' as const, atStep: null })),
+      pendingSteers: this.steers(),
+      plans: this.heldPlans(),
+      questions: this.heldQuestions(),
     };
   }
 
@@ -400,6 +522,23 @@ export class AgentDatabase {
     };
   }
 
+  /** The first `before` finished steps of run `runId`, drawn as a replay restates them, read a step at a time, open or
+   *  closed: fewer only when the ledger holds fewer. */
+  async *runSteps(runId: string, before: number): AsyncGenerator<JsonObject[]> {
+    const { eventRecorder } = this.actorHost().bindStores(this.reference()).stores;
+    const transcript = this.transcript();
+    let at = -1;
+
+    for (let step = 0; step < before; step += 1) {
+      const next = eventRecorder.finishedStepAfter(runId, at);
+
+      if (next === null) return;
+      at = next.at;
+      // A step's output is recorded by reference to its messages' parts: drawn as one message's content.
+      yield drawnStep([{ content: await transcript.parts(next.parts) }]);
+    }
+  }
+
   /** The metadata of its newest message from a person; null before any. */
   async lastUserMetadata(): Promise<JsonObject | null> {
     return await this.readable().transcript.lastUserMetadata() ?? null;
@@ -411,6 +550,21 @@ export class AgentDatabase {
   }
 
   /** Its conversation's newest rows first, projected as a lane reads them. */
+  /** Its conversation as a fork of its workspace reads it. */
+  forkSource(): ForkConversationSource {
+    return localForkConversationSource(this.sql, this.readable().actor);
+  }
+
+  /** A fork of its workspace landing its conversation here; carried payloads re-root under `artifactDirectory`. */
+  forkTarget(artifactDirectory: string): ForkConversationTarget {
+    return localForkConversationTarget(this.sql, {
+      actorId: () => this.reference().actorId,
+      artifactPath: (relative) => forkArtifactPath(relative, artifactDirectory),
+      now: Date.now(),
+      transaction: (write) => { this.storage.transactionSync(write); },
+    });
+  }
+
   async newestFirst(limit: number): Promise<readonly ConversationProjection[]> {
     return await this.readable().transcript.newestFirst(limit);
   }
@@ -476,18 +630,18 @@ export class AgentDatabase {
       hosted: host.hosted,
     });
 
-    // A stalled turn's run is closed, so the agent's chat does not take it up a third time when it next opens.
+    // A stalled turn's run is closed, so the agent's chat does not take it up again when it next opens.
     for (const turn of recovered.stalled) {
       const { eventRecorder } = host.bindStores(turn.reference).stores;
       const open = eventRecorder.openTurn();
 
       if (open?.turn.turnId !== turn.claim.turnId) continue;
-      closeTurnRun(eventRecorder, open.runId, { turnIndex: 0, ...classifyRunEnd({ completed: false, interrupted: false, errorText: `stalled after ${String(turn.claim.epoch)} runs` }) });
+      closeTurnRun(eventRecorder, open.runId, { turnIndex: 0, ...classifyRunEnd({ completed: false, interrupted: false, errorText: 'stalled: cut off at one step too many times' }) });
     }
 
     // Named for the hirer's assignment row the turn answered, which its retirement dismisses.
     return {
-      stalled: recovered.stalled.map((turn) => ({ turnId: announcementOf(turn.claim.turnId), runs: turn.claim.epoch, workMode: turn.claim.workMode })),
+      stalled: recovered.stalled.map((turn) => ({ turnId: announcementOf(turn.claim.turnId), workMode: turn.claim.workMode })),
     };
   }
 
@@ -524,18 +678,4 @@ export class AgentDatabase {
     return new TurnReports(this.sql).read({ actorId: this.readable().actor.actorId, turnId });
   }
 
-  interrupt(turnId: string): void {
-    this.stop(turnId).abort();
-  }
-
-  stop(turnId: string): AbortController {
-    const existing = this.stops.get(turnId);
-
-    if (existing !== undefined) return existing;
-    const created = new AbortController();
-
-    this.stops.set(turnId, created);
-
-    return created;
-  }
 }

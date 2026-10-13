@@ -25,7 +25,7 @@ import type {
   SubordinateRosterEntry,
   TeamToolDeps,
 } from '../delegation/agents-tool';
-import type { TemporaryAgentPort } from './temporary';
+import { TEMPORARY_LIFETIME, terminalTaskReport, type OwedReport, type SubordinateLifetime, type TaskTurnEnding, type TemporaryAgentPort } from './temporary';
 import { KinuError, renderThrownChain } from '../obs/index';
 import { subordinateBirthContext, type SubordinateInheritedContext } from '../types/subordinates';
 import type { ModelMessage } from 'ai';
@@ -214,7 +214,7 @@ export function normalizeReportContent(content: string): string {
 export type SubordinateReportOrigin = 'report_tool' | 'turn_end';
 
 /** Relays only turns a queued signal drove; an owner-typed turn's answer is the owner's. The `report` tool does not come through here. */
-export function subordinateRelaysTurnEnd(input: {
+function subordinateRelaysTurnEnd(input: {
   /** The `report` tool already spoke for this turn; a relay would duplicate it. */
   reportedThisTurn: boolean;
   ownerDriven: boolean;
@@ -223,6 +223,36 @@ export function subordinateRelaysTurnEnd(input: {
   return !input.reportedThisTurn
     && !input.ownerDriven
     && input.assistantText.trim().length > 0;
+}
+
+/**
+ * The report a hired turn's ending owes its hirer, on either backend: none once a report already settled the run; a
+ * task's terminal answer, or any child's failure; else a durable child's turn-end progress, for a turn a queued signal
+ * drove and that said nothing through `report`. The adapters keep the roster and the relay.
+ */
+export async function owedSubordinateTurnReport(input: {
+  readonly lifetime: SubordinateLifetime;
+  readonly ending: TaskTurnEnding;
+  readonly assistantText: string;
+  readonly narration: () => Promise<readonly string[]>;
+  readonly reports: { readonly spoke: boolean; readonly settled: boolean };
+  readonly ownerDriven: boolean;
+  readonly delegating: boolean;
+}): Promise<OwedReport | null> {
+  if (input.reports.settled) return null;
+
+  const terminal = await terminalTaskReport({
+    lifetime: input.lifetime, ending: input.ending, assistantText: input.assistantText, narration: input.narration, delegating: input.delegating,
+  });
+
+  if (terminal !== null) return terminal;
+
+  // A task agent reports only its terminal answer.
+  if (input.ending !== 'answered' || input.lifetime === TEMPORARY_LIFETIME) return null;
+
+  return subordinateRelaysTurnEnd({ reportedThisTurn: input.reports.spoke, ownerDriven: input.ownerDriven, assistantText: input.assistantText })
+    ? { status: 'progress', content: input.assistantText }
+    : null;
 }
 
 /** Only the parent knows whether it is waiting: with no open assignment, no report may create a parent turn. */
@@ -501,13 +531,6 @@ export function createTeamToolDeps(deps: {
         ok: true as const, name: input.name, displayName,
         subordinate: deps.roster.requireActive(input.name),
       };
-    })),
-
-    recordTitle: (input) => settle(Effect.gen(function* () {
-      const displayName = yield* requiredText(input.displayName, 'displayName');
-      deps.rosterMoved();
-
-      return { ok: true as const, name: input.name, displayName };
     })),
 
     spawn: (input) => settle(Effect.gen(function* () {

@@ -34,7 +34,7 @@ const NativeValueSchema = v.custom<NativeValue>(function native(input): boolean 
 });
 
 /** `bytes` lets the decoder detect truncation; `buffer` restores an `ArrayBuffer` source type. */
-const BinaryEnvelopeSchema = v.object({
+export const BinaryEnvelopeSchema = v.object({
   $binary: v.string(),
   bytes: v.number(),
   buffer: v.optional(v.literal(true)),

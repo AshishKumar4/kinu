@@ -44,11 +44,6 @@ export function delegationBudgetOf(
   return { depth, maxDepth: Math.max(0, DELEGATION_MAX_DEPTH - depth) };
 }
 
-/** The budget a hired subordinate inherits: depth up one, room down one. */
-export function deriveChildDelegationBudget(parent: DelegationBudget): DelegationBudget {
-  return { depth: parent.depth + 1, maxDepth: Math.max(0, parent.maxDepth - 1) };
-}
-
 /** Whether this actor may still hire. */
 export function delegationExhausted(budget: DelegationBudget): boolean {
   return budget.maxDepth <= 0;

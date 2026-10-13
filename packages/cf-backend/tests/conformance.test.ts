@@ -48,7 +48,8 @@ function producersRecorded(workspace: ActorHarness<HarnessOrchestratorAgent>): S
 async function observe(): Promise<ObservedSurface> {
   const { workspace } = servedWorkspace();
   const turns = chatSessionTurns(workspace.agent);
-  const { tools } = await turns.prepare({ messages: [{ role: 'user', content: 'deploy the api' }] });
+  // Offered, by name, as its model call carried them: the owner's lane is built in its own isolate.
+  const { tools, activeTools } = await turns.prepare({ messages: [{ role: 'user', content: 'deploy the api' }] });
 
   // The judge grades curriculum proposals; the advisor reviews a completed build turn.
   await workspace.agent.proposeCurriculumTasks(1);
@@ -58,7 +59,7 @@ async function observe(): Promise<ObservedSurface> {
   return {
     root: 'cf-orchestrator',
     planes: {
-      tool: new Set(Object.keys(tools)),
+      tool: new Set(activeTools),
       'agents-op': observedOpEnum(await asSchema(tools.agents?.inputSchema).jsonSchema),
       'memory-op': observedOpEnum(await asSchema(tools.memory?.inputSchema).jsonSchema),
       producer: producersRecorded(workspace),

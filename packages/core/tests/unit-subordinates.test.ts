@@ -4,10 +4,6 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
   buildDrainBatch,
-  drainAssignments,
-  subordinateTurnContext,
-  type AdmittedAssignment,
-  type DrainAssignmentsOptions,
   EventLog,
   eventContentPath,
   initEventsHubTables,
@@ -18,8 +14,6 @@ import {
   ROOT_DELEGATION_BUDGET,
   delegationBudgetOf,
   delegationDepthRefusal,
-  delegationExhausted,
-  deriveChildDelegationBudget,
   admitSubordinateReport,
   admitSubordinateTask,
   agentNamer,
@@ -33,7 +27,7 @@ import {
   SUBORDINATE_REPORT_HANDOFF_MAX_CHARS,
   type ReportDeps,
   type SubordinateIngressDeps,
-  subordinateRelaysTurnEnd,
+  owedSubordinateTurnReport,
   type SerializedMessage,
   type SqlExec,
   type SubordinateDelivery,
@@ -59,8 +53,7 @@ import { serveReport } from '../src/tools/report-operations';
 import type { JsonObject, JsonValue } from '../src/utils/json';
 
 /** A hire chain `depth` levels below the root. */
-const budgetAt = (depth: number) =>
-  Array.from({ length: depth }, () => 0).reduce((budget) => deriveChildDelegationBudget(budget), ROOT_DELEGATION_BUDGET);
+const budgetAt = (depth: number) => ({ depth, maxDepth: Math.max(0, DELEGATION_MAX_DEPTH - depth) });
 
 const NOW = 1_700_000_000_000;
 
@@ -134,25 +127,6 @@ describe('the child descriptor authority', () => {
 });
 
 describe('the delegation depth cap', () => {
-  // Derived from the parent's numbers (heads/types.ts deriveChildBudget).
-  test('a child budget is derived from its parent and runs out at the cap', () => {
-    expect(DELEGATION_MAX_DEPTH).toBe(4);
-    let budget = ROOT_DELEGATION_BUDGET;
-    expect(budget).toEqual({ depth: 0, maxDepth: 4 });
-
-    const chain = [budget];
-
-    for (let i = 0; i < 4; i += 1) {
-      expect(delegationExhausted(budget)).toBe(false);
-      budget = deriveChildDelegationBudget(budget);
-      chain.push(budget);
-    }
-
-    expect(chain.map((b) => b.depth)).toEqual([0, 1, 2, 3, 4]);
-    expect(chain.map((b) => b.maxDepth)).toEqual([4, 3, 2, 1, 0]);
-    expect(delegationExhausted(budget)).toBe(true);
-  });
-
   test('the refusal names the depth reached and classifies as a refusal, not a defect', () => {
     const atCap = budgetAt(4);
     const refusal = delegationDepthRefusal(atCap);
@@ -161,10 +135,6 @@ describe('the delegation depth cap', () => {
     expect(refusal.error).toContain('depth 4');
     expect(refusal.error).toContain('depth 5');
     expect(refusal.error).toContain('swarm');
-  });
-
-  test('a child derived at the cap clamps rather than going negative', () => {
-    expect(deriveChildDelegationBudget(budgetAt(4))).toEqual({ depth: 5, maxDepth: 0 });
   });
 
   test('an actor\'s depth is walked off its directory row, and a missing parent ends the walk as a floor', () => {
@@ -538,17 +508,6 @@ describe('team action routing', () => {
     await expect(h.team.rename({ name: 'researcher-a1b2c3', displayName: '  ' }))
       .rejects.toThrow('displayName must be non-empty');
     expect(h.calls).not.toContain(expect.stringContaining('rename:'));
-  });
-
-  test('a title the child settled on only refreshes the roster listeners', async () => {
-    const h = makeTeamHarness();
-    await h.team.create({});
-
-    await h.team.recordTitle({ name: 'researcher-a1b2c3', displayName: 'Callback Audit' });
-
-    expect(h.calls).toEqual(['spawn:researcher-a1b2c3:Keep the release train moving.']);
-    expect(h.broadcasts).toHaveLength(2);
-    expect('displayName' in h.roster.requireActive('researcher-a1b2c3')).toBe(false);
   });
 
 
@@ -1022,9 +981,14 @@ describe('the owner talking to a subordinate does not wake its parent', () => {
 
     return {
       roster,
-      turnEnds(input: { ownerDriven: boolean; assistantText: string; reportedThisTurn?: boolean }) {
-        if (!subordinateRelaysTurnEnd({ reportedThisTurn: false, ...input })) return;
-        arrivesAtParent('turn_end', input.assistantText, 'progress');
+      async turnEnds(input: { ownerDriven: boolean; assistantText: string; reportedThisTurn?: boolean }) {
+        // A durable hire's answered turn, as either backend ends one.
+        const owed = await owedSubordinateTurnReport({
+          lifetime: 'durable', ending: 'answered', assistantText: input.assistantText, narration: async () => [],
+          reports: { spoke: input.reportedThisTurn ?? false, settled: false }, ownerDriven: input.ownerDriven, delegating: false,
+        });
+
+        if (owed !== null) arrivesAtParent('turn_end', owed.content, owed.status);
       },
       reportTool: (content: string, status: SubordinateReportStatus = 'completed') =>
         arrivesAtParent('report_tool', content, status),
@@ -1034,43 +998,43 @@ describe('the owner talking to a subordinate does not wake its parent', () => {
     };
   }
 
-  test('the owner’s own conversation reaches the parent never, however long it runs', () => {
+  test('the owner’s own conversation reaches the parent never, however long it runs', async () => {
     const scene = scenario();
 
     for (const reply of ['Hi — what do you need?', 'Here are three angles.', 'Done.']) {
-      scene.turnEnds({ ownerDriven: true, assistantText: reply });
+      await scene.turnEnds({ ownerDriven: true, assistantText: reply });
     }
 
     expect(scene.woken()).toEqual([]);
   });
 
-  test('the answer to the parent’s own assignment still arrives automatically', () => {
+  test('the answer to the parent’s own assignment still arrives automatically', async () => {
     const scene = scenario();
 
-    scene.turnEnds({ ownerDriven: false, assistantText: 'Mapped 14 competitors.' });
-    scene.turnEnds({ ownerDriven: false, assistantText: '   ' });
+    await scene.turnEnds({ ownerDriven: false, assistantText: 'Mapped 14 competitors.' });
+    await scene.turnEnds({ ownerDriven: false, assistantText: '   ' });
 
     expect(scene.woken()).toEqual(['Mapped 14 competitors.']);
   });
 
-  test('a report tool cannot wake the parent after the assignment is complete', () => {
+  test('a report tool cannot wake the parent after the assignment is complete', async () => {
     const scene = scenario();
     scene.reportTool('Market mapped.', 'completed');
     expect(scene.roster.requireActive('researcher').currentTask).toBeNull();
 
-    scene.turnEnds({ ownerDriven: true, assistantText: 'Sure, I can dig into pricing.' });
+    await scene.turnEnds({ ownerDriven: true, assistantText: 'Sure, I can dig into pricing.' });
     scene.reportTool('You should see this: incumbent pricing just moved.');
 
     expect(scene.woken()).toEqual(['Market mapped.']);
   });
 
-  test('work the owner’s conversation detached cannot smuggle it upward one hop later', () => {
+  test('work the owner’s conversation detached cannot smuggle it upward one hop later', async () => {
     const scene = scenario();
     scene.reportTool('Market mapped.', 'completed');
 
     // A detached >30s tool job's wake is programmatic; only the roster knows it was the owner's.
     scene.jobSettles('Background run job completed.');
-    scene.turnEnds({ ownerDriven: false, assistantText: 'The crawl finished: 402 pages.' });
+    await scene.turnEnds({ ownerDriven: false, assistantText: 'The crawl finished: 402 pages.' });
 
     expect(scene.woken()).toEqual(['Market mapped.']);
   });
@@ -1083,11 +1047,11 @@ describe('the owner talking to a subordinate does not wake its parent', () => {
     expect(scene.woken()).toEqual(['Background run job completed.']);
   });
 
-  test('a turn the report tool already spoke for is not relayed twice', () => {
+  test('a turn the report tool already spoke for is not relayed twice', async () => {
     const scene = scenario();
 
     scene.reportTool('Done — 14 competitors.', 'completed');
-    scene.turnEnds({
+    await scene.turnEnds({
       ownerDriven: false,
       assistantText: 'Done — 14 competitors.',
       reportedThisTurn: true,
@@ -1387,67 +1351,3 @@ describe('the structured handoff a report carries', () => {
 });
 
 /** The delegation runner. B10: one assignment row, one runner, one turn. */
-describe('drainAssignments', () => {
-  function assignedWorld(inheritedContext?: SerializedMessage[]) {
-    const { sql, actor } = makeWorld();
-    initEventsHubTables(sql);
-    const log = new EventLog(sql, actor);
-
-    const admission: Parameters<typeof admitSubordinateTask>[1] = {
-      fromWorkspace: 'kinu-main', kind: 'task', body: 'Audit the auth flow.', mode: 'build', now: NOW,
-    };
-
-    if (inheritedContext) admission.inheritedContext = { kind: 'fork', messages: inheritedContext };
-    admitSubordinateTask(log, admission);
-
-    return log;
-  }
-
-  test('two concurrent sweeps spend one assignment exactly once', async () => {
-    const forked: SerializedMessage[] = [
-      { id: 'u1', role: 'user', content: 'Fix auth.', createdAt: 1 },
-    ];
-
-    const log = assignedWorld(forked);
-    const ran: AdmittedAssignment[] = [];
-    const held = Promise.withResolvers<void>();
-
-    const sweep: DrainAssignmentsOptions = {
-      now: NOW, budget: 4, staleMs: 600_000,
-      run: async (task) => { ran.push(task); await held.promise; log.markTurnCompleted(task.turnId); },
-      onFailure: (cause) => { throw cause; },
-    };
-
-    // Both sweeps select before either resolves; binding is synchronous, so the second's `pending()` is empty.
-    const first = drainAssignments(log, sweep);
-    const second = drainAssignments(log, sweep);
-    held.resolve();
-    const [a, b] = await Promise.all([first, second]);
-
-    expect(ran.map((task) => task.body)).toEqual(['Audit the auth flow.']);
-    expect(a.consumed + b.consumed).toBe(1);
-
-    expect(subordinateTurnContext(log, ran[0]?.turnId ?? '')).toEqual(forked);
-
-    expect(log.hasOpenDrainLease()).toBe(false);
-    expect(log.pending({ variant: 'subordinate_task' })).toEqual([]);
-  });
-
-  test('a failed run leaves its lease open for a later sweep to re-pend', async () => {
-    const log = assignedWorld();
-    const failures: unknown[] = [];
-
-    const swept = await drainAssignments(log, {
-      now: NOW, budget: 4, staleMs: 600_000,
-      run: () => Promise.reject(new KinuError('unavailable', 'the model refused')),
-      onFailure: (cause) => { failures.push(cause); },
-    });
-
-    expect(swept).toEqual({ consumed: 1, truncated: false });
-    expect(failures).toHaveLength(1);
-
-    // The open lease is the retry: closing it drops the assignment; re-pending spins on the failure.
-    expect(log.hasOpenDrainLease()).toBe(true);
-    expect(log.pending({ variant: 'subordinate_task' })).toEqual([]);
-  });
-});

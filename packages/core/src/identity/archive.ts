@@ -77,6 +77,8 @@ const EXCLUDED_TABLES = {
   memory_note_chunks: true,
   memory_note_chunks_fts: true,
   memory_note_files: true,
+  // Folded from the run events the archive carries, up to a rowid a restore renumbers: the next read folds them again.
+  agent_figure_folds: true,
   memory_projection_updates: true,
 } satisfies Record<string, true>;
 
@@ -239,7 +241,7 @@ interface ArchiveHeader {
   workspace: string;
   source: 'cloud' | 'local';
   exported_at: number;
-  /** The schema genesis of the Kinu that wrote it; an archive under another is refused by name. */
+  /** The schema genesis of the Kinu that wrote it; an archive under another, or none, is refused by name. */
   schema_genesis?: string;
   /** Each agent must close its section, or the archive is refused. */
   agents?: string[];
@@ -430,13 +432,8 @@ function decodeValue(value: EncodedSqlValue): ArchiveDatabaseValue {
   return v.parse(v.union([v.string(), v.number(), v.boolean(), v.null()]), value);
 }
 
-/** 0 without a roster table (older databases stay exportable); export and restore share this count. */
+/** Export and restore share this count. */
 function countArchivedActors(sql: SqlExec): number {
-  const present = sql.exec(
-    `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'workspace_actors'`,
-  ).toArray();
-
-  if (present.length === 0) return 0;
   const counted = sql.exec(`SELECT COUNT(*) AS n FROM workspace_actors`).toArray()[0];
 
   return v.parse(v.number(), counted?.n);

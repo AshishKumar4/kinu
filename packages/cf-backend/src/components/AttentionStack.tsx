@@ -8,7 +8,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Button } from "@cloudflare/kumo";
 import { BrainIcon, ChatCircleTextIcon, CheckIcon, DesktopTowerIcon, NotePencilIcon, ShieldWarningIcon, SparkleIcon, XIcon, type Icon } from "@phosphor-icons/react";
 import {
-  revealMisrepresenting, timeAgo, type AccountMemoryProposal, type OwnerAsk, type PendingAction, type PendingActionKind, type PendingConsent, type PlanPageRef, type Rpc,
+  revealMisrepresenting, timeAgo, type AccountMemoryProposal, type OwedIntent, type OwedOwnerIntent, type OwnerAsk, type PendingAction, type PendingActionKind, type PendingConsent, type PlanPageRef, type Rpc,
 } from "@kinu.run/core";
 import { detach, renderThrownChain } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -20,6 +20,7 @@ type ConsentChoice = "once" | "always" | "deny";
 export interface AttentionStackProps {
   readonly asks: readonly OwnerAsk[];
   readonly rpc: Rpc;
+  readonly owedIntents?: readonly OwedOwnerIntent[];
   /** The hook's own resolution: it drops the consent from its read once the answer lands. */
   readonly resolveConsent: (consentId: string, choice: ConsentChoice) => Promise<void>;
   /** Re-read the queue so an answered row leaves the read too, not only the stack; it reports its own failure. */
@@ -75,7 +76,7 @@ interface Answer {
   readonly icon?: Icon;
   readonly weight: "primary" | "secondary" | "quiet";
   readonly title?: string;
-  readonly run: () => Promise<void>;
+  readonly run: () => Promise<void | OwedIntent | null>;
 }
 
 function AnswerButton({ answer, busy, onAnswer }: { answer: Answer; busy: boolean; onAnswer: (answer: Answer) => Effect.Effect<void> }) {
@@ -218,7 +219,7 @@ function useAnswered(asks: readonly OwnerAsk[]) {
 }
 
 export function AttentionStack(props: AttentionStackProps): ReactNode {
-  const { asks, rpc, onDecided } = props;
+  const { asks, rpc, onDecided, owedIntents = [] } = props;
   const { answered, mark } = useAnswered(asks);
   const [chosen, setChosen] = useState<string | null>(null);
   // The card whose answer is in flight: its buttons wait for it, and the next card's are live as soon as it opens.
@@ -235,11 +236,17 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
 
   const answering = front.key;
 
+  const answerOwed = front.kind === "question" && owedIntents.some((intent) => intent.kind === "answers"
+    && intent.target === front.question.asked.id && intent.actor === front.question.actor);
+
   // A plan is not answered here: opening its review leaves it waiting until it is decided.
   const answer = (choice: Answer): Effect.Effect<void> => Effect.catchCause(Effect.gen(function* () {
+    if (answerOwed) return;
     setBusy(answering);
     setError(null);
-    yield* Effect.promise(() => choice.run());
+    const result = yield* Effect.promise(() => choice.run());
+
+    if (result != null && "owed" in result) return;
 
     if (front.kind === "memory" || front.kind === "question") {
       mark(front.key);
@@ -278,15 +285,15 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
         aria-live="polite">
         <div className="mb-1 flex items-center gap-1.5 p-meta p-text-3">
           <FrontIcon size={12} className="shrink-0 p-warning" weight="fill" aria-hidden />
-          <span>Waiting on you</span>
+          <span>{answerOwed ? "Answer sent" : "Waiting on you"}</span>
           {waiting.length > 1 && <span className="tabular-nums" data-attention-position>· 1 of {waiting.length}</span>}
         </div>
         {front.kind === "consent" && <ConsentBody consent={front.consent} />}
         {front.kind === "memory" && <MemoryBody memory={front.memory} />}
         {front.kind === "action" && <ActionBody action={front.action} rpc={rpc} />}
         {front.kind === "question" && (
-          <QuestionCard asking={front.question} busy={busy === front.key}
-            onAnswer={(answers) => detach(answer({ label: "Answer", weight: "primary", run: async () => { await rpc("answerOwnerQuestions", [front.question.asked.id, answers, front.question.actor]); } }))}
+          <QuestionCard asking={front.question} busy={busy === front.key || answerOwed} owed={answerOwed}
+            onAnswer={(answers) => detach(answer({ label: "Answer", weight: "primary", run: async () => rpc<OwedIntent | null>("answerOwnerQuestions", [front.question.asked.id, answers, front.question.actor]) }))}
             onDismiss={() => detach(answer({ label: "Dismiss", weight: "quiet", run: async () => { await rpc("dismissOwnerQuestions", [front.question.asked.id, front.question.actor]); } }))} />
         )}
         {error?.key === front.key && <div className="mt-1.5 p-t-status p-danger" role="alert">{error.message}</div>}

@@ -6,7 +6,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { act, createElement } from 'react';
 import { createRoot } from 'react-dom/client';
-import type { PlanDecisionOutcome, PlanReview, Rpc } from '@kinu.run/core';
+import type { OwedIntent, PlanDecisionOutcome, PlanReview, Rpc } from '@kinu.run/core';
 import { usePlanDecision, type PlanDecision, type PlanDecisionInput } from '../src/hooks/use-plan-decision';
 
 const PLAN: PlanReview = {
@@ -30,14 +30,19 @@ afterAll(() => {
 });
 
 /** The hook mounted over `input`, and its current answer. */
-async function mounted(input: PlanDecisionInput): Promise<{ readonly current: () => PlanDecision; readonly unmount: () => Promise<void> }> {
+async function mounted(input: PlanDecisionInput): Promise<{
+  readonly current: () => PlanDecision;
+  readonly render: (next: PlanDecisionInput) => Promise<void>;
+  readonly unmount: () => Promise<void>;
+}> {
   const listens = { addEventListener() {}, removeEventListener() {} };
   const container: Element = Object.create(null, Object.getOwnPropertyDescriptors({ nodeType: 1, tagName: 'DIV', namespaceURI: null, ownerDocument: listens, ...listens }));
   const root = createRoot(container);
   let current: PlanDecision | undefined;
+  let renderedInput = input;
 
   function Probe(): null {
-    current = usePlanDecision(input);
+    current = usePlanDecision(renderedInput);
 
     return null;
   }
@@ -50,12 +55,16 @@ async function mounted(input: PlanDecisionInput): Promise<{ readonly current: ()
 
       return current;
     },
+    render: async (next) => {
+      renderedInput = next;
+      await act(async () => { root.render(createElement(Probe)); });
+    },
     unmount: async () => { await act(async () => { root.unmount(); }); },
   };
 }
 
 /** Everything the transaction did, in order: each save, and each rpc with its arguments. */
-function recorder(saves: boolean, decided: () => Promise<PlanDecisionOutcome> = async () => ({ ok: true, plan: PLAN, queued: true })) {
+function recorder(saves: boolean, decided: () => Promise<PlanDecisionOutcome | OwedIntent> = async () => ({ ok: true, plan: PLAN, queued: true })) {
   const done: string[] = [];
 
   // Sent as JSON, as the socket does.
@@ -79,6 +88,30 @@ function recorder(saves: boolean, decided: () => Promise<PlanDecisionOutcome> = 
 }
 
 describe('a decision on a plan revision', () => {
+
+  test('an owed decision accepts its receipt, blocks another decision, and clears with the live read', async () => {
+    const { done, input } = recorder(true, async () => ({ owed: 'intent-1' }));
+    const hook = await mounted(input);
+
+    try {
+      await act(async () => { await hook.current().decide('approve'); });
+      const recorded = [...done];
+
+      expect(hook.current().busy).toBeNull();
+      expect(done).toEqual(['save', 'decidePlanReview ["plan-1",3,"approve"]']);
+      await hook.render({ ...input, owed: true });
+      await act(async () => {
+        await hook.current().decide('approve');
+        await hook.current().decide('request_changes');
+      });
+      expect(done).toEqual(recorded);
+      await hook.render({ ...input, owed: false });
+      await act(async () => { await hook.current().decide('approve'); });
+      expect(done).toEqual([...recorded, ...recorded]);
+    } finally {
+      await hook.unmount();
+    }
+  });
 
   test('takes no decision when the annotations were not saved', async () => {
     const { done, input } = recorder(false);

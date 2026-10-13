@@ -24,6 +24,7 @@ async function seated(name: string) {
 
   const open = async (turnId: string, message: string, item: { metadata?: { drainTurnId?: string } }) => {
     const lease = actor.session.beginTurn({ runId: `run-${turnId}`, turnId }, 'build', 0);
+    actor.session.reserveClaim(lease);
     await actor.session.openTurnInput(lease, {
       item, message: { role: 'user', content: message },
       birthContext: async (drainTurnId) => {

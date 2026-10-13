@@ -3,7 +3,7 @@
 import { Effect } from 'effect';
 import { settle } from '../obs/effect';
 import { workspaceAddressRefusal, workspaceSlug } from './naming';
-import { forkPointExists } from './conversation-store';
+import type { ForkConversationSource } from './fork-conversation';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from './actor-handle';
 import type { ForkFileSource } from './fork';
@@ -15,7 +15,7 @@ export interface ForkTransport {
   occupied(name: string): Promise<boolean>;
   /** Stream the source state into the named workspace; report where and at which cut point it landed. */
   deliver(name: string, source: {
-    sql: SqlExecutor; vfs: ForkFileSource; untilMessageId: string; artifactDirectory: string;
+    sql: SqlExecutor; conversation: ForkConversationSource; vfs: ForkFileSource; untilMessageId: string; artifactDirectory: string;
   }): Promise<{
     workspaceId: string; forkPointMs: number;
   }>;
@@ -26,6 +26,8 @@ export interface ForkDriverDeps {
   readonly vfs: ForkFileSource;
   /** The source workspace's own SQL — where the snapshot is read from. */
   sql: SqlExecutor;
+  /** Where the actor keeps the conversation the fork is cut from. */
+  readonly conversation: ForkConversationSource;
   /** Source payload directory; the carried conversation references payloads by absolute path. */
   readonly artifactDirectory: string;
   /** The actor whose transcript is cut. Message ids are per actor, so an unscoped
@@ -59,7 +61,9 @@ export function forkWorkspace(
       return yield* Effect.die(new Error('agent busy, retry when current turn finishes'));
     }
 
-    if (!forkPointExists(deps.sql, deps.actor, untilMessageId)) {
+    deps.actor.assertCurrent();
+
+    if (!(yield* Effect.promise(() => deps.conversation.has(untilMessageId)))) {
       return yield* Effect.die(new Error(`fork point not found: message id "${untilMessageId}" does not exist in source`));
     }
 
@@ -78,7 +82,7 @@ export function forkWorkspace(
     }
 
     const { workspaceId, forkPointMs } = yield* Effect.promise(() => deps.transport.deliver(name, {
-      sql: deps.sql, vfs: deps.vfs, untilMessageId, artifactDirectory: deps.artifactDirectory,
+      sql: deps.sql, conversation: deps.conversation, vfs: deps.vfs, untilMessageId, artifactDirectory: deps.artifactDirectory,
     }));
 
     return { workspaceId, name, forkPointMs };

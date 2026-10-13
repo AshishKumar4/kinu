@@ -3,7 +3,7 @@
  * can land one: a model request before any byte, a model stream after its first delta, a tool call the model just
  * delivered (its shell still asleep), and between steps. Nothing connects after a kill: the turn's own wake brings
  * the object back. Compare acoyfellow/tardigrade's kill5, which retries a stalled step forever; Kinu settles a turn
- * that two runs leave at one step (the stall rule) rather than handing it the same cut again. That rule needs a
+ * only once six cuts land in one step's own work (D12) rather than handing it the same cut again. That rule needs a
  * stamped build, which this pool does not carry: unit-chat-reopened-turn proves it on the harness, which does.
  *
  * The guarantee is that a recorded claimed call is never replayed automatically, not that a side effect can never

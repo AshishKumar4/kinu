@@ -276,10 +276,10 @@ describe('a decided trial', () => {
     const trial = startTrial(sql, rt.actor, NOW);
 
     if (trial === null) throw new Error('no trial started');
-    expect(advanceTrial(sql, rt.actor, NOW + 1)).toBeNull();
+    expect(advanceTrial(sql, rt.actor, trial, NOW + 1)).toBeNull();
     seedSegments(rt, trial.trialId);
 
-    expect(advanceTrial(sql, rt.actor, NOW + DAY)).toMatchObject({ decision: 'kept', segments: { candidate: 10, incumbent: 10 } });
+    expect(advanceTrial(sql, rt.actor, trial, NOW + DAY)).toMatchObject({ decision: 'kept', segments: { candidate: 10, incumbent: 10 } });
     expect(runningTrial(sql, rt.actor)).toBeNull();
     expect(artifactBody(sql, rt.actor, SECTION)).toBe(EDITED);
 

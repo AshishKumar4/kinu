@@ -527,6 +527,8 @@ NULL` for the 45 s a probe sampled, with the child opening no run. Under the
 arm the same four take 640 / 6,995 / 1,006 / 983 ms, the child opens both
 runs, and all six rows pass in 31 s. The local host arms nothing and
 re-drives on every pass and on open.
+Later note: superseded by D13 (2026-10-11): an assignment is a delivery,
+and no drain runs it.
 
 D4. A delegated turn brackets its run in the durable ledger, like every other
 turn. The local host already did this: an assignment is admitted there as
@@ -571,6 +573,8 @@ Amended 2026-09-28: the two chains are the `kinu-timer` and `terminal-retry`
 jobs on the Agents SDK's Lifecycle queue (0.23 dropped `cf_agents_schedules`),
 one row per id (`cf-backend/src/wake-jobs.ts`). The folds and the phases are
 unchanged.
+Later note: D13 (2026-10-11) drains every agent's due events in one phase
+(`drainDueReactions`), each into a delivery of its own.
 
 Measured the same day in the workerd pool, `cf-backend/tests/workerd/two-turn.test.ts`,
 "drains an external event that reached an idle object, on the wake its arrival
@@ -622,6 +626,7 @@ were not recorded.
 Hypothesis until production shows it: `alarm exceededWallTime` stops for
 delegated turns once this shape is deployed. miniflare enforces no alarm wall,
 so only Workers Logs can confirm it.
+Later note: superseded by D13 (2026-10-11): the delegation fiber is gone.
 
 D8. An agent that needs memory of its own runs in a Worker Loader isolate, not
 in an Agents SDK sub-agent. `this.subAgent(Cls, name)` builds its facet from
@@ -748,11 +753,26 @@ recover its own claims (stalled turns retire; the rest re-pend because their
 rows stay leased until the turn ends). The browser's socket stays in the workspace object; an
 agent's stream reaches it as short `observe` calls.
 Extended to main on 2026-10-07 (owner: "every actor's turn then runs one
-way"): main's turn and main's own stores move into main's facet (being
-built), and its tools reach the workspace through one `callOperation`. The build ships as a
-reset deployment, so main's facet starts empty, as a fresh workspace's does.
-Its socket, roster and shared stores stay in the workspace object, and a root
-tab's socket opening pre-warms main's isolate. Measured 2026-10-07 on the same
+way"): main's turn and main's own stores (conversation, claims, runs, plans,
+owner questions) moved into main's facet, and its tools reach the workspace
+through `AgentWorkspaceRPC.executeTool`, as every agent's do. The build ships
+as a reset deployment, so main's facet starts empty, as a fresh workspace's
+does. Its socket, roster and shared stores stay in the workspace object, and a
+root tab's socket opening pre-warms main's isolate. Main's settled turn is handed
+back as the facet's durable `workspace_settle` effect; the workspace declares
+the turn's evolution, event, title, reply, branch and fleet lanes from it, from
+the facts it carries (frozen in main's isolate at the turn's preparation,
+`actor_turn_facts`) and from the branches admitted during the turn
+(`turn_branches`). A fork
+reads and lands main's conversation through main's isolate. The figures below
+were measured on 2026-10-07, before main moved, comparing main's turn in the
+workspace object with a facet's turn on the same path; the shipped build is held
+by the tier's heap and statement gates, which read main's isolate beside the
+workspace's (`scripts/worker-heap.ts`, `tests/workerd/complexity/`): on
+2026-10-10 main's isolate held 10.8-10.9 MB live after setup, peaked at
+30.6-32.5 MB over the long turn and allocated 95-104 MB of the 146-153 MB the
+two isolates allocated together, and a production turn ran 376 statements in
+the workspace and 449 in main's isolate. Measured 2026-10-07 on the same
 150-step turn and provider path, 3 runs each (armada 20261007185121-975afb24):
 main's turn in the workspace object peaked at 88.6-90.7 MB and allocated
 379-385 MB; a facet's turn peaked at 58.9-69.5 MB and allocated 337-346 MB,
@@ -899,6 +919,99 @@ Each re-ask after a repeated cut waits the shared capped backoff, and the
 turn's wake is what asks it again, in a live process or a new one; the first
 provider-wait cut is asked again at once. The CLI has no wake, and a person's
 start is its restart, so it asks at once.
+
+D13. Every agent is one actor with one turn surface, the workspace's own agent
+included (design v2 with the v3 delta, D9 completed). Decided 2026-10-10 by
+the owner, built 2026-10-11 on `lane/main-isolate`.
+- Admission: every producer (a send, a signal, a drain of events, an
+  assignment, a head's or node's run) commits an `agent_deliveries` row with its
+  source fact and arms the agent's wake (`agent_wakes`), then crosses `admit`
+  once. The isolate stores it under the delivery's id, answers a repeat
+  `duplicate`, and its answer retires the row and carries the agent's report of
+  what it now owes (`AdmittedDelivery`), taken as a told report is; one that
+  fails to cross stays owed to the wake. Each report says whether the agent's
+  chat holds a turn owed or running (`AgentReport.working`), and the tile reads
+  Working from the input taken to the rest, never Unfinished between. A rest
+  never cancels the wake while a delivery is owed. The
+  EventLog is a record, never a queue: `drainAssignments`, the delegation
+  runners and the root's RAM inbox are gone from the cloud. Every agent has a
+  chat, and a head's or node's run is one of its inputs (`kind: 'run'`): its
+  `ChatSession` admits, holds, queues, stops and restores it as any input, each
+  round runs through core's `driveExecution` as a chat turn does, and its end
+  rides the agent's next
+  report (`AgentReport.runEnds`). Its held input retires only once its end is
+  told, so a death first runs it again. `facet_runs`, `admitRun`, `startRun`,
+  `runEnded` and `holdsChat` are gone.
+- One factory, `OrchestratorAgent.actorSurface`, builds every agent's turn
+  surface, the workspace agent's, a hire's, a head's, a swarm node's and a
+  background run's, from core's one reach decision (`surfaceReach`: what the
+  agent reaches by what it is, `actorReach`, and by the lane its turn was
+  admitted in, `turnReach`), so no hot path compares an id to the root's.
+  The census that tracked it closed at 0 H and 62 J (65 sites, each a kept
+  reason); its gate and list were retired after cad6c2196, which holds
+  `scripts/root-branches.ts` and `.json` to restore them from. The workspace seats every agent with no
+  session of its own (`createSeatHost`): the workspace agent over the workspace
+  object's runtime (`workspaceAgentHome`), with its evolution lanes in core
+  `EvolutionLanes` and every agent's advisor in core `ActorAdvisor`. A turn's
+  ledgers are its `TurnSurface`'s. The workspace agent's second session
+  (`orch`, `acc`), `mainTaskProfile`, `turnCapabilities` and the per-kind
+  builders are gone.
+- Port: an isolate holds its workspace's host across calls, so a call crosses
+  once. An execution is claimed `preparing` before it is prepared, and its
+  epoch, minted there from one sequence over the agent's chat turns and runs
+  (`actor_epochs`), is its capability; a run opens the same fence as a chat
+  turn, and a preparation that fails settles its claim `error`. Every call
+  that runs more of a turn carries its capability (turn, run, epoch) and holds
+  only while the durable fence (`actor_turn_fence`) holds that opening, before
+  a reset of the workspace as after it: once a later opening of the agent, a
+  Stop or the turn's end took its place, it is refused `stale_epoch` before
+  anything runs. A call that closes what the turn already did (its trace, its
+  charges, its answer's metadata, its end, its settle) names its execution and
+  is judged against the openings the workspace admitted
+  (`actor_executions`, keyed by the agent, turn and run): its own runs after a newer opening or a Stop, so a
+  stopped turn closes; one naming another execution's opening, or a newer one,
+  is refused `stale_close` and runs nothing. Credentials are held five minutes and refreshed on an upstream's
+  refusal; activity rides tool calls and the turn's end, and the profile the
+  isolate assembled on rides its first step's pace. Measured on `c3c87ed3b`
+  over 3 runs (armada `20261012084457-307f361a`), four tool steps: the open
+  crosses 16 times, the first step 4 and each later one 3, the close 16; §8's
+  12 and 6 are not reached (the account's reads, room events, the tile).
+- Profile: the agent's isolate binds each execution's final profile, with the
+  authority inputs it was resolved from, under the execution's key (turn, run)
+  before any model or tool work (`actor_turn_facts`, `actor_profile_inputs`);
+  a recovery assembles on it, the first step's pace carries it to the
+  workspace, and a workspace that reads the turn again after a restart asks
+  the agent for it first and builds the turn's surface, mode, sources and
+  model on it. No crossing binds a profile on its own, and a recovered
+  execution resolves nothing again on settings changed since; a head's next
+  round and a Retry are new executions and resolve afresh. An applied Retry
+  holds its reopened turn (`queued_turns`) in the commit that marks it
+  applied, so an isolate that dies before the turn opens runs it on its next
+  wake; the states the UI draws while an intent is owed were shot from the
+  gallery by `scripts/owed-intent-shots.ts`, retired after cad6c2196, which
+  holds it. A Retry of an answered turn withdraws the answer in one commit (the
+  transcript from it, the context back to the turn's last input, and its
+  executions' output, `actor_turn_claims.withdrawn_through`), so the model is
+  asked afresh; a failed or stopped turn's Retry continues its completed
+  steps. The workspace holds each agent's open turns by agent and turn: an
+  owner's message id is unique only within an agent.
+- Receipts: a tool's receipt is `started`, `settled` or `indeterminate`, kept
+  where its effect commits and keyed on its run, so a Retry finds none of the
+  last run's. A call whose effect commits in the workspace leaves only a
+  `remote` pointer in the isolate: it is re-asked there under the same call,
+  and a repair asks the workspace's receipts for the unpaired calls it points
+  at. The owner's lane (`submit_plan`, `reply_to_comment`, `ask_owner`) commits
+  in the agent's own store, so its isolate builds and runs it under its own
+  receipt, and the workspace only declares it (`ownerLaneDeclarations`). Every
+  agent's settled run tells the workspace (`run_settle`; main's rides
+  `turnSettled`), which prunes that run's receipts.
+- Stop means stop for every agent and on the CLI: one commit cancels the
+  agent's owed deliveries and marks its fence `cancelled_at`, then its isolate
+  hands unread words back to their composer, cancels its queued turns (their
+  callers told), and aborts the turn. The root's keep-and-rerun is gone.
+  Deletion fences admission and the timer, cancels every owed delivery, quiets
+  every agent alike while its closes drain, and only then revokes.
+- A reset deployment: the genesis lock was re-locked; nothing is adopted.
 
 ## Deploy ladder
 

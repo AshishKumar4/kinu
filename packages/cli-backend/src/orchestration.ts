@@ -1,4 +1,4 @@
-import { EvolutionEngine, historyTurnPairs, MissionGovernor, runEventSinks, type AgentOrchestratorDeps, type AgentRuntime, type AgentStores, type EventLog, type SessionHistory } from '@kinu.run/core';
+import { EvolutionEngine, historyTurnPairs, InProcessDeliveries, MissionGovernor, runEventSinks, type AgentOrchestratorDeps, type AgentRuntime, type AgentStores, type EventLog, type SessionHistory } from '@kinu.run/core';
 import type { LocalAgentSession } from './local-session';
 
 export interface LocalSessionOwner {
@@ -12,6 +12,9 @@ export interface LocalOrchestration {
   readonly engine: EvolutionEngine;
   readonly budget: MissionGovernor;
   readonly eventLog: EventLog;
+  /** Every signal to the agent, every drain of its events and what its hirer assigns it: committed, then handed to its
+   *  chat in this process (design v2 §1), as the cloud's are. */
+  readonly deliveries: InProcessDeliveries;
 }
 
 interface LocalOrchestrationInput {
@@ -34,8 +37,17 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
 
   engine.onEvent((event) => { input.session.read().reportEvolutionEvent(event); });
 
+  const deliveries = new InProcessDeliveries({
+    actorId: input.runtime.actor.actorId,
+    sql: input.runtime.storage.sql,
+    transaction: (body) => input.runtime.storage.transactionSync(body),
+    eventLog: input.eventLog,
+    admit: (delivery) => input.session.read().admitDelivery(delivery),
+    broadcast: (event) => { input.session.read().emit({ type: 'broadcast', event }); },
+  });
+
   return {
-    engine, budget, eventLog: input.eventLog,
+    engine, budget, eventLog: input.eventLog, deliveries,
     deps: {
       host: {
         broadcast: (event) => { input.session.read().emit({ type: 'broadcast', event }); },
@@ -46,6 +58,7 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
         reconcileDurableWake: null,
       },
       engine, eventLog: input.eventLog, budget, oneShot: input.oneShot,
+      deliveries: { signals: deliveries.signals, commit: deliveries.commit },
       refinementLane: () => input.session.read().runRefinementLane(),
       sinks: runEventSinks({ stores: input.stores }, (event, detail) => input.session.read().logActivity(event, detail)),
     },

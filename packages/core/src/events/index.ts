@@ -35,6 +35,7 @@ export {
   type StoredRunEvent,
   type ContextMeasures,
   type StepSpendSource,
+  holdRunHeads,
 } from './recorder';
 
 export {

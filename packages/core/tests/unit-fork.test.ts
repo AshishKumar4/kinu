@@ -11,7 +11,7 @@ import {
   ForkConversation, readChain, readWorkingContext, seedForkSource, seedForkTarget,
   SOURCE_ARTIFACTS, SPILLED_BYTES, TARGET_ARTIFACTS,
 } from './helpers/fork-conversation';
-import { appDataOf, receiverFor, sourceFrames, streamFork } from './helpers/fork-stream';
+import { appDataOf, receiverFor, sourceFrames, streamFork, conversationIn } from './helpers/fork-stream';
 import { SHELL_APPROVAL_AUTHORITY_KEYS } from '../src/config/store';
 import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
@@ -204,7 +204,7 @@ describe('a workspace fork', () => {
     await chat.say({ id: 'm1', role: 'user', text: 'hi' });
     // An answer mid-stream: its row is open and its parts live in stream_parts.
     chat.atomic(() => chat.messages.open('assistant', 'm2', 'output'));
-    chat.messages.streamOpenPart('m2', { partNo: 0, kind: 'text', streamOrder: 0, descriptor: { json: '{"type":"text"}', path: null, digest: null }, text: 'partial' });
+    chat.messages.streamOpenPart('m2', { partNo: 0, streamOrder: 0, descriptor: { json: '{"type":"text"}', path: null, digest: null }, text: 'partial' });
     chat.transcript.record({ id: 'm2', role: 'assistant', turnId: null, runId: null, metadata: null, parts: [{ messageId: 'm2', partNo: 0 }] });
 
     await expect(forkInto(src, tgt, { untilMessageId: 'm2' })).rejects.toThrow(/still open in the source/);
@@ -379,7 +379,7 @@ describe('a workspace fork', () => {
     await writeText(src.vfs, 'notes.md', 'as the fork began');
 
     const frames = forkTransferFrames({
-      sql: src.sql, actor: chat.actor, vfs: src.forkSource, artifactDirectory: SOURCE_ARTIFACTS, appData: appDataOf(src).fork,
+      sql: src.sql, actor: chat.actor, vfs: src.forkSource, artifactDirectory: SOURCE_ARTIFACTS, appData: appDataOf(src).fork, conversation: conversationIn(src.sql),
       untilMessageId: 'm1', transferId: 'tx-moving', frameBytes: 1024,
     });
 
@@ -410,7 +410,7 @@ describe('a workspace fork', () => {
     const pins = async () => (await src.bundle.session()).vfs.snapshots().map((pin) => pin.name);
 
     const frames = forkTransferFrames({
-      sql: src.sql, actor: chat.actor, vfs: src.forkSource, artifactDirectory: SOURCE_ARTIFACTS, appData: appDataOf(src).fork,
+      sql: src.sql, actor: chat.actor, vfs: src.forkSource, artifactDirectory: SOURCE_ARTIFACTS, appData: appDataOf(src).fork, conversation: conversationIn(src.sql),
       untilMessageId: 'm1', transferId: 'tx-early', frameBytes: 1024,
     });
 

@@ -15,6 +15,7 @@ function action(kind: PendingAction['kind'], id = kind): PendingAction {
 
 const EMPTY: WorkspaceOverviewInputs = {
   working: false,
+  awaitsSettings: false,
   unfinished: false,
   pendingActions: [],
   pendingConsents: [],

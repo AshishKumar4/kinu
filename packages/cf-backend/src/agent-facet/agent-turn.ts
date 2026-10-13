@@ -1,11 +1,12 @@
 /** One delegated turn in the agent's isolate: its model loop here, every tool call back in the workspace. */
-import { jsonSchema, tool, type ModelMessage, type ToolSet, type UIMessageChunk } from 'ai';
+import { jsonSchema, tool, type ModelMessage, type ToolSet, type UIMessage, type UIMessageChunk } from 'ai';
 import {
-  ASK_OWNER_TOOL, CHAT_SESSION_ID, actorAffinity, askOwnerTool, HeadCapture, decodeJsonValue, decodeModelMessageValues, encodeModelMessageValues, withEffectClaims, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan, imageModelOutput,
-  type AuthRequest, type AuthResolution, type HandedOffTurn, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type JsonValue, type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind, type AgentSignal, type SendOutcome,
+  CHAT_SESSION_ID, actorAffinity, HeadCapture, ownerLaneTools, toolsInWorkMode, withEffectReceipt, decodeJsonValue, decodeModelMessageValues, encodeModelMessageValues, withEffectPointer, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan, imageModelOutput,
+  type AuthRequest, type AuthResolution, type HandedOffTurn, type SettledRun, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type JsonValue, type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind, type AgentSignal, type SendOutcome,
   turnSourcesFromBundle, captureOperationProfile, type ModelCallReport, type ModelOperationEvent,
-  type AdvisorRecoverySnapshot, type AgentFigures, type HostedActor, type OwedReport, type SerializedMessage, type SessionEvent,
-  type SubordinateReportLedger, type SubordinateReportStatus, type TaskTurnEnding, type WorkMode, type ResolvedTurnProfile, type DynamicContext,
+  type AdvisorRecoverySnapshot, type AgentFigures, type AgentReport, type HostedActor, type OwedReport, type SerializedMessage, type SessionEvent, type TurnEndEvent,
+  type SubordinateReportLedger, type SubordinateReportStatus, type TaskTurnEnding, type WorkMode, type ResolvedTurnProfile,
+  type RemoteReceipt, type ReplyToCommentToolDeps, type StoredRow, type SubmitPlanToolDeps,
 } from '@kinu.run/core';
 
 import { attempt, diagnostics, hold, logged, settle } from '@kinu.run/core/obs';
@@ -16,29 +17,60 @@ import { compactionDiagnostics, hostedActorCompaction } from '@kinu.run/compacti
 import type { AgentDatabase } from './agent-database';
 import type { StepPacer } from './step-pacer';
 import type { ChatTurnRequest } from '../agent-turns';
-import type { AgentHeadDelta, AgentReview, AgentTurnActivity, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, PreparedAgentTurn } from '@kinu.run/core';
+import type { AgentHeadDelta, AgentReview, AgentTurnActivity, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, CacheWarmArm, OpenWork, PreparedAgentTurn, TurnCapability } from '@kinu.run/core';
+
+/** The answer's metadata, unless the workspace reads the turn's narration before it can say it. One shape, not a union:
+ *  a stub's promise of a union is a union of promises. */
+export interface AnswerMetadataReply {
+  readonly owesNarration: boolean;
+  readonly metadata: JsonObject | null;
+}
+
+/** Asks without the narration first: a turn that changed no slate it did not show never reads it. */
+export async function answerMetadataOf(
+  workspace: Pick<AgentWorkspace, 'answerMetadata'>, close: TurnBound, narration: () => Promise<readonly string[]>,
+): Promise<JsonObject | null> {
+  const first = await workspace.answerMetadata(close, null);
+
+  return first.owesNarration ? (await workspace.answerMetadata(close, await narration())).metadata : first.metadata;
+}
+
+
+/** What a call that runs more of a turn names (design v2 §3): its turn, its run and its capability's epoch, which the
+ *  workspace's fence must still hold; a run the workspace started has none, and only its own cut ends it. */
+export type TurnBound = Pick<AgentToolCall, 'turnId' | 'runId' | 'epoch'>;
+
+/** A bound that names a capability: what opens or prepares an execution, never a measure's. */
+export type TurnCapabilityOf = TurnBound & { readonly epoch: number };
 
 export interface AgentWorkspace {
   session(): NimbusSessionSurface;
   stateSession(): NimbusSessionSurface;
   memory(): Memory;
-  program(turnId: string, ...args: Parameters<Executor['execute']>): ReturnType<Executor['execute']>;
-  traceTurn(turnId: string, event: AgentTrace): Promise<void>;
-  traceStream(turnId: string, lines: ReadableStream<Uint8Array>): Promise<void>;
+  program(bound: TurnBound, ...args: Parameters<Executor['execute']>): ReturnType<Executor['execute']>;
+  /** A close (design v2 §3) names the execution it closes, `close`, which the workspace judges against the openings it
+   *  admitted: its own close runs after a Stop or a newer opening; one naming another execution runs nothing. */
+  traceTurn(close: TurnBound, event: AgentTrace): Promise<void>;
+  traceStream(close: TurnBound, lines: ReadableStream<Uint8Array>): Promise<void>;
   /** In the session codec's durable form: a ModelMessage's type is too deep for an RPC signature. */
-  resume(turnId: string): Promise<readonly JsonValue[] | null>;
-  guard(turnId: string, ...args: Parameters<MissionBudgetPort['guard']>): ReturnType<MissionBudgetPort['guard']>;
-  debit(turnId: string, ...args: Parameters<MissionBudgetPort['debit']>): Promise<void>;
-  prepareTurn(turnId: string): Promise<PreparedAgentTurn>;
-  /** The profile the agent assembled its turn on; answers the live block on it. */
-  bindProfile(turnId: string, profile: ResolvedTurnProfile): Promise<DynamicContext>;
+  resume(bound: TurnBound): Promise<readonly JsonValue[] | null>;
+  guard(bound: TurnBound, ...args: Parameters<MissionBudgetPort['guard']>): ReturnType<MissionBudgetPort['guard']>;
+  debit(close: TurnBound, ...args: Parameters<MissionBudgetPort['debit']>): Promise<void>;
+  /** A delivered run's preparation, under its first round's capability: it opens the workspace's fence for the run. */
+  prepareTurn(bound: TurnCapabilityOf): Promise<PreparedAgentTurn>;
   /** A null id reads one between turns. */
   prepareChat(request: ChatTurnRequest): Promise<PreparedAgentTurn>;
+  /** The program the agent's isolate is built on, as a turn would read it, with its seat (and so the program) seeded.
+   *  Opens no turn and holds none: an isolate adopted between turns asks it before its chat exists. */
+  scaffold(): Promise<StoredRow>;
   chatEvent(event: SessionEvent): Promise<void>;
   /** The turn's end, with the agent's figures as it ends. */
-  turnEnded(event: SessionEvent, figures: AgentFigures): Promise<void>;
+  /** `ended` names the execution it closes. `activity`: the lines its turn logged that no tool call took. `window`: the
+   *  transcript's newest messages as it ended, the frame its room is sent. */
+  turnEnded(ended: TurnEndEvent, figures: AgentFigures, activity: readonly AgentTurnActivity[], window: readonly UIMessage[]): Promise<void>;
   owedReport(
-    turn: { readonly reports: SubordinateReportLedger; readonly ownerDriven: boolean },
+    /** `taskId`: the assignment this turn answers, if one opened it. */
+    turn: { readonly reports: SubordinateReportLedger; readonly ownerDriven: boolean; readonly taskId: string | null },
     ended: { readonly ending: TaskTurnEnding; readonly assistantText: string; readonly narration: readonly string[] },
   ): Promise<OwedReport | null>;
   parentReport(report: {
@@ -49,19 +81,37 @@ export interface AgentWorkspace {
   /** The workspace's own agent hands its settled turn to the workspace, which owes that turn's lanes. Repeatable: the
    *  workspace keys what it owes on the turn. */
   turnSettled(settled: HandedOffTurn): Promise<void>;
+  /** Any other agent's run settled: the workspace drops the receipts its tools kept under it. Repeatable. */
+  runSettled(run: SettledRun): Promise<void>;
   hireAdvisor(advisor: AdvisorRecoverySnapshot): Promise<void>;
   /** A facet sets no alarm: the instant it next needs waking, or none, and whether it holds owed work at all (a parked
    *  effect needs no wake but is still owed), replacing what it said before. */
-  owes(next: number | null, holds: boolean): Promise<void>;
+  /** `report`: its standing and its delivered runs' ends not yet told, each told again until a report reached. */
+  owes(seq: number, next: number | null, holds: boolean, report: AgentReport): Promise<void>;
   birthContext(drainTurnId: string): Promise<SerializedMessage[]>;
   steerSkills(text: string, alreadyActive: readonly string[]): Promise<string | null>;
+  /** Its open tasks and running jobs, where its tools wrote them. */
+  openWork(): Promise<OpenWork>;
+  /** The workspace's lane that keeps its prompt cache warm (`CacheWarming`); one an agent has none of keeps nothing. */
+  /** A model request is starting: until when the cache stayed warm for the last one, read before it voids the lane. */
+  noteModelRequest(lastRequestAt: number | null): Promise<number | null>;
+  armCacheWarm(input: CacheWarmArm): Promise<number | null>;
   advise(review: AgentReview): Promise<void>;
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult>;
   executeTool(call: AgentToolCall): Promise<AgentToolAnswer>;
+  /** The workspace's receipts for calls of an execution whose rows here only point there; a call it holds none for is
+   *  absent. Read only, so a closed or stopped turn's repair still asks. */
+  receipts(turnId: string, runId: string, callIds: readonly string[]): Promise<ReadonlyMap<string, RemoteReceipt>>;
   observe(lines: ReadableStream<Uint8Array>): Promise<void>;
-  /** Calls the agent's `step` for the turn's waiting step, and answers once that step has ended (`StepPacer`). */
-  paceStep(turnId: string): Promise<void>;
-  answerMetadata(turnId: string, narration: readonly string[]): Promise<JsonObject | null>;
+  /**
+   * Calls the agent's `step` for the turn's waiting step, and answers once that step has ended (`StepPacer`). The first
+   * step carries the profile the agent assembled the turn on (D5): the workspace binds its tools and live block to it,
+   * and the grant carries that block back. Null after the first.
+   */
+  paceStep(bound: TurnBound, profile: ResolvedTurnProfile | null): Promise<void>;
+  /** The answer's metadata. The turn's narration names the slates its words promoted, read only when the turn changed
+   *  a slate it did not show: asked without it then, the workspace takes nothing and answers `owesNarration`. */
+  answerMetadata(close: TurnBound, narration: readonly string[] | null): Promise<AnswerMetadataReply>;
   getAuth(key: string, opts?: AuthRequest): Promise<AuthResolution | null>;
   listCredentials(): ReturnType<UserCredentialClient['listCredentials']>;
   relayDevice(provider: RelayedProvider): ReturnType<UserCredentialClient['relayDevice']>;
@@ -107,7 +157,7 @@ class HeadTrace {
 
   private readonly encoder = new TextEncoder();
 
-  constructor(private readonly workspace: AgentWorkspace, private readonly turnId: string) {}
+  constructor(private readonly workspace: AgentWorkspace, private readonly close: TurnBound) {}
 
   delta(kind: HeadStreamKind, delta: string): void {
     const line: AgentHeadDelta = { kind, delta };
@@ -117,7 +167,7 @@ class HeadTrace {
 
   async step(sequence: number, step: HeadStep): Promise<void> {
     await this.flush();
-    await this.workspace.traceTurn(this.turnId, { kind: 'step', sequence, step });
+    await this.workspace.traceTurn(this.close, { kind: 'step', sequence, step });
   }
 
   async flush(): Promise<void> {
@@ -131,8 +181,8 @@ class HeadTrace {
 
   relay(words: StepWords): Promise<void> {
     return settle(attempt({ doing: "relaying an agent's live head output", otherwise: 'io' },
-      () => this.workspace.traceStream(this.turnId, words.stream)).pipe(Effect.catch((failure) => Effect.sync(() => {
-        diagnostics.failure('agent.head_output_failed', failure, { turn: this.turnId });
+      () => this.workspace.traceStream(this.close, words.stream)).pipe(Effect.catch((failure) => Effect.sync(() => {
+        diagnostics.failure('agent.head_output_failed', failure, { turn: this.close.turnId });
       }))));
   }
 
@@ -147,10 +197,54 @@ class HeadTrace {
 
 const AGENT_CALLER = { workspaceToken: '' };
 
-function brokeredCredentials(workspace: AgentWorkspace): UserCredentialSource {
-  return {
+/** Bounded well below an access token's life (an hour, for the providers whose login the owner holds), so a credential
+ *  held here is refreshed before it could expire; an upstream's refusal refreshes it at once. */
+const CREDENTIAL_HELD_MS = 5 * 60_000;
+
+/** The credentials an isolate holds, and the account revision they were read under. */
+interface CredentialBroker {
+  readonly client: UserCredentialSource;
+  readonly held: Map<string, { readonly at: number; readonly auth: AuthResolution | null }>;
+  revision: number | null;
+}
+
+/** Each workspace client's broker: the isolate's turns share the credentials one of them read. */
+const brokers = new WeakMap<AgentWorkspace, CredentialBroker>();
+
+/**
+ * The isolate's credentials, held under their refresh rules (design v2 §8): a step asks its workspace for one only once
+ * the account's credentials moved (the revision its turn opened under), it is older than {@link CREDENTIAL_HELD_MS}, or an
+ * upstream refused the one held, whichever turn of it asks.
+ */
+function brokeredCredentials(workspace: AgentWorkspace, revision: number | null): UserCredentialSource {
+  const broker = brokers.get(workspace) ?? heldCredentials(workspace);
+
+  // A preparation that opened no turn read no revision: what is held stands.
+  if (revision !== null && broker.revision !== revision) {
+    broker.held.clear();
+    broker.revision = revision;
+  }
+
+  brokers.set(workspace, broker);
+
+  return broker.client;
+}
+
+function heldCredentials(workspace: AgentWorkspace): CredentialBroker {
+  const held = new Map<string, { readonly at: number; readonly auth: AuthResolution | null }>();
+
+  const client: UserCredentialSource = {
     caller: async () => AGENT_CALLER,
-    getAuth: (key, opts) => workspace.getAuth(key, opts),
+    getAuth: async (key, opts) => {
+      const known = held.get(key);
+
+      if (opts?.rejected === undefined && known !== undefined && Date.now() - known.at < CREDENTIAL_HELD_MS) return known.auth;
+      const auth = await workspace.getAuth(key, opts);
+
+      held.set(key, { at: Date.now(), auth });
+
+      return auth;
+    },
     listCredentials: () => workspace.listCredentials(),
     hub: () => ({
       relayDevice: (_caller, provider) => workspace.relayDevice(provider),
@@ -158,6 +252,8 @@ function brokeredCredentials(workspace: AgentWorkspace): UserCredentialSource {
       cancelModelRelay: (_caller, callId) => workspace.cancelModelRelay(callId),
     }),
   };
+
+  return { client, held, revision: null };
 }
 
 function lines(chunks: ReadableStream<UIMessageChunk>): ReadableStream<Uint8Array> {
@@ -174,25 +270,26 @@ function workspaceTools(
   turn: FacetToolTurn,
 ): ToolSet {
   return Object.fromEntries(prepared.tools.map((descriptor) => {
-    // The owner answers it, nothing executes it: its call parks in this isolate's store, which the repair reads.
-    if (descriptor.name === ASK_OWNER_TOOL) return [descriptor.name, askOwnerTool()];
-
     const entry = tool({
       description: descriptor.description,
       inputSchema: jsonSchema(descriptor.inputSchema),
       execute: async (input, { toolCallId }) => {
         const answer = await workspace.executeTool({
-          activity: turn.database.takeActivity(), turnId: turn.id, mode: turn.mode, parentDriven: turn.parentDriven, ...(turn.driving !== undefined && { driving: turn.driving }),
+          activity: turn.database.takeActivity(), turnId: turn.id, runId: turn.runId, epoch: turn.epoch, mode: turn.mode, parentDriven: turn.parentDriven, ...(turn.driving !== undefined && { driving: turn.driving }),
           callId: toolCallId, name: descriptor.name, input: decodeJsonValue({ value: input }),
         });
 
         turn.live.dynamic = answer.dynamic;
         turn.database.recordReports(turn.id, answer.reports);
-        turn.capture.evidence.push(...answer.captured.evidence);
-        turn.capture.decisions.push(...answer.captured.decisions);
-        turn.capture.artifacts.push(...answer.captured.artifacts);
-        turn.capture.toolCalls.push(...answer.captured.toolCalls);
-        turn.capture.childHeadIds.push(...answer.captured.childHeadIds);
+        const { captured } = answer;
+
+        if (turn.capture !== undefined && captured !== undefined) {
+          turn.capture.evidence.push(...captured.evidence);
+          turn.capture.decisions.push(...captured.decisions);
+          turn.capture.artifacts.push(...captured.artifacts);
+          turn.capture.toolCalls.push(...captured.toolCalls);
+          turn.capture.childHeadIds.push(...captured.childHeadIds);
+        }
 
         return answer.output;
       },
@@ -232,7 +329,7 @@ export type FacetModels = (deps: Omit<AgentProviderDeps, 'env'>) => AgentProvide
 
 function facetModels(actor: HostedActor, workspace: AgentWorkspace, models: FacetModels, prepared: PreparedAgentTurn): AgentProviderRegistry {
   return models({
-    userDO: brokeredCredentials(workspace),
+    userDO: brokeredCredentials(workspace, prepared.credentialsRevision),
     accountFor: (provider) => actor.stores.config.getProviderAccounts()[provider] ?? prepared.accounts[provider]
       ?? prepared.sources.profileInputs.envelope.catalog.accounts?.[provider],
     appTitle: 'Kinu',
@@ -250,9 +347,13 @@ export function facetTurnSources(turn: {
   readonly live: LiveTurn;
   readonly runId: string;
   readonly turnId: string;
+  readonly epoch: number | null;
   readonly pacer: StepPacer;
 }) {
   const { actor, prepared, spend } = turn;
+  const bound: TurnBound = { turnId: turn.turnId, runId: turn.runId, epoch: turn.epoch };
+  // The profile the turn assembled on, until its first step's pace carries it to the workspace (D5).
+  let unbound: ResolvedTurnProfile | null = null;
   const registry = facetModels(actor, turn.workspace, turn.models, prepared);
   // Its calls are routed under its own conversation, as a CLI hire's are, in its workspace's cache.
   const affinity = actorAffinity(actor.record);
@@ -262,6 +363,7 @@ export function facetTurnSources(turn: {
     models: { normalize: (spec) => registry.normalizeSpecSync(spec || prepared.sources.model), resolve: (spec) => registry.resolveModel(spec, affinity) },
     report: (_actor, report) => spend.report(report),
     operations: spend.operations,
+    turn: { profile: () => actor.session.profile, ledger: actor.session.dynamic },
   });
 
   const sources = turnSourcesFromBundle(prepared.sources, {
@@ -271,12 +373,23 @@ export function facetTurnSources(turn: {
     scaffoldSpend: { source: 'scaffold', report: spend.report, operations: spend.operations },
     operations: spend.operations,
     observeStream: async (chunks) => { await turn.workspace.observe(lines(chunks)); },
-    paceStep: (signal) => turn.pacer.pace(turn.workspace, turn.turnId, signal),
+    paceStep: async (signal) => {
+      const profile = unbound;
+
+      unbound = null;
+      const granted = await turn.pacer.pace(turn.workspace, bound, signal, profile);
+
+      // Its first step's grant carries the live block on the profile it bound, before the step reads it.
+      if (granted.dynamic !== null) turn.live.dynamic = granted.dynamic;
+
+      return granted.ended;
+    },
     attachmentBudget: actor.session.orchestrator.acc.context,
     extensions: () => [compaction.extension],
     dynamic: () => () => turn.live.dynamic,
-    // The workspace answers tools and the live block on the profile assembled here.
-    settle: async (profile) => { turn.live.dynamic = await turn.workspace.bindProfile(turn.turnId, profile); },
+    // Bound and frozen by the driver as it resolved (`ClaimedRound.bind`); the workspace answers tools and the live block
+    // on it from its first step.
+    settle: async (profile) => { unbound = profile; },
     taskPlan: () => null,
     operation: (profile, inputs) => captureOperationProfile({ actor: actor.handle, profile, inputs, runId: turn.runId, turnId: turn.turnId }),
   });
@@ -284,99 +397,143 @@ export function facetTurnSources(turn: {
   return { sources, trigger: compaction.trigger };
 }
 
-/** A turn's tool calls carry its lane, so a workspace that restarted mid-turn rebuilds the same turn. */
+/** A turn's tool calls carry its execution and its lane, so a workspace that restarted mid-turn rebuilds the same turn. */
 interface FacetToolTurn {
   readonly id: string;
+  readonly runId: string;
+  readonly epoch: number | null;
   readonly mode: WorkMode;
   readonly parentDriven: boolean;
   readonly driving: JsonObject | undefined;
   readonly live: LiveTurn;
-  readonly capture: HeadCapture;
+  /** A run's, which its inference reads; a chat turn records none. */
+  readonly capture?: HeadCapture;
   readonly database: AgentDatabase;
+  /** The agent's own plan store, where the owner's lane submits and replies; a run reaches no owner's lane. */
+  readonly owner?: { readonly submitPlan: SubmitPlanToolDeps; readonly replyToComment: ReplyToCommentToolDeps };
 }
 
+/**
+ * A turn's tools here (design v2 §4): each workspace tool commits in the workspace, which keeps its receipt, so a call
+ * leaves only a pointer here; the owner's lane (its plans, its questions) commits in this store, under a receipt here.
+ */
 export function facetTurnTools(workspace: AgentWorkspace, prepared: PreparedAgentTurn, actor: HostedActor, turn: FacetToolTurn): ToolSet {
-  return withEffectClaims(workspaceTools(workspace, prepared, turn), {
+  const receipts = {
     actor: actor.handle,
     sql: actor.runtime.storage.sql,
-    turnId: () => turn.id,
-    durable: (callId, signal) => actor.session.durableCall(callId, signal),
-  });
+    execution: () => ({ turnId: turn.id, runId: turn.runId }),
+    durable: (callId: string, signal?: AbortSignal) => actor.session.durableCall(callId, signal),
+  };
+
+  const { ownerLane } = prepared;
+
+  // Asking the owner has no executor: its call parks in this isolate's store, which the repair reads.
+  const owned = toolsInWorkMode(turn.mode, ownerLaneTools({
+    ...(ownerLane.submitPlan && turn.owner !== undefined && { submitPlan: turn.owner.submitPlan }),
+    ...(ownerLane.replyToComment && turn.owner !== undefined && { replyToComment: turn.owner.replyToComment }),
+    ...(ownerLane.askOwner && { askOwner: true }),
+  }));
+
+  return {
+    ...withEffectPointer(workspaceTools(workspace, prepared, turn), receipts),
+    ...withEffectReceipt(owned, { ...receipts, transaction: (body) => actor.runtime.storage.transactionSync(body) }),
+  };
 }
 
-/** A one-shot run on the shared assembly and step loop. */
-export async function runAgentTask(
+/** What a delivered run's preparation set, which the compiler does not follow into: the opening it made at the workspace,
+ *  which every call of the run names, its closes too, and the trace its steps stream to. */
+interface PreparedRun {
+  opened: TurnCapabilityOf | null;
+  trace: HeadTrace | null;
+}
+
+/**
+ * A delivered run's own parts (D2): its preparation, under its first round's claim, by its workspace over this
+ * isolate's models and tools, and the projection of its rounds into its end. Its rounds are core's driver
+ * (`driveExecution`, through `runHeadInference`), run in its chat's turn, which `signal` stops.
+ */
+export async function deliveredRun(
   { database, workspace, models, pacer }: { readonly database: AgentDatabase; readonly workspace: AgentWorkspace; readonly models: FacetModels; readonly pacer: StepPacer },
   task: AgentTurnTask,
+  signal: AbortSignal,
 ): Promise<AgentTurnEnd> {
-  const prepared = await workspace.prepareTurn(task.sequenceId);
-
-  database.prepare(task.sequenceId, prepared);
   const actor = await database.acquire();
-  const live: LiveTurn = { dynamic: prepared.dynamic };
-
-  const stop = database.stop(task.sequenceId).signal;
+  const { runId } = task;
   const capture = new HeadCapture();
-  const runId = prepared.runId;
   const spend = new FacetSpend(workspace);
-  const { sources, trigger } = facetTurnSources({ actor, workspace, models, prepared, spend, live, runId, turnId: task.sequenceId, pacer });
-
-  const inference: HeadInferenceDeps = {
-    actor,
-    runId,
-    clock: REAL_CLOCK,
-    sources,
-    compaction: trigger,
-    tools: facetTurnTools(workspace, prepared, actor, { id: task.sequenceId, mode: task.mode, parentDriven: false, driving: undefined, live, capture, database }),
-    opening: decodeModelMessageValues(prepared.opening),
-    capture,
-    isAborted: () => stop.aborted,
-    signal: stop,
-    advise: async (turn, reachable, mode) => await workspace.advise({ turnId: task.sequenceId, turn, reachable, mode }),
-  };
-
-  const { brief } = prepared;
-
-  if (brief !== undefined) inference.brief = () => brief;
-
-  const trace = prepared.trace ? new HeadTrace(workspace, task.sequenceId) : null;
+  const run: PreparedRun = { opened: null, trace: null };
   let produced: readonly ModelMessage[] | undefined;
-
-  if (prepared.reportMessages) inference.reportMessages = (messages) => { produced = messages; };
-
-  if (prepared.resume) {
-    inference.resume = async () => {
-      const resumed = await workspace.resume(task.sequenceId);
-
-      return resumed === null ? null : decodeModelMessageValues(resumed);
-    };
-  }
-
-  if (prepared.missionLabels !== undefined) inference.mission = {
-    labels: prepared.missionLabels,
-    port: {
-      guard: (...args) => workspace.guard(task.sequenceId, ...args),
-      debit: (...args) => workspace.debit(task.sequenceId, ...args),
-    },
-  };
-
-  if (trace !== null) {
-    inference.reportStep = (sequence, step) => trace.step(sequence, step);
-    inference.reportDelta = (kind, delta) => { trace.delta(kind, delta); };
-  }
 
   openTurnRun(actor.stores.eventRecorder, runId, {
     agentId: actor.record.actorId, causedBy: 'swarm', userMessage: task.body,
     turnIndex: actor.session.orchestrator.sessionTurnIndex,
   });
 
+  const prepare = async (capability: TurnCapability) => {
+    // Every round's call carries the run's capability: the opening its preparation made at the workspace.
+    const bound: TurnCapabilityOf = { turnId: capability.turnId, runId: capability.runId, epoch: capability.epoch };
+    const prepared = await workspace.prepareTurn(bound);
+
+    run.opened = bound;
+    database.prepare(bound, prepared);
+    const live: LiveTurn = { dynamic: prepared.dynamic };
+    const { sources, trigger } = facetTurnSources({ actor, workspace, models, prepared, spend, live, runId, turnId: task.sequenceId, epoch: bound.epoch, pacer });
+
+    const inference: HeadInferenceDeps = {
+      actor,
+      runId,
+      clock: REAL_CLOCK,
+      sources,
+      compaction: trigger,
+      tools: facetTurnTools(workspace, prepared, actor, { id: task.sequenceId, runId, epoch: bound.epoch, mode: task.mode, parentDriven: false, driving: undefined, live, capture, database }),
+      opening: decodeModelMessageValues(prepared.opening),
+      capture,
+      isAborted: () => signal.aborted,
+      signal,
+      advise: async (turn, reachable, mode) => await workspace.advise({ turnId: task.sequenceId, turn, reachable, mode }),
+    };
+
+    const { brief } = prepared;
+
+    if (brief !== undefined) inference.brief = () => brief;
+
+    run.trace = prepared.trace ? new HeadTrace(workspace, bound) : null;
+
+    if (prepared.reportMessages) inference.reportMessages = (messages) => { produced = messages; };
+
+    if (prepared.resume) {
+      inference.resume = async () => {
+        const resumed = await workspace.resume(bound);
+
+        return resumed === null ? null : decodeModelMessageValues(resumed);
+      };
+    }
+
+    if (prepared.missionLabels !== undefined) inference.mission = {
+      labels: prepared.missionLabels,
+      port: {
+        guard: (...args) => workspace.guard(bound, ...args),
+        debit: (...args) => workspace.debit(bound, ...args),
+      },
+    };
+
+    const traced = run.trace;
+
+    if (traced !== null) {
+      inference.reportStep = (sequence, step) => traced.step(sequence, step);
+      inference.reportDelta = (kind, delta) => { traced.delta(kind, delta); };
+    }
+
+    return { input: prepared.input, deps: inference };
+  };
+
   // Every end closes the stream; an open one holds the relay.
   let report: Awaited<ReturnType<typeof runHeadInference>>;
 
   try {
-    report = await runHeadInference(prepared.input, inference);
+    report = await runHeadInference({ key: { turnId: task.sequenceId, runId, mode: task.mode }, actor, prepare });
   } finally {
-    await trace?.flush();
+    await run.trace?.flush();
   }
 
   closeTurnRun(actor.stores.eventRecorder, runId, {
@@ -392,9 +549,13 @@ export async function runAgentTask(
 
   const transcript = actor.stores.history.transcript(CHAT_SESSION_ID);
   const completion = report.canonicalCompletion;
-  const narration = completion === undefined ? [] : await transcript.narration(answerParts(completion.outputPartReferences, completion.finalTextReference));
+  const close: TurnBound = run.opened ?? { turnId: task.sequenceId, runId, epoch: null };
 
-  if (completion !== undefined) await database.answer(completion, await workspace.answerMetadata(completion.turnId, narration));
+  // Its narration is read only if the answer's metadata needs it.
+  if (completion !== undefined) {
+    await database.answer(completion, await answerMetadataOf(workspace, close, async () => await transcript.narration(answerParts(completion.outputPartReferences, completion.finalTextReference))));
+  }
+
   await spend.settled();
 
   return {
@@ -402,7 +563,6 @@ export async function runAgentTask(
     activity: database.takeActivity(),
     figures: database.figures(),
     errorMessage: report.errorMessage ?? null,
-    narration: narration.join('\n'),
     ...(produced !== undefined && { produced: encodeModelMessageValues(produced) }),
   };
 }

@@ -19,7 +19,6 @@ export { initEventsHubTables } from './schema';
 export {
   EventLog,
   boundEventQuery,
-  dismissOrphanedAssignments,
   type PublishResult, type PendingFilter, type QueryFilter, type BoundedQueryFilter,
 } from './log';
 

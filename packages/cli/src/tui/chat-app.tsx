@@ -840,10 +840,12 @@ function ChatScene({
     setActiveSurface(null);
 
     return Effect.catch(
-      attemptInItsWords('unavailable', async () => client.questions?.answer(asking.asked.id, answers)),
+      Effect.map(attemptInItsWords('unavailable', async () => client.questions?.answer(asking.asked.id, answers)), (owed) => {
+        if (owed !== undefined && owed !== null) addMessage({ role: 'system', content: 'Your answer is on its way: the agent takes it when it next wakes.' });
+      }),
       (failure) => Effect.sync(() => addError({ cause: failure })),
     );
-  }, [addError, client]);
+  }, [addError, addMessage, client]);
 
   const selectModel = useCallback(async (spec: string) => {
     if (selectionPendingRef.current) return;

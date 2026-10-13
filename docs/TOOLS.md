@@ -21,8 +21,14 @@ their surface. Crafted tools are called as `tools.<name>(args)` inside `eval`.
 | `web` | `search` returns ranked results (title, url, snippet, date); `fetch` returns one URL as markdown, and with `render: true` loads it in Browser Run first (quick action `content`, then Kinu's converter); `screenshot` saves a PNG under `screenshots/` and shows it to a model that takes images: inside the tool result on Anthropic Messages and OpenAI Responses, in a user message right after the tool results on Chat Completions; a model without image input gets a note in its place. Rendering and screenshots run on Kitesurf unless `engine: 'chrome'`; the CLI reaches Browser Run with `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`, and refuses naming them without. Search works without a key through DuckDuckGo and the Cloudflare markdown service; a stored `tavily` credential upgrades search, at `https://api.tavily.com` or at the credential's own `baseURL` (a bearer credential's optional endpoint, for a proxy). In eval, `web.openBrowser` opens a Chrome session kept across programs until closed or idle 20 min, with a Live View link, and `web.connectBrowser` drives it with @cloudflare/puppeteer through `CodemodeEgress`, which admits only the agent that opened it; `connectBrowser('kitesurf')` starts a browser that ends with its program. `web.pageTools`/`web.callPageTool` list and run a page's WebMCP tools (Kitesurf, or Chrome opened with `lab: true`). Hosted only; the CLI refuses sessions |
 | `report` | A subordinate's progress back to its orchestrator: `progress \| completed \| blocked` |
 
-`submit_plan` is not one of the eight. `buildBuiltinTools` adds it only on a
-Plan turn whose actor owns plan submission.
+`submit_plan`, `reply_to_comment` and `ask_owner` are not among the eight:
+they are the owner's lane, and `ownerLaneTools` builds each only where core's
+`turnReach` gives the turn it (`submit_plan` on an owner turn in Plan mode,
+`reply_to_comment` while a plan the owner sent back awaits answers). Their
+effects commit in the agent's own store, so on the cloud the agent's isolate
+builds and runs them under its own receipt and the workspace only declares them
+(`ownerLaneDeclarations`); the CLI's `buildBuiltinTools` adds them beside the
+eight.
 
 ### Reach
 

@@ -8,7 +8,7 @@ import {
   type PendingAction, type SlateProblem, type SlateSummary,
 } from "@kinu.run/core";
 import * as v from "valibot";
-import { explorationForkTree } from "@kinu.run/core";
+import { explorationForkTree, OwedOwnerIntentSchema, type OwedOwnerIntent } from "@kinu.run/core";
 import type {
   MemoryEntry, ForkNode, ExecutorCommandResult, PendingConsent, AskingAgent, SubordinateActivityEvent, TabPresence,
 } from "@kinu.run/core";
@@ -160,6 +160,8 @@ export function useWorkspaceReads(link: ChatLink) {
   const [readMoves, setReadMoves] = useState<ReadMoves>({});
   const [pendingConsents, setPendingConsents] = useState<PendingConsent[]>([]);
   const [ownerQuestions, setOwnerQuestions] = useState<AskingAgent[]>([]);
+  /** The owner's decisions, answers and Retries whose crossing did not reach their agent, until its wake delivers each. */
+  const [owedIntents, setOwedIntents] = useState<readonly OwedOwnerIntent[]>([]);
   /** A connect clears it. */
   const [unavailableDevices, setUnavailableDevices] = useState<UnavailableDevice[] | null>(null);
   // One read behind both the Work queue and the strip's accent badge, so they cannot disagree.
@@ -255,6 +257,10 @@ export function useWorkspaceReads(link: ChatLink) {
 
   const refreshOwnerQuestions = useCallback(() => refreshCurrentLiveResource(
     "questions", () => rpc<AskingAgent[]>("listOwnerQuestions", []), setOwnerQuestions,
+  ), [refreshCurrentLiveResource, rpc]);
+
+  const refreshOwedIntents = useCallback(() => refreshCurrentLiveResource(
+    "owedIntents", async () => v.parse(v.array(OwedOwnerIntentSchema), await rpc<unknown>("listOwedIntents", [])), setOwedIntents,
   ), [refreshCurrentLiveResource, rpc]);
 
   const refreshTabPresence = useCallback(() => refreshCurrentLiveResource(
@@ -479,11 +485,12 @@ export function useWorkspaceReads(link: ChatLink) {
     inspectWork: refreshInspectedWork,
     listPendingActions: refreshPendingActions,
     listOwnerQuestions: refreshOwnerQuestions,
+    listOwedIntents: refreshOwedIntents,
     getWorkspaceTabPresence: refreshTabPresence,
     listSlates: refreshSlates,
     getActivePlanReview: rereadPlan,
   }), [
-    refreshBackgroundJobs, refreshCurrentLiveResource, refreshExposedPorts, refreshInspectedWork, refreshOwnerQuestions, refreshPendingActions, refreshRoster,
+    refreshBackgroundJobs, refreshCurrentLiveResource, refreshExposedPorts, refreshInspectedWork, refreshOwedIntents, refreshOwnerQuestions, refreshPendingActions, refreshRoster,
     refreshSlates, refreshTabPresence, rereadPlan, rpc,
   ]);
 
@@ -557,7 +564,7 @@ export function useWorkspaceReads(link: ChatLink) {
     // Each fails on its own surface, as its own read did; each port list is its executor's answer, not the workspace's.
     try {
       await Promise.all([
-        refreshExposedPorts(), refreshOwnerQuestions(),
+        refreshExposedPorts(), refreshOwnerQuestions(), refreshOwedIntents(),
         refreshCurrentLiveResource("roster", async () => v.parse(v.array(SubordinateRosterEntrySchema), await listedOn(snap.subordinates)), setSubordinates),
         refreshCurrentLiveResource("consents", () => listedOn(snap.pendingConsents), setPendingConsents),
         refreshCurrentLiveResource("agents", () => listedOn(snap.workspaceAgents), setWorkspaceAgents),
@@ -707,6 +714,7 @@ export function useWorkspaceReads(link: ChatLink) {
       readMoves,
       pendingConsents,
       ownerQuestions,
+      owedIntents,
       resolveConsent,
       unavailableDevices,
       /** Work marks self-changes seen server-side, then calls the clear. */

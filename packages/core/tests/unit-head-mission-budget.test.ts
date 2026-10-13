@@ -6,7 +6,7 @@ import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import { createTestRuntime, scriptedTurnModel } from '@kinu.run/test-utils';
 import type { HeadInput } from '../src/heads/types';
-import { runHeadInference, HeadCapture, buildHeadAccumulatorTools } from '../src/heads/head-inference';
+import { runHeadInference, preparedHeadRun, HeadCapture, buildHeadAccumulatorTools } from '../src/heads/head-inference';
 import {
   MissionGovernor, localMissionScope, type MissionBudgetPort, type MissionScope,
 } from '../src/mission-budget';
@@ -73,7 +73,7 @@ async function hostedHead(model: LanguageModel) {
 async function runHead(mission: MissionScope | null, opts: { stopAfter?: number } = {}) {
   const capture = new HeadCapture();
 
-  const deps: Parameters<typeof runHeadInference>[1] = {
+  const deps: Parameters<typeof preparedHeadRun>[1] = {
     ...await hostedHead(steppingModel({ input: 1_000, output: 200, ...opts })),
     compaction: fixtureCompaction(),
     tools: buildHeadAccumulatorTools(capture),
@@ -82,7 +82,7 @@ async function runHead(mission: MissionScope | null, opts: { stopAfter?: number 
   };
 
   if (mission) deps.mission = mission;
-  const report = await runHeadInference(headInput(mission?.labels), deps);
+  const report = await runHeadInference(preparedHeadRun(headInput(mission?.labels), deps));
 
   return { report, capture };
 }

@@ -76,7 +76,7 @@ async function chat(workspace: string): Promise<readonly string[]> {
 describe("a hired agent's job", () => {
   it('wakes the auditor with its result when it ends, and once however often a restart re-delivers the wake', async () => {
     const workspace = 'hire-job-result';
-    const { hire, pane, job } = await hiredJob(workspace);
+    const { pane, job } = await hiredJob(workspace);
 
     try {
       await probe(workspace).openJobGate(workspace);
@@ -88,13 +88,11 @@ describe("a hired agent's job", () => {
       expect(wake).toEqual([expect.stringContaining(JOB_OUTPUT)]);
       expect((await chat(workspace)).at(-1)).toContain(JOB_NOTED);
 
-      // A restart that finds the job's lane row over a settled job re-delivers its wake; the auditor is woken once all the same.
+      // A restart that finds the job's lane row over a settled job re-delivers its wake: the same delivery, which the
+      // auditor answers as one it holds, so it is woken once all the same.
       await probe(workspace).redeliverJobWake(workspace, job.id);
 
-      const admitted = (await probe(workspace).observe(workspace)).log
-        .filter((row) => row.actorId === hire.actorId && row.variant === 'subordinate_task' && row.body.includes(job.id));
-
-      expect(admitted).toHaveLength(1);
+      expect((await chat(workspace)).filter((line) => line.startsWith('user:') && line.includes(job.id))).toHaveLength(1);
     } finally {
       pane.close();
     }

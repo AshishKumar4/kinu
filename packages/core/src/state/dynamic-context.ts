@@ -6,7 +6,7 @@ import type { AgentStores } from './agent-stores';
 import {
   agentDynamicContext, type DynamicApproval, type DynamicContext, type DynamicDelegate, type MissingCapability, type RuntimeFacts,
 } from '../prompting/volatile-context';
-import type { ActiveRoster } from '../types/dynamic-context';
+import type { ActiveRoster, ShownLesson } from '../types/dynamic-context';
 import { renderFactsForTurn } from '../orchestrator/turn-surface';
 import { listRecoveryFindings } from '../evolution/recovery';
 import { listToolLessons, MAX_TOOL_LESSONS, shownLesson } from '../evolution/struggles';
@@ -16,11 +16,53 @@ import { SUBMIT_PLAN_TOOL } from '../tools/registry';
 import type { ActiveSkillSet } from '../skills/types';
 import type { TurnReason } from '../types/turn';
 import type { ToolSet } from 'ai';
-import type { Fact } from '../memory/facts';
+import type { Fact, FactsStore } from '../memory/facts';
+import type { SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../identity/actor-handle';
+import { ASKED, type Holds } from '../utils/held-reads';
+
+/** The rows a dynamic block reads from its agent's stores. */
+export interface DynamicReads {
+  readonly facts: Pick<FactsStore, 'recentTopK' | 'all'>;
+  readonly recoveryFindings: () => string[];
+  readonly toolLessons: (tools: readonly string[]) => ShownLesson[];
+  readonly runningJobs: AgentStores['jobs']['listRunning'];
+  readonly openTasks: AgentStores['taskList']['listOpen'];
+  readonly liveHeadRuns: AgentStores['headJournal']['listLive'];
+}
+
+/**
+ * An agent's dynamic-block reads through `holds`: a Durable Object reads each once until a statement through its
+ * executors writes a table the read selects from. Every writer named below runs over the agent's `sql`.
+ */
+export function dynamicReads(stores: AgentStores, sql: SqlExecutor, actor: ActorHandle, holds: Holds = ASKED): DynamicReads {
+  // scoreToolLessons and the rewrite that replaces a lesson; one entry per tool set, its names a line each.
+  const lessons = holds.holdEach(['tool_lessons'], (names: string) => listToolLessons(sql, actor, names === '' ? [] : names.split('\n'), MAX_TOOL_LESSONS)
+    .map(shownLesson));
+
+  return {
+    // FactsStore's upsert, observe and forget, and a fork's section import.
+    facts: {
+      recentTopK: holds.holdEach(['agent_facts'], (k: number) => stores.facts.recentTopK(k)),
+      all: holds.hold(['agent_facts'], () => stores.facts.all()),
+    },
+    // recordLesson and corroborateLessonsForTurn.
+    recoveryFindings: holds.hold(['lessons'], () => listRecoveryFindings(sql, actor)),
+    toolLessons: (tools) => lessons(tools.join('\n')),
+    // BackgroundJobStore's create, settle, fail, cancel, reclaim, deferResume, dismiss and clear.
+    runningJobs: holds.holdEach(['background_jobs'], (limit: number | undefined) => stores.jobs.listRunning(limit)),
+    // TaskListStore's add and updates.
+    openTasks: holds.holdEach(['agent_tasks'], (limit: number | undefined) => stores.taskList.listOpen(limit)),
+    // HeadJournal's split, spawn, report, interrupt, abandon and merge.
+    liveHeadRuns: holds.holdEach(['head_journal', 'head_runs'], (limit: number | undefined) => stores.headJournal.listLive(limit)),
+  };
+}
 
 export interface DynamicContextInput {
   readonly rt: AgentRuntime;
   readonly stores: AgentStores;
+  /** Its store reads, held by a host that holds them; absent, read afresh. */
+  readonly reads?: DynamicReads;
   readonly profile: Pick<ResolvedTurnProfile, 'workMode' | 'allowedTools'>;
   readonly tools: ToolSet;
   /** The turn's MCP and extension tools, which only `eval` reaches. */
@@ -59,8 +101,8 @@ export function subordinateDelegatesOf(
 
 /** Nothing finer than the caller's date: a wall-clock field would re-fingerprint the block every step. */
 export function collectDynamicContext(input: DynamicContextInput): DynamicContext {
-  const { rt, stores } = input;
-  const { profile } = input;
+  const { rt, profile } = input;
+  const reads = input.reads ?? dynamicReads(input.stores, rt.storage.sql, rt.actor);
 
   return agentDynamicContext({
     runtime: input.runtime,
@@ -72,16 +114,16 @@ export function collectDynamicContext(input: DynamicContextInput): DynamicContex
     },
     craftedTools: craftedToolDeclarations(input.tools, profile),
     externalTools: externalToolDeclarations(input.tools, input.externalTools ?? {}, profile),
-    factsBlock: renderFactsForTurn(stores.facts, input.accountFacts),
+    factsBlock: renderFactsForTurn(reads.facts, input.accountFacts),
     memoryTail: input.memoryTail,
-    recoveryFindings: listRecoveryFindings(rt.storage.sql, rt.actor),
-    toolLessons: listToolLessons(rt.storage.sql, rt.actor, Object.keys(input.tools), MAX_TOOL_LESSONS).map(shownLesson),
+    recoveryFindings: reads.recoveryFindings(),
+    toolLessons: reads.toolLessons(Object.keys(input.tools)),
     executors: rt.executionRouter?.listExecutors() ?? [],
     // Same cached snapshot the executor row reads, so the two agree.
     devices: rt.deviceTransport?.status().devices,
-    runningJobs: stores.jobs.listRunning(),
-    openTasks: stores.taskList.listOpen(),
-    liveHeadRuns: stores.headJournal.listLive(),
+    runningJobs: reads.runningJobs(),
+    openTasks: reads.openTasks(),
+    liveHeadRuns: reads.liveHeadRuns(),
     subordinateDelegates: input.subordinateDelegates?.(),
     approvals: input.approvals?.(),
     failingSlates: input.failingSlates?.(),

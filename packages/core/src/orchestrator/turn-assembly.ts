@@ -15,6 +15,7 @@ import type { PromptBackend, PromptIdentity } from '../prompting/surface';
 import { withOperationProfile, type OperationProfile } from '../profiles/operation';
 import { effectiveRoleCatalog } from '../profiles/catalog';
 import { ownProfileChoices, resolveAgentTurnProfile, type PinnedProfile, type ProfileAuthorityInputs, type ResolvedTurnProfile } from '../profiles/resolve';
+import type { FrozenAuthority } from './turn-facts';
 import { TierIdSchema, type TierId } from '../types/profile';
 import type { JsonObject } from '../utils/json';
 import * as v from 'valibot';
@@ -37,7 +38,7 @@ import { callableToolNames, toolsForInvocation } from '../execution/work-mode';
 import type { WorkMode } from '../types/turn';
 import type { ActorExecutionInput } from './actor-session';
 import type { ModelCatalogSession } from './model-catalog';
-import { measureCompactionTrigger, type CompactionTriggerReader } from './turn-context';
+import type { CompactionTriggerReader } from './turn-context';
 import { activatedSkillsBlock, filterToolSetBySkills, resolveTurnSkills, splitTurnSkills, type TurnSkillSurface, type TurnSkillsConfig } from './turn-surface';
 
 export interface TurnModelSources {
@@ -110,6 +111,9 @@ export interface TurnAssemblyRequest {
   readonly explicitTier?: TierId;
   /** Overrides the tier's model. */
   readonly model?: string;
+  /** A recovered execution's authority, as it froze at its bind: it assembles on it and drafts nothing from the current
+   *  settings, so a setting changed since cannot answer it differently. */
+  readonly frozen?: FrozenAuthority;
 }
 
 export interface AssembledTurn {
@@ -149,6 +153,7 @@ interface TurnDraft {
 }
 
 async function draftTurn(sources: Pick<TurnAssemblySources, 'profileInputs' | 'choices' | 'config' | 'ancestors' | 'models'>, request: TurnAssemblyRequest): Promise<TurnDraft> {
+  if (request.frozen !== undefined) return frozenDraft(sources, request.frozen);
   const profileInputs = await sources.profileInputs();
   const ancestors = sources.ancestors?.() ?? [];
   const choices = sources.choices ?? ownProfileChoices(sources.config, profileInputs, ancestors.length === 0 ? undefined : ancestors, request.explicitTier === undefined ? {} : { explicitTier: request.explicitTier });
@@ -162,10 +167,48 @@ async function draftTurn(sources: Pick<TurnAssemblySources, 'profileInputs' | 'c
   };
 }
 
+/** A recovered execution's draft, read from what it froze alone: its role's skills from the catalog it bound, its
+ *  model the one its tier served. Nothing of the current settings is read. */
+function frozenDraft(sources: Pick<TurnAssemblySources, 'models' | 'choices'>, frozen: FrozenAuthority): TurnDraft {
+  const { profile, inputs } = frozen;
+  const served = sources.models.normalize(profile.tier.model);
+
+  return {
+    profileInputs: inputs, ancestors: [], drafted: profile, served,
+    choices: { activeRoleId: profile.role.id, ...sources.choices },
+    roleSkills: effectiveRoleCatalog(inputs.envelope.catalog)[profile.role.id]?.skills ?? [],
+    limits: sources.models.catalog.window(served),
+  };
+}
+
+/** The turn's profile over what it can reach: its builtins, its external tools, its wired names and its eval namespaces. */
+function resolvedTurnProfile(sources: TurnAssemblySources, turn: Pick<TurnDraft, 'profileInputs' | 'choices' | 'drafted'> & {
+  readonly workMode: WorkMode;
+  readonly builtins: ToolSet;
+  readonly external: ToolSet;
+  readonly activeSkills: ActiveSkillSet | undefined;
+}): ResolvedTurnProfile {
+  const { drafted } = turn;
+
+  return resolveAgentTurnProfile({
+    ...turn.profileInputs,
+    ...turn.choices,
+    workMode: turn.workMode,
+    availableTools: [
+      ...Object.keys(turn.builtins).filter((name) => BUILTIN_TOOL_NAMES.has(name)),
+      ...Object.keys(turn.external),
+      ...sources.wiredToolNames(drafted.workMode),
+      ...sources.codemodeCapabilities(drafted.workMode),
+    ],
+    activeSkills: turn.activeSkills?.active.map((skill) => skill.name) ?? [],
+  });
+}
+
 /** Effect-free: a measure between turns assembles too. */
 export async function assembleActorTurn(sources: TurnAssemblySources, request: TurnAssemblyRequest): Promise<AssembledTurn> {
   const { models } = sources;
-  // The tier never depends on the tools, so the drafted model is the served one.
+  const { frozen } = request;
+  // The tier never depends on the tools, so the drafted model is the served one; a frozen execution's is the one it froze.
   const { profileInputs, choices, roleSkills, drafted, served: spec, limits } = await draftTurn(sources, request);
 
   const { available: availableSkills, activeSkills } = await sources.skills(request.userText, roleSkills, limits);
@@ -173,18 +216,7 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
   const builtins = filterToolSetBySkills(sources.toolset(drafted.workMode), activeSkills);
   const external = await sources.externalTools(limits);
 
-  const profile = resolveAgentTurnProfile({
-    ...profileInputs,
-    ...choices,
-    workMode: request.workMode,
-    availableTools: [
-      ...Object.keys(builtins).filter((name) => BUILTIN_TOOL_NAMES.has(name)),
-      ...Object.keys(external),
-      ...sources.wiredToolNames(drafted.workMode),
-      ...sources.codemodeCapabilities(drafted.workMode),
-    ],
-    activeSkills: activeSkills?.active.map((skill) => skill.name) ?? [],
-  });
+  const profile = frozen?.profile ?? resolvedTurnProfile(sources, { profileInputs, choices, workMode: request.workMode, drafted, builtins, external, activeSkills });
 
   const operation = sources.operation(profile, profileInputs);
   await sources.settle?.(profile, profileInputs);
@@ -288,7 +320,7 @@ function routedChat(models: TurnModelSources, spec: string, profile: ResolvedTur
 export function withCompactionTrigger(
   execution: Omit<ActorExecutionInput, 'task'>, state: CompactionTriggerReader, key: string, historyLength: number,
 ): Omit<ActorExecutionInput, 'task'> {
-  const measured = measureCompactionTrigger(state, key, historyLength);
+  const measured = state.takeTrigger(key, historyLength);
 
   return {
     ...execution,

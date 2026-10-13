@@ -1083,6 +1083,17 @@
       "exit": 0,
       "machine": "linux x64, AMD EPYC (8 threads)"
     },
+    "bun test --timeout=0 tests/browser/live-app-root-turn.test.ts": {
+      "wallSeconds": 144.35,
+      "cpuSeconds": 331.25,
+      "peakRssMb": 5007.2,
+      "peakRunnable": 20,
+      "peakCpuThreads": 4.41,
+      "meanThreads": 2.29,
+      "samples": 517,
+      "loadAtStart": 0.38,
+      "exit": 0
+    },
     "bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/credential-checkpoint.test.ts scripts/reset.test.ts scripts/prod-logs.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts scripts/runtime-catalog.test.ts": {
       "wallSeconds": 68.19,
       "cpuSeconds": 57.41,

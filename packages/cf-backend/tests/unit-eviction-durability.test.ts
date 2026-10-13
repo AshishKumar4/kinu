@@ -5,7 +5,7 @@
  */
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import {
-  ActorSession, ADVISOR_HEADER, BACKGROUND_FIBER_PREFIX, PROGRAMMATIC_MESSAGE_ID_PREFIX,
+  ActorAdvisor, ADVISOR_HEADER, BACKGROUND_FIBER_PREFIX, PROGRAMMATIC_MESSAGE_ID_PREFIX,
   TERMINAL_EFFECT_RETRY_CEILING_MS,
 } from '@kinu.run/core';
 import {
@@ -193,16 +193,18 @@ describe('the post-turn lanes', () => {
     expect(notes(restarted)).toBe(1);
     expect(owedReview(restarted)).toBe(0);
     // The signal is keyed on the turn so a re-delivery collapses onto the row it already opened.
-    // Said once: one programmatic turn of main's carries the note, whatever id its isolate admitted it under.
+    // Said once: one programmatic turn of main's carries the note, whatever id its isolate admitted it under; main's
+    // isolate runs it when the wake the workspace armed for it fires.
+    await driveUntil(restarted, "main's isolate took the note", () => agentWakes(restarted.db).length === 0);
     expect((await programmaticTurns(restarted)).filter((turn) => turn.text.includes(ADVISOR_HEADER))).toHaveLength(1);
   });
 
   test('an advisor answer stored before a death is delivered once, by the next activation', async () => {
     const { calls, restart } = await cutReview();
-    const deliver = Object.getOwnPropertyDescriptor(ActorSession.prototype, 'deliverAdvisorAnswers');
+    const deliver = Object.getOwnPropertyDescriptor(ActorAdvisor.prototype, 'deliverAnswers');
 
     // The object dies after the ingress stored the answer and before its note is delivered.
-    Object.defineProperty(ActorSession.prototype, 'deliverAdvisorAnswers', {
+    Object.defineProperty(ActorAdvisor.prototype, 'deliverAnswers', {
       configurable: true, value: () => Promise.reject(new Error('the object died')),
     });
 
@@ -211,7 +213,7 @@ describe('the post-turn lanes', () => {
     try {
       died = await restart();
     } finally {
-      if (deliver) Object.defineProperty(ActorSession.prototype, 'deliverAdvisorAnswers', deliver);
+      if (deliver) Object.defineProperty(ActorAdvisor.prototype, 'deliverAnswers', deliver);
     }
 
     expect(calls()).toBe(1);

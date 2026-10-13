@@ -13,16 +13,19 @@ import type { LanguageModel, ModelMessage, ToolSet, UIMessage } from 'ai';
 import * as v from 'valibot';
 import { scriptedTurnModel, type ModelStreamPart, type ScriptedTurnOptions, type ScriptedTurnResult } from '@kinu.run/test-utils/turn-model';
 import { convertArrayToReadableStream, MockLanguageModelV4 } from 'ai/test';
-import type { PreparedRequest, ScriptedAnswer, SettledTurn, TurnHarness } from './turn-harness';
-import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, BackendHost, Clock, ModelInfo, ModelRouteResolution, ActorToolsets } from '@kinu.run/core';
+import type { PreparedRequest, ScriptedAnswer, ScriptedCall, SettledTurn, TurnHarness } from './turn-harness';
+import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, Clock, ModelInfo, ModelRouteResolution, ActorToolsets, SeatedActor, SurfaceReach } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { WorkspaceOverview } from '@kinu.run/core';
 import { OwnedModelServices } from '../../src/owned-model-services';
-import type { HostedTaskProfile, HostedTaskTurn } from '../../src/hosted-actors';
+import { bindAgentSql } from '../../src/runtime';
+import { hostedSubordinateRuntime, type ActorSurface, type SurfaceTurn, type ToolScope } from '../../src/hosted-actors';
+import type { CFSeat } from '../../src/actor-hosting';
 import type { ChatWireTransport } from '../../src/chat-transport';
+import type { AgentTurns } from '../../src/agent-turns';
 import { isWorkMode, workModeForTurnMetadata } from '@kinu.run/core';
-import { ActorClaimStore, admitSubordinateTask, agentArtifactDirectory, agentHome, CHAT_SESSION_ID, createParentWorkspaceVfs, EventLog, SubordinateRosterStore, MAIN_AGENT, openWorkspaceMainActor, SessionHistory, TerminalTransitions, WorkspaceActorDirectory } from '@kinu.run/core';
-import { present } from '@kinu.run/test-utils';
+import { ActorClaimStore, agentArtifactDirectory, agentHome, CHAT_SESSION_ID, createParentWorkspaceVfs, EventLog, SubordinateRosterStore, MAIN_AGENT, openWorkspaceMainActor, SessionHistory, TerminalTransitions, WorkspaceActorDirectory } from '@kinu.run/core';
+import { present, admitTestClaim } from '@kinu.run/test-utils';
 import {
   createCompositeLogger, createConsoleLogger, renderCauseChain, setDiagnosticsSink, toKinuError, type Logger,
 } from '@kinu.run/core/obs';
@@ -31,9 +34,9 @@ import type { UserProfile } from '../../src/user/profile';
 import type { McpToolCall } from '../../src/user/mcp-servers';
 import type { WorkspaceHostTarget } from '../../src/workspace-host';
 import {
-  actorReferenceOf, announcementOf,
+  actorPolicy, actorReferenceOf, announcementOf,
   type ActorHandle,
-  type ActorHost, type ActorSeat, type HostedActor, type SubordinateSeed,
+  type ActorHost, type ActorSeat, type SubordinateSeed,
 } from '@kinu.run/core';
 import {
   BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest, actorAffinity,
@@ -180,6 +183,11 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     return this.ctx;
   }
 
+  /** The instant this activation's alarm is set for, as its job queue last projected it; null when none is set. */
+  async harnessAlarm(): Promise<number | null> {
+    return await this.ctx.storage.getAlarm();
+  }
+
   /** An isolate the loader refuses to open, for the agents it names. */
   harnessIsolateRefusal: { readonly refuses: (actorId: string) => boolean; readonly error: Error } | null = null;
   /** Joined with the fibers and not with the keep-alives, as production's lanes were fibers before D11. */
@@ -211,6 +219,23 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     this.harnessAgentFacets.reset(storageKey);
   }
 
+  /** Set by {@link harnessEvictAgentTurns}; from then on, the hold a later activation has on its agents' turns. */
+  private harnessTurnsEvicted = false;
+
+  private harnessLaterTurns: AgentTurns | null = null;
+
+  protected override get agentTurns(): AgentTurns {
+    if (!this.harnessTurnsEvicted) return super.agentTurns;
+
+    return this.harnessLaterTurns ??= this.openAgentTurns();
+  }
+
+  /** The workspace's hold on its agents' open turns goes, as its eviction takes it, while their isolates run on: the
+   *  next call one of them makes finds no turn open here. */
+  harnessEvictAgentTurns(): void {
+    this.harnessTurnsEvicted = true;
+  }
+
   harnessAgentTraceCalls(): readonly string[] {
     return this.harnessAgentFacets.traceCalls();
   }
@@ -220,20 +245,29 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   }
 
   /** Work the object still owes: maintenance, untimed owed arms (turn claims, queued deliveries), a due timed ledger, a
-   *  detached task, or a due timer wake (which folds every hired agent's pending reactions). */
+   *  detached task, a due timer wake (which folds every hired agent's pending reactions), or work an agent's isolate holds
+   *  and has not said it rests from (its wake stands). */
   harnessWorkRemains(now = Date.now()): boolean {
     const due = this.nextOwedAt();
 
     return this.maintenanceUnfinished || this.owedUntimedWork() || (due !== null && due <= now) || this._backgroundTasks.size > 0
-      || this.harnessTimerDue(now);
+      || this.harnessTimerDue(now) || this.harnessAgentWakeStands();
+  }
+
+  private harnessAgentWakeStands(): boolean {
+    const sql = this.ctx.storage.sql;
+
+    // The SDK creates its queue table on the first job operation; before it, nothing is armed.
+    if (sql.exec("SELECT 1 FROM sqlite_master WHERE name = 'cf_agents_jobs'").toArray().length === 0) return false;
+
+    return sql.exec("SELECT 1 FROM cf_agents_jobs WHERE capability = 'kinu-agent-wakes' LIMIT 1").toArray().length > 0;
   }
 
   /** Turns running now, the root's and every hosted actor's. */
   harnessTurnsInFlight(): number {
-    const hosted = this.actorHost().list().filter((reference) => this.actorHost().hosted(reference)?.session.inFlight === true
-      || this.currentTurnOf(reference) !== null).length;
+    const hosted = this.actorHost().list().filter((reference) => this.currentTurnOf(reference) !== null).length;
 
-    return hosted + (this._inFlight || this.actorSession.inFlight ? 1 : 0);
+    return hosted + (this._inFlight ? 1 : 0);
   }
 
   /** Actors whose turn waits inside a task hire: a task helper of theirs is still working. */
@@ -283,8 +317,8 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   }
   /** Main's chat, in its own isolate (D9): a turn is open there. */
   harnessMainTurnInFlight(): boolean { return this.mainChatTurn() !== null; }
-  /** The owner's Stop of main's chat. */
-  harnessStopMain(): Promise<void> { return this.stopMainChat(); }
+  /** The owner's Stop of main's chat, as its window sends it. */
+  async harnessStopMain(): Promise<void> { await this.cancelCurrentWork(); }
   /** The owner's words to main, admitted as its window admits them; resolves once reserved. */
   harnessAdmitMain(text: string, id: string, mode: WorkMode | undefined): Promise<void> {
     return this.hostedAdmit(this.actorHandle().actorId, { text, files: [], id, mode: mode ?? 'build' });
@@ -401,6 +435,13 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
   /** The child substrate, for lifecycle verbs without a roster row. */
   observeSubordinateRuntime() { return this.subordinateRuntime(); }
+
+  /** The runtime the agent's own hirer assigns it work through, as that hirer's `agents` tool does. */
+  observeHirerRuntime(actorId: string) {
+    const hirer = present(this.agentOf(actorId).parentActorId, `${actorId} has no hirer`);
+
+    return hostedSubordinateRuntime(this.hostedSeams(), () => this.actorHost().bindStores(actorReferenceOf(this.agentOf(hirer))));
+  }
   observeRuntime(): AgentRuntime { return this.rt; }
   setObservedSoul(text: string): void { this._cachedSoulText = text; }
 
@@ -490,7 +531,8 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     readonly availableModels?: readonly string[];
     readonly betaSwarms?: boolean;
   } | null = null;
-  /** Answer these specs as the provider catalog would; any other spec asks the real catalog. */
+  /** Answer these specs as the provider catalog would; any other is one it does not list, so no suite reads models.dev
+   *  over the network, whose answer lands after a lap-counted wait gave up. */
   harnessCatalogModels(entries: Readonly<Record<string, Omit<ModelInfo, 'id'>>>): void {
     this._harnessCatalog = new Map(Object.entries(entries));
   }
@@ -498,7 +540,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   protected override async catalogEntry(spec: string): Promise<ModelInfo | null> {
     const entry = this._harnessCatalog.get(spec);
 
-    return entry === undefined ? super.catalogEntry(spec) : { ...entry, id: spec };
+    return entry === undefined ? null : { ...entry, id: spec };
   }
   /** A cold activation: the owner row persists in SQL, in-memory latches do not. */
   /** A further activation through the actor's own `onStart`. */
@@ -557,35 +599,37 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
     return failure;
   }
-  protected override async mainTaskProfile(turn: HostedTaskTurn): Promise<HostedTaskProfile> {
+  protected override async actorSurface(actor: CFSeat, turn: SurfaceTurn): Promise<ActorSurface> {
+    // The workspace agent's: the turns the suites read prepared tools of.
+    if (!actorPolicy(actor.record).workspaceAgent || turn.run !== undefined) return await super.actorSurface(actor, turn);
     this._prepareFailure = null;
 
     try {
-      const profile = await super.mainTaskProfile(turn);
+      const surface = await super.actorSurface(actor, turn);
 
-      this._preparedTools.set(turn.turnId, profile.tools);
-      this._lastPreparedTools = profile.tools;
+      this._preparedTools.set(announcementOf(turn.key.turnId), surface.tools);
+      this._lastPreparedTools = surface.tools;
 
-      return profile;
+      return surface;
     } catch (error) {
       this._prepareFailure = error instanceof Error ? error : new Error(String(error));
       throw error;
     } finally {
       // Handed to one turn only: the one it opens, never a measure of the next request.
-      if (turn.opening !== undefined) this._suppliedTools = null;
+      if (turn.lane.opening !== undefined) this._suppliedTools = null;
     }
   }
   /** A tool surface replacing the actor's own for the requested mode; a rebuild
    *  for another mode (a role imposing Plan) is the actor's own. */
   private _suppliedTools: ToolSet | null = null;
   harnessSupplyTools(tools: ToolSet | undefined): void { this._suppliedTools = tools ?? null; }
-  protected override actorToolsets(mode: WorkMode, claimScope?: string): ActorToolsets {
+  protected override actorTools(actor: CFSeat, reach: SurfaceReach, mode: WorkMode, scope: ToolScope): ActorToolsets {
     // The requested mode is the message's, never the operation a role bound over it.
-    if (this._suppliedTools !== null && mode === workModeForTurnMetadata(this.turnUserMetadata())) {
+    if (this._suppliedTools !== null && reach.actor.lanes && mode === workModeForTurnMetadata(this.turnUserMetadata())) {
       return { turn: this._suppliedTools, raw: this._suppliedTools };
     }
 
-    return super.actorToolsets(mode, claimScope);
+    return super.actorTools(actor, reach, mode, scope);
   }
 
   /** The scripted model the next turns run on; held, not consumed by one turn. */
@@ -652,7 +696,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
         return {
           id: input.id,
           run: async (): Promise<HeadReport> => {
-            const report = await heads(input.task);
+            const report = await heads(input.task, input.inheritedContext);
 
             const reported: HeadReport = {
               id: input.id, status: report.status, summary: report.summary,
@@ -689,22 +733,8 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     });
   }
 
-  observeActorHost(): ActorHost { return this.actorHost(); }
+  observeActorHost(): ActorHost<SeatedActor> { return this.actorHost(); }
 
-  /** Every programmatic turn the loop was asked to admit through the host. */
-  readonly harnessEnqueued: ProgrammaticTurn[] = [];
-  protected override get host(): BackendHost {
-    const base = super.host;
-
-    return {
-      ...base,
-      enqueueTurn: (input) => {
-        this.harnessEnqueued.push(input);
-
-        return base.enqueueTurn(input);
-      },
-    };
-  }
   /** Main's isolate restarts, and its wake reopens the turn it was inside. */
   async harnessResumeMain(): Promise<void> {
     this.harnessResetAgentIsolate(this.agentOf(this.actorHandle().actorId).storageKey);
@@ -862,20 +892,19 @@ export async function runDelegatedTask(
 ): Promise<void> {
   await wakeForDelegatedTask(workspace, actorId, task);
   await joinHarnessFibers();
-  // The turn's answer is relayed as its agent's isolate settles it.
+  // The turn's answer is relayed as its agent's isolate settles it; what the turn started here (a job's lane) is joined
+  // after it, and its own answer settled in turn.
+  await workspace.agent.harnessAgentsIdle();
+  await joinHarnessFibers();
   await workspace.agent.harnessAgentsIdle();
 }
 
-/** {@link runDelegatedTask} up to the wake's return: the turn it starts may still be running. */
+/** {@link runDelegatedTask} up to its admission: the task is the agent's, and the turn it opens may still be running. */
 export async function wakeForDelegatedTask(
   workspace: ActorHarness<HarnessOrchestratorAgent>, actorId: string, task: string,
 ): Promise<void> {
-  const child = actorOver(workspace.db, actorId);
-
-  admitSubordinateTask(new EventLog(makeSqlExec(workspace.db), child), {
-    fromWorkspace: child.workspaceId, kind: 'task', body: task, mode: 'build', now: Date.now(),
-  });
-  await workspace.agent.terminalRetryPass();
+  // As its hirer's `agents` tool assigns it: admitted, and owed the agent as its delivery.
+  await workspace.agent.observeHirerRuntime(actorId).assign(workspace.agent.agentOf(actorId).name, { body: task, mode: 'build' });
 }
 
 /** Core's background-job journal over the object's stored rows. */
@@ -938,7 +967,7 @@ export async function admittedTurnClaim(
   const history = historyOver(harness);
   const context = history.context.selected() ?? history.context.initialize();
   const claims = new ActorClaimStore(wrapDatabase(harness.db).sql, workspaceMainActor(harness.db), (write) => write(), history);
-  await claims.admit({
+  await admitTestClaim(claims, {
     runId: `run-${turnId}`, turnId, workMode: 'build',
     program: { kind: 'builtin', version: 0, digest: null, build: null },
     context,
@@ -1055,6 +1084,16 @@ export function actorOver(db: Database, actorId: string): ActorHandle {
   return new WorkspaceActorDirectory(sql, { workspaceId: identity.id, ownerUserId: identity.owner_user_id }).open(actorId);
 }
 
+/** An actor's handle over its workspace's own SQL, as the workspace's stores write: what it holds of their rows moves. */
+export function actorOverWorkspace(agent: HarnessOrchestratorAgent, actorId: string): ActorHandle {
+  const sql = bindAgentSql(agent);
+  const [identity] = sql<{ id: string; owner_user_id: string | null }>`SELECT id, owner_user_id FROM workspace_identity`;
+
+  if (identity === undefined) throw new Error('the workspace has no identity row');
+
+  return new WorkspaceActorDirectory(sql, { workspaceId: identity.id, ownerUserId: identity.owner_user_id }).open(actorId);
+}
+
 export function workspaceMainActor(db: Database): ActorHandle {
   return openWorkspaceMainActor(wrapDatabase(db).sql);
 }
@@ -1073,10 +1112,10 @@ export interface ObservedNaming {
   nameOrigin: 'user' | 'auto' | null;
 }
 
-/** A hosted actor as a suite drives it: the production `HostedActor` from the
- *  workspace's `ActorHost`, sharing its one database. */
+/** A hosted actor as a suite drives it: the production seat from the workspace's `ActorHost`, sharing its one
+ *  database; its turns run in its own isolate. */
 export interface HostedActorHarness {
-  readonly actor: HostedActor;
+  readonly actor: SeatedActor;
   readonly workspace: ActorHarness<HarnessOrchestratorAgent>;
 }
 
@@ -1169,6 +1208,15 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
   /** Parks on its first call until scripted, then answers every call with the same text. */
   const parkingModel = (arrived: ReturnType<typeof Promise.withResolvers<ScriptedTurnOptions>>, answer: Promise<ScriptedAnswer>): LanguageModel => {
     let calls = 0;
+    // The answer's tool calls are its first step's alone.
+    let called = false;
+
+    const toolCalls = (scripted: ScriptedAnswer): readonly ScriptedCall[] => {
+      if (called || scripted.calls === undefined) return [];
+      called = true;
+
+      return scripted.calls;
+    };
 
     const usage: ScriptedTurnResult['usage'] = {
       inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
@@ -1203,6 +1251,16 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
           throw Object.assign(new Error('aborted'), { name: 'AbortError' });
         }
 
+        const made = toolCalls(scripted);
+
+        if (made.length > 0) {
+          return {
+            content: made.map((call, index) => ({ type: 'tool-call' as const, toolCallId: `scripted_${String(index)}`, toolName: call.name, input: JSON.stringify(call.input) })),
+            finishReason: { unified: 'tool-calls' as const, raw: undefined },
+            usage, warnings: [],
+          };
+        }
+
         return {
           content: [{ type: 'text', text: textOf(scripted) }],
           finishReason: { unified: scripted.finishReason ?? 'stop', raw: undefined },
@@ -1213,6 +1271,18 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
       doStream: async (options) => {
 
         const scripted = await script(options);
+        const made = toolCalls(scripted);
+
+        if (made.length > 0) {
+          return {
+            stream: convertArrayToReadableStream<ModelStreamPart>([
+              { type: 'stream-start', warnings: [] },
+              ...made.map((call, index): ModelStreamPart => ({ type: 'tool-call', toolCallId: `scripted_${String(index)}`, toolName: call.name, input: JSON.stringify(call.input) })),
+              { type: 'finish', finishReason: { unified: 'tool-calls', raw: undefined }, usage },
+            ]),
+          };
+        }
+
         const text = textOf(scripted);
         const parts: ModelStreamPart[] = [{ type: 'stream-start', warnings: [] }];
 
@@ -1528,9 +1598,21 @@ export async function fireSoonestWake(agent: Pick<HarnessOrchestratorAgent, 'ala
 }
 
 
+/** The object's alarm as the platform fires it: at the instant its job queue projected, and never when none is set. */
+export async function fireAlarm(agent: HarnessOrchestratorAgent): Promise<void> {
+  const at = await agent.harnessAlarm();
+
+  if (at === null) throw new Error('no alarm is set');
+
+  setSystemTime(new Date(Math.max(at, Date.now())));
+  await agent.alarm();
+}
+
 /** A recording owner-UserDO binding, in place of the refusing default. */
 export interface RecordedUserPlaneCalls {
   warmConnections: UserCaller[];
+  /** The account's settings revision a turn's open reads; unchanged (0, 0) unless a suite moves it. */
+  settingsRevision?: { readonly catalog: number; readonly credentials: number };
   /** The account's active workspaces, this one among them, as the peers tool reads them. */
   workspaces?: readonly { readonly name: string; readonly displayName: string }[];
   /** Set to make `userMcp_warmConnections` reject. */
@@ -1598,10 +1680,13 @@ export interface HarnessActorWorld {
   cut?: readonly [TerminalEffectName, TerminalEffectPhase];
   /** The platform steer-branch heads run on: each head's report, when it lands. A promise that never
    *  settles is a head still running. Unset, branching needs the production head runtime. */
-  heads?: (task: string) => Promise<ScriptedHeadReport>;
+  heads?: (task: string, inherited: HeadInput['inheritedContext']) => Promise<ScriptedHeadReport>;
   /** The clock every actor's job runner detaches on, the box's commands too when a suite times them by it. Unset,
    *  the real one. */
   jobClock?: Clock;
+  /** Other workspaces this one reaches by name through `env.OrchestratorAgent` (a fork's target); any other name
+   *  reaches this one. */
+  workspaces?: ReadonlyMap<string, HarnessOrchestratorAgent>;
 }
 
 /** What a scripted steer-branch head reports; the rest of the report is the empty run it did. */
@@ -1657,6 +1742,8 @@ export function makeEnv(
 
         const ownerPlane = {
           getWorkspaceTitle: async (): Promise<null> => null,
+          // The account's settings as a turn opens on them: unchanged unless a suite moves them.
+          getSettingsRevision: async () => ({ catalog: userPlane?.settingsRevision?.catalog ?? 0, credentials: userPlane?.settingsRevision?.credentials ?? 0 }),
           setWorkspaceDisplayName: async (
             _caller: UserCaller, _workspace: string, displayName: string,
           ): Promise<{ applied: boolean }> => {
@@ -1793,7 +1880,14 @@ function instantiate<T extends WorkspaceHostTarget>(
     // This workspace answers its own standing-policy reads: a hosted actor's approval
     // gate fetches the root's policy through `env.OrchestratorAgent`.
     Object.assign(builtEnv, {
-      OrchestratorAgent: { idFromName: (n: string) => n, idFromString: (id: string) => id, get: () => stubOf(agent, world?.rpcServed) },
+      OrchestratorAgent: {
+        idFromName: (n: string) => n, idFromString: (id: string) => id,
+        get: (id: string) => {
+          const other = world?.workspaces?.get(id);
+
+          return other === undefined ? stubOf(agent, world?.rpcServed) : stubOf(other);
+        },
+      },
     });
   }
 
@@ -1942,6 +2036,11 @@ export async function hostedSubordinateHarness(
   const actor = await workspace.agent.observeActorHost().acquire(reference, { kind: 'actor' });
 
   return { actor, workspace };
+}
+
+/** The same hired agent hosted again: its turn in its own isolate released the workspace's hold on it once it rested. */
+export async function hostedAgain(harness: HostedActorHarness): Promise<SeatedActor> {
+  return await harness.workspace.agent.observeActorHost().acquire(harness.actor.reference, { kind: 'actor' });
 }
 
 export async function hostedExplorationHarness(

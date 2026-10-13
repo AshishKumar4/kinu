@@ -60,6 +60,12 @@ function isTextWebSocketMessage(
   return v.is(v.string(), message);
 }
 
+/** The account's model settings as a workspace reads them: its profile catalog's version, its credentials' revision. */
+export interface AccountSettingsRevision {
+  readonly catalog: number;
+  readonly credentials: number;
+}
+
 export class UserDO extends Agent<Env> {
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
@@ -209,8 +215,8 @@ export class UserDO extends Agent<Env> {
     return this.workspaces.putWorkspaceOverview(caller, name, overview);
   }
 
-  listActiveWorkspaces(caller: UserCaller): Promise<Array<Pick<WorkspaceEntry, 'name' | 'displayName' | 'createdAt'>>> {
-    return this.workspaces.listActiveWorkspaces(caller);
+  listActiveWorkspaces(caller: UserCaller, filter?: { readonly awaitsSettings?: boolean }): Promise<Array<Pick<WorkspaceEntry, 'name' | 'displayName' | 'createdAt'>>> {
+    return this.workspaces.listActiveWorkspaces(caller, filter);
   }
 
   registerWorkspace(caller: UserCaller, name: string, displayName?: string, from?: WorkspaceRegistrationSource): Promise<WorkspaceRegistration> {
@@ -283,6 +289,16 @@ export class UserDO extends Agent<Env> {
 
   getCredentialsRevision(caller: UserCaller): Promise<number> {
     return this.credentials.getCredentialsRevision(caller);
+  }
+
+  /**
+   * What a workspace's model settings were read under, in one call: its profile catalog's version and its credentials'
+   * revision. A workspace asks it as a turn opens, since a change does not wake one at rest, and reads again only what moved.
+   */
+  async getSettingsRevision(caller: UserCaller): Promise<AccountSettingsRevision> {
+    const [catalog, credentials] = await Promise.all([this.profile.getWorkspaceProfileCatalogVersion(caller), this.credentials.getCredentialsRevision(caller)]);
+
+    return { catalog, credentials };
   }
 
   listEgressSecrets(caller: UserCaller): Promise<EgressSecretSummary[]> {

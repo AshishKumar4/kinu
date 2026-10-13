@@ -1,5 +1,6 @@
 /** A real hosted actor per head and node over the caller's one workspace database, via the production
  *  directory, `createActorHost` and `seedActorLoop`; a mocked session would pass while writing no claim. */
+import { withHostDeliveries } from '@kinu.run/test-utils';
 import type { Database } from 'bun:sqlite';
 import { makeSqlExec, storesFor } from './helpers';
 import { WorkspaceJobAuthorities } from '../src/jobs/authorities';
@@ -20,7 +21,7 @@ import {
   type ProfileCatalogEnvelope, type RoleDefinition, type TierAssignments,
 } from '../src/profiles/catalog';
 import type { HostedNodeSeat } from '../src/strategy/node-agent';
-import { runHeadInference, type HeadInferenceDeps } from '../src/heads/head-inference';
+import { runHeadInference, preparedHeadRun, type HeadInferenceDeps } from '../src/heads/head-inference';
 import { modelWindow } from '../src/context-window';
 import { conversationKey, vfsTurnSkills, type RunTurnSources } from '../src/orchestrator/turn-assembly';
 import { captureOperationProfile } from '../src/profiles/operation';
@@ -34,7 +35,7 @@ import type { Identity } from '../src/types/primitives';
 import type { TemporaryAgentPort } from '../src/types/subordinates';
 import { historyTurnPairs } from '../src/identity/conversation-store';
 
-type FixtureSeat = HostedNodeSeat;
+type FixtureSeat = HostedNodeSeat<HostedActor>;
 
 /** The one role a fixture actor resolves under; no `allowedTools`, so it never narrows a suite's surface. */
 const TESTER: RoleDefinition = {
@@ -66,12 +67,12 @@ export function fixtureCompaction(key = 'fixture-run'): HeadInferenceDeps['compa
   return {
     key,
     state: {
-      loadPromptTokens: (sessionKey, historyLength) => {
+      takeTrigger: (sessionKey, historyLength) => {
         const saved = tokens.get(sessionKey);
+        const trigger = armed.delete(sessionKey) ? 'force' : 'auto';
 
-        return saved !== undefined && saved.historyLength === historyLength ? saved.tokens : null;
+        return saved !== undefined && saved.historyLength === historyLength ? { trigger, providerReportedTokens: saved.tokens } : { trigger };
       },
-      takeArmedCompaction: (sessionKey) => armed.delete(sessionKey),
       savePromptTokens: (sessionKey, saved, historyLength) => { tokens.set(sessionKey, { tokens: saved, historyLength }); },
       armCompaction: (sessionKey) => { armed.add(sessionKey); },
     },
@@ -79,7 +80,7 @@ export function fixtureCompaction(key = 'fixture-run'): HeadInferenceDeps['compa
 }
 
 /** A run's actor, sources and compaction over `seat`, its turns on `model`. */
-export function runningOn(seat: HostedNodeSeat, model: LanguageModel): Pick<HeadInferenceDeps, 'actor' | 'runId' | 'sources' | 'compaction'> {
+export function runningOn(seat: HostedNodeSeat<HostedActor>, model: LanguageModel): Pick<HeadInferenceDeps, 'actor' | 'runId' | 'sources' | 'compaction'> {
   return {
     actor: seat.actor, runId: seat.runId,
     sources: { ...seat.sources, models: { ...seat.sources.models, resolve: () => model } },
@@ -130,7 +131,7 @@ export interface HostedSeats {
   /** The seat one logical actor's turn runs on; idempotent per name, so a re-hosted node keeps its actor. */
   seat(name: string, origin: 'agent' | 'swarm'): Promise<FixtureSeat>;
   /** `hostNode` over these seats: one actor per node id, all over the one database. */
-  readonly hostNode: (node: NodeIdentity) => Promise<HostedNodeSeat>;
+  readonly hostNode: (node: NodeIdentity) => Promise<FixtureSeat>;
   /** The workspace's job registry every seat's loop attaches to; its root is the caller's runtime's actor. */
   readonly jobs: WorkspaceJobAuthorities;
 }
@@ -193,7 +194,7 @@ export function hostedSeatsOver(input: {
     return { ...rt, actor: bound.handle, identity };
   };
 
-  const orchestrationFor = (bound: BoundActor & { readonly runtime: AgentRuntime }): AgentOrchestratorDeps => ({
+  const orchestrationFor = (bound: BoundActor & { readonly runtime: AgentRuntime }): AgentOrchestratorDeps => (withHostDeliveries({
     host: {
       broadcast: (event) => { broadcasts.push(event); },
       enqueueTurn: async (turn) => {
@@ -208,7 +209,7 @@ export function hostedSeatsOver(input: {
     engine: new EvolutionEngine(bound.runtime, historyTurnPairs(bound.stores.history), { enabled: input.autoEvolve === true }),
     // This actor's own log: publishing into the root's rows would move another actor's turn.
     eventLog: new EventLog(exec, bound.handle),
-  });
+  }));
 
   const tracing = input.tracing;
 
@@ -267,9 +268,10 @@ export function hostedSeatsOver(input: {
       sources: fixtureRunSources(actor, input.model ?? (() => {
         throw new KinuError('unavailable', `the hosted fixture was given no model, so ${name} cannot run a turn`);
       })),
-      infer: (headInput, inference) => runHeadInference(headInput, { ...inference, compaction }),
+      infer: (headInput, inference) => runHeadInference(preparedHeadRun(headInput, { ...inference, actor, compaction })),
       conversations: actor.stores.conversationSearch,
       jobs: { ports: { jobOutput: () => {} }, attach: (authority) => jobs.attach(authority) },
+      receipts: { sql: actor.runtime.storage.sql, actor: actor.handle, durable: (callId, signal) => actor.session.durableCall(callId, signal) },
     };
 
     seats.set(name, seated);

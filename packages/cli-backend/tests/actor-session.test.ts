@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { jsonSchema, tool } from 'ai';
 import type { ModelMessage, ToolSet } from 'ai';
-import { scriptedTurnModel } from '@kinu.run/test-utils';
+import { scriptedTurnModel, withHostDeliveries } from '@kinu.run/test-utils';
 import {
   ActorSession, EvolutionEngine, historyTurnPairs, WorkspaceActorDirectory, profileCatalogDigest,
   resolveTurnProfile, requireBuild, createAgentStores, WORKSPACE_ROOT,
@@ -46,7 +46,7 @@ function sessions() {
     const enqueued: ProgrammaticTurn[] = [];
     const stores = createAgentStores(() => runtime.storage.sql, () => handle, runtime.storage.transactionSync, async () => ({ vfs: runtime.storage.vfs, artifactDirectory: `${WORKSPACE_ROOT}/actors/${handle.actorId}` }));
 
-    const actor: ActorSession = new ActorSession({ history: stores.history, runtime, claims: stores.claims, installedBuild: null, orchestration: {
+    const actor: ActorSession = new ActorSession({ history: stores.history, runtime, claims: stores.claims, installedBuild: null, orchestration: withHostDeliveries({
       engine: new EvolutionEngine(runtime, historyTurnPairs(stores.history), { enabled: false }), eventLog: new EventLog(eventSql, handle),
       host: {
         broadcast: event => { broadcasts.push(event); },
@@ -59,7 +59,7 @@ function sessions() {
         turnInFlight: () => actor.inFlight,
         setTimer: () => { throw new Error('this bounded actor fixture must not schedule background work'); },
       },
-    } });
+    }) });
 
     return { actor, broadcasts, claims: stores.claims, handle, enqueued };
   };
@@ -77,6 +77,7 @@ interface TurnBinding {
 
 async function bind({ actor, turnId, mode, message, tools = {} }: TurnBinding) {
   const lease = actor.beginTurn({ runId: `run-${turnId}`, turnId }, mode, Date.now());
+  actor.reserveClaim(lease);
   actor.bindProfile(lease, resolveTurnProfile({ ...profiles, roleId: 'task', workMode: mode,
     availableTools: Object.keys(tools), activeSkills: [] }), profiles);
   await actor.openTurnInput(lease, { item: {}, message, birthContext: async () => [] });
@@ -177,8 +178,10 @@ test('logical actors in one store keep live context, mode and structured tool da
 test('a released lease cannot mutate or execute a newer turn of the same actor', async () => {
   const { left: { actor, enqueued }, db } = sessions();
   const old = actor.beginTurn({ runId: 'run-old', turnId: 'old-turn' }, 'plan', Date.now());
+  actor.reserveClaim(old);
   actor.finishTurn(old);
   const current = actor.beginTurn({ runId: 'run-new', turnId: 'new-turn' }, 'build', Date.now());
+  actor.reserveClaim(current);
   const profile = resolveTurnProfile({ ...profiles, roleId: 'task', workMode: 'build', availableTools: [], activeSkills: [] });
 
   const model = scriptedTurnModel({ provider: 'fake', modelId: 'actor-model', doGenerate: () => ({

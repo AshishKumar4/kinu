@@ -4,7 +4,7 @@ import { Effect } from 'effect';
 import * as v from 'valibot';
 import type { AgentConfigStore } from '../config/store';
 import type { ActorHandle } from '../identity/actor-handle';
-import { effectAlreadyDone, recordEffectDone } from '../identity/effect-tombstones';
+import { effectsAlreadyDone, recordEffectDone } from '../identity/effect-tombstones';
 import type { FactsStore } from '../memory/facts';
 import {
   accountProposals, applySleepTimeUpdate, runSleepTimeCompute, SleepTimeUpdateSchema, SLEEP_TIME_CADENCE, sleepTimeDue, sleepTimeWakeAt, sleepTimeWindow,
@@ -146,7 +146,11 @@ export class SleepTimeLane {
   private window(): Effect.Effect<SleepTimeWindow, KinuError> {
     return Effect.map(
       attempt({ doing: 'reading the turns sleep-time compute would compress', otherwise: 'io' }, () => this.deps.transcript().newestFirst(READ_ROWS)),
-      (rows) => sleepTimeWindow(rows, (answerId) => effectAlreadyDone(this.deps.sql, this.deps.actor, PROCESSED, answerId)),
+      (rows) => {
+        const processed = effectsAlreadyDone(this.deps.sql, this.deps.actor, PROCESSED, rows.flatMap((row) => (row.role === 'assistant' ? [row.id] : [])));
+
+        return sleepTimeWindow(rows, (answerId) => processed.has(answerId));
+      },
     );
   }
 

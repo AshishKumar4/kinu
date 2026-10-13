@@ -148,7 +148,7 @@ export class EvolutionEngine {
      *  score crafted tools through one table. */
   readonly craftLedger: CraftLedger;
   /** A head or node the workspace does not evolve records nothing, whatever the setting. */
-  private readonly evolves: boolean;
+  readonly evolves: boolean;
   private recoveryPending = true;
   private readonly learningScope = new AsyncLocalStorage<boolean>();
 
@@ -160,11 +160,12 @@ export class EvolutionEngine {
     this.config = { ...DEFAULT_EVOLUTION_CONFIG, ...config };
     rt.actor.assertCurrent();
 
-    const actor = rt.storage.sql<{ evolves: number }>`
-      SELECT evolves FROM workspace_actors WHERE actor_id = ${rt.actor.actorId}`[0];
+    const actor = rt.storage.sql<{ origin: string }>`
+      SELECT origin FROM workspace_actors WHERE actor_id = ${rt.actor.actorId}`[0];
 
     if (actor === undefined) throw new KinuError('missing', 'the evolution actor has no membership record');
-    this.evolves = actor.evolves === 1;
+    // Only the workspace agent evolves (`MAIN_PROFILE`).
+    this.evolves = actor.origin === 'system';
     // Opened on first use: an engine with evolution off never scores a crafted tool, and an agent in its own
     // isolate has no crafted-tool store (they are the workspace's).
     let ledger: CraftLedger | undefined;
@@ -529,8 +530,6 @@ export class EvolutionEngine {
      */
   async runStoredTurnReview(rowId: string, turn: CompletedTurn, followup: string | null): Promise<void> {
     await this.reviewTurn(turn, followup);
-    // Before the lease settles, leaving a one-step crash window.
-    this.sessionWindow.recordReviewRan(rowId);
     this.sessionWindow.settleReview(rowId);
   }
 
@@ -567,8 +566,6 @@ export class EvolutionEngine {
         continue;
       }
 
-      // Before the lease settles, leaving a one-step crash window.
-      this.sessionWindow.recordReviewRan(row.id);
       this.sessionWindow.settleReview(row.id);
       reviewed++;
     }
@@ -676,11 +673,11 @@ export class EvolutionEngine {
     const { actor } = this.rt;
 
     try {
-      advanceTrial(sql, actor);
+      const looked = runningTrial(sql, actor);
+      const undecided = looked !== null && advanceTrial(sql, actor, looked) === null ? looked : null;
+      const trial = undecided ?? (this.agentConfig.getLiveTrials() ? startTrial(sql, actor) : null);
 
-      if (this.agentConfig.getLiveTrials()) startTrial(sql, actor);
-
-      if (runningTrial(sql, actor) !== null || this.rt.decide === undefined) return;
+      if (trial !== null || this.rt.decide === undefined) return;
       const outcome = await runProposer({ rt: this.rt, decide: this.rt.decide, reflect: this.rt.judgeModel ?? this.rt.llm, now: Date.now() });
 
       if (outcome.kind === 'searched') {

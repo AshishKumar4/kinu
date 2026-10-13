@@ -12,7 +12,7 @@ import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   isPlaceholderMission, ownerAsks, planSurface,
 } from "@kinu.run/core";
-import type { PlanReview, Rpc, SignalCard } from "@kinu.run/core";
+import type { OwedOwnerIntent, PlanReview, Rpc, SignalCard } from "@kinu.run/core";
 import type { UIMessage } from "ai";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { useActorChat, useKinu } from "@/hooks/use-kinu";
@@ -112,10 +112,11 @@ export function ConversationSkeleton() {
 
 /** Retry re-runs the failed turn instead of appending a duplicate user message. `refused`: the runtime refused this
  *  tab, in its own words, which no turn caused and no retry of one answers. */
-export function ChatErrorCard({ message, refused, streaming, onRetry, onDismiss }: {
+export function ChatErrorCard({ message, refused, streaming, retryOwed = false, onRetry, onDismiss }: {
   message: string;
   refused?: boolean;
   streaming: boolean;
+  retryOwed?: boolean;
   onRetry: () => void;
   onDismiss: () => void;
 }) {
@@ -140,7 +141,7 @@ export function ChatErrorCard({ message, refused, streaming, onRetry, onDismiss 
         <button onClick={onDismiss}
           className="px-2.5 py-1 p-t-control rounded-md p-text-3 hover:p-text cursor-pointer">Dismiss</button>
         {!refused && (
-          <button onClick={onRetry} disabled={streaming}
+          <button onClick={onRetry} disabled={streaming || retryOwed}
             className="px-2.5 py-1 p-t-control rounded-md p-accent-bg p-accent hover:opacity-90 disabled:opacity-40 cursor-pointer flex items-center gap-1">
             <ArrowsClockwiseIcon size={11} />Retry this turn
           </button>
@@ -154,6 +155,12 @@ interface TerminalCloseState {
   readonly code: number;
   readonly reason: string;
   readonly message: string;
+}
+
+function retryIsOwed(intents: readonly OwedOwnerIntent[], actor: string | null, messages: readonly UIMessage[]): boolean {
+  const newest = messages.reduce<string | null>((id, message) => message.role === "user" ? message.id : id, null);
+
+  return newest !== null && intents.some((intent) => intent.kind === "retry" && intent.actor === actor && intent.target === newest);
 }
 
 /** A terminal close means the SDK stopped redialling; it is not a reconnecting state. */
@@ -533,6 +540,7 @@ function SubordinateChatColumn({
   usePlanApprovedMode(state.activePlan, ui.setMode);
   const showPlanWindow = useContext(AgentPlanWindowContext);
   const attention = useContext(AttentionContext);
+  const retryOwed = state.paneActorId !== null && retryIsOwed(attention?.stack.owedIntents ?? [], state.paneActorId, state.messages);
 
   useEffect(() => { showPlanWindow({ plan: state.activePlan, rpc: state.rpc }); }, [showPlanWindow, state.activePlan, state.rpc]);
   useEffect(() => () => { showPlanWindow(null); }, [showPlanWindow]);
@@ -601,7 +609,7 @@ function SubordinateChatColumn({
             <Fragment key={msg.id}>
               {before(msg.id)}
               {repeats[i] !== 0 && <MessageView message={msg} steers={steers} answerSlates={answerChat} liveTail={msg.id === liveRow ? tail : null}
-                repeats={repeats[i]} onRetry={i === thread.entries.length - 1 && !live ? state.retryLastMessage : undefined} />}
+                repeats={repeats[i]} onRetry={i === thread.entries.length - 1 && !live && !retryOwed ? state.retryLastMessage : undefined} />}
             </Fragment>
           ))}>
           <ChatLiveTail tail={tail} />
@@ -611,10 +619,12 @@ function SubordinateChatColumn({
               message={state.chatError.body}
               refused={state.chatError.refused}
               streaming={live}
+              retryOwed={retryOwed}
               onRetry={state.retryLastMessage}
               onDismiss={state.clearChatError}
             />
           )}
+          {retryOwed && <p role="status" className="p-meta p-text-3">Retry is on its way. The agent runs it when it next wakes.</p>}
         </TranscriptViewport>
         </AskedQuestionsContext.Provider>
       </ErrorBoundary>
@@ -863,11 +873,12 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
 
   const attentionCalls = useMemo((): Omit<AttentionStackProps, "asks"> => ({
     rpc: workspaceRpc,
+    owedIntents: state.owedIntents,
     resolveConsent,
     onDecided: refreshPendingActions,
     onReview: (plan) => show(planSurface(plan)),
     decideMemory: async (id, decision) => { await decideAccountMemory(id, decision); },
-  }), [workspaceRpc, resolveConsent, refreshPendingActions, show]);
+  }), [workspaceRpc, state.owedIntents, resolveConsent, refreshPendingActions, show]);
 
   const ui = useConversationUiState(`${agentId ?? ""}/main`);
   const setChatMode = ui.setMode;
@@ -883,6 +894,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
   });
 
   const { history, thread, positions, transcript } = chat;
+  const retryOwed = retryIsOwed(state.owedIntents, null, state.messages);
 
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
   // The hook spends the per-message aggregate cap (one DO row, see core/cloud-wire) inside its
@@ -1098,7 +1110,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
                       splices={i === thread.entries.length - 1 ? liveSplices : undefined}
                       answerSlates={WORKSPACE_CHAT}
                       liveTail={msg.id === mainLiveRow ? mainTail : null}
-                      onRetry={i === thread.entries.length - 1 && !live ? state.retryLastMessage : undefined}
+                      onRetry={i === thread.entries.length - 1 && !live && !retryOwed ? state.retryLastMessage : undefined}
                       onFork={onForkMessage}
                       onFeedback={onMessageFeedback}
                       feedback={feedbackByMessage[msg.id] ?? null}
@@ -1134,10 +1146,12 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
                   message={state.chatError.body}
                   refused={state.chatError.refused}
                   streaming={live}
+                  retryOwed={retryOwed}
                   onRetry={state.retryLastMessage}
                   onDismiss={state.clearChatError}
                 />
               )}
+              {retryOwed && <p role="status" className="p-meta p-text-3">Retry is on its way. The agent runs it when it next wakes.</p>}
             </TranscriptViewport>
             </AskedQuestionsContext.Provider>
             </ErrorBoundary>
@@ -1216,6 +1230,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
             previewStarting={state.previewStarting}
             onRefreshPorts={(...args: Parameters<typeof state.refreshExposedPorts>) => detach(Effect.promise(async () => state.refreshExposedPorts(...args)))}
             plan={visiblePlan}
+            owedIntents={state.owedIntents}
             snapshot={state.snapshot}
             onRetryLoad={state.retryLoad}
             memory={state.memory}

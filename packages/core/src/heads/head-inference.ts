@@ -7,7 +7,7 @@ import { operationTool } from '../tools/operation-surfaces';
 import { defineOperation, serve } from '../operations/operation';
 import { type ToolSet, type ModelMessage, type StepResult, type ToolExecutionOptions } from 'ai';
 import type { ObserveStream } from '../chat';
-import type { HostedActor } from '../state/actor-host';
+import type { HostedActor, SeatedActor } from '../state/actor-host';
 import type { WorkMode } from '../types/turn';
 import {
   EVIDENCE_KINDS,
@@ -27,18 +27,32 @@ import { HeadFileChanges } from './file-changes';
 import type { ReportHeadDelta } from './head-stream';
 import * as v from 'valibot';
 import { isJsonObject, projectJsonValue, type JsonObject, type JsonValue } from '../utils/json';
-import { attempt, diagnostics, hold, renderThrownChain, toKinuError, type KinuError } from '../obs/index';
-import { Cause, Exit } from 'effect';
+import { attempt, diagnostics, hold, renderThrownChain, settle, toKinuError, type KinuError } from '../obs/index';
+import { Cause, Effect, Exit } from 'effect';
 import { BUILTIN_TOOL_NAMES } from '../tools/registry';
 import { assembleActorTurn, withCompactionTrigger, type RunTurnSources, type TurnAssemblySources } from '../orchestrator/turn-assembly';
 import type { CompactionTriggerReader } from '../orchestrator/turn-context';
-import type { ActorTurnClaim, ClaimOutcome } from '../orchestrator/actor-claims';
+import type { ActorTurnClaim, ClaimOutcome, PreparingClaim } from '../orchestrator/actor-claims';
 import type { ActorExecutionInput, ActorExecutionResult, ActorSession, ActorTurnLease } from '../orchestrator/actor-session';
 import type { ChatEvent } from '../chat';
 import type { MessageReference, MessagePartReference } from '../session/messages';
 import { recordExecutionEvent, settleExecutionContext, snapshotCompletedTurn, type CompactionTriggerState } from '../orchestrator/turn-lifecycle';
+import { driveExecution, type AssembledRound } from '../orchestrator/execution-driver';
+import type { TurnCapability } from '../orchestrator/execution';
 import { OVERFLOW_RETRY_TEXT } from '../turn-failure';
 import type { CompletedTurn } from '../evolution/types';
+
+/** A run's round as it assembled: what its projection reads of its preparation. */
+interface HeadRound extends AssembledRound {
+  readonly execution: Omit<ActorExecutionInput, 'task'>;
+  readonly historyLength: number;
+  readonly contextWindow: number | null;
+}
+
+/** The claim a run's answer is recorded under: its newest round's that claimed. */
+interface CanonicalAnswer {
+  claim: ActorTurnClaim | null;
+}
 
 /** A head's mutable findings; the backend's tools mutate the same instance runHeadInference reads. */
 export class HeadCapture {
@@ -400,8 +414,8 @@ function settleRunContext(deps: HeadInferenceDeps, turn: {
   });
 }
 
-/** The seat supplies the compaction state where the actor lives. */
-export type RunInference = Omit<HeadInferenceDeps, 'compaction'>;
+/** The seat supplies the compaction state where the actor lives, and runs it on the actor's session. */
+export type RunInference = Omit<HeadInferenceDeps, 'compaction' | 'actor'> & { readonly actor: SeatedActor };
 
 interface HeadOutcome {
   status: HeadReport['status'];
@@ -447,7 +461,7 @@ async function adviseCompletedTurn({ session, input, deps, lease, outcome }: Com
 
   if (!session.orchestrator.improvementLanesOpen('completed', input.mode)) return;
 
-  await session.hireAdvisor(session.advisorSnapshot(turn, Object.keys(deps.tools)));
+  await session.advisor.hire(session.advisor.snapshot(turn, Object.keys(deps.tools)));
 }
 
 /** `kind` namespaces the canonical ids of the next turn's input. */
@@ -535,12 +549,43 @@ function streamRelay(deps: HeadInferenceDeps): { observeStream?: HeadInferenceDe
   return deps.observeStream === undefined ? {} : { observeStream: deps.observeStream };
 }
 
+/** A run as its host hands it over before its preparation: the key its first round is claimed under, and its seat. */
+export interface HeadRun {
+  readonly key: { readonly turnId: HeadId; readonly runId: string; readonly mode: WorkMode };
+  readonly actor: HostedActor;
+  /**
+   * Under the run's first round's capability, claimed `preparing` before any of it (design v2 §2-§3): its input and
+   * everything its rounds assemble from. A failure settles that claim `error`.
+   */
+  prepare(capability: TurnCapability): Promise<{ readonly input: HeadInput; readonly deps: HeadInferenceDeps }>;
+}
+
+/** A run whose host prepared it already, as one process holds both: its preparation is what it was handed. */
+export function preparedHeadRun(input: HeadInput, deps: HeadInferenceDeps): HeadRun {
+  return { key: { turnId: input.id, runId: deps.runId, mode: input.mode }, actor: deps.actor, prepare: async () => ({ input, deps }) };
+}
+
 /**
- * One reporting agent over the turns {@link HeadInferenceDeps.resume} grants, and its report. Never throws: a failure
- * is an `errored` report keeping the run's steps and usage. No turn reaches `AgentOrchestrator.recordTurn`
+ * One reporting agent over the turns {@link HeadInferenceDeps.resume} grants, and its report. Its first round is
+ * claimed before it is prepared; each round is then the common driver's ({@link driveExecution}), the run supplying its
+ * assembly, the projection of each round into its report, and the next round's input. Never throws once prepared: a
+ * failure is an `errored` report keeping the run's steps and usage. No turn reaches `AgentOrchestrator.recordTurn`
  * (tests/unit-headless-learning.test.ts).
  */
-export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps): Promise<HeadReport> {
+export async function runHeadInference(run: HeadRun): Promise<HeadReport> {
+  const session = run.actor.session;
+  const reserved = session.reserveExecution(run.key, run.key.mode);
+
+  const capability = { actorId: session.actorId, turnId: reserved.turnId, runId: reserved.runId, epoch: reserved.epoch };
+
+  // A preparation that failed settles the claim it was reserved under, and fails as it failed.
+  return await settle(Effect.promise(() => run.prepare(capability)).pipe(
+    Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : Effect.sync(() => { session.settleReserved(reserved, 'error'); }))),
+    Effect.flatMap((prepared) => Effect.promise(() => inferPrepared(prepared.input, prepared.deps, reserved))),
+  ));
+}
+
+async function inferPrepared(input: HeadInput, deps: HeadInferenceDeps, reserved: PreparingClaim): Promise<HeadReport> {
   const { capture, clock } = deps;
   const startedAt = clock.now();
 
@@ -555,7 +600,8 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   let recorded = 0;
   let lastText = '';
   let lastReasoning = '';
-  let canonicalClaim: ActorTurnClaim | null = null;
+  // Set by a round's projection, which the compiler does not follow into.
+  const canonical: CanonicalAnswer = { claim: null };
   const canonicalOutput: MessageReference[] = [];
   const canonicalParts: MessagePartReference[] = [];
 
@@ -565,7 +611,6 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   // Bridged before the first await, so a cancel during seed restore still interrupts.
   const unbridgeCancel = bridgeCancel(deps.signal, session);
 
-  await session.restoreHistory(seed);
   const conversation: ModelMessage[] = [];
 
   const gate = deps.mission === undefined ? undefined : missionGate(deps.mission);
@@ -606,42 +651,44 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   let overflowRetry = false;
 
   try {
-    for (let index = 0; ; index++) {
-      if (deps.isAborted()) break;
+    // Restored while no round is active, so it replaces the history rather than staging a proposal.
+    await session.restoreHistory(seed);
 
-      // Derived, not minted: a recovered activation re-admits the same turn under the next epoch.
-      const turnId = input.id;
-
-      const lease = session.beginTurn(
-        { runId: deps.runId, turnId: index === 0 ? turnId : `${turnId}#${index}` },
-        input.mode, Date.now(),
-      );
-
-      try {
-        // Per turn: a promotion or a moved profile lands between turns.
-        const assembled = await assembleActorTurn(sources, { userText: input.task, workMode: input.mode, ...(input.model !== undefined && { model: input.model }) });
-        session.bindProfile(lease, assembled.profile, assembled.profileInputs);
+    await driveExecution<HeadRound>(session, {
+      runId: deps.runId, turnId: input.id, mode: input.mode, isAborted: deps.isAborted, reserved,
+      assemble: async (round) => {
+        const assembled = await assembleActorTurn({
+          ...sources,
+          // Bound to the round as it resolves, then the host's own settle (a facet carries it on its first pace).
+          settle: async (profile, inputs) => {
+            round.bind(profile, inputs);
+            await sources.settle?.(profile, inputs);
+          },
+        }, { userText: input.task, workMode: input.mode, ...(input.model !== undefined && { model: input.model }), ...(round.frozen !== null && { frozen: round.frozen }) });
 
         const historyLength = session.history.length;
-
         const execution = withCompactionTrigger(assembled.execution, deps.compaction.state, deps.compaction.key, historyLength);
-
         const stopWhen = (): boolean => deps.isAborted();
 
-        const outcome = await session.execute(lease, {
-          ...execution,
-          task: input.task,
-          chat: { ...execution.chat, stopWhen, onStep, ...streamRelay(deps) },
-          assertActive,
-          scaffoldStreamOptions: { onStep, stopWhen },
-        }, (event) => { settled = relayRunEvent(deps, event) || settled; });
-
-        const retry = settleRunContext(deps, { outcome, execution, historyLength, contextWindow: assembled.window.contextWindow, overflowRetry });
+        return {
+          execution, historyLength, contextWindow: assembled.window.contextWindow,
+          input: {
+            ...execution,
+            task: input.task,
+            chat: { ...execution.chat, stopWhen, onStep, ...streamRelay(deps) },
+            assertActive,
+            scaffoldStreamOptions: { onStep, stopWhen },
+          },
+          onEvent: (event: ChatEvent) => { settled = relayRunEvent(deps, event) || settled; },
+        };
+      },
+      project: async ({ lease, assembled, outcome }) => {
+        const retry = settleRunContext(deps, { outcome, execution: assembled.execution, historyLength: assembled.historyLength, contextWindow: assembled.contextWindow, overflowRetry });
 
         overflowRetry = retry;
 
         if (outcome.claim !== null) {
-          canonicalClaim = outcome.claim;
+          canonical.claim = outcome.claim;
           canonicalOutput.push(...outcome.outputReferences);
           canonicalParts.push(...outcome.outputPartReferences);
           conversation.push(...await materializeMessages(session, outcome.outputReferences));
@@ -659,20 +706,28 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
 
         if (!turnFailed && !outcome.interrupted) await adviseCompletedTurn({ session, input, deps, lease, outcome });
 
-        session.settleTurnClaim(lease, turnClaimOutcome(turnFailed, outcome.interrupted));
-      } finally {
-        session.finishTurn(lease);
-      }
+        return { claim: turnClaimOutcome(turnFailed, outcome.interrupted), stop: failure !== undefined || refusal !== null };
+      },
+      failed: async ({ lease, failure: cause }) => {
+        failure = toKinuError({ doing: `run agent ${input.id} to a report`, cause, otherwise: 'unavailable' });
 
-      if (failure !== undefined || refusal !== null || deps.isAborted()) break;
+        return lease.signal.aborted || deps.isAborted() ? 'aborted' : 'error';
+      },
+      next: async ({ index }) => {
+        const next = await nextRunInput(deps, overflowRetry);
 
-      const next = await nextRunInput(deps, overflowRetry);
+        if (next === null) return null;
+        const turnId = `${input.id}#${index + 1}`;
 
-      if (next === null) break;
-      await appendNextTurnInput({ session, deps, conversation, turnId: `${turnId}#${index + 1}`, ...next });
-    }
+        await appendNextTurnInput({ session, deps, conversation, turnId, ...next });
+
+        return turnId;
+      },
+    });
   } catch (err) {
     failure = toKinuError({ doing: `run agent ${input.id} to a report`, cause: err, otherwise: 'unavailable' });
+    // Its first round never began: its claim ends with it.
+    session.settleReserved(reserved, 'error');
   } finally {
     unbridgeCancel();
   }
@@ -689,6 +744,8 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   const outcome = classifyHeadOutcome(deps, failure);
   const { status, stopReason } = outcome;
   const summary = headSummary({ input, capture, outcome, final: { text: lastText, reasoningText: lastReasoning } });
+
+  const canonicalClaim = canonical.claim;
 
   const canonicalCompletion = canonicalClaim === null ? undefined : {
     turnId: canonicalClaim.turnId, runId: canonicalClaim.runId, outputReferences: canonicalOutput, outputPartReferences: canonicalParts,

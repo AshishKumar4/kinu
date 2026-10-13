@@ -63,9 +63,9 @@ async function seedActorState({ ws, actor, text, runId, version }: SeededActorSt
     id: `m-${actor.actorId}`, origin: 'input', message: { role: 'user', content: text },
   });
   void ws.sql`INSERT INTO actor_turn_claims (
-      actor_id, turn_id, run_id, epoch, work_mode, program_kind, program_version,
+      actor_id, turn_id, run_id, epoch, work_mode, phase, program_kind, program_version,
       program_digest, program_build, outcome, claimed_at)
-    VALUES (${actor.actorId}, ${`turn-${runId}`}, ${runId}, 1, 'build', 'scaffold', ${version},
+    VALUES (${actor.actorId}, ${`turn-${runId}`}, ${runId}, 1, 'build', 'admitted', 'scaffold', ${version},
       ${`digest-${version}`}, NULL, NULL, ${now})`;
   void ws.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
     VALUES (${actor.actorId}, ${version}, ${now}, ${`seeded for ${runId}`}, 'current')`;

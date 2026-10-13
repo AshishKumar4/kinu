@@ -62,7 +62,7 @@ function partIdentity(kind: string, native: JsonObject, ordinals: Map<string, nu
 
 /** An empty reasoning part is not evidence of thinking. */
 function streamedContent(part: StoredPart): boolean {
-  if (part.kind !== 'text' && part.kind !== 'reasoning') return true;
+  if (part.value.type !== 'text' && part.value.type !== 'reasoning') return true;
 
   return v.is(v.string(), part.value.text) && part.value.text.length > 0;
 }
@@ -420,7 +420,7 @@ export class SessionStream {
       const options = metadata ?? part.startMetadata;
 
       if (options !== null && options !== undefined) native.providerOptions = options;
-      opening = { partNo: part.number, kind, streamOrder: part.streamOrder, descriptor: await this.history.messages.prepareDescriptor(native) };
+      opening = { partNo: part.number, streamOrder: part.streamOrder, descriptor: await this.history.messages.prepareDescriptor(native) };
 
       if (text !== null) opening.text = text;
     }
@@ -503,10 +503,8 @@ export class SessionStream {
       return;
     }
 
-    const selected = this.history.context.selected();
-
-    if (selected === null) throw new KinuError('missing', 'stream has no selected context');
-    this.history.context.commit(selected, { cause: 'output', turnId: this.turnId, assertEpoch: () => Effect.sync(() => this.history.assertEpoch(this.turnId, this.epoch)), mutate: entries => {
+    // Inside the fenced write: the commit's own read is the selection this seal joins.
+    this.history.context.commit(null, { cause: 'output', turnId: this.turnId, assertEpoch: () => Effect.sync(() => this.history.assertEpoch(this.turnId, this.epoch)), mutate: entries => {
       this.history.messages.seal(container.id, content, envelope);
 
       if (entries.some(entry => entry.messageId === container.id)) return entries;
@@ -593,7 +591,7 @@ export class SessionStream {
     const streamOrdinals = new Map<string, number>();
 
     for (const part of [...streamed].sort((a, b) => a.streamOrder - b.streamOrder)) {
-      witnessed.set(partIdentity(part.kind, part.value, streamOrdinals), part);
+      witnessed.set(partIdentity(v.parse(v.string(), part.value.type), part.value, streamOrdinals), part);
     }
 
     const finalOrdinals = new Map<string, number>();
@@ -606,13 +604,13 @@ export class SessionStream {
       const identity = partIdentity(kind, native, finalOrdinals);
       const prior = witnessed.get(identity);
 
-      if (prior === undefined) return { kind, value: native, streamOrder: null };
+      if (prior === undefined) return { value: native, streamOrder: null };
       paired.add(identity);
 
       if (prior.streamOrder < lastOrder) reordered = true;
       lastOrder = prior.streamOrder;
 
-      return { kind, value: native, streamOrder: prior.streamOrder };
+      return { value: native, streamOrder: prior.streamOrder };
     });
 
     const kept = [...witnessed]
@@ -624,14 +622,14 @@ export class SessionStream {
       diagnostics.event(STREAM_DIVERGED, { messageId: container.id, kept: kept.length, reordered, finalParts: finalParts.length });
     }
 
-    const merged: { kind: string; value: JsonObject; streamOrder: number | null }[] = [];
+    const merged: { value: JsonObject; streamOrder: number | null }[] = [];
     let at = 0;
 
     for (const final of finals) {
       while (at < kept.length && final.streamOrder !== null && (kept[at]?.streamOrder ?? 0) < final.streamOrder) {
         const orphan = kept[at++];
 
-        if (orphan !== undefined) merged.push({ kind: orphan.kind, value: orphan.value, streamOrder: orphan.streamOrder });
+        if (orphan !== undefined) merged.push({ value: orphan.value, streamOrder: orphan.streamOrder });
       }
 
       merged.push(final);
@@ -640,16 +638,16 @@ export class SessionStream {
     while (at < kept.length) {
       const orphan = kept[at++];
 
-      if (orphan !== undefined) merged.push({ kind: orphan.kind, value: orphan.value, streamOrder: orphan.streamOrder });
+      if (orphan !== undefined) merged.push({ value: orphan.value, streamOrder: orphan.streamOrder });
     }
 
     return merged.map((part, index) => {
       const callId = v.safeParse(v.string(), part.value.toolCallId);
-      const call = part.kind === 'tool-result' && callId.success ? this.calls.get(callId.output) : undefined;
+      const call = part.value.type === 'tool-result' && callId.success ? this.calls.get(callId.output) : undefined;
 
-      if (part.kind === 'tool-call' && callId.success) this.calls.set(callId.output, { messageId: container.id, part: index });
+      if (part.value.type === 'tool-call' && callId.success) this.calls.set(callId.output, { messageId: container.id, part: index });
 
-      return { partNo: index, kind: part.kind, streamOrder: part.streamOrder ?? this.sourceOrder++,
+      return { partNo: index, streamOrder: part.streamOrder ?? this.sourceOrder++,
         replyTo: call === undefined ? null : { messageId: call.messageId, partNo: call.part }, value: part.value };
     });
   }
@@ -672,7 +670,7 @@ export class SessionStream {
       const value = { ...part.descriptor };
 
       if (part.kind === 'text' || part.kind === 'reasoning' || part.text !== '') value.text = part.text;
-      parts.push({ partNo: part.number, kind: part.kind, streamOrder: part.streamOrder, replyTo: null, value });
+      parts.push({ partNo: part.number, streamOrder: part.streamOrder, replyTo: null, value });
     }
 
     return parts;

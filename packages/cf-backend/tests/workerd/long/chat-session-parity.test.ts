@@ -86,7 +86,9 @@ it('steering and a restarted turn preserve conversation order and each step inde
 
   const resuming = completed.frames.findIndex((frame) => frame.type === 'cf_agent_stream_resuming');
   const resumed = completed.frames[resuming];
-  expect(completed.frames.some((frame) => frame.type === 'cf_agent_stream_pending')).toBe(true);
+  // The restarted turn is open before the tab's connect is answered (its isolate's adoption asks for its program alone),
+  // so the tab is told it resumes; a turn owed and not yet open is told pending (unit-chat-transport.test.ts).
+  expect(resuming).toBeGreaterThan(-1);
   expect(completed.frames.slice(resuming + 1).filter((frame) => frame.type === 'cf_agent_use_chat_response' && frame.id === resumed?.id && frame.done === true)).toHaveLength(1);
   expect(completed.frames.some((frame) => frame.type === 'steer_status' && frame.steerId === 'input-PARITY-FOUR-STEER' && frame.status === 'landed')).toBe(true);
   expect(completed.frames.filter((frame) => frame.type === 'cf_agent_use_chat_response' && frame.id === 'PARITY-FIVE' && frame.done === true && frame.error !== true)).toHaveLength(1);

@@ -1,8 +1,7 @@
 diff --git a/packages/core/src/events/hub/trust.ts b/packages/core/src/events/hub/trust.ts
-index 5151ec95a..34226d90e 100644
 --- a/packages/core/src/events/hub/trust.ts
 +++ b/packages/core/src/events/hub/trust.ts
-@@ -9,7 +9,7 @@ import {
+@@ -11,7 +11,7 @@ import {
  } from './types';
  
  export function meetTrust(a: TrustLevel, b: TrustLevel): TrustLevel {
@@ -10,4 +9,4 @@ index 5151ec95a..34226d90e 100644
 +  return TRUST_ORDER[a] > TRUST_ORDER[b] ? a : b;
  }
  
- /** `self` for the empty set (vacuous); callers should not pass it. */
+ /** The only place trust is assigned. Throws `IngressRejectedError` for protocol-illegal ingress. */

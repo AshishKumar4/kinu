@@ -23,6 +23,7 @@ import { getRunTimeline } from '../src/read-models/timeline';
 import { getRunEvents, getRunSummaries, listRuns } from '../src/read-models/runs';
 import { getAgentStatus, getChatHistoryPage, getToolList, type ChatHistoryPage } from '../src/read-models/status';
 import { SessionHistory } from '../src/session/history';
+import { stampTurnAuthor } from '../src/utils/ui-message';
 import { readSessionTranscript, type SessionTranscriptReader } from '../src/session/transcript';
 import { PLATFORM_CATALOG } from '../src/platform-catalog';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
@@ -359,7 +360,7 @@ describe('agent status', () => {
     });
 
     transcript.appendUser(await transcript.prepareUser({
-      id, turnId: id, message, metadata: { kinuEvent: 'fork_interrupted', heads: 9 },
+      id, turnId: id, message, metadata: stampTurnAuthor({ kinuEvent: 'fork_interrupted', heads: 9 }),
     }));
 
     const recorded = transcript.read(id);
@@ -368,7 +369,7 @@ describe('agent status', () => {
     expect((await getChatHistoryPage(transcript)).items).toEqual([{
       id, position: 0, role: 'system', turnId: id, runId: recorded.runId,
       content: '9 head(s) across 1 fork run(s)…', createdAt: recorded.recordedAt,
-      metadata: { kinuEvent: 'fork_interrupted', heads: 9 },
+      metadata: { kinuEvent: 'fork_interrupted', heads: 9, kinuAuthor: 'harness' },
     }]);
     w.db.close();
   });

@@ -3,7 +3,7 @@ import type { ModelMessage } from 'ai';
 import { createTestRuntime } from '@kinu.run/test-utils';
 import { scriptedTurnModel } from '@kinu.run/test-utils/turn-model';
 import { runChat } from '../src/chat';
-import { askOwnerTool } from '../src/tools/builtins';
+import { ownerLaneTools } from '../src/tools/builtins';
 import { settleSync } from '../src/obs/effect';
 import { KinuError } from '../src/obs/error';
 import { initOwnerQuestionsTable, OwnerQuestionStore, type OwnerAnswer } from '../src/plans/owner-questions';
@@ -132,7 +132,7 @@ describe('the owner\'s questions', () => {
 
     for await (const event of runChat({
       modelSpec: 'test/model', model, system: 'Migrate.', history: [{ role: 'user', content: 'Migrate the ledger.' }, asked],
-      tools: { ask_owner: askOwnerTool() }, waitsOn: (call) => questions.waitsOn(call),
+      tools: ownerLaneTools({ askOwner: true }), waitsOn: (call) => questions.waitsOn(call),
     })) events.push(event.type);
 
     expect({ requests, events }).toEqual({ requests: 0, events: ['done'] });

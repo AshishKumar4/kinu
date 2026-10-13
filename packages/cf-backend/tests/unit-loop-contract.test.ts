@@ -1,4 +1,5 @@
 import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import { admitTestClaim } from '@kinu.run/test-utils';
 /**
  * One promoted-loop contract for every full actor kind (open-41): the pinned scaffold version is selected and
  * recorded, with the live alias poisoned so an alias read is observable. The model is not driven here.
@@ -8,7 +9,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
   defaultLoopOrigin, prepareActorProgram, programIdentityOf, sha256Hex,
-  type HostedActor, type WorkspaceActor,
+  type SeatedActor, type WorkspaceActor,
 } from '@kinu.run/core';
 import { hostedWorkspace, resetDatabases, type HostedWorkspaceFixture } from './helpers/hosted-workspace';
 
@@ -19,7 +20,7 @@ function markerSource(marker: string): string {
 
 /** Install one version for one actor, flip its pointer, then poison `identity.scaffold.read()` so an alias read is observable. */
 async function installVersion(
-  fixture: HostedWorkspaceFixture, actor: HostedActor, version: number, marker: string,
+  fixture: HostedWorkspaceFixture, actor: SeatedActor, version: number, marker: string,
 ): Promise<string> {
   const rt = actor.runtime;
   const source = markerSource(marker);
@@ -41,7 +42,7 @@ async function installVersion(
 }
 
 /** One claimed turn via the production selection seam and ledger, returning the row the ledger wrote. */
-async function claimTurnOn(actor: HostedActor, turnId: string): Promise<{
+async function claimTurnOn(actor: SeatedActor, turnId: string): Promise<{
   readonly selectedVersion: number;
   readonly selectedSource: string | null;
   readonly kind: string;
@@ -55,7 +56,7 @@ async function claimTurnOn(actor: HostedActor, turnId: string): Promise<{
 
   const context = actor.stores.history.context.selected() ?? actor.stores.history.context.initialize();
 
-  const claim = await actor.stores.claims.admit({
+  const claim = await admitTestClaim(actor.stores.claims, {
     runId: `run-${turnId}`, turnId, workMode: 'build',
     program: programIdentityOf(program, 'harness-build'),
     context,
@@ -72,7 +73,7 @@ async function claimTurnOn(actor: HostedActor, turnId: string): Promise<{
 
 interface Subject {
   readonly label: string;
-  readonly actor: HostedActor;
+  readonly actor: SeatedActor;
   readonly record: WorkspaceActor;
   readonly expectedOrigin: 'builtin' | 'inherit';
 }
@@ -135,8 +136,8 @@ describe('the promoted-loop contract holds for every full actor kind', () => {
       // Re-read from the ledger: a promotion mutating the stored claim would pass an in-memory comparison.
       const stored = subject.actor.stores.claims.read(`${subject.label}-inflight`);
       expect(stored).not.toBeNull();
-      expect(stored?.program.kind).toBe('scaffold');
-      expect(stored?.program.version).toBe(1);
+      expect(stored?.program?.kind).toBe('scaffold');
+      expect(stored?.program?.version).toBe(1);
 
       const next = await claimTurnOn(subject.actor, `${subject.label}-next`);
       expect(next.version).toBe(2);

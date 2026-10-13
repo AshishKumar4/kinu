@@ -136,7 +136,7 @@ const GATED_CALLS: GatedCall[] = [
   {
     capability: 'workspaces.overview_self',
     name: 'putWorkspaceOverview',
-    run: (u, c) => u.putWorkspaceOverview(c, WORKSPACE, { activity: 'idle', decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [], shares: [] }),
+    run: (u, c) => u.putWorkspaceOverview(c, WORKSPACE, { activity: 'idle', awaitsSettings: false, decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [], shares: [] }),
   },
 
   { capability: 'peers.grants', name: 'hasPeerGrant', run: (u, c) => u.hasPeerGrant(c, 'scout', 'b'.repeat(32)) },
@@ -211,6 +211,7 @@ const GATED_CALLS: GatedCall[] = [
     name: 'getCredentialsRevision',
     run: (u, c) => u.getCredentialsRevision(c),
   },
+  { capability: 'credentials.model', name: 'getSettingsRevision', run: (u, c) => u.getSettingsRevision(c) },
 
   { capability: 'subscription_auth', name: 'startCodexDeviceFlow', run: (u, c) => u.startCodexDeviceFlow(c) },
   { capability: 'subscription_auth', name: 'pollCodexDeviceFlow', run: (u, c) => u.pollCodexDeviceFlow(c) },
@@ -467,9 +468,7 @@ describe('a registered workspace reaches the whole surface', () => {
       users: ['pat@example.test'], visibility: 'users' as const, fork: true,
     };
 
-    await harness.userDO.putWorkspaceOverview({ workspaceToken: harness.otherToken }, OTHER_WORKSPACE, {
-      activity: 'idle', decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [], shares: [shared],
-    });
+    await harness.userDO.putWorkspaceOverview({ workspaceToken: harness.otherToken }, OTHER_WORKSPACE, { activity: 'idle', awaitsSettings: false, decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [], shares: [shared] });
 
     const sharesOf = (page: RosterPage) => page.entries.find((entry) => entry.name === OTHER_WORKSPACE)?.overview?.shares;
 

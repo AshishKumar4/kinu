@@ -20,7 +20,8 @@ import { renderIssues, type JsonObject } from '../utils/json';
 import { compareCodeUnits } from '../utils/text';
 import { openWorkspaceMainActor } from './workspace-actors';
 import { FORK_PIN_PREFIX, forkCarries, type ForkFileSource, type ForkPinnedFiles } from './fork';
-import { forkArtifactPath, planForkConversation } from './fork-plan';
+import { forkArtifactPath } from './fork-plan';
+import { isForkConversationSection, type ForkConversationSource } from './fork-conversation';
 import { ForkSnapshotHeadSchema } from './fork-rows';
 import {
   FORK_ROW_SECTIONS, FORK_SECTIONS, forkSectionCount, perSection,
@@ -216,6 +217,8 @@ export interface ForkTransferSource {
   artifactDirectory: string;
   /** The `db` tool's store as that actor reads it (`AppDataStore.fork`); the fork only reads it. */
   appData: ForkAppData;
+  /** Where that actor keeps its conversation, which the conversation's sections and the cut are read from. */
+  conversation: ForkConversationSource;
   transferId: string;
   /** Max payload bytes per frame. Production passes FORK_FRAME_BYTES. */
   frameBytes: number;
@@ -268,11 +271,7 @@ export async function* forkTransferFrames(
   }
 
   const actorId = openWorkspaceMainActor(source.sql).actorId;
-
-  const plan = planForkConversation({
-    sql: source.sql, actorId, untilMessageId: source.untilMessageId,
-    artifactDirectory: source.artifactDirectory,
-  });
+  const plan = await source.conversation.plan(source.untilMessageId, source.artifactDirectory);
 
   const pinned = await source.vfs.pin(`${FORK_PIN_PREFIX}${source.transferId}`);
 
@@ -287,7 +286,12 @@ export async function* forkTransferFrames(
       sql: source.sql, actorId, plan, artifactDirectory: source.artifactDirectory, appData: source.appData,
     };
 
-    const counts: ForkSectionCounts = { ...perSection((kind) => forkSectionCount(kind, sections)), files: imports.length };
+    const counted = await Promise.all(FORK_ROW_SECTIONS.map(async (kind) => [kind, isForkConversationSection(kind)
+      ? await source.conversation.count(kind, plan, source.artifactDirectory)
+      : forkSectionCount(kind, sections)] as const));
+
+    const tally = new Map<ForkRowSection, number>(counted);
+    const counts: ForkSectionCounts = { ...perSection((kind) => tally.get(kind) ?? 0), files: imports.length };
 
     const identity = source.sql<{ id: string; name: string }>`
       SELECT id, name FROM workspace_identity LIMIT 1
@@ -321,12 +325,12 @@ export async function* forkTransferFrames(
     yield* send({ ...envelope(), kind: 'begin', head, counts });
 
     const yieldRows = async function* <K extends ForkRowSection>(
-      kind: K, declared: ForkSection<ForkRows[K]>,
+      kind: K, declared: ForkSection<ForkRows[K]>, selected: Iterable<ForkRows[K]> | AsyncIterable<ForkRows[K]>,
     ): AsyncGenerator<ForkFrame, void, ForkFrameReply | undefined> {
       let batch: ForkRows[K][] = [];
       let bytes = 0;
 
-      for (const row of declared.select(sections)) {
+      for await (const row of selected) {
         const rowBytes = declared.bytes(row);
 
         // A single row may exceed the frame budget; send it alone rather than reject it.
@@ -343,7 +347,13 @@ export async function* forkTransferFrames(
       if (batch.length > 0) yield* send({ ...envelope(), kind, rows: batch });
     };
 
-    for (const kind of FORK_ROW_SECTIONS) yield* yieldRows(kind, FORK_SECTIONS[kind]);
+    for (const kind of FORK_ROW_SECTIONS) {
+      const declared = FORK_SECTIONS[kind];
+
+      yield* yieldRows(kind, declared, isForkConversationSection(kind)
+        ? source.conversation.rows(kind, plan, source.artifactDirectory)
+        : declared.select(sections));
+    }
 
     /** The chunks a page wants, a frame of them at a time. */
     const chunkFrames = async function* (
@@ -436,7 +446,7 @@ export class ForkTransferReceiver {
           stream: foldForkStream(FORK_STREAM_SEED, frame.digest),
         });
         // Rows arrive frame by frame from here, so an abandoned attempt's rows must go now.
-        this.writer.clearStagedRows();
+        yield* Effect.promise(() => this.writer.clearStagedRows());
 
         return { status: 'staged' };
       }
@@ -521,9 +531,7 @@ export class ForkTransferReceiver {
       ));
     }
 
-    this.writer.stage(frame.kind, frame.rows);
-
-    return Effect.succeed(at);
+    return Effect.as(Effect.promise(() => this.writer.stage(frame.kind, frame.rows)), at);
   }
 
   /**

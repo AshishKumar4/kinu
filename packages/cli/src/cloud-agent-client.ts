@@ -4,7 +4,7 @@ import {
   CHANGELOG_ENTRY_KINDS,
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   JsonValueSchema,
-  PlanDecisionOutcomeSchema, PlanReviewResultSchema, PlanReviewSchema,
+  OwedIntentSchema, PlanDecisionOutcomeSchema, PlanReviewResultSchema, PlanReviewSchema,
   AskingAgentSchema,
   DeferredApprovalSchema,
   ChatHistoryEntrySchema, SendStateSchema, type SendState,
@@ -364,7 +364,7 @@ export class CloudAgentClient implements AgentClient {
     this.questions = subordinateName ? null : {
       // A hosted agent's questions are answered from the web app's stack, where its window is.
       list: async () => v.parse(v.array(AskingAgentSchema), await this.callRpc('listOwnerQuestions', [])).filter((asking) => asking.actor === null),
-      answer: async (id, answers) => { await this.callRpc('answerOwnerQuestions', [id, v.parse(JsonValueSchema, answers)]); },
+      answer: async (id, answers) => v.parse(v.nullable(OwedIntentSchema), await this.callRpc('answerOwnerQuestions', [id, v.parse(JsonValueSchema, answers)])),
     };
     // The workspace's one queue, its hosted agents' commands included, as the web's main stack shows it.
     this.approvals = subordinateName ? null : {
@@ -381,7 +381,7 @@ export class CloudAgentClient implements AgentClient {
         await this.callRpc('savePlanReviewAnnotations', [id, revision, v.parse(JsonValueSchema, annotations)]),
       ),
       decide: async (id, revision, decision, feedback) => v.parse(
-        PlanDecisionOutcomeSchema,
+        v.union([OwedIntentSchema, PlanDecisionOutcomeSchema]),
         await this.callRpc('decidePlanReview', [id, revision, decision, feedback ?? null]),
       ),
       dismiss: async (id, revision) => v.parse(PlanReviewResultSchema, await this.callRpc('dismissPlanReview', [id, revision])),

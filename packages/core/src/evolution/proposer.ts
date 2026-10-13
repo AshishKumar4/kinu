@@ -264,17 +264,17 @@ export type ProposerOutcome =
  */
 export async function runProposer(deps: ProposerDeps, target?: string): Promise<ProposerOutcome> {
   const { rt, now } = deps;
-  const lowTurns = listTurnRatings(rt.storage.sql, rt.actor, { since: now - WINDOW_MS, low: true }).map((rating) => rating.turnId);
+  const low = target === undefined ? [] : listTurnRatings(rt.storage.sql, rt.actor, { since: now - WINDOW_MS, low: true });
 
   const trigger: ProposerTrigger | null = target === undefined
     ? proposerTrigger(rt, now)
-    : { kind: 'reason', reason: 'incorrect', turns: lowTurns };
+    : { kind: 'reason', reason: 'incorrect', turns: low.map((rating) => rating.turnId) };
 
-  if (trigger === null || (target !== undefined && lowTurns.length === 0)) return { kind: 'idle' };
+  if (trigger === null || (target !== undefined && low.length === 0)) return { kind: 'idle' };
 
   const bad = target === undefined
     ? badSet(rt, trigger, now)
-    : listTurnRatings(rt.storage.sql, rt.actor, { since: now - WINDOW_MS, low: true }).slice(0, MAX_OTHER_BAD + MIN_REASON_TURNS)
+    : low.slice(0, MAX_OTHER_BAD + MIN_REASON_TURNS)
       .map((rating): JudgedTurn => ({ id: rating.turnId, side: 'bad', state: `${renderRating(rating)}\n\nWHAT WENT WRONG: ${rating.wrong ?? 'the user was dissatisfied'}` }));
 
   const artifactId = target ?? await targetOf(deps.decide, trigger, bad);

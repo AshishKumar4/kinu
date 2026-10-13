@@ -14,7 +14,7 @@ inbound   Email Routing (catch-all on EMAIL_DOMAIN)
               EmailInbox.accept (core/src/events/ingress/email.ts)
               trust gate → EventLog.publish (email variant, Message-ID dedupe)
               + email_thread ReplyChannel (threading headers, 24h TTL)
-            → scheduleDrain() wakes a turn (debounced; duplicates don't re-wake)
+            → arms the durable wake, which drains it into a delivery (duplicates don't re-wake)
 
 outbound  turn completes (onChatResponse)
             → drainTurnId metadata → dispatchEmailRepliesForTurn

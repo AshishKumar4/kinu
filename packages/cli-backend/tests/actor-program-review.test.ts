@@ -6,7 +6,7 @@ import type { ModelMessage } from 'ai';
 import { createTestRuntime, scriptedTurnModel } from '@kinu.run/test-utils';
 import {
   startActorTurn, prepareActorProgram,
-  runHeadInference, HeadCapture, withHeadCaptureRecording,
+  runHeadInference, preparedHeadRun, HeadCapture, withHeadCaptureRecording,
   initActorStateSchema,
 } from '@kinu.run/core';
 import { defaultLoopOrigin } from '@kinu.run/core';
@@ -109,11 +109,11 @@ test('hosted polled cancellation refuses a promoted direct effect without a sign
   let effects = 0;
   const model = unusedModel();
 
-  const report = await runHeadInference(headInput(), {
+  const report = await runHeadInference(preparedHeadRun(headInput(), {
     ...headLoopSeams(rt, { model: () => model }), clock: REAL_CLOCK, capture: new HeadCapture(),
     isAborted: () => true, abortReason: () => 'already cancelled',
     tools: { mutate: tool({ inputSchema, execute: async () => ++effects }) },
-  });
+  }));
 
   expect(report.status).toBe('aborted');
   expect(effects).toBe(0);
@@ -166,11 +166,11 @@ for (const program of programs) test(`${program.name} preserves reasoning and ac
   const messages: ModelMessage[] = [];
   const deltas: Array<{ kind: string; text: string }> = [];
 
-  const report = await runHeadInference(headInput(), {
+  const report = await runHeadInference(preparedHeadRun(headInput(), {
     ...headLoopSeams(rt, { model: () => model }), clock: REAL_CLOCK, tools, capture, isAborted: () => false,
     reportMessages: produced => { messages.push(...produced); },
     reportDelta: (kind, text) => { deltas.push({ kind, text }); },
-  });
+  }));
 
   expect(report.status).toBe('completed');
   expect(report.stepCount).toBe(2);
@@ -222,12 +222,12 @@ test('a custom model call preserves completed tool messages when its next reques
     return pending.promise;
   } });
 
-  const running = runHeadInference(headInput(), {
+  const running = runHeadInference(preparedHeadRun(headInput(), {
     ...headLoopSeams(rt, { model: () => model }), clock: REAL_CLOCK, capture: new HeadCapture(),
     signal: abort.signal, isAborted: () => abort.signal.aborted,
     tools: { probe: tool({ inputSchema, execute: async () => value }) },
     reportMessages: produced => { messages.push(...produced); },
-  });
+  }));
 
   await started.promise;
   abort.abort(new Error('stop after the completed tool step'));

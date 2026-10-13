@@ -41,19 +41,20 @@ export interface TurnSegment<Signal = never> {
   readonly parts: readonly TranscriptPart[];
 }
 
+/** A landed steer row names the step that read it (`describeLandedSteers`). */
 const SteerRowSchema = v.looseObject({
-  [STEER_METADATA_KEY]: v.optional(v.boolean()),
-  [STEER_STEP_METADATA_KEY]: v.optional(v.number()),
+  [STEER_METADATA_KEY]: v.literal(true),
+  [STEER_STEP_METADATA_KEY]: v.number(),
 });
 
-/** Step of a landed steer row, or null. A steer row without a step is not guessed into place. */
+/** Step of a landed steer row, or null. A step that names no step of the turn is not guessed into place. */
 function steerRowStep(row: { metadata: unknown }): number | null {
   const parsed = v.safeParse(SteerRowSchema, row.metadata ?? {});
 
-  if (!parsed.success || parsed.output[STEER_METADATA_KEY] !== true) return null;
+  if (!parsed.success) return null;
   const step = parsed.output[STEER_STEP_METADATA_KEY];
 
-  return step === undefined || !Number.isInteger(step) || step < 0 ? null : step;
+  return Number.isInteger(step) && step >= 0 ? step : null;
 }
 
 /** Resumable thread walk: fold the frozen half once, then extend per tick with the live window. */

@@ -103,8 +103,6 @@ export interface TestUserDO {
   revokedSocketPushes: string[];
   /** Browser-session revocations, as `workspace:tokenHash`: a logout must reach a listening-only socket. */
   revokedSessionPushes: string[];
-  /** Capability re-pushes requested per workspace; only the root holds the token plaintext. */
-  capabilityRepushes: string[];
   /** Workspaces the owner's object asked for their first tile, in order. */
   overviewNudges: string[];
   consentPrompts: Array<{
@@ -189,8 +187,6 @@ export interface TestUserDOOptions {
   quietWorkspaceGate?: (name: string, ownerUserId: string) => Promise<void>;
   /** Revive over storage a retired DO wrote (eviction). The caller owns the handle; `close` leaves it open. */
   storage?: Database;
-  /** How many subtree pushes a capability install reports missed, asked per call. */
-  capabilityPushMissed?: () => number;
   /** `oauth-app` preset ids the deployment carries a registered app for (fixed values under `MCP_APP_ENV` keys). */
   mcpAppCredentials?: readonly string[];
   /** How a workspace answers the owner's ask for its first tile; absent, the ask is only recorded. */
@@ -273,8 +269,7 @@ interface TestUserEnvironment {
     idFromName(name: string): string;
     get(name: string): {
       destroyAgent(ownerUserId: string): Promise<void>;
-      installWorkspaceCapability(token: string): Promise<{ readonly ok: true; missed: number }>;
-      repushWorkspaceCapability(): Promise<{ missed: number }>;
+      installWorkspaceCapability(token: string): Promise<{ readonly ok: true }>;
       getWorkspaceCapabilityHash(): Promise<string | null>;
       awaitDeviceConsent(request: DeviceConsentRequest): Promise<DeviceConsentDecision>;
       announceDeviceUnavailable(devices: Array<{ id: string; label: string; lastSeenAt: number | null }>): Promise<{ ok: boolean }>;
@@ -348,7 +343,6 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   const revokedSocketPushes: string[] = [];
   const revokedSessionPushes: string[] = [];
   const overviewNudges: string[] = [];
-  const capabilityRepushes: string[] = [];
   const consentPrompts: TestUserDO['consentPrompts'] = [];
   const raisedConsentIds: TestUserDO['raisedConsentIds'] = [];
   const unavailableNotices: TestUserDO['unavailableNotices'] = [];
@@ -565,13 +559,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
         async installWorkspaceCapability(token: string) {
           installed.set(name, token);
 
-          return { ok: true as const, missed: options.capabilityPushMissed?.() ?? 0 };
-        },
-        /** Re-push with the token the root already holds; nothing is re-minted. */
-        async repushWorkspaceCapability() {
-          capabilityRepushes.push(name);
-
-          return { missed: options.capabilityPushMissed?.() ?? 0 };
+          return { ok: true as const };
         },
         async getWorkspaceCapabilityHash() {
           const token = installed.get(name);
@@ -639,7 +627,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   return {
     userDO, db, sql, installed, destroyedWorkspaces, aborted, revokedSocketPushes,
     abortRaised: () => aborts.until((reasons) => reasons.length > 0),
-    revokedSessionPushes, capabilityRepushes, overviewNudges,
+    revokedSessionPushes, overviewNudges,
     pendingConsents: (workspace) => registryFor(workspace).list(),
     resolveConsent: (workspace, consentId, answer) => ({ ok: registryFor(workspace).resolve(consentId, answer) }),
     consentPrompts, raisedConsentIds, unavailableNotices, availableNotices, deviceFrames, devicePushes,

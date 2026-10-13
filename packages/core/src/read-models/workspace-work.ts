@@ -8,7 +8,6 @@ import { bindActorHandle, type ActorHandle, type ActorIdentity } from '../identi
 import { isSubordinateOrigin, type WorkspaceActor } from '../identity/workspace-actors';
 import { AgentTaskTreeSchema, readPlanTasks, TaskListStore, type AgentTaskTree } from '../tools/task-store';
 import { PlanReviewSchema, PlanReviewStore, type PlanReview } from '../plans/review';
-import { tableExists } from '../identity/schema';
 import type { SqlExecutor } from '../types/primitives';
 import type { InspectedWork } from './work-inspection';
 import type { ChangelogEntry } from '../evolution/changelog';
@@ -85,8 +84,6 @@ export function readWorkspaceWork(
   hostedPlans: ReadonlyMap<string, readonly PlanReview[]> = new Map(),
 ): WorkspaceWork {
   root.assertCurrent();
-  const hasReviews = tableExists(sql, 'plan_reviews');
-  const hasTasks = tableExists(sql, 'agent_tasks');
   const plans: OwnedPlan[] = [];
   const tasks: OwnedTask[] = [];
   const byId = new Map(actors.map((row) => [row.actorId, row]));
@@ -100,21 +97,19 @@ export function readWorkspaceWork(
       path: conversationPath(row, byId, root.actorId),
     };
 
-    const reviews = hostedPlans.get(row.actorId) ?? (hasReviews ? new PlanReviewStore(sql, actor).listPage('default', { limit: 50 }).items : []);
+    const reviews = hostedPlans.get(row.actorId) ?? new PlanReviewStore(sql, actor).listPage('default', { limit: 50 }).items;
 
     for (const plan of reviews) {
-      const linked = hasTasks ? readPlanTasks(sql, actor, plan) : [];
+      const linked = readPlanTasks(sql, actor, plan);
 
       plans.push({ owner, plan, tasks: linked });
     }
 
-    if (hasTasks) {
-      const store = new TaskListStore(sql, actor, (write) => write());
-      const linkedIds = store.linkedIds();
-      const unlinked = store.list().filter((tree) => !linkedIds.has(tree.id));
+    const store = new TaskListStore(sql, actor, (write) => write());
+    const linkedIds = store.linkedIds();
+    const unlinked = store.list().filter((tree) => !linkedIds.has(tree.id));
 
-      if (unlinked.length > 0) tasks.push({ owner, plan: null, tasks: unlinked });
-    }
+    if (unlinked.length > 0) tasks.push({ owner, plan: null, tasks: unlinked });
   }
 
   plans.sort((a, b) => b.plan.createdAt - a.plan.createdAt || b.plan.revision - a.plan.revision);

@@ -15,6 +15,7 @@ import type { WorkMode } from '../types/turn';
 import { JsonObjectSchema, projectJsonValue, type JsonObject, type JsonValue } from '../utils/json';
 import { branchableToolCall, programSignal } from './outcome';
 import { readCallJob } from './call-job';
+import { readTransactionalReceipt, TRANSACTIONAL_CALL, type TransactionalCall } from './transactional-receipt';
 import { imageModelOutput } from './image-results';
 import type { TracedToolOptions } from '../obs/index';
 import {
@@ -26,7 +27,22 @@ const typeOf = (schema: JsonSchema): string => jsonSchemaToType(schema, 'T').rep
 
 const oneLine = (type: string): string => type.replace(/\s+/gu, ' ');
 
-const returnsOf = (op: Operation): string => oneLine(typeOf(typeJsonSchema(op.output)));
+/**
+ * What each operation is told as, rendered once: its result type and its eval declaration are pure in the operation, a
+ * module-level object that never changes, and every turn's tool build asks them again. Keyed by the operation; written
+ * as it is first rendered; dropped only with the operation, so a held text cannot go stale.
+ */
+const RENDERED = { returns: new WeakMap<Operation, string>(), declarations: new WeakMap<Operation, string>() };
+
+function rendered(held: WeakMap<Operation, string>, op: Operation, render: (op: Operation) => string): string {
+  const text = held.get(op) ?? render(op);
+
+  held.set(op, text);
+
+  return text;
+}
+
+const returnsOf = (op: Operation): string => rendered(RENDERED.returns, op, (rendering) => oneLine(typeOf(typeJsonSchema(rendering.output))));
 
 const OPTIONAL_TYPES: ReadonlySet<string> = new Set(['optional', 'nullish', 'exact_optional']);
 
@@ -58,7 +74,8 @@ interface NativeCall {
 
 const NamedOp = v.looseObject({ op: v.string() });
 
-/** A native tool over `resolve`, which finds the operation a call names. */
+/** A native tool over `resolve`, which finds the operation a call names. Its calls whose operation is one synchronous
+ *  local commit say so (`TRANSACTIONAL_CALL`), and run inside the receipt's transaction the call carries. */
 function nativeCall(resolve: (input: JsonObject) => NativeCall | KinuError, said: { readonly description: string; readonly parameters: JsonSchema }, members: readonly Served[]): Tool {
   const callOf = (sent: { readonly value: unknown }): NativeCall | KinuError => {
     const json = jsonOf('a tool call', sent);
@@ -85,6 +102,18 @@ function nativeCall(resolve: (input: JsonObject) => NativeCall | KinuError, said
       if (call instanceof KinuError) return await settle(Effect.fail(call));
       const job = readCallJob(options);
 
+      const receipt = readTransactionalReceipt(options);
+      const runSync = call.served.runSync?.bind(call.served);
+
+      // One synchronous local commit: run inside its receipt's transaction, the receipt and the result with it.
+      if (receipt !== undefined && runSync !== undefined) {
+        return receipt.commit(() => {
+          const ran = runSync(call.fields);
+
+          return ran.text ?? ran.value;
+        });
+      }
+
       const { value, text } = await call.served.run(call.fields, {
         callId: options.toolCallId, ...(options.abortSignal !== undefined && { signal: options.abortSignal }), ...(job !== undefined && { job }),
         ...(options.trace !== undefined && { trace: options.trace }), native: options,
@@ -95,7 +124,14 @@ function nativeCall(resolve: (input: JsonObject) => NativeCall | KinuError, said
     toModelOutput: imageModelOutput,
   });
 
-  return members.some(({ op }) => allowedInPlan(op)) ? permitInPlan(built) : built;
+  // Which calls are one synchronous local commit, read by the receipt before it starts one (`withEffectReceipt`).
+  const transactional: TransactionalCall = (input) => {
+    const call = callOf({ value: input });
+
+    return !(call instanceof KinuError) && call.served.runSync !== undefined;
+  };
+
+  return Object.assign(members.some(({ op }) => allowedInPlan(op)) ? permitInPlan(built) : built, { [TRANSACTIONAL_CALL]: transactional });
 }
 
 /** An operation's input as the AI SDK takes a tool's: its JSON Schema, held to the operation's own check. */
@@ -141,6 +177,13 @@ export function nativeTool(description: string, members: readonly Served[], with
 /** One operation as its own native tool, its fields at the top level. */
 export function operationTool(description: string, served: Served): Tool {
   return nativeCall((fields) => ({ served, fields }), { description: `${description} Returns ${returnsOf(served.op)}.`, parameters: inputJsonSchema(served.op) }, [served]);
+}
+
+/** {@link operationTool} as a turn offers it where another store runs it: its description and input, with no executor. */
+export function declaredOperationTool(description: string, op: Operation): Tool {
+  const declared = tool({ description: `${description} Returns ${returnsOf(op)}.`, inputSchema: operationInputSchema(op) });
+
+  return allowedInPlan(op) ? permitInPlan(declared) : declared;
 }
 
 /** One field across the operations that take it: its schemas, and the operations by what each says of it. */
@@ -232,6 +275,10 @@ export function callArgs(op: Operation, input: JsonObject): JsonValue[] {
 
 /** `name(required…, options?): Promise<output | Refusal>`, each type rendered by codemode from the field's own schema. */
 function operationDeclaration(op: Operation): string {
+  return rendered(RENDERED.declarations, op, declarationOf);
+}
+
+function declarationOf(op: Operation): string {
   const { required, optional } = fieldsOf(op);
   const properties = propertiesOf(typeJsonSchema(op.input));
   const typed = (key: string): string => oneLine(typeOf(properties.get(key) ?? {}));

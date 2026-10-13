@@ -139,7 +139,7 @@ describe('forkTransferFrames source streamer', () => {
     // Relative: the receiver re-roots paths under its own plane.
     expect(payloads.every((path) => !path.startsWith('/'))).toBe(true);
     const [carried] = reassemble(frames).artifacts;
-    expect(JSON.parse(carried?.content ?? '')).toEqual([{ partNo: 0, kind: 'text', streamOrder: 0, replyTo: null, value: { type: 'text', text: spilled } }]);
+    expect(JSON.parse(carried?.content ?? '')).toEqual([{ partNo: 0, streamOrder: 0, replyTo: null, value: { type: 'text', text: spilled } }]);
 
     const referenced = frames.filter(isRowFrame).flatMap(
       (frame) => (frame.kind === 'sessionMessages' ? frame.rows : []),

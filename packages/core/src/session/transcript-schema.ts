@@ -4,6 +4,10 @@ import type { RawSqlExec } from '../types/primitives';
 /** The chat session every conversational read and write uses. */
 export const CHAT_SESSION_ID = 'default';
 
+/** A transcript frame's newest messages: what a tab is sent of a conversation, as it connects or a turn ends. The pane
+ *  pages older rows from storage. */
+export const TRANSCRIPT_WINDOW = 60;
+
 export function initSessionTranscriptTables(exec: RawSqlExec): void {
   exec(`CREATE TABLE IF NOT EXISTS conversation_entries (
     actor_id TEXT NOT NULL,

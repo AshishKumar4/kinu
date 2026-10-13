@@ -31,8 +31,8 @@ function retainedDatabase() {
   };
 
   const database = new AgentDatabase(context.storage, {
-    agent: () => files, home: WORKSPACE_ROOT, state: refuse, enqueueTurn: refuse, broadcast: refuse,
-    turnInFlight: () => false, memory: refuse, program: refuse, sayToParent: refuse, logActivity: refuse,
+    agent: () => files, home: WORKSPACE_ROOT, state: refuse, enqueueTurn: refuse, admitDelivery: refuse, broadcast: refuse,
+    turnInFlight: () => false, memory: refuse, program: refuse, sayToParent: refuse, receipts: refuse, logActivity: refuse,
   });
 
   const identity = created.sql<StoredRow>`SELECT * FROM workspace_identity`[0];
@@ -41,6 +41,7 @@ function retainedDatabase() {
   database.adopt({ identity,
     lineage: created.sql<StoredRow>`SELECT * FROM workspace_actors WHERE actor_id IN (${actors.main.actorId}, ${child.actorId}) ORDER BY parent_actor_id`,
     config: [], scaffold: [], workspaceName: 'inspection-owner', installedBuild: null, artifactDirectory: `${WORKSPACE_ROOT}/.kinu/retained`,
+    order: { activation: 'inspection', seq: 1 },
   });
 
   const history = new SessionHistory({ sql: created.sql, actor: child, transactionSync: write => created.db.transaction(write)(),

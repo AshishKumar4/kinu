@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { writeWorkspaceSoul } from '@kinu.run/core';
+import { localForkConversationSource, writeWorkspaceSoul } from '@kinu.run/core';
 import {
   deliverCloudFork, type CloudForkRegistry, type CloudForkSource, type CloudForkTarget,
 } from '../src/user/workspace-fork';
@@ -19,7 +19,7 @@ async function source(): Promise<CloudForkSource> {
 
   return {
     sql: ws.sql, vfs: ws.forkSource, actor, untilMessageId: 'm1', artifactDirectory: SOURCE_ARTIFACTS,
-    appData: appDataOf(ws).fork,
+    appData: appDataOf(ws).fork, conversation: localForkConversationSource(ws.sql, actor),
   };
 }
 

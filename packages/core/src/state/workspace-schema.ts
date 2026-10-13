@@ -2,6 +2,9 @@
 // declared in `conformance/manifest.ts`, which checks `sqlite_master` against this.
 
 import { initAgentOpenTurnsTable } from '../subordinates/open-turns';
+import { initAgentReportsTable, initAgentSequenceTable } from '../subordinates/report-sequence';
+import { initTurnFenceTable } from '../subordinates/turn-fence';
+import { initAgentDeliveriesTable, initAgentStopsTable } from '../subordinates/deliveries';
 import { initTurnReportTable } from '../subordinates/turn-reports';
 import { initAgentFiguresTable } from '../read-models/agent-figures';
 import type { RawSqlExec, SqlExec, SqlExecutor, Storage } from '../types/primitives';
@@ -40,6 +43,7 @@ import { initGitHubActivityTable } from '../github/activity';
 import { initAlternateTakesTable } from '../mcts/takes';
 import { initMctsSearchTable } from '../mcts/search-store';
 import { initFactsTable } from '../memory/facts';
+import { initSubordinateRosterTable } from '../subordinates/roster';
 import { initTaskListTable } from '../tools/task-store';
 import { initArtifactTables, initTrialTables } from '../evolution/artifact-schema';
 import { initSlateStateTable } from '../slates/state';
@@ -101,15 +105,35 @@ function initCompactionStateTables(execRaw: RawSqlExec): void {
 }
 
 export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
-  db.transactionSync(() => { createWorkspaceTables(db); });
+  db.transactionSync(() => {
+    createAgentTables(db);
+    createAgentLifecycleTables(db.execRaw);
+  });
 }
 
-function createWorkspaceTables(db: WorkspaceSchemaSql): void {
+/** An agent's own isolate's database: what its stores use, without the workspace's side of its agents' lifecycle. */
+export function initAgentIsolateSchema(db: WorkspaceSchemaSql): void {
+  db.transactionSync(() => { createAgentTables(db); });
+}
+
+/** The workspace's side of its agents' lifecycle, read and written only over its own database: the turns it handed
+ *  out, the reports it took, the fence its calls hold and the Stops it owes. */
+function createAgentLifecycleTables(execRaw: RawSqlExec): void {
+  initAgentOpenTurnsTable(execRaw);
+  initAgentReportsTable(execRaw);
+  initTurnFenceTable(execRaw);
+  initAgentStopsTable(execRaw);
+}
+
+function createAgentTables(db: WorkspaceSchemaSql): void {
   const { execRaw } = db;
   initWorkspaceOwnershipTables(execRaw);
   initWorkspaceActorTable(execRaw);
-  initAgentOpenTurnsTable(execRaw);
+  initAgentSequenceTable(execRaw);
+  initAgentDeliveriesTable(execRaw);
+  // Its figures folded where its run events are, in its own isolate; the workspace keeps those reported to it.
   initAgentFiguresTable(execRaw);
+  initSubordinateRosterTable(db.exec);
   initActorStateSchema(db);
   execRaw(`CREATE TABLE IF NOT EXISTS slates (
     id TEXT NOT NULL, workspace_id TEXT NOT NULL, revision INTEGER NOT NULL, bytes BLOB NOT NULL,

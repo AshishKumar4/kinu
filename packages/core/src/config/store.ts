@@ -3,6 +3,7 @@ import { markStoreChanged } from '@kinu.run/agent-utils';
 import { Effect } from 'effect';
 import { settleSync } from '../obs/effect';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
+import type { Holds } from '../utils/held-reads';
 import { nameOriginOf, type NameOrigin } from '../identity/naming';
 import { isAccountName, isProviderScope } from '../credentials/accounts';
 import { isReasoningEffort, type ReasoningEffort } from '../providers/reasoning-effort';
@@ -158,14 +159,33 @@ export function initAgentConfigTable(execRaw: RawSqlExec): void {
   )`);
 }
 
+/** Each actor's whole `actor_config`, from one read: a key it lacks is unset, and its default needs no statement. */
+function configRows(sql: SqlExecutor, actorId: string): ReadonlyMap<string, string> {
+  return new Map(sql<{ key: string; value: string }>`SELECT key, value FROM actor_config WHERE actor_id = ${actorId}`
+    .map((row) => [row.key, row.value]));
+}
+
+/** Set once per executor by {@link holdConfig}: its database's config, held by the database's own reads, which any
+ *  statement writing `actor_config` drops. */
+const heldConfigs = new WeakMap<SqlExecutor, (actorId: string) => ReadonlyMap<string, string>>();
+
+/**
+ * Config stores over `sql` hold what they read from now on, through `holds`, the held reads of the database `sql` alone
+ * writes (a Durable Object's). The CLI's file has other processes, and its stores ask per read.
+ */
+export function holdConfig(sql: SqlExecutor, holds: Holds): void {
+  if (!heldConfigs.has(sql)) heldConfigs.set(sql, holds.holdEach(['actor_config'], (actorId: string) => configRows(sql, actorId)));
+}
+
 export function createAgentConfigStore(sql: SqlExecutor, actorId: string, authorize: () => void): AgentConfigStore {
+  // Asked per call: a store made before its database's config was held reads it held from then on.
   const get = (key: string): string | null => {
     authorize();
+    const held = heldConfigs.get(sql);
 
-    const rows = sql<{ value: string }>`
-      SELECT value FROM actor_config WHERE actor_id = ${actorId} AND key = ${key} LIMIT 1`;
+    if (held !== undefined) return held(actorId).get(key) ?? null;
 
-    return rows[0]?.value ?? null;
+    return sql<{ value: string }>`SELECT value FROM actor_config WHERE actor_id = ${actorId} AND key = ${key} LIMIT 1`[0]?.value ?? null;
   };
 
   const set = (key: string, value: string): void => {
@@ -238,12 +258,8 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     delete: remove,
     all() {
       authorize();
-      const rows = sql<{ key: string; value: string }>`SELECT key, value FROM actor_config WHERE actor_id = ${actorId}`;
-      const out: Record<string, string> = {};
 
-      for (const r of rows) out[r.key] = r.value;
-
-      return out;
+      return Object.fromEntries(heldConfigs.get(sql)?.(actorId) ?? configRows(sql, actorId));
     },
     getModel() { return get(AGENT_CONFIG_KEYS.model); },
     setModel(spec) { set(AGENT_CONFIG_KEYS.model, spec); },
@@ -279,14 +295,14 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     getDisplayName() { return get(AGENT_CONFIG_KEYS.displayName); },
     setDisplayName(name) { set(AGENT_CONFIG_KEYS.displayName, name); },
     getNameOrigin() {
-      const v = get(AGENT_CONFIG_KEYS.nameOrigin);
+      const stored = get(AGENT_CONFIG_KEYS.nameOrigin);
 
-      return v === null ? null : nameOriginOf(v);
+      return stored === null ? null : nameOriginOf(stored);
     },
     setNameOrigin(origin) { set(AGENT_CONFIG_KEYS.nameOrigin, origin); },
     setDisplayNameOrigin(name, origin) {
       authorize();
-      void sql`
+        void sql`
         INSERT INTO actor_config (actor_id, key, value) VALUES
           (${actorId}, ${AGENT_CONFIG_KEYS.displayName}, ${name}),
           (${actorId}, ${AGENT_CONFIG_KEYS.nameOrigin}, ${origin})
@@ -317,9 +333,9 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
       return settleSync(setValid(AGENT_CONFIG_KEYS.roleChangePolicy, policy, valid, 'role change policy'));
     },
     getShellApprovalMode(): ShellApprovalMode {
-      const v = get(AGENT_CONFIG_KEYS.shellApprovalMode);
+      const stored = get(AGENT_CONFIG_KEYS.shellApprovalMode);
 
-      return v === 'allow_all' || v === 'deny_all' ? v : 'strict';
+      return stored === 'allow_all' || stored === 'deny_all' ? stored : 'strict';
     },
     setShellApprovalMode(mode) {
       const valid = mode === 'strict' || mode === 'allow_all' || mode === 'deny_all';
@@ -360,17 +376,17 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
       return settleSync(setValid(AGENT_CONFIG_KEYS.advisorMinSeverity, severity, isAdvisorSeverity(severity), 'advisor severity'));
     },
     getAlwaysActiveSkills() {
-      const v = get(AGENT_CONFIG_KEYS.alwaysActiveSkills);
+      const stored = get(AGENT_CONFIG_KEYS.alwaysActiveSkills);
 
-      if (!v) return [];
+      if (!stored) return [];
 
-      return v.split(',').map(s => s.trim()).filter(Boolean);
+      return stored.split(',').map(s => s.trim()).filter(Boolean);
     },
     setAlwaysActiveSkills(names) {
-      const v = Array.from(new Set(names.map(n => n.trim()).filter(Boolean))).join(',');
+      const joined = Array.from(new Set(names.map(n => n.trim()).filter(Boolean))).join(',');
 
-      if (v.length === 0) remove(AGENT_CONFIG_KEYS.alwaysActiveSkills);
-      else set(AGENT_CONFIG_KEYS.alwaysActiveSkills, v);
+      if (joined.length === 0) remove(AGENT_CONFIG_KEYS.alwaysActiveSkills);
+      else set(AGENT_CONFIG_KEYS.alwaysActiveSkills, joined);
     },
     getLastActiveExecutor() { return get(AGENT_CONFIG_KEYS.lastActiveExecutor); },
     setLastActiveExecutor(name) {

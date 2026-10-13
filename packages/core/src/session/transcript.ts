@@ -446,7 +446,7 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
       const metadata = entry.metadata === null ? undefined : await this.payloads.read(entry.metadata);
       this.actor.assertCurrent();
 
-      if (turnAuthor({ id: entry.id, metadata }) === 'operator') return true;
+      if (turnAuthor({ metadata }) === 'operator') return true;
     }
 
     return false;

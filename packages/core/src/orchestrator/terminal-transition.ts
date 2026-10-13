@@ -8,6 +8,7 @@ import { argumentDigest } from '../safety/argument-digest';
 import { Effect } from 'effect';
 import { attempt, diagnostics, hold, renderThrownChain, toKinuError } from '../obs/index';
 import type { SqlExecutor } from '../types/primitives';
+import { ASKED, type Holds } from '../utils/held-reads';
 import type { ActorHandle } from '../identity/actor-handle';
 import {
   TERMINAL_EFFECT_RETRY_BASE_MS,
@@ -50,6 +51,8 @@ export interface TerminalTransitionDeps {
   readonly settled: () => Promise<void>;
   /** Keeps the host alive while a settled turn's detached effects close; settles with `close`. */
   readonly hold: (close: () => Promise<void>) => Promise<void>;
+  /** A Durable Object's held reads; absent, every read asks. */
+  readonly holds?: Holds;
 }
 
 /** Owns the ordering: claim before the first effect, disposition before release, close only on an empty owed set, prune after close. */
@@ -65,16 +68,28 @@ export class TerminalTransitions {
 
   constructor(private readonly deps: TerminalTransitionDeps) {
     this.ledger = new TerminalEffectLedger(deps);
+    const prefix = `${TERMINAL_TRANSITION_CALL_ID}:`;
+
+    // Every tool_effect_claims write is a receipt over the actor's `sql`: this object's claim, settle and release, or
+    // a tool's `withEffectReceipt`. Its hook drops this.
+    this.unsettled = (deps.holds ?? ASKED).hold(['tool_effect_claims'], () => deps.sql<{ turn_id: string; normalized_call_id: string }>`
+      SELECT DISTINCT turn_id, normalized_call_id FROM tool_effect_claims
+      WHERE actor_id = ${deps.actor.actorId}
+        AND normalized_call_id LIKE ${`${prefix}%`} AND result_json IS NULL
+    `.map((row) => ({ turnId: row.turn_id, messageId: row.normalized_call_id.slice(prefix.length) })));
   }
+
+  private readonly unsettled: () => readonly TerminalTransition[];
 
   sequenceId(transition: TerminalTransition): string {
     return `${transition.turnId}/${transition.messageId}`;
   }
 
-  /** The digest binds the row to the turn. */
+  /** The digest binds the row to the turn. An answer closes its turn once, whichever run produced it. */
   private key(transition: TerminalTransition): ToolEffectKey {
     return {
       turnId: transition.turnId,
+      runId: TERMINAL_TRANSITION_CALL_ID,
       callId: `${TERMINAL_TRANSITION_CALL_ID}:${transition.messageId}`,
       digest: argumentDigest({
         tool: TERMINAL_TRANSITION_CALL_ID,
@@ -256,17 +271,8 @@ export class TerminalTransitions {
 
   /** Claimed and never settled; the message id comes back off the call-id suffix. Reads the unsettled claims alone
    *  (`tool_effect_claims_pending`), however many settled before them. */
-  incomplete(): TerminalTransition[] {
-    const prefix = `${TERMINAL_TRANSITION_CALL_ID}:`;
-
-    return this.deps.sql<{ turn_id: string; normalized_call_id: string }>`
-      SELECT DISTINCT turn_id, normalized_call_id FROM tool_effect_claims
-      WHERE actor_id = ${this.deps.actor.actorId}
-        AND normalized_call_id LIKE ${`${prefix}%`} AND result_json IS NULL
-    `.map((row) => ({
-      turnId: row.turn_id,
-      messageId: row.normalized_call_id.slice(prefix.length),
-    }));
+  incomplete(): readonly TerminalTransition[] {
+    return this.unsettled();
   }
 
   /** What a wake must recover: unfinished, not this process's to finish, and not waiting on the owner. */
