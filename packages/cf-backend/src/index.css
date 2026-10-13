@@ -524,10 +524,11 @@ body { background: var(--c-bg); color: var(--c-text); }
 
 /* ── Grouped rows — the mock's inner card: one bordered container whose
       members are separated by dashed rules, not borders of their own. ── */
+/* A group of rows is a card: the card's edge, ground and radius. */
 .p-group {
   border: 1px solid var(--c-border);
   background: var(--c-surface);
-  border-radius: var(--radius-lg);
+  border-radius: var(--r-card);
   overflow: hidden;
 }
 .p-group > * + * { border-top: 1px dashed var(--c-dash); }

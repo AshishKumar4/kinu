@@ -69,6 +69,14 @@ function field(body: Body, keys: readonly (keyof typeof LevelSchema.entries)[]):
   return null;
 }
 
+/** The failure past its refusal sentence: what the provider said and what Kinu made of it, in the chain's order. */
+function afterRefusal(failure: string): string {
+  const refusal = REFUSAL.exec(failure);
+  const rest = refusal === null ? failure : failure.slice(refusal.index + refusal[0].length).replace(/^\.?:\s*/u, '');
+
+  return rest.trim() === '' ? failure : rest.trim();
+}
+
 /** A provider's message without the wrapper it repeats: `AiError: AiError: rate limiting … (c24bf08b-…)`. */
 function cleaned(message: string): string {
   return message.replace(/^(?:\w*Error:\s*)+/u, '').replace(/\s*\([\da-f-]{16,}\)$/iu, '').trim();
@@ -82,7 +90,7 @@ export function turnFailureFacts(failure: string): TurnFailureFacts {
   const body = bodyOf(failure);
   const message = body === null ? null : field(body, ['message']);
   const described = body === null ? null : field(body, ['description', 'detail']);
-  const words = described ?? (message === null ? null : cleaned(message)) ?? failure.split(/\)?\.?: /u).at(-1)?.trim() ?? failure;
+  const words = described ?? (message === null ? null : cleaned(message)) ?? afterRefusal(failure);
   const code = body === null ? null : field(body, ['internalCode', 'code', 'type']);
   const request = body === null ? null : field(body, ['requestId', 'request_id']);
   const said = message === null ? null : cleaned(message);
