@@ -22,7 +22,7 @@
  */
 import type { Browser, ElementHandle, Page } from 'puppeteer';
 import * as v from 'valibot';
-import { AccountMemoryProposalSchema, hostedActorSocketPath, JsonValueSchema, redactSecrets, SLATES_ROOT, type AccountMemoryProposal, type JsonValue } from '@kinu.run/core';
+import { AccountMemoryProposalSchema, CHANGES_MOVED_EVENT, hostedActorSocketPath, JsonValueSchema, redactSecrets, SLATES_ROOT, type AccountMemoryProposal, type JsonValue } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -2007,7 +2007,10 @@ export interface ChangesStormVerdict {
   readonly workspace: string;
   /** How many of the burst's files each tab's Changes pane lists once it settles. */
   readonly listed: readonly number[];
-  /** Each tab's change-set reads, and the read-moved frames it was sent, during the burst. */
+  /** Each tab's change-set reads, and the frames that moved its change-set (`changes_moved`), during the burst. Not
+   *  every read-moved frame: the turn's own (its claim, its agents, its owed work, its ledger) moved 8 to 11 reads per
+   *  turn on staging, none of them the change-set's, and so read 10 and 11 against a bound meant for the burst
+   *  (c6dc27da1 and 71d06f4a9, 2026-10-13; three traced runs: changes_moved once, getExecutorDiff 2 or 3 times). */
   readonly burstReads: readonly number[];
   readonly burstFrames: readonly number[];
   /** The first two tabs' change-set reads while the third opened its Files pane after the burst. */
@@ -2057,7 +2060,7 @@ export async function changesStormStaysBounded(target: FlowTarget): Promise<Chan
     return {
       workspace, listed,
       burstReads: burst.map(reads),
-      burstFrames: burst.map((counts) => counts.received.reads_changed ?? 0),
+      burstFrames: burst.map((counts) => counts.received[CHANGES_MOVED_EVENT] ?? 0),
       idleReads: after.slice(0, 2).map((counts, at) => reads(counts) - reads(burst[at] ?? counts)),
     };
   } finally {
