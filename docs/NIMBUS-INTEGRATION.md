@@ -218,7 +218,7 @@ the plan's limit applies. Locally workerd enforces no CPU limit (its server's
 (workerd README), so the loop holds the whole process and the Stop is never
 answered. Measured on armada, the same on Nimbus 0.15, 0.16 and 0.17: the
 probe's 345–360 s deadline lapses with CPU at 0.999
-(`scripts/turn-file-io.ts --shape=abort`, `abort.node` and `abort.pipe`; 0.15
+(`scripts/turn-file-io.ts --shape=abort` at `9a437a392`, `abort.node` and `abort.pipe`; 0.15
 in the armada artifacts `art-abort-015-baseline-retry`, 0.16 job
 20261011191439-e93bb139, 0.17 jobs 20261011191123-ca5fcf2c and 20261012022155-90848086),
 while `abort.bash` settles in 1.5 s at CPU 0.0002.

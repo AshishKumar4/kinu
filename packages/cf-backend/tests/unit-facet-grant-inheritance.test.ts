@@ -3,7 +3,7 @@
 // from the surface is silently unreachable rather than a build error.
 import { describe, expect, test } from 'bun:test';
 import {
-  createInheritedApprovalPolicy, egressSecretRule, gateExec,
+  createInheritedApprovalPolicy, gateExec,
   grantsAreSubset, resolveInheritedGrants, AGENT_RPC_ACCESS,
   type ApprovalGrant, type ShellApprovalMode, wordsOnly,
 } from '@kinu.run/core';
@@ -18,7 +18,7 @@ const GATED_RULE = 'git-force-push';
 const ROOT_GRANTS: ApprovalGrant[] = [
   { rule: 'rm-recursive', executor: 'sandbox' },
   { rule: GATED_RULE, executor: 'sandbox' },
-  { rule: egressSecretRule('stripe'), executor: 'sandbox' },
+  { rule: 'egress-secret:stripe', executor: 'sandbox' },
 ];
 
 describe('reachability of the root policy read', () => {
@@ -147,13 +147,13 @@ describe('a facet holds the root set, or a subset of it', () => {
 
   test('a facet cannot hold a grant its root lacks', async () => {
     const policy = createInheritedApprovalPolicy(source('strict', [
-      { rule: egressSecretRule('prod-db'), executor: 'sandbox' },
+      { rule: 'egress-secret:prod-db', executor: 'sandbox' },
     ]).deps);
 
     await policy.resolve?.();
-    expect(policy.granted?.({ rule: egressSecretRule('prod-db'), executor: 'sandbox' })).toBe(false);
+    expect(policy.granted?.({ rule: 'egress-secret:prod-db', executor: 'sandbox' })).toBe(false);
     expect(grantsAreSubset(
-      resolveInheritedGrants({ root: ROOT_GRANTS, own: [{ rule: egressSecretRule('prod-db'), executor: 'sandbox' }] }),
+      resolveInheritedGrants({ root: ROOT_GRANTS, own: [{ rule: 'egress-secret:prod-db', executor: 'sandbox' }] }),
       ROOT_GRANTS,
     )).toBe(true);
   });
@@ -165,7 +165,7 @@ describe('a facet holds the root set, or a subset of it', () => {
 
     await policy.resolve?.();
     expect(policy.granted?.({ rule: 'rm-recursive', executor: 'sandbox' })).toBe(true);
-    expect(policy.granted?.({ rule: egressSecretRule('stripe'), executor: 'sandbox' })).toBe(false);
+    expect(policy.granted?.({ rule: 'egress-secret:stripe', executor: 'sandbox' })).toBe(false);
   });
 
   test('the root\'s MODE applies too, so a facet does not silently harden to strict', async () => {

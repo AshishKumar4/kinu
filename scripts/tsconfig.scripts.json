@@ -32,12 +32,6 @@
     "schema-drift.ts",
     "worker-heap/driver.ts",
     "worker-heap/product.ts",
-    "worker-heap/kinu-product.d.ts",
-    "turn-file-io.ts",
-    "turn-file-io/driver.ts",
-    "turn-file-io/facet.ts",
-    "turn-file-io/meter.ts",
-    "turn-file-io/product.ts",
-    "turn-file-io/kinu-product.d.ts"
+    "worker-heap/kinu-product.d.ts"
   ]
 }
