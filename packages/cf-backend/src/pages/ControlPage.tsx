@@ -7,16 +7,16 @@ import {
 } from '@phosphor-icons/react';
 import {
   fetchAudit, fetchFeedback, fetchIncidents, fetchMetrics, fetchOverview, fetchUserDetail,
-  fetchUsers, fetchWorkspaces,
-  type ControlAuditRow, type ControlFeedbackRow, type ControlUserRow, type ControlWorkspaceRow,
-  type ReconcileReport,
+  fetchUsers, fetchWorkspaces, type ReconcileReport,
 } from '../lib/control-api';
-import { METRICS_WINDOWS } from '@kinu.run/core/control-plane';
+import {
+  METRICS_WINDOWS, type AnalyticsResult, type ControlAuditRow, type ControlFeedbackRow, type ControlUserRow,
+  type ControlWorkspaceRow,
+} from '@kinu.run/core/control-plane';
 import { workspaceDisplayTitle, type SeekCursor } from '@kinu.run/core';
 import {
   bytes, Notice, PageWalker, Panel, SectionHeader, Stat, useControlRead, when,
 } from '../components/control/panels';
-import { type AnalyticsPanel } from '../lib/control-api';
 import { WorkspaceDrilldown } from '../components/control/WorkspaceDrilldown';
 
 const TABS = {
@@ -435,7 +435,7 @@ function MetricsView(): ReactNode {
   );
 }
 
-function PanelBody({ panel }: { panel: AnalyticsPanel }): ReactNode {
+function PanelBody({ panel }: { panel: AnalyticsResult }): ReactNode {
   if (panel.status === 'ok') return <MetricTable rows={panel.rows} />;
 
   if (panel.status === 'unconfigured') return <div className="text-xs p-text-3">{panel.missing.join(', ')} not set</div>;
@@ -443,7 +443,7 @@ function PanelBody({ panel }: { panel: AnalyticsPanel }): ReactNode {
   return <div className="text-xs p-danger">{panel.reason}</div>;
 }
 
-function MetricTable({ rows }: { rows: Extract<AnalyticsPanel, { status: 'ok' }>['rows'] }): ReactNode {
+function MetricTable({ rows }: { rows: Extract<AnalyticsResult, { status: 'ok' }>['rows'] }): ReactNode {
   const columns = useMemo(() => Object.keys(rows[0] ?? {}), [rows]);
 
   if (rows.length === 0) return <div className="text-xs p-text-3">No events in this window.</div>;

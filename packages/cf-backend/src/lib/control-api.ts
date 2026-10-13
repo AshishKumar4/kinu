@@ -1,83 +1,25 @@
 /**
  * Typed client for `/api/control/*`. Every read is parsed, never cast: operators make destructive decisions from these.
- * Schemas mirror the store rows without importing the DO module graph into the browser bundle.
+ * Rows are parsed by the store's own schemas; the envelopes below are this page's narrow projections.
  */
+import { Effect } from 'effect';
 import { JsonValueSchema, pageSchema, type JsonValue, type Page } from '@kinu.run/core';
-import { tolerateAsync } from '@kinu.run/core/obs';
+import {
+  ControlAuditRowSchema, ControlMetricsSchema, ControlOverviewSchema, ControlUserRowSchema, ControlWorkspaceRowSchema,
+  FeedbackRecordSchema, type ControlAuditRow, type ControlFeedbackRow, type ControlMetrics, type ControlOverview,
+  type ControlUserRow, type ControlWorkspaceRow,
+} from '@kinu.run/core/control-plane';
+import { settle, tolerateAsync } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import type { ControlAction } from '../control-plane/actions';
+import { refusal, respond } from './http';
 
-const ErrorBodySchema = v.object({ error: v.optional(v.string()) });
-
-const ControlUserRowSchema = v.object({
-  userId: v.string(),
-  email: v.string(),
-  displayName: v.nullable(v.string()),
-  firstSeenAt: v.number(),
-  lastSeenAt: v.number(),
-  workspaces: v.number(),
-});
-
-export type ControlUserRow = v.InferOutput<typeof ControlUserRowSchema>;
-
-const ControlWorkspaceRowSchema = v.object({
-  userId: v.string(),
-  email: v.string(),
-  name: v.string(),
-  displayName: v.string(),
-  createdAt: v.number(),
-  lastSeenAt: v.number(),
-  removedAt: v.nullable(v.number()),
-});
-
-export type ControlWorkspaceRow = v.InferOutput<typeof ControlWorkspaceRowSchema>;
-
-const ControlFeedbackRowSchema = v.object({
-  id: v.string(),
-  createdAt: v.number(),
-  userId: v.string(),
-  email: v.string(),
-  note: v.string(),
-  route: v.string(),
-  workspace: v.nullable(v.string()),
-  objectKey: v.nullable(v.string()),
-  bytes: v.nullable(v.number()),
-});
-
-export type ControlFeedbackRow = v.InferOutput<typeof ControlFeedbackRowSchema>;
-
-const ControlAuditRowSchema = v.object({
-  id: v.string(),
-  at: v.number(),
-  actorEmail: v.string(),
-  actorUserId: v.string(),
-  operation: v.string(),
-  targetKind: v.string(),
-  target: v.string(),
-  /** `pending`: the two-phase write's outcome was never recorded. */
-  outcome: v.picklist(['pending', 'ok', 'denied', 'failed']),
-  detail: v.string(),
-});
-
-export type ControlAuditRow = v.InferOutput<typeof ControlAuditRowSchema>;
-
-const ControlOverviewSchema = v.object({
-  users: v.number(),
-  workspaces: v.number(),
-  workspacesRemoved: v.number(),
-  feedback: v.number(),
-  auditEntries: v.number(),
-  lastAdminActionAt: v.nullable(v.number()),
-  activeUsers24h: v.number(),
-  activeUsers7d: v.number(),
-});
-
-export type ControlOverview = v.InferOutput<typeof ControlOverviewSchema>;
-
+/** The monitor's open incident, as `MonitorDO.listIncidents` answers it. */
 const MonitorIncidentSchema = v.object({
   probe: v.string(),
   detail: v.string(),
   openedAt: v.number(),
+  /** Null while the alert is still owed. */
   alertedAt: v.nullable(v.number()),
   failures: v.number(),
 });
@@ -153,24 +95,6 @@ const UserDetailSchema = v.object({
 
 export type UserDetail = v.InferOutput<typeof UserDetailSchema>;
 
-const AnalyticsResultSchema = v.variant('status', [
-  v.object({ status: v.literal('ok'), rows: v.array(v.record(v.string(), v.union([
-    v.string(), v.number(), v.boolean(), v.null(),
-  ]))) }),
-  v.object({ status: v.literal('unconfigured'), missing: v.array(v.string()) }),
-  v.object({ status: v.literal('failed'), reason: v.string() }),
-]);
-
-const ControlMetricsSchema = v.object({
-  windowHours: v.number(),
-  missing: v.array(v.string()),
-  panels: v.record(v.string(), AnalyticsResultSchema),
-});
-
-export type ControlMetrics = v.InferOutput<typeof ControlMetricsSchema>;
-
-export type AnalyticsPanel = v.InferOutput<typeof AnalyticsResultSchema>;
-
 const ActionAnswerSchema = v.object({
   outcome: v.picklist(['ok', 'denied', 'failed']),
   detail: v.string(),
@@ -191,44 +115,35 @@ export type ControlAnswer<Value> =
   | { status: 'unconfigured'; reason: string }
   | { status: 'failed'; reason: string };
 
-interface ControlRequest {
-  method?: string;
-  body?: string;
-}
-
-async function control<Schema extends v.GenericSchema>(
+function control<Schema extends v.GenericSchema>(
   schema: Schema,
   path: string,
-  init: ControlRequest = {},
-): Promise<ControlAnswer<v.InferOutput<Schema>>> {
-  const response = await fetch(`/api/control${path}`, {
-    ...init,
-    headers: { 'content-type': 'application/json' },
-  });
+  asked: { readonly method?: string; readonly json?: ControlAction } = {},
+): Effect.Effect<ControlAnswer<v.InferOutput<Schema>>> {
+  const url = `/api/control${path}`;
 
-  const body = await tolerateAsync(() => response.json(), 'malformed-input');
+  return Effect.gen(function* () {
+    const response = yield* respond(url, asked);
 
-  if (response.ok) {
-    const parsed = v.safeParse(schema, body);
+    if (!response.ok) {
+      const { message: reason } = yield* refusal(response, asked.method ?? 'GET', url);
+
+      if (response.status === 404) return { status: 'forbidden', reason };
+
+      if (response.status === 403) return { status: 'stale-auth', reason };
+
+      if (response.status === 503) return { status: 'unconfigured', reason };
+
+      return { status: 'failed', reason };
+    }
+
+    const parsed = v.safeParse(schema, yield* Effect.promise(() => tolerateAsync(() => response.json(), 'malformed-input')));
 
     return parsed.success
       ? { status: 'ok', value: parsed.output }
       // A body this client cannot read is page/Worker version skew; say so rather than throw a valibot path.
       : { status: 'failed', reason: 'the control plane answered in a shape this page cannot read' };
-  }
-
-  const error = v.safeParse(ErrorBodySchema, body);
-
-  const reason = (error.success ? error.output.error : undefined)
-    ?? `HTTP ${String(response.status)}`;
-
-  if (response.status === 404) return { status: 'forbidden', reason };
-
-  if (response.status === 403) return { status: 'stale-auth', reason };
-
-  if (response.status === 503) return { status: 'unconfigured', reason };
-
-  return { status: 'failed', reason };
+  });
 }
 
 function pageQuery(cursor: string | null, limit?: number): string {
@@ -243,23 +158,23 @@ function pageQuery(cursor: string | null, limit?: number): string {
 }
 
 export function fetchOverview(): Promise<ControlAnswer<ControlOverview>> {
-  return control(ControlOverviewSchema, '/overview');
+  return settle(control(ControlOverviewSchema, '/overview'));
 }
 
 export function fetchUsers(
   cursor: string | null = null, limit?: number,
 ): Promise<ControlAnswer<Page<ControlUserRow>>> {
-  return control(pageSchema(ControlUserRowSchema), `/users${pageQuery(cursor, limit)}`);
+  return settle(control(pageSchema(ControlUserRowSchema), `/users${pageQuery(cursor, limit)}`));
 }
 
 /** Cursored: rows past the page ceiling must stay reachable. */
 export function fetchUserDetail(
   userId: string, cursor: string | null = null, limit?: number,
 ): Promise<ControlAnswer<UserDetail>> {
-  return control(
+  return settle(control(
     UserDetailSchema,
     `/users/${encodeURIComponent(userId)}${pageQuery(cursor, limit)}`,
-  );
+  ));
 }
 
 /** Mirrors the store's filter so both agree on what an absent `userId` means. */
@@ -284,36 +199,36 @@ export function fetchWorkspaces(
   if (options.includeRemoved === true) params.set('includeRemoved', '1');
   const query = params.toString();
 
-  return control(
+  return settle(control(
     pageSchema(ControlWorkspaceRowSchema),
     `/workspaces${query.length > 0 ? `?${query}` : ''}`,
-  );
+  ));
 }
 
 /** `userId` is required: names are unique only per UserDO and `OrchestratorAgent` is addressed globally. */
 export function fetchWorkspaceDetail(
   userId: string, name: string,
 ): Promise<ControlAnswer<WorkspaceDetail>> {
-  return control(
+  return settle(control(
     WorkspaceDetailSchema,
     `/workspaces/${encodeURIComponent(name)}?userId=${encodeURIComponent(userId)}`,
-  );
+  ));
 }
 
 export function fetchIncidents(): Promise<ControlAnswer<{ incidents: MonitorIncident[] }>> {
-  return control(IncidentsSchema, '/incidents');
+  return settle(control(IncidentsSchema, '/incidents'));
 }
 
 export function fetchFeedback(
   cursor: string | null = null, limit?: number,
 ): Promise<ControlAnswer<Page<ControlFeedbackRow>>> {
-  return control(pageSchema(ControlFeedbackRowSchema), `/feedback${pageQuery(cursor, limit)}`);
+  return settle(control(pageSchema(FeedbackRecordSchema), `/feedback${pageQuery(cursor, limit)}`));
 }
 
 export function fetchAudit(
   cursor: string | null = null, limit?: number,
 ): Promise<ControlAnswer<Page<ControlAuditRow>>> {
-  return control(pageSchema(ControlAuditRowSchema), `/audit${pageQuery(cursor, limit)}`);
+  return settle(control(pageSchema(ControlAuditRowSchema), `/audit${pageQuery(cursor, limit)}`));
 }
 
 export function fetchMetrics(hours: number, workspace?: string): Promise<ControlAnswer<ControlMetrics>> {
@@ -321,12 +236,10 @@ export function fetchMetrics(hours: number, workspace?: string): Promise<Control
 
   if (workspace !== undefined && workspace.length > 0) params.set('workspace', workspace);
 
-  return control(ControlMetricsSchema, `/metrics?${params.toString()}`);
+  return settle(control(ControlMetricsSchema, `/metrics?${params.toString()}`));
 }
 
 /** `stale-auth` is expected (step-up window lapses with the tab open); the page turns it into "sign in again". */
 export function runAction(action: ControlAction): Promise<ControlAnswer<ActionAnswer>> {
-  return control(ActionAnswerSchema, '/actions', {
-    method: 'POST', body: JSON.stringify(action),
-  });
+  return settle(control(ActionAnswerSchema, '/actions', { method: 'POST', json: action }));
 }
