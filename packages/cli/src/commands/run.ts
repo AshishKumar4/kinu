@@ -1,5 +1,5 @@
 import * as readline from 'node:readline';
-import { callAgentRpc, createCloudWebhookTrigger, type CloudWebhookTriggerInput } from '../cloud-api';
+import { callAgentRpc, createCloudWebhookTrigger } from '../cloud-api';
 import { listConfiguredAgentRefs, requireAuthConfig } from '../config';
 import { resolveAgentTarget, type AgentTarget } from '../agent-target';
 import { createAgentClient, type AgentClientFlags } from '../client-factory';
@@ -15,7 +15,7 @@ import { ensureLocalDaemonRunning } from './daemon';
 import { resolvePromptAttachments } from '../attachments';
 import { watchHeadlessConsents, watchTerminalConsents, type ConsentWatcher } from '../consent-watch';
 import { DIM, ERR, formatFailure, printFailure, printStepCut, printToolCall, printToolResult } from '../display';
-import { normalizeWebhookAuthMode, numberField, oneOfFlag, stringField } from '../options';
+import { numberField, oneOfFlag, stringField, webhookTriggerInput } from '../options';
 import {
   executeLocalExecutor,
   getLocalAgentState,
@@ -448,20 +448,12 @@ async function runCloudRpcCommand(origin: string, token: string, name: string, c
 
       if (!label) throw new Error('label required');
 
-      const input: CloudWebhookTriggerInput = {
-        label,
-        auth_mode: normalizeWebhookAuthMode(stringField(cmd, 'authMode') ?? stringField(cmd, 'auth_mode')),
-      };
-
-      const secret = stringField(cmd, 'secret');
-      const contentType = stringField(cmd, 'contentType');
-      const rateLimit = numberField(cmd, 'rateLimit');
-
-      if (secret) input.secret = secret;
-
-      if (contentType) input.accepted_content_type = contentType;
-
-      if (rateLimit) input.rate_limit_per_min = rateLimit;
+      const input = webhookTriggerInput(label, {
+        authMode: stringField(cmd, 'authMode') ?? stringField(cmd, 'auth_mode'),
+        secret: stringField(cmd, 'secret'),
+        contentType: stringField(cmd, 'contentType'),
+        rateLimit: numberField(cmd, 'rateLimit'),
+      });
 
       return decodeJsonValue({ value: await createCloudWebhookTrigger(origin, token, name, input) });
     }
