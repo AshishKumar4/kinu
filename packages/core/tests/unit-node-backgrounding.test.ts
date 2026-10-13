@@ -5,7 +5,8 @@
  */
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { tool, jsonSchema, type LanguageModel, type ToolSet } from 'ai';
+import { tool, jsonSchema, type LanguageModel } from 'ai';
+import type { CodemodeBuilder } from '../src/tools/builtins';
 import type { LanguageModelV4Content } from '@ai-sdk/provider';
 import { scriptedTurnModel, unobservedSpend } from '@kinu.run/test-utils';
 import { createTestRuntime } from './helpers';
@@ -166,7 +167,7 @@ interface Fixture {
 
 function fixture(over: {
   readonly model: LanguageModel;
-  readonly codemodeTool?: (finished: ToolSet) => ToolSet[string];
+  readonly codemode?: CodemodeBuilder;
 }): Fixture {
   const { rt, db } = createTestRuntime();
   initHeadsTables(rt.storage.execRaw);
@@ -219,9 +220,9 @@ function fixture(over: {
     }),
   };
 
-  const codemodeTool = over.codemodeTool;
+  const codemode = over.codemode;
 
-  if (codemodeTool !== undefined) deps.nodeCodemode = () => codemodeTool;
+  if (codemode !== undefined) deps.nodeCodemode = () => codemode;
 
   const jobStarted = (): Promise<void> => started.promise;
 
@@ -246,7 +247,7 @@ describe('a node backgrounds work, ends its turn, and is woken to finish', () =>
 
     const { input, deps, journal, detached, jobStarted } = fixture({
       model: detachThenReport(prompts, (count) => { if (count === 2) secondRequest.resolve(); }),
-      codemodeTool: () => slow.entry,
+      codemode: () => slow.entry,
     });
 
     const running = runNodeAgent(input, deps);
@@ -296,7 +297,7 @@ describe('a node backgrounds work, ends its turn, and is woken to finish', () =>
     const prompts: string[][] = [];
 
     const { input, deps, detached, jobStarted } = fixture({
-      model: detachThenReport(prompts), codemodeTool: () => slow.entry,
+      model: detachThenReport(prompts), codemode: () => slow.entry,
     });
 
     const running = runNodeAgent(input, deps);
@@ -319,7 +320,7 @@ describe('a node backgrounds work, ends its turn, and is woken to finish', () =>
     const prompts: string[][] = [];
 
     const { input, deps, frames, jobStarted } = fixture({
-      model: detachThenReport(prompts), codemodeTool: () => slow.entry,
+      model: detachThenReport(prompts), codemode: () => slow.entry,
     });
 
     const running = runNodeAgent(input, deps);
@@ -346,11 +347,10 @@ describe('a node backgrounds work, ends its turn, and is woken to finish', () =>
   });
 });
 
-describe('a node resolves a function-form codemodeTool through the finished surface', () => {
+describe('a node builds its eval through its codemode builder', () => {
   test('function-form dep becomes a working eval, not the NOT CONFIGURED stub', async () => {
-    // `deps.codemodeTool` may be a function of the finished surface; the node must resolve it
-    // as `buildHeadToolSet` does rather than handing it raw to `prebuiltCodemodeTool`.
-    const factoryForm = (_finished: ToolSet) => tool({
+    // The node installs `eval` from its builder as `buildHeadToolSet` does.
+    const factoryForm = () => tool({
       description: 'Run code in the sandbox.',
       inputSchema: jsonSchema<{ code: string }>({
         type: 'object', required: ['code'], properties: { code: { type: 'string' } },
@@ -382,7 +382,7 @@ describe('a node resolves a function-form codemodeTool through the finished surf
       },
     });
 
-    const { input, deps } = fixture({ model, codemodeTool: factoryForm });
+    const { input, deps } = fixture({ model, codemode: factoryForm });
     const run: NodeRun = await runNodeAgent(input, deps);
     expect(run.report.status).toBe('completed');
     expect(run.candidate).toContain('factory-ran');

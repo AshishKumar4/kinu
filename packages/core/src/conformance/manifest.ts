@@ -4,9 +4,9 @@
  * against the real composition output in both directions. Test-plane only.
  */
 
-import { ASK_OWNER_TOOL, BUILTIN_TOOLS, SUBMIT_PLAN_TOOL } from '../tools/registry';
+import { ASK_OWNER_TOOL, SUBMIT_PLAN_TOOL } from '../tools/registry';
 import type { BuiltinToolName } from '../tools/registry';
-import { AGENTS_OPS, type AgentsOp } from '../operations/agents';
+import type { AgentsOp } from '../operations/agents';
 import { MEMORY } from '../operations/memory';
 import type { SpendSource } from '../events/model-call';
 
@@ -19,7 +19,7 @@ export const CONFORMANCE_PRODUCERS = ['judge'] as const satisfies readonly Spend
 type ConformanceProducer = (typeof CONFORMANCE_PRODUCERS)[number];
 
 /** cf splits by actor profile because the profiles differ (`actorToolDeps`). */
-export const CONFORMANCE_ROOTS = ['cf-orchestrator', 'cf-subordinate', 'cli'] as const;
+const CONFORMANCE_ROOTS = ['cf-orchestrator', 'cf-subordinate', 'cli'] as const;
 
 export type ConformanceRoot = (typeof CONFORMANCE_ROOTS)[number];
 
@@ -28,7 +28,7 @@ export type CapabilityStatus =
   | { readonly wired: true }
   | { readonly absent: string };
 
-export const WIRED: CapabilityStatus = { wired: true };
+const WIRED: CapabilityStatus = { wired: true };
 
 export type RootStatuses = Readonly<Record<ConformanceRoot, CapabilityStatus>>;
 
@@ -133,10 +133,3 @@ export interface ObservedSurface {
   readonly planes: Partial<Record<ConformancePlane, ReadonlySet<string>>>;
 }
 
-/** Registry-closed planes, to tell "undeclared" from impossible states. */
-export const PLANE_UNIVERSE = {
-  tool: [...BUILTIN_TOOLS, SUBMIT_PLAN_TOOL, ASK_OWNER_TOOL],
-  'agents-op': AGENTS_OPS,
-  'memory-op': Object.keys(MEMORY),
-  producer: CONFORMANCE_PRODUCERS,
-} satisfies Partial<Record<ConformancePlane, readonly string[]>>;

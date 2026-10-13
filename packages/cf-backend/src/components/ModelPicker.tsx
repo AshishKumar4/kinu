@@ -5,11 +5,11 @@ import { ArrowsClockwiseIcon, BrainIcon, EyeIcon, WarningCircleIcon } from "@pho
 import {
   formatContextWindow, formatModelSpec, isReasoningEffort, modelTestText, offeredReasoningEfforts, parseModelSpec, providerName,
   specWithoutAccount,
-  type ReasoningEffort,
+  type ReasoningEffort, type ModelMenuResponse, type ModelMenuEntry, type ProviderFailure,
 } from "@kinu.run/core";
 import {
   cloudflareReconnectPath, listAvailableModels,
-  type ModelMenu, type ModelMenuEntry, type ModelTestResult, type ProviderFailure,
+  type ModelTestResult, 
 } from "../lib/user-api";
 import { connectCloudflareInHelper } from "../lib/connect-window";
 import { badgeCapabilities, groupModelMenu, modelMatchesQuery } from "./model-picker-options";
@@ -96,7 +96,7 @@ export interface ModelPickerProps {
   models: ModelMenuEntry[];
   /** Listed so a broken credential is visible instead of silently shortening the menu. */
   failures?: ProviderFailure[];
-  accounts?: ModelMenu['accounts'];
+  accounts?: ModelMenuResponse['accounts'];
   /** Currently selected spec; '' = no explicit choice. */
   value: string;
   onChange: (spec: string) => void;

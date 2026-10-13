@@ -17,7 +17,7 @@ import { providersCommand } from './commands/providers';
 import { doctorCommand, uninstallCommand, updateCommand } from './commands/self';
 import { statusCommand } from './commands/status';
 import { listCommand } from './commands/list';
-import { effortCommand, jobsCommand, modelCommand, toolsCommand, triggersCommand } from './commands/control';
+import { effortCommand, jobsCommand, modelCommand, toolsCommand, triggersCommand, type ControlOpts } from './commands/control';
 import {
   qualityCommand,
   eventsCommand,
@@ -31,7 +31,6 @@ import {
   spendCommand,
   stopCommand,
   timelineCommand,
-  webhookCommand,
 } from './commands/inspect';
 import { debugCommand } from './commands/debug';
 import { exportCommand, importCommand } from './commands/export-import';
@@ -268,7 +267,7 @@ export function buildProgram(): Command {
     .option('--content-type <type>', 'Accepted webhook content type')
     .option('--rate-limit <n>', 'Webhook deliveries per minute')
     .option('--json', 'Print raw JSON')
-    .action(webhookCommand);
+    .action((name: string, label: string, opts: ControlOpts) => triggersCommand(name, 'webhook', label, opts));
 
   llmOpts(
     program

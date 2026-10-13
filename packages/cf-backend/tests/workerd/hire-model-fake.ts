@@ -509,7 +509,7 @@ export async function hireOutbound(request: Request): Promise<Response> {
   // The hire runs on the workspace's pin too: it is the conversation that opened on the brief.
   if (run.childScript === 'job' && openedOn(body) === JOB_MISSION) return jobLane(body, results);
 
-  // The child's lane: `report` is deps-gated (core's `DEPS_GATED_TOOLS`), so only a hired actor carries it.
+  // The child's lane: `report` is deps-gated, so only a hired actor carries it.
   if (toolNames(body).includes('report')) return await childLane(run, body, results);
 
   // The owner's Plan turn in a hired agent's pane submits its plan, and the feedback turn revises it, each once.

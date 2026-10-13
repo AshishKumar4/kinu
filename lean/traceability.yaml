@@ -123,7 +123,7 @@ requirements:
       - Kinu.Evolution.FullCraftLifecycle.ema_bounded
       - Kinu.Evolution.FullCraftLifecycle.ema_stays_bounded
     tsRefs:
-      - packages/core/src/craft/ema.ts#emaUpdate
+      - packages/core/src/craft/ema.ts#updateCraftScores
     remainingEvidence:
       - The TypeScript uses configurable floating-point arithmetic and unbounded observations rather than this fixed scaled-Nat model
       - WP-F4 differential fixtures after the production arithmetic is settled

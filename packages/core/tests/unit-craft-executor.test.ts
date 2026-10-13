@@ -7,12 +7,12 @@ import { createTestRuntime, conversationsFor, actorJobsFor } from './helpers';
 import { programCodemode } from './helpers-program';
 import {
   buildActorTools,
-  craftFailureMarker,
   selectInjectableCraftedTools,
   type ActorToolsetDeps,
   type CodemodeSurface,
   type JsonValue,
 } from '../src/index';
+import { craftFailureMarker } from '../src/craft/in-episode';
 import { tool, jsonSchema } from 'ai';
 import * as v from 'valibot';
 

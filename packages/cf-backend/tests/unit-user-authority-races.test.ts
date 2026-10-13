@@ -49,19 +49,6 @@ interface CodexTokens {
   expires_in: number;
 }
 
-/** One device-code start body. */
-interface CodexUserCode {
-  user_code: string;
-  device_auth_id: string;
-  interval: number;
-}
-
-/** One device-code poll body: the approval, ready to exchange. */
-interface CodexApproval {
-  authorization_code: string;
-  code_verifier: string;
-}
-
 /** A promise a test resolves by hand, holding a teardown or token endpoint open mid-call. */
 function gate() {
   let open = (): void => {};
@@ -254,106 +241,6 @@ describe('a credential the owner moved while a provider was answering', () => {
     // against this stub would be a legitimate rejection of the now-current credential.
     expect((await harness.userDO.listCredentials(owner)).map((row) => row.key)).toEqual([CODEX_CRED_KEY]);
     expect((await harness.userDO.getCodexStatus(owner)).connected).toBe(true);
-    harness.close();
-  });
-});
-
-describe('a device-code sign-in the owner superseded', () => {
-  const USERCODE_URL = 'https://auth.openai.com/api/accounts/deviceauth/usercode';
-  const POLL_URL = 'https://auth.openai.com/api/accounts/deviceauth/token';
-
-  /** `duringExchange` runs at the final token exchange, the last await before a poll writes. */
-  function codexProvider(options: {
-    userCode: () => string;
-    duringExchange?: () => Promise<void>;
-  }): void {
-    globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL) => {
-      const url = requestUrl(input);
-
-      const json = (body: CodexTokens | CodexUserCode | CodexApproval): Response => new Response(JSON.stringify(body), {
-        status: 200, headers: { 'content-type': 'application/json' },
-      });
-
-      if (url === USERCODE_URL) {
-        return json({ user_code: options.userCode(), device_auth_id: `auth-${options.userCode()}`, interval: 5 });
-      }
-
-      if (url === POLL_URL) return json({ authorization_code: 'code', code_verifier: 'verifier' });
-
-      if (url === CODEX_TOKEN_URL) {
-        await options.duringExchange?.();
-
-        return json({ access_token: 'access-approved', refresh_token: 'refresh-approved', expires_in: 3600 });
-      }
-
-      throw new Error(`unexpected fetch: ${url}`);
-    });
-  }
-
-  test('cannot connect the account after a disconnect closed it', async () => {
-    const harness = createTestUserDO({ durableObjectId: USER_ID });
-    const owner = await testOwner();
-    codexProvider({
-      userCode: () => 'AAAA-BBBB',
-      duringExchange: async () => { await harness.userDO.disconnectCodex(owner, false); },
-    });
-    await harness.userDO.startCodexDeviceFlow(owner);
-
-    const polled = await harness.userDO.pollCodexDeviceFlow(owner);
-
-    expect(polled.connected).toBe(false);
-    expect((await harness.userDO.getCodexStatus(owner)).connected).toBe(false);
-    expect((await harness.userDO.listCredentials(owner)).map((row) => row.key)).toEqual([]);
-    harness.close();
-  });
-
-  test('cannot land its tokens on the attempt that replaced it', async () => {
-    const harness = createTestUserDO({ durableObjectId: USER_ID });
-    const owner = await testOwner();
-    let code = 'AAAA-BBBB';
-    codexProvider({
-      userCode: () => code,
-      duringExchange: async () => {
-        code = 'CCCC-DDDD';
-        await harness.userDO.startCodexDeviceFlow(owner);
-      },
-    });
-    await harness.userDO.startCodexDeviceFlow(owner);
-
-    const polled = await harness.userDO.pollCodexDeviceFlow(owner);
-
-    expect(polled.connected).toBe(false);
-    expect((await harness.userDO.getCodexStatus(owner)).startedFlow)
-      .toMatchObject({ userCode: 'CCCC-DDDD' });
-    expect((await harness.userDO.listCredentials(owner)).map((row) => row.key)).toEqual([]);
-    harness.close();
-  });
-
-  test('a sign-in nothing superseded still connects, once', async () => {
-    const harness = createTestUserDO({ durableObjectId: USER_ID });
-    const owner = await testOwner();
-    codexProvider({ userCode: () => 'AAAA-BBBB' });
-    await harness.userDO.startCodexDeviceFlow(owner);
-
-    expect(await harness.userDO.pollCodexDeviceFlow(owner)).toMatchObject({ connected: true });
-    expect((await harness.userDO.getCodexStatus(owner)).connected).toBe(true);
-    expect((await harness.userDO.getCodexStatus(owner)).startedFlow).toBeNull();
-    expect(await harness.userDO.pollCodexDeviceFlow(owner))
-      .toMatchObject({ connected: false });
-    harness.close();
-  });
-
-  // The eval reviewer runs on two of the owner's logins, the second its fallback: each is its own sign-in.
-  test('a named account seals its own login and leaves the main one as it was', async () => {
-    const harness = createTestUserDO({ durableObjectId: USER_ID });
-    const owner = await testOwner();
-    codexProvider({ userCode: () => 'AAAA-BBBB' });
-    await harness.userDO.startCodexDeviceFlow(owner, 'second');
-
-    expect(await harness.userDO.pollCodexDeviceFlow(owner)).toMatchObject({ connected: true });
-    expect((await harness.userDO.listCredentials(owner)).map((row) => row.key)).toEqual(['codex.oauth@second']);
-    expect((await harness.userDO.getCodexStatus(owner)).connected).toBe(false);
-    await expect(harness.userDO.startCodexDeviceFlow(owner, 'Not An Account')).rejects.toMatchObject({ code: 'bad_input' });
     harness.close();
   });
 });

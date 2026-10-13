@@ -2,9 +2,9 @@
  * Platform bindings a route's env declares but the path under test never reaches, as refusals:
  * the first reach names the binding and fails, so "this path reads no binding" stays checked.
  */
+import { type UserProfile } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { Connection } from 'agents';
-import type { UserProfile } from '../../src/user/profile';
 import type { CliAgentTarget, CliRoutesAuthority, CliRoutesEnv } from '../../src/cli/routes';
 import type { UserRoutesAuthority } from '../../src/user/routes';
 import type { McpAuthority } from '../../src/mcp-server';
@@ -304,7 +304,6 @@ export function userAccount<Built extends Partial<UserRoutesAuthority>>(
     userMcp_presets: refuse('userMcp_presets'),
     userMcp_add: refuse('userMcp_add'),
     userMcp_remove: refuse('userMcp_remove'),
-    userMcp_update: refuse('userMcp_update'),
     userMcp_handleOAuthCallback: refuse('userMcp_handleOAuthCallback'),
     listWorkspaces: refuse('listWorkspaces'),
     listActiveWorkspaces: refuse('listActiveWorkspaces'),
@@ -333,8 +332,6 @@ export function userAccount<Built extends Partial<UserRoutesAuthority>>(
     cancelModelRelay: refuse('cancelModelRelay'),
     getCodexStatus: refuse('getCodexStatus'),
     disconnectCodex: refuse('disconnectCodex'),
-    startCodexDeviceFlow: refuse('startCodexDeviceFlow'),
-    pollCodexDeviceFlow: refuse('pollCodexDeviceFlow'),
     startClaudeSignIn: refuse('startClaudeSignIn'),
     finishClaudeSignIn: refuse('finishClaudeSignIn'),
     chatgptPlan: refuse('chatgptPlan'),
@@ -343,10 +340,8 @@ export function userAccount<Built extends Partial<UserRoutesAuthority>>(
     startChatGptPasteSignIn: refuse('startChatGptPasteSignIn'),
     finishChatGptPasteSignIn: refuse('finishChatGptPasteSignIn'),
     signOutChatGpt: refuse('signOutChatGpt'),
-    listConfig: refuse('listConfig'),
     getConfig: refuse('getConfig'),
     setConfig: refuse('setConfig'),
-    listConnectedProviders: refuse('listConnectedProviders'),
     listCloudflareAccounts: refuse('listCloudflareAccounts'),
     selectCloudflareAccount: refuse('selectCloudflareAccount'),
     listAIGateways: refuse('listAIGateways'),

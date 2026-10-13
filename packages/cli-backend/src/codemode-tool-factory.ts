@@ -6,7 +6,7 @@
 import { KINU_NODE_MODULE_SOURCE, requireBuild, type ToolSurfaceNarrowing } from '@kinu.run/core';
 import type {
   CodemodeProvider,
-  CodemodeBuilder,
+  CodemodeSurface,
   JsonValue,
 } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -17,7 +17,7 @@ import {
   withCraftedToolDeclarations, craftedFailureFunctions, renderCraftedDefinitions,
   codemodeFunction, withCodemodeProgram, execContext, readDeviceRequestChannel,
 } from '@kinu.run/core';
-import { tool } from 'ai';
+import { tool, type ToolSet } from 'ai';
 import { programBody } from './executor';
 import * as v from 'valibot';
 
@@ -61,8 +61,8 @@ interface ExecuteSuccess {
   logs?: string[];
 }
 
-/** Pass as `codemode` to `buildActorTools`, or call with a finished confined surface (heads). */
-export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps): CodemodeBuilder {
+/** `eval` over a surface, reaching what `deps.reach` allows; a confined builder passes the reach it is handed. */
+export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps): (surface: CodemodeSurface) => ToolSet[string] {
   return (surface) => {
     const providers = deps.reach.narrowProviders(deps.namespaces ?? []);
     const describe = describeProgramSource(programDeclarations(providers));

@@ -1686,7 +1686,9 @@ provider), with the daemon attaching its own token and rotating it on a 401.
 With no machine connected, the entry offers the Codex device code as before
 (`codex.ts`, `codex-oauth.ts`, the relay and the egress container), which
 stays until OpenAI approves hosted use. The CLI's Codex device-code login is
-deleted: SIWC serves every CLI use it had. The web keeps it for that one case.
+deleted: SIWC serves every CLI use it had. The web kept it for that one case
+until 2e701da3a (2026-10-05) replaced it with signing in here and pasting back
+the landing address; its routes and flow table went on 2026-10-13.
 `chatgpt.js` is a new daemon sibling, which an older daemon's updater does not
 land: the daemon requires it optionally, reports `<stamp>.incomplete` in HELLO
 while it is missing, and the hub's resulting UPDATE re-lands the same build

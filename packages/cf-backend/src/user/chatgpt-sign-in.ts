@@ -168,7 +168,7 @@ export class UserChatGptSignIn {
 
   /**
    * Paste-back sign-in: the account itself holds the login, so no machine is needed. The PKCE verifier stays here.
-   * `account` names the login it seals, as the Codex device sign-in names its own.
+   * `account` names the login it seals, `<key>@<account>`; the main one is the bare key.
    */
   async startChatGptPasteSignIn(caller: UserCaller, account: string = MAIN_ACCOUNT): Promise<{ readonly authorizeUrl: string; readonly redirectUri: string }> {
     await this.host.requireTier(caller, 'subscription_auth');

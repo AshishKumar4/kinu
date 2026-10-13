@@ -1,9 +1,9 @@
 // Preset adds on the real UserDO; `queueMcpAuthUrl` stands in for the authorization redirect the harness cannot perform.
-import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { describe, expect, test } from 'bun:test';
+import { createCredentialCipher } from '@kinu.run/core';
 import {
-  createTestUserDO, sqlExec, testOwner,
+  createTestUserDO, sqlExec, testOwner, TEST_CREDENTIAL_ENCRYPTION_KEY,
   type TestUserDO, type TestUserDOOptions,
 } from './helpers/user-do';
 import {
@@ -34,10 +34,9 @@ describe('an MCP preset add', () => {
     expect(added.authUrl).toBe('https://mcp.cloudflare.com/authorize?test');
 
     const [row] = sqlExec(h.db).exec(
-      `SELECT s.name, s.server_url, s.transport, p.preset_id
-         FROM user_mcp_servers s
-         LEFT JOIN user_mcp_server_presets p ON p.server_id = s.id
-        WHERE s.id = ?`,
+      `SELECT name, server_url, transport, preset_id
+         FROM user_mcp_servers
+        WHERE id = ?`,
       added.id,
     ).toArray();
 
@@ -64,15 +63,19 @@ describe('an MCP preset add', () => {
     expect(added.authUrl).toBeNull();
 
     const [row] = sqlExec(h.db).exec(
-      `SELECT s.name, s.server_url, p.preset_id, s.headers
-         FROM user_mcp_servers s
-         LEFT JOIN user_mcp_server_presets p ON p.server_id = s.id
-        WHERE s.id = ?`,
+      `SELECT name, server_url, preset_id, headers
+         FROM user_mcp_servers
+        WHERE id = ?`,
       added.id,
     ).toArray();
 
     expect(row?.preset_id).toBe('github');
-    expect(v.parse(v.string(), row?.headers)).not.toContain('ghp_test');
+    const sealed = v.parse(v.string(), row?.headers);
+    expect(sealed).not.toContain('ghp_test');
+    // Sealed for this server: it opens under its own id and under no other.
+    const cipher = await createCredentialCipher({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
+    expect(JSON.parse(await cipher.open(`test-user-do:mcp:${added.id}`, sealed))).toEqual({ Authorization: 'Bearer ghp_test' });
+    await expect(cipher.open('test-user-do:mcp:another', sealed)).rejects.toThrow('failed to decrypt');
 
     const [listed] = await h.userDO.userMcp_list(await testOwner());
     expect(listed?.presetId).toBe('github');
@@ -124,10 +127,9 @@ describe('an MCP preset add', () => {
     expect(added.authUrl).toBe('https://github.com/login/oauth/authorize?test');
 
     const [row] = sqlExec(h.db).exec(
-      `SELECT s.name, p.preset_id
-         FROM user_mcp_servers s
-         LEFT JOIN user_mcp_server_presets p ON p.server_id = s.id
-        WHERE s.id = ?`, added.id,
+      `SELECT name, preset_id
+         FROM user_mcp_servers
+        WHERE id = ?`, added.id,
     ).toArray();
 
     expect(row?.preset_id).toBe('github');
@@ -183,10 +185,9 @@ describe('an MCP preset add', () => {
     );
 
     const [row] = sqlExec(h.db).exec(
-      `SELECT p.preset_id
-         FROM user_mcp_servers s
-         LEFT JOIN user_mcp_server_presets p ON p.server_id = s.id
-        WHERE s.id = ?`, added.id,
+      `SELECT preset_id
+         FROM user_mcp_servers
+        WHERE id = ?`, added.id,
     ).toArray();
 
     // The join's NULL is the "no preset" answer, not a stored NULL.
@@ -207,59 +208,6 @@ describe('an MCP preset add', () => {
       { id: 'google', appConfigured: false },
     ]);
     h.close();
-  });
-});
-
-describe('a UserDO opened over storage from before the MCP presets lane', () => {
-  // The shipped pre-lane DDL: `CREATE TABLE IF NOT EXISTS` in `initUserTables` is a no-op on this storage.
-  const SHIPPED_USER_MCP_SERVERS = `
-    CREATE TABLE IF NOT EXISTS user_mcp_servers (
-      id            TEXT PRIMARY KEY,
-      name          TEXT NOT NULL,
-      server_url    TEXT NOT NULL,
-      transport     TEXT NOT NULL,
-      headers       TEXT,
-      allowed_tools TEXT,
-      created_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-      updated_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
-    )
-  `;
-
-  test('list, a custom add and a preset add all run on the old user_mcp_servers shape', async () => {
-    const db = new Database(':memory:');
-    db.run(SHIPPED_USER_MCP_SERVERS);
-
-    const h = createTestUserDO({ storage: db });
-
-    // Defends: `no such column: preset_id` on this read.
-    expect(await h.userDO.userMcp_list(await testOwner())).toEqual([]);
-
-    await h.userDO.userMcp_add(
-      await testOwner(), { name: 'linear', serverUrl: 'https://mcp.linear.example/sse' },
-      'https://kinu.example',
-    );
-    await h.userDO.userMcp_add(
-      await testOwner(),
-      { presetId: 'github', headers: { Authorization: 'Bearer ghp_test' } },
-      'https://kinu.example',
-    );
-
-    const rows = sqlExec(db).exec(
-      `SELECT s.name, p.preset_id
-         FROM user_mcp_servers s
-         LEFT JOIN user_mcp_server_presets p ON p.server_id = s.id
-        ORDER BY s.name`,
-    ).toArray();
-
-    expect(rows.map((r) => [r.name, r.preset_id])).toEqual([
-      ['GitHub', 'github'],
-      ['linear', null],
-    ]);
-
-    const listed = await h.userDO.userMcp_list(await testOwner());
-    expect(listed.map((r) => r.presetId)).toEqual(['github', null]);
-
-    db.close();
   });
 });
 

@@ -90,9 +90,6 @@ export const ASK_OWNER_DESCRIPTION = [
   'Do the work that does not depend on the answer first: asking ends your turn, and the owner\'s answer becomes this call\'s result when they reply.',
 ].join('\n');
 
-/** Builtins dropped when an actor's profile wires no deps for them. `agents` is never dropped. */
-export const DEPS_GATED_TOOLS: readonly BuiltinToolName[] = [REPORT_TOOL];
-
 interface CapabilityReach {
   readonly name: CapabilityName;
   readonly namespace: string;

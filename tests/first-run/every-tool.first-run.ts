@@ -21,7 +21,7 @@ import * as v from 'valibot';
 
 import { formatFailureMix, type EvalObservation, type EvalSubgoal } from '@kinu.run/test-utils';
 import {
-  BUILTIN_TOOLS, DEPS_GATED_TOOLS, censusToolFailures, normalizeFactKey, toolFailureKey, type JsonValue, type RunEvent,
+  BUILTIN_TOOLS, REPORT_TOOL, censusToolFailures, normalizeFactKey, toolFailureKey, type JsonValue, type RunEvent,
 } from '../../packages/core/src/index';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
@@ -36,10 +36,9 @@ const SUITE = 'First-run · every-tool';
 
 const CASE = 'every-tool' as const;
 
-/** The tools a ROOT actor is handed: the standing set minus the ones gated on
- *  deps only a hired actor has. Derived, so a tool that joins or leaves the
- *  table moves this row with it. */
-const ROOT_TOOLS: readonly string[] = BUILTIN_TOOLS.filter((name) => !DEPS_GATED_TOOLS.includes(name));
+/** The tools a ROOT actor is handed: the standing set minus `report`, which only a hired actor has deps for.
+ *  Derived, so a tool that joins or leaves the table moves this row with it. */
+const ROOT_TOOLS: readonly string[] = BUILTIN_TOOLS.filter((name) => name !== REPORT_TOOL);
 
 const PLAN = firstRunCasePlan(SUITE, CASE);
 

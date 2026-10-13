@@ -242,6 +242,13 @@ export class PendingSendStore {
     return this.sql<{ id: string }>`SELECT id FROM queued_turns WHERE actor_id = ${this.actorId} AND id = ${id}`.length > 0;
   }
 
+  /** What the programmatic turn held under `id` was reserved with: null when none is held, or it carried none. */
+  heldMetadata(id: string): JsonObject | null {
+    const held = this.sql<{ metadata_json: string | null }>`SELECT metadata_json FROM queued_turns WHERE actor_id = ${this.actorId} AND id = ${id}`[0];
+
+    return held?.metadata_json == null ? null : parseJsonObject(held.metadata_json);
+  }
+
   /** Its turn settled, ran or not: nothing of it is owed to a later process. */
   retireTurn(id: string): void {
     void this.sql`DELETE FROM queued_turns WHERE actor_id = ${this.actorId} AND id = ${id}`;

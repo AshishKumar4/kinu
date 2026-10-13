@@ -2,10 +2,10 @@
  *  Nothing here is served; only the install command comes from the deployment. */
 import type { UIMessage } from 'ai';
 import * as v from 'valibot';
-import { JsonValueSchema, SubordinateInspectionRequestSchema, type JsonValue, type PanelAgent, type PendingAction, type PlanReview, type SlateSummary, type TabPresence } from '@kinu.run/core';
+import { JsonValueSchema, SubordinateInspectionRequestSchema, type JsonValue, type PanelAgent, type PendingAction, type PlanReview, type SlateSummary, type TabPresence, type ModelMenuEntry, type RosterPage } from '@kinu.run/core';
+import type { UserProfile } from '@/lib/user-api';
 import type { Rpc } from '@kinu.run/core';
 import type { BackgroundJob } from '@kinu.run/core/protocol';
-import type { ModelMenuEntry, RosterPage, UserProfile } from '@/lib/user-api';
 
 const NOW = Date.now();
 

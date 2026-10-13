@@ -77,7 +77,7 @@ export function resolvePromptModelProfile(model?: PromptModelContext): PromptMod
   return { family, capabilities: new Set(inferredCapabilities(model, family)) };
 }
 
-export function modelSupportsTools(model?: PromptModelContext): boolean {
+function modelSupportsTools(model?: PromptModelContext): boolean {
   return resolvePromptModelProfile(model).capabilities.has('tools');
 }
 

@@ -2,12 +2,14 @@
 import * as v from 'valibot';
 import { Cause, Effect } from 'effect';
 import { KinuError, settleSync } from '@kinu.run/core/obs';
-import { rosterMatches, WorkspaceOverviewSchema, WS_OPEN, type AccountMemoryProposal, type RosterBucket, type SqlExec, type WorkspaceOverview } from '@kinu.run/core';
+import {
+  rosterMatches, WorkspaceOverviewSchema, WS_OPEN, type AccountMemoryFrame, type RosterBucket, type RosterCounts, type RosterEntry,
+  type RosterFrame, type RosterPage, type SqlExec, type WorkspaceOverview, type WorkspaceEntry,
+} from '@kinu.run/core';
 import {
   SESSION_AUTHORITY_REVOKED, SESSION_BEARER_HEADER, WEBSOCKET_POLICY_CLOSE, sessionBearerConnectionTag, sessionBearerFromTags,
 } from '../cli/rpc-gate';
 import type { SessionStands } from './user-host';
-import type { WorkspaceEntry } from './workspaces';
 
 export const ROSTER_SOCKET_PATH = '/roster/live';
 
@@ -15,47 +17,11 @@ const ROSTER_SOCKET_TAG = 'roster';
 
 const WORKSPACE_LIST_LIMIT = 200;
 
-export interface RosterEntry extends WorkspaceEntry {
-  overview: WorkspaceOverview | null;
-  decisions: number;
-  logo?: string | null;
-}
-
-export interface RosterCounts {
-  all: number;
-  needs: number;
-  working: number;
-  idle: number;
-  unreported: number;
-  decisions: number;
-}
-
-/** `total` counts what the query matches; `counts`, the whole roster. */
-export interface RosterPage {
-  entries: RosterEntry[];
-  total: number;
-  nextCursor: string | null;
-  counts: RosterCounts;
-}
-
 export interface RosterQuery {
   cursor?: string | null;
   limit?: number;
   bucket?: Exclude<RosterBucket, 'unreported'>;
   query?: string;
-}
-
-export interface RosterFrame {
-  type: 'workspace';
-  name: string;
-  entry: RosterEntry | null;
-  counts: RosterCounts;
-}
-
-/** On the same socket: the account-memory proposals waiting on the owner, so their chats' stacks show them. */
-export interface AccountMemoryFrame {
-  type: 'account_memory';
-  pending: readonly AccountMemoryProposal[];
 }
 
 const ACTIVE = 'w.delete_pending = 0 AND w.create_pending = 0';
