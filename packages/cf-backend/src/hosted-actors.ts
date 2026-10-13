@@ -281,8 +281,8 @@ function hostedHirer(seams: HostedActorSeams, child: BoundActor): BoundActor {
     unregistered: 'The hiring actor is no longer registered.',
   });
 
-  // Neither the hirer's queue (it may wait on this child's) nor its session (an idle hirer holds none).
-  return seams.host.hosted(parent) ?? seams.host.bindStores(parent);
+  // Its stores alone: neither its queue (it may wait on this child's) nor its seat, which its rest releases mid-relay.
+  return seams.host.bindStores(parent);
 }
 
 /** A child's report to its hiring parent, in-process; `sequenceId` remains the ingress dedupe key. */
