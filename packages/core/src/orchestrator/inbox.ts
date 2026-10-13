@@ -140,7 +140,8 @@ export function initPendingSendTables(execRaw: RawSqlExec): void {
     applied_json  TEXT,
     PRIMARY KEY (actor_id, producer)
   )`);
-  // A programmatic turn its producer heard queued, held until its turn settles: `id` is its idempotency key.
+  // A programmatic turn its producer heard queued, held until its turn settles: `id` is its idempotency key. A delivered
+  // run's row keeps its end (`run_end_json`) from the commit that ended it until a report carrying it reached its caller.
   execRaw(`CREATE TABLE IF NOT EXISTS queued_turns (
     seq           INTEGER PRIMARY KEY AUTOINCREMENT,
     actor_id      TEXT NOT NULL,
@@ -148,6 +149,7 @@ export function initPendingSendTables(execRaw: RawSqlExec): void {
     text          TEXT NOT NULL,
     metadata_json TEXT,
     yields        INTEGER NOT NULL DEFAULT 0,
+    run_end_json  TEXT,
     UNIQUE (actor_id, id)
   )`);
 }
@@ -249,6 +251,20 @@ export class PendingSendStore {
     return held?.metadata_json == null ? null : parseJsonObject(held.metadata_json);
   }
 
+  /** The delivered run held under `id` ended so, in the caller's commit: a restart tells it, never runs the run again. */
+  recordRunEnd(id: string, end: JsonObject): void {
+    void this.sql`UPDATE queued_turns SET run_end_json = ${JSON.stringify(end)}
+      WHERE actor_id = ${this.actorId} AND id = ${id} AND run_end_json IS NULL`;
+  }
+
+  /** Each delivered run's end kept here and not yet told, in the order its runs were held. */
+  runEnds(): { readonly id: string; readonly metadata: JsonObject | null; readonly end: JsonObject }[] {
+    return this.sql<{ id: string; metadata_json: string | null; run_end_json: string }>`
+      SELECT id, metadata_json, run_end_json FROM queued_turns
+      WHERE actor_id = ${this.actorId} AND run_end_json IS NOT NULL ORDER BY seq ASC`
+      .map((row) => ({ id: row.id, metadata: row.metadata_json === null ? null : parseJsonObject(row.metadata_json), end: parseJsonObject(row.run_end_json) }));
+  }
+
   /** Its turn settled, ran or not: nothing of it is owed to a later process. */
   retireTurn(id: string): void {
     void this.sql`DELETE FROM queued_turns WHERE actor_id = ${this.actorId} AND id = ${id}`;
@@ -290,10 +306,10 @@ export class PendingSendStore {
       ON CONFLICT (actor_id, producer) DO UPDATE SET cutoff = MAX(cutoff, excluded.cutoff)`;
   }
 
-  /** Every held programmatic turn, in the order its producers heard them queued. */
+  /** Every held programmatic turn still to run, in the order its producers heard them queued: a run that ended is told. */
   restoreTurns(): QueuedTurnRow[] {
     return this.sql<{ id: string; text: string; metadata_json: string | null; yields: number }>`
-      SELECT id, text, metadata_json, yields FROM queued_turns WHERE actor_id = ${this.actorId} ORDER BY seq ASC`
+      SELECT id, text, metadata_json, yields FROM queued_turns WHERE actor_id = ${this.actorId} AND run_end_json IS NULL ORDER BY seq ASC`
       .map((row) => ({
         id: row.id, text: row.text,
         ...(row.metadata_json !== null && { metadata: parseJsonObject(row.metadata_json) }),

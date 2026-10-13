@@ -961,9 +961,23 @@ the owner, built 2026-10-11 on `lane/main-isolate`.
   `ChatSession` admits, holds, queues, stops and restores it as any input, each
   round runs through core's `driveExecution` as a chat turn does, and its end
   rides the agent's next
-  report (`AgentReport.runEnds`). Its held input retires only once its end is
-  told, so a death first runs it again. `facet_runs`, `admitRun`, `startRun`,
-  `runEnded` and `holdsChat` are gone.
+  report (`AgentReport.runEnds`). One commit ends it: its answer, its run's end,
+  any claim of its rounds still open, and its end kept on its held input
+  (`queued_turns.run_end_json`), which retires once a report carrying the end
+  reached the workspace. A death before then tells the kept end at the next
+  start and never runs the run again; before #73 it ran the whole run again
+  (the model asked twice, its tool effects repeated). A newer generation of the
+  run, re-driven after a reset of the workspace, replaces a queued one, waits
+  out a running one, and drops an older one's untold end; the workspace routes
+  a run's calls by turn and run, so one generation's never reach another's.
+  `facet_runs`, `admitRun`, `startRun`, `runEnded` and `holdsChat` are gone.
+- Every chat turn ends in one commit (`ChatSession.endTurn`), answered,
+  failed, stopped or cut: its answer (or the failure it carries), the
+  retirement of the words it answered, its claim's verdict and its run's end,
+  with an answered turn's roster. What the process holds of the close moves,
+  and is heard, only once that commit holds (#71). Before #72 a failed or
+  stopped turn closed its claim and run but left its words owed, and the next
+  start ran them again.
 - One factory, `OrchestratorAgent.actorSurface`, builds every agent's turn
   surface, the workspace agent's, a hire's, a head's, a swarm node's and a
   background run's, from core's one reach decision (`surfaceReach`: what the

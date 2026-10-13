@@ -13,7 +13,7 @@ import type { HeadCapture } from '../heads/head-inference';
 import type { HeadInput, HeadReport, HeadStep } from '../heads/types';
 import type { HeadStreamKind } from '../heads/head-stream';
 import type { JsonObject, JsonValue } from '../utils/json';
-import type { ErrorCode } from '../obs/error';
+import { renderThrownChain, type ErrorCode, type KinuError } from '../obs/error';
 import type { ModelPricing } from '../providers/types';
 import type { WorkMode } from '../types/turn';
 import type { TurnSourcesBundle } from '../orchestrator/turn-assembly';
@@ -134,6 +134,8 @@ export interface AgentToolCall {
 
 export interface AgentReview {
   readonly turnId: string;
+  /** The run it reviews: one of another generation of the run, re-driven under the same turn, reaches nothing of it. */
+  readonly runId: string;
   readonly turn: CompletedTurn;
   readonly reachable: readonly string[];
   readonly mode: WorkMode;
@@ -208,8 +210,14 @@ export interface AgentStanding {
  *  before it ran, or its failure before its first round). */
 export type RunEndOutcome = { readonly ended: AgentTurnEnd } | { readonly refused: { readonly code: ErrorCode; readonly message: string } };
 
-/** A run's end as its agent holds it, carried by each report it makes until one has reached the workspace: its held
- *  input retires only then, so an agent that dies first runs it again. */
+/** Why a delivered run did not run to its end, in its own words. */
+export function refusedRun(failure: KinuError): RunEndOutcome {
+  return { refused: { code: failure.code, message: renderThrownChain({ cause: failure }) } };
+}
+
+/** A run's end as its agent holds it, kept on the run's held input in the commit that ended it and carried by each report
+ *  it makes until one has reached the workspace: its held input retires only then, and an agent that dies first tells
+ *  it from there, never running the run again. */
 export interface RunEndReport {
   readonly id: string;
   /** The generation that ended: a caller its workspace re-drove after a reset awaits its own, under the same id. */

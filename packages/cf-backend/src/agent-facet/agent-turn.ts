@@ -17,7 +17,7 @@ import { compactionDiagnostics, hostedActorCompaction } from '@kinu.run/compacti
 import type { AgentDatabase } from './agent-database';
 import type { StepPacer } from './step-pacer';
 import type { ChatTurnRequest } from '../agent-turns';
-import type { AgentHeadDelta, AgentReview, AgentTurnActivity, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, CacheWarmArm, OpenWork, PreparedAgentTurn, TurnCapability } from '@kinu.run/core';
+import type { AgentHeadDelta, AgentReview, AgentTurnActivity, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, CacheWarmArm, OpenWork, PreparedAgentTurn, RunEndOutcome, TurnCapability } from '@kinu.run/core';
 
 /** The answer's metadata, unless the workspace reads the turn's narration before it can say it. One shape, not a union:
  *  a stub's promise of a union is a union of promises. */
@@ -455,13 +455,16 @@ interface PreparedRun {
 /**
  * A delivered run's own parts (D2): each round's preparation, under that round's claim, by its workspace over this
  * isolate's models and tools, and the projection of its rounds into its end. Its rounds are core's driver
- * (`driveExecution`, through `runHeadInference`), run in its chat's turn, which `signal` stops.
+ * (`driveExecution`, through `runHeadInference`), run in its chat's turn, which `signal` stops. One commit ends it: its
+ * answer, its run's end, every claim of its rounds still open, and its end kept on its held input (`recordEnd`), where a
+ * restart tells it and never runs it again.
  */
 export async function deliveredRun(
   { database, workspace, models, pacer }: { readonly database: AgentDatabase; readonly workspace: AgentWorkspace; readonly models: FacetModels; readonly pacer: StepPacer },
   task: AgentTurnTask,
   signal: AbortSignal,
-): Promise<AgentTurnEnd> {
+  recordEnd: (outcome: RunEndOutcome) => void,
+): Promise<void> {
   const actor = await database.acquire();
   const { runId } = task;
   const capture = new HeadCapture();
@@ -479,7 +482,8 @@ export async function deliveredRun(
     // Every call of the round carries its capability: the opening its preparation made at the workspace.
     const bound: TurnCapabilityOf = { turnId: task.sequenceId, runId: capability.runId, epoch: capability.epoch };
 
-    // The last round's live words reach the workspace under its own opening, before the next is made.
+    // The last round's live words reach the workspace under its own opening, before the next is made. A preparation the
+    // workspace failed opened nothing there (`AgentTurns.prepare`): the run's closes name its last opening.
     await run.trace?.flush();
     const prepared = await workspace.prepareTurn(bound);
 
@@ -499,7 +503,7 @@ export async function deliveredRun(
       capture,
       isAborted: () => signal.aborted,
       signal,
-      advise: async (turn, reachable, mode) => await workspace.advise({ turnId: task.sequenceId, turn, reachable, mode }),
+      advise: async (turn, reachable, mode) => await workspace.advise({ turnId: task.sequenceId, runId, turn, reachable, mode }),
     };
 
     const { brief } = prepared;
@@ -545,33 +549,43 @@ export async function deliveredRun(
     await run.trace?.flush();
   }
 
-  closeTurnRun(actor.stores.eventRecorder, runId, {
-    turnIndex: actor.session.orchestrator.sessionTurnIndex,
-    usage: report.usage,
-    workMode: actor.session.workMode,
-    ...classifyRunEnd({
-      completed: report.status === 'completed',
-      interrupted: report.status === 'aborted',
-      errorText: report.errorMessage,
-    }),
-  });
+  // Its charges land before its end is kept: an end a restart tells was charged.
+  await spend.settled();
 
   const transcript = actor.stores.history.transcript(CHAT_SESSION_ID);
   const completion = report.canonicalCompletion;
   const close: TurnBound = run.opened ?? { turnId: task.sequenceId, runId, epoch: null };
 
   // Its narration is read only if the answer's metadata needs it.
-  if (completion !== undefined) {
-    await database.answer(completion, await answerMetadataOf(workspace, close, async () => await transcript.narration(answerParts(completion.outputPartReferences, completion.finalTextReference))));
-  }
+  const answer = completion === undefined ? () => {}
+    : await database.prepareAnswer(completion, await answerMetadataOf(workspace, close, async () => await transcript.narration(answerParts(completion.outputPartReferences, completion.finalTextReference))));
 
-  await spend.settled();
-
-  return {
+  const ended: AgentTurnEnd = {
     ...report,
     activity: database.takeActivity(),
     figures: database.figures(),
     errorMessage: report.errorMessage ?? null,
     ...(produced !== undefined && { produced: encodeModelMessageValues(produced) }),
   };
+
+  const closing = actor.stores.eventRecorder.collect(() => actor.runtime.storage.transactionSync(() => {
+    closeTurnRun(actor.stores.eventRecorder, runId, {
+      turnIndex: actor.session.orchestrator.sessionTurnIndex,
+      usage: report.usage,
+      workMode: actor.session.workMode,
+      ...classifyRunEnd({
+        completed: report.status === 'completed',
+        interrupted: report.status === 'aborted',
+        errorText: report.errorMessage,
+      }),
+    });
+    answer();
+    recordEnd({ ended });
+
+    // A round a dead isolate opened and the run, run again, never reached: the run's end is its end too.
+    return actor.stores.claims.settleRunIn(runId, 'indeterminate');
+  }));
+
+  closing.value();
+  closing.publish();
 }

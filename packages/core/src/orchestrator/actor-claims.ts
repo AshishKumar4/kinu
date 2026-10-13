@@ -311,6 +311,15 @@ export class ActorClaimStore {
     return () => { this.changed(); };
   }
 
+  /** Every claim of the run still open settles `outcome`, in the caller's commit: the rounds an execution that died opened,
+   *  closed as the run ends. The returned call tells its observers, once that commit holds. */
+  settleRunIn(runId: string, outcome: ClaimOutcome): () => void {
+    this.actor.assertCurrent();
+    void this.sql`UPDATE actor_turn_claims SET outcome=${outcome} WHERE actor_id=${this.actorId} AND run_id=${runId} AND outcome IS NULL`;
+
+    return () => { this.changed(); };
+  }
+
   /** A Retry of the turn's answer: what its executions through its answered one produced is no longer its output. */
   withdraw(turnId: string): void {
     this.actor.assertCurrent();

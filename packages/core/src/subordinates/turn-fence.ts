@@ -75,6 +75,28 @@ export class TurnFences {
   }
 
   /**
+   * An opening whose preparation failed was never its execution's: the execution's record goes back to the opening before
+   * it (`prior`, as {@link executionEpoch} read it before), so the execution's closes name that one. The fence keeps the
+   * failed opening as the agent's newest: nothing older opens.
+   */
+  unopen(actorId: string, opening: FencedOpening, prior: number | null): void {
+    if (prior === null) {
+      void this.sql`DELETE FROM actor_executions WHERE actor_id = ${actorId} AND turn_id = ${opening.turnId} AND run_id = ${opening.runId} AND epoch = ${opening.seq}`;
+
+      return;
+    }
+
+    void this.sql`UPDATE actor_executions SET epoch = ${prior}
+      WHERE actor_id = ${actorId} AND turn_id = ${opening.turnId} AND run_id = ${opening.runId} AND epoch = ${opening.seq}`;
+  }
+
+  /** The epoch the execution was last opened under here; null for one never opened. */
+  executionEpoch(actorId: string, execution: Pick<FencedOpening, 'turnId' | 'runId'>): number | null {
+    return this.sql<{ epoch: number }>`SELECT epoch FROM actor_executions
+      WHERE actor_id = ${actorId} AND turn_id = ${execution.turnId} AND run_id = ${execution.runId}`[0]?.epoch ?? null;
+  }
+
+  /**
    * Whether a close (its trace, charges, answer metadata, end, settle) may run (design v2 §3): judged by the execution it
    * names, never by the fence's current opening, so its own close runs after a Stop or a newer opening. One naming an
    * execution this agent never opened here, or under another epoch than that execution's newest, is refused.

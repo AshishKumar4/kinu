@@ -57,13 +57,13 @@ export interface DrivenExecution<A extends AssembledRound> {
   open?(lease: ActorTurnLease, index: number): Promise<void>;
   /** The declaration and preparation, under the round's capability; it binds through `bind` as it resolves. */
   assemble(round: ClaimedRound): Promise<A>;
-  /** The executed round's result, committed. `close` settles the claim at the point the result decides it. */
-  project(round: ClaimedRound & { readonly assembled: A; readonly outcome: ActorExecutionResult; readonly close: (outcome: ClaimOutcome) => void }): Promise<ProjectedRound>;
+  /** The executed round's result, committed: its claim's outcome, which a commit that closed the claim already holds. */
+  project(round: ClaimedRound & { readonly assembled: A; readonly outcome: ActorExecutionResult }): Promise<ProjectedRound>;
   /** A round stopped before its claim: it ran nothing, and ends interrupted on `outcome`. Absent, it ends as a failure
    *  (`failed`) with the Stop as its cause. */
   stopped?(round: { readonly index: number; readonly lease: ActorTurnLease; readonly outcome: ActorExecutionResult }): Promise<void>;
-  /** A round that failed before its projection answered; `close` as in `project`. Answers its claim's outcome. */
-  failed(round: { readonly index: number; readonly lease: ActorTurnLease; readonly failure: unknown; readonly close: (outcome: ClaimOutcome) => void }): Promise<ClaimOutcome>;
+  /** A round that failed before its projection answered. Answers its claim's outcome, as `project` does. */
+  failed(round: { readonly index: number; readonly lease: ActorTurnLease; readonly failure: unknown }): Promise<ClaimOutcome>;
   /** Appends the next round's input and answers its turn; null ends the execution. */
   next?(round: { readonly index: number }): Promise<string | null>;
 }
@@ -91,6 +91,7 @@ export async function driveExecution<A extends AssembledRound>(session: ActorSes
 
 /** One round under `lease`, finished whatever it ends on: whether the execution stops after it. */
 function driveRound<A extends AssembledRound>(session: ActorSession, execution: DrivenExecution<A>, lease: ActorTurnLease, index: number): Effect.Effect<boolean, KinuError> {
+  // A round its projection left open is settled on the outcome it answered: a run's rounds commit no close of their own.
   const close = (outcome: ClaimOutcome): void => { if (session.claimOpen(lease)) session.settleTurnClaim(lease, outcome); };
 
   const reserved = index === 0 ? execution.reserved : undefined;
@@ -115,7 +116,7 @@ function driveRound<A extends AssembledRound>(session: ActorSession, execution: 
       const assembled = await execution.assemble(claimed);
       const outcome = await session.execute(lease, assembled.input, assembled.onEvent);
 
-      return await execution.project({ ...claimed, assembled, outcome, close });
+      return await execution.project({ ...claimed, assembled, outcome });
     };
 
     const projected = yield* Effect.promise(() => execution.within?.(body) ?? body());
@@ -127,7 +128,7 @@ function driveRound<A extends AssembledRound>(session: ActorSession, execution: 
 
   return round.pipe(
     Effect.catchCause((cause) => Effect.promise(async () => {
-      const outcome = await execution.failed({ index, lease, failure: Cause.squash(cause), close });
+      const outcome = await execution.failed({ index, lease, failure: Cause.squash(cause) });
 
       close(outcome);
 

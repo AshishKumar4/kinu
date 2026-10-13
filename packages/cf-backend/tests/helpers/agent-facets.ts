@@ -95,13 +95,25 @@ export function delayNextTurnEnd(storageKey: string): HeldCall {
 
 const delayedCacheWarms = new Map<string, { readonly reached: () => void; readonly released: Promise<void> }>();
 
-/** The isolate under `storageKey` commits its next turn's answer, and the cache warm it asks the workspace for after it,
- *  before the turn's claim closes, waits on the way until released. */
+/** The isolate under `storageKey` commits its next turn's answer, and the cache warm it asks the workspace for after it
+ *  waits on the way until released. */
 export function delayNextCacheWarm(storageKey: string): HeldCall {
   const reached = Promise.withResolvers<void>();
   const released = Promise.withResolvers<void>();
 
   delayedCacheWarms.set(storageKey, { reached: reached.resolve, released: released.promise });
+
+  return { reached: reached.promise, release: released.resolve };
+}
+
+let delayedRunEnd: { readonly reached: () => void; readonly released: Promise<void> } | null = null;
+
+/** The next report any isolate sends that carries a delivered run's end waits on the way until released. */
+export function delayNextRunEnd(): HeldCall {
+  const reached = Promise.withResolvers<void>();
+  const released = Promise.withResolvers<void>();
+
+  delayedRunEnd = { reached: reached.resolve, released: released.promise };
 
   return { reached: reached.promise, release: released.resolve };
 }
@@ -423,6 +435,14 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
         runSettled: (run) => host().runSettled(run),
         hireAdvisor: (advisor) => host().hireAdvisor(advisor),
         owes: async (seq, next, holds, report) => {
+          const delayedEnd = report.runEnds.length > 0 ? delayedRunEnd : null;
+
+          if (delayedEnd !== null) {
+            delayedRunEnd = null;
+            delayedEnd.reached();
+            await delayedEnd.released;
+          }
+
           const catching = heldReports.get(placement.storageKey);
 
           if (catching !== undefined && (holds || next !== null)) {

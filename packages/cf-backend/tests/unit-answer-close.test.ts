@@ -44,8 +44,9 @@ test("an isolate that dies after the answer committed does not run the turn agai
 
   const answers = (await storedChat(workspace)).filter((message) => message.role === 'assistant');
 
-  // Asked once, answered once, and nothing of it left owed.
+  // Asked once, answered once, closed by its answer's own commit (no recovery settled it), and nothing of it left owed.
   expect(asked).toBe(1);
   expect(answers).toHaveLength(1);
+  expect(db.query<{ outcome: string | null }, []>('SELECT outcome FROM actor_turn_claims').all().map((claim) => claim.outcome)).toEqual(['completed']);
   expect({ open: open(), owed: owed() }).toEqual({ open: 0, owed: 0 });
 });

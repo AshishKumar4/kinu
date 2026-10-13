@@ -2637,6 +2637,6 @@ export type {
   AgentToolCall, AgentToolDescriptor, AgentHeadDelta, AgentTrace, AgentTurnEnd, PreparedAgentTurn, StoredRow, TurnRequestAt,
 } from './subordinates/agent-isolate';
 
-export { writesSnapshotRows } from './subordinates/agent-isolate';
+export { refusedRun, writesSnapshotRows } from './subordinates/agent-isolate';
 
 export { describeAgentTools } from './subordinates/tool-descriptors';

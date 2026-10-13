@@ -2,11 +2,13 @@
  * An execution is claimed as it opens (design v2 §2-§3), before anything of it is prepared: a preparation that fails ends
  * its turn, its room told, and leaves the agent free for the next; a Stop that comes as it opens ends it with nothing
  * asked of the model and the owner's words kept; a run delivered while a chat turn runs waits for that turn's end; and
- * an answer whose commit is refused leaves its execution's close to the turn's failure, durably.
+ * an answer whose commit is refused leaves its execution's close to the turn's failure, durably; and a turn that ends
+ * failed or stopped answers the words it took, so no later start runs them again.
  */
 import { expect, test } from 'bun:test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import { KinuError } from '../src/obs/error';
+import { PendingSendStore } from '../src/orchestrator/inbox';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import { sessionFixture } from './helpers-session';
 
@@ -31,7 +33,12 @@ function answering(held?: () => Promise<void>) {
   return { model, asked, prompts };
 }
 
-test('a turn whose preparation fails ends with its room told, and the next turn runs and is answered', async () => {
+/** The owner's words still owed to a turn: what a later start of the agent runs as a new turn. */
+function owedWords(fixture: Awaited<ReturnType<typeof sessionFixture>>): string[] {
+  return new PendingSendStore(fixture.actor.runtime.storage.sql, fixture.actor.handle.actorId).restore().map((row) => row.id);
+}
+
+test('a turn whose preparation fails ends with its room told, its words answered, and the next turn runs and is answered', async () => {
   const { model, asked } = answering();
   let failures = 1;
 
@@ -46,8 +53,10 @@ test('a turn whose preparation fails ends with its room told, and the next turn 
 
   try {
     await fixture.chat.send('plan the quarterly offsite', { id: 'q-1' });
-    // Its room hears the failure; nothing of it reached the model.
+    await fixture.chat.pumpPromise;
+    // Its room hears the failure; nothing of it reached the model, and no later start runs its words.
     expect([fixture.events.some((event) => event.type === 'error'), asked.count]).toEqual([true, 0]);
+    expect({ outcome: fixture.actor.session.claims.read('q-1')?.outcome ?? null, owed: owedWords(fixture) }).toEqual({ outcome: 'error', owed: [] });
 
     await fixture.chat.send('plan it again', { id: 'q-2' });
     const answered = (await fixture.actor.stores.history.transcript(CHAT_SESSION_ID).history()).filter((row) => row.role === 'assistant');
@@ -109,11 +118,11 @@ test('a run delivered while a chat turn runs starts only once that turn has answ
     model,
     ports: {
       runs: {
-        run: async (_run, _signal, retire) => {
+        run: async (_run, _signal, recordEnd) => {
           order.push('run started');
-          retire();
+          recordEnd({ refused: { code: 'cancelled', message: 'nothing to run' } });
         },
-        refuse: (_run, _failure, retire) => { retire(); },
+        tell: () => {},
       },
     },
   });
@@ -195,5 +204,33 @@ test("a turn whose answer's commit is refused closes its claim and its run as th
     expect(fixture.events.some((event) => event.type === 'error')).toBe(true);
     expect(fixture.actor.stores.claims.read('refused-commit')).toMatchObject({ status: 'settled', outcome: 'error' });
     expect([endedRuns(), fixture.actor.stores.eventRecorder.openTurn()]).toEqual([1, null]);
+  } finally { fixture.close(); }
+});
+
+
+test("a turn stopped while it prepared answers the words it took: no later start runs them", async () => {
+  const preparing = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+
+  const fixture = await sessionFixture({
+    model: answering().model,
+    aroundPrepare: () => async () => {
+      preparing.resolve();
+      await release.promise;
+
+      throw new KinuError('cancelled', 'Turn s-1 was stopped.');
+    },
+  });
+
+  try {
+    const sending = fixture.chat.send('summarize the ledger', { id: 's-1' });
+
+    await preparing.promise;
+    fixture.chat.interrupt();
+    release.resolve();
+    await Promise.allSettled([sending]);
+    await fixture.chat.pumpPromise;
+
+    expect({ outcome: fixture.actor.session.claims.read('s-1')?.outcome ?? null, owed: owedWords(fixture) }).toEqual({ outcome: 'aborted', owed: [] });
   } finally { fixture.close(); }
 });

@@ -464,15 +464,25 @@ export class AgentTurns {
     }
 
     if (this.cuts.get(actorId, bound.turnId)?.signal.aborted === true) return settleSync(Effect.fail(new KinuError('cancelled', `Task ${bound.turnId} was stopped.`)));
+    const opening = { turnId: bound.turnId, runId: bound.runId, seq: bound.epoch };
+    const prior = fences.executionEpoch(actorId, opening);
 
-    if (!fences.open(actorId, { turnId: bound.turnId, runId: bound.runId, seq: bound.epoch })) {
+    if (!fences.open(actorId, opening)) {
       return settleSync(Effect.fail(new KinuError('denied', `The opening of task ${bound.turnId} (${String(bound.epoch)} in its agent's sequence) is older than the agent's newest.`)));
     }
 
     const opened: OpenTurn = { ...turn, fenced: { seq: bound.epoch } };
 
     this.open.set(actorId, bound.turnId, opened);
-    const prepared = await this.read(opened);
+
+    let prepared: PreparedAgentTurn | null = null;
+
+    try {
+      prepared = await this.read(opened);
+    } finally {
+      // A round its isolate never gets: the run's closes still name the opening before it, which its isolate holds.
+      if (prepared === null) fences.unopen(actorId, opening, prior);
+    }
 
     if (prepared === null) return settleSync(Effect.fail(new KinuError('denied', `The preparation of task ${bound.turnId} finished after a later opening of its agent.`)));
 
@@ -558,51 +568,63 @@ export class AgentTurns {
     return this.dynamic(turn, prepared);
   }
 
-  async advise(actorId: string, { turnId, turn: completed, reachable, mode }: AgentReview): Promise<void> {
-    const turn = this.turn(actorId, turnId);
-    const advise = turn.request.run?.inference.advise;
+  async advise(actorId: string, review: AgentReview): Promise<void> {
+    const { turn: completed, reachable, mode } = review;
+    const advise = this.namedRun(actorId, review)?.advise;
 
     if (advise !== undefined) return await advise(completed, reachable, mode);
 
     if (!improvementLanesOpen('completed', mode)) return;
-    const advisor = this.deps.advisor(this.prepared(turn).actor);
+    const advisor = this.deps.advisor(this.prepared(this.turn(actorId, review.turnId)).actor);
 
     await advisor.hire(advisor.snapshot(completed, reachable));
   }
 
-  async trace(actorId: string, turnId: string, event: AgentTrace): Promise<void> {
-    await this.turn(actorId, turnId).request.run?.inference.reportStep?.(event.sequence, event.step);
+  async trace(actorId: string, bound: TurnBound, event: AgentTrace): Promise<void> {
+    await this.namedRun(actorId, bound)?.reportStep?.(event.sequence, event.step);
   }
 
   /** Drained with no reader too: the step record waits on it. */
-  async traceStream(actorId: string, turnId: string, deltas: ReadableStream<AgentHeadDelta>): Promise<void> {
-    const inference = this.turn(actorId, turnId).request.run?.inference;
+  async traceStream(actorId: string, bound: TurnBound, deltas: ReadableStream<AgentHeadDelta>): Promise<void> {
+    const inference = this.namedRun(actorId, bound);
 
     for await (const { kind, delta } of deltas) inference?.reportDelta?.(kind, delta);
   }
 
-  async resume(actorId: string, turnId: string) {
-    const resumed = await this.turn(actorId, turnId).request.run?.inference.resume?.() ?? null;
+  async resume(actorId: string, bound: TurnBound) {
+    const resumed = await this.namedRun(actorId, bound)?.resume?.() ?? null;
 
     return resumed === null ? null : encodeModelMessageValues(resumed);
   }
 
-  async guard(actorId: string, turnId: string, ...args: Parameters<MissionBudgetPort['guard']>) {
-    return await this.missionPort(actorId, turnId)?.guard(...args) ?? null;
+  async guard(actorId: string, bound: TurnBound, ...args: Parameters<MissionBudgetPort['guard']>) {
+    return await this.missionPort(actorId, bound)?.guard(...args) ?? null;
   }
 
-  async debit(actorId: string, turnId: string, ...args: Parameters<MissionBudgetPort['debit']>): Promise<void> {
-    await this.missionPort(actorId, turnId)?.debit(...args);
+  async debit(actorId: string, bound: TurnBound, ...args: Parameters<MissionBudgetPort['debit']>): Promise<void> {
+    await this.missionPort(actorId, bound)?.debit(...args);
   }
 
   /** A run spends through its own mission. Main's chat turn spends through the workspace's governor under the labels its
    *  call names, as it did in this object: its last step's charge may land after its turn closed here. */
-  private missionPort(actorId: string, turnId: string): MissionBudgetPort | null {
+  private missionPort(actorId: string, bound: TurnBound): MissionBudgetPort | null {
     const governor = this.deps.missions(actorId);
 
     if (governor !== null) return { guard: async (seam, labels) => governor.guard(seam, labels), debit: async (tokens, opts) => { governor.debit(tokens, opts); } };
 
-    return this.turn(actorId, turnId).request.run?.inference.mission?.port ?? null;
+    return this.namedRun(actorId, bound)?.mission?.port ?? null;
+  }
+
+  /** The run a call bound to it names, by its turn and its run: a call of another generation, its run re-driven under the
+   *  same turn since, reaches nothing of this one. None for a chat turn. */
+  namedRun(actorId: string, bound: Pick<TurnBound, 'turnId' | 'runId'>): RunInference | undefined {
+    const run = this.turn(actorId, bound.turnId).request.run;
+
+    if (run !== undefined && run.inference.runId !== bound.runId) {
+      return settleSync(Effect.fail(new KinuError('denied', `Run ${bound.runId} is not the run of ${bound.turnId} this workspace awaits.`)));
+    }
+
+    return run?.inference;
   }
 
   /** Main's surface decides its continuity and evolution gate; any other agent's turns continue its conversation. A run

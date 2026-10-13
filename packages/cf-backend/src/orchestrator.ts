@@ -997,8 +997,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         return await this.agentTurns.program(actorId, bound.turnId, ...args);
       },
-      traceTurn: (close, event) => this.agentTurns.trace(actorId, close.turnId, event),
-      traceStream: (close, lines) => this.agentTurns.traceStream(actorId, close.turnId, headDeltas(lines)),
+      traceTurn: (close, event) => this.agentTurns.trace(actorId, close, event),
+      traceStream: (close, lines) => this.agentTurns.traceStream(actorId, close, headDeltas(lines)),
       // Its first step binds the profile its turn assembled on, and the grant carries the live block on it (D5).
       paceStep: async (bound, profile) => {
         if (profile !== null) this.boundProfiles.set(actorId, profile);
@@ -1006,9 +1006,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         await (await this.agentCalls(actorId)).step(bound.turnId, dynamic);
       },
-      resume: (bound) => this.agentTurns.resume(actorId, bound.turnId),
-      guard: (bound, ...args) => this.agentTurns.guard(actorId, bound.turnId, ...args),
-      debit: (close, ...args) => this.agentTurns.debit(actorId, close.turnId, ...args),
+      resume: (bound) => this.agentTurns.resume(actorId, bound),
+      guard: (bound, ...args) => this.agentTurns.guard(actorId, bound, ...args),
+      debit: (close, ...args) => this.agentTurns.debit(actorId, close, ...args),
       prepareTurn: async (bound) => {
         this.admitWork();
 
