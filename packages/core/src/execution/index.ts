@@ -82,11 +82,11 @@ export {
   DEVICE_DUPLICATE_REQUEST, DeviceCancelResultSchema, nextDeviceRequestId,
   DEVICE_CANCEL_MISPAIRED, parseDeviceCancelAnswer,
   DEVICE_PTY_OPEN_METHOD, DEVICE_PTY_INPUT, DEVICE_PTY_RESIZE,
-  DEVICE_PTY_OUTPUT, DEVICE_PTY_EXIT, DEVICE_PTY_MAX_AXIS,
+  DEVICE_PTY_OUTPUT, DEVICE_PTY_EXIT,
   type DeviceCancelResult, type DeviceExecOutput, watchedOutput,
 } from './device-tunnel';
 
-export { DeviceHelloHeadSchema, DeviceUpdateHelloSchema, DeviceHelloSchema, DEVICE_METHOD, DEVICE_FRAMES, DEVICE_ERRORS, DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION, DEVICE_UPDATE_REQUIRED, deviceMethodHas, deviceFailure, type DeviceMethod } from './device-protocol';
+export { DeviceHelloHeadSchema, DeviceUpdateHelloSchema, DeviceHelloSchema, DEVICE_METHOD, DEVICE_FRAMES, DEVICE_ERRORS, DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION, DEVICE_UPDATE_REQUIRED, DEVICE_PTY_MAX_AXIS, deviceMethodHas, deviceFailure, type DeviceMethod } from './device-protocol';
 
 export {
   DeviceSocketHub, deviceIdFromSocket, WS_OPEN,

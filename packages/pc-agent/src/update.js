@@ -47,20 +47,14 @@ function runToExit(file, args, options) {
 const VERSION_STAMP = 'pc-agent.version';
 
 /**
- * The public half of the release signing key, pinned into this daemon at
- * build; held equal to core's `RELEASE_SIGNING_PUBLIC_KEY` by
- * `unit-release-signing.test.ts`. An UPDATE frame is a hub's words; the
- * signature over its checksums is Kinu's, and only a release that verifies
- * against this key is downloaded at all (SECURITY-devices C1: an unsigned
- * frame gave a hostile hub persistent code execution on every machine).
+ * The release signing key, the operator's override of it, and the bytes a
+ * signature covers: core's one definition, built into this daemon. An UPDATE
+ * frame is a hub's words; the signature over its checksums is Kinu's, and only
+ * a release that verifies against this key is downloaded at all
+ * (SECURITY-devices C1: an unsigned frame gave a hostile hub persistent code
+ * execution on every machine).
  */
-const RELEASE_SIGNING_PUBLIC_KEY = '232098b9f5cc9b300b903bb9f3347ecb2b62115b2711438ab7fab12d30bfbaef';
-
-/** A machine's OWN operator may pin another key through the environment —
- *  the test harness signs with a key of its own. A hub cannot reach this. */
-const RELEASE_SIGNING_PUBLIC_KEY_ENV = 'KINU_RELEASE_SIGNING_PUBLIC_KEY';
-
-const RELEASE_MESSAGE_PREFIX = 'kinu-release-v1';
+const { RELEASE_SIGNING_PUBLIC_KEY, RELEASE_SIGNING_PUBLIC_KEY_ENV, releaseMessage } = require('../../core/src/http/release-message.ts');
 
 /** Present from the moment a successor is started until a daemon connects:
  *  a stale pidfile beside it means the successor died before the hub saw it,
@@ -167,24 +161,6 @@ function pinnedPublicKey() {
   const fromEnv = process.env[RELEASE_SIGNING_PUBLIC_KEY_ENV] ?? '';
 
   return fromEnv === '' ? RELEASE_SIGNING_PUBLIC_KEY : fromEnv;
-}
-
-/** Byte order over artifact paths; a different order is a different message. */
-function byArtifactPath([a], [b]) {
-  if (a < b) return -1;
-
-  return a > b ? 1 : 0;
-}
-
-/** The canonical bytes a release signature covers — the same text
- *  `core/src/http/release-signing.ts` builds: prefix, version, then every
- *  artifact with its checksum, sorted by path, one per line. */
-function releaseMessage(version, checksums) {
-  const lines = Object.entries(checksums)
-    .sort(byArtifactPath)
-    .map(([artifact, digest]) => `${artifact} ${digest.toLowerCase()}`);
-
-  return new TextEncoder().encode([RELEASE_MESSAGE_PREFIX, version, ...lines, ''].join('\n'));
 }
 
 /** Whether the frame's signature verifies against the pinned key. A key
@@ -656,8 +632,6 @@ async function reportRefusal({ origin, cfg, version, runtime, reason, fetchFn = 
 }
 
 module.exports = {
-  RELEASE_SIGNING_PUBLIC_KEY,
-  RELEASE_SIGNING_PUBLIC_KEY_ENV,
   VERSION_STAMP,
   UPDATE_PENDING_MARKER,
   PREDECESSOR_ENV,

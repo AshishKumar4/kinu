@@ -1,5 +1,5 @@
 // Sign in with ChatGPT's token protocol (developers.openai.com/siwc, 2026-09-30) for the machine's sign-in
-// (pc-agent/src/chatgpt.js, generated) and a deployment's (chatgpt-sign-in.ts); I/O and errors are each side's.
+// (pc-agent/src/chatgpt.js) and a deployment's (chatgpt-sign-in.ts); I/O and errors are each side's.
 
 export const ISSUER = 'https://auth.openai.com';
 

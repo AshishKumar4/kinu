@@ -15,6 +15,7 @@ import { readExecSignal } from './signal';
 import { commandResult, existsTool } from './exec-result';
 import { Effect } from 'effect';
 import { attempt, KinuError, refusalOf, renderThrownChain, settle } from '../obs/index';
+import { parseInput } from '../utils/json';
 
 /** `write` is a closed command union covering file write and mkdir. */
 export type ParentRpcWrite =
@@ -56,15 +57,6 @@ function parentCall<T>(path: string, operate: () => Promise<T>): Effect.Effect<T
 }
 
 const StringSchema = v.string();
-
-function parseInput<TSchema extends v.GenericSchema>(
-  schema: TSchema,
-  input: { value: unknown },
-): v.InferOutput<TSchema> | undefined {
-  const result = v.safeParse(schema, input.value);
-
-  return result.success ? result.output : undefined;
-}
 
 /** A `VFS` over the parent workspace in the parent's own paths; never merged into this agent's `Storage.vfs`. */
 export function createParentWorkspaceVfs(handle: ParentWorkspaceHandle): VFS {

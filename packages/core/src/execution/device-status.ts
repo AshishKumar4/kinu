@@ -8,6 +8,7 @@ import * as v from 'valibot';
 import type { ExecutorCapability } from './types';
 import { TOOLCHAIN_PROBED_CAPABILITIES, toolchainCapabilities } from './toolchain';
 import { NO_DEVICE_CONNECTED } from './device-tunnel';
+import { MACHINE_SANDBOX_REASONS } from './machine-sandbox-reasons';
 
 /** What an attached machine answered when asked what it can run. `asked` travels with the answer
  *  so an answer taken before the table grew does not read as newer capabilities measured absent. */
@@ -103,13 +104,10 @@ export const DEVICE_SANDBOX_CAPABILITIES = ['sandboxed', 'files_only', 'raw_only
 
 export type DeviceSandboxCapability = (typeof DEVICE_SANDBOX_CAPABILITIES)[number];
 
-/** Why a machine cannot sandbox; each value has one documented fix. The first six mirror
- *  `SANDBOX_STATUS` in `packages/pc-agent/src/sandbox.js` (hub tests hold them equal). `probe_failed`
- *  defers to `DeviceSandboxStatus.detail`; `daemon_outdated` is hub-assigned for daemons sending no field. */
-export const DEVICE_SANDBOX_REASONS = [
-  'no_bwrap', 'no_userns', 'wsl1', 'no_sandbox_exec', 'unsupported_platform', 'probe_failed',
-  'daemon_outdated',
-] as const;
+/** Why a machine cannot sandbox; each value has one documented fix. The machine's own words (`MACHINE_SANDBOX_REASONS`)
+ *  are the daemon's too. `probe_failed` defers to `DeviceSandboxStatus.detail`; `daemon_outdated` is hub-assigned for
+ *  daemons sending no field. */
+export const DEVICE_SANDBOX_REASONS = [...MACHINE_SANDBOX_REASONS, 'daemon_outdated'] as const;
 
 export type DeviceSandboxReason = (typeof DEVICE_SANDBOX_REASONS)[number];
 

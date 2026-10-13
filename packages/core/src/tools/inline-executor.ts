@@ -28,7 +28,7 @@ import { serveFile } from './file-operations';
 import { TurnFileLedger } from '../vfs/file-ledger';
 import { branchableToolCall } from './outcome';
 import { TurnContextBudget } from '../context-budget';
-import type { JsonValue } from '../utils/json';
+import { parseInput, type JsonValue } from '../utils/json';
 import { cloudPlanes, type PathPlanes } from '../vfs/resolve';
 import type { VfsMountRouting } from '../vfs/mounts';
 import { SlateBuildNoteSchema } from '../operations/file';
@@ -51,15 +51,6 @@ const FileWriteSuccessSchema = v.object({
 /** A written slate file's build, as a line of the answer. */
 function buildLine(build: v.InferOutput<typeof SlateBuildNoteSchema>): string {
   return build.builds ? `The slate ${build.slate} builds.` : `The slate ${build.slate} does not build; the user still sees its last working version:\n${build.error ?? ''}`;
-}
-
-function parseInput<TSchema extends v.GenericSchema>(
-  schema: TSchema,
-  input: { value: unknown },
-): v.InferOutput<TSchema> | undefined {
-  const result = v.safeParse(schema, input.value);
-
-  return result.success ? result.output : undefined;
 }
 
 interface ShellExec {

@@ -1226,15 +1226,14 @@ describe('CLI distribution signing prerequisites', () => {
     expect(error).toContain('docs/SELF-HOSTING.md');
   });
 
-  test('a missing or mismatched pin refuses before building and names both client pins', async () => {
+  test('a missing or mismatched pin refuses before building and names the pin', async () => {
     const key = await generateReleaseSigningKey();
     const other = await generateReleaseSigningKey();
 
     for (const pin of ['', other.publicKeyHex]) {
       const error = await rejectedBuild({ KINU_RELEASE_SIGNING_KEY: key.privateKeyPkcs8Base64, KINU_RELEASE_SIGNING_PUBLIC_KEY: pin });
 
-      expect(error).toContain('packages/core/src/http/release-signing.ts');
-      expect(error).toContain('packages/pc-agent/src/update.js');
+      expect(error).toContain('packages/core/src/http/release-message.ts');
     }
   });
 });

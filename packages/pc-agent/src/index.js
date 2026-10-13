@@ -187,7 +187,9 @@ const sandbox = require('./sandbox.js');
 
 const pty = require('./pty.js');
 
-const { createProcReader, procStat, procEntryGone } = pty;
+const { createProcReader, procStat, procEntryGone, groupHasLiveProcess } = pty;
+
+const { elidedOutput } = require('../../core/src/execution/bounded-output.ts');
 
 const update = require('./update.js');
 
@@ -200,6 +202,10 @@ const FRAMES = protocol.frames;
 const chatgpt = require('./chatgpt.js');
 
 const { runToExit } = update;
+
+/** This daemon's own file, as Bun started it. Not `__filename`: a release bundles this file, and the bundler writes the
+ *  source's path into it. */
+const daemonPath = () => require.main.filename;
 
 const HOME_SETTING = process.env.KINU_HOME?.trim() ?? '';
 
@@ -441,9 +447,9 @@ function rpc(ws, id, result, error) {
 
 // ── Shadow-git checkpoints ─────────────────────────────────────────────
 //
-// One engine with the CLI's: the blocks below are core's checkpoints/format.ts
-// and checkpoints/engine.ts, generated, so a machine's checkpoints are taken by
-// the same rules and read alike whichever side wrote them:
+// One engine with the CLI's, core's checkpoints/format.ts and
+// checkpoints/engine.ts, so a machine's checkpoints are taken by the same rules
+// and read alike whichever side wrote them:
 //
 //   <device home>/checkpoints/<agent>/<sha256(dir)[:16]>/ — bare GIT_DIR
 //     KINU_WORKDIR                                    — the target dir
@@ -456,496 +462,9 @@ function rpc(ws, id, result, error) {
 // honestly to "checkpoints unavailable: git not found" without blocking
 // anything.
 
-// BEGIN GENERATED from packages/core/src/checkpoints/format.ts by `bun scripts/daemon-generated.ts`. Do not edit.
+const { DEFAULT_CHECKPOINT_KEEP } = require('../../core/src/checkpoints/format.ts');
 
-// Shadow-git store format; the daemon carries a generated copy.
-
-const DEFAULT_CHECKPOINT_KEEP = 50;
-
-const CHECKPOINTS_UNAVAILABLE_NO_GIT = 'checkpoints unavailable: git not found';
-
-const CHECKPOINT_REF_PREFIX = 'refs/kinu';
-
-const CHECKPOINT_WORKDIR_MARKER = 'KINU_WORKDIR';
-
-/** Generated/derived trees never snapshot. */
-const CHECKPOINT_EXCLUDES = [
-  '.git/', '.hg/', '.svn/',
-  'node_modules/', '.venv/', 'venv/', '__pycache__/', '*.pyc',
-  'dist/', 'build/', 'target/', 'out/', '.next/', '.nuxt/',
-  '.cache/', '.pytest_cache/', '.mypy_cache/', '.ruff_cache/', 'coverage/',
-  '.DS_Store', 'Thumbs.db', '*.log',
-];
-
-/** Null meta marks out-of-turn snapshots (pre-restore). */
-function checkpointSubject(meta, reason) {
-  const clean = (field) => {
-    const spaced = field.replace(/[\r\n|]/g, ' ').trim();
-
-    return spaced === '' ? '-' : spaced;
-  };
-
-  return `turn=${clean(meta?.turnId ?? '-')} session=${clean(meta?.sessionId ?? '-')} ${clean(reason)}`;
-}
-
-/** Unrecognized subjects keep the raw text as the reason with no turn attribution. */
-function parseCheckpointSubject(
-  subject,
-) {
-  const m = /^turn=(\S+) session=(\S+) (.*)$/.exec(subject);
-
-  if (!m) return { turnId: null, sessionId: null, reason: subject };
-  const turn = m[1];
-  const session = m[2];
-  const reason = m[3];
-
-  if (turn === undefined || session === undefined || reason === undefined) {
-    return { turnId: null, sessionId: null, reason: subject };
-  }
-
-  return {
-    turnId: turn === '-' ? null : turn,
-    sessionId: session === '-' ? null : session,
-    reason,
-  };
-}
-
-// A path `git add` cannot read is uncovered, not a failed checkpoint. Engines pass `--ignore-errors`
-// (else git aborts, leaving later paths unstaged) under `LC_ALL=C`; these are git 2.53's exact lines.
-const UNREADABLE_DIR = /^warning: could not open directory '(.+?)\/?': Permission denied$/;
-
-const UNREADABLE_FILE = /^error: open\("(.+)"\): Permission denied$/;
-
-const UNINDEXED_FILE = /^error: unable to index file '(.+?)'$/;
-
-const ADD_FAILED = /^fatal: adding files failed$/;
-
-function diagnoseStaging(stderr) {
-  const lines = stderr.split('\n').map((line) => line.trim()).filter(Boolean);
-  const unreadable = new Set();
-
-  for (const line of lines) {
-    const denied = UNREADABLE_DIR.exec(line) ?? UNREADABLE_FILE.exec(line);
-    const file = denied?.[1];
-
-    if (file !== undefined) unreadable.add(file);
-  }
-
-  return {
-    unreadable: [...unreadable].sort((left, right) => (left < right ? -1 : 1)),
-    // Two passes so a consequence line is judged against the whole denial set.
-    unexplained: lines.filter((line) => !isDenial(line, unreadable)),
-  };
-}
-
-/** `code` null: git never finished, so its index is partial whatever it printed. */
-function stagingOutcome(code, stderr) {
-  if (code === null) return { failure: 'checkpoint staging failed: git add did not finish' };
-  const diagnosis = diagnoseStaging(stderr);
-
-  if (diagnosis.unexplained.length > 0 || (code !== 0 && diagnosis.unreadable.length === 0)) {
-    return { failure: `checkpoint staging failed: ${stderr.trim()}` };
-  }
-
-  return { unreadable: diagnosis.unreadable };
-}
-
-function isDenial(line, unreadable) {
-  if (UNREADABLE_DIR.test(line) || UNREADABLE_FILE.test(line)) return true;
-  // Consequence lines are tolerated only alongside a denial; `unable to index file` also covers
-  // non-permission failures.
-  const unindexed = UNINDEXED_FILE.exec(line);
-
-  if (unindexed) {
-    const file = unindexed[1];
-
-    return file !== undefined && unreadable.has(file);
-  }
-
-  return ADD_FAILED.test(line) && unreadable.size > 0;
-}
-
-const REASON_UNREADABLE_LIMIT = 3;
-
-/** Unreadable paths ride in the free-text reason: the subject grammar is a two-engine on-disk contract. */
-function checkpointReason(reason, unreadable) {
-  if (unreadable.length === 0) return reason;
-  const shown = unreadable.slice(0, REASON_UNREADABLE_LIMIT);
-  const rest = unreadable.length - shown.length;
-  const more = rest > 0 ? ` +${String(rest)} more` : '';
-
-  return `${reason} [skipped ${String(unreadable.length)} unreadable: ${shown.join(' ')}${more}]`;
-}
-
-/** Snapshot time from a `refs/kinu/<ms13>-<seq36>` ref name. */
-function checkpointRefTimestampMs(ref) {
-  const m = /(\d{13})-[0-9a-z]+$/.exec(ref);
-  const stamp = m?.[1];
-
-  return stamp === undefined ? 0 : Number(stamp);
-}
-
-// END GENERATED
-
-// BEGIN GENERATED from packages/core/src/checkpoints/engine.ts by `bun scripts/daemon-generated.ts`. Do not edit.
-
-// Shadow-git checkpoint engine, the one both the CLI and the device daemon run; the daemon carries a generated copy.
-// It imports no value: the host hands it the filesystem, paths, the platform's dirs, hashing and git, so the copy
-// runs in the daemon's dependency-free JavaScript unchanged. One set of rules:
-//   - no wall clock on git: it ends on its own, and a bounded buffer keeps this process's heap;
-//   - one operation at a time, in arrival order: git keeps one index per store, and a restore rewrites the tree a
-//     snapshot reads;
-//   - one snapshot per agent, directory and turn, taken before the mutation it precedes, never blocking it;
-//   - a workdir climbs from the entry itself (`lstat`: moving a link changes the directory holding it), never
-//     through the shared temp directory, the home folder, or a directory `covers` refuses.
-
-/** What marks a project directory, the snapshot unit a file write climbs to. */
-const PROJECT_MARKERS = ['.git', 'package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'Makefile', '.hg'];
-
-const SHA_RE = /^[0-9a-f]{4,64}$/i;
-
-/** git's output this process keeps in memory, at most. */
-const GIT_OUTPUT_BYTES = 32 * 1024 * 1024;
-
-/** A git run: `code` null when git never finished (a signal, an overfull buffer); `missing` when it could not start. */
-
-/** The node modules the engine reads through, as both hosts hand them over. */
-
-/** A snapshot a mutation asks for. `turn` null is out of any turn: the turn key is `no-turn`. */
-
-/** What a request got: the checkpoint id (null when the directory is no work tree), or why none was taken. */
-
-function failed(message) {
-  return new Error(message);
-}
-
-/** The environment a git child runs under. */
-
-/** A failure and each cause under it, outermost first: the frame naming the real fault is often a cause deeper. */
-function causeText(failure) {
-  const links = [failure.message];
-
-  for (let at = failure.cause; at instanceof Error; at = at.cause) links.push(at.message);
-
-  return links.join(': ');
-}
-
-/** A `diff-tree --name-status` letter in restore direction (current to checkpoint). */
-function restoreKindOf(status) {
-  if (status === 'A') return 'create';
-
-  return status === 'D' ? 'delete' : 'modify';
-}
-
-function createCheckpointEngine(host, options) {
-  const { fs: disk, path: paths } = host;
-  const keep = Math.max(1, options.keep);
-  const unsnapshottable = new Set([host.tmpdir, '/tmp', '/var/tmp'].map((dir) => paths.resolve(dir)));
-  let gitAvailable = null;
-  let refSeq = 0;
-  /** `${agent}|${dir}` → the turn whose snapshot was taken. A failed one is never recorded, so the next mutation retries. */
-  const turnDone = new Map();
-
-  const isolatedEnv = () => {
-    const env = {};
-
-    for (const [name, value] of Object.entries(host.env)) {
-      if (value !== undefined && !name.startsWith('GIT_')) env[name] = value;
-    }
-
-    env.GIT_CONFIG_GLOBAL = host.devNull;
-    env.GIT_CONFIG_SYSTEM = host.devNull;
-    env.GIT_CONFIG_NOSYSTEM = '1';
-    env.GIT_AUTHOR_NAME = 'Kinu Checkpoint';
-    env.GIT_AUTHOR_EMAIL = 'checkpoints@kinu.local';
-    env.GIT_COMMITTER_NAME = 'Kinu Checkpoint';
-    env.GIT_COMMITTER_EMAIL = 'checkpoints@kinu.local';
-    // `stagingOutcome` parses git's own English diagnostics.
-    env.LC_ALL = 'C';
-
-    return env;
-  };
-
-  const storeEnv = (gitDir, workdir) => ({ ...isolatedEnv(), GIT_DIR: gitDir, GIT_WORK_TREE: workdir });
-
-  /** A missing cwd fails the spawn the way a missing binary does; it is checked so it never reads as "no git". */
-  const runGit = async (args, cwd, env) => {
-    if (!disk.existsSync(cwd)) return { code: 1, stdout: '', stderr: `working directory not found: ${cwd}`, missing: false };
-    const run = await host.run(options.gitBin, args, { cwd, env, maxBuffer: GIT_OUTPUT_BYTES });
-
-    if (run.missing) {
-      gitAvailable = false;
-      throw failed(CHECKPOINTS_UNAVAILABLE_NO_GIT);
-    }
-
-    gitAvailable = true;
-
-    return run;
-  };
-
-  /** git's stdout, or its stderr thrown. */
-  const git = async (args, cwd, env, doing) => {
-    const run = await runGit(args, cwd, env);
-
-    const said = run.stderr.trim();
-
-    if (run.code !== 0) throw failed(`${doing}: ${said === '' ? `git exited ${String(run.code)}` : said}`);
-
-    return run.stdout;
-  };
-
-  const probeGit = async () => {
-    if (gitAvailable !== null) return gitAvailable;
-
-    try {
-      await runGit(['--version'], host.homedir, isolatedEnv());
-    } catch (error) {
-      // A rejection that did not record a missing git is not one.
-      if (gitAvailable !== false) throw error;
-    }
-
-    return gitAvailable ?? false;
-  };
-
-  const sanitizeAgent = (agent) => (agent === '' ? 'agent' : agent).replace(/[^A-Za-z0-9_-]/g, '_');
-  const storeDirFor = (agent, dir) => paths.join(options.base, sanitizeAgent(agent), host.sha256(paths.resolve(dir)).slice(0, 16));
-  const workdirOrBase = (workdir) => (disk.existsSync(workdir) ? workdir : options.base);
-
-  const initStore = async (gitDir, workdir) => {
-    if (disk.existsSync(paths.join(gitDir, 'HEAD'))) return;
-    disk.mkdirSync(gitDir, { recursive: true });
-    await git(['init', '--bare', '--quiet', gitDir], paths.dirname(gitDir), isolatedEnv(), 'checkpoint store init failed');
-    disk.mkdirSync(paths.join(gitDir, 'info'), { recursive: true });
-    disk.writeFileSync(paths.join(gitDir, 'info', 'exclude'), CHECKPOINT_EXCLUDES.join('\n') + '\n');
-    disk.writeFileSync(paths.join(gitDir, CHECKPOINT_WORKDIR_MARKER), paths.resolve(workdir) + '\n');
-  };
-
-  /** Why `dir` is no work tree to snapshot, or null when it is one. */
-  const snapshotSkipped = (dir) => {
-    const abs = paths.resolve(dir);
-
-    if (abs === paths.parse(abs).root || abs === paths.resolve(host.homedir)) return 'it is the filesystem root or the owner\'s home folder itself';
-
-    // `workdirForPath` resolves a bare `/tmp/x.js` to `/tmp`, which holds every process's scratch.
-    if (unsnapshottable.has(abs)) return 'it is a temp directory every process shares';
-
-    if (!disk.existsSync(abs)) return 'it does not exist';
-
-    return disk.statSync(abs).isDirectory() ? null : 'it is not a directory';
-  };
-
-  const storeRefs = async (gitDir, workdir) => {
-    const run = await runGit(['for-each-ref', '--sort=-refname', '--format=%(refname)|%(objectname)|%(subject)', CHECKPOINT_REF_PREFIX],
-      workdirOrBase(workdir), storeEnv(gitDir, workdir));
-
-    if (run.code !== 0) return [];
-
-    return run.stdout.split('\n').filter(Boolean).map((line) => {
-      const [ref = '', id = '', ...rest] = line.split('|');
-
-      return { ref, id, subject: rest.join('|') };
-    });
-  };
-
-  /** `--ignore-errors`, so an unreadable path costs only that path; the skipped paths are named in the reason. */
-  const stageCurrent = async (gitDir, workdir) => {
-    const env = storeEnv(gitDir, workdir);
-    const add = await runGit(['add', '-A', '--ignore-errors'], workdir, env);
-    const staged = stagingOutcome(add.code, add.stderr);
-
-    if ('failure' in staged) throw failed(staged.failure);
-
-    return { tree: (await git(['write-tree'], workdir, env, 'checkpoint write-tree failed')).trim(), unreadable: staged.unreadable };
-  };
-
-  /** The new checkpoint's id, or the newest one's when nothing changed; null when `dir` is no work tree. */
-  const snapshot = async (agent, dir, meta, reason) => {
-    if (snapshotSkipped(dir) !== null) return null;
-    const abs = paths.resolve(dir);
-    const gitDir = storeDirFor(agent, abs);
-
-    await initStore(gitDir, abs);
-    const env = storeEnv(gitDir, abs);
-    const staged = await stageCurrent(gitDir, abs);
-    const refs = await storeRefs(gitDir, abs);
-    const latest = refs[0];
-
-    if (latest !== undefined && (await runGit(['rev-parse', `${latest.id}^{tree}`], abs, env)).stdout.trim() === staged.tree) return latest.id;
-
-    const subject = checkpointSubject(meta, checkpointReason(reason, staged.unreadable));
-    const sha = (await git(['commit-tree', staged.tree, '-m', subject], abs, env, 'checkpoint commit failed')).trim();
-    const refName = `${CHECKPOINT_REF_PREFIX}/${String(host.now()).padStart(13, '0')}-${(refSeq++).toString(36).padStart(3, '0')}`;
-
-    await git(['update-ref', refName, sha], abs, env, 'checkpoint ref update failed');
-
-    if (refs.length + 1 > keep) {
-      for (const stale of (await storeRefs(gitDir, abs)).slice(keep)) await runGit(['update-ref', '-d', stale.ref], abs, env);
-      await runGit(['prune', '--expire=now'], abs, env);
-    }
-
-    return sha;
-  };
-
-  const requireCheckpoint = async (agent, dir, id) => {
-    if (!SHA_RE.test(id)) throw failed(`invalid checkpoint id: ${id}`);
-    const abs = paths.resolve(dir);
-    const gitDir = storeDirFor(agent, abs);
-
-    if (!disk.existsSync(paths.join(gitDir, 'HEAD'))) throw failed(`no checkpoints exist for ${abs}`);
-    const env = storeEnv(gitDir, abs);
-
-    if ((await runGit(['rev-parse', '--verify', `${id}^{commit}`], workdirOrBase(abs), env)).code !== 0) throw failed(`checkpoint not found: ${id}`);
-
-    return { gitDir, abs, env };
-  };
-
-  /** The current tree against the checkpoint's, in restore direction; an unreadable path is in neither. */
-  const diffToCheckpoint = async (gitDir, abs, id) => {
-    const current = await stageCurrent(gitDir, abs);
-    const out = await git(['diff-tree', '-r', '--name-status', current.tree, `${id}^{tree}`], abs, storeEnv(gitDir, abs), 'checkpoint diff failed');
-
-    return out.split('\n').flatMap((line) => {
-      const tab = line.indexOf('\t');
-
-      if (tab < 0) return [];
-      const status = line.slice(0, tab);
-
-      return [{ path: line.slice(tab + 1), kind: restoreKindOf(status) }];
-    });
-  };
-
-  const listEntries = async (agent, query) => {
-    if (!(await probeGit())) return [];
-    const agentBase = paths.join(options.base, sanitizeAgent(agent));
-
-    // No store directory means this agent has taken no checkpoints.
-    if (!disk.existsSync(agentBase)) return [];
-    const entries = [];
-
-    for (const name of disk.readdirSync(agentBase)) {
-      const gitDir = paths.join(agentBase, name);
-      const marker = paths.join(gitDir, CHECKPOINT_WORKDIR_MARKER);
-
-      if (!disk.existsSync(paths.join(gitDir, 'HEAD')) || !disk.existsSync(marker)) continue;
-      const workdir = disk.readFileSync(marker, 'utf8').trim();
-
-      for (const ref of await storeRefs(gitDir, workdir)) {
-        const meta = parseCheckpointSubject(ref.subject);
-
-        if (typeof query.turnId === 'string' && meta.turnId !== query.turnId) continue;
-        entries.push({ id: ref.id, dir: workdir, at: checkpointRefTimestampMs(ref.ref), ...meta });
-      }
-    }
-
-    entries.sort((a, b) => b.at - a.at);
-
-    return entries.slice(0, Math.max(1, query.limit ?? 50));
-  };
-
-  const restoreTo = async (agent, dir, id) => {
-    if (!(await probeGit())) throw failed(CHECKPOINTS_UNAVAILABLE_NO_GIT);
-    const { gitDir, abs, env } = await requireCheckpoint(agent, dir, id);
-
-    if (!disk.existsSync(abs)) throw failed(`working directory no longer exists: ${abs}`);
-    const files = await diffToCheckpoint(gitDir, abs, id);
-    // Out of any turn, so the restore is undoable without joining the armed turn's group.
-    const preRestoreId = await snapshot(agent, abs, null, 'pre-restore');
-
-    // Files created since the checkpoint go; the checkpoint's tree, content and deletions, is then checked out.
-    for (const change of files) {
-      const target = paths.resolve(abs, change.path);
-
-      if (change.kind !== 'delete' || !target.startsWith(abs)) continue;
-
-      // The one failure expected: the file is already gone.
-      try {
-        disk.unlinkSync(target);
-      } catch (error) {
-        if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
-      }
-    }
-
-    await git(['read-tree', id], abs, env, 'checkpoint read-tree failed');
-    await git(['checkout-index', '-a', '-f'], abs, env, 'checkpoint restore failed');
-
-    return { dir: abs, id, files, preRestoreId };
-  };
-
-  const ensureNow = async (request) => {
-    try {
-      if (!(await probeGit())) return { skipped: 'this machine has no git to take one with' };
-      const abs = paths.resolve(request.dir);
-      const skipped = snapshotSkipped(abs);
-
-      if (skipped !== null) return { skipped };
-      const key = `${sanitizeAgent(request.agent)}|${abs}`;
-      const turnKey = request.turn?.turnId ?? 'no-turn';
-
-      if (turnDone.get(key) === turnKey) return null;
-      const id = await snapshot(request.agent, abs, request.turn, request.reason);
-
-      turnDone.set(key, turnKey);
-
-      return { id };
-    } catch (error) {
-      const skipped = `the snapshot failed: ${error instanceof Error ? causeText(error) : 'it threw something that is not an Error'}`;
-
-      host.log(`checkpoint ${skipped} (the mutation it preceded runs)`);
-
-      return { skipped };
-    }
-  };
-
-  let queue = Promise.resolve();
-
-  const inOrder = (operation) => {
-    const run = queue.then(operation);
-
-    queue = Promise.allSettled([run]);
-
-    return run;
-  };
-
-  return {
-    status: () => inOrder(async () => ((await probeGit())
-      ? { available: true }
-      : { available: false, reason: CHECKPOINTS_UNAVAILABLE_NO_GIT })),
-    ensure: (request) => inOrder(() => ensureNow(request)),
-    mutate: (request, apply) => inOrder(async () => apply(request === null ? null : await ensureNow(request))),
-    list: (agent, query) => inOrder(() => listEntries(agent, query)),
-    plan: (agent, dir, id) => inOrder(async () => {
-      if (!(await probeGit())) throw failed(CHECKPOINTS_UNAVAILABLE_NO_GIT);
-      const { gitDir, abs } = await requireCheckpoint(agent, dir, id);
-
-      return { dir: abs, id, files: await diffToCheckpoint(gitDir, abs, id) };
-    }),
-    restore: (agent, dir, id) => inOrder(() => restoreTo(agent, dir, id)),
-    workdirForPath(target, covers = () => true) {
-      const abs = paths.resolve(target);
-      // The entry itself, never what a link points at: moving or removing a link changes the directory holding it.
-      const candidate = disk.existsSync(abs) && disk.lstatSync(abs).isDirectory() ? abs : paths.dirname(abs);
-      const home = paths.resolve(host.homedir);
-      // Stop at the temp directory, resolved and real (scripts/preflight.ts refuses a marker above it): a marker there
-      // claimed every write beneath it, 24,483 ms for one device write (2026-09-02).
-      const temp = paths.resolve(host.tmpdir);
-      const realTemp = disk.existsSync(temp) ? disk.realpathSync(temp) : temp;
-      let probe = candidate;
-
-      while (probe !== paths.dirname(probe) && probe !== home && covers(probe)) {
-        const real = disk.existsSync(probe) ? disk.realpathSync(probe) : probe;
-
-        if (probe === temp || real === realTemp) break;
-
-        if (PROJECT_MARKERS.some((marker) => disk.existsSync(paths.join(probe, marker)))) return probe;
-        probe = paths.dirname(probe);
-      }
-
-      return candidate;
-    },
-  };
-}
-
-// END GENERATED
+const { createCheckpointEngine } = require('../../core/src/checkpoints/engine.ts');
 
 /** This daemon's frames over core's one checkpoint engine: a hint names the agent, its turn and the directory. */
 function createCheckpoints(opts = {}) {
@@ -1015,42 +534,6 @@ const BARE_BINARY_NAME = /^[A-Za-z0-9._+-]{1,64}$/;
 
 const WHICH_MAX_NAMES = 64;
 
-/**
- * Whether any PATH entry provides an executable `name`.
- *
- * Must agree with `Bun.which` on the CLI host, which resolves the same names on
- * the machine the CLI runs on — one row, two resolvers, and a disagreement is a
- * capability the model routes work by. `cli-backend/tests/path-resolver-parity.test.ts`
- * holds them to it.
- *
- * `isFile` is the load-bearing half: a DIRECTORY can carry a binary's name and
- * carry the execute bit (they nearly all do), and `accessSync(X_OK)` alone said
- * yes to it. A directory named `bun` on PATH claimed `javascript` and
- * `typescript` for a machine that could run neither.
- */
-function onPath(dirs, name) {
-  for (const dir of dirs) {
-    const candidate = path.join(dir, name);
-
-    try {
-      // stat, not lstat: a symlink to a real executable IS the normal shape of
-      // a binary on PATH, and resolving it is what `which` does.
-      if (!fs.statSync(candidate).isFile()) continue;
-      fs.accessSync(candidate, fs.constants.X_OK);
-
-      return true;
-    } catch (err) {
-      // Absent, not executable by this user, an entry that is not a directory
-      // at all, or a symlink that goes nowhere: each means this entry does not
-      // provide the binary. Anything else is a real fault and must not pass as
-      // a clean "absent".
-      if (!['ENOENT', 'EACCES', 'ENOTDIR', 'ELOOP', 'ENAMETOOLONG'].includes(err.code)) throw err;
-    }
-  }
-
-  return false;
-}
-
 /** The names this daemon will answer about, parsed out of the frame: bare
  *  binary names, and nothing else. */
 function probeNames(raw) {
@@ -1068,10 +551,12 @@ function probeNames(raw) {
   return names;
 }
 
+/** The names an executable file on PATH provides, resolved as the CLI host resolves them (`Bun.which`, PATH passed so a
+ *  toolchain installed since start counts). */
 function whichAll(names) {
-  const dirs = String(process.env.PATH ?? '').split(path.delimiter).filter(Boolean);
+  const PATH = String(process.env.PATH ?? '');
 
-  return probeNames(names).filter((name) => onPath(dirs, name));
+  return probeNames(names).filter((name) => Bun.which(name, { PATH }) !== null);
 }
 
 // ── In-flight commands ─────────────────────────────────────────────────
@@ -1241,28 +726,6 @@ async function supervisorStartMatches(entry) {
   return (await startedAs(entry.pid, entry.start)) && (await startedAs(entry.group, entry.groupStart));
 }
 
-async function processGroupHasLiveProcess(group) {
-  if (process.platform === 'linux') {
-    for (const entry of fs.readdirSync('/proc', { withFileTypes: true })) {
-      if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue;
-
-      const stat = procStat(entry.name);
-
-      if (stat !== undefined && stat.group === group && stat.state !== 'Z') return true;
-    }
-
-    return false;
-  }
-
-  const rows = (await psOutput(['-ax', '-o', 'pid=,pgid=,stat='])).trim().split('\n');
-
-  return rows.some((row) => {
-    const [pid, pgid, stat] = row.trim().split(/\s+/, 3);
-
-    return Number(pid) > 0 && Number(pgid) === group && stat && !stat.startsWith('Z');
-  });
-}
-
 /** A signal name the supervisor recorded: `SIG` and the platform's name for it. */
 const SIGNAL_NAME = /^SIG[A-Z0-9]+$/;
 
@@ -1340,7 +803,8 @@ const COMMAND_SHELL = 'bash';
 const SUPERVISOR_SCRIPT = `
 'use strict';
 const fs = require('node:fs');
-const { procStat } = (${createProcReader.toString()})(fs);
+const { procStat, groupHasLiveProcess } = (${createProcReader.toString()})(fs);
+const elidedOutput = (${elidedOutput.toString()});
 const { execFile, spawn } = require('node:child_process');
 
 // fd 4 is the record's \`life\`, handed over at this process's spawn: the kernel closes it however this process exits,
@@ -1427,27 +891,9 @@ function writeTerminalResult(kind, exitCode, signal) {
   fs.renameSync(temporary, resultFile);
 }
 
-async function processGroupHasLiveProcess(group) {
-  if (process.platform === 'linux') {
-    for (const entry of fs.readdirSync('/proc', { withFileTypes: true })) {
-      if (!entry.isDirectory() || !/^\\d+$/.test(entry.name)) continue;
-      try {
-        const stat = procStat(entry.name);
-        if (stat !== undefined && stat.group === group && stat.state !== 'Z') return true;
-      } catch {}
-    }
-    return false;
-  }
-  const rows = (await run('ps', ['-ax', '-o', 'pid=,pgid=,stat='])).trim().split('\\n');
-  return rows.some((row) => {
-    const [pid, pgid, stat] = row.trim().split(/\\s+/, 3);
-    return Number(pid) > 0 && Number(pgid) === group && stat && !stat.startsWith('Z');
-  });
-}
-
 /** One stream: the first HEAD bytes go to its file as they arrive, the last TAIL stay in a ring, every
  *  byte is counted, and once the stream outgrows both the whole of it goes to the spill file. close()
- *  writes what core's BoundedOutput.finish writes, byte for byte, so every executor reads the same.
+ *  writes core's elidedOutput, as BoundedOutput.finish does, so every executor reads the same.
  *  The spill is written at its host path and named by the path the command's own view gives it. */
 class Capture {
   constructor(file, spill, stream) {
@@ -1538,30 +984,14 @@ class Capture {
       fs.closeSync(this.fd);
       return;
     }
-    // A character cut at either seam is dropped whole rather than decoded as a replacement.
-    const last = Buffer.alloc(Math.min(4, this.head));
-    fs.readSync(this.fd, last, 0, last.length, this.head - last.length);
-    let headEnd = this.head;
-    for (let lead = last.length - 1; lead >= 0; lead--) {
-      const byte = last[lead];
-      if ((byte & 0xC0) === 0x80) continue;
-      const size = byte >= 0xF0 ? 4 : byte >= 0xE0 ? 3 : byte >= 0xC0 ? 2 : 1;
-      if (lead + size > last.length) headEnd = this.head - last.length + lead;
-      break;
-    }
-    let tailStart = 0;
-    while (tailStart < Math.min(3, tail.length) && (tail[tailStart] & 0xC0) === 0x80) tailStart++;
-    const omitted = this.total - headEnd - (tail.length - tailStart);
+    const head = Buffer.alloc(this.head);
+    fs.readSync(this.fd, head, 0, this.head, 0);
     if (this.spill !== null) fs.closeSync(this.spill);
     let where = 'the full ' + this.stream + ' was not saved: ' + this.spillFailure;
     if (this.spill !== null) where = 'the full ' + this.stream + ' is at ' + this.spillTarget.shown;
-    const closing = Buffer.concat([
-      Buffer.from('\\n[\\u2026 ' + omitted + ' bytes omitted \\u2026]\\n'),
-      tail.subarray(tailStart),
-      Buffer.from('\\n[' + this.stream + ': ' + this.total + ' bytes, ' + omitted + ' omitted from the middle; ' + where + ']\\n'),
-    ]);
-    fs.writeSync(this.fd, closing, 0, closing.length, headEnd);
-    fs.ftruncateSync(this.fd, headEnd + closing.length);
+    const text = Buffer.from(elidedOutput({ head, tail, total: this.total, stream: this.stream, where }));
+    fs.writeSync(this.fd, text, 0, text.length, 0);
+    fs.ftruncateSync(this.fd, text.length);
     fs.closeSync(this.fd);
   }
 }
@@ -1732,7 +1162,7 @@ child.once('exit', (code, signal) => {
       // This confirms only the owned process group. A command can use setsid
       // to escape that group; same-uid supervision cannot honestly claim it
       // terminated such a detached descendant.
-      processGroupHasLiveProcess(child.pid).then(
+      groupHasLiveProcess(child.pid, (args) => run('ps', args)).then(
         (groupAlive) => finish(groupAlive ? 'exited' : 'cancelled', groupAlive ? 125 : 137),
         () => finish('exited', 125),
       );
@@ -2044,7 +1474,7 @@ function createInFlight(root = INFLIGHT_ROOT, isStarting = () => false) {
       throw new Error(`cannot terminate ${requestId}: supervisor exited without a confirmed group termination`);
     }
 
-    if (await processGroupHasLiveProcess(entry.group)) {
+    if (await groupHasLiveProcess(entry.group, psOutput)) {
       throw new Error(`cannot terminate ${requestId}: owned process group death is unconfirmed`);
     }
 
@@ -3604,7 +3034,7 @@ function procState(pid) {
  * lock exists for.
  */
 async function processRunsThisDaemon(pid) {
-  const named = (args) => args.some((arg) => arg === __filename || path.basename(arg) === path.basename(__filename));
+  const named = (args) => args.some((arg) => arg === daemonPath() || path.basename(arg) === path.basename(daemonPath()));
 
   try {
     if (process.platform === 'linux') {
@@ -3808,7 +3238,7 @@ async function main() {
   const updater = update.createUpdater({
     layout: {
       deviceHome: DEVICE_HOME,
-      daemonPath: __filename,
+      daemonPath: daemonPath(),
       runtime: process.execPath,
     },
     origin: HTTP_ORIGIN,
@@ -4065,7 +3495,7 @@ if (require.main === module) {
     if (process.argv.includes('--selftest')) {
       const stamp = RUNNING_VERSION;
 
-      if (stamp === null) throw new Error(`no version stamp beside ${__filename}`);
+      if (stamp === null) throw new Error(`no version stamp beside ${daemonPath()}`);
       console.log(stamp);
     } else {
       startOnApprovedBun().catch(reportFatal);

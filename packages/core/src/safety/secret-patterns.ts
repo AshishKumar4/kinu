@@ -1,6 +1,6 @@
 /**
  * Secret shapes shared by `scripts/secret-scan.ts`, blueprint export (`secret-scan.ts` finds them) and redaction.
- * The device daemon carries a copy (pc-agent/src/chatgpt.js, generated) to redact a provider's refusal.
+ * The device daemon requires it (pc-agent/src/chatgpt.js) to redact a provider's refusal.
  */
 
 export interface SecretPattern {

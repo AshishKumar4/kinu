@@ -6,6 +6,10 @@ export const DEVICE_PROTOCOL_VERSION = protocol.version;
 
 export const DEVICE_VERSION_REFUSAL_CLOSE = protocol.versionRefusalClose;
 
+/** A terminal's window bound per axis, the daemon's and the hub's: the kernel carries each as an `unsigned short`, and a
+ *  thousand cells on a side is past any real display, so more is a malformed frame. */
+export const DEVICE_PTY_MAX_AXIS = protocol.ptyMaxAxis;
+
 export const DEVICE_FRAMES = protocol.frames;
 
 export const DEVICE_ERRORS = protocol.errors;

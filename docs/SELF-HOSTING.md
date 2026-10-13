@@ -29,10 +29,7 @@ bun scripts/release-signing-key.ts
 
 The command writes the Ed25519 private key as PKCS#8 base64 to `~/.config/kinu/release-signing.key`, with mode `0600`, and prints only its path and `RELEASE_SIGNING_PUBLIC_KEY=<64 hex characters>`. It refuses to overwrite an existing key. For another location, set `KINU_RELEASE_SIGNING_KEY_FILE` before generating the key and keep that variable set for every build. I back up the private key outside the checkout.
 
-I copy the printed hex value into both `RELEASE_SIGNING_PUBLIC_KEY` constants:
-
-- `packages/core/src/http/release-signing.ts`, used by the installer launcher and CLI;
-- `packages/pc-agent/src/update.js`, used by the device daemon.
+I copy the printed hex value into `RELEASE_SIGNING_PUBLIC_KEY` in `packages/core/src/http/release-message.ts`, the one pin the installer launcher, the CLI and the device daemon all read.
 
 Then I check the key against the source pin:
 

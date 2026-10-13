@@ -4,7 +4,7 @@
  */
 
 import * as v from 'valibot';
-import { DEVICE_PTY_MAX_AXIS } from './device-tunnel';
+import { DEVICE_PTY_MAX_AXIS } from './device-protocol';
 
 /** A socket cannot cross a Durable Object RPC boundary; the upgrade request is forwarded here instead. */
 export const WORKSPACE_TERMINAL_PATH = '/_kinu/workspace-terminal';

@@ -1,5 +1,5 @@
-// A provider's refusal in its own words, safe to log and show; the device daemon carries a copy
-// (pc-agent/src/chatgpt.js, generated). Parsing the body is each side's.
+// A provider's refusal in its own words, safe to log and show; the device daemon requires it too
+// (pc-agent/src/chatgpt.js). Parsing the body is each side's.
 import type { JsonObject, JsonValue } from '../utils/json';
 import { redactSecrets } from './secret-patterns';
 import { revealMisrepresenting } from './untrusted-text';

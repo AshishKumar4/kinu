@@ -231,8 +231,8 @@ unapproved devices never fall back to availability. `shell`, `native_binary`,
 `fs_owned`, `net_outbound`, `process_spawn` are structural. The hub probes
 `TOOLCHAIN_PROBE_BINARIES` (`core/src/execution/toolchain.ts`) and records the
 PATH answer in `DeviceStatus.toolchain` for that socket's life.
-`cli-backend/src/host-toolchain.ts` and the Node daemon must agree for equal
-PATHs, pinned by `cli-backend/tests/path-resolver-parity.test.ts`.
+`cli-backend/src/host-toolchain.ts` and the daemon both resolve with
+`Bun.which` against the PATH of the moment (`cli-backend/tests/daemon-which.test.ts`).
 
 A named capability is evidenced; one searched inside probe scope but absent is
 known absent; all others are unmeasured. A stale or too-old probe is not an

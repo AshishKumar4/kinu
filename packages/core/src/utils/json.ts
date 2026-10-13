@@ -192,6 +192,13 @@ export function renderIssues(issues: readonly v.BaseIssue<unknown>[]): string {
     .join('; ');
 }
 
+/** `input.value` as `schema` reads it, or undefined where it does not fit: a tool argument an executor's own refusal names. */
+export function parseInput<TSchema extends v.GenericSchema>(schema: TSchema, input: { value: unknown }): v.InferOutput<TSchema> | undefined {
+  const result = v.safeParse(schema, input.value);
+
+  return result.success ? result.output : undefined;
+}
+
 /** Trimmed non-empty text, or undefined. */
 export function nonEmptyString(input: { value: unknown }): string | undefined {
   const parsed = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), input.value);

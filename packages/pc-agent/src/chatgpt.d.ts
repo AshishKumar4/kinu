@@ -43,13 +43,9 @@ export declare const ISSUER: string;
 
 export declare const RESOURCE: string;
 
-export declare const PLAN_SCOPE: string;
-
 export declare const SCOPES: readonly string[];
 
 export declare const DYNAMIC_AGENT_CLIENT: string;
-
-export declare const AGENT_NAME_HINT: string;
 
 export declare const CALLBACK_PATH: string;
 

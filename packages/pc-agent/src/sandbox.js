@@ -29,21 +29,19 @@ const util = require('node:util');
 
 const update = require('./update.js');
 
+const { RELEASE_SIGNING_PUBLIC_KEY_ENV } = require('../../core/src/http/release-message.ts');
+
+const { MACHINE_SANDBOX_REASONS } = require('../../core/src/execution/machine-sandbox-reasons.ts');
+
 const { runToExit } = update;
 
-/** Why a machine cannot sandbox. `ok` is the only status that runs a command;
- *  every other value is reported to the hub, which refuses `exec` and says so
- *  rather than silently running the command unprotected. The first five are
- *  the hub's own `reason` vocabulary; `probe_failed` is the sixth, for a bwrap
- *  that ran and failed in a way this module does not recognise. */
+/** Why a machine cannot sandbox, keyed by the word upper-cased (`NO_BWRAP`). `ok` is the only status that runs a
+ *  command; every other value is the hub's own `reason` word (core's MACHINE_SANDBOX_REASONS), reported to it, and it
+ *  refuses `exec` and says so rather than silently running the command unprotected. `probe_failed` is for a bwrap that
+ *  ran and failed in a way this module does not recognise. */
 const SANDBOX_STATUS = Object.freeze({
   OK: 'ok',
-  NO_BWRAP: 'no_bwrap',
-  NO_USERNS: 'no_userns',
-  WSL1: 'wsl1',
-  NO_SANDBOX_EXEC: 'no_sandbox_exec',
-  UNSUPPORTED_PLATFORM: 'unsupported_platform',
-  PROBE_FAILED: 'probe_failed',
+  ...Object.fromEntries(MACHINE_SANDBOX_REASONS.map((reason) => [reason.toUpperCase(), reason])),
 });
 
 /** Every hint names the command that fixes the machine. A status the owner
@@ -140,7 +138,7 @@ const ENV_ALLOWLIST_FAMILY = /^LC_[A-Z_]+$/;
 const WITHHELD_ENV = Object.freeze([
   'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY',
   'KINU_TOKEN', 'KINU_AUTH', 'AI_GATEWAY_AUTH', 'KINU_LLM_HEADERS', 'KINU_PROVIDER_CREDENTIALS',
-  update.RELEASE_SIGNING_PUBLIC_KEY_ENV, update.PREDECESSOR_ENV,
+  RELEASE_SIGNING_PUBLIC_KEY_ENV, update.PREDECESSOR_ENV,
 ]);
 
 /**

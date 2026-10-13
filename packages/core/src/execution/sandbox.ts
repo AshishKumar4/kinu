@@ -16,7 +16,7 @@ import { classifyErrorCode, KinuError, refusalOf, renderThrownChain, settle, tol
 import { isVfsError, isVfsErrorCode, syscallError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { shellQuote } from '../utils/shell';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
-import type { JsonValue } from '../utils/json';
+import { parseInput, type JsonValue } from '../utils/json';
 import { direntType } from '../vfs/dirent';
 
 /** The container's working directory and default cwd; declared here because core must not depend on @kinu.run/devbox. */
@@ -182,15 +182,6 @@ const TRANSIENT_MARKERS = [
   'internal error in durable object storage caused object to be reset',
   'http error! status: 500',
 ];
-
-function parseInput<TSchema extends v.GenericSchema>(
-  schema: TSchema,
-  input: { value: unknown },
-): v.InferOutput<TSchema> | undefined {
-  const result = v.safeParse(schema, input.value);
-
-  return result.success ? result.output : undefined;
-}
 
 const StringSchema = v.string();
 

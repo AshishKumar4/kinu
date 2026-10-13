@@ -19,7 +19,7 @@ import { sha256Hex } from '../safety/argument-digest';
 import type { CommandCall } from '../safety/approval-gate';
 import { commandResult, exposedPortText, type CommandResult } from './exec-result';
 import { KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
-import type { JsonValue } from '../utils/json';
+import { parseInput, type JsonValue } from '../utils/json';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SessionExecOptions, SessionPort, SessionRunCodeOptions, SessionStartResult } from '@nimbus-sh/core/runtime/session-protocol.js';
 import type { NimbusSandboxFiles } from '@nimbus-sh/sdk/sandbox';
@@ -144,16 +144,6 @@ const ProcessInputSchema = v.union([
 const PortInputSchema = v.union([v.number(), v.object({ port: v.number() })]);
 
 const LogLimitsSchema = v.optional(v.object({ lines: v.optional(v.number()), bytes: v.optional(v.number()) }), {});
-
-function parseInput<TSchema extends v.GenericSchema>(
-  schema: TSchema,
-  input: { value: unknown },
-): v.InferOutput<TSchema> | undefined {
-  const result = v.safeParse(schema, input.value);
-
-  return result.success ? result.output : undefined;
-}
-
 
 function stringifyResult(input: { value: unknown }): string {
   const text = v.safeParse(v.string(), input.value);

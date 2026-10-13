@@ -1,4 +1,4 @@
-// Shadow-git store format; the daemon carries a generated copy.
+// Shadow-git store format, the CLI's and the device daemon's.
 
 import type { CheckpointTurnMeta } from './types';
 

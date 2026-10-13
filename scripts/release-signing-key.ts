@@ -7,9 +7,9 @@
  * `KINU_RELEASE_SIGNING_KEY_FILE`) and never printed: it is a secret the
  * deployment never holds, read by `scripts/build-cli-dist.sh` at build. The
  * PUBLIC half (hex) is printed, to pin into
- * `packages/core/src/http/release-signing.ts` (`RELEASE_SIGNING_PUBLIC_KEY`)
- * and `packages/pc-agent/src/update.js`; `unit-release-signing.test.ts`
- * holds the two pins equal. Refuses to overwrite a key file that exists.
+ * `packages/core/src/http/release-message.ts` (`RELEASE_SIGNING_PUBLIC_KEY`),
+ * which the CLI, the launcher and the device daemon read. Refuses to
+ * overwrite a key file that exists.
  */
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';

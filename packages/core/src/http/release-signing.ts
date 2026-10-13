@@ -1,21 +1,13 @@
 /**
  * Release signing (SECURITY-devices C1): builds are signed with a key the deployment never holds, and daemon,
- * launcher and CLI verify against {@link RELEASE_SIGNING_PUBLIC_KEY} before any byte reaches a live path.
- * The signed message is the canonical text {@link releaseMessage} builds, never JSON.
+ * launcher and CLI verify against `RELEASE_SIGNING_PUBLIC_KEY` before any byte reaches a live path. The signed
+ * message is the canonical text `releaseMessage` builds, never JSON (release-message.ts, which the daemon reads too).
  */
 import { Effect } from 'effect';
 import { settle } from '../obs/effect';
 import * as v from 'valibot';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
-import { compareCodeUnits } from '../utils/text';
-
-/** Hex. A rotation must ship under the old key first: older machines verify with the key they carry. */
-export const RELEASE_SIGNING_PUBLIC_KEY = '232098b9f5cc9b300b903bb9f3347ecb2b62115b2711438ab7fab12d30bfbaef';
-
-/** Operator-only override (test harness); never a wire input. */
-export const RELEASE_SIGNING_PUBLIC_KEY_ENV = 'KINU_RELEASE_SIGNING_PUBLIC_KEY';
-
-const MESSAGE_PREFIX = 'kinu-release-v1';
+import { releaseMessage } from './release-message';
 
 const ReleaseChecksumsSchema = v.record(
   v.pipe(v.string(), v.startsWith('/')),
@@ -31,15 +23,6 @@ export const SignedReleaseSchema = v.object({
 });
 
 export type SignedRelease = v.InferOutput<typeof SignedReleaseSchema>;
-
-function releaseMessage(version: string, checksums: ReleaseChecksums): Uint8Array<ArrayBuffer> {
-  const lines = Object.entries(checksums)
-    // Never locale order: the order is part of the signed bytes.
-    .sort(([a], [b]) => compareCodeUnits(a, b))
-    .map(([path, sha256]) => `${path} ${sha256.toLowerCase()}`);
-
-  return new TextEncoder().encode([MESSAGE_PREFIX, version, ...lines, ''].join('\n'));
-}
 
 function hexToBytes(hex: string): Uint8Array<ArrayBuffer> {
   const clean = hex.trim().toLowerCase();

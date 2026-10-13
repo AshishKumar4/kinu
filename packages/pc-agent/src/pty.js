@@ -60,18 +60,8 @@ const TERMINAL_NAME = 'xterm-256color';
  */
 const MAX_SESSIONS = 8;
 
-/**
- * The window, bounded. The kernel carries each axis as an `unsigned short`, and
- * a thousand cells on a side is past any real display, so anything larger is a
- * malformed frame rather than a window.
- *
- * The hub declares the same bound as `DEVICE_PTY_MAX_AXIS` in
- * `packages/core/src/execution/device-tunnel.ts`, and this daemon spells it
- * again rather than importing it: this package ships to the user's machine as
- * standalone CommonJS with no workspace dependency. The two ends of the wire
- * must agree, so `tests/pty.test.js` reads the hub's constant and compares.
- */
-const MAX_AXIS = 1000;
+/** The window, bounded per axis: the protocol's `ptyMaxAxis`, the hub's bound too. */
+const MAX_AXIS = require('./device-protocol.json').ptyMaxAxis;
 
 /** A session name is a map key and a word in this daemon's log lines. Bounded
  *  for both reasons; it never becomes a path. */
@@ -160,10 +150,36 @@ function createProcReader(fs) {
     return text === undefined ? undefined : parseProcStat(text);
   }
 
-  return { procEntryGone, procFile, procStat, parseProcStat };
+  /** Whether a process of `group` still runs, a zombie not counting; off Linux, `ps` is asked through `listProcesses`.
+   * @param {number} group @param {(args: string[]) => Promise<string>} listProcesses
+   */
+  async function groupHasLiveProcess(group, listProcesses) {
+    if (process.platform === 'linux') {
+      for (const entry of fs.readdirSync('/proc', { withFileTypes: true })) {
+        if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue;
+
+        // An entry gone since the listing reads as undefined; any other failure is the reader's.
+        const stat = procStat(entry.name);
+
+        if (stat !== undefined && stat.group === group && stat.state !== 'Z') return true;
+      }
+
+      return false;
+    }
+
+    const rows = (await listProcesses(['-ax', '-o', 'pid=,pgid=,stat='])).trim().split('\n');
+
+    return rows.some((row) => {
+      const [pid, pgid, stat] = row.trim().split(/\s+/, 3);
+
+      return Number(pid) > 0 && Number(pgid) === group && stat !== undefined && !stat.startsWith('Z');
+    });
+  }
+
+  return { procEntryGone, procFile, procStat, parseProcStat, groupHasLiveProcess };
 }
 
-const { procEntryGone, procFile, procStat, parseProcStat } = createProcReader(require('node:fs'));
+const { procEntryGone, procFile, procStat, parseProcStat, groupHasLiveProcess } = createProcReader(require('node:fs'));
 
 /**
  * Every process group in the session `leader` leads, the leader's own first.
@@ -396,7 +412,6 @@ function createSessions(options = {}) {
 module.exports = {
   createSessions,
   MAX_SESSIONS,
-  MAX_AXIS,
   TERMINAL_NAME,
   parseSessionName,
   parseAxis,
@@ -405,4 +420,5 @@ module.exports = {
   procFile,
   procStat,
   parseProcStat,
+  groupHasLiveProcess,
 };
