@@ -899,6 +899,23 @@ describe('Settings → Memory', () => {
     });
   });
 
+  // e83e0797e review: with the roster upgrade refused, what waits was the first read for good, so a proposal kept here
+  // stayed on the list after Settings read the memory again.
+  test('a proposal kept in Settings leaves what waits when the roster socket cannot open', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'usersettingsstate&section=memory&memory=waiting&rosterSocket=refused', 'light', 'desktop');
+
+      try {
+        await page.waitForSelector('[data-account-memory-proposal="amp_city"] button');
+        await page.click('[data-account-memory-proposal="amp_city"] button');
+        await page.waitForSelector('[data-account-memory-fact="owner_city"]');
+        await page.waitForFunction(() => document.querySelector('[data-account-memory-proposal="amp_city"]') === null);
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
   // 26244c765: Settings kept its own copy of what waits, read once, so a proposal filed while it was open never showed.
   test('a proposal filed while Settings is open joins what waits, as the attention stack shows it', async () => {
     await withGallery(async (gallery) => {
