@@ -1479,11 +1479,11 @@
   "user_browser_sessions@packages/core/src/state/user-schema.ts": [
     "token_hash TEXT PRIMARY KEY",
     "expires_at INTEGER NOT NULL",
-    "email TEXT",
+    "email TEXT NOT NULL",
     "display_name TEXT",
-    "provider TEXT",
-    "provider_sub TEXT",
-    "auth_time INTEGER"
+    "provider TEXT NOT NULL",
+    "provider_sub TEXT NOT NULL",
+    "auth_time INTEGER NOT NULL"
   ],
   "user_cli_tokens@packages/core/src/state/user-schema.ts": [
     "token_hash TEXT PRIMARY KEY",

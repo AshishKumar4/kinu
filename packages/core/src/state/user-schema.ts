@@ -267,11 +267,11 @@ export function initUserTables(sql: SqlExec): void {
     CREATE TABLE IF NOT EXISTS user_browser_sessions (
       token_hash   TEXT PRIMARY KEY,
       expires_at   INTEGER NOT NULL,
-      email        TEXT,
+      email        TEXT NOT NULL,
       display_name TEXT,
-      provider     TEXT,
-      provider_sub TEXT,
-      auth_time    INTEGER
+      provider     TEXT NOT NULL,
+      provider_sub TEXT NOT NULL,
+      auth_time    INTEGER NOT NULL
     )
   `);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_browser_sessions_exp

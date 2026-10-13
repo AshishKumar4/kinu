@@ -62,10 +62,9 @@ export interface BrowserSessionIdentity {
   authTime: number;
 }
 
-/** A revoked or lapsed session has no row and reads as null. `identity` is null only for rows
- * registered before rows carried one; the KV projection is then the only copy. */
+/** A revoked or lapsed session has no row and reads as null. */
 export interface LiveBrowserSession {
-  identity: BrowserSessionIdentity | null;
+  identity: BrowserSessionIdentity;
 }
 
 export function parseCliAgentConnectTicketUserId(ticket: string): string | null {
@@ -124,23 +123,17 @@ export class UserSessions {
       this.host.ctx.storage.sql.exec(`DELETE FROM user_browser_sessions WHERE expires_at <= ?`, Date.now());
 
       const row = this.host.ctx.storage.sql.exec<{
-        email: string | null;
+        email: string;
         display_name: string | null;
-        provider: string | null;
-        provider_sub: string | null;
-        auth_time: number | null;
+        provider: string;
+        provider_sub: string;
+        auth_time: number;
       }>(
         `SELECT email, display_name, provider, provider_sub, auth_time
            FROM user_browser_sessions WHERE token_hash = ? LIMIT 1`, tokenHash,
       ).toArray()[0];
 
       if (!row) return null;
-
-      // All five columns come from one INSERT, so they are present or absent together;
-      // an older row without them carries no identity rather than half of one.
-      if (row.email === null || row.provider === null || row.provider_sub === null || row.auth_time === null) {
-        return { identity: null };
-      }
 
       return {
         identity: {

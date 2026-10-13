@@ -29,7 +29,7 @@ web UI is the canonical cloud client through `useAgent` and `useAgentChat`
 
 | State | Cloud authority | Local authority | Client rule |
 |---|---|---|---|
-| User identity | KV session store plus `UserDO` | local config, local prefs only | Cloud identity never comes from local config. |
+| User identity | `UserDO` (its session rows) | local config, local prefs only | Cloud identity never comes from local config. |
 | Workspace roster | `UserDO.user_workspaces` | local config plus local DB discovery | The CLI caches aliases, not the roster. |
 | Identity and soul | `SOUL.md` in the workspace VFS | local VFS and SQLite | One `SOUL.md` per backend. |
 | Chat history | canonical `conversation_entries` projection via `getChatHistoryPage` | the same canonical store in the local SQLite, read for inspection; `AgentClient.history()` reads the active CLI JSONL for rendering | Cloud clients read the SDK projection; local render history remains a diagnostic view. |
