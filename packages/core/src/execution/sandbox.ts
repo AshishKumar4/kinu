@@ -69,8 +69,11 @@ export interface SandboxHandle {
     Promise<{ content?: string; encoding?: string; isBinary?: boolean; exitCode?: number }>;
   writeFile(path: string, content: string, opts?: { encoding?: 'utf-8' | 'base64' }): Promise<JsonValue | void>;
   /** Lands `contentBase64` only over the bytes whose sha256 is `expected` (null: no file there), in one guest step.
-   *  `operation` names this write across every send of it. */
-  writeFileIfDigest(path: string, contentBase64: string, expected: string | null, operation: string): Promise<VfsDigestWrite>;
+   *  `operation` names this write across every send of it; `settled` names this caller's earlier writes it has answers
+   *  for, whose answers the guest no longer keeps. */
+  writeFileIfDigest(write: {
+    readonly path: string; readonly contentBase64: string; readonly expected: string | null; readonly operation: string; readonly settled: readonly string[];
+  }): Promise<VfsDigestWrite>;
   listFiles(path: string, opts?: { recursive?: boolean }):
     Promise<{ files: Array<SandboxFileMetadata & { name: string }> }>;
   /** Native stat; `follow: false` reads the entry itself, never its siblings. */
@@ -770,6 +773,9 @@ export function sandboxFiles(
     return null;
   };
 
+  /** The digest writes this plane holds answers for: the guest keeps each answer until a later write names it here. */
+  const settled: string[] = [];
+
   const serving = async <T>(path: string, syscall: string, op: () => Promise<T>): Promise<T> => {
     try {
       return await through(op);
@@ -815,8 +821,18 @@ export function sandboxFiles(
     async writeFileIfDigest(path, data, expected) {
       // One name for every send: a retry after a lost reply is answered what the guest did the first time.
       const operation = crypto.randomUUID();
+      // Each earlier write this plane has an answer for, or gave up on: its answer goes with this send.
+      const retiring = settled.splice(0);
 
-      return await serving(path, 'open', () => handle.writeFileIfDigest(path, bytesToBase64(data), expected, operation));
+      try {
+        return await serving(path, 'open', () => handle.writeFileIfDigest({ path, contentBase64: bytesToBase64(data), expected, operation, settled: retiring }));
+      } catch (cause) {
+        settled.push(...retiring);
+
+        throw cause;
+      } finally {
+        settled.push(operation);
+      }
     },
 
     async writeFile(path, data) {
