@@ -1022,14 +1022,20 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       prepareChat: async (request) => {
         this.admitWork();
 
-        if (request.turnId !== null) {
-          // As a run's: an opening asked while a Stop is owed was queued before it.
-          if (await this.stopReplayed(actorId)) return settleSync(Effect.fail(new KinuError('cancelled', `Turn ${request.turnId} was stopped.`)));
+        if (request.turnId === null) return await this.agentTurns.prepareChat(actorId, request);
+
+        // As a run's: an opening asked while a Stop is owed was queued before it.
+        if (await this.stopReplayed(actorId)) return settleSync(Effect.fail(new KinuError('cancelled', `Turn ${request.turnId} was stopped.`)));
+        this.openingReads(actorId);
+
+        try {
           // A turn opens on the account's settings as they are now; a chat built with no turn reads what is held.
           await this.accountSettingsAtOpen();
-        }
 
-        return await this.agentTurns.prepareChat(actorId, request);
+          return await this.agentTurns.prepareChat(actorId, request);
+        } finally {
+          this.openingPlanes.delete(actorId);
+        }
       },
       // What its turns are built on, seeded as a turn's preparation seeds it; no surface is built for no turn.
       scaffold: async () => {
@@ -1531,8 +1537,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // Its questions park in its own isolate, as every agent's do: the stack asks it once its turn was offered the tool.
       if (run === undefined && reach.turn.askOwner) this.offerAskOwner(actor.stores.config);
 
-      // Its sources' crossings wait on nothing of its own, so they are in flight beside its profile's resolution.
-      const planes = run === undefined ? this.sourcePlanes(runtime, reach.actor, true) : undefined;
+      // Its sources' crossings wait on nothing of its own, so they are in flight beside its profile's resolution, or since
+      // its opening asked for the account's settings.
+      const planes = run === undefined ? this.turnPlanes(key.actorId, runtime, reach.actor) : undefined;
       // A recovered execution's is the one it froze: a role or model chosen since cannot answer it differently.
       const resolved = turn.frozen ?? await this.actorProfile({ actor: actor.handle, availableTools: [], workMode: lane.mode });
 
@@ -1768,6 +1775,29 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         ...event,
       }),
     });
+  }
+
+  /**
+   * The account reads a turn's opening makes, each in flight beside its settings revision read rather than after it:
+   * written as its preparation starts, for that preparation's surface alone, which takes them; its preparation drops
+   * what was not taken as it ends. An agent seated nowhere yet reads them as its surface is built.
+   */
+  private readonly openingPlanes = new Map<string, SourcePlanes>();
+
+  private openingReads(actorId: string): void {
+    const seat = this.actorHost().hosted(actorReferenceOf(this.liveAgentOf(actorId)));
+
+    if (seat !== null) this.openingPlanes.set(actorId, this.sourcePlanes(seat.runtime, actorReach(actorPolicy(seat.record)), true));
+  }
+
+  /** A turn's source reads: its opening's, taken, or started now. */
+  private turnPlanes(actorId: string, runtime: CFRuntime, reach: ActorReach): SourcePlanes {
+    const opened = this.openingPlanes.get(actorId);
+
+    if (opened === undefined) return this.sourcePlanes(runtime, reach, true);
+    this.openingPlanes.delete(actorId);
+
+    return opened;
   }
 
   /** Its sources' crossings that wait on nothing of a turn's own, started at once: for a `turn`, the account's facts and
