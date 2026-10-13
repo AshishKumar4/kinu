@@ -179,6 +179,9 @@ export interface Module {
   readonly forwards: readonly Forward[];
   /** Modules this file names, resolved into the reacher corpus. */
   readonly edges: readonly string[];
+  /** Worker entrypoints this file reaches through the runtime's loopback, `ctx.exports.<Name>` or `cloudflare:workers`'
+   *  `exports.<Name>`: the platform builds them from the Worker's main module, so no import names them. */
+  readonly loopbacks: readonly string[];
 }
 
 /** Declarations that introduce a type and no value. */
@@ -319,10 +322,47 @@ export function buildGraph(reachers: ReadonlyMap<string, string>): Graph {
       consumedImports,
       forwards,
       edges: [...edges],
+      loopbacks: loopbackNames(tree),
     });
   }
 
   return { modules, dangling };
+}
+
+/**
+ * The Worker entrypoints a file names through the runtime's loopback: `<…>.ctx.exports.<Name>`, `ctx.exports.<Name>`,
+ * or `exports.<Name>` where `exports` is imported from `cloudflare:workers`. The runtime builds each from the Worker's
+ * main module, so this is the only reference such an entrypoint ever has.
+ */
+export function loopbackNames(tree: SyntaxNode): string[] {
+  const runtimeExports = new Set<string>();
+
+  for (const statement of tree.children) {
+    const { raw } = statement;
+
+    if (raw.type !== 'ImportDeclaration' || raw.source.value !== 'cloudflare:workers') continue;
+
+    for (const bound of importBindings(statement)) if (bound.imported === 'exports') runtimeExports.add(bound.local);
+  }
+
+  const names = new Set<string>();
+  walk(tree, (node) => {
+    const { raw } = node;
+
+    if (raw.type !== 'MemberExpression' || raw.computed || raw.property.type !== 'Identifier') return;
+    const { object } = raw;
+    const viaRuntime = object.type === 'Identifier' && runtimeExports.has(object.name);
+
+    const viaContext = object.type === 'MemberExpression' && !object.computed
+      && object.property.type === 'Identifier' && object.property.name === 'exports'
+      && ((object.object.type === 'Identifier' && object.object.name === 'ctx')
+        || (object.object.type === 'MemberExpression' && !object.object.computed
+          && object.object.property.type === 'Identifier' && object.object.property.name === 'ctx'));
+
+    if (viaRuntime || viaContext) names.add(raw.property.name);
+  });
+
+  return [...names];
 }
 
 /* ── Entrypoints ──────────────────────────────────────────────────────── */
@@ -1015,6 +1055,19 @@ export function measureReach(
 
   for (const entry of entrypoints) {
     if (entry.symbol !== undefined) reached.add(`${entry.file}#${entry.symbol}`);
+  }
+
+  // A loopback name is the Worker main's export of that name: the runtime constructs it from there.
+  const mains = new Set(entrypoints.filter((entry) => entry.kind === 'module-default').map((entry) => entry.file));
+
+  for (const file of live) {
+    for (const name of graph.modules.get(file)?.loopbacks ?? []) {
+      for (const main of mains) {
+        const site = declarationSite(main, name, graph.modules, new Set());
+
+        if (site !== undefined) reached.add(site);
+      }
+    }
   }
 
   for (const file of live) {

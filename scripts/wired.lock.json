@@ -1,7 +1,4 @@
 [
-  "packages/cf-backend/src/agent-facets.ts#AgentWorkspaceRPC (unreached-export)",
-  "packages/cf-backend/src/codemode-egress.ts#CodemodeEgress (unreached-export)",
-  "packages/cf-backend/src/codemode-sandbox.ts#CodemodeLauncher (unreached-export)",
   "packages/cf-backend/src/components/surfaces/WorkTab.tsx#ParkedCommands (unreached-export)",
   "packages/cf-backend/src/components/surfaces/WorkTab.tsx#ParkedDecisionFlow (unreached-export)",
   "packages/cf-backend/src/components/surfaces/fork-runs.ts#hasLiveForkRun (unreached-export)",
