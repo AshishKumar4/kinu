@@ -1,7 +1,7 @@
 /** One delegated turn in the agent's isolate: its model loop here, every tool call back in the workspace. */
 import { jsonSchema, tool, type ModelMessage, type ToolSet, type UIMessage, type UIMessageChunk } from 'ai';
 import {
-  CHAT_SESSION_ID, actorAffinity, HeadCapture, ownerLaneTools, toolsInWorkMode, withEffectReceipt, decodeJsonValue, decodeModelMessageValues, encodeModelMessageValues, replayPolicyFor, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan, imageModelOutput,
+  actorAffinity, HeadCapture, ownerLaneTools, toolsInWorkMode, withEffectReceipt, decodeJsonValue, decodeModelMessageValues, encodeModelMessageValues, replayPolicyFor, REAL_CLOCK, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan, imageModelOutput,
   type AuthRequest, type AuthResolution, type HandedOffTurn, type SettledRun, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type JsonValue, type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind, type AgentSignal, type SendOutcome,
   turnSourcesFromBundle, captureOperationProfile, type ModelCallReport, type ModelOperationEvent,
   type AdvisorRecoverySnapshot, type AgentFigures, type AgentReport, type HostedActor, type OwedReport, type SerializedMessage, type SessionEvent, type TurnEndEvent,
@@ -555,13 +555,10 @@ export async function deliveredRun(
   // Its charges land before its end is kept: an end a restart tells was charged.
   await spend.settled();
 
-  const transcript = actor.stores.history.transcript(CHAT_SESSION_ID);
   const completion = report.canonicalCompletion;
-  const close: TurnBound = run.opened ?? { turnId: task.sequenceId, runId, epoch: null };
-
-  // Its narration is read only if the answer's metadata needs it.
-  const answer = completion === undefined ? () => {}
-    : await database.prepareAnswer(completion, await answerMetadataOf(workspace, close, async () => await transcript.narration(answerParts(completion.outputPartReferences, completion.finalTextReference))));
+  // No slates are asked for: a crossing here would leave a death in it to run the run again (#75), and the agent a run is
+  // delivered to, a node or a head, is a run actor whose transcript holds no turn, so no answer carries them.
+  const answer = completion === undefined ? () => {} : await database.prepareAnswer(completion);
 
   const ended: AgentTurnEnd = {
     ...report,

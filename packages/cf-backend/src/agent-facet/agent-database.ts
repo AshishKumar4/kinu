@@ -640,14 +640,14 @@ export class AgentDatabase {
 
   /** A run's answer, prepared: the returned write appends it in the commit that ends the run. Nothing where the transcript
    *  holds no turn to answer. */
-  async prepareAnswer(completion: NonNullable<HeadReport['canonicalCompletion']>, metadata: JsonObject | null): Promise<() => void> {
+  async prepareAnswer(completion: NonNullable<HeadReport['canonicalCompletion']>): Promise<() => void> {
     const transcript = this.transcript();
 
     if (transcript.newestId() === null) return () => {};
 
     const entry = await transcript.prepareAssistant({
       id: crypto.randomUUID(), turnId: completion.turnId, runId: completion.runId, parts: completion.outputPartReferences,
-      finalText: completion.finalTextReference, ...(metadata !== null && { metadata }),
+      finalText: completion.finalTextReference,
     });
 
     return () => { transcript.appendAssistant(entry); };
