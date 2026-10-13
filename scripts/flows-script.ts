@@ -422,6 +422,11 @@ function hireApprovalScript(request: ScriptedRequest, latest: string): ScriptedA
   return { text: typeof output === 'string' && output.split(/\r?\n/u).includes(HIRE_EXECUTED) ? HIRE_RAN : 'HIRE STILL BLOCKED' };
 }
 
+/** Whether a decision's row `  <id>: <command>` names `command`, which is followed by where it runs when the ask said. */
+function rowNames(line: string, command: string): boolean {
+  return line.endsWith(`: ${command}`) || line.includes(`: ${command} (`);
+}
+
 /** The approvals row: its turn parks both commands, and each decision's wake is answered without re-issuing anything. */
 function approvalsScript(request: ScriptedRequest, latest: string): ScriptedAnswer | null {
   // The hire row's first: both answer a decision's wake, and the hire's is told by its own command.
@@ -438,7 +443,7 @@ function approvalsScript(request: ScriptedRequest, latest: string): ScriptedAnsw
     for (const line of text.split('\n')) {
       if (line.includes('APPROVED, still not run: re-issue once:')) decision = 'approved';
       else if (line.includes('DENIED: do not re-issue:')) decision = 'denied';
-      else if (decision !== null && PARKED_COMMANDS.some((command) => line.endsWith(command))) heard.add(decision);
+      else if (decision !== null && PARKED_COMMANDS.some((command) => rowNames(line, command))) heard.add(decision);
     }
   }
 
