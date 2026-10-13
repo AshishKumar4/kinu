@@ -1705,8 +1705,9 @@ refused 5 times in 21 and read 555-962 ms otherwise (median 614); with Superviso
 1e588c64d, 2 in 36 (median 512); with the MCP server and Nimbus's npm cache client loaded at first use, 3b9c58d4c,
 0 in 15 (427-861 ms, median 460). What a startup costs is what it links: wrangler's harness loads modules at 17-18
 microseconds a KiB of the static closure on the deploy machine, and 89759ebcc linked 8,591 KiB against 6,533 at
-3b9c58d4c. So the deploy measures the built Worker with `wrangler check startup` and refuses one slower than the newest
-build the validator accepted (scripts/worker-startup.ts, 235 ms on 26244c765); before a reset it uploads the build as
+3b9c58d4c. So the deploy measures the built Worker with `wrangler check startup` and refuses one slower than 216 ms,
+between 3b9c58d4c's fastest profile (209 ms, never refused) and 1e588c64d's (223 ms, refused 2 in 36) on the deploy
+machine (scripts/worker-startup.ts); before a reset it uploads the build as
 a version, not deployed, while the target still serves; and an upload whose startup is refused is made again, three
 times in all. The reset still ends in `wrangler deploy` of that build rather than `versions deploy` of the version it
 validated: on a scratch Worker, the validated version deployed by id after a reset's placeholder served, but every call

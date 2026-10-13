@@ -6,20 +6,22 @@
  *   bun scripts/worker-startup.ts check <built wrangler.json>   measure, and fail above STARTUP_BOUND_MS
  *
  * What it measures, on this machine:
- * - `wrangler check startup` over the dry-run bundle, five times; the median of each profile's whole span. Its harness
- *   (wrangler 4.145 `analyseBundle`) imports the main module from a `startup()` function under the inspector: that
- *   frame's own time is the module loading the import does, linear in the bytes it links (a synthetic Worker of
- *   uncalled functions: 17.9 ms at 1.17 MB, 72.7 ms at 4.77 MB), and each module's top level is its own frame.
+ * - `wrangler check startup` over the dry-run bundle, five times; the fastest profile's whole span, since load on the
+ *   machine only ever adds to it. Its harness (wrangler 4.145 `analyseBundle`) imports the main module from a
+ *   `startup()` function under the inspector: that frame's own time is the module loading the import does, linear in
+ *   the bytes it links (a synthetic Worker of uncalled functions: 17.9 ms at 1.17 MB, 72.7 ms at 4.77 MB), and each
+ *   module's top level is its own frame.
  * - The static closure: the bytes the main module links through static imports, which that loading time follows
- *   (17.2-18.0 µs a KiB over the three builds below).
+ *   (17-18 µs a KiB over the builds below).
  *
- * Calibrated 2026-10-13 on the workstation the deploy runs on, five profiles each:
- * - 26244c765, deployed on 2026-10-10: 235 ms (137 ms loading, 7,839 KiB linked).
- * - 89759ebcc, refused on staging: 254 ms (148 ms loading, 8,591 KiB).
- * - The local figure does not track the validator's linearly. Deployed seven times each to a scratch Worker,
- *   89759ebcc was refused twice and read 564-785 ms otherwise. Its cut, which links 6,981 KiB at 225 ms, was refused
- *   once and read 470-787 ms.
- * So the bound is the accepted build's figure: no build slower than one the validator took.
+ * Calibrated 2026-10-13 on the workstation the deploy runs on. Each build has five local profiles (fastest / median),
+ * then the validator's readings from interleaved deploys to scratch Workers (refusals; median of the rest):
+ * - 89759ebcc, 8,591 KiB linked: 253 / 254 ms; refused 5 in 21, median 614 ms. Staging refused it too.
+ * - 26244c765, 7,839 KiB: 231 / 235 ms; deployed on 2026-10-10. Not deployed to the scratch Workers.
+ * - 1e588c64d, 6,981 KiB: 223 / 227 ms; refused 2 in 36, median 512 ms.
+ * - 3b9c58d4c, 6,533 KiB: 209 / 213 ms; refused 0 in 15, median 460 ms (427-861).
+ * The bound lies between the slowest build never refused and the fastest one refused: a build at 1e588c64d's figure
+ * is refused often enough to take a deploy's target down at random.
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
@@ -27,8 +29,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join, normalize } from 'node:path';
 import * as v from 'valibot';
 
-/** 26244c765's local startup, the newest build the validator accepted when this was set (see header). */
-export const STARTUP_BOUND_MS = 235;
+/** Between 3b9c58d4c's 209 ms, never refused, and 1e588c64d's 223 ms, refused 2 in 36 (see header). */
+export const STARTUP_BOUND_MS = 216;
 
 const PROFILES = 5;
 
@@ -98,13 +100,7 @@ export function staticClosure(main: string): LinkedClosure {
   return { files: seen.size, bytes };
 }
 
-const median = (values: readonly number[]): number => {
-  const sorted = [...values].sort((a, b) => a - b);
-
-  return sorted[Math.floor((sorted.length - 1) / 2)] ?? Number.NaN;
-};
-
-/** A built Worker's startup on this machine: the medians over its profiles, each profile's span, and what it links. */
+/** A built Worker's startup on this machine: the fastest of its profiles, each profile's span, and what it links. */
 interface MeasuredStartup extends LinkedClosure, ProfileTimes {
   readonly runs: readonly number[];
 }
@@ -126,7 +122,7 @@ function measure(config: string): MeasuredStartup {
   });
 
   return {
-    totalMs: median(profiles.map((profile) => profile.totalMs)), loadingMs: median(profiles.map((profile) => profile.loadingMs)),
+    totalMs: Math.min(...profiles.map((profile) => profile.totalMs)), loadingMs: Math.min(...profiles.map((profile) => profile.loadingMs)),
     runs: profiles.map((profile) => Math.round(profile.totalMs)), ...staticClosure(join(dirname(config), built.main)),
   };
 }
@@ -137,7 +133,7 @@ if (import.meta.main) {
   if (command === 'check' && path !== '') {
     const measured = measure(path);
 
-    const line = `startup ${measured.totalMs.toFixed(0)} ms median of ${measured.runs.join(', ')} (module loading ${measured.loadingMs.toFixed(0)} ms), `
+    const line = `startup ${measured.totalMs.toFixed(0)} ms, the fastest of ${measured.runs.join(', ')} (module loading ${measured.loadingMs.toFixed(0)} ms), `
       + `${(measured.bytes / 1024).toFixed(0)} KiB linked in ${String(measured.files)} files; bound ${String(STARTUP_BOUND_MS)} ms`;
 
     console.log(line);
