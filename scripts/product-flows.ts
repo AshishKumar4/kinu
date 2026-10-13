@@ -2619,13 +2619,13 @@ export async function computerDesktopSurvivesAResize(target: FlowTarget): Promis
     await size.click();
     await until(page, 'the size choices', `document.querySelector('[role="option"][aria-selected="false"]') !== null`);
 
-    const to = v.parse(v.string(), await page.$eval('[role="option"][aria-selected="false"]', (option) => {
-      if (!(option instanceof HTMLElement)) throw new Error('a size choice is not an element');
-      option.click();
+    // A pointer's press, as a person picks: the list selects on the pointer's release, not on a scripted click.
+    const option = await page.$('[role="option"][aria-selected="false"]');
 
-      return (option.textContent ?? '').trim();
-    }));
+    if (option === null) throw new Error('the size choices closed before one was picked');
+    const to = v.parse(v.string(), await option.evaluate((element) => (element.textContent ?? '').trim()));
 
+    await option.click();
     const chosen = performance.now();
 
     // The restart ends the session: the desktop stops drawing before it can be drawn again.
