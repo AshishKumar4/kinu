@@ -1204,13 +1204,13 @@ export {
 // Top-K recent agent_facts render into the system prompt every turn.
 export {
   initFactsTable, createFactsStore, renderFactsBlock, searchFacts, normalizeFactKey, unifiedFacts,
-  ACCOUNT_FACTS_ACTOR, FactOriginSchema, VERACITIES,
+  ACCOUNT_FACTS_ACTOR, FactOriginSchema, FactRevisionSchema, FactSchema, VERACITIES,
   type Fact, type FactsStore, type FactSearchHit, type FactUpsertResult, type FactOrigin, type FactRevision, type FactWrite,
   type MemoryScope, type ScopedFact, type Veracity,
 } from './memory/facts';
 
 export {
-  AccountMemoryStore, AccountMemoryProposalSchema, AccountProposalSchema, initAccountMemoryTables,
+  AccountMemoryStore, AccountMemoryProposalSchema, AccountNoteSchema, AccountProposalSchema, initAccountMemoryTables,
   type AccountMemory, type AccountMemoryProposal, type AccountMemoryView, type AccountNote, type AccountNoteHit, type AccountProposal,
   type AccountProposalFiling, type AccountProposer,
 } from './memory/account';

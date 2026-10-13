@@ -2,11 +2,10 @@
 import { Cause, Effect } from 'effect';
 import {
   AccountMemoryProposalSchema, DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS, DEVICE_TIERS, DEVICE_UPDATE_STATES,
-  AccountUsageSchema, FactOriginSchema, ProfileCatalogEnvelopeSchema,
+  AccountNoteSchema, AccountUsageSchema, FactRevisionSchema, FactSchema, ProfileCatalogEnvelopeSchema,
   type Credential,
   type DeviceTier,
   type JsonValue,
-  JsonValueSchema,
   McpPresetAvailabilitySchema,
   McpServerSummarySchema,
   ModelMenuResponseSchema,
@@ -291,23 +290,20 @@ export const getAccountSandboxSize = (): Promise<BoxSize | null> =>
 
 export const setAccountSandboxSize = (size: BoxSize) => settle(api(OkSchema, 'PUT', SANDBOX_SIZE_PATH, { value: size }));
 
-const MemoryOriginSchema = v.nullable(FactOriginSchema);
-
-/** On the roster's socket beside its workspace frames: the proposals waiting on the owner, sent as a socket opens and
- *  again whenever one is filed or decided. */
-
+/** What Settings → Memory shows of the account's view: a fact's confidence and source, and a revision's importance and
+ *  veracity, stay server-side. */
 const AccountMemorySchema = v.object({
   facts: v.array(v.object({
-    key: v.string(), value: JsonValueSchema, importance: v.number(), veracity: v.string(), lastObservedAt: v.number(), origin: MemoryOriginSchema,
-    history: v.array(v.object({ forgotten: v.boolean(), value: v.nullable(JsonValueSchema), origin: MemoryOriginSchema, at: v.number() })),
+    ...v.pick(FactSchema, ['key', 'value', 'importance', 'veracity', 'lastObservedAt', 'origin']).entries,
+    history: v.array(v.pick(FactRevisionSchema, ['forgotten', 'value', 'origin', 'at'])),
   })),
-  notes: v.array(v.object({ id: v.string(), content: v.string(), origin: MemoryOriginSchema, createdAt: v.number() })),
+  notes: v.array(AccountNoteSchema),
   pending: v.array(AccountMemoryProposalSchema),
 });
 
 export type AccountMemoryState = v.InferOutput<typeof AccountMemorySchema>;
 
-export type MemoryOrigin = v.InferOutput<typeof MemoryOriginSchema>;
+export type MemoryOrigin = AccountMemoryState['notes'][number]['origin'];
 
 const MEMORY_PATH = '/memory';
 

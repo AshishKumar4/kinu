@@ -13,8 +13,8 @@ import { KinuError, settleSync } from '../obs/index';
 import { nanoid } from '../utils/nanoid';
 import { expandedTokenGroups, lexicalGroupRelevance, minimumRelevance } from './lexical-recall';
 import {
-  ACCOUNT_FACTS_ACTOR, createFactsStore, FactOriginSchema, initFactsTable, normalizeFactKey,
-  type Fact, type FactOrigin, type FactRevision, type FactsStore,
+  ACCOUNT_FACTS_ACTOR, createFactsStore, FactOriginSchema, FactRevisionSchema, FactSchema, initFactsTable, normalizeFactKey,
+  type Fact, type FactOrigin, type FactsStore,
 } from './facts';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 
@@ -65,12 +65,14 @@ export interface AccountMemory {
   propose(proposal: AccountProposal, delivery?: string): Promise<string>;
 }
 
-export interface AccountNote {
-  readonly id: string;
-  readonly content: string;
-  readonly origin: FactOrigin | null;
-  readonly createdAt: number;
-}
+export const AccountNoteSchema = v.object({
+  id: v.string(),
+  content: v.string(),
+  origin: v.nullable(FactOriginSchema),
+  createdAt: v.number(),
+});
+
+export type AccountNote = Readonly<v.InferOutput<typeof AccountNoteSchema>>;
 
 /**
  * A proposal waiting on the owner, with who asked for it. The roster's socket and `GET /api/user/memory` carry it as it
@@ -89,11 +91,13 @@ export const AccountMemoryProposalSchema = v.object({
 export type AccountMemoryProposal = Readonly<v.InferOutput<typeof AccountMemoryProposalSchema>>;
 
 /** Settings → Memory: every account fact with its history, every note, and what waits on the owner. */
-export interface AccountMemoryView {
-  readonly facts: ReadonlyArray<Fact & { readonly history: readonly FactRevision[] }>;
-  readonly notes: readonly AccountNote[];
-  readonly pending: readonly AccountMemoryProposal[];
-}
+const AccountMemoryViewSchema = v.object({
+  facts: v.pipe(v.array(v.object({ ...FactSchema.entries, history: v.pipe(v.array(FactRevisionSchema), v.readonly()) })), v.readonly()),
+  notes: v.pipe(v.array(AccountNoteSchema), v.readonly()),
+  pending: v.pipe(v.array(AccountMemoryProposalSchema), v.readonly()),
+});
+
+export type AccountMemoryView = Readonly<v.InferOutput<typeof AccountMemoryViewSchema>>;
 
 export function initAccountMemoryTables(execRaw: RawSqlExec): void {
   initFactsTable(execRaw);
