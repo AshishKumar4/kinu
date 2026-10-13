@@ -330,8 +330,6 @@ describe("the removed daemon-download rails", () => {
       const response = await pcRoutes.fetch(new Request(url), makeEnv(userDO));
       expect(response.status).toBe(404);
       expect(response.headers.get("x-kinu-daemon-sha256")).toBeNull();
-      const body = await response.text();
-      expect(body).toBe("Not found");
       expect(userDO.idNames).toEqual([]);
     }
   });

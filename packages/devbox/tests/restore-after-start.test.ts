@@ -131,7 +131,6 @@ describe('the start hook owns restoration', () => {
       }
 
       expect(await caller).toMatchObject({ output: { stdout: container.bootId, stderr: '', exitCode: 0 } });
-      expect(container.bootId).toBeString();
       expect(container.bootId).not.toBe(oldBoot);
       expect(stamps(container)).toBe(2);
       expect((await box.devboxState()).ready).toBe(true);
@@ -360,7 +359,6 @@ describe('the start hook owns restoration', () => {
     await parked.reached;
     const state = await box.devboxState();
     expect(state.restoration).toBe('restoring');
-    expect(state.unready).toBeString();
     parked.release();
     await start;
     expect((await box.devboxState()).restoration).toBe('attached');

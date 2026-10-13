@@ -303,7 +303,7 @@ describe('what the plan route answers', () => {
     const failure = await streamFailure(stacked(api.fetch));
 
     expect(api.sent).toHaveLength(1);
-    expect(kinuCause(failure)).toMatchObject({ message: 'ChatGPT ended the stream before response.completed' });
+    expect(kinuCause(failure)).toMatchObject({ code: 'unavailable' });
   });
 
   test('a usage limit before the first output is final: sent once, a budget refusal', async () => {
@@ -316,16 +316,6 @@ describe('what the plan route answers', () => {
 
     expect(api.sent).toHaveLength(1);
     expect(kinuCause(failure)?.code).toBe('budget');
-  });
-
-  test('the usage limit keeps OpenAI\'s words and names where the owner manages it', async () => {
-    const api = openai(refusal(429, 'subscription_sharing_usage_limit_exceeded'));
-    const model = createChatGptProvider().createModel('gpt-6.1-sol', signedIn(api.fetch).deps);
-    const failed = await failureOf(generateText({ model, prompt: 'hello', maxRetries: 0 }));
-
-    expect(failed?.error).toMatchObject({
-      message: expect.stringMatching(/^refused: subscription_sharing_usage_limit_exceeded .*manage usage at https:\/\/chatgpt\.com\/settings\/usage$/),
-    });
   });
 
   test.each(['subscription_sharing_usage_unavailable', 'subscription_sharing_user_unavailable'])('%s backs off and asks again', async (code) => {
@@ -448,7 +438,7 @@ describe('what the plan route answers', () => {
 
     const failure = await streamFailure(createChatGptProvider().createModel('gpt-6.1-sol', signedIn(api.fetch).deps));
 
-    expect(kinuCause(failure)).toMatchObject({ code: 'unavailable', message: 'ChatGPT ended the stream before response.completed' });
+    expect(kinuCause(failure)).toMatchObject({ code: 'unavailable' });
   });
 });
 

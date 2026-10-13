@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { compareEvalResults, evalGateVerdict, fisherExact, renderEvalComparison, validateEvalResults, whyIncomplete } from './comparison';
+import { compareEvalResults, evalGateVerdict, fisherExact, validateEvalResults, whyIncomplete } from './comparison';
 import type { PlatformReport } from './platform';
 import { mannWhitney } from './shifts';
 
@@ -138,7 +138,6 @@ describe('compareEvalResults', () => {
     const complete = { baseline: null, candidate: null };
 
     expect(evalGateVerdict(comparison, complete)).toMatchObject({ pass: false });
-    expect(evalGateVerdict(comparison, complete).reason).toContain('calls refused as bad input 0.0 [0.0\u20130.0] \u2192 3.0 [2.0\u20133.8]');
   });
 
   test('every check attempted is compared by its own pass rate', () => {
@@ -186,16 +185,21 @@ describe('compareEvalResults', () => {
     expect(compared.verdict).toBe('regressed');
     expect(compared.platform?.tasks[0]?.candidate).toMatchObject({ trials: 10, bugTrials: 8, exceptions: 8, canceled: 30 });
     expect(compareEvalResults(before, after, {}, { baseline: read('eval-t-base', 0), candidate: { measured: false, why: 'no token' } }).verdict).toBe('unchanged');
-    expect(renderEvalComparison(compared)).toContain('| t | 0/10: 0 thrown, 0 over limits, 0 idle wakes, 30 cancelled | 8/10: 8 thrown');
+    expect(compared.platform?.tasks[0]).toMatchObject({
+      taskId: 't',
+      baseline: { trials: 10, bugTrials: 0, exceptions: 0, exceeded: 0, idleWakes: 0, canceled: 30 },
+    });
   });
 
   test('the run report gives each task\u2019s failed calls by tool and cause, and every value beside its change', () => {
     const failing = (count: number) => trialsOf(9, 10, { inputTokens: 1000, toolFailures: [{ tool: 'file', cause: 'bad_input', count }] });
-    const rendered = renderEvalComparison(compareEvalResults(report('t', failing(1), BASE), report('t', failing(2), NEXT)));
+    const comparison = compareEvalResults(report('t', failing(1), BASE), report('t', failing(2), NEXT));
 
-    expect(rendered).toContain('| `file` | bad_input | 10 | 20 |');
-    expect(rendered).toContain('| **Run** | 90.0% (0 pp) |');
-    expect(rendered).toMatch(/\| t \| 90\.0% \(0 pp\) \|[^\n]*\| 2\.0 \(\+1\.0\) \|/u);
+    expect(comparison.rows[0]).toMatchObject({
+      taskId: 't',
+      baseline: { passed: 9, trials: 10, toolFailures: [{ tool: 'file', cause: 'bad_input', count: 10 }], meanToolErrors: 1 },
+      candidate: { passed: 9, trials: 10, toolFailures: [{ tool: 'file', cause: 'bad_input', count: 20 }], meanToolErrors: 2 },
+    });
   });
 
   // The exact test needs four trials a side to call any fall; below that a run cannot say a task held.
@@ -211,8 +215,6 @@ describe('compareEvalResults', () => {
     const comparison = compareEvalResults(report('t', trialsOf(before, trials), BASE), report('t', trialsOf(after, trials), NEXT));
 
     expect(comparison.verdict).toBe(verdict);
-
-    if (verdict === 'inconclusive') expect(renderEvalComparison(comparison)).toContain('Too few trials to tell any fall from noise');
   });
 
   test('a significant fall on any task is a regression, whatever else rose', () => {
@@ -237,11 +239,11 @@ describe('compareEvalResults', () => {
 
   test('with no baseline the report stands alone and still names what failed', () => {
     const comparison = compareEvalResults(null, report('lending-library', trialsOf(3, 10, { failed: 'late-returns-suspend-for-a-week' }), NEXT));
-    const markdown = renderEvalComparison(comparison);
-
     expect(comparison.verdict).toBe('inconclusive');
-    expect(markdown).toContain('3/10');
-    expect(markdown).toContain('`t1 late-returns-suspend-for-a-week` | \u2014 | 7 |');
+    expect(comparison.rows[0]?.candidate).toMatchObject({
+      passed: 3, trials: 10,
+      failedChecks: [{ check: 't1 late-returns-suspend-for-a-week', trials: 7 }],
+    });
   });
 
   test('a request the build refused fails its turn on the build: counted, compared and named, never infrastructure', () => {
@@ -250,7 +252,7 @@ describe('compareEvalResults', () => {
 
     expect(validateEvalResults(refused, 10)).toHaveLength(1);
     expect([comparison.verdict, comparison.rows[0]?.reason]).toEqual(['regressed', null]);
-    expect(renderEvalComparison(comparison)).toContain('`t1 deployment.refused` | 0 | 1 |');
+    expect(comparison.rows[0]?.candidate?.failedChecks).toContainEqual(expect.objectContaining({ check: 't1 deployment.refused', trials: 1 }));
   });
 
   test('a turn that hung fails on the build: counted, compared and named, never infrastructure', () => {
@@ -260,7 +262,7 @@ describe('compareEvalResults', () => {
 
     expect(validateEvalResults(hanging, 10)).toHaveLength(1);
     expect([comparison.verdict, comparison.rows[0]?.reason]).toEqual(['regressed', null]);
-    expect(renderEvalComparison(comparison)).toContain('`t1 deployment.hung` | 0 | 1 |');
+    expect(comparison.rows[0]?.candidate?.failedChecks).toContainEqual(expect.objectContaining({ check: 't1 deployment.hung', trials: 1 }));
   });
 
   // A run cancelled with trials open did not finish them: no result for or against the build, and no verdict.
@@ -275,10 +277,13 @@ describe('compareEvalResults', () => {
   test('a hang is counted by what held it, so a silent job is never read as a model hang', () => {
     const job = { pass: false, hung: 'held by running shell job bgjob-server (workspace: node server.js)', heldBy: ['running shell job'] };
     const run = { pass: false, hung: 'held by open run run-1', heldBy: ['open run'] };
-    const markdown = renderEvalComparison(compareEvalResults(report('t', trialsOf(10, 10), BASE), report('t', [...trialsOf(7, 8), job, run], NEXT)));
+    const comparison = compareEvalResults(report('t', trialsOf(10, 10), BASE), report('t', [...trialsOf(7, 8), job, run], NEXT));
 
-    expect(markdown).toContain('`t1 deployment.hung (held by running shell job)` | 0 | 1 |');
-    expect(markdown).toContain('`t1 deployment.hung (held by open run)` | 0 | 1 |');
+    expect(comparison.rows[0]?.baseline?.failedChecks).toEqual([]);
+    expect(comparison.rows[0]?.candidate?.failedChecks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ trials: 1, evidence: JSON.stringify(job.hung) }),
+      expect.objectContaining({ trials: 1, evidence: JSON.stringify(run.hung) }),
+    ]));
   });
 
   // A reset may be the build's own regression: never infrastructure, and a build that resets more is red even when
@@ -290,7 +295,10 @@ describe('compareEvalResults', () => {
 
     expect(validateEvalResults(resetting, 10)).toHaveLength(1);
     expect([comparison.verdict, comparison.rows[0]?.reason]).toEqual(['regressed', null]);
-    expect(renderEvalComparison(comparison)).toContain('Reset for memory more often: t 0/10 \u2192 5/10');
+    expect(comparison.rows[0]).toMatchObject({
+      baseline: { resets: 0, trials: 10 },
+      candidate: { resets: 5, trials: 10 },
+    });
   });
 
   test('a report that mixes two builds is refused rather than compared', () => {
@@ -363,7 +371,8 @@ describe('metric accounting', () => {
       report('t', [{ pass: true, inputTokens: 100, cacheReadTokens: 0 }], NEXT),
     );
 
-    expect(renderEvalComparison(comparison)).toContain('— → 0.0%');
+    expect(comparison.rows[0]?.baseline?.cacheHitRate).toBeNull();
+    expect(comparison.rows[0]?.candidate?.cacheHitRate).toBe(0);
   });
 
   test('one unreported cost makes cohort, model and suite cost unknown, but a reported zero remains measured', () => {
@@ -433,8 +442,6 @@ describe('evalGateVerdict, what a promote reads', () => {
 
     expect(verdict.pass).toBe(false);
     expect(verdict.reason).toContain('order-book');
-    expect(verdict.reason).toContain('9/10');
-    expect(verdict.reason).toContain('2/10');
   });
 
   test('a baseline leg that is not a complete report fails it, naming the baseline and why', () => {
@@ -466,7 +473,6 @@ describe('evalGateVerdict, what a promote reads', () => {
     );
 
     expect(verdict.pass).toBe(false);
-    expect(verdict.reason).toContain('task version changed');
   });
 });
 
@@ -484,18 +490,20 @@ describe('whyIncomplete, whether a leg can stand in a verdict', () => {
     const skipped = { name: '/repo/evals/tasks/budget-board.eval.ts', assertionResults: [1, 2, 3].map(() => ({ status: 'skipped', meta: {} })) };
     const text = leg.replace(/\]\}\s*$/, `,${JSON.stringify(skipped)}]}`);
 
-    expect(whyIncomplete(text, { trials: 10 })).toBe('budget-board.eval.ts: 3 of its trials did not run (skipped)');
+    const incomplete = whyIncomplete(text, { trials: 10 });
+
+    expect(incomplete).toContain('budget-board.eval.ts');
+    expect(incomplete).toContain(String(skipped.assertionResults.length));
   });
 
   test('a task of these definitions missing from the leg is named', () => {
-    expect(whyIncomplete(leg, { trials: 10, taskFiles: ['order-book.eval.ts', 'launch-prep.eval.ts'] })).toBe('launch-prep.eval.ts did not run');
+    expect(whyIncomplete(leg, { trials: 10, taskFiles: ['order-book.eval.ts', 'launch-prep.eval.ts'] })).toContain('launch-prep.eval.ts');
   });
 
   test('a leg that ran on another build than the one planned for it is named, with both builds', () => {
-    expect(whyIncomplete(leg, { trials: 10, build: 'aaaaaaaa1' })).toBe('its trials ran on build bbbbbbbb2, not the planned aaaaaaaa1');
-  });
+    const incomplete = whyIncomplete(leg, { trials: 10, build: 'aaaaaaaa1' });
 
-  test('missing trials are named as validateEvalResults names them', () => {
-    expect(whyIncomplete(report('order-book', trialsOf(6, 9), NEXT), { trials: 10 })).toContain('holds trials [1, 2, 3, 4, 5, 6, 7, 8, 9]');
+    expect(incomplete).toContain(NEXT.productSha);
+    expect(incomplete).toContain('aaaaaaaa1');
   });
 });

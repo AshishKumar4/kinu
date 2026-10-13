@@ -173,5 +173,5 @@ test('a golden whose base start the platform refuses says why in the platform\'s
   container.containerUnavailable = new Error('Account resource limit exceeded');
 
   await expect(box.ensureGolden()).rejects.toThrow('Account resource limit exceeded');
-  expect(await box.goldenFor('box-a')).toEqual({ kind: 'pending', reason: 'the base snapshot could not be built: starting the base image: Account resource limit exceeded' });
+  expect(await box.goldenFor('box-a')).toEqual({ kind: 'pending', reason: expect.stringContaining('Account resource limit exceeded') });
 });

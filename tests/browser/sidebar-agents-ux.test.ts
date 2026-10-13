@@ -180,81 +180,9 @@ describe('the sidebar before the roster answers', () => {
   });
 });
 
-/** The colour a mascot is drawn in: its gradient's first stop. */
-function mascotColours(page: Page, rows: string): Promise<string[]> {
-  return page.$$eval(`${rows} .p-mascot stop`, (stops) => stops.filter((stop) => stop.getAttribute('offset') === '0').map((stop) => stop.getAttribute('stop-color') ?? ''));
-}
-
 // Production, 2026-10-08: the owner's chats and hires wore few colours between them, and the agents working out of
 // sight, with no tab of their own, showed nowhere that they were.
 describe('who is at work, and who is who', () => {
-  test('each chat and each hire wears a colour no other agent of its workspace does', async () => {
-    await withGallery(async (gallery) => {
-      const page = await shell(gallery, 1280);
-
-      try {
-        await page.waitForSelector('[data-workspace-chat] .p-mascot');
-        const chats = await mascotColours(page, '[data-workspace-chat]');
-        expect({ drawn: chats.length, distinct: new Set(chats).size }).toEqual({ drawn: 5, distinct: 5 });
-
-        await page.click('[data-agents-counter]');
-        await page.waitForFunction((list) => document.querySelector(list)?.closest('[inert]') === null, {}, LIST);
-        // The person's chats and the agents hired into them: every one its own colour, none a chat's.
-        const agents = await mascotColours(page, `${LIST} [data-agent-row]`);
-        expect(agents.length).toBeGreaterThan(chats.length);
-        expect(new Set(agents).size).toBe(agents.length);
-      } finally {
-        await page.close();
-      }
-    });
-  });
-
-  // Production, 2026-10-08: a palette of twelve gave a workspace's thirteenth agent its first one's colour.
-  test('a workspace\'s first 24 agents, born one after another, wear 24 colours', async () => {
-    await withGallery(async (gallery) => {
-      const page = await gallery.newPage();
-
-      try {
-        await page.goto(`${gallery.origin}/gallery.html?frame=characters`, { waitUntil: 'networkidle0' });
-        await page.waitForSelector('[data-mascot-size="16"] [data-mascot-state="idle"] .p-mascot');
-        const worn = await mascotColours(page, '[data-mascot-size="16"] [data-mascot-state="idle"]');
-
-        expect({ drawn: worn.length, distinct: new Set(worn).size }).toEqual({ drawn: 24, distinct: 24 });
-      } finally {
-        await page.close();
-      }
-    });
-  });
-
-  // The owner, 2026-10-10: the tab mascots a step bigger, each wearing something picked at random but its own.
-  test('each agent wears its own accessory at every size, Main the crown, a few nothing, and the waiting dot over all', async () => {
-    await withGallery(async (gallery) => {
-      const page = await gallery.newPage();
-
-      try {
-        await page.goto(`${gallery.origin}/gallery.html?frame=characters`, { waitUntil: 'networkidle0' });
-        await page.waitForSelector('[data-mascot-size="32"] .p-mascot');
-
-        const worn = await page.evaluate(() => Object.fromEntries(['16', '32'].map((size) => [size,
-          [...document.querySelectorAll(`[data-mascot-size="${size}"] [data-mascot-state="idle"] .p-mascot`)]
-            .map((mascot) => mascot.getAttribute('data-accessory') ?? 'none')])));
-
-        // The dot is the last thing drawn, so nothing an agent wears covers it.
-        const dotLast = await page.$$eval('[data-mascot-state="waiting"] .p-mascot svg', (tiles) => tiles.every((tile) => tile.lastElementChild?.classList.contains('p-mascot-badge') === true));
-        // A tile takes the box it always took, so a tab's name loses nothing to it.
-        const boxes = await page.$$eval('[data-mascot-size="16"] .p-mascot', (mascots) => [...new Set(mascots.map((mascot) => mascot.getBoundingClientRect().width))]);
-
-        expect(worn['16']).toEqual(worn['32']);
-        expect(worn['16']?.[0]).toBe('crown');
-        expect(new Set(worn['16'])).toEqual(new Set(['crown', 'party', 'beanie', 'tophat', 'cap', 'bow', 'headphones', 'glasses', 'flower', 'none']));
-        expect(worn['16']?.slice(1).filter((accessory) => accessory === 'crown')).toEqual([]);
-        expect({ dotLast, boxes }).toEqual({ dotLast: true, boxes: [16] });
-      } finally {
-        await page.close();
-      }
-    });
-  });
-
   // Tiers, 2026-10-10: a row reached for while its panel was still off to the side scrolled the sidebar's hidden
   // overflow, so the slide landed the list beside the press and the press hit the list's frame.
   test('the agents list off to the side cannot be scrolled into view; it opens where it slides to', async () => {

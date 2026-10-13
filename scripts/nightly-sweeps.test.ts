@@ -5,8 +5,11 @@ import { mapArgv, sweepUnits, SWEEPS, WORKTREE } from './nightly-sweeps';
 describe('the nightly sweeps on armada', () => {
   test('each sweep cuts its work into exactly as many shards as its map runs parts', () => {
     // `sweep:flakes` takes `--shard=k/n`, `bench.ts validate` takes `--shard k/n`.
-    expect(SWEEPS.map((sweep) => [sweep.name, /--shard[= ]\{item\}\/(\d+)/u.exec(sweep.command.join(' '))?.[1]]))
-      .toEqual([['flakes', '16'], ['bench', '20']]);
+    for (const sweep of SWEEPS) {
+      const denominator = /--shard[= ]\{item\}\/(\d+)/u.exec(sweep.command.join(' '))?.[1];
+      expect(sweep.parts).toBeGreaterThan(0);
+      expect(Number(denominator)).toBe(sweep.parts);
+    }
   });
 
   test('a sweep is one map at the commit, its parts on stdin, each part leaving its report', () => {

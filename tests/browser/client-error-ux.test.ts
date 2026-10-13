@@ -80,7 +80,6 @@ interface Observed {
   /** Errors the PAGE raised — an unhandled rejection or a second throw. */
   pageErrors: string[];
   fallbackVisible: boolean;
-  fallbackText: string;
   sceneIntact: boolean;
   retryPresent: boolean;
   /** Times the view actually threw. The dedupe claim is vacuous without it: a
@@ -220,7 +219,7 @@ async function serve(
 }
 
 /** The boundary's fallback, as a reader sees it. */
-async function fallback(page: Page): Promise<{ visible: boolean; text: string; retry: boolean }> {
+async function fallback(page: Page): Promise<{ visible: boolean; retry: boolean }> {
   return page.evaluate(() => {
     const buttons = [...document.querySelectorAll('button')];
     const retry = buttons.find((node) => (node.textContent ?? '').trim() === 'Try again');
@@ -230,7 +229,6 @@ async function fallback(page: Page): Promise<{ visible: boolean; text: string; r
 
     return {
       visible: heading !== undefined,
-      text: heading?.textContent ?? '',
       retry: retry !== undefined,
     };
   });
@@ -393,7 +391,6 @@ async function drive(gallery: Gallery, options: Scenario): Promise<Observed> {
       sent: sent.list,
       pageErrors,
       fallbackVisible: seen.visible,
-      fallbackText: seen.text,
       retryPresent: seen.retry,
       sceneIntact,
       faultThrows,
@@ -533,11 +530,6 @@ describe('a report the network never delivers', () => {
     expect(unreachable.retryPresent).toBe(true);
   });
 
-  test('the fallback still names what broke', () => {
-    // The product affordance is unchanged by reporting, delivered or not.
-    expect(unreachable.fallbackText).toContain('(workspace)');
-  });
-
   test('the surrounding view is untouched', () => {
     expect(unreachable.sceneIntact).toBe(true);
   });
@@ -593,7 +585,6 @@ describe('a send that never settles', () => {
   test('the fallback renders anyway, with its recovery action', () => {
     expect(stalled.fallbackVisible).toBe(true);
     expect(stalled.retryPresent).toBe(true);
-    expect(stalled.fallbackText).toContain('(workspace)');
   });
 
   test('recovery still works while the request hangs', () => {

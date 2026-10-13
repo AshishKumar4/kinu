@@ -34,7 +34,8 @@ describe('a trial\'s slot', () => {
     const measured = accounts({}, '10');
     const pass = accounts({ KINU_EVAL_PASS: '1' }, '1');
 
-    expect(pass).toEqual(['trial-257', 'trial-258', 'trial-259', 'trial-260']);
+    expect(pass).toHaveLength(TASK_FILES.length);
+    expect(new Set(pass).size).toBe(pass.length);
     expect(measured.filter((account) => pass.includes(account))).toEqual([]);
   });
 

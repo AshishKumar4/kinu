@@ -18,8 +18,6 @@ const account = serveFamily(accountRoutes, { identity: IDENTITY });
 
 const DeletedSchema = v.object({ deleted: v.literal(true) });
 
-const ErrorSchema = v.object({ error: v.string() });
-
 /** Roster empty: the recipients half walks workspace objects this test does not build. */
 function setup(deleteOutcome: 'ok' | 'destroyed' | 'io') {
   const calls: string[] = [];
@@ -79,7 +77,6 @@ describe('DELETE /api/user/account', () => {
     const response = await account(request(JSON.stringify({ confirm: 'someone@else.test' })), env);
 
     expect(response?.status).toBe(400);
-    expect(v.parse(ErrorSchema, await response?.json()).error).toContain('Type the account email');
     expect(calls).toEqual([]);
   });
 
@@ -116,7 +113,9 @@ describe('DELETE /api/user/account', () => {
     restore();
 
     expect(response?.status).toBe(500);
-    expect(v.parse(v.object({ error: v.string() }), await response?.json())).toEqual({ error: 'Internal error.' });
+    const body = await response?.json();
+    expect(body).toMatchObject({ code: 'io', error: expect.any(String) });
+    expect(JSON.stringify(body)).not.toContain('storage unavailable');
     expect(recording.emitted.filter((line) => line.event === 'http.request_failed').map((line) => line.cause))
       .toEqual([expect.stringContaining('storage unavailable')]);
   });

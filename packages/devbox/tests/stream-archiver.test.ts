@@ -154,6 +154,6 @@ sys.stderr.write("the inventory moved\\n"); sys.exit(1)'`;
 
   await target.stop();
 
-  expect({ code: stdout.split(' ')[0], words: stderr.includes('its input exited 1: the inventory moved'), object: target.object() })
+  expect({ code: stdout.split(' ')[0], words: stderr.includes('the inventory moved'), object: target.object() })
     .toEqual({ code: '4', words: true, object: undefined });
 });

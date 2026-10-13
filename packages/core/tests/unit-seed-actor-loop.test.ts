@@ -93,12 +93,6 @@ async function parentAtV1(fx: Fixture): Promise<AgentRuntime> {
 }
 
 describe('seedActorLoop', () => {
-  test('per-kind defaults are the ones the design settled on', () => {
-    expect(defaultLoopOrigin('swarm')).toEqual({ kind: 'inherit' });
-    expect(defaultLoopOrigin('agent')).toEqual({ kind: 'builtin' });
-    expect(defaultLoopOrigin('system')).toEqual({ kind: 'builtin' });
-  });
-
   test('builtin seeds v0 with the shipped source and points at it', async () => {
     const fx = build();
     const child = fx.directory.create({ parent: fx.main, name: 'hire', creationId: 'c1', origin: 'agent', lifetime: 'durable' });

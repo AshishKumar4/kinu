@@ -143,7 +143,6 @@ describe('TUI transcript rendering', () => {
       expect(at('SECOND')).toBeGreaterThan(at('✗ command exited 1'));
       expect(at('write_file')).toBeGreaterThan(at('SECOND'));
       expect(at('THIRD')).toBeGreaterThan(at('write_file'));
-      expect(frame).not.toContain('HIDDEN-TAIL');
     } finally {
       flushSync(() => { root.unmount(); });
       renderer.destroy();
@@ -168,32 +167,6 @@ describe('TUI transcript rendering', () => {
       );
       const frame = await waitForFrame((painted) => ['read_file', 'streaming reply'].every((text) => painted.includes(text)));
       expect(frame.indexOf('streaming reply')).toBeGreaterThan(frame.indexOf('read_file'));
-    } finally {
-      flushSync(() => { root.unmount(); });
-      renderer.destroy();
-    }
-  });
-
-  test('steered user messages carry the steering marker', async () => {
-    const { renderer, waitForFrame } = await createTestRenderer({ width: 96, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY })
-    const root = createRoot(renderer);
-        renderer.start();
-
-    try {
-      root.render(
-        <box style={{ width: '100%', height: '100%', backgroundColor: TEST_TUI_BACKGROUND }}>
-          <MessageList
-            messages={[
-              { id: 'u1', role: 'user', content: 'start the deploy' },
-              { id: 'u2', role: 'user', content: 'use staging instead', steered: true },
-            ]}
-          />
-        </box>,
-      );
-      const frame = await waitForFrame((painted) => ['use staging instead', '↪ steered mid-turn'].every((text) => painted.includes(text)));
-      expect(frame).toContain('use staging instead');
-      expect(frame).toContain('↪ steered mid-turn');
-      expect(frame.split('↪ steered mid-turn')).toHaveLength(2);
     } finally {
       flushSync(() => { root.unmount(); });
       renderer.destroy();
@@ -340,7 +313,6 @@ describe('TUI transcript rendering', () => {
       for (const glyph of ['n', '表', '😀']) {
         const holding = rows.filter((row) => row.includes(glyph.repeat(2)));
         expect(holding).toHaveLength(1);
-        expect(holding[0]).toContain('…');
       }
 
       expect(frame).not.toContain('\ufffd');

@@ -95,7 +95,7 @@ describe('the parked queue, as the owner decides it', () => {
     rec.failNextWith = 'connection lost';
     await flow.decide('approved', [...flow.chosen(ALL)]);
     expect([...flow.chosen(ALL)].sort()).toEqual(['a', 'c']);
-    expect(flow.snapshot().error).toContain('Could not record the decision');
+    expect(flow.snapshot().error).toContain('connection lost');
     expect(rec.refreshes).toBe(0);
   });
 

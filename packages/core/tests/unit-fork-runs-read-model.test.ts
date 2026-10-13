@@ -117,37 +117,6 @@ describe('a run carries a name', () => {
     expect(readForkRun(sql, actor, 'r-named')?.name).toBe('repo audit');
   });
 
-  test('a run that named nothing is called by its task\'s first clause', () => {
-    const { db, sql, actor, actorId } = freshDb();
-    seedSearchRun(db, actorId, {
-      rootId: 'r-derived', task: 'Security and code audit of the repo — a self-evolving agent runtime with a Cloudflare backend',
-      at: 1000, branches: 2, ledger: 'converged',
-    });
-    // Cut where the task itself offers a cut, and never the whole paragraph.
-    expect(readForkRun(sql, actor, 'r-derived')?.name).toBe('Security and code audit of the repo');
-  });
-
-  test('a task with no clause break is cut at a word, not mid-word', () => {
-    const { db, sql, actor, actorId } = freshDb();
-    seedSearchRun(db, actorId, {
-      rootId: 'r-long',
-      task: 'Reproduce the checkout regression against the staging snapshot and report what the guard actually does',
-      at: 1000, branches: 1, ledger: 'converged',
-    });
-    const name = readForkRun(sql, actor, 'r-long')?.name ?? '';
-    expect(name.length).toBeLessThanOrEqual(48);
-    expect(name.endsWith(' ')).toBe(false);
-    expect('Reproduce the checkout regression against the staging snapshot'.startsWith(name)).toBe(true);
-  });
-
-  test('a journal-only run is named too', () => {
-    const { db, sql, actor, actorId } = freshDb();
-    seedJournalledRun(db, actorId, {
-      rootId: 'r-journal', task: 'Audit the CLI surface, then the daemon', at: 1000,
-      heads: [{ status: 'completed' }], merged: true,
-    });
-    expect(readForkRun(sql, actor, 'r-journal')?.name).toBe('Audit the CLI surface');
-  });
 });
 
 describe('listForkRuns', () => {

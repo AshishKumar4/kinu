@@ -27,19 +27,17 @@ describe('cookies: the strip set is the set of cookies the app sets', () => {
   });
 
   test('the approval CSRF cookie the CLI sign-in page sets is one of them', () => {
-    expect(KINU_COOKIE_NAMES.includes(CLI_APPROVAL_CSRF_COOKIE_NAME)).toBe(true);
     expect(forwarded({ cookie: `${CLI_APPROVAL_CSRF_COOKIE_NAME}=csrf; guest=1` }).get('cookie')).toBe('guest=1');
   });
 
-  test('the two authority cookies are among them', () => {
-    expect(KINU_COOKIE_NAMES.includes(SESSION_COOKIE_NAME)).toBe(true);
-    expect(KINU_COOKIE_NAMES.includes(OAUTH_STATE_COOKIE_NAME)).toBe(true);
+  test('neither authority cookie reaches guest preview code', () => {
+    expect(forwarded({ cookie: `${SESSION_COOKIE_NAME}=owner` }).get('cookie')).toBeNull();
+    expect(forwarded({ cookie: `${OAUTH_STATE_COOKIE_NAME}=state` }).get('cookie')).toBeNull();
   });
 
   test('a Kinu-looking cookie nothing here sets is a guest cookie', () => {
     // A name outside the owner's set is the guest's, whatever it is called.
     const forged = '__Host-kinu_d1_bookmark=bookmark';
-    expect(KINU_COOKIE_NAMES.includes('__Host-kinu_d1_bookmark')).toBe(false);
     expect(forwarded({ cookie: forged }).get('cookie')).toBe(forged);
   });
 
@@ -60,10 +58,14 @@ describe('bearer: stripped exactly when the CLI authenticator would route it', (
     'guest-token',
   ];
 
-  test('the strip decision is the authenticator\'s own parse', () => {
-    for (const token of candidates) {
-      const stripped = forwarded({ authorization: `Bearer ${token}` }).get('authorization') === null;
-      expect({ token, stripped }).toEqual({ token, stripped: parseCliBearer(token) !== null });
+  test('only valid CLI bearers are stripped; malformed guest tokens survive', () => {
+    for (const token of candidates.slice(0, 2)) {
+      expect(forwarded({ authorization: `Bearer ${token}` }).get('authorization')).toBeNull();
+    }
+
+    for (const token of candidates.slice(2)) {
+      const authorization = `Bearer ${token}`;
+      expect(forwarded({ authorization }).get('authorization')).toBe(authorization);
     }
   });
 

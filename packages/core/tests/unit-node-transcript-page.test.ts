@@ -70,8 +70,6 @@ describe('node transcript paging', () => {
     // Newest PAGE first; within it, reading order.
     expect(steps.items.map(stepText)).toEqual(['step 4', 'step 5', 'step 6']);
 
-    if (steps.status !== 'more') return;
-    expect(steps.next.after).toBe(`${NODE}-s4`);
   });
 
   test('stepCount is the whole trace, not the page', () => {

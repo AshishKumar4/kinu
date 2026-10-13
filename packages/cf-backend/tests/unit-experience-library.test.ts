@@ -71,7 +71,7 @@ describe('the experience library is owner-scoped and provenance is proven', () =
 
     expect((await owner.search({})).map((e) => e.sourceWorkspace)).toEqual([ALPHA]);
     await expect(owner.publish(lesson('From nowhere.')))
-      .rejects.toThrow('Only a workspace can publish experience');
+      .rejects.toMatchObject({ code: 'denied' });
     harness.close();
   });
 

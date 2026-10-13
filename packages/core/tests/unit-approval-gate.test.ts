@@ -12,7 +12,6 @@ import {
   DeferredApprovalStore,
   initDeferredApprovalsTable,
   reviewCommand,
-  formatApproval,
   gateExec,
   gatedGrants,
   describeExecutionContext,
@@ -316,18 +315,6 @@ describe('reviewCommand — a rule fires on what is invoked, not what is mention
   });
 });
 
-describe('formatApproval', () => {
-  test('returns empty for allow', () => {
-    expect(formatApproval({ decision: 'allow', hits: [] })).toBe('');
-  });
-  test('lists each hit with its explanation for non-allow', () => {
-    const r = reviewCommand('sudo apt-get install nginx', THEIRS);
-    const s = formatApproval(r);
-    expect(s).toContain('Approval review: gate');
-    expect(s).toContain('sudo');
-  });
-});
-
 /** A gate over a recording exec, on one executor, with a given policy. */
 function harness(executor: GatedExecutor, policy: ShellApprovalPolicy) {
   const ran: string[] = [];
@@ -360,9 +347,9 @@ describe('gateExec', () => {
 
   const refusals = [
     { name: 'deny never calls exec, whatever the approver would say',
-      approval: 'allow', command: 'rm -rf /', refusal: 'rm-rf-root' },
+      approval: 'allow', command: 'rm -rf /' },
     { name: 'the same command on the owner\'s machine is refused when they say no',
-      approval: 'deny', command: 'rm -rf node_modules', refusal: 'Denied by the owner' },
+      approval: 'deny', command: 'rm -rf node_modules' },
   ] as const;
 
   for (const refused of refusals) {
@@ -371,7 +358,7 @@ describe('gateExec', () => {
       const result = await h.run(refused.command);
 
       expect(h.ran).toEqual([]);
-      expect(result).toContain(refused.refusal);
+      expect(result).toStartWith('blocked:denied:');
     });
   }
 
@@ -463,7 +450,7 @@ describe('gateExec — standing grants', () => {
 
   test('the grant does not leak to another executor', async () => {
     const store = grantStore(['rm-recursive@device']);
-    expect(await store.on(PARENT, 'deny').run('rm -rf /tmp/scratch')).toContain('the owner refused this');
+    expect(await store.on(PARENT, 'deny').run('rm -rf /tmp/scratch')).toStartWith('blocked:denied:');
     expect(store.asked).toEqual(['parent']);
   });
 
@@ -476,7 +463,7 @@ describe('gateExec — standing grants', () => {
     test(asks.name, async () => {
       const store = grantStore(['rm-recursive@device']);
 
-      expect(await store.on(DEVICE, 'deny').run(asks.command)).toContain('the owner refused this');
+      expect(await store.on(DEVICE, 'deny').run(asks.command)).toStartWith('blocked:denied:');
       expect(store.asked).toEqual([DEVICE.name]);
     });
   }
@@ -495,7 +482,7 @@ describe('gateExec — standing grants', () => {
   test('the same command on an executor the owner never granted still asks', async () => {
     const store = grantStore();
     expect(await store.on(DEVICE, 'allow_always').run('rm -rf /tmp/one')).toBe('ran:rm -rf /tmp/one');
-    expect(await store.on(PARENT, 'deny').run('rm -rf /tmp/one')).toContain('the owner refused this');
+    expect(await store.on(PARENT, 'deny').run('rm -rf /tmp/one')).toStartWith('blocked:denied:');
     expect(store.asked).toEqual([DEVICE.name, PARENT.name]);
   });
 

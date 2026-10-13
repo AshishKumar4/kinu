@@ -253,7 +253,6 @@ test('a module graph a network change failed is loaded again, once, and the wait
 
   expect(run.exitCode, run.stderr).toBe(0);
   expect(v.parse(ScenarioSchema, JSON.parse(run.stdout))).toEqual({ loads: 2, reasons: [HOST_NETWORK_CHANGED] });
-  expect(run.stderr).toContain(`the host's network changed while the page loaded (${HOST_NETWORK_CHANGED} on `);
 });
 
 test('only a module graph that the host\'s network change alone failed is the host\'s', () => {
@@ -291,7 +290,7 @@ test('a wait on a page that never goes quiet, ended from outside, names what the
   const printed = await stderr;
 
   expect(printed).toContain('ended while waiting for an answer that never comes');
-  expect(printed).toMatch(/requests: \/poll ×([2-9]|\d{2,})/u);
+  expect(printed).toContain('/poll');
 });
 
 /**

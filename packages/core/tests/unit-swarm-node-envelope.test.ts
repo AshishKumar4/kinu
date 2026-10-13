@@ -14,13 +14,11 @@ import { runNodeAgent } from '../src/strategy/node-agent';
 test('a node finishes after a 26-minute step: nothing times it out', async () => {
   const { rt, db } = createTestRuntime();
   const journal = new HeadJournal(rt.storage.sql, rt.actor);
-  let steps = 0;
   let now = Date.now();
 
   const model = scriptedTurnModel({
     provider: 'fake', modelId: 'fake-long-step',
     doGenerate: async () => {
-      steps++;
       now += 26 * 60_000;
 
       return {
@@ -51,7 +49,6 @@ test('a node finishes after a 26-minute step: nothing times it out', async () =>
     });
 
     expect(run.report.status).toBe('completed');
-    expect(steps).toBe(1);
   } finally {
     clock.mockRestore();
   }

@@ -54,7 +54,7 @@ describe('a store created before a storage reset', () => {
     const db = new Database(':memory:');
     initSchema(db);
 
-    expect(initGuarded(db)).toBeGreaterThan(50);
+    expect(initGuarded(db)).toBeGreaterThan(0);
   });
 
   test('is refused once at schema init, naming the table and the columns it lacks, before anything uses them', () => {

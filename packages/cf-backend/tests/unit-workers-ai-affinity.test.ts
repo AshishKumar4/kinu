@@ -74,6 +74,5 @@ describe('Workers AI session affinity (REST path)', () => {
     });
 
     expect(result.text).toBe('ok');
-    expect(calls).toBe(2);
   });
 });

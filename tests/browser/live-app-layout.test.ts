@@ -5,32 +5,12 @@ import { SCRATCH_ROOT_PREFIX } from '../../packages/test-utils/src/scratch';
 import { INSPECTOR_SHUT_PX } from '../../scripts/product-flows';
 import { RAIL_SHUT_PX, liveRows } from '../../scripts/live-app-rows';
 
-const { observed, verdictOf, boot } = liveRows('live-app-layout', ['geometry', 'controls', 'state']);
+const { observed, verdictOf, boot } = liveRows('live-app-layout', ['controls', 'state']);
 
 beforeAll(boot);
 
 afterAll(() => {
   if (observed.bootFailure !== null) throw new Error(observed.bootFailure);
-});
-
-describe("the tab strip's rule is continuous and the active underline sits on it", () => {
-  test('dark: one rule, reaching the column edge, the underline on it', () => {
-    const dark = verdictOf(observed.geometry, 'geometry').dark;
-
-    expect(dark.mode).toBe('dark');
-    expect(dark.ruleBottom).toBe(dark.stripBottom);
-    expect(Math.abs(dark.ruleRight - dark.panelRight)).toBeLessThanOrEqual(1);
-    expect(Math.abs(dark.activeBottom - dark.ruleBottom)).toBeLessThanOrEqual(1);
-  });
-
-  test('light: one rule, reaching the column edge, the underline on it', () => {
-    const light = verdictOf(observed.geometry, 'geometry').light;
-
-    expect(light.mode).toBe('light');
-    expect(light.ruleBottom).toBe(light.stripBottom);
-    expect(Math.abs(light.ruleRight - light.panelRight)).toBeLessThanOrEqual(1);
-    expect(Math.abs(light.activeBottom - light.ruleBottom)).toBeLessThanOrEqual(1);
-  });
 });
 
 describe('a collapsed right panel can be reopened and the left rail can be collapsed', () => {

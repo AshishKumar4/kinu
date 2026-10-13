@@ -642,8 +642,9 @@ describe('Evolution Proof', () => {
     if (!memory) throw new Error('the workspace lost memory/MEMORY.md between birth and this read');
     console.log(`    Memory (${memory.length} chars): ${JSON.stringify(memory.slice(0, 120))}`);
     expect(memory).toContain('# evolution-proof');
-    expect(memory).not.toContain('### Lesson');
-    expect(memory).not.toContain('## Session reflection');
+    expect(rt.storage.sql<{ source: string }>`
+      SELECT source FROM lessons WHERE actor_id = ${rt.actor.actorId}
+        AND source IN ('turn_reflection', 'session_reflection')`).toEqual([]);
 
     // Indexing rides an append, so an all-accepted window indexes nothing —
     // reported, and the reason is the line above.

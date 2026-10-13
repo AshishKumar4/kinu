@@ -114,7 +114,7 @@ test('a digest delete refused once the tags are gone leaves the digest, which a 
   const byDigest = await registry.delete(DIGEST);
 
   expect({ first, byId, byDigest, manifests: [...fake.manifests] }).toEqual({
-    first: { kind: 'refused', reason: `deleting ${DIGEST} answered 503: busy`, left: DIGEST }, byId: { kind: 'absent' }, byDigest: { kind: 'deleted' }, manifests: ['sha256:other'],
+    first: { kind: 'refused', reason: expect.stringContaining('busy'), left: DIGEST }, byId: { kind: 'absent' }, byDigest: { kind: 'deleted' }, manifests: ['sha256:other'],
   });
 });
 
@@ -148,5 +148,5 @@ test('a refusal carries the platform\'s own words', async () => {
   const unreachable = await snapshotRegistry({ token: 'token-1', account: ACCOUNT, fetch: () => Promise.reject(new TypeError('fetch failed')) }).delete(SNAPSHOT);
 
   expect({ wrong, unreachable: unreachable.kind, words: unreachable.kind === 'refused' && unreachable.reason.includes('fetch failed') })
-    .toEqual({ wrong: { kind: 'refused', reason: 'minting registry credentials answered 403: Authentication error' }, unreachable: 'refused', words: true });
+    .toEqual({ wrong: { kind: 'refused', reason: expect.stringContaining('Authentication error') }, unreachable: 'refused', words: true });
 });

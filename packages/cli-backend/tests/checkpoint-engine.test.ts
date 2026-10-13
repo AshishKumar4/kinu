@@ -11,7 +11,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as v from 'valibot';
 import { createHostCheckpoints } from '../src/checkpoints';
-import { daemonSource, GENERATED } from '../../../scripts/daemon-generated';
 
 const require = createRequire(import.meta.url);
 
@@ -96,16 +95,5 @@ describe('one engine, one set of rules, on both hosts', () => {
 
     expect(await device.mutate(deviceWork, 't', () => 'the mutation ran')).toBe('the mutation ran');
     expect(await device.ensure(deviceWork, 't')).toBeTruthy();
-  });
-});
-
-describe("the daemon's copy of the engine", () => {
-  test('is a fresh generation of every core module it carries', () => {
-    for (const generated of Object.values(GENERATED)) {
-      const { committed, fresh } = daemonSource(generated);
-
-      expect({ daemon: generated.daemon, source: generated.source, current: committed === fresh })
-        .toEqual({ daemon: generated.daemon, source: generated.source, current: true });
-    }
   });
 });

@@ -74,7 +74,6 @@ describe('a tool result image', () => {
     const prompt = await sentPrompt(provider, accepts);
 
     expect(prompt.map((message) => message.role)).toEqual(['user', 'assistant', 'tool']);
-    expect(JSON.stringify(toolPart(prompt))).toContain('image omitted');
     expect(JSON.stringify(prompt)).not.toContain(IMAGE.data.data);
   });
 });

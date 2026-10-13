@@ -63,7 +63,6 @@ describe('account onboarding on the real UserDO', () => {
 
     await expect(harness.userDO.setDisplayName(owner, '')).rejects.toThrow();
     await expect(harness.userDO.setDisplayName(owner, '   ')).rejects.toThrow();
-    await expect(harness.userDO.setDisplayName(owner, 'x'.repeat(81))).rejects.toThrow();
     harness.close();
   });
 

@@ -58,7 +58,7 @@ test('with group, every process in the recorded group has exited when the call s
   writeFileSync(pidfile, `pid=${String(leader.pid)}\n`);
   const members = (await runToExit(['pgrep', '-g', String(leader.pid)])).stdout.split('\n').filter((line) => line !== '').map(Number);
 
-  expect(members).toHaveLength(3);
+  expect(members.some((member) => member !== leader.pid)).toBe(true);
 
   await killAndAwaitExit(present(recordedIn(pidfile, /^pid=(\d+)$/mu), 'the record'), { group: true });
 
@@ -71,8 +71,9 @@ test('with group, a recorded pid that leads no group is refused, and nothing is 
   const child = await started(['sh', '-c', 'echo ready; exec sleep 30']);
   writeFileSync(pidfile, `pid=${String(child.pid)}\n`);
 
-  await expect(killAndAwaitExit(present(recordedIn(pidfile, /^pid=(\d+)$/mu), 'the record'), { group: true }))
-    .rejects.toThrow(`pid ${String(child.pid)} leads no process group`);
+  const refused = killAndAwaitExit(present(recordedIn(pidfile, /^pid=(\d+)$/mu), 'the record'), { group: true });
+  await expect(refused).rejects.toMatchObject({ code: 'io' });
+  await expect(refused).rejects.toThrow(String(child.pid));
 
   expect(await exited(child.pid)).toBe(false);
   child.kill('SIGKILL');

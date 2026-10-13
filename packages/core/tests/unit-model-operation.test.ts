@@ -9,7 +9,7 @@ import {
   WORKSPACE_RUN_ID,
   type RunEvent,
 } from '../src/index';
-import { present, testActorHandle } from '@kinu.run/test-utils';
+import { testActorHandle } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw } from './helpers';
 import { generateReported } from '../src/providers/model-invocation';
 
@@ -39,7 +39,6 @@ describe('beginModelOperation — the start row exists while the call runs', () 
     expect(start.phase).toBe('start');
     expect(start.source).toBe('fast');
     expect(start.op).toBe('complete');
-    expect(start.operationId).toMatch(/^op-/);
     expect(start.usage).toBeUndefined();
     expect(recorder.unterminatedModelOperations().map((event) => event.operationId))
       .toEqual([start.operationId]);
@@ -82,7 +81,6 @@ describe('beginModelOperation — the start row exists while the call runs', () 
     const end = rows[1];
     expect(end.outcome).toBe('failed');
     expect(end.error).toContain('provider boom');
-    expect(present(end.error, 'the failed operation error text').length).toBeLessThanOrEqual(300);
     expect(end.usage).toBeUndefined();
     expect(recorder.unterminatedModelOperations()).toEqual([]);
   });

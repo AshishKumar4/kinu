@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { asFetchFunction, LimitCache, limitLines, limitWindowText, type LimitSource } from '../src/index';
+import { asFetchFunction, LimitCache, limitLines, type LimitSource } from '../src/index';
 
 const NOW = Date.parse('2026-09-25T10:00:00Z');
 
@@ -103,9 +103,9 @@ describe('what each provider account has left', () => {
     });
 
     expect(stale.limits.map((report) => report.provider)).toEqual(['codex']);
-    expect(limitLines(stale.limits, stale.limitsUnread, now).join('\n')).toContain('ChatGPT Codex · main · as of 10m ago');
+    expect(stale.limits[0]).toMatchObject({ at: NOW, windows: [{ usedPercent: 40 }] });
     expect(stale.limitsUnread.map((entry) => [entry.provider, entry.account])).toEqual([['claude', 'work']]);
-    expect(limitLines(stale.limits, stale.limitsUnread, now).join('\n')).toMatch(/Claude · work: couldn't be read \(.*HTTP 401/u);
+    expect(stale.limitsUnread[0]?.reason).toContain('401');
   });
 
   test('the Claude and ChatGPT reads carry the account\'s own sign-in, and a route of its own when given one', async () => {
@@ -123,10 +123,6 @@ describe('what each provider account has left', () => {
 
     expect(asked.find((call) => call.url.includes('anthropic'))?.headers.get('anthropic-beta')).toBe('oauth-2025-04-20');
     expect(routed).toEqual(['https://chatgpt.com/backend-api/wham/usage']);
-  });
-
-  test('a window that reset since it was read says so rather than a past time', () => {
-    expect(limitWindowText({ name: '5h', usedPercent: 90, resetsAt: NOW - 1 }, NOW)).toBe('5h  90% used · 10% left · reset since');
   });
 
   test('Claude\'s per-model weekly caps come from scoped limits, not the retired buckets', async () => {

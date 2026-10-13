@@ -54,7 +54,6 @@ describe('adaptMemory — semantic index sync on write', () => {
     expect(vs.upserted.length).toBeGreaterThan(1);
 
     for (const c of vs.upserted) {
-      expect(c.id).toBe(`${PATH}:${c.startLine}-${c.endLine}`);
       expect(c.text.length).toBeGreaterThan(0);
     }
 

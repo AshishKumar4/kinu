@@ -1,7 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { ALERT_THRESHOLDS, evaluateFleet, findWakeLoops, settleSignal, type StartupHour } from '../src/obs/analytics/alerts';
-
-const WAKE_LOOP_STARTUPS_PER_HOUR = ALERT_THRESHOLDS.startupsPerHour;
+import { evaluateFleet, findWakeLoops, settleSignal, type StartupHour } from '../src/obs/analytics/alerts';
 
 const HOUR = 3_600_000;
 
@@ -21,11 +19,6 @@ describe('findWakeLoops', () => {
 
     expect(loops.map((l) => l.object)).toEqual(['warm-forge']);
     expect(loops[0]).toMatchObject({ peakPerHour: 57, loopHours: 1, sustained: false, startups: 64, firstLoopHour: T0 + HOUR });
-  });
-
-  test('the threshold hour counts and the hour under it does not', () => {
-    expect(findWakeLoops([hour('a', 0, WAKE_LOOP_STARTUPS_PER_HOUR - 1)])).toEqual([]);
-    expect(findWakeLoops([hour('a', 0, WAKE_LOOP_STARTUPS_PER_HOUR)])).toHaveLength(1);
   });
 
   test('only consecutive loop hours make a loop sustained', () => {

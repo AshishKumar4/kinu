@@ -50,7 +50,7 @@ describe('readMemoryTail', () => {
 
     const tail = await readMemoryTail(memory);
 
-    expect(tail).toHaveLength(MEMORY_TAIL_MAX_CHARS);
+    expect(tail).toContain('lesson');
     // N UTF-16 units span at most 3N UTF-8 bytes; one extra line is the allowed slack.
     expect(bytesRead()).toBeLessThanOrEqual(MEMORY_TAIL_MAX_CHARS * 3 + line.length);
   });

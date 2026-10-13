@@ -129,7 +129,6 @@ it('an exec-only token cannot widen its socket by sending the scopes header', as
 
   socket.send(JSON.stringify({ type: 'rpc', id: 'memory-read', method: 'getMemoryContent', args: [] }));
   expect(await read).toMatchObject({ id: 'memory-read', success: false });
-  expect((await read).error).toContain('workspace.read');
 
   // The owner's open tab: an accepted write reaches it as a broadcast, so exactly one of the two frames arrives.
   const tab = accepted(await env.PUBLIC_SURFACE.fetch(new Request(`${ORIGIN}/agents/${ORCHESTRATOR_AGENT_SLUG}/pool-scoped`, {
@@ -137,12 +136,12 @@ it('an exec-only token cannot widen its socket by sending the scopes header', as
   })));
 
   const write = Promise.race([
-    nextFrame(socket, StateRefusedSchema).then((frame) => frame.error),
-    nextFrame(tab, ForgedBroadcastSchema).then(() => 'the forged state reached the owner\'s tab'),
+    nextFrame(socket, StateRefusedSchema).then(() => 'refused'),
+    nextFrame(tab, ForgedBroadcastSchema).then(() => 'broadcast'),
   ]);
 
   socket.send(JSON.stringify({ type: MessageType.CF_AGENT_STATE, state: FORGED_STATE }));
-  expect(await write).toBe('Connection is readonly');
+  expect(await write).toBe('refused');
   socket.close();
   tab.close();
 });

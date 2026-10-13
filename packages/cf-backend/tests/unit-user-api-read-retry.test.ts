@@ -75,6 +75,6 @@ describe('every route of the browser shares one transport', () => {
     await expect(makeFolder('reports')).rejects.toThrow('a folder named reports already exists');
 
     droppingConnection(0, () => new Response('upstream gone', { status: 502 }));
-    await expect(getSharedLibrary()).rejects.toThrow('GET /api/shared → 502');
+    await expect(getSharedLibrary()).rejects.toMatchObject({ status: 502 });
   });
 });

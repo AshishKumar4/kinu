@@ -118,7 +118,7 @@ describe('the preview listing of a used sandbox', () => {
     expect(named()).toContain('getExposedPorts');
     const listed = await agent.getExposedPorts('sandbox');
 
-    expect(listed).toEqual({ ports: [], pending: "the sandbox's container is still restoring" });
+    expect(listed).toMatchObject({ ports: [], pending: expect.any(String) });
     expect(afterPoll(pinned.ports, listed)).toEqual({ ports: pinned.ports, error: null, starting: ['sandbox'] });
 
     await agent.sandboxRestore({ restoring: false, refused: undefined });

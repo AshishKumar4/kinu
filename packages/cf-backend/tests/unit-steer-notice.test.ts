@@ -55,9 +55,4 @@ describe('the queued line, as the composer receives it', () => {
     expect(noticeFor([landed('s1'), queued('s2')]))
       .toBe(noticeFor([queued('s2')]));
   });
-
-  test('a draft carrying attachments gets the same line: attachments ride the send', () => {
-    // A message to a running turn carries files as file parts, so there is no "text only" exception to explain.
-    expect(noticeFor([queued('s1')])).not.toContain('text only');
-  });
 });

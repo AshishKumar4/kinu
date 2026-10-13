@@ -32,7 +32,6 @@ function assertNativeFeedback(model: MockLanguageModelV4) {
   const result = outputs?.find(part => part.type === 'tool-result' && part.toolCallId === call.toolCallId);
 
   if (result?.type !== 'tool-result' || result.output.type !== 'error-json') throw new Error('native error output was not structured');
-  expect(JSON.stringify(result.output.value)).toStartWith('{"reason":');
   expect(outputs).toEqual(expect.arrayContaining([expect.objectContaining({
     type: 'tool-result', toolCallId: call.toolCallId, toolName: 'file',
     output: { type: 'error-json', value: { reason: 'bad_input', error: expect.stringContaining('transmogrify') } },

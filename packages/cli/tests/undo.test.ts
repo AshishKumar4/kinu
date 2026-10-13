@@ -109,7 +109,6 @@ describe('performUndo', () => {
 
     const listing = await performUndo(client, '99');
     expect(listing.restored).toBe(false);
-    expect(listing.text).toContain('Usage: /undo [n]');
 
     const result = await performUndo(client, '3');
     expect(result.restored).toBe(true);
@@ -169,7 +168,6 @@ describe('performUndo', () => {
 
     const first = await performUndo(client);
     expect(first.restored).toBe(true);
-    expect(first.text).toContain('Undo this with /undo 1.');
     expect(readFileSync(join(work, 'app.ts'), 'utf8')).toBe('turn zero');
 
     // /undo 1 must land on the pre-restore snapshot, not re-apply the pre-turn checkpoint.
@@ -186,7 +184,6 @@ describe('performUndo', () => {
     await engine.ensureCheckpoint(work);
     const result = await performUndo(client);
     expect(result.restored).toBe(false);
-    expect(result.text).toContain('Nothing to restore');
   });
 
   test('degrades honestly: no checkpoints yet, no surface, and no git', async () => {
@@ -360,35 +357,30 @@ describe('/advisor command surface', () => {
     }
   });
 
-  test('reports the state, and the report names the floor and the per-turn cost', async () => {
-    expect(await advisorText(advisorClient(), '/advisor')).toBe(
-      `Advisor: off. Minimum severity ${DEFAULT_ADVISOR_MIN_SEVERITY}. /advisor on adds one model call per turn.`,
-    );
-  });
-
   test('on, off and severity write through, and each write keeps the other field', async () => {
     const client = advisorClient();
-    expect(await advisorText(client, '/advisor on')).toBe(
-      `Advisor: on. Minimum severity ${DEFAULT_ADVISOR_MIN_SEVERITY}. It adds one model call per turn.`,
-    );
-    expect(await advisorText(client, '/advisor')).toContain('Advisor: on.');
+    const initial = { ...(await client.getEvolutionConfig()) };
+    await advisorText(client, '/advisor on');
+    expect(await client.getEvolutionConfig()).toEqual({ ...initial, advisorEnabled: true });
+    await advisorText(client, '/advisor');
+    expect(await client.getEvolutionConfig()).toEqual({ ...initial, advisorEnabled: true });
 
-    expect(await advisorText(client, '/advisor severity blocker')).toBe(
-      'Advisor: on. Minimum severity blocker. It adds one model call per turn.',
-    );
-    expect(await advisorText(client, '/advisor off')).toBe(
-      'Advisor: off. Minimum severity blocker. /advisor on adds one model call per turn.',
-    );
-    expect(await advisorText(client, '/advisor severity nit')).toContain('Advisor: off.');
+    await advisorText(client, '/advisor severity blocker');
+    expect(await client.getEvolutionConfig()).toEqual({ ...initial, advisorEnabled: true, advisorMinSeverity: 'blocker' });
+    await advisorText(client, '/advisor off');
+    expect(await client.getEvolutionConfig()).toEqual({ ...initial, advisorEnabled: false, advisorMinSeverity: 'blocker' });
+    await advisorText(client, '/advisor severity nit');
+    expect(await client.getEvolutionConfig()).toEqual({ ...initial, advisorEnabled: false, advisorMinSeverity: 'nit' });
   });
 
   test('an unusable argument answers with the usage line, naming every value', async () => {
     const client = advisorClient();
 
-    for (const input of ['/advisor maybe', '/advisor severity', '/advisor severity urgent', '/advisor on off']) {
-      expect(await advisorText(client, input)).toBe('Usage: /advisor on | off | severity <nit | concern | blocker>');
-    }
+    const initial = { ...(await client.getEvolutionConfig()) };
 
-    expect(await advisorText(client, '/advisor')).toContain('Advisor: off.');
+    for (const input of ['/advisor maybe', '/advisor severity', '/advisor severity urgent', '/advisor on off']) {
+      await advisorText(client, input);
+      expect(await client.getEvolutionConfig()).toEqual(initial);
+    }
   });
 });

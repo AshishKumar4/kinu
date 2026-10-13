@@ -156,7 +156,9 @@ export class HireOrchestrator extends ProductionOrchestrator {
     return rows.map((row) => {
       const record = v.parse(
         v.fallback(
-          v.looseObject({ kind: v.optional(v.string()), body: v.optional(v.string()), content: v.optional(v.string()) }),
+          v.looseObject({
+            kind: v.optional(v.string()), status: v.optional(v.string()), body: v.optional(v.string()), content: v.optional(v.string()),
+          }),
           {},
         ),
         JSON.parse(row.payload),
@@ -171,7 +173,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
       return {
         actorId: row.actor_id, id: row.id, variant: row.variant,
         turnId: row.turn_id, consumedAt: row.consumed_at,
-        kind, bodyLength: body.length, body,
+        kind, status: record.status ?? null, bodyLength: body.length, body,
       };
     });
   }

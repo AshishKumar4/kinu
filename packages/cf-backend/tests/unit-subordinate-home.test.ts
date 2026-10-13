@@ -92,7 +92,6 @@ describe('a hosted subordinate runs as its own home', () => {
     const clamped = await shell({ command: 'seq 1 20000' });
     const saved = present(/full result at ([^\]]+)\]/u.exec(clamped)?.[1], 'the saved path');
 
-    expect(clamped).not.toContain('the full result was not saved');
     expect(saved).toStartWith(`${agentHome(actorHomeName({ origin: 'agent', name: child.actor.handle.name, storageKey: child.actor.handle.storageKey }))}/.kinu/tool-output/`);
     expect(await file({ op: 'read', path: saved, offset: 19_999, limit: 2 })).toContain('20000');
     expect(await shell({ command: `cd /tmp && tail -n 1 ${saved}` })).toContain('20000');

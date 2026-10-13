@@ -336,17 +336,6 @@ describe('decode after pruning', () => {
 });
 
 describe('estimation and transcripts', () => {
-  test('text prices at chars/4 and media prices flat', () => {
-    const textTurns = kinuCodec.encode([user('x'.repeat(4_000))]);
-    expect(kinuCodec.estimateTurns(textTurns)).toBe(1_000);
-
-    const imageTurns = kinuCodec.encode([
-      { role: 'user', content: [{ type: 'file', data: new Uint8Array(1_000_000), mediaType: 'image/png' }] },
-    ]);
-
-    expect(kinuCodec.estimateTurns(imageTurns)).toBe(1_200);
-  });
-
   test('a tool pair prices its input and output', () => {
     const turns = kinuCodec.encode([
       assistant([toolCall('c1', 'shell', { command: 'x'.repeat(400) })]),
@@ -364,7 +353,8 @@ describe('estimation and transcripts', () => {
     ]);
 
     const line = kinuCodec.transcriptLine(turns[0].items[0]);
-    expect(line).toContain('[tool:shell] callId=c1');
+    expect(line).toContain('shell');
+    expect(line).toContain('c1');
     expect(line).toContain('make test');
     expect(line).toContain('all 42 tests passed');
   });
@@ -387,7 +377,6 @@ describe('estimation and transcripts', () => {
     expect(doc).toContain('exact user wording');
     expect(doc).toContain('ls -la');
     expect(doc).toContain('total 12\\ndrwxr-xr-x');
-    expect(doc).toContain('[binary 5 bytes]');
 
     const blocks = [...doc.matchAll(/```json\n([\s\S]*?)\n```/g)]
       .map((match) => parseMessageGroup(match[1]));

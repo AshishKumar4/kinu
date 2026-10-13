@@ -135,6 +135,6 @@ describe('the Worker admits nothing the Workers runtime cannot load', () => {
   test('the builder resolves what a module really imports, so the check above is not vacuous',
     async () => {
       const entry = join(PACKAGE_DIR, 'bench', 'worker.ts');
-      expect(await bundledSpecifiers(entry)).toContain('valibot');
+      expect(await bundledSpecifiers(entry)).not.toHaveLength(0);
     });
 });

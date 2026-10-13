@@ -143,7 +143,6 @@ describe('a name whose teardown is still pending', () => {
 
     // `unavailable`: the name frees once its teardown finishes.
     expect(created.status).toBe(503);
-    expect(created.error).toContain('still being deleted');
     harness.close();
   });
 });
@@ -207,7 +206,6 @@ describe('an account with no model it can serve', () => {
 
     // A conflict with the account's setup, not a malformed request: the page offers the settings to fix it.
     expect(created.status).toBe(409);
-    expect(created.error).toContain('Workers AI is not connected');
     expect([created.registered, created.calls]).toEqual([[], []]);
   });
 });

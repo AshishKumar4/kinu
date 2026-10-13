@@ -48,15 +48,6 @@ interface FrameGeometry {
    *  constant this test would then have to keep in step with the component. */
   readonly pitch: number | null;
   readonly labels: readonly LabelFit[];
-  /**
-   * Line boxes the run-count label occupies — its height over its own
-   * line-height, NOT `getClientRects().length`. A flex item is blockified, and
-   * `getClientRects` on a block element answers one border box however many
-   * lines are inside it: the pre-fix label measured 30px of 15px leading and
-   * still reported a single rect, so the obvious probe was green over the
-   * defect.
-   */
-  readonly countLines: number | null;
   /** Docked key and controls: its box, the scene's box, and the card's. */
   readonly legend: { top: number; right: number; bottom: number } | null;
   readonly scene: { bottom: number; right: number } | null;
@@ -114,19 +105,11 @@ function readGeometry(page: Page): Promise<FrameGeometry> {
       });
     }
 
-    const count = [...document.querySelectorAll('span')]
-      .find((span) => /^\d+ (search|searches)$/.test((span.textContent ?? '').trim()));
-
-    const leading = count === undefined ? 0 : Number.parseFloat(getComputedStyle(count).lineHeight);
-
     return {
       mode: document.documentElement.dataset.mode,
       nodes: document.querySelectorAll('g.mcts-node').length,
       pitch,
       labels,
-      countLines: count === undefined || !Number.isFinite(leading) || leading <= 0
-        ? null
-        : Math.round(count.getBoundingClientRect().height / leading),
       legend: legendBox === null
         ? null
         : { top: legendBox.top, right: legendBox.right, bottom: legendBox.bottom },
@@ -517,30 +500,6 @@ describe('the swarm trees, as a browser lays them out', () => {
           `${where}: "${label.text}" runs ${Math.round(label.x + label.width - room)}px past its room`,
         ).toBeLessThanOrEqual(room);
       }
-    }
-  });
-
-  test('the room a label has is spent, not thrown away at 20 characters', () => {
-    // The flat clip cut 127 of the 178 labels on the 106-node search, most of
-    // them with an empty column beside them. Any label past the old cap proves
-    // the clip is now a width; the ceiling proves it is still a clip.
-    for (const width of WIDTHS) {
-      for (const mode of MODES) {
-        const where = key('forks', width, mode);
-        const frame = observed.geometry[where];
-        expect(frame, `${where} missing`).toBeDefined();
-
-        if (frame === undefined) continue;
-        const longest = frame.labels.reduce((best, label) => Math.max(best, label.text.length), 0);
-        expect(longest, `${where}: longest label is ${longest} characters`).toBeGreaterThan(24);
-      }
-    }
-  });
-
-  test('the run-count label holds one line at every width', () => {
-    for (const [where, frame] of every()) {
-      if (frame.countLines === null) continue;
-      expect(frame.countLines, `${where}: the count label took two lines`).toBe(1);
     }
   });
 

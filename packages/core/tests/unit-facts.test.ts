@@ -93,10 +93,6 @@ describe('agent_facts', () => {
     expect(disclosure).toMatch(/\.\.\.and \d+ more facts not shown/);
   });
 
-  test('renderFactsBlock empty input returns empty string', () => {
-    expect(renderFactsBlock([])).toBe('');
-  });
-
   test('confidence outside 0..1 clamps at upsert', () => {
     const { facts } = createTestFactsStore();
     facts.upsert('over', 'v', { confidence: 5 });

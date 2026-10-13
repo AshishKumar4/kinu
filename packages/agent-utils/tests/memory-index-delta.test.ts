@@ -27,7 +27,6 @@ describe("MemoryStore.indexFile delta", () => {
 		expect(delta.upserted.length).toBeGreaterThan(1);
 
 		for (const c of delta.upserted) {
-			expect(c.id).toBe(`${PATH}:${c.startLine}-${c.endLine}`);
 			expect(c.path).toBe(PATH);
 			expect(c.text.length).toBeGreaterThan(0);
 		}

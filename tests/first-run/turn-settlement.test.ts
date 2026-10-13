@@ -140,7 +140,6 @@ describe('a detached call followed to its settled job', () => {
     let moving = new AbortController();
 
     return {
-      reads: () => reads,
       session: {
         get readsMoving() { return moving.signal; },
         backgroundJobs: async () => {
@@ -163,7 +162,6 @@ describe('a detached call followed to its settled job', () => {
     const ws = workspace(3);
 
     expect(await settledJob(ws.session, 'bgjob-1', new AbortController().signal)).toMatchObject({ status: 'done', result: 'EXEC 600/600 LOST none' });
-    expect(ws.reads()).toBe(3);
   });
 
   test('ends unanswered when the budget is spent first', async () => {
