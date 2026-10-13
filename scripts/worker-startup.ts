@@ -27,6 +27,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, normalize } from 'node:path';
+import { parseSync } from 'oxc-parser';
 import * as v from 'valibot';
 
 /** Between 3b9c58d4c's 209 ms, never refused, and 1e588c64d's 223 ms, refused 2 in 36 (see header). */
@@ -69,12 +70,6 @@ export interface LinkedClosure {
   readonly bytes: number;
 }
 
-// A built chunk's static `import … from "./x.js"` and `export … from "./x.js"`, minified or not.
-const STATIC_LINKS = [
-  /(?:^|[;\n}])\s*import\s*(?:[\w*{}\s,$]+from\s*)?["']([^"']+)["']/gu,
-  /export\s*(?:\*|\{[^}]*\})\s*from\s*["']([^"']+)["']/gu,
-];
-
 /** The files a built module links through static imports and re-exports, itself included; `import()` links nothing. */
 export function staticClosure(main: string): LinkedClosure {
   const seen = new Set<string>();
@@ -87,13 +82,16 @@ export function staticClosure(main: string): LinkedClosure {
     const source = readFileSync(file, 'utf8');
 
     bytes += Buffer.byteLength(source);
+    const { module } = parseSync(file, source);
 
-    for (const pattern of STATIC_LINKS) {
-      for (const match of source.matchAll(pattern)) {
-        const specifier = match[1] ?? '';
+    // A static import or re-export links its module; `import()` (`module.dynamicImports`) links nothing.
+    const linked = [
+      ...module.staticImports.map((entry) => entry.moduleRequest.value),
+      ...module.staticExports.flatMap((entry) => entry.entries.flatMap((exported) => (exported.moduleRequest === null ? [] : [exported.moduleRequest.value]))),
+    ];
 
-        if (specifier.startsWith('.')) pending.push(normalize(join(dirname(file), specifier)));
-      }
+    for (const specifier of linked) {
+      if (specifier.startsWith('.')) pending.push(normalize(join(dirname(file), specifier)));
     }
   }
 
