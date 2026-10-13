@@ -1596,8 +1596,8 @@ Amended 2026-09-30 after the security review of b23ebbbe20 (SIWC-01 to 11).
 A sign-in's record has one writer at a time, and every writer re-reads it
 there: the daemon's refresh, sign-in landing and sign-out run on one chain,
 and the CLI's refresh and sign-out (`signOutChatGptLogin`) take the config
-lock. So a sign-out waits for a rotation in flight and revokes the token it
-left, no call gets a token while it runs, and a refresh answer that arrives
+lock. So a sign-out waits for a rotation in flight and, asked to revoke,
+revokes the token it left; no call gets a token while it runs, and a refresh answer that arrives
 late or queued renews only the login still on disk: none brings a signed-out
 session back or writes over a newer sign-in. A spent refresh token retires the
 login on both (the CLI resubmitted it on every call), and signing out, main or

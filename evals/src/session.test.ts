@@ -38,13 +38,13 @@ import {
   decodeFrame, encodeChatRequest, encodeRpcRequest,
   recordPublicTurn, HeardStreams, type PublicResponseFrame, type PublicTurnRecorder,
 } from './session-protocol';
-import {
-  resolvePublicSessionPlan, resolveWebIdentity,
-  KinuPublicSession, openPublicSession, WORKSPACE_LEASE_MS, type InspectionAnswer,
-} from './session';
+import { resolvePublicSessionPlan, KinuPublicSession, openPublicSession, type InspectionAnswer } from './session';
+import { resolveWebIdentity, WORKSPACE_LEASE_MS } from './workspace-roster';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import { SubordinateInspectionRequestSchema } from '../../packages/core/src/subordinates/inspection';
 import { measurePromptUsage } from './results';
+import { claimTrialAccount } from './slot';
+import { reviewerCatalog, REVIEWER_ROLE_ID } from './reviewer';
 import {
   BROADCAST_FRAME, FILE_TURN_CHUNKS, FIXTURE_REQUEST_ID,
   RECOVERY_TURN_CHUNKS, chatChunkFrame, chatErrorFrame, chatTerminalFrame, chatTurnFrames, rpcReplyFrame,
@@ -1387,8 +1387,11 @@ describe('the genesis flag on a public session', () => {
     const wire: { method: string; args: readonly unknown[] }[] = [];
     const written: ProfileCatalog[] = [];
     const account = { catalog, version: 0, written };
+    const workspaces = new Map<string, number>();
+    const pins = new Map<string, string>();
+    const roles = new Map<string, string>();
 
-    const server = Bun.serve({ port: 0, hostname: '127.0.0.1',
+    const server = Bun.serve<{ workspace: string }>({ port: 0, hostname: '127.0.0.1',
       async fetch(request, upgrading) {
         const url = new URL(request.url);
 
@@ -1413,15 +1416,22 @@ describe('the genesis flag on a public session', () => {
           }), await request.json());
 
           creates.push(body);
+          workspaces.set(body.name, Date.now());
 
           return Response.json({ name: body.name, displayName: body.displayName });
         }
 
+        if (url.pathname === '/api/user/workspaces') {
+          return Response.json({ entries: [...workspaces].map(([name, lastVisited]) => ({ name, lastVisited })), nextCursor: null });
+        }
+
         if (url.pathname.startsWith('/api/user/workspaces/') && request.method === 'DELETE') {
+          workspaces.delete(decodeURIComponent(url.pathname.split('/').at(-1) ?? ''));
+
           return Response.json({ ok: true });
         }
 
-        if (upgrading.upgrade(request)) return;
+        if (upgrading.upgrade(request, { data: { workspace: decodeURIComponent(url.pathname.split('/').at(-1) ?? '') } })) return;
 
         return new Response('not found', { status: 404 });
       },
@@ -1430,10 +1440,20 @@ describe('the genesis flag on a public session', () => {
 
         if (v.is(RpcRequestFrameSchema, frame)) {
           wire.push({ method: frame.method, args: frame.args });
-          socket.send(rpcReplyFrame({
-            requestId: frame.id,
-            result: frame.method === 'setModel' ? { spec: frame.args[0] } : { ok: true },
-          }));
+
+          let result: JsonValue = { ok: true };
+
+          if (frame.method === 'setModel') {
+            const spec = v.parse(v.string(), frame.args[0]);
+            pins.set(socket.data.workspace, spec);
+            result = { spec };
+          } else if (frame.method === 'setRole') {
+            const role = v.parse(v.string(), frame.args[0]);
+            roles.set(socket.data.workspace, role);
+            result = { role };
+          }
+
+          socket.send(rpcReplyFrame({ requestId: frame.id, result }));
 
           return;
         }
@@ -1445,16 +1465,49 @@ describe('the genesis flag on a public session', () => {
       } },
     });
 
-    return { server, creates, wire, account };
+    return { server, creates, wire, account, workspaces, pins, roles };
   }
 
-  function probeInput(server: Bun.Server<undefined>, genesis?: boolean) {
+  function probeInput(server: { readonly url: URL }, genesis?: boolean) {
     return {
       origin: server.url.origin, identity: { kind: 'loopback' as const },
       workspace: 'probe', purpose: PROBE_PURPOSE, genesis,
       llm: { name: 'workers-ai', model: PROBE_MODEL, baseURL: server.url.origin, headers: {} },
     };
   }
+
+  test('a refused opener changes neither the claimed trial catalog nor its pinned model or role', async () => {
+    const fixture = fakeDeployment();
+    const target = { origin: fixture.server.url.origin, identity: { kind: 'loopback' as const, account: 'trial-7' as const } };
+    const claim = (workspace: string) => claimTrialAccount(target, workspace, Date.now());
+
+    const first = await openPublicSession({
+      ...probeInput(fixture.server, false), identity: target.identity, workspace: 'eval-race-zzzzzz',
+      role: REVIEWER_ROLE_ID, catalog: [reviewerCatalog(PROBE_MODEL)], claim,
+    });
+
+    const before = structuredClone(fixture.account.catalog);
+
+    try {
+      expect(fixture.roles.get(first.workspace)).toBe(REVIEWER_ROLE_ID);
+      expect(fixture.pins.get(first.workspace)).toBe(PROBE_MODEL);
+      expect(before.roles[REVIEWER_ROLE_ID]).toMatchObject({ allowedTools: ['file'], plan: true, spawns: [] });
+      await expect(openPublicSession({
+        ...probeInput(fixture.server, false), identity: target.identity, workspace: 'eval-race-aaaaaa', claim,
+        role: REVIEWER_ROLE_ID, llm: { name: 'fixture', model: 'fixture/loser', baseURL: fixture.server.url.origin, headers: {} },
+        catalog: [(catalog) => catalog.tiers.default.model === 'fixture/loser' ? null : {
+          ...catalog, tiers: { ...catalog.tiers, default: { ...catalog.tiers.default, model: 'fixture/loser' } },
+        }],
+      })).rejects.toThrow(first.workspace);
+      expect(fixture.account.catalog).toEqual(before);
+      expect([...fixture.workspaces.keys()]).toEqual([first.workspace]);
+      expect([...fixture.pins]).toEqual([[first.workspace, PROBE_MODEL]]);
+      expect([...fixture.roles]).toEqual([[first.workspace, REVIEWER_ROLE_ID]]);
+    } finally {
+      await first.teardown();
+      await fixture.server.stop(true);
+    }
+  });
 
   test('genesis: false creates without a mission and writes the soul before the first prompt', async () => {
     const { server, creates, wire } = fakeDeployment();
@@ -1482,7 +1535,7 @@ describe('the genesis flag on a public session', () => {
     }
   });
 
-  test('the account the evals run as has "Beta: swarms" on before its first workspace, and it is written once', async () => {
+  test('the account catalog is configured before use and is written once', async () => {
     const { server, account } = fakeDeployment();
     const first = await openPublicSession(probeInput(server));
     const second = await openPublicSession(probeInput(server));

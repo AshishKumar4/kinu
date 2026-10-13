@@ -13,7 +13,10 @@ import { syscallError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { walkedPath, workspacePath } from '../vfs/workspace-path';
 import { sessionRuntimeBins, workspaceCommandNotFound } from '../vfs/workspace-runtimes';
 import { shellQuote } from '../utils/shell';
-import type { ExecutorCapability, ExecutorProvider, ExecutorStatus, PortExposureResult, PreviewRouteCheck } from './types';
+import { commandTool, type ExecutorCapability, type ExecutorProvider, type ExecutorStatus, type PortExposureResult, type PreviewRouteCheck } from './types';
+import { envContext } from './command-call';
+import { sha256Hex } from '../safety/argument-digest';
+import type { CommandCall } from '../safety/approval-gate';
 import { commandResult, exposedPortText, type CommandResult } from './exec-result';
 import { KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import type { JsonValue } from '../utils/json';
@@ -114,6 +117,25 @@ const NimbusRunCodeOptionsSchema: v.GenericSchema<NimbusRunCodeOptions> = v.obje
   install: v.optional(v.picklist(['never', 'ifMissing'])),
 });
 
+/** What a Nimbus call runs, from the options its schema kept: `runCode` runs a program unless its language is the
+ *  shell. Nimbus starts one without a directory in the home, and takes no named shell from an agent. */
+function nimbusCall(member: 'runCode' | 'startProcess', text: string, options: NimbusRunCodeOptions | undefined): CommandCall {
+  const language = options?.language;
+
+  return {
+    text,
+    ...(member === 'runCode' && language !== 'shell' && { program: language ?? 'default' }),
+    ...(options?.cwd !== undefined && { cwd: options.cwd }),
+    context: {
+      ...envContext(options?.env),
+      ...(options?.stdin !== undefined && { stdinSha256: sha256Hex(options.stdin) }),
+      ...(member === 'runCode' && { language: language ?? 'default' }),
+      ...(options?.timeoutMs !== undefined && { timeoutMs: options.timeoutMs }),
+      ...(options?.install !== undefined && { install: options.install }),
+    },
+  };
+}
+
 const ProcessInputSchema = v.union([
   v.number(),
   v.object({ pid: v.number(), lines: v.optional(v.number()), bytes: v.optional(v.number()) }),
@@ -208,48 +230,47 @@ export function nimbusSession(opts: NimbusSessionOpts) {
   };
 
   const tools: ExecutorProvider['tools'] = {
-    runCode: {
-      description: 'Run code in Nimbus using the requested language runtime.',
-      execute: async (...args: unknown[]): Promise<CommandResult> => {
-        const runCode = box.runCode;
+    // Each reads its options once, by its own schema; what it runs is that reading (`commandTool`).
+    runCode: commandTool('Run code in Nimbus using the requested language runtime.', (args) => {
+      const runCode = box.runCode;
 
-        if (!runCode) return handleLacks('runCode');
-        const code = parseInput(StringSchema, { value: args[0] });
+      if (!runCode) return { refused: handleLacks('runCode') };
+      const code = parseInput(StringSchema, { value: args[0] });
 
-        if (code === undefined) {
-          return refusalOf(new KinuError('bad_input', 'nimbus runCode: code must be a string'));
-        }
+      if (code === undefined) return { refused: refusalOf(new KinuError('bad_input', 'nimbus runCode: code must be a string')) };
+      const options = parseInput(NimbusRunCodeOptionsSchema, { value: args[1] });
 
-        const options = parseInput(NimbusRunCodeOptionsSchema, { value: args[1] });
+      return {
+        call: nimbusCall('runCode', code, options),
+        run: async (): Promise<CommandResult> => {
+          try {
+            return commandResult(await touch(() => runCode(code, options)));
+          } catch (err) {
+            return refusalOf(nimbusFailure({ doing: 'nimbus runCode', cause: err }));
+          }
+        },
+      };
+    }),
+    startProcess: commandTool('Start a background process in Nimbus; returns while it is still running.', (args) => {
+      const startProcess = box.startProcess;
 
-        try {
-          return commandResult(await touch(() => runCode(code, options)));
-        } catch (err) {
-          return refusalOf(nimbusFailure({ doing: 'nimbus runCode', cause: err }));
-        }
-      },
-    },
-    startProcess: {
-      description: 'Start a background process in Nimbus; returns while it is still running.',
-      execute: async (...args: unknown[]): Promise<CommandResult> => {
-        const startProcess = box.startProcess;
+      if (!startProcess) return { refused: handleLacks('startProcess') };
+      const command = parseInput(StringSchema, { value: args[0] });
 
-        if (!startProcess) return handleLacks('startProcess');
-        const command = parseInput(StringSchema, { value: args[0] });
+      if (command === undefined) return { refused: refusalOf(new KinuError('bad_input', 'nimbus startProcess: command must be a string')) };
+      const options = parseInput(NimbusExecOptionsSchema, { value: args[1] });
 
-        if (command === undefined) {
-          return refusalOf(new KinuError('bad_input', 'nimbus startProcess: command must be a string'));
-        }
-
-        const options = parseInput(NimbusExecOptionsSchema, { value: args[1] });
-
-        try {
-          return formatStartResult(await touch(() => startProcess(command, options)));
-        } catch (err) {
-          return refusalOf(nimbusFailure({ doing: `nimbus startProcess \`${command}\``, cause: err }));
-        }
-      },
-    },
+      return {
+        call: nimbusCall('startProcess', command, options),
+        run: async (): Promise<CommandResult> => {
+          try {
+            return formatStartResult(await touch(() => startProcess(command, options)));
+          } catch (err) {
+            return refusalOf(nimbusFailure({ doing: `nimbus startProcess \`${command}\``, cause: err }));
+          }
+        },
+      };
+    }),
     killProcess: {
       description: 'Kill a Nimbus process by pid.',
       execute: async (...args: unknown[]): Promise<string | Refusal> => {
@@ -472,10 +493,12 @@ interface SessionCall {
  */
 async function sessionCall(
   command: string, options: ShellExecOptions, place: { readonly home: string; readonly cred?: VfsCred }, shellCwd: ((name: string) => Promise<string | null>) | undefined,
-): Promise<SessionCall> {
+): Promise<SessionCall | KinuError> {
   const { home, cred } = place;
   const { name, stdin, job, detached } = options;
-  const kept = name === undefined ? null : await shellCwd?.(name) ?? null;
+  const kept = name === undefined || shellCwd === undefined ? null : await keptDirectory(shellCwd, name);
+
+  if (kept instanceof KinuError) return kept;
   const start = startIn(kept ?? home, options.cwd);
   // Absent option must be an absent key: the substrate reads `'cred' in options` to decide whether to inherit.
   const execOptions: NimbusExecOptions = name === undefined ? { cwd: start } : { shellId: name };
@@ -492,6 +515,15 @@ async function sessionCall(
 
   // Absolute, so no `--`, which Nimbus's `cd` reads as a directory.
   return { run: moves ? `cd ${shellQuote(start)} || exit\n${command}` : command, execOptions, start };
+}
+
+/** A named shell's directory, read before its call is sent; one that cannot be read is NOT RUN, since nothing was sent. */
+async function keptDirectory(shellCwd: (name: string) => Promise<string | null>, name: string): Promise<string | null | KinuError> {
+  const [read] = await Promise.allSettled([shellCwd(name)]);
+
+  return read.status === 'fulfilled'
+    ? read.value
+    : new KinuError('unavailable', `NOT RUN: the directory of shell ${JSON.stringify(name)} could not be read, so the command was not sent.`, { cause: read.reason });
 }
 
 /**
@@ -554,6 +586,16 @@ async function stopUnanswered(box: NimbusSandboxHandle, execId: string): Promise
 }
 
 /**
+ * A Nimbus session's state, digested in the session: its directory as a digest, then what `set` lists, every variable
+ * the session keeps, sorted by name, each value quoted, so no value or name can pass for another. An ill-formed one,
+ * holding a lone UTF-16 surrogate, is listed as `$'…'` with each surrogate `\uXXXX` (Kinu's Nimbus patch, ask 52), so
+ * the pipe's `TextEncoder` loses nothing. A subshell first sets the pid Nimbus gives each command (`$`) to 0, so the
+ * listing holds only what the session keeps. Nimbus keeps no function, alias, option or array between a named shell's
+ * calls, and answers `export -p` with nothing.
+ */
+const SESSION_STATE = `( pwd | sha256sum; export '$=0'; set ) | sha256sum`;
+
+/**
  * Shell over the bytes nimbusSessionFiles exposes, its calls starting at `home`. `cred` is fixed at construction,
  * never per call (see {@link NimbusExecOptions.cred}); absent is the session user.
  */
@@ -564,6 +606,8 @@ export function nimbusSessionShell(box: NimbusSandboxHandle, place: { readonly h
     async exec(command, stdinOrOptions) {
       const options: ShellExecOptions = v.is(v.string(), stdinOrOptions) ? { stdin: stdinOrOptions } : stdinOrOptions ?? {};
       const call = await sessionCall(command, options, place, shellCwd);
+
+      if (call instanceof KinuError) return { stdout: '', stderr: call.message, exitCode: 1, refusal: refusalOf(call) };
       const result = await runOnBox(box, call, options);
       const outcome: ShellExecResult = { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode, cwd: call.start };
       const final = options.name === undefined ? null : await shellCwd?.(options.name) ?? null;
@@ -583,7 +627,21 @@ export function nimbusSessionShell(box: NimbusSandboxHandle, place: { readonly h
     },
   };
 
-  if (shellCwd !== undefined) shell.cwd = shellCwd;
+  if (shellCwd !== undefined) {
+    shell.cwd = shellCwd;
+
+    // What the session restores, read inside it and digested there: its directory and variables.
+    shell.state = async (name) => {
+      if (await shellCwd(name) === null) return 'none';
+      const state: NimbusExecOptions = { shellId: name };
+
+      if (place.cred !== undefined) state.cred = place.cred;
+      const read = await box.exec(SESSION_STATE, state);
+      const digest = read.exitCode === 0 ? /^[0-9a-f]{64}/.exec(read.stdout)?.[0] : undefined;
+
+      return digest ?? null;
+    };
+  }
 
   return shell;
 }

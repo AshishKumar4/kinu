@@ -68,7 +68,7 @@ reserved.
 ```bash
 bun install
 bun run cli -- setup
-bun run cli -- create jarvis --mode local --alias jarvis
+bun run cli -- create jarvis --mode local
 ```
 
 A source checkout talks to `https://kinu.run` by default. Use `--origin` or

@@ -572,13 +572,11 @@ These targets supersede conflicting presentation proposals from the design repor
 |UX-07|Classify effects through shared execution contracts and trustworthy evidence, not arbitrary output fields. Unknown effects must not be labelled as measured reads.|
 |UX-08|Active reasoning shows several lines in a bounded scrolling viewport with a subtle activity animation. Respect reduced motion.|
 |UX-09|When reasoning finishes, collapse it to one or two lines with Expand. Preserve the user's deliberate inspection of completed content.|
-|UX-10|The Work/Supervise control retains symmetrical padding and an intact rounded border at desktop and mobile widths.|
-|UX-11|Supervise omits Curriculum and the header budget, prioritizes automations and run history, and hides Evolution until relevant evolution exists.|
-|UX-12|A new workspace starts with its inspector collapsed unless the user opens it or actionable items, slates or outputs warrant showing it.|
-|UX-13|Preserve explicit inspector choices without letting another workspace's open state override the new-workspace default. Passive updates must not steal focus.|
-|UX-14|Landing mocks use the same product components and interaction rules. Only disclosed sample data and demonstration controls differ.|
+|UX-10|A new workspace starts with its inspector collapsed unless the user opens it or actionable items, slates or outputs warrant showing it.|
+|UX-11|Preserve explicit inspector choices without letting another workspace's open state override the new-workspace default. Passive updates must not steal focus.|
+|UX-12|Landing mocks use the same product components and interaction rules. Only disclosed sample data and demonstration controls differ.|
 
-Verify chronological and streaming transitions, failure presentation, empty and populated Supervise states, and inspector behavior in new and returning workspaces, in both themes at desktop and mobile widths. Screenshots alone do not prove effect classification or persistence.
+Verify chronological and streaming transitions, failure presentation, and inspector behavior in new and returning workspaces, in both themes at desktop and mobile widths. Screenshots alone do not prove effect classification or persistence.
 
 ### 13.3 Terminal-specific acceptance
 

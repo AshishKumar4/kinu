@@ -61,6 +61,7 @@ function fakeClient(opts: FakeOptions = {}): Fake {
     checkpoints: null,
     plans: null,
     questions: null,
+    approvals: null,
     localControls: {
       getAlwaysActiveSkills: () => [],
       setAlwaysActiveSkills: () => {},
@@ -72,8 +73,6 @@ function fakeClient(opts: FakeOptions = {}): Fake {
         return () => { state.approval = null; };
       },
       listModelProviders: async () => [],
-      listDeferredApprovals: async () => [],
-      decideDeferredApprovals: async () => ({ decided: [] }),
       listInstructionApprovals: async () => ({ status: 'end' as const, items: [] }),
       readInstructionApproval: async () => null,
       approveInstruction: async () => ({ ok: true as const, path: '', digest: '' }),
@@ -399,7 +398,7 @@ interface PermissionCase {
   command: string;
   hits: ShellApprovalRequest['review']['hits'];
   answer: RequestPermissionResponse;
-  outcome: ShellApprovalOutcome;
+  outcome: ShellApprovalOutcome | null;
 }
 
 const PERMISSION_CASES: PermissionCase[] = [
@@ -418,11 +417,18 @@ const PERMISSION_CASES: PermissionCase[] = [
     outcome: 'deny',
   },
   {
-    name: 'a cancelled permission request denies the command',
+    name: 'a cancelled permission request leaves the command unanswered, not denied',
     command: 'sudo reboot',
     hits: [],
     answer: { outcome: { outcome: 'cancelled' } },
-    outcome: 'deny',
+    outcome: null,
+  },
+  {
+    name: 'an option the agent never offered leaves the command unanswered, not denied',
+    command: 'sudo reboot',
+    hits: [],
+    answer: { outcome: { outcome: 'selected', optionId: 'allow_everything_forever' } },
+    outcome: null,
   },
 ];
 
@@ -439,8 +445,9 @@ describe('kinu acp — permission', () => {
           return present(fake.approval, 'the fake client approval hook')({
             command: permission.command,
             executor: 'device',
+            context: {},
             review: { decision: 'gate', hits: permission.hits },
-          });
+          }, new AbortController().signal);
         },
         () => permission.answer,
       );
@@ -463,8 +470,9 @@ describe('kinu acp — what the editor shows for approval', () => {
         return present(fake.approval, 'the fake client approval hook')({
           command: 'rm -rf ./build \u202E\u2066gpj.x\u200B',
           executor: 'device',
+          context: {},
           review: { decision: 'gate', hits: [] },
-        });
+        }, new AbortController().signal);
       },
       (request) => {
         titles.push(request.toolCall.title ?? '');

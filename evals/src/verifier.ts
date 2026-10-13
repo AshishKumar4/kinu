@@ -1,7 +1,8 @@
 import * as v from 'valibot';
 import { JsonValueSchema, projectJsonValue, type JsonValue, type RunEvent, type SubordinateInspectionRequest } from '@kinu.run/core';
 import { setTimeout as sleep } from 'node:timers/promises';
-import type { InspectionAnswer, PublicCraftedTool, PublicDirEntry, PublicExecutorResult, PublicSlateListing, PublicSwarmRun, WorkBoard, WorkspaceWeb } from './session';
+import type { InspectionAnswer, PublicCraftedTool, PublicDirEntry, PublicExecutorResult, PublicSlateListing, PublicSwarmRun, WorkBoard } from './session';
+import type { WorkspaceWeb } from './workspace-roster';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { INFRA_FAILURE_MARKER, TRANSIENT_PLATFORM_ERRORS } from '@kinu.run/test-utils';
 import { browsing, DRAW_MS, type WorkspaceBrowser } from './browser';

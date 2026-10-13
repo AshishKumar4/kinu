@@ -2,7 +2,8 @@ import { readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** InlineExecutor: the `workspace.*` codemode provider over its workspace's files, shell, memory and craft store. */
 
 import * as v from 'valibot';
-import type { ExecutorProvider, ExecutorCapability, PortAnsweringExecutor, ResourceLimits } from '../execution/types';
+import { commandTool, type ExecutorProvider, type ExecutorCapability, type PortAnsweringExecutor, type ResourceLimits } from '../execution/types';
+import { shellCall } from '../execution/command-call';
 import { nimbusSession, type NimbusSessionOpts } from '../execution/nimbus';
 import type { FilesOwner } from '../safety/command-review';
 import type { ShellSession } from '../execution/shell-session';
@@ -199,22 +200,21 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     exists: existsTool(vfs, { description: 'Check if a path exists.', operation: 'workspace.exists' }),
 
 
-    exec: {
-      description:
-        'Run a command in the workspace shell, over the SAME files readFile/readdir address. '
+    // The workspace shell is gated itself (`withApprovalGatedShell`), on this same reading of the options.
+    exec: commandTool(
+      'Run a command in the workspace shell, over the SAME files readFile/readdir address. '
         + 'A real POSIX shell with ~95 coreutils, pipes, redirects, loops and variables; each call starts fresh in `cwd` (default: your home) '
         + 'unless it names a shell, which keeps its directory and exported variables. '
         + 'Available binaries and process features are listed in this workspace provider\'s capabilities; use sandbox or device only when the task needs that separate machine.',
-      execute: async (...args: unknown[]) => {
+      (args) => {
         const command = parseInput(StringSchema, { value: args[0] });
 
-        if (command === undefined) {
-          return refusalOf(new KinuError('bad_input', 'workspace.exec: command must be a string'));
-        }
+        if (command === undefined) return { refused: refusalOf(new KinuError('bad_input', 'workspace.exec: command must be a string')) };
+        const options = shellExecOptions({ value: args[1] });
 
-        return commandResult(await shell.exec(command, shellExecOptions({ value: args[1] })));
+        return { call: shellCall(command, options, { stdin: true }), run: async () => commandResult(await shell.exec(command, options)) };
       },
-    },
+    ),
 
     listTools: {
       planAllowed: true,

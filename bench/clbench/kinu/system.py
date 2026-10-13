@@ -251,7 +251,6 @@ class KinuSystem(ContinualLearningSystem):
                 "local",
                 "--purpose",
                 self._purpose,
-                "--no-alias-shim",
             ],
             timeout=self._timeout,
         )

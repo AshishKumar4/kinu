@@ -1,8 +1,9 @@
 /**
  * Two-turn probe: the real OrchestratorAgent drives two full Think turns over the HTTP model fake, with the installed
- * Workers AI binding answering the lanes that call it (rating, title, sleep-time judge) by request shape, never prompt
- * text. Defends (2026-09-08): a transcript count naming a missing column, and the second turn's request dropping the
- * message that started it.
+ * remote Workers AI binding answering the lanes that call it (rating, title, sleep-time judge). Defends (2026-09-08):
+ * a transcript count naming a missing column, and the second turn's request dropping the
+ * message that started it. The one exception is `longTurnCost`: its subject is Kinu's storage cost, not the model, so
+ * it runs every lane on the scripted model (the tiers' scripted-model provider) to keep the rows it writes deterministic.
  */
 import { Agent, getAgentByName, getCurrentAgent, type AgentContext } from 'agents';
 import { subscribe } from 'agents/observability';
@@ -20,6 +21,7 @@ import {
   type RecordedLog,
 } from '@kinu.run/core/obs';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
+import { configureRemoteAiFixture } from '../helpers/remote-ai-profile';
 import { KINU_TIMER_JOB, TERMINAL_RETRY_JOB } from '../../src/wake-jobs';
 import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 import { ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
@@ -397,6 +399,9 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   }
 
   async settleState(): Promise<SettleState> {
+    const refusal = providerRateRefusals.get(this.name);
+
+    if (refusal !== undefined) throw new Error(refusal);
     const busy: string[] = [];
 
     if (this._inFlight) busy.push('a turn in flight');
@@ -797,7 +802,7 @@ const NOTE: ReviewAnnotation = {
 const NOTED: NotedChanges = { source: 'workspace', label: 'Workspace', mode: 'vfs-baseline' };
 
 type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
-  'claimOwner' | 'setModel' | 'setSoul' | 'setEvolutionConfig' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp' | 'evalAbortActivation' | 'workspaceTitle'
+  'claimOwner' | 'setModel' | 'setSoul' | 'setEvolutionConfig' | 'setDisplayName' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp' | 'evalAbortActivation' | 'workspaceTitle'
   | 'createSubordinateAgent' | 'readWorkspaceFile'>
   & Pick<ProductionOrchestrator, 'getChangeNotes' | 'saveChangeNotes' | 'sendChangeNotes'>
   & Pick<ObservedOrchestrator, 'refuseReservations' | 'owedSends' | 'latestClaimOutcome' | 'recoveryPass'
@@ -856,6 +861,8 @@ interface WorkspaceRecording extends Logger {
   until(workspace: string, holds: (emitted: readonly RecordedLog[]) => boolean): Promise<void>;
 }
 
+const providerRateRefusals = new Map<string, string>();
+
 function createWorkspaceRecording(): WorkspaceRecording {
   const recording = createRecordingLogger();
   const emitters: (string | null)[] = [];
@@ -867,7 +874,13 @@ function createWorkspaceRecording(): WorkspaceRecording {
       recording.event(name, fields);
     },
     failure(name, error, fields) {
-      emitters.push(emittingWorkspace());
+      const workspace = emittingWorkspace();
+      emitters.push(workspace);
+
+      if (workspace !== null && name === 'provider.request_failed' && v.safeParse(v.object({ status: v.literal(429) }), fields).success) {
+        providerRateRefusals.set(workspace, renderThrownChain({ cause: error }));
+      }
+
       recording.failure(name, error, fields);
     },
     of: (workspace) => own(recording.emitted, workspace),
@@ -937,6 +950,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       const caller = await ownerCaller(this.env);
       const userDO = this.env.UserDO.get(this.env.UserDO.idFromName('probe-owner'));
 
+      await configureRemoteAiFixture(userDO, caller);
       const register = await userDO.registerWorkspace(caller, 'two-turn-workspace', 'Two-Turn Probe');
       const claim = await target.claimOwner('probe-owner');
 
@@ -992,18 +1006,24 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
   }
 
   /** A 500-delta turn after twenty answers of `priorDeltas` deltas, counted in the production orchestrator's own
-   *  SQLite and transcript reads, from enqueue to its sleep-time settle. */
+   *  SQLite and transcript reads, from enqueue to its sleep-time settle. The subject is Kinu's storage cost, not the
+   *  model: every lane, the background memory pass included, runs on the scripted model (the tiers' scripted-model
+   *  provider, scripts/tier-model.ts), so the rows the pass writes are deterministic. The Workers AI binding's own
+   *  behavior is measured by the suites whose subject it is. */
   async longTurnCost(priorDeltas: number): Promise<{ cost: OperationCost; historyReads: number }> {
     const workspace = `long-cost-${String(priorDeltas)}-${crypto.randomUUID()}`;
     const target: QueueTarget = await this.queueTarget(workspace);
     const caller = await ownerCaller(this.env);
     const userDO = this.env.UserDO.get(this.env.UserDO.idFromName('long-owner'));
-    await userDO.registerWorkspace(caller, workspace, 'Long');
+    await userDO.registerWorkspace(caller, workspace, 'Long', { nameOrigin: 'user' });
     const claim = await target.claimOwner('long-owner');
     await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
     await userDO.setCredential(caller, 'openai-compat.default', {
       kind: 'openai-compat', baseURL: 'http://fake-models.invalid/v1', apiKey: 'probe-fixture-key',
     });
+    const catalog = await userDO.getProfileCatalog(caller);
+
+    await userDO.putProfileCatalog(caller, { roles: {}, tiers: { default: { model: 'openai-compat/probe-long' }, fast: { model: 'openai-compat/probe-long' } } }, catalog.version);
     await target.setModel('openai-compat/probe-long');
     await this.httpReset();
     const recording = createWorkspaceRecording();
@@ -1026,10 +1046,10 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     await awaitSleepTimeSettled(recording, workspace, 21);
     await awaitSettled(target);
 
-    // A lost binding call fails the sleep-time pass, retried by its owed effect inside the window: a fixture fault, never a cost.
+    // A lost model call fails the sleep-time pass, retried by its owed effect inside the window: a fixture fault, never a cost.
     const lost = recording.of(workspace).filter((event) => event.event === 'memory.fact_compression_failed');
 
-    if (lost.length > 0) throw new Error(`long cost: the AI binding lost ${String(lost.length)} call(s): ${lost[0]?.cause ?? ''}`);
+    if (lost.length > 0) throw new Error(`long cost: the scripted model lost ${String(lost.length)} call(s): ${lost[0]?.cause ?? ''}`);
 
     return await target.meterEnd();
   }
@@ -1059,7 +1079,8 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
     const caller = await ownerCaller(this.env);
     const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(owner));
-    await userDO.registerWorkspace(caller, workspace, 'Queue Probe');
+    await configureRemoteAiFixture(userDO, caller);
+    await userDO.registerWorkspace(caller, workspace, 'Queue Probe', { nameOrigin: 'user' });
     const claim = await target.claimOwner(owner);
     await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
     await userDO.setCredential(caller, 'openai-compat.default', {
@@ -1173,7 +1194,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
       // The held genesis and one user-origin rerun of the sends it could not land; a signal or peer
       // event that waited with them rides its first step.
-      await awaitSleepTimeSettled(recording, workspace, { chat: 2, peer: 2, signal: 2, yield: 1, attach: 2 }[mode]);
+
       await awaitSettled(target);
 
       const answers = (await target.chatHistoryPage()).items.filter((message) => message.role === 'assistant').map((message) => message.content);
@@ -1195,6 +1216,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
     const caller = await ownerCaller(this.env);
     const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(owner));
+    await configureRemoteAiFixture(userDO, caller);
     await userDO.registerWorkspace(caller, workspace, 'Wake Probe');
     const claim = await target.claimOwner(owner);
     await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
@@ -1287,7 +1309,8 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
     const caller = await ownerCaller(this.env);
     const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(owner));
-    await userDO.registerWorkspace(caller, workspace, 'Queue Probe');
+    await configureRemoteAiFixture(userDO, caller);
+    await userDO.registerWorkspace(caller, workspace, 'Queue Probe', { nameOrigin: 'user' });
     const claim = await target.claimOwner(owner);
     await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
     await userDO.setCredential(caller, 'openai-compat.default', {
@@ -1659,7 +1682,8 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       effects: effectStatuses(await target.parityRows()),
       busy: (await target.settleState()).busy,
       logoCalls: calls.filter(drawsLogoCall).length,
-      turnCalls: calls.filter((call) => !drawsLogoCall(call)).length,
+      turnCalls: calls.filter((call) => call.stream).length,
+      calls,
       answers: (await target.chatHistoryPage()).items.filter((message) => message.role === 'assistant').length,
       runEnds: await target.runEnds(),
     };
@@ -1865,6 +1889,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
     const caller = await ownerCaller(this.env);
     const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(owner));
+    await configureRemoteAiFixture(userDO, caller);
     await userDO.registerWorkspace(caller, workspace, 'Parity');
     const claim = await target.claimOwner(owner);
     await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
@@ -2071,6 +2096,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
     const caller = await ownerCaller(this.env);
     const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(owner));
+    await configureRemoteAiFixture(userDO, caller);
     await userDO.registerWorkspace(caller, workspace, 'First Chat');
     const claim = await target.claimOwner(owner);
     await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
@@ -2246,6 +2272,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
     const caller = await ownerCaller(this.env);
     const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(owner));
+    await configureRemoteAiFixture(userDO, caller);
     await userDO.registerWorkspace(caller, workspace, 'Raw Chat Probe');
     const claim = await target.claimOwner(owner);
     await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
@@ -2350,6 +2377,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       const caller = await ownerCaller(this.env);
       const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(drive.owner));
 
+      await configureRemoteAiFixture(userDO, caller);
       await userDO.registerWorkspace(caller, drive.workspace, drive.displayName);
       const claim = await target.claimOwner(drive.owner);
 

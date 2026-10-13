@@ -15,7 +15,8 @@ import type { ActorHandle } from '../identity/actor-handle';
 import type { DecisionPort } from '../providers/decision-model';
 
 /** Live channel for 'gate'-tier shell approvals (ACP `session/request_permission`). */
-export type RequestShellApproval = (req: ShellApprovalRequest) => Promise<ShellApprovalOutcome | null>;
+/** A prompt in front of the owner; `signal` aborts once another surface decided the ask's row. */
+export type RequestShellApproval = (req: ShellApprovalRequest, signal: AbortSignal) => Promise<ShellApprovalOutcome | null>;
 
 export type CraftStore = Pick<SqlCraftStore, 'create' | 'update' | 'get' | 'delete' | 'list' | 'search'>;
 

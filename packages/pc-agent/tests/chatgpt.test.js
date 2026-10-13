@@ -341,6 +341,13 @@ describe('refresh', () => {
     expect(auth.calls.map((call) => [call.url, call.signal])).toEqual([[REVOKE_URL, undefined]]);
   });
 
+  test('a refused revocation answers in OpenAI\'s own words', async () => {
+    const refusing = async () => Response.json({ error: 'invalid_request', error_description: 'The refresh token has already been used.' }, { status: 400 });
+
+    expect(await chatgpt.revokeSession({ clientId: 'oaiapp_issued', refreshToken: 'rt-1', fetch: refusing }))
+      .toEqual({ unconfirmed: 'OpenAI refused to revoke the sign-in: The refresh token has already been used.' });
+  });
+
   test.each(chatgpt.SPENT_REFRESH_CODES)('%s spends the session', async (code) => {
     const auth = authServer(await signer(), async () => Response.json({ error: code }, { status: 400 }));
     const refresh = chatgpt.refreshTokens({ clientId: 'oaiapp_issued', refreshToken: 'rt-1', fetch: auth.fetch });
@@ -428,13 +435,25 @@ describe('the daemon\'s own sign-in', () => {
     const auth = authServer(await signer(), async () => Response.json({}));
     const session = chatgpt.createDeviceSession({ home, fetch: auth.fetch });
 
-    expect(await session.signOut()).toEqual({ unconfirmed: null });
+    expect(await session.signOut({ revoke: true })).toEqual({ unconfirmed: null });
     expect(auth.calls.filter((call) => call.url === REVOKE_URL).map((call) => call.form)).toEqual([
       { token: 'rt-1', token_type_hint: 'refresh_token', client_id: 'oaiapp_device' },
     ]);
     expect(read(home)).toEqual({ issuer: 'https://auth.openai.com', subject: 'user-sub', email: 'owner@example.com', clientId: 'oaiapp_device' });
     // Signed out, which is not a sign-in that declined plan usage.
     expect(session.status()).toMatchObject({ signedIn: false, planDeclined: false });
+  });
+
+  test('a disconnect not asked to revoke forgets the tokens and asks OpenAI nothing', async () => {
+    const home = scratchDir('siwc-device-disconnect');
+    deviceRecord(home, { accessToken: 'at-1', refreshToken: 'rt-1', expiresAt: Date.now() + 3_600_000 });
+    const auth = authServer(await signer(), async () => Response.json({}));
+    const session = chatgpt.createDeviceSession({ home, fetch: auth.fetch });
+
+    expect(await session.signOut({ revoke: false })).toEqual({ unconfirmed: null });
+    expect(auth.calls.filter((call) => call.url === REVOKE_URL)).toEqual([]);
+    expect(read(home)).not.toHaveProperty('refreshToken');
+    expect(await session.bearer()).toBeNull();
   });
 
   test('a sign-in that declined plan usage says so, and the next one asks for consent again', async () => {
@@ -444,7 +463,7 @@ describe('the daemon\'s own sign-in', () => {
 
     expect(session.status()).toMatchObject({ signedIn: false, planDeclined: true, planEnabled: false });
     expect(new URL((await session.signIn()).authorizeUrl).searchParams.get('prompt')).toBe('consent');
-    await session.signOut();
+    await session.signOut({ revoke: false });
   });
 
   /** auth.openai.com with each refresh held until the test lets it answer; revocations answer at once. */
@@ -480,7 +499,7 @@ describe('the daemon\'s own sign-in', () => {
     const using = session.bearer();
 
     await held.reached;
-    const signingOut = session.signOut();
+    const signingOut = session.signOut({ revoke: true });
     // No call is handed a token while the sign-out is under way, the rotated one included.
     const during = session.bearer();
 
@@ -528,6 +547,49 @@ describe('the daemon\'s own sign-in', () => {
     // The landing waits its turn behind the rotation, then writes the new session over it.
     await recordHolds(home, 'at-1');
     expect(read(home)).toMatchObject({ accessToken: 'at-1', refreshToken: 'rt-1' });
+  });
+
+  test('a sign-out keeps no sign-in landing behind it, and revokes that one only when the owner asked', async () => {
+    for (const revoke of [false, true]) {
+      const home = scratchDir(`siwc-device-sign-out-landing-${String(revoke)}`);
+      deviceRecord(home, { accessToken: 'at-old', refreshToken: 'rt-old', expiresAt: Date.now() + 60_000 });
+      const keys = await signer();
+      const released = Promise.withResolvers();
+      const reached = Promise.withResolvers();
+      const exchange = exchangeAnswer(keys);
+
+      const auth = authServer(keys, async (form) => {
+        if (form.grant_type === 'authorization_code') return exchange(form);
+
+        if (form.grant_type !== 'refresh_token') return Response.json({});
+        reached.resolve();
+        await released.promise;
+
+        return Response.json({ access_token: 'at-rotated', refresh_token: 'rt-rotated', expires_in: 3600 });
+      });
+
+      const session = chatgpt.createDeviceSession({ home, fetch: auth.fetch });
+      // A rotation holds the queue, so the sign-in's landing waits behind it.
+      const using = session.bearer();
+
+      await reached.promise;
+      const authorize = new URL((await session.signIn()).authorizeUrl);
+      pendingNonce = authorize.searchParams.get('nonce') ?? '';
+      const callback = new URL(authorize.searchParams.get('redirect_uri') ?? '');
+      callback.searchParams.set('code', 'code-new');
+      callback.searchParams.set('state', authorize.searchParams.get('state') ?? '');
+
+      expect((await fetch(callback)).status).toBe(200);
+      const signingOut = session.signOut({ revoke });
+
+      released.resolve();
+      await using;
+      await signingOut;
+
+      const revoked = auth.calls.filter((call) => call.url === REVOKE_URL).map((call) => call.form.token);
+      expect(revoked).toEqual(revoke ? ['rt-1', 'rt-rotated'] : []);
+      expect(read(home)).not.toHaveProperty('refreshToken');
+    }
   });
 
   // SIWC-07: an update handoff used to exit with a rotation in flight, leaving the spent token on disk.
@@ -652,6 +714,6 @@ describe('the daemon\'s own sign-in', () => {
     expect(authorize.searchParams.get('client_id')).toBe('oaiapp_cli');
     expect(authorize.searchParams.has('agent_name_hint')).toBe(false);
     expect(session.status().pending).toBe(true);
-    await session.signOut();
+    await session.signOut({ revoke: false });
   });
 });

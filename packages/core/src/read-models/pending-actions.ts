@@ -7,6 +7,7 @@ import type { AccountMemoryProposal } from '../memory/account';
 import type { DeferredApproval } from '../safety/deferred-approval';
 import { proposedSoul, type WorkspaceProposal } from '../safety/workspace-proposals';
 import { boundWriteOf } from '../safety/bound-write';
+import { describeExecutionContext } from '../safety/approval-gate';
 import type { PendingConsent } from '../protocol';
 import type { PlanReview } from '../types/plans';
 import { planTitle } from '../plans/review';
@@ -34,6 +35,8 @@ export interface PendingAction {
   readonly planRef?: { readonly owner: string; readonly id: string; readonly revision: number };
   /** A parked write over the user's file: its review is `reviewParkedWrite` of this id. */
   readonly write?: { readonly path: string };
+  /** Where and how a parked command runs, as the owner reads it: part of what approving allows. */
+  readonly where?: string;
   /** A proposed workspace: the SOUL.md it would start with, exactly as approving writes it. */
   readonly proposal?: { readonly name: string; readonly brief: string; readonly soul: string };
   /** The actor whose ask it is, by id (a parked command, a plan); absent, the workspace's own (a proposal). */
@@ -133,6 +136,7 @@ export function buildPendingActions(input: PendingActionInputs): PendingAction[]
   for (const action of input.deferredActions) {
     if (action.status !== 'queued') continue;
     const write = boundWriteOf(action.command);
+    const where = describeExecutionContext(action.context);
 
     actions.push(write === null ? {
       id: action.id,
@@ -142,6 +146,7 @@ export function buildPendingActions(input: PendingActionInputs): PendingAction[]
       detail: action.command,
       at: action.requestedAt,
       raisedBy: action.actor,
+      ...(where !== '' && { where }),
     } : {
       id: action.id,
       kind: 'deferred_action',

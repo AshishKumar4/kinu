@@ -274,7 +274,7 @@
       "decision": "lexical"
     },
     {
-      "file": "packages/core/src/safety/secret-patterns.ts",
+      "file": "packages/core/src/safety/secret-scan.ts",
       "kind": "hand-parser",
       "owner": "scanText",
       "sourceSha256": "0e4fd061e95680821ae2abc1552ba65faf22814ec76877ae9f7abb67f7998750",
@@ -559,6 +559,48 @@
       "owner": "uploadId",
       "sourceSha256": "9b030d5cd3b5e6d2bc72c640fda0deb28395089997810eec35fe7d3f90d37dfb",
       "decision": "xml"
+    },
+    {
+      "file": "packages/pc-agent/src/chatgpt.js",
+      "kind": "regex-literal",
+      "owner": "benign",
+      "sourceSha256": "2d7c27457d05e63551a4e7f185ade54f18c1772c265e29fc03e974b80d07ee99",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/pc-agent/src/chatgpt.js",
+      "kind": "regex-literal",
+      "owner": "benign",
+      "sourceSha256": "25fa2c23200f4ecc3e39864cfaada76677f7ca980f028f9f87bc4e9c08abed04",
+      "decision": "safety"
+    },
+    {
+      "file": "packages/pc-agent/src/chatgpt.js",
+      "kind": "regex-literal",
+      "owner": "benign",
+      "sourceSha256": "394df264fa214db3331303e2960309a1616d285d4104874a71fc9d59533b89d5",
+      "decision": "safety"
+    },
+    {
+      "file": "packages/pc-agent/src/chatgpt.js",
+      "kind": "regex-literal",
+      "owner": "benign",
+      "sourceSha256": "4bf5361fd6566fda9f10c65723b4fbe178f60f6741545fd2b95a5816295facd0",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/pc-agent/src/chatgpt.js",
+      "kind": "regex-literal",
+      "owner": "benign",
+      "sourceSha256": "f799efffe80697fc506aebf320ccdac23be924dbab4e10818b3875fe1fa052bb",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/pc-agent/src/chatgpt.js",
+      "kind": "regex-literal",
+      "owner": "benign",
+      "sourceSha256": "217949181b575201996482f349e4e5a6e2b272fe0827fdf4a98a44c43eb6a903",
+      "decision": "lexical"
     },
     {
       "file": "packages/pc-agent/src/update.js",

@@ -8,7 +8,8 @@ import { Miniflare, Response as MiniflareResponse, WebSocketPair, convertV4Minif
 import { PERF_SECRET, PERF_SECRET_HOST } from './turn-file-io/egress-secret';
 import { ownerCaller, type JsonObject } from '@kinu.run/core';
 import * as v from 'valibot';
-import { workersAiBinding, readAiRun, workersAiAnswer } from '../packages/cf-backend/tests/helpers/workers-ai-binding';
+import { aiLane, workersAiBinding, readAiRun, type AiRun } from '../packages/cf-backend/tests/helpers/workers-ai-binding';
+import { CLEF_BINDING_ANSWER } from '../packages/test-utils/src/clef-binding-answer';
 import { buildAgentBundle, writeWhole } from '../packages/cf-backend/vite-agent-bundle';
 import { readScriptedRequest, SCRIPTED_MODELS_BODY, scriptedBody, type ScriptedAnswer } from './scripted-protocol';
 import { SliceSchema } from './turn-file-io/meter';
@@ -458,7 +459,17 @@ function modelFinished(entered: number, streamed: boolean): void {
   }
 }
 
-const ai = await workersAiBinding(async (request) => workersAiAnswer(await readAiRun(request)));
+/** The product's own Workers AI lanes, answered at once and alike every run, so inference never sits in a measurement. */
+function scriptedAi(run: AiRun): Response {
+  switch (aiLane(run)) {
+    case 'decision': return Response.json(CLEF_BINDING_ANSWER);
+    case 'title': return Response.json({ response: JSON.stringify({ title: 'Probe Workspace' }) });
+    case 'sleep': return Response.json({ response: JSON.stringify({ upserts: [], decay: [] }) });
+    case null: return Response.json({ errors: [{ message: `no lane answers ${run.model}` }] }, { status: 400 });
+  }
+}
+
+const ai = await workersAiBinding(async (request) => scriptedAi(await readAiRun(request)));
 
 const product = {
   name: 'kinu', ...compat, modulesRoot: dist, modules: await productModules(), workerLoaders: { LOADER: {} },

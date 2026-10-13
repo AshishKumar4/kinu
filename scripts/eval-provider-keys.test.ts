@@ -51,8 +51,6 @@ const deployment = Bun.serve({
       },
     },
     '/api/user/credentials': () => Response.json([...store.keys()].map((key) => ({ key, kind: 'bearer' }))),
-    // A deployment from before trial accounts answers any account as eval-service, so its trials share eval-service.
-    '/api/user/profile': () => Response.json({ email: 'eval-service@kinu.run' }),
     // A provider whose catalogue probe fails is absent with a failure beside it, its key still stored (registry.ts).
     '/api/user/models': () => Response.json({
       models: [{ spec: MODEL, provider: 'opencode-go' }]
@@ -130,19 +128,29 @@ describe('eval-service provider keys on every deployment it drives', () => {
   // The deploy prints this step's output into its log and its report: a key there is a key leaked.
   test('the command prints no key, whether its stores succeed or are refused', async () => {
     for (const refused of [false, true]) {
-      store.clear();
-      refuseStores = refused;
+      const { server, accounts, at } = accountsDeployment();
 
-      const run = Bun.spawn([process.execPath, join(import.meta.dir, 'eval-provider-keys.ts'), origin], {
-        env: childEnv({ HOME: homeWithKeys({ 'opencode-go.bearer': KEY }), KINU_EVAL_WEB_IDENTITY: IDENTITY, KINU_EVAL_MODELS: MODEL }),
+      const run = Bun.spawn([process.execPath, join(import.meta.dir, 'eval-provider-keys.ts'), refused ? origin : at], {
+        env: childEnv({ HOME: homeWithKeys({ 'opencode-go.bearer': KEY }), KINU_EVAL_WEB_IDENTITY: IDENTITY, KINU_EVAL_MODELS: MODEL, KINU_EVAL_TRIALS: '1' }),
         stdout: 'pipe', stderr: 'pipe',
       });
 
-      const [status, stdout, stderr] = await Promise.all([run.exited, new Response(run.stdout).text(), new Response(run.stderr).text()]);
+      refuseStores = refused;
 
-      expect(status).toBe(refused ? 1 : 0);
-      expect(`${stdout}${stderr}`).toContain(refused ? 'storing opencode-go.bearer for eval-service answered 500' : `lists every eval model: ${MODEL}`);
-      expect(`${stdout}${stderr}`).not.toContain(KEY);
+      try {
+        const [status, stdout, stderr] = await Promise.all([run.exited, new Response(run.stdout).text(), new Response(run.stderr).text()]);
+        expect(status).toBe(refused ? 1 : 0);
+        expect(`${stdout}${stderr}`).not.toContain(KEY);
+
+        if (!refused) {
+          const trialAccounts = [...accounts.keys()].filter((name) => name !== 'eval-service');
+          expect(trialAccounts.length).toBeGreaterThan(0);
+          expect(trialAccounts.every((name) => name.startsWith('trial-'))).toBe(true);
+          expect([...accounts.values()].every((account) => account.keys.has('opencode-go.bearer'))).toBe(true);
+        }
+      } finally {
+        await server.stop(true);
+      }
     }
   });
 });

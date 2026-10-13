@@ -1,6 +1,7 @@
 /** One eval-owned staging sample. Public file/terminal routes are intentionally a different boundary from native tools. */
 import * as v from 'valibot';
-import { resolvePublicSessionPlan, webHeaders } from '../../evals/src/session';
+import { resolvePublicSessionPlan } from '../../evals/src/session';
+import { webHeaders } from '../../evals/src/workspace-roster';
 import { SCRIPTED_MODEL_SPEC } from '../../packages/test-utils/src/scripted-model-spec';
 import { Telemetry, readToken, type TelemetryEvent } from '../prod-logs';
 import { PERF_IO_MARKER } from '../turn-file-io-model';

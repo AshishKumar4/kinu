@@ -62,9 +62,13 @@ describe('credential failures keep their shape', () => {
 
     const retiredKey = await rejection(() => current.open('slot', sealed));
 
+    // The record is sound: only its key is gone.
+    expect(await retired.open('slot', sealed)).toBe('secret');
     expectClassified(retiredKey, 'bad_input');
 
     const mine = await current.seal('slot', 'secret');
+
+    expect(await current.open('slot', mine)).toBe('secret');
     const tampered = `${mine.slice(0, -4)}AAAA`;
     const failed = await rejection(() => current.open('slot', tampered));
 

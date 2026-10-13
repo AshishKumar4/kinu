@@ -536,7 +536,7 @@ export const FIRST_RUN_DEFECTS = {
   },
   'workspace-panes': {
     id: 'workspace-panes',
-    found: 'The Diffs and Supervise panes read a workspace\'s review baseline, run list and '
+    found: 'The Diffs and Supervise panes (Supervise since removed) read a workspace\'s review baseline, run list and '
       + 'triggers, and no deployed row asked any of them anything.',
     missedBecause: 'the rows that write files read them back through the Files pane and the ledger, so a '
       + 'baseline that stopped seeing a write or a run list that lost a settled turn '

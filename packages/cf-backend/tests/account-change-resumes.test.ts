@@ -82,8 +82,8 @@ test.each(CHANGES)('when $what, a sleep-time compute parked on a refusal the own
       async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
       async userMcp_warmConnections() { return { servers: 0 }; },
       async setCredential() {},
-      async deleteCredential() {},
-      async disconnectCodex() {},
+      async deleteCredential() { return { unrevoked: null }; },
+      async disconnectCodex() { return { unrevoked: null }; },
       async pollCodexDeviceFlow() { return { connected: true, accountId: 'acc' }; },
       async putProfileCatalog(_caller: UserCaller, _catalog: JsonValue, expectedVersion: number): Promise<ProfileCatalogWriteResult> {
         return expectedVersion === 28

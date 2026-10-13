@@ -5,7 +5,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   createInheritedApprovalPolicy, egressSecretRule, gateExec,
   grantsAreSubset, resolveInheritedGrants, AGENT_RPC_ACCESS,
-  type ApprovalGrant, type ShellApprovalMode,
+  type ApprovalGrant, type ShellApprovalMode, wordsOnly,
 } from '@kinu.run/core';
 import { ORCHESTRATOR_RPC_SURFACE } from '../src/rpc-surface';
 import { hostedMainActor, hostedSubordinateHarness, orchestratorHarness, workspaceMainActor } from './helpers/actor-harness';
@@ -130,11 +130,11 @@ describe('a facet holds the root set, or a subset of it', () => {
     const ran: string[] = [];
 
     const run = gateExec<string>(
-      async (command) => {
+      wordsOnly(async (command) => {
         ran.push(command);
 
         return `ran:${command}`;
-      },
+      }),
       (error) => error.message,
       { name: 'sandbox', filesOwner: 'agent' },
       { policy: createInheritedApprovalPolicy(probe.deps) },

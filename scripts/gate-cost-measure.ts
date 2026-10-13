@@ -63,7 +63,8 @@ import { tmpdir } from 'node:os';
 import { tolerate } from '@kinu.run/core/obs';
 import { writeFully } from './deadline';
 import { writeResourceCost } from './gate-cost';
-import { procFile, procUid } from './process-owner';
+import { procUid } from './process-owner';
+import { procFile, procStat } from './proc';
 import {
   COST_TABLE, KINU_WORK, QUIET_LOAD, type RowCost, costRssMb, costThreads, holdsCheckoutResource, machineName, readCosts, writeCosts,
 } from './gate-cost';
@@ -164,17 +165,9 @@ function readTree(session: number, dumpMembers = false): Reading {
 
     // A process can exit between the directory listing and this read; that is
     // the sampler's normal case, not a failure.
-    const stat = procFile(entry, 'stat');
+    const stat = procStat(entry);
 
-    if (stat === undefined) continue;
-    const fields = stat.slice(stat.lastIndexOf(') ') + 2).split(' ');
-    stats.set(Number(entry), {
-      ppid: Number(fields[1]),
-      session: Number(fields[3]),
-      cpuTicks: Number(fields[11]) + Number(fields[12]) + Number(fields[13]) + Number(fields[14]),
-      tasks: Number(fields[17]),
-      state: fields[0] ?? '',
-    });
+    if (stat !== undefined) stats.set(Number(entry), stat);
   }
 
   // Membership walks UP: a process belongs when it wears the row's session or
@@ -248,11 +241,11 @@ function readTree(session: number, dumpMembers = false): Reading {
     const tasks = tolerate(() => tolerate(() => readdirSync(`/proc/${String(pid)}/task`), 'esrch'), 'enoent') ?? [];
 
     for (const task of tasks) {
-      const taskStat = procFile(pid, `task/${task}/stat`);
+      const taskStat = procStat(pid, `task/${task}/stat`);
 
       if (taskStat === undefined) continue;
 
-      if (taskStat.slice(taskStat.lastIndexOf(') ') + 2)[0] === 'R') runnable += 1;
+      if (taskStat.state === 'R') runnable += 1;
     }
   }
 
@@ -310,9 +303,9 @@ function contention(own: number): Contention | undefined {
     const first = entry.charCodeAt(0);
 
     if (first < 0x30 || first > 0x39) continue;
-    const stat = procFile(entry, 'stat');
+    const stat = procStat(entry);
 
-    if (stat === undefined || Number(stat.slice(stat.lastIndexOf(') ') + 2).split(' ')[3]) === own) continue;
+    if (stat === undefined || stat.session === own) continue;
     const command = procFile(entry, 'cmdline') ?? '';
 
     if (!KINU_WORK.test(command)) continue;
@@ -555,7 +548,7 @@ if (import.meta.main) {
   const scratch = mkdtempSync(join(tmpdir(), 'kinu-cost-'));
   const machine = machineName();
   const today = new Date().toISOString().slice(0, 10);
-  const own = Number(readFileSync('/proc/self/stat', 'utf8').slice(readFileSync('/proc/self/stat', 'utf8').lastIndexOf(') ') + 2).split(' ')[3]);
+  const own = procStat('self', 'stat', true).session;
   const waitSeconds = Number(process.argv.find((argument) => argument.startsWith('--quiet-wait='))?.slice('--quiet-wait='.length) ?? 30);
   const sharedWaitSeconds = Number(process.argv.find((argument) => argument.startsWith('--shared-wait='))?.slice('--shared-wait='.length) ?? 2_700);
   const contended: string[] = [];

@@ -1,10 +1,12 @@
 /** The reactive-user eval's arms against the eval deployment (docs/EVOLUTION-REDESIGN.md §8); `evals/reactive/` runs them. */
-import type { RunEvent } from '@kinu.run/core';
+import type { EvalAccount, RunEvent } from '@kinu.run/core';
 import { Seeded } from '../tasks/seeded';
 import { runTurn } from './harness';
 import { LAST_SEGMENTS, reactiveReply, THUMB_RATE, type ArmRun, type SegmentResult } from './reactive';
 import type { KinuPublicSession } from './session';
-import { ARMS, openWorkspace, type EvalTarget } from './target';
+import { ARMS, openWorkspace } from './target';
+import { prepareTrialAccount } from './slot';
+import { type EvalTarget } from './workspace-roster';
 import { taskTurns, type EvalTask, type EvalTurn } from './task';
 import { TrialTimeline } from './timeline';
 import { measure } from './transcript';
@@ -75,6 +77,7 @@ async function satisfaction(session: KinuPublicSession): Promise<{ sum: number; 
 /** One arm over the plan in one persistent workspace, so what it learns carries from segment to segment. */
 export async function runArm(input: {
   readonly target: EvalTarget;
+  readonly account: EvalAccount;
   readonly model: string;
   readonly arm: 'learning-on' | 'learning-off';
   readonly seed: number;
@@ -82,7 +85,9 @@ export async function runArm(input: {
   readonly tasks: ReadonlyMap<string, EvalTask>;
 }): Promise<ArmRun> {
   const say = (line: string) => process.stdout.write(`[reactive] ${input.arm} seed ${String(input.seed)}: ${line}\n`);
-  const session = await openWorkspace(input.target, { subject: `reactive-${input.arm}-${String(input.seed)}`, mission: 'Help with each task as it comes.', model: input.model });
+  const target = { ...input.target, identity: { ...input.target.identity, account: input.account } };
+  await prepareTrialAccount(target, Date.now());
+  const session = await openWorkspace(target, { subject: `reactive-${input.arm}-${String(input.seed)}`, mission: 'Help with each task as it comes.', model: input.model });
   const rng = new Seeded(input.seed * 7919 + (input.arm === 'learning-on' ? 1 : 2));
   const segments: SegmentResult[] = [];
   let mid = { sum: 0, n: 0 };

@@ -259,7 +259,7 @@ class KinuAgent(BaseInstalledAgent):
             environment,
             command=self._with_run_env(
                 f"{INSTALL_PATH} create {workspace} --mode local "
-                f"--purpose {shlex.quote(self._mission)} --no-alias-shim "
+                f"--purpose {shlex.quote(self._mission)} "
                 f"2>&1 | tee {EnvironmentPaths.agent_dir / CREATE_LOG_NAME}"
             ),
         )

@@ -172,7 +172,7 @@ describe('Claude sign-in on the web', () => {
 
     try {
       const state = (await web.start()).searchParams.get('state') ?? '';
-      await harness.userDO.deleteCredential(await testOwner(), CLAUDE_CRED_KEY);
+      await harness.userDO.deleteCredential(await testOwner(), CLAUDE_CRED_KEY, false);
       const finished = await web.call('/claude/finish', { code: `the-code#${state}` });
 
       expect(v.parse(FinishedSchema, await finished.json()).connected).toBe(false);

@@ -43,7 +43,8 @@ import { appendFileSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { tolerate } from '@kinu.run/core/obs';
-import { procFile, processStartTicks } from './process-owner';
+import { processStartTicks } from './process-owner';
+import { procFile, procStat } from './proc';
 
 /** Seconds between SIGTERM at the bound and SIGKILL, for a child that ignores the first. */
 export const KILL_AFTER_SECONDS = 5;
@@ -148,15 +149,14 @@ async function laidOut(pid: number, name: 'environ' | 'cmdline'): Promise<string
 /** Kill a still-live `pid` and describe it as `<pid> <command>`; undefined when it ended during identification. */
 async function end(pid: number): Promise<string | undefined> {
   const command = (await laidOut(pid, 'cmdline'))?.replaceAll('\0', ' ').trim() ?? '';
-  const stat = procFile(pid, 'stat');
+  const stat = procStat(pid);
 
   // A lookup precedes the async command read. An empty read can mean exec OR exit: only a process still live now
   // is a leftover. Otherwise the old lookup counted a process already gone and claimed the kill ended it.
   if (stat === undefined) return undefined;
-  const state = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[0];
 
-  if (state === undefined || state === 'Z' || state === 'X') return undefined;
-  const description = command || `[comm: ${stat.slice(stat.indexOf('(') + 1, stat.lastIndexOf(')'))}]`;
+  if (stat.state === 'Z' || stat.state === 'X') return undefined;
+  const description = command || `[comm: ${stat.comm}]`;
 
   if (tolerate(() => process.kill(pid, 'SIGKILL'), 'esrch') !== true) return undefined;
 
@@ -201,7 +201,7 @@ export async function endLeftovers(mark: string): Promise<string[]> {
  * lives, the parent is what names it.
  */
 export async function endChildren(parent: number): Promise<string[]> {
-  return await endWhere((fields) => Number(fields[1]) === parent);
+  return await endWhere((stat) => stat.ppid === parent);
 }
 
 /**
@@ -209,12 +209,12 @@ export async function endChildren(parent: number): Promise<string[]> {
  * what the environment check cannot see once its parent has gone: a child that dropped the mark (`env -i`).
  */
 async function endSession(leader: number): Promise<string[]> {
-  return await endWhere((fields) => Number(fields[3]) === leader);
+  return await endWhere((stat) => stat.session === leader);
 }
 
 /** End every live process whose `/proc/<pid>/stat` fields after the command name (state, ppid, pgrp, session, …)
  *  satisfy `matches`; each as `<pid> <command>`. */
-async function endWhere(matches: (fields: readonly string[]) => boolean): Promise<string[]> {
+async function endWhere(matches: (stat: NonNullable<ReturnType<typeof procStat>>) => boolean): Promise<string[]> {
   const left: string[] = [];
 
   for (const pid of liveWhere(matches)) {
@@ -227,37 +227,36 @@ async function endWhere(matches: (fields: readonly string[]) => boolean): Promis
 }
 
 /** Every live process, not a zombie, whose `/proc/<pid>/stat` fields after the command name satisfy `matches`. */
-function liveWhere(matches: (fields: readonly string[]) => boolean): number[] {
+function liveWhere(matches: (stat: NonNullable<ReturnType<typeof procStat>>) => boolean): number[] {
   return (tolerate(() => readdirSync('/proc'), 'enoent') ?? []).flatMap((name) => {
-    const stat = /^\d+$/u.test(name) ? procFile(name, 'stat') : undefined;
-    const fields = stat?.slice(stat.lastIndexOf(')') + 2).split(' ') ?? [];
+    const stat = /^\d+$/u.test(name) ? procStat(name) : undefined;
 
-    return fields[0] !== undefined && fields[0] !== 'Z' && matches(fields) ? [Number(name)] : [];
+    return stat !== undefined && stat.state !== 'Z' && matches(stat) ? [Number(name)] : [];
   });
 }
 
 /** Each live process of the session `leader` started, as `<pid> <state> <wait channel> <command>`: what a run killed for
  *  its silence was waiting on, read before the kill ends it. */
 function waitingIn(leader: number): string[] {
-  return liveWhere((fields) => Number(fields[3]) === leader).map((pid) => {
-    const stat = procFile(pid, 'stat') ?? '';
+  return liveWhere((stat) => stat.session === leader).map((pid) => {
+    const stat = procStat(pid);
     const command = procFile(pid, 'cmdline')?.split('\0').join(' ').trim().slice(0, 200) ?? '';
 
-    return `${String(pid)} ${stat.slice(stat.lastIndexOf(')') + 2, stat.lastIndexOf(')') + 3)} ${procFile(pid, 'wchan') ?? '?'} ${command}`;
+    return `${String(pid)} ${stat?.state ?? ''} ${procFile(pid, 'wchan') ?? '?'} ${command}`;
   });
 }
 
 /** The live children of `parent` whose command line holds `word`. */
 export function childrenRunning(parent: number, word: string): number[] {
-  return liveWhere((fields) => Number(fields[1]) === parent).filter((pid) => procFile(pid, 'cmdline')?.split('\0').includes(word) === true);
+  return liveWhere((stat) => stat.ppid === parent).filter((pid) => procFile(pid, 'cmdline')?.split('\0').includes(word) === true);
 }
 
 /** Resolves once none of `pids` runs: each has exited, whether or not its parent has reaped it yet. */
 export async function exitOf(pids: readonly number[]): Promise<void> {
   const running = (pid: number): boolean => {
-    const stat = procFile(pid, 'stat');
+    const stat = procStat(pid);
 
-    return stat !== undefined && stat.slice(stat.lastIndexOf(')') + 2)[0] !== 'Z';
+    return stat !== undefined && stat.state !== 'Z';
   };
 
   while (pids.some(running)) await Bun.sleep(10);

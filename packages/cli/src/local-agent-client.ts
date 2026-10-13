@@ -69,6 +69,7 @@ import type {
   LocalSessionControls,
   PlanReviewSurface,
   OwnerQuestionSurface,
+  WaitingApprovalSurface,
 } from './agent-client';
 
 
@@ -184,6 +185,7 @@ export class LocalAgentClient implements AgentClient {
   readonly checkpoints: FileCheckpointSurface;
   readonly plans: PlanReviewSurface;
   readonly questions: OwnerQuestionSurface;
+  readonly approvals: WaitingApprovalSurface;
   private readonly deps: LocalAgentClientDeps;
   readonly inlineAttachmentLimitBytes = LOCAL_MAX_INLINE_ATTACHMENT_BYTES;
   readonly planes: PathPlanes;
@@ -235,8 +237,6 @@ export class LocalAgentClient implements AgentClient {
       getShellApprovalMode: () => this.session.getShellApprovalMode().mode,
       setShellApprovalMode: (mode: ShellApprovalMode) => this.session.setShellApprovalMode(mode).mode,
       setShellApprovalHandler: (handler) => this.session.setShellApprovalHandler(handler),
-      listDeferredApprovals: () => this.session.listDeferredApprovals(),
-      decideDeferredApprovals: (ids, decision) => this.session.decideDeferredApprovals(ids, decision),
       listInstructionApprovals: (request) => this.session.listInstructionApprovals(request),
       readInstructionApproval: (path) => this.session.readInstructionApproval(path),
       approveInstruction: (path, digest) => this.session.approveInstruction(path, digest),
@@ -254,6 +254,10 @@ export class LocalAgentClient implements AgentClient {
       list: (limit, turnId) => this.session.listFileCheckpoints(limit, turnId),
       plan: (dir, id) => this.session.planFileRestore(dir, id),
       restore: (dir, id) => this.session.restoreFileCheckpoint(dir, id),
+    };
+    this.approvals = {
+      list: () => this.session.listDeferredApprovals(),
+      decide: (ids, decision) => this.session.decideDeferredApprovals(ids, decision),
     };
     this.questions = {
       list: () => this.session.listOwnerQuestions(),

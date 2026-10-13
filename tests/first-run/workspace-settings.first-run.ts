@@ -27,7 +27,7 @@ import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
 import { ask, openPublicSocket, rpcDetail, type PublicSocket } from './public-socket';
-import { webHeaders, type PublicWebIdentity } from '../../evals/src/session';
+import { webHeaders, type PublicWebIdentity } from '../../evals/src/workspace-roster';
 
 const SUITE = 'First-run · workspace-settings';
 

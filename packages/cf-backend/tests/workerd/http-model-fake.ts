@@ -1,5 +1,6 @@
 import * as v from 'valibot';
 import { KILL_FILE, WAKE_MARKER, WakeHoldPlacementSchema, type CallRecord, type KillPoint, type WakeHoldPlacement } from './two-turn-shapes';
+import { scriptedProbeAnswer } from './probe-model-script';
 import { aiLane, type AiRun } from '../helpers/workers-ai-binding';
 import { WORKERS_AI_MODELS_DEV } from '@kinu.run/test-utils/models-dev';
 /**
@@ -70,8 +71,8 @@ const MODELS_DEV_CATALOG = {
 };
 
 interface HeldGate {
-  readonly arrived: PromiseWithResolvers<void>;
-  readonly release: PromiseWithResolvers<void>;
+  readonly arrived: ReturnType<typeof Promise.withResolvers<void>>;
+  readonly release: ReturnType<typeof Promise.withResolvers<void>>;
 }
 
 /** Armed by `/queue/hold`: the first `probe-queue` call, or every call numbered `from` onward until
@@ -98,7 +99,7 @@ async function holdWakeWindow(where: WakeHoldPlacement): Promise<void> {
  *  every `/proxy/parked` reader still short of its count. Node-side, so no request context owns the wait. */
 let proxyHold: {
   parked: number;
-  readonly release: PromiseWithResolvers<void>;
+  readonly release: ReturnType<typeof Promise.withResolvers<void>>;
   readonly readers: { readonly count: number; readonly resolve: () => void }[];
 } | null = null;
 
@@ -404,8 +405,13 @@ async function wakeBody(body: OutboundBody): Promise<Response> {
   return call('call_wake_run_1', 'shell', { runtime: 'workspace', command: `sleep 45 && echo ${WAKE_MARKER}` });
 }
 
-function longBody(body: OutboundBody): Response {
+function longBody(body: OutboundBody, raw: string): Response {
+  // The background memory pass and the title ask for one completion, not a stream: the shared scripted protocol answers them.
+  const scripted = scriptedProbeAnswer(raw);
+
+  if (scripted !== null) return new Response(scripted.body, { status: scripted.status, headers: { 'content-type': scripted.contentType } });
   const users = (body.messages ?? []).filter((m) => m.role === 'user').map((m) => textOf(m.content));
+
   const spec = users.filter((u) => u.startsWith('long:')).at(-1) ?? 'long:100';
   const deltas = Number.parseInt(spec.slice('long:'.length), 10);
   const chunks: string[] = [];
@@ -825,13 +831,18 @@ export async function probeOutbound(request: Request): Promise<Response> {
 
     if (url.pathname === '/v1/chat/completions' && request.method === 'POST') {
       // SAFETY: the compat SDK posts JSON chat-completion bodies; parsed once against `OutboundBodySchema`.
-      const body = v.parse(OutboundBodySchema, await request.json());
+      const raw = await request.text();
+      const body = v.parse(OutboundBodySchema, JSON.parse(raw));
 
       recordCall(url, request, body);
 
       switch (body.model) {
         case 'probe-queue': {
           await holdQueuedCall('probe-queue');
+
+          const scripted = scriptedProbeAnswer(raw);
+
+          if (scripted !== null) return new Response(scripted.body, { status: scripted.status, headers: { 'content-type': scripted.contentType } });
 
           return echoBody(body);
         }
@@ -844,7 +855,7 @@ export async function probeOutbound(request: Request): Promise<Response> {
         }
 
         case 'probe': return echoBody(body);
-        case 'probe-long': return longBody(body);
+        case 'probe-long': return longBody(body, raw);
         case 'probe-parity': return parityBody(body);
         case 'probe-wake': return wakeBody(body);
         case 'probe-early-done': return earlyDoneBody();

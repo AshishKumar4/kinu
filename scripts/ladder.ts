@@ -241,7 +241,7 @@ const CLIENT_BUILD: Inputs = { ...AMBIENT_BY_NAME, corpus: true };
  *  names is walked from it (`configNamedModules`, ladder-closure.ts). Measured
  *  by `--audit-closure` 2026-09-24 on the complexity row. */
 function workersPool(base: string): Inputs {
-  return { ...AMBIENT_BY_NAME, reads: [`${base}/`] };
+  return { ...AMBIENT_BY_NAME, env: [...AMBIENT_BY_NAME.env ?? [], ...base === 'packages/cf-backend' ? ['KINU_CLOUDFLARE_API_TOKEN'] : []], reads: [`${base}/`] };
 }
 
 /** Gates that run before the deploy tier. The deploy tier is parsed from
@@ -981,7 +981,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived', reads: ['docs/CLI.md'] },
   },
   {
-    run: 'bun test --timeout=0 --isolate scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/pre-push-hook.test.ts scripts/lean-citations.test.ts scripts/nightly-sweeps.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/error-model.test.ts',
+    run: 'bun test --timeout=0 --isolate scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/pre-push-hook.test.ts scripts/lean-citations.test.ts scripts/nightly-sweeps.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/error-model.test.ts scripts/tui-capture.test.ts',
     label: 'Gate self-tests',
     tier: 'push',
     // Measured 2026-08-24 after analytics dataset parity joined: 11.08s; release
@@ -1635,7 +1635,7 @@ export const LADDER: readonly Gate[] = [
       + 'capability row rendering raw snake_case ids with no reading and no absences. '
       + 'Around them the whole WorkspacePage boundary: chat send admission, terminal '
       + 'workspace denial, the file-preview and history/roster request generations, the '
-      + 'one composite file plane, the supervise view live, a revoked device whose '
+      + 'one composite file plane, a revoked device whose '
       + 'command may still run, machine linking on the surface that asked for it, '
       + 'composer and message continuity, the tool preview redacting through the one '
       + 'canonical policy, WorkTab drawing a section only when it has something to '
