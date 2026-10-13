@@ -135,7 +135,7 @@ test('resizing a running box commits and starts it again at the new size; a runn
   // A FIFO: the read returns once the command runs, so the resize lands on a live command.
   const started = join(cwd, 'started');
   await runToExit(['mkfifo', started]);
-  const running = box.execUntimed(`echo up > ${started}; exec sleep 60`, { cwd, execId: 'held' });
+  const running = box.exec(`echo up > ${started}; exec sleep 60`, { cwd, execId: 'held' });
   await Bun.file(started).text();
 
   const resized = await box.resize('large');

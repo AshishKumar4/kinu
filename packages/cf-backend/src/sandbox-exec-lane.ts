@@ -6,14 +6,14 @@
 
 import { jsonResultOrVoid, REAL_CLOCK, SandboxPending, WORKSPACE_BACKUP_DIR, type Clock, type OutputSink, type SandboxHandle } from '@kinu.run/core';
 import { attempt, classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle, toKinuError, type ErrorCode } from "@kinu.run/core/obs";
-import { collectExecRecords, devboxFailure, type DevboxErrorCode } from '@kinu.run/devbox';
+import { devboxFailure, readExec, type DevboxErrorCode } from '@kinu.run/devbox';
 import { Effect } from 'effect';
 import type { KinuDevbox } from "./kinu-devbox";
 import { sandboxPreviewLabelOf } from "@kinu.run/core";
 import type { SandboxPreviewExposures } from "@kinu.run/core";
 
 type ContainerOperations = Pick<KinuDevbox,
-  "execUntimed" | "execUntimedStream" | "killUntimed" | "releaseUntimed" | "resolveReadiness" | "readFile" | "writeFile" | "writeFileIfDigest" | "listFiles" | "statFile"
+  "exec" | "execStream" | "killExec" | "releaseExec" | "resolveReadiness" | "readFile" | "writeFile" | "writeFileIfDigest" | "listFiles" | "statFile"
   | "deleteFile" | "exposePort" | "getExposedPorts" | "unexposePort" | "startSupervised"
   | "stopSupervised" | "listSupervised" | "portToken" | "probePort" | "resize" | "portListeners" | "answerRest">;
 
@@ -106,12 +106,12 @@ function callDevbox<A>(run: () => PromiseLike<A>): Effect.Effect<A, KinuError> {
 }
 
 /**
- * No work deadline: the command on the container runtime's own exec (`Devbox.execUntimed`), which returns its
+ * No work deadline: the command on the container runtime's own exec (`Devbox.exec`), which returns its
  * output whole. An abort ends its process tree and reports once it is gone; a refused kill is reported as itself,
  * since the process is still running, and a command that finished first is returned as finished.
  */
 async function execWithoutDeadline(
-  handle: Pick<KinuDevbox, "execUntimed" | "execUntimedStream" | "killUntimed">,
+  handle: Pick<KinuDevbox, "exec" | "execStream" | "killExec">,
   command: string,
   { cwd, signal, env, execId }: {
     readonly cwd?: string | undefined; readonly signal?: AbortSignal | undefined; readonly env?: Readonly<Record<string, string>> | undefined; readonly execId: string;
@@ -121,15 +121,15 @@ async function execWithoutDeadline(
   const options = { cwd: cwd ?? WORKSPACE_BACKUP_DIR, execId, ...(env !== undefined && { env }) };
 
   const ran = output === undefined
-    ? handle.execUntimed(command, options)
-    : handle.execUntimedStream(command, options).then((stream) => collectExecRecords(stream, (name, data) => { output.write(name, data); }));
+    ? handle.exec(command, options)
+    : handle.execStream(command, options).then((stream) => readExec(stream, (name, data) => { output.write(name, data); }));
 
   // Set only on abort: true means this call ended the process tree, false that the command had already exited.
   let verdict: Promise<boolean> | undefined;
   const { promise: killRefused, reject } = Promise.withResolvers<never>();
 
   const kill = (): void => {
-    verdict = handle.killUntimed(execId);
+    verdict = handle.killExec(execId);
     verdict.catch(reject);
   };
 
@@ -227,7 +227,7 @@ export function adaptCloudflareSandbox(
 
       return settle(Effect.andThen(ready, run.pipe(
         Effect.catch((failure) => (lost(failure) ? again : Effect.fail(failure))),
-        Effect.ensuring(callDevbox(() => handle.releaseUntimed(execId)).pipe(
+        Effect.ensuring(callDevbox(() => handle.releaseExec(execId)).pipe(
           Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('computer.exec_release_failed', failure, { execId }); })),
         )),
       )));

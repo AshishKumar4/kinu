@@ -115,9 +115,10 @@ function readExecRecords(stream: ReadableStream<Uint8Array>): ReadableStream<Exe
   }));
 }
 
-export function collectExecRecords(
+/** Reads an `execStream` to its result, handing each chunk to `heard` as it arrives. */
+export function readExec(
   stream: ReadableStream<Uint8Array>,
-  heard: (stream: 'stdout' | 'stderr', data: Uint8Array) => void,
+  heard: (stream: 'stdout' | 'stderr', data: Uint8Array) => void = () => {},
 ): Promise<ExecResult> {
   return settle(Effect.gen(function* () {
     const reader = readExecRecords(stream).getReader();

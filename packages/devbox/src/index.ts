@@ -6,7 +6,7 @@ export { GOLDEN_NAME } from './golden';
 
 export { DevboxError, devboxFailure, type DevboxErrorCode } from './errors';
 
-export { collectExecRecords, execRecords } from './exec-stream';
+export { execRecords, readExec } from './exec-stream';
 
 export { DevboxGateway, type OutboundPolicy } from './gateway';
 

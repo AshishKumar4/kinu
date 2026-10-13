@@ -54,12 +54,12 @@ const sandboxFor = (id: string) => ({
 
     return { restoring: false, refused: undefined };
   },
-  execUntimed: async () => {
-    box.calls.push('execUntimed');
+  exec: async () => {
+    box.calls.push('exec');
 
     return { stdout: '', stderr: '', exitCode: 0 };
   },
-  releaseUntimed: async () => {},
+  releaseExec: async () => {},
   listFiles: async () => {
     box.calls.push('listFiles');
 
@@ -245,7 +245,7 @@ test('a held port whose holder carries no stamp makes no job serving', async () 
 function environmentRecordingBox(environments: Array<Readonly<Record<string, string>> | undefined>): KinuDevbox {
   return Object.create({
     resolveReadiness: async () => ({ kind: 'restored' as const }),
-    execUntimed: async (_command: string, options: { readonly env?: Readonly<Record<string, string>> }) => {
+    exec: async (_command: string, options: { readonly env?: Readonly<Record<string, string>> }) => {
       environments.push(options.env);
 
       return { stdout: '', stderr: '', exitCode: 0 };
