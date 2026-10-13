@@ -824,13 +824,17 @@ export function sandboxFiles(
       // Each earlier write this plane has an answer for, or gave up on: its answer goes with this send.
       const retiring = settled.splice(0);
 
-      try {
-        return await serving(path, 'open', () => handle.writeFileIfDigest({ path, contentBase64: bytesToBase64(data), expected, operation, settled: retiring }));
-      } catch (cause) {
-        settled.push(...retiring);
+      let answered = false;
 
-        throw cause;
+      try {
+        const answer = await serving(path, 'open', () => handle.writeFileIfDigest({ path, contentBase64: bytesToBase64(data), expected, operation, settled: retiring }));
+
+        answered = true;
+
+        return answer;
       } finally {
+        // A send with no answer may not have reached the guest: the next one names those again.
+        if (!answered) settled.push(...retiring);
         settled.push(operation);
       }
     },
