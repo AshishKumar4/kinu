@@ -54,7 +54,10 @@ deletes it); each part is Nimbus's own build of the source change its ask propos
   `_rpcWriteFileIfRevision`, core's `writeFileIfRevision` supervisor op: stat and write in one synchronous step, absent
   is 0, a mount's file refused ENOTSUP), so a hosted agent's or the editor's save over a session is checked where it
   was read and written in two calls (#55, the hunks as written). A plane that checks neither a revision nor the bytes
-  is refused rather than compared and written.
+  is refused rather than compared and written;
+- `SupervisorRPC`'s npm cache client loads at its first npm cache call (`import()` in `supervisor-calls.js`), so the npm
+  engine it links (the arborist, the libs table, semver) is in no isolate's startup (#56, the hunk as written). A host
+  Worker's startup is bounded by Cloudflare (code 10021), which refused 89759ebcc's on staging (2026-10-13).
 
 Asked of Nimbus and not carried: mysql2's `checkServerIdentity` under workerd's
 TLS (#48), connections keeping the host's socket type (#49), the Cloudflare accounts envelope (#50), a credentialed
