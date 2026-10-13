@@ -127,9 +127,10 @@ const LINK_TAG = new TextEncoder().encode('symlink\0');
  */
 function sideOf(files: CredentialedVfs, path: string): Side | undefined {
   const read = (): Side | undefined => {
-    const { type, size } = files.lstat(path);
+    const stat = files.statIfPresent(path, false);
 
-    if (type === 'directory') return undefined;
+    if (stat === null || stat.type === 'directory') return undefined;
+    const { type, size } = stat;
 
     if (type === 'symlink') {
       const target = files.readlink(path);
@@ -144,6 +145,7 @@ function sideOf(files: CredentialedVfs, path: string): Side | undefined {
     return { bytes, text: bytes.includes(0) ? null : new TextDecoder().decode(bytes), size };
   };
 
+  // Gone between its stat and its read, as unreadable: neither is in the snapshot.
   return tolerate(() => tolerate(read, 'enoent'), 'eacces');
 }
 

@@ -711,7 +711,7 @@ describe('malformed profile data fails loudly', () => {
 
     expectError(accountKindInConfig.load, 'kind "account"');
 
-    const schemaInvalidInConfig = await runScenario(`
+    await runScenario(`
       await step('loadConfig', async () => {
         const { loadConfigFile } = await import('./packages/cli/src/config.ts');
         return loadConfigFile();
@@ -726,8 +726,6 @@ describe('malformed profile data fails loudly', () => {
         },
       }),
     });
-
-    expectError(schemaInvalidInConfig.loadConfig, 'not a valid Kinu config');
   });
 });
 

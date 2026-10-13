@@ -34,7 +34,7 @@ function daemon(files: Map<string, string>) {
     switch (frame.method) {
       case 'which': return { present: [] };
       case 'exists': return files.has(path);
-      case 'statPath': return body === undefined ? null : { size: Buffer.byteLength(body), mtimeMs: 1, isDir: false };
+      case 'statPath': return body === undefined ? null : { size: Buffer.byteLength(body), mtimeMs: 1, type: 'file' };
       case 'readRange': {
         const [, offset, length] = v.parse(RangeParamsSchema, frame.params.slice(0, 3));
 
@@ -47,6 +47,19 @@ function daemon(files: Map<string, string>) {
         files.set(path, v.parse(v.string(), frame.params[1] ?? ''));
 
         return { success: true };
+
+      // The machine compares what it holds against the digest named, then replaces, as the daemon does.
+      case 'writeFileIfDigest': {
+        const held = body === undefined ? null : new Bun.CryptoHasher('sha256').update(body).digest('hex');
+
+        if (held !== (frame.params[2] ?? null)) return { ok: false, sha256: held };
+        const next = Buffer.from(v.parse(v.string(), frame.params[1] ?? ''), 'base64').toString();
+
+        files.set(path, next);
+
+        return { ok: true, sha256: new Bun.CryptoHasher('sha256').update(next).digest('hex') };
+      }
+
       default: return { stdout: DEVICE_HOME, stderr: '', exitCode: 0 };
     }
   };

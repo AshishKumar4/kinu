@@ -36,8 +36,7 @@ export interface WorkspaceSpend {
   readonly offTurnShare: number | null;
   /** Per mission label, dearest first; a call sits in one producer row and every label above it. */
   readonly missions: readonly MissionBudgetSnapshot[];
-  /** Absent when an older deployment answered: not reported, not none. */
-  readonly accounts?: readonly AccountSpend[];
+  readonly accounts: readonly AccountSpend[];
 }
 
 interface Tally {
@@ -109,7 +108,7 @@ export function headStepSources(sql: SqlExecutor): StepSpendSource[] {
   }]);
 }
 
-export function workspaceSpend(deps: WorkspaceSpendDeps): WorkspaceSpend & { readonly accounts: readonly AccountSpend[] } {
+export function workspaceSpend(deps: WorkspaceSpendDeps): WorkspaceSpend {
   deps.actor.assertCurrent();
   const tallies: Tallies = new Map();
   const heads = readHeadSpend(deps.sql);

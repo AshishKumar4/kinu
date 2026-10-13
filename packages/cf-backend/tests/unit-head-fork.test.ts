@@ -10,7 +10,6 @@ import { mockAgentsSdk } from './helpers/agents-sdk';
 import { unreachableObjects } from "./helpers/bindings";
 import type { KinuDevbox } from "../src/kinu-devbox";
 import type { RecordedUserPlaneCalls } from './helpers/actor-harness';
-import type { KinuEgressParams } from '../src/egress/outbound';
 import type { CFRuntime } from '../src/runtime';
 import * as v from 'valibot';
 
@@ -23,8 +22,6 @@ const lastRequestedSandboxId = (): string | null => requestedSandboxId;
 
 /** A head rides a container it does not own, so this must stay at zero. */
 let restoresPerformed = 0;
-
-const configuredEgress: KinuEgressParams[] = [];
 
 const sandboxFor = (id: string) => {
     requestedSandboxId = id;
@@ -45,7 +42,7 @@ const sandboxFor = (id: string) => {
       createBackup: async () => null,
       restoreBackup: async () => { restoresPerformed += 1; },
       // A hosted actor rides the configuration its root installed; a head configuring the container would be a defect.
-      configureEgress: async (params: KinuEgressParams) => { configuredEgress.push(params); },
+      configureEgress: async () => {},
     };
 };
 
@@ -150,20 +147,15 @@ describe('a head forks its parent workspace', () => {
     expect(restoresPerformed).toBe(0);
   });
 
-  test('an owner vault that cannot be read fails the operation, never configuring the container empty', async () => {
-    const unreadable = new Error('the owner object reset mid-call');
-    configuredEgress.length = 0;
-
+  test('an owner vault that cannot be read does not stop the container being configured: only a secret needs it', async () => {
     const { rt } = await hostedHead({}, 'head-vault', {
-      warmConnections: [], failWarm: null, titles: [], failVault: unreadable,
+      warmConnections: [], failWarm: null, titles: [], failVault: new Error('the owner object reset mid-call'),
     });
 
     const handle = rt.sandboxHandle;
 
     if (!handle) throw new Error('a hosted head runtime rides the workspace container');
-    // An empty vault here would be memoized for the handle's life.
-    await expect(handle.exec('true')).rejects.toMatchObject({ _tag: 'KinuError', cause: unreadable });
-    expect(configuredEgress).toEqual([]);
+    await expect(handle.exec('true')).resolves.toMatchObject({ exitCode: 0 });
   });
 
   /** Asserted as a pair: a refusal alone would also hold for a head with no file plane at all. */

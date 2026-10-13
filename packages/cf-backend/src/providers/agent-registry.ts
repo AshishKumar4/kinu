@@ -1,7 +1,7 @@
 // Per-agent provider registry over core's (`createModelRegistry`); auth goes through the UserDO stub.
 import {
   createAIGatewayProvider, createChatGptProvider, createCodexProvider, createModelRegistry, createMyGatewayProvider,
-  createWorkersAIProvider, normalizeModelSpec, retryTransientDO,
+  createWorkersAIProvider, normalizeModelSpec,
   bindingDecisionRun, restDecisionRun, type DecisionRun,
   type ActorReference, type AuthRequest, type AuthResolution, type AuthResolver, type ModelAffinity, type ProviderDeps, type ProviderEnv,
   type ProviderRegistry, type ProviderWaitInfo, type SpecDefault, type UserCaller,
@@ -10,19 +10,40 @@ import {
 import type { LanguageModel } from 'ai';
 import type { CredentialSummary } from '../user/credentials';
 import { deviceRouteFetch, type ModelRelayHub } from '../egress/model-relay-route';
+import { idempotent } from '@nimbus-sh/fabric/do-calls.js';
+import { logDoCallRetry } from '../obs/do-call-retry';
 
-/**
- * Credential DO stub paired with the capability this context presents (owner, or workspace token resolved per call),
- * so no context holds the stub without saying who it is.
- */
+/** Credential and relay methods on UserDO; each call presents its caller's capability. */
 export interface UserCredentialClient extends ModelRelayHub {
   getAuth(caller: UserCaller, key: string, opts?: AuthRequest): Promise<AuthResolution | null>;
   listCredentials(caller: UserCaller): Promise<CredentialSummary[]>;
 }
 
 export interface UserCredentialSource {
-  stub: UserCredentialClient;
-  caller: UserCaller | (() => Promise<UserCaller>);
+  getAuth: AuthResolver;
+  listCredentials(this: void): Promise<CredentialSummary[]>;
+  hub(): ModelRelayHub;
+  caller(this: void): Promise<UserCaller>;
+}
+
+export function userCredentials(resolve: () => UserCredentialClient, authority: UserCaller | (() => Promise<UserCaller>)): UserCredentialSource {
+  const identity = async (): Promise<UserCaller> => authority instanceof Function ? await authority() : authority;
+
+  return {
+    caller: identity,
+    hub: resolve,
+    getAuth: async (key, opts) => {
+      const caller = await identity();
+      // Rotation persists before answering; a repeat reads it, while a spent but unpersisted token is already lost.
+
+      return await idempotent('credential auth', resolve, (stub) => stub.getAuth(caller, key, opts), { onRetry: logDoCallRetry });
+    },
+    listCredentials: async () => {
+      const caller = await identity();
+
+      return await idempotent('credential listing', resolve, (stub) => stub.listCredentials(caller), { onRetry: logDoCallRetry });
+    },
+  };
 }
 
 /** Taken from the consuming provider: the direct path calls `run`, which a gateway-only env lacks. */
@@ -65,27 +86,12 @@ export function routedModelReads(providers: AgentProviderRegistry): NonNullable<
   };
 }
 
-async function resolveCaller(source: UserCredentialSource): Promise<UserCaller> {
-  return source.caller instanceof Function ? await source.caller() : source.caller;
-}
-
-/** Proxies to UserDO so no credential material touches the caller; the DO serializes concurrent refreshes. Null source: every lookup null. */
-export function createUserDOAuthResolver(source: UserCredentialSource | null): AuthResolver {
-  return async (key, opts) => {
-    if (!source) return null;
-    const caller = await resolveCaller(source);
-
-    // Retry-safe: the conditional OAuth refresh persists before returning.
-    return await retryTransientDO('credential auth', () => source.stub.getAuth(caller, key, opts));
-  };
-}
-
 /** The decision model's transport: the deployment's Workers AI binding when it pays, else the owner's Cloudflare login. */
 export function decisionRunOf(opts: Pick<AgentProviderDeps, 'env' | 'userDO'>): DecisionRun {
   const binding = opts.env.WORKERS_AI_VIA_BINDING === 'on' && opts.env.AI && isDirectAiBinding(opts.env.AI) ? opts.env.AI : null;
 
   return binding === null
-    ? restDecisionRun({ getAuth: createUserDOAuthResolver(opts.userDO ?? null) })
+    ? restDecisionRun({ getAuth: opts.userDO?.getAuth ?? (async () => null) })
     : bindingDecisionRun(binding);
 }
 
@@ -103,7 +109,7 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
   const source = opts.userDO ?? null;
 
   const relayed = source === null ? null : {
-    hub: source.stub, caller: () => resolveCaller(source), ...(opts.currentTurn !== undefined && { currentTurn: opts.currentTurn }),
+    hub: source.hub(), caller: source.caller, ...(opts.currentTurn !== undefined && { currentTurn: opts.currentTurn }),
   };
 
   const registry = createModelRegistry({
@@ -125,7 +131,7 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
     appTitle: opts.appTitle,
   });
 
-  const getAuth = createUserDOAuthResolver(source);
+  const getAuth = source?.getAuth ?? (async () => null);
   // Read once per registry: a listing asks about every provider, and a registry lives one call, or until the
   // account's credentials change (`OwnedModelServices.invalidate`).
   let keys: string[] | undefined;
@@ -134,10 +140,7 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
     if (!source) return [];
 
     if (keys !== undefined) return keys;
-    const caller = await resolveCaller(source);
-
-    const credentials = await retryTransientDO('credential listing',
-      () => source.stub.listCredentials(caller));
+    const credentials = await source.listCredentials();
 
     keys = credentials.map((c) => c.key);
 

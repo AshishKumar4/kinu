@@ -12,7 +12,7 @@ import {
   type ActorHandle, type AgentOwnInspection, type ChatHistoryPage, type PositionPageRequest, type SerializedMessage,
   type SessionTranscriptReader, type SubordinateInspectionResult, type SubordinateReportLedger, type ModelPricing, type SqlExecutor,
   type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HeadReport, type HostedActor,
-  type Executor, type JsonObject, type NimbusSandboxHandle, type SqlValue, WORKSPACE_ROOT, cloudPlanes, answersForDrainTurns,
+  type Executor, type JsonObject, type NimbusSandboxFiles, type SqlValue, WORKSPACE_ROOT, cloudPlanes, answersForDrainTurns,
   initPendingSendTables, initTerminalEffectTable, PendingSendStore, contextFill, announcementOf, classifyRunEnd, closeTurnRun, TurnReports,
   PlanReviewStore, OwnerQuestionStore, AgentSequence, TurnFactsStore, type PlanReview, type TurnFacts,
   forkArtifactPath, localForkConversationSource, localForkConversationTarget, type ForkConversationSource, type ForkConversationTarget,
@@ -161,9 +161,9 @@ export class AgentDatabase {
   constructor(
     private readonly storage: DurableObjectStorage,
     private readonly workspace: {
-      readonly agent: () => NimbusSandboxHandle;
+      readonly agent: () => NimbusSandboxFiles;
       readonly home: string;
-      readonly state: () => NimbusSandboxHandle;
+      readonly state: () => NimbusSandboxFiles;
       readonly enqueueTurn: BackendHost['enqueueTurn'];
       /** A delivery of this isolate's own (a signal it raised, its events' drain), handed to its chat (design v2 §1). */
       readonly admitDelivery: (delivery: OwedDelivery) => Promise<DeliveryAnswer>;

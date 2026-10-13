@@ -17,7 +17,8 @@ import {
 import type { PortReservationTransaction } from '@nimbus-sh/worker/port-capability';
 import * as v from 'valibot';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
-import type { NimbusSandboxHandle } from '@kinu.run/core';
+import type { NimbusSandboxFiles } from '@kinu.run/core';
+import type { SessionBox } from '@kinu.run/test-utils/vfs';
 import type { HostedWorkspaceDeps, WorkspaceHostTarget } from '../../src/workspace-host';
 import { noEntrypoints, workerContext } from './bindings';
 
@@ -238,6 +239,14 @@ export const OBJECT_NAMESPACE = {
   },
 };
 
+/** An owner vault no suite over this host reads: the egress asks it only for a request carrying a placeholder. */
+const NO_VAULT = {
+  UserDO: {
+    idFromName: (name: string) => name,
+    get: (): never => { throw new Error('no suite over this host reads an owner vault through the egress'); },
+  },
+};
+
 /**
  * This script's `ctx.exports`: workerd builds one per isolate and hands it to every object, and `@nimbus-sh/platform`
  * holds the first one it is shown for the whole isolate. Every stand-in ctx carries this object, so a bun process that
@@ -251,6 +260,20 @@ export const SCRIPT_EXPORTS = {
     waitUntil: () => { throw new Error('unexpected supervisor background work'); },
     passThroughOnException: () => { throw new Error('unexpected supervisor pass-through'); },
   }), { OrchestratorAgent: OBJECT_NAMESPACE }),
+  /**
+   * An owned workspace's egress (`KinuEgress` in src/server.ts) over the same handler and no vault, so a placeholder is
+   * refused. Loaded at its first request: `outbound` reaches `cloudflare:email` through `agents`, which a case mocks first.
+   */
+  KinuEgress: ({ props }: { readonly props: unknown }) => ({
+    fetch: async (request: Request): Promise<Response> => {
+      const { handleContainerEgress, parseEgressParams } = await import('../../src/egress/outbound');
+
+      return await handleContainerEgress(request, NO_VAULT, parseEgressParams({ props }), {
+        grants: async () => { throw new Error('no suite over this host reads workspace grants through the egress'); },
+      });
+    },
+    connect: (): never => { throw new Error('no suite over this host opens a socket through the egress'); },
+  }),
 };
 
 /** The platform's view of a script's exports: a loopback factory per entrypoint name. */
@@ -419,23 +442,36 @@ export const rpcRouteCapabilityPort = (host: ProgrammaticHost, ...args: Paramete
 
 export type ProgrammaticExecOptions = NonNullable<Parameters<HostedRuntime['exec']>[1]>;
 
-const FileStatSchema = v.object({ type: v.string(), size: v.number(), mtime: v.number() });
+const FileStatSchema = v.object({ type: v.string(), size: v.number(), mtime: v.number(), mode: v.number(), revision: v.optional(v.number()) });
 
 /** The credentialed runtime: `exec` carries the credential and `files.as(agent)` answers the bound
  *  file plane; top-level `files` refuse so it never falls back to the session user. Shared to prevent drift. */
 export function credentialedSessionBox(
   runtime: () => Promise<HostedRuntime>,
   cred: VfsCred,
-): NimbusSandboxHandle {
+): SessionBox {
   const refuse = async (): Promise<never> => { throw new Error('a credentialed plane must not fall back to the session user'); };
 
-  const filesAs = (agent: VfsCred): NimbusSandboxHandle['files'] => {
+  const filesAs = (agent: VfsCred): NimbusSandboxFiles => {
     const view = async () => (await runtime()).files.as(agent);
+
+    // As the session's own stat answers: a zero revision is no revision.
+    const stat = (follow: boolean) => async (path: string) => {
+      const found = await (await view()).stat(path, { follow });
+
+      if (found === null) return null;
+      const answer = v.parse(FileStatSchema, { type: found.type, size: found.size, mtime: found.mtimeMs, mode: found.mode });
+
+      if (typeof found.revision === 'number' && found.revision !== 0) answer.revision = found.revision;
+
+      return answer;
+    };
 
     return {
       as: filesAs,
       read: async (path) => await (await view()).exists(path) ? (await view()).readFileString(path) : null,
       readBytes: async (path) => await (await view()).exists(path) ? (await view()).readFile(path) : null,
+      exists: async (path) => await (await view()).exists(path),
       readRange: async (path, offset, length) => {
         const vfs = (await runtime()).workspace.vfs.as(agent);
 
@@ -443,14 +479,13 @@ export function credentialedSessionBox(
       },
       write: async (path, content) => { await (await view()).writeFile(path, content); },
       list: async (path) => (await (await view()).readdir(path ?? '/')).map((entry) => ({ name: entry.name, type: entry.type })),
-      stat: async (path) => {
-        const stat = await (await view()).stat(path);
-
-        return stat === null ? null : v.parse(FileStatSchema, { type: stat.type, size: stat.size, mtime: stat.mtimeMs });
-      },
+      stat: stat(true),
+      lstat: stat(false),
+      // Absent or no link answers null, as the session's readlink does.
+      readlink: async (path) => (await (await view()).isSymlink(path) ? (await view()).readlink(path) : null),
       rename: async (from, to) => { await (await view()).rename(from, to); },
-      exists: async (path) => (await view()).exists(path),
       mkdir: async (path) => { await (await view()).mkdir(path, { recursive: true }); },
+      chmod: async (path, mode) => { await (await view()).chmod(path, mode); },
       delete: async (path, options) => { await (await view()).remove(path, { recursive: options?.recursive ?? false }); },
     };
   };
@@ -472,8 +507,13 @@ export function credentialedSessionBox(
         exitCode: result.exitCode,
         stdout: result.stdout,
         stderr: result.stderr,
+        duration: result.duration,
+        timestamp: result.timestamp,
       };
     },
-    files: { as: filesAs, read: refuse, write: refuse, list: refuse, exists: refuse, delete: refuse },
+    files: {
+      as: filesAs, read: refuse, readBytes: refuse, readRange: refuse, write: refuse, list: refuse, stat: refuse, lstat: refuse, readlink: refuse,
+      rename: refuse, chmod: refuse, mkdir: refuse, exists: refuse, delete: refuse,
+    },
   };
 }

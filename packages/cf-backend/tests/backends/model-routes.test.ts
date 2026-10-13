@@ -4,7 +4,7 @@ import { generateText, tool, type LanguageModel } from 'ai';
 import { z } from 'zod';
 import * as v from 'valibot';
 import { asFetchFunction, requestUrl, runChat, type AuthResolution, type ChatEvent, type JsonObject, type UserCaller } from '@kinu.run/core';
-import { createAgentProviderRegistry } from '../../src/providers/agent-registry';
+import { createAgentProviderRegistry, userCredentials } from '../../src/providers/agent-registry';
 import { aiProxyRoutes } from '../../src/user/ai-proxy';
 import { cliRoutes, type CliRoutesEnv } from '../../src/cli/routes';
 import { createLocalModelResolver } from '../../../cli-backend/src/model-resolver';
@@ -33,9 +33,9 @@ function gatewayRoutes(upstream: typeof fetch, menu: readonly string[]) {
     ? { baseURL: ACCOUNT_AI, headers: { authorization: 'Bearer cf-user', 'cf-aig-gateway-id': 'default' } }
     : null);
 
-  const hosted = createAgentProviderRegistry({ env: {}, fetch: upstream, userDO: { caller: testOwner, stub: {
+  const hosted = createAgentProviderRegistry({ env: {}, fetch: upstream, userDO: userCredentials(() => ({
     ...NO_RELAY_MACHINE, getAuth: async (_caller, key) => await gatewayAuth(key), listCredentials: async () => [],
-  } } });
+  }), testOwner) });
 
   // The worker's own signed-in proxy route answers the CLI, as it does in production.
   const proxy = serveFamily(aiProxyRoutes);
@@ -326,7 +326,7 @@ describe('an account\'s model menu', () => {
     try {
       const refused = await menu();
       const served = await menu();
-      const hosted = createAgentProviderRegistry({ env: {}, fetch: upstream, userDO: { caller: testOwner, stub: account } });
+      const hosted = createAgentProviderRegistry({ env: {}, fetch: upstream, userDO: userCredentials(() => account, testOwner) });
       const answer = (await generateText({ model: hosted.resolveModel('openai-compat:groq/llama-4-scout', { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' }), prompt: 'hi' })).text;
 
       expect({ refused, served, catalogReads, answer, sent }).toEqual({

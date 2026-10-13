@@ -10,7 +10,8 @@ import * as v from 'valibot';
 import { ownerCaller } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
-import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
+import { ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
+import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import type { ChatAnswers, SeedAnswer } from './store-reset-shapes';
 
 export * from '../../src/server';

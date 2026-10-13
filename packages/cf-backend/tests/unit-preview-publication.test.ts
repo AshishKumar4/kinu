@@ -250,7 +250,7 @@ describe('a withdrawn port stays withdrawn, whatever the container still reports
 });
 
 describe('listing ports re-observes what the container still reports', () => {
-  test('an exposure minted before this record existed is carried into it', async () => {
+  test('a listing publishes nothing the lane did not: what the container reports is no authority', async () => {
     const kv = makeKv();
     const { box } = portBox();
     expect(kv.keys()).toEqual([]);
@@ -260,7 +260,7 @@ describe('listing ports re-observes what the container still reports', () => {
     expect(rows.map((row) => row.port)).toEqual([PORT]);
     expect(await sandboxPreviewExposed(kv, {
       sandboxId: SANDBOX_ID, port: PORT, token: TOKEN,
-    })).toBe(true);
+    })).toBe(false);
   });
 
   test('a re-observed exposure outlives the record it was first published in', async () => {
@@ -299,6 +299,11 @@ describe('listing ports re-observes what the container still reports', () => {
     const kv = makeKv();
     const { box } = portBox();
 
+    // A published record past its half-life, whose renewal the store refuses.
+    setSystemTime(new Date('2026-03-01T12:00:00.000Z'));
+    await sandboxPreviewExposures(kv, SANDBOX_ID).publish(PORT, TOKEN);
+    setSystemTime(new Date(Date.now() + (EXPOSURE_LIFETIME_MS * 2) / 3));
+
     // A failed maintenance write must not empty the panel, and is reported.
     const refusing: KvStore = {
       get: (key) => kv.get(key),
@@ -315,6 +320,7 @@ describe('listing ports re-observes what the container still reports', () => {
     });
 
     expect(emitted.map((line) => line.event)).toContain('preview.refresh_failed');
+    setSystemTime();
   });
 });
 

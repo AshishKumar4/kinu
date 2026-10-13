@@ -4,8 +4,52 @@
  * Each delegated turn is admitted and run as production runs one; its model is served by the platform gateway.
  */
 import { expect, test } from 'bun:test';
-import { GATEWAY_CATALOG, actorOver, actorOverWorkspace, gatewayWorkspace, hostedSubordinateHarness, runDelegatedTask } from './helpers/actor-harness';
+import { Effect, Result } from 'effect';
+import { settle } from '@kinu.run/core/obs';
+import { GATEWAY_CATALOG, actorOver, actorOverWorkspace, gatewayWorkspace, hostedSubordinateHarness, orchestratorHarness, runDelegatedTask, workspaceMainActor } from './helpers/actor-harness';
 import { requestOf, scriptedGateway, type RecordedGatewayRun } from './helpers/platform-gateway';
+import { createTestUserDO, testOwner } from './helpers/user-do';
+
+test('the hosted credential broker recovers a dropped UserDO answer at the namespace hop', async () => {
+  const user = createTestUserDO({ durableObjectId: '0123456789abcdef0123456789abcdef' });
+  const owner = await testOwner();
+  await user.userDO.ensureProfile(owner, 'owner@example.test');
+  await user.userDO.setCredential(owner, 'openai.bearer', { kind: 'bearer', token: 'hosted-token' });
+  await user.userDO.registerWorkspace(owner, 'harness-parent');
+  await user.userDO.ensureWorkspaceCapability('harness-parent', null);
+  const token = user.installed.get('harness-parent');
+
+  if (token === undefined) throw new Error('the workspace was not issued a capability');
+  const workspace = orchestratorHarness(undefined, { userDO: user.userDO, ownerUserId: '0123456789abcdef0123456789abcdef' });
+  workspace.agent.harnessHoldsCapability(token);
+  const read = user.userDO.getAuth.bind(user.userDO);
+  let lost = false;
+
+  // The first answer is lost on its way back.
+  user.userDO.getAuth = async (...args) => {
+    const answer = await read(...args);
+
+    if (!lost) {
+      lost = true;
+      throw new Error('Network connection lost.');
+    }
+
+    return answer;
+  };
+
+  try {
+    const broker = await workspace.agent.agentWorkspace(workspaceMainActor(workspace.db).actorId);
+
+    const answer = await settle(Effect.result(Effect.tryPromise({
+      try: () => broker.getAuth('openai.bearer'), catch: (cause) => ({ cause }),
+    })));
+
+    if (Result.isFailure(answer)) throw answer.failure.cause;
+    expect(answer.success).toMatchObject({ headers: { Authorization: 'Bearer hosted-token' } });
+  } finally {
+    user.close();
+  }
+});
 
 const NOTE = 'the streaming parser holds no whole file';
 

@@ -54,11 +54,11 @@ const DONE = 'epoch 40/40 done\n';
 /** A container that enforces the caller's deadline and kills with the SDK's own message; "outlasts" is an ordering, not a duration. */
 function fakeContainer(): FakeContainer {
   const calls: ExecCall[] = [];
-  const exit = Promise.withResolvers<{ stdout: string; exitCode: number }>();
+  const exit = Promise.withResolvers<{ stdout: string; stderr: string; exitCode: number }>();
 
   return {
     calls,
-    finish: () => exit.resolve({ stdout: DONE, exitCode: 0 }),
+    finish: () => exit.resolve({ stdout: DONE, stderr: '', exitCode: 0 }),
     handle: {
       exec: async (command, opts) => {
         if (opts === undefined) calls.push({ command });
@@ -357,7 +357,7 @@ describe('a sandbox command a job takes', () => {
   // its job's id, so the sandbox's listener read can name the job that serves a port.
   test("carries the id of the job it became in its environment", async () => {
     const { runner, store, bodies } = wholeChainRunner();
-    const serving = Promise.withResolvers<{ stdout: string; exitCode: number }>();
+    const serving = Promise.withResolvers<{ stdout: string; stderr: string; exitCode: number }>();
     const environments: Array<Record<string, string> | undefined> = [];
 
     const handle: SandboxHandle = {
@@ -392,7 +392,7 @@ describe('a sandbox command a job takes', () => {
     expect(environments).toEqual([{ [JOB_STAMP_ENV]: detached.jobId }]);
     expect(store.get(detached.jobId)?.status).toBe('running');
 
-    serving.resolve({ stdout: 'stopped\n', exitCode: 0 });
+    serving.resolve({ stdout: 'stopped\n', stderr: '', exitCode: 0 });
     await Promise.all(bodies);
   });
 
@@ -400,7 +400,7 @@ describe('a sandbox command a job takes', () => {
   // window is crossed on a hand clock, not waited out.
   test('is recorded serving the exposed port it holds when it detaches, and no longer once it settles', async () => {
     const clock = handClock(Date.now());
-    const serving = Promise.withResolvers<{ stdout: string; exitCode: number }>();
+    const serving = Promise.withResolvers<{ stdout: string; stderr: string; exitCode: number }>();
     let stamp: string | null = null;
     let listening = true;
 
@@ -408,6 +408,7 @@ describe('a sandbox command a job takes', () => {
     const sandbox: PortHolders = {
       exposedPorts: async () => [SERVED],
       holders: async (ports) => (listening && ports.includes(SERVED) ? [{ port: SERVED, stamp }] : []),
+      answersFor: async () => null,
     };
 
     const settledRecords: Array<Promise<void>> = [];
@@ -455,7 +456,7 @@ describe('a sandbox command a job takes', () => {
 
     // The server stops: its job settles, and nothing holds the port.
     listening = false;
-    serving.resolve({ stdout: 'stopped\n', exitCode: 0 });
+    serving.resolve({ stdout: 'stopped\n', stderr: '', exitCode: 0 });
     await Promise.all(bodies);
     await Promise.all(settledRecords);
 
@@ -487,7 +488,7 @@ function recordingRunner(clock: ReturnType<typeof handClock>) {
 
 /** A sandbox build detached into a job on `clock`: the sink its command prints to, the job's frames, and its end. */
 async function detachedBuild(clock: ReturnType<typeof handClock>) {
-  const finished = Promise.withResolvers<{ stdout: string; exitCode: number }>();
+  const finished = Promise.withResolvers<{ stdout: string; stderr: string; exitCode: number }>();
   let given: OutputSink | undefined;
   const chain = recordingRunner(clock);
 
@@ -529,7 +530,7 @@ async function detachedBuild(clock: ReturnType<typeof handClock>) {
     jobId: detached.jobId,
     output: present(given, 'the sink the sandbox command was given'),
     finish: async () => {
-      finished.resolve({ stdout: 'built\n', exitCode: 0 });
+      finished.resolve({ stdout: 'built\n', stderr: '', exitCode: 0 });
       await Promise.all(chain.bodies);
     },
   };
@@ -720,7 +721,7 @@ describe("a running job's output", () => {
       exec: async (_command, opts) => {
         opts?.output?.write('stdout', 'ok\n');
 
-        return { stdout: 'ok\n', exitCode: 0 };
+        return { stdout: 'ok\n', stderr: '', exitCode: 0 };
       },
       readFile: async () => ({}),
       writeFile: async () => {},

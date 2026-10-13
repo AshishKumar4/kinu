@@ -1,8 +1,10 @@
 import { Cause, Effect } from 'effect';
 import * as v from 'valibot';
-import { FACET_IMAGE_DIR, facetImageDigest, facetImagePath } from '@nimbus-sh/fabric/process-fabric.js';
-import type { EsbuildService } from '@nimbus-sh/core/runtime/esbuild-service.js';
+import { FACET_IMAGE_DIR, facetImagePath } from '@nimbus-sh/fabric/process-fabric.js';
+import { storeContentBlob, type ImageBlobStore } from '@nimbus-sh/fabric/image-store.js';
+import type { EsbuildReadFs, EsbuildService } from '@nimbus-sh/core/runtime/esbuild-service.js';
 import type { NamespaceFs } from '@nimbus-sh/core/runtime/process-files.js';
+import type { CompositeVFS } from '@nimbus-sh/core/vfs/composite.js';
 import { CRED_KERNEL, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { ComposedFacetManager, LongRunningWorkerSpawnOptions } from '@nimbus-sh/worker/workspace-host';
 import type { WorkspaceSession } from '@kinu.run/core/workspace';
@@ -10,7 +12,7 @@ import {
   SLATE_DRIVEN_MEMBERS, SLATE_METHOD_NAME_SOURCE, SLATE_PAGE_PREAMBLE, slateTitle, type SlateProcess, type SlateProject, slateAuthority,
 } from '@kinu.run/core';
 import { attempt, diagnostics, KinuError, renderCauseChain, settle } from '@kinu.run/core/obs';
-import { SLATE_CLIENT_MODULE, SLATE_SERVER_MODULE } from '@kinu.run/core/slates';
+import { SLATE_CLIENT_MODULE, SLATE_SERVER_MODULE, type SlateBuildFailure, type SlateBuildRead, type SlateImage } from '@kinu.run/core/slates';
 import { BROWSER_CLIENT_MODULE, BROWSER_PRELUDE, browserClientSource } from '../browser-prelude';
 
 interface SlateBootArtifacts {
@@ -43,16 +45,6 @@ export interface ResidentSlateDeps {
  * A slate's compiled modules and the files its runner serves, each held by digest in the facet image directory: what a
  * launch runs, and what a slate falls back to while a later edit fails to build.
  */
-export interface SlateImage {
-  readonly modules: Readonly<Record<string, string>>;
-  readonly client?: string;
-  readonly shell?: string;
-}
-
-/** What a build that did not compile says: the compiler's own words, file and line among them. */
-export interface SlateBuildFailure {
-  readonly failed: string;
-}
 
 /** What a build reads: the authored tree, as its caller sees it. */
 export type SlateBuildInput = Pick<ResidentSlateBoot, 'owner' | 'root' | 'project' | 'read' | 'cred'>;
@@ -473,6 +465,105 @@ interface SlateBuild {
   readonly root: string;
   readonly entries: string;
   readonly provision: (name: string, contents: string) => void;
+  /** The workspace as the compiler reads it, noting each path it looks at. */
+  readonly fs: EsbuildReadFs;
+}
+
+/** The directory holding `path`; `/` holds itself. */
+function parentOf(path: string): string {
+  const at = path.lastIndexOf('/');
+
+  return at <= 0 ? '/' : path.slice(0, at);
+}
+
+/** What a compile looked at: each path, missing or found, and whether every write that could change it is one of them. */
+interface Looked {
+  readonly paths: Map<string, boolean>;
+  /** A link on the way, or a lookup the namespace refused: a write elsewhere could change how it resolves. */
+  unobserved: boolean;
+  /** Paths asked about whose answer has not come: one left when the compile ends threw (a loop, an absent mount). */
+  readonly asking: Set<string>;
+}
+
+/**
+ * `fs`, noting in `looked` every path a compile looks at: true where it asked whether the path exists and it did not.
+ * The resolver's own reads count as the bundled files' do, so a package.json whose `exports` moves is a change. A path
+ * found through links is noted where they lead too, and a missing one where a write of it would land, by the
+ * namespace's own lookup (`namespace` is the same view as `fs`). The links on the way are not reported by that lookup,
+ * so a path resolved through any, or one the lookup refuses, leaves the compile `unobserved`.
+ */
+function looking(fs: NamespaceFs, namespace: CompositeVFS, looked: Looked): EsbuildReadFs {
+  const absolute = (path: string) => (path.startsWith('/') ? path : `/${path}`);
+
+  const mark = (path: string, missing: boolean) => {
+    if (looked.paths.get(path) !== false) looked.paths.set(path, missing);
+  };
+
+  // A missing path, and where a write of it would land with every link followed, and every directory above that not
+  // written yet: a lexical path is watched whole; one through links, or refused, is not.
+  const dangling = async (path: string) => {
+    const [landed] = await Promise.allSettled([(async () => namespace.mutationRoute(absolute(path), { follow: true, creating: true }))()]);
+
+    if (landed.status === 'rejected' || landed.value.path !== absolute(path)) looked.unobserved = true;
+
+    if (landed.status === 'rejected') return;
+
+    for (let at = landed.value.path; at !== '/' && !fs.exists(at); at = parentOf(at)) mark(at, true);
+  };
+
+  const note = (path: string, missing: boolean) => {
+    mark(absolute(path), missing);
+
+    if (missing) return;
+
+    const target = fs.resolveSymlink(path);
+
+    if (target === null || absolute(target) === absolute(path)) return;
+    looked.unobserved = true;
+    mark(absolute(target), false);
+  };
+
+  return {
+    exists: async (path) => {
+      // Marked before it is asked: a lookup that throws (a loop, an absent mount) is still what this compile looked at.
+      mark(absolute(path), true);
+      looked.asking.add(path);
+      const found = fs.exists(path);
+
+      looked.asking.delete(path);
+      note(path, !found);
+
+      if (!found) await dangling(path);
+
+      return found;
+    },
+    isDirectory: (path) => {
+      note(path, false);
+
+      return fs.isDirectory(path);
+    },
+    readFile: (path) => {
+      const bytes = fs.readFile(path);
+
+      note(path, false);
+
+      return bytes;
+    },
+    readFileString: (path) => {
+      const text = fs.readFileString(path);
+
+      note(path, false);
+
+      return text;
+    },
+  };
+}
+
+/** What a compile looked at outside the slate's own tree and the runtime this build generated. */
+function inputsOf(looked: ReadonlyMap<string, boolean>, root: string): SlateBuildRead[] {
+  return [...looked].filter(([path]) => path !== root && !path.startsWith(`${root}/`) && !path.startsWith(`${RUNTIME_DIR}/`))
+    .sort(([a], [b]) => (a < b ? -1 : 1))
+    .map(([path, missing]) => ({ path, missing }));
 }
 
 const COMPILED_JSX = JSON.stringify({ compilerOptions: { jsx: 'react-jsx', jsxImportSource: 'react' } });
@@ -492,6 +583,7 @@ function serverModule(build: SlateBuild, project: SlateProject): Effect.Effect<s
       // Not `alias`: the nimbus-vfs resolver sees a specifier before esbuild applies it.
       external: ['cloudflare:*', 'node:*', 'capnweb', 'kinu:slate', 'react', 'react-dom/client', 'react/jsx-runtime'],
       tsconfigRaw: COMPILED_JSX,
+      fs: build.fs,
     });
 
     if (server.errors.length !== 0) return yield* new KinuError('bad_input', server.errors.map((error) => error.text).join('\n'));
@@ -525,6 +617,7 @@ function browserSurface(build: SlateBuild, id: string, project: SlateProject, re
       bundle: true, format: 'esm', platform: 'browser', outfile: '/__kinu/client.js',
       external: ['react', 'react-dom/client', 'react/jsx-runtime', 'capnweb', 'kinu:slate'],
       tsconfigRaw: COMPILED_JSX,
+      fs: build.fs,
     });
 
     if (client.errors.length !== 0) return yield* new KinuError('bad_input', client.errors.map((error) => error.text).join('\n'));
@@ -556,6 +649,8 @@ export class ResidentSlateProcesses {
    * words, so its caller can keep serving the last image that did.
    */
   build(input: SlateBuildInput): Promise<SlateImage | SlateBuildFailure> {
+    const looked: Looked = { paths: new Map(), unobserved: false, asking: new Set() };
+
     return settle(Effect.catchIf(Effect.gen({ self: this }, function* () {
       const session = yield* Effect.promise(async () => this.deps.session());
       const main = input.project.main;
@@ -595,7 +690,7 @@ export class ResidentSlateProcesses {
         }
       };
 
-      const build: SlateBuild = { bundler, root: input.root, entries: entriesDir, provision };
+      const build: SlateBuild = { bundler, root: input.root, entries: entriesDir, provision, fs: looking(session.filesystem.namespaceFs(input.cred), session.filesystem.vfs.as(input.cred), looked) };
       const application = yield* serverModule(build, input.project);
       const { assets, shell } = yield* browserSurface(build, input.owner, input.project, (entry) => input.read(entry) ?? '');
 
@@ -611,16 +706,20 @@ export class ResidentSlateProcesses {
       };
 
       // Every module travels by content-addressed VFS path; the loader verifies bytes against the digest.
-      kernelVfs.mkdir(`/${FACET_IMAGE_DIR}`, { recursive: true, mode: 0o755 });
+      const blobs: ImageBlobStore = {
+        mkdirp: (dir) => kernelVfs.mkdir(`/${dir}`, { recursive: true, mode: 0o755 }),
+        sizeOf: (path) => kernelVfs.statIfPresent(`/${path}`, false)?.size ?? null,
+        writeFile: (path, bytes) => kernelVfs.writeFile(`/${path}`, bytes, { mode: 0o644 }),
+        writeRange: (path, offset, bytes) => kernelVfs.writeRange(`/${path}`, offset, bytes),
+        list: (dir) => kernelVfs.readdir(`/${dir}`).map((entry) => entry.name),
+        unlink: (path) => kernelVfs.unlink(`/${path}`),
+      };
 
-      const held = (contents: string) => Effect.gen(function* () {
-        const digest = yield* Effect.promise(async () => facetImageDigest(contents));
-        const path = facetImagePath(digest);
+      blobs.mkdirp(FACET_IMAGE_DIR);
 
-        if (!kernelVfs.exists(path)) kernelVfs.writeFile(path, contents, { mode: 0o644 });
-
-        return digest;
-      });
+      const held = (contents: string) => Effect.map(
+        Effect.promise(() => storeContentBlob(blobs, contents, facetImagePath)), (image) => image.digest,
+      );
 
       const digests: Record<string, string> = {};
 
@@ -630,8 +729,11 @@ export class ResidentSlateProcesses {
       return {
         modules: digests,
         ...(shell !== undefined && client !== undefined && { client: yield* held(client.contents), shell: yield* held(shell) }),
+        inputs: inputsOf(looked.paths, input.root),
       };
-    }), (error): error is KinuError => error instanceof KinuError && error.code === 'bad_input', (error) => Effect.succeed({ failed: renderCauseChain(error) })));
+    }), (error): error is KinuError => error instanceof KinuError && error.code === 'bad_input', (error) => Effect.succeed({
+      failed: renderCauseChain(error), inputs: inputsOf(looked.paths, input.root), ...((looked.unobserved || looked.asking.size > 0) && { unobserved: true as const }),
+    })));
   }
 
   /** Runs an image: the durable application on its port, or a caller's private process. */

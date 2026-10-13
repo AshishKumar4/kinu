@@ -2,6 +2,7 @@
  *  share presets, axis settings and the call shape without importing the strategy engine. */
 
 import type { Objective } from './objective';
+import type { Refusal } from '../obs/error';
 
 /** What one node produces: `answer` is an agent tool loop; `thought` is one toolless model call.
  *  `generator`/`trajectory`/`step` are refused by name in `tools/swarm-input.ts`. */
@@ -105,10 +106,7 @@ export interface SwarmNodeAssignment {
 }
 
 /** A refusal, returned as a value (never thrown); `error` says why and what to do instead. */
-export interface SwarmRefusal {
-  readonly reason: 'bad_input';
-  readonly error: string;
-}
+export type SwarmRefusal = Refusal & { readonly reason: 'bad_input' };
 
 /** Closed swarm preset vocabulary. Kept independent of the search engine so
  * profile schemas and prompt surfaces do not import engine policy. */

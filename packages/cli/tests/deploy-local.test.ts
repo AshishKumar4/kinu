@@ -266,7 +266,7 @@ describe('kinu deploy local', () => {
     const stranger = Bun.spawn({ cmd: ['sleep', '120'], stdout: 'ignore', stderr: 'ignore' });
 
     strangers.push(stranger);
-    writeFileSync(join(home, 'local/workerd.pid'), `${String(stranger.pid)}\n`);
+    writeFileSync(join(home, 'local/workerd.pid'), `${String(stranger.pid)}\n${new Date().toISOString()}\n`);
 
     const refused = await runDeploy(home, ['stop']);
 

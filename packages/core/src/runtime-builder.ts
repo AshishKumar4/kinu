@@ -28,7 +28,7 @@ export interface RuntimeComponents {
   home?: string;
   /** This agent's own state when `vfs` is a shared plane. */
   agentStateVfs?: VFS;
-  toolFiles: VFS;
+  toolFiles: AgentRuntime['toolFiles'];
   planes: PathPlanes;
   llm: LLM;
   executor: Executor;

@@ -1817,7 +1817,7 @@ export function makeEnv(
 
         return new Proxy(ownerPlane, {
           get: (target, prop) => {
-            if (prop === 'then') return undefined;
+            if (prop === 'then' || prop === Symbol.dispose) return undefined;
 
             if (owned(prop)) return target[prop];
 

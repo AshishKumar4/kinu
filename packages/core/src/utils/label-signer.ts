@@ -7,14 +7,12 @@ import { timingSafeEqual } from './crypto';
 
 export interface LabelSignerEnv {
   CREDENTIAL_ENCRYPTION_KEY?: string;
-  CREDENTIAL_ENCRYPTION_KEY_PREVIOUS?: string;
 }
 
 export interface LabelSigner {
-  /** Current secret first, then the retired list. */
-  secrets(env: LabelSignerEnv): string[];
+  secret(env: LabelSignerEnv): string | undefined;
   token(secret: string, message: string): Promise<string>;
-  /** Whether `token` was minted for `message` under any secret this deployment still honours. */
+  /** Whether `token` was minted for `message` under this deployment's current secret. */
   verify(env: LabelSignerEnv, message: string, token: string): Promise<boolean>;
 }
 
@@ -72,17 +70,10 @@ export function labelSigner(salt: string, info: string, length = 15): LabelSigne
   };
 
   const signer: LabelSigner = {
-    secrets(env) {
+    secret(env) {
       const current = env.CREDENTIAL_ENCRYPTION_KEY?.trim();
 
-      if (!current) return [];
-
-      const retired = (env.CREDENTIAL_ENCRYPTION_KEY_PREVIOUS ?? '')
-        .split(',')
-        .map((value) => value.trim())
-        .filter(Boolean);
-
-      return [current, ...retired];
+      return current === '' ? undefined : current;
     },
     async token(secret, message) {
       const digest = await crypto.subtle.sign('HMAC', await signingKey(secret), utf8(message));
@@ -90,9 +81,9 @@ export function labelSigner(salt: string, info: string, length = 15): LabelSigne
       return base32(new Uint8Array(digest)).slice(0, length);
     },
     async verify(env, message, token) {
-      const expected = await Promise.all(signer.secrets(env).map((secret) => signer.token(secret, message)));
+      const secret = signer.secret(env);
 
-      return expected.some((candidate) => timingSafeEqual(token, candidate));
+      return secret !== undefined && timingSafeEqual(token, await signer.token(secret, message));
     },
   };
 

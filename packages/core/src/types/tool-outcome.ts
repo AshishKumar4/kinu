@@ -1,12 +1,10 @@
 import * as v from 'valibot';
-import { ERROR_CODES } from '../obs/index';
+import { ERROR_CODES, RefusalSchema } from '../obs/index';
 import { FILE_REFUSAL_REASONS } from './file-edits';
 
 export const ToolFailureValueSchema = v.object({
-  success: v.literal(false),
+  ...RefusalSchema.entries,
   reason: v.nullable(v.picklist([...ERROR_CODES, ...FILE_REFUSAL_REASONS])),
-  error: v.string(),
-  execution: v.optional(v.object({ exitCode: v.number() })),
   /** db.batch's refused operation index, part of the refusal a program branches on. */
   failedIndex: v.optional(v.number()),
 });

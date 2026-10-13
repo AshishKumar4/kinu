@@ -134,6 +134,10 @@ export interface BackgroundJobRunnerDeps {
   scheduleResume?: (atMs: number) => Promise<void> | void;
   /** Absent: one process owns the store (a Durable Object). */
   holder?: JobHolder;
+  /** The jobs every runner in this process drives now, one set its runners share: a runner's owed wakes and its cap
+   *  leave out work another runner here is driving, as `holder` leaves out what another process is. Absent: this
+   *  runner is the process's only one. */
+  drivenHere?: Set<string>;
   /** Asked from the context a detached job's work runs in. A context the platform dropped answers nothing, its work's
    *  answers included, so a job unheard for {@link JOB_SILENCE_MS} is recovered as an evicted one is, at the next
    *  {@link BackgroundJobRunner.recoverLost}. Absent: no job is watched. */
@@ -142,7 +146,7 @@ export interface BackgroundJobRunnerDeps {
 
 /** The workspace's half of every job runner in it. */
 export type WorkspaceJobPorts = Required<Pick<BackgroundJobRunnerDeps, 'jobOutput'>>
-  & Pick<BackgroundJobRunnerDeps, 'onDetached' | 'onCancelled' | 'onSettled' | 'clock' | 'holder' | 'alive'>;
+  & Pick<BackgroundJobRunnerDeps, 'onDetached' | 'onCancelled' | 'onSettled' | 'clock' | 'holder' | 'drivenHere' | 'alive'>;
 
 const SearchJobInputSchema = v.object({ task: v.string() });
 
@@ -266,7 +270,7 @@ export class BackgroundJobRunner {
       id, kind, workMode: mode, input: serializeJobResult({ value: input }), now: Date.now(),
       label: describeJobInput(kind, input),
     });
-    this.controllers.set(id, controller);
+    this.drive(id, controller);
 
     return id;
   }
@@ -288,7 +292,7 @@ export class BackgroundJobRunner {
     });
 
     if (!created) return null;
-    this.controllers.set(id, request.controller);
+    this.drive(id, request.controller);
 
     return id;
   }
@@ -338,8 +342,7 @@ export class BackgroundJobRunner {
   }
 
   /**
-   * Live detached work for the cap: excludes deferred jobs this runner is not driving (no process
-   * tree). Exact because one workspace has one driver.
+   * Live detached work for the cap: excludes deferred jobs no live runner is driving (no process tree).
    */
   private liveDetachedCount(): number {
     const now = Date.now();
@@ -348,9 +351,24 @@ export class BackgroundJobRunner {
     return this.deps.store.countRunningInWorkspace() - idle;
   }
 
-  /** Not the jobs this runner drives: a re-drive arms its instant for the activation after a death. */
+  /** Not the jobs any live runner drives: a re-drive arms its instant for the activation after a death. */
   private owedResumes(): readonly JobResume[] {
-    return this.deps.store.resumesInWorkspace().filter((resume) => !this.controllers.has(resume.id));
+    return this.deps.store.resumesInWorkspace().filter((resume) => !this.drivenNow(resume.id));
+  }
+
+  /** By this runner, another runner in this process, or another live process sharing the store. */
+  private drivenNow(jobId: string): boolean {
+    return this.controllers.has(jobId) || this.deps.drivenHere?.has(jobId) === true || this.deps.holder?.heldElsewhere(jobId) === true;
+  }
+
+  private drive(jobId: string, controller: AbortController): void {
+    this.controllers.set(jobId, controller);
+    this.deps.drivenHere?.add(jobId);
+  }
+
+  private release(jobId: string): void {
+    this.controllers.delete(jobId);
+    this.deps.drivenHere?.delete(jobId);
   }
 
   /** A failed transfer may have moved a prefix, so the job keeps its claim rather than aborting. */
@@ -490,7 +508,7 @@ export class BackgroundJobRunner {
       this.heard.delete(jobId);
       diagnostics.event('jobs.lost', { jobId, kind: this.deps.store.get(jobId)?.kind ?? 'unknown', silentMs: now - at });
       this.controllers.get(jobId)?.abort(new Error('its work stopped answering'));
-      this.controllers.delete(jobId);
+      this.release(jobId);
       this.fiberDrivers.delete(jobId);
       this.interrupted.set(jobId, `interrupted before completion: nothing came back from its work for ${fmtSpan(now - at)}, so it was given up as lost`);
       await this.recoverJob(jobId);
@@ -529,7 +547,7 @@ export class BackgroundJobRunner {
     }
 
     // Only its own: a re-drive that took the job over holds the controller now.
-    if (attempt.controller !== null && this.controllers.get(jobId) === attempt.controller) this.controllers.delete(jobId);
+    if (attempt.controller !== null && this.controllers.get(jobId) === attempt.controller) this.release(jobId);
 
     // Already cancelled: do not relabel the abort as a failure.
     if (this.deps.store.get(jobId)?.status === 'cancelled') return;
@@ -746,7 +764,7 @@ export class BackgroundJobRunner {
     const controller = this.controllers.get(jobId);
 
     if (controller) controller.abort(new Error('cancelled by operator'));
-    this.controllers.delete(jobId);
+    this.release(jobId);
     this.deps.logActivity?.('bg_job_cancelled', jobId);
 
     return true;
@@ -869,7 +887,7 @@ export class BackgroundJobRunner {
   /** Input is read inside the attempt so an unreadable row fails through the settlement path. */
   private driveResume(job: BackgroundJob, resume: JobResumer): void {
     const controller = new AbortController();
-    this.controllers.set(job.id, controller);
+    this.drive(job.id, controller);
     this.runToSettlement(job.id, job.kind, () => resume(job.kind, this.storedInput(job.id), job.workMode, controller.signal));
   }
 

@@ -9,8 +9,8 @@ import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import { supervisorEsbuildService } from '@nimbus-sh/worker/facet-host';
 import { probeDurableApps, probeFacetManager } from './facet-manager';
 import { SlateHost } from '../../src/slates/host';
-import { initSlateBuildTable } from '../../src/slates/builds';
-import { ROOT_SLATE_CALLER, slateCallerKey } from '../../src/slates/bindings';
+import { initSlateBuildTable } from '@kinu.run/core/slates';
+import { ROOT_SLATE_CALLER, slateCallerKey } from '@kinu.run/core/slates';
 import { initWorkspaceSchema, type SqlValue, type WorkMode } from '@kinu.run/core';
 import { ContentRef } from '@agent-core/core';
 import { processes } from '@nimbus-sh/fabric/workerd-facet-host.js';
@@ -88,7 +88,7 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
   }
 
   async publicPlanCall() {
-    const result = await this.host.operation({ ...ROOT_SLATE_CALLER, workMode: 'plan' }, { op: 'call', id: 'network', method: 'example' });
+    const result = await this.host.controller.operation({ ...ROOT_SLATE_CALLER, workMode: 'plan' }, { op: 'call', id: 'network', method: 'example' });
 
     return result.ok ? { ok: true } : { ok: false, reason: result.reason };
   }
@@ -97,7 +97,7 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
     this.prepare();
 
     const committed = v.parse(v.object({ ok: v.literal(true), value: v.object({ source: v.string() }) }),
-      await this.host.operation(ROOT_SLATE_CALLER, { op: 'commit', id: 'network' }));
+      await this.host.controller.operation(ROOT_SLATE_CALLER, { op: 'commit', id: 'network' }));
 
     const digest = new ContentRef(committed.value.source).digest.value;
     // Models a cached image whose key omits the egress policy; a mediated start must not reuse it.
@@ -106,7 +106,7 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
 
     const unmediated = processes(this.ctx, this.env).spawn(
       () => ({ readFile: async () => { throw new Error('This fixture has inline modules only'); } }),
-      { doId: this.ctx.id.toString(), pid: 900000, writerId },
+      { doId: this.ctx.id.toString(), pid: 900000, writerId, bindingKind: 'process' },
       { pid: 900000, writerId, workerKey: key, startArgs: {}, boot: { kind: 'code', code: {
         ...workerCompatibility, mainModule: 'unmediated.js', env: {},
         modules: { 'unmediated.js': `import { DurableObject } from 'cloudflare:workers';

@@ -11,12 +11,13 @@ import * as v from 'valibot';
 
 import type { JsonValue } from '../src/utils/json';
 import { present } from '@kinu.run/test-utils';
+import type { SessionBox } from '@kinu.run/test-utils/vfs';
+import type { NimbusSandboxFiles } from '@nimbus-sh/sdk/sandbox';
 import {
   sandboxFiles,
   nimbusSessionFiles,
   deviceFiles,
   type DeviceTransport,
-  type NimbusSandboxHandle,
   type SandboxHandle,
 } from '../src/execution/index';
 import { createWorkspaceBundle } from './helpers';
@@ -165,10 +166,10 @@ function sandboxHandle(fs: MemFs): SandboxHandle {
       if (command.startsWith('mkdir')) {
         fs.mkdir(p);
 
-        return { exitCode: 0, stdout: '' };
+        return { exitCode: 0, stdout: '', stderr: '' };
       }
 
-      if (command.startsWith('test -e')) return { exitCode: 0, stdout: fs.exists(p) ? 'true' : 'false' };
+      if (command.startsWith('test -e')) return { exitCode: 0, stdout: fs.exists(p) ? 'true' : 'false', stderr: '' };
 
       if (command.startsWith('set -o pipefail; dd ')) {
         const range = /skip=(\d+) count=(\d+)/.exec(command);
@@ -177,11 +178,11 @@ function sandboxHandle(fs: MemFs): SandboxHandle {
         const bytes = fs.read(p)?.subarray(Number(range[1]), Number(range[1]) + Number(range[2]));
 
         return bytes
-          ? { exitCode: 0, stdout: Buffer.from(bytes).toString('base64') }
+          ? { exitCode: 0, stdout: Buffer.from(bytes).toString('base64'), stderr: '' }
           : { exitCode: 1, stdout: '', stderr: 'ENOENT' };
       }
 
-      return { exitCode: 0, stdout: '' };
+      return { exitCode: 0, stdout: '', stderr: '' };
     },
     async exposePort(port, opts) {
       const exposed = { url: `https://preview.invalid/${port}`, port, route: { reached: true } as const };
@@ -203,35 +204,49 @@ function sandboxHandle(fs: MemFs): SandboxHandle {
   return handle;
 }
 
-function nimbusHandle(fs: MemFs): NimbusSandboxHandle {
-  const handle: NimbusSandboxHandle = {
-    async ready() {},
-    files: {
-      async read(path: string) {
-        const b = fs.read(path);
+function nimbusHandle(fs: MemFs): SessionBox {
+  const stat = async (path: string) => {
+    const found = fs.stat(path);
 
-        return b === null ? null : new TextDecoder().decode(b);
-      },
-      async readBytes(path: string) { return fs.read(path); },
-      async write(path: string, data: string | Uint8Array) {
-        const text = v.safeParse(v.string(), data);
-        fs.write(path, text.success
-          ? new TextEncoder().encode(text.output)
-          : v.parse(v.instance(Uint8Array), data));
-      },
-      async list(path: string) { return fs.list(path).map((name) => ({ name })); },
-      async exists(path: string) { return fs.exists(path); },
-      async mkdir(path: string) { fs.mkdir(path); },
-      async delete(path: string) { fs.del(path); },
+    return found === null ? null : { type: found.isDir ? 'directory' : 'file', size: found.size, mtime: fs.mtimeMs, mode: found.isDir ? 0o40755 : 0o100644 };
+  };
+
+  const files: NimbusSandboxFiles = {
+    as: () => files,
+    async read(path: string) {
+      const bytes = fs.read(path);
+
+      return bytes === null ? null : new TextDecoder().decode(bytes);
     },
+    async readBytes(path: string) { return fs.read(path); },
+    async exists(path: string) { return fs.stat(path) !== null; },
+    async readRange(path: string, offset: number, length: number) { return fs.read(path)?.slice(offset, offset + length) ?? null; },
+    async write(path: string, data: string | Uint8Array) {
+      const text = v.safeParse(v.string(), data);
+      fs.write(path, text.success
+        ? new TextEncoder().encode(text.output)
+        : v.parse(v.instance(Uint8Array), data));
+    },
+    async list(path?: string) { return fs.list(path ?? '/').map((name) => ({ name, type: fs.stat(`${path ?? ''}/${name}`)?.isDir === true ? 'directory' : 'file' })); },
+    stat,
+    lstat: stat,
+    async readlink() { return null; },
+    async rename(from: string, to: string) {
+      const bytes = fs.read(from);
+
+      if (bytes !== null) fs.write(to, bytes);
+      fs.del(from);
+    },
+    async mkdir(path: string) { fs.mkdir(path); },
+    async chmod(path: string) { throw new VfsError('ENOTSUP', 'this test plane keeps no modes', path); },
+    async delete(path: string) { fs.del(path); },
+  };
+
+  const handle: SessionBox = {
+    async ready() {},
+    files,
     async exec(cmd: string) {
-      if (cmd.startsWith('stat -c')) {
-        const result = fs.statLine(quoted(cmd));
-
-        return { command: cmd, success: true, ...result, stderr: '' };
-      }
-
-      return { command: cmd, success: true, exitCode: 0, stdout: '', stderr: '' };
+      return { command: cmd, success: true, exitCode: 0, stdout: '', stderr: '', duration: 0, timestamp: 0 };
     },
   };
 
@@ -280,7 +295,7 @@ function deviceTransport(fs: MemFs, calls: string[] = []): DeviceTransport {
       if (method === 'statPath') {
         const stat = fs.stat(p);
 
-        return stat === null ? null : { ...stat, mtimeMs: fs.mtimeMs };
+        return stat === null ? null : { size: stat.size, mtimeMs: fs.mtimeMs, type: stat.isDir ? 'directory' : 'file' };
       }
 
       if (method === 'unlinkPath') {
@@ -338,7 +353,7 @@ const cases: Case[] = [
   { name: 'sandbox file view',
     make: () => sandboxFiles(sandboxHandle(new MemFs())), path: (s) => `/conf/${s}` },
   { name: 'nimbus session file view',
-    make: () => nimbusSessionFiles(nimbusHandle(new MemFs()), { home: '/' }), path: (s) => `/conf/${s}` },
+    make: () => nimbusSessionFiles(nimbusHandle(new MemFs()).files, { home: '/' }), path: (s) => `/conf/${s}` },
   { name: 'device file view',
     make: () => deviceFiles(deviceTransport(new MemFs()), {
       consentedRoot: async () => '/', deviceHome: async () => '/', scope: async () => 'unconfined',

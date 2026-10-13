@@ -7,7 +7,7 @@ import type { Impact } from '@agent-core/core/facets';
 import { LiveShareVisibilitySchema } from './live-share-visibility';
 
 
-export const SHARE_KINDS = ['blueprint', 'live'] as const;
+const SHARE_KINDS = ['blueprint', 'live'] as const;
 
 export type ShareKind = (typeof SHARE_KINDS)[number];
 
@@ -293,3 +293,18 @@ export const BlueprintBundleSchema = v.object({
 
 export type BlueprintBundle = v.InferOutput<typeof BlueprintBundleSchema>;
 
+
+/** A share as the workspace overview lists it: a published blueprint, or a live share titled by its slate. */
+export const SlateShareCardSchema = v.object({
+  kind: v.picklist(SHARE_KINDS),
+  share: v.string(),
+  slate: v.string(),
+  title: v.string(),
+  description: v.string(),
+  createdAt: v.number(),
+  users: v.array(v.string()),
+  visibility: v.optional(LiveShareVisibilitySchema),
+  fork: v.optional(v.boolean()),
+});
+
+export type SlateShareCard = v.InferOutput<typeof SlateShareCardSchema>;

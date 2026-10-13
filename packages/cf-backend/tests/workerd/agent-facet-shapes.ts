@@ -16,10 +16,10 @@ export interface ProbeContention {
 
 export interface OnePlaneObservation {
   readonly home: string;
-  /** The agent's `pwd; id -u` from its own isolate. */
-  readonly agentShell: AgentFacetAnswer;
   /** What the workspace's own view reads back of the file the agent wrote. */
   readonly mainRead: string | null;
+  /** The uid that file belongs to: the agent's own, never the session user's. */
+  readonly writer: number | null;
   readonly mainCat: AgentFacetAnswer;
   /** The agent's isolate and the workspace object's are two isolates. */
   readonly sameIsolate: boolean;

@@ -3,7 +3,8 @@
  * does: only the real chain on workerd catches a `super` call from the override.
  */
 import type { AgentContext } from 'agents';
-import { USER_DO_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
+import { USER_DO_RPC_SURFACE } from '../../src/rpc-surface';
+import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { UserDO } from '../../src/user/user-do';
 
 export type SocketOutcome = 'handled' | { readonly threw: string };

@@ -76,13 +76,12 @@ two slate runtimes are routed differently:
   The URL never changes unless `slate.port` is redeclared or the slate is
   removed. A different process binding the port retires the capability, so the
   old URL answers 404.
-- Kinu sends `slate.runtime: "node"` projects to the sandbox container
-  (`project.ts`; `docs/EXECUTION-LAYER-SPEC.md`, "Slate preview home"). The
-  resident host refuses them (`host.ts` `boot`). Their URL is
-  `<port>-<sandbox>-<token>.<suffix>`. The token is stored and re-exposed byte
-  for byte on recycle, and a supervised process restarts after container sleep
-  (`packages/core/src/execution/sandbox.ts`). The edge record lives 30 idle
-  days and refreshes past day 15 on any authenticated observation
+- A `slate.runtime: "node"` project is refused when its `package.json` is read
+  (`project.ts`). A Node server runs as a sandbox process with an exposed port:
+  its URL is `<port>-<sandbox>-<token>.<suffix>`. The token is stored and
+  re-exposed byte for byte on recycle, and a supervised process restarts after
+  container sleep (`packages/core/src/execution/sandbox.ts`). The edge record
+  lives 30 idle days and refreshes past day 15 on any authenticated observation
   (`packages/core/src/preview/preview-exposures.ts`).
 
 That split is a Kinu integration limit, not a Nimbus one. Nimbus supports Vite,

@@ -376,7 +376,7 @@ describe('LocalAgentSession — plan review', () => {
       if (!plan) throw new Error('the submitted plan was not stored');
       // By the time the handoff turn is dequeued another process holds the driver lease.
       let asked = 0;
-      agent.setDriverGate(() => (asked++ === 0 ? null : { reason: 'unavailable', error: 'another process is driving' }));
+      agent.setDriverGate(() => (asked++ === 0 ? null : { success: false, reason: 'unavailable', error: 'another process is driving' }));
 
       expect(await agent.decidePlanReview(plan.id, 1, 'approve')).toMatchObject({
         ok: true, queued: false, plan: { status: 'approved', handoffAccepted: false },

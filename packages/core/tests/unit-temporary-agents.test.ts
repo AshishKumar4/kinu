@@ -5,12 +5,12 @@ import { Database } from 'bun:sqlite';
 import { asSchema, type ModelMessage } from 'ai';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { DELEGATION_MAX_DEPTH, ROOT_DELEGATION_BUDGET, delegationExhausted, SubordinateRosterStore, TEMPORARY_LIFETIME, EventLog, TASK_TURN_ENDINGS, agentsActionsFor, initEventsHubTables, terminalTaskReport, createAgentsCodemodeProvider, createTeamToolDeps, createTemporaryAgentPort, taskAnswerIsLater, delegationDepthRefusal, receiveSubordinateEvent, type SubordinateEventResult, type SubordinateReportHandoff, TOOL_REACH, type AgentsToolDeps, type AgentsProfileContext, type SubordinateHandoff, type SubordinateRuntime, type TemporaryAgentPort, type WorkMode, type AgentsOp, type CodemodeResult, callOperation, BUILTIN_PROFILE_CATALOG, profileCatalogDigest, DEFAULT_WORKERS_AI_MODEL_SPEC, recoverSubordinateLifecycles } from '../src/index';
+import { DELEGATION_MAX_DEPTH, ROOT_DELEGATION_BUDGET, delegationExhausted, SubordinateRosterStore, TEMPORARY_LIFETIME, EventLog, TASK_TURN_ENDINGS, agentsActionsFor, initEventsHubTables, terminalTaskReport, createAgentsCodemodeProvider, createTeamToolDeps, createTemporaryAgentPort, taskAnswerIsLater, delegationDepthRefusal, receiveSubordinateEvent, type SubordinateEventResult, type SubordinateReportHandoff, TOOL_REACH, type AgentsToolDeps, type AgentsProfileContext, type SubordinateHandoff, type SubordinateRuntime, type TemporaryAgentPort, type WorkMode, type AgentsOp, type CodemodeResult, callOperation, BUILTIN_PROFILE_CATALOG, profileCatalogDigest, DEFAULT_WORKERS_AI_MODEL_SPEC, recoverSubordinateLifecycles, codemodeFunction, failedToolOutcome, successfulToolOutcome, withCodemodeProgram } from '../src/index';
 import { createAgentsTool } from '../src/delegation/agents-operations';
 import { createMemoryVfs } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw, makeSqlExec } from './helpers';
 import type { ActorReference } from '../src/identity/actor-handle';
-import { createTestActors, present } from '@kinu.run/test-utils';
+import { createTestActors, present, toolExecute } from '@kinu.run/test-utils';
 import type { JsonObject, JsonValue } from '../src/utils/json';
 
 const TEST_MODEL = DEFAULT_WORKERS_AI_MODEL_SPEC;
@@ -271,6 +271,14 @@ function nativeRefusal(deps: AgentsToolDeps, input: JsonObject): string | null {
     present(asSchema(createAgentsTool(deps).inputSchema).validate, 'the agents tool validates').call(null, input));
 
   return checked.success ? null : checked.error?.message ?? '';
+}
+
+/** What the turn records of a call that threw. */
+async function thrownOutcome<Result>(pending: Promise<Result>) {
+  try { await pending; }
+  catch (cause) { return failedToolOutcome({ cause }); }
+
+  throw new Error('the call did not fail');
 }
 
 /** A task hire, which returns at once with its child working. */
@@ -684,6 +692,32 @@ describe('the two hire targets are decided by `role`', () => {
     await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
     await expect(pending).rejects.toThrow('never addressable');
     expect(scene.calls).toEqual([]);
+    expect(scene.roster.listAll()).toEqual([]);
+  });
+
+  test('a blank mission is a failed call natively and in a program\'s failure census, and no agent is created', async () => {
+    const scene = makeScene();
+
+    // What the turn records of a native call that threw.
+    expect(await thrownOutcome(toolExecute<JsonObject, JsonValue>(createAgentsTool(scene.deps))({ op: 'hire', lifetime: 'task', role: 'auditor', mission: '   ' })))
+      .toEqual({ success: false, reason: 'bad_input' });
+
+    const hire = present(scene.sandbox().hire, 'the codemode hire entry');
+    const census = [{ success: false as const, reason: 'bad_input' as const, error: expect.any(String), tool: 'agents', op: 'hire' }];
+
+    // Bound inside the program, as a program binds its members when it starts. One that goes on is told of it; one that
+    // returns the refusal fails with it.
+    const recovered = await withCodemodeProgram(async () => {
+      await codemodeFunction('agents', 'hire', hire)('auditor', '   ', { lifetime: 'task' });
+
+      return { result: null };
+    });
+
+    expect(successfulToolOutcome('eval', { output: recovered })).toEqual({ success: true, failures: census });
+    expect(await thrownOutcome(withCodemodeProgram(async () => ({ result: await codemodeFunction('agents', 'hire', hire)('auditor', '   ', { lifetime: 'task' }) }))))
+      .toMatchObject({ success: false, reason: 'bad_input', failures: census });
+    // The port refuses a brief with no role the same way, for the hirers that are not this tool.
+    await expect(scene.temporary.start({ role: 'auditor', roleLabel: ' ', task: 'Survey auth', mode: 'build' })).rejects.toMatchObject({ code: 'bad_input' });
     expect(scene.roster.listAll()).toEqual([]);
   });
 

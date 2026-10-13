@@ -30,6 +30,7 @@ import { branchableToolCall } from './outcome';
 import { TurnContextBudget } from '../context-budget';
 import type { JsonValue } from '../utils/json';
 import { cloudPlanes, type PathPlanes } from '../vfs/resolve';
+import type { VfsMountRouting } from '../vfs/mounts';
 import { SlateBuildNoteSchema } from '../operations/file';
 
 const StringSchema = v.string();
@@ -63,7 +64,8 @@ interface ShellExec {
 }
 
 export interface InlineExecutorDeps {
-  vfs: VFS;
+  /** The plane the tools reach; `resolve` says where a path landed. */
+  vfs: VFS & Partial<Pick<VfsMountRouting, 'resolve'>>;
   /** Absent: {@link WORKSPACE_ROOT}, the root's. */
   home?: string;
   /** Absent: the cloud's planes over `home`. */
@@ -130,9 +132,13 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
   const currentLedger = (): TurnFileLedger => deps.ledger?.() ?? fallbackLedger;
   const currentBudget = (): TurnContextBudget => deps.budget?.() ?? fallbackBudget;
 
+  // One place for where paths land and where the shell starts: its home, as files list from it too.
+  const home = deps.home ?? WORKSPACE_ROOT;
+  const planes = deps.planes ?? cloudPlanes(home);
+
   // The native `file` tool's write, on the same ledger read live per call.
   const fileWrite = serveFile(() => ({
-    vfs, home: deps.home ?? WORKSPACE_ROOT, planes: deps.planes ?? cloudPlanes(deps.home ?? WORKSPACE_ROOT), ledger: currentLedger(), budget: currentBudget(), memory,
+    vfs, home, planes, ledger: currentLedger(), budget: currentBudget(), memory,
     ...(deps.slateBuild !== undefined && { slateBuild: deps.slateBuild }),
   })).write;
 
@@ -352,8 +358,8 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       execute: async (...args: unknown[]): Promise<JsonValue> => {
         const parsed = v.safeParse(SlateOperationSchema, args[0]);
 
-        if (!parsed.success) return { success: false, ...refusalOf(new KinuError('bad_input',
-          'workspace.slates received an operation outside its members', { cause: new v.ValiError(parsed.issues) })) };
+        if (!parsed.success) return refusalOf(new KinuError('bad_input',
+          'workspace.slates received an operation outside its members', { cause: new v.ValiError(parsed.issues) }));
         requireSlateWorkMode(parsed.output, currentWorkMode());
         const result = await slate(parsed.output);
 
@@ -366,7 +372,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     name: TOOL_REACH.slate.codemode,
     kind: 'workspace',
     files: deps.files ?? vfs,
-    homeDir: async () => WORKSPACE_ROOT,
+    homeDir: async () => planes.cwd,
     capabilities: new Set<ExecutorCapability>([
       'javascript', 'typescript', 'shell', 'fs_shared', ...(deps.toolchain ?? []),
     ]),

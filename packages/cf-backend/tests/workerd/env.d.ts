@@ -23,7 +23,6 @@ import type {
   DeployFakeRefusal, DeployFakeServedBuild, DeployFakeStall, DeployFakeState, DeployFakeWeight,
 } from './deploy-fake';
 import type { DeployInputs, DeployRunPhase, DeploySnapshot } from '@kinu.run/core/deploy';
-import type { FilesEioProbeDO } from './files-eio-probe';
 import type { ParkedWritesProbeDO } from './parked-writes-probe';
 import type { ComplexityProbeDO } from './complexity/complexity-probe';
 import type { EffectAtomicityProbeDO } from './effect-atomicity-probe';
@@ -228,6 +227,7 @@ interface SlateProcessProbeRpc extends Rpc.DurableObjectBranded {
   stop(): Promise<void>;
   esbuildInThisIsolate(): Promise<boolean>;
   facetImages(): Promise<string[]>;
+  interruptApplicationImage(): Promise<void>;
   call(method: string, args?: JsonValue[], chain?: string[]): Promise<{ ok: true; value: string } | { ok: false; error: string }>;
   socket(method: string, args?: JsonValue[], surface?: string[]): Promise<{ ok?: boolean; value?: string; error?: string }>;
   route(path?: string, chain?: string[]): Promise<{ status: number; body: string; contentType: string | null }>;
@@ -301,11 +301,20 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
   previewTabs(workspace: string): Promise<{ ports: { port: number; name: string | null }[]; slates: { id: string; title: string; port: number | null }[] }>;
   slateBuild(input: { workspace: string; owner: string; phase: 'good' | 'broken' | 'served' | 'fixed' }): Promise<{ wrote: string | null; preview: string; serves: string | null; told: string[] }>;
   programOnWhiteboard(input: { workspace: string; owner: string; program: string }): Promise<string>;
+  slateImport(input: { workspace: string; owner: string; word: string; first: boolean }): Promise<string>;
+  slateExports(input: { workspace: string; owner: string; entry: 'a.js' | 'b.js'; first: boolean }): Promise<string>;
+  slateRepair(input: { workspace: string; owner: string; id: string; imports: string; setup: string; repair: string }): Promise<{ before: string; after: string; says: string }>;
   craftedToolUnderShare(input: { workspace: string; owner: string }): Promise<{ owner: string; reached: string[]; viewer: string }>;
   forgetActivation(workspace: string): Promise<void>;
   pendingNimbusTasks(workspace: string): Promise<{ tasks: Array<{ id: string; time: number }>; alarm: number | null }>;
   drivePreview(url: string): Promise<PreviewAnswer>;
   rpcPreview(url: string, method: string, args?: JsonValue[]): Promise<RpcAnswer>;
+  holdPreview(url: string): Promise<RpcAnswer>;
+  callHeldPreview(method: string): Promise<RpcAnswer>;
+  closeHeldPreview(): Promise<{ code: number }>;
+  advanceClock(ms: number): Promise<void>;
+  restoreClock(): Promise<void>;
+  wakeOnce(workspace: string): Promise<void>;
   removeSlate(workspace: string, id: string): Promise<RemovedSlate>;
   putPicture(workspace: string, slate: string, digest: string): Promise<void>;
   pictureKeys(workspace: string): Promise<string[]>;
@@ -436,7 +445,6 @@ declare global {
       DEVICE_LEDGER_PROBE: DurableObjectNamespace<DeviceLedgerProbeDO>;
       DEVICE_OUTPUT_HUB_PROBE: DurableObjectNamespace<DeviceOutputHubProbeDO>;
       DEVICE_OUTPUT_WORKSPACE_PROBE: DurableObjectNamespace<DeviceOutputWorkspaceProbeDO>;
-      FILES_EIO_PROBE: DurableObjectNamespace<FilesEioProbeDO>;
       PARKED_WRITES_PROBE: DurableObjectNamespace<ParkedWritesProbeDO>;
       COMPLEXITY_PROBE: DurableObjectNamespace<ComplexityProbeDO>;
       EFFECT_ATOMICITY_PROBE: DurableObjectNamespace<EffectAtomicityProbeDO>;

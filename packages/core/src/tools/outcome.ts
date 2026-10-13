@@ -118,7 +118,6 @@ class CodemodeProgramError extends Data.TaggedError('CodemodeProgramError')<{ re
 export function bindProgramCall<Args extends unknown[]>(
   binding: { tool: string; op: string | null },
   invoke: (...args: Args) => Promise<JsonValue | undefined>,
-  returnedRefusals = false,
 ): (...args: Args) => Promise<JsonValue | undefined> {
   const active = program.getStore();
 
@@ -126,13 +125,7 @@ export function bindProgramCall<Args extends unknown[]>(
     const call = branchableToolCall(() => invoke(...args)).then((value) => {
       const parsed = v.safeParse(ToolFailureValueSchema, value);
 
-      const legacy = returnedRefusals && !parsed.success
-        ? v.safeParse(v.object({ ...ToolFailureValueSchema.entries, success: v.optional(v.literal(false), false) }), value)
-        : null;
-
-      const strict = parsed.success ? parsed.output : null;
-      const recovered = legacy?.success === true ? legacy.output : null;
-      const failure = strict ?? recovered;
+      const failure = parsed.success ? parsed.output : null;
 
       if (failure === null) return value;
       // A native tool called from a program names its operation in its input.

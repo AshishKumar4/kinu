@@ -13,8 +13,9 @@ import { createTestActors, present } from '@kinu.run/test-utils';
 import {
   createNimbusWorkspaceExecutor, createShellSession, DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable,
   nimbusSessionFiles, nimbusSessionShell, withApprovalGatedShell, WORKSPACE_ROOT,
-  type NimbusSandboxHandle, type ShellApprovalOutcome, type ShellApprovalPolicy, type ShellApprovalRequest,
+  type ShellApprovalOutcome, type ShellApprovalPolicy, type ShellApprovalRequest,
 } from '../src/index';
+import { sessionFilesOver, type SessionBox } from '@kinu.run/test-utils/vfs';
 import { createBashShell } from '../src/execution/shell-session';
 import { createSandboxExecutor, type SandboxHandle } from '../src/execution/sandbox';
 import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
@@ -98,15 +99,18 @@ describe('the workspace\'s own processes over the user\'s Drive', () => {
   function workspace(policy: ShellApprovalPolicy) {
     const started: Array<{ readonly command: string; readonly cwd: string | undefined }> = [];
 
-    const box: NimbusSandboxHandle = {
+    const box: SessionBox = {
       ready: async () => {},
-      exec: async (command: string) => ({ command, success: true, stdout: '', stderr: '', exitCode: 0 }),
+      exec: async (command: string) => ({ command, success: true, stdout: '', stderr: '', exitCode: 0, duration: 0, timestamp: 0 }),
       startProcess: async (command, options) => {
         started.push({ command, cwd: options?.cwd });
 
-        return { command, pid: 7, process: { pid: 7, command, state: 'running', exitCode: null, longRunning: true }, ports: [], startedAt: 1 };
+        return {
+          command, pid: 7, ports: [], startedAt: 1,
+          process: { pid: 7, command, argv: [command], cwd: options?.cwd ?? WORKSPACE_ROOT, state: 'running', exitCode: null, startTime: 1, endTime: null, longRunning: true, attachedTty: false },
+        };
       },
-      files: { read: async () => null, write: async () => {}, list: async () => [], stat: async () => null, exists: async () => false, delete: async () => {} },
+      files: sessionFilesOver(),
     };
 
     const { rt } = createTestRuntime();
@@ -115,7 +119,7 @@ describe('the workspace\'s own processes over the user\'s Drive', () => {
     router.register(createNimbusWorkspaceExecutor({
       box,
       shellSession: createShellSession({ home: WORKSPACE_ROOT, userRoots: () => ['/shared'] }),
-      inline: { vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), memory: rt.memory, craftStore: rt.craftStore },
+      inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), memory: rt.memory, craftStore: rt.craftStore },
     }));
 
     return { start: present(router.getProvider('workspace'), 'the workspace').tools.startProcess, started };
@@ -227,15 +231,15 @@ describe('the member is part of the ask', () => {
     const { policy, queue } = owner('deny');
     const live = prompts(2);
 
-    const box: NimbusSandboxHandle = {
+    const box: SessionBox = {
       ready: async () => {},
-      exec: async (command) => ({ command, success: true, stdout: '', stderr: '', exitCode: 0 }),
+      exec: async (command) => ({ command, success: true, stdout: '', stderr: '', exitCode: 0, duration: 0, timestamp: 0 }),
       runCode: async (code, options) => {
         ran.push(options?.timeoutMs);
 
-        return { command: code, success: true, stdout: '', stderr: '', exitCode: 0 };
+        return { command: code, success: true, stdout: '', stderr: '', exitCode: 0, duration: 0, timestamp: 0 };
       },
-      files: { read: async () => null, write: async () => {}, list: async () => [], stat: async () => null, exists: async () => false, delete: async () => {} },
+      files: sessionFilesOver(),
     };
 
     const { rt } = createTestRuntime();
@@ -244,7 +248,7 @@ describe('the member is part of the ask', () => {
     router.register(createNimbusWorkspaceExecutor({
       box,
       shellSession: createShellSession({ home: WORKSPACE_ROOT, userRoots: () => [] }),
-      inline: { vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), memory: rt.memory, craftStore: rt.craftStore },
+      inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), memory: rt.memory, craftStore: rt.craftStore },
     }));
 
     const runCode = present(present(router.getProvider('workspace'), 'the workspace').tools.runCode, 'runCode');
@@ -487,14 +491,14 @@ describe('a named shell is part of the ask as it was when asked', () => {
     const dispatched: string[] = [];
     const watch = { states: 0, mishapAfter: Number.NaN };
 
-    const box: NimbusSandboxHandle = {
+    const box: SessionBox = {
       ready: async () => {},
       exec: async (command) => {
         // A state read is digested in the session; anything else is a command sent to it.
         if (command.includes('sha256sum')) watch.states += 1;
         else dispatched.push(command);
 
-        return { command, success: true, stdout: command.includes('sha256sum') ? `${'0'.repeat(64)}  -\n` : '', stderr: '', exitCode: 0 };
+        return { command, success: true, stdout: command.includes('sha256sum') ? `${'0'.repeat(64)}  -\n` : '', stderr: '', exitCode: 0, duration: 0, timestamp: 0 };
       },
       shellCwd: async () => {
         if (watch.states === watch.mishapAfter) {
@@ -504,7 +508,7 @@ describe('a named shell is part of the ask as it was when asked', () => {
 
         return WORKSPACE_ROOT;
       },
-      files: { read: async () => null, write: async () => {}, list: async () => [], stat: async () => null, exists: async () => false, delete: async () => {} },
+      files: sessionFilesOver(),
     };
 
     const sessionShell = nimbusSessionShell(box, { home: WORKSPACE_ROOT });

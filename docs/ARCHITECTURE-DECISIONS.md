@@ -297,9 +297,9 @@ use, not mounts.
 W4. One namespace. On the cloud the file tool reads the kernel's own
 per-principal namespace, the one its shells read: each principal's view holds
 its mounts (a branch, with no uid of its own, is keyed by its actor id), a
-device's write report is asked of the backend `routeOf` names, and head
-attribution hears the namespace's `observeWrites`. Both are a local patch of
-`@nimbus-sh/core` until Nimbus ships them (NIMBUS-ASKS #23 and #24). Decided
+device's write report is asked of the backend `route` names, and head
+attribution hears the namespace's `observeWrites`. Both are Nimbus's own since
+core 0.16.0 (NIMBUS-ASKS #23 and #24). Decided
 2026-10-06, owner design B (2026-10-04) and m1960. Reversed: a second
 composite the file tool built over the bare kernel tree, beside the one the
 shells read, with an observing wrapper of its own. Locally everything is real
@@ -314,7 +314,7 @@ contentless FTS5 reads each hit from its note, and every search first re-chunks
 the notes whose file identity moved from their stamp (a revision, else inode,
 size, mtime and ctime, taken before the read and checked after), so a note a shell
 wrote is found by the words it holds now; a fork carries the notes, not the
-index. The gate judges where a path lands (`resolvePath`, NIMBUS-ASKS #23), so a
+index. The gate judges where a path lands (`route`, NIMBUS-ASKS #23 and #32), so a
 link into `/pc` is the user's file. `/context` (a rendering of the conversation) and `/skills` (the
 builtins and the workspace's own skills) stay views at `<space>/<name>`, which
 the prompt names as the file tool's alone. `/shared`, never bound locally, is

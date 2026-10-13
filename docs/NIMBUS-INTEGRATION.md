@@ -7,21 +7,21 @@ describes lives in `packages/cf-backend/src/runtime.ts`,
 
 ## Where the packages come from
 
-The tree carries no Nimbus source. Packages come from the registry at exact
-pinned versions, checked against the package manifests and `bun.lock` on
-2026-09-22:
+The tree carries no Nimbus source. Packages come from the registry, checked against the package manifests and
+`bun.lock` on 2026-10-12:
 
 | Package | Version | Declared in |
 |---|---|---|
-| `@nimbus-sh/core` | 0.12.0 | root, `packages/core`, `packages/cf-backend`, `packages/cli-backend` |
-| `@nimbus-sh/fabric` | 0.7.1 | `packages/core`, `packages/cf-backend` |
-| `@nimbus-sh/sdk` | 0.8.1 | `packages/cf-backend` |
-| `@nimbus-sh/worker` | 0.10.0 | `packages/cf-backend` |
-| `@nimbus-sh/runtime-bash` | 5.2.37 | root, `packages/cli-backend` |
-| `@nimbus-sh/runtime-cpython` | 3.13.14 | root, `packages/cli-backend` |
+| `@nimbus-sh/core` | 0.17.0 | root, `packages/core`, `packages/cf-backend`, `packages/cli-backend`, `packages/cli`, `packages/agent-utils`, `packages/compaction`, `packages/test-utils` |
+| `@nimbus-sh/worker` | 0.15.0 | root, `packages/cf-backend` |
+| `@nimbus-sh/fabric` | ^0.12.0 | `packages/core`, `packages/cf-backend` |
+| `@nimbus-sh/sdk` | ^0.13.0 | `packages/core`, `packages/cf-backend` |
+| `@nimbus-sh/platform` | ^0.8.1 | `packages/cf-backend` |
+| `@nimbus-sh/runtime-bash` | 5.2.37-3 | root |
+| `@nimbus-sh/runtime-cpython` | 3.13.14-1 | root |
 
-The pin is exact, never a caret. Fabric, sdk and worker each declare a range
-on core, and a caret that resolves two of them onto different copies gives the
+Core and worker are pinned exactly: Kinu carries declared patches against those versions (below). Fabric, sdk and
+platform float on a caret; each declares a range on core, so they resolve onto the one pinned copy rather than give the
 composition module two instances to be first-write-wins over (D22).
 
 Every declaration moves together, the root `devDependencies` included. The
@@ -34,51 +34,45 @@ fabric and worker, which is why nothing here pins it.
 Core imports fabric directly: `packages/core/src/events/outbox.ts` builds its
 outbox on `@nimbus-sh/fabric/outbox.js`.
 
-One Nimbus fix is patched in, across two packages. Core 0.15.0's rolldown
-build refuses any `tsconfigRaw` and compiles JSX to `React.createElement`
-whatever it is given, so a slate client, whose JSX needs the automatic runtime,
-does not compile; 0.14 bundled it to `react/jsx-runtime` imports (NIMBUS-ASKS
-#19, 2026-10-05). `patches/@nimbus-sh%2Fcore@0.15.0.patch` maps
-`tsconfigRaw.compilerOptions` onto rolldown's JSX transform in
-`runtime/rolldown-build`, in `src/` (Bun) and `dist/` (workerd): `react-jsx` and
-`react-jsxdev` to the automatic runtime from `jsxImportSource`, `react` to the
-classic one with its factories, and it still refuses any other option. It also
-splits `runtime/process-files`' `export const F_OK = 0, X_OK = 1, W_OK = 2, R_OK
-= 4;` into four declarations: vite 8's production build kept only the first
-declarator and failed on `X_OK` and `R_OK` (MISSING_EXPORT; NIMBUS-ASKS #21). The
-build facet runs a prebuilt copy of `runtime/rolldown-build`, a content-addressed asset of
-`@nimbus-sh/worker`, so `patches/@nimbus-sh%2Fworker@0.13.1.patch` carries the
-same change there and re-pins the asset's path, build id and SHA-256. Both go
-when core 0.15.1 ships the fix with a worker built from it; the browser-surface
-case in `packages/cf-backend/tests/workerd/slate-process.test.ts` holds the
-behaviour.
+Core 0.17.0 and worker 0.15.0 carry declared patches (package.json `//patchedDependencies:*` names each, and what
+deletes it); each part is Nimbus's own build of the source change its ask proposes, except where a part says otherwise:
+- a stopped `bash -c` loop ends: core's shell entrypoints forward their AbortSignal to the nested shell, and worker's
+  hosted shell child combines it with its own (NIMBUS-ASKS #42);
+- a client WebSocket open through a preview port holds the resident until it closes, so a quiet HMR socket keeps its dev
+  server (#43: core's `PortRegistry.setClientSockets`, worker's keep-alive);
+- `connectTls` carries the program's servername, which Kinu's egress presents and checks (#44);
+- STARTTLS: a program's `tls.connect({ socket })` upgrades that socket through the egress (#46, patched into the staged
+  node shims alone: an ask tag and an answer tag in the socket's name, the ask read by `keyed-socket.ts` only at the
+  protocol's go-ahead and answered only from the handshake, first after the ask);
+- a program's `navigator` answers as Node's (userAgent, platform, language), so pg chooses its Node transport (#47, the
+  source hunk as written);
+- a walked `rm -r` (a backend with no removal of its own) keeps and names a child it cannot read and removes the rest
+  (#51, the hunk as written, dist and source);
+- `set`, `readonly` and `trap` list an ill-formed value or name as `$'…'`, each lone surrogate `\uXXXX`, so two values a
+  named shell keeps apart list apart and an approval of one shell state never covers the other (#52, the hunk as
+  written, dist and source).
 
-The worker patch also gives each Durable Object its own build-facet isolate
-(NIMBUS-ASKS #22, 2026-10-05). Worker 0.13.1 loads the build facet's code under
-one id per isolate, so every workspace in an isolate builds on one rolldown
-binding, whose event-loop pump, started by one workspace's build, ran another's
-plugin calls in the first one's context: "Cannot perform I/O on behalf of a
-different Durable Object", in 2 of 5 runs of `slate-durability.test.ts` and
-`slate-process.test.ts` in one process. `dist/facets/build-facet.js` adds the
-object's id to the loader id. It goes when a worker release keeps the binding
-from crossing objects.
+Asked of Nimbus and not carried: per-process egress attribution (#45), mysql2's `checkServerIdentity` under workerd's
+TLS (#48), connections keeping the host's socket type (#49), the Cloudflare accounts envelope (#50), a credentialed
+SqliteVFS view walking `..` after a link (#53; Kinu's store planes still key lexically), and the shell resolving an
+operand as POSIX does rather than lexically (#54; a command still reads `./missing/../f` and `f/` where the file plane
+refuses them).
 
-The core patch also gives `vfs/composite` two public methods Kinu's one file
-namespace needs (NIMBUS-ASKS #23 and #24, 2026-10-06), in `src/` and `dist/` with
-their declarations. `routeOf(path)` answers where a path lands for a view: the
-mount point, the backend as that principal sees it (null with the mount's reason
-where it is absent), the backend path after lexical `..`, and whether the mount
-is read-only, so the file tool reaches a device's own write report.
-`resolvePath(path, { follow, creating })` is the composite's own walk, every
-link resolved through the view's mounts, so the approval gate judges where a
-path lands rather than how it is spelled. And
-`observeWrites(observer)` tells an observer of every `writeFile`,
-`writeFileIfRevision`, `unlink` and `rename` that lands, from any view, with the
-bytes it replaced where the observer asks (a rename always carries the bytes
-it moved), so a head's file changes are attributed where the write lands. `packages/core/tests/unit-composite-patch.test.ts`
-holds all three. Each goes when core ships its ask.
+0.17 ships what 0.16's patches carried: `route`/`mutationRoute` `{ creating }` (#32), a node facet's batched output
+writes (#39), and TLS through a workspace egress (`WorkspaceEgressTls.connectTls`, #37). It also ships npm's CommonJS as
+ESM (#35) and build-time facet tasks (#38), so Kinu's esbuild require plugin and the Worker's `toplevel: false` are gone.
+The patches 0.15 needed are upstream: the rolldown build's JSX and tsconfig settings (NIMBUS-ASKS #19),
+`runtime/process-files`' access modes as four declarations (#21), each build-facet call in a lane of its own (#22),
+`CompositeVFS.route(path, { follow })` (#23) and `observeWrites(observer, { wants })` (#24).
 
-Core 0.12.0 and worker 0.10.0 carry what the earlier patches held: the
+Kinu's file plane (`packages/core/src/vfs/mounts.ts`) is Kinu policy over that namespace: the mount declarations,
+whose principal's view a plane is, the bounded views, and one move rule (within a mount, Nimbus's `move`; across
+mounts, EXDEV). A device's write report is asked of the backend `route` names, and a new nested path is routed with
+`{ creating }`. A head's file changes come
+from `observeWrites`, read while the event holds its content (`packages/core/src/vfs/write-events.ts`,
+`packages/core/tests/unit-namespace-writes.test.ts`).
+
+Core 0.12.0 and worker 0.10.0 already carried what the earlier patches held: the
 read-only-open guards in core's `src/vfs/sqlite-vfs.ts` (D21, D22),
 `NPM_REGISTRY` passed from the command's environment to the installer
 (`dist/hosted/commands.js`), `facets()` on `composeHostedRuntime`'s return,
@@ -169,7 +163,7 @@ into the Core interfaces:
 
 | Kinu surface | Nimbus authority |
 |---|---|
-| `Storage.vfs` | `box.files` through `nimbusSessionFiles()` |
+| `Storage.vfs` | the actor's file plane, `workspaceFilePlane()` over the hosted box's store and its mounts |
 | `Shell` and `shell` | `box.exec()` through `nimbusSessionShell()` |
 | `workspace.*` | `createNimbusWorkspaceExecutor()` |
 | background processes | `box.startProcess()` and `box.processes` |
@@ -196,10 +190,11 @@ exported environment state. `ActorRuntimeIdentity.shellId`
 logical actor (subordinate, head, swarm node and branch alike) from
 `hostedActorShellId` in `cf-backend/src/actor-hosting.ts`, keyed on the
 immutable storage key rather than the registered name.
-`HostedWorkspace.box(shellId)` caches one box per key, and that box passes
-`shellId` to the hosted runtime's `exec`, `startProcess` and `runCode`, which
-keep each keyed shell's state separately. The filesystem and the process
-registry stay shared.
+`HostedWorkspace.box(scope)` is one box per actor. A call that names a shell
+(`shellId`) runs in that named shell, keyed by the actor's scope so two actors'
+names never meet; a call that names none runs once, in a shell of its own. The
+filesystem and the process registry stay shared. An agent facet holds no box:
+its session is only the SDK's file plane.
 
 Each actor's automatic scaffold lifecycle targets a distinct path. The main
 actor uses `scaffold/agent.js`; every other actor uses its own
@@ -211,6 +206,22 @@ separation is a convention, not an ACL.
 
 Nimbus process creation is non-blocking and returns a live PID. Process state,
 logs, signals, ports, and runtime availability come from Nimbus.
+
+A Stop ends a shell loop at once, but not a JavaScript loop that never yields
+(`node -e 'for (;;) {}'`). That is the platform's limit, not Nimbus's: JS has no
+preemption, so only the isolate's CPU limit can end that invocation. In
+production a Dynamic Worker invocation runs under the plan's CPU limit unless
+its loader sets a lower `limits.cpuMs`
+(developers.cloudflare.com/dynamic-workers/usage/limits); Nimbus sets none, so
+the plan's limit applies. Locally workerd enforces no CPU limit (its server's
+`NullIsolateLimitEnforcer`) and runs a called worker on its caller's thread
+(workerd README), so the loop holds the whole process and the Stop is never
+answered. Measured on armada, the same on Nimbus 0.15, 0.16 and 0.17: the
+probe's 345–360 s deadline lapses with CPU at 0.999
+(`scripts/turn-file-io.ts --shape=abort`, `abort.node` and `abort.pipe`; 0.15
+in the armada artifacts `art-abort-015-baseline-retry`, 0.16 job
+20261011191439-e93bb139, 0.17 jobs 20261011191123-ca5fcf2c and 20261012022155-90848086),
+while `abort.bash` settles in 1.5 s at CPU 0.0002.
 
 Exposing a port returns a random per-registration capability. Kinu encodes
 the workspace, the port, the capability, and an HMAC in a dedicated preview
@@ -275,8 +286,8 @@ The Worker needs no workspace Durable Object binding, because there is none. It
 needs the `LOADER` Worker Loader binding. `NIMBUS_RUNTIME_CACHE` is optional in
 `Env` (`cf-backend/env.d.ts`). Without it, a hosted interpreter cannot be
 installed and the Worker reports `NIMBUS_RUNTIME_CACHE binding missing`.
-`packages/cf-backend/package.json` pins the Nimbus core, fabric, SDK and
-worker versions exactly. `bun install --frozen-lockfile` in `scripts/deploy.sh`
+`packages/cf-backend/package.json` pins Nimbus core and worker exactly and
+fabric, SDK and platform by caret. `bun install --frozen-lockfile` in `scripts/deploy.sh`
 stops a local `node_modules` tree from deciding which versions ship.
 
 The generic Core Nimbus factory stays reusable by another backend, which is why

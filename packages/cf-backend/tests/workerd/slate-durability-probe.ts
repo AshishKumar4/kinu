@@ -1,19 +1,20 @@
 /**
  * Does a durable Nimbus application answer its own URL after its hosting object is aborted?
  * Everything below `handleNimbusPreviewHostRequest` is production code; the probe adds only the
- * trigger and the observation.
+ * trigger and the observation, and for the keep-alive its isolate's clock.
  */
 import { Agent, getAgentByName, type AgentContext } from 'agents';
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import * as v from 'valibot';
-import { newWebSocketRpcSession } from 'capnweb';
+import { newWebSocketRpcSession, type RpcStub } from 'capnweb';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
-import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
+import { ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
+import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { handleNimbusPreviewHostRequest } from '../../src/nimbus-route';
 import { WORKSPACE_TERMINAL_PATH, WorkspaceTerminalOutputSchema, buildBuiltinTools, codemodeSurface, createDefaultWebSearchProvider, toolsInWorkMode } from '@kinu.run/core';
 import { narrowToolSurface } from '@kinu.run/core';
 import { listPortReservations } from '@nimbus-sh/worker/port-capability';
-import { ROOT_SLATE_CALLER } from '../../src/slates/bindings';
+import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 import { pictureKey, picturePrefix } from '../../src/slates/pictures';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { ownerCaller } from '@kinu.run/core';
@@ -57,10 +58,16 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'runShell');
     Reflect.deleteProperty(this, 'previewTabs');
     Reflect.deleteProperty(this, 'failingSlates');
+    Reflect.deleteProperty(this, 'wakeOnce');
     sealRpcSurface(this, [
       ...ORCHESTRATOR_RPC_SURFACE, 'portReservations', 'runProgram', 'forgetActivation', 'pendingNimbusTasks', 'executorRows', 'runShell', 'previewTabs',
-      'failingSlates',
+      'failingSlates', 'wakeOnce',
     ]);
+  }
+
+  /** The platform's alarm delivery, which runs whichever of Nimbus's tasks are due. */
+  async wakeOnce(): Promise<void> {
+    await this.alarm();
   }
 
   /** What the agent's next model step is told of slates that do not build. */
@@ -184,7 +191,8 @@ export { ObservedOrchestrator as OrchestratorAgent };
  *  reaches it through `workspaceOwner()`, as production's actor does. */
 type SlateTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'writeExecutorFileChunk' | 'executeInExecutor' | 'routeSlateShare'> & Pick<ObservedOrchestrator,
-  'portReservations' | 'runProgram' | 'forgetActivation' | 'pendingNimbusTasks' | 'executorRows' | 'runShell' | 'previewTabs' | 'failingSlates'>;
+  'portReservations' | 'runProgram' | 'forgetActivation' | 'pendingNimbusTasks' | 'executorRows' | 'runShell' | 'previewTabs' | 'failingSlates'
+  | 'wakeOnce'>;
 
 /** `ObservedOrchestrator` is installed under the `OrchestratorAgent` name, so every stub carries
  *  the fixture read. */
@@ -193,6 +201,32 @@ interface ProbeRootEnv extends Omit<ProbeEnv, 'OrchestratorAgent'> {
 }
 
 const PreviewValueSchema = v.object({ url: v.string(), port: v.number() });
+
+type PreviewRpc = Record<string, (...input: JsonValue[]) => Promise<JsonValue>>;
+
+/** A page's `/__rpc` socket through the preview edge, and the slate's methods over it. */
+interface PreviewSocket {
+  readonly socket: WebSocket;
+  readonly stub: RpcStub<PreviewRpc>;
+}
+
+async function calledOver(stub: RpcStub<PreviewRpc>, method: string, args: JsonValue[]): Promise<RpcAnswer> {
+  try {
+    const raw = await stub[method](...args);
+
+    return { ok: true, value: v.is(v.string(), raw) ? raw : JSON.stringify(raw) };
+  } catch (cause) {
+    return { ok: false, error: renderThrownChain({ cause }) };
+  }
+}
+
+/**
+ * The clock this isolate's objects read, as a test moves it: Nimbus's keep-alive reads `Date.now()` and is handed no clock,
+ * and the pool's fake timers reach only the runner's isolate.
+ */
+const platformNow = Date.now.bind(Date);
+
+let advancedMs = 0;
 
 type TerminalDrive =
   | { ok: true; frames: string[]; output: string }
@@ -232,6 +266,13 @@ const LILT_GOOD = 'export default function App() { return <p data-words>lilt-goo
 const LILT_BROKEN = 'export default function App() {\n  return <p>lilt</p>\n  <p>broken</p>;\n}';
 
 const LILT_FIXED = 'export default function App() { return <><p data-words>lilt-fixed</p></>; }';
+
+/** A slate's preview before and after a repair of what it imports (`builds`, or why not), and what it says after. */
+interface SlateRepairSeen {
+  readonly before: string;
+  readonly after: string;
+  readonly says: string;
+}
 
 /** One step of the build flow, as the agent and the user each see it. */
 interface SlateBuildSeen {
@@ -422,6 +463,110 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     };
   }
 
+  /**
+   * A slate whose class imports a workspace file outside its own tree, `/home/main/word.ts`: writes that file to say
+   * `word`, through the workspace as the agent writes, then asks the running slate what it says.
+   */
+  async slateImport(input: { workspace: string; owner: string; word: string; first: boolean }): Promise<string> {
+    const target = await this.workspaceTarget(input.workspace);
+
+    if (input.first) {
+      await this.claimWorkspace(target, input.workspace, input.owner);
+      await this.writeSlateFile(target, '/slates/imports/package.json', JSON.stringify({ main: 'server.ts', slate: { title: 'Imports' } }));
+      await this.writeSlateFile(target, '/slates/imports/server.ts', [
+        'import { SlateObject } from "kinu:slate";',
+        'import { word } from "/home/main/word.ts";',
+        'export class Slate extends SlateObject {',
+        '  async word() { return word; }',
+        '}',
+      ].join('\n'));
+    }
+
+    await target.runProgram([
+      'const path = "/home/main/word.ts";',
+      'if (await workspace.exists(path)) await workspace.readFile(path);',
+      `return await workspace.writeFile(path, ${JSON.stringify(`export const word = ${JSON.stringify(input.word)};\n`)});`,
+    ].join('\n'));
+
+    const called = await workspaceOwner(this.env, input.workspace).slateAs(ROOT_SLATE_CALLER, { op: 'call', id: 'imports', method: 'word' });
+
+    return called.ok ? v.parse(v.string(), called.value) : `refused: ${called.error}`;
+  }
+
+  /**
+   * A slate whose class imports `wordpkg` through `/home/main/user.ts`: the package's package.json `exports` names
+   * `entry`, one of two files that each export a different word. Answers the word the running slate says.
+   */
+  async slateExports(input: { workspace: string; owner: string; entry: 'a.js' | 'b.js'; first: boolean }): Promise<string> {
+    const target = await this.workspaceTarget(input.workspace);
+    const pkg = '/home/main/node_modules/wordpkg';
+
+    const write = (path: string, text: string) => target.runProgram([
+      `const path = ${JSON.stringify(path)};`,
+      'if (await workspace.exists(path)) await workspace.readFile(path);',
+      `return await workspace.writeFile(path, ${JSON.stringify(text)});`,
+    ].join('\n'));
+
+    if (input.first) {
+      await this.claimWorkspace(target, input.workspace, input.owner);
+      await write(`${pkg}/a.js`, 'export const word = "alpha";\n');
+      await write(`${pkg}/b.js`, 'export const word = "beta";\n');
+      await write('/home/main/user.ts', 'export { word } from "wordpkg";\n');
+      await this.writeSlateFile(target, '/slates/exports/package.json', JSON.stringify({ main: 'server.ts', slate: { title: 'Exports' } }));
+      await this.writeSlateFile(target, '/slates/exports/server.ts', [
+        'import { SlateObject } from "kinu:slate";',
+        'import { word } from "/home/main/user.ts";',
+        'export class Slate extends SlateObject {',
+        '  async word() { return word; }',
+        '}',
+      ].join('\n'));
+    }
+
+    await write(`${pkg}/package.json`, JSON.stringify({ name: 'wordpkg', type: 'module', exports: `./${input.entry}` }));
+    const called = await workspaceOwner(this.env, input.workspace).slateAs(ROOT_SLATE_CALLER, { op: 'call', id: 'exports', method: 'word' });
+
+    return called.ok ? v.parse(v.string(), called.value) : `refused: ${called.error}`;
+  }
+
+  /**
+   * A slate whose class imports `imports`, which `setup`, a shell command, leaves unbuildable, and `repair`, another,
+   * mends. Answers the preview after each, and what the slate says.
+   */
+  async slateRepair(input: { workspace: string; owner: string; id: string; imports: string; setup: string; repair: string }): Promise<SlateRepairSeen> {
+    const target = await this.workspaceTarget(input.workspace);
+    const owned = workspaceOwner(this.env, input.workspace);
+
+    const previewed = async () => {
+      const preview = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'preview', id: input.id });
+
+      return preview.ok ? 'builds' : preview.reason;
+    };
+
+    const shell = async (command: string) => {
+      const ran = await this.runInWorkspace(input.workspace, command);
+
+      if (ran.exitCode !== 0) throw new Error(`${command}: exit ${String(ran.exitCode)}: ${ran.stdout}`);
+    };
+
+    await this.claimWorkspace(target, input.workspace, input.owner);
+    await this.writeSlateFile(target, `/slates/${input.id}/package.json`, JSON.stringify({ main: 'server.ts', slate: { title: input.id } }));
+    await this.writeSlateFile(target, `/slates/${input.id}/server.ts`, [
+      'import { SlateObject } from "kinu:slate";',
+      `import { word } from ${JSON.stringify(input.imports)};`,
+      'export class Slate extends SlateObject {',
+      '  async word() { return word; }',
+      '}',
+    ].join('\n'));
+    await shell(input.setup);
+    const before = await previewed();
+
+    await shell(input.repair);
+    const after = await previewed();
+    const called = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'call', id: input.id, method: 'word' });
+
+    return { before, after, says: called.ok ? v.parse(v.string(), called.value) : `refused: ${called.error}` };
+  }
+
   async portReservations(workspace: string): Promise<DurabilityReservation[]> {
     return (await this.workspaceTarget(workspace)).portReservations();
   }
@@ -449,6 +594,66 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
 
   /** Uses the WebSocket arm: a 101 cannot cross the RPC boundary the plain drive uses. */
   async rpcPreview(url: string, method: string, args: JsonValue[] = []): Promise<RpcAnswer> {
+    const opened = await this.previewSocket(url);
+
+    if ('refused' in opened) return { ok: false, error: opened.refused };
+
+    try {
+      return await calledOver(opened.stub, method, args);
+    } finally {
+      opened.socket.close();
+    }
+  }
+
+  /** A page's `/__rpc` socket held open across calls, as an open tab holds it. */
+  private heldPreview: PreviewSocket | undefined;
+
+  async holdPreview(url: string): Promise<RpcAnswer> {
+    const opened = await this.previewSocket(url);
+
+    if ('refused' in opened) return { ok: false, error: opened.refused };
+    this.heldPreview = opened;
+
+    return { ok: true };
+  }
+
+  async callHeldPreview(method: string): Promise<RpcAnswer> {
+    if (this.heldPreview === undefined) throw new Error('no preview socket is held');
+
+    return await calledOver(this.heldPreview.stub, method, []);
+  }
+
+  /** Closes the held socket as a closed tab does; answers once the far end's close has come back through the relay. */
+  async closeHeldPreview(): Promise<{ code: number }> {
+    if (this.heldPreview === undefined) throw new Error('no preview socket is held');
+    const { socket } = this.heldPreview;
+
+    const closed = new Promise<number>((resolve) => {
+      socket.addEventListener('close', (event) => { resolve(event.code); });
+    });
+
+    socket.close(1001, 'tab closed');
+    this.heldPreview = undefined;
+
+    return { code: await closed };
+  }
+
+  /** Moves this isolate's clock `ms` ahead, for every object in it; `restoreClock` puts it back. */
+  advanceClock(ms: number): void {
+    advancedMs += ms;
+    Date.now = () => platformNow() + advancedMs;
+  }
+
+  restoreClock(): void {
+    advancedMs = 0;
+    Date.now = platformNow;
+  }
+
+  async wakeOnce(workspace: string): Promise<void> {
+    await (await this.workspaceTarget(workspace)).wakeOnce();
+  }
+
+  private async previewSocket(url: string): Promise<PreviewSocket | { refused: string }> {
     const endpoint = new URL(url);
     endpoint.pathname = '/__rpc';
 
@@ -459,22 +664,11 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
 
     const socket = response.webSocket;
 
-    if (socket === null || socket === undefined) {
-      return { ok: false, error: `upgrade refused: ${response.status} ${await response.text()}` };
-    }
+    if (socket === null || socket === undefined) return { refused: `upgrade refused: ${response.status} ${await response.text()}` };
 
     socket.accept();
-    const stub = newWebSocketRpcSession<Record<string, (...input: JsonValue[]) => Promise<JsonValue>>>(socket);
 
-    try {
-      const raw = await stub[method](...args);
-
-      return { ok: true, value: v.is(v.string(), raw) ? raw : JSON.stringify(raw) };
-    } catch (cause) {
-      return { ok: false, error: renderThrownChain({ cause }) };
-    } finally {
-      socket.close();
-    }
+    return { socket, stub: newWebSocketRpcSession<PreviewRpc>(socket) };
   }
 
   async removeSlate(workspace: string, id: string): Promise<RemovedSlate> {

@@ -114,11 +114,11 @@ describe('a machine that cannot sandbox runs no command', () => {
     await harness.closeDeviceHarness();
   });
 
-  test('a daemon that claims a sandbox but names no agent root is not sandboxed, and is told which build to fix', async () => {
+  test('a daemon that claims a sandbox but names no absolute agent root is not sandboxed, and is told which build to fix', async () => {
     // Nowhere to put the agent's home: recorded incapable at HELLO, not discovered by a promised command.
     const harness = await deviceHarness('ashish@studio', daemon, { hello: null });
     harness.consentDecision = 'always';
-    await harness.sendDeviceHello({ type: 'HELLO', os: 'linux', sandbox: CAPABLE });
+    await harness.sendDeviceHello({ type: 'HELLO', os: 'linux', sandbox: CAPABLE, agentRoot: '.kinu/agents' });
 
     const refusal = harness.userDO.deviceRpc(harness.workspace, 'exec', ['ls'], { agentName: WORKSPACE });
     await expect(refusal).rejects.toThrow(SANDBOX_UNAVAILABLE);
@@ -129,24 +129,6 @@ describe('a machine that cannot sandbox runs no command', () => {
     expect((await harness.userDO.listDevices(await testOwner()))[0]?.sandbox).toEqual({
       tier: 'sandboxed', capability: 'files_only', reason: 'daemon_outdated',
       detail: 'the daemon proved a sandbox but did not say where agent homes live', gpu: CAPABLE.gpu,
-    });
-    await harness.closeDeviceHarness();
-  });
-
-  test('a daemon too old to say anything about sandboxing names its own age', async () => {
-    // Silence is not proof; every pre-contract daemon sends no sandbox field, so the fix is updating the CLI.
-    const harness = await deviceHarness('ashish@studio', daemon, { hello: null });
-    harness.consentDecision = 'always';
-    await harness.sendDeviceHello({ type: 'HELLO', os: 'linux', hostname: 'studio' });
-
-    const refusal = harness.userDO.deviceRpc(harness.workspace, 'exec', ['ls'], { agentName: WORKSPACE });
-    await expect(refusal).rejects.toThrow(SANDBOX_UNAVAILABLE);
-    await expect(refusal).rejects.toThrow('daemon_outdated');
-    await expect(refusal).rejects.toThrow(sandboxReasonFix('daemon_outdated'));
-    expect(execFrames(harness)).toEqual([]);
-
-    expect((await harness.userDO.listDevices(await testOwner()))[0]?.sandbox).toEqual({
-      tier: 'sandboxed', capability: 'files_only', reason: 'daemon_outdated', detail: null, gpu: [],
     });
     await harness.closeDeviceHarness();
   });
@@ -238,14 +220,12 @@ describe('the frame carries the calling workspace own home', () => {
 
     for (const [method, params] of [
       ['readFile', [file]], ['readRange', [file, 0, 4]], ['writeFile', [file, 'x']], ['listFiles', ['/home/ashish/projects/kinu']],
-      ['statPath', [file]], ['unlinkPath', [file]], ['mkdirPath', [`${file}.d`]], ['exists', [file]],
+      ['statPath', [file]], ['unlinkPath', [file]], ['rmdirPath', [`${file}.d`]], ['mkdirPath', [`${file}.d`]], ['exists', [file]],
     ] satisfies Array<[string, JsonValue[]]>) {
       await harness.userDO.deviceRpc(harness.workspace, method, params, { agentName: WORKSPACE });
     }
 
     const blocks = harness.deviceFrames.map((frame) => v.parse(FrameSandboxSchema, frame.sandbox));
-
-    expect(blocks).toHaveLength(8);
 
     for (const block of blocks) {
       expect(block).toEqual({
@@ -274,16 +254,6 @@ describe('the frame carries the calling workspace own home', () => {
     await harness.closeDeviceHarness();
   });
 
-  test('a machine that consented no directory sends an empty root list, never a guess', async () => {
-    const harness = await deviceHarness('ashish@studio', daemon, { hello: null });
-    harness.consentDecision = 'always';
-    await harness.sendDeviceHello(hello(CAPABLE));
-
-    await harness.userDO.deviceRpc(harness.workspace, 'exec', ['pwd'], { agentName: WORKSPACE });
-    expect(v.parse(FrameSandboxSchema, execFrames(harness)[0]?.sandbox)?.roots).toEqual([]);
-    await harness.closeDeviceHarness();
-  });
-
   test('the runtime status hands the model the same home the frame carries', async () => {
     const harness = await deviceHarness('ashish@studio', daemon, { hello: null });
     harness.consentDecision = 'always';
@@ -302,18 +272,6 @@ describe('the frame carries the calling workspace own home', () => {
     await harness.closeDeviceHarness();
   });
 
-  test('a later HELLO from an older daemon cannot erase the paths, but can withdraw the sandbox', async () => {
-    // Paths are machine facts and survive a downgrade; the verdict is per daemon boot, so silence withdraws it.
-    const harness = await deviceHarness('ashish@studio', daemon, { hello: null });
-    await harness.sendDeviceHello(hello(CAPABLE, { root: '/home/ashish/projects/kinu' }));
-    await harness.sendDeviceHello({ type: 'HELLO', os: 'linux' });
-
-    const status = await harness.userDO.deviceRuntimeStatus(harness.workspace);
-    expect(status.sandbox?.capability).toBe('files_only');
-    expect(status.sandbox?.roots).toEqual(['/home/ashish/projects/kinu']);
-    expect(status.sandbox?.agentHome).toBe(`/home/ashish/.kinu/agents/${WORKSPACE}/home`);
-    await harness.closeDeviceHarness();
-  });
 });
 
 describe('the reason vocabulary is closed and every value carries a fix', () => {

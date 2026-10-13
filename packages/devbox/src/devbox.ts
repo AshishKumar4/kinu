@@ -6,6 +6,7 @@ import { Processes, isProcessLive, CONTAINER_TRUST_ENV, END_TREE } from "./proce
 import { nativeStartClock } from './native-clock';
 import type { DevboxExecOptions, ExecResult, ReadOptions, FileResult, ListFilesOptions, FileMetadata, GatewayBindings } from './contracts';
 import { listFiles as readDirectory } from './file-listing';
+import { writeFileIfDigest as writeFileIfDigestInGuest } from './file-digest-write';
 import { DEFAULT_EXCLUDES, DiskChainStateSchema, DiskChainStorage, diskChain, recoveryNotice, type DiskChain, type DiskChainPorts } from './disk-chain';
 import { STORE_MOUNT, chainStoreRoot, storeObjectUrl } from './store-gateway';
 import { snapshotRegistry, type SnapshotRegistry } from './snapshot-registry';
@@ -2346,6 +2347,13 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     options?: { encoding?: string },
   ) {
     return await settle(this.#claimed(pathScopes({ path, membership: true }), attempt("file", () => this.#writeFile(path, content, options))).pipe(Effect.mapError(fileFault)));
+  }
+
+  /** A write that lands only over the bytes it names (`expected`: their sha256; null: no file there), compared and
+   *  replaced in one guest process (`file-digest-write.ts`); `operation` names it across every send. */
+  async writeFileIfDigest(path: string, contentBase64: string, expected: string | null, operation: string) {
+    return await settle(this.#claimed(pathScopes({ path, membership: true }),
+      writeFileIfDigestInGuest(this.#container(), { path, data: Buffer.from(contentBase64, 'base64'), expected, operation })).pipe(Effect.mapError(fileFault)));
   }
 
   /** `deleteFile` claims the subtree: a path can't reveal it is a directory, and a

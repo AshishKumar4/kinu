@@ -36,7 +36,7 @@ describe('canonicalProviderName', () => {
       ['claude-code', 'claude'],
       ['subscription', 'claude'],
       ['claude-subscription', 'claude'],
-      ['codex', 'chatgpt'],
+
       ['chatgpt', 'chatgpt'],
       ['chatgpt-codex', 'chatgpt'],
       ['openai', 'openai'],

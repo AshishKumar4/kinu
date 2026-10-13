@@ -1,4 +1,4 @@
-import { type Awaitable, type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import { type Awaitable, type VFS, type VfsRevision, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Test helpers: in-memory SQLite via bun:sqlite, mock LLM, mock Executor. */
 
 import { Database } from 'bun:sqlite';
@@ -31,7 +31,7 @@ import { WORKSPACE_IDENTITY_DDL, tableExists } from '../src/identity/schema';
 import { initWorkspaceActorTable, WorkspaceActorDirectory, openWorkspaceMainActor } from '../src/identity/workspace-actors';
 import { initAgentConfigTable } from '../src/config/store';
 import { initCodemodeStateTable } from '../src/identity/program-state';
-import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
+import { WORKSPACE_ROOT, workspacePath } from '../src/vfs/workspace-path';
 import { cloudPlanes } from '../src/vfs/resolve';
 
 export function createTestActor(sql: SqlExecutor, execRaw: RawSqlExec, workspaceId: string, name: string) {
@@ -87,7 +87,11 @@ export function createMemoryVFS(db: Database): WorkspaceBundle['vfs'] {
  * `vfs` with every call ordered after the fixture's seed. `seed` is a thunk run on the first VFS call:
  * an eager seed outlives a test that closes its database. A seed failure rejects the first call.
  */
-function afterSeed(vfs: WorkspaceBundle['vfs'], seed: () => Promise<void>): VFS & Required<Pick<VFS, 'readRange'>> {
+function afterSeed(workspace: WorkspaceBundle, seed: () => Promise<void>): VFS & Required<Pick<VFS, 'readRange'>> {
+  const { vfs } = workspace;
+  // The workspace store's own revisions, as production's file plane reaches them through its namespace.
+  const at = (p: string): string => workspacePath(p, WORKSPACE_ROOT);
+
   let seeded: Promise<void> | null = null;
 
   const chain = <A extends unknown[], R>(fn: (...args: A) => Awaitable<R>) =>
@@ -103,12 +107,14 @@ function afterSeed(vfs: WorkspaceBundle['vfs'], seed: () => Promise<void>): VFS 
     readRange: chain((p: string, offset: number, length: number) => vfs.readRange(p, offset, length)),
     writeFile: chain((p: string, d: Uint8Array) => vfs.writeFile(p, d)),
     readdir: chain((p: string) => vfs.readdir(p)),
-    stat: chain((p: string, options?: { follow?: boolean }) => vfs.stat(p, options)),
+    // Through the namespace, as production's file plane stats: its revision is the one its compare-and-write checks.
+    stat: chain(async (p: string, options?: { follow?: boolean }) => (await workspace.namespace()).stat(at(p), options)),
 
     readlink: chain((p: string) => vfs.readlink(p)),
     unlink: chain((p: string) => vfs.unlink(p)),
     mkdir: chain((p: string, o?: { recursive?: boolean }) => vfs.mkdir(p, o)),
-
+    // The workspace store versions its files, as production's does: an overwrite is checked against the revision read.
+    writeFileIfRevision: chain(async (p: string, d: Uint8Array, r: VfsRevision) => (await workspace.namespace()).writeFileIfRevision(at(p), d, r)),
   };
 }
 
@@ -232,7 +238,7 @@ export function createTestRuntime(opts?: {
   const workspace = createWorkspaceBundle(db);
 
   // `afterSeed` runs the scaffold seed on the first VFS call and orders later calls behind it.
-  const seededFiles = afterSeed(workspace.vfs, () =>
+  const seededFiles = afterSeed(workspace, () =>
     Promise.resolve(workspace.vfs.mkdir('scaffold', { recursive: true }))
       .then(() => writeText(workspace.vfs, 'scaffold/agent.js', 'initial')));
 

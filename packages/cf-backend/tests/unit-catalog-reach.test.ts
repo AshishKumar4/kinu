@@ -8,7 +8,7 @@ import type { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC, type JsonValue } from '@kinu.run/core';
 import { hostedSubordinateHarness, orchestratorHarness, workspaceFiles } from './helpers/actor-harness';
-import { ROOT_SLATE_CALLER } from '../src/slates/bindings';
+import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 
 /** A role with programs and a shell, but no file tool. */
 const CODER = {

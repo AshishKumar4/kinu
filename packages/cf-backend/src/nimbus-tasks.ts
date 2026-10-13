@@ -10,7 +10,7 @@ import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 
 /** The record type fails the build when Nimbus adds a task. */
 const TASKS: Readonly<Record<HostedRuntimeTask, true>> = {
-  'resident-launch': true, 'resident-keepalive': true, 'log-flush': true, 'log-janitor': true,
+  'resident-launch': true, 'resident-keepalive': true, 'log-flush': true, 'log-janitor': true, 'hosting-watch': true,
 };
 
 function isTask(fn: string): fn is HostedRuntimeTask {

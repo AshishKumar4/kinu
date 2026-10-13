@@ -97,6 +97,7 @@ describe('kinu workspace delete', () => {
       name: 'web-agent',
       mode: 'cloud',
       cloudName: 'web-agent',
+      displayName: 'Web agent',
       createdAt: '2026-07-14T00:00:00.000Z',
       updatedAt: '2026-07-14T00:00:00.000Z',
     });
@@ -113,6 +114,7 @@ function workspaceHome(origin: string): string {
         name: 'web-agent',
         mode: 'cloud',
         cloudName: 'web-agent',
+        displayName: 'Web agent',
         createdAt: '2026-07-14T00:00:00.000Z',
         updatedAt: '2026-07-14T00:00:00.000Z',
       },
@@ -120,6 +122,7 @@ function workspaceHome(origin: string): string {
         name: 'localbot',
         mode: 'local',
         localName: 'localbot',
+        cwd: home, workspaceId: 'proj', identityId: 'ws-localbot',
         createdAt: '2026-07-14T00:00:00.000Z',
         updatedAt: '2026-07-14T00:00:00.000Z',
       },

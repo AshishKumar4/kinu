@@ -256,7 +256,7 @@ describe('daemon startup hardening', () => {
 
   test('a device config naming a plaintext origin off this machine is refused before any token is sent', () => {
     const configPath = path.join(DEVICE_HOME, 'origin-device.json');
-    const config = (origin) => JSON.stringify({ user: 'user-1', token: `pdt_${'a'.repeat(32)}`, origin });
+    const config = (origin) => JSON.stringify({ user: 'user-1', device: 'device-1', token: `pdt_${'a'.repeat(32)}`, origin, root: '/home/u/project' });
 
     for (const origin of ['http://kinu.example', 'ftp://kinu.example', 'http://192.0.2.10:8787', 'not a url']) {
       fs.writeFileSync(configPath, config(origin), { mode: 0o600 });
@@ -267,6 +267,29 @@ describe('daemon startup hardening', () => {
     for (const origin of ['https://kinu.run', 'http://localhost:8787', 'http://127.0.0.1:8787', 'http://[::1]:8787']) {
       fs.writeFileSync(configPath, config(origin), { mode: 0o600 });
       expect(readDeviceConfig(configPath).origin).toBe(origin);
+    }
+  });
+
+  test('a device config is read whole or refused: every field the daemon runs on, nonempty, and an absolute directory', () => {
+    const configPath = path.join(DEVICE_HOME, 'partial-device.json');
+    // As the previous release's kinu connect wrote it: no device, which only the CLI reads.
+    const whole = { user: 'user-1', token: `pdt_${'a'.repeat(32)}`, origin: 'https://kinu.run', root: '/home/u/project' };
+
+    fs.writeFileSync(configPath, JSON.stringify(whole), { mode: 0o600 });
+    expect(readDeviceConfig(configPath)).toEqual(whole);
+    fs.writeFileSync(configPath, JSON.stringify({ ...whole, device: 'device-1' }), { mode: 0o600 });
+    expect(readDeviceConfig(configPath)).toEqual({ ...whole, device: 'device-1' });
+
+    for (const field of Object.keys(whole)) {
+      for (const partial of [{ ...whole, [field]: undefined }, { ...whole, [field]: '' }]) {
+        fs.writeFileSync(configPath, JSON.stringify(partial), { mode: 0o600 });
+        expect(() => readDeviceConfig(configPath)).toThrow();
+      }
+    }
+
+    for (const malformed of [{ ...whole, device: '' }, { ...whole, device: 1 }, { ...whole, root: 'project' }]) {
+      fs.writeFileSync(configPath, JSON.stringify(malformed), { mode: 0o600 });
+      expect(() => readDeviceConfig(configPath)).toThrow();
     }
   });
 
@@ -556,6 +579,7 @@ describe('daemon device path confinement', () => {
         ['untiered-stat', 'statPath', [planted]],
         ['untiered-exists', 'exists', [planted]],
         ['untiered-unlink', 'unlinkPath', [planted]],
+        ['untiered-rmdir', 'rmdirPath', [path.dirname(planted)]],
         ['untiered-mkdir', 'mkdirPath', [`${planted}-dir`]],
         ['rpc-untiered00-1', 'exec', [`cat ${JSON.stringify(planted)}`]],
       ];
@@ -751,6 +775,59 @@ describe('daemon device path confinement', () => {
     expect((await ws.response('unpaged')).result.map((entry) => entry.name).sort(byName)).toEqual(names.sort(byName));
   });
 
+  // 2026-10-12 security review: a mutation was judged when its frame arrived and run on the path string after the
+  // checkpoint queue, so a command that swapped a judged directory for a link meanwhile moved it out of the root.
+  test.each([
+    ['writeFile', (at) => ['writeFile', [at('inner/target.txt'), 'written', {}]]],
+    ['writeFileIfDigest', (at) => ['writeFileIfDigest', [at('inner/target.txt'), 'written', require('node:crypto').createHash('sha256').update('inside').digest('hex'), {}]]],
+    ['unlinkPath', (at) => ['unlinkPath', [at('inner/target.txt')]]],
+    ['rmdirPath', (at) => ['rmdirPath', [at('inner/empty')]]],
+    ['mkdirPath', (at) => ['mkdirPath', [at('inner/made/deeper'), { recursive: true }]]],
+  ])('%s that waits in the queue acts where it was checked, never through a link swapped in meanwhile', async (_name, frame) => {
+    const root = scratchDir('daemon-swap');
+
+    // Every entry under a tree, with a file's bytes: what a mutation outside the root would change.
+    const snapshotTree = (dir) => fs.readdirSync(dir, { recursive: true }).map(String).sort((a, b) => a.localeCompare(b)).map((name) => {
+      const full = path.join(dir, String(name));
+
+      return [String(name), fs.lstatSync(full).isFile() ? fs.readFileSync(full, 'utf8') : 'dir'];
+    });
+
+    const project = path.join(root, 'project');
+    const inner = path.join(project, 'inner');
+    const outside = path.join(root, 'outside');
+
+    for (const dir of [path.join(inner, 'empty'), path.join(outside, 'empty')]) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(inner, 'target.txt'), 'inside');
+    fs.writeFileSync(path.join(outside, 'target.txt'), 'inside');
+
+    const before = snapshotTree(outside);
+    let release;
+    const queued = new Promise((resolve) => { release = resolve; });
+
+    // The checkpoint queue, held until the swap is made: a frame's mutation runs only once released.
+    const ctx = {
+      checkpoints: {
+        mutate: async (_request, _covered, apply) => {
+          await queued;
+
+          return apply(null);
+        },
+      },
+    };
+
+    const ws = fakeWs();
+    const [method, params] = frame((relative) => path.join(project, relative));
+
+    handle({ id: 'swap', method, sandbox: scoped([project]), params }, ws, ctx);
+    fs.renameSync(inner, path.join(project, 'inner-old'));
+    fs.symlinkSync(outside, inner);
+    release();
+
+    expect((await ws.response('swap')).error?.code).toBe('EACCES');
+    expect(snapshotTree(outside)).toEqual(before);
+  });
+
   test('scoped native mutations stay inside the resolved root', async () => {
     // Under /tmp rather than TMPDIR: this suite's TMPDIR is inside the real
     // home, which the agent home is mounted over, and a consented directory
@@ -767,7 +844,7 @@ describe('daemon device path confinement', () => {
     handle({ id: 'write', method: 'writeFile', sandbox: scoped([project]), params: [file, 'ok', {}] }, ws, {});
     expect((await ws.response('write')).result).toEqual({ success: true });
     handle({ id: 'stat', method: 'statPath', sandbox: scoped([project]), params: [file] }, ws, {});
-    expect((await ws.response('stat')).result).toMatchObject({ size: 2, isDir: false });
+    expect((await ws.response('stat')).result).toMatchObject({ size: 2, type: 'file' });
     handle({ id: 'unlink', method: 'unlinkPath', sandbox: scoped([project]), params: [file] }, ws, {});
     expect((await ws.response('unlink')).result).toEqual({ success: true });
     const target = path.join(project, 'target.txt');
@@ -779,6 +856,141 @@ describe('daemon device path confinement', () => {
     expect(fs.existsSync(target)).toBe(true);
     expect(fs.existsSync(link)).toBe(false);
     expect(fs.existsSync(file)).toBe(false);
+    // A link to a directory is the link to lstat and no directory to rmdir; the emptied directory itself goes.
+    const dirLink = path.join(project, 'nested-link');
+    fs.symlinkSync(dir, dirLink);
+    handle({ id: 'lstat-link', method: 'statPath', sandbox: scoped([project]), params: [dirLink, { follow: false }] }, ws, {});
+    expect((await ws.response('lstat-link')).result).toMatchObject({ type: 'symlink' });
+    handle({ id: 'rmdir-link', method: 'rmdirPath', sandbox: scoped([project]), params: [dirLink] }, ws, {});
+    expect((await ws.response('rmdir-link')).error?.code).toBe('ENOTDIR');
+    expect(fs.existsSync(dir)).toBe(true);
+    handle({ id: 'rmdir', method: 'rmdirPath', sandbox: scoped([project]), params: [dir] }, ws, {});
+    expect((await ws.response('rmdir')).result).toEqual({ success: true });
+    expect(fs.existsSync(dir)).toBe(false);
+  });
+});
+
+describe('a write that names the bytes it replaces', () => {
+  const sha256 = (text) => require('node:crypto').createHash('sha256').update(text).digest('hex');
+  // A hub with the Sandbox switch on: the consented directories ride the frame.
+  const scoped = (roots) => ({ tier: 'sandboxed', agentHome: path.join(DEVICE_HOME, 'agents', 'ws-1', 'home'), roots });
+
+  test('lands only over those bytes, and a write between the read and it is refused with what is there now', async () => {
+    const root = scratchDir('daemon-digest');
+    const file = path.join(root, 'notes.md');
+    fs.writeFileSync(file, 'read by the agent');
+    const ws = fakeWs();
+
+    // The owner saved over it after the agent read it.
+    fs.writeFileSync(file, 'saved by the owner');
+    handle({ id: 'stale', method: 'writeFileIfDigest', sandbox: scoped([root]), params: [file, 'the agent\'s rewrite', sha256('read by the agent'), {}] }, ws, {});
+
+    expect((await ws.response('stale')).result).toEqual({ ok: false, sha256: sha256('saved by the owner') });
+    expect(fs.readFileSync(file, 'utf8')).toBe('saved by the owner');
+
+    handle({ id: 'fresh', method: 'writeFileIfDigest', sandbox: scoped([root]), params: [file, 'the agent\'s rewrite', sha256('saved by the owner'), {}] }, ws, {});
+
+    expect((await ws.response('fresh')).result).toEqual({ ok: true, sha256: sha256('the agent\'s rewrite') });
+    expect(fs.readFileSync(file, 'utf8')).toBe('the agent\'s rewrite');
+  });
+
+  test('a replaced file keeps every mode bit, the ones a umask would cut too', async () => {
+    const root = scratchDir('daemon-digest-mode');
+    const file = path.join(root, 'shared.sh');
+    fs.writeFileSync(file, 'v1');
+    fs.chmodSync(file, 0o775);
+    const ws = fakeWs();
+    const was = process.umask(0o022);
+
+    try {
+      handle({ id: 'mode', method: 'writeFileIfDigest', sandbox: scoped([root]), params: [file, 'v2', sha256('v1'), {}] }, ws, {});
+      expect((await ws.response('mode')).result).toMatchObject({ ok: true });
+    } finally {
+      process.umask(was);
+    }
+
+    expect(fs.statSync(file).mode & 0o777).toBe(0o775);
+  });
+
+  test('a private file\'s replacement bytes are never written into a file anyone else may read', async () => {
+    const root = scratchDir('daemon-digest-private');
+    const file = path.join(root, 'secret.env');
+    fs.writeFileSync(file, 'v1');
+    fs.chmodSync(file, 0o600);
+    const ws = fakeWs();
+    const was = process.umask(0o022);
+
+    try {
+      handle({ id: 'private', method: 'writeFileIfDigest', sandbox: scoped([root]), params: [file, 'v2', sha256('v1'), {}] }, ws, {});
+      expect((await ws.response('private')).result).toMatchObject({ ok: true });
+    } finally {
+      process.umask(was);
+    }
+
+    // The bytes are in the private file itself, still private, and in no other file beside it.
+    expect({ bytes: fs.readFileSync(file, 'utf8'), mode: fs.statSync(file).mode & 0o777 }).toEqual({ bytes: 'v2', mode: 0o600 });
+    expect(fs.readdirSync(root).filter((name) => fs.readFileSync(path.join(root, name), 'utf8').includes('v2'))).toEqual(['secret.env']);
+  });
+
+  // 2026-10-12 security review: a temp file and a rename replaced a file its owner had made read-only, and dropped its
+  // owner, group and ACLs; a plain write refuses the first and keeps the rest.
+  test('replaces a file in place, as a plain write does: a read-only one is refused, and every other name keeps it', async () => {
+    const root = scratchDir('daemon-digest-in-place');
+    const file = path.join(root, 'shared.md');
+    const other = path.join(root, 'also-shared.md');
+    fs.writeFileSync(file, 'v1');
+    fs.linkSync(file, other);
+
+    // Another user's file where this test may give one (as root): a replacement made by the daemon must not take it over.
+    if (process.getuid?.() === 0) fs.chownSync(file, 65534, 65534);
+    const before = fs.statSync(file);
+    const ws = fakeWs();
+
+    handle({ id: 'replace', method: 'writeFileIfDigest', sandbox: scoped([root]), params: [file, 'v2', sha256('v1'), {}] }, ws, {});
+    expect((await ws.response('replace')).result).toEqual({ ok: true, sha256: sha256('v2') });
+    // The same file, so its owner, group, mode and ACLs are its own still, and its other name reads the new bytes.
+    expect(fs.statSync(file)).toMatchObject({ uid: before.uid, gid: before.gid, mode: before.mode });
+    expect(fs.readFileSync(other, 'utf8')).toBe('v2');
+
+    fs.chmodSync(file, 0o444);
+
+    try {
+      handle({ id: 'read-only', method: 'writeFileIfDigest', sandbox: scoped([root]), params: [file, 'v3', sha256('v2'), {}] }, ws, {});
+
+      // Root writes any file, as a plain write does; anyone else is refused.
+      if (process.getuid?.() === 0) expect((await ws.response('read-only')).result).toMatchObject({ ok: true });
+      else {
+        expect((await ws.response('read-only')).error?.code).toBe('EACCES');
+        expect(fs.readFileSync(file, 'utf8')).toBe('v2');
+      }
+    } finally {
+      fs.chmodSync(file, 0o644);
+    }
+  });
+
+  test('with no digest, creates the file only where none is', async () => {
+    const root = scratchDir('daemon-digest-create');
+    const file = path.join(root, 'new.md');
+    const ws = fakeWs();
+
+    handle({ id: 'create', method: 'writeFileIfDigest', sandbox: scoped([root]), params: [file, 'first', null, {}] }, ws, {});
+    expect((await ws.response('create')).result).toEqual({ ok: true, sha256: sha256('first') });
+
+    handle({ id: 'again', method: 'writeFileIfDigest', sandbox: scoped([root]), params: [file, 'second', null, {}] }, ws, {});
+    expect((await ws.response('again')).result).toEqual({ ok: false, sha256: sha256('first') });
+    expect(fs.readFileSync(file, 'utf8')).toBe('first');
+  });
+
+  test('stays inside the consented directory', async () => {
+    const root = scratchDir('daemon-digest-scope');
+    // Outside every home, temp root and system tree the sandbox names, as the confinement tests plant.
+    const outside = path.join('/dev/shm', `kinu-daemon-digest-${process.pid}.md`);
+    const ws = fakeWs();
+
+    handle({ id: 'escape', method: 'writeFileIfDigest', sandbox: scoped([root]), params: [outside, 'planted', null, {}] }, ws, {});
+
+    expect((await ws.response('escape')).error).toBeTruthy();
+    expect(fs.existsSync(outside)).toBe(false);
   });
 });
 
@@ -862,6 +1074,28 @@ describe('daemon checkpoint protocol', () => {
     handle({ id: 'r', method: 'checkpointRestore', sandbox: RAW, params: ['a', work, list[0].id] }, ws, ctx);
     await ws.response('r');
     expect(fs.readFileSync(path.join(work, 'src', 'a.txt'), 'utf8')).toBe('original');
+  });
+
+  test('a digest-checked replace under a hint is snapshotted first, and undo restores what it replaced', async () => {
+    const digest = (text) => require('node:crypto').createHash('sha256').update(text).digest('hex');
+    const { work, ctx } = setup();
+    const file = path.join(work, 'a.txt');
+
+    fs.writeFileSync(file, 'original');
+    const ws = fakeWs();
+
+    handle({
+      id: 'w1', method: 'writeFileIfDigest', sandbox: RAW, params: [file, 'REPLACED', digest('original'), {}],
+      checkpoint: { agent: 'a', turnId: 't', sessionId: 's', dir: work },
+    }, ws, ctx);
+    expect((await ws.response('w1')).result).toEqual({ ok: true, sha256: digest('REPLACED') });
+
+    handle({ id: 'l', method: 'checkpointList', params: ['a'] }, ws, ctx);
+    const list = (await ws.response('l')).result;
+
+    handle({ id: 'r', method: 'checkpointRestore', sandbox: RAW, params: ['a', work, list[0].id] }, ws, ctx);
+    await ws.response('r');
+    expect(fs.readFileSync(file, 'utf8')).toBe('original');
   });
 
   test('frames without a checkpoint hint behave exactly as before (no snapshot)', async () => {
@@ -1163,7 +1397,7 @@ describe('daemon process under Bun against a local hub', () => {
   const DAEMON_PATH = path.join(__dirname, '..', 'src', 'index.js');
 
   function makeConfig(root, origin) {
-    const config = { user: 'user-1', token: `pdt_${'a'.repeat(32)}`, origin };
+    const config = { user: 'user-1', device: 'device-1', token: `pdt_${'a'.repeat(32)}`, origin, root };
     const configPath = path.join(root, 'device.json');
     fs.writeFileSync(configPath, JSON.stringify(config), { mode: 0o600 });
 
@@ -1437,6 +1671,7 @@ describe('daemon process under Bun against a local hub', () => {
         ['rpc-fence00st-1', 'statPath', [path.join(root, 'device.json')]],
         ['rpc-fence00wr-1', 'writeFile', [path.join(root, 'device.json'), '{"token":"attacker"}']],
         ['rpc-fence00un-1', 'unlinkPath', [path.join(root, 'device.json')]],
+        ['rpc-fence00rm-1', 'rmdirPath', [root]],
         ['rpc-fence00mk-1', 'mkdirPath', [path.join(root, 'planted')]],
       ];
 

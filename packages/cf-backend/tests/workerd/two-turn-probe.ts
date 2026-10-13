@@ -24,8 +24,9 @@ import {
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { configureRemoteAiFixture } from '../helpers/remote-ai-profile';
 import { KINU_TIMER_JOB, TERMINAL_RETRY_JOB } from '../../src/wake-jobs';
-import { ROOT_SLATE_CALLER } from '../../src/slates/bindings';
-import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
+import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
+import { ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
+import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { meterInPlace, type MeteredTurn, type SqlMeter, type TurnCrossings } from './sql-meter';
 import { Crossings } from './crossings';
 import { AgentWorkspaceHost, AgentWorkspaceRPC } from '../../src/agent-facets';

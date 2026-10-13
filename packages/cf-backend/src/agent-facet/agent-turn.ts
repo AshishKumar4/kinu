@@ -12,7 +12,7 @@ import {
 import { attempt, diagnostics, hold, logged, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import type { NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
-import { routedModelReads, type AgentProviderDeps, type AgentProviderRegistry, type UserCredentialClient } from '../providers/agent-registry';
+import { routedModelReads, type AgentProviderDeps, type AgentProviderRegistry, type UserCredentialClient, type UserCredentialSource } from '../providers/agent-registry';
 import { compactionDiagnostics, hostedActorCompaction } from '@kinu.run/compaction';
 import type { AgentDatabase } from './agent-database';
 import type { StepPacer } from './step-pacer';
@@ -203,7 +203,7 @@ const CREDENTIAL_HELD_MS = 5 * 60_000;
 
 /** The credentials an isolate holds, and the account revision they were read under. */
 interface CredentialBroker {
-  readonly client: UserCredentialClient;
+  readonly client: UserCredentialSource;
   readonly held: Map<string, { readonly at: number; readonly auth: AuthResolution | null }>;
   revision: number | null;
 }
@@ -216,7 +216,7 @@ const brokers = new WeakMap<AgentWorkspace, CredentialBroker>();
  * the account's credentials moved (the revision its turn opened under), it is older than {@link CREDENTIAL_HELD_MS}, or an
  * upstream refused the one held, whichever turn of it asks.
  */
-function brokeredCredentials(workspace: AgentWorkspace, revision: number | null): UserCredentialClient {
+function brokeredCredentials(workspace: AgentWorkspace, revision: number | null): UserCredentialSource {
   const broker = brokers.get(workspace) ?? heldCredentials(workspace);
 
   // A preparation that opened no turn read no revision: what is held stands.
@@ -233,8 +233,9 @@ function brokeredCredentials(workspace: AgentWorkspace, revision: number | null)
 function heldCredentials(workspace: AgentWorkspace): CredentialBroker {
   const held = new Map<string, { readonly at: number; readonly auth: AuthResolution | null }>();
 
-  const client: UserCredentialClient = {
-    getAuth: async (_caller, key, opts) => {
+  const client: UserCredentialSource = {
+    caller: async () => AGENT_CALLER,
+    getAuth: async (key, opts) => {
       const known = held.get(key);
 
       if (opts?.rejected === undefined && known !== undefined && Date.now() - known.at < CREDENTIAL_HELD_MS) return known.auth;
@@ -245,9 +246,11 @@ function heldCredentials(workspace: AgentWorkspace): CredentialBroker {
       return auth;
     },
     listCredentials: () => workspace.listCredentials(),
-    relayDevice: (_caller, provider) => workspace.relayDevice(provider),
-    relayModelCall: (_caller, deviceId, callId, request) => workspace.relayModelCall(deviceId, callId, request),
-    cancelModelRelay: (_caller, callId) => workspace.cancelModelRelay(callId),
+    hub: () => ({
+      relayDevice: (_caller, provider) => workspace.relayDevice(provider),
+      relayModelCall: (_caller, deviceId, callId, request) => workspace.relayModelCall(deviceId, callId, request),
+      cancelModelRelay: (_caller, callId) => workspace.cancelModelRelay(callId),
+    }),
   };
 
   return { client, held, revision: null };
@@ -326,7 +329,7 @@ export type FacetModels = (deps: Omit<AgentProviderDeps, 'env'>) => AgentProvide
 
 function facetModels(actor: HostedActor, workspace: AgentWorkspace, models: FacetModels, prepared: PreparedAgentTurn): AgentProviderRegistry {
   return models({
-    userDO: { stub: brokeredCredentials(workspace, prepared.credentialsRevision), caller: AGENT_CALLER },
+    userDO: brokeredCredentials(workspace, prepared.credentialsRevision),
     accountFor: (provider) => actor.stores.config.getProviderAccounts()[provider] ?? prepared.accounts[provider]
       ?? prepared.sources.profileInputs.envelope.catalog.accounts?.[provider],
     appTitle: 'Kinu',

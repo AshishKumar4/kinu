@@ -9,6 +9,7 @@ import { env } from 'cloudflare:workers';
 import { abortAllDurableObjects } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import * as v from 'valibot';
+import type { DeviceHelloSchema } from '@kinu.run/core';
 import {
   DEVICE_CANCEL_METHOD, DEVICE_CONNECT_PATH, DEVICE_EXEC_ACK_METHOD,
   DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION, JsonValueSchema, nextDeviceRequestId, type JsonValue,
@@ -180,10 +181,13 @@ async function machine(owner: string, workspace: string, answer: (frame: v.Infer
     else socket.send(JSON.stringify({ id: frame.output.id, result: reply.said }));
   });
 
-  socket.send(JSON.stringify({
+  const hello = {
     type: 'HELLO', protocolVersion: DEVICE_PROTOCOL_VERSION, features: [...DEVICE_FEATURES], os: 'linux', hostname: 'studio',
+    arch: 'x64', updateCheck: true, root: '/home/ashish/project', home: '/home/ashish', runtime: 'Bun 1.4.2',
     agentRoot: '/home/ashish/.kinu/agents', sandbox: { capability: 'sandboxed', reason: null, gpu: [] },
-  }));
+  } satisfies v.InferOutput<typeof DeviceHelloSchema>;
+
+  socket.send(JSON.stringify(hello));
   await (hosted ? account(owner).hostWorkspace(workspace, deviceId) : account(owner).bindWorkspace(workspace, deviceId));
 
   return {

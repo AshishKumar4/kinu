@@ -16,8 +16,8 @@ import type { AuthIdentity } from '../auth/session';
 import { deriveUserId } from '../auth/store';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import { workspaceOwner } from '../workspace-owner-rpc';
-import { ROOT_SLATE_CALLER } from '../slates/bindings';
 import type { ErrorCode } from '@kinu.run/core/obs';
+import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 import { ownerGate, rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
 
 /** Its own salt and info, so preview and blueprint tokens never verify each other. */
@@ -29,7 +29,7 @@ function blueprintMessage(workspace: string, share: string): string {
 
 /** Null on a deployment with no signing secret. */
 async function mintBlueprintId(env: Env, workspace: string, share: string): Promise<string | null> {
-  const secret = blueprintSigner.secrets(env)[0];
+  const secret = blueprintSigner.secret(env);
 
   if (secret === undefined) return null;
 

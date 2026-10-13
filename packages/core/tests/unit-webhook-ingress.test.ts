@@ -447,9 +447,11 @@ describe('webhook registration', () => {
     expect(triggers.list()).toEqual([]);
   });
 
-  test('a secret store with no table yet answers null rather than throwing', async () => {
+  test('a secret store initializes its table and answers null for an absent secret', async () => {
     const db = new Database(':memory:');
-    expect(await createWebhookSecretStore(makeSql(db)).get('webhook_secret_absent')).toBeNull();
+    const sql = makeSql(db);
+    initEventsHubTables(sql);
+    expect(await createWebhookSecretStore(sql).get('webhook_secret_absent')).toBeNull();
   });
 });
 

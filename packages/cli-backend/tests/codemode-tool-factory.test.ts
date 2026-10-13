@@ -483,7 +483,7 @@ test('each workspace.slates member reaches the slate host as one operation, and 
     slate: async (operation) => {
       operations.push(operation);
 
-      return operation.op === 'remove' ? { ok: false, reason: 'denied', error: 'not yours' } : { ok: true, value: operation.op };
+      return operation.op === 'remove' ? { ok: false, success: false, reason: 'denied', error: 'not yours' } : { ok: true, value: operation.op };
     },
   });
 

@@ -57,7 +57,9 @@ it('git clone of a workspace path is refused for what it is, never for a missing
   // namespace ...` or refuses a host op; this workspace must never say that.
   expect(cloned.stdout).not.toContain('composeFabric');
   expect(cloned.stdout).not.toContain('is a host op');
-  expect(cloned.stdout).toContain('clone failed');
+  // Nimbus's git clones over HTTP only: a path is refused, and no clone is made.
+  expect(cloned.exitCode).not.toBe(0);
+  expect((await probe.runInWorkspace(workspace, 'test -e /home/main/copy/README.md')).exitCode).not.toBe(0);
 });
 
 it('git clone lands the commit, and -C reads the clone from outside it', async () => {

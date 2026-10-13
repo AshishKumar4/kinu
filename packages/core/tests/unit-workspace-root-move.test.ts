@@ -43,8 +43,6 @@ async function nimbusSeededWorkspace(): Promise<Database> {
 
   kernel.writeFile('/home/main/SOUL.md', SOUL);
   kernel.chmod('/home/main/SOUL.md', 0o444);
-  user.mkdir('/home/main/slates/queue', { recursive: true });
-  user.writeFile('/home/main/slates/queue/package.json', '{"name":"queue"}');
   user.writeFile('/home/main/notes.md', '# coupon regression\n');
   user.mkdir('/home/main/data/2026', { recursive: true });
   user.writeFile('/home/main/data/2026/rows.csv', 'id,kind\n1,percent\n');
@@ -97,6 +95,8 @@ async function withHire(database: Database) {
   const identity = agentIdentity(workspaceSql(database), agent);
   const home = provisionAgentHome(kernel, agent, identity);
   const builder = (await bundle.session()).vfs.as(agentCred(identity));
+  user.mkdir('/slates/queue', { recursive: true });
+  user.writeFile('/slates/queue/package.json', '{"name":"queue"}');
 
   return { kernel, user, builder, home };
 }
@@ -150,43 +150,12 @@ describe('slates', () => {
     expect(kernel.readdir('/slates')).toEqual([]);
   });
 
-  test('no agent changes who shares /slates, and a /slates an agent made is the workspace\'s on the next boot', async () => {
+  test('no agent changes who shares /slates', async () => {
     const database = await nimbusSeededWorkspace();
-    const { kernel, user, builder } = await withHire(database);
+    const { user, builder } = await withHire(database);
 
     expect(() => user.chmod('/slates', 0o755)).toThrow('EPERM');
     expect(() => builder.chmod('/slates', 0o755)).toThrow('EPERM');
 
-    // As an agent could have made it before /slates was the workspace's: its own, and a slate in it.
-    kernel.chown('/slates', SESSION_UID, SESSION_UID);
-    kernel.chmod('/slates', 0o755);
-    kernel.chmod('/slates/queue', 0o755);
-    kernel.chmod('/slates/queue/package.json', 0o644);
-
-    const booted = await withHire(database);
-
-    booted.builder.writeFile('/slates/queue/package.json', '{"name":"queue","title":"Queue"}');
-    booted.builder.mkdir('/slates/tracker');
-    expect(booted.kernel.readFileString('/slates/queue/package.json')).toBe('{"name":"queue","title":"Queue"}');
-  });
-
-  test('a slates move cut short finishes on the next boot', async () => {
-    const database = await nimbusSeededWorkspace();
-    await boot(database);
-    // What a boot that stopped after moving the first slate left behind: the rest still under the old root.
-    const { kernel } = await substrate(database);
-    kernel.mkdir('/home/main/slates/board', { recursive: true });
-    kernel.writeFile('/home/main/slates/board/package.json', '{"name":"board"}');
-
-    for (const path of ['/home/main/slates', '/home/main/slates/board', '/home/main/slates/board/package.json']) {
-      kernel.chown(path, SESSION_UID, SESSION_UID);
-    }
-
-    const booted = await withHire(database);
-
-    expect(booted.kernel.readdir('/slates').map((entry) => entry.name).sort((a, b) => a.localeCompare(b))).toEqual(['board', 'queue']);
-    expect(booted.kernel.exists('/home/main/slates')).toBe(false);
-    booted.builder.writeFile('/slates/board/package.json', '{"name":"board","title":"Board"}');
-    expect(booted.kernel.readFileString('/slates/board/package.json')).toBe('{"name":"board","title":"Board"}');
   });
 });

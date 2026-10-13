@@ -248,7 +248,7 @@ export interface ResolvedSwarm {
 }
 
 function badInput(error: string): SwarmRefusal {
-  return { reason: 'bad_input', error: refusalOf(new KinuError('bad_input', error)).error };
+  return { ...refusalOf(new KinuError('bad_input', error)), reason: 'bad_input' };
 }
 
 /**

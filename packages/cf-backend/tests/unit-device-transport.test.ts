@@ -289,6 +289,24 @@ describe('createHubDeviceTransport', () => {
     expect(requiredCall(hub.rpcCalls, 2)[2]?.checkpoint).toBeUndefined();
   });
 
+  test('a digest-checked write carries the checkpoint hint, so the daemon snapshots the file before replacing it', async () => {
+    const hub = fakeHub(() => ({ connected: true, registered: true, toolchain: null }));
+
+    const transport = createHubDeviceTransport({
+      hub: () => hub,
+      caller,
+      agentName: 'agent-1',
+      cliCwd: () => '/home/u/proj',
+      checkpointMeta: () => ({ turnId: 'msg-42', sessionId: 'default' }),
+    });
+
+    await transport.rpc('writeFileIfDigest', ['/home/u/proj/a.txt', 'ZGF0YQ==', null, { encoding: 'base64' }]);
+
+    expect(requiredCall(hub.rpcCalls, 0)[2]?.checkpoint).toEqual({
+      agent: 'agent-1', turnId: 'msg-42', sessionId: 'default', dir: null,
+    });
+  });
+
   test('no checkpoint hint outside a turn or when the meta seam is unwired', async () => {
     const hub = fakeHub(() => ({ connected: true, registered: true, toolchain: null }));
     const unwired = createHubDeviceTransport({ hub: () => hub, caller, agentName: 'a', cliCwd: () => null });

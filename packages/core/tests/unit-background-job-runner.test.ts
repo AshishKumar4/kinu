@@ -1,6 +1,6 @@
 import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // BackgroundJobRunner lifecycle over a fake fiber and fake BackendHost, no DO.
-import { describe, test, expect } from 'bun:test';
+import { describe, test, expect, setSystemTime } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   BackgroundJobRunner, JobNotResumable, MAX_CONCURRENT_DETACHED_JOBS, newJobId,
@@ -75,6 +75,7 @@ function setup(opts: {
   onCancelled?: ((jobId: string) => Promise<void> | void) | null;
   scheduleResume?: (atMs: number) => Promise<void> | void;
   holder?: JobHolder;
+  drivenHere?: Set<string>;
   clock?: Clock;
   alive?: () => Promise<void>;
 } = {}) {
@@ -114,6 +115,7 @@ function setup(opts: {
     harvest: opts.harvest,
     scheduleResume: opts.scheduleResume,
     holder: opts.holder,
+    drivenHere: opts.drivenHere,
     clock: opts.clock,
     alive: opts.alive,
   };
@@ -857,6 +859,47 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
     expect({ live: store.get('jl')?.resumeAttempts, gone: store.get('jg')?.resumeAttempts }).toEqual({ live: 0, gone: 1 });
     expect(Object.fromEntries(held)).toEqual({ jl: 'daemon', jg: 'this' });
     expect(held.get(runner.create('think', {}, 'build', new AbortController()))).toBe('this');
+  });
+
+  test('a re-drive another live process is driving owes this runner no wake, before its next attempt or after', () => {
+    const holder: JobHolder = { hold: () => {}, heldElsewhere: (jobId) => jobId === 'jr', take: () => 'held' };
+    const { runner, store } = setup({ resume: () => new Promise<never>(() => {}), holder });
+    const now = Date.now();
+
+    store.create({ id: 'jr', kind: 'agents', workMode: 'build', input: '{}', now });
+    // The other process's re-drive armed its next attempt as it took the job.
+    store.deferResume('jr', now + 60_000);
+    expect(runner.nextResumeAt()).toBeNull();
+
+    setSystemTime(now + 120_000);
+
+    try {
+      expect(runner.nextResumeAt()).toBeNull();
+    } finally {
+      setSystemTime();
+    }
+  });
+
+  test('a re-drive another runner in this process drives owes the others no wake', async () => {
+    const drivenHere = new Set<string>();
+    const resumed: string[] = [];
+
+    const resume = (_kind: string, input: JsonValue) => {
+      resumed.push(JSON.stringify(input));
+
+      return new Promise<never>(() => {});
+    };
+
+    const driver = setup({ resume, drivenHere });
+    const other = setup({ db: driver.db, resume, drivenHere });
+
+    driver.store.create({ id: 'jh', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
+    await driver.runner.recoverOrphans();
+    await other.runner.recoverOrphans();
+
+    // Driven once, by the runner that took it: the other neither runs it again nor arms a wake for it.
+    expect({ resumed, driver: driver.runner.nextResumeAt(), other: other.runner.nextResumeAt() })
+      .toEqual({ resumed: ['{}'], driver: null, other: null });
   });
 
   /** Two processes on one SQLite file: this one, and a live `sleep` standing in for the other. */

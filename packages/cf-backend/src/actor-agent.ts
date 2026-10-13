@@ -1,5 +1,8 @@
 import { Cause, Effect, Exit } from 'effect';
+import { idempotent } from '@nimbus-sh/fabric/do-calls.js';
+import { logDoCallRetry } from './obs/do-call-retry';
 import type { VfsDirent, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
+import { type SlateCaller, type SlateCallerHop } from '@kinu.run/core/slates';
 /**
  * Actor-agnostic substrate beneath every full-loop Kinu actor on the Cloudflare backend.
  * Tool gating is structural: a profile with no `team` deps gets no hiring actions on `agents`.
@@ -43,7 +46,6 @@ import {
   type RpcFrame,
 } from "./cli/rpc-gate";
 import { codemodeSurface, HeldReads, hostedWindowMay, PAGE_KEEPALIVE, readsWrittenBy, requiredRpcAccess, ROSTER_READS, rpcMovesOverview, type LiveRead, type SqlExec } from "@kinu.run/core";
-import { retryTransientDO } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
 import { attempt, attemptInItsWords, createAgentTracing, hold, recording, renderThrownChain, type AgentTracing, settle, settleSync, settleLoggedSync, settleLogged } from "@kinu.run/core/obs";
 import {
@@ -105,7 +107,7 @@ import {
   buildModelCallEvent,
   type FactsStore,
   createAgentStores, type AgentConfigStore, type SetModelDeps, collectDynamicContext, dynamicReads, type DynamicReads, subordinateDelegatesOf,
-  nimbusSessionFiles, agentArtifactDirectory, agentHome, MAIN_AGENT,
+  agentArtifactDirectory, agentHome, MAIN_AGENT,
   type SessionTranscript,
   type SqlExecutor,
   betaSwarms,
@@ -160,7 +162,7 @@ import {
   toolsInWorkMode, type TaskPlan, withTaskPlan, providersInWorkMode, currentWorkMode, requireWorkModePermission, McpProtocolFailureSchema, McpToolError,
   type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing,
   type AgentInbox,
-  type NimbusSandboxHandle, childContextResolver,
+  childContextResolver,
 } from "@kinu.run/core";
 import {
   bindAgentSql, createCFRuntime, isCFRuntime, MODEL_SETTINGS,
@@ -191,14 +193,13 @@ import type { AgentStoreBroker } from "./agent-facets";
 import type { CodemodeProvider, DeferredApprovalChannel, SlateRoute, SlateCallResult, SlateOperation, SlateReadModel, SlateSurfaceValue } from "@kinu.run/core";
 import { workspaceOwner } from "./workspace-owner-rpc";
 import { CRED_SESSION_USER } from "@nimbus-sh/core/runtime/os-contracts.js";
-import type { SlateCaller, SlateCallerHop } from "./slates/bindings";
 import type { SlateDispatchContext } from "./slates/host";
 import { diagnostics, KinuError, refusalOf, toKinuError, tolerate, type ErrorCode, type Refusal } from "@kinu.run/core/obs";
 import type { UserDO } from "./user/user-do";
 import type { McpToolSurface } from "./user/mcp-servers";
 import type { UserDoRpcMethod } from "./rpc-surface";
 import { isWorkspaceTerminal, WorkspaceTerminalInputSchema } from "@kinu.run/core";
-import type { WorkspaceTerminal } from "./workspace-host";
+import type { HostedBox, HostedWorkspace, WorkspaceTerminal } from "./workspace-host";
 import type { UserCaller } from "@kinu.run/core";
 import { sha256Hex } from '@kinu.run/core';
 import { attributeWorkspace, installAnalyticsDiagnostics } from "@kinu.run/core/analytics";
@@ -562,7 +563,8 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** One Durable Object owns the workspace bytes: a top-level workspace DO serves from its own
    * storage; a facet actor returns a client onto that object. */
-  protected abstract workspaceBox(shellId: string): NimbusSandboxHandle;
+  protected abstract workspaceBox(shellId: string): HostedBox;
+  protected abstract workspaceServing(): ReturnType<HostedWorkspace['serving']>;
 
   protected scaffoldPath(): string { return 'scaffold/agent.js'; }
 
@@ -1528,10 +1530,10 @@ export abstract class ActorAgent extends Agent<Env> {
     }
 
     try {
-      const { stub, caller } = await this.userHub();
+      const caller = await this.userCaller();
 
-      const verified = await retryTransientDO('verifySocketSession',
-        () => stub.verifySocketSession(caller, session.tokenHash));
+      const verified = await idempotent('verifySocketSession', () => this.requireOwnerUserDO(),
+        (stub) => stub.verifySocketSession(caller, session.tokenHash), { onRetry: logDoCallRetry });
 
       return verified.live ? null : SESSION_AUTHORITY_REVOKED;
     } catch (cause) {
@@ -1550,10 +1552,10 @@ export abstract class ActorAgent extends Agent<Env> {
     if (!bearer.readable) return 'This connection carries no readable authorization. Reconnect with: kinu auth';
 
     try {
-      const { stub, caller } = await this.userHub();
+      const caller = await this.userCaller();
 
-      const verified = await retryTransientDO('verifyCliSocketBearer',
-        () => stub.verifyCliSocketBearer(caller, bearer.tokenHash));
+      const verified = await idempotent('verifyCliSocketBearer', () => this.requireOwnerUserDO(),
+        (stub) => stub.verifyCliSocketBearer(caller, bearer.tokenHash), { onRetry: logDoCallRetry });
 
       if (verified.live && verified.generation <= bearer.generation) return null;
 
@@ -2032,7 +2034,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected readonly stores = createAgentStores(
     () => this.boundSql, () => this.actorHandle(), write => this.ctx.storage.transactionSync(write),
     async () => ({
-      vfs: nimbusSessionFiles(this.workspaceBox(this.shellId()), { home: WORKSPACE_ROOT, cred: CRED_SESSION_USER }),
+      vfs: this.workspaceBox(this.shellId()).store({ home: WORKSPACE_ROOT }),
       artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)),
     }),
   );
@@ -2287,6 +2289,9 @@ export abstract class ActorAgent extends Agent<Env> {
 
   private _jobAuthorities: WorkspaceJobAuthorities | null = null;
 
+  /** Every job a runner in this Durable Object drives now, shared by all of them through their ports. */
+  private readonly jobsDrivenHere = new Set<string>();
+
   protected get jobAuthorities(): WorkspaceJobAuthorities {
     this._jobAuthorities ??= new WorkspaceJobAuthorities({
       root: () => ({ kind: 'root', actorId: this.actorHandle().actorId, store: this.jobs, runner: this.jobRunner }),
@@ -2319,6 +2324,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected workspaceJobPorts(owner: string | null): WorkspaceJobPorts {
     return {
       clock: this.jobClock(),
+      drivenHere: this.jobsDrivenHere,
       alive: jobContextAnswers,
       jobOutput: (frame) => { this.broadcastToActor(owner, JSON.stringify(frame)); },
       // Only this request's device work moves; parallel foreground commands remain stoppable.
@@ -2370,14 +2376,14 @@ export abstract class ActorAgent extends Agent<Env> {
   protected readonly boxUse: WorkspaceBoxUse = { used: false };
 
   /**
-   * Records which running job's command holds each exposed sandbox port when that can move (a port exposed or
-   * withdrawn, a job detached or settled), so a listing reads a row and never the box. Only a box this activation
-   * used is asked, and one that is down is not read: the next exposure reads again.
+   * Records which running job's command holds each exposed port, the workspace's or the box's, when that can move (a
+   * port exposed, listened on or withdrawn, a job detached or settled), so a listing reads a row and never the box. Only
+   * a box this activation used is asked, and one that is down is not read: the next exposure reads again.
    */
   protected async servingMoved(): Promise<void> {
-    const holders = this._rt?.sandboxPortHolders() ?? null;
+    const holders = this._rt?.portHolders();
 
-    if (holders !== null) await recordServingJobs(this.jobs, holders);
+    if (holders !== undefined) await recordServingJobs(this.jobs, holders);
   }
   protected get config(): AgentConfigStore {
     return this.stores.config;
@@ -2614,6 +2620,7 @@ export abstract class ActorAgent extends Agent<Env> {
         ctx: this.ctx,
         holdLane: (body) => this.holdLane(body),
         workspaceBox: (shellId) => this.workspaceBox(shellId),
+        workspaceServing: () => this.workspaceServing(),
         getCliCwdForDevice: () => this.getCliCwdForDevice(),
         getCheckpointMetaForDevice: () => this.getCheckpointMetaForDevice(),
       }, {

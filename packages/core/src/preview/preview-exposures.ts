@@ -1,9 +1,11 @@
 // KV projection of published sandbox previews: `proxyToSandbox` creates the Durable Object before checking the
 // token, so the edge must prove the label was published without touching any per-name object. Tokens stored hashed.
 //
-// One generation decides: an exposure's `publishedAt` is when its authority was established (a publish, or a listing's
-// read of the container), and a withdrawal, of one port or of the whole sandbox, outranks every generation at or before
-// it. So no read of the container, however late it lands, restores a port withdrawn after that read.
+// Only a publish establishes an exposure: a listing of the container is no authority, so it keeps a published record
+// alive and never creates one. A withdrawal deletes the record, which only a later publish recreates, whatever the
+// container still reports and however long its own revoke stays undone. A withdrawal mark, of one port or of the whole
+// sandbox, outranks every generation at or before it, so a listing in flight across the withdrawal does not renew the
+// record it read before.
 
 import { Effect } from 'effect';
 import { settle } from '../obs/effect';
@@ -78,12 +80,9 @@ export async function sandboxPreviewExposed(
 export interface SandboxPreviewExposures {
   /** Throws once this writer's workspace has been destroyed. */
   publish(port: number, token: string): Promise<void>;
-  /**
-   * Keeps an exposure a listing read at `observedAt` alive: written only when missing or past half-life, at its own
-   * generation (or `observedAt` when it was never published here). A port withdrawn here is carried back only by a
-   * publish: no listing, however late, vouches for it again.
-   */
-  refresh(port: number, token: string, observedAt: number): Promise<void>;
+  /** Keeps a published exposure a listing still reports alive: rewritten past half-life, at its own generation. Never
+   *  creates one. */
+  refresh(port: number, token: string): Promise<void>;
   /** Outranks every generation of this port so far; only a later publish exposes it again. */
   withdraw(port: number): Promise<void>;
   /** What the edge answers for this sandbox's label: {@link sandboxPreviewExposed}. */
@@ -123,23 +122,21 @@ export function sandboxPreviewExposures(
         yield* Effect.promise(() => write(port, token, Date.now()));
       }));
     },
-    async refresh(port, token, observedAt) {
+    async refresh(port, token) {
       const [held, withdrawn, revocation] = await Promise.all([
         readKvJson(kv, exposureKey(sandboxId, port), EXPOSURE_SCHEMA),
         withdrawnBefore(kv, sandboxId, port),
         readRevocation(),
       ]);
 
-      // This writer's own workspace was destroyed.
-      if (revocation !== null && revocation.revokedBefore >= born) return;
-      const same = held !== null && timingSafeEqual(held.tokenHash, await sha256Hex(token));
-      const generation = same ? held.publishedAt : observedAt;
+      // Nothing published it, or its token is not this one: a listing vouches for nothing.
+      if (held === null || !timingSafeEqual(held.tokenHash, await sha256Hex(token))) return;
 
-      // Withdrawn here: only a record a later publish made is kept alive; re-observation vouches for nothing.
-      if (withdrawn !== null && !(same && held.publishedAt > withdrawn)) return;
+      // This writer's workspace was destroyed, or the port withdrawn since this record's publish.
+      if ((revocation !== null && revocation.revokedBefore >= born) || (withdrawn !== null && held.publishedAt <= withdrawn)) return;
 
-      if (same && (held.refreshedAt ?? held.publishedAt) > Date.now() - REFRESH_AFTER_MS) return;
-      await write(port, token, generation);
+      if ((held.refreshedAt ?? held.publishedAt) > Date.now() - REFRESH_AFTER_MS) return;
+      await write(port, token, held.publishedAt);
     },
     async withdraw(port) {
       await writeKvJson(kv, withdrawalKey(sandboxId, port), { revokedBefore: Date.now() }, PREVIEW_EXPOSURE_TTL_MS);

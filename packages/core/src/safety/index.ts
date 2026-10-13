@@ -32,12 +32,16 @@ export { ParkedWriteFiles, type ParkedWriteFileOps } from './parked-write-files'
 export {
   EGRESS_PLACEHOLDER_PREFIX,
   PLACEHOLDER_BODY_LENGTH,
+  egressPlaceholdersIn,
+  egressGrants,
   grantedEgressBindings,
   isEgressPlaceholder,
   findEgressPlaceholders,
   egressSecretRule,
   egressHostMatches,
   planEgress,
+  scrubBytes,
+  closeReason,
   scrubText,
   createScrubStream,
   type EgressSecretBinding,
@@ -53,7 +57,6 @@ export {
   putEgressSecret,
   revokeEgressSecret,
   resolveEgressInjection,
-  rewrapEgressSecrets,
   type EgressSecretSummary,
   type PutEgressSecretInput,
   type EgressInjection,
@@ -162,6 +165,7 @@ export {
 } from './workspace-proposals';
 
 export {
+  egressHost,
   refusedHostname,
 } from './egress-destination';
 

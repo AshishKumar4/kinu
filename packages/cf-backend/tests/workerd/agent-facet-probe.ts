@@ -1,9 +1,9 @@
-import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Shipped workspace and facet bundles: isolated turns over one shared Nimbus file plane. */
 import { getAgentByName, type AgentContext } from 'agents';
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
-import { agentHome, JsonValueSchema, ownerCaller, runNodeAgent, toolsInWorkMode, type Clock } from '@kinu.run/core';
+import { agentHome, JsonValueSchema, ownerCaller, runNodeAgent, toolsInWorkMode, WORKSPACE_ROOT, type Clock } from '@kinu.run/core';
 import { narrowToolSurface } from '@kinu.run/core';
 import { handClock } from '@kinu.run/test-utils/hand-clock';
 import { diagnostics } from '@kinu.run/core/obs';
@@ -12,12 +12,14 @@ import { HIRE_CHILD_MODEL, hireControlUrl, hireModelsBaseUrl, JOB_MISSION, type 
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { configureRemoteAiFixture } from '../helpers/remote-ai-profile';
 import { hostedActorPlacement } from '../../src/actor-hosting';
-import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
-import { ROOT_SLATE_CALLER, SlateBinding } from '../../src/slates/bindings';
+import { ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
+import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
+import { SlateBinding } from '../../src/slates/bindings';
+import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 import { createRuntimeExecutor, jobContextAnswers } from '../../src/codemode-sandbox';
 import { SLATE_STORAGE_BINDING, type SlateSurfaceResult } from '@kinu.run/core';
 import type { AgentFacet } from './agent-facet-probe-agent';
-import type { AgentFacetAnswer, CraftedFromNodeObservation, NodeJobObservation, OnePlaneObservation, ProbeContention, RelayedAnswer, SwarmFacetObservation } from './agent-facet-shapes';
+import type { CraftedFromNodeObservation, NodeJobObservation, OnePlaneObservation, ProbeContention, RelayedAnswer, SwarmFacetObservation } from './agent-facet-shapes';
 
 export * from '../../src/server';
 
@@ -104,8 +106,6 @@ export class OrchestratorAgent extends ProductionOrchestrator {
     if (homeName === null) throw new Error('a subordinate has a home');
     const home = agentHome(homeName);
     const facet = await this.agentFacetOf<AgentFacet>(child.actorId);
-    const agentShell: AgentFacetAnswer = await facet.exec('pwd; id -u');
-
     await facet.write(`${home}/a`, 'written by the agent');
     const main = this.workspaceBox(hostedActorPlacement(directory.describe(directory.main())).shellId);
     const mainCat = await main.exec(`cat ${home}/a`);
@@ -114,8 +114,8 @@ export class OrchestratorAgent extends ProductionOrchestrator {
 
     return {
       home,
-      agentShell,
-      mainRead: await main.files.read(`${home}/a`),
+      mainRead: await readText(main.store({ home: WORKSPACE_ROOT }), `${home}/a`),
+      writer: (await main.store({ home: WORKSPACE_ROOT }).stat(`${home}/a`))?.uid ?? null,
       mainCat: { exitCode: mainCat.exitCode, stdout: mainCat.stdout, stderr: mainCat.stderr },
       sameIsolate: (await facet.boot()) === bootId,
     };

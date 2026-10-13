@@ -252,7 +252,6 @@ export interface AgentFacetPlacement {
   readonly actorId: string;
   readonly storageKey: string;
   readonly workspaceName: string;
-  readonly shellId: string;
   readonly home: string;
   readonly providers: ProviderEnv;
 }
@@ -316,9 +315,7 @@ export function agentFacet<Facet extends AgentFacet = AgentFacet>(
   const facetEnv = {
     WORKSPACE: exports.AgentWorkspaceRPC({ props: { workspace, actorId: placement.actorId } }),
     WORKSPACE_NAME: placement.workspaceName,
-    SHELL_ID: placement.shellId,
     HOME: placement.home,
-    STATE_SHELL_ID: agentStateShellId(placement.storageKey),
     ...placement.providers,
   } satisfies Record<Exclude<keyof AgentFacetEnv, keyof ProviderEnv>, Fetcher | string> & ProviderEnv;
 

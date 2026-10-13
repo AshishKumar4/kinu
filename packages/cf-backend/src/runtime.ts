@@ -6,15 +6,14 @@ import type { VFS as CoreVFS } from '@nimbus-sh/core/vfs/vfs.js';
 
 import type { AgentRuntime, ActorHandle, LLM, Schedule, Identity, SqlExecutor, SqlValue, RawSqlExec, FiberCtx, ExecutionRouter, DeferredApprovalChannel, WriteObserver, ModelCallSink, ModelOperationSink, ResolvedTurnProfile, SlateCallResult, SlateOperation, ChildContextResolver, ContextTree } from "@kinu.run/core";
 import {
-  nimbusSessionFiles, nimbusSessionShell, createShellSession,
+  nimbusSessionShell, createShellSession,
   DefaultExecutionRouter, createNimbusWorkspaceExecutor,
   workspaceFilePlane, standardMounts, contextMount, skillsMount, type WorkspacePrincipal,
   sharedDriveMount, SHARED_DRIVE_UNCLAIMED, SHARED_DRIVE_UNBOUND, type MossaicVfs,
   withApprovalGatedShell, withApprovalGatedFiles, createInheritedApprovalPolicy, holdsGrant,
   type ShellApprovalPolicy, type ShellApprovalMode, type ApprovalGrant,
-  type EgressSecretBinding,
   createSandboxExecutor, createDeviceTunnelExecutor, type DeviceTransport,
-  type NimbusSandboxHandle,
+  type WorkspaceFiles,
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore, createSqlFiber,
   createRoutedModelLane, routedLlm, bindRoute,
   createScaffoldSurface,
@@ -29,7 +28,6 @@ export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 
 import { diagnostics, toKinuError, detach } from "@kinu.run/core/obs";
 import { Effect } from 'effect';
-import { kinuEgressParams } from "./egress/configure";
 import { BOX_SIZES, BOX_SIZE_ORDER, DEFAULT_BOX_SIZE, type BoxSize } from "@kinu.run/devbox/sizes";
 import { accountSandboxSize, SANDBOX_SIZE_CONFIG_KEY } from "./sandbox-size";
 import { driveBound, tenantDrive } from "./drive/tenant";
@@ -53,11 +51,13 @@ import {
   type AgentProviderRegistry,
   type UserCredentialClient,
   type UserCredentialSource,
+  userCredentials,
 } from "./providers/agent-registry";
 import { ownerCaller, type UserCaller } from "@kinu.run/core";
 import { adaptMemory, backfillMemoryVectors } from "@kinu.run/core";
 import { actorAffinity } from "@kinu.run/core";
 import { nimbusPreviewConfigured } from "./nimbus-route";
+import { workspaceServingScope, type HostedBox, type WorkspaceServing } from "./workspace-host";
 
 /**
  * Every logical actor in a workspace is built over the root object's `name` and `sql`; runtimes
@@ -72,7 +72,9 @@ export interface CFRuntimeAccess {
   holdLane<T>(body: () => Promise<T>): Promise<T>;
   /** One box per workspace: a child composing its own gets a second, empty filesystem
      *  (tests/unit-head-fork.test.ts). Actors are separated by `shellId` and credential. */
-  workspaceBox(shellId: string): NimbusSandboxHandle;
+  workspaceBox(shellId: string): HostedBox;
+  /** The workspace's exposed ports, the jobs listening on them, and the jobs it runs (`HostedWorkspace.serving`). */
+  workspaceServing(): Promise<WorkspaceServing>;
   getCliCwdForDevice?(): string | null;
   getCheckpointMetaForDevice?(): { turnId: string; sessionId: string } | null;
 }
@@ -137,24 +139,6 @@ function userDOStubFor(env: Env, actor: ActorRuntimeIdentity): RuntimeUserDOClie
   return namespace.get(namespace.idFromName(userId));
 }
 
-/** An unreadable vault rejects: the sandbox handle memoizes this configuration, so an empty answer would
- *  strip every injectable secret for the handle's life. */
-async function listOwnerEgressVault(
-  env: Env, actor: ActorRuntimeIdentity,
-): Promise<EgressSecretBinding[]> {
-  const userId = actor.ownerUserId();
-
-  if (!userId) return [];
-  // Used, never copied (see `userDOStubFor`).
-  const vault: EgressVaultClient = env.UserDO.get(env.UserDO.idFromName(userId));
-
-  return [...await vault.listEgressSecrets(await ownerCaller(env))];
-}
-
-interface EgressVaultClient {
-  listEgressSecrets(caller: UserCaller): Promise<readonly EgressSecretBinding[]>;
-}
-
 async function ownerSandboxSize(env: Env, actor: ActorRuntimeIdentity): Promise<BoxSize | null> {
   const owner = userDOStubFor(env, actor);
 
@@ -196,22 +180,28 @@ interface RootApprovalClient {
 }
 
 function userCredentialSourceFor(env: Env, actor: ActorRuntimeIdentity): UserCredentialSource | null {
-  const stub = userDOStubFor(env, actor);
+  const userId = actor.ownerUserId();
 
-  return stub ? { stub, caller: () => userCallerFor(actor) } : null;
+  if (!userId) return null;
+  const namespace: RuntimeUserDONamespace = env.UserDO;
+  const userObject = namespace.idFromName(userId);
+
+  return userCredentials(() => namespace.get(userObject), () => userCallerFor(actor));
 }
 
 export type CFRuntime = AgentRuntime & {
   /** Also what the parent-file RPC serves a fork, so a fork reads exactly its parent's bytes. */
-  localVfs: ReturnType<typeof nimbusSessionFiles>;
+  localVfs: WorkspaceFiles;
   /** `refreshStatus()` is awaited at turn start. */
   deviceTransport: DeviceTransport;
   vectorStore: import("@kinu.run/core").VectorStore;
   startupWork: Promise<void>;
   sandboxHandle: SandboxHandle | null;
-  /** Who holds the box's exposed ports, read without the executor's touch; null until this activation used its box:
-   *  a call activates the box's object, and only real use keeps a box alive (D56). */
-  sandboxPortHolders(): PortHolders | null;
+  /**
+   * Which job holds each exposed port, the workspace's and the box's, read without the executor's touch. The box is read
+   * only once this activation used it: a call activates the box's object, and only real use keeps a box alive (D56).
+   */
+  portHolders(): PortHolders;
 };
 
 /** Every runtime this backend builds carries a vector store (noop when unbound). */
@@ -270,13 +260,11 @@ export function createCFRuntime(
     : workspaceBox;
 
   // Workspace state belongs to the session user: a facet's uid could not create entries under `.kinu`.
-  const originVfs = nimbusSessionFiles(workspaceBox, { home: WORKSPACE_ROOT });
+  const originVfs = workspaceBox.store({ home: WORKSPACE_ROOT });
 
   // Both of the actor's planes or neither (see `workspaceExecution`). This unmounted tree keeps foreign
   // bytes out of memory and agent-state snapshots.
-  const baseWorkspaceVfs = hooks.workspaceExecution
-    ? nimbusSessionFiles(workspaceBox, hooks.workspaceExecution)
-    : originVfs;
+  const baseWorkspaceVfs = hooks.workspaceExecution ? workspaceBox.store(hooks.workspaceExecution) : originVfs;
 
   const memoryStore = new MemoryStore(originVfs, sql, write => access.ctx.storage.transactionSync(write));
   memoryStore.ensureSchema();
@@ -334,6 +322,7 @@ export function createCFRuntime(
     home,
     userRoots: () => agentFileVfs.userRoots(),
     stored: async (name) => await sessionShell.cwd?.(name) ?? null,
+    detachFrees: true,
   });
 
   const planes = cloudPlanes(home);
@@ -385,7 +374,7 @@ export function createCFRuntime(
   });
 
   const toolFiles = withApprovalGatedFiles(agentFileVfs, 'workspace', {
-    planes, resolve: (path, follow) => agentFileVfs.resolve(path, { follow }), userRoots: () => agentFileVfs.userRoots(), locate: null, parksWrites: true,
+    planes, resolve: (path, follow, creating) => agentFileVfs.resolve(path, { follow, creating }), userRoots: () => agentFileVfs.userRoots(), locate: null, parksWrites: true,
   }, approvalPolicy);
 
   executionRouter.register(createNimbusWorkspaceExecutor({
@@ -415,19 +404,14 @@ export function createCFRuntime(
     try {
       const sdk = env.KinuDevbox.getByName(sandboxId);
 
-      // Egress is configured before the container runs anything, not in `onStart` (too late); until then
-      // the container has no network, so it fails closed. Only the owning workspace configures.
+      // Egress is configured before the container runs anything, not in `onStart` (too late): until then its web
+      // requests reach no vault, so no placeholder is spent. Only the owning workspace configures.
       const handle = adaptCloudflareSandbox(sdk, async () => {
         hooks.boxUse.used = true;
         const userId = actor.ownerUserId();
 
         if (!userId) return;
-        await sdk.configureEgress(kinuEgressParams({
-          workspaceName: actor.workspaceName,
-          ownerUserId: userId,
-          vault: await listOwnerEgressVault(env, actor),
-          grants: actor.actor.config.getShellApprovalGrants(),
-        }));
+        await sdk.configureEgress({ workspaceName: actor.workspaceName, ownerUserId: userId });
         // Unread, the box keeps its last default.
         const [accountSize] = await Promise.allSettled([ownerSandboxSize(env, actor)]);
 
@@ -580,14 +564,25 @@ export function createCFRuntime(
     deviceTransport,
     vectorStore,
     sandboxHandle,
-    sandboxPortHolders: () => {
-      const handle = sandboxHandle;
+    portHolders: () => {
+      const box = hooks.boxUse.used && previewSuffix !== undefined && sandboxHandle !== null ? { handle: sandboxHandle, suffix: previewSuffix } : null;
+      let workspace: Promise<WorkspaceServing> | undefined;
+      let sandbox: Promise<readonly number[]> | undefined;
+      const served = () => workspace ??= access.workspaceServing();
+      const boxed = () => sandbox ??= box === null ? Promise.resolve([]) : box.handle.getExposedPorts(box.suffix).then((rows) => rows.map((row) => row.port));
 
-      if (handle === null || !hooks.boxUse.used || previewSuffix === undefined) return null;
-
+      // A job's id names both planes: the box's listener carries it in its environment, a workspace process as its exec
+      // id. Each plane is asked for its own exposed ports only.
       return {
-        exposedPorts: async () => (await handle.getExposedPorts(previewSuffix)).map((row) => row.port),
-        holders: (ports) => handle.portListeners(JOB_STAMP_ENV, ports),
+        exposedPorts: async () => [...await boxed(), ...(await served()).held.map((held) => held.port)],
+        holders: async (ports) => {
+          const own = await boxed();
+          const listened = box === null ? [] : await box.handle.portListeners(JOB_STAMP_ENV, ports.filter((port) => own.includes(port)));
+
+          return listened === null ? null : [...listened, ...(await served()).held.filter((held) => ports.includes(held.port))];
+        },
+        // Unread, the box's facts stand: the workspace answers for the jobs it runs a process for.
+        answersFor: async () => (box === null ? workspaceServingScope(await served()) : null),
       };
     },
   };

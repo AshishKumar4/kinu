@@ -6,7 +6,7 @@
 import { Database } from 'bun:sqlite';
 import { expect, test } from 'bun:test';
 import type { VfsCred } from '@nimbus-sh/core/vfs/vfs.js';
-import { sqlStorageOver } from '@kinu.run/core/identity';
+import { sqlStorageOver } from '../src/identity';
 import { initSlateBuildTable, SlateBuilds, slateImage } from '../src/slates/builds';
 
 const OWNER: VfsCred = { uid: 1000, gid: 1000, groups: [1000], umask: 0o022 };

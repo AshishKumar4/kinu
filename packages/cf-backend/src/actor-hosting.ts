@@ -11,10 +11,10 @@ import type { Agent, AgentContext } from 'agents';
 import {
   childContextResolver, localContextTree, type ContextEditor, type ContextTree, createSeatHost, defaultLoopOrigin,
   facetHomeProvisioner, facetHomeReleaser, actorHomeName, actorStateRoot,
-  actorScaffoldPath, nimbusSessionFiles, agentArtifactDirectory, agentHome, MAIN_AGENT, WORKSPACE_ROOT, type ActorHost,
+  actorScaffoldPath, agentArtifactDirectory, agentHome, MAIN_AGENT, WORKSPACE_ROOT, type ActorHost,
   type SeatHostDeps, type ActorRetirement, type BoundActor, type ActorHandle, type ActorReference,
   type AgentRuntime, type ContextEventRecorder, type DeferredApprovalChannel, type LoopOrigin,
-  type ModelCallReport, type ModelOperationSink, type NimbusSandboxHandle,
+  type ModelCallReport, type ModelOperationSink,
   type NodeHomeHost, type NodeWorkspace, type ProfileAuthorityInputs,
   type ResolvedTurnProfile, type SeatedActor, type SlateCallResult, type SlateOperation, type SqlExec,
   type SqlExecutor, type SqlValue, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory,
@@ -25,6 +25,7 @@ import { flight, KinuError, settle, type AgentTracing } from '@kinu.run/core/obs
 import { Cause, Effect } from 'effect';
 import { createCFRuntime, type CFRuntime, type CFRuntimeHooks, type WorkspaceBoxUse } from './runtime';
 import type { LiveRead } from '@kinu.run/core';
+import type { HostedBox, HostedWorkspace } from './workspace-host';
 
 /** The root agents-SDK members a hosted actor's runtime borrows; projected from `Agent` so upstream drift fails to compile. */
 type HostRootAgent = Pick<Agent<Env>, 'name' | 'sql'>;
@@ -53,7 +54,8 @@ export interface WorkspaceHostSeams {
   installedBuild(): string | null;
   ownerUserId(): string | null;
   capabilityToken(): string | null;
-  workspaceBox(shellId: string): NimbusSandboxHandle;
+  workspaceBox(shellId: string): HostedBox;
+  workspaceServing(): ReturnType<HostedWorkspace['serving']>;
   /** Root-owned uid-0 view, principal registry and uid table, so homes are provisioned in this isolate. */
   homeHost(): Promise<NodeHomeHost>;
   readonly homes: HostedActorHomes;
@@ -168,12 +170,12 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost<C
         if (provisioning === null) {
           if (bound.record.origin !== 'system') return yield* new KinuError('denied', 'Actor has no credentialed artifact home');
 
-          return { vfs: nimbusSessionFiles(box, { home: agentHome(MAIN_AGENT) }), artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)) };
+          return { vfs: box.store({ home: agentHome(MAIN_AGENT) }), artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)) };
         }
 
         const home = yield* Effect.promise(async () => provisioning);
 
-        return { vfs: nimbusSessionFiles(box, home), artifactDirectory: agentArtifactDirectory(home.home) };
+        return { vfs: box.store(home), artifactDirectory: agentArtifactDirectory(home.home) };
       }));
     },
 
@@ -229,6 +231,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost<C
         ctx: seams.ctx,
         holdLane: (body) => seams.holdLane(body),
         workspaceBox: (shellId) => seams.workspaceBox(shellId),
+        workspaceServing: () => seams.workspaceServing(),
       }, {
         actor: bound.handle,
         // Not this actor's name: a self-named child derives a second, empty filesystem.
@@ -245,7 +248,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost<C
       return runtime;
     },
     scaffoldFor: async (bound) => ({ path: actorScaffoldPath(bound.record),
-      vfs: nimbusSessionFiles(seams.workspaceBox(hostedActorPlacement(bound.record).shellId), { home: WORKSPACE_ROOT }) }),
+      vfs: seams.workspaceBox(hostedActorPlacement(bound.record).shellId).store({ home: WORKSPACE_ROOT }) }),
 
     /**
      * Heads and branches inherit the parent's promoted loop; hired subordinates start builtin.
@@ -285,7 +288,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost<C
 
         // A hired-but-idle actor never materialized its subtree, so absence is swallowed.
         return yield* Effect.catchCause(Effect.gen(function* () {
-          yield* Effect.promise(async () => box.files.delete(actorStateRoot(record.storageKey), { recursive: true }));
+          yield* Effect.promise(async () => box.store({ home: WORKSPACE_ROOT }).removeRecursive(actorStateRoot(record.storageKey)));
         }), (failed) => Effect.gen(function* () {
           const cause = Cause.squash(failed);
 

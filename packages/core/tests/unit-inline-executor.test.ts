@@ -260,7 +260,7 @@ describe('workspace.writeFile over the workspace filesystem — what both backen
       sql: rt.storage.sql,
     });
 
-    return { vfs, exec, sandbox, workspace };
+    return { rt, vfs, exec, sandbox, workspace };
   }
 
   test('a deep path creates its parents and round-trips', async () => {
@@ -268,6 +268,40 @@ describe('workspace.writeFile over the workspace filesystem — what both backen
     const result = await exec.tools.writeFile.execute('notes/deep/todo.md', 'from codemode');
     expect(result).toContain('Written');
     expect(await readText(vfs, 'notes/deep/todo.md')).toBe('from codemode');
+  });
+
+  // The versioned store creates on revision 0 (nothing there), and checks every overwrite by the revision read.
+  test('a create is checked by revision 0, an overwrite is checked by the revision read, and a peer\'s write refused', async () => {
+    const { rt, vfs } = buildPlane();
+    let peer: (() => Promise<void>) | null = null;
+    const check = present(vfs.writeFileIfRevision?.bind(vfs), 'the store\'s check');
+
+    // A peer's write that lands after the tool's own checks and before the store's: only the revision catches it.
+    const racing: typeof vfs = {
+      ...vfs,
+      writeFileIfRevision: async (path, data, expected) => {
+        const landing = peer;
+
+        peer = null;
+        await landing?.();
+
+        return await check(path, data, expected);
+      },
+    };
+
+    const file = toolExecute<FileToolInput, JsonValue>(createFileTool({
+      home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: racing, ledger: new TurnFileLedger(), budget: new TurnContextBudget(), memory: rt.memory,
+    }));
+
+    expect(await file({ op: 'write', path: 'plan.md', content: 'first\n' })).toMatchObject({ action: 'created', checked: 'revision' });
+    await file({ op: 'read', path: 'plan.md' });
+    expect(await file({ op: 'write', path: 'plan.md', content: 'second\n' })).toMatchObject({ action: 'replaced', checked: 'revision' });
+
+    await file({ op: 'read', path: 'plan.md' });
+    peer = async () => { await writeText(vfs, 'plan.md', 'the owner saved this\n'); };
+
+    await expect(file({ op: 'write', path: 'plan.md', content: 'third\n' })).rejects.toMatchObject({ verdict: 'stale' });
+    expect(await readText(vfs, 'plan.md')).toBe('the owner saved this\n');
   });
 
   test('an existing file cannot be overwritten before workspace.readFile shows it', async () => {

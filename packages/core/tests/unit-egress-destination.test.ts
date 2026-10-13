@@ -65,8 +65,8 @@ describe('IPv6 literal forms', () => {
     expect(judged('http://[1::]/')).toBeNull();
   });
 
-  test('link-local fe80::/10 — full range, any interface', () => {
-    judgesFamily(['http://[fe80::a]/', 'http://[febf::1]/'], ['http://[fec0::1]/']);
+  test('link-local fe80::/10 and the deprecated site-local fec0::/10 — full range, any interface', () => {
+    judgesFamily(['http://[fe80::a]/', 'http://[febf::1]/', 'http://[fec0::1]/', 'http://[feff::1]/'], ['http://[fe7f::1]/']);
   });
 
   test('unique-local fc00::/7 (the private-fabric ULA)', () => {
@@ -112,8 +112,7 @@ describe('the public control still succeeds', () => {
   test('the refusal payload is the shared wire shape, never a bare string', () => {
     const refusal = present(judged('http://169.254.169.254/'), 'the metadata-address refusal');
 
-    expect(Object.keys(refusal)).toEqual(['reason', 'error']);
-    expect(refusal.reason).toBe('denied');
+    expect(refusal).toMatchObject({ success: false, reason: 'denied' });
     expect(refusal.error.length).toBeGreaterThan(0);
   });
 });

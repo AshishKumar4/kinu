@@ -3,36 +3,29 @@
  * names the observe/stop calls, and a handle that cannot start one says so.
  */
 import { describe, expect, test } from "bun:test";
-import { createNimbusWorkspaceExecutor, nimbusSessionFiles, nimbusSessionShell, type NimbusSandboxHandle, type NimbusStartResult, WORKSPACE_ROOT } from "../src/index";
+import { createNimbusWorkspaceExecutor, nimbusSessionFiles, nimbusSessionShell, type NimbusStartResult, WORKSPACE_ROOT } from "../src/index";
+import { sessionFilesOver, type SessionBox } from "@kinu.run/test-utils/vfs";
 import { createTestRuntime } from "./helpers";
 
-const baseFiles: NimbusSandboxHandle["files"] = {
-  read: async () => null,
-  write: async () => {},
-  list: async () => [],
-  stat: async () => null,
-  exists: async () => false,
-  delete: async () => {},
-};
 
-function handleWith(start: () => Promise<NimbusStartResult>): NimbusSandboxHandle {
+function handleWith(start: () => Promise<NimbusStartResult>): SessionBox {
   return {
     ready: async () => {},
     exec: async (command: string) => ({
-      command, success: true, stdout: "", stderr: "", exitCode: 0,
+      command, success: true, stdout: "", stderr: "", exitCode: 0, duration: 0, timestamp: 0,
     }),
     startProcess: start,
-    files: baseFiles,
+    files: sessionFilesOver(),
   };
 }
 
 /** The hosted workspace over `box`, composed as cf-backend composes it. */
-function workspaceOver(box: NimbusSandboxHandle, runtimeCatalog?: boolean) {
+function workspaceOver(box: SessionBox, runtimeCatalog?: boolean) {
   const { rt } = createTestRuntime();
 
   return createNimbusWorkspaceExecutor({
     box, runtimeCatalog,
-    inline: { vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), memory: rt.memory, craftStore: rt.craftStore },
+    inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), memory: rt.memory, craftStore: rt.craftStore },
   });
 }
 
@@ -41,8 +34,8 @@ function runningStart(overrides: Partial<NimbusStartResult> = {}): NimbusStartRe
     command: "node server.js",
     pid: 3000002,
     process: {
-      pid: 3000002, command: "node server.js", state: "running",
-      exitCode: null, longRunning: true,
+      pid: 3000002, command: "node server.js", argv: ["node", "server.js"], cwd: "/home/main", state: "running",
+      exitCode: null, startTime: 1, endTime: null, longRunning: true, attachedTty: false,
     },
     ports: [],
     startedAt: 1_786_641_209_776,
@@ -63,7 +56,7 @@ describe("nimbus startProcess — the process is alive when the call returns", (
   });
 
   test("a registered port is surfaced with the preview-URL pointer", async () => {
-    const nimbus = workspaceOver(handleWith(async () => runningStart({ ports: [{ port: 3000, pid: 3000002 }] })));
+    const nimbus = workspaceOver(handleWith(async () => runningStart({ ports: [{ port: 3000, pid: 3000002, registeredAt: 1, capability: "cap" }] })));
 
     const out = await nimbus.tools.startProcess.execute("node server.js");
 
@@ -74,7 +67,7 @@ describe("nimbus startProcess — the process is alive when the call returns", (
   test("a process that already finished says so, with its exit code", async () => {
     const nimbus = workspaceOver(handleWith(async () => runningStart({
       command: "echo hi",
-      process: { pid: 7, command: "echo hi", state: "exited", exitCode: 0, longRunning: false },
+      process: { pid: 7, command: "echo hi", argv: ["echo", "hi"], cwd: "/home/main", state: "exited", exitCode: 0, startTime: 1, endTime: 2, longRunning: false, attachedTty: false },
       pid: 7,
     })));
 
@@ -91,6 +84,7 @@ describe("nimbus startProcess — the process is alive when the call returns", (
     const out = await nimbus.tools.startProcess?.execute('node server.js');
     // `unsupported`, not `unavailable`: retrying cannot add a method to this handle.
     expect(out).toEqual({
+      success: false,
       reason: "unsupported",
       error: "Nimbus SDK handle does not expose startProcess",
     });

@@ -89,7 +89,7 @@ describe('deterministic trial insights', () => {
 
   test('an observed idle helper with a recorded empty run list is distinguished from an errored helper', () => {
     const observed = facts([], helperResult([{ name: 'idle', status: 'idle', runs: [] },
-      { name: 'errored', status: 'awaiting_input', runs: [{ status: 'error' }] }, { name: 'waiting', status: 'awaiting_input', runs: [] }]));
+      { name: 'errored', status: 'awaiting_input', runs: [{ status: 'error', asked: 'Count the waitlist signups' }] }, { name: 'waiting', status: 'awaiting_input', runs: [] }]));
 
     expect(observed.filter((fact) => fact.kind === 'idle-helper').map((fact) => fact.data)).toEqual([{ helper: 'idle' }]);
   });
