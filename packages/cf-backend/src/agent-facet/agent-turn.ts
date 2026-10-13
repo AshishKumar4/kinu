@@ -290,6 +290,7 @@ function workspaceTools(
         });
 
         turn.live.dynamic = answer.dynamic;
+        turn.live.openWork = answer.openWork;
         turn.database.recordReports(turn.id, answer.reports);
         const { captured } = answer;
 
@@ -313,6 +314,8 @@ function workspaceTools(
 
 export interface LiveTurn {
   dynamic: PreparedAgentTurn['dynamic'];
+  /** A chat turn's open work, as its preparation and then each of its tools answered: its task reminder reads it. */
+  openWork: OpenWork | null;
 }
 
 /** Filed in the order it was spent. */
@@ -506,7 +509,7 @@ export async function deliveredRun(
 
     run.opened = bound;
     database.prepare(bound, prepared);
-    const live: LiveTurn = { dynamic: prepared.dynamic };
+    const live: LiveTurn = { dynamic: prepared.dynamic, openWork: null };
     const { sources, trigger } = facetTurnSources({ actor, workspace, models, prepared, spend, live, runId, turnId: task.sequenceId, epoch: bound.epoch, pacer });
 
     const inference: HeadInferenceDeps = {

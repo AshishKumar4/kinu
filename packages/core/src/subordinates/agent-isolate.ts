@@ -8,6 +8,7 @@ import type { ContextFill } from '../read-models/context-fill';
 import type { InlineSteer } from '../read-models/transcript';
 import type { PlanStanding } from '../plans/review';
 import type { RunEvent } from '../events/types';
+import type { OpenWork } from '../orchestrator/chat-session';
 import type { ModelCallReport } from '../events/model-call';
 import type { DynamicContext } from '../prompting/volatile-context';
 import type { HeadCapture } from '../heads/head-inference';
@@ -110,6 +111,9 @@ export interface PreparedAgentTurn {
   /** A chat turn's request, noted on the workspace's warming lane as it was prepared: until when the lane kept the cache
    *  warm for the last one (`TurnOpeningAsk`). Null for a preparation that noted none. */
   readonly cacheKeptAliveUntil: number | null;
+  /** A chat turn's open work as it was prepared (`OpenWork`); each tool answer carries it again, and the turn's task
+   *  reminder reads the newest, so nothing of it crosses before the turn commits (#75). None for a run. */
+  readonly openWork?: OpenWork;
 }
 
 export interface AgentTurnActivity {
@@ -159,6 +163,8 @@ export interface AgentToolAnswer {
   readonly dynamic: DynamicContext;
   /** What the turn has told its hirer by now; the agent keeps it, so a reset of the workspace forgets none of it. */
   readonly reports: SubordinateReportLedger;
+  /** The agent's open work once the tool ran: its tasks and whether a job of its still runs. */
+  readonly openWork: OpenWork;
 }
 
 export interface AgentTrace {
