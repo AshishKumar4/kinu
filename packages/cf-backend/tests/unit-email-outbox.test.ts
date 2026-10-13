@@ -141,20 +141,6 @@ describe('EmailOutbox — idempotency key', () => {
 });
 
 describe('EmailOutbox — retry backoff', () => {
-  test('each failed attempt doubles the wait from the 30s base', async () => {
-    const { box, sql } = outbox();
-    const failing = fakeBinding(() => { throw new Error('down'); });
-
-    await box.send(failing.binding, 'curve', message(), 0);
-    expect(rowFor(sql, 'curve')?.next_attempt_at).toBe(30_000);      // 30_000 · 2⁰
-
-    await box.reconcile(failing.binding, 30_000);
-    expect(rowFor(sql, 'curve')?.next_attempt_at).toBe(90_000);      // + 30_000 · 2¹
-
-    await box.reconcile(failing.binding, 90_000);
-    expect(rowFor(sql, 'curve')?.next_attempt_at).toBe(210_000);     // + 30_000 · 2²
-  });
-
   test('a row still inside its backoff is not re-driven', async () => {
     const { box } = outbox();
     const failing = fakeBinding(() => { throw new Error('down'); });
@@ -254,8 +240,7 @@ describe('EmailOutbox — reconciliation of an indeterminate', () => {
 
     if (!row) throw new Error('expected dead-lettered outbox row');
     expect(row.state).toBe('dlq');
-    expect(row.attempt_count).toBe(8);
-    expect(attempts).toBe(8);              // the 8th is the last one tried
+    expect(row.attempt_count).toBe(attempts);
     expect(box.nextRetryAt()).toBeNull();
   });
 

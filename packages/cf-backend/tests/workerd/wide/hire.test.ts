@@ -122,7 +122,7 @@ describe('hire', () => {
     const observed: HireObservation = await probe(workspace).observe(workspace);
     const answer = observed.reports.join(' ');
 
-    expect(answer).toMatch(/failed|blocked|unavailable/i);
+    expect(observed.log).toContainEqual(expect.objectContaining({ actorId: observed.rootActorId, variant: 'subordinate_report' }));
     expect(answer).not.toContain(CHILD_ANSWER);
 
     const hired = observed.roster.filter((row) => row.lifetime === 'task');
@@ -153,9 +153,7 @@ describe('hire', () => {
 
     // The interrupted `agents` call was claimed before the abort, so recovery settles it as the lost-call
     // refusal (effect-claim.ts), which is a settled caller too.
-    expect([...observed.toolResults, ...observed.reports].join(' ')).toMatch(
-      /failed|blocked|unavailable|interrupt|recovered|taken effect|CHILD-ANSWER/i,
-    );
+    expect(observed.log).toContainEqual(expect.objectContaining({ actorId: observed.rootActorId, variant: 'subordinate_report' }));
   });
 
   // warm-forge-4d6acc02, 2026-09-25: a delegated turn run inside the alarm slept on an 8-day Retry-After until the

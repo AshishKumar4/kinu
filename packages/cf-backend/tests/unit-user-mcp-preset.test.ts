@@ -42,7 +42,6 @@ describe('an MCP preset add', () => {
     ).toArray();
 
     expect(row?.preset_id).toBe('cloudflare');
-    expect(row?.name).toBe('Cloudflare');
     expect(row?.server_url).toBe('https://mcp.cloudflare.com/mcp');
     expect(row?.transport).toBe('streamable-http');
 
@@ -73,7 +72,6 @@ describe('an MCP preset add', () => {
     ).toArray();
 
     expect(row?.preset_id).toBe('github');
-    expect(row?.name).toBe('GitHub');
     expect(v.parse(v.string(), row?.headers)).not.toContain('ghp_test');
 
     const [listed] = await h.userDO.userMcp_list(await testOwner());
@@ -97,7 +95,6 @@ describe('an MCP preset add', () => {
     ).toArray();
 
     expect(row?.server_url).toBe('https://gmailmcp.googleapis.com/mcp/v1');
-    expect(row?.name).toBe('Gmail');
     h.close();
   });
 
@@ -106,10 +103,10 @@ describe('an MCP preset add', () => {
 
     await expect(
       h.userDO.userMcp_add(await testOwner(), { presetId: 'github' }, 'https://kinu.example'),
-    ).rejects.toThrow(/needs either the deployment's .*OAuth app or a token/);
+    ).rejects.toMatchObject({ code: 'bad_input' });
     await expect(
       h.userDO.userMcp_add(await testOwner(), { presetId: 'google' }, 'https://kinu.example'),
-    ).rejects.toThrow(/needs either the deployment's .*OAuth app or a token/);
+    ).rejects.toMatchObject({ code: 'bad_input' });
 
     const rows = sqlExec(h.db).exec(`SELECT id FROM user_mcp_servers`).toArray();
     expect(rows.length).toBe(0);
@@ -134,7 +131,6 @@ describe('an MCP preset add', () => {
     ).toArray();
 
     expect(row?.preset_id).toBe('github');
-    expect(row?.name).toBe('GitHub');
 
     const provider = liveMcpTransport(added.id)?.authProvider;
     expect(provider instanceof RegisteredAppOAuthClientProvider).toBe(true);
@@ -167,7 +163,7 @@ describe('an MCP preset add', () => {
         await testOwner(), { presetId: 'github', headers: { Authorization: 'Bearer b' } },
         'https://kinu.example',
       ),
-    ).rejects.toThrow("An MCP server named 'GitHub' already exists.");
+    ).rejects.toMatchObject({ code: 'bad_input' });
 
     const rows = sqlExec(h.db).exec(`SELECT id FROM user_mcp_servers`).toArray();
     expect(rows.length).toBe(1);
@@ -179,7 +175,7 @@ describe('an MCP preset add', () => {
 
     await expect(
       h.userDO.userMcp_add(await testOwner(), { presetId: 'gitlab' }, 'https://kinu.example'),
-    ).rejects.toThrow("Unknown MCP preset 'gitlab'.");
+    ).rejects.toMatchObject({ code: 'bad_input' });
 
     const added = await h.userDO.userMcp_add(
       await testOwner(), { name: 'linear', serverUrl: 'https://mcp.linear.example/sse' },

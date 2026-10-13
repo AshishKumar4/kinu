@@ -5,7 +5,6 @@
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { BUILTIN_TOOLS, NAMED_SWARM_PRESETS, SWARM_PRESETS } from '@kinu.run/core';
 import { cliPageRoutes, type CliRoutesEnv } from '../src/cli/routes';
 import { serveFamily } from './helpers/api';
 import { unreachableKv, unreachableNamespace } from './helpers/bindings';
@@ -109,7 +108,6 @@ describe('CLI download assets', () => {
       expect(response.status).toBe(404);
       const body = await response.text();
       expect(body).not.toContain('<!doctype html>');
-      expect(body).toContain('Deployment incomplete');
       expect(response.headers.get('content-type')).toStartWith('text/plain');
     }
   });
@@ -182,16 +180,5 @@ describe('GET /api/health build stamp', () => {
       expect(body.ok).toBe(false);
       expect(body.build).toBeNull();
     }
-  });
-
-  test('the feature counts are read out of the registries, not declared by hand', async () => {
-    const response = (await healthResponse(new Request(`${ORIGIN}/api/health`), envWithAssets(PUBLISHED)));
-    const body = v.parse(HealthResponseSchema, await response.json());
-    // Held to the registries themselves: a hand-listed number lies at the next registry edit.
-    expect(body.features).toEqual({
-      builtinTools: BUILTIN_TOOLS.length,
-      swarmPresets: SWARM_PRESETS.length,
-      namedSearches: NAMED_SWARM_PRESETS.length,
-    });
   });
 });

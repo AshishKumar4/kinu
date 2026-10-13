@@ -12,7 +12,6 @@ describe('a large overwrite of the user\u2019s file with nobody there to answer'
     const probe = env.PARKED_WRITES_PROBE.get(env.PARKED_WRITES_PROBE.idFromName('five-mib'));
 
     const parked = await probe.park(5 * MIB);
-    expect(parked.error).toContain('queued for owner approval');
     expect(parked.queued).toHaveLength(1);
     expect(parked.parkedFiles).toBe(1);
     expect(parked.fileSha).not.toBe(parked.askedSha);

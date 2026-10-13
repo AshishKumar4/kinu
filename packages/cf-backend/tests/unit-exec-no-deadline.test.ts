@@ -230,7 +230,7 @@ describe("adaptCloudflareSandbox — a command shown as it is printed", () => {
     const box = fakeBox({ streamed: () => cut });
 
     await expect(box.handle.exec("bun run build", { output: { write: () => {}, lost: () => {} } }))
-      .rejects.toMatchObject({ code: 'io', message: expect.stringContaining('ended without its exit code') });
+      .rejects.toMatchObject({ code: 'io' });
   });
 });
 

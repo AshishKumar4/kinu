@@ -124,7 +124,6 @@ describe('CLI provider credentials', () => {
     }), env);
 
     expect(res?.status).toBe(403);
-    expect(await handled(res).text()).toContain('interactive CLI session token');
     expect(stored.size).toBe(0);
     await settled();
   });

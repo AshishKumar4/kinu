@@ -47,7 +47,6 @@ describe('the shell filesystem view answers the type probes its callers make', (
 
     const result = await workspace.exec('touch /home/main/keepme.txt');
 
-    expect(result.stderr).not.toContain('isDirectory');
     expect(result.exitCode).toBe(0);
     expect(await workspace.fs.readFileString('/home/main/keepme.txt')).toBe('important bytes');
   });

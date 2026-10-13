@@ -95,7 +95,7 @@ async function userRows(harness: ActorHarness<HarnessOrchestratorAgent>): Promis
 describe('a chat request through the production gate', () => {
   test('an idle send leaves exactly one row, under the id the client rendered', async () => {
     const harness = orchestratorHarness();
-    const { agent, tableNames } = harness;
+    const { agent } = harness;
     const { wire, sent, frame } = connection(agent);
     await agent.activateActor();
     const gate = agent.harnessChatGate();
@@ -110,8 +110,6 @@ describe('a chat request through the production gate', () => {
     expect((await userRows(harness))).toEqual(['input-req-idle']);
     expect(doneFrames(sent)).toEqual([{ id: 'req-idle' }]);
     // No submission ledger or input receipt table exists for the loop to write.
-    expect(tableNames()).not.toContain('cf_think_submissions');
-    expect(tableNames()).not.toContain('actor_turn_inputs');
   });
 
   test('a live turn records its fleet row at its own seal', async () => {

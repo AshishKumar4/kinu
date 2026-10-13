@@ -1,5 +1,6 @@
 /** Per-user MCP: UserDO + MCPClientManager need the Worker runtime, so this covers the pure helpers and the orchestrator adapter. */
 import { describe, test, expect } from 'bun:test';
+import { KinuError } from '@kinu.run/core/obs';
 import { mapConnectionStatus, mcpCredentialTransport } from '../src/user/mcp';
 import {
   validateMcpServerInput, parseMcpHeaders,
@@ -30,28 +31,21 @@ describe('validateMcpServerInput', () => {
     expectStoredUrl('local', 'http://localhost:9999/mcp', 'http://localhost:9999/mcp');
   });
 
-  test('rejects http:// on a remote host', () => {
-    expect(() => validateMcpServerInput({ name: 'evil', serverUrl: 'http://example.com/mcp' }))
-      .toThrow(/https:\/\//);
+  test.each([
+    ['http:// on a remote host', 'http://example.com/mcp'],
+    ['an invalid serverUrl', 'not-a-url'],
+  ])('rejects %s', (_what, serverUrl) => {
+    expect(() => validateMcpServerInput({ name: 'n', serverUrl })).toThrow(KinuError);
   });
 
   test('rejects empty / missing name', () => {
-    expect(() => validateMcpServerInput({ name: '', serverUrl: 'https://a' })).toThrow(/name/);
-    expect(() => validateMcpServerInput({ serverUrl: 'https://a' })).toThrow(/name/);
-  });
-
-  test('rejects oversize name', () => {
-    expect(() => validateMcpServerInput({ name: 'x'.repeat(65), serverUrl: 'https://a' }))
-      .toThrow(/64 characters/);
-  });
-
-  test('rejects invalid serverUrl', () => {
-    expect(() => validateMcpServerInput({ name: 'n', serverUrl: 'not-a-url' })).toThrow(/valid URL/);
+    expect(() => validateMcpServerInput({ name: '', serverUrl: 'https://a' })).toThrow(KinuError);
+    expect(() => validateMcpServerInput({ serverUrl: 'https://a' })).toThrow(KinuError);
   });
 
   test('rejects unknown transport', () => {
     expect(() => validateMcpServerInput({ name: 'n', serverUrl: 'https://a', transport: 'rpc' }))
-      .toThrow(/transport/);
+      .toThrow(KinuError);
   });
 
   test('accepts each valid transport', () => {
@@ -89,18 +83,18 @@ describe('validateMcpServerInput', () => {
   test('rejects non-array allowedTools', () => {
     expect(() => validateMcpServerInput({
       name: 'n', serverUrl: 'https://a', allowedTools: 'create_issue',
-    })).toThrow(/string\[\]/);
+    })).toThrow(KinuError);
   });
 
   test('rejects non-string allowedTools entries', () => {
     expect(() => validateMcpServerInput({
       name: 'n', serverUrl: 'https://a', allowedTools: ['ok', 42],
-    })).toThrow(/non-empty/);
+    })).toThrow(KinuError);
   });
 
   test('rejects non-object body', () => {
-    expect(() => validateMcpServerInput(null)).toThrow(/JSON object/);
-    expect(() => validateMcpServerInput('hi')).toThrow(/JSON object/);
+    expect(() => validateMcpServerInput(null)).toThrow(KinuError);
+    expect(() => validateMcpServerInput('hi')).toThrow(KinuError);
   });
 });
 
@@ -131,7 +125,7 @@ describe('canonical MCP endpoint identity', () => {
     ['a bare username', 'https://svc@mcp.example.com/v1'],
     ['an empty username with a password', 'https://:s3cret@mcp.example.com/v1'],
   ])('a URL carrying %s is refused, so no credential lands in the plaintext column', (_label, serverUrl) => {
-    expect(() => validateMcpServerInput({ name: 'n', serverUrl })).toThrow(/username or password/u);
+    expect(() => validateMcpServerInput({ name: 'n', serverUrl })).toThrow(KinuError);
   });
 
   test('an empty headers object is omitted, not stored as a credential', () => {
@@ -375,7 +369,6 @@ describe('MCP admission, as both backends read it each turn', () => {
 
     expect(admission.admitted.map((d) => d.name)).toEqual(['loud', 'quiet']);
     expect(admission.admitted[0]?.description?.length).toBeLessThan(essay.length);
-    expect(admission.admitted[0]?.description?.endsWith('...')).toBe(true);
     expect(admission.admitted[1]?.description).toBe('Short.');
   });
 

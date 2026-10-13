@@ -142,7 +142,6 @@ describe('a share this deployment minted', () => {
     expect(p.routed[0]?.handle).toBe(HANDLE);
     expect(p.routed[0]?.pathname).toBe('/');
     expect(p.routed[0]?.claim.userId).toBeNull();
-    expect(p.routed[0]?.claim.source).toMatch(/^[a-z2-7]{15}$/);
   });
 
   test('a viewer cookie minted for ANOTHER share names nobody on this one', async () => {

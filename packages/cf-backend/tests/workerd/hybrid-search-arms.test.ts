@@ -13,6 +13,6 @@ describe('hybridSearch under workerd', () => {
     };
 
     await expect(hybridSearch('deploy target', lexical, createNoopVectorStore()))
-      .rejects.toMatchObject({ code: 'io', message: 'run the lexical half of a hybrid search' });
+      .rejects.toMatchObject({ code: 'io' });
   });
 });

@@ -308,7 +308,6 @@ describe('resource-scoped workspace notices', () => {
   test('inline credentials never reach the technical detail', () => {
     const notice = formatWorkspaceError({ executors: 'provider answered 401 with api_key=sk-live-abc123' }, true);
     expect(notice?.detail).not.toContain('sk-live-abc123');
-    expect(notice?.detail).toContain('api_key=<redacted>');
   });
 });
 

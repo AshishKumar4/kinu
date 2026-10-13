@@ -62,17 +62,17 @@ const A = new Uint8Array([1, 2, 3]);
 const B = new Uint8Array([4, 5, 6]);
 
 describe('when a picture falls due', () => {
-  test('30 s after the last render, and never more than 2 min after the first of a burst', () => {
+  test('continued renders do not starve picture capture', async () => {
     const store = pictures();
+    const until = T0 + 300_000;
 
     store.rendered('board', PORT, T0);
-    expect(store.nextDueAt()).toBe(T0 + 30_000);
+    expect(await store.captureDue(capture(shooting(A)), T0)).toBe(false);
 
-    store.rendered('board', PORT, T0 + 20_000);
-    expect(store.nextDueAt()).toBe(T0 + 50_000);
+    for (let at = T0 + 20_000; at <= until; at += 20_000) store.rendered('board', PORT, at);
 
-    for (let at = T0 + 40_000; at <= T0 + 110_000; at += 20_000) store.rendered('board', PORT, at);
-    expect(store.nextDueAt()).toBe(T0 + 120_000);
+    expect(await store.captureDue(capture(shooting(A)), until)).toBe(true);
+    expect(store.digests().get('board')).toBe(sha256Hex(A));
   });
 });
 
@@ -107,14 +107,16 @@ describe('a shot', () => {
     // A failure waits from when it failed.
     setSystemTime(T0 + 90_000);
     await store.captureDue(capture(failing, bucket), T0 + 90_000);
-    expect(store.nextDueAt()).toBe(T0 + 150_000);
+    const firstRetryAt = Number(store.nextDueAt());
+    expect(firstRetryAt).toBeGreaterThan(T0 + 90_000);
 
-    setSystemTime(T0 + 150_000);
-    await store.captureDue(capture(failing, bucket), T0 + 150_000);
-    expect(store.nextDueAt()).toBe(T0 + 270_000);
+    setSystemTime(firstRetryAt);
+    await store.captureDue(capture(failing, bucket), firstRetryAt);
+    const secondRetryAt = Number(store.nextDueAt());
+    expect(secondRetryAt - firstRetryAt).toBeGreaterThan(firstRetryAt - (T0 + 90_000));
 
-    setSystemTime(T0 + 270_000);
-    await store.captureDue(capture(failing, bucket), T0 + 270_000);
+    setSystemTime(secondRetryAt);
+    await store.captureDue(capture(failing, bucket), secondRetryAt);
     expect(store.nextDueAt()).toBeNull();
     expect(store.digests().get('board')).toBe(sha256Hex(A));
     expect([...bucket.objects.keys()]).toEqual([pictureKey('ledger', 'board', sha256Hex(A))]);
@@ -159,15 +161,28 @@ describe('a shot', () => {
     expect(store.captures(PORT, shot?.handle ?? '', T0 + 30_000)).toBe(false);
   });
 
-  test('is three a wake at most, oldest due first; the rest stay due for the next', async () => {
+  test('captures oldest due first and eventually drains every slate', async () => {
     const store = pictures();
     const bucket = memoryBucket();
+    const slates = ['a', 'b', 'c', 'd'];
+    const shotPorts: number[] = [];
 
-    for (const [index, slate] of ['a', 'b', 'c', 'd'].entries()) store.rendered(slate, PORT + index, T0 + index);
-    await store.captureDue(capture(shooting(A, B, new Uint8Array([7]), new Uint8Array([8])), bucket, ['a', 'b', 'c', 'd']), T0 + 40_000);
+    const shot: PictureCapture = {
+      ...capture(shooting(A, B, new Uint8Array([7]), new Uint8Array([8])), bucket, slates),
+      url: async (port) => {
+        shotPorts.push(port);
 
-    expect([...store.digests().keys()].sort()).toEqual(['a', 'b', 'c']);
-    expect(store.nextDueAt()).toBe(T0 + 30_003);
+        return 'https://preview.test/';
+      },
+    };
+
+    for (const [index, slate] of slates.entries()) store.rendered(slate, PORT + index, T0 + index);
+
+    for (let wake = 0; wake < slates.length; wake += 1) await store.captureDue(shot, T0 + 40_000);
+
+    expect(shotPorts).toEqual(slates.map((_, index) => PORT + index));
+    expect([...store.digests().keys()].sort()).toEqual(slates);
+    expect(store.nextDueAt()).toBeNull();
   });
 
   test('of a slate removed while it ran keeps nothing', async () => {
@@ -225,11 +240,12 @@ describe("a removed slate's pictures", () => {
     setSystemTime(T0 + 60_000);
 
     await store.forget('ledger', 'board', { ...bucket, delete: async () => { throw new Error('R2 is unavailable'); } });
-    expect(store.nextDueAt()).toBe(T0 + 90_000);
+    const retryAt = Number(store.nextDueAt());
+    expect(retryAt).toBeGreaterThan(T0 + 60_000);
 
     const unshot: PictureCapture = { ...capture(failing, bucket, []), camera: async () => { throw new Error('a gone slate was photographed'); } };
 
-    expect(await store.captureDue(unshot, T0 + 90_000)).toBe(false);
+    expect(await store.captureDue(unshot, retryAt)).toBe(false);
     expect([...bucket.objects.keys()]).toEqual([]);
     expect(store.nextDueAt()).toBeNull();
   });

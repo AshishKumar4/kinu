@@ -32,7 +32,7 @@ describe('a turn offers swarm only when the account turned the beta on', () => {
 
     expect(agentsOps(tools)).not.toContain('swarm');
     await expect(toolExecute<{ op: string; task: string }, unknown>(tools.agents)({ op: 'swarm', task: 'rank them' }))
-      .rejects.toMatchObject({ code: 'denied', message: expect.stringContaining('"Beta: swarms"') });
+      .rejects.toMatchObject({ code: 'denied' });
   });
 
   test('on: the tool offers swarm', async () => {

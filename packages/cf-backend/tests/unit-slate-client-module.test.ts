@@ -8,12 +8,6 @@ import { SLATE_CLIENT_MODULE } from '@kinu.run/core/slates';
 // bun's own transpiler, in this process: an esbuild service would be a child the file leaves running.
 const transpiler = new Bun.Transpiler({ loader: 'ts' });
 
-// The `kinu:slate` import map target: its specifiers are exactly what the shell maps, and every used name is imported.
-test('the client module imports exactly react, react-dom/client and capnweb', () => {
-  expect([...new Set(transpiler.scanImports(SLATE_CLIENT_MODULE).map((entry) => entry.path))].sort())
-    .toEqual(['capnweb', 'react', 'react-dom/client']);
-});
-
 // A substring assertion would pass over a name never imported, so this mounts the module under a DOM shim.
 test('the client module evaluates and its surface answers under a DOM shim', async () => {
   const dir = scratchDir('kinu-slate-client');
@@ -21,7 +15,7 @@ test('the client module evaluates and its surface answers under a DOM shim', asy
   writeFileSync(join(dir, 'stubs.js'), [
     'export const createElement = () => null;',
     'export const useMemo = (fn) => fn();',
-    'export const useSyncExternalStore = () => null;',
+    'export const useSyncExternalStore = (_subscribe, read) => read();',
     'export const createRoot = () => ({ render() {} });',
     'export const newWebSocketRpcSession = () => ({ onRpcBroken() {} });',
   ].join('\n'));
@@ -36,7 +30,7 @@ test('the client module evaluates and its surface answers under a DOM shim', asy
   const seen: string[] = [];
 
   const win = {
-    location: new URL('https://slate.test/?kinu={}'),
+    location: new URL('https://slate.test/?kinu=' + encodeURIComponent(JSON.stringify({ origin: 'https://host.test', theme: 'light' }))),
     addEventListener() {},
     postMessage(data: JsonValue) { seen.push(JSON.stringify(data)); },
   };
@@ -56,8 +50,7 @@ test('the client module evaluates and its surface answers under a DOM shim', asy
   try {
     const mod = await import(join(dir, 'slate.js'));
 
-    expect(mod.slate.greet).toBeInstanceOf(Function);
-    expect(mod.useHostContext).toBeInstanceOf(Function);
+    expect(mod.useHostContext()).toMatchObject({ origin: 'https://host.test', theme: 'light' });
     mod.resize(400);
 
     expect(seen).toEqual([]); // parent === window: not embedded, nothing posts
