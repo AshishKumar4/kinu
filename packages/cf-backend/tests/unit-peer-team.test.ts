@@ -9,7 +9,8 @@ import {
   type PeerAgentPayload, type ReplyDispatcher, type ReplyChannelKind,
   type PeerMessage, type KinuEvent, type ReceiveResult, type SqlExec,
 } from '@kinu.run/core';
-import { createMemoryVfs, createTestActorsOver, type MemoryVfs, present } from '@kinu.run/test-utils';
+import { readText } from '@nimbus-sh/core/vfs/vfs.js';
+import { createMemoryVfs, createTestActorsOver, filesIn, type MemoryVfs, present } from '@kinu.run/test-utils';
 import { sqlExec } from './helpers/user-do';
 import { makeEnv, orchestratorHarness } from './helpers/actor-harness';
 import { jsrpcStub } from './helpers/jsrpc-stub';
@@ -26,7 +27,7 @@ interface TestAgent {
   replyChannels: ReplyChannelStore;
   hub: PeerHub;
   /** The agent's own file plane — oversize peer bodies spill here. */
-  files: MemoryVfs['files'];
+  vfs: MemoryVfs['vfs'];
   /** onAdmitted() fires: the drain-to-turn wake. */
   wakes: number;
   /** scheduleDispatch timestamps: the DO alarm arms. */
@@ -75,7 +76,7 @@ function makeNetwork() {
     const log = new EventLog(sql, actor);
     const dispatchers: Partial<Record<ReplyChannelKind, ReplyDispatcher>> = {};
     const replyChannels = new ReplyChannelStore(sql, actor, dispatchers);
-    const { vfs, files } = createMemoryVfs();
+    const { vfs } = createMemoryVfs();
     let agent: TestAgent | null = null;
 
     const hub = new PeerHub({
@@ -112,7 +113,7 @@ function makeNetwork() {
     });
 
     agent = {
-      name, userId, sql, log, replyChannels, files, hub,
+      name, userId, sql, log, replyChannels, vfs, hub,
       wakes: 0, retries: [], grants: new Set(), online: true, clock: null,
     };
     dispatchers.peer_back = { dispatch: (ch, p) => agent.hub.dispatchPeerBack(ch, p) };
@@ -521,7 +522,7 @@ describe('oversize peer bodies stay reachable', () => {
     const path = payload.body_path;
 
     if (!path) throw new Error('expected spilled peer body path');
-    expect(bob.files.get(path)).toEqual(new TextEncoder().encode(JSON.stringify(message)));
+    expect(await readText(bob.vfs, path)).toBe(JSON.stringify(message));
     const batch = buildDrainBatch(events);
 
     if (!batch) throw new Error('expected peer drain batch');
@@ -537,7 +538,7 @@ describe('oversize peer bodies stay reachable', () => {
 
     const events = pendingPeerEvents(bob);
     expect(peerPayload(events[0]).body_path).toBeUndefined();
-    expect(bob.files.size).toBe(0);
+    expect(await filesIn(bob.vfs)).toEqual([]);
     expect(renderForLLM(events[0]).brief).toContain('shipping today');
   });
 
@@ -551,7 +552,7 @@ describe('oversize peer bodies stay reachable', () => {
     });
 
     expect(pendingPeerEvents(alice)).toHaveLength(0);
-    expect(alice.files.size).toBe(0);
+    expect(await filesIn(alice.vfs)).toEqual([]);
   });
 });
 

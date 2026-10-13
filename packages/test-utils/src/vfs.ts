@@ -1,89 +1,73 @@
 import { Effect } from 'effect';
 import { settle } from '@kinu.run/core/obs';
-import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import type { VFS, VfsCasResult } from '@nimbus-sh/core/vfs/vfs.js';
+import { MemoryVFS } from '@nimbus-sh/core/vfs/memory.js';
 import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import type { NimbusSandboxFiles, NimbusSandboxHandle } from '@kinu.run/core';
-// Map-backed VFS; `mkdir` surfaces EEXIST on repeat unless recursive, like the real backends. Each write moves the file's
-// revision, and a revision-checked write lands only over the one named (0: no file), as the workspace's store checks.
 
+/** A test's file plane: every member a workspace's store answers, its revision-checked write among them. */
+export type TestVfs = VFS & Required<Pick<VFS, 'readRange' | 'readlink' | 'rename' | 'removeRecursive' | 'rmdir' | 'symlink' | 'writeFileIfRevision'>>;
 
 export interface MemoryVfs {
-  vfs: VFS & Required<Pick<VFS, 'readRange' | 'writeFileIfRevision'>>;
-  /** Written files, by absolute path — assert spill contents through this. */
-  files: Map<string, string | Uint8Array>;
+  readonly vfs: TestVfs;
 }
 
+/**
+ * Nimbus's MemoryVFS, POSIX-shaped (a file's directory must be there, so a test seeds it), as a plain object a test may
+ * spread to replace one member, with the revision-checked write the workspace's store makes: compared and written in one
+ * step, absent at revision 0.
+ */
 export function createMemoryVfs(): MemoryVfs {
-  const files = new Map<string, string | Uint8Array>();
-  const dirs = new Set<string>();
-  const revisions = new Map<string, number>();
-  // A file put straight into `files` is at revision 1.
-  let clock = 1;
-  const revisionOf = (path: string): number => (files.has(path) ? revisions.get(path) ?? 1 : 0);
+  const memory = new MemoryVFS();
 
-  const write = (path: string, data: string | Uint8Array): void => {
-    files.set(path, data instanceof Uint8Array ? data.slice() : data);
-    clock += 1;
-    revisions.set(path, clock);
+  const vfs: TestVfs = {
+    stat: (path, options) => memory.stat(path, options),
+    readFile: (path) => memory.readFile(path),
+    readRange: (path, offset, length) => memory.readRange(path, offset, length),
+    writeFile: (path, data, options) => { memory.writeFile(path, data, options); },
+    readdir: (path) => memory.readdir(path),
+    mkdir: (path, options) => { memory.mkdir(path, options); },
+    unlink: (path) => { memory.unlink(path); },
+    rmdir: (path) => { memory.rmdir(path); },
+    removeRecursive: (path) => { memory.removeRecursive(path); },
+    rename: (from, to) => { memory.rename(from, to); },
+    symlink: (target, path) => { memory.symlink(target, path); },
+    readlink: (path) => memory.readlink(path),
+    writeFileIfRevision: (path, data, expected): VfsCasResult => {
+      const current = memory.stat(path)?.revision ?? 0;
+
+      if (String(current) !== String(expected)) return { ok: false, revision: current };
+      memory.writeFile(path, data);
+
+      return { ok: true, revision: memory.stat(path)?.revision ?? 0 };
+    },
   };
 
-  const vfs: VFS & Required<Pick<VFS, 'readRange' | 'writeFileIfRevision'>> = {
-    readFile: (path) => {
-      return settle(Effect.gen(function* () {
-        const content = files.get(path);
+  return { vfs };
+}
 
-        if (content === undefined) return yield* Effect.die(new Error(`ENOENT: ${path}`));
+/** Writes each of `files` (path: text) into `vfs`, making its directories first, as a test's seed. */
+export async function seedFiles(vfs: VFS, files: Readonly<Record<string, string>>): Promise<void> {
+  for (const [path, text] of Object.entries(files)) {
+    const dir = path.slice(0, path.lastIndexOf('/'));
 
-        return content instanceof Uint8Array ? content.slice() : new TextEncoder().encode(content);
-      }));
-    },
-    /** Real prefix read, so callers exercise the ranged-read branch, not the no-ranged-read one. */
-    readRange: (path, offset, length) => {
-      return settle(Effect.gen(function* () {
-        const content = files.get(path);
+    if (dir !== '') await vfs.mkdir(dir, { recursive: true });
+    await vfs.writeFile(path, new TextEncoder().encode(text));
+  }
+}
 
-        if (content === undefined) return yield* Effect.die(new Error(`ENOENT: ${path}`));
+/** Every file under `dir` in `vfs`, by absolute path, in order: what a test reads to say what was written. */
+export async function filesIn(vfs: VFS, dir = '/'): Promise<string[]> {
+  const found: string[] = [];
 
-        const bytes = content instanceof Uint8Array ? content : new TextEncoder().encode(content);
+  for (const entry of await vfs.readdir(dir)) {
+    const path = dir === '/' ? `/${entry.name}` : `${dir}/${entry.name}`;
 
-        return bytes.slice(offset, offset + length);
-      }));
-    },
-    writeFile: async (path, data) => { write(path, data); },
-    writeFileIfRevision: async (path, data, expected) => {
-      if (String(revisionOf(path)) !== String(expected)) return { ok: false, revision: revisionOf(path) };
-      write(path, data);
+    if (entry.type === 'directory') found.push(...await filesIn(vfs, path));
+    else found.push(path);
+  }
 
-      return { ok: true, revision: revisionOf(path) };
-    },
-    readdir: async (path) => [...files.keys()]
-      .filter((f) => f.startsWith(`${path}/`))
-      .map((f) => ({ name: f.slice(path.length + 1), type: 'file' })),
-    stat: async (path) => {
-      const content = files.get(path);
-
-      if (content === undefined) return dirs.has(path) ? { size: 0, mtimeMs: 0, type: 'directory' } : null;
-
-      return {
-        size: content instanceof Uint8Array ? content.byteLength : new TextEncoder().encode(content).byteLength, mtimeMs: 0, type: 'file', revision: revisionOf(path),
-      };
-    },
-    unlink: async (path) => {
-      files.delete(path);
-      revisions.delete(path);
-    },
-    mkdir: (path, opts) => {
-      return settle(Effect.gen(function* () {
-        if (dirs.has(path) && opts?.recursive === true) return;
-
-        if (dirs.has(path)) return yield* Effect.die(new Error(`EEXIST: directory exists ${path}`));
-        dirs.add(path);
-      }));
-    },
-
-  };
-
-  return { vfs, files };
+  return found.sort();
 }
 
 /** A test's Nimbus box with a session's file plane beside it, the plane `nimbusSessionFiles` reads. */

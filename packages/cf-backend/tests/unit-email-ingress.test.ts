@@ -15,6 +15,7 @@ import {
 import {
   routeInboundEmail, type EmailDeliveryTarget,
 } from '../src/email/route';
+import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { createMemoryVfs, createTestActorsOver, present } from '@kinu.run/test-utils';
 import { sqlExec } from './helpers/user-do';
 
@@ -44,7 +45,7 @@ function makeDeps(overrides: Partial<EmailIngressDeps> = {}) {
   const actor = createTestActorsOver(db).main;
   const log = new EventLog(exec, actor);
   const replies = new ReplyChannelStore(exec, actor, {});
-  const { vfs, files } = createMemoryVfs();
+  const { vfs } = createMemoryVfs();
 
   const deps: EmailIngressDeps = {
     log, replies,
@@ -55,7 +56,7 @@ function makeDeps(overrides: Partial<EmailIngressDeps> = {}) {
     ...overrides,
   };
 
-  return { deps, log, replies, sql: exec, files };
+  return { deps, log, replies, sql: exec, vfs };
 }
 
 function incoming(overrides: Partial<IncomingEmail> = {}): IncomingEmail {
@@ -254,7 +255,7 @@ describe('acceptInboundEmail — the trust gate', () => {
 
   test('a long mail spills its body and the brief cites the path', async () => {
     // The agent is woken by this message; a silently truncated brief reads as complete.
-    const { deps, log, files } = makeDeps();
+    const { deps, log, vfs } = makeDeps();
     const body = `URGENT-HEAD ${'detail '.repeat(400)}ACTION-TAIL`;
     const result = await acceptInboundEmail(deps, incoming({ body_text: body }));
 
@@ -264,7 +265,7 @@ describe('acceptInboundEmail — the trust gate', () => {
     expect(payload.body_path).toBeTruthy();
 
     if (!payload.body_path) throw new Error('expected spilled email body path');
-    expect(files.get(payload.body_path)).toEqual(new TextEncoder().encode(body));
+    expect(await readText(vfs, payload.body_path)).toBe(body);
 
     const batch = buildDrainBatch(log.pending());
 

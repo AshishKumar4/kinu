@@ -1,7 +1,7 @@
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { createMemoryVfs, createTestActorsOver, present } from '@kinu.run/test-utils';
+import { createMemoryVfs, createTestActorsOver, filesIn, present } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
   EVENT_BRIEF_MAX_CHARS, EventLog, applyVisibilityForStorage, eventContentPath, initEventsHubTables,
@@ -234,9 +234,9 @@ describe('renderForLLM', () => {
     });
 
     test('a report within the brief budget spills nothing and renders unreferenced', async () => {
-      const { vfs, files } = createMemoryVfs();
+      const { vfs } = createMemoryVfs();
       expect(await spillEventContent(vfs, shortReport)).toBeNull();
-      expect(files.size).toBe(0);
+      expect(await filesIn(vfs)).toEqual([]);
 
       const r = renderForLLM({
         ...EVENT_BASE, ingress: 'subordinate', variant: 'subordinate_report', payload_visibility: 'full',
@@ -272,9 +272,9 @@ describe('renderForLLM', () => {
     });
 
     test('a peer body within the brief budget spills nothing and renders unreferenced', async () => {
-      const { vfs, files } = createMemoryVfs();
+      const { vfs } = createMemoryVfs();
       expect(await spillEventContent(vfs, JSON.stringify('shipping today'))).toBeNull();
-      expect(files.size).toBe(0);
+      expect(await filesIn(vfs)).toEqual([]);
 
       const r = renderForLLM({
         ...EVENT_BASE, ingress: 'peer_async', variant: 'peer_agent', payload_visibility: 'full',
@@ -330,7 +330,7 @@ describe('renderForLLM', () => {
     });
 
     test('the budget boundary is exact, and identical content re-addresses one path', async () => {
-      const { vfs, files } = createMemoryVfs();
+      const { vfs } = createMemoryVfs();
       const atBudget = 'a'.repeat(EVENT_BRIEF_MAX_CHARS);
 
       const overBudget = `${atBudget}b`;
@@ -339,7 +339,7 @@ describe('renderForLLM', () => {
       const spilled = present(first?.path, 'the spilled content path');
 
       expect(second).toEqual(first);
-      expect([...files.keys()]).toEqual([spilled]);
+      expect(await filesIn(vfs)).toEqual([`/${spilled}`]);
       expect(spilled.startsWith('.kinu/event-content/')).toBe(true);
     });
 

@@ -45,7 +45,7 @@ import {
 } from '../src/index';
 import { CODE_IS_REFUSAL, KinuError } from '../src/obs/index';
 import { codenameFor } from '../src/identity/naming';
-import { createMemoryVfs, createTestActors, type MemoryVfs } from '@kinu.run/test-utils';
+import { createMemoryVfs, createTestActors, filesIn, type MemoryVfs } from '@kinu.run/test-utils';
 import {
   makeSql as makeTagged, makeSqlExec, makeExecRaw, createTestActor, createTestWorkspace,
 } from './helpers';
@@ -1107,13 +1107,13 @@ describe('oversize subordinate reports stay reachable', () => {
 
   test('a report within the brief budget writes nothing and renders exactly as before', async () => {
     const log = freshLog();
-    const { vfs, files } = createMemoryVfs();
+    const { vfs } = createMemoryVfs();
 
     await admitFromSubordinate(log, vfs, 'Survey done — three seams found; note written.');
 
     const event = log.pending({ variant: 'subordinate_report' })[0];
     expect(reportPayload(event).content_path).toBeUndefined();
-    expect(files.size).toBe(0);
+    expect(await filesIn(vfs)).toEqual([]);
     expect(renderForLLM(event).brief)
       .toBe('completed [re: Survey auth]: Survey done — three seams found; note written.');
   });
@@ -1122,7 +1122,7 @@ describe('oversize subordinate reports stay reachable', () => {
 interface ParentScene {
   log: EventLog;
   roster: SubordinateRosterStore;
-  files: MemoryVfs['files'];
+  vfs: MemoryVfs['vfs'];
   seen: string[];
   announced: Array<{ id: string; content: string }>;
   deps: SubordinateIngressDeps;
@@ -1135,12 +1135,12 @@ function parentScene(): ParentScene {
   const roster = makeRosterStore();
   roster.ensureSchema();
   roster.create(initialRosterEntry);
-  const { vfs, files } = createMemoryVfs();
+  const { vfs } = createMemoryVfs();
   const seen: string[] = [];
   const announced: Array<{ id: string; content: string }> = [];
 
   return {
-    log, roster, files, seen, announced,
+    log, roster, vfs, seen, announced,
     deps: {
       log,
       roster,
@@ -1169,7 +1169,8 @@ describe('the parent ingress, in the order it runs', () => {
     // The VFS write is async and the transaction body is not: the file must exist when the transaction opens.
     const transaction = scene.deps.transaction.bind(scene.deps);
     scene.deps.transaction = <T,>(body: () => T): T => {
-      expect(scene.files.has(spilled)).toBe(true);
+      // The test plane answers in the same turn, so a file the write left is there to stat.
+      expect(scene.vfs.stat(spilled)).toMatchObject({ type: 'file' });
 
       return transaction(body);
     };
@@ -1180,7 +1181,7 @@ describe('the parent ingress, in the order it runs', () => {
     }, 11);
 
     expect(result.disposition).toBe('admitted');
-    expect(scene.files.get(spilled)).toEqual(new TextEncoder().encode(content));
+    expect(await readText(scene.vfs, spilled)).toBe(content);
     const event = scene.log.pending({ variant: 'subordinate_report' })[0];
     expect(reportPayload(event).content_path).toBe(spilled);
     expect(scene.seen).toEqual(['transaction', 'announce', 'drain']);
@@ -1197,7 +1198,7 @@ describe('the parent ingress, in the order it runs', () => {
     }, 12);
 
     expect(result).toEqual({ id: '', disposition: 'not_awaited' });
-    expect(scene.files.size).toBe(0);
+    expect(await filesIn(scene.vfs)).toEqual([]);
     expect(scene.seen).toEqual([]);
     expect(scene.log.pending({ variant: 'subordinate_report' })).toEqual([]);
   });
@@ -1209,7 +1210,7 @@ describe('the parent ingress, in the order it runs', () => {
       fromSubordinate: 'ghost', status: 'progress', content: 'hello',
       origin: 'report_tool', sequenceId: 'settle:msg-1', mode: 'build',
     }, 13)).toEqual({ id: '', disposition: 'not_awaited' });
-    expect(scene.files.size).toBe(0);
+    expect(await filesIn(scene.vfs)).toEqual([]);
     expect(scene.log.pending({ variant: 'subordinate_report' })).toEqual([]);
   });
 

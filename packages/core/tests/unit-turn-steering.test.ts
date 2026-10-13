@@ -4,7 +4,7 @@ import { describe, expect, test } from 'bun:test';
 import { isStepCount, tool, type ModelMessage } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
-import { createMemoryVfs, createTestRuntime, present, scriptedTurnModel, toolExecute, withHostDeliveries } from '@kinu.run/test-utils';
+import { createMemoryVfs, createTestRuntime, present, scriptedTurnModel, seedFiles, toolExecute, withHostDeliveries } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { z } from 'zod';
 import {
@@ -25,7 +25,7 @@ async function fileProgressTurn(opts: { readonly readAt: number; readonly editAt
   const orch = newTurn();
   const memory = createMemoryVfs();
 
-  memory.files.set('/a.ts', opts.missed ? 'alpha alpha\n' : 'alpha\n');
+  await seedFiles(memory.vfs, { '/a.ts': opts.missed ? 'alpha alpha\n' : 'alpha\n' });
 
   const file = createFileTool({
     vfs: memory.vfs, home: '/', planes: cloudPlanes('/'),

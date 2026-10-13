@@ -1,9 +1,9 @@
-import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import { readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 // Defends: a model's tool call is checked against the tool's one schema before the tool runs, and a refusal reaches the
 // durable outcome as `bad_input`. Before, the SDK was handed an unvalidated JSON literal and every tool re-parsed alone.
 import { describe, expect, test } from 'bun:test';
 import { scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils/turn-model';
-import { createMemoryVfs, createTestRuntime, toolExecute } from '@kinu.run/test-utils';
+import { createMemoryVfs, createTestRuntime, seedFiles, toolExecute } from '@kinu.run/test-utils';
 import { runChat, type ChatEvent } from '../src/index';
 import { createFileTool } from '../src/tools/file-operations';
 import { TurnFileLedger } from '../src/vfs/file-ledger';
@@ -26,11 +26,11 @@ const USAGE = {
 };
 
 /** A memory file store that records every write, so a refused call can be shown to have written nothing. */
-function recordingVfs(seed: Record<string, string>) {
+async function recordingVfs(seed: Record<string, string>) {
   const memory = createMemoryVfs();
   const writes: string[] = [];
 
-  for (const [path, text] of Object.entries(seed)) memory.files.set(path, text);
+  await seedFiles(memory.vfs, seed);
 
   const vfs: VFS = {
     ...memory.vfs,
@@ -40,7 +40,7 @@ function recordingVfs(seed: Record<string, string>) {
     },
   };
 
-  return { vfs, files: memory.files, writes };
+  return { vfs, writes };
 }
 
 /** One model step calling `file` with `input`, then a closing text step. */
@@ -58,7 +58,7 @@ function modelCalling(input: JsonObject) {
 }
 
 async function toolResults(input: JsonObject, seed: Record<string, string>) {
-  const store = recordingVfs(seed);
+  const store = await recordingVfs(seed);
   const file = createFileTool({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: store.vfs, ledger: new TurnFileLedger(), budget: new TurnContextBudget() });
   const results: Extract<ChatEvent, { type: 'tool-result' }>[] = [];
   const model = modelCalling(input);
@@ -85,7 +85,7 @@ describe('a tool call the schema refuses', () => {
     expect(results).toHaveLength(1);
     expect(results[0]).toMatchObject({ success: false, reason: 'bad_input' });
     expect(results[0]?.error).toContain('new_text');
-    expect({ file: store.files.get('a.ts'), writes: store.writes }).toEqual({ file: 'alpha\n', writes: [] });
+    expect({ file: await readText(store.vfs, 'a.ts'), writes: store.writes }).toEqual({ file: 'alpha\n', writes: [] });
   });
 
   test('the model is told why in the schema\'s words, classified, not the SDK\'s JSON dump', async () => {
