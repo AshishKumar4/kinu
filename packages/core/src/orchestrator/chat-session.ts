@@ -505,6 +505,15 @@ export class ChatSession {
   get pumping(): boolean { return this.pumpActive; }
   get currentRunId(): string | null { return this.runId; }
 
+  /** The words of the turn this session runs next and has not yet recorded the run of: the one its pump took, else the
+   *  head of its queue while no turn runs. What its host reports as its latest run from the input's admission, so no
+   *  report between the admission and the run's opening shows the run before it. Null once a turn runs. */
+  nextRunWords(): string | null {
+    if (this.actorSession.inFlight) return null;
+
+    return (this.taken ?? this.queue[0])?.text ?? null;
+  }
+
   /** Open on purpose, so the wake reconcile must not seal them. */
   drivenRuns(): readonly string[] {
     return [...new Set([this.runId, this.reopenedRunId].filter((runId): runId is string => runId !== null))];

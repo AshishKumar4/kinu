@@ -501,11 +501,17 @@ export class FacetChat {
   /** Numbered as it leaves, in this agent's store: the workspace takes no report older than one it took. */
   private owesNow(at: number | undefined, runEnds: AgentReport['runEnds']): AgentOwes {
     const owed = this.owed();
+    const standing = this.deps.database.standingReport();
+    // A turn taken in and not yet opened is the run the owner sees as latest, as its opening will record it.
+    const upcoming = this.session.nextRunWords();
 
     return {
       seq: this.deps.database.nextInSequence(), next: at === undefined ? owed : Math.min(at, owed ?? Infinity),
       holds: owed !== null || this.owedWork().length > 0 || runEnds.length > 0,
-      report: { standing: this.deps.database.standingReport(), runEnds, working: this.session.turnOwed },
+      report: {
+        standing: upcoming === null ? standing : { ...standing, latestRun: { status: null, userMessage: upcoming } },
+        runEnds, working: this.session.turnOwed,
+      },
     };
   }
 
