@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
 import { connect } from 'armada';
+import { drainArmadaProgress } from './armada-progress';
 
 const ROOT = join(import.meta.dir, '..');
 
@@ -31,16 +32,7 @@ async function main(): Promise<number> {
     `--label=deploy build ${target} ${sha}`, '--', 'bash', 'scripts/release-build.sh', target, sha, ...promote === undefined ? [] : [promote],
   ], { cwd: ROOT, stdout: 'ignore', stderr: 'pipe' });
 
-  let said = '';
-
-  for await (const chunk of build.stderr) {
-    const text = new TextDecoder().decode(chunk);
-
-    said += text;
-    process.stderr.write(text);
-  }
-
-  const job = /^job (\S+)$/mu.exec(said)?.[1];
+  const { job } = await drainArmadaProgress(build.stderr);
 
   if (await build.exited !== 0 || job === undefined) throw new Error(`the build on armada failed${job === undefined ? '' : ` (job ${job})`}`);
   const tarball = await connect().output(job, 0);
