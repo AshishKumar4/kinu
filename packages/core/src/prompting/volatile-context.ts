@@ -192,10 +192,8 @@ export function agentDynamicContext(sources: DynamicContextSources): DynamicCont
   if (sources.devices !== undefined && sources.devices.length > 0) context.devices = sources.devices;
 
   if (sources.activeSkills !== undefined && sources.activeSkills.active.length > 0) {
-    const reasons = new Map(sources.activeSkills.reasons.map((r) => [r.name, r.reason]));
-
-    context.skills = sources.activeSkills.active.map((skill) => skill.name).sort(compareCodeUnits)
-      .map((name) => ({ name, reason: describeActivationReason(reasons.get(name)) }));
+    context.skills = [...sources.activeSkills.active].sort((a, b) => compareCodeUnits(a.name, b.name))
+      .map((skill) => ({ name: skill.name, reason: describeActivationReason(skill.reason) }));
   }
 
   if (sources.approvals && sources.approvals.total > 0) context.approvals = sources.approvals;

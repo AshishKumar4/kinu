@@ -1,4 +1,4 @@
-import { Cause, Effect, type Exit } from 'effect';
+import { Cause, Effect } from 'effect';
 import { createCliRenderer, type TextareaRenderable } from '@opentui/core';
 import { createRoot, flushSync, useTerminalDimensions } from '@opentui/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -46,7 +46,7 @@ import {
   type TuiAgentSource,
   type TuiAgentSummary,
 } from './tui-shell';
-import { hold, renderThrownChain, showing, detach } from '@kinu.run/core/obs';
+import { renderThrownChain, showing, detach } from '@kinu.run/core/obs';
 import { useKeyboard } from './use-keys';
 
 type HomeTuiAction =
@@ -115,9 +115,6 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
   const modelPickerRequestRef = useRef(0);
   const textareaRef = useRef<TextareaRenderable | null>(null);
   const initialFocusApplied = useRef(false);
-  // Effects return cleanup, not tasks; retain the task until it settles.
-  const cloudSyncTaskRef = useRef<Promise<Exit.Exit<void>> | null>(null);
-  const catalogTaskRef = useRef<Promise<Exit.Exit<void>> | null>(null);
   const deviceConnect = useDeviceConnectPrompt();
   const cloudReady = isCloudAuthConfigured();
   const localReady = isLocalModelConfigured();
@@ -143,7 +140,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
   useEffect(() => {
     if (setupRequired) return;
     let live = true;
-    catalogTaskRef.current = hold(Effect.matchCause(loadHomeModelCatalog(mode, opts), {
+    detach(Effect.matchCause(loadHomeModelCatalog(mode, opts), {
       onSuccess: (menu) => { if (live) setCatalog(menu); },
       onFailure: (failed) => { if (live) setCatalogHint(`Catalog unavailable: ${renderThrownChain({ cause: Cause.squash(failed) })}`); },
     }));
@@ -163,11 +160,9 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
   useEffect(() => {
     if (!cloudReady) return;
     const abort = new AbortController();
-    let task: Promise<Exit.Exit<void>> | null = null;
-    let settled = false;
 
     // Only this effect's cleanup aborts the signal, so it decides whether a refresh failure has anywhere to land.
-    task = hold(Effect.catchCause(Effect.ensuring(Effect.gen(function* () {
+    detach(Effect.catchCause(Effect.gen(function* () {
       const sync = yield* Effect.promise(() => syncCloudAgentRefs());
 
       if (abort.signal.aborted) return;
@@ -176,19 +171,12 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
       if (abort.signal.aborted) return;
       // A contested name is neither store's cloud row; silence would read as "no such cloud workspace".
       setCloudSyncNotice(sync.collisions.length === 0 ? null : collisionNotice(sync.collisions));
-    }), Effect.sync(() => {
-      settled = true;
-
-      if (task !== null && cloudSyncTaskRef.current === task) cloudSyncTaskRef.current = null;
-    })), (failed) => Effect.sync(() => {
+    }), (failed) => Effect.sync(() => {
       // A failed refresh must not read as the list; a torn-down scene shows nothing.
       if (!abort.signal.aborted) {
         setCloudSyncNotice(`Cloud workspaces could not be refreshed: ${renderThrownChain({ cause: Cause.squash(failed) })}`);
       }
     })));
-    cloudSyncTaskRef.current = task;
-
-    if (settled && cloudSyncTaskRef.current === task) cloudSyncTaskRef.current = null;
 
     return () => { abort.abort(); };
   }, [cloudReady, roster.reload]);

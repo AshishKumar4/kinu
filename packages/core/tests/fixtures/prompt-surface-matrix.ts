@@ -53,6 +53,7 @@ const ACTIVE_SKILL: ActiveSkill = {
   trust: 'builtin',
   bodyRef: { kind: 'builtin', text: 'Body of the deploy runbook.' },
   body: 'Body of the deploy runbook.',
+  reason: { kind: 'always_active', via: 'config' },
 };
 
 const ALL_TOOLS = [...BUILTIN_TOOLS];
@@ -97,7 +98,7 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
         referenced: [],
       },
       availableSkills: SKILLS_INDEX,
-      activeSkills: { active: [ACTIVE_SKILL], reasons: [] },
+      activeSkills: { active: [ACTIVE_SKILL] },
     },
   },
   {

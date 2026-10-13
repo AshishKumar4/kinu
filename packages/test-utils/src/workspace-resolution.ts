@@ -3,7 +3,7 @@
  * node_modules. Imported by relative path; names are read from manifests on disk.
  */
 
-import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, join, sep } from 'node:path';
 import { parseJsonObject } from '@kinu.run/core';
 import { Cause, Effect } from 'effect';
@@ -29,19 +29,18 @@ function treeRoot(from: string): Effect.Effect<string> {
 }
 
 /**
- * Workspace packages with an entry point, name → directory. The one list `scripts/bench-sandbox.ts` builds
- * links from; `setup-worktree.sh` globs the same set and is checked against this.
+ * Workspace packages with an entry point, name → directory, from the root manifest's `workspaces` globs as
+ * `setup-worktree.sh` reads them: the vendored `@mossaic/sdk` lives outside `packages/`, and a list read from
+ * `packages/` alone left it linked into a donor. The one list `scripts/bench-sandbox.ts` builds links from.
  */
 export function workspacePackages(root: string): Map<string, string> {
   const packages = new Map<string, string>();
+  const globs = v.parse(v.object({ workspaces: v.array(v.string()) }), parseJsonObject(readFileSync(join(root, 'package.json'), 'utf8'))).workspaces;
+  const manifests = new Set(globs.flatMap((glob) => [...new Bun.Glob(`${glob}/package.json`).scanSync({ cwd: root })]));
 
-  for (const entry of readdirSync(join(root, 'packages'), { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const dir = join(root, 'packages', entry.name);
-    const manifestPath = join(dir, 'package.json');
-
-    if (!existsSync(manifestPath)) continue;
-    const manifest = parseJsonObject(readFileSync(manifestPath, 'utf8'));
+  for (const manifestFile of [...manifests].sort()) {
+    const dir = join(root, dirname(manifestFile));
+    const manifest = parseJsonObject(readFileSync(join(root, manifestFile), 'utf8'));
     const name = v.safeParse(v.string(), manifest.name);
     const main = v.safeParse(v.string(), manifest.main);
 

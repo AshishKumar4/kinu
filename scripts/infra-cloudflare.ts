@@ -106,21 +106,47 @@ function declaredAccountId(): string | undefined {
   return declared !== undefined && /^[0-9a-f]+$/.test(declared) ? declared : undefined;
 }
 
-export function wrangler(argv: readonly string[], timeoutMs = 120_000, stdin?: string): Run {
+/** The account wrangler addresses: an ambient CLOUDFLARE_ACCOUNT_ID, else the one `wrangler.jsonc` declares. */
+export function cloudflareAccountId(): string | undefined {
+  return process.env.CLOUDFLARE_ACCOUNT_ID ?? declaredAccountId();
+}
+
+/** As {@link cloudflareAccountId}, for a caller that cannot go on without one. */
+export function requireCloudflareAccountId(): string {
+  const account = cloudflareAccountId();
+
+  if (account === undefined) {
+    throw new Error('no account_id in packages/cf-backend/wrangler.jsonc and no CLOUDFLARE_ACCOUNT_ID in the environment, so wrangler cannot pick an account non-interactively.');
+  }
+
+  return account;
+}
+
+export interface WranglerRun {
+  /** Null runs to completion: a container deploy builds and pushes an image. */
+  readonly timeoutMs?: number | null;
+  readonly stdin?: string;
+  /** The product's Worker directory unless a caller's paths are relative to another. */
+  readonly cwd?: string;
+}
+
+export function wrangler(argv: readonly string[], run: WranglerRun = {}): Run {
   const env = {
     ...process.env,
     WRANGLER_SEND_METRICS: 'false',
     // `undefined` is a legal value here and `spawnSync` omits the entry, so an
     // owner with one account and no declared id is unaffected.
-    CLOUDFLARE_ACCOUNT_ID: process.env.CLOUDFLARE_ACCOUNT_ID ?? declaredAccountId(),
+    CLOUDFLARE_ACCOUNT_ID: cloudflareAccountId(),
   };
 
   const result = spawnSync('npx', ['wrangler', ...argv], {
-    cwd: CF_BACKEND,
+    cwd: run.cwd ?? CF_BACKEND,
     encoding: 'utf8',
-    timeout: timeoutMs,
+    timeout: run.timeoutMs === null ? undefined : run.timeoutMs ?? 120_000,
+    // A container listing or a piped object outgrows spawnSync's 1 MiB default.
+    maxBuffer: 32 * 1024 * 1024,
     env,
-    input: stdin,
+    input: run.stdin,
   });
 
   if (result.error !== undefined) {
@@ -1164,7 +1190,7 @@ export function emailRoutingToWorker(zone: string, workerName: string): Observat
 /** Whether wrangler holds a usable session at all. Every other observation here
  *  is meaningless without one, so it is asked first and separately. */
 export function authenticated(): Observation {
-  const run = wrangler(['whoami'], 60_000);
+  const run = wrangler(['whoami'], { timeoutMs: 60_000 });
 
   return run.ok ? present('wrangler session valid') : unknown(`\`wrangler whoami\` failed: ${why(run)}`);
 }

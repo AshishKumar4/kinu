@@ -2638,8 +2638,9 @@ export {
 export { MCP_PRESETS, mcpPresetById, type McpPreset, type McpPresetId } from './mcp/presets';
 
 export {
-  validateMcpServerInput, validateMcpServerName, readAllowedTools, parseMcpHeaders,
-  type McpServerInput, type McpTransport,
+  validateMcpServerInput, validateMcpServerName, readAllowedTools, parseMcpHeaders, McpPresetAvailabilitySchema,
+  McpServerSummarySchema, type McpConnectionStatus, type McpPresetAvailability, type McpServerInput, type McpServerSummary,
+  type McpTransport,
 } from './mcp/servers';
 
 export type {

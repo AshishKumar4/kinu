@@ -168,7 +168,7 @@ function ensure(resource: Resource): Step {
   if (decision.action === 'skip') return { id: resource.id, outcome: 'existed', detail: decision.detail };
 
   if (decision.action === 'refuse') return { id: resource.id, outcome: 'refused', detail: decision.detail };
-  const run = wrangler(decision.argv, 300_000);
+  const run = wrangler(decision.argv, { timeoutMs: 300_000 });
 
   return run.ok
     ? { id: resource.id, outcome: 'created', detail: `wrangler ${decision.argv.join(' ')}` }
@@ -368,7 +368,7 @@ async function main(): Promise<number> {
     steps.push(...await provisionSecrets(infrastructure, live, () => secretNames(environment), {
       ask: async (question) => (reader === undefined ? '' : reader.question(question)),
       interactive,
-      install: (secret, value) => wrangler(['secret', 'put', secret, ...environmentArgs(infrastructure.environment)], 120_000, value),
+      install: (secret, value) => wrangler(['secret', 'put', secret, ...environmentArgs(infrastructure.environment)], { stdin: value }),
       show: (text) => { process.stderr.write(text); },
     }));
   } finally {

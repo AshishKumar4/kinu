@@ -92,18 +92,17 @@
  * pointer to the other file is the thing nobody follows.
  */
 
-import * as v from 'valibot';
-
 import { assertMeasured, reconcile, report, writeLock } from './gate-ratchet';
 import { exportedDeclarations, inScope } from './dead-code';
 import { declaredRpcs, invokedNames } from './reachability';
 import {
-  isParseable, isTestFile, isTestScaffold, readMatching, readRepositoryFile, readTests,
+  isManifest, isParseable, isTestFile, isTestScaffold, isTypescriptConfig, readMatching, readRepositoryFile, readTests,
   trackedFiles,
 } from './sources';
+import { readAliases, readWorkspace, resolveSpecifier } from './import-graph';
 import {
   classMembers, collapsePath, declarationOf, declaredName, identifierText,
-  importBindings, importedNames, IMPORT_CANDIDATES, isFunctionLike, isOptionalMember, isReExport,
+  importBindings, importedNames, isFunctionLike, isOptionalMember, isReExport,
   literalText,
   importUses, methodKind, moduleSpecifiers,
   NAMESPACE, parse, type Parsed, reExportBindings, referencedNames, returnTypeOf, superClassName,
@@ -214,29 +213,8 @@ function defaultExportName(tree: SyntaxNode): string | undefined {
   return undefined;
 }
 
-/** This workspace's own packages. */
-const WORKSPACE_SCOPE = '@kinu.run/';
-
 /** A vite import query — `./x.js?raw` addresses the same file as `./x.js`. */
 const QUERY = '?';
-
-/** A package's declared subpaths. Parsed rather than guessed: `@kinu.run/core`
- *  publishes `./workspace` as `src/vfs/nimbus-workspace.ts`, so the directory
- *  shape a rename would produce is simply wrong, and a wrong resolution is a
- *  dropped edge. */
-const SubpathSchema = v.object({ exports: v.optional(v.record(v.string(), v.string()), {}) });
-
-/** A package's declared path aliases. `packages/cf-backend` declares
- *  `"@/*": ["./src/*"]`, and the whole frontend imports through it: 33 of
- *  `WorkspacePage.tsx`'s specifiers, of which a resolver that knows only
- *  relative paths and `@kinu.run/*` resolves 3. Without this rule that one gap
- *  costs 95 phantom findings — every React component in the tree, reported as
- *  unreached. */
-const AliasSchema = v.object({
-  compilerOptions: v.optional(v.object({
-    paths: v.optional(v.record(v.string(), v.array(v.string())), {}),
-  }), {}),
-});
 
 export interface Resolution {
   /** The file this specifier names, when the corpus holds one. */
@@ -251,101 +229,26 @@ export interface Resolution {
 const EXTERNAL: Resolution = { file: undefined, local: false };
 
 /**
- * The file a specifier names.
- *
- * Four rules, each read from the code's own declaration rather than guessed: a
- * package's `exports` subpath, a tsconfig path alias, a relative path, a
- * workspace package root. `corpus` decides every one — a candidate the tree does
- * not hold is not a resolution, which is what stops a rename from inventing an
- * edge. Both manifests are read on demand, by paths the specifier and the
- * importing file name between them, so nothing here enumerates anything.
+ * The file a specifier names, by the resolver every gate shares (`import-graph.ts`): a package's `exports` subpath,
+ * a tsconfig path alias, a relative path, read from the code's own declarations. `corpus` decides each: a candidate
+ * the tree does not hold is not a resolution, which is what stops a rename from inventing an edge. A package whose
+ * conditional exports the resolver cannot enter is opaque, like any dependency.
  */
 export function createResolver(
   corpus: ReadonlySet<string>,
   tracked: ReadonlySet<string>,
 ): (from: string, specifier: string) => Resolution {
-  const manifests = new Map<string, Readonly<Record<string, string>>>();
-  const aliasRules = new Map<string, readonly (readonly [string, string])[]>();
-
-  const subpaths = (pkg: string): Readonly<Record<string, string>> => {
-    const cached = manifests.get(pkg);
-
-    if (cached !== undefined) return cached;
-    const manifest = `packages/${pkg}/package.json`;
-
-    const declaredSubpaths = tracked.has(manifest)
-      ? v.parse(SubpathSchema, JSON.parse(readRepositoryFile(root, manifest))).exports
-      : {};
-
-    manifests.set(pkg, declaredSubpaths);
-
-    return declaredSubpaths;
-  };
-
-  /** `['@/', 'packages/cf-backend/src/']` for the package `from` lives in. */
-  const aliases = (from: string): readonly (readonly [string, string])[] => {
-    const dir = from.split('/').slice(0, 2).join('/');
-    const cached = aliasRules.get(dir);
-
-    if (cached !== undefined) return cached;
-    const config = `${dir}/tsconfig.json`;
-
-    const paths = tracked.has(config)
-      ? v.parse(AliasSchema, JSON.parse(readRepositoryFile(root, config))).compilerOptions.paths
-      : {};
-
-    const rules = Object.entries(paths).flatMap(([pattern, targets]) => {
-      const target = targets[0];
-
-      if (target === undefined || !pattern.endsWith('*') || !target.endsWith('*')) return [];
-
-      return [[pattern.slice(0, -1), collapsePath(`${dir}/${target.slice(0, -1)}`)] as const];
-    });
-
-    aliasRules.set(dir, rules);
-
-    return rules;
-  };
+  const declared = [...tracked];
+  const workspace = readWorkspace(new Map(declared.filter(isManifest).map((file) => [file, readRepositoryFile(root, file)])));
+  const aliases = readAliases(new Map(declared.filter(isTypescriptConfig).map((file) => [file, readRepositoryFile(root, file)])));
 
   return (from, raw) => {
     const specifier = raw.includes(QUERY) ? raw.slice(0, raw.indexOf(QUERY)) : raw;
+    const resolved = resolveSpecifier({ specifier, from, universe: corpus, workspace, aliases });
 
-    const found = (base: string): Resolution => ({
-      file: IMPORT_CANDIDATES.map((suffix) => base + suffix).find((path) => corpus.has(path)),
-      local: true,
-    });
+    if (resolved.kind === 'file' || resolved.kind === 'asset') return { file: resolved.path, local: true };
 
-    if (specifier.startsWith('.')) {
-      const base = collapsePath(`${from.slice(0, from.lastIndexOf('/') + 1)}${specifier}`);
-
-      // A relative path into node_modules is a DEPENDENCY reached through the
-      // filesystem — @nimbus-sh/worker exports no subpath for its dist session
-      // modules, and nimbus-programmatic.ts documents the one live instance.
-      // External like any package specifier, never a dangling local edge.
-      if (base.split('/').includes('node_modules')) return EXTERNAL;
-
-      return found(base);
-    }
-
-    if (specifier.startsWith(WORKSPACE_SCOPE)) {
-      const [pkg, ...rest] = specifier.slice(WORKSPACE_SCOPE.length).split('/');
-
-      if (pkg === undefined || pkg.length === 0) return EXTERNAL;
-      const entry = subpaths(pkg)[rest.length === 0 ? '.' : `./${rest.join('/')}`];
-      const named = entry === undefined ? undefined : collapsePath(`packages/${pkg}/${entry}`);
-
-      if (named !== undefined && corpus.has(named)) return { file: named, local: true };
-
-      return found(collapsePath(`packages/${pkg}/src/${rest.join('/')}`));
-    }
-
-    for (const [prefix, target] of aliases(from)) {
-      if (!specifier.startsWith(prefix)) continue;
-
-      return found(collapsePath(`${target}/${specifier.slice(prefix.length)}`));
-    }
-
-    return EXTERNAL;
+    return resolved.kind === 'unresolved' ? { file: undefined, local: true } : EXTERNAL;
   };
 }
 

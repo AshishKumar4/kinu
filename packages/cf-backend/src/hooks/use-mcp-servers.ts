@@ -1,5 +1,6 @@
 /** The account's MCP servers and the presets they install from: one read every view of them on a page shares. */
-import { listMcpPresets, listMcpServers, type McpPresetAvailability, type McpServerSummary } from "@/lib/user-api";
+import type { McpPresetAvailability, McpServerSummary } from "@kinu.run/core";
+import { listMcpPresets, listMcpServers } from "@/lib/user-api";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAsyncResource, type AsyncResourceControl } from "@/hooks/use-async-resource";
 

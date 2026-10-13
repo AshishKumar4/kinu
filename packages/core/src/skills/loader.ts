@@ -125,7 +125,6 @@ export function admitActiveSkills(opts: {
   return settle(Effect.gen(function* () {
     let remaining = Math.max(0, opts.admissionTokens);
     const active: ActiveSkill[] = [];
-    const reasons: Array<{ name: string; reason: ActivationReason }> = [];
 
     for (const { skill, reason } of opts.activated) {
       // An unreadable body defers only its own skill.
@@ -144,8 +143,7 @@ export function admitActiveSkills(opts: {
       if (Result.isFailure(read)) diagnostics.failure('skills.admission_failed', read.failure, { skill: skill.name });
 
       if (Result.isFailure(read) || read.success === null) {
-        active.push({ ...skill, body: null, trust: 'unverified' });
-        reasons.push({ name: skill.name, reason });
+        active.push({ ...skill, body: null, trust: 'unverified', reason });
         continue;
       }
 
@@ -156,13 +154,12 @@ export function admitActiveSkills(opts: {
 
         if (cost > remaining) {
           // Body admission is a budget decision; the built-in's policy still narrows the tool surface.
-          active.push({ ...skill, body: null, trust: 'builtin' });
+          active.push({ ...skill, body: null, trust: 'builtin', reason });
         } else {
           remaining -= cost;
-          active.push({ ...skill, body: source, trust: 'builtin' });
+          active.push({ ...skill, body: source, trust: 'builtin', reason });
         }
 
-        reasons.push({ name: skill.name, reason });
         continue;
       }
 
@@ -170,8 +167,7 @@ export function admitActiveSkills(opts: {
       const parsed = parseSkillFile(source, 'vfs', skill.name);
 
       if (Result.isFailure(parsed) || parsed.success.name !== skill.name) {
-        active.push({ ...skill, body: null, trust: 'unverified' });
-        reasons.push({ name: skill.name, reason });
+        active.push({ ...skill, body: null, trust: 'unverified', reason });
         continue;
       }
 
@@ -179,8 +175,7 @@ export function admitActiveSkills(opts: {
       const cost = estimateTokens(parsed.success.body.length);
 
       if (cost > remaining) {
-        active.push({ ...parsed.success, bodyRef: skill.bodyRef, body: null, trust: 'unverified' });
-        reasons.push({ name: parsed.success.name, reason });
+        active.push({ ...parsed.success, bodyRef: skill.bodyRef, body: null, trust: 'unverified', reason });
         continue;
       }
 
@@ -191,11 +186,11 @@ export function admitActiveSkills(opts: {
         bodyRef: skill.bodyRef,
         body,
         trust: skillTrust(skill.bodyRef, source, opts.trust),
+        reason,
       });
-      reasons.push({ name: parsed.success.name, reason });
     }
 
-    return { active, reasons };
+    return { active };
   }));
 }
 

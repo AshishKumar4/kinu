@@ -278,12 +278,6 @@ function readSoulForPrompt(override?: string): string {
   return sealSoul(soul === undefined || soul === '' ? FALLBACK_PURPOSE : soul);
 }
 
-/** Activation reasons render in the volatile turn context so the stable prefix stays byte-identical. Order is
- *  kept for the char budget, while block order is pinned by name. */
-function stableActiveSkills(activeSkills: ActiveSkillSet): ActiveSkillSet {
-  return { active: activeSkills.active, reasons: [] };
-}
-
 function hasUnverifiedInstructions(opts: SystemPromptOptions): boolean {
   if (opts.agentsMd?.admitted.some((file) => file.trust === 'unverified')) return true;
 
@@ -306,7 +300,7 @@ export const WORKSPACE_INSTRUCTIONS_HEADER =
 export function renderUnverifiedInstructions(ctx: UnverifiedInstructions): string | null {
   const parts = [
     ctx.agentsMd ? renderAgentsMdSection(ctx.agentsMd, 'unverified') : '',
-    ctx.activeSkills ? renderActiveSkillsSection(stableActiveSkills(ctx.activeSkills), 'unverified').trim() : '',
+    ctx.activeSkills ? renderActiveSkillsSection(ctx.activeSkills, 'unverified', 'stable').trim() : '',
   ].filter(Boolean);
 
   if (parts.length === 0) return null;
@@ -378,7 +372,7 @@ export function buildSystemPromptParts(
     opts.agentsMd ? renderAgentsMdSection(opts.agentsMd, 'system') : '',
     opts.availableSkills ? renderSkillsIndexSection(opts.availableSkills).trim() : '',
     opts.activeSkills
-      ? renderActiveSkillsSection(stableActiveSkills(opts.activeSkills), 'system').trim()
+      ? renderActiveSkillsSection(opts.activeSkills, 'system', 'stable').trim()
       : '',
     // Above the content it governs so the content cannot displace it.
     hasUnverifiedInstructions(opts) ? render(WORKSPACE_INSTRUCTIONS_SECTION, {}) : '',

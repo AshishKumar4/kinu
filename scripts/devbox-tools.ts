@@ -11,7 +11,6 @@
  *
  * deploy.sh builds nothing: it runs `check` on the store bucket it deploys, and refuses by name.
  */
-import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -21,10 +20,9 @@ import { AwsClient } from 'aws4fetch';
 import { devboxTools } from '../armada/devbox-tools';
 import { deployedConfig } from './infra-manifest';
 import { r2ObjectSize, restApiToken } from './cloudflare-rest';
+import { requireCloudflareAccountId, wrangler } from './infra-cloudflare';
 
 const BLOCK_LOWER = join(import.meta.dir, '..', 'packages/devbox/block-lower');
-
-const ACCOUNT = 'f44999d1ddda7012e9a87729eba250f1';
 
 const ToolsRecord = v.object({ sha256: v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/)), bytes: v.number() });
 
@@ -50,7 +48,7 @@ export async function copyPinnedTools(bucket: string): Promise<void> {
   const client = new AwsClient({ accessKeyId, secretAccessKey, service: 's3', region: 'auto' });
 
   for (const part of partsOf(tools)) {
-    const copied = await client.fetch(`https://${ACCOUNT}.r2.cloudflarestorage.com/${bucket}/${part.key}`, {
+    const copied = await client.fetch(`https://${requireCloudflareAccountId()}.r2.cloudflarestorage.com/${bucket}/${part.key}`, {
       method: 'PUT', headers: { 'x-amz-copy-source': `/${source}/${part.key}` },
     });
 
@@ -74,7 +72,7 @@ async function missingPart(bucket: string, tools: v.InferOutput<typeof ToolsReco
   if (token === '') throw new Error('reading the store bucket needs the deploy\'s REST token (KINU_CLOUDFLARE_API_TOKEN)');
 
   for (const part of partsOf(tools)) {
-    const size = await r2ObjectSize({ accountId: ACCOUNT, bucket, key: part.key, token });
+    const size = await r2ObjectSize({ accountId: requireCloudflareAccountId(), bucket, key: part.key, token });
 
     if (size !== part.bytes) return { ...part, size };
   }
@@ -92,14 +90,6 @@ export async function buildTools(): Promise<{ readonly bytes: Uint8Array; readon
   return { bytes, sha256: createHash('sha256').update(bytes).digest('hex'), job: await job.id };
 }
 
-function wrangler(args: readonly string[]) {
-  const ran = spawnSync(join(import.meta.dir, '..', 'node_modules/.bin/wrangler'), args, {
-    encoding: 'utf8', env: { ...process.env, CLOUDFLARE_ACCOUNT_ID: ACCOUNT },
-  });
-
-  return { ok: ran.status === 0, out: `${ran.stdout}${ran.stderr}` };
-}
-
 /** Uploads the pinned tarball's parts from `bytes`, refusing bytes that are not the pin. */
 export function uploadPinnedTools(bucket: string, bytes: Uint8Array, progress: (key: string, bytes: number) => void = () => {}): void {
   const pinned = pinnedTools();
@@ -115,9 +105,9 @@ export function uploadPinnedTools(bucket: string, bytes: Uint8Array, progress: (
     for (const [index, part] of partsOf(pinned).entries()) {
       const file = join(dir, `part-${String(index)}`);
       writeFileSync(file, bytes.subarray(index * TOOLS_PART_BYTES, index * TOOLS_PART_BYTES + part.bytes));
-      const put = wrangler(['r2', 'object', 'put', `${bucket}/${part.key}`, '--file', file, '--content-type', 'application/octet-stream', '--remote']);
+      const put = wrangler(['r2', 'object', 'put', `${bucket}/${part.key}`, '--file', file, '--content-type', 'application/octet-stream', '--remote'], { timeoutMs: null });
 
-      if (!put.ok) throw new Error(`uploading ${bucket}/${part.key} failed:\n${put.out.slice(-1500)}`);
+      if (!put.ok) throw new Error(`uploading ${bucket}/${part.key} failed:\n${`${put.stdout}${put.stderr}`.slice(-1500)}`);
       rmSync(file);
       progress(part.key, part.bytes);
     }

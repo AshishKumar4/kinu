@@ -91,18 +91,17 @@
  *   bun scripts/mutation-pilot.ts --only packages/core/src/mcts/uct.ts:44:boundary
  */
 
-import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
-import { gitEnv } from '../packages/test-utils/src/git-env';
 import { isProductSource, isRunnableSuite, readMatching, trackedFiles } from './sources';
 import {
-  functionOwner, isFunctionLike, moduleSpecifiers, ownerName, parse, walk,
+  functionOwner, isFunctionLike, ownerName, parse, walk,
   type SyntaxNode,
 } from './syntax';
-
-const root = new URL('..', import.meta.url).pathname;
+import {
+  candidateDefenders, requireCleanTargets, requireOwnWorktree, restoreMutant, root, runSuites, writeMutant,
+} from './mutation-runtime';
 
 /**
  * The pinned scope, as path prefixes under one package.
@@ -352,95 +351,7 @@ export function select(all: readonly Mutant[], budget: number): Mutant[] {
   return chosen;
 }
 
-/* ── Defenders ────────────────────────────────────────────────────────── */
-
-/**
- * The suites that could plausibly see one mutant, cheaply: the ones importing
- * the mutated file, and the ones naming the mutated function.
- *
- * Only ever an optimisation, and the escalation below is what keeps it honest —
- * an under-inclusive answer costs seconds on a kill and cannot invent a
- * survivor, because a survivor is re-run against every core suite before it is
- * reported.
- */
-export function defenders(
-  mutant: Mutant,
-  suites: ReadonlyMap<string, string>,
-): readonly string[] {
-  const target = join(root, mutant.file);
-  const found: string[] = [];
-
-  for (const [file, text] of suites) {
-    if (mutant.enclosing !== '(anonymous)' && mutant.enclosing !== '(top level)'
-      && text.includes(mutant.enclosing)) {
-      found.push(file);
-      continue;
-    }
-
-    const imports = moduleSpecifiers(parse(file, text).root)
-      .filter((specifier) => specifier.startsWith('.'))
-      .map((specifier) => join(root, dirname(file), specifier));
-
-    if (imports.some((path) => target === path || target === `${path}.ts`)) found.push(file);
-  }
-
-  return found;
-}
-
 /* ── Applying one mutant, and taking it back ──────────────────────────── */
-
-function git(...args: readonly string[]): string {
-  return execFileSync('git', ['-C', root, ...args], {
-    env: gitEnv(), encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
-  }).trim();
-}
-
-/** Refuse the main checkout: it is shared with every other agent, suite and
- *  editor, and an in-place mutation there makes a test fail for a reason that is
- *  not in the code. `mutation-sweep.ts` states the same refusal for the same
- *  reason; this is the second caller, not a second rule. */
-function requireOwnWorktree(): void {
-  const tree = git('rev-parse', '--show-toplevel');
-  const main = dirname(git('rev-parse', '--path-format=absolute', '--git-common-dir'));
-
-  if (tree === main) {
-    throw new Error(
-      `Refusing to mutate ${tree}: this is the main checkout, which every other agent, `
-      + 'suite and editor reads. Run this in a worktree:'
-      + '\n  git worktree add ../Kinu-pilot -b test/my-pilot main'
-      + '\n  cd ../Kinu-pilot && bash scripts/setup-worktree.sh',
-    );
-  }
-}
-
-/** Refuse a dirty target: the recovery from an interrupted run is
- *  `git checkout --`, and that recovery must not be able to destroy work. */
-function requireCleanTargets(files: readonly string[]): void {
-  const dirty = git('status', '--porcelain', '--', ...files);
-
-  if (dirty !== '') {
-    throw new Error(
-      'Refusing to mutate: these targets have uncommitted changes, and the recovery from '
-      + `an interrupted run is 'git checkout --', which would discard them.\n${dirty}`,
-    );
-  }
-}
-
-/** Pristine text of every file this process has touched, so an interrupt can put
- *  them all back. */
-const pristine = new Map<string, string>();
-
-function restoreAll(): void {
-  for (const [file, text] of pristine) writeFileSync(join(root, file), text);
-  pristine.clear();
-}
-
-for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
-  process.on(signal, () => {
-    restoreAll();
-    process.exit(130);
-  });
-}
 
 /** Write the mutant, having proved the span still holds what was parsed. */
 function apply(mutant: Mutant): void {
@@ -456,64 +367,10 @@ function apply(mutant: Mutant): void {
     );
   }
 
-  pristine.set(mutant.file, source);
-  writeFileSync(path, source.slice(0, mutant.start) + mutant.after + source.slice(mutant.end));
+  writeMutant(mutant.file, source, source.slice(0, mutant.start) + mutant.after + source.slice(mutant.end));
 }
 
-/** Put the file back, and prove it went back. */
-function revert(mutant: Mutant): void {
-  const text = pristine.get(mutant.file);
-
-  if (text === undefined) throw new Error(`${mutant.file} was never mutated`);
-  const path = join(root, mutant.file);
-  writeFileSync(path, text);
-  pristine.delete(mutant.file);
-
-  if (readFileSync(path, 'utf8') !== text) {
-    throw new Error(
-      `${mutant.file} did not restore to its pristine bytes after ${mutant.id}. Stopping so `
-      + `no later result is measured against a mutant. Recover with: git -C ${root} checkout `
-      + `-- ${mutant.file}`,
-    );
-  }
-}
-
-/* ── Running suites ───────────────────────────────────────────────────── */
-
-interface Run {
-  readonly failed: boolean;
-  readonly timedOut: boolean;
-  readonly ms: number;
-  readonly output: string;
-}
-
-function runSuites(paths: readonly string[], deadlineMs: number | undefined): Run {
-  const started = Date.now();
-
-  const spawned = Bun.spawnSync({
-    cmd: ['bun', 'test', '--timeout=0', ...paths],
-    cwd: root,
-    stdout: 'pipe',
-    stderr: 'pipe',
-    env: { ...process.env, FORCE_COLOR: '0' },
-    timeout: deadlineMs,
-    killSignal: 'SIGKILL',
-  });
-
-  const ms = Date.now() - started;
-
-  return {
-    failed: spawned.exitCode !== 0,
-    // A signal death inside the deadline is a runtime fault, not a clock: the
-    // sweep measured one (a bun segfault reported as a 78 s "timeout" against a
-    // 216 s deadline) and this program keeps the same distinction.
-    timedOut: spawned.exitCode === null && deadlineMs !== undefined && ms >= deadlineMs,
-    ms,
-    output: `${spawned.stdout.toString()}${spawned.stderr.toString()}`,
-  };
-}
-
-export type Outcome = 'killed-focused' | 'killed-core' | 'survived' | 'timeout' | 'unrunnable';
+export type Outcome = 'killed-focused' | 'killed-core' | 'survived' | 'timeout' | 'crashed';
 
 export interface Verdict {
   readonly mutant: Mutant;
@@ -530,7 +387,8 @@ const CORE_TIER = 'packages/core/';
 const DEADLINE_FACTOR = 4;
 
 function judge(mutant: Mutant, suites: ReadonlyMap<string, string>, baselineMs: number): Verdict {
-  const focused = defenders(mutant, suites);
+  const anonymous = mutant.enclosing === '(anonymous)' || mutant.enclosing === '(top level)';
+  const focused = candidateDefenders(mutant.file, anonymous ? null : mutant.enclosing, suites);
   const deadlineMs = baselineMs * DEADLINE_FACTOR;
   apply(mutant);
   let spent = 0;
@@ -540,6 +398,8 @@ function judge(mutant: Mutant, suites: ReadonlyMap<string, string>, baselineMs: 
       const run = runSuites(focused, deadlineMs);
       spent += run.ms;
 
+      if (run.crashed) return { mutant, outcome: 'crashed', defenders: focused, ms: spent };
+
       if (run.timedOut) return { mutant, outcome: 'timeout', defenders: focused, ms: spent };
 
       if (run.failed) return { mutant, outcome: 'killed-focused', defenders: focused, ms: spent };
@@ -548,13 +408,15 @@ function judge(mutant: Mutant, suites: ReadonlyMap<string, string>, baselineMs: 
     const escalated = runSuites([CORE_TIER], deadlineMs);
     spent += escalated.ms;
 
+    if (escalated.crashed) return { mutant, outcome: 'crashed', defenders: focused, ms: spent };
+
     if (escalated.timedOut) return { mutant, outcome: 'timeout', defenders: focused, ms: spent };
 
     if (escalated.failed) return { mutant, outcome: 'killed-core', defenders: focused, ms: spent };
 
     return { mutant, outcome: 'survived', defenders: focused, ms: spent };
   } finally {
-    revert(mutant);
+    restoreMutant(mutant.file, mutant.id);
   }
 }
 
@@ -583,7 +445,7 @@ export function render(verdicts: readonly Verdict[], poolSize: number, wallMs: n
     + `${Math.round(wallMs / 1000)} s — ${killed.length} killed `
     + `(${of('killed-focused').length} by focused suites, ${of('killed-core').length} on `
     + `escalation to ${CORE_TIER}), ${survived.length} survived, ${of('timeout').length} timed `
-    + `out, ${of('unrunnable').length} unrunnable.\n`);
+    + `out, ${of('crashed').length} crashed the runtime.\n`);
 
   for (const verdict of verdicts) {
     const mark = verdict.outcome.startsWith('killed') ? 'KILLED  ' : verdict.outcome.toUpperCase();

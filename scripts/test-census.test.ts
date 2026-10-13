@@ -132,6 +132,9 @@ function probeInputs(): CensusInputs {
     bridges: bridgesByName(bridges),
     productUnits: productUnitsOf(sources),
     tracked: new Set([MODULE, PROBE, HELPER, FACTORY, OTHER_HELPER]),
+    // The probe package publishes a root barrel and its budget module, as a workspace manifest would.
+    workspace: new Map([['@kinu.run/probe', { directory: 'packages/probe/', exports: { '.': './src/index.ts', './budget': './src/budget.ts' }, main: undefined }]]),
+    aliases: [],
     scope: '@kinu.run',
   };
 }

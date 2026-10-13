@@ -151,7 +151,7 @@ function bucketOf(config: DeployedConfig, binding: string): string | undefined {
 }
 
 function run(argv: readonly string[]): string {
-  const result = wrangler(argv, 600_000);
+  const result = wrangler(argv, { timeoutMs: 600_000 });
 
   if (!result.ok) throw new Error(`wrangler ${argv.slice(0, 2).join(' ')} failed: ${why(result)}`);
 
@@ -166,7 +166,7 @@ function plan(environment: InfraEnvironment) {
 
 /** The newest reset recorded in `bucket`, or none. */
 export function latestReset(bucket: string): Reset | undefined {
-  const read = wrangler(['r2', 'object', 'get', `${bucket}/${LATEST_RESET_KEY}`, '--pipe', '--remote'], 600_000);
+  const read = wrangler(['r2', 'object', 'get', `${bucket}/${LATEST_RESET_KEY}`, '--pipe', '--remote'], { timeoutMs: 600_000 });
 
   if (read.ok) return v.parse(ResetSchema, JSON.parse(read.stdout));
 

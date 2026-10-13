@@ -53,12 +53,13 @@ function skill(overrides: Partial<ActiveSkill> = {}): ActiveSkill {
     bodyRef: { kind: 'file', path: SKILL_PATH, chars: 20 },
     body: 'Deploy with wrangler.',
     trust: 'unverified',
+    reason: { kind: 'always_active', via: 'config' },
     ...overrides,
   };
 }
 
 function skillSet(...active: ActiveSkill[]): ActiveSkillSet {
-  return { active, reasons: [] };
+  return { active };
 }
 
 /** A real `Tool`, not a cast: `as never` would keep these tests green across a tool-map signature change. */
