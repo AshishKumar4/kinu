@@ -6222,7 +6222,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** A local parked refusal or an agent's own owed work can depend on changed settings. One read, only while idle. */
   private awaitsSettings(): boolean {
     return this.sql<{ awaits: number }>`SELECT EXISTS (SELECT 1 FROM terminal_effects WHERE status = 'parked')
-      OR EXISTS (SELECT 1 FROM agent_owed_work) AS awaits`[0]?.awaits === 1;
+      OR EXISTS (SELECT 1 FROM agent_reports WHERE holds = 1) AS awaits`[0]?.awaits === 1;
   }
 
   /** Only slow source sections are held; every push folds current activity, settings wait and run. */
