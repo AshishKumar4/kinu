@@ -26,7 +26,7 @@ export interface TerminalPaneProps {
   onExecute?: (cmd: string) => Promise<ExecutorCommandResult>;
   /** What the pane's bar shows at its left, before the terminal's own state: the view's switch, or its name. */
   leading?: ReactNode;
-  /** The computer's terminal session this pane attaches to (D89); the box's first without one. */
+  /** The computer's terminal session this pane attaches to (D90); the box's first without one. */
   session?: string;
   /** The pane's bar on the terminal's own ground, under a rule its caller draws, where tabs sit above it. */
   barOnGround?: boolean;
@@ -62,14 +62,15 @@ function TerminalFrame({ leading, state, failure, copies, action, hostRef, barOn
     <div className="flex h-full w-full flex-col">
       <div className={`flex shrink-0 items-center gap-3 pr-3 pl-4 ${barOnGround ? "p-terminal-ground h-9" : "h-11"}`}>
         {leading}
-        <span className="ml-auto flex min-w-0 items-center gap-3 p-meta p-text-3">
-          {failure !== null && <span className="min-w-0 truncate p-danger" title={failure}>{failure}</span>}
+        <span className="ml-auto flex shrink-0 items-center gap-3 p-meta p-text-3">
+          {failure !== null && <span className="max-w-[16rem] truncate p-danger" title={failure}>{failure}</span>}
           {state !== null && (
-            <span data-terminal-state className="inline-flex shrink-0 items-center gap-1.5">
-              <span aria-hidden className="p-env-dot" data-tone={STATE_SAYS[state].tone} />{STATE_SAYS[state].word}
+            <span data-terminal-state className="inline-flex shrink-0 items-center gap-1.5" title={STATE_SAYS[state].word}>
+              <span aria-hidden className="p-env-dot" data-tone={STATE_SAYS[state].tone} />
+              <span className="hidden @[26rem]:inline">{STATE_SAYS[state].word}</span>
             </span>
           )}
-          {copies !== null && <span className="hidden shrink-0 @[28rem]:inline" title={copies.title}>{copies.note}</span>}
+          {copies !== null && <span className="hidden shrink-0 @[36rem]:inline" title={copies.title}>{copies.note}</span>}
           {trailing}
           {action}
         </span>

@@ -1,5 +1,5 @@
 /**
- * The computer's terminal sessions (D89): named tmux sessions the page attaches to by id, each with the folder it was
+ * The computer's terminal sessions (D90): named tmux sessions the page attaches to by id, each with the folder it was
  * last in. tmux keeps a session's shell and screen across reattaches; a restart of the container ends them all, so the
  * box keeps each session's id, name and folder, and the next attach opens a fresh shell there under the same name.
  */

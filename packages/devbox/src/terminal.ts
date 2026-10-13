@@ -21,7 +21,7 @@ const TMUX_CONF = [
 ].join('\n');
 
 /**
- * Each session's shell records how its last command ended on its own pane, where the sessions read finds it (D89): the
+ * Each session's shell records how its last command ended on its own pane, where the sessions read finds it (D90): the
  * exit status, the time, and the command line, once per command the history numbers. The person's own rc runs first.
  */
 const SESSION_RC = [

@@ -1724,7 +1724,7 @@ const stubRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
   return rpcResult({}).json<T>();
 };
 
-/** The computer's sessions (D89) as its box keeps them: a shell, a dev server listening, a test run that failed. */
+/** The computer's sessions (D90) as its box keeps them: a shell, a dev server listening, a test run that failed. */
 const GALLERY_SESSIONS: TerminalSession[] = [
   { id: "shell", name: "shell", cwd: "/workspace/storefront", open: true, running: null, last: { exit: 0, at: Date.now() - 20_000, command: "git status" }, ports: [], branch: "main" },
   { id: "s2", name: "dev server", cwd: "/workspace/storefront", open: true, running: "node", last: null, ports: [5173], branch: "main" },

@@ -6063,7 +6063,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return await this.withSizedBox(async (box) => { await box.resize(size); });
   }
 
-  /** The computer's terminal sessions (D89), read without waking it; null where the deployment has no computer. */
+  /** The computer's terminal sessions (D90), read without waking it; null where the deployment has no computer. */
   @callable() async listComputerSessions(): Promise<readonly TerminalSession[] | null> {
     return await this.computerBox()?.terminalSessions() ?? null;
   }

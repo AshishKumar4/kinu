@@ -1,4 +1,4 @@
-// D89: the computer's terminal sessions. tmux is the box's, so the read's rows are given here as the box's read
+// D90: the computer's terminal sessions. tmux is the box's, so the read's rows are given here as the box's read
 // prints them; the product flow `computer-sessions` reads a real computer's.
 import { TestDevbox } from './support/test-devbox';
 import { describe, expect, test } from 'bun:test';

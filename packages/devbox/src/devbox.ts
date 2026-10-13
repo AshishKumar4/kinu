@@ -3147,7 +3147,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   /**
-   * Every terminal session, as one read of the running box finds it (D89): its folder, the command in its foreground,
+   * Every terminal session, as one read of the running box finds it (D90): its folder, the command in its foreground,
    * how its last command ended, the ports under it, its folder's branch. A box that is not running is not woken: its
    * sessions read as they were left. A session's folder, read, is kept for the next start.
    */

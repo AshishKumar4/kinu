@@ -355,7 +355,7 @@ export class FakeSandbox {
   /** Answers a port's fetch in place of the probe status, e.g. with an upgrade. */
   portAnswer: ((port: number, request: Request) => Response | Promise<Response>) | undefined;
   desktopStart: ExecResult = { stdout: '', stderr: '', exitCode: 0 };
-  /** What the box's terminal sessions read answers (D89): tab-separated `P`, `L` and `B` rows. */
+  /** What the box's terminal sessions read answers (D90): tab-separated `P`, `L` and `B` rows. */
   sessionsRead: ExecResult = { stdout: '', stderr: '', exitCode: 0 };
   readonly fileOperations: FileOperation[] = [];
   readonly mountCalls: string[] = [];

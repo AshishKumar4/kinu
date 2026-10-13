@@ -1,5 +1,5 @@
 /**
- * The machines' terminal sessions (D89): the computer's named sessions, each machine's one shell where it has no more,
+ * The machines' terminal sessions (D90): the computer's named sessions, each machine's one shell where it has no more,
  * and the one place a session says where it is, what it serves and how its last command ended. One status language:
  * the dot a machine wears, on a session.
  */
@@ -192,9 +192,9 @@ export function SessionDetails({ session, name }: { session: TerminalSession | n
     <span className="flex min-w-0 items-center gap-3 p-meta p-text-3">
       {name !== undefined && <span className="inline-flex shrink-0 items-center gap-2 p-row-text font-medium p-text"><Dot tone={sessionTone(session).tone} />{name}</span>}
       <span data-session-cwd className="inline-flex min-w-0 items-center gap-1.5"><FolderOpenIcon size={12} className="shrink-0" aria-hidden /><span className="truncate">{session.cwd}</span></span>
-      {session.branch !== null && <span className="hidden min-w-0 items-center gap-1.5 @[24rem]:inline-flex"><GitBranchIcon size={12} className="shrink-0" aria-hidden /><span className="truncate">{session.branch}</span></span>}
+      {session.branch !== null && <span className="hidden min-w-0 items-center gap-1.5 @[30rem]:inline-flex"><GitBranchIcon size={12} className="shrink-0" aria-hidden /><span className="truncate">{session.branch}</span></span>}
       {session.ports.map((port) => <span key={port} data-session-port className="p-term-port shrink-0">:{port}</span>)}
-      {detail !== null && <span className={`hidden min-w-0 truncate @[32rem]:inline ${failed ? "p-danger" : ""}`}>{detail}</span>}
+      {detail !== null && <span className={`hidden min-w-0 truncate @[34rem]:inline ${failed ? "p-danger" : ""}`}>{detail}</span>}
     </span>
   );
 }

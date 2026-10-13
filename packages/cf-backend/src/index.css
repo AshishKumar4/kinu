@@ -299,7 +299,7 @@ html, body, #root {
        raise    #E8E0CE  row hover, menus
        line     #D2C6AE  structural rules — 1.5:1 on paper, plainly visible
 
-     Gold splits in two on paper: the fill stays bright (#D89A44) while
+     Gold splits in two on paper: the fill stays bright (#D90A44) while
      text-grade gold deepens to #8F5C10, exactly as the mock does. ── */
   --c-overlay:  #F7F3E9;   /* dialogs — paper, lifted by shadow */
   --c-input-bg: #F7F3E9;   /* mock --input */
@@ -1902,7 +1902,7 @@ body > .annotation-toolbar {
 }
 .p-env-action:hover { color: var(--c-text); border-color: var(--c-border-strong); }
 .p-env-action:disabled { opacity: 0.6; }
-/* A machine's sessions as tabs (D89): a name and its dot; the open one carries the accent's underline down onto the
+/* A machine's sessions as tabs (D90): a name and its dot; the open one carries the accent's underline down onto the
    rule its terminal starts under. Tabs that do not fit fade at the edge and scroll. */
 .p-session-tabs {
   display: flex;

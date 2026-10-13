@@ -158,7 +158,7 @@ describe('sharing the open Slate', () => {
 });
 
 describe('the Environment panel', () => {
-  test('the Linux container is the agent\'s computer: its card is a control named by its label that opens its terminal', async () => {
+  test('the Linux container is the agent\'s computer: its chip is a control named by its label that opens its sessions and its screen', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
 
@@ -169,12 +169,13 @@ describe('the Environment panel', () => {
 
         const card = await required(page, '[data-env-card="computer"]', 'button', COMPUTER);
 
-        // From the keyboard: the control takes focus and Enter selects it, so its pane offers its terminal and screen.
+        // From the keyboard: the control takes focus and Enter selects it, so its pane offers its sessions and its screen.
         await card.focus();
         await page.keyboard.press('Enter');
         await page.waitForSelector('[data-env-card="computer"] [aria-pressed="true"]', SOON);
-        expect(await control(page, 'body', 'tab', 'Terminal')).not.toBeNull();
+        await page.waitForSelector('[role="tab"][aria-selected="true"]', SOON);
         expect(await control(page, 'body', 'tab', 'Desktop')).not.toBeNull();
+        expect(await page.$$eval('[role="tablist"] [role="tab"]', (tabs) => tabs.length)).toBeGreaterThan(1);
       } finally { await page.close(); }
     });
   });
