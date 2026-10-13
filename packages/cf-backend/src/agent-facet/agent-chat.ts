@@ -86,6 +86,14 @@ export class FacetChat {
 
   private resting: Promise<unknown> = Promise.resolve();
 
+  /** The wake the workspace holds for this agent as this isolate's newest report named it (`next`; null for none):
+   *  written as each report leaves, a told one once the workspace took it; read by an arm it may already cover (`tell`). */
+  private namedWake: number | null = null;
+
+  /** Its standing moved since the newest report it sent, an arm having asked nothing new (`tell`): set there, dropped as
+   *  any report leaves; the next crossing that can carry one does, a turn's preparation first (`prepareTurn`). */
+  private standingUntold = false;
+
   constructor(private readonly deps: FacetChatDeps) {
     const { actor, storage, workspace } = deps;
     const sql = actor.runtime.storage.sql;
@@ -258,8 +266,14 @@ export class FacetChat {
     // it is this agent's current execution. Every call that runs more of the turn carries it.
     const bound = { turnId: lease.turnId, runId: lease.runId, epoch: round.capability.epoch };
 
+    // What the turn's opening moved of its standing, which its arm did not tell, rides its preparation.
+    const owes = this.standingUntold ? this.owesNow(undefined, []) : null;
+
+    this.standingUntold = false;
+
     const prepared = await workspace.prepareChat({
       turnId: lease.turnId, mode, userText: item.text, parentDriven: this.parentDriven, driving: this.driving, opening,
+      ...(owes !== null && { owes }),
       // A plan the owner sent back with comments awaits its answers on the owner's turns alone.
       awaitsReply: !this.parentDriven && planAwaitingReply(activePlan(), this.driving),
       // Its run, which the turn's recovery continues and its Retry starts anew; a recovered run's surface is built on what
@@ -268,6 +282,7 @@ export class FacetChat {
       ...(explicitTier !== undefined && { explicitTier }), ...(taskPlan !== null && { taskPlan }),
     });
 
+    if (owes !== null) this.namedWake = owes.next;
     database.prepare(bound, prepared);
     this.reviewsTurns = prepared.reviewsTurns;
     // A recovered execution assembles on what it froze as it first bound, and resolves nothing (D5).
@@ -469,7 +484,14 @@ export class FacetChat {
    * ended already leaves no arm behind. Its run ends ride the next report it tells, which retires them once it reached.
    */
   taken(): Promise<AgentOwes> {
-    const reported = this.telling.then(() => this.owesNow(undefined, []));
+    const reported = this.telling.then(() => {
+      const owes = this.owesNow(undefined, []);
+
+      this.namedWake = owes.next;
+      this.standingUntold = false;
+
+      return owes;
+    });
 
     this.telling = hold(attempt({ doing: 'reporting what an agent owes for its input', otherwise: 'unavailable' }, () => reported));
 
@@ -492,9 +514,21 @@ export class FacetChat {
   private tell(at?: number): Promise<void> {
     const told = this.telling.then(async () => {
       const ends = this.session.runEndsOwed();
+
+      // An arm whose wake the workspace already holds, still to come and no later, asks nothing new: that wake comes first,
+      // and the agent tells what it owes then. Its standing rides the next crossing that carries a report: the turn's
+      // preparation, or the next tell. A run's end and a rest always go.
+      if (at !== undefined && ends.length === 0 && this.namedWake !== null && Date.now() < this.namedWake && this.namedWake <= at) {
+        this.standingUntold = true;
+
+        return;
+      }
+
       const { seq, next, holds, report } = this.owesNow(at, ends);
 
+      this.standingUntold = false;
       await this.deps.workspace.owes(seq, next, holds, report);
+      this.namedWake = next;
       this.session.runEndsTold(ends);
     });
 

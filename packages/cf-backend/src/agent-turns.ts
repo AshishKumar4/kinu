@@ -11,7 +11,7 @@ import {
 import type { TurnCall } from './agent-facets';
 import type { TurnBound, TurnCapabilityOf } from './agent-facet/agent-turn';
 import { prepareHostedTurn, type HostedActorSeams, type HostedTurnRequest, type PreparedHostedTurn } from './hosted-actors';
-import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, Fact, FrozenAuthority, JsonObject, PreparedAgentTurn, RunEndReport, StoredRow, TaskPlan, OpenedAt, TurnFacts, TurnOpeningAsk } from '@kinu.run/core';
+import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, Fact, AgentOwes, FrozenAuthority, JsonObject, PreparedAgentTurn, RunEndReport, StoredRow, TaskPlan, OpenedAt, TurnFacts, TurnOpeningAsk } from '@kinu.run/core';
 
 export interface AgentTurnsDeps {
   readonly sql: SqlExecutor;
@@ -65,6 +65,8 @@ export interface ChatTurnRequest {
   /** A recovered execution's authority, as it froze at its bind (D5): its surface, mode and sources are built on it, and
    *  nothing of the current settings is resolved. */
   readonly frozen?: FrozenAuthority;
+  /** The agent's report its opening moved and no crossing told yet, numbered in its sequence: taken first, as a told one. */
+  readonly owes?: AgentOwes;
 }
 
 interface OpenTurn {

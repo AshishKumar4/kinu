@@ -1023,6 +1023,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       prepareChat: async (request) => {
         this.admitWork();
 
+        // What its opening moved of its standing rides the preparation, taken as a told report is.
+        if (request.owes !== undefined) await this.agentOwes(actorId, request.owes);
+
         if (request.turnId === null) return await this.agentTurns.prepareChat(actorId, request);
 
         // As a run's: an opening asked while a Stop is owed was queued before it.
