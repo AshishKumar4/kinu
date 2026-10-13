@@ -681,16 +681,6 @@ export class ChatSession {
     if (queued) this.pump();
   }
 
-  /** A turn that never opened: the report its caller is owed, kept by a commit of its own and driven as a roster is.
-   *  Its producer is told, and so is every caller that joined it: a turn restored after a reset has only joiners. */
-  private async toldUnanswered(item: QueueItem, failure: KinuError): Promise<void> {
-    const told = this.ports.unanswered?.(item, failure) ?? null;
-
-    if (told === null) return;
-
-    await this.settleTold({ turnId: item.idempotencyKey ?? item.turnId ?? item.text, messageId: `unanswered:${told.scope}` }, told);
-  }
-
   /** A report owed its caller, recorded with `transition` (by the turn's end, where it closed one) and driven. */
   private async settleTold(transition: TerminalTransition, told: OwedEffect): Promise<void> {
     await hold(logged('turn.unanswered_report_failed', { doing: 'telling the caller a turn it is owed ended without an answer', otherwise: 'io' }, async () => {
@@ -698,7 +688,17 @@ export class ChatSession {
     }));
   }
 
-  private settleItem(item: QueueItem, failure: KinuError | null, yielded?: boolean, abandoned?: string): void {
+  /**
+   * `tellCaller`: the item never opened, and its caller waits on the work, not on a turn, so it is owed a report of why
+   * ({@link ChatSessionPorts.unanswered}): recorded in the commit that retires the item's held row, so no state has the
+   * item gone and its report unowed, and driven as a roster is (#76). A refusal at dequeue owes none: the item was not
+   * this process's to run.
+   */
+  private settleItem(
+    item: QueueItem,
+    failure: KinuError | null,
+    { yielded, abandoned, tellCaller = false }: { readonly yielded?: boolean; readonly abandoned?: string; readonly tellCaller?: boolean } = {},
+  ): void {
     // A held Retry that never opened (refused, yielded, stopped) is not run by a later process either.
     if (item.heldAs !== undefined && !this.ended) this.pendingSends.retireTurn(item.heldAs);
 
@@ -715,10 +715,25 @@ export class ChatSession {
     this.wakeSendWaiters();
 
     if (item.idempotencyKey === undefined) return;
+    const key = item.idempotencyKey;
+    const told = tellCaller && failure !== null && item.run === undefined && !this.ended ? this.ports.unanswered?.(item, failure) ?? null : null;
+    const transition: TerminalTransition = { turnId: key, messageId: `unanswered:${key}` };
+
+    let owed = false;
 
     // A closed session's store may be gone with it: the turn stays owed there, and the next process settles it. A run's
-    // held row keeps its end until a report carrying it reached its caller ({@link runEndsTold}).
-    if (item.kind === 'programmatic' && item.run === undefined && !this.ended) this.pendingSends.retireTurn(item.idempotencyKey);
+    // held row keeps its end until a report carrying it reached its caller ({@link runEndsTold}). A commit refused here
+    // leaves the turn held, and the next process runs it.
+    settleLoggedSync('turn.unanswered_report_failed', { doing: "retiring a turn that never ran, with the report its caller is owed", otherwise: 'io' }, () => {
+      this.transaction(() => {
+        if (item.kind === 'programmatic' && item.run === undefined && !this.ended) this.pendingSends.retireTurn(key);
+
+        if (told !== null) this.ports.terminal().record(transition, [told]);
+      });
+      owed = told !== null;
+    });
+
+    if (owed && told !== null) this.actorSession.orchestrator.track(this.settleTold(transition, told), "telling a turn's caller it never ran");
     const result = settledAnnouncement(failure, yielded, abandoned);
 
     for (const joined of this.joiners.get(item.idempotencyKey) ?? []) joined(result);
@@ -1207,10 +1222,8 @@ export class ChatSession {
     const failure = new KinuError('cancelled', 'The agent was stopped before this turn ran.');
 
     for (const item of cancelled) {
-      this.settleItem(item, failure);
-
       // Its caller waits on the work, not on a turn: told, as of a turn that never opened. A run's end is its telling.
-      if (item.run === undefined) this.actorSession.orchestrator.track(this.toldUnanswered(item, failure), 'telling a cancelled turn\'s caller');
+      this.settleItem(item, failure, { tellCaller: true });
     }
 
     diagnostics.event('turn.queued_cancelled', { count: cancelled.length });
@@ -1581,13 +1594,13 @@ export class ChatSession {
           diagnostics.event('turn.no_longer_owed', {
             signal: v.is(v.string(), item.metadata?.kinuEvent) ? item.metadata.kinuEvent : 'unknown',
           });
-          this.settleItem(item, null, true);
+          this.settleItem(item, null, { yielded: true });
           continue;
         }
 
         // Checked at dequeue: somebody spoke first, so the offer is consumed.
         if (await this.offerYields(item)) {
-          this.settleItem(item, null, true);
+          this.settleItem(item, null, { yielded: true });
           continue;
         }
 
@@ -1598,10 +1611,8 @@ export class ChatSession {
         this.runningAnnouncement = null;
         this.taken = null;
         this.queuedAtTake = new Set();
-        this.settleItem(item, failure, undefined, abandoned ?? undefined);
-
-        // One that opened owed its caller's report with its end; one that never opened owes it now.
-        if (failure !== null && item.run === undefined) await this.toldUnanswered(item, failure);
+        // One that opened owed its caller's report with its end; one that never opened owes it as its held row retires.
+        this.settleItem(item, failure, { ...(abandoned !== null && { abandoned }), tellCaller: true });
       }
     } finally {
       // Cleared synchronously, not in .finally(): the microtask would leave `pumping` stale and orphan a queued turn.
