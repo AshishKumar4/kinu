@@ -4,7 +4,7 @@ import type { SandboxHandle } from '../../src/index';
 export const sandboxHandleLifecycle: Pick<
   SandboxHandle,
   | 'ensureReady' | 'startSupervisedProcess' | 'stopSupervisedProcess'
-  | 'listSupervisedProcesses' | 'portToken' | 'probePort' | 'notePortRemoved' | 'resize' | 'portListeners' | 'answerRest' | 'statFile'
+  | 'listSupervisedProcesses' | 'portToken' | 'probePort' | 'resize' | 'portListeners' | 'answerRest' | 'statFile'
   | 'writeFileIfDigest'
 > = {
   ensureReady: async () => {},
@@ -15,7 +15,6 @@ export const sandboxHandleLifecycle: Pick<
   listSupervisedProcesses: async () => [],
   portToken: async () => ({ urlToken: 'tok-1' }),
   probePort: async () => { throw new Error('this fixture does not probe a native listener'); },
-  notePortRemoved: async () => {},
   resize: async (size) => ({ kind: 'recorded', size }),
   portListeners: async () => null,
   answerRest: async () => ({ kind: 'refused', reason: 'no rest ask is pending' }),

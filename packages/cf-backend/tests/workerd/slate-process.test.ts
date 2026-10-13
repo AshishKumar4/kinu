@@ -80,6 +80,33 @@ it('a slate edited and rebooted leaves no image of the source it no longer runs'
   }
 });
 
+// #55: a process's images were let go only by Kinu's own stop; one Nimbus ended kept them for good.
+it('a process Nimbus ended holds no image once another is built', async () => {
+  const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('image-sweep-ended'));
+
+  const version = (n: number) => [
+    'import { SlateObject } from "kinu:slate";',
+    'export class Slate extends SlateObject {',
+    `  async which() { return ${String(n)}; }`,
+    '}',
+  ].join('\n');
+
+  try {
+    await subject.start({ source: version(1), app: null });
+    const first = await subject.facetImages();
+
+    await subject.endInNimbus();
+    await subject.start({ source: version(2), app: null });
+    const second = await subject.facetImages();
+
+    // The edited image replaced the ended one's; nothing of version 1 stays beside it.
+    expect(second.length).toBe(first.length);
+    expect(second).not.toEqual(first);
+  } finally {
+    await subject.stop();
+  }
+});
+
 it('reuses complete images and rebuilds an interrupted one at the same content address', async () => {
   const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('image-completeness'));
 

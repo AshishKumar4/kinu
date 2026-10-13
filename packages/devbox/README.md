@@ -195,7 +195,7 @@ await box.destroy();        // destroy the container; a later call starts it aga
 | `portToken(port, name?)` | The port's stable token | `{ urlToken }`; `invalid-input` for 6080 |
 | `exposePort(port, { hostname, name, token })` | Publishes a port; `token` must come from `portToken()` | `{ port, name, url }`; `invalid-input` for 6080 |
 | `getExposedPorts(hostname)` | Lists published ports | `{ port, name, url }[]`; `[]` when stopped |
-| `unexposePort(port)`, `notePortRemoved(port)` | Revokes a port, also on a stopped box | `void` |
+| `unexposePort(port)` | Revokes a port, also on a stopped box | `void` |
 | `probePort(port)` | Asks whether anything answers HTTP | `boolean` |
 | `portListeners(stamp, ports?)` | Lists listening sockets and their processes | `PortListener[]`; `null` when stopped |
 | `resize(size \| null)` | Sets the box's own size | `ResizeOutcome`; `invalid-input` |

@@ -628,7 +628,7 @@ function browserSurface(build: SlateBuild, id: string, project: SlateProject, re
 
 export class ResidentSlateProcesses {
   private readonly bundlers = new Map<string, EsbuildService>();
-  /** Image digests per pid that a sweep must keep; a manager-driven restart reads these paths again. */
+  /** Image digests per pid that a sweep must keep while Nimbus runs it; a manager-driven restart reads these paths again. */
   private readonly imagesInUse = new Map<number, ReadonlySet<string>>();
 
   constructor(private readonly deps: ResidentSlateDeps) {}
@@ -798,22 +798,30 @@ export class ResidentSlateProcesses {
 
       // Nothing else sweeps these images (fabric sweeps only its own), and every source edit writes a new one.
       this.imagesInUse.set(pid, new Set([...Object.values(image.modules), ...[image.client, image.shell].filter((digest) => digest !== undefined)]));
-      this.sweepFacetImages(kernelVfs);
+      this.sweepFacetImages(kernelVfs, session.processes);
 
       return {
         id: String(pid), port: input.app?.port ?? null, methods, artifacts,
         request: (request) => spawned.facet.fetch(request),
         connect: (request) => spawned.facet.connect(request),
         isRunning: async () => session.processes.get(pid)?.state === 'running',
-        stop: async () => { manager.kill(pid); this.imagesInUse.delete(pid); },
+        stop: async () => { manager.kill(pid); },
       };
     }));
   }
 
-  private sweepFacetImages(kernelVfs: ReturnType<WorkspaceSession['vfs']['as']>): void {
+  private sweepFacetImages(kernelVfs: ReturnType<WorkspaceSession['vfs']['as']>, processes: WorkspaceSession['processes']): void {
     const keep = new Set<string>();
 
-    for (const digests of this.imagesInUse.values()) for (const digest of digests) keep.add(facetImagePath(digest));
+    // A process's images go with it, however it ended: Nimbus's own table says which still run.
+    for (const [pid, digests] of this.imagesInUse) {
+      if (processes.get(pid)?.state !== 'running') {
+        this.imagesInUse.delete(pid);
+        continue;
+      }
+
+      for (const digest of digests) keep.add(facetImagePath(digest));
+    }
 
     // A slate's last working build stays, so a later edit that fails to compile still has something to serve.
     for (const digest of this.deps.retained()) keep.add(facetImagePath(digest));

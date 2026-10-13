@@ -5,10 +5,12 @@
 import { afterAll, describe, expect, setSystemTime, test } from 'bun:test';
 import { adaptCloudflareSandbox } from '../src/sandbox-exec-lane';
 import {
+  createSandboxExecutor,
   sandboxPreviewExposed,
   sandboxPreviewExposures,
   type SandboxPreviewExposures,
 } from '@kinu.run/core';
+import { present } from '@kinu.run/test-utils';
 import { makeKv, type FakeKv } from './helpers/kv';
 import type { KvStore } from '@kinu.run/agent-utils';
 import {
@@ -41,7 +43,6 @@ async function recordDiagnostics(body: () => Promise<void>): Promise<readonly Re
 interface PortBox {
   readonly exposed: number[];
   readonly revoked: number[];
-  readonly removed: number[];
   readonly box: KinuDevbox;
 }
 
@@ -49,7 +50,6 @@ interface PortBox {
 function portBox(options: { token?: string; failRevoke?: boolean } = {}): PortBox {
   const exposed: number[] = [];
   const revoked: number[] = [];
-  const removed: number[] = [];
   const token = options.token ?? TOKEN;
 
   const box: KinuDevbox = Object.create({
@@ -68,7 +68,6 @@ function portBox(options: { token?: string; failRevoke?: boolean } = {}): PortBo
 
       return undefined;
     },
-    notePortRemoved: async (port: number) => { removed.push(port); },
     getExposedPorts: async (hostname: string) => [{
       url: `https://${String(PORT)}-${SANDBOX_ID}-${token}.${hostname}/`,
       port: PORT,
@@ -76,7 +75,7 @@ function portBox(options: { token?: string; failRevoke?: boolean } = {}): PortBo
     }],
   });
 
-  return { exposed, revoked, removed, box };
+  return { exposed, revoked, box };
 }
 
 /** `writer` is built when the object woke; pass one in when it must predate a revocation. */
@@ -165,18 +164,42 @@ describe('revoking a port withdraws its published preview', () => {
     })).toBe(false);
   });
 
-  test('removing the port row withdraws it too', async () => {
-    const kv = makeKv();
-    const { box, removed } = portBox();
-    await sandboxPreviewExposures(kv, SANDBOX_ID).publish(PORT, TOKEN);
+});
 
-    await lane(kv, box).notePortRemoved(PORT);
+// #52: the tool revoked, then asked the box to remove the port a second time, after the revocation's own
+// notification; a re-exposure that landed in between was withdrawn by that second removal.
+test('a port exposed again while its unexpose is still settling stays exposed', async () => {
+  const kv = makeKv();
+  const { box } = portBox();
+  const moved = Promise.withResolvers<void>();
+  const notified = Promise.withResolvers<void>();
+  let holding = false;
 
-    expect(removed).toEqual([PORT]);
-    expect(await sandboxPreviewExposed(kv, {
-      sandboxId: SANDBOX_ID, port: PORT, token: TOKEN,
-    })).toBe(false);
+  const handle = adaptCloudflareSandbox(box, async () => {}, sandboxPreviewExposures(kv, SANDBOX_ID), {
+    // The unexpose's own notification is held until the port is exposed again; every other one passes.
+    portsMoved: async () => {
+      if (!holding) return;
+      holding = false;
+      notified.resolve();
+      await moved.promise;
+    },
   });
+
+  // A second apart, as the withdrawal record is (`exposing the port again publishes it again`).
+  setSystemTime(new Date('2026-03-01T12:00:00.000Z'));
+  await handle.exposePort(PORT, { hostname: SUFFIX });
+  holding = true;
+  const unexpose = present(createSandboxExecutor(handle).tools.unexposePort, 'unexposePort').execute(PORT);
+
+  await notified.promise;
+  setSystemTime(new Date('2026-03-01T12:00:01.000Z'));
+  await handle.exposePort(PORT, { hostname: SUFFIX });
+  setSystemTime(new Date('2026-03-01T12:00:02.000Z'));
+  moved.resolve();
+  await unexpose;
+
+  expect(await sandboxPreviewExposed(kv, { sandboxId: SANDBOX_ID, port: PORT, token: TOKEN })).toBe(true);
+  setSystemTime();
 });
 
 describe('a withdrawn port stays withdrawn, whatever the container still reports', () => {

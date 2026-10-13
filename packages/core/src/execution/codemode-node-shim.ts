@@ -87,33 +87,14 @@ function asyncOnly(name, rewrite) {
   };
 }
 
-const EXIT_PREFIX = /^Error \(exit (\d+)\)\n?/;
-const STDERR_LABEL = '\n--- stderr ---\n';
-
 /**
- * A command's result as Node reports it. A refusal carrying an exit is a command that ran, and its error is the
- * formatted output; any other refusal ran nothing (126). Output text is never read for an exit.
+ * A command's result as Node reports it, asked for as the command wrote it (parts). A refusal ran nothing (126).
  */
-function parseExec(result) {
+async function execParts(workspace, command, options) {
+  const result = await workspace.exec(command, { ...options, parts: true });
   const refused = refusalOf(result);
-  const ran = refused !== null && Boolean(result.execution) && typeof result.execution.exitCode === 'number';
-  if (refused !== null && !ran) return { exitCode: 126, stdout: '', stderr: refused };
-  const text = ran ? refused : typeof result === 'string' ? result : JSON.stringify(result);
-  const exit = ran ? EXIT_PREFIX.exec(text) : null;
-  let body = exit ? text.slice(exit[0].length) : text;
-  let stdout = body;
-  let stderr = '';
-  const split = body.indexOf(STDERR_LABEL);
-  if (split >= 0) {
-    stdout = body.slice(0, split);
-    stderr = body.slice(split + STDERR_LABEL.length);
-  } else if (exit && body.startsWith('--- stderr ---\n')) {
-    stdout = '';
-    stderr = body.slice('--- stderr ---\n'.length);
-  }
-  if (stdout.startsWith('--- stdout ---\n')) stdout = stdout.slice('--- stdout ---\n'.length);
-  if (stdout === '(no output)') stdout = '';
-  return { exitCode: ran ? result.execution.exitCode : 0, stdout, stderr };
+  if (refused !== null) return { exitCode: 126, stdout: '', stderr: refused };
+  return { exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr };
 }
 
 function makeFs(workspace, cwd) {
@@ -182,7 +163,7 @@ function makeFs(workspace, cwd) {
     };
   }
   async function run(command, path, syscall) {
-    const outcome = parseExec(await workspace.exec(command));
+    const outcome = await execParts(workspace, command, {});
     if (outcome.exitCode !== 0) throw fsError('EIO', outcome.stderr.trim() || outcome.stdout.trim() || ('exit ' + outcome.exitCode), path, syscall);
   }
   const onPath = (path, command, syscall) => {
@@ -229,7 +210,7 @@ function makeChildProcess(workspace) {
     const callback = typeof optionsOrCallback === 'function' ? optionsOrCallback : maybeCallback;
     const options = typeof optionsOrCallback === 'object' && optionsOrCallback !== null ? optionsOrCallback : {};
     const promise = (async () => {
-      const outcome = parseExec(await workspace.exec(String(command), options.cwd === undefined ? {} : { cwd: String(options.cwd) }));
+      const outcome = await execParts(workspace, String(command), options.cwd === undefined ? {} : { cwd: String(options.cwd) });
       if (outcome.exitCode !== 0) {
         const error = new Error('Command failed: ' + command + '\n' + outcome.stderr);
         error.code = outcome.exitCode;

@@ -81,7 +81,6 @@ function fakeBox(input: {
     listSupervised: async () => [],
     portToken: async (port: number) => ({ urlToken: `tok-${port}` }),
     notePortExposed: async () => {},
-    notePortRemoved: async () => undefined,
   };
 
   // `KinuDevbox` is a DO class a test cannot construct; only the members above are reachable.
