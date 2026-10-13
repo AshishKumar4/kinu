@@ -33,11 +33,28 @@ export interface ScriptedPace {
   readonly reasoning?: { readonly deltas: number; readonly everyMs: number };
 }
 
-/** One answer: prose, or a tool call with its complete arguments. Unpaced, it is written in one piece. */
+/** One answer: prose, or a tool call with its complete arguments. Unpaced, it is written in one piece. `rateLimited`
+ *  answers neither: the call is refused as a provider's rate limit is ({@link rateLimitedAnswer}). */
 export interface ScriptedAnswer {
   readonly text?: string;
   readonly toolCall?: { readonly name: string; readonly arguments: unknown };
   readonly pace?: ScriptedPace;
+  readonly rateLimited?: { readonly retryAfterSeconds: number };
+}
+
+/** A 429 the way an OpenAI-compatible provider sends one: its error body, and the seconds to wait in `retry-after`. */
+export interface RateLimitedResponse {
+  readonly status: 429;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly body: string;
+}
+
+export function rateLimitedAnswer(retryAfterSeconds: number): RateLimitedResponse {
+  return {
+    status: 429,
+    headers: { 'content-type': 'application/json', 'retry-after': String(retryAfterSeconds) },
+    body: JSON.stringify({ error: { message: 'Rate limit reached for requests', type: 'rate_limit_error', code: 'rate_limit_exceeded' } }),
+  };
 }
 
 /** One tool call the conversation holds: its name, its arguments as the wire carried them, and its result's

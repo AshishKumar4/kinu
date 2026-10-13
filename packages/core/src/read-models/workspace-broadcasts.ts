@@ -13,6 +13,20 @@ import { LIVE_READS, READS_CHANGED_EVENT } from './live-reads';
 import { TurnClaimFrameSchema } from './turn-liveness';
 import { CHANGES_MOVED_EVENT } from './workspace-diff';
 
+/** A turn waiting on its provider (a 429/529 sleep, backoff, a sibling's cooldown), not thinking: told only to the
+ *  windows of the turn it holds. `attempt` is 0 when the wait precedes the first attempt. */
+export const ProviderWaitSchema = v.object({
+  provider: v.string(),
+  modelId: v.optional(v.string()),
+  waitMs: v.number(),
+  attempt: v.number(),
+  status: v.optional(v.number()),
+  source: v.picklist(PROVIDER_WAIT_SOURCES),
+});
+
+/** The answer stream's part that carries a turn's wait from its isolate to its room, which tells it as `provider_wait`. */
+export const PROVIDER_WAIT_PART = 'data-provider-wait';
+
 const MctsRowSchema = v.object({
   id: v.string(),
   parent_id: v.nullable(v.string()),
@@ -123,18 +137,7 @@ export const WorkspaceBroadcastSchema = v.variant('type', [
   }),
   v.object({ type: v.literal('device_available'), deviceId: v.string(), label: v.string() }),
   v.object({ type: v.literal('model_fallback'), message: v.string() }),
-  // Waiting on the provider (429/529 sleep, backoff, sibling cooldown), not thinking. `attempt` is 0 when the wait
-  // precedes the first attempt.
-  v.object({
-    type: v.literal('provider_wait'),
-    provider: v.string(),
-    modelId: v.optional(v.string()),
-    waitMs: v.number(),
-    attempt: v.number(),
-    status: v.optional(v.number()),
-    source: v.picklist(PROVIDER_WAIT_SOURCES),
-    actorId: v.optional(v.string()),
-  }),
+  v.object({ type: v.literal('provider_wait'), ...ProviderWaitSchema.entries }),
   v.object({ type: v.literal('work_cancelled') }),
   v.object({ type: v.literal(READS_CHANGED_EVENT), reads: v.array(v.picklist(LIVE_READS)) }),
   JobOutputFrameSchema,

@@ -31,7 +31,7 @@ import {
   SLEPT_TURN_ASK, TOLD_BACK_ANSWER, TOLD_BACK_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK,
   laterReconnectTurn, toldBackTurn, unsentFirstTurn,
   DROPPED_FILE_ASK, DROPPED_FILE_ROW, droppedFileTurn, heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, registerScriptedModel,
-  startScriptedModel, type HeldCall, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, planTasksProbe, SLATE_ID, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, slateUiTurn,
+  startScriptedModel, type HeldCall, LOGO_WAITED_MISSION, ProviderWaitProbe, providerWaitTurn, WAITED_TURN_ASK, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, planTasksProbe, SLATE_ID, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, slateUiTurn,
 } from './scripted-model';
 import { FALLBACK_ANSWER, type ScriptedRequest } from './scripted-protocol';
 import { openPublicSocket } from '../tests/first-run/public-socket';
@@ -174,6 +174,7 @@ export interface TierVerdicts {
   cleared: ClearedVerdict | null;
   planTasks: PlanTasksVerdict | null;
   slateUi: SlateUiVerdict | null;
+  providerWait: ProviderWaitVerdict | null;
   state: StateVerdict | null;
 }
 
@@ -1381,6 +1382,8 @@ interface SlateUiVerdict {
   readonly read: string;
   readonly heard: boolean;
   readonly kept: boolean;
+  /** The work surface's page tabs on a page opened while both pages run: an unsaved page has none (#90). */
+  readonly tabs: readonly string[];
   /** What the first page shows once its card's open control brought it up in the work surface. */
   readonly opened: string;
   readonly redrawn: readonly string[];
@@ -1473,6 +1476,41 @@ async function firstPageReach(page: Page, heard: Promise<ScriptedRequest>): Prom
 }
 
 /** The first page, opened from its card in the work surface: what the work surface's frame of it shows. */
+const RpcFrameSchema = v.object({ type: v.literal('rpc'), id: v.string(), method: v.optional(v.string()) });
+
+/** Settles once a `getExposedPorts` the page asks from now on has been answered on its socket. */
+async function previewsListed(page: Page): Promise<() => Promise<void>> {
+  const cdp = await page.createCDPSession();
+  const asked = new Set<string>();
+  const answered = Promise.withResolvers<void>();
+
+  const frame = (payload: string | undefined) => v.safeParse(RpcFrameSchema, tolerate<unknown>(() => JSON.parse(payload ?? ''), 'malformed-input'));
+
+  await cdp.send('Network.enable');
+  cdp.on('Network.webSocketFrameSent', (event: { response?: { payloadData?: string } }) => {
+    const sent = frame(event.response?.payloadData);
+
+    if (sent.success && sent.output.method === 'getExposedPorts') asked.add(sent.output.id);
+  });
+  cdp.on('Network.webSocketFrameReceived', (event: { response?: { payloadData?: string } }) => {
+    const reply = frame(event.response?.payloadData);
+
+    if (reply.success && asked.has(reply.output.id)) answered.resolve();
+  });
+
+  return async () => {
+    await named("the workspace's previews listed", () => answered.promise);
+    await cdp.detach();
+  };
+}
+
+/** The work surface's page tabs. */
+async function pageTabs(page: Page): Promise<readonly string[]> {
+  await painted(page);
+
+  return v.parse(v.array(v.string()), await page.$$eval('#inspector nav[aria-label="Pages"] button[aria-label]', (tabs) => tabs.map((tab) => tab.getAttribute('aria-label') ?? '')));
+}
+
 async function openedInWorkSurface(page: Page): Promise<string> {
   await page.$eval('[data-slate-ui="first"] button[aria-label="Open first in the work surface"]', (open) => {
     if (open instanceof HTMLElement) open.click();
@@ -1499,11 +1537,17 @@ async function measureSlateUi(newPage: LiveApp['newPage'], origin: string, heard
     const reach = await firstPageReach(page, heard);
     const opened = await openedInWorkSurface(page);
 
+    // A page opened while both pages run lists every preview they hold.
+    const listed = await previewsListed(page);
+
     await named('the reload', () => page.reload({ waitUntil: 'load' }));
     await until(page, 'both blocks drawn again', SLATE_UI_DRAWN);
     const again = await slateUiFrames(page);
 
-    return { ...reach, opened, drawn: first.drawn, shown: first.shown, redrawn: again.drawn, reshown: again.shown, forged: await forgedBlocks(page, origin, workspace) };
+    await listed();
+    const tabs = await pageTabs(page);
+
+    return { ...reach, tabs, opened, drawn: first.drawn, shown: first.shown, redrawn: again.drawn, reshown: again.shown, forged: await forgedBlocks(page, origin, workspace) };
   } finally {
     await page.close();
   }
@@ -1629,6 +1673,76 @@ async function measureCleared(newPage: LiveApp['newPage'], origin: string, held:
   }
 }
 
+/** What the composer's status notices said while a turn or a background call waited on its provider. */
+export interface ProviderWaitVerdict {
+  /** While the workspace's logo, drawn from Settings, was refused twice more and waited out each refusal. */
+  readonly whileLogoWaited: readonly string[];
+  /** While a turn's own call waited on its provider. */
+  readonly duringTurn: readonly string[];
+  /** As that turn's answer ended. */
+  readonly afterTurn: readonly string[];
+}
+
+const COMPOSER_NOTICES = `[...document.querySelectorAll('#chat [data-composer-root] [role="status"]')].map((notice) => (notice.textContent ?? '').trim())`;
+
+/** Every distinct notice text the composer shows, sampled every 50 ms from install into `window.__notices`. */
+const RECORD_NOTICES = `(() => {
+  window.__notices = [];
+  setInterval(() => {
+    for (const text of ${COMPOSER_NOTICES}) if (text !== '' && !window.__notices.includes(text)) window.__notices.push(text);
+  }, 50);
+})()`;
+
+async function noticesRead(page: Page, expression: string): Promise<readonly string[]> {
+  return v.parse(v.array(v.string()), await page.evaluate(expression));
+}
+
+/** Settings' "Draw a new one": the workspace's logo, drawn by the workspace's own model call, outside any turn. */
+async function drawLogoFromSettings(newPage: LiveApp['newPage'], origin: string, workspace: string): Promise<Page> {
+  const settings = await newPage();
+
+  await settings.setViewport(DESKTOP);
+  await named('the settings page to load', () => settings.goto(`${origin}/workspace/${workspace}/settings`, { waitUntil: 'load' }));
+  await until(settings, 'the logo field', `document.querySelector('[data-logo-field] button') !== null`);
+  await settings.click('[data-logo-field] button');
+
+  return settings;
+}
+
+/** #88: a background call's provider wait (the workspace's logo) never stands over the composer as if a turn were
+ *  blocked; a turn's own wait does, counting down to its end and never reading 0s. */
+async function measureProviderWait(newPage: LiveApp['newPage'], origin: string, probe: ProviderWaitProbe): Promise<ProviderWaitVerdict> {
+  const drawn = await createWorkspace(origin, { name: `live-row-logo-wait-${RUN_ID}`, purpose: LOGO_WAITED_MISSION, model: SCRIPTED_MODEL_SPEC });
+  const chat = await openRecorded(newPage, origin, drawn);
+  let whileLogoWaited: readonly string[];
+
+  try {
+    await chat.evaluate(RECORD_NOTICES);
+    const refused = probe.logoRefused(2);
+    const settings = await drawLogoFromSettings(newPage, origin, drawn);
+
+    // The second refusal comes once the first one's wait is over: that wait was told to the chat, or never.
+    await named('the logo to be refused twice more', () => refused);
+    whileLogoWaited = await noticesRead(chat, 'window.__notices');
+    await settings.close();
+  } finally {
+    await chat.close();
+  }
+
+  const waited = await createWorkspace(origin, { name: `live-row-turn-wait-${RUN_ID}`, purpose: 'turn wait probe', model: SCRIPTED_MODEL_SPEC });
+  const page = await openRecorded(newPage, origin, waited);
+
+  try {
+    await page.evaluate(RECORD_NOTICES);
+    await sendInChat(page, WAITED_TURN_ASK);
+    await until(page, 'the waited turn to answer', TURN_ANSWERED);
+
+    return { whileLogoWaited, duringTurn: await noticesRead(page, 'window.__notices'), afterTurn: await noticesRead(page, COMPOSER_NOTICES) };
+  } finally {
+    await page.close();
+  }
+}
+
 /** Row 7: the run's own state directory, measured on the LOCAL server in both
  *  modes — the question is what the harness booted on, not what a deployment
  *  holds. The roster read goes through UserDO, so its namespace directory is
@@ -1648,7 +1762,7 @@ async function measureState(app: LiveApp): Promise<StateVerdict> {
 export const LIVE_ROWS = [
   'live-indicator', 'opened-mid-turn', 'reconnect', 'observed-reconnect', 'slept', 'watched-slept', 'answered',
   'unsent-answer', 'controls', 'walkthrough', 'own-server', 'kept-tab', 'chat-scroll', 'mid-thought', 'dropped-file', 'cleared', 'plan-tasks',
-  'slate-ui', 'state',
+  'slate-ui', 'provider-wait', 'state',
 ] as const;
 
 export type LiveRow = (typeof LIVE_ROWS)[number];
@@ -1670,7 +1784,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
   const observed: TierVerdicts = {
     liveIndicator: null, openedMidTurn: null, reconnect: null, observedReconnect: null, slept: null, watchedSlept: null, answered: null,
     unsentAnswer: null, bootFailure: null,
-    controls: null, walkthrough: null, ownServer: null, keptTab: null, chatScroll: null, midThought: null, droppedFile: null, cleared: null, planTasks: null, slateUi: null, state: null,
+    controls: null, walkthrough: null, ownServer: null, keptTab: null, chatScroll: null, midThought: null, droppedFile: null, cleared: null, planTasks: null, slateUi: null, providerWait: null, state: null,
   };
 
   // Set once the dev server is up: a row that breaks names the file its server's output is kept in.
@@ -1691,9 +1805,10 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
     const clearedHeld = heldCall();
     const toldBack = Promise.withResolvers<ScriptedRequest>();
     const slateHeard = Promise.withResolvers<ScriptedRequest>();
+    const waitProbe = new ProviderWaitProbe();
 
     // The watched turn follows the answered one in its conversation, so it is matched first, by the latest ask.
-    const model = await startScriptedModel((request) => droppedFileTurn(request) ?? toldBackTurn(request, toldBack.resolve) ?? pacedTurn(request)
+    const model = await startScriptedModel((request) => providerWaitTurn(request, waitProbe) ?? droppedFileTurn(request) ?? toldBackTurn(request, toldBack.resolve) ?? pacedTurn(request)
       ?? laterReconnectTurn(request, WATCHED_ANSWER_TURN_ASK, watchedAnswerHeld)
       ?? pacedFirstTurn(request, firstTurn) ?? reconnectTurn(request, ANSWERED_TURN_ASK, answeredHeld)
       ?? reconnectTurn(request, RECONNECT_TURN_ASK, reconnectHeld) ?? reconnectTurn(request, OBSERVED_TURN_ASK, observedHeld)
@@ -1730,6 +1845,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
         'cleared': async () => { observed.cleared = await attempt('cleared', () => measureCleared(newPage, origin, clearedHeld)); },
         'plan-tasks': async () => { observed.planTasks = await attempt('plan-tasks', () => measurePlanTasks(newPage, origin)); },
         'slate-ui': async () => { observed.slateUi = await attempt('slate-ui', () => measureSlateUi(newPage, origin, slateHeard.promise)); },
+        'provider-wait': async () => { observed.providerWait = await attempt('provider-wait', () => measureProviderWait(newPage, origin, waitProbe)); },
         'state': async () => { observed.state = await attempt('state', () => measureState(app)); },
       };
 

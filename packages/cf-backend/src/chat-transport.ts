@@ -17,7 +17,7 @@ import type { UIMessage, UIMessageChunk } from 'ai';
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import {
-  isWorkMode, INTERRUPTED_TURN, JsonObjectSchema, JsonValueSchema, TRANSCRIPT_WINDOW, UIMessageSchema,
+  isWorkMode, INTERRUPTED_TURN, JsonObjectSchema, JsonValueSchema, PROVIDER_WAIT_PART, ProviderWaitSchema, TRANSCRIPT_WINDOW, UIMessageSchema,
   type ChatTransport, type JsonObject, type OwedIntent, type PromptFile, type SendLanding, type SendState, type SessionEvent, type TurnReplies, type WorkMode,
 } from '@kinu.run/core';
 import { attempt, attemptInItsWords, diagnostics, KinuError, refusalOf, settle, toKinuError } from '@kinu.run/core/obs';
@@ -673,6 +673,12 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         // The provider's own words: the sender's chat would keep them as its error, and the turn's classified
         // failure follows as the frame that ends it.
         if (chunk.type === 'error') continue;
+
+        // The turn's wait on its provider, from its isolate (`TurnWaits`): told to the room as a notice, kept in no answer.
+        if (chunk.type === PROVIDER_WAIT_PART) {
+          this.wire.broadcast(JSON.stringify({ type: 'provider_wait', ...v.parse(ProviderWaitSchema, chunk.data) }));
+          continue;
+        }
 
         if (!live.open.admits(chunk)) {
           this.degradeRelay(live, toKinuError({

@@ -17,7 +17,7 @@ import { PLATFORM_CATALOG } from '../packages/core/src/platform-catalog';
 import { timingSafeEqual } from '../packages/core/src/utils/crypto';
 import { scriptedSearch } from './scripted-search';
 import { tierModel } from './tier-model';
-import { SCRIPTED_MODELS_BODY, pacedStream, readScriptedRequest, scriptedBody } from './scripted-protocol';
+import { SCRIPTED_MODELS_BODY, pacedStream, rateLimitedAnswer, readScriptedRequest, scriptedBody } from './scripted-protocol';
 
 interface Env {
   readonly SCRIPTED_MODEL_KEY?: string;
@@ -94,6 +94,12 @@ export default {
 
       const asked = read.request;
       const answer = tierModel(asked);
+
+      if (answer.rateLimited !== undefined) {
+        const limited = rateLimitedAnswer(answer.rateLimited.retryAfterSeconds);
+
+        return new Response(limited.body, { status: limited.status, headers: limited.headers });
+      }
 
       if (asked.streamed && answer.pace !== undefined) {
         const encoder = new TextEncoder();

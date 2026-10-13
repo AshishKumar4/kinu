@@ -6733,11 +6733,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     const listing = provider.listExposedPorts;
-    // A port a slate's application holds is called by the slate's title, never by its number.
-    const titles = executorId === 'workspace' ? this.slates.controller.portTitles() : Promise.resolve(new Map<number, string>());
+    // A port a slate's application holds is called by the slate's title, never by its number; an answer's page is the
+    // chat's until it is saved.
+    const held = executorId === 'workspace' ? this.slates.controller.heldPorts() : Promise.resolve(null);
 
-    return settle(Effect.matchCause(Effect.promise(async () => Promise.all([listing.call(provider), titles])), {
-      onSuccess: ([ports, titled]) => ({ ports: ports.map(({ port, name, url }) => ({ port, url, name: name ?? titled.get(port) })) }),
+    return settle(Effect.matchCause(Effect.promise(async () => Promise.all([listing.call(provider), held])), {
+      onSuccess: ([ports, slates]) => ({
+        ports: ports.filter(({ port }) => slates?.pages.has(port) !== true).map(({ port, name, url }) => ({ port, url, name: name ?? slates?.titles.get(port) })),
+      }),
       onFailure: (failed) => {
         const error = Cause.squash(failed);
 

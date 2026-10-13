@@ -184,7 +184,7 @@ export {
   validateWorkspaceName,
 } from './identity/naming';
 
-export { drawWorkspaceLogo, sanitizeWorkspaceLogoSvg } from './identity/logo';
+export { drawWorkspaceLogo, sanitizeWorkspaceLogoSvg, WORKSPACE_LOGO_SYSTEM_PROMPT } from './identity/logo';
 
 export { workspaceDisplayTitle, workspaceTitleDraft } from './read-models/workspace-title';
 
@@ -2322,7 +2322,8 @@ export {
 } from './read-models/workspace-reads';
 
 export {
-  SubordinateActivityEventSchema, WorkspaceBroadcastSchema, WorkspacePlanUpdatedFrameSchema, type MctsProgress, type WorkspaceBroadcast,
+  PROVIDER_WAIT_PART, ProviderWaitSchema, SubordinateActivityEventSchema, WorkspaceBroadcastSchema, WorkspacePlanUpdatedFrameSchema,
+  type MctsProgress, type WorkspaceBroadcast,
 } from './read-models/workspace-broadcasts';
 
 export { inspectWork, jobPhase, type InspectedWork } from './read-models/work-inspection';

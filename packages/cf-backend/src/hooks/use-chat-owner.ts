@@ -276,17 +276,9 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
   // whose request id the ws transport may not hold. A stream's own error is read live from useChat (`standingStreamError`).
   const [frameError, setFrameError] = useState<ChatTurnError | null>(null);
 
-  /** Cleared on the next stream frame, socket close, or a timer keyed to the declared wait: the
-   *  clearing frame may never come if the request stays in the retry loop's sleep. `untilMs` is the
-   *  wait's end on this browser's clock, so the pill counts down. */
-  const [providerWait, setProviderWait] = useState<{
-    provider: string;
-    modelId?: string;
-    untilMs: number;
-    attempt: number;
-  } | null>(null);
-
-  const providerWaitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** This chat's turn waiting on its provider, told only to the turn's own windows. Cleared by the next stream frame or
+   *  socket close; the notice itself ends at `untilMs`, the wait's end on this browser's clock. */
+  const [providerWait, setProviderWait] = useState<{ provider: string; untilMs: number } | null>(null);
   const [activePlan, setActivePlan] = useState<PlanReview | null>(null);
   // What this chat showed when it was last open in this page, drawn until its connect frame lands.
   const [lastShown] = useState(() => revisited.get(actorKey));
@@ -294,24 +286,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
   // entitle the pane to draw a conversation. False is "not yet", never "nothing".
   const [transcriptSeeded, setTranscriptSeeded] = useState(lastShown !== undefined);
 
-  const clearProviderWait = useCallback(() => {
-    if (providerWaitTimer.current !== null) {
-      clearTimeout(providerWaitTimer.current);
-      providerWaitTimer.current = null;
-    }
-
-    setProviderWait(null);
-  }, []);
-
-  // The notice's `waitMs` plus a grace for the next frame; each wait in a chain updates it.
-  const showProviderWait = useCallback((notice: { provider: string; modelId?: string; waitMs: number; attempt: number }) => {
-    clearProviderWait();
-    setProviderWait({
-      provider: notice.provider, attempt: notice.attempt, untilMs: Date.now() + notice.waitMs,
-      ...(notice.modelId !== undefined && { modelId: notice.modelId }),
-    });
-    providerWaitTimer.current = setTimeout(() => setProviderWait(null), notice.waitMs + 5_000);
-  }, [clearProviderWait]);
+  const clearProviderWait = useCallback(() => setProviderWait(null), []);
 
   const agentOptions: Parameters<typeof useAgent>[0] = {
     agent: ORCHESTRATOR_AGENT_SLUG,
@@ -351,7 +326,8 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
         detail: { name: actorAddress.workspace, displayName },
       }));
     } else if (data.type === "provider_wait") {
-      showProviderWait(data);
+      // Each wait in a chain replaces the one before.
+      setProviderWait({ provider: data.provider, untilMs: Date.now() + data.waitMs });
     } else if (data.type === "cf_agent_use_chat_response") {
       // A stream frame ends the wait; the on-connect replay must not paint "waiting" either.
       clearProviderWait();
@@ -359,7 +335,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
 
       if (failed !== null) setFrameError(failed);
     }
-  }, [actorAddress.workspace, clearProviderWait, showProviderWait]);
+  }, [actorAddress.workspace, clearProviderWait]);
 
   const {
     messages,

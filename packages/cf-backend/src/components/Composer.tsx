@@ -92,21 +92,34 @@ function Notice({ notice }: { notice: ComposerNotice }) {
   );
 }
 
-/** Who a provider's wait is on, and for how long. `untilMs` is this browser's clock. */
+/** Who a provider's wait is on, and for how long, until the wait ends. `untilMs` is this browser's clock. */
 export function useProviderWaitNotice(wait: { provider: string; untilMs: number } | null): ComposerNotice[] {
   const [now, setNow] = useState(Date.now);
 
   useEffect(() => {
     if (wait === null) return undefined;
-    setNow(Date.now());
-    const tick = setInterval(() => setNow(Date.now()), 1_000);
+    let tick: number | undefined;
 
-    return () => clearInterval(tick);
+    // On each whole second the wait has left, so the count reads 3s, 2s, 1s and the notice leaves at the wait's end.
+    const count = () => {
+      const at = Date.now();
+      const left = wait.untilMs - at;
+
+      setNow(at);
+
+      if (left > 0) tick = window.setTimeout(count, left % 1_000 || 1_000);
+    };
+
+    count();
+
+    return () => window.clearTimeout(tick);
   }, [wait]);
 
-  if (wait === null) return [];
+  const left = wait === null ? 0 : wait.untilMs - now;
 
-  return [{ id: "provider-wait", tone: "progress", text: `Waiting on ${wait.provider} · retrying in ${fmtSpan(Math.max(0, wait.untilMs - now))}` }];
+  if (wait === null || left <= 0) return [];
+
+  return [{ id: "provider-wait", tone: "progress", text: `Waiting on ${wait.provider} · retrying in ${fmtSpan(Math.ceil(left / 1_000) * 1_000)}` }];
 }
 
 /** Neither tone disables the composer; that belongs to the socket. */
