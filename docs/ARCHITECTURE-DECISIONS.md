@@ -971,6 +971,12 @@ the owner, built 2026-10-11 on `lane/main-isolate`.
   out a running one, and drops an older one's untold end; the workspace routes
   a run's calls by turn and run, so one generation's never reach another's.
   `facet_runs`, `admitRun`, `startRun`, `runEnded` and `holdsChat` are gone.
+  Nothing crosses between a run's last step and its commit (#75): the head or
+  node a run is delivered to holds no conversation, so its run records no
+  answer and no slates are asked for; before, a death on that crossing ran the
+  run again. A chat turn's answer commits before its slates are taken: an
+  `answer_slates` row of the roster committed with it takes them after, and the
+  workspace gives a take asked again the same.
 - Every chat turn ends in one commit (`ChatSession.endTurn`), answered,
   failed, stopped or cut: its answer (or the failure it carries), the
   retirement of the words it answered, its claim's verdict and its run's end,

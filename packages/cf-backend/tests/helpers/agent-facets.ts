@@ -93,15 +93,15 @@ export function delayNextTurnEnd(storageKey: string): HeldCall {
   return { reached: reached.promise, release: released.resolve };
 }
 
-const delayedSlateStamps = new Map<string, { readonly reached: () => void; readonly released: Promise<void> }>();
+let delayedSlateStamp: { readonly of: (storageKey: string) => boolean; readonly reached: () => void; readonly released: Promise<void> } | null = null;
 
-/** The isolate under `storageKey` commits its next answer, and once the workspace gave it that answer's slates, the
- *  answer to that take waits on the way until released: taken there, not yet stamped here. */
-export function delayNextSlateStamp(storageKey: string): HeldCall {
+/** The next isolate `of` names (its storage key) commits an answer, and once the workspace gave it that answer's slates,
+ *  the answer to that take waits on the way until released: taken there, not yet stamped here. */
+export function delayNextSlateStamp(of: (storageKey: string) => boolean): HeldCall {
   const reached = Promise.withResolvers<void>();
   const released = Promise.withResolvers<void>();
 
-  delayedSlateStamps.set(storageKey, { reached: reached.resolve, released: released.promise });
+  delayedSlateStamp = { of, reached: reached.resolve, released: released.promise };
 
   return { reached: reached.promise, release: released.resolve };
 }
@@ -518,11 +518,12 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           return host().paceStep(bound, profile);
         },
         answerMetadata: async (close, narration) => {
+          counted('answerMetadata');
           const answer = await host().answerMetadata(close, narration);
-          const delayed = answer.owesNarration ? undefined : delayedSlateStamps.get(placement.storageKey);
+          const delayed = delayedSlateStamp;
 
-          if (delayed !== undefined) {
-            delayedSlateStamps.delete(placement.storageKey);
+          if (delayed !== null && !answer.owesNarration && delayed.of(placement.storageKey)) {
+            delayedSlateStamp = null;
             delayed.reached();
             await delayed.released;
           }
