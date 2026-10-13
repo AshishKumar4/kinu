@@ -440,15 +440,15 @@ export function facetTurnTools(workspace: AgentWorkspace, prepared: PreparedAgen
   };
 }
 
-/** What a delivered run's preparation set, which the compiler does not follow into: the opening it made at the workspace,
- *  which every call of the run names, its closes too, and the trace its steps stream to. */
+/** What a delivered run's newest round's preparation set, which the compiler does not follow into: the opening it made at
+ *  the workspace, which every call of that round names, the run's closes too, and the trace its steps stream to. */
 interface PreparedRun {
   opened: TurnCapabilityOf | null;
   trace: HeadTrace | null;
 }
 
 /**
- * A delivered run's own parts (D2): its preparation, under its first round's claim, by its workspace over this
+ * A delivered run's own parts (D2): each round's preparation, under that round's claim, by its workspace over this
  * isolate's models and tools, and the projection of its rounds into its end. Its rounds are core's driver
  * (`driveExecution`, through `runHeadInference`), run in its chat's turn, which `signal` stops.
  */
@@ -469,9 +469,13 @@ export async function deliveredRun(
     turnIndex: actor.session.orchestrator.sessionTurnIndex,
   });
 
+  // Each round's: the workspace knows the run by its own turn, and each round reopens it at that round's epoch.
   const prepare = async (capability: TurnCapability) => {
-    // Every round's call carries the run's capability: the opening its preparation made at the workspace.
-    const bound: TurnCapabilityOf = { turnId: capability.turnId, runId: capability.runId, epoch: capability.epoch };
+    // Every call of the round carries its capability: the opening its preparation made at the workspace.
+    const bound: TurnCapabilityOf = { turnId: task.sequenceId, runId: capability.runId, epoch: capability.epoch };
+
+    // The last round's live words reach the workspace under its own opening, before the next is made.
+    await run.trace?.flush();
     const prepared = await workspace.prepareTurn(bound);
 
     run.opened = bound;

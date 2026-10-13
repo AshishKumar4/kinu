@@ -16,7 +16,7 @@ import {
 } from './types';
 import type { ToolCallRecord } from '../evolution/types';
 import { compactToolCall, type ToolCallInput } from '../evolution/tool-call-record';
-import { missionGate, type MissionBudgetRefusal, type MissionScope, type MissionSeam, type SpendGate } from '../mission-budget';
+import { missionGate, type MissionBudgetRefusal, type MissionGate, type MissionScope, type MissionSeam, type SpendGate } from '../mission-budget';
 import { failedToolOutcome, type ToolOutcome } from '../tools/outcome';
 import { addUsage, normalizeUsage, usageReported, type Usage } from '../usage';
 import { nanoid } from '../utils/nanoid';
@@ -343,7 +343,7 @@ export interface HeadInferenceDeps {
 }
 
 
-function runTurnSources(deps: HeadInferenceDeps, gate: ReturnType<typeof missionGate> | undefined, refused: (refusal: MissionBudgetRefusal) => void): TurnAssemblySources {
+function runTurnSources(deps: HeadInferenceDeps, gate: MissionGate | undefined, refused: (refusal: MissionBudgetRefusal) => void): TurnAssemblySources {
   const { brief } = deps;
 
   const guard = async (seam: MissionSeam): Promise<MissionBudgetRefusal | null> => {
@@ -365,7 +365,7 @@ function runTurnSources(deps: HeadInferenceDeps, gate: ReturnType<typeof mission
   };
 }
 
-async function lastCharge(gate: ReturnType<typeof missionGate> | undefined, id: string): Promise<KinuError | undefined> {
+async function lastCharge(gate: MissionGate | undefined, id: string): Promise<KinuError | undefined> {
   if (gate === undefined) return undefined;
   const doing = `charge agent ${id}'s last step to its mission`;
   const charged = await hold(attempt({ doing, otherwise: 'unavailable' }, () => gate.settled()));
@@ -554,8 +554,9 @@ export interface HeadRun {
   readonly key: { readonly turnId: HeadId; readonly runId: string; readonly mode: WorkMode };
   readonly actor: HostedActor;
   /**
-   * Under the run's first round's capability, claimed `preparing` before any of it (design v2 §2-§3): its input and
-   * everything its rounds assemble from. A failure settles that claim `error`.
+   * Under a round's capability: the first round's, claimed `preparing` before any of it (design v2 §2-§3), prepares the
+   * run's input and what its first round assembles from, and a failure settles that claim `error`; each later round's,
+   * claimed as it opens, binds what that round's calls carry (its input is the first's).
    */
   prepare(capability: TurnCapability): Promise<{ readonly input: HeadInput; readonly deps: HeadInferenceDeps }>;
 }
@@ -581,11 +582,20 @@ export async function runHeadInference(run: HeadRun): Promise<HeadReport> {
   // A preparation that failed settles the claim it was reserved under, and fails as it failed.
   return await settle(Effect.promise(() => run.prepare(capability)).pipe(
     Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : Effect.sync(() => { session.settleReserved(reserved, 'error'); }))),
-    Effect.flatMap((prepared) => Effect.promise(() => inferPrepared(prepared.input, prepared.deps, reserved))),
+    Effect.flatMap((prepared) => Effect.promise(() => inferPrepared(prepared.input, prepared.deps, reserved, async (later) => (await run.prepare(later)).deps))),
   ));
 }
 
-async function inferPrepared(input: HeadInput, deps: HeadInferenceDeps, reserved: PreparingClaim): Promise<HeadReport> {
+/** What a round's calls run under: what its preparation bound to the round's capability, and its mission gate. */
+interface BoundRound {
+  readonly deps: HeadInferenceDeps;
+  readonly gate: MissionGate | undefined;
+  readonly sources: TurnAssemblySources;
+}
+
+async function inferPrepared(
+  input: HeadInput, deps: HeadInferenceDeps, reserved: PreparingClaim, rebind: (capability: TurnCapability) => Promise<HeadInferenceDeps>,
+): Promise<HeadReport> {
   const { capture, clock } = deps;
   const startedAt = clock.now();
 
@@ -613,8 +623,14 @@ async function inferPrepared(input: HeadInput, deps: HeadInferenceDeps, reserved
 
   const conversation: ModelMessage[] = [];
 
-  const gate = deps.mission === undefined ? undefined : missionGate(deps.mission);
-  const sources = runTurnSources(deps, gate, (ruled) => { refusal ??= ruled; });
+  const bindRound = (bound: HeadInferenceDeps): BoundRound => {
+    const gate = bound.mission === undefined ? undefined : missionGate(bound.mission);
+
+    return { deps: bound, gate, sources: runTurnSources(bound, gate, (ruled) => { refusal ??= ruled; }) };
+  };
+
+  // The first round's, prepared under the claim reserved for it; each later round's is bound under its own as it opens.
+  let current = bindRound(deps);
 
   /** A stream that died before its first step settles nothing; half a conversation is worse than none. */
   let settled = false;
@@ -632,7 +648,7 @@ async function inferPrepared(input: HeadInput, deps: HeadInferenceDeps, reserved
 
       // A failed trace write must not kill the work; the sink can be an RPC.
       try {
-        await deps.reportStep?.(seq, { parts });
+        await current.deps.reportStep?.(seq, { parts });
       } catch (err) {
         diagnostics.failure(
           'head.step_trace_failed',
@@ -657,6 +673,11 @@ async function inferPrepared(input: HeadInput, deps: HeadInferenceDeps, reserved
     await driveExecution<HeadRound>(session, {
       runId: deps.runId, turnId: input.id, mode: input.mode, isAborted: deps.isAborted, reserved,
       assemble: async (round) => {
+        // A later round's calls carry its own opening: the run binds them under the round's claim.
+        if (round.index > 0) current = bindRound(await rebind(round.capability));
+
+        const { sources, deps: bound } = current;
+
         const assembled = await assembleActorTurn({
           ...sources,
           // Bound to the round as it resolves, then the host's own settle (a facet carries it on its first pace).
@@ -667,7 +688,7 @@ async function inferPrepared(input: HeadInput, deps: HeadInferenceDeps, reserved
         }, { userText: input.task, workMode: input.mode, ...(input.model !== undefined && { model: input.model }), ...(round.frozen !== null && { frozen: round.frozen }) });
 
         const historyLength = session.history.length;
-        const execution = withCompactionTrigger(assembled.execution, deps.compaction.state, deps.compaction.key, historyLength);
+        const execution = withCompactionTrigger(assembled.execution, bound.compaction.state, bound.compaction.key, historyLength);
         const stopWhen = (): boolean => deps.isAborted();
 
         return {
@@ -675,15 +696,15 @@ async function inferPrepared(input: HeadInput, deps: HeadInferenceDeps, reserved
           input: {
             ...execution,
             task: input.task,
-            chat: { ...execution.chat, stopWhen, onStep, ...streamRelay(deps) },
+            chat: { ...execution.chat, stopWhen, onStep, ...streamRelay(bound) },
             assertActive,
             scaffoldStreamOptions: { onStep, stopWhen },
           },
-          onEvent: (event: ChatEvent) => { settled = relayRunEvent(deps, event) || settled; },
+          onEvent: (event: ChatEvent) => { settled = relayRunEvent(bound, event) || settled; },
         };
       },
       project: async ({ lease, assembled, outcome }) => {
-        const retry = settleRunContext(deps, { outcome, execution: assembled.execution, historyLength: assembled.historyLength, contextWindow: assembled.contextWindow, overflowRetry });
+        const retry = settleRunContext(current.deps, { outcome, execution: assembled.execution, historyLength: assembled.historyLength, contextWindow: assembled.contextWindow, overflowRetry });
 
         overflowRetry = retry;
 
@@ -704,7 +725,7 @@ async function inferPrepared(input: HeadInput, deps: HeadInferenceDeps, reserved
         // The runner's selected answer (chat.ts answerFromSteps), not `text`, which may be a synthesized stand-in.
         if (outcome.answer !== null) lastText = outcome.answer;
 
-        if (!turnFailed && !outcome.interrupted) await adviseCompletedTurn({ session, input, deps, lease, outcome });
+        if (!turnFailed && !outcome.interrupted) await adviseCompletedTurn({ session, input, deps: current.deps, lease, outcome });
 
         return { claim: turnClaimOutcome(turnFailed, outcome.interrupted), stop: failure !== undefined || refusal !== null };
       },
@@ -714,7 +735,12 @@ async function inferPrepared(input: HeadInput, deps: HeadInferenceDeps, reserved
         return lease.signal.aborted || deps.isAborted() ? 'aborted' : 'error';
       },
       next: async ({ index }) => {
-        const next = await nextRunInput(deps, overflowRetry);
+        // The round's charges land under its own opening before a next round's is made.
+        failure = await lastCharge(current.gate, input.id);
+
+        if (failure !== undefined) return null;
+        // Asked under the round that just ended, whose opening the next round's has not yet replaced.
+        const next = await nextRunInput(current.deps, overflowRetry);
 
         if (next === null) return null;
         const turnId = `${input.id}#${index + 1}`;
@@ -733,7 +759,7 @@ async function inferPrepared(input: HeadInput, deps: HeadInferenceDeps, reserved
   }
 
   // Joined on every path: a run never settles past a step its mission has not been charged for.
-  failure ??= await lastCharge(gate, input.id);
+  failure ??= await lastCharge(current.gate, input.id);
 
   if (settled) failure = reportConversation(deps, input, conversation, failure);
 
