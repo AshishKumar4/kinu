@@ -280,7 +280,8 @@ export class UserDevices {
       `UPDATE user_devices
           SET os = ?, hostname = ?, last_seen_at = ?,
               consented_root = ?, device_home = ?, agent_root = ?,
-              sandbox_capability = ?, sandbox_reason = ?, sandbox_detail = ?, sandbox_gpu = ?
+              sandbox_capability = ?, sandbox_reason = ?, sandbox_detail = ?, sandbox_gpu = ?,
+              version = ?, update_check = ?
         WHERE id = ?`,
       hello.os,
       hello.hostname.length <= HOSTNAME_MAX_LENGTH ? hello.hostname : null,
@@ -292,19 +293,10 @@ export class UserDevices {
       verdict.reason,
       verdict.detail,
       JSON.stringify(hello.sandbox.gpu),
-      deviceId,
-    );
-
-    // Per-boot fact like the sandbox verdict: a daemon with no build stamp reads as having none.
-    this.host.sqlx(
-      `INSERT INTO user_device_builds (device_id, version, update_check)
-         VALUES (?, ?, ?)
-         ON CONFLICT(device_id) DO UPDATE SET
-           version = excluded.version,
-           update_check = excluded.update_check`,
-      deviceId,
+      // A daemon with no build stamp reads as having none.
       hello.version ?? null,
       hello.updateCheck ? 1 : 0,
+      deviceId,
     );
     this.host.sqlx(`DELETE FROM user_device_update_refusals WHERE device_id = ? AND runtime <> ?`, deviceId, hello.runtime);
 
@@ -1153,10 +1145,9 @@ export class UserDevices {
                d.replaced_at, d.revoked_at, d.unstopped_at, x.reuse_detected_at,
                d.consented_root,
                d.tier, d.sandbox_capability, d.sandbox_reason, d.sandbox_detail, d.sandbox_gpu,
-               b.version, b.update_check, f.version AS refused_version, f.reason AS refusal_reason,
+               d.version, d.update_check, f.version AS refused_version, f.reason AS refusal_reason,
                p.device_id AS protocol_refused
           FROM user_devices d
-          LEFT JOIN user_device_builds b ON b.device_id = d.id
           LEFT JOIN user_device_update_refusals f ON f.device_id = d.id
           LEFT JOIN user_device_protocol_refusals p ON p.device_id = d.id
           LEFT JOIN (SELECT device_id, MAX(reuse_detected_at) AS reuse_detected_at
