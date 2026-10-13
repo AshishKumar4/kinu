@@ -5,7 +5,7 @@
  * RPC target one of its methods answers with is counted as it leaves, whatever its class: a Nimbus session, a memory, a
  * context tree. Only a call's entry is a crossing: what the receiver calls on itself while it answers is a helper of
  * that call (Nimbus's session reads through its own `client()` and `cred()`), and a target's instances that never left
- * this isolate are this isolate's own. The count splits into phases at a marker call, each step's.
+ * this isolate are this isolate's own. The count splits into phases at a marker call, where one is named.
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { DurableObject, RpcTarget, WorkerEntrypoint } from 'cloudflare:workers';
@@ -64,8 +64,8 @@ export class Crossings {
   /** The instances of a returned target's class that a counted call handed across: the rest never left this isolate. */
   readonly #handed = new WeakSet<object>();
 
-  /** `marker` is the call each phase after the first starts with. */
-  constructor(private readonly marker: string) {}
+  /** `marker` is the call each phase after the first starts with; none, and the count is one phase. */
+  constructor(private readonly marker: string | null) {}
 
   begin(): void {
     this.#phases = [new Map()];

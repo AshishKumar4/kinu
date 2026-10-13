@@ -137,6 +137,9 @@ export class FacetChat {
         deliver: (event) => {
           // Its last charge lands before its end is told: nothing the workspace reads of the turn can miss it.
           if (event.type === 'turn-end') {
+            // Its steps' grant answers: the turn ran its last.
+            deps.pacer.release(event.turnId);
+
             return this.charged().then(async () => {
               // Its room is sent the transcript's newest messages with its end: they are this isolate's to read.
               const window = await deps.database.history(TRANSCRIPT_WINDOW);
@@ -517,6 +520,8 @@ export class FacetChat {
    *  holds a capability into cannot hibernate (#69). A turn that opened meanwhile is working, and keeps it. */
   private atRest(): void {
     if (this.session.pumping || this.terminal.closing) return;
+    // No turn runs: no grant is held for one.
+    this.deps.pacer.releaseAll();
     this.resting = hold(logged('agent.owed_report_failed', { doing: 'telling the workspace what an agent still owes', otherwise: 'unavailable' }, () => this.tell()))
       .then(() => {
         if (!this.session.pumping && !this.terminal.closing) this.deps.workspace.rest();

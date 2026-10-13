@@ -9,8 +9,9 @@ import { AgentFacet as ShippedAgentFacet } from '../../src/agent-facet/agent-fac
 import { meterInPlace, type OperationCost, type SqlMeter } from './sql-meter';
 import { Crossings, type PhasedCrossings } from './crossings';
 
-/** The calls the workspace makes into main's isolate while the meter runs, split at each step's grant. */
-const crossings = new Crossings('facet.step');
+/** The calls the workspace makes into main's isolate while the meter runs: one phase, since a turn's steps run under the
+ *  one grant it holds while its budget lasts (`step-pacer.ts`), and nothing else is called into it per step. */
+const crossings = new Crossings(null);
 
 /** Each facet call counted once: the isolate is cached by id, so its class serves every activation. */
 let counting = false;
