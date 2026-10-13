@@ -2064,15 +2064,13 @@ describe('independent settings and quality reads publish independently', () => {
       await page.setViewport({ width: 900, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=qualitylive`, { waitUntil: 'networkidle0' });
 
-      const rated = () => page.evaluate(() => [...document.querySelectorAll('[data-quality-live] *')]
-        .find((node) => node.textContent?.startsWith('Turns rated') === true && node.children.length > 0)?.textContent ?? '');
+      const verdict = () => page.evaluate(() => document.querySelector('[data-quality-live] [data-quality-verdict]')?.textContent ?? '');
 
-      await page.waitForFunction(() => document.querySelector('[data-quality-live]')?.textContent?.includes('Turns rated') === true);
-      const before = await rated();
+      await page.waitForSelector('[data-quality-live] [data-quality-verdict]');
+      const before = await verdict();
 
       await page.click('[data-quality-rate]');
-      await page.waitForFunction((was: string) => [...document.querySelectorAll('[data-quality-live] *')]
-        .find((node) => node.textContent?.startsWith('Turns rated') === true && node.children.length > 0)?.textContent !== was, {}, before);
+      await page.waitForFunction((was: string) => (document.querySelector('[data-quality-live] [data-quality-verdict]')?.textContent ?? '') !== was, {}, before);
       await page.close();
     });
   });
@@ -2086,9 +2084,7 @@ describe('independent settings and quality reads publish independently', () => {
 
       await page.evaluate(() => window.dispatchEvent(new Event('gallery:quality-heal')));
       await page.click('[data-quality-retry] button');
-      await page.waitForFunction(
-        () => document.querySelector('[data-quality-retry]')?.textContent?.includes('Satisfaction per day') === true,
-      );
+      await page.waitForSelector('[data-quality-retry] [data-quality-verdict]');
       await page.close();
     });
   });
@@ -2898,10 +2894,8 @@ function journalRows(page: Page): Promise<number> {
  * each section in its loading shape and never in the settled one.
  *
  * Three states over the shipped fixtures: nothing in flight, nothing at all,
- * and both ledger reads refusing. The fourth row is the journal's chips, where
- * the chip named for everything has to hold the feed the badge counts — the
- * needs-you row above it counts an unseen self-change off the same read and
- * sends the reader down here to find it.
+ * and the plan read refusing. The fourth row is the journal, whose badge has to
+ * count the rows it holds.
  */
 describe('WorkTab draws a section only when it has something to show', () => {
   test('nothing in flight draws no Now, and the journal under it still draws', async () => {
@@ -2913,17 +2907,6 @@ describe('WorkTab draws a section only when it has something to show', () => {
 
       expect(await page.$('[data-section="work-now"]')).toBeNull();
       expect(await journalRows(page)).toBeGreaterThan(0);
-
-      // No job has ever run in this lane, so the Jobs chip is the empty one —
-      // and a chip with nothing under it says so instead of framing a void.
-      for (const chip of await page.$$('section button[aria-pressed]')) {
-        if (await chip.evaluate((node) => node.textContent?.trim()) === 'Jobs') await chip.click();
-      }
-
-      await page.waitForFunction(() => [...document.querySelectorAll('button[aria-pressed="true"]')]
-        .some((node) => node.textContent?.trim() === 'Jobs'));
-
-      expect(await journalRows(page)).toBe(0);
       await page.close();
     });
   });
@@ -2933,7 +2916,7 @@ describe('WorkTab draws a section only when it has something to show', () => {
       const page = await newPage();
       await page.setViewport({ width: 720, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=workempty`, { waitUntil: 'networkidle0' });
-      await page.waitForFunction(() => document.body.textContent?.includes('Nothing yet') === true);
+      await page.waitForFunction(() => document.body.textContent?.includes('No work yet') === true);
 
       const column = await page.evaluate(() => ({
         sections: document.querySelectorAll('section').length,
@@ -2959,33 +2942,27 @@ describe('WorkTab draws a section only when it has something to show', () => {
       const page = await newPage();
       await page.setViewport({ width: 430, height: 1400 });
       await page.goto(`${origin}/gallery.html?frame=work&lane=failed`, { waitUntil: 'networkidle0' });
-      // Each section owes ITS read's retry, and the two failed reads here are
-      // the only failures on the page.
+      // The plan read failed: Now owes its retry, and it is the only failure on the page.
       await page.waitForFunction(() => [...document.querySelectorAll('section')]
         .filter((node) => [...node.querySelectorAll('button')]
-          .some((button) => button.textContent?.trim() === 'Retry')).length === 2);
+          .some((button) => button.textContent?.trim() === 'Retry')).length === 1);
 
       const sections = await workSections(page);
       const now = sections[0];
-      const journal = sections[1];
 
-      // The plan read failed; the running job is a prop and is still Now's to
-      // show, beside the one retry that read owes.
+      // The running job is a prop and is still Now's to show, beside the one retry that read owes.
       expect(now?.text).toContain('7c1e4a92');
       expect(now?.retries).toBe(1);
-      // The journal has no rows at all — its failure is the whole reason it is
-      // on screen, so there are no chips over nothing.
-      expect(journal?.retries).toBe(1);
-      expect(journal?.chips).toEqual([]);
+      // Nothing finished, so there is no Journal to draw.
       expect(await journalRows(page)).toBe(0);
       // And nothing outside a section owes one: the change-set card this
       // column always draws reads an EMPTY change-set here, not a broken one.
-      expect(await page.$$eval('button', (nodes) => nodes.filter((node) => node.textContent?.trim() === 'Retry').length)).toBe(2);
+      expect(await page.$$eval('button', (nodes) => nodes.filter((node) => node.textContent?.trim() === 'Retry').length)).toBe(1);
       await page.close();
     });
   });
 
-  test('the chip named for everything holds every row the badge counts', async () => {
+  test('the Journal holds every finished row its badge counts, under the day each ended', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
       await page.setViewport({ width: 430, height: 2400 });
@@ -2993,29 +2970,12 @@ describe('WorkTab draws a section only when it has something to show', () => {
       await waitForWorkSection(page, 'Journal');
 
       const journal = (await workSections(page)).find((section) => section.title === 'Journal');
-      const chips = await page.$$('section button[aria-pressed]');
-      const counted: Record<string, number> = {};
 
+      const rows = await page.evaluate(() => [...document.querySelectorAll('section')]
+        .find((node) => node.querySelector('.p-label')?.textContent === 'Journal')
+        ?.querySelectorAll('div.p-group > *').length ?? -1);
 
-      for (const chip of chips) {
-        const label = await chip.evaluate((node) => node.textContent?.trim() ?? '');
-        await chip.click();
-        await page.waitForFunction((pressed) => [...document.querySelectorAll('button[aria-pressed="true"]')]
-          .some((node) => node.textContent?.trim() === pressed), {}, label);
-        counted[label] = await journalRows(page);
-      }
-
-      // A chip that never answered leaves -1 behind, which no badge and no sum
-      // can match, so a missing chip fails here rather than reading as zero.
-      const all = counted.All ?? -1;
-      const jobs = counted.Jobs ?? -1;
-      const self = counted['Self-changes'] ?? -1;
-
-      // The badge counts the feed and All renders it: a row the badge counts
-      // but no chip lists is a row nobody can reach.
-      expect(journal?.badge).toBe(String(all));
-      // Jobs and Self-changes partition that same feed, so they add back up.
-      expect(jobs + self).toBe(all);
+      expect(journal?.badge).toBe(String(rows));
       await page.close();
     });
   });
@@ -3245,19 +3205,15 @@ describe('the Work tab reads the workspace, not the actor', () => {
       await page.close();
     });
   });
-  test('Learnings lists the workspace\'s saved memories, newest first', async () => {
+  test('what the agent knows lists its saved notes, newest first', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
-      await page.setViewport({ width: 430, height: 1400 });
-      await page.goto(`${origin}/gallery.html?frame=work`, { waitUntil: 'networkidle0' });
-      await waitForWorkSection(page, 'Learnings');
+      await page.setViewport({ width: 1280, height: 1400 });
+      await page.goto(`${origin}/gallery.html?frame=agent`, { waitUntil: 'networkidle0' });
+      const panel = '[data-gallery-panel^="Loaded — everything"]';
 
-      const learnings = (await workSections(page)).find((section) => section.title === 'Learnings');
-
-      if (learnings === undefined) throw new Error('the Learnings section is missing');
-      expect(learnings.badge).toBe('2');
-
-      const rows = await page.$$eval('[data-learning]', (nodes) => nodes.map((node) => node.textContent ?? ''));
+      await page.waitForSelector(`${panel} [data-learning]`);
+      const rows = await page.$$eval(`${panel} [data-learning]`, (nodes) => nodes.map((node) => node.textContent ?? ''));
 
       expect(rows).toHaveLength(2);
       expect(rows[0]).toContain('Prompt lanes assemble');

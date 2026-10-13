@@ -662,32 +662,28 @@ test('a note on a changed line stands in for Mark reviewed, leaves the diff when
   });
 });
 
-test('a mouse wheel over the inspector strip scrolls it sideways, so a tab past its edge is reachable', async () => {
+test('a page with no room in the inspector bar is reachable from the bar, and opens', async () => {
   await withGallery(async ({ newPage, origin }) => {
     const page = await newPage();
 
     try {
-      // The default inspector width, with three slates' tabs in the pages' share of the bar.
-      await page.setViewport({ width: 1440, height: 900 });
+      // The column at its opening width, with three slates' pages in the pages' share of the bar.
+      await page.setViewport({ width: 1100, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage&slates=3`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('nav[aria-label="Pages"] button[aria-label="Tally"]');
-      const strip = await page.$('nav[aria-label="Pages"] ul');
-      const box = await strip?.boundingBox();
+      await page.waitForSelector('nav[aria-label="Pages"]');
 
-      if (strip === null || strip === undefined || box === null || box === undefined) throw new Error('the inspector strip is not drawn');
+      const shown = (): Promise<string[]> => page.$$eval('nav[aria-label="Pages"] button[aria-label]',
+        (buttons) => buttons.map((button) => button.getAttribute('aria-label') ?? ''));
 
-      // Whether the strip's last tab ends inside the strip's visible edge.
-      const lastTabShown = (): Promise<boolean> => strip.evaluate((element) => {
-        const last = [...element.querySelectorAll('button[aria-label]')].at(-1)?.getBoundingClientRect();
+      // Not every page fits beside the tools: the rest wait behind the bar's own opener.
+      expect(await shown()).not.toContain('Tally');
+      await page.click('nav[aria-label="Pages"] button[aria-haspopup="menu"]');
 
-        return last !== undefined && last.right <= element.getBoundingClientRect().right + 1;
-      });
+      const tally = await page.waitForFunction(() => [...document.querySelectorAll('nav[aria-label="Pages"] [role="menuitem"]')]
+        .find((item) => item.textContent?.includes('Tally') === true) ?? null);
 
-      expect(await lastTabShown()).toBe(false);
-      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-      await page.mouse.wheel({ deltaY: 2000 });
-
-      expect(await lastTabShown()).toBe(true);
+      await tally.asElement()?.evaluate((item) => { if (item instanceof HTMLElement) item.click(); });
+      await page.waitForFunction(() => document.querySelector('nav[aria-label="Pages"] [aria-current="true"]')?.textContent?.includes('Tally') === true);
     } finally { await page.close(); }
   });
 });

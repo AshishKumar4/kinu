@@ -8,11 +8,10 @@ import { Badge, Button, Loader } from "@cloudflare/kumo";
 import {
   ClockIcon, PulseIcon, WarningCircleIcon, GitBranchIcon,
   PackageIcon, SparkleIcon, CaretRightIcon, ShieldWarningIcon,
-  NotePencilIcon, DatabaseIcon,
+  NotePencilIcon,
 } from "@phosphor-icons/react";
 import { hasWorkspaceWork, jobPhase, taskTreePhase, revealMisrepresenting, timeAgo, type InspectedWork } from "@kinu.run/core";
-import type { AgentTaskTree, ChangelogEntry, MemoryEntry, Omitted, OwnedPlan, PanelAgent, ParkedWriteReview, PendingAction, PendingActionKind, PlanPageRef, WorkspaceWork, WorkspaceWorkOwner } from "@kinu.run/core";
-import type { ReadMoves } from "@/hooks/use-workspace-reads";
+import type { AgentTaskTree, Omitted, OwnedPlan, PanelAgent, ParkedWriteReview, PendingAction, PendingActionKind, PlanPageRef, WorkspaceWork, WorkspaceWorkOwner } from "@kinu.run/core";
 import type { Rpc } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -21,29 +20,20 @@ import { lastValue, useAsyncResource, type AsyncResource } from "@/hooks/use-asy
 import { Section } from "./shared";
 import { HelperRow, PlanProgress, TaskTree } from "./work-tasks";
 import { InspectedRow, JobCard } from "./work-jobs";
-import { ChangelogEntryCard, ChangelogFailure, useChangelog, type ChangelogView } from "./changelog-entries";
 import type { SurfaceKind } from "@kinu.run/core";
 import { renderThrownChain, detach, settle } from "@kinu.run/core/obs";
 import { WorkPlans } from "./WorkPlans";
 import { FileBody } from "./changes/ChangesPanel";
 import type { WorkspaceWorkRead } from "./use-workspace-work";
 
-/** `All` holds every row the feed has: the queue counts unseen entries from the same unfiltered read and points here. Curation belongs to `buildChangelog`'s `changesOnly`. */
-type JournalFilter = "all" | "jobs" | "self";
-
-const FILTERS: Array<{ id: JournalFilter; label: string }> = [
-  { id: "all", label: "All" },
-  { id: "jobs", label: "Jobs" },
-  { id: "self", label: "Self-changes" },
-];
-
 /** Kinds decided in this queue, which is their only home. */
 type DecidedHere = "deferred_action" | "workspace_proposal";
 
 /** Where each pending kind is decided; tab names stay out of core. The kinds decided here are absent. */
 const PENDING_HOME = {
-  scaffold_version: { surface: "Agent", cta: "decide in Agent → Evolution" },
-  unseen_changes: { surface: null, cta: null },
+  scaffold_version: { surface: "Agent", cta: "decide in Agent" },
+  // The agent's own changes are the Agent tab's: how it is changing.
+  unseen_changes: { surface: "Agent", cta: "see them in Agent" },
   curriculum_task: { surface: null, cta: null },
   // The row is the deep link: it opens the plan's own page.
   plan_review: { surface: null, cta: "open the review" },
@@ -68,26 +58,17 @@ export interface WorkTabProps {
   inspectedWork: readonly InspectedWork[];
   onRefreshJobs: () => void;
   onOpenSurface: (surface: SurfaceKind) => void;
-  onChangelogSeen?: () => void;
   /** Re-read after a decision so decided rows leave on the click, not the next poll. */
   onRefreshQueue?: () => void;
   rpc: Rpc;
-  memory?: MemoryEntry[];
-  readMoves?: ReadMoves;
   agents?: { readonly list: readonly PanelAgent[]; readonly open: (agent: PanelAgent) => void };
 }
 
 export function WorkTab({
-  onReviewActor, work: read, onOpenPlan, pendingActions, backgroundJobs, inspectedWork, onRefreshJobs, onOpenSurface, onChangelogSeen, onRefreshQueue, rpc, memory = [], readMoves = {}, agents,
+  onReviewActor, work: read, onOpenPlan, pendingActions, backgroundJobs, inspectedWork, onRefreshJobs, onOpenSurface, onRefreshQueue, rpc, agents,
 }: WorkTabProps) {
-  const [filter, setFilter] = useState<JournalFilter>("all");
   const openPlan = useCallback((item: OwnedPlan) => onOpenPlan({ owner: item.owner.name, id: item.plan.id, revision: item.plan.revision }), [onOpenPlan]);
   const { work, resource: taskResource, reload: reloadTasks } = read;
-
-  const {
-    view: changelog, seenAt: changelogSeenAt, seenError: changelogSeenError,
-    resource: changelogResource, reload: reloadChangelog,
-  } = useChangelog(rpc, onChangelogSeen, readMoves.getEvolutionChangelog ?? 0);
 
   const taskRows = useMemo(() => {
     const rows = (groups: readonly { owner: WorkspaceWorkOwner; tasks: AgentTaskTree[] }[]) =>
@@ -102,25 +83,27 @@ export function WorkTab({
   const runningJobs = backgroundJobs.filter((job) => jobPhase(job, Date.now()) !== "settled");
   const settledJobs = backgroundJobs.filter((job) => jobPhase(job, Date.now()) === "settled");
 
-  const journal = useMemo(
-    () => buildJournal(settledJobs, closedTasks, changelog?.entries ?? []),
-    [settledJobs, closedTasks, changelog],
-  );
+  const journal = useMemo(() => buildJournal(settledJobs, closedTasks), [settledJobs, closedTasks]);
 
-  const nothingAtAll = work !== null && changelog !== null && !hasWorkspaceWork({
-    work, pending: pendingActions, jobs: backgroundJobs,
-    changes: changelog.entries, notes: memory, owed: inspectedWork,
+  const nothingAtAll = work !== null && !hasWorkspaceWork({
+    work, pending: pendingActions, jobs: backgroundJobs, changes: [], notes: [], owed: inspectedWork,
   });
 
-  if (nothingAtAll) return <p className="p-row-text p-text-3">Nothing yet</p>;
+  if (nothingAtAll) {
+    return (
+      <p className="py-1">
+        <span className="block p-row-text p-text-2">No work yet</span>
+        <span className="mt-1 block p-meta p-text-3">Plans, tasks and jobs show here while they run, and stay in the Journal once they finish.</span>
+      </p>
+    );
+  }
 
   return (
     <div className="space-y-6 animate-fade-in">
       <WorkPlans work={work} onOpen={openPlan} />
       <NeedsYou pendingActions={pendingActions} rpc={rpc} onDecided={onRefreshQueue} onOpenSurface={onOpenSurface} onOpenPlan={onOpenPlan} />
       <WorkNow work={work} taskRows={taskRows} openTasks={openTasks} inspected={inspectedWork} runningJobs={runningJobs} helpers={helpers} onOpenHelper={agents?.open} resource={taskResource} onRetry={reloadTasks} onRefreshJobs={onRefreshJobs} onOpenOwner={onReviewActor} rpc={rpc} />
-      <WorkJournal journal={journal} filter={filter} onFilter={setFilter} view={changelog} seenAt={changelogSeenAt} seenError={changelogSeenError} resource={changelogResource} onReload={reloadChangelog} rpc={rpc} onRefreshJobs={onRefreshJobs} onOpenOwner={onReviewActor} />
-      <Learnings memory={memory} onOpenSurface={onOpenSurface} />
+      <WorkJournal journal={journal} rpc={rpc} onRefreshJobs={onRefreshJobs} onOpenOwner={onReviewActor} />
     </div>
   );
 }
@@ -146,7 +129,7 @@ function NeedsYou({ pendingActions, rpc, onDecided, onOpenSurface, onOpenPlan }:
   if (pendingActions.length === 0) return null;
 
   return (
-    <div className="rounded-lg border border-[rgba(224,164,88,.32)] bg-[rgba(224,164,88,.06)] px-[18px] pt-2.5 pb-3.5 [&_.p-label]:!text-[var(--c-accent-fg)]">
+    <div className="rounded-lg border border-[color-mix(in_srgb,var(--c-accent)_32%,transparent)] bg-[var(--c-accent-subtle)] px-[18px] pt-2.5 pb-3.5 [&_.p-label]:!text-[var(--c-accent-fg)]">
       <Section id="work-needs-you" title="Needs you"
         icon={<WarningCircleIcon size={14} className="p-warning" />}
         badge={<Badge variant="secondary">{pendingActions.length}</Badge>}>
@@ -233,92 +216,54 @@ function WorkNow({ work, taskRows, openTasks, inspected, runningJobs, helpers, o
   );
 }
 
-/** Drawn while the digest read owes a retry too, so a broken read never blanks the tab; revalidation failures also show. */
-function WorkJournal({ journal, filter, onFilter, view, seenAt, seenError, resource, onReload, rpc, onRefreshJobs, onOpenOwner }: {
+/** What finished: jobs and tasks, newest first under the day they ended. A row opens what it was. */
+function WorkJournal({ journal, rpc, onRefreshJobs, onOpenOwner }: {
   journal: JournalRow[];
-  filter: JournalFilter;
-  onFilter: (filter: JournalFilter) => void;
-  view: ChangelogView | null;
-  seenAt: number;
-  seenError: string | null;
-  resource: AsyncResource<ChangelogView>;
-  onReload: () => void;
   rpc: Rpc;
   onRefreshJobs: () => void;
   onOpenOwner?: (name: string, actorId: string) => void | Promise<void>;
 }) {
-  const visible = journal.filter((row) => row.chips.includes(filter));
-
-  if (journal.length === 0 && resource.status !== "error") return null;
+  if (journal.length === 0) return null;
+  const days = journalDays(journal, Date.now());
 
   return (
     <Section id="work-journal" title="Journal"
       icon={<ClockIcon size={14} className="p-text-2" />}
-      badge={journal.length > 0 ? <Badge variant="secondary">{journal.length}</Badge> : undefined}>
-      <div className="space-y-3">
-        {journal.length > 0 && (
-          <div className="flex items-center gap-1 flex-wrap">
-            {FILTERS.map((chip) => (
-              <button key={chip.id} type="button" onClick={() => onFilter(chip.id)}
-                aria-pressed={filter === chip.id}
-                className={`px-2.5 py-0.5 p-t-control rounded-full transition-colors ${filter === chip.id ? "bg-[rgba(224,164,88,.1)] p-accent" : "p-text-3 hover:p-accent"}`}>
-                {chip.label}
-              </button>
-            ))}
+      badge={<Badge variant="secondary">{journal.length}</Badge>}>
+      <div className="space-y-3.5">
+        {days.map(({ label, rows }) => (
+          <div key={label} className="space-y-1.5">
+            <p className="p-eyebrow">{label}</p>
+            <div className="p-group">
+              {rows.map((row) => (
+                <div key={row.key}>
+                  {row.kind === "job" && <JobCard grouped job={row.job} onRefresh={onRefreshJobs} rpc={rpc} />}
+                  {row.kind === "task" && <TaskTree grouped task={row.task} owner={row.owner} onOpenOwner={onOpenOwner} />}
+                </div>
+              ))}
+            </div>
           </div>
-        )}
-
-        {(view === null || resource.status === "error") && (
-          <ChangelogFailure resource={resource} reload={onReload} />
-        )}
-        {seenError && (
-          <div className="text-xs p-warning p-card rounded-lg px-3 py-1.5">
-            Could not mark the changelog as seen: {seenError}
-          </div>
-        )}
-
-        {journal.length > 0 && (visible.length > 0 ? (
-          <div className="p-group">
-            {visible.map((row) => (
-              <div key={row.key}>
-                {row.kind === "job" && <JobCard grouped job={row.job} onRefresh={onRefreshJobs} rpc={rpc} />}
-                {row.kind === "task" && <TaskTree grouped task={row.task} owner={row.owner} onOpenOwner={onOpenOwner} />}
-                {row.kind === "self" && (
-                  <ChangelogEntryCard grouped entry={row.entry} seenAt={seenAt}
-                    rpc={rpc} onReverted={onReload} />
-                )}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="p-row-text p-text-3">Nothing under this chip</p>
         ))}
       </div>
     </Section>
   );
 }
 
-function Learnings({ memory, onOpenSurface }: {
-  memory: MemoryEntry[];
-  onOpenSurface: (surface: SurfaceKind) => void;
-}) {
-  if (memory.length === 0) return null;
+/** The journal by the local day each row ended: Today, Yesterday, then the date. */
+function journalDays(journal: readonly JournalRow[], now: number): { label: string; rows: JournalRow[] }[] {
+  const midnight = new Date(now).setHours(0, 0, 0, 0);
+  const days = new Map<string, JournalRow[]>();
 
-  return (
-    <Section id="work-learnings" title="Learnings"
-      icon={<DatabaseIcon size={14} className="p-text-2" />}
-      badge={<Badge variant="secondary">{memory.length}</Badge>}>
-      <div data-learnings className="p-group">
-        {[...memory].reverse().map((entry, i) => (
-          <button key={i} type="button" data-learning onClick={() => onOpenSurface("Agent")}
-            className="w-full rounded-md px-3 py-2 text-left transition-colors hover:p-elevated">
-            <span className="p-row-text p-text line-clamp-1">{entry.content.split("\n")[0]}</span>
-            <span className="p-meta p-text-3 mt-0.5 block">{entry.updatedAt}{entry.savedBy ? ` · ${entry.savedBy}` : ""}</span>
-          </button>
-        ))}
-      </div>
-    </Section>
-  );
+  for (const row of journal) {
+    const ago = Math.floor((midnight - new Date(row.at).setHours(0, 0, 0, 0)) / 86_400_000);
+    let label = new Date(row.at).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+
+    if (ago <= 0) label = "Today";
+    else if (ago === 1) label = "Yesterday";
+    days.set(label, [...days.get(label) ?? [], row]);
+  }
+
+  return [...days].map(([label, rows]) => ({ label, rows }));
 }
 
 /** Nothing here has run, and approving does not run it: the agent is woken and re-issues the command. */
@@ -609,30 +554,16 @@ function PendingRow(
   );
 }
 
-/** Membership is decided by the builder, never the renderer, so no chip drifts from the feed. */
 type JournalRow =
-  | { key: string; at: number; chips: readonly JournalFilter[]; kind: "job"; job: BackgroundJob }
-  | { key: string; at: number; chips: readonly JournalFilter[]; kind: "task"; task: AgentTaskTree; owner: WorkspaceWorkOwner }
-  | { key: string; at: number; chips: readonly JournalFilter[]; kind: "self"; entry: ChangelogEntry };
+  | { key: string; at: number; kind: "job"; job: BackgroundJob }
+  | { key: string; at: number; kind: "task"; task: AgentTaskTree; owner: WorkspaceWorkOwner };
 
-/** Exported for its test: the ordering is the feature. Every row answers to `All`, a no-change self-review included, because the queue counts it as unseen. */
-function buildJournal(
-  jobs: readonly BackgroundJob[],
-  tasks: readonly WorkTaskRow[],
-  entries: readonly ChangelogEntry[],
-): JournalRow[] {
+/** Newest first: the ordering is the feature. */
+function buildJournal(jobs: readonly BackgroundJob[], tasks: readonly WorkTaskRow[]): JournalRow[] {
   const rows: JournalRow[] = [
-    ...jobs.map((job): JournalRow => ({
-      key: `job:${job.id}`, at: job.settledAt ?? job.createdAt, chips: ["all", "jobs"], kind: "job", job,
-    })),
-    ...tasks.map(({ task, owner }): JournalRow => ({
-      key: `task:${owner.actorId}:${task.id}`, at: task.updatedAt, chips: ["all", "self"], kind: "task", task, owner,
-    })),
-    ...entries.map((entry): JournalRow => ({
-      key: `self:${entry.id}`, at: entry.at, chips: ["all", "self"], kind: "self", entry,
-    })),
+    ...jobs.map((job): JournalRow => ({ key: `job:${job.id}`, at: job.settledAt ?? job.createdAt, kind: "job", job })),
+    ...tasks.map(({ task, owner }): JournalRow => ({ key: `task:${owner.actorId}:${task.id}`, at: task.updatedAt, kind: "task", task, owner })),
   ];
 
   return rows.sort((a, b) => b.at - a.at);
 }
-

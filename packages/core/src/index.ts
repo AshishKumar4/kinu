@@ -201,13 +201,13 @@ export {
   type DelegationFeatures, type ExecutionPathSignals,
 } from './evolution/delegation-features';
 
-export { QualityDaySchema, type QualityDay } from './types/quality';
+export { QualityDaySchema, QualityWindowSchema, type QualityDay, type QualityWindow } from './types/quality';
 
 // Turn ratings: the one signal evolution decides by.
 export {
   RATING_SOURCES, rateTurn, renderActions, initTurnRatingTables, recordTurnRating,
   listTurnRatings, ratingOf, hasLowRating, isLowRating, isHighRating, ratingQuality, thumbsRating, takePickRating,
-  retractThumbs, listThumbs, satisfactionInterval, qualitySeries, renderQualitySeries, isTrivialTurn,
+  retractThumbs, listThumbs, satisfactionInterval, qualitySeries, qualityWindow, renderQualitySeries, isTrivialTurn,
   type RatingSource, type WrongReason, type RatingVerdict, type TurnRating, type RatingQuery,
   type RecordTurnRatingInput,
 } from './evolution/ratings';

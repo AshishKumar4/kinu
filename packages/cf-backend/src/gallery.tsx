@@ -3662,18 +3662,31 @@ const TRANSCRIPTS = {
 
 const TRANSCRIPT_BY_NODE = new Map<string, NodeTranscriptView>(Object.entries(TRANSCRIPTS));
 
-/** Satisfaction per day, as `getQuality` answers: two weeks rated, the newest day with no turns yet. */
-const QUALITY_DAYS = Array.from({ length: 14 }, (_, i) => {
-  const mean = 3.1 + i * 0.07;
-  const rated = 6 + (i % 4);
+/** Satisfaction per day, as `getQuality` answers: thirty UTC days, a few weekends nobody rated. */
+const QUALITY_DAYS = Array.from({ length: 30 }, (_, i) => {
+  const day = new Date(NOW - (29 - i) * 864e5).toISOString().slice(0, 10);
+
+  if ([2, 3, 9, 10, 16, 17, 23].includes(i)) {
+    return { day, satisfaction: { mean: 0, lo: 0, hi: 0, n: 0 }, corrected: { mean: 0, lo: 0, hi: 0, n: 0 }, rated: 0, thumbs: 0, turns: 0 };
+  }
+
+  const mean = 3.1 + i * 0.045;
+  const rated = 3 + (i % 4);
 
   return {
-    day: new Date(NOW - (13 - i) * 864e5).toISOString().slice(0, 10),
+    day,
     satisfaction: { mean, lo: mean - 0.45, hi: Math.min(5, mean + 0.4), n: rated },
-    corrected: { mean: 0.3 - i * 0.015, lo: 0.1, hi: 0.5, n: rated },
-    rated, thumbs: i % 3, turns: rated + 3,
+    corrected: { mean: Math.max(0, 0.3 - i * 0.01), lo: 0.05, hi: 0.5, n: rated },
+    rated, thumbs: i % 3, turns: rated + 2,
   };
 });
+
+/** The last seven of those days summed, as `getQualityWindow` answers. */
+const QUALITY_WINDOW = {
+  from: QUALITY_DAYS.at(-7)?.day ?? "", to: QUALITY_DAYS.at(-1)?.day ?? "",
+  satisfaction: { mean: 4.2, lo: 3.8, hi: 4.5, n: 26 }, corrected: { mean: 0.12, lo: 0.04, hi: 0.3, n: 26 },
+  rated: 26, thumbs: 6, turns: 35,
+};
 
 const GEPA_RUNS = [
   { runId: "gepa_2", target: "scaffold", startedAt: NOW - 3 * 864e5, status: "completed", winnerId: "cand_2b", iterations: 6, metricCalls: 48 },
@@ -3701,6 +3714,8 @@ const GEPA_OLDER_DETAIL = {
 
 const evolutionRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "getQuality") return rpcResult(QUALITY_DAYS).json<T>();
+
+  if (method === "getQualityWindow") return rpcResult(QUALITY_WINDOW).json<T>();
 
   if (method === "getGepaRuns") return rpcResult(GEPA_RUNS).json<T>();
 
@@ -4733,6 +4748,8 @@ function QualityRetryFrame() {
       return rpcResult(QUALITY_DAYS).json<T>();
     }
 
+    if (method === "getQualityWindow") return rpcResult(QUALITY_WINDOW).json<T>();
+
     return stubRpc<T>(method);
   }, []);
 
@@ -5405,7 +5422,8 @@ const settledOnlyRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promis
   return workRpc<T>(method, args);
 };
 
-/** Both reads refuse, so Now and the journal each owe a retry; the running job is a prop, so Now still shows it. */
+/** Both reads refuse: Now owes the plan read's retry, and the changelog's is the Agent tab's. The running job is a prop,
+ *  so Now still shows it. */
 const failedReadsRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "listWorkspaceWork") throw new Error("plan fixture failed");
 
@@ -6431,8 +6449,8 @@ function AgentPanel(
              action: banner.retry === null ? undefined : { label: banner.retry, onClick: () => {} } }]
         : []} />
       <AgentSurface
-        snapshot={snapshot} memory={[]} memoryContent={memoryContent}
-        onSearchMemory={() => {}} onRetryLoad={() => {}} rpc={evolutionRpc}
+        snapshot={snapshot} memory={WORK_MEMORIES} memoryContent={memoryContent}
+        onSearchMemory={() => {}} onRetryLoad={() => {}} rpc={evolutionRpc} workspace={WORKSPACE_PAGE_NAME}
       />
     </section>
   );
@@ -7241,6 +7259,10 @@ function QualityLiveFrame() {
   const state = useKinu(WORKSPACE_PAGE_NAME);
 
   const rpc = useMemo<Rpc>(() => async <T,>(method: string, args?: unknown[]): Promise<T> => {
+    if (method === "getQualityWindow") {
+      return rpcResult({ ...QUALITY_WINDOW, rated: QUALITY_WINDOW.rated + qualityLiveRatings, turns: QUALITY_WINDOW.turns + qualityLiveRatings }).json<T>();
+    }
+
     if (method !== "getQuality") return workspacePageRpc<T>(method, args);
     const today = QUALITY_DAYS.at(-1);
 
