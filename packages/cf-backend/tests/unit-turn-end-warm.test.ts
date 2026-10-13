@@ -6,7 +6,17 @@
 import { expect, test } from 'bun:test';
 import { driveUntil, gatewayWorkspace, workspaceMainActor } from './helpers/actor-harness';
 import { delayNextCacheWarm } from './helpers/agent-facets';
+import { socketConnection } from './helpers/bindings';
 import { chatCompletion, openingOf, stubAiBinding } from './helpers/platform-gateway';
+
+function chatRequest(id: string, text: string): string {
+  return JSON.stringify({
+    type: 'cf_agent_use_chat_request', id,
+    init: { method: 'POST', body: JSON.stringify({
+      messages: [{ id: `input-${id}`, role: 'user', parts: [{ type: 'text', text }] }], trigger: 'submit-message',
+    }) },
+  });
+}
 
 test("a turn ends in its room while its warm's arming is still on the way, and the next turn opens after it", async () => {
   let released = false;
@@ -18,23 +28,35 @@ test("a turn ends in its room while its warm's arming is still on the way, and t
     return chatCompletion(run, 'Noted.');
   }));
 
-  const { storageKey } = workspace.agent.agentOf(workspaceMainActor(workspace.db).actorId);
+  const { agent } = workspace;
+  const { storageKey } = agent.agentOf(workspaceMainActor(workspace.db).actorId);
+  const done = new Set<string>();
+  const fanout = agent.broadcast.bind(agent);
+
+  // Each request closes at its turn's end; its done frame is the signal the room sends.
+  Object.defineProperty(agent, 'broadcast', {
+    configurable: true,
+    value: (message: string, exclude?: string[]) => {
+      const id = /"id":"([^"]+)"/u.exec(message)?.[1];
+
+      if (id !== undefined && message.includes('"done":true')) done.add(id);
+      fanout(message, exclude);
+    },
+  });
   const warm = delayNextCacheWarm(storageKey);
 
-  await workspace.agent.harnessAdmitMain('First.', crypto.randomUUID(), undefined);
+  await agent.harnessChatGate()(socketConnection({ id: 'conn-first', send: () => {} }), chatRequest('first', 'First.'));
   await warm.reached;
-  await driveUntil(workspace, 'the turn did not end while its warm was held', () => !workspace.agent.harnessMainTurnInFlight());
+  await driveUntil(workspace, 'the turn did not end in its room while its warm was held', () => done.has('first'));
 
-  const second = crypto.randomUUID();
   let laps = 0;
 
   // The next turn is given two hundred laps to reach its model while the warm is still held: it must not.
-  await workspace.agent.harnessAdmitMain('Second.', second, undefined);
+  await agent.harnessChatGate()(socketConnection({ id: 'conn-second', send: () => {} }), chatRequest('second', 'Second.'));
   await driveUntil(workspace, 'the next turn stopped short of its laps', () => secondAskedEarly || ++laps > 200);
   released = true;
   warm.release();
-  await workspace.agent.harnessMainLanding(second);
-  await workspace.agent.harnessAgentsIdle();
+  await driveUntil(workspace, 'the next turn did not end', () => done.has('second'));
 
   expect(secondAskedEarly).toBe(false);
 });
