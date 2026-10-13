@@ -3,25 +3,25 @@
  * answer. Cloudflare refuses a version whose startup exceeds its CPU limit (code 10021), and a refusal after a reset
  * leaves the target serving its placeholder (staging, 89759ebcc, 2026-10-13).
  *
- *   bun scripts/worker-startup.ts check <built wrangler.json>   measure, and fail above STARTUP_BOUND_MS
+ *   bun scripts/worker-startup.ts check <built wrangler.json>   measure, and fail above LINKED_BOUND_KIB
  *
  * What it measures, on this machine:
- * - `wrangler check startup` over the dry-run bundle, five times; the fastest profile's whole span, since load on the
- *   machine only ever adds to it. Its harness (wrangler 4.145 `analyseBundle`) imports the main module from a
- *   `startup()` function under the inspector: that frame's own time is the module loading the import does, linear in
- *   the bytes it links (a synthetic Worker of uncalled functions: 17.9 ms at 1.17 MB, 72.7 ms at 4.77 MB), and each
- *   module's top level is its own frame.
- * - The static closure: the bytes the main module links through static imports, which that loading time follows
- *   (17-18 µs a KiB over the builds below).
+ * - The static closure: the bytes the main module links through static imports and re-exports, which every isolate
+ *   loads before it answers. It is exact, the same for the same build on any run, and it is what the gate bounds.
+ * - `wrangler check startup` over the dry-run bundle, five times, reported and not gated. Its harness (wrangler 4.145
+ *   `analyseBundle`) imports the main module from a `startup()` function under the inspector: that frame's own time
+ *   is the module loading the import does, linear in the bytes linked (a synthetic Worker of uncalled functions: 17.9
+ *   ms at 1.17 MB, 72.7 ms at 4.77 MB; 17-18 µs a KiB over the builds below), and each module's top level is its own
+ *   frame. Profiled 30 times each, interleaved, the fastest of five ran 204-243 ms for 3b9c58d4c and 223-249 ms for
+ *   1e588c64d: under load the two overlap, so a time bound between them passes and fails the same build by chance.
  *
- * Calibrated 2026-10-13 on the workstation the deploy runs on. Each build has five local profiles (fastest / median),
- * then the validator's readings from interleaved deploys to scratch Workers (refusals; median of the rest):
- * - 89759ebcc, 8,591 KiB linked: 253 / 254 ms; refused 5 in 21, median 614 ms. Staging refused it too.
- * - 26244c765, 7,839 KiB: 231 / 235 ms; deployed on 2026-10-10. Not deployed to the scratch Workers.
- * - 1e588c64d, 6,981 KiB: 223 / 227 ms; refused 2 in 36, median 512 ms.
- * - 3b9c58d4c, 6,533 KiB: 209 / 213 ms; refused 0 in 15, median 460 ms (427-861).
- * The bound lies between the slowest build never refused and the fastest one refused: a build at 1e588c64d's figure
- * is refused often enough to take a deploy's target down at random.
+ * Calibrated 2026-10-13. Each build: its static closure; the median and range of its 30 local profiles; the
+ * validator's readings from interleaved deploys to scratch Workers (refusals; median of the rest).
+ * - 89759ebcc: 8,591 KiB; 263 ms (252-390); refused 5 in 21, median 614 ms. Staging refused it too.
+ * - 26244c765: 7,839 KiB; 240 ms (232-546); deployed on 2026-10-10, not deployed to the scratch Workers.
+ * - 1e588c64d: 6,981 KiB; 233 ms (223-401); refused 2 in 36, median 512 ms.
+ * - 3b9c58d4c: 6,533 KiB; 212 ms (204-291); refused 0 in 15, median 460 ms (427-861).
+ * The bound sits between the build never refused and the smallest one refused, with room for the first's growth.
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
@@ -30,8 +30,8 @@ import { dirname, join, normalize } from 'node:path';
 import { parseSync } from 'oxc-parser';
 import * as v from 'valibot';
 
-/** Between 3b9c58d4c's 209 ms, never refused, and 1e588c64d's 223 ms, refused 2 in 36 (see header). */
-export const STARTUP_BOUND_MS = 216;
+/** Between 3b9c58d4c's 6,533 KiB, never refused, and 1e588c64d's 6,981 KiB, refused 2 in 36 (see header). */
+export const LINKED_BOUND_KIB = 6750;
 
 const PROFILES = 5;
 
@@ -132,10 +132,10 @@ if (import.meta.main) {
     const measured = measure(path);
 
     const line = `startup ${measured.totalMs.toFixed(0)} ms, the fastest of ${measured.runs.join(', ')} (module loading ${measured.loadingMs.toFixed(0)} ms), `
-      + `${(measured.bytes / 1024).toFixed(0)} KiB linked in ${String(measured.files)} files; bound ${String(STARTUP_BOUND_MS)} ms`;
+      + `${(measured.bytes / 1024).toFixed(0)} KiB linked in ${String(measured.files)} files; bound ${String(LINKED_BOUND_KIB)} KiB linked`;
 
     console.log(line);
-    process.exit(measured.totalMs > STARTUP_BOUND_MS ? 1 : 0);
+    process.exit(measured.bytes / 1024 > LINKED_BOUND_KIB ? 1 : 0);
   }
 
   console.error('usage: bun scripts/worker-startup.ts check <built wrangler.json>');

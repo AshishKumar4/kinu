@@ -661,8 +661,8 @@ bun "$KINU_ROOT/scripts/runtime-catalog.ts" ensure "$KINU_RUNTIME_BUCKET" "$KINU
 
 # ── Step 2a: The Worker's startup ────────────────────────────
 # Cloudflare refuses a version whose startup exceeds its CPU limit (code 10021).
-# Measured here first, against the newest build it accepted
-# (scripts/worker-startup.ts). Then, before a reset deletes what the target
+# Bounded here first by what the build links, between the builds it took and
+# refused (scripts/worker-startup.ts). Then, before a reset deletes what the target
 # serves, the validator itself reads it: the build is uploaded as a version,
 # not deployed, while the target still runs (`wrangler versions upload`, which
 # needs the target's container application, gone once the reset ran). On
