@@ -1,7 +1,7 @@
 import type { Awaitable, VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
- * The Nimbus workspace: one durable POSIX filesystem plus shell over the host's SQLite,
- * sharing its transactions. `vfs` and `shell` address the same paths.
+ * The Nimbus workspace: one durable POSIX filesystem plus shell over the host's SQLite, sharing its transactions.
+ * Commands run through the hosted runtime over `session()` (`execution/nimbus.ts`); `vfs` addresses the same paths.
  */
 
 // Type-only: the value import stays inside the lazy boot so Nimbus's wasm graph is not
@@ -20,19 +20,16 @@ import type { ProcessFiles } from '@nimbus-sh/core/runtime/process-files.js';
 import type { RuntimePackage, RuntimeSource } from '@nimbus-sh/core/runtime/runtime-package.js';
 import type { FacetHost } from '@nimbus-sh/core/runtime/facet-host.js';
 import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
-import type { CommandResult, RunOptions } from '@nimbus-sh/core/substrate/lifo/sandbox/run-command.js';
 import {
   agentIdentity, agentTmpRoot, confineAgentTmp, MAIN_AGENT, provisionAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot,
   settleWorkspaceSlates, provisionWorkspaceSoul,
   type HomeRootVfs, type TmpConfiner,
 } from './agent-home';
-import { workspaceCommandNotFound } from './workspace-runtimes';
 import * as v from 'valibot';
-import { ShellExecOptionsSchema, type Shell, type ShellExecOptions } from '../types/primitives';
 import { WORKSPACE_ROOT, workspacePath } from './workspace-path';
 import { FORK_PIN_PREFIX } from '../identity/fork';
 import { ARCHIVE_PIN_PREFIX } from '../identity/archive';
-import { diagnostics, KinuError, refusalOf, toKinuError } from '../obs/index';
+import { diagnostics, KinuError, toKinuError } from '../obs/index';
 import { atVfsPath } from './errno';
 import type { VfsMount, WorkspacePrincipal } from './mounts';
 import type { CompositeVFS } from '@nimbus-sh/core/vfs/composite.js';
@@ -42,15 +39,6 @@ import { shellMounts, type ShellMounts, type ShellMountTable } from './shell-mou
 export type { RuntimePackage, RuntimeSource } from '@nimbus-sh/core/runtime/runtime-package.js';
 
 export { WORKSPACE_ROOT, workspacePath } from './workspace-path';
-
-function shellExecOptions(input: { value: unknown }): ShellExecOptions | undefined {
-  const stdin = v.safeParse(v.string(), input.value);
-
-  if (stdin.success) return { stdin: stdin.output };
-  const options = v.safeParse(ShellExecOptionsSchema, input.value);
-
-  return options.success ? options.output : undefined;
-}
 
 /** `open`'s files with relative paths from `cwd`; a write makes its parent directories first, as the same credential. */
 function workspaceFiles(open: () => Promise<WorkspaceFiles>, cwd: string): WorkspaceFiles {
@@ -113,74 +101,6 @@ function workspaceVfs(open: () => Promise<NimbusWorkspace>): WorkspaceFiles {
   };
 }
 
-type ShellCall = (workspace: NimbusWorkspace, command: string, options: RunOptions & { readonly cwd: string }) => Promise<CommandResult>;
-
-/** Where a call starts: a directory, and a relative `cwd` taken from it. */
-type CallStart = Pick<NimbusWorkspace['fs'], 'cwd' | 'resolve'>;
-
-/** Each call is a shell of its own, started at its `cwd` or `start`'s directory; nothing it changes lasts. */
-function workspaceShell(open: () => Promise<NimbusWorkspace>, start: (workspace: NimbusWorkspace) => CallStart, run: ShellCall): Shell {
-  return {
-    async exec(command, stdinOrOptions) {
-      const options = shellExecOptions({ value: stdinOrOptions });
-
-      if (options?.name !== undefined) {
-        const refusal = refusalOf(new KinuError('unsupported', 'this workspace keeps no named shells; run the command without a name'));
-
-        return { stdout: '', stderr: refusal.error, exitCode: 1, refusal };
-      }
-
-      const workspace = await open();
-      const at = start(workspace);
-      const cwd = options?.cwd === undefined ? at.cwd : at.resolve(options.cwd);
-      const output = options?.output;
-
-      const result = await run(workspace, command, {
-        cwd,
-        stdin: options?.stdin,
-        signal: options?.signal,
-        ...(output !== undefined && {
-          onStdout: (data: Uint8Array) => { output.write('stdout', data); },
-          onStderr: (data: Uint8Array) => { output.write('stderr', data); },
-        }),
-      });
-
-      return workspaceCommandNotFound(
-        { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode, cwd },
-        // Read per call: installs re-register bins mid-session.
-        (bin) => workspace.registry.has(bin),
-      );
-    },
-  };
-}
-
-/** Nimbus's one-shot exec runs as the session user; an agent's call runs as the agent's own process, in a shell built for it. */
-function agentCall(pid: number, env: Readonly<Record<string, string>>): ShellCall {
-  return async (workspace, command, options) => {
-    const { runCommand } = await import('@nimbus-sh/core/substrate/lifo/sandbox/run-command.js');
-    const shell = workspace.shellFor(pid, { cwd: options.cwd, env });
-
-    try {
-      return await runCommand(shell, command, { ...options, cwd: undefined });
-    } finally {
-      await shell.closeDescriptors();
-    }
-  };
-}
-
-/** One agent's credentialed view of the same rows, on both the file and shell planes. */
-export interface WorkspaceAgentPlane {
-  readonly vfs: WorkspaceFiles;
-  readonly shell: Shell;
-}
-
-/** As provisioned by `vfs/agent-home.ts`. */
-export interface WorkspaceAgent {
-  readonly cred: VfsCred;
-  readonly home: string;
-  readonly tmp: string;
-}
-
 /**
  * The store as `cred` (default the session user) sees it, with no mount, relative paths from `home`: an actor's own state.
  * Nimbus's own SqliteFiles, never the workspace `.fs`, which is pinned to the session user; its stat carries the row's
@@ -227,10 +147,7 @@ export type WorkspaceFiles = VFS & Required<Pick<VFS, 'readRange' | 'readlink' |
 
 export interface WorkspaceBundle {
   vfs: WorkspaceFiles;
-  shell: Shell;
   privileged(): Promise<WorkspacePrivileged>;
-  /** Cached per uid and idempotent: a shell holds state (`cd`, exports). */
-  asAgent(agent: WorkspaceAgent): Promise<WorkspaceAgentPlane>;
   session(): Promise<WorkspaceSession>;
   onFilesChanged(listener: (paths: readonly string[]) => void): () => void;
   /** `principal`'s view (default: the session user) holds `mounts`. */
@@ -380,11 +297,9 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
   // One supervisor for this filesystem so no two shells share a pid; `open` sets its pid base.
   const processes = new SessionProcessSupervisor();
 
-  const planes = new Map<number, Promise<WorkspaceAgentPlane>>();
 
   return {
     vfs: workspaceVfs(open),
-    shell: workspaceShell(open, (workspace) => workspace.fs, (workspace, command, options) => workspace.exec(command, options)),
     onFilesChanged(listener) {
       fileListeners.add(listener);
 
@@ -421,33 +336,6 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
       };
     },
     async destroy() { (await open()).destroy(); },
-    async asAgent(agent) {
-      const held = planes.get(agent.cred.uid);
-
-      if (held) return await held;
-
-      const opening = (async (): Promise<WorkspaceAgentPlane> => {
-        try {
-          const origin = await open();
-          const process = processes.spawn('agent', [agent.home], agent.home, { cred: agent.cred });
-          // Over the origin's files, commands and mount table; a second workspace would seed its HOME as the session user.
-          const home: CallStart = { cwd: agent.home, resolve: (path) => workspacePath(path, agent.home) };
-
-          return {
-            vfs: storeFiles(() => Promise.resolve(origin.vfs), agent),
-            shell: workspaceShell(() => Promise.resolve(origin), () => home, agentCall(process.pid, { HOME: agent.home, TMPDIR: agent.tmp })),
-          };
-        } catch (cause) {
-          // Same rule as `booting`: never cache a rejection.
-          planes.delete(agent.cred.uid);
-          throw cause;
-        }
-      })();
-
-      planes.set(agent.cred.uid, opening);
-
-      return await opening;
-    },
   };
 }
 

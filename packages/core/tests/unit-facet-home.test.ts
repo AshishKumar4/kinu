@@ -12,6 +12,7 @@ import {
   actorHomeName } from '../src/vfs/agent-home';
 import { facetHomeProvisioner } from '../src/strategy/node-workspace';
 import { createWorkspaceBundle } from './helpers';
+import { agentPlane } from '@kinu.run/test-utils';
 
 function sqlBinding(value: SqlValue): SQLQueryBindings {
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
@@ -86,8 +87,8 @@ describe('a subordinate and a head provision like a node', () => {
         throw new Error('a facet provisioner must hand back a credential');
       }
 
-      const asSub = await bundle.asAgent(sub);
-      const asHead = await bundle.asAgent(head);
+      const asSub = await agentPlane(bundle, sub);
+      const asHead = await agentPlane(bundle, head);
 
       await writeText(asSub.vfs, `${sub.home}/plan.md`, 'my plan\n');
       expect(await readText(asSub.vfs, `${sub.home}/plan.md`)).toBe('my plan\n');
@@ -117,7 +118,7 @@ describe('a subordinate and a head provision like a node', () => {
       const sub = await facetHomeProvisioner({ ...privileged, sql: bundleSql(database) })(actorHomeName({ origin: 'agent', name: 'notes', storageKey: 'notes-abc123' }));
 
       if (sub.isolation !== 'private-home') throw new Error('a facet provisioner must hand back a credential');
-      const asSub = await bundle.asAgent(sub);
+      const asSub = await agentPlane(bundle, sub);
 
       await writeText(asSub.vfs, '.kinu/tool-output/full.log', 'full\n');
       expect(await asSub.shell.exec('cat .kinu/tool-output/full.log')).toMatchObject({ exitCode: 0, stdout: 'full\n' });

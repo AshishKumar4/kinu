@@ -166,15 +166,14 @@ A workspace holds the state. Agents are the actors that work inside it.
     filesystem opens (`restoreAgentTmpConfinements`), so an eviction never
     leaves an actor with a home and a shared `/tmp`.
 
-    Both backends then credential both planes, because a swarm node reaches the
+    A hosted session credentials both planes, because a swarm node reaches the
     tree with commands and with file tools. A file plane pinned to the session
     user refuses a node's writes inside its own home (I measured `EACCES`) and
-    refuses nothing to a sibling. Locally the node gets `SqliteVFS.as(cred)`
-    and a second `Shell` over the same filesystem (`WorkspaceBundle.asAgent`).
-    On a hosted session it gets one fixed program run as the node inside the
-    same session (`nimbusSessionFiles(box, cred)`) plus
-    `withHostedNodeExecution`. `CLIRuntime.nodeRuntime` and a hosted node's
-    `HostedNodeHome` are where each backend rebuilds that runtime.
+    refuses nothing to a sibling. The node gets one fixed program run as the
+    node inside the same session (`nimbusSessionFiles(box, cred)`) plus
+    `withHostedNodeExecution`; a hosted node's `HostedNodeHome` is where that
+    runtime is rebuilt. On the CLI a node works over its source's plane in the
+    same folder and space (`CLIRuntime.nodeRuntime`).
 
     The hosted program is the session's own `node`, driven by strict JSON. The
     request travels in one environment variable and the answer returns on

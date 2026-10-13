@@ -1092,8 +1092,10 @@ export {
   type AgentIdentity, type HomeRootVfs, type TmpConfiner,
 } from './vfs/agent-home';
 
+export { workspaceCommandNotFound } from './vfs/workspace-runtimes';
+
 export type {
-  WorkspaceAgent, WorkspaceAgentPlane, WorkspaceBundle, WorkspaceFiles, WorkspaceOptions,
+  WorkspaceBundle, WorkspaceFiles, WorkspaceOptions,
   WorkspaceSession,
 } from './vfs/nimbus-workspace';
 

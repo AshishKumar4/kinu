@@ -10,7 +10,7 @@ import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 
 import type { JsonValue } from '../src/utils/json';
-import { present } from '@kinu.run/test-utils';
+import { agentPlane, present, workspaceShell } from '@kinu.run/test-utils';
 import type { SessionBox } from '@kinu.run/test-utils/vfs';
 import type { NimbusSandboxFiles } from '@nimbus-sh/sdk/sandbox';
 import {
@@ -360,7 +360,7 @@ const cases: Case[] = [
           if (input.kind === 'file') return Promise.resolve(files.writeFile(input.path, input.data)).then(() => null);
 
           const options = input.recursive ? '-p ' : '';
-          const made = await workspace.shell.exec(`mkdir ${options}${shellQuote(input.path)}`);
+          const made = await workspaceShell(workspace).exec(`mkdir ${options}${shellQuote(input.path)}`);
 
           if (made.exitCode !== 0) throw new VfsError('EIO', made.stderr, input.path);
 
@@ -544,13 +544,13 @@ describe('the global workspace namespace', () => {
       confineAgentTmp(confiner, 'agent-a', agentA);
       confineAgentTmp(confiner, 'agent-b', agentB);
 
-      const a = await workspace.asAgent({
+      const a = await agentPlane(workspace, {
         cred: agentCred(agentA),
         home: agentHome('agent-a'),
         tmp: agentTmpRoot('agent-a'),
       });
 
-      const b = await workspace.asAgent({
+      const b = await agentPlane(workspace, {
         cred: agentCred(agentB),
         home: agentHome('agent-b'),
         tmp: agentTmpRoot('agent-b'),
@@ -598,7 +598,7 @@ describe('the global workspace namespace', () => {
       }]);
 
       expect((await mounted.readdir('/')).map(({ name }) => name)).toContain('pc');
-      expect((await workspace.shell.exec('test ! -e /pc')).exitCode).toBe(0);
+      expect((await workspaceShell(workspace).exec('test ! -e /pc')).exitCode).toBe(0);
     } finally {
       db.close();
     }

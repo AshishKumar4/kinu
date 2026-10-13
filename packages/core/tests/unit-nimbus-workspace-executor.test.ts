@@ -215,28 +215,6 @@ describe('hosted Nimbus workspace provider', () => {
     expect(missed.refusal?.error).toContain('session box catalog socket closed');
   });
 
-  test('the embedded workspace shell answers its own absent command with the same refusal', async () => {
-    const database = new Database(':memory:');
-    const bundle = createWorkspaceBundle(database);
-
-    try {
-      const missed = await bundle.shell.exec('bun --version');
-
-      expect(missed.exitCode).toBe(127);
-      expect(missed.refusal?.reason).toBe('unavailable');
-      expect(missed.refusal?.error).toContain('bun');
-      expect(missed.refusal?.error).toContain('sandbox');
-
-      const ran = await bundle.shell.exec('echo embedded');
-
-      expect(ran.exitCode).toBe(0);
-      expect(ran.refusal).toBeUndefined();
-      expect(ran.stdout).toContain('embedded');
-    } finally {
-      database.close();
-    }
-  });
-
   test('a listening port the host cannot address reaches the Ports surface as a reason, not as nothing', async () => {
     // Portless entries keep the host's reason rather than being dropped from the Ports panel.
     const { rt } = createTestRuntime();
