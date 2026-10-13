@@ -186,21 +186,22 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
             await hub.acknowledgeDeviceRequest(caller, requestId);
           }
 
-          // A successful call re-proves presence only; keep the toolchain answer.
-          await settle(present(true, rpcOpts?.deviceId));
-
           return rawResult === undefined
             ? undefined
             : v.parse(JsonValueSchema, JSON.parse(rawResult));
         },
         catch: (cause) => ({ cause }),
-      }).pipe(Effect.catch((failed) => Effect.andThen(
-        isDeviceNotConnectedError(failed) ? present(false, rpcOpts?.deviceId) : Effect.void,
-        // Several machines live and none named: caller's error class, fixed before the executor's `io` wrap.
-        () => (isDeviceAmbiguityError(failed)
-          ? Effect.fail(new KinuError('bad_input', renderThrownChain(failed), { cause: failed.cause }))
-          : Effect.die(failed.cause)),
-      )));
+      }).pipe(
+        // A successful call re-proves presence only; keep the toolchain answer.
+        Effect.tap(() => present(true, rpcOpts?.deviceId)),
+        Effect.catch((failed) => Effect.andThen(
+          isDeviceNotConnectedError(failed) ? present(false, rpcOpts?.deviceId) : Effect.void,
+          // Several machines live and none named: caller's error class, fixed before the executor's `io` wrap.
+          () => (isDeviceAmbiguityError(failed)
+            ? Effect.fail(new KinuError('bad_input', renderThrownChain(failed), { cause: failed.cause }))
+            : Effect.die(failed.cause)),
+        )),
+      );
     })),
   };
 }
