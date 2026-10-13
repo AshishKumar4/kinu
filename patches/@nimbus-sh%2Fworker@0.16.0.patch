@@ -523,3 +523,42 @@ index a157bac..15c3f9c 100644
        : proxied ? proxiedConnect(...args) : real.connect(...args);
      let closed = false;
      let hold = null;
+diff --git a/dist/session/supervisor-calls.js b/dist/session/supervisor-calls.js
+index e4cee53..38f0a93 100644
+--- a/dist/session/supervisor-calls.js
++++ b/dist/session/supervisor-calls.js
+@@ -53,7 +53,9 @@
+ import { recordFailure } from '../runtime/stop-replay-body.js';
+ // Phase 2 A'.2 — supervisor in-flight RPC payload byte tracking.
+ import { rpcPayloadStart, rpcPayloadEnd } from '@nimbus-sh/platform/diag-counters.js';
+-import { R2CacheClient, MAX_R2_TARBALL_BYTES } from '../npm/r2-cache.js';
++// Kinu patch (NIMBUS-ASKS #56): the npm cache client, and the npm engine it links (semver, the arborist, the libs
++// table), load at a process's first npm cache call, not in every isolate that exports SupervisorRPC.
++const r2Cache = () => import('../npm/r2-cache.js');
+ import { useRpcResource } from '@nimbus-sh/platform/rpc-dispose.js';
+ import { isSupervisorAnsweredMethod, supervisorAnswer, } from '@nimbus-sh/core/runtime/vfs-supervisor.js';
+ import { fsReadBatchRequestBytes } from './rpc.js';
+@@ -197,6 +199,7 @@
+             return useRpcResource(promise, (value) => value);
+         }
+         async _cacheRead(plan, produce) {
++            const { R2CacheClient } = await r2Cache();
+             const client = new R2CacheClient(this[TRANSPORT]().env?.NPM_TARBALL_CACHE ?? null, this[TRANSPORT]().env?.NPM_PACKUMENT_CACHE ?? null, plan.readOnly);
+             let value;
+             try {
+@@ -666,6 +669,7 @@
+                 : await this._call(this._op('getCachedTarball', [integrity]));
+             return this._cacheRead(plan, async (client) => {
+                 const bytes = await client.getTarball(integrity);
++                const { MAX_R2_TARBALL_BYTES } = await r2Cache();
+                 return { bytes: bytes?.length && bytes.length <= MAX_R2_TARBALL_BYTES ? bytes : null, events: client._cacheEvents };
+             });
+         }
+@@ -683,6 +687,7 @@
+             // does NOT flow through this return path.
+             if (!this._infrastructureCache('putCachedTarball', [integrity, bytes]))
+                 await this._call(this._op('putCachedTarball', [integrity, bytes]));
++            const { R2CacheClient } = await r2Cache();
+             return new R2CacheClient(this[TRANSPORT]().env?.NPM_TARBALL_CACHE ?? null, null).putTarball(integrity, bytes);
+         }
+         /**

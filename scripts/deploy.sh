@@ -286,6 +286,14 @@ trap cleanup EXIT INT TERM
 # JSON — which is exactly what a smoke test needs, because "not JSON" is how a
 # missing asset presents itself (the SPA shell under a JSON
 # content-type).
+# The validator's reading in a wrangler upload's <log>: its startup in ms, `refused`, or `none`.
+startup_reading() {
+  if grep -qF 'Script startup exceeded CPU time limit' "$1"; then echo refused; return; fi
+  local said
+  said="$(grep -oE 'Worker Startup Time:[[:space:]]*[0-9]+' "$1" | head -1 | grep -oE '[0-9]+$')"
+  echo "${said:-none}"
+}
+
 json_field() {
   node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const v=process.argv[1].split(".").reduce((o,k)=>o?.[k],JSON.parse(s));process.stdout.write(v==null?"":String(v))}catch{}})' "$1"
 }
@@ -651,9 +659,37 @@ fi
 bun "$KINU_ROOT/scripts/runtime-catalog.ts" ensure "$KINU_RUNTIME_BUCKET" "$KINU_RUNTIME_CATALOG_SHA256" \
   || { publish_red "the pinned runtime catalog is not in $KINU_RUNTIME_BUCKET, as the line above says"; return 1; }
 
+# ── Step 2a: The Worker's startup ────────────────────────────
+# Cloudflare refuses a version whose startup exceeds its CPU limit (code 10021).
+# Bounded here first by what the build links, between the builds it took and
+# refused (scripts/worker-startup.ts). Then, before a reset deletes what the target
+# serves, the validator itself reads it: the build is uploaded as a version,
+# not deployed, while the target still runs (`wrangler versions upload`, which
+# needs the target's container application, gone once the reset ran). On
+# 2026-10-13 the reset ran first, staging's upload was refused, and staging
+# served its placeholder. The deploy after the reset is still `wrangler
+# deploy` of the same build, never the validated version by id, which serves
+# with none of the classes the reset deleted (L26); the validator refuses the
+# same bytes at random, so either upload is made again on a refused startup
+# (`upload`). A reset finishing an earlier one has a placeholder serving and
+# nothing left to keep up, so its deploy is its first reading.
+bun "$KINU_ROOT/scripts/worker-startup.ts" check "$KINU_BUILT_CONFIG" \
+  || { publish_red "the built Worker's startup is above its bound, as the line above says; nothing was uploaded"; return 1; }
+if [ "$KINU_RESET" = "1" ] && [ "${KINU_PENDING_RESET:-none}" = "none" ]; then
+  KINU_VALIDATE_LOG="$(mktemp -t kinu-validate.XXXXXX.log)"
+  echo "Running: npx wrangler versions upload ${KINU_WRANGLER_ARGS[*]} (log → $KINU_VALIDATE_LOG)"
+  upload "$KINU_VALIDATE_LOG" npx wrangler versions upload "${KINU_WRANGLER_ARGS[@]}"
+  KINU_VALIDATED=$?
+  report startup validated "$(startup_reading "$KINU_VALIDATE_LOG")"
+  if [ "$KINU_VALIDATED" -ne 0 ]; then
+    publish_red "$KINU_WORKER refused this build's version before the reset, so nothing was deleted and it still serves what it did; the log is $KINU_VALIDATE_LOG"
+    return 1
+  fi
+fi
+
 # ── Step 2b: The reset ────────────────────────────────────────
-# After the build, so a red gate or a failed build deletes nothing; the upload
-# below is then the genesis deploy.
+# After the build and its validated version, so a red gate, a failed build or
+# a refused version deletes nothing; the upload below is then the genesis deploy.
 if [ "$KINU_RESET" = "1" ]; then
   echo ""
   echo -e "${BOLD}Step 2b: Resetting $KINU_WORKER${NC}"
@@ -670,12 +706,14 @@ echo ""
 echo "Running: npx wrangler deploy ${KINU_WRANGLER_ARGS[*]} (log → $KINU_DEPLOY_LOG)"
 echo ""
 if upload "$KINU_DEPLOY_LOG" npx wrangler deploy "${KINU_WRANGLER_ARGS[@]}"; then
+  report startup deployed "$(startup_reading "$KINU_DEPLOY_LOG")"
   DEPLOY_PUBLISHED=1
   # From when the version could answer: the start of what Step 5b reads.
   KINU_LIVE_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo ""
   echo -e "${GREEN}Kinu deploy succeeded.${NC}"
 else
+  report startup deployed "$(startup_reading "$KINU_DEPLOY_LOG")"
   echo ""
   publish_red "wrangler deploy failed; its log is $KINU_DEPLOY_LOG"
   return 1

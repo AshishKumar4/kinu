@@ -159,6 +159,27 @@ finish
     expect([rendered.reds, rendered.skipped, rendered.testable]).toEqual([[], 1, false]);
   });
 
+  // Every deploy report since 2026-10-09 held `"startupMs": null`: the devbox probe's open container-startup flight,
+  // never the Worker's. The Worker's startup is the validator's reading, as wrangler printed it for each upload.
+  test("the validator's startup readings are reported, and the deployed version's is the summary's", () => {
+    const { text, summary: rendered } = renderReport({
+      dir: '/reports/this', meta: META, entries: [
+        { kind: 'startup', at: 'validated', reading: 503 },
+        { kind: 'startup', at: 'deployed', reading: 487 },
+        { kind: 'mark', mark: 'end', seconds: 42 },
+      ],
+    });
+
+    expect(text).toContain('- the version uploaded before the reset: 503 ms');
+    expect(text).toContain('- the deployed version: 487 ms');
+    expect(rendered.workerStartupMs).toBe(487);
+
+    const refused = renderReport({ dir: '/reports/this', meta: META, entries: [{ kind: 'startup', at: 'validated', reading: 'refused' }] });
+
+    expect(refused.text).toContain('- the version uploaded before the reset: refused');
+    expect(refused.summary.workerStartupMs).toBeNull();
+  });
+
   // A rehearsal ran no tier, so a red it lacks says nothing about this deploy: it is never the differential's base,
   // and neither is this deploy's own entry.
   test('the previous report is the last real deploy of the environment, never a gates-only one or this one', () => {

@@ -1722,6 +1722,26 @@ Measured 2026-10-07: the tier on armada took 7.0 to 9.1 minutes for 90 rows on 1
 green runs (0b74ff100 in 7.3 minutes on 13, job 20261007190749-9267a508). GitHub's hosted matrix of 2026-10-01
 took 7m15s to 18m21s per source job and 24m47s for the hammer, and its under-15-minute target was never observed.
 
+L26. A Worker's startup is measured before it is uploaded, and a reset deletes nothing until the validator has taken
+the build. Decided 2026-10-13, after staging's reset deploy of 89759ebcc deleted its classes and container application
+and Cloudflare then refused the upload ("Script startup exceeded CPU time limit", code 10021): staging served its
+placeholder. Cloudflare refuses the same bytes at random. Deployed interleaved to scratch Workers: 89759ebcc was
+refused 5 times in 21 and read 555-962 ms otherwise (median 614); with SupervisorRPC exported from its own module,
+1e588c64d, 2 in 36 (median 512); with the MCP server and Nimbus's npm cache client loaded at first use, 3b9c58d4c,
+0 in 15 (427-861 ms, median 460). What a startup costs is what it links: wrangler's harness loads modules at 17-18
+microseconds a KiB of the static closure on the deploy machine, and 89759ebcc linked 8,591 KiB against 6,533 at
+3b9c58d4c. So the deploy refuses a built Worker that links more than 6,750 KiB, between 3b9c58d4c (never refused)
+and 1e588c64d (refused 2 in 36), and reports its local `wrangler check startup` time without gating on it: profiled 30
+times each, the fastest of five ran 204-243 ms for one and 223-249 ms for the other, so a time bound flaps
+(scripts/worker-startup.ts); before a reset it uploads the build as
+a version, not deployed, while the target still serves; and an upload whose startup is refused is made again, three
+times in all. The reset still ends in `wrangler deploy` of that build rather than `versions deploy` of the version it
+validated: on a scratch Worker, the validated version deployed by id after a reset's placeholder served, but every call
+to its Durable Objects failed with an internal error, because the classes the placeholder deleted were not created
+again; `wrangler deploy` of the same build served them. The `startupMs` every deploy report held was the devbox probe's
+open container-startup flight, never the Worker's; the report now carries the validator's reading of each upload
+(`summary.workerStartupMs` for the deployed one).
+
 ## Providers
 
 P1. The ChatGPT plan is Sign in with ChatGPT's open-source token sharing

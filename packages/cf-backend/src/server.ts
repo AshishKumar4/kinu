@@ -110,8 +110,11 @@ export { DeployRunDO } from "./deploy/deploy-do";
 
 // Exports are what workerd exposes on `ctx.exports` (`enable_ctx_exports`).
 // SupervisorRPC comes from its declaring module, never `@nimbus-sh/sdk/worker`,
-// whose root composes a hosted fabric first (first-write-wins per isolate).
-export { SupervisorRPC } from "@nimbus-sh/worker/workspace-host";
+// whose root composes a hosted fabric first (first-write-wins per isolate), nor
+// `@nimbus-sh/worker/workspace-host`, whose re-exports put the whole hosted runtime
+// (shell, npm engine, node runtime, facet manager) in every isolate's startup: it
+// is imported where a workspace composes one (`workspace-host.ts`).
+export { SupervisorRPC } from "@nimbus-sh/worker/session/supervisor-rpc";
 
 // Without it Nimbus records no span: only its own Worker entry adopts.
 adoptTracing(tracing);

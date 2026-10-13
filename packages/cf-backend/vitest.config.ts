@@ -131,6 +131,12 @@ function probeModules(file: string, options: BuildOptions = {}): V4ModuleDefinit
     outfile: fileURLToPath(new URL('./tests/workerd/.compiled/' + file.replace(/\.ts$/, '.js'), import.meta.url)),
     bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
     external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
+    // Bundled into one file, esbuild initializes a dynamically imported module, and what it shares with the rest,
+    // lazily, and drops that initializer where a package says it has no side effects: @cloudflare/sandbox's zod/mini,
+    // once the MCP server loaded at its first request, so every probe failed to start ("Class5 is not a
+    // constructor"). The Worker's build and the agents' bundles split chunks instead, which these probes cannot afford:
+    // 248 modules a probe timed the pool's runner out.
+    ignoreAnnotations: true,
   }).outputFiles;
 
   return built.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm'))).map(output => ({
