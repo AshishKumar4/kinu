@@ -219,7 +219,8 @@
     "actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id)",
     "seq INTEGER NOT NULL",
     "standing_json TEXT NOT NULL",
-    "holds INTEGER NOT NULL CHECK (holds IN (0, 1))"
+    "holds INTEGER NOT NULL CHECK (holds IN (0, 1))",
+    "charged_json TEXT NOT NULL DEFAULT '[]'"
   ],
   "agent_sequence@packages/core/src/subordinates/report-sequence.ts": [
     "actor_id TEXT PRIMARY KEY",

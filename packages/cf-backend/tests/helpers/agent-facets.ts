@@ -121,14 +121,22 @@ export function delayNextHandoff(storageKey: string): HeldCall {
 
 let delayedRunEnd: { readonly reached: () => void; readonly released: Promise<void> } | null = null;
 
-/** The next report any isolate sends that carries a delivered run's end waits on the way until released. */
+/** The next report any isolate sends that carries a delivered run's end waits on the way until released; released
+ *  before any such report is sent, it holds none. */
 export function delayNextRunEnd(): HeldCall {
   const reached = Promise.withResolvers<void>();
   const released = Promise.withResolvers<void>();
+  const held = { reached: reached.resolve, released: released.promise };
 
-  delayedRunEnd = { reached: reached.resolve, released: released.promise };
+  delayedRunEnd = held;
 
-  return { reached: reached.promise, release: released.resolve };
+  return {
+    reached: reached.promise,
+    release: () => {
+      if (delayedRunEnd === held) delayedRunEnd = null;
+      released.resolve();
+    },
+  };
 }
 
 let delayedTurnReport: { readonly reached: (storageKey: string) => void; readonly released: Promise<void> } | null = null;
@@ -148,6 +156,18 @@ export function delayNextRunReview(): HeldIsolateCall {
   const released = Promise.withResolvers<void>();
 
   delayedRunReview = { reached: reached.resolve, released: released.promise };
+
+  return { reached: reached.promise, release: released.resolve };
+}
+
+let delayedModelReport: { readonly from: (storageKey: string) => boolean; readonly reached: (storageKey: string) => void; readonly released: Promise<void> } | null = null;
+
+/** The next model call an isolate `from` reports to its workspace on its own waits on the way until released. */
+export function delayNextModelReport(from: (storageKey: string) => boolean): HeldIsolateCall {
+  const reached = Promise.withResolvers<string>();
+  const released = Promise.withResolvers<void>();
+
+  delayedModelReport = { from, reached: reached.resolve, released: released.promise };
 
   return { reached: reached.promise, release: released.resolve };
 }
@@ -558,7 +578,17 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
         cancelModelRelay: (callId) => host().cancelModelRelay(callId),
         sayToParent: (signal) => host().sayToParent(signal),
         logActivity: (lines) => host().logActivity(lines),
-        reportModelCall: (report) => host().reportModelCall(report),
+        reportModelCall: async (report) => {
+          const delayed = delayedModelReport;
+
+          if (delayed?.from(placement.storageKey) === true) {
+            delayedModelReport = null;
+            delayed.reached(placement.storageKey);
+            await delayed.released;
+          }
+
+          return await host().reportModelCall(report);
+        },
         reportModelOperation: (event) => host().reportModelOperation(event),
       };
 

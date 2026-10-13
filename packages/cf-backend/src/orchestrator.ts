@@ -59,7 +59,7 @@ import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { isWorkspaceTerminal, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
 import { McpToolSurfaceSchema, ShareViewerClaimSchema, type ShareViewerClaim } from '@kinu.run/core';
 import {
-  AgentOpenTurns, AgentReports, TurnFences, type AcceptedReport, type AgentOwes, announcementOf, RECOVERY_BACKOFF_CEILING_MS, type PromptFile, type AgentOpenTurn, CHAT_SESSION_ID, steerSkillsBlock, subordinateTurnContext, type SessionEvent, type SessionTranscript,
+  AgentOpenTurns, AgentReports, TurnFences, type AcceptedReport, type AgentOwes, type RunEndReport, announcementOf, RECOVERY_BACKOFF_CEILING_MS, type PromptFile, type AgentOpenTurn, CHAT_SESSION_ID, steerSkillsBlock, subordinateTurnContext, type SessionEvent, type SessionTranscript,
 } from '@kinu.run/core';
 // Main actor's payload plane on both fork halves: the carried conversation references
 // payload files by absolute path, and the fork is a cut of the main actor's conversation.
@@ -429,6 +429,11 @@ function heard<A>(crossed: CrossedDelivery, value: (admitted: DeliveryAnswer) =>
   else answer.resolve(value(crossed.admitted));
 
   return answer.promise;
+}
+
+/** A delivered run's end, as its charges are kept applied: by its turn and its run. */
+function runEndKey(end: Pick<RunEndReport, 'id' | 'runId'>): string {
+  return `${end.id}\u0000${end.runId}`;
 }
 
 export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
@@ -2888,7 +2893,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // Older than a report already taken from it: delayed past that one, or sent before a reset of either side. Its
     // cumulative figures are older than those taken, so they stand only for a report taken here. A retired agent holds
     // nothing here: its retirement released it.
-    const accepted = new AgentReports(this.boundSql).accept(actorId, seq, standing, holds && live);
+    const reports = new AgentReports(this.boundSql);
+    const accepted = reports.accept(actorId, seq, standing, holds && live);
+    // A run end's charges apply once: with the first report taken that carries it.
+    const charging = new Set(accepted ? reports.chargeOnce(actorId, runEnds.map(runEndKey)) : []);
 
     // Each delivered run's end, whichever report carries it: its caller hears it once, and a repeat finds none. Settled,
     // as a chat turn's terminal transition settles it, whatever generation it was: its receipts go (`runSettled`).
@@ -2897,6 +2905,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         this.agentActivity(actorId, ended.outcome.ended.activity);
 
         if (accepted) recordAgentFigures(this.boundSql, actorId, ended.outcome.ended.figures);
+
+        if (charging.has(runEndKey(ended))) for (const charge of ended.outcome.ended.charges ?? []) this.reportModelCall(charge);
       }
 
       await this.agentTurns.runEnded(actorId, ended);

@@ -319,9 +319,18 @@ export interface LiveTurn {
 export class FacetSpend {
   private filed: Promise<unknown> = Promise.resolve();
 
-  constructor(private readonly workspace: AgentWorkspace) {}
+  /** `kept`: a delivered run's charges, which ride its end ({@link takeCharges}); a chat turn's are relayed as made. */
+  constructor(private readonly workspace: AgentWorkspace, private readonly kept: ModelCallReport[] | null = null) {}
 
-  readonly report = (report: ModelCallReport): void => { this.file(() => this.workspace.reportModelCall(report)); };
+  readonly report = (report: ModelCallReport): void => {
+    if (this.kept === null) this.file(() => this.workspace.reportModelCall(report));
+    else this.kept.push(report);
+  };
+
+  /** The charges kept so far, for the end that carries them. */
+  takeCharges(): readonly ModelCallReport[] {
+    return this.kept?.splice(0) ?? [];
+  }
 
   readonly operations = (event: ModelOperationEvent): void => { this.file(() => this.workspace.reportModelOperation(event)); };
 
@@ -473,7 +482,8 @@ export async function deliveredRun(
   const actor = await database.acquire();
   const { runId } = task;
   const capture = new HeadCapture();
-  const spend = new FacetSpend(workspace);
+  // Its charges ride its end, kept in the commit that ends it: none is lost to a death after that commit, nor told twice.
+  const spend = new FacetSpend(workspace, []);
   const run: PreparedRun = { opened: null, trace: null };
   // Its rounds' reviews ride its end: no advice crosses before the end commits.
   const reviews: AgentReview[] = [];
@@ -554,6 +564,8 @@ export async function deliveredRun(
     // is delivered to, a node or a head, is a run actor whose transcript holds no turn, so no answer carries them.
     const answer = completion === undefined ? () => {} : await database.prepareAnswer(completion);
 
+    const charges = spend.takeCharges();
+
     const ended: AgentTurnEnd = {
       ...report,
       activity: database.takeActivity(),
@@ -561,6 +573,7 @@ export async function deliveredRun(
       errorMessage: report.errorMessage ?? null,
       ...(produced !== undefined && { produced: encodeModelMessageValues(produced) }),
       ...(reviews.length > 0 && { reviews }),
+      ...(charges.length > 0 && { charges }),
     };
 
     const closing = actor.stores.eventRecorder.collect(() => actor.runtime.storage.transactionSync(() => {
@@ -584,8 +597,7 @@ export async function deliveredRun(
     closing.value();
     closing.publish();
   } finally {
-    // After its end committed, so no death in them runs the run again (#75); before its end is told, so the end its
-    // caller hears was traced and charged. A death between loses only them, as their relays drop any failure.
+    // Observability, told after its end committed, so no death in them runs the run again (#75), and before the end is.
     await run.trace?.flush();
     await spend.settled();
   }

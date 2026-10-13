@@ -32,11 +32,14 @@ export class AgentSequence {
 /** The workspace's side: the newest report it took from each agent, the standing that report carried, and whether its
  *  isolate holds owed work (`holds`), as that report said; and each steer it carried, a row each, as each came. */
 export function initAgentReportsTable(execRaw: RawSqlExec): void {
+  // `charged_json`: the run ends whose charges the newest report's run ends were applied with, while the agent's reports
+  // still carry them (`AgentReports.chargeOnce`).
   execRaw(`CREATE TABLE IF NOT EXISTS agent_reports (
     actor_id      TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id),
     seq           INTEGER NOT NULL,
     standing_json TEXT NOT NULL,
-    holds         INTEGER NOT NULL CHECK (holds IN (0, 1))
+    holds         INTEGER NOT NULL CHECK (holds IN (0, 1)),
+    charged_json  TEXT NOT NULL DEFAULT '[]'
   )`);
   // A steer's text fit its own row where it was sent, and no row holds more than one, however many are pending.
   execRaw(`CREATE TABLE IF NOT EXISTS agent_report_steers (
@@ -114,6 +117,21 @@ export class AgentReports {
    *  anything at all. */
   holding(): readonly string[] {
     return this.sql<{ actor_id: string }>`SELECT actor_id FROM agent_reports WHERE holds = 1 ORDER BY actor_id`.map((row) => row.actor_id);
+  }
+
+  /**
+   * The run ends of the report just accepted from the agent whose charges are still to apply, by each end's key (its
+   * turn and run): one a report the workspace took before already carried was charged then. An agent carries an end in
+   * every report until one carrying it was taken, so a key its newest report no longer carries is dropped here: it will
+   * not come again. A report not accepted charges nothing, as a newer one carried whatever it held.
+   */
+  chargeOnce(actorId: string, carried: readonly string[]): readonly string[] {
+    const stored = this.sql<{ charged_json: string }>`SELECT charged_json FROM agent_reports WHERE actor_id = ${actorId}`[0];
+    const charged = new Set(stored === undefined ? [] : v.parse(v.array(v.string()), JSON.parse(stored.charged_json)));
+
+    void this.sql`UPDATE agent_reports SET charged_json = ${JSON.stringify(carried)} WHERE actor_id = ${actorId}`;
+
+    return carried.filter((key) => !charged.has(key));
   }
 
   /** A retired agent owes nothing here any more: whether it was holding work. */

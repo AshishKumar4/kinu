@@ -3,13 +3,14 @@
  * run and the input it answered, whether it answered, failed or was retried, and a delivered run's end is kept in the
  * commit that answers it. A later start of the isolate, routine as isolates rest and are evicted, runs none of it again.
  */
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { afterEach, expect, setSystemTime, test } from 'bun:test';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import { RECOVERY_BACKOFF_CEILING_MS } from '@kinu.run/core';
 import {
-  driveUntil, gatewayWorkspace, mainDatabase, relayedReports, storedChat, workspaceMainActor, type StartedHarness,
+  agentSql, driveUntil, gatewayWorkspace, hostedMainActor, mainDatabase, relayedReports, storedChat, workspaceMainActor, type StartedHarness,
 } from './helpers/actor-harness';
-import { delayNextRunEnd, delayNextRunReview, delayNextTurnReport, failNextAnswerWrite } from './helpers/agent-facets';
+import { delayNextModelReport, delayNextRunEnd, delayNextRunReview, delayNextTurnReport, failNextAnswerWrite } from './helpers/agent-facets';
 import { socketConnection } from './helpers/bindings';
 import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 
@@ -189,4 +190,60 @@ test("a node whose isolate dies as its round's review goes to its workspace is n
   await driveUntil(workspace, 'the search never settled', () => searchSettled(workspace));
 
   expect(nodeCalls()).toBe(1);
+});
+
+/** Main's loop, which a node it starts inherits: on the node's task, one model call beside its turn's own. */
+const NOTING_LOOP = `async function* run(rt, task) {
+  if (String(task).includes('tokenize')) await host.llmStream({ system: 'Note.', messages: [{ role: 'user', content: 'LOOP_NOTE' }] });
+  await host.defaultInference();
+}`;
+
+test("a node whose isolate dies after its run's end committed, before it was told, has its loop's model call charged once", async () => {
+  const workspace = gatewayWorkspace(stubAiBinding((run) => {
+    const { messages } = requestOf(run);
+
+    if (JSON.stringify(messages).includes('LOOP_NOTE')) return chatCompletion(run, 'Noted.');
+
+    if (!openingOf(run).includes(SEARCH)) return chatCompletion(run, 'Cache the token table.');
+
+    return messages.some((message) => message.role === 'tool')
+      ? chatCompletion(run, 'Searching.')
+      : toolCallCompletion(run, { tool: 'agents', args: { op: 'swarm', task: TASK, preset: 'ideate', branches: 1, depth: 1 } }, 'swarm_0');
+  }));
+
+  // Main's current loop is the noting one, which the node inherits as it is hired.
+  const { actor: main } = await hostedMainActor(workspace);
+  const files = main.runtime.agentStateVfs ?? main.runtime.storage.vfs;
+
+  await files.mkdir('scaffold', { recursive: true });
+  await writeText(files, `${main.runtime.identity.scaffold.path}.v2`, NOTING_LOOP);
+  workspace.db.query("UPDATE scaffold_versions SET status = 'historical' WHERE actor_id = ? AND status = 'current'").run(main.handle.actorId);
+  workspace.db.query("INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status) VALUES (?, 2, ?, 'noting loop', 'current')")
+    .run(main.handle.actorId, Date.now());
+
+  // Whatever the node tells its workspace of the run is held on the way: its end, and any charge it relays on its own.
+  const told = delayNextRunEnd();
+
+  delayNextModelReport((key) => key !== mainKey(workspace));
+  const id = crypto.randomUUID();
+
+  await workspace.agent.onMessage(owner, chatRequest(id, id, 'submit-message', SEARCH));
+  await driveUntil(workspace, "the node's run never ended", () => {
+    const node = workspace.db.query<{ actor_id: string }, []>("SELECT actor_id FROM workspace_actors WHERE origin = 'swarm'").get();
+
+    return node !== null && agentSql(workspace, node.actor_id)<{ n: number }>`SELECT COUNT(*) AS n FROM run_events WHERE type = 'run_end'`[0]?.n === 1;
+  });
+  const node = workspace.db.query<{ storage_key: string }, []>("SELECT storage_key FROM workspace_actors WHERE origin = 'swarm'").get();
+
+  // It dies there: the run's end is committed; what it tells of it only on the way. A telling of its end already sent
+  // still arrives, as an unanswered call can, and the next start of the isolate tells it again.
+  workspace.agent.harnessResetAgentIsolate(node?.storage_key ?? '');
+  told.release();
+  setSystemTime(new Date(Date.now() + RECOVERY_BACKOFF_CEILING_MS + 1));
+  await driveUntil(workspace, 'the search never settled', () => searchSettled(workspace));
+
+  const charged = workspace.db.query<{ payload: string }, []>("SELECT payload FROM run_events WHERE type = 'model_call'").all()
+    .filter((event) => JSON.parse(event.payload).source === 'scaffold');
+
+  expect(charged).toHaveLength(1);
 });

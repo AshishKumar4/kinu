@@ -8,6 +8,7 @@ import type { ContextFill } from '../read-models/context-fill';
 import type { InlineSteer } from '../read-models/transcript';
 import type { PlanStanding } from '../plans/review';
 import type { RunEvent } from '../events/types';
+import type { ModelCallReport } from '../events/model-call';
 import type { DynamicContext } from '../prompting/volatile-context';
 import type { HeadCapture } from '../heads/head-inference';
 import type { HeadInput, HeadReport, HeadStep } from '../heads/types';
@@ -178,6 +179,9 @@ export interface AgentTurnEnd extends Omit<HeadReport, 'errorMessage'> {
   readonly produced?: readonly JsonValue[];
   /** Its completed rounds, for its caller's advisor, in order. */
   readonly reviews?: readonly AgentReview[];
+  /** Its model calls beside its rounds' own (compaction, its loop's calls), charged to the workspace as it takes the end:
+   *  kept with the end, so an end a restart tells was charged, once. */
+  readonly charges?: readonly ModelCallReport[];
 }
 
 export interface TurnRequestAt {
