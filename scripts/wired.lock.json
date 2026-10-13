@@ -1,4 +1,5 @@
 [
+  "packages/cf-backend/src/agent-facets.ts#AgentIsolateTail (unreached-export)",
   "packages/cf-backend/src/agent-facets.ts#AgentWorkspaceRPC (unreached-export)",
   "packages/cf-backend/src/codemode-egress.ts#CodemodeEgress (unreached-export)",
   "packages/cf-backend/src/codemode-sandbox.ts#CodemodeLauncher (unreached-export)",

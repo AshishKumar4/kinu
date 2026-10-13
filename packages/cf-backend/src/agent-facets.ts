@@ -9,7 +9,8 @@ import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
 import type { AgentWorkspace, TurnBound, TurnCapabilityOf } from './agent-facet/agent-turn';
 import type { AdvisorRecoverySnapshot, AgentFigures, AgentReport, AgentTurnActivity, HandedOffTurn, ResolvedTurnProfile, SettledRun, AgentHeadDelta, AgentReview, AgentSnapshot, AgentToolCall, AgentTrace, SessionEvent, TurnEndEvent, TurnRequestAt, ModelCallReport, ModelOperationEvent } from '@kinu.run/core';
 import type { ChatTurnRequest } from './agent-turns';
-import { attempt, KinuError, settle } from '@kinu.run/core/obs';
+import { attempt, diagnostics, KinuError, relayedLine, settle, toKinuError } from '@kinu.run/core/obs';
+import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
 import { Effect } from 'effect';
 import type { AgentFacet, AgentFacetCalls, AgentFacetEnv } from './agent-facet/agent-facet';
 import { ASSETS_HOSTS } from './assets-hosts';
@@ -26,6 +27,66 @@ const AGENT_FACET_CLASS = 'AgentFacet';
 export interface AgentWorkspaceProps {
   readonly workspace: string;
   readonly actorId: string;
+}
+
+/** Whose isolate a tail hears: the workspace by name and the agent, as its relayed lines name them. */
+export interface AgentIsolateTailProps {
+  readonly workspace: string;
+  readonly actor: string;
+}
+
+/** A console call's arguments as its tail delivers them, each as text: a string itself, anything else its JSON. */
+const ConsoleArgumentsSchema = v.array(v.pipe(v.unknown(), v.transform((part) => (typeof part === 'string' ? part : JSON.stringify(part) ?? String(part)))));
+
+/**
+ * One invocation of an agent's isolate, as its tail hears it, written as this workspace's lines with the agent named:
+ * each line it logged through the diagnostics envelope again under its own event, any other console call and each
+ * exception under the isolate's, then the invocation's own outcome, CPU and wall time.
+ */
+function relayIsolateTrace(item: TraceItem, named: AgentIsolateTailProps): void {
+  for (const log of item.logs) {
+    const parts = v.parse(ConsoleArgumentsSchema, Array.isArray(log.message) ? log.message : [log.message]);
+    // The isolate's diagnostics write one string per call.
+    const line = parts.length === 1 && parts[0] !== undefined ? relayedLine(parts[0]) : null;
+
+    if (line !== null) diagnostics.relay({ ...line, fields: { ...line.fields, ...named } });
+    else diagnostics.event('agent.isolate_console', { ...named, level: log.level, text: parts.join(' ').slice(0, 2000) });
+  }
+
+  for (const exception of item.exceptions) {
+    const thrown = new Error(exception.message);
+
+    thrown.name = exception.name;
+    diagnostics.failure('agent.isolate_exception', toKinuError({ doing: "running the agent's isolate", cause: thrown, otherwise: 'unavailable' }), named);
+  }
+
+  diagnostics.event('agent.isolate_invocation', {
+    ...named, entrypoint: item.entrypoint ?? '', ...invoked(item.event), outcome: item.outcome,
+    startedAt: item.eventTimestamp ?? 0, cpuMs: item.cpuTime, wallMs: item.wallTime, truncated: item.truncated,
+  });
+}
+
+/** What started an invocation of an agent's isolate: a call into it by name, or an event (its alarm, a fetch). */
+function invoked(event: TraceItem['event']) {
+  if (event === null) return { kind: '', method: '' };
+
+  if ('rpcMethod' in event) return { kind: 'jsrpc', method: event.rpcMethod };
+
+  if ('scheduledTime' in event) return { kind: 'alarm', method: '' };
+
+  return { kind: 'request' in event ? 'fetch' : 'other', method: '' };
+}
+
+/**
+ * Where an agent's isolate is heard (#65): a Dynamic Worker's console, exceptions and invocations reach no log store of
+ * their own, so its loader names this tail, which writes each invocation's as this workspace's lines.
+ */
+export class AgentIsolateTail extends WorkerEntrypoint<Env, AgentIsolateTailProps> {
+  override tail(events: TraceItem[]): void {
+    installAnalyticsDiagnostics(this.env, { workspace: this.ctx.props.workspace });
+
+    for (const item of events) relayIsolateTrace(item, this.ctx.props);
+  }
 }
 
 export interface AgentWorkspaceAnswers extends Omit<AgentWorkspace, 'session' | 'stateSession'> {
@@ -328,6 +389,7 @@ export function agentFacet<Facet extends AgentFacet = AgentFacet>(
           mainModule: 'agent.js',
           modules,
           env: facetEnv,
+          tails: [exports.AgentIsolateTail({ props: { workspace: placement.workspaceName, actor: placement.actorId } })],
         })),
       )),
     )));

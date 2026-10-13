@@ -94,7 +94,7 @@ export class KinuEvents extends WorkerEntrypoint<Env, KinuEgressParams> {
   }
 }
 
-export { AgentWorkspaceRPC } from "./agent-facets";
+export { AgentIsolateTail, AgentWorkspaceRPC } from "./agent-facets";
 
 export { UserDO } from "./user/user-do";
 
