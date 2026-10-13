@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as v from 'valibot';
 import {
-  DEVICE_CANCEL_METHOD, DEVICE_EXEC_ACK_METHOD,
+  BoundedOutput, COMMAND_OUTPUT_LIMITS, DEVICE_CANCEL_METHOD, DEVICE_EXEC_ACK_METHOD,
 
   DEVICE_UNKNOWN_METHOD, DeviceCancelResultSchema, DeviceTunnel, JsonValueSchema, createDeviceTunnelExecutor,
   type DeviceStatus, type DeviceTransport, type TunnelSocket,
@@ -844,21 +844,25 @@ describe('pc-agent durable supervisor', () => {
     expect(existsSync(dir)).toBe(false);
   });
 
-  test('bounds captured output, keeps its head and tail, and saves the whole of it', async () => {
+  // 2026-10-13 review: the device marked the cut with '…' where every other executor writes '...'.
+  test('bounds captured output as every executor does, keeps its head and tail, and saves the whole of it', async () => {
     const ws = recorder();
     const id = rpcId(300);
     const requestDir = join(pcAgent.INFLIGHT_ROOT, id);
     const spill = join(tmpdir(), 'kinu-tool-output', `device-${id}.stdout.log`);
-    handle({ id, method: 'exec', params: [`${JSON.stringify(process.execPath)} -e "process.stdout.write('x'.repeat(600000) + 'END')"`] }, ws.socket);
+    // Two-byte characters after one byte: both seams fall inside a character.
+    handle({ id, method: 'exec', params: [`${JSON.stringify(process.execPath)} -e "process.stdout.write('x' + 'é'.repeat(300000) + 'END')"`] }, ws.socket);
     const answer = await settled(() => ws.of(id)[0], 'the bounded output result');
     const result = v.parse(ExecResultSchema, answer.result);
+    const core = new BoundedOutput(COMMAND_OUTPUT_LIMITS, () => ({ write: () => {}, close: () => ({ path: spill }) }));
+
+    core.write(new TextEncoder().encode(`x${'é'.repeat(300000)}END`));
 
     try {
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain('END');
-      expect(result.stdout).toContain(spill);
+      expect(result.stdout).toBe(core.finish('stdout'));
       expect(statSync(join(requestDir, 'stdout')).size).toBeLessThan(statSync(spill).size);
-      expect(statSync(spill).size).toBe(600_003);
+      expect(statSync(spill).size).toBe(600_004);
     } finally {
       rmSync(spill, { force: true });
     }

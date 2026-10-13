@@ -12,10 +12,6 @@ export interface OutputSpill {
   close(): SpillOutcome;
 }
 
-const CONTINUATION_MASK = 0xC0;
-
-const CONTINUATION_BITS = 0x80;
-
 export class BoundedOutput {
   private readonly head: Uint8Array[] = [];
   private headLength = 0;
@@ -52,18 +48,12 @@ export class BoundedOutput {
     const whole = this.total === this.headLength + this.tailLength;
 
     if (whole) return new TextDecoder().decode(concatBytes([...this.head, tail]));
-    const head = concatBytes(this.head);
-    const headEnd = completeUtf8End(head);
-    const tailStart = firstUtf8Start(tail);
-    const omitted = this.total - headEnd - (tail.length - tailStart);
-    const decoder = new TextDecoder();
-    const kept = `${decoder.decode(head.subarray(0, headEnd))}\n[... ${String(omitted)} bytes omitted ...]\n${decoder.decode(tail.subarray(tailStart))}`;
     const saved = this.spill?.close();
     let where = `the full ${stream} was not kept`;
 
     if (saved !== undefined) where = 'path' in saved ? `the full ${stream} is at ${saved.path}` : `the full ${stream} was not saved: ${saved.failure}`;
 
-    return `${kept}\n[${stream}: ${String(this.total)} bytes, ${String(omitted)} omitted from the middle; ${where}]\n`;
+    return elidedOutput({ head: concatBytes(this.head), tail, total: this.total, stream, where });
   }
 
   private keep(chunk: Uint8Array): void {
@@ -118,30 +108,40 @@ function concatBytes(parts: readonly Uint8Array[]): Uint8Array {
   return out;
 }
 
-function completeUtf8End(bytes: Uint8Array): number {
-  for (let lead = bytes.length - 1; lead >= Math.max(0, bytes.length - 4); lead--) {
-    const byte = bytes[lead] ?? 0;
+/**
+ * A stream's text once it outgrew what is kept: its head and tail, each cut at a whole character, the bytes dropped
+ * between them counted, and `where` the whole of it went. Self-contained, as the device daemon's command supervisor runs
+ * its source (pc-agent/src/index.js), so every executor's output reads alike.
+ */
+export function elidedOutput(kept: {
+  readonly head: Uint8Array; readonly tail: Uint8Array; readonly total: number; readonly stream: string; readonly where: string;
+}): string {
+  const { head, tail, total, stream, where } = kept;
+  const continues = (byte: number | undefined): boolean => ((byte ?? 0) & 0xC0) === 0x80;
+  let headEnd = head.length;
 
-    if ((byte & CONTINUATION_MASK) === CONTINUATION_BITS) continue;
+  // A character cut at either seam is dropped whole rather than decoded as a replacement.
+  for (let lead = head.length - 1; lead >= Math.max(0, head.length - 4); lead--) {
+    const byte = head[lead] ?? 0;
 
-    return lead + utf8SequenceLength(byte) > bytes.length ? lead : bytes.length;
+    if (continues(byte)) continue;
+    let size = 1;
+
+    if (byte >= 0xF0) size = 4;
+    else if (byte >= 0xE0) size = 3;
+    else if (byte >= 0xC0) size = 2;
+
+    if (lead + size > head.length) headEnd = lead;
+
+    break;
   }
 
-  return bytes.length;
-}
+  let tailStart = 0;
 
-function firstUtf8Start(bytes: Uint8Array): number {
-  let start = 0;
+  while (tailStart < Math.min(3, tail.length) && continues(tail[tailStart])) tailStart++;
+  const omitted = total - headEnd - (tail.length - tailStart);
+  const decoder = new TextDecoder();
 
-  while (start < Math.min(3, bytes.length) && ((bytes[start] ?? 0) & CONTINUATION_MASK) === CONTINUATION_BITS) start++;
-
-  return start;
-}
-
-function utf8SequenceLength(lead: number): number {
-  if (lead >= 0xF0) return 4;
-
-  if (lead >= 0xE0) return 3;
-
-  return lead >= 0xC0 ? 2 : 1;
+  return `${decoder.decode(head.subarray(0, headEnd))}\n[... ${String(omitted)} bytes omitted ...]\n${decoder.decode(tail.subarray(tailStart))}`
+    + `\n[${stream}: ${String(total)} bytes, ${String(omitted)} omitted from the middle; ${where}]\n`;
 }

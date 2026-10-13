@@ -189,6 +189,8 @@ const pty = require('./pty.js');
 
 const { createProcReader, procStat, procEntryGone, groupHasLiveProcess } = pty;
 
+const { elidedOutput } = require('../../core/src/execution/bounded-output.ts');
+
 const update = require('./update.js');
 
 const protocol = require('./device-protocol.json');
@@ -836,6 +838,7 @@ const SUPERVISOR_SCRIPT = `
 'use strict';
 const fs = require('node:fs');
 const { procStat, groupHasLiveProcess } = (${createProcReader.toString()})(fs);
+const elidedOutput = (${elidedOutput.toString()});
 const { execFile, spawn } = require('node:child_process');
 
 // fd 4 is the record's \`life\`, handed over at this process's spawn: the kernel closes it however this process exits,
@@ -924,7 +927,7 @@ function writeTerminalResult(kind, exitCode, signal) {
 
 /** One stream: the first HEAD bytes go to its file as they arrive, the last TAIL stay in a ring, every
  *  byte is counted, and once the stream outgrows both the whole of it goes to the spill file. close()
- *  writes what core's BoundedOutput.finish writes, byte for byte, so every executor reads the same.
+ *  writes core's elidedOutput, as BoundedOutput.finish does, so every executor reads the same.
  *  The spill is written at its host path and named by the path the command's own view gives it. */
 class Capture {
   constructor(file, spill, stream) {
@@ -1015,30 +1018,14 @@ class Capture {
       fs.closeSync(this.fd);
       return;
     }
-    // A character cut at either seam is dropped whole rather than decoded as a replacement.
-    const last = Buffer.alloc(Math.min(4, this.head));
-    fs.readSync(this.fd, last, 0, last.length, this.head - last.length);
-    let headEnd = this.head;
-    for (let lead = last.length - 1; lead >= 0; lead--) {
-      const byte = last[lead];
-      if ((byte & 0xC0) === 0x80) continue;
-      const size = byte >= 0xF0 ? 4 : byte >= 0xE0 ? 3 : byte >= 0xC0 ? 2 : 1;
-      if (lead + size > last.length) headEnd = this.head - last.length + lead;
-      break;
-    }
-    let tailStart = 0;
-    while (tailStart < Math.min(3, tail.length) && (tail[tailStart] & 0xC0) === 0x80) tailStart++;
-    const omitted = this.total - headEnd - (tail.length - tailStart);
+    const head = Buffer.alloc(this.head);
+    fs.readSync(this.fd, head, 0, this.head, 0);
     if (this.spill !== null) fs.closeSync(this.spill);
     let where = 'the full ' + this.stream + ' was not saved: ' + this.spillFailure;
     if (this.spill !== null) where = 'the full ' + this.stream + ' is at ' + this.spillTarget.shown;
-    const closing = Buffer.concat([
-      Buffer.from('\\n[\\u2026 ' + omitted + ' bytes omitted \\u2026]\\n'),
-      tail.subarray(tailStart),
-      Buffer.from('\\n[' + this.stream + ': ' + this.total + ' bytes, ' + omitted + ' omitted from the middle; ' + where + ']\\n'),
-    ]);
-    fs.writeSync(this.fd, closing, 0, closing.length, headEnd);
-    fs.ftruncateSync(this.fd, headEnd + closing.length);
+    const text = Buffer.from(elidedOutput({ head, tail, total: this.total, stream: this.stream, where }));
+    fs.writeSync(this.fd, text, 0, text.length, 0);
+    fs.ftruncateSync(this.fd, text.length);
     fs.closeSync(this.fd);
   }
 }
