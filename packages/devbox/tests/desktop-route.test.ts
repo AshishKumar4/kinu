@@ -2,7 +2,7 @@
 import { TestDevbox } from './support/test-devbox';
 import { expect, test } from 'bun:test';
 
-import { harness } from './support/devbox-harness';
+import { TEST_BOX_ID, harness } from './support/devbox-harness';
 
 class DesktopBox extends TestDevbox<unknown> {
 
@@ -67,8 +67,8 @@ test('the desktop is a WebSocket only, and starts nothing for anything else', as
 test('the desktop\'s port is never a preview', async () => {
   const { box } = await startedBox();
 
-  await expect(box.exposePort(6080, { hostname: 'preview.test' })).rejects.toMatchObject({ code: 'invalid-input' });
-  expect(await box.getExposedPorts('preview.test')).toEqual([]);
+  await expect(box.exposePort(6080)).rejects.toMatchObject({ code: 'invalid-input' });
+  expect(await box.getExposedPorts()).toEqual([]);
 });
 
 // HiddenGrasshopper's review of 29de5aed3: core's exposeOn asks portToken first, which left a 6080 row that a
@@ -94,7 +94,7 @@ test('a stored 6080 row is never exposed on restore, nor served as a preview', a
 
   await box.devboxStartup();
 
-  const preview = await box.fetch(new Request('https://box/_devbox/preview/6080/tok6080/websockify'));
+  const preview = await box.fetch(new Request(`https://6080-${TEST_BOX_ID}-tok6080.preview.test/websockify`));
 
-  expect({ exposed: await box.getExposedPorts('preview.test'), status: preview.status, reached }).toEqual({ exposed: [], status: 404, reached: [] });
+  expect({ exposed: await box.getExposedPorts(), status: preview.status, reached }).toEqual({ exposed: [], status: 404, reached: [] });
 });

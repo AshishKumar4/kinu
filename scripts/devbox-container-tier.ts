@@ -105,7 +105,7 @@ function writeFixtureConfig(worker: string, scratch: string, priorDeclared?: str
     containers,
     r2_buckets: [{ binding: 'STORE', bucket_name: worker }],
     assets: { directory: join(REPO, 'packages/cf-backend/public'), binding: 'ASSETS', run_worker_first: true },
-    vars: { ACCOUNT, PROBE_BUCKET: worker, PROBE_HTTP: process.argv.includes('--probe') ? '1' : '0' },
+    vars: { CLOUDFLARE_ACCOUNT_ID: ACCOUNT, PROBE_BUCKET: worker, PROBE_HTTP: process.argv.includes('--probe') ? '1' : '0' },
   }));
 
   return { config, declared };
@@ -424,7 +424,7 @@ async function main(): Promise<void> {
           && [1, 3, 5].every((at, channel) => Math.abs((rgba[channel] ?? -99) - Number.parseInt(hex.slice(at, at + 2), 16)) <= 12);
 
         // The wallpaper's glow warms the ground above the panel: its red stands well above its blue, where the bare
-        // ground's sit within a few levels of each other (D85).
+        // ground's sit within a few levels of each other (D88).
         const glowing = (rgba: readonly number[] | undefined) => rgba !== undefined && (rgba[0] ?? 0) - (rgba[2] ?? 0) >= 12;
 
         const drawn = (shown: Awaited<ReturnType<typeof screen>>) => shown !== null

@@ -185,7 +185,7 @@ test('the bench store gateway flushes an under-threshold operation on success an
   const entry = join(root, 'counter-worker.ts');
   const bench = new URL('./worker.ts', import.meta.url).pathname;
   writeFileSync(entry, `
-    import { DevboxStoreGateway } from ${JSON.stringify(bench)};
+    import { DevboxGateway } from ${JSON.stringify(bench)};
     import { storeSource } from ${JSON.stringify(new URL('../src/store-gateway.ts', import.meta.url).pathname)};
     const calls = {};
     const counter = {
@@ -201,9 +201,9 @@ test('the bench store gateway flushes an under-threshold operation on success an
         if (url.searchParams.has('fail')) throw new Error('lost acknowledgement');
         return result;
       };
-      const gateway = new DevboxStoreGateway({ props: {
+      const gateway = new DevboxGateway({ props: { store: {
         protocolVersion: 1, mode: 'active', routeId: 'devbox-publish', source: storeSource('BACKUP_BUCKET'), keyPrefix: 'boxes/test/', access: 'read-write',
-      } }, { BACKUP_BUCKET: bucket, BenchOpCounter: { idFromName() { return 'test'; }, get() { return counter; } } });
+      } } }, { BACKUP_BUCKET: bucket, BenchOpCounter: { idFromName() { return 'test'; }, get() { return counter; } } });
       try {
         return await gateway.fetch(new Request('http://s3-devbox-publish.sandbox.internal/BACKUP_BUCKET/data', {
           method: 'PUT', headers: { 'content-length': '5' }, body: request.body

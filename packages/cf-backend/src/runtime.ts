@@ -421,7 +421,7 @@ export function createCFRuntime(
         }), { sandboxId });
       },
       // The edge proves a preview hostname from `AUTH_KV` without creating the per-name DO.
-      env.AUTH_KV ? sandboxPreviewExposures(env.AUTH_KV, sandboxId) : null,
+      env.AUTH_KV && previewSuffix !== undefined ? { exposures: sandboxPreviewExposures(env.AUTH_KV, sandboxId), zone: previewSuffix } : null,
       {
         portsMoved: async () => {
           hooks.liveReadsMoved?.(['getExposedPorts']);
@@ -566,11 +566,11 @@ export function createCFRuntime(
     vectorStore,
     sandboxHandle,
     portHolders: () => {
-      const box = hooks.boxUse.used && previewSuffix !== undefined && sandboxHandle !== null ? { handle: sandboxHandle, suffix: previewSuffix } : null;
+      const box = hooks.boxUse.used && previewSuffix !== undefined && sandboxHandle !== null ? sandboxHandle : null;
       let workspace: Promise<WorkspaceServing> | undefined;
       let sandbox: Promise<readonly number[]> | undefined;
       const served = () => workspace ??= access.workspaceServing();
-      const boxed = () => sandbox ??= box === null ? Promise.resolve([]) : box.handle.getExposedPorts(box.suffix).then((rows) => rows.map((row) => row.port));
+      const boxed = () => sandbox ??= box === null ? Promise.resolve([]) : box.getExposedPorts().then((rows) => rows.map((row) => row.port));
 
       // A job's id names both planes: the box's listener carries it in its environment, a workspace process as its exec
       // id. Each plane is asked for its own exposed ports only.
@@ -578,7 +578,7 @@ export function createCFRuntime(
         exposedPorts: async () => [...await boxed(), ...(await served()).held.map((held) => held.port)],
         holders: async (ports) => {
           const own = await boxed();
-          const listened = box === null ? [] : await box.handle.portListeners(JOB_STAMP_ENV, ports.filter((port) => own.includes(port)));
+          const listened = box === null ? [] : await box.portListeners(JOB_STAMP_ENV, ports.filter((port) => own.includes(port)));
 
           return listened === null ? null : [...listened, ...(await served()).held.filter((held) => ports.includes(held.port))];
         },

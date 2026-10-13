@@ -1,15 +1,15 @@
 /** Every workspace, a page at a time; filter and search are the owner's object's queries. List or tiles, in localStorage. */
 import { useEffect, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { Button } from "@cloudflare/kumo";
-import { ListIcon, PlusIcon, SquaresFourIcon } from "@phosphor-icons/react";
+import { ListIcon, SquaresFourIcon } from "@phosphor-icons/react";
 import * as v from "valibot";
 import { APP_ROUTES } from "@kinu.run/core";
 import { useFilteredRoster, useWorkspaceRoster, type RosterFilter } from "@/hooks/use-workspace-roster";
 import type { RosterFilterBucket } from "@/lib/user-api";
 import { inputCls } from "@/components/ui/form";
 import { Segmented } from "@/components/ui/Segmented";
-import { FilledButton } from "@/components/ui/FilledButton";
+import { NewWorkspaceButton } from "@/components/workspaces/NewWorkspaceButton";
 import { WorkspaceOverviewCard } from "@/components/workspaces/WorkspaceOverviewCard";
 
 const VIEW_KEY = "kinu:workspaces-view";
@@ -71,7 +71,6 @@ export default function WorkspacesPage() {
   const [query, setQuery] = useState("");
   const [view, setViewState] = useState<View>(storedView);
   const [filter, setFilter] = useState<"all" | RosterFilterBucket>("all");
-  const navigate = useNavigate();
   const q = usePaused(query.trim());
   const narrowed = filter !== "all" || q !== "";
   const narrowing: RosterFilter = { bucket: filter === "all" ? undefined : filter, q };
@@ -116,9 +115,7 @@ export default function WorkspacesPage() {
               <Button variant="ghost" size="sm" aria-label="Tiled view" aria-pressed={view === "tiled"}
                 icon={<SquaresFourIcon size={14} />} onClick={() => setView("tiled")} />
             </div>
-            <FilledButton className="h-8 px-3 text-sm" onClick={() => void navigate(APP_ROUTES.home)}>
-              <PlusIcon size={13} weight="bold" /> New workspace
-            </FilledButton>
+            <NewWorkspaceButton className="h-8 px-3 text-sm" />
           </div>
         </div>
 

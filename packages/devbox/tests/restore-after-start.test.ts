@@ -6,7 +6,7 @@ import type { DevboxPolicy, StartClock } from '../src/lifecycle';
 import { TestDevbox, TEST_DEVBOX_POLICY as TEST_POLICY } from './support/test-devbox';
 import { handClock } from '../../test-utils/src/hand-clock';
 import {
-  FakeSandbox, STAMP_COMMAND, TEST_BOX_ID, boxState, deliver, fakeStorage, gate, harness,
+  FakeSandbox, STAMP_COMMAND, TEST_BOX_ID, boxState, deliver, fakeStorage, gate, harness, memoryBucket, seedGolden,
   type Harness,
 } from './support/devbox-harness';
 
@@ -83,7 +83,8 @@ function activatedOverRunning(rows: Map<string, StoredValue>): Activated {
 
   const container = new FakeSandbox(state);
   state.container = container.handle();
-  const box = new TestBox(state, {});
+  seedGolden(container);
+  const box = new TestBox(state, { DEVBOX_STORE: memoryBucket(new Map()) });
   container.owner = box;
 
   return { box, container, activation };
@@ -149,7 +150,8 @@ describe('the start hook owns restoration', () => {
 
       await container[termination]();
 
-      expect(container.files.size).toBe(0);
+      // Only what the image itself holds is left: the golden's pinned tools.
+      expect([...container.files.keys()]).toEqual([...container.imageFiles.keys()]);
       expect(container.bootId).toBeUndefined();
       expect(container.s3fsMounts.size).toBe(0);
       expect(rows.get('durable-lifecycle-marker')).toBe('keep this');
@@ -212,7 +214,7 @@ describe('the start hook owns restoration', () => {
     await box.start();
     expect(stamps(container)).toBe(1);
     expect(container.starts).toHaveLength(1);
-    expect(await box.getExposedPorts('preview.test')).toEqual([{ port: 3000, url: 'https://3000-devbox-under-test-tok3000.preview.test', name: 'web' }]);
+    expect(await box.getExposedPorts()).toEqual([{ port: 3000, url: 'https://3000-devbox-under-test-tok3000.preview.test', name: 'web' }]);
     expect((await deliver(container, () => box.exec('echo hi'))).exitCode).toBe(0);
     expect(container.execs.findIndex(command => command.includes(STAMP_COMMAND)))
       .toBeLessThan(container.execs.findIndex(command => command.includes('echo hi')));
@@ -485,7 +487,7 @@ describe('every ending is a named state, and no ending rejects into the platform
         ready: false,
         unready: expect.any(String),
       });
-    expect(await box.getExposedPorts('preview.test')).toEqual([]);
+    expect(await box.getExposedPorts()).toEqual([]);
     expect((await box.exec('echo fixing')).exitCode).toBe(0);
     expect([...rows.keys()].some((key) => key.startsWith('devbox:incident:'))).toBe(true);
   });

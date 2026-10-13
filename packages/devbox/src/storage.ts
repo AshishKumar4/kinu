@@ -43,12 +43,6 @@ export interface DevboxStorage {
   discard: () => Promise<void>;
 }
 
-/** `binding` names `bucket` in the Worker's env: the store gateway serves the container from it (D41). */
-export interface DevboxStore {
-  readonly binding: string;
-  readonly bucket: R2Bucket;
-}
-
 /** The directory a devbox makes durable, and every command's default working directory. */
 export const DEVBOX_WORKDIR = '/workspace';
 

@@ -513,7 +513,7 @@ describe('native egress constraints — red in every governed direction', () => 
   });
 
   const paths = [
-    [base, 'container.start({ ...from, entrypoint, instance: instanceOf(inputs.size), enableInternet: this.enableInternet })', 'container.start({ ...from, entrypoint, instance: instanceOf(inputs.size), enableInternet: true })', 'declared internet policy'],
+    [base, 'instance: instanceOf(inputs.size), enableInternet: this.enableInternet })', 'instance: instanceOf(inputs.size), enableInternet: true })', 'declared internet policy'],
     [router, '.interceptAllOutboundHttp(router)', '.removedHttpRoute(router)', 'HTTP has no total'],
     [router, ".interceptOutboundHttps('*', router)", ".interceptOutboundHttps('api.example.com', router)", 'HTTPS has no total'],
     [base, 'internet: this.enableInternet,', 'internet: true,', 'router does not receive'],
@@ -524,9 +524,10 @@ describe('native egress constraints — red in every governed direction', () => 
     [router, 'this.#fallback = policy.fallback', 'this.#fallback = undefined', 'does not bind the vault'],
     [worker, 'return handleContainerEgress(request, this.env, params, { grants: workspaceGrants(this.env), github: params && new GitHubEgressRecorder(this.env, this.ctx, params) });', 'return fetch(request);', 'does not enter credential injection'],
     [vault, 'vault.resolveEgressInjection(', 'vault.unrelatedInjection(', 'does not consult the owner vault'],
-    [router, '?? this.ctx.props.fallback', '', 'owned routes do not precede'],
-    [router, 'this.ctx.props.internet ?', 'true ?', 'public forwarding is not conditional'],
-    [worker, "from '@kinu.run/devbox'", "from '@unrelated/devbox'", 'DevboxOutbound is not bound'],
+    [router, '?? outbound.fallback', '', 'owned routes do not precede'],
+    [router, 'outbound.internet ?', 'true ?', 'public forwarding is not conditional'],
+    [router, ": routeEgress(request, props.outbound)", ": serveStore(request, props.store, (name) => this.env[name])", 'does not route egress through its router'],
+    [worker, "from '@kinu.run/devbox'", "from '@unrelated/devbox'", 'DevboxGateway is not bound'],
     [worker, 'export class KinuEgress', 'class KinuEgress', 'KinuEgress is not bound'],
   ] as const;
 

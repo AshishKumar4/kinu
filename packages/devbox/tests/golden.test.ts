@@ -55,7 +55,7 @@ class Platform {
         if (this.stopRefused !== undefined) throw new Error(this.stopRefused);
       },
       build: async () => { this.builds += 1; },
-      tell: async (box, answer) => { this.told.push([box, answer]); },
+      tell: (box, answer) => Effect.sync(() => { this.told.push([box, answer]); }),
       delete: (ref) => {
         if (!this.registry) return undefined;
         const refused = this.refuse;

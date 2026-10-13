@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 import { settle } from '@kinu.run/core/obs';
-import type { Memory } from '@kinu.run/core';
+import type { ContextTreeRemote, Memory } from '@kinu.run/core';
 import type { NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
 import type { AgentWorkspace } from './agent-turn';
 
@@ -8,22 +8,26 @@ import type { AgentWorkspace } from './agent-turn';
  * awaiting a rejected RpcPromise leaves its pipeline open; disposing that promise closes the relay's Tail as ok.
  * Fulfilled answers can own live stubs or streams, so their disposer belongs to the consumer, not this adapter. */
 function workspaceRpcAnswer<T>(pending: Promise<T>): Effect.Effect<T> {
-  return Effect.promise(() => pending).pipe(Effect.onError(() => Effect.sync(() => disposeWorkspaceRpc(pending))));
+  return Effect.promise(() => pending).pipe(Effect.onError(() => Effect.sync(() => disposeRpc(pending))));
 }
 
 /** An answer that is data, read whole once it settles: its pipeline is released then too, so a turn's many calls hold
  *  none of theirs open (2026-10-11, the worker-heap gate: main's isolate allocated 246.8 MB over a 150-step turn, 118.3 MB
  *  once each was released). */
 function workspaceRpcData<T>(pending: Promise<T>): Effect.Effect<T> {
-  return workspaceRpcAnswer(pending).pipe(Effect.tap(() => Effect.sync(() => { disposeWorkspaceRpc(pending); })));
+  return workspaceRpcAnswer(pending).pipe(Effect.tap(() => Effect.sync(() => { disposeRpc(pending); })));
 }
 
-function disposeWorkspaceRpc<T>(pending: Promise<T>): void {
-  // Worker RPC's Promise type omits this native method; ordinary in-isolate promises have no pipeline to release.
-  if (Symbol.dispose in pending) {
-    const dispose = pending[Symbol.dispose];
+/** What crosses an RPC owning a pipeline or a stub: a pending call, or a served context tree a call answered. */
+export type RpcCrossing = Promise<unknown> | ContextTreeRemote;
 
-    if (typeof dispose === 'function') dispose.call(pending);
+/** An RPC's disposer, where it crossed with one. Worker RPC's types omit this native method; a promise or an object
+ *  made in this isolate has none. */
+export function disposeRpc(crossed: RpcCrossing): void {
+  if (Symbol.dispose in crossed) {
+    const dispose = crossed[Symbol.dispose];
+
+    if (typeof dispose === 'function') dispose.call(crossed);
   }
 }
 
@@ -48,7 +52,7 @@ function forOneCall<Capability, T>(opening: () => Promise<Capability>, run: (cap
 
     return workspaceRpcAnswer(pending).pipe(
       Effect.flatMap(capability => workspaceRpcAnswer(run(capability))),
-      Effect.ensuring(Effect.sync(() => { disposeWorkspaceRpc(pending); })),
+      Effect.ensuring(Effect.sync(() => { disposeRpc(pending); })),
     );
   });
 }
@@ -157,7 +161,7 @@ export function workspaceClient(workspace: AgentWorkspaceCalls): WorkspaceClient
 
     held = null;
 
-    if (opened !== null) disposeWorkspaceRpc(opened);
+    if (opened !== null) disposeRpc(opened);
   };
 
   /** `owned`: the answer holds live content its consumer reads after (a relayed response's body), so its pipeline is

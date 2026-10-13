@@ -10,6 +10,7 @@ import type { ContextComposition } from '../context-meter';
 import { FAILURE_WITHOUT_ERROR, type RunEventInput } from '../events/types';
 import { TurnFileLedger } from '../vfs/file-ledger';
 import { TurnEscalationLedger } from '../execution/escalation';
+import { TurnCraftLedger } from '../craft/turn-ledger';
 import { renderToolResult } from '../utils/evidence-window';
 import { priceCall, type MissionGovernor, type SpendGate } from '../mission-budget';
 import { USAGE_FIELDS, addUsage, usageReported, usageTotal, type Usage } from '../usage';
@@ -86,8 +87,8 @@ export class TurnAccumulator {
   readonly context = new TurnContextBudget();
   readonly files = new TurnFileLedger();
   readonly escalations = new TurnEscalationLedger();
-  /** Written by craft-cycle.ts: crafted tools run inside `eval`, never as `toolCalls` names. */
-  private readonly craftUsed = new Set<string>();
+  /** Crafted tools run inside `eval`, never as `toolCalls` names: each call's, as the isolate that ran it observed it. */
+  readonly craft = new TurnCraftLedger();
   /** The tool lessons a step listed, id to the revision shown. */
   private readonly lessons = new Map<string, number>();
   private gate: SpendGate | undefined;
@@ -121,7 +122,7 @@ export class TurnAccumulator {
     this.context.reset();
     this.files.reset();
     this.escalations.reset();
-    this.craftUsed.clear();
+    this.craft.reset();
     this.lessons.clear();
   }
 
@@ -131,12 +132,8 @@ export class TurnAccumulator {
     this.usage = usage;
   }
 
-  noteCraftedToolUse(names: readonly string[]): void {
-    for (const name of names) this.craftUsed.add(name);
-  }
-
   craftedToolsUsed(): string[] {
-    return [...this.craftUsed];
+    return this.craft.used();
   }
 
   noteLessonsShown(lessons: readonly { readonly id: string; readonly revision: number }[]): void {

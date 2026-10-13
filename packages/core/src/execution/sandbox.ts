@@ -23,7 +23,6 @@ import { direntType } from '../vfs/dirent';
 export const WORKSPACE_BACKUP_DIR = '/workspace';
 
 interface SandboxExposeOptions {
-  hostname: string;
   name?: string;
   /** Supplied, never left to the SDK: see {@link SandboxHandle.portToken}. */
   token?: string;
@@ -79,11 +78,11 @@ export interface SandboxHandle {
   /** Native stat; `follow: false` reads the entry itself, never its siblings. */
   statFile(path: string, opts?: { follow?: boolean }): Promise<SandboxFileMetadata>;
   deleteFile(path: string): Promise<JsonValue | void>;
-  /** `hostname` is the preview URL suffix; `token` comes from {@link SandboxHandle.portToken}. */
-  exposePort(port: number, opts: { hostname: string; name?: string; token?: string }):
+  /** The box serves its own preview zone; `token` comes from {@link SandboxHandle.portToken}. */
+  exposePort(port: number, opts: { name?: string; token?: string }):
     Promise<{ url: string; port: number; name?: string; route: PreviewRouteCheck }>;
   unexposePort(port: number): Promise<JsonValue | void>;
-  getExposedPorts(hostname: string):
+  getExposedPorts():
     Promise<Array<{ url: string; port: number; name?: string; status?: string }>>;
   /** The only kind of background process that survives container sleep. */
   startSupervisedProcess(command: string, opts?: { cwd?: string }):
@@ -296,7 +295,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
   };
 
   /** One exposure path: Devbox owns listener proof; a failed probe is a real failure, never evidence of absence. */
-  const exposeOn = async (box: SandboxHandle, suffix: string, port: number, name?: string): Promise<PortExposureResult> => {
+  const exposeOn = async (box: SandboxHandle, port: number, name?: string): Promise<PortExposureResult> => {
     const listening = await withSandboxRetry(() => touch(() => box.probePort(port)));
 
     if (!listening) {
@@ -311,7 +310,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
     }
 
     const { urlToken } = await box.portToken(port, name);
-    const opts: SandboxExposeOptions = { hostname: suffix, token: urlToken };
+    const opts: SandboxExposeOptions = { token: urlToken };
 
     if (name !== undefined) opts.name = name;
     const exposed = await withSandboxRetry(() => touch(() => box.exposePort(port, opts)));
@@ -480,7 +479,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
         }
 
         try {
-          const exposed = await exposeOn(handle, previewHostSuffix, p, name);
+          const exposed = await exposeOn(handle, p, name);
 
           // `bad_input`: the caller must start the server first; `unavailable` or `missing` would misfile it.
           return exposed.supported
@@ -521,7 +520,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
         try {
           // The tool is listPorts, the verb both executors declare. A read of the box's record, which never starts it,
           // so no use of the box.
-          const ports = await withSandboxRetry(() => handle.getExposedPorts(previewHostSuffix));
+          const ports = await withSandboxRetry(() => handle.getExposedPorts());
 
           return JSON.stringify((ports ?? []).map(p => ({ port: p.port, status: p.status, url: p.url })));
         } catch (err) {
@@ -693,7 +692,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
       }
 
       try {
-        return await exposeOn(handle, previewHostSuffix, port, opts?.name);
+        return await exposeOn(handle, port, opts?.name);
       } catch (err) {
         return { supported: false, reason: renderThrownChain({ cause: err }) };
       }
@@ -710,7 +709,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
     async listExposedPorts() {
       if (!handle || !previewHostSuffix) return [];
       // A read of the box's record, which never starts it: no use of the box.
-      const ports = await withSandboxRetry(() => handle.getExposedPorts(previewHostSuffix));
+      const ports = await withSandboxRetry(() => handle.getExposedPorts());
 
       return (ports ?? []).map(p => ({
         port: p.port,

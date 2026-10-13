@@ -1,5 +1,5 @@
 /**
- * The desktop's wallpaper (D85): a Python program the desktop's start writes into the box and runs once per X server.
+ * The desktop's wallpaper (D88): a Python program the desktop's start writes into the box and runs once per X server.
  * It paints the root at the server's own size, the ground at once and then the whole picture, and leaves a root that
  * already holds one alone. Python, because the image carries it and no image tool; Chromium draws the mark, from the
  * SVG its host passes, so any mark draws as a browser draws it.

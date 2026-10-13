@@ -349,7 +349,7 @@ describe('the ladder measures something', () => {
   const censusFile = relative(root, import.meta.path);
 
   /** Programs the computer runs, carried as text: the desktop's wallpaper starts the box's own Chromium, headless,
-   *  to draw the mark (DEVBOX-DECISIONS D85). Nothing here launches a browser where the tests run. */
+   *  to draw the mark (DEVBOX-DECISIONS D88). Nothing here launches a browser where the tests run. */
   const IN_THE_COMPUTER: ReadonlySet<string> = new Set(['packages/devbox/src/desktop-wallpaper.ts']);
 
   test('every file that names a browser launcher is inside the derivation', () => {

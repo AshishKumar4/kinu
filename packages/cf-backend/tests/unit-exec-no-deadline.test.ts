@@ -25,7 +25,7 @@ function fakeBox(input: {
   holdsUntilKilled?: boolean;
   finishesFirst?: boolean;
   killFails?: boolean;
-  /** What `execUntimedStream` answers: the box's record stream for the command. */
+  /** What `execStream` answers: the box's record stream for the command. */
   streamed?: () => ReadableStream<Uint8Array>;
 } = {}) {
   const calls: BoxCalls = { started: [], killed: [], streamed: [] };
@@ -34,7 +34,7 @@ function fakeBox(input: {
 
   const box = {
     resolveReadiness: async () => ({ kind: 'restored' as const }),
-    execUntimed: async (command: string, opts: { cwd?: string; execId: string }) => {
+    exec: async (command: string, opts: { cwd?: string; execId: string }) => {
       const call: BoxCalls["started"][number] = { command };
 
       if (opts.cwd !== undefined) call.cwd = opts.cwd;
@@ -45,15 +45,15 @@ function fakeBox(input: {
 
       return { stdout: "epoch 40/40 done\n", stderr: "", exitCode: input.exitCode ?? 0 };
     },
-    execUntimedStream: async (command: string) => {
+    execStream: async (command: string) => {
       calls.streamed.push(command);
 
       if (input.streamed === undefined) throw new Error('this box streams nothing');
 
       return input.streamed();
     },
-    releaseUntimed: async () => {},
-    killUntimed: async (execId: string) => {
+    releaseExec: async () => {},
+    killExec: async (execId: string) => {
       calls.killed.push(execId);
 
       if (input.killFails === true) throw new Error(`the container refused to end process 41: ${execId}`);
@@ -131,7 +131,7 @@ function lossyBox(onLaunch: () => void = () => {}) {
 
     if (answers.has(execId)) return;
 
-    if (launched.has(execId)) throw new DevboxError('indeterminate', `untimed exec ${execId} was launched before; it was not launched again`);
+    if (launched.has(execId)) throw new DevboxError('indeterminate', `exec ${execId} was launched before; it was not launched again`);
     launched.add(execId);
     ran.push(command);
   };
@@ -147,19 +147,19 @@ function lossyBox(onLaunch: () => void = () => {}) {
 
   const box = {
     resolveReadiness: async () => ({ kind: 'restored' as const }),
-    execUntimed: async (command: string, opts: { execId: string }) => {
+    exec: async (command: string, opts: { execId: string }) => {
       launch(command, opts.execId);
       answers.set(opts.execId, answers.get(opts.execId) ?? { stdout: 'once\n', stderr: '', exitCode: 0 });
 
       return reply(answers.get(opts.execId));
     },
-    execUntimedStream: async (command: string, opts: { execId: string }) => {
+    execStream: async (command: string, opts: { execId: string }) => {
       launch(command, opts.execId);
 
       return reply(pipe('once\n'));
     },
-    killUntimed: async () => false,
-    releaseUntimed: async (execId: string) => { released.push(execId); },
+    killExec: async () => false,
+    releaseExec: async (execId: string) => { released.push(execId); },
   };
 
   return { ran, ids, released, executor: createSandboxExecutor(adaptCloudflareSandbox(Object.create(box), async () => {}, null)) };
@@ -243,7 +243,7 @@ describe("adaptCloudflareSandbox — a pending readiness refuses before dispatch
 
     const box: KinuDevbox = Object.create({
       resolveReadiness: async () => ({ kind: 'pending' as const, reason }),
-      execUntimed: async (command: string) => { calls.started.push({ command }); },
+      exec: async (command: string) => { calls.started.push({ command }); },
     });
 
     const handle = adaptCloudflareSandbox(box, async () => {}, null);
@@ -256,8 +256,8 @@ describe("adaptCloudflareSandbox — a pending readiness refuses before dispatch
     // The refusal is the pending kind, not a blanket gate failure.
     const ready: KinuDevbox = Object.create({
       resolveReadiness: async () => ({ kind: 'restored' as const }),
-      execUntimed: async () => ({ stdout: 'ok', stderr: '', exitCode: 0 }),
-      releaseUntimed: async () => {},
+      exec: async () => ({ stdout: 'ok', stderr: '', exitCode: 0 }),
+      releaseExec: async () => {},
     });
  
     await expect(adaptCloudflareSandbox(ready, async () => {}, null)

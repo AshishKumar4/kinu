@@ -586,6 +586,7 @@ describe(productFlowTestName('changes-storm', 'a burst of writes under three ope
 
     expect(storm.listed).toEqual([STORM_FILES, STORM_FILES, STORM_FILES]);
 
+    // Not once per file: each pane re-read its change-set 2 or 3 times and was told it moved once (three staging runs).
     for (const reads of [...storm.burstReads, ...storm.burstFrames]) expect(reads).toBeLessThan(STORM_FILES / 5);
   });
 

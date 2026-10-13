@@ -11,7 +11,7 @@ const SESSION = '/usr/local/share/devbox/desktop';
 export const DESKTOP_SIZE = { width: 1280, height: 800 } as const;
 
 /**
- * The desktop's look (D85): its ground falls from `background` at the top to `foot` and glows in `glow` from below the
+ * The desktop's look (D88): its ground falls from `background` at the top to `foot` and glows in `glow` from below the
  * panel; the panel and the windows' frames are the same warm darks, and the open window carries `glow` under its task.
  */
 export const DESKTOP_COLOURS = { background: '#0F0D0B', foot: '#141110', glow: '#E0A458', panel: '#141110' } as const;
@@ -160,7 +160,7 @@ XTerm*internalBorder: 8`;
 
 /**
  * The first open starts the session; a later one finds it running. A window manager, a panel with a terminal and a
- * browser to launch, and the wallpaper, so a fresh desktop is a desktop and not a black screen (D80, D85). Its first
+ * browser to launch, and the wallpaper, so a fresh desktop is a desktop and not a black screen (D80, D88). Its first
  * argument is the mark the wallpaper centres, an SVG document, or empty for none.
  */
 export const DESKTOP_START = `cd /
