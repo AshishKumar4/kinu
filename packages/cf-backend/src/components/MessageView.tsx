@@ -385,13 +385,15 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
           {codePreview === null && input != null && (
             <div>
               <div className="p-eyebrow mb-1">Input</div>
-              <div className="max-h-40 overflow-auto"><CodeBlock className="language-json">{JSON.stringify(redactPayload(input), null, 2)}</CodeBlock></div>
+              <div className="max-h-40 overflow-auto"><CodeBlock wrap className="language-json">{JSON.stringify(redactPayload(input), null, 2)}</CodeBlock></div>
             </div>
           )}
           {output != null && (
             <div>
               <div className="p-eyebrow mb-1">Output</div>
-              <pre className="p-t-code p-text-2 max-h-40 overflow-auto whitespace-pre-wrap m-0">{displayToolValue(redactPayload(output))}</pre>
+              {displayToolValue(redactPayload(output)).trim() === ""
+                ? <p className="p-meta p-text-3">Nothing printed.</p>
+                : <pre className="p-t-code p-text-2 max-h-40 overflow-auto whitespace-pre-wrap break-words m-0">{displayToolValue(redactPayload(output))}</pre>}
             </div>
           )}
         </div>

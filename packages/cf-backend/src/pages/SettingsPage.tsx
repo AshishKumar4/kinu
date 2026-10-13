@@ -22,6 +22,7 @@ import { WorkspaceAutomations } from "@/components/WorkspaceAutomations";
 import { Card, Field, composing, inputCls } from "@/components/ui/form";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { FilledButton } from "@/components/ui/FilledButton";
+import { Segmented } from "@/components/ui/Segmented";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { WorkspaceLogo } from "@/components/Marks";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
@@ -103,6 +104,8 @@ function FieldState<T>({ field, what, onRetry, children }: {
 
   return <p className="text-xs p-text-3">Loading {what}…</p>;
 }
+
+const ADVISOR_SWITCH = [{ id: "off", label: "Off" }, { id: "on", label: "On" }] as const;
 
 function saveLabel(saving: boolean, saved: boolean): string {
   if (saving) return "Saving…";
@@ -276,15 +279,6 @@ export function WorkspaceSettings({ workspace: agentId, title, logo, state, clea
               </Link>
             </p>
           </div>
-          <FilledButton
-            onClick={save}
-            disabled={saving || !dirty}
-            title={dirty ? undefined : "No unsaved changes"}
-            className="px-3"
-          >
-            {saved ? <CheckIcon size={14} /> : <FloppyDiskIcon size={14} />}
-            <span>{saveLabel(saving, saved)}</span>
-          </FilledButton>
         </header>
 
         {err && <div className="p-notice-danger px-4 py-3 text-xs">{err}</div>}
@@ -315,30 +309,21 @@ export function WorkspaceSettings({ workspace: agentId, title, logo, state, clea
             {(value) => (
               <>
                 <div className="space-y-1.5">
-                  <label className="text-xs p-text-2 font-medium">Second opinion</label>
-                  <div className="grid grid-cols-2 gap-2">
-                    {([false, true] as const).map((on) => (
-                      <button
-                        key={on ? "on" : "off"}
-                        onClick={() => advisor.edit({ ...value, advisorEnabled: on })}
-                        className={`p-2 rounded-md text-xs ${value.advisorEnabled === on ? "p-accent-bg p-accent" : "p-card p-card-hover"}`}
-                      >{on ? "On" : "Off"}</button>
-                    ))}
+                  <label className="block text-xs p-text-2 font-medium">Second opinion</label>
+                  <div className="flex">
+                    <Segmented label="Second opinion" value={value.advisorEnabled ? "on" : "off"} segments={ADVISOR_SWITCH}
+                      onChange={(id) => advisor.edit({ ...value, advisorEnabled: id === "on" })} />
                   </div>
                   <p className="p-meta p-text-3">
                     Off by default. When on, a second model reads each turn and can add one note. That is one extra model call per turn.
                   </p>
                 </div>
                 <div className="space-y-1.5">
-                  <label className="text-xs p-text-2 font-medium">Minimum severity</label>
-                  <div className="grid grid-cols-3 gap-2">
-                    {ADVISOR_SEVERITIES.map((severity) => (
-                      <button
-                        key={severity}
-                        onClick={() => advisor.edit({ ...value, advisorMinSeverity: severity })}
-                        className={`p-2 rounded-md text-xs ${value.advisorMinSeverity === severity ? "p-accent-bg p-accent" : "p-card p-card-hover"}`}
-                      >{ADVISOR_SEVERITY_LABEL[severity]}</button>
-                    ))}
+                  <label className="block text-xs p-text-2 font-medium">Minimum severity</label>
+                  <div className="flex">
+                    <Segmented label="Minimum severity" value={value.advisorMinSeverity}
+                      segments={ADVISOR_SEVERITIES.map((severity) => ({ id: severity, label: ADVISOR_SEVERITY_LABEL[severity] }))}
+                      onChange={(severity) => advisor.edit({ ...value, advisorMinSeverity: severity })} />
                   </div>
                   <p className="p-meta p-text-3">
                     Notes at or above this severity show in the conversation. Lower ones go to the Changelog. The default is concern.
@@ -384,6 +369,16 @@ export function WorkspaceSettings({ workspace: agentId, title, logo, state, clea
           </div>
         </Card>
         </div>
+        {/* Where the edits are: the bar rises from the page's foot once there is something to save. */}
+        {(dirty || saving || saved) && (
+          <div className="sticky bottom-4 z-10 flex items-center justify-between gap-3 rounded-[14px] border p-border p-overlay py-2.5 pl-4 pr-2.5 p-shadow-menu animate-fade-in">
+            <span className="p-row-text p-text-2">{saved && !dirty ? "Changes saved." : "You have unsaved changes."}</span>
+            <FilledButton onClick={save} disabled={saving || !dirty} className="px-3">
+              {saved && !dirty ? <CheckIcon size={14} /> : <FloppyDiskIcon size={14} />}
+              <span>{saveLabel(saving, saved && !dirty)}</span>
+            </FilledButton>
+          </div>
+        )}
       </div>
     </div>
   );

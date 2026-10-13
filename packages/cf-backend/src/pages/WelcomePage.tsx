@@ -207,7 +207,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
 
                 {s.id === 'providers' && (
                   <div className="space-y-5">
-                    <ProvidersPanel returnTo={`${APP_ROUTES.welcome}?step=${s.id}`} />
+                    <ProvidersPanel framed={false} returnTo={`${APP_ROUTES.welcome}?step=${s.id}`} />
                   </div>
                 )}
 

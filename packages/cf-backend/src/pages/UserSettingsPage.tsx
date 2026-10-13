@@ -49,7 +49,7 @@ function ProfileNameEditor({ profile, onSaved }: {
         <div className="flex-1">
           <DisplayNameField value={name} onChange={setName} saving={saving} />
         </div>
-        <Button variant="secondary" size="sm" disabled={!changed || saving} onClick={() => detach(save())}>
+        <Button variant="secondary" size="sm" className="!h-[34px] px-3.5" disabled={!changed || saving} onClick={() => detach(save())}>
           {saving ? <Loader size="sm" /> : null} Save
         </Button>
       </div>

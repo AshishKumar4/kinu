@@ -13,7 +13,8 @@ import { inputCls } from "@/components/ui/form";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { SECRET_REGION } from "@/components/ui/SecretValue";
 import { BrandMark, type BrandName } from "@/components/ui/BrandMark";
-import { DOT_BY_TONE, PluginRow, PLUGIN_ACTION, PLUGIN_PILL } from "@/components/plugins/PluginRow";
+import { PluginRow, PLUGIN_ACTION, PLUGIN_PILL } from "@/components/plugins/PluginRow";
+import { StatusDot } from "@/components/ui/Status";
 import { mcpServerStatus } from "@/components/plugins/mcp-status";
 import { renderThrownChain, detach } from "@kinu.run/core/obs";
 
@@ -53,7 +54,7 @@ function PresetMenu({ preset, status, onRemove }: {
       <button type="button" data-plugin-menu aria-haspopup="menu" aria-expanded={open}
         aria-label={`${preset.title} options`} onClick={() => setOpen((value) => !value)}
         className={`${PLUGIN_PILL} transition-colors hover:bg-[var(--c-elevated)] hover:p-text`}>
-        <span className={`size-1.5 shrink-0 rounded-full ${DOT_BY_TONE[mcpServerStatus(status).tone]}`} />
+        <StatusDot tone={mcpServerStatus(status).tone} />
         {PRESET_WORDS[status]}
         <CaretDownIcon size={9} />
       </button>

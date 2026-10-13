@@ -917,6 +917,8 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-pill-raw > summary:hover { color: var(--c-text); }
 .p-pill-raw > summary > svg { transition: transform var(--dur-fast) ease-out; }
 .p-pill-raw[open] > summary > svg { transform: rotate(90deg); }
+.p-code-wrap pre, .p-code-wrap code { white-space: pre-wrap; overflow-wrap: anywhere; }
+
 .p-pill-detail {
   margin: 8px 0 0 24px;
   padding: 8px 10px;
