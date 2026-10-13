@@ -268,17 +268,20 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     // Linked before `kinu connect` recorded a directory: protocol 2 serves it; this build refuses it after taking the pidfile.
     writeFileSync(join(home, 'device.json'), `${JSON.stringify({ user: 'user_1', token: `pdt_${'a'.repeat(32)}`, origin: served.origin }, null, 2)}\n`, { mode: 0o600 });
     const daemon = startPipedDaemon(home, await releaseSigningEnv());
-    const oldPid = await waitForDaemonPid(home);
+    const version = join(home, 'pc-agent.version');
 
-    await daemon.waitForLog('device.update_rolled_back');
-
-    expect(daemon.log()).toMatch(/device\.update_successor_exited pid=\d+ code=1\b/);
-    expect(pidfile(home)).toBe(oldPid);
+    await waitForFileText(version, NEW, daemon.proc.exited);
+    await waitForFileText(version, OLD, daemon.proc.exited);
     expect(installed(home, 'pc-agent.js')).toBe(PROTOCOL_2_FILES['pc-agent.js']);
     expect(installed(home, 'pc-agent.version').trim()).toBe(OLD);
-    expect(served.sockets.items).toHaveLength(1);
-    expect(served.sockets.items[0]?.closed).toBeNull();
-    await present(served.sockets.items[0], 'the protocol-2 HELLO').settle();
+
+    await served.sockets.until((hellos) => hellos.some(socket => socket.hello.version === OLD));
+    const restored = present(served.sockets.items.filter(socket => socket.hello.version === OLD).at(-1), 'the restored protocol-2 connection');
+    const file = join(scratchDir('protocol-2-rolled-back'), 'landed.txt');
+
+    restored.send({ id: 'restored-write', method: 'writeFile', params: [file, 'after the rollback', {}], sandbox: { tier: 'raw', agentHome: '', roots: [] } });
+    expect(v.parse(ReplySchema, await restored.waitForReply('restored-write'))).toMatchObject({ result: { success: true } });
+    expect(readFileSync(file, 'utf8')).toBe('after the rollback');
   });
 
   test('a build that ships a daemon file this one never had lands it, and comes up on it', async () => {

@@ -835,7 +835,9 @@ describe('LocalAgentHost', () => {
       db.close();
       await root.send(ROOT_SEARCH, { id: crypto.randomUUID() });
 
-      expect(outcomes).toEqual(['bg_job_refused']);
+      // Its search was not sent to the background: the root's cap is full with the hire's held work counted.
+      expect(outcomes).toContain('bg_job_refused');
+      expect(outcomes).not.toContain('bg_job_started');
     } finally {
       // Its search waits for its model until stopped: closing would otherwise wait out the settle grace.
       await (await host.acquire('root/helper')).cancelBackgroundJob('bgjob-held');

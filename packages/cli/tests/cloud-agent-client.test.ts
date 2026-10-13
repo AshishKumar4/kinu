@@ -7,7 +7,6 @@ import {
   type JsonObject, type JsonValue, type ReasoningEffort,
 } from '@kinu.run/core';
 import { CloudAgentClient } from '../src/cloud-agent-client';
-import { renderAccountSpendLines } from '../src/display';
 import { watchDeviceConsents } from '../src/consent-watch';
 import type { AgentClientEvent } from '../src/agent-client';
 import * as v from 'valibot';
@@ -333,7 +332,7 @@ describe('CloudAgentClient protocol', () => {
       const spend = await client.workspaceSpend();
 
       expect([spend.total.calls, spend.total.usage]).toEqual([3, { input: 1200, output: 300 }]);
-      expect(renderAccountSpendLines(spend.accounts, Date.now())).toEqual(['No model call has been recorded yet.']);
+      expect(spend.accounts).toEqual([]);
     } finally {
       await client.close();
     }

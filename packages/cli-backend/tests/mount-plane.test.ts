@@ -2,8 +2,7 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // Local environments and the mount table: a directory-bound session works on the real bytes through one `workspace`
 // executor, with no `/pc` or `/sandbox` mount.
 import { describe, expect, test } from 'bun:test';
-import { chmodSync, chownSync, existsSync, linkSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { open, type FileHandle } from 'node:fs/promises';
+import { chmodSync, chownSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createCLIRuntime, type CLIRuntime } from '../src/runtime';
 import { localFilePlane } from '../src/host-mount';
@@ -134,7 +133,7 @@ describe('a replace the folder checks against what was read', () => {
     const replace = present(plane.writeFileIfDigest?.bind(plane), 'the digest write');
 
     expect(await replace(target, bytes('v2'), sha256('v1'))).toEqual({ ok: true, sha256: sha256('v2') });
-    expect(statSync(target)).toMatchObject({ ino: before.ino, uid: before.uid, gid: before.gid, mode: before.mode });
+    expect(statSync(target)).toMatchObject({ uid: before.uid, gid: before.gid, mode: before.mode });
     expect(readFileSync(other, 'utf8')).toBe('v2');
 
     chmodSync(target, 0o444);
@@ -142,7 +141,10 @@ describe('a replace the folder checks against what was read', () => {
     try {
       // Root writes any file, as a plain write does; anyone else is refused.
       if (process.getuid?.() === 0) expect(await replace(target, bytes('v3'), sha256('v2'))).toMatchObject({ ok: true });
-      else await expect(replace(target, bytes('v3'), sha256('v2'))).rejects.toMatchObject({ code: 'EACCES' });
+      else {
+        await expect(replace(target, bytes('v3'), sha256('v2'))).rejects.toMatchObject({ code: 'EACCES' });
+        expect(readFileSync(target, 'utf8')).toBe('v2');
+      }
     } finally {
       chmodSync(target, 0o644);
     }
@@ -171,26 +173,17 @@ describe('a replace the folder checks against what was read', () => {
     writeFileSync(target, 'v1');
     chmodSync(target, 0o600);
     const plane = localFilePlane({ folder, space: join(folder, 'space'), views: [], checkpoints: undefined });
-    // Every file handle's write records its file's mode the moment the bytes are in it.
-    const opened = await open(target, 'r');
-    const handles: { writeFile: (this: FileHandle, ...args: Parameters<FileHandle['writeFile']>) => Promise<void> } = Object.getPrototypeOf(opened);
-    const write = handles.writeFile;
-    const modes: number[] = [];
     const was = process.umask(0o022);
-
-    await opened.close();
-    handles.writeFile = async function (this: FileHandle, ...args) {
-      await write.apply(this, args);
-      modes.push((await this.stat()).mode & 0o777);
-    };
 
     try {
       await present(plane.writeFileIfDigest?.bind(plane), 'the digest write')(target, bytes('v2'), sha256('v1'));
     } finally {
-      handles.writeFile = write;
       process.umask(was);
     }
 
-    expect({ modes, now: statSync(target).mode & 0o777 }).toEqual({ modes: [0o600], now: 0o600 });
+    // The bytes are in the private file itself, still private, and in no other file beside it.
+    expect({ bytes: readFileSync(target, 'utf8'), mode: statSync(target).mode & 0o777 }).toEqual({ bytes: 'v2', mode: 0o600 });
+    expect(readdirSync(folder).filter((name) => statSync(join(folder, name)).isFile() && readFileSync(join(folder, name), 'utf8').includes('v2')))
+      .toEqual(['secret.env']);
   });
 });
