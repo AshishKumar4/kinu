@@ -41,6 +41,7 @@ import { deriveClosure, repoAt } from './ladder-closure';
 import { armadaVerdict, ciVerdictRow, readFileTimings, readHostedCosts, withRunnerCosts } from './ci-verdicts';
 import { COST_TABLE, type CostTable } from './gate-cost';
 import { costTableFaults } from './cost-table';
+import { PRODUCT_FLOW_ROWS } from './product-flow-rows';
 
 const root = resolve(import.meta.dir, '..');
 
@@ -769,7 +770,7 @@ describe('a deploy phase\'s armada report', () => {
     const complete = flows.find((entry) => entry.row.endsWith('--flow=welcome'));
     const hung = flows.find((entry) => entry.row.endsWith('--flow=hire-home'));
 
-    expect(flows.length).toBe(25);
+    expect(flows.length).toBe(PRODUCT_FLOW_ROWS.length);
     expect(new Set(flows.map((entry) => entry.name)).size).toBe(flows.length);
     expect(flows.every((entry) => entry.rows.length === 1 && entry.rows[0] === entry.row)).toBe(true);
 

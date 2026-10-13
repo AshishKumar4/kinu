@@ -409,7 +409,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
     detach(Effect.promise(async () => {
       try {
         await reportChatStreamFailure(failed, subordinate === undefined ? "root" : "actor", {
-          release: await pageDeployedBuildSha(),
+          release: pageDeployedBuildSha(),
           route: routeTemplateOf(location.pathname),
         });
       } catch (cause) {
@@ -418,14 +418,11 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
     }));
   }, [standingStreamError, subordinate]);
 
-  // Version skew: /api/health's build sha compared on each reconnect. The baseline is per page
-  // (`pageDeployedBuildSha`) because this hook remounts on every workspace navigation.
+  // Version skew: /api/health's build sha against the page's own (`pageDeployedBuildSha`), on each reconnect.
   const [newerDeployedBuild, setNewerDeployedBuild] = useState(false);
 
   const refreshDeployedBuild = useCallback(async () => {
-    const [baseline, live] = await Promise.all([pageDeployedBuildSha(), fetchDeployedBuildSha()]);
-
-    if (isNewerDeployedBuild(baseline, live)) setNewerDeployedBuild(true);
+    if (isNewerDeployedBuild(pageDeployedBuildSha(), await fetchDeployedBuildSha())) setNewerDeployedBuild(true);
   }, []);
 
   // A generation counter, because a ref cannot retrigger an effect. Bumped by backoff retry, every

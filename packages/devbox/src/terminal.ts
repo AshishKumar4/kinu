@@ -5,6 +5,24 @@ import { CONTAINER_TRUST_ENV } from './processes';
 
 const ENV = { ...CONTAINER_TRUST_ENV, TERM: 'xterm-256color' };
 
+/**
+ * tmux keeps the shell and its screen across reattaches (DEVBOX-DECISIONS, the PTY proof); none of its own chrome shows.
+ * No status line, no prefix key, and the page's terminal keeps its own screen, so what scrolls by lands in its scrollback.
+ * A server already running takes the settings at the next attach.
+ */
+const TMUX_CONF = [
+  'set -g status off',
+  'set -g prefix None',
+  'unbind C-b',
+  'set -g escape-time 0',
+  'set -g history-limit 50000',
+  "set -ga terminal-overrides ',xterm*:smcup@:rmcup@'",
+].join('\n');
+
+const ATTACH = `printf '%s\\n' "$1" > /etc/devbox-tmux.conf
+if tmux has-session -t devbox 2>/dev/null; then tmux source-file /etc/devbox-tmux.conf; fi
+exec tmux -f /etc/devbox-tmux.conf new-session -A -s devbox -c /workspace /bin/bash`;
+
 const Size = v.object({ cols: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(1000)), rows: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(1000)) });
 
 const Resize = v.object({ type: v.literal('resize'), ...Size.entries });
@@ -83,7 +101,7 @@ export function terminalSocket(container: Container, params: URLSearchParams): P
     const size = yield* attemptSync('invalid-input', () => v.parse(Size, { cols: Number(params.get('cols') ?? 80), rows: Number(params.get('rows') ?? 24) }));
     const abort = new AbortController();
 
-    const process = yield* attempt('process', () => container.exec(['tmux', 'new-session', '-A', '-s', 'devbox', '-c', '/workspace', '/bin/bash'], {
+    const process = yield* attempt('process', () => container.exec(['/bin/sh', '-c', ATTACH, 'devbox-terminal', TMUX_CONF], {
       pty: size, stdin: 'pipe', env: ENV, signal: abort.signal,
     }));
 

@@ -1072,6 +1072,33 @@ the owner, built 2026-10-11 on `lane/main-isolate`.
   agent's settled run tells the workspace (`run_settle`; main's rides
   `turnSettled`), which prunes that run's receipts; a delivered run's are
   pruned as the workspace takes its end, whichever generation it was.
+  Rejected 2026-10-13: making the workspace's receipt the call's record so
+  the isolate sends a call before its part is durable. On deployed objects
+  a tool step paid three flushes: the isolate's before the model call, the
+  isolate's again before the call crossed (its part, 43 ms), and the
+  workspace's before its answer (48.5 ms), against batch 66's one
+  (cmp-kinu-mst, 40 steps, flush probes 35 and 38.5 ms; a step 150 ms
+  against 64). Done safely, the receipt carries the call's whole native
+  part (provider metadata and signatures through the part codec, spilled
+  when large), its request and position, and model or nested origin; the
+  fence is checked again at the claim, so an older execution cannot claim
+  after a recovery's snapshot; and a recovery adopts the receipts it holds
+  no part of in one idempotent commit. That is a schema, protocol, fence and
+  recovery change on the crash path, with nine test families, for at most
+  one isolate flush per remote step: about 25 to 45 ms, a quarter to a third
+  of a zero-inference step and 1 to 4 percent of a real model's. Retried
+  only with new measurements that move that balance.
+  Measured and closed the same day: making a file call that only reads
+  (`read`, `list`, `stat`, `search`) safe to run again, so the isolate does
+  not wait for its part to be durable before the call crosses and the
+  workspace keeps no receipt of it. Interleaved on deployed objects, 4 rounds
+  of 5 S2 turns an arm: a read step's crossing to the workspace took 55-57 ms
+  against 56, its answer 56-58 ms against 57, the step 184-185 ms against
+  181. Both gates stayed. The stream consumer writes the call's part before
+  the call leaves, awaited or not, and the workspace still writes during a
+  read (activity and turn state). Taking either flush off a read reorders
+  the stream writer or moves activity off the path, the change rejected
+  above.
 - Stop means stop for every agent and on the CLI: one commit cancels the
   agent's owed deliveries and marks its fence `cancelled_at`, then its isolate
   hands unread words back to their composer, cancels its queued turns (their

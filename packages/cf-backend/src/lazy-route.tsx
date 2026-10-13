@@ -26,7 +26,7 @@ export function lazyRoute<Props extends object>(
     examined = true;
 
     return await loadRouteChunk(load, {
-      baseline: pageDeployedBuildSha,
+      baseline: pageDeployedBuildSha(),
       live: fetchDeployedBuildSha,
       session: sessionStorage,
       reload: () => { location.reload(); },

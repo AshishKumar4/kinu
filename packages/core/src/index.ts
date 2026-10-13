@@ -2350,10 +2350,11 @@ export {
 } from './utils/send-admission';
 
 export {
-  createSessionRecovery, fetchDeployedBuildSha, pageDeployedBuildSha,
-  primePageDeployedBuildSha, isNewerDeployedBuild,
+  createSessionRecovery, fetchDeployedBuildSha, isNewerDeployedBuild,
   type SessionRecoveryCallbacks, type SessionRecoveryOptions, type SessionRecovery,
 } from './utils/session-recovery';
+
+export { pageDeployedBuildSha } from './web/page-build';
 
 export { loadRouteChunk } from './utils/chunk-recovery';
 

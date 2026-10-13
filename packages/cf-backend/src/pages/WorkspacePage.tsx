@@ -10,7 +10,7 @@ import {
 } from "@phosphor-icons/react";
 import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
-  isPlaceholderMission, ownerAsks, planSurface,
+  desktopClientUrl, executorLabel, isPlaceholderMission, ownerAsks, planSurface,
 } from "@kinu.run/core";
 import type { OwedOwnerIntent, PlanReview, Rpc, SignalCard } from "@kinu.run/core";
 import type { UIMessage } from "ai";
@@ -42,6 +42,7 @@ import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { hasComparableTakes } from "@kinu.run/core";
 import { classifyProgrammaticTurn, liveTailRow, messageSignalId, messagesUpTo, threadLiveTail, turnRows } from "@kinu.run/core";
 import { WorkSurface } from "@/components/surfaces/WorkSurface";
+import { DesktopScreen } from "@/components/surfaces/DesktopScreen";
 import { SlateInlineContext } from "@/components/slates/context";
 import { ChatSlates } from "@/components/slates/InlineSlate";
 import { SLATE_PREFIX, agentTitle, nestedAgent, type AgentLinkIds, type ForkNode, type PanelAgent } from "@kinu.run/core";
@@ -756,6 +757,14 @@ function WorkspaceView({ view, workspace, title, state, agents, open, clearMain 
   if (view === "settings") return <WorkspaceSettings workspace={workspace} title={title} logo={logo} state={state} clearMain={clearMain} />;
 
   if (view === "new") return <NewChatView workspace={workspace} title={title} createChat={state.createSubordinate} />;
+
+  if (view === "desktop") {
+    return (
+      <div className="flex min-h-0 flex-1 p-3">
+        <DesktopScreen src={desktopClientUrl(location, workspace)} title={`${executorLabel("computer")}'s desktop`} />
+      </div>
+    );
+  }
 
   return <WorkspaceOverview workspace={workspace} title={title} logo={logo} rpc={state.rpc} readMoves={state.readMoves}
     lineage={state.agentStatus?.forkLineage ?? null} agents={agents} open={open} />;

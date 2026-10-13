@@ -35,6 +35,7 @@ import { renderThrownChain, detach } from '@kinu.run/core/obs';
 
 import { withGallery, type Gallery } from '../../scripts/gallery-harness';
 import { CLIENT_ERROR_ENDPOINT, CLIENT_ERROR_MAX_REQUEST_BYTES } from '@kinu.run/core';
+import { PAGE_BUILD_META } from '../../packages/core/src/web/page-build';
 
 const HEALTH = '/api/health';
 
@@ -96,10 +97,11 @@ interface Observed {
 }
 
 /**
- * Serve the two endpoints and record what the page sends.
+ * Serve the page as the release does, its head naming the build it loaded as, and the two endpoints, and record what
+ * the page sends.
  *
- * `stamp` is a mutable box: the gate flips the sha after load, which is the whole
- * mechanism of the release-binding claim.
+ * `stamp` is a mutable box: the gate flips the origin's sha after load, which is the whole mechanism of the
+ * release-binding claim.
  */
 /**
  * Whether the PAGE's own report fetch has settled.
@@ -161,7 +163,20 @@ async function serve(
 ): Promise<void> {
   await page.setRequestInterception(true);
   page.on('request', (request: HTTPRequest) => detach(Effect.promise(async () => {
-    const path = new URL(request.url()).pathname;
+    const url = new URL(request.url());
+    const path = url.pathname;
+
+    if (path === '/gallery.html' && request.isNavigationRequest()) {
+      const html = await (await fetch(url)).text();
+
+      await request.respond({
+        status: 200,
+        contentType: 'text/html',
+        body: html.replace('<head>', `<head><meta name="${PAGE_BUILD_META}" content="${LOADED_SHA}">`),
+      });
+
+      return;
+    }
 
     if (path === HEALTH) {
       await request.respond({

@@ -31,6 +31,18 @@ const IdSchema = v.pipe(v.string(), v.regex(/^[a-zA-Z0-9_-]+$/));
 
 const RecordSchema = v.object({ id: IdSchema, command: v.string(), cwd: v.string() });
 
+/** `$1` as the kernel's, `/etc/hostname`'s and `/etc/hosts`' name for the box, which held a container id and a UUID. */
+const NAME_BOX = `hostname "$1" && printf '%s\\n' "$1" > /etc/hostname && { grep -qw "$1" /etc/hosts || printf '127.0.1.1 %s\\n' "$1" >> /etc/hosts; }`;
+
+/** Names the box for this boot (D83): its prompt, its desktop and its processes answer to `name`. */
+export function nameBox(container: Container, name: string): Promise<void> {
+  return settle(Effect.gen(function* () {
+    const named = yield* attempt('process', async () => await (await container.exec(['sh', '-c', NAME_BOX, 'name-box', name])).output());
+
+    if (named.exitCode !== 0) return yield* Effect.fail(new DevboxError('process', `naming the box ${name}: ${new TextDecoder().decode(named.stderr).trim()}`));
+  }));
+}
+
 export interface ProcessRecord {
   readonly id: string;
   readonly command: string;
