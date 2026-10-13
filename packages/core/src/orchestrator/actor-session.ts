@@ -178,6 +178,22 @@ interface TurnTally {
   readonly pending: Array<Extract<ChatEvent, { type: 'tool-call' }>>;
 }
 
+/** A step that ended the turn: the model answered and called no tool, so the loop asks it nothing more. */
+function endsTurn(record: StepRecord): boolean {
+  const step = record.step;
+
+  return step !== undefined && (step.toolCalls?.length ?? 0) === 0 && TURN_ENDING_REASONS.has(step.finishReason ?? '');
+}
+
+const TURN_ENDING_REASONS: ReadonlySet<string> = new Set(['stop', 'length', 'content-filter']);
+
+/** Whether the execution this one supersedes, of the same turn and run, recorded the step that ended the turn. */
+function answeredBefore(reserved: PreparingClaim, lease: ActorTurnLease): boolean {
+  const { previous } = reserved;
+
+  return previous !== null && previous.answered && previous.runId === lease.runId;
+}
+
 function newTurnTally(resumedSteps: number): TurnTally {
   return {
     text: '', answer: null, steps: resumedSteps, completed: false, failure: null, admittedMessages: [], pending: [],
@@ -391,6 +407,17 @@ export class ActorSession {
     await this.restorations(async () => undefined);
 
     const assertOwner = this.preparingTurnFence(lease, 'delegated input requires a preparing turn');
+    const active = this.requireTurn(lease);
+
+    // Answered by an execution of this run before: its branch already holds the input and the answer, which this one
+    // only closes over ({@link answeredBefore}); seeded again, it would lose the answer it closes.
+    if (active.reserved !== null && answeredBefore(active.reserved, lease)) {
+      const answered = await this.canonical.materialize();
+      active.context = answered;
+      this.messages.splice(0, this.messages.length, ...answered.messages);
+
+      return;
+    }
 
     const selected = this.canonical.context.selected() ?? this.canonical.context.initialize();
 
@@ -591,7 +618,8 @@ export class ActorSession {
     const claim = this.options.claims.read(turnId);
     const cut = this.options.claims.cutOf(turnId);
 
-    if (claim?.outcome !== null || cut === null || cut.epoch !== claim.epoch) return null;
+    // An answered execution's continuation asks nothing: it only closes the turn ({@link answeredBefore}).
+    if (claim?.outcome !== null || claim.answered || cut === null || cut.epoch !== claim.epoch) return null;
     const { work, provider } = cutsThrough(cut);
 
     if (cut.phase === 'work') return cut.phaseAt + recoveryBackoffMs(work);
@@ -770,6 +798,14 @@ export class ActorSession {
       }) ?? null;
       tally.admittedMessages = prepared.messages;
 
+      // An execution before this one of the same run recorded the step that ended the turn: its answer is durable, and
+      // all that was left of it is its close, which this one makes over that record without asking the model again.
+      if (answeredBefore(reserved, lease)) {
+        tally.completed = true;
+
+        return await this.turnResult(lease, active, tally, program);
+      }
+
       if (profile.tier.replaced !== null) {
         await emit({ type: 'model-fallback', from: profile.tier.replaced, to: profile.tier.model, reason: 'its provider no longer lists it' });
       }
@@ -926,7 +962,7 @@ export class ActorSession {
         waitsOn: (call) => this.questions.waitsOn(call),
         measureContext: true, ...(active.trace !== null && { trace: active.trace }),
         persistStreamPart: part => stream.nativePart(part),
-        persistStep: (record) => stream.nativeStep(record, (parts) => this.recordStep(record, parts)),
+        persistStep: (record) => stream.nativeStep(record, (parts) => this.recordStep(record, parts, claim)),
         stepPhase: (phase) => { if (phase === 'work') this.options.claims.working(claim); else this.options.claims.progressed(claim); },
         dynamicContext: {
           ledger: this.dynamic,
@@ -1107,8 +1143,14 @@ export class ActorSession {
     return (index < 0 ? undefined : pending.splice(index, 1)[0])?.args ?? {};
   }
 
-  private recordStep(record: StepRecord, parts: readonly MessagePartReference[]): () => void {
-    const write = () => this.orchestrator.acc.writeNative(record, parts);
+  /** In the step's own commit; a step that ended the turn marks its claim answered there ({@link endsTurn}). */
+  private recordStep(record: StepRecord, parts: readonly MessagePartReference[], claim: ActorTurnClaim): () => void {
+    const write = () => {
+      if (endsTurn(record)) this.options.claims.answered(claim);
+
+      return this.orchestrator.acc.writeNative(record, parts);
+    };
+
     const collected = this.options.recording?.collect(write);
 
     if (collected === undefined) return write();

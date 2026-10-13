@@ -12,7 +12,7 @@ import {
 } from './helpers/actor-harness';
 import {
   delayNextModelReport, delayNextOpenWork, delayNextRunEnd, delayNextRunReview, delayNextTurnReport, failNextAnswerWrite, failNextOpening,
-  loseNextParentReport,
+  holdNextObserve, holdNextResume, loseNextParentReport,
 } from './helpers/agent-facets';
 import { socketConnection } from './helpers/bindings';
 import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
@@ -328,4 +328,38 @@ test("a hire whose assigned turn fails as it opens tells its hirer once, though 
   await workspace.agent.harnessAgentsIdle();
 
   expect(told()).toHaveLength(1);
+});
+
+test("main's isolate dying as its workspace finishes reading the answer's stream does not ask the model again", async () => {
+  const { workspace, asked } = answering();
+  // The workspace reads main's answer stream whole and never says so: main's isolate dies waiting.
+  const reading = holdNextObserve((key) => key === mainKey(workspace));
+  const id = crypto.randomUUID();
+
+  // The owner's request is answered as the turn's stream ends, which the held read never lets it.
+  const sending = Promise.resolve(workspace.agent.onMessage(owner, chatRequest(id, id, 'submit-message')));
+  const first = await Promise.race([reading.then((key) => ({ held: key })), sending.then(() => ({ held: null }))]);
+
+  expect(first.held).not.toBeNull();
+  workspace.agent.harnessResetAgentIsolate(first.held ?? '');
+  // Recovered, the turn is closed over its recorded answer; a restart after finds nothing of it owed.
+  await workspace.agent.recoverStrandedTurn();
+  await driveUntil(workspace, 'the recovered turn never closed', () => owedWords(workspace) === 0);
+  await restartMain(workspace);
+
+  expect({ asked: asked(), answers: (await storedChat(workspace)).filter((message) => message.role === 'assistant').length, owed: owedWords(workspace) })
+    .toEqual({ asked: 1, answers: 1, owed: 0 });
+});
+
+test("a node whose isolate dies as it asks whether its run goes on, after its last answer, is not asked again", async () => {
+  const { workspace, nodeCalls } = searching();
+  const asking = holdNextResume();
+  const id = crypto.randomUUID();
+
+  await workspace.agent.onMessage(owner, chatRequest(id, id, 'submit-message', SEARCH));
+  workspace.agent.harnessResetAgentIsolate(await asking);
+  setSystemTime(new Date(Date.now() + RECOVERY_BACKOFF_CEILING_MS + 1));
+  await driveUntil(workspace, 'the search never settled', () => searchSettled(workspace));
+
+  expect(nodeCalls()).toBe(1);
 });

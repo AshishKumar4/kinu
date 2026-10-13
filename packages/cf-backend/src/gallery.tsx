@@ -2804,7 +2804,7 @@ async function galleryRecoverTurn(): Promise<JsonValue> {
 }
 
 const OWED_CLAIM = {
-  actorId: "root", runId: "run-1", workMode: "build", status: "admitted", outcome: null, claimedAt: NOW - 60e3, withdrawnThrough: 0,
+  actorId: "root", runId: "run-1", workMode: "build", status: "admitted", outcome: null, claimedAt: NOW - 60e3, withdrawnThrough: 0, answered: false,
   program: { kind: "builtin", version: 1, digest: null, build: null },
 } as const;
 

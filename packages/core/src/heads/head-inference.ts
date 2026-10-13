@@ -667,8 +667,11 @@ async function inferPrepared(
   let overflowRetry = false;
 
   try {
-    // Restored while no round is active, so it replaces the history rather than staging a proposal.
-    await session.restoreHistory(seed);
+    // Restored while no round is active, so it replaces the history rather than staging a proposal. A run an execution
+    // before this one answered keeps its branch, which holds the answer this one closes over without asking again.
+    const answered = reserved.previous?.answered === true && reserved.previous.runId === reserved.runId;
+
+    if (!answered) await session.restoreHistory(seed);
 
     await driveExecution<HeadRound>(session, {
       runId: deps.runId, turnId: input.id, mode: input.mode, isAborted: deps.isAborted, reserved,
