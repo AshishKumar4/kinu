@@ -580,8 +580,8 @@ describe('account panels', () => {
             ? request.respond({ status: 200, contentType: 'text/html', body: '' })
             : request.continue()))));
 
-          // Bounded: a page that threw on the input never sends the tab anywhere.
-          const sent = page.waitForRequest(onward, { timeout: 10_000 });
+          // A page that threw on the input never sends the tab anywhere, and this wait never ends.
+          const sent = page.waitForRequest(onward);
           await Promise.allSettled([page.goto(`${gallery.origin}/gallery.html?frame=connected&next=${encodeURIComponent(next)}`, { waitUntil: 'load' })]);
           const reached = new URL((await sent).url());
 

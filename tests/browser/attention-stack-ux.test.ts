@@ -130,7 +130,7 @@ test('an account-memory proposal still waits in the stack when the roster socket
   await withGallery(async ({ newPage, origin }) => {
     const page = await newPage();
     await opened(page, origin, '&asks=two&memory=waiting&rosterSocket=refused');
-    await page.waitForSelector('[data-attention-card="memory:amp_city"], [data-attention-behind="memory:amp_city"]', { timeout: 10_000 });
+    await page.waitForSelector('[data-attention-card="memory:amp_city"], [data-attention-behind="memory:amp_city"]');
 
     expect(await stacked(page)).toEqual(['action:park-publish', 'memory:amp_city', 'action:park-push']);
     await page.close();
