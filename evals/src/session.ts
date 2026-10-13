@@ -38,10 +38,10 @@
  *               rather than a silent hang.
  *   steer       the socket RPC `send` (actor-agent.ts), which is
  *               exactly what the composer calls mid-turn (hooks/use-chat-owner.ts
- *               `sendChat`): the call admits the words under an id minted
- *               here, and the DO's `steer_status` broadcast for that id says
- *               where they landed — `landed` (the running turn read them) or
- *               `turn` (they ran as a turn of their own) — once that is decided.
+ *               `sendChat`), then `awaitSend` for the id minted here, as the
+ *               composer's `sendLanding` asks it: the workspace's record says
+ *               where the words landed, `mid-turn` (the running turn read them)
+ *               or `turn` (they ran as a turn of their own).
  *   history     `GET /agents/<slug>/<name>/get-messages`, the SDK's transport
  *               endpoint the pane is seeded from (agent-routing.ts:24-40).
  *   events      `GET /api/workspaces/<name>/runs` then
@@ -786,11 +786,6 @@ export class KinuPublicSession {
    *  A follower per waiter was nineteen SSE streams on one run of a trial on 2026-09-24, and the object died under
    *  their reads. */
   private readonly runEnds = new Map<string, Promise<void>>();
-  /** Steers awaiting their landing, by the id each was admitted under. */
-  private readonly steerLandings = new Map<string, {
-    resolve: (landing: 'mid-turn' | 'turn') => void;
-    reject: (error: Error) => void;
-  }>();
   private readonly rpcs = new Map<string, {
     readonly resolve: (result: JsonValue) => void;
     readonly reject: (error: Error) => void;
@@ -1074,28 +1069,25 @@ export class KinuPublicSession {
   /**
    * Steer the running turn, the way the composer does.
    *
-   * The call admits the words under an id minted here; the answer is the DO's
-   * own statement about what then happened to them, its `steer_status` for
-   * that id: `'mid-turn'` means the running turn read them at a step, `'turn'`
-   * means that turn ended first and they ran as the next ordinary turn. Both
-   * are landings, decided by the turn and heard when decided, and a caller
-   * that treated `'turn'` as a failure would be failing on a race the product
-   * resolves correctly. The waiter is registered before the call, so a
-   * broadcast cannot precede it.
+   * The call admits the words under an id minted here, and the answer is the
+   * workspace's record of where they landed, read as the composer's
+   * `sendLanding` reads it (`awaitSend`, asked again on each redial):
+   * `'mid-turn'` means the running turn read them at a step, `'turn'` means that
+   * turn ended first and they ran as the next ordinary turn. Both are landings,
+   * and a caller that treated `'turn'` as a failure would be failing on a race
+   * the product resolves correctly. No broadcast is awaited: a correction that
+   * opens its own turn is told no `steer_status`, and its record is durable.
    */
   async steer(text: string): Promise<'mid-turn' | 'turn'> {
     const steerId = this.mintId('steer');
-    const landing = new Promise<'mid-turn' | 'turn'>((resolve, reject) => { this.steerLandings.set(steerId, { resolve, reject }); });
 
     return this.boundary(`send on ${this.input.origin}/${this.workspace}`, async () => {
-      try {
-        await this.rpc('send', [text, steerId, [], 'build']);
-      } catch (cause) {
-        this.steerLandings.delete(steerId);
-        throw cause;
-      }
+      await this.rpc('send', [text, steerId, [], 'build']);
+      const state = await this.endOf(steerId);
 
-      return landing;
+      if (state.status !== 'settled') throw new DeploymentAnswer('no turn read the steer: it was handed back or refused');
+
+      return state.landed;
     });
   }
 
@@ -1898,18 +1890,6 @@ export class KinuPublicSession {
 
       if (frame.error === null) pending.resolve(frame.result);
       else pending.reject(new DeploymentAnswer(frame.error));
-
-      return;
-    }
-
-    if (frame.kind === 'steer') {
-      const pending = this.steerLandings.get(frame.steerId);
-
-      if (!pending || frame.status === 'queued') return;
-      this.steerLandings.delete(frame.steerId);
-
-      if (frame.status === 'returned') pending.reject(new DeploymentAnswer('the turn was stopped before it read the steer'));
-      else pending.resolve(frame.status === 'landed' ? 'mid-turn' : 'turn');
 
       return;
     }

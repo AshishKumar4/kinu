@@ -51,13 +51,11 @@ export async function servePreviewRequest(request: Request, env: SandboxPreviewE
 
   const devbox = env.KinuDevbox;
 
+  // The box reads the port and token from the host, so the visitor's path reaches the port as it is (D60).
   return settle(Effect.catchCause(Effect.promise(async () => {
-    const forwarded = new URL(request.url);
-    forwarded.pathname = `/_devbox/preview/${label.port}/${encodeURIComponent(label.token)}${forwarded.pathname}`;
-
-    const response = await devbox.getByName(label.sandboxId).fetch(new Request(forwarded, new Request(request, {
+    const response = await devbox.getByName(label.sandboxId).fetch(new Request(request, {
       headers: sanitizePreviewRequestHeaders(request.headers),
-    })));
+    }));
 
     return containPreviewResponse(response);
   }), (failed) => Effect.as(recording({ doing: 'reaching the restored container preview', otherwise: 'unavailable' }, (failure) => {

@@ -2654,6 +2654,29 @@ test('file navigation does not pair a new breadcrumb with the old directory', as
   });
 });
 
+// A bare mount lands on the directory its listing answered for. That listing is the landed directory's: adopting its
+// path lists nothing again (staging, 2026-10-13: a /sandbox click listed /sandbox, then /sandbox/workspace).
+test('a click on a bare mount lists once, though it lands below it', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await page.goto(`${origin}/gallery.html?frame=files`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('[data-files-entry][title="pc"]');
+    await page.click('[data-files-entry][title="pc"]');
+    await page.waitForSelector(`[data-files-entry][title="Ashish's MacBook"]`);
+    const before = await page.evaluate(() => window.__kinuListings?.length ?? 0);
+
+    // The machine's own directory is a mount that lands on its consented directory.
+    await page.click(`[data-files-entry][title="Ashish's MacBook"]`);
+    // The landed directory's tiles draw only once the load its adopted path keyed has answered, so a second listing
+    // would already be asked by then.
+    await page.waitForSelector('[data-files-entry][title="quarterly-report.txt"]');
+
+    const asked = await page.evaluate((from) => window.__kinuListings?.slice(from) ?? [], before);
+
+    expect(asked).toHaveLength(1);
+  });
+});
+
 test('code retains syntax colors through streaming and long sidebar titles stay clipped', async () => {
   await withGallery(async ({ newPage, origin }) => {
     const page = await newPage();
@@ -4096,6 +4119,8 @@ declare global {
     __creates: number;
     /** Every `input` frame the pane sent the gallery's workspace shell (`gallery-terminal.ts`). */
     __kinuTerminalInput?: string[];
+    /** Every directory the Files frame was asked to list, in order. */
+    __kinuListings?: string[];
     /** Listener counts by target and type, kept by the patched `EventTarget`. */
     __liveListeners?: Map<string, number>;
   }

@@ -18,7 +18,7 @@ import type { DiskChain, DiskChainPorts } from '../../devbox/src/disk-chain';
 import type { StoredValue } from '../../devbox/src/storage';
 import { ChainTestBox, chainBox } from '../../devbox/tests/support/chain-box';
 import type { FakeSandbox, StartFault } from '../../devbox/tests/support/devbox-harness';
-import { SandboxFailure } from '../../devbox/tests/support/devbox-harness';
+import { HARNESS_GOLDEN, SandboxFailure } from '../../devbox/tests/support/devbox-harness';
 import { processResult } from '../../devbox/tests/support/native-process';
 
 type Workspace = ActorHarness<HarnessOrchestratorAgent>;
@@ -99,9 +99,9 @@ async function restedWithService() {
 
   const sdk: KinuDevbox = Object.create({
     resolveReadiness: () => box.resolveReadiness(),
-    execUntimed: (...args: Parameters<RepairBox['execUntimed']>) => box.execUntimed(...args),
-    execUntimedStream: (...args: Parameters<RepairBox['execUntimedStream']>) => box.execUntimedStream(...args),
-    killUntimed: (...args: Parameters<RepairBox['killUntimed']>) => box.killUntimed(...args),
+    exec: (...args: Parameters<RepairBox['exec']>) => box.exec(...args),
+    execStream: (...args: Parameters<RepairBox['execStream']>) => box.execStream(...args),
+    killExec: (...args: Parameters<RepairBox['killExec']>) => box.killExec(...args),
     readFile: (...args: Parameters<RepairBox['readFile']>) => box.readFile(...args),
     writeFile: (...args: Parameters<RepairBox['writeFile']>) => box.writeFile(...args),
   });
@@ -134,7 +134,8 @@ describe('a service that does not come back on a wake', () => {
     test(`${wake}: the agent's command runs only once the gate settled, its files are exact, and one inbox notice names the service`, async () => {
       const { box, container, rows, agent } = await restedWithService();
 
-      if (wake === 'with its snapshot lost') container.snapshots.clear();
+      // Its own snapshot lost, not the golden it falls back to.
+      if (wake === 'with its snapshot lost') for (const id of container.snapshots.keys()) if (id !== HARNESS_GOLDEN) container.snapshots.delete(id);
       container.startFaults.push(refused('PROCESS_ERROR'));
       const commands = watchCommands(container, rows);
 

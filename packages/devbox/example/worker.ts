@@ -5,38 +5,29 @@
  * `scripts/bench-devbox-standalone.ts` deploys it and runs its acceptance.
  */
 import * as v from 'valibot';
-import { Devbox, GOLDEN_NAME, type BoxPeers, type DevboxStore } from "../src/index";
+import { Devbox, previewBox } from "../src/index";
 
-export { DevboxOutbound, DevboxStoreGateway } from "../src/index";
+export { DevboxGateway } from "../src/index";
 
 interface Env {
   readonly Box: DurableObjectNamespace<ExampleBox>;
-  readonly WORKSPACES: R2Bucket;
   /** Supplied per deploy with `--var`; while it is absent every request is refused. */
   readonly EXAMPLE_TOKEN?: string;
-  readonly DEVBOX_REGISTRY_TOKEN?: string;
+  /** The zone a wildcard route serves previews under; absent, ports are not published. */
+  readonly DEVBOX_PREVIEW_HOST?: string;
 }
 
-export class ExampleBox extends Devbox<Env> {
-  protected override get namespaceBinding(): string { return "Box"; }
-  protected override get registryToken(): string | undefined { return this.env.DEVBOX_REGISTRY_TOKEN; }
-  protected override get registryAccount(): string { return 'f44999d1ddda7012e9a87729eba250f1'; }
-  protected override get peers(): BoxPeers {
-    return { golden: () => this.env.Box.getByName(GOLDEN_NAME), box: id => this.env.Box.get(this.env.Box.idFromString(id)) };
-  }
-  protected override get store(): DevboxStore {
-    return { binding: "WORKSPACES", bucket: this.env.WORKSPACES };
-  }
-}
+export class ExampleBox extends Devbox<Env> {}
 
 
 const BodySchema = v.object({
   command: v.optional(v.string()),
   path: v.optional(v.string()),
   content: v.optional(v.string()),
+  port: v.optional(v.number()),
 });
 
-function required(value: string | undefined, name: string): string {
+function required<T>(value: T | undefined, name: string): T {
   if (value === undefined) throw new Error(`${name} is required`);
 
   return value;
@@ -44,6 +35,11 @@ function required(value: string | undefined, name: string): string {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    // A preview is public to whoever holds its URL; the box checks the port's token.
+    const preview = previewBox(request, env.Box);
+
+    if (preview !== null) return await preview.fetch(request);
+
     if (env.EXAMPLE_TOKEN === undefined || request.headers.get('authorization') !== `Bearer ${env.EXAMPLE_TOKEN}`) {
       return new Response('unauthorized', { status: 401 });
     }
@@ -51,7 +47,7 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === '/health') return Response.json({ ok: true });
-    const box = env.Box.get(env.Box.idFromName(url.searchParams.get('box') ?? 'example'));
+    const box = env.Box.getByName(url.searchParams.get('box') ?? 'example');
     const body = request.method === 'POST' ? v.parse(BodySchema, await request.json()) : {};
 
     switch (`${request.method} ${url.pathname}`) {
@@ -73,6 +69,8 @@ export default {
         return Response.json(await box.startSupervised(required(body.command, 'command')));
       case 'GET /supervised':
         return Response.json(await box.listSupervised());
+      case 'POST /expose':
+        return Response.json(await box.exposePort(required(body.port, 'port')));
       case 'POST /stop':
         return Response.json(await box.quiesce());
       case 'POST /delete':

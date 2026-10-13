@@ -1,15 +1,13 @@
 // Drives the shipped `Devbox` class with an in-memory R2 binding and a model of its chain:
 // what the box asks of the chain is the subject here; the deploy tier runs the real one.
-import { createHash } from 'node:crypto';
 import { Effect } from 'effect';
 import * as v from 'valibot';
 
 import { DiskChainStateSchema, type DiskChain, type DiskChainPorts } from '../../src/disk-chain';
 import { attempt } from '../../src/errors';
 import { TestDevbox } from './test-devbox';
-import type { DevboxStore, StoredValue } from '../../src/storage';
-import { harness } from './devbox-harness';
-import type { FakeSandbox } from './devbox-harness';
+import type { StoredValue } from '../../src/storage';
+import { harness, type FakeSandbox, type TestEnv, type TestSiblings } from './devbox-harness';
 
 /** The disk chain record's revision, or null before the first commit. */
 export function chainHead(rows: Map<string, StoredValue>): number | null {
@@ -48,58 +46,12 @@ function modelChain(ports: DiskChainPorts): DiskChain {
   };
 }
 
-/** In-memory bucket over the objects the container's store mount writes; `head` and `delete`
- *  answer as the R2 binding does, so the shipped `layerIntegrityFailure` runs unchanged. */
-function memoryBucket(objects: Map<string, Uint8Array>): R2Bucket {
-  // SAFETY: constructed against the R2Bucket contract. The box reaches the
-  // four members below and nothing else — `mountBucket` is what exposes the
-  // prefix to the container, and the archive travels through that mount — so
-  // the rest of the surface is unreachable from this fixture's box.
-  return Object.create({
-    head: async (key: string) => {
-      const bytes = objects.get(key);
-
-      if (bytes === undefined) return null;
-
-      return {
-        key,
-        size: bytes.byteLength,
-        version: createHash('sha256').update(bytes).digest('hex'),
-        checksums: { sha256: await crypto.subtle.digest('SHA-256', bytes.slice()) },
-      };
-    },
-    get: async (key: string) => {
-      const bytes = objects.get(key);
-
-      return bytes === undefined ? null : { key, size: bytes.byteLength, body: new Response(bytes.slice()).body };
-    },
-    // R2 refuses a delete of no keys or of more than 1,000 (10027), and lists 1,000 at a time.
-    delete: async (keys: string | string[]) => {
-      const named = Array.isArray(keys) ? keys : [keys];
-
-      if (named.length === 0 || named.length > 1000) throw new Error('delete: The number of keys in the request must be between 1 and 1000 inclusive. (10027)');
-
-      for (const key of named) objects.delete(key);
-    },
-    // A cursor names the last key listed, so a page deleted in between does not shift the next one.
-    list: async (options?: R2ListOptions) => {
-      const after = options?.cursor ?? '';
-      const matching = [...objects.keys()].filter((key) => key.startsWith(options?.prefix ?? '') && key > after).sort();
-      const page = matching.slice(0, 1000);
-      const truncated = page.length < matching.length;
-
-      const listed = page.map((key) => ({ key }));
-
-      return truncated ? { objects: listed, truncated, cursor: page.at(-1) } : { objects: listed, truncated };
-    },
-  });
-}
-
 export interface ChainBox {
   readonly box: ChainTestBox;
   readonly container: FakeSandbox;
   readonly rows: Map<string, StoredValue>;
   readonly objects: Map<string, Uint8Array>;
+  readonly env: TestEnv;
   /** The platform evicts the object while its container runs on: a new instance over the same
    *  storage, container and bucket, holding nothing in memory. */
   readonly evict: () => ChainTestBox;
@@ -107,19 +59,7 @@ export interface ChainBox {
 
 /** The shipped policy with a test-length probe: nothing here is about budgets,
  *  and ambient checkpoints are off so a test's own commits are the only ones. */
-export class ChainTestBox extends TestDevbox<Record<string, never>> {
-  #store: DevboxStore | undefined;
-
-  /** Wired after construction, because the harness creates the container the
-   *  bucket's objects are shared with while constructing the box. */
-  useStore(store: DevboxStore): void {
-    this.#store = store;
-  }
-
-  protected override get store(): DevboxStore | undefined {
-    return this.#store;
-  }
-
+export class ChainTestBox extends TestDevbox<TestEnv> {
   protected override get ambientCheckpoints(): boolean {
     return false;
   }
@@ -129,19 +69,15 @@ export class ChainTestBox extends TestDevbox<Record<string, never>> {
   }
 }
 
-export function chainBox(Box: typeof ChainTestBox = ChainTestBox): ChainBox {
-  const { box, container, rows, state } = harness(Box);
-  const objects = new Map<string, Uint8Array>();
-  const store = { binding: 'BACKUP_BUCKET', bucket: memoryBucket(objects) };
-  box.useStore(store);
+export function chainBox(Box: typeof ChainTestBox = ChainTestBox, siblings?: TestSiblings): ChainBox {
+  const { box, container, rows, objects, env, state } = harness(Box, undefined, undefined, siblings);
 
   const evict = (): ChainTestBox => {
-    const successor = new Box(state, {});
-    successor.useStore(store);
+    const successor = new Box(state, env);
     container.owner = successor;
 
     return successor;
   };
 
-  return { box, container, rows, objects, evict };
+  return { box, container, rows, objects, env, evict };
 }

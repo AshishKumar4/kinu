@@ -83,8 +83,8 @@ function captureFetch(response: () => Response): FetchCapture {
 function execOnlyBox(): KinuDevbox {
   return Object.create({
     resolveReadiness: async () => ({ kind: 'restored' as const }),
-    execUntimed: async () => ({ stdout: 'done', stderr: '', exitCode: 0 }),
-    releaseUntimed: async () => {},
+    exec: async () => ({ stdout: 'done', stderr: '', exitCode: 0 }),
+    releaseExec: async () => {},
   });
 }
 

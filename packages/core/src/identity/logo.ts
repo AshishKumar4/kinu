@@ -178,7 +178,7 @@ export function sanitizeWorkspaceLogoSvg(written: string): string | null {
   return rebuilt.finish();
 }
 
-const WORKSPACE_LOGO_SYSTEM_PROMPT = 'You draw small, calm, animated SVG logos for software workspaces.';
+export const WORKSPACE_LOGO_SYSTEM_PROMPT = 'You draw small, calm, animated SVG logos for software workspaces.';
 
 function workspaceLogoPrompt(subject: string): string {
   return [

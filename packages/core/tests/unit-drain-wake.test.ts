@@ -77,7 +77,6 @@ function inertEngine(): AgentOrchestratorDeps['engine'] {
     hasAdvisorNoteForTurn: () => false,
     advisorNoteForTurn: () => null,
     sessionWindow: store,
-    craftLedger: { names: () => [], observe: () => [] },
     reviewTurn: async () => {},
     onSessionComplete: async () => {},
     runDueEvolution: async () => {},

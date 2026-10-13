@@ -26,7 +26,8 @@
  *    wake loop), and any idle wake: an alarm with nothing to watch, no invocation of its object but alarms and no
  *    model call the object opened within {@link IDLE_WAKE_DISTANCE_MS}, the same target 0 as the durability canary's
  *    idle window. It does not count alarms busy beside their object's work: the SDK's keepAlive heartbeat, a lap or
- *    a timer that served a live turn, or a turn that runs inside alarm invocations. Raw alarm counts measured that
+ *    a timer that served a live turn, or a turn that runs inside alarm invocations; nor a delivery the platform
+ *    cancelled, before any code ran, to an object deleted before it ({@link alarmsThatRan}). Raw alarm counts measured that
  *    work instead (staging fb848438c, 2026-10-08: 46 object-hours at 30-122 alarms, every one of 2,600 alarms within
  *    five minutes of its object's own work), while the event-drain storm's 3,041 alarms came 709 then 2,332 an hour
  *    with none. What an alarm watches without a call or a model call reads as idle here, and its finding names the
@@ -966,6 +967,28 @@ export interface ObjectMinuteCount { readonly object: string; readonly minute: n
 
 export interface ObjectHourCount { readonly object: string; readonly hour: number; readonly count: number }
 
+/**
+ * The alarms an object ran, less the deliveries the platform cancelled for an object deleted before them. workerd
+ * (v1.20260930.2) answers a delivery whose alarm is no longer stored `canceled` before any of the object's code runs
+ * (`global-scope.c++` 845-848; `actor-sqlite.c++` 1023-1074 cancels one whose stored alarm is null), and a deletion
+ * clears the alarm. Staging c6dc27da1, 2026-10-13: 13 eval workspaces each got one such delivery 9:54-10:00 min after
+ * their `destroyed` (21:09-21:13Z), and the gate read each as an idle wake. An alarm that ran (`ok`, `exception`, a
+ * platform kill) still counts, after a deletion or not: that is a re-arm.
+ */
+export function alarmsThatRan(
+  alarms: readonly ObjectMinuteCount[], canceled: readonly ObjectMinuteCount[], destroyedAt: ReadonlyMap<string, number>,
+): ObjectMinuteCount[] {
+  const cancelledAfterDeletion = new Map(canceled
+    .filter((row) => (destroyedAt.get(row.object) ?? Infinity) < row.minute + MINUTE_MS)
+    .map((row) => [`${row.object}@${String(row.minute)}`, row.count]));
+
+  return alarms.flatMap((row) => {
+    const count = row.count - (cancelledAfterDeletion.get(`${row.object}@${String(row.minute)}`) ?? 0);
+
+    return count > 0 ? [{ ...row, count }] : [];
+  });
+}
+
 /** The alarms in `alarms` with no `work` minute of their object within {@link IDLE_WAKE_DISTANCE_MS}, by object-hour. */
 export function idleWakeHours(alarms: readonly ObjectMinuteCount[], work: readonly ObjectMinuteCount[]): ObjectHourCount[] {
   const worked = new Set(work.map((row) => `${row.object}@${String(row.minute)}`));
@@ -1147,7 +1170,8 @@ async function versionRead(t: Telemetry, versionId: string): Promise<VersionRead
     destroyedAt.set(object, Math.min(destroyedAt.get(object) ?? row.timestamp, row.timestamp));
   }
 
-  const alarms = await perMinute(t, [...invocations, eq('$workers.eventType', 'alarm')]);
+  const alarm = [...invocations, eq('$workers.eventType', 'alarm')];
+  const alarms = alarmsThatRan(await perMinute(t, alarm), await perMinute(t, [...alarm, eq('$workers.outcome', 'canceled')]), destroyedAt);
   const called = await perMinute(t, [...invocations, { key: '$workers.eventType', operation: 'neq', value: 'alarm', type: 'string' }]);
   const modelCalls = await perMinute(t, [...scope, eq('$metadata.type', 'cf-worker'), eq('event', 'provider.stream_opened')]);
   // Mossaic's UserDO alarm does its maintenance on ShardDOs and says so in one line when it did (`maintenance_swept`,

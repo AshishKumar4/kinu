@@ -52,10 +52,10 @@ describe("a port's listener", () => {
     const [direct = '', parent = '', none = ''] = fifos;
 
     const served = [
-      box.execUntimed(`exec ${server(direct)}`, { cwd, execId: 'direct', env: { [STAMP]: 'bgjob-direct' } }),
+      box.exec(`exec ${server(direct)}`, { cwd, execId: 'direct', env: { [STAMP]: 'bgjob-direct' } }),
       // The server drops the variable; the shell that started it still carries it.
-      box.execUntimed(`sh -c 'env -u ${STAMP} ${server(parent).replaceAll("'", "'\\''")}; true'`, { cwd, execId: 'parent', env: { [STAMP]: 'bgjob-parent' } }),
-      box.execUntimed(`exec ${server(none)}`, { cwd, execId: 'none' }),
+      box.exec(`sh -c 'env -u ${STAMP} ${server(parent).replaceAll("'", "'\\''")}; true'`, { cwd, execId: 'parent', env: { [STAMP]: 'bgjob-parent' } }),
+      box.exec(`exec ${server(none)}`, { cwd, execId: 'none' }),
     ];
 
     const [directPort, parentPort, nonePort] = await Promise.all(fifos.map(async (fifo) => Number((await Bun.file(fifo).text()).trim())));
@@ -75,7 +75,7 @@ describe("a port's listener", () => {
         { port: directPort, stamp: 'bgjob-direct' }, { port: parentPort, stamp: 'bgjob-parent' }, { port: nonePort, stamp: null },
       ]));
     } finally {
-      for (const execId of ['direct', 'parent', 'none']) await box.killUntimed(execId);
+      for (const execId of ['direct', 'parent', 'none']) await box.killExec(execId);
       await Promise.allSettled(served);
     }
   });

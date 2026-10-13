@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="880" height="436" viewBox="0 0 880 436" role="img" aria-labelledby="title">
-  <title id="title">Your Worker calls a Devbox Durable Object, which owns the container. The container's HTTP on port 80 and HTTPS on 443 leave through DevboxOutbound; its backup traffic reaches R2 through DevboxStoreGateway.</title>
+  <title id="title">Your Worker calls a Devbox Durable Object, which owns the container. The container's HTTP on port 80 and HTTPS on 443 leave, and its backup traffic reaches R2, through DevboxGateway.</title>
   <style>
     .bg { fill: #ffffff; }
     text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; }
@@ -67,12 +67,12 @@
   <text class="c" x="106" y="340" text-anchor="middle">boxes/&lt;id&gt;/backups/</text>
 
   <rect class="blue" x="300" y="262" width="260" height="96" rx="10"/>
-  <text class="ct" x="430" y="294" text-anchor="middle">DevboxStoreGateway</text>
+  <text class="ct" x="430" y="294" text-anchor="middle">DevboxGateway</text>
   <text class="s" x="430" y="318" text-anchor="middle">answers the container's S3 calls</text>
   <text class="s" x="430" y="338" text-anchor="middle">from the binding; no keys (D41)</text>
 
   <rect class="blue" x="674" y="262" width="190" height="96" rx="10"/>
-  <text class="ct" x="769" y="294" text-anchor="middle">DevboxOutbound</text>
+  <text class="ct" x="769" y="294" text-anchor="middle">DevboxGateway</text>
   <text class="s" x="769" y="318" text-anchor="middle">HTTP on port 80 and</text>
   <text class="s" x="769" y="338" text-anchor="middle">HTTPS on port 443</text>
 

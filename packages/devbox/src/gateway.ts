@@ -6,9 +6,8 @@ import { Effect, Result } from 'effect';
 import { DevboxError, attempt, attemptSync, settle } from './errors';
 import { TRUST } from './processes';
 import type { GatewayBindings } from './contracts';
-import type { DevboxStore } from './storage';
 import { createResourceLane } from './operation-lanes';
-import { STORE_MOUNT as CHAIN_STORE_MOUNT, STORE_PUBLISH_ROUTE, storeRouteHost, storeSource } from './store-gateway';
+import { STORE_MOUNT as CHAIN_STORE_MOUNT, STORE_PUBLISH_ROUTE, serveStore, storeRouteHost, storeSource, type StoreGatewayProps } from './store-gateway';
 
 export interface OutboundPolicy {
   readonly routes: Record<string, Fetcher>;
@@ -17,17 +16,33 @@ export interface OutboundPolicy {
 
 export interface OutboundProps extends OutboundPolicy { readonly internet: boolean; }
 
+/** What one loopback binding of `DevboxGateway` serves: a box's egress, or one of its store routes. */
+export type GatewayProps = { readonly outbound: OutboundProps } | { readonly store: StoreGatewayProps };
+
+const GATEWAY_UNEXPORTED = 'export DevboxGateway from the Worker';
+
 /** Exact routes precede the host policy. Native interception registration order cannot express
  *  that when S3Mount adds or replaces a route after the catch-all (D38). */
-export class DevboxOutbound extends WorkerEntrypoint<{}, OutboundProps> {
+export function routeEgress(request: Request, outbound: OutboundProps): Effect.Effect<Response, DevboxError> {
+  return Effect.gen(function* () {
+    const route = outbound.routes[new URL(request.url).hostname] ?? outbound.fallback;
+
+    if (route !== undefined) return yield* attempt('io', () => route.fetch(request));
+
+    return outbound.internet ? yield* attempt('io', () => fetch(request)) : new Response("container egress is not configured", { status: 403 });
+  });
+}
+
+/**
+ * The one entrypoint a host exports for its boxes, reached through `ctx.exports` (a class the Worker does not export has
+ * no loopback binding). It serves a box's egress router, or a store route in place of the SDK's signing gateway, the
+ * bucket resolved by the binding name the route records (D41).
+ */
+export class DevboxGateway extends WorkerEntrypoint<Record<string, R2Bucket | undefined>, GatewayProps> {
   override fetch(request: Request): Promise<Response> {
-    return settle(Effect.gen({ self: this }, function* () {
-      const route = this.ctx.props.routes[new URL(request.url).hostname] ?? this.ctx.props.fallback;
+    const props = this.ctx.props;
 
-      if (route !== undefined) return yield* attempt('io', () => route.fetch(request));
-
-      return this.ctx.props.internet ? yield* attempt('io', () => fetch(request)) : new Response("container egress is not configured", { status: 403 });
-    }));
+    return settle('store' in props ? serveStore(request, props.store, (name) => this.env[name]) : routeEgress(request, props.outbound));
   }
 }
 
@@ -124,30 +139,24 @@ export class ContainerRoutes {
   #fallback: Fetcher | undefined;
   #source: S3MountRequest['source'] | undefined;
   #mountClient: S3Mount | undefined;
-  /** The container was started by this object and no mount has been tried in it since, so it holds
-   *  no S3Mount marker for an unmount to clear (D45). */
-  #unmarked = false;
 
   constructor(readonly host: RouteHost) {}
 
-  configure(policy: OutboundPolicy, store: Pick<DevboxStore, 'binding'> | undefined, reused: boolean): Promise<void> {
+  configure(policy: OutboundPolicy, store: string, reused: boolean): Promise<void> {
     return this.#writes.run(ROUTE_SCOPE, () => settle(Effect.gen({ self: this }, function* () {
       const routes = { ...policy.routes };
-      const source = store === undefined ? undefined : storeSource(store.binding);
+      const source = storeSource(store);
+      const gateway = yield* this.#gateway();
 
-      if (source !== undefined) {
-        const gateway = yield* this.#gateway();
+      if (reused) {
+        const mount = yield* restoredStoreRoute({ files: this.host.files, mounts: yield* this.#mounts() }, source, this.host.prefix, gateway);
 
-        if (reused) {
-          const mount = yield* restoredStoreRoute({ files: this.host.files, mounts: yield* this.#mounts() }, source, this.host.prefix, gateway);
-
-          if (mount !== undefined) routes[mount.hostname] = mount.handler;
-        }
-
-        routes[storeRouteHost(STORE_PUBLISH_ROUTE)] = gateway({ props: {
-          protocolVersion: 1, mode: 'active', routeId: STORE_PUBLISH_ROUTE, source, keyPrefix: this.host.prefix, access: 'read-write',
-        } });
+        if (mount !== undefined) routes[mount.hostname] = mount.handler;
       }
+
+      routes[storeRouteHost(STORE_PUBLISH_ROUTE)] = gateway({ props: {
+        protocolVersion: 1, mode: 'active', routeId: STORE_PUBLISH_ROUTE, source, keyPrefix: this.host.prefix, access: 'read-write',
+      } });
 
       this.#routes = routes;
       this.#fallback = policy.fallback;
@@ -168,19 +177,12 @@ export class ContainerRoutes {
     })));
   }
 
-  /** Called when this object has just started the container: its `/run` is new. */
-  started(): void {
-    this.#unmarked = true;
-  }
-
   mount(path: string): Promise<void> {
     return settle(Effect.gen({ self: this }, function* () {
       const source = this.#source;
 
       if (source === undefined) return yield* Effect.fail(new DevboxError('configuration', 'this devbox has no store to mount'));
       const mounts = yield* this.#mounts();
-      // A failed attempt can leave a marker behind, so the next unmount must run.
-      this.#unmarked = false;
       // No key prefix: s3fs mounts the bucket root and skips checking a prefix it would mount (D46);
       // the route `#gateway` builds roots every key at this box's prefix instead.
       yield* attempt('io', () => mounts.mount({ mountPath: path, source, access: 'read-write',
@@ -190,7 +192,7 @@ export class ContainerRoutes {
 
   unmount(path: string): Promise<void> {
     return settle(Effect.gen({ self: this }, function* () {
-      if (this.#unmarked) return;
+      // Every start is from a snapshot, whose `/run` may hold the marker of the mount it was taken under.
       const mounts = yield* this.#mounts();
       yield* attempt('io', () => mounts.unmount(path));
     }));
@@ -199,12 +201,12 @@ export class ContainerRoutes {
   /** Every store route this box builds, S3Mount's included, is rooted at the box's prefix, which
    *  comes from here and never from what the guest wrote (D46). */
   #gateway(): Effect.Effect<S3GatewayBinding, DevboxError> {
-    const gateway = this.host.bindings.DevboxStoreGateway;
+    const gateway = this.host.bindings.DevboxGateway;
 
-    if (gateway === undefined) return Effect.fail(new DevboxError('configuration', 'export DevboxStoreGateway from the Worker'));
+    if (gateway === undefined) return Effect.fail(new DevboxError('configuration', GATEWAY_UNEXPORTED));
     const root = this.host.prefix;
 
-    return Effect.succeed(({ props }) => gateway({ props: props.mode === 'deny' ? props : { ...props, keyPrefix: root } }));
+    return Effect.succeed(({ props }) => gateway({ props: { store: props.mode === 'deny' ? props : { ...props, keyPrefix: root } } }));
   }
 
   #mounts(): Effect.Effect<S3Mount, DevboxError> {
@@ -216,10 +218,10 @@ export class ContainerRoutes {
 
   #install(): Effect.Effect<void, DevboxError> {
     return Effect.gen({ self: this }, function* () {
-      const binding = this.host.bindings.DevboxOutbound;
+      const binding = this.host.bindings.DevboxGateway;
 
-      if (binding === undefined) return yield* Effect.fail(new DevboxError('configuration', 'export DevboxOutbound from the Worker'));
-      const router = binding({ props: { routes: { ...this.#routes }, fallback: this.#fallback, internet: this.host.internet } });
+      if (binding === undefined) return yield* Effect.fail(new DevboxError('configuration', GATEWAY_UNEXPORTED));
+      const router = binding({ props: { outbound: { routes: { ...this.#routes }, fallback: this.#fallback, internet: this.host.internet } } });
       yield* attempt('io', () => this.host.container.interceptAllOutboundHttp(router));
       yield* attempt('io', () => this.host.container.interceptOutboundHttps('*', router));
     });

@@ -54,6 +54,12 @@ export interface SlateApps extends DurableApps {
   owners(): Promise<ReadonlyMap<number, string>>;
 }
 
+export interface HeldSlatePorts {
+  readonly titles: ReadonlyMap<number, string>;
+  /** The ports answers' pages hold. */
+  readonly pages: ReadonlySet<number>;
+}
+
 /** A method called on a slate's class, as `caller`; a hop from one slate to another carries the chain and the viewer. */
 export interface SlateAppCall {
   readonly caller: SlateCaller;
@@ -463,12 +469,21 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
     }));
   }
 
-  /** Each port a slate's application holds, called by the slate's title: a directory slate's, or its page's `<title>`. */
-  portTitles(): Promise<ReadonlyMap<number, string>> {
+  /**
+   * The ports slates' applications hold: a directory slate's called by its title, and an answer's page apart. A page is
+   * its answer's, drawn in the chat, so the workspace's previews leave it out until it is saved as a slate.
+   */
+  heldPorts(): Promise<HeldSlatePorts> {
     return settle(Effect.gen({ self: this }, function* () {
       const titles = new Map<number, string>();
+      const pages = new Set<number>();
 
       for (const [port, owner] of yield* Effect.promise(async () => this.ports.apps.owners())) {
+        if (ephemeralSlateAddress(owner) !== null) {
+          pages.add(port);
+          continue;
+        }
+
         const source = yield* Effect.tryPromise({
           try: async () => this.ports.resolve(CRED_SESSION_USER, owner),
           catch: (cause) => cause,
@@ -484,7 +499,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
         if (source !== null) titles.set(port, slateTitle(source.project, owner));
       }
 
-      return titles;
+      return { titles, pages };
     }));
   }
 

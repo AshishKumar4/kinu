@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { ALERT_THRESHOLDS } from '@kinu.run/core/analytics';
 import { canaryActivations } from './durability-canary-telemetry';
-import { idleWakeHours, ordinalHours, settledRead, terminalEffectStates, type VersionRead, versionFindings } from './prod-logs';
+import { alarmsThatRan, idleWakeHours, ordinalHours, settledRead, terminalEffectStates, type VersionRead, versionFindings } from './prod-logs';
 
 const HOUR = 3_600_000;
 
@@ -146,6 +146,30 @@ describe('what one deployed version did, as a deploy reports it', () => {
       { what: 'idle wakes', finding: 'object storming woke 1620 time(s) with nothing to watch in the hour from 1970-01-01T01:00:00Z' },
       { what: 'idle wakes', finding: 'object turn-ended woke 4 time(s) with nothing to watch in the hour from 1970-01-01T01:00:00Z' },
     ]);
+  });
+
+  // Staging c6dc27da1, 2026-10-13: 13 deleted eval workspaces each got one alarm delivery 10 minutes after `destroyed`,
+  // which workerd answered `canceled` before any of their code ran (no stored alarm), and each read as an idle wake.
+  test("a delivery cancelled for an object deleted before it is no wake; an alarm that ran after a deletion is", () => {
+    const minute = 60_000;
+    const deleted = HOUR + 5 * minute;
+    const late = HOUR + 15 * minute;
+    const destroyedAt = new Map([['deleted', deleted], ['re-armed', deleted]]);
+
+    const alarms = [
+      { object: 'deleted', minute: late, count: 1 },
+      { object: 're-armed', minute: late, count: 1 },
+      // Cancelled, but never deleted: whatever moved its alarm is the object's own, and its wake still counts.
+      { object: 'live', minute: late, count: 1 },
+    ];
+
+    const canceled = [{ object: 'deleted', minute: late, count: 1 }, { object: 'live', minute: late, count: 1 }];
+    const ran = alarmsThatRan(alarms, canceled, destroyedAt);
+
+    expect(ran).toEqual([{ object: 're-armed', minute: late, count: 1 }, { object: 'live', minute: late, count: 1 }]);
+    expect(idleWakeHours(ran, []).map((idle) => idle.object)).toEqual(['re-armed', 'live']);
+    // The one that was: before the cancelled deliveries were taken away, the deleted object read as woken too.
+    expect(idleWakeHours(alarms, []).map((idle) => idle.object)).toEqual(['deleted', 're-armed', 'live']);
   });
 });
 

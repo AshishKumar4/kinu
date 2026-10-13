@@ -13,6 +13,7 @@ import { attempt, diagnostics, KinuError, relayedLine, settle, toKinuError } fro
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
 import { Effect } from 'effect';
 import type { AgentFacet, AgentFacetCalls, AgentFacetEnv } from './agent-facet/agent-facet';
+import { disposeRpc } from './agent-facet/workspace-rpc';
 import { ASSETS_HOSTS } from './assets-hosts';
 
 export const AGENT_BUNDLE_DIRECTORY = '/_agent';
@@ -212,8 +213,18 @@ export class AgentStoreBroker {
   async archivePage(cursor: ArchiveSqlCursor | null, maxBytes: number) { return await (await this.calls()).archivePage(this.snapshot(), cursor, maxBytes); }
   async spend(steps: readonly StepSpendSource[]) { return await (await this.calls()).spend(this.snapshot(), steps); }
 
+  /** Each call opens the agent's served tree and lets it go once answered: one left open kept the agent's isolate, and
+   *  its workspace with it, from hibernating (#69's rule; a Files listing of /context, cmp-kinu-ux4, 2026-10-13). */
   contextTree(editor: ContextEditor): ContextTree {
-    return remoteContextTree(async () => await (await this.calls()).context(this.snapshot(), editor));
+    return remoteContextTree(async (call) => {
+      const served = await (await this.calls()).context(this.snapshot(), editor);
+
+      try {
+        return await call(served);
+      } finally {
+        disposeRpc(served);
+      }
+    });
   }
 
   conversations(): ConversationRecall {

@@ -1,10 +1,10 @@
-import { Effect } from 'effect';
 import { useState, useCallback, useRef, type FormEvent, type RefObject } from "react";
-import { Link, NavLink, useLocation, useMatch, useNavigate } from "react-router-dom";
+import { Link, NavLink, useLocation, useMatch } from "react-router-dom";
 import { GearIcon, TrashIcon, SignOutIcon, PencilSimpleIcon, CheckIcon, XIcon, PlusIcon, ShieldCheckIcon, SidebarSimpleIcon,
   UsersThreeIcon, CaretRightIcon, EraserIcon,
 } from "@phosphor-icons/react";
 import { KinuLogo } from "./ui/KinuLogo";
+import { NewWorkspaceButton } from "./workspaces/NewWorkspaceButton";
 import { useAccount } from "@/hooks/use-account";
 import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
 import { useWorkspaceRpc, type ConnectionStatus } from "../hooks/use-chat-owner";
@@ -13,7 +13,6 @@ import { lastValue } from "../hooks/use-async-resource";
 import { ModeToggle, ThemeToggle } from "./theme-toggle";
 import { FeedbackButton } from "./FeedbackButton";
 import { isPlaceholderWorkspaceTitle, shortAge, workspaceDisplayTitle, type PanelAgent, type RosterEntry, type WorkspaceEntry } from "@kinu.run/core";
-import { detach } from "@kinu.run/core/obs";
 import { useRename } from "@/hooks/use-rename";
 import { SidebarAgents } from "./SidebarAgents";
 import { ChatMascot, WorkspaceLogo, mascotColour, mascotSeed } from "./Marks";
@@ -148,7 +147,6 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
 
   const onHome = useMatch({ path: "/", end: true }) !== null;
 
-  const navigate = useNavigate();
   const agentsNav = useAgentsNav();
   const { panel, drilled } = useOpenAgentsPanel(agentId);
 
@@ -198,14 +196,7 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
 
       {!onHome && (
         <div className="px-3.5 pb-1.5">
-          <button
-            type="button"
-            onClick={() => detach(Effect.promise(async () => navigate("/")))}
-            className="p-btn flex h-10 w-full items-center justify-center gap-2 p-t-control"
-          >
-            <PlusIcon size={14} weight="bold" />
-            New workspace
-          </button>
+          <NewWorkspaceButton className="h-10 w-full p-t-control" />
         </div>
       )}
       <nav aria-label="Primary" className="px-2 pt-1 space-y-1">

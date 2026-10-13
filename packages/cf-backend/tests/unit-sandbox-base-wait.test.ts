@@ -26,12 +26,12 @@ function boxAnswering(answer: (asked: number) => Answer) {
 
       return answer(asked);
     },
-    execUntimed: async (command: string) => {
+    exec: async (command: string) => {
       ran.push(command);
 
       return { stdout: 'ok', stderr: '', exitCode: 0 };
     },
-    releaseUntimed: async () => {},
+    releaseExec: async () => {},
   });
 
   return { box, ran, asked: () => asked };
