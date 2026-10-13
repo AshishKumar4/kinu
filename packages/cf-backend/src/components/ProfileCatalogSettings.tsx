@@ -27,17 +27,17 @@ import {
   type RoleCatalog,
   type RoleId,
   type TierAssignment,
-  type TierId,
+  type TierId, type ModelMenuResponse,
 } from '@kinu.run/core';
 import { Effect, type Exit } from 'effect';
 import { hold, showing } from '@kinu.run/core/obs';
-import { getProfileCatalog, listAvailableModels, testModel, updateProfileCatalog, type ModelMenu } from '../lib/user-api';
+import { getProfileCatalog, listAvailableModels, testModel, updateProfileCatalog } from '../lib/user-api';
 import { AccountPicker, ModelPicker, reasoningEffortLabel, specOnAccount } from './ModelPicker';
 import { Card, Choice, Field, composing, inputCls, tabCls } from './ui/form';
 import { FilledButton } from './ui/FilledButton';
 import { Segmented } from './ui/Segmented';
 
-const EMPTY_MENU: ModelMenu = { models: [], failures: [] };
+const EMPTY_MENU: ModelMenuResponse = { models: [], failures: [] };
 
 interface CatalogOperation {
   promise: Promise<Exit.Exit<void>> | null;
@@ -72,7 +72,7 @@ const selectSmCls = `${inputCls} !h-6.5 !px-2 !py-0 !text-xs`;
 export function ProfileCatalogSettings() {
   const [envelope, setEnvelope] = useState<ProfileCatalogEnvelope | null>(null);
   const [draft, setDraft] = useState<ProfileCatalog | null>(null);
-  const [menu, setMenu] = useState<ModelMenu>(EMPTY_MENU);
+  const [menu, setMenu] = useState<ModelMenuResponse>(EMPTY_MENU);
   const [selectedRole, setSelectedRole] = useState<RoleId>('task');
   const [newRoleId, setNewRoleId] = useState('');
   const [addingRole, setAddingRole] = useState(false);
@@ -530,7 +530,7 @@ export function ProfileCatalogSettings() {
   );
 }
 
-function labelOfSpec(menu: ModelMenu, spec: string): string {
+function labelOfSpec(menu: ModelMenuResponse, spec: string): string {
   const label = menu.models.find((entry) => entry.spec === specWithoutAccount(spec))?.label ?? spec;
   const account = spec === '' ? undefined : parseModelSpec(spec).account;
 
@@ -558,7 +558,7 @@ function Disclosure(props: { label: string; summary: string; section: string; ch
 function TierTuning(props: {
   tierId: TierId;
   assignment: TierAssignment;
-  menu: ModelMenu;
+  menu: ModelMenuResponse;
   onEffort: (effort: ReasoningEffort | '') => void;
   onFallbacks: (fallbacks: readonly string[]) => void;
 }) {
@@ -588,7 +588,7 @@ function BackupChain(props: {
   label: string;
   chain: readonly string[];
   model: string;
-  menu: ModelMenu;
+  menu: ModelMenuResponse;
   onChange: (fallbacks: readonly string[]) => void;
 }) {
   const taken = new Set([props.model, ...props.chain]);

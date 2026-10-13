@@ -1,7 +1,6 @@
 /** One workspace on the roster, drawn from the tile its entry carries: the card reads nothing of its own. */
 import { Link } from "react-router-dom";
-import { rosterHeadline, shortAge, workspaceDisplayTitle, type WorkspaceOverview, type WorkspaceStatus } from "@kinu.run/core";
-import type { RosterEntry } from "@/lib/user-api";
+import { rosterHeadline, shortAge, workspaceDisplayTitle, type WorkspaceOverview, type WorkspaceStatus, type RosterEntry } from "@kinu.run/core";
 import { coverBadge, coverLetter, coverWash, hueOf } from "@/components/ui/cover";
 import { SlatePicture } from "@/components/slates/SlatePicture";
 

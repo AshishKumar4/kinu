@@ -1,13 +1,12 @@
 diff --git a/packages/core/src/prompt.ts b/packages/core/src/prompt.ts
-index 17b859181..8096b6295 100644
 --- a/packages/core/src/prompt.ts
 +++ b/packages/core/src/prompt.ts
-@@ -91,7 +91,7 @@ export interface SystemPromptOptions extends PromptSurfaceOptions {
+@@ -87,7 +87,7 @@
  
  /** Date-only, never time: the dynamic block's runtime section changes at most once a day. */
  export function currentDateForPrompt(now: Date = new Date()): string {
 -  return now.toISOString().slice(0, 10);
-+  return now.toISOString().slice(0, 11);
++  return now.toISOString().slice(0, 16);
  }
  
- export const FALLBACK_PURPOSE = DEFAULT_SOUL_MD;
+ const FALLBACK_PURPOSE = DEFAULT_SOUL_MD;

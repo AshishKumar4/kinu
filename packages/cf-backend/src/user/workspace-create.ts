@@ -6,14 +6,14 @@ import {
   renderSoulMarkdown,
   type NameOrigin,
   type ProfileCatalogEnvelope,
-  type ReasoningEffort,
+  type ReasoningEffort, type WorkspaceEntry,
 } from '@kinu.run/core';
 import { carriesCauseCode, diagnostics, KinuError, logged, toKinuError, settle, type ErrorCode } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import type { UserCredentialClient } from '../providers/agent-registry';
 import type { UserCaller } from '@kinu.run/core';
 import { listAvailableModels, type AvailableModelsEnv } from './available-models';
-import type { WorkspaceEntry, WorkspaceRegistration, WorkspaceRegistrationSource } from './workspaces';
+import type { WorkspaceRegistration, WorkspaceRegistrationSource } from './workspaces';
 import { indexNewWorkspace, unindexWorkspace, type IndexFeedEnv } from '../control-plane/index-feed';
 import type { OrchestratorAgent } from '../orchestrator';
 import { isOwnedByAnotherAccount } from './workspace-ownership';

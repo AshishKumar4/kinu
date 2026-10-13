@@ -80,7 +80,7 @@ export function admitAgentsMd(
 /** Approved bytes keep system placement; everything else is labelled reference material. */
 export type InstructionPlacement = 'system' | 'unverified';
 
-export function renderInstructionOmission(
+function renderInstructionOmission(
   referenced: ReadonlyArray<AgentsMdReference>, name: string,
 ): string {
   if (referenced.length === 0) return '';

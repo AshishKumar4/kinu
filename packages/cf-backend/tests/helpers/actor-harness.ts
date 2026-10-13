@@ -23,14 +23,13 @@ import { hostedSubordinateRuntime, type ActorSurface, type SurfaceTurn, type Too
 import type { CFSeat } from '../../src/actor-hosting';
 import type { ChatWireTransport } from '../../src/chat-transport';
 import type { AgentTurns } from '../../src/agent-turns';
-import { isWorkMode, workModeForTurnMetadata } from '@kinu.run/core';
+import { isWorkMode, workModeForTurnMetadata, type UserProfile } from '@kinu.run/core';
 import { ActorClaimStore, agentArtifactDirectory, agentHome, CHAT_SESSION_ID, createParentWorkspaceVfs, EventLog, SubordinateRosterStore, MAIN_AGENT, openWorkspaceMainActor, SessionHistory, TerminalTransitions, WorkspaceActorDirectory } from '@kinu.run/core';
 import { present, admitTestClaim } from '@kinu.run/test-utils';
 import {
   createCompositeLogger, createConsoleLogger, renderCauseChain, setDiagnosticsSink, toKinuError, type Logger,
 } from '@kinu.run/core/obs';
 import type { UserDO } from '../../src/user/user-do';
-import type { UserProfile } from '../../src/user/profile';
 import type { McpToolCall } from '../../src/user/mcp-servers';
 import type { WorkspaceHostTarget } from '../../src/workspace-host';
 import {

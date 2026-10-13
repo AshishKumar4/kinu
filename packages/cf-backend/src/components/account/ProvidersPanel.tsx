@@ -14,8 +14,7 @@ import {
   listAvailableModels, listProviderCatalog, getProfileCatalog, updateProfileCatalog,
   listCloudflareGateways, selectCloudflareGateway,
   listCloudflareAccounts, selectCloudflareAccount,
-  type CredentialSummary,
-  type ProviderCatalogEntry,
+  
   type CloudflareGatewayStatus, type CloudflareAccountStatus,
 } from "@/lib/user-api";
 import type { ProfileCatalogEnvelope } from '@kinu.run/core';
@@ -28,7 +27,7 @@ import { ChatGptConnect, ChatGptPlanUsage, ChatGptWelcome } from "@/components/a
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { showing, detach } from '@kinu.run/core/obs';
 import {
-  CHATGPT_CRED_KEY, CLAUDE_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, CODEX_CRED_KEY, MAIN_ACCOUNT, accountCredentialKey, accountOf, baseCredentialKey, catalogProviderOfKey, isAccountName, revokingProviderOf, storedAccounts,
+  CHATGPT_CRED_KEY, CLAUDE_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, CODEX_CRED_KEY, MAIN_ACCOUNT, accountCredentialKey, accountOf, baseCredentialKey, catalogProviderOfKey, isAccountName, revokingProviderOf, storedAccounts, type CredentialSummary, type ProviderCatalogEntry,
 } from '@kinu.run/core';
 
 function ConnectedBadge({ detail }: { detail?: ReactNode }) {

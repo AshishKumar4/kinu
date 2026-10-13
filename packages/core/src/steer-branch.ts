@@ -17,7 +17,7 @@ import type { ActorHandle } from './identity/actor-handle';
 import type { WorkMode } from './types/turn';
 
 /** Depth 1: the branch answers rather than splitting further. */
-export const BRANCH_HEAD_BUDGET = {
+const BRANCH_HEAD_BUDGET = {
   maxDepth: 1,
 } as const;
 

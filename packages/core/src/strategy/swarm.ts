@@ -35,7 +35,7 @@ import {
 } from '../types/swarm';
 
 export {
-  SWARM_ADVANCES, SWARM_CARRIES, SWARM_CONTEXTS, SWARM_EXPANDS, SWARM_SCORES, SWARM_UNITS,
+  SWARM_ADVANCES, SWARM_CONTEXTS, SWARM_EXPANDS,
   type BranchContext, type SwarmAdvance, type SwarmAdvanceSetting, type SwarmCarry,
   type SwarmCarrySetting, type SwarmConfig, type SwarmExpand, type SwarmInput,
   type SwarmNodeAssignment, type SwarmRefusal, type SwarmScore, type SwarmScoreSetting,
@@ -168,7 +168,7 @@ export const UNMEASURED_JUDGE_SAMPLES = DEFAULT_CONFIG.mcts.judgeSamples;
  * `advance` and `carry` become `none` (each reads a measurement), depth follows to 1.
  * Axes are named explicitly so tree-only parameters drop and a new axis is a compile error.
  */
-export function unmeasuredPoint(row: SwarmPresetPoint): SwarmPresetPoint {
+function unmeasuredPoint(row: SwarmPresetPoint): SwarmPresetPoint {
   if (row.config.score.kind !== 'verify') return row;
 
   return {

@@ -7,7 +7,6 @@ import { initDeviceInflightTable } from '../execution/device-inflight';
 import { initEgressVaultTables } from '../safety/egress-vault';
 import { initAccountMemoryTables } from '../memory/account';
 import { initWorkspaceCapabilityTables } from '../safety/workspace-capability';
-import { diagnostics } from '../obs/log';
 
 /** The sole account profile-catalog row in user_config. */
 export const PROFILE_CATALOG_CONFIG_KEY = 'profile_catalog';
@@ -50,15 +49,9 @@ export function initUserTables(sql: SqlExec): void {
       email        TEXT NOT NULL,
       display_name TEXT,
       created_at   INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-      last_seen_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
-    )
-  `);
-  // A table, not a `user_profile` column: the genesis lock (scripts/schema-drift.ts) refuses new
-  // columns on shipped tables. An absent row means not onboarded.
-  sql.exec(`
-    CREATE TABLE IF NOT EXISTS user_onboarding (
-      id           INTEGER PRIMARY KEY CHECK (id = 1),
-      completed_at INTEGER NOT NULL
+      last_seen_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+      -- Null until the welcome wizard finishes.
+      onboarded_at INTEGER
     )
   `);
 
@@ -154,22 +147,7 @@ export function initUserTables(sql: SqlExec): void {
     )
   `);
 
-  // Settled, never deleted, so `generation` keeps rising. A poll commits only if the row still has
-  // its generation and is open, so superseded or post-disconnect replies cannot write tokens.
-  sql.exec(`
-    CREATE TABLE IF NOT EXISTS codex_device_flow (
-      id              INTEGER PRIMARY KEY CHECK (id = 1),
-      device_auth_id  TEXT NOT NULL,
-      user_code       TEXT NOT NULL,
-      poll_interval   INTEGER NOT NULL,
-      portal_url      TEXT NOT NULL,
-      generation      INTEGER NOT NULL DEFAULT 1,
-      settled_at      INTEGER
-    )
-  `);
-
   // OAuth tokens live in separate DO storage keys. `headers` is sealed at rest like a credential.
-  // Presets live in `user_mcp_server_presets`: new columns never reach pre-existing accounts.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_mcp_servers (
       id            TEXT PRIMARY KEY,
@@ -177,36 +155,16 @@ export function initUserTables(sql: SqlExec): void {
       server_url    TEXT NOT NULL,
       transport     TEXT NOT NULL,
       headers       TEXT,
-      allowed_tools TEXT
+      allowed_tools TEXT,
+      -- The MCP_PRESETS entry the server was added from; null for a custom server.
+      preset_id     TEXT
     )
   `);
 
-  // Names address tools (`mcp_<server>_<tool>`), so they must be unique. The add/update transaction is
-  // the guard; this index is the floor. Building it over existing collisions raises and would fail
-  // every `ensureInit`, so collisions are read first and the build is skipped.
-  const collidingNames = sql.exec(`
-    SELECT lower(name) AS name FROM user_mcp_servers
-      GROUP BY lower(name) HAVING COUNT(*) > 1
-  `).toArray().length;
-
-  if (collidingNames === 0) {
-    sql.exec(`
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_user_mcp_servers_name_unique
-        ON user_mcp_servers (lower(name))
-    `);
-  } else {
-    diagnostics.event('user.mcp_name_index_skipped', { collidingNames });
-  }
-
-  // A separate table: a column on `user_mcp_servers` never reaches pre-existing accounts. No row = custom.
+  // Names address tools (`mcp_<server>_<tool>`), so one name, in any case, is one server.
   sql.exec(`
-    CREATE TABLE IF NOT EXISTS user_mcp_server_presets (
-      -- The server row this tag belongs to; cascade-declared so the tag is a
-      -- property of the server, not of the storage that outlives it.
-      server_id TEXT PRIMARY KEY REFERENCES user_mcp_servers(id) ON DELETE CASCADE,
-      -- The MCP_PRESETS entry the server was added from.
-      preset_id TEXT NOT NULL
-    )
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_user_mcp_servers_name_unique
+      ON user_mcp_servers (lower(name))
   `);
 
   // Devices linked via `kinu connect`; only token hashes are stored. Tokens rotate on every connect
@@ -309,11 +267,11 @@ export function initUserTables(sql: SqlExec): void {
     CREATE TABLE IF NOT EXISTS user_browser_sessions (
       token_hash   TEXT PRIMARY KEY,
       expires_at   INTEGER NOT NULL,
-      email        TEXT,
+      email        TEXT NOT NULL,
       display_name TEXT,
-      provider     TEXT,
-      provider_sub TEXT,
-      auth_time    INTEGER
+      provider     TEXT NOT NULL,
+      provider_sub TEXT NOT NULL,
+      auth_time    INTEGER NOT NULL
     )
   `);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_browser_sessions_exp

@@ -2,6 +2,7 @@
  * `/shared/blueprint/:id`: read-only, no workspace chrome; the viewer may have no account.
  * A secret-shaped scan hit is reported by location, never content.
  */
+import { type WorkspaceEntry } from '@kinu.run/core';
 import { showing, detach } from "@kinu.run/core/obs";
 import { Effect } from "effect";
 import { useEffect, useState, type ReactNode } from "react";
@@ -14,7 +15,6 @@ import { FilledButton } from "@/components/ui/FilledButton";
 import { ForkDialog } from "@/components/shared/ForkDialog";
 import { reachConnection } from "@/components/slates/ForkReachPanel";
 import { getBlueprint, signedInEmail } from "@/lib/shared-api";
-import type { WorkspaceEntry } from "@/lib/user-api";
 
 export function SecretWarning({ warnings, children }: { warnings: BlueprintView["warnings"]; children: ReactNode }) {
   if (warnings.length === 0) return null;

@@ -3,8 +3,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do';
 import { CAPABLE_HELLO, daemon } from './helpers/device-harness';
-import type { RosterPage } from '../src/user/roster';
-import { asFetchFunction, sha256Hex } from '@kinu.run/core';
+import { asFetchFunction, sha256Hex, type RosterPage } from '@kinu.run/core';
 import { BUILTIN_PROFILE_CATALOG, decodeJsonValue } from '@kinu.run/core';
 import {
   CapabilityDeniedError,
@@ -54,7 +53,6 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'credentials.model', name: 'getAuth(openai.bearer)', run: (u, c) => u.getAuth(c, 'openai.bearer') },
   { capability: 'credentials.model', name: 'getCredentialEndpoint(openai-compat.box)', run: (u, c) => u.getCredentialEndpoint(c, 'openai-compat.box') },
   { capability: 'credentials.model', name: 'listCredentials', run: (u, c) => u.listCredentials(c) },
-  { capability: 'credentials.model', name: 'listConnectedProviders', run: (u, c) => u.listConnectedProviders(c) },
   { capability: 'credentials.model', name: 'relayDevice', run: (u, c) => u.relayDevice(c, 'codex') },
   { capability: 'credentials.model', name: 'relayModelCall', run: (u, c) => u.relayModelCall(c, 'dev-none', 'call-1', new Request('https://chatgpt.com/backend-api/codex/models')) },
   { capability: 'credentials.model', name: 'cancelModelRelay', run: (u, c) => u.cancelModelRelay(c, 'call-1') },
@@ -101,7 +99,6 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'mcp.manage', name: 'userMcp_presets', run: (u, c) => u.userMcp_presets(c) },
   { capability: 'mcp.manage', name: 'userMcp_add', run: (u, c) => u.userMcp_add(c, { name: 'x', serverUrl: 'https://x' }, 'https://app') },
   { capability: 'mcp.manage', name: 'userMcp_remove', run: (u, c) => u.userMcp_remove(c, 'srv') },
-  { capability: 'mcp.manage', name: 'userMcp_update', run: (u, c) => u.userMcp_update(c, 'srv', { name: 'y' }) },
   { capability: 'mcp.manage', name: 'userMcp_warmConnections', run: (u, c) => u.userMcp_warmConnections(c) },
   { capability: 'mcp.manage', name: 'userMcp_handleOAuthCallback', run: (u, c) => u.userMcp_handleOAuthCallback(c, 'https://app/api/user/mcp/callback') },
 
@@ -158,7 +155,6 @@ const GATED_CALLS: GatedCall[] = [
 
   { capability: 'config', name: 'getConfig', run: (u, c) => u.getConfig(c, 'default_model') },
   { capability: 'config', name: 'setConfig', run: (u, c) => u.setConfig(c, 'default_model', 'x') },
-  { capability: 'config', name: 'listConfig', run: (u, c) => u.listConfig(c) },
   { capability: 'profile.resolve', name: 'getWorkspaceProfileCatalog', run: (u, c) => u.getWorkspaceProfileCatalog(c) },
 
   { capability: 'auth_tokens', name: 'mintCliToken', run: (u, c) => u.mintCliToken(c, USER_ID, TOKEN_HASH) },
@@ -213,8 +209,6 @@ const GATED_CALLS: GatedCall[] = [
   },
   { capability: 'credentials.model', name: 'getSettingsRevision', run: (u, c) => u.getSettingsRevision(c) },
 
-  { capability: 'subscription_auth', name: 'startCodexDeviceFlow', run: (u, c) => u.startCodexDeviceFlow(c) },
-  { capability: 'subscription_auth', name: 'pollCodexDeviceFlow', run: (u, c) => u.pollCodexDeviceFlow(c) },
   { capability: 'subscription_auth', name: 'disconnectCodex', run: (u, c) => u.disconnectCodex(c, false) },
   { capability: 'subscription_auth', name: 'getCodexStatus', run: (u, c) => u.getCodexStatus(c) },
   { capability: 'subscription_auth', name: 'startClaudeSignIn', run: (u, c) => u.startClaudeSignIn(c) },

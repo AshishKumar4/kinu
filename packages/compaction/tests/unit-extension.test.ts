@@ -408,7 +408,6 @@ describe('archive manifest', () => {
       startTurn: 1,
       endTurn: 12,
       userTurns: 6,
-      assistantTurns: 6,
     });
     expect(ranges[0].firstUserAsk).toStartWith('requirement 0:');
 
@@ -440,7 +439,7 @@ describe('archive manifest', () => {
 
     const ranges = archive.list(SESSION);
     expect(ranges).toHaveLength(2);
-    expect(ranges[1]).toMatchObject({ startTurn: 13, endTurn: 18, userTurns: 3, assistantTurns: 3 });
+    expect(ranges[1]).toMatchObject({ startTurn: 13, endTurn: 18, userTurns: 3 });
     expect(ranges[1].firstUserAsk).toStartWith('requirement 6:');
     expect(ranges[1].path).not.toBe(ranges[0].path);
 

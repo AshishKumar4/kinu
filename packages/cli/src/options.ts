@@ -39,8 +39,26 @@ export function oneOfFlag<T extends string>(value: string | undefined, flag: str
   }));
 }
 
-export function normalizeWebhookAuthMode(value: string | undefined): CloudWebhookTriggerInput['auth_mode'] {
+function normalizeWebhookAuthMode(value: string | undefined): CloudWebhookTriggerInput['auth_mode'] {
   return oneOfFlag(value, '--auth-mode', ['hmac', 'bearer', 'mtls']);
+}
+
+/** The webhook a verb or the RPC loop asks for: only what was given is sent. */
+export function webhookTriggerInput(label: string, given: {
+  readonly authMode?: string;
+  readonly secret?: string;
+  readonly contentType?: string;
+  readonly rateLimit?: number;
+}): CloudWebhookTriggerInput {
+  const input: CloudWebhookTriggerInput = { label, auth_mode: normalizeWebhookAuthMode(given.authMode) };
+
+  if (given.secret) input.secret = given.secret;
+
+  if (given.contentType) input.accepted_content_type = given.contentType;
+
+  if (given.rateLimit) input.rate_limit_per_min = given.rateLimit;
+
+  return input;
 }
 
 /** Non-objects are kept under `key` so the payload survives. */

@@ -11,12 +11,9 @@ import * as v from 'valibot';
 import { resolveAgentTarget, type AgentTarget } from '../agent-target';
 import { runLocalOptimization } from '../local-agent-client';
 import { requireAuthConfig } from '../config';
-import {
-  ActivitySpendSchema, callAgentRpc, createCloudWebhookTrigger,
-  type CloudWebhookTriggerInput,
-} from '../cloud-api';
+import { ActivitySpendSchema, callAgentRpc } from '../cloud-api';
 import { ACCENT, DIM, ERR, OK, plural, printJson, printSearchTree, renderAccountSpendLines, WARN } from '../display';
-import { asRecord, normalizeWebhookAuthMode, parsePositiveInt, parseTime, stringField } from '../options';
+import { asRecord, parsePositiveInt, parseTime, stringField } from '../options';
 import {
   executeLocalExecutor,
   getLocalAgentState,
@@ -474,35 +471,6 @@ export async function qualityCommand(name: string, opts: InspectOpts & { days?: 
   }
 
   console.log(renderQualitySeries(data));
-}
-
-export function webhookCommand(name: string, label: string | undefined, opts: InspectOpts & {
-  authMode?: string;
-  secret?: string;
-  contentType?: string;
-  rateLimit?: string;
-} = {}): Promise<void> {
-  return settle(Effect.gen(function* () {
-    if (!label) return yield* Effect.die(new Error('webhook label required'));
-    const target = resolveAgentTarget(name);
-
-    if (target.mode !== 'cloud') return yield* Effect.die(new Error('Webhook triggers require a cloud workspace.'));
-    const auth = requireAuthConfig();
-    const authMode = normalizeWebhookAuthMode(opts.authMode);
-
-    const input: CloudWebhookTriggerInput = {
-      label,
-      auth_mode: authMode,
-    };
-
-    if (opts.secret) input.secret = opts.secret;
-
-    if (opts.contentType) input.accepted_content_type = opts.contentType;
-
-    if (opts.rateLimit) input.rate_limit_per_min = parsePositiveInt(opts.rateLimit, 'rate limit');
-    const created = yield* Effect.promise(async () => createCloudWebhookTrigger(auth.origin, auth.token, target.cloudName, input));
-    printData(decodeJsonValue({ value: created }), opts);
-  }));
 }
 
 function cloudRead(

@@ -28,6 +28,6 @@ export {
 } from './reply-channel';
 
 export {
-  TriggerRegistry, DEFAULT_FORK_POLICY,
+  TriggerRegistry,
   type RegisterSpec, type AlarmScheduler, type ForkPolicy,
 } from './triggers';

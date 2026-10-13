@@ -5,7 +5,6 @@ import { GearIcon, TrashIcon, SignOutIcon, PencilSimpleIcon, CheckIcon, XIcon, P
   UsersThreeIcon, CaretRightIcon, EraserIcon,
 } from "@phosphor-icons/react";
 import { KinuLogo } from "./ui/KinuLogo";
-import type { RosterEntry, WorkspaceEntry } from "../lib/user-api";
 import { useAccount } from "@/hooks/use-account";
 import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
 import { useWorkspaceRpc, type ConnectionStatus } from "../hooks/use-chat-owner";
@@ -13,7 +12,7 @@ import { useWorkspaceRoster } from "../hooks/use-workspace-roster";
 import { lastValue } from "../hooks/use-async-resource";
 import { ModeToggle, ThemeToggle } from "./theme-toggle";
 import { FeedbackButton } from "./FeedbackButton";
-import { isPlaceholderWorkspaceTitle, shortAge, workspaceDisplayTitle, type PanelAgent } from "@kinu.run/core";
+import { isPlaceholderWorkspaceTitle, shortAge, workspaceDisplayTitle, type PanelAgent, type RosterEntry, type WorkspaceEntry } from "@kinu.run/core";
 import { detach } from "@kinu.run/core/obs";
 import { useRename } from "@/hooks/use-rename";
 import { SidebarAgents } from "./SidebarAgents";

@@ -246,7 +246,6 @@ describe('archive index', () => {
     startTurn: 1,
     endTurn: 12,
     userTurns: 6,
-    assistantTurns: 6,
     firstUserAsk: 'port the auth refresh',
     ...overrides,
   });
@@ -254,7 +253,7 @@ describe('archive index', () => {
   test('ranges round-trip in turn order, per session', () => {
     const { store } = stateRig();
     expect(store.archive.list('s1')).toEqual([]);
-    const second = range({ rangeHash: 'h2', path: compactionTranscriptPath('s1', 'h2'), startTurn: 13, endTurn: 18, userTurns: 3, assistantTurns: 3 });
+    const second = range({ rangeHash: 'h2', path: compactionTranscriptPath('s1', 'h2'), startTurn: 13, endTurn: 18, userTurns: 3 });
     // Appended out of order: the index reads back by span.
     store.archive.append('s1', second);
     store.archive.append('s1', range());

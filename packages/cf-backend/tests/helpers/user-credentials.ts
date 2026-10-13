@@ -1,9 +1,8 @@
 // Wraps a plain credential double with the `UserCaller` every privileged UserDO method takes:
 // owner-session by default, a workspace capability token for attenuation tests.
 import { userCredentials, type UserCredentialSource } from '../../src/providers/agent-registry';
-import type { CredentialSummary } from '../../src/user/credentials';
 import type { ModelRelayHub } from '../../src/egress/model-relay-route';
-import { ownerCaller, type AuthRequest, type UserCaller } from '@kinu.run/core';
+import { ownerCaller, type AuthRequest, type UserCaller, type CredentialSummary } from '@kinu.run/core';
 import { TEST_USER_ENV } from './user-do';
 
 export type CredentialSummaryDouble = CredentialSummary;

@@ -1,8 +1,7 @@
-import { forkTransferFrames, nanoid, FORK_FRAME_BYTES } from '@kinu.run/core';
+import { forkTransferFrames, nanoid, FORK_FRAME_BYTES, type WorkspaceEntry } from '@kinu.run/core';
 import type { ForkFrame, ForkFrameReply } from '@kinu.run/core';
 import type { SqlExecutor, ForkAppData, ForkConversationSource, ForkFileSource, ActorHandle } from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';
-import type { WorkspaceEntry } from './workspaces';
 import { Cause, Effect } from 'effect';
 import { KinuError, settle } from '@kinu.run/core/obs';
 

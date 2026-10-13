@@ -13,8 +13,8 @@ export interface ArchiveRange {
   /** 1-based turn ordinals. */
   startTurn: number;
   endTurn: number;
+  /** The rest of the range is assistant turns. */
   userTurns: number;
-  assistantTurns: number;
   /** First user ask inside the range, one line, bounded. */
   firstUserAsk: string;
 }
@@ -54,17 +54,13 @@ export function deriveArchiveRange(
 
   const startTurn = carried + 1;
   let userTurns = 0;
-  let assistantTurns = 0;
   let firstUserAsk = '';
 
   for (const turn of delta) {
-    if (turn.role === 'user') {
-      userTurns++;
+    if (turn.role !== 'user') continue;
+    userTurns++;
 
-      if (!firstUserAsk) firstUserAsk = askSnippet(turn);
-    } else {
-      assistantTurns++;
-    }
+    if (!firstUserAsk) firstUserAsk = askSnippet(turn);
   }
 
   return {
@@ -75,7 +71,6 @@ export function deriveArchiveRange(
       startTurn,
       endTurn: startTurn + delta.length - 1,
       userTurns,
-      assistantTurns,
       firstUserAsk,
     },
   };
@@ -126,7 +121,9 @@ function formatRange(range: ArchiveRange): string {
 
   const ask = range.firstUserAsk ? `"${range.firstUserAsk}"` : '(no user ask)';
 
-  return `- ${span} (${range.userTurns} user / ${range.assistantTurns} assistant), ${ask}, ${range.path}`;
+  const assistantTurns = range.endTurn - range.startTurn + 1 - range.userTurns;
+
+  return `- ${span} (${range.userTurns} user / ${assistantTurns} assistant), ${ask}, ${range.path}`;
 }
 
 function askSnippet(turn: Turn): string {

@@ -33,11 +33,11 @@ export interface TimelineSpan {
 }
 
 /** `agents` stays a plain tool-call: run events carry no arguments to tell a swarm from a hire. */
-export function toolKindFor(name: string): TimelineKind {
+function toolKindFor(name: string): TimelineKind {
   return name === 'shell' ? 'runtime-exec' : 'tool-call';
 }
 
-export function classifyEvolutionType(type: string): TimelineKind {
+function classifyEvolutionType(type: string): TimelineKind {
   if (type === 'turn_complete') return 'llm-turn';
 
   if (type === 'reflection') return 'reflection';
@@ -113,7 +113,7 @@ function isDiagnosisOnly(e: RunEvent): e is DiagnosisOnlyEvent {
   return DIAGNOSIS_ONLY_EVENTS.has(e.type);
 }
 
-export function runEventToSpan(e: RunEvent): TimelineSpan {
+function runEventToSpan(e: RunEvent): TimelineSpan {
   const ts = Date.parse(e.timestamp) || Date.now();
   const base = { ts, source: 'shell' as const, rawType: e.type };
 

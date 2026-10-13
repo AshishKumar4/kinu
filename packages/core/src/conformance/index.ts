@@ -4,9 +4,7 @@ export {
   BACKEND_CONFORMANCE,
   CONFORMANCE_PLANES,
   CONFORMANCE_PRODUCERS,
-  CONFORMANCE_ROOTS,
-  PLANE_UNIVERSE,
-  WIRED,
+  
   type CapabilityStatus,
   type ConformanceManifest,
   type ConformancePlane,

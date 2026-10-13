@@ -46,10 +46,6 @@
       "complexity": 40
     },
     {
-      "key": "packages/cli/src/commands/run.ts#runCloudRpcCommand",
-      "complexity": 38
-    },
-    {
       "key": "packages/cf-backend/src/gallery.tsx#DriveFrame>filesRpc",
       "complexity": 37
     },
@@ -64,6 +60,10 @@
     {
       "key": "packages/core/src/bench/stats.ts#pairedBinaryComparison>gen",
       "complexity": 36
+    },
+    {
+      "key": "packages/cli/src/commands/run.ts#runCloudRpcCommand",
+      "complexity": 35
     },
     {
       "key": "scripts/bench-external.ts#readHarborTrial",

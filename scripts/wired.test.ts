@@ -168,6 +168,31 @@ describe('an exported value with no production consumer', () => {
   });
 });
 
+describe('a Worker entrypoint the runtime builds from the main module', () => {
+  // Its only reference is the loopback: `ctx.exports.<Name>`, or `exports.<Name>` from `cloudflare:workers`. Its method
+  // is called on a binding, so it is no platform hook either.
+  const LOOPBACK = `${BASE}worker/loopback.ts#Loopback (unreached-export)`;
+
+  const worker = (facet: string): Map<string, string> => fixture(SUPPLY(`{ rt: 'x', mission: 'm', logger: 'l' }`), [
+    [`${BASE}worker/server.ts`, `import { facet } from './facet';\nexport { Loopback } from './loopback';\nexport default { fetch: (_request: unknown, _env: unknown, ctx: never) => facet(ctx) };\n`],
+    [`${BASE}worker/loopback.ts`, `import { WorkerEntrypoint } from 'cloudflare:workers';\nexport class Loopback extends WorkerEntrypoint { read(): string { return 'r'; } }\n`],
+    [`${BASE}worker/facet.ts`, facet],
+  ]);
+
+  test('is reported when nothing names it, through the loopback or otherwise', () => {
+    const facet = `export function facet(_ctx: unknown): string { const binding = { read: () => 'r' }; return binding.read(); }\n`;
+
+    expect(census(worker(facet)).filter((key) => key === LOOPBACK)).toEqual([LOOPBACK]);
+  });
+
+  test.each([
+    ['ctx.exports.<Name>', `export function facet(ctx: { exports: Record<string, (o: unknown) => { read(): string }> }): string {\n  return ctx.exports.Loopback({}).read();\n}\n`],
+    ['exports.<Name> from cloudflare:workers', `import { exports } from 'cloudflare:workers';\nexport function facet(_ctx: unknown): string { return exports.Loopback({ props: {} }).read(); }\n`],
+  ])('is NOT reported when a live file reaches it as %s', (_form, facet) => {
+    expect(census(worker(facet)).filter((key) => key === LOOPBACK)).toEqual([]);
+  });
+});
+
 describe('awaited dynamic import consumers', () => {
   const lazyFile = `${BASE}lazy.ts`;
   const lazySource = 'export function highlightCode() { return "html"; } export const unused = 1;';

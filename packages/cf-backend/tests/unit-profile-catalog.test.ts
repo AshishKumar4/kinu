@@ -295,7 +295,6 @@ describe('profile catalog storage hygiene', () => {
       .rejects.toThrow('dedicated typed CAS route');
     await expect(harness.userDO.setConfig(owner, 'profile_catalog', '{}'))
       .rejects.toThrow('dedicated typed CAS route');
-    expect(await harness.userDO.listConfig(owner)).not.toHaveProperty('profile_catalog');
     harness.close();
   });
 });

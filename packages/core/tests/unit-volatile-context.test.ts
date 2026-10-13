@@ -7,7 +7,7 @@ import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import * as v from 'valibot';
 import { z } from 'zod';
-import { runChat, DynamicContextLedger, renderDynamicContextBlock, fnv1a64, agentDynamicContext, observeSystemPromptHash, renderActiveSkillsSection, type DynamicContext, type PromptExecutorInfo } from '../src/index';
+import { runChat, currentDateForPrompt, DynamicContextLedger, renderDynamicContextBlock, fnv1a64, agentDynamicContext, observeSystemPromptHash, renderActiveSkillsSection, type DynamicContext, type PromptExecutorInfo } from '../src/index';
 import { Fnv1a64 } from '../src/utils/fnv1a';
 import { admitActiveSkills } from '../src/skills/loader';
 import { skillViewPath, WORKSPACE_SKILLS_DIR } from '../src/skills/types';
@@ -68,6 +68,26 @@ test('date, model and working directory are live state: a new day is a delta of 
   expect(next).toMatch(DELTA_OPEN);
   expect(next).toContain('2026-10-02');
   expect(next).not.toContain('k = v');
+});
+
+// Hosts stamp the date from the clock every step: anything finer than the day re-sends the runtime section each time.
+test('steps on one day re-send nothing; the first step of the next day is a delta naming it', () => {
+  const ledger = new DynamicContextLedger();
+  const history: ModelMessage[] = [{ role: 'user', content: 'go' }];
+
+  const at = (iso: string) => ({
+    runtime: { backend: 'cli-local', model: { id: 'claude-sonnet-4-7', provider: 'anthropic' }, date: currentDateForPrompt(new Date(iso)) },
+  } as const);
+
+  ledger.weave(history, at('2026-10-01T09:05:00Z'));
+  history.push({ role: 'assistant', content: 'ok' }, { role: 'user', content: 'again' });
+  expect(ledger.weave(history, at('2026-10-01T17:42:03Z'))).toHaveLength(history.length + 1);
+
+  history.push({ role: 'assistant', content: 'ok' }, { role: 'user', content: 'tomorrow' });
+  const next = messageText(present(ledger.weave(history, at('2026-10-02T00:00:01Z')).at(-2), 'woven delta'));
+
+  expect(next).toMatch(DELTA_OPEN);
+  expect(next).toContain('2026-10-02');
 });
 
 // The block's attributes are for the ledger, read back from stored history: a delta names the state it applies to.

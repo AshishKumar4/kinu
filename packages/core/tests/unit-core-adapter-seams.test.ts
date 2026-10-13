@@ -7,7 +7,6 @@ import { jsonSchema, tool, type FinishReason } from 'ai';
 import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
 import { createTestActors, createTestActorsOver, createTestSql, withHostDeliveries } from '@kinu.run/test-utils';
 import {
-  
   buildModelCallEvent, type ModelCallReport,
   classifyRunEnd, RUN_END_REASONS, type RunEndReason,
   TOOL_CALLS_PENDING, TURN_ENDED_MID_WORK,
@@ -15,14 +14,15 @@ import {
   AgentOrchestrator, recordedTurn, type AgentOrchestratorDeps,
   providerSnapshotOf, ProviderListingCache, type ProviderListing,
   defaultSpecFor, DEFAULT_WORKERS_AI_MODEL_SPEC, workersAiSpec,
-  DEFAULT_ROLE_ID, SUBMIT_PLAN_TOOL, DEPS_GATED_TOOLS,
-  craftedToolDescription, toCraftedToolSource, type CraftedTool,
+  DEFAULT_ROLE_ID, SUBMIT_PLAN_TOOL, BUILTIN_TOOLS,
+  craftedToolDescription, type CraftedTool,
   CRAFTED_TOOL_NAMESPACE, nativeToolFunctions,
   initCompletedTurnTable, createCompletedTurnStore,
   initEventsHubTables, EventLog,
   type ModelPricing, type CompletedTurn, type SqlExec,
   type BackendHost, type BroadcastEvent, type ProgrammaticTurn,
 } from '../src/index';
+import { toCraftedToolSource } from '../src/tools/crafted-executor';
 import { makeSqlExec } from './helpers';
 
 describe('EVENT_VARIANTS — the array and the type cannot disagree', () => {
@@ -625,7 +625,7 @@ describe('the declared ids no adapter spells by hand', () => {
   // the submission boundary.
   test('submit_plan is declared but is not a standing builtin', () => {
     expect(SUBMIT_PLAN_TOOL).toBe('submit_plan');
-    expect(DEPS_GATED_TOOLS).not.toContain(SUBMIT_PLAN_TOOL);
+    expect(BUILTIN_TOOLS).not.toContain(SUBMIT_PLAN_TOOL);
   });
 });
 

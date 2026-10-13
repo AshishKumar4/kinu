@@ -3,7 +3,6 @@
     "id TEXT PRIMARY KEY",
     "proposal_json TEXT NOT NULL",
     "origin_json TEXT NOT NULL",
-    "fingerprint TEXT NOT NULL",
     "delivery TEXT UNIQUE",
     "status TEXT NOT NULL DEFAULT 'pending'",
     "created_at INTEGER NOT NULL",
@@ -407,15 +406,6 @@
     "expires_at INTEGER NOT NULL",
     "used_at INTEGER"
   ],
-  "codex_device_flow@packages/core/src/state/user-schema.ts": [
-    "id INTEGER PRIMARY KEY CHECK (id = 1)",
-    "device_auth_id TEXT NOT NULL",
-    "user_code TEXT NOT NULL",
-    "poll_interval INTEGER NOT NULL",
-    "portal_url TEXT NOT NULL",
-    "generation INTEGER NOT NULL DEFAULT 1",
-    "settled_at INTEGER"
-  ],
   "compaction_archive@packages/core/src/state/workspace-schema.ts": [
     "actor_id TEXT NOT NULL",
     "session_key TEXT NOT NULL",
@@ -423,7 +413,6 @@
     "start_turn INTEGER NOT NULL",
     "end_turn INTEGER NOT NULL",
     "user_turns INTEGER NOT NULL",
-    "assistant_turns INTEGER NOT NULL",
     "first_user_ask TEXT NOT NULL",
     "PRIMARY KEY (actor_id, session_key, range_hash)"
   ],
@@ -1490,11 +1479,11 @@
   "user_browser_sessions@packages/core/src/state/user-schema.ts": [
     "token_hash TEXT PRIMARY KEY",
     "expires_at INTEGER NOT NULL",
-    "email TEXT",
+    "email TEXT NOT NULL",
     "display_name TEXT",
-    "provider TEXT",
-    "provider_sub TEXT",
-    "auth_time INTEGER"
+    "provider TEXT NOT NULL",
+    "provider_sub TEXT NOT NULL",
+    "auth_time INTEGER NOT NULL"
   ],
   "user_cli_tokens@packages/core/src/state/user-schema.ts": [
     "token_hash TEXT PRIMARY KEY",
@@ -1580,21 +1569,14 @@
     "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
     "updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)"
   ],
-  "user_mcp_server_presets@packages/core/src/state/user-schema.ts": [
-    "server_id TEXT PRIMARY KEY REFERENCES user_mcp_servers(id) ON DELETE CASCADE",
-    "preset_id TEXT NOT NULL"
-  ],
   "user_mcp_servers@packages/core/src/state/user-schema.ts": [
     "id TEXT PRIMARY KEY",
     "name TEXT NOT NULL",
     "server_url TEXT NOT NULL",
     "transport TEXT NOT NULL",
     "headers TEXT",
-    "allowed_tools TEXT"
-  ],
-  "user_onboarding@packages/core/src/state/user-schema.ts": [
-    "id INTEGER PRIMARY KEY CHECK (id = 1)",
-    "completed_at INTEGER NOT NULL"
+    "allowed_tools TEXT",
+    "preset_id TEXT"
   ],
   "user_peer_grants@packages/core/src/state/user-schema.ts": [
     "sender_user_id TEXT NOT NULL",
@@ -1607,7 +1589,8 @@
     "email TEXT NOT NULL",
     "display_name TEXT",
     "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
-    "last_seen_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)"
+    "last_seen_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
+    "onboarded_at INTEGER"
   ],
   "user_schema_meta@packages/core/src/state/user-schema.ts": [
     "key TEXT PRIMARY KEY",

@@ -100,9 +100,8 @@ it is (`actorReach`, from its roster policy) and by the lane its turn was
 admitted in (`turnReach`). `actorSurface` builds every agent's turn surface from
 it, the workspace agent's, a hire's, a head's, a swarm node's and a background
 run's alike, and gates each plane by it, never by asking what the agent is.
-`DEPS_GATED_TOOLS` lives in core (`packages/core/src/tools/registry.ts`) and
-holds `report`, so renaming a builtin moves its gate with it, where a cf-local
-`['report']` would match nothing. `report` is wired only on a hirer's lane.
+`report` is wired only on a hirer's lane, through the turn reach, and code names
+it by core's `REPORT_TOOL`, so renaming a builtin moves every gate with it.
 `team` and `peers` gate `agents` actions through `agentsActionsFor`, which
 always sees a `swarm` marker, so every CF actor advertises `swarm`. No flag or
 allowlist decides any of this.

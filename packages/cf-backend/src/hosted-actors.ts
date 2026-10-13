@@ -1,8 +1,8 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** Shared tools and roster for non-main agents; their turns run in AgentFacet. */
 
-import { actorPolicy, assignmentDelivery, publishSubordinateReport, type Delivery, type OwedAdmission, type ConversationRecall, type HeadReport, isSubordinateOrigin, type SubordinateReportLedger, type ToolSurfaceNarrowing, type SeatedActor, type TierId } from '@kinu.run/core';
-import type { LanguageModel, ModelMessage, Tool, ToolSet } from 'ai';
+import { actorPolicy, assignmentDelivery, publishSubordinateReport, type Delivery, type OwedAdmission, type ConversationRecall, type HeadReport, isSubordinateOrigin, type SubordinateReportLedger, type CodemodeBuilder, type SeatedActor, type TierId } from '@kinu.run/core';
+import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
 import { EventLog, titleActorFromMessage, spawnSeatedHead, admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus, receiveSubordinateEvent, subordinateForkContext, type SubordinateInheritedContext, inheritedAsModelMessage, explorationActorKey, headStatusUnsettled, storedHeadReportStatus, registeredParent, subordinateDescendants, actorReferenceOf, terminalTaskReport, owedSubordinateTurnReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, type ActorHost, type ActorReference, type BoundActor, type DelegationBudget, type HeadId, type HeadInput, type RunInference, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedNodeSeat, type StepLoopJobSeat, type JobRetirement, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubordinateEventResult, type SubordinateHandoff, type SubordinateLifetime, type SubordinateReportOrigin, type SubordinateReportHandoff, type SubordinateReportStatus, type SubordinateRosterStore, type SubordinateRuntime, type SubordinateSeed, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
 import { attempt, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import type {
@@ -134,8 +134,8 @@ export interface HostedActorSeams {
   webSearch(): WebSearchProvider;
   /** The same provisioner the host uses, so the home a node is told about is the one it has. */
   nodeHome(actor: SeatedActor): Promise<NodeWorkspace>;
-  /** Typed as `Tool`: core widens `HeadToolDeps.codemodeTool` to `unknown`, this seam need not. */
-  codemodeTool(actor: SeatedActor, runtime: CFRuntime, webSearch: WebSearchProvider): (finished: ToolSet, reach: ToolSurfaceNarrowing) => Tool;
+  /** A confined surface's `eval` builder, over the hosted actor it runs as. */
+  codemode(actor: SeatedActor, runtime: CFRuntime, webSearch: WebSearchProvider): CodemodeBuilder;
   /** The workspace journal, so a depth-2 head's spawn row and step rows join. */
   recordStep(headId: HeadId, seq: number, step: HeadStep): Promise<void>;
   readonly publishDelta: ReportHeadDelta;
@@ -628,8 +628,8 @@ export async function hostHead(seams: HostedActorSeams, input: HeadInput): Promi
         },
       })));
     },
-    codemodeTool: (seat) => settleSync(cfRuntimeOf(seat.actor, 'a hosted head').pipe(
-      Effect.map((runtime) => seams.codemodeTool(seat.actor, runtime, seams.webSearch())),
+    codemode: (seat) => settleSync(cfRuntimeOf(seat.actor, 'a hosted head').pipe(
+      Effect.map((runtime) => seams.codemode(seat.actor, runtime, seams.webSearch())),
     )),
     webSearch: seams.webSearch(),
     split: (seat, head) => settleSync(cfRuntimeOf(seat.actor, 'a hosted head').pipe(
@@ -679,8 +679,8 @@ export async function hostNodeSeat(
 }
 
 /** A swarm node's `eval`, over the hosted actor the node runs as. */
-export function nodeCodemodeTool(seams: HostedActorSeams, actor: SeatedActor): (finished: ToolSet, reach: ToolSurfaceNarrowing) => Tool {
-  return settleSync(cfRuntimeOf(actor, 'a swarm node').pipe(Effect.map((runtime) => seams.codemodeTool(actor, runtime, seams.webSearch()))));
+export function nodeCodemodeTool(seams: HostedActorSeams, actor: SeatedActor): CodemodeBuilder {
+  return settleSync(cfRuntimeOf(actor, 'a swarm node').pipe(Effect.map((runtime) => seams.codemode(actor, runtime, seams.webSearch()))));
 }
 
 /**
