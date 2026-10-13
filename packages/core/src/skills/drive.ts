@@ -192,7 +192,7 @@ export function listDrive(drive: MossaicVfs, rawPath: string): Promise<DriveList
       for (const reserved of DRIVE_RESERVED_DIRS) {
         const name = reserved.slice(1);
 
-        if (!listed.some((entry) => entry.name === name)) listed.push({ name, stat: { size: 0, mtimeMs: 0, type: 'directory' } });
+        if (!listed.some((entry) => entry.name === name)) listed.push({ name, type: 'directory', stat: { size: 0, mtimeMs: 0, type: 'directory' } });
       }
     }
 
