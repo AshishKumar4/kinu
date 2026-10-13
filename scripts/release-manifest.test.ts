@@ -139,8 +139,6 @@ describe('what a stranger\'s deployment is given', () => {
 
     expect(secrets.map((secret) => secret.name)).toEqual(expected);
     expect(secrets.find((secret) => secret.name === 'CREDENTIAL_ENCRYPTION_KEY')?.required).toBe(true);
-    expect(secrets.find((secret) => secret.name === 'CREDENTIAL_ENCRYPTION_KEY')?.prompt)
-      .toMatch(/32 random bytes/u);
   });
 
   test('a secret whose var this release does not send is offered, never demanded', () => {

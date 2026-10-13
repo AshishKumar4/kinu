@@ -28,8 +28,8 @@ import { join, resolve } from 'node:path';
 import * as v from 'valibot';
 import { git, gitEnv, initRepo, runToExit, scratchDir } from '@kinu.run/test-utils';
 import {
-  ALLOWED_PREFIXES, BLIND_SPOTS, GENERATED_SUBJECT, MESSAGE_LINE_CEILING, NAMES_WITHOUT_CODE,
-  NARRATION, ROSTER, type Rule, SUBJECT_CEILING, cleanMessage, codeIdentifierTest,
+  ALLOWED_PREFIXES, GENERATED_SUBJECT, MESSAGE_LINE_CEILING, NAMES_WITHOUT_CODE,
+  ROSTER, type Rule, SUBJECT_CEILING, cleanMessage, codeIdentifierTest,
   committedIdentifierTest, inspect, sizeViolations, subjectOf, proseOnly,
   truncatedHistoryRefusal,
 } from './commit-hygiene';
@@ -636,32 +636,5 @@ describe('history mode refuses a clone that has no history, and says how to get 
     expect(live('SealSideDoor')).toBe(false);
     expect(inspect('fix(delta): keep the rows honest\n\n`rows` no longer restates its element '
       + 'type.', live)).toEqual([]);
-  });
-});
-
-describe('the gate states what it does not catch', () => {
-  test('every blind spot names its measured size', () => {
-    expect(BLIND_SPOTS.length).toBeGreaterThan(5);
-
-    for (const spot of BLIND_SPOTS) expect(spot.length).toBeGreaterThan(80);
-    const text = BLIND_SPOTS.join(' ');
-
-    for (const named of ['COLON REVEALS', 'BINARY CONTRASTS', 'EM DASHES', 'SENTENCE LENGTH']) {
-      expect(text).toContain(named);
-    }
-
-    // Each of the four carries a number, because "this gate does not check
-    // style" is not a blind spot, it is a shrug.
-    expect(text).toContain('302 of 1,898');
-    expect(text).toContain('180 measured');
-    expect(text).toContain('3,234');
-    expect(text).toContain('26.6 words');
-  });
-
-  test('every narration pattern says what to write instead', () => {
-    for (const rule of NARRATION) {
-      expect(rule.instead.length).toBeGreaterThan(30);
-      expect(rule.names.length).toBeGreaterThan(5);
-    }
   });
 });

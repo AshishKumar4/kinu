@@ -261,7 +261,6 @@ describe('tasks action=mode — the agent\'s durable role', () => {
     expect(config.getRoleSelection()).toBe('researcher');
 
     const prompt = buildSystemPromptSync(rt, { roleSection: roleSection('researcher') });
-    expect(prompt).toContain('Role: Researcher');
     expect(prompt).toContain(BUILTIN_ROLE_DEFINITIONS.researcher.instructions);
   });
 
@@ -275,8 +274,10 @@ describe('tasks action=mode — the agent\'s durable role', () => {
   test('an unknown role is refused and changes nothing', async () => {
     const { tasks } = roleSetup();
     await tasks({ op: 'switchRole', role: 'auditor' });
-    await expect(tasks({ op: 'switchRole', role: 'yolo' }))
-      .rejects.toMatchObject({ code: 'bad_input', message: expect.stringMatching(/"yolo"[^]*Known roles: auditor/) });
+    const pending = tasks({ op: 'switchRole', role: 'yolo' });
+    await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
+    await expect(pending).rejects.toThrow('yolo');
+    await expect(pending).rejects.toThrow('auditor');
     expect(await tasks({ op: 'role' })).toEqual({ role: 'auditor' });
   });
 

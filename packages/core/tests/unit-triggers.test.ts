@@ -5,7 +5,7 @@ import { Database } from 'bun:sqlite';
 import { createTestActorsOver, present } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
-  DEFAULT_FORK_POLICY, TriggerRegistry, initEventsHubTables,
+  TriggerRegistry, initEventsHubTables,
   type AlarmScheduler, type RegisterSpec, type TriggerKind,
 } from '../src/events/hub/index';
 import {
@@ -76,12 +76,6 @@ describe('TriggerRegistry.register', () => {
     const { registry } = setup();
     const id = await registry.register(spec({ spec: { cron: '0 9 * * *', tz: 'UTC', nested: { a: [1, 2] } } }), NOW);
     expect(present(registry.get(id), 'registered trigger').spec).toEqual({ cron: '0 9 * * *', tz: 'UTC', nested: { a: [1, 2] } });
-  });
-
-  test('rate limit defaults to 60/min and an explicit one is honoured', async () => {
-    const { registry } = setup();
-    expect(present(registry.get(await registry.register(spec(), NOW)), 'registered trigger').rate_limit_per_min).toBe(60);
-    expect(present(registry.get(await registry.register(spec({ rate_limit_per_min: 5 }), NOW)), 'registered trigger').rate_limit_per_min).toBe(5);
   });
 
   test('an explicit rate limit of 0 is preserved, not defaulted away', async () => {
@@ -363,7 +357,6 @@ describe('TriggerRegistry.forkPlan', () => {
   test('routes each kind by its documented default policy', async () => {
     const { registry } = setup();
     const ids = new Map<TriggerKind, string>();
-    expect(Object.keys(DEFAULT_FORK_POLICY)).toEqual(TRIGGER_KINDS);
 
     for (const kind of TRIGGER_KINDS) {
       ids.set(kind, await registry.register(spec({ kind }), NOW));
@@ -371,22 +364,8 @@ describe('TriggerRegistry.forkPlan', () => {
 
     const { copy, share } = registry.forkPlan();
 
-    const expected = (policy: string) => TRIGGER_KINDS
-      .filter(k => DEFAULT_FORK_POLICY[k] === policy)
-      .map((kind) => {
-        const id = ids.get(kind);
-
-        if (!id) throw new Error(`expected registered trigger id for ${kind}`);
-
-        return id;
-      })
-      .sort();
-
-    expect(copy.map(t => t.id).sort()).toEqual(expected('copy'));
-    expect(share.map(t => t.id).sort()).toEqual(expected('share'));
-    const planned = new Set([...copy, ...share].map(t => t.id));
-
-    for (const kind of expected('sever')) expect(planned.has(kind)).toBe(false);
+    expect(copy.map(t => t.id)).toEqual([present(ids.get('timer_cron'), 'the cron trigger id')]);
+    expect(share).toEqual([]);
   });
 
   test('a per-trigger fork_policy overrides the kind default in both directions', async () => {

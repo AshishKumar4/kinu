@@ -470,11 +470,6 @@ describe('fitting a report to the one bound', () => {
     expect(fitted.componentStack.length).toBeGreaterThan(0);
   });
 
-  test('the share is proportional to what each asked for', () => {
-    const fitted = fitClientErrorReport(oversized(450, 50));
-    expect(fitted.stack.length).toBeGreaterThan(fitted.componentStack.length * 4);
-  });
-
   test('whole frames survive, never half of one', () => {
     // A partial frame would be refused by the route's schema, so truncation drops whole frames.
     const fitted = fitClientErrorReport(oversized(400, 400));

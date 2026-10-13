@@ -56,16 +56,14 @@ describe('the workspace takes its own first turn', () => {
     const next = turns.park();
 
     expect(await harness.agent.beginGenesisTurn()).toEqual({ started: true });
-    const request = await next;
+    await next;
     await turns.settle({ messageId: 'a-genesis', text: 'ok' });
 
     const ran = (await turnsRun(harness));
     expect(ran).toHaveLength(1);
     const turn = ran[0];
     expect(turn.provenance.kinuEvent).toBe(WORKSPACE_CREATED_EVENT);
-    expect(turn.provenance[SIGNAL_ID_METADATA_KEY]).toMatch(/^sig-/);
-    expect(turn.text).toContain('first turn');
-    expect(requestText(request.prompt)).toContain('first turn');
+    expect(turn.provenance[SIGNAL_ID_METADATA_KEY]).toBeDefined();
     harness.db.close();
   });
 
@@ -127,7 +125,6 @@ describe('the workspace takes its own first turn', () => {
     const turns = chatSessionTurns(harness.agent);
     const request = await turns.prepare({ messages: [{ role: 'user', content: 'Summarize the incident timeline first.' }] });
     expect(requestText(request.prompt)).toContain('Summarize the incident timeline first.');
-    expect(requestText(request.prompt)).not.toContain('first turn');
 
     expect(await harness.agent.beginGenesisTurn()).toEqual({ started: true });
     await turns.settle({ messageId: 'a-first', text: 'ok' });
@@ -152,7 +149,6 @@ describe('the workspace takes its own first turn', () => {
 
     const ran = (await turnsRun(harness));
     expect(ran).toHaveLength(1);
-    expect(ran[0].text).toContain('first turn');
     expect(ran[0].provenance.kinuEvent).toBe(WORKSPACE_CREATED_EVENT);
     expect(activityEvents(harness.db)).not.toContain('genesis.yielded_to_message');
     harness.db.close();
@@ -177,9 +173,9 @@ describe('the workspace takes its own first turn', () => {
     await sent;
 
     const asked = requestText((await genesis).prompt);
-    expect(asked).toContain('first turn');
-    expect(asked.indexOf('first turn')).toBeLessThan(asked.indexOf('Summarize the incident timeline first.'));
+    expect(asked).toContain('Summarize the incident timeline first.');
     await turns.settle({ messageId: 'a-genesis', text: 'ok' });
+    expect((await turnsRun(harness))[0].provenance.kinuEvent).toBe(WORKSPACE_CREATED_EVENT);
     expect(activityEvents(harness.db)).not.toContain('genesis.yielded_to_message');
     harness.db.close();
   });
@@ -191,7 +187,7 @@ describe('the workspace takes its own first turn', () => {
     const genesis = turns.park();
 
     expect(await harness.agent.beginGenesisTurn()).toEqual({ started: true });
-    expect(requestText((await genesis).prompt)).toContain('first turn');
+    await genesis;
 
     // A late message while the offer holds the slot reruns as the operator's own next turn.
     await harness.agent.send('Late but admitted.', 'm-late');

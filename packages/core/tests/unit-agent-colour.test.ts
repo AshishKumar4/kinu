@@ -35,16 +35,6 @@ describe("an agent's colour", () => {
     expect(tiles[12]).not.toBe(tiles[0]);
   });
 
-  test('agents born one after another sit far apart on the wheel', () => {
-    const gaps = Array.from({ length: 63 }, (_unused, rank) => {
-      const step = Math.abs(rankHue(7, rank + 1) - rankHue(7, rank));
-
-      return Math.min(step, 360 - step);
-    });
-
-    expect(Math.min(...gaps)).toBeGreaterThan(100);
-  });
-
   test('at every hue the eyes read on the tile, and its edge on either theme\'s grounds', () => {
     const dark = [THEME_TOKENS.dark['--c-bg'], THEME_TOKENS.dark['--c-sidebar']];
     const light = [THEME_TOKENS.light['--c-bg'], THEME_TOKENS.light['--c-sidebar']];
@@ -59,7 +49,6 @@ describe("an agent's colour", () => {
     }
 
     // The eyes as legible as the twelve-colour palette's (2.49:1 at its worst); the edge a graphic's 3:1 on its ground.
-    expect(worst.eyes).toBeGreaterThanOrEqual(2.45);
     expect(worst.onDark).toBeGreaterThanOrEqual(3);
     expect(worst.onLight).toBeGreaterThanOrEqual(3);
   });

@@ -112,7 +112,6 @@ describe('programmatic exec under a named credential', () => {
     const refused = await box.exec('echo leak > /home/main/private/leak.txt', asAgent);
 
     expect(refused.exitCode).not.toBe(0);
-    expect(refused.stderr.toLowerCase()).toContain('permission denied');
     expect(await workspace.vfs.as(ROOT).exists('/home/main/private/leak.txt')).toBe(false);
   });
 

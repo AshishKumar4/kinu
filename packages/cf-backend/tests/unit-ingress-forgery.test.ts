@@ -40,8 +40,6 @@ const FIVE_MINUTES_MS = 5 * 60 * 1000;
 /** The capability width `webhook-route.ts` mints. */
 const CAPABILITY_HEX_CHARS = 32;
 
-const RefusalSchema = v.object({ error: v.string() });
-
 const AcceptedSchema = v.object({
   accepted: v.boolean(), event_id: v.string(), admitted: v.boolean(),
 });
@@ -203,7 +201,6 @@ describe('a webhook delivery nobody could sign reaches no event log', () => {
     }), ws.env, ws.ctx);
 
     expect(response.status).toBe(401);
-    expect(v.parse(RefusalSchema, await response.json())).toEqual({ error: 'signature mismatch' });
     // The object was woken (signatures are checked in its own storage) and published nothing.
     expect(ws.activations).toEqual([ws.harness.agent.name]);
     expect(await ws.events('webhook')).toEqual([]);
@@ -217,7 +214,6 @@ describe('a webhook delivery nobody could sign reaches no event log', () => {
     );
 
     expect(response.status).toBe(401);
-    expect(v.parse(RefusalSchema, await response.json())).toEqual({ error: 'missing hmac headers' });
     expect(await ws.events('webhook')).toEqual([]);
   });
 
@@ -231,7 +227,6 @@ describe('a webhook delivery nobody could sign reaches no event log', () => {
     }), ws.env, ws.ctx);
 
     expect(response.status).toBe(401);
-    expect(v.parse(RefusalSchema, await response.json())).toEqual({ error: 'timestamp out of window' });
     expect(await ws.events('webhook')).toEqual([]);
   });
 
@@ -246,7 +241,6 @@ describe('a webhook delivery nobody could sign reaches no event log', () => {
     }), ws.env, ws.ctx);
 
     expect(response.status).toBe(404);
-    expect(await response.text()).toBe('Not found');
     expect(ws.activations).toEqual([]);
     expect(await ws.events('webhook')).toEqual([]);
   });

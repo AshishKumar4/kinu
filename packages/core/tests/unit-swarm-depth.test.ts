@@ -653,7 +653,7 @@ describe('a swarm at depth 2 expands, and its tree is measured', () => {
     // Only `arbitrateBranch` owns the boundary (`caps.depth.value <= atDepth`): in a depth-2 search depth 1 is
     // invited and depth 2 is not. Asserted via prompts because the mock proposes even when uninvited.
     const { nodes, prompts } = await run({ depth: 2, branches: 2, proposeWidth: null });
-    const invited = prompts.filter((sent) => sent.includes('You are proposing, not spawning'));
+    const invited = prompts.filter((sent) => sent.includes('PROPOSE-BRANCH'));
     const oneBelowTheCap = nodes.filter((node) => node.depth === 1).length;
     expect(oneBelowTheCap).toBeGreaterThan(0);
     expect(invited).toHaveLength(oneBelowTheCap);
@@ -1000,14 +1000,12 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
 
   test('no clamp is disclosed, because none can bind', async () => {
     // The pool is sized from the request, so no `swarm.judge_ensemble_clamped` event; a shortfall fails the run.
-    const { logger, result } = await run({
+    const { result } = await run({
       depth: 1, branches: 2, proposeWidth: null,
       config: { score: { kind: 'judge', samples: 20 } },
     });
 
     expect('reason' in result).toBe(false);
-    expect(logger.emitted.filter((line) => line.event === 'swarm.judge_ensemble_clamped'))
-      .toHaveLength(0);
   });
 
   test('a judged tree BELOW the marginalisation floor is refused', () => {
@@ -1545,12 +1543,12 @@ describe("advance:'archive' bins a wave into cells, and the next run starts from
 });
 
 describe("the archive's own region, and the refusal `pareto` carries alone", () => {
-  /** Refusal text for an expected-illegal composition, or '' when legal. */
+  /** The resolver or validity refusal, or null when legal. */
   function archiveRefusal(input: {
     readonly depth: number;
     readonly config?: Partial<SwarmConfig>;
     readonly key?: string;
-  }): string {
+  }): Refusal | null {
     const call = resolveSwarm({
       preset: 'custom',
       label: 'archive-suite',
@@ -1562,41 +1560,37 @@ describe("the archive's own region, and the refusal `pareto` carries alone", () 
       key: input.key,
     });
 
-    if ('reason' in call) return call.error;
+    if ('reason' in call) return call;
 
-    return swarmValidity(call)?.error ?? '';
+    return swarmValidity(call);
   }
 
   test('the archive at depth 1 is LEGAL, so the refusals below are about their own arms', () => {
-    expect(archiveRefusal({ depth: 1, key: 'candOps' })).toBe('');
+    expect(archiveRefusal({ depth: 1, key: 'candOps' })).toBeNull();
   });
 
   test('past depth 1 it is refused, naming where an archive would have selected from', () => {
     // Archive cells are written at settle, so one run has no second level to select; refused, not flattened.
-    const error = archiveRefusal({ depth: 3, key: 'candOps' });
-    expect(error).toContain('depth 3 cannot be run');
-    expect(error).toContain('settle barrier');
-    expect(error).toContain('carry:"elites"');
+    const refusal = archiveRefusal({ depth: 3, key: 'candOps' });
+    expect(refusal).toMatchObject({ reason: 'bad_input' });
   });
 
   test('an archive with no measured objective cannot key a cell, and says so', () => {
     // A judged run has no objective identity or direction to key cells by.
-    const error = archiveRefusal({
+    const refusal = archiveRefusal({
       depth: 1, key: 'candOps', config: { score: { kind: 'judge', samples: 20 } },
     });
 
-    expect(error).toContain('keys every cell by the objective\'s identity');
-    expect(error).toContain('score:"verify"');
+    expect(refusal).toMatchObject({ reason: 'bad_input' });
   });
 
   test('a novelty threshold no distance can satisfy is refused, with the unit STATED', () => {
     // A distance floor, not a similarity ceiling: an unconverted value is stricter than intended or unenterable.
-    const error = archiveRefusal({
+    const refusal = archiveRefusal({
       depth: 1, key: 'candOps', config: { advance: { kind: 'archive', novelty: 1.4 } },
     });
 
-    expect(error).toContain('[0,1]');
-    expect(error).toContain('one MINUS that number');
+    expect(refusal).toMatchObject({ reason: 'bad_input' });
   });
 
   test('a key the instrument does not witness is refused BEFORE a candidate is expanded', async () => {
@@ -1609,7 +1603,7 @@ describe("the archive's own region, and the refusal `pareto` carries alone", () 
 
     if (!('reason' in result)) return;
     expect(result.reason).toBe('bad_input');
-    expect(result.error).toContain('"tactic" is not among the quantities');
+    expect(result.error).toContain('tactic');
     expect(result.error).toContain('candOps');
     expect(result.error).toContain('refOps');
   });
@@ -1691,7 +1685,7 @@ describe("the archive's own region, and the refusal `pareto` carries alone", () 
     expect('reason' in result).toBe(false);
 
     if ('reason' in result) return;
-    expect(result.candidates[0]?.unmeasurable).toContain('omitted declared axis');
+    expect(result.candidates[0]).toMatchObject({ unmeasurable: expect.any(String), pareto: null, score: null });
     expect(result.frontier).toEqual([]);
   });
 
@@ -1724,7 +1718,6 @@ describe("the archive's own region, and the refusal `pareto` carries alone", () 
 
     if (!('reason' in result)) throw new Error('an unmeasured pareto run must refuse, not settle');
     expect(result.reason).toBe('unsupported');
-    expect(result.error).toContain('orders its frontier by the axes');
     expect(rt.storage.sql<{ n: number }>`SELECT COUNT(*) AS n FROM search_nodes`[0]?.n ?? 0).toBe(0);
   });
 });

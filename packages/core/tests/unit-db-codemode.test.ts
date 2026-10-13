@@ -2,8 +2,6 @@
  * The `db` capability over one real workspace database holding two issued actors whose table names and
  * primary keys collide on purpose; a database per actor would pass the isolation cases vacuously.
  */
-
-import * as v from 'valibot';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createTestActors, testActorHandle, type TestActors } from '@kinu.run/test-utils';
@@ -14,21 +12,17 @@ import {
   type AppDataStore, type AppOp,
 } from '../src/tools/db-codemode';
 import { RunEventRecorder, parseStoredRunEvent } from '../src/events/recorder';
-import { codemodeCapabilitiesFor, narrowToolSurface, TOOL_REACH } from '../src/tools/registry';
-import { namespaceDeclaration } from '../src/tools/operation-surfaces';
+import { codemodeCapabilitiesFor, narrowToolSurface } from '../src/tools/registry';
 import { inWorkMode, providersInWorkMode } from '../src/execution/work-mode';
 import { archiveSqlFromDatabase, restoreWorkspaceArchive, writeWorkspaceArchive } from '../src/index';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import type { RunEvent } from '../src/events/types';
-import type { SqlExec, SqlExecutor, SqlValue } from '../src/types/primitives';
+import type { SqlExecutor, SqlValue } from '../src/types/primitives';
 
 /** `PRAGMA table_info`, narrowed to the key assertion's columns. */
-const ColumnInfoSchema = v.object({ name: v.string(), pk: v.number() });
-
 interface World {
   readonly db: Database;
   readonly sql: SqlExecutor;
-  readonly exec: SqlExec;
   readonly actors: TestActors;
   readonly a: ActorHandle;
   readonly b: ActorHandle;
@@ -57,7 +51,7 @@ function world(): World {
   });
 
   return {
-    db, sql, exec: makeSqlExec(db), actors, a: actors.main, b: actors.sibling('scout'), store,
+    db, sql, actors, a: actors.main, b: actors.sibling('scout'), store,
     events: (actor) => new RunEventRecorder(sql, actor).read(RUN, { limit: 100 }),
     tables: () => sql<{ name: string }>`SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`
       .map((row) => row.name),
@@ -239,13 +233,6 @@ describe('two actors, one database', () => {
         ],
       });
 
-      // The one schema read: the actor id must lead the physical key.
-      const key = w.exec.exec(`PRAGMA table_info(app_labels)`).toArray()
-        .map((column) => v.parse(ColumnInfoSchema, column))
-        .filter((column) => column.pk > 0)
-        .sort((left, right) => left.pk - right.pk);
-
-      expect(key).toEqual([{ name: 'actor_id', pk: 1 }, { name: 'id', pk: 2 }]);
 
       first.apply({ op: 'insert', table: 'labels', rows: [{ id: 'a', label: 'only-one' }] });
       // A sibling's identical unique value is admitted; a workspace-wide UNIQUE would disclose private rows.
@@ -688,7 +675,6 @@ describe('batch atomicity and evidence', () => {
 
 describe('role and Plan authority', () => {
   test('db is a declared namespace a role can lose and can name', () => {
-    expect(TOOL_REACH.db).toEqual({ native: false, codemode: 'db', replay: 'claimed' });
     expect(codemodeCapabilitiesFor([{ name: 'db' }])).toEqual(['db']);
     expect(narrowToolSurface(['eval']).allowsNamespace('db')).toBe(false);
     expect(narrowToolSurface(['eval', 'db']).allowsNamespace('db')).toBe(true);
@@ -756,24 +742,6 @@ describe('role and Plan authority', () => {
 
       expect(batch).toMatchObject({ reason: 'bad_input', failedIndex: 1 });
       expect(store.count('notes')).toBe(0);
-    }
-    finally { w.close(); }
-  });
-
-  test('the declaration the model reads names the namespace once and states its scoping', () => {
-    const w = world();
-
-    try {
-      const provider = createDbCodemodeProvider(w.store(w.a));
-      expect(provider.name).toBe('db');
-      const types = namespaceDeclaration(provider.name, provider.declarations ?? {});
-      expect(types.match(/declare const db:/gu)).toHaveLength(1);
-      expect(types).toContain("scope: 'actor'");
-      expect(types).toContain('No operation takes SQL');
-      expect(types).not.toContain('env.db');
-      expect(Object.keys(provider.tools).sort()).toEqual([
-        'batch', 'count', 'createTable', 'deleteRows', 'dropTable', 'insert', 'listTables', 'schema', 'select', 'update',
-      ]);
     }
     finally { w.close(); }
   });

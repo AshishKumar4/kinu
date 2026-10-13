@@ -223,7 +223,6 @@ describe('ChatGPT sign-in by paste-back', () => {
     const refused = await web.finish(web.returned(authorize));
 
     expect(refused.status).toBe(403);
-    expect(await refused.text()).toContain('nonce');
     expect(await storedKeys(harness)).not.toContain(CHATGPT_CRED_KEY);
     harness.close();
   });

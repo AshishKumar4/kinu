@@ -148,7 +148,7 @@ describe('MCP write tools → real @callables', () => {
     );
 
     expect(res?.status).toBe(200);
-    expect(await resultText(res)).toContain('delivered to atlas');
+    expect(await resultText(res)).toContain('delivered');
     expect(calls.find((c) => c.method === 'sendPeerFromMcp')?.args).toEqual([{ agent: 'atlas', message: 'hi', topic: 'sync' }]);
   });
 

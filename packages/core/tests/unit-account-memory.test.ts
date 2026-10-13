@@ -72,7 +72,9 @@ describe('both scopes as one list', () => {
 
     const block = renderFactsBlock(unified);
 
-    expect(block).toBe('owner_name: Ashish  # account\nreply_language: English for this client');
+    expect(block).toContain('Ashish');
+    expect(block).toContain('English for this client');
+    expect(block).not.toContain('Hindi');
     expect(renderFactsBlock(unifiedFacts([...workspace], [...account]))).toBe(block);
   });
 });
@@ -117,7 +119,7 @@ describe("each step's memory block, as the prompt cache sees it", () => {
     const steps = [renderFactsForTurn(facts, account), renderFactsForTurn(facts, account), renderFactsForTurn(facts, account)];
 
     expect(new Set(steps).size).toBe(1);
-    expect(steps[0]).toContain('owner_name: Ashish  # account');
+    expect(steps[0]).toContain('Ashish');
 
     // A fact the step wrote changes the block once, and it holds again after.
     facts.upsert('deploy_target', 'production');

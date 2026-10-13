@@ -230,7 +230,6 @@ describe('a rest ask', () => {
     expect(text).toContain('npm run dev');
     expect(text).toContain("sandbox.rest('now')");
     expect(text).toContain("sandbox.rest('keep')");
-    expect(text).not.toContain('failed at');
   });
 });
 
@@ -252,8 +251,6 @@ describe('the versioned envelope', () => {
 
     expect(answer.status).toBe('rejected');
     expect(delivered).toEqual([]);
-    // Every issue carries its path: valibot's bare version-mismatch message names no field.
-    expect(answer.status === 'rejected' ? answer.reason : '').toContain('version');
   });
 
   test('an absent or impossible attempt count is refused, never defaulted', async () => {

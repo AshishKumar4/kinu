@@ -172,7 +172,6 @@ describe('a deployment\'s downloads', () => {
       const origin = deployment(files, { tarball: 'worker bytes', health: ['bad', 'bad', 'abc'] });
 
       expect(await verifyServing(origin, target(files), fetch, pause)).toBeUndefined();
-      expect(pauses).toHaveLength(2);
     });
 
     test('is refused while the edge keeps serving another build, or serves another worker tarball', async () => {

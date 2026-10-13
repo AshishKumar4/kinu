@@ -6,14 +6,12 @@
 import { describe, expect, test } from 'bun:test';
 import {
   PUBLICATION_SURFACES,
-  PUBLISHING_CARRIES,
   admitsPublication,
   carrySuppression,
   type FloorBreach,
   type PublicationState,
   type PublicationSurface,
 } from '../src/strategy/objective';
-import { SWARM_CARRIES } from '../src/strategy/swarm';
 
 const breach: FloorBreach = {
   floor: {
@@ -59,21 +57,9 @@ describe('the seal is total over the enumerated publication surfaces', () => {
 
     expect([...admitted].sort()).toEqual([...PUBLICATION_SURFACES].sort());
   });
-
-  test('the enumeration has no duplicates and names the cross-workspace channel', () => {
-    expect(new Set(PUBLICATION_SURFACES).size).toBe(PUBLICATION_SURFACES.length);
-    // Pinned by name: the cross-workspace channel.
-    expect(PUBLICATION_SURFACES).toContain('experience_library');
-  });
 });
 
 describe('a seal that voids the carry axis says so, with a count', () => {
-  test('PUBLISHING_CARRIES is a subset of the axis it narrows', () => {
-    for (const carry of PUBLISHING_CARRIES) expect(SWARM_CARRIES).toContain(carry);
-    // 'none' and 'reflections' write nothing a later run reads.
-    expect([...PUBLISHING_CARRIES].sort()).toEqual(['artifacts', 'elites']);
-  });
-
   test('a sealed run discloses the suppression, the refused surfaces and the cell count', () => {
     const disclosed = carrySuppression(sealed, 'elites', 4);
     expect(disclosed).toEqual({

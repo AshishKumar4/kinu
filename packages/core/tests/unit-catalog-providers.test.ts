@@ -457,15 +457,8 @@ describe('registry with dynamic catalog source', () => {
     }, mock.fetch);
 
     const model = registry.resolve('unlisted/some-model', deps);
-    let detail = '';
-
-    try {
-      await generateText({ model, prompt: 'hello', maxOutputTokens: 16 });
-    } catch (err) {
-      detail = describeProviderError({ cause: err });
-    }
-
-    expect(detail).toContain('models.dev');
+    await expect(generateText({ model, prompt: 'hello', maxOutputTokens: 16 })).rejects.toThrow();
+    expect(mock.requests.filter((request) => !request.url.includes('models.dev'))).toEqual([]);
   });
 });
 

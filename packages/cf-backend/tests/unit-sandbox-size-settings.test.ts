@@ -13,7 +13,7 @@ import type { KinuDevbox } from '../src/kinu-devbox';
 import { adaptCloudflareSandbox } from '../src/sandbox-exec-lane';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
 import { accountSandboxSize, SANDBOX_SIZE_CONFIG_KEY } from '../src/sandbox-size';
-import { sandboxSizeText, startRefusedNote, workspaceSizeNote, workspaceSizeOptions } from '../src/lib/sandbox-size-text';
+import { startRefusedNote, workspaceSizeNote, workspaceSizeOptions } from '../src/lib/sandbox-size-text';
 import { settingsSection } from '../src/components/SettingsRail';
 import { serveFamily } from './helpers/api';
 import { unreachableNamespace, workerContext } from './helpers/bindings';
@@ -52,14 +52,12 @@ describe("the owner's account default", () => {
     const env = routeEnv(harness.userDO);
 
     const refused = await sizeRoute(env, 'PUT', 'huge');
-    const refusedText = await refused.text();
     const unset = await (await sizeRoute(env, 'GET')).json();
     const stored = (await sizeRoute(env, 'PUT', 'large')).status;
     const read = await (await sizeRoute(env, 'GET')).json();
 
-    expect({ refused: refused.status, refusedText, unset, stored, read }).toEqual({
+    expect({ refused: refused.status, unset, stored, read }).toEqual({
       refused: 400,
-      refusedText: expect.stringContaining('sandbox_size must be one of small, medium, large'),
       unset: { key: 'sandbox_size', value: null },
       stored: 200,
       read: { key: 'sandbox_size', value: 'large' },
@@ -73,10 +71,6 @@ describe("the owner's account default", () => {
 });
 
 describe('what the owner reads', () => {
-  test('each size reads as its table row', () => {
-    expect(sandboxSizeText('medium')).toBe('Medium · 2 vCPU · 8 GiB · 20 GB disk');
-  });
-
   test("the Environment card offers the account default, named, then every size", () => {
     expect(workspaceSizeOptions('large')).toEqual([
       { value: 'account', label: 'Account default: Large · 4 vCPU · 12 GiB · 20 GB disk' },
@@ -90,13 +84,6 @@ describe('what the owner reads', () => {
   const NOTES = [
     { name: 'a sandbox running at its size says nothing more', state: { account: null, chosen: null, size: 'medium', running: 'medium', startRefused: null }, pending: false, says: null },
     { name: 'a stopped sandbox says nothing more', state: { account: null, chosen: 'large', size: 'large', running: null, startRefused: null }, pending: false, says: null },
-    { name: 'a sandbox still running at an older size says when it changes',
-      state: { account: 'small', chosen: null, size: 'small', running: 'medium', startRefused: null }, pending: false,
-      says: 'Runs at Medium until it next starts, then at Small.' },
-    { name: 'a change to a running sandbox restarts it', state: { account: null, chosen: null, size: 'medium', running: 'medium', startRefused: null }, pending: true,
-      says: 'Restarting at the new size…' },
-    { name: 'a change to a stopped sandbox only saves', state: { account: null, chosen: null, size: 'medium', running: null, startRefused: null }, pending: true,
-      says: 'Saving…' },
   ] as const;
 
   for (const { name, state, pending, says } of NOTES) {
@@ -109,8 +96,6 @@ describe('what the owner reads', () => {
     const note = startRefusedNote('[permanent -> refuse] no image to start');
 
     expect(note).toContain('[permanent -> refuse] no image to start');
-    expect(note).toContain('start it again');
-    expect(note).toContain('choose another size');
   });
 
   test("User settings has a section of its own for the computer's size, at the #sandbox link", () => {

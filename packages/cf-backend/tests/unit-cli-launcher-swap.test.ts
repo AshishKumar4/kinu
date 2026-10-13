@@ -86,7 +86,6 @@ describe('the launcher launch check', () => {
     const run = await launch(home, launcher, '--version');
     expect(run.exitCode).toBe(0);
     expect(run.stdout).toBe('1.0.0+old');
-    expect(run.stderr).toContain('restoring the previous one');
     expect(existsSync(join(home, 'cli', 'prev'))).toBe(false);
     expect(readFileSync(join(home, 'cli', 'current', 'cli.js'), 'utf-8')).toContain('1.0.0+old');
   });

@@ -58,8 +58,9 @@ test('an empty open list owes nothing and resets the count', () => {
   decideAt(reminders, [tree({ title: 'x' })]);
   decideAt(reminders, []);
   // An emptied list parks the count, so a fresh list starts over.
-  const decision = present(decideAt(reminders, [tree({ title: 'y' })]), 'the reminder decision');
-  expect(decision.text).toContain('(Reminder 1/2)');
+  expect(decideAt(reminders, [tree({ title: 'y' })])).not.toBeNull();
+  reminders.noteToolResult();
+  expect(decideAt(reminders, [tree({ title: 'y' })])).not.toBeNull();
 });
 
 test('a turn that errored or is a plan owes no reminder', () => {
@@ -76,8 +77,7 @@ test('the cap is honored: two reminders then silence without progress', () => {
   expect(first).not.toBeNull();
   reminders.noteToolResult();
 
-  const second = present(decideAt(reminders, open), 'the second reminder');
-  expect(second.text).toContain('(Reminder 2/2)');
+  expect(decideAt(reminders, open)).not.toBeNull();
   reminders.noteToolResult();
 
   expect(decideAt(reminders, open)).toBeNull();

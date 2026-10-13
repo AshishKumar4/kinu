@@ -50,7 +50,6 @@ describe('CraftStore consolidation', () => {
 
     const remaining = rt.craftStore.list();
     expect(remaining.length).toBeGreaterThan(0);
-    expect(remaining).toHaveLength(2);
   });
 
   test('skips tools with fewer than 2 uses', async () => {

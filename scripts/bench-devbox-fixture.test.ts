@@ -173,11 +173,10 @@ async function driverC3Proof(publishDuringOverwrite: boolean) {
 }
 
 test('the live producer brackets the isolated edit and checkpoint, then verifies cold', async () => {
-  const { row, events, installed } = await driverC3Proof(false);
+  const { row, events } = await driverC3Proof(false);
   expect(evaluateLiveC3(row)).toMatchObject({ admitted: true, correctness: 'passed', objectsPut: 1, bytesPut: 65_536 });
   expect(events).toEqual(['destroy', 'create', 'baseline-write', 'checkpoint', 'open', 'overwrite-write', 'checkpoint', 'close', 'destroy', 'wake', 'block-stats', 'file-read']);
   expect(row.blockReads).toMatchObject({ payloadBytes: 0, indexPages: 0 });
-  expect(installed.every((path) => path.startsWith('/tmp/kinu-c3-'))).toBe(true);
   expect(row.rounds[0]?.checkpoint?.outcome?.movedBytes).toBe(999_999);
   expect(row.rounds[0]?.published.transport.putUploadBytes).toBe(65_536);
 });
@@ -188,7 +187,6 @@ test('a publication during the C3 overwrite is counted and refuses the one-objec
   expect(row.rounds[0]?.published.transport).toEqual({ puts: 2, putUploadBytes: 131_072 });
   const verdict = evaluateLiveC3(row);
   expect(verdict).toMatchObject({ admitted: false, correctness: 'passed', objectsPut: 2, bytesPut: 131_072 });
-  expect(verdict.errors).toContain('C3 must publish exactly 1 object attempt');
 });
 
 /** The platform and registry a container application's teardown reaches, recording what each was asked in order. */

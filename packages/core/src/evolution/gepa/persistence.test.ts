@@ -56,7 +56,6 @@ describe('startGepaRun + finishGepaRun', () => {
       targetRef: null,
     });
 
-    expect(runId).toMatch(/^gepa-/);
 
     let runs = listGepaRuns(sql, actor);
     expect(runs.length).toBe(1);

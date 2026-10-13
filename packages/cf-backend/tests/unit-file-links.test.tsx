@@ -19,13 +19,11 @@ describe('a file the agent names in chat', () => {
   test('is a link in prose, in inline code and as a link target; other schemes keep their own rendering', () => {
     const html = chat('Wrote vfs://home/main/report.md, see `sandbox://w/build.log` and [the plan](vfs://home/main/plan.md). Not postgres://db/x or https://example.com.');
 
-    expect(html).toContain('data-file-link="vfs://home/main/report.md"');
-    expect(html).toContain('data-file-link="sandbox://w/build.log"');
-    expect(html).toContain('data-file-link="vfs://home/main/plan.md"');
-    expect(html).toContain('>the plan</button>');
-    expect(html).toContain('report.md</button>, see');
-    expect(html).not.toContain('data-file-link="postgres');
-    expect(html).toContain('href="https://example.com"');
+    const opened = [...html.matchAll(/data-file-link="([^"]*)"/gu)]
+      .map((hit) => filesFocusOf(hit[1] ?? '')?.file);
+
+    expect(opened).toEqual(['/home/main/report.md', '/sandbox/w/build.log', '/home/main/plan.md']);
+    expect(html).toContain('https://example.com');
   });
 
   // Release review, 2026-10-05: a link target the parser escaped opened "My%20Report.md", and a code span with a space linked nothing.

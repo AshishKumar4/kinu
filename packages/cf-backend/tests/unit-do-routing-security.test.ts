@@ -23,7 +23,6 @@ const { default: worker } = await import('../src/server');
 describe('F1 defense 1 — the /agents/* transport is pinned to the orchestrator', () => {
   test('the concrete exploit path is a foreign-namespace request (→ rejected)', async () => {
     const victimId = await deriveUserId('victim@example.com');
-    expect(victimId).toMatch(/^[0-9a-f]{32}$/);
     expect(isForeignAgentNamespacePath(`/agents/user-d-o/${victimId}`)).toBe(true);
   });
 

@@ -113,8 +113,8 @@ describe('the dynamic context across an object restart', () => {
       expect.stringMatching(/^system:/u), 'dynamic', 'user:hello one', 'assistant:answer first', 'dynamic', 'user:hello two',
     ]);
     expect(JSON.stringify(after.slice(0, before.length))).toBe(JSON.stringify(before));
-    expect(after.flatMap((message) => messageText(message).match(/Current date: \S+/u) ?? []))
-      .toEqual(['Current date: 2026-10-07', 'Current date: 2026-10-08']);
+    expect(after.filter((message) => messageText(message).startsWith(DYNAMIC_CONTEXT_OPEN_TAG)).map(messageText))
+      .toEqual([expect.stringContaining('2026-10-07'), expect.stringContaining('2026-10-08')]);
   });
 
   test('with the prompt cache expired, the stored blocks go and the state is stated once, before the new input', async () => {

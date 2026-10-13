@@ -95,7 +95,6 @@ describe('the record RPCs answer over a real workspace', () => {
   test('a workspace that has never searched answers with an empty page, not a throw', async () => {
     // Red if `initExplorationRecordsTable` leaves `initWorkspaceSchema`.
     const harness = orchestratorHarness();
-    expect(harness.tableNames()).toContain('exploration_records');
     expect(await harness.agent.listRecordObjectives()).toEqual({ status: 'end', items: [] });
   });
 

@@ -91,29 +91,16 @@ describe('upsertCraftedTool — the admission check', () => {
     expect(scored(rt, 'run_command')).toBe(0);
   });
 
-  test('rejects code that cannot parse', async () => {
+  test.each([
+    ['cannot parse', { name: 'broken_parse', description: 'half a tool', code: 'async (args) => { return args.' }],
+    ['parses but is not a function', { name: 'not_a_tool', description: 'a statement, not a tool', code: '42' }],
+  ])('rejects code that %s', async (_what, tool) => {
     const rt = runtime();
 
-    const result = await upsertCraftedTool(rt, {
-      name: 'broken_parse', description: 'half a tool',
-      code: 'async (args) => { return args.', score: 0.9,
-    });
+    const result = await upsertCraftedTool(rt, { ...tool, score: 0.9 });
 
     expect(result.accepted).toBe(false);
-    expect(rt.craftStore.get('broken_parse')).toBeFalsy();
-  });
-
-  test('rejects code that parses but is not a function', async () => {
-    const rt = runtime();
-
-    const result = await upsertCraftedTool(rt, {
-      name: 'not_a_tool', description: 'a statement, not a tool',
-      code: '42', score: 0.9,
-    });
-
-    expect(result.accepted).toBe(false);
-    expect(result.vetoReason).toContain('not a function');
-    expect(rt.craftStore.get('not_a_tool')).toBeFalsy();
+    expect(rt.craftStore.get(tool.name)).toBeFalsy();
   });
 
   test('a tool the runtime can actually call is stored and scored', async () => {

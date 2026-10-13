@@ -20,22 +20,6 @@ const agent = fakeClient({
     if (process.env.KINU_PTY_SENT_FILE) writeFileSync(process.env.KINU_PTY_SENT_FILE, JSON.stringify(input));
     agent.emit({ type: 'turn-start', kind: 'user', text: '' });
 
-    if (process.env.KINU_PTY_FILE_EDIT === '1') {
-      agent.emit({
-        type: 'tool-call', toolName: 'file', toolCallId: 'call-1',
-        args: {
-          op: 'edit',
-          path: 'src/state.ts',
-          edits: [{ old_text: 'export const ready = false;', new_text: 'export const ready = true;' }],
-        },
-      });
-      agent.emit({
-        type: 'tool-result', toolName: 'file', toolCallId: 'call-1',
-        result: JSON.stringify({ path: 'src/state.ts', reference: 'root://src/state.ts', applied: [{ line: 12, removedLines: 1, addedLines: 1 }] }),
-        success: true,
-      });
-    }
-
     agent.emit({ type: 'text-delta', delta: REPLY });
     agent.emit({ type: 'turn-end', turn: TURN });
 

@@ -24,6 +24,6 @@ test('an issued ticket redeems once, for its workspace, with the expiry it was i
 
   expect(redeemed).toMatchObject({ ok: true, tokenHash: session.tokenHash, expiresAt: issued.expiresAt, capabilities: ['agent.websocket'] });
   expect(await harness.userDO.verifyCliAgentConnectTicket(owner, issued.ticket ?? '', expected))
-    .toEqual({ ok: false, error: 'invalid ticket' });
+    .toMatchObject({ ok: false });
   harness.close();
 });

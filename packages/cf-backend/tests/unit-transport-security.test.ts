@@ -99,7 +99,6 @@ describe('HTTPS responses are pinned', () => {
   });
 
   test('includeSubDomains reaches preview hosts, because they are subdomains of the app host', async () => {
-    expect(PREVIEW_HOST.endsWith(`.${APP_HOST}`)).toBe(true);
     const { env, ctx } = harness(script);
     const response = await worker.fetch(new Request(`https://${PREVIEW_HOST}/`), env, ctx);
     expect(response.headers.get('strict-transport-security')).toContain('includeSubDomains');

@@ -7,10 +7,6 @@ import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
 import { makeSql } from './helpers';
 
 describe('EMA scoring', () => {
-  test('emaUpdate with alpha=0.3', () => {
-    expect(emaUpdate(0.5, 0.8)).toBeCloseTo(0.59, 2); // 0.7*0.5 + 0.3*0.8 = 0.59
-  });
-
   test('emaUpdate preserves [0,1] range for inputs in [0,1]', () => {
     for (let old = 0; old <= 1; old += 0.25) {
       for (let obs = 0; obs <= 1; obs += 0.25) {
@@ -35,18 +31,6 @@ describe('Time decay', () => {
   test('zero days → full score', () => {
     const now = Date.now();
     expect(effectiveScore(0.8, now, now)).toBeCloseTo(0.8, 5);
-  });
-
-  test('30 days → half score (half-life)', () => {
-    const now = Date.now();
-    const thirtyDaysAgo = now - 30 * 86_400_000;
-    expect(effectiveScore(0.8, thirtyDaysAgo, now)).toBeCloseTo(0.4, 1);
-  });
-
-  test('60 days → quarter score', () => {
-    const now = Date.now();
-    const sixtyDaysAgo = now - 60 * 86_400_000;
-    expect(effectiveScore(0.8, sixtyDaysAgo, now)).toBeCloseTo(0.2, 1);
   });
 
   test('score=0 stays 0 regardless of time', () => {

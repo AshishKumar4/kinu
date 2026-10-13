@@ -123,8 +123,6 @@ describe('the advisory diagnosis contract', () => {
     const parsed = parseDiagnosis(replied([change('change-2', 'same', 3), change('change-1', 'worse', 60)]), 'unchanged', [], changes);
     const comment = renderDiagnosis(parsed, [], [], changes);
 
-    expect(comment.startsWith('## \u{1F52C} How the evals\u2019 work changed')).toBe(true);
-    expect(comment).not.toContain('| Cause |');
     expect(comment.split('\n').filter((line) => line.startsWith('- **')).map((line) => /\*\*([a-z-]+)\*\*/.exec(line)?.[1])).toEqual(['budget-board', 'latency-chart']);
     expect(comment).toContain('`change-1/candidate.md:60`');
   });

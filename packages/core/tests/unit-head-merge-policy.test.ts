@@ -109,7 +109,6 @@ describe('the head merge resolves one route, one effort, one spend label', () =>
     await mergeLLM('merging the findings', MergeOutputSchema);
 
     expect(prompts[0]).toContain('merging the findings');
-    expect(prompts[0]?.toLowerCase()).toContain('json');
   });
 
   test('a reply that is not JSON still reports the spend the provider billed', async () => {

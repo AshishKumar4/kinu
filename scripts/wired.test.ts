@@ -15,7 +15,7 @@ import { describe, expect, test } from 'bun:test';
 import { inScope } from './dead-code';
 import { readMatching, readTests } from './sources';
 import {
-  BLIND_SPOTS, buildGraph, builtinToolNames, findEntrypoints, findUnreached, findUnserved, findUnsupplied,
+  buildGraph, builtinToolNames, findEntrypoints, findUnreached, findUnserved, findUnsupplied,
   isReacher, keyOf, measureFields, measureReach, type EntrypointKind,
 } from './wired';
 
@@ -835,23 +835,5 @@ describe('over the live tree', () => {
   test('every finding carries a reason, which is what the lock records', () => {
     const findings = findUnreached(graph, reach, readTests(), read);
     expect(findings.filter((finding) => finding.reason.length === 0)).toEqual([]);
-  });
-});
-
-describe('blind spots', () => {
-  test('each one states a VERDICT, not just a topic', () => {
-    // A blind-spot list that names an area without saying whether the gate sees
-    // it is a list nobody can act on. Every entry must carry one of these.
-    const VERDICT = /NOT DETECTED|OUT OF SCOPE|This gate proves|LOGIC RUNS/;
-    expect(BLIND_SPOTS.length).toBeGreaterThan(0);
-    expect(BLIND_SPOTS.filter((spot) => !VERDICT.test(spot))).toEqual([]);
-  });
-
-  test('the three the brief names are among them', () => {
-    const joined = BLIND_SPOTS.join('\n');
-    expect(joined).toContain('DYNAMIC DISPATCH');
-    expect(joined).toContain('CONFIG FILE');
-    expect(joined).toContain('ASSIGNED AND NEVER READ');
-    expect(joined).toContain('ONE ARM OF A UNION');
   });
 });

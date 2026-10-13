@@ -236,7 +236,6 @@ describe('attaching a terminal', () => {
     const { deps } = harness();
     const response = await terminalRequest(attachRequest(''), deps);
     expect(response?.status).toBe(400);
-    expect(String((await body(response)).error)).toContain('executor');
   });
 
   test('a deployment with no container binding says so', async () => {

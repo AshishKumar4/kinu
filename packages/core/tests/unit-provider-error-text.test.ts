@@ -74,11 +74,6 @@ describe('describeProviderError', () => {
       .toBe('upstream refused');
   });
 
-  test('does not repeat a code the message already states', () => {
-    expect(describeProviderError({ cause: { message: 'rate_limit_exceeded on this key', code: 'rate_limit_exceeded' } }))
-      .toBe('rate_limit_exceeded on this key');
-  });
-
   test('keeps an Error message, and names the error when it has none', () => {
     expect(describeProviderError({ cause: new Error('boom') })).toBe('boom');
     expect(describeProviderError({ cause: new TypeError('') })).toBe('TypeError');

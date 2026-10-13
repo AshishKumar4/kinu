@@ -5,6 +5,7 @@ import * as v from 'valibot';
 import type { SqlExec } from '@kinu.run/core';
 import {
   CapabilityDeniedError,
+  OwnerCapabilityUnavailableError,
   ownerCaller,
   initWorkspaceCapabilityTables,
   commitWorkspaceCapability,
@@ -124,15 +125,15 @@ describe('requireTier fails closed', () => {
     // A different secret derives a different capability, so owner tokens do not cross deployments.
     const foreign = await ownerCaller({ CREDENTIAL_ENCRYPTION_KEY: 'a-completely-different-root-secret-value' });
     await expect(requireTier(sql, TEST_USER_ENV, { caller: foreign }, 'credentials.other'))
-      .rejects.toThrow(/Unrecognized owner capability/);
+      .rejects.toThrow(CapabilityDeniedError);
     db.close();
   });
 
   test('without the secret there is no owner capability to present', async () => {
     const { db, sql } = setup();
-    await expect(ownerCaller({})).rejects.toThrow(/CREDENTIAL_ENCRYPTION_KEY/);
+    await expect(ownerCaller({})).rejects.toThrow(OwnerCapabilityUnavailableError);
     await expect(requireTier(sql, {}, { caller: await testOwner() }, 'credentials.other'))
-      .rejects.toThrow(/CREDENTIAL_ENCRYPTION_KEY/);
+      .rejects.toThrow(OwnerCapabilityUnavailableError);
     db.close();
   });
 
@@ -140,7 +141,7 @@ describe('requireTier fails closed', () => {
     const { db, sql } = setup();
     await mintWorkspaceCapability(sql, 'workspace-a');
     await expect(requireTier(sql, TEST_USER_ENV, { caller: { workspaceToken: 'pwc_nope' } }, 'credentials.model'))
-      .rejects.toThrow(/Unrecognized workspace capability token/);
+      .rejects.toThrow(CapabilityDeniedError);
     db.close();
   });
 

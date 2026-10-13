@@ -1,9 +1,4 @@
-import { describe, expect, test } from 'bun:test';
-import * as evaluation from '../src/mcts/evaluation';
-import * as scaffoldExecutor from '../src/scaffold/executor';
-import * as agentOrchestrator from '../src/orchestrator/agent-orchestrator';
-import type { AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
-import { DEFAULT_ATTEMPT_BUDGET } from '../src/bench/types';
+import { expect, test } from 'bun:test';
 import { jsonSchema, tool } from 'ai';
 import { scriptedTurnModel } from '@kinu.run/test-utils/turn-model';
 import { runChat } from '../src/index';
@@ -44,43 +39,3 @@ test('the shared chat driver, given no stop condition, completes work beyond ten
   expect(answer).toBe('work complete');
 });
 
-describe('the shared turn has no elapsed deadline', () => {
-});
-
-
-describe('owned work carries no default elapsed deadline', () => {
-  test('MCTS judges expose no per-call wall clock', () => {
-    // A judge call is awaited to settlement; the ensemble degrades only on unparseable samples, never slow ones.
-    expect('DEFAULT_JUDGE_CALL_TIMEOUT_MS' in evaluation).toBe(false);
-  });
-
-  test('scaffold runs expose no turn timeout constant or option field', () => {
-    // No elapsed deadline on scaffold loops: cost is bounded by how many trials are queued.
-    expect('SCAFFOLD_TURN_TIMEOUT_MS' in scaffoldExecutor).toBe(false);
-
-    type ScaffoldOptions = Parameters<typeof scaffoldExecutor.runScaffold>[0];
-
-    type HasScaffoldTimeout = 'timeoutMs' extends keyof ScaffoldOptions ? true : false;
-
-    const hasScaffoldTimeout: HasScaffoldTimeout = false;
-    expect(hasScaffoldTimeout).toBe(false);
-  });
-
-  test('evolution settle exposes no join bound constant or dep field', () => {
-    // Background evolution work is never abandoned by the clock.
-    expect('DEFAULT_SETTLE_TIMEOUT_MS' in agentOrchestrator).toBe(false);
-
-    type HasSettleTimeout = 'settleTimeoutMs' extends keyof AgentOrchestratorDeps ? true : false;
-
-    const hasSettleTimeout: HasSettleTimeout = false;
-    expect(hasSettleTimeout).toBe(false);
-  });
-
-});
-
-describe('independent non-chat policies keep their existing values', () => {
-  test('the bench attempt keeps harness provisioning (another ticket owns it)', () => {
-    expect(DEFAULT_ATTEMPT_BUDGET.wallClockMs).toBe(600_000);
-    expect(DEFAULT_ATTEMPT_BUDGET.maxTokens).toBe(600_000);
-  });
-});

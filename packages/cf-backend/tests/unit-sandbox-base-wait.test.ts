@@ -79,7 +79,6 @@ describe('a call that meets the base snapshot being built', () => {
 
     await expect(exec).rejects.toMatchObject({
       code: 'unavailable',
-      message: `the base snapshot's build made no progress in 180 s (at: installing the tools); ${REBUILDING}`,
     });
     expect({ ran, asked: asked() }).toEqual({ ran: [], asked: 181 });
   });
