@@ -6,7 +6,7 @@ import {
   turnSourcesFromBundle, captureOperationProfile, type ModelCallReport, type ModelOperationEvent,
   type AdvisorRecoverySnapshot, type AgentFigures, type AgentReport, type HostedActor, type SerializedMessage, type SessionEvent, type TurnEndEvent,
   type SubordinateReportLedger, type SubordinateReportStatus, type TaskTurnEnding, type WorkMode, type ResolvedTurnProfile,
-  type RemoteReceipt, type ReplyToCommentToolDeps, type StoredRow, type SubmitPlanToolDeps,
+  type RemoteReceipt, type ReplyToCommentToolDeps, type StoredRow, type SubmitPlanToolDeps, type TurnCraftLedger,
 } from '@kinu.run/core';
 
 import { attempt, diagnostics, hold, logged, settle } from '@kinu.run/core/obs';
@@ -292,7 +292,10 @@ function workspaceTools(
         turn.live.dynamic = answer.dynamic;
         turn.live.openWork = answer.openWork;
         turn.database.recordReports(turn.id, answer.reports);
-        const { captured } = answer;
+        const { captured, crafted } = answer;
+
+        // Scored in the workspace, where its crafted tools ran: the turn's record here carries it to its run and review.
+        if (crafted !== null) turn.craft?.note(toolCallId, crafted);
 
         if (turn.capture !== undefined && captured !== undefined) {
           turn.capture.evidence.push(...captured.evidence);
@@ -431,6 +434,8 @@ interface FacetToolTurn {
   /** A run's, which its inference reads; a chat turn records none. */
   readonly capture?: HeadCapture;
   readonly database: AgentDatabase;
+  /** A chat turn's crafted-tool record, which its run and review read; a run keeps none, as its seat's tools observe none. */
+  readonly craft?: TurnCraftLedger;
   /** The agent's own plan store, where the owner's lane submits and replies; a run reaches no owner's lane. */
   readonly owner?: { readonly submitPlan: SubmitPlanToolDeps; readonly replyToComment: ReplyToCommentToolDeps };
 }

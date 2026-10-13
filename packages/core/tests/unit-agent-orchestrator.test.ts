@@ -15,7 +15,7 @@ import type { AgentSignal } from '../src/types/signals';
 import type { CompletedTurn } from '../src/evolution/types';
 import type { JsonObject } from '../src/index';
 import { makeSqlExec } from './helpers';
-import type { ToolOutcome } from '../src/tools/outcome';
+import type { CraftCall } from '../src/craft/in-episode';
 import { present } from '@kinu.run/test-utils';
 
 function newEventLog(): EventLog {
@@ -42,8 +42,6 @@ function fakeEngine(opts?: { enabled?: boolean; dying?: { first: boolean } }) {
   const { sql, execRaw } = createTestSql();
   initCompletedTurnTable(execRaw);
   const store = createCompletedTurnStore(sql, createTestActors(sql, execRaw).main);
-  const crafted: string[] = [];
-  const observed: Array<{ names: string[]; quality: number }> = [];
 
   const reviewTurn = async (turn: CompletedTurn, followup: string | null): Promise<void> => {
     if (opts?.dying?.first === true) {
@@ -65,14 +63,6 @@ function fakeEngine(opts?: { enabled?: boolean; dying?: { first: boolean } }) {
     hasAdvisorNoteForTurn: () => false,
     advisorNoteForTurn: () => null,
     sessionWindow: store,
-    craftLedger: {
-      names: () => crafted,
-      observe: (names: readonly string[], quality: number) => {
-        observed.push({ names: [...names], quality });
-
-        return [];
-      },
-    },
     reviewTurn,
     onSessionComplete: async (s: { turns: CompletedTurn[] }) => { sessions.push(s.turns.length); },
     runDueEvolution: async () => { trials.push(Date.now()); },
@@ -97,7 +87,7 @@ function fakeEngine(opts?: { enabled?: boolean; dying?: { first: boolean } }) {
     },
   };
 
-  return { engine, reviews, sessions, crafted, observed, trials, sql, execRaw, store };
+  return { engine, reviews, sessions, trials, sql, execRaw, store };
 }
 
 function fakeHost(opts?: { activeTurn?: boolean }) {
@@ -805,91 +795,39 @@ describe('AgentOrchestrator.scheduleDrain — debounced ingress coalescing', () 
 });
 
 describe('AgentOrchestrator — the in-episode evolution clock', () => {
-  async function runBlock(orch: AgentOrchestrator, code: string, failure?: string): Promise<void> {
-    await orch.turnExtension.onToolResult?.({
-      toolName: 'eval',
-      args: { code },
-      result: failure ?? 'ok',
-      ...(failure === undefined ? { success: true } satisfies ToolOutcome : { success: false, reason: null } satisfies ToolOutcome),
-    });
-  }
+  /** One `eval` call the turn's tools observed where they ran, as its record keeps it. */
+  const SCORED: CraftCall = { created: [], invoked: ['summarize'], raised: [], returned: ['summarize'], dropped: [] };
 
-  test('the turn extension is the seam — a crafted tool is scored mid-turn', async () => {
-    const { engine, crafted, observed } = fakeEngine();
+  test('a turn records its crafted-tool use while evolution is on and it is not Plan', () => {
     const { host } = fakeHost();
-    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() }));
-    crafted.push('summarize');
-    orch.beginTurn(Date.now());
+    const on = new AgentOrchestrator(withHostDeliveries({ host, engine: fakeEngine().engine, eventLog: newEventLog() }));
+    const off = new AgentOrchestrator(withHostDeliveries({ host, engine: fakeEngine({ enabled: false }).engine, eventLog: newEventLog() }));
 
-    await runBlock(orch, 'return await tools.summarize(1)');
+    on.beginTurn(Date.now());
+    off.beginTurn(Date.now());
+    const build = on.acc.craft.recording;
 
-    expect(observed).toHaveLength(1);
-    expect(observed[0].names).toEqual(['summarize']);
-    expect(orch.craft.snapshot()).toEqual({
-      crafted: [], invoked: ['summarize'], reused: [], returned: 1, raised: 0, dropped: [],
-    });
+    on.beginTurn(Date.now(), { kinuMode: 'plan' });
+    const plan = on.acc.craft.recording;
+
+    on.beginTurn(Date.now());
+    on.restrictTurnWorkMode('plan');
+
+    expect({ build, off: off.acc.craft.recording, plan, restricted: on.acc.craft.recording }).toEqual({ build: true, off: false, plan: false, restricted: false });
   });
 
-  test('a stamped failure is scored against the tool through the same seam', async () => {
-    const { engine, crafted, observed } = fakeEngine();
-    const { host } = fakeHost();
-    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() }));
-    crafted.push('summarize');
-    orch.beginTurn(Date.now());
-
-    await runBlock(orch, 'return await tools.summarize(1)', '[crafted:summarize] boom');
-    expect(observed).toEqual([{ names: ['summarize'], quality: 0.1 }]);
-    expect(present(orch.craft.snapshot(), 'the craft snapshot').raised).toBe(1);
-
-    // …and a failure that names nothing scores nothing.
-    await runBlock(orch, 'return await tools.summarize(1)', 'TypeError: x is not a function');
-    expect(observed).toHaveLength(1);
-  });
-
-  test('a tool that appeared during the turn is crafted, not pre-existing', async () => {
-    const { engine, crafted, observed } = fakeEngine();
+  test('beginTurn clears the previous turn\'s craft record', () => {
+    const { engine } = fakeEngine();
     const { host } = fakeHost();
     const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() }));
     orch.beginTurn(Date.now());
-
-    crafted.push('summarize');
-    await runBlock(orch, 'await workspace.createTool("summarize","d","async()=>1"); return tools.summarize(1)');
-    // Created and called in one breath earns nothing…
-    expect(observed).toEqual([]);
-    expect(present(orch.craft.snapshot(), 'the craft snapshot').crafted).toEqual(['summarize']);
-
-    // …and the next block that reaches for it closes the loop.
-    await runBlock(orch, 'return await tools.summarize(2)');
-    expect(observed).toHaveLength(1);
-    expect(present(orch.craft.snapshot(), 'the craft snapshot').reused).toEqual(['summarize']);
-  });
-
-  test('with auto-evolution off the in-episode clock records nothing', async () => {
-    const { engine, crafted, observed } = fakeEngine({ enabled: false });
-    const { host } = fakeHost();
-    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() }));
-    crafted.push('summarize');
-    orch.beginTurn(Date.now());
-
-    await runBlock(orch, 'return await tools.summarize(1)');
-
-    expect(observed).toEqual([]);
-    expect(orch.craft.snapshot()).toBeNull();
-  });
-
-  test('beginTurn clears the previous turn\'s craft record', async () => {
-    const { engine, crafted } = fakeEngine();
-    const { host } = fakeHost();
-    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() }));
-    crafted.push('summarize');
-    orch.beginTurn(Date.now());
-    await runBlock(orch, 'return await tools.summarize(1)');
-    expect(orch.craft.snapshot()).toEqual({
+    orch.acc.craft.note('eval_0', SCORED);
+    expect(orch.acc.craft.snapshot()).toEqual({
       crafted: [], invoked: ['summarize'], reused: [], returned: 1, raised: 0, dropped: [],
     });
 
     orch.beginTurn(Date.now());
-    expect(orch.craft.snapshot()).toBeNull();
+    expect(orch.acc.craft.snapshot()).toBeNull();
   });
 
   test('turn steering still observes the same calls through the shared seam', async () => {

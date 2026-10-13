@@ -1726,7 +1726,7 @@ export class ChatSession {
       escalations: this.actorSession.orchestrator.acc.escalations,
       steering: this.actorSession.orchestrator.steering.snapshot(),
       completionGate: this.completionGate.pending,
-      craft: this.actorSession.orchestrator.craft.snapshot(),
+      craft: this.actorSession.orchestrator.acc.craft.snapshot(),
       recoveries: this.actorSession.orchestrator.recoverySnapshot(),
       reason: end.reason,
     };

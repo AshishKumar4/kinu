@@ -8,13 +8,14 @@ import { createMemoryVfs, createTestRuntime, present, scriptedTurnModel, seedFil
 import * as v from 'valibot';
 import { z } from 'zod';
 import {
-  AgentOrchestrator, TurnSteering, isFailingToolResult, runChat, ExtensionHost, EvolutionEngine, EventLog, initEventsHubTables,
+  AgentOrchestrator, TurnSteering, runChat, ExtensionHost, EvolutionEngine, EventLog, initEventsHubTables,
   type BackendHost, type ToolCallContext, type ToolResultContext,
 } from '../src/index';
 import {
   IDENTICAL_CALLS_BEFORE_STEER, CONSECUTIVE_FAILURES_BEFORE_STEER, STEPS_WITHOUT_PROGRESS_BEFORE_STEER, TURN_STEERING_HEADER,
 } from '../src/orchestrator/turn-steering';
 import type { JsonObject } from '../src/utils/json';
+import type { ToolOutcome } from '../src/tools/outcome';
 import { makeSqlExec } from './helpers';
 import { createFileTool } from '../src/tools/file-operations';
 import { cloudPlanes } from '../src/vfs/resolve';
@@ -164,20 +165,35 @@ async function repeat(orch: AgentOrchestrator, toolName: string, args: JsonObjec
   }
 }
 
-describe('isFailingToolResult — invocation outcome is independent of rendering', () => {
-  test('a recorded failure stays failed even when the display is truncated', () => {
-    expect(isFailingToolResult({ toolName: 'shell', args: {}, result: '{"error":"cut', success: false, reason: 'io', execution: { exitCode: 2 } })).toBe(true);
-    expect(isFailingToolResult({ toolName: 'eval', args: {}, result: '', success: false, reason: null })).toBe(true);
+describe('a failing invocation is its outcome, independent of its rendering', () => {
+  /** `times` results of one tool, each with its own arguments, as `result` renders them and `outcome` decides. */
+  async function results(orch: AgentOrchestrator, result: string, outcome: ToolOutcome, times: number): Promise<void> {
+    for (let i = 0; i < times; i++) {
+      attempt += 1;
+      await toolResult(orch, { toolName: 'shell', args: { attempt }, result, ...outcome });
+    }
+
+    await step(orch, 1, [user('q')]);
+  }
+
+  test('a recorded failure stays failed even when its display is truncated or unclassified', async () => {
+    const truncated = newTurn();
+    const unknown = newTurn();
+
+    await results(truncated, '{"error":"cut', { success: false, reason: 'io', execution: { exitCode: 2 } }, CONSECUTIVE_FAILURES_BEFORE_STEER);
+    await results(unknown, '', { success: false, reason: null }, CONSECUTIVE_FAILURES_BEFORE_STEER);
+
+    expect([lastSteer(truncated)?.trigger, lastSteer(unknown)?.trigger]).toEqual(['repeated_failure', 'repeated_failure']);
   });
 
-  test('successful error-shaped JSON and error-prefixed text remain data', () => {
-    expect(isFailingToolResult({ toolName: 'shell', args: {}, result: '{"reason":"denied","error":"history"}', success: true })).toBe(false);
-    expect(isFailingToolResult({ toolName: 'shell', args: {}, result: 'Error report: zero failures', success: true })).toBe(false);
-    expect(isFailingToolResult({ toolName: 'eval', args: {}, result: '{"error":"cut', success: true })).toBe(false);
-  });
+  test('successful error-shaped JSON and error-prefixed text remain data', async () => {
+    const orch = newTurn();
 
-  test('a failure with unknown classification still fails', () => {
-    expect(isFailingToolResult({ toolName: 'shell', args: {}, result: 'boom', success: false, reason: null })).toBe(true);
+    await results(orch, '{"reason":"denied","error":"history"}', { success: true }, 1);
+    await results(orch, 'Error report: zero failures', { success: true }, 1);
+    await results(orch, '{"error":"cut', { success: true }, CONSECUTIVE_FAILURES_BEFORE_STEER);
+
+    expect(orch.steering.snapshot().filter((steer) => steer.trigger === 'repeated_failure')).toEqual([]);
   });
 });
 

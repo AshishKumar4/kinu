@@ -256,7 +256,6 @@ function seamOrchestrator(opts?: { enabled?: boolean }) {
     hasAdvisorNoteForTurn: () => false,
     advisorNoteForTurn: () => null,
     sessionWindow: store,
-    craftLedger: { names: () => [], observe: () => [] },
     reviewTurn: async (turn) => { recorded.push(turn); },
     runStoredTurnReview: async (rowId, turn) => { recorded.push(turn); void rowId; },
     onSessionComplete: async () => {},

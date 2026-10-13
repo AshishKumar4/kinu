@@ -715,6 +715,7 @@ export class AgentTurns {
       dynamic: this.dynamic(turn, prepared),
       reports: { ...prepared.surface.reports },
       openWork: this.deps.openWork(actorId),
+      crafted: prepared.surface.surface.ledgers.craft.call(call.callId),
     };
   }
 }
