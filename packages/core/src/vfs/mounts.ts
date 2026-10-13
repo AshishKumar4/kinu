@@ -1,4 +1,4 @@
-import { type Awaitable, type VFS, type VfsCred, type VfsRemoval, type VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
+import { type Awaitable, type VFS, type VfsCred, type VfsDirentType, type VfsRemoval, type VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Workspace plane mount table: the durable workspace tree extended by `/pc` (device tunnel) and `/sandbox`
  * (container), each read through that executor's own `files` VFS so its boundaries still apply. Nimbus's
@@ -77,9 +77,11 @@ export function standardMounts(provider: (name: string) => MountableProvider | u
 	];
 }
 
-/** `stat` is null for an entry that vanished between the listing and its metadata. */
+/** `stat` is null for an entry that vanished between the listing and its metadata, or one the listing did not ask. */
 export interface VfsListedEntry {
 	readonly name: string;
+	/** What its directory says it is. */
+	readonly type: VfsDirentType;
 	readonly stat: VfsStat | null;
 }
 
@@ -128,19 +130,22 @@ export async function readTailWithVfsOps(
 }
 
 /**
- * Stats run concurrently; ENOENT on a child answers `stat: null`, any other error propagates.
+ * Stats run concurrently; ENOENT on a child answers `stat: null`, any other error propagates. A child `asks` declines is
+ * not statted: it lists by its directory entry alone.
  */
-export async function listWithVfsOps(files: VFS, dir: string): Promise<VfsListedEntry[]> {
+export async function listWithVfsOps(files: VFS, dir: string, asks: (child: string) => boolean = () => true): Promise<VfsListedEntry[]> {
 	const entries = await files.readdir(dir);
 
-	return Promise.all(entries.map(async (entry) => {
-		const child = dir === '/' ? `/${entry.name}` : `${dir}/${entry.name}`;
+	return Promise.all(entries.map(async ({ name, type, stat }) => {
+		const child = dir === '/' ? `/${name}` : `${dir}/${name}`;
+
+		if (stat === undefined && !asks(child)) return { name, type, stat: null };
 
 		try {
-			return { name: entry.name, stat: entry.stat ?? await files.stat(child) };
+			return { name, type, stat: stat ?? await files.stat(child) };
 		} catch (cause) {
 			// The plane's own code, never prose matching.
-			if (isVfsError(cause) && cause.code === 'ENOENT') return { name: entry.name, stat: null };
+			if (isVfsError(cause) && cause.code === 'ENOENT') return { name, type, stat: null };
 			throw cause;
 		}
 	}));
