@@ -160,10 +160,36 @@ function createProcReader(fs) {
     return text === undefined ? undefined : parseProcStat(text);
   }
 
-  return { procEntryGone, procFile, procStat, parseProcStat };
+  /** Whether a process of `group` still runs, a zombie not counting; off Linux, `ps` is asked through `listProcesses`.
+   * @param {number} group @param {(args: string[]) => Promise<string>} listProcesses
+   */
+  async function groupHasLiveProcess(group, listProcesses) {
+    if (process.platform === 'linux') {
+      for (const entry of fs.readdirSync('/proc', { withFileTypes: true })) {
+        if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue;
+
+        // An entry gone since the listing reads as undefined; any other failure is the reader's.
+        const stat = procStat(entry.name);
+
+        if (stat !== undefined && stat.group === group && stat.state !== 'Z') return true;
+      }
+
+      return false;
+    }
+
+    const rows = (await listProcesses(['-ax', '-o', 'pid=,pgid=,stat='])).trim().split('\n');
+
+    return rows.some((row) => {
+      const [pid, pgid, stat] = row.trim().split(/\s+/, 3);
+
+      return Number(pid) > 0 && Number(pgid) === group && stat !== undefined && !stat.startsWith('Z');
+    });
+  }
+
+  return { procEntryGone, procFile, procStat, parseProcStat, groupHasLiveProcess };
 }
 
-const { procEntryGone, procFile, procStat, parseProcStat } = createProcReader(require('node:fs'));
+const { procEntryGone, procFile, procStat, parseProcStat, groupHasLiveProcess } = createProcReader(require('node:fs'));
 
 /**
  * Every process group in the session `leader` leads, the leader's own first.
@@ -405,4 +431,5 @@ module.exports = {
   procFile,
   procStat,
   parseProcStat,
+  groupHasLiveProcess,
 };

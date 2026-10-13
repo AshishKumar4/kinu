@@ -24,10 +24,12 @@ export function procFile(pid: number | string, name: string, required?: boolean)
 export function parseProcStat(text: string): ProcStat;
 export function procStat(pid: number | string, name: string, required: true): ProcStat;
 export function procStat(pid: number | string, name?: string, required?: boolean): ProcStat | undefined;
+export function groupHasLiveProcess(group: number, listProcesses: (args: string[]) => Promise<string>): Promise<boolean>;
 
 export function createProcReader(files: typeof fs): {
   readonly procEntryGone: typeof procEntryGone;
   readonly procFile: typeof procFile;
   readonly procStat: typeof procStat;
   readonly parseProcStat: typeof parseProcStat;
+  readonly groupHasLiveProcess: typeof groupHasLiveProcess;
 };

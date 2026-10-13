@@ -187,7 +187,7 @@ const sandbox = require('./sandbox.js');
 
 const pty = require('./pty.js');
 
-const { createProcReader, procStat, procEntryGone } = pty;
+const { createProcReader, procStat, procEntryGone, groupHasLiveProcess } = pty;
 
 const update = require('./update.js');
 
@@ -758,28 +758,6 @@ async function supervisorStartMatches(entry) {
   return (await startedAs(entry.pid, entry.start)) && (await startedAs(entry.group, entry.groupStart));
 }
 
-async function processGroupHasLiveProcess(group) {
-  if (process.platform === 'linux') {
-    for (const entry of fs.readdirSync('/proc', { withFileTypes: true })) {
-      if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue;
-
-      const stat = procStat(entry.name);
-
-      if (stat !== undefined && stat.group === group && stat.state !== 'Z') return true;
-    }
-
-    return false;
-  }
-
-  const rows = (await psOutput(['-ax', '-o', 'pid=,pgid=,stat='])).trim().split('\n');
-
-  return rows.some((row) => {
-    const [pid, pgid, stat] = row.trim().split(/\s+/, 3);
-
-    return Number(pid) > 0 && Number(pgid) === group && stat && !stat.startsWith('Z');
-  });
-}
-
 /** A signal name the supervisor recorded: `SIG` and the platform's name for it. */
 const SIGNAL_NAME = /^SIG[A-Z0-9]+$/;
 
@@ -857,7 +835,7 @@ const COMMAND_SHELL = 'bash';
 const SUPERVISOR_SCRIPT = `
 'use strict';
 const fs = require('node:fs');
-const { procStat } = (${createProcReader.toString()})(fs);
+const { procStat, groupHasLiveProcess } = (${createProcReader.toString()})(fs);
 const { execFile, spawn } = require('node:child_process');
 
 // fd 4 is the record's \`life\`, handed over at this process's spawn: the kernel closes it however this process exits,
@@ -942,24 +920,6 @@ function writeTerminalResult(kind, exitCode, signal) {
   const named = signal ? 'signal=' + signal + '\\n' : '';
   fs.writeFileSync(temporary, 'kind=' + kind + '\\nexitCode=' + exitCode + '\\n' + named, { mode: 0o600 });
   fs.renameSync(temporary, resultFile);
-}
-
-async function processGroupHasLiveProcess(group) {
-  if (process.platform === 'linux') {
-    for (const entry of fs.readdirSync('/proc', { withFileTypes: true })) {
-      if (!entry.isDirectory() || !/^\\d+$/.test(entry.name)) continue;
-      try {
-        const stat = procStat(entry.name);
-        if (stat !== undefined && stat.group === group && stat.state !== 'Z') return true;
-      } catch {}
-    }
-    return false;
-  }
-  const rows = (await run('ps', ['-ax', '-o', 'pid=,pgid=,stat='])).trim().split('\\n');
-  return rows.some((row) => {
-    const [pid, pgid, stat] = row.trim().split(/\\s+/, 3);
-    return Number(pid) > 0 && Number(pgid) === group && stat && !stat.startsWith('Z');
-  });
 }
 
 /** One stream: the first HEAD bytes go to its file as they arrive, the last TAIL stay in a ring, every
@@ -1249,7 +1209,7 @@ child.once('exit', (code, signal) => {
       // This confirms only the owned process group. A command can use setsid
       // to escape that group; same-uid supervision cannot honestly claim it
       // terminated such a detached descendant.
-      processGroupHasLiveProcess(child.pid).then(
+      groupHasLiveProcess(child.pid, (args) => run('ps', args)).then(
         (groupAlive) => finish(groupAlive ? 'exited' : 'cancelled', groupAlive ? 125 : 137),
         () => finish('exited', 125),
       );
@@ -1561,7 +1521,7 @@ function createInFlight(root = INFLIGHT_ROOT, isStarting = () => false) {
       throw new Error(`cannot terminate ${requestId}: supervisor exited without a confirmed group termination`);
     }
 
-    if (await processGroupHasLiveProcess(entry.group)) {
+    if (await groupHasLiveProcess(entry.group, psOutput)) {
       throw new Error(`cannot terminate ${requestId}: owned process group death is unconfirmed`);
     }
 
