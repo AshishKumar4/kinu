@@ -195,6 +195,20 @@ test('a turn ends on the window its agent told, publishing done with it', async 
   expect(h.broadcasts.at(-1)).toMatchObject({ frame: { type: 'cf_agent_chat_messages', messages: [{ id: 'answer' }] } });
 });
 
+test('an answer stamped after its end is shown again, unless a turn is live, whose own end carries it', async () => {
+  const h = harness('turn', async () => { throw new Error('an amended answer reads no history'); });
+  const stamped: UIMessage[] = [{ id: 'answer', role: 'assistant', parts: [{ type: 'text', text: 'settled' }], metadata: { kinuSlatesChanged: ['board'] } }];
+
+  h.transport.answerAmended(stamped);
+  expect(h.broadcasts.at(-1)).toMatchObject({ frame: { type: 'cf_agent_chat_messages', messages: [{ id: 'answer', metadata: { kinuSlatesChanged: ['board'] } }] } });
+
+  await h.transport.openTurn({ turnId: 'next', runId: 'run-next', messageId: 'next-answer', userTurn: false, carried: [], finishedSteps: 0 });
+  const shown = h.broadcasts.length;
+
+  h.transport.answerAmended(stamped);
+  expect(h.broadcasts).toHaveLength(shown);
+});
+
 function chunks(parts: UIMessageChunk[]): ReadableStream<UIMessageChunk> {
   return new ReadableStream({ start(controller) { for (const part of parts) controller.enqueue(part); controller.close(); } });
 }

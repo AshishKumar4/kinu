@@ -68,6 +68,9 @@ export interface AgentWorkspace {
   /** `ended` names the execution it closes. `activity`: the lines its turn logged that no tool call took. `window`: the
    *  transcript's newest messages as it ended, the frame its room is sent. */
   turnEnded(ended: TurnEndEvent, figures: AgentFigures, activity: readonly AgentTurnActivity[], window: readonly UIMessage[]): Promise<void>;
+  /** A committed answer was stamped after its end (its slates' previews): `window` is the transcript's newest messages
+   *  now, which its room is shown again unless a turn is live, whose own end carries it. */
+  answerAmended(window: readonly UIMessage[]): Promise<void>;
   owedReport(
     /** `taskId`: the assignment this turn answers, if one opened it. */
     turn: { readonly reports: SubordinateReportLedger; readonly ownerDriven: boolean; readonly taskId: string | null },

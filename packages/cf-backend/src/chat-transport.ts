@@ -583,6 +583,12 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     this.wire.broadcast(transcriptFrame(window));
   }
 
+  /** An answer stamped after its end: its tabs are shown the window again, unless a turn is live, whose end carries it
+   *  (a window sent mid-turn would drop the answer streaming in). */
+  answerAmended(window: readonly UIMessage[]): void {
+    if (this.live === null) this.wire.broadcast(transcriptFrame(window));
+  }
+
   /** A turn whose agent did not live to tell its end: its window read from the agent's transcript. */
   async closeLostTurn(): Promise<void> {
     this.closeTurn(this.live === null ? [] : await this.wire.history(TRANSCRIPT_WINDOW));

@@ -93,6 +93,19 @@ export function delayNextTurnEnd(storageKey: string): HeldCall {
   return { reached: reached.promise, release: released.resolve };
 }
 
+const delayedSlateStamps = new Map<string, { readonly reached: () => void; readonly released: Promise<void> }>();
+
+/** The isolate under `storageKey` commits its next answer, and once the workspace gave it that answer's slates, the
+ *  answer to that take waits on the way until released: taken there, not yet stamped here. */
+export function delayNextSlateStamp(storageKey: string): HeldCall {
+  const reached = Promise.withResolvers<void>();
+  const released = Promise.withResolvers<void>();
+
+  delayedSlateStamps.set(storageKey, { reached: reached.resolve, released: released.promise });
+
+  return { reached: reached.promise, release: released.resolve };
+}
+
 const delayedHandoffs = new Map<string, { readonly reached: () => void; readonly released: Promise<void> }>();
 
 /** The isolate under `storageKey` commits its next turn's answer, and the handoff of that settled turn to the workspace
@@ -424,6 +437,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           copiedTurnEnds.delete(placement.storageKey);
           copy?.([event, figures, activity, window]);
         },
+        answerAmended: (window) => host().answerAmended(window),
         owedReport: (turn, ended) => host().owedReport(turn, ended),
         parentReport: (report) => host().parentReport(report),
         autoTitle: (subject, title) => host().autoTitle(subject, title),
@@ -476,7 +490,18 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
 
           return host().paceStep(bound, profile);
         },
-        answerMetadata: (turnId, narration) => host().answerMetadata(turnId, narration),
+        answerMetadata: async (close, narration) => {
+          const answer = await host().answerMetadata(close, narration);
+          const delayed = answer.owesNarration ? undefined : delayedSlateStamps.get(placement.storageKey);
+
+          if (delayed !== undefined) {
+            delayedSlateStamps.delete(placement.storageKey);
+            delayed.reached();
+            await delayed.released;
+          }
+
+          return answer;
+        },
         getAuth: (key, opts) => host().getAuth(key, opts),
         listCredentials: () => host().listCredentials(),
         relayDevice: (provider) => host().relayDevice(provider),

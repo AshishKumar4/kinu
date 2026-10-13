@@ -173,6 +173,7 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   scaffold() { return this.open(() => this.answers.scaffold()); }
   chatEvent(event: SessionEvent) { return this.open(() => this.answers.chatEvent(event)); }
   turnEnded(ended: TurnEndEvent, figures: AgentFigures, activity: readonly AgentTurnActivity[], window: readonly UIMessage[]) { return this.open(() => this.answers.turnEnded(ended, figures, activity, window), ended); }
+  answerAmended(window: readonly UIMessage[]) { return this.open(() => this.answers.answerAmended(window)); }
   owedReport(...args: Parameters<AgentWorkspace['owedReport']>) { return this.open(() => this.answers.owedReport(...args)); }
   parentReport(report: Parameters<AgentWorkspace['parentReport']>[0]) { return this.open(() => this.answers.parentReport(report)); }
   autoTitle(subject: string, title: string | null) { return this.open(() => this.answers.autoTitle(subject, title)); }
