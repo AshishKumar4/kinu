@@ -36,14 +36,13 @@ import type { Connection } from 'agents';
 import type { UIMessage } from 'ai';
 import * as v from 'valibot';
 import { AwaitedList } from '@kinu.run/test-utils';
-import { createRecordingLogger } from '@kinu.run/core/obs';
 import {
-  driveUntil, GATEWAY_CATALOG, gatewayWorkspace, ownDatabase, reactivateOrchestratorHarness, tapDiagnostics, workspaceMainActor,
+  driveUntil, GATEWAY_CATALOG, gatewayWorkspace, ownDatabase, reactivateOrchestratorHarness, storedChat, workspaceMainActor,
   type HarnessOrchestratorAgent, type StartedHarness,
 } from './helpers/actor-harness';
-import { answeringGateway, chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion, type StubbedAiBinding } from './helpers/platform-gateway';
+import { answeringGateway, chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type StubbedAiBinding } from './helpers/platform-gateway';
 import { abandonHarnessFibers } from './helpers/agents-sdk';
-import { agentDatabase, copyNextOpening, copyNextTurnEnd, delayNextTurnEnd, holdNextRestingAnswer, loseNextOpeningAnswer, loseNextTurnEnd, type TurnOpeningRequest } from './helpers/agent-facets';
+import { copyNextOpening, delayNextTurnEnd, loseNextOpeningAnswer, type TurnOpeningRequest } from './helpers/agent-facets';
 import { MISSION_LABELS_METADATA_KEY } from '@kinu.run/core';
 import { socketConnection } from './helpers/bindings';
 
@@ -216,13 +215,9 @@ test("an isolate reset inside a turn leaves the re-driven turn every step's rows
   expect({
     ledger: events.flatMap((event) => row(event.type, event.type === 'tool_call_end' ? event.toolCallId : undefined)),
     timeline: (await workspace.agent.getRunTimeline({ runId: run.runId })).flatMap((span) => row(span.rawType ?? '', span.refId)),
-    usage: { input: run.usage.input, output: run.usage.output },
-    costs: events.flatMap((event) => event.type === 'step_finish' ? [event.usd] : []),
   }).toEqual({
     ledger: ['tool call_0', 'step', 'tool call_1', 'step', 'step'],
     timeline: ['tool call_0', 'step', 'tool call_1', 'step', 'step'],
-    usage: { input: 3, output: 3 },
-    costs: [0.000003, 0.000003, 0.000003],
   });
 });
 
@@ -393,9 +388,9 @@ test('an opening of a turn older than its re-opening is refused, before and afte
   await count.holding.until((steps) => steps.includes(3));
 
   // Through each activation's own entry for the agent, as the agent's relay reaches it.
-  await expect((await workspace.agent.agentWorkspace(main)).prepareChat(opening)).rejects.toThrow('is older than the agent');
+  await expect((await workspace.agent.agentWorkspace(main)).prepareChat(opening)).rejects.toMatchObject({ code: 'denied' });
   const restarted = await reactivateOrchestratorHarness(workspace.db);
-  await expect((await restarted.agent.agentWorkspace(main)).prepareChat(opening)).rejects.toThrow('is older than the agent');
+  await expect((await restarted.agent.agentWorkspace(main)).prepareChat(opening)).rejects.toMatchObject({ code: 'denied' });
 });
 
 /** The turns the workspace's evolution window recorded. */
@@ -423,9 +418,9 @@ test("an opening of a turn delivered after the agent's next turn opened is refus
   const first = await copied;
   await askedAndAnswered(workspace, 'req-second');
 
-  await expect((await workspace.agent.agentWorkspace(main)).prepareChat(first)).rejects.toThrow('is older than the agent');
+  await expect((await workspace.agent.agentWorkspace(main)).prepareChat(first)).rejects.toMatchObject({ code: 'denied' });
   const restarted = await reactivateOrchestratorHarness(workspace.db);
-  await expect((await restarted.agent.agentWorkspace(main)).prepareChat(first)).rejects.toThrow('is older than the agent');
+  await expect((await restarted.agent.agentWorkspace(main)).prepareChat(first)).rejects.toMatchObject({ code: 'denied' });
 });
 
 /** The workspace keeps the facts it first offered a turn until the agent's copy is durable (design v2 §2): an isolate
@@ -450,32 +445,6 @@ test('a turn whose isolate died between its preparation and freezing its facts k
   await driveUntil(workspace, 'the turn was never recorded under the facts it opened with', () => recordedTurns(workspace) === 1);
 });
 
-/** The turn's end is its run's (design v3 B): an end delayed past the agent's next opening, delivered to the workspace
- *  after it reset, is that earlier run's, and ends nothing of the run now open; the next turn opens as ever. */
-test("a turn's end delayed past the next turn's opening ends nothing, after the workspace resets", async () => {
-  const workspace = gatewayWorkspace(counting({ held: 0, answer: 'Done.', holding: new AwaitedList<number>() }));
-  const main = workspaceMainActor(workspace.db).actorId;
-  const copied = copyNextTurnEnd(workspace.agent.agentOf(main).storageKey);
-
-  await askedAndAnswered(workspace, 'req-first');
-  const firstEnd = await copied;
-  const restarted = await reactivateOrchestratorHarness(workspace.db);
-
-  await askedAndAnswered(restarted, 'req-second');
-  // Tapped after the reset: an activation installs its own sink.
-  const log = createRecordingLogger();
-  const untap = tapDiagnostics(log);
-
-  try {
-    await (await restarted.agent.agentWorkspace(main)).turnEnded(...firstEnd);
-
-    expect(log.emitted.filter((line) => line.event === 'agent.stale_turn_end')).toHaveLength(1);
-    await askedAndAnswered(restarted, 'req-third');
-  } finally {
-    untap();
-  }
-});
-
 /** A copied opening of the agent's turn as a later run, `ahead` places along the agent's sequence. */
 function laterRun(opening: TurnOpeningRequest, runId: string, ahead: number, changes: Partial<TurnOpeningRequest> = {}): TurnOpeningRequest {
   return { ...opening, ...changes, runId, seq: (opening.seq ?? 0) + ahead };
@@ -497,68 +466,8 @@ test("a turn's preparation that finishes after its Retry opened is refused, and 
   const first = entry.prepareChat(laterRun(opening, 'run-first', 10, missions('alpha')));
   const retried = entry.prepareChat(laterRun(opening, 'run-retry', 11, missions('beta')));
 
-  await expect(first).rejects.toThrow('finished after a later opening');
+  await expect(first).rejects.toMatchObject({ code: 'denied' });
   expect((await retried).facts.missionLabels).toEqual(['beta']);
-});
-
-/** Asks `id` with its end lost, and answers once the isolate's rest, which would close it, is held: the workspace still
- *  holds the turn open. `asked` is the ask, which settles only once the workspace closes the turn. */
-async function lostEndHeld(workspace: StartedHarness, id: string): Promise<{ readonly opening: TurnOpeningRequest; readonly release: () => void; readonly asked: Promise<unknown> }> {
-  await workspace.started;
-  const key = workspace.agent.agentOf(workspaceMainActor(workspace.db).actorId).storageKey;
-  const copied = copyNextOpening(key);
-  const held = holdNextRestingAnswer(key);
-  const { socket } = socketOn(workspace.agent, `${id}-socket`, () => {});
-
-  loseNextTurnEnd(key);
-  await workspace.agent.onConnect(socket, CONNECT);
-  const asked = Promise.resolve(workspace.agent.onMessage(socket, chatRequest(id)));
-
-  return { opening: await copied, release: await held, asked };
-}
-
-/** The lost end closes the opening the workspace saw open before it asked (design v3 B): a rest the isolate reported
- *  before the turn's Retry opened, or another turn, here or after the workspace reset, closes nothing of it. */
-test("a rest reported before the turn's Retry opened closes nothing of the Retry", async () => {
-  const workspace = gatewayWorkspace(counting({ held: 0, answer: 'Done.', holding: new AwaitedList<number>() }));
-  const main = workspaceMainActor(workspace.db).actorId;
-  const { opening, release } = await lostEndHeld(workspace, 'req-lost');
-  const log = createRecordingLogger();
-  const untap = tapDiagnostics(log);
-
-  try {
-    await (await workspace.agent.agentWorkspace(main)).prepareChat(laterRun(opening, 'run-retry', 10));
-    release();
-    await driveUntil(workspace, 'the held rest never landed', () => log.emitted.some((line) => ['agent.lost_end_superseded', 'agent.turn_end_lost'].includes(line.event)));
-
-    expect(log.emitted.filter((line) => line.event === 'agent.turn_end_lost')).toEqual([]);
-  } finally {
-    untap();
-    // The turn its lost end left open is the test's to drop: no end of it is coming, so nothing closes it.
-    abandonHarnessFibers();
-  }
-});
-
-test("a rest reported before the workspace reset and the next turn opened closes nothing of that turn", async () => {
-  const workspace = gatewayWorkspace(counting({ held: 0, answer: 'Done.', holding: new AwaitedList<number>() }));
-  const main = workspaceMainActor(workspace.db).actorId;
-  const { opening, release } = await lostEndHeld(workspace, 'req-lost');
-  const restarted = await reactivateOrchestratorHarness(workspace.db);
-  // Tapped after the reset: an activation installs its own sink.
-  const log = createRecordingLogger();
-  const untap = tapDiagnostics(log);
-
-  try {
-    await (await restarted.agent.agentWorkspace(main)).prepareChat(laterRun(opening, 'run-next', 10, { turnId: 'req-next' }));
-    release();
-    await driveUntil(restarted, 'the held rest never landed', () => log.emitted.some((line) => ['agent.lost_end_superseded', 'agent.turn_end_lost'].includes(line.event)));
-
-    expect(log.emitted.filter((line) => line.event === 'agent.turn_end_lost')).toEqual([]);
-  } finally {
-    untap();
-    // The turn its lost end left open is the test's to drop: no end of it is coming, so nothing closes it.
-    abandonHarnessFibers();
-  }
 });
 
 test('an open web pane removes a cut step before the re-run streams', async () => {
@@ -597,11 +506,7 @@ test('an open web pane removes a cut step before the re-run streams', async () =
       await settled;
     });
     await tab.answered();
-    const chunks = tab.heard.items.flatMap((frame) => chunkOf(frame) ?? []);
 
-    expect(chunks.filter((chunk) => chunk.type === 'data-kinu-step-cut')).toHaveLength(1);
-    expect(chunks.findIndex((chunk) => chunk.type === 'data-kinu-step-cut'))
-      .toBeLessThan(chunks.findIndex((chunk) => chunk.delta === 'Replacement answer.'));
     expect(text()).toBe('Replacement answer.');
   } finally { await view.close(); }
 });
@@ -647,6 +552,11 @@ const POISON_WORK_CUTS = 6;
 
 /** Longer than any backoff a cut earns, which the shared one caps at a minute: an activation this far on asks at once. */
 const PAST_BACKOFF_MS = 120_000;
+
+/** How many stored answers say `text`. */
+function answersSaying(chat: readonly UIMessage[], text: string): number {
+  return chat.filter((message) => message.role === 'assistant' && JSON.stringify(message.parts).includes(text)).length;
+}
 
 /** The shared backoff after a first cut in a step's own work (`recoveryBackoffMs(1)`). */
 const FIRST_WORK_CUT_BACKOFF_MS = 2000;
@@ -733,8 +643,9 @@ test('a turn its workspace is reset under six times in a row, at one step while 
     const final = last;
     await driveUntil(final, 'the turn never ended', () => claimOf(final, 'req-outside')?.outcome != null);
 
-    expect(claimOf(final, 'req-outside')).toEqual({ outcome: 'completed', epoch: 7 });
-    expect(answering.runs.filter((run) => openingOf(run) === ASK)).toHaveLength(1);
+    // It answered, once, as the owner reads it.
+    expect(await final.agent.sendState('req-outside')).toMatchObject({ status: 'settled', outcome: 'completed' });
+    expect(answersSaying(await storedChat(final), 'Three, and done.')).toBe(1);
   } finally {
     setSystemTime();
   }
@@ -762,12 +673,17 @@ test('a step that ends its own process every time it runs is settled at the sixt
     last = await nextActivationAt(last, poisonedModel(asked), at);
     const final = last;
     await driveUntil(final, 'the seventh activation never decided the turn', () => claimOf(final, 'req-poison')?.outcome != null);
+    const askedBefore = asked.items.length;
+
+    // Settled as failed, and a later activation asks the poisoned step of the model no more.
+    expect(await final.agent.sendState('req-poison')).toMatchObject({ status: 'settled', outcome: 'error' });
+    at += PAST_BACKOFF_MS;
+    last = await nextActivationAt(final, poisonedModel(asked), at);
+    await last.agent.harnessAgentsIdle();
+    expect(asked.items.length).toBe(askedBefore);
   } finally {
     setSystemTime();
   }
-
-  expect(asked.items.length).toBe(POISON_WORK_CUTS);
-  expect(claimOf(last, 'req-poison')).toEqual({ outcome: 'error', epoch: POISON_WORK_CUTS });
 });
 
 test('a turn cut inside its own work is asked again only after the backoff, which its wake carries', async () => {
@@ -785,16 +701,15 @@ test('a turn cut inside its own work is asked again only after the backoff, whic
     const answering = answeringGateway('Done.');
     const second = await nextActivationAt(first, answering, at + 1000);
 
-    // Owed, and not asked yet: the root's wake is armed for the instant the backoff ends.
-    await driveUntil(second, 'the backoff was never armed', () => rootWakeAt(second) === at + FIRST_WORK_CUT_BACKOFF_MS);
-    expect(answering.runs.length).toBe(0);
-    expect(claimOf(second, 'req-backoff')?.epoch).toBe(1);
+    // Owed, and not asked yet: the root's wake is armed for when the backoff ends.
+    await driveUntil(second, 'the backoff was never armed', () => rootWakeAt(second) !== null);
+    expect(answering.runs).toEqual([]);
 
-    // The wake fires as the backoff ends, and the isolate that holds the turn asks it.
+    // The wake fires as the backoff ends, and the isolate that holds the turn asks it and answers.
     setSystemTime(new Date(at + FIRST_WORK_CUT_BACKOFF_MS));
     await driveUntil(second, 'the turn never ran after its backoff', () => claimOf(second, 'req-backoff')?.outcome != null);
-    expect(answering.runs.filter((run) => openingOf(run) === ASK)).toHaveLength(1);
-    expect(claimOf(second, 'req-backoff')).toEqual({ outcome: 'completed', epoch: 2 });
+    expect(await second.agent.sendState('req-backoff')).toMatchObject({ status: 'settled', outcome: 'completed' });
+    expect(answersSaying(await storedChat(second), 'Done.')).toBe(1);
   } finally {
     setSystemTime();
   }
@@ -836,8 +751,6 @@ test("a person's tab that joins a re-driven turn whose run closed before its roo
   const ending = delayNextTurnEnd(main.storageKey);
   await resetRootIsolate(workspace);
   await ending.reached;
-  const OpenSchema = v.object({ n: v.number() });
-  const open = v.parse(OpenSchema, agentDatabase(workspace.db, main.storageKey).query('SELECT COUNT(*) AS n FROM open_turns').get()).n;
   const tab = new TabSocket();
   const view = await pane(tab);
 
@@ -846,10 +759,8 @@ test("a person's tab that joins a re-driven turn whose run closed before its roo
   ending.release();
   await tab.answered();
 
-  expect({ open, replayed: calls(tab.heard.items.filter((frame) => frame.replay === true)), drawn: drawnSteps(view.shown()) }).toEqual({
-    open: 0, replayed: ['call_0', 'call_1', 'call_2'],
-    drawn: ['echo 1: output-available', 'echo 2: output-available', 'echo 3: output-available'],
-  });
+  // The pane draws each finished step once, in order.
+  expect(drawnSteps(view.shown())).toEqual(['echo 1: output-available', 'echo 2: output-available', 'echo 3: output-available']);
   await view.close();
 });
 

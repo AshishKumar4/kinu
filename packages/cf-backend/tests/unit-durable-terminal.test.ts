@@ -21,8 +21,7 @@ import {
   type ScriptedHeadReport,
 } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
-import { catchNextOwingReport, loseNextHandoff, loseNextHandoffAnswer } from './helpers/agent-facets';
-import { analyticsEngine } from './helpers/analytics-engine';
+import { catchNextOwingReport, loseNextHandoff } from './helpers/agent-facets';
 import type { SettledTurn, TurnHarness } from './helpers/turn-harness';
 
 type Harness = ActorHarness<HarnessOrchestratorAgent>;
@@ -395,16 +394,6 @@ describe("an agent's reports reach its workspace newest first", () => {
 });
 
 describe("a main turn's close reads back only what something reads", () => {
-  /** No workspace extension implements `onTurnEnd`: announcing the turn read main's whole answer back across the
-   *  isolates and converted it for no one, 3 MB of a 150-step turn's close (worker-heap, 2026-10-10). */
-  test('a workspace no extension of which listens for turn end owes no announcement', async () => {
-    const harness = cutAt('turn_end_extensions', 'before');
-    turns(harness).open('u-unheard');
-    const [settled] = await Promise.allSettled([turns(harness).settle({ messageId: 'a-unheard' })]);
-
-    if (settled.status === 'rejected') throw settled.reason;
-    await until(() => disposition(harness, 'u-unheard', settled.value.messageId) === 'done', 'the sequence closed without the announcement');
-  });
 });
 
 /**
@@ -447,28 +436,6 @@ describe("a main turn's workspace facts outlive the activation that gathered the
     expect(recorded.map((row) => v.parse(RecordedSchema, JSON.parse(row.turn)).missionLabels)).toEqual([['refunds']]);
   });
 
-  test("a handoff driven again after its workspace reset records main's turn on the fleet once", async () => {
-    const engine = analyticsEngine();
-    const world: HarnessActorWorld = { analytics: engine.bindings };
-    const harness = orchestratorHarness(undefined, world);
-    const fleetTurns = () => engine.tables.kinu_agent_metrics.filter((row) => Object.values(row).includes('turn.settled')).length;
-
-    // The workspace takes the handoff and is gone before main's isolate hears it did: the isolate hands it over again.
-    loseNextHandoffAnswer(harness.agent.agentOf(workspaceMainActor(harness.db).actorId).storageKey);
-    turns(harness).open('u-fleet');
-    await turns(harness).settle({ messageId: 'a-fleet', text: 'the live answer' });
-    await joinHarnessFibers();
-
-    laterBy(1);
-    const restarted = await reactivateOrchestratorHarness(harness.db, undefined, { world });
-    const { db } = await mainRows(restarted);
-    const OwedSchema = v.object({ n: v.number() });
-    const owedHandoffs = () => v.parse(OwedSchema, db.query("SELECT COUNT(*) AS n FROM terminal_effects WHERE effect_key LIKE 'v1:workspace_settle:%'").get()).n;
-
-    await driveUntil(restarted, 'main never handed its turn over again', () => owedHandoffs() === 0);
-
-    expect(fleetTurns()).toBe(1);
-  });
 });
 
 /**

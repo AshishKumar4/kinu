@@ -1,14 +1,13 @@
 /**
- * An agent's runs and chat turns are one sequence of executions behind one fence (design v2 §2-§3, D2): a run opens the
- * fence as it is prepared, under the epoch its claim was minted with, as a chat turn opens it. A chat turn queued behind
- * a run neither takes the fence while the run holds it nor clears the run's opening; once it opened, the run's late call
- * runs nothing and its late close neither takes nor clears the turn's. Driven as production drives it: the owner's turn starts a search whose node runs in its own isolate, and a
- * turn is delivered to that node's chat. A run behind a chat turn is the agent's chat's to order
- * (core tests/unit-execution-claim.test.ts), and the fence's to judge (core tests/unit-turn-fence.test.ts).
+ * An agent's runs and chat turns are one sequence of executions (design v2 §2-§3, D2). A chat turn queued behind a run
+ * waits for the run to answer, then runs; once it runs, the run's late tool call runs nothing and its late close takes
+ * nothing of the turn, which goes on to answer. Driven as production drives it: the owner's turn starts a search whose
+ * node runs in its own isolate, and the node asks its workspace for a turn of its own while its run is out. A run
+ * behind a chat turn is the agent's chat's to order (core tests/unit-execution-claim.test.ts).
  */
 import { expect, test } from 'bun:test';
-import * as v from 'valibot';
-import { TurnFences, type AgentToolAnswer, type FencedRow } from '@kinu.run/core';
+import { TurnFences } from '@kinu.run/core';
+import type { TurnBound } from '../src/agent-facet/agent-turn';
 import { sqlOver } from '@kinu.run/test-utils';
 import { catalogTurn, gatewayWorkspace, type StartedHarness } from './helpers/actor-harness';
 import { holdNextRunDelivery } from './helpers/agent-facets';
@@ -17,6 +16,8 @@ import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion
 const ASK = 'Find a way to speed up the parser.';
 
 const CHAT = 'CHAT_ON_NODE: list what is open.';
+
+const LATE_TASK = 'LATE_CALL_TASK';
 
 /** The main actor starts a one-node search, then says so; a call carrying `CHAT` is the node's chat, any other its run. */
 function searching(answers: { readonly run: (run: RecordedGatewayRun) => Response | Promise<Response>; readonly chat: (run: RecordedGatewayRun) => Response | Promise<Response> }) {
@@ -45,71 +46,51 @@ function held() {
   return { asked, answer, serve };
 }
 
-function fenceOf(workspace: StartedHarness, actorId: string): FencedRow {
-  const row = new TurnFences(sqlOver(workspace.db)).row(actorId);
+/** The capability the running run's calls carry: the opening its preparation made at the workspace. */
+function runningCapability(workspace: StartedHarness, actorId: string): TurnBound {
+  const opening = new TurnFences(sqlOver(workspace.db)).row(actorId);
 
-  if (row === null) throw new Error(`no execution of ${actorId} ever opened its fence`);
+  if (opening === null) throw new Error(`the run of ${actorId} opened nothing`);
 
-  return row;
+  return { turnId: opening.turnId, runId: opening.runId, epoch: opening.seq };
 }
 
-/** A turn the node asks its workspace to queue for it, delivered to its chat as the workspace's producers deliver one. */
-async function chatOnNode(workspace: StartedHarness, actorId: string): Promise<void> {
-  const port = await workspace.agent.agentWorkspace(actorId);
+/** Every task the owner's work view lists, by title. */
+async function listedTasks(workspace: StartedHarness): Promise<string[]> {
+  const work = await workspace.agent.listWorkspaceWork();
 
-  expect(await port.enqueueTurn({ text: CHAT, idempotencyKey: 'chat-on-node' })).toEqual({ status: 'queued' });
+  return [...work.plans, ...work.tasks].flatMap((owned) => owned.tasks.map((task) => task.title));
 }
 
-/** A late call carrying `opening`'s capability, as an execution superseded since would send it. */
-async function lateCall(workspace: StartedHarness, actorId: string, opening: FencedRow): Promise<AgentToolAnswer> {
-  const port = await workspace.agent.agentWorkspace(actorId);
-
-  return await port.executeTool({
-    activity: [], turnId: opening.turnId, runId: opening.runId, epoch: opening.seq, mode: 'build', parentDriven: false,
-    callId: `late-${opening.runId}`, name: 'tasks', input: { op: 'add', titles: ['LATE_CALL_TASK'] },
-  });
-}
-
-function lateTasks(workspace: StartedHarness): number {
-  return v.parse(v.object({ n: v.number() }), workspace.db.query("SELECT COUNT(*) AS n FROM agent_tasks WHERE title = 'LATE_CALL_TASK'").get()).n;
-}
-
-test("a chat turn behind a run waits without taking its fence, and the run's late calls take or clear nothing of the turn's", async () => {
+test("a chat turn behind a run runs once the run answered, and the run's late calls run nothing of it", async () => {
   const run = held();
   const chat = held();
   const workspace = gatewayWorkspace(searching({ run: run.serve, chat: chat.serve }));
   const heldRun = holdNextRunDelivery();
   const owner = catalogTurn(workspace.agent, ASK);
   const { actorId: node, release } = await heldRun;
+  const port = await workspace.agent.agentWorkspace(node);
 
   release();
   const runCall = await run.asked.promise;
-  const ran = fenceOf(workspace, node);
+  const late = runningCapability(workspace, node);
 
-  // The run opened the node's fence as it was prepared.
-  expect(ran.live).toBe(true);
-
-  await chatOnNode(workspace, node);
-  expect(fenceOf(workspace, node)).toEqual(ran);
-
+  // The node asks for a turn of its own while its run is out: it waits behind the run.
+  expect(await port.enqueueTurn({ text: CHAT, idempotencyKey: 'chat-on-node' })).toEqual({ status: 'queued' });
   run.answer.resolve(chatCompletion(runCall, 'Cache the token table.'));
   const chatCall = await chat.asked.promise;
-  const chatting = fenceOf(workspace, node);
 
-  // The turn opened only once the run ended, later in the node's sequence.
-  expect(chatting.live).toBe(true);
-  expect(chatting.turnId).not.toBe(ran.turnId);
-  expect(chatting.seq).toBeGreaterThan(ran.seq);
+  // The run's late tool call is refused and adds no task; its late close changes nothing of the turn now running.
+  await expect(port.executeTool({
+    activity: [], turnId: late.turnId, runId: late.runId, epoch: late.epoch, mode: 'build', parentDriven: false,
+    callId: 'late-call', name: 'tasks', input: { op: 'add', titles: [LATE_TASK] },
+  })).rejects.toMatchObject({ code: 'cancelled' });
+  await port.runSettled({ turnId: late.turnId, runId: late.runId, epoch: late.epoch });
 
-  // The run's late call runs nothing, and its late close neither takes nor clears the turn's opening.
-  await expect(lateCall(workspace, node, ran)).rejects.toMatchObject({ code: 'cancelled' });
-  expect(lateTasks(workspace)).toBe(0);
-  await (await workspace.agent.agentWorkspace(node)).runSettled({ turnId: ran.turnId, runId: ran.runId, epoch: ran.seq });
-  expect(fenceOf(workspace, node)).toEqual(chatting);
-
-  chat.answer.resolve(chatCompletion(chatCall, 'Nothing is open.'));
+  chat.answer.resolve(toolCallCompletion(chatCall, { tool: 'tasks', args: { op: 'add', titles: ['CHAT_TASK'] } }, 'chat_task'));
   await owner;
   await workspace.agent.harnessAgentsIdle();
 
-  expect(fenceOf(workspace, node)).toEqual({ ...chatting, live: false });
+  expect(await listedTasks(workspace)).toEqual(expect.arrayContaining(['CHAT_TASK']));
+  expect(await listedTasks(workspace)).not.toContain(LATE_TASK);
 });

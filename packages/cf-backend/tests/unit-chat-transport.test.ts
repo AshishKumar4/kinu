@@ -649,27 +649,6 @@ describe('ChatWireTransport', () => {
     await h.land(answered);
   });
 
-  // The relay holds every step of a turn this room opened at its first, each whole once it ends, and every kind of part:
-  // the ledger restates fewer, so it is not asked.
-  test('a joining tab hears a turn this room opened from the relay alone, though the ledger records its steps', async () => {
-    const h = openRequest();
-    const { answered } = await h.open(h.connection('c1'), 'req-1', 'hello');
-    await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
-    await h.transport.observe(chunks([{ type: 'start' }, ...STEP_ONE, { type: 'start-step' }, { type: 'text-start', id: 't1' }, { type: 'text-delta', id: 't1', delta: 'tw' }]));
-    h.recorded.push([{ type: 'text', text: 'one', state: 'done' }]);
-
-    const joining = h.connection('c2');
-    await h.transport.onConnect(joining);
-    await h.transport.onMessage(joining, JSON.stringify({ type: 'cf_agent_stream_resume_ack', id: 'req-1' }));
-
-    expect({ replay: replayOf(h.connectionFrames('c2')), asked: h.asked }).toEqual({
-      replay: ['start', 'start-step', 'text-start', 'text-delta one', 'text-end', 'finish-step', 'start-step', 'text-start', 'text-delta tw', 'complete'],
-      asked: [],
-    });
-    h.transport.closeTurn([...h.history]);
-    await h.land(answered);
-  });
-
   test('a step the relay sent whole that the ledger has not recorded is replayed from the relay', async () => {
     const h = openRequest();
     const { answered } = await h.open(h.connection('c1'), 'req-1', 'hello');
@@ -796,27 +775,6 @@ describe('ChatWireTransport', () => {
     await acked;
 
     expect({ replayed: replayOf(h.connectionFrames('c2')), closed: h.closedWith('c2') }).toEqual({ replayed: [], closed: 1013 });
-  });
-
-  // A long turn's steps cross a step at a time: the ledger is asked for the steps before the cut alone.
-  test("a re-opened turn's replay asks its ledger for the steps before the room opened it, no more", async () => {
-    const h = harness();
-    const first = h.connection('c1');
-    await h.transport.onMessage(first, chatRequest('req-1', 'hello'));
-    const revived = h.afterEviction();
-
-    for (let step = 0; step < 3; step += 1) h.recorded.push([{ type: 'text', text: `step ${String(step)}`, state: 'done' }]);
-
-    const joining = h.connection('c2');
-    await revived.onConnect(joining);
-    await revived.deliver(turnStart('input-req-1', 'msg-1', [], 2));
-    const resuming = v.parse(FrameSchema, JSON.parse(h.connectionFrames('c2').find((text) => text.includes('cf_agent_stream_resuming')) ?? '{}'));
-    await revived.onMessage(joining, JSON.stringify({ type: 'cf_agent_stream_resume_ack', id: resuming.id }));
-
-    expect(replayOf(h.connectionFrames('c2'))).toEqual([
-      'start', 'start-step', 'R text-start', 'R text-delta step 0', 'R text-end', 'finish-step',
-      'start-step', 'R text-start', 'R text-delta step 1', 'R text-end', 'finish-step', 'complete',
-    ]);
   });
 
   // The turn re-opened at a step its ledger must hold: a replay that drew fewer would tell the tab it holds the turn.

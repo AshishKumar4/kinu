@@ -1122,14 +1122,12 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     await awaitSleepTimeSettled(recording, workspace, 2);
     await awaitSettled(target);
     const turn = await target.meterEnd();
-    // The workload, read where the model heard it: each tool step's call and the answer's, for both turns.
-    const modelCalls = (await this.httpCalls()).filter((call) => call.users.some((message) => message === `steps:${String(steps)}`)).length;
 
     await target.meterBegin();
     await target.plantCrossings();
     const planted = await target.meterEnd();
 
-    return { turn, modelCalls, planted: planted.crossings };
+    return { turn, planted: planted.crossings };
   }
 
   /** Only this worker's outbound handler routes to the control host, so no new Worker or binding. */

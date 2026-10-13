@@ -7,7 +7,7 @@ import { expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import { JsonValueSchema, type OwnerAnswer } from '@kinu.run/core';
-import { driveUntil, gatewayWorkspace, workspaceMainActor, type HarnessOrchestratorAgent, type StartedHarness } from './helpers/actor-harness';
+import { driveUntil, gatewayWorkspace, storedChat, workspaceMainActor, type HarnessOrchestratorAgent, type StartedHarness } from './helpers/actor-harness';
 import { cutNextDelivery, loseNextOpeningAnswer } from './helpers/agent-facets';
 import { socketConnection } from './helpers/bindings';
 import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
@@ -29,7 +29,17 @@ const ANSWER: OwnerAnswer[] = [{ id: 'units', selected: ['Integer cents'] }];
 
 const CUTS = ['before-admit', 'after-admit'] as const;
 
-/** A model that plans, asks and answers, counting what each intent's delivery ran. */
+const FIRST_ANSWER = 'Three open items.';
+
+const RETRY_ANSWER = 'Three open items, counted again.';
+
+/** How many of main's stored answers say `text`: the owner reads each answer once. */
+async function answersSaying(workspace: StartedHarness, text: string): Promise<number> {
+  return (await storedChat(workspace)).filter((message) => message.role === 'assistant' && JSON.stringify(message.parts).includes(text)).length;
+}
+
+/** A model that plans, asks and answers; `ran` says whether each intent's turn reached it, and a Retry is answered in
+ *  words of its own. */
 function model() {
   const ran = { approved: 0, resumed: 0, retried: 0 };
 
@@ -58,7 +68,7 @@ function model() {
     if (openingOf(run).includes(RETRIED)) {
       ran.retried += 1;
 
-      return chatCompletion(run, 'Three open items.');
+      return chatCompletion(run, ran.retried === 1 ? FIRST_ANSWER : RETRY_ANSWER);
     }
 
     return chatCompletion(run, 'Noted.');
@@ -140,7 +150,7 @@ for (const at of CUTS) {
 
     expect(await workspace.agent.getActivePlanReview()).toMatchObject({ id: plan.id, status: 'approved', handoffAccepted: true });
     expect(await workspace.agent.listOwedIntents()).toEqual([]);
-    expect(ran.approved).toBe(1);
+    expect(await answersSaying(workspace, 'Building it.')).toBe(1);
   });
 
   test(`a question answer whose crossing died ${at} is answered owed, and the agent's wake resumes its call once`, async () => {
@@ -160,7 +170,7 @@ for (const at of CUTS) {
     await workspace.agent.harnessAgentsIdle();
 
     expect(await workspace.agent.listOwedIntents()).toEqual([]);
-    expect(ran.resumed).toBe(1);
+    expect(await answersSaying(workspace, 'Storing integer cents.')).toBe(1);
   });
 
   test(`a Retry whose crossing died ${at} ends its request owed, and the agent's wake runs the turn again once`, async () => {
@@ -168,7 +178,6 @@ for (const at of CUTS) {
     const workspace = gatewayWorkspace(gateway);
     const turnId = await turn(workspace, RETRIED);
 
-    expect(ran.retried).toBe(1);
     cutNextDelivery(mainKey(workspace), at);
     const frames = listen(workspace.agent);
 
@@ -186,7 +195,7 @@ for (const at of CUTS) {
     await workspace.agent.harnessAgentsIdle();
 
     expect(await workspace.agent.listOwedIntents()).toEqual([]);
-    expect(ran.retried).toBe(2);
+    expect([await answersSaying(workspace, RETRY_ANSWER), await answersSaying(workspace, FIRST_ANSWER)]).toEqual([1, 0]);
   });
 }
 
@@ -203,18 +212,18 @@ test("a Retry whose agent died before its turn opened runs the turn on the agent
 
   await lost;
   expect(await asked).toBe('answered');
-  expect(owed(workspace)).toBe(0);
+  expect(await workspace.agent.listOwedIntents()).toEqual([]);
 
   workspace.agent.harnessResetAgentIsolate(mainKey(workspace));
   await workspace.agent.recoverStrandedTurn();
   await driveUntil(workspace, 'the applied Retry never ran its turn', () => ran.retried > 1);
   await workspace.agent.harnessAgentsIdle();
 
-  expect(ran.retried).toBe(2);
+  expect([await answersSaying(workspace, RETRY_ANSWER), await answersSaying(workspace, FIRST_ANSWER)]).toEqual([1, 0]);
 });
 
 test('a decision whose crossing reaches the agent is answered as a direct one was, and leaves nothing owed', async () => {
-  const { gateway, ran } = model();
+  const { gateway } = model();
   const workspace = gatewayWorkspace(gateway);
 
   await turn(workspace, PLANNING, 'plan');
@@ -225,5 +234,5 @@ test('a decision whose crossing reaches the agent is answered as a direct one wa
   expect(await workspace.agent.decidePlanReview(plan.id, plan.revision, 'approve')).toMatchObject({ ok: true, queued: true, plan: { status: 'approved' } });
   expect(await workspace.agent.listOwedIntents()).toEqual([]);
   await workspace.agent.harnessAgentsIdle();
-  expect(ran.approved).toBe(1);
+  expect(await answersSaying(workspace, 'Building it.')).toBe(1);
 });

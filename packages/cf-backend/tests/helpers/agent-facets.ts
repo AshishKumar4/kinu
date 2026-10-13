@@ -1,7 +1,7 @@
 /** An agent's isolate for bun suites: the shipped AgentFacet in this process over its own database. */
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
-import { MAIN_AGENT, WORKSPACE_ROOT, type AgentSnapshot } from '@kinu.run/core';
+import { MAIN_AGENT, WORKSPACE_ROOT } from '@kinu.run/core';
 import type { AgentProviderDeps, AgentProviderRegistry } from '../../src/providers/agent-registry';
 import type { AgentContext } from 'agents';
 import { AgentFacet, type AgentFacetCalls, type AgentFacetEnv } from '../../src/agent-facet/agent-facet';
@@ -58,17 +58,6 @@ export function delayNextTurnEnd(storageKey: string): HeldCall {
   delayedTurnEnds.set(storageKey, { reached: reached.resolve, released: released.promise });
 
   return { reached: reached.promise, release: released.resolve };
-}
-
-const handedNarrations = new Map<string, (readonly string[])[]>();
-
-/** Each non-empty narration the isolate under `storageKey` handed its workspace, for an answer's metadata or a report. */
-export function narrationsHandedOver(storageKey: string): readonly (readonly string[])[] {
-  return handedNarrations.get(storageKey) ?? [];
-}
-
-function handNarration(storageKey: string, narration: readonly string[] | null): void {
-  if (narration !== null && narration.length > 0) handedNarrations.set(storageKey, [...narrationsHandedOver(storageKey), narration]);
 }
 
 export type TurnOpeningRequest = Parameters<AgentWorkspaceHost['prepareChat']>[0];
@@ -145,20 +134,6 @@ export async function holdNextRunDelivery(): Promise<{ readonly actorId: string;
   return await held.promise;
 }
 
-const restingAnswers = new Map<string, (release: () => void) => void>();
-
-/**
- * The next time the isolate under `storageKey` answers that it owes nothing, the answer, its own as it was when asked, is
- * held on its way back to the workspace: the promise settles with `release`, which lets it arrive.
- */
-export async function holdNextRestingAnswer(storageKey: string): Promise<() => void> {
-  const held = Promise.withResolvers<() => void>();
-
-  restingAnswers.set(storageKey, held.resolve);
-
-  return await held.promise;
-}
-
 const heldReports = new Map<string, (deliver: () => Promise<void>) => void>();
 
 /**
@@ -185,13 +160,6 @@ const lostHandoffs = new Set<string>();
 /** The isolate under `storageKey` hands its next settled turn to a workspace that is gone before it takes it. */
 export function loseNextHandoff(storageKey: string): void {
   lostHandoffs.add(storageKey);
-}
-
-const lostHandoffAnswers = new Set<string>();
-
-/** The workspace takes the next settled turn the isolate under `storageKey` hands it, and is gone before it answers. */
-export function loseNextHandoffAnswer(storageKey: string): void {
-  lostHandoffAnswers.add(storageKey);
 }
 
 /** The isolate under `storageKey` fails to write its next answer row; the commit is one transaction, so nothing lands. */
@@ -373,19 +341,13 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
             copiedTurnEnds.delete(placement.storageKey);
             copy?.([event, figures, activity, window]);
           },
-          owedReport: (turn, ended) => {
-            handNarration(placement.storageKey, ended.narration);
-
-            return host.owedReport(turn, ended);
-          },
+          owedReport: (turn, ended) => host.owedReport(turn, ended),
           parentReport: (report) => host.parentReport(report),
           autoTitle: (subject, title) => host.autoTitle(subject, title),
           turnSettled: async (settled) => {
             if (lostHandoffs.delete(placement.storageKey)) throw new Error('the workspace was reset before it took the handoff');
 
             await host.turnSettled(settled);
-
-            if (lostHandoffAnswers.delete(placement.storageKey)) throw new Error('the workspace took the handoff and was reset before it answered');
           },
           runSettled: (run) => host.runSettled(run),
           hireAdvisor: (advisor) => host.hireAdvisor(advisor),
@@ -416,11 +378,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
 
             return host.paceStep(bound, profile);
           },
-          answerMetadata: (turnId, narration) => {
-            handNarration(placement.storageKey, narration);
-
-            return host.answerMetadata(turnId, narration);
-          },
+          answerMetadata: (turnId, narration) => host.answerMetadata(turnId, narration),
           getAuth: (key, opts) => host.getAuth(key, opts),
           listCredentials: () => host.listCredentials(),
           relayDevice: (provider) => host.relayDevice(provider),
@@ -446,23 +404,6 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
       // A reset isolate fails every call it still held, as a dropped RPC does; a refusal crosses in its own words, as an
       // error thrown across an RPC does.
       const calls = agentCallsThrough((call) => attemptInItsWords('io', () => untilLost(call(facet), lost.signal)));
-
-      const heldWhenResting = async (snapshot: AgentSnapshot): Promise<boolean> => {
-        const answer = await calls.owed(snapshot);
-        const hold = answer ? undefined : restingAnswers.get(placement.storageKey);
-
-        if (hold === undefined) return answer;
-        restingAnswers.delete(placement.storageKey);
-        const released = Promise.withResolvers<void>();
-
-        hold(released.resolve);
-        await released.promise;
-
-        return answer;
-      };
-
-      // Untouched unless a hold waits: the answer arrives on the tick it always did.
-      const owed = (snapshot: AgentSnapshot): Promise<boolean> => (restingAnswers.has(placement.storageKey) ? heldWhenResting(snapshot) : calls.owed(snapshot));
 
       const admit: AgentFacetCalls['admit'] = async (snapshot, delivery) => {
         const cut = deliveryCuts.get(placement.storageKey);
@@ -496,7 +437,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
         return answered;
       };
 
-      return { facet, calls: { ...calls, owed, admit }, lost };
+      return { facet, calls: { ...calls, admit }, lost };
   }
 }
 

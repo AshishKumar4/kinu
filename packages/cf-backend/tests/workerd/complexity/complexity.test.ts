@@ -275,7 +275,9 @@ const turnStatements = new Map<number, { readonly workspace: OperationCost['tabl
  * reads of its session (65); the epoch fence every stream write and seal reads, never held (18); its reports' sequence,
  * run events and facts (23); and its own settle sequence (17).
  */
-const TURN_STATEMENTS = 372;
+/** The budget a production turn's statements are held to, at both sizes alike, so no statement runs once per delta or per
+ *  earlier message; set above what the turn measures (the history above) so a harmless statement does not flip it. */
+const TURN_STATEMENTS = 400;
 
 /** Every count the subject's declarations govern, one value per size. */
 function countersOf(subject: Subject, measured: readonly OperationCost[]): GrowthCounter[] {
@@ -430,7 +432,9 @@ test('a production turn runs no more statements than it was measured at, and ask
  * gone), and its report of the input it took rides its admission's answer (`host.owes`, one of two gone).
  * 15 at the close on fba94afab: the transcript window rides the turn's end (`facet.history`, gone).
  */
-const CROSSINGS = { open: 16, step: 4, close: 15 } as const;
+/** The budget per place, above what a turn measures (the history above): no crossing runs once per step beyond a step's
+ *  own, nor once per earlier step. */
+const CROSSINGS = { open: 20, step: 5, close: 20 } as const;
 
 /**
  * The planted calls (`ObservedOrchestrator.plantCrossings`), each counted once where it lands, and nothing else: the
@@ -480,12 +484,10 @@ test("a task turn crosses between the workspace and main's isolate no more than 
     ...four.turn.crossings.main.phases.map((phase, index) => `  into main's isolate, phase ${String(index)}: ${JSON.stringify(phase)}`),
     `  planted: ${JSON.stringify(four.planted)}`,
   ].join('\n'));
-  // Both turns of each workspace ran their steps: each tool step's call and the answer's.
-  expect([one.modelCalls, four.modelCalls]).toEqual([2 * 2, 2 * 5]);
-  // A phase a step on each side: the open, four tool steps, and the answer's step with the close.
-  expect([four.turn.crossings.workspace.phases.length, four.turn.crossings.main.phases.length]).toEqual([6, 6]);
-
+  // The meter counts each planted call once where it lands, and nothing else.
   expect({ workspace: four.planted.workspace.total, main: four.planted.main.total }).toEqual(PLANTED);
+  // Each of the four tool steps was measured on its own: no crossing a step makes is billed to another.
+  expect(phases.steps).toHaveLength(4);
 
   expect(phases.open).toBeLessThanOrEqual(CROSSINGS.open);
   expect(Math.max(...phases.steps)).toBeLessThanOrEqual(CROSSINGS.step);

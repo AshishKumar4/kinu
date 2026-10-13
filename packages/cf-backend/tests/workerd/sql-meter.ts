@@ -251,9 +251,8 @@ export interface MeteredTurn {
   readonly crossings: { readonly workspace: PhasedCrossings; readonly main: PhasedCrossings };
 }
 
-/** A metered task turn, the model calls both of its turns made, and the crossings of the planted calls alone. */
+/** A metered task turn, and the crossings of the planted calls alone. */
 export interface TurnCrossings {
   readonly turn: MeteredTurn;
-  readonly modelCalls: number;
   readonly planted: MeteredTurn['crossings'];
 }

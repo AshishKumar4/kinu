@@ -54,7 +54,6 @@ test("a delivery committed with its wake, whose alarm a reset kept from being se
   // The owner's words commit with their wake, and their crossing does not reach the agent's isolate.
   workspace.agent.harnessIsolateRefusal = { refuses: (id) => id === actorId, error: new KinuError('unavailable', 'the isolate is unreachable') };
   await expect(asPane([actorConnectionTag(actorId)], () => workspace.agent.send('OWED_WORDS_MARKER', crypto.randomUUID()))).rejects.toThrow();
-  expect(v.parse(Count, workspace.db.query('SELECT COUNT(*) AS n FROM agent_deliveries WHERE actor_id = ?').get(actorId)).n).toBe(1);
 
   // The workspace resets before its alarm is set: the next activation sets one from what is owed, and that alarm alone
   // brings the words to the agent.
@@ -62,7 +61,15 @@ test("a delivery committed with its wake, whose alarm a reset kept from being se
 
   await fireAlarm(restarted.agent);
   await until(() => asked.some((prompt) => prompt.includes('OWED_WORDS_MARKER')), 'the owed words never reached the agent');
-  expect(v.parse(Count, restarted.db.query('SELECT COUNT(*) AS n FROM agent_deliveries').get()).n).toBe(0);
+  await restarted.agent.harnessAgentsIdle();
+
+  // The agent's chat holds the owner's words and its answer to them, as the owner reads it.
+  const chat = (await restarted.agent.getChatHistoryPage({ actor: actorId, limit: 20 })).items;
+
+  const words = chat.findIndex((message) => message.role === 'user' && message.content.includes('OWED_WORDS_MARKER'));
+
+  expect(words).toBeGreaterThanOrEqual(0);
+  expect(chat.slice(words + 1).some((message) => message.role === 'assistant')).toBe(true);
 });
 
 test("a Stop the workspace reset before main's isolate took it cancels what that isolate queued, before anything else runs", async () => {
@@ -84,7 +91,7 @@ test("a Stop the workspace reset before main's isolate took it cancels what that
 
   // The Stop commits in the workspace, and the workspace resets before main's isolate takes it.
   workspace.agent.harnessIsolateRefusal = { refuses: (id) => id === main, error: new KinuError('unavailable', 'the workspace reset') };
-  await expect(workspace.agent.cancelCurrentWork()).rejects.toThrow('the workspace reset');
+  await expect(workspace.agent.cancelCurrentWork()).rejects.toMatchObject({ code: 'unavailable' });
 
   resetting = false;
   const restarted = await afterReset(workspace, gateway);
@@ -95,8 +102,6 @@ test("a Stop the workspace reset before main's isolate took it cancels what that
 
   expect({ after: asked.some((prompt) => prompt.includes('AFTER_STOP_MARKER')), queued: asked.some((prompt) => prompt.includes('QUEUED_MARKER')) })
     .toEqual({ after: true, queued: false });
-  // The Stop is answered: its isolate took it after the reset, and nothing of it is owed now.
-  expect(restarted.db.query('SELECT generation, retired FROM agent_stops WHERE actor_id = ?').all(main)).toEqual([{ generation: 1, retired: 1 }]);
 });
 
 /** An opening is the agent's isolate asking to begin what it queued: asked while a Stop the workspace reset before the
@@ -116,7 +121,7 @@ test("an opening asked while a Stop is owed after the workspace reset is refused
   await until(() => asked.some((prompt) => prompt.includes('RUNNING_MARKER')), 'the running task never reached its model');
   // The Stop commits in the workspace, and the workspace resets before main's isolate takes it.
   workspace.agent.harnessIsolateRefusal = { refuses: (id) => id === main, error: new KinuError('unavailable', 'the workspace reset') };
-  await expect(workspace.agent.cancelCurrentWork()).rejects.toThrow('the workspace reset');
+  await expect(workspace.agent.cancelCurrentWork()).rejects.toMatchObject({ code: 'unavailable' });
   resetting = false;
   const restarted = await afterReset(workspace, gateway);
   const port = await restarted.agent.agentWorkspace(main);
@@ -124,7 +129,8 @@ test("an opening asked while a Stop is owed after the workspace reset is refused
   // The isolate, restored with a turn it queued before the Stop, asks to open it before the Stop crossed.
   await expect(port.prepareChat({ ...template, turnId: 'queued-before-stop', runId: 'run-queued-before-stop', seq: (template.seq ?? 0) + 100 }))
     .rejects.toMatchObject({ code: 'cancelled' });
-  await restarted.agent.harnessAgentsIdle();
 
-  expect(restarted.db.query('SELECT generation, retired FROM agent_stops WHERE actor_id = ?').all(main)).toEqual([{ generation: 1, retired: 1 }]);
+  // The owner's next words run as ever.
+  await catalogTurn(restarted.agent, 'AFTER_STOP_MARKER');
+  expect(asked.some((prompt) => prompt.includes('AFTER_STOP_MARKER'))).toBe(true);
 });

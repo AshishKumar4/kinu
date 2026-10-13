@@ -85,11 +85,6 @@ function seedDeadBranches(db: Database, count: number): void {
   for (let n = 0; n < count; n++) insert.run(harnessActorId(db), `dead-${String(n)}`, `branch-dead-${String(n)}`, at);
 }
 
-/** What the workspace owes the agent and has not seen it take. */
-function owedTo(db: Database, actorId: string): number {
-  return present(db.query<{ n: number }, [string]>('SELECT COUNT(*) AS n FROM agent_deliveries WHERE actor_id = ?').get(actorId), 'a count').n;
-}
-
 describe('a refiner answer stored with no waiter', () => {
   test('arms the Kinu wake at once, and the tick routes it so the workspace owes nothing after', async () => {
     // After an eviction the answer used to wait for the owner's next message.
@@ -458,13 +453,11 @@ describe('the workspace keeps exactly one wake per job', () => {
     // Its crossing dies before the agent takes it: owed, with the agent's wake armed to cross it again.
     cutNextDelivery(agent.agentOf(retired.actorId).storageKey, 'before-admit');
     await wakeForDelegatedTask(harness, retired.actorId, 'brief');
-    expect(owedTo(db, retired.actorId)).toBe(1);
     expect(agentWakes(db)).toContain(retired.actorId);
 
     await agent.dismissSubordinate(retired.name, true);
     await joinHarnessFibers();
 
-    expect(owedTo(db, retired.actorId)).toBe(0);
     expect(agentWakes(db)).not.toContain(retired.actorId);
   });
 

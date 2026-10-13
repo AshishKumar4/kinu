@@ -1,7 +1,7 @@
 /**
- * An execution is claimed as it opens (design v2 §2-§3): its claim, `preparing`, and its epoch exist before anything of
- * it is prepared, the epoch is the agent's own sequence over all its turns, and a preparation that fails settles that
- * claim `error`. A Stop that comes as it opens claims and prepares nothing, and the turn ends as a stopped one.
+ * An execution is claimed as it opens (design v2 §2-§3), before anything of it is prepared: a preparation that fails ends
+ * its turn, its room told, and leaves the agent free for the next; a Stop that comes as it opens ends it with nothing
+ * asked of the model and the owner's words kept; and a run delivered while a chat turn runs waits for that turn's end.
  */
 import { expect, test } from 'bun:test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
@@ -9,11 +9,13 @@ import { KinuError } from '../src/obs/error';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import { sessionFixture } from './helpers-session';
 
-function answering() {
+/** A model that answers each call `done`, after `held` (when given) lets it. */
+function answering(held?: () => Promise<void>) {
   const asked = { count: 0 };
 
   const model = scriptedTurnModel({ doGenerate: async () => {
     asked.count += 1;
+    await held?.();
 
     return {
       content: [{ type: 'text', text: 'done' }],
@@ -26,46 +28,35 @@ function answering() {
   return { model, asked };
 }
 
-test('a turn is claimed preparing before it is prepared, and a failed preparation settles that claim error', async () => {
-  const seen: unknown[] = [];
+test('a turn whose preparation fails ends with its room told, and the next turn runs and is answered', async () => {
+  const { model, asked } = answering();
+  let failures = 1;
 
   const fixture = await sessionFixture({
-    model: answering().model,
-    ports: {
-      prepareTurn: async (_item, lease) => {
-        seen.push(fixture.actor.stores.claims.read(lease.turnId));
+    model,
+    aroundPrepare: (prepare) => async (...args) => {
+      if (failures-- > 0) throw new KinuError('unavailable', 'the profile catalog could not be read');
 
-        throw new KinuError('unavailable', 'the profile catalog could not be read');
-      },
+      return await prepare(...args);
     },
   });
 
   try {
     await fixture.chat.send('plan the quarterly offsite', { id: 'q-1' });
+    // Its room hears the failure; nothing of it reached the model.
+    expect([fixture.events.some((event) => event.type === 'error'), asked.count]).toEqual([true, 0]);
 
-    expect(seen).toEqual([expect.objectContaining({ turnId: 'q-1', status: 'preparing', outcome: null, program: null })]);
-    expect(fixture.actor.stores.claims.read('q-1')).toMatchObject({ status: 'settled', outcome: 'error' });
+    await fixture.chat.send('plan it again', { id: 'q-2' });
+    const answered = (await fixture.actor.stores.history.transcript(CHAT_SESSION_ID).history()).filter((row) => row.role === 'assistant');
+
+    expect(JSON.stringify(answered)).toContain('done');
   } finally { fixture.close(); }
 });
 
-test("an execution's epoch is the agent's own sequence, over all its turns", async () => {
-  const fixture = await sessionFixture({ model: answering().model });
-
-  try {
-    await fixture.chat.send('first', { id: 't-1' });
-    await fixture.chat.send('second', { id: 't-2' });
-    const [first, second] = [fixture.actor.stores.claims.read('t-1'), fixture.actor.stores.claims.read('t-2')];
-
-    expect([first?.outcome, second?.outcome]).toEqual(['completed', 'completed']);
-    expect((second?.epoch ?? 0) > (first?.epoch ?? 0)).toBe(true);
-  } finally { fixture.close(); }
-});
-
-test('a Stop as a turn opens claims and prepares nothing, and the turn ends stopped with the owner\'s words kept', async () => {
+test("a Stop as a turn opens asks the model nothing, keeps the owner's words, and the next turn runs", async () => {
   const { model, asked } = answering();
   const opening = Promise.withResolvers<void>();
   const stopped = Promise.withResolvers<void>();
-  let prepared = 0;
   let firstArm = true;
 
   const fixture = await sessionFixture({
@@ -77,11 +68,6 @@ test('a Stop as a turn opens claims and prepares nothing, and the turn ends stop
         firstArm = false;
         opening.resolve();
         await stopped.promise;
-      },
-      prepareTurn: async () => {
-        prepared += 1;
-
-        throw new KinuError('unavailable', 'a stopped turn was prepared');
       },
     },
   });
@@ -98,39 +84,30 @@ test('a Stop as a turn opens claims and prepares nothing, and the turn ends stop
 
     const [question, ...after] = await fixture.actor.stores.history.transcript(CHAT_SESSION_ID).history();
 
-    expect({ prepared, asked: asked.count, claim: fixture.actor.stores.claims.read('s-1') }).toEqual({ prepared: 0, asked: 0, claim: null });
-    expect([question?.id, question?.role, after.filter((row) => row.role === 'assistant' && row.parts.length > 0)]).toEqual(['s-1', 'user', []]);
+    expect([asked.count, question?.id, question?.role, after.filter((row) => row.role === 'assistant' && row.parts.length > 0)]).toEqual([0, 's-1', 'user', []]);
+
+    await fixture.chat.send('summarize it now', { id: 's-2' });
+    expect(asked.count).toBe(1);
   } finally { fixture.close(); }
 });
 
-test("a run delivered while a chat turn runs is claimed only once the turn's claim settled, later in the agent's sequence", async () => {
+test('a run delivered while a chat turn runs starts only once that turn has answered', async () => {
   const asked = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
-  const claimedRuns: { readonly epoch: number; readonly chatEpoch: number | undefined; readonly chatOutcome: string | null | undefined }[] = [];
+  const order: string[] = [];
 
-  const model = scriptedTurnModel({ doGenerate: async () => {
+  const { model } = answering(async () => {
     asked.resolve();
     await release.promise;
-
-    return {
-      content: [{ type: 'text', text: 'done' }],
-      finishReason: { unified: 'stop', raw: undefined },
-      usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } },
-      warnings: [],
-    };
-  } });
+    order.push('chat answered');
+  });
 
   const fixture = await sessionFixture({
     model,
     ports: {
-      // The run's host claims its first round as a delivered run's does, before its preparation.
       runs: {
-        run: async (run, _signal, retire) => {
-          const chat = fixture.actor.stores.claims.read('c-1');
-          const reserved = fixture.actor.session.reserveExecution({ turnId: run.id, runId: run.task.runId }, run.task.mode);
-
-          claimedRuns.push({ epoch: reserved.epoch, chatEpoch: chat?.epoch, chatOutcome: chat?.outcome });
-          fixture.actor.session.settleReserved(reserved, 'completed');
+        run: async (_run, _signal, retire) => {
+          order.push('run started');
           retire();
         },
         refuse: (_run, _failure, retire) => { retire(); },
@@ -145,15 +122,11 @@ test("a run delivered while a chat turn runs is claimed only once the turn's cla
     expect(await fixture.chat.admitDelivery({
       id: 'run-1', seq: 1, authorship: 'hirer', input: { kind: 'run', task: { sequenceId: 'run-1', runId: 'r-1', body: 'run behind', mode: 'build' } },
     }, 'workspace')).toBe('taken');
-    expect(claimedRuns).toEqual([]);
 
     release.resolve();
     await sending;
     await fixture.chat.pumpPromise;
-    const [claimed] = claimedRuns;
 
-    expect(claimed?.chatOutcome).toBe('completed');
-    expect((claimed?.epoch ?? 0) > (claimed?.chatEpoch ?? Infinity)).toBe(true);
+    expect(order).toEqual(['chat answered', 'run started']);
   } finally { fixture.close(); }
 });
-

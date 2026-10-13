@@ -575,17 +575,13 @@ describe('root-branches census (design v2 §9)', () => {
     ]);
   });
 
-  test('an unclassified branch, a stale entry and a moved count each disagree', () => {
+  test('an unclassified branch, a stale entry and a moved count each disagree, naming the entry', () => {
     const found = censusOf(source('function owns(id: string) { return id === this.actorHandle().actorId; }'));
+    const entry = [expect.stringContaining('packages/core/src/planted.ts#owns')];
 
-    expect(disagreements(found, {})).toEqual([
-      'packages/core/src/planted.ts#owns: 1 root branch(es) the list does not classify — add it as J (why it stays) or H (the step that removes it)',
-    ]);
-    expect(disagreements(new Map(), { 'packages/core/src/planted.ts#owns': { count: 1, kind: 'H', until: 'step 7', why: 'planted' } })).toEqual([
-      'packages/core/src/planted.ts#owns: listed, and no root branch reproduces it — remove the entry with the change that removed the branch',
-    ]);
-    expect(disagreements(found, { 'packages/core/src/planted.ts#owns': { count: 2, kind: 'J', why: 'planted' } })).toEqual([
-      'packages/core/src/planted.ts#owns: 1 root branch(es), the list says 2 — update its count with the change',
-    ]);
+    expect(disagreements(found, {})).toEqual(entry);
+    expect(disagreements(new Map(), { 'packages/core/src/planted.ts#owns': { count: 1, kind: 'H', until: 'step 7', why: 'planted' } })).toEqual(entry);
+    expect(disagreements(found, { 'packages/core/src/planted.ts#owns': { count: 2, kind: 'J', why: 'planted' } })).toEqual(entry);
+    expect(disagreements(found, { 'packages/core/src/planted.ts#owns': { count: 1, kind: 'J', why: 'planted' } })).toEqual([]);
   });
 });

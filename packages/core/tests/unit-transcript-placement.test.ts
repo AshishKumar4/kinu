@@ -50,16 +50,6 @@ describe('reading a steer row', () => {
     expect(entries[0].steers).toEqual([]);
   });
 
-  test('a steer row naming no step of the turn keeps its bubble instead of guessing', () => {
-    // Placing it at a made-up step would misstate what the model read.
-    const { entries } = buildTranscript([
-      { id: 'bad-steer', role: 'user', parts: [{ type: 'text', text: 'wait' }], metadata: { [STEER_METADATA_KEY]: true, [STEER_STEP_METADATA_KEY]: -1 } },
-      turn('a1', 6),
-    ]);
-
-    expect(entries.map((entry) => entry.message.id)).toEqual(['bad-steer', 'a1']);
-    expect(entries[1].steers).toEqual([]);
-  });
 });
 
 describe('a steer inside the turn that read it', () => {

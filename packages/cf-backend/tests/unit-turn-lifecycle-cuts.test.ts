@@ -7,15 +7,13 @@
 import { afterEach, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import { type GeneralNote, type NotedChanges } from '@kinu.run/core';
-import { agentWakes, catalogTurn, driveUntil, fireSoonestWake, gatewayWorkspace, workspaceMainActor } from './helpers/actor-harness';
+import { agentWakes, catalogTurn, driveUntil, fireSoonestWake, gatewayWorkspace, reactivateOrchestratorHarness, workspaceMainActor } from './helpers/actor-harness';
 import { cutNextDelivery, holdNextDelivery } from './helpers/agent-facets';
 import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 import { socketConnection } from './helpers/bindings';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 
 afterEach(() => { setSystemTime(); });
-
-const Count = v.object({ n: v.number() });
 
 /** The owner's words, as the pane sends them. */
 function ownerWords(text: string): string {
@@ -38,7 +36,12 @@ test("a turn that has closed runs no tool call made under it, and a reset worksp
   const late = { activity: [], turnId: closed.turn_id, runId: closed.run_id, epoch: closed.seq, mode: 'build' as const, parentDriven: false, callId: 'late-call', name: 'tasks', input: { op: 'add', titles: ['STALE_RPC_TASK'] } };
 
   await expect(port.executeTool(late)).rejects.toMatchObject({ code: 'cancelled' });
-  expect(v.parse(Count, workspace.db.query("SELECT COUNT(*) AS n FROM agent_tasks WHERE title = 'STALE_RPC_TASK'").get()).n).toBe(0);
+  const restarted = await reactivateOrchestratorHarness(workspace.db);
+
+  await expect((await restarted.agent.agentWorkspace(actorId)).executeTool(late)).rejects.toMatchObject({ code: 'cancelled' });
+  const work = await restarted.agent.listWorkspaceWork();
+
+  expect([...work.plans, ...work.tasks].flatMap((owned) => owned.tasks.map((task) => task.title))).not.toContain('STALE_RPC_TASK');
 });
 
 test('a later delivery never reaches the model before an older one whose crossing was lost', async () => {
@@ -68,7 +71,14 @@ test('a later delivery never reaches the model before an older one whose crossin
 });
 
 test('a note send whose delivery committed is not also drafted again', async () => {
-  const workspace = gatewayWorkspace(stubAiBinding((run) => chatCompletion(run, 'Done.')));
+  const heard: string[] = [];
+
+  const workspace = gatewayWorkspace(stubAiBinding((run) => {
+    // What each call answers: its newest user message.
+    heard.push(JSON.stringify(requestOf(run).messages.filter((message) => message.role === 'user').at(-1) ?? null));
+
+    return chatCompletion(run, 'Done.');
+  }));
 
   const set: NotedChanges = { source: 'workspace', label: 'Workspace', mode: 'vfs-baseline' };
   const note: GeneralNote = { id: 'retry-note', type: 'GLOBAL_COMMENT', text: 'CHANGE_NOTE_RETRY_MARKER', createdA: 1 };
@@ -82,11 +92,17 @@ test('a note send whose delivery committed is not also drafted again', async () 
 
   const drafted = (await workspace.agent.getChangeNotes(set.source)).map((kept) => kept.id);
 
-  const owed = v.parse(Count, workspace.db.query('SELECT COUNT(*) AS n FROM agent_deliveries WHERE actor_id = ? AND input_json LIKE ?')
-    .get(actorId, '%CHANGE_NOTE_RETRY_MARKER%')).n;
+  // One owner for the note's fate: either it is drafted again, or it is owed and its agent's wake delivers it, once.
+  if (sent === 'failed') {
+    expect(drafted).toEqual(['retry-note']);
 
-  // One owner for the note's fate: either it is drafted again and owed to nobody, or it is owed and not drafted.
-  expect({ sent, drafted, owed }).toEqual(owed === 0 ? { sent: 'failed', drafted: ['retry-note'], owed: 0 } : { sent: 'sent', drafted: [], owed: 1 });
+    return;
+  }
+
+  expect(drafted).toEqual([]);
+  await driveUntil(workspace, 'the owed note never reached the agent', () => heard.some((said) => said.includes('CHANGE_NOTE_RETRY_MARKER')));
+  await workspace.agent.harnessAgentsIdle();
+  expect(heard.filter((said) => said.includes('CHANGE_NOTE_RETRY_MARKER'))).toHaveLength(1);
 });
 
 test('a swarm node that finished leaves no wake armed, and a fired wake arms none', async () => {
@@ -105,20 +121,12 @@ test('a swarm node that finished leaves no wake armed, and a fired wake arms non
   await catalogTurn(workspace.agent, ASK);
   await workspace.agent.harnessJoinDetachedFibers();
 
-  const node = v.parse(v.object({ actor_id: v.string(), status: v.string() }), workspace.db.query(
-    "SELECT a.actor_id, h.status FROM workspace_actors a JOIN head_journal h ON h.id = a.creation_id WHERE a.origin = 'swarm' LIMIT 1",
-  ).get());
-
-  expect(node.status).toBe('completed');
-  expect(agentWakes(workspace.db)).not.toContain(node.actor_id);
-
   const calls = gateway.runs.length;
 
-  // Any wake still armed for other work fires, as production fires it; none re-arms the finished node.
+  // Any wake still armed fires, as production fires it; none runs the finished node, or anything, again.
   for (let pass = 0; pass < 3 && agentWakes(workspace.db).length > 0; pass += 1) {
     await fireSoonestWake(workspace.agent, workspace.db);
     await workspace.agent.harnessJoinDetachedFibers();
-    expect(agentWakes(workspace.db)).not.toContain(node.actor_id);
   }
 
   expect(gateway.runs.length).toBe(calls);
@@ -159,5 +167,4 @@ test('a delivery on its way when a Stop cut it off arrives cancelled, never runs
 
   expect(asked.some((messages) => messages.includes('AFTER_STOP_MARKER'))).toBe(true);
   expect(asked.some((messages) => messages.includes('BEFORE_STOP_MARKER'))).toBe(false);
-  expect(v.parse(Count, workspace.db.query('SELECT COUNT(*) AS n FROM agent_deliveries').get()).n).toBe(0);
 });

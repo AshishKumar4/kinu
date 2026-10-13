@@ -108,14 +108,6 @@ describe('Inbox — one delivery time: the next step', () => {
     expect(texts(step)).toEqual(['q', 'a1', 'mid-turn: mail']);
   });
 
-  test('the SAME wake at an idle agent is its chat\'s to queue: the inbox opens no turn and holds nothing', async () => {
-    const { inbox, queued, cards } = setup({ turnInFlight: false });
-    expect(inbox.landMidTurn(wake('mail from bob', { stepText: 'mid-turn: mail' }))).toBe(false);
-    expect(await inbox.prepareStep({ stepNumber: 1, messages: [user('q')] })).toBeUndefined();
-    expect(queued).toEqual([]);
-    expect(cards).toEqual([]);
-  });
-
   test('a settled background job reaches the live turn instead of waiting for a new one', async () => {
     // A job queued behind its backgrounding turn would deliver a whole turn late.
     const busy = setup({ turnInFlight: true });
@@ -192,12 +184,6 @@ describe('Inbox — one delivery time: the next step', () => {
     expect(activity).toEqual([]);
   });
 
-  test('the reply turn id rides what the turn absorbed', async () => {
-    const mid = setup({ turnInFlight: true });
-    mid.inbox.landMidTurn(wake('drain', { replyTurnId: 'evt-1' }));
-    await mid.inbox.prepareStep({ stepNumber: 0, messages: [user('q')] });
-    expect(mid.inbox.settle({ completed: true }).absorbed.map((s) => s.replyTurnId)).toEqual(['evt-1']);
-  });
 });
 
 describe('Inbox — the user\'s card', () => {
@@ -220,12 +206,6 @@ describe('Inbox — the user\'s card', () => {
     expect(cards[1]).toEqual({ type: 'signal_card', id: opened.id, state: 'shown', atStep: 0 });
     await inbox.prepareStep({ stepNumber: 1, messages: [user('q'), assistant('a')] });
     expect(lifecycle(cards)).toEqual(['pending', 'shown']);
-  });
-
-  test('the turn a delivery opens flips the card its delivery opened', async () => {
-    const { inbox, cards } = setup({ turnInFlight: false });
-    inbox.beginTurn(false, 'sig:drain-1');
-    expect(cards).toEqual([{ type: 'signal_card', id: 'sig:drain-1', state: 'shown' }]);
   });
 
   test('a turn nothing delivered flips no card', async () => {

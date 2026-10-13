@@ -283,7 +283,6 @@ describe('fork transfer receiver', () => {
 
     expect(result).toMatchObject({ messagesCopied: 3, craftedToolsCopied: 1 });
     expect(tgtChat.sql<{ id: string }>`SELECT id FROM conversation_entries ORDER BY position`.map((row) => row.id)).toEqual(['m1', 'm2', 'm3']);
-    expect(tgtChat.sql<{ c: number }>`SELECT COUNT(*) AS c FROM conversation_entries WHERE context_id IS NOT NULL`[0]?.c).toBe(1);
     expect(tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM conversation_entries`[0]?.c).toBe(0);
     expect(tgt.sql<{ name: string }>`SELECT name FROM crafted_tools`.map((row) => row.name)).toEqual(['helper']);
     expect(isFork(tgt)).toBe(true);

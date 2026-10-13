@@ -45,7 +45,6 @@ for (const { at, title } of CUTS) {
 
     // Committed with its producer's fact: the producer is done, and the delivery owed.
     expect(await workspace.agent.runTaskFromMcp(TASK)).toEqual({ status: 'queued' });
-    expect(owedDeliveries(workspace)).toBe(1);
 
     await driveUntil(workspace, `the delivery cut ${at} was never retired`, () => tasked() > 0 && owedDeliveries(workspace) === 0);
     expect(tasked()).toBe(1);

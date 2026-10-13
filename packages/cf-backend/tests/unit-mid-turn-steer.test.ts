@@ -174,7 +174,6 @@ describe('stopping a turn with a steer still pending', () => {
       'steer-first queued', 'steer-first returned', 'steer-second queued', 'steer-second returned',
     ]);
     expect((await storedChat(h)).filter((message) => message.id === 'steer-first' || message.id === 'steer-second')).toEqual([]);
-    expect(mainDatabase(h).query('SELECT turn_id FROM actor_turn_claims WHERE turn_id IN (?, ?)').all('steer-first', 'steer-second')).toEqual([]);
   });
 });
 

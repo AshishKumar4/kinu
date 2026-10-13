@@ -107,14 +107,14 @@ test("a deletion during the root's naming waits for it to close, and nothing of 
 });
 
 test('words sent while a deletion waits for the root to close are refused, and start no turn', async () => {
-  const refused: string[] = [];
+  const refused: unknown[] = [];
 
   const { asked } = await deletedDuringNaming(async (workspace) => {
     const [sent] = await Promise.allSettled([workspace.agent.send('Also archive the old ledger.', crypto.randomUUID(), [])]);
 
-    if (sent.status === 'rejected') refused.push(String(sent.reason));
+    if (sent.status === 'rejected') refused.push(sent.reason);
   });
 
-  expect(refused).toEqual([expect.stringContaining('being deleted')]);
+  expect(refused).toEqual([expect.objectContaining({ code: 'missing' })]);
   expect(asked.some((messages) => messages.includes('Also archive the old ledger.'))).toBe(false);
 });

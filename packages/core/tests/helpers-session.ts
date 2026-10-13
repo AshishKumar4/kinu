@@ -25,6 +25,8 @@ export async function sessionFixture(input: {
   readonly main?: boolean;
   /** Ports a case answers itself, in place of the fixture's. */
   readonly ports?: Partial<Pick<ChatSessionPorts, 'prepareTurn' | 'owedTerminalEffects' | 'armTurnWake' | 'runs'>>;
+  /** Wraps the fixture's own preparation, for a case that fails or holds some turns' and prepares the rest. */
+  readonly aroundPrepare?: (prepare: ChatSessionPorts['prepareTurn']) => ChatSessionPorts['prepareTurn'];
   /** The models and catalog a case's turns are assembled from, in place of the fixture's one model. */
   readonly sources?: Partial<Pick<RunTurnSources, 'models' | 'profileInputs'>>;
   readonly cacheWarming?: (actor: HostedActor) => CacheWarmingLane;
@@ -81,7 +83,7 @@ export async function sessionFixture(input: {
     transport: { deliver: (event) => { events.push(event); } },
     mintAnswerId: () => crypto.randomUUID(),
     ports: {
-      prepareTurn: async (item, _lease, _opening, round) => {
+      prepareTurn: (input.aroundPrepare ?? ((own) => own))(async (item, _lease, _opening, round) => {
         const assembled = await assembleActorTurn({
           ...sources,
           settle: (profile, authority) => { round.bind(profile, authority); },
@@ -92,7 +94,7 @@ export async function sessionFixture(input: {
           sessionKey, contextWindow: assembled.window.contextWindow,
           historyLength: actor.session.history.length,
         };
-      },
+      }),
       composeRequest: async () => {
         const assembled = await assembleActorTurn(sources, { userText: '', workMode: 'build' });
 

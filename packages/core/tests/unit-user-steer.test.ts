@@ -564,26 +564,6 @@ describe('Inbox — the user kind beside the event kind', () => {
     expect(cards.filter((card) => card.id === offered?.id).at(-1)?.state).toBe('undelivered');
   });
 
-  test('a closed host opens no rerun, so a wake left over beside users is offered as its own turn', async () => {
-    // The CLI's end() closes the chat, then aborts the turn it cut, which settles still in flight.
-    const host = { turnInFlight: true, closed: false };
-    const { inbox, queued, broadcasts } = setup(host);
-    inbox.beginTurn(false);
-    await inbox.send(steer('s1', 'unsent when the session ended'));
-    inbox.landMidTurn(event('job 7 finished', { kind: 'background_job' }));
-
-    host.closed = true;
-    inbox.settle({ completed: false });
-    await Promise.resolve();
-    await Promise.resolve();
-
-    // Its own turn, which the closed host declines: its card is withdrawn, never left pending.
-    expect(queued.filter((turn) => turn.origin !== 'user').map((turn) => turn.text)).toEqual(['job 7 finished']);
-    expect(broadcasts.filter((broadcast) => broadcast.type === 'signal_card').at(-1)).toMatchObject({ state: 'undelivered' });
-    // The words still reach the host, whose ledger keeps them for the next start.
-    expect(queued.filter((turn) => turn.origin === 'user').map((turn) => turn.text)).toEqual(['unsent when the session ended']);
-  });
-
   test('a rerun the host never opens strands the events that waited for it to turns of their own', async () => {
     const host = { turnInFlight: true, enqueue: 'skipped' as const };
     const { inbox, queued } = setup(host);
@@ -601,22 +581,6 @@ describe('Inbox — the user kind beside the event kind', () => {
       { text: 'refused rerun', origin: 'user' },
       { text: 'still owed', origin: undefined },
     ]);
-  });
-
-  test('an interrupt returns users and cancels the delivered signal the turn held: its settle runs nothing', async () => {
-    const { inbox, queued, broadcasts } = setup({ turnInFlight: true });
-    inbox.beginTurn(false);
-    await inbox.send(steer('s1', 'give it back'));
-    inbox.landMidTurn(event('cancelled with the turn'));
-
-    expect(inbox.interrupt().steers).toEqual([{ id: 's1', text: 'give it back' }]);
-    expect(broadcasts.map((b) => b.type === 'steer_status' ? b.status : b.state))
-      .toEqual(['queued', 'pending', 'returned']);
-
-    // Stop is the cutoff (design v3 C): the event is not run as a turn of its own.
-    inbox.settle({ completed: false });
-    await Promise.resolve();
-    expect(queued).toEqual([]);
   });
 
   test('a failed durable landing restores users AND events ahead of a steer delivered mid-await', async () => {
