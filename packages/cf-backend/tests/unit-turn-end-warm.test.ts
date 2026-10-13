@@ -7,7 +7,7 @@ import { expect, test } from 'bun:test';
 import { driveUntil, gatewayWorkspace, workspaceMainActor } from './helpers/actor-harness';
 import { delayNextCacheWarm } from './helpers/agent-facets';
 import { socketConnection } from './helpers/bindings';
-import { chatCompletion, openingOf, stubAiBinding } from './helpers/platform-gateway';
+import { chatCompletion, stubAiBinding } from './helpers/platform-gateway';
 
 function chatRequest(id: string, text: string): string {
   return JSON.stringify({
@@ -19,11 +19,10 @@ function chatRequest(id: string, text: string): string {
 }
 
 test("a turn ends in its room while its warm's arming is still on the way, and the next turn opens after it", async () => {
-  let released = false;
-  let secondAskedEarly = false;
+  let asked = 0;
 
   const workspace = gatewayWorkspace(stubAiBinding((run) => {
-    if (openingOf(run).includes('Second.') && !released) secondAskedEarly = true;
+    asked += 1;
 
     return chatCompletion(run, 'Noted.');
   }));
@@ -54,20 +53,26 @@ test("a turn ends in its room while its warm's arming is still on the way, and t
   // The gate answers a request once its turn is done in the room, so each is awaited only after the turn was let run.
   const first = agent.harnessChatGate()(tab('conn-first'), chatRequest('first', 'First.'));
 
+  let laps = 0;
+
+  // Two hundred laps for the turn to end while its warm is held.
   await warm.reached;
-  await driveUntil(workspace, 'the turn did not end in its room while its warm was held', () => done.has('first'));
+  await driveUntil(workspace, 'the turn stopped short of its end and its laps', () => done.has('first') || ++laps > 200);
+  expect(done.has('first')).toBe(true);
   await first;
 
-  let laps = 0;
+  const firstAsked = asked;
+
+  laps = 0;
 
   // The next turn is given two hundred laps to reach its model while the warm is still held: it must not.
   const second = agent.harnessChatGate()(tab('conn-second'), chatRequest('second', 'Second.'));
 
-  await driveUntil(workspace, 'the next turn stopped short of its laps', () => secondAskedEarly || ++laps > 200);
-  released = true;
+  await driveUntil(workspace, 'the next turn asked its model, or stopped, while the warm was held', () => asked > firstAsked || ++laps > 200);
+  expect(asked).toBe(firstAsked);
   warm.release();
   await second;
   await driveUntil(workspace, 'the next turn did not end', () => done.has('second'));
 
-  expect(secondAskedEarly).toBe(false);
+  expect(asked).toBeGreaterThan(firstAsked);
 });
