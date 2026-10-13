@@ -2469,7 +2469,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** The workspace's instruction files, read through its sandbox where it has one. */
   protected workspaceAgentsMd(window: ModelWindow, trust: InstructionTrustResolver): Promise<AgentsMdSources> {
-    return collectWorkspaceAgentsMd(this.rt.storage.vfs, window, trust, this.rt.executionRouter?.getProvider('sandbox'));
+    return collectWorkspaceAgentsMd(this.rt.storage.vfs, window, trust, this.rt.executionRouter?.getProvider('computer'));
   }
 
   private _instructionDesk: InstructionApprovalDesk | null = null;

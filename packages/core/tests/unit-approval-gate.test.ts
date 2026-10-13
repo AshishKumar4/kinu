@@ -534,7 +534,7 @@ describe('the grant vocabulary', () => {
     // Comparing the rule alone would honour a device `sudo` in the sandbox.
     const held: ApprovalGrant[] = [{ rule: 'sudo', executor: 'device' }];
     expect(holdsGrant(held, { rule: 'sudo', executor: 'device' })).toBe(true);
-    expect(holdsGrant(held, { rule: 'sudo', executor: 'sandbox' })).toBe(false);
+    expect(holdsGrant(held, { rule: 'sudo', executor: 'computer' })).toBe(false);
     expect(holdsGrant(held, { rule: 'rm-recursive', executor: 'device' })).toBe(false);
     expect(holdsGrant([], { rule: 'sudo', executor: 'device' })).toBe(false);
   });

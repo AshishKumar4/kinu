@@ -39,7 +39,7 @@ export async function healthResponse(
       'POST/GET/DELETE /mcp/v1/<agentName>': 'MCP streamable-HTTP server',
       [`/agents/${ORCHESTRATOR_AGENT_SLUG}/<name>/...`]: 'chat WebSocket (Think SDK)',
       // Public
-      'https://<capability-host>.<preview-host-suffix>/': 'Workspace or Sandbox port preview',
+      'https://<capability-host>.<preview-host-suffix>/': 'Workspace or computer port preview',
       '/pc/connect': 'reverse-WebSocket tunnel',
     },
     timestamp: new Date().toISOString(),

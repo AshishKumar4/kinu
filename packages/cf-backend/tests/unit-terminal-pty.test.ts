@@ -139,7 +139,7 @@ async function recorded<T>(run: () => Promise<T>): Promise<{
 
 describe('which environments can have a terminal', () => {
   test('the container and the owner machine are the PTY lanes', () => {
-    expect(terminalLane('sandbox')).toEqual({ mode: 'pty' });
+    expect(terminalLane('computer')).toEqual({ mode: 'pty' });
     expect(terminalLane('device')).toEqual({ mode: 'pty' });
   });
 
@@ -305,7 +305,7 @@ describe('a terminal failure names the workspace and the executor', () => {
     return logs.filter((log) => log.event === event);
   }
 
-  const scope = { workspace: WORKSPACE, executor: 'sandbox' };
+  const scope = { workspace: WORKSPACE, executor: 'computer' };
 
   test('a readiness refusal is a fleet row, and still the same answer to the client', async () => {
     const { deps, trace } = harness({

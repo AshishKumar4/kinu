@@ -8,7 +8,7 @@ import type { Operation } from '../operations/operation';
 import { AGENT } from '../operations/agent';
 import { AGENTS_IMPACTS, AGENTS_SLATE } from '../operations/agents';
 import { DB } from '../operations/db';
-import { DEVICE, PARENT, SANDBOX, WORKSPACE } from '../operations/executors';
+import { COMPUTER, DEVICE, PARENT, WORKSPACE } from '../operations/executors';
 import { FILE } from '../operations/file';
 import { MEMORY } from '../operations/memory';
 import { STATE } from '../operations/state';
@@ -30,7 +30,7 @@ export type ActionEffect = 'read' | 'mutate';
 /** Every eval namespace the catalog declares, each operation by its name. */
 const DECLARED = new Map(Object.entries({
   memory: MEMORY, tasks: TASKS, web: WEB, file: FILE, db: DB, state: STATE, agent: AGENT,
-  workspace: WORKSPACE, sandbox: SANDBOX, device: DEVICE, parent: PARENT,
+  workspace: WORKSPACE, computer: COMPUTER, device: DEVICE, parent: PARENT,
 }).map(([namespace, ops]) => [namespace, new Map(Object.values<Operation>(ops).map((op) => [op.name, op]))]));
 
 const impacts = (ops: Readonly<Record<string, Operation>>): Readonly<Record<string, Impact>> => Object.fromEntries(

@@ -112,18 +112,18 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
 
   test('fact aggregate humanizes rows while retaining raw evidence and reverts', () => {
     const { rt, facts } = setup();
-    facts.upsert('sandbox.npm_version', 'npm v10', { confidence: 0.9, source: 'sleep-time-compute' });
+    facts.upsert('computer.npm_version', 'npm v10', { confidence: 0.9, source: 'sleep-time-compute' });
 
     const [entry] = buildChangelog(rt.storage.sql, rt.actor).filter((e) => e.kind === 'fact');
     expect(entry.items).toHaveLength(1);
     const [item] = present(entry.items, 'the fact aggregate items');
-    expect(item.id).toBe('fact:sandbox.npm_version');
+    expect(item.id).toBe('fact:computer.npm_version');
     expect(item.summary).toContain('npm v10');
-    expect(item.evidence).toContain('sandbox.npm_version = npm v10');
+    expect(item.evidence).toContain('computer.npm_version = npm v10');
     expect(item.evidence).toContain('90%');
     expect(item.evidence).toContain('via sleep-time-compute');
-    expect(item.revert).toEqual({ type: 'fact_forget', target: 'sandbox.npm_version' });
-    expect(entry.revert).toEqual({ type: 'fact_forget_many', targets: ['sandbox.npm_version'] });
+    expect(item.revert).toEqual({ type: 'fact_forget', target: 'computer.npm_version' });
+    expect(entry.revert).toEqual({ type: 'fact_forget_many', targets: ['computer.npm_version'] });
   });
 
   test('groups all facts in the digest window into one aggregate card', () => {
@@ -132,9 +132,9 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     facts.upsert('old.fact', 'outside');
     void rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now - 60_000}
       WHERE actor_id = ${rt.actor.actorId} AND key = 'old.fact'`;
-    facts.upsert('sandbox.npm_version', 'npm v10');
+    facts.upsert('computer.npm_version', 'npm v10');
     void rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now - 2000}
-      WHERE actor_id = ${rt.actor.actorId} AND key = 'sandbox.npm_version'`;
+      WHERE actor_id = ${rt.actor.actorId} AND key = 'computer.npm_version'`;
     facts.upsert('project.deploy_target', 'example.workers.dev');
     void rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now - 1000}
       WHERE actor_id = ${rt.actor.actorId} AND key = 'project.deploy_target'`;
@@ -145,18 +145,18 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     expect(entry.at).toBe(now - 1000);
     expect(entry.items?.map((item) => item.id)).toEqual([
       'fact:project.deploy_target',
-      'fact:sandbox.npm_version',
+      'fact:computer.npm_version',
     ]);
   });
 
   test('same-value re-observation keeps a stable id and does not refresh the digest', () => {
     const { rt, facts } = setup();
-    facts.upsert('sandbox.npm_version', 'npm v10');
+    facts.upsert('computer.npm_version', 'npm v10');
     void rt.storage.sql`UPDATE agent_facts SET last_observed_at = 1000
-      WHERE actor_id = ${rt.actor.actorId} AND key = 'sandbox.npm_version'`;
+      WHERE actor_id = ${rt.actor.actorId} AND key = 'computer.npm_version'`;
     const original = present(buildChangelog(rt.storage.sql, rt.actor)[0].items, 'the fact items')[0];
 
-    facts.upsert('sandbox.npm_version', 'npm v10', { confidence: 0.9, source: 'sleep-time-compute' });
+    facts.upsert('computer.npm_version', 'npm v10', { confidence: 0.9, source: 'sleep-time-compute' });
 
     const reobserved = present(buildChangelog(rt.storage.sql, rt.actor)[0].items, 'the fact items')[0];
 
@@ -167,15 +167,15 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
 
   test('value change refreshes the stable fact entry', () => {
     const { rt, facts } = setup();
-    facts.upsert('sandbox.npm_version', 'npm v9');
+    facts.upsert('computer.npm_version', 'npm v9');
     void rt.storage.sql`UPDATE agent_facts SET last_observed_at = 1000
-      WHERE actor_id = ${rt.actor.actorId} AND key = 'sandbox.npm_version'`;
+      WHERE actor_id = ${rt.actor.actorId} AND key = 'computer.npm_version'`;
 
-    facts.upsert('sandbox.npm_version', 'npm v10');
+    facts.upsert('computer.npm_version', 'npm v10');
 
     const [entry] = buildChangelog(rt.storage.sql, rt.actor, { since: 1000 });
     const [item] = present(entry.items, 'the fact aggregate items');
-    expect(item.id).toBe('fact:sandbox.npm_version');
+    expect(item.id).toBe('fact:computer.npm_version');
     expect(item.summary).toContain('npm v10');
     expect(item.summary).not.toContain('v9');
   });
@@ -368,7 +368,7 @@ describe('unseen-count logic (the badge)', () => {
     const sql = rt.storage.sql;
     const actor = rt.actor;
     rate(rt, { score: 4.5, source: 'model', request: 'hi', answer: 'hello' });
-    facts.upsert('sandbox.node_version', 'v22');
+    facts.upsert('computer.node_version', 'v22');
 
     const unseen = listUnseenChangelog(sql, actor, 0);
     const rendered = new Set(buildChangelog(sql, actor, { limit: 30 }).map((entry) => entry.id));
@@ -425,7 +425,7 @@ describe('reverts — real paths only', () => {
 
   test('stable child fact id resolves against a fresh aggregate digest', async () => {
     const { rt, facts } = setup();
-    facts.upsert('sandbox.npm_version', 'npm v10');
+    facts.upsert('computer.npm_version', 'npm v10');
 
     const aggregate = present(
       buildChangelog(rt.storage.sql, rt.actor).find((e) => e.kind === 'fact'),
@@ -434,12 +434,12 @@ describe('reverts — real paths only', () => {
 
     const id = present(aggregate.items, 'the fact aggregate items')[0].id;
 
-    facts.upsert('sandbox.npm_version', 'npm v10', { confidence: 0.95 });
+    facts.upsert('computer.npm_version', 'npm v10', { confidence: 0.95 });
 
     const result = await revertChangelogEntryById({ events: new RunEventRecorder(rt.storage.sql, rt.actor), rt, facts }, id);
 
     expect(result.ok).toBe(true);
-    expect(facts.recall('sandbox.npm_version')).toBeNull();
+    expect(facts.recall('computer.npm_version')).toBeNull();
   });
 
   test('aggregate fact id forgets every constituent fact', async () => {

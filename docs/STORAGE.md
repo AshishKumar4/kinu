@@ -26,7 +26,7 @@ Other Durable Objects in `wrangler.jsonc` keep databases of their own.
 Three stores sit outside actor SQLite:
 
 - Browser auth: the `AUTH_KV` KV namespace.
-- Sandbox `/workspace` backups: the `BACKUP_BUCKET` R2 bucket.
+- Computer `/workspace` backups: the `BACKUP_BUCKET` R2 bucket.
 - Optional embedding recall: the `MEMORY_VECTORS` Vectorize index. It extends
   FTS5 and is never the source of truth.
 
@@ -397,7 +397,7 @@ folder, or one whose folder is gone; there is no adoption. Evals and fixtures bi
 | Nimbus plane | `createWorkspace` over the Durable Object's `ctx.storage.sql` (`workspace-host.ts`) | `createWorkspace` over `agent.db`; holds agent state only, and runs no shell |
 | `file` tool plane | the Nimbus plane | `localFilePlane` (`cli-backend/src/host-mount.ts`): every path is the machine's own; the own space's (`vfs://`, and core's `/home/main`, `/slates` and view paths) land in `~/.kinu/<workspace>/`, a relative one in the folder; past those two, writes keep the approval gate |
 | Shell | Nimbus `runtime-bash` in the box (`nimbusSessionShell`) | the host shell rooted in the directory (`createHostShell`), behind the approval gate, with a shadow-git checkpoint at most once per turn before a command runs |
-| Mounts on the file plane | `/pc`, `/sandbox`, `/skills`, `/shared` (Drive), `/context` | `/skills`, `/shared`, `/context`, `/agent`; `/shared` answers `ENXIO` without a Drive; `/pc` and `/sandbox` are native host paths, never device/container mounts |
+| Mounts on the file plane | `/pc`, `/computer`, `/skills`, `/shared` (Drive), `/context` | `/skills`, `/shared`, `/context`, `/agent`; `/shared` answers `ENXIO` without a Drive; `/pc` and `/computer` are native host paths, never device/container mounts |
 | Mounts in the shell | the same table, through `mountedAuthority` | none: `/pc` in the host shell is the machine's own path |
 
 File checkpoints have one engine, `core/src/checkpoints/engine.ts`. The CLI runs it (`cli-backend/src/checkpoints.ts`), and the device daemon requires the same module (built into the daemon a release ships, `cli/src/daemon-build.ts`), so both take and restore snapshots by the same rules: no wall clock on git, one store operation at a time, a failed snapshot never blocks the mutation it precedes, and a write's workdir climbs from the entry itself and stops at the temp directory and the home folder. `cli-backend/tests/checkpoint-engine.test.ts` holds each rule on both hosts.

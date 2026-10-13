@@ -63,15 +63,15 @@ function desk(defect?: Defect) {
   const read = (path: string) => decoder.decode(files.get(path));
   const hiredReview = defect?.endsWith('review-helpers') === true;
   put(REPORT, defect === 'invented-report' ? JSON.stringify({ testResults: [{ assertionResults: [{ status: 'passed' }] }] }) : INITIAL);
-  put(`/sandbox${CHECKOUT}/vitest-report.json`, read(REPORT));
-  put('/sandbox/workspace/combinators/reports/vitest.json', read(REPORT));
+  put(`/computer${CHECKOUT}/vitest-report.json`, read(REPORT));
+  put('/computer/workspace/combinators/reports/vitest.json', read(REPORT));
   put(`${DESK}/preview/server.mjs`, 'export const server = "workspace and sandbox";\n');
   put(`${DESK}/report-totals.js`, 'export const calculator = "reusable report totals";\n');
   put(RELEASE, JSON.stringify({ version: defect === 'npm-version' ? '8.0.0' : LATEST.version,
     integrity: defect === 'npm-integrity' ? 'sha512-stale' : LATEST.integrity }));
   files.set(`${DESK}/preview/binary.dat`, new Uint8Array([0, 128, 255, 13, 10]));
 
-  for (const module of ['maybe', 'result', 'task', 'toolbelt']) put(`/sandbox${CHECKOUT}/src/${module}.ts`, `export const ${module} = '${module}';\n`);
+  for (const module of ['maybe', 'result', 'task', 'toolbelt']) put(`/computer${CHECKOUT}/src/${module}.ts`, `export const ${module} = '${module}';\n`);
 
   for (const id of ['test-results', 'release-review']) {
     let main: string | undefined = defect === 'dot-entrypoint' ? './index.js' : 'index.js';
@@ -104,8 +104,8 @@ function desk(defect?: Defect) {
     fetch(request) {
       const url = new URL(request.url);
       const path = url.searchParams.get('path') ?? REPORT;
-      const sandbox = url.pathname.startsWith('/sandbox/');
-      const source = sandbox ? `/sandbox/workspace/combinators${path.slice(DESK.length)}` : path;
+      const sandbox = url.pathname.startsWith('/computer/');
+      const source = sandbox ? `/computer/workspace/combinators${path.slice(DESK.length)}` : path;
       const answer = current(source, defect === (sandbox ? 'cached-sandbox-preview' : 'cached-workspace-preview'));
 
       if (url.pathname.endsWith('/api/summary')) return Response.json(answer);
@@ -195,7 +195,7 @@ function desk(defect?: Defect) {
     swarmRuns: () => Promise.resolve(hiredReview ? [] : [{ run: { id: 'review', status: 'completed', startedAt: defect === 'old-swarm' ? 90 : 100, winnerScore: null }, params: null,
       head: { rationale: 'custom', heads: [0, 1].map(() => ({ depth: 1, status: defect === 'swarm' ? 'error' : 'completed', spawnedAt: 100, wallClockMs: 1 })) } }]),
     execute: () => {
-      put(`/sandbox${CHECKOUT}/.kinu-eval-vitest.json`, INITIAL);
+      put(`/computer${CHECKOUT}/.kinu-eval-vitest.json`, INITIAL);
 
       return Promise.resolve({ stdout: '', exitCode: 0 });
     },
@@ -232,7 +232,7 @@ function desk(defect?: Defect) {
     for (const file of turn.seed ?? []) {
       await session.writeFile(file.path, file.content);
 
-      if (file.path.startsWith(`${DESK}/reports/`)) await session.writeFile(`/sandbox/workspace/combinators${file.path.slice(DESK.length)}`, file.content);
+      if (file.path.startsWith(`${DESK}/reports/`)) await session.writeFile(`/computer/workspace/combinators${file.path.slice(DESK.length)}`, file.content);
     }
 
     const cases = (turn.seed ?? []).filter((file) => file.path.includes('/review/'));
@@ -248,7 +248,7 @@ function desk(defect?: Defect) {
     const entries: ZipEntry[] = [];
 
     for (const [path, bytes] of files) {
-      if (path.startsWith(`/sandbox${CHECKOUT}/src/`)) entries.push({ path: `true-myth${path.slice(`/sandbox${CHECKOUT}`.length)}`, bytes });
+      if (path.startsWith(`/computer${CHECKOUT}/src/`)) entries.push({ path: `true-myth${path.slice(`/computer${CHECKOUT}`.length)}`, bytes });
       else if (path.startsWith(`${DESK}/`) && path !== EXPORT) entries.push({ path: `desk${path.slice(DESK.length)}`, bytes });
       else if (path.startsWith('/slates/') && !(defect === 'no-package-members' && basename(path) === 'package.json')) entries.push({ path: path.slice(1), bytes });
     }

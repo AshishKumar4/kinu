@@ -109,7 +109,7 @@ export const STEP_LIVE_BOUND_BYTES = { workspace: 1_000_000, main: 1_500_000 } a
  *  theirs (the first batch after five warm heads carried +397 compiled functions where integration 44b13e946 carried
  *  +297), and two batches after it are each bounded, so a retention one batch hides shows in the next. The step's
  *  workspace is quiesced before them: its compression pass, in flight in this isolate, read as 0.6 MB of one batch.
- *  Each head's "sandbox.executor_registered" line stays live only because this gate attaches an inspector: its
+ *  Each head's "computer.executor_registered" line stays live only because this gate attaches an inspector: its
  *  retainer is the DevTools console's global handle, which V8 caps at 1000 messages; nothing of the product's holds it. */
 export const HEADS_RETAINED_BOUND_BYTES = 1_500_000;
 

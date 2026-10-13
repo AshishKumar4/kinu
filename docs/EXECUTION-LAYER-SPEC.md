@@ -7,9 +7,9 @@
 
 ## One workspace, optional environments
 
-Every workspace has its own space and the computer it works on. On Cloudflare the own space is Nimbus, held as a library over the owning Durable Object's own `ctx.storage.sql`; the computer is the devbox (`/sandbox`) and the owner's devices (`/pc/<name>`). On the CLI everything is real files: the own space is a real directory beside the agent's database (`~/.kinu/<workspace>/`, laid out as the cloud tree: `home/<agent>`, `slates/`), and the computer is this machine, starting in the folder the workspace belongs to; Nimbus over `bun:sqlite` holds only the agent's state (docs/STORAGE.md, "Local and cloud construction"). The `file` tool, default `shell`, `Storage.vfs`, and `workspace.*` all address the same paths and bytes.
+Every workspace has its own space and the computer it works on. On Cloudflare the own space is Nimbus, held as a library over the owning Durable Object's own `ctx.storage.sql`; the computer is the devbox (`/computer`) and the owner's devices (`/pc/<name>`). On the CLI everything is real files: the own space is a real directory beside the agent's database (`~/.kinu/<workspace>/`, laid out as the cloud tree: `home/<agent>`, `slates/`), and the computer is this machine, starting in the folder the workspace belongs to; Nimbus over `bun:sqlite` holds only the agent's state (docs/STORAGE.md, "Local and cloud construction"). The `file` tool, default `shell`, `Storage.vfs`, and `workspace.*` all address the same paths and bytes.
 
-One resolver reads every written path on both backends (`core/src/vfs/resolve.ts`). `vfs://` is the one tree an agent sees, and every other prefix is an alias for a subtree of it, one row each in `PATH_PREFIXES`: on the cloud `local://` is `vfs://` itself, `sandbox://` is `vfs://sandbox` and a machine's `<name>://` is `vfs://pc/<name>`; locally `vfs://` is the own space (`~/.kinu/<workspace>/`) and `local://` is `vfs://local`, the folder. A runtime's `PathPlanes` holds its backend's rows and where each subtree sits on its machine (`cloudPlanes`, `localPlanes`); resolving, printing (the shortest prefix), chat links, the shell's refusal, the prompt's prefix line and the names a machine may not take all read them, so a new or rewired prefix is one row. There is no `pc://`. A plain absolute path is the machine's own, a relative one starts where the agent works (its home on the cloud, the folder locally), and `~` is the shell's `HOME`. In chat each reference is a link: the web opens it in Files (`?file=<reference>` lands there too); the TUI opens a local workspace's as the file itself and a cloud workspace's on that Files page (`core/src/read-models/file-links.ts`). A live machine's `<name>://` links on both, from the device fleet's `mounts`: the web reads them with the executors, and the CLI's cloud client on connect and whenever the executors move.
+One resolver reads every written path on both backends (`core/src/vfs/resolve.ts`). `vfs://` is the one tree an agent sees, and every other prefix is an alias for a subtree of it, one row each in `PATH_PREFIXES`: on the cloud `local://` is `vfs://` itself, `sandbox://` is `vfs://computer` and a machine's `<name>://` is `vfs://pc/<name>`; locally `vfs://` is the own space (`~/.kinu/<workspace>/`) and `local://` is `vfs://local`, the folder. A runtime's `PathPlanes` holds its backend's rows and where each subtree sits on its machine (`cloudPlanes`, `localPlanes`); resolving, printing (the shortest prefix), chat links, the shell's refusal, the prompt's prefix line and the names a machine may not take all read them, so a new or rewired prefix is one row. There is no `pc://`. A plain absolute path is the machine's own, a relative one starts where the agent works (its home on the cloud, the folder locally), and `~` is the shell's `HOME`. In chat each reference is a link: the web opens it in Files (`?file=<reference>` lands there too); the TUI opens a local workspace's as the file itself and a cloud workspace's on that Files page (`core/src/read-models/file-links.ts`). A live machine's `<name>://` links on both, from the device fleet's `mounts`: the web reads them with the executors, and the CLI's cloud client on connect and whenever the executors move.
 
 All planes use Nimbus's `VFS`, `VfsStat`, `VfsDirent` and `VfsRevision`
 (`@nimbus-sh/core/vfs/vfs.js`). File bodies are bytes; text is decoded or
@@ -22,12 +22,12 @@ ranged read that would turn that absence into an I/O failure.
 | Namespace | Registered by | Filesystem relationship |
 |---|---|---|
 | `workspace` | both backends. Cloudflare registers `createNimbusWorkspaceExecutor`; the CLI registers `createInlineExecutor` | the canonical workspace |
-| `sandbox` | Cloudflare only. `createSandboxExecutor` is registered once with a live handle and twice as a not-configured stub | a separate Linux container |
+| `computer` | Cloudflare only. `createSandboxExecutor` is registered once with a live handle and twice as a not-configured stub | a separate Linux container |
 | `device` | Cloudflare over the device tunnel (`createDeviceTunnelExecutor`); the CLI registers none, because there the machine is the workspace | a separate user machine |
 | `parent` | CLI head runtimes only (`createParentExecutor`) | another workspace authority |
 
 Every registration lives in backend `runtime.ts`. `ExecutorKind` has four
-kinds: workspace, sandbox, device and parent. Nimbus implements the workspace through
+kinds: workspace, computer, device and parent. Nimbus implements the workspace through
 `createNimbusWorkspaceExecutor`; it is not a separate runtime kind or namespace.
 Cloudflare registers no `parent`; only a CLI head does.
 
@@ -41,7 +41,7 @@ call it. The Environment surface labels this `Parent workspace`
 (`core/src/read-models/executors.ts`).
 
 The mount table (`core/src/vfs/mounts.ts`, `EXECUTOR_MOUNTS`) exposes the
-user's live devices under `/pc` and a bound container at `/sandbox`; the
+user's live devices under `/pc` and a bound container at `/computer`; the
 Cloudflare runtime also mounts `/shared` (`sharedDriveMount`) and `/context`
 (`contextMount`). Mount paths route to the target `files` VFS with the prefix
 stripped, preserving its consent and path boundaries. An absent environment
@@ -179,7 +179,7 @@ relay has no plan-review surface: it refuses Plan turns
 (`planTurnRefusal`, `cli-backend/src/local-session.ts`) and is never handed
 `submit_plan`. It never exposes a partial Plan toolset.
 
-`sandbox` is hosted-only Linux, implemented by `KinuDevbox`
+`computer` is hosted-only Linux, implemented by `KinuDevbox`
 (`cf-backend/src/kinu-devbox.ts`), a `Devbox` from `@kinu.run/devbox`. It is
 spot capacity: the platform can recycle it and return a blank disk. Devbox
 (`devbox/src/devbox.ts`) keeps startup cheap, attaches storage and processes
@@ -353,8 +353,8 @@ declared in the strict `slate` field of `package.json`, not a second manifest
   `remove` operation ends the application: it stops the process, releases
   the reservation, and deletes the facet's SQLite and the authored tree.
 - `slate.runtime: "node"` is refused when `package.json` is read: no host runs
-  a Node slate. A Node server is a sandbox process whose port is exposed
-  through the sandbox executor's preview rail.
+  a Node slate. A Node server is a computer process whose port is exposed
+  through the computer executor's preview rail.
 
 The preview uses the existing exposure rail. Running state is
 derived from the process; an exposure row is not evidence of a live server.
@@ -366,13 +366,13 @@ boundary. A Slate adds no separate approval policy.
 
 The Environment surface shows one native tree per provider, with raw `files`
 where supplied; it never merges them. The agent sees those same trees through
-`/pc` and `/sandbox`. The Outputs Diff reader is read-only. A Git workspace
+`/pc` and `/computer`. The Outputs Diff reader is read-only. A Git workspace
 uses Git data without touching its index; the workspace compares against a
 Nimbus snapshot of its store taken at each review, `diffs:<actor>:<id>`, whose
 diff visits only the paths written since (`core/src/read-models/workspace-diff.ts`).
 A read never advances that baseline; the review before it is kept for Undo.
 
-Preview discovery asks `workspace`, `sandbox` and `device` for ports
+Preview discovery asks `workspace`, `computer` and `device` for ports
 (`cf-backend/src/hooks/use-workspace-reads.ts`). A transport failure keeps the last
 result with an error; a successful empty result removes stale previews
 (`reconcilePreviewPorts`, `core/src/preview/preview-ports.ts`).
@@ -412,5 +412,5 @@ Register once in backend runtime assembly. Test files, shell state, process
 lifecycle, previews, reconstruction, teardown, errors, and the absence of
 silent fallback. Update the existing prompt, status, and UI source of truth,
 never a second provider list. The core workspace factory is the extension point;
-Cloudflare registers one Nimbus-backed workspace environment. Sandbox directory listing
+Cloudflare registers one Nimbus-backed workspace environment. Computer directory listing
 is `readdir({ path? })` on both its runtime and declared surfaces; no `listFiles` alias remains.

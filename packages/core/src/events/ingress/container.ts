@@ -1,6 +1,6 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
- * Producer for `sandbox_cb` events from inside the agent's container, via an intercepted virtual
+ * Producer for `computer_cb` events from inside the agent's container, via an intercepted virtual
  * host. The workspace comes from backend config and trust is captured at runtime handoff, never
  * read off the wire. `process_done` is effectively-once (dedupe on process id); `file_changed` is
  * at-least-once. Recorded order is arrival order at the DO. Publish is synchronous before the
@@ -109,7 +109,7 @@ async function processDoneDescriptor(
   ]);
 
   return {
-    ingress: 'sandbox_cb',
+    ingress: 'computer_cb',
     variant: 'process_done',
     launching_head_trust: deps.launchingHeadTrust,
     payload: {
@@ -132,7 +132,7 @@ function fileChangedDescriptor(
   envelope: Extract<ContainerEventEnvelope, { kind: 'file_changed' }>,
 ): IngressDescriptor {
   return {
-    ingress: 'sandbox_cb',
+    ingress: 'computer_cb',
     variant: 'file_changed',
     launching_head_trust: deps.launchingHeadTrust,
     payload: { path: envelope.path, change: envelope.change, size: envelope.size },

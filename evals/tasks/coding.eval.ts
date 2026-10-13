@@ -114,11 +114,11 @@ async function graded(verifier: EvalVerifier, scope: 'without-toolbelt' | 'whole
 
   const staged: [string, string][] = [['test.sh', testSh], ['grader.py', grader], ['test.patch', testPatch], ['config.json', turnConfig]];
 
-  // The files route writes into the container through the workspace's /sandbox mount.
-  await verifier.execute('sandbox', 'rm -rf /app /tests /logs && mkdir -p /tests /logs/verifier /logs/artifacts');
-  await Promise.all(staged.map(([name, content]) => verifier.writeFile(`/sandbox/tests/${name}`, content)));
+  // The files route writes into the container through the workspace's /computer mount.
+  await verifier.execute('computer', 'rm -rf /app /tests /logs && mkdir -p /tests /logs/verifier /logs/artifacts');
+  await Promise.all(staged.map(([name, content]) => verifier.writeFile(`/computer/tests/${name}`, content)));
 
-  const lines = (await verifier.execute('sandbox', GRADE)).split('\n');
+  const lines = (await verifier.execute('computer', GRADE)).split('\n');
   const rewardLine = lines.find((line) => line.startsWith(REWARD_LINE)) ?? 'null';
   const reward = v.safeParse(v.pipe(v.string(), v.parseJson(), RewardSchema), rewardLine.slice(REWARD_LINE.length));
 
@@ -200,7 +200,7 @@ const release: EvalPart = {
     verify: async (verifier) => {
       await verifier.check('names-the-commit-that-holds-the-work', async () => {
         const answer = verifier.bareAnswer(/^([0-9a-f]{40})$/);
-        const head = (await verifier.execute('sandbox', `git -C ${CHECKOUT} rev-parse HEAD`)).trim();
+        const head = (await verifier.execute('computer', `git -C ${CHECKOUT} rev-parse HEAD`)).trim();
 
         // Evidence redacts a full sha, so it shows the first 12 digits: enough to tell a stale commit from the head.
         return { pass: answer === head, evidence: { answer: answer?.slice(0, 12) ?? null, head: head.slice(0, 12), replies: verifier.recentReplies() } };

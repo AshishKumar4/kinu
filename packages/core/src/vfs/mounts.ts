@@ -1,6 +1,6 @@
 import { type Awaitable, type VFS, type VfsCred, type VfsRemoval, type VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 /**
- * Workspace plane mount table: the durable workspace tree extended by `/pc` (device tunnel) and `/sandbox`
+ * Workspace plane mount table: the durable workspace tree extended by `/pc` (device tunnel) and `/computer`
  * (container), each read through that executor's own `files` VFS so its boundaries still apply. Nimbus's
  * CompositeVFS does the namespace (lookup, links, read-only, parents, EXDEV, recursive removal); this file holds
  * Kinu's policy over it: the declarations, whose principal's view a plane is, the move rule and bounded views.
@@ -37,7 +37,7 @@ export interface VfsMount {
 
 export const EXECUTOR_MOUNTS = {
 	device: '/pc',
-	sandbox: '/sandbox',
+	computer: '/computer',
 } as const satisfies Record<string, string>;
 
 export const MOUNT_EXECUTORS: Record<string, string> = Object.fromEntries(
@@ -69,8 +69,8 @@ export function standardMounts(provider: (name: string) => MountableProvider | u
 			filesOwner: 'user',
 		},
 		{
-			name: EXECUTOR_MOUNTS.sandbox.slice(1),
-			files: () => provider('sandbox')?.files ?? null,
+			name: EXECUTOR_MOUNTS.computer.slice(1),
+			files: () => provider('computer')?.files ?? null,
 			absentReason: () => 'this workspace has no computer bound',
 			filesOwner: 'agent',
 		},
@@ -450,7 +450,7 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 			if (Exit.isSuccess(renamed)) return;
 
 			// Kinu's move rule: within one mount, mv's move (Nimbus's carry where the backend cannot rename in place); across
-			// mounts EXDEV stands, so nothing crosses into or out of /pc or /sandbox as a side effect.
+			// mounts EXDEV stands, so nothing crosses into or out of /pc or /computer as a side effect.
 			if (!isVfsError(Cause.squash(renamed.cause), 'EXDEV') || !await sameMount(namespace, source.at, target.at)) {
 				return settle(Effect.failCause(renamed.cause));
 			}

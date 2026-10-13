@@ -113,7 +113,7 @@ test("a node woken by its own job's settle runs its next round under that round'
     }
 
     if (!requestOf(run).messages.some((message) => message.role === 'tool')) {
-      return toolCallCompletion(run, { tool: 'shell', args: { command: 'node server.js', runtime: 'sandbox' } }, 'call_server');
+      return toolCallCompletion(run, { tool: 'shell', args: { command: 'node server.js', runtime: 'computer' } }, 'call_server');
     }
 
     readBack.resolve();

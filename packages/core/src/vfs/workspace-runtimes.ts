@@ -33,8 +33,8 @@ export async function workspaceCommandNotFound<O extends { stdout: string; stder
       'unavailable',
       `${bin}: no such command in this workspace's shell. `
         + (installable
-          ? `Run it in the sandbox executor (runtime 'sandbox'), or install it with \`nimbus install ${bin}\`.`
-          : `Run it in the sandbox executor (runtime 'sandbox'), which ships a full toolchain, `
+          ? `Run it on your computer (runtime 'computer'), or install it with \`nimbus install ${bin}\`.`
+          : `Run it on your computer (runtime 'computer'), which ships a full toolchain, `
             + `or install it with \`nimbus install ${bin}\` if a Nimbus runtime provides it.`)
         // "No bins known" and "could not ask" are different answers.
         + (unreadable === undefined ? '' : ` The runtime catalog could not be read: ${renderCauseChain(unreadable)}`),

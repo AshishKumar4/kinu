@@ -1,6 +1,6 @@
 /**
  * The executors' members as programs call them: the workspace (its files, shell, crafted tools and, on Nimbus, its
- * processes, ports and runtimes), the sandbox container, the parent workspace a hire reads, and the user's machine.
+ * processes, ports and runtimes), your computer, the parent workspace a hire reads, and the user's machine.
  * Each executor is its own namespace on its own plane, so each member is its own operation.
  */
 import * as v from 'valibot';
@@ -86,22 +86,22 @@ export const WORKSPACE = {
   listRuntimes: ws({ name: 'listRuntimes', help: 'The installed language runtimes.', impact: 'observe', input: v.strictObject({}), output: Text }),
 } as const;
 
-const sb = executorOp('sandbox');
+const sb = executorOp('computer');
 
-/** The sandbox container's members; `resize` is declared over the host's own size table. Its files are read and
- *  written through the workspace's, under `/sandbox`, as every plane's are. */
-export const SANDBOX = {
+/** The computer container's members; `resize` is declared over the host's own size table. Its files are read and
+ *  written through the workspace's, under `/computer`, as every plane's are. */
+export const COMPUTER = {
   exec: sb({
     name: 'exec', impact: 'execute', input: v.strictObject({ command: Command }), output: Text,
-    help: 'Run a command in the sandbox container. Bun is the default toolchain here (`bun install`, `bun run`, `bun x`, `bun test`). '
-      + 'A sandbox restored after it slept keeps its source and lockfiles but not node_modules or build output: after a failed '
+    help: 'Run a command on your computer. Bun is the default toolchain here (`bun install`, `bun run`, `bun x`, `bun test`). '
+      + 'A computer restored after it slept keeps its source and lockfiles but not node_modules or build output: after a failed '
       + 'import there, run `bun install` once.',
   }),
   readdir: sb({
     name: 'readdir', help: 'A directory\'s entries; the working directory when no path is given.', impact: 'observe',
     input: v.strictObject({ path: v.optional(v.string()) }), output: Text,
   }),
-  deleteFile: sb({ name: 'deleteFile', help: 'Delete a file in the sandbox.', impact: 'mutate', input: v.strictObject({ path: Path }), output: Text }),
+  deleteFile: sb({ name: 'deleteFile', help: 'Delete a file on your computer.', impact: 'mutate', input: v.strictObject({ path: Path }), output: Text }),
   exists: sb({ name: 'exists', help: '"true" or "false".', impact: 'observe', input: v.strictObject({ path: Path }), output: Text }),
   startProcess: sb({
     name: 'startProcess', help: 'A supervised background process; answers JSON {processId, restartable: true}.', impact: 'administer',
@@ -110,19 +110,19 @@ export const SANDBOX = {
   stopProcess: sb({ name: 'stopProcess', help: 'Stop a supervised process.', impact: 'administer', input: v.strictObject({ processId: v.pipe(v.string(), v.nonEmpty()) }), output: Text }),
   listProcesses: sb({ name: 'listProcesses', help: 'JSON rows {processId, pid, status, restartable, command}.', impact: 'observe', input: v.strictObject({}), output: Text }),
   rest: sb({
-    name: 'rest', help: '"now" saves and stops the sandbox, ending what runs; "keep" runs on until it asks again.', impact: 'administer',
+    name: 'rest', help: '"now" saves and stops the computer, ending what runs; "keep" runs on until it asks again.', impact: 'administer',
     input: v.strictObject({ answer: v.picklist(['now', 'keep']) }), output: Text,
   }),
   exposePort: sb({
-    name: 'exposePort', help: 'A public URL for a port the sandbox serves.', impact: 'administer',
+    name: 'exposePort', help: 'A public URL for a port the computer serves.', impact: 'administer',
     input: v.strictObject({ port: ExecutorPortSchema, name: v.optional(v.string()) }), output: Text,
   }),
   unexposePort: sb({ name: 'unexposePort', help: 'Withdraw a port\'s public URL.', impact: 'administer', input: v.strictObject({ port: ExecutorPortSchema }), output: Text }),
   listPorts: sb({ name: 'listPorts', help: 'The exposed ports and their URLs.', impact: 'observe', input: v.strictObject({}), output: Text }),
 } as const;
 
-/** `sandbox.resize` over the host's sizes, each described as it runs. */
-export function sandboxResize(sizes: readonly { readonly size: string; readonly vcpu: number; readonly memoryMib: number }[]) {
+/** `computer.resize` over the host's sizes, each described as it runs. */
+export function computerResize(sizes: readonly { readonly size: string; readonly vcpu: number; readonly memoryMib: number }[]) {
   const choices = sizes.map((row) => `${row.size}: ${String(row.vcpu)} vCPU, ${String(Math.round(row.memoryMib / 102.4) / 10)} GiB`).join('; ');
 
   return sb({

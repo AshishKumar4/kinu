@@ -202,15 +202,15 @@ describe('Sleep-time compute', () => {
     });
 
     expect(summary.upserted).toBe(1);
-    expect(facts.recall('sandbox.npm_version')?.value).toBe('npm v10');
+    expect(facts.recall('computer.npm_version')?.value).toBe('npm v10');
     expect(facts.recall('  Sandbox.NPM   Version  ')?.value).toBe('npm v10');
   });
 
   test('same-value re-observation is not counted as an upsert or refreshed', () => {
     const { facts, testSql } = createTestFactsStore();
-    facts.upsert('sandbox.npm_version', 'npm v10');
+    facts.upsert('computer.npm_version', 'npm v10');
     void testSql.sql`UPDATE agent_facts SET last_observed_at = 1000
-                WHERE key = 'sandbox.npm_version'`;
+                WHERE key = 'computer.npm_version'`;
 
     const summary = applySleepTimeUpdate(facts, {
       upserts: [{ key: 'Sandbox.NPM_Version', value: 'npm v10', confidence: 0.95, rationale: '' }],
@@ -218,24 +218,24 @@ describe('Sleep-time compute', () => {
     });
 
     expect(summary.upserted).toBe(0);
-    expect(facts.recall('sandbox.npm_version')?.lastObservedAt).toBe(1000);
-    expect(facts.recall('sandbox.npm_version')?.confidence).toBe(0.95);
+    expect(facts.recall('computer.npm_version')?.lastObservedAt).toBe(1000);
+    expect(facts.recall('computer.npm_version')?.confidence).toBe(0.95);
   });
 
   test('changed value is counted and refreshes the fact', () => {
     const { facts, testSql } = createTestFactsStore();
-    facts.upsert('sandbox.npm_version', 'npm v9');
+    facts.upsert('computer.npm_version', 'npm v9');
     void testSql.sql`UPDATE agent_facts SET last_observed_at = 1000
-                WHERE key = 'sandbox.npm_version'`;
+                WHERE key = 'computer.npm_version'`;
 
     const summary = applySleepTimeUpdate(facts, {
-      upserts: [{ key: 'sandbox.npm_version', value: 'npm v10', confidence: 0.9, rationale: '' }],
+      upserts: [{ key: 'computer.npm_version', value: 'npm v10', confidence: 0.9, rationale: '' }],
       decay: [],
     });
 
     expect(summary.upserted).toBe(1);
-    expect(facts.recall('sandbox.npm_version')?.value).toBe('npm v10');
-    expect(facts.recall('sandbox.npm_version')?.lastObservedAt).toBeGreaterThan(1000);
+    expect(facts.recall('computer.npm_version')?.value).toBe('npm v10');
+    expect(facts.recall('computer.npm_version')?.lastObservedAt).toBeGreaterThan(1000);
   });
 
   test('rejects an update with out-of-range confidence before any write', async () => {

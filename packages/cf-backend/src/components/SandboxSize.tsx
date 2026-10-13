@@ -15,7 +15,7 @@ const shownIn = (show: (message: string) => void) => (failure: { readonly cause?
   Effect.sync(() => { show(renderThrownChain({ cause: failure.cause ?? failure })); });
 
 export function SandboxSizeRow({ rpc }: { rpc: Rpc }) {
-  const load = useCallback(() => rpc<SandboxSizeState | null>("getSandboxSize"), [rpc]);
+  const load = useCallback(() => rpc<SandboxSizeState | null>("getComputerSize"), [rpc]);
   const { resource, set } = useAsyncResource(load);
   const [pending, setPending] = useState<"resize" | "start" | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -35,7 +35,7 @@ export function SandboxSizeRow({ rpc }: { rpc: Rpc }) {
   };
 
   const choose = (value: BoxSize | typeof ACCOUNT_DEFAULT) =>
-    act("resize", "resizing the computer", "resizeSandbox", [value === ACCOUNT_DEFAULT ? null : value]);
+    act("resize", "resizing the computer", "resizeComputer", [value === ACCOUNT_DEFAULT ? null : value]);
 
   const note = failure ?? workspaceSizeNote(state, pending === "resize");
 
@@ -59,7 +59,7 @@ export function SandboxSizeRow({ rpc }: { rpc: Rpc }) {
           <div className="p-meta p-danger">{startRefusedNote(state.startRefused)}</div>
           <button
             data-env-start-again
-            onClick={() => detach(act("start", "starting the computer", "startSandbox", []))}
+            onClick={() => detach(act("start", "starting the computer", "startComputer", []))}
             disabled={pending !== null}
             className="px-2 py-1 rounded-md p-t-control p-text-2 p-fill hover:p-text"
           >{pending === "start" ? "Starting…" : "Start again"}</button>

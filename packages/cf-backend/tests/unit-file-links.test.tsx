@@ -9,7 +9,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { filesFocusOf } from '@kinu.run/core';
 import { FileLinkContext, MarkdownContent } from '../src/components/surfaces/shared';
 
-const CHAT = { roots: ['vfs', 'sandbox'], open: () => {} };
+const CHAT = { roots: ['vfs', 'computer'], open: () => {} };
 
 function chat(content: string): string {
   return renderToStaticMarkup(createElement(FileLinkContext.Provider, { value: CHAT }, createElement(MarkdownContent, { content })));
@@ -22,7 +22,7 @@ describe('a file the agent names in chat', () => {
     const opened = [...html.matchAll(/data-file-link="([^"]*)"/gu)]
       .map((hit) => filesFocusOf(hit[1] ?? '')?.file);
 
-    expect(opened).toEqual(['/home/main/report.md', '/sandbox/w/build.log', '/home/main/plan.md']);
+    expect(opened).toEqual(['/home/main/report.md', '/computer/w/build.log', '/home/main/plan.md']);
     expect(html).toContain('https://example.com');
   });
 

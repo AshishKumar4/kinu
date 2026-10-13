@@ -9,7 +9,7 @@
  * which is the executor's mounted VFS: what the agent's `file` tool and the
  * web file manager read), not its shell. The hosted shell runs over Nimbus's
  * own filesystem and crosses no mount, by the same rule that keeps `/pc` and
- * `/sandbox` out of it: name a runtime for commands, cross a mount for files
+ * `/computer` out of it: name a runtime for commands, cross a mount for files
  * (docs/EXECUTION-LAYER-SPEC.md). Measured 2026-09-21: `cat /shared/...` in
  * the shell answers ENOENT on a Drive the files route reads whole.
  */

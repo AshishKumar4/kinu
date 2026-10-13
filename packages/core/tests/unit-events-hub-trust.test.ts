@@ -50,15 +50,15 @@ describe('deriveEventTrust', () => {
   });
 
   const sandboxes = [
-    { name: 'sandbox_cb collapses to min(self, head_trust) — external head launches sandbox',
+    { name: 'computer_cb collapses to min(self, head_trust) — external head launches sandbox',
       head: 'external' },
-    { name: 'sandbox_cb stays self when owner head launches sandbox', head: 'owner' },
+    { name: 'computer_cb stays self when owner head launches sandbox', head: 'owner' },
   ] as const;
 
   for (const sandbox of sandboxes) {
     test(sandbox.name, () => {
       const d: IngressDescriptor = {
-        ingress: 'sandbox_cb', variant: 'process_done',
+        ingress: 'computer_cb', variant: 'process_done',
         payload: { process_id: 'p', command: 'ls', exit_code: 0, stdout_excerpt: '', stderr_excerpt: '', duration_ms: 0 },
         launching_head_trust: sandbox.head,
       };

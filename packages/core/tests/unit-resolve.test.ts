@@ -16,7 +16,7 @@ describe('a written path resolves to the machine path its plane serves', () => {
     const cases: Array<[PathPlanes, string, string | null, string]> = [
       [CF, 'vfs://home/main/report.txt', 'vfs', '/home/main/report.txt'],
       [CF, 'vfs://', 'vfs', '/'],
-      [CF, 'sandbox://workspace/build.log', 'sandbox', '/sandbox/workspace/build.log'],
+      [CF, 'sandbox://workspace/build.log', 'computer', '/computer/workspace/build.log'],
       [CF, 'ashish@studio://home/dev/a.txt', 'ashish@studio', '/pc/ashish@studio/home/dev/a.txt'],
       [CLI, 'vfs://slates/board/index.ts', 'vfs', '/home/ana/.kinu/acme/slates/board/index.ts'],
       [CLI, 'local://src/app.ts', 'local', '/home/ana/acme/src/app.ts'],
@@ -47,7 +47,7 @@ describe('a machine path formats to the reference of the plane that holds it', (
   test('the shortest prefix wins; a device is named by its segment; outside every subtree stays a machine path', () => {
     const cases: Array<[PathPlanes, string, string]> = [
       [CF, '/home/main/report.txt', 'vfs://home/main/report.txt'],
-      [CF, '/sandbox', 'sandbox://'],
+      [CF, '/computer', 'sandbox://'],
       [CF, '/pc/ashish@studio', 'ashish@studio://'],
       [CF, '/pc/dev-rig/etc/hosts', 'dev-rig://etc/hosts'],
       [CF, '/pc', 'vfs://pc'],
@@ -60,7 +60,7 @@ describe('a machine path formats to the reference of the plane that holds it', (
   });
 
   test('a reference reads back to the path it was printed from', () => {
-    for (const [planes, absolute] of [[CF, '/pc/dev-rig/x'], [CF, '/sandbox/w/a'], [CLI, '/home/ana/acme/a'], [CLI, '/home/ana/.kinu/acme/slates/s']] as const) {
+    for (const [planes, absolute] of [[CF, '/pc/dev-rig/x'], [CF, '/computer/w/a'], [CLI, '/home/ana/acme/a'], [CLI, '/home/ana/.kinu/acme/slates/s']] as const) {
       expect(resolvePath(formatPath(absolute, planes), planes).absolute).toBe(absolute);
     }
   });
@@ -118,7 +118,7 @@ describe('a shell takes its machine\'s paths', () => {
     expect(shellReference('vfs://slates/board/index.ts', CLI)).toBe('the shell takes this machine\'s paths: vfs://slates/board/index.ts is /home/ana/.kinu/acme/slates/board/index.ts here');
     expect(shellReference('local://src/a.ts', CLI)).toContain('is /home/ana/acme/src/a.ts here');
     expect(shellReference('vfs://skills/slates/SKILL.md', CLI)).toBe('vfs://skills/slates/SKILL.md is in the skills view, which the file tool and workspace.* read; the shell has no path for it');
-    expect(shellReference('sandbox://w/a', CF)).toContain('is /sandbox/w/a here');
+    expect(shellReference('sandbox://w/a', CF)).toContain('is /computer/w/a here');
     expect(shellReference('vfs://../x', CLI)).toContain('names no file');
 
     for (const word of ['https://example.com', 'postgres://db/app', 'notes/vfs://x', 'sandbox://x', '/etc/hosts']) {
@@ -133,7 +133,7 @@ describe('a reference in prose', () => {
   test('is found by its root, without the sentence punctuation after it', () => {
     const text = 'Wrote vfs://home/main/report.md, see (sandbox://w/build.log). Not postgres://db/x, https://x.io or avfs://y.';
 
-    expect(findPlaneReferences(text, ['vfs', 'sandbox'])).toEqual([
+    expect(findPlaneReferences(text, ['vfs', 'computer'])).toEqual([
       { index: 6, reference: 'vfs://home/main/report.md' },
       { index: 38, reference: 'sandbox://w/build.log' },
     ]);
@@ -152,7 +152,7 @@ describe('every prefix is an alias for a vfs:// subtree', () => {
   test('on both backends, each prefix and its vfs:// long form name the same file, and the shorter is printed', () => {
     const cases: Array<[PathPlanes, string, string, string]> = [
       [CF, 'local://home/main/a.md', 'vfs://home/main/a.md', '/home/main/a.md'],
-      [CF, 'sandbox://w/build.log', 'vfs://sandbox/w/build.log', '/sandbox/w/build.log'],
+      [CF, 'sandbox://w/build.log', 'vfs://computer/w/build.log', '/computer/w/build.log'],
       [CF, 'studio://home/dev/a.txt', 'vfs://pc/studio/home/dev/a.txt', '/pc/studio/home/dev/a.txt'],
       [CLI, 'local://src/app.ts', 'vfs://local/src/app.ts', '/home/ana/acme/src/app.ts'],
     ];
@@ -178,11 +178,11 @@ describe('every prefix is an alias for a vfs:// subtree', () => {
     expect(referencePrefixes(planes)).toContain('drive');
     expect(shellReference('drive://a/b.md', planes)).toBe('the shell takes this machine\'s paths: drive://a/b.md is /shared/a/b.md here');
     // Every row of the table, and the subtree machines mount under, is a name no machine takes.
-    expect(RESERVED_ROOTS).toEqual(expect.arrayContaining(['vfs', 'local', 'sandbox', 'pc']));
+    expect(RESERVED_ROOTS).toEqual(expect.arrayContaining(['vfs', 'local', 'computer', 'pc']));
   });
 
   test('a machine is linked by its own name only when it is one, never any scheme', () => {
-    expect(referencePrefixes(CF, ['studio', 'https', 'local'])).toEqual(['vfs', 'local', 'sandbox', 'studio']);
+    expect(referencePrefixes(CF, ['studio', 'https', 'local'])).toEqual(['vfs', 'local', 'computer', 'studio']);
     expect(referencePrefixes(CLI, ['studio'])).toEqual(['vfs', 'local']);
     expect(shellReference('postgres://db/app', CF)).toBeNull();
   });

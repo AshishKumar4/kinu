@@ -369,7 +369,7 @@ describe('the classification the `shell` tool actually produced reaches the read
   }
 
   test('an unprovisioned runtime is `unavailable`, a platform gap, on both backends', async () => {
-    const { record } = await refuseEscalation('sandbox');
+    const { record } = await refuseEscalation('computer');
 
     for (const result of [{ error: record.error ?? '' }, record.error]) {
       const failure = classifyToolFailure({ ...record, result: result ?? null });
@@ -396,12 +396,12 @@ describe('the classification the `shell` tool actually produced reaches the read
 
   test('the same decision is logged under a stable dotted event name', async () => {
     // The log and the ledger row read one classification.
-    const { logger } = await refuseEscalation('sandbox');
+    const { logger } = await refuseEscalation('computer');
     expect(logger.emitted).toEqual([{
       event: 'shell.escalation_refused',
       code: 'unavailable',
       cause: 'runtime_not_provisioned',
-      fields: { runtime: 'sandbox' },
+      fields: { runtime: 'computer' },
     }]);
   });
 

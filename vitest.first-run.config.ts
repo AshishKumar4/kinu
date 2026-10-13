@@ -61,7 +61,7 @@ export const TUI_HARNESS = 'packages/cli/tests/helpers/pty-screen.ts';
 export const EXECUTOR_READERS = {
   'every-tool': 'the row reads what the agent\'s shell, file and codemode calls left on an executor',
   'codemode-craft': 'the crafted body runs on an executor the agent picks',
-  'sandbox-mount-write': 'the row reads the /sandbox mount the agent wrote through',
+  'sandbox-mount-write': 'the row reads the /computer mount the agent wrote through',
   'slate': 'the agent builds and serves the slate from an executor',
   'background-settle': 'the detached job the row waits on runs on an executor the agent picks',
   'files-outside-tree': 'the row reads an executor\'s file plane',

@@ -20,7 +20,7 @@ const RELEASE = `${DESK}/release.json`;
 
 const EXPORT = `${DESK}/handoff.zip`;
 
-const MIRROR = '/sandbox/workspace/combinators';
+const MIRROR = '/computer/workspace/combinators';
 
 const CALCULATOR = 'report_totals';
 
@@ -127,7 +127,7 @@ async function sameSnapshot(verifier: EvalVerifier, id: string, path: string): P
 }
 
 /** The visible server-rendered summary and its API, fetched without a workspace credential. */
-async function previewAnswer(verifier: EvalVerifier, executor: 'workspace' | 'sandbox', path: string): Promise<EvalCheckOutcome> {
+async function previewAnswer(verifier: EvalVerifier, executor: 'workspace' | 'computer', path: string): Promise<EvalCheckOutcome> {
   const expected = summaryOf(await verifier.readFile(path));
 
   const answered = await Promise.all((await verifier.previews(executor)).map(async ({ url }) => {
@@ -180,7 +180,7 @@ async function calculator(verifier: EvalVerifier, id: string, paths: readonly st
 /** Compare actual ZIP payloads with allowed source bytes; names and post-export scratch do not matter. */
 async function archive(verifier: EvalVerifier, checkout: string): Promise<void> {
   await verifier.check('handoff-contains-the-required-source-bytes', async () => {
-    const roots = [`/sandbox${checkout}`, DESK, '/slates/test-results', '/slates/release-review'].map((path) => posix.normalize(path));
+    const roots = [`/computer${checkout}`, DESK, '/slates/test-results', '/slates/release-review'].map((path) => posix.normalize(path));
     const allowed = new Map<string, Uint8Array>();
     const hashes = new Map<string, string>();
     const digest = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
@@ -203,7 +203,7 @@ async function archive(verifier: EvalVerifier, checkout: string): Promise<void> 
     };
 
     for (const root of roots) await collect(root);
-    const required = ['maybe', 'result', 'task', 'toolbelt'].map((module) => `/sandbox${checkout}/src/${module}.ts`);
+    const required = ['maybe', 'result', 'task', 'toolbelt'].map((module) => `/computer${checkout}/src/${module}.ts`);
     required.push(REPORT, RERUN, REVIEW, RELEASE, `${DESK}/report-totals.js`, `${DESK}/preview/server.mjs`, ...CASES.map((file) => file.path));
 
     for (const id of ['test-results', 'release-review']) {
@@ -331,19 +331,19 @@ release-review as exact task titles on the board and mark them done when the vie
           evidence: { code, coordinator, hasCode, hasCoordinator, noteRead: true, factKeys: saved.facts.map((fact) => fact.key), replies: verifier.recentReplies() } };
       });
       await verifier.check('dashboard-report-is-the-sandbox-test-report', async () => {
-        const [local, sandbox] = await Promise.all([verifier.readFile(REPORT), verifier.readFile(`/sandbox${checkout}/vitest-report.json`)]);
+        const [local, sandbox] = await Promise.all([verifier.readFile(REPORT), verifier.readFile(`/computer${checkout}/vitest-report.json`)]);
         const summary = summaryOf(local);
         const graderReport = `${checkout}/.kinu-eval-vitest.json`;
 
         try {
-          await verifier.execute('sandbox', `cd ${checkout} && npx vitest run --coverage=false --reporter=json --outputFile=${graderReport}`);
-          const rerun = summaryOf(await verifier.readFile(`/sandbox${graderReport}`));
+          await verifier.execute('computer', `cd ${checkout} && npx vitest run --coverage=false --reporter=json --outputFile=${graderReport}`);
+          const rerun = summaryOf(await verifier.readFile(`/computer${graderReport}`));
           const counts = ({ total, passed, failed, skipped }: ReportSummary) => ({ total, passed, failed, skipped });
 
           return { pass: local === sandbox && summary.total > 0 && JSON.stringify(counts(summary)) === JSON.stringify(counts(rerun)),
             evidence: { identical: local === sandbox, summary, independentlyRun: rerun } };
         } finally {
-          await verifier.execute('sandbox', `rm -f ${graderReport}`);
+          await verifier.execute('computer', `rm -f ${graderReport}`);
         }
       });
       await calculator(verifier, 'agent-reused-the-report-calculator', [REPORT], true);
@@ -366,7 +366,7 @@ previews reading changes without a rebuild. Add board tasks titled exactly previ
 done when ready, and keep earlier work closed.`,
     verify: async (verifier) => {
       await verifier.check('workspace-dashboard-preview-shows-the-tests', () => previewAnswer(verifier, 'workspace', REPORT));
-      await verifier.check('sandbox-dashboard-preview-shows-the-tests', () => previewAnswer(verifier, 'sandbox', REPORT));
+      await verifier.check('sandbox-dashboard-preview-shows-the-tests', () => previewAnswer(verifier, 'computer', REPORT));
       await archive(verifier, checkout);
       await verifier.check('the-whole-handoff-board-is-done', () => boardHolds(verifier,
         ['src/maybe.ts', 'src/result.ts', 'src/task.ts', 'src/toolbelt.ts', 'release-provenance', 'boundary-review', 'test-results', 'release-review', 'previews', 'export']));
@@ -392,7 +392,7 @@ done when ready, and keep earlier work closed.`,
             evidence: { before, expectedBefore, after, expectedAfter } };
         }));
 
-      for (const executor of ['workspace', 'sandbox'] as const) {
+      for (const executor of ['workspace', 'computer'] as const) {
         await verifier.check(`${executor}-preview-reads-unseen-data`, () => changed(verifier,
           [{ path: RERUN, content: UNSEEN_CONTENT }, { path: `${MIRROR}/reports/rerun.json`, content: UNSEEN_CONTENT }], async (replace) => {
             const before = await previewAnswer(verifier, executor, RERUN);

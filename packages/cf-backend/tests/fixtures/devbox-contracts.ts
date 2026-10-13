@@ -69,7 +69,7 @@ export class ContractBox extends Devbox<Env> {
       transactions: { storage: { transactionSync: work => this.ctx.storage.transactionSync(work) } },
     });
 
-    workspace.filesystem.vfs.mount('/sandbox', sandboxFiles(adaptCloudflareSandbox(this, async () => {}, null)), { resolvesPaths: true });
+    workspace.filesystem.vfs.mount('/computer', sandboxFiles(adaptCloudflareSandbox(this, async () => {}, null)), { resolvesPaths: true });
     const listing: { width: number; calls: number; ms: number }[] = [];
     const find: { command: string; calls: number; ms: number; entries: number }[] = [];
 
@@ -87,10 +87,10 @@ export class ContractBox extends Devbox<Env> {
     const native = await this.exec('find /usr/share -maxdepth 1');
 
     if (native.exitCode !== 0) throw new Error(`the native find failed: ${native.stderr}`);
-    const expected = native.stdout.trim().split('\n').map(path => `/sandbox${path}`).sort().join('\n');
+    const expected = native.stdout.trim().split('\n').map(path => `/computer${path}`).sort().join('\n');
 
     for (let repeat = 0; repeat < 3; repeat += 1) {
-      const command = 'find /sandbox/usr/share -maxdepth 1';
+      const command = 'find /computer/usr/share -maxdepth 1';
       const calls = this.#remoteCalls;
       const at = Date.now();
       const ran = await workspace.exec(command);

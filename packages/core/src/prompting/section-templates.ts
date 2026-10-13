@@ -14,7 +14,7 @@ import roleSection from "../prompts/role-section.md" with { type: 'text' };
 import toolsSection from "../prompts/tools-section.md" with { type: 'text' };
 import toolUseSection from "../prompts/tool-use-section.md" with { type: 'text' };
 import workspaceExecutorLine from "../prompts/workspace-executor-line.md" with { type: 'text' };
-import sandboxExecutorLine from "../prompts/sandbox-executor-line.md" with { type: 'text' };
+import computerExecutorLine from "../prompts/computer-executor-line.md" with { type: 'text' };
 import deviceExecutorLine from "../prompts/device-executor-line.md" with { type: 'text' };
 import genericExecutorLine from "../prompts/generic-executor-line.md" with { type: 'text' };
 import executorsSection from "../prompts/executors-section.md" with { type: 'text' };
@@ -118,11 +118,11 @@ export const WORKSPACE_EXECUTOR_LINE = definePromptSection(
   workspaceExecutorLine.trimEnd(),
 );
 
-/** Sized from the host's table, which the sandbox executor reports; the current size is volatile, so absent. */
-export const SANDBOX_EXECUTOR_LINE = definePromptSection(
+/** Sized from the host's table, which the computer executor reports; the current size is volatile, so absent. */
+export const COMPUTER_EXECUTOR_LINE = definePromptSection(
   "executors/sandbox",
   "{{#if sized}}{{defaultSize}}{{sizes}}{{/if}}",
-  sandboxExecutorLine.trimEnd(),
+  computerExecutorLine.trimEnd(),
 );
 
 /** Names no machine: the fleet is volatile and renders in the dynamic-context block. */
@@ -141,13 +141,13 @@ export const GENERIC_EXECUTOR_LINE = definePromptSection(
 /**
  * Doctrine only; live availability and live mounts render in volatile context,
  * never in this cacheable prefix. Mount doctrine is stated once under
- * `hasDevices` (implied by `executors.length > 1`). `hasSandbox` adds that the
- * file plane's `/sandbox` is the container's `/`. Approvals doctrine is stated
+ * `hasDevices` (implied by `executors.length > 1`). `hasComputer` adds that the
+ * file plane's `/computer` is the container's `/`. Approvals doctrine is stated
  * once, only on turns with a shell.
  */
 export const EXECUTORS_SECTION = definePromptSection(
   "executors/section",
-  "{{deviceNamespaces}}{{executorLines}}{{exposeCalls}}{{workspaceRoot}}{{#if hasFolder}}{{/if}}{{#if hasSandbox}}{{/if}}{{#if hasDevices}}{{/if}}{{#if hasPreview}}{{/if}}{{#if workspacePreview}}{{/if}}{{#if hasHire}}{{/if}}",
+  "{{deviceNamespaces}}{{executorLines}}{{exposeCalls}}{{workspaceRoot}}{{#if hasFolder}}{{/if}}{{#if hasComputer}}{{/if}}{{#if hasDevices}}{{/if}}{{#if hasPreview}}{{/if}}{{#if workspacePreview}}{{/if}}{{#if hasHire}}{{/if}}",
   executorsSection.trimEnd(),
 );
 

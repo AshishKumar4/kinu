@@ -178,7 +178,7 @@ export async function discoverInstructionFiles(
       continue;
     }
 
-    // Keyed on the label: an approval for the workspace file does not cover the sandbox copy.
+    // Keyed on the label: an approval for the workspace file does not cover the computer copy.
     if (result.text.trim()) admitted.push({ path: ref.path, content: result.text, trust: trust(ref.path, result.text) });
   }
 
@@ -188,7 +188,7 @@ export async function discoverInstructionFiles(
 /**
  * A plane's port. A link is followed as the plane's own reader follows it, so only a file that reader could open is read;
  * a plane whose stat still answers a link cannot follow one, and says so. The bytes read must be the ones sized, so the
- * file is sized again after the read: a link moved to another file in between is another inode. A sandbox that cannot
+ * file is sized again after the read: a link moved to another file in between is another inode. A computer that cannot
  * size a file reports 0, and then only the second size is compared.
  */
 function vfsInstructionProbe(files: VFS, path: string): () => Promise<InstructionFileProbe> {
@@ -215,7 +215,7 @@ function vfsInstructionProbe(files: VFS, path: string): () => Promise<Instructio
 
 /**
  * Cloud AGENTS.md discovery: canonical workspace for defaults, an already-active
- * sandbox as the nearest file; never provisions a sandbox. A failed read is not
+ * sandbox as the nearest file; never provisions a computer. A failed read is not
  * reported as absence. Both planes are agent-writable, so neither is trusted by location.
  */
 export function collectWorkspaceAgentsMd(
@@ -227,7 +227,7 @@ export function collectWorkspaceAgentsMd(
   const candidates: InstructionCandidate[] = [{ label: 'AGENTS.md (workspace)', probe: vfsInstructionProbe(vfs, 'AGENTS.md') }];
 
   if (sandbox?.getStatus?.().active && sandbox.files) {
-    candidates.push({ label: '/workspace/AGENTS.md (sandbox)', probe: vfsInstructionProbe(sandbox.files, '/workspace/AGENTS.md') });
+    candidates.push({ label: '/workspace/AGENTS.md (computer)', probe: vfsInstructionProbe(sandbox.files, '/workspace/AGENTS.md') });
   }
 
   return discoverInstructionFiles(candidates, limits, trust);
