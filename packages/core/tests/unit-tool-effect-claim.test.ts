@@ -8,10 +8,11 @@ import { jsonSchema, tool, type ToolExecutionOptions, type ToolSet } from 'ai';
 import {
   buildMcpToolSet, claimToolEffect, initToolEffectClaimTable,
   settleToolEffect, DEFAULT_TOOL_RESULT_MAX_CHARS, PLATFORM_CATALOG,
-  withEffectReceipt, replayPolicyFor, settleUnpairedToolCalls, INTERRUPTED_TOOL_RESULT, type EffectClaimDeps, type JsonValue,
+  withEffectReceipt, replayPolicyFor, settleUnpairedToolCalls, type EffectClaimDeps, type JsonValue,
   defineOperation, nativeTool, serveTransactional,
   type SerializableToolDescriptor,
 } from '../src/index';
+import { INTERRUPTED_TOOL_RESULT } from '../src/prompting/interrupted-tool-calls';
 import { createMemoryVfs } from '@kinu.run/test-utils';
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { lostToolCall } from '../src/tools/effect-claim';

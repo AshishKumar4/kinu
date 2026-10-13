@@ -97,8 +97,8 @@ describe('the browser auth store', () => {
     const second = await createSession(env, profile('google', 'google-user-1', 'PERSON@example.com'));
 
     expect(second.identity.userId).toBe(first.identity.userId);
-    expect(kv.keys().filter((key) => key.startsWith('session:'))).toHaveLength(2);
-    expect(kv.keys().filter((key) => !key.startsWith('session:'))).toEqual([]);
+    // Sessions are the account's rows alone; a sign-in writes nothing to KV.
+    expect(kv.keys()).toEqual([]);
   });
 
   test('an unverified email is refused rather than given an identity of its own', async () => {
@@ -137,11 +137,9 @@ describe('the browser auth store', () => {
     expect(await verifySession(env, 'not-a-kinu-token')).toBeNull();
   });
 
-  test('the authority answers when no KV projection has arrived, and stops the moment it is revoked', async () => {
-    const { env, kv } = setupEnv();
+  test('the row answers with the whole identity, and stops the moment it is revoked', async () => {
+    const { env } = setupEnv();
     const created = await createSession(env, profile('cloudflare', 'cf-1', 'person@example.com'));
-    // What a colo the sign-in's KV write has not reached sees; the row is strongly consistent everywhere.
-    await kv.delete(`session:${sha256(created.token)}`);
 
     // The socket revocation tag needs the session's own hash.
     expect(await verifySession(env, created.token)).toEqual({

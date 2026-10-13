@@ -85,7 +85,7 @@ export function normalizeNote(note: string): string {
 export const ADVISOR_DEDUPE_WINDOW = 50;
 
 /** Normalised forms, compared against {@link normalizeNote}'s output. Kept short: a growing blocklist hides a model problem. */
-export const CONTENT_FREE_NOTES: readonly string[] = [
+const CONTENT_FREE_NOTES: readonly string[] = [
   'stop',
   'ok',
   'okay',

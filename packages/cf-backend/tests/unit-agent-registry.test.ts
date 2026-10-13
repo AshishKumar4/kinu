@@ -5,14 +5,11 @@ import {
   asFetchFunction,
   DEFAULT_WORKERS_AI_MODEL_SPEC,
   defaultSpecFor,
-  
   KINU_USER_AGENT,
-  requestUrl,
+  requestUrl, type ModelMenuEntry, type CredentialSummary,
 } from '@kinu.run/core';
 import { createMockFetch, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, present } from '@kinu.run/test-utils';
 import { createAgentProviderRegistry, userCredentials, type UserCredentialClient } from '../src/providers/agent-registry';
-import type { ModelMenuEntry } from '../src/user/available-models';
-import type { CredentialSummary } from '../src/user/credentials';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
 import { serveFamily } from './helpers/api';
 import { unreachableNamespace, workerContext } from './helpers/bindings';

@@ -159,7 +159,7 @@ test('a delivery on its way when a Stop cut it off arrives cancelled, never runs
 
   // The Stop cancels what the agent is owed, the delivery on its way among them, then the delivery arrives.
   await agent.cancelCurrentWork();
-  release();
+  await release();
   await sending;
 
   await agent.onMessage(owner, ownerWords('AFTER_STOP_MARKER'));

@@ -163,7 +163,7 @@ const FALLBACK_NOUNS = [
 ] as const;
 
 /** Deterministic provisional display title: first non-empty line, collapsed. */
-export function deriveWorkspaceTitle(text: string): string {
+function deriveWorkspaceTitle(text: string): string {
   const firstLine = text.split('\n').map((line) => line.trim()).find((line) => line.length > 0) ?? '';
 
   return firstLine.replace(/\s+/g, ' ').slice(0, 60);

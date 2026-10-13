@@ -8,7 +8,7 @@ import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import * as v from 'valibot';
 import { coversQuery, expandedTokenGroups, lexicalGroupRelevance, minimumRelevance } from './lexical-recall';
-import { safeJsonParse, type JsonValue } from '../utils/json';
+import { JsonValueSchema, safeJsonParse, type JsonValue } from '../utils/json';
 
 
 /** The actor id the account's facts are kept under, in the user object. */
@@ -31,27 +31,33 @@ export const FactOriginSchema = v.object({
 
 export type FactOrigin = v.InferOutput<typeof FactOriginSchema>;
 
-export interface Fact {
-  key: string;
-  value: JsonValue;
-  confidence: number;
-  source: string;
-  lastObservedAt: number;
+const VeracitySchema = v.picklist(VERACITIES);
+
+export const FactSchema = v.object({
+  key: v.string(),
+  value: JsonValueSchema,
+  confidence: v.number(),
+  source: v.string(),
+  lastObservedAt: v.number(),
   /** 0 to 1, default 0.5: how much it matters when recalled. */
-  importance: number;
-  veracity: Veracity;
-  origin: FactOrigin | null;
-}
+  importance: v.number(),
+  veracity: VeracitySchema,
+  origin: v.nullable(FactOriginSchema),
+});
+
+export type Fact = v.InferOutput<typeof FactSchema>;
 
 /** One value a key held, newest first. A forgotten fact is a revision too, with no value; JSON `null` is a value. */
-export interface FactRevision {
-  readonly forgotten: boolean;
-  readonly value: JsonValue | null;
-  readonly importance: number;
-  readonly veracity: Veracity;
-  readonly origin: FactOrigin | null;
-  readonly at: number;
-}
+export const FactRevisionSchema = v.object({
+  forgotten: v.boolean(),
+  value: v.nullable(JsonValueSchema),
+  importance: v.number(),
+  veracity: VeracitySchema,
+  origin: v.nullable(FactOriginSchema),
+  at: v.number(),
+});
+
+export type FactRevision = Readonly<v.InferOutput<typeof FactRevisionSchema>>;
 
 export type FactUpsertResult = 'created' | 'changed' | 'unchanged';
 
@@ -120,8 +126,6 @@ interface FactRow {
   veracity: string;
   origin_json: string | null;
 }
-
-const VeracitySchema = v.picklist(VERACITIES);
 
 function veracityOf(raw: string): Veracity {
   const parsed = v.safeParse(VeracitySchema, raw);

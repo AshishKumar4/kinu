@@ -1,7 +1,8 @@
-// Confined surfaces finish `eval` over the finished set only: a head's function-form `codemodeTool`
+// Confined surfaces finish `eval` over the finished set only: a head's `codemode` builder
 // runs after the `allowedTools` filter; a node's proposal tool merges after the finish.
 import { describe, expect, test } from 'bun:test';
-import { jsonSchema, tool, type ToolSet } from 'ai';
+import { jsonSchema, tool } from 'ai';
+import type { CodemodeSurface } from '../src/tools/builtins';
 import type { LanguageModelV4Content } from '@ai-sdk/provider';
 import { handClock, scriptedTurnModel, toolExecute, unobservedSpend } from '@kinu.run/test-utils';
 import { actorJobsFor, createTestRuntime, conversationsFor, effectClaimsFor } from './helpers';
@@ -93,8 +94,8 @@ describe('head function-form eval resolves over the allowed surface', () => {
     const allowed = ['eval', 'shell', 'file', 'record_evidence'];
     let seen: readonly string[] | null = null;
 
-    const codemodeTool = (finished: ToolSet) => {
-      seen = Object.keys(finished);
+    const codemode = (surface: CodemodeSurface) => {
+      seen = Object.keys(surface.native);
 
       return sandboxEntry('fn-ran');
     };
@@ -105,7 +106,7 @@ describe('head function-form eval resolves over the allowed surface', () => {
       capture: new HeadCapture(),
       rt,
       jobs: actorJobsFor(rt),
-      codemodeTool,
+      codemode,
       webSearch: stubWeb,
       split: neverSplit,
       effectClaims: effectClaimsFor(rt),
@@ -126,7 +127,7 @@ describe('head function-form eval resolves over the allowed surface', () => {
     const { rt } = createTestRuntime();
     let calls = 0;
 
-    const codemodeTool = (_finished: ToolSet) => {
+    const codemode = () => {
       calls += 1;
 
       return sandboxEntry('fn-ran');
@@ -138,7 +139,7 @@ describe('head function-form eval resolves over the allowed surface', () => {
       capture: new HeadCapture(),
       rt,
       jobs: actorJobsFor(rt),
-      codemodeTool,
+      codemode,
       webSearch: stubWeb,
       split: neverSplit,
       effectClaims: effectClaimsFor(rt),
@@ -147,25 +148,6 @@ describe('head function-form eval resolves over the allowed surface', () => {
     expect(tools.eval).toBeUndefined();
     expect(calls).toBe(0);
     expect(Object.keys(tools)).toEqual(['shell']);
-  });
-
-  test('a finished codemodeTool entry installs directly and runs', async () => {
-    const { rt } = createTestRuntime();
-
-    const tools = buildHeadToolSet({
-      conversations: conversationsFor(rt),
-      input: headInput(),
-      capture: new HeadCapture(),
-      rt,
-      jobs: actorJobsFor(rt),
-      codemodeTool: sandboxEntry('direct-ran'),
-      webSearch: stubWeb,
-      split: neverSplit,
-      effectClaims: effectClaimsFor(rt),
-    });
-
-    const runSandbox = toolExecute<{ code: string }, string>(tools.eval);
-    await expect(runSandbox({ code: 'const x = 1' })).resolves.toBe('direct-ran:const x = 1');
   });
 });
 
@@ -176,8 +158,8 @@ describe('node proposal merges after the eval finish', () => {
     const journal = new HeadJournal(rt.storage.sql, rt.actor);
     let seen: readonly string[] | null = null;
 
-    const codemodeTool = (finished: ToolSet) => {
-      seen = Object.keys(finished);
+    const codemode = (surface: CodemodeSurface) => {
+      seen = Object.keys(surface.native);
 
       return sandboxEntry('fn-ran');
     };
@@ -231,7 +213,7 @@ describe('node proposal merges after the eval finish', () => {
       hostNode: hostedSeatsOver({ rt, db, model: () => model }).hostNode,
       journal,
       logger: createRecordingLogger(),
-      nodeCodemode: () => codemodeTool,
+      nodeCodemode: () => codemode,
     };
 
     const run = await runNodeAgent(input, deps);
@@ -294,7 +276,7 @@ describe("a seated head's long call becomes its own job, and the settle wakes it
         // The workspace's clock, which the call's window and the build run on.
         return { ...seat, release: async () => {}, jobs: { ...seat.jobs, ports: { jobOutput: (frame) => { frames.push(frame); }, clock } } };
       },
-      codemodeTool: () => build,
+      codemode: () => () => build,
       webSearch: stubWeb,
       split: () => neverSplit,
       mission: () => null,
@@ -375,7 +357,7 @@ describe('a seated head whose job its owner refused to stop', () => {
           },
         };
       },
-      codemodeTool: () => build,
+      codemode: () => () => build,
       webSearch: stubWeb,
       split: () => neverSplit,
       mission: () => null,

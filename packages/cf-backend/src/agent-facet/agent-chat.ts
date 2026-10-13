@@ -166,7 +166,7 @@ export class FacetChat {
         runs: {
           run: (run, signal, retire) => this.runDelivered(run, signal, retire),
           refuse: (run, failure, retire) => {
-            this.owe(run.id, refusedRun(failure), retire);
+            this.owe(run, refusedRun(failure), retire);
           },
         },
       },
@@ -178,7 +178,7 @@ export class FacetChat {
    * dropped, its input retired, once a report carrying it reached the workspace (`tell`). An isolate that dies first
    * restores the run from its held input and runs it again.
    */
-  private readonly runEnds = new Map<string, { readonly outcome: RunEndOutcome; readonly retire: () => void }>();
+  private readonly runEnds = new Map<string, { readonly runId: string; readonly outcome: RunEndOutcome; readonly retire: () => void }>();
 
   /** A delivered run, run to its end in this chat's turn: its end is owed, and told as it ends, not at rest, since its
    *  caller awaits it and runs may wait behind it. Never fails: a failure is the run's refusal. */
@@ -193,13 +193,13 @@ export class FacetChat {
       const outcome: RunEndOutcome = Exit.isSuccess(exit) ? { ended: exit.value }
         : refusedRun(toKinuError({ doing: 'running a delivered task', cause: Cause.squash(exit.cause), otherwise: 'io' }));
 
-      this.owe(run.id, outcome, retire);
+      this.owe(run, outcome, retire);
       yield* Effect.promise(() => hold(logged('agent.run_end_report_failed', { doing: "telling the workspace a delivered run's end", otherwise: 'unavailable' }, () => this.tell())));
     }));
   }
 
-  private owe(id: string, outcome: RunEndOutcome, retire: () => void): void {
-    this.runEnds.set(id, { outcome, retire });
+  private owe(run: DeliveredRun, outcome: RunEndOutcome, retire: () => void): void {
+    this.runEnds.set(run.id, { runId: run.task.runId, outcome, retire });
   }
 
   private async assemble(prepared: PreparedAgentTurn, turn: { readonly id: string; readonly mode: WorkMode; readonly runId: string; readonly epoch: number | null }, asked: TurnAssemblyRequest, bind?: Parameters<typeof assembleActorTurn>[0]['settle']) {
@@ -498,7 +498,7 @@ export class FacetChat {
   /** `at` asks for a wake no later than it. Carries every run end not yet told, each retired once the report reached. */
   private tell(at?: number): Promise<void> {
     const told = this.telling.then(async () => {
-      const ends = [...this.runEnds].map(([id, { outcome }]) => ({ id, outcome }));
+      const ends = [...this.runEnds].map(([id, { runId, outcome }]) => ({ id, runId, outcome }));
       const { seq, next, holds, report } = this.owesNow(at, ends);
 
       await this.deps.workspace.owes(seq, next, holds, report);

@@ -17,33 +17,23 @@ import { revealMisrepresenting } from '../safety/untrusted-text';
 import { sha256Hex } from '../safety/argument-digest';
 
 /** An MCP tool after crossing the RPC seam, with namespacing context for dispatch. */
-export interface SerializableToolDescriptor {
-  /** Registration id for `userMcp_callTool` routing. Never part of the tool key: it is a random per-registration nanoid. */
-  serverId: string;
-  serverName: string;
-  name: string;
-  /** Tool key the LLM sees: core's `mcpToolKey(serverName, name)`, same rule on both backends. */
-  toolKey: string;
-  description?: string;
-  title?: string;
-  /** JSON Schema (not Zod) so it survives RPC serialization. */
-  inputSchema?: JsonObject;
-  readOnly?: true;
-  /** The catalog entry the server was added from, so a seam can know its server by what it is, not by its name. */
-  presetId?: string;
-}
-
 const SerializableToolDescriptorSchema = v.object({
+  /** Registration id for `userMcp_callTool` routing. Never part of the tool key: it is a random per-registration nanoid. */
   serverId: v.string(),
   serverName: v.string(),
   name: v.string(),
+  /** Tool key the LLM sees: core's `mcpToolKey(serverName, name)`, same rule on both backends. */
   toolKey: v.string(),
   description: v.optional(v.string()),
   title: v.optional(v.string()),
+  /** JSON Schema (not Zod) so it survives RPC serialization. */
   inputSchema: v.optional(JsonObjectSchema),
   readOnly: v.optional(v.literal(true)),
+  /** The catalog entry the server was added from, so a seam can know its server by what it is, not by its name. */
   presetId: v.optional(v.string()),
 });
+
+export type SerializableToolDescriptor = v.InferOutput<typeof SerializableToolDescriptorSchema>;
 
 export const McpToolSurfaceSchema = v.object({
   descriptors: v.array(SerializableToolDescriptorSchema),

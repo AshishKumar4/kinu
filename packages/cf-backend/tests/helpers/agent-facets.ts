@@ -19,6 +19,38 @@ import { joinedOnlyByItself } from './agents-sdk';
  */
 const databases = new WeakMap<Database, Map<string, Database>>();
 
+/** The agents' isolates of each workspace object, for a later activation over its storage that keeps them. */
+const isolates = new WeakMap<Database, InProcessAgentFacets>();
+
+/** The workspace objects whose next activation keeps the agents' isolates the last one opened. */
+const kept = new WeakSet<Database>();
+
+/**
+ * The next activation over `workspace`'s storage keeps the agents' isolates this one opened, as a reset of the workspace
+ * object leaves them running in their own: each one's calls reach the activation that opened it last.
+ */
+export function keepAgentIsolatesAcrossReset(workspace: Database): void {
+  kept.add(workspace);
+}
+
+/** A run's preparation, held at its isolate's call to the workspace once its own claim is durable. */
+export interface HeldPreparation {
+  readonly actorId: string;
+  readonly bound: Parameters<AgentWorkspaceHost['prepareTurn']>[0];
+  release(): void;
+}
+
+const preparationHolds: Array<(held: HeldPreparation) => void> = [];
+
+/** The next run an agent's isolate prepares waits at its call to the workspace until released. */
+export function holdNextRunPreparation(): Promise<HeldPreparation> {
+  const held = Promise.withResolvers<HeldPreparation>();
+
+  preparationHolds.push(held.resolve);
+
+  return held.promise;
+}
+
 /** Models a suite scripts, by the session (`actorAffinity`'s) their calls are routed under. */
 const scriptedModels = new Map<string, () => LanguageModel>();
 
@@ -111,12 +143,12 @@ export function cutNextDelivery(storageKey: string, at: DeliveryCut): void {
   deliveryCuts.set(storageKey, at);
 }
 
-const heldDeliveries = new Map<string, (release: () => void) => void>();
+const heldDeliveries = new Map<string, (release: () => Promise<void>) => void>();
 
 /** The next delivery the workspace crosses into the isolate under `storageKey` is held on its way, as a slow crossing
- *  would be: the promise settles with `release`, which lets it arrive. */
-export async function holdNextDelivery(storageKey: string): Promise<() => void> {
-  const held = Promise.withResolvers<() => void>();
+ *  would be: the promise settles with `release`, which lets it arrive, and settles once the isolate answered or failed. */
+export async function holdNextDelivery(storageKey: string): Promise<() => Promise<void>> {
+  const held = Promise.withResolvers<() => Promise<void>>();
 
   heldDeliveries.set(storageKey, held.resolve);
 
@@ -239,14 +271,27 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
   // Two calls that race to open one agent reach one isolate, as a stub's do.
   const opening = new Map<string, Promise<OpenFacet>>();
   const traceCalls: string[] = [];
+  // The activation that opened each agent last, which its calls reach.
+  const hosts = new Map<string, AgentWorkspaceHost>();
 
   contextOver = makeCtx;
+
+  const earlier = isolates.get(workspace());
+
+  if (earlier !== undefined && kept.has(workspace())) {
+    kept.delete(workspace());
+
+    return earlier;
+  }
+
   // A new workspace answers its model calls as shipped until its suite scripts them.
   scriptedModels.clear();
 
-  return {
+  const facets: InProcessAgentFacets = {
     open: async (placement, host) => {
       const key = placement.storageKey;
+
+      hosts.set(key, host);
 
       const held = opening.get(key) ?? openFacet(placement, host).then((opened) => {
         live.set(key, opened);
@@ -273,31 +318,49 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
     },
   };
 
-  async function openFacet(placement: AgentFacetPlacement, host: AgentWorkspaceHost) {
+  isolates.set(workspace(), facets);
+
+  return facets;
+
+  async function openFacet(placement: AgentFacetPlacement, opener: AgentWorkspaceHost) {
+      // Each call reaches the activation that opened this agent last, as its stub's would after a reset.
+      const host = (): AgentWorkspaceHost => hosts.get(placement.storageKey) ?? opener;
+
       const db = agentDatabase(workspace(), placement.storageKey);
       // The root agent's own turns relay too; a suite counting a node's calls counts the node's alone.
       const counted = (call: string): void => { if (placement.home !== WORKSPACE_ROOT) traceCalls.push(call); };
 
-      const session = await sessionOrFailure(host.session());
-      const stateSession = await sessionOrFailure(host.stateSession());
+      const session = await sessionOrFailure(host().session());
+      const stateSession = await sessionOrFailure(host().stateSession());
 
       // Its port: the workspace's host, held as the shipped client holds it.
       const port: AgentWorkspacePort = {
         traceTurn: (...args) => {
           counted('traceTurn');
 
-          return host.traceTurn(...args);
+          return host().traceTurn(...args);
         },
         traceStream: (...args) => {
           counted('traceStream');
 
-          return host.traceStream(...args);
+          return host().traceStream(...args);
         },
-        resume: (turnId) => host.resume(turnId),
-        guard: (...args) => host.guard(...args),
-        debit: (...args) => host.debit(...args),
-        prepareTurn: (bound) => host.prepareTurn(bound),
-        scaffold: () => host.scaffold(),
+        resume: (turnId) => host().resume(turnId),
+        guard: (...args) => host().guard(...args),
+        debit: (...args) => host().debit(...args),
+        prepareTurn: async (bound) => {
+          const hold = preparationHolds.shift();
+
+          if (hold !== undefined) {
+            const released = Promise.withResolvers<void>();
+
+            hold({ actorId: placement.actorId, bound, release: released.resolve });
+            await released.promise;
+          }
+
+          return await host().prepareTurn(bound);
+        },
+        scaffold: () => host().scaffold(),
         prepareChat: async (request) => {
           const copy = copiedOpenings.get(placement.storageKey);
 
@@ -307,7 +370,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           }
 
           const lost = lostOpeningAnswers.get(placement.storageKey);
-          const prepared = await host.prepareChat(request);
+          const prepared = await host().prepareChat(request);
 
           if (lost === undefined || request.turnId === null) return prepared;
           lostOpeningAnswers.delete(placement.storageKey);
@@ -318,7 +381,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
         chatEvent: async (event) => {
           if (event.type === 'broadcast' && failedBroadcasts.delete(placement.storageKey)) throw new Error('the workspace refused the broadcast');
 
-          await host.chatEvent(event);
+          await host().chatEvent(event);
         },
         turnEnded: async (event, figures, activity, window) => {
           if (lostTurnEnds.delete(placement.storageKey)) return;
@@ -330,67 +393,67 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
             await delay.released;
           }
 
-          await host.turnEnded(event, figures, activity, window);
+          await host().turnEnded(event, figures, activity, window);
           const copy = copiedTurnEnds.get(placement.storageKey);
 
           copiedTurnEnds.delete(placement.storageKey);
           copy?.([event, figures, activity, window]);
         },
-        owedReport: (turn, ended) => host.owedReport(turn, ended),
-        parentReport: (report) => host.parentReport(report),
-        autoTitle: (subject, title) => host.autoTitle(subject, title),
+        owedReport: (turn, ended) => host().owedReport(turn, ended),
+        parentReport: (report) => host().parentReport(report),
+        autoTitle: (subject, title) => host().autoTitle(subject, title),
         turnSettled: async (settled) => {
           if (lostHandoffs.delete(placement.storageKey)) throw new Error('the workspace was reset before it took the handoff');
 
-          await host.turnSettled(settled);
+          await host().turnSettled(settled);
         },
-        runSettled: (run) => host.runSettled(run),
-        hireAdvisor: (advisor) => host.hireAdvisor(advisor),
+        runSettled: (run) => host().runSettled(run),
+        hireAdvisor: (advisor) => host().hireAdvisor(advisor),
         owes: async (seq, next, holds, report) => {
           const catching = heldReports.get(placement.storageKey);
 
           if (catching !== undefined && (holds || next !== null)) {
             heldReports.delete(placement.storageKey);
-            catching(async () => { await host.owes(seq, next, holds, report); });
+            catching(async () => { await host().owes(seq, next, holds, report); });
 
             return;
           }
 
-          await host.owes(seq, next, holds, report);
+          await host().owes(seq, next, holds, report);
         },
-        birthContext: (drainTurnId) => host.birthContext(drainTurnId),
-        steerSkills: (text, alreadyActive) => host.steerSkills(text, alreadyActive),
-        openWork: () => host.openWork(),
-        noteModelRequest: (lastRequestAt) => host.noteModelRequest(lastRequestAt),
-        armCacheWarm: (input) => host.armCacheWarm(input),
-        advise: (review) => host.advise(review),
-        enqueueTurn: (input) => host.enqueueTurn(input),
-        executeTool: (call) => host.executeTool(call),
-        receipts: (turnId, runId, callIds) => host.receipts(turnId, runId, callIds),
-        observe: (lines) => host.observe(lines),
+        birthContext: (drainTurnId) => host().birthContext(drainTurnId),
+        steerSkills: (text, alreadyActive) => host().steerSkills(text, alreadyActive),
+        openWork: () => host().openWork(),
+        noteModelRequest: (lastRequestAt) => host().noteModelRequest(lastRequestAt),
+        armCacheWarm: (input) => host().armCacheWarm(input),
+        advise: (review) => host().advise(review),
+        enqueueTurn: (input) => host().enqueueTurn(input),
+        executeTool: (call) => host().executeTool(call),
+        receipts: (turnId, runId, callIds) => host().receipts(turnId, runId, callIds),
+        observe: (lines) => host().observe(lines),
         paceStep: (bound, profile) => {
           counted('paceStep');
 
-          return host.paceStep(bound, profile);
+          return host().paceStep(bound, profile);
         },
-        answerMetadata: (turnId, narration) => host.answerMetadata(turnId, narration),
-        getAuth: (key, opts) => host.getAuth(key, opts),
-        listCredentials: () => host.listCredentials(),
-        relayDevice: (provider) => host.relayDevice(provider),
-        relayModelCall: (deviceId, callId, request) => host.relayModelCall(deviceId, callId, request),
-        cancelModelRelay: (callId) => host.cancelModelRelay(callId),
-        sayToParent: (signal) => host.sayToParent(signal),
-        logActivity: (lines) => host.logActivity(lines),
-        reportModelCall: (report) => host.reportModelCall(report),
-        reportModelOperation: (event) => host.reportModelOperation(event),
+        answerMetadata: (turnId, narration) => host().answerMetadata(turnId, narration),
+        getAuth: (key, opts) => host().getAuth(key, opts),
+        listCredentials: () => host().listCredentials(),
+        relayDevice: (provider) => host().relayDevice(provider),
+        relayModelCall: (deviceId, callId, request) => host().relayModelCall(deviceId, callId, request),
+        cancelModelRelay: (callId) => host().cancelModelRelay(callId),
+        sayToParent: (signal) => host().sayToParent(signal),
+        logActivity: (lines) => host().logActivity(lines),
+        reportModelCall: (report) => host().reportModelCall(report),
+        reportModelOperation: (event) => host().reportModelOperation(event),
       };
 
       const env: AgentFacetEnv = {
         WORKSPACE: {
           session: async () => session(),
           stateSession: async () => stateSession(),
-          memory: async () => host.memory(),
-          program: (...args) => host.program(...args),
+          memory: async () => host().memory(),
+          program: (...args) => host().program(...args),
           port: async () => port,
         },
         WORKSPACE_NAME: placement.workspaceName,
@@ -414,12 +477,16 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
 
         if (cut === 'before-admit') throw new Error('the crossing died before the agent took the delivery');
         const holding = heldDeliveries.get(placement.storageKey);
+        const crossed = Promise.withResolvers<void>();
 
         if (holding !== undefined) {
           heldDeliveries.delete(placement.storageKey);
           const arrives = Promise.withResolvers<void>();
 
-          holding(arrives.resolve);
+          holding(async () => {
+            arrives.resolve();
+            await crossed.promise;
+          });
           await arrives.promise;
         }
 
@@ -432,7 +499,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           await arrives.promise;
         }
 
-        const answered = await calls.admit(snapshot, delivery);
+        const answered = await calls.admit(snapshot, delivery).finally(() => { crossed.resolve(); });
 
         if (cut === 'after-admit') throw new Error("the crossing died after the agent took the delivery, before its answer");
 

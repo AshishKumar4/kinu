@@ -157,11 +157,13 @@ export class AgentTurns {
     }
   }
 
-  /** A run's end as its agent's report told it: its open run's caller hears it; one this activation never ran is gone. */
+  /** A run's end as its agent's report told it: its open run's caller hears it. One this activation never ran is gone, and
+   *  so is another generation's of the same id, whose caller went with a reset: the re-driven caller awaits its own. */
   runEnded(actorId: string, report: RunEndReport): void {
-    const waiting = this.open.get(actorId, report.id)?.ended;
+    const turn = this.open.get(actorId, report.id);
+    const waiting = turn?.ended;
 
-    if (waiting === undefined) return;
+    if (waiting === undefined || turn?.request.run?.inference.runId !== report.runId) return;
     const { outcome } = report;
 
     if ('ended' in outcome) waiting.resolve(outcome.ended);

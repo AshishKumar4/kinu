@@ -20,7 +20,7 @@ export interface HeadSeat<A extends SeatedActor = SeatedActor> extends HostedNod
 
 export interface SeatedHeadDeps {
   seat(input: HeadInput, writes: WriteObserver): Promise<HeadSeat>;
-  codemodeTool(seat: HeadSeat): HeadToolDeps['codemodeTool'];
+  codemode(seat: HeadSeat): HeadToolDeps['codemode'];
   readonly webSearch: WebSearchProvider;
   split(seat: HeadSeat, input: HeadInput): (request: HeadSplitRequest) => Promise<HeadSplitResult>;
   mission(input: HeadInput, spec: string | null): MissionScope | null;
@@ -44,7 +44,7 @@ export function spawnSeatedHead(input: HeadInput, deps: SeatedHeadDeps): Spawned
       sources: seat.sources,
       tools: buildHeadToolSet({
         input, capture, rt: seat.actor.runtime, conversations: seat.conversations,
-        codemodeTool: deps.codemodeTool(seat), webSearch: deps.webSearch, split: deps.split(seat, input),
+        codemode: deps.codemode(seat), webSearch: deps.webSearch, split: deps.split(seat, input),
         jobs: { jobRunner: runner, backgroundable: CONFINED_BACKGROUNDABLE_TOOLS, mode: () => input.mode },
         effectClaims: { ...seat.receipts, execution: () => ({ turnId: input.id, runId: seat.runId }) },
       }),

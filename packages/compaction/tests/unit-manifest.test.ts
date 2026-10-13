@@ -30,7 +30,6 @@ function range(overrides: Partial<ArchiveRange> = {}): ArchiveRange {
     startTurn: 1,
     endTurn: 4,
     userTurns: 2,
-    assistantTurns: 2,
     firstUserAsk: 'message 0',
     ...overrides,
   };
@@ -47,7 +46,6 @@ describe('deriveArchiveRange', () => {
         startTurn: 1,
         endTurn: 6,
         userTurns: 3,
-        assistantTurns: 3,
         firstUserAsk: 'message 0',
       },
     });
@@ -61,7 +59,6 @@ describe('deriveArchiveRange', () => {
       startTurn: 5,
       endTurn: 9,
       userTurns: 3,
-      assistantTurns: 2,
       // The delta's own first user ask, not the conversation's.
       firstUserAsk: 'message 4',
       path: '/archive/h2.md',
@@ -103,7 +100,7 @@ describe('renderArchiveManifest', () => {
   test('every range renders as one line with span, role mix, ask and path', () => {
     const rendered = renderArchiveManifest([
       range(),
-      range({ rangeHash: 'h1', path: '/a/h1.md', startTurn: 5, endTurn: 5, userTurns: 1, assistantTurns: 0, firstUserAsk: '' }),
+      range({ rangeHash: 'h1', path: '/a/h1.md', startTurn: 5, endTurn: 5, userTurns: 1, firstUserAsk: '' }),
     ]);
 
     expect(rendered).toInclude('message 0');

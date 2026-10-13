@@ -1,6 +1,6 @@
 import { Cause, Effect, Exit } from 'effect';
 import {
-  nanoid, type JsonObject, type JsonValue, JsonObjectSchema, decodeJsonValue, McpProtocolFailureSchema, type UserCaller, compareCodeUnits, type McpPresetId, mcpPresetById, describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor, validateMcpServerInput, validateMcpServerName, readAllowedTools, parseMcpHeaders, type McpTransport, GITHUB_MCP_PRESET, GitHubRefreshAskSchema, refreshGitHub, type GitHubRefreshAnswer, type GitHubRefreshAsk, type McpPresetAvailability, type McpServerSummary,
+  nanoid, type JsonObject, type JsonValue, JsonObjectSchema, decodeJsonValue, McpProtocolFailureSchema, type UserCaller, compareCodeUnits, type McpPresetId, mcpPresetById, describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor, validateMcpServerInput, readAllowedTools, parseMcpHeaders, type McpTransport, GITHUB_MCP_PRESET, GitHubRefreshAskSchema, refreshGitHub, type GitHubRefreshAnswer, type GitHubRefreshAsk, type McpPresetAvailability, type McpServerInput, type McpServerSummary,
 } from '@kinu.run/core';
 import type { MCPClientManager } from 'agents/mcp/client';
 import type { CallToolResult } from '@modelcontextprotocol/client';
@@ -22,19 +22,13 @@ const MCP_OAUTH_CALLBACK_PATH = '/api/user/mcp/callback';
  *  must use the same name. */
 export const USER_MCP_CLIENT_NAME = 'kinu-user-mcp';
 
-/** Shared refusal text for both name guards: the claim in `claimMcpServerName` and the
- *  UNIQUE index, so UI and API show the same message. */
-function mcpNameTakenMessage(name: string): string {
-  return `An MCP server named '${name}' already exists.`;
-}
-
 /**
- * Rethrow a failed name claim, renaming only the `lower(name)` UNIQUE violation to that sentence.
+ * Rethrow a failed server write, naming only the `lower(name)` UNIQUE violation as a taken name.
  * Any other failure is rethrown untouched so storage errors are not reported as duplicates.
  */
 function rethrowMcpNameCollision(input: { cause: unknown; name: string }): never {
   if (/UNIQUE constraint failed/i.test(renderThrownChain({ cause: input.cause }))) {
-    throw new KinuError('bad_input', mcpNameTakenMessage(input.name), { cause: input.cause });
+    throw new KinuError('bad_input', `An MCP server named '${input.name}' already exists.`, { cause: input.cause });
   }
 
   throw input.cause;
@@ -54,10 +48,6 @@ interface McpHydrationRow extends SqlRow {
   headers: string | null;
   preset_id: string | null;
 }
-
-const NullableStringArraySchema = v.nullable(v.array(v.string()));
-
-const NullableStringRecordSchema = v.nullable(v.record(v.string(), v.string()));
 
 /**
  * `MCPClientManager.onStart` restores connections on every activation before credential closures
@@ -190,9 +180,7 @@ export class UserMcpServers {
 
   private configuredRows(): McpHydrationRow[] {
     return this.host.sqlx<McpHydrationRow>(
-      `SELECT s.id, s.name, s.server_url, s.transport, s.headers, p.preset_id
-         FROM user_mcp_servers s
-         LEFT JOIN user_mcp_server_presets p ON p.server_id = s.id`,
+      `SELECT id, name, server_url, transport, headers, preset_id FROM user_mcp_servers`,
     );
   }
 
@@ -319,10 +307,7 @@ export class UserMcpServers {
       id: string; name: string; server_url: string; transport: McpTransport;
       allowed_tools: string | null; preset_id: McpPresetId | null;
     }>(
-      `SELECT s.id, s.name, s.server_url, s.transport, s.allowed_tools, p.preset_id
-         FROM user_mcp_servers s
-         LEFT JOIN user_mcp_server_presets p ON p.server_id = s.id
-        ORDER BY s.name`,
+      `SELECT id, name, server_url, transport, allowed_tools, preset_id FROM user_mcp_servers ORDER BY name`,
     );
 
     // A failed activation is a storage failure, not per-server; it must not report every server disconnected.
@@ -415,25 +400,7 @@ export class UserMcpServers {
     const id = nanoid(8);
     const headersJson = cfg.headers ? JSON.stringify(cfg.headers) : null;
     const allowedJson = cfg.allowedTools ? JSON.stringify(cfg.allowedTools) : null;
-    // Seal before the transaction: sealing awaits, and every written value must be in hand first.
-    const sealedHeaders = await this.host.vault.sealMcpHeaders(id, headersJson);
-    this.claimMcpServerName(cfg.name, id, () => {
-      this.host.ctx.storage.sql.exec(
-        `INSERT INTO user_mcp_servers
-           (id, name, server_url, transport, headers, allowed_tools)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        id, cfg.name, cfg.serverUrl, cfg.transport ?? 'auto',
-        sealedHeaders, allowedJson,
-      );
-
-      // The preset tag lives in its own table; `user_mcp_servers` keeps its shipped shape.
-      if (cfg.presetId !== undefined) {
-        this.host.ctx.storage.sql.exec(
-          `INSERT INTO user_mcp_server_presets (server_id, preset_id) VALUES (?, ?)`,
-          id, cfg.presetId,
-        );
-      }
-    });
+    this.insertMcpServer(id, cfg, await this.host.vault.sealMcpHeaders(id, headersJson), allowedJson);
 
     const callbackUrl = `${publicOrigin.replace(/\/+$/, '')}${MCP_OAUTH_CALLBACK_PATH}`;
 
@@ -516,98 +483,18 @@ export class UserMcpServers {
     this._mcpToolLists.delete(id);
   }
 
-  /** Patch-update editable fields; nothing reconnects. Rotated `headers` apply on the next request
-   *  via `mcpCredentialTransport`; `serverUrl`/`transport` changes require remove + re-add. */
-  async userMcp_update(caller: UserCaller, id: string, patch: JsonValue): Promise<void> {
-    await this.host.requireTier(caller, 'mcp.manage');
-
-    if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) throw new KinuError('bad_input', 'Invalid server id.');
-    const parsedPatch = v.safeParse(JsonObjectSchema, patch);
-
-    if (!parsedPatch.success) throw new KinuError('bad_input', 'patch must be a JSON object.');
-    const p = parsedPatch.output;
-    const sets: string[] = [];
-    const args: SqlStorageValue[] = [];
-    // Same name rule as add: both claim from the same canonical namespace.
-    const renamed = p.name === undefined ? null : validateMcpServerName(p.name);
-
-    if (renamed !== null) { sets.push('name = ?'); args.push(renamed); }
-
-    if (p.allowedTools !== undefined) {
-      const allowedTools = v.safeParse(NullableStringArraySchema, p.allowedTools);
-
-      if (!allowedTools.success) throw new KinuError('bad_input', 'allowedTools must be string[] or null.');
-
-      if (allowedTools.output === null) {
-        sets.push('allowed_tools = ?'); args.push(null);
-      } else {
-        sets.push('allowed_tools = ?'); args.push(JSON.stringify(allowedTools.output));
-      }
-    }
-
-    if (p.headers !== undefined) {
-      const headers = v.safeParse(NullableStringRecordSchema, p.headers);
-
-      if (!headers.success) throw new KinuError('bad_input', 'headers must be Record<string,string> or null.');
-
-      if (headers.output === null) {
-        sets.push('headers = ?'); args.push(null);
-      } else {
-        sets.push('headers = ?'); args.push(await this.host.vault.sealMcpHeaders(id, JSON.stringify(headers.output)));
-      }
-    }
-
-    // Everything above is validated and sealed; nothing below may await.
-    if (sets.length === 0) return;
-    args.push(id);
-
-    const write = (): void => {
-      this.host.ctx.storage.sql.exec(`UPDATE user_mcp_servers SET ${sets.join(', ')} WHERE id = ?`, ...args);
-    };
-
-    if (renamed === null) write();
-    else this.claimMcpServerName(renamed, id, write);
-
-    if (p.headers !== undefined) {
-      try { await this.reownCredentialTransport(id); }
-      catch (err) {
-        diagnostics.failure('mcp.header_rotation_reown_failed', toKinuError({
-          doing: 'moving an MCP server onto the credential seam after a header change',
-          cause: err,
-          otherwise: 'unavailable',
-        }), { serverId: id });
-      }
-    }
-  }
-
-  /** A first credential needs the seam the activation did not register; the dial it starts is not awaited. */
-  private async reownCredentialTransport(id: string): Promise<void> {
-    await this.joinActivation();
-    const row = this.configuredRows().find((configured) => configured.id === id);
-
-    if (row === undefined || !this.needsOwnedTransport(row)) return;
-    // A dial still out is on the connection this replaces.
-    await this.dials.get(id);
-    await this.registerOwnedMcpTransport(row);
-    this.dial(id, () => this.host.mcp.establishConnection(id));
-  }
-
-  /** Claim `name` for `serverId` and run `write` atomically; the transaction is the check and holds
-   *  without the UNIQUE index (see `schema.ts`). `write` must not await. */
-  private claimMcpServerName(name: string, serverId: string, write: () => void): void {
-
+  /** One statement: the `lower(name)` UNIQUE index refuses a taken name, and nothing else is written. */
+  private insertMcpServer(id: string, cfg: McpServerInput, sealedHeaders: string | null, allowedJson: string | null): void {
     try {
-      this.host.ctx.storage.transactionSync(() => {
-        const taken = this.host.ctx.storage.sql.exec(
-          `SELECT 1 AS held FROM user_mcp_servers WHERE lower(name) = lower(?) AND id <> ? LIMIT 1`,
-          name, serverId,
-        ).toArray().length > 0;
-
-        if (taken) throw new KinuError('bad_input', mcpNameTakenMessage(name));
-        write();
-      });
+      this.host.ctx.storage.sql.exec(
+        `INSERT INTO user_mcp_servers
+           (id, name, server_url, transport, headers, allowed_tools, preset_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        id, cfg.name, cfg.serverUrl, cfg.transport ?? 'auto',
+        sealedHeaders, allowedJson, cfg.presetId ?? null,
+      );
     } catch (err) {
-      rethrowMcpNameCollision({ cause: err, name });
+      rethrowMcpNameCollision({ cause: err, name: cfg.name });
     }
   }
 
@@ -641,7 +528,7 @@ export class UserMcpServers {
     await this.host.requireTier(caller, 'mcp.tools');
 
     const rows = this.host.sqlx<{ id: string; name: string; allowed_tools: string | null; preset_id: string | null }>(
-      `SELECT s.id, s.name, s.allowed_tools, p.preset_id FROM user_mcp_servers s LEFT JOIN user_mcp_server_presets p ON p.server_id = s.id`,
+      `SELECT id, name, allowed_tools, preset_id FROM user_mcp_servers`,
     );
 
     if (rows.length === 0) return JSON.stringify({ descriptors: [], unavailable: [] } satisfies McpToolSurface);
@@ -929,7 +816,7 @@ export class UserMcpServers {
 
   private async githubMcpAuthorization(): Promise<string | null> {
     const row = this.host.sqlx<{ id: string }>(
-      `SELECT s.id FROM user_mcp_servers s JOIN user_mcp_server_presets p ON p.server_id = s.id WHERE p.preset_id = ? LIMIT 1`, GITHUB_MCP_PRESET,
+      `SELECT id FROM user_mcp_servers WHERE preset_id = ? LIMIT 1`, GITHUB_MCP_PRESET,
     )[0];
 
     if (!row) return null;

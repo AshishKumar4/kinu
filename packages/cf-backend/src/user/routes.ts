@@ -39,11 +39,11 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   | 'listDevices' | 'issueDeviceJoin' | 'acknowledgeUnstoppedDevice' | 'revokeDevice' | 'renameDevice' | 'listDeviceConsents'
   | 'setDeviceTier' | 'revokeDeviceConsent'
   | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'checkpointCredentials' | 'restoreCredentials' | 'listActiveWorkspaces' | 'getAuthHeaders'
-  | 'getCodexStatus' | 'disconnectCodex' | 'startCodexDeviceFlow' | 'pollCodexDeviceFlow' | 'startClaudeSignIn' | 'finishClaudeSignIn'
+  | 'getCodexStatus' | 'disconnectCodex' | 'startClaudeSignIn' | 'finishClaudeSignIn'
   | 'chatgptPlan' | 'startChatGptSignIn' | 'cancelChatGptSignIn' | 'startChatGptPasteSignIn' | 'finishChatGptPasteSignIn' | 'signOutChatGpt'
-  | 'listConfig' | 'getConfig' | 'setConfig' | 'listConnectedProviders'
+  | 'getConfig' | 'setConfig'
   | 'listCloudflareAccounts' | 'selectCloudflareAccount' | 'listAIGateways' | 'selectAIGateway'
-  | 'userMcp_list' | 'userMcp_presets' | 'userMcp_add' | 'userMcp_remove' | 'userMcp_update'
+  | 'userMcp_list' | 'userMcp_presets' | 'userMcp_add' | 'userMcp_remove'
   | 'userMcp_handleOAuthCallback'
   | 'accountMemory_view' | 'accountMemory_decide' | 'accountMemory_put' | 'accountMemory_forget' | 'accountMemory_forgetNote'
 >;
@@ -396,19 +396,6 @@ userRoutes.delete('/api/user/codex', async (c) => {
   return json({ body: { ok: true, ...outcome } });
 });
 
-/** An empty body signs in the main account; `{ account }` signs in `codex.oauth@<account>`. */
-userRoutes.post('/api/user/codex/start', (c) => settle(Effect.tryPromise({
-  try: async () => {
-    const body = await c.req.text();
-    const named = body === '' ? undefined : v.safeParse(v.object({ account: v.string() }), safeJsonParse(body));
-
-    if (named !== undefined && !named.success) return err(400, 'Body must be empty or { account }');
-
-    return json({ body: await c.get('stub').startCodexDeviceFlow(c.get('owner'), named?.output.account) });
-  },
-  catch: (cause) => toKinuError({ doing: 'starting the Codex sign-in', cause, otherwise: 'unavailable' }),
-})));
-
 async function answerSettingsRead<T>(c: UserContext, read: Promise<T>, moved: (value: T) => boolean): Promise<Response> {
   const value = await read;
 
@@ -416,11 +403,6 @@ async function answerSettingsRead<T>(c: UserContext, read: Promise<T>, moved: (v
 
   return json({ body: value });
 }
-
-userRoutes.post('/api/user/codex/poll', (c) => settle(Effect.tryPromise({
-  try: () => answerSettingsRead(c, c.get('stub').pollCodexDeviceFlow(c.get('owner')), (status) => status.connected),
-  catch: (cause) => toKinuError({ doing: 'checking the Codex sign-in', cause, otherwise: 'unavailable' }),
-})));
 
 userRoutes.get('/api/user/chatgpt', async (c) => answerSettingsRead(c, c.get('stub').chatgptPlan(c.get('owner')), (plan) => plan.changed));
 
@@ -475,8 +457,6 @@ userRoutes.post('/api/user/claude/finish', async (c) => {
   return json({ body: status });
 });
 
-userRoutes.get('/api/user/config', async (c) => json({ body: await c.get('stub').listConfig(c.get('owner')) }));
-
 // Refused whatever the method.
 userRoutes.all('/api/user/config/:key', async (c, next) => {
   const key = decodeURIComponent(rawParam(c, 'key'));
@@ -505,8 +485,6 @@ userRoutes.put('/api/user/config/:key', async (c) => {
 
   return json({ body: { ok: true } });
 });
-
-userRoutes.get('/api/user/providers', async (c) => json({ body: await c.get('stub').listConnectedProviders(c.get('owner')) }));
 
 userRoutes.get('/api/user/providers/catalog', async (c) => json({
   body: await listProviderCatalog(c.env, c.get('identity').userId, c.get('owner')),
@@ -606,23 +584,6 @@ userRoutes.delete('/api/user/mcp/servers/:id', (c) => settle(Effect.tryPromise({
   },
   catch: (cause) => authoredRefusal({ doing: 'removing this MCP server', cause }),
 })));
-
-userRoutes.patch('/api/user/mcp/servers/:id', (c) => {
-  return settle(Effect.gen(function* () {
-    const body = yield* Effect.promise(async () => safeJson(c.req.raw, JsonValueSchema));
-
-    if (body === null) return err(400, 'Body must be JSON');
-
-    return yield* Effect.tryPromise({
-      try: async () => {
-        await c.get('stub').userMcp_update(c.get('owner'), c.get('key'), body);
-
-        return json({ body: { ok: true } });
-      },
-      catch: (cause) => authoredRefusal({ doing: 'updating this MCP server', cause }),
-    });
-  }));
-});
 
 // The account's memory, owner only (`memory.account.manage`): every fact with its history, every note, what waits.
 userRoutes.get('/api/user/memory', mcpRead((stub, owner) => stub.accountMemory_view(owner)));

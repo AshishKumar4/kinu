@@ -212,6 +212,8 @@ export type RunEndOutcome = { readonly ended: AgentTurnEnd } | { readonly refuse
  *  input retires only then, so an agent that dies first runs it again. */
 export interface RunEndReport {
   readonly id: string;
+  /** The generation that ended: a caller its workspace re-drove after a reset awaits its own, under the same id. */
+  readonly runId: string;
   readonly outcome: RunEndOutcome;
 }
 

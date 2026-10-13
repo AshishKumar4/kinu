@@ -104,7 +104,7 @@ test("a stale report's run end leaves the panel on the newer figures", async () 
     standing: {
       messageCount: 0, measures: recorder.readContextMeasures(), latestRun: null, pendingSteers: [], plans: { pending: false, revision: 0 }, questions: 0,
     },
-    runEnds: [{ id: 'stale-run', outcome: { ended } }],
+    runEnds: [{ id: 'stale-run', runId: 'stale-run', outcome: { ended } }],
     working: false,
   });
 

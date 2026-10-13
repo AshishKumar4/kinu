@@ -1,54 +1,12 @@
 
-import type { Usage } from '../usage';
 import type { MissionGovernor } from '../mission-budget';
-import type { ToolOutcome } from '../tools/outcome';
-import type { Struggle } from './struggles';
-import type { TrialTurn } from './trial-rules';
+import type * as v from 'valibot';
+import type { CompletedTurnSchema } from './session-window';
 
-export interface ToolCallRecord {
-  toolCallId?: string;
-  name: string;
-  outcome?: ToolOutcome;
-  argsWindow: string;
-  resultWindow?: string;
-  target: string;
-  program?: string;
-  op: string | null;
-  argsDigest: string | null;
-  writtenPaths: string[];
-  revisitedPaths: string[];
-}
+/** One completed turn, as `CompletedTurnSchema` (`session-window.ts`) stores and reads it. */
+export type CompletedTurn = v.InferOutput<typeof CompletedTurnSchema>;
 
-export interface CompletedTurn {
-  userMessage: string;
-  assistantResponse: string;
-  toolCalls: ToolCallRecord[];
-  /** Crafted tools this turn called, per the craft clock. Not derivable from `toolCalls`:
-     *  crafted tools are codemode-only. Empty = observed none; absent = not observed. */
-  craftedToolsUsed?: readonly string[];
-  steps: number;
-  durationMs: number;
-  /** Null at completion; set later by EvolutionEngine.reviewTurn. */
-  feedback: 'positive' | 'negative' | null;
-  hadError: boolean;
-  /** Durable id of the turn's assistant message. */
-  turnId?: string;
-  sessionId?: string;
-  /** Only user-origin turns treat user follow-ups as verdicts. */
-  origin?: 'user' | 'programmatic';
-  usage?: Usage;
-  /** Mission labels stamped when the turn ended. Carried by the turn because a deferred
-     *  review may run with no active scope. Absent = ungoverned; a review must never invent one. */
-  missionLabels?: readonly string[];
-  /** Where the turn fought its tools, from its steering detector; absent on turns recorded before. */
-  struggles?: readonly Struggle[];
-  /** The tool lessons its steps listed, at the revision each saw; only these does the turn score. */
-  shownLessons?: readonly { readonly id: string; readonly revision: number }[];
-  /** The live trial's arm the turn ran; its errors and steps are the trial's guardrails. */
-  trial?: TrialTurn;
-  /** The turn ended on a question to its owner: its call waits for the answer, so no tool result records it. */
-  askedOwner?: boolean;
-}
+export type ToolCallRecord = CompletedTurn['toolCalls'][number];
 
 export interface CompletedSession {
   sessionId: string;
