@@ -1,12 +1,14 @@
 /**
- * Environment: one card per environment with the selected terminal below. Capability
- * doctrine stays model-facing (core/src/prompting/volatile-context.ts); file browsing lives in Files.
+ * Environment: the machines this workspace runs on, as one surface on the column's ground. A row of chips chooses the
+ * machine; its head says what it is, its state and its actions; under it, its terminal or, for the computer, its
+ * screen, from one hairline to the column's foot. Capability doctrine stays model-facing
+ * (core/src/prompting/volatile-context.ts); file browsing lives in Files.
  */
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useParams } from "react-router-dom";
 import {
-  ArrowSquareOutIcon, CircleIcon, DesktopIcon, DesktopTowerIcon, FolderOpenIcon, GitForkIcon, LockSimpleIcon, PlugIcon, SquaresFourIcon,
-  type Icon,
+  ArrowSquareOutIcon, DesktopIcon, DesktopTowerIcon, FolderOpenIcon, GitForkIcon, LockSimpleIcon, PlugIcon, PlusIcon,
+  SquaresFourIcon, type Icon,
 } from "@phosphor-icons/react";
 import { EXECUTOR_MOUNTS, desktopClientUrl, type MountInfo } from "@kinu.run/core";
 import type { ExecutorCommandResult, Rpc } from "@kinu.run/core";
@@ -15,13 +17,14 @@ import {
   pickDefaultExecutor,
   type ExecutorInfo,
 } from "@kinu.run/core";
+import { DESKTOP_SIZE } from "@kinu.run/devbox/desktop";
 import type { ExecutorOutput } from "@/hooks/use-chat-owner";
 import { lazyRoute } from "@/lazy-route";
 import type { TerminalPaneProps } from "@/components/TerminalPane";
 import { Loader } from "@cloudflare/kumo";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { SandboxSizeRow } from "@/components/SandboxSize";
+import { ComputerSize, useComputerSize } from "@/components/SandboxSize";
 import { Segmented } from "@/components/ui/Segmented";
 import { DesktopScreen } from "./DesktopScreen";
 
@@ -51,39 +54,42 @@ function filesRootFor(name: string): string | null {
   return prefixes[name] ?? null;
 }
 
-/** Each environment's mark, the one the Files drive and the device pages use for the same thing. */
-const ENVIRONMENT_ICONS = {
-  workspace: SquaresFourIcon,
-  device: DesktopTowerIcon,
-  computer: DesktopIcon,
-  parent: GitForkIcon,
-} satisfies Record<string, Icon>;
+/** Each environment's mark, the one the Files drive and the device pages use for the same thing, and what it is. */
+const ENVIRONMENTS = {
+  workspace: { Icon: SquaresFourIcon, about: "The workspace's own files and shell" },
+  device: { Icon: DesktopTowerIcon, about: "Your machine, linked with kinu connect" },
+  computer: { Icon: DesktopIcon, about: "Linux in the cloud" },
+  parent: { Icon: GitForkIcon, about: "The workspace this one was forked from" },
+} satisfies Record<string, { readonly Icon: Icon; readonly about: string }>;
 
-function environmentIcon(name: string): Icon {
-  return Object.entries(ENVIRONMENT_ICONS).find(([key]) => key === name)?.[1] ?? PlugIcon;
+function environmentOf(name: string): { readonly Icon: Icon; readonly about: string } {
+  return Object.entries(ENVIRONMENTS).find(([key]) => key === name)?.[1] ?? { Icon: PlugIcon, about: executorLabel(name) };
 }
 
 /** A PC that is not connected is an offer to connect one, not an environment. */
 const isOfferedPc = (mount: MountInfo): boolean => mount.name === "device" && !mount.live;
 
-type StatusReading = { word: string; dotClass: string };
+/** One status language for every machine: a dot's tone and a word. */
+type Tone = "working" | "ready" | "attention" | "off" | "danger";
+
+interface StatusReading { readonly word: string; readonly tone: Tone }
 
 function statusOf(mount: MountInfo, exec: ExecutorInfo | undefined): StatusReading {
   // Reach before liveness, but only for a live row: `granted` is answered only while
   // the machine is connected, so a not-live mount stays offline.
-  if (mount.live && mount.name === "device" && exec?.granted === false) {
-    return { word: "needs approval", dotClass: "p-info" };
-  }
+  if (mount.live && mount.name === "device" && exec?.granted === false) return { word: "Needs approval", tone: "attention" };
 
-  if (!mount.live) return { word: "offline", dotClass: "p-text-3" };
+  if (!mount.live) return { word: mount.name === "computer" ? "Not available" : "Offline", tone: "off" };
 
-  if (exec?.status === "error") return { word: "error", dotClass: "p-danger" };
+  if (exec?.status === "error") return { word: "Error", tone: "danger" };
 
-  if (exec && isExecutorActive(exec)) return { word: "active", dotClass: "p-success" };
+  if (exec && isExecutorActive(exec)) return { word: "Running", tone: "working" };
 
-  if (exec?.status === "idle" || exec?.configured) return { word: "idle", dotClass: "p-info" };
+  return { word: "Ready", tone: "ready" };
+}
 
-  return { word: "live", dotClass: "p-success" };
+function Dot({ tone }: { tone: Tone }) {
+  return <span aria-hidden className="p-env-dot" data-tone={tone} />;
 }
 
 export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
@@ -123,44 +129,48 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
   const selectedExec = selectedMount ? execByName.get(selectedMount.name) : undefined;
 
   return (
-    <div className="flex flex-col h-full -m-5">
-      <div className="px-4 pt-3 pb-3 space-y-3 shrink-0 border-b p-border">
-        {resource.status === "error" && (
-          <LoadFailure what="the environments" message={resource.message} onRetry={reload} className="p-card px-3 py-2" />
+    <div className="flex h-full flex-col">
+      <div role="group" aria-label="Environments" className="flex shrink-0 flex-wrap gap-1.5 px-4 pt-4">
+        {environments.map((m) => {
+          const exec = execByName.get(m.name);
+          const { Icon: KindIcon } = environmentOf(m.name);
+          const active = selectedMount?.name === m.name;
+
+          return (
+            <div key={m.name} data-env-card={m.name} className="min-w-0">
+              <button type="button" data-env-select onClick={() => setSelected(m.name)} aria-pressed={active} className="p-env-chip">
+                <KindIcon size={14} weight={active ? "fill" : "regular"} className="shrink-0" aria-hidden />
+                <span className="truncate">{exec?.label ?? executorLabel(m.name)}</span>
+                <Dot tone={statusOf(m, exec).tone} />
+              </button>
+            </div>
+          );
+        })}
+        {pcOffered && (
+          <button type="button" data-env-connect onClick={onConnectDevice} aria-label="Connect a PC" title="Connect a PC"
+            className="p-env-chip border-dashed p-text-3">
+            <PlusIcon size={13} className="shrink-0" aria-hidden /><span className="hidden @[30rem]:inline">Connect a PC</span>
+          </button>
         )}
-
-        <section aria-label="Environments">
-          <div className="flex items-center gap-2 mb-2">
-            <span className="p-label">Environments</span>
-          </div>
-          {/* A track of minmax(0, 1fr) at every width: an implicit one sized to the widest card's content, its size choice
-              the widest, and pushed every card past the panel (staging, 2026-10-08). */}
-          <div className="grid grid-cols-1 items-start gap-2 @[38rem]:grid-cols-2 @[64rem]:grid-cols-3">
-            {environments.map((m) => (
-              <EnvironmentCard
-                key={m.name}
-                rpc={rpc}
-                mount={m}
-                exec={execByName.get(m.name)}
-                active={selectedMount?.name === m.name}
-                onSelect={() => setSelected(m.name)}
-                onOpenFiles={onOpenFiles}
-              />
-            ))}
-            {mounts.length === 0 && loaded !== null && <span className="text-xs p-text-3">No environments available.</span>}
-            {mounts.length === 0 && resource.status === "loading" && <span className="text-xs p-text-3">loading…</span>}
-          </div>
-          {pcOffered && <ConnectPcOffer onConnectDevice={onConnectDevice} />}
-        </section>
+        {mounts.length === 0 && loaded !== null && <span className="p-meta p-text-3">No environments available.</span>}
+        {mounts.length === 0 && resource.status === "loading" && <Loader size="sm" />}
       </div>
+      {resource.status === "error" && (
+        <LoadFailure what="the environments" message={resource.message} onRetry={reload} className="mx-4 mt-3 p-card px-3 py-2" />
+      )}
 
-      <SelectedEnvironmentPane
-        mount={selectedMount}
-        exec={selectedExec}
-        workspace={workspaceName}
-        executorOutputs={executorOutputs}
-        onExecute={onExecute}
-      />
+      {selectedMount === null ? <div className="min-h-0 flex-1" /> : (
+        <SelectedEnvironment
+          key={selectedMount.name}
+          rpc={rpc}
+          mount={selectedMount}
+          exec={selectedExec}
+          workspace={workspaceName}
+          executorOutputs={executorOutputs}
+          onExecute={onExecute}
+          onOpenFiles={onOpenFiles}
+        />
+      )}
     </div>
   );
 }
@@ -169,157 +179,156 @@ type PaneView = "terminal" | "desktop";
 
 const PANE_VIEWS = [{ id: "terminal", label: "Terminal" }, { id: "desktop", label: "Desktop" }] as const;
 
-function SelectedEnvironmentPane({ mount, exec, workspace, executorOutputs, onExecute }: {
-  mount: MountInfo | null;
+function SelectedEnvironment({ rpc, mount, exec, workspace, executorOutputs, onExecute, onOpenFiles }: {
+  rpc: Rpc;
+  mount: MountInfo;
   exec: ExecutorInfo | undefined;
   workspace: string;
   executorOutputs: Map<string, ExecutorOutput[]>;
   onExecute: (id: string, cmd: string) => Promise<ExecutorCommandResult>;
-}) {
-  const [view, setView] = useState<PaneView>("terminal");
-
-  if (mount === null) return <div className="flex-1 min-h-0" />;
-
-  if (exec?.granted === false) {
-    return (
-      <div className="flex-1 min-h-0">
-        <NeedsApprovalMount exec={exec} />
-      </div>
-    );
-  }
-
-  if (!mount.live) {
-    return (
-      <div className="flex-1 min-h-0">
-        <UnavailableMount mount={mount} exec={exec} />
-      </div>
-    );
-  }
-
-  const name = exec?.label ?? executorLabel(mount.name);
-  const KindIcon = environmentIcon(mount.name);
-  // Only the computer has a screen.
-  const desktop = exec?.name === "computer" ? desktopClientUrl(location, workspace) : null;
-  const shown = desktop === null ? "terminal" : view;
-  const desktopTitle = `${name}'s desktop`;
-
-  return (
-    <div className="flex flex-col flex-1 min-h-0 gap-1.5 px-3 pt-2.5 pb-3">
-      <div className="flex items-center gap-2 min-w-0 shrink-0 min-h-8">
-        <KindIcon size={14} className="shrink-0 p-text-3" aria-hidden />
-        <span className="p-row-text font-medium p-text truncate">{name}</span>
-        {desktop !== null && (
-          <div className="ml-auto flex shrink-0 items-center gap-1.5">
-            {shown === "desktop" && (
-              <a href={`/workspace/${encodeURIComponent(workspace)}/desktop`} target="_blank" rel="noreferrer" data-desktop-open aria-label={`Open ${desktopTitle} in a new tab`}
-                title="Open in a new tab"
-                className="inline-flex size-7 items-center justify-center rounded-md p-text-3 hover:p-text hover:p-fill">
-                <ArrowSquareOutIcon size={14} />
-              </a>
-            )}
-            <Segmented label={`${name}: terminal or desktop`} segments={PANE_VIEWS} value={shown} onChange={setView} />
-          </div>
-        )}
-      </div>
-      <div className="flex-1 min-h-0">
-        {shown === "desktop" && desktop !== null && <DesktopScreen src={desktop} title={desktopTitle} />}
-        {shown === "terminal" && (exec ? (
-          <Suspense fallback={<div className="h-full flex items-center justify-center"><Loader size="sm" /></div>}>
-            <TerminalPane
-              workspace={workspace}
-              executor={exec.name}
-              outputs={executorOutputs.get(exec.name) ?? []}
-              onExecute={(cmd) => onExecute(exec.name, cmd)}
-            />
-          </Suspense>
-        ) : (
-          <div className="h-full flex items-center justify-center text-xs p-text-3">
-            This environment has no command lane.
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function EnvironmentCard({ rpc, mount, exec, active, onSelect, onOpenFiles }: {
-  rpc: Rpc;
-  mount: MountInfo;
-  exec: ExecutorInfo | undefined;
-  active: boolean;
-  onSelect: () => void;
   onOpenFiles: (root: string) => void;
 }) {
-  const executor = mount.name;
+  const [view, setView] = useState<PaneView>("terminal");
+  const computer = mount.name === "computer";
+  // The computer's size, read once here: its control sits in the head, its restart covers the view.
+  const size = useComputerSize(rpc, computer && mount.live);
+  const name = exec?.label ?? executorLabel(mount.name);
   const status = statusOf(mount, exec);
-  const filesRoot = filesRootFor(executor);
-  // Named by the device's label where bound, else the executor kind.
-  const title = exec?.label ?? executorLabel(executor);
-  const kindTag = exec?.label ? executorLabel(executor) : null;
-  const KindIcon = environmentIcon(executor);
+  const filesRoot = filesRootFor(mount.name);
+  const { about } = environmentOf(mount.name);
+  const usable = mount.live && exec?.granted !== false;
+  // Only the computer has a screen.
+  const desktop = usable && exec?.name === "computer" ? desktopClientUrl(location, workspace) : null;
+  const shown = desktop === null ? "terminal" : view;
+  const desktopTitle = `${name}'s desktop`;
+  const specs = computer ? size.specs : null;
+  const restarting = computer && size.pending === "resize";
+
+  const leading: ReactNode = desktop === null
+    ? <span className="p-row-text font-medium p-text">Terminal</span>
+    : <Segmented label={`${name}: terminal or desktop`} segments={PANE_VIEWS} value={shown} onChange={setView} />;
 
   return (
-    <div
-      data-env-card={mount.name}
-      className={`relative p-card min-w-0 rounded-lg px-3 py-2.5 space-y-1 transition-colors border ${
-        active ? "border-[rgba(224,164,88,.4)] bg-[rgba(224,164,88,.05)]" : "p-border hover:border-[var(--c-border-strong)]"
-      } ${mount.live ? "" : "border-dashed"}`}
-    >
-      <div className="flex items-center gap-2 min-w-0">
-        <KindIcon size={15} className={`shrink-0 ${active ? "p-accent" : "p-text-3"}`} aria-hidden />
-        {/* The whole card selects: the name's button stretches over it, and the card's own controls sit above it. */}
-        <button
-          type="button"
-          data-env-select
-          onClick={onSelect}
-          aria-pressed={active}
-          className={`min-w-0 truncate text-left p-row-text font-medium after:absolute after:inset-0 after:rounded-lg focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-[var(--c-accent)] ${
-            mount.live ? "p-text" : "p-text-3"
-          }`}
-        >{title}</button>
-        {kindTag !== null && (
-          <span className="p-meta p-text-4 shrink-0">{kindTag}</span>
+    <section aria-label={name} className="flex min-h-0 flex-1 flex-col">
+      <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2.5 px-4 pt-4 pb-1">
+        <div className="min-w-[12rem] flex-1">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <h3 className="p-env-name truncate">{name}</h3>
+            <span data-env-status className="p-env-state shrink-0" data-tone={restarting ? "working" : status.tone}>
+              <Dot tone={restarting ? "working" : status.tone} />{restarting ? "Restarting" : status.word}
+            </span>
+            {mount.policy.readOnly && <span title="Read-only" className="flex shrink-0 p-text-3"><LockSimpleIcon size={12} aria-label="Read-only" /></span>}
+          </div>
+          {mount.live && (
+            <p className="p-env-specs mt-0.5 truncate">
+              {about}{specs !== null && ` · ${specs}`}{filesRoot !== null && <> · <span data-env-mount className="p-annotation">{filesRoot}</span></>}
+            </p>
+          )}
+        </div>
+        {mount.live && (
+          <div className="flex shrink-0 items-center gap-1.5">
+            {computer && <ComputerSize state={size} />}
+            {filesRoot !== null && (
+              <button type="button" data-env-files onClick={() => onOpenFiles(filesRoot)} title={`Browse ${name}'s files at ${filesRoot}`} className="p-env-action">
+                <FolderOpenIcon size={13} aria-hidden />Files
+              </button>
+            )}
+          </div>
         )}
-        {mount.policy.readOnly && (
-          <span title="read-only" className="shrink-0 flex"><LockSimpleIcon size={11} className="p-text-3" /></span>
-        )}
-        <span data-env-status className="ml-auto flex shrink-0 items-center gap-1 p-t-status p-text-3">
-          <CircleIcon size={7} weight="fill" className={status.dotClass} aria-hidden />{status.word}
-        </span>
+      </header>
+      {computer && size.notice}
+
+      {exec?.granted === false && <NeedsApprovalMount exec={exec} />}
+      {exec?.granted !== false && !mount.live && <UnavailableMount mount={mount} exec={exec} />}
+      {usable && restarting && (
+        <ViewBar leading={leading}>
+          <Restarting to={size.restartingTo} />
+        </ViewBar>
+      )}
+      {usable && !restarting && shown === "desktop" && desktop !== null && (
+        <ViewBar leading={leading} trailing={
+          <a href={`/workspace/${encodeURIComponent(workspace)}/desktop`} target="_blank" rel="noreferrer" data-desktop-open
+            aria-label={`Open ${desktopTitle} in a new tab`} className="inline-flex items-center gap-1.5 p-meta p-text-3 hover:p-text">
+            <ArrowSquareOutIcon size={13} aria-hidden />New tab
+          </a>
+        }>
+          {/* The screen at its own shape across the column, so the client draws it edge to edge. */}
+          <div className="w-full" style={{ aspectRatio: `${String(DESKTOP_SIZE.width)} / ${String(DESKTOP_SIZE.height)}` }}>
+            <DesktopScreen src={desktop} title={desktopTitle} />
+          </div>
+        </ViewBar>
+      )}
+      {usable && !restarting && shown === "terminal" && (
+        <div className="@container min-h-0 flex-1">
+          {exec ? (
+            <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader size="sm" /></div>}>
+              <TerminalPane
+                workspace={workspace}
+                executor={exec.name}
+                outputs={executorOutputs.get(exec.name) ?? []}
+                onExecute={(cmd) => onExecute(exec.name, cmd)}
+                leading={leading}
+              />
+            </Suspense>
+          ) : (
+            <Absence icon={PlugIcon} title="No command lane">This environment runs no commands.</Absence>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/** The view's bar, the hairline, and the view on the terminal's ground to the column's foot. */
+function ViewBar({ leading, trailing, children }: { leading: ReactNode; trailing?: ReactNode; children: ReactNode }) {
+  return (
+    <>
+      <div className="flex h-11 shrink-0 items-center gap-3 pr-2 pl-4">
+        {leading}
+        {trailing !== undefined && <span className="ml-auto flex items-center gap-3">{trailing}</span>}
       </div>
-      <div className="flex items-center gap-2 min-w-0 min-h-6">
-        <span data-env-mount className="p-annotation p-text-3 truncate">{filesRoot ?? "no files here"}</span>
-        {mount.live && filesRoot !== null && (
-          <button
-            type="button"
-            data-env-files
-            onClick={() => onOpenFiles(filesRoot)}
-            className="relative ml-auto flex shrink-0 items-center gap-1 px-2 py-0.5 rounded-md p-t-control p-text-2 hover:p-text hover:p-fill"
-            title={`Browse ${title}'s files at ${filesRoot}`}
-          ><FolderOpenIcon size={12} />Files</button>
-        )}
+      <div className="p-terminal-ground flex min-h-0 flex-1 flex-col border-t p-border">{children}</div>
+    </>
+  );
+}
+
+/** A resize restarts the container: files and supervised services come back, a shell does not (D50; staging 2026-10-13). */
+function Restarting({ to }: { to: string | null }) {
+  return (
+    <div role="status" className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+      <span className="p-dot-pulse"><DesktopIcon size={24} className="p-accent" aria-hidden /></span>
+      <div className="space-y-1">
+        <p className="p-row-text font-semibold p-text">{to === null ? "Restarting" : `Restarting at ${to}`}</p>
+        <p className="p-meta p-text-3">Your files stay and services start again; open terminals start fresh.</p>
       </div>
-      {executor === "computer" && <div className="relative pt-1"><SandboxSizeRow rpc={rpc} /></div>}
     </div>
   );
 }
 
-function UnavailableMount({ mount, exec }: { mount: MountInfo; exec: ExecutorInfo | undefined }) {
-  const docs = mount.name === "computer"
-      ? { text: "This deployment has no computer. Use the Workspace shell instead.", href: "https://github.com/AshishKumar4/kinu/blob/main/docs/EXECUTION-LAYER-SPEC.md" }
-      : { text: mount.reason ?? exec?.reason ?? "This environment is not enabled here.", href: "https://github.com/AshishKumar4/kinu/blob/main/docs/EXECUTION-LAYER-SPEC.md" };
-
+/** The chosen environment's absence, said in its place: the reason, and where to read more. */
+function Absence({ icon: Mark, title, children }: { icon: Icon; title: string; children: ReactNode }) {
   return (
-    <div className="h-full flex items-center justify-center p-6">
-      <div className="max-w-md text-center space-y-3">
-        <PlugIcon size={28} className="p-text-3 mx-auto" />
-        <div className="text-sm font-medium p-text">{executorLabel(mount.name)} is not available here</div>
-        <p className="text-xs p-text-2 leading-relaxed">
-          {docs.text}{" "}
-          <a href={docs.href} target="_blank" rel="noreferrer" className="p-accent hover:underline">Learn more</a>
-        </p>
+    <div className="flex min-h-0 flex-1 items-center justify-center border-t p-border px-8">
+      <div className="max-w-sm space-y-2 text-center">
+        <Mark size={22} className="mx-auto p-text-3" aria-hidden />
+        <p className="p-row-text font-semibold p-text">{title}</p>
+        <p className="p-meta p-text-2">{children}</p>
       </div>
     </div>
+  );
+}
+
+const EXECUTION_DOCS = "https://github.com/AshishKumar4/kinu/blob/main/docs/EXECUTION-LAYER-SPEC.md";
+
+function UnavailableMount({ mount, exec }: { mount: MountInfo; exec: ExecutorInfo | undefined }) {
+  const text = mount.name === "computer"
+    ? "This deployment has no computer. Use the Workspace shell instead."
+    : mount.reason ?? exec?.reason ?? "This environment is not enabled here.";
+
+  return (
+    <Absence icon={PlugIcon} title={`${executorLabel(mount.name)} is not available here`}>
+      {text}{" "}<a href={EXECUTION_DOCS} target="_blank" rel="noreferrer" className="p-accent hover:underline">Learn more</a>
+    </Absence>
   );
 }
 
@@ -328,28 +337,8 @@ function NeedsApprovalMount({ exec }: { exec: ExecutorInfo }) {
   const name = exec.label ?? executorLabel(exec.name);
 
   return (
-    <div className="h-full flex items-center justify-center p-6" data-env-needs-approval>
-      <div className="max-w-md text-center space-y-3">
-        <LockSimpleIcon size={26} className="p-text-3 mx-auto" />
-        <div className="text-sm font-medium p-text">{name} needs approval</div>
-        <p className="text-xs p-text-2 leading-relaxed">
-          {name} is connected. When this workspace runs its first command on it,
-          you choose whether to grant access.
-        </p>
-      </div>
-    </div>
-  );
-}
-
-/** A PC that is not connected: one quiet line under the environments that offers to connect it. */
-function ConnectPcOffer({ onConnectDevice }: { onConnectDevice: () => void }) {
-  return (
-    <p className="mt-2 flex items-center gap-1.5 p-meta p-text-3">
-      <DesktopTowerIcon size={13} className="shrink-0" aria-hidden />
-      <span>
-        <button type="button" data-env-connect onClick={onConnectDevice} className="p-accent font-medium hover:underline">Connect your PC</button>
-        {" "}to run commands and open its files here.
-      </span>
-    </p>
+    <Absence icon={LockSimpleIcon} title={`${name} needs approval`}>
+      It is connected. When this workspace runs its first command on it, you choose whether to grant access.
+    </Absence>
   );
 }

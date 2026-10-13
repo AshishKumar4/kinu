@@ -13,7 +13,8 @@ import type { KinuDevbox } from '../src/kinu-devbox';
 import { adaptCloudflareSandbox } from '../src/sandbox-exec-lane';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
 import { accountSandboxSize, SANDBOX_SIZE_CONFIG_KEY } from '../src/sandbox-size';
-import { startRefusedNote, workspaceSizeNote, workspaceSizeOptions } from '../src/lib/sandbox-size-text';
+import { sandboxSizeText, sizeSpecs, startRefusedNote, workspaceSizeNote, workspaceSizeOptions } from '../src/lib/sandbox-size-text';
+import { BOX_SIZES, BOX_SIZE_ORDER, DEFAULT_BOX_SIZE } from '@kinu.run/devbox/sizes';
 import { settingsSection } from '../src/components/SettingsRail';
 import { serveFamily } from './helpers/api';
 import { unreachableNamespace, workerContext } from './helpers/bindings';
@@ -71,14 +72,17 @@ describe("the owner's account default", () => {
 });
 
 describe('what the owner reads', () => {
-  test("the Environment card offers the account default, named, then every size", () => {
-    expect(workspaceSizeOptions('large')).toEqual([
-      { value: 'account', label: 'Account default: Large · 4 vCPU · 12 GiB · 20 GB disk' },
-      { value: 'small', label: 'Small · 1 vCPU · 4 GiB · 20 GB disk' },
-      { value: 'medium', label: 'Medium · 2 vCPU · 8 GiB · 20 GB disk' },
-      { value: 'large', label: 'Large · 4 vCPU · 12 GiB · 20 GB disk' },
-    ]);
-    expect(workspaceSizeOptions(null)[0]?.label).toBe('Account default: Medium · 2 vCPU · 8 GiB · 20 GB disk');
+  test("the Environment card offers the account default, named by the size it is, then every size with what it gives", () => {
+    const offered = workspaceSizeOptions('large');
+
+    expect(offered.map((option) => option.value)).toEqual(['account', ...BOX_SIZE_ORDER]);
+    expect(offered[0]?.label).toContain(sandboxSizeText('large'));
+    expect(workspaceSizeOptions(null)[0]?.label).toContain(sandboxSizeText(DEFAULT_BOX_SIZE));
+
+    for (const size of BOX_SIZE_ORDER) {
+      expect(offered.find((option) => option.value === size)?.label).toContain(BOX_SIZES[size].label);
+      expect(offered.find((option) => option.value === size)?.label).toContain(sizeSpecs(size));
+    }
   });
 
   const NOTES = [

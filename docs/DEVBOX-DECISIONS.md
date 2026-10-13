@@ -4574,6 +4574,25 @@ by lands in its scrollback. A server already running loads it at the next attach
 stock attach drew `[devbox] 0:bash* "<container id>"` on the last row; the configured attach drew only the prompt, and
 after `seq 1 120` a reattach showed 74 to 120 and the prompt, with the earlier lines in the page terminal's scrollback.
 
+D85. The desktop wears Kinu's look: a wallpaper painted at the screen's own size, and the panel, the windows' frames
+and the terminals in the same warm darks (2026-10-13). The owner: the desktop had no proper wallpaper, and it should be
+a clean desktop. D80's ground was one flat slate (`xsetroot -solid #3b4252`) under tint2's and Openbox's stock
+colours. Now `DESKTOP_START` writes four things and runs one more: tint2's panel in `DESKTOP_COLOURS` (a hairline along
+its top, the open window's task over the accent), an Openbox theme `Kinu` loaded from a copy of the stock `rc.xml`
+with only its theme's name changed, X resources that put every xterm on the ground, and a Python program that paints
+the root. The program speaks X11 over the server's socket with the standard library alone: the image carries
+`python3` and Chromium and no image tool (`hsetroot`, `feh`), and adding one means a new tools tarball (D78). It reads
+the root's size from the connection's setup, so it fills whatever geometry the server started at; paints the ground at
+once; asks Chromium, headless with a profile of its own, to draw the mark from the SVG the box's class passes
+(`desktopMark`; `KinuDevbox` passes core's `markDocument()`, so a new mark arrives with no copy); composes the ground's
+fall, the accent's glow from below the panel, ordered dither and the mark centred above the panel; and leaves it as
+the root's pixmap, kept by the server (`RetainPermanent`, `_XROOTPMAP_ID`). A root that already names a pixmap is left
+alone, so a later open repaints nothing, and the start no longer resets the root on each open. Chromium's warning
+about `--no-sandbox` is off by policy (`CommandLineFlagSecurityWarningsEnabled`), with no first-run page. Measured on
+staging `c6dc27da1`'s box, by hand, on two X servers started beside the real one: at 1280x768 and 1920x1080 the
+picture filled the screen exactly, the mark sat at the centre above a full-width panel, and the theme drew the
+frames. The container tier's desktop check reads the glow above the panel as well as the ground and the panel.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean

@@ -2876,6 +2876,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   protected async outboundPolicy(): Promise<OutboundPolicy> { return { routes: {} }; }
   /** The name the box answers to in its prompt, its desktop and its processes; unset, the platform's container id. */
   protected get hostname(): string | undefined { return undefined; }
+  /** The mark at the centre of the desktop's wallpaper, an SVG document drawn in its own colour (D85); unset, none. */
+  protected get desktopMark(): string | undefined { return undefined; }
   protected get namespaceBinding(): string { return this.constructor.name; }
 
   protected async configureContainer(reused = this.#adoptionPending || this.#restoration.phase === 'attached' || this.#restoration.phase === 'repair'): Promise<void> {
@@ -2935,7 +2937,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     return this.#withActiveCaller(Effect.gen({ self: this }, function* () {
       const { container } = yield* attempt('io', () => this.#ensureReady(this.#teardowns));
-      const started = yield* attempt('io', async () => await (await container.exec(['/bin/bash', '-c', DESKTOP_START, 'devbox-desktop'], { env: CONTAINER_TRUST_ENV })).output());
+      const started = yield* attempt('io', async () => await (await container.exec(['/bin/bash', '-c', DESKTOP_START, 'devbox-desktop', this.desktopMark ?? ''], { env: CONTAINER_TRUST_ENV })).output());
 
       if (started.exitCode !== 0) {
         return yield* Effect.fail(new DevboxError('io', `the desktop did not start: ${new TextDecoder().decode(started.stderr).trim()}`));

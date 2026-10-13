@@ -256,7 +256,8 @@ export function WorkSurface(props: WorkSurfaceProps) {
     { key: ACTIVITY_SURFACE },
   ];
 
-  const bodyFit = previewSelected ? "overflow-hidden" : "overflow-y-auto py-[18px] pl-[18px] pr-6";
+  // A page, and Environment's terminal and screen, fill the column edge to edge; the rest scroll inside its margins.
+  const bodyFit = previewSelected || surface === "Environment" ? "overflow-hidden" : "overflow-y-auto py-[18px] pl-[18px] pr-6";
 
   return (
     <div className="@container flex flex-col h-full p-sidebar">

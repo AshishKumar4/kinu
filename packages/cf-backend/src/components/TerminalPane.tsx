@@ -1,7 +1,8 @@
 // Native container PTY, device PTY, workspace shell and line-mode terminal lanes.
 
 import { Cause, Effect, type Exit } from 'effect';
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react";
 import { Terminal, type IDisposable } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import * as v from 'valibot';
@@ -23,9 +24,52 @@ export interface TerminalPaneProps {
   executor: string;
   outputs?: readonly TerminalPaneOutput[];
   onExecute?: (cmd: string) => Promise<ExecutorCommandResult>;
+  /** What the pane's bar shows at its left, before the terminal's own state: the view's switch, or its name. */
+  leading?: ReactNode;
 }
 
 type PtyState = 'connecting' | 'connected' | 'disconnected' | 'error';
+
+const STATE_SAYS: Record<PtyState, { readonly word: string; readonly tone: string }> = {
+  connecting: { word: "Connecting", tone: "working" },
+  connected: { word: "Connected", tone: "ready" },
+  disconnected: { word: "Disconnected", tone: "off" },
+  error: { word: "Not connected", tone: "danger" },
+};
+
+/**
+ * A terminal's one bar and its ground: the leading content, then the connection's state, the copy key and the
+ * pane's one action on the right; under a hairline, the terminal itself, edge to edge to the column's foot.
+ */
+function TerminalFrame({ leading, state, failure, copies, action, hostRef }: {
+  leading: ReactNode;
+  state: PtyState | null;
+  failure: string | null;
+  /** The copy key's note, and what ⌃C reaches here; null where the lane has no copy chord. */
+  copies: { readonly note: string; readonly title: string } | null;
+  action: ReactNode;
+  hostRef: RefObject<HTMLDivElement | null>;
+}) {
+  return (
+    <div className="flex h-full w-full flex-col">
+      <div className="flex h-11 shrink-0 items-center gap-3 pr-2 pl-4">
+        {leading}
+        <span className="ml-auto flex min-w-0 items-center gap-3 p-meta p-text-3">
+          {failure !== null && <span className="min-w-0 truncate p-danger" title={failure}>{failure}</span>}
+          {state !== null && (
+            <span data-terminal-state className="inline-flex shrink-0 items-center gap-1.5">
+              <span aria-hidden className="p-env-dot" data-tone={STATE_SAYS[state].tone} />{STATE_SAYS[state].word}
+            </span>
+          )}
+          {copies !== null && <span className="hidden shrink-0 @[28rem]:inline" title={copies.title}>{copies.note}</span>}
+          {action}
+        </span>
+      </div>
+      {/* FitAddon measures the host less its padding, so the text starts on the column's left edge. */}
+      <div ref={hostRef} className="p-terminal-ground min-h-0 flex-1 overflow-hidden border-t p-border pt-2 pl-4" />
+    </div>
+  );
+}
 
 /** The durable container lease moves only on object operations, not proxied frames;
  *  this beat keeps a container from quiescing under a typing user. */
@@ -34,14 +78,14 @@ const KEEPALIVE_MS = 60_000;
 /** xterm's default is 1000 lines, which a build log overruns in seconds. */
 const SCROLLBACK_LINES = 5_000;
 
-export function TerminalPane({ workspace, executor, outputs, onExecute }: TerminalPaneProps) {
+export function TerminalPane({ workspace, executor, outputs, onExecute, leading }: TerminalPaneProps) {
   const lane = terminalLane(executor);
 
-  if (lane.mode === "line") return <LineTerminal executor={executor} outputs={outputs ?? []} onExecute={onExecute} />;
+  if (lane.mode === "line") return <LineTerminal executor={executor} outputs={outputs ?? []} onExecute={onExecute} leading={leading} />;
 
-  if (lane.mode === "shell") return <WorkspaceTerminal workspace={workspace} executor={executor} />;
+  if (lane.mode === "shell") return <WorkspaceTerminal workspace={workspace} executor={executor} leading={leading} />;
 
-  return <PtyTerminal workspace={workspace} executor={executor} />;
+  return <PtyTerminal workspace={workspace} executor={executor} leading={leading} />;
 }
 
 
@@ -122,7 +166,7 @@ function useTerminalPalette(termRef: RefObject<Terminal | null>, theme: Theme): 
  * frames out. The device speaks `ready`/`exit`/`error` frames and is connected at `ready`; the native PTY sends bytes
  * only, is connected at open, and needs the keepalive and a restart the device does not.
  */
-function PtyTerminal({ workspace, executor }: { workspace: string; executor: string }) {
+function PtyTerminal({ workspace, executor, leading }: { workspace: string; executor: string; leading: ReactNode }) {
   const device = executor === "device";
   const theme = useTheme();
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -264,32 +308,23 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
     reconnect(value => value + 1);
   };
 
-  return (
-    <div className="w-full h-full flex flex-col">
-      <div className="flex items-center gap-2 px-1 py-1 shrink-0 p-meta p-text-3">
-        <span>{state === "connected" ? "interactive shell" : state}</span>
-        {failure !== null && <span className="p-danger truncate" title={failure}>{failure}</span>}
-        {device ? (
-          <span className="ml-auto shrink-0" title="⌃C interrupts the foreground program.">⇧⌃C copies</span>
-        ) : (
-          <>
-            <button type="button" onClick={() => detach(Effect.catchCause(Effect.gen(function* () {
-              yield* Effect.promise(async () => restart());
-            }), showing(setFailure)))}
-              className="ml-auto shrink-0 underline decoration-dotted hover:p-text-2 cursor-pointer"
-              title="Destroy this shell and open a new one. Use this after a shell exits.">
-              restart shell
-            </button>
-            {/* Job control is unavailable: the PTY shell is not a session leader, so ⌃C only reaches full-screen programs. */}
-            <span className="shrink-0" title="⌃C reaches a full-screen program. Suspend, fg and bg do not work here.">
-              ⇧⌃C copies · no job control
-            </span>
-          </>
-        )}
-      </div>
-      <div ref={hostRef} className="p-bg flex-1 min-h-0 rounded-lg border p-border overflow-hidden" />
-    </div>
+  // Job control is unavailable on the container's PTY: its shell is not a session leader, so ⌃C reaches only
+  // full-screen programs.
+  const copies = device
+    ? { note: "⇧⌃C copies", title: "⌃C interrupts the foreground program." }
+    : { note: "⇧⌃C copies", title: "⌃C reaches a full-screen program. Suspend, fg and bg do not work here." };
+
+  const restartShell = device ? null : (
+    <button type="button" aria-label="Restart the shell" title="Restart the shell: a new one, for after a shell exits"
+      onClick={() => detach(Effect.catchCause(Effect.gen(function* () {
+        yield* Effect.promise(async () => restart());
+      }), showing(setFailure)))}
+      className="p-bar-icon shrink-0">
+      <ArrowCounterClockwiseIcon size={14} />
+    </button>
   );
+
+  return <TerminalFrame leading={leading} state={state} failure={failure} copies={copies} action={restartShell} hostRef={hostRef} />;
 }
 
 /** Keystrokes out as bytes: the frame both PTY routes read. */
@@ -349,7 +384,7 @@ const DeviceTerminalMessageSchema = v.variant("type", [
 ]);
 
 /** `ready` arrives after the runtime replayed scrollback, so a reload lands on the same screen. */
-function WorkspaceTerminal({ workspace, executor }: { workspace: string; executor: string }) {
+function WorkspaceTerminal({ workspace, executor, leading }: { workspace: string; executor: string; leading: ReactNode }) {
   const theme = useTheme();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -420,25 +455,18 @@ function WorkspaceTerminal({ workspace, executor }: { workspace: string; executo
   useTerminalPalette(termRef, theme);
 
   return (
-    <div className="w-full h-full flex flex-col">
-      <div className="flex items-center gap-2 px-1 py-1 shrink-0 p-meta p-text-3">
-        <span>{state === "connected" ? "workspace shell" : state}</span>
-        {failure !== null && <span className="p-danger truncate" title={failure}>{failure}</span>}
-        <span className="ml-auto shrink-0" title="⌃C interrupts the running command.">
-          ⇧⌃C copies
-        </span>
-      </div>
-      <div ref={hostRef} className="p-bg flex-1 min-h-0 rounded-lg border p-border overflow-hidden" />
-    </div>
+    <TerminalFrame leading={leading} state={state} failure={failure} hostRef={hostRef} action={null}
+      copies={{ note: "⇧⌃C copies", title: "⌃C interrupts the running command." }} />
   );
 }
 
 
 function LineTerminal(
-  { executor, outputs, onExecute }: {
+  { executor, outputs, onExecute, leading }: {
     executor: string;
     outputs: readonly TerminalPaneOutput[];
     onExecute?: (cmd: string) => Promise<ExecutorCommandResult>;
+    leading: ReactNode;
   },
 ) {
   const theme = useTheme();
@@ -542,13 +570,8 @@ function LineTerminal(
   }, [outputs]);
 
   return (
-    <div className="w-full h-full flex flex-col">
-      <div className="flex items-center gap-2 px-1 py-1 shrink-0 p-meta p-text-3">
-        <span>{LINE_MODE_LABEL}</span>
-        {failure !== null && <span className="ml-auto p-danger truncate" title={failure}>{failure}</span>}
-      </div>
-      <div ref={hostRef} className="p-bg flex-1 min-h-0 rounded-lg border p-border overflow-hidden" />
-    </div>
+    <TerminalFrame leading={leading} state={null} failure={failure} hostRef={hostRef} action={null}
+      copies={{ note: LINE_MODE_LABEL, title: LINE_MODE_LABEL }} />
   );
 }
 

@@ -10,7 +10,7 @@ import {
 } from "@kinu.run/devbox";
 import { getAgentByName } from "agents";
 import { settleLogged } from "@kinu.run/core/obs";
-import { sandboxIdForWorkspace } from '@kinu.run/core';
+import { markDocument, sandboxIdForWorkspace } from '@kinu.run/core';
 import type { OrchestratorAgent } from "./orchestrator";
 import { lifecycleIncident, restoreNotices } from "./sandbox-lifecycle";
 import {
@@ -59,6 +59,9 @@ export class KinuDevbox extends Devbox<Env> {
 
   /** What the product calls the box (`executorLabel`), in its prompt and on its desktop. */
   protected override get hostname(): string { return 'computer'; }
+
+  /** The logo's own mark, so the desktop follows it when the mark changes. */
+  protected override get desktopMark(): string { return markDocument(); }
 
   protected override get registryToken(): string | undefined { return this.env.DEVBOX_REGISTRY_TOKEN; }
   protected override get registryAccount(): string | undefined { return this.env.CLOUDFLARE_ACCOUNT_ID; }
