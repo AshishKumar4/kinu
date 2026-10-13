@@ -116,6 +116,10 @@ describe("an answer's slate-ui blocks are drawn in place", () => {
     expect(verdictOf(observed.slateUi, 'slate-ui').opened).toBe(SLATE_UI_PAGES.first);
   });
 
+  test("an answer's pages get no tab in the work surface until they are saved (#90)", () => {
+    expect(verdictOf(observed.slateUi, 'slate-ui').tabs).toEqual([]);
+  });
+
   test('a reload draws them again from the stored answer', () => {
     const { redrawn, reshown } = verdictOf(observed.slateUi, 'slate-ui');
 

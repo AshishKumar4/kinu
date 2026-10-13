@@ -1382,6 +1382,8 @@ interface SlateUiVerdict {
   readonly read: string;
   readonly heard: boolean;
   readonly kept: boolean;
+  /** The work surface's page tabs on a page opened while both pages run: an unsaved page has none (#90). */
+  readonly tabs: readonly string[];
   /** What the first page shows once its card's open control brought it up in the work surface. */
   readonly opened: string;
   readonly redrawn: readonly string[];
@@ -1474,6 +1476,41 @@ async function firstPageReach(page: Page, heard: Promise<ScriptedRequest>): Prom
 }
 
 /** The first page, opened from its card in the work surface: what the work surface's frame of it shows. */
+const RpcFrameSchema = v.object({ type: v.literal('rpc'), id: v.string(), method: v.optional(v.string()) });
+
+/** Settles once a `getExposedPorts` the page asks from now on has been answered on its socket. */
+async function previewsListed(page: Page): Promise<() => Promise<void>> {
+  const cdp = await page.createCDPSession();
+  const asked = new Set<string>();
+  const answered = Promise.withResolvers<void>();
+
+  const frame = (payload: string | undefined) => v.safeParse(RpcFrameSchema, tolerate<unknown>(() => JSON.parse(payload ?? ''), 'malformed-input'));
+
+  await cdp.send('Network.enable');
+  cdp.on('Network.webSocketFrameSent', (event: { response?: { payloadData?: string } }) => {
+    const sent = frame(event.response?.payloadData);
+
+    if (sent.success && sent.output.method === 'getExposedPorts') asked.add(sent.output.id);
+  });
+  cdp.on('Network.webSocketFrameReceived', (event: { response?: { payloadData?: string } }) => {
+    const reply = frame(event.response?.payloadData);
+
+    if (reply.success && asked.has(reply.output.id)) answered.resolve();
+  });
+
+  return async () => {
+    await named("the workspace's previews listed", () => answered.promise);
+    await cdp.detach();
+  };
+}
+
+/** The work surface's page tabs. */
+async function pageTabs(page: Page): Promise<readonly string[]> {
+  await painted(page);
+
+  return v.parse(v.array(v.string()), await page.$$eval('#inspector nav[aria-label="Pages"] button[aria-label]', (tabs) => tabs.map((tab) => tab.getAttribute('aria-label') ?? '')));
+}
+
 async function openedInWorkSurface(page: Page): Promise<string> {
   await page.$eval('[data-slate-ui="first"] button[aria-label="Open first in the work surface"]', (open) => {
     if (open instanceof HTMLElement) open.click();
@@ -1500,11 +1537,17 @@ async function measureSlateUi(newPage: LiveApp['newPage'], origin: string, heard
     const reach = await firstPageReach(page, heard);
     const opened = await openedInWorkSurface(page);
 
+    // A page opened while both pages run lists every preview they hold.
+    const listed = await previewsListed(page);
+
     await named('the reload', () => page.reload({ waitUntil: 'load' }));
     await until(page, 'both blocks drawn again', SLATE_UI_DRAWN);
     const again = await slateUiFrames(page);
 
-    return { ...reach, opened, drawn: first.drawn, shown: first.shown, redrawn: again.drawn, reshown: again.shown, forged: await forgedBlocks(page, origin, workspace) };
+    await listed();
+    const tabs = await pageTabs(page);
+
+    return { ...reach, tabs, opened, drawn: first.drawn, shown: first.shown, redrawn: again.drawn, reshown: again.shown, forged: await forgedBlocks(page, origin, workspace) };
   } finally {
     await page.close();
   }
