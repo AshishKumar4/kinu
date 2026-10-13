@@ -19,7 +19,7 @@ import type { RunInference } from '../heads/head-inference';
 import type { SeatedActor } from '../state/actor-host';
 import type { EffectClaimDeps } from '../tools/effect-claim';
 import type { RunTurnSources } from '../orchestrator/turn-assembly';
-import { buildToolSurface } from '../tools/builtins';
+import { buildToolSurface, type CodemodeBuilder } from '../tools/builtins';
 import type { ReportDeps } from '../tools/report-operations';
 import type { BackgroundJobRunner } from '../jobs/runner';
 import { stepLoopJobs, type StepLoopJobSeat } from '../jobs/step-loop';
@@ -55,7 +55,7 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { WebSearchProvider } from '../web/index';
 import type { WorkMode } from '../types/turn';
 import type { ModelCallSink } from '../events/model-call';
-import type { BuiltinToolName, ToolSurfaceNarrowing } from '../tools/registry';
+import type { BuiltinToolName } from '../tools/registry';
 import { defaultLoopOrigin } from '../scaffold/loop-origin';
 
 /** A head's builtins plus `report`. */
@@ -139,7 +139,7 @@ export interface NodeAgentDeps {
 }
 
 /** A node's `eval` over the actor it runs as, whose runtime may be rebuilt for its home. */
-export type NodeCodemode = (actor: SeatedActor) => (finished: ToolSet, reach: ToolSurfaceNarrowing) => ToolSet[string];
+export type NodeCodemode = (actor: SeatedActor) => CodemodeBuilder;
 
 /** One node's own actor and its per-turn seams; returned by {@link NodeAgentDeps.hostNode} because each is per actor. */
 export interface HostedNodeSeat<A extends SeatedActor = SeatedActor> {
@@ -171,7 +171,7 @@ export interface NodeLoopDeps {
   /** Transient frames while a step is produced, superseded by `reportStep`'s row (heads/head-stream.ts). */
   reportDelta?: ReportHeadDelta;
   arbitrate: NodeArbiter | null;
-  codemodeTool?: unknown;
+  codemode?: CodemodeBuilder;
   webSearch?: WebSearchProvider;
   /**
    * The report contract's gate: null lets the report land, else the text is the node's next instruction.
@@ -304,7 +304,7 @@ function buildNodeToolSet(input: {
     report,
     webSearch: deps.webSearch,
     admitted: NODE_BUILTIN_TOOLS,
-    codemodeTool: deps.codemodeTool,
+    codemode: deps.codemode,
     post: input.arbitrate ? buildProposeTool(input.arbitrate, scratch) : undefined,
     effectClaims: { ...deps.receipts, execution: () => ({ turnId: input.turnId, runId: deps.runId }) },
     wrapFinished: (finished) => withHeadCaptureRecording(
@@ -626,7 +626,7 @@ function nodeLoopDeps(input: NodeAgentInput, deps: NodeAgentDeps, seat: HostedNo
 
   if (deps.mission !== undefined) loop.mission = deps.mission;
 
-  if (deps.nodeCodemode !== undefined) loop.codemodeTool = deps.nodeCodemode(loop.actor);
+  if (deps.nodeCodemode !== undefined) loop.codemode = deps.nodeCodemode(loop.actor);
 
   if (deps.webSearch !== undefined) loop.webSearch = deps.webSearch;
 

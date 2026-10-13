@@ -8,7 +8,7 @@ import type { ToolSet } from 'ai';
 import * as v from 'valibot';
 import { defineOperation, serve } from '../operations/operation';
 import { operationTool } from '../tools/operation-surfaces';
-import { buildToolSurface } from '../tools/builtins';
+import { buildToolSurface, type CodemodeBuilder } from '../tools/builtins';
 import { buildHeadAccumulatorTools, HeadCapture, withHeadCaptureRecording } from './head-inference';
 import { HEAD_BUILTIN_TOOLS, MERGE_STRATEGIES } from './types';
 import type { AgentRuntime } from '../types/agent-runtime';
@@ -40,9 +40,8 @@ export interface HeadToolDeps {
   rt: AgentRuntime;
   /** The builtin factory builds the whole surface and narrows it afterwards, so its deps are whole. */
   conversations: ConversationRecall;
-  /** Pre-built `eval` (codemode differs per platform). A function receives the finished head surface and its allowed
-   *  reach, and its result replaces `eval`. */
-  codemodeTool: unknown;
+  /** Builds `eval` over the finished head surface and its allowed reach (codemode differs per platform). */
+  codemode?: CodemodeBuilder;
   webSearch: WebSearchProvider;
   /** The backend owns the spawn substrate; the budget gate lives here. */
   split(request: HeadSplitRequest): Promise<HeadSplitResult>;
@@ -111,7 +110,7 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
     wrapCalls: (tools) => withHeadCaptureRecording(tools, capture),
     extra,
     allowed: input.allowedTools,
-    codemodeTool: deps.codemodeTool,
+    codemode: deps.codemode,
     effectClaims: deps.effectClaims,
     wrapFinished: (finished) => wrapToolsForBackground(finished, deps.jobs),
   });

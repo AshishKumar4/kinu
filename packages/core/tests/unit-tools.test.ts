@@ -472,10 +472,10 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       buildActorTools({
         rt,
         conversations: conversationsFor(rt),
-            codemode: (surface) => {
+            codemode: (surface, reach) => {
           injected = surface.craftedTools().map((crafted) => crafted.name);
 
-          return nodeCodemodeBuilder(surface);
+          return nodeCodemodeBuilder(surface, reach);
         },
         effectClaims: { sql: rt.storage.sql, actor: rt.actor, execution: () => ({ turnId: 'turn-1', runId: 'run-1' }), durable: () => Promise.resolve() },
         jobs: actorJobsFor(rt),

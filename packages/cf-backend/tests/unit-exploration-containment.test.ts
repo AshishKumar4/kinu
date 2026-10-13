@@ -111,7 +111,7 @@ function buildSurface(opts?: {
     capture,
     rt,
     conversations: stores.conversationSearch,
-    codemodeTool,
+    codemode: () => codemodeTool,
     webSearch: noopWebSearch,
     jobs: {
       jobRunner: new BackgroundJobRunner({ store: stores.jobs, fiber: rt.schedule.fiber.bind(rt.schedule), inbox: { send: async () => 'queued' } }),
