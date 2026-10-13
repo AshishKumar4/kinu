@@ -761,8 +761,8 @@ does. Its socket, roster and shared stores stay in the workspace object, and a
 root tab's socket opening pre-warms main's isolate. Main's settled turn is handed
 back as the facet's durable `workspace_settle` effect; the workspace declares
 the turn's evolution, event, title, reply, branch and fleet lanes from it, from
-the facts it carries (frozen in main's isolate at the turn's preparation,
-`actor_turn_facts`) and from the branches admitted during the turn
+the facts it carries (frozen in main's isolate at the turn's preparation, on
+its claim) and from the branches admitted during the turn
 (`turn_branches`). A fork
 reads and lands main's conversation through main's isolate. The figures below
 were measured on 2026-10-07, before main moved, comparing main's turn in the
@@ -959,7 +959,7 @@ the owner, built 2026-10-11 on `lane/main-isolate`.
 - Port: an isolate holds its workspace's host across calls, so a call crosses
   once. An execution is claimed `preparing` before it is prepared, and its
   epoch, minted there from one sequence over the agent's chat turns and runs
-  (`actor_epochs`), is its capability; a run opens the same fence as a chat
+  (`agent_sequence`, which numbers its reports too), is its capability; a run opens the same fence as a chat
   turn, and a preparation that fails settles its claim `error`. Every call
   that runs more of a turn carries its capability (turn, run, epoch) and holds
   only while the durable fence (`actor_turn_fence`) holds that opening, before
@@ -986,7 +986,7 @@ the owner, built 2026-10-11 on `lane/main-isolate`.
   into fewer flushes, and the deployed count is locked.
 - Profile: the agent's isolate binds each execution's final profile, with the
   authority inputs it was resolved from, under the execution's key (turn, run)
-  before any model or tool work (`actor_turn_facts`, `actor_profile_inputs`);
+  before any model or tool work (on its claim, and `actor_profile_inputs`);
   a recovery assembles on it, the first step's pace carries it to the
   workspace, and a workspace that reads the turn again after a restart asks
   the agent for it first and builds the turn's surface, mode, sources and
@@ -1003,12 +1003,13 @@ the owner, built 2026-10-11 on `lane/main-isolate`.
   asked afresh; a failed or stopped turn's Retry continues its completed
   steps. The workspace holds each agent's open turns by agent and turn: an
   owner's message id is unique only within an agent.
-- Receipts: a tool's receipt is `started`, `settled` or `indeterminate`, kept
+- Receipts: a tool's receipt is started (no result yet) or settled, kept
   where its effect commits and keyed on its run, so a Retry finds none of the
-  last run's. A call whose effect commits in the workspace leaves only a
-  `remote` pointer in the isolate: it is re-asked there under the same call,
-  and a repair asks the workspace's receipts for the unpaired calls it points
-  at. The owner's lane (`submit_plan`, `reply_to_comment`, `ask_owner`) commits
+  last run's; one found started again is indeterminate and refused. A call
+  whose effect commits in the workspace leaves nothing in the isolate but its
+  durable part: it is re-asked there under the same call, and a repair asks
+  the workspace's receipts for the unpaired calls the isolate's own receipts
+  and the owner's questions do not answer. The owner's lane (`submit_plan`, `reply_to_comment`, `ask_owner`) commits
   in the agent's own store, so its isolate builds and runs it under its own
   receipt, and the workspace only declares it (`ownerLaneDeclarations`). Every
   agent's settled run tells the workspace (`run_settle`; main's rides

@@ -697,7 +697,7 @@ export {
 // Applied inside buildActorTools; backends never wrap tools themselves.
 export {
   initToolEffectClaimTable, claimToolEffect, settleToolEffect,
-  withEffectReceipt, withEffectPointer, remoteReceipts, pruneTurnReceipts,
+  withEffectReceipt, remoteReceipts, pruneTurnReceipts,
   type EffectClaimDeps, type ReceiptExecution, type RemoteReceipt, type ToolEffectClaim, type ToolEffectKey,
 } from './tools/effect-claim';
 

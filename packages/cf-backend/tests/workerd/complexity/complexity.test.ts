@@ -260,7 +260,7 @@ const turnStatements = new Map<number, { readonly workspace: OperationCost['tabl
  * isolate adopts its rows again only when they change.
  * 372, over 6 runs on 93f891556 (367 in four, 372 in two: the workspace's 185 or 190, the five apart the Agents SDK's
  * job queue; main's isolate's 182), on 2026-10-12, once every execution is claimed before it is prepared under an epoch
- * minted in the agent's own store (`actor_epochs`, +1; the report sequence numbers no opening, -1), binds the authority
+ * minted in the agent's own store (`actor_epochs` then, +1; the report sequence numbered no opening, -1), binds the authority
  * inputs its profile resolved from, kept once per distinct inputs (`actor_profile_inputs`, +1), and each opening is
  * recorded where the workspace judges the closes that name it (`actor_executions`, +1; a close naming the newest
  * opening is judged by the held fence row and reads nothing).
