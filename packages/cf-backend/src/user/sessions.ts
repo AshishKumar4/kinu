@@ -258,6 +258,8 @@ export class UserSessions {
     return createBuiltinInvite(this.builtinSql(), invite);
   }
 
+  /** Revoke exactly this session; the row's absence is the revocation. The write is durable before the fan-out, so a
+   *  failed push cannot keep a socket authorized (see retireCliAuthority). */
   async revokeBrowserSession(caller: UserCaller, tokenHash: string): Promise<void> {
     await this.host.requireTier(caller, 'auth_tokens');
     this.host.sqlx(`DELETE FROM user_browser_sessions WHERE token_hash = ?`, tokenHash);

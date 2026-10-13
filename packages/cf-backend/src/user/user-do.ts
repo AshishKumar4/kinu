@@ -813,12 +813,6 @@ export class UserDO extends Agent<Env> {
     this.nudges = Promise.all([this.nudges, ...Array.from({ length: Math.min(ROSTER_NUDGE_LANES, queue.length) }, lane)]);
   }
 
-  // Session authority lives here: KV writes and deletes take up to a minute to reach every colo,
-  // so KV can confirm neither revocation nor existence.
-
-  /** Revoke exactly this session; the row's absence is the revocation. The write is durable
-   * before the fan-out, so a failed push cannot keep a socket authorized (see retireCliAuthority). */
-
   /** A WebSocket cannot cross RPC; the Worker forwards these upgrades. */
   private readonly _sockets = new Hono({ getPath: rawPath })
     .all(DEVICE_CONNECT_PATH, async (c) => this.devices.acceptDeviceSocket(c.req.raw, new URL(c.req.url)))
@@ -955,11 +949,6 @@ export class UserDO extends Agent<Env> {
     // Device sockets clean up in webSocketClose, which the runtime fires next.
     if (!deviceIdFromSocket(ws) && !isRosterSocket(ws)) return this.lifecycle.webSocketError(...call);
   }
-
-  // All reads/writes of `user_credentials.value` go through this pair; the only places plaintext
-  // secrets exist in this class (sealed by credential-envelope.ts).
-
-  // Egress secret vault: see user/egress-vault.ts for why the row shape is its own table.
 
   // The Mossaic tenant id is the owner's user id, derived from the profile row's email as the
   // edge does, so no caller names a tenant. Every owner workspace mounts it at `/shared`.
