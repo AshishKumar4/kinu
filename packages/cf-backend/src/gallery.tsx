@@ -4093,11 +4093,6 @@ function ChatMessages() {
         </div>
       ))}
       <DeviceOfflineRow devices={[{ id: "dev-1", label: "ashish-device", lastSeenAt: NOW }]} />
-      <GalleryComposer notices={[
-        ...turnEndNotices({ ...NO_TURN_END, chatError: { body: "fetch failed: provider stream reset before completion (anthropic/claude-opus-4)", refused: false } }),
-        // The runtime refusing this tab, as `sunlit-stone-4a20` answers a resume ACK.
-        ...turnEndNotices({ ...NO_TURN_END, chatError: { body: "Unauthorized", refused: true } }),
-      ]} />
     </div>
   );
 }
@@ -4208,7 +4203,12 @@ function ChatFrame() {
       <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
         <GalleryWorkspaceHeader />
         <ChatMessages />
-        <GalleryComposer notices={REFRESH_NOTICE} />
+        <GalleryComposer notices={[
+          ...REFRESH_NOTICE,
+          ...turnEndNotices({ ...NO_TURN_END, chatError: { body: "fetch failed: provider stream reset before completion (anthropic/claude-opus-4)", refused: false } }),
+          // The runtime refusing this tab, as `sunlit-stone-4a20` answers a resume ACK.
+          ...turnEndNotices({ ...NO_TURN_END, chatError: { body: "Unauthorized", refused: true } }),
+        ]} />
       </div>
     </div>
   );

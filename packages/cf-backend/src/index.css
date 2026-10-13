@@ -2033,6 +2033,7 @@ body > .annotation-toolbar {
 .p-bar-more {
   display: inline-flex;
   align-items: center;
+  gap: 5px;
   height: 24px;
   padding: 0 8px;
   border-radius: 7px;

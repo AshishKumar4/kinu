@@ -90,7 +90,7 @@ export function EventRow({ icon: Mark, tone, label, source, body, state, count =
             <span className="p-pill-body">
               {who}
               {badge}
-              <span data-event-brief className="p-pill-text">{body}</span>
+              <span data-event-brief className="p-pill-text truncate">{body}</span>
             </span>
             {tail}
           </button>

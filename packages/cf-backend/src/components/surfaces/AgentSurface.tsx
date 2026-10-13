@@ -67,7 +67,7 @@ export interface AgentSurfaceProps {
   /** `reads_changed` frames per live read, as WorkTab takes them. */
   readMoves?: ReadMoves;
   /** The workspace's name, which the agent's mascot is drawn from. */
-  workspace?: string;
+  workspace?: string | undefined;
 }
 
 function Chip({ children, mono = false }: { children: React.ReactNode; mono?: boolean }) {

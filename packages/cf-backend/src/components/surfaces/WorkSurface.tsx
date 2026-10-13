@@ -317,8 +317,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
                 snapshot={props.snapshot}
                 memory={props.memory} memoryContent={props.memoryContent}
                 onSearchMemory={props.onSearchMemory} onRetryLoad={props.onRetryLoad}
-                onChangelogSeen={props.onChangelogSeen} rpc={props.rpc} readMoves={props.readMoves}
-                {...(props.workspace !== undefined && { workspace: props.workspace })}
+                onChangelogSeen={props.onChangelogSeen} rpc={props.rpc} readMoves={props.readMoves} workspace={props.workspace}
               />
             )}
             {surface === "Environment" && (

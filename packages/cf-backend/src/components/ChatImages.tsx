@@ -4,6 +4,7 @@
  * that site the answer was read. A click opens the picture whole, the message's others a step away.
  */
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import type { LiveTail } from "@kinu.run/core";
 import { createPortal } from "react-dom";
 import {
   ArrowLeftIcon, ArrowRightIcon, DownloadSimpleIcon, FolderSimpleIcon, GlobeIcon, ImageBrokenIcon, LaptopIcon, TerminalWindowIcon,
@@ -262,4 +263,46 @@ export function Lightbox({ pictures, index, onIndex, onClose }: {
     </div>,
     document.body,
   );
+}
+
+/** The pictures each part of one answer shows, and the opener of its lightbox. */
+export const AnswerPicturesContext = createContext<{
+  readonly of: (part: UIMessage["parts"][number]) => readonly Picture[];
+  readonly open: (picture: Picture) => void;
+} | null>(null);
+
+/** One answer's pictures, its words' once they have settled, and the lightbox a click opens over them. */
+interface AnswerPictures {
+  readonly pictures: React.ContextType<typeof AnswerPicturesContext>;
+  readonly lightbox: ReactNode;
+}
+
+export function useAnswerPictures(message: UIMessage, tail: LiveTail | null): AnswerPictures {
+  const images = useContext(ChatImageContext);
+  const [opened, setOpened] = useState<{ list: readonly Picture[]; index: number } | null>(null);
+
+  if (images === null) return { pictures: null, lightbox: null };
+  const byPart = messagePictures(message, images, (part) => !(tail?.kind === "text" && tail.part === part));
+  const openable = [...byPart.values()].flat().filter((picture) => picture.kind !== "web");
+
+  const pictures = {
+    of: (part: UIMessage["parts"][number]) => byPart.get(part) ?? [],
+    open: (picture: Picture) => setOpened(picture.kind === "web" ? { list: [picture], index: 0 } : { list: openable, index: openable.indexOf(picture) }),
+  };
+
+  const lightbox = opened === null
+    ? null
+    : <Lightbox pictures={opened.list} index={opened.index} onIndex={(index) => setOpened({ ...opened, index })} onClose={() => setOpened(null)} />;
+
+  return { pictures, lightbox };
+}
+
+/** The pictures one part of an answer shows: a tool's under its row, the words' after them. */
+export function PartPictures({ part, size }: { part: UIMessage["parts"][number]; size: "full" | "thumb" }) {
+  const answer = useContext(AnswerPicturesContext);
+  const pictures = answer?.of(part) ?? [];
+
+  if (answer === null || pictures.length === 0) return null;
+
+  return <div className={size === "thumb" ? "pl-4" : undefined}><Pictures pictures={pictures} size={size} open={answer.open} /></div>;
 }

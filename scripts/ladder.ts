@@ -3005,6 +3005,7 @@ export const CI_EXEMPT = {
     'has nothing to run against at CI: its subject is the deployment that just went up, as eval-service, '
     + 'whose secret no pull request holds.',
   'bun test --timeout=0 tests/browser/live-app-turns.test.ts': LIVE_APP_AT_CI,
+  'bun test --timeout=0 tests/browser/live-app-provider-wait.test.ts': LIVE_APP_AT_CI,
   'bun test --timeout=0 tests/browser/live-app-sleep.test.ts': LIVE_APP_AT_CI,
   'bun test --timeout=0 tests/browser/live-app-plans.test.ts': LIVE_APP_AT_CI,
   'bun test --timeout=0 tests/browser/live-app-layout.test.ts': LIVE_APP_AT_CI,

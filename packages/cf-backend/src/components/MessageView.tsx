@@ -26,7 +26,7 @@ import { diagnostics, renderThrownChain, detach } from "@kinu.run/core/obs";
 import { PreviewFrame } from "@/components/PreviewFrame";
 import { AnswerText, MarkdownContent, CodeBlock, SlateLink, type AnswerChat } from "@/components/surfaces/shared";
 import { AttachmentChip } from "@/components/AttachmentChip";
-import { ChatImageContext, Lightbox, messagePictures, Pictures, type Picture } from "@/components/ChatImages";
+import { AnswerPicturesContext, PartPictures, useAnswerPictures } from "@/components/ChatImages";
 import { extractPreviewUrl } from "@kinu.run/core";
 import {
   groupMessageParts,
@@ -430,21 +430,6 @@ function ToolCallFold({ parts, expandedCalls, onToggleCall }: {
   );
 }
 
-/** The pictures each part of one answer shows, and the opener of its lightbox. */
-const AnswerPicturesContext = createContext<{
-  readonly of: (part: UIMessage["parts"][number]) => readonly Picture[];
-  readonly open: (picture: Picture) => void;
-} | null>(null);
-
-function PartPictures({ part, size }: { part: UIMessage["parts"][number]; size: "full" | "thumb" }) {
-  const answer = useContext(AnswerPicturesContext);
-  const pictures = answer?.of(part) ?? [];
-
-  if (answer === null || pictures.length === 0) return null;
-
-  return <div className={size === "thumb" ? "pl-4" : undefined}><Pictures pictures={pictures} size={size} open={answer.open} /></div>;
-}
-
 function ToolCallPart({ part, expanded, onToggleExpand }: { part: AnyToolPart; expanded: boolean; onToggleExpand: () => void }) {
   const output = partOutput(part);
   const input = partInput(part);
@@ -606,8 +591,7 @@ export const MessageView = memo(function MessageView({
 }) {
   const isUser = message.role === "user";
   const isLive = tail !== null;
-  const images = useContext(ChatImageContext);
-  const [opened, setOpened] = useState<{ list: readonly Picture[]; index: number } | null>(null);
+  const { pictures: answerPictures, lightbox } = useAnswerPictures(message, tail);
   // The mid-stream last assistant message is not persisted yet, so it cannot be forked.
   const canFork = !isLive && onFork !== undefined && message.id !== "";
   const { set: callToggles, toggle: toggleCall } = useToggledSet();
@@ -680,14 +664,6 @@ export const MessageView = memo(function MessageView({
   }
 
   const segments = segmentBySteers(message.parts, steers ?? [], answerSplices(message, splices));
-  const pictures = images === null ? null : messagePictures(message, images, (part) => !((tail?.kind === "text") && tail.part === part));
-  const openable = pictures === null ? [] : [...pictures.values()].flat().filter((picture) => picture.kind !== "web");
-
-  const answerPictures = pictures === null ? null : {
-    of: (part: UIMessage["parts"][number]) => pictures.get(part) ?? [],
-    open: (picture: Picture) => setOpened(picture.kind === "web" ? { list: [picture], index: 0 } : { list: openable, index: openable.indexOf(picture) }),
-  };
-
   // The fork button goes on the first segment that draws anything: a steer at step 0 leaves the first empty.
   const forkSegment = segments.findIndex((segment) => segment.parts.length > 0);
 
@@ -727,9 +703,7 @@ export const MessageView = memo(function MessageView({
   return (
     <AnswerPicturesContext.Provider value={answerPictures}>
     <div className="group/msg space-y-1 animate-fade-in">
-      {opened !== null && (
-        <Lightbox pictures={opened.list} index={opened.index} onIndex={(index) => setOpened({ ...opened, index })} onClose={() => setOpened(null)} />
-      )}
+      {lightbox}
       {segments.map((segment, s) => (
         <Fragment key={s}>
           {segment.steer && <SteerBubble steer={segment.steer} onFork={onFork} />}
