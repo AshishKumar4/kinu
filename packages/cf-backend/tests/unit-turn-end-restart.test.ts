@@ -363,3 +363,39 @@ test("a node whose isolate dies as it asks whether its run goes on, after its la
 
   expect(nodeCalls()).toBe(1);
 });
+
+test("a hire whose answer cannot commit tells its hirer its turn failed, once", async () => {
+  const MISSION = 'Catalogue every file under the home directory.';
+  const ASKED = 'Have someone check the ledger.';
+  let workspace: StartedHarness | null = null;
+
+  // Main hires a task agent for the mission, then says so; the hire's answer is refused as it commits.
+  workspace = gatewayWorkspace(stubAiBinding((run) => {
+    const { messages, tools } = requestOf(run);
+
+    if (tools.length === 0) return chatCompletion(run, '{"title":"Ledger Check"}');
+
+    if (!JSON.stringify(messages).includes(ASKED)) {
+      // The newest agent: the hire, which this call is.
+      const hire = workspace?.db.query<{ storage_key: string }, []>('SELECT storage_key FROM workspace_actors ORDER BY rowid DESC LIMIT 1').get();
+
+      if (hire !== null && hire !== undefined) failNextAnswerWrite(hire.storage_key);
+
+      return chatCompletion(run, 'The ledger balances.');
+    }
+
+    return messages.some((message) => message.role === 'tool')
+      ? chatCompletion(run, 'Handed off.')
+      : toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', lifetime: 'task', mission: MISSION } }, 'hire_0');
+  }));
+
+  const id = crypto.randomUUID();
+  const started = workspace;
+  const told = () => relayedReports(started.db).filter((report) => report.includes('failed to run its assigned turn'));
+
+  await started.agent.onMessage(owner, chatRequest(id, id, 'submit-message', ASKED));
+  await driveUntil(started, "the hire's hirer was never told its turn failed", () => told().length > 0);
+  await started.agent.harnessAgentsIdle();
+
+  expect(told()).toHaveLength(1);
+});
