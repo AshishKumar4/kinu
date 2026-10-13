@@ -297,7 +297,8 @@ export interface ChatSessionPorts {
    * restart, so a re-opened turn there is asked again at once.
    */
   armTurnWake?(atMs: number): Promise<void>;
-  /** Owed until {@link quiet}. */
+  /** Its queue's first turn taken: owed until {@link quiet}. Absent where the process is the wake, as {@link quiet} is: the
+   *  agent's isolate holds its port into its workspace between the two (#69). */
   owed?(): void;
   /** The queue drained and no turn runs; absent where the process is the wake, as for {@link armTurnWake}. */
   quiet?(): void;

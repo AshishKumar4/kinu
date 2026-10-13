@@ -33,21 +33,38 @@ export interface AgentWorkspaceCalls {
   stateSession(): Promise<NimbusSessionSurface>;
   memory(): Promise<Memory>;
   program: AgentWorkspace['program'];
-  /** The agent's port: its workspace's host, held across calls (design v2 §3). */
+  /** The agent's port: its workspace's host, held across the calls of its work (design v2 §3). */
   port(): Promise<AgentWorkspacePort>;
 }
 
 /** What crosses through the held port: every call whose answer is data, not a live capability. */
 export type AgentWorkspacePort = Omit<AgentWorkspace, 'session' | 'stateSession' | 'memory' | 'program'>;
 
-/** Nimbus opens a synchronous session surface; its methods first consume the factory's own RpcPromise. */
-class WorkspaceSession implements NimbusSessionSurface {
-  constructor(private readonly pending: Promise<NimbusSessionSurface>) {}
+/** A capability of the workspace opened for one call and let go once it settles: one held open keeps the workspace
+ *  from hibernating (#69). */
+function forOneCall<Capability, T>(opening: () => Promise<Capability>, run: (capability: Capability) => Promise<T>): Effect.Effect<T> {
+  return Effect.suspend(() => {
+    const pending = opening();
 
-  [Symbol.dispose](): void { disposeWorkspaceRpc(this.pending); }
+    return workspaceRpcAnswer(pending).pipe(
+      Effect.flatMap(capability => workspaceRpcAnswer(run(capability))),
+      Effect.ensuring(Effect.sync(() => { disposeWorkspaceRpc(pending); })),
+    );
+  });
+}
+
+/**
+ * Nimbus asks for a synchronous session surface for each of its calls and never lets one go. Each call opens the
+ * workspace's session for itself and lets it go once it settles, so one surface serves any number of calls, a rejected
+ * one included.
+ */
+class WorkspaceSession implements NimbusSessionSurface {
+  constructor(private readonly opening: () => Promise<NimbusSessionSurface>) {}
+
+  [Symbol.dispose](): void {}
 
   private call<T>(run: (session: NimbusSessionSurface) => Promise<T>): Effect.Effect<T> {
-    return workspaceRpcAnswer(this.pending).pipe(Effect.flatMap(session => workspaceRpcAnswer(run(session))));
+    return forOneCall(this.opening, run);
   }
 
   _rpcReady(...args: Parameters<NimbusSessionSurface['_rpcReady']>) { return settle(this.call(session => session._rpcReady(...args))); }
@@ -91,13 +108,14 @@ class WorkspaceSession implements NimbusSessionSurface {
   _rpcDestroy(...args: Parameters<NimbusSessionSurface['_rpcDestroy']>) { return settle(this.call(session => session._rpcDestroy(...args))); }
 }
 
+/** The workspace's memory, opened for each call and let go at its edge: a runtime keeps this for its life. */
 class ConsumedMemory implements Memory {
-  constructor(private readonly pending: Promise<Memory>) {}
+  constructor(private readonly opening: () => Promise<Memory>) {}
 
-  [Symbol.dispose](): void { disposeWorkspaceRpc(this.pending); }
+  [Symbol.dispose](): void {}
 
   private call<T>(run: (memory: Memory) => Promise<T>): Effect.Effect<T> {
-    return workspaceRpcAnswer(this.pending).pipe(Effect.flatMap(memory => workspaceRpcAnswer(run(memory))));
+    return forOneCall(this.opening, run);
   }
 
   write(...args: Parameters<Memory['write']>) { return settle(this.call(memory => memory.write(...args))); }
@@ -109,43 +127,72 @@ class ConsumedMemory implements Memory {
   tail(...args: Parameters<Memory['tail']>) { return settle(this.call(memory => memory.tail(...args))); }
 }
 
+/** The agent's workspace as its isolate calls it, held open only while the agent works. */
+export interface WorkspaceClient extends AgentWorkspace, Disposable {
+  /** The agent works: the port its calls open is held across them. */
+  work(): void;
+  /** The agent rests: its port is let go once no call is on it, and each call until it works again opens its own. */
+  rest(): void;
+}
+
 /**
  * All outgoing WORKSPACE calls cross the same consumption boundary, including chat, tools, pacing and credentials. Those
- * whose answer is data cross once, through the agent's port, held across them; one that fails lets the port go, as its
- * workspace may have reset under it, and the next opens it again. A session, memory or a program's callbacks own live
- * capabilities: each opens its own host, which lets them go at its edge.
+ * whose answer is data cross once, through the agent's port, held across the calls of its work and let go when it rests:
+ * a capability the isolate holds into its workspace keeps that object from hibernating, so an idle tab's workspace stayed
+ * awake, and billed, for as long as the tab was open (#69). A call while it rests opens the port for itself and lets it go
+ * at its edge. One that fails lets the port go, as its workspace may have reset under it, and the next opens it again. A
+ * session, memory or a program's callbacks own live capabilities: each opens its own host, which lets them go at its edge.
  */
-export function workspaceClient(workspace: AgentWorkspaceCalls): AgentWorkspace & Disposable {
+export function workspaceClient(workspace: AgentWorkspaceCalls): WorkspaceClient {
   let held: Promise<AgentWorkspacePort> | null = null;
 
+  // An isolate starts at rest: what its workspace asks of it before a turn opens holds nothing open after.
+  let resting = true;
+
+  /** The calls on the port held: it is let go once the agent rests and none is left. */
+  let onPort = 0;
+
+  const letGo = (): void => {
+    const opened = held;
+
+    held = null;
+
+    if (opened !== null) disposeWorkspaceRpc(opened);
+  };
+
   /** `owned`: the answer holds live content its consumer reads after (a relayed response's body), so its pipeline is
-   *  the consumer's to release; any other answer is data, released as it settles. */
+   *  the consumer's to release, and the port it came through is kept until the agent next rests or the client is let go;
+   *  any other answer is data, released as it settles. */
   const viaPort = <T>(call: (port: AgentWorkspacePort) => Promise<T>, owned = false): Effect.Effect<T> => Effect.suspend(() => {
     held ??= workspace.port();
     const opened = held;
 
+    onPort += 1;
+
     return workspaceRpcAnswer(opened).pipe(
       Effect.flatMap((port) => (owned ? workspaceRpcAnswer(call(port)) : workspaceRpcData(call(port)))),
       Effect.onError(() => Effect.sync(() => {
-        if (held !== opened) return;
-        held = null;
-        disposeWorkspaceRpc(opened);
+        if (held === opened) letGo();
+      })),
+      Effect.ensuring(Effect.sync(() => {
+        onPort -= 1;
+
+        if (resting && onPort === 0 && !owned) letGo();
       })),
     );
   });
 
   return {
-    // The port's own relay stays open while it is held: an isolate holds it for its life, and lets it go here.
-    [Symbol.dispose]: () => {
-      const opened = held;
+    work: () => { resting = false; },
+    rest: () => {
+      resting = true;
 
-      held = null;
-
-      if (opened !== null) disposeWorkspaceRpc(opened);
+      if (onPort === 0) letGo();
     },
-    session: () => new WorkspaceSession(workspace.session()),
-    stateSession: () => new WorkspaceSession(workspace.stateSession()),
-    memory: () => new ConsumedMemory(workspace.memory()),
+    [Symbol.dispose]: letGo,
+    session: () => new WorkspaceSession(() => workspace.session()),
+    stateSession: () => new WorkspaceSession(() => workspace.stateSession()),
+    memory: () => new ConsumedMemory(() => workspace.memory()),
     program: (...args) => settle(workspaceRpcAnswer(workspace.program(...args))),
     traceTurn: (...args) => settle(viaPort((port) => port.traceTurn(...args))),
     traceStream: (...args) => settle(viaPort((port) => port.traceStream(...args))),

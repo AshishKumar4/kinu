@@ -17,7 +17,8 @@ import { Cause, Effect, Exit } from 'effect';
 import { serialQueue } from '@kinu.run/agent-utils';
 import type { AgentDatabase } from './agent-database';
 import type { StepPacer } from './step-pacer';
-import { FacetSpend, answerMetadataOf, deliveredRun, facetTurnSources, facetTurnTools, type AgentWorkspace, type FacetModels, type LiveTurn } from './agent-turn';
+import type { WorkspaceClient } from './workspace-rpc';
+import { FacetSpend, answerMetadataOf, deliveredRun, facetTurnSources, facetTurnTools, type FacetModels, type LiveTurn } from './agent-turn';
 
 /** The words reach the room on the turn's own stream, and a turn's end on its own call. */
 const ROOM_EVENTS: ReadonlySet<SessionEvent['type']> = new Set(['turn-start', 'step-cut', 'error', 'broadcast', 'history-reverted']);
@@ -25,7 +26,7 @@ const ROOM_EVENTS: ReadonlySet<SessionEvent['type']> = new Set(['turn-start', 's
 export interface FacetChatDeps {
   readonly actor: HostedActor;
   readonly database: AgentDatabase;
-  readonly workspace: AgentWorkspace;
+  readonly workspace: WorkspaceClient;
   readonly models: FacetModels;
   readonly storage: DurableObjectStorage;
   readonly pacer: StepPacer;
@@ -145,6 +146,8 @@ export class FacetChat {
         terminal: () => this.terminal,
         driverGate: () => null,
         armTurnWake: (atMs) => this.tell(atMs),
+        // It works from its queue's first turn until it is at rest: its port into its workspace is held only between.
+        owed: () => { workspace.work(); },
         quiet: () => { this.atRest(); },
         // Its tasks tool and its jobs run in the workspace.
         openWork: () => workspace.openWork(),
@@ -161,7 +164,10 @@ export class FacetChat {
         // A run its workspace delivered: a typed input of this chat (D2), its end owed its workspace's caller.
         runs: {
           run: (run, signal, recordEnd) => this.runDelivered(run, signal, recordEnd),
-          tell: () => { this.resting = hold(logged('agent.run_end_report_failed', { doing: "telling the workspace a delivered run's end", otherwise: 'unavailable' }, () => this.tell())); },
+          // Beside any rest it tells: its idle waits on both.
+          tell: () => {
+            this.resting = Promise.all([this.resting, hold(logged('agent.run_end_report_failed', { doing: "telling the workspace a delivered run's end", otherwise: 'unavailable' }, () => this.tell()))]);
+          },
         },
       },
     });
@@ -447,9 +453,14 @@ export class FacetChat {
   }
 
   /** At rest once no turn runs or waits and no close is held, and each rest is told once. */
+  /** At rest, it tells its workspace what it owes, and then lets go of what it held open on it: an object an isolate
+   *  holds a capability into cannot hibernate (#69). A turn that opened meanwhile is working, and keeps it. */
   private atRest(): void {
     if (this.session.pumping || this.terminal.closing) return;
-    this.resting = hold(logged('agent.owed_report_failed', { doing: 'telling the workspace what an agent still owes', otherwise: 'unavailable' }, () => this.tell()));
+    this.resting = hold(logged('agent.owed_report_failed', { doing: 'telling the workspace what an agent still owes', otherwise: 'unavailable' }, () => this.tell()))
+      .then(() => {
+        if (!this.session.pumping && !this.terminal.closing) this.deps.workspace.rest();
+      });
   }
 
   /**
