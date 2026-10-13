@@ -102,7 +102,7 @@ describe(SUITE, () => {
         // path — the second half of the defect — inside an eval call.
         const program = calls.find((call) =>
           call.name === 'eval' && answered(call)
-          && JSON.stringify(call.args ?? {}).includes("listFiles({ path: '' })")
+          && JSON.stringify(call.args ?? {}).includes("computer.readdir({ path: '' })")
           && JSON.stringify(call.result ?? '').includes('first-run-mount.mjs'));
 
         return [
