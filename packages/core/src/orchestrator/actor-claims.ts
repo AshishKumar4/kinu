@@ -9,7 +9,7 @@ import { RUN_END_REASONS } from './turn-lifecycle';
 import { initSessionContextTables } from '../session/schema';
 import { initSessionTranscriptTables } from '../session/transcript-schema';
 import { initTurnFactsTables } from './turn-facts';
-import { AgentSequence } from '../subordinates/report-sequence';
+import { AgentSequence, initAgentSequenceTable } from '../subordinates/report-sequence';
 import { sqlCheckList } from '../identity/schema';
 import type { ActorTurnProgram } from './actor-program';
 import type { SessionHistory } from '../session/history';
@@ -55,6 +55,7 @@ export function initActorClaimTables(exec: RawSqlExec): void {
   // One row a turn: its newest execution's claim. The epoch is the agent's, one sequence over all its turns, so it is the
   // execution's capability too; the program columns are null while the claim is `preparing`. What its run was offered as
   // it was prepared and the authority it bound (`TurnFactsStore`) are kept with it, its run's recovery's too.
+  initAgentSequenceTable(exec);
   exec(`CREATE TABLE IF NOT EXISTS actor_turn_claims (
     actor_id TEXT NOT NULL REFERENCES workspace_actors(actor_id), turn_id TEXT NOT NULL, run_id TEXT NOT NULL, epoch INTEGER NOT NULL,
     work_mode TEXT NOT NULL CHECK(work_mode IN ('plan','build')),
@@ -399,6 +400,16 @@ interface ClaimGuard {
 export function unsettledClaimsOf(sql: SqlExecutor, actorId: string, limit: number): readonly StoredActorClaim[] {
   return sql<ClaimRow>`SELECT turn_id,run_id,epoch,work_mode,phase,program_kind,program_version,program_digest,program_build,outcome,claimed_at,withdrawn_through
     FROM actor_turn_claims WHERE actor_id=${actorId} AND outcome IS NULL ORDER BY claimed_at DESC LIMIT ${limit}`.map((row) => claimOfRow(actorId, row));
+}
+
+/** Which try of its turn the claim's execution is: one past the executions cut before it since the turn last finished a
+ *  step ({@link TurnCut}). Its epoch is the agent's sequence, which numbers every opening and report, so it says nothing
+ *  of the turn's own tries. */
+export function turnAttemptOf(sql: SqlExecutor, claim: Pick<StoredActorClaim, 'actorId' | 'turnId' | 'epoch'>): number {
+  const cut = sql<{ cuts: number }>`SELECT work_cuts + provider_cuts AS cuts FROM actor_turn_cuts
+    WHERE actor_id=${claim.actorId} AND turn_id=${claim.turnId} AND epoch=${claim.epoch}`[0];
+
+  return 1 + (cut?.cuts ?? 0);
 }
 
 function claimOfRow(actorId: string, row: ClaimRow): StoredActorClaim {
