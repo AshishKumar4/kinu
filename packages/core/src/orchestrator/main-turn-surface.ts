@@ -13,6 +13,7 @@ import type { ProfileAuthorityInputs, ResolvedTurnProfile } from '../profiles/re
 import { TurnFileLedger } from '../vfs/file-ledger';
 import { TurnContextBudget } from '../context-budget';
 import { TurnEscalationLedger } from '../execution/escalation';
+import { TurnCraftLedger } from '../craft/turn-ledger';
 import type { TurnContinuity } from './evolution-lanes';
 import type { ExecutionKey } from './execution';
 import type { ChatTurnInput } from './chat-session';
@@ -27,16 +28,20 @@ export interface TurnSurfaceOpening {
   readonly evolutionEnabled: boolean;
 }
 
-/** What a turn's tools account into while they run here: the files it read, its context budget, its escalations. */
+/** What a turn's tools account into while they run here: the files it read, its context budget, its escalations, and
+ *  the crafted tools its `eval` calls created and called. */
 export interface TurnLedgers {
   readonly files: TurnFileLedger;
   readonly context: TurnContextBudget;
   readonly escalations: TurnEscalationLedger;
+  readonly craft: TurnCraftLedger;
 }
 
-/** Empty ledgers: a turn's own, or a call's outside any turn. */
-export function turnLedgers(): TurnLedgers {
-  return { files: new TurnFileLedger(), context: new TurnContextBudget(), escalations: new TurnEscalationLedger() };
+/** Empty ledgers: a turn's own, which observes its crafted tools where `recordsCraft`, or a call's outside any turn. */
+export function turnLedgers(recordsCraft = false): TurnLedgers {
+  return {
+    files: new TurnFileLedger(), context: new TurnContextBudget(), escalations: new TurnEscalationLedger(), craft: new TurnCraftLedger(recordsCraft),
+  };
 }
 
 export class TurnSurface {
@@ -44,7 +49,7 @@ export class TurnSurface {
   readonly item: ChatTurnInput;
   readonly continuity: TurnContinuity;
   readonly evolutionEnabled: boolean;
-  readonly ledgers = turnLedgers();
+  readonly ledgers: TurnLedgers;
   readonly #actor: ActorReference;
   #external: ToolSet = {};
   #operation: OperationProfile | null = null;
@@ -55,6 +60,8 @@ export class TurnSurface {
     this.item = opening.item;
     this.continuity = opening.continuity;
     this.evolutionEnabled = opening.evolutionEnabled;
+    // A turn that records evolution scores the crafted tools its calls run here.
+    this.ledgers = turnLedgers(opening.evolutionEnabled);
     this.#actor = opening.actor;
   }
 
