@@ -51,17 +51,22 @@ test("a turn ends in its room while its warm's arming is still on the way, and t
   const tab = (id: string) => socketConnection({ id, send: (data: string) => { heard(data); } });
   const warm = delayNextCacheWarm(storageKey);
 
-  await agent.harnessChatGate()(tab('conn-first'), chatRequest('first', 'First.'));
+  // The gate answers a request once its turn is done in the room, so each is awaited only after the turn was let run.
+  const first = agent.harnessChatGate()(tab('conn-first'), chatRequest('first', 'First.'));
+
   await warm.reached;
   await driveUntil(workspace, 'the turn did not end in its room while its warm was held', () => done.has('first'));
+  await first;
 
   let laps = 0;
 
   // The next turn is given two hundred laps to reach its model while the warm is still held: it must not.
-  await agent.harnessChatGate()(tab('conn-second'), chatRequest('second', 'Second.'));
+  const second = agent.harnessChatGate()(tab('conn-second'), chatRequest('second', 'Second.'));
+
   await driveUntil(workspace, 'the next turn stopped short of its laps', () => secondAskedEarly || ++laps > 200);
   released = true;
   warm.release();
+  await second;
   await driveUntil(workspace, 'the next turn did not end', () => done.has('second'));
 
   expect(secondAskedEarly).toBe(false);
