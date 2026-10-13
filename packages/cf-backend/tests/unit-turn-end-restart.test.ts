@@ -247,3 +247,32 @@ test("a node whose isolate dies after its run's end committed, before it was tol
 
   expect(charged).toHaveLength(1);
 });
+
+test("a node whose end outgrows a stored row keeps it spilled, and its search hears it whole after a restart", async () => {
+  // Its answer alone is past half a stored row; its end carries it again in its round's review.
+  const ANSWER = `Cache the token table. ${'x'.repeat(1_200_000)}`;
+
+  const workspace = gatewayWorkspace(stubAiBinding((run) => {
+    if (!openingOf(run).includes(SEARCH)) return chatCompletion(run, ANSWER);
+
+    return requestOf(run).messages.some((message) => message.role === 'tool')
+      ? chatCompletion(run, 'Searching.')
+      : toolCallCompletion(run, { tool: 'agents', args: { op: 'swarm', task: TASK, preset: 'ideate', branches: 1, depth: 1 } }, 'swarm_0');
+  }));
+
+  const told = delayNextRunEnd();
+  const id = crypto.randomUUID();
+
+  await workspace.agent.onMessage(owner, chatRequest(id, id, 'submit-message', SEARCH));
+  await told.reached;
+  const node = workspace.db.query<{ storage_key: string }, []>("SELECT storage_key FROM workspace_actors WHERE origin = 'swarm'").get();
+
+  // It dies with its end kept and untold: the next start reads it back from where it was kept.
+  workspace.agent.harnessResetAgentIsolate(node?.storage_key ?? '');
+  setSystemTime(new Date(Date.now() + RECOVERY_BACKOFF_CEILING_MS + 1));
+  await driveUntil(workspace, 'the search never settled', () => searchSettled(workspace));
+
+  const [search] = await workspace.agent.getHeadRuns();
+
+  expect(search?.heads.map((head) => head.summary)).toEqual([ANSWER]);
+});

@@ -963,7 +963,9 @@ the owner, built 2026-10-11 on `lane/main-isolate`.
   rides the agent's next
   report (`AgentReport.runEnds`). One commit ends it: its answer, its run's end,
   any claim of its rounds still open, and its end kept on its held input
-  (`queued_turns.run_end_json`), which retires once a report carrying the end
+  (`queued_turns.run_end_json`, or spilled to a file as other large session
+  payloads are, `run_end_path`/`run_end_digest`, #77), which retires once a
+  report carrying the end
   reached the workspace. Nothing crosses between its answer and that commit:
   its rounds' reviews and its charges (its model calls beside its rounds')
   ride its end, which the workspace advises on and charges as it takes it,

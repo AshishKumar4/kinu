@@ -120,7 +120,7 @@ test('a run delivered while a chat turn runs starts only once that turn has answ
       runs: {
         run: async (_run, _signal, recordEnd) => {
           order.push('run started');
-          recordEnd({ refused: { code: 'cancelled', message: 'nothing to run' } });
+          (await recordEnd({ refused: { code: 'cancelled', message: 'nothing to run' } }))();
         },
         tell: () => {},
       },

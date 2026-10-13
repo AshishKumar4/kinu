@@ -353,6 +353,11 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
   }
 
   /** Each text part among `references`, oldest first. */
+  /** A value this session kept by {@link SessionTranscript.preparePayload}, read back whole. */
+  async payload(stored: SessionPayload): Promise<JsonValue> {
+    return await this.payloads.read(stored);
+  }
+
   async narration(references: readonly ConversationPartReference[]): Promise<string[]> {
     return (await this.parts(references)).flatMap((part) => (part.type === 'text' ? [v.parse(v.string(), part.text)] : []));
   }
@@ -574,6 +579,11 @@ export class SessionTranscript extends SessionTranscriptReader<ActorHandle, Sess
 
   /** Merges `patch` into a recorded entry's metadata: what an answer learns once committed (its slates' previews). An
    *  entry rewound meanwhile is not recorded again. */
+  /** A value kept beside this session's rows, as its payloads are: inline below the row bound, spilled to a file above. */
+  async preparePayload(value: JsonValue): Promise<SessionPayload> {
+    return await this.payloads.prepare(value);
+  }
+
   async amendMetadata(id: string, patch: JsonObject): Promise<void> {
     if (!this.has(id)) return;
     const metadata = await this.payloads.prepare({ ...await this.metadata(id), ...patch });

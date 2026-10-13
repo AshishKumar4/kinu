@@ -206,7 +206,7 @@ export class FacetChat {
   /** A delivered run, run to its end in this chat's turn: its end, kept on its held input in the commit that answers it,
    *  is told as it ends, not at rest, since its caller awaits it and runs may wait behind it. Never fails: a run that
    *  failed before it kept its end keeps its refusal. */
-  async runDelivered(run: DeliveredRun, signal: AbortSignal, recordEnd: (outcome: RunEndOutcome) => void): Promise<void> {
+  async runDelivered(run: DeliveredRun, signal: AbortSignal, recordEnd: (outcome: RunEndOutcome) => Promise<() => void>): Promise<void> {
     const { deps } = this;
 
     return await settle(Effect.gen({ self: this }, function* () {
@@ -214,7 +214,12 @@ export class FacetChat {
         database: deps.database, workspace: deps.workspace, models: deps.models, pacer: deps.pacer,
       }, run.task, signal, recordEnd)));
 
-      if (Exit.isFailure(exit)) recordEnd(refusedRun(toKinuError({ doing: 'running a delivered task', cause: Cause.squash(exit.cause), otherwise: 'io' })));
+      if (Exit.isFailure(exit)) {
+        const refusal = refusedRun(toKinuError({ doing: 'running a delivered task', cause: Cause.squash(exit.cause), otherwise: 'io' }));
+
+        (yield* Effect.promise(() => recordEnd(refusal)))();
+      }
+
       yield* Effect.promise(() => hold(logged('agent.run_end_report_failed', { doing: "telling the workspace a delivered run's end", otherwise: 'unavailable' }, () => this.tell())));
     }));
   }
@@ -569,7 +574,7 @@ export class FacetChat {
    *  reached. */
   private tell(at?: number): Promise<void> {
     const told = this.telling.then(async () => {
-      const ends = this.session.runEndsOwed();
+      const ends = await this.session.runEndsOwed();
 
       // An arm whose wake the workspace already holds, still to come and no later, asks nothing new: that wake comes first,
       // and the agent tells what it owes then. Its standing rides the next crossing that carries a report: the turn's
