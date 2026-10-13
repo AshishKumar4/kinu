@@ -15,38 +15,43 @@ const THEME_BOOT = `(() => {
   root.style.colorScheme = mode;
 })();`;
 
-/** The mark is the hiragana く on a 24-unit grid; `KINU_MARK` selects the one that ships. */
-export type MarkId = 'kana' | 'node' | 'loom' | 'brush';
+/**
+ * The wordmark's k is the mark: one thread down the arm, under the leg, into the stem's foot, up the stem and out again
+ * as the leg, crossing over the arm. The break cut in the arm either side of the leg is the crossing; it still shows at
+ * 16px. Outlines on the wordmark's 24-unit height (stroke 3.4, x-height 10.6, baseline 20.4), filled, so a page can
+ * hold any number of copies with no mask or id between them.
+ */
+const K = 'M1.5 3.6L4.9 3.6L4.9 20.4L1.5 20.4ZM1.5 6.55L15.63 20.4L10.77 20.4L1.5 11.31ZM15.63 10.6L11.7 14.45L9.27 12.07L10.77 10.6ZM7.13 18.93L5.63 20.4L1.5 20.4L1.5 19.69L4.7 16.55Z';
 
-export const KINU_MARK: MarkId = 'brush';
+/** The k spans x 1.5 to 15.63; this centres it on the mark's 24-unit square. */
+const K_CENTRED = 'translate(3.44 0)';
 
-/** Turn above the middle, short entry, long bowed exit, pointed corner: otherwise it reads as a caret. */
-const KU = 'M 10.2 3.6 Q 14.4 6.2 17 9.6 Q 15.2 15 4.8 21';
+/** i, n and u after the k, in the stroke the k is cut from; the i's tittle is square. */
+const INU = 'M18.7 10.6V20.4M23.3 10.6V20.4M23.3 15A4.4 4.4 0 0 1 32.1 15V20.4M36.7 10.6V16A4.4 4.4 0 0 0 45.5 16M45.5 10.6V20.4';
 
-const STROKE = 'fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="miter"';
+const WORD_WIDTH = 47.2;
 
-const MARK_BODIES = {
-  kana: `<path d="${KU}" ${STROKE} stroke-width="2"/>`,
-  node: `<path d="${KU}" ${STROKE} stroke-width="1.9"/><circle cx="17" cy="9.6" r="2.5" fill="currentColor"/>`,
-  loom: `<path d="M 4.6 3.4 L 4.6 20.6" ${STROKE} stroke-width="1.2" stroke-opacity="0.38"/><path d="M 10.6 3.6 Q 14.8 6.2 17.4 9.6 Q 15.6 15 5.4 21" ${STROKE} stroke-width="2"/>`,
-  // Taper stops at 0.55 units so the tail stays visible at 16px.
-  brush: `<path d="M 11.52 2.1 Q 15.72 4.7 18.65 9.58 Q 16.33 16.2 5.18 21.4 L 4.42 20.6 Q 14.07 13.8 15.35 9.62 Q 13.08 7.7 8.88 5.1 Z" fill="currentColor"/>`,
-} satisfies Readonly<Record<MarkId, string>>;
-
-/** Coloured by `currentColor`. */
-export function mark(size: number, id: MarkId = KINU_MARK): string {
-  return `<svg class="mark" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" aria-hidden="true">${MARK_BODIES[id]}</svg>`;
+/** The k alone, coloured by `currentColor`: the favicon, the rail and every place too small for the word. */
+export function mark(size: number): string {
+  return `<svg class="mark" width="${String(size)}" height="${String(size)}" viewBox="0 0 24 24" aria-hidden="true"><path transform="${K_CENTRED}" d="${K}" fill="currentColor"/></svg>`;
 }
 
-export const MARK_IDS: readonly MarkId[] = ['kana', 'node', 'loom', 'brush'];
+/** "kinu", coloured by `currentColor`, `height` px tall; its letters fill the middle 70% of that height. */
+export function wordmark(height: number): string {
+  const width = Math.round(height * WORD_WIDTH / 24 * 10) / 10;
 
-function wordmark(size = 21): string {
-  return `<a class="brand" href="/" aria-label="Kinu.run home">${mark(size)}<span>Kinu.run</span></a>`;
+  return `<svg class="wordmark" width="${String(width)}" height="${String(height)}" viewBox="0 0 ${String(WORD_WIDTH)} 24" fill="none" role="img" aria-label="Kinu">`
+    + `<path d="${K}" fill="currentColor"/><path d="${INU}" stroke="currentColor" stroke-width="3.4"/><rect x="16.7" y="3.4" width="4" height="4" fill="currentColor"/></svg>`;
 }
 
-/** One declared colour, because a favicon has no cascade to inherit from. */
-export function markDocument(id: MarkId = KINU_MARK): string {
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" color="${THEME_TOKENS.dark['--c-accent']}">${MARK_BODIES[id]}</svg>\n`;
+function brand(): string {
+  return `<a class="brand" href="/" aria-label="Kinu.run home">${wordmark(28)}</a>`;
+}
+
+/** The favicon: the brass k on the dark ground's tile, declared, because a favicon has no cascade to inherit from. */
+export function markDocument(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" rx="5.5" fill="${THEME_TOKENS.dark['--c-bg']}"/>`
+    + `<path transform="${K_CENTRED}" d="${K}" fill="${THEME_TOKENS.dark['--c-accent']}"/></svg>\n`;
 }
 
 /** Self-hosted latin subsets (OFL in `public/assets/fonts/`). */
@@ -85,10 +90,9 @@ border-bottom:var(--rule);background:color-mix(in srgb,var(--c-bg) 92%,transpare
 backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
 .bar-inner{width:min(1200px,100%);height:64px;margin:0 auto;padding:0 var(--gutter);
 display:flex;align-items:center;justify-content:space-between;gap:24px}
-.brand{display:inline-flex;align-items:center;gap:9px;font-family:var(--font-display);
-font-size:20px;font-weight:600;letter-spacing:-.02em;color:var(--c-text)}
+.brand{display:inline-flex;align-items:center;color:var(--c-text)}
 .brand:hover{color:var(--c-text)}
-.brand .mark{color:var(--c-accent);flex:none}
+.brand svg,.lockup svg{display:block}
 .brand .kana,.kana{font-family:var(--font-mono);font-size:10px;letter-spacing:.2em;
 color:var(--c-text-3)}
 .nav{display:flex;align-items:center;gap:18px;font-family:var(--font-mono);
@@ -216,8 +220,7 @@ justify-content:space-between;gap:16px;padding:20px var(--gutter);
 border-top:var(--rule);background:var(--c-sidebar);color:var(--c-text-3);font-size:13px}
 footer nav{display:flex;gap:18px}
 footer a:hover{color:var(--c-text)}
-.lockup{display:inline-flex;align-items:center;gap:8px;color:var(--c-text-2)}
-.lockup .mark{color:var(--c-accent)}
+.lockup{display:inline-flex;align-items:center;color:var(--c-text-2)}
 
 @media (max-width:880px){
 .page{border-inline:0}
@@ -262,7 +265,7 @@ export function publicPage(options: PublicPageOptions): string {
 
   const header = options.nav === undefined
     ? ''
-    : `<header class="bar"><div class="bar-inner">${wordmark()}<nav class="nav">${options.nav}</nav></div></header>\n`;
+    : `<header class="bar"><div class="bar-inner">${brand()}<nav class="nav">${options.nav}</nav></div></header>\n`;
 
   return `<!doctype html>
 <html lang="en">
@@ -289,7 +292,7 @@ export const GITHUB_ICON = '<svg width="17" height="17" viewBox="0 0 16 16" fill
 
 export function publicFooter(): string {
   return `<footer>
-  <span class="lockup">${mark(18)} Kinu.run</span>
+  <span class="lockup">${wordmark(24)}</span>
   <nav>
     <a href="${REPO_URL}" target="_blank" rel="noopener noreferrer">GitHub</a>
     <a href="/install">Install</a>
