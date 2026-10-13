@@ -1,12 +1,13 @@
 import { expect, spyOn, test } from 'bun:test';
-import { VfsEventEmitter, type VfsEventListener } from '@nimbus-sh/core/vfs/events.js';
+import { CompositeVFS } from '@nimbus-sh/core/vfs/composite.js';
+import type { VfsEvent } from '@nimbus-sh/core/vfs/events.js';
 import { orchestratorHarness } from './helpers/actor-harness';
 
 test('a file notification delivered after deletion creates no slate state', async () => {
-  const listeners: VfsEventListener[] = [];
+  const listeners: Array<(events: readonly VfsEvent[]) => void> = [];
   // Hold the library's delivery boundary so the notification arrives strictly after the wipe.
 
-  const held = spyOn(VfsEventEmitter.prototype, 'on').mockImplementation((listener) => {
+  const held = spyOn(CompositeVFS.prototype, 'watchChanges').mockImplementation((_path, listener) => {
     listeners.push(listener);
 
     return () => {};

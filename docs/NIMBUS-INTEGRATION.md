@@ -8,15 +8,15 @@ describes lives in `packages/cf-backend/src/runtime.ts`,
 ## Where the packages come from
 
 The tree carries no Nimbus source. Packages come from the registry, checked against the package manifests and
-`bun.lock` on 2026-10-12:
+`bun.lock` on 2026-10-13:
 
 | Package | Version | Declared in |
 |---|---|---|
-| `@nimbus-sh/core` | 0.17.0 | root, `packages/core`, `packages/cf-backend`, `packages/cli-backend`, `packages/cli`, `packages/agent-utils`, `packages/compaction`, `packages/test-utils` |
-| `@nimbus-sh/worker` | 0.15.0 | `packages/cf-backend` |
-| `@nimbus-sh/fabric` | ^0.12.0 | `packages/core`, `packages/cf-backend` |
-| `@nimbus-sh/sdk` | ^0.13.0 | `packages/core`, `packages/cf-backend` |
-| `@nimbus-sh/platform` | ^0.8.1 | `packages/cf-backend` |
+| `@nimbus-sh/core` | 0.18.0 | root, `packages/core`, `packages/cf-backend`, `packages/cli-backend`, `packages/cli`, `packages/agent-utils`, `packages/compaction`, `packages/test-utils` |
+| `@nimbus-sh/worker` | 0.16.0 | `packages/cf-backend` |
+| `@nimbus-sh/fabric` | ^0.13.0 | `packages/core`, `packages/cf-backend` |
+| `@nimbus-sh/sdk` | ^0.13.1 | `packages/core`, `packages/cf-backend` |
+| `@nimbus-sh/platform` | ^0.8.2 | `packages/cf-backend` |
 | `@nimbus-sh/runtime-bash` | 5.2.37-3 | root |
 | `@nimbus-sh/runtime-cpython` | 3.13.14-1 | root |
 
@@ -32,16 +32,17 @@ nests the workspaces' copy below, so the copy that runs is the stale one.
 Core imports fabric directly: `packages/core/src/events/outbox.ts` builds its
 outbox on `@nimbus-sh/fabric/outbox.js`.
 
-Core 0.17.0 and worker 0.15.0 carry declared patches (package.json `//patchedDependencies:*` names each, and what
+Core 0.18.0 and worker 0.16.0 carry declared patches (package.json `//patchedDependencies:*` names each, and what
 deletes it); each part is Nimbus's own build of the source change its ask proposes, except where a part says otherwise:
 - a stopped `bash -c` loop ends: core's shell entrypoints forward their AbortSignal to the nested shell, and worker's
   hosted shell child combines it with its own (NIMBUS-ASKS #42);
 - a client WebSocket open through a preview port holds the resident until it closes, so a quiet HMR socket keeps its dev
   server (#43: core's `PortRegistry.setClientSockets`, worker's keep-alive);
-- `connectTls` carries the program's servername, which Kinu's egress presents and checks (#44);
 - STARTTLS: a program's `tls.connect({ socket })` upgrades that socket through the egress (#46, patched into the staged
   node shims alone: an ask tag and an answer tag in the socket's name, the ask read by `keyed-socket.ts` only at the
-  protocol's go-ahead and answered only from the handshake, first after the ask);
+  protocol's go-ahead and answered only from the handshake, first after the ask). 0.16 refuses it by name
+  (`ERR_NIMBUS_EGRESS_STARTTLS`) until workerd can start TLS through a service binding; a socket the shims did not key
+  keeps that refusal;
 - a program's `navigator` answers as Node's (userAgent, platform, language), so pg chooses its Node transport (#47, the
   source hunk as written);
 - a walked `rm -r` (a backend with no removal of its own) keeps and names a child it cannot read and removes the rest
@@ -50,11 +51,22 @@ deletes it); each part is Nimbus's own build of the source change its ask propos
   named shell keeps apart list apart and an approval of one shell state never covers the other (#52, the hunk as
   written, dist and source).
 
-Asked of Nimbus and not carried: per-process egress attribution (#45), mysql2's `checkServerIdentity` under workerd's
+Asked of Nimbus and not carried: mysql2's `checkServerIdentity` under workerd's
 TLS (#48), connections keeping the host's socket type (#49), the Cloudflare accounts envelope (#50), a credentialed
 SqliteVFS view walking `..` after a link (#53; Kinu's store planes still key lexically), and the shell resolving an
 operand as POSIX does rather than lexically (#54; a command still reads `./missing/../f` and `f/` where the file plane
 refuses them).
+
+0.18 ships the servername `connectTls` carries (#44, the patch is gone; Kinu's egress takes Nimbus's `EgressTlsTarget`),
+an egress per process (`egressFor`, #45), and a route's traversal report (#41): `route(path, { report: true })` names
+every link its lookup read and, refused, the point it stopped at, so a slate build records those as its inputs and a
+link moved out there builds it again (`packages/cf-backend/src/slates/resident.ts`). The workspace's file listener
+moved from the SQLite engine's event bus, which 0.18 no longer feeds, to the namespace's `watchChanges`, so changes on
+Kinu's mounts reach it too; and the embedded workspace's `npx` installs through the workspace's network, as `npm` does.
+Behaviour 0.18 changes under Kinu (Nimbus's 2026-10-12 changelog): a file a Node program creates has the mode it asked
+for, less the umask, where before it was readable by others; npm stops an install whose required dependency cannot be
+resolved, or that names an option Nimbus does not implement, where before it installed the rest; and a program's ES
+modules run natively, in Node's order.
 
 0.17 ships what 0.16's patches carried: `route`/`mutationRoute` `{ creating }` (#32), a node facet's batched output
 writes (#39), and TLS through a workspace egress (`WorkspaceEgressTls.connectTls`, #37). It also ships npm's CommonJS as

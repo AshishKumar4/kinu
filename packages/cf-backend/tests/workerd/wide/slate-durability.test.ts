@@ -142,6 +142,22 @@ it.each([
   expect(seen).toEqual({ before: 'bad_input', after: 'builds', says: id });
 });
 
+// Nimbus ask 41: a slate that built through a second link out of its tree is built again when that link is pointed
+// elsewhere. The build records every link its lookups took, not only the file each found.
+it('a slate that built through a second link out of its tree is built again once that link is pointed elsewhere', async () => {
+  const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('links-hop'));
+
+  const seen = await subject.slateRepair({
+    workspace: 'durability-links-hop', owner: 'durability-owner', id: 'hop', imports: './lib.ts',
+    setup: 'mkdir -p /home/main/hop && echo \'export const word = "first";\' > /home/main/hop/first.ts'
+      + ' && echo \'export const word = "hop";\' > /home/main/hop/second.ts'
+      + ' && ln -s /home/main/hop/first.ts /home/main/hop/alias.ts && ln -s /home/main/hop/alias.ts /slates/hop/lib.ts',
+    repair: 'rm /home/main/hop/alias.ts && ln -s /home/main/hop/second.ts /home/main/hop/alias.ts',
+  });
+
+  expect(seen).toEqual({ before: 'builds', after: 'builds', says: 'hop' });
+});
+
 it('a removed slate’s URL is dead even when a new app claims its port', async () => {
   const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('removed'));
 

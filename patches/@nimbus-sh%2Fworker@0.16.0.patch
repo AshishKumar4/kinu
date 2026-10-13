@@ -1,8 +1,8 @@
 diff --git a/dist/facets/manager.js b/dist/facets/manager.js
-index fed8c23..4058e6c 100644
+index 886ad75..59d7045 100644
 --- a/dist/facets/manager.js
 +++ b/dist/facets/manager.js
-@@ -839,6 +839,21 @@ ${RESIDENCY_MISS_REPORT}
+@@ -858,6 +858,21 @@ ${RESIDENCY_MISS_REPORT}
      try { globalThis.process = __processMod; } catch {}
      try { globalThis.Buffer = __BufferMod; } catch {}
      try { globalThis.global = globalThis; } catch {}
@@ -25,10 +25,10 @@ index fed8c23..4058e6c 100644
      // performance.markResourceTiming and calls it with no receiver,
      // which workerd rejects with "Illegal invocation" and crashes the
 diff --git a/dist/hosted/commands.js b/dist/hosted/commands.js
-index fcd0460..376d8dd 100644
+index b0688e5..1ab46e1 100644
 --- a/dist/hosted/commands.js
 +++ b/dist/hosted/commands.js
-@@ -818,7 +818,8 @@ export async function registerHostedCommands(self, workspace) {
+@@ -819,7 +819,8 @@ export async function registerHostedCommands(self, workspace) {
                          setUmask: identity.setUmask,
                      },
                      runAs: runAsProcess,
@@ -39,10 +39,10 @@ index fcd0460..376d8dd 100644
                  exitCode = result.exitCode;
                  return result;
 diff --git a/dist/hosted/runtime.js b/dist/hosted/runtime.js
-index 6fdca7b..4d2c358 100644
+index 1bd1b4d..c09fb3c 100644
 --- a/dist/hosted/runtime.js
 +++ b/dist/hosted/runtime.js
-@@ -5,7 +5,7 @@ import { SUPERVISOR_DELIVER_OP } from '@nimbus-sh/core/workspace/supervisor-deli
+@@ -4,7 +4,7 @@ import { SUPERVISOR_OP_ROUTES, createSupervisorBridgeStore } from '@nimbus-sh/co
  import { openSupervisorDeliveries } from '@nimbus-sh/core/workspace/supervisor-delivery.js';
  import { WebSocketTerminal } from '../facets/ws-terminal.js';
  import { answerSupervisorOp, buildSessionSupervisorOps } from '../session/supervisor-op.js';
@@ -51,7 +51,7 @@ index 6fdca7b..4d2c358 100644
  import { takeLegacyResetNotice } from '../session/legacy-reset.js';
  import { appendScrollback, ensureSessionStateSchema, loadScrollback, loadShellState, persistShellState } from '../session/state-store.js';
  import { wireProcessLogSocketBroadcast } from '../runtime/process-logs-api.js';
-@@ -35,6 +35,7 @@ class RuntimeOwner {
+@@ -34,6 +34,7 @@ class RuntimeOwner {
      _w1KeepaliveArmed = false;
      _w1JanitorAt = null;
      _w1LastClientActivityAt = 0;
@@ -59,7 +59,7 @@ index 6fdca7b..4d2c358 100644
      _viteShimPid = null;
      _viteShimPort = null;
      wranglerAliasBannerShown = false;
-@@ -72,6 +73,8 @@ class RuntimeOwner {
+@@ -71,6 +72,8 @@ class RuntimeOwner {
          ensureSessionStateSchema(options.ctx);
          // A process's answers leave as the rest of its output does: once what it wrote is published.
          options.ports.setOutput(options.workspace.processes);
@@ -69,58 +69,20 @@ index 6fdca7b..4d2c358 100644
              appendScrollback(options.ctx, data, Date.now());
              persistShellState(options.ctx, { cwd: this.shell.getCwd(), env: this.shell.getEnv() });
 diff --git a/dist/node-shims-artifact.generated.js b/dist/node-shims-artifact.generated.js
-index c7484dc..f931189 100644
+index 5b1c786..93f0df8 100644
 --- a/dist/node-shims-artifact.generated.js
 +++ b/dist/node-shims-artifact.generated.js
 @@ -10,8 +10,8 @@
   */
  /** dist/runtime/node-shims.js generateShimsCode() */
- export const NODE_SHIMS_ENTRY = "/_assets/runtime/node-shims-6e7186f468bae50a.js";
--export const NODE_SHIMS_BUILD_ID = "6e7186f468bae50a";
--export const NODE_SHIMS_SHA256 = "6e7186f468bae50a826c0f3cb45e002865b543cdc5f531dd34ae32ce565e5ab2";
-+export const NODE_SHIMS_BUILD_ID = "0b875202d5b22434";
-+export const NODE_SHIMS_SHA256 = "0b875202d5b22434c10cf2750ee7add4413b75444833d3bd1b9ebf2414787a76";
+ export const NODE_SHIMS_ENTRY = "/_assets/runtime/node-shims-7fb968320d7d0418.js";
+-export const NODE_SHIMS_BUILD_ID = "7fb968320d7d0418";
+-export const NODE_SHIMS_SHA256 = "7fb968320d7d04183698263467cc8b7622ebe961cf6f09350472f7c4bf4c7637";
++export const NODE_SHIMS_BUILD_ID = "b2226f2ea335de28";
++export const NODE_SHIMS_SHA256 = "b2226f2ea335de28349bedd3b3b587eb6523496700226cf57908b4d230e7851a";
  /** @nimbus-sh/core dist/_shared/vfs-write-ledger.js VFS_WRITE_LEDGER_SOURCE */
- export const VFS_WRITE_LEDGER_ENTRY = "/_assets/runtime/vfs-write-ledger-676daf190edbf75d.js";
- export const VFS_WRITE_LEDGER_BUILD_ID = "676daf190edbf75d";
-diff --git a/dist/runtime/egress-tls-client.js b/dist/runtime/egress-tls-client.js
-index 457f0ac..f28b364 100644
---- a/dist/runtime/egress-tls-client.js
-+++ b/dist/runtime/egress-tls-client.js
-@@ -1,6 +1,6 @@
- /** Native TLSSocket owns the Node stream; the egress owns its encrypted session. */
- export const EGRESS_TLS_CLIENT_SOURCE = String.raw `
--function __nimbusEgressTlsConnect(real, net, args, notImplemented) {
-+function __nimbusEgressTlsConnect(real, net, args) {
-   let options = {}, callback;
-   if (args[0] !== null && typeof args[0] === 'object') { options = { ...args[0] }; callback = args[1]; }
-   else {
-@@ -18,9 +18,10 @@ function __nimbusEgressTlsConnect(real, net, args, notImplemented) {
-     const bound = previous?._handle?.options;
-     const host = options.host ?? bound?.host ?? previous?._host ?? 'localhost';
-     const port = Number(options.port ?? bound?.port);
--    if (options.servername !== undefined && options.servername !== host) throw notImplemented('options.servername', 'the egress makes TLS with the destination hostname as its SNI');
-+    // A servername other than the host is the name the egress presents and checks (Node's tls.connect({ servername })).
-+    const servername = typeof options.servername === 'string' && options.servername !== '' && options.servername !== host ? options.servername : undefined;
-     if (previous) previous.destroy();
--    return { host, port };
-+    return servername === undefined ? { host, port } : { host, port, servername };
-   };
-   let reader, writer, resource;
-   let endedRead = false, endedWrite = false, stopped = false;
-diff --git a/dist/runtime/node-shims.js b/dist/runtime/node-shims.js
-index c60cdb9..79ad29a 100644
---- a/dist/runtime/node-shims.js
-+++ b/dist/runtime/node-shims.js
-@@ -7898,7 +7898,7 @@ const __tlsMod = (() => {
-     const proxied = !!(__nimbusReplay && __nimbusReplay.outbound);
-     const egressed = globalThis.__nimbusEgress === true;
-     if (egressed || !proxied) __nimbusReplay?.effect("tls.connect " + describe(args));
--    const socket = egressed ? __nimbusEgressTlsConnect(real, realNet, args, notImplemented)
-+    const socket = egressed ? __nimbusEgressTlsConnect(real, realNet, args)
-       : proxied ? proxiedConnect(...args) : real.connect(...args);
-     let closed = false;
-     let hold = null;
+ export const VFS_WRITE_LEDGER_ENTRY = "/_assets/runtime/vfs-write-ledger-c424322c9d823746.js";
+ export const VFS_WRITE_LEDGER_BUILD_ID = "c424322c9d823746";
 diff --git a/dist/session/hibernation.d.ts b/dist/session/hibernation.d.ts
 index bec2fc5..b40db41 100644
 --- a/dist/session/hibernation.d.ts
@@ -229,10 +191,10 @@ index 07e5f4a..61eaefa 100644
   * W9: ensure the alarm is set for the next flush window. Cheap to
   * call repeatedly — we only schedule the in-isolate flush timer if
 diff --git a/dist/session/init.js b/dist/session/init.js
-index e418b86..6c04df2 100644
+index fb43d14..702e94c 100644
 --- a/dist/session/init.js
 +++ b/dist/session/init.js
-@@ -183,6 +183,8 @@ export async function initSession(self, ws, options = {}) {
+@@ -184,6 +184,8 @@ export async function initSession(self, ws, options = {}) {
      self.runtimeWorkspace = workspace;
      // A process's answers leave as the rest of its output does: once what it wrote is published.
      self.portRegistry.setOutput(workspace.processes);
@@ -242,10 +204,10 @@ index e418b86..6c04df2 100644
      self.kernel = workspace.kernel;
      self.shell = workspace.shell;
 diff --git a/dist/session/nimbus-session.d.ts b/dist/session/nimbus-session.d.ts
-index 23e2676..6ccaed8 100644
+index 04bb622..3e99c3c 100644
 --- a/dist/session/nimbus-session.d.ts
 +++ b/dist/session/nimbus-session.d.ts
-@@ -167,6 +167,8 @@ export declare class NimbusSession extends CloudflareDurableObject<SessionEnv> i
+@@ -170,6 +170,8 @@ export declare class NimbusSession extends CloudflareDurableObject<SessionEnv> i
       *  holds the object only while traffic was observed within
       *  RESIDENT_KEEPALIVE_DETACHED_MS (hibernation.ts residentClientPresent). */
      _w1LastClientActivityAt: number;
@@ -254,7 +216,7 @@ index 23e2676..6ccaed8 100644
      /** Destroyed-session tombstone (SESSION_DESTROYED_KEY), hydrated at boot.
       *  While set, log activity never re-arms the janitor alarm cycle. */
      _w1SessionDestroyed: boolean;
-@@ -692,6 +694,7 @@ export declare class NimbusSession extends CloudflareDurableObject<SessionEnv> i
+@@ -711,6 +713,7 @@ export declare class NimbusSession extends CloudflareDurableObject<SessionEnv> i
          destroyedAt: number;
          reason: string | null;
      }>;
@@ -263,7 +225,7 @@ index 23e2676..6ccaed8 100644
      _handleFetch(request: Request): Promise<Response>;
      /**
 diff --git a/dist/session/nimbus-session.js b/dist/session/nimbus-session.js
-index b2d4e9e..cfdc369 100644
+index 08c7e8d..f11e2e3 100644
 --- a/dist/session/nimbus-session.js
 +++ b/dist/session/nimbus-session.js
 @@ -44,7 +44,7 @@ import { ATTACH_BOOTSTRAP_JTI_KEY_PREFIX, SESSION_DESTROYED_KEY } from './keys.j
@@ -275,7 +237,7 @@ index b2d4e9e..cfdc369 100644
  import { timers } from '@nimbus-sh/fabric/timers.js';
  import { generation } from '@nimbus-sh/fabric/generation.js';
  // S6: initSession (1875 LOC of cmd registrations + boot wiring) extracted.
-@@ -324,6 +324,8 @@ export class NimbusSession extends CloudflareDurableObject {
+@@ -325,6 +325,8 @@ export class NimbusSession extends CloudflareDurableObject {
       *  holds the object only while traffic was observed within
       *  RESIDENT_KEEPALIVE_DETACHED_MS (hibernation.ts residentClientPresent). */
      _w1LastClientActivityAt = 0;
@@ -284,7 +246,7 @@ index b2d4e9e..cfdc369 100644
      /** Destroyed-session tombstone (SESSION_DESTROYED_KEY), hydrated at boot.
       *  While set, log activity never re-arms the janitor alarm cycle. */
      _w1SessionDestroyed = false;
-@@ -947,6 +949,9 @@ export class NimbusSession extends CloudflareDurableObject {
+@@ -968,6 +970,9 @@ export class NimbusSession extends CloudflareDurableObject {
      }
      async _rpcDestroy(options) { return _programmatic.rpcDestroy(this, options); }
      // ── HTTP handler ──────────────────────────────────────────────────────
@@ -294,25 +256,10 @@ index b2d4e9e..cfdc369 100644
      async fetch(request) {
          // Every client reaches the session through here; facets reach it
          // through RPC, which is deliberately not counted.
-diff --git a/dist/session/supervisor-calls.js b/dist/session/supervisor-calls.js
-index 939dfa9..52928dc 100644
---- a/dist/session/supervisor-calls.js
-+++ b/dist/session/supervisor-calls.js
-@@ -818,8 +818,9 @@ export function supervisorCalls(base) {
-                     throw new TypeError('netTls: bad target');
-                 if (typeof egress.connectTls !== 'function')
-                     throw Object.assign(new Error(EGRESS_TLS_REFUSAL), { code: 'ERR_NIMBUS_EGRESS_TLS' });
-+                const servername = typeof payload.servername === 'string' && payload.servername !== '' && payload.servername !== hostname ? payload.servername : undefined;
-                 try {
--                    return await egress.connectTls({ hostname, port });
-+                    return await egress.connectTls(servername === undefined ? { hostname, port } : { hostname, port, servername });
-                 }
-                 catch (error) {
-                     if (error instanceof TypeError && error.message === 'The RPC receiver does not implement the method "connectTls".') {
-diff --git a/public/_assets/runtime/node-shims-6e7186f468bae50a.js b/public/_assets/runtime/node-shims-6e7186f468bae50a.js
-index c031ebc..c1f306d 100644
---- a/public/_assets/runtime/node-shims-6e7186f468bae50a.js
-+++ b/public/_assets/runtime/node-shims-6e7186f468bae50a.js
+diff --git a/public/_assets/runtime/node-shims-7fb968320d7d0418.js b/public/_assets/runtime/node-shims-7fb968320d7d0418.js
+index a157bac..15c3f9c 100644
+--- a/public/_assets/runtime/node-shims-7fb968320d7d0418.js
++++ b/public/_assets/runtime/node-shims-7fb968320d7d0418.js
 @@ -351,6 +351,18 @@ function __nimbusNetworkGate() {
  // or not the process wrote anything yet, and the socket opens once the session
  // answered and what the process wrote before it is published
@@ -351,29 +298,7 @@ index c031ebc..c1f306d 100644
        if (globalThis.__nimbusEgress === true) {
          const socket = this;
          let state = __egressSocketHolds.get(socket);
-@@ -11231,7 +11255,7 @@ const __diagChannelMod = __nativeBuiltin("diagnostics_channel");
- // ──  tls module (W3: forward to workerd, override createServer) ─────
- // ═══════════════════════════════════════════════════════════════════════
- 
--function __nimbusEgressTlsConnect(real, net, args, notImplemented) {
-+function __nimbusEgressTlsConnect(real, net, args) {
-   let options = {}, callback;
-   if (args[0] !== null && typeof args[0] === 'object') { options = { ...args[0] }; callback = args[1]; }
-   else {
-@@ -11249,9 +11273,10 @@ function __nimbusEgressTlsConnect(real, net, args, notImplemented) {
-     const bound = previous?._handle?.options;
-     const host = options.host ?? bound?.host ?? previous?._host ?? 'localhost';
-     const port = Number(options.port ?? bound?.port);
--    if (options.servername !== undefined && options.servername !== host) throw notImplemented('options.servername', 'the egress makes TLS with the destination hostname as its SNI');
-+    // A servername other than the host is the name the egress presents and checks (Node's tls.connect({ servername })).
-+    const servername = typeof options.servername === 'string' && options.servername !== '' && options.servername !== host ? options.servername : undefined;
-     if (previous) previous.destroy();
--    return { host, port };
-+    return servername === undefined ? { host, port } : { host, port, servername };
-   };
-   let reader, writer, resource;
-   let endedRead = false, endedWrite = false, stopped = false;
-@@ -11356,6 +11381,85 @@ const __tlsMod = (() => {
+@@ -11455,6 +11479,85 @@ const __tlsMod = (() => {
    const notImplemented = (option, why) => {
      return nodeError(Error, 'ERR_OPTION_NOT_IMPLEMENTED', 'The ' + option + ' option is not implemented: ' + why);
    };
@@ -459,7 +384,7 @@ index c031ebc..c1f306d 100644
    const patchStartTls = (native) => {
      if (startTlsPatched || !native) return;
      startTlsPatched = true;
-@@ -11363,6 +11467,7 @@ const __tlsMod = (() => {
+@@ -11462,6 +11565,7 @@ const __tlsMod = (() => {
      const original = proto.startTls;
      Object.defineProperty(proto, 'startTls', { configurable: true, writable: true, value: function startTls(options) {
        const token = tokens.get(this);
@@ -467,7 +392,7 @@ index c031ebc..c1f306d 100644
        if (token === undefined) return Reflect.apply(original, this, arguments);
        const self = this;
        // workerd's TLSSocket has released the carrier's writer and reader and
-@@ -11469,11 +11574,31 @@ const __tlsMod = (() => {
+@@ -11568,11 +11672,31 @@ const __tlsMod = (() => {
      };
      return socket;
    };
@@ -492,7 +417,7 @@ index c031ebc..c1f306d 100644
      const proxied = !!(__nimbusReplay && __nimbusReplay.outbound);
      const egressed = globalThis.__nimbusEgress === true;
      if (egressed || !proxied) __nimbusReplay?.effect("tls.connect " + describe(args));
--    const socket = egressed ? __nimbusEgressTlsConnect(real, realNet, args, notImplemented)
+-    const socket = egressed ? __nimbusEgressTlsConnect(real, realNet, args)
 +    const over = egressed && args[0] !== null && typeof args[0] === 'object' ? args[0].socket : undefined;
 +    const keyed = over === undefined ? undefined : __nimbusEgressKeys.get(over);
 +    const socket = keyed !== undefined ? keyedConnect(over, keyed, args[0], args[1])
