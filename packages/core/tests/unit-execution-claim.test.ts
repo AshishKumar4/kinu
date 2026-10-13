@@ -234,3 +234,24 @@ test("a turn stopped while it prepared answers the words it took: no later start
     expect({ outcome: fixture.actor.session.claims.read('s-1')?.outcome ?? null, owed: owedWords(fixture) }).toEqual({ outcome: 'aborted', owed: [] });
   } finally { fixture.close(); }
 });
+
+test("a delivered run's kept end whose spilled file cannot be read is told as a refusal, and the other ends with it", async () => {
+  const fixture = await sessionFixture({ model: answering().model });
+
+  try {
+    const store = new PendingSendStore(fixture.actor.runtime.storage.sql, fixture.actor.handle.actorId);
+    const kept = { kinuEvent: 'delivered_run', kinuMode: 'build', kinuRun: 'run-kept' };
+
+    // One end spilled to a file since lost, one kept whole beside it.
+    store.reserveTurn({ id: 'lost-end', text: 'Name one way.', metadata: { ...kept, kinuRun: 'run-lost' } });
+    store.recordRunEnd('lost-end', { json: null, path: 'payloads/gone.json', digest: 'sha256:gone' });
+    store.reserveTurn({ id: 'kept-end', text: 'Name another.', metadata: kept });
+    store.recordRunEnd('kept-end', { json: JSON.stringify({ refused: { code: 'cancelled', message: 'stopped' } }), path: null, digest: null });
+
+    const owed = await fixture.chat.runEndsOwed();
+
+    expect(owed.map(({ id, outcome }) => [id, 'refused' in outcome ? outcome.refused.code : 'ended'])).toEqual([['lost-end', 'missing'], ['kept-end', 'cancelled']]);
+  } finally {
+    fixture.close();
+  }
+});

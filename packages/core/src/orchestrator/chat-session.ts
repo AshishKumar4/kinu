@@ -43,6 +43,7 @@ import type { TierId } from '../types/profile';
 import type { SendLanding, SettledSignals } from '../types/signals';
 import { WorkModeSchema, type WorkMode } from '../types/turn';
 import { JsonObjectSchema, parseJsonObject, type JsonObject } from '../utils/json';
+import type { SessionPayload } from '../session/payload';
 import { nanoid } from '../utils/nanoid';
 import { ASKED, type Holds } from '../utils/held-reads';
 import type { Usage } from '../usage';
@@ -961,17 +962,32 @@ export class ChatSession {
   }
 
   /** Each delivered run's end kept here and not yet told (D2), as its next report carries it. */
-  async runEndsOwed(): Promise<RunEndReport[]> {
-    const owed: RunEndReport[] = [];
+  runEndsOwed(): Promise<RunEndReport[]> {
+    return settleEffect(Effect.gen({ self: this }, function* () {
+      const owed: RunEndReport[] = [];
 
-    for (const { id, metadata, end } of this.pendingSends.runEnds()) {
-      const held = v.safeParse(HeldRunSchema, metadata);
-      const outcome = v.safeParse(RunEndOutcomeSchema, await this.transcript.payload(end));
+      for (const { id, metadata, end } of this.pendingSends.runEnds()) {
+        const held = v.safeParse(HeldRunSchema, metadata);
 
-      if (held.success && outcome.success) owed.push({ id, runId: held.output.kinuRun, outcome: outcome.output });
-    }
+        if (held.success) owed.push({ id, runId: held.output.kinuRun, outcome: yield* this.keptRunEnd(end) });
+      }
 
-    return owed;
+      return owed;
+    }));
+  }
+
+  /** A run's end as it was kept. One that cannot be read back (its spilled file gone or changed) is told as the refusal
+   *  it is, and retires with its telling: one unreadable end never holds back the agent's other reports. */
+  private keptRunEnd(end: SessionPayload): Effect.Effect<RunEndOutcome> {
+    return attempt({ doing: "reading a delivered run's kept end", otherwise: 'io' }, () => this.transcript.payload(end)).pipe(
+      Effect.map((kept) => v.safeParse(RunEndOutcomeSchema, kept)),
+      Effect.flatMap((parsed) => (parsed.success ? Effect.succeed(parsed.output) : Effect.fail(new KinuError('io', "a delivered run's kept end is not one")))),
+      Effect.catch((failure) => Effect.sync(() => {
+        diagnostics.failure('agent.run_end_unreadable', failure);
+
+        return refusedRun(failure);
+      })),
+    );
   }
 
   /** A report carrying these ends reached the workspace: their runs are owed no more. A newer generation held under the
