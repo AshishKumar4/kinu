@@ -68,7 +68,7 @@ function committedWidthPx(
 
 interface InspectorInput { readonly kind: "pointer" | "key" }
 
-export interface InspectorLayout {
+interface InspectorLayout {
   readonly widthPx: number;
   readonly collapsed: boolean;
   readonly onLayoutChanged: (layout: Layout) => void;

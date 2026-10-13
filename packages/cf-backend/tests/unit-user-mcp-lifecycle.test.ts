@@ -9,9 +9,8 @@ import {
   closeMcpTransport, dropLiveMcpFetch, failNextMcpRemove, holdMcpRestore, seedMcpAnswer, failNextMcpToolCall, failNextMcpDiscovery, hangMcpEstablish, holdNextMcpToolCall, inheritedMcpManager,
   liveMcpFetch, liveMcpTransport, recordedMcpFetch, recordedMcpLifecycle, recordedMcpServers, recordedMcpToolAborts,
   recordedMcpToolCalls, resetRecordedMcp, seedMcpSession, seedMcpTools, seedMcpAuthContinuation, seedSdkMcpServer, seedUndiscoveredMcpTools,
-  type RecordedMcpTransport,
 } from './helpers/agents-sdk';
-import { classifyMcpFailure, storedMcpOptionsCarryCredential } from '../src/user/mcp';
+import { classifyMcpFailure } from '../src/user/mcp';
 import { createCredentialCipher, McpToolSurfaceSchema } from '@kinu.run/core';
 import { KinuError, setDiagnosticsSink, type LogFields } from '@kinu.run/core/obs';
 import { ProtocolError, SdkError, SdkErrorCode } from '@modelcontextprotocol/client';
@@ -427,12 +426,9 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
     h.close();
   });
 
-  test('a cold activation over storage a pre-change build wrote scrubs it', async () => {
+  test('a cold activation serves a sealed credential through the seam, never as SDK data', async () => {
     const first = harness();
-    await seedServer(first, 'srv1', { headers: { Authorization: 'Bearer mcp-secret' } });
-    // A plaintext credential row in the SDK's storage, replayed on every reconnect.
-    seedSdkMcpServer('srv1', { type: 'auto', requestInit: { headers: { Authorization: 'Bearer mcp-secret' } } });
-    expect(persistedServerOptions('srv1')).toContain('mcp-secret');
+    await seedServer(first, 'srv1', { headers: { Authorization: 'Bearer sealed' } });
 
     // A new DO over the same storage; not `harness()`, which would clear the SDK rows under test.
     const woken = createTestUserDO({ storage: first.db });
@@ -440,53 +436,6 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
 
     expect(persistedServerOptions('srv1')).toBe(JSON.stringify({ transport: { type: 'auto' } }));
     // The live connection carries the seam: cold-start ordering invariant.
-    expect(liveMcpFetch('srv1')).not.toBeNull();
-    expect(liveMcpTransport('srv1')?.requestInit).toBeUndefined();
-    woken.close();
-    first.close();
-  });
-
-  test('a row whose credential column is NULL is scrubbed too, not replayed', async () => {
-    // The scrub must not be keyed on our credential column: once it goes NULL the SDK row keeps the
-    // plaintext and nothing would reach it again.
-    const first = harness();
-    await seedServer(first, 'srv1');
-    // Shape of a stored plaintext row (`buildMcpHeaderTransportOpts`, `a080f8d2a^:src/user/mcp.ts:270-287`).
-    seedSdkMcpServer('srv1', {
-      type: 'auto',
-      eventSourceInit: {},
-      requestInit: { headers: { Authorization: 'Bearer stale' } },
-    });
-    expect(persistedServerOptions('srv1')).toContain('stale');
-
-    const woken = createTestUserDO({ storage: first.db });
-    const listed = await woken.userDO.userMcp_list(await testOwner());
-
-    // The plaintext is gone from the SDK's own state, the only place it ever was.
-    expect(persistedServerOptions('srv1')).toBe(JSON.stringify({ transport: { type: 'auto' } }));
-    expect(liveMcpTransport('srv1')?.requestInit).toBeUndefined();
-    expect(liveMcpTransport('srv1')?.eventSourceInit).toBeUndefined();
-    expect(liveMcpFetch('srv1')).toBeNull();
-    // `restoreConnectionsFromStorage` skips a connection this pass registered (`client-zqKcsyFa.js:1541-1549`).
-    expect(recordedMcpLifecycle().established).toContain('srv1');
-    expect(listed[0]?.status).toBe('ready');
-    woken.close();
-    first.close();
-  });
-
-  test('a scrubbed row that DOES hold a credential still serves from the sealed copy', async () => {
-    // The scrub removes the plaintext copy, not the capability: requests stay authorized from the sealed column.
-    const first = harness();
-    await seedServer(first, 'srv1', { headers: { Authorization: 'Bearer sealed' } });
-    seedSdkMcpServer('srv1', {
-      type: 'auto',
-      requestInit: { headers: { Authorization: 'Bearer stale' } },
-    });
-
-    const woken = createTestUserDO({ storage: first.db });
-    await woken.userDO.userMcp_list(await testOwner());
-
-    expect(persistedServerOptions('srv1')).toBe(JSON.stringify({ transport: { type: 'auto' } }));
     expect(liveMcpTransport('srv1')?.requestInit).toBeUndefined();
 
     const seen = await authorizationsSeenDuring(async () => {
@@ -496,35 +445,6 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
     });
 
     expect(seen).toEqual(['Bearer sealed']);
-    woken.close();
-    first.close();
-  });
-
-  test('a headers-clearing patch as an activation’s FIRST MCP call leaves no plaintext', async () => {
-    // Hydration runs after the NULL write, so the scrub cannot depend on the column.
-    const first = harness();
-    const owner = await testOwner();
-    await seedServer(first, 'srv1', { headers: { Authorization: 'Bearer mcp-secret' } });
-    seedSdkMcpServer('srv1', {
-      type: 'auto',
-      requestInit: { headers: { Authorization: 'Bearer mcp-secret' } },
-    });
-
-    const woken = createTestUserDO({ storage: first.db });
-    await woken.userDO.userMcp_update(owner, 'srv1', { headers: null });
-
-    expect(persistedServerOptions('srv1')).toBe(JSON.stringify({ transport: { type: 'auto' } }));
-    expect(liveMcpTransport('srv1')?.requestInit).toBeUndefined();
-    expect(sqlExec(first.db).exec(
-      'SELECT headers FROM user_mcp_servers WHERE id = ?', 'srv1',
-    ).toArray()[0]?.headers).toBeNull();
-
-    // The seam the activation installed reads the cleared column: the next request goes out bare.
-    const seen = await authorizationsSeenDuring(async () => {
-      await liveMcpFetch('srv1')?.('https://srv1.example/sse');
-    });
-
-    expect(seen).toEqual(['none']);
     woken.close();
     first.close();
   });
@@ -628,35 +548,6 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
   });
 });
 
-describe('what counts as a credential in the SDK’s stored options', () => {
-  test('the three data fields count, and the SDK’s own connection state does not', () => {
-    const stored = (transport: RecordedMcpTransport): string => JSON.stringify({ transport });
-
-    expect(storedMcpOptionsCarryCredential(
-      stored({ type: 'auto', requestInit: { headers: { Authorization: 'Bearer x' } } }),
-    )).toBe(true);
-    expect(storedMcpOptionsCarryCredential(
-      stored({ type: 'auto', eventSourceInit: {} }),
-    )).toBe(true);
-    expect(storedMcpOptionsCarryCredential(
-      stored({ type: 'auto', headers: { Authorization: 'Bearer x' } }),
-    )).toBe(true);
-
-    // Session resumption and retry policy are the SDK's own state; rewriting for them would drop a
-    // resumable session on every activation.
-    expect(storedMcpOptionsCarryCredential(
-      stored({ type: 'auto', sessionId: 'sess-1', protocolVersion: '2026-07-28' }),
-    )).toBe(false);
-    expect(storedMcpOptionsCarryCredential(stored({ type: 'auto' }))).toBe(false);
-
-    expect(storedMcpOptionsCarryCredential('{"client":{}}')).toBe(false);
-    expect(storedMcpOptionsCarryCredential('{"transport":null}')).toBe(false);
-    expect(storedMcpOptionsCarryCredential('not json at all')).toBe(false);
-    expect(storedMcpOptionsCarryCredential(null)).toBe(false);
-  });
-});
-
-// 2026-10-05: a stopped eval's MCP call ran on: the call is an RPC to this hub, and no signal crosses an RPC.
 describe('a caller stops the MCP call it made', () => {
   test('a cancel naming the call aborts its request, and the call settles with the cancel', async () => {
     const h = harness();

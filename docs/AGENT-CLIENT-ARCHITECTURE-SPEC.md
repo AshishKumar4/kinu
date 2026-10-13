@@ -224,12 +224,12 @@ POST /api/user/workspaces
 The server keeps a supplied name as given. For a request without a name,
 `fallbackWorkspaceIdentity` makes the slug and a provisional display name from
 the mission, and the genesis turn's `auto_title` effect replaces the display
-name later. The CLI names its own workspaces before it creates them:
-`suggestAgentIdentityFromMission` (`packages/cli/src/agent-create.ts`) runs for
-a new local workspace in the TUI home screen, and `createCloudAgentFromMission`
-runs it for a cloud workspace created without a name. The server treats that
-name as supplied. The workspace noun replaced the agent noun on this path. See
-[WORKSPACES.md](WORKSPACES.md).
+name later. The CLI names a new local workspace itself, with the same
+`fallbackWorkspaceIdentity`, in the TUI home screen. A cloud create sends a name
+only when the owner chose one (`createCliAgent` in
+`packages/cli/src/agent-create.ts`), because the server keeps a sent name as the
+owner's and never replaces its title. The workspace noun replaced the agent noun
+on this path. See [WORKSPACES.md](WORKSPACES.md).
 
 ## History projections
 

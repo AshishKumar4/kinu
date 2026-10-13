@@ -11,5 +11,8 @@
   "dependencies": {
     "@nimbus-sh/core": "0.17.0",
     "valibot": "^1.4.1"
+  },
+  "devDependencies": {
+    "@kinu.run/test-utils": "workspace:*"
   }
 }

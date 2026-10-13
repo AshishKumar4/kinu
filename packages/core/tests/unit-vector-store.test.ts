@@ -61,7 +61,6 @@ function makeMockIndex() {
   };
 
   const index: VectorizeIndex = {
-    async insert(vecs) { return write(vecs); },
     async upsert(vecs) { return write(vecs); },
     async query(vector, options) {
       const topK = options?.topK ?? 10;
@@ -89,13 +88,6 @@ function makeMockIndex() {
 
       return {};
     },
-    async getByIds(ids) {
-      return ids.flatMap((id) => {
-        const r = records.get(id);
-
-        return r ? [{ id, values: r.values, metadata: r.metadata }] : [];
-      });
-    },
   };
 
   return { index, records };
@@ -119,7 +111,7 @@ const constEmbedder: Embedder = {
 };
 
 describe('CloudflareVectorStore', () => {
-  test('upsertChunk + search round-trips a chunk', async () => {
+  test('upsertChunks + search round-trips a chunk', async () => {
     const { index, records } = makeMockIndex();
     const store = createCloudflareVectorStore({ index, embedder: constEmbedder });
 
@@ -129,7 +121,7 @@ describe('CloudflareVectorStore', () => {
       text: 'apples and bananas',
     };
 
-    await store.upsertChunk(chunk);
+    await store.upsertChunks([chunk]);
     expect(present(records.get('mem-1'), 'the upserted mem-1 record').metadata?.path).toBe('memory/MEMORY.md');
 
     const hits = await store.search('apples', 5);
@@ -143,7 +135,7 @@ describe('CloudflareVectorStore', () => {
   test('a record whose metadata breaks the convention is not served as a hit with an invented location', async () => {
     const { index, records } = makeMockIndex();
     const store = createCloudflareVectorStore({ index, embedder: constEmbedder });
-    await store.upsertChunk({ id: 'mem-1', path: 'memory/MEMORY.md', startLine: 1, endLine: 5, text: 'apples and bananas' });
+    await store.upsertChunks([{ id: 'mem-1', path: 'memory/MEMORY.md', startLine: 1, endLine: 5, text: 'apples and bananas' }]);
     records.set('foreign', { values: [1, 0, 0], metadata: { chunkId: 'mem-2', path: 'memory/OTHER.md', startLine: '3', endLine: 4 } });
 
     const hits = await store.search('apples', 5);
@@ -155,7 +147,7 @@ describe('CloudflareVectorStore', () => {
   test.each(['chunkId', 'hash', 'path', 'startLine', 'endLine'])('metadata missing %s is refused without an invented canonical hit', async (missing) => {
     const { index, records } = makeMockIndex();
     const store = createCloudflareVectorStore({ index, embedder: constEmbedder });
-    await store.upsertChunk({ id: 'current', path: 'memory/current.md', startLine: 1, endLine: 1, text: 'apples' });
+    await store.upsertChunks([{ id: 'current', path: 'memory/current.md', startLine: 1, endLine: 1, text: 'apples' }]);
 
     const metadata = Object.fromEntries(Object.entries({
       chunkId: 'remote', hash: 'digest', path: 'memory/remote.md', startLine: 1, endLine: 1,
@@ -187,7 +179,7 @@ describe('CloudflareVectorStore', () => {
   test('deleteChunks removes items', async () => {
     const { index, records } = makeMockIndex();
     const store = createCloudflareVectorStore({ index, embedder: constEmbedder });
-    await store.upsertChunk({ id: 'x', path: '.', startLine: 0, endLine: 0, text: 'hello' });
+    await store.upsertChunks([{ id: 'x', path: '.', startLine: 0, endLine: 0, text: 'hello' }]);
     expect(records.has('x')).toBe(true);
     await store.deleteChunks(['x']);
     expect(records.has('x')).toBe(false);
@@ -195,11 +187,9 @@ describe('CloudflareVectorStore', () => {
 
   test('a failed search rejects and trips the cooldown, never answering an empty corpus', async () => {
     const failingIndex: VectorizeIndex = {
-      async insert() { return {}; },
       async upsert() { return {}; },
       async query() { throw new Error('vectorize down'); },
       async deleteByIds() { return {}; },
-      async getByIds() { return []; },
     };
 
     const store = createCloudflareVectorStore({ index: failingIndex, embedder: constEmbedder });
@@ -210,18 +200,15 @@ describe('CloudflareVectorStore', () => {
 
   test('a failed write rejects instead of reporting success', async () => {
     const failingIndex: VectorizeIndex = {
-      async insert() { return {}; },
       async upsert() { throw new Error('vectorize down'); },
       async query() { return { matches: [] }; },
       async deleteByIds() { throw new Error('vectorize down'); },
-      async getByIds() { return []; },
     };
 
     const store = createCloudflareVectorStore({ index: failingIndex, embedder: constEmbedder });
     const chunk: IndexedChunk = { id: 'x', path: 'p', startLine: 1, endLine: 2, text: 'hello' };
 
     // A swallowed failure lets the backfill mark never-embedded chunks as done.
-    await expect(store.upsertChunk(chunk)).rejects.toThrow('vectorize down');
     await expect(store.upsertChunks([chunk])).rejects.toThrow('vectorize down');
     await expect(store.deleteChunks(['x'])).rejects.toThrow('vectorize down');
     await expect(store.upsertChunks([])).resolves.toBeUndefined();
@@ -232,7 +219,6 @@ describe('CloudflareVectorStore', () => {
     let down = true;
 
     const flakyIndex: VectorizeIndex = {
-      async insert() { return {}; },
       async upsert() {
         if (down) throw new Error('vectorize down');
 
@@ -244,7 +230,6 @@ describe('CloudflareVectorStore', () => {
         return { matches: [] };
       },
       async deleteByIds() { return {}; },
-      async getByIds() { return []; },
     };
 
     const store = createCloudflareVectorStore({ index: flakyIndex, embedder: constEmbedder });
@@ -279,7 +264,6 @@ function makeNamespacedIndex() {
   };
 
   const index: VectorizeIndex = {
-    async insert(vecs) { return put(vecs); },
     async upsert(vecs) { return put(vecs); },
     async query(vector, options) {
       const topK = options?.topK ?? 10;
@@ -304,7 +288,6 @@ function makeNamespacedIndex() {
 
       return {};
     },
-    async getByIds() { return []; },
   };
 
   return { index, records };
@@ -317,8 +300,8 @@ describe('CloudflareVectorStore — workspace isolation', () => {
     const wsB = createCloudflareVectorStore({ index, embedder: constEmbedder, namespace: 'workspace-b' });
 
     const id = 'memory/MEMORY.md:1-5';
-    await wsA.upsertChunk({ id, path: 'memory/MEMORY.md', startLine: 1, endLine: 5, text: 'apples and bananas' });
-    await wsB.upsertChunk({ id, path: 'memory/MEMORY.md', startLine: 1, endLine: 5, text: 'zebras roam' });
+    await wsA.upsertChunks([{ id, path: 'memory/MEMORY.md', startLine: 1, endLine: 5, text: 'apples and bananas' }]);
+    await wsB.upsertChunks([{ id, path: 'memory/MEMORY.md', startLine: 1, endLine: 5, text: 'zebras roam' }]);
 
     expect(records.size).toBe(2);
 
@@ -337,8 +320,8 @@ describe('CloudflareVectorStore — workspace isolation', () => {
     const wsA = createCloudflareVectorStore({ index, embedder: constEmbedder, namespace: 'workspace-a' });
     const wsB = createCloudflareVectorStore({ index, embedder: constEmbedder, namespace: 'workspace-b' });
     const id = 'memory/notes.md:1-2';
-    await wsA.upsertChunk({ id, path: 'memory/notes.md', startLine: 1, endLine: 2, text: 'alpha beta' });
-    await wsB.upsertChunk({ id, path: 'memory/notes.md', startLine: 1, endLine: 2, text: 'alpha beta' });
+    await wsA.upsertChunks([{ id, path: 'memory/notes.md', startLine: 1, endLine: 2, text: 'alpha beta' }]);
+    await wsB.upsertChunks([{ id, path: 'memory/notes.md', startLine: 1, endLine: 2, text: 'alpha beta' }]);
 
     await wsA.deleteChunks([id]);
     expect((await wsA.search('alpha', 5)).length).toBe(0);
@@ -349,7 +332,7 @@ describe('CloudflareVectorStore — workspace isolation', () => {
     const { index, records } = makeNamespacedIndex();
     const store = createCloudflareVectorStore({ index, embedder: constEmbedder, namespace: 'a-fairly-long-workspace-name-xyz' });
     const longId = 'memory/logs/2026-07-13-some-very-long-session-file-name.md:100000-100050';
-    await store.upsertChunk({ id: longId, path: 'memory/logs/x.md', startLine: 100000, endLine: 100050, text: 'hello world' });
+    await store.upsertChunks([{ id: longId, path: 'memory/logs/x.md', startLine: 100000, endLine: 100050, text: 'hello world' }]);
 
     for (const key of records.keys()) expect(new TextEncoder().encode(key).length).toBeLessThanOrEqual(64);
     const hits = await store.search('hello', 5);
@@ -361,7 +344,7 @@ describe('createNoopVectorStore', () => {
   test('reports unavailable + accepts upserts as nop + returns []', async () => {
     const store = createNoopVectorStore();
     expect(store.available).toBe(false);
-    await store.upsertChunk({ id: 'x', path: '.', startLine: 0, endLine: 0, text: 'hi' });
+    await store.upsertChunks([{ id: 'x', path: '.', startLine: 0, endLine: 0, text: 'hi' }]);
     await store.upsertChunks([]);
     await store.deleteChunks([]);
     expect(await store.search('anything')).toEqual([]);

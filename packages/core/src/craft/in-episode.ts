@@ -41,7 +41,7 @@ export function craftCreatesTool(code: string): boolean {
   return program !== null && namespacedCalls(program, ['workspace']).has('workspace.createTool');
 }
 
-/** Also emitted by cf-backend/src/codemode-node-shim.ts `defineCrafted`; keep the format in sync. */
+/** Also emitted by core/src/execution/codemode-node-shim.ts `defineCrafted`; keep the format in sync. */
 export function craftFailureMarker(name: string): string {
   return `[crafted:${name}]`;
 }

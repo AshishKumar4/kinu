@@ -84,7 +84,7 @@ function reduce(state: State, action: Action, limitBytes: number): State {
   };
 }
 
-export interface PendingAttachments {
+interface PendingAttachments {
   readonly parts: readonly FileUIPart[];
   readonly refusal: string | null;
   readonly add: (files: FileList | null | undefined) => void;

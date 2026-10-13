@@ -13,7 +13,7 @@ import {
 } from "react";
 
 import { rosterBucket, rosterMatches } from "@kinu.run/core";
-import { useAccountMemory, type AccountMemory } from "@/hooks/use-account-memory";
+import type { AccountMemoryProposal } from "@kinu.run/core";
 import {
   AccountMemoryFrameSchema, listWorkspaces, RosterFrameSchema, ROSTER_SOCKET_ROUTE,
   type RosterCounts, type RosterEntry, type RosterFilterBucket, type RosterFrame, type RosterPage, type WorkspaceEntry,
@@ -53,8 +53,9 @@ interface WorkspaceRosterValue extends RosterPages {
   readonly subscribe: (listener: FrameListener) => () => void;
   /** Moves on each socket open, since frames missed while it was down are not replayed. */
   readonly epoch: number;
-  /** The account's memory: what Settings shows, and what the attention stack shows waiting. */
-  readonly accountMemory: AccountMemory;
+  /** What waits on the owner in the account's memory, as the socket's newest frame says it; null before one lands.
+   *  Settings reads the whole memory itself, and again on each frame. */
+  readonly accountProposals: readonly AccountMemoryProposal[] | null;
 }
 
 const WorkspaceRosterContext = createContext<WorkspaceRosterValue | null>(null);
@@ -232,8 +233,7 @@ const ALL: RosterFilter = {};
 export function WorkspaceRosterProvider({ children, live = openRosterSocket }: { readonly children: ReactNode; readonly live?: RosterLive }) {
   const listeners = useRef(new Set<FrameListener>());
   const [epoch, setEpoch] = useState(0);
-  const accountMemory = useAccountMemory();
-  const { framed } = accountMemory;
+  const [accountProposals, setAccountProposals] = useState<readonly AccountMemoryProposal[] | null>(null);
 
   const subscribe = useCallback((listener: FrameListener): () => void => {
     listeners.current.add(listener);
@@ -279,7 +279,7 @@ export function WorkspaceRosterProvider({ children, live = openRosterSocket }: {
         const memory = v.safeParse(AccountMemoryFrameSchema, parsed);
 
         if (memory.success) {
-          framed(memory.output.pending);
+          setAccountProposals(memory.output.pending);
 
           return;
         }
@@ -312,7 +312,7 @@ export function WorkspaceRosterProvider({ children, live = openRosterSocket }: {
       window.clearTimeout(timer);
       socket?.close();
     };
-  }, [live, framed]);
+  }, [live]);
 
   const upsert = useCallback((entry: WorkspaceEntry): void => {
     const added: RosterEntry = { ...entry, overview: null, decisions: 0 };
@@ -350,8 +350,8 @@ export function WorkspaceRosterProvider({ children, live = openRosterSocket }: {
   }, [refresh, rename]);
 
   const value = useMemo<WorkspaceRosterValue>(() => ({
-    ...pages, total: pages.counts.all, pending, refresh, upsert, rename, remove, subscribe, epoch, accountMemory,
-  }), [pages, pending, refresh, upsert, rename, remove, subscribe, epoch, accountMemory]);
+    ...pages, total: pages.counts.all, pending, refresh, upsert, rename, remove, subscribe, epoch, accountProposals,
+  }), [pages, pending, refresh, upsert, rename, remove, subscribe, epoch, accountProposals]);
 
   return <WorkspaceRosterContext.Provider value={value}>{children}</WorkspaceRosterContext.Provider>;
 }

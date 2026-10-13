@@ -16,19 +16,20 @@ export interface AnalyticsSqlEnv {
   ANALYTICS_DATASET_SUFFIX?: string;
 }
 
+const AnalyticsRowSchema = v.record(v.string(), v.union([v.string(), v.number(), v.boolean(), v.null()]));
+
+export type AnalyticsRow = v.InferOutput<typeof AnalyticsRowSchema>;
+
 /** `unconfigured` is not `failed`: a missing token must not look like an outage. */
-export type AnalyticsResult =
-  | { readonly status: 'ok'; readonly rows: readonly AnalyticsRow[] }
-  | { readonly status: 'unconfigured'; readonly missing: readonly string[] }
-  | { readonly status: 'failed'; readonly reason: string };
+export const AnalyticsResultSchema = v.variant('status', [
+  v.object({ status: v.literal('ok'), rows: v.pipe(v.array(AnalyticsRowSchema), v.readonly()) }),
+  v.object({ status: v.literal('unconfigured'), missing: v.pipe(v.array(v.string()), v.readonly()) }),
+  v.object({ status: v.literal('failed'), reason: v.string() }),
+]);
 
-export type AnalyticsRow = Record<string, string | number | boolean | null>;
+export type AnalyticsResult = v.InferOutput<typeof AnalyticsResultSchema>;
 
-const AnalyticsCellSchema = v.union([v.string(), v.number(), v.boolean(), v.null()]);
-
-const SqlResponseSchema = v.object({
-  data: v.array(v.record(v.string(), AnalyticsCellSchema)),
-});
+const SqlResponseSchema = v.object({ data: v.array(AnalyticsRowSchema) });
 
 // `errors` is required so a non-envelope body (valibot reads arrays as objects) fails to parse.
 const SqlErrorSchema = v.object({

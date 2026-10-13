@@ -18,6 +18,7 @@ export const CHATGPT_BASE_URL = 'https://api.openai.com/v1';
 
 export const CHATGPT_CRED_KEY = 'chatgpt.oauth';
 
+/** Where the owner reviews and limits what Kinu spends of their ChatGPT plan. */
 export const CHATGPT_USAGE_URL = 'https://chatgpt.com/settings/usage';
 
 export const CHATGPT_DEFAULT_MODEL = 'gpt-6.1-sol';

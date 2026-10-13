@@ -1,6 +1,6 @@
 import type { ModelMenuEntry } from "../lib/user-api";
 
-export interface ModelMenuGroup {
+interface ModelMenuGroup {
   provider: string;
   models: ModelMenuEntry[];
 }

@@ -64,7 +64,7 @@ import {
   type ScaffoldRunOptions,
   initActorClaimTables, ActorClaimStore, initPendingSendTables,
   createScaffoldCandidateSurface, createScaffoldCallTool, createScaffoldHistory, type ScaffoldCandidateBinding,
-  createJsonJudge, type ScaffoldControl,
+  type ScaffoldControl,
   refinementPass, type RefinementDeps,
   type CompletedTurn, type TurnContinuity,
   type AdvisorRecoverySnapshot,
@@ -2022,7 +2022,6 @@ export abstract class ActorAgent extends Agent<Env> {
       rt: this.rt,
       events: this.eventRecorder,
       sql: this.boundSql,
-      history: this.stores.history,
       surface: (task, context, callScope) => createScaffoldCandidateSurface({
         ...this.scaffoldCandidateModel(),
         tools: () => this.getRawToolsForWorkMode(this.turnWorkMode(), callScope),
@@ -2030,14 +2029,6 @@ export abstract class ActorAgent extends Agent<Env> {
         history: this.makeScaffoldHistory(),
         spend: this.scaffoldSpend(),
       }, task, context),
-      // `scaffold` is a fixed tier in MODEL_ROUTE_POLICY, not the turn's model.
-      model: async () => (await this.modelForSource('scaffold')).model,
-      judge: createJsonJudge(
-        () => this.getModelForReview(), (report) => this.reportModelCall(report), this.modelOperations,
-      ),
-      // Attribution sinks for the plane, including the reflection LM.
-      reportModelCall: (report) => this.reportModelCall(report),
-      operations: this.modelOperations,
     };
   }
 
@@ -4523,10 +4514,6 @@ export abstract class ActorAgent extends Agent<Env> {
       spec: resolution.model,
       ...this.ownedModelServices.resolveModelWithEffort(resolution.model, resolution.reasoningEffort),
     };
-  }
-
-  protected async getModelForReview(): Promise<LanguageModel> {
-    return (await this.modelForSource('judge')).model;
   }
 
   /**

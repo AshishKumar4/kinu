@@ -14,7 +14,7 @@ import {
 } from '@kinu.run/core';
 import { cliPageRoutes, cliRoutes } from '../src/cli/routes';
 import { serveFamily } from './helpers/api';
-import { sanitizeReturnTo } from '../src/auth/store';
+import { sanitizeReturnTo } from '@kinu.run/core';
 import { authPageRoutes, type AuthRoutesAuthority, type AuthRoutesEnv } from '../src/auth/routes';
 import {
   bootstrappedProfile, cliAccount, staticRouteCliEnv, unreachableAssets, unreachableNamespace, userAccount,

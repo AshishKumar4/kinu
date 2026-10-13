@@ -2,9 +2,9 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
+import { Effect } from 'effect';
 import { describe, expect, test } from 'bun:test';
 import type { HTTPRequest, Page } from 'puppeteer';
-import { Effect } from 'effect';
 import { detach } from '@kinu.run/core/obs';
 import { ONBOARDING_STEPS } from '@kinu.run/core';
 
@@ -623,6 +623,32 @@ describe('account panels', () => {
         const reached = new URL((await onward).url());
 
         expect(`${reached.pathname}${reached.search}`).toBe(route);
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
+  test('a `next` naming another site sends the tab home on this one', async () => {
+    await withGallery(async (gallery) => {
+      const page = await gallery.newPage();
+
+      try {
+        // Where the tab is sent is the subject, so that document is answered blank rather than loaded.
+        const onward = Promise.withResolvers<URL>();
+        await page.setRequestInterception(true);
+        page.on('request', (request) => detach(Effect.promise(async () => {
+          if (!request.isNavigationRequest() || request.url().includes('frame=connected')) return request.continue();
+          onward.resolve(new URL(request.url()));
+
+          return request.respond({ status: 200, contentType: 'text/html', body: '' });
+        })));
+
+        // It starts with one slash, but a URL parser reads the backslash as a second one: another host.
+        await Promise.allSettled([page.goto(`${gallery.origin}/gallery.html?frame=connected&next=${encodeURIComponent('/\\evil.example')}`, { waitUntil: 'load' })]);
+        const reached = await onward.promise;
+
+        expect({ origin: reached.origin, path: reached.pathname }).toEqual({ origin: gallery.origin, path: '/' });
       } finally {
         await page.close();
       }

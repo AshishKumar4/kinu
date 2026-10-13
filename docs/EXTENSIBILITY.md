@@ -243,26 +243,14 @@ native option.
 | `anthropic`, `claude` | `{ anthropic: { effort } }` for `low`, `medium`, `high`, `xhigh`, `max`; otherwise `undefined` |
 | anything else | `undefined` |
 
-Internal stages take their level from `REASONING_EFFORT_FOR_STAGE`, not the
-user setting. `effortFor()` returns only the Workers AI shape, so call
-`reasoningEffortOptions` unless you already know the provider family is
-Workers AI.
+An internal producer takes the effort of the tier its `MODEL_ROUTE_POLICY` row
+names, through the same function:
 
 ```ts
-import { effortFor, generateReported } from '@kinu.run/core';
+import { generateReported, reasoningEffortOptions } from '@kinu.run/core';
 
-// User-facing chat → medium (default): the turn loop, core/src/chat.ts
-streamText({ model, prompt, ...effortFor('chat') });
-
-// Memory compression → low (many cheap calls)
-generateText({ model, prompt, ...effortFor('memory_compress') });
-
-// Scaffold mutation → high (rare; must be good), reported as `reflection` spend
-generateReported({ model, prompt, ...effortFor('scaffold_mutation') }, { spend });
+generateReported({ model, prompt, providerOptions: reasoningEffortOptions(route.reasoningEffort, provider) }, { spend });
 ```
-
-`chat`, `judge` and `head_merge` use medium. `reflection` and
-`memory_compress` use low. `scaffold_mutation` uses high.
 Effort is the cheapness lever on most paths, not an output-token cap.
 
 ## The agent's runtime surface

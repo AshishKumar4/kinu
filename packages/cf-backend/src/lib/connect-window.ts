@@ -4,11 +4,6 @@ import { cloudflareReconnectPath } from "@/lib/user-api";
 /** The helper window's word to the tab that opened it: the sign-in ended. */
 const CONNECTED_CHANNEL = "kinu-connected";
 
-/** A path on this origin, else home: `next` comes off a URL anyone can write. */
-export function sameOriginPath(next: string | null): string {
-  return next !== null && next.startsWith("/") && !next.startsWith("//") ? next : APP_ROUTES.home;
-}
-
 /**
  * Runs the Cloudflare sign-in in a helper window, so the tab that asked stays where it is (an onboarding step);
  * when the sign-in ends, the helper closes and this tab returns to `returnTo` with the new connection. False when no

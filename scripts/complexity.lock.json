@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-13",
-  "files": 3221,
-  "functions": 84711,
+  "files": 3211,
+  "functions": 83900,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -194,10 +194,6 @@
       "complexity": 29
     },
     {
-      "key": "scripts/bench-devbox-fixture.ts#measureLiveC3",
-      "complexity": 29
-    },
-    {
       "key": "scripts/ladder.ts#claims",
       "complexity": 29
     },
@@ -227,10 +223,6 @@
     },
     {
       "key": "packages/core/src/strategy/swarm-resume.ts#outcomeFacts",
-      "complexity": 28
-    },
-    {
-      "key": "scripts/bench-devbox-fixture.test.ts#driverC3Proof>answer",
       "complexity": 28
     },
     {

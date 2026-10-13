@@ -1,8 +1,6 @@
 import { useState, useTransition } from "react";
-import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
 import { SetupCard } from "@/components/account/SetupCard";
 import {
-  CONNECT_AI_MESSAGE,
   MISSION_LABEL,
   MISSION_PLACEHOLDER,
   useCreateWorkspace,
@@ -17,7 +15,7 @@ export default function HomePage() {
   const [mission, setMission] = useState("");
   const { entries: workspaces, error: rosterError } = useWorkspaceRoster();
   const listFailed = rosterError !== null;
-  const { hasModels, busy, err, create } = useCreateWorkspace();
+  const { busy, err, create } = useCreateWorkspace();
   const files = usePendingAttachments(CLOUD_MAX_INLINE_ATTACHMENT_BYTES);
   const [isPending, startTransition] = useTransition();
   const creating = busy || isPending;
@@ -46,10 +44,8 @@ export default function HomePage() {
           onChange={setMission}
           onSubmit={submit}
           busy={creating}
-          blocked={hasModels === false}
           error={err ?? files.refusal}
           attachments={{ parts: files.parts, onAdd: files.add, onRemove: files.remove }}
-          notice={hasModels === false && <CloudflareAIConnectNotice returnTo="/" message={CONNECT_AI_MESSAGE} />}
         />
 
         <aside className="order-3 min-w-0 lg:order-none">

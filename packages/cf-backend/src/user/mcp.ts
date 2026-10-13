@@ -9,10 +9,9 @@ import {
   MCP_PRESETS,
   type ListedMcpTools, type McpPreset, type McpPresetId, type McpToolRefusal, type McpTransport,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, renderCauseChain, tolerate, toKinuError, type ErrorCode } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, renderCauseChain, toKinuError, type ErrorCode } from '@kinu.run/core/obs';
 import { ProtocolError, SdkError, SdkErrorCode, SdkHttpError, SseError, UnauthorizedError, type Client } from '@modelcontextprotocol/client';
 import { ResultSchema } from '@modelcontextprotocol/sdk/types.js';
-import * as v from 'valibot';
 
 
 /** Re-derived at read time from `MCPClientManager.mcpConnections[id].connectionState`. */
@@ -67,36 +66,6 @@ export function mcpCredentialTransport(
 /** The one transport option the SDK's persistence whitelist does not keep. */
 export interface McpCredentialTransport {
   fetch: (url: string | URL, init?: RequestInit) => Promise<Response>;
-}
-
-/** Declares only the three credential-shaped transport fields; the SDK's session state is left alone. */
-const StoredMcpServerOptionsSchema = v.object({
-  transport: v.optional(v.object({
-    headers: v.optional(v.unknown()),
-    requestInit: v.optional(v.unknown()),
-    eventSourceInit: v.optional(v.unknown()),
-  })),
-});
-
-/**
- * Whether SDK-stored `server_options` still hold a credential; `restoreConnectionsFromStorage` replays it.
- * Only `headers`/`requestInit`/`eventSourceInit` count; unparseable payloads hold nothing.
- */
-export function storedMcpOptionsCarryCredential(raw: string | null | undefined): boolean {
-  if (!raw) return false;
-
-  const parsed = v.safeParse(
-    StoredMcpServerOptionsSchema,
-    tolerate(() => JSON.parse(raw), 'malformed-input'),
-  );
-
-  if (!parsed.success) return false;
-  const transport = parsed.output.transport;
-
-  if (!transport) return false;
-
-  return [transport.headers, transport.requestInit, transport.eventSourceInit]
-    .some((carried) => carried !== undefined && carried !== null);
 }
 
 /** Whether a failed MCP dispatch failed on transport authorization, decided by error class, never text. */

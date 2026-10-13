@@ -28,7 +28,6 @@ function fakeVectorStore(available = true) {
 
   const store: VectorStore = {
     available,
-    async upsertChunk(c) { upserted.push(c); live.set(c.id, c); },
     async upsertChunks(cs) { for (const c of cs) { upserted.push(c); live.set(c.id, c); } },
     async deleteChunks(ids) { for (const id of ids) { deleted.push(id); live.delete(id); } },
     async search() { return []; },
@@ -84,7 +83,6 @@ describe('adaptMemory — semantic index sync on write', () => {
 
     const throwing: VectorStore = {
       available: true,
-      async upsertChunk() { throw new Error('vectorize down'); },
       async upsertChunks() { throw new Error('vectorize down'); },
       async deleteChunks() { throw new Error('vectorize down'); },
       async search() { return []; },
@@ -243,7 +241,6 @@ describe('backfillMemoryVectors — one-time embed of pre-existing chunks', () =
     let down = true;
 
     const index: VectorizeIndex = {
-      async insert() { return {}; },
       async upsert() {
         if (down) throw new Error('vectorize down');
 
@@ -251,7 +248,6 @@ describe('backfillMemoryVectors — one-time embed of pre-existing chunks', () =
       },
       async query() { return { matches: [] }; },
       async deleteByIds() { return {}; },
-      async getByIds() { return []; },
     };
 
     const embedded: string[] = [];

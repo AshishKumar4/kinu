@@ -14,7 +14,7 @@ import type { FactsStore } from '../memory/facts';
 import type { InstructionApprovalStore } from '../safety/instruction-trust';
 import type { TemporaryAgentPort } from '../subordinates/temporary';
 import type { ScaffoldControl } from './control';
-import { JsonValueSchema, parseJsonValue, type JsonValue } from '../utils/json';
+import { JsonValueSchema, parseJsonValue } from '../utils/json';
 import { fnv1a64 } from '../utils/fnv1a';
 import { nanoid } from '../utils/nanoid';
 import { nowMs } from '../utils/date';
@@ -52,72 +52,45 @@ const RationaleSchema = v.pipe(v.string(), v.minLength(MIN_EDIT_RATIONALE));
 
 const NonEmpty = v.pipe(v.string(), v.nonEmpty());
 
-/** `fact` carries a quote checked against the reviewed trajectory: facts are written with no trial. */
-export type RefinementEdit =
-  | {
-    readonly kind: 'fact';
-    readonly key: string;
-    readonly value: JsonValue;
-    readonly quote: string;
-    readonly rationale: string;
-  }
-  | {
-    readonly kind: 'prompt_section';
-    readonly sectionId: string;
-    readonly source: string;
-    readonly rationale: string;
-  }
-  | {
-    readonly kind: 'skill';
-    readonly path: string;
-    readonly source: string;
-    readonly rationale: string;
-  }
-  | {
-    readonly kind: 'subagent_spec';
-    readonly role: string;
-    readonly spec: string;
-    readonly rationale: string;
-  };
-
-export interface RefinementProposal {
-  readonly scope: RefinementScope;
-  readonly summary: string;
-  readonly edits: readonly RefinementEdit[];
-}
+const RefinementEditSchema = v.variant('kind', [
+  v.strictObject({
+    kind: v.literal('fact'),
+    key: NonEmpty,
+    value: JsonValueSchema,
+    quote: NonEmpty,
+    rationale: RationaleSchema,
+  }),
+  v.strictObject({
+    kind: v.literal('prompt_section'),
+    sectionId: NonEmpty,
+    source: NonEmpty,
+    rationale: RationaleSchema,
+  }),
+  v.strictObject({
+    kind: v.literal('skill'),
+    path: NonEmpty,
+    source: NonEmpty,
+    rationale: RationaleSchema,
+  }),
+  v.strictObject({
+    kind: v.literal('subagent_spec'),
+    role: NonEmpty,
+    spec: NonEmpty,
+    rationale: RationaleSchema,
+  }),
+]);
 
 /** `strictObject` at every level: a permissive parse would drop unknown fields such as `scope` and apply the edit in a way nobody wrote. */
-export const RefinementProposalSchema: v.GenericSchema<unknown, RefinementProposal> = v.strictObject({
+export const RefinementProposalSchema = v.strictObject({
   scope: v.picklist(REFINEMENT_SCOPES),
   summary: NonEmpty,
-  edits: v.array(v.variant('kind', [
-    v.strictObject({
-      kind: v.literal('fact'),
-      key: NonEmpty,
-      value: JsonValueSchema,
-      quote: NonEmpty,
-      rationale: RationaleSchema,
-    }),
-    v.strictObject({
-      kind: v.literal('prompt_section'),
-      sectionId: NonEmpty,
-      source: NonEmpty,
-      rationale: RationaleSchema,
-    }),
-    v.strictObject({
-      kind: v.literal('skill'),
-      path: NonEmpty,
-      source: NonEmpty,
-      rationale: RationaleSchema,
-    }),
-    v.strictObject({
-      kind: v.literal('subagent_spec'),
-      role: NonEmpty,
-      spec: NonEmpty,
-      rationale: RationaleSchema,
-    }),
-  ])),
+  edits: v.pipe(v.array(RefinementEditSchema), v.readonly()),
 });
+
+/** `fact` carries a quote checked against the reviewed trajectory: facts are written with no trial. */
+export type RefinementEdit = Readonly<v.InferOutput<typeof RefinementEditSchema>>;
+
+export type RefinementProposal = Readonly<v.InferOutput<typeof RefinementProposalSchema>>;
 
 /** Long enough to clear the floor, so the printed example parses. */
 const RATIONALE_SLOT = '<why this is the smallest edit that would have prevented the failure, in at '
@@ -177,26 +150,19 @@ export interface RefinementDeps {
   readonly approvals?: InstructionApprovalStore;
 }
 
-export interface RefinementRoute {
-  readonly kind: RefinementEditKind;
-  /** Empty exactly where no writable authority exists. */
-  readonly owner: string;
-  /** A fact key, `<sectionId>:<version>`, an instruction path, or a role id. */
-  readonly target: string;
-  readonly disposition: RefinementDisposition;
-  /** Skill routes only: instruction trust is per-bytes, and settlement compares this rather than prose in `reason`. */
-  readonly digest?: string;
-  readonly reason?: string;
-}
-
 const RefinementRouteSchema = v.object({
   kind: v.picklist(REFINEMENT_EDIT_KINDS),
+  /** Empty exactly where no writable authority exists. */
   owner: v.string(),
+  /** A fact key, `<sectionId>:<version>`, an instruction path, or a role id. */
   target: v.string(),
   disposition: v.picklist(REFINEMENT_DISPOSITIONS),
+  /** Skill routes only: instruction trust is per-bytes, and settlement compares this rather than prose in `reason`. */
   digest: v.optional(v.string()),
   reason: v.optional(v.string()),
 });
+
+export type RefinementRoute = Readonly<v.InferOutput<typeof RefinementRouteSchema>>;
 
 export interface RefinementRequest {
   readonly id: string;

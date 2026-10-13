@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import * as v from 'valibot';
-import { copyPinnedTools } from './devbox-tools';
+import { copyPinnedTools, uploadPinnedTools } from './devbox-tools';
 import { requireEqual, tierIdentity } from './fixtures/devbox-e2e/oracle';
 import { completeTeardown } from './fixtures/devbox-e2e/teardown';
 import { CONTRACT_TEARDOWN_BUCKET, ContractTeardownSchema, contractLedger, contractOwner } from './fixtures/devbox-e2e/ledger';
@@ -27,8 +27,6 @@ const REPO = join(import.meta.dir, '..');
 
 const ACCOUNT = 'f44999d1ddda7012e9a87729eba250f1';
 
-const PART_BYTES = 256 * 1024 * 1024;
-
 /** The box's own words when the platform refused it a container and it armed a startup (packages/devbox/src/devbox.ts). */
 const ASK_AGAIN = 'A startup is armed, so ask again';
 
@@ -48,26 +46,10 @@ const Commit = v.looseObject({ kind: v.string(), reason: v.optional(v.string()),
 
 const State = v.looseObject({ chain: v.nullable(v.looseObject({ rev: v.number(), base: v.looseObject({ key: v.string() }), deltas: v.array(v.unknown()) })), snapshot: v.nullable(v.looseObject({ id: v.string() })) });
 
-async function installTools(bucket: string, cached?: string): Promise<void> {
-  const key = `devbox-tools/${artifact.tools.sha256}.tgz`;
-
-  if (cached !== undefined) {
-    const bytes = readFileSync(cached);
-    requireEqual(createHash('sha256').update(bytes).digest('hex'), artifact.tools.sha256);
-    const scratch = mkdtempSync(join(tmpdir(), 'kinu-devbox-tools-'));
-
-    try {
-      for (let part = 0; part * PART_BYTES < bytes.length; part++) {
-        const path = join(scratch, String(part));
-        writeFileSync(path, bytes.subarray(part * PART_BYTES, (part + 1) * PART_BYTES));
-        runWrangler(REPO, ['r2', 'object', 'put', `${bucket}/${key}.${String(part)}`, '--remote', '--file', path]);
-      }
-    } finally { rmSync(scratch, { recursive: true, force: true }); }
-
-    return;
-  }
-
-  await copyPinnedTools(bucket);
+/** A `--tools` file is uploaded as the pin's parts; without one, staging's are copied. */
+async function installTools(bucket: string, cached: string | undefined): Promise<void> {
+  if (cached === undefined) await copyPinnedTools(bucket);
+  else uploadPinnedTools(bucket, readFileSync(cached));
 }
 
 interface Step { readonly contract: string; readonly ms: number; readonly detail: unknown }

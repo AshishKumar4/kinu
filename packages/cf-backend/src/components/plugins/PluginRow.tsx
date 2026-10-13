@@ -8,7 +8,7 @@ export interface PluginStatus {
   readonly tone: PluginTone;
 }
 
-const DOT_BY_TONE = {
+export const DOT_BY_TONE = {
   success: 'p-dot-success',
   warning: 'p-dot-warning',
   neutral: 'p-dot-neutral',

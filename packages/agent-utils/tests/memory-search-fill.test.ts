@@ -1,10 +1,11 @@
 // Partial matches must fill an underfull strict page, not only an empty one.
 import { describe, test, expect } from "bun:test";
 import { MemoryStore } from "../src/memory/store";
-import { createTestDb, createMemoryVfs } from "./helpers";
+import { createTestSql } from "@kinu.run/test-utils";
+import { createMemoryVfs } from "./helpers";
 
 function createStore() {
-	const { sql, transactionSync } = createTestDb()
+	const { sql, transactionSync } = createTestSql()
 	const store = new MemoryStore(createMemoryVfs(), sql, transactionSync);
 	store.ensureSchema();
 
@@ -103,7 +104,7 @@ describe("MemoryStore.search reads its hits from their notes", () => {
 	});
 
 	test("a note deleted under the index leaves no hit", async () => {
-		const { sql, transactionSync } = createTestDb()
+		const { sql, transactionSync } = createTestSql()
 		const files = createMemoryVfs();
 		const store = new MemoryStore(files, sql, transactionSync);
 		store.ensureSchema();

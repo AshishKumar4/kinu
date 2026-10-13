@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 export type CopyStatus = "idle" | "copied" | "failed";
 
-export interface CopyControl {
+interface CopyControl {
   status: CopyStatus;
   copy: (text: string) => void;
 }

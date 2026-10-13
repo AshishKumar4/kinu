@@ -11,9 +11,9 @@ import type {
 import { tool } from 'ai';
 import { codemodeInputSchema, WORKSPACE_ROOT, cloudPlanes } from '@kinu.run/core';
 import { createTestSql, type TestSql } from './sql';
+import { createTestActors } from './actors';
 import {
-  WORKSPACE_IDENTITY_DDL, initWorkspaceActorTable, WorkspaceActorDirectory, initAgentConfigTable,
-  initCodemodeStateTable, createAgentStores, DefaultExecutionRouter,
+  createAgentStores, DefaultExecutionRouter,
 } from '@kinu.run/core';
 import { createMemoryVfs } from './vfs';
 
@@ -128,13 +128,7 @@ function noScaffold(): Identity['scaffold'] {
 export function createTestRuntime(opts: TestRuntimeOptions = {}): TestRuntime {
   const testSql = createTestSql();
   const workspace = createMemoryVfs();
-  const workspaceId = crypto.randomUUID();
-  testSql.execRaw(WORKSPACE_IDENTITY_DDL);
-  void testSql.sql`INSERT INTO workspace_identity (id, name) VALUES (${workspaceId}, 'test')`;
-  initWorkspaceActorTable(testSql.execRaw);
-  initAgentConfigTable(testSql.execRaw);
-  initCodemodeStateTable(testSql.execRaw);
-  const actor = new WorkspaceActorDirectory(testSql.sql, { workspaceId, ownerUserId: '' }).createMain({ name: 'test' });
+  const { main: actor, workspaceId } = createTestActors(testSql.sql, testSql.execRaw);
 
   const rt: AgentRuntime = {
     actor,
@@ -146,7 +140,7 @@ export function createTestRuntime(opts: TestRuntimeOptions = {}): TestRuntime {
       home: WORKSPACE_ROOT,
       sql: testSql.sql,
       execRaw: testSql.execRaw,
-      transactionSync: write => testSql.db.transaction(write)(),
+      transactionSync: testSql.transactionSync,
     },
     memory: opts.memory ?? emptyMemory(),
     executor: opts.executor ?? noExecutor(),

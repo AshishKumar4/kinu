@@ -31,7 +31,7 @@ import { deviceMountSegment } from '../execution/device-tunnel-executor';
 import { EXECUTOR_MOUNTS } from '../vfs/mounts';
 import type { ActiveSkillSet } from '../skills/types';
 import { describeActivationReason } from '../skills/render';
-import { compareSkillNames } from '../skills/discover';
+import { compareCodeUnits } from '../utils/text';
 import type { ActiveRoster, DelegationChoices, DynamicApproval, MissingCapability, ShownLesson } from '../types/dynamic-context';
 import { renderCraftedToolsDeclaration, type CraftedDeclaration, type ExternalToolDeclaration } from '../tools/sandbox-contract';
 
@@ -194,7 +194,7 @@ export function agentDynamicContext(sources: DynamicContextSources): DynamicCont
   if (sources.activeSkills !== undefined && sources.activeSkills.active.length > 0) {
     const reasons = new Map(sources.activeSkills.reasons.map((r) => [r.name, r.reason]));
 
-    context.skills = sources.activeSkills.active.map((skill) => skill.name).sort(compareSkillNames)
+    context.skills = sources.activeSkills.active.map((skill) => skill.name).sort(compareCodeUnits)
       .map((name) => ({ name, reason: describeActivationReason(reasons.get(name)) }));
   }
 
