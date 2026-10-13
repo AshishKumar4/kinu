@@ -16,7 +16,8 @@ import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import puppeteer, { type Browser, type LaunchOptions } from 'puppeteer';
 import { BROWSER_PROFILE_PARENT, holdForRelease, releaseScratch, scratchDir } from '../packages/test-utils/src/scratch';
-import { crashpadsIn, groupRuns, procFile, processStartTicks, reapAbandonedRoots, recordOwner } from './process-owner';
+import { crashpadsIn, groupRuns, processStartTicks, reapAbandonedRoots, recordOwner } from './process-owner';
+import { procFile } from './proc';
 import { signalGroup } from './process-group';
 import { tolerate } from '@kinu.run/core/obs';
 

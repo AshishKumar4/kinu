@@ -228,6 +228,53 @@ describe('account panels', () => {
     });
   });
 
+  test('the account computer size saves through its picker and survives reload', async () => {
+    await withGallery(async (gallery) => {
+      const control = '[aria-label="Default computer size"]';
+
+      const page = await freshPage(gallery, 'usersettingsstate&section=sandbox', 'dark', 'desktop');
+
+      try {
+        await page.waitForSelector(control);
+        await page.click(control);
+        await page.waitForFunction(() => [...document.querySelectorAll('[role="option"]')].some((node) => node.checkVisibility()));
+
+        const options = await page.$$('[role="option"]');
+        let picked = -1;
+
+        for (const [index, option] of options.entries()) {
+          if (await option.evaluate((node) => node.checkVisibility() && node.getAttribute('aria-selected') !== 'true')) {
+            picked = index;
+            await option.click();
+            break;
+          }
+        }
+
+        if (picked === -1) throw new Error('the size picker offered no different size');
+
+        await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+        await page.waitForFunction((selector) => {
+          const node = document.querySelector(selector);
+
+          return node !== null && !node.matches(':disabled') && node.getAttribute('aria-disabled') !== 'true';
+        }, {}, control);
+
+        await page.click(control);
+        await page.waitForFunction(() => [...document.querySelectorAll('[role="option"]')].some((node) => node.checkVisibility()));
+        expect(await page.$$eval('[role="option"]', (nodes) => nodes.findIndex((node) => node.getAttribute('aria-selected') === 'true'))).toBe(picked);
+        await page.keyboard.press('Escape');
+        expect(await page.$$eval('[role="alert"], [data-failure]', (nodes) => nodes.filter((node) => node.checkVisibility()).length)).toBe(0);
+        await page.reload({ waitUntil: 'load' });
+        await page.waitForSelector(control);
+        await page.click(control);
+        await page.waitForFunction(() => [...document.querySelectorAll('[role="option"]')].some((node) => node.checkVisibility()));
+        expect(await page.$$eval('[role="option"]', (nodes) => nodes.findIndex((node) => node.getAttribute('aria-selected') === 'true'))).toBe(picked);
+        await page.keyboard.press('Escape');
+        expect(await page.$$eval('[role="alert"], [data-failure]', (nodes) => nodes.filter((node) => node.checkVisibility()).length)).toBe(0);
+      } finally { await page.close(); }
+    });
+  });
+
   test('ChatGPT connects two ways: a machine gets its connect command, and an address pasted back here signs in', async () => {
     await withGallery(async (gallery) => {
       const page = await freshPage(gallery, 'setupmodal&panel=providers', 'dark', 'desktop');

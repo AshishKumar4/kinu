@@ -22,8 +22,8 @@ import * as v from 'valibot';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC, DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, ProfileCatalogEnvelopeSchema, type EvalAccount } from '@kinu.run/core';
 import { evalWebIdentityEnv } from '@kinu.run/test-utils';
 import { DEFAULT_MODELS, DEFAULT_TRIALS, evalMatrix, PASS_FIRST_SLOT } from '../evals/src/config';
-import { WORKSPACE_LEASE_MS } from '../evals/src/session';
-import { trialAccounts, trialAccountsAt, trialInheritedRows } from '../evals/src/slot';
+import { WORKSPACE_LEASE_MS } from '../evals/src/workspace-roster';
+import { trialAccounts, trialInheritedRows } from '../evals/src/slot';
 import { ARMS } from '../evals/src/target';
 import { recordStep } from './deploy-report';
 import { isEvalTask, trackedFiles } from './sources';
@@ -264,18 +264,12 @@ if (import.meta.main) {
   const identity = process.env[identityEnv]?.trim();
   const taskFiles = trackedFiles().filter(isEvalTask).map((file) => basename(file));
 
-  // Every trial account a run of the full matrix and a deploy's pass act as; a deployment that predates them runs its trials as eval-service.
-  const accounts = identity === undefined || identity === '' ? undefined
-    : await trialAccountsAt({ origin, identity: { kind: 'secret', secret: identity } });
-
-  if (accounts?.kind === 'shared') console.log(`eval-provider-keys: ${accounts.why}`);
-
   const { stored, findings, trials, notes } = await provisionEvalProviderKeys({
     origin, keysPath: EVAL_PROVIDER_KEYS, identity, identityEnv, models: matrix.models,
-    trialAccounts: accounts?.kind === 'trial' ? [
+    trialAccounts: [
       ...trialAccounts(taskFiles, { ...matrix, trials: Math.max(matrix.trials, DEFAULT_TRIALS) }),
       ...trialAccounts(taskFiles, { ...matrix, trials: 1, firstSlot: PASS_FIRST_SLOT }),
-    ] : undefined,
+    ],
   });
 
   for (const note of notes ?? []) console.log(`eval-provider-keys: ${note}`);

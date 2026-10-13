@@ -2,14 +2,15 @@ import { exists as nimbusExists, type Awaitable, type VFS } from '@nimbus-sh/cor
 /** Approval gating where a command reaches a shell (the workspace `Shell`, each provider's shell tools on register)
  *  and where the agent's tools reach a file. */
 
-import { commandFilesOwner, literalWords, onUserRoots, reviewProgram, reviewShellCommand, type ApprovalResult, type FileAccess, type GatedExecutor } from '../safety/command-review';
-import { approveFileAccess, gateExec, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
+import { wasNotDispatched } from '@kinu.run/agent-utils';
+import { literalWords, onUserRoots, type FileAccess, type GatedExecutor } from '../safety/command-review';
+import { approveFileAccess, gateExec, namedShellState, pinnedShellMoved, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
+import { shellCall } from './command-call';
 import { asBytes, currentBytes } from '../safety/bound-write';
-import * as v from 'valibot';
 import { answeredRefusal } from './exec-result';
-import type { ExecutorProvider, ExecutorTool, ExecutorToolResult } from './types';
+import { COMMAND_MEMBERS, type CommandTool, type ExecutorProvider, type ExecutorToolResult } from './types';
 import type { CheckpointFiles, Shell, ShellExecOptions, ShellExecResult } from '../types/primitives';
-import { busyShell, callJob, shellExecOptions, type ShellCwd } from './shell-session';
+import { busyShell, callJob, shellExecOptions } from './shell-session';
 import { requireBuild } from './work-mode';
 import { resolvedPath, shellReference, type PathPlanes } from '../vfs/resolve';
 import { KinuError, refusalOf } from '../obs/error';
@@ -29,21 +30,31 @@ export function withApprovalGatedShell(
 ): Shell {
   const session = reach.shellSession;
 
-  // 'workspace' only: gateProviderExec skips the workspace `exec` because it is gated here.
-  const execute = gateExec<ShellExecResult>(
-    (command, ...rest) => shell.exec(command, shellExecOptions({ value: rest[0] })),
-    (error) => ({ stdout: '', stderr: error.message, exitCode: 1, refusal: refusalOf(error) }),
-    { name: 'workspace', ...reach },
-    {
-      policy,
-      refusalCode: (result) => result.refusal?.reason ?? null,
-      review: async (command, rest) => {
-        const { name, cwd } = shellExecOptions({ value: rest[0] });
+  // 'workspace' only: gateProviderExec skips the workspace `exec` because it is gated here. The options were read once,
+  // by `exec` below; the gate keys and runs those.
+  const notRun = (error: KinuError): ShellExecResult => ({ stdout: '', stderr: error.message, exitCode: 1, refusal: refusalOf(error) });
 
-        return reviewShellCommand({ name: 'workspace', ...reach }, command, await session?.at(name, cwd));
-      },
+  // A gated call in a named shell is asked with that shell's state, and runs only while the shell still restores it;
+  // the whole call is inside the shell's hold, so nothing of this agent moves it in between.
+  const execute = (command: string, options: ShellExecOptions) => gateExec<ShellExecResult>(
+    () => {
+      const { name } = options;
+      const read = shell.state?.bind(shell);
+      const state = name === undefined || read === undefined ? undefined : () => namedShellState(() => read(name), name);
+
+      return {
+        call: { ...shellCall(command, options, { stdin: true }), ...(state !== undefined && { shellState: state }) },
+        run: async (pinned) => {
+          const moved = pinned === undefined ? null : await pinnedShellMoved(pinned, name ?? '', state);
+
+          return moved === null ? shell.exec(command, options) : notRun(moved);
+        },
+      };
     },
-  );
+    notRun,
+    { name: 'workspace', ...reach },
+    { policy, refusalCode: (result) => result.refusal?.reason ?? null, member: 'exec' },
+  )();
 
   const run = async (command: string, options: ShellExecOptions): Promise<ShellExecResult> => {
     const planes = reach.planes;
@@ -55,18 +66,16 @@ export function withApprovalGatedShell(
       return { stdout: '', stderr: refused.message, exitCode: 1, refusal: refusalOf(refused) };
     }
 
-    let result: ShellExecResult | undefined;
+    const running = execute(command, options);
+    const [ran] = await Promise.allSettled([running]);
 
-    try {
-      result = await execute(command, options);
-    } finally {
-      if (options.name !== undefined && result === undefined) session?.lost(options.name);
-    }
+    // A named call that ran leaves its shell where it ended; one that did not run moved nothing; one that failed on
+    // its way may have moved it, unless it was cancelled before it was sent.
+    if (options.name !== undefined && ran.status === 'fulfilled' && ran.value.refusal === undefined) session?.ran(options.name, ran.value.finalCwd ?? null);
 
-    // A named call that ran leaves its shell where it ended; one that did not run moved nothing.
-    if (options.name !== undefined && result.refusal === undefined) session?.ran(options.name, result.finalCwd ?? null);
+    if (options.name !== undefined && ran.status === 'rejected' && !wasNotDispatched(ran.reason)) session?.lost(options.name);
 
-    return result;
+    return running;
   };
 
   const gated: Shell = {
@@ -178,61 +187,52 @@ export function withApprovalGatedFiles(
   return gated;
 }
 
-/** Tools taking a shell command or a program first; VFS-shaped tools are out of scope. */
-const SHELL_COMMAND_MEMBERS = ['exec', 'startProcess', 'runCode'] as const;
-
-const CallOptionsSchema = v.object({ cwd: v.optional(v.string()), language: v.optional(v.string()) });
-
-function parseCallOptions(input: { value: unknown }): v.InferOutput<typeof CallOptionsSchema> {
-  const parsed = v.safeParse(CallOptionsSchema, input.value);
-
-  return parsed.success ? parsed.output : {};
-}
-
-/** `runCode` is a shell command only in the shell language. */
-async function reviewCall(provider: ExecutorProvider, member: string, command: string, rest: readonly unknown[]): Promise<ApprovalResult> {
-  const options = parseCallOptions({ value: rest[0] });
-  const at: ShellCwd | undefined = await provider.shellSession?.at(undefined, options.cwd);
-
-  return member === 'runCode' && options.language !== 'shell'
-    ? reviewProgram(command, commandFilesOwner(provider, command, at))
-    : reviewShellCommand(provider, command, at);
-}
-
 /** Already-wrapped executes, so a provider shared across routers is gated once (idempotent). */
-const GATED_EXECUTES = new WeakSet<ExecutorTool['execute']>();
+const GATED_EXECUTES = new WeakSet<CommandTool['execute']>();
 
 export function gateProviderExec(provider: ExecutorProvider, policy: ShellApprovalPolicy): ExecutorProvider {
   let changed = false;
   const tools = { ...provider.tools };
 
-  for (const name of SHELL_COMMAND_MEMBERS) {
+  for (const name of COMMAND_MEMBERS) {
     if (provider.kind === 'workspace' && name === 'exec') continue;
     const entry = provider.tools[name];
 
     if (!entry || GATED_EXECUTES.has(entry.execute)) continue;
+    const read = entry.prepare;
+    changed = true;
 
-    // Grants name the executor; the call picks the rules.
+    // A member that cannot say what a call runs cannot be approved, so nothing it is asked runs.
+    if (read === undefined) {
+      const unread = new KinuError('unsupported', `${provider.name}.${name} does not say what a call runs, so it cannot be approved: nothing ran`);
+      tools[name] = { ...entry, execute: async () => refusalOf(unread) };
+      continue;
+    }
+
+    // Grants name the executor; the member's own reading of the call picks the rules and is what runs.
     const gated = gateExec<ExecutorToolResult>(
-      (command, ...rest) => entry.execute(command, ...rest),
+      (args) => read(args),
       (error) => refusalOf(error),
       provider,
-      {
-        policy,
-        refusalCode: (result) => result === undefined ? null : answeredRefusal(result)?.reason ?? null,
-        review: (command, rest) => reviewCall(provider, name, command, rest),
-      },
+      { policy, refusalCode: (result) => result === undefined ? null : answeredRefusal(result)?.reason ?? null, member: name },
     );
 
-    const execute: ExecutorTool['execute'] = (...args) => {
+    const execute: CommandTool['execute'] = (...args) => {
       requireBuild(provider.name + '.' + name);
 
       return gated(...args);
     };
 
     GATED_EXECUTES.add(execute);
-    tools[name] = { ...entry, execute };
-    changed = true;
+
+    // Its reading stays the member's, but what it runs goes through the gate: no ungated `run` leaves here.
+    const prepare: CommandTool['prepare'] = (args) => {
+      const prepared = read(args);
+
+      return 'refused' in prepared ? prepared : { call: prepared.call, run: () => execute(...args) };
+    };
+
+    tools[name] = { ...entry, prepare, execute };
   }
 
   return changed ? { ...provider, tools } : provider;

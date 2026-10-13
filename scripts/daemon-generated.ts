@@ -1,6 +1,7 @@
 /**
- * The device daemon shares three modules with core: the checkpoint store format and the checkpoint engine the CLI
- * runs too, and Sign in with ChatGPT's token protocol a deployment's sign-in speaks. Each is dependency-free.
+ * The device daemon shares modules with core: the checkpoint store format and the checkpoint engine the CLI runs
+ * too, Sign in with ChatGPT's token protocol a deployment's sign-in speaks, and the words of a provider's refusal
+ * with what they take out (secrets, controls). Each is dependency-free.
  * The daemon is dependency-free JavaScript, and its updater lands only the files the RUNNING daemon names
  * (`landDaemonFiles` in `pc-agent/src/update.js`), so a new sibling file would leave every updated daemon
  * unable to start. Each module is therefore copied into a daemon file, between two markers, with its type-only
@@ -21,6 +22,9 @@ export const GENERATED = {
   checkpointFormat: { source: 'packages/core/src/checkpoints/format.ts', daemon: 'packages/pc-agent/src/index.js' },
   checkpointEngine: { source: 'packages/core/src/checkpoints/engine.ts', daemon: 'packages/pc-agent/src/index.js' },
   chatgptProtocol: { source: 'packages/core/src/providers/chatgpt-protocol.ts', daemon: 'packages/pc-agent/src/chatgpt.js' },
+  untrustedText: { source: 'packages/core/src/safety/untrusted-text.ts', daemon: 'packages/pc-agent/src/chatgpt.js' },
+  secretPatterns: { source: 'packages/core/src/safety/secret-patterns.ts', daemon: 'packages/pc-agent/src/chatgpt.js' },
+  providerRefusal: { source: 'packages/core/src/safety/provider-refusal.ts', daemon: 'packages/pc-agent/src/chatgpt.js' },
 } as const;
 
 type Generated = (typeof GENERATED)[keyof typeof GENERATED];

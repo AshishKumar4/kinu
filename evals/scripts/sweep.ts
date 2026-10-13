@@ -4,7 +4,7 @@
 // were refused the same first delete, threw, and skipped every trial of their tasks. A delete the deployment fails is
 // printed with its reason and the run goes on; an account that cannot be listed fails the run here, loudly.
 //   bun evals/scripts/sweep.ts
-import { deleteWorkspace, listWorkspaces } from '../src/session';
+import { deleteWorkspace, listWorkspaces } from '../src/workspace-roster';
 import { heldWorkspaces, sweepEvalWorkspaces } from '../src/sweep';
 import { resolveEvalTarget } from '../src/target';
 

@@ -13,7 +13,7 @@ import { PLATFORM_CATALOG } from '../platform-catalog';
 import { withClampedToolResults, type ClampToolResultOptions } from './clamp';
 import { withEffectReceipt, type EffectClaimDeps } from './effect-claim';
 import { mcpToolKey, suffixedMcpToolKey } from './mcp-naming';
-import { quoteUntrusted } from '../safety/untrusted-text';
+import { revealMisrepresenting } from '../safety/untrusted-text';
 import { sha256Hex } from '../safety/argument-digest';
 
 /** An MCP tool after crossing the RPC seam, with namespacing context for dispatch. */
@@ -168,6 +168,24 @@ function schemaKind(input: { value: unknown }): string {
 
 function nonBlank(value: string | undefined): string | undefined {
   return value !== undefined && value.trim() !== '' ? value : undefined;
+}
+
+const TAG_OPENER = /<(?=[a-zA-Z/!?])/g;
+
+const HEADING_MARKER = /^([ \t]{0,3})(#{1,6})(?=[ \t]|$)/gm;
+
+const THEMATIC_BREAK = /^([ \t]{0,3})([-*_])((?:[ \t]*\2){2,}[ \t]*)$/gm;
+
+const TILDES = /~+/g;
+
+/** A server's prose as a quotation: misrepresenting characters shown, and HTML tags, headings, rules and
+ *  strikethrough inert text. */
+function quoteUntrusted(text: string): string {
+  return revealMisrepresenting(text)
+    .replace(TAG_OPENER, '&lt;')
+    .replace(HEADING_MARKER, (_match, indent: string, marks: string) => `${indent}${marks.replace(/#/g, '\\#')}`)
+    .replace(THEMATIC_BREAK, (_match, indent: string, mark: string, rest: string) => `${indent}\\${mark}${rest}`)
+    .replace(TILDES, (run) => run.replace(/~/g, '\\~'));
 }
 
 function sanitizeRemoteProse(text: string | undefined): string | undefined {

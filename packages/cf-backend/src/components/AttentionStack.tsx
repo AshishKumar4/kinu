@@ -100,6 +100,7 @@ function ActionBody({ action, rpc }: { action: PendingAction; rpc: Rpc }) {
       <>
         <div className="p-row-text p-text">{action.write ? action.title : "Run this command?"}</div>
         {action.detail !== null && <code className="mt-1 block max-h-28 overflow-auto rounded-sm px-2 py-1 p-t-code p-text-2 break-all whitespace-pre-wrap p-fill">{revealMisrepresenting(action.detail)}</code>}
+        {action.where !== undefined && <div className="mt-1 p-meta p-text-2 break-all">Runs {revealMisrepresenting(action.where)}</div>}
         {action.write && <div className="mt-1.5"><ParkedWriteChange id={action.id} rpc={rpc} /></div>}
         <div className="mt-1 p-meta p-text-3">
           {action.write ? "Approving writes exactly these bytes." : action.title.replace(/^Approve: /u, "")} · asked {timeAgo(action.at)}

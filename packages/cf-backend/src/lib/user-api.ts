@@ -260,8 +260,13 @@ export const listCredentials  = () => settle(api(v.array(CredentialSummarySchema
 export const setCredential    = (key: string, value: Credential) =>
   settle(api(OkSchema, 'POST', `/credentials/${encodeURIComponent(key)}`, value));
 
-export const deleteCredential = (key: string) =>
-  settle(api(OkSchema, 'DELETE', `/credentials/${encodeURIComponent(key)}`));
+/** What a disconnect left: null unless revoking was asked and did not happen, then in the provider's own words. */
+const DisconnectOutcomeSchema = v.object({ unrevoked: v.nullable(v.string()) });
+
+const revoking = (revoke: boolean) => revoke ? '?revoke=1' : '';
+
+export const deleteCredential = (key: string, revoke: boolean) =>
+  settle(api(DisconnectOutcomeSchema, 'DELETE', `/credentials/${encodeURIComponent(key)}${revoking(revoke)}`));
 
 const CodexStatusSchema = v.object({
   connected: v.boolean(), accountId: v.nullable(v.string()), expiresAt: v.nullable(v.number()),
@@ -300,7 +305,7 @@ export const chatgptPlan = () => settle(api(ChatGptPlanSchema, 'GET', '/chatgpt'
 /** The URL is for a browser on that device: the sign-in comes back to a port there. */
 export const startChatGptSignIn = () => settle(api(ChatGptMachineSignInSchema, 'POST', '/chatgpt/sign-in'));
 
-export const signOutChatGpt = () => settle(api(v.object({ unconfirmed: v.nullable(v.string()) }), 'DELETE', '/chatgpt'));
+export const signOutChatGpt = (revoke: boolean) => settle(api(DisconnectOutcomeSchema, 'DELETE', `/chatgpt${revoking(revoke)}`));
 
 export const cancelChatGptSignIn = () => settle(api(v.object({ cancelled: v.boolean() }), 'DELETE', '/chatgpt/sign-in'));
 
@@ -316,15 +321,7 @@ export const startClaudeSignIn = () => settle(api(v.object({ url: v.string() }),
 /** `code` is what Claude showed: the code, or the address it sent the browser to. */
 export const finishClaudeSignIn = (code: string) => settle(api(PollResultSchema, 'POST', '/claude/finish', { code }));
 
-const UnrevokedGrantSchema = v.object({ key: v.string(), reasons: v.array(v.string()), recordedAt: v.number() });
-
-export type UnrevokedGrant = v.InferOutput<typeof UnrevokedGrantSchema>;
-
-export const listUnrevokedGrants = () => settle(api(v.array(UnrevokedGrantSchema), 'GET', '/unrevoked-grants'));
-
-export const dismissUnrevokedGrant = (key: string) => settle(api(OkSchema, 'DELETE', `/unrevoked-grants/${encodeURIComponent(key)}`));
-
-export const disconnectCodex  = () => settle(api(OkSchema, 'DELETE', '/codex'));
+export const disconnectCodex  = (revoke: boolean) => settle(api(DisconnectOutcomeSchema, 'DELETE', `/codex${revoking(revoke)}`));
 
 export const getAccountUsage = (refresh = false) => settle(api(AccountUsageSchema, 'GET', refresh ? '/usage?refresh=1' : '/usage'));
 

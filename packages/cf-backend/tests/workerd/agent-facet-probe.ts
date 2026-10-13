@@ -10,6 +10,7 @@ import { diagnostics } from '@kinu.run/core/obs';
 import { hostNodeSeat, nodeCodemodeTool } from '../../src/hosted-actors';
 import { HIRE_CHILD_MODEL, hireControlUrl, hireModelsBaseUrl, JOB_MISSION, type JobRow } from './hire-shapes';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
+import { configureRemoteAiFixture } from '../helpers/remote-ai-profile';
 import { hostedActorPlacement } from '../../src/actor-hosting';
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
 import { ROOT_SLATE_CALLER, SlateBinding } from '../../src/slates/bindings';
@@ -291,6 +292,7 @@ export class AgentFacetProbeRoot extends DurableObject<ProbeRootEnv> {
     const owner = await ownerCaller(this.env);
     const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(PROBE_OWNER_ID));
     await userDO.ensureProfile(owner, 'owner@probe.local', 'Owner');
+    await configureRemoteAiFixture(userDO, owner);
     await userDO.registerWorkspace(owner, workspace, workspace);
     const root = await getAgentByName<ProbeEnv, OrchestratorAgent>(this.env.OrchestratorAgent, workspace);
     const claim = await root.claimOwner(PROBE_OWNER_ID);

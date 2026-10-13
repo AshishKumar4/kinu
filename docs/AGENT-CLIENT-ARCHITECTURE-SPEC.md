@@ -193,9 +193,11 @@ Each adapter owns its backend-specific work. Local owns session resume and
 transcript hydration. Cloud owns Durable Object history hydration and socket
 reconnect. A slash command declares the capability it needs in its `requires`
 field, and the command list shows it only when the client has that capability
-(`slash-commands.ts`). `/undo` needs `checkpoints`. `/approval`, `/parked`, `/always`,
+(`slash-commands.ts`). `/undo` needs `checkpoints`. `/approval`, `/always`,
 `/instructions` and `/models` need `localControls`. `/connect` needs
-`consents`, `/plan` needs `plans`, and `/rename` needs `rename`.
+`consents`, `/plan` needs `plans`, and `/rename` needs `rename`. Waiting
+approvals need no command: between turns the chat asks each one in its one
+approval prompt, from `approvals`, with the web's three answers.
 
 Tests pin the behavior. `packages/cli/tests/tui-messages.test.tsx` renders real
 frames and checks the user gutter against assistant markdown, chronological
@@ -252,8 +254,8 @@ never delivers a dropped row twice.
 A recorded CLI transcript is a terminal log, not cloud chat state.
 `AgentClient.history()` returns the active client's renderable messages. Local
 clients project their JSONL record; cloud clients page the Durable Object
-history. `kinu transcripts` (`packages/cli/src/commands/transcripts.ts`) lists
-JSONL records as diagnostics, not conversations to reopen.
+history. `kinu debug <workspace> --transcripts` (`packages/cli/src/commands/debug.ts`)
+lists JSONL records as diagnostics, not conversations to reopen.
 
 ## Walk-back fork
 

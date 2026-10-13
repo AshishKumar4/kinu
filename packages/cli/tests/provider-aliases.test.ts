@@ -12,7 +12,7 @@ const cliBin = join(repoRoot, 'packages/cli/bin/cli.ts');
 
 function scratchHome(): string {
   const home = scratchDir('alias-home');
-  writeFileSync(join(home, 'config.json'), JSON.stringify({ agents: {}, aliases: {} }));
+  writeFileSync(join(home, 'config.json'), JSON.stringify({ agents: {} }));
 
   return home;
 }

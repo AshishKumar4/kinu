@@ -49,7 +49,8 @@ import { PROJECT_MARKERS } from '../packages/core/src/checkpoints/engine';
 import { assertMeasured, finding } from './gate-ratchet';
 import { declaredName, parse, walk } from './syntax';
 import { BROWSER_PROFILE_PARENT, SCRATCH_PREFIXES, SCRATCH_ROOT_PREFIX } from '@kinu.run/test-utils';
-import { procFile, reapAbandonedRoots } from './process-owner';
+import { reapAbandonedRoots } from './process-owner';
+import { procFile, procStat } from './proc';
 import { signalGroup } from './process-group';
 
 /** This checkout, so the merge-state probe reads THIS tree's git directory
@@ -285,13 +286,10 @@ function processTable(): ProcessRow[] {
   for (const name of readdirSync('/proc')) {
     if (!/^\d+$/u.test(name)) continue;
     const cmdline = procFile(name, 'cmdline');
-    const stat = procFile(name, 'stat');
+    const stat = procStat(name);
 
     if (cmdline === undefined || stat === undefined) continue;
-    // After the parenthesised command name, which may hold spaces: state, ppid, process group.
-    const [, ppid, group] = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
-
-    rows.push({ pid: Number(name), ppid: Number(ppid), group: Number(group), args: argsOf(cmdline) });
+    rows.push({ pid: Number(name), ppid: stat.ppid, group: stat.group, args: argsOf(cmdline) });
   }
 
   return rows;

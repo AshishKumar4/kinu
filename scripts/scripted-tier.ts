@@ -15,7 +15,8 @@
  */
 import * as v from 'valibot';
 import { EVAL_ACCOUNTS, PROVIDER_PROXY_PATH, PROXY_CRED_HEADER, PROXY_TARGET_HEADER } from '@kinu.run/core';
-import { resolvePublicSessionPlan, resolveWebIdentity, webHeaders } from '../evals/src/session';
+import { resolvePublicSessionPlan } from '../evals/src/session';
+import { resolveWebIdentity, webHeaders } from '../evals/src/workspace-roster';
 import {
   SCRIPTED_MODEL_ID, SCRIPTED_MODEL_KEY_ENV, SCRIPTED_MODEL_ORIGIN, SCRIPTED_MODEL_SPEC,
 } from '../packages/test-utils/src/scripted-model-spec';

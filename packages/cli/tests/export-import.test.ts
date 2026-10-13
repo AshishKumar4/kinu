@@ -112,7 +112,7 @@ function placedWorkspace() {
     agents: { scout: {
       name: 'scout', mode: 'local', localName: 'scout', cwd: project, workspaceId: 'project',
       createdAt: '', updatedAt: '',
-    } }, aliases: {},
+    } },
   }));
 
   return { home, project };
@@ -250,7 +250,6 @@ describe('kinu export / import', () => {
       agents: {
         skywriter: { name: 'skywriter', mode: 'cloud', cloudName: 'skywriter', createdAt: '', updatedAt: '' },
       },
-      aliases: {},
     }));
 
     try {
@@ -330,7 +329,7 @@ describe('kinu export / import', () => {
     const archive = join(scratch('kinu-export-restart-out-'), 'skywriter.kinu.jsonl');
     writeFileSync(join(home, 'config.json'), JSON.stringify({
       origin: `http://127.0.0.1:${server.port}`, accessToken: 'ptc_stored_session',
-      agents: { skywriter: { name: 'skywriter', mode: 'cloud', cloudName: 'skywriter', createdAt: '', updatedAt: '' } }, aliases: {},
+      agents: { skywriter: { name: 'skywriter', mode: 'cloud', cloudName: 'skywriter', createdAt: '', updatedAt: '' } },
     }));
 
     try {
@@ -359,7 +358,7 @@ describe('kinu export / import', () => {
   test('a bare workspace database file imports, not only an archive', async () => {
     const home = scratch('kinu-export-bare-db-');
     const out = scratch('kinu-export-bare-db-out-');
-    writeFileSync(join(home, 'config.json'), JSON.stringify({ agents: {}, aliases: {} }));
+    writeFileSync(join(home, 'config.json'), JSON.stringify({ agents: {} }));
     const bareDatabase = join(out, 'oldbot.agent.db');
     seedWorkspace(bareDatabase);
 
@@ -378,7 +377,7 @@ describe('kinu export / import', () => {
     const out = scratch('kinu-export-claimed-out-');
     writeFileSync(join(home, 'config.json'), JSON.stringify({ agents: {
       oldbot: { name: 'oldbot', mode: 'cloud', cloudName: 'oldbot', createdAt: '', updatedAt: '' },
-    }, aliases: {} }));
+    } }));
     const bareDatabase = join(out, 'oldbot.agent.db');
     seedWorkspace(bareDatabase);
 

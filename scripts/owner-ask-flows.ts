@@ -13,7 +13,7 @@ import {
   CHAT_IDLE, CHATS, createFlowWorkspace, frameLedger, openInspector, openWorkspacePage, PAGE_TABS, removeFlowWorkspace, sendAndSettle,
   settled, settledAfter, signedInPage, startNewChat, until, waitOn, openSlateShareDialog, submitPublicSlateShare, type FlowTarget,
 } from './product-flows';
-import { webHeaders } from '../evals/src/session';
+import { webHeaders } from '../evals/src/workspace-roster';
 
 const ChatTextSchema = v.string();
 

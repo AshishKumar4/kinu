@@ -225,12 +225,12 @@ export class DeviceSocketHub {
     });
   }
 
-  chatgpt(deviceId: string, method: DeviceChatGptMethod): Promise<JsonValue | null> {
+  chatgpt(deviceId: string, method: DeviceChatGptMethod, params: JsonValue[] = []): Promise<JsonValue | null> {
     const tunnel = this.tunnel(deviceId);
 
     if (!tunnel) return settle(Effect.fail(deviceFailure(DEVICE_ERRORS.disconnected, NO_DEVICE_CONNECTED)));
     const status = method === DEVICE_CHATGPT.status;
-    const asked = attempt({ doing: 'asking the machine about its ChatGPT sign-in', otherwise: 'unavailable' }, () => tunnel.rpc(method, [], { timeoutMs: 0 }));
+    const asked = attempt({ doing: 'asking the machine about its ChatGPT sign-in', otherwise: 'unavailable' }, () => tunnel.rpc(method, params, { timeoutMs: 0 }));
 
     return settle(asked.pipe(
       Effect.map((answer) => answer ?? null),

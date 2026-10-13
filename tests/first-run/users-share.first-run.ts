@@ -8,7 +8,7 @@ import * as v from 'valibot';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
 import { LiveShareCreatedSchema, liveSharePagePath } from '@kinu.run/core';
 import { FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase } from './first-run';
-import { webHeaders } from '../../evals/src/session';
+import { webHeaders } from '../../evals/src/workspace-roster';
 
 const SUITE = 'First-run · users-share';
 

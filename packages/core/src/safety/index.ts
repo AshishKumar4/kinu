@@ -12,6 +12,10 @@ export {
   resolveInheritedGrants,
   createInheritedApprovalPolicy,
   STRICT_NO_CHANNEL_POLICY,
+  describeExecutionContext,
+  type ExecutionContext,
+  type CommandCall,
+  type PreparedCall,
   type ApprovalGrant,
   type ApprovalSpend,
   type ShellApprovalRequest,
@@ -82,6 +86,7 @@ export {
   initDeferredApprovalsTable,
   DEFERRED_APPROVAL_SIGNAL,
   DENIAL_STANDING_MS,
+  DeferredApprovalSchema,
   type DeferredApproval,
   type DeferredApprovalStatus,
   type DeferredApprovalAnswer,
@@ -99,14 +104,17 @@ export {
 
 export {
   SECRET_PATTERNS,
+  redactSecrets,
+  type SecretPattern,
+} from './secret-patterns';
+
+export {
   scanText,
   countDetections,
   secretSightings,
-  redactSecrets,
-  type SecretPattern,
   type SecretFinding,
   type SecretSighting,
-} from './secret-patterns';
+} from './secret-scan';
 
 export {
   InstructionApprovalStore,

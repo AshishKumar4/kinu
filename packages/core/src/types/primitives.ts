@@ -201,4 +201,7 @@ export interface Shell {
   exec(command: string, stdinOrOptions?: string | ShellExecOptions): Promise<ShellExecResult>;
   /** A named shell's directory as an earlier call left it; null: unreadable. */
   cwd?(name: string): Promise<string | null>;
+  /** A digest of what a named shell restores before a call (its directory and exported variables, or that it has
+   *  none yet); null: unreadable. An approval of a call in that shell is bound to it. */
+  state?(name: string): Promise<string | null>;
 }

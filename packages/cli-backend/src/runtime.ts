@@ -395,7 +395,7 @@ function buildCLIRuntime(
   const ownerPolicy: ShellApprovalPolicy = {
     mode: () => agentConfig.getShellApprovalMode(),
     granted: (grant) => holdsGrant(agentConfig.getShellApprovalGrants(), grant),
-    requestApproval: (request) => approvalChannel?.(request) ?? Promise.resolve(null),
+    requestApproval: (request, signal) => approvalChannel?.(request, signal) ?? Promise.resolve(null),
     get deferrals() { return approvalDeferrals ?? undefined; },
   };
 
@@ -912,7 +912,9 @@ function hostOutputSpill(cwd: string, name: string): OutputSpill {
 
 /** The engine dedupes to one snapshot per turn and skips no-op trees. */
 function withCheckpointedShell(shell: Shell, checkpoints: FileCheckpoints, cwd: string): Shell {
+  // The named shells' reads pass through: an approval is bound to the state they report.
   return {
+    ...shell,
     async exec(command, stdinOrOptions) {
       await checkpoints.ensureCheckpoint(cwd, 'shell exec');
 

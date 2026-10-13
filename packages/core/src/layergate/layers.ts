@@ -4,6 +4,7 @@ import { exists, readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 // injected clock/RNG, no model calls or I/O, so every slice is byte-reproducible.
 
 import type { ModelMessage } from 'ai';
+import { wordsOnly } from '../execution/command-call';
 import { ExtensionHost } from '../extension';
 import { DynamicContextLedger, type DynamicContext } from '../prompting/volatile-context';
 import { TurnAccumulator } from '../orchestrator/turn-accumulator';
@@ -1123,11 +1124,11 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           const ran: string[] = [];
 
           const gated = s.gateExec<string>(
-            async (cmd) => {
+            wordsOnly(async (cmd) => {
               ran.push(cmd);
 
               return `ran:${cmd}`;
-            },
+            }),
             (error) => `denied:${error.message}`,
             USER_DEVICE,
             { policy: { mode: () => 'strict', requestApproval: async () => 'allow' } },
@@ -1145,11 +1146,11 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           const ran: string[] = [];
 
           const gated = s.gateExec<string>(
-            async (cmd) => {
+            wordsOnly(async (cmd) => {
               ran.push(cmd);
 
               return 'ran';
-            },
+            }),
             (error) => `denied:${error.message}`,
             USER_DEVICE,
           );
@@ -1167,7 +1168,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           const asked: string[] = [];
 
           const build = (name: string) => s.gateExec<string>(
-            async (cmd) => `ran:${cmd}`,
+            wordsOnly(async (cmd) => `ran:${cmd}`),
             (error) => `denied:${error.message}`,
             { name, filesOwner: 'user' },
             {

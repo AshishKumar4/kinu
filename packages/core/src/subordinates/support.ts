@@ -214,7 +214,7 @@ export function normalizeReportContent(content: string): string {
 export type SubordinateReportOrigin = 'report_tool' | 'turn_end';
 
 /** Relays only turns a queued signal drove; an owner-typed turn's answer is the owner's. The `report` tool does not come through here. */
-export function subordinateRelaysTurnEnd(input: {
+function subordinateRelaysTurnEnd(input: {
   /** The `report` tool already spoke for this turn; a relay would duplicate it. */
   reportedThisTurn: boolean;
   ownerDriven: boolean;

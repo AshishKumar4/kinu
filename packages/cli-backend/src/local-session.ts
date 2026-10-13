@@ -23,10 +23,10 @@ import type {
   BackendHost, ProgrammaticTurn, EnqueueTurnResult, PromptFile, SendLanding, SendOptions, SendState,
   ActiveSkillSet, FactsStore,
   HeadRuntime, HeadGrounding, SerializedMessage, AgentConfigStore, ShellApprovalMode,
-  ShellApprovalRequest, ShellApprovalOutcome, RequestShellApproval,
+  RequestShellApproval,
   DeferredApproval, DeferredApprovalAnswer,
   AgentsSwarmDeps, AgentsToolDeps, TeamToolDeps, PeersToolDeps, TemporaryAgentPort,
-  DynamicContextInput, DynamicApproval,
+  DynamicContextInput,
   RunEvent, RunEventInput, RunEventQuery,
   FileCheckpointListing, FileRestorePlan, FileRestoreResult,
   CheckpointAvailability,
@@ -119,12 +119,12 @@ import { ActorSession, type ActorTurnLease,
   agentSelfHost,
   cancelBackgroundJob, jobResult, listBackgroundJobs,
   getAlwaysActiveSkills, getProviderAccounts, workspaceSpend, type WorkspaceSpend, getReasoningEffort, getShellApprovalMode, getStoredModelSpec,
-  getShellApprovalGrants, revokeShellApprovalGrants, gatedGrants, type ApprovalGrant,
+  getShellApprovalGrants, revokeShellApprovalGrants, type ApprovalGrant,
   setAlwaysActiveSkills, setModel, setProviderAccount, setReasoningEffort, setShellApprovalMode,
   getEvolutionChangelog, markChangelogSeen, pickAlternateTake,
   type EvolutionChangelogView,
   getRunEvents, listRuns, type RunListEntry, type Page, type PageRequest,
-  WORKSPACE_RUN_ID,
+  WORKSPACE_RUN_ID, READS_CHANGED_EVENT, readsOfTables,
   recordModelOperations, type ModelOperationSink,
   McpToolSurfaceCache, toolSurfaceTokens, type McpServedSurface, type McpSurfaceBudget,
   defaultLoopOrigin,
@@ -211,9 +211,9 @@ export interface LocalParentRelay {
 
 export type { SessionEvent } from '@kinu.run/core';
 
-/** Resolving null leaves the standing approval mode's answer in force. */
-export type ShellApprovalHandler =
-  (req: ShellApprovalRequest) => Promise<ShellApprovalOutcome | null>;
+/** Shows the ask's queue row; resolving null leaves the row waiting there. `signal` aborts once another surface
+ *  decided it. */
+export type ShellApprovalHandler = RequestShellApproval;
 
 export interface LocalAgentSessionOpts {
   rt: CLIRuntime;
@@ -324,8 +324,6 @@ export class LocalAgentSession {
   private scheduledAlarmAt: number | null = null;
   private readonly _headRuntime: HeadRuntime;
   private shellApprovalHandler: ShellApprovalHandler | null = null;
-  private pendingShellApproval: DynamicApproval | null = null;
-  private shellApprovalSequence = 0;
   private readonly sessionId: string;
   private readonly oneShot: boolean;
   /** A one-shot process holds no conversation, so its prompt is never a verdict on the prior turn. */
@@ -681,7 +679,7 @@ export class LocalAgentSession {
    *  every `rt.executionRouter` provider. Without one, 'strict' parks hits in the owner queue. */
   setShellApprovalHandler(handler: ShellApprovalHandler | null): () => void {
     this.shellApprovalHandler = handler;
-    this.rt.setShellApprovalChannel?.(handler ? this.wrapShellApprovalHandler(handler) : null);
+    this.rt.setShellApprovalChannel?.(handler);
 
     return () => {
       if (this.shellApprovalHandler === handler) {
@@ -725,7 +723,8 @@ export class LocalAgentSession {
 
         this.eventRecorder.emit(runId ?? WORKSPACE_RUN_ID, { type: 'approval_consumed', ...record });
       },
-      announce: () => { this.host.broadcast({ type: 'pending_actions_changed' }); },
+      // The frame a cloud workspace sends for the same rows, so every terminal re-reads the queue one way.
+      announce: () => { this.host.broadcast({ type: READS_CHANGED_EVENT, reads: readsOfTables(['deferred_approvals']) }); },
       writes: null,
     });
   }
@@ -761,30 +760,6 @@ export class LocalAgentSession {
 
   /** `allow_always` grants exactly the rules asked about on that executor, never a whole-agent
    *  `allow_all`: one `sudo` click must not unlock every gated command everywhere. */
-  private wrapShellApprovalHandler(handler: ShellApprovalHandler): RequestShellApproval {
-    return async (req) => {
-      const pending: DynamicApproval = {
-        id: `shell-${String(this.shellApprovalSequence += 1)}`,
-        kind: 'shell approval',
-        detail: `${req.executor}: ${req.command}`,
-      };
-
-      this.pendingShellApproval = pending;
-
-      try {
-        const outcome = await handler(req) ?? null;
-
-        if (outcome === 'allow_always') {
-          this.config.grantShellApproval(gatedGrants(req.review, req.executor));
-        }
-
-        return outcome;
-      } finally {
-        if (this.pendingShellApproval === pending) this.pendingShellApproval = null;
-      }
-    };
-  }
-
   getStoredModelSpec(): { spec: string | null } {
     return getStoredModelSpec(this.config);
   }
@@ -2234,9 +2209,8 @@ export class LocalAgentSession {
       missingCapabilities: [],
       subordinateDelegates: () => subordinateDelegatesOf(this.teamDeps?.snapshot() ?? []),
       approvals: () => {
-        const items = [...this.deferrals.approvals(this.rt.actor.actorId)];
-
-        if (this.pendingShellApproval !== null) items.push(this.pendingShellApproval);
+        // A command shown on the live prompt is a row here too.
+        const items = this.deferrals.approvals(this.rt.actor.actorId);
 
         return { items, total: items.length };
       },

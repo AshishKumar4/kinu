@@ -77,3 +77,17 @@ test("an eval's exec carries the call's job and cancel: the job's name answers b
   stop.abort();
   await expect(held).rejects.toMatchObject({ outcome: { success: false, reason: 'io' } });
 });
+
+test('a named shell larger than the output bound has one state, read the same each time through the bounded host shell', async () => {
+  const shell = shellOf();
+  // Over the half-megabyte the host keeps of a command's output, so a read of the whole file would be clipped.
+  await shell.exec(`export BIG=$(head -c 700000 /dev/zero | tr '\\0' x)`, { name: 'dev' });
+
+  const [first, second] = [await shell.state?.('dev'), await shell.state?.('dev')];
+
+  expect(first).toMatch(/^[0-9a-f]{64}$/);
+  expect(second).toBe(first);
+
+  await shell.exec('export BIG=y', { name: 'dev' });
+  expect(await shell.state?.('dev')).not.toBe(first);
+});

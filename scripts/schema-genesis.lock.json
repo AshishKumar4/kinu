@@ -608,6 +608,7 @@
     "id TEXT NOT NULL",
     "command TEXT NOT NULL",
     "executor TEXT NOT NULL DEFAULT ''",
+    "context TEXT NOT NULL DEFAULT '{}'",
     "reason TEXT NOT NULL",
     "status TEXT NOT NULL DEFAULT 'queued'",
     "requested_at INTEGER NOT NULL",
@@ -1411,7 +1412,7 @@
   "triggers@packages/core/src/events/hub/schema.ts": [
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL",
-    "kind TEXT NOT NULL CHECK(kind IN ('webhook_durable', 'webhook_ephemeral', 'timer_oneshot', 'timer_cron', 'process_watch', 'file_watch', 'peer_inbox', 'mcp_route', 'email_route'))",
+    "kind TEXT NOT NULL CHECK(kind IN ('webhook_durable', 'webhook_ephemeral', 'timer_oneshot', 'timer_cron', 'email_route'))",
     "spec TEXT NOT NULL DEFAULT '{}'",
     "creator_trust TEXT NOT NULL CHECK(creator_trust IN ('external', 'authenticated', 'owner', 'self'))",
     "fork_policy TEXT CHECK(fork_policy IS NULL OR fork_policy IN ('copy', 'sever', 'share'))",
@@ -1605,11 +1606,6 @@
     "share_id TEXT NOT NULL",
     "card TEXT NOT NULL",
     "PRIMARY KEY (owner_user_id, workspace, share_id)"
-  ],
-  "user_unrevoked_grants@packages/core/src/state/user-schema.ts": [
-    "key TEXT PRIMARY KEY",
-    "reasons_json TEXT NOT NULL",
-    "recorded_at INTEGER NOT NULL"
   ],
   "user_workspaces@packages/core/src/state/user-schema.ts": [
     "name TEXT PRIMARY KEY",

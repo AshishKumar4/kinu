@@ -22,6 +22,7 @@ import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 import * as v from 'valibot';
 import { HELD_PROXY_MODEL } from './ai-proxy-shapes';
+import { WORKERS_AI_FIXTURE_MODEL_ID } from '@kinu.run/test-utils/workers-ai-model-spec';
 
 const PROXY_URL = 'http://localhost/api/user/ai/v1/chat/completions';
 
@@ -74,6 +75,26 @@ async function burst(bearer: string, count: number, parked: number): Promise<Out
 }
 
 describe('CLI AI proxy under concurrent requests from one user', () => {
+  it('runs real model inference instead of canned platform-lane answers', async () => {
+    const bearer = await env.SURFACE_CONTROL.mintCliBearer();
+
+    for (const [left, right] of [[17, 25], [31, 12]]) {
+      const response = await env.PUBLIC_SURFACE.fetch(PROXY_URL, {
+        method: 'POST', headers: { authorization: `Bearer ${bearer}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ model: WORKERS_AI_FIXTURE_MODEL_ID, messages: [
+          { role: 'system', content: 'Add the two integers supplied by the user. Return only a JSON object with the integer property total; do not return a title.' },
+          { role: 'user', content: JSON.stringify({ left, right }) },
+        ], response_format: { type: 'json_object' }, max_tokens: 64 }),
+      });
+
+      expect(response.ok).toBe(true);
+      const content = v.parse(CompletionSchema, await response.json()).choices[0].message.content;
+      const answer = v.parse(v.object({ total: v.number() }), JSON.parse(content));
+
+      expect(answer.total).toBe(left + right);
+    }
+  });
+
   it('answers eight concurrent requests, more than one invocation may hold waiting for headers', async () => {
     const bearer = await env.SURFACE_CONTROL.mintCliBearer();
     await env.SURFACE_CONTROL.holdProxyModel();

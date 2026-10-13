@@ -177,18 +177,18 @@ function signedOutLogin(issuer: OAuthIssuer, metadata: JsonObject | undefined): 
 }
 
 /** What a sign-out did: `removed` a signed-in login; `unconfirmed` is null when OpenAI confirmed the
- *  revocation, a reason when it did not, and undefined when there was no refresh token to revoke. */
+ *  revocation, its reason when it did not, and undefined when revoking was not asked or nothing could be. */
 export interface ChatGptSignOut {
   readonly removed: boolean;
   readonly unconfirmed?: string | null;
 }
 
 /**
- * Signs a ChatGPT login out under the lock its refresh takes: the refresh token revoked is the one on disk,
- * after any rotation in flight, and no refresh queued behind it renews the login again. The tokens go
+ * Signs a ChatGPT login out under the lock its refresh takes, so no refresh queued behind it renews the login again.
+ * Asked to revoke, OpenAI first revokes the refresh token on disk, after any rotation in flight. The tokens go
  * whatever OpenAI answers; the registration stays, so the next sign-in reuses the issued client.
  */
-export function signOutChatGptLogin(configPath: string, account: string, opts: { fetch?: typeof fetch } = {}): Promise<ChatGptSignOut> {
+export function signOutChatGptLogin(configPath: string, account: string, opts: { revoke: boolean; fetch?: typeof fetch }): Promise<ChatGptSignOut> {
   const key = accountCredentialKey(CHATGPT_CRED_KEY, account);
   const issuer = issuerOf(key);
 
@@ -198,7 +198,7 @@ export function signOutChatGptLogin(configPath: string, account: string, opts: {
     if (login === undefined) return { removed: false };
     const registration = registrationOf(login.metadata);
 
-    const revocation = login.refreshToken === undefined || registration === null
+    const revocation = !opts.revoke || login.refreshToken === undefined || registration === null
       ? undefined
       : await revokeSession({ clientId: registration.clientId, refreshToken: login.refreshToken, ...(opts.fetch !== undefined && { fetch: opts.fetch }) });
 

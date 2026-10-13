@@ -27,7 +27,7 @@ import {
   SUBORDINATE_REPORT_HANDOFF_MAX_CHARS,
   type ReportDeps,
   type SubordinateIngressDeps,
-  subordinateRelaysTurnEnd,
+  owedSubordinateTurnReport,
   type SerializedMessage,
   type SqlExec,
   type SubordinateDelivery,
@@ -981,9 +981,14 @@ describe('the owner talking to a subordinate does not wake its parent', () => {
 
     return {
       roster,
-      turnEnds(input: { ownerDriven: boolean; assistantText: string; reportedThisTurn?: boolean }) {
-        if (!subordinateRelaysTurnEnd({ reportedThisTurn: false, ...input })) return;
-        arrivesAtParent('turn_end', input.assistantText, 'progress');
+      async turnEnds(input: { ownerDriven: boolean; assistantText: string; reportedThisTurn?: boolean }) {
+        // A durable hire's answered turn, as either backend ends one.
+        const owed = await owedSubordinateTurnReport({
+          lifetime: 'durable', ending: 'answered', assistantText: input.assistantText, narration: async () => [],
+          reports: { spoke: input.reportedThisTurn ?? false, settled: false }, ownerDriven: input.ownerDriven, delegating: false,
+        });
+
+        if (owed !== null) arrivesAtParent('turn_end', owed.content, owed.status);
       },
       reportTool: (content: string, status: SubordinateReportStatus = 'completed') =>
         arrivesAtParent('report_tool', content, status),
@@ -993,43 +998,43 @@ describe('the owner talking to a subordinate does not wake its parent', () => {
     };
   }
 
-  test('the owner’s own conversation reaches the parent never, however long it runs', () => {
+  test('the owner’s own conversation reaches the parent never, however long it runs', async () => {
     const scene = scenario();
 
     for (const reply of ['Hi — what do you need?', 'Here are three angles.', 'Done.']) {
-      scene.turnEnds({ ownerDriven: true, assistantText: reply });
+      await scene.turnEnds({ ownerDriven: true, assistantText: reply });
     }
 
     expect(scene.woken()).toEqual([]);
   });
 
-  test('the answer to the parent’s own assignment still arrives automatically', () => {
+  test('the answer to the parent’s own assignment still arrives automatically', async () => {
     const scene = scenario();
 
-    scene.turnEnds({ ownerDriven: false, assistantText: 'Mapped 14 competitors.' });
-    scene.turnEnds({ ownerDriven: false, assistantText: '   ' });
+    await scene.turnEnds({ ownerDriven: false, assistantText: 'Mapped 14 competitors.' });
+    await scene.turnEnds({ ownerDriven: false, assistantText: '   ' });
 
     expect(scene.woken()).toEqual(['Mapped 14 competitors.']);
   });
 
-  test('a report tool cannot wake the parent after the assignment is complete', () => {
+  test('a report tool cannot wake the parent after the assignment is complete', async () => {
     const scene = scenario();
     scene.reportTool('Market mapped.', 'completed');
     expect(scene.roster.requireActive('researcher').currentTask).toBeNull();
 
-    scene.turnEnds({ ownerDriven: true, assistantText: 'Sure, I can dig into pricing.' });
+    await scene.turnEnds({ ownerDriven: true, assistantText: 'Sure, I can dig into pricing.' });
     scene.reportTool('You should see this: incumbent pricing just moved.');
 
     expect(scene.woken()).toEqual(['Market mapped.']);
   });
 
-  test('work the owner’s conversation detached cannot smuggle it upward one hop later', () => {
+  test('work the owner’s conversation detached cannot smuggle it upward one hop later', async () => {
     const scene = scenario();
     scene.reportTool('Market mapped.', 'completed');
 
     // A detached >30s tool job's wake is programmatic; only the roster knows it was the owner's.
     scene.jobSettles('Background run job completed.');
-    scene.turnEnds({ ownerDriven: false, assistantText: 'The crawl finished: 402 pages.' });
+    await scene.turnEnds({ ownerDriven: false, assistantText: 'The crawl finished: 402 pages.' });
 
     expect(scene.woken()).toEqual(['Market mapped.']);
   });
@@ -1042,11 +1047,11 @@ describe('the owner talking to a subordinate does not wake its parent', () => {
     expect(scene.woken()).toEqual(['Background run job completed.']);
   });
 
-  test('a turn the report tool already spoke for is not relayed twice', () => {
+  test('a turn the report tool already spoke for is not relayed twice', async () => {
     const scene = scenario();
 
     scene.reportTool('Done — 14 competitors.', 'completed');
-    scene.turnEnds({
+    await scene.turnEnds({
       ownerDriven: false,
       assistantText: 'Done — 14 competitors.',
       reportedThisTurn: true,

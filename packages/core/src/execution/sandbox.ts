@@ -2,10 +2,13 @@ import type { VFS, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 /** Native container executor, one durable workspace per agent, exposed as sandbox.*. */
 
 import * as v from 'valibot';
+import { abortedBeforeStart } from '@kinu.run/agent-utils';
 import { Effect } from 'effect';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus, PortExposureResult, PreviewRouteCheck, SandboxSize, SandboxSizes } from './types';
-import { ExecutorPortSchema } from './types';
-import { callJob, createShellSession, machineShellCall, reportsCwd, shellExecOptions, type MachineShells } from './shell-session';
+import { commandTool, ExecutorPortSchema } from './types';
+import { shellCall } from './command-call';
+import { callJob, createShellSession, machineShellCall, machineShellCwd, reportsCwd, shellExecOptions, type MachineShells } from './shell-session';
+import { namedShellState, pinnedShellMoved } from '../safety/approval-gate';
 import type { OutputSink } from '../types/primitives';
 import { JOB_STAMP_ENV } from '../types/jobs';
 import { commandResult, commandResultAt, exposedPortText, type CommandResult } from './exec-result';
@@ -259,10 +262,7 @@ function cancelledWhileRunning(command: string): Error {
 }
 
 function notDispatched(): Error {
-  return new DOMException(
-    'sandbox exec cancelled before dispatch: no container process was started',
-    'AbortError',
-  );
+  return abortedBeforeStart('sandbox exec cancelled before dispatch: no container process was started');
 }
 
 export interface SandboxExecutorOptions {
@@ -323,63 +323,78 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
   };
 
   const tools: ExecutorProvider['tools'] = {
-    exec: {
-      description: 'Run a shell command in the sandbox container. '
+    exec: commandTool(
+      'Run a shell command in the sandbox container. '
         + 'BUN IS THE DEFAULT toolchain here (bun 1.3.12 ships in the image): use `bun install`, '
         + '`bun run`, `bun x` and `bun test` rather than npm, npx, yarn or pnpm unless a project '
         + 'genuinely requires one of those. '
         + 'A workspace restored after the container slept keeps its source and its LOCKFILES but '
         + 'not its regenerable trees (node_modules, .venv, build output): if an import fails after '
         + 'a restore, run one `bun install` before concluding anything is missing.',
-      execute: async (...args: unknown[]): Promise<CommandResult> => {
-        if (!handle) return notConfigured();
+      (args) => {
+        if (!handle) return { refused: notConfigured() };
         const command = parseInput(StringSchema, { value: args[0] });
 
-        if (command === undefined) {
-          return refusalOf(new KinuError('bad_input', 'sandbox exec: command must be a string'));
-        }
-
+        if (command === undefined) return { refused: refusalOf(new KinuError('bad_input', 'sandbox exec: command must be a string')) };
         const exec = shellExecOptions({ value: args[1] });
         const { signal, job, output } = exec;
 
         if (exec.name !== undefined && shells === undefined) {
-          return refusalOf(new KinuError('unsupported', 'sandbox exec: this runtime keeps no named shells'));
+          return { refused: refusalOf(new KinuError('unsupported', 'sandbox exec: this runtime keeps no named shells')) };
         }
 
         const call = machineShellCall(command, exec, { home: WORKSPACE_BACKUP_DIR, scope: shells?.scope ?? '', stateDirectory: shells?.stateDirectory ?? '' });
+        const reportCwd = reportsCwd({ context: args[1] });
+        const { name } = exec;
 
-        try {
-          // No work deadline: see SandboxHandle.exec. The signal goes to the container; locally it only refuses to
-          // dispatch. One call: the handle owns any re-call after a lost reply, under the call's one launch id.
-          return await names.hold(exec.name, callJob(exec), async () => {
-            const res = await touch(() => {
-              if (signal?.aborted) throw notDispatched();
-              // The signal is added only when given, so an adapter can tell "none" from "already fired".
-              const opts: SandboxExecOptions = { cwd: WORKSPACE_BACKUP_DIR };
+        // What the named shell restores, read in the container; an approval binds it, and the run checks it again.
+        const state = name === undefined || shells === undefined ? undefined : () => namedShellState(async () => (await machineShellCwd({
+          exec: async (read) => {
+            const r = await touch(() => handle.exec(read, { cwd: WORKSPACE_BACKUP_DIR }));
 
-              if (signal !== undefined) opts.signal = signal;
+            return { stdout: r.stdout ?? r.output ?? '', stderr: r.stderr ?? '', exitCode: r.exitCode ?? 1 };
+          },
+        }, name, shells))?.state ?? null, name);
 
-              if (job !== undefined) opts.env = { [JOB_STAMP_ENV]: job };
+        // The container takes no stdin from a call.
+        return { call: { ...shellCall(command, exec, { stdin: false }), ...(state !== undefined && { shellState: state }) }, run: async (pinned): Promise<CommandResult> => {
+          try {
+            // No work deadline: see SandboxHandle.exec. The signal goes to the container; locally it only refuses to
+            // dispatch. One call: the handle owns any re-call after a lost reply, under the call's one launch id.
+            return await names.hold(name, callJob(exec), async () => {
+              const moved = pinned === undefined ? null : await pinnedShellMoved(pinned, name ?? '', state);
 
-              if (output !== undefined) opts.output = call.output(output);
+              if (moved !== null) return refusalOf(moved);
 
-              return handle.exec(call.command, opts);
-            });
+              const res = await touch(() => {
+                if (signal?.aborted) throw notDispatched();
+                // The signal is added only when given, so an adapter can tell "none" from "already fired".
+                const opts: SandboxExecOptions = { cwd: WORKSPACE_BACKUP_DIR };
 
-            const settled = call.settle({ ...res, stdout: res.stdout ?? res.output ?? '' });
+                if (signal !== undefined) opts.signal = signal;
 
-            return reportsCwd({ context: args[1] }) ? commandResultAt(settled) : normalize(settled);
-          }, (message) => refusalOf(new KinuError('unavailable', message)));
-        } catch (err) {
-          const own = classifyErrorCode({ cause: err }) === 'cancelled';
+                if (job !== undefined) opts.env = { [JOB_STAMP_ENV]: job };
 
-          // The caller's cancel wins over what the call it cut short answered.
-          if (own || signal?.aborted === true) throw own ? err : cancelledWhileRunning(command);
+                if (output !== undefined) opts.output = call.output(output);
 
-          return refusalOf(sandboxFailure({ doing: `sandbox exec \`${command}\``, cause: err }));
-        }
+                return handle.exec(call.command, opts);
+              });
+
+              const settled = call.settle({ ...res, stdout: res.stdout ?? res.output ?? '' });
+
+              return reportCwd ? commandResultAt(settled) : normalize(settled);
+            }, (message) => refusalOf(new KinuError('unavailable', message)));
+          } catch (err) {
+            const own = classifyErrorCode({ cause: err }) === 'cancelled';
+
+            // The caller's cancel wins over what the call it cut short answered.
+            if (own || signal?.aborted === true) throw own ? err : cancelledWhileRunning(command);
+
+            return refusalOf(sandboxFailure({ doing: `sandbox exec \`${command}\``, cause: err }));
+          }
+        } };
       },
-    },
+    ),
     readdir: {
       planAllowed: true,
       description: 'List files in a directory: the working directory when `path` is omitted or empty. Returns newline-separated entries prefixed "d" or "-".',
@@ -517,19 +532,16 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
         }
       },
     },
-    startProcess: {
-      description:
-        'Start a SUPERVISED background process in the sandbox. Supervision records a restart ' +
+    startProcess: commandTool(
+      'Start a SUPERVISED background process in the sandbox. Supervision records a restart ' +
         'spec, so the process COMES BACK when the container restarts; a bare `nohup ... &` does ' +
         'not and is lost. Returns JSON {processId}. Prefer this over `exec "cmd &"` for any ' +
         'long-running server.',
-      execute: async (...args: unknown[]): Promise<CommandResult> => {
-        if (!handle) return notConfigured();
+      (args) => {
+        if (!handle) return { refused: notConfigured() };
         const command = parseInput(StringSchema, { value: args[0] });
 
-        if (command === undefined) {
-          return refusalOf(new KinuError('bad_input', 'sandbox startProcess: command must be a string'));
-        }
+        if (command === undefined) return { refused: refusalOf(new KinuError('bad_input', 'sandbox startProcess: command must be a string')) };
 
         const rawOpts = parseInput(
           v.union([v.string(), v.object({ cwd: v.optional(v.string()) })]),
@@ -541,20 +553,22 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
           { value: v.is(v.string(), rawOpts) ? rawOpts : rawOpts?.cwd },
         ) ?? WORKSPACE_BACKUP_DIR;
 
-        try {
-          // Readiness is retried; the start is not: a retry after a partial start would spawn a second process.
-          const started = await touch(async () => {
-            await withSandboxRetry(() => handle.ensureReady());
+        return { call: { text: command, cwd, context: {} }, run: async (): Promise<CommandResult> => {
+          try {
+            // Readiness is retried; the start is not: a retry after a partial start would spawn a second process.
+            const started = await touch(async () => {
+              await withSandboxRetry(() => handle.ensureReady());
 
-            return handle.startSupervisedProcess(command, { cwd });
-          });
+              return handle.startSupervisedProcess(command, { cwd });
+            });
 
-          return JSON.stringify({ ...started, cwd, restartable: true });
-        } catch (err) {
-          return refusalOf(sandboxFailure({ doing: `sandbox startProcess \`${command}\``, cause: err }));
-        }
+            return JSON.stringify({ ...started, cwd, restartable: true });
+          } catch (err) {
+            return refusalOf(sandboxFailure({ doing: `sandbox startProcess \`${command}\``, cause: err }));
+          }
+        } };
       },
-    },
+    ),
     stopProcess: {
       description: 'Stop a supervised process by id and clear its restart spec.',
       execute: async (...args: unknown[]): Promise<string | Refusal> => {

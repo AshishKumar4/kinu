@@ -1,6 +1,7 @@
 import { useEffect, useRef, type ReactElement } from 'react';
 
-import { SearchTree, type SearchTreeFrame } from '@kinu.run/core/web/hero-art';
+import type { ArtFrame } from '@kinu.run/core/web/art';
+import { SearchTree } from '@kinu.run/core/web/hero-art';
 import { mountLivingCanvas, type LivingCanvas } from './living-canvas';
 import { keepOutOf, type FrameTimes } from './stage';
 
@@ -26,17 +27,7 @@ declare global {
   }
 }
 
-function facts(frame: SearchTreeFrame, canvas: HTMLCanvasElement, still: boolean): void {
-  const pruned = String(frame.pruned);
-  const hidden = String(frame.hidden);
-  const generation = String(frame.generation);
-
-  if (canvas.dataset.pruned !== pruned) canvas.dataset.pruned = pruned;
-
-  if (canvas.dataset.hidden !== hidden) canvas.dataset.hidden = hidden;
-
-  if (canvas.dataset.generation !== generation) canvas.dataset.generation = generation;
-
+function facts(frame: ArtFrame, canvas: HTMLCanvasElement, still: boolean): void {
   if ((still || frame.time >= SETTLED_AT) && canvas.dataset.settled !== 'true') canvas.dataset.settled = 'true';
 }
 
@@ -45,7 +36,7 @@ function mountSearchTree(host: HTMLElement, stage: HTMLElement): () => void {
   let pressY = 0;
   let pressed = false;
 
-  const living: LivingCanvas<SearchTreeFrame, SearchTree> = mountLivingCanvas(host, {
+  const living: LivingCanvas<ArtFrame, SearchTree> = mountLivingCanvas(host, {
     create: (aspect) => new SearchTree({ seed: HERO_SEED, aspect }),
     still: { seconds: STATIC_SECONDS, step: STATIC_STEP },
     resolution: 1,

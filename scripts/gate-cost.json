@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-10-09",
+  "measuredAt": "2026-10-11",
   "machine": "linux x64, AMD EPYC (8 threads)",
   "method": "each row alone under `setsid /usr/bin/time -v bun scripts/ladder.ts --gate <run> --no-cache`; the row's whole process tree — its session plus every descendant by ppid, so a setsid'd dev server or browser counts — sampled every 0.05s for its first 3s and every 0.25s after — summed proportional set (Pss, /proc/<pid>/smaps_rollup) for memory, tasks in state R for parallel demand, Δ(utime+stime+cutime+cstime) over at least 0.25s for parallelism achieved; CPU seconds from getrusage(RUSAGE_CHILDREN); a post-publish row against the deployment `--deployment=<origin>` named, with KINU_ORIGIN and KINU_EVAL_ORIGIN set to it; armada medium containers, each row alone, with each container's CPU label recorded from /proc/cpuinfo; post-publish measurements against https://staging.kinu.run; gate:infra measured on its row's own machine against staging. Unmeasured until the next deploy capture: bun run gate:first-run (side-run consent failures), bash scripts/product-flows-tier.sh (per-flow deployment units), bash scripts/eval-pass-tier.sh (side-run eval failures).",
   "rows": {
@@ -730,16 +730,17 @@
       "loadAtStart": 0.41,
       "exit": 0
     },
-    "bun test --timeout=0 --isolate scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/pre-push-hook.test.ts scripts/lean-citations.test.ts scripts/nightly-sweeps.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/error-model.test.ts": {
-      "wallSeconds": 158.38,
-      "cpuSeconds": 228.49,
-      "peakRssMb": 4043.59,
-      "peakRunnable": 12,
-      "peakCpuThreads": 4.19,
-      "meanThreads": 1.44,
-      "samples": 612,
-      "loadAtStart": 0.15,
-      "exit": 0
+    "bun test --timeout=0 --isolate scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/pre-push-hook.test.ts scripts/lean-citations.test.ts scripts/nightly-sweeps.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/error-model.test.ts scripts/tui-capture.test.ts": {
+      "wallSeconds": 126.3,
+      "cpuSeconds": 186.46,
+      "peakRssMb": 4145.05,
+      "peakRunnable": 11,
+      "peakCpuThreads": 4.16,
+      "meanThreads": 1.48,
+      "samples": 506,
+      "loadAtStart": 0.31,
+      "exit": 0,
+      "machine": "linux x64, AMD EPYC (8 threads)"
     },
     "bun test --timeout=0 --isolate scripts/hammer.test.ts scripts/mutation-fences.test.ts": {
       "wallSeconds": 28.82,

@@ -5,8 +5,14 @@ import { detach, showing } from "@kinu.run/core/obs";
 import { FilledButton } from "./FilledButton";
 import { Modal } from "./Modal";
 
+/** A second way to go ahead, offered beside the main one; the main one stays the default. */
+interface AlternateStep {
+  readonly action: string;
+  readonly run: () => Promise<void>;
+}
+
 /** Closes on success; a failure stays open with its reason. */
-export function ConfirmDialog({ title, icon, children, action, failed, onConfirm, onClose, marker, maxWidthClass, danger = true }: {
+export function ConfirmDialog({ title, icon, children, action, failed, onConfirm, onClose, marker, maxWidthClass, danger = true, alternate }: {
   title: string;
   icon?: ReactNode;
   children: ReactNode;
@@ -18,26 +24,33 @@ export function ConfirmDialog({ title, icon, children, action, failed, onConfirm
   maxWidthClass?: string;
   /** False for a step that loses nothing, such as signing in again. */
   danger?: boolean;
+  alternate?: AlternateStep;
 }) {
-  const [busy, setBusy] = useState(false);
+  /** The action running, so only its button says so. */
+  const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const confirm = useCallback(() => detach(Effect.gen(function* () {
-    setBusy(true);
+  const confirm = useCallback((label: string, step: () => Promise<void>) => detach(Effect.gen(function* () {
+    setBusy(label);
     setError(null);
 
     return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      yield* Effect.promise(onConfirm);
+      yield* Effect.promise(step);
       onClose();
-    }), showing(setError)), Effect.sync(() => setBusy(false)));
-  })), [onConfirm, onClose]);
+    }), showing(setError)), Effect.sync(() => setBusy(null)));
+  })), [onClose]);
 
   return (
-    <Modal title={title} icon={icon} onClose={onClose} busy={busy} maxWidthClass={maxWidthClass}
+    <Modal title={title} icon={icon} onClose={onClose} busy={busy !== null} maxWidthClass={maxWidthClass}
       footer={<>
-        <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
-        <FilledButton danger={danger} {...(marker === undefined ? {} : { [marker]: "" })} onClick={confirm} disabled={busy}>
-          {busy ? `${action}…` : action}
+        <Button size="sm" variant="ghost" onClick={onClose} disabled={busy !== null}>Cancel</Button>
+        {alternate !== undefined && (
+          <Button size="sm" variant="secondary" onClick={() => confirm(alternate.action, alternate.run)} disabled={busy !== null}>
+            {busy === alternate.action ? `${alternate.action}…` : alternate.action}
+          </Button>
+        )}
+        <FilledButton danger={danger} {...(marker === undefined ? {} : { [marker]: "" })} onClick={() => confirm(action, onConfirm)} disabled={busy !== null}>
+          {busy === action ? `${action}…` : action}
         </FilledButton>
       </>}>
       {children}
@@ -56,6 +69,7 @@ export interface Confirmation {
   readonly failed?: string;
   readonly danger?: boolean;
   readonly run: () => Promise<void>;
+  readonly alternate?: AlternateStep;
 }
 
 /** The app's one way to ask before a step: `ask` opens the dialog, which the asking component renders as `dialog`. */
@@ -65,7 +79,7 @@ export function useConfirmation() {
 
   const dialog = pending === null ? null : (
     <ConfirmDialog title={pending.title} action={pending.action} failed={pending.failed} danger={pending.danger}
-      onConfirm={pending.run} onClose={close}>
+      onConfirm={pending.run} onClose={close} alternate={pending.alternate}>
       <p className="text-xs p-text-2 leading-relaxed">{pending.body}</p>
     </ConfirmDialog>
   );

@@ -445,7 +445,7 @@ describe('two actors, one database: deferred_approvals', () => {
     const b = new DeferredApprovalStore(w.sql, w.b);
 
     const action = {
-      id: 'appr-1', command: 'rm -rf /tmp/x', executor: 'workspace',
+      id: 'appr-1', command: 'rm -rf /tmp/x', executor: 'workspace', context: {},
       reason: 'destructive', requestedAt: 1,
     };
 
@@ -454,8 +454,8 @@ describe('two actors, one database: deferred_approvals', () => {
     expect(w.count('deferred_approvals')).toBe(2);
 
     expect(a.decide('appr-1', 'approved', 5)?.status).toBe('approved');
-    expect(a.standing(action.command, action.executor, 6)?.status).toBe('approved');
-    expect(b.standing(action.command, action.executor, 6)?.status).toBe('queued');
+    expect(a.standing({ command: action.command, executor: action.executor, context: {} }, 6)?.status).toBe('approved');
+    expect(b.standing({ command: action.command, executor: action.executor, context: {} }, 6)?.status).toBe('queued');
     expect(b.get('appr-1')?.status).toBe('queued');
     expect(a.listQueued()).toHaveLength(0);
     expect(b.listQueued()).toHaveLength(1);
@@ -908,7 +908,7 @@ describe('a handle whose validation throws is refused before the statement runs'
         turnId: 't', runId: 'r', callId: 'c', digest: 'd',
       })],
       ['deferred_approvals', () => approvals.create({
-        id: 'appr-1', command: 'c', executor: 'e', reason: 'r', requestedAt: 1,
+        id: 'appr-1', command: 'c', executor: 'e', context: {}, reason: 'r', requestedAt: 1,
       }, [])],
       ['instruction_approvals', () => new InstructionApprovalStore(
         w.sql, w.revocable, 'scope',

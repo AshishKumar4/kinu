@@ -35,10 +35,8 @@ import { tolerate } from '../../packages/core/src/obs/index';
 import { infraBoundary } from '@kinu.run/test-utils';
 import { AGENT_HOME } from '../../packages/cli/src/config';
 import { DAEMON_LOG_PATH, DEVICE_CONFIG_PATH } from '../../packages/cli/src/device-connect';
-import {
-  webHeaders,
-  type PublicExecutorResult, type PublicSessionResolution, type PublicWebIdentity,
-} from '../../evals/src/session';
+import { type PublicExecutorResult, type PublicSessionResolution } from '../../evals/src/session';
+import { webHeaders, type PublicWebIdentity } from '../../evals/src/workspace-roster';
 
 /** How much of a deployment's answer a finding carries. Enough to name the SQL
  *  error and the route that raised it, short enough to read in a test failure. */

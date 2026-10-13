@@ -37,6 +37,10 @@ export interface OuterBatchAnswer {
   readonly evidence: readonly string[];
 }
 
+export interface RevokedBatchAnswer extends OuterBatchAnswer {
+  readonly beforeRevocation: { readonly rows: DbProbeAnswer['rows']; readonly evidence: readonly string[] };
+}
+
 export class DbCapabilityProbeDO extends DurableObject<Cloudflare.Env> {
   private readonly sql: SqlExecutor = <Row,>(
     query: TemplateStringsArray, ...values: SqlValue[]
@@ -165,6 +169,42 @@ export class DbCapabilityProbeDO extends DurableObject<Cloudflare.Env> {
     }
 
     return { reason, rows: this.rows(), evidence: this.evidence(main) };
+  }
+
+  /** Revoke only after the database holds the first write and its evidence, inside the still-open batch. */
+  revokedBatch(): RevokedBatchAnswer {
+    this.open();
+    const identity = { actorId: 'actor-fenced', workspaceId: 'ws-db-probe', parentActorId: null, name: 'fenced', storageKey: 'agent:fenced' };
+    const observer = bindActorHandle(this.sql, identity, () => Effect.void);
+    let live = true;
+    let beforeRevocation: RevokedBatchAnswer['beforeRevocation'] = { rows: [], evidence: [] };
+
+    const actor = bindActorHandle(this.sql, identity, () => {
+      const rows = this.rows();
+      const evidence = this.evidence(observer);
+
+      if (live && rows.some((row) => row.key === 'first') && evidence.includes('insert:ledger:actor:1:2')) {
+        beforeRevocation = { rows, evidence };
+        live = false;
+      }
+
+      return live ? Effect.void : Effect.fail(new KinuError('denied', 'the actor was revoked during its batch'));
+    });
+
+    const store = this.store(actor);
+    store.createTable({ name: 'ledger', scope: 'actor', columns: [{ name: 'key', type: 'text', primaryKey: true }] });
+    let reason: string | null = null;
+
+    try {
+      store.batch([
+        { op: 'insert', table: 'ledger', rows: [{ key: 'first' }] },
+        { op: 'insert', table: 'ledger', rows: [{ key: 'second' }] },
+      ]);
+    } catch (cause) {
+      reason = cause instanceof Error ? cause.message : String(cause);
+    }
+
+    return { reason, beforeRevocation, rows: this.rows(), evidence: this.evidence(observer) };
   }
 
   /** A handle whose identity is not in the directory: a stale binding is refused before any statement runs. */

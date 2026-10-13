@@ -61,7 +61,11 @@ function setupEnv() {
       const record = v.parse(StoredCredentialSchema, credential);
       stored.set(key, { kind: record.kind ?? 'bearer', value: record });
     },
-    async deleteCredential(_caller: UserCaller, key: string) { stored.delete(key); },
+    async deleteCredential(_caller: UserCaller, key: string) {
+      stored.delete(key);
+
+      return { unrevoked: null };
+    },
   });
 
   const env: CliRoutesEnv<string> = {

@@ -121,7 +121,7 @@ export function createCliSession(agent: string, opts: CliSessionOptions = {}): C
   return fileSession(agent, path, id, conversationId);
 }
 
-export function listCliSessions(agent: string, opts: Pick<CliSessionOptions, 'transcriptDir'> = {}): CliSessionInfo[] {
+export function listTranscripts(agent: string, opts: Pick<CliSessionOptions, 'transcriptDir'> = {}): CliSessionInfo[] {
   const dir = join(transcriptRoot(opts), cleanPathSegment(agent));
 
   if (!existsSync(dir)) return [];
@@ -131,22 +131,6 @@ export function listCliSessions(agent: string, opts: Pick<CliSessionOptions, 'tr
     .map((name) => readSessionInfo(join(dir, name)))
     .filter((info): info is CliSessionInfo => info !== null)
     .sort((a, b) => b.modifiedAt - a.modifiedAt);
-}
-
-export function findTranscriptPath(
-  agent: string,
-  ref: string,
-  opts: Pick<CliSessionOptions, 'transcriptDir'> = {},
-): string | null {
-  if (ref.includes('/') || ref.endsWith('.jsonl')) {
-    const byPath = resolve(ref);
-
-    return existsSync(byPath) ? byPath : null;
-  }
-
-  const byId = join(transcriptRoot(opts), cleanPathSegment(agent), `${ref}.jsonl`);
-
-  return existsSync(byId) ? byId : null;
 }
 
 function inMemorySession(agent: string): CliSession {
