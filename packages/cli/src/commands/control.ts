@@ -21,11 +21,10 @@ import {
   createCloudWebhookTrigger,
   listCloudAvailableModels,
   type CloudWebhookTrigger,
-  type CloudWebhookTriggerInput,
 } from '../cloud-api';
 import * as v from 'valibot';
 import { ACCENT, DIM, OK, printJson, WARN } from '../display';
-import { normalizeWebhookAuthMode, parsePositiveInt, parseTime } from '../options';
+import { parsePositiveInt, parseTime, webhookTriggerInput } from '../options';
 import { createConfiguredLocalModelResolver } from '../local-model-resolver';
 import {
   normalizeModelMenu,
@@ -37,7 +36,7 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 import { cancelLocalJob } from '../local-agent-client';
 import { liveDaemonPid } from './daemon';
 
-interface ControlOpts {
+export interface ControlOpts {
   model?: string;
   baseUrl?: string;
   auth?: string;
@@ -317,16 +316,10 @@ export async function triggersCommand(
     if (normalized === 'webhook') {
       if (!value) throw new Error('webhook label required');
 
-      const webhookInput: CloudWebhookTriggerInput = {
-        label: value,
-        auth_mode: normalizeWebhookAuthMode(opts.authMode),
-      };
+      const webhookInput = webhookTriggerInput(value, {
+        ...opts, rateLimit: opts.rateLimit === undefined ? undefined : parsePositiveInt(opts.rateLimit, 'rate limit'),
+      });
 
-      if (opts.secret) webhookInput.secret = opts.secret;
-
-      if (opts.contentType) webhookInput.accepted_content_type = opts.contentType;
-
-      if (opts.rateLimit) webhookInput.rate_limit_per_min = parsePositiveInt(opts.rateLimit, 'rate limit');
       const created = await createCloudWebhookTrigger(auth.origin, auth.token, target.cloudName, webhookInput);
       present(created, opts, (webhook) => printCreatedWebhook(webhook, auth.origin));
 

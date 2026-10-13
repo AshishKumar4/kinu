@@ -116,7 +116,7 @@ function sortExecutors(executors: PromptExecutorInfo[]): PromptExecutorInfo[] {
 }
 
 /** Registered names are runtimes the workspace has, active; either source is trimmed, deduplicated and sorted once. */
-export function uniquePromptExecutors(opts: Pick<PromptSurfaceOptions, 'executors' | 'registeredExecutors'>): PromptExecutorInfo[] {
+function uniquePromptExecutors(opts: Pick<PromptSurfaceOptions, 'executors' | 'registeredExecutors'>): PromptExecutorInfo[] {
   const source = opts.executors ?? (opts.registeredExecutors ?? []).map((name): PromptExecutorInfo => ({
     name, available: true, configured: true, active: true, status: 'active',
   }));

@@ -10,7 +10,7 @@ import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from '../activation-gate';
 
 import {
-  ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, NO_DEVICE_CONNECTED, ORCHESTRATOR_AGENT_SLUG, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type DeviceCodeStart, type JsonValue, type EgressRequestFacts, type EgressSecretBinding, type ApprovalGrant, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type EgressSecretSummary, type PutEgressSecretInput, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, DEVICE_KEEPALIVE_PING, DEVICE_KEEPALIVE_PONG, DEVICE_TOKEN_ROTATION_ACK, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, } from '@kinu.run/core';
+  ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, NO_DEVICE_CONNECTED, ORCHESTRATOR_AGENT_SLUG, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, type EgressRequestFacts, type EgressSecretBinding, type ApprovalGrant, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type EgressSecretSummary, type PutEgressSecretInput, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, DEVICE_KEEPALIVE_PING, DEVICE_KEEPALIVE_PONG, DEVICE_TOKEN_ROTATION_ACK, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, type RosterPage, type CredentialSummary, type WorkspaceEntry, type UserProfile, } from '@kinu.run/core';
 
 import { DurableObjectOAuthClientProvider, type AgentMcpOAuthProvider } from 'agents/mcp/do-oauth-client-provider';
 
@@ -26,7 +26,7 @@ import { tenantDrive } from '../drive/tenant';
 
 import { installAnalyticsDiagnostics, openAnalyticsWindow } from '@kinu.run/core/analytics';
 import type { McpPresetAvailability, McpServerSummary } from '@kinu.run/core';
-import { acceptRosterSocket, isRosterSocket, unreportedWorkspaces, ROSTER_SOCKET_PATH, type RosterPage, type RosterQuery } from './roster';
+import { acceptRosterSocket, isRosterSocket, unreportedWorkspaces, ROSTER_SOCKET_PATH, type RosterQuery } from './roster';
 
 import { UserDrive, type DriveAnswer, type DriveChunkWrite } from './drive';
 import { UserDevices, type DeviceCancellationOutcome } from './devices';
@@ -40,9 +40,9 @@ import {
   UserSessions, CLI_AGENT_WEBSOCKET_CAPABILITY, type BrowserSessionIdentity, type CliAgentConnectTicketVerification, type CliTokenVerification, type LiveBrowserSession,
 } from './sessions';
 
-import { UserCredentials, type CheckpointedCredential, type CredentialEndpoint, type CodexStatus, type ConnectedProvider, type CredentialSummary } from './credentials';
-import { UserWorkspaces, type WorkspaceEntry, type WorkspaceRegistration, type WorkspaceRegistrationSource } from './workspaces';
-import { UserProfileStore, type ProfileCatalogWriteResult, type UserProfile } from './profile';
+import { UserCredentials, type CheckpointedCredential, type CredentialEndpoint, type CodexStatus } from './credentials';
+import { UserWorkspaces, type WorkspaceRegistration, type WorkspaceRegistrationSource } from './workspaces';
+import { UserProfileStore, type ProfileCatalogWriteResult } from './profile';
 import { ShareCardJobs, type ReceivedShare } from './share-cards';
 import type { SqlRow, UserObjectHost } from './user-host';
 
@@ -158,10 +158,6 @@ export class UserDO extends Agent<Env> {
 
   setConfig(caller: UserCaller, key: string, value: string): Promise<void> {
     return this.profile.setConfig(caller, key, value);
-  }
-
-  listConfig(caller: UserCaller): Promise<Record<string, string>> {
-    return this.profile.listConfig(caller);
   }
 
   getProfileCatalog(caller: UserCaller): Promise<ProfileCatalogEnvelope> {
@@ -345,14 +341,6 @@ export class UserDO extends Agent<Env> {
     return this.credentials.selectCloudflareAccount(caller, accountId);
   }
 
-  startCodexDeviceFlow(caller: UserCaller, account?: string): Promise<DeviceCodeStart> {
-    return this.credentials.startCodexDeviceFlow(caller, account);
-  }
-
-  pollCodexDeviceFlow(caller: UserCaller): ReturnType<UserCredentials['pollCodexDeviceFlow']> {
-    return this.credentials.pollCodexDeviceFlow(caller);
-  }
-
   startClaudeSignIn(caller: UserCaller): ReturnType<UserCredentials['startClaudeSignIn']> {
     return this.credentials.startClaudeSignIn(caller);
   }
@@ -367,10 +355,6 @@ export class UserDO extends Agent<Env> {
 
   getCodexStatus(caller: UserCaller): Promise<CodexStatus> {
     return this.credentials.getCodexStatus(caller);
-  }
-
-  listConnectedProviders(caller: UserCaller): Promise<ConnectedProvider[]> {
-    return this.credentials.listConnectedProviders(caller);
   }
 
   registerBrowserSession(caller: UserCaller, tokenHash: string, expiresAt: number, identity: BrowserSessionIdentity & { credentialGeneration?: number }): Promise<void> {
@@ -566,10 +550,6 @@ export class UserDO extends Agent<Env> {
 
   userMcp_remove(caller: UserCaller, id: string): Promise<void> {
     return this.mcpServers.userMcp_remove(caller, id);
-  }
-
-  userMcp_update(caller: UserCaller, id: string, patch: JsonValue): Promise<void> {
-    return this.mcpServers.userMcp_update(caller, id, patch);
   }
 
   userMcp_toolDescriptors(caller: UserCaller): Promise<string> {
@@ -833,12 +813,6 @@ export class UserDO extends Agent<Env> {
     this.nudges = Promise.all([this.nudges, ...Array.from({ length: Math.min(ROSTER_NUDGE_LANES, queue.length) }, lane)]);
   }
 
-  // Session authority lives here: KV writes and deletes take up to a minute to reach every colo,
-  // so KV can confirm neither revocation nor existence.
-
-  /** Revoke exactly this session; the row's absence is the revocation. The write is durable
-   * before the fan-out, so a failed push cannot keep a socket authorized (see retireCliAuthority). */
-
   /** A WebSocket cannot cross RPC; the Worker forwards these upgrades. */
   private readonly _sockets = new Hono({ getPath: rawPath })
     .all(DEVICE_CONNECT_PATH, async (c) => this.devices.acceptDeviceSocket(c.req.raw, new URL(c.req.url)))
@@ -975,14 +949,6 @@ export class UserDO extends Agent<Env> {
     // Device sockets clean up in webSocketClose, which the runtime fires next.
     if (!deviceIdFromSocket(ws) && !isRosterSocket(ws)) return this.lifecycle.webSocketError(...call);
   }
-
-  // All reads/writes of `user_credentials.value` go through this pair; the only places plaintext
-  // secrets exist in this class (sealed by credential-envelope.ts).
-
-  // Egress secret vault: see user/egress-vault.ts for why the row shape is its own table.
-
-  // Codex device flow: calls wait on OpenAI while other calls run. The generation names the
-  // attempt a poll belongs to and `settled_at` whether it is still live, fencing stale polls.
 
   // The Mossaic tenant id is the owner's user id, derived from the profile row's email as the
   // edge does, so no caller names a tenant. Every owner workspace mounts it at `/shared`.

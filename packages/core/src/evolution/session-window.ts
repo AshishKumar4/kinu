@@ -10,7 +10,6 @@
 import * as v from 'valibot';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
-import type { CompletedTurn } from './types';
 import { parseJsonValue } from '../utils/json';
 import { UsageSchema } from '../usage';
 import { Effect } from 'effect';
@@ -22,10 +21,10 @@ import { nanoid } from '../utils/nanoid';
 import { nowMs } from '../utils/date';
 import { ToolOutcomeSchema } from '../tools/outcome';
 import { StruggleSchema } from './struggles';
+import type { CompletedTurn } from './types';
 
-/** The one durable mirror of {@link CompletedTurn}; a second mirror would drift
- *  into turns that silently fail to decode. */
-export const CompletedTurnSchema: v.GenericSchema<CompletedTurn> = v.object({
+/** A completed turn, as stored and read; `CompletedTurn` (`types.ts`) is its type, so the two cannot drift. */
+export const CompletedTurnSchema = v.object({
   userMessage: v.string(),
   assistantResponse: v.string(),
   toolCalls: v.array(v.object({
@@ -41,20 +40,30 @@ export const CompletedTurnSchema: v.GenericSchema<CompletedTurn> = v.object({
     writtenPaths: v.array(v.string()),
     revisitedPaths: v.array(v.string()),
   })),
-  craftedToolsUsed: v.optional(v.array(v.string())),
+  /** Crafted tools this turn called, per the craft clock. Not derivable from `toolCalls`:
+   *  crafted tools are codemode-only. Empty = observed none; absent = not observed. */
+  craftedToolsUsed: v.optional(v.pipe(v.array(v.string()), v.readonly())),
   steps: v.number(),
   durationMs: v.number(),
+  /** Null at completion; set later by EvolutionEngine.reviewTurn. */
   feedback: v.nullable(v.picklist(['positive', 'negative'])),
   hadError: v.boolean(),
+  /** Durable id of the turn's assistant message. */
   turnId: v.optional(v.string()),
   sessionId: v.optional(v.string()),
+  /** Only user-origin turns treat user follow-ups as verdicts. */
   origin: v.optional(v.picklist(['user', 'programmatic'])),
   usage: v.optional(UsageSchema),
-  // Persisted with the turn: the drain needs it after the running scope is gone.
-  missionLabels: v.optional(v.array(v.pipe(v.string(), v.nonEmpty()))),
-  struggles: v.optional(v.array(StruggleSchema)),
-  shownLessons: v.optional(v.array(v.object({ id: v.string(), revision: v.number() }))),
+  /** Mission labels stamped when the turn ended. Carried by the turn because a deferred review may run with no active
+   *  scope, and persisted so the drain has them after it is gone. Absent = ungoverned; a review must never invent one. */
+  missionLabels: v.optional(v.pipe(v.array(v.pipe(v.string(), v.nonEmpty())), v.readonly())),
+  /** Where the turn fought its tools, from its steering detector; absent on turns recorded before. */
+  struggles: v.optional(v.pipe(v.array(StruggleSchema), v.readonly())),
+  /** The tool lessons its steps listed, at the revision each saw; only these does the turn score. */
+  shownLessons: v.optional(v.pipe(v.array(v.pipe(v.object({ id: v.string(), revision: v.number() }), v.readonly())), v.readonly())),
+  /** The live trial's arm the turn ran; its errors and steps are the trial's guardrails. */
   trial: v.optional(v.object({ trialId: v.string(), segmentId: v.string(), arm: v.picklist(['candidate', 'incumbent']) })),
+  /** The turn ended on a question to its owner: its call waits for the answer, so no tool result records it. */
   askedOwner: v.optional(v.boolean()),
 });
 

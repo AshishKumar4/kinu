@@ -14,7 +14,7 @@ import { DEFAULT_RATE_LIMIT_PER_MIN } from '../ingress/rate-limit';
 
 export type ForkPolicy = 'copy' | 'sever' | 'share';
 
-export const DEFAULT_FORK_POLICY = {
+const DEFAULT_FORK_POLICY = {
   webhook_durable:   'sever',
   webhook_ephemeral: 'sever',
   timer_oneshot:     'sever',

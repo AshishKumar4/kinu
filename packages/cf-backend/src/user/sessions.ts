@@ -1,13 +1,12 @@
 import { parseCliTokenUserId } from '../cli/auth-store';
 import {
-  getActiveAccessTokenScopes, listAccessTokens as listAccessTokenRows, mintAccessToken as mintAccessTokenRow, revokeAccessToken as revokeAccessTokenRow, verifyAccessToken as verifyAccessTokenRow, type AccessTokenMint, type AccessTokenRecord, type AccessTokenScope, ORCHESTRATOR_AGENT_SLUG, nanoid, ownerCaller, type UserCaller, validateWorkspaceName, randomToken, sha256Hex,
+  getActiveAccessTokenScopes, listAccessTokens as listAccessTokenRows, mintAccessToken as mintAccessTokenRow, revokeAccessToken as revokeAccessTokenRow, verifyAccessToken as verifyAccessTokenRow, type AccessTokenMint, type AccessTokenRecord, type AccessTokenScope, ORCHESTRATOR_AGENT_SLUG, nanoid, ownerCaller, type UserCaller, validateWorkspaceName, randomToken, sha256Hex, type UserProfile,
 } from '@kinu.run/core';
 import { diagnostics, KinuError, tolerate, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import {
   builtinAdmission, createBuiltinInvite, findPasskeyAccount, findPasswordAccount, hasBuiltinOwner, initBuiltinAccounts, invitedEmail, isBuiltinOwner, issuePasskeyChallenge, recordPasskeyUse, registerBuiltinAccount, spendPasskeyChallenge, reserveAttempt, clearAttempts, applyReset, listBuiltinAccounts, resetAccount, type Admission, type AttemptBucket, type BuiltinSql, type ChallengePurpose, type Grant, type NewBuiltinAccount, type NewInvite, type PasskeyAccount, type PasswordAccount, type PendingChallenge, type ListedAccount, type Reset, type SigningAccount,
 } from '@kinu.run/core/identity';
-import type { UserProfile } from './profile';
 import { closeEndedRosterSockets, rosterSockets } from './roster';
 import { singletonValue, type SessionStands, type UserObjectHost } from './user-host';
 
@@ -62,10 +61,9 @@ export interface BrowserSessionIdentity {
   authTime: number;
 }
 
-/** A revoked or lapsed session has no row and reads as null. `identity` is null only for rows
- * registered before rows carried one; the KV projection is then the only copy. */
+/** A revoked or lapsed session has no row and reads as null. */
 export interface LiveBrowserSession {
-  identity: BrowserSessionIdentity | null;
+  identity: BrowserSessionIdentity;
 }
 
 export function parseCliAgentConnectTicketUserId(ticket: string): string | null {
@@ -124,23 +122,17 @@ export class UserSessions {
       this.host.ctx.storage.sql.exec(`DELETE FROM user_browser_sessions WHERE expires_at <= ?`, Date.now());
 
       const row = this.host.ctx.storage.sql.exec<{
-        email: string | null;
+        email: string;
         display_name: string | null;
-        provider: string | null;
-        provider_sub: string | null;
-        auth_time: number | null;
+        provider: string;
+        provider_sub: string;
+        auth_time: number;
       }>(
         `SELECT email, display_name, provider, provider_sub, auth_time
            FROM user_browser_sessions WHERE token_hash = ? LIMIT 1`, tokenHash,
       ).toArray()[0];
 
       if (!row) return null;
-
-      // All five columns come from one INSERT, so they are present or absent together;
-      // an older row without them carries no identity rather than half of one.
-      if (row.email === null || row.provider === null || row.provider_sub === null || row.auth_time === null) {
-        return { identity: null };
-      }
 
       return {
         identity: {
@@ -258,6 +250,8 @@ export class UserSessions {
     return createBuiltinInvite(this.builtinSql(), invite);
   }
 
+  /** Revoke exactly this session; the row's absence is the revocation. The write is durable before the fan-out, so a
+   *  failed push cannot keep a socket authorized (see retireCliAuthority). */
   async revokeBrowserSession(caller: UserCaller, tokenHash: string): Promise<void> {
     await this.host.requireTier(caller, 'auth_tokens');
     this.host.sqlx(`DELETE FROM user_browser_sessions WHERE token_hash = ?`, tokenHash);
@@ -267,22 +261,36 @@ export class UserSessions {
 
   /** Close every websocket that named this session at upgrade. Best-effort, like the CLI socket push. */
   private async pushSessionSocketRevocation(tokenHash: string): Promise<void> {
+    await this.pushToActiveWorkspaces({
+      push: (workspace) => workspace.closeRevokedSessionSockets(tokenHash),
+      doing: 'closing a workspace websocket whose browser session was revoked',
+      failed: (workspace, failure) => { diagnostics.failure('auth.session_socket_revocation_push_failed', failure, { workspace }); },
+    });
+  }
+
+  /**
+   * Ask every live workspace to close the sockets a revocation ended. Best-effort: the revocation is durable before
+   * this runs, so a failed push only delays a close; each caller reports its own failures under its own event.
+   */
+  private async pushToActiveWorkspaces(fanOut: {
+    readonly push: (workspace: ReturnType<UserSessionsHost['env']['OrchestratorAgent']['get']>) => Promise<{ closed: number }>;
+    readonly doing: string;
+    readonly failed: (workspace: string, failure: KinuError) => void;
+  }): Promise<void> {
     const workspaces = this.host.sqlx<{ name: string }>(
       `SELECT name FROM user_workspaces
        WHERE delete_pending = 0 AND create_pending = 0`,
     ).map((row) => row.name);
 
-    const settled = await Promise.allSettled(workspaces.map((name) => this.host.env.OrchestratorAgent
-      .get(this.host.env.OrchestratorAgent.idFromName(name))
-      .closeRevokedSessionSockets(tokenHash)));
+    const settled = await Promise.allSettled(workspaces.map((name) => fanOut.push(this.host.env.OrchestratorAgent
+      .get(this.host.env.OrchestratorAgent.idFromName(name)))));
 
     for (const [index, outcome] of settled.entries()) {
-      if (outcome.status === 'fulfilled') continue;
-      diagnostics.failure('auth.session_socket_revocation_push_failed', toKinuError({
-        doing: 'closing a workspace websocket whose browser session was revoked',
-        cause: outcome.reason,
-        otherwise: 'unavailable',
-      }), { workspace: workspaces[index] });
+      const workspace = workspaces[index];
+
+      if (outcome.status === 'rejected' && workspace !== undefined) {
+        fanOut.failed(workspace, toKinuError({ doing: fanOut.doing, cause: outcome.reason, otherwise: 'unavailable' }));
+      }
     }
   }
 
@@ -442,23 +450,11 @@ export class UserSessions {
     );
     const generation = this.authGeneration();
 
-    const workspaces = this.host.sqlx<{ name: string }>(
-      `SELECT name FROM user_workspaces
-       WHERE delete_pending = 0 AND create_pending = 0`,
-    ).map((row) => row.name);
-
-    const settled = await Promise.allSettled(workspaces.map((name) => this.host.env.OrchestratorAgent
-      .get(this.host.env.OrchestratorAgent.idFromName(name))
-      .closeRevokedCliSockets(generation)));
-
-    for (const [index, outcome] of settled.entries()) {
-      if (outcome.status === 'fulfilled') continue;
-      diagnostics.failure('auth.socket_revocation_push_failed', toKinuError({
-        doing: 'closing a workspace websocket whose CLI bearer was revoked',
-        cause: outcome.reason,
-        otherwise: 'unavailable',
-      }), { workspace: workspaces[index], generation });
-    }
+    await this.pushToActiveWorkspaces({
+      push: (workspace) => workspace.closeRevokedCliSockets(generation),
+      doing: 'closing a workspace websocket whose CLI bearer was revoked',
+      failed: (workspace, failure) => { diagnostics.failure('auth.socket_revocation_push_failed', failure, { workspace, generation }); },
+    });
   }
 
   /**

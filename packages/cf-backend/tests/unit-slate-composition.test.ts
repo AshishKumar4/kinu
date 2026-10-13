@@ -85,7 +85,7 @@ test('an MCP tool called through eval answers its data whole, fails on a protoco
     const protocolFailure = { isError: true, content: [{ type: 'text', text: 'remote execution failed' }], structuredContent: { reason: 'remote-code', error: 'remote evidence' } } satisfies Parameters<typeof seedMcpAnswer>[0];
     seedMcpAnswer(protocolFailure);
     await expect(run(call(2))).rejects.toThrow('remote execution failed');
-    await user.userDO.userMcp_update(owner, 'connection-id', { allowedTools: [] });
+    user.sql.exec(`UPDATE user_mcp_servers SET allowed_tools = '[]' WHERE id = 'connection-id'`);
     await expect(run(call(3))).rejects.toThrow('not in the allowed_tools list');
   } finally { user.close(); resetRecordedMcp(); }
 });
@@ -151,7 +151,7 @@ test('a slate\'s MCP call follows connection identity and the owner allowlist', 
     // A server is named as the actor's programs name it, by its name, never by its connection id.
     expect(await on('connection-id', 'read_issue')).toMatchObject({ ok: false, reason: 'missing' });
     expect(await on('github', 'read_issue')).toEqual({ ok: true, value: { content: [] } });
-    await user.userDO.userMcp_update(owner, 'connection-id', { name: 'renamed-github' });
+    user.sql.exec(`UPDATE user_mcp_servers SET name = 'renamed-github' WHERE id = 'connection-id'`);
     expect(await on('github', 'read_issue')).toMatchObject({ ok: false, reason: 'missing' });
     expect(await call('read_issue')).toEqual({ ok: true, value: { content: [] } });
     const incident = { content: [], isError: false, reason: 'denied', error: 'historical incident' };
@@ -162,17 +162,17 @@ test('a slate\'s MCP call follows connection identity and the owner allowlist', 
     expect(await call('read_issue')).toEqual({ ok: true, value: protocolFailure });
     expect(await call('create_issue')).toMatchObject({ ok: false, reason: 'missing' });
 
-    await user.userDO.userMcp_update(owner, 'connection-id', { allowedTools: ['read_issue', 'create_issue'] });
+    user.sql.exec(`UPDATE user_mcp_servers SET allowed_tools = '["read_issue","create_issue"]' WHERE id = 'connection-id'`);
     const planCaller: SlateCaller = { ...ROOT_SLATE_CALLER, workMode: 'plan' };
     expect(await on('renamed-github', 'read_issue', planCaller)).toEqual({ ok: true, value: { content: [] } });
     expect(await on('renamed-github', 'create_issue', planCaller)).toMatchObject({ ok: false, reason: 'denied' });
     expect(await call('create_issue')).toEqual({ ok: true, value: { content: [] } });
 
-    await user.userDO.userMcp_update(owner, 'connection-id', { allowedTools: [] });
+    user.sql.exec(`UPDATE user_mcp_servers SET allowed_tools = '[]' WHERE id = 'connection-id'`);
     expect(await call('read_issue')).toMatchObject({ ok: false, reason: 'missing' });
 
     // A hosted actor connects no MCP servers of its own, so it refuses with the surface reason, not the role one.
-    await user.userDO.userMcp_update(owner, 'connection-id', { allowedTools: ['read_issue'] });
+    user.sql.exec(`UPDATE user_mcp_servers SET allowed_tools = '["read_issue"]' WHERE id = 'connection-id'`);
 
     const child = await hostedSubordinateHarness(actor, {
       name: 'issue-reader', displayName: 'Issue reader', nameOrigin: 'user', roleId: 'task', mission: 'Read issues',

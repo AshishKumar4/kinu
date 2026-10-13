@@ -1,11 +1,11 @@
 import { Effect } from 'effect';
 import {
-  autoTitleMayReplace, nameOriginOf, type NameOrigin, WORKSPACE_KEYED_ROWS, commitWorkspaceCapability, freshWorkspaceCapability, revokeWorkspaceCapability, workspaceCapabilityHash, type UserCaller, validateWorkspaceName, sanitizeWorkspaceLogoSvg, resolveWorkspaceTitle, WorkspaceOverviewSchema, type WorkspaceOverview,
+  autoTitleMayReplace, nameOriginOf, type NameOrigin, WORKSPACE_KEYED_ROWS, commitWorkspaceCapability, freshWorkspaceCapability, revokeWorkspaceCapability, workspaceCapabilityHash, type UserCaller, validateWorkspaceName, sanitizeWorkspaceLogoSvg, resolveWorkspaceTitle, WorkspaceOverviewSchema, type WorkspaceOverview, type RosterPage, type WorkspaceEntry,
 } from '@kinu.run/core';
 import { diagnostics, KinuError, settle, settleLogged, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { openAnalyticsWindow } from '@kinu.run/core/analytics';
-import { rosterCounts, rosterPage, rosterRow, rosterSockets, sendRosterFrame, type RosterPage, type RosterQuery } from './roster';
+import { rosterCounts, rosterPage, rosterRow, rosterSockets, sendRosterFrame, type RosterQuery } from './roster';
 import { deletePictures, picturePrefix } from '../slates/pictures';
 import { notInRegistry } from './workspace-ownership';
 
@@ -15,13 +15,6 @@ import type { ShareCardJobs } from './share-cards';
 
 /** Renewed as each fork frame lands, so this bounds the gap between frames, not the transfer. */
 const FORK_RESERVATION_LEASE_MS = 5 * 60 * 1000;
-
-export interface WorkspaceEntry {
-  name: string;
-  displayName: string;
-  createdAt: number;
-  lastVisited: number;
-}
 
 export interface WorkspaceRegistrationSource {
   purpose?: string;

@@ -4,10 +4,10 @@ import { AwaitedList } from '@kinu.run/test-utils';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import type { AgentContext } from 'agents';
 import { joinHarnessFibers, mockAgentsSdk, rememberMcpManager, inheritedMcpManager } from './agents-sdk';
-import { sha256Hex, DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES, deviceIdFromSocket } from '@kinu.run/core';
+import { sha256Hex, DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES, deviceIdFromSocket, type WorkspaceEntry } from '@kinu.run/core';
 import { isJsonObject } from '../../../core/src/utils/json';
 import { ownerCaller, type UserCaller } from '@kinu.run/core';
-import type { WorkspaceEntry, WorkspaceRegistration } from '../../src/user/workspaces';
+import type { WorkspaceRegistration } from '../../src/user/workspaces';
 import {
   DeviceConsentRegistry,
   DeviceConsentStore,
@@ -496,7 +496,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
       name: options.durableObjectId ?? 'test-user-do',
       toString: () => options.durableObjectId ?? 'test-user-do',
     },
-    // Real, not a passthrough: `userMcp_add`/`userMcp_update` claim a name inside one
+    // Real, not a passthrough: `userMcp_add` claims a name inside one
     // `transactionSync`; a fake makes that claim torn.
     storage: {
       sql,

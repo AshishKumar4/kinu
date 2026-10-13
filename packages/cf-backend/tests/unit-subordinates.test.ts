@@ -8,7 +8,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
 import * as v from 'valibot';
 import {
-  actorConnectionTag, BUILTIN_TOOLS, DEPS_GATED_TOOLS,
+  actorConnectionTag, BUILTIN_TOOLS,
   observedOpEnum, REPORT_TOOL, SubordinateInspectionRequestSchema, type JsonValue, type Rpc, TASK_TURN_ENDINGS, terminalTaskReport,
 } from '@kinu.run/core';
 import { gatedTools, present, TURN_REACH } from '@kinu.run/test-utils';
@@ -89,16 +89,11 @@ describe('subordinate wiring', () => {
     expect(gatedTools(subKeys)).toEqual([...TURN_REACH.assignment]);
   });
 
-  test('every deps-gated tool core declares is answered by this backend', async () => {
-    // Core types the set as `readonly BuiltinToolName[]`, which cannot key an exhaustive table, so a new
-    // DEPS_GATED_TOOLS name with no dep check would stay advertised on every actor.
+  test('a root actor is not handed report, which only a hire has deps for', async () => {
     const turns = chatSessionTurns(orchestratorHarness().agent);
     const orchToolNames = Object.keys((await turns.prepare({ messages: [{ role: 'user', content: 'hello' }] })).tools);
     await turns.settle({ messageId: 'a-gated', text: 'done' });
-    const ungated = DEPS_GATED_TOOLS.filter((name) => orchToolNames.includes(name));
-    expect(ungated).toEqual([]);
-    // Non-empty, or the line above passes vacuously.
-    expect(DEPS_GATED_TOOLS.length).toBeGreaterThan(0);
+    expect(orchToolNames).not.toContain(REPORT_TOOL);
   });
 });
 

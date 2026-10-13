@@ -43,7 +43,6 @@ const CHANGES: AccountChange[] = [
   { what: 'a profile catalog write lands', path: '/profile-catalog', method: 'PUT', body: { catalog: {}, expectedVersion: 28 } },
   { what: 'a profile catalog write is refused', path: '/profile-catalog', method: 'PUT', body: { catalog: {}, expectedVersion: 27 }, parks: true },
   { what: 'Codex is disconnected', path: '/codex', method: 'DELETE' },
-  { what: 'a Codex sign-in completes', path: '/codex/poll', method: 'POST', body: {} },
   { what: 'the web first sees a ChatGPT sign-in made on a machine', path: '/chatgpt', method: 'GET', planChanged: true },
   { what: 'the web reads a ChatGPT plan that has not changed', path: '/chatgpt', method: 'GET', planChanged: false, parks: true },
   { what: 'a Claude sign-in finishes', path: '/claude/finish', method: 'POST', body: { code: 'the-code#state' }, claudeConnected: true },
@@ -84,7 +83,6 @@ test.each(CHANGES)('when $what, a sleep-time compute parked on a refusal the own
       async setCredential() {},
       async deleteCredential() { return { unrevoked: null }; },
       async disconnectCodex() { return { unrevoked: null }; },
-      async pollCodexDeviceFlow() { return { connected: true, accountId: 'acc' }; },
       async putProfileCatalog(_caller: UserCaller, _catalog: JsonValue, expectedVersion: number): Promise<ProfileCatalogWriteResult> {
         return expectedVersion === 28
           ? { ok: true, envelope: { authority: { kind: 'account', accountId: 'acc' }, version: 29, digest: 'd', catalog: BUILTIN_PROFILE_CATALOG } }

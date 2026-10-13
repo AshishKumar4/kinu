@@ -19,7 +19,7 @@ import { randomToken, sha256Hex } from '@kinu.run/core';
 import { readKvJson, writeKvJson, type KvStore } from '@kinu.run/agent-utils';
 import { ownerCaller, type OwnerCapabilityEnv } from '@kinu.run/core';
 import { timingSafeEqual } from '@kinu.run/core';
-import { classify, diagnostics, toKinuError, type KinuError, settle, settleLogged } from '@kinu.run/core/obs';
+import { type KinuError, settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { sanitizeReturnTo } from '@kinu.run/core';
 
@@ -83,18 +83,6 @@ const OAuthStateSchema = v.object({
 });
 
 export type OAuthStateRecord = v.InferOutput<typeof OAuthStateSchema>;
-
-/** KV projection of a session row, written from the row's value. `userId` is read from the token,
- *  never this record, on the verify path. */
-const SessionSchema = v.object({
-  userId: v.string(),
-  email: v.string(),
-  displayName: v.nullable(v.string()),
-  provider: v.string(),
-  sub: v.string(),
-  authTime: v.number(),
-  expiresAt: v.number(),
-});
 
 /** Truncated sha256 in the shape every userId-carrying format (UserDO name, `ptc_…` token) expects;
  *  the one derivation for dev and real sign-in. */
@@ -161,7 +149,7 @@ export function consumeOAuthState(
   }));
 }
 
-/** The id is in the token, not KV, so logout always reaches the authority even before KV propagates. */
+/** The id is in the token, so a check or a logout reaches the account's object with no lookup. */
 function parseSessionTokenUserId(token: string): string | null {
   const match = /^ps_([a-f0-9]{32})_[A-Za-z0-9_-]{64,}$/.exec(token);
 
@@ -178,7 +166,6 @@ export function createSession<Id>(env: AuthStoreEnv<Id>, profile: OAuthProfile):
     const caller = yield* Effect.promise(async () => ownerCaller(env));
     const authority = sessionAuthority(env, identity.userId);
 
-    // One value for both stores so they cannot disagree about what this cookie stands for.
     const minted: BrowserSessionIdentity = {
       email: identity.email,
       displayName: identity.displayName ?? null,
@@ -187,22 +174,8 @@ export function createSession<Id>(env: AuthStoreEnv<Id>, profile: OAuthProfile):
       authTime: now,
     };
 
-    // Authority first: a cookie is never outstanding against a session nothing can revoke.
+    // Registered before the cookie exists: a cookie is never outstanding against a session nothing can revoke.
     yield* Effect.promise(async () => authority.registerBrowserSession(caller, tokenHash, expiresAt, { ...minted, credentialGeneration: profile.credentialGeneration ?? 0 }));
-
-    yield* Effect.catchCause(Effect.gen(function* () {
-      yield* Effect.promise(async () => writeKvJson(env.AUTH_KV, sessionKey(tokenHash), {
-        userId: identity.userId,
-        ...minted,
-        expiresAt,
-      }, SESSION_TTL_MS));
-    }), (failed) => Effect.gen(function* () {
-      const writeFailed = Cause.squash(failed);
-      // This token is never returned; withdraw the row rather than leave it holding a slot.
-      yield* Effect.promise(async () => settleLogged('auth.browser_session_row_stranded', { doing: 'withdrawing the session row a failed sign-in left behind', otherwise: 'unavailable' }, () => authority.revokeBrowserSession(caller, tokenHash)));
-
-      return yield* Effect.die(new SessionAuthorityUnavailableError({ cause: writeFailed }));
-    }));
 
     return { token, issuedAt: now, expiresAt, identity };
   }));
@@ -217,35 +190,13 @@ export class SessionAuthorityUnavailableError extends Data.TaggedError('SessionA
 }
 
 /** Null when not signed in; throws {@link SessionAuthorityUnavailableError} when the answer cannot be
- *  obtained. Liveness is the authority row on every request; identity comes from the KV projection,
- *  or the row when KV has not caught up. Revocation deletes the row, so neither copy can revive it. */
+ *  obtained. The account's session row is liveness and identity both; revocation deletes it. */
 export function verifySession<Id>(env: AuthStoreEnv<Id>, token: string): Promise<AuthIdentity | null> {
   return settle(Effect.gen(function* () {
     const userId = parseSessionTokenUserId(token);
 
     if (!userId) return null;
     const tokenHash = sha256Hex(token);
-
-    const record = yield* Effect.catchCause(Effect.promise(() => readKvJson(env.AUTH_KV, sessionKey(tokenHash), SessionSchema)), (failed) => {
-      const unreadable = Cause.squash(failed);
-
-      // Told apart by the decoder's error type, never prose. An unreachable namespace is an outage;
-      // undecodable bytes are cleaned out and answered as signed out (a 503 would trap the browser).
-      if (!isMalformedRecord({ cause: unreadable })) {
-        return Effect.die(new SessionAuthorityUnavailableError({ cause: unreadable }));
-      }
-
-      return Effect.as(Effect.promise(() => discardCorruptSession(env, userId, tokenHash, toKinuError({
-        doing: 'decoding the browser session record this cookie names',
-        cause: unreadable,
-        otherwise: 'bad_input',
-      }))), 'discarded' as const);
-    });
-
-    if (record === 'discarded') return null;
-
-    // kv.ts floors TTLs, so a record can outlive its deadline; this only picks which identity copy to read.
-    const projected = record && record.expiresAt > Date.now() ? record : null;
 
     // Outside the catch: a missing owner secret is a misconfiguration, not an unreachable DO.
     const caller = yield* Effect.promise(() => ownerCaller(env));
@@ -256,12 +207,7 @@ export function verifySession<Id>(env: AuthStoreEnv<Id>, token: string): Promise
     );
 
     if (!live) return null;
-
-    // Row fallback serves the first request after sign-in at a colo KV has not reached. `identity` is
-    // null only on rows registered before the row carried one.
-    const snapshot = projected ?? live.identity;
-
-    if (!snapshot) return null;
+    const snapshot = live.identity;
 
     // Once OAuth is declared, built-in sessions end with built-in sign-in.
     if (BUILTIN_METHODS.has(snapshot.provider) && !builtinSignInOn(env)) return null;
@@ -283,32 +229,7 @@ export function verifySession<Id>(env: AuthStoreEnv<Id>, token: string): Promise
   }));
 }
 
-/** Decided by type, never by matching an error's prose. */
-function isMalformedRecord(failure: { cause: unknown }): boolean {
-  return failure.cause instanceof v.ValiError || classify(failure) === 'malformed-input';
-}
-
-/**
- * Reported once, then cleared from the row (first) and KV. Failures are recorded, never raised: turning
- * cleanup into an outage would trap the browser behind a cookie it cannot replace.
- */
-async function discardCorruptSession<Id>(
-  env: AuthStoreEnv<Id>,
-  userId: string,
-  tokenHash: string,
-  fault: KinuError,
-): Promise<void> {
-  diagnostics.failure('auth.browser_session_record_malformed', fault);
-
-  await settleLogged('auth.browser_session_row_left', { doing: 'revoking the session row of a record that no longer decodes', otherwise: 'unavailable' }, async () => {
-    await sessionAuthority(env, userId).revokeBrowserSession(await ownerCaller(env), tokenHash);
-  });
-
-  await settleLogged('auth.browser_session_record_left', { doing: 'removing a browser session record that no longer decodes', otherwise: 'unavailable' }, () => env.AUTH_KV.delete(sessionKey(tokenHash)));
-}
-
-/** Deletes the authority row first so the cookie is refused at every colo; throws if that fails.
- *  The KV delete after is cleanup: recorded on failure, never raised. */
+/** Deletes the session row, so the cookie is refused everywhere at once; throws if that fails. */
 export async function revokeSession<Id>(env: AuthStoreEnv<Id>, token: string): Promise<void> {
   const userId = parseSessionTokenUserId(token);
 
@@ -316,12 +237,6 @@ export async function revokeSession<Id>(env: AuthStoreEnv<Id>, token: string): P
   const tokenHash = await sha256Hex(token);
   const caller = await ownerCaller(env);
   await sessionAuthority(env, userId).revokeBrowserSession(caller, tokenHash);
-
-  await settleLogged('auth.browser_session_record_left', { doing: 'removing the KV record of a session that is already revoked', otherwise: 'unavailable' }, () => env.AUTH_KV.delete(sessionKey(tokenHash)));
-}
-
-function sessionKey(tokenHash: string): string {
-  return `session:${tokenHash}`;
 }
 
 /** The one authority on which of a user's sessions are live. */

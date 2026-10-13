@@ -18,14 +18,6 @@ export function craftScores(sql: SqlExecutor): Map<string, CraftScoreRow> {
   return new Map(sql<CraftScoreRow>`SELECT name, score, uses, last_used_at FROM crafted_tools`.map((row) => [row.name, row]));
 }
 
-export function emaUpdate(
-  oldScore: number,
-  newObs: number,
-  alpha = DEFAULT_CONFIG.craftStore.emaAlpha,
-): number {
-  return (1 - alpha) * oldScore + alpha * newObs;
-}
-
 /** Half-life decay; a never-used tool (last_used_at = 0) keeps its stored score. */
 export function effectiveScore(
   score: number,
@@ -67,7 +59,7 @@ export function updateCraftScores(
 ): void {
   const now = nowMs();
 
-  // `emaUpdate` in SQL, so an absent row is simply not matched.
+  // An exponential moving average in SQL, so an absent row is simply not matched.
   for (const name of usedToolNames) {
     void sql`UPDATE crafted_tools
         SET score = (1 - ${alpha}) * score + ${alpha} * ${outcome}, uses = uses + 1, last_used_at = ${now}

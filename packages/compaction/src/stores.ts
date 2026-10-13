@@ -61,7 +61,6 @@ interface ArchiveRangeRow {
   start_turn: number;
   end_turn: number;
   user_turns: number;
-  assistant_turns: number;
   first_user_ask: string;
 }
 
@@ -72,7 +71,6 @@ function toArchiveRange(sessionKey: string, row: ArchiveRangeRow): ArchiveRange 
     startTurn: row.start_turn,
     endTurn: row.end_turn,
     userTurns: row.user_turns,
-    assistantTurns: row.assistant_turns,
     firstUserAsk: row.first_user_ask,
   };
 }
@@ -162,7 +160,7 @@ export function createCompactionStateStore(
         authorize();
 
         return sql<ArchiveRangeRow>`
-          SELECT range_hash, start_turn, end_turn, user_turns, assistant_turns, first_user_ask
+          SELECT range_hash, start_turn, end_turn, user_turns, first_user_ask
           FROM compaction_archive
           WHERE actor_id = ${actorId} AND session_key = ${sessionKey} ORDER BY start_turn ASC`
           .map((row) => toArchiveRange(sessionKey, row));
@@ -171,9 +169,9 @@ export function createCompactionStateStore(
         authorize();
         void sql`INSERT INTO compaction_archive
               (actor_id, session_key, range_hash, start_turn, end_turn,
-               user_turns, assistant_turns, first_user_ask)
+               user_turns, first_user_ask)
             VALUES (${actorId}, ${sessionKey}, ${range.rangeHash}, ${range.startTurn},
-                    ${range.endTurn}, ${range.userTurns}, ${range.assistantTurns},
+                    ${range.endTurn}, ${range.userTurns},
                     ${range.firstUserAsk})
             ON CONFLICT(actor_id, session_key, range_hash) DO NOTHING`;
       },

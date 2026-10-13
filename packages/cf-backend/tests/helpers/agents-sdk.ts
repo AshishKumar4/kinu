@@ -876,8 +876,6 @@ export function recordedMcpToolAborts(): readonly unknown[] {
  *  and the dispatch are two different requests failing. */
 let mcpDiscoveryFailure: Error | null = null;
 
-let mcpRemoveFailure: Error | null = null;
-
 /** `userMcp_add` constructs the provider itself, so the provider stub picks this up at construction. */
 let pendingMcpAuthUrl: string | null = null;
 
@@ -976,10 +974,6 @@ export function failNextMcpDiscovery(error: Error): void {
   mcpDiscoveryFailure = error;
 }
 
-export function failNextMcpRemove(error: Error): void {
-  mcpRemoveFailure = error;
-}
-
 /** Seeds the manager's own storage as an earlier activation left it; with no config row it is an orphan. */
 export function seedSdkMcpServer(
   id: string,
@@ -991,11 +985,6 @@ export function seedSdkMcpServer(
     callbackUrl: row.callbackUrl ?? '', clientId: row.clientId ?? null, authUrl: null, transport,
     server_options: encodeSdkServerOptions(transport),
   });
-}
-
-/** The state a cold activation presents before hydration re-registers a credentialed row. */
-export function dropLiveMcpFetch(id: string): void {
-  delete liveMcpManager?.mcpConnections[id]?.options.transport.fetch;
 }
 
 export function liveMcpTransport(id: string): RecordedMcpTransport | undefined {
@@ -1081,7 +1070,6 @@ export function resetRecordedMcp(): void {
   mcpCallToolFailure = null;
   mcpDiscoveryFailure = null;
 
-  mcpRemoveFailure = null;
   pendingMcpAuthUrl = null;
   liveMcpManager = null;
   mcpRestored = 0;
@@ -1209,13 +1197,6 @@ class FakeMCPClientManager {
   }
 
   async removeServer(id: string): Promise<void> {
-    const failure = mcpRemoveFailure;
-
-    if (failure) {
-      mcpRemoveFailure = null;
-      throw failure;
-    }
-
     delete this.mcpConnections[id];
     mcpServers.delete(id);
     this.changed();

@@ -2,7 +2,6 @@
 // a logical actor of the forked workspace, with actor-keyed rows in the one store
 // (no per-head scratch database), so a head can take a claimed turn.
 
-import type { ToolSet } from 'ai';
 import { type HeadRuntime, type HeadGrounding, type HeadInput, type HeadSeat,
 type WebSearchProvider,
 type RouteModelBinder, type ResolvedTurnProfile,
@@ -10,8 +9,8 @@ type PublishHeadStream,
 type MissionGovernor, type ModelCallSink, type ModelOperationSink,
 type SeatedActor, type TurnLedgers, type WriteObserver,
 runHeadSplit, HeadController, REAL_CLOCK, type HeadJournal,
-codemodeSurface, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, headMergeLLM, spawnSeatedHead,
-localMissionScope, type ToolSurfaceNarrowing, } from '@kinu.run/core'
+actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, headMergeLLM, spawnSeatedHead,
+localMissionScope, type CodemodeBuilder, } from '@kinu.run/core'
 import type { CLIRuntime } from './runtime';
 import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
 
@@ -47,7 +46,7 @@ export function createCLIHeadRuntime(deps: CLIHeadRuntimeDeps): HeadRuntime {
   const runtime: HeadRuntime = {
     spawnHead: async (input) => spawnSeatedHead(input, {
       seat: deps.hostHead,
-      codemodeTool: (seat) => hostedCodemodeTool(seat.actor, deps.webSearch, () => deps.ledgers(seat.actor)),
+      codemode: (seat) => hostedCodemodeTool(seat.actor, deps.webSearch, () => deps.ledgers(seat.actor)),
       webSearch: deps.webSearch,
       split: () => (request) => runHeadSplit(new HeadController(createCLIHeadRuntime(deps), deps.journal(), REAL_CLOCK), input, request),
       mission: () => localMissionScope(deps.governor(), input.missionLabels ?? []),
@@ -72,7 +71,7 @@ export function createCLIHeadRuntime(deps: CLIHeadRuntimeDeps): HeadRuntime {
  */
 export function hostedCodemodeTool(
   actor: SeatedActor, search: WebSearchProvider, ledgers: () => Pick<TurnLedgers, 'files' | 'context'>,
-): (finished: ToolSet, reach: ToolSurfaceNarrowing) => ToolSet[string] {
+): CodemodeBuilder {
   // A program here runs in this process, which holds no Browser Run socket client.
   const surface = hostedSurfaceActor(actor, {
     web: { search, files: actor.runtime.storage, browser: null },
@@ -81,5 +80,5 @@ export function hostedCodemodeTool(
     ledgers,
   });
 
-  return (finished, reach) => createNodeCodemodeToolFactory({ namespaces: actorNamespaces(surface, SURFACE_POLICY.confined), reach })(codemodeSurface(actor.runtime, finished));
+  return (codemode, reach) => createNodeCodemodeToolFactory({ namespaces: actorNamespaces(surface, SURFACE_POLICY.confined), reach })(codemode);
 }

@@ -463,8 +463,8 @@ error class (`classifyMcpFailure`): `auth`, `not_connected`,
 answer is `tool_error`.
 
 A server name addresses its tools (`mcp_<server>_<tool>`), so names are unique.
-`userMcp_add` and `userMcp_update` seal and validate first, then claim the
-canonical `lower(name)` and write inside one `ctx.storage.transactionSync`. No
+`userMcp_add` seals and validates first, then claims the
+canonical `lower(name)` and writes inside one `ctx.storage.transactionSync`. No
 await sits inside that boundary, so two concurrent adds cannot both pass, and a
 refusal names the taken name. `initUserTables` builds a `UNIQUE` index over
 `lower(name)` unconditionally, so no write path leaves a duplicate behind.

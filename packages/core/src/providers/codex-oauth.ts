@@ -11,28 +11,11 @@ export const CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
 
 const CODEX_ISSUER = 'https://auth.openai.com';
 
-const CODEX_DEVICE_PORTAL = `${CODEX_ISSUER}/codex/device`;
-
 export const CODEX_TOKEN_URL = `${CODEX_ISSUER}/oauth/token`;
 
 const CODEX_USER_AGENT = 'codex_cli_rs/0.0.0 (Kinu Agent)';
 
 const CODEX_ORIGINATOR = 'codex_cli_rs';
-
-const DEVICE_CODE_URL = `${CODEX_ISSUER}/api/accounts/deviceauth/usercode`;
-
-const DEVICE_POLL_URL = `${CODEX_ISSUER}/api/accounts/deviceauth/token`;
-
-const DeviceCodeStartResponseSchema = v.object({
-  user_code: v.pipe(v.string(), v.minLength(1)),
-  device_auth_id: v.pipe(v.string(), v.minLength(1)),
-  interval: v.optional(v.union([v.string(), v.number()])),
-});
-
-const DevicePollResponseSchema = v.object({
-  authorization_code: v.pipe(v.string(), v.minLength(1)),
-  code_verifier: v.pipe(v.string(), v.minLength(1)),
-});
 
 const TokenExchangeResponseSchema = v.object({
   access_token: v.pipe(v.string(), v.minLength(1)),
@@ -64,144 +47,12 @@ async function codexTokenEndpointError(res: Response): Promise<OAuthTokenError> 
   );
 }
 
-const DevicePollErrorSchema = v.object({
-  error: v.optional(v.string()),
-  error_description: v.optional(v.string()),
-});
-
-/** Read a rejected device-code poll: an explicit terminal code wins; else 403 is pending and 404 expired. */
-function devicePollRejection(res: Response): Effect.Effect<DeviceCodePoll> {
-  return Effect.flatMap(Effect.promise(() => res.text()), (body) => pollAnswer(res, body));
-}
-
-function pollAnswer(res: Response, body: string): Effect.Effect<DeviceCodePoll> {
-
-  const rejection = v.safeParse(
-    DevicePollErrorSchema,
-    tolerate<unknown>(() => JSON.parse(body), 'malformed-input'),
-  );
-
-  const code = rejection.success ? rejection.output.error : undefined;
-  const reason = rejection.success ? rejection.output.error_description : undefined;
-
-  if (code === 'access_denied') {
-    return Effect.succeed({ status: 'denied', message: reason ?? 'Codex login denied. Run kinu setup again.' });
-  }
-
-  if (code === 'expired_token' || res.status === 404) {
-    return Effect.succeed({ status: 'expired', message: reason ?? 'Codex login expired. Run kinu setup again.' });
-  }
-
-  if (res.status === 403) return Effect.succeed({ status: 'pending' });
-
-  return Effect.die(new Error(`Codex poll failed: ${res.status} ${sanitizeErrorBody(body)}`));
-}
-
-export interface DeviceCodeStart {
-  userCode: string;
-  deviceAuthId: string;
-  pollIntervalSec: number;
-  portalURL: string;
-}
-
-export interface DeviceCodeTokens {
-  accessToken: string;
-  refreshToken: string;
-  expiresAt?: number;
-  idToken?: string;
-}
-
-/** `pending` means ask again; anything else ends the wait. */
-export type DeviceCodePoll =
-  | { status: 'pending' }
-  | { status: 'expired'; message: string }
-  | { status: 'denied'; message: string }
-  | { status: 'granted'; tokens: DeviceCodeTokens };
-
 export interface CodexOAuthClient {
-  startDeviceFlow(): Promise<DeviceCodeStart>;
-  pollDeviceFlow(deviceAuthId: string, userCode: string): Promise<DeviceCodePoll>;
   refresh(refreshToken: string): Promise<{ accessToken: string; refreshToken: string; expiresAt?: number }>;
 }
 
 export function createCodexOAuthClient(fetchFn: typeof fetch = fetch): CodexOAuthClient {
   return {
-    async startDeviceFlow(): Promise<DeviceCodeStart> {
-      return settle(Effect.gen(function* () {
-        const res = yield* Effect.promise(() => fetchFn(DEVICE_CODE_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ client_id: CODEX_CLIENT_ID }),
-        }));
-
-        if (!res.ok) {
-          return yield* Effect.die(new Error(`Codex device-code request failed: ${res.status} ${sanitizeErrorBody(yield* Effect.promise(() => res.text()))}`));
-        }
-
-        const body = v.safeParse(DeviceCodeStartResponseSchema, yield* Effect.promise(() => res.json()));
-
-        if (!body.success) {
-          return yield* Effect.die(new Error('Codex device-code response missing required fields'));
-        }
-
-        return {
-          userCode: body.output.user_code,
-          deviceAuthId: body.output.device_auth_id,
-          pollIntervalSec: Math.max(3, Number(body.output.interval ?? 5)),
-          portalURL: CODEX_DEVICE_PORTAL,
-        };
-      }));
-    },
-
-    async pollDeviceFlow(deviceAuthId, userCode): Promise<DeviceCodePoll> {
-      return settle(Effect.gen(function* () {
-        const pollRes = yield* Effect.promise(() => fetchFn(DEVICE_POLL_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ device_auth_id: deviceAuthId, user_code: userCode }),
-        }));
-
-        if (!pollRes.ok) return yield* devicePollRejection(pollRes);
-        const poll = v.safeParse(DevicePollResponseSchema, yield* Effect.promise(() => pollRes.json()));
-
-        if (!poll.success) {
-          return yield* Effect.die(new Error('Codex poll response missing authorization_code/code_verifier'));
-        }
-
-        const exchange = yield* Effect.promise(() => fetchFn(CODEX_TOKEN_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({
-            grant_type: 'authorization_code',
-            code: poll.output.authorization_code,
-            redirect_uri: `${CODEX_ISSUER}/deviceauth/callback`,
-            client_id: CODEX_CLIENT_ID,
-            code_verifier: poll.output.code_verifier,
-          }).toString(),
-        }));
-
-        if (!exchange.ok) {
-          return yield* Effect.die(new Error(`Codex token exchange failed: ${exchange.status} ${sanitizeErrorBody(yield* Effect.promise(() => exchange.text()))}`));
-        }
-
-        const tokens = v.safeParse(TokenExchangeResponseSchema, yield* Effect.promise(() => exchange.json()));
-
-        if (!tokens.success) {
-          return yield* Effect.die(new Error('Codex token exchange missing access_token/refresh_token'));
-        }
-
-        return {
-          status: 'granted',
-          tokens: {
-            accessToken: tokens.output.access_token,
-            refreshToken: tokens.output.refresh_token,
-            idToken: tokens.output.id_token,
-            expiresAt: tokens.output.expires_in ? Date.now() + tokens.output.expires_in * 1000 : undefined,
-          },
-        };
-      }));
-    },
-
     async refresh(refreshToken: string): Promise<{ accessToken: string; refreshToken: string; expiresAt?: number }> {
       return settle(Effect.gen(function* () {
         const res = yield* Effect.promise(() => fetchFn(CODEX_TOKEN_URL, {
@@ -231,16 +82,6 @@ export function createCodexOAuthClient(fetchFn: typeof fetch = fetch): CodexOAut
         };
       }));
     },
-  };
-}
-
-export function tokensToCredential(t: DeviceCodeTokens, metadata?: JsonObject): OAuthCredential {
-  return {
-    kind: 'oauth',
-    accessToken: t.accessToken,
-    refreshToken: t.refreshToken,
-    expiresAt: t.expiresAt,
-    metadata,
   };
 }
 

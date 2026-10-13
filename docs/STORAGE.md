@@ -38,16 +38,13 @@ signs in again and nothing else is lost. The handoff record keeps the hash of a
 binding cookie that the initiating browser holds, so a callback URL is useless
 away from the browser that started that sign-in.
 
-A session cookie's KV record is a projection. What the cookie stands for, and
-whether it is still live, is one `user_browser_sessions` row in the user's own
-`UserDO`. Sign-in writes that row once, and every cookie check reads it. KV can
-take up to a minute to reach every colo in either direction, so it can answer
-neither question. A copied cookie replayed at a lagging colo would outlive
-logout by that window. The first request after a sign-in redirect would read as
-signed out at a colo the write had not reached, and would start a sign-in that
-loses the same race. The row answers both questions from every colo. Logout
-deletes the row first. The KV delete that follows is cleanup, and a failed
-cleanup never reports a completed revocation as failed.
+What a session cookie stands for, and whether it is still live, is one
+`user_browser_sessions` row in the user's own `UserDO`. Sign-in writes that row
+once, every cookie check reads it, and logout deletes it. KV holds no session:
+it takes up to a minute to reach every colo in either direction, so a copied
+cookie replayed at a lagging colo would outlive logout by that window, and the
+first request after a sign-in redirect would read as signed out at a colo the
+write had not reached. The row answers both questions from every colo.
 
 A websocket that runs on a session keeps its hash and answers to the same row. Logout and a raised credential floor
 close the sockets that named it, in every workspace (`closeRevokedSessionSockets`) and in the user's own `UserDO`,

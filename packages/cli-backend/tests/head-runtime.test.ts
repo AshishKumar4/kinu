@@ -4,7 +4,7 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
-import { getToolName, isToolUIPart, type LanguageModel } from 'ai';
+import { getToolName, isToolUIPart, jsonSchema, tool, type LanguageModel } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
 import type { LanguageModelV2, LanguageModelV2CallOptions } from '@ai-sdk/provider';
 import {
@@ -566,7 +566,7 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
     const tools = buildHeadToolSet({
       input: aHeadInput(), capture, rt,
       conversations: stores.conversationSearch,
-      codemodeTool: { description: 'x', inputSchema: {}, execute: async () => ({ result: 'unused' }) },
+      codemode: () => tool({ description: 'x', inputSchema: jsonSchema<{ code: string }>({ type: 'object' }), execute: async () => ({ result: 'unused' }) }),
       webSearch: stubWeb,
       jobs: {
         jobRunner: new BackgroundJobRunner({ store: stores.jobs, fiber: rt.schedule.fiber.bind(rt.schedule), inbox: { send: async () => 'queued' } }),

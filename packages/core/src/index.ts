@@ -103,8 +103,6 @@ export { validateSwarmProfileSnapshot } from './profiles';
 
 export type { ProfileProvenance, SwarmProfileSnapshot } from './profiles';
 
-export { DEFAULT_WORKERS_AI_MODEL_SPEC } from './providers/workers-ai';
-
 export {
   readForkLineage, FORK_PIN_PREFIX, type ForkLineageRow, type ForkFileSource, type ForkPinnedFiles,
 } from './identity/fork';
@@ -171,7 +169,6 @@ export {
   WORKSPACE_TITLE_SYSTEM_PROMPT,
   workspaceTitlePrompt,
   applyWorkspaceTitle,
-  deriveWorkspaceTitle,
   fallbackWorkspaceIdentity,
   mintAgentName,
   parseWorkspaceTitle,
@@ -200,7 +197,7 @@ export {
 } from './evolution/types';
 
 export {
-  delegationFeatures, renderDelegationFeatures, executionPathSignals,
+  delegationFeatures, renderDelegationFeatures,
   type DelegationFeatures, type ExecutionPathSignals,
 } from './evolution/delegation-features';
 
@@ -222,7 +219,7 @@ export {
 
 export {
   recordRecoveryFinding, listRecoveryFindings, recoveryFindingText,
-  MAX_RECOVERY_FINDINGS, type RecoveryFinding,
+  type RecoveryFinding,
 } from './evolution/recovery';
 
 // One row per turn, owned by EvolutionEngine.
@@ -236,7 +233,7 @@ export {
 
 export {
   buildChangelog, countUnseenChangelog, listUnseenChangelog, CHANGELOG_ENTRY_KINDS,
-  executeChangelogRevert, revertChangelogEntryById,
+  revertChangelogEntryById,
   type ChangelogEntry, type ChangelogEntryKind, type BuildChangelogOptions,
   type ChangelogRevertAction,
   type ChangelogRevertContext, type ChangelogRevertResult,
@@ -368,8 +365,6 @@ export {
   type ChatEvent, type ChatFallback, type ChatOptions, type ChatToolOutput, type ObserveStream,
 } from './chat';
 
-export { ProviderPacer } from './providers/pacing';
-
 export type { ModelAttemptIdentity } from './providers/attempt-identity';
 
 // Extension seam (public plugin API)
@@ -423,7 +418,6 @@ export {
 
 export {
   settleUnpairedToolCalls,
-  INTERRUPTED_TOOL_RESULT,
 } from './prompting/interrupted-tool-calls';
 
 export { StepInjections, type RecordedInjection } from './prompting/step-injections';
@@ -522,7 +516,7 @@ export {
   type ToolReach,
   type BuiltinToolName,
   type BuiltinToolSpec,
-  REPORT_TOOL, SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, ASK_OWNER_TOOL, DEPS_GATED_TOOLS,
+  REPORT_TOOL, SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, ASK_OWNER_TOOL,
 } from './tools/registry';
 
 export {
@@ -735,8 +729,8 @@ export { FILE } from './operations/file';
 export { imageModelOutput } from './tools/image-results';
 
 export {
-  summarizeToolCall, describeToolCall, describeCommand,
-  toolCallEffect, clip,
+  summarizeToolCall, describeToolCall,
+  toolCallEffect,
   type ToolCallEffect,
 } from './tools/tool-call-summary';
 
@@ -756,10 +750,9 @@ export {
   type ClampToolResultOptions,
 } from './tools/clamp';
 
-export { handRolledFileWrite, createFileToolSteer } from './tools/shell-file-steer';
+export { createFileToolSteer } from './tools/shell-file-steer';
 
 export {
-  toCraftedToolSource,
   selectInjectableCraftedTools,
   type CraftedToolSource,
 } from './tools/crafted-executor';
@@ -767,9 +760,7 @@ export {
 export {
   buildSystemPromptSync,
   currentDateForPrompt,
-  FALLBACK_PURPOSE,
   renderUnverifiedInstructions,
-  WORKSPACE_INSTRUCTIONS_HEADER,
   type UnverifiedInstructions,
   type SystemPromptOptions,
 } from './prompt';
@@ -797,7 +788,6 @@ export {
   compilePromptSurface,
   turnReasonForMetadata,
   workModeForTurnMetadata,
-  uniquePromptExecutors,
   type PromptBackend,
   type PromptExecutorInfo,
   type PromptIdentity,
@@ -807,7 +797,6 @@ export {
 
 export {
   assertToolsSupportedByModel,
-  modelSupportsTools,
   resolvePromptModelProfile,
   type PromptModelCapability,
   type PromptModelContext,
@@ -821,7 +810,6 @@ export {
   admitAgentsMd,
   advisorWorkspaceGuidance,
   discoverInstructionFiles,
-  renderInstructionOmission,
   type AdvisorWorkspace,
   type InstructionCandidate,
   type InstructionFileProbe,
@@ -853,7 +841,7 @@ export { toolDescription } from './utils/tool-description';
 export { serverCompactor, isServerCompaction, latestCompaction, type ServerCompactor, COMPACTION_TRIGGER_PERCENT, SERVER_COMPACTION_MIN_TOKENS } from './providers/server-compaction';
 
 export {
-  DynamicContextLedger, agentDynamicContext, executorAvailabilityLabel, searchDelegates, observeSystemPromptHash, renderDynamicContextBlock, DYNAMIC_CONTEXT_HEADER, type DynamicApproval, type DynamicContext, type DynamicDelegate, type DynamicJob, type RuntimeFacts, type DynamicTask, type MissingCapability,
+  DynamicContextLedger, agentDynamicContext, observeSystemPromptHash, renderDynamicContextBlock, type DynamicApproval, type DynamicContext, type DynamicDelegate, type DynamicJob, type RuntimeFacts, type DynamicTask, type MissingCapability,
 } from './prompting/volatile-context';
 
 export type { ActiveRoster } from './types/dynamic-context';
@@ -932,7 +920,7 @@ export {
 
 // Steer-as-Branch
 export {
-  BRANCH_HEAD_BUDGET, BRANCH_RATIONALE, STEER_BRANCH_RUN_ID_PREFIX,
+  BRANCH_RATIONALE, STEER_BRANCH_RUN_ID_PREFIX,
   newBranchId, isSteerBranchRunId, branchHeadId, admitBranch,
   startBranchHead, settleBranchIntoTakes, settlePendingBranch,
   branchOutcomeFromJournal,
@@ -1008,14 +996,14 @@ export {
 } from './scaffold/versions';
 
 // CraftStore quality
-export { emaUpdate, effectiveScore, filterByEffectiveScore, updateCraftScores } from './craft/ema';
+export { effectiveScore, filterByEffectiveScore, updateCraftScores } from './craft/ema';
 
-export { craftFailureMarker, CRAFT_NEUTRAL_PRIOR } from './craft/in-episode';
+export { CRAFT_NEUTRAL_PRIOR } from './craft/in-episode';
 
 
 export { periodicCraftConsolidation } from './craft/consolidation';
 
-export { checkConflictsBeforeAdding, upsertCraftedTool } from './craft/conflict';
+export { upsertCraftedTool } from './craft/conflict';
 
 export {
   DefaultExecutionRouter, runOnExecutor, type ExecutorRun,
@@ -1205,7 +1193,7 @@ export {
 export { memoryBytes } from './memory/note';
 
 
-export { appendMemoryNote, MEMORY_PATH, parseMemoryNotes, readMemoryTail, MEMORY_TAIL_MAX_CHARS, type MemoryNote } from './memory/note';
+export { appendMemoryNote, MEMORY_PATH, parseMemoryNotes, readMemoryTail, type MemoryNote } from './memory/note';
 
 export {
   ConversationSearchStore, invalidateConversationSearchIndex,
@@ -1216,13 +1204,13 @@ export {
 // Top-K recent agent_facts render into the system prompt every turn.
 export {
   initFactsTable, createFactsStore, renderFactsBlock, searchFacts, normalizeFactKey, unifiedFacts,
-  ACCOUNT_FACTS_ACTOR, FactOriginSchema, VERACITIES,
+  ACCOUNT_FACTS_ACTOR, FactOriginSchema, FactRevisionSchema, FactSchema, VERACITIES,
   type Fact, type FactsStore, type FactSearchHit, type FactUpsertResult, type FactOrigin, type FactRevision, type FactWrite,
   type MemoryScope, type ScopedFact, type Veracity,
 } from './memory/facts';
 
 export {
-  AccountMemoryStore, AccountMemoryProposalSchema, AccountProposalSchema, initAccountMemoryTables,
+  AccountMemoryStore, AccountMemoryProposalSchema, AccountNoteSchema, AccountProposalSchema, initAccountMemoryTables,
   type AccountMemory, type AccountMemoryProposal, type AccountMemoryView, type AccountNote, type AccountNoteHit, type AccountProposal,
   type AccountProposalFiling, type AccountProposer,
 } from './memory/account';
@@ -1910,7 +1898,7 @@ export type {
 
 // Backend conformance gate
 export {
-  BACKEND_CONFORMANCE, CONFORMANCE_PLANES, CONFORMANCE_PRODUCERS, CONFORMANCE_ROOTS, PLANE_UNIVERSE, WIRED,
+  BACKEND_CONFORMANCE, CONFORMANCE_PLANES, CONFORMANCE_PRODUCERS,
   compareSurface, normalizeObservedTables, observedOpEnum, phantomCallables, wiredProducers,
   renderConformanceFindings,
 } from './conformance/index';
@@ -1921,7 +1909,7 @@ export type {
 } from './conformance/index';
 
 export {
-  classifyEvolutionType, getRunTimeline, runEventToSpan, toolKindFor,
+  getRunTimeline,
   RUN_TIMELINE_MAX,
 } from './read-models/timeline';
 
@@ -2086,6 +2074,13 @@ export type { PendingAction, PendingActionKind, PendingActionInputs, PersonAsks 
 
 export { buildWorkspaceOverview, rosterBucket, rosterHeadline, rosterMatches, WorkspaceOverviewSchema } from './read-models/workspace-overview';
 
+export {
+  AccountMemoryFrameSchema, CredentialSummarySchema, ModelMenuResponseSchema, ProviderCatalogEntrySchema,
+  RosterFrameSchema, RosterPageSchema, UserProfileSchema, WorkspaceEntrySchema,
+  type AccountMemoryFrame, type CredentialSummary, type ModelMenuEntry, type ModelMenuResponse, type ProviderCatalogEntry,
+  type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type UserProfile, type WorkspaceEntry,
+} from './read-models/account-wire';
+
 export type {
   RosterBucket, WorkspaceHeadline, WorkspaceOverview, WorkspaceOverviewInputs, WorkspaceOverviewShare, WorkspaceOverviewSlate, WorkspaceStatus,
 } from './read-models/workspace-overview';
@@ -2122,7 +2117,6 @@ export {
   ADVISOR_SEVERITY_LABEL,
   ADVISOR_SEVERITY_METADATA_KEY,
   ADVISOR_SIGNAL_KIND,
-  CONTENT_FREE_NOTES,
   DEFAULT_ADVISOR_MIN_SEVERITY,
   ADVISOR_DEDUPE_WINDOW,
   ADVISOR_HEADER,
@@ -2183,14 +2177,6 @@ export {
   type RoleChangeActor, type RoleChangePolicy, type RoleChangeOutcome,
   type RoleChangeRefusal, type RoleStateStore,
 } from './profiles';
-
-export type { ReasoningEffort } from './providers/effort';
-
-export { REASONING_EFFORTS } from './providers/effort';
-
-export type { NamedSwarmPreset, SwarmNodeAssignment } from './strategy/swarm';
-
-export { SWARM_PRESET_DOCTRINE } from './strategy/swarm';
 
 export { fmtPct, fmtSpan, fmtTokens, fmtUsd, formatBytes, shortAge, timeAgo } from './utils/format';
 

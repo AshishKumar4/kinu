@@ -1,4 +1,4 @@
-// Reasoning-effort wire vocabulary; the per-stage choice lives in providers/effort.ts.
+// Reasoning-effort wire vocabulary; providers/effort.ts maps a level to each provider's option.
 import * as v from 'valibot';
 
 /**

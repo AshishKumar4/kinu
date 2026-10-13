@@ -9,6 +9,7 @@ import type { AgentsToolDeps } from './agents-tool';
 import { createAgentsTool } from './agents-operations';
 import type { EffectClaimDeps } from '../tools/effect-claim';
 import { wrapToolsForBackground, type ActorJobs } from '../jobs/background-wrap';
+import { withClampedToolResult } from '../tools/clamp';
 
 // Not `ActorToolDeps`: cf-backend's actor-agent.ts already owns that name.
 export interface ActorToolsetDeps extends BuiltinToolDeps {
@@ -34,7 +35,16 @@ export function buildActorTools(deps: ActorToolsetDeps): ActorToolsets {
     extra = { agents: createAgentsTool(deps.agents) };
   }
 
-  const raw = buildToolSurface({ ...deps, extra });
+  const { codemode } = deps;
+  const clamp = { files: deps.rt.storage, producer: 'eval' as const, images: true as const };
+
+  // An actor's `eval` results are clamped to its context budget; a confined surface's are its run's to judge.
+  const raw = buildToolSurface({
+    ...deps, extra,
+    codemode: codemode && ((surface, reach) => withClampedToolResult(
+      codemode(surface, reach), deps.contextBudget ? { ...clamp, budget: deps.contextBudget } : clamp,
+    )),
+  });
 
   return { raw, turn: wrapToolsForBackground(raw, deps.jobs) };
 }

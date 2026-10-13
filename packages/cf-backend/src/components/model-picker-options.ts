@@ -1,4 +1,4 @@
-import type { ModelMenuEntry } from "../lib/user-api";
+import { type ModelMenuEntry } from '@kinu.run/core';
 
 interface ModelMenuGroup {
   provider: string;

@@ -12,11 +12,11 @@ import {
   type ReactNode,
 } from "react";
 
-import { rosterBucket, rosterMatches } from "@kinu.run/core";
+import { rosterBucket, rosterMatches, AccountMemoryFrameSchema, RosterFrameSchema, type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type WorkspaceEntry } from "@kinu.run/core";
 import type { AccountMemoryProposal } from "@kinu.run/core";
 import {
-  AccountMemoryFrameSchema, decideAccountMemory, getAccountMemory, listWorkspaces, RosterFrameSchema, ROSTER_SOCKET_ROUTE,
-  type RosterCounts, type RosterEntry, type RosterFilterBucket, type RosterFrame, type RosterPage, type WorkspaceEntry,
+  decideAccountMemory, getAccountMemory, listWorkspaces, ROSTER_SOCKET_ROUTE,
+  type RosterFilterBucket, 
 } from "@/lib/user-api";
 import { ApiError } from "@/lib/http";
 import { detach, diagnostics, renderThrownChain, settle, settleSync, tolerate } from "@kinu.run/core/obs";

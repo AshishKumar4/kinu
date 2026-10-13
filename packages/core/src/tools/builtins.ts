@@ -11,6 +11,7 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { ConversationRecall } from '../memory/conversation-search';
 import {
   ASK_OWNER_DESCRIPTION, ASK_OWNER_TOOL, BUILTIN_TOOL_DESCRIPTIONS, memoryToolSpec, renderToolSchemaDescription, keepBuiltins, narrowToolSurface,
+  type ToolSurfaceNarrowing,
 } from './registry';
 import { TaskListStore } from './task-store';
 import { withClampedToolResult } from './clamp';
@@ -42,8 +43,6 @@ import { diagnostics, KinuError, settle, settleSync, type Logger } from '../obs/
 import { permitInPlan, toolsInWorkMode } from '../execution/work-mode';
 import type { WorkMode } from '../types/turn';
 
-type ExecutableToolEntry = NonNullable<ToolSet[string]>;
-
 /** Builds `eval` over a finished surface: the sandbox declares every other tool, so it runs last. */
 export interface CodemodeSurface {
   readonly native: ToolSet;
@@ -58,8 +57,9 @@ export interface CodemodeSurface {
   readonly cwd: string;
 }
 
-/** Core has no codegen; the CLI supplies `createNodeCodemodeToolFactory`. */
-export type CodemodeBuilder = (surface: CodemodeSurface) => ToolSet[string];
+/** Core has no codegen; each backend supplies its factory. `reach` is the namespaces the allowed tools reach, for a
+ *  confined surface (head, swarm node); an actor's surface reaches them all. */
+export type CodemodeBuilder = (surface: CodemodeSurface, reach: ToolSurfaceNarrowing) => ToolSet[string];
 
 /** `ask_owner`'s input as an operation's, so a malformed call is refused by field before it can park; nothing serves it. */
 const ASK_OWNER = defineOperation({
@@ -94,8 +94,6 @@ export interface BuiltinToolDeps {
   rt: AgentRuntime;
   /** The turn's MCP and extension tools, which `eval` reaches (`CodemodeSurface.external`). */
   external?: () => ToolSet;
-  /** Ready `eval` for a confined surface (head, swarm node); actors set `codemode` on `buildActorTools` instead. */
-  prebuiltCodemodeTool?: unknown;
   /** Hybrid memory search when present; null declares no semantic index (results report lexical-only). */
   vectorStore?: import('../memory/vector-store').VectorStore | null;
   /** Enables remember/recall/forget and joins facts into the search RRF merge. */
@@ -138,17 +136,15 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
 
   const tools: ToolSet = {};
 
-  // Registered first so eval heads the list; actors replace this key in place via `installCodemode`.
-  const prebuilt = { value: deps.prebuiltCodemodeTool };
+  // Registered first so eval heads the list; the surface's builder replaces this key in place via `installCodemode`.
   // No core fallback: an in-process compile would break in any V8 isolate.
-  tools.eval = isExecutableToolEntry(prebuilt) ? prebuilt.value : tool({
+  tools.eval = tool({
     description:
       BUILTIN_TOOL_DESCRIPTIONS.eval +
       ' (NOT CONFIGURED: no eval builder on this runtime)',
     inputSchema: codemodeInputSchema(),
     execute: (): Promise<JsonValue> => settle(Effect.fail(new KinuError('unsupported', 'eval is not configured on this runtime. The backend must supply '
-      + 'deps.prebuiltCodemodeTool to buildBuiltinTools or deps.codemode to '
-      + 'buildActorTools (CF: cf-backend/createCodemodeToolFactory; CLI: '
+      + 'deps.codemode to buildToolSurface (CF: cf-backend/createCodemodeToolFactory; CLI: '
       + '@kinu.run/cli-backend/createNodeCodemodeToolFactory).'))),
   });
 
@@ -236,27 +232,16 @@ export function ownerLaneDeclarations(lane: { readonly submitPlan: boolean; read
   return withCheckedInputs(declared);
 }
 
-function isExecutableToolEntry(
-  input: { value: unknown },
-): input is { value: ExecutableToolEntry } {
-  return v.is(v.object({
-    inputSchema: v.unknown(),
-    execute: v.function(),
-  }), input.value);
-}
-
 /** Build `eval` over a finished surface; `buildActorTools` calls it before the effect-claim wrap. */
 function installCodemode(
   surface: ToolSet,
   build: CodemodeBuilder,
-  deps: BuiltinToolDeps,
+  deps: BuiltinToolDeps & { readonly allowed?: readonly string[] },
 ): void {
   const { rt } = deps;
-  const built = build(codemodeSurface(rt, toolsInWorkMode(deps.workMode ?? 'build', surface), deps.external));
-  const clamp = { files: rt.storage, producer: 'eval' as const, images: true as const };
-  surface.eval = withCheckedInput('eval', withClampedToolResult(
-    built,
-    deps.contextBudget ? { ...clamp, budget: deps.contextBudget } : clamp,
+  // `eval` reaches only the namespaces the allowed tools reach.
+  surface.eval = withCheckedInput('eval', build(
+    codemodeSurface(rt, toolsInWorkMode(deps.workMode ?? 'build', surface), deps.external), narrowToolSurface(deps.allowed),
   ));
 }
 
@@ -267,10 +252,8 @@ export interface ToolSurfaceDeps extends BuiltinToolDeps {
   /** Wraps the admitted builtins and `extra` outside their input check, so it sees a refused call too. */
   wrapCalls?: (tools: ToolSet) => ToolSet;
   allowed?: readonly string[];
-  /** Wins over `codemodeTool`. */
+  /** Builds `eval` over the finished surface; absent, `eval` answers that it is not configured. */
   codemode?: CodemodeBuilder;
-  /** A finished entry installs with the builtins; a function builds over the finished surface. */
-  codemodeTool?: unknown;
   /** Merged after the finish, never declared to the sandbox. */
   post?: ToolSet;
   /** Claimed inside the Plan check, so a refused call claims nothing. */
@@ -279,15 +262,7 @@ export interface ToolSurfaceDeps extends BuiltinToolDeps {
 }
 
 export function buildToolSurface(deps: ToolSurfaceDeps): ToolSet {
-  let builtin: BuiltinToolDeps = deps;
-
-  if (builtin.prebuiltCodemodeTool === undefined && deps.codemodeTool !== undefined) {
-    const direct = { value: deps.codemodeTool };
-
-    if (isExecutableToolEntry(direct)) builtin = { ...deps, prebuiltCodemodeTool: deps.codemodeTool };
-  }
-
-  const built = buildBuiltinTools(builtin.workMode === 'plan' ? { ...builtin, workMode: 'build' } : builtin);
+  const built = buildBuiltinTools(deps.workMode === 'plan' ? { ...deps, workMode: 'build' } : deps);
   const narrowed = deps.admitted === undefined ? built : keepBuiltins(built, deps.admitted);
   const merged = deps.extra === undefined ? narrowed : { ...narrowed, ...withCheckedInputs(deps.extra) };
   const wrapped = deps.wrapCalls === undefined ? merged : deps.wrapCalls(merged);
@@ -297,18 +272,7 @@ export function buildToolSurface(deps: ToolSurfaceDeps): ToolSet {
     ? wrapped
     : Object.fromEntries(Object.entries(wrapped).filter(([name]) => allow.has(name)));
 
-  if (deps.codemode !== undefined) {
-    installCodemode(surface, deps.codemode, deps);
-  } else {
-    const buildFromSurface = v.safeParse(v.function(), deps.codemodeTool);
-
-    if (buildFromSurface.success && 'eval' in surface) {
-      // `eval` reaches only the namespaces the allowed tools reach.
-      const entry = { value: buildFromSurface.output(toolsInWorkMode(deps.workMode ?? 'build', surface), narrowToolSurface(deps.allowed)) };
-
-      if (isExecutableToolEntry(entry)) surface.eval = withCheckedInput('eval', entry.value);
-    }
-  }
+  if (deps.codemode !== undefined && 'eval' in surface) installCodemode(surface, deps.codemode, deps);
 
   const finished = deps.post === undefined ? surface : { ...surface, ...withCheckedInputs(deps.post) };
   const modeBound = toolsInWorkMode(deps.workMode ?? 'build', deps.effectClaims === undefined ? finished : withEffectReceipt(finished, deps.effectClaims));

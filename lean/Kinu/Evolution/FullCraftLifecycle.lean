@@ -1,7 +1,7 @@
 /-
   Kinu.Evolution.FullCraftLifecycle — 5-phase CraftStore pipeline.
   Sources: packages/core/src/evolution/engine.ts#EvolutionEngine.extractPattern,
-  packages/core/src/craft/ema.ts#emaUpdate,
+  packages/core/src/craft/ema.ts#updateCraftScores,
   packages/core/src/craft/consolidation.ts#periodicCraftConsolidation.
   The nonempty retirement guard still holds; age/use eligibility, extraction
   vetoes, SQL persistence and configurable floating-point EMA are abstracted out.
