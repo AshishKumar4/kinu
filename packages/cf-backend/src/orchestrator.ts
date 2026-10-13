@@ -1060,8 +1060,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         await this.hostedTurnEnded(actorId, event, figures, window);
       },
       answerAmended: async (window) => { this.chatRooms.hostedRoom(actorId)?.answerAmended(window); },
-      // The turn's report disposition is the agent's own, kept where the turn ran. An agent with no hirer owes none.
-      owedReport: async (turn, ended) => (actorPolicy(this.agentOf(actorId)).hirer === null ? null : await hostedOwedReport(this.hostedSeams(), this.agentBound(actorId), turn, ended)),
+      // The turn's report, owed once its answer committed: decided here, where its hirer's roster is, and relayed. What it
+      // told so far is the agent's own, kept where the turn ran. An agent with no hirer owes none.
+      turnReport: async (turn, ended, relay) => {
+        if (actorPolicy(this.agentOf(actorId)).hirer === null) return 'none';
+
+        const actor = this.agentBound(actorId);
+        const report = await hostedOwedReport(this.hostedSeams(), actor, turn, ended);
+
+        return report === null ? 'none' : await hostedParentReport(this.hostedSeams(), actor, {
+          text: report.content, status: report.status, mode: relay.mode, sequenceId: relay.sequenceId, ...(report.quiet === true && { quiet: true as const }),
+        });
+      },
       parentReport: (report) => hostedParentReport(this.hostedSeams(), this.agentBound(actorId), report),
       autoTitle: (subject, title) => hostedAutoTitle(this.hostedSeams(), this.agentBound(actorId), subject, title),
       turnSettled: async (settled) => {

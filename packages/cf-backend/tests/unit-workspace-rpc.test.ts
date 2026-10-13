@@ -23,7 +23,7 @@ const unusedPort: AgentWorkspacePort = {
   answerAmended: unused,
   turnSettled: unused,
   runSettled: unused,
-  owedReport: unused,
+  turnReport: unused,
   parentReport: unused,
   autoTitle: unused,
   hireAdvisor: unused,

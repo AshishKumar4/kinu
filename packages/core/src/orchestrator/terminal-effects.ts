@@ -92,6 +92,9 @@ const TERMINAL_EFFECT_NAMES = [
   // Detached; a refused drawing completes and the monogram stays.
   'workspace_logo',
   'parent_report',
+  // Detached: a hire's report of its turn, decided by the workspace that holds its hirer's roster once the answer
+  // committed, and relayed; the hirer's ingress dedupes a replay on its sequence id.
+  'turn_report',
   // Detached: a turn whose lanes are another object's hands it the settled turn, which that object owes on its own.
   'workspace_settle',
   // Detached: an agent whose lanes are its own tells the workspace its run settled; the workspace drops the run's receipts.

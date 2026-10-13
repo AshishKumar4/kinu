@@ -9,7 +9,7 @@ import {
   type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpeningAsk, type JsonObject, type PlanReview, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
   type InspectedWork, type PreparedAgentTurn, type PreparedTurn, type TerminalTurnFacts, type TerminalTurnParts,
   type SessionEvent, type TurnAssemblyRequest, type WorkMode, type OwnerQuestionStore, type RunEndOutcome, type DeliveredRun, type AgentOwes, type AgentReport, type ClaimedRound,
-  refusedRun, turnAttemptOf,
+  refusedRun, turnAttemptOf, TASK_TURN_ENDINGS, WorkModeSchema, type TaskTurnEnding,
 } from '@kinu.run/core';
 import { createCompactionStateStore, type CompactionStateStore } from '@kinu.run/compaction';
 import { attempt, diagnostics, hold, logged, settle, toKinuError, type KinuError } from '@kinu.run/core/obs';
@@ -37,6 +37,12 @@ export interface FacetChatDeps {
 const AnswerSlatesSchema = v.object({ turnId: v.string(), runId: v.string(), epoch: v.nullable(v.number()), messageId: v.string() });
 
 type AnswerSlates = v.InferOutput<typeof AnswerSlatesSchema>;
+
+/** A hire's turn's report, owed once its answer committed: what decides it, and the key and mode it is relayed under. */
+const TurnReportSchema = v.object({
+  turnId: v.string(), ending: v.picklist(TASK_TURN_ENDINGS), assistantText: v.string(), narration: v.array(v.string()),
+  ownerDriven: v.boolean(), taskId: v.nullable(v.string()), sequenceId: v.string(), mode: WorkModeSchema,
+});
 
 /** Owed by a turn that committed an answer: the workspace saw its slates change, and they are stamped on that answer. */
 function answerSlatesEffect(close: TurnBound, messageId: string): OwedEffect[] {
@@ -97,6 +103,10 @@ export class FacetChat {
 
   private resting: Promise<unknown> = Promise.resolve();
 
+  /** The ending the settling turn owes its hirer a report of, from the chat's `owedReport` port until its roster declares
+   *  the row that reports it after the commit (`owedTerminalEffects`, which drops it). */
+  private reportOwed: { readonly ending: TaskTurnEnding; readonly assistantText: string; readonly narration: readonly string[] } | null = null;
+
   /** The wake the workspace holds for this agent as this isolate's newest report named it (`next`; null for none):
    *  written as each report leaves, a told one once the workspace took it; read by an arm it may already cover (`tell`). */
   private namedWake: number | null = null;
@@ -145,15 +155,13 @@ export class FacetChat {
         owedTerminalEffects: (input) => this.owedTerminalEffects(input),
         // A failure answer has no narration: only the slates it showed are stamped on it.
         failedAnswerSlates: async (lease) => await answerMetadataOf(workspace, { turnId: lease.turnId, runId: lease.runId, epoch: actor.session.closeEpoch(lease) }, async () => []),
-        // What the turn already told its hirer is the agent's own record, so a reset of the workspace cannot repeat it.
-        // An agent with no hirer owes no report, so it asks the workspace for none.
-        owedReport: async (ending, assistantText, narration) => (this.policy.hirer === null ? null : await workspace.owedReport(
-          {
-            reports: this.deps.database.reports(this.session.currentTurnId ?? ''), ownerDriven: !this.parentDriven,
-            taskId: this.parentDriven ? announcementOf(this.session.currentTurnId ?? '') : null,
-          },
-          { ending, assistantText, narration: reportReadsNarration(ending) ? await narration() : [] },
-        )),
+        // Decided after the answer committed, by a row of its roster (`turn_report`): nothing crosses before the commit
+        // (#75). An agent with no hirer owes no report.
+        owedReport: async (ending, assistantText, narration) => {
+          if (this.policy.hirer !== null) this.reportOwed = { ending, assistantText, narration: reportReadsNarration(ending) ? await narration() : [] };
+
+          return null;
+        },
         // Its hirer waits on the work, not on a turn: one that ended without an answer is answered to it as blocked, keyed by
         // the work.
         unanswered: async (item, failure) => {
@@ -386,7 +394,9 @@ export class FacetChat {
       evolutionEnabled: false,
     };
 
-    const report = input.owedReport;
+    const report = this.reportOwed;
+
+    this.reportOwed = null;
 
     const parts: TerminalTurnParts = {
       ...chatTurnParts(input),
@@ -395,19 +405,20 @@ export class FacetChat {
       ...(input.opensConversation() && { autoTitle: { mission: input.userText, standIn: true } }),
       sleepTime: false,
       ...(this.reviewsTurns && { advisor: projectJsonValue({ value: session.advisor.snapshot(scoped, input.reachableTools) }) }),
-      ...(report !== null && {
-        parentReport: {
-          text: report.content,
-          status: report.status,
-          // An assignment's turn is keyed by it, so a re-run after a reset answers it once.
-          sequenceId: this.parentDriven ? announcementOf(this.session.currentTurnId ?? '') : `${this.deps.actor.record.actorId}:turn-end:${input.messageId}`,
-          ...(report.quiet === true && { quiet: true as const }),
-        },
-      }),
     };
 
+    const reported: OwedEffect[] = report === null ? [] : [{
+      name: 'turn_report', scope: input.messageId, lane: 'detached',
+      input: {
+        turnId, ...report, narration: [...report.narration], ownerDriven: !this.parentDriven, mode: session.workMode,
+        taskId: this.parentDriven ? announcementOf(turnId) : null,
+        // An assignment's turn is keyed by it, so a re-run after a reset answers it once.
+        sequenceId: this.parentDriven ? announcementOf(turnId) : `${this.deps.actor.record.actorId}:turn-end:${input.messageId}`,
+      },
+    }];
+
     // Its tools' receipts were kept in the workspace, which drops them once the run settled.
-    return [...slates, ...declareTerminalRoster(facts, parts), runSettleEffect(input.messageId, { turnId, runId, epoch })];
+    return [...slates, ...declareTerminalRoster(facts, parts), ...reported, runSettleEffect(input.messageId, { turnId, runId, epoch })];
   }
 
   private get terminal(): TerminalTransitions {
@@ -423,6 +434,17 @@ export class FacetChat {
           hireAdvisor: (advisor) => workspace.hireAdvisor(advisor),
           applyTitle: (subject) => this.applyTitle(subject),
           sendReport: (report) => workspace.parentReport(report),
+        }),
+        turn_report: terminalEffect({
+          input: TurnReportSchema,
+          run: async (owed) => ({
+            status: 'completed',
+            detail: await workspace.turnReport(
+              { reports: this.deps.database.reports(owed.turnId), ownerDriven: owed.ownerDriven, taskId: owed.taskId },
+              { ending: owed.ending, assistantText: owed.assistantText, narration: owed.narration },
+              { sequenceId: owed.sequenceId, mode: owed.mode },
+            ),
+          }),
         }),
         answer_slates: terminalEffect({
           input: AnswerSlatesSchema,

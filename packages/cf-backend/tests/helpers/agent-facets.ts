@@ -131,6 +131,24 @@ export function delayNextRunEnd(): HeldCall {
   return { reached: reached.promise, release: released.resolve };
 }
 
+let delayedTurnReport: { readonly reached: (storageKey: string) => void; readonly released: Promise<void> } | null = null;
+
+/** A call held on its way: `reached` answers the storage key of the isolate that made it; `release` lets it arrive. */
+export interface HeldIsolateCall {
+  readonly reached: Promise<string>;
+  release(): void;
+}
+
+/** The next report any hire's settled turn owes its hirer waits on the way to the workspace until released. */
+export function delayNextTurnReport(): HeldIsolateCall {
+  const reached = Promise.withResolvers<string>();
+  const released = Promise.withResolvers<void>();
+
+  delayedTurnReport = { reached: reached.resolve, released: released.promise };
+
+  return { reached: reached.promise, release: released.resolve };
+}
+
 export type TurnOpeningRequest = Parameters<AgentWorkspaceHost['prepareChat']>[0];
 
 const copiedOpenings = new Map<string, (opening: TurnOpeningRequest) => void>();
@@ -438,7 +456,17 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           copy?.([event, figures, activity, window]);
         },
         answerAmended: (window) => host().answerAmended(window),
-        owedReport: (turn, ended) => host().owedReport(turn, ended),
+        turnReport: async (turn, ended, relay) => {
+          const delayed = delayedTurnReport;
+
+          if (delayed !== null) {
+            delayedTurnReport = null;
+            delayed.reached(placement.storageKey);
+            await delayed.released;
+          }
+
+          return await host().turnReport(turn, ended, relay);
+        },
         parentReport: (report) => host().parentReport(report),
         autoTitle: (subject, title) => host().autoTitle(subject, title),
         turnSettled: async (settled) => {

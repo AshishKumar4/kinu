@@ -4,7 +4,7 @@ import {
   CHAT_SESSION_ID, actorAffinity, HeadCapture, ownerLaneTools, toolsInWorkMode, withEffectReceipt, decodeJsonValue, decodeModelMessageValues, encodeModelMessageValues, replayPolicyFor, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan, imageModelOutput,
   type AuthRequest, type AuthResolution, type HandedOffTurn, type SettledRun, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type JsonValue, type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind, type AgentSignal, type SendOutcome,
   turnSourcesFromBundle, captureOperationProfile, type ModelCallReport, type ModelOperationEvent,
-  type AdvisorRecoverySnapshot, type AgentFigures, type AgentReport, type HostedActor, type OwedReport, type SerializedMessage, type SessionEvent, type TurnEndEvent,
+  type AdvisorRecoverySnapshot, type AgentFigures, type AgentReport, type HostedActor, type SerializedMessage, type SessionEvent, type TurnEndEvent,
   type SubordinateReportLedger, type SubordinateReportStatus, type TaskTurnEnding, type WorkMode, type ResolvedTurnProfile,
   type RemoteReceipt, type ReplyToCommentToolDeps, type StoredRow, type SubmitPlanToolDeps,
 } from '@kinu.run/core';
@@ -71,11 +71,15 @@ export interface AgentWorkspace {
   /** A committed answer was stamped after its end (its slates' previews): `window` is the transcript's newest messages
    *  now, which its room is shown again unless a turn is live, whose own end carries it. */
   answerAmended(window: readonly UIMessage[]): Promise<void>;
-  owedReport(
+  /** The report a hire's settled turn owes its hirer, decided where the hirer's roster is and relayed to it, once its
+   *  answer committed: `turn`, what it told so far; `relay`, its dedupe key and mode. Answers the relay's disposition, or
+   *  `none` where it owed none. */
+  turnReport(
     /** `taskId`: the assignment this turn answers, if one opened it. */
     turn: { readonly reports: SubordinateReportLedger; readonly ownerDriven: boolean; readonly taskId: string | null },
     ended: { readonly ending: TaskTurnEnding; readonly assistantText: string; readonly narration: readonly string[] },
-  ): Promise<OwedReport | null>;
+    relay: { readonly sequenceId: string; readonly mode: WorkMode },
+  ): Promise<string>;
   parentReport(report: {
     readonly text: string; readonly status: SubordinateReportStatus; readonly mode: WorkMode; readonly sequenceId: string; readonly quiet?: true;
   }): Promise<string>;

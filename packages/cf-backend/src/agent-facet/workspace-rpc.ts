@@ -207,7 +207,7 @@ export function workspaceClient(workspace: AgentWorkspaceCalls): WorkspaceClient
     answerAmended: (...args) => settle(viaPort((port) => port.answerAmended(...args))),
     turnSettled: (...args) => settle(viaPort((port) => port.turnSettled(...args))),
     runSettled: (...args) => settle(viaPort((port) => port.runSettled(...args))),
-    owedReport: (...args) => settle(viaPort((port) => port.owedReport(...args))),
+    turnReport: (...args) => settle(viaPort((port) => port.turnReport(...args))),
     parentReport: (...args) => settle(viaPort((port) => port.parentReport(...args))),
     autoTitle: (...args) => settle(viaPort((port) => port.autoTitle(...args))),
     hireAdvisor: (...args) => settle(viaPort((port) => port.hireAdvisor(...args))),

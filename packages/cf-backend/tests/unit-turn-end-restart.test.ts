@@ -6,8 +6,10 @@
 import { afterEach, expect, setSystemTime, test } from 'bun:test';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import { RECOVERY_BACKOFF_CEILING_MS } from '@kinu.run/core';
-import { driveUntil, gatewayWorkspace, mainDatabase, storedChat, workspaceMainActor, type StartedHarness } from './helpers/actor-harness';
-import { delayNextRunEnd, failNextAnswerWrite } from './helpers/agent-facets';
+import {
+  driveUntil, gatewayWorkspace, mainDatabase, relayedReports, storedChat, workspaceMainActor, type StartedHarness,
+} from './helpers/actor-harness';
+import { delayNextRunEnd, delayNextTurnReport, failNextAnswerWrite } from './helpers/agent-facets';
 import { socketConnection } from './helpers/bindings';
 import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 
@@ -125,4 +127,43 @@ test("a node whose isolate dies after its run ended, with its end untold, is not
   await driveUntil(workspace, 'the search never settled', () => workspace.db.query<{ status: string }, []>('SELECT status FROM head_journal').get()?.status === 'completed');
 
   expect(nodeCalls).toBe(1);
+});
+
+test("a hire whose isolate dies as its turn's report goes to its hirer is asked once, and its hirer hears it once", async () => {
+  const MISSION = 'Catalogue every file under the home directory.';
+  const ASKED = 'Have someone check the ledger.';
+  const ANSWER = 'The ledger balances.';
+  let asked = 0;
+
+  // Main hires a task agent for the mission, then says so; the hire, whose conversation never holds main's ask, answers.
+  // A call that offers no tools is the workspace naming itself, no agent's turn.
+  const workspace = gatewayWorkspace(stubAiBinding((run) => {
+    const { messages, tools } = requestOf(run);
+
+    if (tools.length > 0 && !JSON.stringify(messages).includes(ASKED)) {
+      asked += 1;
+
+      return chatCompletion(run, ANSWER);
+    }
+
+    if (!JSON.stringify(messages).includes(ASKED)) return chatCompletion(run, '{"title":"Ledger Check"}');
+
+    return messages.some((message) => message.role === 'tool')
+      ? chatCompletion(run, 'Handed off.')
+      : toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', lifetime: 'task', mission: MISSION } }, 'hire_0');
+  }));
+
+  const reporting = delayNextTurnReport();
+  const id = crypto.randomUUID();
+
+  // Sent as the pane sends it; nothing waits for its agents to rest, which a held report never lets them.
+  await workspace.agent.onMessage(owner, chatRequest(id, id, 'submit-message', ASKED));
+  const hire = await reporting.reached;
+
+  // The hire's isolate dies as its report goes: its answer, and the report it owes, are its own, told when next woken.
+  workspace.agent.harnessResetAgentIsolate(hire);
+  setSystemTime(new Date(Date.now() + RECOVERY_BACKOFF_CEILING_MS + 1));
+  await driveUntil(workspace, "the hire's hirer never heard its report", () => relayedReports(workspace.db).some((report) => report.includes(ANSWER)));
+
+  expect({ asked, heard: relayedReports(workspace.db).filter((report) => report.includes(ANSWER)).length }).toEqual({ asked: 1, heard: 1 });
 });
