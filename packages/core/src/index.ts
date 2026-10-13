@@ -201,7 +201,7 @@ export {
   type DelegationFeatures, type ExecutionPathSignals,
 } from './evolution/delegation-features';
 
-export { QualityDaySchema, QualityWindowSchema, type QualityDay, type QualityWindow } from './types/quality';
+export { QualityDaySchema, type QualityDay, type QualityWindow } from './types/quality';
 
 // Turn ratings: the one signal evolution decides by.
 export {

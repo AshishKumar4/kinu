@@ -1905,6 +1905,29 @@ export async function openInspector(page: Page): Promise<void> {
   throw new Error(`the inspector column stayed at ${String(outcome.value)}px; tried ${JSON.stringify(outcome.attempts)}`);
 }
 
+/** Open the inspector's page whose title holds `title` through its bar: its tab when it has room, else the bar's menu
+ *  of the rest. Settles once that page is the open one. */
+export async function openInspectorPage(page: Page, title: string, wait = { timeout: 10_000 }): Promise<void> {
+  const tab = `nav[aria-label="Pages"] li button[aria-label*=${JSON.stringify(title)}]`;
+
+  await page.waitForSelector(`${tab}, nav[aria-label="Pages"] button[aria-haspopup="menu"]`, wait);
+
+  if (await page.$(tab) === null) {
+    if (await page.$('nav[aria-label="Pages"] button[aria-haspopup="menu"][aria-expanded="true"]') === null) {
+      await page.click('nav[aria-label="Pages"] button[aria-haspopup="menu"]');
+    }
+
+    const item = await page.waitForFunction((wanted: string) => [...document.querySelectorAll('nav[aria-label="Pages"] [role="menuitem"]')]
+      .find((entry) => entry.textContent?.includes(wanted) === true) ?? null, wait, title);
+
+    await item.asElement()?.evaluate((entry) => { if (entry instanceof HTMLElement) entry.click(); });
+  } else {
+    await page.click(tab);
+  }
+
+  await page.waitForSelector(`nav[aria-label="Pages"] button[aria-current="true"][aria-label*=${JSON.stringify(title)}]`, wait);
+}
+
 /** Press the inspector strip's tab named `name`; an absent tab throws. */
 function stripTab(name: string): string {
   return `(() => {
@@ -2135,7 +2158,7 @@ export interface SlatePreviewVerdict {
 }
 
 /** The names the inspector's Pages strip shows, one per tab: its links, not the actions beside them ("Share Flow probe"). */
-export const PAGE_TABS = `[...document.querySelectorAll('#inspector nav[aria-label="Pages"] button.p-bar-link[aria-label]')].map((tab) => tab.getAttribute('aria-label') ?? '')`;
+export const PAGE_TABS = `[...document.querySelectorAll('#inspector nav[aria-label="Pages"] li button[aria-label]')].map((tab) => tab.getAttribute('aria-label') ?? '')`;
 
 /**
  * Row: a slate the agent builds shows its running preview in its own tab.

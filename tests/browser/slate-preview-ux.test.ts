@@ -4,6 +4,7 @@ import { detach } from '@kinu.run/core/obs';
 import { executorLabel } from '@kinu.run/core';
 import * as v from 'valibot';
 import { withGallery } from '../../scripts/gallery-harness';
+import { openInspectorPage } from '../../scripts/product-flows';
 import type { Frame, Page } from 'puppeteer';
 
 async function serveSlate(page: Page): Promise<void> {
@@ -234,7 +235,7 @@ test('preview tabs deduplicate live slates, fill the surface, and give each open
       for (const width of [1100, 390]) {
         await page.setViewport({ width, height: 850 });
         await page.goto(`${origin}/gallery.html?frame=previewtabs`, { waitUntil: 'networkidle0' });
-        await page.waitForSelector('[aria-label="Dashboard"]');
+        await page.waitForSelector('nav[aria-label="Pages"]');
         expect(await page.$('[aria-label="Output"]')).toBeNull();
         expect(await page.$('[aria-label="Duplicate dashboard port"]')).toBeNull();
         // The workspace-wide read lands once and lists the whole roster —
@@ -244,7 +245,7 @@ test('preview tabs deduplicate live slates, fill the surface, and give each open
 
         // Each tab frames its own origin, so the wait names the tab's iframe, not whichever the last tab left.
         for (const [title, host] of [['Dashboard', 'gallery.preview'], ['Sandbox app', '8080-sandbox'], ['Device app', '3000-device']]) {
-          await page.click(`[aria-label="${title}"]`);
+          await openInspectorPage(page, title ?? '');
           const iframe = await page.waitForSelector(`iframe[src*="${host}"]`);
 
           if (!iframe) throw new Error('Preview missing');

@@ -108,7 +108,7 @@ function Pages({ surface, pages, choose }: { readonly surface: SurfaceKind | nul
     <nav ref={strip} className="p-pages" aria-label="Pages">
       <span ref={sizes} className="p-pages-sizes" aria-hidden>
         {pages.map((page) => (
-          <span key={page.key} className="p-page" aria-current={page.key === surface ? "true" : undefined}>
+          <span key={page.key} className="p-page" data-open={page.key === surface ? "" : undefined}>
             <span className="p-page-link"><page.Icon size={14} />{page.title}</span>
             {page.key === surface && page.action}
           </span>
@@ -117,7 +117,7 @@ function Pages({ surface, pages, choose }: { readonly surface: SurfaceKind | nul
       {picked ? (
         <span className="relative flex min-w-0">
           <button type="button" aria-expanded={menu} aria-haspopup="menu" aria-label={current.title} title={`${current.title}, one of ${String(pages.length)} pages`}
-            className="p-page p-page-picker" aria-current="true" onClick={() => setMenu(!menu)}>
+            className="p-page p-page-picker" data-open="" aria-current="true" onClick={() => setMenu(!menu)}>
             <current.Icon size={14} weight="fill" className="shrink-0" aria-hidden />
             <span className="truncate">{current.title}</span>
             <CaretDownIcon size={10} weight="bold" className="shrink-0 p-text-3" aria-hidden />
@@ -127,7 +127,7 @@ function Pages({ surface, pages, choose }: { readonly surface: SurfaceKind | nul
       ) : (
         <ul className="p-pages-row">
           {pages.map((page, index) => shown.has(index) && (
-            <li key={page.key} className="p-page" aria-current={page.key === surface ? "true" : undefined}>
+            <li key={page.key} className="p-page" data-open={page.key === surface ? "" : undefined}>
               <button type="button" className="p-page-link" onClick={() => choose(page.key)} title={page.title} aria-label={page.title}
                 aria-current={page.key === surface ? "true" : undefined}>
                 <page.Icon size={14} weight={page.key === surface ? "fill" : "regular"} className="shrink-0" aria-hidden />

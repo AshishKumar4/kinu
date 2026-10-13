@@ -2024,9 +2024,9 @@ body > .annotation-toolbar {
 .p-page:hover { color: var(--c-text); background: var(--c-neutral-tint); }
 .p-page-link { display: flex; min-width: 0; align-items: center; gap: 6px; height: 100%; padding: 0 9px 0 8px; font-size: 12.5px; font-weight: 500; letter-spacing: -0.005em; white-space: nowrap; }
 .p-page-link:focus-visible { border-radius: 7px; outline: 1.5px solid var(--c-accent); outline-offset: 1px; }
-.p-page[aria-current="true"] { flex-shrink: 1; color: var(--c-text); background: var(--c-surface); box-shadow: 0 0 0 1px var(--c-border), 0 1px 2px rgb(0 0 0 / 0.18); }
-.p-page[aria-current="true"] .p-page-link > svg { color: var(--c-accent-mark); }
-.p-page[aria-current="true"]:has(.p-bar-action) .p-page-link { padding-right: 2px; }
+.p-page[data-open] { flex-shrink: 1; color: var(--c-text); background: var(--c-surface); box-shadow: 0 0 0 1px var(--c-border), 0 1px 2px rgb(0 0 0 / 0.18); }
+.p-page[data-open] > .p-page-link > svg, .p-page-picker > svg:first-child { color: var(--c-accent-mark); }
+.p-page[data-open]:has(.p-bar-action) .p-page-link { padding-right: 2px; }
 .p-page > .p-bar-action { width: 20px; height: 20px; margin-right: 3px; }
 .p-page-picker { gap: 6px; max-width: 100%; padding: 0 8px; font-size: 12.5px; font-weight: 500; white-space: nowrap; }
 .p-page-picker > .p-tool-count { flex-shrink: 0; }

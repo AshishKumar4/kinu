@@ -89,7 +89,7 @@ function pictureName(picture: Picture, home: string): string {
 }
 
 /** Every picture a settled answer shows, by the part it follows, each once: a tool's first, then the words'. */
-export function messagePictures(message: UIMessage, at: ChatImageSource, settled: (part: UIMessage["parts"][number]) => boolean): ReadonlyMap<UIMessage["parts"][number], readonly Picture[]> {
+function messagePictures(message: UIMessage, at: ChatImageSource, settled: (part: UIMessage["parts"][number]) => boolean): ReadonlyMap<UIMessage["parts"][number], readonly Picture[]> {
   const shown = new Set<string>();
   const byPart = new Map<UIMessage["parts"][number], readonly Picture[]>();
 
@@ -194,7 +194,7 @@ function Shot({ picture, size, onOpen }: { readonly picture: Picture; readonly s
 }
 
 /** The pictures one part shows: one at its size, two or more in a grid. */
-export function Pictures({ pictures, size, open }: { readonly pictures: readonly Picture[]; readonly size: "full" | "thumb"; readonly open: (picture: Picture) => void }) {
+function Pictures({ pictures, size, open }: { readonly pictures: readonly Picture[]; readonly size: "full" | "thumb"; readonly open: (picture: Picture) => void }) {
   const shots = pictures.map((picture) => <Shot key={picture.key} picture={picture} size={size} onOpen={() => open(picture)} />);
 
   if (pictures.length > 1 && pictures.every((picture) => picture.kind !== "web")) return <div className="p-shot-grid my-2" data-size={size}>{shots}</div>;
@@ -203,7 +203,7 @@ export function Pictures({ pictures, size, open }: { readonly pictures: readonly
 }
 
 /** A picture opened whole: fit to the window, its name and machine above, the message's others a step away. */
-export function Lightbox({ pictures, index, onIndex, onClose }: {
+function Lightbox({ pictures, index, onIndex, onClose }: {
   readonly pictures: readonly Picture[]; readonly index: number; readonly onIndex: (index: number) => void; readonly onClose: () => void;
 }) {
   const at = useContext(ChatImageContext);

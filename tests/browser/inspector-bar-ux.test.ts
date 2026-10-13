@@ -6,6 +6,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { ElementHandle, Page } from 'puppeteer';
 import { withGallery } from '../../scripts/gallery-harness';
+import { openInspectorPage } from '../../scripts/product-flows';
 
 declare global {
   interface Window {
@@ -87,7 +88,8 @@ describe('the inspector bar keeps the workspace in reach', () => {
         await page.evaluate(() => { document.documentElement.dataset.previewArrived = '1'; });
         await page.waitForSelector('button[aria-label="Show workspace"]', SOON);
         await page.tap('button[aria-label="Show workspace"]');
-        await page.waitForSelector('button[aria-label="Arrived app"]', SOON);
+        // The app that arrived is reachable from the bar, by its tab or the bar's menu of the pages without room.
+        await openInspectorPage(page, 'Arrived app', SOON);
 
         const reach = await toolsInReach(page);
 
@@ -115,7 +117,7 @@ describe('the inspector bar keeps the workspace in reach', () => {
       try {
         await page.setViewport({ width: 1440, height: 900 });
         await page.goto(`${origin}/gallery.html?frame=workspacepage&slates=3`, { waitUntil: 'networkidle0' });
-        await page.waitForSelector('button[aria-label="Tally"]', SOON);
+        await page.waitForSelector('nav[aria-label="Pages"]', SOON);
 
         const tool = await required(page, 'body', 'button', 'Environment');
 
@@ -143,9 +145,7 @@ describe('sharing the open Slate', () => {
       try {
         await page.setViewport({ width: 1440, height: 900 });
         await page.goto(`${origin}/gallery.html?frame=workspacepage&slates=3`, { waitUntil: 'networkidle0' });
-        await page.waitForSelector('button[aria-label="Board"]', SOON);
-        await page.click('button[aria-label="Board"]');
-        await page.waitForSelector('button[aria-label="Board"][aria-current="true"]', SOON);
+        await openInspectorPage(page, 'Board', SOON);
 
         const share = await required(page, 'body', 'button', 'Share Board');
 

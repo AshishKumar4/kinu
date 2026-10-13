@@ -19,7 +19,7 @@ export const QualityDaySchema = v.object({
 export type QualityDay = v.InferOutput<typeof QualityDaySchema>;
 
 /** The last few UTC days summed over every rating in them, as `qualityWindow` answers "the last 7 days". */
-export const QualityWindowSchema = v.object({
+const QualityWindowSchema = v.object({
   /** UTC dates, YYYY-MM-DD, both included. */
   from: v.string(),
   to: v.string(),
