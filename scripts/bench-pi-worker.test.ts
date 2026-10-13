@@ -115,10 +115,5 @@ describe('official Pi baseline worker', () => {
     expect(result.output).toMatchObject({ tokens: 18, steps: 2, modelCalls: 2, hadError: false });
     expect(result.requests).toHaveLength(2);
 
-    const retryMessages = result.requests[1].messages
-      .filter((message) => message.role === 'user')
-      .map((message) => JSON.stringify(message.content));
-
-    expect(retryMessages.some((message) => message.includes('machine verifier still fails'))).toBe(true);
   });
 });

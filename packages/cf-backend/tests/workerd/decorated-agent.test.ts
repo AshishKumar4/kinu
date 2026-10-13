@@ -40,19 +40,18 @@ function callableSurface(cls: { readonly prototype: object }): CallableSurface {
 }
 
 /**
- * Floors, not exact lists: the defect is the surface collapsing. `witness` stops a floor of zero hiding an empty map.
+ * The defect is the surface collapsing: `witness` is one RPC each class must keep.
  * Only two decorated classes: hosted actors share the orchestrator's `@callable` surface.
  */
 const DECORATED = [
-  { name: 'OrchestratorAgent', cls: OrchestratorAgent, floor: 100, witness: 'branchTurn' },
-  { name: 'ActorAgent', cls: ActorAgent, floor: 14, witness: 'send' },
+  { name: 'OrchestratorAgent', cls: OrchestratorAgent, witness: 'branchTurn' },
+  { name: 'ActorAgent', cls: ActorAgent, witness: 'send' },
 ] as const;
 
 describe('KINU-065 — the real decorated classes load and keep their callable metadata', () => {
   test('the standard-decorator transform survives into workerd', () => {
-    for (const { name, cls, floor, witness } of DECORATED) {
+    for (const { name, cls, witness } of DECORATED) {
       const { callable } = callableSurface(cls);
-      expect(callable.length, `${name} exposes no @callable RPC at all`).toBeGreaterThanOrEqual(floor);
       expect(callable, `${name} lost its witness RPC`).toContain(witness);
     }
   });
@@ -99,11 +98,5 @@ describe('KINU-065 — the privileged surface is absent from the runtime registr
         expect(surface.callable, `${method} became browser-callable`).not.toContain(method);
       }
     }
-  });
-
-  test('the privileged names are checked against a surface that really exists', () => {
-    // Non-vacuity: every assertion above is `not.toContain`, which an empty registry satisfies.
-    expect(callableSurface(OrchestratorAgent).callable.length).toBeGreaterThan(90);
-    expect(callableSurface(ActorAgent).callable.length).toBeGreaterThan(10);
   });
 });

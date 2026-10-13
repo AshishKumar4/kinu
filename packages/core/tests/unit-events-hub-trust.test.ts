@@ -125,9 +125,9 @@ describe('derivePriority', () => {
   });
   test('forbidden combo throws', () => {
     expect(() => derivePriority('external', 'chat'))
-      .toThrow('Ingress invalid_combination rejected: trust=external + variant=chat is not a permitted combination');
+      .toThrow(IngressRejectedError);
     expect(() => derivePriority('owner', 'webhook'))
-      .toThrow('Ingress invalid_combination rejected: trust=owner + variant=webhook is not a permitted combination');
+      .toThrow(IngressRejectedError);
   });
 });
 

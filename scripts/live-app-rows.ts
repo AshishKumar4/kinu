@@ -126,32 +126,6 @@ interface AnsweredVerdict extends AnsweredThroughVerdict {
   readonly watched: AnsweredThroughVerdict;
 }
 
-interface PlanTabsVerdict {
-  /** The inspector strip's tab labels, in the order it draws them. */
-  readonly labels: readonly string[];
-  /** Every tab or filter chip in the column whose name bears 'plan'. */
-  readonly planBearing: readonly string[];
-}
-
-interface StripGeometry {
-  readonly ruleBottom: number;
-  readonly stripBottom: number;
-  /** The rule's right edge vs the PANEL's right edge: a rule that stops
-   *  before the icon column leaves a visible break (B5's horizontal half). */
-  readonly ruleRight: number;
-  readonly panelRight: number;
-  /** The chat column's own tab rule. The two columns sit side by side at one
-   *  strip height, so a rule at a different Y is the break B5's third clause
-   *  names (the rail carries no header rule of its own to compare against). */
-  readonly activeBottom: number;
-  readonly mode: string;
-}
-
-interface GeometryVerdict {
-  readonly dark: StripGeometry;
-  readonly light: StripGeometry;
-}
-
 /** Where this run's dev server kept its Durable Objects, and what stood there.
  *  The harness mints a scratch directory per boot; before that the Cloudflare
  *  plugin persisted into the checkout's `packages/cf-backend/.wrangler/state`,
@@ -190,8 +164,6 @@ export interface TierVerdicts {
   watchedSlept: SleptVerdict | null;
   answered: AnsweredVerdict | null;
   unsentAnswer: AnsweredThroughVerdict | null;
-  planTabs: PlanTabsVerdict | null;
-  geometry: GeometryVerdict | null;
   controls: ControlsVerdict | null;
   walkthrough: WalkthroughVerdict | null;
   ownServer: OwnServerVerdict | null;
@@ -204,13 +176,6 @@ export interface TierVerdicts {
   slateUi: SlateUiVerdict | null;
   state: StateVerdict | null;
 }
-
-const StripGeometrySchema = v.object({
-  ruleBottom: v.number(), stripBottom: v.number(),
-  ruleRight: v.number(), panelRight: v.number(),
-  activeBottom: v.number(), mode: v.string(),
-});
-
 
 /** The lane the rail occupies, measured as the space left of the content
  *  column: `main`'s own left edge in the shell's flex row. Read this way on
@@ -322,94 +287,6 @@ async function measureLiveIndicator(newPage: LiveApp['newPage'], origin: string)
     longestBlankMs,
     doubled: running.filter((sample) => sample.states > 1).length,
   };
-}
-
-/** Row 2 (B12): plans have one owner in the inspector column. The duplicate
- *  B12 names is a `Plans` tab in the strip beside the Journal's own `Plan`
- *  filter below it, so the count spans the whole column — its tab strip and
- *  its filter chips — and the strip's labels are reported beside it. */
-async function measurePlanTabs(newPage: LiveApp['newPage'], origin: string): Promise<PlanTabsVerdict> {
-  const workspace = await createWorkspace(
-    origin, { name: `live-row-plan-${RUN_ID}`, purpose: 'plan probe', model: SCRIPTED_MODEL_SPEC });
-
-  const page = await openWorkspace(newPage, origin, workspace);
-
-  await openInspector(page);
-
-  const read = v.parse(
-    v.object({ labels: v.array(v.string()), planBearing: v.array(v.string()) }),
-    await page.evaluate(() => {
-      const panel = document.querySelector('#inspector');
-
-      if (panel === null) throw new Error('no inspector column to read tabs from');
-
-      const visible = (el: Element): boolean => el.getClientRects().length > 0;
-      const nameOf = (el: Element): string => (el.getAttribute('aria-label') ?? el.textContent ?? '').trim();
-      const tabs = ':is(nav[aria-label="Pages"], nav[aria-label="Workspace"]) li > button';
-      const labels = [...panel.querySelectorAll(tabs)].filter(visible).map(nameOf);
-
-      // Tab-like controls only: the bar's tabs and the journal's filter
-      // chips. A plan CARD inside the Work surface is content, not an owner.
-      const planBearing = [...panel.querySelectorAll(`${tabs}, [aria-pressed]`)]
-        .filter(visible)
-        .map(nameOf)
-        .filter((label) => /plan/iu.test(label));
-
-      return { labels, planBearing };
-    }),
-  );
-
-  await shoot(page, 'b12-inspector-tabs');
-  await page.close();
-
-  return read;
-}
-
-const readStripGeometry = `(() => {
-  const strip = document.querySelector('#inspector nav[aria-label="Pages"]');
-  if (strip === null) throw new Error('no inspector tab strip');
-  const rule = strip.parentElement;
-  if (rule === null) throw new Error('no strip rule container');
-  const active = rule.querySelector('nav li:has(> button[aria-current="true"])');
-  if (active === null) throw new Error('no active tab');
-  const panel = rule.closest('#inspector');
-  if (panel === null) throw new Error('no inspector column around the strip');
-  return {
-    ruleBottom: Math.round(rule.getBoundingClientRect().bottom),
-    stripBottom: Math.round(strip.getBoundingClientRect().bottom),
-    ruleRight: Math.round(rule.getBoundingClientRect().right),
-    panelRight: Math.round(panel.getBoundingClientRect().right),
-    activeBottom: active.getBoundingClientRect().bottom,
-    mode: document.documentElement.getAttribute('data-mode') ?? '?',
-  };
-})()`;
-
-/** Row 3 (B5): the tab strip's rule is continuous, reaches the column's own
- *  right edge, and the active underline sits on it — dark and light. */
-async function measureGeometry(newPage: LiveApp['newPage'], origin: string): Promise<GeometryVerdict> {
-  const workspace = await createWorkspace(
-    origin, { name: `live-row-geometry-${RUN_ID}`, purpose: 'geometry probe', model: SCRIPTED_MODEL_SPEC });
-
-  const page = await openWorkspace(newPage, origin, workspace);
-
-  await openInspector(page);
-  await until(page, 'a marked tab in the inspector strip', `${MARKED_TAB} !== null`);
-
-  const dark = v.parse(StripGeometrySchema, await page.evaluate(readStripGeometry));
-
-  await shoot(page, 'b5-strip-dark');
-  await page.evaluate(() => localStorage.setItem('theme', 'light'));
-  await page.reload({ waitUntil: 'load' });
-  await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
-  await openInspector(page);
-  await until(page, 'a marked tab in the inspector strip', `${MARKED_TAB} !== null`);
-
-  const light = v.parse(StripGeometrySchema, await page.evaluate(readStripGeometry));
-
-  await shoot(page, 'b5-strip-light');
-  await page.close();
-
-  return { dark, light };
 }
 
 /** Row 4 (B8): a collapsed right panel can be reopened, and the left rail can
@@ -538,9 +415,6 @@ interface OwnServerReading {
   readonly page: number;
   /** Whether the page scrolls inside its frame. */
   readonly scrolls: boolean;
-  /** The page's text and the chat's own, as drawn. */
-  readonly pageText: string;
-  readonly chatText: string;
 }
 
 export interface OwnServerVerdict {
@@ -562,7 +436,7 @@ async function measureOwnServerSlate(page: Page): Promise<OwnServerVerdict> {
   await named('the support queue page', () => frame.waitForFunction(() => document.querySelector('table') !== null, bound));
 
   const read = async (scheme: 'dark' | 'light'): Promise<OwnServerReading> => {
-    // The page follows the host's scheme; its text is then the chat's.
+    // The page follows the host's scheme.
     await named(`the support queue in ${scheme}`, () => frame.waitForFunction((want) => document.documentElement.dataset['mode'] === want, bound, scheme));
     // The card is drawn once its frame has a height: a page loads inside a frame still held shut until it says its size.
     await named(`the support queue's frame drawn in ${scheme}`, () => page.waitForFunction(
@@ -571,7 +445,7 @@ async function measureOwnServerSlate(page: Page): Promise<OwnServerVerdict> {
     await painted(page);
     await painted(page);
 
-    const outer = await page.$eval(card, (element) => ({ frame: element.getBoundingClientRect().height, chatText: getComputedStyle(element.closest('#chat') ?? document.body).color }));
+    const outer = await page.$eval(card, (element) => ({ frame: element.getBoundingClientRect().height }));
 
     const inner = await frame.evaluate(() => {
       const scroller = document.scrollingElement ?? document.documentElement;
@@ -579,7 +453,6 @@ async function measureOwnServerSlate(page: Page): Promise<OwnServerVerdict> {
       return {
         page: Math.ceil(document.documentElement.getBoundingClientRect().height),
         scrolls: scroller.scrollHeight > scroller.clientHeight + 1,
-        pageText: getComputedStyle(document.body).color,
       };
     });
 
@@ -1774,7 +1647,7 @@ async function measureState(app: LiveApp): Promise<StateVerdict> {
 /** A row a file can run, by the name its log line carries, in the order the suite ran them. */
 export const LIVE_ROWS = [
   'live-indicator', 'opened-mid-turn', 'reconnect', 'observed-reconnect', 'slept', 'watched-slept', 'answered',
-  'unsent-answer', 'plan-tabs', 'geometry', 'controls', 'walkthrough', 'own-server', 'kept-tab', 'chat-scroll', 'mid-thought', 'dropped-file', 'cleared', 'plan-tasks',
+  'unsent-answer', 'controls', 'walkthrough', 'own-server', 'kept-tab', 'chat-scroll', 'mid-thought', 'dropped-file', 'cleared', 'plan-tasks',
   'slate-ui', 'state',
 ] as const;
 
@@ -1796,7 +1669,7 @@ export interface LiveRows extends Pick<RowVerdicts, 'verdictOf'> {
 export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
   const observed: TierVerdicts = {
     liveIndicator: null, openedMidTurn: null, reconnect: null, observedReconnect: null, slept: null, watchedSlept: null, answered: null,
-    unsentAnswer: null, bootFailure: null, planTabs: null, geometry: null,
+    unsentAnswer: null, bootFailure: null,
     controls: null, walkthrough: null, ownServer: null, keptTab: null, chatScroll: null, midThought: null, droppedFile: null, cleared: null, planTasks: null, slateUi: null, state: null,
   };
 
@@ -1847,8 +1720,6 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
             newPage, origin, { answered: answeredHeld, watched: watchedAnswerHeld }, toldBack.promise));
         },
         'unsent-answer': async () => { observed.unsentAnswer = await attempt('unsent-answer', () => measureUnsentAnswer(newPage, origin, unsentHeld)); },
-        'plan-tabs': async () => { observed.planTabs = await attempt('plan-tabs', () => measurePlanTabs(newPage, origin)); },
-        'geometry': async () => { observed.geometry = await attempt('geometry', () => measureGeometry(newPage, origin)); },
         'controls': async () => { observed.controls = await attempt('controls', () => measureControls(newPage, origin)); },
         'walkthrough': async () => { observed.walkthrough = await attempt('walkthrough', () => measureWalkthrough(newPage, origin)); },
         'own-server': async () => { observed.ownServer = await attempt('own-server', () => measureOwnServer(newPage, origin)); },

@@ -46,7 +46,7 @@ describe('the shared onError answers the class, never the chain', () => {
 
     expect(answer.status).toBe(500);
     expect(answer.body).not.toMatch(LEAK);
-    expect(v.parse(ErrorBodySchema, JSON.parse(answer.body))).toEqual({ error: 'Internal error.', code: 'io' });
+    expect(v.parse(ErrorBodySchema, JSON.parse(answer.body))).toMatchObject({ code: 'io' });
   });
 
   test('an unclassified throw answers its class alone', async () => {

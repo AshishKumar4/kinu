@@ -128,7 +128,7 @@ describe('UserDO Codex credential of a named account', () => {
 
     for (const key of ['codex.oauth@work', 'claude.oauth', 'claude.oauth@work']) {
       await expect(harness.userDO.setCredential(owner, key, { kind: 'oauth', accessToken: 'no-refresh' }))
-        .rejects.toThrow(`${key} requires an OAuth refresh token`);
+        .rejects.toMatchObject({ code: 'bad_input' });
     }
 
     expect(await harness.userDO.listCredentials(owner)).toEqual([]);

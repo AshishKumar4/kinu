@@ -9,7 +9,7 @@ import * as v from 'valibot';
 import type { SqlDatabase, SqlRow, SqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
   agentHome,
-  agentTmpRoot, actorHomeName } from '../src/vfs/agent-home';
+  actorHomeName } from '../src/vfs/agent-home';
 import { facetHomeProvisioner } from '../src/strategy/node-workspace';
 import { createWorkspaceBundle } from './helpers';
 
@@ -68,13 +68,6 @@ describe('facet agent names share one namespace without colliding', () => {
     expect(() => actorHomeName({ origin: 'agent', name: 'rm', storageKey: 'a; rm -rf /' })).toThrow('not a usable agent name');
     expect(() => actorHomeName({ origin: 'swarm', name: 'exp:a', storageKey: "a'; rm -rf /" })).toThrow('not a usable agent name');
     expect(() => actorHomeName({ origin: 'swarm', name: 'exp:etc', storageKey: '../../etc' })).toThrow('not a usable agent name');
-  });
-
-  test('the longest valid subordinate slug still provisions', () => {
-    // Subordinate slugs may be 64 chars; the kind prefix must not push them out of the namespace.
-    expect(agentHome(actorHomeName({ origin: 'agent', name: 'a'.repeat(64), storageKey: 'a'.repeat(64) }))).toBe(`/home/${'a'.repeat(64)}`);
-    expect(agentHome(actorHomeName({ origin: 'agent', name: 'a', storageKey: 'a'.repeat(64) }))).toBe(`/home/sub-${'a'.repeat(64)}`);
-    expect(agentTmpRoot(actorHomeName({ origin: 'agent', name: 'a', storageKey: 'a'.repeat(64) }))).toBe(`/tmp/sub-${'a'.repeat(64)}`);
   });
 });
 

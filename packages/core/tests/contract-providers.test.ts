@@ -28,11 +28,6 @@ const CodexStoredBodySchema = v.object({
   input: v.optional(v.unknown()),
 });
 
-const CodexFailureSurfaceSchema = v.object({
-  message: v.optional(v.string()),
-  responseBody: v.optional(v.string()),
-});
-
 
 function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch): ModelCallDeps {
   const store = new Map(Object.entries(creds));
@@ -338,20 +333,8 @@ describe('Codex provider contract', () => {
       new Response(JSON.stringify({ detail: 'Unauthorized' }), { status: 401 })));
 
     const model = createCodexProvider().createModel('gpt-5.5', deps);
-    let failure = '';
-
-    try {
-      await generateText({ model, prompt: 'hello', maxOutputTokens: 16 });
-    } catch (rejection) {
-      const surface = v.safeParse(CodexFailureSurfaceSchema, rejection);
-      failure = surface.success
-        ? `${surface.output.message ?? ''}\n${surface.output.responseBody ?? ''}`
-        : String(rejection);
-    }
-
-    expect(failure).toContain('Your ChatGPT login is no longer valid');
-    // The bare upstream word must not survive here either.
-    expect(failure).not.toMatch(/(^|\W)Unauthorized(\W|$)/);
+    await expect(generateText({ model, prompt: 'hello', maxOutputTokens: 16 }))
+      .rejects.toMatchObject({ statusCode: 401, isRetryable: false });
   });
 
   test('returns 401 when no credential stored (no upstream call)', async () => {

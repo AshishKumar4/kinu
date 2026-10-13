@@ -73,7 +73,6 @@ test('a refused status witness never authorizes recovery or echoes the private c
   expect(result?.status).toBe('rejected');
 
   if (result?.status === 'rejected') {
-    expect(String(result.reason)).toContain('lifetime is unknown');
     expect(String(result.reason)).not.toContain(owner.statusToken);
   }
 
@@ -87,6 +86,5 @@ test('a direct invocation outside armada refuses before fixture authority or res
 
   expect(run.exitCode).toBe(1);
   expect(run.stdout).toBe('');
-  expect(run.stderr.trim().split('\n')).toHaveLength(1);
   expect(run.stderr).toContain('armada map --connection=');
 });

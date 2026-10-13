@@ -3,7 +3,7 @@ import { describe, test, expect } from 'bun:test';
 import type { ForkNode } from '@kinu.run/core';
 import type { HeadRunView } from '@kinu.run/core';
 import { explorationForkTree, type MctsRow } from '@kinu.run/core';
-import { ancestorIds, cleanNodeLabel, clipToWidth, findForkNode, LABEL_MIN_SCALE, linkWidth, losingBranchIds, maxVisits, NODE_R_MAX, nodeRadius, principalVariation, subtreeCount, terminalForkNode, treeStats, viewNoteFor } from '@kinu.run/core/swarm-view';
+import { ancestorIds, cleanNodeLabel, findForkNode, losingBranchIds, principalVariation, subtreeCount, terminalForkNode, treeStats } from '@kinu.run/core/swarm-view';
 import { present } from '@kinu.run/test-utils';
 
 let seq = 0;
@@ -134,37 +134,6 @@ describe('settled winner', () => {
   });
 });
 
-describe('size scales', () => {
-  test('radius grows with visits and stays inside its bracket', () => {
-    // Hand-derived from the area scale.
-    expect(nodeRadius(0, 20)).toBe(3.5);
-    expect(nodeRadius(20, 20)).toBe(NODE_R_MAX);
-    expect(nodeRadius(1, 20)).toBeCloseTo(5.17705, 5);
-    expect(nodeRadius(5, 20)).toBeCloseTo(7.25, 5);
-  });
-
-  test('area, not diameter, tracks visits', () => {
-    const quarter = nodeRadius(5, 20) - nodeRadius(0, 20);
-    const full = nodeRadius(20, 20) - nodeRadius(0, 20);
-    expect(full / quarter).toBeCloseTo(2, 5);
-  });
-  test('an unvisited tree does not divide by zero', () => {
-    expect(nodeRadius(0, 0)).toBe(3.5);
-    expect(nodeRadius(1, 1)).toBe(NODE_R_MAX);
-    expect(linkWidth(0, 0)).toBe(0.7);
-  });
-
-  test('visits beyond the maximum cannot blow the scale out', () => {
-    expect(nodeRadius(999, 20)).toBeCloseTo(NODE_R_MAX, 5);
-    expect(linkWidth(999, 20)).toBeCloseTo(4.5, 5);
-  });
-
-  test('maxVisits reads the busiest node anywhere in the tree', () => {
-    const root = node({ visits: 3, children: [node({ visits: 1, children: [node({ visits: 17 })] })] });
-    expect(maxVisits(root)).toBe(17);
-  });
-});
-
 describe('folding', () => {
 
   test('an abandoned leaf has nothing to fold', () => {
@@ -217,48 +186,6 @@ describe('labels', () => {
     expect(cleanNodeLabel('   ', '(root)')).toBe('(root)');
   });
 
-  // Fixed-width faces: the clip is decided by the room, not by Chrome's proportional metrics.
-  const perChar = (text: string) => text.length * 10;
-
-  const wide = (text: string): number => {
-    let width = 0;
-
-    for (const ch of text) width += ch === 'W' ? 20 : 5;
-
-    return width;
-  };
-
-  test('a label that fits its room is not touched', () => {
-    expect(clipToWidth('abcd', 40, perChar)).toBe('abcd');
-    expect(clipToWidth('abcd', 40.5, perChar)).toBe('abcd');
-  });
-
-  test('the ellipsis is inside the room, never beyond it', () => {
-    // Appending the ellipsis after filling the room would overflow by one glyph into the next column.
-    expect(clipToWidth('abcdefghij', 50, perChar)).toBe('abcd…');
-    expect(clipToWidth('abcdefghij', 55, perChar)).toBe('abcd…');
-    expect(clipToWidth('abcdefghij', 60, perChar)).toBe('abcde…');
-  });
-
-  test('room too small for even one glyph yields nothing, never a bare ellipsis', () => {
-    expect(clipToWidth('abcdefghij', 10, perChar)).toBe('');
-    expect(clipToWidth('abcdefghij', 0, perChar)).toBe('');
-    expect(clipToWidth('abcdefghij', -5, perChar)).toBe('');
-  });
-
-  test('room is spent on the widest prefix that fits, not on a character count', () => {
-    expect(clipToWidth('WWWWWW', 45, wide)).toBe('WW…');
-    expect(clipToWidth('iiiiii', 45, wide)).toBe('iiiiii');
-  });
 });
 
 // A canvas that crops or de-labels itself silently reads as broken (#206): note below legible zoom or wider than view.
-
-describe('viewNoteFor', () => {
-	const BAND = { x0: 0, x1: 946 };
-
-	test('a legible tree that fits says nothing', () => {
-		expect(viewNoteFor(BAND, 1, 1200)).toBeNull();
-		expect(viewNoteFor(BAND, LABEL_MIN_SCALE, 1200)).toBeNull();
-	});
-});

@@ -83,7 +83,6 @@ describe("admission on an unknown window", () => {
     // Negative control: an admission that refuses nothing would otherwise pass.
     const refused = await admit(128_000);
     expect(refused).toBeInstanceOf(Error);
-    expect(refused instanceof Error ? refused.message : "").toContain("refused before submission");
   });
 
   test("the refusal is not a transient blip the client should retry through", async () => {

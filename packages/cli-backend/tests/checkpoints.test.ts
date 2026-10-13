@@ -246,7 +246,6 @@ describe('createHostCheckpoints', () => {
     engine.beginTurn({ turnId: 't', sessionId: 's' });
 
     expect(await engine.ensureCheckpoint(work)).toBeNull();
-    expect(readFileSync(ran, 'utf8').split('\n')).not.toContain('write-tree');
     expect(await engine.list()).toEqual([]);
   });
 

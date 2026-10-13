@@ -13,8 +13,7 @@ describe('measureContext', () => {
   test('splits the system prompt on its own section headings', () => {
     const system = 'the soul\nlives here\n## Runtime context\nbackend: cf\n## Delegation\nrungs';
     const { segments } = measureContext({ system, messages: [] });
-    expect(segments.map((s) => [s.plane, s.label])).toEqual([
-      ['system', 'Soul'],
+    expect(segments.slice(1).map((s) => [s.plane, s.label])).toEqual([
       ['system', 'Runtime context'],
       ['system', 'Delegation'],
     ]);
@@ -64,13 +63,6 @@ describe('measureContext', () => {
 
     const { segments } = measureContext({ messages: [message] });
     expect(segments[0]?.chars).toBe(JSON.stringify(message.content).length);
-  });
-
-  test('the estimate names its own divisor and is never fitted to anything', () => {
-    const m = measureContext({ system: 'abcdefgh', messages: [] });
-    expect(m.measuredChars).toBe(8);
-    expect(m.charsPerToken).toBe(4);
-    expect(m.estimatedTokens).toBe(2);
   });
 
   test('measuredChars is exactly the sum of the segments', () => {

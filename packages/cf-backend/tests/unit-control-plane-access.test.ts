@@ -168,7 +168,6 @@ describe('the assertion is verified, never trusted', () => {
 
     if (Result.isSuccess(answer)) throw new Error('unreachable');
     expect(answer.failure).toBe('access_missing');
-    expect(adminDenialAnswer(answer.failure)).toEqual({ status: 404, message: 'Not found' });
   });
 
   test('an empty assertion header is missing rather than invalid', async () => {

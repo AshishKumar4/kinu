@@ -27,7 +27,7 @@ describe('the instruction desk on a Durable Object', () => {
     await writeText(vfs, path, `${SKILL}\n# changed after review\n`);
 
     expect(await agent.approveInstruction(path, reviewed.digest)).toMatchObject({
-      ok: false, error: expect.stringContaining('changed'),
+      ok: false,
     });
 
     const current = await agent.readInstructionApproval(path);

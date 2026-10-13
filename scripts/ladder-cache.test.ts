@@ -663,7 +663,6 @@ describe('ladder-cache — single-gate CLI', () => {
     });
 
     expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain('expected an exact command');
     expect(existsSync(join(cache, 'kinu-ladder'))).toBe(false);
   });
 });

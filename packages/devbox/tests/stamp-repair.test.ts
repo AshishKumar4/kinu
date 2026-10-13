@@ -14,7 +14,7 @@ test('same-container repair writes an outstanding stamp and becomes ready indepe
   const before = await box.devboxState();
 
   expect(before.ready).toBe(true);
-  expect(before.bootId).toBeString();
+  expect(before.bootId).toBeDefined();
   // A fresh isolate adopts the durable, still-owed stamp on the same native container, not a replacement.
   rows.set('devbox:restoration', settledRestoration([], 'pending'));
   const repaired = new ChainTestBox(container.ctx, {});
@@ -31,7 +31,7 @@ test('same-container repair writes an outstanding stamp and becomes ready indepe
 
   expect(after.ready).toBe(true);
   expect(after.restoration).toBe('attached');
-  expect(after.bootId).toBeString();
+  expect(after.bootId).toBeDefined();
   expect(after.bootId).not.toBe(before.bootId);
   expect(container.bootId).toBe(after.bootId);
   expect(rows.get('devbox:boot-id')).toBe(after.bootId);

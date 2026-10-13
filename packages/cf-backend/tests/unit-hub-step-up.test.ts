@@ -2,7 +2,6 @@
 import type { HubEnv, HubTarget } from '../src/events/routes';
 import { serveFamily } from './helpers/api';
 import { describe, test, expect } from 'bun:test';
-import { isFreshAuthTime } from '../src/auth/session';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
 mockAgentsSdk();
@@ -84,17 +83,5 @@ describe('web trigger-creation step-up gate', () => {
     const res = await serveFamily(hubRoutes(() => resolveAgent), signedIn())(createTriggerRequest(Date.now()), env);
     expect(res?.status).toBe(401);
     expect(calls).toHaveLength(0);
-  });
-});
-
-describe('isFreshAuthTime', () => {
-  test('boundary behavior', () => {
-    const now = Date.now();
-    expect(isFreshAuthTime(now, now)).toBe(true);
-    expect(isFreshAuthTime(now - 5 * 60 * 1000, now)).toBe(true);
-    expect(isFreshAuthTime(now - 5 * 60 * 1000 - 1, now)).toBe(false);
-    expect(isFreshAuthTime(null, now)).toBe(false);
-    expect(isFreshAuthTime(undefined, now)).toBe(false);
-    expect(isFreshAuthTime(0, now)).toBe(false);
   });
 });

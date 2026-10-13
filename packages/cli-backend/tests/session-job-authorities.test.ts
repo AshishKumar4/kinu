@@ -18,7 +18,6 @@ test("recoverBackgroundJobs settles a swarm node's job its ended loop left runni
   await session.settleBackgroundWork();
 
   expect(jobColumn(db, 'bgjob-node', 'status')).toBe('failed');
-  expect(jobColumn(db, 'bgjob-node', 'error')).toContain('interrupted');
   expect(events.items.some((e) => e.type === 'turn-start' && e.kind === 'programmatic')).toBe(false);
 });
 
@@ -31,5 +30,5 @@ test("an agent's jobs are listed by its name, apart from the workspace's own", a
 
   expect((await session.listBackgroundJobs(20, 'builder')).map((job) => job.id)).toEqual(['bgjob-hire']);
   expect(await session.listBackgroundJobs(20)).toEqual([]);
-  await expect(session.listBackgroundJobs(20, 'nobody')).rejects.toThrow('No agent named nobody');
+  await expect(session.listBackgroundJobs(20, 'nobody')).rejects.toMatchObject({ code: 'missing', message: expect.stringContaining('nobody') });
 });

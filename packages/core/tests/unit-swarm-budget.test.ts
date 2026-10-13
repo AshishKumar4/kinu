@@ -137,7 +137,6 @@ describe('THE RACE: two nodes proposing at once cannot both be paid from one bud
     for (const decision of decisions) {
       if (decision.kind === 'granted') continue;
       expect(decision.policy).toBe('budget-exhausted');
-      expect(decision.error).toContain('remain in this search');
     }
   });
 

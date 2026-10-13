@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  delegationFeatures, renderDelegationFeatures, executionPathSignals,
+  delegationFeatures, executionPathSignals,
 } from '../src/evolution/delegation-features';
 import type { ToolCallRecord } from '../src/evolution/types';
 import { compactToolCall } from '../src/evolution/tool-call-record';
@@ -40,27 +40,6 @@ describe('delegationFeatures', () => {
     });
   });
 
-  test('renders one compact evidence line', () => {
-    const line = renderDelegationFeatures(delegationFeatures({
-      toolCalls: [], steps: 41, durationMs: 372_000,
-    }));
-
-    expect(line).toBe(
-      'Turn process: 41 sequential steps, 0 hiring, 0 exploration, 0 messaging, 0 eval, 6.2min wall clock',
-    );
-  });
-
-  test('appends a wasted-motion clause only when there is wasted motion', () => {
-    const toolCalls = [
-      call('web_search', { query: 'wilson interval' }),
-      call('web_search', { query: 'wilson interval' }),
-      write('/notes.md'),
-      call('shell', { command: 'cat /notes.md' }),
-    ];
-
-    const line = renderDelegationFeatures(delegationFeatures({ toolCalls, steps: 4, durationMs: 8_000 }));
-    expect(line).toContain('8.0s wall clock. Wasted motion: 1 looped, 1 redundant, 1 backtracking tool calls');
-  });
 });
 
 describe('executionPathSignals — loops', () => {

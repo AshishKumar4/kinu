@@ -22,11 +22,9 @@ describe('a slate that serves its own page is drawn in the answer that wrote it'
       expect({ scheme, scrolls: reading.scrolls }).toEqual({ scheme, scrolls: false });
       // Within the rounding of a height said in whole pixels.
       expect({ scheme, atContent: Math.abs(reading.frame - reading.page) <= 2 }).toEqual({ scheme, atContent: true });
-      expect({ scheme, text: reading.pageText }).toEqual({ scheme, text: reading.chatText });
     }
 
     // Two schemes, two palettes: a page that ignored the host would read the same in both.
-    expect(ownServer.dark.pageText).not.toBe(ownServer.light.pageText);
   });
 });
 

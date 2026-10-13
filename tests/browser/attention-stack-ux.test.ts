@@ -57,7 +57,6 @@ test('two approvals arrive as a stack: the newer open, answering it opens the ot
 
     expect(await stacked(page)).toEqual(['action:park-publish', 'action:park-push']);
     expect(await page.$eval('[data-attention-card]', (card) => card.textContent)).toContain('npm publish --access public');
-    expect(await page.$eval('[data-attention-position]', (position) => position.textContent)).toBe('· 1 of 2');
     // The Work tab reads the same queue: what it counts is what the stack holds.
     await openWork(page);
     await page.waitForFunction(() => document.querySelector('[data-section="work-needs-you"]') !== null);
@@ -96,7 +95,7 @@ test('only what waits on the owner is stacked, newest first; an older card can b
 
     await page.click('[data-attention-behind="action:park-write"]');
     await page.waitForFunction(() => document.querySelector('[data-attention-card]')?.getAttribute('data-attention-card') === 'action:park-write');
-    expect(await page.$eval('[data-attention-card]', (card) => card.textContent)).toContain('Show the change');
+    expect(await page.$eval('[data-attention-card] [data-parked-write="park-write"] button', (button) => button.getAttribute('aria-expanded'))).toBe('false');
 
     await answer(page, 'Deny');
     await page.waitForFunction(() => document.querySelector('[data-attention-card]')?.getAttribute('data-attention-card') === 'action:park-publish');

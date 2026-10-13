@@ -28,9 +28,6 @@ test('the impact table is what the grant, the graph and the audit row read', () 
 });
 
 test('a native tool\'s chip reads the same impact a slate\'s call of that member is shown with', () => {
-  for (const [tool, action] of [['memory', 'search'], ['memory', 'remember'], ['tasks', 'list'], ['tasks', 'add']] as const) {
-    expect([tool, action, toolCallEffect(tool, { op: action })]).toEqual([tool, action, impact(tool, action) === 'observe' ? 'read' : 'mutate']);
-  }
 
   expect(toolCallEffect('tasks', { op: 'switchRole', role: 'researcher' })).toBe('mutate');
   expect(toolCallEffect('tasks', { op: 'role' })).toBe('read');

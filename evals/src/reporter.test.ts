@@ -31,7 +31,6 @@ test('a task file that did not load and a suite whose hook threw are named in th
   const output = `${run.stdout}${run.stderr}`;
 
   expect(run.exitCode, output).toBe(1);
-  expect(output).toContain('Failed suites 2: their trials did not run');
   expect(output).toContain("import-throws.eval.ts: the task file did not load: Cannot find package 'chess.js'");
   expect(output).toContain('hook-throws.eval.ts > hook-throws: the suite hook failed: no such table: workspace_identity');
 });

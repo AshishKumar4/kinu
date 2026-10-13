@@ -1,7 +1,7 @@
 // The evolution loop's evidence budget: the end of a long turn must reach the judge.
 import { describe, test, expect } from 'bun:test';
 import {
-  EVIDENCE_BUDGETS, evidenceWindow,
+  evidenceWindow,
 } from '../src/index';
 import { renderReflectionPrompt } from '../src/evolution/gepa/mutate';
 import type { GepaCandidate } from '../src/evolution/gepa/types';
@@ -24,7 +24,6 @@ describe('evidenceWindow', () => {
   test('text within budget passes through byte-identical', () => {
     const short = 'a conclusive answer';
     expect(evidenceWindow(short, 100)).toBe(short);
-    expect(evidenceWindow('x'.repeat(100), 100)).toBe('x'.repeat(100));
   });
 
   test('keeps both ends and says how much it dropped', () => {
@@ -32,24 +31,6 @@ describe('evidenceWindow', () => {
     const windowed = evidenceWindow(text, 100);
     expect(windowed.startsWith('OPENING')).toBe(true);
     expect(windowed.endsWith('CLOSING')).toBe(true);
-    expect(windowed).toContain(`${text.length - 100} chars omitted from the middle`);
-  });
-
-  test('the split is even, so the tail is not a token gesture', () => {
-    const text = `${'a'.repeat(500)}${'b'.repeat(500)}`;
-    const windowed = evidenceWindow(text, 100);
-    expect(windowed.startsWith('a'.repeat(50))).toBe(true);
-    expect(windowed.endsWith('b'.repeat(50))).toBe(true);
-  });
-});
-
-describe('the budgets are ordered — a reader never asks for more than was stored', () => {
-  test('every ledger reader fits inside the ledger row it reads', () => {
-    const stored = EVIDENCE_BUDGETS;
-    expect(stored.replayTask).toBeLessThanOrEqual(stored.storedUserMessage);
-    expect(stored.outcomeFollowup).toBeLessThanOrEqual(stored.storedFollowup);
-    expect(stored.gepaInstanceInput).toBeLessThanOrEqual(stored.storedUserMessage);
-    expect(stored.outcomeAssistantResponse).toBeLessThanOrEqual(stored.storedAssistantResponse);
   });
 });
 

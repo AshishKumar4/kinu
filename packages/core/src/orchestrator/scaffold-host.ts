@@ -134,7 +134,7 @@ async function* streamScaffoldChat(
 }
 
 /** Page size, defaulted and capped: the scaffold pages rather than ingests. */
-export const SCAFFOLD_HISTORY_DEFAULT_LIMIT = 20;
+const SCAFFOLD_HISTORY_DEFAULT_LIMIT = 20;
 
 export const SCAFFOLD_HISTORY_MAX_LIMIT = 100;
 

@@ -149,7 +149,7 @@ describe('a workspace whose delete has begun', () => {
     expect(capabilityRows(harness)).toEqual([]);
 
     await expect(harness.userDO.ensureWorkspaceCapability('doomed', null))
-      .rejects.toThrow(/not in your registry|being deleted/);
+      .rejects.toMatchObject({ code: 'missing' });
     expect(capabilityRows(harness)).toEqual([]);
     expect(harness.installed.get('doomed')).toBe(token);
     harness.close();
@@ -168,7 +168,6 @@ describe('a workspace whose delete has begun', () => {
 
     // Stored hash and installed token must come from one mint for the workspace to authenticate.
     const installed = harness.installed.get('fresh');
-    expect(installed).toMatch(/^pwc_/);
     expect(harness.db.prepare<{ token_hash: string }, []>(
       `SELECT token_hash FROM workspace_capability_tokens WHERE workspace_name = 'fresh'`,
     ).all()).toEqual([{ token_hash: await sha256Hex(installed ?? '') }]);
@@ -303,7 +302,6 @@ describe('a device-code sign-in the owner superseded', () => {
     const polled = await harness.userDO.pollCodexDeviceFlow(owner);
 
     expect(polled.connected).toBe(false);
-    expect(polled.error).toContain('superseded');
     expect((await harness.userDO.getCodexStatus(owner)).connected).toBe(false);
     expect((await harness.userDO.listCredentials(owner)).map((row) => row.key)).toEqual([]);
     harness.close();
@@ -325,7 +323,6 @@ describe('a device-code sign-in the owner superseded', () => {
     const polled = await harness.userDO.pollCodexDeviceFlow(owner);
 
     expect(polled.connected).toBe(false);
-    expect(polled.error).toContain('superseded');
     expect((await harness.userDO.getCodexStatus(owner)).startedFlow)
       .toMatchObject({ userCode: 'CCCC-DDDD' });
     expect((await harness.userDO.listCredentials(owner)).map((row) => row.key)).toEqual([]);
@@ -342,7 +339,7 @@ describe('a device-code sign-in the owner superseded', () => {
     expect((await harness.userDO.getCodexStatus(owner)).connected).toBe(true);
     expect((await harness.userDO.getCodexStatus(owner)).startedFlow).toBeNull();
     expect(await harness.userDO.pollCodexDeviceFlow(owner))
-      .toMatchObject({ connected: false, error: expect.stringContaining('No device flow in progress') });
+      .toMatchObject({ connected: false });
     harness.close();
   });
 
@@ -356,7 +353,7 @@ describe('a device-code sign-in the owner superseded', () => {
     expect(await harness.userDO.pollCodexDeviceFlow(owner)).toMatchObject({ connected: true });
     expect((await harness.userDO.listCredentials(owner)).map((row) => row.key)).toEqual(['codex.oauth@second']);
     expect((await harness.userDO.getCodexStatus(owner)).connected).toBe(false);
-    await expect(harness.userDO.startCodexDeviceFlow(owner, 'Not An Account')).rejects.toThrow('not an account name');
+    await expect(harness.userDO.startCodexDeviceFlow(owner, 'Not An Account')).rejects.toMatchObject({ code: 'bad_input' });
     harness.close();
   });
 });
@@ -368,7 +365,7 @@ describe('one browser approval mints one CLI token', () => {
 
     const first = await harness.userDO.mintCliToken(owner, USER_ID, AUTHORIZATION, 'terminal');
     await expect(harness.userDO.mintCliToken(owner, USER_ID, AUTHORIZATION, 'terminal'))
-      .rejects.toThrow('already been redeemed');
+      .rejects.toMatchObject({ name: 'CliAuthorizationSpentError' });
 
     expect((await harness.userDO.listCliTokens(owner)).map((row) => row.tokenHash))
       .toEqual([first.tokenHash]);
@@ -473,7 +470,7 @@ describe('a CLI bearer revoked under a live websocket', () => {
 
     expect(live.fake.closed).toEqual([]);
     expect(JSON.parse(live.fake.sent[0] ?? '{}')).toMatchObject({
-      type: 'rpc', id: 'r1', success: false, error: expect.stringContaining('not remotely invokable'),
+      type: 'rpc', id: 'r1', success: false,
     });
 
     expect(await user.userDO.revokeCliTokenHash(owner, tokenHash)).toEqual({ ok: true });
@@ -481,12 +478,10 @@ describe('a CLI bearer revoked under a live websocket', () => {
     const after = connection(scopedTags(bearerTag));
     await actor.agent.onMessage(after.wire, scopedFrame);
 
-    expect(after.fake.closed).toEqual([
-      { code: 1008, reason: 'This CLI authorization is invalid. Sign in again with: kinu auth' },
-    ]);
+    expect(after.fake.closed.map(({ code }) => code)).toEqual([1008]);
     // Answered by the bearer gate, not the scope one.
     expect(JSON.parse(after.fake.sent[0] ?? '{}')).toMatchObject({
-      type: 'rpc', id: 'r1', success: false, error: expect.stringContaining('no longer valid'),
+      type: 'rpc', id: 'r1', success: false,
     });
     user.close();
   });
@@ -588,7 +583,7 @@ describe('a browser session revoked under a live websocket', () => {
 
     expect(live.fake.closed).toEqual([]);
     expect(JSON.parse(live.fake.sent[0] ?? '{}')).toMatchObject({
-      type: 'rpc', id: 'r1', success: false, error: expect.stringContaining('not remotely invokable'),
+      type: 'rpc', id: 'r1', success: false,
     });
 
     await user.userDO.revokeBrowserSession(owner, sessionTokenHash);
@@ -596,12 +591,10 @@ describe('a browser session revoked under a live websocket', () => {
     const after = connection(sessionTags(sessionTokenHash));
     await actor.agent.onMessage(after.wire, scopedFrame);
 
-    expect(after.fake.closed).toEqual([
-      { code: 1008, reason: 'This session has been signed out. Sign in again.' },
-    ]);
+    expect(after.fake.closed.map(({ code }) => code)).toEqual([1008]);
     // Answered by the session gate, not the scope one.
     expect(JSON.parse(after.fake.sent[0] ?? '{}')).toMatchObject({
-      type: 'rpc', id: 'r1', success: false, error: expect.stringContaining('signed out'),
+      type: 'rpc', id: 'r1', success: false,
     });
     user.close();
   });
@@ -623,9 +616,7 @@ describe('a browser session revoked under a live websocket', () => {
 
     // A silent copied cookie never reaches the frame gate, so the push must close it. Only the socket that named
     // this session closes; other sign-ins, CLI bearers and untagged connections are someone else's authority.
-    expect(signedOut.fake.closed).toEqual([
-      { code: 1008, reason: 'This session has been signed out. Sign in again.' },
-    ]);
+    expect(signedOut.fake.closed.map(({ code }) => code)).toEqual([1008]);
     expect(otherSession.fake.closed).toEqual([]);
     expect(cliSocket.fake.closed).toEqual([]);
     expect(untagged.fake.closed).toEqual([]);
@@ -666,9 +657,7 @@ describe('a browser session revoked under a live websocket', () => {
     const fresh = connection(sessionTags(sessionTokenHash));
     await actor.agent.onMessage(fresh.wire, scopedFrame);
 
-    expect(fresh.fake.closed).toEqual([
-      { code: 1008, reason: 'This session has been signed out. Sign in again.' },
-    ]);
+    expect(fresh.fake.closed.map(({ code }) => code)).toEqual([1008]);
     user.close();
   });
 

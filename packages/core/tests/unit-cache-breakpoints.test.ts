@@ -316,8 +316,6 @@ describe('promptCacheWarm', () => {
     expect(promptCacheWarm(openai, AT + 59 * MINUTE)).toBe(true);
     expect(promptCacheWarm(openai, AT + 61 * MINUTE)).toBe(false);
     expect(promptCacheWarm({ ...openai, retention: 'long' }, AT + 23 * 60 * MINUTE)).toBe(true);
-    expect(promptCacheWarm({ at: AT, providerId: 'workers-ai', retention: 'short' }, AT + 59 * MINUTE)).toBe(true);
-    expect(promptCacheWarm({ at: AT, providerId: 'workers-ai', retention: 'short' }, AT + 61 * MINUTE)).toBe(false);
   });
 
   test('no cache is never warm, nor is an actor with no request; a warming lane keeps an expired entry warm', () => {

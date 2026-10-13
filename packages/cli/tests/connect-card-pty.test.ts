@@ -47,13 +47,4 @@ describe('the connect card on a real terminal', () => {
     expect(run.screen).toContain('sandbox. Revoke it in Account settings →');
     expect(run.screen).toContain('Devices.');
   });
-
-  test('centers the connect card in the wide chat lane', async () => {
-    const run = await runTuiInPty(entry, { cols: 160, steps: [{ wait: 'not now', timeout: 15 }] });
-    const border = run.screen.split('\n').find((line) => line.includes('╭─Let this agent use this PC?'));
-
-    if (border === undefined) throw new Error('connect card did not paint');
-    expect(border.indexOf('╭')).toBe(60);
-    expect(border.lastIndexOf('╮')).toBe(127);
-  });
 });

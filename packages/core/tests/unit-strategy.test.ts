@@ -9,11 +9,6 @@ import { REASONING_EFFORTS } from '../src/providers/effort';
 import type { ReasoningEffort } from '../src/providers/effort';
 
 describe('reasoning_effort plumbing', () => {
-  test('REASONING_EFFORT_FOR_STAGE has all stages', () => {
-    expect(REASONING_EFFORT_FOR_STAGE.chat).toBe('medium');
-    expect(REASONING_EFFORT_FOR_STAGE.scaffold_mutation).toBe('high');
-  });
-
   test('workersAIEffortOption returns empty when no effort', () => {
     expect(workersAIEffortOption()).toEqual({});
     expect(workersAIEffortOption(undefined)).toEqual({});

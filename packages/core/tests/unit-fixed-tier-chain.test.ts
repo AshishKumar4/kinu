@@ -116,9 +116,12 @@ test('a tier the owner must fix is said once, naming the tier and the model, unt
   await expect(completeOnRoute(route('gateway/unfunded'), lane, 'one')).rejects.toThrow();
   await expect(completeOnRoute(route('gateway/unfunded'), lane, 'two')).rejects.toThrow();
 
-  expect(said()).toEqual([
-    'Your fast tier is refusing requests. gateway/unfunded: Upstream request failed: Insufficient account funds (HTTP 402, server_error). Change it in Settings → Models.',
-  ]);
+  expect(said()).toEqual([expect.stringContaining('gateway/unfunded')]);
+  expect(said()[0]).toContain('fast');
+  expect(said()[0]).toContain('Upstream request failed: Insufficient account funds');
+  expect(said()[0]).toContain('402');
+  expect(said()[0]).toContain('server_error');
+  expect(said()[0]).toContain('Settings → Models');
 
   // The tier answers once, and a later refusal is news again.
   answers.delete('gateway/unfunded');
@@ -153,7 +156,8 @@ test('a spent plan on the tier is said once, where a busy one says nothing', asy
   await expect(completeOnRoute(route('chatgpt/gpt-6.1-sol'), lane, 'two')).rejects.toThrow();
 
   expect(said()).toHaveLength(1);
-  expect(said()[0]).toContain('Your fast tier is refusing requests. chatgpt/gpt-6.1-sol: ');
+  expect(said()[0]).toContain('fast');
+  expect(said()[0]).toContain('chatgpt/gpt-6.1-sol');
   expect(said()[0]).toContain('https://chatgpt.com/settings/usage');
 });
 

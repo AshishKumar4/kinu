@@ -81,9 +81,9 @@ describe('one workspace actor directory', () => {
     const second = workspace('second', 'owner');
     const main = first.directory.createMain({ name: 'main' });
     second.directory.createMain({ name: 'main' });
-    expect(() => second.directory.resolveChild(main, 'child')).toThrow('another actor directory');
-    expect(() => first.directory.resolveChild({ ...main }, 'child')).toThrow('another actor directory');
-    expect(() => new WorkspaceActorDirectory(first.sql, { workspaceId: 'first', ownerUserId: 'foreign' })).toThrow('Workspace ownership');
+    expect(() => second.directory.resolveChild(main, 'child')).toThrow(expect.objectContaining({ code: 'denied' }));
+    expect(() => first.directory.resolveChild({ ...main }, 'child')).toThrow(expect.objectContaining({ code: 'denied' }));
+    expect(() => new WorkspaceActorDirectory(first.sql, { workspaceId: 'first', ownerUserId: 'foreign' })).toThrow(expect.objectContaining({ code: 'denied' }));
   });
   test('retirement survives a wake and holds the alias until deletion completes', () => {
     const { directory, sql } = workspace('workspace', 'owner');
@@ -221,7 +221,7 @@ describe('one workspace actor directory', () => {
       return Promise.resolve('turn');
     });
 
-    await expect(send(background.actorId)).rejects.toMatchObject({ code: 'denied', message: expect.stringContaining('view-only') });
+    await expect(send(background.actorId)).rejects.toMatchObject({ code: 'denied' });
     await expect(send(hire.actorId)).resolves.toBe('turn');
     expect(sent).toEqual([hire.actorId]);
   });

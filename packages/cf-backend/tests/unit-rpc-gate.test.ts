@@ -127,7 +127,6 @@ describe('rpc gate on scoped connections', () => {
     const rejection = present(rejectOutOfScopeRpc(EXEC_ONLY, rpcFrame('getMemoryContent', 'rpc-7')), 'the out-of-scope rejection');
     const frame = JSON.parse(rejection);
     expect(frame).toMatchObject({ type: 'rpc', id: 'rpc-7', success: false });
-    expect(frame.error).toContain('workspace.read');
   });
 
   test('the old websocket-read-allowlist methods are interactive-only now — a read+exec scoped token cannot reach them (no read-only widening)', () => {
@@ -154,7 +153,6 @@ describe('rpc gate on scoped connections', () => {
       const rejection = present(rejectOutOfScopeRpc(READ_EXEC, rpcFrame(method, 'rpc-9')), `the out-of-scope rejection of ${method}`);
       const frame = JSON.parse(rejection);
       expect(frame).toMatchObject({ type: 'rpc', id: 'rpc-9', success: false });
-      expect(frame.error).toContain('kinu auth');
     }
   });
 

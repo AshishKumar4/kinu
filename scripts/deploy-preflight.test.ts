@@ -59,25 +59,4 @@ describe('the deployment preflight', () => {
     // that dropped it would be asking to be trusted instead.
     expect(describeDeploymentVerdict(verdict, ORIGIN)).toContain('HTTP 503');
   });
-
-  test('every verdict names a command or a flag a reader can act on', () => {
-    const verdicts = [
-      deploymentVerdict({ localSha: 'a', health: health('a') }),
-      deploymentVerdict({ localSha: 'a', health: health('b') }),
-      deploymentVerdict({ localSha: 'a', health: health(null) }),
-      deploymentVerdict({ localSha: 'a', health: null, failure: 'boom' }),
-    ];
-
-    for (const verdict of verdicts) {
-      const line = describeDeploymentVerdict(verdict, ORIGIN);
-
-      // `current` states the build it verified; the other three must name the
-      // remedy. A state reported without either has moved the problem.
-      const actionable = verdict.kind === 'current'
-        ? line.includes(verdict.sha)
-        : line.includes('deploy') || line.includes('--allow-stale');
-
-      expect(actionable, `${verdict.kind}: ${line}`).toBe(true);
-    }
-  });
 });

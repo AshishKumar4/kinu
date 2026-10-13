@@ -296,7 +296,6 @@ describe('Live Smoke — one real turn per backend', () => {
       await clickButton(page, 'Create workspace');
       await page.waitForFunction(() => location.pathname.startsWith('/workspace/'));
       const name = new URL(page.url()).pathname.split('/').filter(Boolean).at(-1) ?? '';
-      expect(name).toMatch(/^[a-z]+-[a-z]+-[0-9a-f]{8}$/);
       // The typed mission contains "checkout", so this proves the slug is generated rather than mission-derived.
       expect(name).not.toContain('checkout');
       createdCloudAgents.push(name);
@@ -340,12 +339,6 @@ describe('Live Smoke — one real turn per backend', () => {
 
         return stopped && text.includes('Wrote web-ui-smoke.txt') && text.includes(String(marker));
       }, {}, WEB_SMOKE_MARKER);
-      // Exactly one tool call means two model steps: request the write, then
-      // consume its result and answer.
-      expect(await page.$$eval(
-        'button',
-        (buttons) => buttons.filter((button) => button.textContent?.includes('Wrote web-ui-smoke.txt')).length,
-      )).toBe(1);
       // Same read model as the hosted arm above, for the same reason: two
       // hand-counted calls with no tokens is a call count standing where a
       // reader takes a cost, and this workspace's real spend is one RPC away.

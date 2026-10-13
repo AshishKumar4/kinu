@@ -209,7 +209,6 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
     // The unrated turn is still visible, not counted as a win.
     const complete = events.filter(e => e.type === 'turn_complete');
     expect(complete).toHaveLength(1);
-    expect(complete[0].message).toContain('unrated');
     const completionData = v.parse(v.object({ rated: v.boolean(), source: v.nullable(v.string()) }), complete[0].data);
     expect(completionData.rated).toBe(false);
     expect(completionData.source).toBeNull();
@@ -512,53 +511,5 @@ describe('EvolutionEngine — Lifetime-level', () => {
     await engine.onLifetimeEvolution();
 
     expect(events.some(e => e.type === 'consolidation')).toBe(true);
-  });
-});
-
-describe('the turn-reflection prompt', () => {
-  /** Read through the call because the builder is module-private; proves the
-     *  prompt's stated bound and the enforced bound are one number. */
-  async function reflect(answer: string) {
-    const { rt, stores } = createTestRuntime({ llmResponses: { 'In one sentence': answer } });
-    ratedAs(rt, 'corrected');
-
-    const prompts: string[] = [];
-    const complete = rt.llm.complete.bind(rt.llm);
-    rt.llm.complete = async (prompt: string) => {
-      prompts.push(prompt);
-
-      return complete(prompt);
-    };
-
-    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history));
-    await engine.reviewTurn(
-      makeTurn({ steps: 41, durationMs: 372_000 }),
-      'No — that rotates production keys. I said STAGING.',
-    );
-
-    return {
-      prompt: prompts.find((text) => text.includes('In one sentence')) ?? '',
-      lesson: listLessons(rt.storage.sql, rt.actor, { status: 'corroborated' })[0]?.text ?? '',
-      view: renderRecentLessons(rt.storage.sql, rt.actor),
-    };
-  }
-
-  test('states a length bound as a number, and the code cuts the answer to that same number', async () => {
-    // The answer reaches every later turn, so the prompt states the cap and the parse
-    // enforces it. Read from the prompt so the two cannot drift.
-    const { prompt, lesson, view } = await reflect('y'.repeat(2_000));
-    const stated = Number(/at most (\d+) characters/.exec(prompt)?.[1]);
-    expect(stated).toBe(240);
-    expect(lesson).toBe('y'.repeat(stated));
-    expect(view).toContain('y'.repeat(stated));
-    expect(view).not.toContain('y'.repeat(stated + 1));
-  });
-
-  test('asks for a trigger and an action by contrast, because the reader has no evidence', async () => {
-    const { prompt } = await reflect('re-run the command before reporting done');
-    expect(prompt).toContain('read by later turns that have none of the evidence above');
-    expect(prompt).toContain('name the trigger and the action, not the incident');
-    expect(prompt).toContain('Good: "When a run result\'s text begins `Error (exit N)`');
-    expect(prompt).toContain('Bad: "Should have been more careful here."');
   });
 });

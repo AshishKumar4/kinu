@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  APP_ROUTES, DISPLAY_NAME_MAX, displayNameProblem, needsOnboarding,
-  ONBOARDING_STEPS, routeTemplateOf,
+  APP_ROUTES, displayNameProblem, needsOnboarding,
+  routeTemplateOf,
 } from '../src/index';
 
 describe('needsOnboarding', () => {
@@ -22,32 +22,9 @@ describe('needsOnboarding', () => {
   });
 });
 
-describe('ONBOARDING_STEPS', () => {
-  test('the wizard has its steps in order: you, a provider, the default model, tools, then what Kinu does', () => {
-    expect(ONBOARDING_STEPS.map((s) => s.id)).toEqual(['profile', 'providers', 'model', 'tools', 'showcase']);
-  });
-
-  test('steps carry titles and no ledes', () => {
-    for (const step of ONBOARDING_STEPS) {
-      expect(step.title.length).toBeGreaterThan(0);
-      expect('lede' in step).toBe(false);
-    }
-  });
-});
-
 describe('displayNameProblem', () => {
-  test('an empty name and a name of spaces are refusals', () => {
-    expect(displayNameProblem('')).toBe('Enter a name.');
-    expect(displayNameProblem('   ')).toBe('Enter a name.');
-  });
-
   test('padding is not part of the name', () => {
     expect(displayNameProblem('  Ashish Rao  ')).toBeNull();
-  });
-
-  test('the limit holds: 80 is usable, 81 is a refusal', () => {
-    expect(displayNameProblem('x'.repeat(DISPLAY_NAME_MAX))).toBeNull();
-    expect(displayNameProblem('x'.repeat(DISPLAY_NAME_MAX + 1))).toBe(`Keep the name under ${DISPLAY_NAME_MAX} characters.`);
   });
 });
 

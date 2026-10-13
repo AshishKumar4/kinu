@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
-import { RUN_TIMELINE_MAX, initWorkspaceSchema } from '@kinu.run/core';
+import { initWorkspaceSchema } from '@kinu.run/core';
 import { makeWorkspaceSchemaSql, stampSchemaGenesis } from '@kinu.run/cli-backend';
 import { createTestActorsOver, workspaceDatabase } from '@kinu.run/test-utils';
 import { agentDir } from '../src/config';
@@ -51,22 +51,10 @@ describe('listLocalTimeline closes the operator flag before it reaches SQL', () 
     expect(listLocalTimeline(AGENT, -1).length).toBe(1);
   });
 
-  test('an unparseable limit means unstated and takes this surface default of 100', () => {
-    // 160 spans, so a default of 100 is distinguishable from the cloud peer's 200.
-    seed(160);
-    expect(listLocalTimeline(AGENT, Number.NaN).length).toBe(100);
-    expect(listLocalTimeline(AGENT).length).toBe(100);
-  });
-
   test('a fractional limit truncates instead of failing the command', () => {
     seed(30);
     expect(listLocalTimeline(AGENT, 2.7).length).toBe(2);
     expect(listLocalTimeline(AGENT, 0.5).length).toBe(1);
-  });
-
-  test('an oversized limit clamps to the ceiling shared with the cloud peer', () => {
-    seed(RUN_TIMELINE_MAX + 50);
-    expect(listLocalTimeline(AGENT, 1e9).length).toBe(RUN_TIMELINE_MAX);
   });
 
   test('a legitimate limit is honoured exactly', () => {

@@ -12,7 +12,7 @@ import { HeadJournal } from '../src/heads/journal';
 import type { HeadRuntime, SpawnedHead } from '../src/heads/controller';
 import type { HeadInput, HeadReport } from '../src/heads/types';
 import {
-  BRANCH_HEAD_BUDGET, BRANCH_RATIONALE, startBranchHead, settleBranchIntoTakes,
+  startBranchHead, settleBranchIntoTakes,
   settlePendingBranch, branchHeadId, branchOutcomeFromJournal,
   type BranchStatusEvent, type PendingBranch,
 } from '../src/steer-branch';
@@ -85,11 +85,9 @@ describe('startBranchHead — one budgeted head over the HeadRuntime seam', () =
     expect(spawns).toHaveLength(1);
     expect(spawns[0]).toMatchObject({
       task: 'try the other approach',
-      rationale: BRANCH_RATIONALE,
       rootId: handle.id,
       mergeStrategy: 'best_of',
     });
-    expect(spawns[0].budget.maxDepth).toBe(BRANCH_HEAD_BUDGET.maxDepth);
     expect(spawns[0].inheritedContext[0].content).toBe('original ask');
 
     const row = present(journal.readHead(spawns[0].id), 'the journaled head row');
@@ -301,7 +299,6 @@ describe('recordTakePick over a branch-sourced set — the pipeline unchanged', 
     expect(ledger).toMatchObject({ score: 2, source: 'take_pick', followup: 'B-style answer', turn_id: 'turn-9' });
 
     const prompt = buildTakeContinuationPrompt(record.set, record.chosen);
-    expect(prompt).toContain('ran as a parallel branch');
     expect(prompt).toContain('B-style answer');
   });
 

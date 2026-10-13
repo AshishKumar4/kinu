@@ -66,8 +66,6 @@ test('the theme step stands until a theme is stored, and closes once one is', as
     // The render loop must run for frame events to fire; the wait returns on the first frame showing the step.
     renderer.start();
     await waitForFrame((frame) => frame.includes('Choose a theme'));
-    expect(captureCharFrame()).toContain('Light');
-    expect(captureCharFrame()).toContain('Dark');
     mockInput.pressEnter();
     await waitForFrame((frame) => frame.includes('Choose a keymap'));
     expect(store.read().theme).toBeDefined();

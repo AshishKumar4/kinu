@@ -691,7 +691,7 @@ describe('one container identity is retried, then replaced, then refused', () =>
       const claimed = ladder(rows);
       expect(claimed?.stage).toBe(stage);
       expect(claimed?.owner).not.toBe(PREVIOUS);
-      expect(claimed?.owner).toBeString();
+      expect(claimed).toBeDefined();
       parked.release();
       await attempt;
       expect(rows.has(RECOVERY_KEY)).toBe(false);

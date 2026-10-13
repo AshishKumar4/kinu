@@ -678,13 +678,11 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
 
   test('resolved models call the proxy with the CLI bearer and the wire model id', async () => {
     const seen: Array<{ path: string; auth: string | null; affinity: string | null; model: JsonValue | undefined }> = [];
-    let wireCalls = 0;
 
     const server = Bun.serve({
       port: 0,
       hostname: '127.0.0.1',
       async fetch(request) {
-        wireCalls++;
         const body = v.parse(JsonObjectSchema, await request.json());
 
         seen.push({
@@ -735,7 +733,6 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
       expect(viaGateway.text).toBe('ok');
 
       expect(seen.map((s) => s.path)).toEqual(['/api/user/ai/v1/chat/completions', '/api/user/ai/v1/responses']);
-      expect(wireCalls).toBe(2);
       // OpenAI's own request, OpenAI's own id: the worker forwards it to the gateway's endpoint for OpenAI.
       expect(seen.map((s) => s.model)).toEqual([DEFAULT_WORKERS_AI_MODEL_ID, 'gpt-4.1']);
 

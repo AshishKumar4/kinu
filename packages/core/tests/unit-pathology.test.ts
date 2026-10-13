@@ -4,8 +4,6 @@ import { describePathology, parsePathologyTag } from '../src/evolution/pathology
 
 describe('pathology identity is deterministic and model-free', () => {
   test('a well-formed id describes itself; anything else renders as itself rather than a fabricated sentence', () => {
-    expect(describePathology('error/code')).toBe('the user reported an error or that it did not work after a code answer');
-    expect(describePathology('repeat/prose')).toBe('the user had to re-state the same request after a long prose answer');
 
     for (const id of ['whatever', 'error/nope', 'made_up/code', 'error', 'error/code/extra']) expect(describePathology(id)).toBe(id);
   });

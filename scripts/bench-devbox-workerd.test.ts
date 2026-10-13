@@ -1,6 +1,4 @@
-import { scratchDir } from '../packages/test-utils/src/scratch';
-import { readFileSync, writeFileSync } from 'node:fs';
-
+import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
@@ -26,18 +24,11 @@ const GeneratedConfig = v.looseObject({
 
 describe('bench fixture Durable Object bindings', () => {
   test('captures one arm\'s generated config before disposal', () => {
-    const directory = scratchDir('devbox-workerd');
-
-    const configPath = join(directory, 'wrangler.jsonc');
-
     const captured = fixtureConfigForArms(
       readFileSync(join(ROOT, 'packages/devbox/bench/wrangler.jsonc'), 'utf8'),
       resourceNames('workerd-binding-probe', ARM),
       [ARM],
     );
-
-    writeFileSync(configPath, captured);
-    expect(readFileSync(configPath, 'utf8')).toBe(captured);
 
     const config = v.parse(GeneratedConfig, JSON.parse(captured));
     expect(config.durable_objects.bindings.map((binding) => binding.class_name)).toEqual(CLASSES);

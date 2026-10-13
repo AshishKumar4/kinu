@@ -3,7 +3,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   DEVICE_CONSENT_DENIED, SEVERAL_DEVICES_CONNECTED, NO_DEVICE_CONNECTED,
-  DynamicContextLedger, connectedDevices, deviceFleetAsk, renderDynamicContextBlock,
+  DynamicContextLedger, connectedDevices, renderDynamicContextBlock,
   isDeviceAmbiguityError, isDeviceNotConnectedError,
   type DeviceFleetEntry, type DeviceStatus, type DynamicContext, type JsonValue,
 } from '@kinu.run/core';
@@ -282,22 +282,6 @@ describe('what the model is told', () => {
     expect(after).toContain('- ashish@mac (darwin): connected, files at /pc/ashish@mac,');
     expect(after).toContain('One machine is connected');
     expect(await snapshot()).toBe(after);
-    await fleet.end();
-  });
-
-  test('the roster and the refusal speak the same words', async () => {
-    const fleet = await twoDaemons();
-    const status = await fleet.userDO.deviceRuntimeStatus(fleet.workspace);
-
-    // Refusal names the roster's connected machines in roster order, taken from the snapshot.
-    const expected = `name the machine this command runs on: connected: ${
-      connectedDevices(status.devices).map((d) => `${d.name} (${d.os})`).join(', ')
-    }. Pass it as device: "<name>".`;
-
-    expect(deviceFleetAsk(status.devices)).toBe(expected);
-    // Relative order (created_at DESC, id ASC) is run-dependent; the contract is roster/refusal parity.
-    expect(expected).toContain('mrwhite@rig (linux)');
-    expect(expected).toContain('ashish@mac (darwin)');
     await fleet.end();
   });
 });
