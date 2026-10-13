@@ -80,8 +80,9 @@ function pictureSrc(picture: Picture, at: ChatImageSource): string {
   return picture.kind === "data" ? picture.src : picture.url;
 }
 
-function pictureName(picture: Picture): string {
-  if (picture.kind === "file") return picture.path;
+/** A picture's name as the chat writes paths: a workspace file from its home, any other from its root. */
+function pictureName(picture: Picture, home: string): string {
+  if (picture.kind === "file") return picture.path.startsWith(`${home}/`) ? picture.path.slice(home.length + 1) : picture.path;
 
   return picture.kind === "data" ? picture.label : picture.url;
 }
@@ -157,7 +158,7 @@ function Shot({ picture, size, onOpen }: { readonly picture: Picture; readonly s
   }
 
   if (picture.kind === "file" && state === "missing") {
-    return <Note icon={ImageBrokenIcon}>{WHERE[picture.machine].missing}: <span className="font-mono p-text-2">{picture.path}</span></Note>;
+    return <Note icon={ImageBrokenIcon}>{WHERE[picture.machine].missing}: <span className="font-mono p-text-2">{pictureName(picture, at.home)}</span></Note>;
   }
 
   if (picture.kind === "web" && state === "missing") {
@@ -165,7 +166,7 @@ function Shot({ picture, size, onOpen }: { readonly picture: Picture; readonly s
   }
 
   const src = pictureSrc(picture, at);
-  const name = pictureName(picture);
+  const name = pictureName(picture, at.home);
 
   return (
     <figure className="p-shot my-2" data-size={size} data-chat-image={picture.kind}>
@@ -224,7 +225,7 @@ export function Lightbox({ pictures, index, onIndex, onClose }: {
 
   if (at === null || picture === undefined) return null;
   const src = pictureSrc(picture, at);
-  const name = pictureName(picture);
+  const name = pictureName(picture, at.home);
 
   // Above every pane, whatever transform an answer's entrance leaves on its column.
   return createPortal(
