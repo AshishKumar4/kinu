@@ -2154,10 +2154,14 @@ export class ChatSession {
     closed();
   }
 
-  /** A turn that ended before an answer committed: its end ({@link endTurn}) carries the failure on its answer, where a
-   *  reload reads it. A close that fails is logged; the turn stays open, as a death there would leave it. */
+  /**
+   * A turn that ended before an answer committed: its end ({@link endTurn}) carries the failure on its answer, where a
+   * reload reads it. One whose answer cannot be written still closes, without it: its room was told. A close that fails
+   * even so is logged, and the turn stays open, as a death there would leave it.
+   */
   private async endFailed(item: QueueItem, lease: ActorTurnLease, end: RunEndClassification): Promise<void> {
     let answer: PreparedConversationEntry | null = null;
+    let closed = false;
 
     // Without it, the turn still closes: its failure is told its room, not kept on an answer.
     if (end.error !== undefined && !this.transcript.has(this.messageId)) {
@@ -2170,8 +2174,19 @@ export class ChatSession {
       });
     }
 
+    const failure = answer;
+
+    if (failure !== null) {
+      settleLoggedSync('turn.failure_unrecorded', { doing: "closing a turn with its failure's answer", otherwise: 'io' }, () => {
+        this.endTurn({ item, lease, end, answer: failure, roster: null });
+        closed = true;
+      });
+    }
+
+    if (closed) return;
+
     settleLoggedSync('turn.persist_failed', { doing: 'closing a turn that ended without its answer', otherwise: 'io' }, () => {
-      this.endTurn({ item, lease, end, answer, roster: null });
+      this.endTurn({ item, lease, end, answer: null, roster: null });
     });
   }
 
