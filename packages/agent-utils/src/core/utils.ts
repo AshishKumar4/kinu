@@ -28,14 +28,15 @@ export function serialQueue(): <T>(op: () => Promise<T>) => Promise<T> {
 
 /**
  * Run `work` but stop waiting when `signal` aborts. An already-aborted signal rejects with `message`
- * without starting work; a later abort rejects with what `terminate` resolves. Without `terminate`
- * only the wait is cancelled, and `message` must say so. `terminate` must resolve, not throw.
+ * without starting work; a later abort rejects with what `terminate` resolves, or, where it resolves null (it found the
+ * work never dispatched), as the already-aborted signal does. Without `terminate` only the wait is cancelled, and
+ * `message` must say so. `terminate` must resolve, not throw.
  */
 export async function raceAbort<T>(
 	work: () => Promise<T>,
 	signal: AbortSignal | undefined,
 	message: string,
-	terminate?: () => Promise<string>,
+	terminate?: () => Promise<string | null>,
 ): Promise<T> {
 	if (!signal) return work();
 	const abortError = (text: string) => new DOMException(text, "AbortError");
@@ -75,7 +76,7 @@ export async function raceAbort<T>(
 
 		if (!terminate) throw abortError(message);
 
-		let text: string;
+		let text: string | null;
 
 		try {
 			text = await terminate();
@@ -85,7 +86,7 @@ export async function raceAbort<T>(
 			throw failure;
 		}
 
-		throw abortError(text);
+		throw text === null ? abortedBeforeStart(message) : abortError(text);
 	} finally {
 		signal.removeEventListener("abort", onAbort);
 	}

@@ -9,27 +9,46 @@ const Reply = v.variant('ok', [
 
 export type DigestWrite = v.InferOutput<typeof Reply>;
 
+/** One digest write as a caller sends it: the new bytes as base64, the digest they replace, and its sends' names. */
+export interface DigestWriteRequest {
+  readonly path: string;
+  readonly contentBase64: string;
+  readonly expected: string | null;
+  /** This write's name across every send of it. */
+  readonly operation: string;
+  /** The caller's earlier writes whose answers it holds. */
+  readonly settled: readonly string[];
+}
+
 /** A write's name across its sends: a UUID, safe as a file name in the guest. */
 const OPERATION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
 /**
  * Writes `data` at `path` only if the file's bytes hash to `expected` (null: only if no file is there). One guest
- * process reads the new bytes from stdin and, holding the directory of the file `path` leads to, compares that file and
- * replaces it through a temp file and a rename, so the compare and the write are one instant under every name for the
- * file, and a reader never sees half a file. The replacement keeps the file's mode, owner, group and extended
- * attributes (its ACLs), and a file this user may not write is refused, as a plain write leaves and refuses it. The guest keeps each `operation`'s answer, and its staged write before the
- * rename publishes it, so a resend after a lost reply or a guest cut at any point gets the first send's outcome rather
- * than a second compare.
+ * process reads the new bytes from stdin, compares the file `path` leads to and writes over it in place, as a plain write
+ * does: the file keeps its inode, owner, group, mode, extended attributes and every other link to it, and a file this
+ * user may not write is refused. Writers of one name take turns on its directory and writers of one file under other
+ * names (hard links) on the file, so a compare and its write are one step under every name.
+ *
+ * The guest keeps each `operation`'s answer, so a resend after a lost reply gets the first send's outcome rather than a
+ * second compare; a send cut after its bytes landed is answered that its write stands, unless the file changed again
+ * before the resend. `settled` names the operations whose answers the caller holds: no send of them is left, so their
+ * answers go. What the caller never acknowledges goes with the container's `/tmp`.
  */
 export function writeFileIfDigest(
   container: Pick<Container, 'exec'>,
-  { path, data, expected, operation }: { readonly path: string; readonly data: Uint8Array; readonly expected: string | null; readonly operation: string },
+  { path, data, expected, operation, settled }: {
+    readonly path: string; readonly data: Uint8Array; readonly expected: string | null; readonly operation: string; readonly settled: readonly string[];
+  },
 ): Effect.Effect<DigestWrite, DevboxError> {
   return Effect.gen(function* () {
     if (!path.startsWith('/') || path.includes('\0')) return yield* Effect.fail(new DevboxError('file', `a digest write needs an absolute path, not ${JSON.stringify(path)}`));
 
-    if (!OPERATION.test(operation)) return yield* Effect.fail(new DevboxError('file', `a digest write is named by a UUID, not ${JSON.stringify(operation)}`));
-    const writer = yield* attempt('io', () => container.exec(['python3', '-c', WRITE_IF_DIGEST, path, expected ?? '', operation], { stdin: 'pipe' }));
+    for (const named of [operation, ...settled]) {
+      if (!OPERATION.test(named)) return yield* Effect.fail(new DevboxError('file', `a digest write is named by a UUID, not ${JSON.stringify(named)}`));
+    }
+
+    const writer = yield* attempt('io', () => container.exec(['python3', '-c', WRITE_IF_DIGEST, path, expected ?? '', operation, ...settled], { stdin: 'pipe' }));
     const stdin = writer.stdin;
 
     if (stdin === null) return yield* Effect.fail(new DevboxError('io', 'the digest write took no stdin'));
@@ -47,22 +66,22 @@ export function writeFileIfDigest(
 }
 
 const WRITE_IF_DIGEST = `
-import errno, fcntl, hashlib, json, os, secrets, sys, time
-path, expected, operation = sys.argv[1], sys.argv[2] or None, sys.argv[3]
+import fcntl, hashlib, json, os, secrets, sys
+path, expected, operation, settled = sys.argv[1], sys.argv[2] or None, sys.argv[3], sys.argv[4:]
 data = sys.stdin.buffer.read()
+digest = hashlib.sha256(data).hexdigest()
 # Each operation's answer, kept for its resends: a resend after a lost reply is answered what the first send did, and
-# one that arrives while the first still runs waits for it. A day-old answer has no resend left to serve.
+# one that arrives while the first still runs waits for it.
 journal = '/tmp/kinu-digest-writes'
 os.makedirs(journal, mode=0o700, exist_ok=True)
-for entry in os.scandir(journal):
-    try:
-        if entry.stat().st_mtime < time.time() - 86400:
-            os.unlink(entry.path)
-    except FileNotFoundError:
-        pass
+for done in settled:
+    for kept in (done + '.json', done + '.lock'):
+        try:
+            os.unlink(os.path.join(journal, kept))
+        except FileNotFoundError:
+            pass
 answered = os.path.join(journal, operation + '.json')
-# The staged write, recorded before its rename publishes it: a resend finds its temp file gone if and only if the rename
-# ran, since a failed attempt drops this record before its temp file.
+# Recorded before the write starts and dropped with its answer: a resend that finds it was cut while it wrote.
 intent = os.path.join(journal, operation + '.intent')
 lock = os.open(os.path.join(journal, operation + '.lock'), os.O_RDWR | os.O_CREAT, 0o600)
 fcntl.flock(lock, fcntl.LOCK_EX)
@@ -81,21 +100,10 @@ def answer(reply):
     if os.path.exists(intent):
         os.unlink(intent)
     print(text)
-if os.path.exists(intent):
-    with open(intent) as staged:
-        recorded = json.load(staged)
-    if not os.path.exists(recorded['temporary']):
-        # The first send's rename published its bytes and it was cut before answering: that write stands.
-        answer({'ok': True, 'sha256': recorded['sha256']})
-        sys.exit(0)
-    # It was cut before its rename: nothing was published, so this send starts over.
-    os.unlink(intent)
-    os.unlink(recorded['temporary'])
 if expected is None:
     os.makedirs(os.path.dirname(path) or '/', exist_ok=True)
-# The file every link in path leads to, as the read that hashed expected followed them: it is compared and replaced and
-# the links stay, and a dangling link's file is created, as a plain write creates it. Every name for that file is one
-# entry of one directory, so holding the directory from the compare to the rename orders writes under any of them.
+# The file every link in path leads to, as the read that hashed expected followed them: it is compared and written and
+# the links stay, and a dangling link's file is created, as a plain write creates it.
 directory, name = os.path.split(os.path.realpath(path))
 try:
     folder = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
@@ -109,47 +117,28 @@ fcntl.flock(folder, fcntl.LOCK_EX)
 try:
     held = os.open(name, os.O_RDONLY, dir_fd=folder)
 except FileNotFoundError:
-    found, kept, attributes = None, None, {}
+    held, found = None, None
 else:
-    with os.fdopen(held, 'rb') as reading:
+    fcntl.flock(held, fcntl.LOCK_EX)
+    with open(held, 'rb', closefd=False) as reading:
         found = hashlib.sha256(reading.read()).hexdigest()
-        kept = os.fstat(held)
-        # Its extended attributes, ACLs among them, go with it to the replacement; a file system without them has none.
-        try:
-            attributes = {key: os.getxattr(held, key) for key in os.listxattr(held)}
-        except OSError as unsupported:
-            if unsupported.errno not in (errno.ENOTSUP, errno.EOPNOTSUPP):
-                raise
-            attributes = {}
+if os.path.exists(intent):
+    # The first send passed its compare and was cut while it wrote: if its bytes are there, its write stands.
+    if found == digest:
+        answer({'ok': True, 'sha256': digest})
+        sys.exit(0)
+    os.unlink(intent)
 if found != expected:
     answer({'ok': False, 'sha256': found})
     sys.exit(0)
-# A file this user may not write is refused, as a plain write refuses it: the rename below needs only the directory.
-if kept is not None and not os.access(name, os.W_OK, dir_fd=folder):
-    raise PermissionError(errno.EACCES, 'Permission denied', path)
-temporary = '.' + name + '.' + secrets.token_hex(6) + '.kinu-write'
-digest = hashlib.sha256(data).hexdigest()
+record(intent, digest)
 try:
-    # Created with the replaced file's mode and given the bits the umask cut, its owner, group and extended attributes,
-    # before any byte is written: the replacement is the file a plain write would have left, under the same protections.
-    mode = None if kept is None else kept.st_mode & 0o7777
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666 if mode is None else mode, dir_fd=folder)
-    with os.fdopen(descriptor, 'wb') as out:
-        if kept is not None:
-            os.fchown(descriptor, kept.st_uid, kept.st_gid)
-            os.fchmod(descriptor, mode)
-            for key, value in attributes.items():
-                os.setxattr(descriptor, key, value)
+    # A create only where nothing is yet; a write over a file still there.
+    written = os.open(name, os.O_WRONLY | (os.O_CREAT | os.O_EXCL if held is None else os.O_TRUNC), 0o666, dir_fd=folder)
+    with open(written, 'wb') as out:
         out.write(data)
-    record(intent, json.dumps({'temporary': os.path.join(directory, temporary), 'sha256': digest}))
-    os.rename(temporary, name, src_dir_fd=folder, dst_dir_fd=folder)
 except BaseException:
-    if os.path.exists(intent):
-        os.unlink(intent)
-    try:
-        os.unlink(temporary, dir_fd=folder)
-    except FileNotFoundError:
-        pass
+    os.unlink(intent)
     raise
 answer({'ok': True, 'sha256': digest})
 `;

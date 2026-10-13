@@ -86,7 +86,7 @@ function container(fs: ContainerFs): SandboxHandle {
 				: new TextEncoder().encode(content));
 		},
 		// The guest compares what it holds against the digest named, then replaces, as the devbox's guest process does.
-		async writeFileIfDigest(path, contentBase64, expected) {
+		async writeFileIfDigest({ path, contentBase64, expected }) {
 			const resolved = fs.resolve(path);
 			const held = fs.files.get(resolved);
 			const found = held === undefined ? null : sha256Hex(held);
@@ -261,13 +261,13 @@ describe('a digest-checked write to the sandbox', () => {
 
 		const handle: SandboxHandle = {
 			...box,
-			async writeFileIfDigest(path, contentBase64, expected, operation) {
-				const first = answered.get(operation);
+			async writeFileIfDigest(write) {
+				const first = answered.get(write.operation);
 
 				if (first !== undefined) return first;
-				const answer = await box.writeFileIfDigest(path, contentBase64, expected, operation);
+				const answer = await box.writeFileIfDigest(write);
 
-				answered.set(operation, answer);
+				answered.set(write.operation, answer);
 				meanwhile();
 
 				throw new Error('Network connection lost.');

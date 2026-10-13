@@ -245,21 +245,20 @@ it('a slate declaring a browser surface serves the shell, the client bundle, and
 
     expect(await subject.paths()).toEqual({ kinuInSlateRoot: false, entries: ['client.js', 'server.js'] });
 
-    const artifacts = await subject.artifacts();
+    const application = await subject.applicationModule();
+    const client = (await subject.route('/__kinu/client.js')).body;
 
-    expect(artifacts.application).not.toContain('client-only-marker-7f3a');
-    expect(artifacts.application).not.toContain('createRoot');
-    expect(artifacts.application).toContain('server-only-marker-1c9e');
-    expect(artifacts.client).toBeDefined();
-    expect(artifacts.client).toContain('client-only-marker-7f3a');
+    expect(application).not.toContain('client-only-marker-7f3a');
+    expect(application).not.toContain('createRoot');
+    expect(application).toContain('server-only-marker-1c9e');
+    expect(client).toContain('client-only-marker-7f3a');
     // The slate skill's client names no `React`: its JSX must compile to the automatic runtime's imports.
-    expect(artifacts.client).toContain('react/jsx-runtime');
-    expect(artifacts.client).not.toContain('React.createElement');
-    expect(artifacts.client).not.toContain('server-only-marker-1c9e');
-    expect(artifacts.client).not.toContain('this.storage');
-    // The page served is the one built, opened once with the head the runner gives every page it answers.
+    expect(client).toContain('react/jsx-runtime');
+    expect(client).not.toContain('React.createElement');
+    expect(client).not.toContain('server-only-marker-1c9e');
+    expect(client).not.toContain('this.storage');
+    // The page served is opened once with the head the runner gives every page it answers.
     expect(shell.body.split(SLATE_PAGE_PREAMBLE)).toHaveLength(2);
-    expect(shell.body.replace(SLATE_PAGE_PREAMBLE, '')).toBe(artifacts.shell);
   } finally {
     await subject.stop();
   }

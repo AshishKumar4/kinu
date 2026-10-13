@@ -232,7 +232,7 @@ interface SlateProcessProbeRpc extends Rpc.DurableObjectBranded {
   call(method: string, args?: JsonValue[], chain?: string[]): Promise<{ ok: true; value: string } | { ok: false; error: string }>;
   socket(method: string, args?: JsonValue[], surface?: string[]): Promise<{ ok?: boolean; value?: string; error?: string }>;
   route(path?: string, chain?: string[]): Promise<{ status: number; body: string; contentType: string | null }>;
-  artifacts(): Promise<{ application: string; client?: string; shell?: string }>;
+  applicationModule(): Promise<string>;
   paths(): Promise<{ kinuInSlateRoot: boolean; entries: string[] }>;
   compileProbe(source: string | null, cred?: VfsCred, project?: Record<string, JsonValue>): Promise<{ ok?: boolean; code?: string; detail?: string }>;
   seedPrivateSource(): Promise<void>;

@@ -184,7 +184,7 @@ await box.destroy();        // destroy the container; a later call starts it aga
 | `releaseUntimed(execId)` | Forgets the id | `void` |
 | `readFile(path, { encoding })`, `readFileStream(path)` | Reads a file | `{ content, encoding }`, `ReadableStream` |
 | `writeFile(path, content, { encoding })` | Writes text or a stream; makes parents | `void` |
-| `writeFileIfDigest(path, contentBase64, expected, operation)` | Writes only over the bytes whose sha256 is `expected` (`null`: no file) | `{ ok, sha256 }` |
+| `writeFileIfDigest({ path, contentBase64, expected, operation, settled })` | Writes in place only over the bytes whose sha256 is `expected` (`null`: no file); drops the kept answers of `settled` | `{ ok, sha256 }` |
 | `mkdir(path, { recursive })`, `deleteFile(path)` | Makes a folder; deletes recursively | `void` |
 | `listFiles(path, { recursive })` | Lists a folder | `{ files }` |
 | `statFile(path, { follow })`, `exists(path)` | Reads one entry | `{ type, size, mode, … }`, `{ exists }` |
