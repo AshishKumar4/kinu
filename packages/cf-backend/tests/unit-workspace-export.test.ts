@@ -93,7 +93,7 @@ describe('cloud workspace export', () => {
     const source = await workspace();
     await expect(readWorkspaceArchivePage(source.sql, {
       workspace: 'scout', source: 'cloud', cursor: { phase: 'sql', table: 'gone', after: 0, rows: 0 },
-    })).rejects.toThrow();
+    })).rejects.toThrow('"gone"');
   });
 
   test('exporting a workspace database needs an interactive session, not a CI token', () => {

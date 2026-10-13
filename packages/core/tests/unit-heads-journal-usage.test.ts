@@ -115,7 +115,7 @@ describe('a journal column reads back as the shape it was written in', () => {
     journal.insertSpawn(spawn('h', 'run-1'));
     db.run('UPDATE head_journal SET decisions_json = ? WHERE actor_id = ? AND id = ?', ['[{"question":"which?"}]', actor.actorId, 'h']);
 
-    expect(() => journal.readHeadView('h')).toThrow();
+    expect(() => journal.readHeadView('h')).toThrow('choice');
   });
 });
 

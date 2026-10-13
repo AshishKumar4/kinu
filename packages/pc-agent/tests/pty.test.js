@@ -240,6 +240,7 @@ describe('the session registry answers for what it holds', () => {
       expect(() => h.sessions.open({
         session: refusal.second, cols: 80, rows: 24, argv: shellArgv(), env: shellEnv(), send: h.send,
       })).toThrow();
+      expect(h.sessions.size()).toBe(1);
     });
   }
 
@@ -257,10 +258,11 @@ describe('the session registry answers for what it holds', () => {
       session: 'pane-bad', cols, rows, argv: shellArgv(), env: shellEnv(), send: h.send,
     });
 
-    expect(open(0, 24)).toThrow();
-    expect(open(80, 0)).toThrow();
-    expect(open(80.5, 24)).toThrow();
-    expect(open('80', 24)).toThrow();
+    expect(open(0, 24)).toThrow('width');
+    expect(open(80, 0)).toThrow('height');
+    expect(open(80.5, 24)).toThrow('width');
+    expect(open('80', 24)).toThrow('width');
+    expect(h.sessions.size()).toBe(0);
   });
 
   test('the daemon and the hub bound the window at the same number', () => {
@@ -287,6 +289,7 @@ describe('the session registry answers for what it holds', () => {
       .toThrow();
     expect(() => h.sessions.open({ session: 'pane-1', cols: 80, rows: 24, argv: [], env: shellEnv(), send: h.send }))
       .toThrow();
+    expect(h.sessions.size()).toBe(0);
   });
 
   test('a congested socket discards output and the daemon says how much', async () => {

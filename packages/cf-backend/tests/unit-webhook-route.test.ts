@@ -343,7 +343,7 @@ describe('the builder and the matcher are one contract', () => {
       { workspaceName: WORKSPACE, triggerId: '' },
     ]) {
       await expect(webhookRoutePath(ROUTE_SECRET, identity))
-        .rejects.toThrow();
+        .rejects.toThrow(`"${identity.workspaceName}" and trigger "${identity.triggerId}"`);
     }
   });
 

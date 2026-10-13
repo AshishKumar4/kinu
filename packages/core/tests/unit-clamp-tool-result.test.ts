@@ -69,6 +69,7 @@ describe('clampToolResult', () => {
 
   test('an unsaved result says so rather than naming a path that holds nothing', async () => {
     const clamped = await clampToolResult('z'.repeat(100_000), {});
+    expect(clamped.length).toBeLessThan(100_000);
     expect(() => markerPath(clamped)).toThrow();
   });
 

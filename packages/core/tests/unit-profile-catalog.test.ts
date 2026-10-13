@@ -210,8 +210,8 @@ describe('built-in defaults', () => {
     }
   });
 
-  test('the builtin catalog validates and pins the platform default model', () => {
-    expect(() => validateProfileCatalog({ value: BUILTIN_PROFILE_CATALOG })).not.toThrow();
+  test('the builtin catalog validates unchanged', () => {
+    expect(validateProfileCatalog({ value: BUILTIN_PROFILE_CATALOG })).toEqual(BUILTIN_PROFILE_CATALOG);
   });
 });
 

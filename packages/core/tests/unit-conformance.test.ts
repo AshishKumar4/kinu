@@ -31,7 +31,10 @@ describe('compareSurface can fail (canaries)', () => {
   test('observed but declared absent → contradicted, citing the stale reason', () => {
     const report = compareSurface(observing({ tool: new Set(BUILTIN_TOOLS) }));
     const contradiction = report.findings.find((f) => f.kind === 'contradicted' && f.name === 'report');
-    expect(contradiction).toBeDefined();
+    const declared = BACKEND_CONFORMANCE.tool?.report?.cli;
+
+    if (declared === undefined || !('absent' in declared)) throw new Error('the manifest declares report absent on the CLI');
+    expect(contradiction?.staleReason).toBe(declared.absent);
   });
 
   test('an unmeasured plane is reported, never silently conformant', () => {

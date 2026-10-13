@@ -134,6 +134,6 @@ describe('the git test fixture', () => {
 
   test('the fixture repo carries its own identity, not the developer\'s', async () => {
     const target = await repo();
-    expect((await git(target, 'config', '--local', '--get', 'user.email')).trim()).toBeTruthy();
+    expect((await git(target, 'config', 'user.email')).trim()).toBe('kinu@example.invalid');
   });
 });

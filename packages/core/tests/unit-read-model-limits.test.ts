@@ -53,7 +53,8 @@ describe('the run list page is closed against every caller value', () => {
     const page = listRuns(recorder, null, 1e9);
 
     if (page.status !== 'more') throw new Error('expected runs behind a clamped page');
-    expect(page.next.after).toBeTruthy();
+    const rest = listRuns(recorder, page.next, 1e9);
+    expect(page.items.length + rest.items.length).toBe(205);
   });
 
   test('a page holding the whole history says end, and has no cursor to read', () => {

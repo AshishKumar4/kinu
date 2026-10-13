@@ -15,6 +15,7 @@ import { createMyGatewayProvider } from '@kinu.run/core';
 import { createAIGatewayProvider, type ProviderEnv } from '@kinu.run/core';
 import { platformGatewayEnv, stubAiBinding, TEST_GATEWAY_URL } from './helpers/platform-gateway';
 import { requestUrl } from '@kinu.run/core';
+import { present } from '@kinu.run/test-utils';
 
 const providerDeps = (env: ProviderEnv) => ({
   env,
@@ -248,10 +249,12 @@ describe('platform gateway availability', () => {
       .toEqual(expect.any(String));
   });
 
-  test('createModel refuses an env isAvailable would have rejected', () => {
+  test('createModel refuses an env isAvailable would have rejected, for the reason it reports', async () => {
     const provider = createAIGatewayProvider();
-    expect(() => provider.createModel('@cf/test/model', providerDeps({ AI_GATEWAY_URL: TEST_GATEWAY_URL })))
-      .toThrow();
+    const deps = providerDeps({ AI_GATEWAY_URL: TEST_GATEWAY_URL });
+    const reason = present(await provider.unavailableReason?.(deps), 'the unavailable reason');
+
+    expect(() => provider.createModel('@cf/test/model', deps)).toThrow(reason);
   });
 
   // Staging, 2026-10-08: every `ai-gateway/workers-ai/*` row answered 400 "No such model workers-ai/@cf/…" (code 5007).

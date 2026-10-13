@@ -54,9 +54,13 @@ describe('dedupeKeyFor — process_done', () => {
       payload: { process_id: 'pid-42', command: 'ls', exit_code: 0, stdout_excerpt: '', stderr_excerpt: '', duration_ms: 0 },
     };
 
-    expect(dedupeKeyFor(e)).not.toBeNull();
-    expect(dedupeKeyFor({ ...e, payload: { ...e.payload, command: 'pwd' } })).toBe(dedupeKeyFor(e));
-    expect(dedupeKeyFor({ ...e, payload: { ...e.payload, process_id: 'pid-43' } })).not.toBe(dedupeKeyFor(e));
+    const key = dedupeKeyFor(e);
+    const sameProcess = dedupeKeyFor({ ...e, payload: { ...e.payload, command: 'pwd' } });
+    const otherProcess = dedupeKeyFor({ ...e, payload: { ...e.payload, process_id: 'pid-43' } });
+
+    expect(key).not.toBeNull();
+    expect(sameProcess).toBe(key);
+    expect(otherProcess).not.toBe(key);
   });
 });
 

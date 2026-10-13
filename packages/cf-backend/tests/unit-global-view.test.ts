@@ -104,7 +104,7 @@ describe('the layout — one function answers for every agent', () => {
   test('a name that could escape /home is refused, not sanitised', () => {
     // The cap is 96: the longest valid subordinate slug is 64 and the `sub-` prefix must not push it out.
     for (const bad of ['../etc', 'a/b', '/abs', '', 'Node-A', 'a'.repeat(97)]) {
-      expect(() => agentHome(bad)).toThrow();
+      expect(() => agentHome(bad)).toThrow(`'${bad}'`);
     }
   });
 

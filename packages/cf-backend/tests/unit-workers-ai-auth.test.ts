@@ -78,7 +78,7 @@ describe('Workers AI credential refresh', () => {
     await expect(refreshCloudflareCredential(
       { CLOUDFLARE_OAUTH_CLIENT_ID: 'cid', CLOUDFLARE_OAUTH_CLIENT_SECRET: 'csec' },
       { kind: 'oauth', accessToken: 'cf-access-1' },
-    )).rejects.toThrow();
+    )).rejects.toThrow(/no refresh token/i);
   });
 
   test('a revoked refresh token surfaces as a typed invalid_grant error', async () => {

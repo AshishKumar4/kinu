@@ -103,13 +103,13 @@ describe('the browser auth store', () => {
 
   test('an unverified email is refused rather than given an identity of its own', async () => {
     const { env } = setupEnv();
-    expect(createSession(env, {
+    await expect(createSession(env, {
       provider: 'github',
       providerSub: 'gh-1',
       email: 'person@example.com',
       emailVerified: false,
       displayName: null,
-    })).rejects.toThrow();
+    })).rejects.toThrow(/did not report this email address as verified/);
   });
 
   test('a session stops verifying once its lifetime is up', async () => {
@@ -183,7 +183,7 @@ describe('OAuth handoff state', () => {
     const { state, binding } = await started(kv);
 
     await expect(consumeOAuthState(kv, state, 'github', binding))
-      .rejects.toThrow();
+      .rejects.toThrow(/provider mismatch/);
   });
 
   test('a hostile return_to is neutralised on the way in, not just on the way out', async () => {

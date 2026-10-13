@@ -79,7 +79,7 @@ describe('definePromptSection — a missing slot fails loudly', () => {
 
   test('throws, naming the section and the slot, instead of rendering empty', () => {
     const section = definePromptSection('t/store', fromStore);
-    expect(() => section.render({ present: 'x' })).toThrow();
+    expect(() => section.render({ present: 'x' })).toThrow('t/store');
   });
 
   test('and does not silently drop the section — no partial output escapes', () => {
@@ -93,11 +93,11 @@ describe('definePromptSection — a missing slot fails loudly', () => {
 
 describe('definePromptSection — a malformed template fails at definition', () => {
   test('rejects an unclosed tag', () => {
-    expect(() => definePromptSection('t/unclosed', 'A {{oops')).toThrow();
+    expect(() => definePromptSection('t/unclosed', 'A {{oops')).toThrow('t/unclosed');
   });
 
   test('rejects a slot with inner spaces, so the type and the parser cannot disagree', () => {
-    expect(() => definePromptSection('t/spaced', 'A {{ oops }} B')).toThrow();
+    expect(() => definePromptSection('t/spaced', 'A {{ oops }} B')).toThrow('t/spaced');
   });
 
   test('rejects a dotted path — navigation belongs in TypeScript, not the template', () => {
@@ -240,47 +240,47 @@ describe('{{#if}} — a flag with no value fails loudly, like every other slot',
 
   test('an absent flag throws naming it — the section never silently vanishes', () => {
     const section = definePromptSection('t/flag-absent', fromStore);
-    expect(() => section.render({})).toThrow();
+    expect(() => section.render({})).toThrow('t/flag-absent');
   });
 
   test('a string where a flag belongs throws, and says which spelling to use', () => {
     const section = definePromptSection('t/flag-typed', fromStore);
     // A runtime source declares no contract, so this compiles; that is the case under test.
     const stringWhereFlagBelongs = { flag: 'true' };
-    expect(() => section.render(stringWhereFlagBelongs)).toThrow();
+    expect(() => section.render(stringWhereFlagBelongs)).toThrow('t/flag-typed');
   });
 
   test('a boolean where a text slot belongs throws the mirror of that', () => {
     const source = storedSource('A{{value}}B');
     const section = definePromptSection('t/slot-typed', source);
     const booleanWhereTextBelongs = { value: true };
-    expect(() => section.render(booleanWhereTextBelongs)).toThrow();
+    expect(() => section.render(booleanWhereTextBelongs)).toThrow('t/slot-typed');
   });
 });
 
 describe('{{#if}} — a malformed conditional fails at definition', () => {
   test('rejects a conditional that is never closed', () => {
-    expect(() => definePromptSection('t/unclosed-if', 'A{{#if x}}B')).toThrow();
+    expect(() => definePromptSection('t/unclosed-if', 'A{{#if x}}B')).toThrow('t/unclosed-if');
   });
 
   test('rejects a close with nothing open', () => {
-    expect(() => definePromptSection('t/stray-close', 'A{{/if}}B')).toThrow();
+    expect(() => definePromptSection('t/stray-close', 'A{{/if}}B')).toThrow('t/stray-close');
   });
 
   test('rejects {{else}} outside a conditional', () => {
-    expect(() => definePromptSection('t/stray-else', 'A{{else}}B')).toThrow();
+    expect(() => definePromptSection('t/stray-else', 'A{{else}}B')).toThrow('t/stray-else');
   });
 
   test('rejects a second {{else}} in one conditional', () => {
-    expect(() => definePromptSection('t/two-else', '{{#if x}}A{{else}}B{{else}}C{{/if}}')).toThrow();
+    expect(() => definePromptSection('t/two-else', '{{#if x}}A{{else}}B{{else}}C{{/if}}')).toThrow('t/two-else');
   });
 
   test('rejects an expression in the condition — a flag is one declared boolean', () => {
-    expect(() => definePromptSection('t/expr', '{{#if a && b}}x{{/if}}')).toThrow();
+    expect(() => definePromptSection('t/expr', '{{#if a && b}}x{{/if}}')).toThrow('t/expr');
   });
 
   test('rejects {{#each}} BY NAME, pointing at where iteration lives', () => {
-    expect(() => definePromptSection('t/each', '{{#each items}}x{{/each}}')).toThrow();
+    expect(() => definePromptSection('t/each', '{{#each items}}x{{/each}}')).toThrow('t/each');
   });
 });
 
@@ -295,7 +295,7 @@ describe('renderFrom — the door a promoted candidate comes through', () => {
   test('a replacement that drops a slot is legal; one that invents a slot throws', () => {
     // `templateContract` in the promotion gate catches this first; this is the backstop.
     expect(section.renderFrom('static prose', { v: 'q', on: true })).toBe('static prose');
-    expect(() => section.renderFrom('{{invented}}', { v: 'q', on: true })).toThrow();
+    expect(() => section.renderFrom('{{invented}}', { v: 'q', on: true })).toThrow('{{invented}}');
   });
 
   test('re-rendering the same replacement is byte-stable', () => {

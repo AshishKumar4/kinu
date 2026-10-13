@@ -30,5 +30,5 @@ test("eval lists a namespace's members as call forms, and a program reads one's 
 test('describe names the namespaces it has when asked for one it does not', async () => {
   const run = toolExecute<{ code: string }, JsonValue>(await evalTool());
 
-  await expect(run({ code: "return describe('stat')" })).rejects.toThrow();
+  await expect(run({ code: "return describe('stat')" })).rejects.toThrow('"stat"');
 });
