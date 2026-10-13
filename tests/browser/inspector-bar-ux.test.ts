@@ -5,11 +5,11 @@
  */
 import { describe, expect, test } from 'bun:test';
 import type { ElementHandle, Page } from 'puppeteer';
-import { executorLabel } from '@kinu.run/core';
 import { withGallery } from '../../scripts/gallery-harness';
 
 /** The agent's own machine, by the one label every surface gives it. */
-const COMPUTER = executorLabel('computer');
+// The owner reads the computer's own name, not the namespace (d052cd645 rendered `computer`).
+const COMPUTER = 'Computer';
 
 const TOOL_NAMES = ['Work', 'Changes', 'Files', 'Swarms', 'Agent', 'Environment', 'Activity'];
 
