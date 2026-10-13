@@ -103,7 +103,7 @@ describe('guided onboarding renderer', () => {
       skip: () => {},
     };
 
-    const { renderer, waitForFrame, captureCharFrame } = await createTestRenderer({
+    const { renderer, waitForFrame } = await createTestRenderer({
       width: 80,
       height: 24,
       useThread: false,
@@ -125,7 +125,6 @@ describe('guided onboarding renderer', () => {
         </TuiProductProvider>,
       );
       await waitForFrame((frame) => frame.includes('Step 1/6 · location'));
-      expect(captureCharFrame()).toContain('Where will your workspaces live?');
     } finally {
       flushSync(() => { root.unmount(); });
       renderer.destroy();

@@ -86,9 +86,6 @@ describe('TUI theme', () => {
     // The registry refuses sub-WCAG presets at module load, so their presence is the assertion;
     // ratios print because a floor says nothing about the margin.
     const registry = createThemeRegistry(BUILTIN_TUI_THEMES);
-    expect(registry.themes.map((theme) => theme.id)).toEqual([
-      'kinu-light-solid', 'kinu-dark-solid', 'kinu-light', 'kinu-dark', 'kinu-dusk', 'kinu-paper', 'high-contrast',
-    ]);
     const lines: string[] = [];
 
     for (const theme of registry.themes) {

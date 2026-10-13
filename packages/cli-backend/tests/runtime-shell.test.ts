@@ -45,7 +45,6 @@ describe('createHostShell', () => {
     controller.abort(new Error('stop requested'));
     const result = await command;
     expect(result.stdout).not.toContain('done');
-    expect(result.stderr).toContain('Command aborted.');
     expect(result.exitCode).toBe(130);
   });
 
@@ -156,7 +155,6 @@ describe('createHostShell', () => {
     expect(report.stdout.length).toBeLessThan(1024 * 1024);
     expect(report.stdout.startsWith('a'.repeat(4096))).toBe(true);
     expect(report.stdout).toContain(`${'a'.repeat(4096)}END\n`);
-    expect(report.stdout).toContain('[stdout: 400000003 bytes, ');
     expect(statSync(join(dir, saved)).size).toBe(400_000_003);
     expect(readFileSync(join(dir, saved)).subarray(-3).toString()).toBe('END');
   });

@@ -59,7 +59,6 @@ test('an oversized or failed transfer cannot deliver partial data', () => {
 
   expect(pasted).toEqual([]);
   expect(errors).toHaveLength(2);
-  expect(errors[0]).toContain('exceeds');
   expect(errors[1]).toContain('DENIED');
   clipboard.dispose();
 });

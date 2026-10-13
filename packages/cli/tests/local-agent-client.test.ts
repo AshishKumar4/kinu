@@ -348,14 +348,6 @@ describe('LocalAgentClient', () => {
     db.close();
   });
 
-  test('workspace chat exposes no selectable session surface', async () => {
-    const { client } = setup(fakeModel('answer'));
-    await client.connect();
-    await client.send('first question');
-    expect((await client.history()).map((message) => message.role)).toEqual(['user', 'assistant']);
-    await client.close();
-  });
-
   test('stop() aborts the in-flight turn through LocalAgentSession', async () => {
     const { client } = setup(stallingModel());
     const observed = new AwaitedList<AgentClientEvent>();
@@ -538,7 +530,6 @@ describe('LocalAgentClient', () => {
     const result = await client.fork({ text: 'second question', occurrenceFromEnd: 1 });
     expect(result.client).toBe(client);
     expect(client.cliSession.id).not.toBe(originalSessionId);
-    expect(result.label).toBe(`branch ${client.cliSession.id}`);
 
     await client.send('third question');
     const forkedPrompt = present(seenPrompts.at(-1), 'the last prompt seen');

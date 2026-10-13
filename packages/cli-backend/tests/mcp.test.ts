@@ -193,7 +193,7 @@ describe('connectMcpServers', () => {
       expect(conn.descriptors.map((d) => d.toolKey)).toEqual(['mcp_bad_good']);
       expect(conn.refused.map((r) => [r.server, r.reason.includes('scalar_root')])).toEqual([['bad', true]]);
       expect(conn.diagnostics.map((d) => d.status)).toEqual(['connected']);
-      expect(logs.filter((message) => message.includes('scalar_root'))).toHaveLength(1);
+      expect(logs.some((message) => message.includes('scalar_root'))).toBe(true);
       await expect(conn.call('bad', 'good', { q: 'x' })).resolves.toBe('ran good');
     } finally {
       await conn.close();

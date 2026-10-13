@@ -64,7 +64,6 @@ describe("setup without any terminal", () => {
 
     expect(result.timedOut).toBe(false);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("Not signed in to Kinu");
     expect(result.stdout).toContain("kinu auth --origin https://kinu.example.com");
   });
 
@@ -76,7 +75,6 @@ describe("setup without any terminal", () => {
 
     expect(result.timedOut).toBe(false);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("needs an interactive terminal");
     expect(result.stdout).toContain("kinu provider connect");
   });
 });

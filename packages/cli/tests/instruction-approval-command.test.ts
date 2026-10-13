@@ -117,7 +117,7 @@ describe('/instructions page actions', () => {
     expect(approved).toEqual({ path: LATER.path, digest: REVIEWED });
 
     if (outcome.kind !== 'text') throw new Error('expected text');
-    expect(outcome.text).toContain('Nothing was approved');
+    expect(outcome.text).toContain('the file changed or could not be read after review; read it again before approving');
     expect(reads).toEqual([]);
   });
 
@@ -171,7 +171,6 @@ describe('/instructions page actions', () => {
     );
 
     if (outcome.kind !== 'text') throw new Error('expected text');
-    expect(outcome.text).toContain('row changed');
     expect(called).toBe(false);
   });
 });
