@@ -12,7 +12,7 @@ import {
 } from './helpers/actor-harness';
 import {
   delayNextModelReport, delayNextOpenWork, delayNextRunEnd, delayNextRunReview, delayNextTurnReport, failNextAnswerWrite, failNextOpening,
-  loseNextParentReport,
+  holdNextObserve, holdNextResume, loseNextParentReport,
 } from './helpers/agent-facets';
 import { socketConnection } from './helpers/bindings';
 import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
@@ -326,6 +326,76 @@ test("a hire whose assigned turn fails as it opens tells its hirer once, though 
   setSystemTime(new Date(Date.now() + RECOVERY_BACKOFF_CEILING_MS + 1));
   await driveUntil(workspace, "the hire's hirer was never told its task failed", () => told().length > 0);
   await workspace.agent.harnessAgentsIdle();
+
+  expect(told()).toHaveLength(1);
+});
+
+test("main's isolate dying as its workspace finishes reading the answer's stream does not ask the model again", async () => {
+  const { workspace, asked } = answering();
+  // The workspace reads main's answer stream whole and never says so: main's isolate dies waiting.
+  const reading = holdNextObserve((key) => key === mainKey(workspace));
+  const id = crypto.randomUUID();
+
+  // The owner's request is answered as the turn's stream ends, which the held read never lets it.
+  const sending = Promise.resolve(workspace.agent.onMessage(owner, chatRequest(id, id, 'submit-message')));
+  const first = await Promise.race([reading.then((key) => ({ held: key })), sending.then(() => ({ held: null }))]);
+
+  expect(first.held).not.toBeNull();
+  workspace.agent.harnessResetAgentIsolate(first.held ?? '');
+  // Recovered, the turn is closed over its recorded answer; a restart after finds nothing of it owed.
+  await workspace.agent.recoverStrandedTurn();
+  await driveUntil(workspace, 'the recovered turn never closed', () => owedWords(workspace) === 0);
+  await restartMain(workspace);
+
+  expect({ asked: asked(), answers: (await storedChat(workspace)).filter((message) => message.role === 'assistant').length, owed: owedWords(workspace) })
+    .toEqual({ asked: 1, answers: 1, owed: 0 });
+});
+
+test("a node whose isolate dies as it asks whether its run goes on, after its last answer, is not asked again", async () => {
+  const { workspace, nodeCalls } = searching();
+  const asking = holdNextResume();
+  const id = crypto.randomUUID();
+
+  await workspace.agent.onMessage(owner, chatRequest(id, id, 'submit-message', SEARCH));
+  workspace.agent.harnessResetAgentIsolate(await asking);
+  setSystemTime(new Date(Date.now() + RECOVERY_BACKOFF_CEILING_MS + 1));
+  await driveUntil(workspace, 'the search never settled', () => searchSettled(workspace));
+
+  expect(nodeCalls()).toBe(1);
+});
+
+test("a hire whose answer cannot commit tells its hirer its turn failed, once", async () => {
+  const MISSION = 'Catalogue every file under the home directory.';
+  const ASKED = 'Have someone check the ledger.';
+  let workspace: StartedHarness | null = null;
+
+  // Main hires a task agent for the mission, then says so; the hire's answer is refused as it commits.
+  workspace = gatewayWorkspace(stubAiBinding((run) => {
+    const { messages, tools } = requestOf(run);
+
+    if (tools.length === 0) return chatCompletion(run, '{"title":"Ledger Check"}');
+
+    if (!JSON.stringify(messages).includes(ASKED)) {
+      // The newest agent: the hire, which this call is.
+      const hire = workspace?.db.query<{ storage_key: string }, []>('SELECT storage_key FROM workspace_actors ORDER BY rowid DESC LIMIT 1').get();
+
+      if (hire !== null && hire !== undefined) failNextAnswerWrite(hire.storage_key);
+
+      return chatCompletion(run, 'The ledger balances.');
+    }
+
+    return messages.some((message) => message.role === 'tool')
+      ? chatCompletion(run, 'Handed off.')
+      : toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', lifetime: 'task', mission: MISSION } }, 'hire_0');
+  }));
+
+  const id = crypto.randomUUID();
+  const started = workspace;
+  const told = () => relayedReports(started.db).filter((report) => report.includes('failed to run its assigned turn'));
+
+  await started.agent.onMessage(owner, chatRequest(id, id, 'submit-message', ASKED));
+  await driveUntil(started, "the hire's hirer was never told its turn failed", () => told().length > 0);
+  await started.agent.harnessAgentsIdle();
 
   expect(told()).toHaveLength(1);
 });

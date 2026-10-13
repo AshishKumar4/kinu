@@ -170,6 +170,29 @@ export interface HeldIsolateCall {
 
 let delayedRunReview: { readonly reached: (storageKey: string) => void; readonly released: Promise<void> } | null = null;
 
+let delayedObserve: { readonly from: (storageKey: string) => boolean; readonly reached: (storageKey: string) => void } | null = null;
+
+/** The next model stream an isolate `from` gives its workspace to read is never finished reading: the isolate waits on
+ *  it, after its model's answer, as long as nothing ends it. */
+export function holdNextObserve(from: (storageKey: string) => boolean): Promise<string> {
+  const reached = Promise.withResolvers<string>();
+
+  delayedObserve = { from, reached: reached.resolve };
+
+  return reached.promise;
+}
+
+let delayedResume: { readonly reached: (storageKey: string) => void } | null = null;
+
+/** The next ask any isolate makes of its workspace for its run's next round is never answered. */
+export function holdNextResume(): Promise<string> {
+  const reached = Promise.withResolvers<string>();
+
+  delayedResume = { reached: reached.resolve };
+
+  return reached.promise;
+}
+
 /** The next crossing that carries a delivered run's round reviews to its workspace (its end's report) waits on the way
  *  until released. */
 export function delayNextRunReview(): HeldIsolateCall {
@@ -489,7 +512,17 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
 
           return host().traceStream(...args);
         },
-        resume: (turnId) => host().resume(turnId),
+        resume: async (bound) => {
+          const delayed = delayedResume;
+
+          if (delayed !== null) {
+            delayedResume = null;
+            delayed.reached(placement.storageKey);
+            await new Promise<never>(() => {});
+          }
+
+          return await host().resume(bound);
+        },
         guard: (...args) => host().guard(...args),
         debit: (...args) => host().debit(...args),
         prepareTurn: async (bound) => {
@@ -642,7 +675,19 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           return answer;
         },
         receipts: (turnId, runId, callIds) => host().receipts(turnId, runId, callIds),
-        observe: (lines) => host().observe(lines),
+        observe: async (lines) => {
+          const delayed = delayedObserve;
+
+          if (delayed?.from(placement.storageKey) === true) {
+            delayedObserve = null;
+            // Read whole, as the workspace reads it, then never answered.
+            await host().observe(lines);
+            delayed.reached(placement.storageKey);
+            await new Promise<never>(() => {});
+          }
+
+          return await host().observe(lines);
+        },
         paceStep: (bound, profile) => {
           counted('paceStep');
 

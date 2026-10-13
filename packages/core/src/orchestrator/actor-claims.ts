@@ -41,6 +41,9 @@ export interface StoredActorClaim {
   readonly status: (typeof CLAIM_STATUSES)[number]; readonly outcome: ClaimOutcome | null; readonly claimedAt: number;
   /** The epoch through which the turn's executions were withdrawn by a Retry of its answer (`withdraw`); 0 for none. */
   readonly withdrawnThrough: number;
+  /** An execution of its run recorded the step that ended the turn, in that step's own commit (`answered`), and every
+   *  later execution of the run keeps it: what is left of the run is its close, never another ask of the model. */
+  readonly answered: boolean;
 }
 
 export interface ContextRevision {
@@ -65,6 +68,7 @@ export function initActorClaimTables(exec: RawSqlExec): void {
     outcome TEXT CHECK(outcome IS NULL OR outcome IN (${sqlCheckList(CLAIM_OUTCOMES)})),
     claimed_at INTEGER NOT NULL, withdrawn_through INTEGER NOT NULL DEFAULT 0,
     facts_json TEXT, profile_json TEXT, inputs_key TEXT,
+    answered INTEGER NOT NULL DEFAULT 0 CHECK(answered IN (0,1)),
     PRIMARY KEY(actor_id,turn_id))`);
   exec(`CREATE INDEX IF NOT EXISTS idx_actor_claims_outcome ON actor_turn_claims(actor_id,outcome,claimed_at DESC)`);
   // Where each execution of a turn stands, so the next knows where a dead one was cut ({@link TurnCut}).
@@ -104,7 +108,7 @@ export function cutsThrough(cut: TurnCut) {
   return { work: cut.workCuts + (cut.phase === 'work' ? 1 : 0), provider: cut.providerCuts + (cut.phase === 'provider' ? 1 : 0) };
 }
 
-export interface ClaimRow { turn_id: string; run_id: string; epoch: number; work_mode: WorkMode; phase: 'preparing' | 'admitted'; program_kind: ActorProgramIdentity['kind'] | null; program_version: number | null; program_digest: string | null; program_build: string | null; outcome: ClaimOutcome | null; claimed_at: number; withdrawn_through: number }
+export interface ClaimRow { turn_id: string; run_id: string; epoch: number; work_mode: WorkMode; phase: 'preparing' | 'admitted'; program_kind: ActorProgramIdentity['kind'] | null; program_version: number | null; program_digest: string | null; program_build: string | null; outcome: ClaimOutcome | null; claimed_at: number; withdrawn_through: number; answered: number }
 
 /** A claim minted as its execution opens: its epoch, which is its capability, and the execution it supersedes. */
 export interface PreparingClaim {
@@ -158,6 +162,7 @@ export class ActorClaimStore {
         VALUES(${this.actorId},${input.turnId},${input.runId},${epoch},${input.workMode},'preparing',NULL,${nowMs()})
         ON CONFLICT(actor_id,turn_id) DO UPDATE SET run_id=excluded.run_id,epoch=excluded.epoch,work_mode=excluded.work_mode,phase='preparing',
           program_kind=NULL,program_version=NULL,program_digest=NULL,program_build=NULL,outcome=NULL,claimed_at=excluded.claimed_at,
+          answered=CASE WHEN run_id=excluded.run_id THEN answered ELSE 0 END,
           facts_json=CASE WHEN run_id=excluded.run_id THEN facts_json END,
           profile_json=CASE WHEN run_id=excluded.run_id THEN profile_json END,
           inputs_key=CASE WHEN run_id=excluded.run_id THEN inputs_key END`;
@@ -260,6 +265,12 @@ export class ActorClaimStore {
     this.markCut(claim, 'work');
   }
 
+  /** Its execution recorded the step that ended the turn, in that step's commit: a later execution of the same run only
+   *  closes it ({@link StoredActorClaim.answered}). */
+  answered(claim: Pick<ActorTurnClaim, 'turnId' | 'epoch'>): void {
+    void this.sql`UPDATE actor_turn_claims SET answered=1 WHERE actor_id=${this.actorId} AND turn_id=${claim.turnId} AND epoch=${claim.epoch}`;
+  }
+
   /** A step finished: the turn moved, so no cut before it says anything about the next. */
   progressed(claim: ActorTurnClaim): void {
     void this.sql`UPDATE actor_turn_cuts SET phase='work',phase_at=${nowMs()},work_cuts=0,provider_cuts=0
@@ -340,7 +351,7 @@ export class ActorClaimStore {
 
   read(turnId: string): StoredActorClaim | null {
     this.actor.assertCurrent();
-    const row = this.sql<ClaimRow>`SELECT turn_id,run_id,epoch,work_mode,phase,program_kind,program_version,program_digest,program_build,outcome,claimed_at,withdrawn_through FROM actor_turn_claims WHERE actor_id=${this.actorId} AND turn_id=${turnId}`[0];
+    const row = this.sql<ClaimRow>`SELECT turn_id,run_id,epoch,work_mode,phase,program_kind,program_version,program_digest,program_build,outcome,claimed_at,withdrawn_through,answered FROM actor_turn_claims WHERE actor_id=${this.actorId} AND turn_id=${turnId}`[0];
 
     return row === undefined ? null : this.claimOf(row);
   }
@@ -348,7 +359,7 @@ export class ActorClaimStore {
   turns(limit = 100): readonly StoredActorClaim[] {
     this.actor.assertCurrent();
 
-    return this.sql<ClaimRow>`SELECT turn_id,run_id,epoch,work_mode,phase,program_kind,program_version,program_digest,program_build,outcome,claimed_at,withdrawn_through FROM actor_turn_claims WHERE actor_id=${this.actorId} ORDER BY claimed_at DESC LIMIT ${limit}`.map(row => this.claimOf(row));
+    return this.sql<ClaimRow>`SELECT turn_id,run_id,epoch,work_mode,phase,program_kind,program_version,program_digest,program_build,outcome,claimed_at,withdrawn_through,answered FROM actor_turn_claims WHERE actor_id=${this.actorId} ORDER BY claimed_at DESC LIMIT ${limit}`.map(row => this.claimOf(row));
   }
   latestTurn(): StoredActorClaim | null { return this.turns(1)[0] ?? null; }
   unsettled(limit?: number): readonly StoredActorClaim[] {
@@ -413,7 +424,7 @@ interface ClaimGuard {
 /** The actor's claims still open, newest first; read without a handle too, as a cold root reads them before it hosts
  *  anybody. */
 export function unsettledClaimsOf(sql: SqlExecutor, actorId: string, limit: number): readonly StoredActorClaim[] {
-  return sql<ClaimRow>`SELECT turn_id,run_id,epoch,work_mode,phase,program_kind,program_version,program_digest,program_build,outcome,claimed_at,withdrawn_through
+  return sql<ClaimRow>`SELECT turn_id,run_id,epoch,work_mode,phase,program_kind,program_version,program_digest,program_build,outcome,claimed_at,withdrawn_through,answered
     FROM actor_turn_claims WHERE actor_id=${actorId} AND outcome IS NULL ORDER BY claimed_at DESC LIMIT ${limit}`.map((row) => claimOfRow(actorId, row));
 }
 
@@ -435,7 +446,7 @@ function claimOfRow(actorId: string, row: ClaimRow): StoredActorClaim {
 
   if (row.outcome === null) status = row.phase;
 
-  return Object.freeze({ actorId, turnId: row.turn_id, runId: row.run_id, epoch: row.epoch, workMode: row.work_mode, program, status, outcome: row.outcome, claimedAt: row.claimed_at, withdrawnThrough: row.withdrawn_through });
+  return Object.freeze({ actorId, turnId: row.turn_id, runId: row.run_id, epoch: row.epoch, workMode: row.work_mode, program, status, outcome: row.outcome, claimedAt: row.claimed_at, withdrawnThrough: row.withdrawn_through, answered: row.answered === 1 });
 }
 
 function assertLiveIn(guard: ClaimGuard, claim: Pick<ActorTurnClaim, 'epoch'>): void {

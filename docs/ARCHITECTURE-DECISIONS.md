@@ -966,23 +966,32 @@ the owner, built 2026-10-11 on `lane/main-isolate`.
   (`queued_turns.run_end_json`, or spilled to a file as other large session
   payloads are, `run_end_path`/`run_end_digest`, #77), which retires once a
   report carrying the end
-  reached the workspace. Nothing crosses between its answer and that commit:
-  its rounds' reviews and its charges (its model calls beside its rounds')
-  ride its end, which the workspace advises on and charges as it takes it,
-  once per end (`agent_reports.charged_json`, the ends its newest report
-  carries), and its live trace is told after the commit, before the end (#75). A death before then tells the kept end at the next
+  reached the workspace. Its rounds' reviews and its charges (its model calls
+  beside its rounds') ride its end, which the workspace advises on and charges
+  as it takes it, once per end (`agent_reports.charged_json`, the ends its
+  newest report carries), and its live trace is told after the commit, before
+  the end. A death before then tells the kept end at the next
   start and never runs the run again; before #73 it ran the whole run again
   (the model asked twice, its tool effects repeated). A newer generation of the
   run, re-driven after a reset of the workspace, replaces a queued one, waits
   out a running one, and drops an older one's untold end; the workspace routes
   a run's calls by turn and run, so one generation's never reach another's.
   `facet_runs`, `admitRun`, `startRun`, `runEnded` and `holdsChat` are gone.
-  Nothing crosses between a run's last step and its commit (#75): the head or
-  node a run is delivered to holds no conversation, so its run records no
-  answer and no slates are asked for; before, a death on that crossing ran the
-  run again. A chat turn's answer commits before its slates are taken: an
-  `answer_slates` row of the roster committed with it takes them after, and the
-  workspace gives a take asked again the same.
+  The head or node a run is delivered to holds no conversation, so its run
+  records no answer and no slates are asked for. A chat turn's answer commits
+  before its slates are taken: an `answer_slates` row of the roster committed
+  with it takes them after, and the workspace gives a take asked again the same.
+- A step that ends its turn (no tool call; it stopped, ran out of length or was
+  filtered) marks its claim `answered` in the step's own commit, and every
+  later execution of the same run keeps the mark (#75). An execution that finds
+  it set asks the model nothing: it closes the turn, or the run's round, over
+  the recorded answer, through the same projection and commit (`endTurn`, the
+  run's end commit) a live answer takes, and keeps its branch as the answered
+  execution left it. So a death anywhere between a durable final answer and its
+  commit (the room's read of the stream, a step's trace, a round's charge, a
+  node asking whether its run goes on) costs no second ask. Before, each such
+  crossing asked the model again on recovery, and they were removed one at a
+  time.
 - Every chat turn ends in one commit (`ChatSession.endTurn`), answered,
   failed, stopped or cut: its answer (or the failure it carries), the
   retirement of the words it answered, its claim's verdict and its run's end,

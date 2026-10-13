@@ -112,6 +112,7 @@
     "facts_json TEXT",
     "profile_json TEXT",
     "inputs_key TEXT",
+    "answered INTEGER NOT NULL DEFAULT 0 CHECK(answered IN (0,1))",
     "PRIMARY KEY(actor_id,turn_id)"
   ],
   "actor_turn_cuts@packages/core/src/orchestrator/actor-claims.ts": [

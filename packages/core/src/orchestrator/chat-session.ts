@@ -43,6 +43,7 @@ import type { TierId } from '../types/profile';
 import type { SendLanding, SettledSignals } from '../types/signals';
 import { WorkModeSchema, type WorkMode } from '../types/turn';
 import { JsonObjectSchema, parseJsonObject, type JsonObject } from '../utils/json';
+import type { SessionPayload } from '../session/payload';
 import { nanoid } from '../utils/nanoid';
 import { ASKED, type Holds } from '../utils/held-reads';
 import type { Usage } from '../usage';
@@ -681,6 +682,11 @@ export class ChatSession {
     if (queued) this.pump();
   }
 
+  /** The report a turn that ended without its answer owes its caller, why in its own words; none where it has no caller. */
+  private callerReport(item: QueueItem, why: string): OwedEffect | null {
+    return this.ports.unanswered?.(item, new KinuError('io', why)) ?? null;
+  }
+
   /** A report owed its caller, recorded with `transition` (by the turn's end, where it closed one) and driven. */
   private async settleTold(transition: TerminalTransition, told: OwedEffect): Promise<void> {
     await hold(logged('turn.unanswered_report_failed', { doing: 'telling the caller a turn it is owed ended without an answer', otherwise: 'io' }, async () => {
@@ -956,17 +962,32 @@ export class ChatSession {
   }
 
   /** Each delivered run's end kept here and not yet told (D2), as its next report carries it. */
-  async runEndsOwed(): Promise<RunEndReport[]> {
-    const owed: RunEndReport[] = [];
+  runEndsOwed(): Promise<RunEndReport[]> {
+    return settleEffect(Effect.gen({ self: this }, function* () {
+      const owed: RunEndReport[] = [];
 
-    for (const { id, metadata, end } of this.pendingSends.runEnds()) {
-      const held = v.safeParse(HeldRunSchema, metadata);
-      const outcome = v.safeParse(RunEndOutcomeSchema, await this.transcript.payload(end));
+      for (const { id, metadata, end } of this.pendingSends.runEnds()) {
+        const held = v.safeParse(HeldRunSchema, metadata);
 
-      if (held.success && outcome.success) owed.push({ id, runId: held.output.kinuRun, outcome: outcome.output });
-    }
+        if (held.success) owed.push({ id, runId: held.output.kinuRun, outcome: yield* this.keptRunEnd(end) });
+      }
 
-    return owed;
+      return owed;
+    }));
+  }
+
+  /** A run's end as it was kept. One that cannot be read back (its spilled file gone or changed) is told as the refusal
+   *  it is, and retires with its telling: one unreadable end never holds back the agent's other reports. */
+  private keptRunEnd(end: SessionPayload): Effect.Effect<RunEndOutcome> {
+    return attempt({ doing: "reading a delivered run's kept end", otherwise: 'io' }, () => this.transcript.payload(end)).pipe(
+      Effect.map((kept) => v.safeParse(RunEndOutcomeSchema, kept)),
+      Effect.flatMap((parsed) => (parsed.success ? Effect.succeed(parsed.output) : Effect.fail(new KinuError('io', "a delivered run's kept end is not one")))),
+      Effect.catch((failure) => Effect.sync(() => {
+        diagnostics.failure('agent.run_end_unreadable', failure);
+
+        return refusedRun(failure);
+      })),
+    );
   }
 
   /** A report carrying these ends reached the workspace: their runs are owed no more. A newer generation held under the
@@ -1824,7 +1845,7 @@ export class ChatSession {
         if (!interrupted) this.actorSession.orchestrator.acc.hadError = true;
         const end = classifyRunEnd({ completed: false, interrupted, errorText: message.slice(0, 500) });
         // Its caller's report rides its end's commit: a turn cut off by a Stop owes none.
-        const told = interrupted ? null : this.ports.unanswered?.(item, new KinuError('io', message)) ?? null;
+        const told = interrupted ? null : this.callerReport(item, message);
 
         await this.endFailed(item, lease, end, told);
         this.emit({ type: 'error', message });
@@ -2024,7 +2045,8 @@ export class ChatSession {
       const failed = classifyRunEnd({ completed: false, interrupted: false, errorText: runError ?? message.slice(0, 500) });
 
       diagnostics.failure('turn.persist_failed', commit.failure);
-      await this.endFailed(item, lease, failed);
+      // Its caller waits on the work: told it failed, by the commit that closes it, as any failed turn's caller is.
+      await this.endFailed(item, lease, failed, this.callerReport(item, message));
       // Not durable, so the terminal event carries no final answer.
       this.emit({ type: 'error', message });
       this.emit({ type: 'turn-end', turn: this.snapshotTurn(item, ''), turnId: lease.turnId, runId: lease.runId, epoch: this.actorSession.closeEpoch(lease) });
