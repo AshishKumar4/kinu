@@ -691,7 +691,7 @@ export {
 // Applied inside buildActorTools; backends never wrap tools themselves.
 export {
   initToolEffectClaimTable, claimToolEffect, settleToolEffect,
-  withEffectReceipt, withEffectPointer, remoteReceipts, pruneTurnReceipts,
+  withEffectReceipt, remoteReceipts, pruneTurnReceipts,
   type EffectClaimDeps, type ReceiptExecution, type RemoteReceipt, type ToolEffectClaim, type ToolEffectKey,
 } from './tools/effect-claim';
 
@@ -1715,7 +1715,7 @@ export {
 export { startActorTurn, type ActorTurnInput } from './orchestrator/actor-turn';
 
 export {
-  ActorClaimStore, initActorClaimTables, programIdentityOf, verifyClaimedProgram,
+  ActorClaimStore, initActorClaimTables, programIdentityOf, turnAttemptOf, verifyClaimedProgram,
   type ActorProgramIdentity, type ActorTurnClaim, type StoredActorClaim,
   type ContextRevision, type ConsumedContext, type ClaimOutcome, type ClaimRecovery,
 } from './orchestrator/actor-claims';

@@ -140,11 +140,7 @@ describe('tool effect claims', () => {
         { type: 'tool-call', toolCallId: 'call-lost', toolName: 'run', input: {} },
         { type: 'tool-call', toolCallId: 'call-never', toolName: 'run', input: {} },
       ] },
-    ], (call) => {
-      const lost = lostToolCall(sql, actor, { turnId: 'turn-1', runId: 'run-1' }, call);
-
-      return lost === 'remote' ? null : lost;
-    });
+    ], (call) => lostToolCall(sql, actor, { turnId: 'turn-1', runId: 'run-1' }, call));
 
     expect(repaired?.[1]).toEqual({ role: 'tool', content: [
       { type: 'tool-result', toolCallId: 'call-settled', toolName: 'run', output: { type: 'json', value: { sent: 'ops' } } },

@@ -13,9 +13,9 @@ import { driveUntil, gatewayWorkspace, mainDatabase, ownDatabase } from './helpe
 import { socketConnection } from './helpers/bindings';
 import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 
-const Receipts = v.array(v.object({ actor_id: v.string(), status: v.string() }));
+const Receipts = v.array(v.object({ actor_id: v.string(), settled: v.number() }));
 
-const RECEIPTS = "SELECT actor_id, status FROM tool_effect_claims WHERE normalized_call_id = ? AND normalized_call_id NOT LIKE 'terminal:%'";
+const RECEIPTS = "SELECT actor_id, result_json IS NOT NULL AS settled FROM tool_effect_claims WHERE normalized_call_id = ? AND normalized_call_id NOT LIKE 'terminal:%'";
 
 /** The owner's Plan message, as the pane sends one. */
 function planRequest(id: string): string {
@@ -57,7 +57,7 @@ test("a plan the agent submits commits under its own store's receipt, and the wo
 
   expect(await workspace.agent.getActivePlanReview()).toMatchObject({ revision: 1, status: 'pending' });
   expect(held[0]?.workspace).toEqual([]);
-  expect(held[0]?.agent.map((row) => row.status)).toEqual(['settled']);
+  expect(held[0]?.agent.map((row) => row.settled)).toEqual([1]);
 });
 
 test("an agent's settled run leaves the workspace no receipt of the tools it ran there", async () => {
@@ -89,8 +89,8 @@ test("an agent's settled run leaves the workspace no receipt of the tools it ran
   await workspace.agent.terminalRetryPass();
   await joinHarnessFibers();
 
-  // Kept in the workspace while the run could re-ask it, as its isolate keeps only a pointer.
-  expect(during[0]?.map((row) => [row.actor_id, row.status])).toEqual([[actorId, 'settled']]);
+  // Kept in the workspace while the run could re-ask it; its isolate keeps none.
+  expect(during[0]?.map((row) => [row.actor_id, row.settled])).toEqual([[actorId, 1]]);
   expect(v.parse(Receipts, ownDatabase(workspace, actorId).query(RECEIPTS).all('call_list'))).toEqual([]);
   expect(v.parse(Receipts, workspace.db.query(RECEIPTS).all('call_list'))).toEqual([]);
 });

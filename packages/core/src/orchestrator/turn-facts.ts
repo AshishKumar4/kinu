@@ -34,15 +34,13 @@ export interface FrozenAuthority {
 export type FactsKey = Pick<ExecutionKey, 'turnId' | 'runId'>;
 
 /**
- * One row an execution, by its key: the facts the workspace offered as it was prepared, and the authority it bound,
- * each frozen once and null until then. A turn's recovery continues its key; a Retry, new input or a run's next round
- * is another. Authority inputs are kept once each in `actor_profile_inputs`, by the catalog and listing they hold, as
- * every execution between two settings changes binds the same.
+ * An execution's facts and authority are kept on its claim (`actor_turn_claims`), by its key: the facts the workspace
+ * offered as it was prepared, and the authority it bound, each frozen once and null until then. A turn's recovery
+ * continues its run and keeps them; a Retry or new input is another run, whose claim starts without them, and a run's
+ * next round is a claim of its own. Authority inputs are kept once each in `actor_profile_inputs`, by the catalog and
+ * listing they hold, as every execution between two settings changes binds the same.
  */
 export function initTurnFactsTables(exec: RawSqlExec): void {
-  exec(`CREATE TABLE IF NOT EXISTS actor_turn_facts (
-    actor_id TEXT NOT NULL, turn_id TEXT NOT NULL, run_id TEXT NOT NULL, facts_json TEXT, profile_json TEXT, inputs_key TEXT,
-    PRIMARY KEY(actor_id,turn_id,run_id))`);
   exec(`CREATE TABLE IF NOT EXISTS actor_profile_inputs (
     actor_id TEXT NOT NULL, inputs_key TEXT NOT NULL, inputs_json TEXT NOT NULL,
     PRIMARY KEY(actor_id,inputs_key))`);
@@ -56,14 +54,15 @@ function inputsKeyOf(inputs: ProfileAuthorityInputs): string {
   return `${owner}:${String(version)}:${digest}:${inputs.provider.revision}`;
 }
 
-/** An agent's executions' facts and frozen authority, in its own store beside its claims on them. */
+/** An agent's executions' facts and frozen authority, on its own claims on them. */
 export class TurnFactsStore {
   constructor(private readonly sql: SqlExecutor, private readonly actorId: string) {}
 
-  /** As the execution is prepared; prepared again, by its recovery or a re-read, it keeps what it first opened with. */
+  /** As the execution is prepared, under its claim; prepared again, by its recovery or a re-read, it keeps what it first
+   *  opened with. */
   freeze(key: FactsKey, facts: TurnFacts): void {
-    void this.sql`INSERT INTO actor_turn_facts (actor_id, turn_id, run_id, facts_json) VALUES (${this.actorId}, ${key.turnId}, ${key.runId}, ${JSON.stringify(facts)})
-      ON CONFLICT (actor_id, turn_id, run_id) DO UPDATE SET facts_json = COALESCE(actor_turn_facts.facts_json, excluded.facts_json)`;
+    void this.sql`UPDATE actor_turn_claims SET facts_json = COALESCE(facts_json, ${JSON.stringify(facts)})
+      WHERE actor_id = ${this.actorId} AND turn_id = ${key.turnId} AND run_id = ${key.runId}`;
   }
 
   /** The bind transition's record, once, before any model or tool work: a later bind of the same key keeps the first. */
@@ -72,17 +71,17 @@ export class TurnFactsStore {
 
     void this.sql`INSERT INTO actor_profile_inputs (actor_id, inputs_key, inputs_json) VALUES (${this.actorId}, ${inputsKey}, ${JSON.stringify(authority.inputs)})
       ON CONFLICT (actor_id, inputs_key) DO NOTHING`;
-    void this.sql`INSERT INTO actor_turn_facts (actor_id, turn_id, run_id, profile_json, inputs_key) VALUES (${this.actorId}, ${key.turnId}, ${key.runId}, ${JSON.stringify(authority.profile)}, ${inputsKey})
-      ON CONFLICT (actor_id, turn_id, run_id) DO UPDATE SET profile_json = COALESCE(actor_turn_facts.profile_json, excluded.profile_json),
-        inputs_key = COALESCE(actor_turn_facts.inputs_key, excluded.inputs_key)`;
+    void this.sql`UPDATE actor_turn_claims SET profile_json = COALESCE(profile_json, ${JSON.stringify(authority.profile)}),
+        inputs_key = COALESCE(inputs_key, ${inputsKey})
+      WHERE actor_id = ${this.actorId} AND turn_id = ${key.turnId} AND run_id = ${key.runId}`;
   }
 
   /** Null before the execution first bound. */
   frozen(key: FactsKey): FrozenAuthority | null {
     const row = this.sql<{ profile_json: string | null; inputs_json: string | null }>`
-      SELECT f.profile_json, i.inputs_json FROM actor_turn_facts f
-        LEFT JOIN actor_profile_inputs i ON i.actor_id = f.actor_id AND i.inputs_key = f.inputs_key
-      WHERE f.actor_id = ${this.actorId} AND f.turn_id = ${key.turnId} AND f.run_id = ${key.runId}`[0];
+      SELECT c.profile_json, i.inputs_json FROM actor_turn_claims c
+        LEFT JOIN actor_profile_inputs i ON i.actor_id = c.actor_id AND i.inputs_key = c.inputs_key
+      WHERE c.actor_id = ${this.actorId} AND c.turn_id = ${key.turnId} AND c.run_id = ${key.runId}`[0];
 
     if (row === undefined || row.profile_json === null || row.inputs_json === null) return null;
 
@@ -93,7 +92,7 @@ export class TurnFactsStore {
   }
 
   of(key: FactsKey): TurnFacts {
-    const row = this.sql<{ facts_json: string | null }>`SELECT facts_json FROM actor_turn_facts WHERE actor_id = ${this.actorId} AND turn_id = ${key.turnId} AND run_id = ${key.runId}`[0];
+    const row = this.sql<{ facts_json: string | null }>`SELECT facts_json FROM actor_turn_claims WHERE actor_id = ${this.actorId} AND turn_id = ${key.turnId} AND run_id = ${key.runId}`[0];
 
     return row?.facts_json === null || row === undefined ? UNPREPARED_TURN_FACTS : v.parse(TurnFactsSchema, JSON.parse(row.facts_json));
   }

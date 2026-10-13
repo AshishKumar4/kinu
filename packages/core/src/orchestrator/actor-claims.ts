@@ -9,6 +9,7 @@ import { RUN_END_REASONS } from './turn-lifecycle';
 import { initSessionContextTables } from '../session/schema';
 import { initSessionTranscriptTables } from '../session/transcript-schema';
 import { initTurnFactsTables } from './turn-facts';
+import { AgentSequence, initAgentSequenceTable } from '../subordinates/report-sequence';
 import { sqlCheckList } from '../identity/schema';
 import type { ActorTurnProgram } from './actor-program';
 import type { SessionHistory } from '../session/history';
@@ -52,7 +53,9 @@ export interface ConsumedContext { readonly requestId: string; readonly revision
 
 export function initActorClaimTables(exec: RawSqlExec): void {
   // One row a turn: its newest execution's claim. The epoch is the agent's, one sequence over all its turns, so it is the
-  // execution's capability too; the program columns are null while the claim is `preparing`.
+  // execution's capability too; the program columns are null while the claim is `preparing`. What its run was offered as
+  // it was prepared and the authority it bound (`TurnFactsStore`) are kept with it, its run's recovery's too.
+  initAgentSequenceTable(exec);
   exec(`CREATE TABLE IF NOT EXISTS actor_turn_claims (
     actor_id TEXT NOT NULL REFERENCES workspace_actors(actor_id), turn_id TEXT NOT NULL, run_id TEXT NOT NULL, epoch INTEGER NOT NULL,
     work_mode TEXT NOT NULL CHECK(work_mode IN ('plan','build')),
@@ -61,10 +64,9 @@ export function initActorClaimTables(exec: RawSqlExec): void {
     program_version INTEGER, program_digest TEXT, program_build TEXT,
     outcome TEXT CHECK(outcome IS NULL OR outcome IN (${sqlCheckList(CLAIM_OUTCOMES)})),
     claimed_at INTEGER NOT NULL, withdrawn_through INTEGER NOT NULL DEFAULT 0,
+    facts_json TEXT, profile_json TEXT, inputs_key TEXT,
     PRIMARY KEY(actor_id,turn_id))`);
   exec(`CREATE INDEX IF NOT EXISTS idx_actor_claims_outcome ON actor_turn_claims(actor_id,outcome,claimed_at DESC)`);
-  // The agent's newest epoch, minted once an execution opens: read and advanced in one statement, whatever its history.
-  exec(`CREATE TABLE IF NOT EXISTS actor_epochs (actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id), epoch INTEGER NOT NULL)`);
   // Where each execution of a turn stands, so the next knows where a dead one was cut ({@link TurnCut}).
   exec(`CREATE TABLE IF NOT EXISTS actor_turn_cuts (
     actor_id TEXT NOT NULL, turn_id TEXT NOT NULL, epoch INTEGER NOT NULL, build TEXT,
@@ -148,14 +150,17 @@ export class ActorClaimStore {
       this.actor.assertCurrent();
       const previous = this.read(input.turnId);
 
-      const epoch = this.sql<{ epoch: number }>`INSERT INTO actor_epochs(actor_id,epoch) VALUES(${this.actorId},1)
-        ON CONFLICT(actor_id) DO UPDATE SET epoch=epoch+1 RETURNING epoch`[0]?.epoch ?? 1;
+      // The agent's one sequence, which numbers its reports too: read and advanced in one statement, whatever its history.
+      const epoch = new AgentSequence(this.sql, this.actorId).next();
 
       this.carryCuts(input.turnId, epoch, previous?.epoch ?? 0, input.installedBuild ?? null);
       void this.sql`INSERT INTO actor_turn_claims(actor_id,turn_id,run_id,epoch,work_mode,phase,outcome,claimed_at)
         VALUES(${this.actorId},${input.turnId},${input.runId},${epoch},${input.workMode},'preparing',NULL,${nowMs()})
         ON CONFLICT(actor_id,turn_id) DO UPDATE SET run_id=excluded.run_id,epoch=excluded.epoch,work_mode=excluded.work_mode,phase='preparing',
-          program_kind=NULL,program_version=NULL,program_digest=NULL,program_build=NULL,outcome=NULL,claimed_at=excluded.claimed_at`;
+          program_kind=NULL,program_version=NULL,program_digest=NULL,program_build=NULL,outcome=NULL,claimed_at=excluded.claimed_at,
+          facts_json=CASE WHEN run_id=excluded.run_id THEN facts_json END,
+          profile_json=CASE WHEN run_id=excluded.run_id THEN profile_json END,
+          inputs_key=CASE WHEN run_id=excluded.run_id THEN inputs_key END`;
       this.changed();
 
       return { turnId: input.turnId, runId: input.runId, epoch, previous };
@@ -395,6 +400,16 @@ interface ClaimGuard {
 export function unsettledClaimsOf(sql: SqlExecutor, actorId: string, limit: number): readonly StoredActorClaim[] {
   return sql<ClaimRow>`SELECT turn_id,run_id,epoch,work_mode,phase,program_kind,program_version,program_digest,program_build,outcome,claimed_at,withdrawn_through
     FROM actor_turn_claims WHERE actor_id=${actorId} AND outcome IS NULL ORDER BY claimed_at DESC LIMIT ${limit}`.map((row) => claimOfRow(actorId, row));
+}
+
+/** Which try of its turn the claim's execution is: one past the executions cut before it since the turn last finished a
+ *  step ({@link TurnCut}). Its epoch is the agent's sequence, which numbers every opening and report, so it says nothing
+ *  of the turn's own tries. */
+export function turnAttemptOf(sql: SqlExecutor, claim: Pick<StoredActorClaim, 'actorId' | 'turnId' | 'epoch'>): number {
+  const cut = sql<{ cuts: number }>`SELECT work_cuts + provider_cuts AS cuts FROM actor_turn_cuts
+    WHERE actor_id=${claim.actorId} AND turn_id=${claim.turnId} AND epoch=${claim.epoch}`[0];
+
+  return 1 + (cut?.cuts ?? 0);
 }
 
 function claimOfRow(actorId: string, row: ClaimRow): StoredActorClaim {

@@ -296,9 +296,12 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     const actorId = this.actorHandle().actorId;
     const agentId = textColumn(this.unmetered('SELECT actor_id FROM workspace_actors WHERE name = ?', agent).one().actor_id);
 
-    // Main's turn is stranded in its own isolate, whose last answer told this workspace it still owes work (D9).
+    // Main's turn is stranded in its own isolate, on its second try (one execution before it was cut in its work), whose
+    // last answer told this workspace it still owes work (D9).
     await this.mainRows(`INSERT INTO actor_turn_claims (actor_id, turn_id, run_id, epoch, work_mode, phase, program_kind, program_version, claimed_at)
       VALUES (?, 'turn-stranded', 'run-stranded', 2, 'build', 'admitted', 'builtin', 1, ?)`, actorId, Date.now());
+    await this.mainRows(`INSERT INTO actor_turn_cuts (actor_id, turn_id, epoch, build, phase, phase_at, work_cuts, provider_cuts)
+      VALUES (?, 'turn-stranded', 2, NULL, 'work', ?, 1, 0)`, actorId, Date.now());
     this.unmetered(`INSERT INTO agent_reports (actor_id, seq, standing_json, holds) VALUES (?, 0, ?, 1)
       ON CONFLICT (actor_id) DO UPDATE SET holds = 1`, actorId, JSON.stringify(NO_STANDING));
     this.unmetered(`INSERT INTO terminal_effects (actor_id, sequence_id, effect_key, effect_name, scope, seq, input_json, status)

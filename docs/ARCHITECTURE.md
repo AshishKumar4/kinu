@@ -133,9 +133,9 @@ tools, which run under the turn's `TurnSurface`
 (`packages/core/src/orchestrator/main-turn-surface.ts`, its execution and its
 ledgers), held by `AgentTurns` with the open turn. The agent's isolate
 claims the execution (turn, run) as `preparing` before it is prepared, minting
-its epoch (`actor_epochs`, one sequence over the agent's chat turns and runs),
+its epoch (`agent_sequence`, one sequence over the agent's chat turns, runs and reports),
 and binds its final profile with the inputs it was resolved from under that key
-(`actor_turn_facts`, `actor_profile_inputs`) before any model or tool work; its
+(on its claim, and `actor_profile_inputs`) before any model or tool work; its
 first step's pace carries that profile to the workspace, and a workspace that
 reads the turn again after a restart rebuilds its surface from what it froze.
 Every call that runs more of the turn carries its capability (turn, run, epoch)
@@ -150,7 +150,7 @@ durable `workspace_settle` effect: the workspace declares its roster
 (evolution, event log, titles, replies, branches, the fleet row) from that
 handoff, never from what one activation held. The handoff carries the facts the
 workspace decided as the turn opened, frozen in the agent's own store at its
-preparation (`actor_turn_facts`), and the branches the owner started during the
+preparation (on its claim), and the branches the owner started during the
 turn are rows of the workspace's from their admission (`turn_branches`). A head keeps its accumulator tools and split
 callback in the workspace. A swarm node keeps its report, branch arbiter,
 background jobs and wake queue there too. Steps, live deltas and mission

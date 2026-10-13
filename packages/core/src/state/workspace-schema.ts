@@ -2,7 +2,7 @@
 // declared in `conformance/manifest.ts`, which checks `sqlite_master` against this.
 
 import { initAgentOpenTurnsTable } from '../subordinates/open-turns';
-import { initAgentReportsTable, initAgentSequenceTable } from '../subordinates/report-sequence';
+import { initAgentReportsTable } from '../subordinates/report-sequence';
 import { initTurnFenceTable } from '../subordinates/turn-fence';
 import { initAgentDeliveriesTable, initAgentStopsTable } from '../subordinates/deliveries';
 import { initTurnReportTable } from '../subordinates/turn-reports';
@@ -128,7 +128,6 @@ function createAgentTables(db: WorkspaceSchemaSql): void {
   const { execRaw } = db;
   initWorkspaceOwnershipTables(execRaw);
   initWorkspaceActorTable(execRaw);
-  initAgentSequenceTable(execRaw);
   initAgentDeliveriesTable(execRaw);
   // Its figures folded where its run events are, in its own isolate; the workspace keeps those reported to it.
   initAgentFiguresTable(execRaw);

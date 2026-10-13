@@ -2810,7 +2810,7 @@ const OWED_CLAIM = {
 
 const OWED_EFFECT = { name: null, scope: "turn", seq: 0, input: "{}", blocked: null } as const;
 
-const OWED_TURNS = [{ ...OWED_CLAIM, turnId: "turn-live", epoch: 1 }, { ...OWED_CLAIM, turnId: "turn-stranded", epoch: 3 }];
+const OWED_TURNS = [{ claim: { ...OWED_CLAIM, turnId: "turn-live", epoch: 1 }, attempt: 1 }, { claim: { ...OWED_CLAIM, turnId: "turn-stranded", epoch: 3 }, attempt: 3 }];
 
 /** `&owed=all`'s work read: one turn this activation runs and one it stranded on its third attempt until a recovery
  *  settles it, and effects owed each way, folded by core's own projection as the workspace's read folds its stores. */
@@ -2819,7 +2819,7 @@ function galleryOwedWork(): JsonValue {
   const recovered = document.documentElement.dataset.galleryRecoveries !== undefined;
 
   return v.parse(JsonValueSchema, inspectWork({
-    claims: OWED_TURNS.filter((claim) => !recovered || claim.turnId !== "turn-stranded").map((claim) => ({ claim, actor: null })),
+    claims: OWED_TURNS.filter(({ claim }) => !recovered || claim.turnId !== "turn-stranded").map((owed) => ({ ...owed, actor: null })),
     agentTurns: [],
     executing: new Set(["turn-live"]),
     effects: [

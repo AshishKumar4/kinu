@@ -1,7 +1,7 @@
 /** One delegated turn in the agent's isolate: its model loop here, every tool call back in the workspace. */
 import { jsonSchema, tool, type ModelMessage, type ToolSet, type UIMessage, type UIMessageChunk } from 'ai';
 import {
-  CHAT_SESSION_ID, actorAffinity, HeadCapture, ownerLaneTools, toolsInWorkMode, withEffectReceipt, decodeJsonValue, decodeModelMessageValues, encodeModelMessageValues, withEffectPointer, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan, imageModelOutput,
+  CHAT_SESSION_ID, actorAffinity, HeadCapture, ownerLaneTools, toolsInWorkMode, withEffectReceipt, decodeJsonValue, decodeModelMessageValues, encodeModelMessageValues, replayPolicyFor, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan, imageModelOutput,
   type AuthRequest, type AuthResolution, type HandedOffTurn, type SettledRun, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type JsonValue, type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind, type AgentSignal, type SendOutcome,
   turnSourcesFromBundle, captureOperationProfile, type ModelCallReport, type ModelOperationEvent,
   type AdvisorRecoverySnapshot, type AgentFigures, type AgentReport, type HostedActor, type OwedReport, type SerializedMessage, type SessionEvent, type TurnEndEvent,
@@ -268,12 +268,17 @@ function workspaceTools(
   workspace: AgentWorkspace,
   prepared: PreparedAgentTurn,
   turn: FacetToolTurn,
+  durable: (callId: string, signal?: AbortSignal) => Promise<void>,
 ): ToolSet {
   return Object.fromEntries(prepared.tools.map((descriptor) => {
     const entry = tool({
       description: descriptor.description,
       inputSchema: jsonSchema(descriptor.inputSchema),
-      execute: async (input, { toolCallId }) => {
+      execute: async (input, { toolCallId, messages, abortSignal }) => {
+        // In this store's history before it crosses, so a reset after its effect committed there finds it to ask after;
+        // a program's own call streams no part.
+        if (replayPolicyFor(descriptor.name) !== 'safe' && messages.length > 0) await durable(toolCallId, abortSignal);
+
         const answer = await workspace.executeTool({
           activity: turn.database.takeActivity(), turnId: turn.id, runId: turn.runId, epoch: turn.epoch, mode: turn.mode, parentDriven: turn.parentDriven, ...(turn.driving !== undefined && { driving: turn.driving }),
           callId: toolCallId, name: descriptor.name, input: decodeJsonValue({ value: input }),
@@ -415,7 +420,7 @@ interface FacetToolTurn {
 
 /**
  * A turn's tools here (design v2 §4): each workspace tool commits in the workspace, which keeps its receipt, so a call
- * leaves only a pointer here; the owner's lane (its plans, its questions) commits in this store, under a receipt here.
+ * leaves nothing here; the owner's lane (its plans, its questions) commits in this store, under a receipt here.
  */
 export function facetTurnTools(workspace: AgentWorkspace, prepared: PreparedAgentTurn, actor: HostedActor, turn: FacetToolTurn): ToolSet {
   const receipts = {
@@ -435,7 +440,7 @@ export function facetTurnTools(workspace: AgentWorkspace, prepared: PreparedAgen
   }));
 
   return {
-    ...withEffectPointer(workspaceTools(workspace, prepared, turn), receipts),
+    ...workspaceTools(workspace, prepared, turn, receipts.durable),
     ...withEffectReceipt(owned, { ...receipts, transaction: (body) => actor.runtime.storage.transactionSync(body) }),
   };
 }
