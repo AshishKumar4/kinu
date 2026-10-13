@@ -384,10 +384,11 @@ function mapWorkspace(files: Map<string, string>, commands: string[]): CodemodeP
       exists: { description: 'exists', execute: async (path) => files.has(String(path)) },
       exec: {
         description: 'run',
+        // As the workspace's own exec answers a program that asks for the command's parts.
         execute: async (command) => {
           commands.push(String(command));
 
-          return 'ran';
+          return { stdout: 'ran', stderr: '', exitCode: 0 };
         },
       },
     },
@@ -422,6 +423,33 @@ test('a program writes only into the workspace it was given, and Plan refuses be
   } finally {
     rmSync(machinePath, { force: true });
   }
+});
+
+// #53: the bridge rebuilt a command's output from the text the model is shown, so output that looked like that text's
+// own markers came back changed.
+test('child_process hands a program exactly what the command wrote, whatever it says', async () => {
+  const { rt } = createTestRuntime();
+  const said = { stdout: '(no output)', stderr: '' };
+
+  const workspace = createInlineExecutor({
+    vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore, sql: rt.storage.sql,
+    shell: { exec: async () => ({ ...said, exitCode: 0 }) }, filesOwner: 'agent',
+  });
+
+  const execute = toolExecute<{ code: string }, ExecuteToolResult>(
+    createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), namespaces: [workspace] })({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [] }),
+  );
+
+  const program = "return await require('child_process').exec('anything');";
+
+  expect(await execute({ code: program })).toMatchObject({ result: { stdout: '(no output)', stderr: '' } });
+
+  said.stdout = 'one\n\n--- stderr ---\ntwo';
+  expect(await execute({ code: program })).toMatchObject({ result: { stdout: 'one\n\n--- stderr ---\ntwo', stderr: '' } });
+
+  said.stdout = 'out';
+  said.stderr = 'warned';
+  expect(await execute({ code: program })).toMatchObject({ result: { stdout: 'out', stderr: 'warned' } });
 });
 
 test('a failed fs call keeps the code and path the workspace names, once', async () => {
@@ -483,7 +511,7 @@ test('each workspace.slates member reaches the slate host as one operation, and 
     slate: async (operation) => {
       operations.push(operation);
 
-      return operation.op === 'remove' ? { ok: false, reason: 'denied', error: 'not yours' } : { ok: true, value: operation.op };
+      return operation.op === 'remove' ? { ok: false, success: false, reason: 'denied', error: 'not yours' } : { ok: true, value: operation.op };
     },
   });
 

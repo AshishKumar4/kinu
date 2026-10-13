@@ -20,7 +20,6 @@ const DUMMY_LLM: LLMProviderConfig = { name: 'fake', baseURL: 'http://localhost:
 /** A local workspace whose ledger holds one model call per entry, each paid by `account`. */
 async function localWorkspace(home: string, name: string, calls: ReadonlyArray<{ usage: Usage; usd: number; account: CallAccount }>) {
   mkdirSync(join(home, name), { recursive: true });
-  placeLocalWorkspace(home, name);
   const db = workspaceDatabase(join(home, name, 'agent.db'));
 
   try {
@@ -38,6 +37,8 @@ async function localWorkspace(home: string, name: string, calls: ReadonlyArray<{
   } finally {
     db.close();
   }
+
+  placeLocalWorkspace(home, name);
 }
 
 /** The CLI's own reader, in a process whose home is `home`. */

@@ -130,13 +130,15 @@ describe('installed Nimbus dependency integrity', () => {
     await agent.setSoul('# Checkout\n\n## Mission\n\nAudit the checkout flow.');
 
     const revised = '# Checkout\n\n## Mission\n\nAudit the refunds flow.';
+    // The editor saves over the revision it opened, as FileViewer does.
+    const opened = await agent.readExecutorFile('workspace', 'SOUL.md');
 
     const saved = await agent.writeExecutorFileChunk({
       executorId: 'workspace', path: 'SOUL.md', transferId: 'soul-save', offset: 0,
-      chunk: new TextEncoder().encode(revised), final: true,
+      chunk: new TextEncoder().encode(revised), final: true, expectedRevision: opened.revision,
     });
 
-    expect(saved).toEqual({ ok: true });
+    expect(saved).toMatchObject({ ok: true });
     expect((await agent.getAgentStatus()).soul).toBe(revised);
     expect(await agent.deleteExecutorFile('workspace', 'SOUL.md')).toEqual({ ok: true });
     expect((await agent.getAgentStatus()).soul).toBe('');

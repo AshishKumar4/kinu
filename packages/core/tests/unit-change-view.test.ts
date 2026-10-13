@@ -198,10 +198,11 @@ describe('change view', () => {
     expect(added?.path).toBe('src/n.ts');
   });
 
-  test('a file with no rows says why: binary, not compared, too many lines, stopped at the row limit, or empty', () => {
+  test('a bounded or omitted body says why, without losing the full totals', () => {
     const [binary] = parseGitDiff(['diff --git a/logo.png b/logo.png', 'Binary files a/logo.png and b/logo.png differ'].join('\n'));
     const rewritten = numbered(1500);
-    const counted = changedFile(rewritten, rewritten.map((line) => `${line}!`));
+    const aligned = changedFile(rewritten, rewritten.map((line) => `${line}!`));
+    const counted = { ...aligned, lines: [] };
 
     const [capped] = parseGitDiff([
       'diff --git a/data.csv b/data.csv', '--- a/data.csv', '+++ b/data.csv', '@@ -1,0 +1,1200 @@',

@@ -1,44 +1,29 @@
-/**
- * Minimal LCS line diff (add/del/ctx rows plus +/- counts).
- * The O(n·m) table's size bound is enforced here, not by callers (see {@link MAX_LINES_PER_FILE}).
- */
+import { compareTexts, diffText } from '@nimbus-sh/core/substrate/lifo/commands/text/diff-analysis.js';
+
 /** `hunk`: a git hunk header (`@@ -40,6 +40,8 @@ context`), never a line of the file. */
 export interface DiffLine { kind: 'add' | 'del' | 'ctx' | 'hunk'; text: string }
 
 export interface LineDiff {
   lines: DiffLine[]; added: number; removed: number;
-  /** Body bounded (alignment refused or rows capped); +/- counts still cover the whole file. */
+  /** Body rows capped; +/- counts still cover the whole file. */
   truncated?: boolean;
 }
 
-/** Max rows carried per file and max lines per side aligned: an unreadable body is not worth the table.
- *  Memory binds, not CPU: breaching `do.isolate.reset_silent` is a silent object reset. The table this allows must fit
- *  an eighth of that wall, which `unit-workspace-diff.test.ts` holds rather than this module: the browser aligns lines
- *  too, and reading the catalog here ships all of it to every page. */
+/** Max rows carried per file; alignment and +/- counts cover both full texts. */
 export const MAX_LINES_PER_FILE = 1000;
 
 export function diffLines(before: string, after: string): LineDiff {
   const a = before === '' ? [] : before.split('\n');
   const b = after === '' ? [] : after.split('\n');
 
-  // Align only the differing middle; trimming the shared head and tail is O(a+b) with no memory.
-  let head = 0;
+  const encoder = new TextEncoder();
 
-  while (head < a.length && head < b.length && a[head] === b[head]) head++;
-  let tail = 0;
+  // Each split item, including a final empty one, is a line. JSON keeps lone surrogates distinct through UTF-8.
+  const asText = (rows: readonly string[]) => diffText(encoder.encode(
+    rows.length === 0 ? '' : `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`,
+  ));
 
-  while (
-    tail < a.length - head && tail < b.length - head
-    && a[a.length - 1 - tail] === b[b.length - 1 - tail]
-  ) tail++;
-  const n = a.length - head - tail;
-  const m = b.length - head - tail;
-
-  // Past the bound, report the middle as a wholesale replacement with no body and no table.
-  // A middle with one empty side needs no table, so it is exempt at any size.
-  if (n > 0 && m > 0 && (n > MAX_LINES_PER_FILE || m > MAX_LINES_PER_FILE)) {
-    return { lines: [], added: m, removed: n, truncated: true };
-  }
+  const changes = compareTexts(asText(a), asText(b), { ignoreCase: false, whiteSpace: 'none', minimal: true, horizon: 0 });
 
   const lines: DiffLine[] = [];
   let added = 0, removed = 0, dropped = false;
@@ -56,47 +41,19 @@ export function diffLines(before: string, after: string): LineDiff {
     lines.push({ kind, text });
   };
 
-  const done = (): LineDiff =>
-    dropped ? { lines, added, removed, truncated: true } : { lines, added, removed };
+  let at = 0;
 
-  for (let k = 0; k < head; k++) emit('ctx', a[k]);
+  for (const change of changes) {
+    while (at < change.line0) emit('ctx', a[at++]);
 
-  // Pure insertion or deletion: exact with no table.
-  if (n === 0 || m === 0) {
-    for (let k = 0; k < n; k++) emit('del', a[head + k]);
+    for (let k = 0; k < change.deleted; k++) emit('del', a[at++]);
 
-    for (let k = 0; k < m; k++) emit('add', b[head + k]);
-  } else {
-    // lcs[i][j] = LCS length of mid-a[i:] and mid-b[j:].
-    const lcs: number[][] = Array.from(
-      { length: n + 1 },
-      () => Array.from<number>({ length: m + 1 }).fill(0),
-    );
-
-    for (let i = n - 1; i >= 0; i--) {
-      for (let j = m - 1; j >= 0; j--) {
-        lcs[i][j] = a[head + i] === b[head + j]
-          ? lcs[i + 1][j + 1] + 1
-          : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
-      }
-    }
-
-    let i = 0, j = 0;
-
-    while (i < n && j < m) {
-      if (a[head + i] === b[head + j]) { emit('ctx', a[head + i]); i++; j++; }
-      else if (lcs[i + 1][j] >= lcs[i][j + 1]) { emit('del', a[head + i]); i++; }
-      else { emit('add', b[head + j]); j++; }
-    }
-
-    while (i < n) emit('del', a[head + i++]);
-
-    while (j < m) emit('add', b[head + j++]);
+    for (let k = 0; k < change.inserted; k++) emit('add', b[change.line1 + k]);
   }
 
-  for (let k = a.length - tail; k < a.length; k++) emit('ctx', a[k]);
+  while (at < a.length) emit('ctx', a[at++]);
 
-  return done();
+  return dropped ? { lines, added, removed, truncated: true } : { lines, added, removed };
 }
 
 export type FileStatus = 'added' | 'removed' | 'changed';

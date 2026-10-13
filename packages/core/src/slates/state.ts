@@ -4,6 +4,9 @@ import { KinuError } from '../obs/error';
 import { settleSync } from '../obs/effect';
 import type { RawSqlExec, SqlExec, SqlExecRow } from '../types/primitives';
 import { JsonValueSchema, parseJsonValue, renderIssues, type JsonValue } from '../utils/json';
+import { requireWorkModePermission } from '../execution/work-mode';
+import type { WorkMode } from '../types/turn';
+import type { SlateCallResult } from './rpc';
 
 /** Implicit on every slate; answered from the workspace object's `slate_state` table. */
 export const SLATE_STORAGE_BINDING = '__storage';
@@ -51,10 +54,6 @@ function oneKey(request: StorageRequest): Effect.Effect<string, KinuError> {
 }
 
 /** Unknown members are `denied`; malformed arguments are `bad_input` naming the broken signature. */
-export function routeSlateStorageCall(request: StorageRequest): SlateStorageOp {
-  return settleSync(storageOp(request));
-}
-
 function storageOp(request: StorageRequest): Effect.Effect<SlateStorageOp, KinuError> {
   switch (request.member) {
     case 'get': return Effect.map(oneKey(request), (key): SlateStorageOp => ({ op: 'get', key }));
@@ -145,4 +144,25 @@ export class SqliteSlateStateStore {
 
     return rows.map(stateEntry);
   }
+}
+
+/** A slate's own storage, as its caller may use it: read in any mode, written only where the caller may write. */
+export function slateStorageCall(
+  state: SqliteSlateStateStore, caller: { readonly workMode: WorkMode }, id: string, request: StorageRequest,
+): SlateCallResult {
+  return settleSync(Effect.map(storageOp(request), (operation): SlateCallResult => {
+    if (operation.op === 'put' || operation.op === 'delete') requireWorkModePermission(caller.workMode, false, 'slate storage write');
+
+    switch (operation.op) {
+      case 'get': return { ok: true, value: state.get(id, operation.key) };
+      case 'put': {
+        state.put(id, operation.key, operation.value);
+
+        return { ok: true, value: null };
+      }
+
+      case 'delete': return { ok: true, value: state.delete(id, operation.key) };
+      case 'list': return { ok: true, value: state.list(id, { prefix: operation.prefix, limit: operation.limit }) };
+    }
+  }));
 }

@@ -312,21 +312,31 @@ describe('collectWorkspaceAgentsMd — cloud discovery', () => {
   });
 });
 
-// The cloud plane cannot resolve a link through Nimbus yet (NIMBUS-ASKS 10), so a link is never followed, and the
-// bytes read must be the ones sized: AGENTS.md is agent-writable, and a link or a swap would carry any file in.
+// A link is followed as the plane's reader follows it, and the bytes read must be the ones sized: AGENTS.md is
+// agent-writable, and a swap between the size and the read would carry another file in.
 describe('cloud instruction files are contained and read as sized', () => {
-  test('an AGENTS.md or ADVISOR.md that is a link is reported unavailable, never read', async () => {
+  test('an AGENTS.md or ADVISOR.md that is a link is read through it', async () => {
     const workspace = createWorkspaceBundle(new Database(':memory:'));
     const kernel = (await workspace.session()).vfs.as(CRED_KERNEL);
-    await kernel.writeFile('/home/main/secret.txt', new TextEncoder().encode('the owner key'));
-    await kernel.symlink('/home/main/secret.txt', '/home/main/AGENTS.md');
-    await kernel.symlink('/home/main/secret.txt', '/home/main/ADVISOR.md');
+    await kernel.writeFile('/home/main/shared-guide.md', new TextEncoder().encode('Use bun for everything.'));
+    await kernel.symlink('/home/main/shared-guide.md', '/home/main/AGENTS.md');
+    await kernel.symlink('shared-guide.md', '/home/main/ADVISOR.md');
 
     const sources = await collectWorkspaceAgentsMd(workspace.vfs, WINDOW, APPROVED);
 
-    expect(sources.admitted).toEqual([]);
-    expect(sources.unavailable).toEqual([{ path: 'AGENTS.md (workspace)', reason: 'a link this plane does not follow' }]);
-    expect(await advisorWorkspaceGuidance({ vfs: workspace.vfs, limits: async () => WINDOW })).toBe('');
+    expect(sources.admitted.map((file) => [file.path, file.content])).toEqual([['AGENTS.md (workspace)', 'Use bun for everything.']]);
+    expect(sources.unavailable).toEqual([]);
+    expect(await advisorWorkspaceGuidance({ vfs: workspace.vfs, limits: async () => WINDOW })).toBe('Use bun for everything.');
+  });
+
+  test('a link to nothing is no instruction file', async () => {
+    const workspace = createWorkspaceBundle(new Database(':memory:'));
+    const kernel = (await workspace.session()).vfs.as(CRED_KERNEL);
+    await kernel.symlink('/home/main/gone.md', '/home/main/AGENTS.md');
+
+    const sources = await collectWorkspaceAgentsMd(workspace.vfs, WINDOW, APPROVED);
+
+    expect(sources).toMatchObject({ admitted: [], unavailable: [] });
   });
 
   test('a file swapped between sizing and reading is reported, not read', async () => {

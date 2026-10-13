@@ -52,11 +52,14 @@ const JsonObject = v.record(v.string(), JsonValueSchema);
 
 const EvidenceEvent = RunEventSchema;
 
-const HelperRun = v.object({ status: v.string(), asked: v.optional(v.string()), userMessage: v.optional(v.nullable(v.string())) });
+const HelperRun = v.object({ status: v.nullable(v.string()), userMessage: v.nullable(v.string()) });
 
 const Helper = v.object({ name: v.string(), status: v.string(), runs: v.optional(v.array(HelperRun)) });
 
-const HelperCheck = v.object({ helpers: v.array(Helper) });
+const HelperCheck = v.object({ helpers: v.array(v.object({
+  ...Helper.entries,
+  runs: v.array(v.object({ status: v.nullable(v.string()), asked: v.string() })),
+})) });
 
 type EvidenceEvent = v.InferOutput<typeof EvidenceEvent>;
 
@@ -295,8 +298,8 @@ function recordRuns(runs: readonly LedgerRun[], add: RecordFact): void {
   }
 }
 
-function recordedHelper(helper: Helper, old: HelperObservation | undefined, sources: EvidenceLine[]): HelperObservation {
-  return { status: helper.status, runs: helper.runs?.map((item) => ({ status: item.status, asked: item.asked ?? item.userMessage ?? null })) ?? old?.runs ?? null,
+function recordedHelper(helper: { readonly status: string; readonly runs?: readonly { readonly status: string | null; readonly asked: string | null }[] }, old: HelperObservation | undefined, sources: EvidenceLine[]): HelperObservation {
+  return { status: helper.status, runs: helper.runs?.map((item) => ({ ...item })) ?? old?.runs ?? null,
     evidence: refs(old?.evidence ?? [], sources) };
 }
 
@@ -350,7 +353,9 @@ function recordDelegations(calls: readonly Call[], add: RecordFact) {
       const roster = v.safeParse(v.object({ subordinates: v.array(Helper) }), call.event.result);
 
       for (const helper of roster.success ? roster.output.subordinates : []) {
-        helpers.set(helper.name, recordedHelper(helper, helpers.get(helper.name), call.evidence));
+        helpers.set(helper.name, recordedHelper({
+          status: helper.status, runs: helper.runs?.map((run) => ({ status: run.status, asked: run.userMessage })),
+        }, helpers.get(helper.name), call.evidence));
       }
     }
   }
@@ -358,7 +363,7 @@ function recordDelegations(calls: readonly Call[], add: RecordFact) {
   return { assignments, helpers };
 }
 
-function helperSources(lines: readonly string[], helper: Helper, at: number): EvidenceLine[] {
+function helperSources(lines: readonly string[], helper: { readonly name: string; readonly status: string; readonly runs?: readonly { readonly status: string | null }[] }, at: number): EvidenceLine[] {
   const source: EvidenceLine[] = [{ file: 'results.json', line: at }];
   let runAt = lineOf(lines, 'status', helper.status, at);
 

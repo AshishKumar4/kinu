@@ -7,7 +7,7 @@
  * an allowlist, so a new member is unreachable until listed; native RPC has no dispatch hook to intercept.
  */
 
-import { AGENT_RPC_ACCESS, inheritedDescriptor, type RpcSurfaceSubject } from '@kinu.run/core';
+import { AGENT_RPC_ACCESS } from '@kinu.run/core';
 import type { ActorAgent } from './actor-agent';
 import type { OrchestratorAgent } from './orchestrator';
 import type { UserDO } from './user/user-do';
@@ -51,39 +51,6 @@ const AGENTS_FACET_RPC_SURFACE: readonly string[] = [
   '_cf_unregisterFacetRun',
 ] as const;
 
-/** Every prototype-chain member below `Object.prototype` not shadowed by an own property; the rule
- * workerd implements, measured over real stubs by workerd/orchestrator-seal.test.ts. */
-function rpcReachableNames(target: RpcSurfaceSubject): string[] {
-  const own = new Set(Object.getOwnPropertyNames(target));
-  const reachable = new Set<string>();
-
-  for (let proto: object | null = Object.getPrototypeOf(target);
-       proto !== null && proto !== Object.prototype;
-       proto = Object.getPrototypeOf(proto)) {
-    for (const name of Object.getOwnPropertyNames(proto)) {
-      if (name !== 'constructor' && !own.has(name)) reachable.add(name);
-    }
-  }
-
-  return [...reachable].sort();
-}
-
-/**
- * Reduce `instance`'s RPC-reachable surface to `surface`, in place. Call as the last statement of the
- * constructor, after `super()` installed the SDK wrappers. Function identity is preserved.
- */
-export function sealRpcSurface(instance: RpcSurfaceSubject, surface: readonly string[]): void {
-  const allowed = new Set(surface);
-
-  for (const name of rpcReachableNames(instance)) {
-    if (allowed.has(name)) continue;
-    const descriptor = inheritedDescriptor(instance, name);
-
-    if (descriptor) Object.defineProperty(instance, name, { ...descriptor, enumerable: false });
-  }
-}
-
-
 // `satisfies readonly (keyof X)[]` fails the build on a name that is not a public member.
 
 /** The RPC counterpart of the `requireTier` gate: every entry gates itself on a `UserCaller`. */
@@ -109,7 +76,7 @@ const USER_DO_METHODS = [
   'builtinPasswordAccount',
   'builtinRecordPasskeyUse',
   'builtinRegister',
-  'builtinReplacePassword',
+
   'builtinReserveAttempt',
   'builtinResetAccount',
   'builtinSpendChallenge',
@@ -288,6 +255,7 @@ const ORCHESTRATOR_METHODS = [
   'abortExecutorFileDownload',
   'abortExecutorFileWrite',
   'acceptContainerEvent',
+  'egressGrants',
   'recordGitHubEgress',
   // Never `@callable`.
   'admitBlueprint',

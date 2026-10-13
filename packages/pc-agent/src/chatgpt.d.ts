@@ -1,8 +1,5 @@
-// The CLI imports this module twice: its BYTES, to install beside the daemon (the default export, a
-// text import), and its API, to sign in and refresh on this machine (the named exports).
-declare const source: string;
-
-export default source;
+// The CLI imports this module's API, to sign in and refresh on this machine; the bytes it installs beside the daemon
+// it reads from disk (packages/cli/src/device-connect.ts `daemonFiles`), as Bun gives one file one loader.
 
 /** One sign-in on this machine: the verified identity, the issued client, and its tokens. */
 export interface SiwcRecord {

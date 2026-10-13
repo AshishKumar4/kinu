@@ -5,11 +5,12 @@
  */
 import { Agent, type AgentContext } from 'agents';
 
-import { USER_DO_RPC_SURFACE, USER_DO_STARTED_RPC, sealRpcSurface } from '../rpc-surface';
+import { USER_DO_RPC_SURFACE, USER_DO_STARTED_RPC } from '../rpc-surface';
+import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from '../activation-gate';
 
 import {
-  ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, NO_DEVICE_CONNECTED, ORCHESTRATOR_AGENT_SLUG, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type DeviceCodeStart, type JsonValue, type EgressRequestFacts, type EgressSecretBinding, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type EgressSecretSummary, type PutEgressSecretInput, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, DEVICE_KEEPALIVE_PING, DEVICE_KEEPALIVE_PONG, DEVICE_TOKEN_ROTATION_ACK, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, } from '@kinu.run/core';
+  ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, NO_DEVICE_CONNECTED, ORCHESTRATOR_AGENT_SLUG, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type DeviceCodeStart, type JsonValue, type EgressRequestFacts, type EgressSecretBinding, type ApprovalGrant, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type EgressSecretSummary, type PutEgressSecretInput, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, DEVICE_KEEPALIVE_PING, DEVICE_KEEPALIVE_PONG, DEVICE_TOKEN_ROTATION_ACK, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, } from '@kinu.run/core';
 
 import { DurableObjectOAuthClientProvider, type AgentMcpOAuthProvider } from 'agents/mcp/do-oauth-client-provider';
 
@@ -28,7 +29,8 @@ import type { McpPresetAvailability, McpServerSummary } from '@kinu.run/core';
 import { acceptRosterSocket, isRosterSocket, unreportedWorkspaces, ROSTER_SOCKET_PATH, type RosterPage, type RosterQuery } from './roster';
 
 import { UserDrive, type DriveAnswer, type DriveChunkWrite } from './drive';
-import { DeviceHelloSchema, UserDevices, type DeviceCancellationOutcome } from './devices';
+import { UserDevices, type DeviceCancellationOutcome } from './devices';
+import { DeviceHelloHeadSchema, DeviceHelloSchema, DeviceUpdateHelloSchema } from '@kinu.run/core';
 import { UserTerminals } from './terminals';
 import { UserChatGptSignIn, type ChatGptMachineSignIn, type ChatGptPlanStatus } from './chatgpt-sign-in';
 import { UserMcpServers, USER_MCP_CLIENT_NAME, type McpToolCall } from './mcp-servers';
@@ -45,7 +47,7 @@ import { ShareCardJobs, type ReceivedShare } from './share-cards';
 import type { SqlRow, UserObjectHost } from './user-host';
 
 import {
-  type Admission, type AttemptBucket, type ChallengePurpose, type Grant, type NewBuiltinAccount, type NewInvite, type PasskeyAccount, type PasswordAccount, type PasswordHash, type PendingChallenge, type ListedAccount, type Reset, type SigningAccount,
+  type Admission, type AttemptBucket, type ChallengePurpose, type Grant, type NewBuiltinAccount, type NewInvite, type PasskeyAccount, type PasswordAccount, type PendingChallenge, type ListedAccount, type Reset, type SigningAccount,
 } from '@kinu.run/core/identity';
 
 const ROSTER_NUDGE_LANES = 4;
@@ -295,8 +297,8 @@ export class UserDO extends Agent<Env> {
     return this.credentials.revokeEgressSecret(caller, id);
   }
 
-  resolveEgressInjection(caller: UserCaller, facts: EgressRequestFacts, active: readonly EgressSecretBinding[]): Promise<EgressInjectionResult> {
-    return this.credentials.resolveEgressInjection(caller, facts, active);
+  resolveEgressInjection(caller: UserCaller, facts: EgressRequestFacts, grants: readonly ApprovalGrant[]): Promise<EgressInjectionResult> {
+    return this.credentials.resolveEgressInjection(caller, facts, grants);
   }
 
   getCredentialEndpoint(caller: UserCaller, key: string): Promise<CredentialEndpoint | null> {
@@ -377,10 +379,6 @@ export class UserDO extends Agent<Env> {
 
   builtinReserveAttempt(caller: UserCaller, buckets: readonly AttemptBucket[]): Promise<number> {
     return this.sessions.builtinReserveAttempt(caller, buckets);
-  }
-
-  builtinReplacePassword(caller: UserCaller, userId: string, password: PasswordHash): Promise<void> {
-    return this.sessions.builtinReplacePassword(caller, userId, password);
   }
 
   builtinResetAccount(caller: UserCaller, grant: Grant): Promise<SigningAccount | null> {
@@ -874,11 +872,27 @@ export class UserDO extends Agent<Env> {
     }
 
     // Anything not a HELLO (including non-JSON) is treated as an RPC response.
-    const hello = v.safeParse(DeviceHelloSchema, tolerate(() => JSON.parse(data), 'malformed-input'));
+    const announced = tolerate(() => JSON.parse(data), 'malformed-input');
+    const head = v.safeParse(DeviceHelloHeadSchema, announced);
 
-    if (hello.success) {
-      if (!this.devices._devices.hello(deviceId, hello.output.protocolVersion, hello.output.features)) {
+    if (head.success) {
+      const admitted = this.devices._devices.hello(deviceId, head.output.protocolVersion, head.output.features);
+      const hello = v.safeParse(DeviceHelloSchema, announced);
+
+      if (admitted !== 'serve' || !hello.success) {
         this.sqlx(`INSERT OR IGNORE INTO user_device_protocol_refusals (device_id) VALUES (?)`, deviceId);
+        // The protocol before this one is pushed the build that brings it here, and nothing else.
+        const previous = v.safeParse(DeviceUpdateHelloSchema, announced);
+        const update = admitted === 'update' && previous.success ? await this.devices.deviceUpdateFrame(deviceId, previous.output) : null;
+
+        if (update === null || !previous.success) {
+          this.devices._devices.refuse(deviceId);
+
+          return;
+        }
+
+        diagnostics.event('device.update_pushed', { device: deviceId, from: previous.output.version ?? '', to: update.version });
+        ws.send(JSON.stringify(update));
 
         return;
       }

@@ -21,8 +21,8 @@ const Layer = v.object({
   key: v.string(), bytes: v.pipe(v.number(), v.safeInteger(), v.minValue(1)), committedAt: v.number(), digest: LayerDigest,
 });
 
-/** `saves`: how many saves the layer covers, from the boundary below it; a delta from before D77 covers one. */
-const Delta = v.object({ ...Layer.entries, saves: v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(1)), 1) });
+/** `saves`: how many saves the layer covers, from the boundary below it. */
+const Delta = v.object({ ...Layer.entries, saves: v.pipe(v.number(), v.safeInteger(), v.minValue(1)) });
 
 export const DiskChainStateSchema = v.object({
   format: v.literal(DISK_CHAIN_FORMAT),
@@ -52,8 +52,6 @@ const KEEP_INVENTORY = `{ [ ! -e ${shellPath(NEXT_INVENTORY)} ] || mv ${shellPat
   + `&& mv ${shellPath(NEXT_INVENTORY_REV)} ${shellPath(INVENTORY_REV)}`;
 
 const CHANGES = `${RT}/disk-changes`;
-
-const STAGED_BY_AN_OLDER_IMAGE = `${RT}/disk-stage`;
 
 const PACK = `${RT}/disk-pack/layer.sqsh`;
 
@@ -112,15 +110,15 @@ function keepBoundCommand(bound: string, rev: string): string {
   return `flock ${shellPath(`${BLOCKS}.lock`)} sh -c ${shellPath(keep)}`;
 }
 
-/** Each merged layer's list, from this disk or else from its object; a line for each that neither holds. */
+/** Each merged layer's required list, cached here or read from its current stored object. */
 function gatherCommand(root: string, keys: readonly string[]): string {
   const scratch = shellPath(`${LEVELS}/.gather`);
 
-  return [`mkdir -p ${shellPath(LEVELS)}`, ...keys.map((key) => {
+  return ['set -e', `mkdir -p ${shellPath(LEVELS)}`, ...keys.map((key) => {
     const local = shellPath(levelList(key));
 
     return `[ -e ${local} ] || { rm -rf ${scratch}; /usr/bin/unsquashfs -no-progress -d ${scratch} -f ${shellPath(mounted(root, key))} .devbox-delta/paths >/dev/null 2>&1; `
-      + `[ -e ${scratch}/.devbox-delta/paths ] && mv ${scratch}/.devbox-delta/paths ${local}; rm -rf ${scratch}; }; [ -e ${local} ] || echo missing`;
+      + `mv ${scratch}/.devbox-delta/paths ${local}; rm -rf ${scratch}; }`;
   })].join('\n');
 }
 
@@ -171,7 +169,7 @@ function changesCommand(before: string, after: string): string {
   const deleted = `${CHANGES}.deleted`;
 
   return [
-    'set -e', `rm -rf ${shellPath(STAGED_BY_AN_OLDER_IMAGE)}`,
+    'set -e',
     `LC_ALL=C comm -z -13 ${shellPath(before)} ${shellPath(after)} | cut -z -f1 > ${shellPath(changed)}`,
     `cut -z -f1 ${shellPath(before)} > ${shellPath(`${deleted}.before`)} && cut -z -f1 ${shellPath(after)} > ${shellPath(`${deleted}.after`)}`,
     `LC_ALL=C comm -z -23 ${shellPath(`${deleted}.before`)} ${shellPath(`${deleted}.after`)} > ${shellPath(deleted)}`,
@@ -414,13 +412,11 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
     // An appended layer is cut from the tree the last save left, whose digests become the boundary below it.
     if (replaced.length === 0) yield* run('keeping the boundary', keepBoundCommand(bound, baseline));
 
-    if (replaced.length !== 0 && (yield* run('gathering the merged layers\' paths', gatherCommand(ports.storeRoot(), replaced.map(layer => layer.key)))) !== '') {
-      ports.log('a merged layer\'s paths are held neither here nor in its object, so this save is a base');
-
-      return yield* commitBase(state, at);
+    if (replaced.length !== 0) {
+      yield* run('gathering the merged layers\' paths', gatherCommand(ports.storeRoot(), replaced.map(layer => layer.key)));
+      yield* run('merging the change lists', mergeListsCommand(CHANGES, NEXT_INVENTORY, replaced.map(layer => levelList(layer.key))));
     }
 
-    if (replaced.length !== 0) yield* run('merging the change lists', mergeListsCommand(CHANGES, NEXT_INVENTORY, replaced.map(layer => levelList(layer.key))));
     const below = (yield* run('finding the boundary\'s digests', `[ -d ${shellPath(bound)} ] && echo held || true`)) === 'held' ? bound : null;
     const key = `${state.base.key.slice(0, state.base.key.lastIndexOf('/'))}/delta-${String(keep + 1)}-${crypto.randomUUID()}.sqsh`;
     const { bytes, digest } = yield* publish(key, { tar: deltaTarCommand({ dir, changes: CHANGES, below, next: `${BLOCKS}.next`, listing: levelList(key) }) });

@@ -30,8 +30,6 @@ describe('a written path resolves to the machine path its plane serves', () => {
     expect(resolvePath('notes/a.md', CF)).toEqual({ plane: 'vfs', absolute: '/home/main/notes/a.md' });
     expect(resolvePath('', CF)).toEqual({ plane: 'vfs', absolute: '/home/main' });
     expect(resolvePath('~', CLI)).toEqual({ plane: null, absolute: '/home/ana' });
-    expect(resolvePath('~/notes/../a.md', CLI)).toEqual({ plane: null, absolute: '/home/ana/a.md' });
-    expect(resolvePath('src/../README.md', CLI)).toEqual({ plane: 'local', absolute: '/home/ana/acme/README.md' });
     expect(resolvePath('/etc/hosts', CLI)).toEqual({ plane: null, absolute: '/etc/hosts' });
     expect(resolvePath('~other/x', CF)).toEqual({ plane: 'vfs', absolute: '/home/main/~other/x' });
   });

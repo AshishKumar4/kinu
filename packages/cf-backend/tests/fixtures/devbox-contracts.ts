@@ -47,7 +47,8 @@ export class ContractBox extends Devbox<Env> {
     }
   }
 
-  enableInternet = this.env.PROBE_HTTP === '1';
+  // As KinuDevbox's (D82), so the contracts run on the network shape Kinu ships.
+  enableInternet = true;
   protected override get containerImage(): string { return GOLDEN_BASE; }
   protected override get store(): DevboxStore { return { binding: 'STORE', bucket: this.env.STORE }; }
   protected override get namespaceBinding(): string { return 'Box'; }

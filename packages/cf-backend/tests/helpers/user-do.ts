@@ -4,7 +4,7 @@ import { AwaitedList } from '@kinu.run/test-utils';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import type { AgentContext } from 'agents';
 import { joinHarnessFibers, mockAgentsSdk, rememberMcpManager, inheritedMcpManager } from './agents-sdk';
-import { sha256Hex, DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES } from '@kinu.run/core';
+import { sha256Hex, DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES, deviceIdFromSocket } from '@kinu.run/core';
 import { isJsonObject } from '../../../core/src/utils/json';
 import { ownerCaller, type UserCaller } from '@kinu.run/core';
 import type { WorkspaceEntry, WorkspaceRegistration } from '../../src/user/workspaces';
@@ -141,6 +141,22 @@ export interface TestUserDO {
   close(): void;
 }
 
+/** What a current daemon reports on connect, every field it sends: a sandbox it proved and where agent homes live. */
+export const CAPABLE_HELLO = {
+  type: 'HELLO',
+  protocolVersion: DEVICE_PROTOCOL_VERSION,
+  features: [...DEVICE_FEATURES],
+  os: 'linux',
+  arch: 'x64',
+  hostname: 'studio',
+  root: '/home/ashish/project',
+  home: '/home/ashish',
+  updateCheck: true,
+  runtime: 'Bun 1.4.2',
+  agentRoot: '/home/ashish/.kinu/agents',
+  sandbox: { capability: 'sandboxed', reason: null, gpu: [] },
+} satisfies JsonValue;
+
 export const TEST_CREDENTIAL_ENCRYPTION_KEY = 'test-credential-encryption-key-0123456789';
 
 export const TEST_USER_ENV = { CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY };
@@ -160,7 +176,6 @@ export interface TestUserDOOptions {
    *  can be held open across another. `say` sends a frame first, as the daemon sends live output. */
   deviceResponder?: (frame: DeviceFrame, say: (frame: JsonValue) => Promise<void>) => JsonValue | Promise<JsonValue>;
   credentialEncryptionKey?: string;
-  credentialEncryptionKeyPrevious?: string;
   /** Lets a stored Cloudflare login renew; absent, its refresh fails for want of a client. */
   cloudflareOAuthClientId?: string;
   cloudflareOAuthClientSecret?: string;
@@ -249,7 +264,6 @@ interface TestUserEnvironment {
   SLATE_PICTURES?: PictureBucket;
   CLI_PUBLIC_ORIGIN?: string;
   ASSETS?: { fetch(input: Request): Promise<Response> };
-  CREDENTIAL_ENCRYPTION_KEY_PREVIOUS?: string;
   CLOUDFLARE_OAUTH_CLIENT_ID?: string;
   MCP_GITHUB_CLIENT_ID?: string;
   MCP_GITHUB_CLIENT_SECRET?: string;
@@ -475,9 +489,9 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     const accepted = live.find((entry) => entry.ws === ws);
 
     if (accepted) return accepted.tags;
-    const attachment = v.safeParse(v.object({ device: v.nullable(v.string()) }), ws.deserializeAttachment());
+    const device = deviceIdFromSocket(ws);
 
-    return attachment.success && attachment.output.device !== null ? [`device:${attachment.output.device}`] : [];
+    return device === null ? [] : [`device:${device}`];
   };
 
   const kv = new Map<string, JsonValue>();
@@ -525,6 +539,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
       return tag === undefined ? all : all.filter((ws) => tagsOf(ws).includes(tag));
     },
     acceptWebSocket: (ws: typeof socket, tags: string[] = []) => { live.push({ ws, tags }); },
+    getTags: tagsOf,
   };
 
   const env: TestUserEnvironment = {
@@ -597,10 +612,6 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     },
   };
 
-  if (options.credentialEncryptionKeyPrevious) {
-    env.CREDENTIAL_ENCRYPTION_KEY_PREVIOUS = options.credentialEncryptionKeyPrevious;
-  }
-
   for (const preset of options.mcpAppCredentials ?? []) {
     if (preset === 'github') {
       env.MCP_GITHUB_CLIENT_ID = 'test-github-client-id';
@@ -644,7 +655,8 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
 
       if (!target) throw new Error(`no fake daemon is attached for ${deviceId}`);
 
-      const frame = isJsonObject(hello) ? { protocolVersion: DEVICE_PROTOCOL_VERSION, features: [...DEVICE_FEATURES], ...hello } : hello;
+      // A test names the fields it is about; the rest are a current daemon's.
+      const frame = isJsonObject(hello) ? { ...CAPABLE_HELLO, ...hello } : hello;
 
       return userDO.webSocketMessage(target, JSON.stringify(frame));
     },

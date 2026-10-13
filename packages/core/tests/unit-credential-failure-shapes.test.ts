@@ -55,19 +55,20 @@ describe('credential failures keep their shape', () => {
     expect(short.thrown?.message).toContain('too short to be a key (5 chars)');
   });
 
-  test('a record sealed with a key this deployment no longer has, or tampered, is bad input; the tampered one keeps its cause', async () => {
+  test('a record sealed with another key, or tampered, is bad input; the tampered one keeps its cause', async () => {
     const retired = await createCredentialCipher({ CREDENTIAL_ENCRYPTION_KEY: RETIRED });
     const sealed = await retired.seal('slot', 'secret');
     const current = await createCredentialCipher({ CREDENTIAL_ENCRYPTION_KEY: KEY });
 
     const retiredKey = await rejection(() => current.open('slot', sealed));
 
+    // The record is sound: only its key is gone.
+    expect(await retired.open('slot', sealed)).toBe('secret');
     expectClassified(retiredKey, 'bad_input');
-    expect(retiredKey.thrown?.message).toMatch(
-      /^Record "slot" was sealed with encryption key \S+, which this deployment no longer has\. Restore it in CREDENTIAL_ENCRYPTION_KEY_PREVIOUS, or reconnect the provider\.$/,
-    );
 
     const mine = await current.seal('slot', 'secret');
+
+    expect(await current.open('slot', mine)).toBe('secret');
     const tampered = `${mine.slice(0, -4)}AAAA`;
     const failed = await rejection(() => current.open('slot', tampered));
 

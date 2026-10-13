@@ -1,4 +1,4 @@
-import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import type { Awaitable, VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * The Nimbus workspace: one durable POSIX filesystem plus shell over the host's SQLite,
  * sharing its transactions. `vfs` and `shell` address the same paths.
@@ -7,18 +7,20 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 // Type-only: the value import stays inside the lazy boot so Nimbus's wasm graph is not
 // loaded at module eval (cold start; workerd test pool cannot load it).
 import type { NimbusWorkspace } from '@nimbus-sh/core/workspace';
+import type { WorkspaceFs } from '@nimbus-sh/core/workspace/workspace-fs.js';
 import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { PID_GEN_STRIDE } from '@nimbus-sh/core/runtime/process-table.js';
 import type { SqlDatabase, VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { assumeGeneration, generation } from '@nimbus-sh/fabric/generation.js';
-import type { CredentialedVfs, SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+import type { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+import { sqliteFiles, type SqliteFiles } from '@nimbus-sh/core/vfs/sqlite-files.js';
 import type { ProcessFiles } from '@nimbus-sh/core/runtime/process-files.js';
 import type { RuntimePackage, RuntimeSource } from '@nimbus-sh/core/runtime/runtime-package.js';
 import type { FacetHost } from '@nimbus-sh/core/runtime/facet-host.js';
 import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
-import type { CommandResult, RunOptions } from '@nimbus-sh/core/substrate/lifo/sandbox/types.js';
+import type { CommandResult, RunOptions } from '@nimbus-sh/core/substrate/lifo/sandbox/run-command.js';
 import {
   agentIdentity, agentTmpRoot, confineAgentTmp, MAIN_AGENT, provisionAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot,
   settleWorkspaceSlates, provisionWorkspaceSoul,
@@ -30,7 +32,7 @@ import { ShellExecOptionsSchema, type Shell, type ShellExecOptions } from '../ty
 import { WORKSPACE_ROOT, workspacePath } from './workspace-path';
 import { FORK_PIN_PREFIX } from '../identity/fork';
 import { ARCHIVE_PIN_PREFIX } from '../identity/archive';
-import { diagnostics, KinuError, tolerate, toKinuError } from '../obs/index';
+import { diagnostics, KinuError, refusalOf, toKinuError } from '../obs/index';
 import { atVfsPath } from './errno';
 import type { VfsMount, WorkspacePrincipal } from './mounts';
 import type { CompositeVFS } from '@nimbus-sh/core/vfs/composite.js';
@@ -41,8 +43,6 @@ export type { RuntimePackage, RuntimeSource } from '@nimbus-sh/core/runtime/runt
 
 export { WORKSPACE_ROOT, workspacePath } from './workspace-path';
 
-export { workspaceBoxFiles } from './workspace-box-files';
-
 function shellExecOptions(input: { value: unknown }): ShellExecOptions | undefined {
   const stdin = v.safeParse(v.string(), input.value);
 
@@ -52,48 +52,65 @@ function shellExecOptions(input: { value: unknown }): ShellExecOptions | undefin
   return options.success ? options.output : undefined;
 }
 
-function workspaceFiles(vendor: WorkspaceBundle['vfs'], cwd: string): WorkspaceBundle['vfs'] {
-  const at = <T>(path: string, syscall: string, call: (absolute: string) => T | Promise<T>): Promise<T> => {
+/** `open`'s files with relative paths from `cwd`; a write makes its parent directories first, as the same credential. */
+function workspaceFiles(open: () => Promise<WorkspaceFiles>, cwd: string): WorkspaceFiles {
+  const at = <T>(path: string, syscall: string, call: (files: WorkspaceFiles, absolute: string) => Awaitable<T>): Promise<T> => {
     const absolute = workspacePath(path, cwd);
 
-    return atVfsPath(absolute, syscall, () => call(absolute));
+    return atVfsPath(absolute, syscall, async () => call(await open(), absolute));
   };
 
   return {
-    readFile: (path) => at(path, 'open', (absolute) => vendor.readFile(absolute)),
-    // Creating a file makes no parents, so the directories come first, as the same credential.
-    writeFile: (path, data) => at(path, 'open', async (absolute) => {
-      await vendor.mkdir(absolute.slice(0, absolute.lastIndexOf('/')) || '/', { recursive: true });
+    readFile: (path) => at(path, 'open', (files, absolute) => files.readFile(absolute)),
+    writeFile: (path, data) => at(path, 'open', async (files, absolute) => {
+      await files.mkdir(absolute.slice(0, absolute.lastIndexOf('/')) || '/', { recursive: true });
 
-      return vendor.writeFile(absolute, data);
+      return files.writeFile(absolute, data);
     }),
-    readdir: (path) => at(path, 'scandir', (absolute) => vendor.readdir(absolute)),
-    stat: (path, options) => at(path, options?.follow === false ? 'lstat' : 'stat', (absolute) => vendor.stat(absolute, options)),
-    readlink: (path) => at(path, 'readlink', (absolute) => vendor.readlink(absolute)),
-    unlink: (path) => at(path, 'unlink', (absolute) => vendor.unlink(absolute)),
-    mkdir: (path, opts) => at(path, 'mkdir', (absolute) => vendor.mkdir(absolute, opts)),
-    removeRecursive: (path) => at(path, 'rm', (absolute) => vendor.removeRecursive(absolute)),
-    rename: (oldPath, newPath) => at(oldPath, 'rename', (absolute) => vendor.rename(absolute, workspacePath(newPath, cwd))),
-    readRange: (path, offset, length) => at(path, 'read', (absolute) => vendor.readRange(absolute, offset, length)),
+    readdir: (path) => at(path, 'scandir', (files, absolute) => files.readdir(absolute)),
+    stat: (path, options) => at(path, options?.follow === false ? 'lstat' : 'stat', (files, absolute) => files.stat(absolute, options)),
+    readlink: (path) => at(path, 'readlink', (files, absolute) => files.readlink(absolute)),
+    unlink: (path) => at(path, 'unlink', (files, absolute) => files.unlink(absolute)),
+    mkdir: (path, opts) => at(path, 'mkdir', (files, absolute) => files.mkdir(absolute, opts)),
+    removeRecursive: (path) => at(path, 'rm', (files, absolute) => files.removeRecursive(absolute)),
+    rename: (oldPath, newPath) => at(oldPath, 'rename', (files, absolute) => files.rename(absolute, workspacePath(newPath, cwd))),
+    readRange: (path, offset, length) => at(path, 'read', (files, absolute) => files.readRange(absolute, offset, length)),
   };
 }
 
-/** The session user's view, the shell process's own, so every write passes the lease check a command's does. */
-function workspaceVfs(open: () => Promise<NimbusWorkspace>): WorkspaceBundle['vfs'] {
-  const fs = async (): Promise<NimbusWorkspace['fs']> => (await open()).fs;
+/**
+ * The session user's view, the shell process's own, so every write passes the lease check a command's does. A path is
+ * the view's as a process's is: a relative one from its directory, and `..` taken by the walk, after a link, never
+ * collapsed first. An empty path is that directory, as on every other plane of this file. A write makes its parent
+ * directories first.
+ */
+function workspaceVfs(open: () => Promise<NimbusWorkspace>): WorkspaceFiles {
+  const named = (path: string): string => (path === '' ? '.' : path);
 
-  return workspaceFiles({
-    readFile: async (path) => (await fs()).readFile(path),
-    writeFile: async (path, data) => (await fs()).writeFile(path, data),
-    readdir: async (path) => (await fs()).readdir(path),
-    stat: async (path, options) => (await fs()).stat(path, options),
-    readlink: async (path) => (await fs()).readlink(path),
-    unlink: async (path) => (await fs()).remove(path),
-    removeRecursive: async (path) => (await fs()).remove(path, { recursive: true }),
-    mkdir: async (path, opts) => (await fs()).mkdir(path, opts),
-    rename: async (from, to) => (await fs()).rename(from, to),
-    readRange: async (path, offset, length) => (await fs()).readRange(path, offset, length),
-  }, WORKSPACE_ROOT);
+  const at = async <T>(path: string, syscall: string, call: (fs: WorkspaceFs, path: string) => Awaitable<T>): Promise<T> => {
+    const { fs } = await open();
+
+    return atVfsPath(fs.resolve(named(path)), syscall, () => call(fs, named(path)));
+  };
+
+  return {
+    readFile: (path) => at(path, 'open', (fs, name) => fs.readFile(name)),
+    writeFile: (path, data) => at(path, 'open', async (fs, name) => {
+      const absolute = fs.resolve(name);
+
+      await fs.mkdir(absolute.slice(0, absolute.lastIndexOf('/')) || '/', { recursive: true });
+
+      return fs.writeFile(name, data);
+    }),
+    readdir: (path) => at(path, 'scandir', (fs, name) => fs.readdir(name)),
+    stat: (path, options) => at(path, options?.follow === false ? 'lstat' : 'stat', (fs, name) => fs.stat(name, options)),
+    readlink: (path) => at(path, 'readlink', (fs, name) => fs.readlink(name)),
+    unlink: (path) => at(path, 'unlink', (fs, name) => fs.unlink(name)),
+    mkdir: (path, opts) => at(path, 'mkdir', (fs, name) => fs.mkdir(name, opts)),
+    removeRecursive: (path) => at(path, 'rm', (fs, name) => fs.removeRecursive(name)),
+    rename: (oldPath, newPath) => at(oldPath, 'rename', (fs, name) => fs.rename(name, named(newPath))),
+    readRange: (path, offset, length) => at(path, 'read', (fs, name) => fs.readRange(name, offset, length)),
+  };
 }
 
 type ShellCall = (workspace: NimbusWorkspace, command: string, options: RunOptions & { readonly cwd: string }) => Promise<CommandResult>;
@@ -108,7 +125,7 @@ function workspaceShell(open: () => Promise<NimbusWorkspace>, start: (workspace:
       const options = shellExecOptions({ value: stdinOrOptions });
 
       if (options?.name !== undefined) {
-        const refusal = { reason: 'unsupported' as const, error: 'this workspace keeps no named shells; run the command without a name' };
+        const refusal = refusalOf(new KinuError('unsupported', 'this workspace keeps no named shells; run the command without a name'));
 
         return { stdout: '', stderr: refusal.error, exitCode: 1, refusal };
       }
@@ -140,7 +157,7 @@ function workspaceShell(open: () => Promise<NimbusWorkspace>, start: (workspace:
 /** Nimbus's one-shot exec runs as the session user; an agent's call runs as the agent's own process, in a shell built for it. */
 function agentCall(pid: number, env: Readonly<Record<string, string>>): ShellCall {
   return async (workspace, command, options) => {
-    const { runCommand } = await import('@nimbus-sh/core/substrate/lifo/sandbox/SandboxCommands.js');
+    const { runCommand } = await import('@nimbus-sh/core/substrate/lifo/sandbox/run-command.js');
     const shell = workspace.shellFor(pid, { cwd: options.cwd, env });
 
     try {
@@ -153,7 +170,7 @@ function agentCall(pid: number, env: Readonly<Record<string, string>>): ShellCal
 
 /** One agent's credentialed view of the same rows, on both the file and shell planes. */
 export interface WorkspaceAgentPlane {
-  readonly vfs: WorkspaceBundle['vfs'];
+  readonly vfs: WorkspaceFiles;
   readonly shell: Shell;
 }
 
@@ -164,24 +181,15 @@ export interface WorkspaceAgent {
   readonly tmp: string;
 }
 
-/** The same `SqliteVFS`, credentialed as the agent; never the workspace `.fs`, which is pinned to the session user. */
-function agentVfs(vfs: CredentialedVfs, home: string): WorkspaceBundle['vfs'] {
-  return workspaceFiles({
-    readFile: (path) => vfs.readFile(path),
-    writeFile: (path, data) => vfs.writeFile(path, data),
-    readdir: (path) => vfs.readdir(path),
-    stat: (path, options) => {
-      const st = tolerate(() => (options?.follow === false ? vfs.lstat(path) : vfs.stat(path)), 'enoent');
+/**
+ * The store as `cred` (default the session user) sees it, with no mount, relative paths from `home`: an actor's own state.
+ * Nimbus's own SqliteFiles, never the workspace `.fs`, which is pinned to the session user; its stat carries the row's
+ * revision and inode. Its `..` is still taken lexically, before any link, as SqliteVFS keys a path (NIMBUS-ASKS #53).
+ */
+export function storeFiles(open: () => Promise<SqliteVFS>, plane: { readonly home: string; readonly cred?: VfsCred }): WorkspaceFiles {
+  let files: SqliteFiles | undefined;
 
-      return st === undefined ? null : { size: st.size, mtimeMs: st.mtime, type: st.type };
-    },
-    readlink: (path) => vfs.readlink(path),
-    unlink: (path) => vfs.unlink(path),
-    removeRecursive: (path) => { vfs.removeRecursive(path); },
-    mkdir: (path, opts) => vfs.mkdir(path, opts),
-    rename: (from, to) => vfs.rename(from, to),
-    readRange: (path, offset, length) => vfs.readRange(path, offset, length),
-  }, home);
+  return workspaceFiles(async () => files ??= sqliteFiles(await open(), plane.cred ?? CRED_SESSION_USER), plane.home);
 }
 
 /** Uid-0 view of the same bytes plus the principal registry that scopes `/tmp` per uid. */
@@ -214,8 +222,11 @@ function principalKey(cred: Readonly<VfsCred>, actor: string | undefined): strin
   return `${cred.uid}@${actor ?? ''}`;
 }
 
+/** A file plane that answers every call a workspace's own tree can: ranged reads, links, renames, recursive removal. */
+export type WorkspaceFiles = VFS & Required<Pick<VFS, 'readRange' | 'readlink' | 'rename' | 'removeRecursive'>>;
+
 export interface WorkspaceBundle {
-  vfs: VFS & Required<Pick<VFS, 'readRange' | 'readlink' | 'rename' | 'removeRecursive'>>;
+  vfs: WorkspaceFiles;
   shell: Shell;
   privileged(): Promise<WorkspacePrivileged>;
   /** Cached per uid and idempotent: a shell holds state (`cd`, exports). */
@@ -247,6 +258,12 @@ export interface WorkspaceOptions {
   fabric?: FabricComposition;
   /** Remote runtime catalog (e.g. R2); names it can satisfy become install-on-first-use stubs. */
   runtimeSource?: RuntimeSource;
+  /**
+   * Where every request and socket the workspace's commands and programs make goes out (`NimbusWorkspaceOptions.egress`),
+   * asked once as the workspace opens, without waiting on anything. Absent, or answering none, they use the isolate's
+   * own network.
+   */
+  egress?: () => NimbusCreation['egress'];
 }
 
 /** Returns synchronously; the workspace boots lazily on its first operation. */
@@ -286,6 +303,10 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
     if (opts.runtimeFacets !== undefined) creation = { ...creation, facets: opts.runtimeFacets };
 
     if (opts.runtimeSource !== undefined) creation = { ...creation, runtimeSource: opts.runtimeSource };
+
+    const egress = opts.egress?.();
+
+    if (egress !== undefined) creation = { ...creation, egress };
 
     const workspace = await shellOver(creation);
 
@@ -396,7 +417,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
           const home: CallStart = { cwd: agent.home, resolve: (path) => workspacePath(path, agent.home) };
 
           return {
-            vfs: agentVfs(origin.vfs.as(agent.cred), agent.home),
+            vfs: storeFiles(() => Promise.resolve(origin.vfs), agent),
             shell: workspaceShell(() => Promise.resolve(origin), () => home, agentCall(process.pid, { HOME: agent.home, TMPDIR: agent.tmp })),
           };
         } catch (cause) {

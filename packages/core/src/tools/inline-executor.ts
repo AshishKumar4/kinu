@@ -7,7 +7,7 @@ import { shellCall } from '../execution/command-call';
 import { nimbusSession, type NimbusSessionOpts } from '../execution/nimbus';
 import type { FilesOwner } from '../safety/command-review';
 import type { ShellSession } from '../execution/shell-session';
-import type { Memory, SqlExecutor } from '../types/primitives';
+import type { Memory, ShellExecResult, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { CraftStore } from '../types/agent-runtime';
 import { vfsAddressingHint } from '@kinu.run/agent-utils/vfs';
@@ -30,9 +30,13 @@ import { branchableToolCall } from './outcome';
 import { TurnContextBudget } from '../context-budget';
 import type { JsonValue } from '../utils/json';
 import { cloudPlanes, type PathPlanes } from '../vfs/resolve';
+import type { VfsMountRouting } from '../vfs/mounts';
 import { SlateBuildNoteSchema } from '../operations/file';
 
 const StringSchema = v.string();
+
+/** `exec`'s options asking for the command's own output, not the text built from it. */
+const PartsSchema = v.object({ parts: v.literal(true) });
 
 const OptionalPathSchema = v.optional(v.string());
 
@@ -59,11 +63,12 @@ function parseInput<TSchema extends v.GenericSchema>(
 }
 
 interface ShellExec {
-  exec(command: string, opts?: { signal?: AbortSignal }): Promise<{ stdout: string; stderr: string; exitCode: number }>;
+  exec(command: string, opts?: { signal?: AbortSignal }): Promise<ShellExecResult>;
 }
 
 export interface InlineExecutorDeps {
-  vfs: VFS;
+  /** The plane the tools reach; `resolve` says where a path landed. */
+  vfs: VFS & Partial<Pick<VfsMountRouting, 'resolve'>>;
   /** Absent: {@link WORKSPACE_ROOT}, the root's. */
   home?: string;
   /** Absent: the cloud's planes over `home`. */
@@ -130,9 +135,13 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
   const currentLedger = (): TurnFileLedger => deps.ledger?.() ?? fallbackLedger;
   const currentBudget = (): TurnContextBudget => deps.budget?.() ?? fallbackBudget;
 
+  // One place for where paths land and where the shell starts: its home, as files list from it too.
+  const home = deps.home ?? WORKSPACE_ROOT;
+  const planes = deps.planes ?? cloudPlanes(home);
+
   // The native `file` tool's write, on the same ledger read live per call.
   const fileWrite = serveFile(() => ({
-    vfs, home: deps.home ?? WORKSPACE_ROOT, planes: deps.planes ?? cloudPlanes(deps.home ?? WORKSPACE_ROOT), ledger: currentLedger(), budget: currentBudget(), memory,
+    vfs, home, planes, ledger: currentLedger(), budget: currentBudget(), memory,
     ...(deps.slateBuild !== undefined && { slateBuild: deps.slateBuild }),
   })).write;
 
@@ -199,14 +208,26 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       'Run a command in the workspace shell, over the SAME files readFile/readdir address. '
         + 'A real POSIX shell with ~95 coreutils, pipes, redirects, loops and variables; each call starts fresh in `cwd` (default: your home) '
         + 'unless it names a shell, which keeps its directory and exported variables. '
+        + 'Pass `parts: true` among the options to get `{ stdout, stderr, exitCode }` as the command wrote them, instead of the text. '
         + 'Available binaries and process features are listed in this workspace provider\'s capabilities; use sandbox or device only when the task needs that separate machine.',
       (args) => {
         const command = parseInput(StringSchema, { value: args[0] });
 
         if (command === undefined) return { refused: refusalOf(new KinuError('bad_input', 'workspace.exec: command must be a string')) };
         const options = shellExecOptions({ value: args[1] });
+        const parts = v.is(PartsSchema, args[1]);
 
-        return { call: shellCall(command, options, { stdin: true }), run: async () => commandResult(await shell.exec(command, options)) };
+        return {
+          call: shellCall(command, options, { stdin: true }),
+          run: async () => {
+            const outcome = await shell.exec(command, options);
+
+            // A program reads what the command wrote; the text the model is shown is built from it, never parsed back.
+            return parts && outcome.refusal === undefined
+              ? { stdout: outcome.stdout, stderr: outcome.stderr, exitCode: outcome.exitCode }
+              : commandResult(outcome);
+          },
+        };
       },
     ),
 
@@ -352,8 +373,8 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       execute: async (...args: unknown[]): Promise<JsonValue> => {
         const parsed = v.safeParse(SlateOperationSchema, args[0]);
 
-        if (!parsed.success) return { success: false, ...refusalOf(new KinuError('bad_input',
-          'workspace.slates received an operation outside its members', { cause: new v.ValiError(parsed.issues) })) };
+        if (!parsed.success) return refusalOf(new KinuError('bad_input',
+          'workspace.slates received an operation outside its members', { cause: new v.ValiError(parsed.issues) }));
         requireSlateWorkMode(parsed.output, currentWorkMode());
         const result = await slate(parsed.output);
 
@@ -366,7 +387,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     name: TOOL_REACH.slate.codemode,
     kind: 'workspace',
     files: deps.files ?? vfs,
-    homeDir: async () => WORKSPACE_ROOT,
+    homeDir: async () => planes.cwd,
     capabilities: new Set<ExecutorCapability>([
       'javascript', 'typescript', 'shell', 'fs_shared', ...(deps.toolchain ?? []),
     ]),

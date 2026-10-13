@@ -2,7 +2,7 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // Local environments and the mount table: a directory-bound session works on the real bytes through one `workspace`
 // executor, with no `/pc` or `/sandbox` mount.
 import { describe, expect, test } from 'bun:test';
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, chownSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createCLIRuntime, type CLIRuntime } from '../src/runtime';
 import { localFilePlane } from '../src/host-mount';
@@ -95,5 +95,114 @@ describe('the local backend file plane', () => {
     }
 
     expect(existsSync(join(folder, 'dir/locked/kept'))).toBe(true);
+  });
+});
+
+describe('a replace the folder checks against what was read', () => {
+  const sha256 = (text: string): string => new Bun.CryptoHasher('sha256').update(text).digest('hex');
+  const bytes = (text: string): Uint8Array => new TextEncoder().encode(text);
+
+  // Two heads in this process each hold their own plane over the same folder.
+  test('two planes replacing the same read at once: exactly one lands, the other is told what is there now', async () => {
+    const folder = scratchDir('mount-plane-race');
+    const target = join(folder, 'plan.md');
+    writeFileSync(target, 'read by both');
+    const first = localFilePlane({ folder, space: join(folder, 'space-a'), views: [], checkpoints: undefined });
+    const second = localFilePlane({ folder, space: join(folder, 'space-b'), views: [], checkpoints: undefined });
+    const replace = (plane: typeof first, text: string) => present(plane.writeFileIfDigest?.bind(plane), 'the digest write')(target, bytes(text), sha256('read by both'));
+
+    const answers = await Promise.all([replace(first, 'from the first head'), replace(second, 'from the second head')]);
+    const landed = answers.filter((answer) => answer.ok);
+
+    expect(landed).toHaveLength(1);
+    expect(answers.find((answer) => !answer.ok)).toEqual({ ok: false, sha256: sha256(readFileSync(target, 'utf8')) });
+  });
+
+  // #54: the replacements were ordered by name, so two names for one file each compared and wrote at once.
+  test('two names for one file replacing the same read at once: exactly one lands', async () => {
+    const folder = scratchDir('mount-plane-hardlinks');
+    const first = join(folder, 'plan.md');
+    const second = join(folder, 'plan-link.md');
+    writeFileSync(first, 'read by both');
+    linkSync(first, second);
+    const plane = localFilePlane({ folder, space: join(folder, 'space'), views: [], checkpoints: undefined });
+    const replace = (path: string, text: string) => present(plane.writeFileIfDigest?.bind(plane), 'the digest write')(path, bytes(text), sha256('read by both'));
+
+    for (let round = 0; round < 20; round += 1) {
+      writeFileSync(first, 'read by both');
+      const answers = await Promise.all([replace(first, 'through the first name'), replace(second, 'through the second name')]);
+
+      expect(answers.filter((answer) => answer.ok)).toHaveLength(1);
+      expect(answers.find((answer) => !answer.ok)).toEqual({ ok: false, sha256: sha256(readFileSync(first, 'utf8')) });
+    }
+  });
+
+  // 2026-10-12 security review: a temp file and a rename replaced a read-only file and dropped its owner, group and ACLs.
+  test('a replaced file is the same file, as a plain write leaves it, and a read-only one is refused', async () => {
+    const folder = scratchDir('mount-plane-in-place');
+    const target = join(folder, 'shared.md');
+    const other = join(folder, 'also-shared.md');
+    writeFileSync(target, 'v1');
+    linkSync(target, other);
+
+    // Another user's file where this test may give one (as root): a replacement made by this process must not take it over.
+    if (process.getuid?.() === 0) chownSync(target, 65534, 65534);
+    const before = statSync(target);
+    const plane = localFilePlane({ folder, space: join(folder, 'space'), views: [], checkpoints: undefined });
+    const replace = present(plane.writeFileIfDigest?.bind(plane), 'the digest write');
+
+    expect(await replace(target, bytes('v2'), sha256('v1'))).toEqual({ ok: true, sha256: sha256('v2') });
+    expect(statSync(target)).toMatchObject({ uid: before.uid, gid: before.gid, mode: before.mode });
+    expect(readFileSync(other, 'utf8')).toBe('v2');
+
+    chmodSync(target, 0o444);
+
+    try {
+      // Root writes any file, as a plain write does; anyone else is refused.
+      if (process.getuid?.() === 0) expect(await replace(target, bytes('v3'), sha256('v2'))).toMatchObject({ ok: true });
+      else {
+        await expect(replace(target, bytes('v3'), sha256('v2'))).rejects.toMatchObject({ code: 'EACCES' });
+        expect(readFileSync(target, 'utf8')).toBe('v2');
+      }
+    } finally {
+      chmodSync(target, 0o644);
+    }
+  });
+
+  test('a replaced file keeps every mode bit, the ones a umask would cut too', async () => {
+    const folder = scratchDir('mount-plane-mode');
+    const target = join(folder, 'shared.sh');
+    writeFileSync(target, 'v1');
+    chmodSync(target, 0o775);
+    const plane = localFilePlane({ folder, space: join(folder, 'space'), views: [], checkpoints: undefined });
+    const was = process.umask(0o022);
+
+    try {
+      await present(plane.writeFileIfDigest?.bind(plane), 'the digest write')(target, bytes('v2'), sha256('v1'));
+    } finally {
+      process.umask(was);
+    }
+
+    expect([readFileSync(target, 'utf8'), statSync(target).mode & 0o777]).toEqual(['v2', 0o775]);
+  });
+
+  test('a private file\'s replacement bytes are never written into a file anyone else may read', async () => {
+    const folder = scratchDir('mount-plane-private');
+    const target = join(folder, 'secret.env');
+    writeFileSync(target, 'v1');
+    chmodSync(target, 0o600);
+    const plane = localFilePlane({ folder, space: join(folder, 'space'), views: [], checkpoints: undefined });
+    const was = process.umask(0o022);
+
+    try {
+      await present(plane.writeFileIfDigest?.bind(plane), 'the digest write')(target, bytes('v2'), sha256('v1'));
+    } finally {
+      process.umask(was);
+    }
+
+    // The bytes are in the private file itself, still private, and in no other file beside it.
+    expect({ bytes: readFileSync(target, 'utf8'), mode: statSync(target).mode & 0o777 }).toEqual({ bytes: 'v2', mode: 0o600 });
+    expect(readdirSync(folder).filter((name) => statSync(join(folder, name)).isFile() && readFileSync(join(folder, name), 'utf8').includes('v2')))
+      .toEqual(['secret.env']);
   });
 });

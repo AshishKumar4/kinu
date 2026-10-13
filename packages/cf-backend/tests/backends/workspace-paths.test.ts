@@ -76,11 +76,15 @@ for (const name of testBackends()) {
         const home = plane.home.replace(/^\//u, '');
         await plane.write(`${plane.home}/notes/item.txt`, 'one');
 
-        for (const path of [
-          `${plane.home}/notes/item.txt`, `/${home.replace('/', '//')}/notes/item.txt`, `${plane.home}/notes/./item.txt`, `${plane.home}/notes/item.txt/`,
-        ]) {
+        for (const path of [`${plane.home}/notes/item.txt`, `/${home.replace('/', '//')}/notes/item.txt`, `${plane.home}/notes/./item.txt`]) {
           expect(await plane.read(path)).toMatchObject({ content: 'one' });
         }
+
+        // A file is no directory: a trailing slash on it is refused, as the shell refuses it.
+        const slashed = await plane.read(`${plane.home}/notes/item.txt/`);
+
+        expect(slashed).toHaveProperty('error');
+        expect(slashed).not.toHaveProperty('content');
 
         await plane.write(`${plane.home}/notes/./item.txt`, 'two');
         expect(await plane.read(`${plane.home}/notes/item.txt`)).toMatchObject({ content: 'two' });
@@ -102,11 +106,19 @@ for (const name of testBackends()) {
 
       try {
         await plane.write('item.txt', 'one');
+        await plane.write('dir/kept.txt', 'a directory to pass through');
+        await plane.write(`${plane.workdir}/x/kept.txt`, 'another');
         await plane.write(`${plane.space}/slates/project/item.txt`, 'slate');
 
         for (const path of ['./item.txt', './dir/../item.txt', `${plane.workdir}/x/../item.txt`, `${plane.workdir}//./item.txt`]) {
           expect(await plane.read(path)).toMatchObject({ content: 'one' });
         }
+
+        // `..` is taken after the walk reaches it, so a directory that is not there is not passed through.
+        const missing = await plane.read('./missing/../item.txt');
+
+        expect(missing).toHaveProperty('error');
+        expect(missing).not.toHaveProperty('content');
 
         expect(await plane.read(`${plane.home}/../../slates/project/./item.txt`)).toMatchObject({ content: 'slate' });
 

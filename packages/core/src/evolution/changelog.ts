@@ -25,11 +25,11 @@ import {
 import { describePathology } from './pathology';
 import { formatScoreInterval } from '../utils/stats';
 import { parseJsonValue } from '../utils/json';
-import { renderThrownChain, settle, tolerate } from '../obs/index';
+import { KinuError, renderThrownChain, settle, settleSync, tolerate } from '../obs/index';
 
 const ScaffoldRunEventSchema = v.object({
-  fromVersion: v.optional(v.number()),
-  toVersion: v.optional(v.number()),
+  fromVersion: v.number(),
+  toVersion: v.number(),
 });
 
 export const CHANGELOG_ENTRY_KINDS = [
@@ -92,20 +92,14 @@ function scaffoldStatusChangeAt(sql: SqlExecutor, actor: ActorHandle): Map<numbe
       AND type IN ('scaffold_promotion', 'scaffold_rollback')`;
 
   for (const r of rows) {
-    const at = Date.parse(r.ts);
-
-    if (!Number.isFinite(at)) continue;
-    // An older payload shape is skipped and written_at stands.
-    const payload = tolerate(() => parseJsonValue(r.payload), 'malformed-input');
-    const parsed = v.safeParse(ScaffoldRunEventSchema, payload);
-
-    if (!parsed.success) continue;
+    const at = v.parse(v.pipe(v.number(), v.finite()), Date.parse(r.ts));
+    const payload = v.parse(ScaffoldRunEventSchema, parseJsonValue(r.payload));
 
     const version = r.type === 'scaffold_promotion'
-      ? parsed.output.toVersion
-      : parsed.output.fromVersion;
+      ? payload.toVersion
+      : payload.fromVersion;
 
-    if (version !== undefined && at > (byVersion.get(version) ?? 0)) {
+    if (at > (byVersion.get(version) ?? 0)) {
       byVersion.set(version, at);
     }
   }
@@ -468,29 +462,34 @@ function ratingEntry(
 export function buildChangelog(
   sql: SqlExecutor, actor: ActorHandle, opts: BuildChangelogOptions = {},
 ): ChangelogEntry[] {
-  const limit = opts.limit ?? 50;
+  return settleSync(Effect.try({
+    try: () => {
+      const limit = opts.limit ?? 50;
 
-  const entries = [
-    ...scaffoldEntries(sql, actor),
-    ...toolEntries(sql, limit),
-    ...gepaEntries(sql, actor, limit),
-    ...artifactEntries(sql, actor, limit),
-    ...refinementEntries(sql, actor, limit),
-  ].filter((e) => opts.since === undefined || e.at > opts.since);
+      const entries = [
+        ...scaffoldEntries(sql, actor),
+        ...toolEntries(sql, limit),
+        ...gepaEntries(sql, actor, limit),
+        ...artifactEntries(sql, actor, limit),
+        ...refinementEntries(sql, actor, limit),
+      ].filter((e) => opts.since === undefined || e.at > opts.since);
 
-  const facts = factAggregate(sql, actor, limit, opts.since);
+      const facts = factAggregate(sql, actor, limit, opts.since);
 
-  if (facts) entries.push(facts);
-  const ratings = ratingEntry(sql, actor, opts.since, limit);
+      if (facts) entries.push(facts);
+      const ratings = ratingEntry(sql, actor, opts.since, limit);
 
-  if (ratings) entries.push(ratings);
-  entries.sort((a, b) => b.at - a.at || (a.id < b.id ? 1 : -1));
+      if (ratings) entries.push(ratings);
+      entries.sort((a, b) => b.at - a.at || (a.id < b.id ? 1 : -1));
 
-  const kept = opts.changesOnly === true
-    ? entries.filter((e) => e.kind !== 'ratings' && e.noChange !== true)
-    : entries;
+      const kept = opts.changesOnly === true
+        ? entries.filter((e) => e.kind !== 'ratings' && e.noChange !== true)
+        : entries;
 
-  return kept.slice(0, limit);
+      return kept.slice(0, limit);
+    },
+    catch: (cause) => cause instanceof KinuError ? cause : new KinuError('io', 'Corrupt stored evolution changelog', { cause }),
+  }));
 }
 
 /** Unseen badge ceiling. */

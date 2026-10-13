@@ -2,23 +2,25 @@
  * The file operations served over `rt.toolFiles`. A write or edit is refused until the agent has read what it would
  * replace, here or by the native tool: one ledger for both.
  */
-import { type VFS, type VfsRevision, writeText } from '@nimbus-sh/core/vfs/vfs.js';
-import { isVfsError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { type VFS, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
+import { isVfsError, VfsError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { normalizePath } from '@nimbus-sh/core/vfs/composite.js';
 import { vfsAddressingHint } from '@kinu.run/agent-utils/vfs';
 import * as v from 'valibot';
 import { formatPath, resolvePath, type PathPlanes } from '../vfs/resolve';
+import { writeConditionally, type ObservedFile, type WriteGuarantee } from '../vfs/conditional-write';
 import type { CheckpointFiles, Memory, VfsWriteReport } from '../types/primitives';
 import type { TurnContextBudget } from '../context-budget';
 import { ensureDir, vfsDirname } from '../utils/vfs-helpers';
 import { memoryIndexPath } from '../memory/note';
 import { applyFileEdits, formatFileSlice, FILE_READ_LINE_CHARS, FILE_READ_LINES, FILE_READ_MAX_CHARS, FILE_REFUSAL_REASONS, type FileEdit } from './file-edit';
 import { FileRefusalError } from '../types/file-edits';
-import { readFileHead, readFileText, scanFileWindow, type ScannedFile } from './file-scan';
+import { readFileHead, scanFileWindow, type ScannedFile } from './file-scan';
 import type { TurnFileLedger, FileEditOutcomeReason, FileSeenNeed } from '../vfs/file-ledger';
-import { KinuError, renderThrownChain } from '../obs/index';
+import { KinuError, renderThrownChain, tolerateAsync } from '../obs/index';
 import { requireBuild } from '../execution/work-mode';
 import { uncheckpointedSentence } from '../execution/exec-result';
-import { RESIDENT_TEXT_MAX_BYTES } from '../vfs/mounts';
+import { RESIDENT_TEXT_MAX_BYTES, type VfsMountRouting } from '../vfs/mounts';
 import { rasterImage } from '../utils/raster-image';
 import { bytesToBase64 } from '../utils/base64';
 import { imageCarrier, type ImageCarrier } from '../types/tool-images';
@@ -120,7 +122,8 @@ async function vfsFailure(vfs: VFS, input: { error: unknown }, action: string, p
 }
 
 export interface FileDeps {
-  readonly vfs: VFS & CheckpointFiles;
+  /** The tool's file plane; its `resolve`, where it has one, says where a path landed, so a result names that file. */
+  readonly vfs: VFS & CheckpointFiles & Partial<Pick<VfsMountRouting, 'resolve'>>;
   readonly home: string;
   readonly ledger: TurnFileLedger;
   /** The turn-cumulative bulk budget; a read the file outran is recorded there. */
@@ -141,9 +144,12 @@ const SLATE_FILE = new RegExp(`^${SLATES_ROOT}/([^/]+)/`);
 
 const BrokenSchema = v.object({ broken: v.string() });
 
-/** Whether the slate a written file belongs to still builds; nothing for a file outside one, or where no slate host answers. */
+/**
+ * Whether the slate a written file belongs to still builds; nothing for a file outside one, or where no slate host
+ * answers. The slate is the one the path the write landed on names.
+ */
 async function slateBuild(deps: FileDeps, path: string): Promise<{ readonly build?: v.InferOutput<typeof SlateBuildNoteSchema> }> {
-  const slate = SLATE_FILE.exec(resolvePath(path, deps.planes).absolute)?.[1];
+  const slate = SLATE_FILE.exec(normalizePath(resolvePath(path, deps.planes).absolute))?.[1];
 
   if (slate === undefined || deps.slateBuild === undefined) return {};
   const built = await deps.slateBuild(slate);
@@ -209,33 +215,39 @@ function fileOps(deps: FileDeps) {
   const searchLines = (content: string, query: string): { line: number; text: string }[] =>
     content.split('\n').flatMap((text, index) => text.includes(query) ? [{ line: index + 1, text }] : []);
 
-  /** The one write path. `observe` runs as soon as the bytes land, so a later failure
-   *  cannot leave the ledger denying content already on disk. */
+  /** The one write path: conditioned on what was read (`vfs/conditional-write.ts`). `observe` runs as soon as the
+   *  bytes land, so a later failure cannot leave the ledger denying content already on disk. */
   const persist = async (
-    path: string, content: string, observe: (revision?: VfsRevision) => void, expected?: VfsRevision,
-  ): Promise<VfsWriteReport | null> => {
+    path: string, content: string, observe: (revision?: VfsRevision) => void, observed: ObservedFile,
+  ): Promise<{ readonly report: VfsWriteReport | null; readonly checked: WriteGuarantee }> => {
     const dir = vfsDirname(path);
-    let report: VfsWriteReport | null = null;
 
     if (dir) await ensureDir(vfs, dir);
+    const written = await writeConditionally(vfs, path, new TextEncoder().encode(content), observed);
 
-    if (expected === undefined) {
-      if (vfs.writeFileWithReport) report = await vfs.writeFileWithReport(path, new TextEncoder().encode(content));
-      else await writeText(vfs, path, content);
-      observe();
-    } else {
-      if (!vfs.writeFileIfRevision) throw new KinuError('unsupported', 'versioned edits require revision-checked writes');
-      const result = await vfs.writeFileIfRevision(path, new TextEncoder().encode(content), expected);
-
-      if (!result.ok) throw new FileRefusalError('stale', `${path} changed since the observed revision`);
-      observe(result.revision);
-    }
-
+    observe('revision' in written.now ? written.now.revision : undefined);
     const indexed = memoryIndexPath(path);
 
     if (deps.memory && indexed) await deps.memory.index(indexed);
 
-    return report;
+    return { report: written.report, checked: written.guarantee };
+  };
+
+  /** The file as it is now, with the revision that names it where the plane versions its files; absent, none. */
+  const readObserved = async (path: string, revision?: VfsRevision): Promise<{ readonly text: string | null; readonly observed: ObservedFile }> => {
+    // The revision read before the bytes: a write between the two is refused by the plane's own check, not lost.
+    const at = revision ?? (await vfs.stat(path))?.revision;
+    const historical = revision === undefined ? undefined : vfs.readFileAtRevision?.bind(vfs);
+
+    const load = async () => (historical !== undefined && revision !== undefined ? await historical(path, revision) : await vfs.readFile(path));
+    // A file the agent read and is gone now is a change, not an absence to create into.
+    const bytes = revision === undefined ? await tolerateAsync(load, 'enoent') : await load();
+
+    if (bytes === undefined) return { text: null, observed: { kind: 'absent' } };
+
+    const read: ObservedFile = at === undefined ? { kind: 'read', bytes } : { kind: 'read', bytes, revision: at };
+
+    return { text: new TextDecoder('utf-8', { ignoreBOM: true }).decode(bytes), observed: read };
   };
 
   const undo = (report: VfsWriteReport | null) => (report === null ? {} : { undo: uncheckpointedSentence(report.uncheckpointed, 'this write') });
@@ -268,8 +280,16 @@ function fileOps(deps: FileDeps) {
     }
   };
 
-  /** How a result names its file: the reference the live table gives it. */
-  const referenceOf = (path: string): string => formatPath(resolvePath(path, deps.planes).absolute, deps.planes);
+  /**
+   * Where a path landed, links and `..` walked as the operation walked them, and the reference the live table gives
+   * that file: what a result names, so reading the reference back reads the bytes the call read or wrote. A plane with
+   * no namespace to walk (a bare store, as a birth runtime's) lands where the path is named.
+   */
+  const landing = async (path: string): Promise<{ readonly at: string; readonly reference: string }> => {
+    const at = vfs.resolve === undefined ? resolvePath(path, deps.planes).absolute : await vfs.resolve(path);
+
+    return { at, reference: formatPath(at, deps.planes) };
+  };
 
   /** A raster image is shown to the model, as a screenshot is: its text would be noise. Null for anything else. */
   const imageRead = async (path: string): Promise<ImageCarrier | null> => {
@@ -283,7 +303,7 @@ function fileOps(deps: FileDeps) {
         + `${IMAGE_READ_MAX_BYTES} a model is shown; scale it down with the shell first.`);
     }
 
-    const output = `${referenceOf(path)}: ${image.mediaType} ${image.width}x${image.height}, ${bytes.byteLength} bytes`;
+    const output = `${(await landing(path)).reference}: ${image.mediaType} ${image.width}x${image.height}, ${bytes.byteLength} bytes`;
 
     return imageCarrier(output, [{ mediaType: image.mediaType, data: bytesToBase64(bytes) }]);
   };
@@ -334,16 +354,15 @@ function fileOps(deps: FileDeps) {
     }),
     write: async (path: string, content: string) => {
       requireBuild('file.write');
-      let existing: string | null = null;
+      let existing: string | null;
+      let observed: ObservedFile;
 
       try {
-        existing = await readFileText(vfs, path);
+        ({ text: existing, observed } = await readObserved(path));
       } catch (err) {
-        if (!isVfsError(err) || err.code !== 'ENOENT') {
-          const vfsFail = await vfsFailure(vfs, { error: err }, 'write', path);
+        const vfsFail = await vfsFailure(vfs, { error: err }, 'write', path);
 
-          return failure(vfsFail.reason, vfsFail.error);
-        }
+        return failure(vfsFail.reason, vfsFail.error);
       }
 
       if (existing !== null) {
@@ -352,19 +371,22 @@ function fileOps(deps: FileDeps) {
         if (refusal && reason) return failure(reason, refusal);
       }
 
-      let report: VfsWriteReport | null;
+      let landed: { readonly report: VfsWriteReport | null; readonly checked: WriteGuarantee };
 
       try {
-        report = await persist(path, content, () => ledger.observeWhole(path, content));
+        landed = await persist(path, content, (revision) => ledger.observeWhole(path, content, revision), observed);
       } catch (err) {
         const vfsFail = await vfsFailure(vfs, { error: err }, 'write', path);
 
         return failure(vfsFail.reason, vfsFail.error);
       }
 
+      const where = await landing(path);
+
       return {
-        path, reference: referenceOf(path), bytes: content.length, action: existing === null ? 'created' as const : 'replaced' as const, ...undo(report),
-        ...await slateBuild(deps, path),
+        path, reference: where.reference, bytes: content.length, action: existing === null ? 'created' as const : 'replaced' as const,
+        checked: landed.checked, ...undo(landed.report),
+        ...await slateBuild(deps, where.at),
       };
     },
     edit: async (path: string, raw: readonly { readonly old_text: string; readonly new_text: string }[]) => {
@@ -372,16 +394,21 @@ function fileOps(deps: FileDeps) {
       const edits: FileEdit[] = raw.map((edit) => ({ oldText: edit.old_text, newText: edit.new_text }));
 
       let current: string;
-      let revision = ledger.readRevision(path);
+      let observed: ObservedFile;
 
       try {
+        // The revision the agent read, where the plane keeps it: the edit applies to what was read.
+        let held;
+
         try {
-          current = await readFileText(vfs, path, revision);
+          held = await readObserved(path, ledger.readRevision(path));
         } catch (cause) {
           if (!isVfsError(cause) || cause.code !== 'ENOTSUP') throw cause;
-          revision = undefined;
-          current = await readFileText(vfs, path);
+          held = await readObserved(path);
         }
+
+        if (held.text === null) throw new VfsError('ENOENT', 'no such file, open', path);
+        ({ text: current, observed } = { text: held.text, observed: held.observed });
       } catch (err) {
         const vfsFail = await vfsFailure(vfs, { error: err }, 'edit', path);
         ledger.recordEdit(path, vfsFail.reason);
@@ -405,10 +432,10 @@ function fileOps(deps: FileDeps) {
         return failure(outcome.reason, outcome.message);
       }
 
-      let report: VfsWriteReport | null;
+      let landed: { readonly report: VfsWriteReport | null; readonly checked: WriteGuarantee };
 
       try {
-        report = await persist(path, outcome.content, (writtenRevision) => ledger.observeEdited(path, current, outcome, writtenRevision), revision);
+        landed = await persist(path, outcome.content, (writtenRevision) => ledger.observeEdited(path, current, outcome, writtenRevision), observed);
       } catch (err) {
         const vfsFail = await vfsFailure(vfs, { error: err }, 'edit', path);
         ledger.recordEdit(path, vfsFail.reason);
@@ -418,11 +445,13 @@ function fileOps(deps: FileDeps) {
 
       ledger.recordEdit(path, null);
 
+      const where = await landing(path);
+
       return {
-        path, reference: referenceOf(path),
+        path, reference: where.reference,
         applied: outcome.applied.map((a) => ({ line: a.line, removedLines: a.removedLines, addedLines: a.addedLines })),
-        ...undo(report),
-        ...await slateBuild(deps, path),
+        checked: landed.checked, ...undo(landed.report),
+        ...await slateBuild(deps, where.at),
       };
     },
   };

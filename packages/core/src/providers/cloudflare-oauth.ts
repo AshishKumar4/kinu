@@ -1,3 +1,8 @@
+import {
+  NIMBUS_CLOUDFLARE_API as CLOUDFLARE_API,
+  NIMBUS_CF_OAUTH_TOKEN_URL as CLOUDFLARE_TOKEN_URL,
+  isNimbusCloudflareAccountId as isCloudflareAccountId,
+} from '@nimbus-sh/sdk/oauth';
 import { JsonObjectSchema, type JsonObject } from '../utils/json';
 import { OAuthTokenError } from './oauth-token-error';
 import { nonEmptyString } from '../utils/json';
@@ -29,10 +34,6 @@ export const CLOUDFLARE_WORKERS_AI_SCOPES = 'user-details.read account-settings.
 /** Created on an account's first authenticated request to it; no other id is (developers.cloudflare.com/ai-gateway/
  *  configuration/manage-gateway, updated 2026-09-15; changelog 2026-03-02). */
 const DEFAULT_CLOUDFLARE_AI_GATEWAY_ID = 'default';
-
-const CLOUDFLARE_API = 'https://api.cloudflare.com/client/v4';
-
-const CLOUDFLARE_TOKEN_URL = 'https://dash.cloudflare.com/oauth2/token';
 
 export interface CloudflareOAuthEnv {
   CLOUDFLARE_OAUTH_CLIENT_ID?: string;
@@ -303,23 +304,15 @@ export function accountIdFromCloudflareCredential(credential: OAuthCredential): 
   return v.is(v.string(), accountId) && isCloudflareAccountId(accountId) ? accountId : null;
 }
 
-/** Every Cloudflare account this login can see; older tokens report just the selected one. */
+/** Every Cloudflare account this login can see, as recorded at sign-in. */
 export function cloudflareAccountsFromCredential(credential: OAuthCredential): CloudflareAccount[] {
   const stored = v.safeParse(v.array(CloudflareAccountSchema), credential.metadata?.accounts);
 
-  const accounts = stored.success
+  return stored.success
     ? stored.output
         .filter((row) => isCloudflareAccountId(row.id))
         .map((row): CloudflareAccount => ({ id: row.id, name: nonEmptyString({ value: row.name }) ?? row.id }))
     : [];
-
-  if (accounts.length > 0) return accounts;
-  const selected = accountIdFromCloudflareCredential(credential);
-
-  if (!selected) return [];
-  const name = credential.metadata?.accountName;
-
-  return [{ id: selected, name: v.is(v.string(), name) && name.trim() ? name.trim() : selected }];
 }
 
 /** The same credential pointed at another of its accounts (the metadata `cloudflareWorkersAIBaseURL` reads). */
@@ -409,8 +402,4 @@ function jsonObjectOf(response: Response, label: string): Effect.Effect<JsonObje
   return Effect.tryPromise({ try: async () => v.parse(JsonObjectSchema, await response.json()), catch: (cause) => ({ cause }) }).pipe(
     Effect.catch((failed) => Effect.die(new Error(`${label} returned HTTP ${response.status} with a body that is not JSON.`, { cause: failed.cause }))),
   );
-}
-
-function isCloudflareAccountId(value: string): boolean {
-  return /^[a-fA-F0-9]{16,64}$/.test(value);
 }

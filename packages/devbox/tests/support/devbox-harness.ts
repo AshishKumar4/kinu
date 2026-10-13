@@ -951,9 +951,10 @@ export class FakeSandbox {
 
     if (protocol !== undefined) return protocol;
 
-    // An untimed launch is `setsid -w /bin/bash -c` (D69); a raw exec is `/bin/bash -c`.
+    // An untimed launch is `setsid -w /bin/bash -c` (D69); a raw exec is `/bin/bash -c`. A digest write names its file
+    // in argv (`file-digest-write.ts`).
     const onHost = options.cwd?.includes(DEVBOX_SCRATCH_PREFIX) === true || args[0] === 'setsid' || args[3] === "kill-tree" || args[3] === "port-listeners"
-      || args[3] === 'devbox-desktop';
+      || args[3] === 'devbox-desktop' || (args[0] === 'python3' && args[3]?.includes(DEVBOX_SCRATCH_PREFIX) === true);
 
     if (this.nativeExec !== undefined && onHost) return this.nativeExec(args, options);
 

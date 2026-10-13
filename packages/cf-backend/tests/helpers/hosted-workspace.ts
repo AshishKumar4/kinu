@@ -110,6 +110,7 @@ export async function hostedWorkspace(
     },
     holdLane: (body) => body(),
     workspaceBox: (shellId) => workspace.box(shellId),
+    workspaceServing: () => workspace.serving(),
     homeHost: () => workspace.bundle.privileged()
       .then((privileged) => ({ ...privileged, sql: ctx.storage.sql })),
     sql,
@@ -151,8 +152,8 @@ export async function hostedWorkspace(
     reconcileDurableWake: () => undefined,
     logActivity: () => undefined,
     tracing: () => createAgentTracing({ tracer: createRecordingTracer(), isolateGen: 1, selfPath: [], actor: { id: main.actorId, kind: 'main' } }),
-    slate: () => Promise.resolve({ ok: false, reason: 'unavailable', error: 'no slate host in this fixture' }),
-    slateBuild: () => Promise.resolve({ ok: false, reason: 'unavailable', error: 'no slate host in this fixture' }),
+    slate: () => Promise.resolve({ ok: false, success: false, reason: 'unavailable', error: 'no slate host in this fixture' }),
+    slateBuild: () => Promise.resolve({ ok: false, success: false, reason: 'unavailable', error: 'no slate host in this fixture' }),
     deferrals: () => undefined,
     refinementLane: () => () => Promise.resolve(),
     chosenLoopOrigin: (record) => chosen.get(record.actorId) ?? null,

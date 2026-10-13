@@ -1,6 +1,6 @@
 // Wraps a plain credential double with the `UserCaller` every privileged UserDO method takes:
 // owner-session by default, a workspace capability token for attenuation tests.
-import type { UserCredentialSource } from '../../src/providers/agent-registry';
+import { userCredentials, type UserCredentialSource } from '../../src/providers/agent-registry';
 import type { CredentialSummary } from '../../src/user/credentials';
 import type { ModelRelayHub } from '../../src/egress/model-relay-route';
 import { ownerCaller, type AuthRequest, type UserCaller } from '@kinu.run/core';
@@ -22,17 +22,14 @@ export const NO_RELAY_MACHINE: ModelRelayHub = {
 };
 
 export function userCredentialSource(store: CredentialStoreDouble): UserCredentialSource {
-  return {
-    caller: () => ownerCaller(TEST_USER_ENV),
-    stub: {
-      ...NO_RELAY_MACHINE,
-      getAuth: async (_caller: UserCaller, key: string, opts?: AuthRequest) => {
-        const headers = await store.getAuthHeaders(key, opts);
-        const baseURL = headers === null ? null : await store.getCredentialBaseURL(key);
+  return userCredentials(() => ({
+    ...NO_RELAY_MACHINE,
+    getAuth: async (_caller: UserCaller, key: string, opts?: AuthRequest) => {
+      const headers = await store.getAuthHeaders(key, opts);
+      const baseURL = headers === null ? null : await store.getCredentialBaseURL(key);
 
-        return headers === null ? null : { headers, ...(baseURL !== null && { baseURL }) };
-      },
-      listCredentials: (_caller: UserCaller) => store.listCredentials(),
+      return headers === null ? null : { headers, ...(baseURL !== null && { baseURL }) };
     },
-  };
+    listCredentials: (_caller: UserCaller) => store.listCredentials(),
+  }), () => ownerCaller(TEST_USER_ENV));
 }

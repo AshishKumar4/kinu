@@ -147,7 +147,7 @@ describe('an episode keeps its evidence', () => {
         calls: 8, callsWithoutUsage: 0, unpricedCalls: 8,
         usage: { input: 234433, output: 29531 },
       },
-      producers: [], missions: [], offTurnShare: null,
+      producers: [], missions: [], accounts: [], offTurnShare: null,
       coverage: { calls: 8, measured: 8, reported: 1, silent: [], partial: [] },
     };
 
@@ -193,7 +193,7 @@ describe('an episode keeps its evidence', () => {
 
     const spend: WorkspaceSpend = {
       total: { calls: 3, callsWithoutUsage: 0, unpricedCalls: 3, usage: { input: 10, output: 5 } },
-      producers: [], missions: [], offTurnShare: null,
+      producers: [], missions: [], accounts: [], offTurnShare: null,
       coverage: { calls: 3, measured: 3, reported: 1, silent: [], partial: [] },
     };
 
@@ -253,7 +253,7 @@ describe('an episode keeps its evidence', () => {
       async spend(): Promise<WorkspaceSpend> {
         return {
           total: { calls: 1, callsWithoutUsage: 0, unpricedCalls: 1, usage: { input: 1, output: 1 } },
-          producers: [], missions: [], offTurnShare: null,
+          producers: [], missions: [], accounts: [], offTurnShare: null,
           coverage: { calls: 1, measured: 1, reported: 1, silent: [], partial: [] },
         };
       },
@@ -295,7 +295,7 @@ describe('an episode keeps its evidence', () => {
 
     const spend: WorkspaceSpend = {
       total: { calls: 3, callsWithoutUsage: 0, unpricedCalls: 3, usage: { input: 10, output: 5 } },
-      producers: [], missions: [], offTurnShare: null,
+      producers: [], missions: [], accounts: [], offTurnShare: null,
       coverage: { calls: 3, measured: 3, reported: 1, silent: [], partial: [] },
     };
 

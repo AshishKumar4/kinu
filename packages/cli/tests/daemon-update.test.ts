@@ -28,6 +28,16 @@ const NEW_DAEMON = `${DAEMON_FILES['pc-agent.js']}\n// build ${NEW}\n`;
 
 const NEW_FILES = { ...DAEMON_FILES, 'pc-agent.js': NEW_DAEMON };
 
+/** The daemon production ran on device protocol 2 (packages/pc-agent/tests/fixtures/protocol-2). */
+const PROTOCOL_2 = join(repoRoot, 'packages/pc-agent/tests/fixtures/protocol-2');
+
+const PROTOCOL_2_FILES: Record<string, string> = Object.fromEntries([
+  ['pc-agent.js', 'index.js'], ['sandbox.js', 'sandbox.js'], ['pty.js', 'pty.js'], ['update.js', 'update.js'],
+  ['chatgpt.js', 'chatgpt.js'], ['device-protocol.json', 'device-protocol.json'],
+].map(([name, fixture]) => [name, readFileSync(join(PROTOCOL_2, `${fixture}.txt`), 'utf8')]));
+
+const AnnouncedSchema = v.looseObject({ protocolVersion: v.number(), features: v.array(v.string()) });
+
 const hubs: UpdateHub[] = [];
 
 /** Homes minted; teardown re-reads each pidfile, which names the owner after a handover. */
@@ -75,15 +85,16 @@ function hub(opts: Parameters<typeof startUpdateHub>[0]): UpdateHub {
   return started;
 }
 
-function installedMachine(origin: string, stamp: string | null, config: JsonObject = {}): string {
+function installedMachine(origin: string, stamp: string | null, config: JsonObject = {}, files: Record<string, string> = DAEMON_FILES): string {
   const home = scratchDir('daemon-update');
   homes.push(home);
   mintedHomes.push(home);
 
-  for (const [name, source] of Object.entries(DAEMON_FILES)) writeFileSync(join(home, name), source, { mode: 0o700 });
+  for (const [name, source] of Object.entries(files)) writeFileSync(join(home, name), source, { mode: 0o700 });
 
   if (stamp !== null) writeFileSync(join(home, 'pc-agent.version'), `${stamp}\n`, { mode: 0o600 });
-  writeFileSync(join(home, 'device.json'), `${JSON.stringify({ user: 'user_1', token: `pdt_${'a'.repeat(32)}`, origin })}\n`, { mode: 0o600 });
+  // As the previous release's `kinu connect` wrote it (beaf28a46), and as an update leaves it: the fields the daemon reads.
+  writeFileSync(join(home, 'device.json'), `${JSON.stringify({ user: 'user_1', token: `pdt_${'a'.repeat(32)}`, origin, root: home }, null, 2)}\n`, { mode: 0o600 });
   writeFileSync(join(home, 'config.json'), `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
 
   return home;
@@ -228,6 +239,63 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     expect(served.hits.filter((hit) => hit.startsWith('/downloads/'))).toHaveLength(2);
   });
 
+
+  test('a protocol-2 daemon from the previous release takes the pushed build, comes back on this protocol and serves', async () => {
+    const served = hub({ served: NEW, archive: await daemonArchive(NEW_FILES, NEW) });
+    const home = installedMachine(served.origin, OLD, {}, PROTOCOL_2_FILES);
+    startPipedDaemon(home, await releaseSigningEnv());
+
+    await served.sockets.until((hellos) => hellos[1] !== undefined);
+    const [previous, successor] = [present(served.sockets.items[0], 'the protocol-2 HELLO'), present(served.sockets.items[1], 'the successor HELLO')];
+    const before = v.parse(AnnouncedSchema, previous.hello);
+    const after = v.parse(AnnouncedSchema, successor.hello);
+
+    expect({ protocol: before.protocolVersion, checked: before.features.includes('writeFileIfDigest') }).toEqual({ protocol: 2, checked: false });
+    expect({ protocol: after.protocolVersion, checked: after.features.includes('writeFileIfDigest'), version: successor.hello.version })
+      .toEqual({ protocol: 3, checked: true, version: NEW });
+
+    // It serves on the new protocol: a digest-checked write lands, outside the Kinu home the tunnel never serves.
+    const file = join(scratchDir('protocol-2-updated'), 'landed.txt');
+
+    successor.send({ id: 'checked', method: 'writeFileIfDigest', params: [file, 'after the update', null, {}], sandbox: { tier: 'raw', agentHome: '', roots: [] } });
+    expect(v.parse(ReplySchema, await successor.waitForReply('checked'))).toMatchObject({ result: { ok: true } });
+    expect(readFileSync(file, 'utf8')).toBe('after the update');
+  });
+
+  test('a protocol-2 daemon whose successor refuses its config at start rolls back and keeps serving', async () => {
+    const served = hub({ served: NEW, archive: await daemonArchive(NEW_FILES, NEW) });
+    const home = installedMachine(served.origin, OLD, {}, PROTOCOL_2_FILES);
+    // Linked before `kinu connect` recorded a directory: protocol 2 serves it; this build refuses it after taking the pidfile.
+    writeFileSync(join(home, 'device.json'), `${JSON.stringify({ user: 'user_1', token: `pdt_${'a'.repeat(32)}`, origin: served.origin }, null, 2)}\n`, { mode: 0o600 });
+    const daemon = startPipedDaemon(home, await releaseSigningEnv());
+    const version = join(home, 'pc-agent.version');
+
+    await waitForFileText(version, NEW, daemon.proc.exited);
+    await waitForFileText(version, OLD, daemon.proc.exited);
+    expect(installed(home, 'pc-agent.js')).toBe(PROTOCOL_2_FILES['pc-agent.js']);
+    expect(installed(home, 'pc-agent.version').trim()).toBe(OLD);
+
+    await served.sockets.until((hellos) => hellos.some(socket => socket.hello.version === OLD));
+    const restored = present(served.sockets.items.filter(socket => socket.hello.version === OLD).at(-1), 'the restored protocol-2 connection');
+    const file = join(scratchDir('protocol-2-rolled-back'), 'landed.txt');
+
+    restored.send({ id: 'restored-write', method: 'writeFile', params: [file, 'after the rollback', {}], sandbox: { tier: 'raw', agentHome: '', roots: [] } });
+    expect(v.parse(ReplySchema, await restored.waitForReply('restored-write'))).toMatchObject({ result: { success: true } });
+    expect(readFileSync(file, 'utf8')).toBe('after the rollback');
+  });
+
+  test('a build that ships a daemon file this one never had lands it, and comes up on it', async () => {
+    // The new daemon requires a module the running build does not ship: the archive's own file list says what lands.
+    const daemon = `${DAEMON_FILES['pc-agent.js']}\nrequire('./added.js');\n// build ${NEW}\n`;
+    const served = hub({ served: NEW, archive: await daemonArchive({ ...DAEMON_FILES, 'pc-agent.js': daemon, 'added.js': 'module.exports = {};\n' }, NEW) });
+    const home = installedMachine(served.origin, OLD);
+    startPipedDaemon(home, await releaseSigningEnv());
+
+    await served.sockets.until((hellos) => hellos[1] !== undefined);
+    expect(present(served.sockets.items[1], 'the successor HELLO').hello).toMatchObject({ version: NEW });
+    expect(installed(home, 'added.js')).toBe('module.exports = {};\n');
+    expect(installed(home, 'pc-agent.version').trim()).toBe(NEW);
+  });
 
   test('THE TROJAN PROBE: a hub-chosen checksum with no Kinu signature downloads nothing', async () => {
     // SECURITY-devices C1: an unsigned frame naming a trojaned tarball is refused before any byte is fetched.

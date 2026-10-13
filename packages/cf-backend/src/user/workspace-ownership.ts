@@ -5,7 +5,9 @@
 import type { OrchestratorAgent } from '../orchestrator';
 import type { UserDO } from './user-do';
 import { ERROR_STATUS, ownerCaller, type OwnerCapabilityEnv } from '@kinu.run/core';
-import { classifyTransientDO, retryTransientDO } from '@kinu.run/core';
+import { idempotent } from '@nimbus-sh/fabric/do-calls.js';
+import { classifyDoCall, isRetryableDoCall } from '@nimbus-sh/platform/oom-classify.js';
+import { logDoCallRetry } from '../obs/do-call-retry';
 import type { ObjectNamespace } from '@kinu.run/core';
 import { Effect, Result } from 'effect';
 import { carriesCauseCode, diagnostics, KinuError, settle, toKinuError } from '@kinu.run/core/obs';
@@ -64,7 +66,7 @@ export function claimOwnedWorkspace<Id, Agent extends WorkspaceOwnerClaim>(
   workspaceName: string,
 ): Promise<OwnedWorkspaceResult<Agent>> {
   return settle(Effect.gen(function* () {
-    const userDO = env.UserDO.get(env.UserDO.idFromName(userId));
+    const userObject = env.UserDO.idFromName(userId);
     // Every call below is idempotent, so platform-dropped connections are retried.
     const owner = yield* Effect.promise(() => ownerCaller(env));
     // Order is the security property: hasWorkspace must answer before claimOwner for anyone
@@ -72,7 +74,8 @@ export function claimOwnedWorkspace<Id, Agent extends WorkspaceOwnerClaim>(
     const membershipKey = `${userId}\u0000${workspaceName}`;
 
     if (!membershipProven.has(membershipKey)) {
-      const member = yield* Effect.promise(() => retryTransientDO('hasWorkspace', () => userDO.hasWorkspace(owner, workspaceName)));
+      const member = yield* Effect.promise(() => idempotent('hasWorkspace', () => env.UserDO.get(userObject),
+        (stub) => stub.hasWorkspace(owner, workspaceName), { onRetry: logDoCallRetry }));
 
       if (!member) {
         // A fresh removal answer outranks a concurrent request's proof.
@@ -85,10 +88,11 @@ export function claimOwnedWorkspace<Id, Agent extends WorkspaceOwnerClaim>(
       membershipProven.add(membershipKey);
     }
 
-    const agent = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(workspaceName));
+    const workspaceObject = env.OrchestratorAgent.idFromName(workspaceName);
 
     const claimed = yield* Effect.result(Effect.tryPromise({
-      try: () => retryTransientDO('claimOwner', () => agent.claimOwner(userId)),
+      try: () => idempotent('claimOwner', () => env.OrchestratorAgent.get(workspaceObject),
+        (stub) => stub.claimOwner(userId), { onRetry: logDoCallRetry }),
       catch: (cause) => ({ cause }),
     }));
 
@@ -97,21 +101,22 @@ export function claimOwnedWorkspace<Id, Agent extends WorkspaceOwnerClaim>(
 
       if (isOwnedByAnotherAccount({ cause: e })) return refused<Agent>(403, `Workspace ${workspaceName} belongs to another account.`);
 
-      const transient = classifyTransientDO({ cause: e });
+      const transient = classifyDoCall(e);
 
       const failure = toKinuError({
-        doing: 'claiming workspace ownership', cause: e, otherwise: transient === null ? 'io' : 'unavailable',
+        doing: 'claiming workspace ownership', cause: e, otherwise: isRetryableDoCall(transient) || transient === 'overloaded' ? 'unavailable' : 'io',
       });
 
-      diagnostics.failure('workspace.claim_owner_failed', failure, { workspace: workspaceName, transient: transient ?? 'none' });
+      diagnostics.failure('workspace.claim_owner_failed', failure, { workspace: workspaceName, transient });
 
       return refused<Agent>(ERROR_STATUS[failure.code], `Could not reach workspace ${workspaceName}; try again.`);
     }
 
     // The UserDO serializes this reconcile; it returns immediately once both sides agree.
     const provisioned = yield* Effect.result(Effect.tryPromise({
-      try: () => retryTransientDO('ensureWorkspaceCapability',
-        () => userDO.ensureWorkspaceCapability(workspaceName, claimed.success.capabilityHash)),
+      // Replay replaces the single current hash and installed token; the prior token is no longer live.
+      try: () => idempotent('ensureWorkspaceCapability', () => env.UserDO.get(userObject),
+        (stub) => stub.ensureWorkspaceCapability(workspaceName, claimed.success.capabilityHash), { onRetry: logDoCallRetry }),
       catch: (cause) => ({ cause }),
     }));
 
@@ -126,17 +131,17 @@ export function claimOwnedWorkspace<Id, Agent extends WorkspaceOwnerClaim>(
         return refused<Agent>(404, `Workspace ${workspaceName} is not in your registry.`);
       }
 
-      const transient = classifyTransientDO({ cause: e });
+      const transient = classifyDoCall(e);
 
       const failure = toKinuError({
-        doing: "provisioning the workspace's capability token", cause: e, otherwise: transient === null ? 'io' : 'unavailable',
+        doing: "provisioning the workspace's capability token", cause: e, otherwise: isRetryableDoCall(transient) || transient === 'overloaded' ? 'unavailable' : 'io',
       });
 
-      diagnostics.failure('workspace.capability_provisioning_failed', failure, { workspace: workspaceName, transient: transient ?? 'none' });
+      diagnostics.failure('workspace.capability_provisioning_failed', failure, { workspace: workspaceName, transient });
 
       return refused<Agent>(ERROR_STATUS[failure.code], 'Could not issue this workspace\'s capability token; try again.');
     }
 
-    return Result.succeed(agent);
+    return Result.succeed(env.OrchestratorAgent.get(workspaceObject));
   }));
 }

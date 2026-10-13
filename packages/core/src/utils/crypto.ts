@@ -1,14 +1,7 @@
 /** Web-Crypto primitives shared by every path that mints or checks a secret. */
-import { bytesToBase64 } from './base64';
+import { pkceChallenge, randomBase64Url } from '@nimbus-sh/sdk/oauth';
 
-/** URL-safe base64, padding trimmed. The only encoder: PKCE (RFC 7636) compares the challenge as a string. */
-export function base64Url(bytes: Uint8Array): string {
-  return bytesToBase64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
-}
-
-export function randomToken(bytes: number): string {
-  return base64Url(crypto.getRandomValues(new Uint8Array(bytes)));
-}
+export { base64Url, randomBase64Url as randomToken } from '@nimbus-sh/sdk/oauth';
 
 export interface PkcePair {
   readonly verifier: string;
@@ -16,10 +9,9 @@ export interface PkcePair {
 }
 
 export async function createPkcePair(): Promise<PkcePair> {
-  const verifier = randomToken(32);
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+  const verifier = randomBase64Url(32);
 
-  return { verifier, challenge: base64Url(new Uint8Array(digest)) };
+  return { verifier, challenge: await pkceChallenge(verifier) };
 }
 
 /** SHA-256 digests live in `safety/argument-digest.ts` (`sha256Hex`). */

@@ -32,7 +32,7 @@ export const WORKSPACE = {
   readdir: ws({ name: 'readdir', help: 'A directory\'s entry names.', impact: 'observe', input: v.strictObject({ path: Path }), output: v.array(v.string()) }),
   exists: ws({ name: 'exists', help: 'Whether a path exists.', impact: 'observe', input: v.strictObject({ path: Path }), output: v.boolean() }),
   exec: ws({
-    name: 'exec', impact: 'execute', output: Text,
+    name: 'exec', impact: 'execute', output: v.union([Text, v.object({ stdout: v.string(), stderr: v.string(), exitCode: v.number() })]),
     help: 'Run a command in the workspace shell, over the same files readFile reads: a POSIX shell with ~95 coreutils, pipes, '
       + 'redirects, loops and variables. Each call starts fresh in `cwd` (default your home) unless it names a shell, which '
       + 'keeps its directory and exported variables. Use sandbox or device only when the task needs that machine.',
@@ -40,6 +40,7 @@ export const WORKSPACE = {
       command: Command,
       cwd: v.optional(described(v.string(), 'Where the command starts.')),
       name: v.optional(described(v.pipe(v.string(), v.nonEmpty()), 'A shell that keeps its directory and variables between calls naming it.')),
+      parts: v.optional(described(v.literal(true), 'Answer `{ stdout, stderr, exitCode }` as the command wrote them, instead of the text.')),
     }),
   }),
   listTools: ws({

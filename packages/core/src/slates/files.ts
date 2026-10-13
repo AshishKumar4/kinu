@@ -8,7 +8,6 @@ import type { WorkspaceSlateContentStore } from './content';
 import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
 import { settleSync } from '../obs/effect';
-import { tolerate } from '../obs/index';
 import { compareCodeUnits } from '../utils/text';
 import { unmovedSince } from '../vfs/unmoved';
 
@@ -92,6 +91,8 @@ export interface SlateFileTree {
   access(path: string, mode: number): void;
   stat(path: string): { mode: number };
   lstat(path: string): FileStat;
+  /** lstat when `followLeaf` is false, or null when nothing is there. */
+  statIfPresent(path: string, followLeaf?: boolean): FileStat | null;
   readdir(path: string): { name: string; type: string }[];
   readlink(path: string): string;
   readFileUncached(path: string): Uint8Array;
@@ -172,7 +173,7 @@ export class SlateFiles {
     const target = new Map(tree.entries.map((entry) => [entry.path, entry]));
     // Before the rows' time: a rewrite in that millisecond still moves the mtime.
     const written = manifest.at - 1;
-    const present = this.lstatOrNull(root);
+    const present = this.vfs.statIfPresent(root, false);
     const fresh = present?.type !== 'directory';
 
     if (present !== null && fresh) this.vfs.unlink(root);
@@ -186,7 +187,7 @@ export class SlateFiles {
 
     for (const entry of tree.entries) {
       const path = `${root}/${entry.path}`;
-      const current = fresh ? null : this.lstatOrNull(path);
+      const current = fresh ? null : this.vfs.statIfPresent(path, false);
 
       if (entry.kind === 'directory') {
         if (current === null) this.vfs.mkdir(path, { mode: entry.mode | 0o700 });
@@ -234,10 +235,6 @@ export class SlateFiles {
         this.vfs.unlink(absolute);
       }
     }
-  }
-
-  private lstatOrNull(path: string): FileStat | null {
-    return tolerate(() => this.vfs.lstat(path), 'enoent') ?? null;
   }
 
   /** The read's permission check, without the read. */

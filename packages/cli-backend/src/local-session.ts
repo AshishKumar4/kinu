@@ -168,6 +168,13 @@ interface LocalHostedSession {
   readonly approvals?: DeferredApprovalQueue;
   /** The root's: wakes a hire the owner's decision answers, on its own durable queue. */
   readonly wakeHire?: (actorId: string, signal: AgentSignal) => Effect.Effect<void, KinuError>;
+  /** Every job a session of this workspace drives now, the tree's one set, shared with the root and every hire. */
+  readonly jobsDriven: Set<string>;
+}
+
+/** The jobs a session's runners drive: its host tree's set, or, for a session outside a host, its own. */
+function drivenJobs(hosted: LocalHostedSession | undefined): Set<string> {
+  return hosted?.jobsDriven ?? new Set();
 }
 
 type TurnAsked = Pick<ChatTurnInput, 'kind' | 'text' | 'metadata'>;
@@ -287,6 +294,8 @@ export class LocalAgentSession {
   private readonly taskList: TaskListStore;
   private readonly jobRunner: BackgroundJobRunner;
   private readonly jobHolder: JobHolder;
+  /** Every job a runner in this process drives now: a hosted session's tree's set, shared with its root and hires. */
+  private readonly jobsDrivenHere: Set<string>;
   /** Every job operation in this session reaches the runner over the job's rows: the root's, or a node's or head's. */
   private readonly jobAuthorities: WorkspaceJobAuthorities;
   private readonly clock: Clock;
@@ -549,6 +558,7 @@ export class LocalAgentSession {
     this.deferrals = this.workspaceQueue(opts.hosted);
 
     this.rt.setApprovalDeferrals?.(this.deferrals.channelFor(this.rt.actor.actorId));
+    this.jobsDrivenHere = drivenJobs(opts.hosted);
     this.jobHolder = processJobHolder(this.rt.storage, OS_LEASE_PROCESS);
     this.jobRunner = new BackgroundJobRunner({
       store: this.jobs,
@@ -575,6 +585,7 @@ export class LocalAgentSession {
       // Arms the session's one terminal-retry timer, which sweeps due jobs before replaying owed effects.
       scheduleResume: (atMs) => this.scheduleTerminalRetry(atMs),
       holder: this.jobHolder,
+      drivenHere: this.jobsDrivenHere,
     } satisfies BackgroundJobRunnerDeps);
     this.jobAuthorities = new WorkspaceJobAuthorities({
       root: () => ({ kind: 'root', actorId: this.rt.actor.actorId, store: this.jobs, runner: this.jobRunner }),
@@ -2496,7 +2507,7 @@ export class LocalAgentSession {
 
   /** The session's own job seams: a node's or head's output reaches the same listeners its chat's does. */
   private loopJobPorts(): WorkspaceJobPorts {
-    return { jobOutput: (frame) => { this.host.broadcast(frame); }, onDetached: null, onCancelled: null, holder: this.jobHolder };
+    return { jobOutput: (frame) => { this.host.broadcast(frame); }, onDetached: null, onCancelled: null, holder: this.jobHolder, drivenHere: this.jobsDrivenHere };
   }
 
   /** A swarm actor no loop holds: its loop ended, with this process or before it, so its rows settle and wake nobody. */

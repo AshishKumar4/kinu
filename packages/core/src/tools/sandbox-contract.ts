@@ -225,7 +225,7 @@ export function codemodeFunction<Result>(namespace: string, member: string, invo
     const value = await invoke(...args);
 
     return value === undefined ? undefined : decodeJsonValue({ value });
-  }, namespace !== CRAFTED_TOOL_NAMESPACE);
+  });
 
   return async (...args: unknown[]): Promise<JsonValue | undefined> => {
     const value = await call(...args);

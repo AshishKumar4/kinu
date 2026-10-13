@@ -13,7 +13,8 @@ import {
 } from '@kinu.run/core';
 import type { OrchestratorAgent } from '../../src/orchestrator';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { USER_DO_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
+import { USER_DO_RPC_SURFACE } from '../../src/rpc-surface';
+import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import type { DeviceCancellationOutcome } from '../../src/user/devices';
 import { UserDO } from '../../src/user/user-do';
 

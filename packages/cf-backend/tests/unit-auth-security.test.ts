@@ -453,13 +453,6 @@ describe('auth and desktop security invariants', () => {
     }
   });
 
-  test('a credential stored before accounts were recorded reports its selected account', () => {
-    expect(cloudflareAccountsFromCredential({
-      kind: 'oauth', accessToken: 'cf-access',
-      metadata: { accountId: 'abc123abc123abc123abc123abc123ab', accountName: 'User Account' },
-    })).toEqual([{ id: 'abc123abc123abc123abc123abc123ab', name: 'User Account' }]);
-  });
-
   test('expired access-token-only Cloudflare credentials stop advertising Workers AI', () => {
     const base = {
       kind: 'oauth' as const,

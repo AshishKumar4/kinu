@@ -4,11 +4,10 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { Effect } from 'effect';
-import * as v from 'valibot';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { isolatedBunArgs } from '@kinu.run/core';
 import { classify, classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle, settleSync, tolerate, toKinuError } from '@kinu.run/core/obs';
@@ -18,11 +17,7 @@ import { AGENT_HOME, ensureAgentHome, loadConfigFile, requireAuthConfig, resolve
 import { listCloudDevices, registerCloudDevice, type CloudDevice, type CloudDeviceSandbox } from './cloud-api';
 import { readDaemonLogTail, rotateDaemonLogIfNeeded } from './daemon-log';
 import { issuedDeviceConnected, waitForAnswer, type StoppableWaitOptions } from '@kinu.run/core';
-import PC_AGENT_DAEMON_SOURCE from '../../pc-agent/src/index.js' with { type: 'text' };
-import PC_AGENT_SANDBOX_SOURCE from '../../pc-agent/src/sandbox.js' with { type: 'text' };
-import PC_AGENT_PTY_SOURCE from '../../pc-agent/src/pty.js' with { type: 'text' };
-import PC_AGENT_UPDATE_SOURCE from '../../pc-agent/src/update.js' with { type: 'text' };
-import DEVICE_PROTOCOL from '../../core/src/execution/device-protocol.json';
+import { parseDeviceConfig, type DeviceConfig } from '../../pc-agent/src/index.js';
 import { DIM, VERSION } from './display';
 
 const PID_PATH = join(AGENT_HOME, 'pc-agent.pid');
@@ -38,22 +33,24 @@ const VERSION_STAMP_PATH = join(AGENT_HOME, 'pc-agent.version');
 /** Written by the daemon while its successor starts; with a stale pidfile, the successor died and `.prev` last ran. */
 const UPDATE_PENDING_PATH = join(AGENT_HOME, 'pc-agent.update-pending');
 
-/** Every sibling the daemon `require`s. */
-const DAEMON_SIBLINGS: readonly { readonly name: string; readonly source: string }[] = [
-  { name: 'sandbox.js', source: PC_AGENT_SANDBOX_SOURCE },
-  { name: 'pty.js', source: PC_AGENT_PTY_SOURCE },
-  { name: 'update.js', source: PC_AGENT_UPDATE_SOURCE },
-  { name: 'device-protocol.json', source: JSON.stringify(DEVICE_PROTOCOL) },
-];
+interface DaemonFiles {
+  readonly daemon: string;
+  /** Every file the daemon requires beside itself. */
+  readonly siblings: readonly { readonly name: string; readonly source: string }[];
+}
 
 /**
- * chatgpt.js is read, not imported as text: the CLI imports it as a module too, and Bun's bundler gives one
- * file one loader (21 of 40 builds failed). The release and the source tree put it beside their daemon.
+ * The daemon and its siblings, read where the release or the source tree keeps them, never imported as text: the CLI
+ * imports the daemon (its device.json schema) and chatgpt.js as modules, and Bun gives one file one loader (21 of 40
+ * builds failed with chatgpt.js imported both ways). The release keeps them in `pc-agent/` beside the CLI as they
+ * install (scripts/build-cli-dist.sh); the source tree keeps the daemon as index.js, with declarations beside it.
  */
-function daemonSiblings(): readonly { readonly name: string; readonly source: string }[] {
-  const file = [join(import.meta.dir, 'pc-agent', 'chatgpt.js'), join(import.meta.dir, '..', '..', 'pc-agent', 'src', 'chatgpt.js')].find(existsSync);
+function daemonFiles(): DaemonFiles {
+  const release = join(import.meta.dir, 'pc-agent');
+  const [dir, daemon] = existsSync(join(release, 'pc-agent.js')) ? [release, 'pc-agent.js'] : [join(import.meta.dir, '..', '..', 'pc-agent', 'src'), 'index.js'];
+  const siblings = readdirSync(dir).filter((name) => name !== daemon && !name.endsWith('.d.ts') && (name.endsWith('.js') || name.endsWith('.json'))).sort();
 
-  return [...DAEMON_SIBLINGS, { name: 'chatgpt.js', source: readFileSync(file ?? join(import.meta.dir, 'pc-agent', 'chatgpt.js'), 'utf8') }];
+  return { daemon: readFileSync(join(dir, daemon), 'utf8'), siblings: siblings.map((name) => ({ name, source: readFileSync(join(dir, name), 'utf8') })) };
 }
 
 export const DAEMON_LOG_PATH = join(AGENT_HOME, 'pc-agent.log');
@@ -95,33 +92,39 @@ export interface ConnectOutcomeDescription {
 }
 
 export type ConnectDeviceResult =
-  | { kind: 'connected'; deviceId: string; label: string; sandbox: CloudDeviceSandbox; wholeMachine: boolean }
-  | { kind: 'cancelled'; deviceId: string }
+  | { kind: 'connected'; deviceId: string; label: string; sandbox: CloudDeviceSandbox; wholeMachine: boolean; replacedLocalConfig: boolean }
+  | { kind: 'cancelled'; deviceId: string; replacedLocalConfig: boolean }
   | { kind: 'already-running'; connected: boolean };
 
 export function connectDevice(auth: DeviceAuth, opts: ConnectDeviceOptions = {}): Promise<ConnectDeviceResult> {
   return settle(Effect.gen(function* () {
-    if (opts.session && (yield* runningDaemonPid()) !== null) {
+    const local = yield* readLocalDevice();
+    const replacedLocalConfig = local.kind === 'malformed';
+    const previous = local.kind === 'current' ? deviceOnOrigin(local.config, auth.origin) : undefined;
+
+    if (!replacedLocalConfig && opts.session && (yield* runningDaemonPid()) !== null) {
       // The running daemon owns device.json and its credentials.
       const devices = yield* listDevicesForConnect(auth, 'checking whether the installed daemon is connected');
 
-      return { kind: 'already-running', connected: thisDeviceIn(devices, auth.origin) } satisfies ConnectDeviceResult;
+      return { kind: 'already-running', connected: registrationConnected(devices, previous) } satisfies ConnectDeviceResult;
     }
 
     yield* assertDaemonPlatformSupported();
     const runtime = yield* daemonRuntime();
-    const device = yield* registerDeviceForConnect(auth, opts.label, localDevice(auth.origin)?.token, opts.device);
+    const device = yield* registerDeviceForConnect(auth, opts.label, previous?.token, opts.device);
     yield* installDaemonFiles(device);
+
+    if (replacedLocalConfig && opts.session) yield* stopRunningDaemon();
     const launch = yield* startInstalledDaemon(opts.session === true, runtime);
     // The daemon must show as connected on the server before success is claimed.
     const connected = yield* waitForDeviceConnected(auth, device.deviceId, launch, opts);
 
-    if (connected === undefined) return { kind: 'cancelled', deviceId: device.deviceId } satisfies ConnectDeviceResult;
+    if (connected === undefined) return { kind: 'cancelled', deviceId: device.deviceId, replacedLocalConfig } satisfies ConnectDeviceResult;
     thisDeviceConnected = true;
 
     // The hub is the authority on the machine's name, not the name typed at the prompt.
     return {
-      kind: 'connected', deviceId: device.deviceId, label: connected.label, sandbox: connected.sandbox, wholeMachine: connected.wholeMachine,
+      kind: 'connected', deviceId: device.deviceId, label: connected.label, sandbox: connected.sandbox, wholeMachine: connected.wholeMachine, replacedLocalConfig,
     } satisfies ConnectDeviceResult;
   }));
 }
@@ -147,12 +150,15 @@ let offerConsumed = false;
 
 let thisDeviceConnected: boolean | null = null;
 
-/** Whether the device the hub issued this machine, as `device.json` names it, is connected; a file from before it
- *  named its device, or another account's, names none. */
-function thisDeviceIn(devices: readonly CloudDevice[], origin: string): boolean {
-  const id = localDevice(origin)?.device;
+/** Whether this machine's current registration on the hub is connected. */
+function thisDeviceIn(devices: readonly CloudDevice[], origin: string): Effect.Effect<boolean, KinuError> {
+  return Effect.map(localDevice(origin), (device) => registrationConnected(devices, device));
+}
 
-  return id !== undefined && issuedDeviceConnected(devices, id) !== undefined;
+/** Whether the registration `config` names is connected. One the previous release linked names none, and cannot be
+ *  confirmed until linking again records it. */
+function registrationConnected(devices: readonly CloudDevice[], config: DeviceConfig | undefined): boolean {
+  return config?.device !== undefined && issuedDeviceConnected(devices, config.device) !== undefined;
 }
 
 /**
@@ -175,7 +181,7 @@ export function shouldOfferDeviceConnect(): Promise<boolean> {
       );
 
       if (listed === null) return false;
-      thisDeviceConnected = thisDeviceIn(listed, auth.origin);
+      thisDeviceConnected = yield* thisDeviceIn(listed, auth.origin);
     }
 
     if (thisDeviceConnected) return false;
@@ -199,10 +205,10 @@ export function deviceStatusLine(): Promise<string> {
       return { origin: auth.origin, devices: await listCloudDevices(auth.origin, auth.token) };
     },
     catch: (err) => ({ err }),
-  }).pipe(Effect.match({
-    onFailure: ({ err }) => `Device status unavailable: ${renderThrownChain({ cause: err })}`,
-    onSuccess: ({ origin, devices }) => {
-      thisDeviceConnected = thisDeviceIn(devices, origin);
+  }).pipe(Effect.matchEffect({
+    onFailure: ({ err }) => Effect.succeed(`Device status unavailable: ${renderThrownChain({ cause: err })}`),
+    onSuccess: ({ origin, devices }) => Effect.gen(function* () {
+      thisDeviceConnected = yield* thisDeviceIn(devices, origin);
       const connected = devices.filter((device) => device.connected);
 
       if (connected.length > 0) {
@@ -214,24 +220,26 @@ export function deviceStatusLine(): Promise<string> {
       if (devices.length > 0) return `${devices.length} registered device${devices.length === 1 ? '' : 's'}, none connected.`;
 
       return 'No PC is connected to your account yet.';
-    },
+    }),
   })));
 }
 
 export function describeConnectOutcome(result: ConnectDeviceResult, session: boolean): ConnectOutcomeDescription {
+  const notice = result.kind !== 'already-running' && result.replacedLocalConfig ? 'Replaced the malformed local device config. ' : '';
+
   switch (result.kind) {
     case 'already-running':
       return result.connected
         ? { ok: true, message: 'This PC is already connected.' }
         : { ok: false, message: 'The daemon is installed here but not connected. Run: kinu connect' };
     case 'cancelled':
-      return { ok: false, message: 'Stopped waiting for the daemon. It keeps trying to connect; check: kinu desktop logs' };
+      return { ok: false, message: `${notice}Stopped waiting for the daemon. It keeps trying to connect; check: kinu desktop logs` };
     case 'connected':
       return {
         ok: true,
-        message: session
+        message: notice + (session
           ? 'Connected for this session. The daemon stops when you leave the CLI.'
-          : 'Connected. This PC stays connected after you leave the CLI.',
+          : 'Connected. This PC stays connected after you leave the CLI.'),
       };
   }
 }
@@ -313,19 +321,43 @@ function listDevicesForConnect(auth: DeviceAuth, doing: string): Effect.Effect<C
 }
 
 /** This machine's registration on `origin`, as the daemon's `device.json` holds it: its token, which linking again
- *  replaces, and the device the hub issued it. */
-function localDevice(origin: string): v.InferOutput<typeof LocalDeviceSchema> | undefined {
-  const text = tolerate(() => readFileSync(DEVICE_CONFIG_PATH, 'utf-8'), 'enoent');
+ *  replaces, and the device the hub issued it, where the CLI that linked it recorded one. */
+function localDevice(origin: string): Effect.Effect<DeviceConfig | undefined, KinuError> {
+  return Effect.gen(function* () {
+    const local = yield* readLocalDevice();
 
-  if (text === undefined) return undefined;
-  const parsed = v.safeParse(LocalDeviceSchema, tolerate(() => JSON.parse(text), 'malformed-input'));
+    if (local.kind === 'malformed') return yield* local.error;
 
-  if (!parsed.success || parsed.output.origin.replace(/\/+$/, '') !== origin.replace(/\/+$/, '')) return undefined;
-
-  return parsed.output;
+    return local.kind === 'current' ? deviceOnOrigin(local.config, origin) : undefined;
+  });
 }
 
-const LocalDeviceSchema = v.object({ origin: v.string(), token: v.string(), device: v.optional(v.string()) });
+type LocalDeviceRead =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'current'; readonly config: DeviceConfig }
+  | { readonly kind: 'malformed'; readonly error: KinuError };
+
+function readLocalDevice(): Effect.Effect<LocalDeviceRead, KinuError> {
+  return Effect.gen(function* () {
+    const text = yield* io('reading this machine\'s device config', () => tolerate(() => readFileSync(DEVICE_CONFIG_PATH, 'utf-8'), 'enoent'));
+
+    if (text === undefined) return { kind: 'none' };
+
+    // The daemon's own schema: the CLI reads device.json as the daemon that runs on it will.
+    return yield* Effect.try({
+      try: () => parseDeviceConfig(text, DEVICE_CONFIG_PATH),
+      catch: (cause) => toKinuError({ doing: 'reading this machine\'s device config', cause, otherwise: 'io' }),
+    }).pipe(Effect.match({
+      onSuccess: (config): LocalDeviceRead => ({ kind: 'current', config }),
+      onFailure: (error): LocalDeviceRead => ({ kind: 'malformed', error }),
+    }));
+  });
+}
+
+function deviceOnOrigin(config: DeviceConfig, origin: string): DeviceConfig | undefined {
+  return config.origin.replace(/\/+$/, '') === origin.replace(/\/+$/, '') ? config : undefined;
+}
+
 
 function registerDeviceForConnect(auth: DeviceAuth, label: string | undefined, replaces: string | undefined, device: string | undefined) {
   return Effect.tryPromise({
@@ -391,10 +423,11 @@ function installDaemonFiles(device: { origin: string; userId: string; deviceId: 
       root: process.cwd(),
     }, null, 2)}\n`;
 
-    const scriptTemporary = yield* stageInstallFile(SCRIPT_PATH, PC_AGENT_DAEMON_SOURCE, 0o700);
+    const files = yield* io('reading the daemon files this CLI ships', daemonFiles);
+    const scriptTemporary = yield* stageInstallFile(SCRIPT_PATH, files.daemon, 0o700);
 
     // Siblings ship with the release, never fetched.
-    const siblingTemporaries = yield* Effect.forEach(daemonSiblings(), (sibling) => Effect.map(
+    const siblingTemporaries = yield* Effect.forEach(files.siblings, (sibling) => Effect.map(
       stageInstallFile(join(AGENT_HOME, sibling.name), sibling.source, 0o700),
       (temporary) => ({ target: join(AGENT_HOME, sibling.name), temporary }),
     ));

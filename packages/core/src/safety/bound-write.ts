@@ -1,6 +1,11 @@
 import { exists, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import { Effect } from 'effect';
 import * as v from 'valibot';
 
+import { settle } from '../obs/effect';
+import type { CheckpointFiles } from '../types/primitives';
+import { FileRefusalError } from '../types/file-edits';
+import { writeConditionally, type ObservedFile } from '../vfs/conditional-write';
 import { sha256Hex } from './argument-digest';
 
 export interface BoundFileWrite {
@@ -42,13 +47,24 @@ export async function currentBytes(plane: VFS, path: string): Promise<Uint8Array
   return await exists(plane, path) ? asBytes(await plane.readFile(path)) : null;
 }
 
-/** Only over the file asked about; no plane offers compare-and-write, so a change between the compare and the write
- *  goes unseen. The caller holds the bytes before the compare, so that gap is the plane's alone. */
-export async function performBoundWrite(plane: VFS, write: BoundFileWrite, bytes: Uint8Array): Promise<'written' | 'changed'> {
-  const current = await currentBytes(plane, write.path);
+/**
+ * Only over the file asked about: its bytes now must be the ones the ask showed, and the write is conditioned on that
+ * read as the file tool's are (its revision where the plane versions files, else its digest, compared by the plane), so
+ * a save between the compare and the write is refused as well.
+ */
+export function performBoundWrite(plane: VFS & CheckpointFiles, write: BoundFileWrite, bytes: Uint8Array): Promise<'written' | 'changed'> {
+  return settle(Effect.gen(function* () {
+    // The revision before the bytes: a write between the two is refused by the plane's own check.
+    const revision = (yield* Effect.promise(async () => plane.stat(write.path)))?.revision;
+    const current = yield* Effect.promise(async () => currentBytes(plane, write.path));
 
-  if (current === null || sha256Hex(current) !== write.current) return 'changed';
-  await plane.writeFile(write.path, bytes);
+    if (current === null || sha256Hex(current) !== write.current) return 'changed' as const;
+    const read: ObservedFile = revision === undefined ? { kind: 'read', bytes: current } : { kind: 'read', bytes: current, revision };
 
-  return 'written';
+    return yield* Effect.tryPromise({ try: async () => writeConditionally(plane, write.path, bytes, read), catch: (cause) => cause }).pipe(
+      Effect.as('written' as const),
+      Effect.catchIf((cause) => cause instanceof FileRefusalError && cause.verdict === 'stale', () => Effect.succeed('changed' as const)),
+      Effect.catch((cause) => Effect.die(cause)),
+    );
+  }));
 }

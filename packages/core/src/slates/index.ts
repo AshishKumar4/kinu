@@ -11,7 +11,7 @@ export { EphemeralSlates, initEphemeralSlateTable } from './ephemeral';
 
 export { SlateUsageStore, initSlateUsageTable } from './usage';
 
-export { initSlateStateTable, SLATE_HOST_BINDING, SLATE_STORAGE_BINDING, SqliteSlateStateStore, routeSlateStorageCall, type SlateStorageOp, type SlateStorageListOptions } from './state';
+export { initSlateStateTable, SLATE_HOST_BINDING, SLATE_STORAGE_BINDING, SqliteSlateStateStore, slateStorageCall, type SlateStorageOp, type SlateStorageListOptions } from './state';
 
 export { SLATE_SERVER_MODULE, SLATE_CLIENT_MODULE } from './runtime-modules';
 
@@ -30,3 +30,13 @@ export type { DurableAppIdentity, DurableApps } from './durable-app';
 export { SlateLiveShareStore, initSlateLiveShareTables } from './live-shares';
 
 export { shareLiveSlate } from './live-sharing';
+
+export { SlateBuilds, initSlateBuildTable, slateImage, type FailingSlateBuild, type SlateBuildFailure, type SlateBuildRead, type SlateImage } from './builds';
+
+export { ROOT_SLATE_CALLER, shareCaller, slateCallerKey, type SlateCaller, type SlateCallerHop } from './caller';
+
+export { SlateProcesses, heldSlateKey, type RunningSlate, type SlateLaunch, type SlateProcessPorts, type RunnableSlateSource } from './processes';
+
+export { SlateShareViewers, type SlateShareViewersDeps, type ViewerAdmission, type ViewerRun } from './share-viewers';
+
+export { SlateController, type SlateAppCall, type SlateApps, type SlateClassProcess, type SlateControllerPorts } from './controller';

@@ -11,6 +11,176 @@ const os = require('node:os');
 
 const crypto = require('node:crypto');
 
+const sha256Of = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
+
+/**
+ * A write frame: confined as a write and checkpointed as one, then `write` with the decoded bytes. An answer that wrote
+ * nothing (`ok: false`) carries no checkpoint note.
+ */
+function checkpointedWrite(msg, { requested, content, options }, checkpoints, write) {
+  const view = viewFromFrame(msg);
+  const confined = confinedDeviceViewPath(view, requested, 'write');
+  const covers = (candidate) => view.checkpointDirectory(candidate).why === null;
+
+  const verdict = checkpoints && msg.checkpoint
+    ? view.checkpointDirectory(hintedDir(msg.checkpoint) ?? checkpoints.workdirForPath(confined, covers))
+    : null;
+
+  const data = options?.encoding === 'base64' ? Buffer.from(String(content), 'base64') : Buffer.from(String(content));
+
+  return mutation(checkpoints, msg.checkpoint, coveredBy(verdict), (snapshot) => {
+    const answer = write(view, confined, data);
+
+    if (answer.ok === false) return answer;
+    const skipped = whyUncheckpointed(verdict, snapshot);
+
+    return skipped === null ? answer : { ...answer, uncheckpointed: skipped };
+  });
+}
+
+/**
+ * Writes `data` only if the file's bytes still hash to `expected` (null: only if no file is there), over the file in
+ * place, as a plain write does: the file keeps its inode, owner, group, mode, ACLs and every other link to it, and a file
+ * this user may not write is refused. The compare and the write run here in one synchronous step of this process, so no
+ * other write of this daemon interleaves. Answers the new digest, or the one found (null: absent). `target` is the
+ * judged path; the step runs where it still is (`atJudged`).
+ */
+function replaceIfDigest(view, target, data, expected) {
+  // A raw view's path is the one requested, links and all, and is read and written through them as before; a judged
+  // path names no link, so one found in its place is refused.
+  const follow = view.raw === true ? 0 : NO_FOLLOW;
+
+  return atJudged(view, target, { createParents: true }, (at) => {
+    let found = null;
+
+    try {
+      found = sha256Of(readFollowing(at, follow));
+    } catch (cause) {
+      if (cause.code !== 'ENOENT') throw cause;
+    }
+
+    if (found !== expected) return { ok: false, sha256: found };
+    // A create only where nothing is yet; a replacement only of a file still there.
+    const flags = found === null ? fs.constants.O_CREAT | fs.constants.O_EXCL : fs.constants.O_TRUNC;
+    const fd = fs.openSync(at, fs.constants.O_WRONLY | flags | follow, 0o666);
+
+    try {
+      fs.writeFileSync(fd, data);
+    } finally {
+      fs.closeSync(fd);
+    }
+
+    return { ok: true, sha256: sha256Of(data) };
+  });
+}
+
+const NO_FOLLOW = fs.constants.O_NOFOLLOW ?? 0;
+
+/** Linux's O_PATH: a directory held by a walk that needs only search permission on it, as a path lookup does. */
+const O_PATH = 0o10000000;
+
+/** A file's bytes; `follow` 0 reads through a link in its last component, NO_FOLLOW refuses one. */
+function readFollowing(at, follow) {
+  const fd = fs.openSync(at, fs.constants.O_RDONLY | follow);
+
+  try {
+    return fs.readFileSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** `data` written over the file at `at`, created if absent; a link in its last component is refused. */
+function writeNoFollow(at, data) {
+  const fd = fs.openSync(at, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | NO_FOLLOW, 0o666);
+
+  try {
+    fs.writeFileSync(fd, data);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** Why a judged path no longer holds: a command on this device swapped a link into it after the frame was judged. */
+function movedUnderneath(judged, cause) {
+  const error = new Error(`device path '${judged}' changed after it was checked: a directory in it is now a link`);
+  error.code = 'EACCES';
+  error.cause = cause;
+
+  return error;
+}
+
+/**
+ * Runs one synchronous mutation `act` on the path a sandboxed view judged, where it still is when the mutation runs: a
+ * frame waits in the checkpoint queue, and a command on this device may meanwhile swap a directory of the path for a
+ * link out of the consented root. On Linux the directory is opened from `/`, one component at a time with O_NOFOLLOW
+ * (creating any that `createParents` allows), and `act` gets `/proc/self/fd/<dir>/<name>`: no later swap moves it. On
+ * macOS, with no such handle, the directory is resolved again and must be the one judged. A raw view judged nothing
+ * the device's commands cannot reach themselves, so its path is used as it is.
+ */
+function atJudged(view, judged, { createParents = false } = {}, act) {
+  if (view.raw === true) {
+    if (createParents) fs.mkdirSync(path.dirname(judged), { recursive: true });
+
+    return act(judged);
+  }
+
+  const dir = path.dirname(judged);
+
+  if (process.platform !== 'linux') {
+    if (createParents) fs.mkdirSync(dir, { recursive: true });
+
+    if (fs.realpathSync(dir) !== dir) throw movedUnderneath(judged, null);
+
+    return act(judged);
+  }
+
+  const flags = O_PATH | fs.constants.O_DIRECTORY | NO_FOLLOW;
+  let fd = fs.openSync('/', flags);
+
+  try {
+    for (const name of dir.split('/').filter((part) => part !== '')) {
+      const next = `/proc/self/fd/${fd}/${name}`;
+      let opened;
+
+      try {
+        if (createParents && !fs.existsSync(next)) fs.mkdirSync(next);
+        opened = fs.openSync(next, flags);
+      } catch (cause) {
+        if (fs.lstatSync(next, { throwIfNoEntry: false })?.isSymbolicLink()) throw movedUnderneath(judged, cause);
+        throw withPath(cause, judged);
+      }
+
+      fs.closeSync(fd);
+      fd = opened;
+    }
+
+    const held = `/proc/self/fd/${fd}`;
+
+    try {
+      return act(`${held}/${path.basename(judged)}`);
+    } catch (cause) {
+      throw withPath(cause, judged, held, dir);
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** `cause` naming the judged path the caller knows, not the descriptor path it ran on. */
+function withPath(cause, judged, descriptor, dir) {
+  if (descriptor !== undefined && typeof cause.message === 'string') {
+    cause.message = cause.message.split(descriptor).join(dir);
+
+    if (typeof cause.path === 'string') cause.path = cause.path.split(descriptor).join(dir);
+  } else if (typeof cause.message === 'string' && typeof cause.path === 'string') {
+    cause.message = cause.message.split(cause.path).join(judged);
+    cause.path = judged;
+  }
+
+  return cause;
+}
+
 const { spawn } = require('node:child_process');
 
 const sandbox = require('./sandbox.js');
@@ -30,10 +200,6 @@ const FRAMES = protocol.frames;
 const chatgpt = require('./chatgpt.js');
 
 const { runToExit } = update;
-
-/** The names this daemon requires beside itself — the four requires above
- *  — for the updater to land a newer set of. */
-const DAEMON_SIBLINGS = ['sandbox.js', 'pty.js', 'update.js', 'chatgpt.js', 'device-protocol.json'];
 
 const HOME_SETTING = process.env.KINU_HOME?.trim() ?? '';
 
@@ -1638,7 +1804,7 @@ function waitForFile(file, signal) {
 /**
  * Resolves once the supervisor of `dir` is gone, or `signal` aborts. It holds `life` open for writing from its spawn,
  * so a reader opened while that end is held is hung up when the supervisor exits, and one opened after finds no
- * writer at all. A record from a supervisor older than `life` has nothing to watch.
+ * writer at all. A directory with no `life` has no supervisor: it was never spawned, or has removed it.
  */
 async function supervisorExit(dir, signal) {
   let fd;
@@ -1646,7 +1812,7 @@ async function supervisorExit(dir, signal) {
   try {
     fd = fs.openSync(path.join(dir, 'life'), fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
   } catch (err) {
-    if (err && err.code === 'ENOENT') return new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+    if (err && err.code === 'ENOENT') return;
     throw err;
   }
 
@@ -2259,6 +2425,39 @@ function viewFromFrame(msg) {
     deviceHome: DEVICE_HOME,
     roots: frame.roots,
   });
+}
+
+/**
+ * A path's size, mtime and kind, or null when there is nothing there. `follow: false` is lstat, of the entry as
+ * unlink takes it: a link is the link, so a removal walking a tree takes the name and never goes on into what it leads to.
+ */
+function statPathAnswer(msg) {
+  const { params } = msg;
+  const follow = (params[1] ?? {}).follow !== false;
+  const view = viewFromFrame(msg);
+  const confined = follow ? confinedDeviceViewPath(view, params[0], 'read') : view.resolveEntryPath(parseString(params[0], 'device paths must be strings'), 'read');
+  const stat = follow ? fs.statSync(confined, { throwIfNoEntry: false }) : fs.lstatSync(confined, { throwIfNoEntry: false });
+
+  return stat === undefined ? null : { size: stat.size, mtimeMs: stat.mtimeMs, type: statType(stat) };
+}
+
+/**
+ * The entry rmdir removes, as unlink takes it, so a link is no directory here and rmdir refuses it; the directory
+ * itself is judged as well as its parent, so Kinu's own directory is never one a frame removes.
+ */
+function rmdirEntry(view, msg) {
+  const requested = parseString(msg.params[0], 'device paths must be strings');
+
+  view.resolvePath(requested, 'write');
+
+  return view.resolveEntryPath(requested, 'write');
+}
+
+/** A stat's kind as the device file contract names it: a link (lstat only), a directory, or a file. */
+function statType(stat) {
+  if (stat.isSymbolicLink()) return 'symlink';
+
+  return stat.isDirectory() ? 'directory' : 'file';
 }
 
 /** One file method's path, through the frame's view. `mode` is what the method
@@ -2900,46 +3099,46 @@ function handle(msg, ws, ctx) {
       const bytes = readRangeBytes(confinedDeviceViewPath(viewFromFrame(msg), params[0], 'read'), offset, length);
       rpc(ws, id, { encoding: 'base64', content: bytes.toString('base64') });
     } else if (method === METHODS.writeFile) {
-      const options = params[2] ?? {};
-      const view = viewFromFrame(msg);
-      const confined = confinedDeviceViewPath(view, params[0], 'write');
-      const covers = (candidate) => view.checkpointDirectory(candidate).why === null;
+      rpcWhenSettled(ws, id, checkpointedWrite(msg, { requested: params[0], content: params[1], options: params[2] }, checkpoints, (view, confined, data) => {
+        // A raw view's path is the one requested and is written through its links as before; a judged one names none.
+        atJudged(view, confined, { createParents: true }, (at) => { if (view.raw === true) fs.writeFileSync(at, data); else writeNoFollow(at, data); });
 
-      const verdict = checkpoints && msg.checkpoint
-        ? view.checkpointDirectory(hintedDir(msg.checkpoint) ?? checkpoints.workdirForPath(confined, covers))
-        : null;
-
-      rpcWhenSettled(ws, id, mutation(checkpoints, msg.checkpoint, coveredBy(verdict), (snapshot) => {
-        fs.mkdirSync(path.dirname(confined), { recursive: true });
-        fs.writeFileSync(confined, options.encoding === 'base64' ? Buffer.from(String(params[1]), 'base64') : params[1]);
-        const skipped = whyUncheckpointed(verdict, snapshot);
-
-        return skipped === null ? { success: true } : { success: true, uncheckpointed: skipped };
+        return { success: true };
       }));
+    } else if (method === METHODS.writeFileIfDigest) {
+      rpcWhenSettled(ws, id, checkpointedWrite(msg, { requested: params[0], content: params[1], options: params[3] }, checkpoints,
+        (view, confined, data) => replaceIfDigest(view, confined, data, params[2] ?? null)));
     } else if (method === METHODS.listFiles) {
       rpc(ws, id, listFilesAnswer(msg));
     } else if (method === METHODS.statPath) {
-      const confined = confinedDeviceViewPath(viewFromFrame(msg), params[0], 'read');
-
-      if (!fs.existsSync(confined)) return rpc(ws, id, null);
-      const stat = fs.statSync(confined);
-      rpc(ws, id, { size: stat.size, mtimeMs: stat.mtimeMs, isDir: stat.isDirectory() });
+      rpc(ws, id, statPathAnswer(msg));
     } else if (method === METHODS.unlinkPath) {
       // The ENTRY, not its target: unlink removes the name the caller gave,
       // and following the link would delete a path they never named.
-      const entry = viewFromFrame(msg).resolveEntryPath(parseString(params[0], 'device paths must be strings'), 'write');
+      const view = viewFromFrame(msg);
+      const entry = view.resolveEntryPath(parseString(params[0], 'device paths must be strings'), 'write');
 
       rpcWhenSettled(ws, id, mutation(checkpoints, null, null, () => {
-        fs.unlinkSync(entry);
+        atJudged(view, entry, {}, (at) => { fs.unlinkSync(at); });
+
+        return { success: true };
+      }));
+    } else if (method === METHODS.rmdirPath) {
+      const view = viewFromFrame(msg);
+      const entry = rmdirEntry(view, msg);
+
+      rpcWhenSettled(ws, id, mutation(checkpoints, null, null, () => {
+        atJudged(view, entry, {}, (at) => { fs.rmdirSync(at); });
 
         return { success: true };
       }));
     } else if (method === METHODS.mkdirPath) {
-      const options = params[1] ?? {};
-      const confined = confinedDeviceViewPath(viewFromFrame(msg), params[0], 'write');
+      const recursive = (params[1] ?? {}).recursive === true;
+      const view = viewFromFrame(msg);
+      const confined = confinedDeviceViewPath(view, params[0], 'write');
 
       rpcWhenSettled(ws, id, mutation(checkpoints, null, null, () => {
-        fs.mkdirSync(confined, { recursive: options.recursive === true });
+        atJudged(view, confined, { createParents: recursive }, (at) => { fs.mkdirSync(at, { recursive }); });
 
         return { success: true };
       }));
@@ -2983,10 +3182,25 @@ function readDeviceConfig(configPath = CONFIG_PATH) {
     throw new Error(`could not read device config at ${configPath}`, { cause: err });
   }
 
-  let parsed;
+  return parseDeviceConfig(text, configPath);
+}
+
+/**
+ * The one schema of device.json, which the CLI reads it by too: JSON naming
+ * the user, token, origin and root this daemon runs on, each a nonempty
+ * string; `origin` one this daemon will send its token to; `root`, the
+ * directory `kinu connect` ran in, absolute. `device`, the registration the
+ * hub issued, is the CLI's and never read here: a nonempty string where
+ * `kinu connect` wrote one, absent where the previous release linked the
+ * machine, which an update leaves as it is. Fields beyond these are kept, so
+ * a rotated token is written back with them. `text` is the file's contents;
+ * a parse error never echoes them.
+ */
+function parseDeviceConfig(text, configPath) {
+  let value;
 
   try {
-    parsed = JSON.parse(text);
+    value = JSON.parse(text);
   } catch (cause) {
     const safeCause = cause instanceof SyntaxError
       ? new Error('device config is not valid JSON')
@@ -2995,25 +3209,24 @@ function readDeviceConfig(configPath = CONFIG_PATH) {
     throw new Error(`device config at ${configPath} is corrupt; re-run: kinu connect`, { cause: safeCause });
   }
 
-  const expectation = `device config at ${configPath} is missing its user or token; re-run: kinu connect`;
-  const cfg = parseRecord(parsed, expectation);
-  const user = parseString(cfg.user, expectation);
-  const token = parseString(cfg.token, expectation);
-  const origin = cfg.origin === undefined ? undefined : trustedOrigin(parseString(cfg.origin, expectation), configPath);
-  // The directory `kinu connect` ran in, parsed HERE with everything else so
-  // the dial site sends a domain value rather than branching on a
-  // representation. Absent on a config written before it existed, and absent
-  // is what the hub reads as "this device named no directory".
-  const root = cfg.root === undefined ? undefined : parseString(cfg.root, expectation);
+  const expectation = `device config at ${configPath} is missing its user, token, origin or directory; re-run: kinu connect`;
+  const cfg = parseRecord(value, expectation);
 
-  if (user.length === 0 || token.length === 0) throw new Error(expectation);
-  const config = { ...cfg, user, token };
+  const nonempty = (field, refusal) => {
+    const named = parseString(cfg[field], refusal);
 
-  if (origin !== undefined) config.origin = origin;
+    if (named.length === 0) throw new Error(refusal);
 
-  if (root !== undefined) config.root = root;
+    return named;
+  };
 
-  return config;
+  const [user, token, origin, root] = ['user', 'token', 'origin', 'root'].map((field) => nonempty(field, expectation));
+
+  if (!path.isAbsolute(root)) throw new Error(`device config at ${configPath} names a directory that is not absolute; re-run: kinu connect`);
+
+  if (cfg.device !== undefined) nonempty('device', `device config at ${configPath} names a device that is not a nonempty string; re-run: kinu connect`);
+
+  return { ...cfg, user, token, origin: trustedOrigin(origin, configPath), root };
 }
 
 /**
@@ -3605,7 +3818,6 @@ async function main() {
     layout: {
       deviceHome: DEVICE_HOME,
       daemonPath: __filename,
-      siblings: DAEMON_SIBLINGS,
       runtime: process.execPath,
     },
     origin: HTTP_ORIGIN,
@@ -3780,9 +3992,7 @@ async function main() {
 
 /** The HTTP origin the device credentials trust. */
 function hubOrigin(cfg) {
-  const origin = cfg.origin ?? '';
-
-  return (origin === '' ? 'https://kinu.run' : origin).replace(/\/+$/, '');
+  return cfg.origin.replace(/\/+$/, '');
 }
 
 /**
@@ -3844,10 +4054,15 @@ async function refuse(runtime, reason) {
   exitWhenQuiet(1);
 }
 
-/** @param {unknown} err */
+/**
+ * A start that failed ends the process, not just its exit code: a successor's
+ * lifeline (`predecessorExited`) would hold it open, and the updater that
+ * started it rolls back only when it exits.
+ * @param {unknown} err
+ */
 function reportFatal(err) {
   console.error('Kinu PC agent:', err instanceof Error ? err.message : String(err));
-  process.exitCode = 1;
+  exitWhenQuiet(1);
 }
 
 if (require.main === module) {
@@ -3900,6 +4115,7 @@ module.exports = {
   createCheckpoints,
   CONFIG_PATH,
   readDeviceConfig,
+  parseDeviceConfig,
   startConnectLoop,
   getConnectTicket,
   persistRotatedToken,

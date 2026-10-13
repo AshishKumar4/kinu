@@ -215,7 +215,6 @@ export function canonicalProviderName(value: string): string {
       return 'claude';
     case 'chatgpt':
     case 'chatgpt-codex':
-    case 'codex':
       return 'chatgpt';
     case 'compat':
     case 'ollama':

@@ -5,11 +5,10 @@
  * per request. Plaintext exists only here and in the outbound handler, outside the container.
  */
 
-import { Effect, Result } from 'effect';
-import { attempt, settle } from '../obs/effect';
+import { Effect } from 'effect';
+import { settle } from '../obs/effect';
 import * as v from 'valibot';
 import type { CredentialCipher } from '../credentials/envelope';
-import { diagnostics } from '../obs/log';
 import type { SqlExec } from '../types/primitives';
 import { nanoid } from '../utils/nanoid';
 import {
@@ -191,44 +190,10 @@ export function resolveEgressInjection(
   }));
 }
 
-/**
- * Re-seal every row under the current key; false when any row failed, so the caller withholds
- * `credential_envelope_key_id` (rotation drops the previous key on the strength of that marker).
- */
-export function rewrapEgressSecrets(
-  deps: EgressVaultDeps,
-): Promise<boolean> {
-  return settle(Effect.gen(function* () {
-    let clean = true;
-
-    for (const raw of deps.sql.exec(`SELECT id, secret FROM user_egress_secrets`).toArray()) {
-      const parsed = v.safeParse(IdSecretRow, raw);
-
-      if (!parsed.success) { clean = false; continue; }
-
-      const { id, secret } = parsed.output;
-
-      const resealed = yield* Effect.result(attempt({ doing: 'resealing an egress secret under the current key', otherwise: 'bad_input' }, async () => {
-        const plaintext = await deps.cipher.open(deps.aad(id), secret);
-        const sealed = await deps.cipher.seal(deps.aad(id), plaintext);
-        deps.sql.exec(`UPDATE user_egress_secrets SET secret = ? WHERE id = ?`, sealed, id);
-      }));
-
-      if (Result.isFailure(resealed)) {
-        clean = false;
-        diagnostics.failure('egress.secret_reseal_failed', resealed.failure, { secretId: id });
-      }
-    }
-
-    return clean;
-  }));
-}
-
 const PlaceholderRow = v.object({ placeholder: v.string() });
 
 const SecretRow = v.object({ secret: v.string() });
 
-const IdSecretRow = v.object({ id: v.string(), secret: v.string() });
 
 function readOne<Schema extends v.GenericSchema>(
   schema: Schema, sql: SqlExec, query: string, ...values: string[]

@@ -72,6 +72,76 @@ it('an edit that breaks a slate\'s build ships nothing: the agent is told where,
   expect([fixed.preview, fixed.serves, fixed.told]).toEqual(['builds', 'lilt-fixed', []]);
 });
 
+it('a slate is rebuilt when a file it imports from outside its own tree changes', async () => {
+  const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('imports'));
+  const at = { workspace: 'durability-imports', owner: 'durability-owner' };
+
+  expect(await subject.slateImport({ ...at, word: 'alpha', first: true })).toBe('alpha');
+  expect(await subject.slateImport({ ...at, word: 'beta', first: false })).toBe('beta');
+});
+
+it('a slate is rebuilt when a package it imports switches the entry its package.json exports', async () => {
+  const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('exports'));
+  const at = { workspace: 'durability-exports', owner: 'durability-owner' };
+
+  expect(await subject.slateExports({ ...at, entry: 'a.js', first: true })).toBe('alpha');
+  expect(await subject.slateExports({ ...at, entry: 'b.js', first: false })).toBe('beta');
+});
+
+it('a slate refused for what it imports is built again once a directory above that is replaced, or its mode repaired', async () => {
+  const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('repairs'));
+  const at = { workspace: 'durability-repairs', owner: 'durability-owner' };
+
+  // The directory the import names is renamed away and a fixed copy renamed in: two events, neither at the file.
+  const replaced = await subject.slateRepair({
+    ...at, id: 'replaced', imports: '/home/main/replaced/deps/lib.ts',
+    setup: 'mkdir -p /home/main/replaced/deps /home/main/replaced/fixed'
+      + ' && echo \'export const word = ;\' > /home/main/replaced/deps/lib.ts'
+      + ' && echo \'export const word = "replaced";\' > /home/main/replaced/fixed/lib.ts',
+    repair: 'mv /home/main/replaced/deps /home/main/replaced/broken && mv /home/main/replaced/fixed /home/main/replaced/deps',
+  });
+
+  expect(replaced).toEqual({ before: 'bad_input', after: 'builds', says: 'replaced' });
+
+  // A directory above the import that its owner may not enter, then may: one event, at that directory.
+  const unlocked = await subject.slateRepair({
+    ...at, id: 'unlocked', imports: '/home/main/locked/deps/lib.ts',
+    setup: 'mkdir -p /home/main/locked/deps && echo \'export const word = "unlocked";\' > /home/main/locked/deps/lib.ts && chmod 000 /home/main/locked',
+    repair: 'chmod 700 /home/main/locked',
+  });
+
+  expect(unlocked).toEqual({ before: 'bad_input', after: 'builds', says: 'unlocked' });
+});
+
+// The slate's own lib.ts is a link out of its tree: what it resolves to is what is built, and a repair out there,
+// wherever along the links it lands, builds it again.
+it.each([
+  ['the link\'s target is fixed', 'mkdir -p /home/main/linked && echo \'export const word = ;\' > /home/main/linked/lib.ts'
+    + ' && ln -s /home/main/linked/lib.ts /slates/linked/lib.ts',
+  'echo \'export const word = "linked";\' > /home/main/linked/lib.ts', 'linked'],
+  ['the link\'s target is written', 'ln -s /home/main/dangling/lib.ts /slates/dangling/lib.ts',
+    'mkdir -p /home/main/dangling && echo \'export const word = "dangling";\' > /home/main/dangling/lib.ts', 'dangling'],
+  ['a second link\'s target is written', 'mkdir -p /home/main/chained && ln -s /home/main/chained/alias.ts /slates/chained/lib.ts'
+    + ' && ln -s /home/main/chained/future/lib.ts /home/main/chained/alias.ts',
+  'mkdir -p /home/main/chained/future && echo \'export const word = "chained";\' > /home/main/chained/future/lib.ts', 'chained'],
+  ['a second link is pointed elsewhere', 'mkdir -p /home/main/alias && ln -s /home/main/alias/alias.ts /slates/alias/lib.ts'
+    + ' && ln -s /home/main/alias/future.ts /home/main/alias/alias.ts',
+  'echo \'export const word = "alias";\' > /home/main/alias/real.ts && rm /home/main/alias/alias.ts'
+    + ' && ln -s /home/main/alias/real.ts /home/main/alias/alias.ts', 'alias'],
+  ['a file where a directory belongs is replaced', 'mkdir -p /home/main/obstruct && echo blocked > /home/main/obstruct/block'
+    + ' && ln -s /home/main/obstruct/block/lib.ts /slates/obstruction/lib.ts',
+  'rm /home/main/obstruct/block && mkdir /home/main/obstruct/block && echo \'export const word = "obstruction";\' > /home/main/obstruct/block/lib.ts',
+  'obstruction'],
+  ['a link loop is broken', 'mkdir -p /home/main/loop && ln -s /home/main/loop/b /home/main/loop/a && ln -s /home/main/loop/a /home/main/loop/b'
+    + ' && ln -s /home/main/loop/a/lib.ts /slates/loop/lib.ts',
+  'rm /home/main/loop/a && mkdir /home/main/loop/a && echo \'export const word = "loop";\' > /home/main/loop/a/lib.ts', 'loop'],
+])('a slate whose lib.ts links out of its tree is built again once %s', async (_how, setup, repair, id) => {
+  const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName(`links-${id}`));
+  const seen = await subject.slateRepair({ workspace: `durability-links-${id}`, owner: 'durability-owner', id, imports: './lib.ts', setup, repair });
+
+  expect(seen).toEqual({ before: 'bad_input', after: 'builds', says: id });
+});
+
 it('a removed slate’s URL is dead even when a new app claims its port', async () => {
   const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('removed'));
 

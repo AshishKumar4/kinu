@@ -18,7 +18,7 @@ import type { TuiAgentRoster } from './tui-shell';
 
 const HUB_READS: ReadonlySet<string> = new Set<LiveRead>([...ROSTER_READS, 'listWorkspaceWork', 'listBackgroundJobs']);
 
-export function useHub({ client, seed, readHub, view, roster, label, running, projectRoot, messages }: {
+export function useHub({ client, seed, readHub, view, roster, label, running, messages }: {
   client: AgentClient;
   /** What the host already read for the first workspace. */
   seed: TuiHubData | undefined;
@@ -28,7 +28,6 @@ export function useHub({ client, seed, readHub, view, roster, label, running, pr
   /** The open workspace's own name, once its status has answered. */
   label: string | undefined;
   running: boolean;
-  projectRoot: string;
   messages: readonly DisplayMessage[];
 }) {
   // The hub carries its workspace's identity so a switch resets it alongside other per-client state.
@@ -97,9 +96,8 @@ export function useHub({ client, seed, readHub, view, roster, label, running, pr
         status: running ? 'running' : 'idle',
         workspace: hub.data.agents[0]?.workspace ?? client.agentName,
       },
-      projectRoot,
     }),
-  }, [hub, roster.page.items, client, label, running, projectRoot, jobTails]);
+  }, [hub, roster.page.items, client, label, running, jobTails]);
 
   const answered = useMemo(() => answeredHelpers(messages, hub?.data.helpers ?? []), [messages, hub]);
   // Bumped by each frame naming a read the hub shows, so the hub reads again.

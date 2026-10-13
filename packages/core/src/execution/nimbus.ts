@@ -1,159 +1,56 @@
-import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import type { VFS, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 import { direntType } from '../vfs/dirent';
 /** Nimbus executor adapter: maps a backend-supplied workspace box onto Kinu's ExecutorProvider contract. */
 
 import * as v from 'valibot';
 import { raceAbort } from '@kinu.run/agent-utils';
 import type { OutputSink, Shell, ShellExecOptions, ShellExecResult } from '../types/primitives';
-import { collectExecStream, type ExecChunk, type ExecStream } from '@nimbus-sh/core/runtime/exec-stream.js';
+import { collectExecStream, type ExecChunk, type ExecOutput, type ExecStream } from '@nimbus-sh/core/runtime/exec-stream.js';
 import type { VfsMount, WorkspacePrincipal } from '../vfs/mounts';
 import type { CompositeVFS } from '@nimbus-sh/core/vfs/composite.js';
 import { atVfsPath } from '../vfs/errno';
 import { syscallError } from '@nimbus-sh/core/vfs/vfs-error.js';
-import { workspacePath } from '../vfs/workspace-path';
+import { walkedPath, workspacePath } from '../vfs/workspace-path';
 import { sessionRuntimeBins, workspaceCommandNotFound } from '../vfs/workspace-runtimes';
 import { shellQuote } from '../utils/shell';
-import { base64ToBytes } from '../utils/base64';
 import { commandTool, type ExecutorCapability, type ExecutorProvider, type ExecutorStatus, type PortExposureResult, type PreviewRouteCheck } from './types';
 import { envContext } from './command-call';
 import { sha256Hex } from '../safety/argument-digest';
 import type { CommandCall } from '../safety/approval-gate';
-import { commandResult, exposedPortText, formatExecResult, type CommandResult } from './exec-result';
+import { commandResult, exposedPortText, type CommandResult } from './exec-result';
 import { KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import type { JsonValue } from '../utils/json';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
+import type { SessionExecOptions, SessionPort, SessionRunCodeOptions, SessionStartResult } from '@nimbus-sh/core/runtime/session-protocol.js';
+import type { NimbusSandboxFiles } from '@nimbus-sh/sdk/sandbox';
 
-/** Shell-fallback constants: path and offsets travel as JSON in one env value, never quoted into shell text. */
-const NIMBUS_RANGE_ENV = 'KINU_NIMBUS_RANGE_REQUEST';
+/**
+ * A command's options: the shared session contract's, as far as Kinu sets them. `cred` is host-injected only
+ * ({@link NimbusExecOptionsSchema} omits it so an agent cannot choose uid 0); `shellId` names the transport's shell, which
+ * a host keys per agent; `detach` frees that shell for its next call while the command runs on.
+ */
+type NimbusExecOptions = Pick<SessionExecOptions, 'cwd' | 'env' | 'timeoutMs' | 'stdin' | 'cred' | 'shellId' | 'execId' | 'detach'>;
 
-const NIMBUS_RANGE_READER = `const fs=require('node:fs');const r=JSON.parse(process.env.${NIMBUS_RANGE_ENV});if(!Number.isSafeInteger(r.offset)||r.offset<0||!Number.isSafeInteger(r.length)||r.length<=0)throw new Error('invalid range');const fd=fs.openSync(r.path,'r');try{const b=Buffer.allocUnsafe(r.length);const n=fs.readSync(fd,b,0,r.length,r.offset);process.stdout.write(b.subarray(0,n).toString('base64'));}finally{fs.closeSync(fd);}`;
+type NimbusRunCodeOptions = NimbusExecOptions & Pick<SessionRunCodeOptions, 'language' | 'install'>;
 
-interface NimbusOriginRangeRead {
-  readonly box: NimbusSandboxHandle;
-  readonly files: NimbusSandboxFiles;
-  readonly path: string;
-  readonly offset: number;
-  readonly length: number;
-  readonly cred?: VfsCred;
-}
+export type NimbusExecResult = ExecOutput;
 
-/** One window of a file's bytes. Prefers the box's native ranged read; the `node -e` shell reader is a fallback
- *  only for handles lacking the op (Workers forbid `new Function`, so it would fail hosted). */
-async function readNimbusOriginRange(read: NimbusOriginRangeRead): Promise<Uint8Array> {
-  const { box, files, path, offset, length, cred } = read;
+export type NimbusPortInfo = SessionPort;
 
-  if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0) {
-    throw syscallError('EIO', 'read', path, { detail: 'range offset and length must be positive safe integers' });
-  }
+/** `startProcess` result: the process is still running, so no exit code or output; read `logs`, stop via `killProcess`. */
+export type NimbusStartResult = SessionStartResult;
 
-  const native = files.readRange;
-
-  if (native) {
-    const bytes = await native.call(files, path, offset, length);
-
-    if (bytes === null) throw syscallError('ENOENT', 'open', path);
-
-    return bytes;
-  }
-
-  const result = await box.exec(`node -e ${shellQuote(NIMBUS_RANGE_READER)}`, {
-    env: { [NIMBUS_RANGE_ENV]: JSON.stringify({ path, offset, length }) },
-    ...asCred(cred),
-  });
-
-  if (!result.success || result.exitCode !== 0) {
-    throw syscallError('EIO', 'read', path, {
-      detail: `this file's bytes could not be read right now: try opening it again, or download it instead`,
-    });
-  }
-
-  return base64ToBytes(result.stdout.trim());
-}
-
-export interface NimbusExecOptions {
-  cwd?: string;
-  env?: Record<string, string>;
-  timeoutMs?: number;
-  stdin?: string;
-  /** Identity the command runs as; absent is the session user. Host-injected only: {@link NimbusExecOptionsSchema}
-   *  omits it so an agent cannot choose uid 0. */
-  cred?: VfsCred;
-  /** A named shell, whose directory and exported variables last between the calls naming it; absent keeps nothing. */
-  name?: string;
-}
-
-type NimbusRunCodeOptions = NimbusExecOptions & {
-  language?: 'javascript' | 'typescript' | 'python' | 'ruby' | 'shell';
-  install?: 'never' | 'ifMissing';
-};
-
-export interface NimbusExecResult {
-  command: string;
-  success: boolean;
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-  duration?: number;
-  timestamp?: number;
-}
-
-interface NimbusProcessInfo {
-  pid: number;
-  command: string;
-  state: string;
-  exitCode: number | null;
-  longRunning: boolean;
-}
-
-export interface NimbusPortInfo {
-  port: number;
-  pid?: number;
-  registeredAt?: number;
-  capability?: string;
-}
-
-/** `startProcess` result (SDK ≥0.2.0): the process is still running, so no exit code or output; read `logs`, stop via `killProcess`. */
-export interface NimbusStartResult {
-  command: string;
-  pid: number;
-  process: NimbusProcessInfo;
-  ports: NimbusPortInfo[];
-  startedAt: number;
-}
-
-/** The handle's file plane. `as(cred)` binds it to one identity; when absent the credentialed plane refuses
- *  rather than acting as the session user. */
-interface NimbusSandboxFiles {
-  as?(cred: VfsCred): NimbusSandboxFiles;
-    read(path: string): Promise<string | null>;
-    /** Raw-byte read (SDK ≥0.1.4). */
-    readBytes?(path: string): Promise<Uint8Array | null>;
-    /** Exactly this window of a file's bytes; absent on older SDK handles; null when the path is absent. */
-    readRange?: (path: string, offset: number, length: number) => Promise<Uint8Array | null>;
-    /** Whole-file write; no precondition, so no compare-and-write. */
-    write(path: string, content: string | Uint8Array): Promise<void>;
-    list(path?: string): Promise<Array<{ name: string; type?: string; isDir?: boolean; size?: number }>>;
-    /** Native stat (SDK ≥0.2.0). `mtime` and `ctime` are in milliseconds; null when absent. No revision or inode field. */
-    stat?(path: string): Promise<{ type: string; size: number; mtime: number; ctime?: number } | null>;
-    lstat?(path: string): Promise<{ type: string; size: number; mtime: number; ctime?: number; mode?: number } | null>;
-    /** A link's target text; null when the path is absent. */
-    readlink?(path: string): Promise<string | null>;
-    rename?(from: string, to: string): Promise<void>;
-    chmod?(path: string, mode: number): Promise<void>;
-    exists(path: string): Promise<boolean>;
-    mkdir?(path: string): Promise<void>;
-    delete(path: string, options?: { recursive?: boolean }): Promise<void>;
-}
+/** A remote session's file plane as Kinu reads it: the SDK's `NimbusSandbox.files`. `as(cred)` binds it to one identity. */
+export type { NimbusSandboxFiles };
 
 export interface NimbusSandboxHandle {
   ready(): Promise<void>;
   exec(command: string, options?: NimbusExecOptions): Promise<NimbusExecResult>;
   /** A named shell's directory as its last call left it; null before its first call. */
-  shellCwd?(name: string): Promise<string | null>;
+  shellCwd?(shellId: string): Promise<string | null>;
   execStream?: (command: string, options?: NimbusExecOptions) => Promise<ExecStream>;
   startProcess?: (command: string, options?: NimbusExecOptions) => Promise<NimbusStartResult>;
   runCode?: (code: string, options?: NimbusRunCodeOptions) => Promise<NimbusExecResult>;
-  files: NimbusSandboxFiles;
   runtimes?: {
     ensure?(specs: string | string[], options?: { force?: boolean }): Promise<JsonValue | undefined>;
     install?(spec: string, options?: { force?: boolean }): Promise<JsonValue | undefined>;
@@ -189,42 +86,6 @@ function handleLacks(surface: string): Refusal {
   return refusalOf(new KinuError('unsupported', `Nimbus SDK handle does not expose ${surface}`));
 }
 
-/**
- * The workspace `node` shim compiles via `new Function` (forbidden hosted) and `vfs/workspace-runtimes.ts` loopback guard
- * refuses container-naming programs. The guard marker classifies any command; the V8 mark only a command invoking `node`.
- */
-const CODEGEN_BLOCKED_MARK = 'Code generation from strings disallowed';
-
-const WORKSPACE_NODE_UNAVAILABLE_MARK = 'cannot run JavaScript in this workspace';
-
-const WORKSPACE_NODE_REFUSAL =
-  `workspace node cannot run programs on this host: the runtime forbids code compilation from strings, so no node server starts here. `
-  + `Run Node/Vite programs in an available capable executor, such as sandbox. `
-  + `Worker slates compile separately: call workspace.slates.<id>.$preview(), without a node precheck.`;
-
-function invokesWorkspaceNode(command: string): boolean {
-  return /(^|[;&|(\s])node(\s|$)/m.test(command);
-}
-
-
-/** A thrown failure, classified the same way before it becomes `io`. */
-function workspaceExecFailure(input: { doing: string; cause: unknown; command?: string }): KinuError {
-  const text = renderThrownChain({ cause: input.cause });
-
-  if (text.includes(WORKSPACE_NODE_UNAVAILABLE_MARK)) {
-    return new KinuError('unsupported', WORKSPACE_NODE_REFUSAL);
-  }
-
-  if (
-    (input.command === undefined || invokesWorkspaceNode(input.command))
-    && text.includes(CODEGEN_BLOCKED_MARK)
-  ) {
-    return new KinuError('unsupported', WORKSPACE_NODE_REFUSAL);
-  }
-
-  return nimbusFailure({ doing: input.doing, cause: input.cause });
-}
-
 const NO_LISTENER_MARK = 'nothing is serving port';
 
 function workspaceNoListenerReason(port: number): string {
@@ -235,17 +96,6 @@ function workspaceNoListenerReason(port: number): string {
 /** Session RPC failures default to `io`; abort, timeout and memory-wall keep the classifier's precise code. */
 function nimbusFailure(input: { doing: string; cause: unknown }): KinuError {
   return toKinuError({ ...input, otherwise: 'io' });
-}
-
-/** A transport failure is not evidence that a process exited with a made-up code. */
-function nimbusTransportRefusal(result: NimbusExecResult): Refusal | null {
-  return !result.success && result.exitCode === 0
-    ? { reason: 'io', error: 'Nimbus execution did not report success: ' + formatExecResult(result) }
-    : null;
-}
-
-function normalizeExec(result: NimbusExecResult): CommandResult {
-  return nimbusTransportRefusal(result) ?? commandResult(result);
 }
 
 const StringSchema = v.string();
@@ -394,9 +244,9 @@ export function nimbusSession(opts: NimbusSessionOpts) {
         call: nimbusCall('runCode', code, options),
         run: async (): Promise<CommandResult> => {
           try {
-            return normalizeExec(await touch(() => runCode(code, options)));
+            return commandResult(await touch(() => runCode(code, options)));
           } catch (err) {
-            return refusalOf(workspaceExecFailure({ doing: 'nimbus runCode', cause: err }));
+            return refusalOf(nimbusFailure({ doing: 'nimbus runCode', cause: err }));
           }
         },
       };
@@ -416,7 +266,7 @@ export function nimbusSession(opts: NimbusSessionOpts) {
           try {
             return formatStartResult(await touch(() => startProcess(command, options)));
           } catch (err) {
-            return refusalOf(workspaceExecFailure({ doing: `nimbus startProcess \`${command}\``, cause: err, command }));
+            return refusalOf(nimbusFailure({ doing: `nimbus startProcess \`${command}\``, cause: err }));
           }
         },
       };
@@ -463,7 +313,7 @@ export function nimbusSession(opts: NimbusSessionOpts) {
         try {
           return stringifyResult({ value: await touch(() => readLogs(pid, limits)) });
         } catch (err) {
-          return refusalOf(workspaceExecFailure({ doing: `nimbus logs ${pid}`, cause: err }));
+          return refusalOf(nimbusFailure({ doing: `nimbus logs ${pid}`, cause: err }));
         }
       },
     },
@@ -575,8 +425,8 @@ export function nimbusSession(opts: NimbusSessionOpts) {
     },
   };
 
-  // JS/TS, shell, coreutils, `node`, `npm`/`npx`, and `git` need no install. `python`/`native_binary` also need a facet
-  // host (`runtimeCatalog`); Cloudflare says false, the CLI supplies `localFacetHost()`.
+  // JS/TS, shell, coreutils, `node`, `npm`/`npx`, and `git` need no install. `python`/`native_binary` install from the
+  // runtime catalog (`runtimeCatalog`).
   const capabilities: ExecutorCapability[] = [
     'javascript', 'typescript', 'shell', 'npm', 'git', 'net_outbound',
     ...(box.ports?.expose && opts.inboundNetwork !== false ? (['net_inbound'] as const) : []),
@@ -645,18 +495,23 @@ async function sessionCall(
   command: string, options: ShellExecOptions, place: { readonly home: string; readonly cred?: VfsCred }, shellCwd: ((name: string) => Promise<string | null>) | undefined,
 ): Promise<SessionCall | KinuError> {
   const { home, cred } = place;
-  const { name, stdin } = options;
+  const { name, stdin, job, detached } = options;
   const kept = name === undefined || shellCwd === undefined ? null : await keptDirectory(shellCwd, name);
 
   if (kept instanceof KinuError) return kept;
   const start = startIn(kept ?? home, options.cwd);
   // Absent option must be an absent key: the substrate reads `'cred' in options` to decide whether to inherit.
-  const execOptions: NimbusExecOptions = name === undefined ? { cwd: start } : { name };
+  const execOptions: NimbusExecOptions = name === undefined ? { cwd: start } : { shellId: name };
   const moves = name !== undefined && (kept === null || options.cwd !== undefined);
 
   if (stdin !== undefined) execOptions.stdin = stdin;
 
   if (cred !== undefined) execOptions.cred = cred;
+
+  if (job !== undefined) execOptions.execId = job;
+
+  // A job that outruns its window frees its shell for the next call; it runs on, and its later cd and exports are not kept.
+  if (name !== undefined && detached !== undefined) execOptions.detach = detached;
 
   // Absolute, so no `--`, which Nimbus's `cd` reads as a directory.
   return { run: moves ? `cd ${shellQuote(start)} || exit\n${command}` : command, execOptions, start };
@@ -671,7 +526,10 @@ async function keptDirectory(shellCwd: (name: string) => Promise<string | null>,
     : new KinuError('unavailable', `NOT RUN: the directory of shell ${JSON.stringify(name)} could not be read, so the command was not sent.`, { cause: read.reason });
 }
 
-/** A box that streams stops the command on a cancel; one that cannot only stops waiting for it. */
+/**
+ * A box that streams stops the command on a cancel; one that cannot only stops waiting for it. A Stop before the box is
+ * ready sends nothing; one while the command starts waits for it to start, then cancels it and waits for its exit.
+ */
 function runOnBox(box: NimbusSandboxHandle, call: SessionCall, options: ShellExecOptions): Promise<NimbusExecResult> {
   const streamed = box.execStream;
 
@@ -680,33 +538,60 @@ function runOnBox(box: NimbusSandboxHandle, call: SessionCall, options: ShellExe
   }
 
   const stopped = new AbortController();
-  let exit: Promise<unknown> = Promise.resolve();
+  // Absent: not started. Pending: starting, which nothing cancels until the box answers. Fulfilled: running until its exit.
+  let launch: Promise<ExecStream> | undefined;
+  // Named before it is sent, so a Stop whose start answer is lost can still find the command by it.
+  const execId = call.execOptions.execId ?? `exec-${crypto.randomUUID()}`;
 
   return raceAbort(async () => {
-    const stream = await streamed(call.run, call.execOptions);
+    await box.ready();
+    options.signal?.throwIfAborted();
+    launch = streamed(call.run, { ...call.execOptions, execId });
 
-    exit = stream.exit;
-
-    return heard(stream, options.output, stopped.signal);
+    return heard(await launch, options.output, stopped.signal);
   }, options.signal, 'workspace exec cancelled before it started', async () => {
     stopped.abort();
-    await Promise.allSettled([exit]);
+
+    if (launch === undefined) return 'workspace exec cancelled before it started';
+    const [launched] = await Promise.allSettled([launch]);
+
+    // A start the box did not answer may still have run: it is stopped by its name, or the stop is not confirmed.
+    if (launched.status === 'rejected') return await stopUnanswered(box, execId);
+    await Promise.allSettled([launched.value.exit]);
 
     return 'workspace exec cancelled: the command was stopped';
   });
 }
 
+const RunningProcessesSchema = v.array(v.looseObject({ pid: v.number(), state: v.string(), execId: v.optional(v.string()) }));
+
+/**
+ * The processes of a command whose start the box never answered, found by the exec id it was sent with and killed;
+ * how the stop ended. Without a process list the box cannot be asked, and a command no longer listed may have run.
+ */
+async function stopUnanswered(box: NimbusSandboxHandle, execId: string): Promise<string> {
+  const list = box.processes?.list?.bind(box.processes);
+  const kill = box.processes?.kill?.bind(box.processes);
+  const unconfirmed = `workspace exec stop unconfirmed: the box lost its answer to the start of exec ${execId}`;
+
+  if (list === undefined || kill === undefined) return `${unconfirmed}, and lists no processes to find it by`;
+  const listed = v.safeParse(RunningProcessesSchema, await list());
+
+  if (!listed.success) return `${unconfirmed}, and its process list was unreadable`;
+  const running = listed.output.filter((process) => process.execId === execId && process.state === 'running');
+
+  await Promise.all(running.map(async (process) => await kill(process.pid)));
+
+  return running.length > 0 ? 'workspace exec cancelled: the command was stopped' : `${unconfirmed}, and it is not running now`;
+}
+
 /**
  * A Nimbus session's state, digested in the session: its directory as a digest, then what `set` lists, every variable
- * the session keeps, sorted by name, each value quoted, so no value or name can pass for another (but for the limit
- * below). A subshell first sets the pid Nimbus gives each command (`$`) to 0, so the listing holds only what the
- * session keeps. Nimbus keeps no function, alias, option or array between a named shell's calls, and answers
- * `export -p` with nothing.
- *
- * Limit: the listing is text, and Nimbus's pipe encodes it with `TextEncoder`, which turns every lone UTF-16 surrogate
- * into U+FFFD. Two values that differ only there (U+D800 and U+D801) digest alike, though the session keeps them apart.
- * No read inside the session can tell them apart, so the fix is Nimbus's: Nimbus ask 52 (`set` escapes ill-formed
- * strings, or the session exposes a digest of its saved state).
+ * the session keeps, sorted by name, each value quoted, so no value or name can pass for another. An ill-formed one,
+ * holding a lone UTF-16 surrogate, is listed as `$'…'` with each surrogate `\uXXXX` (Kinu's Nimbus patch, ask 52), so
+ * the pipe's `TextEncoder` loses nothing. A subshell first sets the pid Nimbus gives each command (`$`) to 0, so the
+ * listing holds only what the session keeps. Nimbus keeps no function, alias, option or array between a named shell's
+ * calls, and answers `export -p` with nothing.
  */
 const SESSION_STATE = `( pwd | sha256sum; export '$=0'; set ) | sha256sum`;
 
@@ -728,9 +613,6 @@ export function nimbusSessionShell(box: NimbusSandboxHandle, place: { readonly h
       const final = options.name === undefined ? null : await shellCwd?.(options.name) ?? null;
 
       if (final !== null) outcome.finalCwd = final;
-      const refusal = nimbusTransportRefusal(result);
-
-      if (refusal !== null) return { ...outcome, refusal };
 
       // 127 means the command is not in the box's catalog; the install remedy derives from the box's runtime list.
       const runtimes = box.runtimes?.list?.bind(box.runtimes);
@@ -751,7 +633,10 @@ export function nimbusSessionShell(box: NimbusSandboxHandle, place: { readonly h
     // What the session restores, read inside it and digested there: its directory and variables.
     shell.state = async (name) => {
       if (await shellCwd(name) === null) return 'none';
-      const read = await box.exec(SESSION_STATE, { name, ...asCred(place.cred) });
+      const state: NimbusExecOptions = { shellId: name };
+
+      if (place.cred !== undefined) state.cred = place.cred;
+      const read = await box.exec(SESSION_STATE, state);
       const digest = read.exitCode === 0 ? /^[0-9a-f]{64}/.exec(read.stdout)?.[0] : undefined;
 
       return digest ?? null;
@@ -761,139 +646,101 @@ export function nimbusSessionShell(box: NimbusSandboxHandle, place: { readonly h
   return shell;
 }
 
-/** A command's stream read to its end; `stop` cancels the stream, which ends the command. */
+/**
+ * A command's stream read to its end; `stop` cancels the stream, which ends the command. Cancelled by its own reader: on
+ * workerd a pipe's abort signal leaves a source whose read is pending uncancelled, so a silent command ran on after a
+ * Stop (armada 20261011135731-48f44e7b: pipeThrough uncancelled at 5004 ms, reader.cancel at 1502 ms).
+ */
 async function heard(stream: ExecStream, output: OutputSink | undefined, stop: AbortSignal): Promise<NimbusExecResult> {
-  const told = stream.output.pipeThrough(new TransformStream<ExecChunk, ExecChunk>({
-    transform(chunk, forward) {
-      output?.write(chunk.stream, chunk.data);
-      forward.enqueue(chunk);
+  const reader = stream.output.getReader();
+
+  const stopped = new Promise<'stopped'>((resolve) => {
+    if (stop.aborted) resolve('stopped');
+    else stop.addEventListener('abort', () => { resolve('stopped'); }, { once: true });
+  });
+
+  const told = new ReadableStream<ExecChunk>({
+    async pull(forward) {
+      const next = await Promise.race([reader.read(), stopped]);
+
+      if (next === 'stopped') {
+        await reader.cancel(stop.reason);
+        forward.close();
+
+        return;
+      }
+
+      if (next.done) {
+        forward.close();
+
+        return;
+      }
+
+      output?.write(next.value.stream, next.value.data);
+      forward.enqueue(next.value);
     },
-  }), { signal: stop });
+  }, { highWaterMark: 0 });
 
   return collectExecStream({ output: told, exit: stream.exit });
 }
 
 /**
- * A Nimbus session's files in its own absolute paths. With `cred`, the plane is `files.as(cred)`; a handle without
- * that view is refused as `unsupported`. Absent is the origin. Shell fallbacks run as the same credential.
+ * A remote Nimbus session's files in its own absolute paths, a relative one from `home`, each `..` the session's walk to
+ * take. With `cred`, the plane is `files.as(cred)`. Absent is the origin.
  */
-/** Binds a shell fallback to the plane's credential; absent must be an absent key (`'cred' in options`). */
-function asCred(cred: VfsCred | undefined): { cred: VfsCred } | Record<string, never> {
-  return cred === undefined ? {} : { cred };
-}
-
 export function nimbusSessionFiles(
-  box: NimbusSandboxHandle,
+  session: NimbusSandboxFiles,
   plane: { readonly home: string; readonly cred?: VfsCred },
 ): VFS & Required<Pick<VFS, 'readlink' | 'removeRecursive' | 'rename' | 'readRange'>> {
   const { home, cred } = plane;
-  const at = (path: string): string => workspacePath(path, home);
-  let files = box.files;
+  const at = (path: string): string => walkedPath(path, home);
+  const files = cred === undefined ? session : session.as(cred);
 
-  if (cred !== undefined) {
-    if (files.as === undefined) {
-      throw new KinuError('unsupported', 'this workspace handle has no credential-bound file plane, so it cannot act as the agent');
-    }
+  const present = async <T>(path: string, syscall: string, read: (absolute: string) => Promise<T | null>): Promise<T> => {
+    const absolute = at(path);
+    const answer = await atVfsPath(absolute, syscall, () => read(absolute));
 
-    files = files.as(cred);
-  }
+    if (answer === null) throw syscallError('ENOENT', syscall, absolute);
+
+    return answer;
+  };
 
   return {
-    async readFile(path) {
-      const absolute = at(path);
-
-      if (files.readBytes) {
-        const bytes = await atVfsPath(absolute, 'open', () => files.readBytes?.(absolute) ?? null);
-
-        if (bytes === null) throw syscallError('ENOENT', 'open', absolute);
-
-        return bytes;
-      }
-
-      const content = await atVfsPath(absolute, 'open', () => files.read(absolute));
-
-      if (content === null) throw syscallError('ENOENT', 'open', absolute);
-
-      return new TextEncoder().encode(content);
-    },
-    /** Prefix the origin's fixed Node reader reads; the SDK file methods cannot express a range. */
-    async readRange(path, offset, length) {
-      return readNimbusOriginRange({ box, files, path: at(path), offset, length, cred });
-    },
+    readFile: (path) => present(path, 'open', (absolute) => files.readBytes(absolute)),
+    readRange: (path, offset, length) => present(path, 'read', (absolute) => files.readRange(absolute, offset, length)),
     async writeFile(path, data) {
       const absolute = at(path);
 
       await atVfsPath(absolute, 'open', () => files.write(absolute, data));
     },
-    // No `writeFileIfRevision`: the SDK write takes no precondition and stat has no revision, so
-    // `writeExecutorFileOp` answers `unsupported`.
+    // No `writeFileIfRevision`: the SDK write takes no precondition, so `writeExecutorFileOp` answers `unsupported`.
     async readdir(path) {
       const absolute = at(path);
 
-      return (await atVfsPath(absolute, 'scandir', () => files.list(absolute)))
-        .map((entry) => ({ name: entry.name, type: entry.isDir === true ? 'directory' : direntType(entry.type) }));
+      return (await atVfsPath(absolute, 'scandir', () => files.list(absolute))).map((entry) => ({ name: entry.name, type: direntType(entry.type) }));
     },
-    async readlink(path) {
-      const absolute = at(path);
-
-      if (files.readlink) {
-        const target = await atVfsPath(absolute, 'readlink', () => files.readlink?.(absolute) ?? null);
-
-        if (target === null) throw syscallError('ENOENT', 'readlink', absolute);
-
-        return target;
-      }
-
-      // Like the `stat` fallback, a failed readlink reads as an absent link; its stderr says why.
-      const r = await box.exec(`readlink -- ${shellQuote(absolute)}`, asCred(cred));
-
-      if (!r.success || r.exitCode !== 0) throw syscallError('ENOENT', 'readlink', absolute, { detail: r.stderr.trim() || undefined });
-
-      return r.stdout.replace(/\n$/, '');
-    },
+    readlink: (path) => present(path, 'readlink', (absolute) => files.readlink(absolute)),
     async stat(path, options) {
       const absolute = at(path);
-      const native = options?.follow === false ? files.lstat?.bind(files) : files.stat?.bind(files);
+      const stat = await atVfsPath(absolute, options?.follow === false ? 'lstat' : 'stat', () => (options?.follow === false ? files.lstat(absolute) : files.stat(absolute)));
 
-      if (native) {
-        const stat = await native.call(files, absolute);
+      if (stat === null) return null;
+      const type = stat.type === 'symlink' ? 'symlink' as const : 'file' as const;
+      const answer: VfsStat = { size: stat.size, mtimeMs: stat.mtime, type: stat.type === 'directory' ? 'directory' : type };
 
-        if (stat === null) return null;
-        const type = stat.type === 'symlink' ? 'symlink' as const : 'file' as const;
-        // The change time moves on every write and no caller sets it: what a note's stamp is told apart by.
-        const changed = stat.ctime === undefined ? {} : { ctimeMs: stat.ctime };
+      // The change time moves on every write and no caller sets it: what a note's stamp is told apart by, and the
+      // revision, where the backend keeps one, before it.
+      if (stat.ctime !== undefined) answer.ctimeMs = stat.ctime;
 
-        return { size: stat.size, mtimeMs: stat.mtime, ...changed, type: stat.type === 'directory' ? 'directory' : type };
-      }
+      if (stat.ino !== undefined) answer.ino = stat.ino;
 
-      const result = await box.exec(`stat -c '%s %Y %F' ${shellQuote(absolute)}`, asCred(cred));
+      if (stat.revision !== undefined) answer.revision = stat.revision;
 
-      if (!result.success || result.exitCode !== 0) return null;
-      const [size, seconds, ...kind] = result.stdout.trim().split(/\s+/);
-      const type = kind.join(' ');
-
-      const entryType = type === 'symbolic link' ? 'symlink' as const : 'file' as const;
-
-      return { size: Number(size), mtimeMs: Number(seconds) * 1_000, type: type === 'directory' ? 'directory' : entryType };
+      return answer;
     },
     async unlink(path) { await files.delete(at(path)); },
     async removeRecursive(path) { await files.delete(at(path), { recursive: true }); },
-    async rename(from, to) {
-      if (!files.rename) throw syscallError('EIO', 'rename', from, { detail: 'Nimbus SDK handle does not expose rename', dest: to });
-      await files.rename(at(from), at(to));
-    },
-    async mkdir(path, opts) {
-      if (files.mkdir) {
-        await files.mkdir(at(path));
-
-        return;
-      }
-
-      const r = await box.exec(`mkdir ${opts?.recursive ? '-p ' : ''}-- ${shellQuote(at(path))}`, asCred(cred));
-
-      if (!r.success || r.exitCode !== 0) {
-        throw syscallError('EIO', 'mkdir', path, { detail: r.stderr.trim() || undefined });
-      }
-    },
+    async rename(from, to) { await files.rename(at(from), at(to)); },
+    async mkdir(path) { await files.mkdir(at(path)); },
   };
 }

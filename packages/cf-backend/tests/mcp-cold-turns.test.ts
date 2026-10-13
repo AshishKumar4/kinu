@@ -10,7 +10,7 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import {
   chatSessionTurns, fireSoonestWake, improvementLanesRan, mainDatabase, nextTurn, orchestratorHarness, tapDiagnostics, until, workspaceFiles, type RecordedUserPlaneCalls,
 } from './helpers/actor-harness';
-import { ROOT_SLATE_CALLER } from '../src/slates/bindings';
+import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 
 const KEY = mcpToolKey('tracker', 'find_issue');
 

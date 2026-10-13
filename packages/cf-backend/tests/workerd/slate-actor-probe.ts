@@ -19,10 +19,10 @@ import { bindActorHandle, createDefaultWebSearchProvider, initCodemodeStateTable
 import { CodemodeEgress as ProductionEgress } from '../../src/codemode-egress';
 import { codemodeLauncher } from '../../src/codemode-sandbox';
 import { SlateHost } from '../../src/slates/host';
-import { initSlateBuildTable } from '../../src/slates/builds';
+import { initSlateBuildTable } from '@kinu.run/core/slates';
 import { createMemoryVfs } from '@kinu.run/test-utils/vfs';
 import type { BrowserSessions } from '@kinu.run/core';
-import { ROOT_SLATE_CALLER } from '../../src/slates/bindings';
+import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { jsonSchema, tool as defineTool } from 'ai';
 import type { JsonObject, UserCaller } from '@kinu.run/core';

@@ -120,6 +120,31 @@ describe('hosted workspace actor shell state', () => {
     });
   });
 
+  // A named shell's listing of its state tells apart what the shell keeps apart, so a read of it (an approval's) never
+  // takes one state for another: values, or names, that differ only in a lone UTF-16 surrogate (NIMBUS-ASKS #52).
+  test('a named shell lists apart values and names the shell keeps apart, and alike what is the same', async () => {
+    const storage = openWorkspaceDatabase();
+    const workspace = await NimbusWorkspace.create({ ...storage, generation: 1 });
+    const box = sdkBox(workerHost(workspace, new Map()));
+    // `$` is the only variable two shells in the same state list differently.
+    const listing = `( export '$=0'; set )`;
+
+    const holding = async (shellId: string, value: string) => {
+      await box.exec('export A="$B"', { shellId, env: { B: value } });
+
+      return (await box.exec(listing, shell(shellId))).stdout;
+    };
+
+    const named = async (name: string) => (await box.exec(listing, { shellId: 'agent:names', env: { [name]: 'same' } })).stdout;
+
+    expect(await box.exec(`case "$A" in "$B") echo same;; *) echo apart;; esac`, { env: { A: '\uD800', B: '\uD801' } }))
+      .toMatchObject({ stdout: 'apart\n' });
+    expect(await holding('agent:low', '\uD800')).not.toBe(await holding('agent:high', '\uD801'));
+    expect(await holding('agent:low-again', '\uD800')).toBe(await holding('agent:low', '\uD800'));
+    expect(await named('N\uD800')).not.toBe(await named('N\uD801'));
+    expect(await named('N\uD800')).toBe(await named('N\uD800'));
+  });
+
   test('durable shell state survives worker reconstruction', async () => {
     const storage = openWorkspaceDatabase();
 
@@ -249,18 +274,12 @@ describe('hosted workspace preview capabilities', () => {
 });
 
 describe('an approval in a hosted named session', () => {
-  /** The session plane as the hosted workspace adapts the public SDK: a name is a shell id. */
+  /** The session plane as the hosted workspace adapts the public SDK: its options, shell id included, pass as they are. */
   function sessionBox(sdk: ReturnType<typeof sdkBox>): NimbusSandboxHandle {
     return {
       ready: async () => {},
-      exec: async (command, options) => {
-        const { name, ...rest } = options ?? {};
-        const result = await sdk.exec(command, name === undefined ? rest : { ...rest, shellId: name });
-
-        return { command, success: result.exitCode === 0, stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
-      },
+      exec: async (command, options) => await sdk.exec(command, options),
       shellCwd: async (name) => (await sdk.exec('pwd', shell(name))).stdout.trim() || null,
-      files: { read: async () => null, write: async () => {}, list: async () => [], stat: async () => null, exists: async () => false, delete: async () => {} },
     };
   }
 

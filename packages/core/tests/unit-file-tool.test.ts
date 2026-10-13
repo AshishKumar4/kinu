@@ -17,7 +17,8 @@ import { SPILL_DIRS, TurnContextBudget } from '../src/context-budget';
 import { JsonObjectSchema, type JsonObject } from '../src/utils/json';
 import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { RESIDENT_TEXT_MAX_BYTES } from '../src/vfs/mounts';
-import type { Memory } from '../src/types/primitives';
+import type { CheckpointFiles, Memory } from '../src/types/primitives';
+import { sha256Hex } from '../src/safety/argument-digest';
 import { fnv1a64 } from '../src/utils/fnv1a';
 import type { JsonValue } from '../src/utils/json';
 import { TurnAccumulator } from '../src/orchestrator/turn-accumulator';
@@ -426,7 +427,13 @@ describe('TurnFileLedger', () => {
  * Plane with a ranged read like every production plane. `perRead` caps bytes per `readRange` so small
  * fixtures cross chunk and multi-byte boundaries; `wholeReads` records every unbounded `readFile`.
  */
-function memoryVfs(seed: Record<string, string> = {}, opts: { perRead?: number; revisions?: boolean } = {}): VFS & Required<Pick<VFS, 'readRange'>> & { files: Map<string, string>; wholeReads: string[]; write(path: string, content: string): void } {
+/**
+ * A plane in memory that, like the CLI's folder, a machine or the sandbox, compares a write's digest itself.
+ * `racer` runs as a write reaches the plane: a peer's write landing between the tool's read and its own.
+ */
+function memoryVfs(seed: Record<string, string> = {}, opts: { perRead?: number; revisions?: boolean } = {}): VFS & Required<Pick<VFS, 'readRange'>> & Required<Pick<CheckpointFiles, 'writeFileIfDigest'>> & {
+  files: Map<string, string>; wholeReads: string[]; write(path: string, content: string): void; racer: (() => void) | null;
+} {
   const files = new Map(Object.entries(seed));
   // Starts with a revision so a later write bumps it to a new value.
   const revisions = new Map(Object.keys(seed).map((path) => [path, 1]));
@@ -447,10 +454,23 @@ function memoryVfs(seed: Record<string, string> = {}, opts: { perRead?: number; 
     return encoder.encode(content);
   };
 
-  return {
+  const plane: VFS & Required<Pick<VFS, 'readRange'>> & Required<Pick<CheckpointFiles, 'writeFileIfDigest'>> & {
+    files: Map<string, string>; wholeReads: string[]; write(path: string, content: string): void; racer: (() => void) | null;
+  } = {
     files,
     wholeReads,
     write,
+    racer: null,
+    async writeFileIfDigest(path: string, data: Uint8Array, expected: string | null) {
+      plane.racer?.();
+      const held = files.get(path);
+      const found = held === undefined ? null : sha256Hex(encoder.encode(held));
+
+      if (found !== expected) return { ok: false as const, sha256: found };
+      write(path, new TextDecoder('utf-8', { ignoreBOM: true }).decode(data));
+
+      return { ok: true as const, sha256: sha256Hex(data) };
+    },
     async readFile(path: string) {
       wholeReads.push(path);
       const content = files.get(path);
@@ -461,7 +481,10 @@ function memoryVfs(seed: Record<string, string> = {}, opts: { perRead?: number; 
     },
     readRange: async (path: string, offset: number, length: number) => bytesOf(path)
       .subarray(offset, offset + Math.min(length, opts.perRead ?? length)),
-    async writeFile(path: string, data: Uint8Array) { write(path, new TextDecoder('utf-8', { ignoreBOM: true }).decode(data)); },
+    async writeFile(path: string, data: Uint8Array) {
+      plane.racer?.();
+      write(path, new TextDecoder('utf-8', { ignoreBOM: true }).decode(data));
+    },
     async readdir() { return [{ name: 'local', type: 'directory' }]; },
     async stat(path: string): Promise<VfsStat | null> {
       const content = files.get(path);
@@ -477,6 +500,8 @@ function memoryVfs(seed: Record<string, string> = {}, opts: { perRead?: number; 
     async unlink(path: string) { files.delete(path); },
     async mkdir() {},
   };
+
+  return plane;
 }
 
 /** What a program can pass: it calls `execute` directly, so actions, paths and edits may be off-schema. */
@@ -495,10 +520,10 @@ test('a denied edit keeps its counter through the persisted file-edit event', as
   const { stores, db } = createTestRuntime();
   const files = memoryVfs({ '/denied.txt': 'before' });
 
-  const denied = {
-    ...files,
-    async writeFile(path: string) { throw new VfsError('EACCES', `permission denied, write '${path}'`, path); },
-  };
+  const refuse = async (path: string): Promise<never> => { throw new VfsError('EACCES', `permission denied, write '${path}'`, path); };
+
+  // Every way the plane writes: the tool replaces a file it read through the plane's own check.
+  const denied = { ...files, writeFile: refuse, writeFileIfRevision: refuse, writeFileIfDigest: refuse };
 
   const { call, ledger } = toolFor(denied);
 
@@ -525,7 +550,7 @@ describe('file tool', () => {
       edits: [{ old_text: 'const x = 1;', new_text: 'const x = 2;' }],
     });
 
-    expect(edited).toEqual({ path: 'a.ts', reference: 'vfs://home/main/a.ts', applied: [{ line: 1, removedLines: 1, addedLines: 1 }] });
+    expect(edited).toEqual({ path: 'a.ts', reference: 'vfs://home/main/a.ts', applied: [{ line: 1, removedLines: 1, addedLines: 1 }], checked: 'digest' });
     expect(vfs.files.get('a.ts')).toBe('const x = 2;\n');
   });
 
@@ -557,6 +582,26 @@ describe('file tool', () => {
     await expect(result).rejects.toThrow('changed since you read it');
     expect(vfs.files.get('a.ts')).toBe('const x = 1;\nconst y = 2;\n');
     expect(ledger.snapshot().failures).toEqual({ stale: 1 });
+  });
+
+  test('a peer\'s write between the read and the replace is kept, and the replace refused naming the change', async () => {
+    const vfs = memoryVfs({ 'a.ts': 'const x = 1;\n' });
+    const { call } = toolFor(vfs);
+    await call({ op: 'read', path: 'a.ts' });
+    vfs.racer = () => { vfs.racer = null; vfs.write('a.ts', 'the owner saved this\n'); };
+
+    await expect(call({ op: 'write', path: 'a.ts', content: 'the agent\'s rewrite\n' })).rejects.toMatchObject({ verdict: 'stale' });
+    expect(vfs.files.get('a.ts')).toBe('the owner saved this\n');
+  });
+
+  test('a peer\'s write between the read and the edit is kept, and the edit refused', async () => {
+    const vfs = memoryVfs({ 'a.ts': 'const x = 1;\n' });
+    const { call } = toolFor(vfs);
+    await call({ op: 'read', path: 'a.ts' });
+    vfs.racer = () => { vfs.racer = null; vfs.write('a.ts', 'const x = 1;\nconst y = 2;\n'); };
+
+    await expect(call({ op: 'edit', path: 'a.ts', edits: [{ old_text: 'const x = 1;', new_text: 'const x = 3;' }] })).rejects.toMatchObject({ verdict: 'stale' });
+    expect(vfs.files.get('a.ts')).toBe('const x = 1;\nconst y = 2;\n');
   });
 
   test('a failed edit leaves the file untouched and is counted by reason', async () => {
@@ -736,7 +781,7 @@ describe('file tool', () => {
     const vfs = memoryVfs();
     const { call } = toolFor(vfs);
     expect(await call({ op: 'write', path: 'new.txt', content: 'hi' }))
-      .toEqual({ path: 'new.txt', reference: 'vfs://home/main/new.txt', bytes: 2, action: 'created' });
+      .toEqual({ path: 'new.txt', reference: 'vfs://home/main/new.txt', bytes: 2, action: 'created', checked: 'digest' });
     expect(vfs.files.get('new.txt')).toBe('hi');
   });
 

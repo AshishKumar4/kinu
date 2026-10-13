@@ -1,8 +1,6 @@
-// Pins the DO retry seam per failure class. Reset strings come from
-// PLATFORM_CATALOG['do.reset.transient'], the entry the classifier cites, so they cannot drift.
+// Authenticated workspace requests recover platform losses without bypassing ownership or reusing broken stubs.
 import { Result } from 'effect';
 import { describe, test, expect } from 'bun:test';
-import { retryTransientDO, classifyTransientDO } from '@kinu.run/core';
 import {
   claimOwnedWorkspace, notInRegistry, ownedByAnotherAccount,
   type OwnedWorkspaceResult, type WorkspaceOwnerClaim, type WorkspaceOwnershipEnv, type WorkspaceRegistry,
@@ -12,7 +10,7 @@ const USER = '0123456789abcdef0123456789abcdef';
 
 const CONNECTION_LOST = 'Network connection lost.';
 
-/** Fails `failures` times with `error`, then succeeds; counts calls so retries are proven. */
+/** Fails `failures` times with `error`, then succeeds. */
 function flaky<T>(failures: number, error: Error, value: T) {
   let seen = 0;
 
@@ -22,7 +20,6 @@ function flaky<T>(failures: number, error: Error, value: T) {
 
       return value;
     },
-    calls: () => seen,
   };
 }
 
@@ -31,104 +28,13 @@ function answers<T>(...values: T[]) {
 
   return {
     call: async () => values[Math.min(seen++, values.length - 1)],
-    calls: () => seen,
   };
 }
-
-describe('classifyTransientDO — which failures belong to the platform', () => {
-
-  test('a dropped connection is a platform transient', () => {
-    expect(classifyTransientDO({ cause: new Error(CONNECTION_LOST) })).toBe('connection_lost');
-  });
-
-  test('a superseded script is a platform transient', () => {
-    expect(classifyTransientDO({ cause: new Error(
-      'This script has been upgraded. Please send a new request to connect to the new version.',
-    ) })).toBe('superseded_isolate');
-  });
-
-  test('the platform signal survives a wrapper that kept only message and cause', () => {
-    const wrapped = new Error('SQL query failed', { cause: new Error(CONNECTION_LOST) });
-    expect(classifyTransientDO({ cause: wrapped })).toBe('connection_lost');
-  });
-
-  test('the retryable flag is read at any depth, not just on top', () => {
-    const flagged = Object.assign(new Error('storage went away'), { retryable: true });
-    expect(classifyTransientDO({ cause: new Error('wrapped', { cause: flagged }) }))
-      .toBe('retryable_flag');
-  });
-
-  test('an application error is not a transient', () => {
-    expect(classifyTransientDO({ cause: new Error('workspace is owned by a different user') })).toBeNull();
-    expect(classifyTransientDO({ cause: new Error('no such table: workspace_identity') })).toBeNull();
-  });
-
-  test('an overloaded object is not a transient — retrying is what overloaded it', () => {
-    const overloaded = Object.assign(new Error('Durable Object is overloaded.'),
-      { retryable: true, overloaded: true });
-
-    expect(classifyTransientDO({ cause: overloaded })).toBeNull();
-  });
-
-  test('a memory-limit reset is not a transient — it recurs on retry', () => {
-    expect(classifyTransientDO({ cause: new Error(
-      "Durable Object's isolate exceeded its memory limit and was reset.",
-    ) })).toBeNull();
-  });
-
-  test('a cyclic cause chain terminates', () => {
-    const a = new Error('a');
-    const b = new Error('b', { cause: a });
-    Object.assign(a, { cause: b });
-    expect(classifyTransientDO({ cause: a })).toBeNull();
-  });
-
-  test('a non-error throw is unclassifiable, not a crash', () => {
-    expect(classifyTransientDO({ cause: CONNECTION_LOST })).toBeNull();
-    expect(classifyTransientDO({ cause: null })).toBeNull();
-    expect(classifyTransientDO({ cause: undefined })).toBeNull();
-    expect(classifyTransientDO({ cause: 42 })).toBeNull();
-  });
-});
-
-describe('retryTransientDO', () => {
-  test('a dropped connection is retried and the call succeeds', async () => {
-    const flake = flaky(1, new Error(CONNECTION_LOST), 'ok');
-    await expect(retryTransientDO('t', flake.call)).resolves.toBe('ok');
-    expect(flake.calls()).toBe(2);
-  });
-
-  test('a deploy that superseded the callee is retried', async () => {
-    const flake = flaky(1, new Error('Durable Object reset because its code was updated.'), 'ok');
-    await expect(retryTransientDO('t', flake.call)).resolves.toBe('ok');
-    expect(flake.calls()).toBe(2);
-  });
-
-  test('an application error is not retried', async () => {
-    const flake = flaky(1, new Error('workspace is owned by a different user'), 'ok');
-    await expect(retryTransientDO('t', flake.call)).rejects.toThrow('workspace is owned by a different user');
-    expect(flake.calls()).toBe(1);
-  });
-
-  test('an overloaded object is not retried', async () => {
-    const flake = flaky(1,
-      Object.assign(new Error('Durable Object is overloaded.'), { retryable: true, overloaded: true }),
-      'ok');
-
-    await expect(retryTransientDO('t', flake.call)).rejects.toThrow('Durable Object is overloaded.');
-    expect(flake.calls()).toBe(1);
-  });
-
-  test('a transient that outlives the attempts throws unchanged, so callers report it', async () => {
-    const flake = flaky(Infinity, new Error(CONNECTION_LOST), 'ok');
-    await expect(retryTransientDO('t', flake.call)).rejects.toThrow(CONNECTION_LOST);
-    expect(flake.calls()).toBe(3);
-  });
-});
 
 describe('claimOwnedWorkspace — the gate on every authenticated workspace request', () => {
   function envWith(opts: {
     dropHasWorkspace?: number;
+    membershipError?: Error;
     membershipAnswers?: boolean[];
     registryReads?: string[];
     claimError?: Error;
@@ -139,7 +45,7 @@ describe('claimOwnedWorkspace — the gate on every authenticated workspace requ
   }): WorkspaceOwnershipEnv<string, WorkspaceOwnerClaim> {
     const membership = opts.membershipAnswers
       ? answers(...opts.membershipAnswers)
-      : flaky(opts.dropHasWorkspace ?? 0, new Error(CONNECTION_LOST), true);
+      : flaky(opts.dropHasWorkspace ?? 0, opts.membershipError ?? new Error(CONNECTION_LOST), true);
 
     let reconciles = 0;
 
@@ -182,6 +88,98 @@ describe('claimOwnedWorkspace — the gate on every authenticated workspace requ
   test('one dropped membership read does not fail the request', async () => {
     const result = await claimOwnedWorkspace(envWith({ dropHasWorkspace: 1 }), USER, 'drop-retry');
     expect(Result.isSuccess(result)).toBe(true);
+  });
+
+  test('a live storage reset recovers the authenticated workspace request', async () => {
+    const result = await claimOwnedWorkspace(envWith({
+      dropHasWorkspace: 1,
+      membershipError: new Error('Internal error in Durable Object storage caused object to be reset; reference = abc'),
+    }), USER, 'live-storage-retry');
+
+    expect(Result.isSuccess(result)).toBe(true);
+  });
+
+  test('a platform retryable flag is honored whatever the message says', async () => {
+    const result = await claimOwnedWorkspace(envWith({
+      dropHasWorkspace: 1,
+      membershipError: Object.assign(new Error('refused'), { retryable: true }),
+    }), USER, 'flagged-retryable');
+
+    expect(Result.isSuccess(result)).toBe(true);
+  });
+
+  test('overload anywhere in an ownership failure vetoes another delivery', async () => {
+    const failures = [
+      new Error('Durable Object reset because its code was updated.', { cause: Object.assign(new Error('refused'), { overloaded: true }) }),
+      Object.assign(new Error('refused', { cause: new Error(CONNECTION_LOST) }), { overloaded: true }),
+      Object.assign(new Error('refused', { cause: new Error('Durable Object is overloaded.') }), { retryable: true }),
+    ];
+
+    for (const [index, claimError] of failures.entries()) {
+      // The claim is delivered once: an overloaded object is not asked again.
+      const delivered: string[] = [];
+      await expect(claimOwnedWorkspace(envWith({ claimError, claims: delivered }), USER, `overload-veto-${index}`))
+        .resolves.toMatchObject({ failure: { status: 503 } });
+      expect(delivered).toHaveLength(1);
+    }
+  });
+
+  test('a scalar cause is not a platform signal for another registry read', async () => {
+    // A second read would succeed: the request fails because none is made.
+    await expect(claimOwnedWorkspace(envWith({
+      dropHasWorkspace: 1,
+      membershipError: new Error('registry read failed', { cause: CONNECTION_LOST }),
+    }), USER, 'scalar-cause')).rejects.toBeInstanceOf(Error);
+  });
+
+  test('ownership retries mint and dispose stubs without disposing the returned workspace', async () => {
+    let registryStubs = 0;
+
+    const env: WorkspaceOwnershipEnv<string, WorkspaceOwnerClaim> = {
+      CREDENTIAL_ENCRYPTION_KEY: 'test-owner-secret',
+      UserDO: {
+        idFromName: (name) => name,
+        get: () => {
+          const number = ++registryStubs;
+          let live = true;
+
+          return {
+            [Symbol.dispose]() { live = false; },
+            async hasWorkspace() {
+              if (!live || number === 1) throw new Error(CONNECTION_LOST);
+
+              return true;
+            },
+            async ensureWorkspaceCapability() {
+              if (!live) throw new Error('disposed registry stub');
+            },
+          };
+        },
+      },
+      OrchestratorAgent: {
+        idFromName: (name) => name,
+        get: () => {
+          let live = true;
+
+          return {
+            [Symbol.dispose]() { live = false; },
+            async claimOwner() {
+              if (!live) throw new Error('disposed workspace stub');
+
+              return { owner: USER, capabilityHash: 'h' };
+            },
+          };
+        },
+      },
+    };
+
+    const result = await claimOwnedWorkspace(env, USER, 'stub-lifecycle');
+
+    expect(Result.isSuccess(result)).toBe(true);
+
+    if (Result.isFailure(result)) throw new Error(result.failure.error);
+    // A first stub that lost its connection is not the one returned: the workspace answers through what is.
+    await expect(result.success.claimOwner(USER)).resolves.toMatchObject({ owner: USER });
   });
 
   test('a platform failure that persists reports 503, not 500', async () => {

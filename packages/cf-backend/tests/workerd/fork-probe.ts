@@ -8,13 +8,13 @@ import { DurableObject } from 'cloudflare:workers';
 import {
   agentArtifactDirectory, agentHome, CHAT_SESSION_ID, MAIN_AGENT,
   FORK_STREAM_SEED, ForkStagingState, ForkTargetWriter, ForkTransferReceiver,
-  foldForkStream, createWorkspaceForkSink, createWorkspaceForkSource, writeWorkspaceSoul, forkTransferFrames, initWorkspaceSchema, nimbusSessionFiles,
+  foldForkStream, createWorkspaceForkSink, createWorkspaceForkSource, writeWorkspaceSoul, forkTransferFrames, initWorkspaceSchema,
   readForkLineage, missionOf, SOUL_FILE, SOUL_PATH, SessionHistory, summarizeSoul, WorkspaceActorDirectory, openWorkspaceMainActor,
   createAppDataStore, createFactsStore, recordLesson, RunEventRecorder, WORKSPACE_RUN_ID,
   type ActorHandle, type AppDataStore, type ForkFrame, type ForkFrameReply, type ForkLineageRow, type ForkResult, type ForkStaging, type SqlExecutor, type SqlValue,
   WORKSPACE_ROOT,
 } from '@kinu.run/core';
-import { workspaceBoxFiles } from '@kinu.run/core/workspace';
+import { storeFiles } from '@kinu.run/core/workspace';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
@@ -201,11 +201,7 @@ export class ForkSourceProbeDO extends ForkProbeDO {
     ledger.createTable({ name: 'ledger', scope: 'actor', columns: [{ name: 'key', type: 'text', primaryKey: true }, { name: 'amount', type: 'integer' }] });
     ledger.apply({ op: 'insert', table: 'ledger', rows: Array.from({ length: PROBE_LEDGER_ROWS }, (_, at) => ({ key: `k${at}`, amount: at })) });
 
-    const files = nimbusSessionFiles({
-      files: workspaceBoxFiles(() => this.store()),
-      ready: async () => undefined,
-      exec: async () => { throw new Error('the fork probe runs no processes'); },
-    }, { home: WORKSPACE_ROOT });
+    const files = storeFiles(() => this.store(), { home: WORKSPACE_ROOT });
 
     const history = new SessionHistory({
       actor,

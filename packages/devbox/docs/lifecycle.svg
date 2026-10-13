@@ -1,0 +1,116 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="508" viewBox="0 0 880 508" role="img" aria-labelledby="title">
+  <title id="title">A box's life: a call starts it from a snapshot or the image, the restore brings files, processes and ports back, an idle check every 60 seconds decides when to rest, a live process makes the box ask its host first, and a graceful stop saves and stops the container.</title>
+  <style>
+    .bg { fill: #ffffff; }
+    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; }
+    .t { font-size: 16px; font-weight: 600; fill: #1f2328; }
+    .s { font-size: 13px; fill: #59636e; }
+    .k { font-size: 12px; fill: #1f2328; }
+    .c { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; font-size: 12px; fill: #59636e; }
+    .line { stroke: #818b98; stroke-width: 1.5; fill: none; }
+    .dash { stroke: #818b98; stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+    .head { fill: #818b98; }
+    .blue { fill: #ddf4ff; stroke: #54aeff; stroke-width: 1.5; }
+    .purple { fill: #fbefff; stroke: #c297ff; stroke-width: 1.5; }
+    .green { fill: #dafbe1; stroke: #4ac26b; stroke-width: 1.5; }
+    .orange { fill: #fff1e5; stroke: #fb8f44; stroke-width: 1.5; }
+    .red { fill: #ffebe9; stroke: #ff8182; stroke-width: 1.5; }
+    .gray { fill: #f6f8fa; stroke: #d1d9e0; stroke-width: 1.5; }
+    .chip { fill: #ffffff; stroke: #4ac26b; stroke-width: 1; }
+    .chipw { fill: #ffffff; stroke: #d4a72c; stroke-width: 1; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #0d1117; }
+      .t, .k { fill: #f0f6fc; }
+      .s, .c { fill: #9198a1; }
+      .line, .dash { stroke: #6e7681; }
+      .head { fill: #6e7681; }
+      .blue { fill: #132339; stroke: #4493f8; }
+      .purple { fill: #252139; stroke: #ab7df8; }
+      .green { fill: #12261e; stroke: #3fb950; }
+      .orange { fill: #2c1f1a; stroke: #db6d28; }
+      .red { fill: #301b1e; stroke: #f85149; }
+      .gray { fill: #171b22; stroke: #3d444d; }
+      .chip { fill: #0d1117; stroke: #3fb950; }
+      .chipw { fill: #0d1117; stroke: #d29922; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+      <path class="head" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+  </defs>
+  <rect class="bg" width="880" height="508" rx="12"/>
+
+  <!-- Row 1: stopped, start, restore, running -->
+  <rect class="gray" x="16" y="70" width="96" height="70" rx="35"/>
+  <text class="t" x="64" y="100" text-anchor="middle">Stopped</text>
+  <text class="s" x="64" y="120" text-anchor="middle">no container</text>
+
+  <line class="line" x1="112" y1="105" x2="172" y2="105" marker-end="url(#arrow)"/>
+  <text class="s" x="142" y="95" text-anchor="middle">a call</text>
+  <text class="c" x="142" y="124" text-anchor="middle">start()</text>
+
+  <rect class="blue" x="172" y="40" width="180" height="130" rx="10"/>
+  <text class="t" x="262" y="66" text-anchor="middle">Start</text>
+  <text class="s" x="262" y="92" text-anchor="middle">its own snapshot,</text>
+  <text class="s" x="262" y="110" text-anchor="middle">else the golden snapshot,</text>
+  <text class="s" x="262" y="128" text-anchor="middle">else the image</text>
+  <text class="c" x="262" y="154" text-anchor="middle">exec /bin/true</text>
+
+  <line class="line" x1="352" y1="105" x2="392" y2="105" marker-end="url(#arrow)"/>
+
+  <rect class="purple" x="392" y="40" width="200" height="130" rx="10"/>
+  <text class="t" x="492" y="66" text-anchor="middle">Restore</text>
+  <text class="s" x="492" y="92" text-anchor="middle">attach /workspace,</text>
+  <text class="s" x="492" y="110" text-anchor="middle">restart supervised processes,</text>
+  <text class="s" x="492" y="128" text-anchor="middle">re-expose ports</text>
+  <text class="s" x="492" y="154" text-anchor="middle">one budget of 25 s</text>
+
+  <line class="line" x1="592" y1="105" x2="632" y2="105" marker-end="url(#arrow)"/>
+
+  <rect class="green" x="632" y="40" width="230" height="130" rx="10"/>
+  <text class="t" x="747" y="66" text-anchor="middle">Running</text>
+  <rect class="chip" x="641" y="78" width="212" height="26" rx="13"/>
+  <text class="k" x="747" y="96" text-anchor="middle"><tspan font-weight="600">ready</tspan>  everything came back</text>
+  <rect class="chipw" x="641" y="110" width="212" height="26" rx="13"/>
+  <text class="k" x="747" y="128" text-anchor="middle"><tspan font-weight="600">repair</tspan>  a process or port is down</text>
+  <text class="s" x="747" y="158" text-anchor="middle">saves to R2 every 5 min</text>
+
+  <!-- Terminal attach failure -->
+  <line class="dash" x1="492" y1="170" x2="492" y2="196" marker-end="url(#arrow)"/>
+  <rect class="red" x="392" y="196" width="200" height="30" rx="15"/>
+  <text class="k" x="492" y="216" text-anchor="middle"><tspan font-weight="600">refused</tspan>  <tspan class="c">attachNow()</tspan> retries</text>
+
+  <!-- Row 2: graceful stop, idle check -->
+  <rect class="orange" x="16" y="262" width="300" height="130" rx="10"/>
+  <text class="t" x="166" y="288" text-anchor="middle">Graceful stop <tspan class="c" font-weight="400">quiesce()</tspan></text>
+  <text class="s" x="34" y="314">1  refuse new calls, drain the rest</text>
+  <text class="s" x="34" y="334">2  final save to R2</text>
+  <text class="s" x="34" y="354">3  snapshot the container</text>
+  <text class="s" x="34" y="374">4  stop it</text>
+
+  <rect class="blue" x="562" y="262" width="300" height="130" rx="10"/>
+  <text class="t" x="712" y="288" text-anchor="middle">Idle check, every 60 s</text>
+  <text class="s" x="580" y="314">no call for 30 min,</text>
+  <text class="s" x="580" y="334">nothing in flight,</text>
+  <text class="s" x="580" y="354">and both still true 10 min later</text>
+
+  <line class="line" x1="747" y1="170" x2="747" y2="262" marker-end="url(#arrow)"/>
+
+  <line class="line" x1="562" y1="316" x2="316" y2="316" marker-end="url(#arrow)"/>
+  <text class="s" x="439" y="306" text-anchor="middle">no process running</text>
+
+  <path class="line" d="M64,262 L64,140" marker-end="url(#arrow)"/>
+
+  <!-- Row 3: the agent decides when something still runs -->
+  <rect class="blue" x="330" y="420" width="220" height="76" rx="10"/>
+  <text class="t" x="440" y="446" text-anchor="middle">Rest ask</text>
+  <text class="s" x="440" y="466" text-anchor="middle">a <tspan class="c">rest</tspan> incident to the host;</text>
+  <text class="c" x="440" y="486" text-anchor="middle">answerRest('now' | 'keep')</text>
+
+  <path class="line" d="M712,392 L712,458 L550,458" marker-end="url(#arrow)"/>
+  <text class="s" x="631" y="448" text-anchor="middle">a process runs</text>
+
+  <path class="line" d="M330,458 L166,458 L166,392" marker-end="url(#arrow)"/>
+  <text class="c" x="248" y="448" text-anchor="middle">'now'</text>
+</svg>

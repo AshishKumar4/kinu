@@ -6,12 +6,11 @@ import type { ForkFileSink } from '../identity/fork-sink';
 import type { ForkFileSource } from '../identity/fork';
 import type { ArchiveFileSource, ArchiveFileTarget, ArchivePinnedStore, ArchiveStoreSource, ArchiveStoreTarget } from '../identity/archive';
 import { readSoul } from '../identity/soul';
-import { tolerate } from '../obs/index';
 import { provisionWorkspaceSoul } from './agent-home';
 import { workspacePath, WORKSPACE_ROOT } from './workspace-path';
 import type { WorkspaceBundle, WorkspaceSession } from './nimbus-workspace';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
-import type { CredentialedVfs, SqliteVFS, VfsExportPage, VfsStat } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+import type { SqliteVFS, VfsExportPage } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 
 type FileSessionSource = { session(): Promise<Pick<WorkspaceSession, 'vfs' | 'sql'>> };
 
@@ -85,7 +84,7 @@ function forkSinkOver(store: () => Promise<SqliteVFS>): ForkFileSink {
 
       for (const path of paths) {
         const at = workspacePath(path, WORKSPACE_ROOT);
-        const stat = lstatOrNull(plane, at);
+        const stat = plane.statIfPresent(at, false);
 
         if (stat === null) continue;
 
@@ -109,7 +108,7 @@ function forkSourceOver(store: SqliteVFS): ForkFileSource {
 
       return {
         readdir: (path) => at.readdir(path).map((entry) => entry.name),
-        kind: (path) => lstatOrNull(at, path)?.type ?? null,
+        kind: (path) => at.statIfPresent(path, false)?.type ?? null,
         readFile: (path) => at.readFile(path),
         exportPage: (root, after) => store.exportPage({ at: name, root, after }),
         exportChunks: (hashes, maxBytes) => store.exportChunks(hashes, maxBytes),
@@ -128,16 +127,12 @@ export function createWorkspaceForkSource(bundle: FileSessionSource): ForkFileSo
   };
 }
 
-function lstatOrNull(plane: CredentialedVfs, path: string): VfsStat | null {
-  return tolerate(() => plane.lstat(path), 'enoent') ?? null;
-}
-
 export function workspaceArchiveStore(bundle: FileSessionSource): ArchiveStoreSource {
   const pinnedOver = (store: SqliteVFS, name: string): ArchivePinnedStore => {
     const at = store.at(name, CRED_KERNEL);
 
     return {
-      readdir: (path) => (lstatOrNull(at, path)?.type === 'directory' ? at.readdir(path).map((entry) => entry.name) : []),
+      readdir: (path) => (at.statIfPresent(path, false)?.type === 'directory' ? at.readdir(path).map((entry) => entry.name) : []),
       exportPage: (root, after) => store.exportPage({ at: name, root, after }),
       exportChunks: (hashes, maxBytes) => store.exportChunks(hashes, maxBytes),
       release: async () => { await store.dropSnapshotAsync(name); },
@@ -173,7 +168,7 @@ export function workspaceArchiveTarget(bundle: WorkspaceBundle): ArchiveFileTarg
 
       if (page.after === null) {
         const root = `/${page.root}`;
-        const born = lstatOrNull(kernel, root);
+        const born = kernel.statIfPresent(root, false);
 
         if (born?.type === 'directory') kernel.removeRecursive(root);
         else if (born !== null) kernel.unlink(root);
