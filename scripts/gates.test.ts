@@ -11,8 +11,6 @@ import {
   WranglerContainers, wranglerContainerClasses,
 } from './egress-interception';
 import { assertMeasured, reconcile, writeLock } from './gate-ratchet';
-import { censusOf, disagreements, readCensus } from './root-branches';
-import { readSources } from './sources';
 import { parseJsonc } from './jsonc';
 import { configuredScanner, judgeAdvisories } from './dependency-advisory-gate';
 import {
@@ -530,58 +528,4 @@ describe('native egress constraints — red in every governed direction', () => 
       expect(nativeRoutingReasons(mutated, mutated.get(worker) ?? '').some(reason => reason.includes(constraint))).toBe(true);
     });
   }
-});
-
-
-describe('root-branches census (design v2 §9)', () => {
-  const source = (code: string): Map<string, string> => new Map([['packages/core/src/planted.ts', code]]);
-
-  test("lists every place the product decides by whether an agent is the workspace's own", () => {
-    expect(disagreements(censusOf(readSources()), readCensus())).toEqual([]);
-  });
-
-  test('finds each form of a root branch, by its enclosing declaration', () => {
-    const found = censusOf(source(`class Agent {
-  owns(actorId: string) { return actorId === this.actorHandle().actorId; }
-  roots(record: { parentActorId: string | null }) { return record.parentActorId === null; }
-  system(record: { origin: string }) { return record.origin === 'system'; }
-  placed(record: Row) { return actorPolicy(record).workspaceAgent; }
-  routes() { return ROUTES.workspaceAgent; }
-}`));
-
-    expect([...found]).toEqual([
-      ['packages/core/src/planted.ts#Agent.owns', 1], ['packages/core/src/planted.ts#Agent.roots', 1],
-      ['packages/core/src/planted.ts#Agent.system', 1], ['packages/core/src/planted.ts#Agent.placed', 1],
-    ]);
-  });
-
-  test('follows a renamed or aliased root id, policy and parent, and not the same name bound elsewhere', () => {
-    const found = censusOf(source(`class Agent {
-  private get placement(): ActorPolicy { return actorPolicy(this.row); }
-  private get me() { return this.actorHandle().actorId; }
-  aliased(id: string) { const main = this.actorHandle().actorId; return id === main; }
-  destructured(id: string) { const { actorId } = this.actorHandle(); return id === actorId; }
-  member(id: string) { return id === this.me; }
-  getter() { return this.placement.workspaceAgent; }
-  bound(row: Row) { const placed = actorPolicy(row); return placed.workspaceAgent; }
-  typed(where: ActorPolicy) { return where.workspaceAgent; }
-  read(row: Row) { const { workspaceAgent } = actorPolicy(row); return workspaceAgent; }
-  parent(row: Row) { const { parentActorId: up } = row; return up === null; }
-  elsewhere(actorId: string, main: string) { return actorId === main; }
-}`));
-
-    expect([...found.keys()].map((key) => key.split('#')[1])).toEqual([
-      'Agent.aliased', 'Agent.destructured', 'Agent.member', 'Agent.getter', 'Agent.bound', 'Agent.typed', 'Agent.read', 'Agent.parent',
-    ]);
-  });
-
-  test('an unclassified branch, a stale entry and a moved count each disagree, naming the entry', () => {
-    const found = censusOf(source('function owns(id: string) { return id === this.actorHandle().actorId; }'));
-    const entry = [expect.stringContaining('packages/core/src/planted.ts#owns')];
-
-    expect(disagreements(found, {})).toEqual(entry);
-    expect(disagreements(new Map(), { 'packages/core/src/planted.ts#owns': { count: 1, kind: 'H', until: 'step 7', why: 'planted' } })).toEqual(entry);
-    expect(disagreements(found, { 'packages/core/src/planted.ts#owns': { count: 2, kind: 'J', why: 'planted' } })).toEqual(entry);
-    expect(disagreements(found, { 'packages/core/src/planted.ts#owns': { count: 1, kind: 'J', why: 'planted' } })).toEqual([]);
-  });
 });

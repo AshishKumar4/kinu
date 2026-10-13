@@ -2035,12 +2035,6 @@ function galleryOweIntent(intent: OwedOwnerIntent): JsonValue {
   return { owed: intent.id };
 }
 
-window.addEventListener("gallery:owed-intents", (event) => {
-  if (!(event instanceof CustomEvent)) return;
-  document.documentElement.dataset.galleryOwedIntents = JSON.stringify(v.parse(v.array(OwedOwnerIntentSchema), event.detail));
-  galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["listOwedIntents"] }));
-});
-
 function seedFrameTranscript(transcript: string | null): void {
   if (transcript === "revert") seedGalleryChat(REVERT_THREAD);
 
