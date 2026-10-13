@@ -1,11 +1,13 @@
 /** Where a provider's sign-in ends in its helper window: it tells the tab that opened it, then closes itself. */
 import { useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
-import { announceConnected, sameOriginPath } from "@/lib/connect-window";
+import { announceConnected } from "@/lib/connect-window";
+import { sanitizeReturnTo } from "@/lib/return-to";
 
 export default function ConnectedPage() {
   const [search] = useSearchParams();
-  const next = sameOriginPath(search.get("next"));
+  // `next` comes off a URL anyone can write.
+  const next = sanitizeReturnTo(search.get("next") ?? "/", window.location.origin);
 
   useEffect(() => { announceConnected(next); }, [next]);
 

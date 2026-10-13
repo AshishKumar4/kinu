@@ -561,6 +561,23 @@ describe('account panels', () => {
     });
   });
 
+  test('a `next` naming another site sends the tab home on this one', async () => {
+    await withGallery(async (gallery) => {
+      const page = await gallery.newPage();
+
+      try {
+        // It starts with one slash, but a URL parser reads the backslash as a second one: another host.
+        const onward = page.waitForRequest((request) => request.isNavigationRequest() && !request.url().includes('frame=connected'));
+        await Promise.allSettled([page.goto(`${gallery.origin}/gallery.html?frame=connected&next=${encodeURIComponent('/\\evil.example')}`, { waitUntil: 'load' })]);
+        const reached = new URL((await onward).url());
+
+        expect({ origin: reached.origin, path: reached.pathname }).toEqual({ origin: gallery.origin, path: '/' });
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
   // Production, 2026-10-08: its one sign-in, Cloudflare, shares no name for most accounts; nothing guesses one.
   test('an account its provider shared no name for starts blank, says which provider, wears its email\'s letter, and saves no empty name', async () => {
     await withGallery(async (gallery) => {

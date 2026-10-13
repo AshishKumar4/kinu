@@ -6,9 +6,10 @@ import {
   readSessionToken, setCookie,
 } from './session';
 import {
-  consumeOAuthState, createOAuthState, createSession, revokeSession, sanitizeReturnTo,
+  consumeOAuthState, createOAuthState, createSession, revokeSession,
   type OAuthProfile, type SessionAuthority,
 } from './store';
+import { sanitizeReturnTo } from '../lib/return-to';
 import { escapeHtml, json, KINU_USER_AGENT, sha256Hex } from '@kinu.run/core';
 import { authDocument, loginDocument, type BuiltinSignIn } from '@kinu.run/core';
 import { builtinAccounts } from './builtin';
