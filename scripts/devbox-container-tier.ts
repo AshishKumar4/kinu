@@ -490,7 +490,7 @@ async function main(): Promise<void> {
       };
 
       const sessions = () => sh('for p in Xkasmvnc openbox tint2 Xvfb; do printf "%s=%s " "$p" "$(pgrep -c -x "$p")"; done');
-      const one = 'Xkasmvnc=1 openbox=1 tint2=1 Xvfb=0 ';
+      const one = 'Xkasmvnc=1 openbox=1 tint2=1 Xvfb=0';
 
       // A box whose desktop never opened: the first look starts it, at the screen's size; looks at once share it.
       const first = v.parse(Screen, await desk('screenshot'));

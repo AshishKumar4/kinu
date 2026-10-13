@@ -210,7 +210,7 @@ export function withApprovalGatedFiles(
 function desktopCall(member: string, input: JsonValue): string {
   const shown = JSON.stringify(input);
 
-  return `${member}(${shown.length > 200 ? `${shown.slice(0, 199)}…` : shown})`;
+  return `${member}(${shown.length > 200 ? `${shown.slice(0, 197)}...` : shown})`;
 }
 
 /** Already-wrapped executes, so a provider shared across routers is gated once (idempotent). */

@@ -9,6 +9,7 @@ import { renderActiveSkillsSection, renderSkillsIndexSection } from './skills/re
 import type { ActiveSkillSet, SkillsIndex } from './skills/types';
 import {
   compilePromptSurface,
+  type PromptBackend,
   type PromptExecutorInfo,
   type PromptSurface,
   type PromptSurfaceOptions,
@@ -155,20 +156,21 @@ function sandboxSizeSlots(sizes: SandboxSizes | undefined) {
   };
 }
 
-function renderExecutorLine(
-  exec: PromptExecutorInfo,
-  render: RenderSection,
-  surface: Pick<PromptSurface, 'backend' | 'seesImages'>,
-): string {
-  const { backend } = surface;
+/** What an executor's line says beyond the executor: the backend, and whether the turn's model takes images, as its
+ *  catalog says (absent counts as taking them): one that does not cannot see the computer's desktop. */
+interface ExecutorLineContext {
+  readonly backend: PromptBackend | undefined;
+  readonly seesImages: boolean;
+}
 
+function renderExecutorLine(exec: PromptExecutorInfo, render: RenderSection, { backend, seesImages }: ExecutorLineContext): string {
   switch (exec.name) {
       case 'workspace':
         return render(WORKSPACE_EXECUTOR_LINE, {
           cliLocal: backend === 'cli-local', memoryMb: String(WORKSPACE_MEMORY_MB),
         });
       case 'computer':
-        return render(COMPUTER_EXECUTOR_LINE, { ...sandboxSizeSlots(exec.sizes), blind: !surface.seesImages });
+        return render(COMPUTER_EXECUTOR_LINE, { ...sandboxSizeSlots(exec.sizes), blind: !seesImages });
       case 'device':
         return render(DEVICE_EXECUTOR_LINE, {});
       default:
@@ -176,7 +178,9 @@ function renderExecutorLine(
   }
 }
 
-function renderExecutorSection(surface: PromptSurface, render: RenderSection): string {
+function renderExecutorSection(surface: PromptSurface, render: RenderSection, seesImages: boolean): string {
+  const context: ExecutorLineContext = { backend: surface.backend, seesImages };
+
   const tools = surface.builtinTools;
 
   if (!hasTool(tools, 'eval') && !hasTool(tools, 'shell')) return '';
@@ -190,8 +194,8 @@ function renderExecutorSection(surface: PromptSurface, render: RenderSection): s
   const devices = executors.filter((exec) => exec.name !== 'workspace');
 
   const lines = [
-    ...devices.map((exec) => renderExecutorLine(exec, render, surface)).filter((line) => line !== ''),
-    ...(workspace ? [renderExecutorLine(workspace, render, surface)] : []),
+    ...devices.map((exec) => renderExecutorLine(exec, render, context)).filter((line) => line !== ''),
+    ...(workspace ? [renderExecutorLine(workspace, render, context)] : []),
   ];
 
   const previewExecutors = executors.filter((exec) => exec.capabilities?.includes('net_inbound'));
@@ -349,7 +353,7 @@ export function buildSystemPromptParts(
   const shared = [
     renderOperatingGuidance(surface, render),
     // Execution doctrine before the tool index: a rule read after the menu is applied late.
-    renderExecutorSection(surface, render),
+    renderExecutorSection(surface, render, opts.model?.seesImages !== false),
     renderToolsSection(surface, render),
     hasTool(surface.builtinTools, 'file') && hasTool(surface.builtinTools, 'shell') && hasTool(surface.builtinTools, 'eval')
       ? render(TOOL_USE_SECTION, { familyDelta: promptFamilyDelta(TOOL_USE_SECTION.id, surface.model.family) })
