@@ -134,6 +134,18 @@ export const ControlOverviewSchema = v.object({
 
 export type ControlOverview = v.InferOutput<typeof ControlOverviewSchema>;
 
+/** The monitor's open incident, as `MonitorDO.listIncidents` answers it and the control page reads it. */
+export const MonitorIncidentSchema = v.object({
+  probe: v.string(),
+  detail: v.string(),
+  openedAt: v.number(),
+  /** Null while the alert is still owed. */
+  alertedAt: v.nullable(v.number()),
+  failures: v.number(),
+});
+
+export type MonitorIncident = v.InferOutput<typeof MonitorIncidentSchema>;
+
 export interface UserObservation {
   userId: string;
   email: string;

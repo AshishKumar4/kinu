@@ -3,7 +3,7 @@ import { exists, readText, type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.j
 // real bytes and a real pointer.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { sqlOver, createMemoryVfs, createTestRuntime } from '@kinu.run/test-utils';
+import { createMemoryVfs, createTestRuntime } from '@kinu.run/test-utils';
 import { INITIAL_SCAFFOLD_SOURCE, defaultLoopOrigin, seedActorLoop } from '../src/scaffold/bootstrap';
 import { initScaffoldTables } from '../src/scaffold/schemas';
 import { getCurrentScaffoldVersion } from '../src/scaffold/versions';
@@ -17,6 +17,7 @@ import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { Identity, SqlExecutor } from '../src/types/primitives';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
+import { wrapDatabase } from '../src/identity/inline-primitives';
 
 const PARENT_V1 = '// parent v1 — the promoted loop\nasync function* run(rt, task) { yield "v1"; }\n';
 
@@ -48,7 +49,7 @@ function scaffoldIdentity(name: string, vfs: VFS, sql: SqlExecutor, actorId: str
 
 function build(): Fixture {
   const db = new Database(':memory:');
-  const sql = sqlOver(db);
+  const sql = wrapDatabase(db).sql;
   const execRaw = (ddl: string): void => { db.exec(ddl); };
 
   execRaw(WORKSPACE_IDENTITY_DDL);

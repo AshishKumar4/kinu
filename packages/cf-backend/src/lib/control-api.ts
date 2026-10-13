@@ -6,25 +6,13 @@ import { Effect } from 'effect';
 import { JsonValueSchema, pageSchema, type JsonValue, type Page } from '@kinu.run/core';
 import {
   ControlAuditRowSchema, ControlMetricsSchema, ControlOverviewSchema, ControlUserRowSchema, ControlWorkspaceRowSchema,
-  FeedbackRecordSchema, type ControlAuditRow, type ControlFeedbackRow, type ControlMetrics, type ControlOverview,
-  type ControlUserRow, type ControlWorkspaceRow,
+  FeedbackRecordSchema, MonitorIncidentSchema, type ControlAuditRow, type ControlFeedbackRow, type ControlMetrics,
+  type ControlOverview, type ControlUserRow, type ControlWorkspaceRow, type MonitorIncident,
 } from '@kinu.run/core/control-plane';
 import { settle, tolerateAsync } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import type { ControlAction } from '../control-plane/actions';
 import { refusal, respond } from './http';
-
-/** The monitor's open incident, as `MonitorDO.listIncidents` answers it. */
-const MonitorIncidentSchema = v.object({
-  probe: v.string(),
-  detail: v.string(),
-  openedAt: v.number(),
-  /** Null while the alert is still owed. */
-  alertedAt: v.nullable(v.number()),
-  failures: v.number(),
-});
-
-export type MonitorIncident = v.InferOutput<typeof MonitorIncidentSchema>;
 
 const IncidentsSchema = v.object({ incidents: v.array(MonitorIncidentSchema) });
 

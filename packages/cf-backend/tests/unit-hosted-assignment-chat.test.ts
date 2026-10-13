@@ -3,11 +3,11 @@
  * naming its hirer (owner m1768, EVENTS-ONE-API-0926), and the answer lands under it.
  */
 import { expect, test } from 'bun:test';
-import { sqlOver } from '@kinu.run/test-utils';
 import {
   agentSql, driveUntil, gatewayWorkspace, hostedSubordinateHarness, wakeForDelegatedTask,
 } from './helpers/actor-harness';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
+import { wrapDatabase } from '@kinu.run/core/identity';
 
 test("a durable grandchild that only worked its assignment shows the task, from its hirer, and its answer", async () => {
   const gateway = stubAiBinding((run) => {
@@ -32,7 +32,7 @@ test("a durable grandchild that only worked its assignment shows the task, from 
     name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate',
   });
 
-  const sql = sqlOver(workspace.db);
+  const sql = wrapDatabase(workspace.db).sql;
 
   const grandchild = (): string | undefined => sql<{ id: string }>`
     SELECT actor_id AS id FROM workspace_actors WHERE parent_actor_id = ${middle.actor.handle.actorId}`[0]?.id;
