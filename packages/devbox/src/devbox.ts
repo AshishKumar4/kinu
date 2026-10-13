@@ -2250,17 +2250,6 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return { urlToken: spec.token };
   }
 
-  notePortRemoved(port: number): Promise<void> {
-    return settle(attempt('io', async () => {
-      this.ctx.storage.kv.delete(EXPOSED_PREFIX + port);
-
-      return await this.#resources.run(portScope(port), async () => {
-        await this.ctx.storage.delete(`${PORT_SPEC_PREFIX}${port}`);
-        this.stampInteraction();
-      });
-    }));
-  }
-
   #unready(): string | undefined {
     const refused = this.#refused;
 
@@ -2425,7 +2414,12 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
    *  readiness: a port must stay revocable on a box that is not attached. */
   unexposePort(port: number): Promise<void> {
     return settle(attempt('io', async () => {
-      return await this.notePortRemoved(port);
+      this.ctx.storage.kv.delete(EXPOSED_PREFIX + port);
+
+      return await this.#resources.run(portScope(port), async () => {
+        await this.ctx.storage.delete(`${PORT_SPEC_PREFIX}${port}`);
+        this.stampInteraction();
+      });
     }));
   }
 

@@ -95,7 +95,6 @@ export interface SandboxHandle {
   probePort(port: number): Promise<boolean>;
   /** `stamp` read up holders' ancestry; null while down (never starts it). */
   portListeners(stamp: string, ports?: readonly number[]): Promise<readonly SandboxPortListener[] | null>;
-  notePortRemoved(port: number): Promise<void>;
   /** Records the size; a container running at another size restarts at it, and one not running stays so. */
   resize(size: string): Promise<SandboxResize>;
   answerRest(answer: 'now' | 'keep'): Promise<SandboxRestAnswer>;
@@ -504,8 +503,8 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
         }
 
         try {
+          // The box's revocation removes the port's row and withdraws its preview: nothing more to remove here.
           await withSandboxRetry(() => touch(() => Promise.resolve(handle.unexposePort(port))));
-          await handle.notePortRemoved(port);
 
           return `unexposed ${port}`;
         } catch (err) {

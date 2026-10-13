@@ -118,6 +118,25 @@ describe('a replace the folder checks against what was read', () => {
     expect(answers.find((answer) => !answer.ok)).toEqual({ ok: false, sha256: sha256(readFileSync(target, 'utf8')) });
   });
 
+  // #54: the replacements were ordered by name, so two names for one file each compared and wrote at once.
+  test('two names for one file replacing the same read at once: exactly one lands', async () => {
+    const folder = scratchDir('mount-plane-hardlinks');
+    const first = join(folder, 'plan.md');
+    const second = join(folder, 'plan-link.md');
+    writeFileSync(first, 'read by both');
+    linkSync(first, second);
+    const plane = localFilePlane({ folder, space: join(folder, 'space'), views: [], checkpoints: undefined });
+    const replace = (path: string, text: string) => present(plane.writeFileIfDigest?.bind(plane), 'the digest write')(path, bytes(text), sha256('read by both'));
+
+    for (let round = 0; round < 20; round += 1) {
+      writeFileSync(first, 'read by both');
+      const answers = await Promise.all([replace(first, 'through the first name'), replace(second, 'through the second name')]);
+
+      expect(answers.filter((answer) => answer.ok)).toHaveLength(1);
+      expect(answers.find((answer) => !answer.ok)).toEqual({ ok: false, sha256: sha256(readFileSync(first, 'utf8')) });
+    }
+  });
+
   // 2026-10-12 security review: a temp file and a rename replaced a read-only file and dropped its owner, group and ACLs.
   test('a replaced file is the same file, as a plain write leaves it, and a read-only one is refused', async () => {
     const folder = scratchDir('mount-plane-in-place');
