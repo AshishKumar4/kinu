@@ -32,11 +32,6 @@ export function presetBrand(presetId: string | null): BrandName | undefined {
 }
 
 /** A preset card's own words for a server's state; the tone is every view's (`mcpServerStatus`). */
-const PRESET_WORDS = {
-  ready: 'Connected', connected: 'Connected', authenticating: 'Needs sign-in', failed: 'Failed',
-  connecting: 'Connecting', discovering: 'Connecting', unknown: 'Unknown',
-} satisfies Record<McpServerSummary['status'], string>;
-
 function PresetMenu({ preset, status, onRemove }: {
   preset: McpPreset;
   status: McpServerSummary['status'];
@@ -55,7 +50,7 @@ function PresetMenu({ preset, status, onRemove }: {
         aria-label={`${preset.title} options`} onClick={() => setOpen((value) => !value)}
         className={`${PLUGIN_PILL} transition-colors hover:bg-[var(--c-elevated)] hover:p-text`}>
         <StatusDot tone={mcpServerStatus(status).tone} />
-        {PRESET_WORDS[status]}
+        {mcpServerStatus(status).label}
         <CaretDownIcon size={9} />
       </button>
       {open && (
@@ -161,7 +156,7 @@ function PresetRow({ preset, server, appConfigured, onChanged }: {
   return (
     <>
     {dialog}
-    <PluginRow source={preset.id} state={server === undefined ? 'Not added' : PRESET_WORDS[server.status]}
+    <PluginRow source={preset.id} state={server === undefined ? 'Not added' : mcpServerStatus(server.status).label}
       name={preset.title} description={preset.description}
       tile={<BrandMark brand={brand} size={22} />}
       trailing={trailing}
