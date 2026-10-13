@@ -2197,7 +2197,7 @@ export { resumeIndexFromLastEventId } from './protocol/run-events-cursor';
 export { buildTree, explorationForkTree, type MctsRow } from './read-models/fork-tree-rows';
 
 export {
-  executorLabel, executorSortKey, isActiveExecutionDevice, isExecutorActive,
+  executorLabel, executorSortKey, isActiveExecutionDevice,
   pickDefaultExecutor, type ExecutorAvailability,
 } from './read-models/executors';
 
