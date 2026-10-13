@@ -15,6 +15,7 @@ import { describeGpuNodes, effectiveDeviceMode, sandboxReasonFix } from '@kinu.r
 import { enforceOwnerOnly, ensureSecretDir } from '@kinu.run/cli-backend';
 import { AGENT_HOME, ensureAgentHome, loadConfigFile, requireAuthConfig, resolveCloudSession, updateConfigFile } from './config';
 import { listCloudDevices, registerCloudDevice, type CloudDevice, type CloudDeviceSandbox } from './cloud-api';
+import { buildDaemonFiles, type DaemonFiles } from './daemon-build';
 import { readDaemonLogTail, rotateDaemonLogIfNeeded } from './daemon-log';
 import { issuedDeviceConnected, waitForAnswer, type StoppableWaitOptions } from '@kinu.run/core';
 import { parseDeviceConfig, type DeviceConfig } from '../../pc-agent/src/index.js';
@@ -33,24 +34,22 @@ const VERSION_STAMP_PATH = join(AGENT_HOME, 'pc-agent.version');
 /** Written by the daemon while its successor starts; with a stale pidfile, the successor died and `.prev` last ran. */
 const UPDATE_PENDING_PATH = join(AGENT_HOME, 'pc-agent.update-pending');
 
-interface DaemonFiles {
-  readonly daemon: string;
-  /** Every file the daemon requires beside itself. */
-  readonly siblings: readonly { readonly name: string; readonly source: string }[];
-}
-
 /**
- * The daemon and its siblings, read where the release or the source tree keeps them, never imported as text: the CLI
- * imports the daemon (its device.json schema) and chatgpt.js as modules, and Bun gives one file one loader (21 of 40
- * builds failed with chatgpt.js imported both ways). The release keeps them in `pc-agent/` beside the CLI as they
- * install (scripts/build-cli-dist.sh); the source tree keeps the daemon as index.js, with declarations beside it.
+ * The daemon and its siblings as they install, never imported as text: the CLI imports the daemon (its device.json
+ * schema) and chatgpt.js as modules, and Bun gives one file one loader (21 of 40 builds failed with chatgpt.js imported
+ * both ways). The release keeps them built in `pc-agent/` beside the CLI (scripts/build-cli-dist.sh); the source tree
+ * builds them as the release did.
  */
-function daemonFiles(): DaemonFiles {
+function daemonFiles(): Effect.Effect<DaemonFiles, KinuError> {
   const release = join(import.meta.dir, 'pc-agent');
-  const [dir, daemon] = existsSync(join(release, 'pc-agent.js')) ? [release, 'pc-agent.js'] : [join(import.meta.dir, '..', '..', 'pc-agent', 'src'), 'index.js'];
-  const siblings = readdirSync(dir).filter((name) => name !== daemon && !name.endsWith('.d.ts') && (name.endsWith('.js') || name.endsWith('.json'))).sort();
 
-  return { daemon: readFileSync(join(dir, daemon), 'utf8'), siblings: siblings.map((name) => ({ name, source: readFileSync(join(dir, name), 'utf8') })) };
+  if (!existsSync(join(release, 'pc-agent.js'))) return buildDaemonFiles();
+
+  return io('reading the daemon files this CLI ships', () => {
+    const siblings = readdirSync(release).filter((name) => name !== 'pc-agent.js' && (name.endsWith('.js') || name.endsWith('.json'))).sort();
+
+    return { daemon: readFileSync(join(release, 'pc-agent.js'), 'utf8'), siblings: siblings.map((name) => ({ name, source: readFileSync(join(release, name), 'utf8') })) };
+  });
 }
 
 export const DAEMON_LOG_PATH = join(AGENT_HOME, 'pc-agent.log');
@@ -423,7 +422,7 @@ function installDaemonFiles(device: { origin: string; userId: string; deviceId: 
       root: process.cwd(),
     }, null, 2)}\n`;
 
-    const files = yield* io('reading the daemon files this CLI ships', daemonFiles);
+    const files = yield* daemonFiles();
     const scriptTemporary = yield* stageInstallFile(SCRIPT_PATH, files.daemon, 0o700);
 
     // Siblings ship with the release, never fetched.

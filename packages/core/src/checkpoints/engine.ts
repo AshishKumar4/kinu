@@ -1,4 +1,4 @@
-// Shadow-git checkpoint engine, the one both the CLI and the device daemon run; the daemon carries a generated copy.
+// Shadow-git checkpoint engine, the one both the CLI and the device daemon run.
 // It imports no value: the host hands it the filesystem, paths, the platform's dirs, hashing and git, so the copy
 // runs in the daemon's dependency-free JavaScript unchanged. One set of rules:
 //   - no wall clock on git: it ends on its own, and a bounded buffer keeps this process's heap;

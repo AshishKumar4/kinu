@@ -122,14 +122,18 @@ mkdir -p "$stage"
 # The device daemon travels inside every platform artifact as well, beside the
 # CLI that embeds it: a daemon updating itself downloads this archive and lands
 # these files, and the stamp beside them is the build its HELLO then reports.
-# Run once here, as the CLI is below, so a daemon that cannot load never ships.
+# Each file is built with the core modules it requires (packages/cli/src/daemon-build.ts),
+# as a source-tree `kinu connect` builds it. Run once here, as the CLI is below,
+# so a daemon that cannot load never ships.
 mkdir -p "$stage/pc-agent"
-cp "$ROOT/packages/pc-agent/src/index.js" "$stage/pc-agent/pc-agent.js"
-cp "$ROOT/packages/pc-agent/src/sandbox.js" "$stage/pc-agent/sandbox.js"
-cp "$ROOT/packages/pc-agent/src/pty.js" "$stage/pc-agent/pty.js"
-cp "$ROOT/packages/pc-agent/src/update.js" "$stage/pc-agent/update.js"
-cp "$ROOT/packages/pc-agent/src/chatgpt.js" "$stage/pc-agent/chatgpt.js"
-cp "$ROOT/packages/core/src/execution/device-protocol.json" "$stage/pc-agent/device-protocol.json"
+(cd "$ROOT" && "$BUN" -e '
+  const [module, into] = process.argv.slice(1);
+  const { buildDaemonFiles } = await import(module);
+  const { settle } = await import("@kinu.run/core/obs");
+  const { daemon, siblings } = await settle(buildDaemonFiles());
+  await Bun.write(`${into}/pc-agent.js`, daemon);
+  for (const sibling of siblings) await Bun.write(`${into}/${sibling.name}`, sibling.source);
+' "$ROOT/packages/cli/src/daemon-build.ts" "$stage/pc-agent") || { echo "build-cli-dist: the device daemon does not build" >&2; exit 1; }
 printf '%s\n' "$version" > "$stage/pc-agent/pc-agent.version"
 daemon_stamp="$(KINU_HOME="$stage/pc-agent" "$BUN" "$stage/pc-agent/pc-agent.js" --selftest 2>&1)" || {
   echo "build-cli-dist: the shipped daemon failed its selftest: $daemon_stamp" >&2

@@ -1,7 +1,6 @@
 /**
  * One checkpoint engine, one set of rules: the CLI's checkpoints and the device daemon's are both core's
- * `checkpoints/engine.ts`, the daemon's a generated copy. Each rule the two once kept differently is asserted here on
- * both, and the daemon's copy is held equal to a fresh generation of the source.
+ * `checkpoints/engine.ts`, each over its own host. Each rule the two once kept differently is asserted here on both.
  */
 import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';

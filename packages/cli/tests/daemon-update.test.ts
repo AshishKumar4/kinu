@@ -286,7 +286,8 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
 
   test('a build that ships a daemon file this one never had lands it, and comes up on it', async () => {
     // The new daemon requires a module the running build does not ship: the archive's own file list says what lands.
-    const daemon = `${DAEMON_FILES['pc-agent.js']}\nrequire('./added.js');\n// build ${NEW}\n`;
+    // A built daemon is one CommonJS wrapper, so the require goes inside it, first.
+    const daemon = `${DAEMON_FILES['pc-agent.js'].replace('"use strict";', '"use strict";require("./added.js");')}\n// build ${NEW}\n`;
     const served = hub({ served: NEW, archive: await daemonArchive({ ...DAEMON_FILES, 'pc-agent.js': daemon, 'added.js': 'module.exports = {};\n' }, NEW) });
     const home = installedMachine(served.origin, OLD);
     startPipedDaemon(home, await releaseSigningEnv());

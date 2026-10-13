@@ -51,7 +51,7 @@ function nodeCheckpointHost(): CheckpointHost {
   };
 }
 
-/** The CLI's agent over core's one checkpoint engine (the device daemon runs a generated copy of it). */
+/** The CLI's agent over core's one checkpoint engine, which the device daemon runs too. */
 export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoints {
   const engine = createCheckpointEngine(nodeCheckpointHost(), {
     base: opts.base ?? path.join(kinuHome(), 'checkpoints'),

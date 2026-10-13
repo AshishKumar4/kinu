@@ -1,4 +1,4 @@
-/** Store-format parity: the TS engine and the pc-agent daemon engine (which carries core's format, generated) restore each other's snapshots. */
+/** Store-format parity: the CLI's host and the pc-agent daemon's, over core's one engine, restore each other's snapshots. */
 import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';
 import { createRequire } from 'node:module';
