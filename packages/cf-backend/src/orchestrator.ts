@@ -245,8 +245,8 @@ import {
   WorkspacePlanReferenceSchema,
 } from "@kinu.run/core";
 import type { MctsSearchRunSummary, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
-import { Cause, Effect } from 'effect';
-import { attempt, authoredRefusal, classify, CODE_IS_REFUSAL, diagnostics, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
+import { Cause, Effect, type Exit } from 'effect';
+import { attempt, authoredRefusal, classify, CODE_IS_REFUSAL, diagnostics, hold, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import type { NameOrigin } from "@kinu.run/core";
 import { deliverCloudFork, type ForkFrameAck } from "./user/workspace-fork";
@@ -1021,7 +1021,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         // Asked while a Stop of the agent's is owed, it was queued before that Stop, which its isolate takes first.
         if (await this.stopReplayed(actorId)) return settleSync(Effect.fail(new KinuError('cancelled', `Task ${bound.turnId} was stopped.`)));
         // A turn opens on the account's settings as they are now (`accountSettingsAtOpen`).
-        await this.accountSettingsAtOpen();
+        await this.openingAccount(actorId, false);
 
         return await this.agentTurns.prepare(actorId, bound);
       },
@@ -1035,11 +1035,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         // As a run's: an opening asked while a Stop is owed was queued before it.
         if (await this.stopReplayed(actorId)) return settleSync(Effect.fail(new KinuError('cancelled', `Turn ${request.turnId} was stopped.`)));
-        this.openingReads(actorId);
 
         try {
           // A turn opens on the account's settings as they are now; a chat built with no turn reads what is held.
-          await this.accountSettingsAtOpen();
+          await this.openingAccount(actorId, true);
 
           return await this.agentTurns.prepareChat(actorId, request);
         } finally {
@@ -1331,6 +1330,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
           if (new AgentReports(this.boundSql).release(record.actorId)) this.agentReportMoved(record.actorId);
           this.agentsWorking.delete(record.actorId);
+          this.openingAccountDropped(record.actorId);
         }
 
         if (own && retirement.destroy) this.dropAgentFacet(record.storageKey);
@@ -1797,8 +1797,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /**
    * The account reads a turn's opening makes, each in flight beside its settings revision read rather than after it:
-   * written as its preparation starts, for that preparation's surface alone, which takes them; its preparation drops
-   * what was not taken as it ends. An agent seated nowhere yet reads them as its surface is built.
+   * written as its admission or its preparation starts them (`openingAccount`), for that preparation's surface alone,
+   * which takes them; its preparation drops what was not taken as it ends, and so do a run's preparation, the agent's
+   * rest and its retirement (`openingAccountDropped`). An agent seated nowhere yet reads them as its surface is built.
    */
   private readonly openingPlanes = new Map<string, SourcePlanes>();
 
@@ -1806,6 +1807,38 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const seat = this.actorHost().hosted(actorReferenceOf(this.liveAgentOf(actorId)));
 
     if (seat !== null) this.openingPlanes.set(actorId, this.sourcePlanes(seat.runtime, actorReach(actorPolicy(seat.record)), true));
+  }
+
+  /**
+   * The settings revision read of an idle agent's next opening, with its planes, started as the delivery that opens its
+   * work crosses (`admit`): they reach the owner's object before the tile that admission moves, whose write would hold
+   * their answers behind its flush. Written there; taken by the agent's next preparation (`openingAccount`); dropped
+   * when the agent tells it rests or is retired (`openingAccountDropped`).
+   */
+  private readonly accountAtOpen = new Map<string, Promise<Exit.Exit<void, KinuError>>>();
+
+  private openingAccountStarted(actorId: string): void {
+    if (this.accountAtOpen.has(actorId)) return;
+    this.accountAtOpen.set(actorId, hold(attempt({ doing: "reading the account's settings as an agent's work opens", otherwise: 'unavailable' }, () => this.accountSettingsAtOpen())));
+    this.openingReads(actorId);
+  }
+
+  /** A preparation's account reads: those its admission started, or started now; a run's surface takes no planes. */
+  private async openingAccount(actorId: string, turn: boolean): Promise<void> {
+    const started = this.accountAtOpen.get(actorId);
+
+    this.accountAtOpen.delete(actorId);
+
+    if (!turn) this.openingPlanes.delete(actorId);
+    else if (started === undefined) this.openingReads(actorId);
+
+    if (started === undefined) await this.accountSettingsAtOpen();
+    else await settle(await started);
+  }
+
+  private openingAccountDropped(actorId: string): void {
+    this.accountAtOpen.delete(actorId);
+    this.openingPlanes.delete(actorId);
   }
 
   /** A turn's source reads: its opening's, taken, or started now. */
@@ -2756,12 +2789,23 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     transaction: (body) => this.ctx.storage.transactionSync(body),
     wake: (actorId, at) => this.owedWake(actorId, at ?? Date.now() + RECOVERY_BACKOFF_CEILING_MS),
     admit: async (actorId, delivery) => {
-      const { answer, owes } = await (await this.preArmed(actorId, () => this.agentCalls(actorId))).admit(this.agentSnapshot(actorId), delivery);
+      // An agent at rest opens its work on what crosses: its opening's account reads go out ahead of its tile.
+      if (!this.agentsWorking.has(actorId)) this.openingAccountStarted(actorId);
+      let working = false;
 
-      // What it owes once it took the input, carried by the answer.
-      if (owes !== null) await this.agentOwes(actorId, owes);
+      try {
+        const { answer, owes } = await (await this.preArmed(actorId, () => this.agentCalls(actorId))).admit(this.agentSnapshot(actorId), delivery);
 
-      return answer;
+        working = owes?.report.working === true;
+
+        // What it owes once it took the input, carried by the answer.
+        if (owes !== null) await this.agentOwes(actorId, owes);
+
+        return answer;
+      } finally {
+        // No work opened on it: a later opening reads the account as it is then.
+        if (!working) this.openingAccountDropped(actorId);
+      }
     },
     eventLog: (actorId) => new EventLog(this.watchedExec, this.agentBound(actorId).handle),
     live: (actorId) => this.liveActor(actorId),
@@ -2928,11 +2972,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     // A retired agent's answer arms nothing: tearing it down ended its wake.
-    if (!live) return await this.agentWakes.owes(actorId, null);
+    if (!live) {
+      this.openingAccountDropped(actorId);
+
+      return await this.agentWakes.owes(actorId, null);
+    }
+
     // A rest told while a delivery is owed it keeps the wake that crosses it.
     await this.agentWakes.owes(actorId, next ?? (this.deliveriesOwed(actorId) ? Date.now() + RECOVERY_BACKOFF_CEILING_MS : null));
 
     if (next !== null) return;
+    this.openingAccountDropped(actorId);
     await this.closeLostChatTurn(actorId);
     this.releaseIdleHosted(actorReferenceOf(this.liveAgentOf(actorId)));
 
