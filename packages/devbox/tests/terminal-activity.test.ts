@@ -9,7 +9,7 @@ import { INCIDENT_PREFIX } from '../src/incidents';
 import { DEFAULT_DEVBOX_POLICY, LAST_INTERACTION_KEY, QUIET_SINCE_KEY } from '../src/lifecycle';
 import { Processes } from '../src/processes';
 import type { StoredValue } from '../src/storage';
-import { harness, wakeWhileArmed } from './support/devbox-harness';
+import { TEST_BOX_ID, harness, wakeWhileArmed } from './support/devbox-harness';
 
 /** The shipped policy with a test-length probe: nothing here is about budgets. */
 class TestBox extends TestDevbox<unknown> {
@@ -106,7 +106,7 @@ describe("only the box's own use holds it", () => {
     const { box } = harness(TestBox);
     await box.devboxStartup();
 
-    await box.getExposedPorts('previews.example');
+    await box.getExposedPorts();
     await box.portListeners('KINU_JOB_ID', [8001]);
 
     expect((await box.devboxState()).lastInteractionAt).toBeUndefined();
@@ -375,7 +375,7 @@ describe('an open preview socket is the box\'s use', () => {
     try {
       setSystemTime(start);
       await box.devboxStartup();
-      await box.fetch(new Request('https://box/_devbox/preview/5173/tok5173/hmr', { headers: { upgrade: 'websocket' } }));
+      await box.fetch(new Request(`https://5173-${TEST_BOX_ID}-tok5173.preview.test/hmr`, { headers: { upgrade: 'websocket' } }));
       const visitor = pairs[0]?.[0];
       visitor?.send('from the visitor');
       app[1].send('from the app');

@@ -7,12 +7,12 @@ import { nativeStartClock } from './native-clock';
 import type { DevboxExecOptions, ExecResult, ReadOptions, FileResult, ListFilesOptions, FileMetadata, GatewayBindings } from './contracts';
 import { listFiles as readDirectory } from './file-listing';
 import { writeFileIfDigest as writeFileIfDigestInGuest, type DigestWriteRequest } from './file-digest-write';
-import { DEFAULT_EXCLUDES, DiskChainStateSchema, DiskChainStorage, diskChain, recoveryNotice, type DiskChain, type DiskChainPorts } from './disk-chain';
+import { DEFAULT_EXCLUDES, DiskChainStateSchema, DiskChainStorage, UnboundStorage, diskChain, recoveryNotice, type DiskChain, type DiskChainPorts } from './disk-chain';
 import { STORE_MOUNT, chainStoreRoot, storeObjectUrl } from './store-gateway';
 import { snapshotRegistry, type SnapshotRegistry } from './snapshot-registry';
 import { Snapshots } from './snapshots';
 import {
-  GOLDEN_BASE, GOLDEN_ENTRYPOINT, GOLDEN_REFRESH_MS, GoldenStateSchema, buildGolden, goldenFor, pipeParts, refreshTools,
+  GOLDEN_BASE, GOLDEN_ENTRYPOINT, GOLDEN_NAME, GOLDEN_REFRESH_MS, GoldenStateSchema, buildGolden, goldenFor, pipeParts, refreshTools,
   type GoldenAnswer, type GoldenPorts,
 } from './golden';
 import artifact from '../block-lower/upstream.json';
@@ -20,10 +20,12 @@ import { ContainerRoutes, type OutboundPolicy } from './gateway';
 import { terminalSocket, resetTerminal } from './terminal';
 import { bridgeSockets } from './socket-bridge';
 import { DESKTOP_PORT, DESKTOP_START } from './desktop';
+import { LABEL_LIMIT, LABEL_NAME, ZoneSchema, previewAddress, type PreviewAddress } from './preview';
 import { Deferred, Effect, Result } from 'effect';
 
 import {
   DEFAULT_DEVBOX_POLICY,
+  PORT_TOKEN_LENGTH,
   generatePortToken,
   healthProbeCommand,
   healthProbeSilent,
@@ -79,7 +81,6 @@ import {
   type CheckpointKind,
   type CheckpointOutcome,
   type DevboxStorage,
-  type DevboxStore,
   type StoredValue,
 } from './storage';
 
@@ -87,19 +88,20 @@ import {
  *  attempt, and `#armStartup` early-returns on a pinned attempt, so nothing re-arms. */
 const CONTAINER_STOP_ATTEMPTS = 50;
 
-interface UntimedExecution {
+interface RunningExec {
   cancelled: boolean;
   started?: Promise<ExecProcess>;
 }
 
-interface UntimedOptions {
+/** An `execId` makes a command once per id (D48). */
+interface ExecOptions {
   readonly cwd?: string;
-  readonly execId: string;
   readonly env?: Readonly<Record<string, string>>;
+  readonly execId?: string;
 }
 
 function launchUnknown(execId: string): DevboxError {
-  return new DevboxError('indeterminate', `untimed exec ${execId} was launched before, and its outcome cannot be read here; it was not launched again`);
+  return new DevboxError('indeterminate', `exec ${execId} was launched before, and its outcome cannot be read here; it was not launched again`);
 }
 
 /** `port-listeners STAMP [PORT...]`: `port pid stamp command` per socket holder; /proc, as the image has no `ss`. */
@@ -173,7 +175,7 @@ const BOOT_ID_KEY = 'devbox:boot-id';
 /** Survives a mid-restore object reset; turnover clears it, so no stale phase admits another container. */
 const SETTLED_KEY = 'devbox:restoration';
 
-const UNTIMED_CLAIM_PREFIX = 'devbox:untimed:';
+const EXEC_CLAIM_PREFIX = 'devbox:exec:';
 
 const REPLACED_COUNT_KEY = 'devbox:replaced-count';
 
@@ -193,7 +195,10 @@ const DISK_STATE_KEY = 'devbox:disk-chain';
 /** Where the box stamps the container's identity: on the disk a replacement does not keep (P1). */
 const BOOT_ID_PATH = '/tmp/devbox-boot-id';
 
-const NO_START_IMAGE = 'no image to start: name it `devbox` in the container `images` map';
+/** A loopback Durable Object namespace's tag in `ctx.exports`; an entrypoint's stub answers any property as an RPC (D85). */
+const NAMESPACE_TAG = '[object LoopbackDurableObjectNamespace]';
+
+const NO_NAMESPACE = 'no Durable Object namespace among the Worker\'s exports accepts this box\'s id: export its class from the Worker';
 
 const NO_CONTAINER = 'this server runs no containers, as a local dev server never does: a box runs on a deployment';
 
@@ -218,7 +223,27 @@ const GOLDEN_KEY = 'devbox:golden';
 
 const AWAITING_GOLDEN_KEY = 'devbox:awaiting-golden';
 
-type StartSource = { readonly kind: 'image' } | { readonly kind: 'own' | 'golden'; readonly id: string };
+/** A snapshot a box starts from, and the namespace that gave it, which a failed wake asks for the next one. */
+type StartSource = { readonly kind: 'own' | 'golden'; readonly id: string; readonly boxes: Siblings };
+
+/** What a box reaches on the boxes of its own namespace: the golden builder, and a box it tells (D65). */
+interface Siblings {
+  idFromString(id: string): DurableObjectId;
+  get(id: DurableObjectId): { goldenReady(answer: GoldenAnswer): Promise<void> };
+  getByName(name: string): { goldenFor(box: string, lost?: string): Promise<GoldenAnswer> };
+}
+
+/** By the tag alone: a namespace's members are the platform's, and an entrypoint is told apart only by its tag (M2). */
+const NamespaceSchema = v.custom<Siblings>((entry) => Object.prototype.toString.call(entry) === NAMESPACE_TAG);
+
+/** A Worker's exports or env, read by name. */
+const BindingsSchema = v.record(v.string(), v.unknown());
+
+/** An R2 binding as the store reads it. */
+const BucketSchema = v.custom<R2Bucket>((bound) => v.is(v.looseObject({ get: v.function(), list: v.function() }), bound));
+
+/** The registry credentials a host's env supplies (D65): a Containers token and the account it is scoped to. */
+const RegistryEnvSchema = v.object({ DEVBOX_REGISTRY_TOKEN: v.pipe(v.string(), v.minLength(1)), CLOUDFLARE_ACCOUNT_ID: v.pipe(v.string(), v.minLength(1)) });
 
 /** A box with nothing to start from waits on the golden object, and is ready as its answer says (D65, D79). */
 type BaseWait = Extract<GoldenAnswer, { readonly kind: 'pending' }>;
@@ -245,10 +270,13 @@ function logLate(step: string): (failure: LateStartFailure) => void {
   };
 }
 
-interface PortExposeOptions {
-  hostname: string;
-  token: string;
-  name?: string;
+interface PreviewSite {
+  readonly host: string;
+  readonly name: string;
+}
+
+function previewUrl(port: number, site: PreviewSite, token: string): string {
+  return `https://${String(port)}-${site.name}-${token}.${site.host}`;
 }
 
 interface RestoreClock {
@@ -270,8 +298,6 @@ function unawaited(work: Promise<unknown>, lost: string): void {
     console.error(`[devbox] ${lost}: ${describe({ cause })}`);
   });
 }
-
-const DESKTOP_PORT_REFUSED = Effect.fail(new DevboxError('invalid-input', `port ${String(DESKTOP_PORT)} is the desktop's, and is never a preview`));
 
 function fileFault(failure: DevboxError): DevboxError {
   const error = failure.cause;
@@ -296,6 +322,9 @@ const SCHEDULE_PREFIX = 'devbox:schedule:';
 
 const EXPOSED_PREFIX = 'devbox:exposed:';
 
+/** The name the box was reached by, kept because a box woken by its id alone has none (D86). */
+const NAME_KEY = 'devbox:name';
+
 /** Constant-time: answer time says nothing of the token. */
 function sameToken(held: string | undefined, given: string): boolean {
   if (held === undefined || held.length !== given.length) return false;
@@ -310,7 +339,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   readonly #gateways: GatewayBindings;
   #storage: DevboxStorage | undefined;
 
-  #started: StartSource = { kind: 'image' };
+  /** What this object last started the container from; undefined until it starts one (an adopted container). */
+  #started: StartSource | undefined;
+  #siblings: Siblings | undefined;
   #snapshotOwner: Snapshots | undefined;
   #gateRestore: Flight | undefined;
   /** Fences every write below: an abandoned startup continuation keeps running, and must
@@ -365,6 +396,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   constructor(ctx: DevboxState, env: Env) {
     super(ctx, env);
     this.#gateways = ctx.exports;
+    const name: unknown = ctx.id.name;
+
+    if (typeof name === 'string' && name.length > 0 && ctx.storage.kv.get(NAME_KEY) !== name) ctx.storage.kv.put(NAME_KEY, name);
     this.#activate();
   }
 
@@ -424,16 +458,45 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     this.#invalidateGeneration();
   }
 
-  /** A subclass supplies it because only it knows its `Env`; the binding is named twice:
-   *  `mountBucket` resolves it by name in the container, the snapshot chain uses it directly. */
-  protected get store(): DevboxStore | undefined {
+  /** The name of the R2 binding the box keeps its disk and the pinned tools in. The box reads `env[store]`, and the
+   *  gateway resolves the same name, which a store mount records as its bucket (D41). */
+  protected get store(): string {
+    return 'DEVBOX_STORE';
+  }
+
+  /** The bucket bound as `store`; undefined where the Worker binds none. */
+  #bucket(): R2Bucket | undefined {
+    const env = v.safeParse(BindingsSchema, this.env);
+    const bound = env.success ? v.safeParse(BucketSchema, env.output[this.store]) : undefined;
+
+    return bound?.success === true ? bound.output : undefined;
+  }
+
+  /**
+   * The boxes of this object's own namespace. The platform names no object's namespace: no member of `ctx` or of the
+   * id says which export it is, and the class name is not the export name, since a bundler renames classes. So it is
+   * the namespace export that accepts this object's id, every other refusing it (D85; armada 20261013160711-ee86dcc5).
+   */
+  #ownNamespace(): Siblings | undefined {
+    if (this.#siblings !== undefined) return this.#siblings;
+    const own = this.ctx.id.toString();
+    const exported = v.safeParse(BindingsSchema, this.ctx.exports);
+
+    for (const entry of exported.success ? Object.values(exported.output) : []) {
+      const namespace = v.safeParse(NamespaceSchema, entry);
+
+      if (namespace.success && Result.isSuccess(Result.try(() => namespace.output.idFromString(own)))) return this.#siblings = namespace.output;
+    }
+
     return undefined;
   }
 
-  /** D55: 55 of 59 snapshot wakes answered within 3.1 s, 4 took 30 to 53 s. */
-  /** The golden builder, and the boxes it tells (D65). */
-  protected get peers(): BoxPeers | undefined {
-    return undefined;
+  /** What a start needs before the platform is asked: the store the golden's tools come from, and this box's own
+   *  namespace. Either missing is a refusal naming what to add, not a wait (D85). */
+  #startable(): Siblings | DevboxError {
+    if (this.#bucket() === undefined) return new DevboxError('configuration', this.#unboundStore());
+
+    return this.#ownNamespace() ?? new DevboxError('configuration', NO_NAMESPACE);
   }
 
   protected get toolsPin(): string {
@@ -466,13 +529,19 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   #refreshTools(): Effect.Effect<void, DevboxError> {
-    if (this.peers === undefined) return Effect.void;
-
     return refreshTools({ pin: this.toolsPin, exec: (command) => this.#rawExec(command, DEVBOX_RUNTIME_DIR), pipe: (key, path) => this.#pipeParts(key, path) });
   }
 
   #pipeParts(key: string, path: string): Effect.Effect<void, DevboxError> {
-    return pipeParts({ get: async (wanted) => await this.store?.bucket.get(wanted) ?? null, container: this.#container() }, key, path);
+    const bucket = this.#bucket();
+
+    if (bucket === undefined) return Effect.fail(new DevboxError('configuration', this.#unboundStore()));
+
+    return pipeParts({ get: async (wanted) => await bucket.get(wanted), container: this.#container() }, key, path);
+  }
+
+  #unboundStore(): string {
+    return `bind an R2 bucket as \`${this.store}\`, or override \`store\``;
   }
 
   #goldenPorts(): GoldenPorts {
@@ -498,7 +567,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       snapshot: async (name) => (await container().snapshotContainer({ name })).id,
       destroy: () => this.#destroyGoldenContainer(),
       build: () => this.armAlarm(GOLDEN_BUILD_CALLBACK, 0),
-      tell: async (box, answer) => { await this.peers?.box(box).goldenReady(answer); },
+      tell: (box, answer) => {
+        const boxes = this.#ownNamespace();
+
+        return boxes === undefined ? Effect.fail(new DevboxError('configuration', NO_NAMESPACE)) : attempt('io', () => boxes.get(boxes.idFromString(box)).goldenReady(answer));
+      },
       delete: (ref, owe) => this.snapshotRegistry?.delete(ref, owe),
       now: () => Date.now(),
     };
@@ -532,20 +605,18 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     await this.devboxStartup();
   }
 
-  /** A Containers token (D65); without one, dead snapshots wait. */
-  protected get registryToken(): string | undefined {
-    return undefined;
-  }
+  /** The registry dead snapshots are deleted from (D65): a Containers token (Account > Containers > Edit) and its
+   *  account, read from the env as `DEVBOX_REGISTRY_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. Without both, they wait. */
+  protected get registry(): { readonly token: string; readonly account: string } | undefined {
+    const supplied = v.safeParse(RegistryEnvSchema, this.env);
 
-  protected get registryAccount(): string | undefined {
-    return /^registry\.cloudflare\.com\/([0-9a-f]{32})\//.exec(this.containerImage ?? '')?.[1];
+    return supplied.success ? { token: supplied.output.DEVBOX_REGISTRY_TOKEN, account: supplied.output.CLOUDFLARE_ACCOUNT_ID } : undefined;
   }
 
   protected get snapshotRegistry(): SnapshotRegistry | undefined {
-    const token = this.registryToken;
-    const account = this.registryAccount;
+    const registry = this.registry;
 
-    return token === undefined || account === undefined ? undefined : snapshotRegistry({ token, account, fetch: (input, init) => fetch(input, init) });
+    return registry === undefined ? undefined : snapshotRegistry({ ...registry, fetch: (input, init) => fetch(input, init) });
   }
 
   protected get snapshotWakeCutoverMs(): number {
@@ -562,10 +633,17 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return DEFAULT_EXCLUDES;
   }
 
-  /** Undefined means previews are unavailable: port forwarding is not re-activated and the box
-   *  reports that rather than returning a URL that cannot resolve. */
+  /** The zone preview hosts are served under, `DEVBOX_PREVIEW_HOST` by default. Without one, exposing a port is
+   *  refused and a restart re-exposes none. */
   protected get previewHost(): string | undefined {
-    return undefined;
+    const zone = v.safeParse(ZoneSchema, this.env);
+
+    return zone.success ? zone.output.DEVBOX_PREVIEW_HOST : undefined;
+  }
+
+  /** The name the box was reached by (`getByName`); a box only ever reached by its id has none, so no host names it. */
+  protected get previewName(): string | undefined {
+    return this.ctx.storage.kv.get<string>(NAME_KEY);
   }
 
   /** The incident is already durable, so a throw is transient and retried by schedule;
@@ -661,9 +739,6 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       // D50: the one start boundary.
       this.ctx.storage.kv.put(RUNNING_SIZE_KEY, inputs.size);
       this.#startFrom(container, inputs, source);
-
-      // A snapshot's `/run` may still hold the S3Mount marker of the mount it was taken under.
-      if (source.kind === 'image') this.#routes().started();
     }
 
     const cancel = new AbortController();
@@ -691,7 +766,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   get #snapshots(): Snapshots {
     return this.#snapshotOwner ??= new Snapshots({
       kv: this.ctx.storage.kv,
-      base: () => this.containerImage ?? '',
+      base: () => GOLDEN_BASE,
       chainRev: () => {
         const chain = v.safeParse(DiskChainStateSchema, this.ctx.storage.kv.get(DISK_STATE_KEY));
 
@@ -702,32 +777,29 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     });
   }
 
-  /** Its own snapshot, else the golden (or the image, with no builder), else wait to be told (D65). */
-  async #startSource(lost?: string): Promise<StartSource | BaseWait> {
+  /** Its own snapshot, else the golden, else wait to be told (D65). */
+  async #startSource(boxes: Siblings, lost?: string): Promise<StartSource | BaseWait> {
     const own = lost === undefined ? this.#snapshots.wake() : undefined;
 
-    if (own !== undefined) return { kind: 'own', id: own };
+    if (own !== undefined) return { kind: 'own', id: own, boxes };
+    const answer = await boxes.getByName(GOLDEN_NAME).goldenFor(this.ctx.id.toString(), lost);
 
-    if (this.peers === undefined) return { kind: 'image' };
-    const answer = await this.peers.golden().goldenFor(this.ctx.id.toString(), lost);
-
-    return answer.kind === 'ready' ? { kind: 'golden', id: answer.id } : answer;
+    return answer.kind === 'ready' ? { kind: 'golden', id: answer.id, boxes } : answer;
   }
 
   #startFrom(container: Container, inputs: StartInputs, source: StartSource): void {
     this.#started = source;
     this.#awaitingGolden = undefined;
     this.#snapshots.started(source.kind === 'own' ? source.id : undefined);
-    const from = source.kind === 'image' ? { image: inputs.image } : { containerSnapshot: { id: source.id } };
-    const entrypoint = this.peers === undefined ? undefined : GOLDEN_ENTRYPOINT;
-
-    container.start({ ...from, entrypoint, instance: instanceOf(inputs.size), enableInternet: this.enableInternet });
+    container.start({ containerSnapshot: { id: source.id }, entrypoint: GOLDEN_ENTRYPOINT, instance: instanceOf(inputs.size), enableInternet: this.enableInternet });
     keepStartRefusal(container);
   }
 
-  /** A snapshot start that fails or misses the cutover falls back to the image and the chain. */
+  /** A snapshot start that fails or misses the cutover falls back to the next source and the chain. */
   async #admit(container: Container, signal: AbortSignal, inputs: StartInputs): Promise<boolean> {
-    if (this.#started.kind !== 'image') {
+    const started = this.#started;
+
+    if (started !== undefined) {
       // Cleared once settled: a later abort killed the image's container (D64).
       const cutover = new AbortController();
       const timer = setTimeout(() => { cutover.abort(new DevboxError('io', 'the snapshot start was not admitted within the cutover')); }, this.snapshotWakeCutoverMs);
@@ -738,7 +810,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
       // No room is no verdict on the snapshot: it stays the source, and the exec below fails in the platform's words, so
       // the admission retries (staging, 2026-10-08).
-      if (!isCapacityRefusal({ cause: woke.reason }) && !await this.#cutOver(container, inputs, woke.reason)) return false;
+      if (!isCapacityRefusal({ cause: woke.reason }) && !await this.#cutOver(container, inputs, woke.reason, started)) return false;
     }
 
     await firstExec(container, signal);
@@ -747,9 +819,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   /** Leaves a snapshot that failed to wake for the next source; false while the golden that replaces it is pending. */
-  async #cutOver(container: Container, inputs: StartInputs, failed: LateStartFailure['cause']): Promise<boolean> {
-    this.#trace('startup.snapshot.cutover', { from: this.#started.kind, reason: describe({ cause: failed }) });
-    const golden = this.#started.kind === 'golden' ? this.#started.id : undefined;
+  async #cutOver(container: Container, inputs: StartInputs, failed: LateStartFailure['cause'], started: StartSource): Promise<boolean> {
+    this.#trace('startup.snapshot.cutover', { from: started.kind, reason: describe({ cause: failed }) });
+    const golden = started.kind === 'golden' ? started.id : undefined;
     await container.destroy();
     await this.#awaitContainerStopped();
 
@@ -758,7 +830,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       unawaited(this.#snapshots.sweep(), 'sweeping dead snapshots');
     }
 
-    const next = await this.#startSource(golden);
+    const next = await this.#startSource(started.boxes, golden);
 
     if (next.kind === 'pending') {
       this.#awaitingGolden = next;
@@ -1179,7 +1251,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   #startInputs(): StartInputs {
-    return { image: this.containerImage ?? '', size: this.#size(), internet: this.enableInternet };
+    return { size: this.#size(), store: this.#bucket() !== undefined, internet: this.enableInternet };
   }
 
   #refusedStart(): string | undefined {
@@ -1194,7 +1266,15 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     this.#trace('startup.admit.enter', { generation, running: !startsContainer });
 
     try {
-      const source = startsContainer ? await this.#startSource() : undefined;
+      const startable = startsContainer ? this.#startable() : undefined;
+
+      if (startable instanceof DevboxError) {
+        await this.#refuseAdmission({ generation, since, startsContainer, inputs }, { cause: startable });
+
+        return;
+      }
+
+      const source = startable === undefined ? undefined : await this.#startSource(startable);
 
       if (source?.kind === 'pending') {
         this.#awaitingGolden = source;
@@ -1211,37 +1291,46 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       this.ctx.storage.kv.delete(START_REFUSED_KEY);
       this.#trace('startup.admit.exit', { generation, ms: Date.now() - since, admitted: true, owned: this.#owns(generation) });
     } catch (thrown) {
-      const cause = this.containerImage === undefined ? new DevboxError('configuration', NO_START_IMAGE, { cause: thrown }) : thrown;
-      const reason = describe({ cause });
-      this.#trace('startup.admit.exit', {
-        generation, ms: Date.now() - since, admitted: false, owned: this.#owns(generation),
-        running: this.ctx.container?.running === true, reason,
-      });
+      await this.#refuseAdmission({ generation, since, startsContainer, inputs }, { cause: thrown });
+    }
+  }
+
+  /** An admission that did not start: refused once if it would fail the same way again (D47), else retried. */
+  async #refuseAdmission(
+    { generation, since, startsContainer, inputs }: { readonly generation: number; readonly since: number; readonly startsContainer: boolean; readonly inputs: StartInputs },
+    failed: { readonly cause: unknown },
+  ): Promise<void> {
+    const reason = describe(failed);
+    this.#trace('startup.admit.exit', {
+      generation, ms: Date.now() - since, admitted: false, owned: this.#owns(generation),
+      running: this.ctx.container?.running === true, reason,
+    });
+
+    if (!this.#owns(generation)) {
+      console.error(`[devbox] superseded admission refused: ${reason}`);
+
+      return;
+    }
+
+    const failure = classifyRecovery(failed);
+
+    // A start that fails the same way every time is refused once, not re-armed each second (D47).
+    if (isTerminalRecovery(failure)) {
+      const refusal = `[${failure} -> refuse] ${reason}`;
+      this.#adoptionPending = false;
+
+      if (startsContainer) this.ctx.storage.kv.put(START_REFUSED_KEY, { reason: refusal, ...inputs });
+      await this.#settle({ phase: 'unattached', reason: refusal, retry: false });
 
       if (this.#owns(generation)) {
-        const failure = classifyRecovery({ cause });
-
-        // A start that fails the same way every time is refused once, not re-armed each second (D47).
-        if (isTerminalRecovery(failure)) {
-          const refusal = `[${failure} -> refuse] ${reason}`;
-          this.#adoptionPending = false;
-
-          if (startsContainer) this.ctx.storage.kv.put(START_REFUSED_KEY, { reason: refusal, ...inputs });
-          await this.#settle({ phase: 'unattached', reason: refusal, retry: false });
-
-          if (this.#owns(generation)) {
-            await this.#record('attach', refusal);
-            this.#deleteSchedule(STARTUP_CALLBACK);
-          }
-        } else {
-          this.#refused = { generation, reason };
-          await this.#record('attach', `[${failure} -> retry] ${reason}`);
-
-          if (this.#owns(generation)) await this.armAlarm(STARTUP_CALLBACK, 1);
-        }
-      } else {
-        console.error(`[devbox] superseded admission refused: ${reason}`);
+        await this.#record('attach', refusal);
+        this.#deleteSchedule(STARTUP_CALLBACK);
       }
+    } else {
+      this.#refused = { generation, reason };
+      await this.#record('attach', `[${failure} -> retry] ${reason}`);
+
+      if (this.#owns(generation)) await this.armAlarm(STARTUP_CALLBACK, 1);
     }
   }
 
@@ -1594,14 +1683,19 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       return true;
     }
 
-    const options: PortExposeOptions = { hostname, token: spec.token };
+    const site = this.#previewSite(spec.port);
 
-    if (spec.name !== undefined) options.name = spec.name;
+    if (site instanceof DevboxError) {
+      steps.skip();
+      await this.#record('port', site.message, { port: spec.port });
+
+      return false;
+    }
 
     const exposed = await steps.run(
-      // `super`: the restoration is the readiness gate, so it must not wait on that gate
+      // The restoration is the readiness gate, so it must not wait on that gate
       // nor queue behind a caller already waiting at it (see `#restartWorkloads`).
-      async () => await this.#expose(spec.port, options),
+      async () => await this.#expose(spec.port, site, { token: spec.token, name: spec.name }),
       logLate(`the exposure of port ${spec.port}`),
     );
 
@@ -1638,10 +1732,6 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     if (this.#refusedStart() !== undefined) return;
     await this.armAlarm(STARTUP_CALLBACK, 1);
-  }
-
-  protected get containerImage(): string | undefined {
-    return this.peers === undefined ? this.ctx.container?.images['devbox'] : GOLDEN_BASE;
   }
 
   protected get defaultSize(): BoxSize {
@@ -1698,7 +1788,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       if (!running) return { kind: 'recorded', size: target, previous: undefined } as const;
 
       if (previous === target) return { kind: 'unchanged', size: target, previous } as const;
-      const endedCommands = this.#untimed.size;
+      const endedCommands = this.#running.size;
       const committed = yield* attempt('io', () => this.#quiesce(true));
 
       if (committed.kind === 'failed') {
@@ -1803,14 +1893,33 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return admissionOf(this.#restoration);
   }
 
-  /** Defaults cwd to `DEVBOX_WORKDIR`: commands landing outside the durable directory are
-   *  not saved. A caller-supplied `cwd` overrides it. */
-  async exec(command: string, options?: DevboxExecOptions): Promise<ExecResult> {
-    return await settle(this.#withActiveCaller(attempt("io", async () => {
-      await this.ensureReady();
+  /** Every command runs as `setsid -w bash -c`, in its own group, which `killExec` ends (D37, D69), from
+   *  `DEVBOX_WORKDIR` unless `cwd` says otherwise: commands landing outside it are not saved. With an `execId` it runs
+   *  once per id, and a retry reads the first answer until `releaseExec` (D48); without one the box claims nothing. */
+  exec(command: string, options: ExecOptions = {}): Promise<ExecResult> {
+    const { execId } = options;
+    const answered = execId === undefined ? undefined : this.#answers.get(execId);
 
-      return await this.#execute(command, { cwd: DEVBOX_WORKDIR, ...options });
-    })));
+    if (answered !== undefined) return settle(Deferred.await(answered));
+
+    if (execId !== undefined && !this.#claimLaunch(execId)) return settle(Effect.fail(launchUnknown(execId)));
+    const id = execId ?? crypto.randomUUID();
+    const running: RunningExec = { cancelled: false };
+    const answer = Deferred.makeUnsafe<ExecResult, DevboxError>();
+    this.#running.set(id, running);
+
+    if (execId !== undefined) this.#answers.set(execId, answer);
+
+    return settle(this.#withActiveCaller(Effect.gen({ self: this }, function* () {
+      const process = yield* this.#spawn(command, options, running);
+
+      return decoded(yield* attempt('process', () => process.output()));
+    })).pipe(
+      Effect.exit,
+      Effect.tap((exit) => Deferred.done(answer, exit)),
+      Effect.flatten,
+      Effect.ensuring(Effect.sync(() => { this.#running.delete(id); })),
+    ));
   }
 
   /** The same native listener command/parser used during restore; core receives evidence, not a curl protocol. */
@@ -1826,39 +1935,16 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }));
   }
 
-  /** No deadline; the SDK's process lane lost output (D37). */
-  execUntimed(command: string, options: UntimedOptions): Promise<ExecResult> {
-    const answered = this.#answers.get(options.execId);
-
-    if (answered !== undefined) return settle(Deferred.await(answered));
-
-    if (!this.#claimLaunch(options.execId)) return settle(Effect.fail(launchUnknown(options.execId)));
-    const pending: UntimedExecution = { cancelled: false };
-    const answer = Deferred.makeUnsafe<ExecResult, DevboxError>();
-    this.#untimed.set(options.execId, pending);
-    this.#answers.set(options.execId, answer);
-
-    return settle(this.#withActiveCaller(Effect.gen({ self: this }, function* () {
-      const process = yield* this.#startUntimed(command, options, pending);
-
-      return decoded(yield* attempt('process', () => process.output()));
-    })).pipe(
-      Effect.exit,
-      Effect.tap((exit) => Deferred.done(answer, exit)),
-      Effect.flatten,
-      Effect.ensuring(Effect.sync(() => { this.#untimed.delete(options.execId); })),
-    ));
-  }
-
-  releaseUntimed(execId: string): Promise<void> {
+  /** Forgets an `execId`: its answer and its claim. */
+  releaseExec(execId: string): Promise<void> {
     return settle(attempt('io', async () => {
       this.#answers.delete(execId);
-      this.ctx.storage.kv.delete(`${UNTIMED_CLAIM_PREFIX}${execId}`);
+      this.ctx.storage.kv.delete(`${EXEC_CLAIM_PREFIX}${execId}`);
     }));
   }
 
   #claimLaunch(execId: string): boolean {
-    const key = `${UNTIMED_CLAIM_PREFIX}${execId}`;
+    const key = `${EXEC_CLAIM_PREFIX}${execId}`;
 
     if (this.ctx.storage.kv.get(key) !== undefined) return false;
     this.ctx.storage.kv.put(key, true);
@@ -1866,35 +1952,40 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return true;
   }
 
-  execUntimedStream(command: string, options: UntimedOptions): Promise<ReadableStream<Uint8Array>> {
-    if (!this.#claimLaunch(options.execId)) return settle(Effect.fail(launchUnknown(options.execId)));
-    const pending: UntimedExecution = { cancelled: false };
-    this.#untimed.set(options.execId, pending);
+  /** `exec` as framed records, read with `readExec`; cancelling the stream ends the command. A stream keeps no answer,
+   *  so a retry under the same `execId` is `indeterminate`. */
+  execStream(command: string, options: ExecOptions = {}): Promise<ReadableStream<Uint8Array>> {
+    const { execId } = options;
+
+    if (execId !== undefined && !this.#claimLaunch(execId)) return settle(Effect.fail(launchUnknown(execId)));
+    const id = execId ?? crypto.randomUUID();
+    const running: RunningExec = { cancelled: false };
+    this.#running.set(id, running);
     const leave = this.#arrive();
     const gone = Promise.withResolvers<void>();
-    const ended = (): void => { this.#untimed.delete(options.execId); leave(); gone.resolve(); };
+    const ended = (): void => { this.#running.delete(id); leave(); gone.resolve(); };
 
-    return settle(this.#startUntimed(command, options, pending).pipe(
+    return settle(this.#spawn(command, options, running).pipe(
       Effect.map((process) => {
-        unawaited(process.exitCode.finally(ended), `untimed exec ${options.execId} ended without its exit code`);
+        unawaited(process.exitCode.finally(ended), `exec ${id} ended without its exit code`);
 
         return execRecords(process, {
           exited: ended,
-          cancelled: async () => { await this.killUntimed(options.execId); await gone.promise; },
+          cancelled: async () => { await this.killExec(id); await gone.promise; },
         });
       }),
       Effect.onError(() => Effect.sync(ended)),
     ));
   }
 
-  #startUntimed(command: string, options: UntimedOptions, pending: UntimedExecution): Effect.Effect<ExecProcess, DevboxError> {
+  #spawn(command: string, { cwd, env }: ExecOptions, running: RunningExec): Effect.Effect<ExecProcess, DevboxError> {
     return Effect.gen({ self: this }, function* () {
       const { container } = yield* attempt('not-ready', () => this.#ensureReady(this.#teardowns));
 
-      if (pending.cancelled) return yield* Effect.fail(new DevboxError('cancelled', 'computer exec cancelled before admission'));
+      if (running.cancelled) return yield* Effect.fail(new DevboxError('cancelled', 'computer exec cancelled before admission'));
       // Its own group, which its kill ends (D69).
-      const started = yield* attemptSync('process', () => launch(container, ['setsid', '-w', '/bin/bash', '-c', command], options));
-      pending.started = started;
+      const started = yield* attemptSync('process', () => launch(container, ['setsid', '-w', '/bin/bash', '-c', command], { cwd, env }));
+      running.started = started;
 
       return yield* attempt('process', () => started);
     });
@@ -1913,14 +2004,14 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }));
   }
 
-  /** False when the command had already exited. */
-  killUntimed(execId: string): Promise<boolean> {
+  /** Ends the command's process tree; false when it had already exited. */
+  killExec(execId: string): Promise<boolean> {
     return settle(Effect.gen({ self: this }, function* () {
-      const pending = this.#untimed.get(execId);
+      const running = this.#running.get(execId);
 
-      if (pending === undefined) return false;
-      pending.cancelled = true;
-      const started = pending.started;
+      if (running === undefined) return false;
+      running.cancelled = true;
+      const started = running.started;
 
       if (started === undefined) return true;
       const container = this.ctx.container;
@@ -1937,7 +2028,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }));
   }
 
-  readonly #untimed = new Map<string, UntimedExecution>();
+  readonly #running = new Map<string, RunningExec>();
   readonly #answers = new Map<string, Deferred.Deferred<ExecResult, DevboxError>>();
 
   /** The only transition that clears a terminal refusal; keeps the `replace` stage, so a failed
@@ -2034,7 +2125,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     if (starting !== undefined) await Promise.allSettled([starting.run]);
 
-    if (ending) await Promise.allSettled([...this.#untimed.keys()].map((execId) => this.killUntimed(execId)));
+    if (ending) await Promise.allSettled([...this.#running.keys()].map((execId) => this.killExec(execId)));
 
     if (this.#activeCallers !== 0) {
       this.#callersDrained = Promise.withResolvers<void>();
@@ -2104,9 +2195,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return outcome;
   }
 
-  /** A box with no store keeps nothing past a rest, its snapshot included. */
   async #restSnapshot(): Promise<void> {
-    if (this.store === undefined) return;
     const [taken] = await Promise.allSettled([this.#snapshots.save()]);
 
     if (taken.status === 'rejected') await this.#record('quiesce', `the rest took no snapshot, so the next wake recovers from the backup: ${describe({ cause: taken.reason })}`);
@@ -2224,7 +2313,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   /** Must be asked before the first exposure: restarts re-expose each port with its stored
    *  token, so the first exposure must use the same token for the preview URL to survive. */
   portToken(port: number, name?: string): Promise<{ urlToken: string }> {
-    return settle(port === DESKTOP_PORT ? DESKTOP_PORT_REFUSED : attempt('io', async () => {
+    const site = this.#previewSite(port);
+
+    return settle(site instanceof DevboxError ? Effect.fail(site) : attempt('io', async () => {
       return await this.#resources.run(portScope(port), () => this.#portToken(port, name));
     }));
   }
@@ -2273,7 +2364,6 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       ]);
 
       return {
-        durable: this.store !== undefined,
         running: this.ctx.container?.running === true,
         restoration: this.#restoration.phase,
         ready: this.#quiescing === undefined && this.#restoration.phase === 'attached' && this.#gateRestore === undefined,
@@ -2402,13 +2492,13 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     })).pipe(Effect.mapError(fileFault)));
   }
 
-  async exposePort(
-    port: number,
-    options: { name?: string; hostname: string; token?: string },
-  ) {
-    return await settle(port === DESKTOP_PORT
-      ? DESKTOP_PORT_REFUSED
-      : this.#claimed(portScope(port), attempt("file", () => this.#expose(port, options))).pipe(Effect.mapError(fileFault)));
+  /** Published at `https://<port>-<box name>-<token>.<previewHost>`. Refused before a token is minted, so a port
+   *  the box cannot name leaves no row a restart would re-expose: `configuration` without a preview host or a name,
+   *  `invalid-input` for the desktop's port or a name no host label can carry. */
+  async exposePort(port: number, options: { name?: string; token?: string } = {}) {
+    const site = this.#previewSite(port);
+
+    return await settle(site instanceof DevboxError ? Effect.fail(site) : this.#claimed(portScope(port), attempt('io', () => this.#expose(port, site, options))));
   }
 
   /** Revocation touches only this object's preview rows, never the container, so it skips
@@ -2478,7 +2568,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
   /** An exec on a stopped container would start a blank one, and save its empty disk. */
   async #runCheckpoint(kind: CheckpointKind): Promise<CheckpointOutcome> {
-    if (this.store !== undefined && this.ctx.container?.running !== true) {
+    if (this.ctx.container?.running !== true) {
       return { kind: 'skipped', reason: 'container is not running', bytes: undefined, movedBytes: 0 };
     }
 
@@ -2738,37 +2828,25 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return this.#storage;
   }
 
-  /** An ephemeral box (no store) gets a storage that reports empty/skipped on every call,
-   *  so callers never null-check it. */
   #buildStorage(): DevboxStorage {
-    const store = this.store;
+    const bucket = this.#bucket();
 
-    if (store === undefined) {
-      const reason = 'this devbox has no store configured, so nothing is durable';
+    if (bucket === undefined) return new UnboundStorage(this.#unboundStore());
 
-      return {
-        attach: () => Promise.resolve({ kind: 'empty', detail: reason } as const),
-        checkpoint: () => Promise.resolve({
-          kind: 'skipped', reason, bytes: undefined, movedBytes: 0,
-        } as const),
-        discard: () => Promise.resolve(),
-      };
-    }
-
-    return new DiskChainStorage(this.diskChain(this.#diskChainPorts(store)), {
+    return new DiskChainStorage(this.diskChain(this.#diskChainPorts(bucket)), {
       prepare: () => this.#refreshTools(),
-      fromSnapshot: () => this.#started.kind === 'own',
+      fromSnapshot: () => this.#started?.kind === 'own',
       recovered: async (restoredTo) => { await this.#record('recovered', recoveryNotice(restoredTo, this.archiveExcludes)); },
       discard: async () => {
         this.ctx.storage.kv.delete(DISK_STATE_KEY);
         this.#snapshots.supersede();
 
         // R2 pages at 1,000, refuses an empty delete (D64).
-        for (let listed = await store.bucket.list({ prefix: `${chainStoreRoot(this.#boxPrefix())}/` }); listed.objects.length > 0;) {
-          await store.bucket.delete(listed.objects.map(object => object.key));
+        for (let listed = await bucket.list({ prefix: `${chainStoreRoot(this.#boxPrefix())}/` }); listed.objects.length > 0;) {
+          await bucket.delete(listed.objects.map(object => object.key));
 
           if (!listed.truncated) break;
-          listed = await store.bucket.list({ prefix: `${chainStoreRoot(this.#boxPrefix())}/`, cursor: listed.cursor });
+          listed = await bucket.list({ prefix: `${chainStoreRoot(this.#boxPrefix())}/`, cursor: listed.cursor });
         }
       },
     });
@@ -2778,7 +2856,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return diskChain(ports);
   }
 
-  #diskChainPorts(store: DevboxStore): DiskChainPorts {
+  #diskChainPorts(bucket: R2Bucket): DiskChainPorts {
     const root = chainStoreRoot(this.#boxPrefix());
     const exec = (command: string) => this.#rawExec(command, DEVBOX_RUNTIME_DIR);
 
@@ -2797,10 +2875,10 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         yield* attemptSync('io', () => this.ctx.storage.kv.put(DISK_STATE_KEY, state));
       }))),
       storeRoot: () => root,
-      storeObjectUrl: (key) => storeObjectUrl(root, store.binding, key),
-      objectBytes: async (key) => (await store.bucket.head(key))?.size,
+      storeObjectUrl: (key) => storeObjectUrl(root, this.store, key),
+      objectBytes: async (key) => (await bucket.head(key))?.size,
       deleteObjects: async (keys) => {
-        await store.bucket.delete([...keys]);
+        await bucket.delete([...keys]);
       },
       mountStore: async () => {
         if ((await exec(`mountpoint -q ${STORE_MOUNT}`)).exitCode === 0) return;
@@ -2876,7 +2954,6 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   protected async outboundPolicy(): Promise<OutboundPolicy> { return { routes: {} }; }
   /** The name the box answers to in its prompt, its desktop and its processes; unset, the platform's container id. */
   protected get hostname(): string | undefined { return undefined; }
-  protected get namespaceBinding(): string { return this.constructor.name; }
 
   protected async configureContainer(reused = this.#adoptionPending || this.#restoration.phase === 'attached' || this.#restoration.phase === 'repair'): Promise<void> {
     await this.#routes().configure(await this.outboundPolicy(), this.store, reused);
@@ -2887,26 +2964,31 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     if (name !== undefined) await nameBox(this.#container(), name);
   }
 
-  getExposedPorts(hostname: string) {
+  getExposedPorts() {
     return settle(attempt('io', async () => {
       if (this.ctx.container?.running !== true) return [];
       const rows = await this.#portSpecs();
       const result: { port: number; name: string | undefined; url: string }[] = [];
 
       for (const spec of rows) {
-        if (this.ctx.storage.kv.get(EXPOSED_PREFIX + spec.port) !== spec.token) continue;
-        result.push({ port: spec.port, name: spec.name, url: `https://${spec.port}-${this.previewName}-${spec.token}.${hostname}` });
+        const site = this.#previewSite(spec.port);
+
+        if (site instanceof DevboxError || this.ctx.storage.kv.get(EXPOSED_PREFIX + spec.port) !== spec.token) continue;
+        result.push({ port: spec.port, name: spec.name, url: previewUrl(spec.port, site, spec.token) });
       }
 
       return result;
     }));
   }
 
-  #preview(request: Request, port: number, token: string): Effect.Effect<Response, DevboxError> {
+  /** The port comes from the host and the path is the visitor's, `/_devbox/terminal` included (D60). */
+  #preview(request: Request, { port, name, token }: PreviewAddress): Effect.Effect<Response, DevboxError> {
     return Effect.gen({ self: this }, function* () {
       const spec = yield* attempt('io', () => this.ctx.storage.get<PortExposureSpec>(`${PORT_SPEC_PREFIX}${port}`));
 
-      if (port === DESKTOP_PORT || spec === undefined || !sameToken(spec.token, token)) return new Response('Preview not exposed', { status: 404 });
+      if (port === DESKTOP_PORT || name !== this.previewName || spec === undefined || !sameToken(spec.token, token)) {
+        return new Response('Preview not exposed', { status: 404 });
+      }
 
       return yield* this.#withActiveCaller(attempt('io', async () => {
         await this.ensureReady();
@@ -3012,15 +3094,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   override fetch(request: Request): Promise<Response> {
     return settle(Effect.gen({ self: this }, function* () {
       const url = yield* attemptSync('invalid-input', () => new URL(request.url));
-      const preview = /^\/_devbox\/preview\/(\d+)\/([^/]+)(\/.*)$/.exec(url.pathname);
+      const preview = previewAddress(url.hostname, this.previewHost);
 
-      if (preview !== null) {
-        url.pathname = preview[3];
-        const token = yield* attemptSync('invalid-input', () => decodeURIComponent(preview[2]));
-        const forwarded = yield* attemptSync('invalid-input', () => new Request(url.toString(), request));
-
-        return yield* this.#preview(forwarded, Number(preview[1]), token);
-      }
+      if (preview !== null) return yield* this.#preview(request, preview);
 
       if (url.pathname === '/_devbox/desktop') return yield* this.#desktop(request);
 
@@ -3112,13 +3188,30 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     await this.#files().writeFile(path, bytes);
   }
 
-  protected get previewName(): string { return this.ctx.id.toString(); }
-
-  async #expose(port: number, options: { hostname: string; token?: string; name?: string }) {
+  async #expose(port: number, site: PreviewSite, options: { token?: string; name?: string }) {
     const token = options.token ?? (await this.#portToken(port, options.name)).urlToken;
     this.ctx.storage.kv.put(EXPOSED_PREFIX + port, token);
 
-    return { port, name: options.name, url: `https://${port}-${this.previewName}-${token}.${options.hostname}` };
+    return { port, name: options.name, url: previewUrl(port, site, token) };
+  }
+
+  /** `<port>-<name>-<token>` is one DNS label, so a name gets what the port and a token leave of 63 (D86). */
+  #previewSite(port: number): PreviewSite | DevboxError {
+    const host = this.previewHost;
+    const name = this.previewName;
+
+    if (port === DESKTOP_PORT) return new DevboxError('invalid-input', `port ${String(DESKTOP_PORT)} is the desktop's, and is never a preview`);
+
+    if (host === undefined || host.length === 0) return new DevboxError('configuration', 'previews are off: set `DEVBOX_PREVIEW_HOST` to the zone a wildcard route serves, or override `previewHost`');
+
+    if (name === undefined) return new DevboxError('configuration', 'no preview host can name this box: it was never reached by `getByName`');
+    const budget = LABEL_LIMIT - String(port).length - 2 - PORT_TOKEN_LENGTH;
+
+    if (!LABEL_NAME.test(name) || name.length > budget) {
+      return new DevboxError('invalid-input', `the box name \`${name}\` cannot be a preview host label: a label holds 63 characters, which leaves a name ${String(budget)} lowercase letters, digits or hyphens`);
+    }
+
+    return { host: host.toLowerCase(), name };
   }
 
   protected async armAlarm(callback: string, delaySeconds: number): Promise<void> {
@@ -3215,7 +3308,3 @@ function parsedOrNull<S extends v.GenericSchema>(schema: S, value: StoredValue):
   return parsed.success ? parsed.output : null;
 }
 
-export interface BoxPeers {
-  readonly golden: () => { goldenFor(box: string, lost?: string): Promise<GoldenAnswer> };
-  readonly box: (id: string) => { goldenReady(answer: GoldenAnswer): Promise<void> };
-}

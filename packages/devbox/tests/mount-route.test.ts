@@ -8,9 +8,9 @@ import { chainBox, type ChainBox, type ChainTestBox } from './support/chain-box'
 import { Devbox, harness, type FakeSandbox } from './support/devbox-harness';
 import type { StoredValue } from '../src/storage';
 
-const store = { binding: 'WORKSPACES' };
+const store = 'WORKSPACES';
 
-const source = storeSource(store.binding);
+const source = storeSource(store);
 
 const prefix = 'boxes/owner/backups/';
 
@@ -29,7 +29,7 @@ async function refused(marker?: GuestMarker, arrange?: (container: FakeSandbox) 
 
   const routes = new ContainerRoutes({
     container: container.handle(), files: new Files(container.handle()), prefix, internet: false,
-    bindings: { DevboxStoreGateway: unexpected, DevboxOutbound: unexpected },
+    bindings: { DevboxGateway: unexpected },
   });
 
   try {
@@ -101,13 +101,9 @@ test('the SDK marker of a root mount rebinds its route, rooted at this box\'s pr
   const routes = new ContainerRoutes({
     container: container.handle(), files: new Files(container.handle()), prefix, internet: false,
     bindings: {
-      DevboxStoreGateway: ({ props }) => {
-        stores.push(props);
-
-        return { fetch: unreached, connect: unreached };
-      },
-      DevboxOutbound: ({ props }) => {
-        installed.push(Object.keys(props.routes).sort());
+      DevboxGateway: ({ props }) => {
+        if ('store' in props) stores.push(props.store);
+        else installed.push(Object.keys(props.outbound.routes).sort());
 
         return { fetch: unreached, connect: unreached };
       },

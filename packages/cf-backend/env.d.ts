@@ -49,7 +49,7 @@ declare global {
     JWT_SECRET?: string;
     /** Sessions, OAuth state, CLI approval state; all self-expiring, never a source of truth. */
     AUTH_KV: KVNamespace;
-    /** Durable workspace payloads; the container reaches them through `DevboxStoreGateway`. */
+    /** Durable workspace payloads; the container reaches them through `DevboxGateway`. */
     BACKUP_BUCKET?: R2Bucket;
     /** Feedback screenshots; absent ⇒ note-only feedback lands and screenshots are refused. */
     FEEDBACK_BUCKET?: R2Bucket;

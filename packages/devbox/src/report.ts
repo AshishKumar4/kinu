@@ -42,7 +42,6 @@ export interface SupervisedProcessRow {
 
 /** Everything a caller can ask about a box without touching the container. */
 export interface DevboxReport {
-  readonly durable: boolean;
   readonly running: boolean;
   /** `repair` admits operations, so the agent can fix a failed service; `unattached` is terminal. */
   readonly restoration: Restoration['phase'];

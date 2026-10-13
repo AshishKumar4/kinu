@@ -6,14 +6,14 @@
 
 import { jsonResultOrVoid, REAL_CLOCK, SandboxPending, WORKSPACE_BACKUP_DIR, type Clock, type OutputSink, type SandboxHandle } from '@kinu.run/core';
 import { attempt, classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle, toKinuError, type ErrorCode } from "@kinu.run/core/obs";
-import { collectExecRecords, devboxFailure, type DevboxErrorCode } from '@kinu.run/devbox';
+import { devboxFailure, readExec, type DevboxErrorCode } from '@kinu.run/devbox';
 import { Effect } from 'effect';
 import type { KinuDevbox } from "./kinu-devbox";
 import { sandboxPreviewLabelOf } from "@kinu.run/core";
 import type { SandboxPreviewExposures } from "@kinu.run/core";
 
 type ContainerOperations = Pick<KinuDevbox,
-  "execUntimed" | "execUntimedStream" | "killUntimed" | "releaseUntimed" | "resolveReadiness" | "readFile" | "writeFile" | "writeFileIfDigest" | "listFiles" | "statFile"
+  "exec" | "execStream" | "killExec" | "releaseExec" | "resolveReadiness" | "readFile" | "writeFile" | "writeFileIfDigest" | "listFiles" | "statFile"
   | "deleteFile" | "exposePort" | "getExposedPorts" | "unexposePort" | "startSupervised"
   | "stopSupervised" | "listSupervised" | "portToken" | "probePort" | "resize" | "portListeners" | "answerRest">;
 
@@ -106,12 +106,12 @@ function callDevbox<A>(run: () => PromiseLike<A>): Effect.Effect<A, KinuError> {
 }
 
 /**
- * No work deadline: the command on the container runtime's own exec (`Devbox.execUntimed`), which returns its
+ * No work deadline: the command on the container runtime's own exec (`Devbox.exec`), which returns its
  * output whole. An abort ends its process tree and reports once it is gone; a refused kill is reported as itself,
  * since the process is still running, and a command that finished first is returned as finished.
  */
 async function execWithoutDeadline(
-  handle: Pick<KinuDevbox, "execUntimed" | "execUntimedStream" | "killUntimed">,
+  handle: Pick<KinuDevbox, "exec" | "execStream" | "killExec">,
   command: string,
   { cwd, signal, env, execId }: {
     readonly cwd?: string | undefined; readonly signal?: AbortSignal | undefined; readonly env?: Readonly<Record<string, string>> | undefined; readonly execId: string;
@@ -121,15 +121,15 @@ async function execWithoutDeadline(
   const options = { cwd: cwd ?? WORKSPACE_BACKUP_DIR, execId, ...(env !== undefined && { env }) };
 
   const ran = output === undefined
-    ? handle.execUntimed(command, options)
-    : handle.execUntimedStream(command, options).then((stream) => collectExecRecords(stream, (name, data) => { output.write(name, data); }));
+    ? handle.exec(command, options)
+    : handle.execStream(command, options).then((stream) => readExec(stream, (name, data) => { output.write(name, data); }));
 
   // Set only on abort: true means this call ended the process tree, false that the command had already exited.
   let verdict: Promise<boolean> | undefined;
   const { promise: killRefused, reject } = Promise.withResolvers<never>();
 
   const kill = (): void => {
-    verdict = handle.killUntimed(execId);
+    verdict = handle.killExec(execId);
     verdict.catch(reject);
   };
 
@@ -163,10 +163,16 @@ function recordPortsMoved(portsMoved: (() => Promise<void>) | undefined): Effect
     .pipe(Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('jobs.serving_unread', failure); })));
 }
 
+/** The edge's record of published previews, and the zone their hosts are under. */
+export interface LanePreviews {
+  readonly exposures: SandboxPreviewExposures;
+  readonly zone: string;
+}
+
 export function adaptCloudflareSandbox(
   handle: ContainerOperations,
   configure: () => Promise<void>,
-  previews: SandboxPreviewExposures | null,
+  previews: LanePreviews | null,
   { portsMoved, clock = REAL_CLOCK }: {
     readonly portsMoved?: () => Promise<void>;
     /** Times a hold for the box's base snapshot (D79). */
@@ -221,7 +227,7 @@ export function adaptCloudflareSandbox(
 
       return settle(Effect.andThen(ready, run.pipe(
         Effect.catch((failure) => (lost(failure) ? again : Effect.fail(failure))),
-        Effect.ensuring(callDevbox(() => handle.releaseUntimed(execId)).pipe(
+        Effect.ensuring(callDevbox(() => handle.releaseExec(execId)).pipe(
           Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('computer.exec_release_failed', failure, { execId }); })),
         )),
       )));
@@ -241,17 +247,17 @@ export function adaptCloudflareSandbox(
     exposePort: (port, opts) => settle(Effect.gen(function* () {
       if (previews === null) return yield* Effect.fail(new KinuError('unavailable', PREVIEWS_UNPUBLISHABLE));
       const exposed = yield* onContainer(() => handle.exposePort(port, opts));
-      const label = yield* Effect.try({ try: () => sandboxPreviewLabelOf(new URL(exposed.url), { PREVIEW_HOST_SUFFIX: opts.hostname }), catch: (cause) => fromDevbox({ cause }) });
+      const label = yield* Effect.try({ try: () => sandboxPreviewLabelOf(new URL(exposed.url), { PREVIEW_HOST_SUFFIX: previews.zone }), catch: (cause) => fromDevbox({ cause }) });
 
       if (label === null || label.port !== port) return yield* Effect.fail(new KinuError('io', `the container minted a preview URL this deployment cannot publish: ${exposed.url}`));
-      yield* callDevbox(() => previews.publish(port, label.token));
+      yield* callDevbox(() => previews.exposures.publish(port, label.token));
       yield* recordPortsMoved(portsMoved);
 
-      if (!(yield* callDevbox(() => previews.exposed(port, label.token)))) {
+      if (!(yield* callDevbox(() => previews.exposures.exposed(port, label.token)))) {
         return { ...exposed, route: { reached: false, gate: 'published' as const, detail: 'the edge holds no published record for this URL' } };
       }
 
-      const live = yield* onContainer(() => handle.getExposedPorts(opts.hostname));
+      const live = yield* onContainer(() => handle.getExposedPorts());
 
       return live.some(row => row.port === port && row.url === exposed.url)
         ? { ...exposed, route: { reached: true } }
@@ -260,7 +266,7 @@ export function adaptCloudflareSandbox(
     // Withdraw first: a revoked port the edge still admits is unsafe. The container's own revoke needs no readiness,
     // and a container that keeps the exposure regardless serves nothing the edge admits.
     unexposePort: (port) => settle(Effect.gen(function* () {
-      if (previews !== null) yield* callDevbox(() => previews.withdraw(port));
+      if (previews !== null) yield* callDevbox(() => previews.exposures.withdraw(port));
       const removed = yield* callDevbox(() => jsonResultOrVoid(handle.unexposePort(port)));
       yield* recordPortsMoved(portsMoved);
 
@@ -269,13 +275,13 @@ export function adaptCloudflareSandbox(
     // Renewing what was published keeps long-lived previews from ageing out; what the container reports publishes
     // nothing. A failed renewal is reported and the listing stands: the record is already correct.
     // Not `onContainer`: a read never starts a container.
-    getExposedPorts: (hostname) => settle(callDevbox(async () => {
-      const rows = await handle.getExposedPorts(hostname);
+    getExposedPorts: () => settle(callDevbox(async () => {
+      const rows = await handle.getExposedPorts();
 
       if (previews !== null) {
-        const index = previews;
+        const { exposures: index, zone } = previews;
         await Promise.all(rows.map(async (row) => {
-          const label = sandboxPreviewLabelOf(new URL(row.url), { PREVIEW_HOST_SUFFIX: hostname });
+          const label = sandboxPreviewLabelOf(new URL(row.url), { PREVIEW_HOST_SUFFIX: zone });
 
           if (label === null || label.port !== row.port) return;
 

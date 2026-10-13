@@ -4,12 +4,21 @@
  */
 
 import type { ToolSet } from 'ai';
+import * as v from 'valibot';
+import { Cause, Effect, Exit } from 'effect';
 import { buildToolSurface, type BuiltinToolDeps, type CodemodeBuilder } from '../tools/builtins';
 import type { AgentsToolDeps } from './agents-tool';
 import { createAgentsTool } from './agents-operations';
 import type { EffectClaimDeps } from '../tools/effect-claim';
 import { wrapToolsForBackground, type ActorJobs } from '../jobs/background-wrap';
+import { isBackgroundOutcomeText } from '../jobs/threshold';
 import { withClampedToolResult } from '../tools/clamp';
+import { createCraftLedger, observeCraftCall, type CraftLedger } from '../craft/in-episode';
+import type { TurnCraftLedger } from '../craft/turn-ledger';
+import { currentWorkMode } from '../execution/work-mode';
+import { renderThrownChain, settle } from '../obs/index';
+import { renderToolResult } from '../utils/evidence-window';
+import type { AgentRuntime } from '../types/agent-runtime';
 
 // Not `ActorToolDeps`: cf-backend's actor-agent.ts already owns that name.
 export interface ActorToolsetDeps extends BuiltinToolDeps {
@@ -20,6 +29,8 @@ export interface ActorToolsetDeps extends BuiltinToolDeps {
   /** Builds `eval` over the finished surface (builtins plus `agents`); runs before the effect-claim wrap. */
   codemode?: CodemodeBuilder;
   jobs: ActorJobs;
+  /** The turn's crafted-tool record: its `eval` calls are observed here, where they run. Absent, none is. */
+  craft?: TurnCraftLedger;
 }
 
 export interface ActorToolsets {
@@ -46,7 +57,64 @@ export function buildActorTools(deps: ActorToolsetDeps): ActorToolsets {
     )),
   });
 
-  return { raw, turn: wrapToolsForBackground(raw, deps.jobs) };
+  const turn = wrapToolsForBackground(raw, deps.jobs);
+
+  if (deps.craft !== undefined && turn.eval !== undefined) {
+    turn.eval = observingCrafts(turn.eval, craftLedgerOver(deps.rt), deps.craft);
+  }
+
+  return { raw, turn };
+}
+
+/** The crafted-tool store `rt` holds, opened on first use: a turn that records nothing reads none, and an agent's own
+ *  isolate has none (they are the workspace's). */
+function craftLedgerOver(rt: Pick<AgentRuntime, 'craftStore' | 'storage'>): CraftLedger {
+  let opened: CraftLedger | undefined;
+  const ledger = (): CraftLedger => (opened ??= createCraftLedger({ craftStore: rt.craftStore, sql: rt.storage.sql }));
+
+  return { names: () => ledger().names(), observe: (names, quality) => ledger().observe(names, quality) };
+}
+
+/**
+ * `eval`, scored where it runs, over the store its crafted tools live in: each call it closes while `turn` records is
+ * observed against the callable set as it was dispatched (`observeCraftCall`), into `turn` under its call id. A
+ * backgrounded call has not finished, so it is not observed; nor is a Plan invocation.
+ */
+export function observingCrafts(entry: ToolSet[string], ledger: CraftLedger, turn: TurnCraftLedger): ToolSet[string] {
+  const { execute } = entry;
+
+  if (execute === undefined) return entry;
+
+  return {
+    ...entry,
+    execute: async (input, options) => {
+      if (!turn.recording || currentWorkMode() === 'plan') return await execute(input, options);
+      const before = new Set(ledger.names());
+      const code = v.safeParse(v.object({ code: v.string() }), input);
+
+      const observe = (result: string, failed: boolean): void => {
+        if (!code.success || isBackgroundOutcomeText(result)) return;
+        const call = observeCraftCall(ledger, { code: code.output.code, before, result, failed });
+
+        if (call !== null) turn.note(options.toolCallId, call);
+      };
+
+      // The call closes as it would unobserved: its output, or its own error rethrown as it was thrown.
+      return await settle(Effect.gen(function* () {
+        const settled = yield* Effect.exit(Effect.promise(async () => await execute(input, options)));
+
+        if (Exit.isSuccess(settled)) {
+          observe(renderToolResult(settled.value), false);
+
+          return settled.value;
+        }
+
+        observe(renderThrownChain({ cause: Cause.squash(settled.cause) }), true);
+
+        return yield* Effect.failCause(settled.cause);
+      }));
+    },
+  };
 }
 
 export {

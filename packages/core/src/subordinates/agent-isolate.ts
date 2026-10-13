@@ -12,6 +12,7 @@ import type { OpenWork } from '../orchestrator/chat-session';
 import type { ModelCallReport } from '../events/model-call';
 import type { DynamicContext } from '../prompting/volatile-context';
 import type { HeadCapture } from '../heads/head-inference';
+import type { CraftCall } from '../craft/in-episode';
 import type { HeadInput, HeadReport, HeadStep } from '../heads/types';
 import type { HeadStreamKind } from '../heads/head-stream';
 import type { JsonObject, JsonValue } from '../utils/json';
@@ -165,6 +166,9 @@ export interface AgentToolAnswer {
   readonly reports: SubordinateReportLedger;
   /** The agent's open work once the tool ran: its tasks and whether a job of its still runs. */
   readonly openWork: OpenWork;
+  /** What its `eval` created and called of the workspace's crafted tools, as scored where it ran; its turn's record keeps
+   *  it. Null for any other tool, or a turn that does not record evolution. */
+  readonly crafted: CraftCall | null;
 }
 
 export interface AgentTrace {

@@ -28,10 +28,8 @@ const sandboxFor = (id: string) => {
 
     return {
       resolveReadiness: async () => ({ kind: 'restored' as const }),
-      // A command with no deadline takes the untimed lane; `exec` is the SDK's bounded lane and not what the handle reaches.
-      execUntimed: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
-      releaseUntimed: async () => {},
-      exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+      exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
+      releaseExec: async () => {},
       readFile: async () => ({ content: '', exitCode: 0 }),
       writeFile: async () => ({ exitCode: 0 }),
       listFiles: async () => ({ files: [], exitCode: 0 }),

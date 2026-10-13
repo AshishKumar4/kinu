@@ -308,8 +308,8 @@ A cold container costs about 2.8s, a warm call 0.22s, both measured on
 `core/src/execution/sandbox.ts`; the warm one survives only here. An escalated
 command has no elapsed deadline. An absent `SandboxHandle.exec` `timeout`
 means no deadline and uses the container runtime's own `exec`
-(`Devbox.execUntimed`), not SDK `exec` (`core/src/execution/sandbox.ts`;
-DEVBOX-DECISIONS D37). The wait is bounded instead: the call
+(`Devbox.exec`), not SDK `exec` (`core/src/execution/sandbox.ts`;
+DEVBOX-DECISIONS D37, D87). The wait is bounded instead: the call
 backgrounds after 30s interactive or 300s one-shot (`BACKGROUND_POLICY`,
 `core/src/types/jobs.ts`) while the work continues. A lane deadline would
 silently outrank those detach windows, so there is none.

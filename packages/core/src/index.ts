@@ -998,7 +998,9 @@ export {
 // CraftStore quality
 export { effectiveScore, filterByEffectiveScore, updateCraftScores } from './craft/ema';
 
-export { CRAFT_NEUTRAL_PRIOR } from './craft/in-episode';
+export { CRAFT_NEUTRAL_PRIOR, type CraftCall } from './craft/in-episode';
+
+export { TurnCraftLedger } from './craft/turn-ledger';
 
 
 export { periodicCraftConsolidation } from './craft/consolidation';
@@ -1727,11 +1729,9 @@ export { prepareActorProgram, type ActorTurnProgram } from './orchestrator/actor
 export { USER_MESSAGE_SIGNAL_KIND } from './types/signals';
 
 export {
-  TurnSteering, isFailingToolResult,
+  TurnSteering,
   type TurnProgressInputs,
 } from './orchestrator/turn-steering';
-
-export { CraftCycle } from './orchestrator/craft-cycle';
 
 export {
   CompletionGate, observeCompletionState, completionGateText,

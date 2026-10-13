@@ -2,7 +2,7 @@
 
 Devbox presents an ephemeral Cloudflare container as a machine that stays: its files survive a recycle, its supervised processes start again, and its preview URLs keep their hostname.
 
-<p align="center"><img src="docs/architecture.svg" width="880" alt="Your Worker calls the Devbox Durable Object, which owns the container. The container's web traffic leaves through DevboxOutbound; its backup reaches R2 through DevboxStoreGateway."></p>
+<p align="center"><img src="docs/architecture.svg" width="880" alt="Your Worker calls the Devbox Durable Object, which owns the container. The container's web traffic leaves, and its backup reaches R2, through DevboxGateway."></p>
 
 Every decision in this package, with the measurement that settled it, is in [DEVBOX-DECISIONS.md](../../docs/DEVBOX-DECISIONS.md); the D-numbers below point there. Read it before you change the package.
 
@@ -11,24 +11,15 @@ Every decision in this package, with the measurement that settled it, is in [DEV
 The core of [`example/worker.ts`](example/worker.ts), a complete host with no Kinu code:
 
 ```ts
-import { Devbox, GOLDEN_NAME, type BoxPeers, type DevboxStore } from '@kinu.run/devbox';
+import { Devbox } from '@kinu.run/devbox';
 
-export { DevboxOutbound, DevboxStoreGateway } from '@kinu.run/devbox';
+export { DevboxGateway } from '@kinu.run/devbox';
 
 interface Env {
   readonly Box: DurableObjectNamespace<ExampleBox>;
-  readonly WORKSPACES: R2Bucket;
 }
 
-export class ExampleBox extends Devbox<Env> {
-  protected override get store(): DevboxStore {
-    return { binding: 'WORKSPACES', bucket: this.env.WORKSPACES };
-  }
-
-  protected override get peers(): BoxPeers {
-    return { golden: () => this.env.Box.getByName(GOLDEN_NAME), box: (id) => this.env.Box.get(this.env.Box.idFromString(id)) };
-  }
-}
+export class ExampleBox extends Devbox<Env> {}
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -43,18 +34,19 @@ export default {
 "durable_objects": { "bindings": [{ "class_name": "ExampleBox", "name": "Box" }] },
 "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ExampleBox"] }],
 "containers": [{ "class_name": "ExampleBox", "scheduling_policy": "durable_object" }],
-"r2_buckets": [{ "binding": "WORKSPACES", "bucket_name": "kinu-devbox-example" }]
+"r2_buckets": [{ "binding": "DEVBOX_STORE", "bucket_name": "kinu-devbox-example" }]
 ```
 
-- `store` makes the box durable. Without it the box runs and keeps nothing.
-- `peers` lets a box start from one golden snapshot of `cloudflare/debian-trixie` with the tools installed, built by the object named `GOLDEN_NAME` (D66). Publish the pinned tools to the bucket once: `bun scripts/devbox-tools.ts publish <bucket>`. Without `peers`, a box starts the image named `devbox` in the container's `images` map.
-- The Worker must export `DevboxOutbound`, and `DevboxStoreGateway` when the box has a store. The gateway answers the container's S3 calls from the R2 binding, so no key pair exists (D41).
+- The store is the R2 bucket bound as `DEVBOX_STORE` (override `store` to name another binding). A box keeps its disk there, and starts from one golden snapshot of `cloudflare/debian-trixie` with the pinned tools installed, built by the box named `GOLDEN_NAME` in the same namespace (D66). Publish the pinned tools to the bucket once: `bun scripts/devbox-tools.ts publish <bucket>`. A box with no bucket bound is refused at its first start, naming the binding (D85).
+- The box finds its own namespace among the Worker's exports, the one that accepts its id (D85), so the class must be exported from the Worker.
+- The Worker must export `DevboxGateway`. It routes the container's web traffic, and answers its S3 calls from the R2 binding, so no key pair exists (D41).
+- Previews are optional: set `DEVBOX_PREVIEW_HOST` to a zone routed to the Worker, and route it with `previewBox` ([Ports and previews](#ports-and-previews)).
 
 ## Lifecycle
 
-<p align="center"><img src="docs/lifecycle.svg" width="880" alt="A call starts a stopped box from its own snapshot, the golden snapshot or the image. The restore attaches /workspace, restarts supervised processes and re-exposes ports. An idle check every 60 s leads to a graceful stop, or to a rest ask when a process still runs."></p>
+<p align="center"><img src="docs/lifecycle.svg" width="880" alt="A call starts a stopped box from its own snapshot, else the golden snapshot, else waits for the golden. The restore attaches /workspace, restarts supervised processes and re-exposes ports. An idle check every 60 s leads to a graceful stop, or to a rest ask when a process still runs."></p>
 
-A box in `repair` still takes calls, so its agent can fix what did not come back. An idle box with a live process records a `rest` incident and holds until `answerRest()`; the default `onIncident` only logs it, so a host that wants the ask overrides `onIncident` (D59). A start that fails the same way every time is refused with code `refused` until its image, size or internet setting changes, or a caller calls `start()` or `attachNow()` (D52).
+A box in `repair` still takes calls, so its agent can fix what did not come back. An idle box with a live process records a `rest` incident and holds until `answerRest()`; the default `onIncident` only logs it, so a host that wants the ask overrides `onIncident` (D59). A start that fails the same way every time is refused with code `refused` until its size, internet setting or store binding changes, or a caller calls `start()` or `attachNow()` (D52).
 
 ## Durability
 
@@ -65,7 +57,7 @@ A box in `repair` still takes calls, so its agent can fix what did not come back
 | Files in `/workspace`, `.git` included | as at the last `quiesce()` | as at the last save |
 | `archiveExcludes`: `node_modules`, caches, build output | yes | no; an incident names them |
 | Supervised processes | restarted, without their memory | restarted, without their memory |
-| Exposed ports, with `previewHost` set | same URL | same URL |
+| Exposed ports, with a preview zone | same URL | same URL |
 | Other processes | no | no |
 
 Only a graceful stop takes a snapshot: `quiesce()`, a running `resize()`, or `answerRest('now')`. `stop()` and `destroy()` save nothing. Snapshots serve for 29 days from the first one in their lineage (D65). A snapshot start that fails or is not admitted within 10 s falls back to a fresh start and the chain; a capacity refusal retries the snapshot instead. The chain's layout and its deltas, merged like a binary counter, are D57 and D77; the block layer is [DEVBOX-BLOCK-LAYER.md](../../docs/DEVBOX-BLOCK-LAYER.md).
@@ -90,13 +82,13 @@ Commands, files, processes, `exposePort()` and `probePort()` wait on `ensureRead
 
 ```ts
 const { stdout, stderr, exitCode } = await box.exec('npm test', { cwd: '/workspace/app' });
+const built = await readExec(await box.execStream('npm run build'), (from, bytes) => console.log(from, bytes.byteLength));
 
-const execId = crypto.randomUUID();
-const stream = await box.execUntimedStream('npm run build', { execId });
-const built = await collectExecRecords(stream, (from, bytes) => console.log(from, bytes.byteLength));
+await box.exec('npm run deploy', { execId });   // once per id: a retry after a lost answer is not run again
+await box.killExec(execId);
 ```
 
-Each `execId` launches once; a repeat gets the first answer or `indeterminate`. `killUntimed(execId)` ends its process tree.
+Every command runs as `setsid -w bash -c`, in its own process group, with no deadline. Cancelling a stream ends its command. Give an `execId` when a retry must not run the command twice, or to end it with `killExec`: each id launches once, a repeat gets the first answer, or `indeterminate` for a stream, until `releaseExec(execId)`. Without one the box keeps nothing.
 
 ### Files
 
@@ -122,16 +114,18 @@ A supervised process has a durable spec, so every start runs it again. A `startP
 ### Ports and previews
 
 ```ts
-const { url } = await box.exposePort(3000, { hostname: 'preview.example.com' });
-// https://3000-<previewName>-<token>.preview.example.com
+// DEVBOX_PREVIEW_HOST = "preview.example.com", with a wildcard route *.preview.example.com/* to this Worker
+const { url } = await env.Box.getByName('demo').exposePort(3000);
+// https://3000-demo-<token>.preview.example.com
 
-// In your Worker, with port and token read from the preview host:
-const target = new URL(request.url);
-target.pathname = `/_devbox/preview/${port}/${token}${target.pathname}`;
-return box.fetch(new Request(target.toString(), request));
+// In your Worker's fetch, before anything else:
+const preview = previewBox(request, env.Box);
+if (preview !== null) return preview.fetch(request);
 ```
 
-The token is kept per port. Override `previewHost` and every start re-exposes the port at the same URL. `previewName` defaults to the object id. To pass `token` yourself, take it from `portToken(port)`.
+`previewBox` reaches the box a host under `DEVBOX_PREVIEW_HOST` names, and the box serves the request: it checks that the name is its own, that the token is the port's, and that the port is exposed. The port comes from the host; the visitor's path reaches the port as it is (D60). The token is kept per port, so every start re-exposes the port at the same URL. To pass `token` yourself, take it from `portToken(port)`.
+
+The name is the one the box was reached by with `getByName`, kept the first time the box sees it. A host label holds 63 characters, so a name gets 41 with a 4-digit port, in lowercase letters, digits and hyphens. A box reached only by its id, a name that does not fit, or no preview zone is refused at `exposePort`.
 
 ### Resize and sizes
 
@@ -177,11 +171,10 @@ await box.destroy();        // destroy the container; a later call starts it aga
 | `ensureReady()` | Strict `resolveReadiness()` | `restored` or `repair`; throws on `pending` |
 | `restoreStatus()` | Reads the restore | `{ restoring, refused }` |
 | `attachNow()` | Retries a refused or partial restore | `AttachOutcome` |
-| `exec(command, { cwd, env })` | Runs `bash -c` | `{ stdout, stderr, exitCode }` |
-| `execUntimed(command, { execId, cwd, env })` | Runs once per `execId` | `{ stdout, stderr, exitCode }`; `indeterminate` |
-| `execUntimedStream(command, { execId, cwd, env })` | The same, streamed | `ReadableStream`; read it with `collectExecRecords` |
-| `killUntimed(execId)` | Ends the process tree | `false` if it had already ended |
-| `releaseUntimed(execId)` | Forgets the id | `void` |
+| `exec(command, { cwd, env, execId })` | Runs `setsid -w bash -c`; once per `execId` | `{ stdout, stderr, exitCode }`; `indeterminate` |
+| `execStream(command, { cwd, env, execId })` | The same, streamed | `ReadableStream`; read it with `readExec` |
+| `killExec(execId)` | Ends the process tree | `false` if it had already ended |
+| `releaseExec(execId)` | Forgets the id | `void` |
 | `readFile(path, { encoding })`, `readFileStream(path)` | Reads a file | `{ content, encoding }`, `ReadableStream` |
 | `writeFile(path, content, { encoding })` | Writes text or a stream; makes parents | `void` |
 | `writeFileIfDigest({ path, contentBase64, expected, operation, settled })` | Writes in place only over the bytes whose sha256 is `expected` (`null`: no file); drops the kept answers of `settled` | `{ ok, sha256 }` |
@@ -192,9 +185,9 @@ await box.destroy();        // destroy the container; a later call starts it aga
 | `stopSupervised(processId)`, `listSupervised()` | Stops one; lists them | `{ stopped }`, rows |
 | `startProcess(command, { cwd, processId })` | Starts a process that is not restored | `{ id, pid, status, … }` |
 | `getProcess(id)`, `listProcesses()`, `killProcess(id)` | Native processes | a record or `null`, records, `void` |
-| `portToken(port, name?)` | The port's stable token | `{ urlToken }`; `invalid-input` for 6080 |
-| `exposePort(port, { hostname, name, token })` | Publishes a port; `token` must come from `portToken()` | `{ port, name, url }`; `invalid-input` for 6080 |
-| `getExposedPorts(hostname)` | Lists published ports | `{ port, name, url }[]`; `[]` when stopped |
+| `portToken(port, name?)` | The port's stable token | `{ urlToken }`; refused as `exposePort` is |
+| `exposePort(port, { name, token })` | Publishes a port; `token` must come from `portToken()` | `{ port, name, url }`; `configuration` without a zone or a name, `invalid-input` for 6080 or a name no host label holds |
+| `getExposedPorts()` | Lists published ports | `{ port, name, url }[]`; `[]` when stopped |
 | `unexposePort(port)` | Revokes a port, also on a stopped box | `void` |
 | `probePort(port)` | Asks whether anything answers HTTP | `boolean` |
 | `portListeners(stamp, ports?)` | Lists listening sockets and their processes | `PortListener[]`; `null` when stopped |
@@ -208,7 +201,7 @@ await box.destroy();        // destroy the container; a later call starts it aga
 | `discardState()` | Deletes the backup and drops its snapshots (D65) | `void` |
 | `destroy()` | Destroys the container without a save and ends the box's starts | `void` |
 | `devboxState()`, `devboxIncidentReasons()` | Reads the box and its incidents | a report, incident rows |
-| `fetch(request)` | Serves `/_devbox/preview/…`, `/_devbox/terminal` and `/_devbox/desktop` | `Response`; 404 |
+| `fetch(request)` | Serves its preview hosts, `/_devbox/terminal` and `/_devbox/desktop` | `Response`; 404 |
 | `resetShell()`, `noteTerminalActivity()` | Ends the terminal session; counts terminal use | `void` |
 | `ensureGolden()` | Builds the golden snapshot if needed | its snapshot id |
 
@@ -216,15 +209,15 @@ await box.destroy();        // destroy the container; a later call starts it aga
 
 | Override | Default | Sets |
 | --- | --- | --- |
-| `store`, `peers` | none | the backup bucket; the golden builder |
-| `previewHost`, `previewName` | none, the object id | the preview URL |
+| `store` | `'DEVBOX_STORE'` | the binding of the backup bucket, which also holds the pinned tools |
+| `previewHost`, `previewName` | `DEVBOX_PREVIEW_HOST`, the name the box was reached by | the preview URL; a host that overrides `previewHost` routes its own zone |
 | `policy` | 60 s heartbeat, 30 min idle, 10 min quiet, 5 min saves, 25 s restore | the lifecycle's timings |
 | `defaultSize` | `'medium'` | the size nobody chose |
 | `archiveExcludes` | `node_modules`, `*.log`, `.cache`, `.bun`, `__pycache__`, `.venv`, `target`, `.next`, `.turbo`, `dist` | what the chain skips |
 | `outboundPolicy()` | `{ routes: {} }` | exact-host routes and a fallback for HTTP on port 80 and HTTPS on 443 |
 | `enableInternet` | `true` | raw internet, which other ports use directly; `false` answers unrouted HTTP and HTTPS with 403 |
 | `onIncident(incident, delivery)` | logs it | where failures and rest asks go |
-| `registryToken`, `registryAccount` | none; the account of a `registry.cloudflare.com` image | together, let the box delete dead snapshots (D65) |
+| `registry` | `DEVBOX_REGISTRY_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` from the env, when both are set | the Containers token and account that let the box delete dead snapshots (D65) |
 
 Devbox's own failures are `DevboxError`s with a `code` (D42). Worker RPC drops the class, so read a caught one with `devboxFailure({ cause: error })`.
 

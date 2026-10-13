@@ -334,11 +334,24 @@ function vaultPolicyReasons({ base, kinu, routes, vault }: VaultClasses, sources
   return reasons;
 }
 
-function dispatcherReasons(router: ContainerClass): string[] {
+/** A function declared in the interception sources, by name. */
+function functionNamed(sources: ReadonlyMap<string, string>, name: string): SyntaxNode | undefined {
+  let found: SyntaxNode | undefined;
+
+  for (const [file, text] of sources) {
+    if (!text.includes(name)) continue;
+    walk(parse(file, text).root, node => { if (node.type === 'FunctionDeclaration' && declaredName(node) === name) found = node; });
+  }
+
+  return found;
+}
+
+/** The egress router, given the box's outbound props: owned routes first, the open internet only where declared. */
+function dispatcherReasons(router: SyntaxNode): string[] {
   const reasons: string[] = [];
   let hasFallback = false;
-  walk(router.node, node => { if (node.raw.type === 'LogicalExpression' && memberPath(node.raw.right) === 'this.ctx.props.fallback') hasFallback = true; });
-  const calls = callsIn(router.node);
+  walk(router, node => { if (node.raw.type === 'LogicalExpression' && memberPath(node.raw.right) === 'outbound.fallback') hasFallback = true; });
+  const calls = callsIn(router);
   const routed = calls.find(call => call.raw.type === 'CallExpression' && memberPath(call.raw.callee) === 'route.fetch');
   const direct = calls.find(call => call.raw.type === 'CallExpression' && nameOf(call.raw.callee) === 'fetch');
 
@@ -346,7 +359,7 @@ function dispatcherReasons(router: ContainerClass): string[] {
   let conditional = false;
 
   for (let parent = direct?.parent; parent !== undefined; parent = parent.parent) {
-    if (parent.raw.type === 'ConditionalExpression' && memberPath(parent.raw.test) === 'this.ctx.props.internet'
+    if (parent.raw.type === 'ConditionalExpression' && memberPath(parent.raw.test) === 'outbound.internet'
       && direct !== undefined && direct.start >= parent.raw.consequent.start && direct.end <= parent.raw.consequent.end) conditional = true;
   }
 
@@ -361,15 +374,18 @@ export function nativeRoutingReasons(sources: ReadonlyMap<string, string>, entry
   const base = classes.get('Devbox');
   const kinu = classes.get('KinuDevbox');
   const routes = classes.get('ContainerRoutes');
-  const router = classes.get('DevboxOutbound');
+  const gateway = classes.get('DevboxGateway');
+  const router = functionNamed(sources, 'routeEgress');
   const vault = classes.get('KinuEgress');
 
-  if (base === undefined || kinu === undefined || routes === undefined || router === undefined || vault === undefined) return ['native routing has an unmeasured owner'];
+  if (base === undefined || kinu === undefined || routes === undefined || gateway === undefined || router === undefined || vault === undefined) return ['native routing has an unmeasured owner'];
 
   const reasons = [...admissionPolicyReasons(base), ...interceptionReasons(routes),
     ...vaultPolicyReasons({ base, kinu, routes, vault }, sources), ...dispatcherReasons(router)];
 
-  if (!exportsNamed(entry, 'DevboxOutbound', '@kinu.run/devbox')) reasons.push('DevboxOutbound is not bound to its routing implementation in the Worker entry');
+  if (!callsIn(gateway.node).some(call => callName(call) === 'routeEgress')) reasons.push('DevboxGateway does not route egress through its router');
+
+  if (!exportsNamed(entry, 'DevboxGateway', '@kinu.run/devbox')) reasons.push('DevboxGateway is not bound to its routing implementation in the Worker entry');
 
   if (vault.file !== WORKER_ENTRY || !exportsNamed(entry, 'KinuEgress')) reasons.push('KinuEgress is not bound to its routing implementation in the Worker entry');
 

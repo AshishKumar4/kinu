@@ -115,18 +115,11 @@ export type PublicFrame =
   /** The DO announcing a stream for `id` it keeps from this socket until acked: its live chunks are the workspace
    *  working. */
   | { readonly kind: 'resuming'; readonly id: string }
-  /** The DO's account of where a steered message is: taken, read by the
-   *  running turn at a step, run as a turn of its own, or handed back. */
-  | { readonly kind: 'steer'; readonly steerId: string; readonly status: SteerStatus }
   /** The live reads a write in the workspace moved (`reads_changed`), sent at the end of the tick that wrote: before
    *  the answer to any call that arrived after the write. Names are kept as sent, so a read a newer build adds still
    *  counts. */
   | { readonly kind: 'reads'; readonly reads: readonly string[] }
   | { readonly kind: 'other'; readonly type: string };
-
-const STEER_STATUSES = ['queued', 'landed', 'turn', 'returned'] as const;
-
-type SteerStatus = (typeof STEER_STATUSES)[number];
 
 const FrameSchema = v.object({
   type: v.string(),
@@ -134,8 +127,6 @@ const FrameSchema = v.object({
   body: v.optional(v.string()),
   done: v.optional(v.boolean()),
   landed: v.optional(v.picklist(['mid-turn', 'turn'])),
-  steerId: v.optional(v.string()),
-  status: v.optional(v.string()),
   /** The DO sets `error: true` on a terminal failure frame and carries the text
    *  in `body`; an RPC reply's `error` is the failure itself, which may be a
    *  string or a structured value. One field, two producers, so both shapes are
@@ -203,12 +194,6 @@ export function decodeFrame(data: SocketPayload): PublicFrame | null {
   if (type === CHAT_MESSAGE_TYPES.STREAM_RESUMING && id !== undefined) return { kind: 'resuming', id };
 
   if (type === READS_CHANGED_EVENT && frame.output.reads !== undefined) return { kind: 'reads', reads: frame.output.reads };
-
-  if (type === 'steer_status' && frame.output.steerId !== undefined) {
-    const status = v.safeParse(v.picklist(STEER_STATUSES), frame.output.status);
-
-    if (status.success) return { kind: 'steer', steerId: frame.output.steerId, status: status.output };
-  }
 
   return { kind: 'other', type };
 }

@@ -2,7 +2,7 @@
 // pushed the bench's operation tally. The push never settled, every later store request in that
 // isolate awaited it, and from then on every box's `/backups` mount failed until teardown.
 import { expect, test } from 'bun:test';
-import { DevboxStoreGateway } from '../bench/worker';
+import { DevboxGateway } from '../bench/worker';
 import { storeRouteHost, storeSource, type StoreGatewayProps } from '../src/store-gateway';
 
 const props: StoreGatewayProps = {
@@ -23,7 +23,7 @@ test('a store request does not wait on a tally push that another request left un
   });
 
   const head = async (): Promise<number> => {
-    const gateway = new DevboxStoreGateway(Object.create({ props }), env);
+    const gateway = new DevboxGateway(Object.create({ props: { store: props } }), env);
     const answer = await gateway.fetch(new Request(`http://${storeRouteHost('route-1')}/BACKUP_BUCKET/a`, { method: 'HEAD' }));
 
     return answer.status;
