@@ -108,13 +108,13 @@ describe('the model stack retries every call once, in one place', () => {
     if (!APICallError.isInstance(failure)) throw new Error('an exhausted response was not an API call failure', { cause: failure });
 
     expect(harness.calls()).toBe(2);
-    expect(harness.waits).toEqual([stated ? 0 : 1_000]);
+    expect(harness.waits).toEqual([stated ? 0 : 3_000]);
     expect(failure.isRetryable).toBe(false);
     expect(failure.cause).toMatchObject({ statusCode: 429, responseHeaders: Object.fromEntries(headers), responseBody: body });
     expect(failure.responseHeaders).toEqual(Object.fromEntries(headers));
     expect(failure.responseBody).toBe(body);
     expect(describeProviderError({ cause: failure })).toContain(providerText);
-    expect(statedRetryAfterMs({ cause: failure }, 1_000_000)).toBe(stated ? 0 : 2_000);
+    expect(statedRetryAfterMs({ cause: failure }, 1_000_000)).toBe(stated ? 0 : 6_000);
   });
 
   test.each([
@@ -269,7 +269,7 @@ describe('the model stack retries every call once, in one place', () => {
 
     await harness.call();
 
-    expect(harness.waits).toEqual([1_998]);
+    expect(harness.waits).toEqual([3_998]);
   });
 
   test('a generated backoff never waits past the per-wait cap', async () => {
@@ -288,8 +288,8 @@ describe('the model stack retries every call once, in one place', () => {
     const harness = retryHarness(Array.from({ length: 6 }, () => new Response('limited', { status: 429, headers: { 'Retry-After': '1' } })));
 
     await expect(harness.call()).rejects.toBeInstanceOf(APICallError);
-    expect(harness.calls()).toBe(4);
-    expect(harness.waits).toEqual([1_000, 1_000, 1_000]);
+    expect(harness.calls()).toBe(6);
+    expect(harness.waits).toEqual([1_000, 1_000, 1_000, 1_000, 1_000]);
   });
 
   test('continues through provider-mandated waits until success', async () => {
@@ -305,7 +305,7 @@ describe('the model stack retries every call once, in one place', () => {
   });
 
   test.each([
-    ['default', undefined, 3], ['none', 0, 0], ['one', 1, 1],
+    ['default', undefined, 5], ['none', 0, 0], ['one', 1, 1],
   ] as const)('the call\'s %s retry budget is spent once, the SDK retrying nothing on top', async (_label, requested, retries) => {
     const harness = retryHarness([new Response('limited', { status: 429, headers: { 'Retry-After': '1' } })]);
 
@@ -353,7 +353,7 @@ describe('the model stack retries every call once, in one place', () => {
 
     expect(await harness.call()).toBe('ok');
     expect(harness.calls()).toBe(3);
-    expect(harness.waits).toEqual([1_000, 2_000]);
+    expect(harness.waits).toEqual([3_000, 6_000]);
   });
 
   test('529 and an overloaded 503 are waited as limits; any other retryable failure backs off without cooling the lane', async () => {

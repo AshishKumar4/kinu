@@ -14,6 +14,7 @@ import { fmtSpan, type TurnLiveness, type WorkMode } from "@kinu.run/core";
 import { AttachButton, AttachmentTray, pasteAttachments, type AttachmentsControl } from "@/components/Attachments";
 import type { WorkspaceNotice } from "@kinu.run/core";
 import { composing } from "@/components/ui/form";
+import type { ProviderWaitShown } from "@/hooks/use-chat-owner";
 
 const CHAT_MODES: readonly WorkMode[] = ["build", "plan"];
 
@@ -92,8 +93,8 @@ function Notice({ notice }: { notice: ComposerNotice }) {
   );
 }
 
-/** Who a provider's wait is on, and for how long, until the wait ends. `untilMs` is this browser's clock. */
-export function useProviderWaitNotice(wait: { provider: string; untilMs: number } | null): ComposerNotice[] {
+/** Who a provider's wait is on, and for how long, until the wait ends. */
+export function useProviderWaitNotice(wait: ProviderWaitShown | null): ComposerNotice[] {
   const [now, setNow] = useState(Date.now);
 
   useEffect(() => {
@@ -119,7 +120,9 @@ export function useProviderWaitNotice(wait: { provider: string; untilMs: number 
 
   if (wait === null || left <= 0) return [];
 
-  return [{ id: "provider-wait", tone: "progress", text: `Waiting on ${wait.provider} · retrying in ${fmtSpan(Math.ceil(left / 1_000) * 1_000)}` }];
+  const of = wait.retry === undefined || wait.retries === undefined ? "" : ` · ${String(wait.retry)} of ${String(wait.retries)}`;
+
+  return [{ id: "provider-wait", tone: "progress", text: `Waiting on ${wait.provider} · retrying in ${fmtSpan(Math.ceil(left / 1_000) * 1_000)}${of}` }];
 }
 
 /** Neither tone disables the composer; that belongs to the socket. */

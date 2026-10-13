@@ -141,3 +141,15 @@ describe('a wait on the provider shows over the composer only while it holds a t
     expect(verdictOf(observed.providerWait, 'provider-wait').afterTurn).toEqual([]);
   });
 });
+
+describe('a turn whose provider limits it for a minute, stating no wait, answers by itself', () => {
+  test('it answers and does not stop on the refusal', () => {
+    const { answered, stopped } = verdictOf(observed.providerWait, 'provider-wait').minute;
+
+    expect({ answered, stopped }).toEqual({ answered: true, stopped: false });
+  });
+
+  test('while it waits, the composer counts its retries', () => {
+    expect(verdictOf(observed.providerWait, 'provider-wait').minute.notices.some((text) => /\b\d+ of \d+\b/u.test(text))).toBe(true);
+  });
+});

@@ -25,12 +25,17 @@ import { abortableSleep, providerPacer, type ProviderPacer } from '../pacing';
 import type { ProviderWaitInfo } from '../types';
 import { recordAttemptFailure, withAttemptIdentity, type AttemptIdentityCapture } from '../attempt-identity';
 
-/** Full-jitter backoff; unmeasured. */
+/** Full-jitter backoff for a failure that is not a rate limit; unmeasured. */
 const BASE_DELAY_MS = 2_000;
 
 const BACKOFF_FACTOR = 2;
 
 const MAX_DELAY_MS = 60_000;
+
+/** A rate limit that states no wait is waited out with half of each doubling ceiling fixed, from 4 s, so the default
+ *  budget's waits add up to at least a minute: Workers AI's limits are per minute, its 429s carried no wait header in
+ *  623 of 623 recorded, and calls answered again 63 s after the first 429 (prod-glm-1 evals, 2026-09-30). */
+const RATE_LIMIT_BASE_MS = 4_000;
 
 /** OMP's `maxRetryDelayMs` (oh-my-pi ai/src/types.ts:499); a longer Retry-After means the account is spent. */
 const MAX_RETRY_DELAY_MS = 60_000;
@@ -136,15 +141,16 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
 
   const warn = policy.warn ?? ((message: string) => diagnostics.failure('provider.rate_limited', new KinuError('unavailable', message)));
 
-  const reportWait = (waitMs: number, attemptNumber: number, source: ProviderWaitInfo['source'], status?: number): Effect.Effect<void> => {
+  const reportWait = (wait: ReportedWait): Effect.Effect<void> => {
     const onWait = policy.onWait;
 
     if (onWait === undefined) return Effect.void;
 
     const info: ProviderWaitInfo = {
-      provider: policy.provider, waitMs, attempt: attemptNumber, source,
+      provider: policy.provider, waitMs: wait.waitMs, attempt: wait.attempt, source: wait.source,
+      ...(wait.retry !== undefined && { retry: wait.retry, retries }),
       ...(policy.modelId !== undefined && { modelId: policy.modelId }),
-      ...(status !== undefined && { status }),
+      ...(wait.status !== undefined && { status: wait.status }),
     };
 
     return Effect.try({
@@ -176,7 +182,7 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
         yield* spendRetry(() => spentBy(outcome, policy.provider));
         const waitMs = Math.floor(random() * backoffCeiling(attemptNumber));
 
-        yield* reportWait(waitMs, attemptNumber, outcome.kind === 'stall' ? 'stall' : 'backoff');
+        yield* reportWait({ waitMs, attempt: attemptNumber, source: outcome.kind === 'stall' ? 'stall' : 'backoff', retry: waits });
         yield* Effect.promise(() => sleep(waitMs, signal));
         continue;
       }
@@ -193,7 +199,7 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
         const stated = retryAfter !== null && retryAfter <= MAX_RETRY_DELAY_MS;
         const waitMs = stated ? retryAfter : Math.floor(random() * backoffCeiling(attemptNumber));
 
-        yield* reportWait(waitMs, attemptNumber, stated ? 'header' : 'backoff', failure.statusCode);
+        yield* reportWait({ waitMs, attempt: attemptNumber, source: stated ? 'header' : 'backoff', status: failure.statusCode, retry: waits });
         yield* Effect.promise(() => sleep(waitMs, signal));
         continue;
       }
@@ -208,13 +214,13 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
         }));
       }
 
-      const waitMs = retryAfter ?? Math.floor(random() * backoffCeiling(attemptNumber));
+      const waitMs = retryAfter ?? rateLimitWait(waits + 1, random());
       const declared = pacer.declareWait(yield* lane.billed(), waitMs);
 
       yield* spendRetry(() => handedOver(policy.provider, waitMs, failure));
       owned = declared;
-      warn(`[kinu] ${policy.provider} rate-limited: waiting ${fmtSpan(waitMs)} (attempt ${String(attemptNumber)})`);
-      yield* reportWait(waitMs, attemptNumber, retryAfter !== null ? 'header' : 'backoff', limit.status);
+      warn(`[kinu] ${policy.provider} rate-limited: waiting ${fmtSpan(waitMs)} (retry ${String(waits)} of ${String(retries)})`);
+      yield* reportWait({ waitMs, attempt: attemptNumber, source: retryAfter !== null ? 'header' : 'backoff', status: limit.status, retry: waits });
       yield* Effect.promise(() => sleep(waitMs, signal));
     }
   }).pipe(Effect.onError((cause) => Effect.sync(() => recordAttemptFailure(capture, cause))));
@@ -247,7 +253,7 @@ interface CooldownCheck {
   readonly retries: number;
   readonly now: () => number;
   readonly signal: AbortSignal | undefined;
-  readonly reportWait: (waitMs: number, attempt: number, source: ProviderWaitInfo['source']) => Effect.Effect<void>;
+  readonly reportWait: (wait: ReportedWait) => Effect.Effect<void>;
 }
 
 /** The lane's cooldown waited out, re-read after each wait since a sibling may extend it; one past the longest wait, or
@@ -264,7 +270,7 @@ function cooledDown(check: CooldownCheck): Effect.Effect<void> {
 
       if (untilMs !== check.owned) {
         if (check.retries === 0) return yield* Effect.die(handedOver(policy.provider, waitMs));
-        yield* check.reportWait(waitMs, 0, 'cooldown');
+        yield* check.reportWait({ waitMs, attempt: 0, source: 'cooldown' });
       }
 
       yield* Effect.promise(() => pacer.pause(waitMs, signal));
@@ -272,8 +278,24 @@ function cooledDown(check: CooldownCheck): Effect.Effect<void> {
   });
 }
 
+/** One wait a call reports: `retry` is which of its retries the wait comes before, absent for a sibling's cooldown. */
+interface ReportedWait {
+  readonly waitMs: number;
+  readonly attempt: number;
+  readonly source: ProviderWaitInfo['source'];
+  readonly status?: number;
+  readonly retry?: number;
+}
+
 function backoffCeiling(attempt: number): number {
   return Math.min(MAX_DELAY_MS, BASE_DELAY_MS * BACKOFF_FACTOR ** Math.min(attempt - 1, 32));
+}
+
+/** The `retry`th wait on a rate limit that stated none: half its ceiling fixed, half drawn ({@link RATE_LIMIT_BASE_MS}). */
+function rateLimitWait(retry: number, drawn: number): number {
+  const ceiling = Math.min(MAX_DELAY_MS, RATE_LIMIT_BASE_MS * BACKOFF_FACTOR ** Math.min(retry - 1, 32));
+
+  return Math.floor(ceiling / 2 + drawn * (ceiling / 2));
 }
 
 interface StreamAttempt {
