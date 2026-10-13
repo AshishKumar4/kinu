@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="436" viewBox="0 0 880 436" role="img" aria-labelledby="title">
+  <title id="title">Your Worker calls a Devbox Durable Object, which owns the container. The container's HTTP on port 80 and HTTPS on 443 leave through DevboxOutbound; its backup traffic reaches R2 through DevboxStoreGateway.</title>
+  <style>
+    .bg { fill: #ffffff; }
+    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; }
+    .t { font-size: 16px; font-weight: 600; fill: #1f2328; }
+    .s { font-size: 13px; fill: #59636e; }
+    .c { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; font-size: 12px; fill: #59636e; }
+    .ct { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; font-size: 14px; font-weight: 600; fill: #1f2328; }
+    .line { stroke: #818b98; stroke-width: 1.5; fill: none; }
+    .head { fill: #818b98; }
+    .blue { fill: #ddf4ff; stroke: #54aeff; stroke-width: 1.5; }
+    .purple { fill: #fbefff; stroke: #c297ff; stroke-width: 1.5; }
+    .green { fill: #dafbe1; stroke: #4ac26b; stroke-width: 1.5; }
+    .orange { fill: #fff1e5; stroke: #fb8f44; stroke-width: 1.5; }
+    .gray { fill: #f6f8fa; stroke: #d1d9e0; stroke-width: 1.5; stroke-dasharray: 5 4; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #0d1117; }
+      .t, .ct { fill: #f0f6fc; }
+      .s, .c { fill: #9198a1; }
+      .line { stroke: #6e7681; }
+      .head { fill: #6e7681; }
+      .blue { fill: #132339; stroke: #4493f8; }
+      .purple { fill: #252139; stroke: #ab7df8; }
+      .green { fill: #12261e; stroke: #3fb950; }
+      .orange { fill: #2c1f1a; stroke: #db6d28; }
+      .gray { fill: #171b22; stroke: #3d444d; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+      <path class="head" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+  </defs>
+  <rect class="bg" width="880" height="436" rx="12"/>
+
+  <!-- Row 1: the caller, the box object, the container -->
+  <rect class="blue" x="16" y="24" width="180" height="112" rx="10"/>
+  <text class="t" x="106" y="56" text-anchor="middle">Your Worker</text>
+  <text class="s" x="106" y="80" text-anchor="middle">routes calls and</text>
+  <text class="s" x="106" y="98" text-anchor="middle">preview requests</text>
+  <text class="c" x="106" y="121" text-anchor="middle">env.Box.getByName(…)</text>
+
+  <rect class="purple" x="300" y="24" width="260" height="112" rx="10"/>
+  <text class="t" x="430" y="56" text-anchor="middle">Devbox</text>
+  <text class="s" x="430" y="80" text-anchor="middle">a Durable Object, one per box;</text>
+  <text class="s" x="430" y="98" text-anchor="middle">its SQLite keeps process specs,</text>
+  <text class="s" x="430" y="116" text-anchor="middle">port tokens and the backup record</text>
+
+  <rect class="green" x="674" y="24" width="190" height="112" rx="10"/>
+  <text class="t" x="769" y="56" text-anchor="middle">Container</text>
+  <text class="s" x="769" y="80" text-anchor="middle">/workspace on its disk;</text>
+  <text class="s" x="769" y="98" text-anchor="middle">starts from a snapshot</text>
+  <text class="s" x="769" y="116" text-anchor="middle">or the image</text>
+
+  <line class="line" x1="196" y1="80" x2="300" y2="80" marker-end="url(#arrow)"/>
+  <text class="s" x="248" y="70" text-anchor="middle">RPC, fetch</text>
+
+  <line class="line" x1="560" y1="80" x2="674" y2="80" marker-end="url(#arrow)"/>
+  <text class="s" x="617" y="70" text-anchor="middle">native API</text>
+  <text class="c" x="617" y="98" text-anchor="middle">ctx.container</text>
+
+  <!-- Row 2: the container's way out -->
+  <rect class="orange" x="16" y="262" width="180" height="96" rx="10"/>
+  <text class="t" x="106" y="294" text-anchor="middle">R2 bucket</text>
+  <text class="s" x="106" y="318" text-anchor="middle">the disk backup</text>
+  <text class="c" x="106" y="340" text-anchor="middle">boxes/&lt;id&gt;/backups/</text>
+
+  <rect class="blue" x="300" y="262" width="260" height="96" rx="10"/>
+  <text class="ct" x="430" y="294" text-anchor="middle">DevboxStoreGateway</text>
+  <text class="s" x="430" y="318" text-anchor="middle">answers the container's S3 calls</text>
+  <text class="s" x="430" y="338" text-anchor="middle">from the binding; no keys (D41)</text>
+
+  <rect class="blue" x="674" y="262" width="190" height="96" rx="10"/>
+  <text class="ct" x="769" y="294" text-anchor="middle">DevboxOutbound</text>
+  <text class="s" x="769" y="318" text-anchor="middle">HTTP on port 80 and</text>
+  <text class="s" x="769" y="338" text-anchor="middle">HTTPS on port 443</text>
+
+  <line class="line" x1="769" y1="136" x2="769" y2="262" marker-end="url(#arrow)"/>
+  <text class="s" x="758" y="203" text-anchor="end">HTTP and HTTPS out</text>
+
+  <line class="line" x1="674" y1="310" x2="560" y2="310" marker-end="url(#arrow)"/>
+  <text class="s" x="617" y="300" text-anchor="middle">store hosts</text>
+
+  <line class="line" x1="300" y1="310" x2="196" y2="310" marker-end="url(#arrow)"/>
+  <text class="s" x="248" y="300" text-anchor="middle">R2 binding</text>
+
+  <line class="line" x1="769" y1="358" x2="769" y2="388" marker-end="url(#arrow)"/>
+  <rect class="gray" x="560" y="388" width="304" height="34" rx="17"/>
+  <text class="s" x="712" y="410" text-anchor="middle">your <tspan class="c">outboundPolicy()</tspan>, else internet or 403</text>
+</svg>
