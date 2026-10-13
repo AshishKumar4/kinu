@@ -1014,7 +1014,7 @@ export {
   WORKSPACE_BACKUP_DIR,
   createDeviceTunnelExecutor, type DeviceTransport,
   deviceToolchainAnswer, freshDeviceToolchain,
-  connectedDevices, deviceByName, deviceFleetAsk, sameDeviceStatus,
+  connectedDevices, deviceByName, deviceFleetAsk, sameDeviceStatus, soleLiveDevice,
   effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason,
   sandboxReasonFix, sandboxCause, describeGpuNodes,
   DEVICE_TOOLCHAIN_TTL_MS,

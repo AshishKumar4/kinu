@@ -1,6 +1,6 @@
 // A non-zero exit must not drop stdout (where pytest/make write diagnostics), on every public exec surface.
 import { describe, test, expect } from 'bun:test';
-import { toolExecute } from '@kinu.run/test-utils';
+import { oneMachine, toolExecute } from '@kinu.run/test-utils';
 import { answeredRefusal, formatExecResult, type CommandResult, type ExecOutcome } from '../src/execution/exec-result';
 import { KinuError, refusalOf } from '../src/obs/index';
 import { parseJsonValue } from '../src/utils/json';
@@ -156,8 +156,8 @@ describe('the surfaces the model reads', () => {
   test('the device tunnel reports failures the same way', async () => {
     const device = createDeviceTunnelExecutor({
       rpc: async () => PYTEST,
-      status: () => ({ connected: true, registered: true, toolchain: null }),
-      refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
+      status: () => (oneMachine()),
+      refreshStatus: async () => (oneMachine()),
     });
 
     const out = await device.tools.exec?.execute('pytest');
@@ -169,8 +169,8 @@ describe('the surfaces the model reads', () => {
 
     const device = createDeviceTunnelExecutor({
       rpc: async () => ({ stdout: 'wrote notes.txt\n', stderr: '', exitCode: 0, uncheckpointed: { dir: '/home/owner', why } }),
-      status: () => ({ connected: true, registered: true, toolchain: null }),
-      refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
+      status: () => (oneMachine()),
+      refreshStatus: async () => (oneMachine()),
     });
 
     expect(await device.tools.exec?.execute('echo hi > notes.txt')).toBe(

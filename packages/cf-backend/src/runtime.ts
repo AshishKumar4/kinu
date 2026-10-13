@@ -12,7 +12,7 @@ import {
   sharedDriveMount, SHARED_DRIVE_UNCLAIMED, SHARED_DRIVE_UNBOUND, type MossaicVfs,
   withApprovalGatedShell, withApprovalGatedFiles, createInheritedApprovalPolicy, holdsGrant,
   type ShellApprovalPolicy, type ShellApprovalMode, type ApprovalGrant,
-  createSandboxExecutor, createDeviceTunnelExecutor, type DeviceTransport,
+  createSandboxExecutor, createDeviceTunnelExecutor, soleLiveDevice, type DeviceTransport,
   type WorkspaceFiles,
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore, createSqlFiber,
   createRoutedModelLane, routedLlm, bindRoute,
@@ -507,9 +507,9 @@ export function createCFRuntime(
     try {
       const status = await hub.deviceRuntimeStatus(await userCallerFor(actor));
 
-      if (deviceId === undefined) return status[field] ?? null;
+      const device = deviceId === undefined ? soleLiveDevice(status.devices) : status.devices?.find((entry) => entry.id === deviceId);
 
-      return status.devices?.find((device) => device.id === deviceId)?.[field] ?? null;
+      return device?.[field] ?? null;
     } catch (cause) {
       throw toKinuError({
         doing: "reading the device's consented directory",

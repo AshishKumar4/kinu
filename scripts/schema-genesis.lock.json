@@ -1507,11 +1507,6 @@
     "kind TEXT NOT NULL",
     "value TEXT NOT NULL"
   ],
-  "user_device_builds@packages/core/src/state/user-schema.ts": [
-    "device_id TEXT PRIMARY KEY REFERENCES user_devices(id) ON DELETE CASCADE",
-    "version TEXT",
-    "update_check INTEGER NOT NULL DEFAULT 1"
-  ],
   "user_device_protocol_refusals@packages/core/src/state/user-schema.ts": [
     "device_id TEXT PRIMARY KEY REFERENCES user_devices(id) ON DELETE CASCADE"
   ],
@@ -1548,6 +1543,8 @@
     "sandbox_gpu TEXT",
     "agent_root TEXT",
     "tier TEXT NOT NULL DEFAULT 'sandboxed'",
+    "version TEXT",
+    "update_check INTEGER NOT NULL DEFAULT 1",
     "unstopped_at INTEGER"
   ],
   "user_egress_secrets@packages/core/src/safety/egress-vault.ts": [

@@ -50,12 +50,7 @@ function fleetTransport(devices: readonly DeviceFleetEntry[]): DeviceTransport &
   const sent: Sent[] = [];
   let fleet = devices;
 
-  const status = (): DeviceStatus => ({
-    connected: fleet.some((d) => d.connected),
-    registered: fleet.length > 0,
-    toolchain: null,
-    devices: fleet,
-  });
+  const status = (): DeviceStatus => ({ devices: fleet });
 
   return {
     sent,
@@ -159,8 +154,8 @@ describe('the device fleet at the executor surface', () => {
     // No `devices`: the hub answers for a one-machine account; the executor must not refuse.
     const bare: DeviceTransport & { sent: Sent[] } = {
       sent: [],
-      status: () => ({ connected: false, registered: true, toolchain: null }),
-      refreshStatus: async () => ({ connected: false, registered: true, toolchain: null }),
+      status: () => ({}),
+      refreshStatus: async () => ({}),
       rpc: async (method, params, opts): Promise<JsonValue> => {
         bare.sent.push({ method, params, deviceId: opts?.deviceId });
 
@@ -459,7 +454,7 @@ describe('the workspace shell on a machine confined to one directory', () => {
   const TREE = new Map<string, string | null>([['/', null], ['/home', null], ['/home/rig', null], ['/home/rig/notes.md', 'rig notes\n']]);
 
   function confinedRig(): DeviceTransport {
-    const status = (): DeviceStatus => ({ connected: true, registered: true, toolchain: null, devices: [RIG] });
+    const status = (): DeviceStatus => ({ devices: [RIG] });
 
     return {
       status, refreshStatus: async () => status(),

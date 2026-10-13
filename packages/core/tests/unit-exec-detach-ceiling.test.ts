@@ -3,7 +3,7 @@
 import { describe, test, expect } from 'bun:test';
 import { jsonSchema, tool, type ToolSet } from 'ai';
 import * as v from 'valibot';
-import { toolExecute, createTestActorsOver, handClock, present, hostDeliveries } from '@kinu.run/test-utils';
+import { createTestActorsOver, handClock, hostDeliveries, oneMachine, present, toolExecute } from '@kinu.run/test-utils';
 import { createSandboxExecutor, type SandboxHandle } from '../src/execution/sandbox';
 import { createDeviceTunnelExecutor } from '../src/execution/device-tunnel-executor';
 import { createHubDeviceTransport, type DeviceHubClient } from '../src/execution/hub-device-transport';
@@ -668,7 +668,7 @@ describe("a running job's output", () => {
 
     // As UserDO hands over the daemon's frames: the build prints, then outruns its call's window.
     const hub: DeviceHubClient = {
-      deviceRuntimeStatus: async () => ({ connected: true, registered: true, toolchain: null }),
+      deviceRuntimeStatus: async () => (oneMachine()),
       deviceRpc: async (_caller, _method, _params, opts) => {
         handedOver = opts?.onOutput;
         handedOver?.({ chunks: [{ stream: 'stdout', data: base64('resolving dependencies\n') }], dropped: 0 });

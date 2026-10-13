@@ -19,7 +19,7 @@ import { DEVICE_METHOD } from './device-protocol';
 import { commandTool, type ExecutorProvider, type ExecutorCapability, type ExecutorStatus } from './types';
 import { shellCall } from './command-call';
 import {
-  connectedDevices, deviceFleetAsk, deviceByName, freshDeviceToolchain,
+  connectedDevices, deviceFleetAsk, deviceByName, freshDeviceToolchain, soleLiveDevice,
   type DeviceFleetEntry, type DeviceStatus, type DeviceToolchain,
 } from './device-status';
 import {
@@ -199,7 +199,8 @@ export function createDeviceTunnelExecutor(
   // Connected, registered-but-offline, or none. The row carries the machine's name and grant state.
   const getStatus = (): ExecutorStatus => {
     const s = transport.status();
-    const live = (s.devices ?? []).filter((d) => d.connected);
+    const live = connectedDevices(s.devices);
+    const sole = soleLiveDevice(s.devices);
     const named = live[0] ?? s.devices?.[0];
     const identity: Partial<Pick<ExecutorStatus, 'label' | 'granted' | 'sandbox' | 'mounts'>> = {};
 
@@ -208,15 +209,14 @@ export function createDeviceTunnelExecutor(
     // Only a fleet the hub listed has segments to name.
     if (s.devices !== undefined) identity.mounts = live.map((device) => deviceMountSegment(device, s.devices));
     // Per-device answers count only when exactly one machine is live.
-    const perDeviceReach = live.length === 1 ? live[0].granted : undefined;
-    const granted = perDeviceReach ?? s.workspaceGranted;
+    const granted = sole?.granted;
 
     if (granted !== undefined) identity.granted = granted;
 
-    if (s.sandbox !== undefined) identity.sandbox = s.sandbox;
+    if (sole?.sandbox !== undefined) identity.sandbox = sole.sandbox;
 
     // Reach, not liveness: a machine without this workspace's grant raises the owner's card first.
-    if (s.connected && granted === false) {
+    if (live.length > 0 && granted === false) {
       return {
         configured: true, available: false, active: false, status: 'idle',
         reason: 'Connected, but this workspace has no access yet: the first command raises a consent card for the owner.',
@@ -224,9 +224,9 @@ export function createDeviceTunnelExecutor(
       };
     }
 
-    if (s.connected) return { configured: true, available: true, active: true, status: 'active', ...identity };
+    if (live.length > 0) return { configured: true, available: true, active: true, status: 'active', ...identity };
 
-    if (s.registered) {
+    if ((s.devices?.length ?? 0) > 0) {
       return {
         configured: true, available: false, active: false, status: 'disconnected',
         reason: 'Device registered but offline: the user can reconnect it with `kinu connect`.',
@@ -245,7 +245,7 @@ export function createDeviceTunnelExecutor(
   } | null = null;
 
   const derived = () => {
-    const answer = freshDeviceToolchain(transport.status().toolchain, Date.now());
+    const answer = freshDeviceToolchain(soleLiveDevice(transport.status().devices)?.toolchain, Date.now());
 
     if (memo?.from === answer) return memo;
     // Inside the answer's scope: measured. Outside it, and `docker`/`gpu` always: unmeasured.
@@ -495,7 +495,7 @@ export function createDeviceTunnelExecutor(
     get unmeasuredCapabilities() {
       return derived().unmeasured;
     },
-    isAvailable: () => transport.status().connected,
+    isAvailable: () => connectedDevices(transport.status().devices).length > 0,
     getStatus,
     connect: () => settle(Effect.tryPromise({ try: () => rpc(DEVICE_METHOD.exec, ['echo connected']), catch: (cause) => ({ cause }) }).pipe(
       Effect.asVoid,

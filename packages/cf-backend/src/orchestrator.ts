@@ -185,7 +185,7 @@ import {
   getRunTimeline, RUN_TIMELINE_MAX, boundedInt, type TimelineSpan,
   getRunEvents, getRunEventText, type RunListEntry, type RunSummary,
   turnRequestIndex, turnRequestPage, type TurnRequestIndex, type TurnRequestPage, type AgentStores,
-  LiveReadsNotice, readsMovedByFiles, readsOfTables, readsWrittenBy, ROSTER_READS, sameDeviceStatus, type LiveRead,
+  LiveReadsNotice, readsMovedByFiles, readsOfTables, readsWrittenBy, ROSTER_READS, connectedDevices, sameDeviceStatus, type LiveRead,
   CHANGES_MOVED_EVENT, ChangeSetCache, getWorkspaceDiff, getExecutorDiff, resetWorkspaceBaseline, restoreWorkspaceBaseline,
   type ExecutorDiffResult, type WorkspaceBaselines, type WorkspaceDiffResult, type WorkspaceReviewResult,
   initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes, deliverOwedChangeNotes, owesChangeNotes, type ChangeNotesChat,
@@ -6558,11 +6558,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return settle(Effect.gen({ self: this }, function* () {
     // The owner's machine has no container to warm; it only needs to be attached.
       if (executorId === 'device') {
-        const device = this.rt.deviceTransport.status();
+        const { devices } = this.rt.deviceTransport.status();
 
-        if (device.connected) return { ok: true };
+        if (connectedDevices(devices).length > 0) return { ok: true };
 
-        if (device.registered) return { error: 'That machine is offline. Run `kinu connect` on it.' };
+        if ((devices?.length ?? 0) > 0) return { error: 'That machine is offline. Run `kinu connect` on it.' };
 
         return { error: 'No machine is linked to this account yet. Run `kinu connect` on the one you want.' };
       }

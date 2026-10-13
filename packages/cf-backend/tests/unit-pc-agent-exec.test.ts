@@ -4,7 +4,7 @@
  */
 
 import { present } from '../../test-utils/src/present';
-import { handClock, isRunning, runOk } from '@kinu.run/test-utils';
+import { handClock, isRunning, oneMachine, runOk } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -1009,7 +1009,7 @@ function deviceChain(clock?: ReturnType<typeof handClock>, silent = false) {
   };
 
   tunnel = new DeviceTunnel(socket, undefined, undefined, clock);
-  const connected: DeviceStatus = { connected: true, registered: true, toolchain: null };
+  const connected: DeviceStatus = oneMachine();
 
   const transport: DeviceTransport = {
     rpc: (method, params, opts) => tunnel.rpc(method, params, opts),

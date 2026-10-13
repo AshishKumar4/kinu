@@ -10,7 +10,7 @@ import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 
 import type { JsonValue } from '../src/utils/json';
-import { agentPlane, present, workspaceShell } from '@kinu.run/test-utils';
+import { agentPlane, oneMachine, present, workspaceShell } from '@kinu.run/test-utils';
 import type { SessionBox } from '@kinu.run/test-utils/vfs';
 import type { NimbusSandboxFiles } from '@nimbus-sh/sdk/sandbox';
 import {
@@ -323,8 +323,8 @@ function deviceTransport(fs: MemFs, calls: string[] = []): DeviceTransport {
 
       return null;
     },
-    status: () => ({ connected: true, registered: true, toolchain: null }),
-    refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
+    status: () => (oneMachine()),
+    refreshStatus: async () => (oneMachine()),
   };
 
   return transport;

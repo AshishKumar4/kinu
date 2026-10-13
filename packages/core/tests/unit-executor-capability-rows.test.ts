@@ -9,7 +9,7 @@ import {
   renderDynamicContextBlock, buildSystemPromptSync,
   deviceToolchainAnswer, DEVICE_TOOLCHAIN_TTL_MS,
 } from '../src/index';
-import { createTestRuntime } from '@kinu.run/test-utils';
+import { createTestRuntime, oneMachine } from '@kinu.run/test-utils';
 import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
 
 /** Rows `DefaultExecutionRouter.listExecutors` hands the prompt for one real provider. */
@@ -31,8 +31,8 @@ function runsLine(provider: ExecutorProvider): string {
 }
 
 const connectedDevice: DeviceTransport = {
-  status: () => ({ connected: true, registered: true, toolchain: null }),
-  refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
+  status: () => (oneMachine()),
+  refreshStatus: async () => (oneMachine()),
   rpc: async () => undefined,
 };
 
@@ -72,11 +72,7 @@ describe('sandbox capability row', () => {
 
 /** A machine that resolved exactly `binaries` on its PATH `secondsAgo` ago. */
 function probedDevice(binaries: readonly string[], secondsAgo = 0): DeviceTransport {
-  const status = {
-    connected: true,
-    registered: true,
-    toolchain: deviceToolchainAnswer(binaries, Date.now() - secondsAgo * 1_000),
-  };
+  const status = oneMachine({ toolchain: deviceToolchainAnswer(binaries, Date.now() - secondsAgo * 1_000) });
 
   return { status: () => status, refreshStatus: async () => status, rpc: async () => undefined };
 }
