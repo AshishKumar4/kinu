@@ -2253,7 +2253,9 @@ export const LADDER: readonly Gate[] = [
     // 2026-10-01, interleaved twice at load 9-29: 204 s median without the #30 rows, 289 s with them as two rows of
     // their own, 220 s with the watched turn run in the answered row's workspace (as now), all 14 green.
     // One of the four files the live-app rows split into when one file outran its 480 s deadline alone.
-    seconds: 220,
+    // 2026-10-13: the provider-wait row alone took 142 s with the dev server's boot on armada (job 20261013214907-8e6a82ec);
+    // the file with it is unmeasured.
+    seconds: 300,
     catches: 'the shipped workspace page as it runs: this row boots the product itself — `vite dev` in cf-backend, which is workerd with real Durable Objects behind the real client — and drives it in Chrome at 1440x900, where the inspector column, its separator and the rail lane exist. No gallery row can: the gallery serves a FROZEN pre-built bundle with fixtures answering `/api/*`. '
       + 'Its rows: a running turn draws exactly one live state through the paced turn\'s four silences, and '
       + 'Stop never stands over a pane drawing nothing; a page opened mid-turn offers Stop while it runs and stops '
@@ -2261,7 +2263,9 @@ export const LADDER: readonly Gate[] = [
       + 'replays the answer as it stood; an answer keeps each step\'s text where it streamed after the turn ends and '
       + 'after a reload, the model\'s next request carrying it, and so does a turn another tab sent, on the page that '
       + 'watched it, and the workspace\'s own first turn, which no page sent; and a marker sent in each pane stays out of the '
-      + 'other, the transcript leak a shared store shows as green.',
+      + 'other, the transcript leak a shared store shows as green. A wait on the provider shows over the composer only '
+      + 'while it holds the chat\'s turn, counting down and never at 0s: the workspace\'s logo, drawn from Settings beside '
+      + 'the open chat and refused as a rate limit, shows nothing there (#88).',
     blind: 'one workspace, one viewport, one model. The rows drive 1440x900 in two themes on '
       + 'the workspace route: every other route, width and theme is the gallery rows\' subject '
       + 'and unmeasured here. The model is a local scripted SSE server, so the content is '
