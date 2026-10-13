@@ -7,35 +7,13 @@
 import {
   describeMcpTool, listMcpToolsLeniently,
   MCP_PRESETS,
-  type ListedMcpTools, type McpPreset, type McpPresetId, type McpToolRefusal, type McpTransport,
+  type ListedMcpTools, type McpConnectionStatus, type McpPreset, type McpPresetAvailability, type McpPresetId,
+  type McpToolRefusal,
 } from '@kinu.run/core';
 import { diagnostics, KinuError, renderCauseChain, toKinuError, type ErrorCode } from '@kinu.run/core/obs';
 import { ProtocolError, SdkError, SdkErrorCode, SdkHttpError, SseError, UnauthorizedError, type Client } from '@modelcontextprotocol/client';
 import { ResultSchema } from '@modelcontextprotocol/sdk/types.js';
 
-
-/** Re-derived at read time from `MCPClientManager.mcpConnections[id].connectionState`. */
-export type McpConnectionStatus =
-  | 'connecting'
-  | 'authenticating'
-  | 'connected'
-  | 'ready'
-  | 'discovering'
-  | 'failed'
-  | 'unknown';
-
-export interface McpServerSummary {
-  id: string;
-  name: string;
-  serverUrl: string;
-  transport: McpTransport;
-  status: McpConnectionStatus;
-  error: string | null;
-  toolsCount: number;
-  authUrl: string | null;
-  allowedTools: string[] | null;
-  presetId: McpPresetId | null;
-}
 
 /**
  * Credentials go via a `fetch` closure, not `requestInit.headers`: the SDK persists headers and
@@ -292,13 +270,6 @@ const SDK_FAILURE_KINDS: Partial<Record<SdkErrorCode, McpFailureKind>> = {
   [SdkErrorCode.RequestTimeout]: 'timeout',
   [SdkErrorCode.SendFailed]: 'send_failed',
 };
-
-/** `appConfigured` is only meaningful for `oauth-app` presets: whether env carries both client
- *  credentials. */
-export interface McpPresetAvailability {
-  readonly id: McpPresetId;
-  readonly appConfigured: boolean;
-}
 
 /** The only place these `Env` names exist; messages and the deploy doc take their wording from here. */
 const MCP_APP_ENV = {

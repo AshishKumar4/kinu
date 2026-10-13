@@ -107,7 +107,10 @@ function fakeSkill(name: string, opts: Partial<ActiveSkill> = {}): DiscoveredSki
 const APPROVED: InstructionTrustResolver = () => 'approved';
 
 function activeSkill(name: string, opts: Partial<ActiveSkill> = {}): ActiveSkill {
-  return { ...fakeSkill(name, opts), trust: 'approved', body: opts.body ?? 'body' };
+  return {
+    ...fakeSkill(name, opts), trust: 'approved', body: opts.body ?? 'body',
+    reason: opts.reason ?? { kind: 'explicit', matched_token: name },
+  };
 }
 
 describe('parseSkillFile', () => {
@@ -421,16 +424,13 @@ describe('resolveActiveSkills', () => {
 
 describe('renderActiveSkillsSection + tool gating', () => {
   test('returns empty string for empty active set', () => {
-    expect(renderActiveSkillsSection({ active: [], reasons: [] }, 'system')).toBe('');
+    expect(renderActiveSkillsSection({ active: [] }, 'system', 'reason')).toBe('');
   });
 
   test('renders the skill body and a "tool surface restricted" line when allow_tools is non-empty', () => {
     const a = activeSkill('a', { allowed_tools: ['run', 'memory'] });
 
-    const out = renderActiveSkillsSection({
-      active: [a],
-      reasons: [{ name: 'a', reason: { kind: 'explicit', matched_token: 'a' } }],
-    }, 'system');
+    const out = renderActiveSkillsSection({ active: [a] }, 'system', 'reason');
 
     expect(out).toContain('run');
   });
@@ -462,12 +462,10 @@ describe('renderActiveSkillsSection + tool gating', () => {
       // An unread body has no bytes to approve, so its pointer is reference material.
       trust: 'unverified',
       body: null,
+      reason: { kind: 'explicit', matched_token: 'giant' },
     };
 
-    const out = renderActiveSkillsSection({
-      active: [deferred],
-      reasons: [{ name: 'giant', reason: { kind: 'explicit', matched_token: 'giant' } }],
-    }, 'unverified');
+    const out = renderActiveSkillsSection({ active: [deferred] }, 'unverified', 'reason');
 
     expect(out).toContain('50000');
     // The pointer is the one load path every skill has, whichever root holds it.
@@ -477,17 +475,14 @@ describe('renderActiveSkillsSection + tool gating', () => {
   test('render order is name order, so the same active set is byte-identical however it was activated', () => {
     const a = activeSkill('alpha');
     const b = activeSkill('beta');
-    expect(renderActiveSkillsSection({ active: [a, b], reasons: [] }, 'system'))
-      .toBe(renderActiveSkillsSection({ active: [b, a], reasons: [] }, 'system'));
+    expect(renderActiveSkillsSection({ active: [a, b] }, 'system', 'stable'))
+      .toBe(renderActiveSkillsSection({ active: [b, a] }, 'system', 'stable'));
   });
 
   test('admitted bodies render unchanged', () => {
     const a = activeSkill('a', { body: 'short body' });
 
-    const out = renderActiveSkillsSection({
-      active: [a],
-      reasons: [{ name: 'a', reason: { kind: 'explicit', matched_token: 'a' } }],
-    }, 'system');
+    const out = renderActiveSkillsSection({ active: [a] }, 'system', 'reason');
 
     expect(out).toContain('short body');
   });
@@ -832,8 +827,8 @@ describe('skills admission', () => {
     // Nothing dropped: deferred skills keep a null body and a reference-tier pointer.
     expect(set.active.length).toBe(skills.length);
 
-    const rendered = renderActiveSkillsSection(set, 'system')
-      + renderActiveSkillsSection(set, 'unverified');
+    const rendered = renderActiveSkillsSection(set, 'system', 'reason')
+      + renderActiveSkillsSection(set, 'unverified', 'reason');
 
     for (const skill of skills) expect(rendered).toContain(`### ${skill.name}`);
   });
@@ -881,7 +876,7 @@ describe('skills admission', () => {
     expect(byName.get('aaa-pinned-giant')?.body).toBeNull();
     expect(vfs.calls.readFile).toEqual([`${WORKSPACE_SKILLS_DIR}/zzz-invoked.md`]);
     // The giant stays visible as a reference-tier pointer.
-    expect(renderActiveSkillsSection(set, 'unverified')).toContain(skillReference('aaa-pinned-giant'));
+    expect(renderActiveSkillsSection(set, 'unverified', 'reason')).toContain(skillReference('aaa-pinned-giant'));
   });
 
   test('every discovered skill is rendered, named in the index, or reachable through a pointer — nothing is lost silently', async () => {
@@ -909,8 +904,8 @@ describe('skills admission', () => {
 
     const indexText = renderSkillsIndexSection(index);
 
-    const activeText = renderActiveSkillsSection(set, 'system')
-      + renderActiveSkillsSection(set, 'unverified');
+    const activeText = renderActiveSkillsSection(set, 'system', 'reason')
+      + renderActiveSkillsSection(set, 'unverified', 'reason');
 
     const discovered = [...discovery.skills.map(s => s.name), ...discovery.unread.map(u => u.name)];
     expect(discovered.length).toBe(12 + BUILTIN_SKILLS.length + 1); // 12 authored + the built-ins + the whale
@@ -969,7 +964,7 @@ describe('skills admission', () => {
 
     expect(set.active[0]?.body).toBeNull();
     expect(set.active[0]?.trust).toBe('builtin');
-    expect(set.reasons).toEqual([{ name: builtin.name, reason: { kind: 'always_active', via: 'config' } }]);
+    expect(set.active.map(({ name, reason }) => ({ name, reason }))).toEqual([{ name: builtin.name, reason: { kind: 'always_active', via: 'config' } }]);
     expect(unionAllowedTools(set.active)).toEqual(builtin.allowed_tools);
   });
 
@@ -1017,7 +1012,7 @@ describe('skills admission', () => {
       expect(byName.get('bad-read')?.body).toBeNull();
       expect(byName.get('bad-read')?.trust).toBe('unverified');
       expect(byName.get('good')?.body).toContain('hello body');
-      expect(set.reasons.map((r) => r.name).sort()).toEqual(['bad-read', 'bad-stat', 'good']);
+      expect(set.active.map((skill) => skill.name).sort()).toEqual(['bad-read', 'bad-stat', 'good']);
       expect(log.emitted.filter((l) => l.event === 'skills.admission_failed').length).toBe(2);
     } finally {
       restore();

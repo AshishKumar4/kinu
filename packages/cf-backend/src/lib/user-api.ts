@@ -7,6 +7,8 @@ import {
   type DeviceTier,
   type JsonValue,
   JsonValueSchema,
+  McpPresetAvailabilitySchema,
+  McpServerSummarySchema,
   ModelTestResultSchema,
   ProviderFailureSchema,
   type ModelTestResult,
@@ -14,6 +16,7 @@ import {
   type ProfileCatalogEnvelope,
   type RosterBucket,
   WorkspaceOverviewSchema,
+  type McpTransport,
 } from '@kinu.run/core';
 import { settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -421,8 +424,6 @@ export function cloudflareReconnectPath(returnTo: string): string {
   return `/auth/cloudflare/start?${params.toString()}`;
 }
 
-export type McpTransport = 'auto' | 'sse' | 'streamable-http';
-
 export interface McpServerInput {
   name?: string;
   serverUrl?: string;
@@ -433,26 +434,10 @@ export interface McpServerInput {
   presetId?: string;
 }
 
-export const McpServerSummarySchema = v.object({
-  id: v.string(), name: v.string(), serverUrl: v.string(),
-  transport: v.picklist(['auto', 'sse', 'streamable-http']),
-  status: v.picklist(['connecting', 'authenticating', 'connected', 'ready', 'discovering', 'failed', 'unknown']),
-  error: v.nullable(v.string()), toolsCount: v.number(), authUrl: v.nullable(v.string()),
-  allowedTools: v.nullable(v.array(v.string())), presetId: v.nullable(v.string()),
-});
-
-export type McpServerSummary = v.InferOutput<typeof McpServerSummarySchema>;
-
 export const listMcpServers = () => settle(api(v.array(McpServerSummarySchema), 'GET', '/mcp/servers'));
 
-/** Whether the preset's OAuth app is configured, which decides sign-in vs fallback. */
-export interface McpPresetAvailability {
-  id: string;
-  appConfigured: boolean;
-}
-
-export const listMcpPresets = () =>
-  settle(api(v.array(v.object({ id: v.string(), appConfigured: v.boolean() })), 'GET', '/mcp/presets'));
+/** Whether each preset's OAuth app is configured, which decides sign-in vs fallback. */
+export const listMcpPresets = () => settle(api(v.array(McpPresetAvailabilitySchema), 'GET', '/mcp/presets'));
 
 export const addMcpServer   = (input: McpServerInput) =>
   settle(api(v.object({ id: v.string(), authUrl: v.nullable(v.string()) }), 'POST', '/mcp/servers', input));

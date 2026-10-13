@@ -87,10 +87,10 @@ test('a block carries no kind attribute: a full block has a fingerprint, a delta
 const APPROVED: InstructionTrustResolver = () => 'approved';
 
 /** An active skill whose body the allocation paid for; admission prices it from `bodyRef` alone. */
-function skill(name: string): ActiveSkill {
+function skill(name: string, reason: ActiveSkill['reason'] = { kind: 'explicit', matched_token: name }): ActiveSkill {
   const body = `Body of ${name}`;
 
-  return { ...header(name, body.length), trust: 'approved', body };
+  return { ...header(name, body.length), trust: 'approved', body, reason };
 }
 
 /** The same skill as discovery returns it, before any body was read. */
@@ -498,10 +498,10 @@ describe('active skills and why each is on', () => {
 
   test('every active skill is listed with its activation reason, in name order', () => {
     const text = present(blockOf({
-      active: [skill('gamma'), skill('alpha'), skill('beta')],
-      reasons: [
-        { name: 'alpha', reason: { kind: 'explicit', matched_token: 'deploy' } },
-        { name: 'gamma', reason: { kind: 'always_active', via: 'config' } },
+      active: [
+        skill('gamma', { kind: 'always_active', via: 'config' }),
+        skill('alpha', { kind: 'explicit', matched_token: 'deploy' }),
+        skill('beta'),
       ],
     }), 'the block');
 
@@ -515,7 +515,7 @@ describe('active skills and why each is on', () => {
   });
 
   test('no active skill renders no section', () => {
-    expect(blockOf({ active: [], reasons: [] })).toBeNull();
+    expect(blockOf({ active: [] })).toBeNull();
   });
 });
 
@@ -1582,11 +1582,11 @@ describe('active-skill budget priority (activation precedence, stable render ord
     });
 
     expect(vfs.reads).toEqual([invoked.bodyRef.path]);
-    const section = renderActiveSkillsSection(admitted, 'system');
+    const section = renderActiveSkillsSection(admitted, 'system', 'reason');
     expect(section).toContain('THE-INVOKED-BODY');
     expect(section).not.toContain('GGGG');
     // A deferred body goes in the reference tier: it has no bytes the owner approved.
-    const reference = renderActiveSkillsSection(admitted, 'unverified');
+    const reference = renderActiveSkillsSection(admitted, 'unverified', 'reason');
     expect(reference).toContain('aaa-giant');
 
     expect(reference).toContain(skillViewPath('aaa-giant'));

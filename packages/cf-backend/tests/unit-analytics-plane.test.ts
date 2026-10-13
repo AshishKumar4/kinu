@@ -441,10 +441,10 @@ describe('nothing a person said reaches the dataset', () => {
   });
 
   test('the digest is stable, distinguishing, and empty for an absent identifier', () => {
-    // Known answers per the algorithm `privacy.ts` documents: stored approval digests must keep matching.
+    // Known answers per the algorithm `privacy.ts` documents: stored approval digests must keep matching, and two
+    // identifiers, two answers.
     expect(analyticsDigest('alpha')).toBe('a33109d75d8b6dab');
     expect(analyticsDigest('beta')).toBe('f24c3abbaf81e4c7');
-    expect(analyticsDigest('alpha')).not.toBe(analyticsDigest('beta'));
     // Absent stays visibly absent, not one bucket that looks like a real workspace.
     expect(analyticsDigest('')).toBe('');
   });

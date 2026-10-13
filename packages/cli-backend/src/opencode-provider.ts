@@ -3,7 +3,7 @@
 
 import { Cause, Effect } from 'effect';
 import {
-  asFetchFunction, createWireModel, deferredModel, JsonObjectSchema, sdkWire, type WireProtocol,
+  asFetchFunction, createWireModel, deferredModel, JsonObjectSchema, sdkWire,
 } from '@kinu.run/core';
 import type { LanguageModel } from 'ai';
 import type { ModelProvider, ModelInfo } from '@kinu.run/core';
@@ -43,7 +43,6 @@ const metadataSchema = v.object({
 });
 
 const remoteConfigSchema = v.object({
-  model: v.optional(v.string()),
   provider: v.optional(v.record(v.string(), v.object({
     options: v.optional(v.object({
       baseURL: v.optional(v.string()),
@@ -113,7 +112,6 @@ interface ProviderRoute {
 }
 
 interface ResolvedConfig {
-  defaultModel: string;
   providers: Record<string, ProviderRoute>;
   models: OpenCodeModelInfo[];
 }
@@ -149,7 +147,6 @@ export function createOpenCodeProvider(opts: OpenCodeProviderOptions = {}): Mode
 
   let availabilityCache: Promise<OpenCodeAvailability> | null = null;
   let configCache: { signature: string; loadedAt: number; config: ResolvedConfig } | null = null;
-  let modelMetadata = new Map<string, OpenCodeModelInfo>();
 
   const availability = () => (availabilityCache ??= probeFn());
 
@@ -237,18 +234,9 @@ export function createOpenCodeProvider(opts: OpenCodeProviderOptions = {}): Mode
       }
 
       const models = yield* discoverModels(spawnFn);
-      const firstModel = models[0];
 
-      if (!firstModel) return yield* Effect.die(new Error('opencode reports no available models'));
-      modelMetadata = new Map(models.map((model) => [model.id, model]));
-
-      const configuredDefault = config.model ?? '';
-
-      const defaultModel = models.some((model) => model.id === configuredDefault)
-        ? configuredDefault
-        : firstModel.id;
-
-      configCache = { signature, loadedAt: Date.now(), config: { defaultModel, providers, models } };
+      if (models.length === 0) return yield* Effect.die(new Error('opencode reports no available models'));
+      configCache = { signature, loadedAt: Date.now(), config: { providers, models } };
 
       return configCache.config;
     });
@@ -284,19 +272,15 @@ export function createOpenCodeProvider(opts: OpenCodeProviderOptions = {}): Mode
         return info;
       })));
     },
-    get defaultModel() {
-      return undefined; // resolved lazily via loadConfig in setup
-    },
     // Its own lane per route: opencode.ai serves Zen and Go, and a spent Go window must not cool Zen.
     laneOf: (modelId) => `${OPENCODE_PROVIDER_ID}:${modelId.slice(0, modelId.indexOf('/'))}`,
     createModel(modelId: string): LanguageModel {
       return settleSync(Effect.gen(function* () {
         if (!modelId.includes('/')) return yield* Effect.die(new Error(`Invalid opencode model id: ${modelId}`));
 
-        // A resumed session calls before any listing, so the metadata the API is chosen from is read first.
-        return deferredModel(OPENCODE_PROVIDER_ID, modelId, () => settle(Effect.map(loadConfig(), () => createOpenCodeModel({
-          modelId, resolveConfig: () => settle(loadConfig()), invalidateCache, fetchImpl,
-          protocol: sdkWire(modelMetadata.get(modelId)?.apiNpm), reasoning: modelMetadata.get(modelId)?.reasoning === true,
+        // A resumed session calls before any listing, so the route and the metadata the API is chosen from are read first.
+        return deferredModel(OPENCODE_PROVIDER_ID, modelId, () => settle(Effect.flatMap(loadConfig(), (config) => openCodeModel({
+          modelId, config, invalidateCache, fetchImpl,
         }))));
       }));
     },
@@ -306,63 +290,37 @@ export function createOpenCodeProvider(opts: OpenCodeProviderOptions = {}): Mode
 
 interface OpenCodeModelSpec {
   modelId: string;
-  resolveConfig: () => Promise<ResolvedConfig>;
+  config: ResolvedConfig;
   invalidateCache: () => void;
   fetchImpl: typeof fetch;
-  protocol: WireProtocol;
-  reasoning: boolean;
 }
 
-function createOpenCodeModel(spec: OpenCodeModelSpec): ReturnType<typeof createWireModel> {
-  const { modelId, resolveConfig, invalidateCache, fetchImpl, protocol, reasoning } = spec;
+/** The SDK model on the route opencode's configuration names for the model's provider. */
+function openCodeModel(spec: OpenCodeModelSpec): Effect.Effect<ReturnType<typeof createWireModel>, KinuError> {
+  const { modelId, config, invalidateCache, fetchImpl } = spec;
   // `createModel` refused an id without one.
   const slash = modelId.indexOf('/');
   const providerId = modelId.slice(0, slash);
-  const upstreamModel = modelId.slice(slash + 1);
+  const route = config.providers[providerId];
 
-  const placeholder = 'https://opencode.invalid';
+  if (!route) return Effect.fail(new KinuError('unavailable', `Provider "${providerId}" is not available in your opencode configuration.`));
+  const metadata = config.models.find((model) => model.id === modelId);
+  const protocol = sdkWire(metadata?.apiNpm);
+  const openaiChat = protocol === 'chat-completions' && providerId === 'openai';
 
-  const customFetch = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const config = await resolveConfig();
-    const route = config.providers[providerId];
+  const routed = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const response = await fetchImpl(input, { ...init, body: routeBody(init?.body, openaiChat) });
 
-    if (!route) {
-      return new Response(
-        JSON.stringify({ error: `Provider "${providerId}" is not available in your opencode configuration.` }),
-        { status: 503, headers: { 'Content-Type': 'application/json' } },
-      );
-    }
+    // A refused login drops the cache, so the next request reads auth.json again.
+    if (response.status === 401 || response.status === 403) invalidateCache();
 
-    const originalUrl = input instanceof Request ? input.url : input.toString();
-    const url = originalUrl.replace(placeholder, route.baseURL);
-
-    const headers = new Headers(init?.headers);
-
-    for (const [name, value] of Object.entries(route.headers)) {
-      headers.set(name, value);
-    }
-
-    headers.set('content-type', 'application/json');
-    const response = await fetchImpl(url, { ...init, headers, body: routeBody(init?.body, protocol === 'chat-completions' && providerId === 'openai') });
-
-    // Drop cache on auth failure so the next request re-reads auth.json.
-    if (response.status === 401 || response.status === 403) {
-      invalidateCache();
-    }
-
-    // Strip encoding headers that may not match after proxying.
-    const responseHeaders = new Headers(response.headers);
-    responseHeaders.delete('content-encoding');
-    responseHeaders.delete('content-length');
-
-    return new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: responseHeaders,
-    });
+    return response;
   });
 
-  return createWireModel({ name: OPENCODE_PROVIDER_ID, modelId: upstreamModel, baseURL: placeholder, fetch: customFetch, protocol, reasoning });
+  return Effect.succeed(createWireModel({
+    name: OPENCODE_PROVIDER_ID, modelId: modelId.slice(slash + 1), baseURL: route.baseURL, headers: route.headers,
+    fetch: routed, protocol, reasoning: metadata?.reasoning === true,
+  }));
 }
 
 /** OpenAI's Chat Completions route takes `max_completion_tokens`, which the compatible SDK names `max_tokens`. */

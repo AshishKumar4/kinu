@@ -1,4 +1,4 @@
-import type { McpServerSummary } from "@/lib/user-api";
+import type { McpServerSummary } from "@kinu.run/core";
 import type { PluginStatus } from "./PluginRow";
 
 /** An MCP server's state as every view of it words and colours it. */

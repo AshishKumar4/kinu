@@ -80,17 +80,16 @@
  *   bun run sweep:mutation --only heads-self-metered
  */
 
-import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { gitEnv } from '../packages/test-utils/src/git-env';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { isProductSource, isRunnableSuite, readMatching, trackedFiles } from './sources';
 import {
-  declarationOf, isReExport, moduleSpecifiers, parse, type SyntaxNode, walk,
+  declarationOf, isReExport, parse, type SyntaxNode, walk,
 } from './syntax';
 import { CATALOGUE, type Mutation } from './mutation-sweep.catalogue';
-
-const root = new URL('..', import.meta.url).pathname;
+import {
+  candidateDefenders, requireCleanTargets, requireOwnWorktree, restoreMutant, root, runSuites, writeMutant,
+} from './mutation-runtime';
 
 /**
  * A suite root the sweep runs, with the seconds it took on the reference machine.
@@ -154,50 +153,6 @@ interface Verdict {
 
 /* ── Refusals ─────────────────────────────────────────────────────────────── */
 
-function git(...args: readonly string[]): string {
-  return execFileSync('git', ['-C', root, ...args], {
-    env: gitEnv(), encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
-  }).trim();
-}
-
-/**
- * Refuse to run anywhere a concurrent reader could load a mutant.
- *
- * The main checkout is shared: other agents, other suites and the editor all read it.
- * A worktree is one branch's own tree, and `setup-worktree.sh` has already given it
- * its own workspace scope, so a mutation there is visible to this process only.
- */
-function requireOwnWorktree(): void {
-  const tree = git('rev-parse', '--show-toplevel');
-  const main = dirname(git('rev-parse', '--path-format=absolute', '--git-common-dir'));
-
-  if (tree === main) {
-    throw new Error(
-      `Refusing to mutate ${tree}: this is the main checkout, which every other agent, `
-      + 'suite and editor reads. In-place mutation in a shared tree makes a test fail for '
-      + 'a reason that is not in the code, and every concurrent suite overlapping the '
-      + 'window reports a meaningless green or a misattributed red. Run this in a worktree:'
-      + '\n  git worktree add ../Kinu-sweep -b test/my-sweep main'
-      + '\n  cd ../Kinu-sweep && bash scripts/setup-worktree.sh',
-    );
-  }
-}
-
-/** Refuse when a target file already differs from HEAD. The sweep restores the exact
- *  pristine bytes it read, so a local edit would survive intact — but if this process
- *  is killed outright, `git checkout --` is the recovery, and that recovery must not be
- *  able to destroy work. */
-function requireCleanTargets(files: readonly string[]): void {
-  const dirty = git('status', '--porcelain', '--', ...files);
-
-  if (dirty !== '') {
-    throw new Error(
-      `Refusing to mutate: these targets have uncommitted changes, and the recovery from `
-      + `an interrupted sweep is 'git checkout --', which would discard them.\n${dirty}`,
-    );
-  }
-}
-
 /**
  * Assert the tiers and the declared exclusions cover every runnable suite.
  *
@@ -223,22 +178,6 @@ function requireTotalScope(): void {
 }
 
 /* ── The mutation, applied and taken back ─────────────────────────────────── */
-
-/** The pristine text of every file this process has mutated, so an interrupt can put
- *  them all back. */
-const pristine = new Map<string, string>();
-
-function restoreAll(): void {
-  for (const [file, text] of pristine) writeFileSync(join(root, file), text);
-  pristine.clear();
-}
-
-for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
-  process.on(signal, () => {
-    restoreAll();
-    process.exit(130);
-  });
-}
 
 /**
  * The pristine text of the mutation's file, once it is certain the snippet lands.
@@ -267,107 +206,7 @@ function readAndLocate(mutation: Mutation): string {
 
 function applyMutation(mutation: Mutation): void {
   const source = readAndLocate(mutation);
-  pristine.set(mutation.file, source);
-  writeFileSync(join(root, mutation.file), source.replace(mutation.find, mutation.replace));
-}
-
-function revertMutation(mutation: Mutation): void {
-  const text = pristine.get(mutation.file);
-
-  if (text === undefined) throw new Error(`${mutation.file} was never mutated`);
-  const path = join(root, mutation.file);
-  writeFileSync(path, text);
-  pristine.delete(mutation.file);
-  const now = readFileSync(path, 'utf8');
-
-  if (now !== text) {
-    throw new Error(
-      `${mutation.file} did not restore to its pristine bytes after mutation `
-      + `"${mutation.id}". Stopping so no later result is measured against a mutant. `
-      + `Recover with: git -C ${root} checkout -- ${mutation.file}`,
-    );
-  }
-}
-
-/* ── Running suites ───────────────────────────────────────────────────────── */
-
-interface Run {
-  readonly failed: boolean;
-  readonly timedOut: boolean;
-  /** The runtime died by a signal well inside its deadline, so it says nothing about
-   *  the mutation. */
-  readonly crashed: boolean;
-  readonly ms: number;
-  readonly output: string;
-}
-
-/**
- * One `bun test` invocation, with a signal death told apart from a deadline.
- *
- * A SIGNAL IS NOT A CLOCK, and reading `exitCode === null` as "timed out" is the
- * mistake this function exists to not make. Measured 2026-08-19: the
- * `provider-options-override-wins` mutant reported TIMEOUT after 78 s against a 216 s
- * deadline, which is arithmetically impossible. The real cause was a Bun 1.3.14
- * segmentation fault in `packages/cli-backend`, and it did not reproduce on the next
- * run — an intermittent runtime crash wearing a clock's clothes. Both a deadline kill
- * and a crash leave `exitCode` null, so the elapsed time is what separates them, and a
- * crash is retried once because an intermittent fault is not a finding.
- */
-function runSuites(paths: readonly string[], deadlineMs: number | undefined): Run {
-  const started = Date.now();
-
-  // `timeout: undefined` is how the baseline says it has no bound to derive one from —
-  // it is the run that MEASURES the bound every later mutant is held to.
-  const spawned = Bun.spawnSync({
-    cmd: ['bun', 'test', '--timeout=0', ...paths],
-    cwd: root,
-    stdout: 'pipe',
-    stderr: 'pipe',
-    env: { ...process.env, FORCE_COLOR: '0' },
-    timeout: deadlineMs,
-    killSignal: 'SIGKILL',
-  });
-
-  const ms = Date.now() - started;
-  const bySignal = spawned.exitCode === null;
-  const reachedDeadline = deadlineMs !== undefined && ms >= deadlineMs;
-
-  return {
-    failed: spawned.exitCode !== 0,
-    timedOut: bySignal && reachedDeadline,
-    crashed: bySignal && !reachedDeadline,
-    ms,
-    output: `${spawned.stdout.toString()}${spawned.stderr.toString()}`,
-  };
-}
-
-/**
- * Suites that could plausibly see this mutation, cheaply: the ones importing the
- * mutated file directly, and the ones naming its symbol.
- *
- * Only ever an optimisation. A mutation surviving this set is escalated to the whole
- * package and then to every other package, so an under-inclusive answer costs time on
- * a kill and can never invent a survivor.
- */
-function candidateDefenders(mutation: Mutation): readonly string[] {
-  const suites = readMatching((file) => isRunnableSuite(file) && file.endsWith('.ts'));
-  const target = join(root, mutation.file);
-  const found: string[] = [];
-
-  for (const [file, text] of suites) {
-    if (text.includes(mutation.symbol)) {
-      found.push(file);
-      continue;
-    }
-
-    const imports = moduleSpecifiers(parse(file, text).root)
-      .filter((spec) => spec.startsWith('.'))
-      .map((spec) => join(root, dirname(file), spec));
-
-    if (imports.some((spec) => target === spec || target === `${spec}.ts`)) found.push(file);
-  }
-
-  return found;
+  writeMutant(mutation.file, source, source.replace(mutation.find, mutation.replace));
 }
 
 /* ── Reach: the check `gate:dead-code` gets wrong ─────────────────────────── */
@@ -440,10 +279,10 @@ function isReadPosition(node: SyntaxNode): boolean {
 
 /* ── The sweep ────────────────────────────────────────────────────────────── */
 
-function sweepOne(mutation: Mutation, baselineMs: number): Verdict {
+function sweepOne(mutation: Mutation, baselineMs: number, suites: ReadonlyMap<string, string>): Verdict {
   const readers = productionReaders(mutation.symbol, mutation.file);
   const reach: Reach = readers.length === 0 ? 'unreached' : 'untested';
-  const narrow = candidateDefenders(mutation);
+  const narrow = candidateDefenders(mutation.file, mutation.symbol, suites);
 
   const stages: readonly { readonly label: string; readonly paths: readonly string[] }[] = [
     { label: `${String(narrow.length)} candidate defenders`, paths: narrow },
@@ -457,36 +296,29 @@ function sweepOne(mutation: Mutation, baselineMs: number): Verdict {
 
   for (const stage of stages) {
     if (stage.paths.length === 0) continue;
-    let run = runSuites(stage.paths, deadlineMs);
+    const run = runSuites(stage.paths, deadlineMs);
     spent += run.ms;
 
-    // One retry, because an intermittent runtime fault is not a finding — and if it
-    // reproduces, that is a fact about the runtime rather than about the mutation.
     if (run.crashed) {
-      run = runSuites(stage.paths, deadlineMs);
-      spent += run.ms;
-    }
-
-    if (run.crashed) {
-      revertMutation(mutation);
+      restoreMutant(mutation.file, mutation.id);
 
       return { mutation, outcome: 'crashed', by: stage.label, reach, readers, ms: spent };
     }
 
     if (run.timedOut) {
-      revertMutation(mutation);
+      restoreMutant(mutation.file, mutation.id);
 
       return { mutation, outcome: 'timeout', by: stage.label, reach, readers, ms: spent };
     }
 
     if (run.failed) {
-      revertMutation(mutation);
+      restoreMutant(mutation.file, mutation.id);
 
       return { mutation, outcome: 'killed', by: stage.label, reach, readers, ms: spent };
     }
   }
 
-  revertMutation(mutation);
+  restoreMutant(mutation.file, mutation.id);
 
   return { mutation, outcome: 'survived', by: 'every tier', reach, readers, ms: spent };
 }
@@ -622,8 +454,10 @@ if (import.meta.main) {
 
   const started = Date.now();
 
+  const suites = readMatching((file) => isRunnableSuite(file) && file.endsWith('.ts'));
+
   const verdicts = selected.map((mutation) => {
-    const verdict = sweepOne(mutation, baseline.ms);
+    const verdict = sweepOne(mutation, baseline.ms, suites);
     console.log(`  ${verdict.outcome.padEnd(9)} ${verdict.mutation.id.padEnd(34)} `
       + `${String(Math.round(verdict.ms / 1000))} s`);
 

@@ -5,7 +5,36 @@ import { KinuError, settleSync, tolerate } from '../obs/index';
 import { JsonArraySchema, JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
 import { mcpPresetById, type McpPreset, type McpPresetId } from './presets';
 
-export type McpTransport = 'auto' | 'sse' | 'streamable-http';
+const MCP_TRANSPORTS = ['auto', 'sse', 'streamable-http'] as const;
+
+export type McpTransport = (typeof MCP_TRANSPORTS)[number];
+
+/** Re-derived at read time from `MCPClientManager.mcpConnections[id].connectionState`. */
+const MCP_CONNECTION_STATUSES = ['connecting', 'authenticating', 'connected', 'ready', 'discovering', 'failed', 'unknown'] as const;
+
+export type McpConnectionStatus = (typeof MCP_CONNECTION_STATUSES)[number];
+
+/** One installed server, as `GET /api/user/mcp/servers` answers it. A preset id stays a string so a page older than
+ *  the server still reads a preset it does not know. */
+export const McpServerSummarySchema = v.object({
+  id: v.string(),
+  name: v.string(),
+  serverUrl: v.string(),
+  transport: v.picklist(MCP_TRANSPORTS),
+  status: v.picklist(MCP_CONNECTION_STATUSES),
+  error: v.nullable(v.string()),
+  toolsCount: v.number(),
+  authUrl: v.nullable(v.string()),
+  allowedTools: v.nullable(v.array(v.string())),
+  presetId: v.nullable(v.string()),
+});
+
+export type McpServerSummary = v.InferOutput<typeof McpServerSummarySchema>;
+
+/** `appConfigured` is only meaningful for `oauth-app` presets: whether the deployment carries both client credentials. */
+export const McpPresetAvailabilitySchema = v.object({ id: v.string(), appConfigured: v.boolean() });
+
+export type McpPresetAvailability = v.InferOutput<typeof McpPresetAvailabilitySchema>;
 
 export interface McpServerInput {
   name: string;

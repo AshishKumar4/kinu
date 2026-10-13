@@ -50,6 +50,7 @@ export interface DiscoveredSkill extends SkillHeader {
 export interface ActiveSkill extends DiscoveredSkill {
   body: string | null;
   readonly trust: InstructionTrust;
+  readonly reason: ActivationReason;
 }
 
 export function skillBodyChars(ref: SkillBodyRef): number {
@@ -74,7 +75,6 @@ export type SkillSource =
 
 export interface ActiveSkillSet {
   active: ActiveSkill[];
-  reasons: Array<{ name: string; reason: ActivationReason }>;
 }
 
 export type ActivationReason =

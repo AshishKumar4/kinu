@@ -184,7 +184,7 @@ export const evalsKey = (sha: string): string => `evals/${sha}.json`;
 
 /** The comparison may finish before the deploy writes its verified record. Keep them independent. */
 function assertEvalVerdict(sha: string, bucket: string): void {
-  const stored = wrangler(['r2', 'object', 'get', `${bucket}/${evalsKey(sha)}`, '--pipe', '--remote'], 600_000);
+  const stored = wrangler(['r2', 'object', 'get', `${bucket}/${evalsKey(sha)}`, '--pipe', '--remote'], { timeoutMs: 600_000 });
 
   if (!stored.ok) throw new Error(`no eval verdict yet for ${sha}: ${why(stored)}`);
   const proof = v.parse(EvalProofSchema, JSON.parse(stored.stdout));
@@ -418,7 +418,7 @@ function targets(): Targets {
 }
 
 function r2(argv: readonly string[]): string {
-  const run = wrangler(['r2', 'object', ...argv, '--remote'], 600_000);
+  const run = wrangler(['r2', 'object', ...argv, '--remote'], { timeoutMs: 600_000 });
 
   if (!run.ok) throw new Error(`wrangler r2 object ${argv.slice(0, 2).join(' ')} failed: ${why(run)}`);
 
@@ -463,7 +463,7 @@ function verified(bucket: string, sha: string): Verified {
 
 /** Production's history, oldest first: empty before the first promotion. */
 function promotions(bucket: string): Promotion[] {
-  const run = wrangler(['r2', 'object', 'get', `${bucket}/${HISTORY_KEY}`, '--pipe', '--remote'], 600_000);
+  const run = wrangler(['r2', 'object', 'get', `${bucket}/${HISTORY_KEY}`, '--pipe', '--remote'], { timeoutMs: 600_000 });
 
   if (run.ok) return v.parse(v.array(PromotionSchema), JSON.parse(run.stdout));
 
@@ -637,7 +637,7 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
     if ('refused' in plan) throw new Error(plan.refused);
     const { target } = plan;
 
-    const run = wrangler(['rollback', target.version, '--message', `Rollback to ${target.sha}`, '--yes', ...environmentArgs('production')], 600_000);
+    const run = wrangler(['rollback', target.version, '--message', `Rollback to ${target.sha}`, '--yes', ...environmentArgs('production')], { timeoutMs: 600_000 });
 
     if (!run.ok) throw new Error(`wrangler rollback ${target.version} failed: ${why(run)}`);
     production.put(HISTORY_KEY, JSON.stringify(plan.history), 'application/json');

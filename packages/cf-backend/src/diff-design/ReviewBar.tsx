@@ -48,7 +48,7 @@ const DESIGN_VIEWS: readonly DesignView[] = [
   { id: "edge-capped", group: "Large and odd files", label: "A diff that stops part-way", query: "&set=edge&file=data/seed/coupons.csv" },
 ];
 
-/** Review chrome, not product. `scripts/diff-design-shots.ts` photographs the states it links. */
+/** Review chrome, not product. `scripts/design-shots.ts diff-design` photographs the states it links. */
 export function ReviewBar() {
   const [open, setOpen] = useState(false);
   const { mode } = useTheme();

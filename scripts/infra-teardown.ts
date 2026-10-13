@@ -182,7 +182,7 @@ async function main(): Promise<number> {
   for (const resource of doomed) {
     const argv = resource.destroy ?? [];
 
-    const run = wrangler(argv, 300_000);
+    const run = wrangler(argv, { timeoutMs: 300_000 });
 
     if (run.ok) {
       console.log(`  deleted  ${resource.id}`);

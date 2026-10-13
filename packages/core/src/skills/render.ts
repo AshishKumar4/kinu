@@ -52,11 +52,13 @@ export function renderSkillsIndexSection(index: SkillsIndex): string {
 
 /**
  * Active skill bodies for one trust tier. Only `system` (built-ins and
- * owner-approved files) may announce a tool restriction (KINU-N028).
+ * owner-approved files) may announce a tool restriction (KINU-N028). A `stable` heading leaves the activation reason
+ * to the volatile turn context, so the cached prefix stays byte-identical however a skill activated.
  */
 export function renderActiveSkillsSection(
   activeSet: ActiveSkillSet,
   placement: InstructionPlacement,
+  heading: 'reason' | 'stable',
 ): string {
   const system = placement === 'system';
 
@@ -65,15 +67,11 @@ export function renderActiveSkillsSection(
 
   if (tier.length === 0) return '';
 
-  const reasonByName = new Map<string, ActivationReason>();
-
-  for (const r of activeSet.reasons) reasonByName.set(r.name, r.reason);
-
   // Name order, so the same active set renders byte-identically however it activated (prompt cache).
   const blocks = [...tier]
     .sort((a, b) => compareCodeUnits(a.name, b.name))
     .map((skill) => {
-      const header = `### ${skill.name} (${describeActivationReason(reasonByName.get(skill.name))})`;
+      const header = `### ${skill.name} (${heading === 'stable' ? 'active' : describeActivationReason(skill.reason)})`;
 
       return skill.body === null
         ? `${header}\n\n(body not admitted by this turn's skills allocation (${skillBodyChars(skill.bodyRef)} chars): `
@@ -127,9 +125,7 @@ export function unionAllowedTools(skills: ReadonlyArray<SkillHeader>): string[] 
 }
 
 /** How a skill came to be active, as the prompt says it. */
-export function describeActivationReason(r?: ActivationReason): string {
-  if (!r) return 'active';
-
+export function describeActivationReason(r: ActivationReason): string {
   switch (r.kind) {
     case 'explicit':      return `explicit /${r.matched_token}`;
     case 'always_active': return `pinned via ${r.via}`;

@@ -25,7 +25,7 @@ import { rawPath, rethrow } from '../api/context';
 import { tenantDrive } from '../drive/tenant';
 
 import { installAnalyticsDiagnostics, openAnalyticsWindow } from '@kinu.run/core/analytics';
-import { type McpPresetAvailability, type McpServerSummary } from './mcp';
+import type { McpPresetAvailability, McpServerSummary } from '@kinu.run/core';
 import { acceptRosterSocket, isRosterSocket, unreportedWorkspaces, ROSTER_SOCKET_PATH, type RosterPage, type RosterQuery } from './roster';
 
 import { UserDrive, type DriveAnswer, type DriveChunkWrite } from './drive';
