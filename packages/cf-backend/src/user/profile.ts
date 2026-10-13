@@ -13,8 +13,7 @@ export interface UserProfile {
   displayName: string | null;
   createdAt: number;
   lastSeenAt: number;
-  /** `null` until the wizard reaches `finish()`. Lives in `user_onboarding` because the
-   *  genesis lock refuses a new column on the shipped `user_profile`. */
+  /** `null` until the wizard reaches `finish()`. */
   onboardedAt: number | null;
   /** Counted like `listWorkspaces`' `total`. An account owning a workspace never sees the
    *  wizard, stamp or not. */
@@ -51,19 +50,14 @@ export interface UserProfileStoreHost extends Pick<UserObjectHost, 'ctx' | 'requ
 export class UserProfileStore {
   constructor(private readonly host: UserProfileStoreHost) {}
 
-  private onboardingCompletedAt(): number | null {
-    return singletonValue(this.host.sqlx, 'SELECT completed_at AS value FROM user_onboarding WHERE id = 1', v.number()) ?? null;
-  }
-
   async ensureProfile(caller: UserCaller, email: string, displayName?: string): Promise<UserProfile> {
     await this.host.requireTier(caller, 'profile');
     const now = Date.now();
-    const onboardedAt = this.onboardingCompletedAt();
     const workspaceCount = this.host.workspaces.rosterCount();
 
-    const existing = this.host.sqlx<{ email: string; display_name: string | null; created_at: number; last_seen_at: number }>(
-      `SELECT email, display_name, created_at, last_seen_at FROM user_profile WHERE id = 1`,
-    )[0];
+    const existing = this.host.sqlx<{
+      email: string; display_name: string | null; created_at: number; last_seen_at: number; onboarded_at: number | null;
+    }>(`SELECT email, display_name, created_at, last_seen_at, onboarded_at FROM user_profile WHERE id = 1`)[0];
 
     if (existing) {
       this.host.sqlx(
@@ -76,7 +70,7 @@ export class UserProfileStore {
         displayName: displayName ?? existing.display_name,
         createdAt: existing.created_at,
         lastSeenAt: now,
-        onboardedAt,
+        onboardedAt: existing.onboarded_at,
         workspaceCount,
       };
     }
@@ -86,15 +80,15 @@ export class UserProfileStore {
       email, displayName ?? null, now, now,
     );
 
-    return { email, displayName: displayName ?? null, createdAt: now, lastSeenAt: now, onboardedAt, workspaceCount };
+    return { email, displayName: displayName ?? null, createdAt: now, lastSeenAt: now, onboardedAt: null, workspaceCount };
   }
 
   async getProfile(caller: UserCaller): Promise<UserProfile | null> {
     await this.host.requireTier(caller, 'profile');
 
-    const row = this.host.sqlx<{ email: string; display_name: string | null; created_at: number; last_seen_at: number }>(
-      `SELECT email, display_name, created_at, last_seen_at FROM user_profile WHERE id = 1`,
-    )[0];
+    const row = this.host.sqlx<{
+      email: string; display_name: string | null; created_at: number; last_seen_at: number; onboarded_at: number | null;
+    }>(`SELECT email, display_name, created_at, last_seen_at, onboarded_at FROM user_profile WHERE id = 1`)[0];
 
     if (!row) return null;
 
@@ -103,7 +97,7 @@ export class UserProfileStore {
       displayName: row.display_name,
       createdAt: row.created_at,
       lastSeenAt: row.last_seen_at,
-      onboardedAt: this.onboardingCompletedAt(),
+      onboardedAt: row.onboarded_at,
       workspaceCount: this.host.workspaces.rosterCount(),
     };
   }
@@ -112,14 +106,12 @@ export class UserProfileStore {
   async completeOnboarding(caller: UserCaller): Promise<{ onboardedAt: number }> {
     await this.host.requireTier(caller, 'account');
 
-    this.host.sqlx(
-      `INSERT INTO user_onboarding (id, completed_at) VALUES (1, ?) ON CONFLICT (id) DO NOTHING`,
-      Date.now(),
-    );
+    this.host.sqlx(`UPDATE user_profile SET onboarded_at = COALESCE(onboarded_at, ?) WHERE id = 1`, Date.now());
 
-    const stamped = this.onboardingCompletedAt();
+    const stamped = singletonValue(this.host.sqlx, 'SELECT onboarded_at AS value FROM user_profile WHERE id = 1', v.nullable(v.number()));
 
-    if (stamped === null) throw new KinuError('io', 'user_onboarding has no row after the insert');
+    // The wizard runs only for an account whose profile the sign-in made.
+    if (stamped === undefined || stamped === null) throw new KinuError('io', 'the account has no profile to stamp');
 
     return { onboardedAt: stamped };
   }

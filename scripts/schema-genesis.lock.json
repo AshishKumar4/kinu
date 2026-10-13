@@ -1569,21 +1569,14 @@
     "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
     "updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)"
   ],
-  "user_mcp_server_presets@packages/core/src/state/user-schema.ts": [
-    "server_id TEXT PRIMARY KEY REFERENCES user_mcp_servers(id) ON DELETE CASCADE",
-    "preset_id TEXT NOT NULL"
-  ],
   "user_mcp_servers@packages/core/src/state/user-schema.ts": [
     "id TEXT PRIMARY KEY",
     "name TEXT NOT NULL",
     "server_url TEXT NOT NULL",
     "transport TEXT NOT NULL",
     "headers TEXT",
-    "allowed_tools TEXT"
-  ],
-  "user_onboarding@packages/core/src/state/user-schema.ts": [
-    "id INTEGER PRIMARY KEY CHECK (id = 1)",
-    "completed_at INTEGER NOT NULL"
+    "allowed_tools TEXT",
+    "preset_id TEXT"
   ],
   "user_peer_grants@packages/core/src/state/user-schema.ts": [
     "sender_user_id TEXT NOT NULL",
@@ -1596,7 +1589,8 @@
     "email TEXT NOT NULL",
     "display_name TEXT",
     "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
-    "last_seen_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)"
+    "last_seen_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
+    "onboarded_at INTEGER"
   ],
   "user_schema_meta@packages/core/src/state/user-schema.ts": [
     "key TEXT PRIMARY KEY",

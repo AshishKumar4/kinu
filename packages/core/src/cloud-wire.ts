@@ -33,14 +33,14 @@ export function parseEvalAccount(name: string): EvalAccount | null {
 
 /**
  * The tables a trial account may hold rows in when its trial opens: its provider keys and what keeps them (the
- * revision counters), and the account's own bookkeeping (its profile, onboarding,
+ * revision counters), and the account's own bookkeeping (its profile,
  * schema version, token generation, and the agents SDK's state row, which the account never writes). A device-status
  * watcher names the workspace that registered it, which the account keeps after the workspace is deleted until a
  * device moves: no later trial opens a workspace of that name.
  */
 const TRIAL_ACCOUNT_KEEPS: ReadonlySet<string> = new Set([
   'user_credentials', 'user_credential_revisions', 'user_credentials_revision',
-  'user_schema_meta', 'user_profile', 'user_onboarding', 'user_auth_generation', 'cf_agents_state', 'device_status_watchers',
+  'user_schema_meta', 'user_profile', 'user_auth_generation', 'cf_agents_state', 'device_status_watchers',
 ]);
 
 /** A positive catalog CAS version proves its sole stored configuration row. It routes the trial's models; every
