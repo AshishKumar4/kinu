@@ -1150,6 +1150,10 @@ async function versionRead(t: Telemetry, versionId: string): Promise<VersionRead
   const alarms = await perMinute(t, [...invocations, eq('$workers.eventType', 'alarm')]);
   const called = await perMinute(t, [...invocations, { key: '$workers.eventType', operation: 'neq', value: 'alarm', type: 'string' }]);
   const modelCalls = await perMinute(t, [...scope, eq('$metadata.type', 'cf-worker'), eq('event', 'provider.stream_opened')]);
+  // Mossaic's UserDO alarm does its maintenance on ShardDOs and says so in one line when it did (`maintenance_swept`,
+  // AshishKumar4/Mossaic#6): staging c6dc27da1, 2026-10-13, read one such sweep, 30 shard calls in its trace, as an
+  // idle wake.
+  const swept = await perMinute(t, [...scope, eq('$metadata.type', 'cf-worker'), eq('event', 'maintenance_swept')]);
   const total = (rows: readonly { readonly count: number }[]): number => rows.reduce((sum, row) => sum + row.count, 0);
 
   const read = {
@@ -1169,7 +1173,7 @@ async function versionRead(t: Telemetry, versionId: string): Promise<VersionRead
       terminal: terminalEffectStates(terminal, destroyedAt),
     },
     startups: await startupHours(t, scope),
-    idleWakes: idleWakeHours(alarms, [...called, ...modelCalls]),
+    idleWakes: idleWakeHours(alarms, [...called, ...modelCalls, ...swept]),
   };
 }
 
