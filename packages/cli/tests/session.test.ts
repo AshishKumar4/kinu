@@ -127,7 +127,7 @@ describe("CLI transcripts", () => {
   test("kinu debug --transcripts lists a workspace's recorded runs and their files, signed out", async () => {
     const home = scratchDir("debug-transcripts");
     writeFileSync(join(home, "config.json"), JSON.stringify({
-      agents: { jarvis: { name: "jarvis", mode: "cloud", cloudName: "jarvis", createdAt: "", updatedAt: "" } },
+      agents: { jarvis: { name: "jarvis", mode: "cloud", cloudName: "jarvis", displayName: "Jarvis", createdAt: "", updatedAt: "" } },
     }));
     const dir = tempTranscriptDir();
     const session = createCliSession("jarvis", { transcriptDir: dir });
