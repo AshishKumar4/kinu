@@ -64,7 +64,7 @@ Only a graceful stop takes a snapshot: `quiesce()`, a running `resize()`, or `an
 
 ## Calls
 
-<p align="center"><img src="docs/request-path.svg" width="880" alt="exec: your Worker calls box.exec, Devbox waits until the box is ready, runs bash in /workspace and returns stdout, stderr and the exit code. Preview: your Worker forwards a preview host to /_devbox/preview on the box, which checks the token and proxies to the container port."></p>
+<p align="center"><img src="docs/request-path.svg" width="880" alt="exec: your Worker calls box.exec, Devbox waits until the box is ready, runs setsid bash in /workspace and returns stdout, stderr and the exit code. Preview: previewBox finds the box a preview host names, your Worker forwards the request unchanged, and the box checks the name and the token and proxies to the container port."></p>
 
 `box` is a stub such as `env.Box.getByName('demo')`.
 
@@ -88,7 +88,7 @@ await box.exec('npm run deploy', { execId });   // once per id: a retry after a 
 await box.killExec(execId);
 ```
 
-Every command runs as `setsid -w bash -c`, in its own process group, with no deadline. Cancelling a stream ends its command. Give an `execId` when a retry must not run the command twice, or to end it with `killExec`: each id launches once, a repeat gets the first answer, or `indeterminate` for a stream, until `releaseExec(execId)`. Without one the box keeps nothing.
+Every command runs as `setsid -w bash -c`, in its own process group, with no deadline. Cancelling a stream ends its command. Give an `execId` when a retry must not run the command twice, or to end it with `killExec`: each id launches once, a repeat gets the first answer, or `indeterminate` for a stream, until `releaseExec(execId)`. Without one the box keeps nothing (D87).
 
 ### Files
 
@@ -123,7 +123,7 @@ const preview = previewBox(request, env.Box);
 if (preview !== null) return preview.fetch(request);
 ```
 
-`previewBox` reaches the box a host under `DEVBOX_PREVIEW_HOST` names, and the box serves the request: it checks that the name is its own, that the token is the port's, and that the port is exposed. The port comes from the host; the visitor's path reaches the port as it is (D60). The token is kept per port, so every start re-exposes the port at the same URL. To pass `token` yourself, take it from `portToken(port)`.
+`previewBox` reaches the box a host under `DEVBOX_PREVIEW_HOST` names, and the box serves the request: it checks that the name is its own, that the token is the port's, and that the port is exposed. The port comes from the host; the visitor's path reaches the port as it is (D60, D86). The token is kept per port, so every start re-exposes the port at the same URL. To pass `token` yourself, take it from `portToken(port)`.
 
 The name is the one the box was reached by with `getByName`, kept the first time the box sees it. A host label holds 63 characters, so a name gets 41 with a 4-digit port, in lowercase letters, digits and hyphens. A box reached only by its id, a name that does not fit, or no preview zone is refused at `exposePort`.
 

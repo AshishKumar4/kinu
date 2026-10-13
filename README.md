@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.svg">
-    <img alt="Kinu.run: the brush mark and wordmark over a faint tree of a real search" src="docs/assets/banner.svg" width="900">
+    <img alt="Kinu.run: the kinu wordmark over a faint tree of a real search" src="docs/assets/banner.svg" width="900">
   </picture>
 </p>
 
