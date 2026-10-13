@@ -22,11 +22,9 @@ export interface SlateBuildRead {
   readonly missing: boolean;
 }
 
-/** A compiled slate: each module's content digest, the client bundle and page shell when it has a browser surface. */
+/** A compiled slate: each module's content digest; the runner module carries the client bundle and page shell. */
 export interface SlateImage {
   readonly modules: Readonly<Record<string, string>>;
-  readonly client?: string;
-  readonly shell?: string;
   /** What the compile looked at outside the slate's own tree; kept beside the image, not in it. */
   readonly inputs?: readonly SlateBuildRead[];
 }
@@ -65,11 +63,7 @@ export function initSlateBuildTable(execRaw: RawSqlExec): void {
   execRaw('CREATE INDEX IF NOT EXISTS slate_build_inputs_path ON slate_build_inputs (path)');
 }
 
-const SlateImageSchema = v.object({
-  modules: v.record(v.string(), v.string()),
-  client: v.optional(v.string()),
-  shell: v.optional(v.string()),
-});
+const SlateImageSchema = v.object({ modules: v.record(v.string(), v.string()) });
 
 const RowSchema = v.object({
   good_key: v.nullable(v.string()), good_image: v.nullable(v.string()), failed_key: v.nullable(v.string()), failure: v.nullable(v.string()),
@@ -237,10 +231,6 @@ export class SlateBuilds {
       const image = v.parse(SlateImageSchema, JSON.parse(v.parse(v.object({ good_image: v.string() }), row).good_image));
 
       yield* Object.values(image.modules);
-
-      if (image.client !== undefined) yield image.client;
-
-      if (image.shell !== undefined) yield image.shell;
     }
   }
 }

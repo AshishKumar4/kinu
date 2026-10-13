@@ -9,17 +9,11 @@ import { CRED_KERNEL, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.
 import type { ComposedFacetManager, LongRunningWorkerSpawnOptions } from '@nimbus-sh/worker/workspace-host';
 import type { WorkspaceSession } from '@kinu.run/core/workspace';
 import {
-  SLATE_DRIVEN_MEMBERS, SLATE_METHOD_NAME_SOURCE, SLATE_PAGE_PREAMBLE, slateTitle, type SlateProcess, type SlateProject, slateAuthority,
+  escapeHtml, SLATE_DRIVEN_MEMBERS, SLATE_METHOD_NAME_SOURCE, SLATE_PAGE_PREAMBLE, slateTitle, type SlateProcess, type SlateProject, slateAuthority,
 } from '@kinu.run/core';
 import { attempt, diagnostics, KinuError, renderCauseChain, settle } from '@kinu.run/core/obs';
 import { SLATE_CLIENT_MODULE, SLATE_SERVER_MODULE, type SlateBuildFailure, type SlateBuildRead, type SlateImage } from '@kinu.run/core/slates';
 import { BROWSER_CLIENT_MODULE, BROWSER_PRELUDE, browserClientSource } from '../browser-prelude';
-
-interface SlateBootArtifacts {
-  application: string;
-  client?: string;
-  shell?: string;
-}
 
 export interface ResidentSlateProcess extends SlateProcess {
   /** The port the durable application listens on; null for a caller's private process, which is reached by RPC alone. */
@@ -28,7 +22,6 @@ export interface ResidentSlateProcess extends SlateProcess {
   connect(request: Request): Promise<Response>;
   /** The method names `startProcess` published — the forwarder's allow list. */
   readonly methods: readonly string[];
-  readonly artifacts: Readonly<SlateBootArtifacts>;
 }
 
 export interface ResidentSlateDeps {
@@ -47,20 +40,24 @@ export interface ResidentSlateDeps {
  */
 
 /** What a build reads: the authored tree, as its caller sees it. */
-export type SlateBuildInput = Pick<ResidentSlateBoot, 'owner' | 'root' | 'project' | 'read' | 'cred'>;
-
-export interface ResidentSlateBoot {
-  readonly key: string;
+export interface SlateBuildInput {
   /** The slate id, independent of source revision and process incarnation. */
   readonly owner: string;
   readonly root: string;
   readonly project: SlateProject;
   /** An authored entry's text, wherever the slate's source keeps it; null for one it does not hold. */
   readonly read: (entry: string) => string | null;
-  /** Set for the durable application (reserved port, owner-pinned facet whose SQLite persists); null spawns a private ephemeral process. */
-  readonly app: { readonly port: number } | null;
   /** Whose file plane compiles the authored tree: the caller's, never the origin's on its behalf. */
   readonly cred: VfsCred;
+}
+
+/** What a launch runs an image as. */
+export interface SlateLaunchInput {
+  /** The slate id, independent of source revision and process incarnation. */
+  readonly owner: string;
+  readonly root: string;
+  /** Set for the durable application (reserved port, owner-pinned facet whose SQLite persists); null spawns a private ephemeral process. */
+  readonly app: { readonly port: number } | null;
   /** `workspace`, `__storage` and `__host`, each the host's entrypoint for this slate as its caller. */
   readonly bindings: Readonly<Record<string, Fetcher>>;
   /** The caller's explicitly selected network capability; never implicit inheritance. */
@@ -378,10 +375,6 @@ function isPageEntry(browser: string): boolean {
   return browser.endsWith('.html');
 }
 
-function escapeHtml(text: string): string {
-  return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
-}
-
 function slateShell(input: { readonly title: string; readonly assets: readonly { readonly path: string }[] }): string {
   const styles = input.assets
     .filter((asset) => asset.path.endsWith('.css'))
@@ -608,17 +601,6 @@ export class ResidentSlateProcesses {
 
   constructor(private readonly deps: ResidentSlateDeps) {}
 
-  /** Builds the tree and runs it; a tree that does not compile is refused in the compiler's words. */
-  start(input: ResidentSlateBoot): Promise<ResidentSlateProcess> {
-    return settle(Effect.gen({ self: this }, function* () {
-      const built = yield* Effect.promise(async () => this.build(input));
-
-      if ('failed' in built) return yield* new KinuError('bad_input', built.failed);
-
-      return yield* Effect.promise(async () => this.launch(input, built));
-    }));
-  }
-
   /**
    * Compiles the authored tree into an image. A tree that does not compile is answered as a value, in the compiler's
    * words, so its caller can keep serving the last image that did.
@@ -703,21 +685,16 @@ export class ResidentSlateProcesses {
       const digests: Record<string, string> = {};
 
       for (const [name, contents] of Object.entries(modules)) digests[name] = yield* held(contents);
-      const client = assets.find((asset) => asset.path === '/__kinu/client.js');
       const { inputs } = yield* trace;
 
-      return {
-        modules: digests,
-        ...(shell !== undefined && client !== undefined && { client: yield* held(client.contents), shell: yield* held(shell) }),
-        inputs,
-      };
+      return { modules: digests, inputs };
     }), (error): error is KinuError => error instanceof KinuError && error.code === 'bad_input', (error) => Effect.map(trace, ({ inputs, unwatched }) => ({
       failed: renderCauseChain(error), inputs, ...(unwatched && { unobserved: true as const }),
     }))));
   }
 
   /** Runs an image: the durable application on its port, or a caller's private process. */
-  launch(input: ResidentSlateBoot, image: SlateImage): Promise<ResidentSlateProcess> {
+  launch(input: SlateLaunchInput, image: SlateImage): Promise<ResidentSlateProcess> {
     return settle(Effect.gen({ self: this }, function* () {
       const session = yield* Effect.promise(async () => this.deps.session());
       const { workerCompatibility } = yield* attempt({ doing: 'loading the slate runtime vendor', otherwise: 'io' }, async () => import('virtual:kinu-slate-vendor'));
@@ -771,17 +748,12 @@ export class ResidentSlateProcesses {
         });
       });
 
-      const artifacts: SlateBootArtifacts = {
-        application: read(applicationImage),
-        ...(image.client !== undefined && image.shell !== undefined && { client: read(image.client), shell: read(image.shell) }),
-      };
-
       // Nothing else sweeps these images (fabric sweeps only its own), and every source edit writes a new one.
-      this.imagesInUse.set(pid, new Set([...Object.values(image.modules), ...[image.client, image.shell].filter((digest) => digest !== undefined)]));
+      this.imagesInUse.set(pid, new Set(Object.values(image.modules)));
       this.sweepFacetImages(kernelVfs, session.processes);
 
       return {
-        id: String(pid), port: input.app?.port ?? null, methods, artifacts,
+        id: String(pid), port: input.app?.port ?? null, methods,
         request: (request) => spawned.facet.fetch(request),
         connect: (request) => spawned.facet.connect(request),
         isRunning: async () => session.processes.get(pid)?.state === 'running',

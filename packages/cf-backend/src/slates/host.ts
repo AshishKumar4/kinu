@@ -385,7 +385,7 @@ export class SlateHost {
 
   /** A process for `launch`: the slate's bindings as its caller, and its outbound mediated as that caller's eval is. */
   private async launch(launch: SlateLaunch<SlateSource>): Promise<ResidentSlateProcess> {
-    const { key, id, caller, source, image, app } = launch;
+    const { id, caller, source, image, app } = launch;
     const globalOutbound = caller.workMode === 'plan' ? null : codemodeEgress({ workspace: this.deps.workspace, actor: await this.deps.browserActor(caller) });
 
     if (caller.workMode === 'build' && globalOutbound === null) {
@@ -399,12 +399,7 @@ export class SlateHost {
       bindings[name] = exports.SlateBinding({ props });
     }
 
-    const read = await this.slateSources.reader(caller.cred, source);
-
-    return await this.resident.launch({
-      key, owner: id, root: source.root, project: source.project, read, cred: caller.cred, bindings, globalOutbound,
-      app: app === null ? null : { port: app.port },
-    }, image);
+    return await this.resident.launch({ owner: id, root: source.root, bindings, globalOutbound, app: app === null ? null : { port: app.port } }, image);
   }
 
   filesChanged(paths: readonly string[]): string[] {
