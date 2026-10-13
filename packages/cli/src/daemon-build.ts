@@ -8,9 +8,6 @@ import { join, relative, resolve } from 'node:path';
 import { Effect } from 'effect';
 import { attempt, KinuError } from '@kinu.run/core/obs';
 
-/** The daemon's source directory in this tree. */
-const DAEMON_DIR = join(import.meta.dir, '..', '..', 'pc-agent', 'src');
-
 export interface DaemonFiles {
   /** The daemon, which installs as `pc-agent.js`. */
   readonly daemon: string;
@@ -31,8 +28,8 @@ function fromRepository(text: string, source: string): string {
   return text.replace(MODULE_LINE, (_line, path: string) => `// ${relative(repository, resolve(path))}`);
 }
 
-/** Builds every daemon file in `source`, `index.js` the daemon. */
-export function buildDaemonFiles(source: string = DAEMON_DIR): Effect.Effect<DaemonFiles, KinuError> {
+/** Builds every daemon file in `source` (this tree's daemon by default), `index.js` the daemon. */
+export function buildDaemonFiles(source: string = join(import.meta.dir, '..', '..', 'pc-agent', 'src')): Effect.Effect<DaemonFiles, KinuError> {
   const names = readdirSync(source).filter((name) => name.endsWith('.js') || name.endsWith('.json')).sort();
 
   return Effect.gen(function* () {
