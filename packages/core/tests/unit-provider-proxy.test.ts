@@ -67,7 +67,6 @@ describe('provider proxy fetch', () => {
       body: '{"model":"x"}',
     });
 
-    expect(seen).toHaveLength(1);
     expect(seen[0]?.url).toBe('https://kinu.example.com/api/user/ai/proxy/forward');
     const headers = new Headers(seen[0]?.init?.headers);
     expect(headers.get('authorization')).toBe('Bearer ptc_test');

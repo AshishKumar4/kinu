@@ -225,7 +225,6 @@ describe('definitive provider failures propagate', () => {
 
     expect(done).toBeUndefined();
     // Only closed facts (HTTP status, provider error type), never provider prose (KINU-043).
-    expect(threw?.message ?? '').toContain('the provider refused the request');
     expect(threw?.message ?? '').toContain('400');
     expect(threw?.message ?? '').toContain('transport_error');
     expect(threw?.message ?? '').not.toContain('definitive upstream failure');

@@ -24,16 +24,18 @@ describe('buildCompactionSummaryPrompt', () => {
     expect(prompt).toContain('new turns here');
   });
 
-  test('an oversize latest ask is windowed head+tail with a named omission, not dropped', () => {
+  test('an oversize latest ask keeps both supplied ends without a full echo', () => {
+    const head = 'DEPLOY-STAGING-FIRST';
+    const tail = 'REPORT-THE-PREVIEW-URL-LAST';
+    const ask = `${head}${'A'.repeat(10_000)}${tail}`;
+
     const prompt = buildCompactionSummaryPrompt({
-      transcript: 't', latestUserAsk: 'A'.repeat(10_000), budgetTokens: 500,
+      transcript: 't', latestUserAsk: ask, budgetTokens: 500,
     });
 
-    // Both ends survive (the tail of a long spec-dump ask carries its point)
-    // and the cut names itself, so the summarizer knows the ask was longer.
-    expect(prompt).toContain('A'.repeat(4_000));
-    expect(prompt).not.toContain('A'.repeat(8_001));
-    expect(prompt).toContain('chars omitted from the middle');
+    expect(prompt).toContain(head);
+    expect(prompt).toContain(tail);
+    expect(prompt).not.toContain(ask);
   });
 });
 

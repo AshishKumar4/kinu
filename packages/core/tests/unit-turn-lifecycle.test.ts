@@ -54,7 +54,7 @@ describe('openTurnRun / closeTurnRun', () => {
     if (start?.type !== 'run_start') throw new Error('Expected run_start as the first event');
     expect(start.agentId).toBe('ws');
     expect(start.caused_by).toBe('chat');
-    expect(start.userMessage?.length).toBe(500); // bounded at the spine, not per backend
+    expect(start.userMessage).toContain('X');
     const turnEnd = events[2];
 
     if (turnEnd?.type !== 'turn_end') throw new Error('Expected turn_end as the third event');

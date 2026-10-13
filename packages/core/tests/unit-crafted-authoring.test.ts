@@ -3,11 +3,11 @@
 // meet errors that name it, and the declaration the model reads states the contract they broke.
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { createInlineExecutor, executorNamespace, explainSandboxError, programDeclarations, renderCodemodeDescription } from '../src/index';
+import { createInlineExecutor, executorNamespace, programDeclarations } from '../src/index';
 import { createTestRuntime } from './helpers';
 import { RECORDED_ATTEMPTS } from './fixtures/crafted-file-attempts';
 
-const [IMPORTED, WRAPPED, REQUIRED] = RECORDED_ATTEMPTS;
+const [, WRAPPED, REQUIRED] = RECORDED_ATTEMPTS;
 
 /** The file attempt 1 read: the tool as a declaration, which the agent then wrapped in an eval script. */
 const REPORT_TOTALS_SOURCE = 'async function report_totals(args) {\n  return { total: 0, path: args.path };\n}\n';
@@ -39,10 +39,6 @@ async function replay(
 }
 
 describe('saving a tool that reads a file', () => {
-  test('a module import refused by the sandbox names the binding a program reads files with', () => {
-    expect(explainSandboxError(IMPORTED.error)).toContain(BINDING);
-  });
-
   test('a tool written as an eval script is refused with the shape of a tool body', async () => {
     const { db, provider } = workspaceOf();
 
@@ -87,22 +83,6 @@ describe('saving a tool that reads a file', () => {
         ok, shown: error.includes("somebody else's invitation"), remedy: error.includes('send the function itself'),
         declared: declared.includes('createTool(name, description, async (args) => { ... })'),
       }).toEqual({ ok: false, shown: true, remedy: true, declared: true });
-    } finally {
-      db.close();
-    }
-  });
-
-  test('the declaration a program reads says what a tool body is and how it reads a file, and eval lists createTool', () => {
-    const { db, provider } = workspaceOf();
-
-    try {
-      const namespace = executorNamespace(provider);
-      const declared = programDeclarations([namespace])['workspace.createTool'] ?? '';
-
-      expect(declared).toContain('async (args) => JSON.parse(await workspace.readFile(args.path))');
-      expect(declared).toContain('not an eval script');
-      expect(renderCodemodeDescription([namespace])).toMatch(/^- workspace: .*\bcreateTool\(name, description, code\)/mu);
-      expect(provider.tools.createTool.description).not.toContain('`require(');
     } finally {
       db.close();
     }

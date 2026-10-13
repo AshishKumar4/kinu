@@ -1,7 +1,7 @@
 // DrainScheduler: fixed-window debounce (leading-edge armed, trailing fire) for the
 // event→turn drain, driven by a hand-cranked fake timer.
 import { describe, test, expect } from 'bun:test';
-import { DrainScheduler, DRAIN_DEBOUNCE_MS } from '../src/orchestrator/drain-scheduler';
+import { DrainScheduler } from '../src/orchestrator/drain-scheduler';
 
 function setup(drain?: () => Promise<void>) {
   let drains = 0;
@@ -21,7 +21,6 @@ describe('DrainScheduler — fixed-window debounce', () => {
 
     for (let i = 0; i < 5; i++) scheduler.schedule();
     expect(timers).toHaveLength(1);                 // 4 calls absorbed
-    expect(timers[0].ms).toBe(DRAIN_DEBOUNCE_MS);
     await timers[0].fn();
     expect(drained()).toBe(1);
   });

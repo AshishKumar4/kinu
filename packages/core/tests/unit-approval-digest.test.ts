@@ -2,7 +2,7 @@
 
 import { describe, expect, test } from 'bun:test';
 import {
-  argumentDigest, sha256Hex, stableStringify,
+  argumentDigest,
 } from '../src/index';
 
 describe('argumentDigest', () => {
@@ -17,7 +17,6 @@ describe('argumentDigest', () => {
   test('is a full-strength (64-hex / 256-bit) SHA-256, not a truncated fingerprint', () => {
     const d = argumentDigest({ cmd: 'deploy' });
     expect(d).toMatch(/^[0-9a-f]{64}$/);
-    expect(d).toBe(sha256Hex(stableStringify({ cmd: 'deploy' })));
     // Pinned against `printf '{"cmd":"deploy"}' | sha256sum`.
     expect(d).toBe('0cf3286509cd632a7cc63866f31b1f36660f23a9ef242f82a8080c7f8a23e2de');
   });

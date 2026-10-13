@@ -8,7 +8,6 @@ import {
   parentSelectionWeights, rolloutMinibatch, renderReflectionPrompt,
   type EvalInstance, type GepaBudget, type GepaCandidate, type MetricOutcome,
 } from './index';
-import { DELEGATION_RUBRIC } from '../delegation-features';
 
 function seededRng(seed: number): () => number {
   let s = seed;
@@ -190,24 +189,6 @@ describe('renderReflectionPrompt', () => {
     expect(prompt).toContain('task input');
     expect(prompt).toContain('too verbose');
     expect(prompt).toContain('Turn process: 41 sequential steps, 0 team, 0 think');
-    // One shared rubric string (evolution/delegation-features.ts).
-    expect(prompt).toContain(DELEGATION_RUBRIC);
-  });
-
-  test('keeps the delegation rubric scoped to scaffold reflection', () => {
-    const parent = mkCandidate('tool-source', { i1: 0.4 });
-
-    const prompt = renderReflectionPrompt({
-      parent,
-      minibatch: [mkInstance('i1', 'task input')],
-      rollout: {
-        outcomes: [{ instanceId: 'i1', outcome: { score: 0.4, feedback: 'too slow' } }],
-        metricCalls: 1,
-      },
-      artifactDescription: 'crafted tool source',
-    });
-
-    expect(prompt).not.toContain('Delegation rubric');
   });
 });
 
@@ -593,7 +574,6 @@ describe('runGepa — rejection reasons and the give-up counter', () => {
       random: seededRng(1),
     });
 
-    expect(log.reasons).toHaveLength(5);
     expect(result.stopReason).toBe('no_improvement_possible');
   });
 

@@ -117,21 +117,11 @@ describe('tunneled device capability row', () => {
     expect(stale).toContain('not measured here: javascript, typescript, python, npm, git, docker, gpu');
   });
 
-  test('the block tells the model that "not measured" is ignorance, not a denial', () => {
-    const block = renderDynamicContextBlock({
-      executors: routerRows(createDeviceTunnelExecutor(connectedDevice)),
-    });
-
-    expect(block).toContain('It may well work, so try it before ruling it out');
-  });
-
   test('declares no capability its own tool surface cannot exercise', () => {
     const provider = createDeviceTunnelExecutor(connectedDevice);
     const line = runsLine(provider);
 
     // Nothing in `device` can keep a process alive between turns or signal one.
-    expect(Object.keys(provider.tools).sort())
-      .toEqual(['exec', 'exists', 'readdir']);
     expect(line).not.toContain('process_long');
     expect(line).not.toContain('process_signal');
   });

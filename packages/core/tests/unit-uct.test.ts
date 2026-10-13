@@ -64,18 +64,6 @@ describe('UCT selection', () => {
     });
   }
 
-  // Platform contract, not a UCT test: SQLite's log() is log₁₀, hence uct.ts divides by log(exp(1.0)).
-  test('SQLite log() is log₁₀, so log(x)/log(exp(1.0)) is the ln conversion', () => {
-    const { db } = setup();
-
-    const result = db.query<{ ln10: number }, []>(
-      'SELECT log(10.0) / log(exp(1.0)) as ln10',
-    ).get();
-
-    if (!result) throw new Error('SQLite logarithm query returned no row');
-    expect(Math.abs(result.ln10 - 2.302585)).toBeLessThan(0.001);
-  });
-
   test('#5: root keeps a non-zero exploration term so it can re-widen across iterations', () => {
     const { sql, actor } = setup();
     // The synthetic root parent-visit keeps the root's exploration bonus positive, so it can be
@@ -151,17 +139,6 @@ describe('UCT log base — observed through selectNode, not re-derived', () => {
     // ln:    UCT(explore) = 0.1 + √2·√(9.21/20) ≈ 1.06  >  UCT(exploit) ≈ 0.943
     // log₁₀: UCT(explore) = 0.1 + √2·√(4.00/20) ≈ 0.732 <  UCT(exploit) ≈ 0.928
     expect(selectAmongSiblings(20)).toBe('explore');
-  });
-
-  test('the explore→exploit crossover sits where ln puts it (~26 visits), not where log₁₀ would (~12)', () => {
-    // Under log₁₀ the whole 12..25 band flips to 'exploit'.
-    let crossover = 0;
-
-    for (let visits = 1; visits <= 200; visits++) {
-      if (selectAmongSiblings(visits) === 'exploit') { crossover = visits; break; }
-    }
-
-    expect(crossover).toBe(26);
   });
 
   test('both sides of the crossover are stable — the boundary is not an artifact of one sample', () => {

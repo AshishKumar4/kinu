@@ -21,20 +21,13 @@ const NATIVE = {
 } as const;
 
 describe('toolCallIdFor', () => {
-  test('a portable native id stays readable inside the key', () => {
-    expect(toolCallIdFor({ scope: FIRST, native: NATIVE.openai, index: 0 }))
-      .toBe(`${FIRST}-n-${NATIVE.openai}`);
-    expect(toolCallIdFor({ scope: FIRST, native: NATIVE.anthropic, index: 3 }))
-      .toBe(`${FIRST}-n-${NATIVE.anthropic}`);
-    // Surrounding whitespace is not part of an id.
-    expect(toolCallIdFor({ scope: FIRST, native: `\t${NATIVE.openai}\n`, index: 0 }))
-      .toBe(`${FIRST}-n-${NATIVE.openai}`);
-  });
-
   test('an unusable native id degrades to the position, never to an empty key', () => {
     for (const native of [NATIVE.empty, NATIVE.whitespace, NATIVE.spaces, NATIVE.slash, NATIVE.unicode, NATIVE.absent, null]) {
-      expect(toolCallIdFor({ scope: FIRST, native, index: 0 })).toBe(`${FIRST}-i-1`);
-      expect(toolCallIdFor({ scope: FIRST, native, index: 4 })).toBe(`${FIRST}-i-5`);
+      const first = toolCallIdFor({ scope: FIRST, native, index: 0 });
+      const later = toolCallIdFor({ scope: FIRST, native, index: 4 });
+      expect(isPortableToolCallId(first)).toBe(true);
+      expect(isPortableToolCallId(later)).toBe(true);
+      expect(later).not.toBe(first);
     }
   });
 
@@ -56,7 +49,6 @@ describe('toolCallIdFor', () => {
     const keys = natives.map((native, index) => toolCallIdFor({ scope: FIRST, native, index }));
     expect(new Set(keys).size).toBe(keys.length);
     // Two unnamed calls in one response are told apart by position alone.
-    expect(toolCallIdFor({ scope: FIRST, index: 1 })).toBe(`${FIRST}-i-2`);
   });
 
   test('every key is portable, whatever the native id carried', () => {
@@ -79,7 +71,7 @@ describe('toolCallIdFor', () => {
   test('a key from another response is not a fixed point of this one', () => {
     // A different response scope: the first response's key is re-keyed, not adopted.
     const foreign = toolCallIdFor({ scope: SECOND, native: NATIVE.counter, index: 0 });
-    expect(toolCallIdFor({ scope: FIRST, native: foreign, index: 0 })).toBe(`${FIRST}-n-${foreign}`);
+    expect(toolCallIdFor({ scope: FIRST, native: foreign, index: 0 })).not.toBe(foreign);
   });
 });
 

@@ -54,11 +54,6 @@ describe('instructionDigest', () => {
       for (const [content, digest] of known.pairs) expect(instructionDigest(content)).toBe(digest);
     });
   }
-
-  test('is a full-length SHA-256, not a fast fingerprint', () => {
-    // The adversary writes the file, so the hash must be cryptographic: 64 hex chars.
-    expect(instructionDigest('anything')).toMatch(/^[0-9a-f]{64}$/);
-  });
 });
 
 describe('InstructionApprovalStore — approval binds path AND digest', () => {

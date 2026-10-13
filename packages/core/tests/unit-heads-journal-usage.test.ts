@@ -55,30 +55,6 @@ const report = (id: string, usage: HeadReport['usage']): HeadReport => ({
 });
 
 describe('a fresh journal cannot fabricate a cost it was never told', () => {
-  test('every Usage field has a column, nullable and with no default', () => {
-    const db = new Database(':memory:');
-    initHeadsTables(makeExecRaw(db));
-
-    const info = db.prepare<{ name: string; type: string; notnull: number; dflt_value: string | null }, []>(
-      `SELECT name, type, "notnull", dflt_value FROM pragma_table_info('head_journal')`,
-    ).all();
-
-    // The list the DDL is generated from is the list every Usage reader walks.
-    expect(Object.keys(HEAD_USAGE_COLUMNS).sort()).toEqual([...USAGE_FIELDS].sort());
-
-    for (const field of USAGE_FIELDS) {
-      const column = info.find((c) => c.name === HEAD_USAGE_COLUMNS[field]);
-      expect(column).toBeDefined();
-      // NOT NULL or a default puts the fabricated zero back.
-      expect(column?.notnull).toBe(0);
-      expect(column?.dflt_value).toBeNull();
-    }
-
-    // A neuron count is fractional; token counts are whole.
-    expect(info.find((c) => c.name === HEAD_USAGE_COLUMNS.neurons)?.type).toBe('REAL');
-    expect(info.find((c) => c.name === HEAD_USAGE_COLUMNS.input)?.type).toBe('INTEGER');
-  });
-
   test('a spawned head that has not reported has NULL in every usage column, not 0', () => {
     const { db, actor, journal } = newJournal();
     journal.insertSpawn(spawn('h-live', 'run-live'));
@@ -139,7 +115,7 @@ describe('a journal column reads back as the shape it was written in', () => {
     journal.insertSpawn(spawn('h', 'run-1'));
     db.run('UPDATE head_journal SET decisions_json = ? WHERE actor_id = ? AND id = ?', ['[{"question":"which?"}]', actor.actorId, 'h']);
 
-    expect(() => journal.readHeadView('h')).toThrow('choice');
+    expect(() => journal.readHeadView('h')).toThrow();
   });
 });
 

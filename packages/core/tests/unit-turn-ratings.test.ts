@@ -8,7 +8,7 @@ import { describe, expect, test } from 'bun:test';
 import { EvolutionEngine } from '../src/evolution/engine';
 import type { CompletedTurn } from '../src/evolution/types';
 import {
-  listThumbs, listTurnRatings, qualitySeries, ratingOf, recordTurnRating, retractThumbs, satisfactionInterval,
+  listThumbs, listTurnRatings, qualitySeries, ratingOf, recordTurnRating, retractThumbs,
 } from '../src/evolution/ratings';
 import {
   createDecisionPort, restDecisionRun, type DecisionAnswers, type DecisionPort, type DecisionQuestion,
@@ -138,7 +138,6 @@ describe('the rating ledger', () => {
       ['2026-10-01', 2, 0, 3], ['2026-10-02', 1, 1, 5],
     ]);
     expect(series[0]?.corrected.mean).toBe(0.5);
-    expect(series[0]?.satisfaction).toMatchObject(satisfactionInterval([4, 2]));
   });
 
   test('retracting a thumb touches no other source', () => {

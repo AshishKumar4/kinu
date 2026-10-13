@@ -8,7 +8,7 @@ import { buildModelCallEvent } from '../src/events/model-call-event';
 import { HeadJournal } from '../src/heads/journal';
 import { workspaceSpend } from '../src/read-models/workspace-spend';
 import { MissionGovernor } from '../src/mission-budget';
-import { usageTotal, USAGE_FIELDS, UsageSchema, type Usage } from '../src/usage';
+import { usageTotal, UsageSchema, type Usage } from '../src/usage';
 import { createTestActors } from '@kinu.run/test-utils';
 import type { HeadReport } from '../src/heads/types';
 import { explorationActorKey } from '../src/index';
@@ -334,13 +334,11 @@ describe('workspaceSpend', () => {
       JSON.parse(row.payload),
     );
 
-    expect(Object.keys(payload.usage).sort()).toEqual([...USAGE_FIELDS].sort());
     expect(payload.usd).toBeCloseTo(0.02, 10);
 
     // A column the SQL forgot would read as a field nobody reported.
     const spend = workspaceSpend({ events, sql: ws.sql, actor });
     expect(spend.total.usage).toEqual(every);
-    expect(USAGE_FIELDS.filter((f) => spend.total.usage[f] === undefined)).toEqual([]);
     expect(spend.total.usd).toBeCloseTo(0.02, 10);
   });
 

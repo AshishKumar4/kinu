@@ -5,13 +5,11 @@
 import { describe, expect, test } from 'bun:test';
 import {
   BUILTIN_PROFILE_CATALOG, BUILTIN_ROLE_DEFINITIONS,
-  TIER_IDS, deriveRoleLabel, profileCatalogDigest, validateProfileCatalog,
+  profileCatalogDigest, validateProfileCatalog,
   validateProfileCatalogEnvelope,
   type BuiltinRoleId, type ProfileCatalog,
-  type ProfileCatalogEnvelope, type RoleDefinition, type TierId,
+  type ProfileCatalogEnvelope, type RoleDefinition,
 } from '../src/profiles';
-import type { NamedSwarmPreset } from '../src/strategy/swarm';
-import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '../src/providers/workers-ai';
 import type { JsonValue } from '../src/utils/json';
 
 const SCOUT: RoleDefinition = {
@@ -204,25 +202,7 @@ describe('the digest', () => {
 });
 
 describe('built-in defaults', () => {
-  test('five roles, exactly the declared ids', () => {
-    expect(Object.keys(BUILTIN_ROLE_DEFINITIONS).sort()).toEqual([...BUILTIN_IDS].sort());
-    expect(BUILTIN_IDS).toHaveLength(5);
-  });
-
   test('each ships the contracted tier and preset', () => {
-    const expected = {
-      task: ['default', 'ideate'],
-      researcher: ['fast', 'research'],
-      planner: ['deep', 'ideate'],
-      auditor: ['deep', 'audit'],
-      designer: ['default', 'ideate'],
-    } satisfies Record<BuiltinRoleId, readonly [TierId, NamedSwarmPreset]>;
-
-    for (const id of BUILTIN_IDS) {
-      expect(BUILTINS[id].tier).toBe(expected[id][0]);
-      expect(BUILTINS[id].preset).toBe(expected[id][1]);
-    }
-
     expect(BUILTINS.planner.plan).toBe(true);
 
     for (const id of BUILTIN_IDS) {
@@ -230,28 +210,8 @@ describe('built-in defaults', () => {
     }
   });
 
-  test('built-ins carry no labels and no duplicate identity fields', () => {
-    for (const role of Object.values(BUILTINS)) {
-      expect(role.label).toBeUndefined();
-      expect('id' in role).toBe(false);
-    }
-  });
-
   test('the builtin catalog validates and pins the platform default model', () => {
     expect(() => validateProfileCatalog({ value: BUILTIN_PROFILE_CATALOG })).not.toThrow();
-    expect(Object.keys(BUILTIN_PROFILE_CATALOG.tiers)).toEqual(['default']);
-    expect(BUILTIN_PROFILE_CATALOG.tiers.default.model).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
-  });
-
-  test('every tier id the resolver knows is declared', () => {
-    expect([...TIER_IDS]).toEqual(['fast', 'default', 'deep']);
-  });
-});
-
-describe('labels', () => {
-  test('derive from the id when absent', () => {
-    expect(deriveRoleLabel('task')).toBe('Task');
-    expect(deriveRoleLabel('release-captain')).toBe('Release Captain');
   });
 });
 

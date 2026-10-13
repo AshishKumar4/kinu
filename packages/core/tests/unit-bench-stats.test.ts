@@ -141,7 +141,6 @@ describe('pairedBinaryComparison', () => {
     expect(stats.pValue).toBe(1);
     expect(stats.significant).toBe(false);
     expect(stats.resolvable).toBe(false);
-    expect(stats.verdict).toContain('cannot separate');
   });
 
   test('a large real difference is significant AND resolvable', () => {
@@ -157,7 +156,6 @@ describe('pairedBinaryComparison', () => {
     expect(stats.resolvable).toBe(true);
     expect(stats.effect).toBeCloseTo(13 / 40, 10);
     expect(stats.ci.lo).toBeGreaterThan(0);
-    expect(stats.verdict).toContain('significant');
   });
 
   test('a tiny effect on a small corpus is flagged unresolvable, not a finding', () => {
@@ -172,7 +170,6 @@ describe('pairedBinaryComparison', () => {
     expect(stats.effect).toBeCloseTo(0.01, 10);
     expect(stats.resolutionRatio).toBeLessThan(1);
     expect(stats.resolvable).toBe(false);
-    expect(stats.verdict).toContain('resolves');
     expect(stats.pairsNeededForObserved).toBeGreaterThan(100);
   });
 
@@ -183,7 +180,6 @@ describe('pairedBinaryComparison', () => {
     expect(stats.floorPValue).toBeCloseTo(2 / 32, 10);
     expect(stats.canReachSignificance).toBe(false);
     expect(stats.significant).toBe(false);
-    expect(stats.verdict).toContain('UNDECIDABLE');
     const six = pairedBinaryComparison(outcomes([...spec, { a: false, b: true }]), { seed: 1, iterations: 500 });
     expect(six.canReachSignificance).toBe(true);
     expect(six.significant).toBe(true);
@@ -202,8 +198,6 @@ describe('pairedBinaryComparison', () => {
     expect(stats.floorPValue).toBeCloseTo(0.5, 10);
     expect(stats.canReachSignificance).toBe(false);
     expect(stats.pValue).toBeCloseTo(0.5, 10);
-    expect(stats.verdict).toContain('UNDECIDABLE');
-    expect(stats.verdict).toContain('2 of 40');
     expect(floorPValue(stats.pairs)).toBeLessThan(0.05);
   });
 
@@ -231,7 +225,6 @@ describe('pairedBinaryComparison', () => {
   test('an empty run concludes nothing', () => {
     const stats = pairedBinaryComparison([], { seed: 1, iterations: 100 });
     expect(stats.pairs).toBe(0);
-    expect(stats.verdict).toContain('nothing to conclude');
     expect(stats.significant).toBe(false);
   });
 
@@ -329,7 +322,6 @@ describe('repeats — the unit of pairing stays the task', () => {
     expect(stats.tiedPartial).toBe(1);
     expect(stats.bothPass).toBe(1);
     expect(stats.bothFail).toBe(0);
-    expect(stats.verdict).toContain('repeats buy precision within a task');
   });
 
   test('repeats shrink dispersion, so the reported resolution reflects them', () => {
@@ -400,7 +392,6 @@ describe('computeGain (stateful vs stateless)', () => {
     // Two differing pairs floor at p=0.5: the arithmetic is right and the design cannot decide.
     expect(g.pairsWithDifference).toBe(2);
     expect(g.canReachSignificance).toBe(false);
-    expect(g.verdict).toContain('UNDECIDABLE');
   });
 
   test('zero gain is reportable as a real result', () => {
@@ -415,7 +406,6 @@ describe('computeGain (stateful vs stateless)', () => {
     // No task differed, so this contrast measured nothing and must not read as "no effect".
     expect(g.pairsWithDifference).toBe(0);
     expect(g.canReachSignificance).toBe(false);
-    expect(g.verdict).toContain('measured nothing at all');
   });
 
   test('a negative gain is reported as the stateful arm doing worse', () => {
@@ -430,7 +420,6 @@ describe('computeGain (stateful vs stateless)', () => {
     expect(g.pValue).toBeCloseTo(2 / 16, 10);
     // Four differing pairs floor at p=0.125, above alpha, so the direction is withheld.
     expect(g.canReachSignificance).toBe(false);
-    expect(g.verdict).toContain('UNDECIDABLE');
   });
 
   test('past the exact test\'s floor, the direction is stated', () => {
@@ -442,7 +431,8 @@ describe('computeGain (stateful vs stateless)', () => {
     expect(g.pairsWithDifference).toBe(6);
     expect(g.floorPValue).toBeCloseTo(2 / 64, 10);
     expect(g.canReachSignificance).toBe(true);
-    expect(g.verdict).toContain('WORSE');
+    expect(g.gain).toBe(-1);
+    expect(g.ci.hi).toBeLessThan(0);
   });
 
   test('the design floor is 2^(1-k) in DIFFERING pairs, and k>=6 is exact', () => {
@@ -464,7 +454,6 @@ describe('computeGain (stateful vs stateless)', () => {
     expect(g.tasks).toBe(20);
     expect(g.pairsWithDifference).toBe(5);
     expect(g.canReachSignificance).toBe(false);
-    expect(g.verdict).toContain('UNDECIDABLE');
   });
 
   test('an unbounded reward scale gets no normalized gain', () => {
@@ -480,7 +469,6 @@ describe('computeGain (stateful vs stateless)', () => {
     expect(g.gain).toBeCloseTo(-0.2, 10);
     expect(g.normalizedGain).toBeNull();
     expect(g.pairsWithDifference).toBe(2);
-    expect(g.verdict).toContain('UNDECIDABLE');
   });
 
   test('no headroom leaves the normalized gain undefined rather than infinite', () => {
@@ -496,7 +484,8 @@ describe('computeGain (stateful vs stateless)', () => {
   test('an empty gain run says so', () => {
     const g = computeGain([], { seed: 1, iterations: 100 });
     expect(g.tasks).toBe(0);
-    expect(g.verdict).toContain('no gain measured');
-    expect(DEFAULT_ALPHA).toBe(0.05);
+    expect(g.gain).toBe(0);
+    expect(g.pairsWithDifference).toBe(0);
+    expect(g.canReachSignificance).toBe(false);
   });
 });

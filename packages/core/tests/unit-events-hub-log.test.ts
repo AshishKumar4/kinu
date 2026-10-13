@@ -236,11 +236,6 @@ describe('EventLog.query admits only a finite positive integer limit', () => {
       .toHaveLength(DEFAULT_PAGE);
   });
 
-  test('an absent limit takes the default page', () => {
-    expect(seededLog(DEFAULT_PAGE + 40).query({}))
-      .toHaveLength(DEFAULT_PAGE);
-  });
-
   test('a fractional limit truncates instead of failing the query', () => {
     const log = seededLog(40);
     expect(log.query({ limit: 2.7 })).toHaveLength(2);

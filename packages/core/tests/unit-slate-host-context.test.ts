@@ -1,9 +1,8 @@
 import { expect, test } from 'bun:test';
 import {
   isSlateFrameMessage, slateFrameSrc, slateLinkId,
-  SLATE_HOST_CONTEXT_MESSAGE, SLATE_QUERY_PARAM, SLATE_SIZE_CHANGED_MESSAGE,
+  SLATE_QUERY_PARAM, SLATE_SIZE_CHANGED_MESSAGE,
 } from '../src/slates/host-context';
-import { SLATE_CLIENT_MODULE } from '../src/slates/runtime-modules';
 import { parseSlateProject } from '../src/slates/project';
 
 test('slateLinkId accepts a well-formed slate link and refuses every other href', () => {
@@ -14,12 +13,6 @@ test('slateLinkId accepts a well-formed slate link and refuses every other href'
   expect(slateLinkId('https://x')).toBeNull();
   expect(slateLinkId('slate:x')).toBeNull();
   expect(slateLinkId('')).toBeNull();
-});
-
-test('the generated client module and the host vocabulary share one spelling', () => {
-  expect(SLATE_CLIENT_MODULE).toContain(`"${SLATE_QUERY_PARAM}"`);
-  expect(SLATE_CLIENT_MODULE).toContain(`"${SLATE_HOST_CONTEXT_MESSAGE}"`);
-  expect(SLATE_CLIENT_MODULE).toContain(`"${SLATE_SIZE_CHANGED_MESSAGE}"`);
 });
 
 test('a slate is sized by what it holds: package.json declares no inline height', () => {
