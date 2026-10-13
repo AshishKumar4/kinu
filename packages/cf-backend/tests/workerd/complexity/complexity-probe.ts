@@ -125,18 +125,22 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
 
   private readonly execRaw = (ddl: string): void => { this.sql.exec(ddl); };
 
-  private opened: Promise<SqliteVFS> | undefined;
+  private opened: Promise<NimbusWorkspace> | undefined;
 
-  private workspace(): Promise<SqliteVFS> {
+  private nimbus(): Promise<NimbusWorkspace> {
     this.opened ??= NimbusWorkspace.create({ sql: this.sql, transactions: { storage: this.ctx.storage } })
       .then((workspace) => {
         // As a workspace boot leaves it: /slates the kernel's, shared with the workspace's agents.
         settleWorkspaceSlates(workspace.vfs.as(CRED_KERNEL), (path) => { workspace.vfs.registerSharedDirectory(path); });
 
-        return workspace.vfs;
+        return workspace;
       });
 
     return this.opened;
+  }
+
+  private async workspace(): Promise<SqliteVFS> {
+    return (await this.nimbus()).vfs;
   }
 
   /** The agent's file plane, as `createCFRuntime` mounts it (no /pc, no /sandbox here). */
@@ -357,7 +361,7 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
     // No page listens here: the subject is the read, not the frame.
     const changes = new ChangeSetCache(() => {});
 
-    (await this.workspace()).events.on((batch) => changes.touched(batch.flatMap((event) => (event.oldPath === undefined ? [event.path] : [event.path, event.oldPath]))));
+    (await this.nimbus()).filesystem.vfs.as(CRED_KERNEL).watchChanges('/', (batch) => changes.touched(batch.flatMap((event) => (event.oldPath === undefined ? [event.path] : [event.path, event.oldPath]))));
     const baselines = await this.baselines();
 
     for (let index = 0; index < files; index += 1) await writeText(vfs, filePath(index), fileText(index));

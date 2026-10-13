@@ -1,13 +1,13 @@
 /**
- * A preview's WebSocket holds its resident while it stays open, quiet or not (Kinu's Nimbus patch, NIMBUS-ASKS #43): 0.17
- * holds a resident only for 60 s after client traffic, so a page holding a quiet socket lost the server behind it. Through
+ * A preview's WebSocket holds its resident while it stays open, quiet or not (Kinu's Nimbus patch, NIMBUS-ASKS #43): worker
+ * 0.16 holds a resident only for 60 s after client traffic, so a page holding a quiet socket lost the server behind it. Through
  * the production workspace object, its preview edge, and a slate's own `/__rpc` socket, with the object's clock moved
  * past that hold and its alarms delivered. The slate's `evaluation` names the evaluation of its module that answers.
  */
 import { env } from 'cloudflare:workers';
 import { expect, it } from 'vitest';
 
-/** Past 0.17's hold on a resident after its last client traffic (`RESIDENT_KEEPALIVE_DETACHED_MS`, 60 s). */
+/** Past worker 0.16's hold on a resident after its last client traffic (`RESIDENT_KEEPALIVE_DETACHED_MS`, 60 s). */
 const PAST_TRAFFIC_BOUND_MS = 61_000;
 
 it('an open, quiet preview socket keeps the same application serving past the traffic bound, and relays both ways', async () => {

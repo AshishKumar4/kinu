@@ -397,8 +397,8 @@
   // blobs under `blobs/<name>-<version>/<file>` (@nimbus-sh/worker
   // dist/runtime/runtime-catalog.js). The var NIMBUS_RUNTIME_CATALOG_SHA256 names
   // that catalog; without it `nimbus install` refuses, naming the var. Its value is
-  // the catalog Nimbus 0.17.0 pins for its own deployments (apps/nimbus-deployments.json
-  // at its release commit 025354c39). The bucket's catalog/v1.json also lists a scratch
+  // the catalog Nimbus pins for its own deployments (apps/nimbus-deployments.json
+  // at its 0.18.0 release commit 9ace634a0, unchanged since 0.17.0's 025354c39). The bucket's catalog/v1.json also lists a scratch
   // TypeScript 7 runtime whose runner no worker build registers, so it is not pinned.
   // Measured 2026-08-17: this bucket exists on this account and IS seeded —
   // clang, python, ruby, bash, cpython. Without the binding the Worker throws

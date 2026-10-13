@@ -37,8 +37,8 @@ export interface SlateBuildFailure {
   /** What the compile looked at before it failed, a missing import among them. */
   readonly inputs?: readonly SlateBuildRead[];
   /**
-   * Its resolution went through links, or a lookup the namespace refused, so a write that would make it build may
-   * touch nothing it recorded: it is reported, and never stands in for compiling the same source again.
+   * A lookup stopped at a mount that is not there, whose return no write tells: it is reported, and never stands in for
+   * compiling the same source again.
    */
   readonly unobserved?: true;
 }
