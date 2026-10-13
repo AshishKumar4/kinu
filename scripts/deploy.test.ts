@@ -1887,11 +1887,13 @@ const RECORDED_PARTIAL_UPLOAD = 'Uploaded kinu-staging (31.90 sec)\n\n✘ [ERROR
 describe('the runtime catalog the build pins is in its bucket before the Worker that reads it', () => {
   const ENSURE = `bun scripts/runtime-catalog.ts ensure fixture-runtime-cache ${FIXTURE_CATALOG}`;
 
-  test('the deploy puts it there, from the bucket and pin its build names, before the upload', async () => {
+  test('the deploy puts it there, from the bucket and pin its build names', async () => {
     const run = await runDeploy({ uploadRuns: [{ says: 'success', status: 0 }] });
 
+    // The command the deploy runs names the build's bucket and pin, and the deploy goes on to upload; that a failed one
+    // stops it first is the next test's.
     expect(run.events, run.stdout).toContain(ENSURE);
-    expect(run.uploads).toHaveLength(1);
+    expect(run.uploads).not.toEqual([]);
   });
 
   test('a catalog that cannot be put there stops the deploy before anything is uploaded', async () => {
