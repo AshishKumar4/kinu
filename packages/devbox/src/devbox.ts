@@ -102,10 +102,10 @@ function launchUnknown(execId: string): DevboxError {
   return new DevboxError('indeterminate', `untimed exec ${execId} was launched before, and its outcome cannot be read here; it was not launched again`);
 }
 
-/** `port-listeners STAMP [PORT...]`: `port pid stamp command` per socket holder; /proc, as the image has no `ss`. */
 /** `$1` as the kernel's, `/etc/hostname`'s and `/etc/hosts`' name for the box, which held a container id and a UUID. */
 const NAME_BOX = `hostname "$1" && printf '%s\\n' "$1" > /etc/hostname && { grep -qw "$1" /etc/hosts || printf '127.0.1.1 %s\\n' "$1" >> /etc/hosts; }`;
 
+/** `port-listeners STAMP [PORT...]`: `port pid stamp command` per socket holder; /proc, as the image has no `ss`. */
 const PORT_LISTENERS = `
 stamp=$1; shift
 socks=$(for f in /proc/net/tcp /proc/net/tcp6; do
