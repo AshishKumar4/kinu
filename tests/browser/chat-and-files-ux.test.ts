@@ -4340,6 +4340,9 @@ describe('the home creation form, as a browser submits it', () => {
       await page.goto(`${origin}/gallery.html?frame=home`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('#workspace-mission');
       await page.type('#workspace-mission', 'Own the checkout service.');
+
+      // Whatever the page made of the failed listing is painted by now: the create must still be offered.
+      expect(await page.$eval('button[type="submit"]', (button) => button instanceof HTMLButtonElement && button.disabled)).toBe(false);
       await page.click('button[type="submit"]');
 
       // The created entry lands in the roster the page reads.
