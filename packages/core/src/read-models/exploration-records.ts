@@ -74,27 +74,27 @@ export function listRecordObjectives(
     const floor = after === null ? '' : after.floorDigest ?? '';
 
     const groups = sql<ObjectiveGroup>`
-    SELECT objective_id,
-           floor_digest,
-           MAX(metric)                AS metric,
-           MAX(unit)                  AS unit,
-           MAX(direction)             AS direction,
-           MAX(scale)                 AS scale,
-           COUNT(*)                   AS row_count,
-           COUNT(DISTINCT descriptor) AS named_cells,
-           SUM(CASE WHEN descriptor IS NULL THEN 1 ELSE 0 END) AS unpartitioned,
-           MAX(first_recorded_at)     AS last_recorded_at
-      FROM exploration_records
-     WHERE actor_id = ${actor.actorId}
-     GROUP BY objective_id, floor_digest
-    HAVING MAX(metric) IS NOT NULL
-       AND (${from} = 0
-            OR MAX(first_recorded_at) < ${at}
-            OR (MAX(first_recorded_at) = ${at}
-                AND (objective_id > ${objective}
-                     OR (objective_id = ${objective}
-                         AND COALESCE(floor_digest, '') > ${floor}))))
-     ORDER BY last_recorded_at DESC, objective_id ASC, COALESCE(floor_digest, '') ASC
+    SELECT r.objective_id,
+           r.floor_digest,
+           o.metric,
+           o.unit,
+           o.direction,
+           o.scale,
+           COUNT(*)                     AS row_count,
+           COUNT(DISTINCT r.descriptor) AS named_cells,
+           SUM(CASE WHEN r.descriptor IS NULL THEN 1 ELSE 0 END) AS unpartitioned,
+           MAX(r.first_recorded_at)     AS last_recorded_at
+      FROM exploration_records r
+      JOIN exploration_objectives o ON o.actor_id = r.actor_id AND o.objective_id = r.objective_id
+     WHERE r.actor_id = ${actor.actorId}
+     GROUP BY r.objective_id, r.floor_digest
+    HAVING ${from} = 0
+            OR MAX(r.first_recorded_at) < ${at}
+            OR (MAX(r.first_recorded_at) = ${at}
+                AND (r.objective_id > ${objective}
+                     OR (r.objective_id = ${objective}
+                         AND COALESCE(r.floor_digest, '') > ${floor})))
+     ORDER BY last_recorded_at DESC, r.objective_id ASC, COALESCE(r.floor_digest, '') ASC
      LIMIT ${page + 1}`;
 
     const fetched = seekPage(groups, page, objectiveCursor);
@@ -142,9 +142,9 @@ export function listRecordCells(
   request: RecordPageRequest = {},
 ): Page<RecordCellSummary> {
   return settleSync(Effect.gen(function* () {
-    const direction = yield* directionOf(sql, actor, handle);
+    const direction = describeObjective(sql, actor, handle).identity?.direction;
 
-    if (direction === null) return { status: 'end', items: [] };
+    if (direction === undefined) return { status: 'end', items: [] };
     const page = boundedInt(request.limit, DEFAULT_CELL_PAGE, 1, MAX_RECORD_PAGE);
     const cursor = request.cursor ?? null;
     const after = cursor === null ? null : yield* cellAnchorOf(sql, actor, handle, cursor.after);
@@ -180,9 +180,9 @@ export function readRecordCell(
   request: RecordPageRequest = {},
 ): Page<ExplorationRecord> {
   return settleSync(Effect.gen(function* () {
-    const direction = yield* directionOf(sql, actor, handle);
+    const direction = describeObjective(sql, actor, handle).identity?.direction;
 
-    if (direction === null) return { status: 'end', items: [] };
+    if (direction === undefined) return { status: 'end', items: [] };
     const page = boundedInt(request.limit, DEFAULT_OCCUPANT_PAGE, 1, MAX_RECORD_PAGE);
     const cursor = request.cursor ?? null;
     const seek = cursor === null ? null : yield* occupantSeek(sql, actor, handle, cursor.after);
@@ -190,26 +190,6 @@ export function readRecordCell(
     return seekPage(recordsInCell(sql, actor, handle, { direction, seek, limit: page + 1 }), page,
       (record) => record.artifactDigest);
   }));
-}
-
-/** The stored direction for a handle, or null when it names nothing. Rows the store cannot
- *  describe raise rather than read as empty. */
-function directionOf(
-  sql: SqlExecutor, actor: ActorHandle, handle: RecordObjectiveHandle,
-): Effect.Effect<ObjectiveDirection | null> {
-  const described = describeObjective(sql, actor, handle);
-
-  if (described.identity !== null) return Effect.succeed(described.identity.direction);
-
-  if (described.rows > 0) {
-    return Effect.die(new Error(
-      `exploration_records holds ${described.rows} row(s) under objective ${handle.objectiveId}`
-      + ' written before the store recorded what it measured: no unit and no direction, so'
-      + ' they can be neither ordered nor presented.',
-    ));
-  }
-
-  return Effect.succeed(null);
 }
 
 /** Cursors are JSON so `''` and null descriptors stay distinct; every anchor is resolved against
