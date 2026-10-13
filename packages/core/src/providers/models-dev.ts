@@ -168,17 +168,24 @@ export async function listModelsDevProviderModels(
   }));
 }
 
+/** A name with case and punctuation set aside: "Glm 5.3" and "GLM-5.3" spell one name. */
+const spelled = (name: string): string => name.toLowerCase().replace(/[^a-z0-9]/gu, '');
+
 /**
  * The name the model's own lab gives it, through a reseller entry's `canonical_model_id`: models.dev's Workers AI rows
  * title-case their slugs ("Glm 5.3") where Z.AI's own row says "GLM-5.3", so one model reads one way in every menu.
+ * Only the spelling is the lab's: a reseller's variant ("… fp8 Fast") keeps the words that tell it from the lab's.
  */
 function canonicalName(data: Record<string, ModelsDevProvider>, model: ModelsDevModel): string | undefined {
   const canonical = model.canonical_model_id;
   const slash = canonical?.indexOf('/') ?? -1;
 
-  if (canonical === undefined || slash <= 0) return undefined;
+  const own = model.name;
 
-  return nonEmptyString({ value: data[canonical.slice(0, slash)]?.models?.[canonical.slice(slash + 1)]?.name }) ?? undefined;
+  if (canonical === undefined || slash <= 0 || own === undefined) return undefined;
+  const lab = nonEmptyString({ value: data[canonical.slice(0, slash)]?.models?.[canonical.slice(slash + 1)]?.name });
+
+  return lab !== undefined && spelled(lab) === spelled(own) ? lab : undefined;
 }
 
 /** Provider metadata, or null when not in the catalog; an unreadable catalog throws rather than returning null. */
