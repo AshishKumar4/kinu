@@ -686,6 +686,40 @@ test('a step that ends its own process every time it runs is settled at the sixt
   }
 });
 
+test("a step its root's isolate dies inside six times is settled, and no later wake runs the owner's words again", async () => {
+  const asked = new AwaitedList<true>();
+  const workspace = gatewayWorkspace(poisonedModel(asked));
+  const before = poisoned.items.length;
+  let at = Date.now();
+
+  await poisonedOnSocket(workspace, 'req-poison-isolate');
+
+  try {
+    for (let run = 2; run <= POISON_WORK_CUTS; run += 1) {
+      at += PAST_BACKOFF_MS;
+      setSystemTime(new Date(at));
+      await resetRootIsolate(workspace);
+      await poisoned.until((all) => all.length - before === run);
+    }
+
+    // The seventh recovery decides the turn before the isolate's chat opens; a wake after it finds nothing owed.
+    for (const wake of ['decided', 'after']) {
+      at += PAST_BACKOFF_MS;
+      setSystemTime(new Date(at));
+      await resetRootIsolate(workspace);
+
+      const next = await Promise.race([
+        workspace.agent.harnessAgentsIdle().then(() => 'at rest' as const),
+        poisoned.until((all) => all.length - before > POISON_WORK_CUTS).then(() => 'ran again' as const),
+      ]);
+
+      expect({ wake, next, outcome: claimOf(workspace, 'req-poison-isolate')?.outcome ?? null }).toEqual({ wake, next: 'at rest', outcome: 'error' });
+    }
+  } finally {
+    setSystemTime();
+  }
+});
+
 test('a turn cut inside its own work is asked again only after the backoff, which its wake carries', async () => {
   const asked = new AwaitedList<true>();
   // On a whole second, which is where a wake lands.
