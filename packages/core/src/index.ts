@@ -2075,6 +2075,13 @@ export type { PendingAction, PendingActionKind, PendingActionInputs, PersonAsks 
 
 export { buildWorkspaceOverview, rosterBucket, rosterHeadline, rosterMatches, WorkspaceOverviewSchema } from './read-models/workspace-overview';
 
+export {
+  AccountMemoryFrameSchema, CredentialSummarySchema, ModelMenuResponseSchema, ProviderCatalogEntrySchema,
+  RosterFrameSchema, RosterPageSchema, UserProfileSchema, WorkspaceEntrySchema,
+  type AccountMemoryFrame, type CredentialSummary, type ModelMenuEntry, type ModelMenuResponse, type ProviderCatalogEntry,
+  type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type UserProfile, type WorkspaceEntry,
+} from './read-models/account-wire';
+
 export type {
   RosterBucket, WorkspaceHeadline, WorkspaceOverview, WorkspaceOverviewInputs, WorkspaceOverviewShare, WorkspaceOverviewSlate, WorkspaceStatus,
 } from './read-models/workspace-overview';

@@ -14,12 +14,11 @@ import * as v from 'valibot';
 import {
   CACHE_HIT_EMA_ALPHA, JsonValueSchema,
   type ActivitySnapshot, type ApprovalGrant, type DeferredApprovalAnswer, type JsonValue,
-  type UserCaller,
+  type UserCaller, type WorkspaceEntry,
 } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { sqlExec } from './helpers/user-do';
 import type { ControlEnv } from '../src/control-plane/routes';
-import type { WorkspaceEntry } from '../src/user/workspaces';
 import { ownedByAnotherAccount } from '../src/user/workspace-ownership';
 
 mockAgentsSdk();

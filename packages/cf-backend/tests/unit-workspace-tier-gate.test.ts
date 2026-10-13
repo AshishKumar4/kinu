@@ -3,8 +3,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do';
 import { CAPABLE_HELLO, daemon } from './helpers/device-harness';
-import type { RosterPage } from '../src/user/roster';
-import { asFetchFunction, sha256Hex } from '@kinu.run/core';
+import { asFetchFunction, sha256Hex, type RosterPage } from '@kinu.run/core';
 import { BUILTIN_PROFILE_CATALOG, decodeJsonValue } from '@kinu.run/core';
 import {
   CapabilityDeniedError,

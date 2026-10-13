@@ -1,13 +1,12 @@
 import { parseCliTokenUserId } from '../cli/auth-store';
 import {
-  getActiveAccessTokenScopes, listAccessTokens as listAccessTokenRows, mintAccessToken as mintAccessTokenRow, revokeAccessToken as revokeAccessTokenRow, verifyAccessToken as verifyAccessTokenRow, type AccessTokenMint, type AccessTokenRecord, type AccessTokenScope, ORCHESTRATOR_AGENT_SLUG, nanoid, ownerCaller, type UserCaller, validateWorkspaceName, randomToken, sha256Hex,
+  getActiveAccessTokenScopes, listAccessTokens as listAccessTokenRows, mintAccessToken as mintAccessTokenRow, revokeAccessToken as revokeAccessTokenRow, verifyAccessToken as verifyAccessTokenRow, type AccessTokenMint, type AccessTokenRecord, type AccessTokenScope, ORCHESTRATOR_AGENT_SLUG, nanoid, ownerCaller, type UserCaller, validateWorkspaceName, randomToken, sha256Hex, type UserProfile,
 } from '@kinu.run/core';
 import { diagnostics, KinuError, tolerate, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import {
   builtinAdmission, createBuiltinInvite, findPasskeyAccount, findPasswordAccount, hasBuiltinOwner, initBuiltinAccounts, invitedEmail, isBuiltinOwner, issuePasskeyChallenge, recordPasskeyUse, registerBuiltinAccount, spendPasskeyChallenge, reserveAttempt, clearAttempts, applyReset, listBuiltinAccounts, resetAccount, type Admission, type AttemptBucket, type BuiltinSql, type ChallengePurpose, type Grant, type NewBuiltinAccount, type NewInvite, type PasskeyAccount, type PasswordAccount, type PendingChallenge, type ListedAccount, type Reset, type SigningAccount,
 } from '@kinu.run/core/identity';
-import type { UserProfile } from './profile';
 import { closeEndedRosterSockets, rosterSockets } from './roster';
 import { singletonValue, type SessionStands, type UserObjectHost } from './user-host';
 

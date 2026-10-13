@@ -2,31 +2,12 @@
  *  source of truth for models; models.dev for which providers a BYO key can connect. */
 import {
   catalogCredKey, listModelsDevProviders, modelsDevCompatBaseURL, testModel,
-  type ModelTestResult, type ModelsDevProviderInfo, type ProviderFailure, type ReasoningEffort,
+  type ModelMenuResponse, type ModelMenuEntry, type ModelTestResult, type ModelsDevProviderInfo, type ProviderCatalogEntry,
 } from '@kinu.run/core';
 import { createAgentProviderRegistry, userCredentials, type UserCredentialClient } from '../providers/agent-registry';
 import type { ObjectNamespace } from '@kinu.run/core';
 import type { ProviderEnv } from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';
-
-export interface ModelMenuEntry {
-  /** `<provider>/<modelId>`, used as the actor_config.model value. */
-  spec: string;
-  label: string;
-  provider: string;
-  providerLabel?: string;
-  capabilities?: string[];
-  contextWindow?: number;
-  /** The settings control renders exactly these after "model default". */
-  reasoningEfforts?: readonly ReasoningEffort[];
-}
-
-/** `failures` lists unreachable providers so the picker can say so instead of dropping them. */
-export interface ModelMenuResponse {
-  models: ModelMenuEntry[];
-  failures: ProviderFailure[];
-  accounts?: Readonly<Record<string, readonly string[]>>;
-}
 
 export interface AvailableModelsEnv<Id> extends ProviderEnv {
   UserDO: ObjectNamespace<Id, UserCredentialClient>;
@@ -54,17 +35,6 @@ export async function listAvailableModels<Id>(
   }));
 
   return { models: out, failures: menu.failures, ...(menu.accounts !== undefined && { accounts: menu.accounts }) };
-}
-
-export interface ProviderCatalogEntry {
-  /** Also the model-spec prefix (`<id>/<modelId>`). */
-  id: string;
-  credKey: string;
-  name: string;
-  doc?: string;
-  /** From models.dev metadata. */
-  envVar?: string;
-  connected: boolean;
 }
 
 /** models.dev providers the openai-compat path can drive, plus those a static provider serves under

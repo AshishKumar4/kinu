@@ -2,9 +2,9 @@
  * Platform bindings a route's env declares but the path under test never reaches, as refusals:
  * the first reach names the binding and fails, so "this path reads no binding" stays checked.
  */
+import { type UserProfile } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { Connection } from 'agents';
-import type { UserProfile } from '../../src/user/profile';
 import type { CliAgentTarget, CliRoutesAuthority, CliRoutesEnv } from '../../src/cli/routes';
 import type { UserRoutesAuthority } from '../../src/user/routes';
 import type { McpAuthority } from '../../src/mcp-server';

@@ -10,7 +10,7 @@ import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from '../activation-gate';
 
 import {
-  ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, NO_DEVICE_CONNECTED, ORCHESTRATOR_AGENT_SLUG, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, type EgressRequestFacts, type EgressSecretBinding, type ApprovalGrant, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type EgressSecretSummary, type PutEgressSecretInput, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, DEVICE_KEEPALIVE_PING, DEVICE_KEEPALIVE_PONG, DEVICE_TOKEN_ROTATION_ACK, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, } from '@kinu.run/core';
+  ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, NO_DEVICE_CONNECTED, ORCHESTRATOR_AGENT_SLUG, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, type EgressRequestFacts, type EgressSecretBinding, type ApprovalGrant, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type EgressSecretSummary, type PutEgressSecretInput, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, DEVICE_KEEPALIVE_PING, DEVICE_KEEPALIVE_PONG, DEVICE_TOKEN_ROTATION_ACK, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, type RosterPage, type CredentialSummary, type WorkspaceEntry, type UserProfile, } from '@kinu.run/core';
 
 import { DurableObjectOAuthClientProvider, type AgentMcpOAuthProvider } from 'agents/mcp/do-oauth-client-provider';
 
@@ -26,7 +26,7 @@ import { tenantDrive } from '../drive/tenant';
 
 import { installAnalyticsDiagnostics, openAnalyticsWindow } from '@kinu.run/core/analytics';
 import type { McpPresetAvailability, McpServerSummary } from '@kinu.run/core';
-import { acceptRosterSocket, isRosterSocket, unreportedWorkspaces, ROSTER_SOCKET_PATH, type RosterPage, type RosterQuery } from './roster';
+import { acceptRosterSocket, isRosterSocket, unreportedWorkspaces, ROSTER_SOCKET_PATH, type RosterQuery } from './roster';
 
 import { UserDrive, type DriveAnswer, type DriveChunkWrite } from './drive';
 import { UserDevices, type DeviceCancellationOutcome } from './devices';
@@ -40,9 +40,9 @@ import {
   UserSessions, CLI_AGENT_WEBSOCKET_CAPABILITY, type BrowserSessionIdentity, type CliAgentConnectTicketVerification, type CliTokenVerification, type LiveBrowserSession,
 } from './sessions';
 
-import { UserCredentials, type CheckpointedCredential, type CredentialEndpoint, type CodexStatus, type CredentialSummary } from './credentials';
-import { UserWorkspaces, type WorkspaceEntry, type WorkspaceRegistration, type WorkspaceRegistrationSource } from './workspaces';
-import { UserProfileStore, type ProfileCatalogWriteResult, type UserProfile } from './profile';
+import { UserCredentials, type CheckpointedCredential, type CredentialEndpoint, type CodexStatus } from './credentials';
+import { UserWorkspaces, type WorkspaceRegistration, type WorkspaceRegistrationSource } from './workspaces';
+import { UserProfileStore, type ProfileCatalogWriteResult } from './profile';
 import { ShareCardJobs, type ReceivedShare } from './share-cards';
 import type { SqlRow, UserObjectHost } from './user-host';
 

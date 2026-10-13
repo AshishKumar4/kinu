@@ -7,8 +7,7 @@ import type { Page, PageRequest } from '@kinu.run/core';
 import * as v from 'valibot';
 import type { OrchestratorAgent } from '../orchestrator';
 import type { UserDO } from '../user/user-do';
-import type { RosterPage } from '../user/roster';
-import { err, json, publicError, publicText, safeJson } from '@kinu.run/core';
+import { err, json, publicError, publicText, safeJson, type RosterPage } from '@kinu.run/core';
 import { ownerCaller } from '@kinu.run/core';
 import { MONITOR_SINGLETON, type MonitorDO } from '../monitor/monitor-do';
 import {

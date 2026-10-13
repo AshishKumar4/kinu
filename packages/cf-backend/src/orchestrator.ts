@@ -95,7 +95,6 @@ import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contr
 import type { SupervisorOpResult } from '@kinu.run/core/workspace';
 import { openingList, TURN_CLAIM_FRAME, type AccountSpend, type ActivitySnapshot, type TabPresence, type TurnClaimState } from "@kinu.run/core";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
-import { teamPeers } from "./lib/workspace-roster";
 import { nextAlarmTime } from '@kinu.run/core';
 import { accountDeps, armedWarms, CacheWarmingLane, CacheWarmStore } from '@kinu.run/core';
 import {
@@ -3124,7 +3123,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         this.requireOwnerUserId();
         const { stub, caller } = await this.userHub();
 
-        return teamPeers(this.name, await stub.listActiveWorkspaces(caller));
+        // The owner's other workspaces, self excluded.
+        return (await stub.listActiveWorkspaces(caller))
+          .filter((peer) => peer.name !== this.name)
+          .map((peer) => ({ name: peer.name, displayName: peer.displayName }));
       },
       ask: async ({ agent, topic, message, mode, signal }) => {
         await requirePeer(agent);

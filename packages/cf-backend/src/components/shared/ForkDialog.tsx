@@ -5,11 +5,11 @@ import { useNavigate } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import { GitBranchIcon } from "@phosphor-icons/react";
 import { showing, detach } from "@kinu.run/core/obs";
-import { workspaceDisplayTitle, type BlueprintFork } from "@kinu.run/core";
+import { workspaceDisplayTitle, type BlueprintFork, type WorkspaceEntry } from "@kinu.run/core";
 import { Modal } from "@/components/ui/Modal";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { inputCls } from "@/components/ui/form";
-import { listWorkspaces, type WorkspaceEntry } from "@/lib/user-api";
+import { listWorkspaces } from "@/lib/user-api";
 import { createWorkspaceFromMission } from "@/lib/create-workspace";
 import { forkBlueprint, forkLiveShare } from "@/lib/shared-api";
 

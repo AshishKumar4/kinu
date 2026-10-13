@@ -5,10 +5,9 @@ import {
   bindingDecisionRun, restDecisionRun, type DecisionRun,
   type ActorReference, type AuthRequest, type AuthResolution, type AuthResolver, type ModelAffinity, type ProviderDeps, type ProviderEnv,
   type ProviderRegistry, type ProviderWaitInfo, type SpecDefault, type UserCaller,
-  accountDeps, countRequestInputTokens, parseModelSpec, type TurnModelSources,
+  accountDeps, countRequestInputTokens, parseModelSpec, type TurnModelSources, type CredentialSummary,
 } from '@kinu.run/core';
 import type { LanguageModel } from 'ai';
-import type { CredentialSummary } from '../user/credentials';
 import { deviceRouteFetch, type ModelRelayHub } from '../egress/model-relay-route';
 import { idempotent } from '@nimbus-sh/fabric/do-calls.js';
 import { logDoCallRetry } from '../obs/do-call-retry';

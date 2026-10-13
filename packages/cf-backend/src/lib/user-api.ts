@@ -2,20 +2,25 @@
 import { Cause, Effect } from 'effect';
 import {
   AccountMemoryProposalSchema, DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS, DEVICE_TIERS, DEVICE_UPDATE_STATES,
-  AccountUsageSchema, FactOriginSchema, ProfileCatalogEnvelopeSchema, REASONING_EFFORTS,
+  AccountUsageSchema, FactOriginSchema, ProfileCatalogEnvelopeSchema,
   type Credential,
   type DeviceTier,
   type JsonValue,
   JsonValueSchema,
   McpPresetAvailabilitySchema,
   McpServerSummarySchema,
+  ModelMenuResponseSchema,
+  type ModelMenuResponse,
   ModelTestResultSchema,
-  ProviderFailureSchema,
+  ProviderCatalogEntrySchema,
   type ModelTestResult,
   type ProfileCatalog,
   type ProfileCatalogEnvelope,
   type RosterBucket,
-  WorkspaceOverviewSchema,
+  RosterPageSchema,
+  UserProfileSchema,
+  WorkspaceEntrySchema,
+  CredentialSummarySchema,
   type McpTransport,
 } from '@kinu.run/core';
 import { settle } from '@kinu.run/core/obs';
@@ -24,17 +29,12 @@ import { ApiError, request } from './http';
 import type { BoxSize } from '@kinu.run/devbox/sizes';
 import { accountSandboxSize, SANDBOX_SIZE_CONFIG_KEY } from '../sandbox-size';
 
-export type UserProfile = NonNullable<v.InferOutput<typeof UserProfileSchema>>;
+export type UserProfile = NonNullable<v.InferOutput<typeof AccountProfileSchema>>;
 
-export type WorkspaceEntry = v.InferOutput<typeof WorkspaceEntrySchema>;
 
-export type RosterEntry = v.InferOutput<typeof RosterEntrySchema>;
 
-export type RosterCounts = v.InferOutput<typeof RosterCountsSchema>;
 
-export type RosterPage = v.InferOutput<typeof RosterPageSchema>;
 
-export type RosterFrame = v.InferOutput<typeof RosterFrameSchema>;
 
 export type RosterFilterBucket = Exclude<RosterBucket, 'unreported'>;
 
@@ -45,47 +45,19 @@ export interface RosterQuery {
   readonly q?: string;
 }
 
-export type CredentialSummary = v.InferOutput<typeof CredentialSummarySchema>;
 
-export type ModelMenuEntry = v.InferOutput<typeof ModelMenuEntrySchema>;
 
-/** A provider unreachable while building the menu, shown as a notice rather than an empty picker. */
-export type ProviderFailure = v.InferOutput<typeof ProviderFailureSchema>;
 
-export type ModelMenu = v.InferOutput<typeof ModelMenuSchema>;
 
 
 const OkSchema = v.object({ ok: v.boolean() });
 
-const UserProfileSchema = v.nullable(v.object({
-  email: v.string(), displayName: v.nullable(v.string()), createdAt: v.number(), lastSeenAt: v.number(),
-  onboardedAt: v.nullable(v.number()),
-  /** An account that already has a workspace is never sent through the wizard. */
-  workspaceCount: v.number(),
+/** The profile as the GET route sends it: the account's own, plus whether to show the control-plane link. */
+const AccountProfileSchema = v.nullable(v.object({
+  ...UserProfileSchema.entries,
   /** Nav visibility only, decided by the function that guards `/api/control/*`; that gate answers for itself every request. */
   controlPlane: v.boolean(),
 }));
-
-const WorkspaceEntrySchema = v.object({
-  name: v.string(), displayName: v.string(), createdAt: v.number(), lastVisited: v.number(),
-});
-
-const RosterEntrySchema = v.object({
-  ...WorkspaceEntrySchema.entries, overview: v.nullable(WorkspaceOverviewSchema), decisions: v.number(), logo: v.optional(v.nullable(v.string())),
-});
-
-const RosterCountsSchema = v.object({
-  all: v.number(), needs: v.number(), working: v.number(), idle: v.number(), unreported: v.number(), decisions: v.number(),
-});
-
-const RosterPageSchema = v.object({
-  entries: v.array(RosterEntrySchema), total: v.number(), nextCursor: v.nullable(v.string()), counts: RosterCountsSchema,
-});
-
-/** `entry` is null once the workspace has left the roster. */
-export const RosterFrameSchema = v.object({
-  type: v.literal('workspace'), name: v.string(), entry: v.nullable(RosterEntrySchema), counts: RosterCountsSchema,
-});
 
 export const ROSTER_SOCKET_ROUTE = '/api/user/workspaces/live';
 
@@ -97,21 +69,6 @@ const CliSetupSchema = v.object({
   publicOrigin: v.string(), installCommand: v.string(), setupCommand: v.optional(v.string()), authCommand: v.string(),
 });
 
-const CredentialSummarySchema = v.object({
-  key: v.string(), kind: v.picklist(['bearer', 'oauth', 'openai-compat']),
-});
-
-const ModelMenuEntrySchema = v.object({
-  spec: v.string(), label: v.string(), provider: v.string(), providerLabel: v.optional(v.string()),
-  capabilities: v.optional(v.array(v.string())), contextWindow: v.optional(v.number()),
-  /** Absent when the catalog could not say; empty when the model takes none. */
-  reasoningEfforts: v.optional(v.array(v.picklist(REASONING_EFFORTS))),
-});
-
-const ModelMenuSchema = v.object({
-  models: v.array(ModelMenuEntrySchema), failures: v.array(ProviderFailureSchema),
-  accounts: v.optional(v.record(v.string(), v.array(v.string()))),
-});
 
 export type CliSetup = v.InferOutput<typeof CliSetupSchema>;
 
@@ -129,11 +86,11 @@ function api<Schema extends v.GenericSchema>(
   return request(schema, `/api/user${path}`, { method, ...(body !== undefined && { json: body }) });
 }
 
-export const getProfile = () => settle(api(UserProfileSchema, 'GET', '/profile'));
+export const getProfile = () => settle(api(AccountProfileSchema, 'GET', '/profile'));
 
 export const completeOnboarding = () => settle(api(v.object({ onboardedAt: v.number() }), 'POST', '/onboarding/complete'));
 
-export const setDisplayName = (displayName: string) => settle(api(UserProfileSchema, 'PATCH', '/profile', { displayName }));
+export const setDisplayName = (displayName: string) => settle(api(AccountProfileSchema, 'PATCH', '/profile', { displayName }));
 
 /** The confirmation phrase is the account's own email, checked again server-side. */
 export const builtinAuthStatus = () => settle(api(v.object({ enabled: v.boolean(), owner: v.boolean() }), 'GET', '/builtin-auth'));
@@ -325,7 +282,7 @@ export const updateProfileCatalog = (
 ): Promise<ProfileCatalogEnvelope> =>
   settle(api(ProfileCatalogEnvelopeSchema, 'PUT', '/profile-catalog', { catalog, expectedVersion }));
 
-export const listAvailableModels = (): Promise<ModelMenu> => settle(api(ModelMenuSchema, 'GET', '/models'));
+export const listAvailableModels = (): Promise<ModelMenuResponse> => settle(api(ModelMenuResponseSchema, 'GET', '/models'));
 
 const SANDBOX_SIZE_PATH = `/config/${SANDBOX_SIZE_CONFIG_KEY}`;
 
@@ -338,7 +295,6 @@ const MemoryOriginSchema = v.nullable(FactOriginSchema);
 
 /** On the roster's socket beside its workspace frames: the proposals waiting on the owner, sent as a socket opens and
  *  again whenever one is filed or decided. */
-export const AccountMemoryFrameSchema = v.object({ type: v.literal('account_memory'), pending: v.array(AccountMemoryProposalSchema) });
 
 const AccountMemorySchema = v.object({
   facts: v.array(v.object({
@@ -376,12 +332,6 @@ export function testModel(spec: string, signal: AbortSignal): Promise<ModelTestR
   }));
 }
 
-export type ProviderCatalogEntry = v.InferOutput<typeof ProviderCatalogEntrySchema>;
-
-const ProviderCatalogEntrySchema = v.object({
-  id: v.string(), credKey: v.string(), name: v.string(), doc: v.optional(v.string()),
-  envVar: v.optional(v.string()), connected: v.boolean(),
-});
 
 export const listProviderCatalog = () =>
   settle(api(v.array(ProviderCatalogEntrySchema), 'GET', '/providers/catalog'));

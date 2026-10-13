@@ -1,5 +1,5 @@
 import {
-  createExperienceLibrary, BUILTIN_PROFILE_CATALOG, profileCatalogDigest, validateProfileCatalog, type ExperienceEntry, type ExperienceKind, type ProfileCatalog, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, decodeJsonValue, PROFILE_CATALOG_CONFIG_KEY, CapabilityDeniedError, type UserCaller, type WorkspaceOverview, displayNameProblem,
+  createExperienceLibrary, BUILTIN_PROFILE_CATALOG, profileCatalogDigest, validateProfileCatalog, type ExperienceEntry, type ExperienceKind, type ProfileCatalog, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, decodeJsonValue, PROFILE_CATALOG_CONFIG_KEY, CapabilityDeniedError, type UserCaller, type WorkspaceOverview, displayNameProblem, type UserProfile,
 } from '@kinu.run/core';
 import { authoredRefusal, KinuError, renderThrownChain } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -7,18 +7,6 @@ import { libraryTiles } from './roster';
 import { singletonValue, type UserObjectHost } from './user-host';
 import type { UserWorkspaces } from './workspaces';
 import { ReceivedShareSchema, type ReceivedShare } from './share-cards';
-
-export interface UserProfile {
-  email: string;
-  displayName: string | null;
-  createdAt: number;
-  lastSeenAt: number;
-  /** `null` until the wizard reaches `finish()`. */
-  onboardedAt: number | null;
-  /** Counted like `listWorkspaces`' `total`. An account owning a workspace never sees the
-   *  wizard, stamp or not. */
-  workspaceCount: number;
-}
 
 /** A typed result, not an exception: error classes do not survive the DO RPC boundary. */
 export type ProfileCatalogWriteResult =
