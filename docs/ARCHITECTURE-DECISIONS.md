@@ -347,6 +347,28 @@ when the wipe skips the storage, so it pins the decision. Not measured on the
 edge: Cloudflare's facet docs say the facets' databases are stored with the
 parent's, and do not name `deleteAll`.
 
+W6. A program's STARTTLS under the workspace egress stays in band: the staged
+node shims key each plain socket and carry the upgrade as an ask and an answer
+tag on that socket (`packages/cf-backend/src/egress/keyed-socket.ts`, Nimbus
+ask 46), until workerd starts TLS on a socket that came through a service
+binding, which Nimbus has drafted. Decided 2026-10-13. Rejected for now: an
+out-of-band upgrade from the shim to KinuEgress. Its mechanism is measured. The
+egress may upgrade its own upstream mid-relay once the relay's pending read is
+cancelled: `reader.cancel()`, then `socket.startTls()`, and SMTP 587 answered
+EHLO over the session (armada 20261013074325-7af9a252, compat 2026-09-30).
+Releasing the reader with a read pending hung, and aborting a `pipeTo` lost the
+connection (20261013043029-5a7afc96). With the program saying when, the
+egress needs none of the protocol go-ahead parsers. The shim reaches the egress
+only through `connect()`, so the upgrade would be a second connection naming
+the first one's key and servername, and the egress would look the upstream up
+in a registry shared by two KinuEgress invocations from the Dynamic Worker.
+Whether two loopback invocations share an isolate on the edge is not
+documented and not measured (they do under workerd and on armada), and failing
+closed there would refuse STARTTLS where the keyed shim serves it today. If
+same-socket STARTTLS slips, this design comes back: key-only socket names, the
+control connection, the cancelled read, and `keyed-socket.ts`'s recognizer and
+two-tag framing deleted.
+
 ## Chat loop
 
 C1. The stored assistant row holds the turn's answer. The runner selects it
