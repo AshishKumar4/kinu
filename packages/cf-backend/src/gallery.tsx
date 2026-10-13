@@ -1189,6 +1189,8 @@ declare global {
     __kinuTerminalWindow?: { cols: number; rows: number };
     /** With `terminalopen=held`, opens the terminal sockets the frame is holding. */
     __kinuOpenTerminals?: () => void;
+    /** Every directory the Files frame was asked to list, in order. */
+    __kinuListings?: string[];
   }
 }
 
@@ -5659,6 +5661,8 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
 
     if (method === "getExecutorFiles") {
       const [execName, path] = v.parse(v.tuple([v.string(), v.string()]), args ?? []);
+
+      (window.__kinuListings ??= []).push(path);
 
       if (execName !== "workspace") return rpcResult({ error: `Executor "${execName}" has no listing here` }).json<T>();
       const asked = path === "" ? "/" : path;
