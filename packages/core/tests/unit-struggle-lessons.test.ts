@@ -184,11 +184,11 @@ describe('a struggling turn teaches one lesson about its tool', () => {
 
     const effect = present(chatTerminalEffects({
       chat: () => { throw new Error('the lessons owe no turn'); },
-      orchestrator: {
+      orchestrator: () => ({
         recordTurn: () => { throw new Error('the lessons record no turn'); },
         recordedTurn: () => { throw new Error('the lessons record no turn'); },
         drainPendingEvents: () => Promise.reject(new Error('the lessons drain nothing')),
-      },
+      }),
       engine: evolution,
     }).turn_lessons, 'the lessons body');
 

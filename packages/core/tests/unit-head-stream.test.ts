@@ -8,7 +8,7 @@ import { Database } from 'bun:sqlite';
 import { createTestRuntime, scriptedTurnModel, type ModelStreamPart } from '@kinu.run/test-utils';
 import type { LanguageModel, ModelMessage } from 'ai';
 import { jsonSchema, tool } from 'ai';
-import { runHeadInference, HeadCapture, type HeadInferenceDeps } from '../src/heads/head-inference';
+import { runHeadInference, preparedHeadRun, HeadCapture, type HeadInferenceDeps } from '../src/heads/head-inference';
 import type { HeadStreamKind } from '../src/heads/head-stream';
 import { makeSql, makeExecRaw, createTestActor, stepText } from './helpers';
 import { LiveHeadJournal } from '../src/heads/live-journal';
@@ -137,10 +137,10 @@ describe('a head is admitted against its model\'s window as the catalog reports 
       windowFor: async () => ({ contextWindow: 1_048_576, modelOutputLimit: null }),
     };
 
-    const report = await runHeadInference(input, {
+    const report = await runHeadInference(preparedHeadRun(input, {
       ...base,
       sources: { ...base.sources, models: { ...base.sources.models, catalog } },
-    });
+    }));
 
     expect([report.status, report.errorMessage]).toEqual(['completed', undefined]);
   });
@@ -150,10 +150,10 @@ describe('a running head publishes what it is producing', () => {
   test('both halves of a step reach the channel, each tagged with its own kind', async () => {
     const frames: Frame[] = [];
 
-    const report = await runHeadInference(headInput(), await deps(
+    const report = await runHeadInference(preparedHeadRun(headInput(), await deps(
       streamingHead({ reasoning: 'weighing the two lexers', text: 'the lexer handles UTF-8' }),
       { reportDelta: (kind, delta) => { frames.push({ kind, delta }); } },
-    ));
+    )));
 
     expect(report.status).toBe('completed');
     // Both kinds in provider order: a prose-only channel paints a thinking model as idle.
@@ -167,9 +167,9 @@ describe('a running head publishes what it is producing', () => {
     // Preservation: no frame merged, dropped, reordered or reshaped.
     const chunks = ['The ', 'lexer ', 'handles ', 'UTF', '-8 ', 'correctly.'];
     const frames: Frame[] = [];
-    await runHeadInference(headInput(), await deps(chunkedHead(chunks), {
+    await runHeadInference(preparedHeadRun(headInput(), await deps(chunkedHead(chunks), {
       reportDelta: (kind, delta) => { frames.push({ kind, delta }); },
-    }));
+    })));
 
     expect(frames.map((frame) => frame.delta)).toEqual(chunks);
     expect(frames.every((frame) => frame.kind === 'text')).toBe(true);
@@ -179,9 +179,9 @@ describe('a running head publishes what it is producing', () => {
   test('an empty delta is not a frame', async () => {
     // Empty text deltas are dropped, so keep-alive chunks repaint nothing.
     const frames: Frame[] = [];
-    await runHeadInference(headInput(), await deps(chunkedHead(['', 'answer', '']), {
+    await runHeadInference(preparedHeadRun(headInput(), await deps(chunkedHead(['', 'answer', '']), {
       reportDelta: (kind, delta) => { frames.push({ kind, delta }); },
-    }));
+    })));
     expect(frames).toEqual([{ kind: 'text', delta: 'answer' }]);
   });
 
@@ -191,10 +191,10 @@ describe('a running head publishes what it is producing', () => {
     const frames: Frame[] = [];
     const steps: HeadStep[] = [];
 
-    const report = await runHeadInference(headInput(), await deps(chunkedHead(chunks), {
+    const report = await runHeadInference(preparedHeadRun(headInput(), await deps(chunkedHead(chunks), {
       reportDelta: (kind, delta) => { frames.push({ kind, delta }); },
       reportStep: (_seq, step) => { steps.push(step); },
-    }));
+    })));
 
     expect(steps).toHaveLength(1);
     expect(steps.map(stepText)).toEqual([chunks.join('')]);
@@ -216,10 +216,10 @@ describe('a running head publishes what it is producing', () => {
     const input = headInput();
     journal.insertSpawn(input);
     announced.length = 0;
-    await runHeadInference(input, await deps(chunkedHead(['a ', 'settled ', 'answer']), {
+    await runHeadInference(preparedHeadRun(input, await deps(chunkedHead(['a ', 'settled ', 'answer']), {
       reportDelta: (kind, delta) => { frames.push({ kind, delta }); },
       reportStep: (seq, step) => { journal.appendStep(input.id, seq, step); },
-    }));
+    })));
 
     expect(frames).toHaveLength(3);
     expect(announced).toEqual([input.id]);
@@ -229,14 +229,14 @@ describe('a running head publishes what it is producing', () => {
 
   test('no sink wired changes nothing about the run', async () => {
     // Frames are best effort: their absence is unobservable in anything durable.
-    const withSink = await runHeadInference(headInput(), await deps(
+    const withSink = await runHeadInference(preparedHeadRun(headInput(), await deps(
       streamingHead({ reasoning: 'thinking', text: 'answer' }),
       { reportDelta: () => { /* published nowhere */ } },
-    ));
+    )));
 
-    const without = await runHeadInference(headInput(), await deps(
+    const without = await runHeadInference(preparedHeadRun(headInput(), await deps(
       streamingHead({ reasoning: 'thinking', text: 'answer' }),
-    ));
+    )));
 
     expect(without.status).toBe(withSink.status);
     expect(without.summary).toBe(withSink.summary);
@@ -267,13 +267,13 @@ test('a cancelled head retains its already-settled SDK tool conversation', async
     return pending.promise;
   } });
 
-  const running = runHeadInference(headInput(), await deps(model, {
+  const running = runHeadInference(preparedHeadRun(headInput(), await deps(model, {
     signal: abort.signal, clock: REAL_CLOCK, isAborted: () => abort.signal.aborted,
     tools: { probe: tool({ inputSchema: jsonSchema<Record<string, never>>({ type: 'object', properties: {} }),
       execute: async () => value,
     }) },
     reportMessages: messages => { produced.push(...messages); },
-  }));
+  })));
 
   await secondStarted.promise;
   abort.abort(new Error('stopped after the evidence step'));

@@ -422,7 +422,7 @@ describe('two actors, one database: tool_effect_claims', () => {
   test('one call key is claimable by each actor and settles only for its owner', () => {
     const w = world();
     initToolEffectClaimTable(w.execRaw);
-    const key = { turnId: 'turn-1', callId: 'call-1', digest: 'digest-1' };
+    const key = { turnId: 'turn-1', runId: 'run-1', callId: 'call-1', digest: 'digest-1' };
 
     expect(claimToolEffect(w.sql, w.a, key).kind).toBe('claimed');
     expect(claimToolEffect(w.sql, w.b, key).kind).toBe('claimed');
@@ -905,7 +905,7 @@ describe('a handle whose validation throws is refused before the statement runs'
       }, { awaitsFollowup: false, id: 'row-1', now: 1 })],
       ['effect_tombstones', () => recordEffectDone(w.sql, w.revocable, { scope: 's', key: 'k' })],
       ['tool_effect_claims', () => claimToolEffect(w.sql, w.revocable, {
-        turnId: 't', callId: 'c', digest: 'd',
+        turnId: 't', runId: 'r', callId: 'c', digest: 'd',
       })],
       ['deferred_approvals', () => approvals.create({
         id: 'appr-1', command: 'c', executor: 'e', context: {}, reason: 'r', requestedAt: 1,

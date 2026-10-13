@@ -6,7 +6,7 @@
 import { expect, test } from 'bun:test';
 import { Effect, Result } from 'effect';
 import { settle } from '@kinu.run/core/obs';
-import { GATEWAY_CATALOG, actorOver, gatewayWorkspace, hostedSubordinateHarness, orchestratorHarness, runDelegatedTask, workspaceMainActor } from './helpers/actor-harness';
+import { GATEWAY_CATALOG, actorOver, actorOverWorkspace, gatewayWorkspace, hostedSubordinateHarness, orchestratorHarness, runDelegatedTask, workspaceMainActor } from './helpers/actor-harness';
 import { requestOf, scriptedGateway, type RecordedGatewayRun } from './helpers/platform-gateway';
 import { createTestUserDO, testOwner } from './helpers/user-do';
 
@@ -155,7 +155,7 @@ test('a hosted child advertises only its callable crafted surface and loses it w
     reader: { description: 'Files only', instructions: 'Inspect files.', tier: 'default', preset: 'ideate', allowedTools: ['file'] },
   } });
   // An idle hire holds no hosted slot: its settings are its rows.
-  actorOver(workspace.db, child.actor.handle.actorId).config.setRoleSelection('reader');
+  actorOverWorkspace(workspace.agent, child.actor.handle.actorId).config.setRoleSelection('reader');
   await runDelegatedTask(workspace, child.actor.handle.actorId, 'Inspect the remaining capabilities.');
   const last = gateway.runs.at(-1);
 

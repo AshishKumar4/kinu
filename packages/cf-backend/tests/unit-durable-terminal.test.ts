@@ -9,17 +9,18 @@
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  TERMINAL_EFFECT_RETRY_CEILING_MS, claimToolEffect, createFactsStore,
+  AgentReports, TERMINAL_EFFECT_RETRY_CEILING_MS, claimToolEffect, createFactsStore,
   type TerminalEffectName, type TerminalEffectPhase,
 } from '@kinu.run/core';
 import { createRecordingLogger } from '@kinu.run/core/obs';
 import {
-  chatSessionTurns, ledgerOver, orchestratorHarness,
+  agentWakes, chatSessionTurns, driveUntil, ledgerOver, mainRows, orchestratorHarness,
   reactivateOrchestratorHarness,
   tapDiagnostics, until, workspaceMainActor, type ActorHarness, type HarnessActorWorld, type HarnessOrchestratorAgent,
   type ScriptedHeadReport,
 } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
+import { catchNextOwingReport, loseNextHandoff } from './helpers/agent-facets';
 import type { SettledTurn, TurnHarness } from './helpers/turn-harness';
 import { wrapDatabase } from '@kinu.run/core/identity';
 
@@ -244,7 +245,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     // Heads still running: their reports arrive only after the claims are read.
     const reports: Array<ReturnType<typeof Promise.withResolvers<ScriptedHeadReport>>> = [];
 
-    const harness = cutAt('turn_end_extensions', 'before', {
+    const harness = cutAt('turn_record', 'before', {
       heads: () => {
         const report = Promise.withResolvers<ScriptedHeadReport>();
         reports.push(report);
@@ -363,12 +364,104 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
 
 });
 
+describe("an agent's reports reach its workspace newest first", () => {
+  /** Numbered in the agent's own store (design v3 B). A report main's isolate sent while it owed work, in flight past
+   *  the next activation's isolate driving that work and reporting itself at rest, armed main's wake again. */
+  test('a report delayed past a newer one changes nothing', async () => {
+    const harness = orchestratorHarness();
+    const main = workspaceMainActor(harness.db).actorId;
+    const storageKey = harness.agent.agentOf(main).storageKey;
+
+    const caught = catchNextOwingReport(storageKey);
+    loseNextHandoff(storageKey);
+    turns(harness).open('u-stale');
+    await Promise.allSettled([turns(harness).settle({ messageId: 'a-stale', text: 'the live answer' })]);
+    const deliverStale = await caught;
+
+    laterBy(1);
+    const restarted = await reactivateOrchestratorHarness(harness.db);
+    const owes = () => new AgentReports(wrapDatabase(restarted.db).sql).holding().includes(main) || agentWakes(restarted.db).includes(main);
+    const { db } = await mainRows(restarted);
+    const handedOver = () => db.query("SELECT 1 FROM terminal_effects WHERE effect_key LIKE 'v1:workspace_settle:%'").get() === null;
+
+    await driveUntil(restarted, 'main never handed its turn over and rested', () => handedOver() && !owes());
+    await restarted.agent.harnessAgentsIdle();
+    await deliverStale();
+    await joinHarnessFibers();
+
+    expect(owes()).toBe(false);
+  });
+});
+
+describe("a main turn's close reads back only what something reads", () => {
+});
+
+/**
+ * What the workspace decided as main's turn opened, and the branches its owner started during it, are the turn's roster
+ * inputs; main's isolate commits the answer and hands the turn over afterwards, and the workspace may be gone between.
+ */
+describe("a main turn's workspace facts outlive the activation that gathered them", () => {
+  test('a reset between the answer and its handoff keeps the branch and the evolution gate the turn opened with', async () => {
+    const world: HarnessActorWorld = { heads: headsAnswering({ status: 'completed', summary: 'the branch answer' }) };
+    const harness = orchestratorHarness(undefined, world);
+
+    await branchDuring(harness, 'u-reset', 'a-reset', 'try the other library');
+    loseNextHandoff(harness.agent.agentOf(workspaceMainActor(harness.db).actorId).storageKey);
+    await turns(harness).settle({ messageId: 'a-reset', text: 'the live answer' });
+    await joinHarnessFibers();
+
+    laterBy(1);
+    const restarted = await reactivateOrchestratorHarness(harness.db, undefined, { world });
+
+    await driveUntil(restarted, 'the handoff landed without the branch or the review its turn owed', () => takeSets(restarted) === 1 && owedReviews(restarted) === 1);
+  });
+
+  test('a turn handed over after its workspace reset is recorded under the missions it ran for', async () => {
+    const harness = orchestratorHarness();
+
+    harness.agent.harnessDrivingUserMessage('Tally the refunds.', { missionLabels: ['refunds'] });
+    loseNextHandoff(harness.agent.agentOf(workspaceMainActor(harness.db).actorId).storageKey);
+    await turns(harness).settle({ messageId: 'a-mission', text: 'the live answer' });
+    await joinHarnessFibers();
+
+    // The governor that scoped the turn as it ran is this activation's; the next one opens with none.
+    laterBy(1);
+    const restarted = await reactivateOrchestratorHarness(harness.db);
+
+    await driveUntil(restarted, 'the handed-over turn was never recorded', () => windowedTurns(restarted) === 1);
+
+    const RecordedSchema = v.object({ missionLabels: v.optional(v.array(v.string())) });
+    const recorded = restarted.db.query<{ turn: string }, []>('SELECT turn FROM completed_turns').all();
+
+    expect(recorded.map((row) => v.parse(RecordedSchema, JSON.parse(row.turn)).missionLabels)).toEqual([['refunds']]);
+  });
+
+});
+
 /**
  * Auto-continuations share the durable turn id, so claims are released only when no response can run.
  * `_inFlight` is clear after eviction; the surviving run row is the witness seeded here.
  */
 // Core's `creditedTurnId` decides; this pins that the orchestrator hands its verdict to the branch settle.
 describe('mid-turn captures are credited to the turn only when it answered', () => {
+  test("a steer branch starts from main's conversation as main's own isolate keeps it", async () => {
+    const inherited: string[] = [];
+
+    const harness = orchestratorHarness(undefined, {
+      heads: async (_task, context) => {
+        inherited.push(JSON.stringify(context));
+
+        return { status: 'completed', summary: 'the branch answer' };
+      },
+    });
+
+    turns(harness).open('u-before');
+    await turns(harness).settle({ messageId: 'a-before', text: 'The ledger keeps integer cents.' });
+    await branchDuring(harness, 'u-branch-context', 'a-branch-context', 'try the other library');
+
+    expect(inherited).toEqual([expect.stringContaining('The ledger keeps integer cents.')]);
+  });
+
   test('a completed turn credits its branch take set to its answer', async () => {
     const harness = orchestratorHarness(undefined, { heads: headsAnswering({ status: 'completed', summary: 'the branch answer' }) });
     await branchDuring(harness, 'u-credit', 'a-credit', 'try the other library');
@@ -392,7 +485,7 @@ describe('mid-turn captures are credited to the turn only when it answered', () 
 describe('a turn releases its tool claims only when no response can still run', () => {
   /** A tool call claimed and unsettled: the state a still-executing turn leaves. */
   function claimTool(harness: Harness, turnId: string, callId: string): void {
-    claimToolEffect(wrapDatabase(harness.db).sql, workspaceMainActor(harness.db), { turnId, callId, digest: 'harness-tool-digest' });
+    claimToolEffect(wrapDatabase(harness.db).sql, workspaceMainActor(harness.db), { turnId, runId: 'run-1', callId, digest: 'harness-tool-digest' });
   }
 
   const released = [

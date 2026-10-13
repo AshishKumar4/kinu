@@ -249,7 +249,7 @@ describe('default compaction over the real storage plane', () => {
     };
 
     const driveForced = (messages: ModelMessage[]) =>
-      drive(messages, state.takeArmedCompaction(SESSION) ? 'force' : undefined);
+      drive(messages, state.takeTrigger(SESSION, messages.length).trigger === 'force' ? 'force' : undefined);
 
     const small = history(2, 100);
     await drive(small);
@@ -319,7 +319,7 @@ describe('default compaction over the real storage plane', () => {
     state.armCompaction(SESSION);
     await driveForced(grown);
     expect(outcomes.at(-1)?.outcome).toBe('planned');
-    expect(state.takeArmedCompaction(SESSION)).toBe(false);
+    expect(state.takeTrigger(SESSION, grown.length).trigger).toBe('auto');
 
     const ranges = state.archive.list(SESSION);
     expect(ranges).toHaveLength(2);

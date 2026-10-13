@@ -249,6 +249,12 @@ export class OwnerQuestionStore {
     return this.byCall(call)?.status === 'open';
   }
 
+  /** Moves with every question asked and every one closed; a closed question never opens again, so it only grows. */
+  revision(): number {
+    return this.sql<{ revision: number }>`SELECT COUNT(*) + COALESCE(SUM(status != 'open'), 0) AS revision FROM owner_questions
+      WHERE actor_id=${this.actorId}`[0]?.revision ?? 0;
+  }
+
   open(): AskedQuestions[] {
     if (!this.mayWait()) return [];
 

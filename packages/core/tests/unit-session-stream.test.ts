@@ -1,6 +1,6 @@
 import { expect, spyOn, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
-import { createTestRuntime } from '@kinu.run/test-utils';
+import { createTestRuntime, admitTestClaim } from '@kinu.run/test-utils';
 import { SessionHistory } from '../src/session/history';
 import { ActorClaimStore, initActorClaimTables } from '../src/orchestrator/actor-claims';
 import { SessionStream } from '../src/orchestrator/session-stream';
@@ -115,7 +115,7 @@ function setup() {
   const rows = () => testSql.db.query<{ text: string }, []>('SELECT text FROM stream_parts ORDER BY part_no, segment').all().map(row => row.text);
 
   const turn = async (turnId: string) => {
-    const claim = await claims.admit({ runId: `run-${turnId}`, turnId, workMode: 'build', program: BUILTIN, context: selected() });
+    const claim = await admitTestClaim(claims, { runId: `run-${turnId}`, turnId, workMode: 'build', program: BUILTIN, context: selected() });
     const stream = new SessionStream(history, turnId, claim.epoch);
     const consumed = await claims.consume(claim, { index: 0, messages: (await history.materialize()).messages });
     stream.beginRequest(consumed.requestId, 0);
@@ -389,7 +389,7 @@ test('an admission the store refuses seals nothing of a live stream', async () =
     await stream.nativePart({ type: 'text-start', id: '0' });
     await stream.nativePart({ type: 'text-delta', id: '0', text: 'live ' });
     const stale = { ...s.selected(), revision: s.selected().revision + 7 };
-    await expect(s.claims.admit({ runId: 'run-t2', turnId: 't2', workMode: 'build', program: BUILTIN, context: stale })).rejects.toThrow(KinuError);
+    await expect(admitTestClaim(s.claims, { runId: 'run-t2', turnId: 't2', workMode: 'build', program: BUILTIN, context: stale })).rejects.toThrow(KinuError);
     expect(s.open()).toHaveLength(1);
     await stream.nativePart({ type: 'text-end', id: '0' });
     await stream.nativeStep({ messages: [{ role: 'assistant', content: [{ type: 'text', text: 'live and done' }] }], toolResults: [] });
@@ -442,10 +442,10 @@ test('a window never splits a surrogate pair across two statements', async () =>
     // The first delta opens the part; the flush ten deltas later falls on the high surrogate, which is held back.
     for (let i = 0; i < 10; i++) await stream.nativePart({ type: 'text-delta', id: '0', text: 'a' });
     await stream.nativePart({ type: 'text-delta', id: '0', text: '\ud83d' });
-    expect(s.rows()).toEqual(['a'.repeat(10)]);
+    expect(s.rows()).toEqual(['a', 'a'.repeat(9)]);
     await stream.nativePart({ type: 'text-delta', id: '0', text: '\ude00' });
     await stream.nativePart({ type: 'text-end', id: '0' });
-    expect(s.rows()).toEqual([`${'a'.repeat(10)}😀`]);
+    expect(s.rows()).toEqual(['a', 'a'.repeat(9), '😀']);
   } finally { s.testSql.close(); }
 });
 
@@ -500,7 +500,7 @@ test('a call is durable only once its part is in the record, and a slow write ho
 
   try {
     const { stream } = await s.turn('t1');
-    const calls = () => s.testSql.db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM stream_parts WHERE kind = 'tool-call'").get()?.n ?? 0;
+    const calls = () => s.testSql.db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM stream_parts WHERE json_extract(descriptor_json, '$.type') = 'tool-call'").get()?.n ?? 0;
     const seen: number[] = [];
     const waited = stream.durable('call-1').then(() => { seen.push(calls()); });
 

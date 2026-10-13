@@ -91,7 +91,7 @@ test("a hosted agent's failed turn ends on one error, shown once, and still name
     .toEqual({ ended: 1, shown: 1, named: true });
 });
 
-test('a task admitted while the drain runs another is run by that drain', async () => {
+test('a task admitted while the agent runs another is run after it', async () => {
   const parked = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const answered: string[] = [];
@@ -116,10 +116,11 @@ test('a task admitted while the drain runs another is run by that drain', async 
 
   await wakeForDelegatedTask(workspace, subordinate.actorId, 'First task.');
   await parked.promise;
-  // The wake for the second task finds the drain running the first.
+  // The second task reaches the agent while it runs the first.
   await wakeForDelegatedTask(workspace, subordinate.actorId, 'Second task.');
   release.resolve();
   await joinHarnessFibers();
+  await workspace.agent.harnessAgentsIdle();
 
   expect(answered).toContain('second');
 });

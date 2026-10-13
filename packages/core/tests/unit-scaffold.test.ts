@@ -10,7 +10,7 @@ import { modifyScaffold } from '../src/scaffold/modify';
 import { rollbackScaffold } from '../src/scaffold/rollback';
 import { initScaffoldTables } from '../src/scaffold/schemas';
 import {
-  createScaffoldCallTool, initToolEffectClaimTable, withEffectClaims,
+  createScaffoldCallTool, initToolEffectClaimTable, withEffectReceipt,
   type EffectClaimDeps,
 } from '../src/index';
 
@@ -145,7 +145,7 @@ describe('scaffold host callTool ids', () => {
     initToolEffectClaimTable(execRaw);
 
     const deps: EffectClaimDeps = {
-      sql, actor: createTestActors(sql, execRaw).main, turnId: () => 'turn-1', durable: () => Promise.resolve(),
+      sql, actor: createTestActors(sql, execRaw).main, execution: () => ({ turnId: 'turn-1', runId: 'run-1' }), durable: () => Promise.resolve(),
     };
 
     const calls: string[] = [];
@@ -162,7 +162,7 @@ describe('scaffold host callTool ids', () => {
       },
     });
 
-    const claimed = () => withEffectClaims({ shell: entry }, deps);
+    const claimed = () => withEffectReceipt({ shell: entry }, deps);
     const firstHost = createScaffoldCallTool(claimed);
     const secondHost = createScaffoldCallTool(claimed);
     const realNow = Date.now;

@@ -3,6 +3,7 @@ import type { MissionScope } from '../mission-budget';
 import type { WebSearchProvider } from '../web/provider';
 import type { WriteObserver } from '../vfs/write-events';
 import type { HostedNodeSeat } from '../strategy/node-agent';
+import type { SeatedActor } from '../state/actor-host';
 import type { SpawnedHead } from './controller';
 import { buildHeadSystemPrompt, HeadCapture, type RunInference } from './head-inference';
 import { CONFINED_BACKGROUNDABLE_TOOLS } from '../jobs/background-wrap';
@@ -11,7 +12,7 @@ import { buildHeadToolSet, type HeadSplitRequest, type HeadSplitResult, type Hea
 import type { ReportHeadDelta } from './head-stream';
 import type { HeadInput, HeadReport, HeadStep } from './types';
 
-export interface HeadSeat extends HostedNodeSeat {
+export interface HeadSeat<A extends SeatedActor = SeatedActor> extends HostedNodeSeat<A> {
   release(): Promise<void>;
   /** The host's per-actor queue, where it keeps one. */
   queue?<Result>(body: () => Promise<Result>): Promise<Result>;
@@ -45,6 +46,7 @@ export function spawnSeatedHead(input: HeadInput, deps: SeatedHeadDeps): Spawned
         input, capture, rt: seat.actor.runtime, conversations: seat.conversations,
         codemodeTool: deps.codemodeTool(seat), webSearch: deps.webSearch, split: deps.split(seat, input),
         jobs: { jobRunner: runner, backgroundable: CONFINED_BACKGROUNDABLE_TOOLS, mode: () => input.mode },
+        effectClaims: { ...seat.receipts, execution: () => ({ turnId: input.id, runId: seat.runId }) },
       }),
       brief: (callable) => buildHeadSystemPrompt(input, callable),
       capture,

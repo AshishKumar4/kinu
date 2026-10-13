@@ -41,6 +41,7 @@ test('a successful tool call records the value it returned, and a text tool reco
 
   try {
     const lease = actor.session.beginTurn({ runId: 'run-record', turnId: 'turn-record' }, 'build', 0);
+    actor.session.reserveClaim(lease);
     actor.session.bindProfile(lease, profile, inputs);
     await actor.session.openTurnInput(lease, { item: {}, message: { role: 'user', content: 'Write the notes.' }, birthContext: async () => [] });
 
@@ -101,6 +102,7 @@ test('a narrated multi-step turn answers with its final step, whatever it stream
 
   try {
     const lease = actor.session.beginTurn({ runId: 'run-answer', turnId: 'turn-answer' }, 'build', 0);
+    actor.session.reserveClaim(lease);
     actor.session.bindProfile(lease, profile, inputs);
     await actor.session.openTurnInput(lease, { item: {}, message: { role: 'user', content: 'Run the test and reply with only PASS or FAIL.' }, birthContext: async () => [] });
 

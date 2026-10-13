@@ -234,8 +234,8 @@ export const DECLARED = byFile([
   // Wire shapes: each `ok`/`success` here is read by a caller that does not share this process (RPC, HTTP, a
   // model or the program it wrote, stdout) or mirrors one in a fixture; changing it changes that contract.
   ...([
-    ['packages/cf-backend/src/actor-agent.ts', ['installWorkspaceCapability', 'recordSubordinateTitle', 'onModelSettingsChanged', 'cancelCurrentWork', 'installClientMessageGate', 'refuseRevokedSocketAuthority'],
-      'DO RPC answers (capability install, subordinate title, model-settings fan-out, cancel) and the Agents SDK\'s `{ success: false }` socket denial, read across the isolate'],
+    ['packages/cf-backend/src/actor-agent.ts', ['installWorkspaceCapability', 'onModelSettingsChanged', 'cancelCurrentWork', 'installClientMessageGate', 'refuseRevokedSocketAuthority'],
+      'DO RPC answers (capability install, model-settings fan-out, cancel) and the Agents SDK\'s `{ success: false }` socket denial, read across the isolate'],
     ['packages/cf-backend/src/cli/routes.ts', ['body'],
       'the CLI routes\' HTTP JSON bodies, read by the CLI\'s fetch'],
     ['packages/cli-backend/src/host-mount.ts', ['replaceNow'],

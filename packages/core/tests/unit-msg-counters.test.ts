@@ -115,7 +115,6 @@ function makeTeam(delivery: SubordinateDelivery) {
     knows: async (name) => name === rosterEntry.name,
     create: async () => ({ name: rosterEntry.name, displayName: 'Researcher', subordinate: rosterEntry }),
     rename: async (input) => ({ ok: true, name: input.name, displayName: input.displayName, subordinate: rosterEntry }),
-    recordTitle: async (input) => ({ ok: true, name: input.name, displayName: input.displayName }),
     spawn: async () => ({ name: rosterEntry.name, displayName: 'Researcher' }),
     status: async () => ({ roster: [rosterEntry] }),
     dismiss: async (input) => ({ ok: true, name: input.name, historyKept: true, stoppedJobs: [] }),

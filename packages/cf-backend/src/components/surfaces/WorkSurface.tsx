@@ -1,7 +1,7 @@
 /** Workspace navigation: titled live previews first, then work/read surfaces. */
 import { Suspense, useCallback, useEffect, useState, type ReactNode } from "react";
 import { GlobeIcon, NotePencilIcon, SparkleIcon } from "@phosphor-icons/react";
-import type { SlateSummary, PendingAction, PlanReview } from "@kinu.run/core";
+import type { SlateSummary, PendingAction, PlanReview, OwedOwnerIntent } from "@kinu.run/core";
 import type { WorkspacePlanArrival } from "@/hooks/use-workspace-reads";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import type { FilesFocus, HeadDeltas } from "@kinu.run/core";
@@ -89,6 +89,7 @@ export interface WorkSurfaceProps {
   previewStarting?: readonly string[];
   onRefreshPorts: () => void;
   plan: PlanReview | null;
+  owedIntents?: readonly OwedOwnerIntent[];
   planRpc?: Rpc;
   snapshot: AsyncResource<AgentStatus>;
   memory: MemoryEntry[];
@@ -298,7 +299,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
             />
           </ErrorBoundary>
         </div>
-        <PlanPageList pages={planPages} rpc={props.rpc} planRpc={props.planRpc} onReviewActor={props.onReviewActor} />
+        <PlanPageList pages={planPages} rpc={props.rpc} planRpc={props.planRpc} onReviewActor={props.onReviewActor} owedIntents={props.owedIntents} />
         <ErrorBoundary key={surface} label={surface ?? undefined}>
           <Suspense fallback={<div className="h-full flex items-center justify-center"><Loader size="sm" /></div>}>
             {surface === "Files" && (

@@ -1,7 +1,7 @@
 diff --git a/packages/core/src/evolution/engine.ts b/packages/core/src/evolution/engine.ts
 --- a/packages/core/src/evolution/engine.ts
 +++ b/packages/core/src/evolution/engine.ts
-@@ -156,7 +156,7 @@
+@@ -157,7 +157,7 @@ export class EvolutionEngine {
    ) {
      this.rt = rt;
      this.turnPair = turnPair;
@@ -9,4 +9,4 @@ diff --git a/packages/core/src/evolution/engine.ts b/packages/core/src/evolution
 +    this.config = { ...config, ...DEFAULT_EVOLUTION_CONFIG };
      rt.actor.assertCurrent();
  
-     const actor = rt.storage.sql<{ evolves: number }>`
+     const actor = rt.storage.sql<{ origin: string }>`

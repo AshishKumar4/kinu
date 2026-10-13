@@ -84,7 +84,7 @@ describe('KINU-065 — the privileged surface is absent from the runtime registr
         'receivePeerMessage', 'listPeersFromMcp', 'runTaskFromMcp', 'saveNoteFromMcp', 'sendPeerFromMcp',
       ] },
       { cls: ActorAgent, names: [
-        'installWorkspaceCapability', 'getSubordinateBootstrapIdentity', 'receiveSubordinateEvent',
+        'installWorkspaceCapability',
       ] },
     ] as const;
 

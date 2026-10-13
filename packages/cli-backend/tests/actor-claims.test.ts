@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { jsonSchema, tool } from 'ai';
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
 import * as v from 'valibot';
-import { scriptedTurnModel, toolExecute } from '@kinu.run/test-utils';
+import { scriptedTurnModel, toolExecute, withHostDeliveries, admitTestClaim } from '@kinu.run/test-utils';
 import {
   ActorSession, EvolutionEngine, historyTurnPairs, WorkspaceActorDirectory, createAgentStores, profileCatalogDigest,
   resolveTurnProfile, verifyClaimedProgram, readVersionedScaffoldSource, sha256Hex,
@@ -73,7 +73,7 @@ async function workspace(): Promise<{ bind: (name: string) => Bound; rt: AgentRu
     const stores = createAgentStores(() => runtime.storage.sql, () => handle, runtime.storage.transactionSync, async () => ({ vfs: runtime.storage.vfs, artifactDirectory: `${WORKSPACE_ROOT}/actors/${handle.actorId}` }));
 
     const actor: ActorSession = new ActorSession({ history: stores.history, runtime, claims: stores.claims, installedBuild: null,
-    orchestration: {
+    orchestration: withHostDeliveries({
       engine: new EvolutionEngine(runtime, historyTurnPairs(stores.history), { enabled: false }), eventLog: new EventLog(eventSql, handle),
       host: {
         broadcast: () => {},
@@ -81,7 +81,7 @@ async function workspace(): Promise<{ bind: (name: string) => Bound; rt: AgentRu
         turnInFlight: () => actor.inFlight,
         setTimer: () => { throw new Error('this fixture must not schedule background work'); },
       },
-    }, });
+    }), });
 
     return { actor, runtime, stores, handle };
   };
@@ -111,6 +111,8 @@ async function runTurn(bound: Bound, opts: {
   const lease = bound.actor.beginTurn(
     { runId: opts.runId ?? `run-${opts.turnId}`, turnId: opts.turnId }, mode, Date.now(),
   );
+
+  bound.actor.reserveClaim(lease);
 
   bound.actor.bindProfile(lease, resolveTurnProfile({
     ...profiles, roleId: 'task', workMode: mode, availableTools: Object.keys(opts.tools ?? {}), activeSkills: [],
@@ -201,7 +203,7 @@ test('a source change after admission cannot alter the bytes the turn consumed',
   expect(result.text).toBe('v1 answer');
   await writeText(files, rt.identity.scaffold.path + '.v1', V2);
   const claim = left.stores.claims.read('turn-src');
-  expect(claim?.program.digest).toBe(createHash('sha256').update(V1).digest('hex'));
+  expect(claim?.program?.digest).toBe(createHash('sha256').update(V1).digest('hex'));
 
   if (claim === null) throw new Error('the turn must have left a claim to verify');
 
@@ -299,7 +301,7 @@ test('a stale execution epoch cannot write to the claim a newer one owns', async
   const left = bind('left');
   const claims = left.stores.claims;
 
-  const stale = await claims.admit({
+  const stale = await admitTestClaim(claims, {
     runId: 'run-old', turnId: 'turn-fence', workMode: 'build',
     program: { kind: 'builtin', version: 0, digest: null, build: null },
     context: await selectedInput(left, [{ role: 'user', content: 'first activation' }]),
@@ -307,20 +309,44 @@ test('a stale execution epoch cannot write to the claim a newer one owns', async
 
   expect(stale.epoch).toBe(1);
 
-  const live = await claims.admit({
+  const live = await admitTestClaim(claims, {
     runId: 'run-new', turnId: 'turn-fence', workMode: 'build',
     program: { kind: 'builtin', version: 0, digest: null, build: null },
     context: await selectedInput(left, [{ role: 'user', content: 'second activation' }]),
   });
 
   expect(live.epoch).toBe(2);
-  await expect(claims.consume(stale, { index: 0, messages: [{ role: 'user', content: 'stale step' }] })).rejects.toThrow(KinuError);
-  expect(() => claims.settle(stale, 'completed')).toThrow(KinuError);
-  await claims.consume(live, { index: 0, messages: [{ role: 'user', content: 'live step' }] });
+  const otherEpoch = { code: 'denied', message: 'actor turn is owned by another execution epoch' };
+  const settled = { code: 'denied', message: 'actor turn is settled and takes no further work' };
+
+  await expect(claims.consume(stale, { index: 0, messages: [{ role: 'user', content: 'stale step' }] })).rejects.toMatchObject(otherEpoch);
+  expect(() => claims.settle(stale, 'completed')).toThrow(otherEpoch.message);
+
+  // Two steps prepared from one revision: the second to commit finds the first's request and writes none.
+  const racing = await Promise.allSettled([
+    claims.consume(live, { index: 0, messages: [{ role: 'user', content: 'live step' }] }),
+    claims.consume(live, { index: 0, messages: [{ role: 'user', content: 'same step again' }] }),
+  ]);
+
+  expect(racing.map((outcome) => outcome.status)).toEqual(['fulfilled', 'rejected']);
+  expect(racing[1]).toMatchObject({ reason: { code: 'denied', message: 'another request consumed this claim during preparation' } });
   expect(claims.read('turn-fence')).toMatchObject({ epoch: 2, runId: 'run-new' });
   expect((await claims.consumedContext('turn-fence'))?.revision).toBe(1);
   claims.settle(live, 'completed');
-  await expect(claims.consume(live, { index: 1, messages: [{ role: 'user', content: 'after settle' }] })).rejects.toThrow(KinuError);
+  expect(claims.read('turn-fence')).toMatchObject({ epoch: 2, status: 'settled', outcome: 'completed' });
+  expect(() => claims.settle(live, 'error')).toThrow(settled.message);
+  expect(claims.read('turn-fence')).toMatchObject({ outcome: 'completed' });
+  await expect(claims.consume(live, { index: 1, messages: [{ role: 'user', content: 'after settle' }] })).rejects.toMatchObject(settled);
+
+  // Two activations claiming the turn from one reading of it: the later claim supersedes the earlier, whose admission
+  // finds it gone and takes nothing.
+  const context = await selectedInput(left, [{ role: 'user', content: 'third activation' }]);
+  const admit = (runId: string) => admitTestClaim(claims, { runId, turnId: 'turn-fence', workMode: 'build', program: { kind: 'builtin', version: 0, digest: null, build: null }, context });
+  const admitted = await Promise.allSettled([admit('run-a'), admit('run-b')]);
+
+  expect(admitted.map((outcome) => outcome.status)).toEqual(['rejected', 'fulfilled']);
+  expect(admitted[0]).toMatchObject({ reason: { code: 'denied', message: 'claim changed during admission preparation' } });
+  expect(claims.read('turn-fence')).toMatchObject({ epoch: 4, runId: 'run-b', status: 'admitted' });
 });
 
 test('one actor cannot write another actor\'s claim, and their revisions never mix', async () => {
@@ -328,13 +354,13 @@ test('one actor cannot write another actor\'s claim, and their revisions never m
   const left = bind('left');
   const right = bind('right');
 
-  const leftClaim = await left.stores.claims.admit({
+  const leftClaim = await admitTestClaim(left.stores.claims, {
     runId: 'run-l', turnId: 'shared-turn-id', workMode: 'build',
     program: { kind: 'builtin', version: 0, digest: null, build: null },
     context: await selectedInput(left, [{ role: 'user', content: 'left context' }]),
   });
 
-  const rightClaim = await right.stores.claims.admit({
+  const rightClaim = await admitTestClaim(right.stores.claims, {
     runId: 'run-r', turnId: 'shared-turn-id', workMode: 'plan',
     program: { kind: 'builtin', version: 0, digest: null, build: null },
     context: await selectedInput(right, [{ role: 'user', content: 'right context' }]),
@@ -553,7 +579,7 @@ test('claim recovery preserves native binary and URL attachment carriers', async
   const left = bind('left');
   const claims = left.stores.claims;
 
-  const claim = await claims.admit({
+  const claim = await admitTestClaim(claims, {
     runId: 'run-codec', turnId: 'turn-codec', workMode: 'build',
     program: { kind: 'builtin', version: 0, digest: null, build: null },
     context: await selectedInput(left, [{ role: 'user', content: [

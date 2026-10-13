@@ -13,8 +13,7 @@ declare module 'kinu:product' {
   }
 
   export class OrchestratorAgent extends DurableObject {
-    /** Private in the source; the probe reads its size. */
-    protected readonly delegatedTurns: { readonly actorRunners: ReadonlyMap<string, Promise<void>> };
+    listWorkspaceAgents(): Promise<readonly { readonly key: string; readonly activity: string }[]>;
     protected hostedSeams(): {
       readonly host: {
         acquire(reference: ActorReference, seat: { readonly kind: 'actor' | 'head' | 'node' }): Promise<HostedActor>;
@@ -25,6 +24,9 @@ declare module 'kinu:product' {
     protected get config(): { setSleepTimeComputeEnabled(enabled: boolean): void };
     protected settleBackgroundTasks(): Promise<void>;
     protected get terminal(): { idle(): Promise<void> };
+    protected actorHandle(): { readonly actorId: string };
+    /** Main's isolate, or another agent's, as the bundle reaches it. */
+    protected agentFacetOf<Facet extends Rpc.WorkerEntrypointBranded>(actorId: string): Promise<Fetcher<Facet>>;
   }
 
   const handler: ExportedHandler;

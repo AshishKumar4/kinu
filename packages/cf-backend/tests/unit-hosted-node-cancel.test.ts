@@ -67,8 +67,8 @@ describe('cancelling a search reaches its hosted nodes', () => {
     });
 
     const { agent, db } = gatewayWorkspace(gateway);
-
-    await catalogTurn(agent, ASK);
+    // Its agents rest only once the node's run ends, which its held call keeps open: the cancel comes first.
+    const turn = catalogTurn(agent, ASK);
     const call = await held.promise;
     const job = db.query<{ id: string }, []>("SELECT id FROM background_jobs WHERE kind = 'agents'").get();
 
@@ -76,6 +76,7 @@ describe('cancelling a search reaches its hosted nodes', () => {
     expect(await agent.cancelBackgroundJob(job.id)).toEqual({ ok: true });
     // A cancel that never reached the node lets this answer land, and the node completes.
     answer.resolve(chatCompletion(call, 'Cache the token table.'));
+    await turn;
     await agent.harnessJoinDetachedFibers();
 
     const node = db.query<{ id: string; status: string }, []>('SELECT id, status FROM head_journal').get();
@@ -108,8 +109,9 @@ describe('cancelling a search reaches its hosted nodes', () => {
     }, 2);
 
     const { agent, db } = gatewayWorkspace(gateway);
+    // Its agents rest only once both workers' runs end, which their held calls keep open: the Stop comes first.
+    const turn = catalogTurn(agent, ASK);
 
-    await catalogTurn(agent, ASK);
     await bothHeld.promise;
     const [stopped, sibling] = db.query<{ id: string }, []>('SELECT id FROM head_journal ORDER BY id').all();
 
@@ -119,6 +121,7 @@ describe('cancelling a search reaches its hosted nodes', () => {
 
     // A Stop that never reached its worker lets this answer land, and that worker completes.
     for (const call of calls) call.answer.resolve(chatCompletion(call.run, 'Cache the token table.'));
+    await turn;
     await agent.harnessJoinDetachedFibers();
 
     const job = db.query<{ status: string }, []>("SELECT status FROM background_jobs WHERE kind = 'agents'").get();

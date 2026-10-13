@@ -83,6 +83,8 @@ describe('the context number a page reads back', () => {
     recorder.emit('measured-turn', { type: 'context_admitted', tokens: 80, contextWindow: 1_000 });
     recorder.emit('measured-turn', { type: 'step_finish', parts: [], stepIndex: 1, usage: { input: 100 }, context, modelId: 'first-model', egress: 'relay', });
     recorder.emit('measured-turn', { type: 'step_finish', parts: [], stepIndex: 2, usage: { output: 5, cacheRead: 200 }, modelId: 'second-model', });
+    // Written as an earlier activation of main's isolate wrote them: the one that reads them next starts afresh.
+    harness.agent.harnessResetAgentIsolate(harness.agent.agentOf(main.actor.actorId).storageKey);
 
     // The measured step has left the telemetry sample, but still supplies the context number.
     const snapshot = await harness.agent.getActivitySnapshot({ steps: 1 });

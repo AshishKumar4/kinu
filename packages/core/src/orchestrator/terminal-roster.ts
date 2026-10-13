@@ -5,7 +5,7 @@
 import { JsonValueSchema, type JsonValue } from '../utils/json';
 import { WorkModeSchema, type WorkMode } from '../types/turn';
 import type { RunEndReason } from './turn-lifecycle';
-import type { TurnContinuity } from './agent-orchestrator';
+import type { TurnContinuity } from './evolution-lanes';
 import type { OwedEffect } from './terminal-effects';
 import type { OwedTerminalEffectsInput } from './chat-session';
 import type { SubordinateReportStatus } from '../events/hub/types';
@@ -13,6 +13,7 @@ import { isPlaceholderMission } from '../identity/soul';
 import * as v from 'valibot';
 import { CompletedTurnSchema } from '../evolution/session-window';
 import { RunEndReasonSchema } from './terminal-effects';
+import { TurnFactsSchema } from './turn-facts';
 import { owesTurnLessons } from '../evolution/struggles';
 
 /** `completed` is the driver's verdict; rows keyed to the answer gate on the narrower `durablyAnswered`. */
@@ -165,6 +166,7 @@ export function declareTerminalRoster(
       status: facts.status,
       turn: facts.scopedTurn,
       workMode: facts.workMode,
+      autoEvolve: facts.evolutionEnabled,
     },
   });
 
@@ -220,9 +222,19 @@ function followUpTurns(messageId: string, parts: Pick<TerminalTurnParts, 'overfl
   return owed;
 }
 
+/** The run a turn settled on, as its agent tells the workspace that kept its tools' receipts. */
+export const SettledRunSchema = v.object({
+  turnId: v.string(),
+  runId: v.string(),
+  /** The epoch it was claimed under, which its close names (design v2 §3). */
+  epoch: v.nullable(v.number()),
+});
+
+export type SettledRun = v.InferOutput<typeof SettledRunSchema>;
+
 /** A settled turn as its chat hands it to the object that owes its lanes; that object scopes and declares the rest. */
 export const HandedOffTurnSchema = v.object({
-  turnId: v.string(),
+  ...SettledRunSchema.entries,
   messageId: v.string(),
   status: RunEndReasonSchema,
   completed: v.boolean(),
@@ -237,6 +249,8 @@ export const HandedOffTurnSchema = v.object({
   answeredDeliveries: v.array(v.string()),
   reachableTools: v.array(v.string()),
   recordedAt: v.number(),
+  /** What the workspace decided as the turn opened, as the agent froze it then. */
+  facts: TurnFactsSchema,
 });
 
 export type HandedOffTurn = v.InferOutput<typeof HandedOffTurnSchema>;
@@ -250,6 +264,11 @@ export function declareHandoffRoster(
   parts: Pick<TerminalTurnParts, 'overflowRetry' | 'outputContinuation' | 'taskReminder'>, settled: HandedOffTurn,
 ): OwedEffect[] {
   return [...followUpTurns(settled.messageId, parts), { name: 'workspace_settle', scope: settled.messageId, lane: 'detached', input: { ...settled } }];
+}
+
+/** An agent whose lanes are its own tells the workspace its run settled, as {@link declareHandoffRoster}'s handoff does. */
+export function runSettleEffect(messageId: string, run: SettledRun): OwedEffect {
+  return { name: 'run_settle', scope: messageId, lane: 'detached', input: { ...run } };
 }
 
 /** Owed whether or not a reply ever rates the turn, only by a turn with something to learn from (`owesTurnLessons`);

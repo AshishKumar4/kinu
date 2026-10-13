@@ -162,7 +162,7 @@ export class OrchestratorAgent extends Product {
 
   /** Tool `name` called with `input`; with `abortAfterMs`, its call aborted that long in, as a Stop aborts a turn's calls. */
   async perfTool(name: string, input: string, abortAfterMs?: number): Promise<string> {
-    this.acc.context.reset();
+    // Built outside any turn, its surface accounts into ledgers of its own: no earlier call's budget carries in.
     const tool = this.getRawToolsForWorkMode('build')[name];
 
     if (tool?.execute === undefined) throw new Error(`tool ${name} is absent`);

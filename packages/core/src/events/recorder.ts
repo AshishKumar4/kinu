@@ -26,7 +26,7 @@ import { Effect } from 'effect';
 import { diagnostics, KinuError, settleSync, toKinuError } from '../obs/index';
 import { ToolOutcomeSchema } from '../types/tool-outcome';
 import { FileEditFailuresSchema } from '../types/file-edits';
-import { turnAuthor } from '../utils/ui-message';
+import { TURN_AUTHOR_METADATA_KEY } from '../utils/ui-message';
 import { CallAccountSchema, QuotaSnapshotSchema } from '../providers/quota';
 
 /** Admission identity reopens the turn; all model output lives in canonical session payloads. */
@@ -251,11 +251,9 @@ export function initRunEventTables(execRaw: RawSqlExec): void {
     PRIMARY KEY (actor_id, run_id)
   )`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_open_turns_opened ON open_turns(actor_id, opened_at DESC)`);
-  // One row per actor: a person's newest words stay one read however much automation follows.
-  execRaw(`CREATE TABLE IF NOT EXISTS operator_requests (
-    actor_id TEXT PRIMARY KEY,
-    text TEXT NOT NULL
-  )`);
+  // A person's newest words stay one read however much automation follows: their run's start is stamped `operator`.
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_run_events_operator ON run_events(actor_id)
+    WHERE type = 'run_start' AND json_valid(payload) AND json_extract(payload, '$.turn.metadata.kinuAuthor') = 'operator'`);
 }
 
 export interface StepSpendSource {
@@ -300,6 +298,59 @@ function spendTallyOf(row: Omit<SpendAggregateRow, 'source'>): SpendTally {
   return row.usd === null ? tally : { ...tally, usd: row.usd };
 }
 
+/** One read of the head: absent until read. */
+interface HeadSlot<T> {
+  known?: { readonly value: T };
+}
+
+/** The newest run and context measures of one actor, as {@link RunEventRecorder.latestRunHeader} and
+ *  {@link RunEventRecorder.readContextMeasures} read them. */
+interface RunHead {
+  /** Persisted and not yet published: a commit still open, or one rolled back. Nothing is held or advanced meanwhile. */
+  unpublished: number;
+  readonly latest: HeadSlot<{ readonly runId: string; readonly status: string | null } | null>;
+  readonly operatorWords: HeadSlot<string | null>;
+  readonly provider: HeadSlot<ContextMeasures['provider']>;
+  readonly gate: HeadSlot<ContextMeasures['gate']>;
+}
+
+const RUN_HEADS = new WeakMap<SqlExecutor, Map<string, RunHead>>();
+
+/**
+ * Each recorder over `sql` holds its actor's run head from then on. Only for a database `sql` alone writes, a Durable
+ * Object's: its one run_events writer is {@link RunEventRecorder.persist}, whatever recorder runs it, and each publish
+ * advances the head every recorder over `sql` shares. The CLI's file has other processes; its recorders ask.
+ */
+export function holdRunHeads(sql: SqlExecutor): void {
+  if (!RUN_HEADS.has(sql)) RUN_HEADS.set(sql, new Map());
+}
+
+/** Later in `ORDER BY ts DESC, rowid DESC`. */
+function newer(candidate: { readonly at: string; readonly seq: number }, held: { readonly at: string; readonly seq: number } | null): boolean {
+  return held === null || candidate.at > held.at || (candidate.at === held.at && candidate.seq > held.seq);
+}
+
+/** The newest run, as an event of `event.runId` leaves it: a run's first event or its end names it outright; an older
+ *  run's later event leaves whether it ended to its rows. */
+function advanceLatest(slot: RunHead['latest'], event: RunEvent): void {
+  const latest = slot.known;
+
+  if (latest === undefined) return;
+  const status = event.type === 'run_end' ? event.reason ?? null : null;
+
+  if (latest.value !== null && latest.value.runId === event.runId) {
+    if (event.type === 'run_end') slot.known = { value: { runId: event.runId, status } };
+  } else if (event.eventIndex === 0 || event.type === 'run_end') slot.known = { value: { runId: event.runId, status } };
+  else delete slot.known;
+}
+
+/** A held measure moves to `measured` when it is later in `ORDER BY ts DESC, rowid DESC`. */
+function advanceMeasure<M extends { readonly at: string; readonly seq: number }>(slot: HeadSlot<M | null>, measured: M): void {
+  const held = slot.known;
+
+  if (held !== undefined && newer(measured, held.value)) slot.known = { value: measured };
+}
+
 export class RunEventRecorder {
   private publications: (() => void)[] | null = null;
   private readonly listeners = new Set<RunEventListener>();
@@ -307,8 +358,49 @@ export class RunEventRecorder {
   private readonly measuredWindows = new Map<string, number | null>();
   readonly actorId: string;
 
+  private readonly head: RunHead | null;
+
   constructor(private readonly sql: SqlExecutor, private readonly actor: ActorHandle) {
     this.actorId = actor.actorId;
+    const heads = RUN_HEADS.get(sql);
+    const head = heads?.get(actor.actorId) ?? (heads === undefined ? null : { unpublished: 0, latest: {}, operatorWords: {}, provider: {}, gate: {} });
+
+    if (head !== null) heads?.set(actor.actorId, head);
+    this.head = head;
+  }
+
+  /** A published event moves the head as the reads would see it now. */
+  private advance(event: RunEvent, seq: number): void {
+    const head = this.head;
+
+    if (head === null) return;
+
+    if (event.runId !== WORKSPACE_RUN_ID) advanceLatest(head.latest, event);
+
+    if (event.type === 'run_start' && event.userMessage !== undefined && event.turn?.metadata?.[TURN_AUTHOR_METADATA_KEY] === 'operator') {
+      head.operatorWords.known = { value: event.userMessage };
+    }
+
+    const input = event.type === 'step_finish' ? event.usage?.input : undefined;
+
+    if (input !== undefined) advanceMeasure(head.provider, { tokens: input, at: event.timestamp, seq });
+
+    if (event.type === 'context_admitted') {
+      advanceMeasure(head.gate, { tokens: event.tokens ?? null, contextWindow: event.contextWindow ?? null, at: event.timestamp, seq });
+    }
+  }
+
+  /** The head's `slot` while nothing persisted waits on its publish; else `read`, held once nothing does. */
+  private fromHead<T>(slot: (head: RunHead) => HeadSlot<T>, read: () => T): T {
+    if (this.head === null || this.head.unpublished > 0) return read();
+    const held = slot(this.head);
+
+    if (held.known !== undefined) return held.known.value;
+    const value = read();
+
+    held.known = { value };
+
+    return value;
   }
 
   emit(runId: string, input: RunEventInput): RunEvent {
@@ -337,10 +429,7 @@ export class RunEventRecorder {
    * commit so no subscriber hears of an undone write.
    */
   emitDeferred(runId: string, input: RunEventInput): DeferredRunEvent {
-    return settleSync(Effect.map(this.persist(stampRunEvent(input, runId)), (event) => {
-
-      if (event.type === 'run_start') this.noteOperatorRequest(event);
-
+    return settleSync(Effect.map(this.persist(stampRunEvent(input, runId)), ({ event, seq }) => {
       if (event.type === 'run_start' && event.turn !== undefined) {
         void this.sql`INSERT INTO open_turns (actor_id, run_id, opened_at) VALUES (${this.actorId}, ${runId}, ${event.timestamp})`;
       }
@@ -351,6 +440,9 @@ export class RunEventRecorder {
         event,
         publish: () => {
           if (event.type === 'context_overflow') this.measuredWindows.set(event.model, event.window);
+          this.advance(event, seq);
+
+          if (this.head !== null) this.head.unpublished -= 1;
 
           return settleSync(Effect.forEach(this.listeners, (listener) => Effect.try({
             try: () => listener(event),
@@ -363,15 +455,18 @@ export class RunEventRecorder {
     }));
   }
 
-  private persist(ev: UnindexedEvent): Effect.Effect<RunEvent, KinuError> {
+  private persist(ev: UnindexedEvent): Effect.Effect<{ readonly event: RunEvent; readonly seq: number }, KinuError> {
     return Effect.flatMap(Effect.sync(() => {
       this.actor.assertCurrent();
 
-      return this.sql<{ event_index: number }>`INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts)
+      // Counted before it writes: a statement that throws may still have written.
+      if (this.head !== null) this.head.unpublished += 1;
+
+      return this.sql<{ event_index: number; seq: number }>`INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts)
         SELECT ${this.actorId}, ${ev.runId}, COALESCE(MAX(event_index), -1) + 1, ${ev.type},
           json_set(${JSON.stringify(ev)}, '$.eventIndex', COALESCE(MAX(event_index), -1) + 1), ${ev.timestamp}
         FROM run_events WHERE actor_id = ${this.actorId} AND run_id = ${ev.runId}
-        RETURNING event_index`[0];
+        RETURNING event_index, rowid AS seq`[0];
     }), (stored) => {
       if (stored === undefined) return Effect.fail(new KinuError('io', 'a persisted run event returned no row'));
 
@@ -381,17 +476,9 @@ export class RunEventRecorder {
         // The event just written is this isolate's typed value; only a read from storage is parsed (parseStoredRunEvent).
         const event: RunEvent = { ...ev, eventIndex: stored.event_index };
 
-        return event;
+        return { event, seq: stored.seq };
       });
     });
-  }
-
-  private noteOperatorRequest(start: Extract<RunEvent, { type: 'run_start' }>): void {
-    if (start.turn === undefined || start.userMessage === undefined) return;
-
-    if (turnAuthor({ id: start.turn.turnId, metadata: start.turn.metadata }) !== 'operator') return;
-    void this.sql`INSERT INTO operator_requests (actor_id, text) VALUES (${this.actorId}, ${start.userMessage})
-      ON CONFLICT (actor_id) DO UPDATE SET text = excluded.text`;
   }
 
   readText(runId: string, opts: BoundedRunEventQuery): StoredRunEvent[] {
@@ -507,42 +594,34 @@ export class RunEventRecorder {
   latestRunHeader(): { status: string | null; userMessage: string | null } | null {
     this.actor.assertCurrent();
 
-    const latest = this.sql<{ run_id: string }>`
-      SELECT run_id FROM run_events INDEXED BY idx_run_events_actor
-      WHERE actor_id = ${this.actorId} AND run_id != ${WORKSPACE_RUN_ID}
-      ORDER BY rowid DESC LIMIT 1`;
+    const latest = this.fromHead((head) => head.latest, () => {
+      const runId = this.sql<{ run_id: string }>`
+        SELECT run_id FROM run_events INDEXED BY idx_run_events_actor
+        WHERE actor_id = ${this.actorId} AND run_id != ${WORKSPACE_RUN_ID}
+        ORDER BY rowid DESC LIMIT 1`[0]?.run_id;
 
-    const runId = latest[0]?.run_id;
+      if (runId === undefined) return null;
 
-    if (runId === undefined) return null;
+      const [end] = this.sql<{ payload: string }>`
+        SELECT payload FROM run_events
+        WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND type = ${'run_end'}
+        ORDER BY event_index DESC LIMIT 1`;
 
-    const [end] = this.sql<{ payload: string }>`
-      SELECT payload FROM run_events
-      WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND type = ${'run_end'}
-      ORDER BY event_index DESC LIMIT 1`;
+      const sealed = end === undefined ? null : parseStoredRunEvent(end.payload);
 
-    const sealed = end === undefined ? null : parseStoredRunEvent(end.payload);
+      return { runId, status: sealed?.type === 'run_end' ? sealed.reason ?? null : null };
+    });
 
-    return { status: sealed?.type === 'run_end' ? sealed.reason ?? null : null, userMessage: this.operatorWords() };
+    return latest === null ? null : { status: latest.status, userMessage: this.operatorWords() };
   }
 
-  /** Older storage: scanned once, kept ('' for none). */
-  private operatorWords(window = 50): string | null {
-    const [asked] = this.sql<{ text: string }>`SELECT text FROM operator_requests WHERE actor_id = ${this.actorId}`;
-
-    if (asked !== undefined) return asked.text === '' ? null : asked.text;
-
-    const starts = this.sql<{ payload: string }>`
-      SELECT payload FROM run_events WHERE actor_id = ${this.actorId} AND type = ${'run_start'}
-      ORDER BY ts DESC, rowid DESC LIMIT ${window}`;
-
-    const found = starts.map((row) => parseStoredRunEvent(row.payload)).find((start) => start.type === 'run_start'
-      && start.turn !== undefined && turnAuthor({ id: start.turn.turnId, metadata: start.turn.metadata }) === 'operator');
-
-    const text = found?.type === 'run_start' ? found.userMessage ?? '' : '';
-    void this.sql`INSERT INTO operator_requests (actor_id, text) VALUES (${this.actorId}, ${text})`;
-
-    return text === '' ? null : text;
+  /** The person's newest words, as their run's start stamped `operator` recorded them; none before they first spoke. */
+  private operatorWords(): string | null {
+    // The literals match `idx_run_events_operator`'s, so the read is one seek.
+    return this.fromHead((head) => head.operatorWords, () => this.sql<{ text: string | null }>`
+      SELECT json_extract(payload, '$.userMessage') AS text FROM run_events
+      WHERE actor_id = ${this.actorId} AND type = 'run_start' AND json_valid(payload) AND json_extract(payload, '$.turn.metadata.kinuAuthor') = 'operator'
+      ORDER BY rowid DESC LIMIT 1`[0]?.text ?? null);
   }
 
   /** Auto-GEPA's durable denominator. Rows without `workMode` count nothing; a turn in the same
@@ -598,6 +677,21 @@ export class RunEventRecorder {
       ORDER BY opened_at DESC, rowid DESC LIMIT 1`[0]?.run_id ?? null;
   }
 
+  /** `runId`'s next finished step after the event at `after`: one row a read, so a long run's steps are never held at once. */
+  finishedStepAfter(runId: string, after: number): { readonly at: number; readonly parts: readonly MessagePartReference[] } | null {
+    this.actor.assertCurrent();
+
+    const row = this.sql<{ event_index: number; payload: string }>`
+      SELECT event_index, payload FROM run_events
+      WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND type = ${'step_finish' satisfies RunEventType} AND event_index > ${after}
+      ORDER BY event_index ASC LIMIT 1`[0];
+
+    if (row === undefined) return null;
+    const event = parseStoredRunEvent(row.payload);
+
+    return { at: row.event_index, parts: event.type === 'step_finish' ? event.parts : [] };
+  }
+
   /** Whether the owner's Stop reached `runId` (`stop_requested`). */
   stopRequested(runId: string): boolean {
     this.actor.assertCurrent();
@@ -640,7 +734,10 @@ export class RunEventRecorder {
     // An unparseable start row propagates.
     const start = parseStoredRunEvent(row.payload);
 
-    if (start.type !== 'run_start' || start.turn === undefined) return settleSync(Effect.fail(new KinuError('io', `run ${row.run_id} is recorded open without a turn`)));
+    if (start.type !== 'run_start') return settleSync(Effect.fail(new KinuError('io', `run ${row.run_id} is recorded open with no start`)));
+
+    // A delivered run's, which its chat restores from the run's held row and runs again: no turn of the conversation.
+    if (start.turn === undefined) return null;
 
     const recorded = this.finishedSteps(row.run_id);
 
@@ -687,20 +784,25 @@ export class RunEventRecorder {
   readContextMeasures(): ContextMeasures {
     this.actor.assertCurrent();
 
-    const provider = this.sql<{ tokens: number; ts: string; seq: number }>`
-      SELECT json_extract(payload, '$.usage.input') AS tokens, ts, rowid AS seq FROM run_events
-      WHERE actor_id = ${this.actorId} AND type = 'step_finish' AND json_extract(payload, '$.usage.input') IS NOT NULL
-      ORDER BY ts DESC, rowid DESC LIMIT 1`[0];
+    const provider = this.fromHead((head) => head.provider, () => {
+      const row = this.sql<{ tokens: number; ts: string; seq: number }>`
+        SELECT json_extract(payload, '$.usage.input') AS tokens, ts, rowid AS seq FROM run_events
+        WHERE actor_id = ${this.actorId} AND type = 'step_finish' AND json_extract(payload, '$.usage.input') IS NOT NULL
+        ORDER BY ts DESC, rowid DESC LIMIT 1`[0];
 
-    const gate = this.sql<{ tokens: number | null; contextWindow: number | null; ts: string; seq: number }>`
-      SELECT json_extract(payload, '$.tokens') AS tokens, json_extract(payload, '$.contextWindow') AS contextWindow, ts, rowid AS seq
-      FROM run_events WHERE actor_id = ${this.actorId} AND type = 'context_admitted'
-      ORDER BY ts DESC, rowid DESC LIMIT 1`[0];
+      return row === undefined ? null : { tokens: row.tokens, at: row.ts, seq: row.seq };
+    });
 
-    return {
-      provider: provider === undefined ? null : { tokens: provider.tokens, at: provider.ts, seq: provider.seq },
-      gate: gate === undefined ? null : { tokens: gate.tokens, contextWindow: gate.contextWindow, at: gate.ts, seq: gate.seq },
-    };
+    const gate = this.fromHead((head) => head.gate, () => {
+      const row = this.sql<{ tokens: number | null; contextWindow: number | null; ts: string; seq: number }>`
+        SELECT json_extract(payload, '$.tokens') AS tokens, json_extract(payload, '$.contextWindow') AS contextWindow, ts, rowid AS seq
+        FROM run_events WHERE actor_id = ${this.actorId} AND type = 'context_admitted'
+        ORDER BY ts DESC, rowid DESC LIMIT 1`[0];
+
+      return row === undefined ? null : { tokens: row.tokens, contextWindow: row.contextWindow, at: row.ts, seq: row.seq };
+    });
+
+    return { provider, gate };
   }
 
   /** The newest step a provider measured, whole: read for the cache report, not on each step's context fill. */

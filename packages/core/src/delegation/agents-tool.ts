@@ -152,10 +152,6 @@ export interface TeamToolDeps {
   rename(input: { name: string; displayName: string }): Promise<{
     ok: true; name: string; displayName: string; subordinate: SubordinateRosterEntry;
   }>;
-  /** Record a title the child settled itself. Writes nothing; refreshes roster listeners. */
-  recordTitle(input: { name: string; displayName: string }): Promise<{
-    ok: true; name: string; displayName: string;
-  }>;
   /** Create a durable subordinate; its first turn is the mission. Same role
    *  vocabulary as {@link create}. */
   spawn(input: {

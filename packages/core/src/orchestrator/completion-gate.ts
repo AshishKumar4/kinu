@@ -17,14 +17,14 @@ import { diagnostics, renderThrownChain, settle } from '../obs/index';
 export const COMPLETION_GATE_EVENT = 'completion_gate';
 
 /** The model must never read a harness check as something the user typed. */
-export const COMPLETION_GATE_HEADER =
+const COMPLETION_GATE_HEADER =
   '[Runtime check: a mechanical gate from Kinu, not written by the user.]';
 
 /** Read-only probes. A failing `git status` is dropped: it describes the probe, not the deliverable. */
 export const COMPLETION_PROBE_COMMANDS = ['pwd', 'ls -la', 'git status --short'] as const;
 
 /** The echo re-anchors the model; the full task is already in history. */
-export const COMPLETION_TASK_ECHO_MAX_CHARS = 2_000;
+const COMPLETION_TASK_ECHO_MAX_CHARS = 2_000;
 
 /** Null when nothing could be read; the caller must then not gate. */
 export function observeCompletionState(deps: {

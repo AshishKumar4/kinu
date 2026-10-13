@@ -120,7 +120,6 @@ function searchableDeps(opts: {
         ok: true, name: input.name, displayName: input.displayName,
         subordinate: { name: input.name, displayName: input.displayName, role: 'task', actorReference: null, birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
       }),
-      recordTitle: async (input) => ({ ok: true, name: input.name, displayName: input.displayName, applied: true }),
       spawn: async (input) => {
         spawns.push(`hire:${input.role}`);
 

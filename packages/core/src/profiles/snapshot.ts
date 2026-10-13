@@ -70,6 +70,11 @@ const ResolvedTurnProfileSchema = v.strictObject({
   digest: v.string(),
 });
 
+/** A turn's profile as its run froze it (design v2 §2, D5); one that no longer parses is refused, never resumed half-read. */
+export function parseResolvedTurnProfile(input: { value: unknown }): ResolvedTurnProfile {
+  return parseProfileValue(ResolvedTurnProfileSchema, "a run's frozen turn profile", input);
+}
+
 /** One durable swarm's immutable profile record. */
 export interface SwarmProfileSnapshot {
   readonly profile: ResolvedTurnProfile;

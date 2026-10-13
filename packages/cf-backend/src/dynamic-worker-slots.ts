@@ -26,8 +26,8 @@ export class AgentIsolateSlots {
 
   constructor(private readonly ledger: DurableObjectState) {}
 
-  #oursHeld(): boolean {
-    return loaderLedgerStats(this.ledger).inFlightWorkers.some((key) => this.#asked.has(key));
+  #oursHeld(ledger = loaderLedgerStats(this.ledger)): boolean {
+    return ledger.inFlightWorkers.some((key) => this.#asked.has(key));
   }
 
   #ask(key: string, by: number): void {
@@ -48,8 +48,9 @@ export class AgentIsolateSlots {
       for (;;) {
         const ledger = loaderLedgerStats(this.ledger);
 
-        // No headroom during a refusal's pause is not a full ledger: the pause ends by itself.
-        if (!this.#oursHeld() && !ledger.inFlightWorkers.includes(key) && ledger.pauseMs === 0 && ledger.headroom === 0) {
+        // No headroom during a refusal's pause is not a full ledger: the pause ends by itself. Asked last: free room is
+        // the common case, and the ledger is read once a call.
+        if (ledger.headroom === 0 && ledger.pauseMs === 0 && !ledger.inFlightWorkers.includes(key) && !this.#oursHeld(ledger)) {
           return yield* Effect.fail(this.#cap(new Error(`${REFUSED}: every slot is held`)));
         }
 
@@ -81,26 +82,17 @@ export class AgentIsolateSlots {
 
 export function agentCallsThrough(through: <A>(call: (isolate: AgentFacetCalls) => Promise<A>) => Effect.Effect<A, KinuError>): AgentFacetCalls {
   return {
-    run: (...args) => settle(through((isolate) => isolate.run(...args))),
-    submitPlan: (...args) => settle(through((isolate) => isolate.submitPlan(...args))),
-    replyPlanComment: (...args) => settle(through((isolate) => isolate.replyPlanComment(...args))),
     activePlanReview: (...args) => settle(through((isolate) => isolate.activePlanReview(...args))),
     planReviews: (...args) => settle(through((isolate) => isolate.planReviews(...args))),
     savePlanReviewAnnotations: (...args) => settle(through((isolate) => isolate.savePlanReviewAnnotations(...args))),
     dismissPlanReview: (...args) => settle(through((isolate) => isolate.dismissPlanReview(...args))),
-    decidePlanReview: (...args) => settle(through((isolate) => isolate.decidePlanReview(...args))),
     ownerQuestions: (...args) => settle(through((isolate) => isolate.ownerQuestions(...args))),
-    answerOwnerQuestions: (...args) => settle(through((isolate) => isolate.answerOwnerQuestions(...args))),
     dismissOwnerQuestions: (...args) => settle(through((isolate) => isolate.dismissOwnerQuestions(...args))),
-    enqueue: (...args) => settle(through((isolate) => isolate.enqueue(...args))),
-    send: (...args) => settle(through((isolate) => isolate.send(...args))),
     admit: (...args) => settle(through((isolate) => isolate.admit(...args))),
-    retry: (...args) => settle(through((isolate) => isolate.retry(...args))),
+    landing: (...args) => settle(through((isolate) => isolate.landing(...args))),
     sendState: (...args) => settle(through((isolate) => isolate.sendState(...args))),
     awaitSend: (...args) => settle(through((isolate) => isolate.awaitSend(...args))),
     interruptChat: (...args) => settle(through((isolate) => isolate.interruptChat(...args))),
-    stopChat: (...args) => settle(through((isolate) => isolate.stopChat(...args))),
-    queue: (...args) => settle(through((isolate) => isolate.queue(...args))),
     wake: (...args) => settle(through((isolate) => isolate.wake(...args))),
     modelSettingsChanged: (...args) => settle(through((isolate) => isolate.modelSettingsChanged(...args))),
     revertTo: (...args) => settle(through((isolate) => isolate.revertTo(...args))),
@@ -110,17 +102,28 @@ export function agentCallsThrough(through: <A>(call: (isolate: AgentFacetCalls) 
     answerTexts: (...args) => settle(through((isolate) => isolate.answerTexts(...args))),
     answer: (...args) => settle(through((isolate) => isolate.answer(...args))),
     newestFirst: (...args) => settle(through((isolate) => isolate.newestFirst(...args))),
+    armCompaction: (...args) => settle(through((isolate) => isolate.armCompaction(...args))),
+    forkHas: (...args) => settle(through((isolate) => isolate.forkHas(...args))),
+    forkPlan: (...args) => settle(through((isolate) => isolate.forkPlan(...args))),
+    forkCount: (...args) => settle(through((isolate) => isolate.forkCount(...args))),
+    forkRows: (...args) => settle(through((isolate) => isolate.forkRows(...args))),
+    forkClear: (...args) => settle(through((isolate) => isolate.forkClear(...args))),
+    forkStage: (snapshot, artifactDirectory, kind, rows) => settle(through((isolate) => isolate.forkStage(snapshot, artifactDirectory, kind, rows))),
+    forkPublish: (...args) => settle(through((isolate) => isolate.forkPublish(...args))),
     drainAnswers: (...args) => settle(through((isolate) => isolate.drainAnswers(...args))),
     lastUserMetadata: (...args) => settle(through((isolate) => isolate.lastUserMetadata(...args))),
     turnPair: (...args) => settle(through((isolate) => isolate.turnPair(...args))),
     standing: (...args) => settle(through((isolate) => isolate.standing(...args))),
     steps: (...args) => settle(through((isolate) => isolate.steps(...args))),
+    runSteps: (...args) => settle(through((isolate) => isolate.runSteps(...args))),
     listRuns: (...args) => settle(through((isolate) => isolate.listRuns(...args))),
     runSummaries: (...args) => settle(through((isolate) => isolate.runSummaries(...args))),
     runEvents: (...args) => settle(through((isolate) => isolate.runEvents(...args))),
     runEventText: (...args) => settle(through((isolate) => isolate.runEventText(...args))),
     idle: (...args) => settle(through((isolate) => isolate.idle(...args))),
+    deliverAdvice: (...args) => settle(through((isolate) => isolate.deliverAdvice(...args))),
     step: (...args) => settle(through((isolate) => isolate.step(...args))),
+    frozen: (...args) => settle(through((isolate) => isolate.frozen(...args))),
     history: (...args) => settle(through((isolate) => isolate.history(...args))),
     historyPage: (...args) => settle(through((isolate) => isolate.historyPage(...args))),
     messageCount: (...args) => settle(through((isolate) => isolate.messageCount(...args))),
@@ -138,6 +141,5 @@ export function agentCallsThrough(through: <A>(call: (isolate: AgentFacetCalls) 
     interrupt: (...args) => settle(through((isolate) => isolate.interrupt(...args))),
     recover: (...args) => settle(through((isolate) => isolate.recover(...args))),
     archivePage: (...args) => settle(through((isolate) => isolate.archivePage(...args))),
-    deliverAdvice: (...args) => settle(through((isolate) => isolate.deliverAdvice(...args))),
   };
 }

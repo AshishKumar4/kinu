@@ -10,13 +10,12 @@ import {
 } from '../src/heads/reconcile';
 import { RunEventRecorder, initRunEventTables } from '../src/events/recorder';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store';
-import { Inbox } from '../src/orchestrator/inbox';
 import {
   agentDynamicContext, renderDynamicContextBlock, DynamicContextLedger,
 } from '../src/prompting/volatile-context';
 import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host';
 import type { ModelMessage } from 'ai';
-import { present, testActorHandle } from '@kinu.run/test-utils';
+import { present, testActorHandle, hostDeliveries } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw } from './helpers';
 import { createTestActorsOver } from '@kinu.run/test-utils';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
@@ -94,7 +93,7 @@ function idleAgent() {
     setTimer: () => {},
   };
 
-  return { enqueued, inbox: new Inbox(host) };
+  return { enqueued, inbox: hostDeliveries(host).signals };
 }
 
 describe('an operator-cancelled fork is not reported as running', () => {

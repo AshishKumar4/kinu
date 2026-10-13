@@ -11,7 +11,7 @@ import { type ActorHandle, type SleepTimeUpdate, type CheckpointTurnMeta, type E
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { scratchDir, scratchPath, scriptedTurnModel, type ScriptedTurnResult, workspaceDatabase } from '@kinu.run/test-utils';
 import {
-  agentHistory, mainDatabase, orchestratorHarness, scriptedSleepTime, sentTurn, workspaceFiles, workspaceMainActor,
+  actorOverWorkspace, agentHistory, mainDatabase, orchestratorHarness, scriptedSleepTime, sentTurn, workspaceFiles, workspaceMainActor,
 } from '../helpers/actor-harness';
 import { deviceHarness, WORKSPACE } from '../helpers/device-harness';
 import { pcAgentDaemon } from '../helpers/pc-agent-daemon';
@@ -167,11 +167,13 @@ async function cloudflare(opens: BackendOpening): Promise<SharedBackend> {
   // Main's conversation is its own isolate's: any read through its window opens that isolate's database.
   await agent.getChatHistoryPage({ limit: 1 });
   const main = agentHistory(harness, workspaceMainActor(db).actorId);
+  // Its settings are written as the workspace's own stores write them: what the object holds of them moves.
+  const actor = actorOverWorkspace(agent, main.actor.actorId);
 
   return {
     name: 'cf',
     sql: wrapDatabase(db).sql,
-    actor: workspaceMainActor(db),
+    actor,
     files: workspaceFiles(agent),
     history: main.history,
     chat: { sql: wrapDatabase(mainDatabase(harness)).sql, actor: main.actor },
@@ -179,7 +181,7 @@ async function cloudflare(opens: BackendOpening): Promise<SharedBackend> {
     holdTurn: (text, mode) => gate.hold(() => sentTurn(agent, text, crypto.randomUUID(), mode)),
     sleepTime: (answer, enabled) => {
       const prompts = scriptedSleepTime(agent, answer);
-      workspaceMainActor(db).config.setSleepTimeComputeEnabled(enabled);
+      actor.config.setSleepTimeComputeEnabled(enabled);
 
       return prompts;
     },

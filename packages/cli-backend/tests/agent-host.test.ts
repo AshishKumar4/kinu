@@ -14,6 +14,7 @@ import type { LanguageModel } from 'ai';
 import type { LanguageModelV2CallOptions, LanguageModelV2StreamPart, LanguageModelV2Usage } from '@ai-sdk/provider';
 import * as v from 'valibot';
 import {
+  AgentDeliveries,
   BackgroundJobStore,
   backgroundJobWakeTrigger,
   MAX_CONCURRENT_DETACHED_JOBS,
@@ -45,7 +46,7 @@ import {
   type LocalHostedAgent,
 } from '../src/agent-host';
 import { makeExecRaw, makeSql, makeSqlExec, makeWorkspaceSchemaSql, type CLIRuntime, workspaceHome } from '../src/runtime';
-import { AwaitedList, createMemoryVfs, present, readTranscriptRows, spawnTest, workspaceDatabase } from '@kinu.run/test-utils';
+import { AwaitedList, createMemoryVfs, gatedTools, present, readTranscriptRows, spawnTest, TURN_REACH, workspaceDatabase, admitTestClaim } from '@kinu.run/test-utils';
 import { openWorkspaceCLI } from '../src/open';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import type { LocalModelResolver } from '../src/model-resolver';
@@ -83,8 +84,10 @@ function textAnswer(answer: string, usage: LanguageModelV2Usage) {
 }
 
 /** The advisor's task names what it is: a review of one finished turn. */
+/** The advisor's own call: the review is the task it was handed, its newest words. A hirer's roster may name that task
+ *  while the advisor still works, so a prompt that only mentions it is not one. */
 function isReview(options: LanguageModelV2CallOptions): boolean {
-  return JSON.stringify(options.prompt).includes('You are reviewing one finished turn');
+  return JSON.stringify(options.prompt.filter((message) => message.role === 'user').at(-1) ?? null).includes('You are reviewing one finished turn');
 }
 
 /** `review`, when given, is what a hired advisor on the same model answers its task with. */
@@ -560,6 +563,49 @@ function eventCount(dbPath: string, kind: 'peer' | 'pending'): number {
 }
 
 /** Resolves after `count` turns on `agent`: peer mail does not wait for the receiver, so the host must not close mid-turn. */
+/** A hire that asks to run `gated` for `brief`, and asks again once its owner approves; `results`: each tool result it read. */
+function approvalModel(brief: string, gated: string) {
+  const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+  const results: string[] = [];
+
+  const shellCall = (id: string) => ({
+    stream: new ReadableStream<LanguageModelV2StreamPart>({
+      start(controller) {
+        controller.enqueue({ type: 'stream-start', warnings: [] });
+        controller.enqueue({ type: 'tool-call', toolCallId: id, toolName: 'shell', input: JSON.stringify({ command: gated }) });
+        controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+        controller.close();
+      },
+    }),
+  });
+
+  const model = new TestLanguageModelV2({
+    provider: 'fake',
+    modelId: 'fake-model',
+    doGenerate: async () => textAnswer('acknowledged', usage),
+    doStream: async (options) => {
+      const prompt = JSON.stringify(options.prompt);
+      const shells = (options.tools ?? []).some((tool) => tool.name === 'shell');
+
+      // A result this run has not seen yet: the step after a call.
+      if (prompt.split('"tool-result"').length - 1 > results.length) {
+        results.push(prompt.slice(prompt.lastIndexOf('"tool-result"')));
+
+        return { stream: textStream('done', usage) };
+      }
+
+      // Its brief asks; the owner's decision, woken on its own queue, asks again once.
+      if (shells && prompt.includes(brief) && results.length === 0) return shellCall('call_ask');
+
+      if (shells && prompt.includes('APPROVED, still not run') && results.length === 1) return shellCall('call_reissue');
+
+      return { stream: textStream('ok', usage) };
+    },
+  });
+
+  return { model, results };
+}
+
 function awaitTurns(host: LocalAgentHost, agent: string, count: number): Promise<void> {
   const settled = Promise.withResolvers<void>();
   let seen = 0;
@@ -1048,6 +1094,8 @@ describe('LocalAgentHost', () => {
 
       // `programmatic` opens the child's `report` surface and is what the relay policy reads.
       expect(childTurns).toEqual([{ kind: 'programmatic', workMode: 'build', text: brief }]);
+      // A hire's assignment, as the one reach table has it (design v2 §1.6), on the CLI as on the cloud.
+      expect(gatedTools((childPrompts[0]?.tools ?? []).map((tool) => tool.name))).toEqual([...TURN_REACH.assignment]);
 
       // Exactly one user text mentions the brief and equals it; a wrapper would contain it too.
 
@@ -1136,43 +1184,7 @@ describe('LocalAgentHost', () => {
     const brief = 'Push the release.';
     // Gated (git-force-push) and harmless by construction: /dev/null is no repository, so git pushes nothing.
     const gated = 'git --git-dir=/dev/null push --force origin release';
-    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
-    const results: string[] = [];
-
-    const shellCall = (id: string) => ({
-      stream: new ReadableStream<LanguageModelV2StreamPart>({
-        start(controller) {
-          controller.enqueue({ type: 'stream-start', warnings: [] });
-          controller.enqueue({ type: 'tool-call', toolCallId: id, toolName: 'shell', input: JSON.stringify({ command: gated }) });
-          controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
-          controller.close();
-        },
-      }),
-    });
-
-    const model = new TestLanguageModelV2({
-      provider: 'fake',
-      modelId: 'fake-model',
-      doGenerate: async () => textAnswer('acknowledged', usage),
-      doStream: async (options) => {
-        const prompt = JSON.stringify(options.prompt);
-        const shells = (options.tools ?? []).some((tool) => tool.name === 'shell');
-
-        // A result this run has not seen yet: the step after a call.
-        if (prompt.split('"tool-result"').length - 1 > results.length) {
-          results.push(prompt.slice(prompt.lastIndexOf('"tool-result"')));
-
-          return { stream: textStream('done', usage) };
-        }
-
-        // Its brief asks; the owner's decision, woken on its own queue, asks again once.
-        if (shells && prompt.includes(brief) && results.length === 0) return shellCall('call_ask');
-
-        if (shells && prompt.includes('APPROVED, still not run') && results.length === 1) return shellCall('call_reissue');
-
-        return { stream: textStream('ok', usage) };
-      },
-    });
+    const { model, results } = approvalModel(brief, gated);
 
     const { state, project } = makeRoots();
     await seedAgent(state, 'root');
@@ -1203,6 +1215,57 @@ describe('LocalAgentHost', () => {
       expect(await root.listDeferredApprovals()).toEqual([]);
     } finally {
       await host.close();
+    }
+  });
+
+  // Decided in a process that hosts none of the root's hires (the interactive CLI over a daemon's workspace), the
+  // decision was written where no pass read it, so the hire never heard it.
+  test("approved from a process that hosts no hire, the hire hears the decision at its host's next pass", async () => {
+    const brief = 'Push the release.';
+    const gated = 'git --git-dir=/dev/null push --force origin release';
+    const { model, results } = approvalModel(brief, gated);
+    const { state, project } = makeRoots();
+    await seedAgent(state, 'root');
+    const refs = [{ name: 'root', cwd: project, workspaceId: 'proj' }];
+    const daemon = makeHost(state, model, refs);
+
+    try {
+      const team = await daemon.host.team('root');
+      await team.create({ name: 'courier', role: 'researcher', mission: 'Ship releases.' });
+      const asked = awaitTurns(daemon.host, 'root/courier', 1);
+      await team.assign({ name: 'courier', task: brief, mode: 'build' });
+      await asked;
+    } finally {
+      await daemon.host.close();
+    }
+
+    // The interactive process: the root's own session, over the same file, with no host of its hires.
+    const dbPath = join(state, 'root', 'agent.db');
+    const db = workspaceDatabase(dbPath);
+    const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM, cwd: project });
+    const interactive = new LocalAgentSession({ rt, db, model, onEvent: () => {} });
+
+    try {
+      const parked = await interactive.listDeferredApprovals();
+
+      expect(await interactive.decideDeferredApprovals(parked.map((action) => action.id), 'approved')).toEqual({ decided: parked.map((action) => action.id) });
+    } finally {
+      await interactive.end();
+      db.close();
+    }
+
+    const restarted = makeHost(state, model, refs);
+
+    try {
+      const woken = awaitTurns(restarted.host, 'root/courier', 1);
+      await restarted.host.tick('root/courier');
+      await woken;
+
+      // Re-issued under its own approval, the command ran: git's own refusal, not the gate's.
+      expect(results).toHaveLength(2);
+      expect(results[1]).toContain('not a git repository');
+    } finally {
+      await restarted.host.close();
     }
   });
 
@@ -1517,9 +1580,9 @@ describe('LocalAgentHost', () => {
 
       expect(notes).toEqual([{ message: note }]);
       // The reviewer is a background agent under the subordinate: view-only, no tab, one task.
-      expect(db.query<{ origin: string; tab: number; input: number; lifetime: string }, [string]>(
-        'SELECT origin, tab, input, lifetime FROM workspace_actors WHERE parent_actor_id = ?',
-      ).all(actorId)).toContainEqual({ origin: 'evolution', tab: 0, input: 0, lifetime: 'task' });
+      expect(db.query<{ origin: string; lifetime: string }, [string]>(
+        'SELECT origin, lifetime FROM workspace_actors WHERE parent_actor_id = ?',
+      ).all(actorId)).toContainEqual({ origin: 'evolution', lifetime: 'task' });
     } finally { db.close(); }
   });
 
@@ -1958,7 +2021,7 @@ describe('LocalAgentHost', () => {
     await team.assign({ name: 'ask-refiner-x1', task: 'Review the recent turns.', mode: 'build' });
     // The helper the lane hires is task-lived, and durable verbs refuse one: so it becomes one after the handoff.
     const helper = workspaceDatabase(dbPath);
-    helper.run(`UPDATE workspace_actors SET origin = 'evolution', tab = 0, input = 0, lifetime = 'task' WHERE name = 'ask-refiner-x1'`);
+    helper.run(`UPDATE workspace_actors SET origin = 'evolution', lifetime = 'task' WHERE name = 'ask-refiner-x1'`);
     helper.close();
     await held.promise;
     const closing = host.close();
@@ -2526,7 +2589,7 @@ describe('LocalAgentHost — the driver lease', () => {
     const db = workspaceDatabase(dbPath);
     const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM, cwd: project });
 
-    const claim = await rt.stores.claims.admit({
+    const claim = await admitTestClaim(rt.stores.claims, {
       runId: 'live-run', turnId: 'live-turn', workMode: 'build',
       context: rt.stores.history.context.selected() ?? rt.stores.history.context.initialize(),
       program: { kind: 'builtin', version: 0, digest: null, build: null },
@@ -2668,24 +2731,17 @@ describe('LocalAgentHost — the driver lease', () => {
     }
   });
 
-  test('opening a workspace settles a task left for a hire that is gone, with a reason, and a live actor\'s with its own', async () => {
-    // The rule lives in core; cf's copy of this row woke its workspace every lap for days (2026-09-26).
+  test("opening a workspace cancels what an agent that is gone was owed, and keeps a live agent's", async () => {
+    // cf's copy of an unvisited row woke its workspace every lap for days (2026-09-26): nothing owed a gone agent stays.
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');
     const refs: HostedAgentRef[] = [{ name: 'root', cwd: project, workspaceId: 'proj' }];
     const db = workspaceDatabase(dbPath);
 
     try {
-      const insert = db.query(
-        `INSERT INTO agent_log (actor_id, id, kind, variant, trace_id, payload, received_at)
-         VALUES (?, ?, 'event', 'subordinate_task', 'trace-orphan', '{"body":"brief"}', ?)`,
-      );
+      const owed = new AgentDeliveries(makeSql(db));
 
-      const root = present(db.query<{ actor_id: string }, []>('SELECT actor_id FROM workspace_actors WHERE parent_actor_id IS NULL').get(), 'the root actor');
-
-      insert.run('gone-actor', 'orphan-task', Date.now());
-      // Any hosted actor can be handed a task; the drain runs hires only.
-      insert.run(root.actor_id, 'unrun-task', Date.now());
+      owed.add('gone-actor', { id: 'orphan-task', input: { kind: 'turn', text: 'brief' }, authorship: 'hirer' });
     } finally {
       db.close();
     }
@@ -2701,35 +2757,21 @@ describe('LocalAgentHost — the driver lease', () => {
     const view = new Database(dbPath, { readonly: true });
 
     try {
-      const dismissed = (id: string) => view.query<{ step_idx: number | null; reason: string | null }, [string]>(
-        `SELECT step_idx, json_extract(payload, '$.__dismissed.reason') AS reason FROM agent_log WHERE id = ?`,
-      ).get(id);
-
-      const [gone, unrun] = [dismissed('orphan-task'), dismissed('unrun-task')];
-
-      // Both settled; the live actor's with a reason of its own, not the one a gone actor's task is given.
-      expect([gone?.step_idx, unrun?.step_idx]).toEqual([-2, -2]);
-      expect(unrun?.reason).not.toBe(gone?.reason);
+      expect(new AgentDeliveries(makeSql(view)).actors()).toEqual([]);
     } finally {
       view.close();
     }
   });
 
-  test('a drained event whose turn is refused goes back to pending and is delivered once', async () => {
+  test('a drain while a rival drives defers, and the next pass delivers the event once', async () => {
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');
     const refs: HostedAgentRef[] = [{ name: 'root', cwd: project, workspaceId: 'proj' }];
     const { host } = makeHost(state, streamingModel('handled'), refs, { driverKind: 'daemon' });
     let turns = 0;
-    // The drain binds rows, announces, then queues the turn; a rival arriving in that window is the queue-item contract's case.
-    let stolenBy: number | null = null;
 
     const unsubscribe = host.subscribe((_agent, event) => {
       if (event.type === 'turn-start') turns += 1;
-
-      if (event.type !== 'broadcast' || event.event.type !== 'signal_card') return;
-
-      stolenBy ??= rivalHolds(dbPath, 'interactive');
     });
 
     try {
@@ -2738,20 +2780,19 @@ describe('LocalAgentHost — the driver lease', () => {
       expect((await (await host.acquire('root')).fireDueTriggers(fireAt)).fired).toBe(1);
       expect(eventCount(dbPath, 'pending')).toBe(1);
 
+      const stolenBy = rivalHolds(dbPath, 'interactive');
+
       await host.tick('root');
 
-      expect(stolenBy).not.toBeNull();
-      expect(holderAt(dbPath)).toEqual({ pid: stolenBy ?? -1, kind: 'interactive' });
-      // Bound-and-abandoned is invisible to `pending()`; this fails if a refused turn is settled as queued.
-      expect(eventCount(dbPath, 'pending')).toBe(1);
+      // Pending, or owed the agent by a drain its debounce ran meanwhile: either way, nothing ran under the rival.
+      expect(holderAt(dbPath)).toEqual({ pid: stolenBy, kind: 'interactive' });
       expect(turns).toBe(0);
 
       await retireRivals();
 
       const ran = await host.tick('root');
       expect(ran.ran).toBe(true);
-      expect(turns).toBe(1);
-      expect(eventCount(dbPath, 'pending')).toBe(0);
+      expect({ pending: eventCount(dbPath, 'pending'), turns }).toEqual({ pending: 0, turns: 1 });
     } finally {
       unsubscribe();
       await host.close();

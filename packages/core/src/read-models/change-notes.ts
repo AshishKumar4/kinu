@@ -4,10 +4,10 @@ import type { RawSqlExec } from '../types/primitives';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { DiffAnchor, GeneralNote, PassageNote, ReviewAnnotation } from '../types/plans';
 import { admitReviewAnnotations, DiffAnchorSchema } from '../plans/annotation-admission';
-import type { JsonObject } from '../utils/json';
+import { parseJsonObject, type JsonObject } from '../utils/json';
 import { comparePaths } from './change-view';
-import { KinuError } from '../obs/index';
-import { settle, settleSync } from '../obs/effect';
+import { KinuError, toKinuError } from '../obs/index';
+import { attemptInItsWords, settle } from '../obs/effect';
 
 const CHANGE_NOTES_EVENT = 'change_notes';
 
@@ -20,9 +20,28 @@ export function initChangeNotesTable(execRaw: RawSqlExec): void {
     notes_json TEXT NOT NULL,
     PRIMARY KEY (actor_id, source)
   )`);
+  // Notes taken from their draft, owed to the chat under one message id until it holds them.
+  execRaw(`CREATE TABLE IF NOT EXISTS change_notes_outbox (
+    seq           INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor_id      TEXT NOT NULL,
+    id            TEXT NOT NULL,
+    source        TEXT NOT NULL,
+    notes_json    TEXT NOT NULL,
+    text          TEXT NOT NULL,
+    metadata_json TEXT NOT NULL,
+    UNIQUE (actor_id, id)
+  )`);
 }
 
 type NotesRuntime = Pick<AgentRuntime, 'storage' | 'actor'>;
+
+/** The chat the notes cross to. */
+export interface ChangeNotesChat {
+  /** Hands one message to the chat; a message already held under its id is held, not sent again. */
+  deliver(message: ChangeNotesMessage): Promise<void>;
+  /** Whether the chat holds the message sent under `id`: a delivery that failed may still have landed. */
+  holds(id: string): Promise<boolean>;
+}
 
 export type ChangeNotesResult =
   | { readonly ok: true; readonly notes: readonly ChangeNote[] }
@@ -223,9 +242,7 @@ function changeNotesMessage(set: NotedChanges, notes: readonly ChangeNote[]): Ch
   };
 }
 
-export function sendChangeNotes(
-  rt: NotesRuntime, set: { value: unknown }, admit: (message: ChangeNotesMessage, consume: () => void) => Promise<void>,
-): Promise<ChangeNotesResult> {
+export function sendChangeNotes(rt: NotesRuntime, set: { value: unknown }, chat: ChangeNotesChat): Promise<ChangeNotesResult> {
   return settle(Effect.gen(function* () {
     rt.actor.assertCurrent();
     const parsed = v.safeParse(NotedChangesSchema, set.value);
@@ -235,14 +252,76 @@ export function sendChangeNotes(
     const kept = keptNotes(rt, source);
 
     if (kept === null || kept.notes.length === 0) return { ok: false, error: 'there are no notes to send' } satisfies ChangeNotesResult;
+    const message = changeNotesMessage(parsed.output, kept.notes);
 
-    yield* Effect.promise(async () => admit(changeNotesMessage(parsed.output, kept.notes), () => settleSync(Effect.gen(function* () {
-      const taken = rt.storage.sql<{ source: string }>`DELETE FROM change_notes
-        WHERE actor_id = ${rt.actor.actorId} AND source = ${source} AND notes_json = ${kept.json} RETURNING source`;
+    // Taken from the draft and owed under the message's id in one write, before anything crosses to the chat: a note
+    // written meanwhile is a draft of its own, and a delivery this process does not live to finish is sent again
+    // under the same id ({@link deliverOwedChangeNotes}).
+    rt.storage.transactionSync(() => {
+      void rt.storage.sql`DELETE FROM change_notes WHERE actor_id = ${rt.actor.actorId} AND source = ${source}`;
+      void rt.storage.sql`INSERT INTO change_notes_outbox (actor_id, id, source, notes_json, text, metadata_json)
+        VALUES (${rt.actor.actorId}, ${message.id}, ${source}, ${kept.json}, ${message.text}, ${JSON.stringify(message.metadata)})`;
+    });
+    const owed: OwedChangeNotes = { message, source, json: kept.json };
 
-      if (taken.length === 0) return yield* new KinuError('unavailable', 'the notes changed while they were being sent; send them again');
-    }))));
+    // A failed delivery is asked after: notes the chat took are sent; notes it did not take are the operator's draft
+    // again, to send once more; and notes it cannot answer for stay owed, sent again under their id.
+    yield* deliverOwed(rt, owed, chat).pipe(Effect.catch((failure) => Effect.gen(function* () {
+      const asked = yield* Effect.result(attemptInItsWords('unavailable', () => chat.holds(message.id)));
+
+      if (Result.isSuccess(asked) && asked.success) return retire(rt, owed);
+
+      if (Result.isSuccess(asked)) redraft(rt, owed);
+
+      return yield* Effect.fail(failure);
+    })));
 
     return { ok: true, notes: [] } satisfies ChangeNotesResult;
+  }));
+}
+
+interface OwedChangeNotes {
+  readonly message: ChangeNotesMessage;
+  readonly source: string;
+  readonly json: string;
+}
+
+/** One owed delivery: held, it is no longer owed; failed, it stays owed and the failure is its caller's. */
+function deliverOwed(rt: NotesRuntime, owed: OwedChangeNotes, chat: ChangeNotesChat): Effect.Effect<void, KinuError> {
+  return attemptInItsWords('unavailable', () => chat.deliver(owed.message)).pipe(Effect.andThen(() => Effect.sync(() => { retire(rt, owed); })));
+}
+
+function retire(rt: NotesRuntime, owed: OwedChangeNotes): void {
+  void rt.storage.sql`DELETE FROM change_notes_outbox WHERE actor_id = ${rt.actor.actorId} AND id = ${owed.message.id}`;
+}
+
+/** Owed notes the chat never took, a draft again unless a newer draft took their place. */
+function redraft(rt: NotesRuntime, owed: OwedChangeNotes): void {
+  rt.storage.transactionSync(() => {
+    void rt.storage.sql`INSERT OR IGNORE INTO change_notes (actor_id, source, notes_json)
+      VALUES (${rt.actor.actorId}, ${owed.source}, ${owed.json})`;
+    retire(rt, owed);
+  });
+}
+
+/** Whether notes taken from a draft still wait for the chat to hold them. */
+export function owesChangeNotes(rt: NotesRuntime): boolean {
+  return rt.storage.sql<{ x: number }>`SELECT 1 AS x FROM change_notes_outbox WHERE actor_id = ${rt.actor.actorId} LIMIT 1`.length > 0;
+}
+
+/** Sends again, in the order they were taken, the notes a process took and did not live to see held. A failure leaves
+ *  its notes owed for the next pass and is reported; the rest still go. */
+export function deliverOwedChangeNotes(rt: NotesRuntime, chat: ChangeNotesChat, failed: (cause: KinuError) => void): Promise<void> {
+  return settle(Effect.gen(function* () {
+    const owed = rt.storage.sql<{ id: string; source: string; notes_json: string; text: string; metadata_json: string }>`
+      SELECT id, source, notes_json, text, metadata_json FROM change_notes_outbox WHERE actor_id = ${rt.actor.actorId} ORDER BY seq ASC`;
+
+    for (const row of owed) {
+      const message: ChangeNotesMessage = { id: row.id, text: row.text, metadata: parseJsonObject(row.metadata_json) };
+
+      yield* deliverOwed(rt, { message, source: row.source, json: row.notes_json }, chat).pipe(Effect.catch((cause) => Effect.sync(() => {
+        failed(toKinuError({ doing: 'sending change notes the chat does not hold yet', cause, otherwise: 'unavailable' }));
+      })));
+    }
   }));
 }

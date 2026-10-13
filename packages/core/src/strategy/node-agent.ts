@@ -16,7 +16,8 @@ import { stoppedByOwner } from './live-workers';
 import { HeadCapture, withHeadCaptureRecording } from '../heads/head-inference';
 import type { PublishHeadStream, ReportHeadDelta } from '../heads/head-stream';
 import type { RunInference } from '../heads/head-inference';
-import type { HostedActor } from '../state/actor-host';
+import type { SeatedActor } from '../state/actor-host';
+import type { EffectClaimDeps } from '../tools/effect-claim';
 import type { RunTurnSources } from '../orchestrator/turn-assembly';
 import { buildToolSurface } from '../tools/builtins';
 import type { ReportDeps } from '../tools/report-operations';
@@ -138,30 +139,30 @@ export interface NodeAgentDeps {
 }
 
 /** A node's `eval` over the actor it runs as, whose runtime may be rebuilt for its home. */
-export type NodeCodemode = (actor: HostedActor) => (finished: ToolSet, reach: ToolSurfaceNarrowing) => ToolSet[string];
+export type NodeCodemode = (actor: SeatedActor) => (finished: ToolSet, reach: ToolSurfaceNarrowing) => ToolSet[string];
 
 /** One node's own actor and its per-turn seams; returned by {@link NodeAgentDeps.hostNode} because each is per actor. */
-export interface HostedNodeSeat {
-  readonly actor: HostedActor;
+export interface HostedNodeSeat<A extends SeatedActor = SeatedActor> {
+  readonly actor: A;
   readonly infer: (input: HeadInput, inference: RunInference) => Promise<HeadReport>;
   /** The activation's run id; every turn this node admits is claimed under it. */
   readonly runId: string;
   readonly sources: RunTurnSources;
   readonly conversations: ConversationRecall;
   readonly jobs: StepLoopJobSeat;
+  /** Where its calls' receipts are kept: the store their effects commit to. */
+  readonly receipts: Omit<EffectClaimDeps, 'execution'>;
 }
 
 export interface NodeLoopDeps {
-  /**
-   * The hosted actor this node is: a node's turn writes a durable claim, so it needs an identity,
-   * `actor.runtime` and claimed turns on `actor.session`.
-   */
-  actor: HostedActor;
+  /** The actor this node is: a node's turn writes a durable claim, so it needs an identity and `actor.runtime`. */
+  actor: SeatedActor;
   infer: HostedNodeSeat['infer'];
   runId: string;
   sources: RunTurnSources;
   conversations: ConversationRecall;
   jobs: StepLoopJobSeat;
+  receipts: HostedNodeSeat['receipts'];
   logger: Logger;
   signal?: AbortSignal;
   clock: Clock;
@@ -262,6 +263,8 @@ function buildProposeTool(
  */
 function buildNodeToolSet(input: {
   readonly deps: NodeLoopDeps;
+  /** The node's one input: its calls claim under it, in its run. */
+  readonly turnId: string;
   readonly capture: HeadCapture;
   readonly scratch: NodeScratch;
   readonly arbitrate: NodeArbiter | null;
@@ -303,6 +306,7 @@ function buildNodeToolSet(input: {
     admitted: NODE_BUILTIN_TOOLS,
     codemodeTool: deps.codemodeTool,
     post: input.arbitrate ? buildProposeTool(input.arbitrate, scratch) : undefined,
+    effectClaims: { ...deps.receipts, execution: () => ({ turnId: input.turnId, runId: deps.runId }) },
     wrapFinished: (finished) => withHeadCaptureRecording(
       wrapToolsForBackground(finished, {
         jobRunner: input.jobRunner,
@@ -406,6 +410,7 @@ async function runNodeLoop(
   // A null arbiter is the only spelling of "no branch can be granted here".
   const tools = buildNodeToolSet({
     deps,
+    turnId: spec.headInput.id,
     capture,
     scratch,
     arbitrate: deps.arbitrate,
@@ -601,6 +606,7 @@ function nodeLoopDeps(input: NodeAgentInput, deps: NodeAgentDeps, seat: HostedNo
     infer: seat.infer,
     conversations: seat.conversations,
     jobs: seat.jobs,
+    receipts: seat.receipts,
     logger: deps.logger,
     // Real time unless the run handed a clock (D19).
     clock: deps.clock ?? REAL_CLOCK,

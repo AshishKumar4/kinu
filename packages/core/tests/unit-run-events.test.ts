@@ -665,10 +665,10 @@ describe('completedWorkTurns — the auto-GEPA cadence source query', () => {
 });
 
 describe('RunEventRecorder.latestRunHeader', () => {
-  /** A run the person started, recorded as `processTurn` records a user turn: under its own id. */
+  /** A run the person started, recorded as `processTurn` records a user turn: under its own id, stamped theirs. */
   const asked = (text: string) => ({
     type: 'run_start' as const, agentId: 'a', userMessage: text,
-    turn: { turnId: `turn-${text}`, messageId: `msg-${text}`, kind: 'user' as const, text },
+    turn: { turnId: `turn-${text}`, messageId: `msg-${text}`, kind: 'user' as const, text, metadata: { kinuAuthor: 'operator' } },
   });
 
   test('the newest real run leads, over many intervening events and the reserved aggregate', () => {
@@ -744,20 +744,6 @@ describe('RunEventRecorder.latestRunHeader', () => {
       });
     }
 
-    expect(recorder.latestRunHeader()?.userMessage).toBe('Reconcile March');
-  });
-
-  test("storage from before the table finds the person's words once, and keeps them", () => {
-    const { recorder, sql, actor } = setup();
-
-    recorder.emit('run-person', asked('Reconcile March'));
-    recorder.emit('run-person', { type: 'run_end', reason: 'completed' });
-    void sql`DELETE FROM operator_requests`;
-
-    expect(recorder.latestRunHeader()?.userMessage).toBe('Reconcile March');
-
-    // Kept, not re-derived: the run it came from is gone and the words stay.
-    void sql`DELETE FROM run_events WHERE actor_id = ${actor.actorId} AND run_id = ${'run-person'} AND type = ${'run_start'}`;
     expect(recorder.latestRunHeader()?.userMessage).toBe('Reconcile March');
   });
 });

@@ -4,7 +4,7 @@ import { REAL_CLOCK } from '@kinu.run/core';
 import { createHash } from 'node:crypto';
 import { createTestRuntime, scriptedTurnModel } from '@kinu.run/test-utils';
 import {
-  startActorTurn, prepareActorProgram, inWorkMode, runHeadInference, HeadCapture,
+  startActorTurn, prepareActorProgram, inWorkMode, runHeadInference, preparedHeadRun, HeadCapture,
   MissionGovernor, localMissionScope, initActorClaimTables,
 } from '@kinu.run/core';
 import { createSandboxedExecutor } from '../src/executor';
@@ -122,7 +122,7 @@ test('the real head caller executes its selected program and retains its produce
   rt.identity.scaffold.version = async () => 1;
   const produced: ModelMessage[] = [];
 
-  const report = await runHeadInference({
+  const report = await runHeadInference(preparedHeadRun({
     id: 'head-one', rootId: 'origin', parentId: null, depth: 0, task: 'go', mode: 'build',
     rationale: 'exercise the selected program', inheritedContext: [],
     budget: { maxDepth: 0, spawnedAt: Date.now() }, mergeStrategy: 'synthesize',
@@ -131,7 +131,7 @@ test('the real head caller executes its selected program and retains its produce
     ...headLoopSeams(rt, { model: () => chat.model }), clock: REAL_CLOCK, tools: {}, capture: new HeadCapture(),
     isAborted: () => false,
     reportMessages: messages => { produced.push(...messages); },
-  });
+  }));
 
   expect(report.summary).toBe('version one');
   expect(produced).toEqual([{ role: 'assistant', content: [{ type: 'text', text: 'version one' }] }]);
@@ -148,7 +148,7 @@ test('separate model calls inside a selected head program share its real mission
 
   if (mission === null) throw new Error('the declared mission must have a scope');
 
-  const report = await runHeadInference({
+  const report = await runHeadInference(preparedHeadRun({
     id: 'head-budgeted', rootId: 'origin', parentId: null, depth: 0, task: 'go', mode: 'build',
     rationale: 'exercise the selected program budget', inheritedContext: [],
     budget: { maxDepth: 0, spawnedAt: Date.now() }, mergeStrategy: 'synthesize',
@@ -156,7 +156,7 @@ test('separate model calls inside a selected head program share its real mission
   }, {
     ...headLoopSeams(rt, { model: () => chat.model }), clock: REAL_CLOCK, tools: {}, capture: new HeadCapture(), mission,
     isAborted: () => false,
-  });
+  }));
 
   expect(report.status).toBe('budget_exceeded');
   expect(chatModel.doStreamCalls).toHaveLength(1);

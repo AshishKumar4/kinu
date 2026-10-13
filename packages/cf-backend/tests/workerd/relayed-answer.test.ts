@@ -10,24 +10,6 @@ import { env } from 'cloudflare:test';
 import { expect, it } from 'vitest';
 import * as v from 'valibot';
 
-it("an agent's workspace call hands back its answer without the disposer it received", async () => {
-  const probe = env.AGENT_FACET_PROBE.get(env.AGENT_FACET_PROBE.idFromName('relayed-agent-answer'));
-  const seen = await probe.agentWorkspaceAnswer('relayed-agent-answer-workspace', 'scout');
-
-  expect(seen.answer).toEqual({ Authorization: 'Bearer relay-probe-key' });
-  expect(seen.carriesDisposer).toBe(false);
-});
-
-// A list arrives with the disposer too. Measured the same day, the platform did not hold a relay open for a list it
-// handed on (0 ms against 803 ms for an object); it leaves as a copy anyway, so no relayed answer carries one.
-it("an agent's workspace call hands back a list without the disposer it received", async () => {
-  const probe = env.AGENT_FACET_PROBE.get(env.AGENT_FACET_PROBE.idFromName('relayed-agent-listing'));
-  const seen = await probe.agentWorkspaceListing('relayed-agent-listing-workspace', 'scout');
-
-  expect(seen.answer).toEqual([{ key: 'openai-compat.default', kind: 'openai-compat' }]);
-  expect(seen.carriesDisposer).toBe(false);
-});
-
 it("a slate's binding call hands back its answer without the disposer it received", async () => {
   const probe = env.AGENT_FACET_PROBE.get(env.AGENT_FACET_PROBE.idFromName('relayed-slate-answer'));
   const seen = await probe.slateBindingAnswer('relayed-slate-answer-workspace');

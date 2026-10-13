@@ -62,6 +62,8 @@ describe('the roster', () => {
     await catalogTurn(workspace.agent, 'Delegate counting the paths.');
     await workspace.agent.terminalRetryPass();
     await joinHarnessFibers();
+    // The helper's turn runs in its own isolate, which tells the workspace once it rests.
+    await workspace.agent.harnessAgentsIdle();
     const before = workspace.agent.harnessDynamicWorkers.calls.length;
     const hired = (await workspace.agent.listWorkspaceAgents()).find((agent) => agent.category === 'hired');
 

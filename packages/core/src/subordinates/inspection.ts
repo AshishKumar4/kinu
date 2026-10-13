@@ -9,7 +9,6 @@ import { ChatHistoryEntrySchema } from '../types/chat';
 import type { RunEvent } from '../events/types';
 import { ERROR_CODES, KinuError, refusalOf } from '../obs/error';
 import { UsageSchema } from '../usage';
-import { tableExists } from '../identity/schema';
 import type { SqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { SubordinateRosterEntrySchema, SubordinateRosterStore, subordinateTitle } from './roster';
@@ -113,25 +112,19 @@ export async function readSubordinateInspection(
 
   switch (request.view) {
     case 'plans':
-      if (!tableExists(sql, 'plan_reviews')) return missingSubordinateHistory(path);
-
       return { view: 'plans', path, page: new PlanReviewStore(sql, actor).listPage('default', request.page) };
     case 'plan':
     case 'planTasks': {
-      if (!tableExists(sql, 'plan_reviews')) return missingSubordinateHistory(path);
       const plan = new PlanReviewStore(sql, actor).get(request.id, request.revision);
 
       if (!plan || plan.sessionId !== 'default') return missingSubordinateHistory(path);
 
       if (request.view === 'plan') return { view: 'plan', path, plan };
 
-      if (!tableExists(sql, 'agent_tasks')) return missingSubordinateHistory(path);
-
       return { view: 'planTasks', path, tasks: readPlanTasks(sql, actor, plan) };
     }
 
     case 'children': {
-      if (!tableExists(sql, 'actor_subordinates')) return missingSubordinateHistory(path);
       const page = new SubordinateRosterStore(raw, actor).listPage(request.page);
 
       const items = page.items.map((entry) => ({
@@ -143,15 +136,10 @@ export async function readSubordinateInspection(
     }
 
     case 'history':
-      if (!tableExists(sql, 'conversation_entries')) return missingSubordinateHistory(path);
-
       return { view: 'history', path, page: await getChatHistoryPage(transcriptFor(actor), request.page) };
     case 'runs':
-      if (!tableExists(sql, 'run_events')) return missingSubordinateHistory(path);
-
       return { view: 'runs', path, page: getRunSummaries(new RunEventRecorder(sql, actor), request.page.cursor, request.page.limit) };
     case 'events': {
-      if (!tableExists(sql, 'run_events')) return missingSubordinateHistory(path);
       const recorder = new RunEventRecorder(sql, actor);
 
       if (recorder.runSeq(request.runId) === null) return missingSubordinateHistory(path);
@@ -173,8 +161,6 @@ export async function readSubordinateInspection(
 
 /** A sealed output read is independent of roster, plan and timeline projections. */
 async function readStepInspection(sql: SqlExecutor, actor: ActorHandle, transcriptFor: SubordinateInspectionSource['transcriptFor'], request: Extract<SubordinateInspectionRequest, { view: 'step' }>): Promise<SubordinateInspectionResult> {
-  if (!tableExists(sql, 'run_events') || !tableExists(sql, 'session_messages')) return missingSubordinateHistory(request.path);
-
   const event = new RunEventRecorder(sql, actor).read(request.runId, { since: request.eventIndex, limit: 1 })[0];
 
   if (event?.type !== 'step_finish' || event.eventIndex !== request.eventIndex) return missingSubordinateHistory(request.path);

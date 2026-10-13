@@ -56,6 +56,13 @@ export const FORK_ROW_SECTIONS = [
   'appRows',
 ] as const satisfies readonly ForkRowSection[];
 
+/** The sections the conversation's store holds, in crossing order. */
+export const FORK_CONVERSATION_SECTIONS = [
+  'sessionMessages', 'conversationEntries', 'conversationEntryParts', 'contextMembers', 'ownerQuestions',
+] as const satisfies readonly ForkRowSection[];
+
+export type ForkConversationSection = (typeof FORK_CONVERSATION_SECTIONS)[number];
+
 /** One value per section; the compiler holds it to every section. */
 export function perSection<T>(make: (section: ForkRowSection) => T): Record<ForkRowSection, T> {
   return {
@@ -74,39 +81,48 @@ export function perSection<T>(make: (section: ForkRowSection) => T): Record<Fork
   };
 }
 
-/** What a section reads on the source: its main actor's rows, the cut's plan, payloads relative to its directory. */
-export interface ForkSectionSource {
+/** What a conversation section reads on the source: its main actor's rows, the cut's plan, payloads relative to its
+ *  directory. */
+export interface ForkStoreSource {
   readonly sql: SqlExecutor;
   readonly actorId: string;
   readonly plan: ForkConversationPlan;
   readonly artifactDirectory: string;
-  /** The `db` tool's store as the source's main actor reads it. */
+}
+
+/** What a workspace section reads on the source: the conversation's view, and the `db` tool's store as the source's
+ *  main actor reads it. */
+export interface ForkSectionSource extends ForkStoreSource {
   readonly appData: ForkAppData;
 }
 
-/** Where a section's rows land on the target. */
-export interface ForkSectionTarget {
+/** Where a conversation section's rows land on the target. */
+export interface ForkStoreTarget {
   readonly sql: SqlExecutor;
   readonly actorId: string;
   /** A carried payload, re-rooted under the target's own artifact directory. */
   readonly artifactPath: (relative: string) => string;
-  /** The fork's one working context, made on first use. */
-  readonly context: () => string;
-  /** The `db` tool's store as the target's main actor writes it, opened on first use: the actor is born at `begin`. */
+  /** When the fork lands: its working context's revision is recorded at it. */
+  readonly now: number;
+}
+
+/** Where a workspace section's rows land on the target: the conversation's, and the `db` tool's store as the target's
+ *  main actor writes it, opened on first use (the actor is born at `begin`). */
+export interface ForkSectionTarget extends ForkStoreTarget {
   readonly appData: () => ForkAppData;
 }
 
-export interface ForkSection<Row> {
+export interface ForkSection<Row, Source extends ForkStoreSource = ForkSectionSource, Target extends ForkStoreTarget = ForkSectionTarget> {
   readonly rows: v.GenericSchema<Row>;
   /** The source's rows, one at a time so the sender holds a frame, never a section. */
-  select(source: ForkSectionSource): Iterable<Row>;
+  select(source: Source): Iterable<Row>;
   /** How many `select` yields, without reading the rows twice; counted by selecting when absent. */
-  count?(source: ForkSectionSource): number;
+  count?(source: Source): number;
   /** Payload bytes on the wire, which the frame budget bounds. */
   bytes(row: Row): number;
-  stage(target: ForkSectionTarget, rows: readonly Row[]): void;
+  stage(target: Target, rows: readonly Row[]): void;
   /** Empties what an abandoned attempt landed where fork-policy.ts cannot name the tables. */
-  reset?(target: ForkSectionTarget): void;
+  reset?(target: Target): void;
 }
 
 /**
@@ -212,31 +228,14 @@ function* craftedToolRows({ sql }: ForkSectionSource): Iterable<ForkCraftedToolR
 /** Every section's declaration, each over its own row. */
 export type ForkSections = { readonly [K in ForkRowSection]: ForkSection<ForkRows[K]> };
 
-export const FORK_SECTIONS: ForkSections = {
-  agentConfig: {
-    rows: ForkConfigRowSchema,
-    select: configRows,
-    bytes: (row) => utf8Bytes(row.key) + utf8Bytes(row.value),
-    stage: ({ sql }, rows) => {
-      const { config } = openWorkspaceMainActor(sql);
+/** A conversation section's declaration, over the conversation's store alone: it holds no `db` tool data, which only
+ *  the workspace's sections read and write. */
+export type ForkConversationDeclaration<Row> = ForkSection<Row, ForkStoreSource, ForkStoreTarget>;
 
-      for (const row of rows) config.set(row.key, row.value);
-    },
-  },
-  craftedTools: {
-    rows: ForkCraftedToolRowSchema,
-    select: craftedToolRows,
-    bytes: (row) => utf8Bytes(row.name) + utf8Bytes(row.description) + utf8Bytes(row.code),
-    stage: ({ sql }, rows) => {
-      for (const row of rows) {
-        void sql`
-          INSERT OR REPLACE INTO crafted_tools (name, description, code, created_at, updated_at)
-          VALUES (${row.name}, ${row.description}, ${row.code}, ${row.created_at}, ${row.updated_at})
-        `;
-        markStoreChanged(sql);
-      }
-    },
-  },
+/** Every conversation section's declaration, each over its own row. */
+export type ForkConversationDeclarations = { readonly [K in ForkConversationSection]: ForkConversationDeclaration<ForkRows[K]> };
+
+export const FORK_CONVERSATION_DECLARATIONS: ForkConversationDeclarations = {
   sessionMessages: {
     rows: ForkSessionMessageRowSchema,
     select: function* ({ sql, actorId, plan, artifactDirectory }) {
@@ -303,6 +302,75 @@ export const FORK_SECTIONS: ForkSections = {
       }
     },
   },
+  contextMembers: {
+    rows: ForkContextMemberRowSchema,
+    select: ({ plan }) => plan.members,
+    count: ({ plan }) => plan.members.length,
+    bytes: (row) => utf8Bytes(row.entry_id) + utf8Bytes(row.message_id),
+    // The restored working context: one revision of a fresh context with the cut revision's membership.
+    stage: ({ sql, actorId, now }, rows) => {
+      const contextId = forkContext(sql, actorId, now);
+
+      for (const row of rows) {
+        void sql`
+          INSERT INTO context_memberships (actor_id, context_id, entry_id, from_revision, to_revision, position, message_id)
+          VALUES (${actorId}, ${contextId}, ${row.entry_id}, ${FORK_CONTEXT_REVISION}, ${null}, ${row.position}, ${row.message_id})
+        `;
+      }
+    },
+  },
+  ownerQuestions: {
+    rows: ForkOwnerQuestionRowSchema,
+    select: ({ sql }) => actorRows(sql, (actorId, after) => {
+      const found = sql<ForkOwnerQuestionRow & { rowid: number }>`
+        SELECT rowid, id, call_id, turn_id, mode, tier, reason_json, digest, questions_json, status, answers_json, asked_at, closed_at
+        FROM owner_questions WHERE actor_id = ${actorId} AND status != 'open' AND rowid > ${after} ORDER BY rowid LIMIT 1
+      `[0];
+
+      return found === undefined ? undefined : { rowid: found.rowid, row: v.parse(ForkOwnerQuestionRowSchema, found) };
+    }),
+    bytes: (row) => utf8Bytes(row.questions_json) + utf8Bytes(row.answers_json) + utf8Bytes(row.reason_json) + utf8Bytes(row.call_id) + utf8Bytes(row.turn_id),
+    // Resumed as they land: the fork's conversation goes on from where the source's was, and owes no turn of its own.
+    stage: ({ sql, actorId }, rows) => {
+      for (const row of rows) {
+        void sql`
+          INSERT INTO owner_questions (actor_id, id, call_id, turn_id, mode, tier, reason_json, digest, questions_json, status, answers_json,
+            asked_at, closed_at, resumed_at)
+          VALUES (${actorId}, ${row.id}, ${row.call_id}, ${row.turn_id}, ${row.mode}, ${row.tier}, ${row.reason_json}, ${row.digest},
+            ${row.questions_json}, ${row.status}, ${row.answers_json}, ${row.asked_at}, ${row.closed_at}, ${row.closed_at ?? row.asked_at})
+        `;
+      }
+
+      markStoreChanged(sql);
+    },
+  },
+};
+
+export const FORK_SECTIONS: ForkSections = {
+  agentConfig: {
+    rows: ForkConfigRowSchema,
+    select: configRows,
+    bytes: (row) => utf8Bytes(row.key) + utf8Bytes(row.value),
+    stage: ({ sql }, rows) => {
+      const { config } = openWorkspaceMainActor(sql);
+
+      for (const row of rows) config.set(row.key, row.value);
+    },
+  },
+  craftedTools: {
+    rows: ForkCraftedToolRowSchema,
+    select: craftedToolRows,
+    bytes: (row) => utf8Bytes(row.name) + utf8Bytes(row.description) + utf8Bytes(row.code),
+    stage: ({ sql }, rows) => {
+      for (const row of rows) {
+        void sql`
+          INSERT OR REPLACE INTO crafted_tools (name, description, code, created_at, updated_at)
+          VALUES (${row.name}, ${row.description}, ${row.code}, ${row.created_at}, ${row.updated_at})
+        `;
+        markStoreChanged(sql);
+      }
+    },
+  },
   lessons: {
     rows: ForkLessonRowSchema,
     select: lessonRows,
@@ -361,31 +429,6 @@ export const FORK_SECTIONS: ForkSections = {
     },
   },
   // The answers the carried calls read: the conversation keeps each call, and the repair reads its result from here.
-  ownerQuestions: {
-    rows: ForkOwnerQuestionRowSchema,
-    select: ({ sql }) => actorRows(sql, (actorId, after) => {
-      const found = sql<ForkOwnerQuestionRow & { rowid: number }>`
-        SELECT rowid, id, call_id, turn_id, mode, tier, reason_json, digest, questions_json, status, answers_json, asked_at, closed_at
-        FROM owner_questions WHERE actor_id = ${actorId} AND status != 'open' AND rowid > ${after} ORDER BY rowid LIMIT 1
-      `[0];
-
-      return found === undefined ? undefined : { rowid: found.rowid, row: v.parse(ForkOwnerQuestionRowSchema, found) };
-    }),
-    bytes: (row) => utf8Bytes(row.questions_json) + utf8Bytes(row.answers_json) + utf8Bytes(row.reason_json) + utf8Bytes(row.call_id) + utf8Bytes(row.turn_id),
-    // Resumed as they land: the fork's conversation goes on from where the source's was, and owes no turn of its own.
-    stage: ({ sql, actorId }, rows) => {
-      for (const row of rows) {
-        void sql`
-          INSERT INTO owner_questions (actor_id, id, call_id, turn_id, mode, tier, reason_json, digest, questions_json, status, answers_json,
-            asked_at, closed_at, resumed_at)
-          VALUES (${actorId}, ${row.id}, ${row.call_id}, ${row.turn_id}, ${row.mode}, ${row.tier}, ${row.reason_json}, ${row.digest},
-            ${row.questions_json}, ${row.status}, ${row.answers_json}, ${row.asked_at}, ${row.closed_at}, ${row.closed_at ?? row.asked_at})
-        `;
-      }
-
-      markStoreChanged(sql);
-    },
-  },
   appTables: {
     rows: ForkAppTableRowSchema,
     select: ({ appData }) => appData.tables().map(({ declaration, createdAt }) => ({ declaration, created_at: createdAt })),
@@ -417,33 +460,55 @@ export const FORK_SECTIONS: ForkSections = {
       }
     },
   },
-  contextMembers: {
-    rows: ForkContextMemberRowSchema,
-    select: ({ plan }) => plan.members,
-    count: ({ plan }) => plan.members.length,
-    bytes: (row) => utf8Bytes(row.entry_id) + utf8Bytes(row.message_id),
-    // The restored working context: one revision of a fresh context with the cut revision's membership.
-    stage: ({ sql, actorId, context }, rows) => {
-      const contextId = context();
-
-      for (const row of rows) {
-        void sql`
-          INSERT INTO context_memberships (actor_id, context_id, entry_id, from_revision, to_revision, position, message_id)
-          VALUES (${actorId}, ${contextId}, ${row.entry_id}, ${FORK_CONTEXT_REVISION}, ${null}, ${row.position}, ${row.message_id})
-        `;
-      }
-    },
-  },
+  ...FORK_CONVERSATION_DECLARATIONS,
 };
 
 /** Rows `section` selects on the source. */
 export function forkSectionCount(kind: ForkRowSection, source: ForkSectionSource): number {
-  const declared = FORK_SECTIONS[kind];
+  return sectionCount(FORK_SECTIONS[kind], source);
+}
 
+/** How many rows a section sends from `source`, never holding them. */
+export function sectionCount<Source extends ForkStoreSource>(declared: Pick<ForkSection<unknown, Source>, 'count' | 'select'>, source: Source): number {
   if (declared.count !== undefined) return declared.count(source);
   let total = 0;
 
   for (const _row of declared.select(source)) total += 1;
 
   return total;
+}
+
+/** The fork's own context, created once and read back (membership and publication may run on different activations).
+ *  An existing selection is adopted so the target never has two. */
+export function forkContext(sql: SqlExecutor, actorId: string, now: number): string {
+  const selected = sql<{ context_id: string }>`
+    SELECT context_id FROM actor_context_selection WHERE actor_id = ${actorId}
+  `[0]?.context_id;
+
+  const contextId = selected ?? crypto.randomUUID();
+
+  if (selected === undefined) {
+    void sql`
+      INSERT INTO actor_contexts (actor_id, context_id)
+      VALUES (${actorId}, ${contextId})
+    `;
+  }
+
+  const revision = sql<{ revision: number }>`
+    SELECT revision FROM context_revisions
+    WHERE actor_id = ${actorId} AND context_id = ${contextId} AND revision = ${FORK_CONTEXT_REVISION}
+  `[0];
+
+  if (revision === undefined) {
+    void sql`
+      INSERT INTO context_revisions (actor_id, context_id, revision, author, cause, turn_id, proposal_id, recorded_at)
+      VALUES (${actorId}, ${contextId}, ${FORK_CONTEXT_REVISION}, ${actorId}, ${'fork'}, ${null}, ${null}, ${now})
+    `;
+  }
+
+  if (selected === undefined) {
+    void sql`INSERT INTO actor_context_selection (actor_id, context_id) VALUES (${actorId}, ${contextId})`;
+  }
+
+  return contextId;
 }

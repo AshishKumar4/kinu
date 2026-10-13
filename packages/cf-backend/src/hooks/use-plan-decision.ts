@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Cause, Effect } from "effect";
-import { PlanDecisionOutcomeSchema, planHandoffShortfall, type PlanReview, type Rpc } from "@kinu.run/core";
+import { OwedIntentSchema, PlanDecisionOutcomeSchema, planHandoffShortfall, type PlanReview, type Rpc } from "@kinu.run/core";
 import * as v from "valibot";
 import { attempt, KinuError, renderThrownChain, settle } from "@kinu.run/core/obs";
 
@@ -13,6 +13,8 @@ export interface PlanDecisionInput {
   readonly editable: boolean;
   /** Decided revision whose wake is still owed: retry without resaving. */
   readonly handoffPending: boolean;
+  /** A decision on its way to the agent's wake (`owedIntents`): none is made again until the agent takes it. */
+  readonly owed?: boolean;
   readonly rpc: Rpc;
   /** False prevents the decision. */
   readonly save: () => Promise<boolean>;
@@ -21,13 +23,13 @@ export interface PlanDecisionInput {
 
 export interface PlanDecision {
   readonly busy: DecisionBusy;
-  /** Synchronous guard before React commits the busy state. */
+  /** Synchronous guard before React commits the busy state; true while a decision is on its way too. */
   readonly inFlight: () => boolean;
   readonly decide: (decision: PlanDecisionKind) => Promise<void>;
 }
 
 /** Save the comments before the single decision wake; the review renders what they send. */
-export function usePlanDecision({ plan, editable, handoffPending, rpc, save, onError }: PlanDecisionInput): PlanDecision {
+export function usePlanDecision({ plan, editable, handoffPending, owed = false, rpc, save, onError }: PlanDecisionInput): PlanDecision {
   const [busy, setBusy] = useState<DecisionBusy>(null);
   const inFlight = useRef(false);
 
@@ -37,7 +39,7 @@ export function usePlanDecision({ plan, editable, handoffPending, rpc, save, onE
   }, [plan?.id, plan?.revision]);
 
   const decide = useCallback(async (decision: PlanDecisionKind) => {
-    if (!plan || (!editable && !handoffPending) || inFlight.current) return;
+    if (!plan || owed || (!editable && !handoffPending) || inFlight.current) return;
     inFlight.current = true;
     setBusy(decision === "approve" ? "approve" : "request");
     onError(null);
@@ -45,8 +47,11 @@ export function usePlanDecision({ plan, editable, handoffPending, rpc, save, onE
     return settle(Effect.gen(function* () {
       if (editable && !(yield* attempt({ doing: "saving plan annotations", otherwise: "io" }, save))) return;
 
-      const result = v.parse(PlanDecisionOutcomeSchema, yield* attempt({ doing: "deciding a plan review", otherwise: "io" }, () =>
+      const result = v.parse(v.union([OwedIntentSchema, PlanDecisionOutcomeSchema]), yield* attempt({ doing: "deciding a plan review", otherwise: "io" }, () =>
         rpc<unknown>("decidePlanReview", [plan.id, plan.revision, decision])));
+
+      // On its way to the agent's wake: the review shows it so (`owedIntents`) until the agent takes it.
+      if ("owed" in result) return;
 
       if (!result.ok) return yield* Effect.fail(new KinuError("bad_input", result.error));
       const shortfall = planHandoffShortfall(result);
@@ -64,9 +69,9 @@ export function usePlanDecision({ plan, editable, handoffPending, rpc, save, onE
         setBusy(null);
       })),
     ));
-  }, [editable, handoffPending, onError, plan, rpc, save]);
+  }, [editable, handoffPending, owed, onError, plan, rpc, save]);
 
-  const isInFlight = useCallback(() => inFlight.current, []);
+  const isInFlight = useCallback(() => owed || inFlight.current, [owed]);
 
   return { busy, inFlight: isInFlight, decide };
 }

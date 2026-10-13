@@ -148,7 +148,7 @@ export function filterToolSetBySkills(tools: ToolSet, activeSkills: ActiveSkillS
  * Rendered fresh each step, so it never enters the cacheable prefix, from the workspace's newest facts and the account's,
  * which the turn read once (`TurnAssemblySources.accountFacts`): the block's bytes change only when a fact does.
  */
-export function renderFactsForTurn(facts: FactsStore, account: readonly Fact[] = []): string | undefined {
+export function renderFactsForTurn(facts: Pick<FactsStore, 'recentTopK' | 'all'>, account: readonly Fact[] = []): string | undefined {
   // Every key this workspace holds suppresses the account's, not only the newest twenty the block shows.
   const held = account.length === 0 ? new Set<string>() : new Set(facts.all().map((fact) => fact.key));
   const shared = account.filter((fact) => !held.has(fact.key));

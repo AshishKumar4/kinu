@@ -12,8 +12,8 @@ import * as v from 'valibot';
 import type { PrepareStepContext } from '../extension';
 import type { BackendHost, EnqueueTurnResult, ProgrammaticTurn, PromptFile } from '../types/backend-host';
 import type {
-  AgentInbox, AgentSignal, SendOutcome, SettledSignals, SignalCardState,
-  SignalUndeliveredReason, UserSignalIdentity,
+  AgentSignal, SendOutcome, SettledSignals, SignalCardState,
+  UserSignalIdentity,
 } from '../types/signals';
 import { SIGNAL_ID_METADATA_KEY, USER_MESSAGE_SIGNAL_KIND } from '../types/signals';
 import { StepInjections } from '../prompting/step-injections';
@@ -101,7 +101,7 @@ export function describeLandedSteers(
     id: steer.id ?? `steer-${nanoid(12)}`,
     text: steer.text,
     atStep,
-    metadata: { [STEER_METADATA_KEY]: true, [STEER_STEP_METADATA_KEY]: atStep },
+    metadata: { [STEER_METADATA_KEY]: true, [STEER_STEP_METADATA_KEY]: atStep, [TURN_AUTHOR_METADATA_KEY]: 'operator' },
     ...(steer.files !== undefined && { files: steer.files }),
   }));
 }
@@ -129,6 +129,26 @@ export function initPendingSendTables(execRaw: RawSqlExec): void {
     filename   TEXT NOT NULL,
     media_type TEXT NOT NULL,
     url        TEXT NOT NULL
+  )`);
+  // Per producer, the newest delivery it took and the newest a Stop cut off (design v3 C): deliveries cross in their
+  // producer's order, so one at or below either mark was answered before, or was cancelled.
+  execRaw(`CREATE TABLE IF NOT EXISTS input_marks (
+    actor_id      TEXT NOT NULL,
+    producer      TEXT NOT NULL CHECK (producer IN ('workspace','self')),
+    taken_through INTEGER NOT NULL DEFAULT 0,
+    cutoff        INTEGER NOT NULL DEFAULT 0,
+    applied_json  TEXT,
+    PRIMARY KEY (actor_id, producer)
+  )`);
+  // A programmatic turn its producer heard queued, held until its turn settles: `id` is its idempotency key.
+  execRaw(`CREATE TABLE IF NOT EXISTS queued_turns (
+    seq           INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor_id      TEXT NOT NULL,
+    id            TEXT NOT NULL,
+    text          TEXT NOT NULL,
+    metadata_json TEXT,
+    yields        INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (actor_id, id)
   )`);
 }
 
@@ -208,6 +228,88 @@ export class PendingSendStore {
       WHERE actor_id = ${this.actorId}
       ORDER BY seq ASC`;
   }
+
+  /** A programmatic turn, held before its producer hears it queued; a repeat of its key holds nothing new. */
+  reserveTurn(turn: { readonly id: string; readonly text: string; readonly metadata?: JsonObject; readonly yieldsToUserMessage?: boolean }): void {
+    const metadata = turn.metadata === undefined ? null : JSON.stringify(turn.metadata);
+
+    void this.sql`INSERT OR IGNORE INTO queued_turns (actor_id, id, text, metadata_json, yields)
+      VALUES (${this.actorId}, ${turn.id}, ${turn.text}, ${metadata}, ${turn.yieldsToUserMessage === true ? 1 : 0})`;
+  }
+
+  /** Whether a programmatic turn is held under `id`: a delivery repeated before its turn ran is the same one. */
+  hasTurn(id: string): boolean {
+    return this.sql<{ id: string }>`SELECT id FROM queued_turns WHERE actor_id = ${this.actorId} AND id = ${id}`.length > 0;
+  }
+
+  /** Its turn settled, ran or not: nothing of it is owed to a later process. */
+  retireTurn(id: string): void {
+    void this.sql`DELETE FROM queued_turns WHERE actor_id = ${this.actorId} AND id = ${id}`;
+  }
+
+  /** Where a delivery stands against its producer's marks: cut off by a Stop, answered before, or new. */
+  markOf(producer: InputProducer, seq: number): 'cancelled' | 'duplicate' | 'new' {
+    const marks = this.sql<{ taken_through: number; cutoff: number }>`
+      SELECT taken_through, cutoff FROM input_marks WHERE actor_id = ${this.actorId} AND producer = ${producer}`[0];
+
+    if (marks === undefined) return 'new';
+
+    if (seq <= marks.cutoff) return 'cancelled';
+
+    return seq <= marks.taken_through ? 'duplicate' : 'new';
+  }
+
+  /**
+   * The delivery `seq` is held in this store now, or, an owner's intent, applied, with what it did (`applied`, as JSON).
+   * Only the newest is kept, under `taken_through`: its producer crosses in order (only a delivery newer than every one
+   * taken is taken) and stops at a crossing that fails, so the one it may cross again, its answer lost, is the newest.
+   */
+  took(producer: InputProducer, seq: number, applied: string | null = null): void {
+    void this.sql`INSERT INTO input_marks (actor_id, producer, taken_through, applied_json)
+      VALUES (${this.actorId}, ${producer}, ${seq}, ${applied})
+      ON CONFLICT (actor_id, producer) DO UPDATE SET taken_through = MAX(taken_through, excluded.taken_through),
+        applied_json = excluded.applied_json`;
+  }
+
+  /** What the intent `seq` did, as {@link took} kept it: null for any other delivery. */
+  applied(producer: InputProducer, seq: number): string | null {
+    return this.sql<{ applied_json: string | null }>`
+      SELECT applied_json FROM input_marks WHERE actor_id = ${this.actorId} AND producer = ${producer} AND taken_through = ${seq}`[0]?.applied_json ?? null;
+  }
+
+  /** A Stop's cutoff: nothing its producer committed at or below `seq` is taken after. */
+  cut(producer: InputProducer, seq: number): void {
+    void this.sql`INSERT INTO input_marks (actor_id, producer, cutoff) VALUES (${this.actorId}, ${producer}, ${seq})
+      ON CONFLICT (actor_id, producer) DO UPDATE SET cutoff = MAX(cutoff, excluded.cutoff)`;
+  }
+
+  /** Every held programmatic turn, in the order its producers heard them queued. */
+  restoreTurns(): QueuedTurnRow[] {
+    return this.sql<{ id: string; text: string; metadata_json: string | null; yields: number }>`
+      SELECT id, text, metadata_json, yields FROM queued_turns WHERE actor_id = ${this.actorId} ORDER BY seq ASC`
+      .map((row) => ({
+        id: row.id, text: row.text,
+        ...(row.metadata_json !== null && { metadata: parseJsonObject(row.metadata_json) }),
+        ...(row.yields === 1 && { yieldsToUserMessage: true }),
+      }));
+  }
+}
+
+/** What a Stop takes from the running turn: the steers back to their composer, the delivered signals' ids cancelled. */
+export interface InterruptedInputs {
+  readonly steers: UserSteer[];
+  readonly cancelled: string[];
+}
+
+/** Where a delivery came from, whose order its marks follow: the agent's workspace, or its own process's producers. */
+export type InputProducer = 'workspace' | 'self';
+
+/** A programmatic turn its producer heard queued, as a later process restores it. */
+export interface QueuedTurnRow {
+  readonly id: string;
+  readonly text: string;
+  readonly metadata?: JsonObject;
+  readonly yieldsToUserMessage?: boolean;
 }
 
 /** One acknowledged send; `turnId` is null while idle-queued. */
@@ -235,6 +337,11 @@ export interface UserSteerDeps {
 const SignalIdMetadataSchema = v.object({
   [SIGNAL_ID_METADATA_KEY]: v.optional(v.string()),
 });
+
+/** A person's words as the chat sends them: what the Inbox alone admits (a delivery reaches it through {@link Inbox.landMidTurn}). */
+export interface UserWords extends AgentSignal {
+  readonly user: UserSignalIdentity;
+}
 
 /** Producers never see or set `cardId`. */
 interface DeliveredSignal extends AgentSignal {
@@ -267,11 +374,9 @@ export function signalCardId(idempotencyKey: string): string {
   return `sig:${idempotencyKey}`;
 }
 
-export class Inbox implements AgentInbox {
+export class Inbox {
   private pending: DeliveredSignal[] = [];
   private absorbed: DeliveredSignal[] = [];
-  /** Previous turn's absorbed events, held one turn so a continuation turn can re-absorb them. */
-  private settled: DeliveredSignal[] = [];
   /** The host enqueue in flight until the turn opens; while set, a message rides that turn's first step. */
   private starting: Promise<EnqueueTurnResult> | null = null;
   /** The cards each step of this turn took in, by step number, until that step ends and they are seen. */
@@ -310,38 +415,39 @@ export class Inbox implements AgentInbox {
     return this.starting !== null || this.host.turnInFlight();
   }
 
-  /** Settles once the turn being started has reached its host, however the host answered. */
-  async handedOver(): Promise<void> {
-    await Promise.allSettled([this.starting]);
-  }
-
   /**
-   * The busy read and buffer push are synchronous. A signal with `idempotencyKey` derives its card id from it,
-   * so a collapsed re-delivery never opens a second, forever-pending card.
+   * A person's words, as the chat admits them: queued for the running turn's next step, or opening one. Anything else
+   * reaches the agent only as a delivery (design v2 §1), which its chat's admission lands here ({@link landMidTurn}) or
+   * queues as a turn of its own. The busy read and buffer push are synchronous.
    */
-  send(signal: AgentSignal): Promise<SendOutcome> {
-    const cardId = signal.idempotencyKey ? signalCardId(signal.idempotencyKey) : `sig-${nanoid()}`;
-    const delivered: DeliveredSignal = { ...signal, cardId };
-    // Read once, before any await.
-    const { busy } = this;
+  send(words: UserWords): Promise<SendOutcome> {
+    const delivered: DeliveredUserSignal = { ...words, cardId: words.idempotencyKey ? signalCardId(words.idempotencyKey) : `sig-${nanoid()}` };
 
-    if (isUserSignal(delivered)) {
-      if (!busy) return this.queueUsers([delivered], { idempotent: false });
-      this.steers.onAccept?.({ ...toUserSteer(delivered), id: delivered.user.id, mode: delivered.user.mode });
-      this.pending.push(delivered);
-      this.host.broadcast({
-        type: 'steer_status', status: 'queued', steerId: delivered.user.id, text: signal.text,
-      });
-
-      return Promise.resolve('mid-turn');
-    }
-
-    if (!busy) return this.queue(delivered);
+    if (!this.busy) return this.queueUsers([delivered], { idempotent: false });
+    this.steers.onAccept?.({ ...toUserSteer(delivered), id: delivered.user.id, mode: delivered.user.mode });
     this.pending.push(delivered);
-    this.openCard(delivered, stepBody(delivered));
-    this.logActivity?.('signal_injected', `${signal.kind} -> live turn`);
+    this.host.broadcast({
+      type: 'steer_status', status: 'queued', steerId: delivered.user.id, text: words.text,
+    });
 
     return Promise.resolve('mid-turn');
+  }
+
+  /** What a delivery hands a running turn, spliced at its next step; false with no turn running, when it waits for a
+   *  turn of its own. Never opens one: its chat's admission does that. */
+  landMidTurn(signal: AgentSignal): boolean {
+    const delivered: DeliveredSignal = { ...signal, cardId: signal.idempotencyKey ? signalCardId(signal.idempotencyKey) : `sig-${nanoid()}` };
+
+    if (isUserSignal(delivered) || !this.busy) return false;
+    this.splice(delivered);
+
+    return true;
+  }
+
+  private splice(delivered: DeliveredSignal): void {
+    this.pending.push(delivered);
+    this.openCard(delivered, stepBody(delivered));
+    this.logActivity?.('signal_injected', `${delivered.kind} -> live turn`);
   }
 
   /** Bound once, as the chat session is built, before any signal is accepted. */
@@ -423,7 +529,6 @@ export class Inbox implements AgentInbox {
     const leftoverEvents = leftover.filter((signal) => !isUserSignal(signal));
     const absorbedEvents = absorbed.filter((signal) => !isUserSignal(signal));
     const requeue = opts.completed ? leftoverEvents : [...absorbedEvents, ...leftoverEvents];
-    this.settled = opts.completed ? absorbedEvents : [];
     this.absorbed = [];
     this.injections.reset();
     this.redeliver(leftoverUsers, requeue);
@@ -433,10 +538,20 @@ export class Inbox implements AgentInbox {
     return { absorbed: absorbedEvents };
   }
 
-  /** Return user signals the model never saw to the composer. Events stay pending and still owe their turn. */
-  interrupt(): UserSteer[] {
+  /**
+   * A Stop's cutoff on the running turn (design v3 C): user signals the model never saw go back to the composer, and
+   * every delivered signal it holds, read or not, is cancelled with the turn rather than re-delivered at its settle.
+   * Answers both: the steers, and the cancelled signals' delivery ids.
+   */
+  interrupt(): InterruptedInputs {
     const returned = this.pending.filter(isUserSignal);
-    this.pending = this.pending.filter((signal) => !isUserSignal(signal));
+    const unread = this.pending.filter((signal) => !isUserSignal(signal));
+    const cancelled = [...unread, ...this.absorbed.filter((signal) => !isUserSignal(signal))];
+    this.pending = [];
+    this.absorbed = this.absorbed.filter(isUserSignal);
+
+    // Let go unread: no turn answers it, as its card says (a read one's turn end says so of it).
+    for (const signal of unread) this.moveCard(signal.cardId, 'undelivered');
 
     for (const signal of returned) {
       this.host.broadcast({
@@ -444,7 +559,12 @@ export class Inbox implements AgentInbox {
       });
     }
 
-    return returned.map(toUserSteer);
+    return { steers: returned.map(toUserSteer), cancelled: cancelled.flatMap((signal) => (signal.idempotencyKey === undefined ? [] : [signal.idempotencyKey])) };
+  }
+
+  /** The delivery ids of the signals this turn's steps read: answered by its completed commit. */
+  get absorbedDeliveries(): readonly string[] {
+    return this.absorbed.flatMap((signal) => (isUserSignal(signal) || signal.idempotencyKey === undefined ? [] : [signal.idempotencyKey]));
   }
 
   /** Replace the user queue from its durable authority, ahead of pending events. Called once, as the session
@@ -464,18 +584,15 @@ export class Inbox implements AgentInbox {
     this.pending = [...restored, ...this.pending.filter((signal) => !isUserSignal(signal))];
   }
 
-  /** Turn start: drop leaked splice state; a continuation re-queues {@link settled}. `signalId` is the card
-   *  of the signal that started this turn, which moves to shown. */
-  beginTurn(continuation: boolean, signalId?: string): void {
+  /** Turn start: drop leaked splice state. `signalId` is the card of the signal that started this turn, which moves to
+   *  shown. */
+  beginTurn(signalId?: string): void {
     this.starting = null;
     this.absorbed = [];
     this.stepCards.clear();
     this.splices.clear();
     this.seen = [];
     this.injections.reset();
-
-    if (continuation) this.pending.unshift(...this.settled);
-    this.settled = [];
 
     if (signalId) {
       this.moveCard(signalId, 'shown');
@@ -562,11 +679,12 @@ export class Inbox implements AgentInbox {
     }
   }
 
-  /** Compensation runs outside the enqueue's catch so a failing compensation surfaces instead of re-entering.
-   *  `idempotencyKey` rides to the backend, which derives the queued message id from it. */
+  /**
+   * What a turn left unread, re-delivered as a turn of its own. `idempotencyKey` rides to the backend, which derives the
+   * queued message id from it. One the host does not open is dropped here, its card withdrawn and the failure reported.
+   */
   private async queue(signal: DeliveredSignal): Promise<SendOutcome> {
     this.openCard(signal, signal.text);
-    let reason: SignalUndeliveredReason;
 
     try {
       const metadata = { ...turnMetadata(signal), [SIGNAL_ID_METADATA_KEY]: signal.cardId };
@@ -593,22 +711,19 @@ export class Inbox implements AgentInbox {
       if (result.status === 'queued') return 'queued';
 
       if (result.status === 'failed') {
-        reason = 'turn_failed';
         diagnostics.failure(
           'signal.turn_failed',
           new KinuError('unavailable', `the signal's turn ended on its error: ${result.reason ?? 'unstated'}`),
           { signal: signal.kind },
         );
       } else {
-        reason = 'preempted';
         diagnostics.failure(
           'signal.preempted',
-          new KinuError('unavailable', 'the host pre-empted the signal turn; compensating'),
+          new KinuError('unavailable', 'the host pre-empted the signal turn'),
           { signal: signal.kind },
         );
       }
     } catch (err) {
-      reason = 'failed';
       diagnostics.failure(
         'signal.enqueue_failed',
         toKinuError({ doing: 'enqueue a signal turn', cause: err, otherwise: 'io' }),
@@ -617,7 +732,6 @@ export class Inbox implements AgentInbox {
     }
 
     this.moveCard(signal.cardId, 'undelivered');
-    signal.compensate?.(reason);
 
     return 'undelivered';
   }
@@ -706,3 +820,6 @@ function reportRedeliveryFailure(kind: string) {
     );
   };
 }
+
+/** The metadata a signal's own turn opens under: its event, its reply's drain, its author; a delivery's as the inbox's. */
+export { turnMetadata };

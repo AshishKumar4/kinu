@@ -53,23 +53,24 @@ test('an open message reads its accumulated text and a sealed one its content', 
     const descriptor = await s.payloads.prepare({ type: 'text' });
     s.context.initialize();
     s.messages.open('assistant', 'answer', 'output');
-    s.messages.streamOpenPart('answer', { partNo: 0, kind: 'text', streamOrder: 0, descriptor, text: 'ab' });
+    s.messages.streamOpenPart('answer', { partNo: 0, streamOrder: 0, descriptor, text: 'ab' });
     const entry = { messageId: 'answer' };
     expect(await s.messages.materialize(entry)).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'ab' }] });
 
     s.messages.streamAppend('answer', 0, 'cd');
     s.messages.streamMetadata('answer', 0, await s.messages.prepareDescriptor({ type: 'text', providerOptions: { test: { partial: true } } }));
-    expect(streamRows()).toBe(1);
+    // The append is the part's next segment; its metadata rewrites the first.
+    expect(streamRows()).toBe(2);
     expect(await s.messages.materialize(entry)).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'abcd', providerOptions: { test: { partial: true } } }] });
     s.messages.streamEnd('answer', 0);
     expect(() => s.messages.streamAppend('answer', 0, 'e')).toThrow('ended');
 
-    const content = await s.messages.prepareContent([{ partNo: 0, kind: 'text', streamOrder: 0, replyTo: null, value: { type: 'text', text: 'final' } }]);
+    const content = await s.messages.prepareContent([{ partNo: 0, streamOrder: 0, replyTo: null, value: { type: 'text', text: 'final' } }]);
     s.messages.seal('answer', content, { providerOptions: { test: { late: true } } });
     expect(streamRows()).toBe(0);
     expect(await s.messages.materialize(entry)).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'final' }], providerOptions: { test: { late: true } } });
     expect(() => s.messages.seal('answer', content)).toThrow('already sealed');
-    expect(() => s.messages.streamOpenPart('answer', { partNo: 1, kind: 'text', streamOrder: 1, descriptor })).toThrow('sealed');
+    expect(() => s.messages.streamOpenPart('answer', { partNo: 1, streamOrder: 1, descriptor })).toThrow('sealed');
     expect(await s.messages.openParts('answer')).toBeNull();
   } finally { s.testSql.close(); }
 });
@@ -81,7 +82,7 @@ test('an accumulating part never puts one row over the platform limit and seals 
   try {
     const descriptor = await s.payloads.prepare({ type: 'reasoning' });
     s.messages.open('assistant', 'long', 'output');
-    s.messages.streamOpenPart('long', { partNo: 0, kind: 'reasoning', streamOrder: 0, descriptor });
+    s.messages.streamOpenPart('long', { partNo: 0, streamOrder: 0, descriptor });
     const window = 'r'.repeat(300_000);
 
     for (let i = 0; i < 4; i++) s.messages.streamAppend('long', 0, window);
