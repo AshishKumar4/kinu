@@ -434,10 +434,15 @@ test('a production turn runs no more statements than it was measured at, and ask
  * The hop cuts (lane/hops, 6efda8696 and 92374a6cd): the request's warming rides the preparation (`host.noteModelRequest`,
  * gone at the open), and a report whose wake the workspace already holds sends none of its own (`host.owes` at the open
  * and the close, its standing riding the preparation or the next report).
+ * One grant per turn while its budget lasts (step-pacer.ts), measured 3 runs alike on 2026-10-13: a turn's steps run
+ * under the one call the workspace holds open into its isolate, so `host.paceStep` and `facet.step` cross once, with
+ * the first step, not with each. A phase now starts with a tool call, a tool step's one crossing while its grant is held:
+ * the open with its first step is 21, the three tool calls between 2, 1, 1 (the first with its room's start), and the
+ * last tool call with the answering step and the close 14; 39 in all for four tool steps, 33 for one.
  */
-/** The budget per place, above what a turn measures (the history above): no crossing runs once per step beyond a step's
- *  own, nor once per earlier step. */
-const CROSSINGS = { open: 20, step: 5, close: 20 } as const;
+/** The budget per place, as measured (the history above): no crossing runs once per step beyond a step's own, nor once
+ *  per earlier step. */
+const CROSSINGS = { open: 21, step: 2, close: 14 } as const;
 
 /**
  * The planted calls (`ObservedOrchestrator.plantCrossings`), each counted once where it lands, and nothing else: the
@@ -455,7 +460,8 @@ const PLANTED = {
   main: { 'facet.newestFirst': 1 },
 } as const;
 
-/** A turn's crossings by place, both sides summed: its open, each model step's, and its last step's with its close. */
+/** A turn's crossings by place, both sides summed: its open with its first model step; each tool call with the model step
+ *  it leads to; and its last tool call with its answering step and its close. */
 interface TurnPhases {
   readonly open: number;
   readonly steps: readonly number[];
@@ -489,8 +495,8 @@ test("a task turn crosses between the workspace and main's isolate no more than 
   ].join('\n'));
   // The meter counts each planted call once where it lands, and nothing else.
   expect({ workspace: four.planted.workspace.total, main: four.planted.main.total }).toEqual(PLANTED);
-  // Each of the four tool steps was measured on its own: no crossing a step makes is billed to another.
-  expect(phases.steps).toHaveLength(4);
+  // Each tool call opens a phase: the three between the first step and the last tool call were measured alone.
+  expect(phases.steps).toHaveLength(3);
 
   expect(phases.open).toBeLessThanOrEqual(CROSSINGS.open);
   expect(Math.max(...phases.steps)).toBeLessThanOrEqual(CROSSINGS.step);

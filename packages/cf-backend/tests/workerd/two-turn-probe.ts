@@ -146,9 +146,10 @@ const NO_STANDING = { messageCount: 0, measures: { provider: null, gate: null },
 /**
  * Calls into this worker while the meter runs: the relay main's isolate opens its port through (and calls that own live
  * capabilities through), the workspace host that is its port, and the account. Counted once per worker, for the one
- * workspace a meter runs over; a phase after the first starts with a step's pace, which crosses through the port.
+ * workspace a meter runs over; a phase after the first starts with a tool call: while its grant is held, the one
+ * crossing a tool step makes (`step-pacer.ts`).
  */
-const crossings = new Crossings('host.paceStep');
+const crossings = new Crossings('host.executeTool');
 
 /** The facet's calls as the workspace makes them. */
 const FACET_CALLS = Object.keys(agentCallsThrough(() => Effect.die('names only')));

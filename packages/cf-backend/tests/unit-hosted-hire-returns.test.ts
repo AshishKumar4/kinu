@@ -417,7 +417,7 @@ test("a Stop skips a turn the stopped agent's runner had already picked up", asy
 
 // A facet's CPU budget is about 30 s for whatever runs under one call into it, and a turn held inside the call that
 // handed it over died after 22 steps (platform catalog do.facet.cpu_ms): each step is run under a call of its own.
-test("each model step of a hired agent's turn runs under a call its workspace makes into it", async () => {
+test("a hired agent's model steps run under one call its workspace makes into it, held while its budget lasts", async () => {
   const workspace = gatewayWorkspace(stubAiBinding((run) => toolResults(run) < 2
     ? toolCallCompletion(run, { tool: 'eval', args: { code: 'return 1' } }, `call_${String(toolResults(run))}`)
     : chatCompletion(run, 'Counted.')));
@@ -426,7 +426,8 @@ test("each model step of a hired agent's turn runs under a call its workspace ma
 
   await runDelegatedTask(workspace, child.actor.handle.actorId, 'Count twice.');
 
-  expect(workspace.agent.harnessAgentTraceCalls().filter((call) => call === 'paceStep')).toHaveLength(3);
+  // Three steps, one grant: the platform's facet CPU budget is met by a call that waits on the steps, not by one per step.
+  expect(workspace.agent.harnessAgentTraceCalls().filter((call) => call === 'paceStep')).toHaveLength(1);
   expect(agentSql(workspace, child.actor.handle.actorId)<{ n: number }>`
     SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${child.actor.handle.actorId} AND type = 'run_end'`[0]?.n).toBe(1);
 });

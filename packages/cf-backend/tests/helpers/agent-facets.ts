@@ -93,6 +93,27 @@ export function delayNextTurnEnd(storageKey: string): HeldCall {
   return { reached: reached.promise, release: released.resolve };
 }
 
+const lostInterrupts = new Set<string>();
+
+/** The next Stop pushed to the isolate under `storageKey` is lost on the way, as a dropped RPC is: the turn's own signal
+ *  never hears it, and only the workspace's cut of the turn stands. */
+export function loseNextInterrupt(storageKey: string): void {
+  lostInterrupts.add(storageKey);
+}
+
+const delayedToolAnswers = new Map<string, { readonly reached: () => void; readonly released: Promise<void> }>();
+
+/** The isolate under `storageKey` makes its next tool call, and the workspace's answer, given, waits on its way back
+ *  until released: the step after it has not started. */
+export function delayNextToolAnswer(storageKey: string): HeldCall {
+  const reached = Promise.withResolvers<void>();
+  const released = Promise.withResolvers<void>();
+
+  delayedToolAnswers.set(storageKey, { reached: reached.resolve, released: released.promise });
+
+  return { reached: reached.promise, release: released.resolve };
+}
+
 let delayedSlateStamp: { readonly of: (storageKey: string) => boolean; readonly reached: () => void; readonly released: Promise<void> } | null = null;
 
 /** The next isolate `of` names (its storage key) commits an answer, and once the workspace gave it that answer's slates,
@@ -481,7 +502,18 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
         armCacheWarm: (input) => host().armCacheWarm(input),
         advise: (review) => host().advise(review),
         enqueueTurn: (input) => host().enqueueTurn(input),
-        executeTool: (call) => host().executeTool(call),
+        executeTool: async (call) => {
+          const answer = await host().executeTool(call);
+          const delayed = delayedToolAnswers.get(placement.storageKey);
+
+          if (delayed !== undefined) {
+            delayedToolAnswers.delete(placement.storageKey);
+            delayed.reached();
+            await delayed.released;
+          }
+
+          return answer;
+        },
         receipts: (turnId, runId, callIds) => host().receipts(turnId, runId, callIds),
         observe: (lines) => host().observe(lines),
         paceStep: (bound, profile) => {
@@ -571,7 +603,13 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
         return answered;
       };
 
-      return { facet, calls: { ...calls, admit }, lost };
+      const interruptChat: AgentFacetCalls['interruptChat'] = async (snapshot, cutoff) => {
+        if (lostInterrupts.delete(placement.storageKey)) throw new Error('the Stop was lost on its way to the agent');
+
+        return await calls.interruptChat(snapshot, cutoff);
+      };
+
+      return { facet, calls: { ...calls, admit, interruptChat }, lost };
   }
 }
 

@@ -548,6 +548,8 @@ export async function deliveredRun(
   try {
     report = await runHeadInference({ key: { turnId: task.sequenceId, runId, mode: task.mode }, actor, prepare });
   } finally {
+    // Its steps' grant answers: the run ran its last.
+    pacer.release(task.sequenceId);
     await run.trace?.flush();
   }
 
