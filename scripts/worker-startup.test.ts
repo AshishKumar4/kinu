@@ -19,7 +19,8 @@ describe("the built Worker's startup", () => {
       timeDeltas: [0, 40_000, 60_000, 30_000],
     };
 
-    expect(profileTimes(profile)).toEqual({ totalMs: 250, loadingMs: 70 });
+    // Each sample holds the time to the next: 40 + 60 ms in the harness's frame, 30 ms in the module's, the last none.
+    expect(profileTimes(profile)).toEqual({ totalMs: 250, loadingMs: 100 });
   });
 
   test('the static closure follows imports and re-exports, never an import()', () => {
