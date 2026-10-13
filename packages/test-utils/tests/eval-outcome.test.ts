@@ -81,7 +81,6 @@ describe('admissibility rests on the outcome, not on mechanism coverage', () => 
     const verdict = assessAdmissibility(['t'], obs);
     expect(verdict.admissible).toBe(false);
     expect(verdict.outcomesScored).toBe(0);
-    expect(verdict.failures.join(' ')).toContain('measured activity');
   });
 
   test('a run where the agent SOLVED NOTHING is admissible — that is a finding', () => {

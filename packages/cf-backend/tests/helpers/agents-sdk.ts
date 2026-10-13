@@ -752,28 +752,6 @@ export function resetNativeSpans(): void {
   openSpans.length = 0;
 }
 
-export function renderNativeSpanTree(): string {
-  const lines: string[] = [];
-
-  const walk = (parent: number | null, depth: number): void => {
-    for (const [index, span] of nativeSpans.entries()) {
-      if (span.parent !== parent) continue;
-
-      const shown = [...span.attributes]
-        .filter(([key]) => key !== 'kinu.self_path')
-        .map(([key, value]) => `${key.replace('kinu.', '')}=${String(value)}`)
-        .join(' ');
-
-      lines.push(`${'  '.repeat(depth)}${span.name}${shown === '' ? '' : `  [${shown}]`}`);
-      walk(index, depth + 1);
-    }
-  };
-
-  walk(null, 0);
-
-  return lines.join('\n');
-}
-
 /** The fields the fake's `connectToServer` and `seedMcpAuthContinuation` read or write. */
 export interface RecordedMcpAuthProvider {
   authUrl?: string | null;

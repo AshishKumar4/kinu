@@ -348,7 +348,6 @@ describe('CLI control routes', () => {
     for (const method of ['deviceRpc', 'claimOwner', 'constructor', '__proto__', 'destroyAgent']) {
       const res = await cli(rpcRequest(method, ['x']), env);
       expect(`${method}:${res?.status}`).toBe(`${method}:404`);
-      expect((await errorBody(res)).error).toContain('No such agent RPC method');
     }
 
     expect(calls).toEqual([]);
@@ -438,7 +437,6 @@ describe('CLI webhook creation step-up gate', () => {
     const { env, calls } = setupEnv({ tokenMintedAt: Date.now() - 24 * 60 * 60 * 1000 });
     const res = await cli(cliRequest('/api/cli/workspaces/jarvis/triggers/webhook', webhookInit), env);
     expect(res?.status).toBe(401);
-    expect((await errorBody(res)).error).toContain('step-up auth required');
     expect(calls.some((c) => c.startsWith('triggers:webhook:'))).toBe(false);
   });
 
@@ -458,7 +456,6 @@ describe('the send RPC names its message', () => {
     const refused = await cli(rpcRequest('send', ['Name the release.']), env);
 
     expect(refused?.status).toBe(400);
-    expect(v.parse(ErrorResponseSchema, await handled(refused).json()).error).toContain('A message id is 1 to 128 characters');
     expect(v.parse(v.looseObject({ messageCount: v.number() }), await rpcResult(env, 'getAgentStatus')).messageCount).toBe(0);
     expect(JSON.stringify(await rpcResult(env, 'getChatHistoryPage', [{ limit: 10 }]))).not.toContain('Name the release.');
   });

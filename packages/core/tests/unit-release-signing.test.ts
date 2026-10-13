@@ -28,10 +28,10 @@ test('the message is canonical: the order the checksums arrive in does not chang
   expect(await verifyRelease({ ...signed, checksums: upper }, key.publicKeyHex)).toBe(true);
 });
 
-test('the daemon pins the same public key core does, and it is a real key', () => {
+test('the daemon pins the same public key core does, and it is a real key', async () => {
   // The daemon cannot import core; its pin is read off the module `kinu connect` installs.
   const daemon = v.parse(v.object({ RELEASE_SIGNING_PUBLIC_KEY: v.string() }), require('../../pc-agent/src/update.js'));
 
   expect(daemon.RELEASE_SIGNING_PUBLIC_KEY).toBe(RELEASE_SIGNING_PUBLIC_KEY);
-  expect(RELEASE_SIGNING_PUBLIC_KEY).toMatch(/^[0-9a-f]{64}$/);
+  await expect(verifyRelease({ version: '1.0.0', checksums: CHECKSUMS, signature: 'AAAA' }, RELEASE_SIGNING_PUBLIC_KEY)).resolves.toBe(false);
 });

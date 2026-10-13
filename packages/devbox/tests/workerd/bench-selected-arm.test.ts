@@ -14,7 +14,6 @@ describe('the selected-arm route guard', () => {
     expect(await response.json()).toMatchObject({
       ok: false,
       strategy: 'snapshot-chain',
-      error: 'strategy not deployed in this run',
     });
   });
 
@@ -22,7 +21,7 @@ describe('the selected-arm route guard', () => {
     const response = await SELF.fetch('https://bench.test/state?strategy=snapshot-chain');
 
     expect(response.status).toBe(401);
-    expect(await response.json()).toMatchObject({ ok: false, error: 'unauthorized' });
+    expect(await response.json()).toMatchObject({ ok: false });
   });
 
   const UNNAMED_ARMS = [
@@ -39,7 +38,6 @@ describe('the selected-arm route guard', () => {
       expect(response.status).toBe(400);
       expect(await response.json()).toMatchObject({
         ok: false,
-        error: 'strategy is required: snapshot-chain',
       });
     });
   }

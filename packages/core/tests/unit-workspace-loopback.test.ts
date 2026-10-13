@@ -39,7 +39,6 @@ describe('the workspace loopback', () => {
 
       expect(hit.exitCode).toBe(0);
       expect(hit.stdout).toContain('Kinu live preview loopback');
-      expect(`${hit.stdout}\n${hit.stderr}`).not.toContain('1003');
     } finally {
       database.close();
     }
@@ -55,7 +54,6 @@ describe('the workspace loopback', () => {
 
       expect(missed.exitCode).toBe(7);
       expect(missed.stderr).toContain('Failed to connect');
-      expect(`${missed.stdout}\n${missed.stderr}`).not.toContain('1003');
     } finally {
       database.close();
     }

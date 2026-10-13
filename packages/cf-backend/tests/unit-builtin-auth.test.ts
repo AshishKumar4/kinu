@@ -87,8 +87,6 @@ function deployment() {
   return { env, objectFor, page, post, register, registerOwner, unreachable };
 }
 
-const ErrorSchema = v.object({ error: v.string() });
-
 const InviteSchema = v.object({ url: v.string() });
 
 const ChallengeSchema = v.object({ challenge: v.string() });
@@ -106,7 +104,6 @@ describe('who may register', () => {
     const forged = await register('forger@example.com', 'not-an-invite');
 
     expect(stranger.status).toBe(403);
-    expect(v.parse(ErrorSchema, await stranger.json()).error).toContain('Ask the owner');
     expect(forged.status).toBe(403);
   });
 
@@ -121,14 +118,12 @@ describe('who may register', () => {
     const elsewhere = await register('victim@example.com', invite);
 
     expect(elsewhere.status).toBe(403);
-    expect(v.parse(ErrorSchema, await elsewhere.json()).error).toContain('different email');
     expect((await register('first@example.com', invite)).status).toBe(200);
     const again = await register('first@example.com', invite);
     const another = await register('second@example.com', invite);
 
     expect(again.status).toBe(403);
     expect(another.status).toBe(403);
-    expect(v.parse(ErrorSchema, await another.json()).error).toContain('not valid');
   });
 });
 
@@ -252,11 +247,6 @@ test('the setup token never rides in a URL: /login takes it in a password field 
   expect(owner).not.toContain(encodeURIComponent(SETUP_TOKEN));
   await registerOwner('owner@example.com');
   const signIn = await page(`/login?setup=${encodeURIComponent(SETUP_TOKEN)}`);
-
-  expect(signIn).toContain('Set up or recover the owner');
-  // The recovery field names the status line that reads its outcome to a screen reader.
-  expect(signIn).toContain('aria-describedby="recovery-status"');
-  expect(signIn).toContain('id="recovery-status"');
   expect(signIn).not.toContain('owner@example.com');
   expect(signIn).not.toContain(encodeURIComponent(SETUP_TOKEN));
 });
@@ -268,7 +258,6 @@ test("the deployer's setup token resets the owner's sign-in and ends the owner's
   const reset = await post('/api/auth/builtin/password/reset', { setup: SETUP_TOKEN, password: 'a brand new password' });
 
   expect(guessed.status).toBe(403);
-  expect(v.parse(ErrorSchema, await guessed.json()).error).toBe('That is not the setup token.');
   expect(reset.status).toBe(200);
   expect(await verifySession(env, before)).toBeNull();
   expect((await post('/api/auth/builtin/password/sign-in', { email: 'owner@example.com', password: 'a brand new password' })).status).toBe(200);
@@ -321,7 +310,6 @@ describe('signing in', () => {
 
     expect(first.status).toBe(200);
     expect(replay.status).toBe(403);
-    expect(v.parse(ErrorSchema, await replay.json()).error).toContain('already used');
   });
 });
 

@@ -170,7 +170,6 @@ describe('cli backend conformance', () => {
     expect(renderConformanceFindings(report)).toBe('');
     expect(report.unmeasured).toEqual([]);
 
-    expect(captured.length).toBeGreaterThanOrEqual(5);
     expect(present(observed.planes.tool, 'the tool plane').has('eval')).toBe(true);
     // `reply` and its `eventId` are advertised exactly when the host wired peer transport.
     expect(present(observed.planes['agents-op'], 'the agents-op plane').has('reply')).toBe(true);

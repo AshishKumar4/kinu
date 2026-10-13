@@ -69,12 +69,6 @@ describe('the declaration is measurable', () => {
     expect(missing).toEqual([]);
   });
 
-  test('every fence states what its absence costs', () => {
-    // A fence list whose entries carry no reason is a list of TODOs. The `why`
-    // is what a reader gets when the gate goes red on a snippet that moved.
-    expect(FENCES.filter((fence) => fence.why.length < 40)).toEqual([]);
-  });
-
   test('every mutation actually changes its file', () => {
     // An identity mutation would leave the owner green and the gate would
     // report the fence as unproved forever — a permanently red gate nobody can

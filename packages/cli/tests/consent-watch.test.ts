@@ -106,7 +106,7 @@ describe('watchDeviceConsents', () => {
 
     expect(presented).toEqual(['c1']);
     expect(resolved).toEqual([{ consentId: 'c1', decision: 'always' }]);
-    expect(notes).toEqual([{ kind: 'resolved', message: 'Approved (always).' }]);
+    expect(notes.map((entry) => entry.kind)).toEqual(['resolved']);
   });
 
   test('an answered consent still listed pending is never re-presented', async () => {

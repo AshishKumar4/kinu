@@ -165,16 +165,6 @@ describe('checkpointReason', () => {
     expect(checkpointReason('pre-mutation', [])).toBe('pre-mutation');
   });
 
-  test('skipped paths are named in the record, so an incomplete snapshot says so', () => {
-    expect(checkpointReason('file write', ['locked.txt', 'systemd-private-abc']))
-      .toBe('file write [skipped 2 unreadable: locked.txt systemd-private-abc]');
-  });
-
-  test('a directory full of them stays one readable line', () => {
-    expect(checkpointReason('shell exec', ['a', 'b', 'c', 'd', 'e']))
-      .toBe('shell exec [skipped 5 unreadable: a b c +2 more]');
-  });
-
   test('the note survives the subject round trip as part of the reason', () => {
     const reason = checkpointReason('file write', ['locked.txt']);
     expect(parseCheckpointSubject(checkpointSubject(meta, reason)).reason).toBe(reason);

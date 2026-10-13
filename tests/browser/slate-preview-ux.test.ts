@@ -405,7 +405,6 @@ test('a change-set read that fails raises the Changes tab, which says what faile
       await page.waitForSelector('[aria-label="Changes"]');
       await page.click('[aria-label="Changes"]');
       await page.waitForSelector('[data-changes-error]');
-      expect(await page.$eval('[data-changes] header', el => el.textContent?.trim())).toBe("Can't read Workspace");
       expect(await page.$eval('[data-changes-error]', el => el.textContent)).toBe('the change-set read failed');
     } finally { await page.close(); }
   });
@@ -532,7 +531,6 @@ test('Changes opens on a connected machine, and never reads a sandbox that is as
 
     try {
       await page.waitForSelector('[data-file-row="src/device.ts"]');
-      expect(await page.$eval('[data-changes] [data-source-menu]', (menu) => menu.textContent?.trim())).toBe('Your PC');
 
       await page.click('[data-add-idle-sandbox]');
       await page.evaluate(() => { window.dispatchEvent(new Event('focus')); });

@@ -3,19 +3,8 @@ import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';
 
 import { join } from 'node:path';
-import { asFetchFunction, fallbackWorkspaceIdentity } from '@kinu.run/core';
+import { asFetchFunction } from '@kinu.run/core';
 import * as v from 'valibot';
-
-describe('CLI mission workspace names', () => {
-  test('a new workspace gets a neutral slug and the mission as its stand-in title, and no model is asked', () => {
-    // The stand-in is what the workspace's own first-turn `auto_title` effect names, down the fast tier's route.
-    expect(fallbackWorkspaceIdentity('Review the OAuth callback flow', '123456abcdef')).toEqual({
-      name: 'ironwood-elm-56abcdef',
-      displayName: 'Review the OAuth callback flow',
-      nameOrigin: 'auto',
-    });
-  });
-});
 
 describe('a cloud create names the workspace only when the owner did', () => {
   test('the home screen\'s unnamed create leaves the name to the server; `kinu create jarvis` sends jarvis', async () => {

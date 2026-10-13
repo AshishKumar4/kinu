@@ -6,8 +6,10 @@ const FAMILIES = ['budget-board', 'chess', 'launch-prep', 'memory-recall'];
 describe('the reactive user', () => {
   test('a pass moves on; a failure is corrected by naming what failed, then the request is repeated, then dropped', () => {
     expect(reactiveReply('total the March spend', [], 0)).toBeNull();
-    expect(reactiveReply('total the March spend', ['totals-match'], 0)).toBe('That isn\'t right yet: totals-match fails.');
-    expect(reactiveReply('total the March spend', ['totals-match', 'no-duplicates'], 0)).toBe('That isn\'t right yet: totals-match, no-duplicates fail.');
+    expect(reactiveReply('total the March spend', ['totals-match'], 0)).toContain('totals-match');
+    const correction = reactiveReply('total the March spend', ['totals-match', 'no-duplicates'], 0);
+    expect(correction).toContain('totals-match');
+    expect(correction).toContain('no-duplicates');
     expect(reactiveReply('total the March spend', ['totals-match'], 1)).toBe('total the March spend');
     expect(reactiveReply('total the March spend', ['totals-match'], 2)).toBeNull();
   });

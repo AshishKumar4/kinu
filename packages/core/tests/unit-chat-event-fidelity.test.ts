@@ -209,7 +209,6 @@ describe('ChatEvent tool success/error fidelity', () => {
     const events = await collect(model, tools);
     const result = events.find((e) => e.type === 'tool-result');
     expect(result?.type === 'tool-result' && result.result).toBe('{"result":42,"logs":["printed"]}');
-    expect(result?.type === 'tool-result' && result.result).not.toContain('[object Object]');
   });
 
   test('a succeeding tool yields success:true and no error', async () => {

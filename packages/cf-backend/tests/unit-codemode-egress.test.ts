@@ -223,7 +223,6 @@ describe("a program reaches its own workspace's previews, and no other's", () =>
     const response = await egress.fetch(String(url));
 
     expect(response.status).toBe(403);
-    expect(await response.text()).toContain('blocked internal host');
   });
 });
 

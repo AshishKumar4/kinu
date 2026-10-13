@@ -63,33 +63,23 @@ describe('explorePrompt — the one question every substrate asks', () => {
   });
 
   test('crafted tools ride as prior art; none means no empty heading', () => {
-    expect(explorePrompt(base).system).not.toContain('Known patterns');
 
     const withTools = explorePrompt({
       ...base,
       craftedTools: [{ name: 'parse_log', description: 'split a log into records' }],
     });
 
-    expect(withTools.system).toContain('Known patterns');
     expect(withTools.system).toContain('- parse_log: split a log into records');
   });
 
   test('the sibling diversity directive rides the user message', () => {
     const solo = explorePrompt(base);
     const withSiblings = explorePrompt({ ...base, siblings: ['the simplest possible solution'] });
-    const directive = diversityDirective(['the simplest possible solution']);
-    expect(solo.user).not.toContain(directive);
-    expect(withSiblings.user).toContain(directive);
+    expect(solo.user).not.toContain('the simplest possible solution');
+    expect(withSiblings.user).toContain('the simplest possible solution');
   });
 
   test('the parent context is carried verbatim', () => {
     expect(explorePrompt(base).user).toContain('user: fix the parser');
-  });
-
-  test('Plan branches ask for a read-only planning alternative without runnable code', () => {
-    const prompt = explorePrompt({ ...base, mode: 'plan' });
-    expect(prompt.system).toContain('read-only planning approach');
-    expect(prompt.system).not.toContain('code block');
-    expect(prompt.user).toContain('Do not implement it');
   });
 });

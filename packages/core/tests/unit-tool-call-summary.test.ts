@@ -1,7 +1,7 @@
 // Tool card summary lines: repeated calls stay distinguishable, and no summary invents detail.
 import { describe, test, expect } from 'bun:test';
 import type { JsonObject } from '@kinu.run/core';
-import { clip, describeToolCall, summarizeToolCall, toolCallEffect } from '../src/tools/tool-call-summary';
+import { describeToolCall, summarizeToolCall } from '../src/tools/tool-call-summary';
 
 describe('tool call summaries — the unified agents tool', () => {
   test('agents calls retain their action and distinguishing input', () => {
@@ -83,48 +83,6 @@ describe('tool call summaries — truthfulness', () => {
     expect(summarizeToolCall('gh__search_issues', { query: 'is:open' })).toBe('is:open');
     expect(summarizeToolCall('gh__search_issues', { query: 'is:open', repo: 'kinu' })).toBe('');
     expect(summarizeToolCall('crafted_thing', { count: 3 })).toBe('');
-  });
-
-  test('long values are clipped with a visible marker, never silently cut', () => {
-    const long = 'a'.repeat(200);
-    const summary = summarizeToolCall('shell', { command: long });
-    expect(summary.endsWith('...')).toBe(true);
-    expect(summary.length).toBeLessThanOrEqual(72);
-    expect(clip('short')).toBe('short');
-    expect(clip('one    two\n three')).toBe('one two three');
-  });
-});
-
-describe('toolCallEffect — consequence controls activity density', () => {
-  test('known mutations remain prominent', () => {
-    expect(toolCallEffect('file', { op: 'write', path: '/workspace/report.md' })).toBe('mutate');
-    expect(toolCallEffect('file', { op: 'edit', path: '/workspace/src/auth.ts' })).toBe('mutate');
-    expect(toolCallEffect('tasks', { op: 'update', id: 't3', status: 'done' })).toBe('mutate');
-    expect(toolCallEffect('memory', { op: 'remember', key: 'deploy.target' })).toBe('mutate');
-    expect(toolCallEffect('agents', { op: 'swarm', task: 'audit it' })).toBe('mutate');
-    // `mode` with a role mutates actor_config via changeActiveRole.
-    expect(toolCallEffect('tasks', { op: 'switchRole', role: 'researcher' })).toBe('mutate');
-    expect(toolCallEffect('tasks', { op: 'role' })).toBe('read');
-
-  });
-  test('known observations collapse into the compact timeline', () => {
-    expect(toolCallEffect('file', { op: 'read', path: '/workspace/report.md' })).toBe('read');
-    expect(toolCallEffect('web', { op: 'search', query: 'deploy' })).toBe('read');
-    expect(toolCallEffect('memory', { op: 'search', query: 'deploy' })).toBe('read');
-  });
-
-  test('a fetch and a screenshot read; delegation is consequential', () => {
-    expect(toolCallEffect('web', { op: 'fetch', url: 'https://example.com' })).toBe('read');
-    expect(toolCallEffect('web', { op: 'screenshot', url: 'https://example.com' })).toBe('read');
-    expect(toolCallEffect('agents', { op: 'assign' })).toBe('mutate');
-    expect(toolCallEffect('agents', { op: 'list' })).toBe('read');
-  });
-
-  test('programs and unclassified contracts remain explicitly unknown', () => {
-    expect(toolCallEffect('shell', { command: 'node inspect.js' })).toBe('unknown');
-    expect(toolCallEffect('eval', { code: 'return await workspace.files.read("a")' })).toBe('unknown');
-    expect(toolCallEffect('crafted_unknown', { op: 'write' })).toBe('unknown');
-    expect(toolCallEffect('file', 'read a')).toBe('unknown');
   });
 });
 

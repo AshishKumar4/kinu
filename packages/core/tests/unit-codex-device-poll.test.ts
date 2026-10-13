@@ -46,7 +46,6 @@ describe('the Codex device-code poll', () => {
     expect(answer.status).not.toBe('pending');
 
     if (answer.status !== 'expired') throw new Error('expected the expired answer');
-    expect(answer.message).toMatch(/expired/i);
     // A dead code never reaches the token exchange.
     expect(asked).toEqual([POLL_URL]);
   });

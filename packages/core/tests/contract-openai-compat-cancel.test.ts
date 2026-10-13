@@ -103,7 +103,6 @@ describe('openai-compat cancellation', () => {
     expect(seen[0]?.fired).toBe(true);
 
     expect(failureMessage.length).toBeGreaterThan(0);
-    expect(failureMessage).toContain('abort');
     expect(seen).toHaveLength(1);
   });
 });

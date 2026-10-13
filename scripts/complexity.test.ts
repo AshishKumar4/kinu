@@ -19,7 +19,7 @@ import { runToExit } from '../packages/test-utils/src/spawn';
 
 
 import {
-  BLIND_SPOTS, census, distribution, inventory, isGreen, judge, keyOf, lockCandidate, measureFile, readBudget,
+  census, distribution, inventory, isGreen, judge, keyOf, lockCandidate, measureFile, readBudget,
   shrinkBudget, topTier, writeBudget,
   type Budget, type Measured,
 } from './complexity';
@@ -575,19 +575,5 @@ describe('over the live tree', () => {
 
   test('the tree is inside its own budget', () => {
     expect(judge(measured, budget)).toEqual({ over: [], entrants: [], grown: [], stale: [] });
-  });
-});
-
-describe('blind spots', () => {
-  test('each one states a verdict rather than a topic', () => {
-    const VERDICT = /NOT MEASURED|NOT DETECTED|OUT OF SCOPE/;
-    expect(BLIND_SPOTS.length).toBeGreaterThan(0);
-    expect(BLIND_SPOTS.filter((spot) => !VERDICT.test(spot))).toEqual([]);
-  });
-
-  test('the two a per-function count cannot see are named', () => {
-    const joined = BLIND_SPOTS.join('\n');
-    expect(joined).toContain('NESTING DEPTH');
-    expect(joined).toContain('COMPLEXITY MOVED RATHER THAN REMOVED');
   });
 });

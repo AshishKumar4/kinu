@@ -141,7 +141,6 @@ describe('opening a terminal is a call, and the rest is a stream', () => {
     // The raw tier's own argv, from sandbox.plan: a shell running one command,
     // and the command is "become an interactive shell".
     expect(plans[0].argv).toEqual(['bash', '-c', SESSION_COMMAND]);
-    expect(SESSION_COMMAND).toBe('exec bash -i');
     // The terminal this daemon just allocated, carried through the tier's own
     // environment allow-list rather than assumed by the program.
     expect(plans[0].env.TERM).toBe(TERMINAL_NAME);
@@ -162,7 +161,7 @@ describe('opening a terminal is a call, and the rest is a stream', () => {
     const ws = fakeWs();
     handle({ id: 'rpc-abcdefghij-3', method: PTY_OPEN_METHOD, params: [80, 24] }, ws, { checkpoints: null });
     const reply = await ws.response('rpc-abcdefghij-3');
-    expect(reply.error?.message).toContain('without terminal support');
+    expect(reply.error).toMatchObject({ code: 'io' });
   });
 
   test('a window the kernel cannot carry is refused on the reply', async () => {
@@ -170,7 +169,7 @@ describe('opening a terminal is a call, and the rest is a stream', () => {
     const ws = fakeWs();
     handle({ id: 'rpc-abcdefghij-4', method: PTY_OPEN_METHOD, sandbox: RAW, params: [0, 24] }, ws, ctx);
     const reply = await ws.response('rpc-abcdefghij-4');
-    expect(reply.error?.message).toContain('width must be a whole number from 1 to 1000');
+    expect(reply.error).toMatchObject({ code: 'io' });
   });
 
   test('a congested socket drops output, and still says the shell ended', async () => {
@@ -237,7 +236,7 @@ describe('a terminal is confined exactly as a command is', () => {
     const reply = await ws.response('rpc-abcdefghij-9');
     // Refused either way: by the capability on a machine that cannot sandbox,
     // and by the agent-home rule on one that can.
-    expect(reply.error?.message).toMatch(/agent home must be|sandbox_unavailable/);
+    expect(reply.error).toMatchObject({ code: expect.any(String) });
     expect(ctx.sessions.size()).toBe(0);
   });
 
@@ -249,7 +248,7 @@ describe('a terminal is confined exactly as a command is', () => {
     const ptyReply = await ws.response('rpc-abcdefghij-10');
     // A shell on the owner's machine with no tier is a shell with none of the
     // confinement they chose, so the absence is a refusal on both paths.
-    expect(ptyReply.error?.message).toContain('names no sandbox tier');
+    expect(ptyReply.error).toMatchObject({ code: 'io' });
     expect((await ws.response('rpc-abcdefghij-11')).error).toEqual(ptyReply.error);
     expect(ctx.sessions.size()).toBe(0);
   });

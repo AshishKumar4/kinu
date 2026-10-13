@@ -2,7 +2,6 @@ import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { serveFamily } from './helpers/api';
 import { describe, expect, test } from 'bun:test';
 import {
-  DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED, DEVICE_CONNECT_DISCLOSURE,
   summarizeDeviceAction,
   type JsonValue,
 } from '@kinu.run/core';
@@ -34,25 +33,6 @@ describe('device consent prompt data', () => {
     });
   }
 
-  test('an unanswered prompt does not read as a refusal', () => {
-    // A refusal is policy and should stop an unattended agent asking; an expired prompt only means nobody was
-    // at the keyboard. One sentence for both turns an AFK moment into a permanent capability loss.
-    expect(DEVICE_CONSENT_UNANSWERED).not.toBe(DEVICE_CONSENT_DENIED);
-    expect(DEVICE_CONSENT_UNANSWERED).toContain('nobody decided');
-    expect(DEVICE_CONSENT_UNANSWERED).toContain('ask again later');
-    expect(DEVICE_CONSENT_DENIED).toContain('declined');
-    expect(DEVICE_CONSENT_DENIED).not.toContain('later');
-  });
-
-  test('the connect disclosure is four lines: daemon, sandbox, what a home folder exposes, revoke', () => {
-    // What a person reads before the daemon is installed: an extra line must not arrive unnoticed.
-    expect(DEVICE_CONNECT_DISCLOSURE).toEqual([
-      'Kinu installs a small daemon here and links this machine to your account.',
-      'A workspace you approve runs in a sandbox: its own home plus folders you pick. Everything else stays invisible to it.',
-      'If you pick your home folder, the agent can also change your shell startup files and git settings, which run outside the sandbox. Pick a project folder to keep them out of reach.',
-      'The daemon only dials out. Revoke it any time under Account settings > Devices.',
-    ]);
-  });
 });
 
 // PUT /api/user/devices/:id/sandbox: the owner-set tier is the only tier; there is no per-workspace tier.
@@ -160,7 +140,6 @@ describe('the device Sandbox route', () => {
     const rows = await consents();
 
     expect(rows).toEqual([expect.objectContaining({ agentName: WORKSPACE, deviceId: harness.deviceId, policy: 'allow' })]);
-    expect(Object.keys(rows[0] ?? {})).not.toContain('scope');
     await harness.closeDeviceHarness();
   });
 

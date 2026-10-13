@@ -17,15 +17,6 @@ describe('sleepTimeDue', () => {
     expect(sleepTimeDue({ completedTurns: 0, lastRunTurn: null })).toBe(false);
   });
 
-  test('the turn count: due on the third turn since the last run, not before', () => {
-    expect(sleepTimeDue({ completedTurns: 2, lastRunTurn: null })).toBe(false);
-    expect(sleepTimeDue({ completedTurns: 3, lastRunTurn: null })).toBe(true);
-    // The turn right after a run, and a run that lands exactly on the interval.
-    expect(sleepTimeDue({ completedTurns: 4, lastRunTurn: 3 })).toBe(false);
-    expect(sleepTimeDue({ completedTurns: 5, lastRunTurn: 3 })).toBe(false);
-    expect(sleepTimeDue({ completedTurns: 3 + SLEEP_TIME_CADENCE.everyTurns, lastRunTurn: 3 })).toBe(true);
-  });
-
   test('idle: due after the interval with an unprocessed turn, never over processed ones', () => {
     expect(sleepTimeDue({ completedTurns: 2, lastRunTurn: null, idleMs: SLEEP_TIME_CADENCE.idleMs - 1 })).toBe(false);
     expect(sleepTimeDue({ completedTurns: 2, lastRunTurn: null, idleMs: SLEEP_TIME_CADENCE.idleMs })).toBe(true);

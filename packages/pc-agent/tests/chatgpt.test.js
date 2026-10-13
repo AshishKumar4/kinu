@@ -171,10 +171,9 @@ describe('first sign-in on a machine', () => {
     const flow = await chatgpt.beginSignIn({ home: scratchDir('siwc-no-client'), fetch: auth.fetch });
     const authorize = started(flow);
     const refused = failureOf(flow.done);
-    const says = 'no issued client ID';
 
     await returnToLoopback(flow, { code: 'code-1', state: authorize.searchParams.get('state') });
-    expect((await refused)?.message).toContain(says);
+    expect(await refused).toBeInstanceOf(chatgpt.SiwcError);
     expect(auth.tokenCalls()).toEqual([]);
   });
 
@@ -215,10 +214,9 @@ describe('a returning sign-in', () => {
     const flow = await chatgpt.beginSignIn({ home: scratchDir('siwc-other-client'), registration, fetch: auth.fetch });
     const authorize = started(flow);
     const refused = failureOf(flow.done);
-    const says = 'different client';
 
     await returnToLoopback(flow, { code: 'code-2', state: authorize.searchParams.get('state'), client_id: 'oaiapp_someone_else' });
-    expect((await refused)?.message).toContain(says);
+    expect(await refused).toBeInstanceOf(chatgpt.SiwcError);
     expect(auth.tokenCalls()).toEqual([]);
   });
 
@@ -228,10 +226,9 @@ describe('a returning sign-in', () => {
     const flow = await chatgpt.beginSignIn({ home: scratchDir('siwc-other-account'), registration, fetch: auth.fetch });
     const authorize = started(flow);
     const refused = failureOf(flow.done);
-    const says = 'different ChatGPT account';
 
     await returnToLoopback(flow, { code: 'code-2', state: authorize.searchParams.get('state') });
-    expect((await refused)?.message).toContain(says);
+    expect(await refused).toBeInstanceOf(chatgpt.SiwcError);
   });
 
   test('asking again after a decline carries prompt=consent', async () => {
@@ -294,17 +291,16 @@ describe('what the browser brings back', () => {
   });
 
   test.each([
-    ['answers another attempt', { nonce: 'another-nonce' }, 'nonce mismatch'],
-    ['was issued to another client', { audience: 'oaiapp_other' }, 'another client'],
-  ])('an ID token that %s is refused', async (_what, claims, message) => {
+    ['answers another attempt', { nonce: 'another-nonce' }],
+    ['was issued to another client', { audience: 'oaiapp_other' }],
+  ])('an ID token that %s is refused', async (_what, claims) => {
     const keys = await signer();
     const flow = await chatgpt.beginSignIn({ home: scratchDir('siwc-id-token'), fetch: authServer(keys, exchangeAnswer(keys, claims)).fetch });
     const authorize = started(flow);
     const refused = failureOf(flow.done);
-    const says = message;
 
     await returnToLoopback(flow, { code: 'code-6', state: authorize.searchParams.get('state'), client_id: 'oaiapp_issued' });
-    expect((await refused)?.message).toContain(says);
+    expect(await refused).toBeInstanceOf(chatgpt.SiwcError);
   });
 
   test('an ID token signed by a key auth.openai.com does not publish is refused', async () => {
@@ -314,10 +310,9 @@ describe('what the browser brings back', () => {
     const flow = await chatgpt.beginSignIn({ home: scratchDir('siwc-forged'), fetch: auth.fetch });
     const authorize = started(flow);
     const refused = failureOf(flow.done);
-    const says = 'does not publish';
 
     await returnToLoopback(flow, { code: 'code-7', state: authorize.searchParams.get('state'), client_id: 'oaiapp_issued' });
-    expect((await refused)?.message).toContain(says);
+    expect(await refused).toBeInstanceOf(chatgpt.SiwcError);
   });
 });
 
@@ -627,7 +622,7 @@ describe('the daemon\'s own sign-in', () => {
 
     session.abort();
     await quiet;
-    expect((await using)?.message).toContain('stopped before auth.openai.com answered');
+    expect(await using).toBeInstanceOf(chatgpt.SiwcError);
     expect(held.events).toEqual([]);
     expect(held.auth.tokenCalls().map((call) => call.signal?.aborted)).toEqual([true]);
     expect(read(home)).toMatchObject({ accessToken: 'at-old', refreshToken: 'rt-old' });

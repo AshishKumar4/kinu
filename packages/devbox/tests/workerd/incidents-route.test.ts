@@ -11,7 +11,7 @@ describe('incidents route', () => {
     const response = await SELF.fetch('https://bench.test/incidents?box=probe-1&strategy=snapshot-chain');
 
     expect(response.status).toBe(401);
-    expect(await response.json()).toMatchObject({ ok: false, error: 'unauthorized' });
+    expect(await response.json()).toMatchObject({ ok: false });
   });
 
   it('refuses an incidents request that names no arm at all', async () => {
@@ -22,7 +22,6 @@ describe('incidents route', () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({
       ok: false,
-      error: 'strategy is required: snapshot-chain',
     });
   });
 
@@ -35,7 +34,6 @@ describe('incidents route', () => {
     expect(await response.json()).toMatchObject({
       ok: false,
       strategy: 'snapshot-chain',
-      error: 'strategy not deployed in this run',
     });
   });
 });

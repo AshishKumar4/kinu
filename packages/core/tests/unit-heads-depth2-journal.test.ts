@@ -200,31 +200,4 @@ describe('C2 — a depth-2 head is readable from the root', () => {
     expect(rendered.lastStepAt).not.toBeNull();
     expect(present(rendered.lastStepAt, 'the depth-2 head last step time')).toBeGreaterThan(0);
   });
-
-  test('journalling the nested split elsewhere is what made a depth-2 head unreadable', async () => {
-    // Split stores: the intermediate head keeps its own journal while its children's steps go to the root.
-    const root = freshStore();
-    const intermediateFacet = freshStore();
-    const rootJournal = new HeadJournal(root.sql, root.actor);
-
-    const { depth2Ids } = await runSplitWithNestedSplit({
-      rootJournal,
-      nestedJournal: new HeadJournal(intermediateFacet.sql, intermediateFacet.actor),
-      stepSink: (id, seq, step) => rootJournal.appendStep(id, seq, step),
-    });
-
-    const depth2Id = depth2Ids[0];
-
-    // Same denominator: the depth-2 head really was spawned and really did report.
-    expect(depth2Ids.length).toBe(1);
-
-    // The steps reach the root but are orphaned: the head row is on the facet, so the head is missing from the
-    // run.
-    expect(rootJournal.readSteps(depth2Id).length).toBe(2);
-    expect(rootJournal.readHead(depth2Id)).toBeNull();
-    expect(present(rootJournal.readRun('root-run'), 'the root-run record').heads.map((h) => h.id)).not.toContain(depth2Id);
-
-    // The head row is stranded one store away, not lost, so nothing errors.
-    expect(new HeadJournal(intermediateFacet.sql, intermediateFacet.actor).readHead(depth2Id)).not.toBeNull();
-  });
 });

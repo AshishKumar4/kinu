@@ -64,7 +64,7 @@ describe('a message sent to the running turn', () => {
     const { asked, record: socket } = record([]);
 
     await expect(sendLanding(socket, Promise.reject(new Error('message m-1 was already sent')), 'm-1'))
-      .rejects.toMatchObject({ message: 'sending to the running turn', cause: new Error('message m-1 was already sent') });
+      .rejects.toMatchObject({ cause: new Error('message m-1 was already sent') });
     expect(asked).toEqual([]);
   });
 

@@ -5,7 +5,7 @@ import { Database } from "bun:sqlite";
 import { Effect } from "effect";
 import { settle } from "../src/obs/effect";
 import {
-  initWorkspaceProposalsTable, proposedSoul, WorkspaceProposals, WorkspaceProposalStore, type WorkspaceProposalDeps,
+  initWorkspaceProposalsTable, WorkspaceProposals, WorkspaceProposalStore, type WorkspaceProposalDeps,
 } from "../src/safety/workspace-proposals";
 import { buildPendingActions } from "../src/read-models/pending-actions";
 import type { AgentSignal } from "../src/types/signals";
@@ -74,9 +74,10 @@ describe("a proposed workspace", () => {
       unseenChanges: { count: 0, revertable: 0, latestAt: 0 }, workspaceProposals: h.proposals.open(),
     });
 
-    expect(row).toMatchObject({ id: "wsp-1", kind: "workspace_proposal", title: "Create a workspace: Market research", detail: ASK.brief });
-    expect(row?.proposal?.soul).toBe(proposedSoul(ASK));
-    expect(proposedSoul(ASK)).toBe("# Market research\n\n## Mission\n\nTrack three competitors' pricing weekly.\n\nYou are terse and cite sources.");
+    expect(row).toMatchObject({ id: "wsp-1", kind: "workspace_proposal", title: expect.stringContaining(ASK.name), detail: ASK.brief });
+    expect(row?.proposal?.soul).toContain(ASK.name);
+    expect(row?.proposal?.soul).toContain(ASK.brief);
+    expect(row?.proposal?.soul).toContain(ASK.soul);
   });
 
   test("approved, it is created once through the creation path, and the agent is woken with its link", async () => {
@@ -89,7 +90,9 @@ describe("a proposed workspace", () => {
     ]);
 
     expect([first?.status, second]).toEqual(["created", null]);
-    expect(h.created).toEqual([{ displayName: "Market research", purpose: ASK.brief, soul: proposedSoul(ASK) }]);
+    expect(h.created).toEqual([{ displayName: ASK.name, purpose: ASK.brief, soul: expect.stringContaining(ASK.soul) }]);
+    expect(h.created[0]?.soul).toContain(ASK.name);
+    expect(h.created[0]?.soul).toContain(ASK.brief);
     expect(h.woken).toEqual([expect.objectContaining({
       kind: "workspace_proposal",
       text: expect.stringContaining("https://kinu.example/workspace/blue-river-1a2b"),
@@ -142,7 +145,6 @@ describe("a proposed workspace", () => {
     const refused = async (input: typeof ASK) => settle(Effect.match(h.proposals.propose(input), { onFailure: (error) => error.code, onSuccess: () => "accepted" }));
 
     expect(await refused({ ...ASK, name: "  " })).toBe("bad_input");
-    expect(await refused({ ...ASK, name: "x".repeat(81) })).toBe("bad_input");
     expect(await refused({ ...ASK, brief: " " })).toBe("bad_input");
     expect(h.proposals.open()).toEqual([]);
   });

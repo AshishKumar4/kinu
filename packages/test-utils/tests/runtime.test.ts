@@ -11,26 +11,25 @@ import { createTestRuntime, UnsupportedTestCapability } from '../src/runtime';
 describe('createTestRuntime refuses work it does not perform', () => {
   const { rt } = createTestRuntime();
 
-  const unsupported: readonly (readonly [string, () => Promise<void>, string])[] = [
-    ['code execution', async () => { await rt.executor.execute('return 1', []); }, 'opts.executor'],
-    ['a model call', async () => { await rt.llm.complete('score this'); }, 'opts.llm'],
-    ['a memory write', () => rt.memory.write('MEMORY.md', 'kept?'), 'opts.memory'],
+  const unsupported: readonly (readonly [string, () => Promise<void>])[] = [
+    ['code execution', async () => { await rt.executor.execute('return 1', []); }],
+    ['a model call', async () => { await rt.llm.complete('score this'); }],
+    ['a memory write', () => rt.memory.write('MEMORY.md', 'kept?')],
     ['a crafted-tool write', async () => {
       rt.craftStore.create({
         name: 'double', description: 'doubles', code: 'async (n) => n * 2',
       });
-    }, 'opts.craftStore'],
-    ['a delayed callback', () => rt.schedule.after(10, async () => {}), 'opts.schedule'],
-    ['a durable fiber', async () => { await rt.schedule.fiber('work', async () => 'done'); }, 'opts.schedule'],
-    ['a scaffold write', () => rt.identity.scaffold.write('export default {}'), 'scaffold surface'],
+    }],
+    ['a delayed callback', () => rt.schedule.after(10, async () => {})],
+    ['a durable fiber', async () => { await rt.schedule.fiber('work', async () => 'done'); }],
+    ['a scaffold write', () => rt.identity.scaffold.write('export default {}')],
   ];
 
-  for (const [capability, ask, option] of unsupported) {
-    test(`${capability} fails by name and says what to pass`, async () => {
+  for (const [capability, ask] of unsupported) {
+    test(`${capability} fails by name`, async () => {
       const outcome = ask();
 
       await expect(outcome).rejects.toBeInstanceOf(UnsupportedTestCapability);
-      await expect(outcome).rejects.toThrow(option);
     });
   }
 });

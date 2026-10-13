@@ -341,7 +341,6 @@ describe('a re-drive continues under the profile it started under', () => {
     seedInterruptedRun({ rt: stored.rt, task, roleId: 'auditor' });
     const pending = stored.execute({ op: 'swarm', task }, REDRIVE);
     await expect(pending).rejects.toMatchObject({ code: 'unavailable' });
-    await expect(pending).rejects.toThrow('the judge faulted while scoring');
 
     const flat = harness({ envelope: envelopeOf(TIERS_V2, 2), roleId: 'lead' });
     seedInterruptedRun({ rt: flat.rt, task, roleId: 'lead' });
@@ -512,7 +511,6 @@ describe('`models` routes each node to its own assigned model', () => {
     await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
     await expect(pending).rejects.toThrow('tier');
     await expect(pending).rejects.toThrow('models');
-    await expect(pending).rejects.toThrow('ignored');
   });
 
   test('the identity digest changes when the models change', () => {

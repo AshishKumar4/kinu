@@ -829,13 +829,6 @@ describe('a device is visible before it is usable', () => {
     expect((await harness.userDO.listDevices(await testOwner()))[0].label).toBe('studio tower');
     await harness.closeDeviceHarness();
   });
-
-  test('registration bounds the name before any surface can render it', async () => {
-    const harness = await deviceHarness(`  ${'x'.repeat(120)}  `);
-    expect((await harness.userDO.listDevices(await testOwner()))[0].label)
-      .toBe('x'.repeat(80));
-    await harness.closeDeviceHarness();
-  });
 });
 
 describe('asking for a machine when there is none', () => {

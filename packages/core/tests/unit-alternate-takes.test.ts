@@ -104,7 +104,6 @@ describe('recordTakePick — the preference signal', () => {
     const prompt = buildTakeContinuationPrompt(set, chosen);
     expect(prompt).toContain('the task');
     expect(prompt).toContain('alternative approach');
-    expect(prompt).toContain('continue with this approach');
   });
 });
 

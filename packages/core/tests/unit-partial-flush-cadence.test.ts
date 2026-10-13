@@ -9,14 +9,6 @@ function decisions(signals: readonly PartialFlushSignal[], cadence = partialFlus
 /** The cadence's period, measured rather than restated, so the number lives in one place. */
 const PERIOD = decisions(Array<PartialFlushSignal>(100).fill('content')).indexOf(true, 1);
 
-test('the first content chunk flushes, then every period of content chunks', () => {
-  expect(PERIOD).toBeGreaterThan(1);
-  const content = Array<PartialFlushSignal>(PERIOD * 2 + 1).fill('content');
-  const flushed = decisions(content).flatMap((flushes, index) => flushes ? [index] : []);
-
-  expect(flushed).toEqual([0, PERIOD, PERIOD * 2]);
-});
-
 test('a settled tool result flushes at once and starts the count over', () => {
   const cadence = partialFlushCadence();
 

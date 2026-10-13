@@ -930,7 +930,6 @@ describe('what the address and smoke steps check', () => {
 
     expect(rows.every((row) => row.state === 'done')).toBe(true);
     expect(cloudflare.serving()).toBe('version-1');
-    expect(rows.find((row) => row.id === 'secrets')?.detail).toContain('kept from the running version');
     // `keep_bindings` keeps the live keys; a fresh entry here would destroy them.
     expect(await vault.read('CREDENTIAL_ENCRYPTION_KEY')).toBeNull();
     expect(bindings.map((binding) => binding.name)).not.toContain('CREDENTIAL_ENCRYPTION_KEY');

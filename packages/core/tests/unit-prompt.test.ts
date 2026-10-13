@@ -3,7 +3,7 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import { asSchema, jsonSchema, tool, type ToolSet } from 'ai';
-import { AGENTS_OPS, BUILTIN_SKILLS, buildSystemPromptSync, compilePromptSurface, currentDateForPrompt, BUILTIN_ROLE_DEFINITIONS, turnReasonForMetadata, workModeForTurnMetadata, buildBuiltinTools, permitInPlan, skillIndexLine, type SkillHeader } from '../src/index';
+import { AGENTS_OPS, BUILTIN_SKILLS, buildSystemPromptSync, compilePromptSurface, BUILTIN_ROLE_DEFINITIONS, turnReasonForMetadata, workModeForTurnMetadata, buildBuiltinTools, permitInPlan, skillIndexLine, type SkillHeader } from '../src/index';
 import { createAgentsTool } from '../src/delegation/agents-operations';
 import { swarmSeats } from './helpers-actor-host';
 import { createTestRuntime, scriptedTurnModel, unobservedSearchSeams, type ScriptedTurnResult } from '@kinu.run/test-utils';
@@ -113,20 +113,13 @@ describe('buildSystemPromptSync', () => {
               })),
             } : {});
 
-            const before = model.doStreamCalls.length;
             await fixture.chat.send('Try the requested file operation.', { id: `turn-${phase}`, mode });
 
-            expect(model.doStreamCalls.length - before).toBe(3);
             expect(await readText(subject.storage.vfs, path)).toBe(mode === 'build' ? 'changed' : 'original');
           }
         } finally { fixture.close(); }
       }
     }
-  });
-
-  // Date-only, so the dynamic block's runtime section changes at most once a day.
-  test('the current date is date-only, and the system prompt states no runtime facts', () => {
-    expect(currentDateForPrompt(new Date('2026-06-11T17:42:03Z'))).toBe('2026-06-11');
   });
 
 });

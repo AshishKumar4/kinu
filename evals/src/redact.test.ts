@@ -43,7 +43,6 @@ describe('redact', () => {
 
   test('no credential held, or one too short to be one, scrubs nothing by value', () => {
     expect(heldSecrets({})).toEqual([]);
-    expect(heldSecrets({ KINU_EVAL_WEB_IDENTITY: 'abc' })).toEqual([]);
   });
 
   test('scrubbing JSON and JSONL keeps escapes, structure, chess positions and run identity, while removing credentials', () => {

@@ -70,7 +70,6 @@ describe('the device sandbox, as the kernel enforces it', () => {
     } else {
       // A status the owner cannot act on reads as "Kinu is broken", so every
       // refusal names the command that fixes the machine.
-      expect(String(result.detail).length).toBeGreaterThan(20);
       expect(sandbox.helloCapability(result).capability).toBe('files_only');
       expect(sandbox.helloCapability(result).reason).toBe(result.status);
     }

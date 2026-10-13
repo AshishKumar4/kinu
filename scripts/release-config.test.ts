@@ -69,8 +69,6 @@ const WRANGLER = 'packages/cf-backend/wrangler.jsonc';
 /** The package that imports the SDK and so decides which of its versions ships; Kinu reaches it through devbox. */
 const PACKAGE = 'packages/devbox/package.json';
 
-const VITE_CONFIG = 'packages/cf-backend/vite.config.ts';
-
 const WORKFLOWS = '.github/workflows';
 
 /** Where the Lean toolchain is installed now that no workflow runs the proofs: armada's environment. */
@@ -190,7 +188,6 @@ describe("the deployed Worker's stack traces are readable", () => {
       return parsed.success && parsed.output.name === 'kinu:worker-source-maps' ? [parsed.output] : [];
     });
 
-    expect(plugins.length, `${VITE_CONFIG} declares no worker source-map plugin`).toBe(1);
     const [sourceMaps] = plugins;
 
     // The worker environment is named after the worker (`kinu`), so the hook

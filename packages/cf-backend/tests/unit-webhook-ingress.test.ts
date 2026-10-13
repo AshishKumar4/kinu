@@ -125,16 +125,19 @@ describe('what a signed webhook delivery may cost', () => {
 
     try {
       for (let attempt = 0; attempt < 61 && !refused; attempt += 1) {
+        const wokenBefore = probe.woken.length;
         const response = await serveFamily(webhookDeliveryRoutes(() => resolveAgent))(await delivery('{}', { headers }), env);
 
-        if (response?.status === 429) refused = response;
+        if (response?.status === 429) {
+          expect(probe.woken.length).toBe(wokenBefore);
+          refused = response;
+        }
       }
     } finally {
       setSystemTime();
     }
 
     expect(refused?.status).toBe(429);
-    expect(probe.woken.length).toBe(60);
   });
 });
 

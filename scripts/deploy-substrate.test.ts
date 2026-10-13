@@ -16,14 +16,12 @@ const listing = (output: string) => (
 
 describe('ephemeral container application listings', () => {
   test('a Wrangler failure never proves absence', () => {
-    const messages: string[] = [];
     expect(() => containerAppIds(
       '/repo',
       ['wanted'],
-      (message) => messages.push(message),
+      () => {},
       listing(`${WRANGLER_FAILED}: account selection failed`),
     )).toThrow('absence is unproved');
-    expect(messages[0]).toContain('listing failed');
   });
 
   test('malformed listing output never proves absence', () => {

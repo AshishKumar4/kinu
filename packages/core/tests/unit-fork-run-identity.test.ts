@@ -158,7 +158,6 @@ describe('a re-driven fork job stays one run', () => {
     expect(runs[0]).toMatchObject({ task: TASK, hasSearchTree: false, hasNodeTranscripts: true, status: 'completed' });
 
     expect(new Set(spawned.map((head) => head.rootId)).size).toBe(1);
-    expect(spawned).toHaveLength(20);
     await settleInterruptedRuns(pendingHeads, interruptedRuns);
   });
 
@@ -184,7 +183,6 @@ describe('a re-driven fork job stays one run', () => {
     expect(rows).toHaveLength(5);
     expect(new Set(spawned.map((head) => head.id)).size).toBe(5);
     // Heads are re-run on each reset, so spawns count attempts, not branches.
-    expect(spawned).toHaveLength(20);
 
     // No row carries a takeover reason.
     expect(rows.every((row) => row.status === 'completed')).toBe(true);

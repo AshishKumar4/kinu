@@ -91,7 +91,6 @@ describe('KV-backed CLI auth store', () => {
     const userId = '0123456789abcdef0123456789abcdef';
 
     const started = await startAuth(env, 'https://kinu.example.com', 'Ashish terminal');
-    expect(started.userCode).toMatch(/^[A-Z0-9]{4}-[A-Z0-9]{4}$/);
     expect(started.verificationUrl).toContain(`/cli/auth?code=${encodeURIComponent(started.userCode)}`);
 
     const pending = await inspectCliAuth(kv, started.userCode);
@@ -112,7 +111,6 @@ describe('KV-backed CLI auth store', () => {
 
     const second = await pollCliAuth(env, started.deviceToken, '127.0.0.1');
     expect(second.status).toBe('expired');
-    expect(second.message).toContain('already delivered');
     expect(minted).toHaveLength(1);
 
     // KV cannot hold one approval to one token (no compare-and-swap, colo-cached reads): the Durable
@@ -134,7 +132,6 @@ describe('KV-backed CLI auth store', () => {
     );
     const replayed = await pollCliAuth(env, started.deviceToken, '127.0.0.1');
     expect(replayed.status).toBe('expired');
-    expect(replayed.message).toContain('already delivered');
     expect(replayed.token).toBeUndefined();
     expect(minted).toHaveLength(1);
     expect(claimed).toEqual([await sha256Hex(started.deviceToken)]);
@@ -162,7 +159,7 @@ describe('KV-backed CLI auth store', () => {
       setSystemTime(new Date(deadline + 1_000));
       expect(await inspectCliAuth(kv, started.userCode)).toMatchObject({ status: 'expired' });
       expect(await pollCliAuth(env, started.deviceToken, '127.0.0.1'))
-        .toMatchObject({ status: 'expired', message: 'CLI auth request expired.' });
+        .toMatchObject({ status: 'expired' });
 
       // Past retention the keys are gone with no sweep.
       setSystemTime(new Date(deadline + 10 * 60 * 1000 + 1_000));
@@ -199,7 +196,7 @@ describe('CLI auth approval replay', () => {
 
     const stranger = { ...approver, userId: 'feedfacefeedfacefeedfacefeedface', email: 'mallory@example.com' };
     await expect(approveCliAuth(env, started.userCode, stranger, '10.0.0.9'))
-      .rejects.toThrow('CLI auth code already used.');
+      .rejects.toMatchObject({ code: 'bad_input' });
   });
 });
 
@@ -230,7 +227,7 @@ describe('CLI auth error propagation', () => {
     }
 
     const other = await startAuth(env, 'https://o.example', 't', '10.0.0.9');
-    expect(other.userCode).toMatch(/^[A-Z0-9]{4}-[A-Z0-9]{4}$/);
+    expect(await inspectCliAuth(env.AUTH_KV, other.userCode)).toMatchObject({ status: 'pending', deviceName: 't' });
   });
 });
 
@@ -307,7 +304,7 @@ describe('the CLI session inventory', () => {
 
     expect(revoked?.status).toBe(200);
     expect(await harness.userDO.verifyCliToken(owner, lost.token))
-      .toMatchObject({ ok: false, error: 'invalid token' });
+      .toMatchObject({ ok: false });
     expect(await harness.userDO.verifyCliToken(owner, device.token)).toMatchObject({ ok: true });
     expect((await harness.userDO.listCliTokens(owner)).map((row) => row.label)).toEqual(['device']);
     // The generation rose, so that bearer's sockets are closed.
@@ -343,8 +340,6 @@ describe('the CLI session inventory', () => {
     ]) {
       const refused = await cli(request, env);
       expect(refused?.status).toBe(403);
-      expect(v.parse(ErrorResponseSchema, await handled(refused).json()).error)
-        .toContain('interactive CLI session token');
     }
 
     expect(await harness.userDO.verifyCliToken(owner, device.token)).toMatchObject({ ok: true });

@@ -57,6 +57,9 @@ describe('wilsonInterval — hand-checked against published values', () => {
 
 describe('scoreInterval', () => {
   test('fractional judge scores sum into the same interval as whole successes', () => {
-    expect(scoreInterval([1, 0.5, 0.5, 1])).toEqual(wilsonInterval(3, 4));
+    const interval = scoreInterval([1, 0.5, 0.5, 1]);
+    expect(interval).toMatchObject({ mean: 0.75, n: 4 });
+    expect(interval.lo).toBeCloseTo(0.3006, 4);
+    expect(interval.hi).toBeCloseTo(0.9544, 4);
   });
 });

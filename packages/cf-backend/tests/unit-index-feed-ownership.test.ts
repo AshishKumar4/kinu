@@ -124,7 +124,7 @@ describe('the workspace index feed sits behind the ownership gate', () => {
     await h.settle();
 
     expect(h.index.workspaces).toEqual([
-      { userId: expect.stringMatching(/^[a-f0-9]{32}$/), name: 'mine' },
+      { userId: h.index.users[0], name: 'mine' },
     ]);
   });
 

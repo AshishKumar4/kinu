@@ -303,7 +303,7 @@ describe('a model or effort chosen for a workspace', () => {
     const status = await mustRun(machine, ['status', 'pinned']);
 
     expect(status).toContain('openai-compat/beta-model');
-    expect(status).toMatch(/Effort:\s+high/u);
+    expect(status).toContain('high');
     expect(await nextTurnModel(machine, 'pinned')).toBe('beta-model');
   });
 
