@@ -12,6 +12,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
 import { deviceFiles, JsonValueSchema, type DeviceStatus, type DeviceTransport, type JsonValue } from '@kinu.run/core';
+import { oneMachine } from '@kinu.run/test-utils';
 
 const require_ = createRequire(import.meta.url);
 
@@ -27,7 +28,7 @@ const ReplySchema = v.object({ id: v.string(), result: v.optional(JsonValueSchem
 /** Every frame goes to the daemon as the hub sends it, with the owner's Sandbox switch off; every
  *  answer comes back through the platform's receive limit. */
 function tunnelToDaemon(): DeviceTransport {
-  const connected: DeviceStatus = { connected: true, registered: true, toolchain: null };
+  const connected: DeviceStatus = oneMachine();
   let next = 0;
 
   return {

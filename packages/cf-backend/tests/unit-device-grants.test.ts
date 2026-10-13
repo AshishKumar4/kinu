@@ -11,7 +11,7 @@ import {
   CAPABLE_HELLO, OTHER_WORKSPACE, WORKSPACE, daemon, deviceHarness,
 } from './helpers/device-harness';
 import type { UserCaller } from '@kinu.run/core';
-import { DeviceSocketHub } from '@kinu.run/core';
+import { connectedDevices, DeviceSocketHub, soleLiveDevice } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { appProbe, concretePath, PROBE_ORIGIN } from './helpers/app-probe';
 import {
@@ -794,8 +794,7 @@ describe('a device is visible before it is usable', () => {
     const harness = await deviceHarness('ashish@studio');
     const status = await harness.userDO.deviceRuntimeStatus(harness.workspace);
 
-    expect(status.connected).toBe(true);
-    expect(status.workspaceGranted).toBe(false);
+    expect(soleLiveDevice(status.devices)?.granted).toBe(false);
     expect(status.devices).toMatchObject([
       { id: harness.deviceId, name: 'ashish@studio', os: 'linux', hostname: 'studio', connected: true },
     ]);
@@ -809,8 +808,8 @@ describe('a device is visible before it is usable', () => {
     harness.consentDecision = 'always';
     await harness.userDO.deviceRpc(harness.workspace, 'readRange', ['/tmp/a', 0, 64], { agentName: WORKSPACE });
 
-    expect((await harness.userDO.deviceRuntimeStatus(harness.workspace)).workspaceGranted).toBe(true);
-    expect((await harness.userDO.deviceRuntimeStatus(harness.sibling)).workspaceGranted).toBe(false);
+    expect(soleLiveDevice((await harness.userDO.deviceRuntimeStatus(harness.workspace)).devices)?.granted).toBe(true);
+    expect(soleLiveDevice((await harness.userDO.deviceRuntimeStatus(harness.sibling)).devices)?.granted).toBe(false);
     await harness.closeDeviceHarness();
   });
 
@@ -910,7 +909,7 @@ describe('asking for a machine when there is none', () => {
     await harness.sendDeviceHello(CAPABLE_HELLO);
     const seen = await harness.userDO.deviceRuntimeStatus(caller);
     expect(seen.devices?.map((d) => d.name)).toEqual(['studio']);
-    expect(seen.workspaceGranted).toBe(false);
+    expect(soleLiveDevice(seen.devices)?.granted).toBe(false);
 
     harness.consentDecision = 'always';
     const result = await harness.userDO.deviceRpc(caller, 'exec', ['make build'], { agentName: WORKSPACE });
@@ -918,7 +917,7 @@ describe('asking for a machine when there is none', () => {
     expect(result).toContain('"exitCode":0');
     expect(harness.deviceFrames.filter((f) => f.method === 'exec').map((f) => f.params[0]))
       .toEqual(['make build']);
-    expect((await harness.userDO.deviceRuntimeStatus(caller)).workspaceGranted).toBe(true);
+    expect(soleLiveDevice((await harness.userDO.deviceRuntimeStatus(caller)).devices)?.granted).toBe(true);
     expect((await harness.userDO.listDeviceConsents(await testOwner()))).toEqual([
       expect.objectContaining({ agentName: WORKSPACE, deviceId, policy: 'allow' }),
     ]);
@@ -1027,8 +1026,8 @@ describe('the machine the agent asked for, as the owner reads it', () => {
     expect(harness.unavailableNotices).toEqual([{ workspace: WORKSPACE, devices: [] }]);
 
     const status = await harness.userDO.deviceRuntimeStatus({ workspaceToken: workspace });
-    expect(status.connected).toBe(false);
-    expect(status.workspaceGranted).toBeUndefined();
+    // Away: no machine is live, so none answers for this workspace's grant.
+    expect(connectedDevices(status.devices)).toEqual([]);
     await harness.joinFibers();
     harness.close();
   });
@@ -1045,9 +1044,9 @@ describe('the machine the agent asked for, as the owner reads it', () => {
     expect(harness.unavailableNotices[0]?.devices.map((d) => d.label)).toEqual(['ashish@studio']);
 
     const status = await harness.userDO.deviceRuntimeStatus(harness.workspace);
-    expect(status.connected).toBe(false);
-    expect(status.registered).toBe(true);
-    expect(status.workspaceGranted).toBeUndefined();
+    // Registered and away: the machine is listed, live nowhere, and claims no grant.
+    expect(status.devices).toMatchObject([{ name: 'ashish@studio', connected: false }]);
+    expect(status.devices?.[0]?.granted).toBeUndefined();
     await harness.closeDeviceHarness();
   });
 
@@ -1065,8 +1064,7 @@ describe('the machine the agent asked for, as the owner reads it', () => {
       workspaceName: WORKSPACE,
     }]);
     const status = await harness.userDO.deviceRuntimeStatus(harness.workspace);
-    expect(status.connected).toBe(true);
-    expect(status.workspaceGranted).toBe(false);
+    expect(soleLiveDevice(status.devices)?.granted).toBe(false);
     await harness.closeDeviceHarness();
   });
 
@@ -1080,8 +1078,7 @@ describe('the machine the agent asked for, as the owner reads it', () => {
     expect(harness.consentPrompts).toHaveLength(1);
 
     const status = await harness.userDO.deviceRuntimeStatus(harness.workspace);
-    expect(status.connected).toBe(true);
-    expect(status.workspaceGranted).toBe(true);
+    expect(soleLiveDevice(status.devices)?.granted).toBe(true);
     await harness.closeDeviceHarness();
   });
 });

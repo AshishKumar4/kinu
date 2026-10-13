@@ -61,13 +61,21 @@ export interface DeviceFleetEntry {
 /** The fleet as one flat list — every registered machine with its liveness. */
 export type DeviceFleet = readonly DeviceFleetEntry[];
 
-/** Every machine in the fleet that is live right now, fleet order preserved. */
+/** Whether two snapshots say the same of every machine; unknown reads as no machines. */
 export function sameDeviceStatus(a: DeviceStatus, b: DeviceStatus): boolean {
-  return JSON.stringify({ ...a, devices: a.devices ?? [] }) === JSON.stringify({ ...b, devices: b.devices ?? [] });
+  return JSON.stringify(a.devices ?? []) === JSON.stringify(b.devices ?? []);
 }
 
+/** Every machine in the fleet that is live right now, fleet order preserved. */
 export function connectedDevices(fleet: DeviceFleet | undefined): DeviceFleetEntry[] {
   return (fleet ?? []).filter((device) => device.connected);
+}
+
+/** The one machine live, when exactly one is: the machine a call naming none reaches. */
+export function soleLiveDevice(fleet: DeviceFleet | undefined): DeviceFleetEntry | undefined {
+  const live = connectedDevices(fleet);
+
+  return live.length === 1 ? live[0] : undefined;
 }
 
 /** The ask returned when a command named no device and several machines could answer. */
@@ -206,25 +214,14 @@ export function describeGpuNodes(nodes: readonly string[]): string {
   return names.length > 0 ? names.join(', ') : 'none';
 }
 
-/** Hub snapshot of the user's device fleet, from the transport's perspective. */
+/**
+ * Hub snapshot of the user's device fleet, from the transport's perspective. Each machine's presence, grant, toolchain
+ * and sandbox are its own entry's; what holds for "the machine" when a call names none is the sole live entry's
+ * ({@link soleLiveDevice}).
+ */
 export interface DeviceStatus {
-  /** A live daemon socket is open on the user's device hub right now. */
-  connected: boolean;
-  /** The user has at least one registered (non-revoked) device. */
-  registered: boolean;
-  /** Toolchain answer, or null when never asked or unable to answer. */
-  toolchain: DeviceToolchain | null;
-  /** Every registered device, present only in the enriched snapshot. Absent is unknown, not "no devices". */
+  /** Every registered device, newest first. Absent is unknown (the hub has not answered), not "no devices". */
   devices?: readonly DeviceFleetEntry[];
-  /** Whether this caller's workspace holds an action grant on the connected device, so the model
-   *  knows if its first call raises the consent card. Absent = unknown / no device / non-workspace caller. */
-  workspaceGranted?: boolean;
-  /** The directory named at `kinu connect`. Null when it is not an absolute path: the base tier then fails closed. */
-  consentedRoot?: string | null;
-  /** The machine's home as reported on HELLO, so the hub never runs a command to learn it. */
-  deviceHome?: string | null;
-  /** How the connected device runs a command for this workspace; absent when none is connected. */
-  sandbox?: DeviceSandboxStatus;
 }
 
 /** An answer still inside its window, or null (expiry reads as never-probed). */

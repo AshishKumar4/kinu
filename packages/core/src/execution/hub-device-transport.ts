@@ -21,8 +21,8 @@ import { type UserCaller } from '../safety/workspace-capability';
 /** A failed refresh is recorded, then tolerated: the last snapshot is kept. */
 const STATUS_RECHECK_FAILED: LogEventName = 'device.status_refresh_failed';
 
-/** `toolchain: null` distinguishes "not asked" from "has no toolchain". */
-const DISCONNECTED: DeviceStatus = { connected: false, registered: false, toolchain: null };
+/** No fleet known: before the hub answers, or with no hub to ask. */
+const UNKNOWN: DeviceStatus = {};
 
 /** The methods the daemon snapshots for undo before they change the machine; it reads the turn from their hint. */
 const CHECKPOINTED: ReadonlySet<string> = new Set([DEVICE_METHOD.exec, DEVICE_METHOD.writeFile, DEVICE_METHOD.writeFileIfDigest]);
@@ -81,7 +81,7 @@ export interface HubDeviceTransportOpts {
 }
 
 export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTransport {
-  let snapshot: DeviceStatus = DISCONNECTED;
+  let snapshot: DeviceStatus = UNKNOWN;
   let answered = false;
 
   const adopt = (next: DeviceStatus): void => {
@@ -92,12 +92,27 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
     if (moved) opts.onStatusChanged?.();
   };
 
+  /**
+   * What a call's answer proves of presence: the machine it named, or, naming none, the one the hub answered for (the
+   * account's only machine) or every machine (none was live). A machine the snapshot does not list is left to a refresh.
+   */
+  const present = (connected: boolean, deviceId: string | undefined): void => {
+    const { devices } = snapshot;
+
+    if (devices === undefined) return;
+    const only = devices.length === 1 ? devices[0]?.id : undefined;
+    const named = deviceId ?? (connected ? only : undefined);
+
+    if (connected && named === undefined) return;
+    adopt({ devices: devices.map((device) => (named === undefined || device.id === named ? { ...device, connected } : device)) });
+  };
+
   /** Authoritative hub check, one at a time. A failure keeps the last snapshot. */
   const refreshStatus = flight(() => Effect.suspend(() => {
     const hub = opts.hub();
 
     if (!hub) {
-      adopt(DISCONNECTED);
+      adopt(UNKNOWN);
 
       return Effect.succeed(snapshot);
     }
@@ -124,7 +139,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
 
       if (!hub) {
         // A null hub means an unattached workspace, not an unlinked machine.
-        adopt(DISCONNECTED);
+        adopt(UNKNOWN);
 
         return Effect.fail(deviceFailure(DEVICE_ERRORS.noOwner, WORKSPACE_HAS_NO_OWNER));
       }
@@ -172,7 +187,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
           }
 
           // A successful call re-proves presence only; keep the toolchain answer.
-          adopt({ ...snapshot, connected: true, registered: true });
+          present(true, rpcOpts?.deviceId);
 
           return rawResult === undefined
             ? undefined
@@ -180,7 +195,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
         },
         catch: (cause) => ({ cause }),
       }).pipe(Effect.catch((failed) => {
-        if (isDeviceNotConnectedError(failed)) adopt({ ...snapshot, connected: false });
+        if (isDeviceNotConnectedError(failed)) present(false, rpcOpts?.deviceId);
 
         // Several machines live and none named: caller's error class, fixed before the executor's `io` wrap.
         return isDeviceAmbiguityError(failed)

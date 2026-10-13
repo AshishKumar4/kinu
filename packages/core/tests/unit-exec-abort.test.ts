@@ -1,6 +1,6 @@
 // The AbortSignal chain from `shell` and executor exec tools; one dropped link makes it a no-op.
 import { describe, test, expect } from 'bun:test';
-import { toolExecute } from '@kinu.run/test-utils';
+import { oneMachine, toolExecute } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { createSandboxExecutor, type SandboxHandle } from '../src/execution/sandbox';
@@ -39,7 +39,7 @@ type TunnelFrame = v.InferOutput<typeof TunnelFrameSchema>;
 
 /** Over a real tunnel, so a silent device is bounded by the transport, not a test double. */
 function tunnelTransport(tunnel: DeviceTunnel): DeviceTransport {
-  const connected = { connected: true, registered: true, toolchain: null } as const;
+  const connected = oneMachine();
 
   return {
     rpc: (method, params, opts) => tunnel.rpc(method, params, opts),
@@ -191,8 +191,8 @@ describe('remote executor exec abort', () => {
 
         return cancelAnswer(v.parse(v.string(), params[0]));
       },
-      status: () => ({ connected: true, registered: true, toolchain: null }),
-      refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
+      status: () => (oneMachine()),
+      refreshStatus: async () => (oneMachine()),
     };
 
     return { transport, calls };
@@ -328,8 +328,8 @@ describe('remote executor exec abort', () => {
 
         return Promise.resolve({ requestId: v.parse(v.string(), params[0]), cancelled: 'unknown' });
       },
-      status: () => ({ connected: true, registered: true, toolchain: null }),
-      refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
+      status: () => (oneMachine()),
+      refreshStatus: async () => (oneMachine()),
     };
 
     const provider = createDeviceTunnelExecutor(transport);
@@ -379,8 +379,8 @@ describe('remote executor exec abort', () => {
 
         return { stdout: '', stderr: '', exitCode: 0 };
       },
-      status: () => ({ connected: true, registered: true, toolchain: null }),
-      refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
+      status: () => (oneMachine()),
+      refreshStatus: async () => (oneMachine()),
     };
 
     const provider = createDeviceTunnelExecutor(transport);
@@ -398,8 +398,8 @@ describe('remote executor exec abort', () => {
   test('without a signal, exec resolves normally', async () => {
     const transport: DeviceTransport = {
       rpc: async () => ({ stdout: 'ok', stderr: '', exitCode: 0 }),
-      status: () => ({ connected: true, registered: true, toolchain: null }),
-      refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
+      status: () => (oneMachine()),
+      refreshStatus: async () => (oneMachine()),
     };
 
     const provider = createDeviceTunnelExecutor(transport);

@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { Subprocess } from 'bun';
 import { afterAll, afterEach, describe, expect, test } from 'bun:test';
-import { killAndAwaitExit, present, recordedIn, runOk, scratchDir } from '@kinu.run/test-utils';
+import { killAndAwaitExit, oneMachine, present, recordedIn, runOk, scratchDir } from '@kinu.run/test-utils';
 import { tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import {
@@ -446,7 +446,7 @@ type FrameSandbox = NonNullable<Extract<HubPush, { method: string }>['sandbox']>
 
 /** Core's device transport over the fake hub's socket: every call carries the block, and its answer is the daemon's own. */
 function tunnelOver(socket: HubSocket, sandbox: FrameSandbox): DeviceTransport {
-  const connected: DeviceStatus = { connected: true, registered: true, toolchain: null };
+  const connected: DeviceStatus = oneMachine();
   let next = 0;
 
   return {

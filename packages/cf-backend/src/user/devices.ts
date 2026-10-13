@@ -1239,32 +1239,7 @@ export class UserDevices {
         : { ...reach, granted: this.getDeviceBinding(workspace, device.id) === 'allow' };
     }));
 
-    const live = devices.filter((device) => device.connected);
-
-    if (live.length === 0) {
-      return { connected: false, registered: devices.length > 0, toolchain: null, devices };
-    }
-
-    // Single-machine fields are absent when several machines are live; per-device entries carry them.
-    if (live.length > 1) return { connected: true, registered: true, toolchain: null, devices };
-    const only = live[0];
-
-    if (!only) return { connected: false, registered: devices.length > 0, toolchain: null, devices };
-
-    const status: DeviceStatus = {
-      connected: true,
-      registered: true,
-      toolchain: only.toolchain ?? null,
-      devices,
-      consentedRoot: only.consentedRoot ?? null,
-      deviceHome: only.deviceHome ?? null,
-      // Per caller, not per device: home and roots depend on the workspace.
-      sandbox: only.sandbox,
-    };
-
-    if (only.granted !== undefined) status.workspaceGranted = only.granted;
-
-    return status;
+    return { devices };
   }
 
   /** Pre-grant view of registered devices. Order is newest first and stable across reads:
