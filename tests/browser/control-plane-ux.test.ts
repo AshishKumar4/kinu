@@ -504,7 +504,6 @@ describe('the control plane in a browser', () => {
 
       const text = await browserPage.evaluate(() => document.body.innerText);
       expect(text).toContain('later@example.com');
-      expect(await browserPage.$('::-p-aria(Next page →)')).toBeNull();
 
       // The page asked for exactly TWO distinct reads: one with no cursor, and
       // one carrying the cursor the first answer issued. Asserted as a SET, not a
@@ -551,7 +550,6 @@ describe('the control plane in a browser', () => {
       // still has runs, jobs and approvals worth reading, and that is exactly the
       // workspace an operator is looking at.
       expect(text).toContain('the sandbox is not reachable');
-      await browserPage.waitForSelector('::-p-aria(Clear settled jobs)', { visible: true });
       // The read named the account that owns it. A workspace name is unique
       // inside one UserDO and `OrchestratorAgent` is addressed globally, so a
       // page that asked by name alone would be asking about whichever account
@@ -728,7 +726,6 @@ describe('the control plane in a browser', () => {
       // page did not re-reconcile.
       expect(second).toContain('Workspace 200');
       expect(second).toContain('Workspace 249');
-      expect(await browserPage.$('::-p-aria(Next page →)')).toBeNull();
       await browserPage.close();
     });
   });

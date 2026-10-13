@@ -64,10 +64,11 @@ describe('what sandbox.resize answers', () => {
 
   test('a restart whose final checkpoint failed is refused, naming the size it kept', async () => {
     const box = boxAnswering(async () => ({ kind: 'failed', size: 'large', previous: 'medium', reason: 'the store refused the write' }));
-    const refused = await resize(createSandboxExecutor(box, { sizes: SIZES }), 'large');
-    expect(refused).toMatchObject({ reason: 'io', error: expect.stringContaining('the store refused the write') });
-    expect(refused).toMatchObject({ error: expect.stringContaining('Medium') });
-    expect(refused).toMatchObject({ error: expect.stringContaining('Large') });
+    expect(await resize(createSandboxExecutor(box, { sizes: SIZES }), 'large')).toMatchObject({
+      reason: 'io',
+      // The kept size and the supplied failure, both from this test's own table and box.
+      error: expect.stringMatching(/Medium.*the store refused the write.*Large/su),
+    });
   });
 
   test('a size the table does not name is refused before the container is asked', async () => {

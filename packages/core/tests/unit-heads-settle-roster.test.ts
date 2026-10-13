@@ -4,7 +4,7 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { present } from '@kinu.run/test-utils';
-import { HeadJournal } from '../src/heads/journal';
+import { HeadJournal, UNREPORTED_AT_MERGE_REASON } from '../src/heads/journal';
 import { initHeadsTables } from '../src/heads/schema';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initSwarmNodeRecords } from '../src/strategy/swarm-resume';
@@ -100,6 +100,7 @@ describe('a run that settles closes every head it did not hear from', () => {
       SELECT status, error_message, completed_at FROM head_journal
       WHERE actor_id = ${actor.actorId} AND id = 'h4'`;
 
+    expect(row?.error_message).toBe(UNREPORTED_AT_MERGE_REASON);
     expect(row?.completed_at).toBeGreaterThan(0);
   });
 
