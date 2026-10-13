@@ -72,7 +72,8 @@ const ORDER: Readonly<Record<InspectedWork['phase'], number>> = { blocked: 0, ru
 
 /** Blocked first, since nothing in flight will move it; then what runs; then what waits. */
 export function inspectWork(input: {
-  readonly claims: readonly { readonly claim: StoredActorClaim; readonly actor: string | null }[];
+  /** Each with which try of its turn it is ({@link turnAttemptOf}). */
+  readonly claims: readonly { readonly claim: StoredActorClaim; readonly actor: string | null; readonly attempt: number }[];
   /** Turns handed to an agent's isolate; one the agent reports itself is its report's row. */
   readonly agentTurns: readonly { readonly turnId: string; readonly actor: string }[];
   /** The turns this isolate is executing or awaiting from an agent; any other is stranded. */
@@ -87,7 +88,7 @@ export function inspectWork(input: {
 
   return [
     ...input.claims.filter(({ claim }) => claim.outcome === null)
-      .map(({ claim, actor }) => turnWork({ turnId: claim.turnId, actor, label: `${claim.workMode} turn`, attempt: claim.epoch }, input.executing)),
+      .map(({ claim, actor, attempt }) => turnWork({ turnId: claim.turnId, actor, label: `${claim.workMode} turn`, attempt }, input.executing)),
     ...input.agentTurns.filter((turn) => !answered.has(turn.turnId))
       .map((turn) => turnWork({ ...turn, label: 'delegated turn', attempt: null }, input.executing)),
     ...input.effects.map((owned) => effectWork(owned, input.now)),

@@ -5,10 +5,10 @@ Object. Nimbus runs over that object's `ctx.storage.sql` and owns the workspace
 files and execution state. The workspace also keeps the roster, the shared
 ledgers (evolution, event log, jobs, tasks, missions), main's handed-over turns
 and the branches the owner started during each (`turn_branches`), and tool
-execution. A turn's facts from its preparation are its agent's, frozen beside its
-claims (`actor_turn_facts`, keyed by turn and run, with the final profile and
-the inputs it was resolved from, `actor_profile_inputs`, once the execution
-binds) and carried in its handoff. No shadow VFS or file sync path runs between agents.
+execution. A turn's facts from its preparation are its agent's, frozen on its
+claim (`actor_turn_claims`, kept for its run's recovery and cleared for a new
+run, with the final profile and the inputs it was resolved from,
+`actor_profile_inputs`, once the execution binds) and carried in its handoff. No shadow VFS or file sync path runs between agents.
 
 Every agent, main included, has an `AgentFacet` in a Worker Loader isolate, with
 its own SQLite for its conversation, turn and effect claims, run events, plans
@@ -526,9 +526,9 @@ its own DDL, all of it `IF NOT EXISTS`, all of it run from the same
 | Swarm leaderboard | `exploration_records` (cumulative across runs), `exploration_objectives` (what each objective measures) | `core/src/strategy/records.ts` |
 | Swarm node content | `swarm_node_records` (what a swarm re-entry reads) | `core/src/strategy/swarm-resume.ts` |
 | Live trials | `artifact_trials`, `trial_turns` | `core/src/evolution/trials.ts` |
-| Turn lifecycle | `actor_turn_claims` (`preparing` from the claim, `admitted` once bound to its program and context; `withdrawn_through`, the epoch through which a Retry of the turn's answer withdrew its executions' output), `actor_epochs` (one sequence an agent, over its chat turns and runs: a claim's epoch is its capability) and the session tables above | `core/src/orchestrator/actor-claims.ts` |
+| Turn lifecycle | `actor_turn_claims` (`preparing` from the claim, `admitted` once bound to its program and context; `withdrawn_through`, the epoch through which a Retry of the turn's answer withdrew its executions' output; the facts it was prepared with and the profile it bound), `agent_sequence` (one sequence an agent, over its chat turns, runs and reports: a claim's epoch is its capability) and the session tables above | `core/src/orchestrator/actor-claims.ts` |
 | Deliveries and fences (D13) | `agent_deliveries` (what each agent is owed, until its isolate answers), `actor_turn_fence` (one row an agent: its newest opening, its run, `ended_at`, a Stop's `cancelled_at`; a call that runs more of a turn holds only while it holds that opening), `actor_executions` (each execution an agent opened here, by turn and run, with its newest opening's epoch: a close runs only if it names that execution under that epoch) | `core/src/subordinates/deliveries.ts`, `core/src/subordinates/turn-fence.ts` |
-| Once-only effects | `tool_effect_claims` (a receipt: `started`, `settled` or `indeterminate`, kept where its effect commits and keyed on its run; an agent's isolate keeps a `remote` pointer for a call whose effect commits in the workspace, and the workspace prunes a run's receipts as the run settles), `effect_tombstones` | `core/src/tools/effect-claim.ts`, `core/src/identity/effect-tombstones.ts` |
+| Once-only effects | `tool_effect_claims` (a receipt, started until its result is kept, kept where its effect commits and keyed on its run; an agent's isolate keeps none for a call whose effect commits in the workspace, and the workspace prunes a run's receipts as the run settles), `effect_tombstones` | `core/src/tools/effect-claim.ts`, `core/src/identity/effect-tombstones.ts` |
 | Facts | `agent_facts`, `agent_fact_history` | `core/src/memory/facts.ts` |
 | Account memory (user object) | `agent_facts`, `agent_fact_history` under `ACCOUNT_FACTS_ACTOR`, `account_notes`, `account_memory_proposals` | `core/src/memory/account.ts`, `cf-backend/src/user/account-memory.ts` |
 | Conversation search | `conversation_fts` (derived FTS5 index) | `core/src/memory/conversation-search.ts`, created by the store on first use |

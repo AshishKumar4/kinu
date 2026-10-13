@@ -703,18 +703,20 @@ export class ActorSession {
     return this.liveStream?.durable(callId, signal) ?? Promise.resolve();
   }
 
-  /** What became, where their effects commit, of the history's unpaired calls this store only points at. */
-  private async remoteAnswers(lease: ActorTurnLease): Promise<ReadonlyMap<string, RemoteReceipt | 'absent'>> {
+  /** What became, where their effects commit, of the history's unpaired calls this store holds no receipt of, each asked
+   *  once a turn into `remote`: its own receipts answer first, and an owner's question its own store answers. */
+  private async askRemote(lease: ActorTurnLease, remote: Map<string, RemoteReceipt | 'absent'>): Promise<void> {
     const ask = this.options.receipts;
 
-    const pointed = ask === undefined ? [] : unpairedToolCalls(this.messages)
-      .filter((call) => lostToolCall(this.runtime.storage.sql, this.runtime.actor, lease, call) === 'remote')
+    const unanswered = ask === undefined ? [] : unpairedToolCalls(this.messages)
+      .filter((call) => !remote.has(call.toolCallId) && call.toolName !== ASK_OWNER_TOOL
+        && lostToolCall(this.runtime.storage.sql, this.runtime.actor, lease, call) === null)
       .map((call) => call.toolCallId);
 
-    if (ask === undefined || pointed.length === 0) return new Map();
-    const receipts = await ask(lease, pointed);
+    if (ask === undefined || unanswered.length === 0) return;
+    const receipts = await ask(lease, unanswered);
 
-    return new Map(pointed.map((callId) => [callId, receipts.get(callId) ?? 'absent']));
+    for (const callId of unanswered) remote.set(callId, receipts.get(callId) ?? 'absent');
   }
 
   private async run(
@@ -754,7 +756,7 @@ export class ActorSession {
       durableOutput = new SessionStream(this.canonical, lease.turnId, claim.epoch);
       const stream = durableOutput;
       this.liveStream = stream;
-      const remote = await this.remoteAnswers(lease);
+      const remote = new Map<string, RemoteReceipt | 'absent'>();
       const events = this.turnEvents({ lease, active, profile, input, program, claim, stream, tally, remote });
 
       for await (const event of events) {
@@ -863,7 +865,7 @@ export class ActorSession {
     readonly claim: ActorTurnClaim;
     readonly stream: SessionStream;
     readonly tally: TurnTally;
-    readonly remote: ReadonlyMap<string, RemoteReceipt | 'absent'>;
+    readonly remote: Map<string, RemoteReceipt | 'absent'>;
   }): AsyncIterable<ChatEvent> {
     const { lease, active, profile, input, program, claim, stream, tally, remote } = turn;
     const { tools, extensions } = this.turnToolset(input, profile);
@@ -885,8 +887,14 @@ export class ActorSession {
 
           if (answered !== null) return { state: 'settled', result: answered };
           const lost = lostToolCall(this.runtime.storage.sql, this.runtime.actor, lease, call);
+          const owed = remote.get(call.toolCallId);
 
-          return lost === 'remote' ? lostRemoteCall(remote.get(call.toolCallId), call) : lost;
+          if (lost !== null) return lost;
+
+          if (owed !== undefined) return lostRemoteCall(owed, call);
+
+          // Cut in this process's own step once handed to its tool: where its effect commits was not asked, so it may have run.
+          return stream.dispatched(call.toolCallId) ? lostRemoteCall({ status: 'indeterminate' }, call) : null;
         },
         onAsk: (calls) => {
           const metadata = this.turnMetadata;
@@ -918,6 +926,8 @@ export class ActorSession {
             active.context = base;
             this.messages.splice(0, this.messages.length, ...base.messages);
             stepEntries = base.entries;
+            // Its unpaired calls are paired from this history: one this store holds no receipt of is asked after first.
+            await this.askRemote(lease, remote);
 
             // A cold cache makes rewriting free: the stored blocks collapse into one.
             if (!turnOpened) {

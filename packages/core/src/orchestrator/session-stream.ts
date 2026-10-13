@@ -202,6 +202,11 @@ export class SessionStream {
     return call.held.promise.finally(() => { signal?.removeEventListener('abort', aborted); });
   }
 
+  /** Whether the call was handed to its tool, which asks its part durable before anything of it runs. */
+  dispatched(callId: string): boolean {
+    return this.durableCalls.get(callId)?.awaited === true;
+  }
+
   private durableCall(callId: string): DurableCall {
     const call = this.durableCalls.get(callId) ?? { held: Promise.withResolvers<void>(), awaited: false, failed: null };
 

@@ -3,7 +3,7 @@
  * externally visible effect, in the store the effect commits to, and `started`, `settled(result)` or `indeterminate`.
  * A reset between effect and `tool_call_end` never replays the effect: a settled receipt answers a re-ask, and a started
  * one found again is indeterminate, refused explicitly. A call whose effect commits in another store (a workspace tool,
- * from an agent's isolate) keeps only a `remote` pointer here; that store's own receipt answers for it. Per-tool policy:
+ * from an agent's isolate) keeps nothing here: that store's own receipt answers for it. Per-tool policy:
  * tools/registry.ts (`replay`).
  */
 
@@ -51,7 +51,6 @@ export function initToolEffectClaimTable(execRaw: RawSqlExec): void {
     normalized_call_id TEXT NOT NULL,
     call_digest        TEXT NOT NULL,
     result_json        TEXT,
-    status             TEXT NOT NULL DEFAULT 'started' CHECK (status IN ('started', 'settled', 'indeterminate', 'remote')),
     PRIMARY KEY (actor_id, turn_id, run_id, normalized_call_id, call_digest)
   )`);
   // Recovery reads only what never settled; the primary key leads with the turn, so it scanned every settled claim.
@@ -74,14 +73,8 @@ export function claimToolEffect(
     LIMIT 1`[0];
 
   if (existing) {
-    if (existing.result_json !== null) return { kind: 'settled', result: parseJsonValue(existing.result_json) };
-
     // Found started: whatever began it may or may not have taken effect.
-    void sql`UPDATE tool_effect_claims SET status = 'indeterminate'
-      WHERE actor_id=${actorId} AND turn_id=${key.turnId} AND run_id=${key.runId}
-        AND normalized_call_id=${key.callId} AND call_digest=${key.digest}`;
-
-    return { kind: 'indeterminate' };
+    return existing.result_json === null ? { kind: 'indeterminate' } : { kind: 'settled', result: parseJsonValue(existing.result_json) };
   }
 
   void sql`INSERT OR IGNORE INTO tool_effect_claims
@@ -97,7 +90,7 @@ export function settleToolEffect(
 ): boolean {
   actor.assertCurrent();
 
-  return sql`UPDATE tool_effect_claims SET result_json=${result}, status = 'settled'
+  return sql`UPDATE tool_effect_claims SET result_json=${result}
     WHERE actor_id=${actor.actorId} AND turn_id=${key.turnId} AND run_id=${key.runId}
       AND normalized_call_id=${key.callId} AND call_digest=${key.digest}
       AND result_json IS NULL RETURNING normalized_call_id`.length !== 0;
@@ -177,41 +170,6 @@ export function withEffectReceipt(
   return claimed;
 }
 
-/**
- * Wraps tools whose effect commits in another store (design v2 §4): each call leaves a `remote` pointer here before it
- * crosses, and never a result. A re-ask crosses again under the same call, where that store's receipt answers it; the
- * pointer only tells a repair to ask there, and never itself lets anything run.
- */
-export function withEffectPointer(tools: ToolSet, deps: Omit<EffectClaimDeps, 'transaction'>): ToolSet {
-  const pointed: ToolSet = {};
-
-  for (const [name, entry] of Object.entries(tools)) {
-    const execute = entry.execute;
-
-    if (replayPolicyFor(name) === 'safe' || !execute) {
-      pointed[name] = entry;
-      continue;
-    }
-
-    pointed[name] = {
-      ...entry,
-      execute: async (input, options) => {
-        const key = receiptKey(deps, name, projectJsonValue({ value: input }), options.toolCallId);
-
-        if (options.messages.length > 0) await deps.durable?.(options.toolCallId, options.abortSignal);
-        deps.actor.assertCurrent();
-        void deps.sql`INSERT OR IGNORE INTO tool_effect_claims
-            (actor_id, turn_id, run_id, normalized_call_id, call_digest, result_json, status)
-          VALUES (${deps.actor.actorId}, ${key.turnId}, ${key.runId}, ${key.callId}, ${key.digest}, ${null}, 'remote')`;
-
-        return await execute(input, options);
-      },
-    };
-  }
-
-  return pointed;
-}
-
 /** Inside the transaction: a settled receipt answers; a started one cannot exist for a transactional effect, which rolls
  *  back with it, and is refused if found; else the receipt, the effect and its result are written together. */
 function committedOnce(deps: EffectClaimDeps, key: ToolEffectKey, name: string, run: () => JsonValue): ReceiptCommit {
@@ -238,22 +196,20 @@ export type LostToolCall =
   | { readonly state: 'settled'; readonly result: JsonValue }
   | { readonly state: 'claimed'; readonly refusal: string };
 
-/** Per execution: providers reuse call ids; an `<assignment>#<k>` round claims as its assignment. `'remote'`: this
- *  store only points at the call, and the store its effect commits to answers for it ({@link lostRemoteCall}). */
+/** Per execution: providers reuse call ids; an `<assignment>#<k>` round claims as its assignment. Null: this store holds
+ *  no receipt of it, which the store its effect commits to may ({@link lostRemoteCall}). */
 export function lostToolCall(
   sql: SqlExecutor, actor: ActorHandle, execution: ReceiptExecution, call: { readonly toolCallId: string; readonly toolName: string },
-): LostToolCall | 'remote' | null {
+): LostToolCall | null {
   actor.assertCurrent();
 
   const [claimTurn = execution.turnId] = execution.turnId.split('#');
 
-  const row = sql<{ result_json: string | null; status: string }>`SELECT result_json, status FROM tool_effect_claims
+  const row = sql<{ result_json: string | null }>`SELECT result_json FROM tool_effect_claims
     WHERE actor_id=${actor.actorId} AND turn_id IN (${execution.turnId}, ${claimTurn}) AND run_id=${execution.runId}
       AND normalized_call_id=${call.toolCallId} LIMIT 1`[0];
 
   if (row === undefined) return null;
-
-  if (row.status === 'remote') return 'remote';
 
   return row.result_json === null
     ? { state: 'claimed', refusal: indeterminateEffectMessage(call.toolName, call.toolCallId) }
@@ -261,19 +217,19 @@ export function lostToolCall(
 }
 
 /**
- * A pointed call's answer, from what its owner said of it: its result, or the indeterminate refusal for one it started
- * and never settled. Owned but never started there (`'absent'`), it never ran: the interruption. Its owner not asked
- * (`undefined`, a call cut in this process's own step) may or may not have run it.
+ * A call this store holds no receipt of, from what the store its effect commits to said of it: its result, or the
+ * indeterminate refusal for one it started and never settled. Never started there either (`'absent'`), it never ran:
+ * the interruption.
  */
-export function lostRemoteCall(answer: RemoteReceipt | 'absent' | undefined, call: { readonly toolCallId: string; readonly toolName: string }): LostToolCall | null {
+export function lostRemoteCall(answer: RemoteReceipt | 'absent', call: { readonly toolCallId: string; readonly toolName: string }): LostToolCall | null {
   if (answer === 'absent') return null;
 
-  return answer?.status === 'settled'
+  return answer.status === 'settled'
     ? { state: 'settled', result: answer.output }
     : { state: 'claimed', refusal: indeterminateEffectMessage(call.toolName, call.toolCallId) };
 }
 
-/** The receipts this store keeps for an execution's calls, as its isolate asks for the ones it only points at. */
+/** The receipts this store keeps for an execution's calls, as its isolate asks for the ones it holds none of. */
 export function remoteReceipts(
   sql: SqlExecutor, actor: ActorHandle, execution: ReceiptExecution, callIds: readonly string[],
 ): ReadonlyMap<string, RemoteReceipt> {
@@ -285,7 +241,7 @@ export function remoteReceipts(
   for (const callId of callIds) {
     const row = sql<{ result_json: string | null }>`SELECT result_json FROM tool_effect_claims
       WHERE actor_id=${actor.actorId} AND turn_id IN (${execution.turnId}, ${claimTurn}) AND run_id=${execution.runId}
-        AND normalized_call_id=${callId} AND status <> 'remote' LIMIT 1`[0];
+        AND normalized_call_id=${callId} LIMIT 1`[0];
 
     if (row !== undefined) receipts.set(callId, row.result_json === null ? { status: 'indeterminate' } : { status: 'settled', output: parseJsonValue(row.result_json) });
   }

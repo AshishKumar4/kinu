@@ -9,6 +9,7 @@ import {
   type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpening, type JsonObject, type PlanReview, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
   type InspectedWork, type PreparedAgentTurn, type PreparedTurn, type TerminalTurnFacts, type TerminalTurnParts,
   type SessionEvent, type TurnAssemblyRequest, type WorkMode, type OwnerQuestionStore, type RunEndOutcome, type DeliveredRun, type AgentOwes, type AgentReport, type ClaimedRound,
+  turnAttemptOf,
 } from '@kinu.run/core';
 import { createCompactionStateStore, type CompactionStateStore } from '@kinu.run/compaction';
 import { attempt, diagnostics, hold, logged, renderThrownChain, settle, toKinuError, type KinuError } from '@kinu.run/core/obs';
@@ -529,7 +530,7 @@ export class FacetChat {
     const running = actor.session.turnClaim?.turnId;
 
     return inspectWork({
-      claims: actor.stores.claims.unsettled().map((claim) => ({ claim, actor: name })),
+      claims: actor.stores.claims.unsettled().map((claim) => ({ claim, actor: name, attempt: turnAttemptOf(actor.runtime.storage.sql, claim) })),
       agentTurns: [],
       executing: new Set(running === undefined ? [] : [running]),
       effects: ledger.pendingSequences().flatMap((sequence) => ledger.owed(sequence)).map((effect) => ({ effect, actor: name })),

@@ -1,13 +1,15 @@
 /**
- * An agent's sequence, in its own store, which numbers its reports to the workspace, and the newest report the
- * workspace took from each agent (design v3 B): a report delayed past a later one, or sent before either side reset,
- * changes nothing there. Its executions' openings are numbered by their claims' epochs (`actor_epochs`).
+ * An agent's one sequence, in its own store, which numbers its reports to the workspace and its executions' openings (its
+ * claims' epochs) alike, and the newest report the workspace took from each agent (design v3 B): a report delayed past a
+ * later one, or sent before either side reset, changes nothing there. Each is compared, strictly, only with the newest of
+ * its kind the workspace took, so neither assumes its numbers consecutive.
  */
 import * as v from 'valibot';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { AgentStandingReport } from './agent-isolate';
 
-/** The agent's side: one counter, in its own store, which a restart of its isolate continues. */
+/** The agent's side: one counter, in its own store, which a restart of its isolate continues; its reports and its
+ *  executions' epochs both draw from it. */
 export function initAgentSequenceTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS agent_sequence (
     actor_id TEXT PRIMARY KEY,

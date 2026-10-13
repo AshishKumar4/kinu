@@ -1,5 +1,5 @@
 import { exists as nimbusExists, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
-import { PLATFORM_CATALOG, GitHubFactSchema, actorPolicy, AgentDeliveries, AgentStops, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type Fact, AGENT_CONFIG_KEYS } from '@kinu.run/core';
+import { PLATFORM_CATALOG, GitHubFactSchema, actorPolicy, AgentDeliveries, AgentStops, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type Fact, AGENT_CONFIG_KEYS, turnAttemptOf } from '@kinu.run/core';
 import { ROOT_SLATE_CALLER, type SlateCaller } from '@kinu.run/core/slates';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
@@ -3892,7 +3892,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const agentTurns = new AgentOpenTurns(this.boundSql).all();
 
     return inspectWork({
-      claims: turns.map((turn) => ({ claim: turn.claim, actor: actorName(turn.record.actorId) })),
+      claims: turns.map((turn) => ({ claim: turn.claim, actor: actorName(turn.record.actorId), attempt: turnAttemptOf(this.boundSql, turn.claim) })),
       agentTurns: agentTurns.map((turn) => ({ turnId: turn.turnId, actor: actorName(turn.actorId) ?? turn.actorId })),
       executing: new Set(agentTurns.filter((turn) => this.agentTurns.isOpen(turn.actorId, turn.turnId)).map((turn) => turn.turnId)),
       effects: ledger.pendingSequences().flatMap((sequence) => ledger.owed(sequence)).map((effect) => ({ effect, actor: null })),
