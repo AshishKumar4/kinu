@@ -7,11 +7,7 @@ function unused(): never {
   throw new Error('the adapter called an unrelated workspace method');
 }
 
-const unusedWorkspace: AgentWorkspaceCalls = {
-  session: unused,
-  stateSession: unused,
-  memory: unused,
-  program: unused,
+const unusedPort: AgentWorkspacePort = {
   traceTurn: unused,
   traceStream: unused,
   resume: unused,
@@ -50,12 +46,13 @@ const unusedWorkspace: AgentWorkspaceCalls = {
   logActivity: unused,
   reportModelCall: unused,
   reportModelOperation: unused,
-  port: unused,
 };
+
+const unusedWorkspace: AgentWorkspaceCalls = { session: unused, stateSession: unused, memory: unused, program: unused, port: unused };
 
 /** A workspace whose port answers with `calls`, as its host does. */
 function ported(calls: Partial<AgentWorkspacePort>): AgentWorkspaceCalls {
-  return { ...unusedWorkspace, port: async () => ({ ...unusedWorkspace, ...calls }) };
+  return { ...unusedWorkspace, port: async () => ({ ...unusedPort, ...calls }) };
 }
 
 test('a rejected outgoing promise releases its pipeline and preserves the exact rejection', async () => {

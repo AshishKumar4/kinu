@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 import {
-  autoTitleMayReplace, nameOriginOf, type NameOrigin, WORKSPACE_KEYED_ROWS, armCapabilityReconcile, clearCapabilityReconcile, commitWorkspaceCapability, freshWorkspaceCapability, pendingCapabilityReconcile, revokeWorkspaceCapability, workspaceCapabilityHash, type UserCaller, validateWorkspaceName, sanitizeWorkspaceLogoSvg, resolveWorkspaceTitle, WorkspaceOverviewSchema, type WorkspaceOverview,
+  autoTitleMayReplace, nameOriginOf, type NameOrigin, WORKSPACE_KEYED_ROWS, commitWorkspaceCapability, freshWorkspaceCapability, revokeWorkspaceCapability, workspaceCapabilityHash, type UserCaller, validateWorkspaceName, sanitizeWorkspaceLogoSvg, resolveWorkspaceTitle, WorkspaceOverviewSchema, type WorkspaceOverview,
 } from '@kinu.run/core';
 import { diagnostics, KinuError, settle, settleLogged, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -78,25 +78,7 @@ export class UserWorkspaces {
    * Admission is re-checked in the same synchronous turn as the write, so a delete during minting wins.
    */
   private async reconcileWorkspaceCapability(workspaceName: string, presentedHash: string | null): Promise<void> {
-    if (presentedHash && presentedHash === workspaceCapabilityHash(this.host.ctx.storage.sql, workspaceName)) {
-      // Matching hash is done only if no rotation is pending on a replica; the root holds the
-      // only plaintext, so it is asked to re-push.
-      const pending = pendingCapabilityReconcile(this.host.ctx.storage.sql, workspaceName);
-
-      if (pending === null || pending !== presentedHash) return;
-      const workspace = this.host.env.OrchestratorAgent.get(this.host.env.OrchestratorAgent.idFromName(workspaceName));
-      const result = await workspace.repushWorkspaceCapability();
-
-      if (result.missed === 0) {
-        clearCapabilityReconcile(this.host.ctx.storage.sql, workspaceName);
-
-        return;
-      }
-
-      armCapabilityReconcile(this.host.ctx.storage.sql, workspaceName, presentedHash);
-
-      return;
-    }
+    if (presentedHash && presentedHash === workspaceCapabilityHash(this.host.ctx.storage.sql, workspaceName)) return;
 
     const inFlight = this._provisioning.get(workspaceName);
 
@@ -110,13 +92,8 @@ export class UserWorkspaces {
       }
 
       commitWorkspaceCapability(this.host.ctx.storage.sql, workspaceName, tokenHash);
-      clearCapabilityReconcile(this.host.ctx.storage.sql, workspaceName);
       const workspace = this.host.env.OrchestratorAgent.get(this.host.env.OrchestratorAgent.idFromName(workspaceName));
-      const result = await workspace.installWorkspaceCapability(token);
-
-      if (result.missed > 0) {
-        armCapabilityReconcile(this.host.ctx.storage.sql, workspaceName, tokenHash);
-      }
+      await workspace.installWorkspaceCapability(token);
     })();
 
     this._provisioning.set(workspaceName, task);

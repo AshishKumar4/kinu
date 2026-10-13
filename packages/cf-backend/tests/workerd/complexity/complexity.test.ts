@@ -262,7 +262,7 @@ const turnStatements = new Map<number, { readonly workspace: OperationCost['tabl
  * job queue; main's isolate's 182), on 2026-10-12, once every execution is claimed before it is prepared under an epoch
  * minted in the agent's own store (`actor_epochs`, +1; the report sequence numbers no opening, -1), binds the authority
  * inputs its profile resolved from, kept once per distinct inputs (`actor_profile_inputs`, +1), and each opening is
- * recorded where the workspace judges the closes that name it (`actor_turn_openings`, +1; a close naming the newest
+ * recorded where the workspace judges the closes that name it (`actor_executions`, +1; a close naming the newest
  * opening is judged by the held fence row and reads nothing).
  * What remains, by group. Workspace: the Agents SDK's job queue (65, every arm and alarm asks it, and it is the SDK's);
  * the settle sequence's terminal effects and receipts (25: each attempt is written before its call, and each retry
@@ -438,15 +438,15 @@ const CROSSINGS = { open: 20, step: 5, close: 20 } as const;
 
 /**
  * The planted calls (`ObservedOrchestrator.plantCrossings`), each counted once where it lands, and nothing else: the
- * workspace into the account and into main's isolate; main's isolate into the relay, which opens the workspace's host
- * and calls it, a real call nested in another; and into a memory and a Nimbus session the host answers with. The
+ * workspace into the account and into main's isolate; main's isolate into the relay for its port, the workspace's host,
+ * and through it; and into a memory and a Nimbus session the host answers with. The
  * session's read calls `client()` and `cred()` on itself: helpers of the one call, never crossings of their own.
  */
 const PLANTED = {
   workspace: {
     'account.getCredentialsRevision': 1, 'AgentMemory.tail': 1, 'HostedSession._rpcReadFile': 1,
     'host.logActivity': 1, 'host.memory': 1, 'host.session': 1,
-    'relay.logActivity': 1, 'relay.memory': 1, 'relay.session': 1,
+    'relay.memory': 1, 'relay.port': 1, 'relay.session': 1,
     'workspace.agentWorkspace': 3,
   },
   main: { 'facet.newestFirst': 1 },

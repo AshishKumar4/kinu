@@ -105,19 +105,33 @@ function initCompactionStateTables(execRaw: RawSqlExec): void {
 }
 
 export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
-  db.transactionSync(() => { createWorkspaceTables(db); });
+  db.transactionSync(() => {
+    createAgentTables(db);
+    createAgentLifecycleTables(db.execRaw);
+  });
 }
 
-function createWorkspaceTables(db: WorkspaceSchemaSql): void {
+/** An agent's own isolate's database: what its stores use, without the workspace's side of its agents' lifecycle. */
+export function initAgentIsolateSchema(db: WorkspaceSchemaSql): void {
+  db.transactionSync(() => { createAgentTables(db); });
+}
+
+/** The workspace's side of its agents' lifecycle, read and written only over its own database: the turns it handed
+ *  out, the reports it took, the fence its calls hold and the Stops it owes. */
+function createAgentLifecycleTables(execRaw: RawSqlExec): void {
+  initAgentOpenTurnsTable(execRaw);
+  initAgentReportsTable(execRaw);
+  initTurnFenceTable(execRaw);
+  initAgentStopsTable(execRaw);
+}
+
+function createAgentTables(db: WorkspaceSchemaSql): void {
   const { execRaw } = db;
   initWorkspaceOwnershipTables(execRaw);
   initWorkspaceActorTable(execRaw);
-  initAgentOpenTurnsTable(execRaw);
   initAgentSequenceTable(execRaw);
-  initAgentReportsTable(execRaw);
-  initTurnFenceTable(execRaw);
   initAgentDeliveriesTable(execRaw);
-  initAgentStopsTable(execRaw);
+  // Its figures folded where its run events are, in its own isolate; the workspace keeps those reported to it.
   initAgentFiguresTable(execRaw);
   initSubordinateRosterTable(db.exec);
   initActorStateSchema(db);

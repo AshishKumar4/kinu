@@ -759,8 +759,8 @@ describe('improvement_lanes — one verdict gates the improvement lanes', () => 
     return harness;
   }
 
-  const advisors = (harness: ActorHarness<HarnessOrchestratorAgent>) => harness.db.query<{ origin: string; tab: number; input: number; lifetime: string }, []>(
-    "SELECT origin, tab, input, lifetime FROM workspace_actors WHERE name = 'ask-advisor' OR name LIKE 'ask-advisor-%'",
+  const advisors = (harness: ActorHarness<HarnessOrchestratorAgent>) => harness.db.query<{ origin: string; lifetime: string }, []>(
+    "SELECT origin, lifetime FROM workspace_actors WHERE name = 'ask-advisor' OR name LIKE 'ask-advisor-%'",
   ).all();
 
   /** Notes once the lanes ran and every hired advisor's delegated turn has drained. */
@@ -782,7 +782,7 @@ describe('improvement_lanes — one verdict gates the improvement lanes', () => 
     await chatSessionTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'deploy the api' }] });
     expect(await settled(harness, { messageId: 'a-build', text: 'deployed' })).toBe(1);
     // The reviewer is a background agent, listed with the others: view-only, no tab, one task.
-    expect(advisors(harness)).toEqual([{ origin: 'evolution', tab: 0, input: 0, lifetime: 'task' }]);
+    expect(advisors(harness)).toEqual([{ origin: 'evolution', lifetime: 'task' }]);
   });
 
   test('a FAILED build turn feeds no lane', async () => {

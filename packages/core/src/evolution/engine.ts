@@ -160,11 +160,12 @@ export class EvolutionEngine {
     this.config = { ...DEFAULT_EVOLUTION_CONFIG, ...config };
     rt.actor.assertCurrent();
 
-    const actor = rt.storage.sql<{ evolves: number }>`
-      SELECT evolves FROM workspace_actors WHERE actor_id = ${rt.actor.actorId}`[0];
+    const actor = rt.storage.sql<{ origin: string }>`
+      SELECT origin FROM workspace_actors WHERE actor_id = ${rt.actor.actorId}`[0];
 
     if (actor === undefined) throw new KinuError('missing', 'the evolution actor has no membership record');
-    this.evolves = actor.evolves === 1;
+    // Only the workspace agent evolves (`MAIN_PROFILE`).
+    this.evolves = actor.origin === 'system';
     // Opened on first use: an engine with evolution off never scores a crafted tool, and an agent in its own
     // isolate has no crafted-tool store (they are the workspace's).
     let ledger: CraftLedger | undefined;

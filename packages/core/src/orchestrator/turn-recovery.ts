@@ -92,7 +92,7 @@ export function decideInterruptedTurn(turn: InterruptedTurn): Effect.Effect<Inte
     if (turn.turnOpen()) return { kind: 'active' } as const;
 
     if (cuts.work >= POISON_WORK_CUTS || cuts.provider >= STALLED_PROVIDER_CUTS) {
-      diagnostics.event('actor.turn_stalled', { actor: turn.actor, turn: claim.turnId, runs: claim.epoch, workCuts: cuts.work, providerCuts: cuts.provider });
+      diagnostics.event('actor.turn_stalled', { actor: turn.actor, turn: claim.turnId, epoch: claim.epoch, workCuts: cuts.work, providerCuts: cuts.provider });
 
       return settled(claim, 'error', 'stalled');
     }

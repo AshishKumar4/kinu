@@ -278,11 +278,15 @@ function workspaceTools(
 
         turn.live.dynamic = answer.dynamic;
         turn.database.recordReports(turn.id, answer.reports);
-        turn.capture.evidence.push(...answer.captured.evidence);
-        turn.capture.decisions.push(...answer.captured.decisions);
-        turn.capture.artifacts.push(...answer.captured.artifacts);
-        turn.capture.toolCalls.push(...answer.captured.toolCalls);
-        turn.capture.childHeadIds.push(...answer.captured.childHeadIds);
+        const { captured } = answer;
+
+        if (turn.capture !== undefined && captured !== undefined) {
+          turn.capture.evidence.push(...captured.evidence);
+          turn.capture.decisions.push(...captured.decisions);
+          turn.capture.artifacts.push(...captured.artifacts);
+          turn.capture.toolCalls.push(...captured.toolCalls);
+          turn.capture.childHeadIds.push(...captured.childHeadIds);
+        }
 
         return answer.output;
       },
@@ -399,7 +403,8 @@ interface FacetToolTurn {
   readonly parentDriven: boolean;
   readonly driving: JsonObject | undefined;
   readonly live: LiveTurn;
-  readonly capture: HeadCapture;
+  /** A run's, which its inference reads; a chat turn records none. */
+  readonly capture?: HeadCapture;
   readonly database: AgentDatabase;
   /** The agent's own plan store, where the owner's lane submits and replies; a run reaches no owner's lane. */
   readonly owner?: { readonly submitPlan: SubmitPlanToolDeps; readonly replyToComment: ReplyToCommentToolDeps };
@@ -541,12 +546,13 @@ export async function deliveredRun(
 
   const transcript = actor.stores.history.transcript(CHAT_SESSION_ID);
   const completion = report.canonicalCompletion;
-  // The run's report carries its narration, so it is read whether or not the answer's metadata needs it.
-  const narration = completion === undefined ? [] : await transcript.narration(answerParts(completion.outputPartReferences, completion.finalTextReference));
-
   const close: TurnBound = run.opened ?? { turnId: task.sequenceId, runId, epoch: null };
 
-  if (completion !== undefined) await database.answer(completion, await answerMetadataOf(workspace, close, async () => narration));
+  // Its narration is read only if the answer's metadata needs it.
+  if (completion !== undefined) {
+    await database.answer(completion, await answerMetadataOf(workspace, close, async () => await transcript.narration(answerParts(completion.outputPartReferences, completion.finalTextReference))));
+  }
+
   await spend.settled();
 
   return {
@@ -554,7 +560,6 @@ export async function deliveredRun(
     activity: database.takeActivity(),
     figures: database.figures(),
     errorMessage: report.errorMessage ?? null,
-    narration: narration.join('\n'),
     ...(produced !== undefined && { produced: encodeModelMessageValues(produced) }),
   };
 }

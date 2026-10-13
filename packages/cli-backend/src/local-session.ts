@@ -39,7 +39,7 @@ import { ActorSession, type ActorTurnLease,
   BackgroundJobStore, BackgroundJobRunner, type BackgroundJobRunnerDeps, type JobHolder, processJobHolder, type TaskListStore,
   WorkspaceJobAuthorities, endedStepLoopJobs, actorReferenceOf, type JobAuthority, type JobRetirement, type WorkspaceJobPorts,
   backgroundJobNotice,
-  DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals, admitSubordinateTask, type AgentSignal,
+  DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals, admitSubordinateTask, AgentDeliveries, assignmentDelivery, type AgentSignal,
   BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob, type ActorToolsets,
   BACKGROUND_POLICY, type BackgroundPolicy,
   type MctsSearchStore,
@@ -621,10 +621,6 @@ export class LocalAgentSession {
     }));
   }
 
-  /** Shared, not copied, with every local child on this plane: revocations are live. */
-  instructionApprovalAuthority(): InstructionApprovalStore {
-    return this.instructionApprovals;
-  }
   getAlwaysActiveSkills(): string[] { return getAlwaysActiveSkills(this.config).names; }
   setAlwaysActiveSkills(names: ReadonlyArray<string>): void { setAlwaysActiveSkills(this.config, names); }
 
@@ -735,8 +731,8 @@ export class LocalAgentSession {
   }
 
   /**
-   * With no host here (the interactive CLI over a daemon's workspace), the decision is admitted to the hire's own
-   * event log, as its hirer's message would be: whichever process hosts it drains it there and runs its turn.
+   * With no host here (the interactive CLI over a daemon's workspace), the decision is admitted to the hire as its
+   * hirer's message is, and owed to it in the same commit: whichever process hosts it crosses it at its next pass.
    */
   private admitDecision(actorId: string, signal: AgentSignal): Effect.Effect<void, KinuError> {
     return Effect.gen({ self: this }, function* () {
@@ -746,11 +742,14 @@ export class LocalAgentSession {
         return yield* Effect.fail(new KinuError('missing', `No live agent ${actorId} to tell of the decision.`));
       }
 
-      const { handle } = this.actorHost.bindStores(actorReferenceOf(record));
+      const log = new EventLog(makeSqlExec(this.db), this.actorHost.bindStores(actorReferenceOf(record)).handle);
+      const from = this.rt.actor.name;
 
-      admitSubordinateTask(new EventLog(makeSqlExec(this.db), handle), {
-        fromWorkspace: this.rt.actor.name, kind: 'message', body: signal.text, mode: 'build', now: Date.now(),
-      });
+      this.db.transaction(() => {
+        const admitted = admitSubordinateTask(log, { fromWorkspace: from, kind: 'message', body: signal.text, mode: 'build', now: Date.now() });
+
+        if (admitted.admitted) new AgentDeliveries(this.rt.storage.sql).add(actorId, assignmentDelivery(log, { id: admitted.id, body: signal.text.trim(), mode: 'build', from }));
+      })();
     });
   }
 
@@ -2429,11 +2428,6 @@ export class LocalAgentSession {
     }
 
     return profiles;
-  }
-
-  /** Drop the cached provider listing after an unobservable change (credential, connection, sign-in). */
-  refreshProviderListing(): void {
-    this.profiles().refreshListing();
   }
 
   /** A static-model session answers only for its own model; other specs are refused by name. */

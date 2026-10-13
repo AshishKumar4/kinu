@@ -9,7 +9,7 @@
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  AgentOwedWork, TERMINAL_EFFECT_RETRY_CEILING_MS, claimToolEffect, createFactsStore,
+  AgentReports, TERMINAL_EFFECT_RETRY_CEILING_MS, claimToolEffect, createFactsStore,
   type TerminalEffectName, type TerminalEffectPhase,
 } from '@kinu.run/core';
 import { createRecordingLogger } from '@kinu.run/core/obs';
@@ -380,7 +380,7 @@ describe("an agent's reports reach its workspace newest first", () => {
 
     laterBy(1);
     const restarted = await reactivateOrchestratorHarness(harness.db);
-    const owes = () => new AgentOwedWork(sqlOver(restarted.db)).all().includes(main) || agentWakes(restarted.db).includes(main);
+    const owes = () => new AgentReports(sqlOver(restarted.db)).holding().includes(main) || agentWakes(restarted.db).includes(main);
     const { db } = await mainRows(restarted);
     const handedOver = () => db.query("SELECT 1 FROM terminal_effects WHERE effect_key LIKE 'v1:workspace_settle:%'").get() === null;
 

@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import {
-  meetTrust, meetAll, trustSatisfies,
+  meetTrust,
   deriveEventTrust, derivePriority, deriveDefaultVisibility, deriveFields,
   IngressRejectedError,
   type IngressDescriptor,
@@ -18,20 +18,6 @@ describe('meetTrust', () => {
     expect(meetTrust('external', 'owner')).toBe('external');
     expect(meetTrust('authenticated', 'self')).toBe('authenticated');
     expect(meetTrust('self', 'external')).toBe('external');
-  });
-  test('meetAll reduces to min across the chain', () => {
-    expect(meetAll(['owner', 'self', 'authenticated'])).toBe('authenticated');
-    expect(meetAll(['external', 'owner', 'self'])).toBe('external');
-    expect(meetAll(['owner'])).toBe('owner');
-    expect(meetAll([])).toBe('self');           // vacuous
-  });
-});
-
-describe('trustSatisfies', () => {
-  test('owner satisfies authenticated and below', () => {
-    expect(trustSatisfies('owner', 'authenticated')).toBe(true);
-    expect(trustSatisfies('owner', 'external')).toBe(true);
-    expect(trustSatisfies('authenticated', 'owner')).toBe(false);
   });
 });
 

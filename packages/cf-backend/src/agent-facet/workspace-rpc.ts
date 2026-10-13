@@ -27,16 +27,18 @@ function disposeWorkspaceRpc<T>(pending: Promise<T>): void {
   }
 }
 
-export interface AgentWorkspaceCalls extends Omit<AgentWorkspace, 'session' | 'stateSession' | 'memory'> {
+/** The agent's relay to its workspace: the calls whose answers own live capabilities, and the port every other crosses. */
+export interface AgentWorkspaceCalls {
   session(): Promise<NimbusSessionSurface>;
   stateSession(): Promise<NimbusSessionSurface>;
   memory(): Promise<Memory>;
+  program: AgentWorkspace['program'];
   /** The agent's port: its workspace's host, held across calls (design v2 §3). */
   port(): Promise<AgentWorkspacePort>;
 }
 
 /** What crosses through the held port: every call whose answer is data, not a live capability. */
-export type AgentWorkspacePort = Omit<AgentWorkspaceCalls, 'session' | 'stateSession' | 'memory' | 'program' | 'port'>;
+export type AgentWorkspacePort = Omit<AgentWorkspace, 'session' | 'stateSession' | 'memory' | 'program'>;
 
 /** Nimbus opens a synchronous session surface; its methods first consume the factory's own RpcPromise. */
 class WorkspaceSession implements NimbusSessionSurface {

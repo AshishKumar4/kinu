@@ -34,34 +34,14 @@ describe('subordinate wiring', () => {
   test('registered task lifetime supplies a terminal report for each non-answer ending', async () => {
     const { agent } = orchestratorHarness();
     const actor = await agent.actorDirectory({ action: 'register', creationId: 'temporary-proof', name: 'temporary-child', origin: 'agent', lifetime: 'task' });
-    const identity = await agent.getSubordinateBootstrapIdentity({ name: actor.name, reference: actor.reference });
 
-    if ('reason' in identity) throw new Error(identity.error);
-    expect(identity.lifetime).toBe('task');
+    expect(actor.lifetime).toBe('task');
 
     for (const ending of TASK_TURN_ENDINGS) {
-      const report = await terminalTaskReport({ lifetime: identity.lifetime, ending, assistantText: ending === 'answered' ? 'The evidence is complete.' : '', narration: async () => [] });
+      const report = await terminalTaskReport({ lifetime: actor.lifetime, ending, assistantText: ending === 'answered' ? 'The evidence is complete.' : '', narration: async () => [] });
       expect(report?.status).toBe(ending === 'answered' ? 'completed' : 'blocked');
       expect(report?.content).toBeString();
     }
-  });
-
-  test('a child bootstrap retains root ownership and refuses a foreign parent reference', async () => {
-    const { agent } = orchestratorHarness();
-    const actor = await agent.actorDirectory({ action: 'register', creationId: 'lineage-proof', name: 'lineage-child', origin: 'agent', lifetime: 'durable' });
-    const identity = await agent.getSubordinateBootstrapIdentity({ name: actor.name, reference: actor.reference });
-    expect(identity).toMatchObject({ parentWorkspace: agent.name, ownerUserId: 'harness-owner', depth: 1, name: 'lineage-child' });
-    const refused = await agent.getSubordinateBootstrapIdentity({ name: actor.name, reference: { ...actor.reference, parentActorId: 'foreign-parent' } });
-    expect(refused).toMatchObject({ reason: 'denied' });
-  });
-
-  test('native bootstrap reads disclose lineage without disclosing the capability token', async () => {
-    const { agent } = orchestratorHarness();
-    const actor = await agent.actorDirectory({ action: 'register', creationId: 'bootstrap-contract', name: 'bootstrap-child', origin: 'agent', lifetime: 'durable' });
-    const bootstrap = await agent.getSubordinateBootstrapIdentity({ name: actor.name, reference: actor.reference });
-    expect(bootstrap).toMatchObject({ name: 'bootstrap-child', depth: 1, ownerUserId: 'harness-owner' });
-    expect(JSON.stringify(bootstrap)).not.toContain('harness-capability');
-    expect(bootstrap).not.toHaveProperty('capabilityToken');
   });
 
   test('a hosted child shares the workspace file plane under its own state root', async () => {

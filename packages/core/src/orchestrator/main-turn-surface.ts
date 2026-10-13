@@ -47,7 +47,6 @@ export class TurnSurface {
   readonly ledgers = turnLedgers();
   readonly #actor: ActorReference;
   #external: ToolSet = {};
-  #inputs: ProfileAuthorityInputs | null = null;
   #operation: OperationProfile | null = null;
   #declared: ToolSet = {};
 
@@ -82,16 +81,18 @@ export class TurnSurface {
 
   /** The turn's reads resolved a profile: its tools run under it until the agent's isolate binds the one it assembled on. */
   resolved(profile: ResolvedTurnProfile, inputs: ProfileAuthorityInputs): void {
-    this.#inputs = inputs;
     this.#operation = this.#capture(profile, inputs);
   }
 
   /** The profile the agent's isolate assembled the turn on: its tools run under it, and its eval reaches what it allows. */
   bind(profile: ResolvedTurnProfile): void {
-    if (this.#inputs === null) return;
+    // Bound under the inputs it resolved with (`resolved`), which its operation holds.
+    const inputs = this.#operation?.inputs ?? null;
+
+    if (inputs === null) return;
     const allowed = new Set(profile.allowedTools);
 
-    this.#operation = this.#capture(profile, this.#inputs);
+    this.#operation = this.#capture(profile, inputs);
     this.#declared = allowed.has('eval') ? Object.fromEntries(Object.entries(this.#external).filter(([name]) => allowed.has(name))) : {};
   }
 

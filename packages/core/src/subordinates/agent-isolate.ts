@@ -1,6 +1,6 @@
 import type { AgentFigures } from '../read-models/agent-figures';
 import type { ContextMeasures } from '../events/recorder';
-import type { JSONSchema7, ModelMessage, UIMessage } from 'ai';
+import type { JSONSchema7, UIMessage } from 'ai';
 import type { CompletedTurn } from '../evolution/types';
 import type { TrialTurn } from '../evolution/trial-rules';
 import type { TurnFacts } from '../orchestrator/turn-facts';
@@ -59,12 +59,6 @@ export interface AgentSnapshot {
   readonly installedBuild: string | null;
   readonly artifactDirectory: string;
   readonly order: SnapshotOrder;
-}
-
-export interface AgentTurnOpening {
-  readonly id: string;
-  readonly message: ModelMessage;
-  readonly metadata: JsonObject;
 }
 
 export interface AgentTurnTask {
@@ -155,7 +149,8 @@ export interface AgentCaptureDelta {
 
 export interface AgentToolAnswer {
   readonly output: unknown;
-  readonly captured: AgentCaptureDelta;
+  /** What the call recorded into a run's capture, which its inference reads; none for a chat turn, which has none. */
+  readonly captured?: AgentCaptureDelta;
   readonly dynamic: DynamicContext;
   /** What the turn has told its hirer by now; the agent keeps it, so a reset of the workspace forgets none of it. */
   readonly reports: SubordinateReportLedger;
@@ -176,7 +171,6 @@ export interface AgentTurnEnd extends Omit<HeadReport, 'errorMessage'> {
   readonly activity: readonly AgentTurnActivity[];
   readonly figures: AgentFigures;
   readonly errorMessage: string | null;
-  readonly narration: string;
   readonly produced?: readonly JsonValue[];
 }
 
@@ -188,7 +182,7 @@ export interface TurnRequestAt {
 }
 
 export interface AgentRecovery {
-  readonly stalled: readonly { readonly turnId: string; readonly runs: number; readonly workMode: WorkMode }[];
+  readonly stalled: readonly { readonly turnId: string; readonly workMode: WorkMode }[];
 }
 
 /** One answer of an agent's, as its `<slate-ui>` blocks are read from it: its text parts, and the mode the agent last

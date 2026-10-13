@@ -105,8 +105,8 @@ export class AgentOrchestrator extends EvolutionLanes {
     return this.turnEvolutionEnabled;
   }
 
-  /** Reset per-turn accounting from the turn's metadata. `continuation` re-admits the previous turn's signals. */
-  beginTurn(now: number, metadata?: JsonObject, continuation = false): void {
+  /** Reset per-turn accounting from the turn's metadata. */
+  beginTurn(now: number, metadata?: JsonObject): void {
     this.deps.engine.recoverInterruptedWork();
     this.acc.reset(now);
     this.steering.reset();
@@ -119,7 +119,7 @@ export class AgentOrchestrator extends EvolutionLanes {
     this.craft.reset(evolutionEnabled);
     this.turnRecoveries = [];
     this.observeRecoveries = evolutionEnabled;
-    this.inbox.beginTurn(continuation, readSignalId(metadata));
+    this.inbox.beginTurn(readSignalId(metadata));
     this.deps.budget?.activate(this.activeMissions);
   }
 

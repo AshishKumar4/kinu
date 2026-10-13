@@ -22,7 +22,6 @@ export const WORKSPACE_KEYED_ROWS = [
   { table: 'device_status_watchers', column: 'agent_name', removal: 'after-destroy' },
   { table: 'device_notice_pending', column: 'agent_name', removal: 'after-destroy' },
   { table: 'workspace_capability_tokens', column: 'workspace_name', removal: 'capability' },
-  { table: 'workspace_capability_reconcile', column: 'workspace_name', removal: 'capability' },
   { table: 'device_inflight_requests', column: 'workspace', removal: { kept: 'the device protocol removes a row once the daemon acknowledges its end' } },
   { table: 'experience_library', column: 'source_workspace', removal: { kept: "provenance: the owner's library outlives the workspace it came from" } },
   { table: 'user_peer_grants', column: 'sender_agent_name', removal: { kept: "another user's workspace" } },

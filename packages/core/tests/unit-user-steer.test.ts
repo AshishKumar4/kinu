@@ -163,7 +163,7 @@ describe('Inbox — the user kind, accepted', () => {
 
   test('durable reset state replaces the process-local user queue in its stored order', async () => {
     const { inbox, drained } = setup({ turnInFlight: true });
-    inbox.beginTurn(false);
+    inbox.beginTurn();
     // A pending event keeps its place; the restored users land ahead of it.
     inbox.landMidTurn(event('still pending'));
     inbox.restorePending([
@@ -188,7 +188,7 @@ describe('Inbox — the user kind, accepted', () => {
 describe('Inbox — the user kind, landing in the step', () => {
   test('everything pending lands as ONE user message at the step tail', async () => {
     const { inbox, drained, broadcasts } = setup({ turnInFlight: true });
-    inbox.beginTurn(false);
+    inbox.beginTurn();
     await inbox.send(steer('s1', 'also check staging'));
     await inbox.send(steer('s2', 'and the logs'));
 
@@ -215,7 +215,7 @@ describe('Inbox — the user kind, landing in the step', () => {
   test('the landed broadcast reports WHICH step it landed in, not just that it landed', async () => {
     // Only the step index places the operator's words where the model read them.
     const { inbox, broadcasts, drained } = setup({ turnInFlight: true });
-    inbox.beginTurn(false);
+    inbox.beginTurn();
     await inbox.prepareStep(step(0, HISTORY));
     await inbox.send(steer('s1', 'use the swarm for this'));
     await inbox.prepareStep(step(7, HISTORY));
@@ -230,7 +230,7 @@ describe('Inbox — the user kind, landing in the step', () => {
 
   test('a step with nothing pending re-applies earlier steers at the index the model first saw them', async () => {
     const { inbox } = setup({ turnInFlight: true });
-    inbox.beginTurn(false);
+    inbox.beginTurn();
     await inbox.send(steer('s1', 'also check staging'));
     await inbox.prepareStep(step(0, HISTORY));
 
@@ -245,14 +245,14 @@ describe('Inbox — the user kind, landing in the step', () => {
 
   test('a fresh turn resets splice coordinates but KEEPS a steer typed for it', async () => {
     const { inbox } = setup({ turnInFlight: true });
-    inbox.beginTurn(false);
+    inbox.beginTurn();
     await inbox.send(steer('s1', 'first turn steer'));
     await inbox.prepareStep(step(0, HISTORY));
     expect(inbox.recordedMessages()).toEqual([{ role: 'user', content: 'first turn steer' }]);
 
     // Typed while the previous turn finished: it belongs to the next turn.
     await inbox.send(steer('s2', 'typed as the turn ended'));
-    inbox.beginTurn(false);
+    inbox.beginTurn();
     expect(inbox.recordedMessages()).toEqual([]);
     expect(await inbox.prepareStep(step(0, HISTORY))).toEqual([
       ...HISTORY,
@@ -268,7 +268,7 @@ describe('Inbox — the user kind, landing in the step', () => {
       onDrain: () => landing.promise,
     });
 
-    inbox.beginTurn(false);
+    inbox.beginTurn();
     await inbox.send(steer('s1', 'wait for storage'));
 
     let returned = false;
@@ -303,7 +303,7 @@ describe('Inbox — the user kind, landing in the step', () => {
       },
     });
 
-    inbox.beginTurn(false);
+    inbox.beginTurn();
     await inbox.send(steer('s1', 'first'));
 
     await expect(inbox.prepareStep(step(0, HISTORY))).rejects.toThrow('storage unavailable');
@@ -319,7 +319,7 @@ describe('Inbox — the user kind, landing in the step', () => {
   test('attachments ride as file parts rather than being dropped from the text', async () => {
     const files = [{ filename: 'trace.png', mediaType: 'image/png', url: 'data:image/png;base64,AA' }];
     const { inbox, drained } = setup({ turnInFlight: true });
-    inbox.beginTurn(false);
+    inbox.beginTurn();
     await inbox.send(steer('s1', 'look at this', { files }));
 
     expect(await inbox.prepareStep(step(0, HISTORY))).toEqual([
@@ -339,7 +339,7 @@ describe('Inbox — the user kind, landing in the step', () => {
 describe('Inbox — the user kind, the three load-bearing semantics', () => {
   test('drained steers are available VERBATIM for persistence, one row per steer', async () => {
     const { inbox, drained } = setup({ turnInFlight: true });
-    inbox.beginTurn(false);
+    inbox.beginTurn();
     await inbox.send(steer('s1', 'also check staging'));
     await inbox.prepareStep(step(0, HISTORY));
     await inbox.send(steer('s2', 'and the logs'));
@@ -358,7 +358,7 @@ describe('Inbox — the user kind, the three load-bearing semantics', () => {
 
   test('an interrupt returns what the model never saw, and drops it from the turn', async () => {
     const { inbox, broadcasts } = setup({ turnInFlight: true });
-    inbox.beginTurn(false);
+    inbox.beginTurn();
     await inbox.send(steer('s1', 'change of plans'));
 
     // Returned to the composer, not swallowed: the surface already rendered it as sent.
@@ -372,7 +372,7 @@ describe('Inbox — the user kind, the three load-bearing semantics', () => {
 
   test('an interrupt leaves a steer the model already read in the durable record', async () => {
     const { inbox } = setup({ turnInFlight: true });
-    inbox.beginTurn(false);
+    inbox.beginTurn();
     await inbox.send(steer('s1', 'also check staging'));
     await inbox.prepareStep(step(0, HISTORY));
 
@@ -383,7 +383,7 @@ describe('Inbox — the user kind, the three load-bearing semantics', () => {
 
   test('leftover users rerun as ONE user-origin turn, stamped operator under their mode', async () => {
     const { inbox, queued, broadcasts } = setup({ turnInFlight: true, turnId: 'turn-9' });
-    inbox.beginTurn(false);
+    inbox.beginTurn();
     await inbox.prepareStep(step(0, HISTORY));
     // Typed during the final answer: no further step for them to land on.
     await inbox.send(steer('s1', 'one more thing'));
@@ -407,7 +407,7 @@ describe('Inbox — the user kind, the three load-bearing semantics', () => {
 
   test('the spliced conversation replays into the turn response at the position the model saw it', async () => {
     const { inbox } = setup({ turnInFlight: true });
-    inbox.beginTurn(false);
+    inbox.beginTurn();
     await inbox.send(steer('s1', 'also check staging'));
     await inbox.prepareStep(step(0, HISTORY));
 
@@ -426,7 +426,7 @@ describe('Inbox — the user kind, the three load-bearing semantics', () => {
 describe('Inbox — the user kind beside the event kind', () => {
   test('a mixed step splices the user message then the event, and only the user message is durable', async () => {
     const { inbox, broadcasts } = setup({ turnInFlight: true });
-    inbox.beginTurn(false);
+    inbox.beginTurn();
     await inbox.send(steer('s1', 'the user said this'));
     inbox.landMidTurn(event('an event arrived'));
 
@@ -489,7 +489,7 @@ describe('Inbox — the user kind beside the event kind', () => {
 
   test('an aborted turn requeues pending users and absorbed events — never absorbed users', async () => {
     const { inbox, queued } = setup({ turnInFlight: true });
-    inbox.beginTurn(false);
+    inbox.beginTurn();
     await inbox.send(steer('s1', 'the model saw me'));
     inbox.landMidTurn(event('absorbed event'));
     await inbox.prepareStep(step(0, HISTORY));
@@ -506,7 +506,7 @@ describe('Inbox — the user kind beside the event kind', () => {
     });
     expect(queued[0].idempotencyKey).toMatch(/^steer-rerun:.*:build:/);
 
-    inbox.beginTurn(false);
+    inbox.beginTurn();
     expect(await inbox.prepareStep(step(0, [{ role: 'user', content: 'typed too late' }]))).toEqual([
       { role: 'user', content: 'typed too late' },
       { role: 'user', content: 'absorbed event\n\nleftover event' },
@@ -517,7 +517,7 @@ describe('Inbox — the user kind beside the event kind', () => {
     // A drain bound while the turn ran (the alarm's tick) and one bound as the rerun opened (a send) are one
     // turn either way: the rerun's first step carries the event.
     const { inbox, queued } = setup({ turnInFlight: true });
-    inbox.beginTurn(false);
+    inbox.beginTurn();
     await inbox.send(steer('s1', 'queued behind the turn'));
     inbox.landMidTurn(event('bound by the tick', { stepText: 'mid-turn: bound by the tick' }));
 
@@ -528,7 +528,7 @@ describe('Inbox — the user kind beside the event kind', () => {
       { text: 'queued behind the turn', origin: 'user' },
     ]);
 
-    inbox.beginTurn(false);
+    inbox.beginTurn();
     expect(await inbox.prepareStep(step(0, [{ role: 'user', content: 'queued behind the turn' }]))).toEqual([
       { role: 'user', content: 'queued behind the turn' },
       { role: 'user', content: 'mid-turn: bound by the tick' },
@@ -543,7 +543,7 @@ describe('Inbox — the user kind beside the event kind', () => {
 
     if (offer === null) throw new Error('a real mission makes a genesis offer');
     const { inbox, queued, broadcasts } = setup({ turnInFlight: true });
-    inbox.beginTurn(false);
+    inbox.beginTurn();
     await inbox.send(steer('s1', 'operator words'));
     inbox.landMidTurn(offer);
 
@@ -555,7 +555,7 @@ describe('Inbox — the user kind beside the event kind', () => {
     ]);
 
     // Nothing rides the rerun's first step, and its turn absorbs nothing.
-    inbox.beginTurn(false);
+    inbox.beginTurn();
     expect(await inbox.prepareStep(step(0, [{ role: 'user', content: 'operator words' }]))).toBeUndefined();
     expect(inbox.settle({ completed: true }).absorbed).toEqual([]);
 
@@ -567,7 +567,7 @@ describe('Inbox — the user kind beside the event kind', () => {
   test('a rerun the host never opens strands the events that waited for it to turns of their own', async () => {
     const host = { turnInFlight: true, enqueue: 'skipped' as const };
     const { inbox, queued } = setup(host);
-    inbox.beginTurn(false);
+    inbox.beginTurn();
     await inbox.send(steer('s1', 'refused rerun'));
     inbox.landMidTurn(event('still owed'));
 
@@ -596,7 +596,7 @@ describe('Inbox — the user kind beside the event kind', () => {
       },
     });
 
-    inbox.beginTurn(false);
+    inbox.beginTurn();
     await inbox.send(steer('s1', 'first'));
     inbox.landMidTurn(event('one event'));
 
@@ -621,7 +621,7 @@ describe('Inbox — the user kind beside the event kind', () => {
 
   test('pending users rerun as ONE turn in arrival order, under plan if any of them was plan', async () => {
     const { inbox, queued } = setup({ turnInFlight: true });
-    inbox.beginTurn(false);
+    inbox.beginTurn();
     await inbox.send(steer('s1', 'build this', { mode: 'build' }));
     await inbox.send(steer('s2', 'plan that', { mode: 'plan' }));
     await inbox.send(steer('s3', 'build the other', { mode: 'build' }));
@@ -673,7 +673,7 @@ describe('Inbox — the user kind beside the event kind', () => {
 
     // The turn opens on the first message; its first step carries the rest.
     inFlight = true;
-    inbox.beginTurn(false);
+    inbox.beginTurn();
     expect(await inbox.prepareStep(step(0, [...HISTORY, { role: 'user', content: 'first' }]))).toEqual([
       ...HISTORY,
       { role: 'user', content: 'first' },

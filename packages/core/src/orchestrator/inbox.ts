@@ -137,7 +137,6 @@ export function initPendingSendTables(execRaw: RawSqlExec): void {
     producer      TEXT NOT NULL CHECK (producer IN ('workspace','self')),
     taken_through INTEGER NOT NULL DEFAULT 0,
     cutoff        INTEGER NOT NULL DEFAULT 0,
-    applied_seq   INTEGER,
     applied_json  TEXT,
     PRIMARY KEY (actor_id, producer)
   )`);
@@ -262,20 +261,20 @@ export class PendingSendStore {
 
   /**
    * The delivery `seq` is held in this store now, or, an owner's intent, applied, with what it did (`applied`, as JSON).
-   * Only the newest is kept: its producer crosses in order and stops at a crossing that fails, so the one it may cross
-   * again, its answer lost, is the newest taken; one taken after it was answered first.
+   * Only the newest is kept, under `taken_through`: its producer crosses in order (only a delivery newer than every one
+   * taken is taken) and stops at a crossing that fails, so the one it may cross again, its answer lost, is the newest.
    */
   took(producer: InputProducer, seq: number, applied: string | null = null): void {
-    void this.sql`INSERT INTO input_marks (actor_id, producer, taken_through, applied_seq, applied_json)
-      VALUES (${this.actorId}, ${producer}, ${seq}, ${applied === null ? null : seq}, ${applied})
+    void this.sql`INSERT INTO input_marks (actor_id, producer, taken_through, applied_json)
+      VALUES (${this.actorId}, ${producer}, ${seq}, ${applied})
       ON CONFLICT (actor_id, producer) DO UPDATE SET taken_through = MAX(taken_through, excluded.taken_through),
-        applied_seq = excluded.applied_seq, applied_json = excluded.applied_json`;
+        applied_json = excluded.applied_json`;
   }
 
   /** What the intent `seq` did, as {@link took} kept it: null for any other delivery. */
   applied(producer: InputProducer, seq: number): string | null {
     return this.sql<{ applied_json: string | null }>`
-      SELECT applied_json FROM input_marks WHERE actor_id = ${this.actorId} AND producer = ${producer} AND applied_seq = ${seq}`[0]?.applied_json ?? null;
+      SELECT applied_json FROM input_marks WHERE actor_id = ${this.actorId} AND producer = ${producer} AND taken_through = ${seq}`[0]?.applied_json ?? null;
   }
 
   /** A Stop's cutoff: nothing its producer committed at or below `seq` is taken after. */
@@ -378,8 +377,6 @@ export function signalCardId(idempotencyKey: string): string {
 export class Inbox {
   private pending: DeliveredSignal[] = [];
   private absorbed: DeliveredSignal[] = [];
-  /** Previous turn's absorbed events, held one turn so a continuation turn can re-absorb them. */
-  private settled: DeliveredSignal[] = [];
   /** The host enqueue in flight until the turn opens; while set, a message rides that turn's first step. */
   private starting: Promise<EnqueueTurnResult> | null = null;
   /** The cards each step of this turn took in, by step number, until that step ends and they are seen. */
@@ -532,7 +529,6 @@ export class Inbox {
     const leftoverEvents = leftover.filter((signal) => !isUserSignal(signal));
     const absorbedEvents = absorbed.filter((signal) => !isUserSignal(signal));
     const requeue = opts.completed ? leftoverEvents : [...absorbedEvents, ...leftoverEvents];
-    this.settled = opts.completed ? absorbedEvents : [];
     this.absorbed = [];
     this.injections.reset();
     this.redeliver(leftoverUsers, requeue);
@@ -549,9 +545,13 @@ export class Inbox {
    */
   interrupt(): InterruptedInputs {
     const returned = this.pending.filter(isUserSignal);
-    const cancelled = [...this.pending, ...this.absorbed].filter((signal) => !isUserSignal(signal));
+    const unread = this.pending.filter((signal) => !isUserSignal(signal));
+    const cancelled = [...unread, ...this.absorbed.filter((signal) => !isUserSignal(signal))];
     this.pending = [];
     this.absorbed = this.absorbed.filter(isUserSignal);
+
+    // Let go unread: no turn answers it, as its card says (a read one's turn end says so of it).
+    for (const signal of unread) this.moveCard(signal.cardId, 'undelivered');
 
     for (const signal of returned) {
       this.host.broadcast({
@@ -584,18 +584,15 @@ export class Inbox {
     this.pending = [...restored, ...this.pending.filter((signal) => !isUserSignal(signal))];
   }
 
-  /** Turn start: drop leaked splice state; a continuation re-queues {@link settled}. `signalId` is the card
-   *  of the signal that started this turn, which moves to shown. */
-  beginTurn(continuation: boolean, signalId?: string): void {
+  /** Turn start: drop leaked splice state. `signalId` is the card of the signal that started this turn, which moves to
+   *  shown. */
+  beginTurn(signalId?: string): void {
     this.starting = null;
     this.absorbed = [];
     this.stepCards.clear();
     this.splices.clear();
     this.seen = [];
     this.injections.reset();
-
-    if (continuation) this.pending.unshift(...this.settled);
-    this.settled = [];
 
     if (signalId) {
       this.moveCard(signalId, 'shown');

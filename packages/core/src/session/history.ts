@@ -142,9 +142,9 @@ export class SessionHistory {
   async cutStep(outputs: readonly string[]): Promise<'text' | 'tools' | null> {
     const parts = [...(await this.messages.materializePartsOf(outputs)).values()].flat();
 
-    if (parts.some((part) => part.kind === 'tool-call')) return 'tools';
+    if (parts.some((part) => part.value.type === 'tool-call')) return 'tools';
 
-    return parts.some((part) => (part.kind === 'text' || part.kind === 'reasoning') && v.parse(v.string(), part.value.text) !== '') ? 'text' : null;
+    return parts.some((part) => (part.value.type === 'text' || part.value.type === 'reasoning') && v.parse(v.string(), part.value.text) !== '') ? 'text' : null;
   }
 
   transcript(sessionId: string): SessionTranscript {

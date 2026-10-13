@@ -42,7 +42,6 @@ function team() {
     knows: async (name) => name === roster.name,
     create: async () => ({ name: roster.name, displayName: 'Researcher', subordinate: roster }),
     rename: async (input) => ({ ok: true, name: input.name, displayName: input.displayName, subordinate: roster }),
-    recordTitle: async (input) => ({ ok: true, name: input.name, displayName: input.displayName }),
     spawn: async () => ({ name: roster.name, displayName: 'Researcher' }),
     status: async () => ({ roster: [roster] }),
     dismiss: async (input) => ({ ok: true, name: input.name, historyKept: true, stoppedJobs: [] }),

@@ -9,12 +9,14 @@ import { KinuError } from '../src/obs/error';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import { sessionFixture } from './helpers-session';
 
-/** A model that answers each call `done`, after `held` (when given) lets it. */
+/** A model that answers each call `done`, after `held` (when given) lets it; `prompts`: what each call was sent. */
 function answering(held?: () => Promise<void>) {
   const asked = { count: 0 };
+  const prompts: string[] = [];
 
-  const model = scriptedTurnModel({ doGenerate: async () => {
+  const model = scriptedTurnModel({ doGenerate: async (options) => {
     asked.count += 1;
+    prompts.push(JSON.stringify(options.prompt));
     await held?.();
 
     return {
@@ -25,7 +27,7 @@ function answering(held?: () => Promise<void>) {
     };
   } });
 
-  return { model, asked };
+  return { model, asked, prompts };
 }
 
 test('a turn whose preparation fails ends with its room told, and the next turn runs and is answered', async () => {
@@ -128,5 +130,37 @@ test('a run delivered while a chat turn runs starts only once that turn has answ
     await fixture.chat.pumpPromise;
 
     expect(order).toEqual(['chat answered', 'run started']);
+  } finally { fixture.close(); }
+});
+
+test("words sent while a turn opens are the turn's own: a Stop then hands them back, and no turn runs them", async () => {
+  const { model, prompts } = answering();
+  const handedBack = Promise.withResolvers<string[]>();
+  const second = Promise.withResolvers<void>();
+  let opened = false;
+  const stop = (): void => { handedBack.resolve(fixture.chat.interrupt()); };
+
+  const fixture = await sessionFixture({
+    model,
+    // The first turn is announced as it opens, before its execution is claimed: the owner writes again, and stops once
+    // those words are taken, as the turn's own or as a turn of their own.
+    onEvent: (event) => {
+      if (event.type === 'turn-start' && opened) stop();
+
+      if (event.type === 'broadcast' && event.event.type === 'steer_status' && event.event.status === 'queued') stop();
+
+      if (event.type !== 'turn-start' || opened) return;
+      opened = true;
+      void fixture.chat.send('and the refunds too', { id: 'o-2' }).then(() => { second.resolve(); }, () => { second.resolve(); });
+    },
+  });
+
+  try {
+    await Promise.allSettled([fixture.chat.send('summarize the ledger', { id: 'o-1' })]);
+    await second.promise;
+    await fixture.chat.pumpPromise;
+
+    expect(await handedBack.promise).toEqual(['and the refunds too']);
+    expect(prompts.filter((prompt) => prompt.includes('and the refunds too'))).toEqual([]);
   } finally { fixture.close(); }
 });

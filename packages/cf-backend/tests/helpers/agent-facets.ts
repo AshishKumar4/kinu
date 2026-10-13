@@ -5,6 +5,7 @@ import { MAIN_AGENT, WORKSPACE_ROOT } from '@kinu.run/core';
 import type { AgentProviderDeps, AgentProviderRegistry } from '../../src/providers/agent-registry';
 import type { AgentContext } from 'agents';
 import { AgentFacet, type AgentFacetCalls, type AgentFacetEnv } from '../../src/agent-facet/agent-facet';
+import type { AgentWorkspacePort } from '../../src/agent-facet/workspace-rpc';
 import { agentCallsThrough } from '../../src/dynamic-worker-slots';
 import { attemptInItsWords } from '@kinu.run/core/obs';
 import { AgentDatabase } from '../../src/agent-facet/agent-database';
@@ -280,114 +281,117 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
       const session = await sessionOrFailure(host.session());
       const stateSession = await sessionOrFailure(host.stateSession());
 
+      // Its port: the workspace's host, held as the shipped client holds it.
+      const port: AgentWorkspacePort = {
+        traceTurn: (...args) => {
+          counted('traceTurn');
+
+          return host.traceTurn(...args);
+        },
+        traceStream: (...args) => {
+          counted('traceStream');
+
+          return host.traceStream(...args);
+        },
+        resume: (turnId) => host.resume(turnId),
+        guard: (...args) => host.guard(...args),
+        debit: (...args) => host.debit(...args),
+        prepareTurn: (bound) => host.prepareTurn(bound),
+        scaffold: () => host.scaffold(),
+        prepareChat: async (request) => {
+          const copy = copiedOpenings.get(placement.storageKey);
+
+          if (copy !== undefined && request.turnId !== null) {
+            copiedOpenings.delete(placement.storageKey);
+            copy(request);
+          }
+
+          const lost = lostOpeningAnswers.get(placement.storageKey);
+          const prepared = await host.prepareChat(request);
+
+          if (lost === undefined || request.turnId === null) return prepared;
+          lostOpeningAnswers.delete(placement.storageKey);
+          lost();
+
+          return await new Promise<never>(() => {});
+        },
+        chatEvent: async (event) => {
+          if (event.type === 'broadcast' && failedBroadcasts.delete(placement.storageKey)) throw new Error('the workspace refused the broadcast');
+
+          await host.chatEvent(event);
+        },
+        turnEnded: async (event, figures, activity, window) => {
+          if (lostTurnEnds.delete(placement.storageKey)) return;
+          const delay = delayedTurnEnds.get(placement.storageKey);
+
+          if (delay !== undefined) {
+            delayedTurnEnds.delete(placement.storageKey);
+            delay.reached();
+            await delay.released;
+          }
+
+          await host.turnEnded(event, figures, activity, window);
+          const copy = copiedTurnEnds.get(placement.storageKey);
+
+          copiedTurnEnds.delete(placement.storageKey);
+          copy?.([event, figures, activity, window]);
+        },
+        owedReport: (turn, ended) => host.owedReport(turn, ended),
+        parentReport: (report) => host.parentReport(report),
+        autoTitle: (subject, title) => host.autoTitle(subject, title),
+        turnSettled: async (settled) => {
+          if (lostHandoffs.delete(placement.storageKey)) throw new Error('the workspace was reset before it took the handoff');
+
+          await host.turnSettled(settled);
+        },
+        runSettled: (run) => host.runSettled(run),
+        hireAdvisor: (advisor) => host.hireAdvisor(advisor),
+        owes: async (seq, next, holds, report) => {
+          const catching = heldReports.get(placement.storageKey);
+
+          if (catching !== undefined && (holds || next !== null)) {
+            heldReports.delete(placement.storageKey);
+            catching(async () => { await host.owes(seq, next, holds, report); });
+
+            return;
+          }
+
+          await host.owes(seq, next, holds, report);
+        },
+        birthContext: (drainTurnId) => host.birthContext(drainTurnId),
+        steerSkills: (text, alreadyActive) => host.steerSkills(text, alreadyActive),
+        openWork: () => host.openWork(),
+        noteModelRequest: (lastRequestAt) => host.noteModelRequest(lastRequestAt),
+        armCacheWarm: (input) => host.armCacheWarm(input),
+        advise: (review) => host.advise(review),
+        enqueueTurn: (input) => host.enqueueTurn(input),
+        executeTool: (call) => host.executeTool(call),
+        receipts: (turnId, runId, callIds) => host.receipts(turnId, runId, callIds),
+        observe: (lines) => host.observe(lines),
+        paceStep: (bound, profile) => {
+          counted('paceStep');
+
+          return host.paceStep(bound, profile);
+        },
+        answerMetadata: (turnId, narration) => host.answerMetadata(turnId, narration),
+        getAuth: (key, opts) => host.getAuth(key, opts),
+        listCredentials: () => host.listCredentials(),
+        relayDevice: (provider) => host.relayDevice(provider),
+        relayModelCall: (deviceId, callId, request) => host.relayModelCall(deviceId, callId, request),
+        cancelModelRelay: (callId) => host.cancelModelRelay(callId),
+        sayToParent: (signal) => host.sayToParent(signal),
+        logActivity: (lines) => host.logActivity(lines),
+        reportModelCall: (report) => host.reportModelCall(report),
+        reportModelOperation: (event) => host.reportModelOperation(event),
+      };
+
       const env: AgentFacetEnv = {
         WORKSPACE: {
           session: async () => session(),
           stateSession: async () => stateSession(),
           memory: async () => host.memory(),
           program: (...args) => host.program(...args),
-          // Its port is the same calls, held as the shipped client holds the workspace's host.
-          port: async () => env.WORKSPACE,
-          traceTurn: (...args) => {
-            counted('traceTurn');
-
-            return host.traceTurn(...args);
-          },
-          traceStream: (...args) => {
-            counted('traceStream');
-
-            return host.traceStream(...args);
-          },
-          resume: (turnId) => host.resume(turnId),
-          guard: (...args) => host.guard(...args),
-          debit: (...args) => host.debit(...args),
-          prepareTurn: (bound) => host.prepareTurn(bound),
-          scaffold: () => host.scaffold(),
-          prepareChat: async (request) => {
-            const copy = copiedOpenings.get(placement.storageKey);
-
-            if (copy !== undefined && request.turnId !== null) {
-              copiedOpenings.delete(placement.storageKey);
-              copy(request);
-            }
-
-            const lost = lostOpeningAnswers.get(placement.storageKey);
-            const prepared = await host.prepareChat(request);
-
-            if (lost === undefined || request.turnId === null) return prepared;
-            lostOpeningAnswers.delete(placement.storageKey);
-            lost();
-
-            return await new Promise<never>(() => {});
-          },
-          chatEvent: async (event) => {
-            if (event.type === 'broadcast' && failedBroadcasts.delete(placement.storageKey)) throw new Error('the workspace refused the broadcast');
-
-            await host.chatEvent(event);
-          },
-          turnEnded: async (event, figures, activity, window) => {
-            if (lostTurnEnds.delete(placement.storageKey)) return;
-            const delay = delayedTurnEnds.get(placement.storageKey);
-
-            if (delay !== undefined) {
-              delayedTurnEnds.delete(placement.storageKey);
-              delay.reached();
-              await delay.released;
-            }
-
-            await host.turnEnded(event, figures, activity, window);
-            const copy = copiedTurnEnds.get(placement.storageKey);
-
-            copiedTurnEnds.delete(placement.storageKey);
-            copy?.([event, figures, activity, window]);
-          },
-          owedReport: (turn, ended) => host.owedReport(turn, ended),
-          parentReport: (report) => host.parentReport(report),
-          autoTitle: (subject, title) => host.autoTitle(subject, title),
-          turnSettled: async (settled) => {
-            if (lostHandoffs.delete(placement.storageKey)) throw new Error('the workspace was reset before it took the handoff');
-
-            await host.turnSettled(settled);
-          },
-          runSettled: (run) => host.runSettled(run),
-          hireAdvisor: (advisor) => host.hireAdvisor(advisor),
-          owes: async (seq, next, holds, report) => {
-            const catching = heldReports.get(placement.storageKey);
-
-            if (catching !== undefined && (holds || next !== null)) {
-              heldReports.delete(placement.storageKey);
-              catching(async () => { await host.owes(seq, next, holds, report); });
-
-              return;
-            }
-
-            await host.owes(seq, next, holds, report);
-          },
-          birthContext: (drainTurnId) => host.birthContext(drainTurnId),
-          steerSkills: (text, alreadyActive) => host.steerSkills(text, alreadyActive),
-          openWork: () => host.openWork(),
-          noteModelRequest: (lastRequestAt) => host.noteModelRequest(lastRequestAt),
-          armCacheWarm: (input) => host.armCacheWarm(input),
-          advise: (review) => host.advise(review),
-          enqueueTurn: (input) => host.enqueueTurn(input),
-          executeTool: (call) => host.executeTool(call),
-          receipts: (turnId, runId, callIds) => host.receipts(turnId, runId, callIds),
-          observe: (lines) => host.observe(lines),
-          paceStep: (bound, profile) => {
-            counted('paceStep');
-
-            return host.paceStep(bound, profile);
-          },
-          answerMetadata: (turnId, narration) => host.answerMetadata(turnId, narration),
-          getAuth: (key, opts) => host.getAuth(key, opts),
-          listCredentials: () => host.listCredentials(),
-          relayDevice: (provider) => host.relayDevice(provider),
-          relayModelCall: (deviceId, callId, request) => host.relayModelCall(deviceId, callId, request),
-          cancelModelRelay: (callId) => host.cancelModelRelay(callId),
-          sayToParent: (signal) => host.sayToParent(signal),
-          logActivity: (lines) => host.logActivity(lines),
-          reportModelCall: (report) => host.reportModelCall(report),
-          reportModelOperation: (event) => host.reportModelOperation(event),
+          port: async () => port,
         },
         WORKSPACE_NAME: placement.workspaceName,
         SHELL_ID: placement.shellId,

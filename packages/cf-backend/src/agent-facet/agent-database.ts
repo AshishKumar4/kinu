@@ -4,7 +4,7 @@ import type { ModelMessage, UIMessage } from 'ai';
 import {
   CHAT_SESSION_ID, EventLog, EvolutionEngine, WorkspaceActorDirectory, runEventSinks, historyTurnPairs, conversationTurnPair, type ConversationTurnPair,
   actorReferenceOf, actorScaffoldPath, createActorHost, createScaffoldSurface, defaultLoopOrigin,
-  initWorkspaceSchema, nimbusSessionFiles, recoverActorTurns, MissionGovernor, actorReadHandle, readSessionTranscript, readSubordinateInspection,
+  initAgentIsolateSchema, nimbusSessionFiles, recoverActorTurns, MissionGovernor, actorReadHandle, readSessionTranscript, readSubordinateInspection,
   drawnStep, getChatHistoryPage, inheritedContextFromTranscript, turnRequestIndex, turnRequestPage,
   type TurnRequestIndex, type TurnRequestPage, RunEventRecorder, spendLedger, type SpendLedger, type StepSpendSource,
   readAgentFigures, NO_FIGURES, type AgentFigures,
@@ -118,7 +118,8 @@ export class AgentDatabase {
   private execution: Executor | null = null;
 
   /** Reads held between this database's statements: `sql` and `exec` drop them. Every write passes one of the two but
-   *  DDL and {@link adopt}'s copied rows (identity, lineage, config, scaffold), which nothing here holds. */
+   *  DDL and {@link adopt}'s copied rows (identity, lineage, scaffold), which nothing here holds; its config rows follow
+   *  a delete through `exec`, which drops the held config. */
   readonly held = new HeldReads();
 
   private readonly sql: SqlExecutor = <T,>(query: TemplateStringsArray, ...values: SqlValue[]): T[] => {
@@ -141,8 +142,6 @@ export class AgentDatabase {
   /** The rows this database was last made to hold, as the workspace sent them; null once it wrote one of them itself. */
   private adopted: string | null = null;
 
-  /** This database's config, held: its writers are the stores over `sql` and {@link adopt}. */
-  private readonly configs = holdConfig(this.sql);
 
   /** Its message count, held: SessionTranscript's record and truncate, and a fork's reset and staging, run over `sql`. */
   private readonly heldMessageCount = this.held.hold(['conversation_entries'], () => this.readable().transcript.count());
@@ -179,7 +178,9 @@ export class AgentDatabase {
   ) {
     // Run heads, held: every run_events write here is a recorder's persist over `sql`, whose publish advances them.
     holdRunHeads(this.sql);
-    initWorkspaceSchema({
+    // Its config, held: every actor_config write passes `sql` or `exec` (the stores, and adopt's replacement).
+    holdConfig(this.sql, this.held);
+    initAgentIsolateSchema({
       execRaw: (ddl) => { storage.sql.exec(ddl); },
       sql: this.sql,
       transactionSync: (write) => storage.transactionSync(write),
@@ -216,7 +217,8 @@ export class AgentDatabase {
 
         for (const row of snapshot.lineage) {
           upsertRow(this.storage, 'workspace_actors', row);
-          this.storage.sql.exec('DELETE FROM actor_config WHERE actor_id = ?', row.actor_id ?? null);
+          // Through `exec`, which drops the held config (`holdConfig`) before the copied rows replace it.
+          this.exec.exec('DELETE FROM actor_config WHERE actor_id = ?', row.actor_id ?? null);
         }
 
         for (const row of snapshot.config) upsertRow(this.storage, 'actor_config', row);
@@ -226,7 +228,6 @@ export class AgentDatabase {
       const adopted = snapshot.lineage.map((row) => v.parse(v.string(), row.actor_id));
 
       this.directory?.forget(adopted);
-      this.configs.adopt(adopted, snapshot.config);
     }
 
     this.adopted = rows;
@@ -629,18 +630,18 @@ export class AgentDatabase {
       hosted: host.hosted,
     });
 
-    // A stalled turn's run is closed, so the agent's chat does not take it up a third time when it next opens.
+    // A stalled turn's run is closed, so the agent's chat does not take it up again when it next opens.
     for (const turn of recovered.stalled) {
       const { eventRecorder } = host.bindStores(turn.reference).stores;
       const open = eventRecorder.openTurn();
 
       if (open?.turn.turnId !== turn.claim.turnId) continue;
-      closeTurnRun(eventRecorder, open.runId, { turnIndex: 0, ...classifyRunEnd({ completed: false, interrupted: false, errorText: `stalled after ${String(turn.claim.epoch)} runs` }) });
+      closeTurnRun(eventRecorder, open.runId, { turnIndex: 0, ...classifyRunEnd({ completed: false, interrupted: false, errorText: 'stalled: cut off at one step too many times' }) });
     }
 
     // Named for the hirer's assignment row the turn answered, which its retirement dismisses.
     return {
-      stalled: recovered.stalled.map((turn) => ({ turnId: announcementOf(turn.claim.turnId), runs: turn.claim.epoch, workMode: turn.claim.workMode })),
+      stalled: recovered.stalled.map((turn) => ({ turnId: announcementOf(turn.claim.turnId), workMode: turn.claim.workMode })),
     };
   }
 

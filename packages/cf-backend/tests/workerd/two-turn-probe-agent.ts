@@ -53,10 +53,10 @@ export class AgentFacet extends ShippedAgentFacet {
     return { cost: this.meter.end(null), crossings: crossings.end() };
   }
 
-  /** One call this isolate makes into its workspace's relay, and one into each of two RPC targets the relay answers
-   *  with: each must show in the workspace's count once, the session's read without the helpers it calls on itself. */
+  /** One call this isolate makes through its port, and one into each of two RPC targets the relay answers with: each
+   *  must show in the workspace's count once, the session's read without the helpers it calls on itself. */
   async plantCrossings(): Promise<void> {
-    await this.env.WORKSPACE.logActivity([]);
+    await (await this.env.WORKSPACE.port()).logActivity([]);
     const memory = await this.env.WORKSPACE.memory();
 
     await memory.tail('MEMORY.md', 16);

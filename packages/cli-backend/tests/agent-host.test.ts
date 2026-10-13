@@ -511,6 +511,49 @@ function eventCount(dbPath: string, kind: 'peer' | 'pending'): number {
 }
 
 /** Resolves after `count` turns on `agent`: peer mail does not wait for the receiver, so the host must not close mid-turn. */
+/** A hire that asks to run `gated` for `brief`, and asks again once its owner approves; `results`: each tool result it read. */
+function approvalModel(brief: string, gated: string) {
+  const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+  const results: string[] = [];
+
+  const shellCall = (id: string) => ({
+    stream: new ReadableStream<LanguageModelV2StreamPart>({
+      start(controller) {
+        controller.enqueue({ type: 'stream-start', warnings: [] });
+        controller.enqueue({ type: 'tool-call', toolCallId: id, toolName: 'shell', input: JSON.stringify({ command: gated }) });
+        controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+        controller.close();
+      },
+    }),
+  });
+
+  const model = new TestLanguageModelV2({
+    provider: 'fake',
+    modelId: 'fake-model',
+    doGenerate: async () => textAnswer('acknowledged', usage),
+    doStream: async (options) => {
+      const prompt = JSON.stringify(options.prompt);
+      const shells = (options.tools ?? []).some((tool) => tool.name === 'shell');
+
+      // A result this run has not seen yet: the step after a call.
+      if (prompt.split('"tool-result"').length - 1 > results.length) {
+        results.push(prompt.slice(prompt.lastIndexOf('"tool-result"')));
+
+        return { stream: textStream('done', usage) };
+      }
+
+      // Its brief asks; the owner's decision, woken on its own queue, asks again once.
+      if (shells && prompt.includes(brief) && results.length === 0) return shellCall('call_ask');
+
+      if (shells && prompt.includes('APPROVED, still not run') && results.length === 1) return shellCall('call_reissue');
+
+      return { stream: textStream('ok', usage) };
+    },
+  });
+
+  return { model, results };
+}
+
 function awaitTurns(host: LocalAgentHost, agent: string, count: number): Promise<void> {
   const settled = Promise.withResolvers<void>();
   let seen = 0;
@@ -1033,43 +1076,7 @@ describe('LocalAgentHost', () => {
     const brief = 'Push the release.';
     // Gated (git-force-push) and harmless by construction: /dev/null is no repository, so git pushes nothing.
     const gated = 'git --git-dir=/dev/null push --force origin release';
-    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
-    const results: string[] = [];
-
-    const shellCall = (id: string) => ({
-      stream: new ReadableStream<LanguageModelV2StreamPart>({
-        start(controller) {
-          controller.enqueue({ type: 'stream-start', warnings: [] });
-          controller.enqueue({ type: 'tool-call', toolCallId: id, toolName: 'shell', input: JSON.stringify({ command: gated }) });
-          controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
-          controller.close();
-        },
-      }),
-    });
-
-    const model = new TestLanguageModelV2({
-      provider: 'fake',
-      modelId: 'fake-model',
-      doGenerate: async () => textAnswer('acknowledged', usage),
-      doStream: async (options) => {
-        const prompt = JSON.stringify(options.prompt);
-        const shells = (options.tools ?? []).some((tool) => tool.name === 'shell');
-
-        // A result this run has not seen yet: the step after a call.
-        if (prompt.split('"tool-result"').length - 1 > results.length) {
-          results.push(prompt.slice(prompt.lastIndexOf('"tool-result"')));
-
-          return { stream: textStream('done', usage) };
-        }
-
-        // Its brief asks; the owner's decision, woken on its own queue, asks again once.
-        if (shells && prompt.includes(brief) && results.length === 0) return shellCall('call_ask');
-
-        if (shells && prompt.includes('APPROVED, still not run') && results.length === 1) return shellCall('call_reissue');
-
-        return { stream: textStream('ok', usage) };
-      },
-    });
+    const { model, results } = approvalModel(brief, gated);
 
     const { state, project } = makeRoots();
     await seedAgent(state, 'root');
@@ -1100,6 +1107,57 @@ describe('LocalAgentHost', () => {
       expect(await root.listDeferredApprovals()).toEqual([]);
     } finally {
       await host.close();
+    }
+  });
+
+  // Decided in a process that hosts none of the root's hires (the interactive CLI over a daemon's workspace), the
+  // decision was written where no pass read it, so the hire never heard it.
+  test("approved from a process that hosts no hire, the hire hears the decision at its host's next pass", async () => {
+    const brief = 'Push the release.';
+    const gated = 'git --git-dir=/dev/null push --force origin release';
+    const { model, results } = approvalModel(brief, gated);
+    const { state, project } = makeRoots();
+    await seedAgent(state, 'root');
+    const refs = [{ name: 'root', cwd: project, workspaceId: 'proj' }];
+    const daemon = makeHost(state, model, refs);
+
+    try {
+      const team = await daemon.host.team('root');
+      await team.create({ name: 'courier', role: 'researcher', mission: 'Ship releases.' });
+      const asked = awaitTurns(daemon.host, 'root/courier', 1);
+      await team.assign({ name: 'courier', task: brief, mode: 'build' });
+      await asked;
+    } finally {
+      await daemon.host.close();
+    }
+
+    // The interactive process: the root's own session, over the same file, with no host of its hires.
+    const dbPath = join(state, 'root', 'agent.db');
+    const db = workspaceDatabase(dbPath);
+    const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM, cwd: project });
+    const interactive = new LocalAgentSession({ rt, db, model, onEvent: () => {} });
+
+    try {
+      const parked = await interactive.listDeferredApprovals();
+
+      expect(await interactive.decideDeferredApprovals(parked.map((action) => action.id), 'approved')).toEqual({ decided: parked.map((action) => action.id) });
+    } finally {
+      await interactive.end();
+      db.close();
+    }
+
+    const restarted = makeHost(state, model, refs);
+
+    try {
+      const woken = awaitTurns(restarted.host, 'root/courier', 1);
+      await restarted.host.tick('root/courier');
+      await woken;
+
+      // Re-issued under its own approval, the command ran: git's own refusal, not the gate's.
+      expect(results).toHaveLength(2);
+      expect(results[1]).toContain('not a git repository');
+    } finally {
+      await restarted.host.close();
     }
   });
 
@@ -1414,9 +1472,9 @@ describe('LocalAgentHost', () => {
 
       expect(notes).toEqual([{ message: note }]);
       // The reviewer is a background agent under the subordinate: view-only, no tab, one task.
-      expect(db.query<{ origin: string; tab: number; input: number; lifetime: string }, [string]>(
-        'SELECT origin, tab, input, lifetime FROM workspace_actors WHERE parent_actor_id = ?',
-      ).all(actorId)).toContainEqual({ origin: 'evolution', tab: 0, input: 0, lifetime: 'task' });
+      expect(db.query<{ origin: string; lifetime: string }, [string]>(
+        'SELECT origin, lifetime FROM workspace_actors WHERE parent_actor_id = ?',
+      ).all(actorId)).toContainEqual({ origin: 'evolution', lifetime: 'task' });
     } finally { db.close(); }
   });
 
@@ -2443,6 +2501,33 @@ describe('LocalAgentHost — the driver lease', () => {
     } finally {
       await host.close();
       db.close();
+    }
+  });
+
+  // A Stop cancelled only work a hire held in its event log, and cut off only a hire whose turn ran: an idle hire's
+  // committed assignment, owed while another process drove, ran after the Stop once this process drove again.
+  test("a Stop of the root cancels what an idle hire was assigned and had not taken: it never runs", async () => {
+    const { state, project } = makeRoots();
+    const dbPath = await seedAgent(state, 'root');
+    const asked: string[] = [];
+
+    const { host } = makeHost(state, streamingModel('ok', (options) => { asked.push(JSON.stringify(options.prompt)); }), [
+      { name: 'root', cwd: project, workspaceId: 'proj' },
+    ], { driverKind: 'daemon' });
+
+    try {
+      const team = await host.team('root');
+      await team.create({ name: 'courier', role: 'researcher', mission: 'Ship releases.' });
+      // Another process drives the workspace: the assignment is committed and owed, and nothing here crosses it.
+      rivalHolds(dbPath, 'interactive');
+      await team.assign({ name: 'courier', task: 'STOPPED_TASK: push the release.', mode: 'build' });
+      (await host.acquire('root')).interrupt();
+      await retireRivals();
+      await host.tick('root/courier');
+
+      expect(asked.filter((prompt) => prompt.includes('STOPPED_TASK'))).toEqual([]);
+    } finally {
+      await host.close();
     }
   });
 

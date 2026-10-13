@@ -22,7 +22,7 @@ import {
   type VectorStore,
 } from "@kinu.run/core";
 import type { DeviceFileScope, LiveRead, SandboxHandle } from "@kinu.run/core";
-import { JOB_STAMP_ENV, withHostedNodeExecution, WORKSPACE_ROOT, type PortHolders, cloudPlanes, holdConfig } from '@kinu.run/core';
+import { JOB_STAMP_ENV, withHostedNodeExecution, WORKSPACE_ROOT, type Holds, type PortHolders, cloudPlanes, holdConfig } from '@kinu.run/core';
 import type { ActorReference, HostedNodeHome, TierRefusals } from '@kinu.run/core';
 
 export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
@@ -84,16 +84,17 @@ interface AgentSqlSource {
 
 const boundSql = new WeakMap<AgentSqlSource, SqlExecutor>();
 
-/** The workspace's stores share one executor identity, including hosted actors' runtimes. The object is its database's
- *  one writer, so its config stores hold what they read (`holdConfig`). */
-export function bindAgentSql(agent: AgentSqlSource): SqlExecutor {
+/** The workspace's stores share one executor identity, including hosted actors' runtimes. Given the object's held
+ *  reads (it is its database's one writer), its config stores hold what they read (`holdConfig`). */
+export function bindAgentSql(agent: AgentSqlSource, holds?: Holds): SqlExecutor {
   let sql = boundSql.get(agent);
 
   if (sql === undefined) {
     sql = agent.sql.bind(agent);
     boundSql.set(agent, sql);
-    holdConfig(sql);
   }
+
+  if (holds !== undefined) holdConfig(sql, holds);
 
   return sql;
 }

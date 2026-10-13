@@ -141,7 +141,7 @@ reads the turn again after a restart rebuilds its surface from what it froze.
 Every call that runs more of the turn carries its capability (turn, run, epoch)
 and holds only while the workspace's durable fence (`actor_turn_fence`) holds
 that opening; every call that closes it names that opening, and runs only if
-it is the agent's own (`actor_turn_openings`). A tool
+it names an execution the agent opened here, under that execution's newest epoch (`actor_executions`). A tool
 whose effect commits in the workspace returns through
 `AgentWorkspaceRPC.executeTool`, its receipt kept there and a pointer to it in
 the facet; the facet holds conversation, claims, its own effect claims and run

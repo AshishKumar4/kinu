@@ -60,7 +60,7 @@ import {
   type ActorDirectoryResult, type WorkspaceActorDirectory,
   type ScaffoldRunOptions,
   initActorClaimTables, ActorClaimStore, initPendingSendTables,
-  createScaffoldCandidateSurface, createScaffoldCallTool, createScaffoldHistory, type ScaffoldCandidateBinding,
+  createScaffoldCandidateSurface, createScaffoldHistory, type ScaffoldCandidateBinding,
   createJsonJudge, type ScaffoldControl,
   refinementPass, type RefinementDeps,
   type CompletedTurn, type TurnContinuity,
@@ -128,13 +128,11 @@ import {
   type TeamToolDeps,
   type SubordinateRuntime, type TemporaryAgentPort,
   SubordinateRosterStore, subordinateTitle,
-  createTeamToolDeps, createTemporaryAgentPort, receiveSubordinateEvent,
-  type SubordinateReportStatus, type SubordinateReportOrigin,
-  type SubordinateEventResult,
+  createTeamToolDeps, createTemporaryAgentPort,
   // One minting rule for every subordinate, on either backend
   agentNamer,
   // Subordinate tree depth cap: derived per child, never stated by one
-  delegationExhausted, deriveChildDelegationBudget, type DelegationBudget,
+  delegationExhausted, type DelegationBudget,
   readSoul, bootstrapScaffold,
   applyWorkspaceTitle, suggestWorkspaceTitle, type NameOrigin,
   parseModelSpec, specModelInfo, assembleActorTurn,
@@ -195,7 +193,7 @@ import { workspaceOwner } from "./workspace-owner-rpc";
 import { CRED_SESSION_USER } from "@nimbus-sh/core/runtime/os-contracts.js";
 import type { SlateCaller, SlateCallerHop } from "./slates/bindings";
 import type { SlateDispatchContext } from "./slates/host";
-import { diagnostics, KinuError, refusalOf, refusing, toKinuError, tolerate, type ErrorCode, type Refusal } from "@kinu.run/core/obs";
+import { diagnostics, KinuError, refusalOf, toKinuError, tolerate, type ErrorCode, type Refusal } from "@kinu.run/core/obs";
 import type { UserDO } from "./user/user-do";
 import type { McpToolSurface } from "./user/mcp-servers";
 import type { UserDoRpcMethod } from "./rpc-surface";
@@ -587,9 +585,9 @@ export abstract class ActorAgent extends Agent<Env> {
     return token ? sha256Hex(token) : null;
   }
 
-  /** Worker-side DO RPC only, deliberately not `@callable`. `missed` counts failed subtree
-   * pushes; the caller reports them to the UserDO so it can arm reconciliation. */
-  installWorkspaceCapability(token: string): Promise<{ ok: true; missed: number }> {
+  /** Worker-side DO RPC only, deliberately not `@callable`. Hosted actors read the one capability row through their
+   *  runtime, so a reissue applies on their next call: there are no per-actor copies to push to. */
+  installWorkspaceCapability(token: string): Promise<{ ok: true }> {
     return settle(Effect.gen({ self: this }, function* () {
       if (!token) return yield* new KinuError('denied', 'capability token required');
       void this.sql`INSERT INTO workspace_capability (id, token) VALUES (1, ${token})
@@ -599,21 +597,8 @@ export abstract class ActorAgent extends Agent<Env> {
       // The first tile, so a workspace nobody opens still shows.
       this.overviewChanged();
 
-      // Hosted actors read the single capability row through their runtime, so a reissue applies on
-      // their next call; no per-actor copies exist, so `missed` is always zero (callers report it).
-      return { ok: true, missed: 0 };
+      return { ok: true } as const;
     }));
-  }
-
-  /** Re-run the subtree push with the token this root holds; only the root stores the plaintext,
-   *  so retries go through it. Idempotent: same push and same committed token. */
-  async repushWorkspaceCapability(): Promise<{ missed: number }> {
-    const token = this.workspaceCapabilityToken();
-
-    if (!token) return { missed: 0 };
-    const result = await this.installWorkspaceCapability(token);
-
-    return { missed: result.missed };
   }
 
   /**
@@ -930,89 +915,8 @@ export abstract class ActorAgent extends Agent<Env> {
     });
   }
 
-  /**
-   * Called by a child after it wrote its naming state; only names the roster's reads.
-   * Must not call the child back (it is mid-turn). Not `@callable`: stub possession authorizes.
-   */
-  async recordSubordinateTitle(
-    name: string,
-    displayName: string,
-  ): Promise<{ ok: true }> {
-    await this.getTeamToolDeps().recordTitle({ name, displayName });
-
-    return { ok: true };
-  }
-
   protected activeRoleLabel(): string {
     return this.config.getRoleSelection();
-  }
-  /**
-   * Facet bootstrap authority, worker-side DO RPC only. The child's depth is decided here, never
-   * from its own arguments, and seeding refuses at the cap even for a stale ToolSet.
-   */
-  getSubordinateBootstrapIdentity(input: { name: string; reference: ActorReference }): Promise<{
-    parentWorkspace: string;
-    ownerUserId: string;
-    model: string | null;
-    depth: number | null;
-    origin: ActorDirectoryResult['origin'];
-    lifetime: ActorDirectoryResult['lifetime'];
-    name: string;
-    storageKey: string;
-    creationId: string;
-  } | Refusal> {
-    return settle(Effect.gen({ self: this }, function* () {
-      return yield* Effect.catchCause(Effect.gen({ self: this }, function* () {
-        const child = yield* Effect.promise(async () => this.actorDirectory({ action: 'validate', name: input.name, reference: input.reference }));
-        const ownerUserId = this.getOwnerUserId();
-
-        if (!ownerUserId) return yield* new KinuError('missing', 'The workspace has no owner.');
-        let depth: number | null = null;
-
-        if (isSubordinateOrigin(child.origin)) {
-          const own = this.delegationBudget();
-
-          if (delegationExhausted(own)) return yield* new KinuError('denied', 'The parent cannot create a subordinate below its delegation depth.');
-          depth = deriveChildDelegationBudget(own).depth;
-        }
-
-        return {
-          parentWorkspace: this.workspaceName(), ownerUserId, model: this.config.getModel(),
-          depth, origin: child.origin, lifetime: child.lifetime, name: child.name, storageKey: child.storageKey, creationId: child.creationId,
-        };
-      }), refusing('reading a registered child bootstrap', 'io'));
-    }));
-  }
-
-  /** Worker-side DO RPC only (not `@callable`). Reports use the same EventLog → drain rail as
-   * mission inbox. */
-  async receiveSubordinateEvent(input: {
-    fromSubordinate: string;
-    status: SubordinateReportStatus;
-    content: string;
-    origin: SubordinateReportOrigin;
-    mode: WorkMode;
-    /** Ingress dedupe key: a replayed report is one the parent already holds. */
-    sequenceId: string;
-  }): Promise<SubordinateEventResult> {
-
-    return receiveSubordinateEvent({
-      log: this.eventLog,
-      roster: this.subordinateRoster,
-      vfs: this.rt.storage.vfs,
-      transaction: (body) => this.ctx.storage.transactionSync(body),
-      announce: (report) => {
-        this.liveReadsMoved(ROSTER_READS);
-        this.broadcastSubordinateEvent({ ...report, kind: 'report' });
-      },
-      // Its durable wake drains the report into a turn of its own, whichever isolate holds it.
-      onAdmitted: () => { this.durableWakeOwner()?.(); },
-      evolutionAnswerStored: () => this.advice.owe(this.actorHandle().actorId),
-      onEvolutionAnswer: () => { this.durableWakeOwner()?.(); },
-      // A temporary child's answer belongs to the waiting `agents.ask` call, so the register gets
-      // first refusal on the name through the port that parked the waiter.
-      temporary: this.temporaryAgentPort(),
-    }, input, Date.now());
   }
 
   /** Protected: the workspace root builds every hosted actor's model seams from this one
@@ -1468,9 +1372,6 @@ export abstract class ActorAgent extends Agent<Env> {
   protected get compactionState(): CompactionStateStore {
     return (this._compactionState ??= createCompactionStateStore(this.boundSql, this.actorHandle()));
   }
-
-  /** Durable-history length (ModelMessage count) the turn's prompt-token measurement is bound to. */
-  protected _turnDurableLength = 0;
 
   /** Shared by the per-turn extension and swarm ladder so outcome names cannot drift. */
   private readonly compactionLogger: CompactionLogger = {
@@ -2026,36 +1927,6 @@ export abstract class ActorAgent extends Agent<Env> {
       },
       bindModel: spec => this.ownedModelServices.resolveModel(spec),
       modelContext: spec => this.modelCatalog.contextFor(spec),
-    };
-  }
-
-  /** No step cap: the scaffold runs as long as the live turn it may replace (owner ruling,
-   * 2026-08-21). Tool names resolve against the raw surface per call. */
-  protected makeScaffoldLLMStream(signal?: AbortSignal): ScaffoldRunOptions['llmStream'] {
-    return createScaffoldCandidateSurface({
-      ...this.scaffoldCandidateModel(),
-      tools: () => this.getRawTools(),
-      history: undefined,
-      signal,
-      spend: this.scaffoldSpend(),
-    }, '').llmStream;
-  }
-
-  /**
-   * `callScope` gives stable call ids and claim turn identity so a re-driven trial matches
-   * prior tool-effect claims; this narrows duplicates only as far as the rollout is deterministic.
-   */
-  protected makeScaffoldCallTool(callScope?: string, signal?: AbortSignal): NonNullable<ScaffoldRunOptions['callTool']> {
-    let prepared: Promise<NonNullable<ScaffoldRunOptions['callTool']>> | undefined;
-
-    return async (name, args) => {
-      prepared ??= this.preparedWorkMode().then((mode) => {
-        const tools = this.getRawToolsForWorkMode(mode, callScope);
-
-        return createScaffoldCallTool(() => tools, callScope, signal);
-      });
-
-      return (await prepared)(name, args);
     };
   }
 
@@ -2681,7 +2552,7 @@ export abstract class ActorAgent extends Agent<Env> {
   // `this.sql` needs `this` bound; this closure can be passed by reference to helpers safely.
   private _boundSql: SqlExecutor | null = null;
   protected get boundSql(): SqlExecutor {
-    this._boundSql ??= bindAgentSql(this);
+    this._boundSql ??= bindAgentSql(this, this.held);
 
     return this._boundSql;
   }
@@ -3709,11 +3580,6 @@ export abstract class ActorAgent extends Agent<Env> {
     return operation ? withOperationProfile(tools, operation) : tools;
   }
 
-  /** Unwrapped tool surface; eval side-streams use it to run tools inline, never auto-backgrounded. */
-  protected getRawTools(): ToolSet {
-    return this.getRawToolsForWorkMode(this.turnWorkMode());
-  }
-
   /** `claimScope` keys a rollout's effects on the rollout; else a call claims under the operation it runs in. */
   protected getRawToolsForWorkMode(mode: WorkMode, claimScope?: string): ToolSet {
     return this.ownTools(mode, claimScope ?? null).raw;
@@ -3868,14 +3734,6 @@ export abstract class ActorAgent extends Agent<Env> {
       stored: () => this.getStoredModelId(),
       normalize: (spec) => (spec === null ? '' : this.providerRegistry().normalizeSpecSync(spec)),
     });
-  }
-
-  protected effectiveModelProviderFamily(): string {
-    const spec = this.effectiveModelSpec();
-
-    if (!spec) return '';
-
-    return parseModelSpec(spec).provider;
   }
 
   /** Uses the resolved spec: the raw stored id is null on default-configured agents,
@@ -4098,11 +3956,6 @@ export abstract class ActorAgent extends Agent<Env> {
       approvals: extras.approvals,
       ...(extras.failingSlates !== undefined && { failingSlates: extras.failingSlates }),
     });
-  }
-
-  /** A queued signal stamps kinuEvent metadata on the saved user message; real chat carries none. */
-  protected lastUserTurnIsProgrammatic(): boolean {
-    return this.turnUserMessageEvent() !== null;
   }
 
   /** Chat turns are interactive: slow work must hand back a handle fast. Signal-driven turns are

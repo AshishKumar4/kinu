@@ -32,22 +32,14 @@ export function isTransactionalCall(entry: Tool, input: JsonValue): boolean {
  * one synchronous commit with its receipt and result (design v2 §4), so the receipt is settled or absent, never started.
  */
 export class TransactionalReceipt {
-  #committed = false;
-
   constructor(private readonly commitWith: (run: () => JsonValue) => ReceiptCommit) {}
 
   commit(run: () => JsonValue): JsonValue {
-    this.#committed = true;
     const committed = this.commitWith(run);
 
     if (committed.kind === 'refused') return settleSync(Effect.fail(committed.failure));
 
     return committed.output;
-  }
-
-  /** Whether the call ran through it: one a wrapper did not hand its options on to settles its receipt after. */
-  get committed(): boolean {
-    return this.#committed;
   }
 }
 

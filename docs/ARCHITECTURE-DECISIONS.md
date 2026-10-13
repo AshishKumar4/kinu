@@ -946,8 +946,10 @@ the owner, built 2026-10-11 on `lane/main-isolate`.
   surface, the workspace agent's, a hire's, a head's, a swarm node's and a
   background run's, from core's one reach decision (`surfaceReach`: what the
   agent reaches by what it is, `actorReach`, and by the lane its turn was
-  admitted in, `turnReach`), so no hot path compares an id to the root's
-  (`scripts/root-branches.json`: 0 H). The workspace seats every agent with no
+  admitted in, `turnReach`), so no hot path compares an id to the root's.
+  The census that tracked it closed at 0 H and 62 J (65 sites, each a kept
+  reason); its gate and list were retired after cad6c2196, which holds
+  `scripts/root-branches.ts` and `.json` to restore them from. The workspace seats every agent with no
   session of its own (`createSeatHost`): the workspace agent over the workspace
   object's runtime (`workspaceAgentHome`), with its evolution lanes in core
   `EvolutionLanes` and every agent's advisor in core `ActorAdvisor`. A turn's
@@ -966,7 +968,7 @@ the owner, built 2026-10-11 on `lane/main-isolate`.
   anything runs. A call that closes what the turn already did (its trace, its
   charges, its answer's metadata, its end, its settle) names its execution and
   is judged against the openings the workspace admitted
-  (`actor_turn_openings`): its own runs after a newer opening or a Stop, so a
+  (`actor_executions`, keyed by the agent, turn and run): its own runs after a newer opening or a Stop, so a
   stopped turn closes; one naming another execution's opening, or a newer one,
   is refused `stale_close` and runs nothing. Credentials are held five minutes and refreshed on an upstream's
   refusal; activity rides tool calls and the turn's end, and the profile the
@@ -985,7 +987,9 @@ the owner, built 2026-10-11 on `lane/main-isolate`.
   round and a Retry are new executions and resolve afresh. An applied Retry
   holds its reopened turn (`queued_turns`) in the commit that marks it
   applied, so an isolate that dies before the turn opens runs it on its next
-  wake. A Retry of an answered turn withdraws the answer in one commit (the
+  wake; the states the UI draws while an intent is owed were shot from the
+  gallery by `scripts/owed-intent-shots.ts`, retired after cad6c2196, which
+  holds it. A Retry of an answered turn withdraws the answer in one commit (the
   transcript from it, the context back to the turn's last input, and its
   executions' output, `actor_turn_claims.withdrawn_through`), so the model is
   asked afresh; a failed or stopped turn's Retry continues its completed

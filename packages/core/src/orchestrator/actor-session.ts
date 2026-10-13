@@ -61,7 +61,7 @@ const RESTORE_REFUSALS: Readonly<Record<Extract<InterruptedTurnVerdict, { kind: 
   stopped: 'This turn was stopped before the last process ended, so it is not run again.',
   answered: 'This turn had already given its report before the last process ended, so it is not run again.',
   record_unreadable: 'The record of what this turn had done could not be read after the last process ended, so it is not run again.',
-  stalled: 'This turn made no progress across two runs, so it is not run a third time.',
+  stalled: 'This turn was cut off at the same step too many times, so it is not run again.',
   unverified: 'The program this turn ran has changed since the last process ended, so it is not run again under another.',
 };
 

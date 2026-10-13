@@ -18,17 +18,17 @@ import {
   createWorkspaceForkSink, createWorkspaceForkSource, workspaceSoul, workspaceArchiveStore, writeWorkspaceSoul,
   explorationActorKey, writesSnapshotRows,
   HeadController, REAL_CLOCK, runHeadSplit, SubordinateRosterStore,
-  EventLog, actorReferenceOf, subordinateDescendants, TEMPORARY_LIFETIME,
+  EventLog, actorReferenceOf, stoppedBelow, TEMPORARY_LIFETIME,
   artifactOverrides, currentArtifacts,
   agentsActionsFor, agentsProfileContext, betaSwarms, buildActorTools, BACKGROUNDABLE_TOOLS,
   vfsTurnSkills, conversationKey, captureOperationProfile, type RunTurnSources,
-  ActorAdvisor, describeAgentTools, historyTurnPairs, inTurnSurface, turnLedgers, type TurnLedgers, surfaceReach, turnArtifactBodies, withToolText, HeadCapture,
+  ActorAdvisor, describeAgentTools, historyTurnPairs, inTurnSurface, turnLedgers, type TurnLedgers, surfaceReach, turnArtifactBodies, withToolText,
   BUILTIN_TOOL_NAMES, codemodeCapabilitiesFor, agentRoleSwitch, currentOperationProfile,
   ownProfileChoices, pruneTurnReceipts, remoteReceipts, type SeatedActor, type SettledRun, type SurfaceReach, type ExecutionLane, type OperationProfile, type CodemodeSurface,
   type SubordinateReportLedger, type ActorToolsets,
   invocationBackgroundPolicy, endedStepLoopJobs, inlineResultInbox, type ActorJobs, type JobAuthority,
   createTeamToolDeps, delegationExhausted,
-  agentNamer, withHeadCaptureRecording,
+  agentNamer,
   type ActorHost, type ActorToolsetDeps, type AgentsToolDeps,
   type BoundActor, type HeadInput,
   type HeadJournalPort, type HeadSplitRequest, type HeadSplitResult,
@@ -56,7 +56,7 @@ import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { isWorkspaceTerminal, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
 import { McpToolSurfaceSchema, ShareViewerClaimSchema, type ShareViewerClaim } from '@kinu.run/core';
 import {
-  AgentOpenTurns, AgentOwedWork, AgentReports, TurnFences, type AgentOwes, announcementOf, RECOVERY_BACKOFF_CEILING_MS, type PromptFile, type AgentOpenTurn, CHAT_SESSION_ID, steerSkillsBlock, subordinateTurnContext, type SessionEvent, type SessionTranscript,
+  AgentOpenTurns, AgentReports, TurnFences, type AcceptedReport, type AgentOwes, announcementOf, RECOVERY_BACKOFF_CEILING_MS, type PromptFile, type AgentOpenTurn, CHAT_SESSION_ID, steerSkillsBlock, subordinateTurnContext, type SessionEvent, type SessionTranscript,
 } from '@kinu.run/core';
 // Main actor's payload plane on both fork halves: the carried conversation references
 // payload files by absolute path, and the fork is a cut of the main actor's conversation.
@@ -878,11 +878,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   private snapshotSeq = 0;
 
-  private _owedWork: AgentOwedWork | null = null;
-
-  protected get owedWork(): AgentOwedWork {
-    return this._owedWork ??= new AgentOwedWork(this.boundSql);
-  }
 
   private _agentTurns: AgentTurns | null = null;
 
@@ -1272,7 +1267,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           // Retired: what it was owed and had not taken is cancelled with its wake.
           this.deliveries.cancel(record.actorId);
           await this.agentWakes.owes(record.actorId, null);
-          this.noteAgentOwedWork(record.actorId, false);
+
+          if (new AgentReports(this.boundSql).release(record.actorId)) this.agentReportMoved(record.actorId);
           this.agentsWorking.delete(record.actorId);
         }
 
@@ -1514,7 +1510,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         : { bodies: {}, trial: null };
 
       const overrides = artifactOverrides(artifacts.bodies);
-      const capture = run?.capture ?? new HeadCapture();
+      const capture = run?.capture ?? null;
       const reports: SubordinateReportLedger = { spoke: false, settled: false };
       const report = reach.turn.report ? this.hirerReport(actor, lane.mode, reports, key.turnId) : undefined;
 
@@ -1533,7 +1529,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // before this turn read them.
       if (Object.keys(surface.declared).length > 0) built = build();
       const held = { taskPlan: lane.taskPlan, surface, sql: runtime.storage.sql };
-      const tools = run === undefined ? this.turnTools(withToolText(withHeadCaptureRecording(built.turn, capture), overrides.tools), held) : built.turn;
+      const tools = run === undefined ? this.turnTools(withToolText(built.turn, overrides.tools), held) : built.turn;
       const { descriptors, digest } = await describeAgentTools(tools);
 
       // Its plans and questions commit in its own isolate's store, which builds these tools and keeps their receipts. A
@@ -2011,15 +2007,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       return hirer === null ? null : { hirer, roster: seams.roster(this.actorHost().bindStores(actorReferenceOf(hirer))) };
     };
 
-    const ownerMade = (actor: WorkspaceActor): boolean => {
-      for (let step: WorkspaceActor | null = actor; step !== null && step.actorId !== actorId; step = directory.retained(step.parentActorId ?? '')) {
-        if (step.origin === 'user') return true;
-      }
-
-      return false;
-    };
-
-    const below = subordinateDescendants(this.workspaceActors().list(), actorId).filter((actor) => !ownerMade(actor));
+    const below = stoppedBelow(this.workspaceActors().list(), actorId);
 
     if (below.length === 0) return;
 
@@ -2812,24 +2800,30 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** One report of an agent's, told or carried by its admission's answer (taken rides admit). */
   private async agentOwes(actorId: string, { seq, next, holds, report }: AgentOwes): Promise<void> {
     const { standing, runEnds } = report;
+    const before = this.reportedReport(actorId);
+    const live = this.liveActor(actorId);
+    // Older than a report already taken from it: delayed past that one, or sent before a reset of either side. Its
+    // cumulative figures are older than those taken, so they stand only for a report taken here. A retired agent holds
+    // nothing here: its retirement released it.
+    const accepted = new AgentReports(this.boundSql).accept(actorId, seq, standing, holds && live);
 
     // Each delivered run's end, whichever report carries it: its caller hears it once, and a repeat finds none.
     for (const ended of runEnds) {
       if ('ended' in ended.outcome) {
         this.agentActivity(actorId, ended.outcome.ended.activity);
-        recordAgentFigures(this.boundSql, actorId, ended.outcome.ended.figures);
+
+        if (accepted) recordAgentFigures(this.boundSql, actorId, ended.outcome.ended.figures);
       }
 
       this.agentTurns.runEnded(actorId, ended);
     }
 
-    const before = this.reportedStanding(actorId);
+    if (!accepted) return;
+    this.reportedReports.set(actorId, { standing, holds: holds && live });
+    this.standingMoved(actorId, before?.standing, standing);
 
-    // Older than a report already taken from it: delayed past that one, or sent before a reset of either side.
-    if (!new AgentReports(this.boundSql).accept(actorId, seq, standing)) return;
-    this.reportedStandings.set(actorId, standing);
-    this.standingMoved(actorId, before, standing);
-    const live = this.liveActor(actorId);
+    // Who holds owed work is read by the work page (`owingAgentsWork`): a change of the agent's answer moves it.
+    if ((before?.holds ?? false) !== (holds && live)) this.overviewChanged();
 
     if (this.agentsWorking.has(actorId) !== (live && report.working)) {
       if (live && report.working) this.agentsWorking.add(actorId);
@@ -2839,7 +2833,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // A retired agent's answer arms nothing: tearing it down ended its wake.
     if (!live) return await this.agentWakes.owes(actorId, null);
-    this.noteAgentOwedWork(actorId, holds);
     // A rest told while a delivery is owed it keeps the wake that crosses it.
     await this.agentWakes.owes(actorId, next ?? (this.deliveriesOwed(actorId) ? Date.now() + RECOVERY_BACKOFF_CEILING_MS : null));
 
@@ -3751,7 +3744,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // Each agent's own isolate reports them at its turns' ends, main's as any other's: its steps are its isolate's (D9).
       figures: (actorIds) => reportedAgentFigures(this.boundSql, actorIds),
       chat: (actorId) => {
-        const reported = this.reportedStanding(actorId);
+        const reported = this.reportedReport(actorId)?.standing;
 
         return reported === undefined ? null : { planPending: reported.plans.pending, lastFailed: reported.latestRun?.status === 'error' };
       },
@@ -3833,13 +3826,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * What each agent holding owed work answers of its own, the agents named by their own last answer of what they owe
-   * (`agent_owed_work`), not by their wakes: a parked effect is owed with no wake. One that cannot answer is left out.
+   * What each agent holding owed work answers of its own, the agents named by their own last report of what they owe
+   * (`agent_reports.holds`), not by their wakes: a parked effect is owed with no wake. One that cannot answer is left out.
    */
   private async owingAgentsWork(): Promise<InspectedWork[]> {
     const reported: InspectedWork[] = [];
 
-    await Promise.all(this.owedWork.all().filter((actorId) => this.liveActor(actorId)).map((actorId) => settleLogged(
+    await Promise.all(new AgentReports(this.boundSql).holding().filter((actorId) => this.liveActor(actorId)).map((actorId) => settleLogged(
       'subordinate.agent_work_unread',
       { doing: "reading what an agent's own isolate still owes", otherwise: 'io' },
       async () => { reported.push(...await (await this.agentCalls(actorId)).owedWork(this.agentSnapshot(actorId))); },
@@ -4457,7 +4450,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const main = this.actorHandle().actorId;
 
     if (!this.config.getHoldsTurns()) return { messageCount: 0, context: null, latestRun: null, pendingSteers: [], plans: { pending: false, revision: 0 }, questions: 0 };
-    const reported = opts.fresh === true ? undefined : this.reportedStanding(main);
+    const reported = opts.fresh === true ? undefined : this.reportedReport(main)?.standing;
 
     if (reported !== undefined) {
       const { measures, ...standing } = reported;
@@ -4468,22 +4461,29 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return await (await this.agentCalls(main)).standing(this.agentSnapshot(main), this.modelCatalog.contextWindow());
   }
 
-  /** The agent's standing as it last reported it: held as each report arrives, read from where its report was stored
-   *  after a cold start, so a background read never wakes the agent; none before its first report. */
-  private reportedStanding(actorId: string): AgentStandingReport | undefined {
-    const held = this.reportedStandings.get(actorId);
+  /** The agent's newest report as this workspace took it: held as each report arrives, read from where its report was
+   *  stored after a cold start, so a background read never wakes the agent; none before its first report. */
+  private reportedReport(actorId: string): AcceptedReport | undefined {
+    const held = this.reportedReports.get(actorId);
 
     if (held !== undefined) return held;
-    const stored = new AgentReports(this.boundSql).standing(actorId);
+    const stored = new AgentReports(this.boundSql).report(actorId);
 
     if (stored === null) return undefined;
-    this.reportedStandings.set(actorId, stored);
+    this.reportedReports.set(actorId, stored);
 
     return stored;
   }
 
-  /** Each agent's standing as it last reported it, held as each report is stored. */
-  private readonly reportedStandings = new Map<string, AgentStandingReport>();
+  /** Each agent's newest report, held: written by each accepted report (`agentOwes`) and its retirement's release
+   *  (`agentReportMoved`), dropped with the activation. */
+  private readonly reportedReports = new Map<string, AcceptedReport>();
+
+  /** A retired agent's report says it owes nothing: the held copy goes, and the work page moves. */
+  private agentReportMoved(actorId: string): void {
+    this.reportedReports.delete(actorId);
+    this.overviewChanged();
+  }
 
   /** Its plans and questions are written in its own isolate, which the workspace's reads do not watch: a report whose
    *  revisions differ from the last one moves what reads them. */
@@ -6133,7 +6133,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const main = this.actorHandle().actorId;
 
     // Its own last answer may hold work with no wake to come back for it, as a parked effect is held.
-    if (!this.agentWakes.armed(main) && !this.owedWork.all().includes(main)) return { recovered: 'none' };
+    if (!this.agentWakes.armed(main) && this.reportedReport(main)?.holds !== true) return { recovered: 'none' };
     // Its isolate decides each claim it holds and no turn of its runs, as an agent's do after a reset; then it takes up
     // what it still owes.
     await (await this.agentCalls(main)).recover(this.agentSnapshot(main));
@@ -6218,9 +6218,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** Both an agent's report and its retirement publish a changed settings-wait obligation. */
-  private noteAgentOwedWork(actorId: string, holds: boolean): void {
-    if (this.owedWork.held(actorId, holds)) this.overviewChanged();
-  }
 
   /** A local parked refusal or an agent's own owed work can depend on changed settings. One read, only while idle. */
   private awaitsSettings(): boolean {

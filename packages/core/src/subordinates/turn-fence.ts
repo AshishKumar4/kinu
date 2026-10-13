@@ -19,22 +19,17 @@ export function initTurnFenceTable(execRaw: RawSqlExec): void {
     facts_json TEXT,
     cancelled_at INTEGER
   )`);
-  // Each opening admitted, by its place in the agent's sequence: what a close names is checked against it (`closes`),
-  // its repeats too. A ring of {@link KEPT_OPENINGS} slots an agent: an opening takes its place's slot from the one
-  // {@link KEPT_OPENINGS} places older, in the one statement that admits it.
-  execRaw(`CREATE TABLE IF NOT EXISTS actor_turn_openings (
+  // Each execution the agent opened here, by its turn and run, with the epoch of its newest opening: what its closes
+  // name is checked against it (`closes`), however late they come. A recovery re-opens the same execution under its
+  // next epoch, which the dead one's closes then no longer name.
+  execRaw(`CREATE TABLE IF NOT EXISTS actor_executions (
     actor_id TEXT NOT NULL REFERENCES workspace_actors(actor_id),
-    slot     INTEGER NOT NULL,
-    seq      INTEGER NOT NULL,
     turn_id  TEXT NOT NULL,
     run_id   TEXT NOT NULL,
-    PRIMARY KEY (actor_id, slot)
+    epoch    INTEGER NOT NULL,
+    PRIMARY KEY (actor_id, turn_id, run_id)
   )`);
 }
-
-/** How many of an agent's newest places in its sequence a close is judged against by name: one naming an older opening
- *  runs, and finds nothing of another execution to change, as every close write is keyed on its own. */
-const KEPT_OPENINGS = 64;
 
 /** What a close names (design v2 §3): the execution it closes and the epoch it opened with; null for one never admitted
  *  (stopped, or its preparation failed, before its claim was bound), whose close can end nothing of the fence by place. */
@@ -73,32 +68,24 @@ export class TurnFences {
       RETURNING seq`.length > 0;
 
     if (!admitted) return false;
-    void this.sql`INSERT INTO actor_turn_openings (actor_id, slot, seq, turn_id, run_id)
-      VALUES (${actorId}, ${opening.seq % KEPT_OPENINGS}, ${opening.seq}, ${opening.turnId}, ${opening.runId})
-      ON CONFLICT (actor_id, slot) DO UPDATE SET seq = excluded.seq, turn_id = excluded.turn_id, run_id = excluded.run_id`;
+    void this.sql`INSERT INTO actor_executions (actor_id, turn_id, run_id, epoch) VALUES (${actorId}, ${opening.turnId}, ${opening.runId}, ${opening.seq})
+      ON CONFLICT (actor_id, turn_id, run_id) DO UPDATE SET epoch = excluded.epoch`;
 
     return true;
   }
 
   /**
-   * Whether a close (its trace, charges, answer metadata, end, settle) may run (design v2 §3): its execution's own close
-   * runs after a Stop or a newer opening, so it is judged by the opening it names, never by the fence's current one. One
-   * that names an opening as another execution's, or an opening newer than any admitted, is refused, running nothing.
-   * One older than the kept openings runs, and finds nothing of another execution to change: every close write is keyed
-   * on its own execution.
+   * Whether a close (its trace, charges, answer metadata, end, settle) may run (design v2 §3): judged by the execution it
+   * names, never by the fence's current opening, so its own close runs after a Stop or a newer opening. One naming an
+   * execution this agent never opened here, or under another epoch than that execution's newest, is refused.
    */
   closes(actorId: string, closed: ClosedExecution): boolean {
     if (closed.seq === null) return true;
 
-    const opening = this.sql<{ turn_id: string; run_id: string }>`SELECT turn_id, run_id FROM actor_turn_openings
-      WHERE actor_id = ${actorId} AND slot = ${closed.seq % KEPT_OPENINGS} AND seq = ${closed.seq}`[0];
+    const execution = this.sql<{ epoch: number }>`SELECT epoch FROM actor_executions
+      WHERE actor_id = ${actorId} AND turn_id = ${closed.turnId} AND run_id = ${closed.runId}`[0];
 
-    if (opening !== undefined) return opening.turn_id === closed.turnId && opening.run_id === closed.runId;
-    const newest = this.row(actorId);
-
-    if (newest === null || closed.seq > newest.seq) return false;
-
-    return closed.seq < newest.seq || (newest.turnId === closed.turnId && newest.runId === closed.runId);
+    return execution?.epoch === closed.seq;
   }
 
   /** The agent's newest opening, and whether it still runs: neither ended nor stopped. Null before its first. */

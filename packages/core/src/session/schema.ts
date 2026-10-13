@@ -23,7 +23,7 @@ export function initSessionContextTables(exec: RawSqlExec): void {
   // window is the part's next segment, so a flush writes only its own text and no row reaches the platform row limit.
   exec(`CREATE TABLE IF NOT EXISTS stream_parts (
     actor_id TEXT NOT NULL, message_id TEXT NOT NULL, part_no INTEGER NOT NULL, segment INTEGER NOT NULL,
-    kind TEXT NOT NULL, stream_order INTEGER NOT NULL,
+    stream_order INTEGER NOT NULL,
     descriptor_json TEXT, descriptor_path TEXT, descriptor_digest TEXT,
     text TEXT NOT NULL DEFAULT '', ended INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY(actor_id,message_id,part_no,segment),

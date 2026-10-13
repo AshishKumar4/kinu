@@ -3,12 +3,10 @@ import type { ChatEvent } from '../src/chat';
 import { describe, test, expect } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
+import { createScaffoldHistory, runScaffold, type ScaffoldHistoryPage } from '../src/index';
 import {
-  SCAFFOLD_HISTORY_DEFAULT_LIMIT, SCAFFOLD_HISTORY_MAX_LIMIT,
-  SCAFFOLD_HISTORY_MAX_MESSAGE_CHARS, SCAFFOLD_HISTORY_MAX_PAGE_CHARS,
-  createScaffoldHistory, runScaffold,
-  type ScaffoldHistoryPage,
-} from '../src/index';
+  SCAFFOLD_HISTORY_DEFAULT_LIMIT, SCAFFOLD_HISTORY_MAX_LIMIT, SCAFFOLD_HISTORY_MAX_MESSAGE_CHARS, SCAFFOLD_HISTORY_MAX_PAGE_CHARS,
+} from '../src/orchestrator/scaffold-host';
 import { SCAFFOLD_HOST_TYPES } from '../src/scaffold/executor';
 import type { Executor } from '../src/types/primitives';
 import type { JsonValue } from '../src/utils/json';

@@ -5,7 +5,7 @@ import { Database } from 'bun:sqlite';
 import { asSchema, type ModelMessage } from 'ai';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { DELEGATION_MAX_DEPTH, ROOT_DELEGATION_BUDGET, delegationExhausted, SubordinateRosterStore, TEMPORARY_LIFETIME, EventLog, TASK_TURN_ENDINGS, agentsActionsFor, initEventsHubTables, terminalTaskReport, createAgentsCodemodeProvider, createTeamToolDeps, createTemporaryAgentPort, taskAnswerIsLater, deriveChildDelegationBudget, delegationDepthRefusal, receiveSubordinateEvent, type SubordinateEventResult, type SubordinateReportHandoff, TOOL_REACH, type AgentsToolDeps, type AgentsProfileContext, type SubordinateHandoff, type SubordinateRuntime, type TemporaryAgentPort, type WorkMode, type AgentsOp, type CodemodeResult, callOperation, BUILTIN_PROFILE_CATALOG, profileCatalogDigest, DEFAULT_WORKERS_AI_MODEL_SPEC, recoverSubordinateLifecycles } from '../src/index';
+import { DELEGATION_MAX_DEPTH, ROOT_DELEGATION_BUDGET, delegationExhausted, SubordinateRosterStore, TEMPORARY_LIFETIME, EventLog, TASK_TURN_ENDINGS, agentsActionsFor, initEventsHubTables, terminalTaskReport, createAgentsCodemodeProvider, createTeamToolDeps, createTemporaryAgentPort, taskAnswerIsLater, delegationDepthRefusal, receiveSubordinateEvent, type SubordinateEventResult, type SubordinateReportHandoff, TOOL_REACH, type AgentsToolDeps, type AgentsProfileContext, type SubordinateHandoff, type SubordinateRuntime, type TemporaryAgentPort, type WorkMode, type AgentsOp, type CodemodeResult, callOperation, BUILTIN_PROFILE_CATALOG, profileCatalogDigest, DEFAULT_WORKERS_AI_MODEL_SPEC, recoverSubordinateLifecycles } from '../src/index';
 import { createAgentsTool } from '../src/delegation/agents-operations';
 import { createMemoryVfs } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw, makeSqlExec } from './helpers';
@@ -40,8 +40,7 @@ function testProfile(): AgentsProfileContext {
 }
 
 /** A hire chain `depth` levels below the root. */
-const budgetAt = (depth: number) =>
-  Array.from({ length: depth }, () => 0).reduce((budget) => deriveChildDelegationBudget(budget), ROOT_DELEGATION_BUDGET);
+const budgetAt = (depth: number) => ({ depth, maxDepth: Math.max(0, DELEGATION_MAX_DEPTH - depth) });
 
 const NOW = 1_700_000_000_000;
 

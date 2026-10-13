@@ -30,6 +30,8 @@ export async function sessionFixture(input: {
   /** The models and catalog a case's turns are assembled from, in place of the fixture's one model. */
   readonly sources?: Partial<Pick<RunTurnSources, 'models' | 'profileInputs'>>;
   readonly cacheWarming?: (actor: HostedActor) => CacheWarmingLane;
+  /** Hears each event as the session's room does, the moment it is sent. */
+  readonly onEvent?: (event: SessionEvent) => void;
 }) {
   const { rt, testSql } = createTestRuntime();
   const db = testSql.db;
@@ -80,7 +82,7 @@ export async function sessionFixture(input: {
     eventRecorder: actor.stores.eventRecorder,
     compactionState: fixtureCompaction(sessionKey).state,
     transaction,
-    transport: { deliver: (event) => { events.push(event); } },
+    transport: { deliver: (event) => { events.push(event); input.onEvent?.(event); } },
     mintAnswerId: () => crypto.randomUUID(),
     ports: {
       prepareTurn: (input.aroundPrepare ?? ((own) => own))(async (item, _lease, _opening, round) => {

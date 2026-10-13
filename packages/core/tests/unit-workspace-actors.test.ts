@@ -189,25 +189,23 @@ describe('one workspace actor directory', () => {
     const main = directory.createMain({ name: 'main' });
     const actorId = crypto.randomUUID();
 
-    expect(() => sql`INSERT INTO workspace_actors (actor_id, parent_actor_id, name, storage_key, origin, tab, input, lifetime, evolves, created_at, creation_id)
-      VALUES (${actorId}, ${main.actorId}, ${`exp:${origin}`}, ${actorId}, ${origin}, 0, 0, 'task', 0, ${Date.now()}, 'c-old')`).toThrow('CHECK constraint failed');
+    expect(() => sql`INSERT INTO workspace_actors (actor_id, parent_actor_id, name, storage_key, origin, lifetime, created_at, creation_id)
+      VALUES (${actorId}, ${main.actorId}, ${`exp:${origin}`}, ${actorId}, ${origin}, 'task', ${Date.now()}, 'c-old')`).toThrow('CHECK constraint failed');
     expect(() => directory.apply(main, [], JSON.parse(JSON.stringify({ action: 'register', creationId: 'c-new', name: `exp:${origin}-new`, origin, lifetime: 'task' }))))
       .toThrow(expect.objectContaining({ code: 'bad_input' }));
   });
 
   test.each([
-    { case: 'a swarm worker that takes input', origin: 'swarm', tab: 0, input: 1, lifetime: 'task', evolves: 0 },
-    { case: 'a background agent with durable life', origin: 'evolution', tab: 0, input: 0, lifetime: 'durable', evolves: 0 },
-    { case: 'an agent-made hire with a tab', origin: 'agent', tab: 1, input: 1, lifetime: 'durable', evolves: 0 },
-    { case: 'a hire that feeds evolution', origin: 'user', tab: 1, input: 1, lifetime: 'durable', evolves: 1 },
-    { case: 'a view-only hire', origin: 'user', tab: 1, input: 0, lifetime: 'durable', evolves: 0 },
+    { case: 'a swarm worker with durable life', origin: 'swarm', lifetime: 'durable' },
+    { case: 'a background agent with durable life', origin: 'evolution', lifetime: 'durable' },
+    { case: "an owner's hire that ends with its task", origin: 'user', lifetime: 'task' },
   ])('the table refuses $case', (row) => {
     const { directory, sql } = workspace('workspace', 'owner');
     const main = directory.createMain({ name: 'main' });
     const actorId = crypto.randomUUID();
 
-    expect(() => sql`INSERT INTO workspace_actors (actor_id, parent_actor_id, name, storage_key, origin, tab, input, lifetime, evolves, created_at, creation_id)
-      VALUES (${actorId}, ${main.actorId}, 'x', ${actorId}, ${row.origin}, ${row.tab}, ${row.input}, ${row.lifetime}, ${row.evolves}, ${Date.now()}, 'c-bad')`).toThrow('CHECK constraint failed');
+    expect(() => sql`INSERT INTO workspace_actors (actor_id, parent_actor_id, name, storage_key, origin, lifetime, created_at, creation_id)
+      VALUES (${actorId}, ${main.actorId}, 'x', ${actorId}, ${row.origin}, ${row.lifetime}, ${Date.now()}, 'c-bad')`).toThrow('CHECK constraint failed');
   });
 
   test('a view-only agent refuses a message and never runs the send; a hire takes it', async () => {

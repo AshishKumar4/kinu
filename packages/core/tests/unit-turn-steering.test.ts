@@ -8,12 +8,12 @@ import { createMemoryVfs, createTestRuntime, present, scriptedTurnModel, toolExe
 import * as v from 'valibot';
 import { z } from 'zod';
 import {
-  AgentOrchestrator, TurnSteering, isFailingToolResult, runChat,
-  IDENTICAL_CALLS_BEFORE_STEER, CONSECUTIVE_FAILURES_BEFORE_STEER,
-  STEPS_WITHOUT_PROGRESS_BEFORE_STEER,
-  TURN_STEERING_HEADER, ExtensionHost, EvolutionEngine, EventLog, initEventsHubTables,
+  AgentOrchestrator, TurnSteering, isFailingToolResult, runChat, ExtensionHost, EvolutionEngine, EventLog, initEventsHubTables,
   type BackendHost, type ToolCallContext, type ToolResultContext,
 } from '../src/index';
+import {
+  IDENTICAL_CALLS_BEFORE_STEER, CONSECUTIVE_FAILURES_BEFORE_STEER, STEPS_WITHOUT_PROGRESS_BEFORE_STEER, TURN_STEERING_HEADER,
+} from '../src/orchestrator/turn-steering';
 import type { JsonObject } from '../src/utils/json';
 import { makeSqlExec } from './helpers';
 import { createFileTool } from '../src/tools/file-operations';

@@ -2,8 +2,8 @@ import { markStoreChanged } from '@kinu.run/agent-utils';
 // AgentConfigStore: typed accessors over the `actor_config` key/value table.
 import { Effect } from 'effect';
 import { settleSync } from '../obs/effect';
-import type { SqlExecutor, SqlValue, RawSqlExec } from '../types/primitives';
-import * as v from 'valibot';
+import type { SqlExecutor, RawSqlExec } from '../types/primitives';
+import type { Holds } from '../utils/held-reads';
 import { nameOriginOf, type NameOrigin } from '../identity/naming';
 import { isAccountName, isProviderScope } from '../credentials/accounts';
 import { isReasoningEffort, type ReasoningEffort } from '../providers/reasoning-effort';
@@ -159,106 +159,37 @@ export function initAgentConfigTable(execRaw: RawSqlExec): void {
   )`);
 }
 
-/** Where a database's config stores read `actor_config`. A store says `changed` before each write it makes. */
-interface ConfigReads {
-  value(actorId: string, key: string): string | null;
-  all(actorId: string): Record<string, string>;
-  changed(actorId: string): void;
+/** Each actor's whole `actor_config`, from one read: a key it lacks is unset, and its default needs no statement. */
+function configRows(sql: SqlExecutor, actorId: string): ReadonlyMap<string, string> {
+  return new Map(sql<{ key: string; value: string }>`SELECT key, value FROM actor_config WHERE actor_id = ${actorId}`
+    .map((row) => [row.key, row.value]));
 }
 
-/** A question per read: a database other processes also write (the CLI's file) can hold nothing between them. */
-function liveConfigReads(sql: SqlExecutor): ConfigReads {
-  return {
-    value: (actorId, key) => sql<{ value: string }>`
-      SELECT value FROM actor_config WHERE actor_id = ${actorId} AND key = ${key} LIMIT 1`[0]?.value ?? null,
-    all: (actorId) => Object.fromEntries(sql<{ key: string; value: string }>`SELECT key, value FROM actor_config WHERE actor_id = ${actorId}`
-      .map((row) => [row.key, row.value])),
-    changed: () => undefined,
-  };
-}
-
-const ConfigRowSchema = v.object({ actor_id: v.string(), key: v.string(), value: v.string() });
+/** Set once per executor by {@link holdConfig}: its database's config, held by the database's own reads, which any
+ *  statement writing `actor_config` drops. */
+const heldConfigs = new WeakMap<SqlExecutor, (actorId: string) => ReadonlyMap<string, string>>();
 
 /**
- * Each actor's whole `actor_config`, held from one read: a key it lacks is unset, and its default needs no statement.
- * Every store over its executor reads through it and drops the actor's rows before it writes. The two other writers
- * say so: an isolate adopting its workspace's rows ({@link adopt}), and a fork emptying its target ({@link configReplaced}).
+ * Config stores over `sql` hold what they read from now on, through `holds`, the held reads of the database `sql` alone
+ * writes (a Durable Object's). The CLI's file has other processes, and its stores ask per read.
  */
-class ConfigCatalog implements ConfigReads {
-  private readonly held = new Map<string, ReadonlyMap<string, string>>();
-
-  constructor(private readonly sql: SqlExecutor) {}
-
-  private rows(actorId: string): ReadonlyMap<string, string> {
-    const held = this.held.get(actorId);
-
-    if (held !== undefined) return held;
-
-    const rows = new Map(this.sql<{ key: string; value: string }>`SELECT key, value FROM actor_config WHERE actor_id = ${actorId}`
-      .map((row) => [row.key, row.value]));
-
-    this.held.set(actorId, rows);
-
-    return rows;
-  }
-
-  value(actorId: string, key: string): string | null {
-    return this.rows(actorId).get(key) ?? null;
-  }
-
-  all(actorId: string): Record<string, string> {
-    return Object.fromEntries(this.rows(actorId));
-  }
-
-  changed(actorId: string): void {
-    this.held.delete(actorId);
-  }
-
-  clear(): void {
-    this.held.clear();
-  }
-
-  /** After an adoption committed: `rows` are now every row of `actorIds`. */
-  adopt(actorIds: readonly string[], rows: readonly Readonly<Record<string, SqlValue>>[]): void {
-    const parsed = rows.map((row) => v.parse(ConfigRowSchema, row));
-
-    for (const actorId of actorIds) this.held.set(actorId, new Map(parsed.filter((row) => row.actor_id === actorId).map((row) => [row.key, row.value])));
-  }
-}
-
-const held = new WeakMap<SqlExecutor, ConfigCatalog>();
-
-/**
- * The one catalog of the database `sql` executes on, held from now on by every config store over `sql`. Only for a
- * database `sql` alone writes, a Durable Object's: the CLI's file has other processes, and its stores ask per read.
- */
-export function holdConfig(sql: SqlExecutor): ConfigCatalog {
-  const catalog = held.get(sql) ?? new ConfigCatalog(sql);
-
-  held.set(sql, catalog);
-
-  return catalog;
-}
-
-/** A writer other than a store replaced `actor_config` rows through `sql`: a held catalog reads them again. */
-export function configReplaced(sql: SqlExecutor): void {
-  held.get(sql)?.clear();
+export function holdConfig(sql: SqlExecutor, holds: Holds): void {
+  if (!heldConfigs.has(sql)) heldConfigs.set(sql, holds.holdEach(['actor_config'], (actorId: string) => configRows(sql, actorId)));
 }
 
 export function createAgentConfigStore(sql: SqlExecutor, actorId: string, authorize: () => void): AgentConfigStore {
-  const live = liveConfigReads(sql);
-  // Asked per call: a store made before its database's catalog was held must still drop what it writes.
-  const reads = (): ConfigReads => held.get(sql) ?? live;
-
+  // Asked per call: a store made before its database's config was held reads it held from then on.
   const get = (key: string): string | null => {
     authorize();
+    const held = heldConfigs.get(sql);
 
-    return reads().value(actorId, key);
+    if (held !== undefined) return held(actorId).get(key) ?? null;
+
+    return sql<{ value: string }>`SELECT value FROM actor_config WHERE actor_id = ${actorId} AND key = ${key} LIMIT 1`[0]?.value ?? null;
   };
 
   const set = (key: string, value: string): void => {
     authorize();
-    reads().changed(actorId);
     void sql`INSERT INTO actor_config (actor_id, key, value) VALUES (${actorId}, ${key}, ${value})
         ON CONFLICT(actor_id, key) DO UPDATE SET value = excluded.value`;
 
@@ -268,7 +199,6 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
   const remove = (key: string, ...others: string[]): void => {
     authorize();
     const keys = [key, ...others];
-    reads().changed(actorId);
     void sql`DELETE FROM actor_config WHERE actor_id = ${actorId}
       AND key IN (SELECT value FROM json_each(${JSON.stringify(keys)}))`;
 
@@ -288,7 +218,6 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
   /** Single upsert-RETURNING so two stores cannot mint the same value; unparseable rows count as 0. */
   const increment = (key: string): number => {
     authorize();
-    reads().changed(actorId);
 
     const rows = sql<{ value: string }>`
       INSERT INTO actor_config (actor_id, key, value) VALUES (${actorId}, ${key}, ${'1'})
@@ -330,7 +259,7 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     all() {
       authorize();
 
-      return reads().all(actorId);
+      return Object.fromEntries(heldConfigs.get(sql)?.(actorId) ?? configRows(sql, actorId));
     },
     getModel() { return get(AGENT_CONFIG_KEYS.model); },
     setModel(spec) { set(AGENT_CONFIG_KEYS.model, spec); },
@@ -373,8 +302,7 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     setNameOrigin(origin) { set(AGENT_CONFIG_KEYS.nameOrigin, origin); },
     setDisplayNameOrigin(name, origin) {
       authorize();
-      reads().changed(actorId);
-      void sql`
+        void sql`
         INSERT INTO actor_config (actor_id, key, value) VALUES
           (${actorId}, ${AGENT_CONFIG_KEYS.displayName}, ${name}),
           (${actorId}, ${AGENT_CONFIG_KEYS.nameOrigin}, ${origin})

@@ -4,7 +4,8 @@
  */
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { agentSql, catalogTurn, gatewayWorkspace, mainDatabase, workspaceMainActor } from './helpers/actor-harness';
+import { RunEventRecorder, type AgentTurnEnd } from '@kinu.run/core';
+import { agentSql, catalogTurn, gatewayWorkspace, mainDatabase, mainRows, workspaceMainActor } from './helpers/actor-harness';
 import {
   GATEWAY_MODEL, chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun,
 } from './helpers/platform-gateway';
@@ -54,10 +55,15 @@ function streamedStep(delta: StreamedDelta, finish: 'tool_calls' | 'stop', usage
   });
 }
 
-test("the agents panel reads main's tokens and cache from its own facet", async () => {
-  const gateway = stubAiBinding(() => streamedStep({ content: 'Counted.' }, 'stop', {
+/** Every step answered with the same counted usage: 2,100 tokens, 1,800 of them cached. */
+function countingGateway() {
+  return stubAiBinding(() => streamedStep({ content: 'Counted.' }, 'stop', {
     prompt_tokens: 2000, completion_tokens: 100, total_tokens: 2100, prompt_tokens_details: { cached_tokens: 1800 },
   }));
+}
+
+test("the agents panel reads main's tokens and cache from its own facet", async () => {
+  const gateway = countingGateway();
 
   const workspace = gatewayWorkspace(gateway);
 
@@ -70,6 +76,39 @@ test("the agents panel reads main's tokens and cache from its own facet", async 
 
   expect(main?.figures.tokens).toBe(2100);
   expect(main?.figures.cacheEma).not.toBeNull();
+});
+
+/** A report delayed past a newer one, carrying a run's end with the figures it held then, changes no figure the panel
+ *  reads: the agent's figures are cumulative, and the newer report already carried the later ones. */
+test("a stale report's run end leaves the panel on the newer figures", async () => {
+  const gateway = countingGateway();
+
+  const workspace = gatewayWorkspace(gateway);
+
+  await catalogTurn(workspace.agent, 'Count the parser paths.');
+  await workspace.agent.terminalRetryPass();
+  await joinHarnessFibers();
+  const tokens = async () => (await workspace.agent.listWorkspaceAgents()).find((agent) => agent.category === 'main')?.figures.tokens;
+  const before = await tokens();
+  const main = workspaceMainActor(workspace.db).actorId;
+  const own = await mainRows(workspace);
+  const recorder = new RunEventRecorder(own.sql, own.actor);
+
+  const ended: AgentTurnEnd = {
+    id: 'stale-run', status: 'completed', summary: '', evidence: [], decisions: [], artifactRefs: [], fileChanges: [], childHeadIds: [],
+    toolCalls: [], stepCount: 0, usage: {}, wallClockMs: 0, activity: [], errorMessage: null,
+    figures: { tokens: 1, activeMs: 0, cacheEma: null },
+  };
+
+  await (await workspace.agent.agentWorkspace(main)).owes(0, null, false, {
+    standing: {
+      messageCount: 0, measures: recorder.readContextMeasures(), latestRun: null, pendingSteers: [], plans: { pending: false, revision: 0 }, questions: 0,
+    },
+    runEnds: [{ id: 'stale-run', outcome: { ended } }],
+    working: false,
+  });
+
+  expect([before, await tokens()]).toEqual([2100, 2100]);
 });
 
 test('a researcher hire\'s steps are priced at its fast tier\'s rate, not the root\'s', async () => {

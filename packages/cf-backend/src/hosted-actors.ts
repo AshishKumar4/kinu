@@ -3,7 +3,7 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 
 import { actorPolicy, assignmentDelivery, publishSubordinateReport, type Delivery, type OwedAdmission, type ConversationRecall, type HeadReport, isSubordinateOrigin, type SubordinateReportLedger, type ToolSurfaceNarrowing, type SeatedActor, type TierId } from '@kinu.run/core';
 import type { LanguageModel, ModelMessage, Tool, ToolSet } from 'ai';
-import { EventLog, titleActorFromMessage, spawnSeatedHead, admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus, receiveSubordinateEvent, subordinateRelaysTurnEnd, subordinateForkContext, type SubordinateInheritedContext, inheritedAsModelMessage, explorationActorKey, headStatusUnsettled, storedHeadReportStatus, registeredParent, subordinateDescendants, actorReferenceOf, TEMPORARY_LIFETIME, terminalTaskReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, type ActorHost, type ActorReference, type BoundActor, type DelegationBudget, type HeadId, type HeadInput, type RunInference, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedNodeSeat, type StepLoopJobSeat, type JobRetirement, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubordinateEventResult, type SubordinateHandoff, type SubordinateLifetime, type SubordinateReportOrigin, type SubordinateReportHandoff, type SubordinateReportStatus, type SubordinateRosterStore, type SubordinateRuntime, type SubordinateSeed, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
+import { EventLog, titleActorFromMessage, spawnSeatedHead, admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus, receiveSubordinateEvent, subordinateForkContext, type SubordinateInheritedContext, inheritedAsModelMessage, explorationActorKey, headStatusUnsettled, storedHeadReportStatus, registeredParent, subordinateDescendants, actorReferenceOf, terminalTaskReport, owedSubordinateTurnReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, type ActorHost, type ActorReference, type BoundActor, type DelegationBudget, type HeadId, type HeadInput, type RunInference, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedNodeSeat, type StepLoopJobSeat, type JobRetirement, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubordinateEventResult, type SubordinateHandoff, type SubordinateLifetime, type SubordinateReportOrigin, type SubordinateReportHandoff, type SubordinateReportStatus, type SubordinateRosterStore, type SubordinateRuntime, type SubordinateSeed, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
 import { attempt, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import type {
   AgentToolDescriptor, ArtifactOverrides, DynamicReads, ExecutionKey, ExecutionLane, FrozenAuthority, HeadCapture, HeadSeat, JsonObject, OperationProfile, OwedReport, PreparedAgentTurn,
@@ -83,7 +83,8 @@ export interface ActorSurface {
   readonly sources: SurfaceSources;
   /** Its dynamic block's reads, held for the agent across its turns. */
   readonly reads: DynamicReads;
-  readonly capture: HeadCapture;
+  /** A run's, which its inference reads; a chat turn records none. */
+  readonly capture: HeadCapture | null;
   /** What the turn has told its hirer by now. */
   readonly reports: SubordinateReportLedger;
   /** Whether its turns are reviewed by an advisor. */
@@ -332,15 +333,15 @@ export async function relayHostedReport(
 export async function retireStalledTask(
   seams: HostedActorSeams,
   child: SeatedActor,
-  turn: { readonly turnId: string; readonly runs: number; readonly workMode: WorkMode },
+  turn: { readonly turnId: string; readonly workMode: WorkMode },
 ): Promise<void> {
-  new EventLog(seams.exec, child.handle).dismiss(turn.turnId, `stalled after ${String(turn.runs)} runs`, 'system');
+  new EventLog(seams.exec, child.handle).dismiss(turn.turnId, 'stalled: cut off at one step too many times', 'system');
 
   const owed = await terminalTaskReport({
     lifetime: hostedLifetime(child.record),
     ending: 'recovered',
-    assistantText: 'This task was cut off twice at the same step by resets of the workspace (a platform memory or time '
-      + 'limit), so it is not being run again. A reset may have come from other work in the workspace, not from this task.',
+    assistantText: 'This task was cut off at the same step too many times by resets of the workspace (a platform memory or '
+      + 'time limit), so it is not being run again. A reset may have come from other work in the workspace, not from this task.',
     narration: () => Promise.resolve([]),
   });
 
@@ -457,20 +458,11 @@ export function hostedOwedReport(
 
     if (seams.roster(hirer).finishTurn(actor.record.name, ended.ending, Date.now())) seams.announce(hirer);
 
-    if (turn.reports.settled) return null;
-
-    const terminal = yield* Effect.promise(() => terminalTaskReport({
-      lifetime: hostedLifetime(actor.record), ending: ended.ending, assistantText: ended.assistantText,
+    return yield* Effect.promise(() => owedSubordinateTurnReport({
+      lifetime: hostedLifetime(actor.record), ending: ended.ending, assistantText: ended.assistantText, narration: async () => ended.narration,
+      reports: turn.reports, ownerDriven: turn.ownerDriven,
       delegating: taskAnswerIsLater({ roster: seams.roster(actor), log: new EventLog(seams.exec, actor.handle), ...(turn.taskId !== null && { turnTaskId: turn.taskId }) }),
-      narration: async () => ended.narration,
     }));
-
-    if (terminal !== null) return terminal;
-
-    // A task agent reports only its terminal answer.
-    return ended.ending === 'answered' && hostedLifetime(actor.record) !== TEMPORARY_LIFETIME && subordinateRelaysTurnEnd({
-      reportedThisTurn: turn.reports.spoke, ownerDriven: turn.ownerDriven, assistantText: ended.assistantText,
-    }) ? { status: 'progress', content: ended.assistantText } : null;
   }));
 }
 

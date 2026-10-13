@@ -987,7 +987,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         observe: async (s) => {
           const queued: string[] = [];
           const inbox = new s.Inbox(fakeSignalHost(queued, true));
-          inbox.beginTurn(false);
+          inbox.beginTurn();
           inbox.landMidTurn({ kind: 'event_drain', text: 'turn-1', stepText: 'step-1' });
 
           const spliced = await inbox.prepareStep(
@@ -1039,7 +1039,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
 
             inbox.landMidTurn({ kind: 'event_drain', text: 'wake', stepText: 'mid-turn wake' });
             await inbox.prepareStep({ stepNumber: 0, messages: shortHistory() });
-            inbox.beginTurn(false, carried);
+            inbox.beginTurn(carried);
 
             return { cards, queuedTurnNamesItsCard: carried !== undefined && carried === ids[0] };
           };

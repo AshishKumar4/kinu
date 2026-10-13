@@ -9,9 +9,9 @@ export { initFiberTable, tableExists } from './identity/schema';
 
 export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, readSubordinateInspection, missingSubordinateHistory, type SubordinateInspectionRequest, type SubordinateInspectionResult, type SubordinateChild } from './subordinates/inspection';
 
-export { AgentOpenTurns, AgentOwedWork, type AgentOpenTurn } from './subordinates/open-turns';
+export { AgentOpenTurns, type AgentOpenTurn } from './subordinates/open-turns';
 
-export { AgentReports, AgentSequence } from './subordinates/report-sequence';
+export { AgentReports, AgentSequence, type AcceptedReport } from './subordinates/report-sequence';
 
 export { TurnFences, type ClosedExecution, type FencedRow, type OpenedAt } from './subordinates/turn-fence';
 
@@ -76,7 +76,7 @@ export { initActivationTable, listActivations, recordActivation, type Activation
 export { ChatHistoryEntrySchema } from './types/chat';
 
 // Every composition root calls this and nothing else (tests/contract-workspace-schema.test.ts).
-export { initAllTables, initWorkspaceSchema, initActorStateSchema, type WorkspaceSchemaSql } from './state/workspace-schema';
+export { initAgentIsolateSchema, initAllTables, initWorkspaceSchema, initActorStateSchema, type WorkspaceSchemaSql } from './state/workspace-schema';
 
 export { resetGuardedExec, StoragePredatesResetError } from './state/store-reset';
 
@@ -566,7 +566,7 @@ export { subordinateForkContext, subordinateTurnContext } from './subordinates/s
 
 export { inheritedAsModelMessage } from './heads/head-inference';
 
-export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendants, isSubordinateOrigin, whenActorTakesInput, type ActorOrigin, type ActorProfile, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor } from './identity/workspace-actors';
+export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendants, stoppedBelow, isSubordinateOrigin, whenActorTakesInput, type ActorOrigin, type ActorProfile, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor } from './identity/workspace-actors';
 
 export type { AnsweredEvolutionHelper } from './identity/evolution-helpers';
 
@@ -637,7 +637,7 @@ export {
   parentAdmitsSubordinateReport,
   readSubordinateLiveStatus,
   subordinateDescriptorSource,
-  subordinateRelaysTurnEnd,
+  subordinateRelaysTurnEnd, owedSubordinateTurnReport,
   type SubordinateDescriptor,
   type SubordinateDescriptorSource,
   type SubordinateLiveStatus,
@@ -672,7 +672,6 @@ export {
   delegationBudgetOf,
   delegationDepthRefusal,
   delegationExhausted,
-  deriveChildDelegationBudget,
   type DelegationBudget,
   type DelegationDepthRefusal,
 } from './subordinates/depth';
@@ -844,7 +843,7 @@ export {
   type MediaModality,
 } from './prompting/attachment-sanitizer';
 
-export { ASKED, HeldReads } from './utils/held-reads';
+export { ASKED, HeldReads, type Holds } from './utils/held-reads';
 
 export { rasterImage, type RasterImage } from './utils/raster-image';
 
@@ -1508,9 +1507,6 @@ export {
   OwnerCapabilityUnavailableError,
   CapabilityDeniedError,
   initWorkspaceCapabilityTables,
-  pendingCapabilityReconcile,
-  armCapabilityReconcile,
-  clearCapabilityReconcile,
   workspaceCapabilityHash,
   freshWorkspaceCapability,
   commitWorkspaceCapability,
@@ -1735,9 +1731,7 @@ export { prepareActorProgram, type ActorTurnProgram } from './orchestrator/actor
 export { USER_MESSAGE_SIGNAL_KIND } from './types/signals';
 
 export {
-  TurnSteering, isFailingToolResult, TURN_STEERING_HEADER,
-  IDENTICAL_CALLS_BEFORE_STEER, CONSECUTIVE_FAILURES_BEFORE_STEER,
-  STEPS_WITHOUT_PROGRESS_BEFORE_STEER,
+  TurnSteering, isFailingToolResult,
   type TurnProgressInputs,
 } from './orchestrator/turn-steering';
 
@@ -1745,8 +1739,7 @@ export { CraftCycle } from './orchestrator/craft-cycle';
 
 export {
   CompletionGate, observeCompletionState, completionGateText,
-  COMPLETION_GATE_EVENT, COMPLETION_GATE_HEADER, COMPLETION_PROBE_COMMANDS,
-  COMPLETION_TASK_ECHO_MAX_CHARS,
+  COMPLETION_GATE_EVENT,
   type TurnCompletionFacts,
 } from './orchestrator/completion-gate';
 
@@ -1767,9 +1760,6 @@ export {
 
 export {
   createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory,
-  SCAFFOLD_HISTORY_DEFAULT_LIMIT, SCAFFOLD_HISTORY_MAX_LIMIT,
-  SCAFFOLD_HISTORY_MAX_MESSAGE_CHARS,
-  SCAFFOLD_HISTORY_MAX_PAGE_CHARS,
   type ScaffoldBridgeOpts, type ScaffoldHistoryQuery, type ScaffoldHistoryReader,
   type ScaffoldHistoryEntry, type ScaffoldHistoryPage,
 } from './orchestrator/scaffold-host';
@@ -2648,7 +2638,7 @@ export {
 } from './mcp/servers';
 
 export type {
-  AgentTurnActivity, AgentCaptureDelta, AgentTurnOpening, AgentRecovery, AgentAnswer, AgentAnswerTexts, AgentReview, AgentStanding, AgentStandingReport, AgentReport, AgentOwes, AdmittedDelivery, AgentSteps, RunEndOutcome, RunEndReport, AgentSnapshot, AgentTurnTask, AgentToolAnswer,
+  AgentTurnActivity, AgentCaptureDelta, AgentRecovery, AgentAnswer, AgentAnswerTexts, AgentReview, AgentStanding, AgentStandingReport, AgentReport, AgentOwes, AdmittedDelivery, AgentSteps, RunEndOutcome, RunEndReport, AgentSnapshot, AgentTurnTask, AgentToolAnswer,
   AgentToolCall, AgentToolDescriptor, AgentHeadDelta, AgentTrace, AgentTurnEnd, PreparedAgentTurn, StoredRow, TurnRequestAt,
 } from './subordinates/agent-isolate';
 

@@ -14,20 +14,6 @@ export function meetTrust(a: TrustLevel, b: TrustLevel): TrustLevel {
   return TRUST_ORDER[a] < TRUST_ORDER[b] ? a : b;
 }
 
-/** `self` for the empty set (vacuous); callers should not pass it. */
-export function meetAll(trusts: ReadonlyArray<TrustLevel>): TrustLevel {
-  if (trusts.length === 0) return 'self';
-  let acc: TrustLevel = trusts[0];
-
-  for (let i = 1; i < trusts.length; i++) acc = meetTrust(acc, trusts[i]);
-
-  return acc;
-}
-
-export function trustSatisfies(have: TrustLevel, required: TrustLevel): boolean {
-  return TRUST_ORDER[have] >= TRUST_ORDER[required];
-}
-
 /** The only place trust is assigned. Throws `IngressRejectedError` for protocol-illegal ingress. */
 export function deriveEventTrust(d: IngressDescriptor): TrustLevel {
   switch (d.ingress) {

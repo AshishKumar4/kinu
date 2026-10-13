@@ -17,9 +17,9 @@ export const MessagePartReferenceSchema = v.object({ messageId: v.string(), part
 
 export type MessagePartReference = v.InferOutput<typeof MessagePartReferenceSchema>;
 
+/** Its kind is its native value's own `type`. */
 const StoredPartFieldsSchema = v.object({
   partNo: v.number(),
-  kind: v.string(),
   streamOrder: v.number(),
   replyTo: v.nullable(v.object({ messageId: v.string(), partNo: v.number() })),
 });
@@ -46,7 +46,6 @@ export interface ClaimFence {
 
 export interface StreamPartInput {
   readonly partNo: number;
-  readonly kind: string;
   readonly streamOrder: number;
   /** The part without its text, through `SessionPayloads.prepare`. */
   readonly descriptor: SessionPayload;
@@ -60,7 +59,7 @@ interface MessageRow { origin: MessageOrigin; role: string; native_content_kind:
 
 interface SealedMessage { readonly message: ModelMessage; readonly origin: MessageOrigin }
 
-interface StreamPartRow { part_no: number; segment: number; kind: string; stream_order: number; descriptor_json: string | null; descriptor_path: string | null; descriptor_digest: string | null; text: string }
+interface StreamPartRow { part_no: number; segment: number; stream_order: number; descriptor_json: string | null; descriptor_path: string | null; descriptor_digest: string | null; text: string }
 
 export type ToolCallIndex = ReadonlyMap<string, { messageId: string; part: number }>;
 
@@ -145,7 +144,7 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
 
   /** Segment 0 carries the descriptor; every segment carries its share of the text. */
   protected async streamed(messageId: string): Promise<StoredPart[]> {
-    const rows = this.sql<StreamPartRow>`SELECT part_no,segment,kind,stream_order,descriptor_json,descriptor_path,descriptor_digest,text FROM stream_parts
+    const rows = this.sql<StreamPartRow>`SELECT part_no,segment,stream_order,descriptor_json,descriptor_path,descriptor_digest,text FROM stream_parts
       WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} ORDER BY part_no,segment`;
 
     const parts: StoredPart[] = [];
@@ -160,8 +159,8 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
 
       const value = descriptorObject(await this.payloads.readStored(row.descriptor_json, row.descriptor_path, row.descriptor_digest));
 
-      if (row.kind === 'text' || row.kind === 'reasoning' || row.text !== '') value.text = row.text;
-      parts.push({ partNo: row.part_no, kind: row.kind, streamOrder: row.stream_order, replyTo: null, value });
+      if (value.type === 'text' || value.type === 'reasoning' || row.text !== '') value.text = row.text;
+      parts.push({ partNo: row.part_no, streamOrder: row.stream_order, replyTo: null, value });
     }
 
     this.actor.assertCurrent();
@@ -335,7 +334,7 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
     const nativeParts = text ? [{ type: 'text', text: content }] : jsonObjectElements(content);
 
     if (nativeParts === null) throw new KinuError('bad_input', 'message content is neither text nor a list of parts');
-    const parts = nativeParts.map((value, partNo) => ({ partNo, kind: v.parse(v.string(), value.type), streamOrder: partNo, replyTo: replyOf(value, calls), value }));
+    const parts = nativeParts.map((value, partNo) => ({ partNo, streamOrder: partNo, replyTo: replyOf(value, calls), value }));
 
     return { id, role, contentKind: text ? 'string' : 'parts', envelope, content: await this.prepareContent(parts) };
   }
@@ -412,8 +411,8 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
     this.actor.assertCurrent();
     const [first = ''] = part.text === undefined ? [] : segmented(part.text);
 
-    const opened = this.sql<{ part_no: number }>`INSERT INTO stream_parts(actor_id,message_id,part_no,segment,kind,stream_order,descriptor_json,descriptor_path,descriptor_digest,text,ended)
-      SELECT ${this.actor.actorId},${messageId},${part.partNo},0,${part.kind},${part.streamOrder},${part.descriptor.json},${part.descriptor.path},${part.descriptor.digest},${first},0
+    const opened = this.sql<{ part_no: number }>`INSERT INTO stream_parts(actor_id,message_id,part_no,segment,stream_order,descriptor_json,descriptor_path,descriptor_digest,text,ended)
+      SELECT ${this.actor.actorId},${messageId},${part.partNo},0,${part.streamOrder},${part.descriptor.json},${part.descriptor.path},${part.descriptor.digest},${first},0
       FROM session_messages WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND sealed_at IS NULL RETURNING part_no`;
 
     if (opened.length === 0) throw new KinuError('denied', 'message is missing or sealed');
@@ -431,12 +430,12 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
     for (const piece of segmented(text)) {
       // Two statements, not one with an optional clause: a store without claims has no claim table to name.
       const appended = fence === null
-        ? this.sql<{ segment: number }>`INSERT INTO stream_parts(actor_id,message_id,part_no,segment,kind,stream_order,descriptor_json,descriptor_path,descriptor_digest,text,ended)
-          SELECT actor_id,message_id,part_no,segment + 1,kind,stream_order,NULL,NULL,NULL,${piece},0 FROM stream_parts
+        ? this.sql<{ segment: number }>`INSERT INTO stream_parts(actor_id,message_id,part_no,segment,stream_order,descriptor_json,descriptor_path,descriptor_digest,text,ended)
+          SELECT actor_id,message_id,part_no,segment + 1,stream_order,NULL,NULL,NULL,${piece},0 FROM stream_parts
           WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo} AND ended=0
           AND segment=(SELECT MAX(segment) FROM stream_parts WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo}) RETURNING segment`
-        : this.sql<{ segment: number }>`INSERT INTO stream_parts(actor_id,message_id,part_no,segment,kind,stream_order,descriptor_json,descriptor_path,descriptor_digest,text,ended)
-          SELECT actor_id,message_id,part_no,segment + 1,kind,stream_order,NULL,NULL,NULL,${piece},0 FROM stream_parts
+        : this.sql<{ segment: number }>`INSERT INTO stream_parts(actor_id,message_id,part_no,segment,stream_order,descriptor_json,descriptor_path,descriptor_digest,text,ended)
+          SELECT actor_id,message_id,part_no,segment + 1,stream_order,NULL,NULL,NULL,${piece},0 FROM stream_parts
           WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo} AND ended=0
           AND segment=(SELECT MAX(segment) FROM stream_parts WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo})
           AND EXISTS (SELECT 1 FROM actor_turn_claims c WHERE c.actor_id=${actorId} AND c.turn_id=${fence.turnId} AND c.epoch=${fence.epoch} AND c.outcome IS NULL)

@@ -708,9 +708,12 @@ export class ChatSession {
     return this.reopening || this.running();
   }
 
-  /** A turn runs or is queued; a Retry claimed but not yet queued aside. */
+  /** A turn runs, is taken by the pump and still opening, or is queued; a Retry claimed but not yet queued aside. Words
+   *  sent while one opens are its own, so a Stop then hands them back; an offer taken yields to them instead. */
   private running(): boolean {
-    return this.actorSession.inFlight || this.queue.some((item) => item.kind === 'user' || item.yieldsToUserMessage === true);
+    const opening = this.taken !== null && this.taken.run === undefined && this.taken.yieldsToUserMessage !== true;
+
+    return this.actorSession.inFlight || opening || this.queue.some((item) => item.kind === 'user' || item.yieldsToUserMessage === true);
   }
 
   /**

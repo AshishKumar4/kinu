@@ -1,7 +1,7 @@
 /** A non-main agent's chat in its own isolate (D9). */
 import { AsyncLocalStorage } from 'node:async_hooks';
 import {
-  CHAT_SESSION_ID, ChatSession, EventLog, HeadCapture, PendingSendStore, RECOVERY_BACKOFF_CEILING_MS, TRANSCRIPT_WINDOW, TerminalTransitions,
+  CHAT_SESSION_ID, ChatSession, EventLog, PendingSendStore, RECOVERY_BACKOFF_CEILING_MS, TRANSCRIPT_WINDOW, TerminalTransitions,
   PlanReviewActions, announcementOf, assembleActorTurn, authoredTurnMetadata, chatTerminalEffects, chatTurnParts, declareTerminalRoster, inspectWork,
   planHandoffStillOwed, planAwaitingReply, approvedTaskPlan, missionGate, workModeUnderReview, projectJsonValue, declareHandoffRoster, HandedOffTurnSchema, runSettleEffect, SettledRunSchema, terminalEffect, turnAuthorship, turnLane, type TurnAuthorship,
   actorPolicy, metadataTier, workModeForTurnMetadata, reportReadsNarration, subordinateTerminalEffects, withCompactionTrigger, type ActorPolicy,
@@ -207,7 +207,7 @@ export class FacetChat {
     const live: LiveTurn = { dynamic: prepared.dynamic };
 
     const tools = facetTurnTools(workspace, prepared, actor, {
-      id: turn.id, runId: turn.runId, epoch: turn.epoch, mode: turn.mode, parentDriven: this.parentDriven, driving: this.driving, live, capture: new HeadCapture(), database,
+      id: turn.id, runId: turn.runId, epoch: turn.epoch, mode: turn.mode, parentDriven: this.parentDriven, driving: this.driving, live, database,
       // Its plans are its own store's, judged by the metadata its turn was admitted under.
       owner: {
         submitPlan: { submit: async (edits) => await this.planned((plans) => plans.submit(edits, this.driving)) },

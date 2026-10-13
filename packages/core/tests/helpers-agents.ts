@@ -67,11 +67,6 @@ export function makeTeam(
         subordinate: { ...rosterEntry, name: input.name, displayName: input.displayName },
       };
     },
-    recordTitle: async (input) => {
-      recordCall(calls, 'recordTitle', { input });
-
-      return { ok: true, name: input.name, displayName: input.displayName, applied: true };
-    },
     spawn: async (input) => {
       recordCall(calls, 'spawn', { input });
 

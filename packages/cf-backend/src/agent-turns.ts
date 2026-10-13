@@ -137,7 +137,7 @@ export class AgentTurns {
       const refused = await this.deps.deliver(reference, { sequenceId: input.id, runId: inference.runId, body: input.task, mode: input.mode });
 
       if (refused !== null) ended.reject(refused);
-      const { activity: _activity, narration: _narration, figures: _figures, produced, errorMessage, ...report } = await ended.promise;
+      const { activity: _activity, figures: _figures, produced, errorMessage, ...report } = await ended.promise;
 
       if (produced !== undefined) inference.reportMessages?.(decodeModelMessageValues(produced));
 
@@ -648,7 +648,7 @@ export class AgentTurns {
 
     const { capture } = prepared.surface;
 
-    const before = {
+    const before = capture === null ? null : {
       evidence: capture.evidence.length, decisions: capture.decisions.length, artifacts: capture.artifacts.length,
       toolCalls: capture.toolCalls.length, childHeadIds: capture.childHeadIds.length,
     };
@@ -660,13 +660,13 @@ export class AgentTurns {
 
     return {
       output,
-      captured: {
+      ...(capture !== null && before !== null && { captured: {
         evidence: capture.evidence.slice(before.evidence),
         decisions: capture.decisions.slice(before.decisions),
         artifacts: capture.artifacts.slice(before.artifacts),
         toolCalls: capture.toolCalls.slice(before.toolCalls),
         childHeadIds: capture.childHeadIds.slice(before.childHeadIds),
-      },
+      } }),
       dynamic: this.dynamic(turn, prepared),
       reports: { ...prepared.surface.reports },
     };

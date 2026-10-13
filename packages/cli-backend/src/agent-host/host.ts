@@ -23,6 +23,8 @@ import {
   type SubordinateInheritedContext,
   actorReferenceOf,
   subordinateDescendants,
+  stoppedBelow,
+  deliveryMetadata,
   canonicalConversationId,
   childContextResolver, hostedChildTree,
   createLocalPeerEndpoint,
@@ -42,10 +44,9 @@ import {
   type SubordinateReportLedger,
   agentNamer,
   subordinateDescriptorSource,
-  subordinateRelaysTurnEnd,
   missionOf,
   recoverSubordinateLifecycles,
-  terminalTaskReport,
+  owedSubordinateTurnReport,
   taskAnswerIsLater,
   type ActorHost,
   type ActorReference, type AgentSignal, type JobRetirement, type SendOutcome, type SubordinateDismissal,
@@ -975,27 +976,12 @@ export class LocalAgentHost {
 
         const state = child.relay;
 
-        // Suppressed only by a run-settling report, never a progress note.
-        if (state === null || state.settled) return null;
+        if (state === null) return null;
 
-        // A task child always reports its ending, and any child its failure.
-        const terminal = await terminalTaskReport({
-          lifetime: child.actor.record.lifetime, ending, assistantText, narration,
+        return await owedSubordinateTurnReport({
+          lifetime: child.actor.record.lifetime, ending, assistantText, narration, reports: state, ownerDriven: state.ownerDriven,
           delegating: taskAnswerIsLater({ roster: child.roster, log: child.eventLog, ...(state.turnId !== null && { turnTaskId: announcementOf(state.turnId) }) }),
         });
-
-        if (terminal) return terminal;
-
-        // A task agent reports only its terminal answer.
-        if (ending !== 'answered' || child.actor.record.lifetime === 'task') return null;
-
-        return subordinateRelaysTurnEnd({
-          reportedThisTurn: state.spoke,
-          ownerDriven: state.ownerDriven,
-          assistantText,
-        })
-          ? { status: 'progress', content: assistantText }
-          : null;
       },
       sequenceId: (messageId) => `${child.key}:turn-end:${messageId}`,
       send: async ({ text, status, mode, sequenceId, quiet }) => {
@@ -1281,9 +1267,6 @@ export class LocalAgentHost {
         actor.config.setDisplayNameOrigin(input.displayName, input.nameOrigin);
         actor.config.setRoleSelection(input.role);
         actor.config.setAssignedTier(input.tier ?? null);
-        const inheritedModel = parent.config.getModel();
-
-        if (inheritedModel) actor.config.setModel(inheritedModel);
       });
       const actor = await tree.host.acquire(binding.reference, { kind: 'actor' });
       const rt = tree.runtimes.get(binding.reference.actorId);
@@ -1403,35 +1386,25 @@ export class LocalAgentHost {
       ?? new SubordinateRosterStore(makeSqlExec(tree.db), tree.host.bindStores(actorReferenceOf(hirer)).handle);
   }
 
-  /** Stops the unsettled agents below `key`; one the owner added has its own Stop. */
+  /** Stops the agents below `key` (core `stoppedBelow`): what each was owed and had not taken is cancelled with its
+   *  queued turns, whether or not a turn of its runs; one the owner added has its own Stop. */
   private stopSubtree(key: string): void {
     const entry = this.entries.get(key);
 
     if (entry === undefined || this.closed) return;
     const { tree } = entry;
 
-    const ownerMade = (actor: WorkspaceActor): boolean => {
-      for (let step: WorkspaceActor | null = actor; step !== null && step.actorId !== entry.actor.reference.actorId;
-        step = tree.directory.retained(step.parentActorId ?? '')) {
-        if (step.origin === 'user') return true;
-      }
-
-      return false;
-    };
-
-    for (const actor of subordinateDescendants(tree.directory.list(), entry.actor.reference.actorId)) {
-      if (ownerMade(actor)) continue;
-      const reference = actorReferenceOf(actor);
-      const log = new EventLog(makeSqlExec(tree.db), tree.host.bindStores(reference).handle);
-
-      for (const pending of log.pending({ variant: 'subordinate_task' })) log.dismiss(pending.id, 'stopped by the owner', 'system');
+    for (const actor of stoppedBelow(tree.directory.list(), entry.actor.reference.actorId)) {
       const live = this.byActor.get(actor.actorId);
+      const running = live?.actor.session.inFlight === true;
 
-      if (live?.actor.session.inFlight === true) {
-        live.session.interrupt();
-        continue;
-      }
+      // What it was owed and had not taken is cancelled and the work it carried dismissed, as the cloud's Stop does; a
+      // session here has its queued turns cancelled and its running turn cut off.
+      this.cancelOwed(tree, actor);
+      live?.session.interrupt();
 
+      // A running turn reports its own end.
+      if (running) continue;
       const roster = this.hirerRoster(tree, actor);
 
       if (roster?.get(actor.name)?.status !== 'working') continue;
@@ -1439,6 +1412,22 @@ export class LocalAgentHost {
 
       if (actor.lifetime === 'task') this.retireStopped(tree, actor);
     }
+  }
+
+  /** What a stopped agent was owed and had not taken: cancelled, and the work it carried dismissed with it. */
+  private cancelOwed(tree: HostTree, actor: WorkspaceActor): void {
+    const log = new EventLog(makeSqlExec(tree.db), tree.host.bindStores(actorReferenceOf(actor)).handle);
+    const deliveries = new AgentDeliveries(makeSql(tree.db));
+
+    tree.db.transaction(() => {
+      for (const delivery of deliveries.cancel(actor.actorId)) {
+        const drained = deliveryMetadata(delivery)?.drainTurnId;
+
+        if (typeof drained !== 'string') continue;
+
+        for (const event of log.query({ turn_id: drained })) log.dismiss(event.id, 'stopped by the owner', 'system');
+      }
+    })();
   }
 
   private retireStopped(tree: HostTree, actor: WorkspaceActor): void {

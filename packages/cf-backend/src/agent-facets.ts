@@ -206,7 +206,7 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
 
   /**
    * The agent's port (design v2 §3): its workspace's host, which the agent holds across its calls so each crosses once.
-   * A call bound to a turn is fenced there; one that fails lets the port go, and the next call opens it again. The
+   * A call bound to a turn is fenced there; one that fails lets the port go, and the next call opens it again. Only the
    * calls whose answers own live capabilities (a session, memory, a program's callbacks) open a host each, below.
    */
   async port() { return await this.host(); }
@@ -215,44 +215,6 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
   stateSession() { return this.owned((host) => host.stateSession()); }
   memory() { return this.owned((host) => host.memory()); }
   program(bound: TurnBound, ...args: Parameters<Executor['execute']>) { return this.owned((host) => host.program(bound, ...args)); }
-  traceTurn(close: TurnBound, event: AgentTrace) { return this.owned((host) => host.traceTurn(close, event)); }
-  traceStream(close: TurnBound, lines: ReadableStream<Uint8Array>) { return this.owned((host) => host.traceStream(close, lines)); }
-  resume(bound: TurnBound) { return this.owned((host) => host.resume(bound)); }
-  guard(bound: TurnBound, ...args: Parameters<MissionBudgetPort['guard']>) { return this.owned((host) => host.guard(bound, ...args)); }
-  debit(close: TurnBound, ...args: Parameters<MissionBudgetPort['debit']>) { return this.owned((host) => host.debit(close, ...args)); }
-  prepareTurn(bound: TurnCapabilityOf) { return this.owned((host) => host.prepareTurn(bound)); }
-  advise(review: AgentReview) { return this.owned((host) => host.advise(review)); }
-  enqueueTurn(input: ProgrammaticTurn) { return this.owned((host) => host.enqueueTurn(input)); }
-  executeTool(call: AgentToolCall) { return this.owned((host) => host.executeTool(call)); }
-  receipts(turnId: string, runId: string, callIds: readonly string[]) { return this.owned((host) => host.receipts(turnId, runId, callIds)); }
-  observe(lines: ReadableStream<Uint8Array>) { return this.owned((host) => host.observe(lines)); }
-  paceStep(bound: TurnBound, profile: ResolvedTurnProfile | null) { return this.owned((host) => host.paceStep(bound, profile)); }
-  answerMetadata(close: TurnBound, narration: readonly string[] | null) { return this.owned((host) => host.answerMetadata(close, narration)); }
-  reportModelCall(report: ModelCallReport) { return this.owned((host) => host.reportModelCall(report)); }
-  reportModelOperation(event: ModelOperationEvent) { return this.owned((host) => host.reportModelOperation(event)); }
-  prepareChat(request: ChatTurnRequest) { return this.owned((host) => host.prepareChat(request)); }
-  scaffold() { return this.owned((host) => host.scaffold()); }
-  chatEvent(event: SessionEvent) { return this.owned((host) => host.chatEvent(event)); }
-  turnEnded(ended: TurnEndEvent, figures: AgentFigures, activity: readonly AgentTurnActivity[], window: readonly UIMessage[]) { return this.owned((host) => host.turnEnded(ended, figures, activity, window)); }
-  owedReport(...args: Parameters<AgentWorkspace['owedReport']>) { return this.owned((host) => host.owedReport(...args)); }
-  parentReport(report: Parameters<AgentWorkspace['parentReport']>[0]) { return this.owned((host) => host.parentReport(report)); }
-  autoTitle(subject: string, title: string | null) { return this.owned((host) => host.autoTitle(subject, title)); }
-  turnSettled(settled: HandedOffTurn) { return this.owned((host) => host.turnSettled(settled)); }
-  runSettled(run: SettledRun) { return this.owned((host) => host.runSettled(run)); }
-  hireAdvisor(advisor: AdvisorRecoverySnapshot) { return this.owned((host) => host.hireAdvisor(advisor)); }
-  owes(seq: number, next: number | null, holds: boolean, report: AgentReport) { return this.owned((host) => host.owes(seq, next, holds, report)); }
-  birthContext(drainTurnId: string) { return this.owned((host) => host.birthContext(drainTurnId)); }
-  steerSkills(text: string, alreadyActive: readonly string[]) { return this.owned((host) => host.steerSkills(text, alreadyActive)); }
-  openWork() { return this.owned((host) => host.openWork()); }
-  noteModelRequest(lastRequestAt: number | null) { return this.owned((host) => host.noteModelRequest(lastRequestAt)); }
-  armCacheWarm(input: CacheWarmArm) { return this.owned((host) => host.armCacheWarm(input)); }
-  getAuth(key: string, opts?: AuthRequest) { return this.owned((host) => host.getAuth(key, opts)); }
-  listCredentials() { return this.owned((host) => host.listCredentials()); }
-  relayDevice(provider: RelayedProvider) { return this.owned((host) => host.relayDevice(provider)); }
-  relayModelCall(deviceId: string, callId: string, request: Request) { return this.owned((host) => host.relayModelCall(deviceId, callId, request)); }
-  cancelModelRelay(callId: string) { return this.owned((host) => host.cancelModelRelay(callId)); }
-  sayToParent(signal: AgentSignal) { return this.owned((host) => host.sayToParent(signal)); }
-  logActivity(lines: readonly AgentTurnActivity[]) { return this.owned((host) => host.logActivity(lines)); }
 }
 
 const UIChunkSchema = v.custom<UIMessageChunk>((value) => v.is(v.looseObject({ type: v.string() }), value), 'a UI message chunk');

@@ -334,7 +334,7 @@ export class ActorClaimStore {
   unsettled(limit?: number): readonly StoredActorClaim[] {
     this.actor.assertCurrent();
 
-    return this.sql<ClaimRow>`SELECT turn_id,run_id,epoch,work_mode,phase,program_kind,program_version,program_digest,program_build,outcome,claimed_at,withdrawn_through FROM actor_turn_claims WHERE actor_id=${this.actorId} AND outcome IS NULL ORDER BY claimed_at DESC LIMIT ${limit ?? -1}`.map(row => this.claimOf(row));
+    return unsettledClaimsOf(this.sql, this.actorId, limit ?? -1);
   }
   private async materialize(id: string): Promise<ContextRevision> {
     const { request, messages } = await this.history.requests.materialize(id);
@@ -390,7 +390,14 @@ interface ClaimGuard {
 }
 
 /** A claim row as one reads it: its program only once bound. */
-export function claimOfRow(actorId: string, row: ClaimRow): StoredActorClaim {
+/** The actor's claims still open, newest first; read without a handle too, as a cold root reads them before it hosts
+ *  anybody. */
+export function unsettledClaimsOf(sql: SqlExecutor, actorId: string, limit: number): readonly StoredActorClaim[] {
+  return sql<ClaimRow>`SELECT turn_id,run_id,epoch,work_mode,phase,program_kind,program_version,program_digest,program_build,outcome,claimed_at,withdrawn_through
+    FROM actor_turn_claims WHERE actor_id=${actorId} AND outcome IS NULL ORDER BY claimed_at DESC LIMIT ${limit}`.map((row) => claimOfRow(actorId, row));
+}
+
+function claimOfRow(actorId: string, row: ClaimRow): StoredActorClaim {
   const program = row.program_kind === null || row.program_version === null ? null
     : Object.freeze({ kind: row.program_kind, version: row.program_version, digest: row.program_digest, build: row.program_build });
 

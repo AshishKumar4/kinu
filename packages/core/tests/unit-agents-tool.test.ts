@@ -10,7 +10,7 @@ import { AGENTS_OPS } from '../src/operations/agents';
 import { SWARM_PRESETS } from '../src/strategy/swarm';
 import {
   agentsActionsFor, buildBuiltinTools, createAgentsTool, resumableAgentsInput,
-  deriveChildDelegationBudget, ROOT_DELEGATION_BUDGET,
+  DELEGATION_MAX_DEPTH,
   PEER_REPLY_TOPIC, SPAWN_STARTED_OPTION,
   classifyToolFailure, JsonObjectSchema, failedToolOutcome,
   type AgentsSwarmDeps, type AgentsToolDeps,
@@ -272,8 +272,7 @@ describe('agents tool — the field contract', () => {
 // ToolSet is cached across turns and a facet's identity is seeded after it is built.
 
 /** A hire chain `depth` levels below the root. */
-const budgetAt = (depth: number) =>
-  Array.from({ length: depth }, () => 0).reduce((budget) => deriveChildDelegationBudget(budget), ROOT_DELEGATION_BUDGET);
+const budgetAt = (depth: number) => ({ depth, maxDepth: Math.max(0, DELEGATION_MAX_DEPTH - depth) });
 
 describe('agents tool — delegation depth', () => {
   const depthDeps = (depth: number, extra: Partial<AgentsToolDeps> = {}) => {

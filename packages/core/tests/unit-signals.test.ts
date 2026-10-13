@@ -156,7 +156,7 @@ describe('Inbox — one delivery time: the next step', () => {
     expect(inbox.landMidTurn(wake('third'))).toBe(true);
     expect(queued.map((turn) => turn.text)).toEqual(['first']);
 
-    inbox.beginTurn(false);
+    inbox.beginTurn();
     expect(texts(present(await inbox.prepareStep({ stepNumber: 0, messages: [user('first')] }), 'the prepared step')))
       .toEqual(['first', 'second\n\nthird']);
     release();
@@ -210,7 +210,7 @@ describe('Inbox — the user\'s card', () => {
 
   test('a turn nothing delivered flips no card', async () => {
     const { inbox, cards } = setup({ turnInFlight: false });
-    inbox.beginTurn(false, undefined);
+    inbox.beginTurn(undefined);
     expect(cards).toEqual([]);
   });
 
@@ -251,7 +251,7 @@ describe('Inbox — the user\'s card', () => {
 describe('Inbox — what the agent has seen', () => {
   test('the step that took a splice ends: its card is seen, and the answer keeps it where it was read', async () => {
     const { inbox, cards } = setup({ turnInFlight: true });
-    inbox.beginTurn(false, undefined);
+    inbox.beginTurn(undefined);
     await inbox.prepareStep({ stepNumber: 0, messages: [user('q')] });
     inbox.landMidTurn(wake('turn text', { stepText: 'mid-turn: mail from bob' }));
     await inbox.prepareStep({ stepNumber: 1, messages: [user('q'), assistant('a')] });
@@ -269,7 +269,7 @@ describe('Inbox — what the agent has seen', () => {
 
   test('a step that never ended leaves its card being shown, and the answer keeps none', async () => {
     const { inbox, cards } = setup({ turnInFlight: true });
-    inbox.beginTurn(false, undefined);
+    inbox.beginTurn(undefined);
     inbox.landMidTurn(wake('turn text', { stepText: 'mid-turn: mail from bob' }));
     await inbox.prepareStep({ stepNumber: 0, messages: [user('q')] });
     inbox.settle({ completed: false });
@@ -281,7 +281,7 @@ describe('Inbox — what the agent has seen', () => {
 
   test('the delivery that opens a turn is seen once the first step ends, and keeps its own row', async () => {
     const { inbox, cards } = setup({ turnInFlight: false });
-    inbox.beginTurn(false, 'sig:drain-1');
+    inbox.beginTurn('sig:drain-1');
     inbox.stepEnded(0);
 
     expect(lifecycle(cards)).toEqual(['shown', 'seen']);
@@ -374,38 +374,12 @@ describe('Inbox — turn boundaries', () => {
     await inbox.prepareStep({ stepNumber: 0, messages: [user('q'), user('pad'), user('pad2')] });
     inbox.landMidTurn(wake('t-waiting', { stepText: 'still pending' }));
 
-    inbox.beginTurn(false);
+    inbox.beginTurn();
     const step0 = present(await inbox.prepareStep({ stepNumber: 0, messages: [user('q2')] }), 'the prepared step');
     expect(texts(step0)).toEqual(['q2', 'still pending']);
     expect(inbox.settle({ completed: true }).absorbed.map((s) => s.text)).toEqual(['t-waiting']);
   });
 
-  test('a CONTINUATION turn re-absorbs the just-settled signals; a regular turn drops them', async () => {
-    const { inbox } = setup({ turnInFlight: true });
-    inbox.landMidTurn(wake('t1', { stepText: 'mail from bob' }));
-    await inbox.prepareStep({ stepNumber: 0, messages: [user('q')] });
-    expect(inbox.settle({ completed: true }).absorbed.map((s) => s.text)).toEqual(['t1']);
-
-    // A settled reply channel no-ops, so re-dispatch on continuation is idempotent.
-    inbox.beginTurn(true);
-    const step0 = present(await inbox.prepareStep({ stepNumber: 0, messages: [user('q'), assistant('partial')] }), 'the prepared step');
-    expect(texts(step0)).toEqual(['q', 'partial', 'mail from bob']);
-    expect(inbox.settle({ completed: true }).absorbed.map((s) => s.text)).toEqual(['t1']);
-
-    inbox.beginTurn(false);
-    expect(await inbox.prepareStep({ stepNumber: 0, messages: [user('q2')] })).toBeUndefined();
-    expect(inbox.settle({ completed: true }).absorbed).toEqual([]);
-  });
-
-  test('a non-completed turn retains nothing for a continuation', async () => {
-    const { inbox } = setup({ turnInFlight: true });
-    inbox.landMidTurn(wake('t-aborted', { stepText: 'mail from bob' }));
-    await inbox.prepareStep({ stepNumber: 0, messages: [user('q')] });
-    expect(inbox.settle({ completed: false }).absorbed.map((s) => s.text)).toEqual(['t-aborted']);
-
-    inbox.beginTurn(true);
-    expect(await inbox.prepareStep({ stepNumber: 0, messages: [user('continued')] })).toBeUndefined();
-  });
 });
 
 describe('the workspace genesis signal', () => {

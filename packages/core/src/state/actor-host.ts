@@ -6,13 +6,12 @@ import { markStoreChanged } from '@kinu.run/agent-utils';
 // unsettled claims from durable rows, with no timer or in-memory registry.
 
 import { KinuError } from '../obs/error';
-import { configReplaced } from '../config/store';
 import type { Holds } from '../utils/held-reads';
 import type { SqlExec, SqlExecutor, Storage } from '../types/primitives';
 import type { AgentRuntime } from '../types/agent-runtime';
 import { ActorSession, type ActorSessionOptions } from '../orchestrator/actor-session';
 import type { AgentOrchestratorDeps } from '../orchestrator/agent-orchestrator';
-import { claimOfRow, type ClaimRow, type StoredActorClaim } from '../orchestrator/actor-claims';
+import { unsettledClaimsOf, type StoredActorClaim } from '../orchestrator/actor-claims';
 import type { SessionFilePlane } from '../session/payload';
 import { actorReferenceOf, sameActorReference, type ActorHandle, type ActorReference } from '../identity/actor-handle';
 import { createAgentStores, type AgentStores } from './agent-stores';
@@ -516,16 +515,7 @@ function purgeActorRows(storage: Pick<Storage, 'sql' | 'transactionSync'> & SqlE
       storage.exec(`DELETE FROM "${table.replace(/"/g, '""')}" WHERE actor_id = ?`, actorId);
     }
   });
-  configReplaced(storage.sql);
   markStoreChanged(storage.sql);
-}
-
-// Read without a handle: a cold root reads these before it hosts anybody.
-function unsettledClaimsOf(sql: SqlExecutor, actorId: string, limit: number): readonly StoredActorClaim[] {
-  return sql<ClaimRow>`SELECT turn_id, run_id, epoch, work_mode, phase, program_kind, program_version, program_digest,
-            program_build, outcome, claimed_at
-     FROM actor_turn_claims WHERE actor_id = ${actorId} AND outcome IS NULL
-     ORDER BY claimed_at DESC LIMIT ${limit}`.map((row) => claimOfRow(actorId, row));
 }
 
 /**

@@ -150,15 +150,12 @@ export function withEffectReceipt(
         if (options.messages.length > 0) await deps.durable?.(options.toolCallId, options.abortSignal);
         const { transaction } = deps;
 
-        // One synchronous local commit: its receipt, effect and result commit as one, inside the call.
+        // One synchronous local commit: its receipt, effect and result commit as one, inside the call. A tool that says
+        // its calls are transactional commits through the receipt it is handed; one that cannot says no such thing.
         if (transaction !== undefined && isTransactionalCall(entry, projectJsonValue({ value: input }))) {
           const receipt = new TransactionalReceipt((run) => transaction(() => committedOnce(deps, key, name, run)));
-          const output = await execute(input, Object.assign({}, options, { [TRANSACTIONAL_RECEIPT_OPTION]: receipt }));
 
-          // A wrapper that did not hand the receipt on ran it outside: its result is recorded after, as any call's is.
-          if (!receipt.committed) settleToolEffect(deps.sql, deps.actor, key, JSON.stringify(projectJsonValue({ value: output })));
-
-          return output;
+          return await execute(input, Object.assign({}, options, { [TRANSACTIONAL_RECEIPT_OPTION]: receipt }));
         }
 
         const claim = claimToolEffect(deps.sql, deps.actor, key);

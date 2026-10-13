@@ -14,8 +14,6 @@ import {
   ROOT_DELEGATION_BUDGET,
   delegationBudgetOf,
   delegationDepthRefusal,
-  delegationExhausted,
-  deriveChildDelegationBudget,
   admitSubordinateReport,
   admitSubordinateTask,
   agentNamer,
@@ -55,8 +53,7 @@ import { serveReport } from '../src/tools/report-operations';
 import type { JsonObject, JsonValue } from '../src/utils/json';
 
 /** A hire chain `depth` levels below the root. */
-const budgetAt = (depth: number) =>
-  Array.from({ length: depth }, () => 0).reduce((budget) => deriveChildDelegationBudget(budget), ROOT_DELEGATION_BUDGET);
+const budgetAt = (depth: number) => ({ depth, maxDepth: Math.max(0, DELEGATION_MAX_DEPTH - depth) });
 
 const NOW = 1_700_000_000_000;
 
@@ -130,25 +127,6 @@ describe('the child descriptor authority', () => {
 });
 
 describe('the delegation depth cap', () => {
-  // Derived from the parent's numbers (heads/types.ts deriveChildBudget).
-  test('a child budget is derived from its parent and runs out at the cap', () => {
-    expect(DELEGATION_MAX_DEPTH).toBe(4);
-    let budget = ROOT_DELEGATION_BUDGET;
-    expect(budget).toEqual({ depth: 0, maxDepth: 4 });
-
-    const chain = [budget];
-
-    for (let i = 0; i < 4; i += 1) {
-      expect(delegationExhausted(budget)).toBe(false);
-      budget = deriveChildDelegationBudget(budget);
-      chain.push(budget);
-    }
-
-    expect(chain.map((b) => b.depth)).toEqual([0, 1, 2, 3, 4]);
-    expect(chain.map((b) => b.maxDepth)).toEqual([4, 3, 2, 1, 0]);
-    expect(delegationExhausted(budget)).toBe(true);
-  });
-
   test('the refusal names the depth reached and classifies as a refusal, not a defect', () => {
     const atCap = budgetAt(4);
     const refusal = delegationDepthRefusal(atCap);
@@ -157,10 +135,6 @@ describe('the delegation depth cap', () => {
     expect(refusal.error).toContain('depth 4');
     expect(refusal.error).toContain('depth 5');
     expect(refusal.error).toContain('swarm');
-  });
-
-  test('a child derived at the cap clamps rather than going negative', () => {
-    expect(deriveChildDelegationBudget(budgetAt(4))).toEqual({ depth: 5, maxDepth: 0 });
   });
 
   test('an actor\'s depth is walked off its directory row, and a missing parent ends the walk as a floor', () => {
@@ -534,17 +508,6 @@ describe('team action routing', () => {
     await expect(h.team.rename({ name: 'researcher-a1b2c3', displayName: '  ' }))
       .rejects.toThrow('displayName must be non-empty');
     expect(h.calls).not.toContain(expect.stringContaining('rename:'));
-  });
-
-  test('a title the child settled on only refreshes the roster listeners', async () => {
-    const h = makeTeamHarness();
-    await h.team.create({});
-
-    await h.team.recordTitle({ name: 'researcher-a1b2c3', displayName: 'Callback Audit' });
-
-    expect(h.calls).toEqual(['spawn:researcher-a1b2c3:Keep the release train moving.']);
-    expect(h.broadcasts).toHaveLength(2);
-    expect('displayName' in h.roster.requireActive('researcher-a1b2c3')).toBe(false);
   });
 
 

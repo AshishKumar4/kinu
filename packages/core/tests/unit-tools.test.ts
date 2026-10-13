@@ -132,7 +132,6 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
         displayName: 'S',
         subordinate: { name: 's', displayName: 'S', role: 'researcher', actorReference: null, birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
       }),
-      recordTitle: async () => ({ ok: true as const, name: 's', displayName: 'S', applied: true }),
       spawn: async () => ({ name: 's', displayName: 'S' }),
       assign: async () => ({ ok: true as const, name: 's', ...stubHandoff }),
       knows: async () => true,
