@@ -13,7 +13,7 @@ The tree carries no Nimbus source. Packages come from the registry, checked agai
 | Package | Version | Declared in |
 |---|---|---|
 | `@nimbus-sh/core` | 0.17.0 | root, `packages/core`, `packages/cf-backend`, `packages/cli-backend`, `packages/cli`, `packages/agent-utils`, `packages/compaction`, `packages/test-utils` |
-| `@nimbus-sh/worker` | 0.15.0 | root, `packages/cf-backend` |
+| `@nimbus-sh/worker` | 0.15.0 | `packages/cf-backend` |
 | `@nimbus-sh/fabric` | ^0.12.0 | `packages/core`, `packages/cf-backend` |
 | `@nimbus-sh/sdk` | ^0.13.0 | `packages/core`, `packages/cf-backend` |
 | `@nimbus-sh/platform` | ^0.8.1 | `packages/cf-backend` |
@@ -28,8 +28,6 @@ Every declaration moves together, the root `devDependencies` included. The
 root declares `@nimbus-sh/core` for the repository's own scripts and fixtures.
 A root version left behind hoists its copy to the top of `node_modules` and
 nests the workspaces' copy below, so the copy that runs is the stale one.
-`@nimbus-sh/platform` is nobody's declared dependency. It arrives under core,
-fabric and worker, which is why nothing here pins it.
 
 Core imports fabric directly: `packages/core/src/events/outbox.ts` builds its
 outbox on `@nimbus-sh/fabric/outbox.js`.
