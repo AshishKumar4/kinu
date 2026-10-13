@@ -5,8 +5,9 @@ import { Loader } from "@cloudflare/kumo";
 import { Effect } from "effect";
 import { ArrowSquareOutIcon, DesktopTowerIcon, GlobeIcon } from "@phosphor-icons/react";
 import { attempt, renderThrownChain, detach } from "@kinu.run/core/obs";
+import { CHATGPT_USAGE_URL } from "@kinu.run/core";
 import {
-  CHATGPT_USAGE_URL, cancelChatGptSignIn, chatgptPlan, finishChatGptPaste, registerDevice, startChatGptPaste, startChatGptSignIn,
+  cancelChatGptSignIn, chatgptPlan, finishChatGptPaste, registerDevice, startChatGptPaste, startChatGptSignIn,
   type ChatGptPlan,
 } from "@/lib/user-api";
 import { BrandMark } from "@/components/ui/BrandMark";
