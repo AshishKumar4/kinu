@@ -13,14 +13,12 @@ interface VectorMutation {
 }
 
 export interface VectorizeIndex {
-  insert(vectors: VectorRecord[]): Promise<VectorMutation>;
   upsert(vectors: VectorRecord[]): Promise<VectorMutation>;
   query(
     vector: number[],
     options?: { topK?: number; namespace?: string; returnMetadata?: boolean | 'all' | 'indexed'; filter?: JsonObject },
   ): Promise<{ matches: VectorMatch[] }>;
   deleteByIds(ids: string[]): Promise<VectorMutation>;
-  getByIds(ids: string[]): Promise<VectorRecord[]>;
 }
 
 export interface VectorRecord {
@@ -35,7 +33,6 @@ export interface VectorMatch {
   readonly id: string;
   readonly score: number;
   readonly metadata?: JsonObject;
-  readonly values?: number[];
 }
 
 export interface Embedder {
@@ -59,7 +56,6 @@ export interface VectorSearchHit {
 export interface VectorStore {
   readonly available: boolean;
   /** Idempotent on id. Rejects when the write did not land. */
-  upsertChunk(chunk: IndexedChunk): Promise<void>;
   upsertChunks(chunks: readonly IndexedChunk[]): Promise<void>;
   deleteChunks(ids: readonly string[]): Promise<void>;
   /** Rejects on backend failure: `hybridSearch` decides whether another arm covers. */
@@ -158,10 +154,6 @@ export function createCloudflareVectorStore(opts: {
   return {
     get available() { return Date.now() >= unavailableUntil; },
 
-    upsertChunk(chunk: IndexedChunk) {
-      return settle(Effect.asVoid(tripping('upsert', async () => index.upsert(await toRecords([chunk])))));
-    },
-
     upsertChunks(chunks: readonly IndexedChunk[]) {
       return settle(chunks.length === 0 ? Effect.void : Effect.asVoid(tripping('batch upsert', async () => index.upsert(await toRecords(chunks)))));
     },
@@ -209,7 +201,6 @@ export function createCloudflareVectorStore(opts: {
 export function createNoopVectorStore(): VectorStore {
   return {
     available: false,
-    async upsertChunk() { /* nop */ },
     async upsertChunks() { /* nop */ },
     async deleteChunks() { /* nop */ },
     async search() { return []; },

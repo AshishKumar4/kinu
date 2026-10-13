@@ -17,7 +17,7 @@ function memoryOver(content: string) {
 
   const vectors: VectorStore = {
     available: false,
-    async upsertChunk() {}, async upsertChunks() {}, async deleteChunks() {}, async search() { return []; },
+    async upsertChunks() {}, async deleteChunks() {}, async search() { return []; },
   };
 
   const memory = adaptMemory(store, files, { store: vectors });
