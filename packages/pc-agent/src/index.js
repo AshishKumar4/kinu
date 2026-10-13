@@ -534,42 +534,6 @@ const BARE_BINARY_NAME = /^[A-Za-z0-9._+-]{1,64}$/;
 
 const WHICH_MAX_NAMES = 64;
 
-/**
- * Whether any PATH entry provides an executable `name`.
- *
- * Must agree with `Bun.which` on the CLI host, which resolves the same names on
- * the machine the CLI runs on — one row, two resolvers, and a disagreement is a
- * capability the model routes work by. `cli-backend/tests/path-resolver-parity.test.ts`
- * holds them to it.
- *
- * `isFile` is the load-bearing half: a DIRECTORY can carry a binary's name and
- * carry the execute bit (they nearly all do), and `accessSync(X_OK)` alone said
- * yes to it. A directory named `bun` on PATH claimed `javascript` and
- * `typescript` for a machine that could run neither.
- */
-function onPath(dirs, name) {
-  for (const dir of dirs) {
-    const candidate = path.join(dir, name);
-
-    try {
-      // stat, not lstat: a symlink to a real executable IS the normal shape of
-      // a binary on PATH, and resolving it is what `which` does.
-      if (!fs.statSync(candidate).isFile()) continue;
-      fs.accessSync(candidate, fs.constants.X_OK);
-
-      return true;
-    } catch (err) {
-      // Absent, not executable by this user, an entry that is not a directory
-      // at all, or a symlink that goes nowhere: each means this entry does not
-      // provide the binary. Anything else is a real fault and must not pass as
-      // a clean "absent".
-      if (!['ENOENT', 'EACCES', 'ENOTDIR', 'ELOOP', 'ENAMETOOLONG'].includes(err.code)) throw err;
-    }
-  }
-
-  return false;
-}
-
 /** The names this daemon will answer about, parsed out of the frame: bare
  *  binary names, and nothing else. */
 function probeNames(raw) {
@@ -587,10 +551,12 @@ function probeNames(raw) {
   return names;
 }
 
+/** The names an executable file on PATH provides, resolved as the CLI host resolves them (`Bun.which`, PATH passed so a
+ *  toolchain installed since start counts). */
 function whichAll(names) {
-  const dirs = String(process.env.PATH ?? '').split(path.delimiter).filter(Boolean);
+  const PATH = String(process.env.PATH ?? '');
 
-  return probeNames(names).filter((name) => onPath(dirs, name));
+  return probeNames(names).filter((name) => Bun.which(name, { PATH }) !== null);
 }
 
 // ── In-flight commands ─────────────────────────────────────────────────
