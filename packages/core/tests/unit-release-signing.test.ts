@@ -1,7 +1,7 @@
-/** Release signature (SECURITY-devices C1): canonical text over (version, checksums); core's and the daemon's pins are one key. */
+/** Release signature (SECURITY-devices C1): canonical text over (version, checksums), under the one pinned key. */
 import { expect, test } from 'bun:test';
-import * as v from 'valibot';
-import { RELEASE_SIGNING_PUBLIC_KEY, generateReleaseSigningKey, signRelease, verifyRelease } from '../src/http/release-signing';
+import { RELEASE_SIGNING_PUBLIC_KEY } from '../src/http/release-message';
+import { generateReleaseSigningKey, signRelease, verifyRelease } from '../src/http/release-signing';
 
 const CHECKSUMS = { '/downloads/kinu-cli-linux-x64.tar.gz': 'a'.repeat(64), '/downloads/kinu-runtime-cpython.tar.gz': 'b'.repeat(64) };
 
@@ -28,10 +28,6 @@ test('the message is canonical: the order the checksums arrive in does not chang
   expect(await verifyRelease({ ...signed, checksums: upper }, key.publicKeyHex)).toBe(true);
 });
 
-test('the daemon pins the same public key core does, and it is a real key', async () => {
-  // The daemon cannot import core; its pin is read off the module `kinu connect` installs.
-  const daemon = v.parse(v.object({ RELEASE_SIGNING_PUBLIC_KEY: v.string() }), require('../../pc-agent/src/update.js'));
-
-  expect(daemon.RELEASE_SIGNING_PUBLIC_KEY).toBe(RELEASE_SIGNING_PUBLIC_KEY);
+test('the pinned public key is a real Ed25519 key', async () => {
   await expect(verifyRelease({ version: '1.0.0', checksums: CHECKSUMS, signature: 'AAAA' }, RELEASE_SIGNING_PUBLIC_KEY)).resolves.toBe(false);
 });

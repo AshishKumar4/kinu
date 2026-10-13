@@ -14,7 +14,8 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { RELEASE_SIGNING_PUBLIC_KEY, signRelease, verifyRelease, type ReleaseChecksums, type SignedRelease } from '../packages/core/src/http/release-signing';
+import { RELEASE_SIGNING_PUBLIC_KEY } from '../packages/core/src/http/release-message';
+import { signRelease, verifyRelease, type ReleaseChecksums, type SignedRelease } from '../packages/core/src/http/release-signing';
 
 if (process.argv.length === 3 && process.argv[2] === '--check') {
   await signConfiguredRelease('signing-key-check', {});
@@ -74,7 +75,7 @@ async function signConfiguredRelease(buildVersion: string, artifactChecksums: Re
 function refuseSigning(reason: string): never {
   console.error(`sign-release: ${reason}\n` +
     '  Generate a private key with: bun scripts/release-signing-key.ts\n' +
-    '  Pin its printed public key in packages/core/src/http/release-signing.ts and packages/pc-agent/src/update.js.\n' +
+    '  Pin its printed public key in packages/core/src/http/release-message.ts.\n' +
     '  See docs/SELF-HOSTING.md#release-signing for the complete bootstrap.');
   process.exit(1);
 }

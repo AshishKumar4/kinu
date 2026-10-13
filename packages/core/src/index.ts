@@ -2257,9 +2257,10 @@ export {
   releaseArtifact, releaseArtifactHead, type ReleaseArtifactObject, type ReleaseArtifactStore,
 } from './http/release-artifact';
 
+export { RELEASE_SIGNING_PUBLIC_KEY, RELEASE_SIGNING_PUBLIC_KEY_ENV } from './http/release-message';
+
 export {
-  RELEASE_SIGNING_PUBLIC_KEY, RELEASE_SIGNING_PUBLIC_KEY_ENV, SignedReleaseSchema,
-  signRelease, verifyRelease, generateReleaseSigningKey, type ReleaseChecksums, type SignedRelease,
+  SignedReleaseSchema, signRelease, verifyRelease, generateReleaseSigningKey, type ReleaseChecksums, type SignedRelease,
 } from './http/release-signing';
 
 export {

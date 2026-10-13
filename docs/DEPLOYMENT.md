@@ -75,7 +75,7 @@ bun scripts/release-signing-key.ts
 
 `scripts/release-signing-key.ts` writes a PKCS#8 base64 private key to `~/.config/kinu/release-signing.key` with mode `0600`. It prints the path and `RELEASE_SIGNING_PUBLIC_KEY=<64 hex characters>`, never the private key, and refuses an existing file. `KINU_RELEASE_SIGNING_KEY_FILE` chooses another path; I set it for generation and every later build. The private key belongs in a backup or build-runner secret store, never in source or Worker secrets. Staging and production use the same signed artifacts, so the key belongs to the build machine, not one deployment environment.
 
-I replace `RELEASE_SIGNING_PUBLIC_KEY` in both `packages/core/src/http/release-signing.ts` and `packages/pc-agent/src/update.js` with that printed hex value. Core's pin reaches the served installer launcher and the bundled CLI; the daemon ships its own copy. Both must name the new key.
+I replace `RELEASE_SIGNING_PUBLIC_KEY` in `packages/core/src/http/release-message.ts` with that printed hex value. That one pin reaches the served installer launcher, the bundled CLI and the device daemon, which is built with it.
 
 ```bash
 unset KINU_RELEASE_SIGNING_PUBLIC_KEY

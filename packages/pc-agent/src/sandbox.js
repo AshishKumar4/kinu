@@ -29,6 +29,8 @@ const util = require('node:util');
 
 const update = require('./update.js');
 
+const { RELEASE_SIGNING_PUBLIC_KEY_ENV } = require('../../core/src/http/release-message.ts');
+
 const { runToExit } = update;
 
 /** Why a machine cannot sandbox. `ok` is the only status that runs a command;
@@ -140,7 +142,7 @@ const ENV_ALLOWLIST_FAMILY = /^LC_[A-Z_]+$/;
 const WITHHELD_ENV = Object.freeze([
   'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY',
   'KINU_TOKEN', 'KINU_AUTH', 'AI_GATEWAY_AUTH', 'KINU_LLM_HEADERS', 'KINU_PROVIDER_CREDENTIALS',
-  update.RELEASE_SIGNING_PUBLIC_KEY_ENV, update.PREDECESSOR_ENV,
+  RELEASE_SIGNING_PUBLIC_KEY_ENV, update.PREDECESSOR_ENV,
 ]);
 
 /**
