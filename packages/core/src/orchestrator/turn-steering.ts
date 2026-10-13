@@ -56,7 +56,7 @@ function noProgressText(steps: number): string {
 }
 
 /** SDK invocation status is independent of the value a successful tool returned. */
-export function isFailingToolResult(ctx: ToolResultContext): boolean {
+function isFailingToolResult(ctx: ToolResultContext): boolean {
   return !ctx.success;
 }
 

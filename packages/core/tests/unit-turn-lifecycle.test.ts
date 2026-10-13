@@ -6,7 +6,7 @@ import {
   initRunEventTables, RunEventRecorder,
   openTurnRun, closeTurnRun, snapshotCompletedTurn,
   persistMeasuredPromptTokens, applyOverflowRecovery, declareTerminalRoster, creditedTurnId,
-  TurnAccumulator, TurnSteering, CraftCycle, TurnEscalationLedger,
+  TurnAccumulator, TurnSteering, TurnEscalationLedger,
   SPILL_DIRS,
   type CompactionTriggerState,
 } from '../src/index';
@@ -144,35 +144,15 @@ describe('openTurnRun / closeTurnRun', () => {
 
   test('an in-episode craft loop writes its craft_cycle row; an idle turn writes none', () => {
     const rec = recorder();
-    const observed: string[][] = [];
-    const crafted: string[] = [];
     const acc = new TurnAccumulator();
 
-    const cycle = new CraftCycle({
-      names: () => crafted,
-      observe: (names) => {
-        observed.push([...names]);
-
-        return [];
-      },
-    }, acc);
-
-    cycle.reset(true);
-
-    // The episode: craft in one call, reach for it in the next.
-    crafted.push('sum');
-    cycle.onToolResult({
-      toolName: 'eval', args: { code: 'await workspace.createTool("sum","d","async()=>1")' },
-      result: 'ok', success: true,
-    });
-    cycle.onToolResult({
-      toolName: 'eval', args: { code: 'return await tools.sum(1)' },
-      result: '1', success: true,
-    });
+    // The episode, as the calls were observed where they ran: craft in one call, reach for it in the next.
+    acc.craft.note('create', { created: ['sum'], invoked: [], raised: [], returned: [], dropped: [] });
+    acc.craft.note('call', { created: [], invoked: ['sum'], raised: [], returned: ['sum'], dropped: [] });
 
     closeTurnRun(rec, 'run-c', {
       turnIndex: 0, usage: { input: 1, output: 1 }, reason: 'completed',
-      craft: cycle.snapshot(),
+      craft: acc.craft.snapshot(),
     });
     const events = rec.read('run-c');
     expect(events.map((e) => e.type)).toEqual(['craft_cycle', 'turn_end', 'run_end']);
@@ -182,17 +162,14 @@ describe('openTurnRun / closeTurnRun', () => {
     expect(row.crafted).toEqual(['sum']);
     expect(row.reused).toEqual(['sum']);
     expect(row.returned).toBe(1);
-    expect(observed).toEqual([['sum']]);
-    // The same clock is what the graded turn reports as crafted-tool use.
+    // The same record is what the graded turn reports as crafted-tool use.
     expect(snapshotCompletedTurn({ acc, steering: new TurnSteering() }, {
       userMessage: 'u', assistantResponse: 'a', sessionId: 'default', origin: 'user',
     }).craftedToolsUsed).toEqual(['sum']);
 
-    const idle = new CraftCycle({ names: () => [], observe: () => [] }, new TurnAccumulator());
-    idle.reset(true);
     closeTurnRun(rec, 'run-idle', {
       turnIndex: 0, usage: { input: 1, output: 1 }, reason: 'completed',
-      craft: idle.snapshot(),
+      craft: new TurnAccumulator().craft.snapshot(),
     });
     expect(rec.read('run-idle').map((e) => e.type)).toEqual(['turn_end', 'run_end']);
   });

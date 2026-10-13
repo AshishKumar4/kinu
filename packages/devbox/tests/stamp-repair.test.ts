@@ -8,7 +8,7 @@ import { ChainTestBox, chainBox } from './support/chain-box';
 import { settledRestoration } from '../src/restoration';
 
 test('same-container repair writes an outstanding stamp and becomes ready independently of its explanation', async () => {
-  const { box, container, rows } = chainBox();
+  const { box, container, rows, env } = chainBox();
 
   await box.devboxStartup();
   const before = await box.devboxState();
@@ -17,7 +17,7 @@ test('same-container repair writes an outstanding stamp and becomes ready indepe
   expect(before.bootId).toBeDefined();
   // A fresh isolate adopts the durable, still-owed stamp on the same native container, not a replacement.
   rows.set('devbox:restoration', settledRestoration([], 'pending'));
-  const repaired = new ChainTestBox(container.ctx, {});
+  const repaired = new ChainTestBox(container.ctx, env);
 
   container.owner = repaired;
   expect((await repaired.devboxState()).ready).toBe(false);

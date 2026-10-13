@@ -1,12 +1,11 @@
 // Backend-agnostic per-turn agent logic: turn accounting and the event→turn reactor, over the agent's evolution lanes
 // (`EvolutionLanes`, whose exit contract covers everything this dispatches).
-// The in-episode clock (`craft`, `recordRecovery`) writes synchronous rows and needs no join.
+// The in-episode clock (`recordRecovery`) writes synchronous rows and needs no join.
 
 import type { ModelMessage } from 'ai';
 import { TurnAccumulator, type TurnSinks } from './turn-accumulator';
 import type { RunEndReason } from './turn-lifecycle';
 import { TurnSteering } from './turn-steering';
-import { CraftCycle } from './craft-cycle';
 import { DrainScheduler } from './drain-scheduler';
 import { Inbox, readSignalId, type UserSteerDeps } from './inbox';
 import { EvolutionLanes, improvementLanesOpen, type EvolutionLanesDeps } from './evolution-lanes';
@@ -30,7 +29,6 @@ export interface AgentOrchestratorDeps extends EvolutionLanesDeps {
   engine: EvolutionLanesDeps['engine'] & Pick<
     EvolutionEngine,
     | 'withTurnLearning'
-    | 'craftLedger'
     | 'recordRecovery'
     | 'reviewTurn'
     | 'recentAdvisorNotes'
@@ -58,7 +56,6 @@ export class AgentOrchestrator extends EvolutionLanes {
   readonly signals: AgentInbox;
   /** Per-turn mechanical steering; feeds the durable `turn_steering` rows. */
   readonly steering = new TurnSteering();
-  readonly craft: CraftCycle;
   /** Registered on each turn's ExtensionHost by both backends. The steer is decided against the step being
    *  prepared and handed straight to it, so it dies with that step. */
   readonly turnExtension: KinuExtension = {
@@ -66,7 +63,6 @@ export class AgentOrchestrator extends EvolutionLanes {
     onToolCall: (ctx) => this.steering.onToolCall(ctx),
     onToolResult: (ctx) => {
       const recovery = this.steering.onToolResult(ctx);
-      this.craft.onToolResult(ctx);
 
       if (recovery && this.observeRecoveries) this.recordRecovery(recovery);
     },
@@ -91,7 +87,6 @@ export class AgentOrchestrator extends EvolutionLanes {
   constructor(private readonly deps: AgentOrchestratorDeps, steers?: UserSteerDeps) {
     super(deps);
     this.acc = new TurnAccumulator(deps.sinks, deps.budget);
-    this.craft = new CraftCycle(deps.engine.craftLedger, this.acc);
     this.turnEvolutionEnabled = deps.engine.enabled;
     this.inbox = new Inbox(deps.host, (e, d) => this.logActivity(e, d), steers);
     this.signals = deps.deliveries.signals;
@@ -116,7 +111,8 @@ export class AgentOrchestrator extends EvolutionLanes {
     this.activeMissions = readMissionLabels(metadata);
     const evolutionEnabled = this.deps.engine.enabled && workMode !== 'plan';
     this.turnEvolutionEnabled = evolutionEnabled;
-    this.craft.reset(evolutionEnabled);
+    // Its `eval` calls are observed where they run (`delegation/actor-tools.ts`), into this turn's record.
+    this.acc.craft.recording = evolutionEnabled;
     this.turnRecoveries = [];
     this.observeRecoveries = evolutionEnabled;
     this.inbox.beginTurn(readSignalId(metadata));
@@ -132,7 +128,7 @@ export class AgentOrchestrator extends EvolutionLanes {
     if (mode !== 'plan' || this.activeWorkMode === 'plan') return;
     this.activeWorkMode = 'plan';
     this.turnEvolutionEnabled = false;
-    this.craft.reset(false);
+    this.acc.craft.recording = false;
     this.observeRecoveries = false;
   }
 

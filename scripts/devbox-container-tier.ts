@@ -105,7 +105,7 @@ function writeFixtureConfig(worker: string, scratch: string, priorDeclared?: str
     containers,
     r2_buckets: [{ binding: 'STORE', bucket_name: worker }],
     assets: { directory: join(REPO, 'packages/cf-backend/public'), binding: 'ASSETS', run_worker_first: true },
-    vars: { ACCOUNT, PROBE_BUCKET: worker, PROBE_HTTP: process.argv.includes('--probe') ? '1' : '0' },
+    vars: { CLOUDFLARE_ACCOUNT_ID: ACCOUNT, PROBE_BUCKET: worker, PROBE_HTTP: process.argv.includes('--probe') ? '1' : '0' },
   }));
 
   return { config, declared };

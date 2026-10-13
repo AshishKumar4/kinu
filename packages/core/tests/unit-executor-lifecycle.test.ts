@@ -54,8 +54,8 @@ function sandboxHandle(): SandboxHandle & { calls: string[]; execOptions: unknow
     async unexposePort(port: number) {
       calls.push(`unexpose:${port}`);
     },
-    async getExposedPorts(hostname: string) {
-      calls.push(`ports:${hostname}`);
+    async getExposedPorts() {
+      calls.push('ports');
 
       return [];
     },

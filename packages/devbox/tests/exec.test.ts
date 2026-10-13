@@ -1,4 +1,4 @@
-// D37: an untimed command runs on `ctx.container.exec`, and ending it ends everything it started. Here the
+// D37: a command runs on `ctx.container.exec`, and ending it ends everything it started. Here the
 // runtime's exec is a real local process, so the output, the exit code and the process tree are real. It stays
 // local: what it proves is the box's own end of an exec (how it reads, times and ends one), and a real container's
 // exec is held to its bytes and exit by gate:devbox-e2e's exec contract.
@@ -10,14 +10,14 @@ import { join } from 'node:path';
 
 import { DEFAULT_DEVBOX_POLICY } from '../src/lifecycle';
 import { devboxFailure } from '../src/errors';
-import { collectExecRecords } from '../src/exec-stream';
+import { readExec } from '../src/exec-stream';
 import { gate, harness } from './support/devbox-harness';
 import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
 import { pipeExec as localExec } from './support/native-process';
 import { isRunning } from '../../test-utils/src/spawn';
 import { runToExit } from '../../test-utils/src/spawn';
 
-const root = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}untimed-exec-`));
+const root = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}exec-`));
 
 afterAll(() => { rmSync(root, { recursive: true, force: true }); });
 
@@ -36,22 +36,22 @@ async function readyBox(exec: Container['exec'] = localExec) {
   return box;
 }
 
-describe('an untimed command on the runtime\'s exec', () => {
+describe('a command on the runtime\'s exec', () => {
   test('returns its own output and exit code', async () => {
     const box = await readyBox();
     const cwd = mkdtempSync(join(root, 'output-'));
 
-    expect(await box.execUntimed('pwd; echo out; echo err >&2; exit 7', { cwd, execId: 'one' }))
+    expect(await box.exec('pwd; echo out; echo err >&2; exit 7', { cwd }))
       .toEqual({ stdout: `${cwd}\nout\n`, stderr: 'err\n', exitCode: 7 });
   });
 
-  // 2026-10-03: an untimed exec forced the trust env over the caller's; a raw one did not.
+  // 2026-10-03: the exec kept per id forced the trust env over the caller's; the plain one did not.
   test('runs with the box\'s trust environment under the caller\'s own, as a raw exec does', async () => {
     const box = await readyBox();
     const cwd = mkdtempSync(join(root, 'env-'));
     const env = { REQUESTS_CA_BUNDLE: join(cwd, 'bundle.pem') };
 
-    expect(await box.execUntimed('printf "%s %s" "$REQUESTS_CA_BUNDLE" "$NODE_EXTRA_CA_CERTS"', { cwd, execId: 'env', env }))
+    expect(await box.exec('printf "%s %s" "$REQUESTS_CA_BUNDLE" "$NODE_EXTRA_CA_CERTS"', { cwd, env }))
       .toEqual({ stdout: `${env.REQUESTS_CA_BUNDLE} /etc/cloudflare/certs/cloudflare-containers-ca.crt`, stderr: '', exitCode: 0 });
   });
 
@@ -61,13 +61,13 @@ describe('an untimed command on the runtime\'s exec', () => {
     // A FIFO: the read below returns once the command has started its child and written the child's pid.
     const started = join(cwd, 'started');
     await runToExit(['mkfifo', started]);
-    const ran = box.execUntimed(`sleep 60 & echo $! > ${started}; wait`, { cwd, execId: 'held' });
+    const ran = box.exec(`sleep 60 & echo $! > ${started}; wait`, { cwd, execId: 'held' });
     const child = Number((await Bun.file(started).text()).trim());
 
-    expect(await box.killUntimed('held')).toBe(true);
+    expect(await box.killExec('held')).toBe(true);
     expect((await ran).exitCode).not.toBe(0);
     expect(isRunning(child)).toBe(false);
-    expect(await box.killUntimed('held')).toBe(false);
+    expect(await box.killExec('held')).toBe(false);
   });
 
   test('a kill that arrives while the command is still starting ends it once it has started', async () => {
@@ -83,10 +83,10 @@ describe('an untimed command on the runtime\'s exec', () => {
 
     const cwd = mkdtempSync(join(root, 'starting-'));
     // Left alone it answers exit 0 a minute later, past the test's own bound.
-    const ran = box.execUntimed('exec sleep 60', { cwd, execId: 'starting' });
+    const ran = box.exec('exec sleep 60', { cwd, execId: 'starting' });
     await starting.reached;
 
-    const killed = box.killUntimed('starting');
+    const killed = box.killExec('starting');
     starting.release();
 
     expect(await killed).toBe(true);
@@ -99,18 +99,18 @@ describe('an untimed command on the runtime\'s exec', () => {
     const cwd = mkdtempSync(join(root, 'pre-admission-'));
     const marker = join(cwd, 'must-not-exist');
 
-    const ran = Promise.allSettled([box.execUntimed(`sleep 10; touch '${marker}'`, { cwd, execId: 'cancel-before-ready' })]);
+    const ran = Promise.allSettled([box.exec(`sleep 10; touch '${marker}'`, { cwd, execId: 'cancel-before-ready' })]);
 
     try {
       await admission.reached;
-      const cancelled = await box.killUntimed('cancel-before-ready');
+      const cancelled = await box.killExec('cancel-before-ready');
       admission.release();
       const [outcome] = await ran;
       const kind = outcome.status === 'rejected' ? devboxFailure({ cause: outcome.reason })?.code : 'completed';
 
       expect({ cancelled, outcome: kind, wrote: existsSync(marker) })
         .toEqual({ cancelled: true, outcome: 'cancelled', wrote: false });
-      expect(await box.killUntimed('cancel-before-ready')).toBe(false);
+      expect(await box.killExec('cancel-before-ready')).toBe(false);
     } finally {
       admission.release();
       await ran;
@@ -145,31 +145,46 @@ describe('one launch per id', () => {
     const command = 'echo ran >> effects; echo done';
     const effects = () => readFileSync(join(cwd, 'effects'), 'utf8');
 
-    expect(await box.execUntimed(command, { cwd, execId: 'once' })).toEqual({ stdout: 'done\n', stderr: '', exitCode: 0 });
+    expect(await box.exec(command, { cwd, execId: 'once' })).toEqual({ stdout: 'done\n', stderr: '', exitCode: 0 });
 
-    expect(await box.execUntimed(command, { cwd, execId: 'once' })).toEqual({ stdout: 'done\n', stderr: '', exitCode: 0 });
+    expect(await box.exec(command, { cwd, execId: 'once' })).toEqual({ stdout: 'done\n', stderr: '', exitCode: 0 });
     expect(effects()).toBe('ran\n');
 
-    await collectExecRecords(await box.execUntimedStream(command, { cwd, execId: 'streamed' }), () => {});
-    await expect(box.execUntimed(command, { cwd, execId: 'streamed' })).rejects.toMatchObject({ code: 'indeterminate' });
+    await readExec(await box.execStream(command, { cwd, execId: 'streamed' }));
+    await expect(box.exec(command, { cwd, execId: 'streamed' })).rejects.toMatchObject({ code: 'indeterminate' });
     expect(effects()).toBe('ran\nran\n');
 
-    await box.releaseUntimed('once');
-    await box.execUntimed(command, { cwd, execId: 'once' });
+    await box.releaseExec('once');
+    await box.exec(command, { cwd, execId: 'once' });
     expect(effects()).toBe('ran\nran\nran\n');
+  });
+
+  // D87: a caller with no use for an id mints none, and the box keeps nothing for it.
+  test('without an id a command runs each time, and neither it nor a stream leaves a claim', async () => {
+    const { box, rows } = harness(TestBox, undefined, localExec);
+    await box.devboxStartup();
+    const cwd = mkdtempSync(join(root, 'unclaimed-'));
+    const command = 'echo ran >> effects; echo done';
+
+    await box.exec(command, { cwd });
+    await box.exec(command, { cwd });
+    await readExec(await box.execStream(command, { cwd }));
+
+    expect({ effects: readFileSync(join(cwd, 'effects'), 'utf8'), claims: [...rows.keys()].filter((key) => key.startsWith('devbox:exec:')) })
+      .toEqual({ effects: 'ran\nran\nran\n', claims: [] });
   });
 });
 
-describe('a streamed untimed command', () => {
+describe('a streamed command', () => {
   test('hands over what it printed while it still runs, and its exit code ends the stream', async () => {
     const box = await readyBox();
     const cwd = mkdtempSync(join(root, 'stream-'));
     const release = await releaseFifo(cwd);
-    const stream = await box.execUntimedStream(`echo compiled; read line < ${release}; echo "built $line" >&2; exit 3`, { cwd, execId: 'stream' });
+    const stream = await box.execStream(`echo compiled; read line < ${release}; echo "built $line" >&2; exit 3`, { cwd });
     const heard: string[] = [];
 
     // The command waits on the FIFO until its first line is heard, so it ends only if that line came while it ran.
-    const result = await collectExecRecords(stream, (name, data) => {
+    const result = await readExec(stream, (name, data) => {
       heard.push(`${name}: ${decoder.decode(data)}`);
 
       if (heard.length === 1) writeFileSync(release, 'ok\n');
@@ -184,7 +199,7 @@ describe('a streamed untimed command', () => {
     const cwd = mkdtempSync(join(root, 'stream-cancel-'));
     const started = join(cwd, 'started');
     await runToExit(['mkfifo', started]);
-    const stream = await box.execUntimedStream(`sleep 60 & echo $! > ${started}; wait`, { cwd, execId: 'stream-cancel' });
+    const stream = await box.execStream(`sleep 60 & echo $! > ${started}; wait`, { cwd });
     const child = Number((await Bun.file(started).text()).trim());
 
     await stream.cancel('the reader is gone');
@@ -201,14 +216,14 @@ describe('a streamed untimed command', () => {
     const { idleMs, quietConfirmMs } = DEFAULT_DEVBOX_POLICY;
 
     try {
-      const stream = await box.execUntimedStream(`read line < ${release}; echo done`, { cwd, execId: 'stream-hold' });
+      const stream = await box.execStream(`read line < ${release}; echo done`, { cwd });
       // Past the idle window and then through the quiet one: an uncounted command would let the box rest here.
       const idle = start + idleMs + 1_000;
       await restDecision(box, idle);
       const running = await restDecision(box, idle + quietConfirmMs);
 
       writeFileSync(release, 'ok\n');
-      expect(await collectExecRecords(stream, () => {})).toEqual({ stdout: 'done\n', stderr: '', exitCode: 0 });
+      expect(await readExec(stream)).toEqual({ stdout: 'done\n', stderr: '', exitCode: 0 });
       const ended = idle + quietConfirmMs;
       await restDecision(box, ended + idleMs + 1_000);
       const after = await restDecision(box, ended + idleMs + 1_000 + quietConfirmMs);
@@ -228,7 +243,7 @@ describe('a streamed untimed command', () => {
     const { idleMs, quietConfirmMs } = DEFAULT_DEVBOX_POLICY;
 
     try {
-      const stream = await box.execUntimedStream(`read line < ${release}`, { cwd, execId: 'stream-cancel-rest' });
+      const stream = await box.execStream(`read line < ${release}`, { cwd });
       await stream.cancel('the reader is gone');
       const idle = start + idleMs + 1_000;
       await restDecision(box, idle);

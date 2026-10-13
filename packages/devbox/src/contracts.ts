@@ -1,11 +1,9 @@
-import type { DevboxOutbound, OutboundProps } from './gateway';
-import type { DevboxStoreGateway, StoreGatewayProps } from './store-gateway';
+import type { DevboxGateway, GatewayProps } from './gateway';
 
 export type DevboxExecOptions = Pick<ContainerExecOptions, 'cwd' | 'env' | 'signal'>;
 
 export interface GatewayBindings {
-  readonly DevboxStoreGateway?: (options: { readonly props: StoreGatewayProps }) => Pick<Service<DevboxStoreGateway>, keyof Fetcher>;
-  readonly DevboxOutbound?: (options: { readonly props: OutboundProps }) => Pick<Service<DevboxOutbound>, keyof Fetcher>;
+  readonly DevboxGateway?: (options: { readonly props: GatewayProps }) => Pick<Service<DevboxGateway>, keyof Fetcher>;
 }
 
 export interface ExecResult {

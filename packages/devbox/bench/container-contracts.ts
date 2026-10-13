@@ -5,7 +5,7 @@ import { settle } from '../src/errors';
 import { describeThrown } from '../src/lifecycle';
 import { listFiles } from '../src/file-listing';
 import { Processes, CONTAINER_TRUST_ENV, TRUST } from '../src/processes';
-import { collectExecRecords } from '../src/exec-stream';
+import { readExec } from '../src/exec-stream';
 import { TOOLS_STAMP, toolsInstallCommand } from '../src/tools';
 import { DESKTOP_START, DESKTOP_PORT } from '../src/desktop';
 import type { Devbox } from '../src/devbox';
@@ -64,9 +64,9 @@ async function exec(box: Devbox<unknown>): Promise<void> {
   const bytes = new Uint8Array([...new TextEncoder().encode(`${SCRATCH}\n/own-bundle.pem\n${CONTAINER_TRUST_ENV.NODE_EXTRA_CA_CERTS}\n`), 255, 0, 120]);
   const expected = { stdout: new TextDecoder().decode(bytes), stderr: 'err\n', exitCode: 3 };
   equal(await box.exec(command, options), expected);
-  equal(await box.execUntimed(command, { ...options, execId: 'contract-untimed' }), expected);
+  equal(await box.exec(command, { ...options, execId: 'contract-once' }), expected);
   const chunks: Uint8Array[] = [];
-  equal(await collectExecRecords(await box.execUntimedStream(command, { ...options, execId: 'contract-stream' }), (from, data) => {
+  equal(await readExec(await box.execStream(command, options), (from, data) => {
     if (from === 'stdout') chunks.push(data);
   }), expected);
   equal(chunks.flatMap(chunk => [...chunk]), [...bytes]);
@@ -201,7 +201,7 @@ async function processes(box: Devbox<unknown>, container: Container): Promise<vo
 }
 
 async function kill(box: Devbox<unknown>, container: Container): Promise<void> {
-  for (const lane of ['supervised', 'untimed'] as const) {
+  for (const lane of ['supervised', 'exec'] as const) {
     for (const response of ['ignore', 'late'] as const) {
       const id = `${lane}-${response}`;
       const sleeper = `sleep ${String(7200 + (lane === 'supervised' ? 0 : 10) + (response === 'ignore' ? 1 : 2))}`;
@@ -211,11 +211,11 @@ async function kill(box: Devbox<unknown>, container: Container): Promise<void> {
         : `trap '(trap "" TERM; exec ${sleeper}) & exit 0' TERM; sleep 7300 & touch ${SCRATCH}/${id}; wait`;
 
       const process = new Processes(container);
-      const ran = lane === 'untimed' ? box.execUntimed(command, { cwd: '/', execId: id }) : process.start(command, { cwd: '/', processId: id });
+      const ran = lane === 'exec' ? box.exec(command, { cwd: '/', execId: id }) : process.start(command, { cwd: '/', processId: id });
       const outcome = Promise.allSettled([ran]);
       await native(container, `until [ -e ${SCRATCH}/${id} ]; do sleep 0.05; done`);
 
-      if (lane === 'untimed') await box.killUntimed(id);
+      if (lane === 'exec') await box.killExec(id);
       else await process.kill(id);
       await outcome;
       equal(await native(container, `ps -eo args=,stat= | awk '$1 == "sleep" && $2 == "${sleeper.slice(6)}" && $3 !~ /^Z/ {print}'`), '');
