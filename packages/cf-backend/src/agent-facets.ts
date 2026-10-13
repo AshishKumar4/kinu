@@ -4,7 +4,7 @@ import type { UIMessage, UIMessageChunk } from 'ai';
 import * as v from 'valibot';
 import { decodeModelMessageValues, forkConversationRowSchema, relayedAnswer, remoteContextTree } from '@kinu.run/core';
 import type { ForkConversationPlan, ForkConversationSection, ForkConversationSource, ForkConversationTarget, ForkRows } from '@kinu.run/core';
-import type { AgentOwnInspection, ArchiveSqlCursor, CacheWarmArm, ContextEditor, ContextTree, StepSpendSource, ConversationRecall, PositionPageRequest, AgentSignal, AuthRequest, RelayedProvider, ProgrammaticTurn, ProviderEnv, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
+import type { AgentOwnInspection, ArchiveSqlCursor, CacheWarmArm, ContextEditor, ContextTree, ContextTreeRemote, StepSpendSource, ConversationRecall, PositionPageRequest, AgentSignal, AuthRequest, RelayedProvider, ProgrammaticTurn, ProviderEnv, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
 import type { AgentWorkspace, TurnBound, TurnCapabilityOf } from './agent-facet/agent-turn';
 import type { AdvisorRecoverySnapshot, AgentFigures, AgentReport, AgentTurnActivity, HandedOffTurn, ResolvedTurnProfile, SettledRun, AgentHeadDelta, AgentSnapshot, AgentToolCall, AgentTrace, SessionEvent, TurnEndEvent, TurnRequestAt, ModelCallReport, ModelOperationEvent } from '@kinu.run/core';
@@ -193,6 +193,15 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   logActivity(lines: readonly AgentTurnActivity[]) { return this.open(() => this.answers.logActivity(lines)); }
 }
 
+/** A served tree's disposer, where it crossed as a stub; one served in this isolate (the tests' facets) has none. */
+function letGo(served: ContextTreeRemote): void {
+  if (Symbol.dispose in served) {
+    const dispose = served[Symbol.dispose];
+
+    if (typeof dispose === 'function') dispose.call(served);
+  }
+}
+
 /** One agent's own stores, in its isolate (D9). */
 export class AgentStoreBroker {
   constructor(private readonly calls: () => Promise<AgentFacetCalls>, private readonly snapshot: () => AgentSnapshot) {}
@@ -209,8 +218,18 @@ export class AgentStoreBroker {
   async archivePage(cursor: ArchiveSqlCursor | null, maxBytes: number) { return await (await this.calls()).archivePage(this.snapshot(), cursor, maxBytes); }
   async spend(steps: readonly StepSpendSource[]) { return await (await this.calls()).spend(this.snapshot(), steps); }
 
+  /** Each call opens the agent's served tree and lets it go once answered: one left open kept the agent's isolate, and
+   *  its workspace with it, from hibernating (#69's rule; a Files listing of /context, cmp-kinu-ux4, 2026-10-13). */
   contextTree(editor: ContextEditor): ContextTree {
-    return remoteContextTree(async () => await (await this.calls()).context(this.snapshot(), editor));
+    return remoteContextTree(async (call) => {
+      const served = await (await this.calls()).context(this.snapshot(), editor);
+
+      try {
+        return await call(served);
+      } finally {
+        letGo(served);
+      }
+    });
   }
 
   conversations(): ConversationRecall {

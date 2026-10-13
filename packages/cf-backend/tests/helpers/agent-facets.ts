@@ -63,6 +63,15 @@ class ScriptedModelFacet extends AgentFacet {
   }
 }
 
+/** Context trees each isolate served its workspace that the workspace has not let go. Across real isolates a served
+ *  tree crosses as a stub, which keeps both ends up until disposed (#69): here it carries a disposer, as one does. */
+const heldContextTrees = new Map<string, number>();
+
+/** How many trees of its context the isolate under `storageKey` has served and not had let go. */
+export function contextTreesHeld(storageKey: string): number {
+  return heldContextTrees.get(storageKey) ?? 0;
+}
+
 /** Isolates whose next answer row fails to write, as a failed commit does. */
 const undurableAnswers = new Set<string>();
 
@@ -791,7 +800,23 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
         return await calls.interruptChat(snapshot, cutoff);
       };
 
-      return { facet, calls: { ...calls, admit, interruptChat }, lost };
+      const context: AgentFacetCalls['context'] = async (snapshot, editor) => {
+        const served = await calls.context(snapshot, editor);
+        const held = (by: number) => { heldContextTrees.set(placement.storageKey, contextTreesHeld(placement.storageKey) + by); };
+
+        let open = true;
+
+        held(1);
+
+        return Object.assign(served, {
+          [Symbol.dispose]: () => {
+            if (open) held(-1);
+            open = false;
+          },
+        });
+      };
+
+      return { facet, calls: { ...calls, admit, interruptChat, context }, lost };
   }
 }
 
