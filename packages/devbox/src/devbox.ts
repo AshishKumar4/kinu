@@ -2,7 +2,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
 import { Files, SandboxFileError } from '@cloudflare/sandbox';
-import { Processes, isProcessLive, CONTAINER_TRUST_ENV, END_TREE } from "./processes";
+import { Processes, isProcessLive, nameBox, CONTAINER_TRUST_ENV, END_TREE } from "./processes";
 import { nativeStartClock } from './native-clock';
 import type { DevboxExecOptions, ExecResult, ReadOptions, FileResult, ListFilesOptions, FileMetadata, GatewayBindings } from './contracts';
 import { listFiles as readDirectory } from './file-listing';
@@ -101,9 +101,6 @@ interface UntimedOptions {
 function launchUnknown(execId: string): DevboxError {
   return new DevboxError('indeterminate', `untimed exec ${execId} was launched before, and its outcome cannot be read here; it was not launched again`);
 }
-
-/** `$1` as the kernel's, `/etc/hostname`'s and `/etc/hosts`' name for the box, which held a container id and a UUID. */
-const NAME_BOX = `hostname "$1" && printf '%s\\n' "$1" > /etc/hostname && { grep -qw "$1" /etc/hosts || printf '127.0.1.1 %s\\n' "$1" >> /etc/hosts; }`;
 
 /** `port-listeners STAMP [PORT...]`: `port pid stamp command` per socket holder; /proc, as the image has no `ss`. */
 const PORT_LISTENERS = `
@@ -2887,10 +2884,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     const name = this.hostname;
 
     // The kernel keeps a name for the boot alone, so each start names the box again (D83).
-    if (name === undefined) return;
-    const named = await (await this.#container().exec(['sh', '-c', NAME_BOX, 'name-box', name])).output();
-
-    if (named.exitCode !== 0) throw new DevboxError('process', `naming the box ${name}: ${new TextDecoder().decode(named.stderr).trim()}`);
+    if (name !== undefined) await nameBox(this.#container(), name);
   }
 
   getExposedPorts(hostname: string) {
