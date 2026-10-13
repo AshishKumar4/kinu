@@ -108,12 +108,24 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
     return { path: at, entries: listed };
   })), [rpc]);
 
+  /** A bare mount point's listing, answered for the directory it landed on: written as that listing adopts the
+   *  landed path, taken by the load the adoption starts, which then asks for nothing. */
+  const landed = useRef<{ readonly path: string; readonly entries: DirEntry[] } | null>(null);
+
   // Keyed on `path` so an old directory's listing never renders under the new breadcrumb.
   const loadListing = useCallback((): Promise<DirEntry[]> => settle(Effect.catchCause(Effect.gen(function* () {
+    const held = landed.current;
+
+    landed.current = null;
+
+    if (held?.path === path) return held.entries;
     const listed = yield* Effect.promise(async () => listDir(path));
 
     // A bare mount point lists the consented directory; adopt the returned path so child paths resolve.
-    if (listed.path !== path) setPath(listed.path);
+    if (listed.path !== path) {
+      landed.current = listed;
+      setPath(listed.path);
+    }
 
     return listed.entries;
   }), (failed) => Effect.gen(function* () {

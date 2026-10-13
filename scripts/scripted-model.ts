@@ -13,12 +13,12 @@
 import { createServer as createHttpServer, type ServerResponse } from 'node:http';
 import { setTimeout as sleep } from 'node:timers/promises';
 import * as v from 'valibot';
-import { SLATES_ROOT, workspacePath, WORKSPACE_ROOT } from '@kinu.run/core';
+import { SLATES_ROOT, workspacePath, WORKSPACE_LOGO_SYSTEM_PROMPT, WORKSPACE_ROOT } from '@kinu.run/core';
 import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-spec';
 
 import { apiJson } from './live-app-harness';
 import {
-  FALLBACK_ANSWER, SCRIPTED_MODELS_BODY, pacedStream, readScriptedRequest, scriptedBody,
+  FALLBACK_ANSWER, SCRIPTED_MODELS_BODY, pacedStream, rateLimitedAnswer, readScriptedRequest, scriptedBody,
   type ScriptedAnswer, type ScriptedCall, type ScriptedModel, type ScriptedPace, type ScriptedRequest,
 } from './scripted-protocol';
 
@@ -91,6 +91,15 @@ export async function startScriptedModel(script: ScriptedModel): Promise<Scripte
         // prose where a tool call was meant is read here first.
         process.stderr.write(`scripted-model: tools=${asked.available.join(',')} called=${asked.called.join(',')} users=${JSON.stringify(asked.userTexts)}\n`);
         answers.push(answer);
+
+        if (answer.rateLimited !== undefined) {
+          const limited = rateLimitedAnswer(answer.rateLimited.retryAfterSeconds);
+
+          response.writeHead(limited.status, limited.headers);
+          response.end(limited.body);
+
+          return;
+        }
 
         if (asked.streamed && answer.pace !== undefined) {
           response.setHeader('content-type', 'text/event-stream');
@@ -245,6 +254,61 @@ export function thinkingTurn(request: ScriptedRequest): ScriptedAnswer | null {
   if (!request.userTexts.some((text) => text.includes(THINKING_TURN_ASK))) return null;
 
   return { text: THINKING_TURN_ANSWER, pace: { firstTokenMs: 0, lead: '', leadMs: 0, reasoning: { deltas: 150, everyMs: 20 } } };
+}
+
+/* ── The provider-wait row ────────────────────────────────────────────── */
+
+/** A workspace made with this mission has every drawing of its logo refused as a rate limit: the logo is the
+ *  workspace's own call, made after the first turn and from Settings, so it waits on the provider in the background. */
+export const LOGO_WAITED_MISSION = 'Background wait probe: the logo waits on the provider.';
+
+/** The ask whose first call is refused as a rate limit, and answered once the provider's wait is over. */
+export const WAITED_TURN_ASK = 'Turn wait probe: answer once the provider lets you.';
+
+/** Long enough for the composer to count down several seconds, short enough to keep the row small. */
+export const TURN_WAIT_SECONDS = 4;
+
+/** Short, so the logo asks again soon after each refusal. */
+const LOGO_WAIT_SECONDS = 3;
+
+/** The row's side of the provider-wait script: the waited turn refused once, and the logo's refusals counted, so the
+ *  row waits on the server having refused, never on a clock. */
+export class ProviderWaitProbe {
+  turnRefused = false;
+
+  private logos = 0;
+
+  private readonly waiting: { readonly at: number; readonly reached: () => void }[] = [];
+
+  /** Settles once the logo has been refused `more` more times. */
+  logoRefused(more: number): Promise<void> {
+    const { promise, resolve } = Promise.withResolvers<void>();
+
+    this.waiting.push({ at: this.logos + more, reached: resolve });
+
+    return promise;
+  }
+
+  refuseLogo(): ScriptedAnswer {
+    this.logos += 1;
+
+    for (const wait of this.waiting) if (wait.at <= this.logos) wait.reached();
+
+    return { rateLimited: { retryAfterSeconds: LOGO_WAIT_SECONDS } };
+  }
+}
+
+export function providerWaitTurn(request: ScriptedRequest, probe: ProviderWaitProbe): ScriptedAnswer | null {
+  if (request.system.includes(WORKSPACE_LOGO_SYSTEM_PROMPT) && request.userTexts.some((text) => text.includes(LOGO_WAITED_MISSION))) {
+    return probe.refuseLogo();
+  }
+
+  if (!request.streamed || !(request.userTexts.at(-1) ?? '').includes(WAITED_TURN_ASK)) return null;
+
+  if (probe.turnRefused) return { text: 'Done.' };
+  probe.turnRefused = true;
+
+  return { rateLimited: { retryAfterSeconds: TURN_WAIT_SECONDS } };
 }
 
 /** A model call a row holds open: its turn is admitted and its model silent until the row lets it answer. */

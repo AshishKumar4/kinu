@@ -40,9 +40,8 @@ function parseSocketMessage(data: MessageEvent["data"]) {
 
 /**
  * One Durable Object broadcasts to every socket, so hosted actors' frames (`signal_card`,
- * `steer_status`) carry an actor stamp. Unstamped frames are the workspace's own. `provider_wait`'s
- * `actorId` is not ownership. The workspace pane admits no stamped frame; an agent pane admits
- * its own actor's; an unresolved pane admits none.
+ * `steer_status`) carry an actor stamp. Unstamped frames are the workspace's own. The workspace pane
+ * admits no stamped frame; an agent pane admits its own actor's; an unresolved pane admits none.
  */
 function admitsActorFrame(msg: SocketFrame, pane: PaneIdentity): boolean {
   if (msg.type !== "signal_card" && msg.type !== "steer_status") return true;

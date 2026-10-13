@@ -1687,6 +1687,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       contextBudget: scope.ledgers.context,
       fileLedger: scope.ledgers.files,
       escalations: scope.ledgers.escalations,
+      // Its `eval` runs here, over the workspace's crafted tools: scored here, and carried to its isolate's turn record.
+      craft: scope.ledgers.craft,
       agents: this.actorAgentsToolDeps(actor, reach.actor, mode, scope.profile),
       // Rows are `actor_id`-scoped, so a hire's `remember` cannot overwrite what the workspace observed under the same words.
       vectorStore: runtime.vectorStore,
@@ -3506,7 +3508,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // extension here listens, as reading the answer back crosses into main's isolate for the whole turn.
       turnEndExtensions: this.extensions.listens('onTurnEnd'),
       credited: settled.credited,
-      // Main's own isolate saw its tools run, and recorded them in the turn it handed over.
+      // Scored here as main's `eval` ran them; main's own isolate kept what each call's answer carried, in the turn it handed over.
       craftedToolsUsed: scoped.craftedToolsUsed ?? [],
       eventReplies: { answered: new Set(settled.answeredDeliveries), requestId: settled.messageId },
       // Each with the task its head was started on, as the journal recorded it at the branch's start.
@@ -6733,11 +6735,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     const listing = provider.listExposedPorts;
-    // A port a slate's application holds is called by the slate's title, never by its number.
-    const titles = executorId === 'workspace' ? this.slates.controller.portTitles() : Promise.resolve(new Map<number, string>());
+    // A port a slate's application holds is called by the slate's title, never by its number; an answer's page is the
+    // chat's until it is saved.
+    const held = executorId === 'workspace' ? this.slates.controller.heldPorts() : Promise.resolve(null);
 
-    return settle(Effect.matchCause(Effect.promise(async () => Promise.all([listing.call(provider), titles])), {
-      onSuccess: ([ports, titled]) => ({ ports: ports.map(({ port, name, url }) => ({ port, url, name: name ?? titled.get(port) })) }),
+    return settle(Effect.matchCause(Effect.promise(async () => Promise.all([listing.call(provider), held])), {
+      onSuccess: ([ports, slates]) => ({
+        ports: ports.filter(({ port }) => slates?.pages.has(port) !== true).map(({ port, name, url }) => ({ port, url, name: name ?? slates?.titles.get(port) })),
+      }),
       onFailure: (failed) => {
         const error = Cause.squash(failed);
 

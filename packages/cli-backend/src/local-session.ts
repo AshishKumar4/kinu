@@ -2760,6 +2760,7 @@ export class LocalAgentSession {
       contextBudget: this.actorSession.orchestrator.acc.context,
       fileLedger: this.actorSession.orchestrator.acc.files,
       escalations: this.actorSession.orchestrator.acc.escalations,
+      craft: this.actorSession.orchestrator.acc.craft,
       vectorStore: null,
       external: () => this.turnExternalTools,
       codemode: (surface) => {

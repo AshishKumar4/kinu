@@ -30,7 +30,6 @@ import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import { upsertCraftedTool } from '../craft/conflict';
 import { periodicCraftConsolidation } from '../craft/consolidation';
 import { updateCraftScores } from '../craft/ema';
-import { createCraftLedger, type CraftLedger } from '../craft/in-episode';
 import { recordRecoveryFinding, recoveryFindingText, type RecoveryFinding } from './recovery';
 import { effectAlreadyDone, recordEffectDone } from '../identity/effect-tombstones';
 import type { TurnPairReader } from '../identity/conversation-store';
@@ -144,9 +143,6 @@ export class EvolutionEngine {
   /** Every completed turn still owed evolution work, one row per turn.
      *  AgentOrchestrator owns the cadence; the engine owns the ledger. */
   readonly sessionWindow: CompletedTurnStore;
-  /** The crafted-tool ledger the step clock writes through, so both timescales
-     *  score crafted tools through one table. */
-  readonly craftLedger: CraftLedger;
   /** A head or node the workspace does not evolve records nothing, whatever the setting. */
   readonly evolves: boolean;
   private recoveryPending = true;
@@ -166,13 +162,6 @@ export class EvolutionEngine {
     if (actor === undefined) throw new KinuError('missing', 'the evolution actor has no membership record');
     // Only the workspace agent evolves (`MAIN_PROFILE`).
     this.evolves = actor.origin === 'system';
-    // Opened on first use: an engine with evolution off never scores a crafted tool, and an agent in its own
-    // isolate has no crafted-tool store (they are the workspace's).
-    let ledger: CraftLedger | undefined;
-    const craft = (): CraftLedger => (ledger ??= createCraftLedger({ craftStore: rt.craftStore, sql: rt.storage.sql }));
-
-    this.craftLedger = { names: () => craft().names(), observe: (names, quality) => craft().observe(names, quality) };
-
     // Created here so every backend gets the engine's ledgers without schema wiring.
     initLessonTables(rt.storage.execRaw);
     initTurnRatingTables(rt.storage.execRaw);

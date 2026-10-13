@@ -3,13 +3,13 @@ import { exists, readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 // Layer decomposition of the turn pipeline plus each layer's deterministic assertion slice: literal fixtures,
 // injected clock/RNG, no model calls or I/O, so every slice is byte-reproducible.
 
-import type { ModelMessage } from 'ai';
+import { jsonSchema, tool, type ModelMessage, type ToolExecutionOptions } from 'ai';
 import { wordsOnly } from '../execution/command-call';
 import { ExtensionHost } from '../extension';
 import { DynamicContextLedger, type DynamicContext } from '../prompting/volatile-context';
 import { TurnAccumulator } from '../orchestrator/turn-accumulator';
 import { TurnSteering } from '../orchestrator/turn-steering';
-import { CraftCycle } from '../orchestrator/craft-cycle';
+import { observingCrafts } from '../delegation/actor-tools';
 import type { CraftLedger } from '../craft/in-episode';
 import { TurnContextBudget } from '../context-budget';
 import { TurnFileLedger } from '../vfs/file-ledger';
@@ -24,6 +24,7 @@ import { workspaceSkillPath } from '../skills/discover';
 import type { PipelineSubjects } from './subjects';
 import * as v from 'valibot';
 import type { RunEventInput } from '../events/types';
+import type { JsonValue } from '../utils/json';
 
 /** Generic over the subjects record so a dependent package can define its own slice. */
 export interface Probe<S = PipelineSubjects> {
@@ -1541,38 +1542,38 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       {
         id: 'craft-fitness/turn-usage-is-the-call-site-scan',
         asserts: 'the turn reports as crafted-tool use exactly what the call-site scan saw: an MCP or native tool call contributes nothing, and a run with evolution off reports none',
-        observe: () => {
+        observe: async () => {
           const ledger: CraftLedger = { names: () => ['sum', 'fmt'], observe: () => [] };
 
-          const turn = (
+          // Only `eval` is observed (`buildActorTools` wraps it alone): any other tool's call contributes nothing.
+          const turn = async (
             calls: ReadonlyArray<{ toolName: string; code?: string }>,
             enabled = true,
-          ): string[] => {
+          ): Promise<string[]> => {
             const acc = new TurnAccumulator();
-            const cycle = new CraftCycle(ledger, acc);
-            cycle.reset(enabled);
 
-            for (const call of calls) {
-              cycle.onToolResult({
-                toolName: call.toolName,
-                args: call.code === undefined ? {} : { code: call.code },
-                result: '{"result":"ok"}',
-                success: true,
-              });
+            acc.craft.recording = enabled;
+
+            const program: ((input: { readonly code: string | undefined }, options: ToolExecutionOptions<unknown>) => PromiseLike<JsonValue>) | undefined = observingCrafts(
+              tool({ inputSchema: jsonSchema({ type: 'object' }), execute: async () => ({ result: 'ok' }) }), ledger, acc.craft,
+            ).execute;
+
+            for (const [index, call] of calls.entries()) {
+              if (call.toolName === 'eval') await program?.({ code: call.code }, { toolCallId: `call-${String(index)}`, messages: [], context: undefined });
             }
 
             return acc.craftedToolsUsed();
           };
 
           return [
-            ['crafted', turn([{ toolName: 'eval', code: 'await tools.sum(1); codemode.fmt(2)' }])],
-            ['mcp', turn([{ toolName: 'mcp__github__create_issue' }, { toolName: 'shell' }])],
-            ['mentioned-only', turn([{ toolName: 'eval', code: '// tools.sum(1)' }])],
-            ['across-blocks', turn([
+            ['crafted', await turn([{ toolName: 'eval', code: 'await tools.sum(1); codemode.fmt(2)' }])],
+            ['mcp', await turn([{ toolName: 'mcp__github__create_issue' }, { toolName: 'shell' }])],
+            ['mentioned-only', await turn([{ toolName: 'eval', code: '// tools.sum(1)' }])],
+            ['across-blocks', await turn([
               { toolName: 'eval', code: 'await tools.sum(1)' },
               { toolName: 'eval', code: 'await tools.sum(2); await tools.fmt(3)' },
             ])],
-            ['evolution-off', turn([{ toolName: 'eval', code: 'await tools.sum(1)' }], false)],
+            ['evolution-off', await turn([{ toolName: 'eval', code: 'await tools.sum(1)' }], false)],
           ];
         },
       },

@@ -5,9 +5,9 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { makeSql } from './helpers';
 import {
-  CRAFT_INVOCATION_QUALITY, CRAFT_NEUTRAL_PRIOR,
-  craftCreatesTool, craftFailureBlame, craftFailureMarker, craftInvocationError, craftInvocationSites,
-  createCraftLedger,
+  CRAFT_NEUTRAL_PRIOR,
+  craftFailureBlame, craftFailureMarker, craftInvocationError, craftInvocationSites,
+  createCraftLedger, observeCraftCall, type CraftLedger,
 } from '../src/craft/in-episode';
 import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
 
@@ -68,14 +68,19 @@ describe('craftInvocationSites — what the runtime saw called', () => {
   });
 });
 
-describe('craftCreatesTool — the block asked for a tool of its own', () => {
+describe('a call is credited with creating a tool only when it asked for one', () => {
+  /** The tools a call's program could have created: the store grew by `w` while it ran. */
+  const grown: CraftLedger = { names: () => ['w'], observe: () => [] };
+
+  const created = (code: string): readonly string[] => observeCraftCall(grown, { code, before: new Set(), result: '{}', failed: false })?.created ?? [];
+
   test('a real call counts; a mention in a stored body does not', () => {
-    expect(craftCreatesTool('await workspace.createTool("a","b","c")')).toBe(true);
-    expect(craftCreatesTool('return workspace.readFile("/a")')).toBe(false);
-    expect(craftCreatesTool('// workspace.createTool("a","b","c")')).toBe(false);
-    expect(craftCreatesTool('await workspace.createTool("w","d","async()=>workspace.createTool(1)")')).toBe(true);
-    expect(craftCreatesTool('const s = "workspace.createTool("')).toBe(false);
-    expect(craftCreatesTool('other.workspace.createTool(1)')).toBe(false);
+    expect(created('await workspace.createTool("a","b","c")')).toEqual(['w']);
+    expect(created('return workspace.readFile("/a")')).toEqual([]);
+    expect(created('// workspace.createTool("a","b","c")')).toEqual([]);
+    expect(created('await workspace.createTool("w","d","async()=>workspace.createTool(1)")')).toEqual(['w']);
+    expect(created('const s = "workspace.createTool("')).toEqual([]);
+    expect(created('other.workspace.createTool(1)')).toEqual([]);
   });
 });
 
@@ -100,6 +105,13 @@ describe('craftFailureBlame — attribution by stamp only', () => {
     expect(craftInvocationError('t', 'plain string').message).toBe('[crafted:t] plain string');
   });
 });
+
+/** A call of `name` that raised: its failure names it. What the score retired comes back. */
+function raised(ledger: CraftLedger, name: string): readonly string[] {
+  const failure = craftInvocationError(name, new Error('boom')).message;
+
+  return observeCraftCall(ledger, { code: `await tools.${name}(1)`, before: new Set([name]), result: failure, failed: true })?.dropped ?? [];
+}
 
 function ledgerFixture() {
   const db = new Database(':memory:');
@@ -156,7 +168,8 @@ describe('the craft ledger — where an in-episode observation lands', () => {
     expect(before.score).toBe(CRAFT_NEUTRAL_PRIOR);
     expect(before.uses).toBe(0);
 
-    ledger.observe(['summarize'], CRAFT_INVOCATION_QUALITY.returned);
+    // A clean call of a tool that existed before it ran.
+    observeCraftCall(ledger, { code: 'return await tools.summarize(1)', before: new Set(['summarize']), result: '{"result":1}', failed: false });
 
     const after = db.query<{ score: number; uses: number }, []>(
       `SELECT score, uses FROM crafted_tools WHERE name='summarize'`,
@@ -173,9 +186,7 @@ describe('the craft ledger — where an in-episode observation lands', () => {
 
     const dropped: string[] = [];
 
-    for (let i = 0; i < 4; i++) {
-      dropped.push(...ledger.observe(['broken'], CRAFT_INVOCATION_QUALITY.raised));
-    }
+    for (let i = 0; i < 4; i++) dropped.push(...raised(ledger, 'broken'));
 
     // Forgiving of a flake, decisive about a persistently broken artifact.
     expect(dropped).toEqual(['broken']);
@@ -184,9 +195,9 @@ describe('the craft ledger — where an in-episode observation lands', () => {
   test('one success is enough to keep a tool that merely stumbled', () => {
     const { ledger, db } = ledgerFixture();
     db.run(`INSERT INTO crafted_tools (name) VALUES ('flaky')`);
-    expect(ledger.observe(['flaky'], CRAFT_INVOCATION_QUALITY.raised)).toEqual([]);
-    expect(ledger.observe(['flaky'], CRAFT_INVOCATION_QUALITY.returned)).toEqual([]);
-    expect(ledger.observe(['flaky'], CRAFT_INVOCATION_QUALITY.raised)).toEqual([]);
+    expect(raised(ledger, 'flaky')).toEqual([]);
+    expect(observeCraftCall(ledger, { code: 'await tools.flaky(1)', before: new Set(['flaky']), result: 'ok', failed: false })?.dropped).toEqual([]);
+    expect(raised(ledger, 'flaky')).toEqual([]);
   });
 
   test('a creation carries its neutral prior in the same INSERT — nothing to seed', () => {
@@ -202,7 +213,7 @@ describe('the craft ledger — where an in-episode observation lands', () => {
 
   test('an observation of a tool outside the store is a no-op, not a resurrection', () => {
     const { ledger, db } = ledgerFixture();
-    expect(ledger.observe(['ghost'], CRAFT_INVOCATION_QUALITY.returned)).toEqual([]);
+    expect(ledger.observe(['ghost'], CRAFT_NEUTRAL_PRIOR)).toEqual([]);
     expect(db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM crafted_tools`).get()?.n).toBe(0);
   });
 });
