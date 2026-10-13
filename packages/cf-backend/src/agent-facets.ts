@@ -4,7 +4,7 @@ import type { UIMessage, UIMessageChunk } from 'ai';
 import * as v from 'valibot';
 import { decodeModelMessageValues, forkConversationRowSchema, relayedAnswer, remoteContextTree } from '@kinu.run/core';
 import type { ForkConversationPlan, ForkConversationSection, ForkConversationSource, ForkConversationTarget, ForkRows } from '@kinu.run/core';
-import type { AgentOwnInspection, ArchiveSqlCursor, CacheWarmArm, ContextEditor, ContextTree, ContextTreeRemote, StepSpendSource, ConversationRecall, PositionPageRequest, AgentSignal, AuthRequest, RelayedProvider, ProgrammaticTurn, ProviderEnv, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
+import type { AgentOwnInspection, ArchiveSqlCursor, CacheWarmArm, ContextEditor, ContextTree, StepSpendSource, ConversationRecall, PositionPageRequest, AgentSignal, AuthRequest, RelayedProvider, ProgrammaticTurn, ProviderEnv, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
 import type { AgentWorkspace, TurnBound, TurnCapabilityOf } from './agent-facet/agent-turn';
 import type { AdvisorRecoverySnapshot, AgentFigures, AgentReport, AgentTurnActivity, HandedOffTurn, ResolvedTurnProfile, SettledRun, AgentHeadDelta, AgentSnapshot, AgentToolCall, AgentTrace, SessionEvent, TurnEndEvent, TurnRequestAt, ModelCallReport, ModelOperationEvent } from '@kinu.run/core';
@@ -13,6 +13,7 @@ import { attempt, diagnostics, KinuError, relayedLine, settle, toKinuError } fro
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
 import { Effect } from 'effect';
 import type { AgentFacet, AgentFacetCalls, AgentFacetEnv } from './agent-facet/agent-facet';
+import { disposeRpc } from './agent-facet/workspace-rpc';
 import { ASSETS_HOSTS } from './assets-hosts';
 
 export const AGENT_BUNDLE_DIRECTORY = '/_agent';
@@ -193,15 +194,6 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   logActivity(lines: readonly AgentTurnActivity[]) { return this.open(() => this.answers.logActivity(lines)); }
 }
 
-/** A served tree's disposer, where it crossed as a stub; one served in this isolate (the tests' facets) has none. */
-function letGo(served: ContextTreeRemote): void {
-  if (Symbol.dispose in served) {
-    const dispose = served[Symbol.dispose];
-
-    if (typeof dispose === 'function') dispose.call(served);
-  }
-}
-
 /** One agent's own stores, in its isolate (D9). */
 export class AgentStoreBroker {
   constructor(private readonly calls: () => Promise<AgentFacetCalls>, private readonly snapshot: () => AgentSnapshot) {}
@@ -227,7 +219,7 @@ export class AgentStoreBroker {
       try {
         return await call(served);
       } finally {
-        letGo(served);
+        disposeRpc(served);
       }
     });
   }

@@ -582,7 +582,7 @@ type ContextFailure =
   | { readonly kind: 'refusal'; readonly verdict: FileRefusalError['verdict']; readonly message: string }
   | { readonly kind: 'kinu'; readonly code: KinuError['code']; readonly message: string };
 
-export type ContextAnswer<T> = { readonly value: T } | { readonly failure: ContextFailure };
+type ContextAnswer<T> = { readonly value: T } | { readonly failure: ContextFailure };
 
 export interface ContextTreeRemote {
   readFile(path: string): Promise<ContextAnswer<Uint8Array>>;
