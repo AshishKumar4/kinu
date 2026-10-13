@@ -156,8 +156,7 @@ describe('createHubDeviceTransport', () => {
 
   test('rpc outcomes re-seed the snapshot: success → connected, hub rejection → offline', async () => {
     let hubUp = true;
-    // The machine was away when the snapshot was taken.
-    const hub = fakeHub(() => oneMachine({ connected: false }));
+    const hub = fakeHub(() => oneMachine({ connected: hubUp }));
 
     const failingHub: DeviceHubClient = {
       deviceRuntimeStatus: async () => oneMachine({ connected: false }),
@@ -173,7 +172,7 @@ describe('createHubDeviceTransport', () => {
       cliCwd: () => null,
     });
 
-    await transport.refreshStatus();
+    // Before any refresh the fleet is unknown: the answer cannot say which machine it was, so the hub is asked.
     await transport.rpc('exec', ['echo hi']);
     expect(transport.status()).toEqual(oneMachine());
     expect(hub.rpcCalls[0]).toMatchObject([
@@ -189,23 +188,25 @@ describe('createHubDeviceTransport', () => {
   // 2026-10-13 review: a call's answer moved the account's "connected" and left every machine's own entry as it was,
   // so a machine that dropped still read as live by name.
   test('a call\'s answer moves the machine it named, and no other', async () => {
-    const fleet = { devices: [machine({ id: 'studio', name: 'studio' }), machine({ id: 'rig', name: 'rig' })] };
+    let fleet = { devices: [machine({ id: 'studio', name: 'studio' }), machine({ id: 'rig', name: 'rig' })] };
 
     const hub: DeviceHubClient = {
       deviceRuntimeStatus: async () => fleet,
-      deviceRpc: async (_caller, _method, _params, opts) => {
-        if (opts?.deviceId === 'rig') throw deviceFailure(DEVICE_ERRORS.disconnected, 'no device connected');
-
-        return JSON.stringify({ stdout: 'ok', stderr: '', exitCode: 0 });
-      },
+      deviceRpc: async () => { throw deviceFailure(DEVICE_ERRORS.disconnected, 'no device connected'); },
       acknowledgeDeviceRequest: async () => {},
     };
 
     const transport = createHubDeviceTransport({ hub: () => hub, caller, agentName: 'agent-1', actorId: 'actor-1', cliCwd: () => null });
+    const live = () => connectedDevices(transport.status().devices).map((device) => device.name);
 
     await transport.refreshStatus();
     await expect(transport.rpc('exec', ['echo hi'], { deviceId: 'rig' })).rejects.toThrow(NO_DEVICE_CONNECTED);
-    expect(connectedDevices(transport.status().devices).map((device) => device.name)).toEqual(['studio']);
+    expect(live()).toEqual(['studio']);
+
+    // Naming none, the machine the hub chose dropped: not every machine did, so the fleet is read again.
+    fleet = { devices: [machine({ id: 'studio', name: 'studio' }), machine({ id: 'rig', name: 'rig', connected: false })] };
+    await expect(transport.rpc('exec', ['echo hi'])).rejects.toThrow(NO_DEVICE_CONNECTED);
+    expect(live()).toEqual(['studio']);
   });
 
   test('a device call re-proves presence without discarding what the machine answered', async () => {
