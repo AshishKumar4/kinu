@@ -2798,4 +2798,30 @@ describe('LocalAgentHost — the driver lease', () => {
       await host.close();
     }
   });
+
+  // A Stop dismissed only work a hire held in its event log, and cut off only a hire whose turn ran: an idle hire's
+  // brief, owed as a delivery while another process drove, ran after the Stop once this process drove again.
+  test("a Stop of the root cancels what an idle hire was assigned and had not taken: it never runs", async () => {
+    const { state, project } = makeRoots();
+    const dbPath = await seedAgent(state, 'root');
+    const asked: string[] = [];
+
+    const { host } = makeHost(state, streamingModel('ok', (options) => { asked.push(JSON.stringify(options.prompt)); }), [
+      { name: 'root', cwd: project, workspaceId: 'proj' },
+    ], { driverKind: 'daemon' });
+
+    try {
+      const team = await host.team('root');
+      // Another process drives the workspace: the brief is committed and owed, and nothing here crosses it.
+      rivalHolds(dbPath, 'interactive');
+      const hired = await team.spawn({ name: 'courier', role: 'researcher', mission: 'STOPPED_TASK: push the release.', mode: 'build' });
+      (await host.acquire('root')).interrupt();
+      await retireRivals();
+      await host.tick(`root/${hired.name}`);
+
+      expect(asked.filter((prompt) => prompt.includes('STOPPED_TASK'))).toEqual([]);
+    } finally {
+      await host.close();
+    }
+  });
 });
