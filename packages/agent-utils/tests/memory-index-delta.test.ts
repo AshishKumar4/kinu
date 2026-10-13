@@ -1,9 +1,10 @@
 import { describe, test, expect } from "bun:test";
 import { MemoryStore } from "../src/memory/store";
-import { createTestDb, createMemoryVfs } from "./helpers";
+import { createTestSql } from "@kinu.run/test-utils";
+import { createMemoryVfs } from "./helpers";
 
 function createStore() {
-	const { sql, transactionSync } = createTestDb()
+	const { sql, transactionSync } = createTestSql()
 	const fs = createMemoryVfs();
 	const store = new MemoryStore(fs, sql, transactionSync);
 	store.ensureSchema();
@@ -68,7 +69,7 @@ describe("MemoryStore.indexFile delta", () => {
 
 describe("canonical index publication", () => {
   test.each(['replace', 'delete'])('a failed %s publication rolls back lexical rows, stamp and projection obligations together', async (operation) => {
-    const { sql, transactionSync } = createTestDb();
+    const { sql, transactionSync } = createTestSql();
     const fs = createMemoryVfs();
     const initial = new MemoryStore(fs, sql, transactionSync);
     initial.ensureSchema();
