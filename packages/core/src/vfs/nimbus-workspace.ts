@@ -329,7 +329,8 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
     provisionAgentHome(root, MAIN_AGENT, main);
     confineAgentTmp(workspace.vfs, MAIN_AGENT, main);
     restoreAgentTmpConfinements(opts.sql, root, workspace.vfs);
-    workspace.vfs.events.on((batch) => {
+    // Every change the namespace sees, on any mount, whoever made it.
+    workspace.filesystem.vfs.as(CRED_KERNEL).watchChanges('/', (batch) => {
       if (fileListeners.size === 0) return;
       // A rename names where the file left as well as where it went.
       const paths = batch.flatMap((event) => (event.oldPath === undefined ? [event.path] : [event.path, event.oldPath]));

@@ -94,6 +94,7 @@ export async function registerNpm(workspace: NimbusWorkspace): Promise<void> {
   })).exitCode;
 
   registry.register('npm', npm.createNpmCommand(registry, shellExecute, workspace.kernel));
-  registry.register('npx', npm.createNpxCommand(registry, shellExecute));
+  // npx's cache install fetches through the workspace's network, its egress, as npm's does.
+  registry.register('npx', npm.createNpxCommand(registry, shellExecute, workspace.kernel));
 }
 

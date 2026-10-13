@@ -8,9 +8,10 @@ import { Cause, Effect, Result } from "effect";
 import { routeAgentRequest } from "agents";
 import { tracing, WorkerEntrypoint } from 'cloudflare:workers';
 import { adoptTracing } from '@nimbus-sh/platform/tracing.js';
+import type { EgressStreams, EgressTlsTarget } from '@nimbus-sh/core/_shared/workspace-network.js';
 import {
   containerEventResolver, GitHubEgressRecorder, handleContainerEgress, handleContainerEvent, handleEgressConnect, handleEgressTls,
-  parseEgressParams, workspaceGrants, type EgressTlsStreams, type EgressTlsTarget, type KinuEgressParams,
+  parseEgressParams, workspaceGrants, type KinuEgressParams,
 } from './egress/outbound';
 import { ORCHESTRATOR_AGENT_SLUG } from "@kinu.run/core";
 import { diagnostics, settle, toKinuError, type ErrorCode, type KinuError, settleLogged } from "@kinu.run/core/obs";
@@ -82,7 +83,7 @@ export class KinuEgress extends WorkerEntrypoint<Env, KinuEgressParams> {
   }
 
   /** A workspace program's TLS socket, made here (`handleEgressTls`); Nimbus calls it for each one. */
-  connectTls(target: EgressTlsTarget): Promise<EgressTlsStreams> {
+  connectTls(target: EgressTlsTarget): Promise<EgressStreams> {
     return handleEgressTls(target, parseEgressParams(this.ctx));
   }
 }
@@ -93,7 +94,7 @@ export class KinuEvents extends WorkerEntrypoint<Env, KinuEgressParams> {
   }
 }
 
-export { AgentWorkspaceRPC } from "./agent-facets";
+export { AgentIsolateTail, AgentWorkspaceRPC } from "./agent-facets";
 
 export { UserDO } from "./user/user-do";
 

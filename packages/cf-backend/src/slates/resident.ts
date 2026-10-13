@@ -469,101 +469,76 @@ interface SlateBuild {
   readonly fs: EsbuildReadFs;
 }
 
-/** The directory holding `path`; `/` holds itself. */
-function parentOf(path: string): string {
-  const at = path.lastIndexOf('/');
-
-  return at <= 0 ? '/' : path.slice(0, at);
-}
-
-/** What a compile looked at: each path, missing or found, and whether every write that could change it is one of them. */
-interface Looked {
-  readonly paths: Map<string, boolean>;
-  /** A link on the way, or a lookup the namespace refused: a write elsewhere could change how it resolves. */
-  unobserved: boolean;
-  /** Paths asked about whose answer has not come: one left when the compile ends threw (a loop, an absent mount). */
-  readonly asking: Set<string>;
-}
-
 /**
- * `fs`, noting in `looked` every path a compile looks at: true where it asked whether the path exists and it did not.
- * The resolver's own reads count as the bundled files' do, so a package.json whose `exports` moves is a change. A path
- * found through links is noted where they lead too, and a missing one where a write of it would land, by the
- * namespace's own lookup (`namespace` is the same view as `fs`). The links on the way are not reported by that lookup,
- * so a path resolved through any, or one the lookup refuses, leaves the compile `unobserved`.
+ * `fs`, noting in `looked` every path a compile looks at, as it spelled it, before it asks: a lookup that throws is
+ * still one this compile made. The resolver's own reads count as the bundled files' do, so a package.json whose
+ * `exports` moves is a change.
  */
-function looking(fs: NamespaceFs, namespace: CompositeVFS, looked: Looked): EsbuildReadFs {
-  const absolute = (path: string) => (path.startsWith('/') ? path : `/${path}`);
-
-  const mark = (path: string, missing: boolean) => {
-    if (looked.paths.get(path) !== false) looked.paths.set(path, missing);
-  };
-
-  // A missing path, and where a write of it would land with every link followed, and every directory above that not
-  // written yet: a lexical path is watched whole; one through links, or refused, is not.
-  const dangling = async (path: string) => {
-    const [landed] = await Promise.allSettled([(async () => namespace.mutationRoute(absolute(path), { follow: true, creating: true }))()]);
-
-    if (landed.status === 'rejected' || landed.value.path !== absolute(path)) looked.unobserved = true;
-
-    if (landed.status === 'rejected') return;
-
-    for (let at = landed.value.path; at !== '/' && !fs.exists(at); at = parentOf(at)) mark(at, true);
-  };
-
-  const note = (path: string, missing: boolean) => {
-    mark(absolute(path), missing);
-
-    if (missing) return;
-
-    const target = fs.resolveSymlink(path);
-
-    if (target === null || absolute(target) === absolute(path)) return;
-    looked.unobserved = true;
-    mark(absolute(target), false);
-  };
+function looking(fs: NamespaceFs, looked: Set<string>): EsbuildReadFs {
+  const seen = (path: string) => { looked.add(path.startsWith('/') ? path : `/${path}`); };
 
   return {
     exists: async (path) => {
-      // Marked before it is asked: a lookup that throws (a loop, an absent mount) is still what this compile looked at.
-      mark(absolute(path), true);
-      looked.asking.add(path);
-      const found = fs.exists(path);
+      seen(path);
 
-      looked.asking.delete(path);
-      note(path, !found);
-
-      if (!found) await dangling(path);
-
-      return found;
+      return fs.exists(path);
     },
     isDirectory: (path) => {
-      note(path, false);
+      seen(path);
 
       return fs.isDirectory(path);
     },
     readFile: (path) => {
-      const bytes = fs.readFile(path);
+      seen(path);
 
-      note(path, false);
-
-      return bytes;
+      return fs.readFile(path);
     },
     readFileString: (path) => {
-      const text = fs.readFileString(path);
+      seen(path);
 
-      note(path, false);
-
-      return text;
+      return fs.readFileString(path);
     },
   };
 }
 
-/** What a compile looked at outside the slate's own tree and the runtime this build generated. */
-function inputsOf(looked: ReadonlyMap<string, boolean>, root: string): SlateBuildRead[] {
-  return [...looked].filter(([path]) => path !== root && !path.startsWith(`${root}/`) && !path.startsWith(`${RUNTIME_DIR}/`))
+/** What a compile looked at, traced: the paths a write to which can change it, and whether one is told by no write. */
+interface Traced {
+  readonly inputs: SlateBuildRead[];
+  /** A lookup stopped at a mount that is not there: its return writes nothing a watch is told of. */
+  readonly unwatched: boolean;
+}
+
+/**
+ * Each path a compile looked at, traced by the namespace's own lookup (`namespace` is the view `fs` reads through,
+ * Nimbus ask 41): every link on the way, and the file it found or the point it was refused at, missing there. Those
+ * outside the slate's own tree and the runtime this build generated are what can change the compile.
+ */
+async function traced(namespace: CompositeVFS, looked: ReadonlySet<string>, root: string): Promise<Traced> {
+  const paths = new Map<string, boolean>();
+  let unwatched = false;
+
+  const mark = (path: string, missing: boolean) => {
+    if (paths.get(path) !== false) paths.set(path, missing);
+  };
+
+  for (const path of looked) {
+    const report = await namespace.route(path, { follow: true, report: true });
+
+    for (const link of report.links) mark(link, false);
+
+    if ('refusal' in report) {
+      mark(report.refusal.at, true);
+      unwatched ||= report.refusal.code === 'ENXIO';
+    } else {
+      mark(report.point === '/' ? report.path : `${report.point}${report.path === '/' ? '' : report.path}`, false);
+    }
+  }
+
+  const inputs = [...paths].filter(([path]) => path !== root && !path.startsWith(`${root}/`) && !path.startsWith(`${RUNTIME_DIR}/`))
     .sort(([a], [b]) => (a < b ? -1 : 1))
     .map(([path, missing]) => ({ path, missing }));
+
+  return { inputs, unwatched };
 }
 
 const COMPILED_JSX = JSON.stringify({ compilerOptions: { jsx: 'react-jsx', jsxImportSource: 'react' } });
@@ -649,7 +624,11 @@ export class ResidentSlateProcesses {
    * words, so its caller can keep serving the last image that did.
    */
   build(input: SlateBuildInput): Promise<SlateImage | SlateBuildFailure> {
-    const looked: Looked = { paths: new Map(), unobserved: false, asking: new Set() };
+    const looked = new Set<string>();
+
+    const trace = Effect.flatMap(Effect.promise(async () => this.deps.session()), (session) => attempt(
+      { doing: 'tracing what the slate build looked at', otherwise: 'io' }, async () => traced(session.filesystem.vfs.as(input.cred), looked, input.root),
+    ));
 
     return settle(Effect.catchIf(Effect.gen({ self: this }, function* () {
       const session = yield* Effect.promise(async () => this.deps.session());
@@ -690,7 +669,7 @@ export class ResidentSlateProcesses {
         }
       };
 
-      const build: SlateBuild = { bundler, root: input.root, entries: entriesDir, provision, fs: looking(session.filesystem.namespaceFs(input.cred), session.filesystem.vfs.as(input.cred), looked) };
+      const build: SlateBuild = { bundler, root: input.root, entries: entriesDir, provision, fs: looking(session.filesystem.namespaceFs(input.cred), looked) };
       const application = yield* serverModule(build, input.project);
       const { assets, shell } = yield* browserSurface(build, input.owner, input.project, (entry) => input.read(entry) ?? '');
 
@@ -725,15 +704,16 @@ export class ResidentSlateProcesses {
 
       for (const [name, contents] of Object.entries(modules)) digests[name] = yield* held(contents);
       const client = assets.find((asset) => asset.path === '/__kinu/client.js');
+      const { inputs } = yield* trace;
 
       return {
         modules: digests,
         ...(shell !== undefined && client !== undefined && { client: yield* held(client.contents), shell: yield* held(shell) }),
-        inputs: inputsOf(looked.paths, input.root),
+        inputs,
       };
-    }), (error): error is KinuError => error instanceof KinuError && error.code === 'bad_input', (error) => Effect.succeed({
-      failed: renderCauseChain(error), inputs: inputsOf(looked.paths, input.root), ...((looked.unobserved || looked.asking.size > 0) && { unobserved: true as const }),
-    })));
+    }), (error): error is KinuError => error instanceof KinuError && error.code === 'bad_input', (error) => Effect.map(trace, ({ inputs, unwatched }) => ({
+      failed: renderCauseChain(error), inputs, ...(unwatched && { unobserved: true as const }),
+    }))));
   }
 
   /** Runs an image: the durable application on its port, or a caller's private process. */

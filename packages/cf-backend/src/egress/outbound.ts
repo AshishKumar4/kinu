@@ -22,6 +22,7 @@ import {
   type EgressRequestFacts,
   type ScrubReplacement,
 } from '@kinu.run/core';
+import type { EgressStreams, EgressTlsTarget } from '@nimbus-sh/core/_shared/workspace-network.js';
 import { carryKeyed, keyedHost } from './keyed-socket';
 import type { OrchestratorAgent } from '../orchestrator';
 import type { ObjectNamespace } from '@kinu.run/core';
@@ -260,7 +261,7 @@ export function handleEgressConnect(socket: Socket, params: KinuEgressParams | u
  * program's servername where it named one other than the host, and its plaintext handed back. A refused host, or a
  * session that cannot be made, rejects with why: the program's socket fails with it.
  */
-export function handleEgressTls(target: EgressTlsTarget, params: KinuEgressParams | undefined): Promise<EgressTlsStreams> {
+export function handleEgressTls(target: EgressTlsTarget, params: KinuEgressParams | undefined): Promise<EgressStreams> {
   return settle(Effect.gen(function* () {
     const judged = params === undefined ? { refusal: { error: 'egress is not configured for this workspace yet' } } : egressHost(target.hostname);
 
@@ -281,20 +282,6 @@ export function handleEgressTls(target: EgressTlsTarget, params: KinuEgressParam
 
     return { readable: secure.readable, writable: secure.writable };
   }));
-}
-
-/** Where a program's TLS socket goes (Nimbus's `WorkspaceEgressTls.connectTls` target). */
-export interface EgressTlsTarget {
-  readonly hostname: string;
-  readonly port: number;
-  /** The name to present and check the server by, when the program named one other than the host. */
-  readonly servername?: string;
-}
-
-/** The plaintext of a TLS session the egress made. */
-export interface EgressTlsStreams {
-  readonly readable: ReadableStream<Uint8Array>;
-  readonly writable: WritableStream<Uint8Array>;
 }
 
 /** One classifier refuses at three seams (container hop, `web.fetch`, codemode loopback); one event shape keeps them comparable. */
