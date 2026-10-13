@@ -287,11 +287,9 @@ export interface CacheWarmArm {
   readonly lastRequest: { readonly body: unknown; readonly sentAt: number; readonly usage: Usage } | undefined;
 }
 
-/** A conversation's warming lane as its session tells it, wherever the lane runs: the session knows both instants. */
+/** A conversation's warming lane as its session tells it at a turn's end, wherever the lane runs. A turn's request is
+ *  noted on it by the turn's preparation (`TurnOpeningAsk`). */
 export interface CacheWarming {
-  /** A real provider request is starting: answers until when the prompt cache stayed warm for the one sent at
-   *  `lastRequestAt` (null when nothing kept it, or none was sent), read before this request voids the lane. */
-  noteRequest(lastRequestAt: number | null): Promise<number | null>;
   /** Consider a warm for the request this turn ended on; null when the policy declined. */
   armAfterTurn(input: CacheWarmArm): Promise<number | null>;
 }

@@ -31,7 +31,6 @@ const unusedPort: AgentWorkspacePort = {
   birthContext: unused,
   steerSkills: unused,
   openWork: unused,
-  noteModelRequest: unused,
   armCacheWarm: unused,
   advise: unused,
   enqueueTurn: unused,

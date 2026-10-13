@@ -431,6 +431,9 @@ test('a production turn runs no more statements than it was measured at, and ask
  * 16 at the open on e8826816c: the profile the isolate assembled on rides its first step's pace (`host.bindProfile`,
  * gone), and its report of the input it took rides its admission's answer (`host.owes`, one of two gone).
  * 15 at the close on fba94afab: the transcript window rides the turn's end (`facet.history`, gone).
+ * The hop cuts (lane/hops, 6efda8696 and 92374a6cd): the request's warming rides the preparation (`host.noteModelRequest`,
+ * gone at the open), and a report whose wake the workspace already holds sends none of its own (`host.owes` at the open
+ * and the close, its standing riding the preparation or the next report).
  */
 /** The budget per place, above what a turn measures (the history above): no crossing runs once per step beyond a step's
  *  own, nor once per earlier step. */

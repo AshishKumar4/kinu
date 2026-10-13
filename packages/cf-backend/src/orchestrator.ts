@@ -957,6 +957,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       frozen: async (reference, key) => await (await this.agentCalls(reference.actorId)).frozen(this.agentSnapshot(reference.actorId), { turnId: key.turnId, runId: key.runId }),
       pricing: (spec) => this.modelCatalog.pricing(spec),
       accounts: () => this.config.getProviderAccounts(),
+      noteRequest: (actorId, lastRequestAt) => this.warmingOf(actorId).noteRequest(lastRequestAt),
       credentialsRevision: () => this.openedCredentialsRevision(),
       // The workspace agent's missions are the workspace's: owner-declared here, and charged here as its turns spend.
       missions: (actorId) => (actorPolicy(this.agentOf(actorId)).workspaceAgent ? this.budget : null),
@@ -1022,6 +1023,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       prepareChat: async (request) => {
         this.admitWork();
 
+        // What its opening moved of its standing rides the preparation, taken as a told report is.
+        if (request.owes !== undefined) await this.agentOwes(actorId, request.owes);
+
         if (request.turnId === null) return await this.agentTurns.prepareChat(actorId, request);
 
         // As a run's: an opening asked while a Stop is owed was queued before it.
@@ -1085,7 +1089,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         alreadyActive: new Set(alreadyActive),
       }),
       // Only main's conversation is kept warm: no other agent has its wake chain.
-      noteModelRequest: async (lastRequestAt) => this.warmingOf(actorId).noteRequest(lastRequestAt),
       armCacheWarm: async (input) => this.warmingOf(actorId).armAfterTurn(input),
       // Its tasks tool and its jobs run here, over its own rows, main's as any agent's.
       openWork: async () => {
