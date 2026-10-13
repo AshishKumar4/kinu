@@ -85,9 +85,13 @@ describe('reportLiveModelSpend — a line is the suite\'s own spend, not a runni
   test('the returned line is the shape the aggregate parses', () => {
     recordLiveModelSpend(undefined);
     const total = reportLiveModelSpend('Suite A');
-    // `scripts/eval-spend.ts` parses exactly these four fields.
-    expect(Object.keys(total).sort())
-      .toEqual(['calls', 'callsWithoutUsage', 'episodesUnmeasured', 'episodesWithoutModel', 'usage']);
+    expect(total).toMatchObject({
+      calls: 1,
+      callsWithoutUsage: 1,
+      episodesUnmeasured: 0,
+      episodesWithoutModel: 0,
+    });
+    expect(total.usage).toEqual({});
   });
 });
 
