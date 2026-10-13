@@ -406,15 +406,6 @@
     "expires_at INTEGER NOT NULL",
     "used_at INTEGER"
   ],
-  "codex_device_flow@packages/core/src/state/user-schema.ts": [
-    "id INTEGER PRIMARY KEY CHECK (id = 1)",
-    "device_auth_id TEXT NOT NULL",
-    "user_code TEXT NOT NULL",
-    "poll_interval INTEGER NOT NULL",
-    "portal_url TEXT NOT NULL",
-    "generation INTEGER NOT NULL DEFAULT 1",
-    "settled_at INTEGER"
-  ],
   "compaction_archive@packages/core/src/state/workspace-schema.ts": [
     "actor_id TEXT NOT NULL",
     "session_key TEXT NOT NULL",

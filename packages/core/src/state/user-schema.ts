@@ -154,20 +154,6 @@ export function initUserTables(sql: SqlExec): void {
     )
   `);
 
-  // Settled, never deleted, so `generation` keeps rising. A poll commits only if the row still has
-  // its generation and is open, so superseded or post-disconnect replies cannot write tokens.
-  sql.exec(`
-    CREATE TABLE IF NOT EXISTS codex_device_flow (
-      id              INTEGER PRIMARY KEY CHECK (id = 1),
-      device_auth_id  TEXT NOT NULL,
-      user_code       TEXT NOT NULL,
-      poll_interval   INTEGER NOT NULL,
-      portal_url      TEXT NOT NULL,
-      generation      INTEGER NOT NULL DEFAULT 1,
-      settled_at      INTEGER
-    )
-  `);
-
   // OAuth tokens live in separate DO storage keys. `headers` is sealed at rest like a credential.
   // Presets live in `user_mcp_server_presets`: new columns never reach pre-existing accounts.
   sql.exec(`

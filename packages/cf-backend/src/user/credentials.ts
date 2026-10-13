@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 import {
-  type Credential, CLAUDE_CRED_KEY, CODEX_CRED_KEY, MAIN_ACCOUNT, accountCredentialKey, baseCredentialKey, claudeCodeFrom, createClaudeOAuthClient, createCodexOAuthClient, startClaudeSignIn, subscriptionIssuer, rotateLogin, usableLogin, type LoginRenewal, type SubscriptionIssuer, decodeCodexAccountId, tokensToCredential, type DeviceCodeStart, type JsonValue, type OAuthCredential, type EgressRequestFacts, type EgressSecretBinding, type ApprovalGrant, grantedEgressBindings, parseJsonValue, ownerCaller, type UserCaller, type ResolvedCaller, credentialToHeaders, refusedLogin, type AuthRequest, type AuthResolution, validateCredential, validateCredentialKey, createCredentialCipher, type CredentialCipher, listEgressSecrets, putEgressSecret, resolveEgressInjection, revokeEgressSecret, type EgressInjectionResult, type EgressSecretSummary, type EgressVaultDeps, type PutEgressSecretInput, revocationEndpointFor, revokeOAuthGrant, type DisconnectOutcome, isModelInferenceCredentialKey, CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, accountIdFromCloudflareCredential, cloudflareAIGatewayId, cloudflareAccountsFromCredential, cloudflareWorkersAIBaseURL, fetchCloudflareAIGateways, isCloudflareAIGatewayId, isCloudflareCredentialExpiring, isCloudflareCredentialUsable, refreshCloudflareCredential, withCloudflareAccount, type CloudflareAccount, type CloudflareAIGatewaySummary,
+  type Credential, CLAUDE_CRED_KEY, CODEX_CRED_KEY, baseCredentialKey, claudeCodeFrom, createClaudeOAuthClient, startClaudeSignIn, subscriptionIssuer, rotateLogin, usableLogin, type LoginRenewal, type SubscriptionIssuer, decodeCodexAccountId, type JsonValue, type OAuthCredential, type EgressRequestFacts, type EgressSecretBinding, type ApprovalGrant, grantedEgressBindings, parseJsonValue, ownerCaller, type UserCaller, type ResolvedCaller, credentialToHeaders, refusedLogin, type AuthRequest, type AuthResolution, validateCredential, validateCredentialKey, createCredentialCipher, type CredentialCipher, listEgressSecrets, putEgressSecret, resolveEgressInjection, revokeEgressSecret, type EgressInjectionResult, type EgressSecretSummary, type EgressVaultDeps, type PutEgressSecretInput, revocationEndpointFor, revokeOAuthGrant, type DisconnectOutcome, isModelInferenceCredentialKey, CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, accountIdFromCloudflareCredential, cloudflareAIGatewayId, cloudflareAccountsFromCredential, cloudflareWorkersAIBaseURL, fetchCloudflareAIGateways, isCloudflareAIGatewayId, isCloudflareCredentialExpiring, isCloudflareCredentialUsable, refreshCloudflareCredential, withCloudflareAccount, type CloudflareAccount, type CloudflareAIGatewaySummary,
 } from '@kinu.run/core';
 import { attempt, authoredRefusal, diagnostics, KinuError, renderThrownChain, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -44,11 +44,6 @@ const REFRESH_DOING: ReadonlyMap<string, string> = new Map([
 
 const CLAUDE_SIGN_IN_KEY = 'claude.sign-in';
 
-/** The account the open Codex device-code attempt signs in, named with its generation; none is the main account. */
-const CODEX_FLOW_ACCOUNT_KEY = 'codex.device-flow-account';
-
-const CodexFlowAccountSchema = v.object({ generation: v.number(), account: v.string() });
-
 /** `revision` at the start: a write or disconnect since spends the sign-in. */
 const ClaudeSignInSchema = v.object({ url: v.string(), state: v.string(), verifier: v.string(), revision: v.number() });
 
@@ -60,7 +55,6 @@ export interface CodexStatus {
   connected: boolean;
   accountId: string | null;
   expiresAt: number | null;
-  startedFlow: { userCode: string; portalURL: string; pollIntervalSec: number } | null;
 }
 
 export interface ConnectedProvider {
@@ -672,101 +666,6 @@ export class UserCredentials {
     );
   }
 
-  /** `account` names the login this attempt seals, `codex.oauth@<account>`; the main one is the bare key. */
-  async startCodexDeviceFlow(caller: UserCaller, account: string = MAIN_ACCOUNT): Promise<DeviceCodeStart> {
-    await this.host.requireTier(caller, 'subscription_auth');
-    // Refuses a name that is not an account's before OpenAI is asked for a code.
-    accountCredentialKey(CODEX_CRED_KEY, account);
-    const client = createCodexOAuthClient();
-    const result = await client.startDeviceFlow();
-
-    // The generation rises in the write itself so two racing starts cannot get the same number.
-    const [opened] = this.host.sqlx<{ generation: number }>(
-      `INSERT INTO codex_device_flow
-         (id, device_auth_id, user_code, poll_interval, portal_url, generation, settled_at)
-       VALUES (1, ?, ?, ?, ?, 1, NULL)
-       ON CONFLICT(id) DO UPDATE SET
-         device_auth_id = excluded.device_auth_id,
-         user_code      = excluded.user_code,
-         poll_interval  = excluded.poll_interval,
-         portal_url     = excluded.portal_url,
-         generation     = generation + 1,
-         settled_at     = NULL
-       RETURNING generation`,
-      result.deviceAuthId, result.userCode, result.pollIntervalSec, result.portalURL,
-    );
-
-    if (opened !== undefined) this.host.ctx.storage.kv.put(CODEX_FLOW_ACCOUNT_KEY, { generation: opened.generation, account });
-
-    return result;
-  }
-
-  async pollCodexDeviceFlow(caller: UserCaller): Promise<{ connected: boolean; accountId?: string; error?: string }> {
-    await this.host.requireTier(caller, 'subscription_auth');
-
-    const row = this.host.sqlx<{ device_auth_id: string; user_code: string; generation: number }>(
-      `SELECT device_auth_id, user_code, generation FROM codex_device_flow
-       WHERE id = 1 AND settled_at IS NULL`,
-    )[0];
-
-    if (!row) return { connected: false, error: 'No device flow in progress: call startCodexDeviceFlow first.' };
-    // Both fences must be read before the provider wait.
-    const generation = row.generation;
-    const named = v.safeParse(CodexFlowAccountSchema, this.host.ctx.storage.kv.get(CODEX_FLOW_ACCOUNT_KEY));
-    const key = accountCredentialKey(CODEX_CRED_KEY, named.success && named.output.generation === generation ? named.output.account : MAIN_ACCOUNT);
-    const revision = this.credentialRevision(key);
-
-    const client = createCodexOAuthClient();
-
-    try {
-      const poll = await client.pollDeviceFlow(row.device_auth_id, row.user_code);
-
-      if (poll.status === 'pending') return { connected: false };
-
-      if (poll.status === 'expired' || poll.status === 'denied') return { connected: false, error: poll.message };
-      const accountId = decodeCodexAccountId(poll.tokens.accessToken);
-      const cred = tokensToCredential(poll.tokens, accountId ? { accountId } : undefined);
-      const sealed = await this.sealCredential(key, cred);
-
-      if (!this.commitCodexDeviceFlow({ key, generation, revision, kind: cred.kind, sealed })) {
-        diagnostics.event('credential.codex_device_flow_superseded', { outcome: 'denied' });
-
-        return {
-          connected: false,
-          error: 'That Codex sign-in was superseded before it completed: start the connection again.',
-        };
-      }
-
-      return { connected: true, accountId: accountId ?? undefined };
-    } catch (cause) {
-      const error = authoredRefusal({ doing: 'checking the Codex sign-in', cause });
-      diagnostics.failure('user.codex_poll_failed', error);
-
-      return { connected: false, error: renderThrownChain({ cause: error }) };
-    }
-  }
-
-  /** Commits credential and flow settlement together; synchronous, with both fences checked
-   * before either write, so a poll lands whole against its attempt or not at all. */
-  private commitCodexDeviceFlow(input: {
-    key: string; generation: number; revision: number; kind: Credential['kind']; sealed: string;
-  }): boolean {
-    const open = this.host.sqlx(
-      `SELECT 1 AS x FROM codex_device_flow
-       WHERE id = 1 AND generation = ? AND settled_at IS NULL`,
-      input.generation,
-    ).length > 0;
-
-    if (!open) return false;
-
-    if (!this.commitCredential({
-      key: input.key, kind: input.kind, sealed: input.sealed, expectRevision: input.revision,
-    })) return false;
-    this.host.sqlx(`UPDATE codex_device_flow SET settled_at = ? WHERE id = 1`, Date.now());
-
-    return true;
-  }
-
   /** One Claude sign-in at a time; its PKCE verifier stays in this object, as the CLI's stays on the machine. */
   async startClaudeSignIn(caller: UserCaller): Promise<{ readonly url: string }> {
     await this.host.requireTier(caller, 'subscription_auth');
@@ -824,43 +723,17 @@ export class UserCredentials {
 
   async disconnectCodex(caller: UserCaller, revoke: boolean): Promise<DisconnectOutcome> {
     await this.host.requireTier(caller, 'subscription_auth');
-    const outcome = await this.disconnectCredential(CODEX_CRED_KEY, revoke);
-    // Settled, not deleted: the generation must keep rising, and a poll already waiting on OpenAI
-    // must find this attempt closed rather than find no row to fence against.
-    this.host.sqlx(`UPDATE codex_device_flow SET settled_at = ? WHERE id = 1 AND settled_at IS NULL`, Date.now());
 
-    return outcome;
+    return this.disconnectCredential(CODEX_CRED_KEY, revoke);
   }
 
   async getCodexStatus(caller: UserCaller): Promise<CodexStatus> {
     await this.host.requireTier(caller, 'subscription_auth');
     const cred = await this.readCredential(CODEX_CRED_KEY);
 
-    // Only an open attempt is an in-progress flow; a settled row just keeps the generation rising.
-    const flow = this.host.sqlx<{ user_code: string; portal_url: string; poll_interval: number }>(
-      `SELECT user_code, portal_url, poll_interval FROM codex_device_flow
-       WHERE id = 1 AND settled_at IS NULL`,
-    )[0];
+    if (cred?.kind === 'oauth') return { connected: true, accountId: decodeCodexAccountId(cred.accessToken), expiresAt: cred.expiresAt ?? null };
 
-    if (cred?.kind === 'oauth') {
-      return {
-        connected: true,
-        accountId: decodeCodexAccountId(cred.accessToken),
-        expiresAt: cred.expiresAt ?? null,
-        startedFlow: flow
-          ? { userCode: flow.user_code, portalURL: flow.portal_url, pollIntervalSec: flow.poll_interval }
-          : null,
-      };
-    }
-
-    return {
-      connected: false,
-      accountId: null,
-      expiresAt: null,
-      startedFlow: flow
-        ? { userCode: flow.user_code, portalURL: flow.portal_url, pollIntervalSec: flow.poll_interval }
-        : null,
-    };
+    return { connected: false, accountId: null, expiresAt: null };
   }
 
   async listConnectedProviders(caller: UserCaller): Promise<ConnectedProvider[]> {

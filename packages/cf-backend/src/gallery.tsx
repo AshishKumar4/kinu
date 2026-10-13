@@ -493,7 +493,7 @@ async function settingsSectionsFixture(path: string, method: string, body: BodyI
 
   if (path === "/api/user/codex") {
     return settingsCodexHealthy
-      ? fixtureJson({ connected: false, accountId: null, expiresAt: null, startedFlow: null })
+      ? fixtureJson({ connected: false, accountId: null, expiresAt: null })
       : fixtureJson({ error: "Codex status fixture failed" }, 503);
   }
 

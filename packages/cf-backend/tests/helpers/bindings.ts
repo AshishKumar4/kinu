@@ -333,8 +333,6 @@ export function userAccount<Built extends Partial<UserRoutesAuthority>>(
     cancelModelRelay: refuse('cancelModelRelay'),
     getCodexStatus: refuse('getCodexStatus'),
     disconnectCodex: refuse('disconnectCodex'),
-    startCodexDeviceFlow: refuse('startCodexDeviceFlow'),
-    pollCodexDeviceFlow: refuse('pollCodexDeviceFlow'),
     startClaudeSignIn: refuse('startClaudeSignIn'),
     finishClaudeSignIn: refuse('finishClaudeSignIn'),
     chatgptPlan: refuse('chatgptPlan'),

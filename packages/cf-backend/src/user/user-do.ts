@@ -10,7 +10,7 @@ import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from '../activation-gate';
 
 import {
-  ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, NO_DEVICE_CONNECTED, ORCHESTRATOR_AGENT_SLUG, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type DeviceCodeStart, type JsonValue, type EgressRequestFacts, type EgressSecretBinding, type ApprovalGrant, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type EgressSecretSummary, type PutEgressSecretInput, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, DEVICE_KEEPALIVE_PING, DEVICE_KEEPALIVE_PONG, DEVICE_TOKEN_ROTATION_ACK, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, } from '@kinu.run/core';
+  ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, NO_DEVICE_CONNECTED, ORCHESTRATOR_AGENT_SLUG, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, type EgressRequestFacts, type EgressSecretBinding, type ApprovalGrant, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type EgressSecretSummary, type PutEgressSecretInput, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, DEVICE_KEEPALIVE_PING, DEVICE_KEEPALIVE_PONG, DEVICE_TOKEN_ROTATION_ACK, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, } from '@kinu.run/core';
 
 import { DurableObjectOAuthClientProvider, type AgentMcpOAuthProvider } from 'agents/mcp/do-oauth-client-provider';
 
@@ -343,14 +343,6 @@ export class UserDO extends Agent<Env> {
 
   selectCloudflareAccount(caller: UserCaller, accountId: string): Promise<void> {
     return this.credentials.selectCloudflareAccount(caller, accountId);
-  }
-
-  startCodexDeviceFlow(caller: UserCaller, account?: string): Promise<DeviceCodeStart> {
-    return this.credentials.startCodexDeviceFlow(caller, account);
-  }
-
-  pollCodexDeviceFlow(caller: UserCaller): ReturnType<UserCredentials['pollCodexDeviceFlow']> {
-    return this.credentials.pollCodexDeviceFlow(caller);
   }
 
   startClaudeSignIn(caller: UserCaller): ReturnType<UserCredentials['startClaudeSignIn']> {
@@ -980,9 +972,6 @@ export class UserDO extends Agent<Env> {
   // secrets exist in this class (sealed by credential-envelope.ts).
 
   // Egress secret vault: see user/egress-vault.ts for why the row shape is its own table.
-
-  // Codex device flow: calls wait on OpenAI while other calls run. The generation names the
-  // attempt a poll belongs to and `settled_at` whether it is still live, fencing stale polls.
 
   // The Mossaic tenant id is the owner's user id, derived from the profile row's email as the
   // edge does, so no caller names a tenant. Every owner workspace mounts it at `/shared`.

@@ -265,7 +265,6 @@ export const deleteCredential = (key: string, revoke: boolean) =>
 
 const CodexStatusSchema = v.object({
   connected: v.boolean(), accountId: v.nullable(v.string()), expiresAt: v.nullable(v.number()),
-  startedFlow: v.nullable(v.object({ userCode: v.string(), portalURL: v.string(), pollIntervalSec: v.number() })),
 });
 
 const PollResultSchema = v.object({

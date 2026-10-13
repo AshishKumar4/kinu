@@ -39,7 +39,7 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   | 'listDevices' | 'issueDeviceJoin' | 'acknowledgeUnstoppedDevice' | 'revokeDevice' | 'renameDevice' | 'listDeviceConsents'
   | 'setDeviceTier' | 'revokeDeviceConsent'
   | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'checkpointCredentials' | 'restoreCredentials' | 'listActiveWorkspaces' | 'getAuthHeaders'
-  | 'getCodexStatus' | 'disconnectCodex' | 'startCodexDeviceFlow' | 'pollCodexDeviceFlow' | 'startClaudeSignIn' | 'finishClaudeSignIn'
+  | 'getCodexStatus' | 'disconnectCodex' | 'startClaudeSignIn' | 'finishClaudeSignIn'
   | 'chatgptPlan' | 'startChatGptSignIn' | 'cancelChatGptSignIn' | 'startChatGptPasteSignIn' | 'finishChatGptPasteSignIn' | 'signOutChatGpt'
   | 'listConfig' | 'getConfig' | 'setConfig' | 'listConnectedProviders'
   | 'listCloudflareAccounts' | 'selectCloudflareAccount' | 'listAIGateways' | 'selectAIGateway'
@@ -396,19 +396,6 @@ userRoutes.delete('/api/user/codex', async (c) => {
   return json({ body: { ok: true, ...outcome } });
 });
 
-/** An empty body signs in the main account; `{ account }` signs in `codex.oauth@<account>`. */
-userRoutes.post('/api/user/codex/start', (c) => settle(Effect.tryPromise({
-  try: async () => {
-    const body = await c.req.text();
-    const named = body === '' ? undefined : v.safeParse(v.object({ account: v.string() }), safeJsonParse(body));
-
-    if (named !== undefined && !named.success) return err(400, 'Body must be empty or { account }');
-
-    return json({ body: await c.get('stub').startCodexDeviceFlow(c.get('owner'), named?.output.account) });
-  },
-  catch: (cause) => toKinuError({ doing: 'starting the Codex sign-in', cause, otherwise: 'unavailable' }),
-})));
-
 async function answerSettingsRead<T>(c: UserContext, read: Promise<T>, moved: (value: T) => boolean): Promise<Response> {
   const value = await read;
 
@@ -416,11 +403,6 @@ async function answerSettingsRead<T>(c: UserContext, read: Promise<T>, moved: (v
 
   return json({ body: value });
 }
-
-userRoutes.post('/api/user/codex/poll', (c) => settle(Effect.tryPromise({
-  try: () => answerSettingsRead(c, c.get('stub').pollCodexDeviceFlow(c.get('owner')), (status) => status.connected),
-  catch: (cause) => toKinuError({ doing: 'checking the Codex sign-in', cause, otherwise: 'unavailable' }),
-})));
 
 userRoutes.get('/api/user/chatgpt', async (c) => answerSettingsRead(c, c.get('stub').chatgptPlan(c.get('owner')), (plan) => plan.changed));
 

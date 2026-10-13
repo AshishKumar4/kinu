@@ -213,8 +213,6 @@ const GATED_CALLS: GatedCall[] = [
   },
   { capability: 'credentials.model', name: 'getSettingsRevision', run: (u, c) => u.getSettingsRevision(c) },
 
-  { capability: 'subscription_auth', name: 'startCodexDeviceFlow', run: (u, c) => u.startCodexDeviceFlow(c) },
-  { capability: 'subscription_auth', name: 'pollCodexDeviceFlow', run: (u, c) => u.pollCodexDeviceFlow(c) },
   { capability: 'subscription_auth', name: 'disconnectCodex', run: (u, c) => u.disconnectCodex(c, false) },
   { capability: 'subscription_auth', name: 'getCodexStatus', run: (u, c) => u.getCodexStatus(c) },
   { capability: 'subscription_auth', name: 'startClaudeSignIn', run: (u, c) => u.startClaudeSignIn(c) },
