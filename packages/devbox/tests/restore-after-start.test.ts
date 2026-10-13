@@ -6,7 +6,7 @@ import type { DevboxPolicy, StartClock } from '../src/lifecycle';
 import { TestDevbox, TEST_DEVBOX_POLICY as TEST_POLICY } from './support/test-devbox';
 import { handClock } from '../../test-utils/src/hand-clock';
 import {
-  FakeSandbox, STAMP_COMMAND, TEST_BOX_ID, boxState, deliver, fakeStorage, gate, harness,
+  FakeSandbox, STAMP_COMMAND, TEST_BOX_ID, boxState, deliver, fakeStorage, gate, harness, memoryBucket, seedGolden,
   type Harness,
 } from './support/devbox-harness';
 
@@ -83,7 +83,8 @@ function activatedOverRunning(rows: Map<string, StoredValue>): Activated {
 
   const container = new FakeSandbox(state);
   state.container = container.handle();
-  const box = new TestBox(state, {});
+  seedGolden(container);
+  const box = new TestBox(state, { DEVBOX_STORE: memoryBucket(new Map()) });
   container.owner = box;
 
   return { box, container, activation };
@@ -149,7 +150,8 @@ describe('the start hook owns restoration', () => {
 
       await container[termination]();
 
-      expect(container.files.size).toBe(0);
+      // Only what the image itself holds is left: the golden's pinned tools.
+      expect([...container.files.keys()]).toEqual([...container.imageFiles.keys()]);
       expect(container.bootId).toBeUndefined();
       expect(container.s3fsMounts.size).toBe(0);
       expect(rows.get('durable-lifecycle-marker')).toBe('keep this');

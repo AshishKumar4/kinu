@@ -59,7 +59,7 @@ export interface GoldenPorts {
   readonly snapshot: (name: string) => Promise<string>;
   readonly destroy: () => Promise<void>;
   readonly build: () => Promise<void>;
-  readonly tell: (box: string, answer: GoldenAnswer) => Promise<void>;
+  readonly tell: (box: string, answer: GoldenAnswer) => Effect.Effect<void, DevboxError>;
   /** Deletes a snapshot from the registry, telling `owe` its manifest's digest before any tag goes; undefined without the
    *  authority to. */
   readonly delete: (ref: string, owe: (digest: string) => void) => Promise<SnapshotDeletion> | undefined;
@@ -122,7 +122,7 @@ export function buildGolden(ports: GoldenPorts, keepAlive: boolean): Effect.Effe
       ? { kind: 'ready', id: state.current.id, tools: state.current.tools }
       : { kind: 'pending', reason: state.failure ?? REBUILDING };
 
-    for (const box of after.waiting) yield* Effect.result(attempt('io', () => ports.tell(box, answer)));
+    for (const box of after.waiting) yield* Effect.result(ports.tell(box, answer));
 
     if (keepAlive && state.previous !== undefined && Result.isSuccess(built)) {
       const previous = state.previous;

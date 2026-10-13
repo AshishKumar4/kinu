@@ -6,8 +6,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { BoxSize } from '../src/sizes';
-import { devboxFailure, type DevboxFailure } from '../src/errors';
-import { HARNESS_IMAGE, harness } from './support/devbox-harness';
+import { DevboxError, devboxFailure, type DevboxFailure } from '../src/errors';
+import { HARNESS_GOLDEN, harness } from './support/devbox-harness';
+import { GOLDEN_ENTRYPOINT } from '../src/golden';
 import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
 import { pipeExec as localExec } from './support/native-process';
 import { runToExit } from '../../test-utils/src/spawn';
@@ -32,11 +33,11 @@ const INSTANCES = {
 
 const instance = (size: keyof typeof INSTANCES) => INSTANCES[size];
 
-test('a box with no size chosen starts at the default size, on the image the host named `devbox`', async () => {
+test('a box with no size chosen starts at the default size, from the golden', async () => {
   const { box, container } = harness(TestBox);
   await box.start();
 
-  expect(container.startOptions).toEqual([{ image: HARNESS_IMAGE, instance: instance('medium'), enableInternet: true }]);
+  expect(container.startOptions).toEqual([{ containerSnapshot: { id: HARNESS_GOLDEN }, entrypoint: GOLDEN_ENTRYPOINT, instance: instance('medium'), enableInternet: true }]);
   expect(await box.boxSize()).toEqual({ size: 'medium', chosen: undefined, running: 'medium', startRefused: undefined });
   await box.destroy();
 });
@@ -156,22 +157,27 @@ test('a resize goes ahead over an unmanaged command, which a rest would refuse t
 
   expect((await box.quiesce()).kind).toBe('failed');
   expect(await box.resize('small')).toMatchObject({ kind: 'restarted', size: 'small', previous: 'medium' });
-  expect(await box.getProcess(process.id)).toBeNull();
+  // A rest's snapshot keeps the command's record; the restart ended the command itself.
+  expect((await box.getProcess(process.id))?.status).not.toBe('running');
   expect(container.startOptions.map((options) => options?.instance)).toEqual([instance('medium'), instance('small')]);
   await box.destroy();
 });
 
-/** Names no image until its host deploys one, so the platform refuses each start the same way. */
-class LateImageBox extends TestBox {
-  image: string | undefined = undefined;
+/** Binds no store until its host deploys one, so each start is refused the same way: with no bucket the golden cannot
+ *  build (D85). */
+class UnboundStoreBox extends TestBox {
+  bound = false;
 
-  protected override get containerImage(): string | undefined {
-    return this.image;
+  protected override get store(): string {
+    return this.bound ? 'DEVBOX_STORE' : 'UNBOUND_STORE';
   }
 }
 
+/** Refused by the platform the same way at every start, a refusal only a changed input lifts (D52). A refused wake of
+ *  the golden asks the golden once for another before the refusal is recorded (D64), so each attempt is two starts. */
 async function refusedStart() {
-  const made = harness(LateImageBox);
+  const made = harness(TestBox);
+  made.container.containerUnavailable = new DevboxError('configuration', 'the platform refuses this application');
   await made.box.start();
 
   return made;
@@ -193,9 +199,9 @@ const startupRows = (container: { readonly scheduleRows: readonly { readonly cal
 
 // Red on 719c2d1ac: each request started the box again and filed another incident.
 test('a start that fails permanently is refused once: later requests and a successor after eviction answer the recorded refusal without starting again', async () => {
-  const { box, container, state } = await refusedStart();
+  const { box, container, state, env } = await refusedStart();
   const asked = [await refusalOf(box.resolveReadiness()), await refusalOf(box.resolveReadiness())];
-  const successor = new LateImageBox(state, {});
+  const successor = new TestBox(state, env);
   container.owner = successor;
   await successor.kickStartup();
   const armedByKick = startupRows(container);
@@ -209,19 +215,32 @@ test('a start that fails permanently is refused once: later requests and a succe
     reported: (await successor.boxSize()).startRefused,
   }).toEqual({
     asked: Array.from({ length: 3 }, () => expect.objectContaining({ code: 'refused' })),
-    starts: 1,
+    starts: 2,
     incidents: 1,
     armed: [0, 0],
     reported: expect.any(String),
   });
 });
 
-test('a changed input asks again: an image the host names later, another size, the internet setting, or an explicit attach or start', async () => {
-  const imaged = await refusedStart();
-  imaged.box.image = HARNESS_IMAGE;
-  const ready = await imaged.box.resolveReadiness();
-  const cleared = (await imaged.box.boxSize()).startRefused;
+// D85: with no bucket the golden cannot build, so the box names the binding to add rather than waiting on it forever.
+test('a box with no store bound is refused before the platform is asked, naming the binding; once bound it starts', async () => {
+  const { box, container } = harness(UnboundStoreBox);
+  const refused = await refusalOf(box.resolveReadiness());
+  const reported = (await box.boxSize()).startRefused;
+  const starts = container.startOptions.length;
+  box.bound = true;
 
+  expect({ refused, reported, starts, ready: await box.resolveReadiness(), after: container.startOptions.length }).toEqual({
+    refused: expect.objectContaining({ code: 'refused' }),
+    reported: expect.stringContaining('bind an R2 bucket as `UNBOUND_STORE`, or override `store`'),
+    starts: 0,
+    ready: { kind: 'restored' },
+    after: 1,
+  });
+  await box.destroy();
+});
+
+test('a changed input asks again: another size, the internet setting, or an explicit attach or start', async () => {
   const resized = await refusedStart();
   await resized.box.resize('large');
   await refusalOf(resized.box.resolveReadiness());
@@ -237,8 +256,6 @@ test('a changed input asks again: an image the host names later, another size, t
   await restarted.box.start();
 
   expect({
-    ready,
-    cleared,
     resized: resized.container.startOptions.map((options) => options?.instance),
     offline: offline.container.startOptions.map((options) => options?.enableInternet),
     reattached,
@@ -246,28 +263,26 @@ test('a changed input asks again: an image the host names later, another size, t
     incidents: (await attached.box.devboxIncidentReasons()).length,
     restarted: restarted.container.startOptions.length,
   }).toEqual({
-    ready: { kind: 'restored' },
-    cleared: undefined,
-    resized: [instance('medium'), instance('large')],
-    offline: [true, false],
+    resized: [instance('medium'), instance('medium'), instance('large'), instance('large')],
+    offline: [true, true, false, false],
     reattached: expect.objectContaining({ code: 'io' }),
-    attached: 2,
+    attached: 4,
     incidents: 2,
-    restarted: 2,
+    restarted: 4,
   });
 
-  for (const { box } of [imaged, resized, offline, attached, restarted]) await box.destroy();
+  for (const { box } of [resized, offline, attached, restarted]) await box.destroy();
 });
 
 // The platform's own words when it has no room (D36; `bench-artifacts/side-by-side/c-before.log`, 2026-09-30).
 test('a capacity answer is a retry, never a recorded refusal: a successor starts the box once the platform has room', async () => {
-  const { box, container, state, rows } = harness(TestBox);
+  const { box, container, state, rows, env } = harness(TestBox);
   const capacity = 'There is no container instance that can be provided to this Durable Object, try again later';
   container.startFaultBeforeRunning = new Error(capacity);
 
   const refused = await box.resolveReadiness();
   const recorded = { row: rows.get('devbox:start-refused'), reported: (await box.boxSize()).startRefused, armed: startupRows(container) };
-  const successor = new TestBox(state, {});
+  const successor = new TestBox(state, env);
   container.owner = successor;
 
   expect({ refused, recorded, ready: await successor.resolveReadiness(), starts: container.startOptions.length }).toEqual({

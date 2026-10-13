@@ -1,6 +1,6 @@
 /** The deploy tier's eval-owned throwaway Worker. No route is added to Kinu. */
 import * as v from 'valibot';
-import { Devbox, GOLDEN_NAME, type BoxPeers, type DevboxStore, type DevboxState } from '../../../devbox/src/index';
+import { Devbox, GOLDEN_NAME, type DevboxState } from '../../../devbox/src/index';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace/nimbus-workspace.js';
 import { GOLDEN_BASE, GoldenStateSchema, pipeParts } from '../../../devbox/src/golden';
 import { settle } from '../../../devbox/src/errors';
@@ -13,14 +13,14 @@ import { adaptCloudflareSandbox } from '../../src/sandbox-exec-lane';
 import { terminalRoutes } from '../../src/terminal-route';
 import { serveFamily } from '../helpers/api';
 
-export { DevboxOutbound, DevboxStoreGateway } from '../../../devbox/src/index';
+export { DevboxGateway } from '../../../devbox/src/index';
 
 interface Env {
   readonly Box: DurableObjectNamespace<ContractBox>;
   readonly STORE: R2Bucket;
   readonly EVAL_IDENTITY: string;
   readonly DEVBOX_REGISTRY_TOKEN: string;
-  readonly ACCOUNT: string;
+  readonly CLOUDFLARE_ACCOUNT_ID: string;
   readonly ASSETS: Fetcher;
   readonly PROBE_HTTP: string;
   readonly PROBE_ACCESS_KEY_ID?: string;
@@ -49,14 +49,7 @@ export class ContractBox extends Devbox<Env> {
 
   // As KinuDevbox's (D82), so the contracts run on the network shape Kinu ships.
   enableInternet = true;
-  protected override get containerImage(): string { return GOLDEN_BASE; }
-  protected override get store(): DevboxStore { return { binding: 'STORE', bucket: this.env.STORE }; }
-  protected override get namespaceBinding(): string { return 'Box'; }
-  protected override get registryToken(): string { return this.env.DEVBOX_REGISTRY_TOKEN; }
-  protected override get registryAccount(): string { return this.env.ACCOUNT; }
-  protected override get peers(): BoxPeers {
-    return { golden: () => this.env.Box.getByName(GOLDEN_NAME), box: id => this.env.Box.get(this.env.Box.idFromString(id)) };
-  }
+  protected override get store(): string { return 'STORE'; }
   protected override get policy() { return { ...DEFAULT_DEVBOX_POLICY, checkpointIntervalMs: 2_000 }; }
   protected override get ambientCheckpoints(): boolean { return false; }
 
@@ -168,7 +161,7 @@ export class ContractBox extends Devbox<Env> {
   async inspection() {
     await this.ensureReady();
 
-    return { images: this.ctx.container?.images, base: this.containerImage, actual: await this.ctx.container?.inspect(), state: await this.devboxState() };
+    return { images: this.ctx.container?.images, base: GOLDEN_BASE, actual: await this.ctx.container?.inspect(), state: await this.devboxState() };
   }
 
   async diskContract(kind: typeof DISK_CONTRACTS[number]): Promise<void> {
@@ -187,7 +180,7 @@ export class ContractBox extends Devbox<Env> {
     return this.exec(command, { env: {
       ACCESS_KEY: this.env.PROBE_ACCESS_KEY_ID ?? '', SECRET_KEY: this.env.PROBE_SECRET_ACCESS_KEY ?? '',
       AWS_ACCESS_KEY_ID: this.env.PROBE_ACCESS_KEY_ID ?? '', AWS_SECRET_ACCESS_KEY: this.env.PROBE_SECRET_ACCESS_KEY ?? '',
-      PROBE_BUCKET: this.env.PROBE_BUCKET, PROBE_ACCOUNT: this.env.ACCOUNT,
+      PROBE_BUCKET: this.env.PROBE_BUCKET, PROBE_ACCOUNT: this.env.CLOUDFLARE_ACCOUNT_ID,
     } });
   }
 

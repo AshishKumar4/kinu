@@ -1,9 +1,8 @@
 /** A store mount's S3 requests, answered from the Worker's own R2 binding: no key pair exists (D41).
  *  S3Mount's `s3fs` holds a placeholder password and each mount's host routes here. */
-import { WorkerEntrypoint } from 'cloudflare:workers';
 import type { S3GatewayBinding, S3MountRequest } from '@cloudflare/sandbox';
 import { Effect } from 'effect';
-import { DevboxError, attempt, attemptSync, settle } from './errors';
+import { DevboxError, attempt, attemptSync } from './errors';
 
 /** The box's prefix in the store: S3Mount admits a second mount of a binding only at the same prefix. */
 export function chainStoreRoot(boxPrefix: string): string {
@@ -317,11 +316,4 @@ export function serveStore(request: Request, props: StoreGatewayProps, bucketOf:
 
     return yield* serveObject(call, key);
   });
-}
-
-/** Handed to S3Mount as its gateway binding in place of the SDK's signing `S3Gateway`. */
-export class DevboxStoreGateway extends WorkerEntrypoint<Record<string, R2Bucket | undefined>, StoreGatewayProps> {
-  override fetch(request: Request): Promise<Response> {
-    return settle(serveStore(request, this.ctx.props, (name) => this.env[name]));
-  }
 }

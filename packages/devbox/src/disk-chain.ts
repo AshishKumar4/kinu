@@ -521,6 +521,28 @@ export class DiskChainStorage implements DevboxStorage {
   }
 }
 
+/** A box's storage while its store is unbound: nothing it keeps can be reached, so it attaches nothing and saves
+ *  nothing, naming the binding to add (D85). */
+export class UnboundStorage implements DevboxStorage {
+  readonly #unbound: string;
+
+  constructor(reason: string) {
+    this.#unbound = reason;
+  }
+
+  discard(): Promise<void> {
+    return settle(Effect.fail(new DevboxError('configuration', this.#unbound)));
+  }
+
+  attach(): Promise<AttachOutcome> {
+    return settle(Effect.fail(new DevboxError('configuration', this.#unbound)));
+  }
+
+  checkpoint(): Promise<CheckpointOutcome> {
+    return Promise.resolve({ kind: 'failed', reason: this.#unbound, bytes: undefined, movedBytes: undefined });
+  }
+}
+
 export interface DiskChainHost {
   readonly prepare: () => Effect.Effect<void, DevboxError>;
   readonly fromSnapshot: () => boolean;

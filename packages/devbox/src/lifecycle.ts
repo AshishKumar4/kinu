@@ -287,13 +287,24 @@ export function classifyRecovery(thrown: { readonly cause: unknown }): RecoveryC
   }
 }
 
-/** The platform's words when the account has no room for another container (staging, 2026-10-08). */
-const ACCOUNT_LIMIT = 'Account resource limit exceeded';
+/** The platform's words when it has no container to give: the account's limit (staging, 2026-10-08), no instance
+ *  (D36, `bench-artifacts/side-by-side/c-before.log`), and the application's `max_instances`. */
+const NO_ROOM = [
+  'Account resource limit exceeded',
+  'There is no container instance that can be provided',
+  'Maximum number of running container instances exceeded',
+];
 
-/** A start refused for want of room: it says nothing about what the box started from, so that source stays good. */
+/** A start refused for want of a container, in the platform's words or the SDK's code: it says nothing about what the
+ *  box started from, so that source stays good (D85). */
 export function isCapacityRefusal(thrown: { readonly cause: unknown }): boolean {
   for (let value = thrown.cause; value instanceof Error; value = value.cause) {
-    if (value.message.includes(ACCOUNT_LIMIT)) return true;
+    const failure = value;
+
+    if (NO_ROOM.some((words) => failure.message.includes(words))) return true;
+    const coded = v.safeParse(CodedFailureSchema, failure);
+
+    if (coded.success && coded.output.code === 'CONTAINER_UNAVAILABLE') return true;
   }
 
   return false;

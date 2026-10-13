@@ -10,6 +10,8 @@ import { createHash } from 'node:crypto';
 import type { StoredValue } from '../../src/storage';
 import { describeThrown, type LateStartFailure } from '../../src/lifecycle';
 import { TOOLS_STAMP } from '../../src/tools';
+import { GOLDEN_NAME, type GoldenAnswer } from '../../src/golden';
+import artifact from '../../block-lower/upstream.json';
 import { shellSyntaxError } from "./container-shell";
 import { DEVBOX_SCRATCH_PREFIX } from './scratch';
 import * as v from 'valibot';
@@ -367,6 +369,8 @@ export class FakeSandbox {
   /** A fresh container holds only the image's dirs; `/var/tmp/devbox` is made by whatever runs
    *  first. Commands earn dirs by `mkdir -p`; a cwd absent here refuses chdir, as the container does. */
   readonly directories = new Set<string>(IMAGE_DIRECTORIES);
+  /** What every container this fake starts holds before anything runs: the image's own files. */
+  readonly imageFiles = new Map<string, string>();
   readonly fileOperationFailures = {
     rename: Array<Error>(),
     move: Array<Error>(),
@@ -771,6 +775,8 @@ export class FakeSandbox {
     this.directories.clear();
 
     for (const path of IMAGE_DIRECTORIES) this.directories.add(path);
+
+    for (const [path, content] of this.imageFiles) this.files.set(path, content);
     this.bootId = undefined;
     this.processes.clear();
     this.s3fsMounts.clear();
@@ -914,7 +920,8 @@ export class FakeSandbox {
 
     if (behaviour === undefined) return Promise.reject(new Error(`snapshot ${snapshot} not found`));
 
-    return this.start(options).then(() => {
+    // A container that came up holds the snapshot's disk, whatever the start answered after it ran.
+    const restore = () => {
       const disk = this.#snapshotDisks.get(snapshot);
 
       for (const [path, content] of disk?.files ?? []) this.files.set(path, content);
@@ -922,6 +929,10 @@ export class FakeSandbox {
       for (const [path, bytes] of disk?.binaryFiles ?? []) this.binaryFiles.set(path, bytes);
 
       for (const path of disk?.directories ?? []) this.directories.add(path);
+    };
+
+    return this.start(options).finally(() => {
+      if (this.running.running) restore();
     });
   }
 
@@ -1163,22 +1174,52 @@ Object.defineProperty(globalThis, 'scheduler', {
  *  and a second spelling here would be a second opinion on the platform. */
 type BoxState = ConstructorParameters<typeof Devbox>[0];
 
+/** The golden every harness box starts from: the base with the pinned tools in it (D66). */
+export const HARNESS_GOLDEN = 'golden-harness';
+
+/** The golden builder a box's namespace serves, and the boxes it tells (D65). */
+export interface TestSiblings {
+  goldenFor(box: string, lost?: string): Promise<GoldenAnswer>;
+  goldenReady(box: string, answer: GoldenAnswer): Promise<void>;
+}
+
+/** A golden that is always built, from the shipped pin. */
+export const READY_GOLDEN: TestSiblings = {
+  goldenFor: async () => ({ kind: 'ready', id: HARNESS_GOLDEN, tools: artifact.tools.sha256 }),
+  goldenReady: async () => undefined,
+};
+
 export interface BoxStateParts {
   readonly storage: DurableObjectStorage;
   readonly id: string;
   readonly container?: { running: boolean };
   readonly blockConcurrencyWhile: <T>(closure: () => Promise<T>) => Promise<T>;
+  readonly siblings?: TestSiblings;
+  /** The Worker's exports, where a test names them itself. */
+  readonly exports?: BoxState['exports'];
 }
 
-/** The Worker's exports as a box reaches them: its two gateways, and nothing of the host Worker it is
- *  compiled with (another package's tests use this harness, under that package's own exports). */
-function gatewayExports(): BoxState['exports'] {
-  const gateways: GatewayBindings = {
-    DevboxStoreGateway: () => ({ fetch: async () => unreached('store gateway network'), connect: () => unreached('store gateway TCP') }),
-    DevboxOutbound: () => ({ fetch: async () => unreached('outbound network'), connect: () => unreached('outbound TCP') }),
-  };
+/** A Durable Object namespace as `ctx.exports` holds one: tagged as the platform tags it, which is how a box tells it
+ *  from an entrypoint (D85). */
+export function testNamespace(siblings: TestSiblings, accepts: (id: string) => boolean = () => true) {
+  return {
+    [Symbol.toStringTag]: 'LoopbackDurableObjectNamespace',
+    idFromString: (id: string) => {
+      if (!accepts(id)) throw new TypeError('Durable Object ID is not valid for this namespace.');
 
-  return new Proxy(Object.create(null), { get: (_target, key) => (key === 'DevboxStoreGateway' || key === 'DevboxOutbound' ? gateways[key] : undefined) });
+      return { toString: () => id };
+    },
+    get: (id: { toString(): string }) => ({ goldenReady: (answer: GoldenAnswer) => siblings.goldenReady(id.toString(), answer) }),
+    getByName: (name: string) => (name === GOLDEN_NAME ? { goldenFor: (box: string, lost?: string) => siblings.goldenFor(box, lost) } : unreached(`namespace.getByName(${name})`)),
+  };
+}
+
+/** The Worker's exports as a box reaches them: the gateway and the box's own namespace, and nothing of the host Worker
+ *  it is compiled with (another package's tests use this harness, under that package's own exports). */
+function workerExports(siblings: TestSiblings): BoxState['exports'] {
+  const gateway: GatewayBindings['DevboxGateway'] = () => ({ fetch: async () => unreached('gateway network'), connect: () => unreached('gateway TCP') });
+
+  return Object.assign(Object.create(null), { DevboxGateway: gateway, Box: testNamespace(siblings) });
 }
 
 /** The whole `DurableObjectState`: the SDK `Sandbox` constructor takes the full handle.
@@ -1189,7 +1230,7 @@ export function boxState(parts: BoxStateParts): BoxState {
     storage: parts.storage,
     container: parts.container === undefined ? undefined : containerHandle(parts.container),
     blockConcurrencyWhile: parts.blockConcurrencyWhile,
-    exports: gatewayExports(),
+    exports: parts.exports ?? workerExports(parts.siblings ?? READY_GOLDEN),
     props: {},
     waitUntil: () => unreached('state.waitUntil'),
     get facets(): DurableObjectFacets { return unreached('state.facets'); },
@@ -1226,9 +1267,65 @@ export function containerHandle(flag: { running: boolean }, exec?: Container['ex
   };
 }
 
-/** An ephemeral test box has no store and nothing durable, so its env has no bindings.
- *  Named rather than `unknown`: a boundary that admits anything admits an unparsed value too. */
-export type TestEnv = Record<string, never>;
+/** In-memory bucket over the objects the container's store mount writes; `head` and `delete`
+ *  answer as the R2 binding does, so the shipped `layerIntegrityFailure` runs unchanged. */
+export function memoryBucket(objects: Map<string, Uint8Array>): R2Bucket {
+  // SAFETY: constructed against the R2Bucket contract. The box reaches the
+  // four members below and nothing else — `mountBucket` is what exposes the
+  // prefix to the container, and the archive travels through that mount — so
+  // the rest of the surface is unreachable from this fixture's box.
+  return Object.create({
+    head: async (key: string) => {
+      const bytes = objects.get(key);
+
+      if (bytes === undefined) return null;
+
+      return {
+        key,
+        size: bytes.byteLength,
+        version: createHash('sha256').update(bytes).digest('hex'),
+        checksums: { sha256: await crypto.subtle.digest('SHA-256', bytes.slice()) },
+      };
+    },
+    get: async (key: string) => {
+      const bytes = objects.get(key);
+
+      return bytes === undefined ? null : { key, size: bytes.byteLength, body: new Response(bytes.slice()).body };
+    },
+    // R2 refuses a delete of no keys or of more than 1,000 (10027), and lists 1,000 at a time.
+    delete: async (keys: string | string[]) => {
+      const named = Array.isArray(keys) ? keys : [keys];
+
+      if (named.length === 0 || named.length > 1000) throw new Error('delete: The number of keys in the request must be between 1 and 1000 inclusive. (10027)');
+
+      for (const key of named) objects.delete(key);
+    },
+    // A cursor names the last key listed, so a page deleted in between does not shift the next one.
+    list: async (options?: R2ListOptions) => {
+      const after = options?.cursor ?? '';
+      const matching = [...objects.keys()].filter((key) => key.startsWith(options?.prefix ?? '') && key > after).sort();
+      const page = matching.slice(0, 1000);
+      const truncated = page.length < matching.length;
+
+      const listed = page.map((key) => ({ key }));
+
+      return truncated ? { objects: listed, truncated, cursor: page.at(-1) } : { objects: listed, truncated };
+    },
+  });
+}
+
+/** A test box's env: its store, an in-memory bucket, under the default name. */
+export interface TestEnv {
+  readonly DEVBOX_STORE: R2Bucket;
+}
+
+/** The platform's side of the golden: the snapshot a box starts from, and the pinned tools in every container this
+ *  fake starts, since every container a box runs came from the golden (D66, D85). */
+export function seedGolden(container: FakeSandbox): void {
+  container.imageFiles.set(TOOLS_STAMP, artifact.tools.sha256);
+  container.files.set(TOOLS_STAMP, artifact.tools.sha256);
+  container.addSnapshot(HARNESS_GOLDEN, new Map([[TOOLS_STAMP, artifact.tools.sha256]]));
+}
 
 /** Also the box prefix the strategy scopes the store to (`boxes/<id>`). */
 export const TEST_BOX_ID = 'devbox-under-test';
@@ -1243,6 +1340,9 @@ export interface Harness<Box> {
   readonly box: Box;
   readonly container: FakeSandbox;
   readonly rows: Map<string, StoredValue>;
+  /** What the box's store holds. */
+  readonly objects: Map<string, Uint8Array>;
+  readonly env: TestEnv;
   readonly storage: FakeStorage;
   /** What the platform hands a new instance of the object after an eviction: same storage, same container. */
   readonly state: BoxState;
@@ -1260,11 +1360,14 @@ export function harness<Box extends PlatformServed>(
   Box: new (state: BoxState, env: TestEnv) => Box,
   id: string = TEST_BOX_ID,
   exec?: Container['exec'],
+  siblings: TestSiblings = READY_GOLDEN,
 ): Harness<Box> {
   const storage = fakeStorage();
+  const objects = new Map<string, Uint8Array>();
+  const env: TestEnv = { DEVBOX_STORE: memoryBucket(objects) };
 
   const state = boxState({
-    storage: storage.handle, id,
+    storage: storage.handle, id, siblings,
     blockConcurrencyWhile: <T>(closure: () => Promise<T>): Promise<T> => {
       const previous = container.initGate;
       const completed = Promise.withResolvers<void>();
@@ -1282,10 +1385,11 @@ export function harness<Box extends PlatformServed>(
   container.running.running = false;
   state.container = container.handle();
   container.nativeExec = exec;
-  const box = new Box(state, {});
+  seedGolden(container);
+  const box = new Box(state, env);
   container.owner = box;
 
-  return { box, container, rows: storage.rows, storage, state };
+  return { box, container, rows: storage.rows, objects, env, storage, state };
 }
 
 /** Holds the operation until the init gate opens: no event reaches a Durable Object inside

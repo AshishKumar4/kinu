@@ -35,10 +35,9 @@ test('snapshot deletion uses the deployment account even when its image is the m
       super(Object.create(ctx),
         Object.assign(Object.create(null), {
           CLOUDFLARE_ACCOUNT_ID: 'account-for-this-deployment', DEVBOX_REGISTRY_TOKEN: ['registry', 'token'].join('-'),
-          BACKUP_BUCKET: Object.create({ list: async () => ({ objects: [], truncated: false }) }),
+          BACKUP_BUCKET: Object.create({ get: async () => null, list: async () => ({ objects: [], truncated: false }) }),
         }));
     }
-    protected override get containerImage(): string { return 'cloudflare/debian-trixie'; }
   }
 
   try {

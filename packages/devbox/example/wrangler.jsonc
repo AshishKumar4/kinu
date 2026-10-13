@@ -24,5 +24,5 @@
       "scheduling_policy": "durable_object"
     }
   ],
-  "r2_buckets": [{ "binding": "WORKSPACES", "bucket_name": "kinu-devbox-example" }]
+  "r2_buckets": [{ "binding": "DEVBOX_STORE", "bucket_name": "kinu-devbox-example" }]
 }
