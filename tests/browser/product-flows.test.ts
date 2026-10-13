@@ -19,10 +19,10 @@ import {
   DRIVE_SLATE, INSPECTOR_SHUT_PX,
   agentIsThereOnReturn, agentPlanIsReviewedInItsPane, agentProposesAWorkspace, accountMemoryCrossesWorkspaces, accountMemoryInTheStack, approvalsStackAtTheComposer, spliceSitsWhereItWasRead, hireParksAndRunsOnApproval, driveKeepsWhatIsDone, driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState,
   openWaitsNamed, slateOpensFromMyStuff, slateSharesReachingNothing, slateShowsItsPreview, workspaceGetsFirstAnswer,
-  writtenFileShowsInFilesAndChanges, changesStormStaysBounded, openMemoryFollowsItsWriter,
+  writtenFileShowsInFilesAndChanges, changesStormStaysBounded, openMemoryFollowsItsWriter, computerDesktopSurvivesAResize, reopenedWorkspaceRunsTheDeployedBuild,
   type AgentPlanVerdict, type AgentReturnVerdict, type ApprovalStackVerdict, type HireApprovalVerdict, type WorkspaceProposalVerdict, type AccountMemoryVerdict, type StackMemoryVerdict, type SpliceVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict,
   type FlowTarget, type PanelVerdict, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict,
-  type StampedCardVerdict, type WrittenFileVerdict,
+  type StampedCardVerdict, type WrittenFileVerdict, type DesktopResizeVerdict, type ReopenVerdict,
 } from '../../scripts/product-flows';
 import {
   ACCOUNT_FACT, ACCOUNT_RECALL_REPLY, CONTINUE, FLOW_MEMORY_NOTE, FLOW_PROBE, FLOW_SHELL_PROBE, FLOW_SLATE, HIRE_PARKED_COMMAND, INTERRUPTED_BRIEF,
@@ -608,5 +608,38 @@ describe(productFlowTestName('live-memory', "an open memory pane follows another
     expect(memory.shown).toContain(FLOW_MEMORY_NOTE);
     expect(memory.turnReads).toBeGreaterThan(0);
     expect(memory.idleReads).toBe(0);
+  });
+});
+
+// The computer restarts at a new size under an open desktop, and the desktop comes back without a reload.
+describe(productFlowTestName('desktop-resize', "a resized computer's desktop draws again"), () => {
+  let observed: DesktopResizeVerdict | null = null;
+
+  beforeAll(async () => {
+    observed = await flowRow('desktop-resize', computerDesktopSurvivesAResize);
+  });
+
+  test('it was resized to another size, and its desktop drew its panel again', () => {
+    const resized = verdictOf(observed, 'desktop-resize');
+
+    expect(resized.to).not.toBe(resized.from);
+    expect(resized.backAfterS).toBeGreaterThan(0);
+  });
+});
+
+// A workspace reopened by Back loads its page from the deployment, so it runs the build the deployment serves.
+describe(productFlowTestName('reopen', 'a workspace reopened by Back loads the deployed build'), () => {
+  let observed: ReopenVerdict | null = null;
+
+  beforeAll(async () => {
+    observed = await flowRow('reopen', reopenedWorkspaceRunsTheDeployedBuild);
+  });
+
+  test('its page was loaded again from the deployment, not shown from either of the browser\'s caches', () => {
+    const reopened = verdictOf(observed, 'reopen');
+
+    expect(reopened.restored).toBe(false);
+    expect(reopened.navigation).toBe('back_forward');
+    expect(reopened.transferBytes).toBeGreaterThan(0);
   });
 });

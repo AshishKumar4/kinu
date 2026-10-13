@@ -45,7 +45,8 @@ function claimChunkReload(session: ChunkReloadStore, target: string): boolean {
 }
 
 interface ChunkRecoveryDeps {
-  baseline: () => Promise<string | null>;
+  /** The build this page runs. */
+  baseline: string | null;
   live: () => Promise<string | null>;
   session: ChunkReloadStore;
   reload: () => void;
@@ -67,7 +68,7 @@ export function loadRouteChunk<Module>(
 
     if (live === null) return yield* Effect.failCause(failed);
 
-    if (!isNewerDeployedBuild(yield* Effect.promise(async () => deps.baseline()), live)) return yield* Effect.failCause(failed);
+    if (!isNewerDeployedBuild(deps.baseline, live)) return yield* Effect.failCause(failed);
 
     if (!claimChunkReload(deps.session, live)) return yield* Effect.failCause(failed);
     deps.reload();

@@ -197,7 +197,7 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
     const binary = term.onBinary(data => { if (socket.readyState === WebSocket.OPEN) socket.send(Uint8Array.from(data, byte => byte.charCodeAt(0))); });
 
     const release = releaseSocketPane({
-      socket, subscriptions: [inputFrames(term, socket), resizeFrames(term, socket), binary], disposeChrome, copyOperation, termRef,
+      socket, subscriptions: [inputFrames(term, socket), windowFrames(term, socket), binary], disposeChrome, copyOperation, termRef,
     });
 
     return () => {
@@ -301,10 +301,20 @@ function inputFrames(term: Terminal, socket: WebSocket): IDisposable {
   });
 }
 
-function resizeFrames(term: Terminal, socket: WebSocket): IDisposable {
-  return term.onResize(({ cols, rows }) => {
-    if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "resize", cols, rows }));
-  });
+/**
+ * The shell's window is the pane's: declared when the socket opens and at every resize after. The query's geometry is
+ * the pane's at mount, before layout settles, and a resize while the socket connected was dropped, so the computer's
+ * tmux kept drawing for a taller pane and scrolled its prompt off the top (staging 71d06f4a9, 2026-10-13).
+ */
+function windowFrames(term: Terminal, socket: WebSocket): IDisposable {
+  const declare = () => {
+    if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+  };
+
+  socket.addEventListener("open", declare);
+  const resized = term.onResize(declare);
+
+  return { dispose: () => { socket.removeEventListener("open", declare); resized.dispose(); } };
 }
 
 function releaseSocketPane(pane: {
@@ -363,17 +373,12 @@ function WorkspaceTerminal({ workspace, executor }: { workspace: string; executo
       + `?executor=${encodeURIComponent(executor)}&cols=${term.cols}&rows=${term.rows}`,
     );
 
-    let dataSubscription: IDisposable | null = null;
-    let resizeSubscription: IDisposable | null = null;
+    // The runtime sizes its editor from frames, never the query; the window is declared before any input.
+    const shellWindow = windowFrames(term, socket);
 
-    socket.onopen = () => {
-      // The runtime sizes its editor from frames, never the query, so declare the window on open.
-      socket.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
-      dataSubscription = term.onData((data) => {
-        if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "input", data }));
-      });
-      resizeSubscription = resizeFrames(term, socket);
-    };
+    const typing = term.onData((typed) => {
+      if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "input", data: typed }));
+    });
 
     socket.onmessage = (event) => {
       // Process notices share this socket; unknown frames are dropped.
@@ -408,7 +413,7 @@ function WorkspaceTerminal({ workspace, executor }: { workspace: string; executo
     };
 
     return releaseSocketPane({
-      socket, subscriptions: [dataSubscription, resizeSubscription], disposeChrome, copyOperation, termRef,
+      socket, subscriptions: [shellWindow, typing], disposeChrome, copyOperation, termRef,
     });
   }, [workspace, executor]);
 

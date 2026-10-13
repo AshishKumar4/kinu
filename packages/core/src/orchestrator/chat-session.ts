@@ -544,6 +544,10 @@ export class ChatSession {
   /** Non-zero while a terminal transition runs on the pump's stack, where awaiting execution would deadlock. */
   private settlingDepth = 0;
 
+  /** The settled turn's cache-warm arming, in flight past its end: written as the turn settles (it never fails, its
+   *  failure logged), and joined by the next turn's preparation, which notes a request the lane must see after it. */
+  private warming: Promise<void> = Promise.resolve();
+
   /** Self-starts the pump when idle. A re-announcement of an already recorded fact starts no turn and answers 'queued'. */
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult> {
     // The operator's immediate next turn, answered at admission: its settle is on this pump's stack.
@@ -1923,7 +1927,10 @@ export class ChatSession {
     });
 
     // The preparation notes this turn's request where the warming lane lives, reading its keep first: the durable counter
-    // it bumps voids any armed warm, and stops a mid-turn wake from adding a refresh.
+    // it bumps voids any armed warm, and stops a mid-turn wake from adding a refresh. So the warm the turn before armed is
+    // in first.
+    await this.warming;
+
     const prepared = await this.ports.prepareTurn(input, lease, {
       answerId: this.messageId, lastRequestAt: this.actorSession.lastRequestAt(), coldUnlessKept: this.actorSession.promptCacheCold(null),
     }, round);
@@ -2059,11 +2066,13 @@ export class ChatSession {
     try {
       // The lane decides whether the prefix is worth keeping; a turn that ran nothing kept none. Its claim and run closed
       // with its answer (`commitTurn`). Its arming is the lane's advice, not the turn's: it is in flight beside the settle,
-      // sent in the answer's flush rather than a flush of its own, and one that fails is logged and leaves the turn as it
-      // ended.
-      const warmed = prepared === null ? Promise.resolve() : settleLogged(
-        'turn.cache_warm_unarmed', { doing: "arming the prompt cache's warm after the turn", otherwise: 'unavailable' }, () => this.armCacheWarm(prepared),
-      );
+      // sent in the answer's flush rather than a flush of its own, past the turn's end, and one that fails is logged and
+      // leaves the turn as it ended.
+      if (prepared !== null) {
+        this.warming = settleLogged(
+          'turn.cache_warm_unarmed', { doing: "arming the prompt cache's warm after the turn", otherwise: 'unavailable' }, () => this.armCacheWarm(prepared),
+        );
+      }
 
       // Core drives the settled turn's effects as one state machine; this backend supplies the bodies and
       // the fiber. The ledger already holds the roster committed with the answer.
@@ -2074,7 +2083,6 @@ export class ChatSession {
       }
       finally { this.settlingDepth -= 1; }
 
-      await warmed;
       this.emit({ type: 'turn-end', turn, turnId: lease.turnId, runId: lease.runId, epoch: this.actorSession.closeEpoch(lease) });
 
       return end.reason;

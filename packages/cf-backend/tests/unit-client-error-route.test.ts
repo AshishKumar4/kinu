@@ -351,8 +351,6 @@ describe('the payload the browser builds', () => {
     globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = requestUrl(input);
 
-      if (url.endsWith('/api/health')) throw new TypeError('offline');
-
       if (init?.method === 'POST') posts.push({ url, body: v.parse(v.string(), init.body ?? '') });
 
       return new Response('{}', { status: 202 });
@@ -366,7 +364,7 @@ describe('the payload the browser builds', () => {
 
   async function posted(error: Error, componentStack: string): Promise<ClientErrorReport> {
     await reportRenderFailure(error, componentStack, {
-      release: await pageDeployedBuildSha(),
+      release: pageDeployedBuildSha(),
       route: routeTemplateOf(location.pathname),
     });
     expect(posts).toHaveLength(1);

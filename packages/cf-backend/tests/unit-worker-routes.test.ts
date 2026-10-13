@@ -5,7 +5,7 @@
  * or serves the shell where a door should answer.
  */
 import { describe, expect, test } from 'bun:test';
-import { DEV_IDENTITY_HEADER, type UserCaller } from '@kinu.run/core';
+import { CLI_VERSION_PATH, DEV_IDENTITY_HEADER, type UserCaller } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { workerContext, workerEnv } from './helpers/bindings';
 import { makeKv } from './helpers/kv';
@@ -85,7 +85,8 @@ async function send(caller: Caller, method: string, path: string): Promise<Answe
   return { status: response.status, assets, location: response.headers.get('location') };
 }
 
-const shell = (path: string): Partial<Answer> => ({ status: 200, assets: [path] });
+/** The shell serves the page asked for, and names in it the build that serves it, read off the build's stamp. */
+const shell = (path: string): Partial<Answer> => ({ status: 200, assets: [path, CLI_VERSION_PATH] });
 
 const door = (status: number): Partial<Answer> => ({ status, assets: [] });
 
