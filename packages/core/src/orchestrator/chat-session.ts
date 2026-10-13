@@ -347,10 +347,11 @@ export interface ChatSessionPorts {
    * with the chat; its host supplies its assembly, next input and report. Absent where no run is delivered (the CLI).
    */
   readonly runs?: {
-    /** Runs it to its end, which its host owes its caller: `recordEnd`, in the commit that answers the run, keeps that end
-     *  on its held row, where a restart tells it ({@link ChatSession.runEndsOwed}) and never runs the run again. Never
+    /** Runs it to its end, which its host owes its caller: `recordEnd` prepares that end as a session payload, spilled as
+     *  others are when it outgrows a row, and answers the write that keeps it on its held row, made in the commit that
+     *  answers the run, where a restart tells it ({@link ChatSession.runEndsOwed}) and never runs the run again. Never
      *  throws: a run that fails records its refusal. */
-    run(run: DeliveredRun, signal: AbortSignal, recordEnd: (outcome: RunEndOutcome) => void): Promise<void>;
+    run(run: DeliveredRun, signal: AbortSignal, recordEnd: (outcome: RunEndOutcome) => Promise<() => void>): Promise<void>;
     /** A run's end is kept here untold (a run refused unrun, or ends a restart found): its host tells them. */
     tell(): void;
   };
@@ -695,7 +696,10 @@ export class ChatSession {
 
     // A run its host never ran: its end is the refusal, kept as the run's own would be, and told.
     if (item.run !== undefined && (failure !== null || yielded === true) && !this.ended) {
-      this.pendingSends.recordRunEnd(item.run.id, runEndJson(refusedRun(failure ?? new KinuError('cancelled', 'The run was no longer owed.'))));
+      // A refusal's words fit its row: no file is written for it.
+      const refusal = refusedRun(failure ?? new KinuError('cancelled', 'The run was no longer owed.'));
+
+      this.pendingSends.recordRunEnd(item.run.id, { json: JSON.stringify(refusal), path: null, digest: null });
       this.ports.runs?.tell();
     }
 
@@ -847,7 +851,7 @@ export class ChatSession {
     // Another generation of a run held here: its workspace reset and re-drove it, so the held one's caller is gone. One
     // that already ended goes with its untold end; one still owed is replaced or waited out.
     if (held.success && held.output.kinuRun !== run.task.runId) {
-      if (!this.runEndsOwed().some((ended) => ended.id === run.id)) return this.supersede(run);
+      if (!this.pendingSends.runEnds().some((kept) => kept.id === run.id)) return this.supersede(run);
       this.pendingSends.retireTurn(run.id);
     }
 
@@ -916,7 +920,11 @@ export class ChatSession {
     this.runningRun = { id: run.id, controller };
 
     try {
-      await runs.run(run, controller.signal, (outcome) => { this.pendingSends.recordRunEnd(run.id, runEndJson(outcome)); });
+      await runs.run(run, controller.signal, async (outcome) => {
+        const kept = await this.transcript.preparePayload(runEndJson(outcome));
+
+        return () => { this.pendingSends.recordRunEnd(run.id, kept); };
+      });
     } finally {
       this.runningRun = null;
     }
@@ -925,23 +933,27 @@ export class ChatSession {
   }
 
   /** Each delivered run's end kept here and not yet told (D2), as its next report carries it. */
-  runEndsOwed(): RunEndReport[] {
-    return this.pendingSends.runEnds().flatMap(({ id, metadata, end }) => {
-      const held = v.safeParse(HeldRunSchema, metadata);
-      const outcome = v.safeParse(RunEndOutcomeSchema, end);
+  async runEndsOwed(): Promise<RunEndReport[]> {
+    const owed: RunEndReport[] = [];
 
-      return held.success && outcome.success ? [{ id, runId: held.output.kinuRun, outcome: outcome.output }] : [];
-    });
+    for (const { id, metadata, end } of this.pendingSends.runEnds()) {
+      const held = v.safeParse(HeldRunSchema, metadata);
+      const outcome = v.safeParse(RunEndOutcomeSchema, await this.transcript.payload(end));
+
+      if (held.success && outcome.success) owed.push({ id, runId: held.output.kinuRun, outcome: outcome.output });
+    }
+
+    return owed;
   }
 
   /** A report carrying these ends reached the workspace: their runs are owed no more. A newer generation held under the
    *  same id since is not one of them. */
   runEndsTold(told: readonly RunEndReport[]): void {
     this.transaction(() => {
-      const owed = this.runEndsOwed();
+      const held = this.pendingSends.runEnds().map(({ id, metadata }) => ({ id, run: v.safeParse(HeldRunSchema, metadata) }));
 
       for (const end of told) {
-        if (owed.some((kept) => kept.id === end.id && kept.runId === end.runId)) this.pendingSends.retireTurn(end.id);
+        if (held.some((kept) => kept.id === end.id && kept.run.success && kept.run.output.kinuRun === end.runId)) this.pendingSends.retireTurn(end.id);
       }
     });
   }

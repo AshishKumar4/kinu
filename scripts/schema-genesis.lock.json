@@ -1097,7 +1097,10 @@
     "metadata_json TEXT",
     "yields INTEGER NOT NULL DEFAULT 0",
     "run_end_json TEXT",
-    "UNIQUE (actor_id, id)"
+    "run_end_path TEXT",
+    "run_end_digest TEXT",
+    "UNIQUE (actor_id, id)",
+    "CHECK((run_end_json IS NULL AND run_end_path IS NULL AND run_end_digest IS NULL) OR (run_end_json IS NOT NULL AND run_end_path IS NULL AND run_end_digest IS NULL) OR (run_end_json IS NULL AND run_end_path IS NOT NULL AND run_end_digest IS NOT NULL))"
   ],
   "refinement_lane_holds@packages/core/src/evolution/refinement.ts": [
     "actor_id TEXT PRIMARY KEY",

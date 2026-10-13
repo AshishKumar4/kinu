@@ -477,7 +477,7 @@ export async function deliveredRun(
   { database, workspace, models, pacer }: { readonly database: AgentDatabase; readonly workspace: AgentWorkspace; readonly models: FacetModels; readonly pacer: StepPacer },
   task: AgentTurnTask,
   signal: AbortSignal,
-  recordEnd: (outcome: RunEndOutcome) => void,
+  recordEnd: (outcome: RunEndOutcome) => Promise<() => void>,
 ): Promise<void> {
   const actor = await database.acquire();
   const { runId } = task;
@@ -576,6 +576,9 @@ export async function deliveredRun(
       ...(charges.length > 0 && { charges }),
     };
 
+    // Prepared before the commit, spilled if it outgrows a row; kept by it.
+    const keepEnd = await recordEnd({ ended });
+
     const closing = actor.stores.eventRecorder.collect(() => actor.runtime.storage.transactionSync(() => {
       closeTurnRun(actor.stores.eventRecorder, runId, {
         turnIndex: actor.session.orchestrator.sessionTurnIndex,
@@ -588,7 +591,7 @@ export async function deliveredRun(
         }),
       });
       answer();
-      recordEnd({ ended });
+      keepEnd();
 
       // A round a dead isolate opened and the run, run again, never reached: the run's end is its end too.
       return actor.stores.claims.settleRunIn(runId, 'indeterminate');

@@ -21,6 +21,7 @@ import { nanoid } from '../utils/nanoid';
 import { metadataBroadcastEvent, type SeenSplice } from '../read-models/background-event';
 import type { WorkMode } from '../types/turn';
 import { parseJsonObject, type JsonObject } from '../utils/json';
+import type { SessionPayload } from '../session/payload';
 import { stampTurnAuthor, TURN_AUTHOR_METADATA_KEY } from '../utils/ui-message';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import { diagnostics, KinuError, toKinuError } from '../obs/index';
@@ -141,7 +142,8 @@ export function initPendingSendTables(execRaw: RawSqlExec): void {
     PRIMARY KEY (actor_id, producer)
   )`);
   // A programmatic turn its producer heard queued, held until its turn settles: `id` is its idempotency key. A delivered
-  // run's row keeps its end (`run_end_json`) from the commit that ended it until a report carrying it reached its caller.
+  // run's row keeps its end from the commit that ended it until a report carrying it reached its caller: inline
+  // (`run_end_json`), or spilled to a file as other large session payloads are (`run_end_path`, `run_end_digest`).
   execRaw(`CREATE TABLE IF NOT EXISTS queued_turns (
     seq           INTEGER PRIMARY KEY AUTOINCREMENT,
     actor_id      TEXT NOT NULL,
@@ -150,7 +152,12 @@ export function initPendingSendTables(execRaw: RawSqlExec): void {
     metadata_json TEXT,
     yields        INTEGER NOT NULL DEFAULT 0,
     run_end_json  TEXT,
-    UNIQUE (actor_id, id)
+    run_end_path  TEXT,
+    run_end_digest TEXT,
+    UNIQUE (actor_id, id),
+    CHECK((run_end_json IS NULL AND run_end_path IS NULL AND run_end_digest IS NULL)
+      OR (run_end_json IS NOT NULL AND run_end_path IS NULL AND run_end_digest IS NULL)
+      OR (run_end_json IS NULL AND run_end_path IS NOT NULL AND run_end_digest IS NOT NULL))
   )`);
 }
 
@@ -252,17 +259,20 @@ export class PendingSendStore {
   }
 
   /** The delivered run held under `id` ended so, in the caller's commit: a restart tells it, never runs the run again. */
-  recordRunEnd(id: string, end: JsonObject): void {
-    void this.sql`UPDATE queued_turns SET run_end_json = ${JSON.stringify(end)}
-      WHERE actor_id = ${this.actorId} AND id = ${id} AND run_end_json IS NULL`;
+  recordRunEnd(id: string, end: SessionPayload): void {
+    void this.sql`UPDATE queued_turns SET run_end_json = ${end.json}, run_end_path = ${end.path}, run_end_digest = ${end.digest}
+      WHERE actor_id = ${this.actorId} AND id = ${id} AND run_end_json IS NULL AND run_end_path IS NULL`;
   }
 
   /** Each delivered run's end kept here and not yet told, in the order its runs were held. */
-  runEnds(): { readonly id: string; readonly metadata: JsonObject | null; readonly end: JsonObject }[] {
-    return this.sql<{ id: string; metadata_json: string | null; run_end_json: string }>`
-      SELECT id, metadata_json, run_end_json FROM queued_turns
-      WHERE actor_id = ${this.actorId} AND run_end_json IS NOT NULL ORDER BY seq ASC`
-      .map((row) => ({ id: row.id, metadata: row.metadata_json === null ? null : parseJsonObject(row.metadata_json), end: parseJsonObject(row.run_end_json) }));
+  runEnds(): { readonly id: string; readonly metadata: JsonObject | null; readonly end: SessionPayload }[] {
+    return this.sql<{ id: string; metadata_json: string | null; run_end_json: string | null; run_end_path: string | null; run_end_digest: string | null }>`
+      SELECT id, metadata_json, run_end_json, run_end_path, run_end_digest FROM queued_turns
+      WHERE actor_id = ${this.actorId} AND (run_end_json IS NOT NULL OR run_end_path IS NOT NULL) ORDER BY seq ASC`
+      .map((row) => ({
+        id: row.id, metadata: row.metadata_json === null ? null : parseJsonObject(row.metadata_json),
+        end: row.run_end_json === null ? { json: null, path: row.run_end_path ?? '', digest: row.run_end_digest ?? '' } : { json: row.run_end_json, path: null, digest: null },
+      }));
   }
 
   /** Its turn settled, ran or not: nothing of it is owed to a later process. */
@@ -309,7 +319,8 @@ export class PendingSendStore {
   /** Every held programmatic turn still to run, in the order its producers heard them queued: a run that ended is told. */
   restoreTurns(): QueuedTurnRow[] {
     return this.sql<{ id: string; text: string; metadata_json: string | null; yields: number }>`
-      SELECT id, text, metadata_json, yields FROM queued_turns WHERE actor_id = ${this.actorId} AND run_end_json IS NULL ORDER BY seq ASC`
+      SELECT id, text, metadata_json, yields FROM queued_turns
+      WHERE actor_id = ${this.actorId} AND run_end_json IS NULL AND run_end_path IS NULL ORDER BY seq ASC`
       .map((row) => ({
         id: row.id, text: row.text,
         ...(row.metadata_json !== null && { metadata: parseJsonObject(row.metadata_json) }),

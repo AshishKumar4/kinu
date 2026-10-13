@@ -25,13 +25,16 @@ export interface CanaryLoad {
   readonly jobSleepSeconds: number;
   /** Inline steps the hired helper and each swarm node take. */
   readonly helperSteps: number;
+  /** Characters the helper's and each node's final answer is padded with: an end past a stored row (#77). */
+  readonly answerBytes?: number;
 }
 
 type Who = 'root' | 'helper' | 'node';
 
 function loadText(who: Who, load: CanaryLoad): string {
   return `${CANARY_PREFIX} ${who} steps=${String(load.steps)} sleep=${String(load.sleepSeconds)} jobs=${String(load.jobs)} `
-    + `jobsleep=${String(load.jobSleepSeconds)} helper=${String(load.helperSteps)}`;
+    + `jobsleep=${String(load.jobSleepSeconds)} helper=${String(load.helperSteps)}`
+    + (load.answerBytes === undefined ? '' : ` bytes=${String(load.answerBytes)}`);
 }
 
 export function canaryAsk(load: CanaryLoad): string {
@@ -42,7 +45,7 @@ export function canaryMarker(who: Who | 'job', step: number): string {
   return `${CANARY_PREFIX}_${who.toUpperCase()}_STEP_${String(step)}`;
 }
 
-const CANARY_LOAD = /KINU_CANARY (root|helper|node) steps=(\d+) sleep=(\d+) jobs=(\d+) jobsleep=(\d+) helper=(\d+)/;
+const CANARY_LOAD = /KINU_CANARY (root|helper|node) steps=(\d+) sleep=(\d+) jobs=(\d+) jobsleep=(\d+) helper=(\d+)(?: bytes=(\d+))?/;
 
 function sleepStep(who: Who | 'job', step: number, sleepSeconds: number): ScriptedAnswer {
   return {
@@ -64,6 +67,7 @@ function loadOf(request: ScriptedRequest): { who: Who; load: CanaryLoad } | null
     load: {
       steps: Number(match[2]), sleepSeconds: Number(match[3]), jobs: Number(match[4]),
       jobSleepSeconds: Number(match[5]), helperSteps: Number(match[6]),
+      ...(match[7] !== undefined && { answerBytes: Number(match[7]) }),
     },
   };
 }
@@ -79,7 +83,9 @@ export function canaryScript(request: ScriptedRequest): ScriptedAnswer | null {
   const made = request.calls.length;
 
   if (who !== 'root') {
-    return made < load.helperSteps ? sleepStep(who, made, load.sleepSeconds) : { text: `${CANARY_PREFIX}_${who.toUpperCase()}_DONE` };
+    const padding = load.answerBytes === undefined ? '' : ` ${'x'.repeat(load.answerBytes)}`;
+
+    return made < load.helperSteps ? sleepStep(who, made, load.sleepSeconds) : { text: `${CANARY_PREFIX}_${who.toUpperCase()}_DONE${padding}` };
   }
 
   if (made === 0) return { text: 'Starting the swarm.', toolCall: { name: 'agents', arguments: { op: 'swarm', preset: 'ideate', task: loadText('node', load) } } };
