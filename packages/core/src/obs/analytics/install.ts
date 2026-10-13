@@ -6,7 +6,7 @@
 import { ERROR_CODES, type ErrorCode, type KinuError } from '../error';
 import {
   createCompositeLogger, createConsoleLogger, diagnostics, setDiagnosticsSink,
-  type LogEventName, type LogFields, type Logger,
+  type LogEventName, type LogFields, type Logger, type RelayedLine,
 } from '../log';
 import * as v from 'valibot';
 import { boundaryOf, eventFamily } from './boundaries';
@@ -156,6 +156,9 @@ function createAnalyticsLogger(env: AnalyticsEnv): Logger {
     },
     failure(name: LogEventName, error: KinuError, fields?: LogFields): void {
       route(name, fields ?? {}, error.code);
+    },
+    relay(line: RelayedLine): void {
+      route(line.event, line.fields, line.code ?? '');
     },
   };
 }

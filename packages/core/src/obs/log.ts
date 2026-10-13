@@ -4,9 +4,10 @@
  */
 
 import { Cause, Effect, Exit } from 'effect';
+import * as v from 'valibot';
 import type { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { attempt, settle, settleSync } from './effect';
-import { renderCauseChain, toKinuError, type ErrorCode, type KinuError } from './error';
+import { ERROR_CODES, renderCauseChain, toKinuError, type ErrorCode, type KinuError } from './error';
 import { redactSecrets } from '../safety/secret-patterns';
 
 /**
@@ -69,6 +70,9 @@ export interface Logger {
     error: KinuError,
     fields?: Fields & LoggableFields<Fields>,
   ): void;
+  /** A line another isolate wrote through this envelope, its fields banned where it was written: a sink with no use for
+   *  one (a test's) leaves this out. */
+  relay?(line: RelayedLine): void;
 }
 
 /** Caller fields nest under `fields` so none can overwrite `code`; discriminators lead. */
@@ -77,6 +81,28 @@ interface LogLine {
   readonly code?: ErrorCode;
   readonly cause?: string;
   readonly fields: LogFields;
+}
+
+/** A line as another isolate wrote it: one whose console no log store sees (a Dynamic Worker's), written again here. */
+export type RelayedLine = LogLine;
+
+const isLogEventName = (name: string): name is LogEventName => /^[^.\s]+\.\S+$/u.test(name);
+
+const LogLineSchema = v.pipe(v.string(), v.parseJson(), v.object({
+  event: v.pipe(v.string(), v.check(isLogEventName)),
+  code: v.optional(v.picklist(ERROR_CODES)),
+  cause: v.optional(v.string()),
+  fields: v.record(v.string(), v.union([v.string(), v.number(), v.boolean()])),
+}));
+
+/** A line {@link createLineLogger} wrote, read back in its envelope; null for any other text. */
+export function relayedLine(text: string): RelayedLine | null {
+  const parsed = v.safeParse(LogLineSchema, text);
+
+  if (!parsed.success || !isLogEventName(parsed.output.event)) return null;
+  const { event, code, cause, fields } = parsed.output;
+
+  return { event, fields, ...(code !== undefined && { code }), ...(cause !== undefined && { cause }) };
 }
 
 /** A logger over any line sink: the JSON envelope is this file's, the destination the caller's. */
@@ -93,6 +119,14 @@ export function createLineLogger(write: (line: string) => void): Logger {
     failure(name: LogEventName, error: KinuError, fields?: LogFields): void {
       write(JSON.stringify({
         event: name, code: error.code, cause: redactSecrets(renderCauseChain(error)), fields: masked(fields),
+      } satisfies LogLine));
+    },
+    relay(line: RelayedLine): void {
+      write(JSON.stringify({
+        event: line.event,
+        ...(line.code !== undefined && { code: line.code }),
+        ...(line.cause !== undefined && { cause: redactSecrets(line.cause) }),
+        fields: masked(line.fields),
       } satisfies LogLine));
     },
   };
@@ -115,6 +149,9 @@ export function createCompositeLogger(members: readonly Logger[]): Logger {
     },
     failure(name, error, fields) {
       return settleSync(fan((member) => member.failure(name, error, fields)));
+    },
+    relay(line) {
+      return settleSync(fan((member) => member.relay?.(line)));
     },
   };
 }
@@ -143,13 +180,16 @@ export function setDiagnosticsSink(logger: Logger): () => void {
   };
 }
 
-/** Shared logger for call sites without an injection seam; routes to the installed sink. */
-export const diagnostics: Logger = {
+/** Shared logger for call sites without an injection seam; routes to the installed sink, which relays a line or not. */
+export const diagnostics: Logger & Required<Pick<Logger, 'relay'>> = {
   event(name, fields) {
     diagnosticsSink.event(name, fields);
   },
   failure(name, error, fields) {
     diagnosticsSink.failure(name, error, fields);
+  },
+  relay(line) {
+    diagnosticsSink.relay?.(line);
   },
 };
 
@@ -234,6 +274,9 @@ export function createRecordingLogger(): RecordingLogger {
         cause: renderCauseChain(error),
         fields: fields ? { ...fields } : {},
       });
+    },
+    relay(line: RelayedLine): void {
+      record({ event: line.event, code: line.code ?? null, cause: line.cause ?? null, fields: { ...line.fields } });
     },
     until(holds) {
       if (holds(emitted)) return Promise.resolve();
