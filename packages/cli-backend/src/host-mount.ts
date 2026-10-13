@@ -38,15 +38,24 @@ function throwVfsError(input: { error: unknown; syscall: string; path: string })
 type HostFiles = VFS & Required<Pick<VFS, 'readRange' | 'rmdir' | 'rename' | 'readlink'>> & Required<Pick<CheckpointFiles, 'writeFileIfDigest'>>;
 
 /**
- * Each path's compare-through-rename, one at a time in this process: every head's plane over the machine shares this
- * table, so two of them cannot both pass a compare and the later rename lose the first write. Keyed by the path's real
- * directory, so a link to it is the same file.
+ * Each file's compare-and-write, one at a time in this process: every head's plane over the machine shares this table,
+ * so two of them cannot both pass a compare and the later write lose the first. Keyed by the file itself (device and
+ * inode), so every name for it, a hard link or a link to its directory, is the same file; a name with no file yet by
+ * its real directory and name.
  */
 const replacing = new Map<string, Promise<unknown>>();
 
-async function oneAtATime<T>(path: string, run: () => Promise<T>): Promise<T> {
+async function fileKey(path: string): Promise<string> {
+  const held = await tolerateAsync(() => fs.stat(path, { bigint: true }), 'enoent');
+
+  if (held !== undefined) return `${String(held.dev)}:${String(held.ino)}`;
   const directory = await tolerateAsync(() => fs.realpath(dirname(path)), 'enoent') ?? dirname(path);
-  const key = join(directory, basename(path));
+
+  return join(directory, basename(path));
+}
+
+async function oneAtATime<T>(path: string, run: () => Promise<T>): Promise<T> {
+  const key = await fileKey(path);
   const before = replacing.get(key);
 
   const mine = (async () => {
@@ -70,7 +79,7 @@ async function oneAtATime<T>(path: string, run: () => Promise<T>): Promise<T> {
 /**
  * `data` at `path` only if its bytes still hash to `expected` (null: only if none is there), written over the file in
  * place, as a plain write does: it keeps its inode, owner, group, mode, ACLs and every other link to it, and a file this
- * user may not write is refused. Each path's compare and write run one at a time in this process (`oneAtATime`); this
+ * user may not write is refused. Each file's compare and write run one at a time in this process (`oneAtATime`); this
  * host gives no lock against another process's write in between.
  */
 function replaceIfDigest(path: string, data: Uint8Array, expected: string | null): Promise<VfsDigestWrite> {
