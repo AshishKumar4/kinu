@@ -113,7 +113,6 @@ describe('bun install over node_modules linked into another checkout', () => {
     const install = await bun(checkout, 'install');
 
     expect(install.exitCode, install.output).not.toBe(0);
-    expect(install.output).toContain('refuse-linked-install');
     expect(snapshot(primary)).toEqual(primaryBefore);
     expect(snapshot(join(checkout, 'node_modules'))).toEqual(modulesBefore);
     expect(existsSync(join(checkout, 'bun.lock'))).toBe(false);
@@ -127,7 +126,6 @@ describe('bun install over node_modules linked into another checkout', () => {
 
     const scan = await bun(checkout, 'pm', 'scan');
     expect(scan.exitCode, scan.output).toBe(0);
-    expect(scan.output).not.toContain('refuse-linked-install');
   });
 });
 

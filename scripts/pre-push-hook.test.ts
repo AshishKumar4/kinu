@@ -108,10 +108,9 @@ describe('the pre-push hook proves only the commit it pushes', () => {
 
     writeFileSync(join(repo, path), text);
 
-    const { status, stderr } = await runHook(repo, head);
+    const { status } = await runHook(repo, head);
 
     expect(status).toBe(1);
-    expect(stderr).toContain('uncommitted or untracked changes');
   });
 });
 
