@@ -964,7 +964,10 @@ the owner, built 2026-10-11 on `lane/main-isolate`.
   report (`AgentReport.runEnds`). One commit ends it: its answer, its run's end,
   any claim of its rounds still open, and its end kept on its held input
   (`queued_turns.run_end_json`), which retires once a report carrying the end
-  reached the workspace. A death before then tells the kept end at the next
+  reached the workspace. Nothing crosses between its answer and that commit:
+  its rounds' reviews ride its end, which the workspace advises on as it takes
+  it, and its live trace and charges are told after the commit, before the end
+  (#75). A death before then tells the kept end at the next
   start and never runs the run again; before #73 it ran the whole run again
   (the model asked twice, its tool effects repeated). A newer generation of the
   run, re-driven after a reset of the workspace, replaces a queued one, waits

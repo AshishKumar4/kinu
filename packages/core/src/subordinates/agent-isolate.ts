@@ -135,10 +135,9 @@ export interface AgentToolCall {
   readonly input: JsonValue;
 }
 
+/** A completed round of a delivered run, for its caller's advisor: carried by the run's end, and reviewed by the
+ *  workspace as it takes that end, so nothing of it crosses before the run's end commits. */
 export interface AgentReview {
-  readonly turnId: string;
-  /** The run it reviews: one of another generation of the run, re-driven under the same turn, reaches nothing of it. */
-  readonly runId: string;
   readonly turn: CompletedTurn;
   readonly reachable: readonly string[];
   readonly mode: WorkMode;
@@ -177,6 +176,8 @@ export interface AgentTurnEnd extends Omit<HeadReport, 'errorMessage'> {
   readonly figures: AgentFigures;
   readonly errorMessage: string | null;
   readonly produced?: readonly JsonValue[];
+  /** Its completed rounds, for its caller's advisor, in order. */
+  readonly reviews?: readonly AgentReview[];
 }
 
 export interface TurnRequestAt {

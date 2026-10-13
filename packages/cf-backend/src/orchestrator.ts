@@ -1106,7 +1106,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         return { tasks: reads.openTasks(), asyncWakePending: reads.runningJobs().total > 0 };
       },
-      advise: (review) => this.agentTurns.advise(actorId, review),
       enqueueTurn: (input) => this.enqueueHostedTurn(this.actorHost().bindStores(actorReferenceOf(this.liveAgentOf(actorId))), input),
       executeTool: (call) => {
         this.admitWork();
@@ -2900,7 +2899,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         if (accepted) recordAgentFigures(this.boundSql, actorId, ended.outcome.ended.figures);
       }
 
-      this.agentTurns.runEnded(actorId, ended);
+      await this.agentTurns.runEnded(actorId, ended);
       this.runSettled(actorId, { turnId: ended.id, runId: ended.runId });
     }
 

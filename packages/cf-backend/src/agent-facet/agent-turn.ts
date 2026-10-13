@@ -102,7 +102,6 @@ export interface AgentWorkspace {
   /** The workspace's lane that keeps its prompt cache warm (`CacheWarming`): a chat turn's preparation notes its request
    *  there (`TurnOpeningAsk`), and its end arms the warm it earned. */
   armCacheWarm(input: CacheWarmArm): Promise<number | null>;
-  advise(review: AgentReview): Promise<void>;
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult>;
   executeTool(call: AgentToolCall): Promise<AgentToolAnswer>;
   /** The workspace's receipts for calls of an execution whose rows here only point there; a call it holds none for is
@@ -476,6 +475,8 @@ export async function deliveredRun(
   const capture = new HeadCapture();
   const spend = new FacetSpend(workspace);
   const run: PreparedRun = { opened: null, trace: null };
+  // Its rounds' reviews ride its end: no advice crosses before the end commits.
+  const reviews: AgentReview[] = [];
   let produced: readonly ModelMessage[] | undefined;
 
   openTurnRun(actor.stores.eventRecorder, runId, {
@@ -509,7 +510,7 @@ export async function deliveredRun(
       capture,
       isAborted: () => signal.aborted,
       signal,
-      advise: async (turn, reachable, mode) => await workspace.advise({ turnId: task.sequenceId, runId, turn, reachable, mode }),
+      advise: async (turn, reachable, mode) => { reviews.push({ turn, reachable, mode }); },
     };
 
     const { brief } = prepared;
@@ -546,49 +547,46 @@ export async function deliveredRun(
     return { input: prepared.input, deps: inference };
   };
 
-  // Every end closes the stream; an open one holds the relay.
-  let report: Awaited<ReturnType<typeof runHeadInference>>;
-
   try {
-    report = await runHeadInference({ key: { turnId: task.sequenceId, runId, mode: task.mode }, actor, prepare });
+    const report = await runHeadInference({ key: { turnId: task.sequenceId, runId, mode: task.mode }, actor, prepare });
+    const completion = report.canonicalCompletion;
+    // No slates are asked for: a crossing here would leave a death in it to run the run again (#75), and the agent a run
+    // is delivered to, a node or a head, is a run actor whose transcript holds no turn, so no answer carries them.
+    const answer = completion === undefined ? () => {} : await database.prepareAnswer(completion);
+
+    const ended: AgentTurnEnd = {
+      ...report,
+      activity: database.takeActivity(),
+      figures: database.figures(),
+      errorMessage: report.errorMessage ?? null,
+      ...(produced !== undefined && { produced: encodeModelMessageValues(produced) }),
+      ...(reviews.length > 0 && { reviews }),
+    };
+
+    const closing = actor.stores.eventRecorder.collect(() => actor.runtime.storage.transactionSync(() => {
+      closeTurnRun(actor.stores.eventRecorder, runId, {
+        turnIndex: actor.session.orchestrator.sessionTurnIndex,
+        usage: report.usage,
+        workMode: actor.session.workMode,
+        ...classifyRunEnd({
+          completed: report.status === 'completed',
+          interrupted: report.status === 'aborted',
+          errorText: report.errorMessage,
+        }),
+      });
+      answer();
+      recordEnd({ ended });
+
+      // A round a dead isolate opened and the run, run again, never reached: the run's end is its end too.
+      return actor.stores.claims.settleRunIn(runId, 'indeterminate');
+    }));
+
+    closing.value();
+    closing.publish();
   } finally {
+    // After its end committed, so no death in them runs the run again (#75); before its end is told, so the end its
+    // caller hears was traced and charged. A death between loses only them, as their relays drop any failure.
     await run.trace?.flush();
+    await spend.settled();
   }
-
-  // Its charges land before its end is kept: an end a restart tells was charged.
-  await spend.settled();
-
-  const completion = report.canonicalCompletion;
-  // No slates are asked for: a crossing here would leave a death in it to run the run again (#75), and the agent a run is
-  // delivered to, a node or a head, is a run actor whose transcript holds no turn, so no answer carries them.
-  const answer = completion === undefined ? () => {} : await database.prepareAnswer(completion);
-
-  const ended: AgentTurnEnd = {
-    ...report,
-    activity: database.takeActivity(),
-    figures: database.figures(),
-    errorMessage: report.errorMessage ?? null,
-    ...(produced !== undefined && { produced: encodeModelMessageValues(produced) }),
-  };
-
-  const closing = actor.stores.eventRecorder.collect(() => actor.runtime.storage.transactionSync(() => {
-    closeTurnRun(actor.stores.eventRecorder, runId, {
-      turnIndex: actor.session.orchestrator.sessionTurnIndex,
-      usage: report.usage,
-      workMode: actor.session.workMode,
-      ...classifyRunEnd({
-        completed: report.status === 'completed',
-        interrupted: report.status === 'aborted',
-        errorText: report.errorMessage,
-      }),
-    });
-    answer();
-    recordEnd({ ended });
-
-    // A round a dead isolate opened and the run, run again, never reached: the run's end is its end too.
-    return actor.stores.claims.settleRunIn(runId, 'indeterminate');
-  }));
-
-  closing.value();
-  closing.publish();
 }

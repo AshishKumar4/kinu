@@ -32,7 +32,6 @@ const unusedPort: AgentWorkspacePort = {
   steerSkills: unused,
   openWork: unused,
   armCacheWarm: unused,
-  advise: unused,
   enqueueTurn: unused,
   executeTool: unused,
   receipts: unused,

@@ -9,7 +9,7 @@ import { RECOVERY_BACKOFF_CEILING_MS } from '@kinu.run/core';
 import {
   driveUntil, gatewayWorkspace, mainDatabase, relayedReports, storedChat, workspaceMainActor, type StartedHarness,
 } from './helpers/actor-harness';
-import { delayNextRunEnd, delayNextTurnReport, failNextAnswerWrite } from './helpers/agent-facets';
+import { delayNextRunEnd, delayNextRunReview, delayNextTurnReport, failNextAnswerWrite } from './helpers/agent-facets';
 import { socketConnection } from './helpers/bindings';
 import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 
@@ -60,6 +60,29 @@ function chatRequest(requestId: string, id: string, trigger: 'submit-message' | 
   });
 }
 
+/** A workspace whose main agent starts a one-node search, then says so; `nodeCalls` counts the node's model calls. */
+function searching() {
+  let calls = 0;
+
+  const workspace = gatewayWorkspace(stubAiBinding((run) => {
+    if (!openingOf(run).includes(SEARCH)) {
+      calls += 1;
+
+      return chatCompletion(run, 'Cache the token table.');
+    }
+
+    return requestOf(run).messages.some((message) => message.role === 'tool')
+      ? chatCompletion(run, 'Searching.')
+      : toolCallCompletion(run, { tool: 'agents', args: { op: 'swarm', task: TASK, preset: 'ideate', branches: 1, depth: 1 } }, 'swarm_0');
+  }));
+
+  return { workspace, nodeCalls: () => calls };
+}
+
+function searchSettled(workspace: StartedHarness): boolean {
+  return workspace.db.query<{ status: string }, []>('SELECT status FROM head_journal').get()?.status === 'completed';
+}
+
 test('a turn whose answer could not commit ends failed, and a restart does not run it again', async () => {
   const { workspace, asked } = answering();
   const id = crypto.randomUUID();
@@ -97,21 +120,7 @@ test("a failed turn the owner retried is answered once by the Retry, and a resta
 });
 
 test("a node whose isolate dies after its run ended, with its end untold, is not run again, and its search completes", async () => {
-  let nodeCalls = 0;
-
-  const gateway = stubAiBinding((run) => {
-    if (!openingOf(run).includes(SEARCH)) {
-      nodeCalls += 1;
-
-      return chatCompletion(run, 'Cache the token table.');
-    }
-
-    return requestOf(run).messages.some((message) => message.role === 'tool')
-      ? chatCompletion(run, 'Searching.')
-      : toolCallCompletion(run, { tool: 'agents', args: { op: 'swarm', task: TASK, preset: 'ideate', branches: 1, depth: 1 } }, 'swarm_0');
-  });
-
-  const workspace = gatewayWorkspace(gateway);
+  const { workspace, nodeCalls } = searching();
   const told = delayNextRunEnd();
   const id = crypto.randomUUID();
 
@@ -124,9 +133,9 @@ test("a node whose isolate dies after its run ended, with its end untold, is not
   // It dies there: the run's answer and its end are committed, its telling only on the way.
   workspace.agent.harnessResetAgentIsolate(node?.storage_key ?? '');
   setSystemTime(new Date(Date.now() + RECOVERY_BACKOFF_CEILING_MS + 1));
-  await driveUntil(workspace, 'the search never settled', () => workspace.db.query<{ status: string }, []>('SELECT status FROM head_journal').get()?.status === 'completed');
+  await driveUntil(workspace, 'the search never settled', () => searchSettled(workspace));
 
-  expect(nodeCalls).toBe(1);
+  expect(nodeCalls()).toBe(1);
 });
 
 test("a hire whose isolate dies as its turn's report goes to its hirer is asked once, and its hirer hears it once", async () => {
@@ -166,4 +175,18 @@ test("a hire whose isolate dies as its turn's report goes to its hirer is asked 
   await driveUntil(workspace, "the hire's hirer never heard its report", () => relayedReports(workspace.db).some((report) => report.includes(ANSWER)));
 
   expect({ asked, heard: relayedReports(workspace.db).filter((report) => report.includes(ANSWER)).length }).toEqual({ asked: 1, heard: 1 });
+});
+
+test("a node whose isolate dies as its round's review goes to its workspace is not asked again, and its search completes", async () => {
+  const { workspace, nodeCalls } = searching();
+  // The review of the node's round goes to its workspace on the way: its isolate dies there.
+  const reviewing = delayNextRunReview();
+  const id = crypto.randomUUID();
+
+  await workspace.agent.onMessage(owner, chatRequest(id, id, 'submit-message', SEARCH));
+  workspace.agent.harnessResetAgentIsolate(await reviewing.reached);
+  setSystemTime(new Date(Date.now() + RECOVERY_BACKOFF_CEILING_MS + 1));
+  await driveUntil(workspace, 'the search never settled', () => searchSettled(workspace));
+
+  expect(nodeCalls()).toBe(1);
 });

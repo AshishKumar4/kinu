@@ -166,12 +166,17 @@ export class AgentTurns {
 
   /** A run's end as its agent's report told it: its open run's caller hears it. One this activation never ran is gone, and
    *  so is another generation's of the same id, whose caller went with a reset: the re-driven caller awaits its own. */
-  runEnded(actorId: string, report: RunEndReport): void {
+  async runEnded(actorId: string, report: RunEndReport): Promise<void> {
     const turn = this.open.get(actorId, report.id);
     const waiting = turn?.ended;
 
     if (waiting === undefined || turn?.request.run?.inference.runId !== report.runId) return;
     const { outcome } = report;
+
+    // Its rounds' advice, reviewed here as its end is taken: nothing of its rounds crossed before its end committed.
+    for (const review of 'ended' in outcome ? outcome.ended.reviews ?? [] : []) {
+      await hold(logged('agent.run_advice_failed', { doing: "reviewing a delivered run's round", otherwise: 'io' }, () => this.advise(actorId, { turnId: report.id, runId: report.runId, review })));
+    }
 
     if ('ended' in outcome) waiting.resolve(outcome.ended);
     else waiting.reject(new KinuError(outcome.refused.code, outcome.refused.message));
@@ -579,14 +584,14 @@ export class AgentTurns {
     return this.dynamic(turn, prepared);
   }
 
-  async advise(actorId: string, review: AgentReview): Promise<void> {
+  private async advise(actorId: string, { turnId, runId, review }: { readonly turnId: string; readonly runId: string; readonly review: AgentReview }): Promise<void> {
     const { turn: completed, reachable, mode } = review;
-    const advise = this.namedRun(actorId, review)?.advise;
+    const advise = this.namedRun(actorId, { turnId, runId })?.advise;
 
     if (advise !== undefined) return await advise(completed, reachable, mode);
 
     if (!improvementLanesOpen('completed', mode)) return;
-    const advisor = this.deps.advisor(this.prepared(this.turn(actorId, review.turnId)).actor);
+    const advisor = this.deps.advisor(this.prepared(this.turn(actorId, turnId)).actor);
 
     await advisor.hire(advisor.snapshot(completed, reachable));
   }

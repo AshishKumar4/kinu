@@ -216,7 +216,6 @@ export function workspaceClient(workspace: AgentWorkspaceCalls): WorkspaceClient
     steerSkills: (...args) => settle(viaPort((port) => port.steerSkills(...args))),
     openWork: () => settle(viaPort((port) => port.openWork())),
     armCacheWarm: (...args) => settle(viaPort((port) => port.armCacheWarm(...args))),
-    advise: (...args) => settle(viaPort((port) => port.advise(...args))),
     enqueueTurn: (...args) => settle(viaPort((port) => port.enqueueTurn(...args))),
     executeTool: (...args) => settle(viaPort((port) => port.executeTool(...args))),
     receipts: (...args) => settle(viaPort((port) => port.receipts(...args))),

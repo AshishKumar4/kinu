@@ -139,6 +139,19 @@ export interface HeldIsolateCall {
   release(): void;
 }
 
+let delayedRunReview: { readonly reached: (storageKey: string) => void; readonly released: Promise<void> } | null = null;
+
+/** The next crossing that carries a delivered run's round reviews to its workspace (its end's report) waits on the way
+ *  until released. */
+export function delayNextRunReview(): HeldIsolateCall {
+  const reached = Promise.withResolvers<string>();
+  const released = Promise.withResolvers<void>();
+
+  delayedRunReview = { reached: reached.resolve, released: released.promise };
+
+  return { reached: reached.promise, release: released.resolve };
+}
+
 /** The next report any hire's settled turn owes its hirer waits on the way to the workspace until released. */
 export function delayNextTurnReport(): HeldIsolateCall {
   const reached = Promise.withResolvers<string>();
@@ -492,6 +505,15 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
             await delayedEnd.released;
           }
 
+          const reviewed = report.runEnds.some(({ outcome }) => 'ended' in outcome && (outcome.ended.reviews?.length ?? 0) > 0);
+          const delayedReview = reviewed ? delayedRunReview : null;
+
+          if (delayedReview !== null) {
+            delayedRunReview = null;
+            delayedReview.reached(placement.storageKey);
+            await delayedReview.released;
+          }
+
           const catching = heldReports.get(placement.storageKey);
 
           if (catching !== undefined && (holds || next !== null)) {
@@ -507,7 +529,6 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
         steerSkills: (text, alreadyActive) => host().steerSkills(text, alreadyActive),
         openWork: () => host().openWork(),
         armCacheWarm: (input) => host().armCacheWarm(input),
-        advise: (review) => host().advise(review),
         enqueueTurn: (input) => host().enqueueTurn(input),
         executeTool: (call) => host().executeTool(call),
         receipts: (turnId, runId, callIds) => host().receipts(turnId, runId, callIds),
