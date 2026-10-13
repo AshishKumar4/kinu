@@ -261,15 +261,15 @@ describe('durable device request ownership', () => {
     for (const requestId of [detaching, sibling]) {
       harness.db.prepare(
         `INSERT INTO device_inflight_requests
-         (request_id, device_id, workspace, turn_id)
+         (request_id, device_id, workspace, actor_id)
          VALUES (?, ?, ?, ?)`,
-      ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
+      ).run(requestId, harness.deviceId, WORKSPACE, 'agent-1');
     }
 
     expect(await harness.userDO.transferDeviceRequestToBackgroundJob(harness.workspace, detaching, 'job-1'))
       .toEqual({ transferred: true });
 
-    expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
+    expect(await harness.userDO.cancelDeviceRequestsForAgent(harness.workspace, 'agent-1'))
       .toEqual([{ requestId: sibling, outcome: 'terminated' }]);
     expect(await harness.userDO.cancelDeviceRequestsForBackgroundJob(harness.workspace, 'job-1'))
       .toEqual([{ requestId: detaching, outcome: 'terminated' }]);
@@ -295,11 +295,11 @@ describe('durable device request ownership', () => {
     const harness = await deviceHarness();
     const claimed = nextDeviceRequestId();
     harness.db.prepare(
-      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
+      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, actor_id)
        VALUES (?, ?, ?, ?)`,
-    ).run(claimed, harness.deviceId, WORKSPACE, 'turn-1');
+    ).run(claimed, harness.deviceId, WORKSPACE, 'agent-1');
 
-    const sweep = harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1');
+    const sweep = harness.userDO.cancelDeviceRequestsForAgent(harness.workspace, 'agent-1');
     expect(await harness.userDO.transferDeviceRequestToBackgroundJob(harness.workspace, claimed, 'job-1'))
       .toEqual({ transferred: false });
     expect(await sweep).toEqual([{ requestId: claimed, outcome: 'terminated' }]);
@@ -311,13 +311,13 @@ describe('durable device request ownership', () => {
     const harness = await deviceHarness();
     const detached = nextDeviceRequestId();
     harness.db.prepare(
-      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
+      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, actor_id)
        VALUES (?, ?, ?, ?)`,
-    ).run(detached, harness.deviceId, WORKSPACE, 'turn-1');
+    ).run(detached, harness.deviceId, WORKSPACE, 'agent-1');
 
     expect(await harness.userDO.transferDeviceRequestToBackgroundJob(harness.workspace, detached, 'job-1'))
       .toEqual({ transferred: true });
-    expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1')).toEqual([]);
+    expect(await harness.userDO.cancelDeviceRequestsForAgent(harness.workspace, 'agent-1')).toEqual([]);
     expect(harness.deviceFrames.filter((frame) => frame.method === DEVICE_CANCEL_METHOD)).toEqual([]);
     await harness.closeDeviceHarness();
   });
@@ -326,17 +326,17 @@ describe('durable device request ownership', () => {
     const harness = await deviceHarness();
     const requestId = nextDeviceRequestId();
     harness.db.prepare(
-      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
+      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, actor_id)
        VALUES (?, ?, ?, ?)`,
-    ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
+    ).run(requestId, harness.deviceId, WORKSPACE, 'agent-1');
     harness.attachDevice(null);
 
     // No live tunnel: the kill cannot be confirmed, so the row stays retryable.
-    expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
+    expect(await harness.userDO.cancelDeviceRequestsForAgent(harness.workspace, 'agent-1'))
       .toEqual([{ requestId, outcome: 'failed', detail: NO_DEVICE_CONNECTED }]);
 
     harness.attachDevice(harness.deviceId);
-    expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
+    expect(await harness.userDO.cancelDeviceRequestsForAgent(harness.workspace, 'agent-1'))
       .toEqual([{ requestId, outcome: 'terminated' }]);
     await harness.closeDeviceHarness();
   });
@@ -345,16 +345,16 @@ describe('durable device request ownership', () => {
     const harness = await deviceHarness();
     const requestId = nextDeviceRequestId();
     harness.db.prepare(
-      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
+      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, actor_id)
        VALUES (?, ?, ?, ?)`,
-    ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
+    ).run(requestId, harness.deviceId, WORKSPACE, 'agent-1');
     harness.db.prepare(
       `UPDATE device_inflight_requests SET cancel_claim = ? WHERE request_id = ?`,
     ).run('claim-of-a-dead-activation', requestId);
 
     const revived = createTestUserDO({ storage: harness.db, deviceResponder: daemon });
     revived.attachDevice(harness.deviceId);
-    expect(await revived.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
+    expect(await revived.userDO.cancelDeviceRequestsForAgent(harness.workspace, 'agent-1'))
       .toEqual([{ requestId, outcome: 'terminated' }]);
     await revived.joinFibers();
     revived.close();
@@ -374,18 +374,18 @@ describe('durable device request ownership', () => {
 
     const requestId = nextDeviceRequestId();
     harness.db.prepare(
-      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
+      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, actor_id)
        VALUES (?, ?, ?, ?)`,
-    ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
+    ).run(requestId, harness.deviceId, WORKSPACE, 'agent-1');
 
-    expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
+    expect(await harness.userDO.cancelDeviceRequestsForAgent(harness.workspace, 'agent-1'))
       .toEqual([{ requestId, outcome: 'terminated' }]);
     expect(await harness.userDO.transferDeviceRequestToBackgroundJob(harness.workspace, requestId, 'job-1'))
       .toEqual({ transferred: false });
 
     // The retry cleans up and never kills the dead process group a second time.
     ackWorks = true;
-    expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
+    expect(await harness.userDO.cancelDeviceRequestsForAgent(harness.workspace, 'agent-1'))
       .toEqual([{ requestId, outcome: 'terminated' }]);
     expect(harness.deviceFrames.filter((frame) => frame.method === DEVICE_CANCEL_METHOD)
       .map((frame) => frame.params[0])).toEqual([requestId]);
@@ -404,10 +404,10 @@ describe('durable device request ownership', () => {
 
     const requestId = nextDeviceRequestId();
     harness.db.prepare(
-      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
+      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, actor_id)
        VALUES (?, ?, ?, ?)`,
-    ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
-    expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
+    ).run(requestId, harness.deviceId, WORKSPACE, 'agent-1');
+    expect(await harness.userDO.cancelDeviceRequestsForAgent(harness.workspace, 'agent-1'))
       .toEqual([{ requestId, outcome: 'terminated' }]);
 
     // Death is durable: a new activation refuses the transfer even before cleaning the row up.
@@ -415,7 +415,7 @@ describe('durable device request ownership', () => {
     revived.attachDevice(harness.deviceId);
     expect(await revived.userDO.transferDeviceRequestToBackgroundJob(harness.workspace, requestId, 'job-1'))
       .toEqual({ transferred: false });
-    expect(await revived.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
+    expect(await revived.userDO.cancelDeviceRequestsForAgent(harness.workspace, 'agent-1'))
       .toEqual([{ requestId, outcome: 'terminated' }]);
     expect(revived.deviceFrames.filter((frame) => frame.method === DEVICE_CANCEL_METHOD)).toEqual([]);
     expect(revived.db.prepare(
@@ -443,18 +443,18 @@ describe('durable device request ownership', () => {
 
     const requestId = nextDeviceRequestId();
     harness.db.prepare(
-      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
+      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, actor_id)
        VALUES (?, ?, ?, ?)`,
-    ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
+    ).run(requestId, harness.deviceId, WORKSPACE, 'agent-1');
 
-    expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
+    expect(await harness.userDO.cancelDeviceRequestsForAgent(harness.workspace, 'agent-1'))
       .toEqual([{ requestId, outcome: 'unknown' }]);
     expect(await harness.userDO.transferDeviceRequestToBackgroundJob(harness.workspace, requestId, 'job-1'))
       .toEqual({ transferred: false });
 
     // A cleanup retry reports the stored answer, never a termination this sweep did not observe.
     ackWorks = true;
-    expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
+    expect(await harness.userDO.cancelDeviceRequestsForAgent(harness.workspace, 'agent-1'))
       .toEqual([{ requestId, outcome: 'unknown' }]);
     expect(harness.db.prepare(
       `SELECT request_id FROM device_inflight_requests WHERE request_id = ?`,
@@ -467,13 +467,13 @@ describe('durable device request ownership', () => {
     const requestId = nextDeviceRequestId();
     harness.db.prepare(
       `INSERT INTO device_inflight_requests
-       (request_id, device_id, workspace, turn_id, cancel_outcome)
+       (request_id, device_id, workspace, actor_id, cancel_outcome)
        VALUES (?, ?, ?, ?, ?)`,
-    ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1', 'terminated');
+    ).run(requestId, harness.deviceId, WORKSPACE, 'agent-1', 'terminated');
     harness.attachDevice(null);
 
     // A confirmed stop must never regress into "the kill failed" when the cleanup socket is gone.
-    expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
+    expect(await harness.userDO.cancelDeviceRequestsForAgent(harness.workspace, 'agent-1'))
       .toEqual([{ requestId, outcome: 'terminated' }]);
     expect(await harness.userDO.transferDeviceRequestToBackgroundJob(harness.workspace, requestId, 'job-1'))
       .toEqual({ transferred: false });
@@ -496,15 +496,15 @@ describe('durable device request ownership', () => {
 
     const requestId = nextDeviceRequestId();
     harness.db.prepare(
-      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
+      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, actor_id)
        VALUES (?, ?, ?, ?)`,
-    ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
+    ).run(requestId, harness.deviceId, WORKSPACE, 'agent-1');
     dropRow = () => {
       harness.db.prepare(`DELETE FROM device_inflight_requests WHERE request_id = ?`).run(requestId);
       dropRow = null;
     };
 
-    expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1')).toEqual([]);
+    expect(await harness.userDO.cancelDeviceRequestsForAgent(harness.workspace, 'agent-1')).toEqual([]);
     await harness.closeDeviceHarness();
   });
 
@@ -514,14 +514,14 @@ describe('durable device request ownership', () => {
     const requestId = nextDeviceRequestId();
 
     await harness.userDO.deviceRpc(harness.workspace, 'exec', ['sleep 30'], {
-      agentName: WORKSPACE, requestId, backgroundJobId: 'job-1',
+      agentName: WORKSPACE, actorId: 'agent-1', requestId, backgroundJobId: 'job-1',
       checkpoint: { agent: WORKSPACE, turnId: 'turn-1', sessionId: 's', dir: null },
     });
 
     expect(harness.db.prepare(
-      `SELECT turn_id, background_job_id FROM device_inflight_requests WHERE request_id = ?`,
-    ).all(requestId)).toEqual([{ turn_id: null, background_job_id: 'job-1' }]);
-    expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1')).toEqual([]);
+      `SELECT actor_id, background_job_id FROM device_inflight_requests WHERE request_id = ?`,
+    ).all(requestId)).toEqual([{ actor_id: null, background_job_id: 'job-1' }]);
+    expect(await harness.userDO.cancelDeviceRequestsForAgent(harness.workspace, 'agent-1')).toEqual([]);
     expect(await harness.userDO.cancelDeviceRequestsForBackgroundJob(harness.workspace, 'job-1'))
       .toEqual([{ requestId, outcome: 'terminated' }]);
     await harness.closeDeviceHarness();
@@ -531,9 +531,9 @@ describe('durable device request ownership', () => {
     const harness = await deviceHarness();
     const requestId = nextDeviceRequestId();
     harness.db.prepare(
-      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
+      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, actor_id)
        VALUES (?, ?, ?, ?)`,
-    ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
+    ).run(requestId, harness.deviceId, WORKSPACE, 'agent-1');
     harness.db.prepare(`UPDATE user_devices SET revoked_at = ? WHERE id = ?`)
       .run(Date.now(), harness.deviceId);
 
@@ -580,9 +580,9 @@ describe('durable device request ownership', () => {
     const harness = await deviceHarness();
     const requestId = nextDeviceRequestId();
     harness.db.prepare(
-      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
+      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, actor_id)
        VALUES (?, ?, ?, ?)`,
-    ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
+    ).run(requestId, harness.deviceId, WORKSPACE, 'agent-1');
     harness.db.prepare(`UPDATE user_devices SET revoked_at = ?, unstopped_at = ? WHERE id = ?`)
       .run(Date.now(), Date.now(), harness.deviceId);
 
@@ -601,9 +601,9 @@ describe('durable device request ownership', () => {
     harness.consentDecision = 'always';
     const requestId = nextDeviceRequestId();
     harness.db.prepare(
-      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
+      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, actor_id)
        VALUES (?, ?, ?, ?)`,
-    ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
+    ).run(requestId, harness.deviceId, WORKSPACE, 'agent-1');
 
     await harness.userDO.deviceRpc(harness.workspace, DEVICE_CANCEL_METHOD, [requestId], {
       agentName: WORKSPACE,
@@ -611,7 +611,7 @@ describe('durable device request ownership', () => {
 
     // The sweep reports the already-stored answer and sends no second kill: the paths cannot
     // disagree.
-    expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
+    expect(await harness.userDO.cancelDeviceRequestsForAgent(harness.workspace, 'agent-1'))
       .toEqual([{ requestId, outcome: 'terminated' }]);
     expect(harness.deviceFrames.filter((frame) => frame.method === DEVICE_CANCEL_METHOD)
       .map((frame) => frame.params[0])).toEqual([requestId]);
@@ -683,9 +683,9 @@ describe('durable device request ownership', () => {
 
     for (const requestId of [first, second]) {
       harness.db.prepare(
-        `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
+        `INSERT INTO device_inflight_requests (request_id, device_id, workspace, actor_id)
          VALUES (?, ?, ?, ?)`,
-      ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
+      ).run(requestId, harness.deviceId, WORKSPACE, 'agent-1');
     }
 
     stealClaim = () => {
@@ -694,7 +694,7 @@ describe('durable device request ownership', () => {
       stealClaim = null;
     };
 
-    expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
+    expect(await harness.userDO.cancelDeviceRequestsForAgent(harness.workspace, 'agent-1'))
       .toEqual([{ requestId: first, outcome: 'terminated' }]);
     // Exactly one authority cancels and reports a request.
     expect(harness.deviceFrames.filter((frame) => frame.method === DEVICE_CANCEL_METHOD)
@@ -717,9 +717,9 @@ describe('durable device request ownership', () => {
 
     const requestId = nextDeviceRequestId();
     harness.db.prepare(
-      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
+      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, actor_id)
        VALUES (?, ?, ?, ?)`,
-    ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
+    ).run(requestId, harness.deviceId, WORKSPACE, 'agent-1');
 
     expect(await harness.userDO.revokeDevice(await testOwner(), harness.deviceId))
       .toEqual({ ok: true, unstoppedCommands: 0 });
@@ -738,9 +738,9 @@ describe('device revocation admission', () => {
     const requestId = nextDeviceRequestId();
     harness.db.prepare(
       `INSERT INTO device_inflight_requests
-       (request_id, device_id, workspace, turn_id)
+       (request_id, device_id, workspace, actor_id)
        VALUES (?, ?, ?, ?)`,
-    ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
+    ).run(requestId, harness.deviceId, WORKSPACE, 'agent-1');
 
     const cancellationSent = Promise.withResolvers<{ id: string; method: string; params: JsonValue[] }>();
     let attachment: JsonValue = null;

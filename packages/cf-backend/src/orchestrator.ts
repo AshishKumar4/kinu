@@ -2078,6 +2078,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const below = stoppedBelow(this.workspaceActors().list(), actorId);
 
     if (below.length === 0) return;
+    // Each stopped agent's commands, through the sweep its own Stop makes.
+    this.detachOwned(Effect.forEach(below, (actor) => this.stopAgentDevices(actor.actorId), { concurrency: 'unbounded', discard: true }));
 
     this.detachOwned(Effect.promise(async () => {
       for (const actor of below) {
@@ -3029,6 +3031,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       }),
       interrupt: () => {
         this.detachOwned(Effect.promise(() => this.stopAgent(actorId)));
+        this.detachOwned(Effect.asVoid(this.stopAgentDevices(actorId)));
         this.stopSubtree(actorId);
       },
       sendState: async (id) => await (await facet()).sendState(snapshot(), id),

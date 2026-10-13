@@ -58,14 +58,15 @@ const OwnershipRowSchema = v.object({
   live_device: v.number(),
 });
 
-/** `turn_id` is the same durable turn key `tool_effect_claims` uses. */
+/** `actor_id`: the agent whose turn runs the command, so the agent's Stop reaches it whether or not that turn has ended
+ *  (#68); null once a background job owns it, or for a command no agent's turn runs. */
 export function initDeviceInflightTable(sql: SqlExec): void {
   sql.exec(`
     CREATE TABLE IF NOT EXISTS device_inflight_requests (
       request_id        TEXT PRIMARY KEY,
       device_id         TEXT NOT NULL,
       workspace         TEXT NOT NULL,
-      turn_id           TEXT,
+      actor_id          TEXT,
       background_job_id TEXT,
       -- The exclusive cancellation claim. A claimed row belongs to exactly one
       -- in-flight sweep, so a parallel detach cannot move it and a second sweep
@@ -82,8 +83,8 @@ export function initDeviceInflightTable(sql: SqlExec): void {
     )
   `);
   sql.exec(`
-    CREATE INDEX IF NOT EXISTS idx_device_inflight_turn
-      ON device_inflight_requests (workspace, turn_id)
+    CREATE INDEX IF NOT EXISTS idx_device_inflight_actor
+      ON device_inflight_requests (workspace, actor_id)
   `);
   sql.exec(`
     CREATE INDEX IF NOT EXISTS idx_device_inflight_device
@@ -110,15 +111,15 @@ export class DeviceRequestLedger {
     requestId: string;
     deviceId: string;
     workspace: string;
-    turnId: string | null;
+    actorId: string | null;
     backgroundJobId: string | null;
   }): void {
     this.sql.exec(
       `INSERT OR IGNORE INTO device_inflight_requests
-         (request_id, device_id, workspace, turn_id, background_job_id)
+         (request_id, device_id, workspace, actor_id, background_job_id)
        VALUES (?, ?, ?, ?, ?)`,
       input.requestId, input.deviceId, input.workspace,
-      input.backgroundJobId === null ? input.turnId : null,
+      input.backgroundJobId === null ? input.actorId : null,
       input.backgroundJobId,
     );
   }
@@ -132,9 +133,9 @@ export class DeviceRequestLedger {
     );
   }
 
-  /** Claim one turn's live requests, excluding rows already detached to a background job. */
-  claimTurnRequests(workspace: string, turnId: string): ClaimedDeviceRequest[] {
-    return this.claim(`turn_id = ? AND background_job_id IS NULL`, workspace, turnId);
+  /** Claim one agent's live requests, any turn's, excluding rows already detached to a background job. */
+  claimAgentRequests(workspace: string, actorId: string): ClaimedDeviceRequest[] {
+    return this.claim(`actor_id = ? AND background_job_id IS NULL`, workspace, actorId);
   }
 
   claimBackgroundJobRequests(workspace: string, jobId: string): ClaimedDeviceRequest[] {
@@ -244,7 +245,7 @@ export class DeviceRequestLedger {
   ): DeviceTransferOutcome {
     this.sql.exec(
       `UPDATE device_inflight_requests
-          SET turn_id = NULL, background_job_id = ?
+          SET actor_id = NULL, background_job_id = ?
         WHERE request_id = ? AND workspace = ?
           AND background_job_id IS NULL AND cancel_claim IS NULL AND cancel_outcome IS NULL
           AND device_id IN (SELECT id FROM user_devices WHERE revoked_at IS NULL)`,

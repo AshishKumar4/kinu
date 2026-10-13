@@ -53,6 +53,7 @@ describe('createHubDeviceTransport', () => {
       hub: () => fakeHub(() => ({ connected, registered: true, toolchain: null })),
       caller,
       agentName: 'agent-1',
+      actorId: 'actor-1',
       cliCwd: () => null,
     });
 
@@ -80,7 +81,7 @@ describe('createHubDeviceTransport', () => {
     };
 
     const transport = createHubDeviceTransport({
-      hub: () => hub, agentName: 'agent-1', cliCwd: () => null, caller,
+      hub: () => hub, agentName: 'agent-1', actorId: 'actor-1', cliCwd: () => null, caller,
       onStatusChanged: () => { moved += 1; },
     });
 
@@ -107,7 +108,7 @@ describe('createHubDeviceTransport', () => {
 
     const transport = createHubDeviceTransport({
       hub: () => (attached ? fakeHub(() => ({ connected: false, registered: false, toolchain: null, devices: [] })) : null),
-      agentName: 'agent-1', cliCwd: () => null, caller,
+      agentName: 'agent-1', actorId: 'actor-1', cliCwd: () => null, caller,
       onStatusChanged: () => { moved += 1; },
     });
 
@@ -122,7 +123,7 @@ describe('createHubDeviceTransport', () => {
     // A null hub means no owner id resolved; `kinu connect` guidance would be wrong.
 
     const transport = createHubDeviceTransport({
-      hub: () => null, agentName: 'agent-1', cliCwd: () => null,
+      hub: () => null, agentName: 'agent-1', actorId: 'actor-1', cliCwd: () => null,
       caller,
     });
 
@@ -140,7 +141,7 @@ describe('createHubDeviceTransport', () => {
 
     // A hub that answers with no device must not read as unattached.
     const unlinked = createHubDeviceTransport({
-      hub: () => fakeHub(() => NO_DEVICE), agentName: 'agent-1', cliCwd: () => null, caller,
+      hub: () => fakeHub(() => NO_DEVICE), agentName: 'agent-1', actorId: 'actor-1', cliCwd: () => null, caller,
     });
 
     let hubRefusal: Error | null = null;
@@ -166,13 +167,14 @@ describe('createHubDeviceTransport', () => {
       hub: () => (hubUp ? hub : failingHub),
       caller,
       agentName: 'agent-1',
+      actorId: 'actor-1',
       cliCwd: () => null,
     });
 
     await transport.rpc('exec', ['echo hi']);
     expect(transport.status()).toEqual({ connected: true, registered: true, toolchain: null });
     expect(hub.rpcCalls[0]).toMatchObject([
-      'exec', ['echo hi'], { agentName: 'agent-1', requestId: expect.stringMatching(/^rpc-/) }, FAKE_CALLER,
+      'exec', ['echo hi'], { agentName: 'agent-1', actorId: 'actor-1', requestId: expect.stringMatching(/^rpc-/) }, FAKE_CALLER,
     ]);
 
     hubUp = false;
@@ -192,7 +194,7 @@ describe('createHubDeviceTransport', () => {
 
 
     const transport = createHubDeviceTransport({
-      hub: () => hub, caller, agentName: 'agent-1', cliCwd: () => null,
+      hub: () => hub, caller, agentName: 'agent-1', actorId: 'actor-1', cliCwd: () => null,
     });
 
     await transport.refreshStatus();
@@ -208,7 +210,7 @@ describe('createHubDeviceTransport', () => {
 
 
     const transport = createHubDeviceTransport({
-      hub: () => hub, caller, agentName: 'agent-1', cliCwd: () => '/home/me/project',
+      hub: () => hub, caller, agentName: 'agent-1', actorId: 'actor-1', cliCwd: () => '/home/me/project',
     });
 
     const requestId = nextDeviceRequestId();
@@ -248,7 +250,7 @@ describe('createHubDeviceTransport', () => {
       acknowledgeDeviceRequest: async () => {},
     };
 
-    const transport = createHubDeviceTransport({ hub: () => hub, caller, agentName: 'agent-1', cliCwd: () => null });
+    const transport = createHubDeviceTransport({ hub: () => hub, caller, agentName: 'agent-1', actorId: 'actor-1', cliCwd: () => null });
 
     expect(await transport.rpc('exec', ['make'], { timeoutMs: 0, requestId: nextDeviceRequestId(), output }))
       .toEqual({ stdout: 'compiled 1\ncafé\n', stderr: 'warn\n', exitCode: 0 });
@@ -257,7 +259,7 @@ describe('createHubDeviceTransport', () => {
 
   test('an exec with nowhere to show its output asks the hub for none', async () => {
     const hub = fakeHub(() => ({ connected: true, registered: true, toolchain: null }));
-    const transport = createHubDeviceTransport({ hub: () => hub, caller, agentName: 'agent-1', cliCwd: () => null });
+    const transport = createHubDeviceTransport({ hub: () => hub, caller, agentName: 'agent-1', actorId: 'actor-1', cliCwd: () => null });
 
     await transport.rpc('exec', ['make'], { timeoutMs: 0, requestId: nextDeviceRequestId() });
 
@@ -272,6 +274,7 @@ describe('createHubDeviceTransport', () => {
       hub: () => hub,
       caller,
       agentName: 'agent-1',
+      actorId: 'actor-1',
       cliCwd: () => '/home/u/proj',
       checkpointMeta: () => ({ turnId: 'msg-42', sessionId: 'default' }),
     });
@@ -296,6 +299,7 @@ describe('createHubDeviceTransport', () => {
       hub: () => hub,
       caller,
       agentName: 'agent-1',
+      actorId: 'actor-1',
       cliCwd: () => '/home/u/proj',
       checkpointMeta: () => ({ turnId: 'msg-42', sessionId: 'default' }),
     });
@@ -309,13 +313,13 @@ describe('createHubDeviceTransport', () => {
 
   test('no checkpoint hint outside a turn or when the meta seam is unwired', async () => {
     const hub = fakeHub(() => ({ connected: true, registered: true, toolchain: null }));
-    const unwired = createHubDeviceTransport({ hub: () => hub, caller, agentName: 'a', cliCwd: () => null });
+    const unwired = createHubDeviceTransport({ hub: () => hub, caller, agentName: 'a', actorId: 'actor-1', cliCwd: () => null });
     await unwired.rpc('exec', ['ls']);
     expect(requiredCall(hub.rpcCalls, 0)[2]?.checkpoint).toBeUndefined();
 
 
     const outsideTurn = createHubDeviceTransport({
-      hub: () => hub, agentName: 'a', cliCwd: () => null, checkpointMeta: () => null,
+      hub: () => hub, agentName: 'a', actorId: 'actor-1', cliCwd: () => null, checkpointMeta: () => null,
       caller,
     });
 
@@ -328,7 +332,7 @@ describe('createHubDeviceTransport', () => {
 
 
     const transport = createHubDeviceTransport({
-      hub: () => hub, agentName: 'agent-1', cliCwd: () => "/home/u/my proj",
+      hub: () => hub, agentName: 'agent-1', actorId: 'actor-1', cliCwd: () => "/home/u/my proj",
       caller,
     });
 
@@ -351,7 +355,7 @@ describe('createHubDeviceTransport', () => {
 
 
     const transport = createHubDeviceTransport({
-      hub: () => denying, caller, agentName: 'agent-1', cliCwd: () => null,
+      hub: () => denying, caller, agentName: 'agent-1', actorId: 'actor-1', cliCwd: () => null,
     });
 
     expect(await transport.refreshStatus()).toEqual({ connected: false, registered: false, toolchain: null });
@@ -365,6 +369,7 @@ describe('createHubDeviceTransport', () => {
       hub: () => fakeHub(() => ({ connected: true, registered: true, toolchain: null })),
       caller: async () => { throw new Error('This workspace has not been issued a capability token yet.'); },
       agentName: 'agent-1',
+      actorId: 'actor-1',
       cliCwd: () => null,
     });
 

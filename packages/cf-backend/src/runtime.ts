@@ -459,6 +459,7 @@ export function createCFRuntime(
     hub: () => userDOStubFor(env, actor),
     caller: () => userCallerFor(actor),
     agentName: actor.workspaceName,
+    actorId: actor.actor.actorId,
     cliCwd: cliCwdForDevice,
     checkpointMeta: () => access.getCheckpointMetaForDevice?.() ?? null,
     onStatusChanged: () => hooks.liveReadsMoved?.(['getExecutors', 'getToolDescriptions']),

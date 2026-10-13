@@ -6,11 +6,12 @@
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import type { UIMessage } from 'ai';
-import { TURN_AUTHOR_METADATA_KEY } from '@kinu.run/core';
+import { actorConnectionTag, TURN_AUTHOR_METADATA_KEY } from '@kinu.run/core';
 import {
   hostedSubordinateHarness, orchestratorHarness, chatSessionTurns, storedChat, type HarnessOrchestratorAgent,
-  workspaceMainActor,
+  type RecordedUserPlaneCalls, workspaceMainActor,
 } from './helpers/actor-harness';
+import { asPane, joinHarnessFibers } from './helpers/agents-sdk';
 import type { Database } from 'bun:sqlite';
 
 /** Scoped by handle: an unscoped read would let a sibling's cancellation satisfy or pollute this assertion. */
@@ -93,6 +94,25 @@ describe('the workspace root answers the actor control plane', () => {
     const rootId = workspaceMainActor(orchestrator.db).actorId;
     expect(cancelActivity(orchestrator.db, rootId)).toEqual([{ detail: '0 foreground aborted' }]);
     expect(cancelActivity(orchestrator.db, child.actor.handle.actorId)).toEqual([]);
+  });
+
+  /** Stop is an agent's own (#68): a hire's reaches its commands on the owner's machine, any turn's, and main's runs on. */
+  test("a hire's Stop sweeps its own device commands and leaves main's running", async () => {
+    const userPlane: RecordedUserPlaneCalls = { warmConnections: [], failWarm: null, titles: [], agentCancels: [] };
+    const orchestrator = orchestratorHarness(userPlane);
+
+    await orchestrator.agent.setSoul('# Purpose\n\nKeep the coast notes.');
+    const { subordinate } = await orchestrator.agent.createSubordinateAgent();
+    const hire = v.parse(v.string(), subordinate.actorId);
+    const main = workspaceMainActor(orchestrator.db).actorId;
+
+    await asPane([actorConnectionTag(hire)], () => orchestrator.agent.cancelCurrentWork());
+    await joinHarnessFibers();
+    expect(userPlane.agentCancels).toEqual([hire]);
+
+    await orchestrator.agent.cancelCurrentWork();
+    await joinHarnessFibers();
+    expect(userPlane.agentCancels).toEqual([hire, main]);
   });
 });
 

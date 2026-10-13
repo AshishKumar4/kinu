@@ -631,7 +631,7 @@ export class UserDevices {
     method: string,
     params: JsonValue[],
     opts?: {
-      deviceId?: string; agentName?: string; checkpoint?: DeviceCheckpointHint;
+      deviceId?: string; agentName?: string; actorId?: string; checkpoint?: DeviceCheckpointHint;
       timeoutMs?: number; requestId?: string; backgroundJobId?: string;
       onOutput?: (output: DeviceExecOutput) => void | Promise<void>;
     },
@@ -714,7 +714,7 @@ export class UserDevices {
         requestId,
         deviceId,
         workspace: workspace,
-        turnId: opts?.checkpoint?.turnId ?? null,
+        actorId: opts?.actorId ?? null,
         backgroundJobId,
       });
     });
@@ -815,17 +815,17 @@ export class UserDevices {
   }
 
   /**
-   * Stop every live device command of one durable turn after a fresh actor activation.
-   * Rows with no turn id are excluded so Stop never widens into a workspace sweep.
+   * Stop every live device command of one agent, whichever of its turns ran it: one its ended turn's Stop left
+   * unconfirmed is reached by the next (#68). Rows with no agent are excluded so Stop never widens into a workspace sweep.
    */
-  async cancelDeviceRequestsForTurn(
+  async cancelDeviceRequestsForAgent(
     caller: UserCaller,
-    turnId: string,
+    actorId: string,
   ): Promise<DeviceCancellationOutcome[]> {
     // Claim atomically before any device await, so a parallel detach to a background job
     // cannot race this sweep.
-    return this.cancelClaimedDeviceRequests(caller, turnId,
-      (workspace) => this._inflight.claimTurnRequests(workspace, turnId));
+    return this.cancelClaimedDeviceRequests(caller, actorId,
+      (workspace) => this._inflight.claimAgentRequests(workspace, actorId));
   }
 
   private async cancelClaimedDeviceRequests(

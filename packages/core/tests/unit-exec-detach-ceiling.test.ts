@@ -679,7 +679,7 @@ describe("a running job's output", () => {
       acknowledgeDeviceRequest: async () => {},
     };
 
-    const transport = createHubDeviceTransport({ hub: () => hub, caller: async () => ({ workspaceToken: 'pwc_test' }), agentName: 'main', cliCwd: () => null });
+    const transport = createHubDeviceTransport({ hub: () => hub, caller: async () => ({ workspaceToken: 'pwc_test' }), agentName: 'main', actorId: 'actor-main', cliCwd: () => null });
     await transport.refreshStatus();
     const router = new DefaultExecutionRouter();
     router.register(createDeviceTunnelExecutor(transport));

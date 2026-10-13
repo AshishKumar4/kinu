@@ -83,18 +83,18 @@ export class DeviceLedgerProbeDO extends DurableObject<Cloudflare.Env> {
     this.initialized = true;
   }
 
-  admit(requestId: string, turnId: string): void {
+  admit(requestId: string, actorId: string): void {
     this.activate();
     this.ledger.insert({
-      requestId, deviceId: DEVICE, workspace: WORKSPACE, turnId, backgroundJobId: null,
+      requestId, deviceId: DEVICE, workspace: WORKSPACE, actorId, backgroundJobId: null,
     });
   }
 
   /** Leaves claims held: the state an activation dying mid-sweep leaves behind. */
-  claimTurn(turnId: string): ProbeClaim[] {
+  claimAgent(actorId: string): ProbeClaim[] {
     this.activate();
 
-    return this.ledger.claimTurnRequests(WORKSPACE, turnId).map((row) => ({
+    return this.ledger.claimAgentRequests(WORKSPACE, actorId).map((row) => ({
       requestId: row.requestId,
       deviceId: row.deviceId,
       claim: row.claim,

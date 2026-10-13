@@ -151,6 +151,7 @@ describe('two daemons connected at once', () => {
       hub: () => fleet.userDO,
       caller: async () => fleet.workspace,
       agentName: WORKSPACE,
+      actorId: 'actor-1',
       cliCwd: () => null,
     });
 

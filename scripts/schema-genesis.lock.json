@@ -636,7 +636,7 @@
     "request_id TEXT PRIMARY KEY",
     "device_id TEXT NOT NULL",
     "workspace TEXT NOT NULL",
-    "turn_id TEXT",
+    "actor_id TEXT",
     "background_job_id TEXT",
     "cancel_claim TEXT",
     "cancel_outcome TEXT CHECK (cancel_outcome IN ('terminated', 'unknown'))"
