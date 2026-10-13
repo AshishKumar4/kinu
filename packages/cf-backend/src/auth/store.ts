@@ -21,7 +21,7 @@ import { ownerCaller, type OwnerCapabilityEnv } from '@kinu.run/core';
 import { timingSafeEqual } from '@kinu.run/core';
 import { classify, diagnostics, toKinuError, type KinuError, settle, settleLogged } from '@kinu.run/core/obs';
 import * as v from 'valibot';
-import { sanitizeReturnTo } from '../lib/return-to';
+import { sanitizeReturnTo } from '@kinu.run/core';
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 

@@ -449,13 +449,13 @@ describe('the control plane in a browser', () => {
         () => document.body.innerText.includes('Failed to fetch'),
       );
 
-      // One classified record per refused attempt — StrictMode re-runs the
-      // mount read, so the attempt count is the runtime's business; the
-      // equality is what holds. Each record carries the class and the WHOLE
-      // chain, the `doing` frame first.
-      await diagnosticsSettled(diagnostics, refused);
-      expect(refused).toBeGreaterThanOrEqual(1);
-      expect(diagnostics).toHaveLength(refused);
+      // One classified record per refused read. A read whose connection drops is asked again once (`respond`), and
+      // the page went network-idle first, so every read has made both requests. Each record carries the class and the
+      // WHOLE chain, the `doing` frame first.
+      expect(refused % 2).toBe(0);
+      await diagnosticsSettled(diagnostics, refused / 2);
+      expect(refused).toBeGreaterThanOrEqual(2);
+      expect(diagnostics).toHaveLength(refused / 2);
 
       for (const line of diagnostics) {
         expect(line.event).toBe('control.read_failed');

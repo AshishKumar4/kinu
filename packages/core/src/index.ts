@@ -2492,6 +2492,7 @@ export {
   type ReportedRoute,
   REPORTED_ROUTES,
   routeTemplateOf,
+  sanitizeReturnTo,
 } from './read-models/app-routes';
 
 export {

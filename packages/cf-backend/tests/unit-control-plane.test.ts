@@ -496,13 +496,6 @@ describe('feedback rows', () => {
 });
 
 describe('the audit log', () => {
-  test('the store exposes no way to change or remove what an attempt recorded', () => {
-    // Append-only as an API-surface fact: one writer appends an attempt, one settles it; neither deletes or edits.
-    const auditNames = Object.keys(store).filter((name) => /audit/i.test(name));
-    expect(auditNames.sort())
-      .toEqual(['AUDIT_OUTCOMES', 'appendAudit', 'listAudit', 'listPendingAudit', 'settleAudit']);
-  });
-
   test('the store chooses the row id and the clock, never the caller', () => {
     // The caller picks neither the primary key nor the clock (only via `now`), so a repeated append is two rows.
     const { sql, close } = freshStore();

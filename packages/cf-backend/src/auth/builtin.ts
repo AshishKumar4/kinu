@@ -9,7 +9,7 @@ import { tolerateAsync } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { SESSION_COOKIE_NAME, setCookie } from './session';
 import { createSession, deriveBuiltinUserId, type OAuthProfile } from './store';
-import { sanitizeReturnTo } from '../lib/return-to';
+import { sanitizeReturnTo } from '@kinu.run/core';
 import { builtinSignInOn } from '@kinu.run/core/identity';
 import type { AuthRoutesAuthority, AuthRoutesEnv } from './routes';
 import {

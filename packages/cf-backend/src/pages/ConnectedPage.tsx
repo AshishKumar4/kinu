@@ -2,7 +2,7 @@
 import { useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
 import { announceConnected } from "@/lib/connect-window";
-import { sanitizeReturnTo } from "@/lib/return-to";
+import { sanitizeReturnTo } from "@kinu.run/core";
 
 export default function ConnectedPage() {
   const [search] = useSearchParams();
