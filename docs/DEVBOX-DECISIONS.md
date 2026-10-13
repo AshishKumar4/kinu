@@ -4574,6 +4574,29 @@ by lands in its scrollback. A server already running loads it at the next attach
 stock attach drew `[devbox] 0:bash* "<container id>"` on the last row; the configured attach drew only the prompt, and
 after `seq 1 120` a reattach showed 74 to 120 and the prompt, with the earlier lines in the page terminal's scrollback.
 
+D85. A host is a class and one export, and the box finds its own namespace (2026-10-13, issue #104). A host used to
+write about 27 lines: the store as an object, `peers` to reach the golden and its siblings, `namespaceBinding`, the
+registry's token and account, and two gateway exports. It now writes `export class Box extends Devbox<Env> {}` and
+`export { DevboxGateway }`. The store is the R2 binding named by `store`, `DEVBOX_STORE` unless overridden, and the
+registry the dead snapshots are deleted from (D65) is `DEVBOX_REGISTRY_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` from the env.
+
+No platform member names an object's own namespace. Measured on Miniflare's workerd (armada `20261013154734-f35cf2e6`,
+`20261013154816-fd3293e0` and `20261013160711-ee86dcc5`): `ctx.exports` holds the Worker's top-level exports and
+nothing else, neither `ctx` nor the id says which of them is the object's, and a namespace's tag is
+`[object LoopbackDurableObjectNamespace]` where an entrypoint's is `[object LoopbackServiceStub]`. The class name is no
+guide either: a Vite build of the product exports `lte as MossaicShardDO` (`20261013155040-a9c96c9e`). So the box takes
+the namespace export whose `idFromString` accepts its own id; every other namespace throws "Durable Object ID is not
+valid for this namespace." A class the Worker does not export has no loopback binding, so the class and
+`DevboxGateway` must be exported, and a box that finds no namespace is refused with `configuration`, naming that.
+
+Every box starts from its own snapshot, else the golden (D66); the declared image is no longer a start source and
+`NO_START_IMAGE` is gone. The golden's tools come from the store, so a box with no bucket bound is refused at its first
+start with `configuration`, naming the binding, where it used to wait on a golden that could not build. A refused
+start is keyed by its size, its internet setting and whether a store is bound (D52). A capacity refusal, or
+`CONTAINER_UNAVAILABLE` after the container ran, says nothing about the snapshot the box woke from, so that snapshot
+stays the source. Every store mount unmounts first. The real-container gate (`gate:devbox-e2e`) passed on
+`fbb799b40`, armada `20261013215648-98491a33`, the golden built in 75 s.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean

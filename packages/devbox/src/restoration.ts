@@ -36,7 +36,7 @@ export function terminalRefusal(reason: string): string {
 }
 
 /** What a start refusal is keyed by (D52): the base is the one golden, so a size, the internet policy, or a bound store
- *  that differs from the refused start's lifts the refusal (D83). */
+ *  that differs from the refused start's lifts the refusal (D85). */
 export interface StartInputs {
   readonly size: BoxSize;
   readonly internet: boolean;

@@ -192,7 +192,7 @@ const DISK_STATE_KEY = 'devbox:disk-chain';
 /** Where the box stamps the container's identity: on the disk a replacement does not keep (P1). */
 const BOOT_ID_PATH = '/tmp/devbox-boot-id';
 
-/** A loopback Durable Object namespace's tag in `ctx.exports`; an entrypoint's stub answers any property as an RPC (D83). */
+/** A loopback Durable Object namespace's tag in `ctx.exports`; an entrypoint's stub answers any property as an RPC (D85). */
 const NAMESPACE_TAG = '[object LoopbackDurableObjectNamespace]';
 
 const NO_NAMESPACE = 'no Durable Object namespace among the Worker\'s exports accepts this box\'s id: export its class from the Worker';
@@ -465,7 +465,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   /**
    * The boxes of this object's own namespace. The platform names no object's namespace: no member of `ctx` or of the
    * id says which export it is, and the class name is not the export name, since a bundler renames classes. So it is
-   * the namespace export that accepts this object's id, every other refusing it (D83; armada 20261013160711-ee86dcc5).
+   * the namespace export that accepts this object's id, every other refusing it (D85; armada 20261013160711-ee86dcc5).
    */
   #ownNamespace(): Siblings | undefined {
     if (this.#siblings !== undefined) return this.#siblings;
@@ -482,7 +482,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   /** What a start needs before the platform is asked: the store the golden's tools come from, and this box's own
-   *  namespace. Either missing is a refusal naming what to add, not a wait (D83). */
+   *  namespace. Either missing is a refusal naming what to add, not a wait (D85). */
   #startable(): Siblings | DevboxError {
     if (this.#bucket() === undefined) return new DevboxError('configuration', this.#unboundStore());
 

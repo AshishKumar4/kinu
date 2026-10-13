@@ -46,7 +46,7 @@ describe('the store mount states its own s3fs bounds', () => {
 describe('the store mount clears a marker before it mounts', () => {
   const s3Calls = (arm: ReturnType<typeof chainBox>) => arm.container.shimCalls.filter((call) => call.startsWith('s3-mount'));
 
-  // Every container starts from a snapshot (D83), whose `/run` may hold the marker of the mount it was taken under.
+  // Every container starts from a snapshot (D85), whose `/run` may hold the marker of the mount it was taken under.
   test('every mount clears a marker first, the first one included', async () => {
     const arm = chainBox();
     expect((await arm.box.attachNow()).kind).toBe('empty');

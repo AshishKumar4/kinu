@@ -296,7 +296,7 @@ const NO_ROOM = [
 ];
 
 /** A start refused for want of a container, in the platform's words or the SDK's code: it says nothing about what the
- *  box started from, so that source stays good (D83). */
+ *  box started from, so that source stays good (D85). */
 export function isCapacityRefusal(thrown: { readonly cause: unknown }): boolean {
   for (let value = thrown.cause; value instanceof Error; value = value.cause) {
     const failure = value;

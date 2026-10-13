@@ -922,7 +922,7 @@ function boxOf(
 
   if (binding === undefined) throw new Error(`no durable-object binding for ${strategy}`);
 
-  // The golden is the namespace's own, by its plain name (D83); every other box is named per arm.
+  // The golden is the namespace's own, by its plain name (D85); every other box is named per arm.
   return binding.get(binding.idFromName(name === GOLDEN_NAME ? GOLDEN_NAME : `${strategy}:${name}`));
 }
 

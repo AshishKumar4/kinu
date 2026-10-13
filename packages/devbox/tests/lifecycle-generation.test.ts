@@ -215,7 +215,7 @@ describe('the startup kick arms restoration without attaching inline', () => {
 
   test('an unhealthy answer AFTER the container ran is no verdict on what it started from: the box keeps it and attaches', async () => {
     // `startFaultAfterRunning` fires after the platform has an instance: the container is up, but the start answered
-    // unavailable. Before D83 the box started the image and refused until the next drive; a box starts from a snapshot
+    // unavailable. Before D85 the box started the image and refused until the next drive; a box starts from a snapshot
     // now, and a transient answer must not report that snapshot lost, so the box asks the running container again.
     const asked: (string | undefined)[] = [];
 

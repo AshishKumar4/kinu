@@ -1200,7 +1200,7 @@ export interface BoxStateParts {
 }
 
 /** A Durable Object namespace as `ctx.exports` holds one: tagged as the platform tags it, which is how a box tells it
- *  from an entrypoint (D83). */
+ *  from an entrypoint (D85). */
 export function testNamespace(siblings: TestSiblings, accepts: (id: string) => boolean = () => true) {
   return {
     [Symbol.toStringTag]: 'LoopbackDurableObjectNamespace',
@@ -1320,7 +1320,7 @@ export interface TestEnv {
 }
 
 /** The platform's side of the golden: the snapshot a box starts from, and the pinned tools in every container this
- *  fake starts, since every container a box runs came from the golden (D66, D83). */
+ *  fake starts, since every container a box runs came from the golden (D66, D85). */
 export function seedGolden(container: FakeSandbox): void {
   container.imageFiles.set(TOOLS_STAMP, artifact.tools.sha256);
   container.files.set(TOOLS_STAMP, artifact.tools.sha256);

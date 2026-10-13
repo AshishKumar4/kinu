@@ -164,7 +164,7 @@ test('a resize goes ahead over an unmanaged command, which a rest would refuse t
 });
 
 /** Binds no store until its host deploys one, so each start is refused the same way: with no bucket the golden cannot
- *  build (D83). */
+ *  build (D85). */
 class UnboundStoreBox extends TestBox {
   bound = false;
 
@@ -222,7 +222,7 @@ test('a start that fails permanently is refused once: later requests and a succe
   });
 });
 
-// D83: with no bucket the golden cannot build, so the box names the binding to add rather than waiting on it forever.
+// D85: with no bucket the golden cannot build, so the box names the binding to add rather than waiting on it forever.
 test('a box with no store bound is refused before the platform is asked, naming the binding; once bound it starts', async () => {
   const { box, container } = harness(UnboundStoreBox);
   const refused = await refusalOf(box.resolveReadiness());

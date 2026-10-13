@@ -522,7 +522,7 @@ export class DiskChainStorage implements DevboxStorage {
 }
 
 /** A box's storage while its store is unbound: nothing it keeps can be reached, so it attaches nothing and saves
- *  nothing, naming the binding to add (D83). */
+ *  nothing, naming the binding to add (D85). */
 export class UnboundStorage implements DevboxStorage {
   readonly #reason: string;
 

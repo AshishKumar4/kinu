@@ -1,4 +1,4 @@
-// D83: a box reaches the golden and its siblings through its own namespace, found among the Worker's exports as the
+// D85: a box reaches the golden and its siblings through its own namespace, found among the Worker's exports as the
 // one namespace that accepts the box's id, whatever the export is named. Nothing else in `ctx` names it.
 import { expect, test } from 'bun:test';
 import { TestDevbox } from './support/test-devbox';
