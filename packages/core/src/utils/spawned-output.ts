@@ -1,4 +1,4 @@
-// Child stdout reader shared by the `claude` and `opencode` bridges.
+// Child stdout reader for the `opencode` bridge.
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import { settle } from '../obs/effect';

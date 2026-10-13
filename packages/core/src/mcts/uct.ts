@@ -27,11 +27,9 @@ export function selectNode(
   const W = knobs.explorationWeight ?? DEFAULT_CONFIG.mcts.explorationWeight;
   const maxDepth = knobs.maxDepth ?? DEFAULT_CONFIG.mcts.maxDepth;
 
-  // parent_visits: the parent's visits for children; the root's own visits (floored) for the root.
-  const rows = sql<SearchNode & { parent_visits: number }>`
-    SELECT
-      s.*,
-      COALESCE(p.visits, max(2, s.visits)) AS parent_visits
+  // The parent's visits for children; the root's own visits (floored) for the root.
+  const rows = sql<SearchNode>`
+    SELECT s.*
     FROM search_nodes s
     LEFT JOIN search_nodes p ON p.actor_id = s.actor_id AND s.parent_id = p.id
     WHERE s.actor_id = ${actor.actorId} AND s.root_id = ${rootId}

@@ -9,9 +9,6 @@ export type PromptModelCapability = ModelCapability;
 export interface PromptModelContext {
   id?: string;
   provider?: string;
-  family?: PromptModelFamily;
-  reasoning?: boolean;
-  capabilities?: readonly string[];
   /** Null when no catalog row names it. */
   contextWindow?: number | null;
   /** Largest answer out of that window; absent when the catalog has not answered, never the window itself. */
@@ -19,11 +16,8 @@ export interface PromptModelContext {
 }
 
 export interface PromptModelProfile {
-  id?: string;
-  provider?: string;
   family: PromptModelFamily;
   capabilities: ReadonlySet<PromptModelCapability>;
-  contextWindow?: number | null;
 }
 
 const TOOL_CAPABILITIES: PromptModelCapability[] = ['tools', 'streaming'];
@@ -46,30 +40,7 @@ const KIMI_CAPABILITIES: PromptModelCapability[] = [
   'prompt-caching',
 ];
 
-function normalizeCapability(raw: string): PromptModelCapability | null {
-  switch (raw) {
-    case 'tools':
-    case 'vision':
-    case 'reasoning':
-    case 'json-mode':
-    case 'streaming':
-      return raw;
-    case 'structured-output':
-    case 'structured-outputs':
-      return 'structured-outputs';
-    case 'computer-use':
-    case 'computer_use':
-      return 'computer-use';
-    case 'prompt-cache':
-    case 'prompt-caching':
-      return 'prompt-caching';
-    default:
-      return null;
-  }
-}
-
 function resolveFamily(model?: PromptModelContext): PromptModelFamily {
-  if (model?.family) return model.family;
   const text = `${model?.provider ?? ''} ${specWithoutAccount(model?.id ?? '')}`.toLowerCase();
 
   if (text.includes('kimi')) return 'kimi';
@@ -86,21 +57,13 @@ function resolveFamily(model?: PromptModelContext): PromptModelFamily {
 }
 
 function inferredCapabilities(model: PromptModelContext | undefined, family: PromptModelFamily): PromptModelCapability[] {
-  if (model?.capabilities?.length) {
-    const out = model.capabilities.map(normalizeCapability).filter((c): c is PromptModelCapability => c !== null);
-
-    if (model.reasoning && !out.includes('reasoning')) out.push('reasoning');
-
-    return out;
-  }
-
   const text = `${model?.provider ?? ''} ${model?.id ?? ''}`.toLowerCase();
 
   if (text.includes('o4-mini') || text.includes('deepseek-r1')) {
     return ['streaming', 'reasoning'];
   }
 
-  // Whole family: a new Kimi release must not drop to bare tools+streaming when the catalog is unreachable.
+  // Whole family: a new Kimi release must not drop to bare tools+streaming.
   if (family === 'kimi') return KIMI_CAPABILITIES;
 
   if (family === 'gpt') return GPT_REASONING_CAPABILITIES;
@@ -111,13 +74,7 @@ function inferredCapabilities(model: PromptModelContext | undefined, family: Pro
 export function resolvePromptModelProfile(model?: PromptModelContext): PromptModelProfile {
   const family = resolveFamily(model);
 
-  return {
-    id: model?.id,
-    provider: model?.provider,
-    family,
-    capabilities: new Set(inferredCapabilities(model, family)),
-    contextWindow: model?.contextWindow,
-  };
+  return { family, capabilities: new Set(inferredCapabilities(model, family)) };
 }
 
 export function modelSupportsTools(model?: PromptModelContext): boolean {

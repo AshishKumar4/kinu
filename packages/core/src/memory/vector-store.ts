@@ -122,10 +122,8 @@ export function createCloudflareVectorStore(opts: {
   // Deterministic, so delete recomputes it. Raw chunk id without a namespace.
   async function storageId(chunkId: string): Promise<string> {
     if (!namespace) return chunkId;
-    const data = new TextEncoder().encode(`${namespace}\u0000${chunkId}`);
-    const digest = await crypto.subtle.digest('SHA-256', data);
 
-    return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, 40);
+    return (await hashText(`${namespace}\u0000${chunkId}`)).slice(0, 40);
   }
 
   async function toRecords(chunks: readonly IndexedChunk[]): Promise<VectorRecord[]> {
