@@ -6,7 +6,6 @@ import {
   createInheritedApprovalPolicy,
   createScrubStream,
   egressHostMatches,
-  egressSecretRule,
   findEgressPlaceholders,
   gateExec,
   grantsAreSubset,
@@ -158,7 +157,7 @@ describe('planEgress', () => {
 describe('grants are the workspace set, or a subset', () => {
   const root: ApprovalGrant[] = [
     { rule: 'rm-rf', executor: 'sandbox' },
-    { rule: egressSecretRule('bind-stripe'), executor: 'sandbox' },
+    { rule: 'egress-secret:bind-stripe', executor: 'sandbox' },
   ];
 
   test('a facet that has recorded nothing inherits the whole root set', () => {
@@ -175,7 +174,7 @@ describe('grants are the workspace set, or a subset', () => {
   test('a facet can never hold a grant its root lacks', () => {
     const own = [
       { rule: 'rm-rf', executor: 'sandbox' },
-      { rule: egressSecretRule('bind-prod-db'), executor: 'sandbox' },
+      { rule: 'egress-secret:bind-prod-db', executor: 'sandbox' },
       { rule: 'rm-rf', executor: 'device' },
     ];
 
@@ -215,7 +214,7 @@ describe('inherited approval policy', () => {
   });
 
   test('after resolving, the root\'s mode and grants apply', async () => {
-    const grant = { rule: egressSecretRule('bind-stripe'), executor: 'sandbox' };
+    const grant = { rule: 'egress-secret:bind-stripe', executor: 'sandbox' };
     const policy = createInheritedApprovalPolicy(rootSource('allow_all', [grant]).source);
     await policy.resolve?.();
     expect(policy.mode()).toBe('allow_all');

@@ -34,7 +34,7 @@ export function findEgressPlaceholders(text: string): string[] {
 
 /** One secret bound to one destination, without the secret, so a binding is safe to log, list, or send. */
 export interface EgressSecretBinding {
-  /** Stable id; also the vocabulary of the owner's grant ({@link egressSecretRule}). */
+  /** Stable id; also the vocabulary of the owner's grant ({@link EGRESS_SECRET_RULE_PREFIX}). */
   readonly id: string;
   readonly label: string;
   /** Hostname or `*` glob ({@link egressHostMatches}) this secret may be spent on. */
@@ -42,12 +42,8 @@ export interface EgressSecretBinding {
   readonly placeholder: string;
 }
 
+/** A binding's approval is the rule `egress-secret:<id>`, reusing the approval gate's `(rule, executor)` grants. */
 const EGRESS_SECRET_RULE_PREFIX = 'egress-secret:';
-
-/** Rule name a binding's approval is recorded under, reusing the approval gate's `(rule, executor)` grant machinery. */
-export function egressSecretRule(bindingId: string): string {
-  return `${EGRESS_SECRET_RULE_PREFIX}${bindingId}`;
-}
 
 /** Executor egress grants are scoped to; the grant writer and the binding filter must agree on this string. */
 const EGRESS_EXECUTOR = 'sandbox';
@@ -68,7 +64,7 @@ export function grantedEgressBindings(
     grants.filter((g) => g.executor === EGRESS_EXECUTOR).map((g) => g.rule),
   );
 
-  return vault.filter((b) => approved.has(egressSecretRule(b.id)));
+  return vault.filter((b) => approved.has(`${EGRESS_SECRET_RULE_PREFIX}${b.id}`));
 }
 
 /** Case-insensitive host match; `*` spans any run, pattern anchored at both ends to block suffix tricks. */

@@ -552,3 +552,54 @@ describe('the carried stream is read in any split', () => {
     await carried;
   });
 });
+
+describe('the carried stream is read in bounded memory', () => {
+  // #62: 'ß' upper-cased to 'SS', so a word stepped past the length it was cut at and grew with the line.
+  test('a program line of any bytes, with no space or newline, holds no more than a word of it', async () => {
+    const megabyte = new Uint8Array(1 << 20).fill(0xdf);
+    const total = 1 + 16 * megabyte.length;
+    const allCarried = Promise.withResolvers<void>();
+    let carried = 0;
+    let send: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let hangUp: ReadableStreamDefaultController<Uint8Array> | undefined;
+
+    const program: CarriedSocket = {
+      readable: new ReadableStream<Uint8Array>({ start(controller) { send = controller; } }),
+      writable: new WritableStream<Uint8Array>(),
+      close: async () => {},
+    };
+
+    // A server that says nothing until it hangs up: every byte is the program's line.
+    const server: UpgradableSocket = {
+      readable: new ReadableStream<Uint8Array>({ start(controller) { hangUp = controller; } }),
+      writable: new WritableStream<Uint8Array>({
+        write(chunk) {
+          carried += chunk.length;
+
+          if (carried === total) allCarried.resolve();
+        },
+      }),
+      close: async () => {},
+      startTls: () => { throw new Error('this server makes no session'); },
+    };
+
+    const carrying = carryKeyed(program, server, 'smtp.example.com', KEY);
+
+    Bun.gc(true);
+    const before = process.memoryUsage().heapUsed;
+
+    // An odd first word, so a two-character fold never lands on the bound.
+    send?.enqueue(Uint8Array.of(0x41));
+
+    for (let sent = 0; sent < 16; sent += 1) send?.enqueue(megabyte);
+
+    await allCarried.promise;
+    Bun.gc(true);
+    const grownMiB = (process.memoryUsage().heapUsed - before) / 2 ** 20;
+
+    send?.close();
+    hangUp?.close();
+    await carrying;
+    expect(grownMiB).toBeLessThan(4);
+  });
+});

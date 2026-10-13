@@ -572,12 +572,10 @@ describe('daemon device path confinement', () => {
 
     try {
       const frames = [
-        ['untiered-read', 'readFile', [planted]],
         ['untiered-range', 'readRange', [planted, 0, 6]],
         ['untiered-write', 'writeFile', [planted, 'planted']],
         ['untiered-list', 'listFiles', [path.dirname(planted)]],
         ['untiered-stat', 'statPath', [planted]],
-        ['untiered-exists', 'exists', [planted]],
         ['untiered-unlink', 'unlinkPath', [planted]],
         ['untiered-rmdir', 'rmdirPath', [path.dirname(planted)]],
         ['untiered-mkdir', 'mkdirPath', [`${planted}-dir`]],
@@ -613,8 +611,7 @@ describe('daemon device path confinement', () => {
 
     try {
       for (const [id, method, params] of [
-        ['traversal', 'readFile', [climb]],
-        ['symlink', 'readFile', [path.join(project, 'link')]],
+        ['symlink', 'readRange', [path.join(project, 'link'), 0, 6]],
         ['traversal-range', 'readRange', [climb, 0, 6]],
         ['traversal-write', 'writeFile', [climb, 'planted']],
         ['symlink-write', 'writeFile', [path.join(project, 'link'), 'planted']],
@@ -632,7 +629,7 @@ describe('daemon device path confinement', () => {
 
     // The system trees a program needs stay readable and refuse a write,
     // which is what the kernel does to the shell for the same paths.
-    handle({ id: 'read-system', method: 'readFile', sandbox: scoped([project]), params: ['/etc/hostname'] }, ws, {});
+    handle({ id: 'read-system', method: 'readRange', sandbox: scoped([project]), params: ['/etc/hostname', 0, 64] }, ws, {});
     expect((await ws.response('read-system')).error).toBeUndefined();
     handle({
       id: 'write-system',
@@ -652,7 +649,7 @@ describe('daemon device path confinement', () => {
     const baited = path.join(DEVICE_HOME, 'baited-device.json');
     fs.writeFileSync(baited, '{"token":"machine-secret"}', { mode: 0o600 });
     fs.symlinkSync(baited, bait);
-    handle({ id: 'kinu-link', method: 'readFile', sandbox: scoped([project]), params: [bait] }, ws, {});
+    handle({ id: 'kinu-link', method: 'readRange', sandbox: scoped([project]), params: [bait, 0, 64] }, ws, {});
     expect((await ws.response('kinu-link')).error?.message).toContain("inside Kinu's own directory");
     expect((await ws.response('kinu-link')).result).toBeUndefined();
     expect(fs.readFileSync(baited, 'utf8')).toContain('machine-secret');
@@ -704,9 +701,9 @@ describe('daemon device path confinement', () => {
     ]) {
       handle({
         id,
-        method: 'readFile',
+        method: 'readRange',
         sandbox: { tier: 'sandboxed', agentHome, roots: [] },
-        params: [path.join(sibling, 'notes.txt')],
+        params: [path.join(sibling, 'notes.txt'), 0, 64],
       }, ws, {});
       const frame = await ws.response(id);
       expect(frame.result).toBeUndefined();
@@ -722,13 +719,13 @@ describe('daemon device path confinement', () => {
 
     try {
       handle({ id: 'rpc-wholemach0-1', method: 'exec', sandbox: whole, params: [`cat ${JSON.stringify(outside)}`] }, ws, {});
-      handle({ id: 'whole-read', method: 'readFile', sandbox: whole, params: [outside] }, ws, {});
+      handle({ id: 'whole-read', method: 'readRange', sandbox: whole, params: [outside, 0, 64] }, ws, {});
       handle({
-        id: 'whole-kinu', method: 'readFile', sandbox: whole, params: [path.join(DEVICE_HOME, 'whole-machine-device.json')],
+        id: 'whole-kinu', method: 'readRange', sandbox: whole, params: [path.join(DEVICE_HOME, 'whole-machine-device.json'), 0, 64],
       }, ws, {});
 
       expect((await ws.response('rpc-wholemach0-1')).result.stdout).toBe('secret');
-      expect((await ws.response('whole-read')).result).toBe('secret');
+      expect(Buffer.from((await ws.response('whole-read')).result.content, 'base64').toString()).toBe('secret');
       // Kinu's own directory is the one thing no tier serves.
       expect((await ws.response('whole-kinu')).error?.message).toContain("inside Kinu's own directory");
     } finally {
@@ -1665,8 +1662,8 @@ describe('daemon process under Bun against a local hub', () => {
       fs.writeFileSync(path.join(root, 'config.json'), '{"accessToken":"ptc_owner_bearer"}', { mode: 0o600 });
 
       const refused = [
-        ['rpc-fence00rd-1', 'readFile', [path.join(root, 'config.json')]],
-        ['rpc-fence00dv-1', 'readFile', [path.join(root, 'device.json')]],
+        ['rpc-fence00rd-1', 'readRange', [path.join(root, 'config.json'), 0, 64]],
+        ['rpc-fence00dv-1', 'readRange', [path.join(root, 'device.json'), 0, 64]],
         ['rpc-fence00ls-1', 'listFiles', [root]],
         ['rpc-fence00st-1', 'statPath', [path.join(root, 'device.json')]],
         ['rpc-fence00wr-1', 'writeFile', [path.join(root, 'device.json'), '{"token":"attacker"}']],
@@ -1694,7 +1691,7 @@ describe('daemon process under Bun against a local hub', () => {
       fs.symlinkSync(path.join(root, 'device.json'), bait);
 
       try {
-        hub.socket().send(JSON.stringify({ id: 'rpc-fence00sy-1', method: 'readFile', sandbox: RAW, params: [bait] }));
+        hub.socket().send(JSON.stringify({ id: 'rpc-fence00sy-1', method: 'readRange', sandbox: RAW, params: [bait, 0, 64] }));
         expect((await reply('rpc-fence00sy-1')).error?.message).toContain("inside Kinu's own directory");
       } finally {
         fs.rmSync(bait, { force: true });

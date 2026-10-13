@@ -260,14 +260,6 @@ function deviceTransport(fs: MemFs, calls: string[] = []): DeviceTransport {
       const path = v.safeParse(v.string(), params[0]);
       const p = path.success ? path.output : '';
 
-      if (method === 'readFile') {
-        const b = fs.read(p);
-
-        if (b === null) throw Object.assign(new Error(`ENOENT: no such file '${p}'`), { code: 'ENOENT' });
-
-        return { content: Buffer.from(b).toString('base64'), encoding: 'base64' };
-      }
-
       if (method === 'readRange') {
         const offset = v.parse(v.number(), params[1]);
         const length = v.parse(v.number(), params[2]);
@@ -289,8 +281,6 @@ function deviceTransport(fs: MemFs, calls: string[] = []): DeviceTransport {
       }
 
       if (method === 'listFiles') return { entries: fs.list(p).map((name) => ({ name })), next: null };
-
-      if (method === 'exists') return fs.exists(p);
 
       if (method === 'statPath') {
         const stat = fs.stat(p);

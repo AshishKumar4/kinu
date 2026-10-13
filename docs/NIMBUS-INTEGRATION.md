@@ -13,7 +13,7 @@ The tree carries no Nimbus source. Packages come from the registry, checked agai
 | Package | Version | Declared in |
 |---|---|---|
 | `@nimbus-sh/core` | 0.17.0 | root, `packages/core`, `packages/cf-backend`, `packages/cli-backend`, `packages/cli`, `packages/agent-utils`, `packages/compaction`, `packages/test-utils` |
-| `@nimbus-sh/worker` | 0.15.0 | root, `packages/cf-backend` |
+| `@nimbus-sh/worker` | 0.15.0 | `packages/cf-backend` |
 | `@nimbus-sh/fabric` | ^0.12.0 | `packages/core`, `packages/cf-backend` |
 | `@nimbus-sh/sdk` | ^0.13.0 | `packages/core`, `packages/cf-backend` |
 | `@nimbus-sh/platform` | ^0.8.1 | `packages/cf-backend` |
@@ -28,8 +28,6 @@ Every declaration moves together, the root `devDependencies` included. The
 root declares `@nimbus-sh/core` for the repository's own scripts and fixtures.
 A root version left behind hoists its copy to the top of `node_modules` and
 nests the workspaces' copy below, so the copy that runs is the stale one.
-`@nimbus-sh/platform` is nobody's declared dependency. It arrives under core,
-fabric and worker, which is why nothing here pins it.
 
 Core imports fabric directly: `packages/core/src/events/outbox.ts` builds its
 outbox on `@nimbus-sh/fabric/outbox.js`.
@@ -218,7 +216,7 @@ the plan's limit applies. Locally workerd enforces no CPU limit (its server's
 (workerd README), so the loop holds the whole process and the Stop is never
 answered. Measured on armada, the same on Nimbus 0.15, 0.16 and 0.17: the
 probe's 345–360 s deadline lapses with CPU at 0.999
-(`scripts/turn-file-io.ts --shape=abort`, `abort.node` and `abort.pipe`; 0.15
+(`scripts/turn-file-io.ts --shape=abort` at `9a437a392`, `abort.node` and `abort.pipe`; 0.15
 in the armada artifacts `art-abort-015-baseline-retry`, 0.16 job
 20261011191439-e93bb139, 0.17 jobs 20261011191123-ca5fcf2c and 20261012022155-90848086),
 while `abort.bash` settles in 1.5 s at CPU 0.0002.

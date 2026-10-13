@@ -146,7 +146,7 @@ describe('DeviceConsentRegistry identity', () => {
     const pending = [
       reg.request(REQUEST),
       reg.request({ ...REQUEST, command: 'rm -rf build' }),
-      reg.request({ ...REQUEST, method: 'readFile' }),
+      reg.request({ ...REQUEST, method: 'readRange' }),
       reg.request({ ...REQUEST, deviceId: 'dev-2' }),
       reg.request({ ...REQUEST, workspaceName: 'notes' }),
     ];
@@ -205,13 +205,13 @@ describe('DeviceConsentRegistry always-grant coverage', () => {
     const { reg } = registry();
     const asked = reg.request(REQUEST);
     const wider = reg.request({ ...REQUEST, command: 'cat /etc/shadow' });
-    const readFile = reg.request({ ...REQUEST, method: 'readFile', command: 'readFile(/etc/shadow)' });
+    const read = reg.request({ ...REQUEST, method: 'readRange', command: 'readRange(/etc/shadow, 0, 64)' });
 
     reg.resolve('cons-1', 'always');
     expect(await asked).toBe('always');
     // Bound, so allowed — but the remembering was the one "always" answer.
     expect(await wider).toBe('once');
-    expect(await readFile).toBe('once');
+    expect(await read).toBe('once');
     expect(reg.list()).toEqual([]);
   });
 

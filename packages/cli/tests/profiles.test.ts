@@ -710,22 +710,6 @@ describe('malformed profile data fails loudly', () => {
     });
 
     expectError(accountKindInConfig.load, 'kind "account"');
-
-    await runScenario(`
-      await step('loadConfig', async () => {
-        const { loadConfigFile } = await import('./packages/cli/src/config.ts');
-        return loadConfigFile();
-      });
-    `, {
-      setup: (home) => seedConfig(home, {
-        localProfile: {
-          authority: { kind: 'local' },
-          version: -4,
-          digest: profileCatalogDigest(catalogA()),
-          catalog: catalogA(),
-        },
-      }),
-    });
   });
 });
 

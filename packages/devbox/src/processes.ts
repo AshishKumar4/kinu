@@ -63,13 +63,11 @@ fi
 setsid sh -c 'echo "$$ $(cat /proc/sys/kernel/random/boot_id)" >"$0/pid"; exec "$@"' "$dir" "$@" >"$dir/stdout.log" 2>"$dir/stderr.log"
 echo "$?" >"$dir/exit.tmp" && mv "$dir/exit.tmp" "$dir/exit"`;
 
-/** `$1/pid`'s pid if alive and from this boot (an old record: if written since boot). */
+/** `$1/pid`'s pid if alive and from this boot: `RUN` records the boot beside it. */
 const LIVE = `live() {
   [ -f "$1/pid" ] || return 1
   read -r p b < "$1/pid"
-  if [ -n "$b" ]; then [ "$b" = "$(cat /proc/sys/kernel/random/boot_id)" ] || return 1
-  else [ "$(stat -c %Y "$1/pid")" -ge "$(awk '/^btime/ {print $2}' /proc/stat)" ] || return 1
-  fi
+  [ "$b" = "$(cat /proc/sys/kernel/random/boot_id)" ] || return 1
   kill -0 "$p" 2>/dev/null && echo "$p"
 }`;
 
