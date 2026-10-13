@@ -139,6 +139,55 @@ function PaletteSearchInput({
   );
 }
 
+/** What every searchable palette shares: the frame, an optional hint, the search input, and the results or a line
+ *  saying none match. Each palette keeps its own filter, geometry, rows and words. */
+function SearchablePalette<T>({ title, frame, hint, placeholder, onFilter, items, row, empty, onSelect, selectId }: {
+  readonly title: string;
+  readonly frame: { readonly width: number; readonly height: number; readonly left: number; readonly top: number };
+  readonly hint: string | null;
+  readonly placeholder: string;
+  readonly onFilter: (value: string) => void;
+  readonly items: readonly T[];
+  /** One result, clipped to the palette's inner width. */
+  readonly row: (item: T, width: number) => string;
+  readonly empty: string;
+  readonly onSelect: (item: T) => void;
+  readonly selectId?: string;
+}) {
+  const { colors } = useTuiTheme();
+  const selectRef = useRef<SelectRenderable | null>(null);
+  const innerWidth = Math.max(1, frame.width - 4);
+
+  return (
+    <PaletteFrame title={title} width={frame.width} height={frame.height} left={frame.left} top={frame.top}>
+      {hint !== null && <PaletteLine text={hint} width={innerWidth} color={colors.text.muted} />}
+      <PaletteSearchInput placeholder={placeholder} onInput={onFilter} selectRef={selectRef} />
+      {items.length === 0 ? (
+        <PaletteLine text={empty} width={innerWidth} color={colors.text.muted} />
+      ) : (
+        <select
+          id={selectId}
+          ref={selectRef}
+          focused={false}
+          options={items.map((item): SelectOption => ({ name: row(item, innerWidth), description: '', value: item }))}
+          showDescription={false}
+          showScrollIndicator={true}
+          wrapSelection={true}
+          onSelect={selectAt(items, onSelect)}
+          style={{
+            width: '100%',
+            flexGrow: 1,
+            backgroundColor: colors.background.overlay,
+            textColor: colors.text.primary,
+            selectedBackgroundColor: colors.background.selection,
+            selectedTextColor: colors.text.primary,
+          }}
+        />
+      )}
+    </PaletteFrame>
+  );
+}
+
 interface CommandPaletteProps {
   commands: readonly SlashCommandInfo[];
   terminal: OverlayGeometry;
@@ -146,9 +195,7 @@ interface CommandPaletteProps {
 }
 
 export function CommandPaletteOverlay({ commands, terminal, onSelect }: CommandPaletteProps) {
-  const { colors } = useTuiTheme();
   const [filter, setFilter] = useState('');
-  const selectRef = useRef<SelectRenderable | null>(null);
 
   const filtered = filter.trim() === ''
     ? commands
@@ -162,54 +209,18 @@ export function CommandPaletteOverlay({ commands, terminal, onSelect }: CommandP
     20,
   );
 
-  const compact = paletteHeight < 9;
-  const innerWidth = Math.max(1, paletteWidth - 4);
-  const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
-
-  const options: SelectOption[] = filtered.map((command) => ({
-    name: clipText(`${command.name.padEnd(14)} ${command.description}`, innerWidth),
-    description: '',
-    value: command,
-  }));
-
   return (
-    <PaletteFrame
+    <SearchablePalette
       title="Commands"
-      width={paletteWidth}
-      height={paletteHeight}
-      left={position.left}
-      top={position.top}
-    >
-      {!compact && (
-        <PaletteLine text="Type to filter · ↑/↓ move · Enter insert · Esc close" width={innerWidth} color={colors.text.muted} />
-      )}
-      <PaletteSearchInput
-        placeholder="Filter commands…"
-        onInput={setFilter}
-        selectRef={selectRef}
-      />
-      {options.length === 0 ? (
-        <PaletteLine text={`No command matches "${filter.trim()}".`} width={innerWidth} color={colors.text.muted} />
-      ) : (
-        <select
-          ref={selectRef}
-          focused={false}
-          options={options}
-          showDescription={false}
-          showScrollIndicator={true}
-          wrapSelection={true}
-          onSelect={selectAt(filtered, onSelect)}
-          style={{
-            width: '100%',
-            flexGrow: 1,
-            backgroundColor: colors.background.overlay,
-            textColor: colors.text.primary,
-            selectedBackgroundColor: colors.background.selection,
-            selectedTextColor: colors.text.primary,
-          }}
-        />
-      )}
-    </PaletteFrame>
+      frame={{ width: paletteWidth, height: paletteHeight, ...centeredPosition(terminal, paletteWidth, paletteHeight, 'center') }}
+      hint={paletteHeight < 9 ? null : 'Type to filter · ↑/↓ move · Enter insert · Esc close'}
+      placeholder="Filter commands…"
+      onFilter={setFilter}
+      items={filtered}
+      row={(command, width) => clipText(`${command.name.padEnd(14)} ${command.description}`, width)}
+      empty={`No command matches "${filter.trim()}".`}
+      onSelect={onSelect}
+    />
   );
 }
 
@@ -228,9 +239,7 @@ interface SettingsOverlayProps {
 }
 
 export function SettingsOverlay({ settings, terminal, onSelect }: SettingsOverlayProps) {
-  const { colors } = useTuiTheme();
   const [filter, setFilter] = useState('');
-  const selectRef = useRef<SelectRenderable | null>(null);
   const query = filter.trim().toLowerCase();
 
   const filtered = query === ''
@@ -246,64 +255,22 @@ export function SettingsOverlay({ settings, terminal, onSelect }: SettingsOverla
     22,
   );
 
-  const compact = paletteHeight < 10;
-  const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
-  const innerWidth = Math.max(1, paletteWidth - 4);
-
-  const options: SelectOption[] = filtered.map((setting) => ({
-    name: paletteRow(
-      `${setting.group} · ${setting.label}`,
-      setting.value,
-      Math.max(1, innerWidth - 3),
-    ),
-    description: '',
-    value: setting,
-  }));
+  const hint = paletteWidth - 4 < 54
+    ? '↑/↓ move · Enter apply · Esc close'
+    : 'Type to filter · ↑/↓ move · Enter apply · Esc close';
 
   return (
-    <PaletteFrame
+    <SearchablePalette
       title="Settings"
-      width={paletteWidth}
-      height={paletteHeight}
-      left={position.left}
-      top={position.top}
-    >
-      {!compact && (
-        <PaletteLine
-          text={innerWidth < 54
-            ? '↑/↓ move · Enter apply · Esc close'
-            : 'Type to filter · ↑/↓ move · Enter apply · Esc close'}
-          width={innerWidth}
-          color={colors.text.muted}
-        />
-      )}
-      <PaletteSearchInput
-        placeholder="Filter settings…"
-        onInput={setFilter}
-        selectRef={selectRef}
-      />
-      {options.length === 0 ? (
-        <PaletteLine text={`No setting matches "${filter.trim()}".`} width={innerWidth} color={colors.text.muted} />
-      ) : (
-        <select
-          ref={selectRef}
-          focused={false}
-          options={options}
-          showDescription={false}
-          showScrollIndicator={true}
-          wrapSelection={true}
-          onSelect={selectAt(filtered, onSelect)}
-          style={{
-            width: '100%',
-            flexGrow: 1,
-            backgroundColor: colors.background.overlay,
-            textColor: colors.text.primary,
-            selectedBackgroundColor: colors.background.selection,
-            selectedTextColor: colors.text.primary,
-          }}
-        />
-      )}
-    </PaletteFrame>
+      frame={{ width: paletteWidth, height: paletteHeight, ...centeredPosition(terminal, paletteWidth, paletteHeight, 'center') }}
+      hint={paletteHeight < 10 ? null : hint}
+      placeholder="Filter settings…"
+      onFilter={setFilter}
+      items={filtered}
+      row={(setting, width) => paletteRow(`${setting.group} · ${setting.label}`, setting.value, Math.max(1, width - 3))}
+      empty={`No setting matches "${filter.trim()}".`}
+      onSelect={onSelect}
+    />
   );
 }
 
@@ -756,27 +723,24 @@ export function PromptHistoryOverlay({ entries, terminal, onSelect }: {
   terminal: OverlayGeometry;
   onSelect: (text: string) => void;
 }) {
-  const { colors } = useTuiTheme();
   const [filter, setFilter] = useState('');
-  const selectRef = useRef<SelectRenderable | null>(null);
   const filtered = [...entries].reverse().filter((text) => text.toLowerCase().includes(filter.toLowerCase()));
   const paletteWidth = boundedPaletteWidth(terminal, 0.7, 42, 88);
   const paletteHeight = Math.min(Math.max(8, filtered.length + 6), 18, Math.max(3, terminal.height - 2));
-  const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
-  const innerWidth = Math.max(1, paletteWidth - 4);
 
   return (
-    <PaletteFrame title="Prompt history" width={paletteWidth} height={paletteHeight} left={position.left} top={position.top}>
-      <PaletteSearchInput placeholder="Search sent and cleared prompts…" onInput={setFilter} selectRef={selectRef} />
-      {filtered.length === 0 ? <PaletteLine text="No matching prompts" width={innerWidth} color={colors.text.muted} /> : (
-        <select id="prompt-history-results" ref={selectRef} focused={false} showDescription={false} showScrollIndicator={true}
-          options={filtered.map((text) => ({ name: clipText(text.replace(/\s+/g, ' '), innerWidth), description: '', value: text }))}
-          onSelect={selectAt(filtered, onSelect)}
-          style={{ height: Math.max(1, paletteHeight - 6), backgroundColor: colors.background.overlay,
-            textColor: colors.text.primary, selectedBackgroundColor: colors.background.selection,
-            selectedTextColor: colors.text.strong }} />
-      )}
-    </PaletteFrame>
+    <SearchablePalette
+      title="Prompt history"
+      frame={{ width: paletteWidth, height: paletteHeight, ...centeredPosition(terminal, paletteWidth, paletteHeight, 'center') }}
+      hint={null}
+      placeholder="Search sent and cleared prompts…"
+      onFilter={setFilter}
+      items={filtered}
+      row={(text, width) => clipText(text.replace(/\s+/g, ' '), width)}
+      empty="No matching prompts"
+      onSelect={onSelect}
+      selectId="prompt-history-results"
+    />
   );
 }
 
