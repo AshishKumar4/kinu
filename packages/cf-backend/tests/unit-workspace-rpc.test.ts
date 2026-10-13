@@ -20,6 +20,7 @@ const unusedPort: AgentWorkspacePort = {
   scaffold: unused,
   chatEvent: unused,
   turnEnded: unused,
+  answerAmended: unused,
   turnSettled: unused,
   runSettled: unused,
   owedReport: unused,

@@ -577,6 +577,19 @@ export class SessionTranscript extends SessionTranscriptReader<ActorHandle, Sess
     });
   }
 
+  /** Merges `patch` into a recorded entry's metadata: what an answer learns once committed (its slates' previews). An
+   *  entry rewound meanwhile is not recorded again. */
+  async amendMetadata(id: string, patch: JsonObject): Promise<void> {
+    if (!this.has(id)) return;
+    const metadata = await this.payloads.prepare({ ...await this.metadata(id), ...patch });
+
+    this.atomic(() => {
+      this.actor.assertCurrent();
+      void this.sql`UPDATE conversation_entries SET metadata_json=${metadata.json}, metadata_path=${metadata.path}, metadata_digest=${metadata.digest}
+        WHERE actor_id=${this.actor.actorId} AND session_id=${this.sessionId} AND id=${id}`;
+    });
+  }
+
   /** The newest user row's turn, its empty failed answer dropped; null without one. */
   reopenNewestTurn(): ConversationEntry | null {
     const newest = this.newestUserId();

@@ -14,11 +14,12 @@ import {
 import { createCompactionStateStore, type CompactionStateStore } from '@kinu.run/compaction';
 import { attempt, diagnostics, hold, logged, settle, toKinuError, type KinuError } from '@kinu.run/core/obs';
 import { Cause, Effect, Exit } from 'effect';
+import * as v from 'valibot';
 import { serialQueue } from '@kinu.run/agent-utils';
 import type { AgentDatabase } from './agent-database';
 import type { StepPacer } from './step-pacer';
 import type { WorkspaceClient } from './workspace-rpc';
-import { FacetSpend, answerMetadataOf, deliveredRun, facetTurnSources, facetTurnTools, type FacetModels, type LiveTurn } from './agent-turn';
+import { FacetSpend, answerMetadataOf, deliveredRun, facetTurnSources, facetTurnTools, type FacetModels, type LiveTurn, type TurnBound } from './agent-turn';
 
 /** The words reach the room on the turn's own stream, and a turn's end on its own call. */
 const ROOM_EVENTS: ReadonlySet<SessionEvent['type']> = new Set(['turn-start', 'step-cut', 'error', 'broadcast', 'history-reverted']);
@@ -30,6 +31,16 @@ export interface FacetChatDeps {
   readonly models: FacetModels;
   readonly storage: DurableObjectStorage;
   readonly pacer: StepPacer;
+}
+
+/** The answer whose slates are owed, and the execution that answered it: its take is a close of that execution. */
+const AnswerSlatesSchema = v.object({ turnId: v.string(), runId: v.string(), epoch: v.nullable(v.number()), messageId: v.string() });
+
+type AnswerSlates = v.InferOutput<typeof AnswerSlatesSchema>;
+
+/** Owed by a turn that committed an answer: the workspace saw its slates change, and they are stamped on that answer. */
+function answerSlatesEffect(close: TurnBound, messageId: string): OwedEffect[] {
+  return messageId === '' ? [] : [{ name: 'answer_slates', scope: messageId, lane: 'detached', input: { ...close, messageId } }];
 }
 
 /** Who wrote a turn: the owner's words and decisions are the owner's, every other programmatic turn its hirer's. */
@@ -132,7 +143,8 @@ export class FacetChat {
         prepareTurn: (item, lease, opening, round) => this.prepareTurn(item, lease, opening, round),
         composeRequest: () => this.composeRequest(),
         owedTerminalEffects: (input) => this.owedTerminalEffects(input),
-        answerMetadata: async (lease, texts) => await answerMetadataOf(workspace, { turnId: lease.turnId, runId: lease.runId, epoch: actor.session.closeEpoch(lease) }, texts),
+        // A failure answer has no narration: only the slates it showed are stamped on it.
+        failedAnswerSlates: async (lease) => await answerMetadataOf(workspace, { turnId: lease.turnId, runId: lease.runId, epoch: actor.session.closeEpoch(lease) }, async () => []),
         // What the turn already told its hirer is the agent's own record, so a reset of the workspace cannot repeat it.
         // An agent with no hirer owes no report, so it asks the workspace for none.
         owedReport: async (ending, assistantText, narration) => (this.policy.hirer === null ? null : await workspace.owedReport(
@@ -345,13 +357,16 @@ export class FacetChat {
     // The claim the turn ran under, which its settle names as its close (design v2 §3).
     const epoch = session.turnClaim?.epoch ?? null;
 
+    // Its slates are taken once its answer committed, by a row of the roster committed with it (#75).
+    const slates = answerSlatesEffect({ turnId, runId, epoch }, input.messageId);
+
     if (this.policy.workspaceAgent) {
-      return declareHandoffRoster(chatTurnParts(input), {
+      return [...slates, ...declareHandoffRoster(chatTurnParts(input), {
         turnId, runId, epoch, messageId: input.messageId, status: input.status, completed: input.completed,
         workMode: session.workMode, userText: input.userText, assistantText: input.assistantText, event: input.event ?? null,
         turn: projectJsonValue({ value: input.turn }), credited: input.credited, answeredDeliveries: [...input.answeredDeliveries],
         reachableTools: [...input.reachableTools], recordedAt: Date.now(), facts: opened,
-      });
+      })];
     }
 
     // A replay already carries the scope its first attempt recorded.
@@ -392,7 +407,7 @@ export class FacetChat {
     };
 
     // Its tools' receipts were kept in the workspace, which drops them once the run settled.
-    return [...declareTerminalRoster(facts, parts), runSettleEffect(input.messageId, { turnId, runId, epoch })];
+    return [...slates, ...declareTerminalRoster(facts, parts), runSettleEffect(input.messageId, { turnId, runId, epoch })];
   }
 
   private get terminal(): TerminalTransitions {
@@ -408,6 +423,14 @@ export class FacetChat {
           hireAdvisor: (advisor) => workspace.hireAdvisor(advisor),
           applyTitle: (subject) => this.applyTitle(subject),
           sendReport: (report) => workspace.parentReport(report),
+        }),
+        answer_slates: terminalEffect({
+          input: AnswerSlatesSchema,
+          run: async (owed) => {
+            await this.amendAnswerSlates(owed);
+
+            return { status: 'completed' };
+          },
         }),
         workspace_settle: terminalEffect({
           input: HandedOffTurnSchema,
@@ -564,6 +587,24 @@ export class FacetChat {
       effects: ledger.pendingSequences().flatMap((sequence) => ledger.owed(sequence)).map((effect) => ({ effect, actor: name })),
       now: Date.now(),
     });
+  }
+
+  /**
+   * Its answer's slates, asked of the workspace that saw them change, stamped on the committed answer: its words promote
+   * a slate it changed and did not show, so its narration is read only then. The workspace gives a replay the same, and
+   * an answer rewound meanwhile is stamped with nothing. Its room is shown the answer again, unless a turn is live.
+   */
+  private async amendAnswerSlates({ messageId, ...close }: AnswerSlates): Promise<void> {
+    const { actor, database, workspace } = this.deps;
+    const transcript = actor.stores.history.transcript(CHAT_SESSION_ID);
+    const answer = transcript.read(messageId);
+
+    if (answer === null) return;
+    const metadata = await answerMetadataOf(workspace, close, async () => await transcript.narration(answer.parts));
+
+    if (metadata === null) return;
+    await transcript.amendMetadata(messageId, metadata);
+    await workspace.answerAmended(await database.history(TRANSCRIPT_WINDOW));
   }
 
   /** The stand-in lands first, as every actor's does: the model's name may be refused, and parks here. */

@@ -59,7 +59,7 @@ import {
   owesOutputLimitContinuation, OUTPUT_CONTINUATION_EVENT, snapshotCompletedTurn,
   type CompactionTriggerState, type RunEndClassification, type RunEndFacts, type RunEndReason,
 } from './turn-lifecycle';
-import { answerParts, type SessionTranscript, type PreparedConversationEntry } from '../session/transcript';
+import type { SessionTranscript, PreparedConversationEntry } from '../session/transcript';
 import { RECOVERY_BACKOFF_CEILING_MS } from '../utils/recovery-backoff';
 import type { MessageReference } from '../session/messages';
 import type { ContextSelection } from '../session/context';
@@ -264,13 +264,13 @@ export interface OwedTerminalEffectsInput {
   readonly taskReminder: { readonly text: string } | null;
 }
 
-/** `seen`: the splices the agent read mid-answer, kept once here; none from a turn whose events re-deliver. */
-async function answerMetadata(
-  ports: ChatSessionPorts, lease: ActorTurnLease, texts: () => Promise<readonly string[]>,
-  { end, seen = [] }: { readonly end: RunEndClassification; readonly seen?: readonly SeenSplice[] },
-): Promise<JsonObject | null> {
+/** `seen`: the splices the agent read mid-answer, kept once here; none from a turn whose events re-deliver. `slates`: a
+ *  failure answer's, taken as it commits ({@link ChatSessionPorts.failedAnswerSlates}). */
+function answerMetadata(
+  { end, seen = [], slates = null }: { readonly end: RunEndClassification; readonly seen?: readonly SeenSplice[]; readonly slates?: JsonObject | null },
+): JsonObject | null {
   const metadata: JsonObject = {
-    ...await ports.answerMetadata?.(lease, texts),
+    ...slates,
     ...(end.reason === 'incomplete' && { [TURN_END_METADATA_KEY]: end.reason }),
     ...(end.error !== undefined && { [TURN_FAILURE_METADATA_KEY]: end.error }),
     ...(seen.length > 0 && { [SIGNALS_SEEN_METADATA_KEY]: seen.map((splice) => ({ ...splice })) }),
@@ -303,8 +303,13 @@ export interface ChatSessionPorts {
   /** Never consumes an armed compaction. */
   composeRequest(): Promise<ComposedRequest>;
   owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[];
-  /** The turn's slates, stamped on its answer; absent where there are no slates (the CLI, `FileDeps.slate`). */
-  answerMetadata?(lease: ActorTurnLease, texts: () => Promise<readonly string[]>): Promise<JsonObject | null>;
+  /**
+   * A failed turn's slates, stamped on its failure answer as it commits: it owes no roster to carry them. An answered
+   * turn's are taken only once its answer committed, by a row of its own roster (`answer_slates`): a crossing before the
+   * commit would leave a death there to ask the model again (#75). Absent where there are no slates (the CLI,
+   * `FileDeps.slate`).
+   */
+  failedAnswerSlates?(lease: ActorTurnLease): Promise<JsonObject | null>;
   /** The report this ending owes its caller; narration is read only if the report carries it. */
   owedReport?(ending: TaskTurnEnding, assistantText: string, narration: () => Promise<readonly string[]>): Promise<OwedReport | null>;
   /** A turn that never opened, or ended on its failure before an answer existed, and why: its caller is told, as it waits
@@ -1943,7 +1948,7 @@ export class ChatSession {
 
     // A failed turn re-queues what it absorbed (`Inbox.settle`), so only a turn without error keeps its splices.
     const seen = runError === null ? this.actorSession.orchestrator.inbox.seenSplices() : [];
-    const metadata = await answerMetadata(this.ports, lease, () => this.transcript.narration(answerParts(execution.outputPartReferences, finalText)), { end, seen });
+    const metadata = answerMetadata({ end, seen });
 
     const preparedAssistant = streamed.output || !interrupted ? await this.transcript.prepareAssistant({
       id: this.messageId, turnId: lease.turnId, runId: lease.runId, parts: execution.outputPartReferences, finalText,
@@ -2203,7 +2208,7 @@ export class ChatSession {
     // Without it, the turn still closes: its failure is told its room, not kept on an answer.
     if (end.error !== undefined && !this.transcript.has(this.messageId)) {
       await settleLogged('turn.failure_unrecorded', { doing: "recording the turn's failure on its answer", otherwise: 'io' }, async () => {
-        const metadata = await answerMetadata(this.ports, lease, async () => [], { end });
+        const metadata = answerMetadata({ end, slates: await this.ports.failedAnswerSlates?.(lease) ?? null });
 
         answer = await this.transcript.prepareAssistant({
           id: this.messageId, turnId: lease.turnId, runId: lease.runId, parts: [], finalText: null, ...(metadata !== null && { metadata }),

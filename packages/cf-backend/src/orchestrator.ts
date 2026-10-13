@@ -1059,6 +1059,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         if (activity.length > 0) this.agentActivity(actorId, activity);
         await this.hostedTurnEnded(actorId, event, figures, window);
       },
+      answerAmended: async (window) => { this.chatRooms.hostedRoom(actorId)?.answerAmended(window); },
       // The turn's report disposition is the agent's own, kept where the turn ran. An agent with no hirer owes none.
       owedReport: async (turn, ended) => (actorPolicy(this.agentOf(actorId)).hirer === null ? null : await hostedOwedReport(this.hostedSeams(), this.agentBound(actorId), turn, ended)),
       parentReport: (report) => hostedParentReport(this.hostedSeams(), this.agentBound(actorId), report),
@@ -3294,14 +3295,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   private readonly turnSlates = new Map<string, { readonly changed: Set<string>; readonly shown: Set<string> }>();
 
-  private readonly answeredTurns = new Map<string, string[]>();
+  /** Each agent's last answered turns and what their take gave: a take asked again (its answer's row replayed after a
+   *  death) is given the same, and a slate changed under one after it is carried to the agent's next answer. */
+  private readonly answeredTurns = new Map<string, { readonly turnId: string; readonly reply: Promise<AnswerMetadataReply> }[]>();
 
   private noteTurnSlates(kind: 'changed' | 'shown', ids: readonly string[]): void {
     const actor = activeOperationProfile();
 
     if (actor === undefined || actor.turnId === WORKSPACE_RUN_ID) return;
     const actorId = actor.actor.actorId;
-    const key = this.answeredTurns.get(actorId)?.includes(actor.turnId) === true ? `${actorId}:carried` : `${actorId}:${actor.turnId}`;
+    const key = this.answeredTurns.get(actorId)?.some((answered) => answered.turnId === actor.turnId) === true ? `${actorId}:carried` : `${actorId}:${actor.turnId}`;
     let held = this.turnSlates.get(key);
 
     if (held === undefined) {
@@ -3314,6 +3317,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Without the narration, takes nothing while a slate the turn changed went unshown: only its words can promote it. */
   private async takeTurnSlates(actorId: string, turnId: string, narration: readonly string[] | null): Promise<AnswerMetadataReply> {
+    const answered = this.answeredTurns.get(actorId)?.find((turn) => turn.turnId === turnId);
+
+    if (answered !== undefined) return await answered.reply;
     const keys = [`${actorId}:${turnId}`, `${actorId}:carried`];
     const holding = keys.map((key) => this.turnSlates.get(key));
 
@@ -3329,13 +3335,22 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       return held;
     });
 
-    this.answeredTurns.set(actorId, [...(this.answeredTurns.get(actorId) ?? []).slice(-(ANSWERED_TURNS_KEPT - 1)), turnId]);
     const changed = taken.flatMap((held) => [...held?.changed ?? []]);
     const shown = new Set(taken.flatMap((held) => [...held?.shown ?? []]));
+    const reply = this.slatePreviews(slatesToPreview(new Set(changed), shown, narration ?? []));
+
+    // Answered as it is taken: a slate the turn changes from here is carried, and a take asked again waits on this one.
+    this.answeredTurns.set(actorId, [...(this.answeredTurns.get(actorId) ?? []).slice(-(ANSWERED_TURNS_KEPT - 1)), { turnId, reply }]);
+
+    return await reply;
+  }
+
+  /** The previews of those that still exist. */
+  private async slatePreviews(ids: readonly string[]): Promise<AnswerMetadataReply> {
     const vfs = this.hostedWorkspace().bundle.vfs;
     const kept = [];
 
-    for (const id of slatesToPreview(new Set(changed), shown, narration ?? [])) if (await nimbusExists(vfs, `${SLATES_ROOT}/${id}`)) kept.push(id);
+    for (const id of ids) if (await nimbusExists(vfs, `${SLATES_ROOT}/${id}`)) kept.push(id);
 
     return { owesNarration: false, metadata: kept.length === 0 ? null : { [SLATES_CHANGED_METADATA_KEY]: kept } };
   }

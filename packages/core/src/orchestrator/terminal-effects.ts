@@ -96,6 +96,9 @@ const TERMINAL_EFFECT_NAMES = [
   'workspace_settle',
   // Detached: an agent whose lanes are its own tells the workspace its run settled; the workspace drops the run's receipts.
   'run_settle',
+  // Detached: an answer's slates, asked of the workspace that saw them change once the answer committed, and stamped on
+  // it after. A replay asks again and is given the same.
+  'answer_slates',
   // Detached: the fleet's row for a turn handed over, owed once as its sequence is first recorded however often the
   // handoff repeats. An analytics write: a crash between it and its claim can write it twice, never lose it.
   'fleet_turn',
