@@ -976,6 +976,14 @@ the owner, built 2026-10-11 on `lane/main-isolate`.
   over 3 runs (armada `20261012084457-307f361a`), four tool steps: the open
   crosses 16 times, the first step 4 and each later one 3, the close 16; §8's
   12 and 6 are not reached (the account's reads, room events, the tile).
+  Reversed 2026-10-13, measured on deployed Durable Objects. A crossing that
+  follows a write in its sender's flush waits for that write to be durable
+  (the output gate, about 25 to 50 ms an object). One with no write before it
+  lands in the same millisecond. A warm one-reply turn's ten gated crossings
+  put its request at 602 ms to its done frame, against batch 66's 155 ms
+  (cmp-kinu-cur-m, 18 turns, 2026-10-13). So the turn's path keeps only the
+  crossings that cannot ride admission or its end, its writes are coalesced
+  into fewer flushes, and the deployed count is locked.
 - Profile: the agent's isolate binds each execution's final profile, with the
   authority inputs it was resolved from, under the execution's key (turn, run)
   before any model or tool work (`actor_turn_facts`, `actor_profile_inputs`);
