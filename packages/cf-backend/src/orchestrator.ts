@@ -2877,7 +2877,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // nothing here: its retirement released it.
     const accepted = new AgentReports(this.boundSql).accept(actorId, seq, standing, holds && live);
 
-    // Each delivered run's end, whichever report carries it: its caller hears it once, and a repeat finds none.
+    // Each delivered run's end, whichever report carries it: its caller hears it once, and a repeat finds none. Settled,
+    // as a chat turn's terminal transition settles it, whatever generation it was: its receipts go (`runSettled`).
     for (const ended of runEnds) {
       if ('ended' in ended.outcome) {
         this.agentActivity(actorId, ended.outcome.ended.activity);
@@ -2886,6 +2887,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       }
 
       this.agentTurns.runEnded(actorId, ended);
+      this.runSettled(actorId, { turnId: ended.id, runId: ended.runId });
     }
 
     if (!accepted) return;
@@ -3353,7 +3355,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * settled run go. Its answer is committed, so nothing runs under that run again and its close paired every call it
    * lost; its follow-ups are later turns. A retired agent's rows went with it.
    */
-  private runSettled(actorId: string, run: SettledRun): void {
+  private runSettled(actorId: string, run: Pick<SettledRun, 'turnId' | 'runId'>): void {
     if (!this.liveActor(actorId)) return;
     pruneTurnReceipts(this.boundSql, this.agentBound(actorId).handle, run);
   }

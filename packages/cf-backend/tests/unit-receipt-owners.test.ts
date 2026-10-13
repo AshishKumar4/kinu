@@ -2,7 +2,7 @@
  * A tool call's receipt lives in the store its effect commits to (design v2 §4), and goes when its run settles. The
  * owner's lane (a plan, a reply, a question) commits in the agent's own isolate, so its receipt is kept there and the
  * workspace keeps none around it; a workspace tool keeps its receipt in the workspace, which drops it at the run's settle
- * for every agent, not main's alone.
+ * for every agent, not main's alone, and as it takes a delivered run's end.
  */
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
@@ -93,4 +93,32 @@ test("an agent's settled run leaves the workspace no receipt of the tools it ran
   expect(during[0]?.map((row) => [row.actor_id, row.settled])).toEqual([[actorId, 1]]);
   expect(v.parse(Receipts, ownDatabase(workspace, actorId).query(RECEIPTS).all('call_list'))).toEqual([]);
   expect(v.parse(Receipts, workspace.db.query(RECEIPTS).all('call_list'))).toEqual([]);
+});
+
+test("a swarm node's delivered run leaves the workspace no receipt of the tools it ran there once its end is taken", async () => {
+  const ASK = 'Find a way to speed up the parser.';
+  const during: v.InferOutput<typeof Receipts>[] = [];
+
+  const workspace = gatewayWorkspace(stubAiBinding((run) => {
+    const answered = requestOf(run).messages.some((message) => message.role === 'tool');
+
+    if (!openingOf(run).includes(ASK)) {
+      if (answered) during.push(v.parse(Receipts, workspace.db.query(RECEIPTS).all('node_write')));
+
+      return answered ? chatCompletion(run, 'Wrote the note.')
+        : toolCallCompletion(run, { tool: 'file', args: { op: 'write', path: 'notes/idea.md', content: 'cache the token table' } }, 'node_write');
+    }
+
+    return answered ? chatCompletion(run, 'Searching.')
+      : toolCallCompletion(run, { tool: 'agents', args: { op: 'swarm', task: 'Name one way to tokenize faster.', preset: 'ideate', branches: 1, depth: 1 } }, 'swarm_0');
+  }));
+
+  await asPane([], () => workspace.agent.send(ASK, crypto.randomUUID()));
+  await driveUntil(workspace, 'the search never completed', () => workspace.db.query<{ status: string }, []>('SELECT status FROM head_journal').get()?.status === 'completed');
+  await workspace.agent.harnessAgentsIdle();
+  await joinHarnessFibers();
+
+  // Kept while the run could re-ask it, and gone with its end.
+  expect(during[0]?.map((row) => row.settled)).toEqual([1]);
+  expect(v.parse(Receipts, workspace.db.query(RECEIPTS).all('node_write'))).toEqual([]);
 });

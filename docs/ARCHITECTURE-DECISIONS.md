@@ -1049,7 +1049,8 @@ the owner, built 2026-10-11 on `lane/main-isolate`.
   in the agent's own store, so its isolate builds and runs it under its own
   receipt, and the workspace only declares it (`ownerLaneDeclarations`). Every
   agent's settled run tells the workspace (`run_settle`; main's rides
-  `turnSettled`), which prunes that run's receipts.
+  `turnSettled`), which prunes that run's receipts; a delivered run's are
+  pruned as the workspace takes its end, whichever generation it was.
 - Stop means stop for every agent and on the CLI: one commit cancels the
   agent's owed deliveries and marks its fence `cancelled_at`, then its isolate
   hands unread words back to their composer, cancels its queued turns (their
