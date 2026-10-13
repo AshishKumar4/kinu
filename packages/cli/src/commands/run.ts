@@ -272,6 +272,12 @@ async function respondToRpcCommand(
   }
 }
 
+/** What differs between backends in the RPC loop: how a non-prompt command is answered and what a prompt reports. */
+interface RpcBackend {
+  readonly command: (cmd: JsonObject) => Promise<JsonValue>;
+  readonly prompt: (id: JsonObject['id'], message: string) => Promise<void>;
+}
+
 async function runRpc(
   target: AgentTarget,
   opts: AgentClientFlags & TranscriptFlags,
@@ -279,41 +285,53 @@ async function runRpc(
   const output = (input: { value: unknown }) => process.stdout.write(`${JSON.stringify(decodeJsonValue(input))}\n`);
   const clientOpts = { model: opts.model, baseUrl: opts.baseUrl, auth: opts.auth, ...transcriptOptions(opts) };
 
+  /** One RPC session over stdin: a line per command, until `exit`, `shutdown` or the end of input. The protocol's
+   *  responses are written here, inside the boundary the error model declares for `runRpc`. */
+  const serveRpc = async (client: AgentClient, backend: RpcBackend): Promise<void> => {
+    const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+
+    for await (const line of rl) {
+      if (!line.trim()) continue;
+      const cmd = parseRpc(line);
+
+      if (!cmd.ok) { output({ value: { type: 'response', success: false, error: cmd.error } }); continue; }
+
+      if (cmd.value.type === 'exit' || cmd.value.type === 'shutdown') break;
+
+      if (cmd.value.type !== 'prompt') {
+        await respondToRpcCommand(cmd.value, client, output, () => backend.command(cmd.value));
+        continue;
+      }
+
+      const message = stringField(cmd.value, 'message') ?? '';
+
+      if (!message) {
+        output({ value: { id: cmd.value.id, type: 'response', command: 'prompt', success: false, error: 'message required' } });
+        continue;
+      }
+
+      await backend.prompt(cmd.value.id, message);
+    }
+  };
+
   if (target.mode === 'cloud') {
     const auth = requireAuthConfig();
     const client = await createAgentClient(target, clientOpts);
     output({ value: { type: 'session', id: client.cliSession.id, workspace: target.name, backend: 'cloud', cwd: process.cwd() } });
     const unsubscribe = client.subscribe((event) => output({ value: { type: 'event', event } }));
-    const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 
     try {
-      for await (const line of rl) {
-        if (!line.trim()) continue;
-        const cmd = parseRpc(line);
-
-        if (!cmd.ok) { output({ value: { type: 'response', success: false, error: cmd.error } }); continue; }
-
-        if (cmd.value.type === 'exit' || cmd.value.type === 'shutdown') break;
-
-        if (cmd.value.type !== 'prompt') {
-          await respondToRpcCommand(cmd.value, client, output, () => runCloudRpcCommand(auth.origin, auth.token, target.cloudName, cmd.value));
-          continue;
-        }
-
-        const message = stringField(cmd.value, 'message') ?? '';
-
-        if (!message) {
-          output({ value: { id: cmd.value.id, type: 'response', command: 'prompt', success: false, error: 'message required' } });
-          continue;
-        }
-
-        output({ value: { type: 'turn_start', id: cmd.value.id } });
-        const result = await client.send(message, { cwd: process.cwd() });
-        const turn = result.landed === 'turn' ? result : { text: '', steps: 0 };
-        output({ value: { type: 'message_end', role: 'assistant', text: turn.text } });
-        output({ value: { id: cmd.value.id, type: 'response', command: 'prompt', success: true } });
-        output({ value: { type: 'turn_end', steps: turn.steps } });
-      }
+      await serveRpc(client, {
+        command: (cmd) => runCloudRpcCommand(auth.origin, auth.token, target.cloudName, cmd),
+        prompt: async (id, message) => {
+          output({ value: { type: 'turn_start', id } });
+          const result = await client.send(message, { cwd: process.cwd() });
+          const turn = result.landed === 'turn' ? result : { text: '', steps: 0 };
+          output({ value: { type: 'message_end', role: 'assistant', text: turn.text } });
+          output({ value: { id, type: 'response', command: 'prompt', success: true } });
+          output({ value: { type: 'turn_end', steps: turn.steps } });
+        },
+      });
     } finally {
       unsubscribe();
       await client.close();
@@ -329,39 +347,19 @@ async function runRpc(
   // Client-owned MCP connects on the first prompt; the daemon owns orphaned-job recovery.
   let connected = false;
 
-  const ensureConnected = async () => {
-    if (connected) return;
-    connected = true;
-    await client.connect();
-  };
-
   try {
-    const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+    await serveRpc(client, {
+      command: (cmd) => runLocalRpcCommand(target.localName, cmd, client),
+      prompt: async (id, message) => {
+        if (!connected) {
+          connected = true;
+          await client.connect();
+        }
 
-    for await (const line of rl) {
-      if (!line.trim()) continue;
-      const cmd = parseRpc(line);
-
-      if (!cmd.ok) { output({ value: { type: 'response', success: false, error: cmd.error } }); continue; }
-
-      if (cmd.value.type === 'exit' || cmd.value.type === 'shutdown') break;
-
-      if (cmd.value.type !== 'prompt') {
-        await respondToRpcCommand(cmd.value, client, output, () => runLocalRpcCommand(target.localName, cmd.value, client));
-        continue;
-      }
-
-      const message = stringField(cmd.value, 'message') ?? '';
-
-      if (!message) {
-        output({ value: { id: cmd.value.id, type: 'response', command: 'prompt', success: false, error: 'message required' } });
-        continue;
-      }
-
-      await ensureConnected();
-      await client.send(message, { cwd: process.cwd() });
-      output({ value: { id: cmd.value.id, type: 'response', command: 'prompt', success: true } });
-    }
+        await client.send(message, { cwd: process.cwd() });
+        output({ value: { id, type: 'response', command: 'prompt', success: true } });
+      },
+    });
   } finally {
     try {
       await client.close();
