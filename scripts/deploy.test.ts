@@ -182,6 +182,8 @@ interface DeployRun {
   readonly ambientRecord?: string;
   readonly account?: DeployAccount;
   readonly uploadRuns?: readonly UploadRun[];
+  /** What `wrangler versions upload` says before a reset; a version the validator took, by default. */
+  readonly validation?: UploadRun;
 }
 
 interface UploadRun {
@@ -267,7 +269,7 @@ mock.module(${JSON.stringify(cloudflare)}, () => ({
 /** The runtime catalog the fixture build pins (NIMBUS_RUNTIME_CATALOG_SHA256). */
 const FIXTURE_CATALOG = 'c'.repeat(64);
 
-function uploadFixture(fixture: string, uploadRuns: readonly UploadRun[] | undefined): void {
+function uploadFixture(fixture: string, uploadRuns: readonly UploadRun[] | undefined, validation: UploadRun = { says: 'success', status: 0 }): void {
   if (uploadRuns === undefined) return;
   const build = join(fixture, 'packages', 'cf-backend', 'dist');
   const downloads = join(build, 'client', 'downloads');
@@ -293,6 +295,9 @@ function uploadFixture(fixture: string, uploadRuns: readonly UploadRun[] | undef
 
   writeFileSync(join(build, 'worker-release', 'kinu-worker-1.0.0+testsha.tar.gz'), 'fixture');
 
+  writeFileSync(join(fixture, 'validate.out'), validation.says === 'success' ? 'Worker Startup Time: 412 ms\nVersion ID: 7c1a\n' : validation.says);
+  writeFileSync(join(fixture, 'validate.status'), String(validation.status));
+
   for (const [index, result] of uploadRuns.entries()) {
     writeFileSync(join(fixture, `upload.${String(index + 1)}.out`), result.says === 'success'
       ? `KinuDevbox\nRead 1 files from the assets directory ${join(build, 'client')}\nVersion ID: 9b1f\n` : result.says);
@@ -316,6 +321,7 @@ async function runDeploy({
   ambientRecord = "",
   account,
   uploadRuns,
+  validation,
 }: DeployRun = {}) {
   const fixture = scratchDir("deploy-gate");
   // The deploy lock lives in the runtime directory: the fixture's own, so a real deploy on this machine never blocks
@@ -343,7 +349,7 @@ async function runDeploy({
 
   if (existsSync(uploadHelper)) writeFileSync(join(fixture, 'scripts', 'deploy-upload.sh'), readFileSync(uploadHelper));
 
-  uploadFixture(fixture, uploadRuns);
+  uploadFixture(fixture, uploadRuns, validation);
 
   executable(join(fixture, "node_modules", ".bin", "bun"), commandStub("bun"));
   executable(join(fixture, "bash"), commandStub("bash"));
@@ -366,6 +372,10 @@ fi
 printf 'MUTATE npx %s\\n' "$*" >> "$KINU_DEPLOY_GATE_LOG"
 if [ "$KINU_DEPLOY_UPLOAD_FIXTURE" = "1" ]; then
   if [ "$2" = "r2" ]; then exit 0; fi
+  if [ "$2" = "versions" ] && [ "$3" = "upload" ]; then
+    cat "$KINU_DEPLOY_ROOT/validate.out"
+    exit "$(cat "$KINU_DEPLOY_ROOT/validate.status")"
+  fi
   if [ "$2" = "deploy" ]; then
     printf '%s\\0' "$@" >> "$KINU_DEPLOY_UPLOAD_ARGV"
     printf '\\n' >> "$KINU_DEPLOY_UPLOAD_ARGV"
@@ -583,6 +593,67 @@ describe("deploy gate", () => {
     expect(recovered.infraStatuses, `${recovered.stdout}\n${recovered.stderr}`).toEqual([0, 1]);
     expect(recovered.uploads).toHaveLength(1);
     expect(recovered.events.some((event) => event.startsWith('bun scripts/promote.ts record'))).toBe(false);
+  });
+
+  // 2026-10-13: staging's reset deleted its classes and container application, then the validator refused the build's
+  // startup (code 10021) and staging served its placeholder. The validator now reads the build first, uploaded as a
+  // version and not deployed, while what the reset would delete still serves.
+  describe('the validator reads a reset build before the reset deletes anything', () => {
+    const VALIDATE = 'MUTATE npx wrangler versions upload --tag testsha --message kinu staging testsha';
+    const DEPLOY = 'MUTATE npx wrangler deploy --tag testsha --message kinu staging testsha';
+    const CHECK = 'bun scripts/worker-startup.ts check packages/cf-backend/dist/kinu/wrangler.json';
+    const wipe = (events: readonly string[]) => events.findIndex((event) => event.startsWith('bun scripts/reset.ts wipe'));
+
+    test('the startup check, then the version upload, then the reset, then the deploy of that build', async () => {
+      const run = await runDeploy({ option: '--reset', account: resetAccount(), uploadRuns: [{ says: 'success', status: 0 }] });
+      const order = [CHECK, VALIDATE].map((event) => run.events.indexOf(event));
+
+      expect(order.every((index) => index >= 0), run.stdout).toBe(true);
+      expect(order[0]).toBeLessThan(order[1] ?? -1);
+      expect(order[1]).toBeLessThan(wipe(run.events));
+      expect(wipe(run.events)).toBeLessThan(run.events.indexOf(DEPLOY));
+      expect(run.report).toContain('startup validated 412');
+    });
+
+    test('a version the validator refuses deletes nothing and deploys nothing', async () => {
+      const run = await runDeploy({
+        option: '--reset', account: resetAccount(), uploadRuns: [{ says: 'success', status: 0 }],
+        validation: { says: '✘ [ERROR] Your Worker failed validation because it exceeded startup limits.\n   - Error: Script startup exceeded CPU time limit.\n   [code: 10021]', status: 1 },
+      });
+
+      expect(run.status).not.toBe(0);
+      expect(run.events).toContain(VALIDATE);
+      expect(wipe(run.events)).toBe(-1);
+      expect(run.uploads).toEqual([]);
+      expect(run.report).toContain('startup validated refused');
+    });
+
+    test('a build above the startup bound uploads nothing, validated or deployed, and deletes nothing', async () => {
+      const run = await runDeploy({ option: '--reset', account: resetAccount(), failingGate: CHECK, uploadRuns: [{ says: 'success', status: 0 }] });
+
+      expect(run.status).not.toBe(0);
+      expect(run.events).not.toContain(VALIDATE);
+      expect(wipe(run.events)).toBe(-1);
+      expect(run.uploads).toEqual([]);
+    });
+
+    // A reset whose build never uploaded has its placeholder serving and no container application, which a version
+    // upload needs: nothing is left up to keep, and its deploy is the validator's first reading.
+    test('a reset finishing an earlier one, its placeholder serving, uploads no version first', async () => {
+      const account = resetAccount(true);
+      const run = await runDeploy({ option: '--reset', pendingReset: account.reset.tag, account, uploadRuns: [{ says: 'success', status: 0 }] });
+
+      expect(run.events).toContain(CHECK);
+      expect(run.events).not.toContain(VALIDATE);
+    });
+
+    test('a deploy with no reset uploads no version first: a refused deploy leaves the target as it was', async () => {
+      const run = await runDeploy({ uploadRuns: [{ says: 'success', status: 0 }] });
+
+      expect(run.events).toContain(CHECK);
+      expect(run.events).not.toContain(VALIDATE);
+      expect(run.uploads).toHaveLength(1);
+    });
   });
 
   test("a plain deploy with an old reset record still refuses its absent container", async () => {

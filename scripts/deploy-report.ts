@@ -45,6 +45,9 @@ const EntrySchema = v.variant('kind', [
   v.object({ kind: v.literal('dispatched'), what: v.string(), url: v.string() }),
   v.object({ kind: v.literal('mark'), mark: v.string(), seconds: v.number() }),
   v.object({ kind: v.literal('timing'), phase: v.string(), what: v.string(), command: v.string(), seconds: v.number(), silence: v.optional(v.number()) }),
+  // The validator's reading of the Worker's startup as wrangler printed it: before a reset (`validated`, the version
+  // uploaded and not deployed) and at the deploy (`deployed`).
+  v.object({ kind: v.literal('startup'), at: v.picklist(['validated', 'deployed']), reading: v.union([v.number(), v.picklist(['refused', 'none'])]) }),
 ]);
 
 export type ReportEntry = v.InferOutput<typeof EntrySchema>;
@@ -60,6 +63,9 @@ const SummarySchema = v.object({
   totalSeconds: v.nullable(v.number()),
   liveSeconds: v.nullable(v.number()),
   testable: v.boolean(),
+  /** The validator's startup reading of the deployed version, in ms, or null where it printed none or refused it. A
+   *  summary written before 2026-10-13 holds none. */
+  workerStartupMs: v.optional(v.nullable(v.number())),
 });
 
 export type ReportSummary = v.InferOutput<typeof SummarySchema>;
@@ -146,6 +152,15 @@ export function recordNotice(dir: string, notice: { readonly phase: string; read
 /** A row's measured wall, green or red; hosted rows have no local silence measurement. */
 export function recordTiming(dir: string, timing: Omit<Extract<ReportEntry, { kind: 'timing' }>, 'kind'>): void {
   append(dir, { kind: 'timing', ...timing });
+}
+
+/** The validator's startup reading as deploy.sh read it from wrangler's log: ms, `refused`, or `none`. */
+export function recordStartup(dir: string, at: 'validated' | 'deployed', said: string): void {
+  let reading: number | 'refused' | 'none' = 'none';
+
+  if (/^\d+$/u.test(said)) reading = Number(said);
+  else if (said === 'refused') reading = 'refused';
+  append(dir, { kind: 'startup', at, reading });
 }
 
 /** A plan row the deploy did not run, and why. */
@@ -372,6 +387,8 @@ export function renderReport(input: ReportInput): RenderedReport {
     `| ${entry.phase}: ${entry.what} | ${entry.seconds.toFixed(1)} | ${entry.silence === undefined ? '—' : entry.silence.toFixed(1)} | \`${entry.command}\` |`);
 
   const ended = marks.get('end');
+  const startups = entries.flatMap((entry) => (entry.kind === 'startup' ? [entry] : []));
+  const deployedStartup = startups.filter((entry) => entry.at === 'deployed').at(-1)?.reading;
 
   const lines = [
     ...headerLines(input, marks, { reds: reds.length, fresh: reds.filter(isNew).length, skipped: skipped.length }),
@@ -385,6 +402,8 @@ export function renderReport(input: ReportInput): RenderedReport {
     ...section('Soak, after the verdict', soak.length === 0 ? [] : [
       `${String(soak.length)} red in the eval soak, which ran after this deploy's verdict and is no red of it.`, ...redSections(soak, () => true),
     ]),
+    ...section("The Worker's startup, as the validator read it", startups.map((entry) =>
+      `- ${entry.at === 'validated' ? 'the version uploaded before the reset' : 'the deployed version'}: ${typeof entry.reading === 'number' ? `${String(entry.reading)} ms` : entry.reading}`)),
     ...section('Rows, longest first', rowTimes.length === 0 ? [] : ['| row | seconds | longest silence (seconds) | command |', '| --- | ---: | ---: | --- |', ...rowTimes]),
     ...section('Eval cache usage', cacheLines(evals, previous)),
     ...section('When', timings.length === 0 ? [] : ['| mark | seconds from the start |', '| --- | --- |', ...timings]),
@@ -396,6 +415,7 @@ export function renderReport(input: ReportInput): RenderedReport {
       sha: meta.sha, environment: meta.environment, mode: meta.mode, startedAt: meta.startedAt, dir,
       reds: reds.flatMap((entry) => identity(entry) ?? []), skipped: skipped.length,
       totalSeconds: marks.get('end') ?? null, liveSeconds: marks.get('live') ?? null, testable: marks.has('live'),
+      workerStartupMs: typeof deployedStartup === 'number' ? deployedStartup : null,
     },
   };
 }
@@ -420,6 +440,11 @@ if (import.meta.main) {
 
   if (command === 'runner' && rest.length === 2) {
     recordRunner(first, rest[0] ?? '', Number(rest[1]));
+    process.exit(0);
+  }
+
+  if (command === 'startup' && rest.length === 2 && (rest[0] === 'validated' || rest[0] === 'deployed')) {
+    recordStartup(first, rest[0], rest[1] ?? '');
     process.exit(0);
   }
 
@@ -460,6 +485,6 @@ if (import.meta.main) {
     process.exit(summary.reds.length === 0 ? 0 : 1);
   }
 
-  console.error('usage: bun scripts/deploy-report.ts open|note|dispatched|mark|budget|render …');
+  console.error('usage: bun scripts/deploy-report.ts open|note|dispatched|startup|mark|budget|render …');
   process.exit(2);
 }
