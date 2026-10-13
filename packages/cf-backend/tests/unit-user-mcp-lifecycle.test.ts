@@ -58,7 +58,8 @@ function harness(options?: TestUserDOOptions): TestUserDO {
   return createTestUserDO(options);
 }
 
-/** A configured server, written as `userMcp_add` would; the real call needs a live endpoint. */
+/** A configured server, written as `userMcp_add` would; the real call needs a live endpoint. A credentialed row is
+ *  registered by the next object's activation, as after a deploy, so a test of its transport wakes one. */
 async function seedServer(
   h: TestUserDO,
   id: string,
@@ -323,8 +324,10 @@ describe('the SDK server rows are derived from the config table', () => {
   test('a configured row is not removed by that pass', async () => {
     const h = harness();
     await seedServer(h, 'srv1', { headers: { Authorization: 'Bearer keep' } });
-    await h.userDO.userMcp_list(await testOwner());
+    const woken = createTestUserDO({ storage: h.db });
+    await woken.userDO.userMcp_list(await testOwner());
     expect(recordedMcpServers().map((s) => s.id)).toContain('srv1');
+    woken.close();
     h.close();
   });
 
@@ -366,6 +369,8 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
   test('what the SDK would persist for a credentialed server holds no credential', async () => {
     const h = harness();
     await seedServer(h, 'srv1', { headers: { Authorization: 'Bearer mcp-secret' } });
+    const woken = createTestUserDO({ storage: h.db });
+    await woken.userDO.userMcp_list(await testOwner());
 
     const persisted = persistedServerOptions('srv1');
     expect(persisted).not.toContain('mcp-secret');
@@ -373,6 +378,7 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
     expect(persisted).not.toContain('requestInit');
     expect(persisted).not.toContain('eventSourceInit');
     expect(persisted).toBe(JSON.stringify({ transport: { type: 'auto' } }));
+    woken.close();
     h.close();
   });
 
@@ -424,6 +430,8 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
       'UPDATE user_mcp_servers SET headers = ? WHERE id = ?',
       await cipher.seal('test-user-do:mcp:other', JSON.stringify({ Authorization: 'Bearer other' })), 'srv1',
     );
+    const woken = createTestUserDO({ storage: h.db });
+    await woken.userDO.userMcp_list(await testOwner());
 
     const send = recordedMcpFetch('srv1');
     expect(send).not.toBeNull();
@@ -433,9 +441,9 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
     });
 
     expect(seen).toEqual([]);
+    woken.close();
     h.close();
   });
-
 
   test('requests during an activation join its one reconciliation', async () => {
     const first = harness();
