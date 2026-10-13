@@ -6,11 +6,6 @@ import { wrapDatabase } from '@kinu.run/core/identity';
 
 export type TestSql = ReturnType<typeof wrapDatabase> & { readonly db: Database; close(): void };
 
-/** A `SqlExecutor` over an existing database, e.g. a real actor's harness database. */
-export function sqlOver(db: Database): SqlExecutor {
-  return wrapDatabase(db).sql;
-}
-
 /** A fresh, isolated in-memory database + sql template tag. */
 export function createTestSql(): TestSql {
   const db = new Database(':memory:');

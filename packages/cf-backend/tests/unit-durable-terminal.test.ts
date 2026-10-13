@@ -13,7 +13,6 @@ import {
   type TerminalEffectName, type TerminalEffectPhase,
 } from '@kinu.run/core';
 import { createRecordingLogger } from '@kinu.run/core/obs';
-import { sqlOver } from '@kinu.run/test-utils';
 import {
   chatSessionTurns, ledgerOver, orchestratorHarness,
   reactivateOrchestratorHarness,
@@ -22,6 +21,7 @@ import {
 } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 import type { SettledTurn, TurnHarness } from './helpers/turn-harness';
+import { wrapDatabase } from '@kinu.run/core/identity';
 
 type Harness = ActorHarness<HarnessOrchestratorAgent>;
 
@@ -183,7 +183,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
    */
   test('a fact update whose tombstone fails leaves no half-applied prefix', async () => {
     const harness = orchestratorHarness();
-    const facts = () => createFactsStore(sqlOver(harness.db), workspaceMainActor(harness.db));
+    const facts = () => createFactsStore(wrapDatabase(harness.db).sql, workspaceMainActor(harness.db));
     facts().upsert('deploy_target', 'staging', { confidence: 0.6 });
     turns(harness).open('u-one');
     await turns(harness).settle({ messageId: 'a-one' });
@@ -392,7 +392,7 @@ describe('mid-turn captures are credited to the turn only when it answered', () 
 describe('a turn releases its tool claims only when no response can still run', () => {
   /** A tool call claimed and unsettled: the state a still-executing turn leaves. */
   function claimTool(harness: Harness, turnId: string, callId: string): void {
-    claimToolEffect(sqlOver(harness.db), workspaceMainActor(harness.db), { turnId, callId, digest: 'harness-tool-digest' });
+    claimToolEffect(wrapDatabase(harness.db).sql, workspaceMainActor(harness.db), { turnId, callId, digest: 'harness-tool-digest' });
   }
 
   const released = [

@@ -7,9 +7,10 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { archiveSqlFromDatabase, CHAT_SESSION_ID, readWorkspaceArchivePage, restoreWorkspaceArchive, SessionHistory, AGENT_RPC_ACCESS, requiredRpcAccess, type ActorHandle, type ArchiveCursor, type SqlExec } from '@kinu.run/core';
-import { seedTranscriptEntry, readTranscriptRows, sqlOver } from '@kinu.run/test-utils';
+import { seedTranscriptEntry, readTranscriptRows } from '@kinu.run/test-utils';
 import { createTestActor, createTestWorkspace } from '../../core/tests/helpers';
 import { cliScopesConnectionTag, rejectOutOfScopeRpc } from '../src/cli/rpc-gate';
+import { wrapDatabase } from '@kinu.run/core/identity';
 
 /** Enough chained entries that one page cannot hold the conversation. */
 const MESSAGES = 450;
@@ -79,7 +80,7 @@ describe('cloud workspace export', () => {
     expect(result.source).toBe('cloud');
 
     // Read back through the production transcript reader: rows landed without their chain read as empty here.
-    const restored = await readTranscriptRows(sqlOver(target), source.actor, source.vfs);
+    const restored = await readTranscriptRows(wrapDatabase(target).sql, source.actor, source.vfs);
     expect(restored.map((row) => row.content)).toEqual([...source.said]);
   });
 
