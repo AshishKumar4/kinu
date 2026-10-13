@@ -863,6 +863,10 @@ describe('sanitizeReturnTo (single strict implementation)', () => {
     expect(sanitizeReturnTo('/workspaces/my%20space', ORIGIN)).toBe('/workspaces/my%20space');
   });
 
+  test('refuses a path no URL parser can read, rather than throwing', () => {
+    for (const next of ['//', '//evil.example:65536', '/a/..//', '/a/%2e%2e//']) expect(sanitizeReturnTo(next, ORIGIN)).toBe('/');
+  });
+
   test('rejects a tab or newline that a URL parser strips into another host', () => {
     expect(sanitizeReturnTo(decodeURIComponent('/%09/evil.example'), ORIGIN)).toBe('/');
     expect(sanitizeReturnTo(decodeURIComponent('/%0a/evil.example'), ORIGIN)).toBe('/');

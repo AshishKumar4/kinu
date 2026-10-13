@@ -5,7 +5,7 @@ import * as v from 'valibot';
 import { Effect } from 'effect';
 import { describe, expect, test } from 'bun:test';
 import { detach } from '@kinu.run/core/obs';
-import type { Page } from 'puppeteer';
+import type { HTTPRequest, Page } from 'puppeteer';
 import { ONBOARDING_STEPS } from '@kinu.run/core';
 
 import { withGallery, type Gallery } from '../../scripts/gallery-harness';
@@ -564,8 +564,9 @@ describe('account panels', () => {
   });
 
   // Each starts with one slash and names this origin, yet the browser lands elsewhere: a URL parser reads the backslash
-  // as a second slash, and a dot segment, spelled or percent-encoded, climbs out to leave `//evil.example`.
-  test.each(['/\\evil.example', '/a/..//evil.example', '/a/%2e%2e//evil.example', '/a/%2E%2E//evil.example'])(
+  // as a second slash, and a dot segment, spelled or percent-encoded, climbs out to leave `//evil.example`. The last
+  // three have no host a URL parser accepts, so reading them must refuse rather than throw the page away.
+  test.each(['/\\evil.example', '/a/..//evil.example', '/a/%2e%2e//evil.example', '/a/%2E%2E//evil.example', '//', '//evil.example:65536', '/a/..//'])(
     'a `next` of %s sends the tab home on this site',
     async (next) => {
       await withGallery(async (gallery) => {
@@ -573,17 +574,16 @@ describe('account panels', () => {
 
         try {
           // Where the tab is sent is the subject, so that document is answered blank rather than loaded.
-          const onward = Promise.withResolvers<URL>();
+          const onward = (request: HTTPRequest) => request.isNavigationRequest() && !request.url().includes('frame=connected');
           await page.setRequestInterception(true);
-          page.on('request', (request) => detach(Effect.promise(async () => {
-            if (!request.isNavigationRequest() || request.url().includes('frame=connected')) return request.continue();
-            onward.resolve(new URL(request.url()));
+          page.on('request', (request) => detach(Effect.promise(async () => (onward(request)
+            ? request.respond({ status: 200, contentType: 'text/html', body: '' })
+            : request.continue()))));
 
-            return request.respond({ status: 200, contentType: 'text/html', body: '' });
-          })));
-
+          // Bounded: a page that threw on the input never sends the tab anywhere.
+          const sent = page.waitForRequest(onward, { timeout: 10_000 });
           await Promise.allSettled([page.goto(`${gallery.origin}/gallery.html?frame=connected&next=${encodeURIComponent(next)}`, { waitUntil: 'load' })]);
-          const reached = await onward.promise;
+          const reached = new URL((await sent).url());
 
           expect({ origin: reached.origin, path: reached.pathname }).toEqual({ origin: gallery.origin, path: '/' });
         } finally {
