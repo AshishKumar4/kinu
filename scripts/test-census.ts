@@ -23,11 +23,14 @@ import { parseLock, type Plant } from './census-plants';
 import { claims, deployGates, LADDER, packageScripts } from './ladder';
 import {
   ANTI_SLOP_ROOT, ANTI_SLOP_RULES, isAntiSlopRuleSuite, isBunDiscoverableSuite, isParseable,
-  isProductSource, isPythonSuite, isRunnableSuite, isShippedSource, isStylesheet, isTestFile, isVitestEvalSuite,
-  readRepositoryFile, readSources, trackedFiles, workspaceScope,
+  isManifest, isProductSource, isPythonSuite, isRunnableSuite, isShippedSource, isStylesheet, isTestFile, isTypescriptConfig,
+  isVitestEvalSuite, readMatching, readRepositoryFile, readSources, trackedFiles, workspaceScope,
 } from './sources';
 import {
-  classMembers, collapsePath, declaredName, importBindings, IMPORT_CANDIDATES, isFunctionLike,
+  readAliases, readWorkspace, resolveSpecifier as resolveModule, type Alias, type PackageDir,
+} from './import-graph';
+import {
+  classMembers, collapsePath, declaredName, importBindings, isFunctionLike,
   literalText, moduleSpecifiers, NAMESPACE, parse, publishedNames, stringArguments, superClassName, type SyntaxNode, walk,
 } from './syntax';
 
@@ -1340,7 +1343,7 @@ interface ProductConstant {
 }
 
 function exportedConstant(
-  file: string, name: string, inputs: Pick<CensusInputs, 'sources' | 'tracked' | 'scope'>, seen = new Set<string>(),
+  file: string, name: string, inputs: Pick<CensusInputs, 'sources' | 'tracked' | 'workspace' | 'aliases'>, seen = new Set<string>(),
 ): ProductConstant | undefined {
   const key = `${file}#${name}`;
 
@@ -1362,7 +1365,7 @@ function exportedConstant(
     const imported = entry.name === NAMESPACE ? name : entry.origin.imported;
 
     if (imported === NAMESPACE) continue;
-    const target = resolveSpecifier(entry.origin.specifier, dirname(file), inputs.tracked, inputs.scope);
+    const target = resolveSpecifier(entry.origin.specifier, file, inputs);
     const found = target === undefined ? undefined : exportedConstant(target, imported, inputs, seen);
 
     if (found !== undefined) return found;
@@ -1371,7 +1374,7 @@ function exportedConstant(
   return undefined;
 }
 
-type OracleInputs = Pick<CensusInputs, 'sources' | 'tracked' | 'scope' | 'readModule'>;
+type OracleInputs = Pick<CensusInputs, 'sources' | 'tracked' | 'workspace' | 'aliases' | 'readModule'>;
 
 interface OracleContext {
   readonly inputs: OracleInputs;
@@ -1395,7 +1398,7 @@ function renderedReader(parsed: ParsedFile, inputs: OracleInputs, kind: 'text' |
 
     for (const statement of module.tree.children) {
       if (statement.raw.type !== 'ImportDeclaration' || statement.raw.importKind === 'type') continue;
-      const target = resolveSpecifier(statement.raw.source.value, dirname(module.file), inputs.tracked, inputs.scope);
+      const target = resolveSpecifier(statement.raw.source.value, module.file, inputs);
 
       if (target === undefined || isShippedSource(target) || !isParseable(target)) continue;
 
@@ -1573,7 +1576,7 @@ function copiedConstantExpectations(
 
   for (const statement of parsed.tree.children) {
     if (statement.raw.type !== 'ImportDeclaration' || statement.raw.importKind === 'type') continue;
-    const target = resolveSpecifier(statement.raw.source.value, dirname(parsed.file), inputs.tracked, inputs.scope);
+    const target = resolveSpecifier(statement.raw.source.value, parsed.file, inputs);
 
     if (target === undefined) continue;
 
@@ -1694,7 +1697,7 @@ function renderedPins(
 
   for (const statement of parsed.tree.children) {
     if (statement.raw.type !== 'ImportDeclaration') continue;
-    const target = resolveSpecifier(statement.raw.source.value, dirname(parsed.file), inputs.tracked, inputs.scope);
+    const target = resolveSpecifier(statement.raw.source.value, parsed.file, inputs);
 
     if (target !== 'scripts/test-requirements.ts') continue;
 
@@ -2381,7 +2384,7 @@ function testImportClosure(direct: readonly string[], inputs: CensusInputs): Set
 
     if (cached !== undefined) return cached;
     const text = inputs.readModule(file);
-    const local = text === undefined ? [] : resolveImports(parseFile(file, text), inputs.tracked, inputs.scope).local;
+    const local = text === undefined ? [] : resolveImports(parseFile(file, text), inputs).local;
 
     known.set(file, local);
 
@@ -2637,10 +2640,8 @@ function mocks(
  * argument-only reader, which is how this reported zero goldens on a tree that
  * had one.
  */
-export function fixtureGenerators(tracked: readonly string[]): Map<string, string> {
+export function fixtureGenerators(tracked: readonly string[], resolution: ModuleResolution): Map<string, string> {
   const generators = new Map<string, string>();
-  const trackedSet = new Set(tracked);
-  const scope = workspaceScope();
 
   for (const file of tracked) {
     if (!file.startsWith('scripts/') || !isParseable(file) || isTestFile(file)) continue;
@@ -2663,7 +2664,7 @@ export function fixtureGenerators(tracked: readonly string[]): Map<string, strin
     // specifier that resolves nowhere imports nothing, and the set of product
     // files has one definition in `sources.ts`.
     const importsProduct = [...specifiers].some((specifier) => {
-      const target = resolveSpecifier(specifier, 'scripts', trackedSet, scope);
+      const target = resolveSpecifier(specifier, file, resolution);
 
       return target !== undefined && isProductSource(target);
     });
@@ -3169,31 +3170,22 @@ export interface Census {
 }
 
 /**
- * The tracked file a module specifier names, with the candidate-suffix rule
- * `wired.ts` uses — so "the module under test" means the same thing in both.
- * The suffix list and the collapse live in `syntax.ts`: one spelling shared by
- * every resolver, rather than one per gate.
- *
- * A specifier that resolves nowhere is not an import of anything, and "this
- * script imports product source" is RESOLVED to a path the enumeration holds
- * and asked of `isProductSource`, rather than matched against the shape a
- * specifier usually has.
+ * The tracked file a module specifier names, by the resolver every gate shares (`import-graph.ts`), so "the module
+ * under test" means the same thing in all of them. A package the resolver cannot enter, a leaf, or a specifier that
+ * resolves nowhere is not an import of anything here, and "this script imports product source" is RESOLVED to a path
+ * the enumeration holds and asked of `isProductSource`, rather than matched against the shape a specifier usually has.
  */
-function resolveSpecifier(
-  specifier: string, dir: string, tracked: ReadonlySet<string>, scope: string,
-): string | undefined {
-  let base: string | undefined;
+function resolveSpecifier(specifier: string, from: string, inputs: ModuleResolution): string | undefined {
+  const resolved = resolveModule({ specifier, from, universe: inputs.tracked, workspace: inputs.workspace, aliases: inputs.aliases });
 
-  if (specifier.startsWith('.')) base = collapsePath(`${dir}/${specifier}`);
-  else if (specifier.startsWith(`${scope}/`)) {
-    const rest = specifier.slice(scope.length + 1).split('/');
-    base = collapsePath(`packages/${rest[0] ?? ''}/src/${rest.slice(1).join('/')}`);
-  }
+  return resolved.kind === 'file' || resolved.kind === 'asset' ? resolved.path : undefined;
+}
 
-  if (base === undefined) return undefined;
-  const at = base;
-
-  return IMPORT_CANDIDATES.map((suffix) => at + suffix).find((path) => tracked.has(path));
+/** What resolving a specifier reads: the tracked files, the workspace packages and the `paths` aliases. */
+interface ModuleResolution {
+  readonly tracked: ReadonlySet<string>;
+  readonly workspace: ReadonlyMap<string, PackageDir>;
+  readonly aliases: readonly Alias[];
 }
 
 interface Imports {
@@ -3206,13 +3198,11 @@ interface Imports {
   readonly localNames: Set<string>;
 }
 
-/** Resolve a test file's imports with the same candidate-suffix rule `wired.ts`
- *  uses, so "the module under test" means the same thing in both. */
-function resolveImports(parsed: ParsedFile, tracked: ReadonlySet<string>, scope: string): Imports {
+/** Resolve a test file's imports by the shared resolver. */
+function resolveImports(parsed: ParsedFile, inputs: ModuleResolution): Imports {
   const specifiers: string[] = [];
   const local: string[] = [];
   const localNames = new Set<string>();
-  const dir = parsed.file.slice(0, parsed.file.lastIndexOf('/'));
 
   for (const statement of parsed.tree.children) {
     const named = moduleSpecifiers(statement);
@@ -3223,7 +3213,7 @@ function resolveImports(parsed: ParsedFile, tracked: ReadonlySet<string>, scope:
     if (specifier === undefined) continue;
     const bound = importBindings(statement);
 
-    const target = resolveSpecifier(specifier, dir, tracked, scope);
+    const target = resolveSpecifier(specifier, parsed.file, inputs);
 
     if (target === undefined) continue;
     local.push(target);
@@ -3240,7 +3230,7 @@ function resolveImports(parsed: ParsedFile, tracked: ReadonlySet<string>, scope:
  * which function bodies it holds, which fixtures a generator writes, which
  * bridges exist, and what the tracked set is. Built once per run.
  */
-export interface CensusInputs {
+export interface CensusInputs extends ModuleResolution {
   /** A gate program's own test: its subject is the tree, so reading source is its input, not a coupling. */
   readonly gateTests: ReadonlySet<string>;
   readonly sources: ReadonlyMap<string, string>;
@@ -3250,7 +3240,6 @@ export interface CensusInputs {
   readonly generators: ReadonlyMap<string, string>;
   readonly bridges: ReadonlyMap<string, readonly Bridge[]>;
   readonly productUnits: ReadonlyMap<string, Unit>;
-  readonly tracked: ReadonlySet<string>;
   readonly scope: string;
 }
 
@@ -3272,7 +3261,7 @@ export interface Measured {
  */
 export function measureFile(file: string, text: string, inputs: CensusInputs): Measured {
   const parsed = parseFile(file, text);
-  const { local, specifiers, localNames } = resolveImports(parsed, inputs.tracked, inputs.scope);
+  const { local, specifiers, localNames } = resolveImports(parsed, inputs);
   const spans = testSpans(parsed);
   const facts = localFacts(parsed, inputs.tracked);
   const { internal, external } = mocks(parsed, spans, inputs.scope);
@@ -3356,15 +3345,21 @@ export function censusInputs(tracked: readonly string[], runners: readonly Runne
   const classes = classNonPublicMembers(sources);
   const bridges = bridgesByName(tracked.filter(isCensusFile).flatMap((file) => bridgesOf(file, readRepositoryFile(root, file), classes)));
 
+  const resolution: ModuleResolution = {
+    tracked: new Set(tracked),
+    workspace: readWorkspace(readMatching(isManifest)),
+    aliases: readAliases(new Map(tracked.filter(isTypescriptConfig).map((file) => [file, readRepositoryFile(root, file)]))),
+  };
+
   return {
+    ...resolution,
     gateTests: gateTests(runners),
     sources,
     readModule: (file) => readRepositoryFile(root, file),
     nonPublic,
-    generators: fixtureGenerators(tracked),
+    generators: fixtureGenerators(tracked, resolution),
     bridges,
     productUnits: productUnitsOf(sources),
-    tracked: new Set(tracked),
     scope: workspaceScope(),
   };
 }
