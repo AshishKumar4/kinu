@@ -439,10 +439,12 @@ test('a production turn runs no more statements than it was measured at, and ask
  * the first step, not with each. A phase now starts with a tool call, a tool step's one crossing while its grant is held:
  * the open with its first step is 21, the three tool calls between 2, 1, 1 (the first with its room's start), and the
  * last tool call with the answering step and the close 14; 39 in all for four tool steps, 33 for one.
+ * 17 at the open on the admission lane (e47ed4e8f): MEMORY.md's tail rides the turn's sources, read in the workspace
+ * (`AgentMemory.tail` and the memory its isolate opened for it, gone); 35 in all, 29 for one.
  */
 /** The budget per place, as measured (the history above): no crossing runs once per step beyond a step's own, nor once
  *  per earlier step. */
-const CROSSINGS = { open: 21, step: 2, close: 14 } as const;
+const CROSSINGS = { open: 17, step: 2, close: 14 } as const;
 
 /**
  * The planted calls (`ObservedOrchestrator.plantCrossings`), each counted once where it lands, and nothing else: the
