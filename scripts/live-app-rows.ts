@@ -31,7 +31,7 @@ import {
   SLEPT_TURN_ASK, TOLD_BACK_ANSWER, TOLD_BACK_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK,
   laterReconnectTurn, toldBackTurn, unsentFirstTurn,
   DROPPED_FILE_ASK, DROPPED_FILE_ROW, droppedFileTurn, heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, registerScriptedModel,
-  startScriptedModel, type HeldCall, ProviderWaitProbe, providerWaitTurn, TITLE_WAITED_MISSION, WAITED_TURN_ASK, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, planTasksProbe, SLATE_ID, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, slateUiTurn,
+  startScriptedModel, type HeldCall, LOGO_WAITED_MISSION, ProviderWaitProbe, providerWaitTurn, WAITED_TURN_ASK, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, planTasksProbe, SLATE_ID, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, slateUiTurn,
 } from './scripted-model';
 import { FALLBACK_ANSWER, type ScriptedRequest } from './scripted-protocol';
 import { openPublicSocket } from '../tests/first-run/public-socket';
@@ -1675,8 +1675,8 @@ async function measureCleared(newPage: LiveApp['newPage'], origin: string, held:
 
 /** What the composer's status notices said while a turn or a background call waited on its provider. */
 export interface ProviderWaitVerdict {
-  /** After the first answer, until its workspace's title had been refused twice more and waited out each refusal. */
-  readonly afterAnswer: readonly string[];
+  /** While the workspace's logo, drawn from Settings, was refused twice more and waited out each refusal. */
+  readonly whileLogoWaited: readonly string[];
   /** While a turn's own call waited on its provider. */
   readonly duringTurn: readonly string[];
   /** As that turn's answer ended. */
@@ -1697,20 +1697,36 @@ async function noticesRead(page: Page, expression: string): Promise<readonly str
   return v.parse(v.array(v.string()), await page.evaluate(expression));
 }
 
-/** #88: a background call's provider wait (the workspace's title, owed once the first turn settles) never stands over
- *  the composer as if a turn were blocked; a turn's own wait does, counting down to its end and never reading 0s. */
+/** Settings' "Draw a new one": the workspace's logo, drawn by the workspace's own model call, outside any turn. */
+async function drawLogoFromSettings(newPage: LiveApp['newPage'], origin: string, workspace: string): Promise<Page> {
+  const settings = await newPage();
+
+  await settings.setViewport(DESKTOP);
+  await named('the settings page to load', () => settings.goto(`${origin}/workspace/${workspace}/settings`, { waitUntil: 'load' }));
+  await until(settings, 'the logo field', `document.querySelector('[data-logo-field] button') !== null`);
+  await settings.click('[data-logo-field] button');
+
+  return settings;
+}
+
+/** #88: a background call's provider wait (the workspace's logo) never stands over the composer as if a turn were
+ *  blocked; a turn's own wait does, counting down to its end and never reading 0s. */
 async function measureProviderWait(newPage: LiveApp['newPage'], origin: string, probe: ProviderWaitProbe): Promise<ProviderWaitVerdict> {
-  const titled = await createWorkspace(origin, { name: `live-row-title-wait-${RUN_ID}`, purpose: TITLE_WAITED_MISSION, model: SCRIPTED_MODEL_SPEC });
-  const background = await openRecorded(newPage, origin, titled);
-  let afterAnswer: readonly string[];
+  const drawn = await createWorkspace(origin, { name: `live-row-logo-wait-${RUN_ID}`, purpose: LOGO_WAITED_MISSION, model: SCRIPTED_MODEL_SPEC });
+  const chat = await openRecorded(newPage, origin, drawn);
+  let whileLogoWaited: readonly string[];
 
   try {
-    await background.evaluate(RECORD_NOTICES);
-    // The second refusal comes once the first one's wait is over: that wait was told, or never.
-    await named('the title to be refused twice more', () => probe.titleRefused(2));
-    afterAnswer = await noticesRead(background, 'window.__notices');
+    await chat.evaluate(RECORD_NOTICES);
+    const refused = probe.logoRefused(2);
+    const settings = await drawLogoFromSettings(newPage, origin, drawn);
+
+    // The second refusal comes once the first one's wait is over: that wait was told to the chat, or never.
+    await named('the logo to be refused twice more', () => refused);
+    whileLogoWaited = await noticesRead(chat, 'window.__notices');
+    await settings.close();
   } finally {
-    await background.close();
+    await chat.close();
   }
 
   const waited = await createWorkspace(origin, { name: `live-row-turn-wait-${RUN_ID}`, purpose: 'turn wait probe', model: SCRIPTED_MODEL_SPEC });
@@ -1721,7 +1737,7 @@ async function measureProviderWait(newPage: LiveApp['newPage'], origin: string, 
     await sendInChat(page, WAITED_TURN_ASK);
     await until(page, 'the waited turn to answer', TURN_ANSWERED);
 
-    return { afterAnswer, duringTurn: await noticesRead(page, 'window.__notices'), afterTurn: await noticesRead(page, COMPOSER_NOTICES) };
+    return { whileLogoWaited, duringTurn: await noticesRead(page, 'window.__notices'), afterTurn: await noticesRead(page, COMPOSER_NOTICES) };
   } finally {
     await page.close();
   }

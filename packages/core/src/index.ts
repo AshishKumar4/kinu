@@ -184,7 +184,7 @@ export {
   validateWorkspaceName,
 } from './identity/naming';
 
-export { drawWorkspaceLogo, sanitizeWorkspaceLogoSvg } from './identity/logo';
+export { drawWorkspaceLogo, sanitizeWorkspaceLogoSvg, WORKSPACE_LOGO_SYSTEM_PROMPT } from './identity/logo';
 
 export { workspaceDisplayTitle, workspaceTitleDraft } from './read-models/workspace-title';
 

@@ -13,7 +13,7 @@
 import { createServer as createHttpServer, type ServerResponse } from 'node:http';
 import { setTimeout as sleep } from 'node:timers/promises';
 import * as v from 'valibot';
-import { SLATES_ROOT, workspacePath, WORKSPACE_ROOT } from '@kinu.run/core';
+import { SLATES_ROOT, workspacePath, WORKSPACE_LOGO_SYSTEM_PROMPT, WORKSPACE_ROOT } from '@kinu.run/core';
 import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-spec';
 
 import { apiJson } from './live-app-harness';
@@ -258,9 +258,9 @@ export function thinkingTurn(request: ScriptedRequest): ScriptedAnswer | null {
 
 /* ── The provider-wait row ────────────────────────────────────────────── */
 
-/** A workspace made with this mission has its titling refused as a rate limit for the whole row: the title is owed once
- *  the first turn settles, so it waits on the provider in the background after the answer. */
-export const TITLE_WAITED_MISSION = 'Background wait probe: the title waits on the provider.';
+/** A workspace made with this mission has every drawing of its logo refused as a rate limit: the logo is the
+ *  workspace's own call, made after the first turn and from Settings, so it waits on the provider in the background. */
+export const LOGO_WAITED_MISSION = 'Background wait probe: the logo waits on the provider.';
 
 /** The ask whose first call is refused as a rate limit, and answered once the provider's wait is over. */
 export const WAITED_TURN_ASK = 'Turn wait probe: answer once the provider lets you.';
@@ -268,42 +268,42 @@ export const WAITED_TURN_ASK = 'Turn wait probe: answer once the provider lets y
 /** Long enough for the composer to count down several seconds, short enough to keep the row small. */
 export const TURN_WAIT_SECONDS = 4;
 
-/** Short, so the title asks again soon after each refusal. */
-const TITLE_WAIT_SECONDS = 3;
+/** Short, so the logo asks again soon after each refusal. */
+const LOGO_WAIT_SECONDS = 3;
 
-/** The row's side of the provider-wait script: the waited turn refused once, and the title's refusals counted, so the
+/** The row's side of the provider-wait script: the waited turn refused once, and the logo's refusals counted, so the
  *  row waits on the server having refused, never on a clock. */
 export class ProviderWaitProbe {
   turnRefused = false;
 
-  private titles = 0;
+  private logos = 0;
 
   private readonly waiting: { readonly at: number; readonly reached: () => void }[] = [];
 
-  /** Settles once the title has been refused `more` more times. */
-  titleRefused(more: number): Promise<void> {
+  /** Settles once the logo has been refused `more` more times. */
+  logoRefused(more: number): Promise<void> {
     const { promise, resolve } = Promise.withResolvers<void>();
 
-    this.waiting.push({ at: this.titles + more, reached: resolve });
+    this.waiting.push({ at: this.logos + more, reached: resolve });
 
     return promise;
   }
 
-  refuseTitle(): ScriptedAnswer {
-    this.titles += 1;
+  refuseLogo(): ScriptedAnswer {
+    this.logos += 1;
 
-    for (const wait of this.waiting) if (wait.at <= this.titles) wait.reached();
+    for (const wait of this.waiting) if (wait.at <= this.logos) wait.reached();
 
-    return { rateLimited: { retryAfterSeconds: TITLE_WAIT_SECONDS } };
+    return { rateLimited: { retryAfterSeconds: LOGO_WAIT_SECONDS } };
   }
 }
 
 export function providerWaitTurn(request: ScriptedRequest, probe: ProviderWaitProbe): ScriptedAnswer | null {
-  const titling = !request.streamed && request.available.length === 0;
+  if (request.system.includes(WORKSPACE_LOGO_SYSTEM_PROMPT) && request.userTexts.some((text) => text.includes(LOGO_WAITED_MISSION))) {
+    return probe.refuseLogo();
+  }
 
-  if (titling && [request.system, ...request.userTexts].some((text) => text.includes(TITLE_WAITED_MISSION))) return probe.refuseTitle();
-
-  if (titling || !(request.userTexts.at(-1) ?? '').includes(WAITED_TURN_ASK)) return null;
+  if (!request.streamed || !(request.userTexts.at(-1) ?? '').includes(WAITED_TURN_ASK)) return null;
 
   if (probe.turnRefused) return { text: 'Done.' };
   probe.turnRefused = true;

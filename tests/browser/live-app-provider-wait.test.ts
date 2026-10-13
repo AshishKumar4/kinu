@@ -10,8 +10,8 @@ afterAll(() => {
 });
 
 describe('a wait on the provider shows over the composer only while it holds a turn (#88)', () => {
-  test("a background call's wait after the answer, the workspace's title, shows nothing", () => {
-    expect(verdictOf(observed.providerWait, 'provider-wait').afterAnswer).toEqual([]);
+  test("a background call's wait, the workspace's logo drawn from Settings, shows nothing in its chat", () => {
+    expect(verdictOf(observed.providerWait, 'provider-wait').whileLogoWaited).toEqual([]);
   });
 
   test("a turn's own wait shows while it waits", () => {
