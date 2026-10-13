@@ -262,22 +262,34 @@ export class UserSessions {
 
   /** Close every websocket that named this session at upgrade. Best-effort, like the CLI socket push. */
   private async pushSessionSocketRevocation(tokenHash: string): Promise<void> {
+    await this.pushToActiveWorkspaces((workspace) => workspace.closeRevokedSessionSockets(tokenHash), {
+      event: 'auth.session_socket_revocation_push_failed',
+      doing: 'closing a workspace websocket whose browser session was revoked',
+      fields: {},
+    });
+  }
+
+  /**
+   * Ask every live workspace to close the sockets a revocation ended. Best-effort: the revocation is durable before
+   * this runs, so a failed push only delays a close, and each failure is reported with its workspace.
+   */
+  private async pushToActiveWorkspaces(
+    push: (workspace: ReturnType<UserSessionsHost['env']['OrchestratorAgent']['get']>) => Promise<{ closed: number }>,
+    report: { readonly event: `${string}.${string}`; readonly doing: string; readonly fields: Readonly<Record<string, number>> },
+  ): Promise<void> {
     const workspaces = this.host.sqlx<{ name: string }>(
       `SELECT name FROM user_workspaces
        WHERE delete_pending = 0 AND create_pending = 0`,
     ).map((row) => row.name);
 
-    const settled = await Promise.allSettled(workspaces.map((name) => this.host.env.OrchestratorAgent
-      .get(this.host.env.OrchestratorAgent.idFromName(name))
-      .closeRevokedSessionSockets(tokenHash)));
+    const settled = await Promise.allSettled(workspaces.map((name) => push(this.host.env.OrchestratorAgent
+      .get(this.host.env.OrchestratorAgent.idFromName(name)))));
 
     for (const [index, outcome] of settled.entries()) {
       if (outcome.status === 'fulfilled') continue;
-      diagnostics.failure('auth.session_socket_revocation_push_failed', toKinuError({
-        doing: 'closing a workspace websocket whose browser session was revoked',
-        cause: outcome.reason,
-        otherwise: 'unavailable',
-      }), { workspace: workspaces[index] });
+      diagnostics.failure(report.event, toKinuError({ doing: report.doing, cause: outcome.reason, otherwise: 'unavailable' }), {
+        workspace: workspaces[index], ...report.fields,
+      });
     }
   }
 
@@ -437,23 +449,11 @@ export class UserSessions {
     );
     const generation = this.authGeneration();
 
-    const workspaces = this.host.sqlx<{ name: string }>(
-      `SELECT name FROM user_workspaces
-       WHERE delete_pending = 0 AND create_pending = 0`,
-    ).map((row) => row.name);
-
-    const settled = await Promise.allSettled(workspaces.map((name) => this.host.env.OrchestratorAgent
-      .get(this.host.env.OrchestratorAgent.idFromName(name))
-      .closeRevokedCliSockets(generation)));
-
-    for (const [index, outcome] of settled.entries()) {
-      if (outcome.status === 'fulfilled') continue;
-      diagnostics.failure('auth.socket_revocation_push_failed', toKinuError({
-        doing: 'closing a workspace websocket whose CLI bearer was revoked',
-        cause: outcome.reason,
-        otherwise: 'unavailable',
-      }), { workspace: workspaces[index], generation });
-    }
+    await this.pushToActiveWorkspaces((workspace) => workspace.closeRevokedCliSockets(generation), {
+      event: 'auth.socket_revocation_push_failed',
+      doing: 'closing a workspace websocket whose CLI bearer was revoked',
+      fields: { generation },
+    });
   }
 
   /**
