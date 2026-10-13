@@ -40,10 +40,23 @@ export interface AgentWorkspaceCalls {
 /** What crosses through the held port: every call whose answer is data, not a live capability. */
 export type AgentWorkspacePort = Omit<AgentWorkspace, 'session' | 'stateSession' | 'memory' | 'program'>;
 
+/** A capability of the workspace opened for one call and let go once it settles: one held open keeps the workspace
+ *  from hibernating (#69). */
+function forOneCall<Capability, T>(opening: () => Promise<Capability>, run: (capability: Capability) => Promise<T>): Effect.Effect<T> {
+  return Effect.suspend(() => {
+    const pending = opening();
+
+    return workspaceRpcAnswer(pending).pipe(
+      Effect.flatMap(capability => workspaceRpcAnswer(run(capability))),
+      Effect.ensuring(Effect.sync(() => { disposeWorkspaceRpc(pending); })),
+    );
+  });
+}
+
 /**
  * Nimbus asks for a synchronous session surface for each of its calls and never lets one go. Each call opens the
  * workspace's session for itself and lets it go once it settles, so one surface serves any number of calls, a rejected
- * one included, and none holds the workspace from hibernating (#69).
+ * one included.
  */
 class WorkspaceSession implements NimbusSessionSurface {
   constructor(private readonly opening: () => Promise<NimbusSessionSurface>) {}
@@ -51,14 +64,7 @@ class WorkspaceSession implements NimbusSessionSurface {
   [Symbol.dispose](): void {}
 
   private call<T>(run: (session: NimbusSessionSurface) => Promise<T>): Effect.Effect<T> {
-    return Effect.suspend(() => {
-      const pending = this.opening();
-
-      return workspaceRpcAnswer(pending).pipe(
-        Effect.flatMap(session => workspaceRpcAnswer(run(session))),
-        Effect.ensuring(Effect.sync(() => { disposeWorkspaceRpc(pending); })),
-      );
-    });
+    return forOneCall(this.opening, run);
   }
 
   _rpcReady(...args: Parameters<NimbusSessionSurface['_rpcReady']>) { return settle(this.call(session => session._rpcReady(...args))); }
@@ -102,22 +108,14 @@ class WorkspaceSession implements NimbusSessionSurface {
   _rpcDestroy(...args: Parameters<NimbusSessionSurface['_rpcDestroy']>) { return settle(this.call(session => session._rpcDestroy(...args))); }
 }
 
-/** The workspace's memory, opened for each call and let go at its edge: a runtime keeps this for its life, and a memory
- *  held open keeps its workspace from hibernating (#69). */
+/** The workspace's memory, opened for each call and let go at its edge: a runtime keeps this for its life. */
 class ConsumedMemory implements Memory {
   constructor(private readonly opening: () => Promise<Memory>) {}
 
   [Symbol.dispose](): void {}
 
   private call<T>(run: (memory: Memory) => Promise<T>): Effect.Effect<T> {
-    return Effect.suspend(() => {
-      const pending = this.opening();
-
-      return workspaceRpcAnswer(pending).pipe(
-        Effect.flatMap(memory => workspaceRpcAnswer(run(memory))),
-        Effect.ensuring(Effect.sync(() => { disposeWorkspaceRpc(pending); })),
-      );
-    });
+    return forOneCall(this.opening, run);
   }
 
   write(...args: Parameters<Memory['write']>) { return settle(this.call(memory => memory.write(...args))); }
