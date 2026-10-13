@@ -85,6 +85,11 @@ export function withAppSecurityHeaders(
   const desktopClient = url.pathname.startsWith(DESKTOP_CLIENT_ROOT);
 
   for (const [key, value] of Object.entries(BASE_HEADERS)) headers.set(key, value);
+  // Never kept: Chrome answers Back and a restored session from its disk cache unasked under the assets' default
+  // `max-age=0, must-revalidate`, and under `no-cache`, so a workspace reopened that way ran whichever build last loaded
+  // at its address; under `no-store` it loads the current one (Chrome 2026-10-13, staging and a local server). Every
+  // script the shell names is content-hashed, so those keep their caching.
+  headers.set('cache-control', 'no-store');
 
   if (desktopClient) headers.set('x-frame-options', 'SAMEORIGIN');
   headers.set('content-security-policy', desktopClient ? desktopClientCsp(url) : appDocumentCsp(url, previewOrigin));

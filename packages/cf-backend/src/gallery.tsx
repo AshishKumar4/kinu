@@ -61,7 +61,6 @@ import { APP_ROUTES, rosterBucket, rosterMatches, WorkspaceOverviewSchema, type 
 import { CHUNK_FIXED_KEY, lazyRoute } from "@/lazy-route";
 import { useKinu } from "@/hooks/use-kinu";
 import type { SubordinateSnapshot } from "@/hooks/use-chat-owner";
-import { primePageDeployedBuildSha } from "@kinu.run/core";
 import { ChatLiveTail, DeviceOfflineRow, MessageView, SteerBubble } from "@/components/MessageView";
 import { buildTranscript, profileCatalogCanonical } from "@kinu.run/core";
 import WorkspacePage, { ConversationSkeleton, ChatErrorCard, EmptyConversation } from "@/pages/WorkspacePage";
@@ -6983,9 +6982,8 @@ function feedbackRoutedFrame(): MountedFrame {
   };
 }
 
-/** Calls `pageDeployedBuildSha` at load like `index.tsx`, and replaceStates the address bar: the report reads `location.pathname`, which the MemoryRouter leaves at `/`. */
+/** ReplaceStates the address bar: the report reads `location.pathname`, which the MemoryRouter leaves at `/`. */
 function errorBoundaryFrame(): MountedFrame {
-  primePageDeployedBuildSha();
   history.replaceState(null, "", `/workspace/checkout-fixes${location.search}`);
 
   return {
@@ -7002,8 +7000,6 @@ function errorBoundaryFrame(): MountedFrame {
 
 /** Leaves the address bar alone: recovery ends in `location.reload()`, and a rewritten path would get Vite's SPA fallback `index.html`. */
 function lazyRouteFrame(): MountedFrame {
-  primePageDeployedBuildSha();
-
   return {
     entries: ["/workspace/checkout-fixes"],
     node: (

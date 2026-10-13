@@ -1,12 +1,12 @@
 /**
  * Client policy for surviving a deploy supersede. A silently dead socket (OPEN, but every RPC times out)
  * is detected by consecutive timeouts and force-redialed with growing spacing; every non-initial 'open'
- * re-runs the initial load; a changed /api/health build sha offers a one-time reload.
+ * re-runs the initial load; a /api/health build sha other than the page's own offers a one-time reload.
  */
 
 import * as v from "valibot";
 import { Effect } from 'effect';
-import { diagnostics, renderThrownChain, settle, toKinuError } from '../obs/index';
+import { renderThrownChain, settle } from '../obs/index';
 
 /** The agents SDK's verbatim timeout rejection. A fast rejection is proof of life. */
 const RPC_TIMEOUT_PATTERN = /^RPC call to .+ timed out after \d+ms$/;
@@ -144,44 +144,6 @@ async function readHealthBuildSha(): Promise<string | null> {
   const parsed = v.safeParse(HealthBodySchema, await res.json());
 
   return parsed.success ? parsed.output.build?.sha ?? null : null;
-}
-
-let pageBuild: Promise<string | null> | null = null;
-
-/** The memoized baseline task, retained through settlement so all readers share one answer. */
-async function loadPageBuildSha(): Promise<string | null> {
-  let thrown: { cause: unknown } | null = null;
-
-  try {
-    // A missing stamp or tolerated transport failure is an expected null, not a defect.
-    return await fetchDeployedBuildSha();
-  } catch (cause) {
-    thrown = { cause };
-  }
-
-  // Only untolerated defects reach here; they are recorded with a class before resolving to null.
-  diagnostics.failure('session_recovery.build_baseline_failed', toKinuError({
-    doing: "reading this page's deployed build sha",
-    cause: thrown.cause,
-    otherwise: 'unavailable',
-  }));
-
-  return null;
-}
-
-/**
- * The build this page loaded, read once per document and shared by the skew notice and the render-failure
- * report. Primed eagerly by `index.tsx` at load.
- */
-export function pageDeployedBuildSha(): Promise<string | null> {
-  pageBuild ??= loadPageBuildSha();
-
-  return pageBuild;
-}
-
-/** Start the shared baseline at page load. */
-export function primePageDeployedBuildSha(): void {
-  pageBuild ??= loadPageBuildSha();
 }
 
 /** Skew needs both a baseline and a live stamp. */

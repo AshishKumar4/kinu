@@ -2641,3 +2641,56 @@ export async function computerDesktopSurvivesAResize(target: FlowTarget): Promis
     await removeFlowWorkspace(target, workspace);
   }
 }
+
+export interface ReopenVerdict {
+  readonly workspace: string;
+  /** Whether Back showed the page kept whole in the back/forward cache, its sockets closed under it. */
+  readonly restored: boolean;
+  /** How the browser says it reached the reopened page, and the bytes it moved for its document: none when the
+   *  document came out of the browser's own cache. */
+  readonly navigation: string;
+  readonly transferBytes: number;
+}
+
+/** Marks a page shown again from the back/forward cache: its document is the one it had, with no load of its own. */
+const MARK_RESTORED = `addEventListener('pageshow', (event) => { if (event.persisted) document.documentElement.dataset.kinuRestored = ''; })`;
+
+/**
+ * Row: a workspace reopened by Back loads the build the deployment serves.
+ *
+ * The reader opens a workspace, leaves it for another page of the app as a new document, and goes Back. On
+ * 71d06f4a9 Chrome answered that document and its scripts from its disk cache without asking (staging, 2026-10-13), as
+ * it does a restored session, so a workspace reopened that way ran whichever build last loaded at its address: the
+ * owner saw an older design come back. With its back/forward cache on, Chrome instead showed the page it had kept,
+ * whose sockets had closed: "Could not load preview listings: Connection closed".
+ */
+export async function reopenedWorkspaceRunsTheDeployedBuild(target: FlowTarget): Promise<ReopenVerdict> {
+  const workspace = await createFlowWorkspace(target, 'reopen');
+
+  try {
+    const page = await signedInPage(target.browser, target.identity);
+
+    await page.evaluateOnNewDocument(MARK_RESTORED);
+    await page.goto(`${target.origin}/workspace/${workspace}`, { waitUntil: 'load' });
+    await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
+    await page.goto(`${target.origin}/user/settings`, { waitUntil: 'load' });
+    // History's own Back: Puppeteer's resolved on the settings page's own address change, before Back landed.
+    await page.evaluate(() => { history.back(); });
+    await page.waitForFunction((path) => location.pathname === path && document.readyState === 'complete', {}, `/workspace/${workspace}`);
+
+    const reopened = v.parse(v.object({ restored: v.boolean(), type: v.string(), transferSize: v.number() }), await page.evaluate(() => {
+      const [navigation] = performance.getEntriesByType('navigation');
+      const restored = document.documentElement.dataset.kinuRestored !== undefined;
+
+      return navigation instanceof PerformanceNavigationTiming ? { restored, type: navigation.type, transferSize: navigation.transferSize } : null;
+    }));
+
+    // A page loaded again must also come up: its socket answers as on any load.
+    if (!reopened.restored) await until(page, "the reopened workspace's live composer", CHAT_COMPOSER_LIVE);
+    await page.close();
+
+    return { workspace, restored: reopened.restored, navigation: reopened.type, transferBytes: reopened.transferSize };
+  } finally {
+    await removeFlowWorkspace(target, workspace);
+  }
+}
