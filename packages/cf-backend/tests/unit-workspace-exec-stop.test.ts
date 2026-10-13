@@ -7,6 +7,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { exists, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { nimbusSessionShell, WORKSPACE_ROOT, type NimbusSandboxHandle } from '@kinu.run/core';
+import { wasNotDispatched } from '@kinu.run/agent-utils';
 import { present } from '@kinu.run/test-utils';
 import { createHostedWorkspace, type HostedBox } from '../src/workspace-host';
 import {
@@ -50,6 +51,17 @@ function hostedBox(): HostedBox {
   return workspace.box('agent:main');
 }
 
+/** How `pending` was refused: a Stop's AbortError. */
+async function rejection(pending: Promise<unknown>): Promise<Error> {
+  const [settled] = await Promise.allSettled([pending]);
+
+  if (settled.status === 'fulfilled' || !(settled.reason instanceof Error) || settled.reason.name !== 'AbortError') {
+    throw new Error(`the command was not stopped: ${String(settled.status === 'fulfilled' ? 'it ran' : settled.reason)}`);
+  }
+
+  return settled.reason;
+}
+
 /** A command that waits for `gate` to be written, then writes `marker`: what it does after a Stop shows whether it ran on. */
 const gated = (marker: string) => `until test -e gate; do sleep 0.1; done; printf ran > ${marker}`;
 
@@ -82,7 +94,8 @@ describe('a Stop of a hosted workspace command', () => {
 
     await asked.promise;
     controller.abort();
-    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    // Answered as never sent, so an approval it spent is given back and a named shell is not lost.
+    expect(wasNotDispatched(await rejection(pending))).toBe(true);
 
     // Readiness arrives after the Stop: nothing is sent, and no file is written.
     readying.resolve();
@@ -139,9 +152,8 @@ describe('a Stop of a hosted workspace command', () => {
       await start.running;
       controller.abort();
       start.drop();
-      await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
-
-      // Red: answered as never started, and the command ran on to write its file once let.
+      // Red: answered as never sent, and the command ran on to write its file once let.
+      expect(wasNotDispatched(await rejection(pending))).toBe(false);
       await writeText(box.store({ home: WORKSPACE_ROOT }), 'gate', '');
       await start.ended();
       expect(await exists(box.store({ home: WORKSPACE_ROOT }), 'after-stop.txt')).toBe(false);
@@ -166,7 +178,8 @@ describe('a Stop of a hosted workspace command', () => {
       await start.running;
       controller.abort();
       start.drop();
-      await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+      // Red: answered as never sent, though it may run on.
+      expect(wasNotDispatched(await rejection(pending))).toBe(false);
 
       // Nothing could find the command to stop it, and the answer claimed no stop: it runs on.
       await writeText(box.store({ home: WORKSPACE_ROOT }), 'gate', '');

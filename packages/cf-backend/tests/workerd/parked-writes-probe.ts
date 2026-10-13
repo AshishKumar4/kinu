@@ -9,7 +9,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
-import { cloudPlanes, DeferredApprovalQueue, DeferredApprovalStore, WORKSPACE_ROOT, initDeferredApprovalsTable, initWorkspaceSchema, ParkedWriteFiles, performBoundWrite, sha256Hex, withApprovalGatedFiles, WorkspaceActorDirectory, type SqlExec, type SqlExecutor, type SqlValue } from '@kinu.run/core';
+import { cloudPlanes, DeferredApprovalQueue, DeferredApprovalStore, WORKSPACE_ROOT, initDeferredApprovalsTable, initWorkspaceSchema, ParkedWriteFiles, performBoundWrite, sha256Hex, type CheckpointFiles, withApprovalGatedFiles, WorkspaceActorDirectory, type SqlExec, type SqlExecutor, type SqlValue } from '@kinu.run/core';
 
 /** The owner's machine as the agent's plane mounts it. */
 const MACHINE = '/pc/studio';
@@ -34,9 +34,20 @@ function pattern(size: number, seed: number): Uint8Array {
   return bytes;
 }
 
-/** The file plane as the agent's tools reach it, over the kernel's view of this object's workspace. */
-function planeOver(files: CredentialedVfs): VFS {
+/**
+ * The file plane as the agent's tools reach it, over the kernel's view of this object's workspace. As the machine's
+ * own daemon does, it compares a save's digest and writes in one step.
+ */
+function planeOver(files: CredentialedVfs): VFS & CheckpointFiles {
   return {
+    writeFileIfDigest: async (path, data, expected) => {
+      const now = files.exists(path) ? sha256Hex(files.readFileUncached(path)) : null;
+
+      if (now !== expected) return { ok: false, sha256: now };
+      files.writeFile(path, data);
+
+      return { ok: true, sha256: sha256Hex(data) };
+    },
     readFile: async (path) => files.readFileUncached(path),
     writeFile: async (path, data) => { files.writeFile(path, data); },
     readdir: async (path) => files.readdir(path),
@@ -60,7 +71,7 @@ export class ParkedWritesProbeDO extends DurableObject<Cloudflare.Env> {
 
   private readonly exec: SqlExec = { exec: (query, ...bindings) => this.ctx.storage.sql.exec(query, ...bindings) };
 
-  private opened: Promise<{ readonly queue: DeferredApprovalQueue; readonly plane: VFS; readonly kernel: CredentialedVfs }> | undefined;
+  private opened: Promise<{ readonly queue: DeferredApprovalQueue; readonly plane: VFS & CheckpointFiles; readonly kernel: CredentialedVfs }> | undefined;
 
   private open() {
     this.opened ??= (async () => {

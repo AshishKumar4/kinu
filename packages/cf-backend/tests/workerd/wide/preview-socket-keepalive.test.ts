@@ -10,10 +10,12 @@ import { expect, it } from 'vitest';
 /** Past worker 0.16's hold on a resident after its last client traffic (`RESIDENT_KEEPALIVE_DETACHED_MS`, 60 s). */
 const PAST_TRAFFIC_BOUND_MS = 61_000;
 
-it('an open, quiet preview socket keeps the same application serving past the traffic bound, and relays both ways', async () => {
+it('an open, quiet preview socket keeps the same application serving past the traffic bound, relays both ways, and lets go once closed', async () => {
   const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('preview-keepalive'));
   const workspace = 'preview-keepalive';
   const boot = await subject.serveSlate({ workspace, owner: 'keepalive-owner', id: 'held', body: 'held-body' });
+  // The workspace's armed keep-alive of its resident, as Nimbus names the task (`HostedRuntimeTask`).
+  const keepalives = async () => (await subject.pendingNimbusTasks(workspace)).tasks.map((task) => task.id).filter((id) => id === 'resident-keepalive');
 
   expect(await subject.holdPreview(boot.url)).toEqual({ ok: true });
 
@@ -30,7 +32,17 @@ it('an open, quiet preview socket keeps the same application serving past the tr
 
     expect(await subject.callHeldPreview('evaluation')).toEqual(serving);
     expect(await subject.callHeldPreview('ping')).toEqual({ ok: true, value: '{"rows":2}' });
+    expect(await keepalives()).toEqual(['resident-keepalive']);
     expect(await subject.closeHeldPreview()).toEqual({ code: 1001 });
+
+    // Closed, the socket holds nothing: past the bound after its close the resident's keep-alive ends and arms no
+    // successor. Red when a close releases nothing.
+    for (let quiet = 0; quiet < 2; quiet += 1) {
+      await subject.advanceClock(PAST_TRAFFIC_BOUND_MS);
+      await subject.wakeOnce(workspace);
+    }
+
+    expect(await keepalives()).toEqual([]);
   } finally {
     await subject.restoreClock();
   }

@@ -552,7 +552,7 @@ function runOnBox(box: NimbusSandboxHandle, call: SessionCall, options: ShellExe
   }, options.signal, 'workspace exec cancelled before it started', async () => {
     stopped.abort();
 
-    if (launch === undefined) return 'workspace exec cancelled before it started';
+    if (launch === undefined) return null;
     const [launched] = await Promise.allSettled([launch]);
 
     // A start the box did not answer may still have run: it is stopped by its name, or the stop is not confirmed.
@@ -713,7 +713,12 @@ export function nimbusSessionFiles(
 
       await atVfsPath(absolute, 'open', () => files.write(absolute, data));
     },
-    // No `writeFileIfRevision`: the SDK write takes no precondition, so `writeExecutorFileOp` answers `unsupported`.
+    // Over the revision its stat gave, checked and written in one step at the session (Kinu's SDK patch, Nimbus ask 55).
+    writeFileIfRevision: (path, data, expected) => {
+      const absolute = at(path);
+
+      return atVfsPath(absolute, 'open', () => files.writeIfRevision(absolute, data, Number(expected)));
+    },
     async readdir(path) {
       const absolute = at(path);
 

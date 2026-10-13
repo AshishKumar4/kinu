@@ -239,6 +239,7 @@ function nimbusHandle(fs: MemFs): SessionBox {
     },
     async mkdir(path: string) { fs.mkdir(path); },
     async chmod(path: string) { throw new VfsError('ENOTSUP', 'this test plane keeps no modes', path); },
+    async writeIfRevision(path: string) { throw new VfsError('ENOTSUP', 'this test plane keeps no revisions', path); },
     async delete(path: string) { fs.del(path); },
   };
 

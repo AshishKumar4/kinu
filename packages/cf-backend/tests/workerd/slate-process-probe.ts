@@ -5,7 +5,7 @@ import { ProcessFiles } from '@nimbus-sh/core/runtime/process-files.js';
 import { CRED_KERNEL, CRED_SESSION_USER, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
-import { FACET_IMAGE_DIR, facetImageDigest, facetImagePath } from '@nimbus-sh/fabric/process-fabric.js';
+import { FACET_IMAGE_DIR, facetImagePath } from '@nimbus-sh/fabric/process-fabric.js';
 import type { EsbuildService } from '@nimbus-sh/core/runtime/esbuild-service.js';
 import { supervisorEsbuildService } from '@nimbus-sh/worker/facet-host';
 import { probeDurableApps, probeFacetManager } from './facet-manager';
@@ -14,7 +14,7 @@ import {
   initSlateStateTable, parseSlateProject, issuedSlateInvocation, routeSlateCall, slateStorageCall,
   type JsonValue, type SlateCallResult, type SlateInvocation,
 } from '@kinu.run/core';
-import { SqliteSlateStateStore } from '@kinu.run/core/slates';
+import { SqliteSlateStateStore, type SlateImage } from '@kinu.run/core/slates';
 import { KinuError, renderThrownChain } from '@kinu.run/core/obs';
 import { ResidentSlateProcesses, type ResidentSlateProcess } from '../../src/slates/resident';
 import { slateBatchStub } from '../../src/slates/rpc-transport';
@@ -100,6 +100,9 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
 
   private process: ResidentSlateProcess | undefined;
 
+  /** The image the running process was launched from. */
+  private image: SlateImage | undefined;
+
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
     super(ctx, env);
     initSlateStateTable((ddl: string) => ctx.storage.sql.exec(ddl));
@@ -151,15 +154,16 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     const authored = this.vfs.as(cred);
     const read = (entry: string) => (authored.exists(`${root}/${entry}`) ? authored.readFileString(`${root}/${entry}`) : null);
 
-    const boot = {
-      key: crypto.randomUUID(), owner, root, read, app, cred,
-      globalOutbound: codemodeEgress({ workspace: null, actor: null }),
-      project: parseSlateProject(project),
-    };
+    // Built, then launched, as the host does; a tree that does not compile is refused in the compiler's words.
+    const image = await this.resident.build({ owner, root, read, cred, project: parseSlateProject(project) });
 
-    this.process = await this.resident.start(bindChain
-      ? { ...boot, bindings: { __storage: storageStub, workspace: exports.SlateChainProbe({}) } }
-      : { ...boot, bindings: { __storage: storageStub } });
+    if ('failed' in image) throw new KinuError('bad_input', image.failed);
+
+    this.image = image;
+    this.process = await this.resident.launch({
+      owner, root, app, globalOutbound: codemodeEgress({ workspace: null, actor: null }),
+      bindings: bindChain ? { __storage: storageStub, workspace: exports.SlateChainProbe({}) } : { __storage: storageStub },
+    }, image);
   }
 
   async facetImages(): Promise<string[]> {
@@ -169,10 +173,23 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
   }
 
   async interruptApplicationImage(): Promise<void> {
-    const application = this.started().artifacts.application;
-    const path = facetImagePath(await facetImageDigest(application));
+    const path = facetImagePath(this.module('application.js'));
+    const kernel = this.vfs.as(CRED_KERNEL);
 
-    this.vfs.as(CRED_KERNEL).truncate(path, new TextEncoder().encode(application).byteLength - 1);
+    kernel.truncate(path, new TextEncoder().encode(kernel.readFileString(path)).byteLength - 1);
+  }
+
+  /** The server module the running image was compiled to, as its content-addressed image holds it. */
+  applicationModule(): string {
+    return this.vfs.as(CRED_KERNEL).readFileString(facetImagePath(this.module('application.js')));
+  }
+
+  private module(name: string): string {
+    const digest = this.image?.modules[name];
+
+    if (digest === undefined) throw new KinuError('unavailable', `start() has not built an image with ${name}`);
+
+    return digest;
   }
 
   async seedPrivateSource(): Promise<void> {
@@ -233,10 +250,6 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     } finally {
       SlateProcessProbeDO.invocations.delete(invocation);
     }
-  }
-
-  artifacts() {
-    return this.started().artifacts;
   }
 
   paths() {

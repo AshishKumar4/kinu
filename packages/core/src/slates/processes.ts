@@ -52,7 +52,6 @@ export interface RunningSlate<Source, Process> {
   /** The source digest its image was built from: the last that built, while `broken` says why a newer one did not. */
   readonly built: string;
   readonly broken: string | null;
-  readonly revision: number;
   readonly caller: SlateCaller;
   readonly id: string;
   readonly source: Source;
@@ -153,12 +152,7 @@ export class SlateProcesses<Source extends RunnableSlateSource, Process extends 
       const key = `slate:mediated:${this.ports.workspace}:${held}:${digest}`;
       const running = this.running.get(held);
 
-      if (running?.key === key && await running.process.isRunning()) {
-        const refreshed = { ...running, revision };
-        this.running.set(held, refreshed);
-
-        return refreshed;
-      }
+      if (running?.key === key && await running.process.isRunning()) return running;
 
       const changed = new Set<string>();
 
@@ -175,7 +169,7 @@ export class SlateProcesses<Source extends RunnableSlateSource, Process extends 
       const { image, key: built, broken } = imaged;
 
       if (running !== undefined && running.built === built && await running.process.isRunning()) {
-        const kept = { ...running, revision, broken };
+        const kept = { ...running, broken };
         this.running.set(held, kept);
 
         return kept;
@@ -198,7 +192,7 @@ export class SlateProcesses<Source extends RunnableSlateSource, Process extends 
         continue;
       }
 
-      const started = { key, built, broken, revision, caller, id, source, process, app };
+      const started = { key, built, broken, caller, id, source, process, app };
       this.running.set(held, started);
 
       return started;

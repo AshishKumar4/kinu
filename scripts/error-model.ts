@@ -394,6 +394,8 @@ export const DECLARED = byFile([
       'a seeded task\'s validation report: whether its oracle passed, and on which attempt'],
     ['packages/core/src/vfs/context-plane.ts', ['write'],
       '`VfsCasResult`, the vendored Nimbus VFS\'s revision-checked write answer; its shape is that package\'s contract'],
+    ['packages/test-utils/src/vfs.ts', ['writeFileIfRevision', 'writeIfRevision'],
+      '`VfsCasResult`, the revision-checked write answer of the Nimbus VFS and SDK files plane these test planes stand in for'],
     ['packages/cli/src/device-connect.ts', ['describeConnectOutcome'],
       'which glyph the connect message shows; both branches are printed, neither fails'],
     ['packages/cli/src/tui/overlays.tsx', ['ModelListOverlay'],
