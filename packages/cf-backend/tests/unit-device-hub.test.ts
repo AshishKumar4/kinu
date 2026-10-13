@@ -12,13 +12,13 @@ import {
 } from '@kinu.run/core';
 import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
+import { present } from '@kinu.run/test-utils';
 import { CAPABLE_HELLO, WORKSPACE } from './helpers/device-harness';
 import { provisionTestWorkspace } from './helpers/user-do';
 import {
   DeviceSocketHub,
   DeviceTerminalHub,
   deviceIdFromSocket,
-  terminalFromSocket,
   type DeviceSocket,
   type DeviceSocketCtx,
 } from '@kinu.run/core';
@@ -67,6 +67,60 @@ function connected() {
   return { ctx, hub, ws };
 }
 
+type PeerMessage = string | ArrayBuffer | ArrayBufferView;
+
+/** The socket platform delivers bytes and a close code to the remote peer. */
+function socketPeer(onMessage?: (data: PeerMessage) => void, open = true) {
+  let attachment: unknown;
+  const messages: PeerMessage[] = [];
+  const readers: Array<ReturnType<typeof Promise.withResolvers<PeerMessage>>> = [];
+  const closure = Promise.withResolvers<number | undefined>();
+
+  const socket: DeviceSocket = {
+    readyState: open ? 1 : 3,
+    send(data) {
+      const reader = readers.shift();
+
+      if (reader) reader.resolve(data);
+      else messages.push(data);
+      onMessage?.(data);
+    },
+    close(code) { this.readyState = 3; closure.resolve(code); },
+    serializeAttachment(value) { attachment = value; },
+    deserializeAttachment() { return attachment; },
+  };
+
+  return {
+    socket, closed: closure.promise,
+    receive: async (): Promise<PeerMessage> => {
+      const message = messages.shift();
+
+      if (message !== undefined) return message;
+      const reader = Promise.withResolvers<PeerMessage>();
+      readers.push(reader);
+
+      return reader.promise;
+    },
+  };
+}
+
+function peerContext(): DeviceSocketCtx {
+  const accepted: Array<{ ws: DeviceSocket; tags: string[] }> = [];
+
+  return {
+    acceptWebSocket(ws, tags) { accepted.push({ ws, tags }); },
+    getWebSockets(tag) { return accepted.filter((entry) => tag === undefined || entry.tags.includes(tag)).map((entry) => entry.ws); },
+    getTags(ws) { return accepted.find((entry) => entry.ws === ws)?.tags ?? []; },
+  };
+}
+
+function answeringPeer(deviceId: string, hub: () => DeviceSocketHub, result: JsonValue) {
+  return socketPeer((data) => {
+    const frame = v.parse(v.object({ id: v.string() }), JSON.parse(v.parse(v.string(), data)));
+    hub().handleMessage(deviceId, JSON.stringify({ id: frame.id, result }));
+  });
+}
+
 describe('DeviceSocketHub', () => {
   test('a daemon without the current protocol is refused before it can execute', async () => {
     const harness = createTestUserDO();
@@ -108,15 +162,9 @@ describe('DeviceSocketHub', () => {
     const first = fakeSocket();
     const second = fakeSocket();
     hub.accept('dev-a', first);
-    const duplicate = fakeSocket();
-    const closed = fakeSocket(false);
-    ctx.acceptWebSocket(duplicate, ['device:dev-a']);
-    ctx.acceptWebSocket(closed, ['device:dev-a']);
     hub.accept('dev-a', second);
     hub.hello('dev-a', DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
     expect(first.closed).toEqual([{ code: 1000, reason: 'replaced by a new connection' }]);
-    expect(duplicate.closed).toEqual(first.closed);
-    expect(closed.closed).toEqual([]);
     expect(hub.liveSocket('dev-a')).toBe(second);
     const tunnel = hub.tunnel('dev-a');
 
@@ -127,6 +175,28 @@ describe('DeviceSocketHub', () => {
     const frame = v.parse(v.object({ id: v.string() }), JSON.parse(second.sent[0] ?? 'null'));
     hub.handleMessage('dev-a', JSON.stringify({ id: frame.id, result: 'ok' }));
     expect(await pending).toBe('ok');
+  });
+
+  test('a reconnect closes every older live peer and leaves another machine serving', async () => {
+    const ctx = peerContext();
+    const hub = new DeviceSocketHub(ctx);
+    const first = answeringPeer('dev-a', () => hub, 'first daemon');
+    const duplicate = answeringPeer('dev-a', () => hub, 'duplicate daemon');
+    const replacement = answeringPeer('dev-a', () => hub, 'replacement daemon');
+    const sibling = answeringPeer('dev-b', () => hub, 'other machine');
+
+    hub.accept('dev-a', first.socket);
+    ctx.acceptWebSocket(duplicate.socket, ['device:dev-a']);
+    ctx.acceptWebSocket(socketPeer(undefined, false).socket, ['device:dev-a']);
+    hub.accept('dev-b', sibling.socket);
+    hub.hello('dev-b', DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
+    hub.accept('dev-a', replacement.socket);
+    hub.hello('dev-a', DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
+
+    expect(await first.closed).toBe(1000);
+    expect(await duplicate.closed).toBe(1000);
+    expect(await present(hub.tunnel('dev-a'), 'the reconnected machine').rpc('exec', ['hostname'])).toBe('replacement daemon');
+    expect(await present(hub.tunnel('dev-b'), 'the other machine').rpc('exec', ['hostname'])).toBe('other machine');
   });
 
   test('a new hub over the same ctx rebuilds liveness + tunnel after a wake', async () => {
@@ -149,15 +219,19 @@ describe('DeviceSocketHub', () => {
     expect(await reply).toBe('hi');
   });
 
-  test('a daemon admitted only for update keeps no serving tunnel, even on a socket that served before', () => {
-    const { ctx, hub } = connected();
+  test('a wake cannot readmit a formerly serving, now update-only daemon', async () => {
+    const ctx = peerContext();
+    let hub = new DeviceSocketHub(ctx);
+    const daemon = answeringPeer('dev-a', () => hub, { signedIn: false });
+    hub.accept('dev-a', daemon.socket);
+    hub.hello('dev-a', DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
+    expect(await present(hub.tunnel('dev-a'), 'the serving daemon').rpc('exec', ['hostname'])).toEqual({ signedIn: false });
 
-    expect(hub.tunnel('dev-a')).not.toBeNull();
-    expect(hub.hello('dev-a', DEVICE_PROTOCOL_VERSION - 1, DEVICE_FEATURES)).toBe('update');
-    expect(hub.tunnel('dev-a')).toBeNull();
-    expect(hub.relayDevice()).toBeNull();
-    // Nor after a wake, rebuilt from the socket's attachment.
-    expect(new DeviceSocketHub(ctx).tunnel('dev-a')).toBeNull();
+    hub.hello('dev-a', DEVICE_PROTOCOL_VERSION - 1, DEVICE_FEATURES);
+    hub = new DeviceSocketHub(ctx);
+    await expect(hub.chatgpt('dev-a', DEVICE_CHATGPT.status)).rejects.toMatchObject({ code: 'unavailable' });
+    await expect(hub.relay('dev-a', 'relay-after-wake', { method: 'GET', url: 'https://chatgpt.com/backend-api/models', headers: [], body: null }))
+      .rejects.toMatchObject({ code: 'unavailable' });
   });
 
   test('a socket close rejects its in-flight calls; liveness follows the socket', async () => {
@@ -203,56 +277,74 @@ describe('DeviceSocketHub', () => {
     const hub = new DeviceSocketHub(ctx);
     const ws = fakeSocket();
     hub.accept('dev-a', ws);
-    const duplicate = fakeSocket();
-    const closed = fakeSocket(false);
-    const sibling = fakeSocket();
-    ctx.acceptWebSocket(duplicate, ['device:dev-a']);
-    ctx.acceptWebSocket(closed, ['device:dev-a']);
-    hub.accept('dev-b', sibling);
     hub.close('dev-a', 'device revoked');
     expect(ws.closed).toEqual([{ code: 1000, reason: 'device revoked' }]);
-    expect(duplicate.closed).toEqual(ws.closed);
-    expect(closed.closed).toEqual([]);
-    expect(sibling.closed).toEqual([]);
-    expect(hub.liveSocket('dev-b')).toBe(sibling);
     expect(hub.isConnected('dev-a')).toBe(false);
+  });
+
+  test('revocation closes every live peer of one machine while another still answers', async () => {
+    const ctx = peerContext();
+    const hub = new DeviceSocketHub(ctx);
+    const first = answeringPeer('dev-a', () => hub, 'revoked machine');
+    const duplicate = answeringPeer('dev-a', () => hub, 'duplicate daemon');
+    const sibling = answeringPeer('dev-b', () => hub, 'other machine');
+    hub.accept('dev-a', first.socket);
+    ctx.acceptWebSocket(duplicate.socket, ['device:dev-a']);
+    ctx.acceptWebSocket(socketPeer(undefined, false).socket, ['device:dev-a']);
+    hub.hello('dev-a', DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
+    hub.accept('dev-b', sibling.socket);
+    hub.hello('dev-b', DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
+    const revoked = present(hub.tunnel('dev-a'), 'the machine before revocation');
+    expect(await revoked.rpc('exec', ['hostname'])).toBe('revoked machine');
+
+    hub.close('dev-a', 'device revoked');
+    expect(await first.closed).toBe(1000);
+    expect(await duplicate.closed).toBe(1000);
+    await expect(revoked.rpc('exec', ['hostname'])).rejects.toMatchObject({ code: 'unavailable' });
+    expect(await present(hub.tunnel('dev-b'), 'the other machine').rpc('exec', ['hostname'])).toBe('other machine');
   });
 });
 
 describe('DeviceTerminalHub socket ownership', () => {
-  test('distinct panes survive a wake, refuse a sibling attach and keep their close reasons', () => {
-    const { ctx, hub } = connected();
+  test('distinct panes survive a wake, refuse a sibling attach and keep their own bytes', async () => {
+    const ctx = peerContext();
+    const hub = new DeviceSocketHub(ctx);
     const terminals = new DeviceTerminalHub(ctx, hub);
-    const first = fakeSocket();
-    const second = fakeSocket();
-    const output: Array<string | ArrayBuffer | ArrayBufferView> = [];
-    first.send = (data) => { output.push(data); };
+    let serving = terminals;
+
+    const daemon = socketPeer((data) => {
+      const input = v.parse(v.object({ type: v.literal(DEVICE_PTY_INPUT), session: v.string(), data: v.string() }), JSON.parse(v.parse(v.string(), data)));
+      serving.toPane(input.session, Buffer.from(input.data, 'base64'));
+    });
+
+    const first = socketPeer();
+    const second = socketPeer();
+    hub.accept('dev-a', daemon.socket);
+    hub.hello('dev-a', DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
 
     terminals.register('session-a', 'dev-a', 'workspace-a');
     terminals.register('session-b', 'dev-a', 'workspace-b');
-    expect(terminals.attach('session-a', first)).toEqual({ device: 'dev-a', workspace: 'workspace-a' });
-    terminals.attach('session-b', second);
-    expect(() => terminals.attach('session-a', fakeSocket())).toThrow();
-    expect(first.closed).toEqual([]);
-    expect(second.closed).toEqual([]);
+    terminals.attach('session-a', first.socket);
+    terminals.attach('session-b', second.socket);
 
-    const woken = new DeviceTerminalHub(ctx, hub);
-    expect(woken.panesForDevice('dev-a')).toEqual(['session-a', 'session-b']);
-    expect(terminalFromSocket(first)).toEqual({ session: 'session-a', device: 'dev-a', workspace: 'workspace-a' });
-    const bytes = new Uint8Array([0, 255, 13]);
-    woken.toPane('session-a', bytes);
-    expect(output).toEqual([bytes]);
+    serving = new DeviceTerminalHub(ctx, hub);
+    await expect(Promise.resolve().then(() => serving.attach('session-a', socketPeer().socket))).rejects.toMatchObject({ code: 'missing' });
+    const firstBytes = new Uint8Array([0, 255, 13]);
+    const secondBytes = new Uint8Array([27, 91, 65]);
+    serving.fromPane('session-a', 'dev-a', firstBytes);
+    serving.fromPane('session-b', 'dev-a', secondBytes);
+    expect(new Uint8Array(v.parse(v.instance(Uint8Array), await first.receive()))).toEqual(firstBytes);
+    expect(new Uint8Array(v.parse(v.instance(Uint8Array), await second.receive()))).toEqual(secondBytes);
 
-    woken.paneExit('session-a', 17);
-    expect(output.at(-1)).toBe(JSON.stringify({ type: 'exit', exitCode: 17 }));
-    expect(first.closed).toEqual([{ code: 1000, reason: 'the shell ended' }]);
-    expect(woken.paneSocket('session-a')).toBeNull();
-    expect(woken.paneSocket('session-b')).toBe(second);
+    serving.paneExit('session-a', 17);
+    expect(JSON.parse(v.parse(v.string(), await first.receive()))).toMatchObject({ type: 'exit', exitCode: 17 });
+    expect(await first.closed).toBe(1000);
+    serving.fromPane('session-b', 'dev-a', secondBytes);
+    expect(new Uint8Array(v.parse(v.instance(Uint8Array), await second.receive()))).toEqual(secondBytes);
 
-    woken.endPane('session-b', 'device revoked');
-    expect(second.sent).toEqual([JSON.stringify({ type: 'error', error: 'device revoked' })]);
-    expect(second.closed).toEqual([{ code: 1000, reason: 'device revoked' }]);
-    expect(woken.panesForDevice('dev-a')).toEqual([]);
+    serving.endPane('session-b', 'device revoked');
+    expect(JSON.parse(v.parse(v.string(), await second.receive()))).toMatchObject({ type: 'error' });
+    expect(await second.closed).toBe(1000);
   });
 });
 
