@@ -6,7 +6,7 @@ import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { fakeMossaic } from '@kinu.run/test-utils/mossaic';
-import { agentPlane, present, workspaceShell } from '@kinu.run/test-utils';
+import { agentPlane, oneMachine, present, workspaceShell } from '@kinu.run/test-utils';
 
 import { isVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { removeTree, standardMounts, withMountTable, workspaceFilePlane, type VfsMount, type WorkspacePrincipal } from '../src/vfs/mounts';
@@ -227,8 +227,8 @@ describe('the workspace plane mount table', () => {
 		let scope: DeviceFileScope = 'root';
 
 		const transport: DeviceTransport = {
-			status: () => ({ connected: true, registered: true, toolchain: null }),
-			refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
+			status: () => (oneMachine()),
+			refreshStatus: async () => (oneMachine()),
 			rpc: async (method, params) => {
 				const path = v.parse(v.string(), params[0]);
 				const content = Object.entries(machine).find(([file]) => file === path)?.[1];
@@ -827,8 +827,8 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 		const machine = { '/home/dev/notes.txt': 'consented', '/etc/secrets.key': 'outside' };
 
 		const transport: DeviceTransport = {
-			status: () => ({ connected: true, registered: true, toolchain: null }),
-			refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
+			status: () => (oneMachine()),
+			refreshStatus: async () => (oneMachine()),
 			rpc: async (method, params): Promise<JsonValue> => {
 				const path = v.parse(v.string(), params[0]);
 				const content = Object.entries(machine).find(([file]) => file === path)?.[1];

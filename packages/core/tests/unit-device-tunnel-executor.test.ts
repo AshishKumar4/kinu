@@ -5,6 +5,7 @@ import type { JsonValue } from '../src/utils/json';
 import { DEVICE_ERRORS, deviceFailure } from '../src/execution/device-protocol';
 import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { renderThrownChain } from '../src/obs/index';
+import { oneMachine } from '@kinu.run/test-utils';
 
 /** The machine's files as the agent's file tools reach them under `/pc`: the executor's own view, consent applied. */
 function filesOf(provider: ReturnType<typeof createDeviceTunnelExecutor>) {
@@ -37,7 +38,7 @@ function transport(resultFor: (method: string, params: JsonValue[]) => JsonValue
 
   return {
     calls,
-    ...staticTransport({ connected: true, registered: true, toolchain: null }, async (method, params) => {
+    ...staticTransport({}, async (method, params) => {
       calls.push({ method, params });
 
       return resultFor(method, params);
@@ -60,8 +61,8 @@ describe('createDeviceTunnelExecutor', () => {
     const observed: string[] = [];
 
     const t: DeviceTransport = {
-      status: () => ({ connected: true, registered: true, toolchain: null }),
-      refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
+      status: () => ({}),
+      refreshStatus: async () => ({}),
       rpc: async (_method, _params, opts) => {
         issued.push({ reported: observed[observed.length - 1] ?? '', sent: opts?.requestId });
 
@@ -85,8 +86,8 @@ describe('createDeviceTunnelExecutor', () => {
     const reported: string[] = [];
 
     const t: DeviceTransport = {
-      status: () => ({ connected: true, registered: true, toolchain: null }),
-      refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
+      status: () => ({}),
+      refreshStatus: async () => ({}),
       rpc: async (_method, _params, opts) => {
         if (opts?.requestId === undefined) throw new Error('exec reached the device with no identity');
         issued.push({ requestId: opts.requestId, backgroundJobId: opts.backgroundJobId });
@@ -174,7 +175,6 @@ describe('createDeviceTunnelExecutor', () => {
     const calls: Array<{ method: string; params: JsonValue[] }> = [];
 
     const described = staticTransport({
-      connected: true, registered: true, toolchain: null,
       devices: [{ id: 'dev-1', name: 'box', os: 'linux', hostname: 'box', connected: true }],
     }, async (method, params) => {
       calls.push({ method, params });
@@ -195,14 +195,10 @@ describe('createDeviceTunnelExecutor', () => {
 
   test('the row carries the machine\'s own name and this agent\'s grant state', () => {
     const named = staticTransport({
-      connected: true,
-      registered: true,
-      toolchain: null,
       devices: [
         { id: 'dev-2', name: 'spare box', os: 'linux', hostname: 'spare', connected: false },
-        { id: 'dev-1', name: 'ashish@studio', os: 'darwin', hostname: 'studio', connected: true },
+        { id: 'dev-1', name: 'ashish@studio', os: 'darwin', hostname: 'studio', connected: true, granted: true },
       ],
-      workspaceGranted: true,
     }, async () => undefined);
 
     // The connected machine names the row, not whichever registered first; only a live machine's segment is linkable.
@@ -213,20 +209,16 @@ describe('createDeviceTunnelExecutor', () => {
 
     // Offline but registered: still named, still ungranted.
     const offline = staticTransport({
-      connected: false,
-      registered: true,
-      toolchain: null,
-      devices: [{ id: 'dev-1', name: 'ashish@studio', os: null, hostname: null, connected: false }],
-      workspaceGranted: false,
+      devices: [{ id: 'dev-1', name: 'ashish@studio', os: null, hostname: null, connected: false, granted: false }],
     }, async () => undefined);
 
-    expect(createDeviceTunnelExecutor(offline).getStatus?.()).toMatchObject({
-      status: 'disconnected', label: 'ashish@studio', granted: false,
-    });
+    // Offline, a machine's grant is not "the" machine's: the row names it and says nothing of reach.
+    expect(createDeviceTunnelExecutor(offline).getStatus?.()).toMatchObject({ status: 'disconnected', label: 'ashish@studio' });
 
-    const bare = staticTransport({ connected: true, registered: true, toolchain: null }, async () => undefined);
+    // One machine, live: it names the row and is its one linkable segment.
+    const bare = staticTransport(oneMachine(), async () => undefined);
     expect(createDeviceTunnelExecutor(bare).getStatus?.()).toEqual({
-      configured: true, available: true, active: true, status: 'active',
+      configured: true, available: true, active: true, status: 'active', label: 'laptop', mounts: ['laptop'],
     });
   });
 
@@ -260,7 +252,7 @@ describe('createDeviceTunnelExecutor', () => {
   test('tools reach the hub even when the cached snapshot is stale-false', async () => {
     // A cached false could never flip back to true, so the tools ask the hub rather than the snapshot.
     const t = transport(() => ({ stdout: 'hi', stderr: '', exitCode: 0 }));
-    t.status = () => ({ connected: false, registered: true, toolchain: null });
+    t.status = () => (oneMachine({ connected: false }));
     const provider = createDeviceTunnelExecutor(t);
 
     expect(await provider.tools.exec.execute('echo hi')).toBe('hi');
@@ -271,9 +263,9 @@ describe('createDeviceTunnelExecutor', () => {
 
   test('getStatus maps the hub snapshot to the three lifecycle states', () => {
     const rpc: DeviceTransport['rpc'] = async () => 'unused';
-    const connected = createDeviceTunnelExecutor(staticTransport({ connected: true, registered: true, toolchain: null }, rpc));
-    const offline = createDeviceTunnelExecutor(staticTransport({ connected: false, registered: true, toolchain: null }, rpc));
-    const none = createDeviceTunnelExecutor(staticTransport({ connected: false, registered: false, toolchain: null }, rpc));
+    const connected = createDeviceTunnelExecutor(staticTransport(oneMachine(), rpc));
+    const offline = createDeviceTunnelExecutor(staticTransport(oneMachine({ connected: false }), rpc));
+    const none = createDeviceTunnelExecutor(staticTransport({ devices: [] }, rpc));
 
     expect(connected.getStatus?.()).toMatchObject({ available: true, configured: true, status: 'active' });
     expect(offline.getStatus?.()).toMatchObject({ available: false, configured: true, status: 'disconnected' });
@@ -284,13 +276,8 @@ describe('createDeviceTunnelExecutor', () => {
   test('a connected machine this workspace cannot use reads as reach, not liveness', () => {
     const rpc: DeviceTransport['rpc'] = async () => 'unused';
 
-    const ungranted = staticTransport({
-      connected: true, registered: true, toolchain: null, workspaceGranted: false,
-    }, rpc);
-
-    const granted = staticTransport({
-      connected: true, registered: true, toolchain: null, workspaceGranted: true,
-    }, rpc);
+    const ungranted = staticTransport(oneMachine({ granted: false }), rpc);
+    const granted = staticTransport(oneMachine({ granted: true }), rpc);
 
     // The ungranted row says the machine exists and the first call raises a card.
     expect(createDeviceTunnelExecutor(ungranted).getStatus?.()).toMatchObject({
@@ -304,10 +291,8 @@ describe('createDeviceTunnelExecutor', () => {
   test('a caller with no workspace identity keeps the liveness reading', () => {
     const rpc: DeviceTransport['rpc'] = async () => 'unused';
 
-    // `workspaceGranted` absent: a non-workspace caller or an older snapshot; row unchanged.
-    const status = createDeviceTunnelExecutor(staticTransport({
-      connected: true, registered: true, toolchain: null,
-    }, rpc)).getStatus?.();
+    // `granted` absent: a non-workspace caller; row unchanged.
+    const status = createDeviceTunnelExecutor(staticTransport(oneMachine(), rpc)).getStatus?.();
 
     expect(status).toMatchObject({ available: true, active: true, status: 'active' });
     expect(status?.granted).toBeUndefined();
@@ -318,7 +303,6 @@ describe('createDeviceTunnelExecutor', () => {
 
     // Reach comes from the live machine's own entry.
     const single = staticTransport({
-      connected: true, registered: true, toolchain: null,
       devices: [{ id: 'dev-1', name: 'studio', os: 'linux', hostname: 's', connected: true, granted: false }],
     }, rpc);
 
@@ -332,7 +316,6 @@ describe('createDeviceTunnelExecutor', () => {
 
     // With several live machines the top-level reach fields are absent; the row lists both and the model names one.
     const status = createDeviceTunnelExecutor(staticTransport({
-      connected: true, registered: true, toolchain: null,
       devices: [
         { id: 'dev-1', name: 'studio', os: 'linux', hostname: 's', connected: true, granted: false },
         { id: 'dev-2', name: 'rig', os: 'linux', hostname: 'r', connected: true, granted: true },
@@ -344,11 +327,11 @@ describe('createDeviceTunnelExecutor', () => {
   });
 
   test('hub/tunnel disconnect errors surface the connect guidance', async () => {
-    const hubRejects = staticTransport({ connected: false, registered: true, toolchain: null }, async () => {
+    const hubRejects = staticTransport({}, async () => {
       throw deviceFailure(DEVICE_ERRORS.disconnected, 'no device connected');
     });
 
-    const tunnelDropped = staticTransport({ connected: true, registered: true, toolchain: null }, async () => {
+    const tunnelDropped = staticTransport({}, async () => {
       throw deviceFailure(DEVICE_ERRORS.disconnected, 'device tunnel not connected');
     });
 
@@ -362,7 +345,7 @@ describe('createDeviceTunnelExecutor', () => {
   });
 
   test('a non-connection failure is classified, and keeps its own message', async () => {
-    const t = staticTransport({ connected: true, registered: true, toolchain: null }, async () => {
+    const t = staticTransport({}, async () => {
       throw new Error('permission denied');
     });
 
@@ -375,7 +358,7 @@ describe('createDeviceTunnelExecutor', () => {
   });
 
   test('a read that could not reach the device never answers `false`', async () => {
-    const t = staticTransport({ connected: true, registered: true, toolchain: null }, async () => {
+    const t = staticTransport({}, async () => {
       throw new Error('permission denied');
     });
 
@@ -389,7 +372,7 @@ describe('createDeviceTunnelExecutor', () => {
   test('an unanswered or string-valued exists RPC never asserts absence', async () => {
     for (const wire of [undefined, 'false']) {
       const t = staticTransport(
-        { connected: true, registered: true, toolchain: null },
+        {},
         async () => wire,
       );
 
@@ -401,7 +384,7 @@ describe('createDeviceTunnelExecutor', () => {
 
   test('a malformed base64 frame never becomes an empty file', async () => {
     const t = staticTransport(
-      { connected: true, registered: true, toolchain: null },
+      {},
       async () => ({ encoding: 'base64', content: 42 }),
     );
 

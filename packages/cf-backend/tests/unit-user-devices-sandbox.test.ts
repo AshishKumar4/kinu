@@ -12,7 +12,7 @@ import {
 } from '@kinu.run/core';
 import { testOwner, type DeviceFrame } from './helpers/user-do';
 import { WORKSPACE, OTHER_WORKSPACE, daemon, deviceHarness } from './helpers/device-harness';
-import { CapabilityDeniedError } from '@kinu.run/core';
+import { CapabilityDeniedError, soleLiveDevice } from '@kinu.run/core';
 
 /** Loaded from the shipped daemon rather than restated, so a new daemon status is one this suite sends. */
 const DaemonSandboxModuleSchema = v.object({
@@ -260,7 +260,7 @@ describe('the frame carries the calling workspace own home', () => {
     await harness.sendDeviceHello(hello(CAPABLE, { root: '/home/ashish/projects/kinu' }));
 
     const status = await harness.userDO.deviceRuntimeStatus(harness.workspace);
-    expect(status.sandbox).toEqual({
+    expect(soleLiveDevice(status.devices)?.sandbox).toEqual({
       tier: 'sandboxed',
       capability: 'sandboxed',
       reason: null,

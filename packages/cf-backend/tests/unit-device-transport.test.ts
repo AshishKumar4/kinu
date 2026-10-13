@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
   nextDeviceRequestId, isDeviceNotConnectedError, isWorkspaceUnattachedError,
-  NO_DEVICE_CONNECTED, WORKSPACE_HAS_NO_OWNER, type DeviceStatus, type JsonValue,
+  NO_DEVICE_CONNECTED, WORKSPACE_HAS_NO_OWNER, connectedDevices, soleLiveDevice, type DeviceStatus, type JsonValue,
   DEVICE_ERRORS, deviceFailure,
 } from '@kinu.run/core';
 import {
@@ -11,6 +11,7 @@ import {
   type DeviceRpcOptions,
 } from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';
+import { machine, oneMachine } from '@kinu.run/test-utils';
 
 const FAKE_CALLER = { workspaceToken: 'pwc_test' } as const;
 
@@ -33,7 +34,7 @@ function fakeHub(status: () => DeviceStatus): DeviceHubClient & { rpcCalls: RpcC
   };
 }
 
-const NO_DEVICE: DeviceStatus = { connected: false, registered: false, toolchain: null };
+const NO_DEVICE: DeviceStatus = { devices: [] };
 
 function requiredCall(calls: RpcCall[], index: number): RpcCall {
   const call = calls[index];
@@ -50,17 +51,17 @@ describe('createHubDeviceTransport', () => {
 
 
     const transport = createHubDeviceTransport({
-      hub: () => fakeHub(() => ({ connected, registered: true, toolchain: null })),
+      hub: () => fakeHub(() => oneMachine({ connected })),
       caller,
       agentName: 'agent-1',
       actorId: 'actor-1',
       cliCwd: () => null,
     });
 
-    expect((await transport.refreshStatus())).toEqual({ connected: false, registered: true, toolchain: null });
+    expect((await transport.refreshStatus())).toEqual(oneMachine({ connected: false }));
     connected = true; // the user runs `kinu connect` between turns
-    expect((await transport.refreshStatus())).toEqual({ connected: true, registered: true, toolchain: null });
-    expect(transport.status().connected).toBe(true);
+    expect((await transport.refreshStatus())).toEqual(oneMachine());
+    expect(connectedDevices(transport.status().devices)).toHaveLength(1);
   });
 
   // 2026-09-26: every wake of an idle workspace re-read its page's executors, since a fresh object's first answer
@@ -74,7 +75,7 @@ describe('createHubDeviceTransport', () => {
       deviceRuntimeStatus: async () => {
         listCalls += 1;
 
-        return { connected, registered: true, toolchain: null };
+        return oneMachine({ connected });
       },
       deviceRpc: async () => 'unused',
       acknowledgeDeviceRequest: async () => {},
@@ -97,7 +98,7 @@ describe('createHubDeviceTransport', () => {
     connected = false;
     await transport.refreshStatus();
     expect(moved).toBe(1);
-    expect(transport.status().connected).toBe(false);
+    expect(connectedDevices(transport.status().devices)).toEqual([]);
   });
 
   // 2026-09-26: a workspace answered first without its hub, then by a hub with no machines, told every open page
@@ -107,7 +108,7 @@ describe('createHubDeviceTransport', () => {
     let moved = 0;
 
     const transport = createHubDeviceTransport({
-      hub: () => (attached ? fakeHub(() => ({ connected: false, registered: false, toolchain: null, devices: [] })) : null),
+      hub: () => (attached ? fakeHub(() => NO_DEVICE) : null),
       agentName: 'agent-1', actorId: 'actor-1', cliCwd: () => null, caller,
       onStatusChanged: () => { moved += 1; },
     });
@@ -127,7 +128,8 @@ describe('createHubDeviceTransport', () => {
       caller,
     });
 
-    expect(await transport.refreshStatus()).toEqual({ connected: false, registered: false, toolchain: null });
+    // No hub lists any machine: the fleet is unknown, and reads as none.
+    expect(await transport.refreshStatus()).toEqual({});
     const refusal = transport.rpc('exec', ['ls']);
     await expect(refusal).rejects.toThrow(WORKSPACE_HAS_NO_OWNER);
     await expect(refusal).rejects.not.toThrow(/kinu connect/);
@@ -154,14 +156,13 @@ describe('createHubDeviceTransport', () => {
 
   test('rpc outcomes re-seed the snapshot: success → connected, hub rejection → offline', async () => {
     let hubUp = true;
-    const hub = fakeHub(() => NO_DEVICE);
+    const hub = fakeHub(() => oneMachine({ connected: hubUp }));
 
     const failingHub: DeviceHubClient = {
-      deviceRuntimeStatus: async () => NO_DEVICE,
+      deviceRuntimeStatus: async () => oneMachine({ connected: false }),
       deviceRpc: async () => { throw deviceFailure(DEVICE_ERRORS.disconnected, 'no device connected'); },
       acknowledgeDeviceRequest: async () => { throw deviceFailure(DEVICE_ERRORS.disconnected, 'no device connected'); },
     };
-
 
     const transport = createHubDeviceTransport({
       hub: () => (hubUp ? hub : failingHub),
@@ -171,24 +172,46 @@ describe('createHubDeviceTransport', () => {
       cliCwd: () => null,
     });
 
+    // Before any refresh the fleet is unknown: the answer cannot say which machine it was, so the hub is asked.
     await transport.rpc('exec', ['echo hi']);
-    expect(transport.status()).toEqual({ connected: true, registered: true, toolchain: null });
+    expect(transport.status()).toEqual(oneMachine());
     expect(hub.rpcCalls[0]).toMatchObject([
       'exec', ['echo hi'], { agentName: 'agent-1', actorId: 'actor-1', requestId: expect.stringMatching(/^rpc-/) }, FAKE_CALLER,
     ]);
 
     hubUp = false;
     await expect(transport.rpc('exec', ['echo hi'])).rejects.toThrow(NO_DEVICE_CONNECTED);
-    expect(transport.status().connected).toBe(false);
-    expect(transport.status().registered).toBe(true); // connectivity changed, registration didn't
+    // Connectivity changed, registration didn't.
+    expect(transport.status()).toEqual(oneMachine({ connected: false }));
+  });
+
+  // 2026-10-13 review: a call's answer moved the account's "connected" and left every machine's own entry as it was,
+  // so a machine that dropped still read as live by name.
+  test('a call\'s answer moves the machine it named, and no other', async () => {
+    let fleet = { devices: [machine({ id: 'studio', name: 'studio' }), machine({ id: 'rig', name: 'rig' })] };
+
+    const hub: DeviceHubClient = {
+      deviceRuntimeStatus: async () => fleet,
+      deviceRpc: async () => { throw deviceFailure(DEVICE_ERRORS.disconnected, 'no device connected'); },
+      acknowledgeDeviceRequest: async () => {},
+    };
+
+    const transport = createHubDeviceTransport({ hub: () => hub, caller, agentName: 'agent-1', actorId: 'actor-1', cliCwd: () => null });
+    const live = () => connectedDevices(transport.status().devices).map((device) => device.name);
+
+    await transport.refreshStatus();
+    await expect(transport.rpc('exec', ['echo hi'], { deviceId: 'rig' })).rejects.toThrow(NO_DEVICE_CONNECTED);
+    expect(live()).toEqual(['studio']);
+
+    // Naming none, the machine the hub chose dropped: not every machine did, so the fleet is read again.
+    fleet = { devices: [machine({ id: 'studio', name: 'studio' }), machine({ id: 'rig', name: 'rig', connected: false })] };
+    await expect(transport.rpc('exec', ['echo hi'])).rejects.toThrow(NO_DEVICE_CONNECTED);
+    expect(live()).toEqual(['studio']);
   });
 
   test('a device call re-proves presence without discarding what the machine answered', async () => {
-    const probed: DeviceStatus = {
-      connected: true,
-      registered: true,
-      toolchain: { present: ['javascript'], asked: ['javascript', 'python'], probedAt: Date.now() },
-    };
+    const toolchain = { present: ['javascript'], asked: ['javascript', 'python'], probedAt: Date.now() } as const;
+    const probed = oneMachine({ toolchain: { ...toolchain, present: [...toolchain.present], asked: [...toolchain.asked] } });
 
     const hub = fakeHub(() => probed);
 
@@ -201,12 +224,12 @@ describe('createHubDeviceTransport', () => {
     await transport.rpc('exec', ['echo hi']);
 
     // A call proves the socket, not the toolchain: it must not re-seed the snapshot.
-    expect(transport.status().toolchain).toEqual(probed.toolchain);
+    expect(soleLiveDevice(transport.status().devices)?.toolchain).toEqual(probed.devices?.[0]?.toolchain);
   });
 
   test('the caller\'s request identity is forwarded, not dropped or replaced', async () => {
     // This seam rewrites `exec` params; a lost id is a command nothing can cancel.
-    const hub = fakeHub(() => ({ connected: true, registered: true, toolchain: null }));
+    const hub = fakeHub(() => (oneMachine()));
 
 
     const transport = createHubDeviceTransport({
@@ -237,7 +260,7 @@ describe('createHubDeviceTransport', () => {
     };
 
     const hub: DeviceHubClient = {
-      deviceRuntimeStatus: async () => ({ connected: true, registered: true, toolchain: null }),
+      deviceRuntimeStatus: async () => (oneMachine()),
       deviceRpc: async (_caller, _method, _params, opts) => {
         // As UserDO hands the daemon's frames over while the command runs: base64, a frame per window.
         opts?.onOutput?.({ chunks: [{ stream: 'stdout', data: btoa('compiled 1\n') }, { stream: 'stderr', data: btoa('warn\n') }], dropped: 0 });
@@ -258,7 +281,7 @@ describe('createHubDeviceTransport', () => {
   });
 
   test('an exec with nowhere to show its output asks the hub for none', async () => {
-    const hub = fakeHub(() => ({ connected: true, registered: true, toolchain: null }));
+    const hub = fakeHub(() => (oneMachine()));
     const transport = createHubDeviceTransport({ hub: () => hub, caller, agentName: 'agent-1', actorId: 'actor-1', cliCwd: () => null });
 
     await transport.rpc('exec', ['make'], { timeoutMs: 0, requestId: nextDeviceRequestId() });
@@ -267,7 +290,7 @@ describe('createHubDeviceTransport', () => {
   });
 
   test('mutating methods carry the pre-mutation checkpoint hint; reads do not', async () => {
-    const hub = fakeHub(() => ({ connected: true, registered: true, toolchain: null }));
+    const hub = fakeHub(() => (oneMachine()));
 
 
     const transport = createHubDeviceTransport({
@@ -293,7 +316,7 @@ describe('createHubDeviceTransport', () => {
   });
 
   test('a digest-checked write carries the checkpoint hint, so the daemon snapshots the file before replacing it', async () => {
-    const hub = fakeHub(() => ({ connected: true, registered: true, toolchain: null }));
+    const hub = fakeHub(() => (oneMachine()));
 
     const transport = createHubDeviceTransport({
       hub: () => hub,
@@ -312,7 +335,7 @@ describe('createHubDeviceTransport', () => {
   });
 
   test('no checkpoint hint outside a turn or when the meta seam is unwired', async () => {
-    const hub = fakeHub(() => ({ connected: true, registered: true, toolchain: null }));
+    const hub = fakeHub(() => (oneMachine()));
     const unwired = createHubDeviceTransport({ hub: () => hub, caller, agentName: 'a', actorId: 'actor-1', cliCwd: () => null });
     await unwired.rpc('exec', ['ls']);
     expect(requiredCall(hub.rpcCalls, 0)[2]?.checkpoint).toBeUndefined();
@@ -328,7 +351,7 @@ describe('createHubDeviceTransport', () => {
   });
 
   test('exec calls are rewritten into the CLI-forwarded working directory', async () => {
-    const hub = fakeHub(() => ({ connected: true, registered: true, toolchain: null }));
+    const hub = fakeHub(() => (oneMachine()));
 
 
     const transport = createHubDeviceTransport({
@@ -358,15 +381,16 @@ describe('createHubDeviceTransport', () => {
       hub: () => denying, caller, agentName: 'agent-1', actorId: 'actor-1', cliCwd: () => null,
     });
 
-    expect(await transport.refreshStatus()).toEqual({ connected: false, registered: false, toolchain: null });
-    expect(transport.status()).toEqual({ connected: false, registered: false, toolchain: null });
+    // The refusal keeps the fleet unknown, which reads as no machine.
+    expect(await transport.refreshStatus()).toEqual({});
+    expect(transport.status()).toEqual({});
     await expect(transport.rpc('exec', ['ls'])).rejects.toThrow('not available to a shared workspace');
   });
 
   test('a workspace with no capability token reads as no device rather than throwing at turn start', async () => {
 
     const transport = createHubDeviceTransport({
-      hub: () => fakeHub(() => ({ connected: true, registered: true, toolchain: null })),
+      hub: () => fakeHub(() => (oneMachine())),
       caller: async () => { throw new Error('This workspace has not been issued a capability token yet.'); },
       agentName: 'agent-1',
       actorId: 'actor-1',
@@ -374,7 +398,7 @@ describe('createHubDeviceTransport', () => {
     });
 
     // beforeTurn awaits this on every turn; it must never be what fails a turn.
-    expect(await transport.refreshStatus()).toEqual({ connected: false, registered: false, toolchain: null });
+    expect(await transport.refreshStatus()).toEqual({});
     await expect(transport.rpc('exec', ['ls'])).rejects.toThrow('capability token');
   });
 });

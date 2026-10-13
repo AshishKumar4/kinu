@@ -73,3 +73,5 @@ export * from './claims';
 export * from './command-call';
 
 export * from './workspace-shell';
+
+export * from './device-fleet';

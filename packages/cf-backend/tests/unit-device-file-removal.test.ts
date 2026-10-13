@@ -6,13 +6,13 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync, lstatSync, mkdirSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { deleteExecutorPathOp, deviceFiles, type DeviceStatus, type DeviceTransport } from '@kinu.run/core';
-import { scratchDir } from '@kinu.run/test-utils';
+import { oneMachine, scratchDir } from '@kinu.run/test-utils';
 import { pcAgentDaemon } from './helpers/pc-agent-daemon';
 
 /** Every frame to the daemon as the hub sends it, the owner's Sandbox switch off. */
 function tunnelToDaemon(): DeviceTransport {
   const daemon = pcAgentDaemon();
-  const connected: DeviceStatus = { connected: true, registered: true, toolchain: null };
+  const connected: DeviceStatus = oneMachine();
   let next = 0;
 
   return {

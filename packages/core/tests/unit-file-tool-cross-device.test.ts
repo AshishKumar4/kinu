@@ -33,7 +33,7 @@ interface Frame { readonly method: string; readonly path: JsonValue | undefined;
 function fleet(written: JsonValue, keepWrites = false): DeviceTransport & { readonly frames: Frame[] } {
   const frames: Frame[] = [];
   const files = new Map<string, Buffer>();
-  const status = (): DeviceStatus => ({ connected: true, registered: true, toolchain: null, devices: [STUDIO, RIG] });
+  const status = (): DeviceStatus => ({ devices: [STUDIO, RIG] });
   const bytesOn = (deviceId: string | undefined) => files.get(deviceId ?? '') ?? Buffer.from(`notes kept on ${deviceId ?? 'no machine'}`);
 
   return {

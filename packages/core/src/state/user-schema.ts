@@ -204,6 +204,10 @@ export function initUserTables(sql: SqlExec): void {
       agent_root      TEXT,
       -- The owner's Sandbox switch. ON unless the owner turned it off.
       tier            TEXT NOT NULL DEFAULT 'sandboxed',
+      -- The build the daemon reported on its last HELLO (NULL: it named none), and
+      -- whether its owner lets the hub push a newer one (updateCheck in the CLI config).
+      version         TEXT,
+      update_check    INTEGER NOT NULL DEFAULT 1,
       -- Revocation found a command it could not confirm stopped. This owner-
       -- visible fact survives removal of its active in-flight row; reconnection
       -- cannot clear it because a revoked device never reconnects.
@@ -211,20 +215,6 @@ export function initUserTables(sql: SqlExec): void {
     )
   `);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_devices_token_hash ON user_devices (token_hash)`);
-
-  // A table, not `user_devices` columns: the genesis lock refuses new columns on shipped tables.
-  sql.exec(`
-    CREATE TABLE IF NOT EXISTS user_device_builds (
-      -- The device whose daemon reported. Cascade-declared so the row is a
-      -- property of the device, not of the storage that outlives it.
-      device_id    TEXT PRIMARY KEY REFERENCES user_devices(id) ON DELETE CASCADE,
-      -- The build the daemon reported on its last HELLO (NULL only for a row
-      -- written before the field existed), and whether its owner lets the hub
-      -- push a newer one (updateCheck in the CLI config).
-      version      TEXT,
-      update_check INTEGER NOT NULL DEFAULT 1
-    )
-  `);
 
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_device_update_refusals (

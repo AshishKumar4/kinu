@@ -5,7 +5,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
-import { toolExecute } from '@kinu.run/test-utils';
+import { oneMachine, toolExecute } from '@kinu.run/test-utils';
 import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import {
   buildBuiltinTools, censusToolFailures, classifyToolFailure,
@@ -590,8 +590,8 @@ describe('each executor tool files its own failure in the right part', () => {
   test('device: no device attached is a platform gap, not a successful call', async () => {
     const payload = await escalate(createDeviceTunnelExecutor({
       rpc: async () => { throw deviceFailure(DEVICE_ERRORS.disconnected, 'no device connected'); },
-      status: () => ({ connected: false, registered: true, toolchain: null }),
-      refreshStatus: async () => ({ connected: false, registered: true, toolchain: null }),
+      status: () => (oneMachine({ connected: false })),
+      refreshStatus: async () => (oneMachine({ connected: false })),
     }));
 
     // Prose read as a successful call would leave the census counting nothing here.

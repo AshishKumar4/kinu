@@ -3,7 +3,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   DEVICE_CONSENT_DENIED, SEVERAL_DEVICES_CONNECTED, NO_DEVICE_CONNECTED,
-  DynamicContextLedger, connectedDevices, renderDynamicContextBlock,
+  DynamicContextLedger, connectedDevices, renderDynamicContextBlock, soleLiveDevice,
   isDeviceAmbiguityError, isDeviceNotConnectedError,
   type DeviceFleetEntry, type DeviceStatus, type DynamicContext, type JsonValue,
 } from '@kinu.run/core';
@@ -68,7 +68,6 @@ describe('two daemons connected at once', () => {
     const fleet = await twoDaemons();
     const status = await fleet.userDO.deviceRuntimeStatus(fleet.workspace);
 
-    expect(status.connected).toBe(true);
     expect(connectedDevices(status.devices).map((d) => d.name).sort()).toEqual(['ashish@mac', 'mrwhite@rig']);
     const mac = byName(status.devices, 'ashish@mac');
     const rig = byName(status.devices, 'mrwhite@rig');
@@ -83,10 +82,8 @@ describe('two daemons connected at once', () => {
     expect(rig?.consentedRoot).toBe('/home/mrwhite/work');
     expect(fleet.mac.frames.map((f) => f.method)).toEqual(['which']);
     expect(fleet.rig.frames.map((f) => f.method)).toEqual(['which']);
-    // Two machines have no single connected device: the one-machine fields are absent.
-    expect(status.workspaceGranted).toBeUndefined();
-    expect(status.sandbox).toBeUndefined();
-    expect(status.consentedRoot).toBeUndefined();
+    // Two machines have no single connected device: a call naming none reaches neither.
+    expect(soleLiveDevice(status.devices)).toBeUndefined();
     await fleet.end();
   });
 
@@ -181,7 +178,7 @@ describe('two daemons connected at once', () => {
     const after = await fleet.userDO.deviceRuntimeStatus(fleet.workspace);
     expect(byName(after.devices, 'mrwhite@rig')).toMatchObject({ connected: false });
     expect(byName(after.devices, 'ashish@mac')).toMatchObject({ connected: true });
-    expect(after.consentedRoot).toBe('/Users/ashish/work');
+    expect(soleLiveDevice(after.devices)?.consentedRoot).toBe('/Users/ashish/work');
     // A stated absence, not a re-route.
     await expect(fleet.userDO.deviceRpc(fleet.workspace, 'exec', ['pwd'], { agentName: WORKSPACE, deviceId: fleet.rigId }))
       .rejects.toThrow(NO_DEVICE_CONNECTED);
@@ -230,10 +227,12 @@ describe('two daemons connected at once', () => {
 describe('what the model is told', () => {
   /** Rendered from a hub snapshot, as state/dynamic-context.ts does on both backends. */
   function context(status: DeviceStatus): DynamicContext {
+    const live = connectedDevices(status.devices).length > 0;
+
     return {
       executors: [{
-        name: 'device', kind: 'device', available: status.connected, configured: status.registered,
-        active: status.connected, status: status.connected ? 'active' : 'disconnected',
+        name: 'device', kind: 'device', available: live, configured: (status.devices?.length ?? 0) > 0,
+        active: live, status: live ? 'active' : 'disconnected',
       }],
       devices: status.devices,
     };

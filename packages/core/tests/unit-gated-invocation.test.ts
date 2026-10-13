@@ -150,7 +150,7 @@ describe('a machine is part of the ask', () => {
 
   function fleet(): DeviceTransport & { readonly ranOn: Array<string | undefined> } {
     const ranOn: Array<string | undefined> = [];
-    const status = (): DeviceStatus => ({ connected: true, registered: true, toolchain: null, devices: [STUDIO, RIG] });
+    const status = (): DeviceStatus => ({ devices: [STUDIO, RIG] });
 
     return {
       ranOn,
@@ -535,7 +535,7 @@ describe('a named shell is part of the ask as it was when asked', () => {
   function device(home: string, policy: ShellApprovalPolicy) {
     const machine = scratchMachine(home);
     const STUDIO: DeviceFleetEntry = { id: 'dev-studio', name: 'studio', os: 'linux', hostname: 'studio', connected: true };
-    const status = (): DeviceStatus => ({ connected: true, registered: true, toolchain: null, devices: [STUDIO] });
+    const status = (): DeviceStatus => ({ devices: [STUDIO] });
     const reads = { count: 0, failAfter: Number.POSITIVE_INFINITY };
 
     const transport: DeviceTransport = {

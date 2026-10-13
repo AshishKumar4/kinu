@@ -8,7 +8,7 @@ import {
   DEVICE_TOOLCHAIN_TTL_MS, TOOLCHAIN_PROBE_BINARIES,
   DEVICE_RELAY,
   DEVICE_UNKNOWN_METHOD, TUNNEL_DISCONNECTED, DEVICE_CHATGPT, DEVICE_CANCEL_METHOD, DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION,
-  type JsonValue,
+  connectedDevices, type JsonValue,
 } from '@kinu.run/core';
 import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -129,7 +129,7 @@ describe('DeviceSocketHub', () => {
       const { deviceId } = await harness.userDO.registerDevice(await testOwner(), 'old daemon');
       harness.attachDaemon(deviceId);
       await harness.sendDeviceHello({ ...CAPABLE_HELLO, protocolVersion: 0, features: [] }, deviceId);
-      expect((await harness.userDO.deviceRuntimeStatus(await testOwner())).connected).toBe(false);
+      expect(connectedDevices((await harness.userDO.deviceRuntimeStatus(await testOwner())).devices)).toEqual([]);
     } finally {
       harness.close();
     }
@@ -662,16 +662,12 @@ describe('device links expire on an absolute window, renewed by rotation', () =>
 
   test('the runtime status separates "no device" from "registered but away", with nothing claimed', async () => {
     const harness = createTestUserDO();
-    expect(await harness.userDO.deviceRuntimeStatus(await testOwner()))
-      .toEqual({ connected: false, registered: false, toolchain: null, devices: [] });
+    expect(await harness.userDO.deviceRuntimeStatus(await testOwner())).toEqual({ devices: [] });
 
     const { deviceId } = await harness.userDO.registerDevice(await testOwner(), 'studio tower');
-    // `toolchain: null` offline, never an empty set (the model would read "runs nothing"); the row stays
-    // named so the agent can ask for it.
+    // No toolchain offline, never an empty set (the model would read "runs nothing"); the row stays named so the
+    // agent can ask for it.
     expect(await harness.userDO.deviceRuntimeStatus(await testOwner())).toEqual({
-      connected: false,
-      registered: true,
-      toolchain: null,
       devices: [{ id: deviceId, name: 'studio tower', os: null, hostname: null, connected: false }],
     });
     harness.close();
@@ -717,7 +713,7 @@ describe('the daemon keepalive, answered by the hub', () => {
     expect(device.sent.slice(before)).toEqual(['pong', 'pong']);
     expect(device.ws.readyState).toBe(1);
     expect(await harness.userDO.deviceRuntimeStatus(await testOwner()))
-      .toMatchObject({ connected: true, devices: [{ id: deviceId, connected: true }] });
+      .toMatchObject({ devices: [{ id: deviceId, connected: true }] });
 
     await harness.joinFibers();
     harness.close();
