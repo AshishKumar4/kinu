@@ -150,6 +150,14 @@ export function agentIdentity(sql: SqlDatabase, agentName: string): AgentIdentit
 }
 
 /** Reads only; never allocates. */
+/** The agent given `uid` as its own ({@link agentIdentity}); null for a uid below the agents' (root, the session user). */
+export function agentNameOfUid(sql: SqlDatabase, uid: number): string | null {
+  if (uid < AGENT_UID_FLOOR) return null;
+  const [row] = [...sql.exec(`SELECT agent_name FROM ${IDENTITY_TABLE} WHERE uid = ?`, uid)];
+
+  return row === undefined ? null : v.parse(v.string(), row.agent_name);
+}
+
 function allocatedAgentIdentity(sql: SqlDatabase, agentName: string): AgentIdentity | null {
   const [row] = [...sql.exec(`SELECT uid FROM ${IDENTITY_TABLE} WHERE agent_name = ?`, agentName)];
 

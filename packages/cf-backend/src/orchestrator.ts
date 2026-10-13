@@ -63,7 +63,7 @@ import {
 } from '@kinu.run/core';
 // Main actor's payload plane on both fork halves: the carried conversation references
 // payload files by absolute path, and the fork is a cut of the main actor's conversation.
-import { agentArtifactDirectory, agentHome, MAIN_AGENT } from '@kinu.run/core';
+import { agentArtifactDirectory, agentHome, agentNameOfUid, MAIN_AGENT } from '@kinu.run/core';
 import { contextFill, type AgentStanding, type AgentStandingReport } from '@kinu.run/core';
 import type { ChatWire } from './chat-transport';
 import { SLATE_SHARE_PATH, liveShareEntryPage, slateShareUrl, viewerEntryUrl } from './slate-share-route';
@@ -551,11 +551,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /**
    * The workspace's egress: its commands' and programs' requests and sockets leave through Kinu's, as the sandbox's do,
-   * minted with this workspace's owner as it opens. Nothing is asked of the vault or the grants here: the egress asks
-   * for both (`egressGrants`) for a request that names a placeholder. A workspace with no owner keeps the isolate's own
-   * network.
+   * minted with this workspace's owner as it opens, and for a process an agent started, with that agent
+   * (`actingAgent`), so what the egress records names it. Nothing is asked of the vault or the grants here: the egress
+   * asks for both (`egressGrants`) for a request that names a placeholder. A workspace with no owner keeps the isolate's
+   * own network.
    */
-  private workspaceEgress(): WorkspaceEgress | undefined {
+  private workspaceEgress(actorId?: string): WorkspaceEgress | undefined {
     // A store refused at the reset runs nothing that reaches the network (its turns, chat and requests are refused), and
     // its export reads files: it needs no egress, and its tables are not read for an owner.
     if (this.storageRefusal !== undefined) return undefined;
@@ -563,7 +564,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     if (ownerUserId === null) return undefined;
 
-    return this.ctx.exports.KinuEgress({ props: { workspaceName: this.name, ownerUserId } });
+    return this.ctx.exports.KinuEgress({ props: { workspaceName: this.name, ownerUserId, ...(actorId !== undefined && { actorId }) } });
+  }
+
+  /**
+   * The agent a workspace process acts for: the one whose own credential it runs under, or the workspace's own agent
+   * for a session-user process an exec named (the owner's terminal names none). Null when it acts for nobody named.
+   */
+  private actingAgent(process: { readonly cred: VfsCred; readonly execId?: string }): string | null {
+    if (process.cred.uid === CRED_SESSION_USER.uid) return process.execId === undefined ? null : this.actorHandle().actorId;
+    const name = agentNameOfUid(this.ctx.storage.sql, process.cred.uid);
+
+    return name === null ? null : this.workspaceActors().list().find((record) => hostedActorPlacement(record).homeName === name)?.actorId ?? null;
   }
 
   private hostedWorkspace(): HostedWorkspace {
@@ -573,6 +585,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       tasks: this.nimbusTasks,
       previewUrl: (port, capability) => nimbusPreviewUrl(this.env, this.name, port, capability),
       egress: () => this.workspaceEgress(),
+      egressFor: (process) => {
+        const actorId = this.actingAgent(process);
+
+        return actorId === null ? undefined : this.workspaceEgress(actorId);
+      },
       onFilesChanged: (paths) => {
         if (this.deleting.signal.aborted) return;
         this.changes.touched(paths);
@@ -3808,9 +3825,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return egressGrants(getShellApprovalGrants(this.config).grants);
   }
 
-  /** The devbox egress cannot name the agent, so nobody's. Never `@callable`. */
-  async recordGitHubEgress(facts: readonly GitHubFact[]): Promise<void> {
-    recordGitHubActivity(this.boundSql, v.parse(v.array(GitHubFactSchema), facts), { actorId: null, source: 'egress', at: Date.now() });
+  /** By the agent a workspace process acted for, where its egress named one; a container's names nobody. Never `@callable`. */
+  async recordGitHubEgress(facts: readonly GitHubFact[], actorId: string | null): Promise<void> {
+    recordGitHubActivity(this.boundSql, v.parse(v.array(GitHubFactSchema), facts), { actorId, source: 'egress', at: Date.now() });
   }
 
   @callable() getWorkspaceGitHub(refresh = false): Promise<WorkspaceGitHubView> {

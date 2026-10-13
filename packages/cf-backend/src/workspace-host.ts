@@ -85,6 +85,8 @@ export interface HostedWorkspaceDeps<Id> {
   onPortsChanged?: () => void;
   /** Kinu's egress for the workspace's commands and programs, asked once as the workspace opens. */
   readonly egress?: WorkspaceOptions['egress'];
+  /** The egress for one of their processes, naming the agent it acts for. */
+  readonly egressFor?: WorkspaceOptions['egressFor'];
   /** Asked before a preview request is routed and by the launch journal after a reset. A refusal says why
      *  the slate cannot serve. */
   ensureSlate?(owner: string): Promise<Refusal | null>;
@@ -250,6 +252,7 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
     fabric: HOST_FABRIC_COMPOSITION,
     runtimeSource,
     ...(deps.egress !== undefined && { egress: deps.egress }),
+    ...(deps.egressFor !== undefined && { egressFor: deps.egressFor }),
   });
 
   if (deps.onFilesChanged) bundle.onFilesChanged(deps.onFilesChanged);

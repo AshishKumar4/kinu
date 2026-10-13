@@ -264,6 +264,11 @@ export interface WorkspaceOptions {
    * own network.
    */
   egress?: () => NimbusCreation['egress'];
+  /**
+   * The egress for one process of the workspace, asked once per process (`NimbusWorkspaceOptions.egressFor`) with the
+   * credential it runs under and the exec that started it; answering none keeps the workspace's.
+   */
+  egressFor?: (process: { readonly cred: VfsCred; readonly execId?: string }) => NimbusCreation['egress'];
 }
 
 /** Returns synchronously; the workspace boots lazily on its first operation. */
@@ -305,8 +310,20 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
     if (opts.runtimeSource !== undefined) creation = { ...creation, runtimeSource: opts.runtimeSource };
 
     const egress = opts.egress?.();
+    const { egressFor } = opts;
 
     if (egress !== undefined) creation = { ...creation, egress };
+
+    if (egress !== undefined && egressFor !== undefined) {
+      creation = {
+        ...creation,
+        egressFor: ({ pid, execId }) => {
+          const entry = processes.get(pid);
+
+          return entry === undefined ? undefined : egressFor({ cred: entry.cred, ...(execId !== undefined && { execId }) });
+        },
+      };
+    }
 
     const workspace = await shellOver(creation);
 

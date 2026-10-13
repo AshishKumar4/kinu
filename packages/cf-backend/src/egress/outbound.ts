@@ -47,12 +47,15 @@ const CONTAINER_EVENT_PATH = '/v1/events';
 export interface KinuEgressParams {
   readonly workspaceName: string;
   readonly ownerUserId: string;
+  /** The agent a workspace process acts for, where one is named (`OrchestratorAgent.workspaceEgress`); a container's names none. */
+  readonly actorId?: string;
 }
 
 /** Parsed: `ctx.props` arrives untyped, and a configuration that is not this shape reads as unconfigured (both handlers refuse). */
 const EgressParamsSchema = v.object({
   workspaceName: v.pipe(v.string(), v.minLength(1)),
   ownerUserId: v.pipe(v.string(), v.minLength(1)),
+  actorId: v.optional(v.pipe(v.string(), v.minLength(1))),
 });
 
 /** Undefined when the container is not configured yet; both handlers then refuse. */
@@ -101,7 +104,7 @@ export const containerEventResolver = (env: Env): ContainerEventResolver =>
   );
 
 export class GitHubEgressRecorder implements GitHubRecorder {
-  constructor(private readonly env: Env, private readonly execution: ExecutionContext, private readonly workspaceName: string) {}
+  constructor(private readonly env: Env, private readonly execution: ExecutionContext, private readonly params: KinuEgressParams) {}
 
   waitUntil(work: Promise<unknown>): void {
     this.execution.waitUntil(work);
@@ -110,9 +113,9 @@ export class GitHubEgressRecorder implements GitHubRecorder {
   record(facts: readonly GitHubFact[]): Promise<void> {
     return settle(logged('egress.github_record_failed', { doing: 'recording GitHub work in its workspace', otherwise: 'unavailable' }, async () => {
       if (facts.length === 0) return;
-      const agent = await getAgentByName<Env, OrchestratorAgent>(this.env.OrchestratorAgent, this.workspaceName);
+      const agent = await getAgentByName<Env, OrchestratorAgent>(this.env.OrchestratorAgent, this.params.workspaceName);
 
-      await agent.recordGitHubEgress(facts);
+      await agent.recordGitHubEgress(facts, this.params.actorId ?? null);
     }));
   }
 }
