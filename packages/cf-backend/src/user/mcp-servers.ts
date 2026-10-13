@@ -8,7 +8,7 @@ import { DurableObjectOAuthClientProvider } from 'agents/mcp/do-oauth-client-pro
 import { diagnostics, hold, KinuError, recording, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import {
-  mapConnectionStatus, mcpCredentialTransport, isMcpTransportUnauthorized, callRenewingExpiredSession, storedMcpOptionsCarryCredential, mcpAppCredentials, mcpAppEnvNames, listMcpPresetAvailability, readUndiscoveredToolList, mcpListingRefusals, classifyMcpFailure, observedMcpState, CALLABLE_MCP_STATES, McpTransitionLog, type McpObservedState, type McpPresetAvailability, type McpServerSummary, type McpToolListing,
+  mapConnectionStatus, mcpCredentialTransport, isMcpTransportUnauthorized, callRenewingExpiredSession, mcpAppCredentials, mcpAppEnvNames, listMcpPresetAvailability, readUndiscoveredToolList, mcpListingRefusals, classifyMcpFailure, observedMcpState, CALLABLE_MCP_STATES, McpTransitionLog, type McpObservedState, type McpPresetAvailability, type McpServerSummary, type McpToolListing,
 } from './mcp';
 import { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
 import type { UserCredentials } from './credentials';
@@ -53,12 +53,6 @@ interface McpHydrationRow extends SqlRow {
   transport: McpTransport;
   headers: string | null;
   preset_id: string | null;
-}
-
-/** The part of a `cf_agents_mcp_servers` row the credential scrub reads. */
-interface SdkServerOptionsRow {
-  readonly id: string;
-  readonly server_options: string | null;
 }
 
 const NullableStringArraySchema = v.nullable(v.array(v.string()));
@@ -183,7 +177,7 @@ export class UserMcpServers {
     const registered: string[] = [];
 
     for (const row of rows) {
-      if (!this.needsOwnedTransport(row, sdkRows)) continue;
+      if (!this.needsOwnedTransport(row)) continue;
       await this.registerOwnedMcpTransport(row);
       registered.push(row.id);
     }
@@ -202,14 +196,11 @@ export class UserMcpServers {
     );
   }
 
-  /** A sealed credential must run on the seam; a credential the SDK stored as data must go,
-   *  whether or not our column still holds one. */
-  private needsOwnedTransport(row: McpHydrationRow, sdkRows: readonly SdkServerOptionsRow[]): boolean {
+  /** A sealed credential must run on the seam, which the SDK cannot persist and so never restores. */
+  private needsOwnedTransport(row: McpHydrationRow): boolean {
     const live = this.host.mcp.mcpConnections[row.id]?.options.transport;
-    const seamLive = live !== undefined && 'fetch' in live && live.fetch !== undefined;
-    const needsSeam = row.headers !== null && !seamLive;
 
-    return needsSeam || storedMcpOptionsCarryCredential(sdkRows.find((server) => server.id === row.id)?.server_options);
+    return row.headers !== null && (live === undefined || !('fetch' in live) || live.fetch === undefined);
   }
 
   /** Starts `connect` unless a dial of this server is in flight; its outcome lands on the connection, a failure logged. */
@@ -594,7 +585,7 @@ export class UserMcpServers {
     await this.joinActivation();
     const row = this.configuredRows().find((configured) => configured.id === id);
 
-    if (row === undefined || !this.needsOwnedTransport(row, this.host.mcp.listServers())) return;
+    if (row === undefined || !this.needsOwnedTransport(row)) return;
     // A dial still out is on the connection this replaces.
     await this.dials.get(id);
     await this.registerOwnedMcpTransport(row);

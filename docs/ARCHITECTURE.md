@@ -642,9 +642,8 @@ Reasoning effort is set by the user. `/effort` in chat or
 `packages/core/src/providers/effort.ts` maps the level onto each family's native
 option: `reasoningEffort` for Workers AI, OpenAI-shaped providers, and
 OpenRouter, and `effort` for Anthropic (levels Anthropic does not take are not
-sent). Internal stages take theirs from `REASONING_EFFORT_FOR_STAGE`, sized to
-the work: reflection and memory compression take `low`, and scaffold mutation takes
-`high`.
+sent). A producer the profile routes (scaffold, judge, reflection and the others in
+`MODEL_ROUTE_POLICY`) takes the effort of the tier it runs on.
 
 ## Storage and formal models
 

@@ -500,7 +500,7 @@ test('a call is durable only once its part is in the record, and a slow write ho
 
   try {
     const { stream } = await s.turn('t1');
-    const calls = () => s.testSql.db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM stream_parts WHERE kind = 'tool-call'").get()?.n ?? 0;
+    const calls = () => s.testSql.db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM stream_parts WHERE json_extract(descriptor_json, '$.type') = 'tool-call'").get()?.n ?? 0;
     const seen: number[] = [];
     const waited = stream.durable('call-1').then(() => { seen.push(calls()); });
 

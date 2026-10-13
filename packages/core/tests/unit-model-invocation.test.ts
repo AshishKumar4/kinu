@@ -6,15 +6,12 @@
  */
 import { afterAll, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { MockLanguageModelV3 } from 'ai/test';
-import type { LanguageModelV3GenerateResult } from '@ai-sdk/provider';
 import { createTestActors } from '@kinu.run/test-utils';
 import { createTestWorkspace } from './helpers';
 import { RunEventRecorder } from '../src/events/recorder';
 import { unpricedLedgerSink } from '../src/events/model-call-event';
 import { workspaceSpend } from '../src/read-models/workspace-spend';
 import { createVercelAILLM } from '../src/llm';
-import { createJsonJudge } from '../src/evolution/control';
 import { createWorkersAIEmbedder } from '../src/providers/model-invocation';
 import { buildCfWebSearchProvider } from '../src/web/provider-factory';
 import type { ModelCallSink } from '../src/events/model-call';
@@ -49,22 +46,6 @@ function ledger(): Ledger {
       .map((spent) => [`${spent.provider ?? '-'}@${spent.account ?? '-'}`, spent.calls])),
   };
 }
-
-function answered(text: string): LanguageModelV3GenerateResult {
-  return {
-    content: [{ type: 'text', text }],
-    finishReason: { unified: 'stop', raw: 'stop' },
-    usage: {
-      inputTokens: { total: 30, noCache: 30, cacheRead: undefined, cacheWrite: undefined },
-      outputTokens: { total: 4, text: 4, reasoning: undefined },
-    },
-    warnings: [],
-    response: { modelId: 'served-model' },
-  };
-}
-
-const modelAnswering = (text: string): MockLanguageModelV3 =>
-  new MockLanguageModelV3({ doGenerate: async () => answered(text) });
 
 describe('an endpoint LLM files every call it makes', () => {
   const server = Bun.serve({
@@ -112,17 +93,6 @@ describe('an endpoint LLM files every call it makes', () => {
       reflection: { calls: 2, unmeasured: 0, usage: { input: 24, output: 6, cacheRead: 0, reasoning: 0 } },
     });
     expect(accounts()).toEqual({ 'openai@work': 2 });
-  });
-});
-
-describe('the raters file their calls as judge spend', () => {
-  test('a JSON judge files its call even when the answer fails the schema: the call was billed', async () => {
-    const { report, producers } = ledger();
-    const judge = createJsonJudge(() => modelAnswering('{"score": "not a number"}'), report);
-    const Score = v.object({ score: v.number() });
-
-    await expect(judge({ schema: Score, prompt: 'score it' })).rejects.toThrow();
-    expect(producers()).toEqual({ judge: { calls: 1, unmeasured: 0, usage: { input: 30, output: 4 } } });
   });
 });
 

@@ -11,6 +11,7 @@ import { parseModelSpec } from './types';
 import { StaleModelList } from './util';
 import { withModelsDevRead } from './models-dev';
 import { Effect, Result } from 'effect';
+import * as v from 'valibot';
 import { diagnostics, KinuError, renderThrownChain, settle, settleSync } from '../obs/index';
 import { accountCredentialKey, MAIN_ACCOUNT, storedAccounts } from '../credentials/accounts';
 
@@ -24,11 +25,13 @@ export interface DynamicProviderSource {
 }
 
 /** A provider whose probe threw; reported, not thrown, so one broken provider cannot empty the menu. */
-export interface ProviderFailure {
-  provider: string;
-  label?: string;
-  reason: string;
-}
+export const ProviderFailureSchema = v.object({
+  provider: v.string(),
+  label: v.optional(v.string()),
+  reason: v.string(),
+});
+
+export type ProviderFailure = v.InferOutput<typeof ProviderFailureSchema>;
 
 /** The model menu: what can be listed, plus what could not be reached. */
 export interface ModelMenu {
@@ -121,7 +124,6 @@ function providerFailureReason({ error }: { error: unknown }): string {
 }
 
 export function createProviderRegistry(): ProviderRegistry {
-  const ordered: ModelProvider[] = [];
   const byId = new Map<string, ModelProvider>();
   const dynamic: DynamicProviderSource[] = [];
 
@@ -153,7 +155,7 @@ export function createProviderRegistry(): ProviderRegistry {
   /** Static plus servable dynamic providers; a dynamic enumeration failure is one reported failure. */
   function allProviders(deps: ProviderDeps): Effect.Effect<{ providers: ModelProvider[]; failures: ProviderFailure[] }> {
     return Effect.gen(function* () {
-      const providers = [...ordered];
+      const providers = [...byId.values()];
       const failures: ProviderFailure[] = [];
 
       for (const source of dynamic) {
@@ -200,7 +202,6 @@ export function createProviderRegistry(): ProviderRegistry {
         ? Effect.die(new Error(`Provider ${provider.id} already registered`))
         : Effect.sync(() => {
           byId.set(provider.id, provider);
-          ordered.push(provider);
         }));
     },
     registerDynamic(source) {
@@ -209,7 +210,7 @@ export function createProviderRegistry(): ProviderRegistry {
     get(id) { return providerFor(id); },
     canResolve(id) { return providerFor(id) !== undefined; },
 
-    list() { return [...ordered]; },
+    list() { return [...byId.values()]; },
 
     listProviders(deps) {
       return settle(Effect.gen(function* () {

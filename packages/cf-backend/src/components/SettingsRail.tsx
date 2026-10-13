@@ -18,7 +18,7 @@ const SETTINGS_SECTIONS = {
   cli: { label: "CLI", Icon: TerminalIcon, about: "The command line, on a machine of yours." },
 } as const;
 
-export type SettingsSection = keyof typeof SETTINGS_SECTIONS;
+type SettingsSection = keyof typeof SETTINGS_SECTIONS;
 
 function isSettingsSection(id: string): id is SettingsSection {
   return Object.hasOwn(SETTINGS_SECTIONS, id);

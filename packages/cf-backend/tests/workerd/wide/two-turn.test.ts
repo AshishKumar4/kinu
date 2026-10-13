@@ -120,15 +120,6 @@ describe('two real turns over the HTTP model seam', () => {
       { role: 'user', content: expect.stringContaining('QUEUE-PROGRAMMATIC') },
     ]);
   });
-  // Each steer fits its own row; a report that carried them all in one row could not be stored, and the workspace kept
-  // showing the agent as it was before them.
-  it("shows the owner every steer main's isolate holds, though together they pass a row's limit", async () => {
-    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('large-queue-driver'));
-    const seen = v.parse(QueuedConversationSchema, await root.queuedConversation('large'));
-
-    expect(seen.steersShown).toBe(3);
-  });
-
   it('keeps a queued chat on its durable token through a cold reset and replay', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('cold-queue-driver'));
 

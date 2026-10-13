@@ -1,6 +1,8 @@
 // Server-side trust boundary for screenshots. Workers have no image decoder, so this walks the chunk stream:
 // CRC validation and metadata stripping are one lossless pass over a default-deny keep-list.
 
+import { crc32 } from '../utils/crc32';
+
 /** Closed so callers map it with an exhaustive switch instead of matching text. */
 export type PngFault =
   | 'not-png'
@@ -38,39 +40,6 @@ const MAX_PIXELS = 60_000_000;
 
 /** Per-axis bound, so a thin strip is refused on its own terms. */
 const MAX_AXIS = 32_768;
-
-let table: Uint32Array | null = null;
-
-/** CRC-32/ISO-HDLC (spec 5.5). */
-function crcTable(): Uint32Array {
-  if (table !== null) return table;
-  const built = new Uint32Array(256);
-
-  for (let n = 0; n < 256; n += 1) {
-    let c = n;
-
-    for (let bit = 0; bit < 8; bit += 1) {
-      c = (c & 1) !== 0 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    }
-
-    built[n] = c >>> 0;
-  }
-
-  table = built;
-
-  return built;
-}
-
-function crc32(bytes: Uint8Array, from: number, to: number): number {
-  const lookup = crcTable();
-  let c = 0xffffffff;
-
-  for (let i = from; i < to; i += 1) {
-    c = lookup[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
-  }
-
-  return (c ^ 0xffffffff) >>> 0;
-}
 
 function readUint32(bytes: Uint8Array, at: number): number {
   return ((bytes[at] << 24) | (bytes[at + 1] << 16) | (bytes[at + 2] << 8) | bytes[at + 3]) >>> 0;
@@ -141,7 +110,7 @@ export function sanitizePng(bytes: Uint8Array): SanitizedPng | PngRejection {
       return { fault: 'truncated', error: `chunk ${type} runs past the end of the image` };
     }
 
-    if (crc32(bytes, at + 4, crcAt) !== readUint32(bytes, crcAt)) {
+    if (crc32(bytes.subarray(at + 4, crcAt)) !== readUint32(bytes, crcAt)) {
       return { fault: 'bad-crc', error: `chunk ${type} fails its checksum` };
     }
 

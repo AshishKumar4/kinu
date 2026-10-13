@@ -1,7 +1,7 @@
 // Lossless codec for native model messages. A decoded message is confirmed by the SDK's `modelMessageSchema`: a row
 // outlives the code that wrote it, and a message crosses isolates as JSON. An encoded one is this isolate's own typed
 // value and is not walked again. Not `JSON.stringify`: it turns `Uint8Array`/`ArrayBuffer`/`URL` into different values, and a
-// context revision must round-trip exactly. The compaction `binaryReplacer` is preview-only.
+// context revision must round-trip exactly. `binaryReplacer` (`utils/json.ts`) is preview-only.
 
 import { Effect } from 'effect';
 import { settleSync } from '../obs/effect';

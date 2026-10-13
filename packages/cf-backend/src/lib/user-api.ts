@@ -8,6 +8,7 @@ import {
   type JsonValue,
   JsonValueSchema,
   ModelTestResultSchema,
+  ProviderFailureSchema,
   type ModelTestResult,
   type ProfileCatalog,
   type ProfileCatalogEnvelope,
@@ -103,10 +104,6 @@ const ModelMenuEntrySchema = v.object({
   capabilities: v.optional(v.array(v.string())), contextWindow: v.optional(v.number()),
   /** Absent when the catalog could not say; empty when the model takes none. */
   reasoningEfforts: v.optional(v.array(v.picklist(REASONING_EFFORTS))),
-});
-
-const ProviderFailureSchema = v.object({
-  provider: v.string(), label: v.optional(v.string()), reason: v.string(),
 });
 
 const ModelMenuSchema = v.object({
@@ -278,9 +275,6 @@ const PollResultSchema = v.object({
 });
 
 export const codexStatus      = () => settle(api(CodexStatusSchema, 'GET', '/codex'));
-
-/** Where the owner reviews and limits what Kinu spends of their ChatGPT plan. */
-export const CHATGPT_USAGE_URL = 'https://chatgpt.com/settings/usage';
 
 /** A sign-in through a machine: waiting for one to connect, or open at the URL for a browser on that machine. */
 const ChatGptMachineSignInSchema = v.variant('state', [

@@ -8,7 +8,7 @@ import { KinuError, settleSync } from '../obs/index';
 import { isWorkMode, type WorkMode } from '../types/turn';
 import { sha256Hex, stableStringify } from '../safety/argument-digest';
 import { JsonValueSchema } from '../utils/json';
-import { REASONING_EFFORT_FOR_STAGE, REASONING_EFFORTS, type ReasoningEffort } from '../providers/effort';
+import { REASONING_EFFORTS, type ReasoningEffort } from '../providers/effort';
 import type { NamedSwarmPreset } from '../types/swarm';
 import { DEFAULT_PROVIDER_RETRIES, ROLE_ID_RE, isValidRoleId } from '../types/profile';
 import { DEFAULT_DECISION_MODEL, type DecisionModel } from '../providers/decision-model';
@@ -25,7 +25,7 @@ import { currentOperationProfile } from './operation';
 import type { ActorReference } from '../identity/actor-handle';
 import type { AgentConfigStore } from '../config/store';
 
-const DEFAULT_TURN_REASONING_EFFORT: ReasoningEffort = REASONING_EFFORT_FOR_STAGE.chat;
+const DEFAULT_TURN_REASONING_EFFORT: ReasoningEffort = 'medium';
 
 /** Absence from `availableModels` proves nothing unless no listing failed; `revision` changes with availability. */
 const ProviderCatalogSnapshotSchema = v.looseObject({

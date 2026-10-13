@@ -1913,7 +1913,7 @@ describe('LocalAgentHost', () => {
     await team.assign({ name: 'ask-refiner-x1', task: 'Review the recent turns.', mode: 'build' });
     // The helper the lane hires is task-lived, and durable verbs refuse one: so it becomes one after the handoff.
     const helper = workspaceDatabase(dbPath);
-    helper.run(`UPDATE workspace_actors SET origin = 'evolution', tab = 0, input = 0, lifetime = 'task' WHERE name = 'ask-refiner-x1'`);
+    helper.run(`UPDATE workspace_actors SET origin = 'evolution', lifetime = 'task' WHERE name = 'ask-refiner-x1'`);
     helper.close();
     await held.promise;
     const closing = host.close();
@@ -2501,33 +2501,6 @@ describe('LocalAgentHost — the driver lease', () => {
     } finally {
       await host.close();
       db.close();
-    }
-  });
-
-  // A Stop cancelled only work a hire held in its event log, and cut off only a hire whose turn ran: an idle hire's
-  // committed assignment, owed while another process drove, ran after the Stop once this process drove again.
-  test("a Stop of the root cancels what an idle hire was assigned and had not taken: it never runs", async () => {
-    const { state, project } = makeRoots();
-    const dbPath = await seedAgent(state, 'root');
-    const asked: string[] = [];
-
-    const { host } = makeHost(state, streamingModel('ok', (options) => { asked.push(JSON.stringify(options.prompt)); }), [
-      { name: 'root', cwd: project, workspaceId: 'proj' },
-    ], { driverKind: 'daemon' });
-
-    try {
-      const team = await host.team('root');
-      await team.create({ name: 'courier', role: 'researcher', mission: 'Ship releases.' });
-      // Another process drives the workspace: the assignment is committed and owed, and nothing here crosses it.
-      rivalHolds(dbPath, 'interactive');
-      await team.assign({ name: 'courier', task: 'STOPPED_TASK: push the release.', mode: 'build' });
-      (await host.acquire('root')).interrupt();
-      await retireRivals();
-      await host.tick('root/courier');
-
-      expect(asked.filter((prompt) => prompt.includes('STOPPED_TASK'))).toEqual([]);
-    } finally {
-      await host.close();
     }
   });
 

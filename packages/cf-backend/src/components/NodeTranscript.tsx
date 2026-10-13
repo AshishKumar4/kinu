@@ -8,8 +8,8 @@ import {
 import type { UIMessage } from "ai";
 import type { HeadStep, NodeTranscriptView } from "@kinu.run/core";
 import { shownHeadStatus, threadLiveTail, usageTotal, type TurnLiveness } from "@kinu.run/core";
-import { Cause, Effect, type Exit } from "effect";
-import { diagnostics, hold, renderThrownChain } from "@kinu.run/core/obs";
+import { Cause, Effect } from "effect";
+import { detach, diagnostics, renderThrownChain } from "@kinu.run/core/obs";
 import { ChatLiveTail, MessageView } from "@/components/MessageView";
 import {
   deltaAsMessage, NO_HEAD_DELTAS, type HeadDelta, type HeadDeltas,
@@ -23,10 +23,6 @@ import type { SeekCursor } from "@kinu.run/core";
 import { fmtTokens, timeAgo } from "@kinu.run/core";
 import type { ForkNode, Rpc } from "@kinu.run/core";
 
-
-interface OlderPageLoad {
-  promise: Promise<Exit.Exit<void>> | null;
-}
 
 /** Shared by this panel and the run pane's node list; covers head-journal and search-node statuses. An unknown status gets the quiet dot. */
 export function statusDot(status: string): string {
@@ -348,17 +344,17 @@ export function useNodeTranscript({ runId, nodeId, rpc, headActivity, headDeltas
   const below = walk.steps.length > 0 ? walk.below : viewBelow;
   const walkRef = useRef(subject);
   walkRef.current = subject;
-  const inFlight = useRef<OlderPageLoad | null>(null);
+  const inFlight = useRef<symbol | null>(null);
 
   const loadOlder = useCallback(() => {
     const at = walkRef.current;
 
     if (inFlight.current !== null || below === null) return;
     setWalk((prev) => ({ ...prev, loading: true, error: null }));
-    const owner: OlderPageLoad = { promise: null };
-    // Install the strong action owner before a synchronous RPC fake can settle the page load.
+    const owner = Symbol('older page');
+    // Install the owner before a synchronous RPC fake can settle the page load.
     inFlight.current = owner;
-    owner.promise = hold(Effect.ensuring(Effect.catchCause(Effect.catchCause(Effect.gen(function* () {
+    detach(Effect.ensuring(Effect.catchCause(Effect.catchCause(Effect.gen(function* () {
       const next = yield* Effect.promise(() => rpc<NodeTranscriptView | null>('getNodeTranscript', [runId, nodeId, { cursor: below }]));
 
       if (walkRef.current !== at) return;

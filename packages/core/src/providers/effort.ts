@@ -1,4 +1,4 @@
-// Adaptive reasoning-effort budgets per inference stage.
+// A reasoning effort as each provider family's native option.
 //
 // Chat Completions SDKs read `reasoningEffort` under their provider's name in camelCase (workersAi, opencodeGo)
 // and serialize reasoning_effort, overwriting a wire-spelled option.
@@ -18,23 +18,6 @@ export type ProviderOptions = NonNullable<Parameters<typeof streamText>[0]['prov
 function compatOptionsKey(name: string): string {
   return name.replace(/[_-]([a-z])/gu, (_match, letter: string) => letter.toUpperCase());
 }
-
-export type InferenceStage =
-  | 'chat'
-  | 'judge'
-  | 'reflection'
-  | 'scaffold_mutation' // Agent rewrites its own controller
-  | 'head_merge'
-  | 'memory_compress';
-
-export const REASONING_EFFORT_FOR_STAGE = {
-  chat: 'medium',
-  judge: 'medium',
-  reflection: 'low',
-  scaffold_mutation: 'high',
-  head_merge: 'medium',
-  memory_compress: 'low',
-} satisfies Record<InferenceStage, ReasoningEffort>;
 
 export function workersAIEffortOption(
   effort?: ReasoningEffort,
@@ -90,8 +73,4 @@ export function mergeProviderOptions(
   }
 
   return merged;
-}
-
-export function effortFor(stage: InferenceStage) {
-  return workersAIEffortOption(REASONING_EFFORT_FOR_STAGE[stage]);
 }

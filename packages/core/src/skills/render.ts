@@ -9,7 +9,7 @@ import {
   type ActivationReason, type ActiveSkill, type ActiveSkillSet,
   type SkillHeader, type SkillsIndex,
 } from './types';
-import { compareSkillNames } from './discover';
+import { compareCodeUnits } from '../utils/text';
 import type { InstructionPlacement } from '../prompting/agents-md';
 import { SHARED_SKILLS_DIR } from '../vfs/shared-drive';
 import { vfsReference } from '../vfs/resolve';
@@ -71,7 +71,7 @@ export function renderActiveSkillsSection(
 
   // Name order, so the same active set renders byte-identically however it activated (prompt cache).
   const blocks = [...tier]
-    .sort((a, b) => compareSkillNames(a.name, b.name))
+    .sort((a, b) => compareCodeUnits(a.name, b.name))
     .map((skill) => {
       const header = `### ${skill.name} (${describeActivationReason(reasonByName.get(skill.name))})`;
 

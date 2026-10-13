@@ -149,8 +149,8 @@ function walk<Item>(read: (cursor: SeekCursor | null) => Page<Item>): readonly I
   throw new Error('the walk did not reach `end` in 50 pages');
 }
 
-describe('a stored identity cannot disagree with the digest beside it', () => {
-  test("every row's stored identity re-hashes to its own objective_id", () => {
+describe('a stored identity cannot disagree with the digest it is keyed by', () => {
+  test("every objective's stored identity re-hashes to its own objective_id", () => {
     // Red if any identity column is dropped from, or constant in, the writer's INSERT.
     const { sql } = seeded();
 
@@ -158,11 +158,10 @@ describe('a stored identity cannot disagree with the digest beside it', () => {
       objective_id: string; metric: string; unit: string;
       direction: string; scale: string; verifier_digest: string;
     }>`SELECT objective_id, metric, unit, direction, scale, verifier_digest
-         FROM exploration_records`;
+         FROM exploration_objectives`;
 
     // Denominator: a re-hash over zero rows proves nothing.
-    expect(rows.length).toBeGreaterThan(0);
-    expect(rows).toHaveLength(11);
+    expect(rows).toHaveLength(2);
 
     for (const row of rows) {
       expect(objectiveIdOf({
@@ -179,17 +178,12 @@ describe('a stored identity cannot disagree with the digest beside it', () => {
     expect(new Set(rows.map((row) => row.direction))).toEqual(new Set(['minimise', 'maximise']));
   });
 
-  test('a re-record fills blank identity columns from the writer-held identity', () => {
+  test('the identity is told only for a handle that holds rows', () => {
     const { sql, actor } = store();
+    expect(describeObjective(sql, actor, CALLS_HANDLE)).toEqual({ identity: null, rows: 0 });
     recordExploration(sql, actor, { publication: OPEN, write: write({ value: 40 }) });
-    void sql`UPDATE exploration_records SET metric = NULL, unit = NULL, direction = NULL,
-               scale = NULL, verifier_digest = NULL`;
-    expect(describeObjective(sql, actor, CALLS_HANDLE)).toEqual({ identity: null, rows: 1 });
-
-    // A better value, since the monotone rule refuses anything else: the backfill rides a real write.
-    expect(recordExploration(sql, actor, { publication: OPEN, write: write({ value: 12 }) }).kind)
-      .toBe('recorded');
     expect(describeObjective(sql, actor, CALLS_HANDLE)).toEqual({ identity: CALLS, rows: 1 });
+    expect(describeObjective(sql, actor, { ...CALLS_HANDLE, floorDigest: 'another floor' })).toEqual({ identity: null, rows: 0 });
   });
 });
 
@@ -229,25 +223,8 @@ describe('listRecordObjectives — the discovery read the store had none of', ()
     expect(byMetric.get('pass_rate')?.lastRecordedAt).toBe(T0 + 16);
   });
 
-  test('a set whose rows predate the identity columns is not listed', () => {
-    // Without `HAVING MAX(metric) IS NOT NULL` the listing would have to invent a sort direction.
+  test('an unknown handle reads as an empty page', () => {
     const { sql, actor } = seeded();
-    void sql`UPDATE exploration_records SET metric = NULL, unit = NULL, direction = NULL,
-               scale = NULL, verifier_digest = NULL
-             WHERE objective_id = ${CALLS_HANDLE.objectiveId}`;
-    const items = listRecordObjectives(sql, actor).items;
-    expect(items.length).toBeGreaterThan(0);
-    expect(items.map((item) => item.metric)).toEqual(['pass_rate']);
-  });
-
-  test('asking about such a set DIRECTLY raises rather than answering "no rows"', () => {
-    // Undescribable rows are a fault, distinct from an unknown handle's empty page.
-    const { sql, actor } = seeded();
-    void sql`UPDATE exploration_records SET metric = NULL, direction = NULL
-             WHERE objective_id = ${CALLS_HANDLE.objectiveId}`;
-    expect(() => listRecordCells(sql, actor, CALLS_HANDLE)).toThrow(/before the store recorded/);
-    expect(() => readRecordCell(sql, actor, { ...CALLS_HANDLE, descriptor: null }))
-      .toThrow(/before the store recorded/);
     const unknown: RecordObjectiveHandle = { objectiveId: 'nope', floorDigest: null };
     expect(listRecordCells(sql, actor, unknown)).toEqual({ status: 'end', items: [] });
     expect(readRecordCell(sql, actor, { ...unknown, descriptor: null })).toEqual({ status: 'end', items: [] });

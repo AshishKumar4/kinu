@@ -600,10 +600,8 @@ describe('a slate asking the agent', () => {
     await Promise.allSettled([turn]);
     await workspace.agent.harnessAgentsIdle();
 
-    // Ended by now, as its reader reads it: a reply still open would read on past every pending piece of work.
-    const read = await Promise.race([readReply(answer), new Promise<'open'>((resolve) => { setTimeout(() => { resolve('open'); }, 0); })]);
-
-    expect(read).toMatchObject({ pieces: [], failure: expect.any(String) });
+    // Ended, as its reader reads it: a reply left open would hold its reader past every piece of work.
+    expect(await readReply(answer)).toMatchObject({ pieces: [], failure: expect.any(String) });
   });
 
   test('a stopped turn ends the reply with why', async () => {

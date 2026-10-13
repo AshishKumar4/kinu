@@ -1,6 +1,4 @@
 // The one table routing every SpendSource to a model; `satisfies` makes a missing row a compile error.
-// Declared exception: the judge panel files as `judge` but spans vendor families, keeping its effort on
-// REASONING_EFFORT_FOR_STAGE.judge; never route it through resolveModelRoute('judge', …).
 import { SPEND_SOURCES, type SpendSource } from '../events/model-call';
 import type { ReasoningEffort } from '../providers/effort';
 import type { TierId } from './catalog';

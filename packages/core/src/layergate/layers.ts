@@ -169,7 +169,6 @@ function vectorHit(id: string, score: number): VectorSearchHit {
 function fakeVectorStore(hits: readonly VectorSearchHit[]): VectorStore {
   return {
     available: true,
-    upsertChunk: async () => {},
     upsertChunks: async () => {},
     deleteChunks: async () => {},
     search: async () => [...hits],

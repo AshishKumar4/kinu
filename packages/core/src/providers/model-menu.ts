@@ -2,7 +2,7 @@
 
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from './workers-ai';
 import { knownReasoningEfforts, type ReasoningEffort } from './reasoning-effort';
-import { type ProviderFailure } from './registry';
+import { ProviderFailureSchema, type ProviderFailure } from './registry';
 import { MODEL_CAPABILITIES, specProvider, specWithoutAccount, type ModelCapability } from './types';
 import * as v from 'valibot';
 import { nonEmptyString } from '../utils/json';
@@ -16,12 +16,6 @@ const ModelMenuPayloadSchema = v.object({
 });
 
 const MenuAccountsSchema = v.record(v.string(), v.array(v.pipe(v.string(), v.check(isAccountName))));
-
-const ProviderFailureSchema = v.object({
-  provider: v.string(),
-  reason: v.string(),
-  label: v.optional(v.string()),
-});
 
 const ModelEntryPayloadSchema = v.object({
   provider: v.optional(v.unknown()),

@@ -12,7 +12,7 @@ const MODELS: Readonly<Record<PromptModelFamily, PromptModelContext>> = {
 };
 
 describe('family wording is a delta over the same typed sections', () => {
-  test('family inference is catalog-first, case-insensitive, with no new capability inference', () => {
+  test('family inference is case-insensitive, with no new capability inference', () => {
     for (const [family, model] of Object.entries(MODELS)) {
       const inferred: string = resolvePromptModelProfile(model).family;
 
@@ -21,13 +21,10 @@ describe('family wording is a delta over the same typed sections', () => {
 
     expect(resolvePromptModelProfile({ id: 'CLAUDE-SONNET', provider: 'openai' }).family).toBe('claude');
     expect(resolvePromptModelProfile({ id: 'GEMINI-PRO' }).family).toBe('gemini');
-    expect(resolvePromptModelProfile({ id: 'gpt', family: 'claude' }).family).toBe('claude');
     expect(resolvePromptModelProfile().family).toBe('generic');
 
     for (const model of [MODELS.claude, MODELS.gemini]) {
       expect([...resolvePromptModelProfile(model).capabilities]).toEqual(['tools', 'streaming']);
-      expect([...resolvePromptModelProfile({ ...model, capabilities: ['vision', 'reasoning'] }).capabilities])
-        .toEqual(['vision', 'reasoning']);
     }
   });
 

@@ -43,11 +43,7 @@ export const TOOL_REACH = {
 
 /** Replay policy by provider tool name; undeclared names (MCP, adapters) resolve to `claimed`. */
 export function replayPolicyFor(toolName: string): ReplayPolicy {
-  return isToolReachName(toolName) ? TOOL_REACH[toolName].replay : 'claimed';
-}
-
-function isToolReachName(value: string): value is keyof typeof TOOL_REACH {
-  return Object.hasOwn(TOOL_REACH, value);
+  return isCapabilityName(toolName) ? TOOL_REACH[toolName].replay : 'claimed';
 }
 
 type CapabilityName = keyof typeof TOOL_REACH;

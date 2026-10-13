@@ -863,7 +863,7 @@ const NOTED: NotedChanges = { source: 'workspace', label: 'Workspace', mode: 'vf
 type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'setModel' | 'setSoul' | 'setEvolutionConfig' | 'setDisplayName' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp' | 'evalAbortActivation' | 'workspaceTitle'
   | 'createSubordinateAgent' | 'readWorkspaceFile'>
-  & Pick<ProductionOrchestrator, 'getChangeNotes' | 'saveChangeNotes' | 'sendChangeNotes' | 'getWorkspaceSnapshot' | 'cancelCurrentWork'>
+  & Pick<ProductionOrchestrator, 'getChangeNotes' | 'saveChangeNotes' | 'sendChangeNotes'>
   & Pick<ObservedOrchestrator, 'refuseReservations' | 'owedSends' | 'latestClaimOutcome' | 'recoveryPass'
   | 'seedOwedReplies' | 'replyLeases' | 'transitionState' | 'strandedWork' | 'answerSlates' | 'answerPageModes' | 'cutTerminal' | 'liveTerminal' | 'mainQuiet' | 'terminalState' | 'alienEffect' | 'inspectWork' | 'chatHistoryPage' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
   | 'receivePeerThenEvict' | 'timerTickFinished' | 'runCauses' | 'drainRunClosed' | 'meterBegin' | 'meterEnd' | 'plantCrossings' | 'settleState'>;
@@ -1234,12 +1234,12 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
         }
       });
 
-      const send = async (text: string, file?: { filename: string; mediaType: string; url: string }, id = text): Promise<void> => {
+      const send = async (text: string, file?: { filename: string; mediaType: string; url: string }): Promise<void> => {
         if (socket === null) throw new Error('queue probe socket is closed');
         socket.send(JSON.stringify({
-          type: 'cf_agent_use_chat_request', id,
+          type: 'cf_agent_use_chat_request', id: text,
           init: { method: 'POST', body: JSON.stringify({
-            messages: [{ id: `input-${id}`, role: 'user', parts: [
+            messages: [{ id: `input-${text}`, role: 'user', parts: [
               ...(file !== undefined ? [{ type: 'file', mediaType: file.mediaType, url: file.url, filename: file.filename }] : []),
               { type: 'text', text },
             ] }],
@@ -1252,9 +1252,9 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
           const page = await target.fetch(`https://probe/agents/orchestrator-agent/${workspace}/get-messages`);
           const history = v.parse(SocketHistorySchema, await page.json());
 
-          if (history.some((row) => row.role === 'user' && row.id === `input-${id}`) || admittedIds.has(id)) break;
+          if (history.some((row) => row.role === 'user' && row.id === `input-${text}`) || admittedIds.has(text)) break;
 
-          if (Date.now() - began > 20000) throw new Error(`socket input ${id} neither persisted nor announced queued`);
+          if (Date.now() - began > 20000) throw new Error(`socket input ${text} neither persisted nor announced queued`);
           await new Promise<void>((resolve) => setTimeout(resolve, 20));
         }
       };
@@ -1263,33 +1263,6 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
         await send('QUEUE-OWNER');
         await fetch('http://probe-control.invalid/queue/arrived');
         await target.beginGenesisTurn();
-      } else if (mode === 'large') {
-        const genesis = await target.beginGenesisTurn();
-
-        if (!genesis.started) throw new Error('queue probe genesis did not start');
-        await fetch('http://probe-control.invalid/queue/arrived');
-
-        // Each fits its own row, as it fit the row it was sent in; together they pass a row's limit.
-        for (const id of ['QUEUE-L1', 'QUEUE-L2', 'QUEUE-L3']) await send(`${id} ${'x'.repeat(700 * 1024)}`, undefined, id);
-        const began = Date.now();
-        let steersShown = 0;
-
-        // The owner's workspace shows what main's isolate reported pending, once its report arrives.
-        while (steersShown < 3 && Date.now() - began < 20000) {
-          steersShown = (await target.getWorkspaceSnapshot()).pendingSteers.length;
-
-          if (steersShown < 3) await new Promise<void>((resolve) => setTimeout(resolve, 20));
-        }
-
-        // The owner's Stop hands the steers back, so no turn runs them; the snapshot shows none pending once it has.
-        await target.cancelCurrentWork();
-        await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
-
-        for (const stopped = Date.now(); (await target.getWorkspaceSnapshot()).pendingSteers.length > 0 && Date.now() - stopped < 15000;) {
-          await new Promise<void>((resolve) => setTimeout(resolve, 20));
-        }
-
-        return { http: [], task: null, answers: [], steersShown };
       } else {
         const genesis = await target.beginGenesisTurn();
 

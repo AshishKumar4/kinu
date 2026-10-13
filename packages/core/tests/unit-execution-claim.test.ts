@@ -3,7 +3,7 @@
  * its turn, its room told, and leaves the agent free for the next; a Stop that comes as it opens ends it with nothing
  * asked of the model and the owner's words kept; and a run delivered while a chat turn runs waits for that turn's end.
  */
-import { expect, test } from 'bun:test';
+import { expect, spyOn, test } from 'bun:test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import { KinuError } from '../src/obs/error';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
@@ -138,21 +138,27 @@ test("words sent while a turn opens are the turn's own: a Stop then hands them b
   const handedBack = Promise.withResolvers<string[]>();
   const second = Promise.withResolvers<void>();
   let opened = false;
-  const stop = (): void => { handedBack.resolve(fixture.chat.interrupt()); };
 
   const fixture = await sessionFixture({
     model,
-    // The first turn is announced as it opens, before its execution is claimed: the owner writes again, and stops once
-    // those words are taken, as the turn's own or as a turn of their own.
+    // The first turn is announced as it opens, before anything of it reached the model: the owner writes again.
     onEvent: (event) => {
-      if (event.type === 'turn-start' && opened) stop();
-
-      if (event.type === 'broadcast' && event.event.type === 'steer_status' && event.event.status === 'queued') stop();
-
       if (event.type !== 'turn-start' || opened) return;
       opened = true;
       void fixture.chat.send('and the refunds too', { id: 'o-2' }).then(() => { second.resolve(); }, () => { second.resolve(); });
     },
+  });
+
+  const { session } = fixture.actor;
+  const steer = session.send.bind(session);
+
+  // The owner stops once those words are taken, as the opening turn's own.
+  spyOn(session, 'send').mockImplementation(async (words) => {
+    const outcome = await steer(words);
+
+    handedBack.resolve(fixture.chat.interrupt());
+
+    return outcome;
   });
 
   try {

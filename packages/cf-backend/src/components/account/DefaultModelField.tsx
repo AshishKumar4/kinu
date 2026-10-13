@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { Loader } from "@cloudflare/kumo";
 import type { ProfileCatalogEnvelope } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
@@ -8,7 +8,7 @@ import { CardSlot } from "@/components/ui/CardSlot";
 import { getProfileCatalog, listAvailableModels, updateProfileCatalog } from "@/lib/user-api";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 
-export function DefaultModelField({ shown }: { shown: boolean }) {
+export function DefaultModelField() {
   const catalog = useAsyncResource(getProfileCatalog);
   const menu = useAsyncResource(listAvailableModels);
   const [saving, setSaving] = useState(false);
@@ -16,12 +16,6 @@ export function DefaultModelField({ shown }: { shown: boolean }) {
   const reloadCatalog = catalog.reload;
   const reloadMenu = menu.reload;
   const publish = catalog.set;
-
-  useEffect(() => {
-    if (!shown) return;
-    reloadCatalog();
-    reloadMenu();
-  }, [shown, reloadCatalog, reloadMenu]);
 
   const choose = useCallback((envelope: ProfileCatalogEnvelope, model: string) => {
     const tiers = { ...envelope.catalog.tiers, default: { ...envelope.catalog.tiers.default, model } };

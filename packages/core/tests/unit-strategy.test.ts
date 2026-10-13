@@ -2,11 +2,9 @@ import { describe, test, expect } from 'bun:test';
 import { streamText } from 'ai';
 import * as v from 'valibot';
 import {
-  workersAIEffortOption, effortFor, reasoningEffortOptions,
-  mergeProviderOptions, REASONING_EFFORT_FOR_STAGE, createChatModel, JsonObjectSchema, asFetchFunction, type JsonObject,
+  workersAIEffortOption, reasoningEffortOptions,
+  mergeProviderOptions, createChatModel, JsonObjectSchema, asFetchFunction, type JsonObject,
 } from '../src/index';
-import { REASONING_EFFORTS } from '../src/providers/effort';
-import type { ReasoningEffort } from '../src/providers/effort';
 
 describe('reasoning_effort plumbing', () => {
   test('workersAIEffortOption returns empty when no effort', () => {
@@ -30,9 +28,9 @@ describe('reasoning_effort plumbing', () => {
       }),
     });
 
-    const result = streamText({ model, prompt: 'probe', maxRetries: 0, ...effortFor('chat') });
+    const result = streamText({ model, prompt: 'probe', maxRetries: 0, providerOptions: reasoningEffortOptions('medium', 'workers-ai') });
     await result.text;
-    expect(requests[0]?.reasoning_effort).toBe(REASONING_EFFORT_FOR_STAGE.chat);
+    expect(requests[0]?.reasoning_effort).toBe('medium');
     expect(requests[0]?.reasoningEffort).toBeUndefined();
     expect(requests[0]?.max_tokens).toBeUndefined();
     expect(requests[0]?.max_completion_tokens).toBeUndefined();
@@ -75,21 +73,7 @@ describe('reasoning_effort plumbing', () => {
   });
 });
 
-/**
- * The rung table is asserted as an ordering (cheap fan-out, medium user-visible, high self-modification),
- * named by real call sites rather than stage by stage.
- */
-describe('the reasoning rung a stage gets is a policy, not a list of magnitudes', () => {
-  test('the self-modifying turn reasons most', () => {
-    const rung = (effort: ReasoningEffort) => REASONING_EFFORTS.indexOf(effort);
-
-    // The self-modifying turn is the strict maximum; the ladder is walked, so a new stage is covered.
-    for (const [stage, effort] of Object.entries(REASONING_EFFORT_FOR_STAGE)) {
-      if (stage === 'scaffold_mutation') continue;
-      expect(rung(REASONING_EFFORT_FOR_STAGE.scaffold_mutation)).toBeGreaterThan(rung(effort));
-    }
-  });
-
+describe('provider options layer per namespace', () => {
   test('inside one provider namespace the override beats the base it is layered over', () => {
     // The second argument is the request and wins over the plan (`chat.ts`, `actor-agent.ts` layer this way).
     // A shared and a unique key together: a wholesale override would lose the cache key.

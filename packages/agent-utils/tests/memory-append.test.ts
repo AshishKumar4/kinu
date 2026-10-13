@@ -2,10 +2,11 @@ import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 // appendToFile must not overwrite existing content when a read fails with anything but ENOENT.
 import { describe, test, expect } from "bun:test";
 import { MemoryStore } from "../src/memory/store";
-import { createTestDb, createMemoryVfs } from "./helpers";
+import { createTestSql } from "@kinu.run/test-utils";
+import { createMemoryVfs } from "./helpers";
 
 function createStore() {
-	const { sql, db, transactionSync } = createTestDb();
+	const { sql, db, transactionSync } = createTestSql();
 	const fs = createMemoryVfs();
 	const store = new MemoryStore(fs, sql, transactionSync);
 	store.ensureSchema();
@@ -28,7 +29,7 @@ describe("MemoryStore.appendToFile", () => {
 	});
 
 	test("a non-ENOENT read failure propagates instead of overwriting the file", async () => {
-		const { sql, transactionSync } = createTestDb()
+		const { sql, transactionSync } = createTestSql()
 		const fs = createMemoryVfs({ "memory/MEMORY.md": "# precious notes" });
 		fs.readFile = async () => { throw new Error("EIO: the store is unreachable"); };
 

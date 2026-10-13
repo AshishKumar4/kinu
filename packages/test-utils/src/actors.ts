@@ -5,7 +5,7 @@ import {
   WORKSPACE_IDENTITY_DDL, initWorkspaceActorTable, initAgentConfigTable, initCodemodeStateTable,
   WorkspaceActorDirectory, type ActorHandle, type RawSqlExec, type SqlExecutor,
 } from '@kinu.run/core';
-import { sqlOver } from './sql';
+import { wrapDatabase } from '@kinu.run/core/identity';
 
 /** The actors of one test workspace, and the directory that issued them. */
 export interface TestActors {
@@ -58,5 +58,7 @@ export function createTestActors(
 
 /** The same over a `bun:sqlite` handle a test opened itself. */
 export function createTestActorsOver(db: Database, opts: { name?: string } = {}): TestActors {
-  return createTestActors(sqlOver(db), (ddl) => { db.exec(ddl); }, opts);
+  const { sql, execRaw } = wrapDatabase(db);
+
+  return createTestActors(sql, execRaw, opts);
 }

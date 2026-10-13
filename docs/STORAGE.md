@@ -526,7 +526,7 @@ its own DDL, all of it `IF NOT EXISTS`, all of it run from the same
 | Branching heads | `head_runs`, `head_journal`, `head_evidence`, `head_steps`, `head_merge_results` | `core/src/heads/schema.ts` |
 | Swarm search | `search_nodes`, `mcts_search_runs` (durable checkpoints) | `core/src/mcts/schemas.ts`, `search-store.ts` |
 | Alternate takes | `alternate_takes` (a settled `/branch` redirect) | `core/src/mcts/takes.ts` |
-| Swarm leaderboard | `exploration_records` (cumulative across runs) | `core/src/strategy/records.ts` |
+| Swarm leaderboard | `exploration_records` (cumulative across runs), `exploration_objectives` (what each objective measures) | `core/src/strategy/records.ts` |
 | Swarm node content | `swarm_node_records` (what a swarm re-entry reads) | `core/src/strategy/swarm-resume.ts` |
 | Live trials | `artifact_trials`, `trial_turns` | `core/src/evolution/trials.ts` |
 | Turn lifecycle | `actor_turn_claims` (`preparing` from the claim, `admitted` once bound to its program and context; `withdrawn_through`, the epoch through which a Retry of the turn's answer withdrew its executions' output), `actor_epochs` (one sequence an agent, over its chat turns and runs: a claim's epoch is its capability) and the session tables above | `core/src/orchestrator/actor-claims.ts` |

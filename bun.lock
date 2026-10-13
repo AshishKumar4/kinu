@@ -66,6 +66,9 @@
         "@nimbus-sh/core": "0.15.0",
         "valibot": "^1.4.1",
       },
+      "devDependencies": {
+        "@kinu.run/test-utils": "workspace:*",
+      },
     },
     "packages/cf-backend": {
       "name": "@kinu.run/cf-backend",

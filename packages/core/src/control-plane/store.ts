@@ -74,26 +74,29 @@ export function initControlPlaneSchema(sql: ControlPlaneSql): void {
   for (const statement of DDL) sql.exec(statement);
 }
 
-export interface ControlUserRow {
-  userId: string;
-  email: string;
-  displayName: string | null;
-  firstSeenAt: number;
-  lastSeenAt: number;
-  workspaces: number;
-}
+export const ControlUserRowSchema = v.object({
+  userId: v.string(),
+  email: v.string(),
+  displayName: v.nullable(v.string()),
+  firstSeenAt: v.number(),
+  lastSeenAt: v.number(),
+  workspaces: v.number(),
+});
 
-export interface ControlWorkspaceRow {
-  userId: string;
+export type ControlUserRow = v.InferOutput<typeof ControlUserRowSchema>;
+
+export const ControlWorkspaceRowSchema = v.object({
+  userId: v.string(),
   /** Empty when the workspace was indexed before its owner was observed. */
-  email: string;
-  name: string;
-  displayName: string;
-  createdAt: number;
-  lastSeenAt: number;
-  removedAt: number | null;
-}
+  email: v.string(),
+  name: v.string(),
+  displayName: v.string(),
+  createdAt: v.number(),
+  lastSeenAt: v.number(),
+  removedAt: v.nullable(v.number()),
+});
 
+export type ControlWorkspaceRow = v.InferOutput<typeof ControlWorkspaceRowSchema>;
 
 /** `pending` is the intent, written before the mutation runs; a row still pending
  *  means the result was never recorded. */
@@ -103,29 +106,33 @@ export type AuditOutcome = (typeof AUDIT_OUTCOMES)[number];
 
 export type AuditSettlement = Exclude<AuditOutcome, 'pending'>;
 
-export interface ControlAuditRow {
-  id: string;
-  at: number;
-  actorEmail: string;
-  actorUserId: string;
-  operation: string;
-  targetKind: string;
-  target: string;
-  outcome: AuditOutcome;
+export const ControlAuditRowSchema = v.object({
+  id: v.string(),
+  at: v.number(),
+  actorEmail: v.string(),
+  actorUserId: v.string(),
+  operation: v.string(),
+  targetKind: v.string(),
+  target: v.string(),
+  outcome: v.picklist(AUDIT_OUTCOMES),
   /** Never a credential. */
-  detail: string;
-}
+  detail: v.string(),
+});
 
-export interface ControlOverview {
-  users: number;
-  workspaces: number;
-  workspacesRemoved: number;
-  feedback: number;
-  auditEntries: number;
-  lastAdminActionAt: number | null;
-  activeUsers24h: number;
-  activeUsers7d: number;
-}
+export type ControlAuditRow = v.InferOutput<typeof ControlAuditRowSchema>;
+
+export const ControlOverviewSchema = v.object({
+  users: v.number(),
+  workspaces: v.number(),
+  workspacesRemoved: v.number(),
+  feedback: v.number(),
+  auditEntries: v.number(),
+  lastAdminActionAt: v.nullable(v.number()),
+  activeUsers24h: v.number(),
+  activeUsers7d: v.number(),
+});
+
+export type ControlOverview = v.InferOutput<typeof ControlOverviewSchema>;
 
 export interface UserObservation {
   userId: string;

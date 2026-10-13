@@ -28,7 +28,6 @@ describe('the semantic mirror survives an unavailable or failed backend', () => 
 
     const vectors: VectorStore = {
       get available() { return available; },
-      upsertChunk: async (chunk) => { chunks.set(chunk.id, chunk); },
       upsertChunks: async (fresh) => { for (const chunk of fresh) chunks.set(chunk.id, chunk); },
       deleteChunks: async (ids) => {
         if (rejectDeletes) throw new Error('the semantic backend rejected deletion');

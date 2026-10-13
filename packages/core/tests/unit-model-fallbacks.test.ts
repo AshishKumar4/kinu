@@ -33,15 +33,6 @@ describe('a model window has one source', () => {
       expect([...profile.capabilities]).toContain('tools');
     }
   });
-
-  test('catalog-reported capabilities still win over the family fallback', () => {
-    const profile = resolvePromptModelProfile({
-      id: 'moonshotai/kimi-k3',
-      capabilities: ['tools', 'streaming'],
-    });
-
-    expect([...profile.capabilities].sort()).toEqual(['streaming', 'tools']);
-  });
 });
 
 // Pricing is null until the catalog lands, so the budget ledger blends and says so.

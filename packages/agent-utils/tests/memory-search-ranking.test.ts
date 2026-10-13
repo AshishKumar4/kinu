@@ -2,10 +2,11 @@
 import { describe, test, expect } from "bun:test";
 import { present } from "../../test-utils/src/present";
 import { MemoryStore } from "../src/memory/store";
-import { createTestDb, createMemoryVfs } from "./helpers";
+import { createTestSql } from "@kinu.run/test-utils";
+import { createMemoryVfs } from "./helpers";
 
 function createStore() {
-	const { sql, transactionSync } = createTestDb()
+	const { sql, transactionSync } = createTestSql()
 	const fs = createMemoryVfs();
 	const store = new MemoryStore(fs, sql, transactionSync);
 	store.ensureSchema();
