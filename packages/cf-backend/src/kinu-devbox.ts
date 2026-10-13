@@ -57,6 +57,9 @@ export class KinuDevbox extends Devbox<Env> {
 
   protected override get namespaceBinding(): string { return 'KinuDevbox'; }
 
+  /** What the product calls the box (`executorLabel`), in its prompt and on its desktop. */
+  protected override get hostname(): string { return 'computer'; }
+
   protected override get registryToken(): string | undefined { return this.env.DEVBOX_REGISTRY_TOKEN; }
   protected override get registryAccount(): string | undefined { return this.env.CLOUDFLARE_ACCOUNT_ID; }
 

@@ -4555,6 +4555,15 @@ about a second, which the wake's store mount meets (D44's paired store-mount pha
 enabled against 1,910 ms disabled). A workspace with no owner configures no vault, so its web
 requests go out unrouted, as its raw sockets do.
 
+D83. The box answers to a name of its own, `computer` in Kinu, set at every start (2026-10-13). The owner asked why
+every computer has a long random name: the prompt read `root@702e7477…cdde:/workspace#` and tmux and the desktop
+showed the same 64 hex characters, the platform's container id. Measured on staging `71d06f4a9` (an eval workspace's
+box, through its exec route): `hostname` printed that id, `/etc/hostname` held a platform UUID, `/etc/hosts` held only
+`localhost`, and `hostname computer` succeeded as root, after which a new shell's prompt read `root@computer`. The
+kernel keeps a name for one boot, so `configureContainer`, which every start and adoption runs before any caller's
+exec, names the box again: the kernel's name, `/etc/hostname`, and a `127.0.1.1` line in `/etc/hosts`. A `Devbox`
+names nothing unless its class says a name (`hostname`); `KinuDevbox` says the product's word for it.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean

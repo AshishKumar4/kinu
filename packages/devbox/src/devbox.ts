@@ -103,6 +103,9 @@ function launchUnknown(execId: string): DevboxError {
 }
 
 /** `port-listeners STAMP [PORT...]`: `port pid stamp command` per socket holder; /proc, as the image has no `ss`. */
+/** `$1` as the kernel's, `/etc/hostname`'s and `/etc/hosts`' name for the box, which held a container id and a UUID. */
+const NAME_BOX = `hostname "$1" && printf '%s\\n' "$1" > /etc/hostname && { grep -qw "$1" /etc/hosts || printf '127.0.1.1 %s\\n' "$1" >> /etc/hosts; }`;
+
 const PORT_LISTENERS = `
 stamp=$1; shift
 socks=$(for f in /proc/net/tcp /proc/net/tcp6; do
@@ -2874,11 +2877,20 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   protected async outboundPolicy(): Promise<OutboundPolicy> { return { routes: {} }; }
+  /** The name the box answers to in its prompt, its desktop and its processes; unset, the platform's container id. */
+  protected get hostname(): string | undefined { return undefined; }
   protected get namespaceBinding(): string { return this.constructor.name; }
 
   protected async configureContainer(reused = this.#adoptionPending || this.#restoration.phase === 'attached' || this.#restoration.phase === 'repair'): Promise<void> {
     await this.#routes().configure(await this.outboundPolicy(), this.store, reused);
     this.#renewContainer();
+    const name = this.hostname;
+
+    // The kernel keeps a name for the boot alone, so each start names the box again (D83).
+    if (name === undefined) return;
+    const named = await (await this.#container().exec(['sh', '-c', NAME_BOX, 'name-box', name])).output();
+
+    if (named.exitCode !== 0) throw new DevboxError('process', `naming the box ${name}: ${new TextDecoder().decode(named.stderr).trim()}`);
   }
 
   getExposedPorts(hostname: string) {
