@@ -1,6 +1,7 @@
 {
   "version": 3,
   "versionRefusalClose": 4406,
+  "ptyMaxAxis": 1000,
   "methods": {
     "ping": {},
     "cancel": {},

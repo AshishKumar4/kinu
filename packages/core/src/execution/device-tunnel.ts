@@ -98,8 +98,6 @@ export const DEVICE_PTY_OUTPUT = DEVICE_FRAMES.ptyOutput;
 
 export const DEVICE_PTY_EXIT = DEVICE_FRAMES.ptyExit;
 
-export const DEVICE_PTY_MAX_AXIS = 1000;
-
 export const DEVICE_CANCEL_MISPAIRED = 'device answered a cancellation for another command';
 
 export const DEVICE_DUPLICATE_REQUEST = 'device RPC id is already in flight';

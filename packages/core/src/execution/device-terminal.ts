@@ -13,9 +13,8 @@ import { connections, type Connections } from '@nimbus-sh/fabric/connections.js'
 import { z } from 'zod/v4';
 import type { DeviceSocket, DeviceSocketCtx, DeviceSocketHub } from './device-hub';
 import { WS_OPEN } from './device-hub';
-import {
-  DEVICE_PTY_INPUT, DEVICE_PTY_MAX_AXIS, DEVICE_PTY_RESIZE,
-} from './device-tunnel';
+import { DEVICE_PTY_MAX_AXIS } from './device-protocol';
+import { DEVICE_PTY_INPUT, DEVICE_PTY_RESIZE } from './device-tunnel';
 
 const TERMINAL_WS_TAG_PREFIX = 'terminal:';
 
