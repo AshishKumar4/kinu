@@ -317,10 +317,18 @@ describe('account panels', () => {
         await clickByText(page, '[data-chatgpt-connect] button', 'Sign in here', '[data-chatgpt-connect]');
         await page.waitForSelector('[data-chatgpt-way="here"] input');
         await page.focus('[data-chatgpt-way="here"] input');
+        await page.keyboard.type('sk-');
+
+        if (held.length === 0) throw new Error('nothing of the home page was held, so it could not arrive behind the modal');
         await Promise.all(held.splice(0).map(async (request) => request.continue()));
         await page.waitForSelector('#workspace-mission');
+        // Typed on without touching anything: every key lands in the modal, none on the page that arrived.
+        await page.keyboard.type('after-arrival');
 
-        expect(await page.evaluate(() => document.activeElement?.closest('[data-chatgpt-way="here"]') !== null)).toBe(true);
+        expect(await page.$eval('[data-chatgpt-way="here"] input', (input) => (input instanceof HTMLInputElement ? input.value : null)))
+          .toBe('sk-after-arrival');
+        expect(await page.$eval('#workspace-mission', (field) => (field instanceof HTMLTextAreaElement || field instanceof HTMLInputElement ? field.value : null)))
+          .toBe('');
       } finally {
         await page.close();
       }
