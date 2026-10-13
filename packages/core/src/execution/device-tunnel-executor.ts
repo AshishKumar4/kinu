@@ -34,11 +34,7 @@ import { readDeviceOwnershipContext } from './signal';
 import { callJob, createShellSession, machineShellCall, machineShellCwd, reportsCwd, shellExecOptions, type MachineShells } from './shell-session';
 import { namedShellState, pinnedShellMoved } from '../safety/approval-gate';
 import { isPrefixName, RESERVED_ROOTS } from '../vfs/resolve';
-import {
-  isJsonObject,
-  JsonValueSchema,
-  type JsonValue,
-} from '../utils/json';
+import { isJsonObject, JsonValueSchema, parseInput, type JsonValue } from '../utils/json';
 
 const NOT_CONNECTED =
   'No device connected. Asking for one raised a request with your user: they are shown a card ' +
@@ -161,15 +157,6 @@ const DeviceStatSchema = v.nullable(v.object({
   mtimeMs: v.number(),
   type: v.picklist(['file', 'directory', 'symlink']),
 }));
-
-function parseInput<TSchema extends v.GenericSchema>(
-  schema: TSchema,
-  input: { value: unknown },
-): v.InferOutput<TSchema> | undefined {
-  const result = v.safeParse(schema, input.value);
-
-  return result.success ? result.output : undefined;
-}
 
 /** Permissive, so a `{ signal }`-only caller keeps its device option. */
 const DeviceSelectionSchema = v.union([
