@@ -8,7 +8,7 @@ import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { createHostedWorkspace, type HostedWorkspace, type HostedWorkspaceEnv } from '../src/workspace-host';
 import { MemoryStore } from '@kinu.run/agent-utils/memory';
-import { fakeMossaic, sqlOver } from '@kinu.run/test-utils';
+import { fakeMossaic } from '@kinu.run/test-utils';
 import {
   agentCred, agentIdentity, mossaicVfs, provisionAgentHome, sharedDriveMount, workspaceSoul, workspaceFilePlane, WORKSPACE_ROOT,
   initWorkspaceActorTable, WORKSPACE_IDENTITY_DDL, writeWorkspaceSoul, type JsonValue,
@@ -18,6 +18,7 @@ import type { Refusal } from '@kinu.run/core/obs';
 import type { RouteableFacetTarget, SqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { actorObjectState, durableObjectStorage, durableSqlStorage, durableStorage, HELD_NIMBUS_TASKS, SCRIPT_EXPORTS } from './helpers/programmatic-host';
 import { workerCompatibility } from '../vite-agent-bundle';
+import { wrapDatabase } from '@kinu.run/core/identity';
 
 const databases: Database[] = [];
 
@@ -384,7 +385,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
     });
 
-    const store = new MemoryStore(workspace.bundle.vfs, sqlOver(actor.database), write => actor.database.transaction(write)());
+    const store = new MemoryStore(workspace.bundle.vfs, wrapDatabase(actor.database).sql, write => actor.database.transaction(write)());
     store.ensureSchema();
     await store.writeFile('memory/MEMORY.md', '# Notes\n\nthe indexed bytes\n');
     await store.indexFile('memory/MEMORY.md', '# Notes\n\nthe indexed bytes\n');

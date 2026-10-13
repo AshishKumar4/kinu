@@ -6,7 +6,6 @@ import {
   DEFAULT_WORKERS_AI_MODEL_SPEC, agentCred, agentHome, agentIdentity,
   openWorkspaceMainActor, RunEventRecorder, SESSION_UID, WORKSPACE_RUN_ID,
   INTERRUPTED_TURN, isJsonAnswer, type JsonValue, type SlateSurfaceResult, actorHomeName } from '@kinu.run/core';
-import { sqlOver } from '@kinu.run/test-utils';
 import {
   catalogTurn, gatewayWorkspace, hostedSubordinateHarness, chatSessionTurns, orchestratorHarness, reactivateOrchestratorHarness, storedChat, workspaceFiles,
 } from './helpers/actor-harness';
@@ -19,6 +18,7 @@ import { SlateId } from '@agent-core/core/slates';
 import { slateDirectory } from '@kinu.run/core/slates';
 import type { SqlDatabase, SqlRow, SqlValue as VendorSqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { present, toolExecute } from '@kinu.run/test-utils';
+import { wrapDatabase } from '@kinu.run/core/identity';
 
 /** The credential is the child's provisioned identity, looked up (hiring provisioned it), never allocated here. */
 async function childCaller(db: Database, agentName: string, actorName: string): Promise<SlateCaller> {
@@ -763,7 +763,7 @@ test('a slate\'s ai.stream hands over the answer as the model writes it, and fil
   expect(pieces.length).toBeGreaterThan(1);
   expect(JSON.stringify(gateway.runs[0]?.query)).toContain('be brief');
 
-  const ledger = new RunEventRecorder(sqlOver(actor.db), openWorkspaceMainActor(sqlOver(actor.db)));
+  const ledger = new RunEventRecorder(wrapDatabase(actor.db).sql, openWorkspaceMainActor(wrapDatabase(actor.db).sql));
 
   expect(ledger.spendByProducer().get('slate')).toMatchObject({ calls: 1, callsWithoutUsage: 0 });
 });
@@ -785,7 +785,7 @@ test('a slate\'s ai.run runs one model call under the caller authority, as a sla
   expect(JSON.stringify(gateway.runs[0]?.query)).toContain('summarize');
   expect(JSON.stringify(gateway.runs[0]?.query)).toContain('be brief');
 
-  const ledger = new RunEventRecorder(sqlOver(actor.db), openWorkspaceMainActor(sqlOver(actor.db)));
+  const ledger = new RunEventRecorder(wrapDatabase(actor.db).sql, openWorkspaceMainActor(wrapDatabase(actor.db).sql));
   const operations = ledger.read(WORKSPACE_RUN_ID).flatMap((event) => (event.type === 'model_operation' ? [event] : []));
 
   expect(operations.map((row) => row.source)).toEqual(['slate', 'slate']);

@@ -3,11 +3,11 @@
 // the model reads them: the request a turn prepares.
 import { describe, expect, test } from 'bun:test';
 import { DeferredApprovalStore, formatApproval, SubordinateRosterStore } from '@kinu.run/core';
-import { sqlOver } from '@kinu.run/test-utils';
 import { makeSqlExec } from '../../core/tests/helpers';
 import {
   chatSessionTurns, orchestratorHarness, workspaceMainActor, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
+import { wrapDatabase } from '@kinu.run/core/identity';
 
 /** Everything the model reads for one turn: the prepared system prompt and prompt messages. */
 async function modelContext(agent: HarnessOrchestratorAgent): Promise<string> {
@@ -37,7 +37,7 @@ describe('the orchestrator dynamic context reads its own planes', () => {
   test('a deferred shell approval is parked on the user in the block', async () => {
     const { agent, db } = orchestratorHarness();
 
-    const parked = new DeferredApprovalStore(sqlOver(db), workspaceMainActor(db)).create({
+    const parked = new DeferredApprovalStore(wrapDatabase(db).sql, workspaceMainActor(db)).create({
       id: `defer-${crypto.randomUUID()}`,
       command: 'bun run deploy',
       executor: 'workspace', context: {},

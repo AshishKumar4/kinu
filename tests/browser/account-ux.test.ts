@@ -629,31 +629,35 @@ describe('account panels', () => {
     });
   });
 
-  test('a `next` naming another site sends the tab home on this one', async () => {
-    await withGallery(async (gallery) => {
-      const page = await gallery.newPage();
+  // Each starts with one slash and names this origin, yet the browser lands elsewhere: a URL parser reads the backslash
+  // as a second slash, and a dot segment, spelled or percent-encoded, climbs out to leave `//evil.example`. The last
+  // three have no host a URL parser accepts, so reading them must refuse rather than throw the page away.
+  test.each(['/\\evil.example', '/a/..//evil.example', '/a/%2e%2e//evil.example', '/a/%2E%2E//evil.example', '//', '//evil.example:65536', '/a/..//'])(
+    'a `next` of %s sends the tab home on this site',
+    async (next) => {
+      await withGallery(async (gallery) => {
+        const page = await gallery.newPage();
 
-      try {
-        // Where the tab is sent is the subject, so that document is answered blank rather than loaded.
-        const onward = Promise.withResolvers<URL>();
-        await page.setRequestInterception(true);
-        page.on('request', (request) => detach(Effect.promise(async () => {
-          if (!request.isNavigationRequest() || request.url().includes('frame=connected')) return request.continue();
-          onward.resolve(new URL(request.url()));
+        try {
+          // Where the tab is sent is the subject, so that document is answered blank rather than loaded.
+          const onward = (request: HTTPRequest) => request.isNavigationRequest() && !request.url().includes('frame=connected');
+          await page.setRequestInterception(true);
+          page.on('request', (request) => detach(Effect.promise(async () => (onward(request)
+            ? request.respond({ status: 200, contentType: 'text/html', body: '' })
+            : request.continue()))));
 
-          return request.respond({ status: 200, contentType: 'text/html', body: '' });
-        })));
+          // A page that threw on the input never sends the tab anywhere, and this wait never ends.
+          const sent = page.waitForRequest(onward);
+          await Promise.allSettled([page.goto(`${gallery.origin}/gallery.html?frame=connected&next=${encodeURIComponent(next)}`, { waitUntil: 'load' })]);
+          const reached = new URL((await sent).url());
 
-        // It starts with one slash, but a URL parser reads the backslash as a second one: another host.
-        await Promise.allSettled([page.goto(`${gallery.origin}/gallery.html?frame=connected&next=${encodeURIComponent('/\\evil.example')}`, { waitUntil: 'load' })]);
-        const reached = await onward.promise;
-
-        expect({ origin: reached.origin, path: reached.pathname }).toEqual({ origin: gallery.origin, path: '/' });
-      } finally {
-        await page.close();
-      }
-    });
-  });
+          expect({ origin: reached.origin, path: reached.pathname }).toEqual({ origin: gallery.origin, path: '/' });
+        } finally {
+          await page.close();
+        }
+      });
+    },
+  );
 
   // Production, 2026-10-08: its one sign-in, Cloudflare, shares no name for most accounts; nothing guesses one.
   test('an account its provider shared no name for starts blank, says which provider, wears its email\'s letter, and saves no empty name', async () => {
