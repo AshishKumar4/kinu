@@ -1,6 +1,7 @@
 // A workspace process leaves through Kinu's egress minted for the agent that started it (Nimbus's egressFor, ask 45),
 // so what the egress records, its GitHub facts, names that agent.
 import { expect, test } from 'bun:test';
+import { present } from '@kinu.run/test-utils';
 import { EGRESS_FETCHES } from './helpers/programmatic-host';
 import { hostedMainActor, hostedSubordinateHarness, orchestratorHarness } from './helpers/actor-harness';
 
@@ -12,8 +13,8 @@ test('a request a hired agent\'s command makes leaves through an egress naming t
   const before = EGRESS_FETCHES.length;
 
   // A private address: the egress refuses it without the network, after it has served the request.
-  await main.actor.runtime.shell.exec('curl -s http://10.0.0.1/main');
-  await child.actor.runtime.shell.exec('curl -s http://10.0.0.1/child');
+  await present(main.actor.runtime.shell, 'main\'s shell').exec('curl -s http://10.0.0.1/main');
+  await present(child.actor.runtime.shell, 'the hired agent\'s shell').exec('curl -s http://10.0.0.1/child');
 
   expect(EGRESS_FETCHES.slice(before)).toEqual([
     { url: 'http://10.0.0.1/main', actorId: main.actor.handle.actorId },
