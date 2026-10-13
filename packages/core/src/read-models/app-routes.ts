@@ -81,15 +81,16 @@ export function sanitizeReturnTo(input: string, origin: string): string {
   const raw = input.trim();
   const here = new URL(origin).origin;
 
-  if (!raw.startsWith('/') || hasControlOrBackslash(raw)) return '/';
+  // One leading slash, so the parse below is a path against `here` and cannot fail on a host it does not accept.
+  if (!raw.startsWith('/') || raw.startsWith('//') || hasControlOrBackslash(raw)) return '/';
   const resolved = new URL(raw, here);
-  const path = `${resolved.pathname}${resolved.search}${resolved.hash}`;
-  const again = new URL(path, here);
   const decoded = percentDecoded(resolved.pathname);
 
-  if (resolved.origin !== here || again.origin !== here || `${again.pathname}${again.search}${again.hash}` !== path) return '/';
-
   if (!isOnePath(resolved.pathname) || !isOnePath(decoded) || decoded.includes('\\')) return '/';
+  const path = `${resolved.pathname}${resolved.search}${resolved.hash}`;
+  const again = new URL(path, here);
+
+  if (resolved.origin !== here || again.origin !== here || `${again.pathname}${again.search}${again.hash}` !== path) return '/';
 
   if (decoded.startsWith('/auth/') || decoded === '/login' || decoded === '/logout') return '/';
 
