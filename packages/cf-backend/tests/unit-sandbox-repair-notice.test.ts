@@ -99,9 +99,9 @@ async function restedWithService() {
 
   const sdk: KinuDevbox = Object.create({
     resolveReadiness: () => box.resolveReadiness(),
-    execUntimed: (...args: Parameters<RepairBox['execUntimed']>) => box.execUntimed(...args),
-    execUntimedStream: (...args: Parameters<RepairBox['execUntimedStream']>) => box.execUntimedStream(...args),
-    killUntimed: (...args: Parameters<RepairBox['killUntimed']>) => box.killUntimed(...args),
+    exec: (...args: Parameters<RepairBox['exec']>) => box.exec(...args),
+    execStream: (...args: Parameters<RepairBox['execStream']>) => box.execStream(...args),
+    killExec: (...args: Parameters<RepairBox['killExec']>) => box.killExec(...args),
     readFile: (...args: Parameters<RepairBox['readFile']>) => box.readFile(...args),
     writeFile: (...args: Parameters<RepairBox['writeFile']>) => box.writeFile(...args),
   });

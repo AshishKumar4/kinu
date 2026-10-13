@@ -88,19 +88,20 @@ import {
  *  attempt, and `#armStartup` early-returns on a pinned attempt, so nothing re-arms. */
 const CONTAINER_STOP_ATTEMPTS = 50;
 
-interface UntimedExecution {
+interface RunningExec {
   cancelled: boolean;
   started?: Promise<ExecProcess>;
 }
 
-interface UntimedOptions {
+/** An `execId` makes a command once per id (D48). */
+interface ExecOptions {
   readonly cwd?: string;
-  readonly execId: string;
   readonly env?: Readonly<Record<string, string>>;
+  readonly execId?: string;
 }
 
 function launchUnknown(execId: string): DevboxError {
-  return new DevboxError('indeterminate', `untimed exec ${execId} was launched before, and its outcome cannot be read here; it was not launched again`);
+  return new DevboxError('indeterminate', `exec ${execId} was launched before, and its outcome cannot be read here; it was not launched again`);
 }
 
 /** `port-listeners STAMP [PORT...]`: `port pid stamp command` per socket holder; /proc, as the image has no `ss`. */
@@ -174,7 +175,7 @@ const BOOT_ID_KEY = 'devbox:boot-id';
 /** Survives a mid-restore object reset; turnover clears it, so no stale phase admits another container. */
 const SETTLED_KEY = 'devbox:restoration';
 
-const UNTIMED_CLAIM_PREFIX = 'devbox:untimed:';
+const EXEC_CLAIM_PREFIX = 'devbox:exec:';
 
 const REPLACED_COUNT_KEY = 'devbox:replaced-count';
 
@@ -1787,7 +1788,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       if (!running) return { kind: 'recorded', size: target, previous: undefined } as const;
 
       if (previous === target) return { kind: 'unchanged', size: target, previous } as const;
-      const endedCommands = this.#untimed.size;
+      const endedCommands = this.#running.size;
       const committed = yield* attempt('io', () => this.#quiesce(true));
 
       if (committed.kind === 'failed') {
@@ -1892,14 +1893,33 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return admissionOf(this.#restoration);
   }
 
-  /** Defaults cwd to `DEVBOX_WORKDIR`: commands landing outside the durable directory are
-   *  not saved. A caller-supplied `cwd` overrides it. */
-  async exec(command: string, options?: DevboxExecOptions): Promise<ExecResult> {
-    return await settle(this.#withActiveCaller(attempt("io", async () => {
-      await this.ensureReady();
+  /** Every command runs as `setsid -w bash -c`, in its own group, which `killExec` ends (D37, D69), from
+   *  `DEVBOX_WORKDIR` unless `cwd` says otherwise: commands landing outside it are not saved. With an `execId` it runs
+   *  once per id, and a retry reads the first answer until `releaseExec` (D48); without one the box claims nothing. */
+  exec(command: string, options: ExecOptions = {}): Promise<ExecResult> {
+    const { execId } = options;
+    const answered = execId === undefined ? undefined : this.#answers.get(execId);
 
-      return await this.#execute(command, { cwd: DEVBOX_WORKDIR, ...options });
-    })));
+    if (answered !== undefined) return settle(Deferred.await(answered));
+
+    if (execId !== undefined && !this.#claimLaunch(execId)) return settle(Effect.fail(launchUnknown(execId)));
+    const id = execId ?? crypto.randomUUID();
+    const running: RunningExec = { cancelled: false };
+    const answer = Deferred.makeUnsafe<ExecResult, DevboxError>();
+    this.#running.set(id, running);
+
+    if (execId !== undefined) this.#answers.set(execId, answer);
+
+    return settle(this.#withActiveCaller(Effect.gen({ self: this }, function* () {
+      const process = yield* this.#spawn(command, options, running);
+
+      return decoded(yield* attempt('process', () => process.output()));
+    })).pipe(
+      Effect.exit,
+      Effect.tap((exit) => Deferred.done(answer, exit)),
+      Effect.flatten,
+      Effect.ensuring(Effect.sync(() => { this.#running.delete(id); })),
+    ));
   }
 
   /** The same native listener command/parser used during restore; core receives evidence, not a curl protocol. */
@@ -1915,39 +1935,16 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }));
   }
 
-  /** No deadline; the SDK's process lane lost output (D37). */
-  execUntimed(command: string, options: UntimedOptions): Promise<ExecResult> {
-    const answered = this.#answers.get(options.execId);
-
-    if (answered !== undefined) return settle(Deferred.await(answered));
-
-    if (!this.#claimLaunch(options.execId)) return settle(Effect.fail(launchUnknown(options.execId)));
-    const pending: UntimedExecution = { cancelled: false };
-    const answer = Deferred.makeUnsafe<ExecResult, DevboxError>();
-    this.#untimed.set(options.execId, pending);
-    this.#answers.set(options.execId, answer);
-
-    return settle(this.#withActiveCaller(Effect.gen({ self: this }, function* () {
-      const process = yield* this.#startUntimed(command, options, pending);
-
-      return decoded(yield* attempt('process', () => process.output()));
-    })).pipe(
-      Effect.exit,
-      Effect.tap((exit) => Deferred.done(answer, exit)),
-      Effect.flatten,
-      Effect.ensuring(Effect.sync(() => { this.#untimed.delete(options.execId); })),
-    ));
-  }
-
-  releaseUntimed(execId: string): Promise<void> {
+  /** Forgets an `execId`: its answer and its claim. */
+  releaseExec(execId: string): Promise<void> {
     return settle(attempt('io', async () => {
       this.#answers.delete(execId);
-      this.ctx.storage.kv.delete(`${UNTIMED_CLAIM_PREFIX}${execId}`);
+      this.ctx.storage.kv.delete(`${EXEC_CLAIM_PREFIX}${execId}`);
     }));
   }
 
   #claimLaunch(execId: string): boolean {
-    const key = `${UNTIMED_CLAIM_PREFIX}${execId}`;
+    const key = `${EXEC_CLAIM_PREFIX}${execId}`;
 
     if (this.ctx.storage.kv.get(key) !== undefined) return false;
     this.ctx.storage.kv.put(key, true);
@@ -1955,35 +1952,40 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return true;
   }
 
-  execUntimedStream(command: string, options: UntimedOptions): Promise<ReadableStream<Uint8Array>> {
-    if (!this.#claimLaunch(options.execId)) return settle(Effect.fail(launchUnknown(options.execId)));
-    const pending: UntimedExecution = { cancelled: false };
-    this.#untimed.set(options.execId, pending);
+  /** `exec` as framed records, read with `readExec`; cancelling the stream ends the command. A stream keeps no answer,
+   *  so a retry under the same `execId` is `indeterminate`. */
+  execStream(command: string, options: ExecOptions = {}): Promise<ReadableStream<Uint8Array>> {
+    const { execId } = options;
+
+    if (execId !== undefined && !this.#claimLaunch(execId)) return settle(Effect.fail(launchUnknown(execId)));
+    const id = execId ?? crypto.randomUUID();
+    const running: RunningExec = { cancelled: false };
+    this.#running.set(id, running);
     const leave = this.#arrive();
     const gone = Promise.withResolvers<void>();
-    const ended = (): void => { this.#untimed.delete(options.execId); leave(); gone.resolve(); };
+    const ended = (): void => { this.#running.delete(id); leave(); gone.resolve(); };
 
-    return settle(this.#startUntimed(command, options, pending).pipe(
+    return settle(this.#spawn(command, options, running).pipe(
       Effect.map((process) => {
-        unawaited(process.exitCode.finally(ended), `untimed exec ${options.execId} ended without its exit code`);
+        unawaited(process.exitCode.finally(ended), `exec ${id} ended without its exit code`);
 
         return execRecords(process, {
           exited: ended,
-          cancelled: async () => { await this.killUntimed(options.execId); await gone.promise; },
+          cancelled: async () => { await this.killExec(id); await gone.promise; },
         });
       }),
       Effect.onError(() => Effect.sync(ended)),
     ));
   }
 
-  #startUntimed(command: string, options: UntimedOptions, pending: UntimedExecution): Effect.Effect<ExecProcess, DevboxError> {
+  #spawn(command: string, { cwd, env }: ExecOptions, running: RunningExec): Effect.Effect<ExecProcess, DevboxError> {
     return Effect.gen({ self: this }, function* () {
       const { container } = yield* attempt('not-ready', () => this.#ensureReady(this.#teardowns));
 
-      if (pending.cancelled) return yield* Effect.fail(new DevboxError('cancelled', 'computer exec cancelled before admission'));
+      if (running.cancelled) return yield* Effect.fail(new DevboxError('cancelled', 'computer exec cancelled before admission'));
       // Its own group, which its kill ends (D69).
-      const started = yield* attemptSync('process', () => launch(container, ['setsid', '-w', '/bin/bash', '-c', command], options));
-      pending.started = started;
+      const started = yield* attemptSync('process', () => launch(container, ['setsid', '-w', '/bin/bash', '-c', command], { cwd, env }));
+      running.started = started;
 
       return yield* attempt('process', () => started);
     });
@@ -2002,14 +2004,14 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }));
   }
 
-  /** False when the command had already exited. */
-  killUntimed(execId: string): Promise<boolean> {
+  /** Ends the command's process tree; false when it had already exited. */
+  killExec(execId: string): Promise<boolean> {
     return settle(Effect.gen({ self: this }, function* () {
-      const pending = this.#untimed.get(execId);
+      const running = this.#running.get(execId);
 
-      if (pending === undefined) return false;
-      pending.cancelled = true;
-      const started = pending.started;
+      if (running === undefined) return false;
+      running.cancelled = true;
+      const started = running.started;
 
       if (started === undefined) return true;
       const container = this.ctx.container;
@@ -2026,7 +2028,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }));
   }
 
-  readonly #untimed = new Map<string, UntimedExecution>();
+  readonly #running = new Map<string, RunningExec>();
   readonly #answers = new Map<string, Deferred.Deferred<ExecResult, DevboxError>>();
 
   /** The only transition that clears a terminal refusal; keeps the `replace` stage, so a failed
@@ -2123,7 +2125,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     if (starting !== undefined) await Promise.allSettled([starting.run]);
 
-    if (ending) await Promise.allSettled([...this.#untimed.keys()].map((execId) => this.killUntimed(execId)));
+    if (ending) await Promise.allSettled([...this.#running.keys()].map((execId) => this.killExec(execId)));
 
     if (this.#activeCallers !== 0) {
       this.#callersDrained = Promise.withResolvers<void>();

@@ -82,13 +82,13 @@ Commands, files, processes, `exposePort()` and `probePort()` wait on `ensureRead
 
 ```ts
 const { stdout, stderr, exitCode } = await box.exec('npm test', { cwd: '/workspace/app' });
+const built = await readExec(await box.execStream('npm run build'), (from, bytes) => console.log(from, bytes.byteLength));
 
-const execId = crypto.randomUUID();
-const stream = await box.execUntimedStream('npm run build', { execId });
-const built = await collectExecRecords(stream, (from, bytes) => console.log(from, bytes.byteLength));
+await box.exec('npm run deploy', { execId });   // once per id: a retry after a lost answer is not run again
+await box.killExec(execId);
 ```
 
-Each `execId` launches once; a repeat gets the first answer or `indeterminate`. `killUntimed(execId)` ends its process tree.
+Every command runs as `setsid -w bash -c`, in its own process group, with no deadline. Cancelling a stream ends its command. Give an `execId` when a retry must not run the command twice, or to end it with `killExec`: each id launches once, a repeat gets the first answer, or `indeterminate` for a stream, until `releaseExec(execId)`. Without one the box keeps nothing.
 
 ### Files
 
@@ -171,11 +171,10 @@ await box.destroy();        // destroy the container; a later call starts it aga
 | `ensureReady()` | Strict `resolveReadiness()` | `restored` or `repair`; throws on `pending` |
 | `restoreStatus()` | Reads the restore | `{ restoring, refused }` |
 | `attachNow()` | Retries a refused or partial restore | `AttachOutcome` |
-| `exec(command, { cwd, env })` | Runs `bash -c` | `{ stdout, stderr, exitCode }` |
-| `execUntimed(command, { execId, cwd, env })` | Runs once per `execId` | `{ stdout, stderr, exitCode }`; `indeterminate` |
-| `execUntimedStream(command, { execId, cwd, env })` | The same, streamed | `ReadableStream`; read it with `collectExecRecords` |
-| `killUntimed(execId)` | Ends the process tree | `false` if it had already ended |
-| `releaseUntimed(execId)` | Forgets the id | `void` |
+| `exec(command, { cwd, env, execId })` | Runs `setsid -w bash -c`; once per `execId` | `{ stdout, stderr, exitCode }`; `indeterminate` |
+| `execStream(command, { cwd, env, execId })` | The same, streamed | `ReadableStream`; read it with `readExec` |
+| `killExec(execId)` | Ends the process tree | `false` if it had already ended |
+| `releaseExec(execId)` | Forgets the id | `void` |
 | `readFile(path, { encoding })`, `readFileStream(path)` | Reads a file | `{ content, encoding }`, `ReadableStream` |
 | `writeFile(path, content, { encoding })` | Writes text or a stream; makes parents | `void` |
 | `writeFileIfDigest({ path, contentBase64, expected, operation, settled })` | Writes in place only over the bytes whose sha256 is `expected` (`null`: no file); drops the kept answers of `settled` | `{ ok, sha256 }` |

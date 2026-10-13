@@ -42,8 +42,8 @@ const sandboxFor = (id: string) => ({
       return { restoring: false, refused: undefined };
     },
     // The Env terminal's command takes the untimed lane: no deadline asked for.
-    execUntimed: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
-    releaseUntimed: async () => {},
+    exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
+    releaseExec: async () => {},
     getExposedPorts: async () => [{
       url: `https://${String(PORT)}-${id}-p8788_ab12cd34.${SUFFIX}/`, port: PORT, status: 'active',
     }],

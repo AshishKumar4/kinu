@@ -4619,6 +4619,19 @@ the box checks the rest. A host that overrides `previewHost` routes its own zone
 published capability first (`preview-proxy.ts`) and now forwards the visitor's request unchanged, and its `previewName`
 override is gone, since every Kinu stub is `getByName(sandboxIdForWorkspace(workspace))`, the name it computed.
 
+D87. One `exec`, with an id only when the caller needs one (2026-10-13, issue #104). There were two lanes: `exec` ran
+`bash -c` and no call could end it, and `execUntimed` and `execUntimedStream` ran `setsid -w bash -c` (D69) under an id
+every caller had to mint, each launch leaving a claim row until `releaseUntimed`. Now every caller's command takes the
+one launch path, `setsid -w bash -c` on the container runtime's exec (D37), from `exec` or `execStream`. An `execId`
+keeps D48's meaning: one launch per id, the first answer kept for a retry until `releaseExec`, and `indeterminate` for
+a stream, which keeps no answer. Without one the box holds the command in memory only, under an id it mints, and
+writes nothing: cancelling a stream still ends its process tree, and so do `resize()` and `answerRest('now')`, which
+used to wait for a plain `exec` to finish. `killExec` and `releaseExec` replace `killUntimed` and `releaseUntimed`, and
+`readExec` replaces `collectExecRecords`, its listener now optional. The stream stays framed bytes read on the caller's
+side, because a `ReadableStream` crosses Workers RPC only with byte chunks (workerd issue #6675). The output is
+unchanged: the container contracts' exec row holds `exec`, `exec` under an id and `execStream` to the same bytes and
+exit code.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean

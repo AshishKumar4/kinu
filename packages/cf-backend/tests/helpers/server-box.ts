@@ -64,10 +64,10 @@ export function serverBox(clock: HandClock, killed: string[] = []) {
     getExposedPorts: async () => (stamps.size === 0 ? [] : [{ port: SERVED_PORT, name: undefined, url: `https://${String(SERVED_PORT)}-box-token.preview.test` }]),
     portListeners: async () => [...stamps.values()].map((stamp) => ({ port: SERVED_PORT, pid: 1, stamp, command: 'node server.js' })),
     // Whole, as the runtime answers a call that streams nothing.
-    execUntimed: (_command: string, exec: BoxExec) => new Promise((resolve) => {
+    exec: (_command: string, exec: BoxExec) => new Promise((resolve) => {
       serve(exec, (exitCode) => { resolve({ stdout: SERVING, stderr: '', exitCode }); });
     }),
-    execUntimedStream: async (_command: string, exec: BoxExec) => {
+    execStream: async (_command: string, exec: BoxExec) => {
       const exitCode = Promise.withResolvers<number>();
 
       const stdout = new ReadableStream<Uint8Array>({
@@ -82,9 +82,9 @@ export function serverBox(clock: HandClock, killed: string[] = []) {
 
       return execRecords({ stdout, stderr: null, exitCode: exitCode.promise }, { exited: () => {}, cancelled: async () => {} });
     },
-    releaseUntimed: async () => {},
+    releaseExec: async () => {},
     // The process tree ends as the runtime ends it: the command exits on the signal.
-    killUntimed: async (execId: string) => {
+    killExec: async (execId: string) => {
       const end = running.get(execId);
       killed.push(execId);
       end?.(137);
