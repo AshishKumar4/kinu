@@ -1894,7 +1894,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return Effect.gen({ self: this }, function* () {
       const { container } = yield* attempt('not-ready', () => this.#ensureReady(this.#teardowns));
 
-      if (pending.cancelled) return yield* Effect.fail(new DevboxError('cancelled', 'sandbox exec cancelled before admission'));
+      if (pending.cancelled) return yield* Effect.fail(new DevboxError('cancelled', 'computer exec cancelled before admission'));
       // Its own group, which its kill ends (D69).
       const started = yield* attemptSync('process', () => launch(container, ['setsid', '-w', '/bin/bash', '-c', command], options));
       pending.started = started;
@@ -2653,7 +2653,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   answerRest(answer: RestAnswer): Promise<RestAnswered> {
     return settle(attempt('io', async (): Promise<RestAnswered> => {
       if (await this.ctx.storage.get<number>(REST_ASK_KEY) === undefined) {
-        return { kind: 'refused', reason: 'no rest ask is pending: the sandbox is in use or already resting' };
+        return { kind: 'refused', reason: 'no rest ask is pending: the computer is in use or already resting' };
       }
 
       await this.ctx.storage.delete(REST_ASK_KEY);

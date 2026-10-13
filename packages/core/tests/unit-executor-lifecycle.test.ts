@@ -152,9 +152,9 @@ describe("executor lifecycle state", () => {
     const router = new DefaultExecutionRouter();
     router.register(createSandboxExecutor(handle, { previewHostSuffix: "kinu.example.test" }));
 
-    const [info] = router.listExecutors().filter((e) => e.name === "sandbox");
+    const [info] = router.listExecutors().filter((e) => e.name === "computer");
     expect(info).toMatchObject({
-      name: "sandbox",
+      name: "computer",
       configured: true,
       available: true,
       active: false,
@@ -162,9 +162,9 @@ describe("executor lifecycle state", () => {
     });
     expect(handle.calls).toEqual([]);
 
-    const result = await present(router.getProvider("sandbox"), "the registered sandbox provider").tools.exec.execute("echo ok");
+    const result = await present(router.getProvider("computer"), "the registered sandbox provider").tools.exec.execute("echo ok");
     expect(result).toBe("ok");
-    expect(router.listExecutors().find((e) => e.name === "sandbox")?.active).toBe(true);
+    expect(router.listExecutors().find((e) => e.name === "computer")?.active).toBe(true);
     expect(handle.calls).toEqual(["exec:echo ok"]);
   });
 
@@ -434,7 +434,7 @@ describe("the sandbox namespace a program calls", () => {
 
     const sandbox = executorNamespace(createSandboxExecutor(handle, { previewHostSuffix: "kinu.example.test" })).tools;
 
-    await present(sandbox.exposePort, "sandbox.exposePort").execute(8787, { name: "api" });
+    await present(sandbox.exposePort, "computer.exposePort").execute(8787, { name: "api" });
     expect(named).toEqual(["api"]);
   });
 });

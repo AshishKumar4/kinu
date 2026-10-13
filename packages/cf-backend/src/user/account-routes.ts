@@ -11,14 +11,11 @@ import { forgetSharesGiven, type ShareRosterAuthority, type SharesGivenEnv } fro
 import type { ObjectNamespace } from '@kinu.run/core';
 import {
   confirmsAccountDelete,
-  displayNameProblem,
   EXPERIENCE_KINDS,
   err, json, safeJson,
   type OwnerCapabilityEnv, type UserCaller,
 } from '@kinu.run/core';
 import { ownerGate, type ApiVariables, type FamilyEnv } from '../api/context';
-
-const ProfilePatch = v.object({ displayName: v.string() });
 
 const DeleteConfirm = v.object({ confirm: v.string() });
 
@@ -28,7 +25,7 @@ const ExperienceQuery = v.object({
 });
 
 type AccountAuthority = Pick<
-  UserDO, 'completeOnboarding' | 'searchExperience' | 'deleteAccount' | 'setDisplayName' | 'heldRows'
+  UserDO, 'completeOnboarding' | 'searchExperience' | 'deleteAccount' | 'heldRows'
 >;
 
 export interface AccountRoutesEnv<Id> extends SharesGivenEnv<Id>, OwnerCapabilityEnv {
@@ -97,16 +94,4 @@ accountRoutes.delete('/api/user/account', ownerGate(), (c) => {
 
     return json({ body: { deleted: true } });
   }));
-});
-
-accountRoutes.patch('/api/user/profile', ownerGate(), async (c) => {
-  const body = await safeJson(c.req.raw, ProfilePatch);
-
-  if (!body) return err(400, 'Body must be { displayName }');
-
-  const problem = displayNameProblem(body.displayName);
-
-  if (problem !== null) return err(400, problem);
-
-  return json({ body: await account(c).setDisplayName(c.get('owner'), body.displayName) });
 });

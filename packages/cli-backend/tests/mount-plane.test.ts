@@ -1,6 +1,6 @@
 import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // Local environments and the mount table: a directory-bound session works on the real bytes through one `workspace`
-// executor, with no `/pc` or `/sandbox` mount.
+// executor, with no `/pc` or `/computer` mount.
 import { describe, expect, test } from 'bun:test';
 import { chmodSync, chownSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -45,11 +45,11 @@ describe('the local backend file plane', () => {
     expect(v.parse(v.string(), out)).toContain('from the host');
   });
 
-  // Issue #36: the CLI registers no device or sandbox runtime, so no mount answers for one: `/pc` and `/sandbox`
+  // Issue #36: the CLI registers no device or sandbox runtime, so no mount answers for one: `/pc` and `/computer`
   // are ordinary paths, never a refusal naming a machine or a container the CLI cannot have.
-  test('a local workspace has no /pc or /sandbox mount, bound to a directory or not', async () => {
+  test('a local workspace has no /pc or /computer mount, bound to a directory or not', async () => {
     for (const rt of [freshRuntime(), freshRuntime(scratchDir('mount-plane-bound'))]) {
-      for (const path of ['/pc', '/sandbox']) {
+      for (const path of ['/pc', '/computer']) {
         let code: string | null = null;
 
         try { (await rt.storage.vfs.readdir(path)).map(({ name }) => name); } catch (caught) { code = isVfsError(caught) ? caught.code : 'unclassified'; }
@@ -58,7 +58,7 @@ describe('the local backend file plane', () => {
       }
     }
 
-    // Nothing but the store answers at /sandbox: a write there meets what any top-level path meets, `/` being root's.
+    // Nothing but the store answers at /computer: a write there meets what any top-level path meets, `/` being root's.
     const unbound = freshRuntime().storage.vfs;
 
     const writing = async (path: string) => {
@@ -71,7 +71,7 @@ describe('the local backend file plane', () => {
       }
     };
 
-    const sandbox = await writing('/sandbox/notes.md');
+    const sandbox = await writing('/computer/notes.md');
 
     expect(sandbox).toBe('EACCES');
     expect(await writing('/elsewhere/notes.md')).toBe('EACCES');

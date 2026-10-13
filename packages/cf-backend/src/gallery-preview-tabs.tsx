@@ -49,7 +49,7 @@ type ReplyValue = JsonValue | PlanReview | readonly ReplyValue[] | { readonly [k
 const MACHINE: ExecutorInfo = { name: 'device', kind: 'device', capabilities: [], available: true, configured: true, active: true, status: 'active' };
 
 /** A sandbox that could run but is asleep, raised by `data-add-idle-sandbox`: reading it would wake it. */
-const IDLE_SANDBOX: ExecutorInfo = { name: 'sandbox', kind: 'sandbox', capabilities: [], available: true, configured: true, active: false, status: 'idle' };
+const IDLE_COMPUTER: ExecutorInfo = { name: 'computer', kind: 'computer', capabilities: [], available: true, configured: true, active: false, status: 'idle' };
 
 const MACHINE_DIFF = { mode: 'git', files: [{ path: 'src/device.ts', status: 'added', added: 1, removed: 0,
   lines: [{ kind: 'hunk', text: '@@ -0,0 +1 @@' }, { kind: 'add', text: 'export const onDevice = true;' }] }] };
@@ -194,11 +194,11 @@ export function PreviewTabsGallery() {
     <div data-preview-surface className="flex-1 min-h-0" style={narrow ? { width: INSPECTOR_DEFAULT_PX } : undefined}>
       <WorkSurface planRpc={owner === "main" ? rpc : workerRpc} planOwner={owner} onReviewActor={setOwner} surface={surface} onSurface={setSurface} previewFocus={focus} planFocus={planFocus}
         workspacePlanArrival={workspacePlanArrival}
-        pinnedPorts={[{ executor: 'workspace', port: 8789, url: SLATE_GALLERY_URL, name: 'Duplicate dashboard port' }, { executor: 'sandbox', port: 8080, url: SANDBOX_URL, name: 'Sandbox app' }, { executor: 'device', port: 3000, url: DEVICE_URL, name: 'Device app' }]}
+        pinnedPorts={[{ executor: 'workspace', port: 8789, url: SLATE_GALLERY_URL, name: 'Duplicate dashboard port' }, { executor: 'computer', port: 8080, url: SANDBOX_URL, name: 'Sandbox app' }, { executor: 'device', port: 3000, url: DEVICE_URL, name: 'Device app' }]}
         slates={slates} slateReloads={new Map(slates.map(item => [item.id, reload]))}
-        previewError={null} previewStarting={starting ? ['sandbox'] : []} onRefreshPorts={NOTHING} plan={owner === "main" ? plan : workerPlan} snapshot={{ status: 'loading' }} onRetryLoad={NOTHING}
+        previewError={null} previewStarting={starting ? ['computer'] : []} onRefreshPorts={NOTHING} plan={owner === "main" ? plan : workerPlan} snapshot={{ status: 'loading' }} onRetryLoad={NOTHING}
         memory={[]} memoryContent="" onSearchMemory={NOTHING} mctsTrees={new Map()} headActivity={new Map()} isStreaming={false}
-        executors={[...machine ? [MACHINE] : [], ...idleSandbox ? [IDLE_SANDBOX] : []]} executorOutputs={new Map()} onExecute={async () => ({})} backgroundJobs={[]} inspectedWork={[]} onRefreshJobs={NOTHING} pendingActions={[]}
+        executors={[...machine ? [MACHINE] : [], ...idleSandbox ? [IDLE_COMPUTER] : []]} executorOutputs={new Map()} onExecute={async () => ({})} backgroundJobs={[]} inspectedWork={[]} onRefreshJobs={NOTHING} pendingActions={[]}
         tabPresence={{ explorations: false, work: true }} rpc={rpc} />
     </div>
   </div>;

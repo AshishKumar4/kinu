@@ -396,7 +396,7 @@ describe('the escalation row', () => {
   test('a turn that escalated writes one row that survives storage; one that did not writes none', () => {
     const rec = recorder();
     const escalations = new TurnEscalationLedger();
-    escalations.observe({ runtime: 'sandbox', reason: 'needs a long-running process', outcome: 'ok' });
+    escalations.observe({ runtime: 'computer', reason: 'needs a long-running process', outcome: 'ok' });
 
     closeTurnRun(rec, 'run-e', { turnIndex: 0, reason: 'completed', escalations });
     closeTurnRun(rec, 'run-plain', {
@@ -409,7 +409,7 @@ describe('the escalation row', () => {
     expect(rows[0]).toMatchObject({
       type: 'execution_escalation',
       escalations: [{
-        runtime: 'sandbox', reason: 'needs a long-running process', outcome: 'ok', count: 1,
+        runtime: 'computer', reason: 'needs a long-running process', outcome: 'ok', count: 1,
       }],
     });
   });
@@ -419,11 +419,11 @@ describe('the escalation row', () => {
     const escalations = new TurnEscalationLedger();
 
     for (let i = 0; i < 30; i += 1) {
-      escalations.observe({ runtime: 'sandbox', reason: 'inbound port', outcome: 'ok' });
+      escalations.observe({ runtime: 'computer', reason: 'inbound port', outcome: 'ok' });
     }
 
     expect(escalations.snapshot().escalations).toEqual([
-      { runtime: 'sandbox', reason: 'inbound port', outcome: 'ok', count: 30 },
+      { runtime: 'computer', reason: 'inbound port', outcome: 'ok', count: 30 },
     ]);
   });
 
@@ -431,7 +431,7 @@ describe('the escalation row', () => {
     // How often escalation happens unreasoned is the measurement a prompt change
     // would try to move; fabricating a reason would destroy it.
     const escalations = new TurnEscalationLedger();
-    escalations.observe({ runtime: 'sandbox', reason: undefined, outcome: 'ok' });
+    escalations.observe({ runtime: 'computer', reason: undefined, outcome: 'ok' });
     escalations.observe({ runtime: 'device', reason: '   ', outcome: 'ok' });
     expect(escalations.snapshot().escalations.map((e) => e.reason)).toEqual([null, null]);
   });
@@ -440,18 +440,18 @@ describe('the escalation row', () => {
     // "The runtime was never there" and "the command failed" are different
     // findings; a single failure count would merge them into "unreliable".
     const escalations = new TurnEscalationLedger();
-    escalations.observe({ runtime: 'sandbox', reason: 'parallelism', outcome: 'refused' });
-    escalations.observe({ runtime: 'sandbox', reason: 'parallelism', outcome: 'failed' });
-    escalations.observe({ runtime: 'sandbox', reason: 'parallelism', outcome: 'failed' });
+    escalations.observe({ runtime: 'computer', reason: 'parallelism', outcome: 'refused' });
+    escalations.observe({ runtime: 'computer', reason: 'parallelism', outcome: 'failed' });
+    escalations.observe({ runtime: 'computer', reason: 'parallelism', outcome: 'failed' });
     expect(escalations.snapshot().escalations).toEqual([
-      { runtime: 'sandbox', reason: 'parallelism', outcome: 'refused', count: 1 },
-      { runtime: 'sandbox', reason: 'parallelism', outcome: 'failed', count: 2 },
+      { runtime: 'computer', reason: 'parallelism', outcome: 'refused', count: 1 },
+      { runtime: 'computer', reason: 'parallelism', outcome: 'failed', count: 2 },
     ]);
   });
 
   test('reset clears the turn, so a ledger is never carried into the next one', () => {
     const escalations = new TurnEscalationLedger();
-    escalations.observe({ runtime: 'sandbox', reason: 'x', outcome: 'ok' });
+    escalations.observe({ runtime: 'computer', reason: 'x', outcome: 'ok' });
     expect(escalations.active).toBe(true);
     escalations.reset();
     expect(escalations.active).toBe(false);

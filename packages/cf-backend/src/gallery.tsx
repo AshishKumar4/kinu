@@ -1406,7 +1406,7 @@ const NO_HEAD_ACTIVITY: ReadonlyMap<string, number> = new Map();
  * Non-agent sockets (vite HMR) fall through to the real WebSocket.
  */
 const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
-  getSandboxSize: { account: null, chosen: null, size: "medium", running: "medium", startRefused: null },
+  getComputerSize: { account: null, chosen: null, size: "medium", running: "medium", startRefused: null },
   getWorkspaceSnapshot: {
     status: {
       id: "agent_01j9x7q2m4checkoutfixes", name: "checkout-coupon-bug-9935d3",
@@ -1593,7 +1593,7 @@ const MESSAGES: UIMessage[] = [
     parts: [
       { type: "reasoning", text: "**Reproducing the failure**\n\nThe coupon path goes through `/api/cart/apply`. I should reproduce first, then bisect." },
       { type: "reasoning", text: "**Bisecting**\n\nThe handler, the pricing service, then the migration that landed Tuesday. The 500 with SAVE20 but not SAVE10 suggests a percentage-vs-fixed branch." },
-      { type: "tool-run", toolCallId: "t1", state: "output-available", input: { runtime: "sandbox", command: "curl -s -X POST localhost:8788/api/cart/apply -d '{\"code\":\"SAVE20\"}'" }, output: "HTTP 500\n{\"error\":\"TypeError: Cannot read properties of undefined (reading 'percent')\"}" },
+      { type: "tool-run", toolCallId: "t1", state: "output-available", input: { runtime: "computer", command: "curl -s -X POST localhost:8788/api/cart/apply -d '{\"code\":\"SAVE20\"}'" }, output: "HTTP 500\n{\"error\":\"TypeError: Cannot read properties of undefined (reading 'percent')\"}" },
       { type: "tool-eval", toolCallId: "t2", state: "output-available", input: { code: "// Inspect coupon rows to find the missing kind\nconst rows = await sql`SELECT code, kind, value FROM coupons WHERE code LIKE 'SAVE%'`;\nreturn rows;" }, output: '[{"code":"SAVE10","kind":"fixed","value":10},{"code":"SAVE20","kind":null,"value":20}]' },
       { type: "text", text: "Found it. Tuesday's migration backfilled `kind` for fixed coupons only — percentage coupons have `kind: null`, and `applyCoupon` dereferences `rules[kind].percent`.\n\n```ts\nconst rule = rules[coupon.kind ?? inferKind(coupon)];\n```\n\nI'll patch the migration, add a regression test, and run the suite." },
       // A run of calls, not one.
@@ -1603,7 +1603,7 @@ const MESSAGES: UIMessage[] = [
       { type: "tool-file", toolCallId: "t6", state: "output-available", input: { op: "edit", path: "packages/checkout/migrations/0042_coupon_kind.sql", edits: [{}, {}] }, output: { error: "old_text not found or not unique — the file changed since the last read" } },
       { type: "tool-file", toolCallId: "t7", state: "output-available", input: { op: "write", path: "packages/checkout/tests/coupon-kind.test.ts" }, output: "ok" },
       { type: "tool-agents", toolCallId: "t8", state: "output-available", input: { op: "swarm", branches: 3, task: "Check every other call site that indexes `rules` by kind" }, output: "3 forks merged" },
-      { type: "tool-run", toolCallId: "t3", state: "input-available", input: { runtime: "sandbox", command: "bun test packages/checkout" } },
+      { type: "tool-run", toolCallId: "t3", state: "input-available", input: { runtime: "computer", command: "bun test packages/checkout" } },
     ],
   }),
   msg({
@@ -1636,7 +1636,7 @@ const MESSAGES: UIMessage[] = [
       {
         type: "tool-run", toolCallId: "t9", state: "output-available",
         input: {
-          runtime: "sandbox",
+          runtime: "computer",
           command: "for f in packages/checkout/migrations/*.sql; do\n  echo \"-- checking $f\"\n  sqlite3 :memory: < \"$f\" || exit 1\ndone",
         },
         output: "-- checking packages/checkout/migrations/0041_coupons.sql\n-- checking packages/checkout/migrations/0042_coupon_kind.sql",
@@ -1709,7 +1709,7 @@ const stubRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
   if (method === "listWorkspaceWork") return rpcResult({ plans: [], tasks: [] }).json<T>();
 
   // A `SandboxSizeState`: the blanket `[]` below reads as a start refused for `undefined`.
-  if (method === "getSandboxSize") return rpcResult(v.parse(JsonValueSchema, AGENT_RPC.get(method))).json<T>();
+  if (method === "getComputerSize") return rpcResult(v.parse(JsonValueSchema, AGENT_RPC.get(method))).json<T>();
 
   // Read as `result.builtIn.map(...)`; three halves, as the orchestrator answers it.
   if (method === "getToolDescriptions") return rpcResult({ builtIn: [], executors: [], crafted: [] }).json<T>();
@@ -2117,9 +2117,9 @@ function galleryPortListing(executor: string | undefined): GalleryListing | null
 
   if (flags.listingHeld === "1") return { kind: "held" };
 
-  if (executor !== "sandbox") return null;
+  if (executor !== "computer") return null;
 
-  if (flags.sandboxStarting === "1") return { kind: "listed", value: { ports: [], pending: "the sandbox's container is still restoring" } };
+  if (flags.sandboxStarting === "1") return { kind: "listed", value: { ports: [], pending: "the computer is still restoring" } };
 
   // `data-sandbox-ports`: what the sandbox answers next. `failed`: an error; `forged`: a port whose address is not
   // a preview's; `none`: no ports at all.
@@ -3373,7 +3373,7 @@ const MERGED_RUN: HeadRunView = {
     {
       id: "root-merge-1-h2", parentId: null, depth: 1, task: "packages/admin/src/coupon-report.ts", rationale: "the reporting path",
       status: "errored", summary: null,
-      errorMessage: "the admin package is not checked out in this sandbox",
+      errorMessage: "the admin package is not checked out on this computer",
       usage: { input: 1_020, output: 0 }, wallClockMs: 2_100,
       spawnedAt: NOW - 52e5, lastStepAt: null, decisions: [],
     },
@@ -3506,7 +3506,7 @@ const TRANSCRIPTS = {
     spawnedAt: NOW - 52e5, lastStepAt: null, wallClockMs: 2_100,
     usage: { input: 1_020 },
     steps: { status: "end", items: [] }, stepCount: 0, toolCount: 0, answer: null, decisions: [],
-    errorMessage: "the admin package is not checked out in this sandbox",
+    errorMessage: "the admin package is not checked out on this computer",
     path: [
       { id: "root-merge-1", label: "Check every other call site that indexes rules by kind", depth: 0, status: "completed" },
       { id: "root-merge-1-h2", label: "packages/admin/src/coupon-report.ts", depth: 1, status: "errored" },
@@ -5475,7 +5475,7 @@ const PARKED_WRITE_REVIEW: ParkedWriteReview = {
 const SHELL_GRANTS = [
   { rule: "rm-recursive", executor: "device" },
   { rule: "sudo", executor: "device" },
-  { rule: "docker-destructive", executor: "sandbox" },
+  { rule: "docker-destructive", executor: "computer" },
 ];
 
 const approvalsRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
@@ -5549,7 +5549,7 @@ const ENVIRONMENT_EXECUTORS: ExecutorInfo[] = [
     capabilities: ["shell", "npm", "git", "docker", "fs_owned", "process_spawn"],
   },
   {
-    name: "sandbox", kind: "sandbox", available: true, configured: true, active: true, status: "active",
+    name: "computer", kind: "computer", available: true, configured: true, active: true, status: "active",
     capabilities: ["shell", "npm", "git", "fs_owned", "net_inbound", "process_long"],
   },
   {
@@ -5565,7 +5565,7 @@ function seedCompositeTree(offlineDevice: boolean): Map<string, DirEntry[]> {
     ["/", [
       { name: "home", type: "dir", mtimeMs: NOW - 4 * 36e5 },
       ...(offlineDevice ? [] : [{ name: "pc", type: "dir" as const, mtimeMs: NOW - 60e3 }]),
-      { name: "sandbox", type: "dir", mtimeMs: NOW - 30 * 60e3 },
+      { name: "computer", type: "dir", mtimeMs: NOW - 30 * 60e3 },
     ]],
     ["/home", [{ name: "main", type: "dir", mtimeMs: NOW - 4 * 36e5 }]],
     ["/home/main", [
@@ -5578,12 +5578,12 @@ function seedCompositeTree(offlineDevice: boolean): Map<string, DirEntry[]> {
     ]],
     ["/home/main/memory", [{ name: "MEMORY.md", type: "file", size: 1_204, mtimeMs: NOW - 26e5 }]],
     ["/home/main/skills", [{ name: "sql-triage.md", type: "file", size: 2_010, mtimeMs: NOW - 20 * 864e5 }]],
-    ["/sandbox", [{ name: "workspace", type: "dir", mtimeMs: NOW - 30 * 60e3 }]],
-    ["/sandbox/workspace", [
+    ["/computer", [{ name: "workspace", type: "dir", mtimeMs: NOW - 30 * 60e3 }]],
+    ["/computer/workspace", [
       { name: "build.log", type: "file", size: 18_211, mtimeMs: NOW - 31 * 60e3 },
       { name: "dist", type: "dir", mtimeMs: NOW - 30 * 60e3 },
     ]],
-    ["/sandbox/workspace/dist", [{ name: "app.js", type: "file", size: 220_114, mtimeMs: NOW - 30 * 60e3 }]],
+    ["/computer/workspace/dist", [{ name: "app.js", type: "file", size: 220_114, mtimeMs: NOW - 30 * 60e3 }]],
   ]);
 
   if (!offlineDevice) {
@@ -5613,7 +5613,7 @@ const FILES_TEXT = {
   "/home/main/AGENTS.md": "## Working agreements\n\nRun the checkout suite before claiming a fix.\n",
   [`${PC_CONSENTED_ROOT}/quarterly-report.txt`]: "Q3 numbers, draft 2 — do not circulate.\n",
   [`${PC_CONSENTED_ROOT}/notes.html`]: "<h1>Q3 close</h1><p>Signed off by finance.</p>\n",
-  "/sandbox/workspace/build.log": "$ bun run build\nbundled 412 modules in 1.9s\nok\n",
+  "/computer/workspace/build.log": "$ bun run build\nbundled 412 modules in 1.9s\nok\n",
 } satisfies Record<string, string>;
 
 interface PreviewDeferred {
@@ -5648,7 +5648,7 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
     offlineDevice
       ? { name: "device", prefix: "device.*", live: false, policy: { readOnly: false, consistency: "live-shared" }, reason: "no device connected" }
       : { name: "device", prefix: "device.*", live: true, policy: { readOnly: false, consistency: "live-shared" }, reason: null },
-    { name: "sandbox", prefix: "sandbox.*", live: true, policy: { readOnly: false, consistency: "ephemeral" }, reason: null },
+    { name: "computer", prefix: "computer.*", live: true, policy: { readOnly: false, consistency: "ephemeral" }, reason: null },
   ];
 
   const filesRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
@@ -6077,7 +6077,7 @@ const TOOLCALL_MESSAGES: UIMessage[] = [
       { type: "text", text: "A multi-line `shell` command, expanded — a shell script, not an escaped JSON string." },
       {
         type: "tool-run", toolCallId: "tc3", state: "output-available",
-        input: { runtime: "sandbox", command: "for f in packages/checkout/migrations/*.sql; do\n  echo \"-- checking $f\"\n  sqlite3 :memory: < \"$f\" || exit 1\ndone" },
+        input: { runtime: "computer", command: "for f in packages/checkout/migrations/*.sql; do\n  echo \"-- checking $f\"\n  sqlite3 :memory: < \"$f\" || exit 1\ndone" },
         output: "-- checking packages/checkout/migrations/0041_coupons.sql\n-- checking packages/checkout/migrations/0042_coupon_kind.sql",
       },
     ],
@@ -6118,7 +6118,7 @@ const LARGE_TOOL_RUN_MESSAGE: UIMessage = msg({
       input: { op: "read", path: `packages/checkout/src/generated/module-${String(index)}.ts` },
       output: "…",
     })),
-    { type: "tool-run", toolCallId: "large-preview", state: "output-available", input: { runtime: "sandbox", command: "kinu expose 8789" }, output: { url: SLATE_GALLERY_URL, port: 8789 } },
+    { type: "tool-run", toolCallId: "large-preview", state: "output-available", input: { runtime: "computer", command: "kinu expose 8789" }, output: { url: SLATE_GALLERY_URL, port: 8789 } },
     { type: "tool-file", toolCallId: "large-edit", state: "output-available", input: { op: "edit", path: "packages/checkout/migrations/0042_coupon_kind.sql", edits: [{}, {}] }, output: { error: "old_text not found or not unique" } },
     { type: "tool-file", toolCallId: "large-write", state: "output-available", input: { op: "write", path: "packages/checkout/tests/coupon-kind.test.ts" }, output: "ok" },
     { type: "tool-tasks", toolCallId: "large-task", state: "output-available", input: { op: "update", id: "t4", status: "done" }, output: "ok" },
@@ -6134,7 +6134,7 @@ const SECRET_TOOL_RUN_PART: UIMessage['parts'][number] = {
   toolCallId: 'secret-call',
   state: 'output-available',
   input: {
-    runtime: 'sandbox',
+    runtime: 'computer',
     command: `curl -s https://api.stripe.example/v1/charges --token=${ASSEMBLED_TOKEN}`,
     headers: { authorization: 'Bearer sk-live-REDACTME' },
     nested: { apiKey: 'sk-live-REDACTME', keep: 'visible' },
@@ -6152,7 +6152,7 @@ const SECRET_ERROR_PART: UIMessage['parts'][number] = {
   type: 'tool-run',
   toolCallId: 'secret-error',
   state: 'output-error',
-  input: { runtime: 'sandbox', command: `deploy --token=${ASSEMBLED_TOKEN}` },
+  input: { runtime: 'computer', command: `deploy --token=${ASSEMBLED_TOKEN}` },
   errorText: `deploy rejected the credential ${ASSEMBLED_TOKEN}`,
 };
 
@@ -6204,7 +6204,7 @@ const STREAMING_MESSAGES: UIMessage[] = [
     id: "st-tool", role: "assistant",
     parts: [
       { type: "text", state: "done", text: "Running the regression suite before I touch anything else." },
-      { type: "tool-run", toolCallId: "st3", state: "input-available", input: { runtime: "sandbox", command: "bun test packages/checkout" } },
+      { type: "tool-run", toolCallId: "st3", state: "input-available", input: { runtime: "computer", command: "bun test packages/checkout" } },
     ],
   }),
   msg({

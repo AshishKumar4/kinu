@@ -38,7 +38,7 @@ async function hiredServer() {
     if (asked(run).at(-1)?.includes(START) !== true) return chatCompletion(run, 'Noted.');
 
     return toolAnswers(run).length === 0
-      ? toolCallCompletion(run, { tool: 'shell', args: { command: 'node server.js', runtime: 'sandbox' } }, 'call_server')
+      ? toolCallCompletion(run, { tool: 'shell', args: { command: 'node server.js', runtime: 'computer' } }, 'call_server')
       : chatCompletion(run, 'The server is running in the background.');
   });
 
@@ -153,7 +153,7 @@ test("the owner's Stop ends a call still in its foreground, on the box too", asy
   const killed: string[] = [];
 
   const gateway = stubAiBinding((run) => (toolAnswers(run).length === 0
-    ? toolCallCompletion(run, { tool: 'shell', args: { command: 'node server.js', runtime: 'sandbox' } }, 'call_server')
+    ? toolCallCompletion(run, { tool: 'shell', args: { command: 'node server.js', runtime: 'computer' } }, 'call_server')
     : chatCompletion(run, 'Stopped.')));
 
   const workspace = gatewayWorkspace(gateway, { container: true, box: () => serverBox(clock, killed), jobClock: clock, previewHostSuffix: 'preview.test' });

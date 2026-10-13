@@ -38,7 +38,7 @@ inductive Capability where
   deriving DecidableEq, Repr
 
 inductive ExecutorKind where
-  | workspace | sandbox | device | parent
+  | workspace | computer | device | parent
   deriving DecidableEq, Repr
 
 /-- What a PATH probe can settle: the capabilities of `TOOLCHAIN_PROBE`. The
@@ -59,14 +59,14 @@ structure NimbusConfig where
 inductive Executor where
   | inline (toolchain : List Capability)
   | nimbusWorkspace (toolchain : List Capability) (config : NimbusConfig)
-  | sandbox
+  | computer
   | device (present : List Capability)
   | parent
 
 def Executor.kind : Executor → ExecutorKind
   | .inline _ => .workspace
   | .nimbusWorkspace _ _ => .workspace
-  | .sandbox => .sandbox
+  | .computer => .computer
   | .device _ => .device
   | .parent => .parent
 
@@ -79,7 +79,7 @@ def nimbusCaps (config : NimbusConfig) : List Capability :=
     [.processSpawn, .processLong, .processSignal] ++
     (if config.catalog then [.python, .nativeBinary] else [])
 
-def sandboxCaps : List Capability :=
+def computerCaps : List Capability :=
   [.javascript, .typescript, .nativeBinary, .shell, .npm, .git, .fsOwned,
    .netOutbound, .netInbound, .processSpawn, .processLong]
 
@@ -91,7 +91,7 @@ def Executor.caps : Executor → List Capability
   | .inline toolchain => inlineCaps toolchain
   | .nimbusWorkspace toolchain config =>
     inlineCaps toolchain ++ (nimbusCaps config).filter (· != .fsOwned) ++ [.fsShared]
-  | .sandbox => sandboxCaps
+  | .computer => computerCaps
   | .device present => deviceCaps present
   | .parent => [.shell, .fsShared]
 
@@ -105,13 +105,13 @@ def Executor.Probed : Executor → Prop
 /-- The kinds whose executor shares the workspace's files. -/
 def ExecutorKind.sharesFiles : ExecutorKind → Bool
   | .workspace | .parent => true
-  | .sandbox | .device => false
+  | .computer | .device => false
 
 private theorem not_probed_of (cs : List Capability) (h : FromProbe cs) (c : Capability)
     (hc : c ∉ probed) : c ∉ cs := fun hm => hc (h c hm)
 
 /-- **The kind says who owns the files.** A workspace or parent executor claims
-    shared files and not owned ones; a sandbox or device executor claims owned
+    shared files and not owned ones; a computer or device executor claims owned
     files and not shared ones. -/
 theorem the_kind_says_who_owns_the_files (e : Executor) (h : e.Probed) :
     (Capability.fsShared ∈ e.caps ↔ e.kind.sharesFiles = true) ∧
@@ -127,7 +127,7 @@ theorem the_kind_says_who_owns_the_files (e : Executor) (h : e.Probed) :
   | nimbusWorkspace t n =>
     have := ho t h
     simp [Executor.caps, Executor.kind, ExecutorKind.sharesFiles, inlineCaps, this, List.mem_filter]
-  | sandbox => decide
+  | computer => decide
   | device p =>
     have := hs p h
     simp [Executor.caps, Executor.kind, ExecutorKind.sharesFiles, deviceCaps, this]
@@ -148,7 +148,7 @@ theorem no_executor_claims_docker_or_gpu (e : Executor) (h : e.Probed) :
   | inline t => simp [Executor.caps, inlineCaps, hd t h, hg t h]
   | nimbusWorkspace t n =>
     simp [Executor.caps, inlineCaps, hd t h, hg t h, List.mem_filter, (hn n).1, (hn n).2]
-  | sandbox => decide
+  | computer => decide
   | device p => simp [Executor.caps, deviceCaps, hd p h, hg p h]
   | parent => decide
 

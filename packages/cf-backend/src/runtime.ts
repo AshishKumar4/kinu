@@ -221,7 +221,7 @@ export interface CFRuntimeHooks {
   slateBuild?: (slate: string) => Promise<SlateCallResult>;
   workspaceObserver?: WriteObserver;
   liveReadsMoved?: (reads: readonly LiveRead[]) => void;
-  /** A sandbox port was exposed or withdrawn, which can change the job that serves it; awaited by the call. */
+  /** A computer port was exposed or withdrawn, which can change the job that serves it; awaited by the call. */
   servingMoved: () => Promise<void>;
   readonly boxUse: WorkspaceBoxUse;
   /** Where non-turn model seams (judge, fast tier, reflection, embedder) report cost; turn spend arrives
@@ -416,8 +416,8 @@ export function createCFRuntime(
         const [accountSize] = await Promise.allSettled([ownerSandboxSize(env, actor)]);
 
         if (accountSize.status === 'fulfilled') await sdk.useDefaultSize(accountSize.value);
-        else diagnostics.failure('sandbox.account_size_unread', toKinuError({
-          doing: "reading the owner's sandbox size", cause: accountSize.reason, otherwise: 'unavailable',
+        else diagnostics.failure('computer.account_size_unread', toKinuError({
+          doing: "reading the owner's computer size", cause: accountSize.reason, otherwise: 'unavailable',
         }), { sandboxId });
       },
       // The edge proves a preview hostname from `AUTH_KV` without creating the per-name DO.
@@ -436,13 +436,13 @@ export function createCFRuntime(
         sizes: SANDBOX_SIZES,
         shells: machineShells,
       }));
-      diagnostics.event('sandbox.executor_registered', {
+      diagnostics.event('computer.executor_registered', {
         sandboxId,
         previews: previewSuffix ?? '',
       });
     } catch (err) {
-      diagnostics.failure('sandbox.executor_registration_failed', toKinuError({
-        doing: 'registering the sandbox executor',
+      diagnostics.failure('computer.executor_registration_failed', toKinuError({
+        doing: 'registering the computer executor',
         cause: err,
         otherwise: 'unavailable',
       }), { sandboxId });

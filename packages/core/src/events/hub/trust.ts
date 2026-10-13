@@ -28,7 +28,7 @@ export function deriveEventTrust(d: IngressDescriptor): TrustLevel {
     case 'timer_alarm':
       return d.trigger_creator_trust;
 
-    case 'sandbox_cb':
+    case 'computer_cb':
       // Capped at the launching head's trust so sandbox output cannot launder to `self`.
       return meetTrust('self', d.launching_head_trust);
 

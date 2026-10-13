@@ -10,15 +10,15 @@ import {
 import { ORCHESTRATOR_RPC_SURFACE } from '../src/rpc-surface';
 import { agentSql, hostedAgain, hostedMainActor, hostedSubordinateHarness, orchestratorHarness, workspaceMainActor } from './helpers/actor-harness';
 
-/** A force-push reaches out, so the agent's own `sandbox` does not exempt it. */
+/** A force-push reaches out, so the agent's own `computer` does not exempt it. */
 const GATED = 'git push --force origin main';
 
 const GATED_RULE = 'git-force-push';
 
 const ROOT_GRANTS: ApprovalGrant[] = [
-  { rule: 'rm-recursive', executor: 'sandbox' },
-  { rule: GATED_RULE, executor: 'sandbox' },
-  { rule: 'egress-secret:stripe', executor: 'sandbox' },
+  { rule: 'rm-recursive', executor: 'computer' },
+  { rule: GATED_RULE, executor: 'computer' },
+  { rule: 'egress-secret:stripe', executor: 'computer' },
 ];
 
 describe('reachability of the root policy read', () => {
@@ -141,7 +141,7 @@ describe('a facet holds the root set, or a subset of it', () => {
         return `ran:${command}`;
       }),
       (error) => error.message,
-      { name: 'sandbox', filesOwner: 'agent' },
+      { name: 'computer', filesOwner: 'agent' },
       { policy: createInheritedApprovalPolicy(probe.deps) },
     );
 
@@ -152,25 +152,25 @@ describe('a facet holds the root set, or a subset of it', () => {
 
   test('a facet cannot hold a grant its root lacks', async () => {
     const policy = createInheritedApprovalPolicy(source('strict', [
-      { rule: 'egress-secret:prod-db', executor: 'sandbox' },
+      { rule: 'egress-secret:prod-db', executor: 'computer' },
     ]).deps);
 
     await policy.resolve?.();
-    expect(policy.granted?.({ rule: 'egress-secret:prod-db', executor: 'sandbox' })).toBe(false);
+    expect(policy.granted?.({ rule: 'egress-secret:prod-db', executor: 'computer' })).toBe(false);
     expect(grantsAreSubset(
-      resolveInheritedGrants({ root: ROOT_GRANTS, own: [{ rule: 'egress-secret:prod-db', executor: 'sandbox' }] }),
+      resolveInheritedGrants({ root: ROOT_GRANTS, own: [{ rule: 'egress-secret:prod-db', executor: 'computer' }] }),
       ROOT_GRANTS,
     )).toBe(true);
   });
 
   test('a facet that narrowed itself keeps only the narrowing', async () => {
     const policy = createInheritedApprovalPolicy(source('strict', [
-      { rule: 'rm-recursive', executor: 'sandbox' },
+      { rule: 'rm-recursive', executor: 'computer' },
     ]).deps);
 
     await policy.resolve?.();
-    expect(policy.granted?.({ rule: 'rm-recursive', executor: 'sandbox' })).toBe(true);
-    expect(policy.granted?.({ rule: 'egress-secret:stripe', executor: 'sandbox' })).toBe(false);
+    expect(policy.granted?.({ rule: 'rm-recursive', executor: 'computer' })).toBe(true);
+    expect(policy.granted?.({ rule: 'egress-secret:stripe', executor: 'computer' })).toBe(false);
   });
 
   test('the root\'s MODE applies too, so a facet does not silently harden to strict', async () => {
@@ -191,6 +191,6 @@ describe('a facet holds the root set, or a subset of it', () => {
     });
 
     expect(policy.mode()).toBe('strict');
-    expect(policy.granted?.({ rule: 'rm-recursive', executor: 'sandbox' })).toBe(false);
+    expect(policy.granted?.({ rule: 'rm-recursive', executor: 'computer' })).toBe(false);
   });
 });

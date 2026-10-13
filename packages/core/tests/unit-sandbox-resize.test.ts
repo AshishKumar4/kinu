@@ -1,4 +1,4 @@
-// `sandbox.resize` as the model meets it (DEVBOX-DECISIONS D50): the declaration and the prompt line generated from
+// `computer.resize` as the model meets it (DEVBOX-DECISIONS D50): the declaration and the prompt line generated from
 // the host's size table, and each answer the tool gives, through the real executor, router and prompt renderer.
 import { describe, expect, test } from 'bun:test';
 import { createSandboxExecutor, type SandboxHandle, type SandboxResize } from '../src/execution/sandbox';
@@ -46,7 +46,7 @@ async function resize(provider: ExecutorProvider, size: string): Promise<ReturnT
   return await tool.execute(size);
 }
 
-describe('what sandbox.resize answers', () => {
+describe('what computer.resize answers', () => {
   const CASES: ReadonlyArray<{ name: string; answer: SandboxResize }> = [
     { name: 'a sandbox that is not running only records the size', answer: { kind: 'recorded', size: 'large' } },
     { name: 'a sandbox already at the size is left alone', answer: { kind: 'unchanged', size: 'large' } },

@@ -1,5 +1,5 @@
 import { exists, readText, type Awaitable, type VFS, type VfsRevision, writeText } from '@nimbus-sh/core/vfs/vfs.js';
-// The workspace mount table: /pc and /sandbox extend one view (#36/#142/#143); an absent mount
+// The workspace mount table: /pc and /computer extend one view (#36/#142/#143); an absent mount
 // is stated as absent, and device consent is still enforced on mounted paths. The workspace shell
 // serves the same table (#22).
 import { Database } from 'bun:sqlite';
@@ -106,11 +106,11 @@ describe('the workspace plane mount table', () => {
 		expect((await mounted.stat('/pc/home/dev/report.txt'))?.type).toBe('file');
 	});
 
-	test('/sandbox lists the container tree', async () => {
+	test('/computer lists the container tree', async () => {
 		const container = fakeTree({ '/workspace/build.log': 'ok' });
-		const mounted = withMountTable(fakeTree({}), [mountOf('sandbox', container)]);
+		const mounted = withMountTable(fakeTree({}), [mountOf('computer', container)]);
 
-		expect((await mounted.readdir('/sandbox/workspace')).map(({ name }) => name)).toEqual(['build.log']);
+		expect((await mounted.readdir('/computer/workspace')).map(({ name }) => name)).toEqual(['build.log']);
 	});
 
 	test('reads and writes under a live mount cross to the owning machine', async () => {
@@ -281,11 +281,11 @@ describe('the workspace plane mount table', () => {
 
 		const mounted = withMountTable(base, [
 			mountOf('pc', fakeTree({ '/home/dev/a.txt': 'x' })),
-			mountOf('sandbox', null, 'this workspace has no computer bound'),
+			mountOf('computer', null, 'this workspace has no computer bound'),
 		]);
 
 		expect((await mounted.readdir('/')).map(({ name }) => name)).toEqual(expect.arrayContaining(['notes.md', 'memory', 'pc']));
-		expect((await mounted.readdir('/')).map(({ name }) => name)).not.toContain('sandbox');
+		expect((await mounted.readdir('/')).map(({ name }) => name)).not.toContain('computer');
 		// Snapshots, index services and the real shell use the base plane; none enumerate a VFS-only mount.
 		expect((await mounted.readdir('')).map(({ name }) => name)).not.toContain('pc');
 		expect((await base.readdir('/')).map(({ name }) => name)).not.toContain('pc');
@@ -337,7 +337,7 @@ describe('the workspace plane mount table', () => {
 		const mounts = standardMounts((name) => {
 			if (name === "device") return { files: deviceTree, isAvailable: () => false };
 
-			if (name === "sandbox") return { files: sandboxFiles, isAvailable: () => false };
+			if (name === "computer") return { files: sandboxFiles, isAvailable: () => false };
 
 			return undefined;
 		});
@@ -348,7 +348,7 @@ describe('the workspace plane mount table', () => {
 		await expect(Promise.resolve(mounted.readdir('/pc')).then(entries => entries.map(({ name }) => name))).rejects.toMatchObject({ code: 'ENXIO' });
 		await expect(Promise.resolve(mounted.readdir('/pc')).then(entries => entries.map(({ name }) => name))).rejects.toMatchObject({ code: 'ENXIO' });
 		// A container is a binding: it provisions on first touch.
-		expect(await readText(mounted, '/sandbox/workspace/b.txt')).toBe('y');
+		expect(await readText(mounted, '/computer/workspace/b.txt')).toBe('y');
 	});
 });
 
@@ -420,12 +420,12 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 
 		const mounted = withMountTable(fakeTree({}), [
 			mountOf('pc', pc),
-			mountOf('sandbox', sandbox),
+			mountOf('computer', sandbox),
 		]);
 
 		await expect(mounted.rename(
 			'/pc/home/dev/report.txt',
-			'/sandbox/workspace/report.txt',
+			'/computer/workspace/report.txt',
 		)).rejects.toMatchObject({ code: 'EXDEV' });
 		expect(await readText(pc, '/home/dev/report.txt')).toBe('device copy');
 		expect(await readText(sandbox, '/workspace/report.txt')).toBe('container copy');
@@ -600,9 +600,9 @@ describe('a live mount point is a directory of this plane', () => {
 		const container = fakeTree({ '/workspace/build.log': 'ok' });
 		// A structural mount point is a directory even if its backend cannot report root metadata.
 		const blindRoot = { ...container, stat: async (path: string) => path === '/' ? null : container.stat(path) };
-		const mounted = withMountTable(fakeTree({}), [mountOf('sandbox', blindRoot)]);
+		const mounted = withMountTable(fakeTree({}), [mountOf('computer', blindRoot)]);
 
-		expect(await mounted.stat('/sandbox')).toMatchObject({ type: 'directory' });
+		expect(await mounted.stat('/computer')).toMatchObject({ type: 'directory' });
 	});
 
 });
@@ -697,7 +697,7 @@ describe('a device\'s own write report, on a watched plane', () => {
 });
 
 describe('the workspace shell serves the same mount table (#22)', () => {
-	/** A workspace whose session user holds `/shared` (a Drive), `/sandbox` (any ranged tree) and an absent `/pc`. */
+	/** A workspace whose session user holds `/shared` (a Drive), `/computer` (any ranged tree) and an absent `/pc`. */
 	async function workspaceWithMounts() {
 		const bundle = createWorkspaceBundle(new Database(':memory:'));
 		const store = fakeMossaic();
@@ -706,7 +706,7 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 		await writeText(drive, '/notes.md', 'from the Drive\n');
 		await container.mkdir('/workspace', { recursive: true });
 		shared(bundle, [
-			mountOf('shared', drive), mountOf('sandbox', container), mountOf('pc', null, 'no device connected'),
+			mountOf('shared', drive), mountOf('computer', container), mountOf('pc', null, 'no device connected'),
 			{ ...mountOf('context', fakeTree({ 'notes.md': 'history' })), storeView: true },
 		]);
 
@@ -717,7 +717,7 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 		const { shell } = await workspaceWithMounts();
 
 		const listed = await shell.exec('ls /');
-		expect(listed.stdout.split(/\s+/)).toEqual(expect.arrayContaining(['home', 'shared', 'sandbox']));
+		expect(listed.stdout.split(/\s+/)).toEqual(expect.arrayContaining(['home', 'shared', 'computer']));
 		expect(listed.stdout).not.toContain('pc');
 		expect(await shell.exec('cat /shared/notes.md')).toMatchObject({ stdout: 'from the Drive\n', exitCode: 0 });
 	});
@@ -731,7 +731,7 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 	});
 
 	/** Plain `df` leaves these out: neither Drive's client nor the sandbox executor answers a disk-usage call. */
-	const SIZELESS = ['/sandbox', '/shared'];
+	const SIZELESS = ['/computer', '/shared'];
 
 	// A view over the root's store is sized as Linux sizes a bind mount: by the filesystem behind it.
 	test('df sizes the root and its views alike; df -a, mount and /proc/mounts add the rest, and no absent mount', async () => {
@@ -783,7 +783,7 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 		expect((await agent.shell.exec('ls /pc')).stdout.split(/\s+/).filter(Boolean)).toEqual(['laptop', 'studio']);
 	});
 
-	for (const name of ['pc', 'sandbox', 'shared']) {
+	for (const name of ['pc', 'computer', 'shared']) {
 		test(`a read under /${name} asks its backend only for the file, from the shell and the file plane alike (m1960)`, async () => {
 			const bundle = createWorkspaceBundle(new Database(':memory:'));
 			const calls: string[] = [];
@@ -881,7 +881,7 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 	test('mv between two mounts copies across, since each mount is its own device', async () => {
 		const { shell, drive, container } = await workspaceWithMounts();
 
-		expect(await shell.exec('mv /shared/notes.md /sandbox/workspace/notes.md')).toMatchObject({ exitCode: 0 });
+		expect(await shell.exec('mv /shared/notes.md /computer/workspace/notes.md')).toMatchObject({ exitCode: 0 });
 		expect(await exists(drive, '/notes.md')).toBe(false);
 		expect(await readText(container, '/workspace/notes.md')).toBe('from the Drive\n');
 	});

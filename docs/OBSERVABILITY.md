@@ -544,7 +544,7 @@ paths and, through a substituted URL or a stored header, secrets. The chain goes
 ## `ReservedLogField`: the compile-time ban
 
 ```ts
-log.event('shell.escalated', { runtime: 'sandbox', attempts: 2 });   // compiles
+log.event('shell.escalated', { runtime: 'computer', attempts: 2 });   // compiles
 log.event('shell.escalated', { soul: prompt });                      // does NOT
 ```
 
@@ -573,7 +573,7 @@ needs no log call: whoever catches it classifies it. Each call writes one JSON
 line, which reaches Workers Logs on workerd and the daemon journal on the CLI.
 
 ```json
-{"event":"shell.escalation_refused","code":"unavailable","cause":"runtime_not_provisioned","fields":{"runtime":"sandbox"}}
+{"event":"shell.escalation_refused","code":"unavailable","cause":"runtime_not_provisioned","fields":{"runtime":"computer"}}
 ```
 
 `createLineLogger` builds the line (`obs/log.ts:206`). `createConsoleLogger`
@@ -734,12 +734,12 @@ the same typed failures through the SDK.
    returned `NOT_CONFIGURED` prose, so escalation recorded `ok` and the census
    missed it.
 2. A missing `device` had the same invisible shape.
-3. Sandbox admission refusals that survived retries became `io`, so capacity
+3. Computer admission refusals that survived retries became `io`, so capacity
    looked like a tool defect.
 4. The misevolution veto returned `{ ok: false, error }` without `reason`, so
    the census filed a working gate as `broke`.
 
-`nimbus.listPorts` without a port API, `sandbox.exists` and `device.exists` on a
+`nimbus.listPorts` without a port API, `computer.exists` and `device.exists` on a
 failed call, and `workspace.readdir` on failure each refuse with a class
 instead of returning an empty or false value.
 
@@ -761,7 +761,7 @@ The Executors terminal uses the structural command result and forwards its
   stay values. The caller may handle them. They do not fail the enclosing
   codemode invocation unless its program raises an unhandled exception.
 - `ExecutorProvider` ports. Typed `{ supported, reason }` values differ from
-  parsed strings. `sandbox.listExposedPorts` and `nimbus.listExposedPorts`
+  parsed strings. `computer.listExposedPorts` and `nimbus.listExposedPorts`
   still return `[]` for an absent handle or preview host.
 - `console.*` outside the logger. Regex on 2026-08-24: 496 matches in
   `packages/cli/src`, which is terminal output. Regex on 2026-09-22: 493 in

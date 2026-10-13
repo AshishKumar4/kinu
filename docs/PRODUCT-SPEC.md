@@ -312,7 +312,7 @@ None of this forms one serializable prompt file. Each mutable runtime object is 
 | `.kinu/compaction/<session>/<range>.md` | Recall text for a compacted range, cited by SQL archive records. | A writable projection of the current working conversation. |
 | Tool-output, attachment and event-content spill areas | Large content retained outside a prompt-sized response. | Permission to replace canonical event outcomes or claim every byte was included in the prompt. |
 | `AGENTS.md` and skill files | Instruction source whose system placement follows approved content identity. | That file write access automatically grants trusted instruction authority. |
-| `/pc`, `/sandbox` | Mounted views of available external machines. | That the workspace shell runs on those machines or shares their native paths. |
+| `/pc`, `/computer` | Mounted views of available external machines. | That the workspace shell runs on those machines or shares their native paths. |
 
 ### 7.3 What the shared store required
 
@@ -356,7 +356,7 @@ A hosted code program receives capability namespaces, not the trusted Worker's r
 |---|---|
 | `tools.*` | Admitted native and eligible crafted tools. MCP tools enter through the admitted tool surface, not a blanket account client. |
 | `workspace.*` | Canonical workspace files, shell/process and supported workspace operations. |
-| `sandbox.*`, `device.*`, `parent.*` | Actor-available execution adapters. Missing environments are not simulated. |
+| `computer.*`, `device.*`, `parent.*` | Actor-available execution adapters. Missing environments are not simulated. |
 | `agents.*`, `memory.*`, `tasks.*`, `web.*` | Their existing dependency-gated dispatch paths. |
 | Root/assignment control namespaces | Planning/release/report operations only where the actor's composition supplies them. A namespace named in a comment is not proof of availability. |
 | `state.*` / `env.state` | Durable actor-private JSON key/value state: get, set, delete and list. All four are Plan-allowed. |

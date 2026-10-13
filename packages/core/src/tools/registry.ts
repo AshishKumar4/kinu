@@ -147,7 +147,7 @@ export interface ToolSurfaceNarrowing {
 /**
  * `allowedTools` is the resolver's merged list; `undefined` allows everything.
  * A declared namespace is exposed when any capability reaching it is allowed; an
- * undeclared one (e.g. `pc`, `sandbox`) is exposed when `eval` is.
+ * undeclared one (e.g. `pc`, `computer`) is exposed when `eval` is.
  */
 export function narrowToolSurface(
   allowedTools: readonly string[] | undefined,
@@ -230,7 +230,7 @@ export function memoryToolSpec(hasFacts: boolean, hasAccount = false): BuiltinTo
 export const BUILTIN_TOOL_SPECS = {
   eval: {
     name: 'eval',
-    summary: 'Run a JavaScript program that can call your tools and the sandbox namespaces.',
+    summary: 'Run a JavaScript program that can call your tools and each environment\'s namespace.',
     notes: [
       'Write it like a Node script: top-level statements, `await` anywhere, and `return` (or a trailing expression) hands back the result. Type annotations do not parse.',
       '`tools.<name>(input)` calls a native tool with the input its schema declares; a tool saved with `workspace.createTool` joins `tools` from the next program, declared in dynamic_context.',

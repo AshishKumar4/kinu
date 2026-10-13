@@ -87,7 +87,7 @@ describe("writeExecutorFileOp", () => {
     const { deps, written } = makeDeps();
     const bin = new Uint8Array([0x89, 0x50, 0x00, 0xff, 0xfe]);
     // Each environment gets the path in its own namespace: nothing prefixed or stripped.
-    expect(await writeExecutorFileOp(deps, "sandbox", "/workspace/logo.png", { bytes: bin })).toMatchObject({ ok: true });
+    expect(await writeExecutorFileOp(deps, "computer", "/workspace/logo.png", { bytes: bin })).toMatchObject({ ok: true });
     expect(written.get("/workspace/logo.png")).toEqual(bin);
 
     expect(await writeExecutorFileOp(deps, "nimbus", "/home/main/a.bin", { bytes: bin })).toMatchObject({ ok: true });
@@ -117,7 +117,7 @@ describe("writeExecutorFileOp", () => {
       error: "the sandbox container is not running",
     });
 
-    const result = await writeExecutorFileOp(deps, "sandbox", "/workspace/x", { bytes: new TextEncoder().encode("y") });
+    const result = await writeExecutorFileOp(deps, "computer", "/workspace/x", { bytes: new TextEncoder().encode("y") });
     expect(result).toMatchObject({ error: expect.stringContaining("not running") });
   });
 

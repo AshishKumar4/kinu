@@ -535,9 +535,9 @@ test('Changes opens on a connected machine, and never reads a sandbox that is as
       await page.click('[data-add-idle-sandbox]');
       await page.evaluate(() => { window.dispatchEvent(new Event('focus')); });
       await page.waitForFunction(() => (document.documentElement.dataset.galleryDiffReads ?? '').split(' ').filter((source) => source === 'device').length > 1);
-      expect(await reads()).not.toContain('sandbox');
+      expect(await reads()).not.toContain('computer');
       await page.click('[data-changes] [data-source-menu]');
-      expect(await page.$$eval('[role="menuitemradio"]', (items, label) => items.map((item) => item.textContent ?? '').some((text) => text.includes(label)), executorLabel('sandbox'))).toBe(false);
+      expect(await page.$$eval('[role="menuitemradio"]', (items, label) => items.map((item) => item.textContent ?? '').some((text) => text.includes(label)), executorLabel('computer'))).toBe(false);
     } finally { await page.close(); }
   });
 });

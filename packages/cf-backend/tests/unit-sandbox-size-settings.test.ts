@@ -1,6 +1,6 @@
 // The sandbox size in Kinu (DEVBOX-DECISIONS D50): the owner's account default through the user config route, which
 // takes only a size the table names, the words the Environment card and User settings show for it, and
-// `sandbox.resize` through the adapter.
+// `computer.resize` through the adapter.
 import './helpers/ui-module-globals';
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { present } from '@kinu.run/test-utils';
@@ -98,12 +98,12 @@ describe('what the owner reads', () => {
     expect(note).toContain('[permanent -> refuse] no image to start');
   });
 
-  test("User settings has a section of its own for the computer's size, at the #sandbox link", () => {
-    expect(settingsSection('#sandbox')).toBe('sandbox');
+  test("User settings has a section of its own for the computer's size, at the #computer link", () => {
+    expect(settingsSection('#computer')).toBe('computer');
   });
 });
 
-describe('sandbox.resize through the adapter', () => {
+describe('computer.resize through the adapter', () => {
   test('configures the box, which pushes the account default, then resizes it without attaching it', async () => {
     const steps: string[] = [];
 
@@ -143,7 +143,7 @@ describe('sandbox.resize through the adapter', () => {
       refused = renderThrownChain({ cause });
     }
 
-    expect({ asked, refusal: refused?.includes(refusal), resize: refused?.includes('sandbox.resize('), attachNow: refused?.includes('attachNow') })
+    expect({ asked, refusal: refused?.includes(refusal), resize: refused?.includes('computer.resize('), attachNow: refused?.includes('attachNow') })
       .toEqual({ asked: 1, refusal: true, resize: true, attachNow: false });
   });
 
@@ -178,7 +178,7 @@ describe('what the Environment card reads', () => {
 
     try {
       expect((await sizeRoute(routeEnv(user.userDO), 'PUT', 'small')).status).toBe(200);
-      expect(await agent.getSandboxSize()).toEqual({ account: 'small', chosen: null, size: 'small', running: null, startRefused: null });
+      expect(await agent.getComputerSize()).toEqual({ account: 'small', chosen: null, size: 'small', running: null, startRefused: null });
     } finally {
       user.close();
     }

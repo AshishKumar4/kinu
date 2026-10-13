@@ -19,7 +19,7 @@ import {
 } from './workspace-access';
 import type { CloudWorkspaceRegistry } from './workspace-create';
 import type { ObjectNamespace } from '@kinu.run/core';
-import { err, isWorkspaceName, json, safeJson, safeJsonParse } from '@kinu.run/core';
+import { displayNameProblem, err, isWorkspaceName, json, safeJson, safeJsonParse } from '@kinu.run/core';
 import { idempotent } from '@nimbus-sh/fabric/do-calls.js';
 import { logDoCallRetry } from '../obs/do-call-retry';
 import type { UserCaller } from '@kinu.run/core';
@@ -34,7 +34,7 @@ const CheckpointSchema = v.array(v.object({ key: v.string(), sealed: v.string() 
 /** Every UserDO call `/api/user/*` makes: one gate holds one stub. */
 export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   UserDO,
-  'ensureProfile' | 'userMcp_warmConnections' | 'getProfile' | 'getProfileCatalog' | 'putProfileCatalog'
+  'ensureProfile' | 'userMcp_warmConnections' | 'getProfile' | 'setDisplayName' | 'getProfileCatalog' | 'putProfileCatalog'
   | 'fetch' | 'listWorkspaces' | 'touchWorkspace' | 'removeWorkspace' | 'hasWorkspace'
   | 'listDevices' | 'issueDeviceJoin' | 'acknowledgeUnstoppedDevice' | 'revokeDevice' | 'renameDevice' | 'listDeviceConsents'
   | 'setDeviceTier' | 'revokeDeviceConsent'
@@ -169,13 +169,27 @@ userRoutes.use('/api/user/*', ownerGate(), async (c, next) => {
   await next();
 });
 
-userRoutes.get('/api/user/profile', async (c) => {
-  const profile = await c.get('stub').getProfile(c.get('owner'));
-  // Uses the same allowlist as `authorizeAdmin` so the nav link and gate agree. Not authorization:
-  // Access covers only `/control*` and `/api/control*`, so the gate still checks both halves.
-  const controlPlane = isControlPlaneOperator(c.env, c.get('identity'));
+/** The profile as every profile route answers it: the account's own, plus whether to show the control-plane link.
+ *  Uses the same allowlist as `authorizeAdmin` so the nav link and gate agree. Not authorization: Access covers
+ *  only `/control*` and `/api/control*`, so the gate still checks both halves. */
+function accountProfile(c: UserContext, profile: Awaited<ReturnType<UserRoutesAuthority['getProfile']>>) {
+  return json({ body: profile === null ? null : { ...profile, controlPlane: isControlPlaneOperator(c.env, c.get('identity')) } });
+}
 
-  return json({ body: profile === null ? null : { ...profile, controlPlane } });
+const ProfilePatch = v.object({ displayName: v.string() });
+
+userRoutes.get('/api/user/profile', async (c) => accountProfile(c, await c.get('stub').getProfile(c.get('owner'))));
+
+userRoutes.patch('/api/user/profile', async (c) => {
+  const body = await safeJson(c.req.raw, ProfilePatch);
+
+  if (!body) return err(400, 'Body must be { displayName }');
+
+  const problem = displayNameProblem(body.displayName);
+
+  if (problem !== null) return err(400, problem);
+
+  return accountProfile(c, await c.get('stub').setDisplayName(c.get('owner'), body.displayName));
 });
 
 userRoutes.get('/api/user/profile-catalog', async (c) => json({ body: await c.get('stub').getProfileCatalog(c.get('owner')) }));

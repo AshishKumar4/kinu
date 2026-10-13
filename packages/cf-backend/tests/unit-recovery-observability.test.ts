@@ -228,8 +228,8 @@ describe('a rest ask', () => {
 
     expect({ status: answer.status, signals: delivered.length }).toEqual({ status: 'queued', signals: 1 });
     expect(text).toContain('npm run dev');
-    expect(text).toContain("sandbox.rest('now')");
-    expect(text).toContain("sandbox.rest('keep')");
+    expect(text).toContain("computer.rest('now')");
+    expect(text).toContain("computer.rest('keep')");
   });
 });
 

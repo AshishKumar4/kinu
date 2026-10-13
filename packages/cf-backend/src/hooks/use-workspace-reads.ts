@@ -443,7 +443,7 @@ export function useWorkspaceReads(link: ChatLink) {
   const refreshExposedPorts = useCallback(async () => {
     const generation = ++exposedPortsRefreshGeneration.current;
 
-    const results = await Promise.all(["workspace", "sandbox"].map(async (executor) => {
+    const results = await Promise.all(["workspace", "computer"].map(async (executor) => {
       try {
         const result = await rpc<ExposedPortList>("getExposedPorts", [executor]);
 

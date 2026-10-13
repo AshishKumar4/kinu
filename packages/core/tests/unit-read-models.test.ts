@@ -7,11 +7,13 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { jsonSchema, tool, type ToolSet } from 'ai';
 
-import { seedTranscriptEntry, present, testActorHandle } from '@kinu.run/test-utils';
+import { createMemoryVfs, seedTranscriptEntry, present, testActorHandle } from '@kinu.run/test-utils';
 import {
   createTestActor, createTestRuntime, createWorkspaceBundle, makeExecRaw, makeSql, makeSqlExec,
 } from './helpers';
 import { workspaceSoul, writeWorkspaceSoul } from '../src/vfs/workspace-planes';
+import { MOUNT_EXECUTORS, standardMounts, workspaceFilePlane } from '../src/vfs/mounts';
+import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { createTestActors } from '@kinu.run/test-utils';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store';
@@ -539,6 +541,26 @@ describe('workspace change-set', () => {
 });
 
 describe('executor file plane', () => {
+  /** A machine's own file plane, empty, which records each call: a call to a computer starts it. */
+  function machinePlane(machine: string, asked: string[]): VFS {
+    const { vfs } = createMemoryVfs();
+
+    const heard = async <T>(op: string, path: string, call: () => T | Promise<T>): Promise<T> => {
+      asked.push(`${machine}.${op} ${path}`);
+
+      return await call();
+    };
+
+    return {
+      readFile: async (path) => heard('readFile', path, () => vfs.readFile(path)),
+      writeFile: async (path, data) => heard('writeFile', path, () => vfs.writeFile(path, data)),
+      readdir: async (path) => heard('readdir', path, () => vfs.readdir(path)),
+      stat: async (path, options) => heard('stat', path, () => vfs.stat(path, options)),
+      unlink: async (path) => heard('unlink', path, () => vfs.unlink(path)),
+      mkdir: async (path, options) => heard('mkdir', path, () => vfs.mkdir(path, options)),
+    };
+  }
+
   /** Includes where the executor starts, which only the environment knows. */
   function router(files?: VFS) {
     const provider = files === undefined
@@ -588,6 +610,19 @@ describe('executor file plane', () => {
     const up = await getExecutorFiles(router(rt.storage.vfs), 'workspace', '/home/main/..');
     expect(up.path).toBe('/home');
     expect(up.entries?.map((e) => e.name)).toContain('main');
+    db.close();
+  });
+
+  test("the root lists each machine's mount point as a directory without asking that machine, which would start it", async () => {
+    const db = new Database(':memory:');
+    const asked: string[] = [];
+    const machines = new Map(Object.values(MOUNT_EXECUTORS).map((machine) => [machine, { isAvailable: () => true, files: machinePlane(machine, asked) }]));
+    const { files } = workspaceFilePlane(createWorkspaceBundle(db), { mounts: standardMounts((name) => machines.get(name)), principal: {}, home: WORKSPACE_ROOT });
+
+    const listed = await getExecutorFiles(router(files), 'workspace', '/');
+
+    expect(asked).toEqual([]);
+    expect(listed.entries).toEqual(expect.arrayContaining(Object.keys(MOUNT_EXECUTORS).map((mount) => ({ name: mount.slice(1), type: 'dir' }))));
     db.close();
   });
 

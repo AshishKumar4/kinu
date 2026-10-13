@@ -53,7 +53,7 @@ const INSTRUCTIONS = '<workspace_instructions>\nFiles read from the workspace.\n
 
 const EXECUTORS = Object.freeze([
   { name: 'workspace', available: true, configured: true, active: true, status: 'active' },
-  { name: 'sandbox', available: true, configured: true, active: false, status: 'idle' },
+  { name: 'computer', available: true, configured: true, active: false, status: 'idle' },
   { name: 'device', available: false, configured: true, active: false, status: 'offline' },
   { name: 'nimbus', available: false, configured: false, active: false, status: 'not_configured' },
 ] as const);
@@ -862,7 +862,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         observe: (s) => ({
           selfOnly: s.buildDrainBatch([
             event({ id: 'a', ingress: 'self_emit', variant: 'internal', payload: { kind: 'note', data: 'x' } }),
-            event({ id: 'b', variant: 'internal', ingress: 'sandbox_cb', payload: { kind: 'note', data: 'y' } }),
+            event({ id: 'b', variant: 'internal', ingress: 'computer_cb', payload: { kind: 'note', data: 'y' } }),
           ]),
           mixed: s.buildDrainBatch([
             webhookEvent('ext'),
@@ -1198,7 +1198,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         observe: (s) => ({
           stable: s.argumentDigest({ b: 1, a: [2, { d: 4, c: 3 }] }) === s.argumentDigest({ a: [2, { c: 3, d: 4 }], b: 1 }),
           distinct: s.argumentDigest({ a: 1 }) !== s.argumentDigest({ a: 2 }),
-          digest: s.argumentDigest({ command: 'rm -rf /tmp/x', runtime: 'sandbox' }),
+          digest: s.argumentDigest({ command: 'rm -rf /tmp/x', runtime: 'computer' }),
         }),
       },
     ],
@@ -1351,7 +1351,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
     id: 'file-plane',
     owns: 'the exact-match file editor and the honest read behind the `file` tool (core tools/file-edit.ts): ' +
       'an edit lands exactly once or not at all, and no read is ever clipped without saying how to continue it; ' +
-      'and the mount table that extends that one plane with /pc and /sandbox (vfs/mounts.ts)',
+      'and the mount table that extends that one plane with /pc and /computer (vfs/mounts.ts)',
     subjects: ['applyFileEdits', 'scanFileWindow', 'formatFileSlice', 'withMountTable'],
     probes: [
       {
@@ -1471,7 +1471,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
 
           const mounted = s.withMountTable(tree({ '/notes.md': 'workspace' }), [
             { name: 'pc', files: () => tree({ '/home/dev/a.txt': 'from the device' }), absentReason: () => 'no device connected', filesOwner: 'user' },
-            { name: 'sandbox', files: () => null, absentReason: sandboxAbsence, filesOwner: 'agent' },
+            { name: 'computer', files: () => null, absentReason: sandboxAbsence, filesOwner: 'agent' },
           ]);
 
           const absenceOf = async (read: () => Promise<void>) => {
@@ -1486,8 +1486,8 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             }
           };
 
-          const absentReaddir = await absenceOf(async () => { await mounted.readdir('/sandbox'); });
-          const absentExists = await absenceOf(async () => { await exists(mounted, '/sandbox/x'); });
+          const absentReaddir = await absenceOf(async () => { await mounted.readdir('/computer'); });
+          const absentExists = await absenceOf(async () => { await exists(mounted, '/computer/x'); });
 
           return [
             ['mounted-read', await readText(mounted, '/pc/home/dev/a.txt')],

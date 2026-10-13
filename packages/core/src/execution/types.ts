@@ -80,7 +80,7 @@ export const EXECUTOR_CAPABILITIES = [
 
 export type ExecutorCapability = (typeof EXECUTOR_CAPABILITIES)[number];
 
-export type ExecutorKind = 'workspace' | 'sandbox' | 'device' | 'parent';
+export type ExecutorKind = 'workspace' | 'computer' | 'device' | 'parent';
 
 export type ExecutorLifecycleStatus =
   | 'not_configured'
@@ -124,14 +124,14 @@ export interface ExecutorStatus {
   granted?: boolean;
   /** Device sandbox mode; absent for non-device environments. */
   sandbox?: DeviceSandboxStatus;
-  /** The sizes `sandbox.resize` offers; absent for every other environment. */
+  /** The sizes `computer.resize` offers; absent for every other environment. */
   sizes?: SandboxSizes;
   /** Each live machine's segment under `/pc`, the name its `<name>://` references take; the device fleet only. */
   mounts?: string[];
 }
 
 /** An executor registered as a named codemode provider; matches @cloudflare/codemode's ToolProvider shape. */
-/** What a program reaches of an executor: its members, and the status that sizes `sandbox.resize`. */
+/** What a program reaches of an executor: its members, and the status that sizes `computer.resize`. */
 export type ExecutorProviderSurface = Pick<ExecutorProvider, 'name' | 'tools' | 'positionalArgs' | 'getStatus'>;
 
 export interface ExecutorProvider {

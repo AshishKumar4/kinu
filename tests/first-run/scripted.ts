@@ -90,7 +90,7 @@ const steerCorrection: Script = (request) => {
 
 /** background-settle: the sleep, then what its call returned. A handle means it detached, and the wake reports it. */
 const backgroundSettle: Script = (request) => latest(request) !== SETTLE_ASK ? null : steps(request, [
-  call('shell', { runtime: 'sandbox', command: `sleep 45 && echo ${SETTLE_MARKER}`, why: 'The command sleeps longer than a workspace call waits.' }),
+  call('shell', { runtime: 'computer', command: `sleep 45 && echo ${SETTLE_MARKER}`, why: 'The command sleeps longer than a workspace call waits.' }),
 ], ([shell]) => {
   const job = shell?.result.match(/bgjob-[\w-]+/)?.[0];
 

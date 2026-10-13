@@ -7,7 +7,7 @@ export type { ExecutorInfo };
 /** The executor kind's human name, not a copy of the namespace (the namespace is the API). */
 const EXECUTOR_LABELS = {
   device:    "Your PC",
-  sandbox:   "Computer",
+  computer:  "Computer",
   workspace: "Workspace",
   // Forks only: the workspace this one branched from, reached over DO RPC.
   parent:    "Parent workspace",
@@ -17,7 +17,7 @@ export function executorLabel(name: string): string {
   return Object.entries(EXECUTOR_LABELS).find(([key]) => key === name)?.[1] ?? name;
 }
 
-const EXECUTOR_ORDER = ["device", "sandbox", "workspace", "parent"];
+const EXECUTOR_ORDER = ["device", "computer", "workspace", "parent"];
 
 export function executorSortKey(name: string): number {
   const idx = EXECUTOR_ORDER.indexOf(name);
@@ -48,7 +48,7 @@ export interface ExecutorAvailability {
   status?: "not_configured" | "idle" | "active" | "disconnected" | "error";
 }
 
-const STATIC_PRIORITY = ["device", "sandbox"];
+const STATIC_PRIORITY = ["device", "computer"];
 
 export function pickDefaultExecutor(executors: ExecutorAvailability[], lastActive?: string | null): string {
   const isActive = (name: string) => executors.some((e) =>

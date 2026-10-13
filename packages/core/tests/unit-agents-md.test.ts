@@ -177,7 +177,7 @@ function fakeSandbox(opts: { active: boolean; files?: VFS }): ExecutorProvider {
   };
 
   const provider: ExecutorProvider = {
-    name: 'sandbox', kind: 'sandbox', capabilities: new Set(), filesOwner: 'agent',
+    name: 'computer', kind: 'computer', capabilities: new Set(), filesOwner: 'agent',
     files: opts.files,
     homeDir: async () => '/workspace',
     isAvailable: () => true,
@@ -194,7 +194,7 @@ describe('collectWorkspaceAgentsMd — cloud discovery', () => {
     const workspace = await fakeVfs({
       'AGENTS.md': 'workspace defaults',
       '/workspace/AGENTS.md': 'must not be treated as a parent mount',
-      '/sandbox/workspace/AGENTS.md': 'must not be treated as sandbox bytes',
+      '/computer/workspace/AGENTS.md': 'must not be treated as sandbox bytes',
     });
 
     const sandbox = await fakeVfs({ '/workspace/AGENTS.md': 'sandbox project rules' });
@@ -209,7 +209,7 @@ describe('collectWorkspaceAgentsMd — cloud discovery', () => {
     expect(sources.admitted.map((f) => f.content)).toEqual(['workspace defaults', 'sandbox project rules']);
     expect(sources.admitted.map((f) => f.path)).toEqual([
       'AGENTS.md (workspace)',
-      '/workspace/AGENTS.md (sandbox)',
+      '/workspace/AGENTS.md (computer)',
     ]);
     expect(sources.referenced).toEqual([]);
     expect(workspace.reads).toEqual(['AGENTS.md']);

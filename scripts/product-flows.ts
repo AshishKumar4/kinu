@@ -2603,7 +2603,7 @@ export async function computerDesktopSurvivesAResize(target: FlowTarget): Promis
 
     await openInspector(page);
     await page.evaluate(stripTab('Environment'));
-    const computer = executorLabel('sandbox');
+    const computer = executorLabel('computer');
 
     await until(page, 'the computer in the Environment panel', `[...document.querySelectorAll('#inspector button')].some((b) => (b.textContent ?? '').trim() === ${JSON.stringify(computer)})`);
     await page.evaluate(`[...document.querySelectorAll('#inspector button')].find((b) => (b.textContent ?? '').trim() === ${JSON.stringify(computer)}).click()`);

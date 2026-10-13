@@ -507,14 +507,14 @@ export function createDeviceTunnelExecutor(
     disconnect: async () => { /* the hub owns the socket lifecycle */ },
     tools,
     positionalArgs: true,
-    // The PC is behind the user's NAT; no inbound ports. Use `sandbox` for previewable URLs.
+    // The PC is behind the user's NAT; no inbound ports. Use `computer` for previewable URLs.
     async exposePort(port: number) {
       return {
         supported: false,
         reason:
           `device executor reverse-tunnels outbound from your PC; there's no inbound port to expose ` +
           `from this side. Point your local browser at the address your server uses (port ${port}), ` +
-          `or use the 'sandbox' executor if you want a public URL.`,
+          `or use the 'computer' executor if you want a public URL.`,
       };
     },
     async unexposePort() { /* nothing to do */ },

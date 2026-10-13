@@ -581,8 +581,8 @@ function ageText(seconds: number): string {
 }
 
 export function restAskText(running: RunningForRest, details: ReadonlyMap<number, RestDetail>, windowMinutes: number): string {
-  const head = `The sandbox has not been used for ${String(windowMinutes)} minutes and would rest now`;
-  const again = `sandbox.rest('keep') leaves it running, and it asks again after about ${String(windowMinutes)} minutes without use.`;
+  const head = `The computer has not been used for ${String(windowMinutes)} minutes and would rest now`;
+  const again = `computer.rest('keep') leaves it running, and it asks again after about ${String(windowMinutes)} minutes without use.`;
 
   if (running.unreadable !== undefined) {
     return `${head}, but its process list could not be read (${running.unreadable}), so it cannot tell whether a command `
