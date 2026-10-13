@@ -112,6 +112,11 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
     allowed: input.allowedTools,
     codemode: deps.codemode,
     effectClaims: deps.effectClaims,
-    wrapFinished: (finished) => wrapToolsForBackground(finished, deps.jobs),
+    wrapFinished: (finished) => {
+      const backgrounded = wrapToolsForBackground(finished, deps.jobs);
+
+      // `eval` is built over the finished surface, after `wrapCalls` recorded the rest, so its calls are recorded here.
+      return backgrounded.eval === undefined ? backgrounded : { ...backgrounded, ...withHeadCaptureRecording({ eval: backgrounded.eval }, capture) };
+    },
   });
 }

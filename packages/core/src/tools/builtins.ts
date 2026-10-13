@@ -240,11 +240,8 @@ function installCodemode(
 ): void {
   const { rt } = deps;
   // `eval` reaches only the namespaces the allowed tools reach.
-  const built = build(codemodeSurface(rt, toolsInWorkMode(deps.workMode ?? 'build', surface), deps.external), narrowToolSurface(deps.allowed));
-  const clamp = { files: rt.storage, producer: 'eval' as const, images: true as const };
-  surface.eval = withCheckedInput('eval', withClampedToolResult(
-    built,
-    deps.contextBudget ? { ...clamp, budget: deps.contextBudget } : clamp,
+  surface.eval = withCheckedInput('eval', build(
+    codemodeSurface(rt, toolsInWorkMode(deps.workMode ?? 'build', surface), deps.external), narrowToolSurface(deps.allowed),
   ));
 }
 
