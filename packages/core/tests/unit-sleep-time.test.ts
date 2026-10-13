@@ -196,14 +196,14 @@ describe('Sleep-time compute', () => {
 
     const summary = applySleepTimeUpdate(facts, {
       upserts: [{
-        key: '  Sandbox.NPM   Version  ', value: 'npm v10', confidence: 0.9, rationale: '',
+        key: '  Computer.NPM   Version  ', value: 'npm v10', confidence: 0.9, rationale: '',
       }],
       decay: [],
     });
 
     expect(summary.upserted).toBe(1);
     expect(facts.recall('computer.npm_version')?.value).toBe('npm v10');
-    expect(facts.recall('  Sandbox.NPM   Version  ')?.value).toBe('npm v10');
+    expect(facts.recall('  Computer.NPM   Version  ')?.value).toBe('npm v10');
   });
 
   test('same-value re-observation is not counted as an upsert or refreshed', () => {
@@ -213,7 +213,7 @@ describe('Sleep-time compute', () => {
                 WHERE key = 'computer.npm_version'`;
 
     const summary = applySleepTimeUpdate(facts, {
-      upserts: [{ key: 'Sandbox.NPM_Version', value: 'npm v10', confidence: 0.95, rationale: '' }],
+      upserts: [{ key: 'Computer.NPM_Version', value: 'npm v10', confidence: 0.95, rationale: '' }],
       decay: [],
     });
 

@@ -23,7 +23,7 @@ describe('a reference opens the file it names', () => {
 
     expect(links.roots).toEqual(['vfs', 'local', 'computer']);
     expect(links.href('vfs://home/main/a b.md')).toBe('https://kinu.run/workspace/acme?file=vfs%3A%2F%2Fhome%2Fmain%2Fa+b.md');
-    expect(links.href('sandbox://w/x')).toBe('https://kinu.run/workspace/acme?file=sandbox%3A%2F%2Fw%2Fx');
+    expect(links.href('computer://w/x')).toBe('https://kinu.run/workspace/acme?file=computer%3A%2F%2Fw%2Fx');
   });
 });
 
@@ -62,7 +62,7 @@ describe('a local link is the file URL pathToFileURL makes', () => {
 describe('a cloud reference opens the Files surface', () => {
   test('on its folder with the file previewed, or on the folder itself', () => {
     expect(filesFocusOf('vfs://home/main/notes/report.md')).toEqual({ path: '/home/main/notes', file: '/home/main/notes/report.md' });
-    expect(filesFocusOf('sandbox://w/')).toEqual({ path: '/computer/w' });
+    expect(filesFocusOf('computer://w/')).toEqual({ path: '/computer/w' });
     expect(filesFocusOf('vfs://')).toEqual({ path: '/' });
     expect(filesFocusOf('vfs://../x')).toBeNull();
   });

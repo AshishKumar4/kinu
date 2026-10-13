@@ -209,7 +209,7 @@ describe('collectWorkspaceAgentsMd — cloud discovery', () => {
     expect(sources.admitted.map((f) => f.content)).toEqual(['workspace defaults', 'sandbox project rules']);
     expect(sources.admitted.map((f) => f.path)).toEqual([
       'AGENTS.md (workspace)',
-      '/workspace/AGENTS.md (sandbox)',
+      '/workspace/AGENTS.md (computer)',
     ]);
     expect(sources.referenced).toEqual([]);
     expect(workspace.reads).toEqual(['AGENTS.md']);

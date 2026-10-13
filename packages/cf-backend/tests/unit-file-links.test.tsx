@@ -17,7 +17,7 @@ function chat(content: string): string {
 
 describe('a file the agent names in chat', () => {
   test('is a link in prose, in inline code and as a link target; other schemes keep their own rendering', () => {
-    const html = chat('Wrote vfs://home/main/report.md, see `sandbox://w/build.log` and [the plan](vfs://home/main/plan.md). Not postgres://db/x or https://example.com.');
+    const html = chat('Wrote vfs://home/main/report.md, see `computer://w/build.log` and [the plan](vfs://home/main/plan.md). Not postgres://db/x or https://example.com.');
 
     const opened = [...html.matchAll(/data-file-link="([^"]*)"/gu)]
       .map((hit) => filesFocusOf(hit[1] ?? '')?.file);

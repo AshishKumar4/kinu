@@ -171,12 +171,12 @@ describe('attaching a terminal', () => {
 
   test('the container is prepared before the shell opens onto it', async () => {
     const { deps, trace } = harness();
-    const response = await terminalRequest(attachRequest('executor=sandbox&cols=120&rows=40'), deps);
+    const response = await terminalRequest(attachRequest('executor=computer&cols=120&rows=40'), deps);
     expect(response?.status).toBe(200);
     expect(await response?.text()).toBe('pty-socket');
     // Preflight (egress, /workspace) settles before the PTY exists, and the lease is stamped before the socket
     // is handed over, or the first heartbeat can stop the container under it.
-    expect(trace.calls).toEqual(["prepareTerminal:sandbox", "noteTerminalActivity", "terminal"]);
+    expect(trace.calls).toEqual(["prepareTerminal:computer", "noteTerminalActivity", "terminal"]);
   });
 
 
@@ -184,7 +184,7 @@ describe('attaching a terminal', () => {
   test('the upgrade the SDK proxies is the same request, minus the caller\'s credentials', async () => {
     const { deps, trace } = harness();
 
-    const request = attachRequest('executor=sandbox', {
+    const request = attachRequest('executor=computer', {
       headers: {
         upgrade: 'websocket',
         connection: 'Upgrade',
@@ -208,9 +208,9 @@ describe('attaching a terminal', () => {
 
   // A wrong-verb GET is refused before anything is touched; it must not start a container on its way to saying so.
   test.each([
-    { path: 'terminal?executor=sandbox', status: 400 },
+    { path: 'terminal?executor=computer', status: 400 },
     { path: 'terminal?executor=workspace', status: 400 },
-    { path: 'terminal/keepalive?executor=sandbox', status: 405 },
+    { path: 'terminal/keepalive?executor=computer', status: 405 },
   ])('GET /$path is refused and touches nothing', async ({ path, status }) => {
     const { deps, trace } = harness();
 
@@ -240,7 +240,7 @@ describe('attaching a terminal', () => {
 
   test('a deployment with no container binding says so', async () => {
     const { deps } = harness({ sandboxBound: false });
-    const response = await terminalRequest(attachRequest('executor=sandbox'), deps);
+    const response = await terminalRequest(attachRequest('executor=computer'), deps);
     expect(response?.status).toBe(503);
   });
 
@@ -249,15 +249,15 @@ describe('attaching a terminal', () => {
       prepare: async () => ({ error: 'attach overran its budget; a retry is scheduled' }),
     });
 
-    const response = await terminalRequest(attachRequest('executor=sandbox'), deps);
+    const response = await terminalRequest(attachRequest('executor=computer'), deps);
     expect(response?.status).toBe(503);
     expect(String((await body(response)).error)).toContain('attach overran');
-    expect(trace.calls).toEqual(['prepareTerminal:sandbox']);
+    expect(trace.calls).toEqual(['prepareTerminal:computer']);
   });
 
   test('a container that fails the attach reports it rather than hanging', async () => {
     const { deps } = harness({ attach: async () => { throw new Error('container is not listening on 3000'); } });
-    const response = await terminalRequest(attachRequest('executor=sandbox'), deps);
+    const response = await terminalRequest(attachRequest('executor=computer'), deps);
     expect(response?.status).toBe(503);
     expect(String((await body(response)).error)).toContain('not listening');
   });
@@ -276,7 +276,7 @@ describe('opening the desktop (D70)', () => {
     });
 
     expect((await terminalRequest(request, deps))?.status).toBe(200);
-    expect(trace.calls).toEqual(['prepareTerminal:sandbox', 'noteTerminalActivity', 'terminal']);
+    expect(trace.calls).toEqual(['prepareTerminal:computer', 'noteTerminalActivity', 'terminal']);
     expect(new URL(trace.request?.url ?? '').pathname).toBe('/_devbox/desktop');
     expect([...trace.request?.headers.keys() ?? []].sort()).toEqual(['connection', 'sec-websocket-protocol', 'sec-websocket-version', 'upgrade']);
   });
@@ -313,12 +313,12 @@ describe('a terminal failure names the workspace and the executor', () => {
     });
 
     const { value: response, logs } = await recorded(
-      async () => await terminalRequest(attachRequest('executor=sandbox'), deps),
+      async () => await terminalRequest(attachRequest('executor=computer'), deps),
     );
 
     expect(response?.status).toBe(503);
     expect(String((await body(response)).error)).toContain('attach overran');
-    expect(trace.calls).toEqual(['prepareTerminal:sandbox']);
+    expect(trace.calls).toEqual(['prepareTerminal:computer']);
 
     const notReady = terminalRows(logs, 'terminal.not_ready');
     expect(notReady).toHaveLength(1);
@@ -333,12 +333,12 @@ describe('a terminal failure names the workspace and the executor', () => {
     });
 
     const { value: response, logs } = await recorded(
-      async () => await terminalRequest(attachRequest('executor=sandbox'), deps),
+      async () => await terminalRequest(attachRequest('executor=computer'), deps),
     );
 
     expect(response?.status).toBe(503);
     expect(String((await body(response)).error)).toContain('not answering');
-    expect(trace.calls).toEqual(['prepareTerminal:sandbox']);
+    expect(trace.calls).toEqual(['prepareTerminal:computer']);
 
     const preflight = terminalRows(logs, 'terminal.preflight_failed');
     expect(preflight).toHaveLength(1);
@@ -352,7 +352,7 @@ describe('a terminal failure names the workspace and the executor', () => {
     });
 
     const { logs } = await recorded(
-      async () => await terminalRequest(attachRequest('executor=sandbox'), deps),
+      async () => await terminalRequest(attachRequest('executor=computer'), deps),
     );
 
     const attach = terminalRows(logs, 'terminal.attach_failed');
@@ -398,7 +398,7 @@ describe('an attached terminal and a container that wants to sleep', () => {
     const { deps, trace } = harness();
 
     const beat = new Request(
-      `https://app.example/api/workspaces/${WORKSPACE}/terminal/keepalive?executor=sandbox`,
+      `https://app.example/api/workspaces/${WORKSPACE}/terminal/keepalive?executor=computer`,
       { method: 'POST' },
     );
 
@@ -414,7 +414,7 @@ describe('an attached terminal and a container that wants to sleep', () => {
   test('a beat never starts a shell', async () => {
     const { deps, trace } = harness();
     await terminalRequest(
-      new Request(`https://app.example/api/workspaces/${WORKSPACE}/terminal/keepalive?executor=sandbox`,
+      new Request(`https://app.example/api/workspaces/${WORKSPACE}/terminal/keepalive?executor=computer`,
         { method: 'POST' }), deps,
     );
     expect(trace.calls).not.toContain('terminal');
@@ -424,7 +424,7 @@ describe('an attached terminal and a container that wants to sleep', () => {
     const { deps } = harness({ lease: async () => { throw new Error('attach failed: snapshot not found'); } });
 
     const response = await terminalRequest(
-      new Request(`https://app.example/api/workspaces/${WORKSPACE}/terminal/keepalive?executor=sandbox`,
+      new Request(`https://app.example/api/workspaces/${WORKSPACE}/terminal/keepalive?executor=computer`,
         { method: 'POST' }), deps,
     );
 
@@ -504,12 +504,12 @@ describe('who owns a terminal attach', () => {
     controller.abort();
 
     const response = await terminalRequest(
-      attachRequest('executor=sandbox', { signal: controller.signal }), deps,
+      attachRequest('executor=computer', { signal: controller.signal }), deps,
     );
 
     expect(response?.status).toBe(503);
     // The preflight is not fenced: the container belongs to the DO and another attach may be waiting on it.
-    expect(trace.calls).toEqual(['prepareTerminal:sandbox']);
+    expect(trace.calls).toEqual(['prepareTerminal:computer']);
   });
 
   test('a client that leaves mid-upgrade gets no shell, and its socket is released', async () => {
@@ -535,7 +535,7 @@ describe('who owns a terminal attach', () => {
     };
 
     const pending = terminalRequest(
-      attachRequest('executor=sandbox', { signal: controller.signal }), deps, context,
+      attachRequest('executor=computer', { signal: controller.signal }), deps, context,
     );
 
     await entered.promise;
@@ -570,7 +570,7 @@ describe('who owns a terminal attach', () => {
     const controller = new AbortController();
 
     const response = await terminalRequest(
-      attachRequest('executor=sandbox', { signal: controller.signal }), deps,
+      attachRequest('executor=computer', { signal: controller.signal }), deps,
     );
 
     expect(response?.status).toBe(200);

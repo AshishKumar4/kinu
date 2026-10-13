@@ -309,7 +309,7 @@ ${handoff.coordinator} still coordinates it. Keep the corrected code for the new
     prompt: `In this new conversation, what is our private release code and who coordinates the handoff?
 After the work below, reply with just the code and coordinator, separated by a comma.
 
-Run the library's tests again and keep the JSON report at ${checkout}/vitest-report.json in the sandbox
+Run the library's tests again and keep the JSON report at ${checkout}/vitest-report.json on the computer
 and the identical file at ${REPORT} here. Use the report_totals calculation we kept to check that real report.
 
 I want two live workspace views: test-results, the dashboard, and release-review, the release view.
@@ -330,8 +330,8 @@ release-review as exact task titles on the board and mark them done when the vie
         return { pass: code === handoff.current && coordinator === handoff.coordinator && hasCode && hasCoordinator,
           evidence: { code, coordinator, hasCode, hasCoordinator, noteRead: true, factKeys: saved.facts.map((fact) => fact.key), replies: verifier.recentReplies() } };
       });
-      await verifier.check('dashboard-report-is-the-sandbox-test-report', async () => {
-        const [local, sandbox] = await Promise.all([verifier.readFile(REPORT), verifier.readFile(`/computer${checkout}/vitest-report.json`)]);
+      await verifier.check('dashboard-report-is-the-computer-test-report', async () => {
+        const [local, computer] = await Promise.all([verifier.readFile(REPORT), verifier.readFile(`/computer${checkout}/vitest-report.json`)]);
         const summary = summaryOf(local);
         const graderReport = `${checkout}/.kinu-eval-vitest.json`;
 
@@ -340,8 +340,8 @@ release-review as exact task titles on the board and mark them done when the vie
           const rerun = summaryOf(await verifier.readFile(`/computer${graderReport}`));
           const counts = ({ total, passed, failed, skipped }: ReportSummary) => ({ total, passed, failed, skipped });
 
-          return { pass: local === sandbox && summary.total > 0 && JSON.stringify(counts(summary)) === JSON.stringify(counts(rerun)),
-            evidence: { identical: local === sandbox, summary, independentlyRun: rerun } };
+          return { pass: local === computer && summary.total > 0 && JSON.stringify(counts(summary)) === JSON.stringify(counts(rerun)),
+            evidence: { identical: local === computer, summary, independentlyRun: rerun } };
         } finally {
           await verifier.execute('computer', `rm -f ${graderReport}`);
         }
@@ -353,8 +353,8 @@ release-review as exact task titles on the board and mark them done when the vie
       await verifier.check('live-views-are-done', () => boardHolds(verifier, ['test-results', 'release-review']));
     },
   }, {
-    prompt: `Open the same dashboard from a dev server in this workspace and from one in the sandbox, and keep both
-running for the handoff. Keep its portable entry point at ${DESK}/preview/server.mjs; the sandbox copy lives
+    prompt: `Open the same dashboard from a dev server in this workspace and from one on the computer, and keep both
+running for the handoff. Keep its portable entry point at ${DESK}/preview/server.mjs; the computer's copy lives
 at /workspace/combinators, with the same reports and preview sources. Each server accepts a workspace report
 path in ?path=, exposes GET /api/summary?path= as the JSON totals, and server-renders those totals as visible
 JSON inside <output id="summary">. Show vitest.json and rerun.json without copying a fixed table into the page.
@@ -366,7 +366,7 @@ previews reading changes without a rebuild. Add board tasks titled exactly previ
 done when ready, and keep earlier work closed.`,
     verify: async (verifier) => {
       await verifier.check('workspace-dashboard-preview-shows-the-tests', () => previewAnswer(verifier, 'workspace', REPORT));
-      await verifier.check('sandbox-dashboard-preview-shows-the-tests', () => previewAnswer(verifier, 'computer', REPORT));
+      await verifier.check('computer-dashboard-preview-shows-the-tests', () => previewAnswer(verifier, 'computer', REPORT));
       await archive(verifier, checkout);
       await verifier.check('the-whole-handoff-board-is-done', () => boardHolds(verifier,
         ['src/maybe.ts', 'src/result.ts', 'src/task.ts', 'src/toolbelt.ts', 'release-provenance', 'boundary-review', 'test-results', 'release-review', 'previews', 'export']));

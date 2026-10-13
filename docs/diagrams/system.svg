@@ -129,7 +129,7 @@
   <text class="b mono" x="310" y="599" fill="var(--orange)">KinuDevbox</text>
   <text class="s" x="310" y="617">Linux container · processes · ports</text>
   <text class="s" x="310" y="635">platform snapshots on rest</text>
-  <text class="xs mono" x="310" y="653">sandbox:// = vfs://computer</text>
+  <text class="xs mono" x="310" y="653">computer:// = vfs://computer</text>
   <text class="xs" x="310" y="671">disk-chain backup to R2</text>
   <rect x="602" y="578" width="274" height="114" rx="7" fill="var(--blueFill)" stroke="var(--blueLine)"/>
   <text class="b" x="614" y="599" fill="var(--blue)">Workers AI + model providers</text>

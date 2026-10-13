@@ -632,7 +632,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
 
     expect(delta).toContain('- old: gpu: removed from execution status.');
     expect(delta).toContain('- new, gpu: available, runs: native_binary');
-    expect(delta).toContain('- sandbox: active, files at /computer, runs: python, not measured here: docker');
+    expect(delta).toContain('- computer: active, files at /computer, runs: python, not measured here: docker');
 
     expect(delta).not.toContain('- workspace:');
   });
@@ -645,7 +645,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     const delta = messageText(present(ledger.weave(history, { factsBlock: '- unchanged = yes', executors: [workspace, connectedDevice] }).at(-1), 'woven tail'));
 
     expect(delta).toContain('- device: connected, files at /pc');
-    expect(delta).toContain('- sandbox: removed from execution status.');
+    expect(delta).toContain('- computer: removed from execution status.');
     expect(delta).not.toContain('/computer');
     expect(delta).not.toContain('- workspace:');
     expect(delta).not.toContain('unchanged = yes');

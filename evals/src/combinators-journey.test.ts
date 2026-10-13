@@ -37,10 +37,10 @@ const PathSchema = v.object({ path: v.string() });
 const TestReportSchema = v.object({ testResults: v.array(v.object({ assertionResults: v.array(v.object({ status: v.string(), duration: v.optional(v.nullable(v.number())) })) })) });
 
 type Defect = 'board' | 'invented-report' | 'skipped' | 'hardcoded-calculator' | 'stale-dashboard' | 'stale-review'
-  | 'workspace-preview' | 'sandbox-preview' | 'invisible-preview' | 'swarm' | 'old-swarm' | 'audit' | 'npm-version' | 'npm-integrity'
+  | 'workspace-preview' | 'computer-preview' | 'invisible-preview' | 'swarm' | 'old-swarm' | 'audit' | 'npm-version' | 'npm-integrity'
   | 'export-missing' | 'export-changed' | 'export-duplicate' | 'export-extra' | 'memory-code' | 'memory-coordinator' | 'escaped-preview' | 'reopened-module'
   | 'board-case' | 'relative-review' | 'scratch-after-pack' | 'agent-unused' | 'agent-used-once' | 'empty-memory' | 'memory-note' | 'renamed-export'
-  | 'cached-workspace-preview' | 'cached-sandbox-preview' | 'dot-entrypoint' | 'no-main' | 'no-package-members' | 'review-with-rerun' | 'lagged-use'
+  | 'cached-workspace-preview' | 'cached-computer-preview' | 'dot-entrypoint' | 'no-main' | 'no-package-members' | 'review-with-rerun' | 'lagged-use'
   | 'completed-review-helpers' | 'error-review-helpers' | 'aborted-review-helpers' | 'incomplete-review-helpers'
   | 'unrelated-review-helpers' | 'serial-review-helpers' | 'unmeasured-review-helpers';
 
@@ -65,7 +65,7 @@ function desk(defect?: Defect) {
   put(REPORT, defect === 'invented-report' ? JSON.stringify({ testResults: [{ assertionResults: [{ status: 'passed' }] }] }) : INITIAL);
   put(`/computer${CHECKOUT}/vitest-report.json`, read(REPORT));
   put('/computer/workspace/combinators/reports/vitest.json', read(REPORT));
-  put(`${DESK}/preview/server.mjs`, 'export const server = "workspace and sandbox";\n');
+  put(`${DESK}/preview/server.mjs`, 'export const server = "workspace and computer";\n');
   put(`${DESK}/report-totals.js`, 'export const calculator = "reusable report totals";\n');
   put(RELEASE, JSON.stringify({ version: defect === 'npm-version' ? '8.0.0' : LATEST.version,
     integrity: defect === 'npm-integrity' ? 'sha512-stale' : LATEST.integrity }));
@@ -104,9 +104,9 @@ function desk(defect?: Defect) {
     fetch(request) {
       const url = new URL(request.url);
       const path = url.searchParams.get('path') ?? REPORT;
-      const sandbox = url.pathname.startsWith('/computer/');
-      const source = sandbox ? `/computer/workspace/combinators${path.slice(DESK.length)}` : path;
-      const answer = current(source, defect === (sandbox ? 'cached-sandbox-preview' : 'cached-workspace-preview'));
+      const computer = url.pathname.startsWith('/computer/');
+      const source = computer ? `/computer/workspace/combinators${path.slice(DESK.length)}` : path;
+      const answer = current(source, defect === (computer ? 'cached-computer-preview' : 'cached-workspace-preview'));
 
       if (url.pathname.endsWith('/api/summary')) return Response.json(answer);
       const visible = JSON.stringify(answer);
@@ -320,14 +320,14 @@ const defects: readonly { defect: Defect; turn: number; checks: readonly string[
   { defect: 'audit', turn: 1, checks: ['boundary-review-records-the-actual-answers'] },
   { defect: 'hardcoded-calculator', turn: 1, checks: ['the-report-calculator-works'] },
   { defect: 'board', turn: 1, checks: ['boundary-review-is-done'] },
-  { defect: 'invented-report', turn: 2, checks: ['dashboard-report-is-the-sandbox-test-report'] },
+  { defect: 'invented-report', turn: 2, checks: ['dashboard-report-is-the-computer-test-report'] },
   { defect: 'agent-used-once', turn: 2, checks: ['agent-reused-the-report-calculator'] },
   { defect: 'skipped', turn: 2, checks: ['dashboard-summarizes-the-real-tests', 'dashboard-summarizes-the-rerun'] },
   { defect: 'stale-review', turn: 2, checks: ['release-review-reads-the-dashboard-and-provenance'] },
   { defect: 'board', turn: 2, checks: ['live-views-are-done'] },
   { defect: 'workspace-preview', turn: 3, checks: ['workspace-dashboard-preview-shows-the-tests'] },
-  { defect: 'sandbox-preview', turn: 3, checks: ['sandbox-dashboard-preview-shows-the-tests'] },
-  { defect: 'invisible-preview', turn: 3, checks: ['workspace-dashboard-preview-shows-the-tests', 'sandbox-dashboard-preview-shows-the-tests'] },
+  { defect: 'computer-preview', turn: 3, checks: ['computer-dashboard-preview-shows-the-tests'] },
+  { defect: 'invisible-preview', turn: 3, checks: ['workspace-dashboard-preview-shows-the-tests', 'computer-dashboard-preview-shows-the-tests'] },
   { defect: 'export-missing', turn: 3, checks: ['handoff-contains-the-required-source-bytes'] },
   { defect: 'export-changed', turn: 3, checks: ['handoff-contains-the-required-source-bytes'] },
   { defect: 'export-extra', turn: 3, checks: ['handoff-contains-the-required-source-bytes'] },
@@ -335,7 +335,7 @@ const defects: readonly { defect: Defect; turn: number; checks: readonly string[
   { defect: 'stale-dashboard', turn: 3, checks: ['dashboard-reads-a-report-changed-outside-the-chat', 'release-review-reads-changed-report-and-provenance'] },
   { defect: 'stale-review', turn: 3, checks: ['release-review-reads-changed-report-and-provenance'] },
   { defect: 'cached-workspace-preview', turn: 3, checks: ['workspace-preview-reads-unseen-data'] },
-  { defect: 'cached-sandbox-preview', turn: 3, checks: ['sandbox-preview-reads-unseen-data'] },
+  { defect: 'cached-computer-preview', turn: 3, checks: ['computer-preview-reads-unseen-data'] },
 ];
 
 describe('journey graders reject realistic defects before accepting the corrected artifacts', () => {

@@ -50,7 +50,7 @@ describe('deriveEventTrust', () => {
   });
 
   const sandboxes = [
-    { name: 'computer_cb collapses to min(self, head_trust) — external head launches sandbox',
+    { name: 'computer_cb collapses to min(self, head_trust) — external head launches computer',
       head: 'external' },
     { name: 'computer_cb stays self when owner head launches sandbox', head: 'owner' },
   ] as const;
