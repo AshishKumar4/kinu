@@ -4119,6 +4119,8 @@ declare global {
     __creates: number;
     /** Every `input` frame the pane sent the gallery's workspace shell (`gallery-terminal.ts`). */
     __kinuTerminalInput?: string[];
+    /** Every directory the Files frame was asked to list, in order. */
+    __kinuListings?: string[];
     /** Listener counts by target and type, kept by the patched `EventTarget`. */
     __liveListeners?: Map<string, number>;
   }
