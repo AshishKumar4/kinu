@@ -6,12 +6,9 @@ import {
   ArrowSquareOutIcon, CaretDownIcon, PlusIcon, TrashIcon, XIcon,
 } from "@phosphor-icons/react";
 import {
-  MCP_PRESETS, mcpPresetById, type McpPreset, type McpPresetId,
+  MCP_PRESETS, mcpPresetById, type McpPreset, type McpPresetId, type McpServerSummary,
 } from "@kinu.run/core";
-import {
-  addMcpServer, removeMcpServer,
-  type McpServerInput, type McpServerSummary,
-} from "@/lib/user-api";
+import { addMcpServer, removeMcpServer, type McpServerInput } from "@/lib/user-api";
 import { inputCls } from "@/components/ui/form";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { SECRET_REGION } from "@/components/ui/SecretValue";

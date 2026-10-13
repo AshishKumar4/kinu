@@ -2,7 +2,7 @@ import { useState, type ReactNode } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
 import { PlugsConnectedIcon, PuzzlePieceIcon } from "@phosphor-icons/react";
 import { APP_ROUTES } from "@kinu.run/core";
-import type { McpServerSummary } from "@/lib/user-api";
+import type { McpServerSummary } from "@kinu.run/core";
 import { mapResource, lastValue, type AsyncResource } from "@/hooks/use-async-resource";
 import { useMcpServers } from "@/hooks/use-mcp-servers";
 import { mcpServerStatus } from "@/components/plugins/mcp-status";

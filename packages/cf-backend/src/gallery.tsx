@@ -106,8 +106,9 @@ import type {
   ForkRunSummary, HeadRunView, MountInfo, NodeTranscriptView, Page, PageRequest,
   AccountSpend, PendingAction, ProducerSpend, SearchTreeRow, Usage, WorkspaceSpend,
 } from "@kinu.run/core";
-import type { McpServerSummary, ModelMenuEntry, ModelTestResult, RosterCounts, RosterEntry, RosterFrame, RosterPage, UserDevice, WorkspaceEntry } from "@/lib/user-api";
-import { McpServerSummarySchema, ROSTER_SOCKET_ROUTE } from "@/lib/user-api";
+import type { ModelMenuEntry, ModelTestResult, RosterCounts, RosterEntry, RosterFrame, RosterPage, UserDevice, WorkspaceEntry } from "@/lib/user-api";
+import { ROSTER_SOCKET_ROUTE } from "@/lib/user-api";
+import { McpServerSummarySchema, type McpServerSummary } from "@kinu.run/core";
 import * as v from "valibot";
 import { galleryChatWindow, galleryClearChat, galleryServerPush, seedGalleryChat, seededGalleryChatRows, serveGalleryRpc } from "@/gallery-agent-stub";
 
