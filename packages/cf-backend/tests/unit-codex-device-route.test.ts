@@ -219,7 +219,21 @@ describe('Codex from the cloud: the owner\'s machine carries every call, or the 
   });
 
   test('two turns meeting an expired token through the machine refresh the login once', async () => {
-    const { harness, relayed, model, attachMachine } = await rig(recordedUpstream(ACCESS_2, 'fresh'));
+    const bothSent = Promise.withResolvers<void>();
+    let oldTokenCalls = 0;
+
+    // Both turns' first calls reach the machine before either is answered, so each meets the old token. Under load the
+    // second turn otherwise started after the first had rotated it, and sent the rotated one first (hammer, 2026-10-13);
+    // that order is the next test's.
+    const { harness, relayed, model, attachMachine } = await rig(recordedUpstream(ACCESS_2, 'fresh'), async (request) => {
+      if (new Headers(request.headers).get('authorization') !== `Bearer ${ACCESS_1}`) return;
+      oldTokenCalls += 1;
+
+      if (oldTokenCalls === 2) bothSent.resolve();
+
+      await bothSent.promise;
+    });
+
     await attachMachine('relay');
 
     const [first, second] = await Promise.all([step(model, newTurn()), step(model, newTurn())]);
