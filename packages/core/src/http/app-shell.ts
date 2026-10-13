@@ -24,7 +24,7 @@ const CONTENT_NAMED_ASSET = /^\/assets\/[^/]+-[A-Za-z0-9_-]{8}\.[a-z0-9]+$/u;
  *   assets' answer a returning page revalidated each of its 65 modules through this Worker before it drew
  *   (cmp-kinu-ux2, 2026-10-13). Files kept under their own names (the fonts, the icon) keep that answer.
  */
-export function cachePolicy(pathname: string, status: number, html: boolean): string | null {
+function cachePolicy(pathname: string, status: number, html: boolean): string | null {
   if (html) return 'no-store';
 
   if (CONTENT_NAMED_ASSET.test(pathname) && (status === 200 || status === 304)) return 'public, max-age=31536000, immutable';
