@@ -23,7 +23,7 @@ export interface ComputerSizeState {
   readonly restartingTo: string | null;
   /** A refused start, a failure, or a size waiting for the next start: said under the head. */
   readonly notice: ReactNode;
-  readonly choose: (value: BoxSize | typeof ACCOUNT_DEFAULT) => void;
+  readonly choose: (value: BoxSize | typeof ACCOUNT_DEFAULT) => Effect.Effect<void>;
 }
 
 const startPending = (pending: "resize" | "start" | null) => (pending === "start" ? "start" : null);
@@ -48,10 +48,9 @@ export function useComputerSize(rpc: Rpc, enabled: boolean): ComputerSizeState {
     );
   };
 
-  const choose = (value: BoxSize | typeof ACCOUNT_DEFAULT) => {
+  const choose = (value: BoxSize | typeof ACCOUNT_DEFAULT) => Effect.sync(() => {
     setChoosing(value === ACCOUNT_DEFAULT ? state?.account ?? DEFAULT_BOX_SIZE : value);
-    detach(act("resize", "resizing the computer", "resizeComputer", [value === ACCOUNT_DEFAULT ? null : value]));
-  };
+  }).pipe(Effect.andThen(act("resize", "resizing the computer", "resizeComputer", [value === ACCOUNT_DEFAULT ? null : value])));
 
   // A stopped computer only records the choice; a running one restarts at it.
   const restarting = pending === "resize" && state?.running !== null;
@@ -95,7 +94,7 @@ export function ComputerSize({ state: size }: { state: ComputerSizeState }) {
         value={state.chosen ?? ACCOUNT_DEFAULT}
         options={workspaceSizeOptions(state.account)}
         shown={(value) => BOX_SIZES[value === ACCOUNT_DEFAULT ? state.account ?? DEFAULT_BOX_SIZE : value].label}
-        onChange={size.choose}
+        onChange={(value) => detach(size.choose(value))}
         disabled={size.pending !== null}
       />
     </div>

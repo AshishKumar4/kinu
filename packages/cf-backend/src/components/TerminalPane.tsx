@@ -52,7 +52,7 @@ function TerminalFrame({ leading, state, failure, copies, action, hostRef }: {
 }) {
   return (
     <div className="flex h-full w-full flex-col">
-      <div className="flex h-11 shrink-0 items-center gap-3 pr-2 pl-4">
+      <div className="flex h-11 shrink-0 items-center gap-3 pr-3 pl-4">
         {leading}
         <span className="ml-auto flex min-w-0 items-center gap-3 p-meta p-text-3">
           {failure !== null && <span className="min-w-0 truncate p-danger" title={failure}>{failure}</span>}

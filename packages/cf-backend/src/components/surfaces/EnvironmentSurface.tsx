@@ -13,7 +13,7 @@ import {
 import { EXECUTOR_MOUNTS, desktopClientUrl, type MountInfo } from "@kinu.run/core";
 import type { ExecutorCommandResult, Rpc } from "@kinu.run/core";
 import {
-  executorLabel, isExecutorActive,
+  executorLabel,
   pickDefaultExecutor,
   type ExecutorInfo,
 } from "@kinu.run/core";
@@ -24,7 +24,7 @@ import type { TerminalPaneProps } from "@/components/TerminalPane";
 import { Loader } from "@cloudflare/kumo";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { ComputerSize, useComputerSize } from "@/components/SandboxSize";
+import { ComputerSize, useComputerSize, type ComputerSizeState } from "@/components/SandboxSize";
 import { Segmented } from "@/components/ui/Segmented";
 import { DesktopScreen } from "./DesktopScreen";
 
@@ -74,6 +74,7 @@ type Tone = "working" | "ready" | "attention" | "off" | "danger";
 
 interface StatusReading { readonly word: string; readonly tone: Tone }
 
+/** A machine's state: ready to run commands, or why not. "Running" is a command's word, not a machine's. */
 function statusOf(mount: MountInfo, exec: ExecutorInfo | undefined): StatusReading {
   // Reach before liveness, but only for a live row: `granted` is answered only while
   // the machine is connected, so a not-live mount stays offline.
@@ -83,9 +84,16 @@ function statusOf(mount: MountInfo, exec: ExecutorInfo | undefined): StatusReadi
 
   if (exec?.status === "error") return { word: "Error", tone: "danger" };
 
-  if (exec && isExecutorActive(exec)) return { word: "Running", tone: "working" };
-
   return { word: "Ready", tone: "ready" };
+}
+
+/** The computer's state: restarting under a resize, asleep while stopped (it wakes when used), else as any machine. */
+function computerStatus(mount: MountInfo, exec: ExecutorInfo | undefined, size: ComputerSizeState): StatusReading {
+  if (size.pending === "resize") return { word: "Restarting", tone: "working" };
+
+  if (mount.live && size.state !== null && size.state.running === null) return { word: "Asleep", tone: "off" };
+
+  return statusOf(mount, exec);
 }
 
 function Dot({ tone }: { tone: Tone }) {
@@ -188,94 +196,120 @@ function SelectedEnvironment({ rpc, mount, exec, workspace, executorOutputs, onE
   onExecute: (id: string, cmd: string) => Promise<ExecutorCommandResult>;
   onOpenFiles: (root: string) => void;
 }) {
-  const [view, setView] = useState<PaneView>("terminal");
   const computer = mount.name === "computer";
   // The computer's size, read once here: its control sits in the head, its restart covers the view.
   const size = useComputerSize(rpc, computer && mount.live);
   const name = exec?.label ?? executorLabel(mount.name);
-  const status = statusOf(mount, exec);
+  const restarting = computer && size.pending === "resize";
+  const status = computer ? computerStatus(mount, exec, size) : statusOf(mount, exec);
+
+  return (
+    <section aria-label={name} className="flex min-h-0 flex-1 flex-col">
+      <Head mount={mount} name={name} status={status} specs={computer ? size.specs : null} onOpenFiles={onOpenFiles}
+        size={computer ? <ComputerSize state={size} /> : null} />
+      {computer && size.notice}
+      <EnvironmentView mount={mount} exec={exec} name={name} workspace={workspace} restartingTo={restarting ? size.restartingTo ?? "" : null}
+        executorOutputs={executorOutputs} onExecute={onExecute} />
+    </section>
+  );
+}
+
+/** The chosen machine's head: its name and state, what it is, and its actions. */
+function Head({ mount, name, status, specs, size, onOpenFiles }: {
+  mount: MountInfo;
+  name: string;
+  status: StatusReading;
+  specs: string | null;
+  size: ReactNode;
+  onOpenFiles: (root: string) => void;
+}) {
   const filesRoot = filesRootFor(mount.name);
   const { about } = environmentOf(mount.name);
-  const usable = mount.live && exec?.granted !== false;
+
+  return (
+    <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2.5 px-4 pt-4 pb-1">
+      <div className="min-w-[12rem] flex-1">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <h3 className="p-env-name truncate">{name}</h3>
+          <span data-env-status className="p-env-state shrink-0" data-tone={status.tone}><Dot tone={status.tone} />{status.word}</span>
+          {mount.policy.readOnly && <span title="Read-only" className="flex shrink-0 p-text-3"><LockSimpleIcon size={12} aria-label="Read-only" /></span>}
+        </div>
+        {mount.live && (
+          <p className="p-env-specs mt-0.5 truncate">
+            {about}{specs !== null && ` · ${specs}`}{filesRoot !== null && <> · <span data-env-mount className="p-annotation">{filesRoot}</span></>}
+          </p>
+        )}
+      </div>
+      {mount.live && (
+        <div className="flex shrink-0 items-center gap-1.5">
+          {size}
+          {filesRoot !== null && (
+            <button type="button" data-env-files onClick={() => onOpenFiles(filesRoot)} title={`Browse ${name}'s files at ${filesRoot}`} className="p-env-action">
+              <FolderOpenIcon size={13} aria-hidden />Files
+            </button>
+          )}
+        </div>
+      )}
+    </header>
+  );
+}
+
+/** Under the head: the machine's absence, its restart, or its terminal or screen. */
+function EnvironmentView({ mount, exec, name, workspace, restartingTo, executorOutputs, onExecute }: {
+  mount: MountInfo;
+  exec: ExecutorInfo | undefined;
+  name: string;
+  workspace: string;
+  /** While a resize restarts the computer, the size it starts at. */
+  restartingTo: string | null;
+  executorOutputs: Map<string, ExecutorOutput[]>;
+  onExecute: (id: string, cmd: string) => Promise<ExecutorCommandResult>;
+}) {
+  const [view, setView] = useState<PaneView>("terminal");
+
+  if (exec?.granted === false) return <NeedsApprovalMount exec={exec} />;
+
+  if (!mount.live) return <UnavailableMount mount={mount} exec={exec} />;
+
   // Only the computer has a screen.
-  const desktop = usable && exec?.name === "computer" ? desktopClientUrl(location, workspace) : null;
+  const desktop = exec?.name === "computer" ? desktopClientUrl(location, workspace) : null;
   const shown = desktop === null ? "terminal" : view;
-  const desktopTitle = `${name}'s desktop`;
-  const specs = computer ? size.specs : null;
-  const restarting = computer && size.pending === "resize";
 
   const leading: ReactNode = desktop === null
     ? <span className="p-row-text font-medium p-text">Terminal</span>
     : <Segmented label={`${name}: terminal or desktop`} segments={PANE_VIEWS} value={shown} onChange={setView} />;
 
-  return (
-    <section aria-label={name} className="flex min-h-0 flex-1 flex-col">
-      <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2.5 px-4 pt-4 pb-1">
-        <div className="min-w-[12rem] flex-1">
-          <div className="flex min-w-0 items-center gap-2.5">
-            <h3 className="p-env-name truncate">{name}</h3>
-            <span data-env-status className="p-env-state shrink-0" data-tone={restarting ? "working" : status.tone}>
-              <Dot tone={restarting ? "working" : status.tone} />{restarting ? "Restarting" : status.word}
-            </span>
-            {mount.policy.readOnly && <span title="Read-only" className="flex shrink-0 p-text-3"><LockSimpleIcon size={12} aria-label="Read-only" /></span>}
-          </div>
-          {mount.live && (
-            <p className="p-env-specs mt-0.5 truncate">
-              {about}{specs !== null && ` · ${specs}`}{filesRoot !== null && <> · <span data-env-mount className="p-annotation">{filesRoot}</span></>}
-            </p>
-          )}
-        </div>
-        {mount.live && (
-          <div className="flex shrink-0 items-center gap-1.5">
-            {computer && <ComputerSize state={size} />}
-            {filesRoot !== null && (
-              <button type="button" data-env-files onClick={() => onOpenFiles(filesRoot)} title={`Browse ${name}'s files at ${filesRoot}`} className="p-env-action">
-                <FolderOpenIcon size={13} aria-hidden />Files
-              </button>
-            )}
-          </div>
-        )}
-      </header>
-      {computer && size.notice}
+  if (restartingTo !== null) return <ViewBar leading={leading}><Restarting to={restartingTo === "" ? null : restartingTo} /></ViewBar>;
 
-      {exec?.granted === false && <NeedsApprovalMount exec={exec} />}
-      {exec?.granted !== false && !mount.live && <UnavailableMount mount={mount} exec={exec} />}
-      {usable && restarting && (
-        <ViewBar leading={leading}>
-          <Restarting to={size.restartingTo} />
-        </ViewBar>
-      )}
-      {usable && !restarting && shown === "desktop" && desktop !== null && (
-        <ViewBar leading={leading} trailing={
-          <a href={`/workspace/${encodeURIComponent(workspace)}/desktop`} target="_blank" rel="noreferrer" data-desktop-open
-            aria-label={`Open ${desktopTitle} in a new tab`} className="inline-flex items-center gap-1.5 p-meta p-text-3 hover:p-text">
-            <ArrowSquareOutIcon size={13} aria-hidden />New tab
-          </a>
-        }>
-          {/* The screen at its own shape across the column, so the client draws it edge to edge. */}
-          <div className="w-full" style={{ aspectRatio: `${String(DESKTOP_SIZE.width)} / ${String(DESKTOP_SIZE.height)}` }}>
-            <DesktopScreen src={desktop} title={desktopTitle} />
-          </div>
-        </ViewBar>
-      )}
-      {usable && !restarting && shown === "terminal" && (
-        <div className="@container min-h-0 flex-1">
-          {exec ? (
-            <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader size="sm" /></div>}>
-              <TerminalPane
-                workspace={workspace}
-                executor={exec.name}
-                outputs={executorOutputs.get(exec.name) ?? []}
-                onExecute={(cmd) => onExecute(exec.name, cmd)}
-                leading={leading}
-              />
-            </Suspense>
-          ) : (
-            <Absence icon={PlugIcon} title="No command lane">This environment runs no commands.</Absence>
-          )}
-        </div>
-      )}
-    </section>
+  if (shown === "desktop" && desktop !== null) return <DesktopView name={name} workspace={workspace} src={desktop} leading={leading} />;
+
+  if (exec === undefined) return <Absence icon={PlugIcon} title="No command lane">This environment runs no commands.</Absence>;
+
+  return (
+    <div className="@container min-h-0 flex-1">
+      <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader size="sm" /></div>}>
+        <TerminalPane workspace={workspace} executor={exec.name} outputs={executorOutputs.get(exec.name) ?? []}
+          onExecute={(cmd) => onExecute(exec.name, cmd)} leading={leading} />
+      </Suspense>
+    </div>
+  );
+}
+
+function DesktopView({ name, workspace, src, leading }: { name: string; workspace: string; src: string; leading: ReactNode }) {
+  const title = `${name}'s desktop`;
+
+  return (
+    <ViewBar leading={leading} trailing={
+      <a href={`/workspace/${encodeURIComponent(workspace)}/desktop`} target="_blank" rel="noreferrer" data-desktop-open
+        aria-label={`Open ${title} in a new tab`} className="inline-flex items-center gap-1.5 p-meta p-text-3 hover:p-text">
+        <ArrowSquareOutIcon size={13} aria-hidden />New tab
+      </a>
+    }>
+      {/* The screen at its own shape across the column, so the client draws it edge to edge. */}
+      <div className="w-full" style={{ aspectRatio: `${String(DESKTOP_SIZE.width)} / ${String(DESKTOP_SIZE.height)}` }}>
+        <DesktopScreen src={src} title={title} />
+      </div>
+    </ViewBar>
   );
 }
 
@@ -283,7 +317,7 @@ function SelectedEnvironment({ rpc, mount, exec, workspace, executorOutputs, onE
 function ViewBar({ leading, trailing, children }: { leading: ReactNode; trailing?: ReactNode; children: ReactNode }) {
   return (
     <>
-      <div className="flex h-11 shrink-0 items-center gap-3 pr-2 pl-4">
+      <div className="flex h-11 shrink-0 items-center gap-3 pr-3 pl-4">
         {leading}
         {trailing !== undefined && <span className="ml-auto flex items-center gap-3">{trailing}</span>}
       </div>

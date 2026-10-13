@@ -156,6 +156,11 @@ function ListingStatus({ error, starting = [], onRetry }: { error: string | null
   );
 }
 
+/** A page, and Environment's terminal and screen, fill the column edge to edge; the rest scroll inside its margins. */
+function bodyFitFor(surface: SurfaceKind | null, previewSelected: boolean): string {
+  return previewSelected || surface === "Environment" ? "overflow-hidden" : "overflow-y-auto py-[18px] pl-[18px] pr-6";
+}
+
 export function WorkSurface(props: WorkSurfaceProps) {
   const requested = props.surface;
   const [changeCount, setChangeCount] = useState<number | null>(null);
@@ -256,8 +261,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
     { key: ACTIVITY_SURFACE },
   ];
 
-  // A page, and Environment's terminal and screen, fill the column edge to edge; the rest scroll inside its margins.
-  const bodyFit = previewSelected || surface === "Environment" ? "overflow-hidden" : "overflow-y-auto py-[18px] pl-[18px] pr-6";
+  const bodyFit = bodyFitFor(surface, previewSelected);
 
   return (
     <div className="@container flex flex-col h-full p-sidebar">

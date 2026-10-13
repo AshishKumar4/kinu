@@ -1885,7 +1885,7 @@ body > .annotation-toolbar {
 .p-env-state[data-tone="attention"] { color: var(--c-warning); }
 .p-env-state[data-tone="danger"] { color: var(--c-danger); }
 .p-env-state[data-tone="off"] { color: var(--c-text-3); }
-.p-env-specs { font-size: 12px; line-height: 16px; color: var(--c-text-3); font-variant-numeric: tabular-nums; }
+.p-env-specs { font-size: 12px; line-height: 16px; color: var(--c-text-3); }
 .p-env-action {
   display: inline-flex;
   height: 28px;
