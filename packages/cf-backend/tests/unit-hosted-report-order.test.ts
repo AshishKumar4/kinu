@@ -3,13 +3,13 @@
  * acts on it after its own turn ends; a drain signalled mid-turn left the report stranded until the delivery grace.
  */
 import { expect, test } from 'bun:test';
-import { sqlOver } from '@kinu.run/test-utils';
 import {
   agentSql, armedWakes, driveUntil, GATEWAY_CATALOG, gatewayWorkspace, hostedSubordinateHarness, reactivateOrchestratorHarness, wakeForDelegatedTask,
 } from './helpers/actor-harness';
 import { abandonHarnessFibers, joinHarnessFibers, joinHarnessKeepAlives } from './helpers/agents-sdk';
 import { KINU_TIMER_JOB } from '../src/wake-jobs';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun } from './helpers/platform-gateway';
+import { wrapDatabase } from '@kinu.run/core/identity';
 
 // A helper that hired durable then task: the durable hire's report must not wait on the helper while its task hire runs.
 test("a helper waiting on its task hire gets its answer, then takes up the report its durable hire made meanwhile", async () => {
@@ -110,7 +110,7 @@ for (const { verb, args, notes } of CASES) {
       name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate',
     });
 
-    const sql = sqlOver(workspace.db);
+    const sql = wrapDatabase(workspace.db).sql;
     const middleId = middle.actor.handle.actorId;
     const turnsEnded = (): number => agentSql(workspace, middleId)<{ n: number }>`SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${middleId} AND type = 'run_end'`[0]?.n ?? 0;
 
@@ -170,7 +170,7 @@ test("a report its durable hire made during a helper's turn is taken up though t
     name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate',
   });
 
-  const sql = sqlOver(first.db);
+  const sql = wrapDatabase(first.db).sql;
   const middleId = middle.actor.handle.actorId;
 
   const pendingReports = (): number => sql<{ n: number }>`
@@ -225,7 +225,7 @@ test("a report to an idle helper survives a reset before its drain: the durable 
     name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate',
   });
 
-  const sql = sqlOver(first.db);
+  const sql = wrapDatabase(first.db).sql;
   const middleId = middle.actor.handle.actorId;
 
   const pendingReports = (): number => sql<{ n: number }>`
