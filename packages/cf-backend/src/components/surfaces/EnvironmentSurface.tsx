@@ -54,7 +54,7 @@ function filesRootFor(name: string): string | null {
 const ENVIRONMENT_ICONS = {
   workspace: SquaresFourIcon,
   device: DesktopTowerIcon,
-  sandbox: DesktopIcon,
+  computer: DesktopIcon,
   parent: GitForkIcon,
 } satisfies Record<string, Icon>;
 
