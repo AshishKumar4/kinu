@@ -245,7 +245,7 @@ import {
   WorkspacePlanReferenceSchema,
 } from "@kinu.run/core";
 import type { MctsSearchRunSummary, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
-import { Cause, Effect, type Exit } from 'effect';
+import { Cause, Effect, Exit } from 'effect';
 import { attempt, authoredRefusal, classify, CODE_IS_REFUSAL, diagnostics, hold, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import type { NameOrigin } from "@kinu.run/core";
@@ -1022,7 +1022,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         // Asked while a Stop of the agent's is owed, it was queued before that Stop, which its isolate takes first.
         if (await this.stopReplayed(actorId)) return settleSync(Effect.fail(new KinuError('cancelled', `Task ${bound.turnId} was stopped.`)));
         // A turn opens on the account's settings as they are now (`accountSettingsAtOpen`).
-        await this.openingAccount(actorId, false);
+        const opened = await this.openingAccount(actorId, false);
+
+        if (Exit.isFailure(opened)) return settleSync(Effect.failCause(opened.cause));
 
         return await this.agentTurns.prepare(actorId, bound);
       },
@@ -1039,7 +1041,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         try {
           // A turn opens on the account's settings as they are now; a chat built with no turn reads what is held.
-          await this.openingAccount(actorId, true);
+          const opened = await this.openingAccount(actorId, true);
+
+          if (Exit.isFailure(opened)) return settleSync(Effect.failCause(opened.cause));
 
           return await this.agentTurns.prepareChat(actorId, request);
         } finally {
@@ -1816,12 +1820,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   private openingAccountStarted(actorId: string): void {
     if (this.accountAtOpen.has(actorId)) return;
-    this.accountAtOpen.set(actorId, hold(attempt({ doing: "reading the account's settings as an agent's work opens", otherwise: 'unavailable' }, () => this.accountSettingsAtOpen())));
+    this.accountAtOpen.set(actorId, this.settingsAtOpen());
     this.openingReads(actorId);
   }
 
-  /** A preparation's account reads: those its admission started, or started now; a run's surface takes no planes. */
-  private async openingAccount(actorId: string, turn: boolean): Promise<void> {
+  private settingsAtOpen(): Promise<Exit.Exit<void, KinuError>> {
+    return hold(attempt({ doing: "reading the account's settings as an agent's work opens", otherwise: 'unavailable' }, () => this.accountSettingsAtOpen()));
+  }
+
+  /** A preparation's account reads: those its admission started, or started now; a run's surface takes no planes. Its
+   *  caller fails with the read's failure. */
+  private async openingAccount(actorId: string, turn: boolean): Promise<Exit.Exit<void, KinuError>> {
     const started = this.accountAtOpen.get(actorId);
 
     this.accountAtOpen.delete(actorId);
@@ -1829,8 +1838,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     if (!turn) this.openingPlanes.delete(actorId);
     else if (started === undefined) this.openingReads(actorId);
 
-    if (started === undefined) await this.accountSettingsAtOpen();
-    else await settle(await started);
+    return await (started ?? this.settingsAtOpen());
   }
 
   private openingAccountDropped(actorId: string): void {
