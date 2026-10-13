@@ -4632,6 +4632,32 @@ side, because a `ReadableStream` crosses Workers RPC only with byte chunks (work
 unchanged: the container contracts' exec row holds `exec`, `exec` under an id and `execStream` to the same bytes and
 exit code.
 
+D89. An agent drives the desktop the owner watches, one action at a time (2026-10-14, issue #100). The owner asked an
+agent to use the computer while its desktop was open in the Env panel; the agent found no `DISPLAY`, installed Xvfb,
+started a second screen nobody could see, and could not read the PNG it took of it. Now the box answers
+`desktop({ driver, action })`, which `computer.screenshot()`, `click`, `type`, `key`, `scroll`, `move` and `drag`
+send one action at a time. Each call first runs the desktop check, the start script that the owner's socket route
+also runs, single-flight, so a look and a pane opened at once share one session; the check brings back any part of
+the session that died and ends by printing X's own geometry. The session's files and its background are written only
+by a run that starts X, so a check on a running desktop costs a few `pgrep`s. It is bounded at 60 s, a few times a fresh X's start:
+an X that stays alive and never opens its port would otherwise hold every later desktop call, and the box's rest,
+behind it. A point off that screen is refused before any input.
+One agent drives at a time: an agent takes the screen by looking once no other agent has called in 30 s, input is
+taken only from the agent holding it, and a screen X started afresh is nobody's, so every action lands on a screen
+its agent saw. The owner is not a driver. Each action is one xdotool invocation bounded at 5 s, with no
+`mousemove --sync`, which waits about 15 s when the pointer is already at the point; what a click holds and a drag
+presses is released whether or not the run ends cleanly. The capture is `scrot -p`, read back as bytes in the same
+run. Both run on the container runtime's exec directly rather than D87's `exec`: they are the box's own fixed
+commands, not a caller's; the capture is binary, which `exec` decodes as text; and xdotool's argv carries typed text
+without a shell to quote it. The screen is 1280×768, down from 1280×800: tile-based vision models resize a
+screenshot 800 high to 1228×768 at their default detail, and none Kinu serves resizes one 768 high, so an agent's
+points are the screen's own pixels. Every process the box starts gets `DISPLAY=:0`, so a window a program opens
+lands on that screen; the environment is `CONTAINER_ENV`, renamed from `CONTAINER_TRUST_ENV` because it no longer
+holds only the trust bundles. While no X runs, a program that needs a display fails as it did without `DISPLAY`
+(cannot open a display), and one that only checks the variable is told of a display that is not there; a headless
+browser ignores it. A tool that picks a dialog over a prompt because `DISPLAY` is set (a GUI pinentry, an askpass) now
+asks on the owner's screen, which is where the owner watches.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean

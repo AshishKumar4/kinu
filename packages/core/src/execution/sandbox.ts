@@ -18,6 +18,7 @@ import { shellQuote } from '../utils/shell';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { parseInput, type JsonValue } from '../utils/json';
 import { direntType } from '../vfs/dirent';
+import { desktopTools, type DesktopAnswer, type DesktopRequest } from './desktop';
 
 /** The container's working directory and default cwd; declared here because core must not depend on @kinu.run/devbox. */
 export const WORKSPACE_BACKUP_DIR = '/workspace';
@@ -100,6 +101,9 @@ export interface SandboxHandle {
   /** Records the size; a container running at another size restarts at it, and one not running stays so. */
   resize(size: string): Promise<SandboxResize>;
   answerRest(answer: 'now' | 'keep'): Promise<SandboxRestAnswer>;
+  /** One action on the desktop the owner watches, starting it when it is not running; the box refuses what only it can
+   *  check (a point off the screen, another agent driving) before any input reaches the screen. */
+  desktop(request: DesktopRequest): Promise<DesktopAnswer>;
 }
 
 export type SandboxRestAnswer =
@@ -269,11 +273,13 @@ export interface SandboxExecutorOptions {
   readonly sizes?: SandboxSizes;
   /** Where this agent's named shells keep their state; without it a name is refused. */
   readonly shells?: MachineShells;
+  /** This agent, as the box tells the desktop's drivers apart; without it the computer offers no desktop. */
+  readonly driver?: string;
 }
 
 /** Pass no handle for a "not configured" stub. */
 export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxExecutorOptions = {}): ExecutorProvider {
-  const { previewHostSuffix, activated, sizes, shells } = options;
+  const { previewHostSuffix, activated, sizes, shells, driver } = options;
   // One call at a time per name, and a name a detached job holds answers at once.
   const names = createShellSession({ home: WORKSPACE_BACKUP_DIR, userRoots: () => [] });
   const connected = handle != null;
@@ -623,6 +629,10 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
       },
     },
   };
+
+  if (driver !== undefined) {
+    Object.assign(tools, desktopTools({ box: handle && ((request) => touch(() => handle.desktop(request))), driver, notConfigured }));
+  }
 
   if (sizes !== undefined) {
     tools.resize = {

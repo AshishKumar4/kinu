@@ -246,7 +246,7 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
     temporaryAsk: sources.temporaryAsk(),
     backend: sources.backend,
     roleSection: sources.brief?.(callableToolNames(workMode, callable)) ?? profile.role,
-    model: { id: spec },
+    model: { id: spec, seesImages: models.catalog.acceptedMedia(spec).has('image') },
     sectionOverrides: artifacts.sections,
     identity,
     agentsMd,

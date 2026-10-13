@@ -5,8 +5,9 @@ const LOG = '/tmp/devbox-desktop.log';
 /** The session's own files: its two launchers and its panel's configuration. */
 const SESSION = '/usr/local/share/devbox/desktop';
 
-/** The screen, which the client scales to its frame. */
-export const DESKTOP_SIZE = { width: 1280, height: 800 } as const;
+/** The screen, which the client scales to its frame. 768 high: no vision model Kinu serves resizes a screenshot this size,
+ *  so an agent's points are the screen's own pixels (D89). */
+export const DESKTOP_SIZE = { width: 1280, height: 768 } as const;
 
 /** What a fresh desktop shows behind every window, and the panel along its foot (D80). */
 export const DESKTOP_COLOURS = { background: '#3b4252', panel: '#20242b' } as const;
@@ -59,15 +60,15 @@ clock_padding = 8 0`;
  * The first open starts the session; a later one finds it running. A window manager, a panel with a terminal and a
  * browser to launch, and a background, so a fresh desktop is a desktop and not a black screen (D80).
  */
-export const DESKTOP_START = `cd /
-printf '%s\\n' 'export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox --disable-gpu --disable-dev-shm-usage --disable-component-update"' > /etc/chromium.d/devbox
-mkdir -p ${SESSION}
-printf '%s\\n' ${launcher('Terminal', 'sh -c "cd /workspace 2>/dev/null; exec xterm -fa Monospace -fs 11"', '/usr/share/pixmaps/xterm-color_48x48.xpm')} > ${SESSION}/terminal.desktop
-printf '%s\\n' ${launcher('Browser', 'chromium', '/usr/share/icons/hicolor/48x48/apps/chromium.png')} > ${SESSION}/browser.desktop
-cat > ${SESSION}/tint2rc <<'PANEL'
+const DESKTOP_START = `cd /
+if ! pgrep -x Xkasmvnc >/dev/null; then
+  printf '%s\\n' 'export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox --disable-gpu --disable-dev-shm-usage --disable-component-update"' > /etc/chromium.d/devbox
+  mkdir -p ${SESSION}
+  printf '%s\\n' ${launcher('Terminal', 'sh -c "cd /workspace 2>/dev/null; exec xterm -fa Monospace -fs 11"', '/usr/share/pixmaps/xterm-color_48x48.xpm')} > ${SESSION}/terminal.desktop
+  printf '%s\\n' ${launcher('Browser', 'chromium', '/usr/share/icons/hicolor/48x48/apps/chromium.png')} > ${SESSION}/browser.desktop
+  cat > ${SESSION}/tint2rc <<'PANEL'
 ${PANEL}
 PANEL
-if ! pgrep -x Xkasmvnc >/dev/null; then
   setsid Xkasmvnc :0 -geometry ${String(DESKTOP_SIZE.width)}x${String(DESKTOP_SIZE.height)} -depth 24 -interface 0.0.0.0 -websocketPort ${String(DESKTOP_PORT)} \\
     -DisableBasicAuth 1 -sslOnly 0 -SecurityTypes None -AlwaysShared -publicIP 127.0.0.1 >${LOG} 2>&1 </dev/null &
   server=$!
@@ -81,9 +82,15 @@ if ! pgrep -x openbox >/dev/null; then
   wm=$!
   until pgrep -x openbox >/dev/null; do kill -0 "$wm" 2>/dev/null || exit 1; sleep 0.01; done
 fi
-DISPLAY=:0 xsetroot -solid '${DESKTOP_COLOURS.background}'
+[ -z "\${server-}" ] || DISPLAY=:0 xsetroot -solid '${DESKTOP_COLOURS.background}'
 if ! pgrep -x tint2 >/dev/null; then
   DISPLAY=:0 setsid tint2 -c ${SESSION}/tint2rc >>${LOG} 2>&1 </dev/null &
   panel=$!
   until DISPLAY=:0 xdotool search --class tint2 >/dev/null 2>&1; do kill -0 "$panel" 2>/dev/null || { tail -n 20 ${LOG} >&2; exit 1; }; sleep 0.02; done
 fi`;
+
+/** The start, which brings back any part of the session that died, then the screen's size as X reports it, and `fresh`
+ *  when this run started X: a screen nobody has seen. */
+export const DESKTOP_CHECK = `${DESKTOP_START}
+DISPLAY=:0 xdotool getdisplaygeometry
+[ -z "\${server-}" ] || echo fresh`;

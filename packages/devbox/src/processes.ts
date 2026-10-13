@@ -10,8 +10,9 @@ const BUNDLE = '/etc/ssl/certs/ca-certificates.crt';
 
 const SYSTEM_BUNDLE = '/etc/ssl/certs/ca-certificates.system.crt';
 
-// Native exec does not inherit start() env; the upstream coding-agents example passes this per process.
-export const CONTAINER_TRUST_ENV = { NODE_EXTRA_CA_CERTS: CA_PATH, REQUESTS_CA_BUNDLE: BUNDLE };
+// Native exec does not inherit start() env; the upstream coding-agents example passes this per process. The trust
+// bundles, and the desktop's display, so a window a program opens lands on the screen the owner watches (D89).
+export const CONTAINER_ENV = { NODE_EXTRA_CA_CERTS: CA_PATH, REQUESTS_CA_BUNDLE: BUNDLE, DISPLAY: ':0' };
 
 /** The SDK docs' trust step; it keeps no earlier container's CA. */
 export const TRUST = ['/bin/sh', '-c', `[ -e ${SYSTEM_BUNDLE} ] || { cp ${BUNDLE} ${SYSTEM_BUNDLE}.tmp && mv ${SYSTEM_BUNDLE}.tmp ${SYSTEM_BUNDLE}; }
@@ -180,7 +181,7 @@ export class Processes {
       yield* whileCurrent(options.current, () => attempt('file', () => this.#files.writeFile(`${dir}/process.json`, JSON.stringify(record))));
 
       const launched = yield* Effect.result(whileCurrent(options.current, () => attempt('process', () => this.container.exec(['/bin/sh', '-c', RUN, 'devbox-process', dir, record.cwd, '/bin/bash', '-c', command], {
-        env: CONTAINER_TRUST_ENV, stdout: 'ignore', stderr: 'ignore',
+        env: CONTAINER_ENV, stdout: 'ignore', stderr: 'ignore',
       }))));
 
       if (Result.isFailure(launched)) {

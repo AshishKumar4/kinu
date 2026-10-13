@@ -5,11 +5,12 @@ import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 
 import { wasNotDispatched } from '@kinu.run/agent-utils';
 import { literalWords, onUserRoots, type FileAccess, type GatedExecutor } from '../safety/command-review';
-import { approveFileAccess, gateExec, namedShellState, pinnedShellMoved, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
+import { approveDesktopInput, approveFileAccess, gateExec, namedShellState, pinnedShellMoved, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
 import { shellCall } from './command-call';
 import { asBytes, currentBytes } from '../safety/bound-write';
 import { answeredRefusal } from './exec-result';
-import { COMMAND_MEMBERS, type CommandTool, type ExecutorProvider, type ExecutorToolResult } from './types';
+import { COMMAND_MEMBERS, type CommandTool, type ExecutorProvider, type ExecutorTool, type ExecutorToolResult } from './types';
+import { DESKTOP_INPUT_MEMBERS } from './desktop';
 import type { CheckpointFiles, Shell, ShellExecOptions, ShellExecResult } from '../types/primitives';
 import { busyShell, callJob, shellExecOptions } from './shell-session';
 import { requireBuild } from './work-mode';
@@ -18,6 +19,7 @@ import type { VfsMountRouting } from '../vfs/mounts';
 import { KinuError, refusalOf } from '../obs/error';
 import { Effect } from 'effect';
 import { settle } from '../obs/effect';
+import { projectJsonValue, type JsonValue } from '../utils/json';
 
 export type ShellReach = Pick<GatedExecutor, 'filesOwner' | 'shellSession'> & {
   /** This workspace's planes: a `root://` word is refused with its real path. Absent, none is. */
@@ -204,6 +206,13 @@ export function withApprovalGatedFiles(
   return gated;
 }
 
+/** A desktop call as the owner is asked about it: the member and its input, its text cut to what a prompt shows. */
+function desktopCall(member: string, input: JsonValue): string {
+  const shown = JSON.stringify(input);
+
+  return `${member}(${shown.length > 200 ? `${shown.slice(0, 199)}…` : shown})`;
+}
+
 /** Already-wrapped executes, so a provider shared across routers is gated once (idempotent). */
 const GATED_EXECUTES = new WeakSet<CommandTool['execute']>();
 
@@ -250,6 +259,25 @@ export function gateProviderExec(provider: ExecutorProvider, policy: ShellApprov
     };
 
     tools[name] = { ...entry, prepare, execute };
+  }
+
+  for (const name of DESKTOP_INPUT_MEMBERS) {
+    const entry = provider.tools[name];
+
+    if (provider.kind !== 'computer' || !entry || GATED_EXECUTES.has(entry.execute)) continue;
+    changed = true;
+
+    // Asked once as one rule; what each call does stays the member's.
+    const gated: ExecutorTool = {
+      ...entry,
+      execute: (...args) => settle(Effect.matchEffect(approveDesktopInput(provider.name, desktopCall(name, projectJsonValue({ value: args[0] })), policy), {
+        onFailure: (refused) => Effect.succeed(refusalOf(refused)),
+        onSuccess: () => Effect.promise(() => entry.execute(...args)),
+      })),
+    };
+
+    GATED_EXECUTES.add(gated.execute);
+    tools[name] = gated;
   }
 
   return changed ? { ...provider, tools } : provider;

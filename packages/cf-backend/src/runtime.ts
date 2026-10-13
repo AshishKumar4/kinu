@@ -435,6 +435,8 @@ export function createCFRuntime(
         activated: () => hooks.liveReadsMoved?.(['getExecutors', 'getToolDescriptions', 'getExposedPorts']),
         sizes: SANDBOX_SIZES,
         shells: machineShells,
+        // The box's desktop has one driver at a time; each of the workspace's agents drives as itself.
+        driver: actor.actor.actorId,
       }));
       diagnostics.event('computer.executor_registered', {
         sandboxId,

@@ -9,7 +9,6 @@ import { renderActiveSkillsSection, renderSkillsIndexSection } from './skills/re
 import type { ActiveSkillSet, SkillsIndex } from './skills/types';
 import {
   compilePromptSurface,
-  type PromptBackend,
   type PromptExecutorInfo,
   type PromptSurface,
   type PromptSurfaceOptions,
@@ -159,15 +158,17 @@ function sandboxSizeSlots(sizes: SandboxSizes | undefined) {
 function renderExecutorLine(
   exec: PromptExecutorInfo,
   render: RenderSection,
-  backend?: PromptBackend,
+  surface: Pick<PromptSurface, 'backend' | 'seesImages'>,
 ): string {
+  const { backend } = surface;
+
   switch (exec.name) {
       case 'workspace':
         return render(WORKSPACE_EXECUTOR_LINE, {
           cliLocal: backend === 'cli-local', memoryMb: String(WORKSPACE_MEMORY_MB),
         });
       case 'computer':
-        return render(COMPUTER_EXECUTOR_LINE, sandboxSizeSlots(exec.sizes));
+        return render(COMPUTER_EXECUTOR_LINE, { ...sandboxSizeSlots(exec.sizes), blind: !surface.seesImages });
       case 'device':
         return render(DEVICE_EXECUTOR_LINE, {});
       default:
@@ -189,8 +190,8 @@ function renderExecutorSection(surface: PromptSurface, render: RenderSection): s
   const devices = executors.filter((exec) => exec.name !== 'workspace');
 
   const lines = [
-    ...devices.map((exec) => renderExecutorLine(exec, render, surface.backend)).filter((line) => line !== ''),
-    ...(workspace ? [renderExecutorLine(workspace, render, surface.backend)] : []),
+    ...devices.map((exec) => renderExecutorLine(exec, render, surface)).filter((line) => line !== ''),
+    ...(workspace ? [renderExecutorLine(workspace, render, surface)] : []),
   ];
 
   const previewExecutors = executors.filter((exec) => exec.capabilities?.includes('net_inbound'));

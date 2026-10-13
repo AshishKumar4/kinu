@@ -161,6 +161,26 @@ export const EXEC_OUTPUT_PROGRAM = [
 export const EXEC_OUTPUT_ASK = 'With eval, run this program exactly and reply with the line it returns:\n'
   + EXEC_OUTPUT_PROGRAM;
 
+/** computer-desktop: the title of the page the computer's own browser opens, which X names its window by. */
+export const DESKTOP_PROBE_TITLE = 'KINU_DESKTOP_PROBE';
+
+/** computer-desktop: look at the screen the owner watches, open a page there from the computer's shell, wait for its
+ *  window, and return the screen as it is then. */
+export const DESKTOP_PROGRAM = [
+  'await computer.screenshot();',
+  `await computer.exec("mkdir -p /tmp/kinu-desk && printf '<title>${DESKTOP_PROBE_TITLE}</title><h1>probe</h1>' > /tmp/kinu-desk/index.html");`,
+  "await computer.exec('setsid -f python3 -m http.server 8766 --bind 127.0.0.1 --directory /tmp/kinu-desk >/dev/null 2>&1');",
+  "await computer.exec('setsid -f chromium --no-first-run --user-data-dir=/tmp/kinu-desk/profile http://127.0.0.1:8766/ >/dev/null 2>&1');",
+  'for (let tries = 0; tries < 60; tries += 1) {',
+  `  if (String(await computer.exec('xdotool search --name ${DESKTOP_PROBE_TITLE} || true')).trim() !== '') break;`,
+  '  await new Promise((resolve) => setTimeout(resolve, 500));',
+  '}',
+  'return await computer.screenshot();',
+].join('\n');
+
+export const DESKTOP_ASK = 'With eval, run this program exactly and reply with the size of the screenshot it returns:\n'
+  + DESKTOP_PROGRAM;
+
 /**
  * two-machines: the two machines, by the names a person would type.
  *

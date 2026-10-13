@@ -10,7 +10,9 @@ import { answeredRefusal } from '../execution/exec-result';
 import { KinuError, settleSync } from '../obs/index';
 import { serve, type Operation, type Served } from '../operations/operation';
 import { COMPUTER, computerResize, DEVICE, PARENT, WORKSPACE } from '../operations/executors';
-import { JsonObjectSchema, projectJsonValue, type JsonValue } from '../utils/json';
+import { JsonObjectSchema, projectJsonValue, type JsonObject, type JsonValue } from '../utils/json';
+import { DESKTOP_MEMBERS } from '../execution/desktop';
+import type { ExecCallContext } from '../execution/signal';
 import { programExecContext } from './outcome';
 import type { CodemodeProvider } from '../types/codemode';
 import { callArgs, codemodeNamespace } from './operation-surfaces';
@@ -23,17 +25,28 @@ const DECLARED = new Map<string, { readonly ops: Readonly<Record<string, Operati
   ['device', { ops: DEVICE, summary: 'The user\'s machine.' }],
 ]);
 
-/**
- * A shell call's arguments, with what its backend says a program's shell calls carry, or else the call's own stop
- * signal: a caller outside eval stops its command by cancelling the call.
- */
+/** What a program's shell or desktop call carries beyond its arguments, as its backend says, or else the call's own
+ *  stop signal: a caller outside eval stops its command by cancelling the call. */
+function callContext(signal: AbortSignal | undefined): ExecCallContext | undefined {
+  return programExecContext() ?? (signal === undefined ? undefined : { signal });
+}
+
+/** A shell call's arguments, its context merged into its options. */
 function withExecContext(op: Operation, args: readonly JsonValue[], signal: AbortSignal | undefined): unknown[] {
-  const context = op.name === 'exec' ? programExecContext() ?? (signal === undefined ? undefined : { signal }) : undefined;
+  const context = op.name === 'exec' ? callContext(signal) : undefined;
 
   if (context === undefined) return [...args];
   const [command, options] = args;
 
   return [command, { ...v.parse(v.optional(JsonObjectSchema, {}), options), ...context }];
+}
+
+/** A desktop member is called with its named input and its context: stopped with its program, and refused once its
+ *  program was moved to the background. */
+function memberArgs(op: Operation, input: JsonObject, signal: AbortSignal | undefined): unknown[] {
+  if (op.ns === 'computer' && DESKTOP_MEMBERS.some((member) => member === op.name)) return [input, callContext(signal)];
+
+  return withExecContext(op, callArgs(op, input), signal);
 }
 
 /** Each declared member the executor implements, forwarded with the arguments it is called with. */
@@ -43,7 +56,7 @@ function forwarded(provider: Pick<ExecutorProviderSurface, 'name' | 'tools'>, op
 
     if (member === undefined) return [];
 
-    return [serve(op, (input, { signal }) => Effect.flatMap(Effect.promise(() => member.execute(...withExecContext(op, callArgs(op, v.parse(JsonObjectSchema, projectJsonValue({ value: input }))), signal))), (answer) => {
+    return [serve(op, (input, { signal }) => Effect.flatMap(Effect.promise(() => member.execute(...memberArgs(op, v.parse(JsonObjectSchema, projectJsonValue({ value: input })), signal))), (answer) => {
       const refusal = answeredRefusal(projectJsonValue({ value: answer }));
 
       if (refusal !== null) return Effect.fail(new KinuError(refusal.reason ?? 'io', refusal.error, refusal.execution === undefined ? undefined : { execution: refusal.execution }));

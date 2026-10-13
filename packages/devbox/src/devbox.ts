@@ -2,7 +2,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
 import { Files, SandboxFileError } from '@cloudflare/sandbox';
-import { Processes, isProcessLive, nameBox, CONTAINER_TRUST_ENV, END_TREE } from "./processes";
+import { Processes, isProcessLive, nameBox, CONTAINER_ENV, END_TREE } from "./processes";
 import { nativeStartClock } from './native-clock';
 import type { DevboxExecOptions, ExecResult, ReadOptions, FileResult, ListFilesOptions, FileMetadata, GatewayBindings } from './contracts';
 import { listFiles as readDirectory } from './file-listing';
@@ -19,9 +19,10 @@ import artifact from '../block-lower/upstream.json';
 import { ContainerRoutes, type OutboundPolicy } from './gateway';
 import { terminalSocket, resetTerminal } from './terminal';
 import { bridgeSockets } from './socket-bridge';
-import { DESKTOP_PORT, DESKTOP_START } from './desktop';
+import { DESKTOP_CHECK, DESKTOP_PORT } from './desktop';
+import { DESKTOP_ACTION_MS, DESKTOP_CHECK_MS, DesktopLease, DesktopRequestSchema, SCREENSHOT, offScreen, pngSize, xdotoolOf, type DesktopAnswer, type DesktopRequest, type DesktopScreen } from './desktop-input';
 import { LABEL_LIMIT, LABEL_NAME, ZoneSchema, previewAddress, type PreviewAddress } from './preview';
-import { Deferred, Effect, Result } from 'effect';
+import { Deferred, Effect, Result, Semaphore } from 'effect';
 
 import {
   DEFAULT_DEVBOX_POLICY,
@@ -356,6 +357,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   /** Set by `destroy`, cleared by a caller or a host (D36). */
   #closed = false;
   #teardowns = 0;
+  /** The desktop check in progress, which the owner's pane and every agent action await (D89): one run at a time. */
+  #desktopCheck: Deferred.Deferred<DesktopScreen, DevboxError> | undefined;
+  /** Agents' desktop actions run one at a time, in arrival order. */
+  readonly #desktopTurns = Semaphore.makeUnsafe(1);
+  readonly #desktopLease = new DesktopLease();
   /** Opened by the attempt on its hook; every phase stamp reads it until the attempt settles.
    *  Memory only: a witness needing stamps past a reset keeps them via `onRestorePhase`. */
   #phaseClock: RestoreClock | undefined;
@@ -3017,12 +3023,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     return this.#withActiveCaller(Effect.gen({ self: this }, function* () {
       const { container } = yield* attempt('io', () => this.#ensureReady(this.#teardowns));
-      const started = yield* attempt('io', async () => await (await container.exec(['/bin/bash', '-c', DESKTOP_START, 'devbox-desktop'], { env: CONTAINER_TRUST_ENV })).output());
 
-      if (started.exitCode !== 0) {
-        return yield* Effect.fail(new DevboxError('io', `the desktop did not start: ${new TextDecoder().decode(started.stderr).trim()}`));
-      }
-
+      yield* this.#desktopUp(container);
       const server = `http://127.0.0.1:${String(DESKTOP_PORT)}`;
       const headers = new Headers(request.headers);
       headers.set('origin', server);
@@ -3030,6 +3032,94 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
       return answer.webSocket ? this.#bridge(answer.webSocket, answer.headers) : answer;
     }));
+  }
+
+  /** The desktop running, as the check finds it once it brought back what had died; callers during a check share it. */
+  #desktopUp(container: Container): Effect.Effect<DesktopScreen, DevboxError> {
+    return Effect.suspend(() => {
+      const running = this.#desktopCheck;
+
+      if (running !== undefined) return Deferred.await(running);
+      const checked = Deferred.makeUnsafe<DesktopScreen, DevboxError>();
+      this.#desktopCheck = checked;
+
+      return this.#checkDesktop(container).pipe(
+        Effect.exit,
+        Effect.tap((exit) => Deferred.done(checked, exit)),
+        Effect.flatten,
+        Effect.ensuring(Effect.sync(() => {
+          if (this.#desktopCheck === checked) this.#desktopCheck = undefined;
+        })),
+      );
+    });
+  }
+
+  #checkDesktop(container: Container): Effect.Effect<DesktopScreen, DevboxError> {
+    return Effect.gen({ self: this }, function* () {
+      // Bounded: an X that stays alive and never opens its port would hold every desktop call, and the box's rest, behind it.
+      const checked = yield* attempt('io', async () => decoded(await (await launch(container, ['/bin/bash', '-c', DESKTOP_CHECK, 'devbox-desktop'], {
+        signal: AbortSignal.timeout(DESKTOP_CHECK_MS),
+      })).output()), `starting the desktop, bounded at ${String(DESKTOP_CHECK_MS / 1000)} s`);
+
+      const [size = '', fresh] = checked.stdout.trim().split('\n');
+      const [width = Number.NaN, height = Number.NaN] = size.split(/\s+/u).map(Number);
+
+      if (checked.exitCode !== 0 || !Number.isInteger(width) || !Number.isInteger(height)) {
+        return yield* Effect.fail(new DevboxError('io', `the desktop did not start: ${checked.stderr.trim() || checked.stdout.trim()}`));
+      }
+
+      if (fresh === 'fresh') this.#desktopLease.clear();
+
+      return { width, height };
+    });
+  }
+
+  /**
+   * One action on the desktop the owner watches, for the agent `request.driver` (D89). The desktop is checked first,
+   * under the box's own readiness; then the action's points against the screen and the driver against the lease, before
+   * any input. Actions run one at a time; each xdotool run is bounded, and what it holds down is released however it ends.
+   */
+  async desktop(request: DesktopRequest): Promise<DesktopAnswer> {
+    return await settle(this.#withActiveCaller(Effect.gen({ self: this }, function* () {
+      const asked = v.safeParse(DesktopRequestSchema, request);
+
+      if (!asked.success) return yield* Effect.fail(new DevboxError('invalid-input', `desktop: ${v.summarize(asked.issues)}`));
+      const { driver, action } = asked.output;
+      const { container } = yield* attempt('io', () => this.#ensureReady(this.#teardowns));
+      const screen = yield* this.#desktopUp(container);
+      const outside = offScreen(action, screen);
+
+      if (outside !== null) return { kind: 'refused', reason: 'off_screen', detail: outside } satisfies DesktopAnswer;
+      const refused = this.#desktopLease.admit(driver, action.kind === 'screenshot', Date.now());
+
+      if (refused !== null) return refused;
+
+      if (action.kind === 'screenshot') {
+        const shot = yield* attempt('io', async () => await (await launch(container, ['/bin/bash', '-c', SCREENSHOT, 'devbox-screenshot'], { signal: AbortSignal.timeout(DESKTOP_ACTION_MS) })).output());
+        const png = new Uint8Array(shot.stdout);
+        const size = pngSize(png);
+
+        if (shot.exitCode !== 0 || size === null) return yield* Effect.fail(new DevboxError('io', `the screenshot failed: ${new TextDecoder().decode(shot.stderr).trim()}`));
+
+        return { kind: 'screen', png: Buffer.from(png).toString('base64'), ...size } satisfies DesktopAnswer;
+      }
+
+      const { argv, release } = xdotoolOf(action);
+
+      // A release that fails is recorded; the action's own outcome is what the agent hears.
+      const released = release === null ? Effect.void : attempt('io', async () => {
+        await (await launch(container, release, { signal: AbortSignal.timeout(DESKTOP_ACTION_MS) })).output();
+      }).pipe(
+        Effect.catchTag('DevboxError', (failure) => Effect.sync(() => { this.#trace('desktop.release_failed', { action: action.kind, reason: failure.message }); })),
+      );
+
+      const ran = yield* attempt('io', async () => decoded(await (await launch(container, argv, { signal: AbortSignal.timeout(DESKTOP_ACTION_MS) })).output()))
+        .pipe(Effect.ensuring(released));
+
+      if (ran.exitCode !== 0) return yield* Effect.fail(new DevboxError('io', `xdotool ${action.kind} failed: ${ran.stderr.trim()}`));
+
+      return { kind: 'done' } satisfies DesktopAnswer;
+    }).pipe(this.#desktopTurns.withPermits(1))));
   }
 
   /** The SDK's `bridge()`: an open preview socket is the box's use. */
@@ -3292,7 +3382,7 @@ async function firstExec(container: Container, signal: AbortSignal): Promise<voi
 
 function launch(container: Container, argv: readonly string[], options: DevboxExecOptions): Promise<ExecProcess> {
   return container.exec([...argv], {
-    cwd: options.cwd ?? DEVBOX_WORKDIR, env: { ...CONTAINER_TRUST_ENV, ...options.env }, signal: options.signal,
+    cwd: options.cwd ?? DEVBOX_WORKDIR, env: { ...CONTAINER_ENV, ...options.env }, signal: options.signal,
   });
 }
 

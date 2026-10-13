@@ -247,6 +247,42 @@ export function approveFileAccess(
   });
 }
 
+/** The rule desktop input trips: one consent, which grants what a person at the computer's keyboard has. */
+const DESKTOP_INPUT_RULE = 'desktop-input';
+
+const DESKTOP_INPUT_REVIEW: ApprovalResult = {
+  decision: 'gate',
+  hits: [{
+    rule: DESKTOP_INPUT_RULE, decision: 'gate',
+    explanation: 'Let the agent use the computer\'s screen, keyboard and mouse. It can do anything you could at that screen, including running commands in its terminal.',
+  }],
+};
+
+/**
+ * Consent to drive the desktop of `executor`, asked as one rule over the call `action` names: a standing grant covers
+ * every later input, and a refusal refuses that call, as a refused command refuses itself. `deny_all` refuses first,
+ * since the shared decision drops a granted rule before it reads the mode.
+ */
+export function approveDesktopInput(executor: string, action: string, policy: ShellApprovalPolicy): Effect.Effect<void, KinuError> {
+  return Effect.gen(function* () {
+    yield* Effect.promise(async () => { await policy.resolve?.(); });
+
+    if (policy.mode() === 'deny_all') {
+      return yield* Effect.fail(new KinuError('denied', `NOT RUN: refused by standing policy (deny_all): ${formatApproval(DESKTOP_INPUT_REVIEW)}`));
+    }
+
+    const decision = yield* Effect.promise(() => decideApproval(
+      { command: `${executor}.${action}`, executor, context: async () => ({}) }, DESKTOP_INPUT_REVIEW, policy,
+    ));
+
+    if (!decision.run) return yield* Effect.fail(decision.error);
+
+    const { spent } = decision;
+
+    if (spent !== undefined) yield* Effect.promise(async () => { await policy.deferrals?.settle(spent, 'spent'); });
+  });
+}
+
 /** Human-readable result for approval prompts and deny errors. */
 export function formatApproval(result: ApprovalResult): string {
   if (result.decision === 'allow') return '';

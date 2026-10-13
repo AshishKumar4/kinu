@@ -97,6 +97,8 @@ export interface PromptSurface {
   executors: PromptExecutorInfo[];
   configuredExecutors: PromptExecutorInfo[];
   model: PromptModelProfile;
+  /** Whether the turn's model takes images: one that does not cannot see the computer's desktop. */
+  seesImages: boolean;
   backend?: PromptBackend;
   roleSection: { id: string; label: string; instructions: string } | null;
   identity: ResolvedPromptIdentity;
@@ -179,6 +181,7 @@ export function compilePromptSurface(opts: PromptSurfaceOptions): PromptSurface 
     executors,
     configuredExecutors: executors.filter(executorIsConfigured),
     model: resolvePromptModelProfile(opts.model),
+    seesImages: opts.model?.seesImages !== false,
     roleSection: opts.roleSection ?? null,
     backend: opts.backend,
     // Compared against '' after trim, not `??`: a fresh workspace's title is '' until its first prompt.

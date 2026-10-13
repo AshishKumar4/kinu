@@ -13,6 +13,8 @@ export interface PromptModelContext {
   contextWindow?: number | null;
   /** Largest answer out of that window; absent when the catalog has not answered, never the window itself. */
   modelOutputLimit?: number | null;
+  /** Whether it takes image input, as its catalog row says; absent counts as taking it, as the transport does. */
+  seesImages?: boolean;
 }
 
 export interface PromptModelProfile {

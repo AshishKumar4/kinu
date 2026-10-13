@@ -5,6 +5,9 @@
  */
 import * as v from 'valibot';
 import { ExecutorPortSchema } from '../execution/types';
+import {
+  ButtonSchema, ClickCountSchema, DesktopPointSchema, KeysSchema, TypedTextSchema, WheelClicksSchema,
+} from '../execution/desktop';
 import { CRAFTED_TOOL_BODY, WORKSPACE_FILE_BINDINGS } from '../types/codemode';
 import { defineOperation, type Impact, type Operation } from './operation';
 
@@ -88,6 +91,23 @@ export const WORKSPACE = {
 
 const sb = executorOp('computer');
 
+/** A desktop member: the owner's screen is never reachable from a slate. */
+const desk = <const I extends v.StrictObjectSchema<v.ObjectEntries, undefined>, const O extends v.GenericSchema>(
+  op: Pick<Operation<I, O>, 'name' | 'help' | 'input' | 'output'> & { readonly impact: Impact },
+) => defineOperation({ ns: 'computer', slate: false, ...op });
+
+const Point = described(DesktopPointSchema, 'A point on the screen, [x, y]: pixels of the screenshot, from its top left.');
+
+const Screen = v.strictObject({
+  image: described(v.string(), 'The screen as a PNG data URL. Returned from the program, it is shown to you.'),
+  width: described(v.number(), 'x runs from 0 to width - 1.'),
+  height: described(v.number(), 'y runs from 0 to height - 1.'),
+});
+
+const KEYS_ARE = '"Return", "Tab", "Escape", "BackSpace", "Delete", "Home", "End", "Page_Up", "Page_Down", "Up", "Down", '
+  + '"Left", "Right", "space", "F1"-"F12", or a letter, digit or punctuation mark; modifiers before it with "+": "ctrl+l", '
+  + '"ctrl+shift+t", "alt+Tab". Enter, Esc, cmd and win are understood.';
+
 /** The computer container's members; `resize` is declared over the host's own size table. Its files are read and
  *  written through the workspace's, under `/computer`, as every plane's are. */
 export const COMPUTER = {
@@ -119,6 +139,41 @@ export const COMPUTER = {
   }),
   unexposePort: sb({ name: 'unexposePort', help: 'Withdraw a port\'s public URL.', impact: 'administer', input: v.strictObject({ port: ExecutorPortSchema }), output: Text }),
   listPorts: sb({ name: 'listPorts', help: 'The exposed ports and their URLs.', impact: 'observe', input: v.strictObject({}), output: Text }),
+  screenshot: desk({
+    name: 'screenshot', impact: 'observe', input: v.strictObject({}), output: Screen,
+    help: 'The desktop: the screen the owner watches in the Computer pane, as an image. Starts the desktop if it is not running; '
+      + 'start programs that open windows after it. Return it from the program to see it.',
+  }),
+  click: desk({
+    name: 'click', impact: 'execute', output: v.null(), help: 'Click at a point.',
+    input: v.strictObject({
+      at: Point,
+      button: v.optional(described(ButtonSchema, 'Default "left".')),
+      count: v.optional(described(ClickCountSchema, '2 double-clicks, 3 triple-clicks; default 1.')),
+      hold: v.optional(described(KeysSchema, 'Modifiers held during the click: "ctrl", "shift", "alt", "super", or several joined by "+".')),
+    }),
+  }),
+  type: desk({
+    name: 'type', impact: 'execute', output: v.null(), help: 'Type text at the keyboard focus. "\\n" presses Return.',
+    input: v.strictObject({ text: described(TypedTextSchema, 'At most 4,000 characters.') }),
+  }),
+  key: desk({
+    name: 'key', impact: 'execute', output: v.null(), help: 'Press a key, or a chord of modifiers and a key.',
+    input: v.strictObject({ keys: described(KeysSchema, KEYS_ARE) }),
+  }),
+  scroll: desk({
+    name: 'scroll', impact: 'execute', output: v.null(), help: 'Turn the mouse wheel over a point: what is under it scrolls.',
+    input: v.strictObject({
+      at: Point,
+      dy: described(WheelClicksSchema, 'Wheel clicks down; negative scrolls up.'),
+      dx: v.optional(described(WheelClicksSchema, 'Wheel clicks right; negative scrolls left.')),
+    }),
+  }),
+  move: desk({ name: 'move', impact: 'execute', output: v.null(), help: 'Move the pointer to a point without clicking, to hover.', input: v.strictObject({ at: Point }) }),
+  drag: desk({
+    name: 'drag', impact: 'execute', output: v.null(), help: 'Press the left button at one point, move to another, release.',
+    input: v.strictObject({ from: described(DesktopPointSchema, 'Where the drag starts, [x, y].'), to: described(DesktopPointSchema, 'Where it ends, [x, y].') }),
+  }),
 } as const;
 
 /** `computer.resize` over the host's sizes, each described as it runs. */

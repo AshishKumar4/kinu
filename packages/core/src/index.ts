@@ -1013,6 +1013,7 @@ export {
   busyShell, callJob, createBashShell, createShellSession, machineShellCall, shellExecOptions, type MachineShellCall, type MachineShellPlace,
   type MachineShells, type ShellSession,
   createSandboxExecutor, type SandboxHandle, type SandboxResize, isSandboxTransientError, SandboxPending, sandboxSizeLabel,
+  DESKTOP_MEMBERS,
   WORKSPACE_BACKUP_DIR,
   createDeviceTunnelExecutor, type DeviceTransport,
   deviceToolchainAnswer, freshDeviceToolchain,

@@ -354,7 +354,8 @@ export class FakeSandbox {
   readonly listening = new Set<number>();
   /** Answers a port's fetch in place of the probe status, e.g. with an upgrade. */
   portAnswer: ((port: number, request: Request) => Response | Promise<Response>) | undefined;
-  desktopStart: ExecResult = { stdout: '', stderr: '', exitCode: 0 };
+  /** The desktop check's answer: it ends by printing the screen's size. */
+  desktopStart: ExecResult = { stdout: '1280 768\n', stderr: '', exitCode: 0 };
   readonly fileOperations: FileOperation[] = [];
   readonly mountCalls: string[] = [];
   /** Mounts and execs share one chronological list: stop order is a property of the order
@@ -965,7 +966,8 @@ export class FakeSandbox {
     // A caller's command is `setsid -w /bin/bash -c` (D69); the box's own is `/bin/bash -c`. A digest write names its file
     // in argv (`file-digest-write.ts`).
     const onHost = options.cwd?.includes(DEVBOX_SCRATCH_PREFIX) === true || args[0] === 'setsid' || args[3] === "kill-tree" || args[3] === "port-listeners"
-      || args[3] === 'devbox-desktop' || (args[0] === 'python3' && args[3]?.includes(DEVBOX_SCRATCH_PREFIX) === true);
+      || args[3] === 'devbox-desktop' || (args[0] === 'python3' && args[3]?.includes(DEVBOX_SCRATCH_PREFIX) === true)
+      || args[0] === 'xdotool' || args[3] === 'devbox-screenshot';
 
     if (this.nativeExec !== undefined && onHost) return this.nativeExec(args, options);
 

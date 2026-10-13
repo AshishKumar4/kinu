@@ -8,7 +8,10 @@ import { DEFAULT_DEVBOX_POLICY, describeThrown } from '../../../devbox/src/lifec
 import { fileErrorContract, runContainerContract } from '../../../devbox/bench/container-contracts';
 import { CONTAINER_CONTRACTS, DISK_CONTRACTS } from '../../../devbox/bench/contract-types';
 import { diskContract } from '../../../devbox/bench/disk-contracts';
-import { desktopClientUrl, sandboxFiles, withAppSecurityHeaders } from '@kinu.run/core';
+import {
+  JsonValueSchema, createSandboxExecutor, desktopClientUrl, executorNamespace, gateProviderExec, projectJsonValue, sandboxFiles, withAppSecurityHeaders,
+  type JsonValue, type ShellApprovalPolicy,
+} from '@kinu.run/core';
 import { adaptCloudflareSandbox } from '../../src/sandbox-exec-lane';
 import { terminalRoutes } from '../../src/terminal-route';
 import { serveFamily } from '../helpers/api';
@@ -203,6 +206,20 @@ export class ContractBox extends Devbox<Env> {
     ])];
   }
 
+  /**
+   * A program's call of `computer.<member>(...args)` as agent `driver` makes it (D89): the product's own members, gated as
+   * the router gates them under a standing consent, over the product's adapter onto this box and its real desktop.
+   */
+  async agentDesktop(driver: string, member: string, args: readonly JsonValue[]): Promise<JsonValue> {
+    const consented: ShellApprovalPolicy = { mode: () => 'strict', granted: (grant) => grant.rule === 'desktop-input' };
+    const computer = executorNamespace(gateProviderExec(createSandboxExecutor(adaptCloudflareSandbox(this, async () => {}, null), { driver }), consented));
+    const tool = computer.tools[member];
+
+    if (tool === undefined) throw new Error(`computer has no ${member}`);
+
+    return projectJsonValue({ value: await tool.execute(...args) });
+  }
+
   async clear(): Promise<void> {
     const snapshots = this.snapshots();
     await this.discardState();
@@ -216,7 +233,7 @@ export class ContractBox extends Devbox<Env> {
   }
 }
 
-const Body = v.object({ command: v.optional(v.string()) });
+const Body = v.object({ command: v.optional(v.string()), driver: v.optional(v.string()), member: v.optional(v.string()), args: v.optional(v.string()) });
 
 async function desktopRoute(request: Request, env: Env, ctx: ExecutionContext, url: URL): Promise<Response | null> {
   if (url.pathname.startsWith('/kasmvnc/')) return withAppSecurityHeaders(await env.ASSETS.fetch(request), url, null);
@@ -256,6 +273,7 @@ async function contractRoute(url: URL, name: string, box: DurableObjectStub<Cont
 
       return Response.json({ ok: true });
     case '/exec': return Response.json(await box.exec(body.command ?? ''));
+    case '/agent-desktop': return Response.json(await box.agentDesktop(body.driver ?? 'agent', body.member ?? '', v.parse(v.array(JsonValueSchema), JSON.parse(body.args ?? '[]'))));
     case '/storage-probe': return Response.json(await box.storageProbe(body.command ?? ''));
     case '/state': return Response.json(await box.devboxState());
     case '/checkpoint': return Response.json(await box.checkpointNow(url.searchParams.get('kind') === 'tick' ? 'tick' : 'quiesce'));
