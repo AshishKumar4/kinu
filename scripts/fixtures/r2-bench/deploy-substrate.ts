@@ -5,7 +5,7 @@
  * platform, each line bought with a failed run:
  *
  *   - The account must be named non-interactively, because this credential can
- *     see more than one and wrangler refuses to choose.
+ *     see more than one and wrangler refuses to choose (`infra-cloudflare.ts` names it).
  *   - `wrangler delete` needs TWO routes: `--config` has failed against
  *     /workers/services while `--name` succeeded on the first try.
  *   - Deleting the Worker does NOT delete its container application, which keeps
@@ -18,11 +18,9 @@
  * nothing about what is measured inside one.
  */
 
-import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import * as v from 'valibot';
 import { deleteApplicationByRest, deletedByRest } from '../../cloudflare-rest';
+import { requireCloudflareAccountId, wrangler } from '../../infra-cloudflare';
 
 /** What `wrangler containers list --json` is trusted to say. Parsed rather than
  *  cast, because a listing this driver cannot understand must not read as
@@ -44,37 +42,6 @@ export const delay = async (ms: number): Promise<void> => {
   await settle.promise;
 };
 
-/**
- * The account every wrangler call runs against.
- *
- * MEASURED: `wrangler r2 bucket` takes no config file, and this credential can
- * see more than one account, so wrangler refuses to choose and the run dies
- * before it starts. Read from the product's own config rather than duplicated,
- * so a benchmark cannot end up measuring a different account than the product
- * deploys to. `CLOUDFLARE_ACCOUNT_ID` still wins, which is how
- * `scripts/deploy.sh` is parameterised too.
- */
-export function accountId(repoRoot: string): string {
-  const fromEnv = process.env['CLOUDFLARE_ACCOUNT_ID'];
-
-  if (fromEnv !== undefined && fromEnv.length > 0) return fromEnv;
-  const config = readFileSync(join(repoRoot, 'packages/cf-backend/wrangler.jsonc'), 'utf8');
-  const found = /"account_id"\s*:\s*"([0-9a-f]+)"/.exec(config);
-
-  if (found === null) {
-    throw new Error(
-      'no account_id in packages/cf-backend/wrangler.jsonc and no CLOUDFLARE_ACCOUNT_ID in the '
-      + 'environment, so wrangler cannot pick an account non-interactively.',
-    );
-  }
-
-  const id = found[1];
-
-  if (id === undefined) throw new Error('account_id match contained no capture');
-
-  return id;
-}
-
 export interface WranglerOptions {
   readonly allowFailure?: boolean;
 }
@@ -91,25 +58,19 @@ export function wranglerProvesAbsence(output: string): boolean {
   return !output.startsWith(WRANGLER_FAILED) || EXPLICIT_ABSENCE.test(output);
 }
 
+/** A benchmark's wrangler call, run from `repoRoot` to completion: its output, or a refusal by policy. */
 export function runWrangler(
   repoRoot: string,
   args: readonly string[],
   options: WranglerOptions = {},
 ): string {
-  try {
-    return execFileSync('bunx', ['wrangler', ...args], {
-      cwd: repoRoot,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      maxBuffer: 32 * 1024 * 1024,
-      env: { ...process.env, CLOUDFLARE_ACCOUNT_ID: accountId(repoRoot) },
-    });
-  } catch (error) {
-    const detail = describeThrown({ cause: error });
+  const run = wrangler(args, { cwd: repoRoot, timeoutMs: null });
 
-    if (options.allowFailure === true) return `${WRANGLER_FAILED}: ${detail}`;
-    throw new Error(`wrangler ${args.join(' ')} failed: ${detail}`, { cause: error });
-  }
+  if (run.ok) return run.stdout;
+  const detail = `${run.stderr}${run.stdout}`.trim() || `exit ${String(run.code)}`;
+
+  if (options.allowFailure === true) return `${WRANGLER_FAILED}: ${detail}`;
+  throw new Error(`wrangler ${args.join(' ')} failed: ${detail}`);
 }
 
 /**
@@ -167,7 +128,7 @@ export function deleteContainerApps(
 
   return found.map((app) => {
     if (deletedByRest(app.id)) {
-      const deleted = deleteApplicationByRest(accountId(repoRoot), app.id);
+      const deleted = deleteApplicationByRest(requireCloudflareAccountId(), app.id);
 
       if (!deleted.ok) {
         log(`WARNING: container application ${app.name} (${app.id}) was NOT deleted: ${deleted.reason}`);
