@@ -54,6 +54,14 @@ async function installTools(bucket: string, cached: string | undefined): Promise
 
 interface Step { readonly contract: string; readonly ms: number; readonly detail: unknown }
 
+/** The desktop as its client draws it: pixels at the ground, the wallpaper's glow and the panel, and where it is drawn. */
+interface DesktopReading {
+  readonly desktop: readonly number[];
+  readonly glow: readonly number[];
+  readonly panel: readonly number[];
+  readonly rect: { readonly x: number; readonly y: number; readonly width: number; readonly height: number };
+}
+
 interface FixtureSecrets {
   readonly EVAL_IDENTITY: string;
   readonly DEVBOX_REGISTRY_TOKEN: string;
@@ -400,7 +408,7 @@ async function main(): Promise<void> {
         // The desktop a quarter in from its corner, where X never starts its pointer (the middle), the wallpaper's glow
         // just above the panel's middle, and the foot's middle, in the desktop's own coordinates; and where the client
         // draws it.
-        const screen = () => frame.evaluate((size, footY, glowY) => {
+        const screen = (): Promise<DesktopReading | null> => frame.evaluate((size, footY, glowY) => {
           const canvas = [...document.querySelectorAll('canvas')].sort((a, b) => b.width * b.height - a.width * a.height)[0];
 
           if (canvas === undefined || canvas.width < 640) return null;
@@ -427,7 +435,7 @@ async function main(): Promise<void> {
         // ground's sit within a few levels of each other (D88).
         const glowing = (rgba: readonly number[] | undefined) => rgba !== undefined && (rgba[0] ?? 0) - (rgba[2] ?? 0) >= 12;
 
-        const drawn = (shown: Awaited<ReturnType<typeof screen>>) => shown !== null
+        const drawn = (shown: DesktopReading | null) => shown !== null
           && near(shown.desktop, DESKTOP_COLOURS.background) && glowing(shown.glow) && near(shown.panel, DESKTOP_COLOURS.panel);
 
         // The first frame may come before the panel and the wallpaper paint: a person sees the desktop within seconds, or

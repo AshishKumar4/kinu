@@ -24,7 +24,7 @@ test("an agent's isolate's lines are written as the workspace's, the agent named
   const written: string[] = [];
   // What the isolate's own diagnostics wrote on its console.
   createLineLogger((line) => { written.push(line); }).event('provider.stream_opened', { provider: 'openai-compat:cmp', ms: 71 });
-  const tail = new AgentIsolateTail({ ...workerContext(), props: { workspace: 'acme', actor: 'agent-1' } }, makeEnv());
+  const tail = new AgentIsolateTail({ ...workerContext(), props: { workspace: 'acme', actor: 'agent-1', object: 'acme-object' } }, makeEnv());
 
   console$.mockClear();
   tail.tail([invocation([
@@ -36,13 +36,13 @@ test("an agent's isolate's lines are written as the workspace's, the agent named
   const lines = console$.mock.calls.map(([line]) => (typeof line === 'string' ? relayedLine(line) : null)).filter((line) => line?.event !== 'analytics.sink_installed');
 
   expect(lines).toEqual([
-    { event: 'provider.stream_opened', fields: { provider: 'openai-compat:cmp', ms: 71, workspace: 'acme', actor: 'agent-1' } },
-    { event: 'agent.isolate_console', fields: { workspace: 'acme', actor: 'agent-1', level: 'log', text: 'a library said 3' } },
-    { event: 'agent.isolate_exception', code: 'unavailable', cause: expect.stringContaining('x is not a function'), fields: { workspace: 'acme', actor: 'agent-1' } },
+    { event: 'provider.stream_opened', fields: { provider: 'openai-compat:cmp', ms: 71, workspace: 'acme', actor: 'agent-1', object: 'acme-object' } },
+    { event: 'agent.isolate_console', fields: { workspace: 'acme', actor: 'agent-1', object: 'acme-object', level: 'log', text: 'a library said 3' } },
+    { event: 'agent.isolate_exception', code: 'unavailable', cause: expect.stringContaining('x is not a function'), fields: { workspace: 'acme', actor: 'agent-1', object: 'acme-object' } },
     {
       event: 'agent.isolate_invocation',
       fields: {
-        workspace: 'acme', actor: 'agent-1', entrypoint: 'AgentFacet', kind: 'jsrpc', method: 'admit', outcome: 'ok', startedAt: 1_000, cpuMs: 12, wallMs: 340,
+        workspace: 'acme', actor: 'agent-1', object: 'acme-object', entrypoint: 'AgentFacet', kind: 'jsrpc', method: 'admit', outcome: 'ok', startedAt: 1_000, cpuMs: 12, wallMs: 340,
         truncated: false,
       },
     },

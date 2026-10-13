@@ -2,7 +2,7 @@
 
 import { escapeHtml } from './http';
 import {
-  COPY_SCRIPT, GITHUB_ICON, REPO_URL, mark, publicFooter, publicPage,
+  COPY_SCRIPT, GITHUB_ICON, REPO_URL, publicFooter, publicPage, wordmark,
 } from './public-shell';
 
 
@@ -183,7 +183,7 @@ export function approvalDocument(title: string, body: string): string {
     title: `${title} - Kinu.run`,
     styles: CARD_CSS,
     body: `<main class="gate"><div class="card">
-  <span class="lockup">${mark(18)} Kinu.run</span>
+  <span class="lockup">${wordmark(24)}</span>
   <h1 class="small">${escapeHtml(title)}</h1>
   ${body}
 </div></main>\n`,

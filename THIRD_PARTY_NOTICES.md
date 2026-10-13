@@ -14,7 +14,7 @@ the MIT License. The required copyright notice and license text sit in
 
 Kinu builds `@mossaic/sdk` from vendored source of
 [Mossaic](https://github.com/AshishKumar4/Mossaic), copyright 2026 Ashish
-Kumar, pinned at commit `1bf170e0`. The source sits under
+Kumar, pinned at commit `5935e3de`. The source sits under
 [`third_party/mossaic`](third_party/mossaic) with a digest per file in
 [`third_party/mossaic/upstream.json`](third_party/mossaic/upstream.json).
 
