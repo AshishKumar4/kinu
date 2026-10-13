@@ -48,9 +48,10 @@ function account(holds: readonly string[]) {
 }
 
 describe("a workspace's page", () => {
-  for (const path of ['/workspace/jarvis', '/workspace/jarvis/agents/researcher']) {
+  // Each case its own name: an isolate keeps the membership it proved, and asks the account once.
+  for (const [workspace, path] of [['jarvis', '/workspace/jarvis'], ['friday', '/workspace/friday/agents/researcher']] as const) {
     test(`${path} wakes the workspace as its document is answered`, async () => {
-      const { env, asked } = account(['jarvis']);
+      const { env, asked } = account([workspace]);
       const context = workerContext();
 
       // The loopback host is where the dev identity signs the request in.
@@ -59,7 +60,7 @@ describe("a workspace's page", () => {
       expect(answer.status).toBe(200);
       expect(await answer.text()).toContain('<title>Kinu</title>');
       await Promise.all(context.retained);
-      expect(asked).toEqual(['member:jarvis', 'claim:jarvis']);
+      expect(asked).toEqual([`member:${workspace}`, `claim:${workspace}`]);
     });
   }
 
@@ -71,6 +72,6 @@ describe("a workspace's page", () => {
 
     expect(answer.status).toBe(200);
     await Promise.all(context.retained);
-    expect(asked).toEqual(['member:someone-elses']);
+    expect(asked.filter((call) => call.startsWith('claim:'))).toEqual([]);
   });
 });
