@@ -103,6 +103,10 @@ export class FacetChat {
 
   private resting: Promise<unknown> = Promise.resolve();
 
+  /** The chat turn this isolate assembled last, and what its preparation and tools told it: written as a turn is
+   *  assembled, read by its task reminder ({@link ChatSessionPorts.openWork}) only while that turn is the current one. */
+  private liveTurn: { readonly turnId: string; readonly live: LiveTurn } | null = null;
+
   /** The ending the settling turn owes its hirer a report of, from the chat's `owedReport` port until its roster declares
    *  the row that reports it after the commit (`owedTerminalEffects`, which drops it). */
   private reportOwed: { readonly ending: TaskTurnEnding; readonly assistantText: string; readonly narration: readonly string[] } | null = null;
@@ -181,7 +185,12 @@ export class FacetChat {
         owed: () => { workspace.work(); },
         quiet: () => { this.atRest(); },
         // Its tasks tool and its jobs run in the workspace.
-        openWork: () => workspace.openWork(),
+        // What the turn's preparation and its tools last answered: a turn that never prepared asks.
+        openWork: async () => {
+          const live = this.liveTurn;
+
+          return live !== null && live.turnId === this.session.currentTurnId && live.live.openWork !== null ? live.live.openWork : await workspace.openWork();
+        },
         // The lane that keeps its prompt cache warm is the workspace's, which holds the provider keys and the wake.
         cacheWarming: {
           armAfterTurn: (input) => workspace.armCacheWarm(input),
@@ -226,7 +235,9 @@ export class FacetChat {
 
   private async assemble(prepared: PreparedAgentTurn, turn: { readonly id: string; readonly mode: WorkMode; readonly runId: string; readonly epoch: number | null }, asked: TurnAssemblyRequest, bind?: Parameters<typeof assembleActorTurn>[0]['settle']) {
     const { actor, database, workspace, models, pacer } = this.deps;
-    const live: LiveTurn = { dynamic: prepared.dynamic };
+    const live: LiveTurn = { dynamic: prepared.dynamic, openWork: prepared.openWork ?? null };
+
+    this.liveTurn = { turnId: turn.id, live };
 
     const tools = facetTurnTools(workspace, prepared, actor, {
       id: turn.id, runId: turn.runId, epoch: turn.epoch, mode: turn.mode, parentDriven: this.parentDriven, driving: this.driving, live, database,
@@ -656,7 +667,7 @@ export class FacetChat {
     const { actor, workspace, models, pacer } = this.deps;
     const workMode = actor.session.workMode;
     const prepared = await workspace.prepareChat({ turnId: null, mode: workMode, userText: '', parentDriven: false, awaitsReply: false });
-    const { sources } = facetTurnSources({ actor, workspace, models, prepared, spend: this.spend, live: { dynamic: prepared.dynamic }, runId: prepared.runId, turnId: 'title', epoch: null, pacer });
+    const { sources } = facetTurnSources({ actor, workspace, models, prepared, spend: this.spend, live: { dynamic: prepared.dynamic, openWork: null }, runId: prepared.runId, turnId: 'title', epoch: null, pacer });
     const inputs = await sources.profileInputs();
     const profile = resolveAgentTurnProfile({ ...inputs, ...ownProfileChoices(sources.config, inputs, sources.ancestors?.()), workMode, availableTools: [], activeSkills: [] });
     const route = resolveModelRoute('fast', profile);

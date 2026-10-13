@@ -59,7 +59,7 @@ import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { isWorkspaceTerminal, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
 import { McpToolSurfaceSchema, ShareViewerClaimSchema, type ShareViewerClaim } from '@kinu.run/core';
 import {
-  AgentOpenTurns, AgentReports, TurnFences, type AcceptedReport, type AgentOwes, type RunEndReport, announcementOf, RECOVERY_BACKOFF_CEILING_MS, type PromptFile, type AgentOpenTurn, CHAT_SESSION_ID, steerSkillsBlock, subordinateTurnContext, type SessionEvent, type SessionTranscript,
+  AgentOpenTurns, AgentReports, TurnFences, type AcceptedReport, type AgentOwes, type RunEndReport, type OpenWork, announcementOf, RECOVERY_BACKOFF_CEILING_MS, type PromptFile, type AgentOpenTurn, CHAT_SESSION_ID, steerSkillsBlock, subordinateTurnContext, type SessionEvent, type SessionTranscript,
 } from '@kinu.run/core';
 // Main actor's payload plane on both fork halves: the carried conversation references
 // payload files by absolute path, and the fork is a cut of the main actor's conversation.
@@ -963,6 +963,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       pricing: (spec) => this.modelCatalog.pricing(spec),
       accounts: () => this.config.getProviderAccounts(),
       noteRequest: (actorId, lastRequestAt) => this.warmingOf(actorId).noteRequest(lastRequestAt),
+      openWork: (actorId) => this.openWorkOf(actorId),
       credentialsRevision: () => this.openedCredentialsRevision(),
       // The workspace agent's missions are the workspace's: owner-declared here, and charged here as its turns spend.
       missions: (actorId) => (actorPolicy(this.agentOf(actorId)).workspaceAgent ? this.budget : null),
@@ -1104,12 +1105,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       }),
       // Only main's conversation is kept warm: no other agent has its wake chain.
       armCacheWarm: async (input) => this.warmingOf(actorId).armAfterTurn(input),
-      // Its tasks tool and its jobs run here, over its own rows, main's as any agent's.
-      openWork: async () => {
-        const reads = this.dynamicReadsOf(actorReferenceOf(this.liveAgentOf(actorId)));
-
-        return { tasks: reads.openTasks(), asyncWakePending: reads.runningJobs().total > 0 };
-      },
+      // Asked only by a turn that never prepared: one that did reads what its preparation and its tools answered.
+      openWork: async () => this.openWorkOf(actorId),
       enqueueTurn: (input) => this.enqueueHostedTurn(this.actorHost().bindStores(actorReferenceOf(this.liveAgentOf(actorId))), input),
       executeTool: (call) => {
         this.admitWork();
@@ -2931,6 +2928,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private readonly agentsWorking = new Set<string>();
 
   /** One report of an agent's, told or carried by its admission's answer (taken rides admit). */
+  /** An agent's open work: its tasks tool and its jobs run here, over its own rows, main's as any agent's. */
+  private openWorkOf(actorId: string): OpenWork {
+    const reads = this.dynamicReadsOf(actorReferenceOf(this.liveAgentOf(actorId)));
+
+    return { tasks: reads.openTasks(), asyncWakePending: reads.runningJobs().total > 0 };
+  }
+
   private async agentOwes(actorId: string, { seq, next, holds, report }: AgentOwes): Promise<void> {
     const { standing, runEnds } = report;
     const before = this.reportedReport(actorId);

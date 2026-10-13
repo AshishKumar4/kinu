@@ -10,7 +10,7 @@ import { RECOVERY_BACKOFF_CEILING_MS } from '@kinu.run/core';
 import {
   agentSql, driveUntil, gatewayWorkspace, hostedMainActor, mainDatabase, relayedReports, storedChat, workspaceMainActor, type StartedHarness,
 } from './helpers/actor-harness';
-import { delayNextModelReport, delayNextRunEnd, delayNextRunReview, delayNextTurnReport, failNextAnswerWrite } from './helpers/agent-facets';
+import { delayNextModelReport, delayNextOpenWork, delayNextRunEnd, delayNextRunReview, delayNextTurnReport, failNextAnswerWrite } from './helpers/agent-facets';
 import { socketConnection } from './helpers/bindings';
 import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 
@@ -99,6 +99,27 @@ test('a turn whose answer could not commit ends failed, and a restart does not r
   await restartMain(workspace);
 
   expect({ before, after: asked() }).toEqual({ before: 1, after: 1 });
+});
+
+test("main's isolate dying after its model answered, as its turn was being closed, does not ask the model again", async () => {
+  const { workspace, asked } = answering();
+  // Whatever main's turn asks its workspace between its model's answer and its commit is held on the way: it dies there.
+  const reading = delayNextOpenWork();
+  const id = crypto.randomUUID();
+  const sending = Promise.resolve(workspace.agent.onMessage(owner, chatRequest(id, id, 'submit-message')));
+  const first = await Promise.race([reading.reached.then(() => 'held' as const), sending.then(() => 'answered' as const)]);
+
+  // Its held call is never answered: the isolate died in it. A turn that asked nothing leaves the hold unused.
+  if (first === 'held') {
+    workspace.agent.harnessResetAgentIsolate(mainKey(workspace));
+    await workspace.agent.recoverStrandedTurn();
+  } else {
+    reading.release();
+  }
+
+  await workspace.agent.harnessAgentsIdle();
+
+  expect({ asked: asked(), owed: owedWords(workspace) }).toEqual({ asked: 1, owed: 0 });
 });
 
 test("a failed turn the owner retried is answered once by the Retry, and a restart runs neither again", async () => {

@@ -193,6 +193,26 @@ export function delayNextModelReport(from: (storageKey: string) => boolean): Hel
   return { reached: reached.promise, release: released.resolve };
 }
 
+let delayedOpenWork: { readonly reached: (storageKey: string) => void; readonly released: Promise<void> } | null = null;
+
+/** The next read of an agent's open work any isolate asks its workspace for waits on the way until released; released
+ *  before any is asked, it holds none. */
+export function delayNextOpenWork(): HeldIsolateCall {
+  const reached = Promise.withResolvers<string>();
+  const released = Promise.withResolvers<void>();
+  const held = { reached: reached.resolve, released: released.promise };
+
+  delayedOpenWork = held;
+
+  return {
+    reached: reached.promise,
+    release: () => {
+      if (delayedOpenWork === held) delayedOpenWork = null;
+      released.resolve();
+    },
+  };
+}
+
 /** The next report any hire's settled turn owes its hirer waits on the way to the workspace until released. */
 export function delayNextTurnReport(): HeldIsolateCall {
   const reached = Promise.withResolvers<string>();
@@ -568,7 +588,17 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
         },
         birthContext: (drainTurnId) => host().birthContext(drainTurnId),
         steerSkills: (text, alreadyActive) => host().steerSkills(text, alreadyActive),
-        openWork: () => host().openWork(),
+        openWork: async () => {
+          const delayed = delayedOpenWork;
+
+          if (delayed !== null) {
+            delayedOpenWork = null;
+            delayed.reached(placement.storageKey);
+            await delayed.released;
+          }
+
+          return await host().openWork();
+        },
         armCacheWarm: (input) => host().armCacheWarm(input),
         enqueueTurn: (input) => host().enqueueTurn(input),
         executeTool: async (call) => {

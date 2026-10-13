@@ -6,7 +6,7 @@ import {
   announcementOf, improvementLanesOpen, type ActorAdvisor, type SeatedActor, type TurnSurface,
   type ActorReference, type DynamicContext, type ModelPricing, type ResolvedTurnProfile, type TierId, type WorkMode,
   type HeadInput, type RunInference, type HeadReport, type SqlExecutor, type MissionBudgetPort, type MissionGovernor, type Executor, readMissionLabels,
-  openingCacheCold,
+  openingCacheCold, type OpenWork,
 } from '@kinu.run/core';
 import type { TurnCall } from './agent-facets';
 import type { TurnBound, TurnCapabilityOf } from './agent-facet/agent-turn';
@@ -34,6 +34,8 @@ export interface AgentTurnsDeps {
   /** A real provider request of the agent's is starting: noted on its warming lane, which answers until when it kept the
    *  cache warm for the one sent at `lastRequestAt` (`CacheWarmingLane.noteRequest`). */
   noteRequest(actorId: string, lastRequestAt: number | null): number | null;
+  /** The agent's open work, over its own rows (its tasks tool and its jobs run here): what its turn's task reminder reads. */
+  openWork(actorId: string): OpenWork;
   /** The account's credentials revision as the turn's open read it; null before one opened. */
   credentialsRevision(): number | null;
   /** The governor an agent's chat turns spend under, when its missions are the workspace's: main's (D9). */
@@ -458,7 +460,7 @@ export class AgentTurns {
       // Finished after a later opening took its place, or after its run ended: none of it is the agent's to freeze.
       if (prepared === null) return yield* Effect.fail(new KinuError('denied', `The preparation of turn ${turnId} finished after a later opening of its agent.`));
 
-      return { ...prepared, cacheKeptAliveUntil: kept };
+      return { ...prepared, cacheKeptAliveUntil: kept, openWork: this.deps.openWork(actorId) };
     }).pipe(Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : Effect.sync(() => {
       if (this.chats.get(actorId) !== turnId) this.close(actorId, turnId);
     })))));
@@ -712,6 +714,7 @@ export class AgentTurns {
       } }),
       dynamic: this.dynamic(turn, prepared),
       reports: { ...prepared.surface.reports },
+      openWork: this.deps.openWork(actorId),
     };
   }
 }
