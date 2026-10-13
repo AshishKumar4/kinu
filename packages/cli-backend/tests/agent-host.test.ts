@@ -2800,26 +2800,37 @@ describe('LocalAgentHost — the driver lease', () => {
   });
 
   // A Stop dismissed only work a hire held in its event log, and cut off only a hire whose turn ran: an idle hire's
-  // brief, owed as a delivery while another process drove, ran after the Stop once this process drove again.
-  test("a Stop of the root cancels what an idle hire was assigned and had not taken: it never runs", async () => {
+  // brief, owed as a delivery while another process drove, ran after the Stop once this process drove again. A hire's
+  // own hire is loaded only when something addresses it, so the Stop is all that reaches it.
+  test("a Stop of the root cancels what its hires were assigned and had not taken, loaded here or not: none runs", async () => {
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');
     const asked: string[] = [];
+    const model = streamingModel('ok', (options) => { asked.push(JSON.stringify(options.prompt)); });
+    const refs = [{ name: 'root', cwd: project, workspaceId: 'proj' }];
 
-    const { host } = makeHost(state, streamingModel('ok', (options) => { asked.push(JSON.stringify(options.prompt)); }), [
-      { name: 'root', cwd: project, workspaceId: 'proj' },
-    ], { driverKind: 'daemon' });
+    // Another process drives the workspace: each brief is committed and owed, and nothing here crosses it.
+    rivalHolds(dbPath, 'interactive');
+    const { host: hiring } = makeHost(state, model, refs, { driverKind: 'daemon' });
+    let leaf = '';
 
     try {
-      const team = await host.team('root');
-      // Another process drives the workspace: the brief is committed and owed, and nothing here crosses it.
-      rivalHolds(dbPath, 'interactive');
-      const hired = await team.spawn({ name: 'courier', role: 'researcher', mission: 'STOPPED_TASK: push the release.', mode: 'build' });
+      const hired = await (await hiring.team('root')).spawn({ name: 'courier', role: 'researcher', mission: 'STOPPED_TASK: push the release.', mode: 'build' });
+      const below = await (await hiring.team(`root/${hired.name}`)).spawn({ name: 'scout', role: 'researcher', mission: 'STOPPED_LEAF: list the files.', mode: 'build' });
+      leaf = `root/${hired.name}/${below.name}`;
+    } finally {
+      await hiring.close();
+    }
+
+    const { host } = makeHost(state, model, refs, { driverKind: 'daemon' });
+
+    try {
       (await host.acquire('root')).interrupt();
       await retireRivals();
-      await host.tick(`root/${hired.name}`);
+      await host.tick(leaf.slice(0, leaf.lastIndexOf('/')));
+      await host.tick(leaf);
 
-      expect(asked.filter((prompt) => prompt.includes('STOPPED_TASK'))).toEqual([]);
+      expect(asked.filter((prompt) => prompt.includes('STOPPED_'))).toEqual([]);
     } finally {
       await host.close();
     }
