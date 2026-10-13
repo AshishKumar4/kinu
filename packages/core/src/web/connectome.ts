@@ -1,18 +1,22 @@
 /**
- * Connectome background: a fixed-budget mat of branching, fusing fibres grown from the view's rim,
- * with signal grains. Pure and deterministic for a given seed, budget and call sequence; emits `ArtFrame`
- * (`nodeCount` always 0). Coordinates are view-normalised; nothing is drawn under keep-out boxes.
+ * Connectome background: a sparse tissue of still pyramidal neurons in the view's margins. Each cell is a soma, a long
+ * apical dendrite with its tuft, two or three short basal dendrites, and an axon to two or three neighbours. A cell
+ * fires now and then: its soma and arbor brighten and a spike runs down each axon, and a spike that lands may tip the
+ * next cell over. Nothing moves. The pointer is a stimulus, never a force: a cell under it charges and fires, and a
+ * click fires the nearest one. Pure and deterministic for a given seed, width and call sequence; emits `ArtFrame`.
+ *
+ * A soma's place is view-normalised (0..1 both ways), so a resize keeps the tissue spread over the view; every length
+ * is in view widths, so a cell keeps its shape. Lengths are set in CSS pixels and scaled by the width it was grown for.
  */
 
-import { type ArtFrame, clamp, grown, viewDistance, type KeepOut, PULSE_STRIDE, STROKE_STRIDE, TONE_ACCENT, TONE_BRIGHT } from './art';
+import { type ArtFrame, clamp, type KeepOut, NODE_STRIDE, PULSE_STRIDE, STROKE_STRIDE, TONE_ACCENT, TONE_BRIGHT } from './art';
 import { seededRandom } from '../utils/stats';
-import { movePulse, type Pulse, pulseTail, writePulse } from './pulse';
 
 export interface ConnectomeOptions {
   readonly seed: number;
   readonly aspect: number;
-  /** Defaults to MESH_SEGMENTS. */
-  readonly segments?: number;
+  /** CSS pixels across, so a cell is the same size on any window. */
+  readonly width: number;
   /** Decisions already waiting at birth earn no flash. */
   readonly activity?: ConnectomeActivity;
 }
@@ -24,180 +28,128 @@ export interface ConnectomeActivity {
 
 export type ConnectomeMode = 'idle' | 'working' | 'attention';
 
-export const MESH_SEGMENTS = 16_000;
+/** One cell per this many square pixels, between the bounds. */
+const AREA_PER_CELL = 62_000;
 
-export const CANVAS_SEGMENTS = 2_400;
+const MIN_CELLS = 5;
 
-const SIGNALS_PER_SEGMENT = 1 / 24;
+const MAX_CELLS = 26;
 
-/** In view width units. */
-const SIGNAL_TAIL = 0.012;
+const SPACING_PX = 210;
 
-/** Rim reach in view width units; a corner reaches CORNER_REACH times further. */
-const REACH = 0.17;
+/** Axons reach neighbours at most this far. */
+const AXON_REACH_PX = 520;
 
-const CORNER_REACH = 1.7;
+const APICAL_PX = [150, 230] as const;
 
-const ROOT_SPACING = 0.016;
+const BASAL_PX = [22, 36] as const;
 
-const CORNER_ROOTS = 10;
+const SOMA_PX = [2.8, 3.6] as const;
 
-const SEGMENT = 0.02;
+const SPIKE_SPEED_PX = 300;
 
-const RATIO = 0.86;
+const SPIKE_TAIL_PX = 26;
 
-const SEGMENT_FLOOR = 0.005;
+/** An axon stops this short of the soma it reaches. */
+const SYNAPSE_GAP_PX = 9;
 
-const MAX_GENERATION = 13;
+/** Seconds between a cell's own spikes, on average, idle and while an agent works. */
+const IDLE_PERIOD = 22;
 
-const SEGMENTS_PER_BRANCH = 5;
+const WORKING_PERIOD = 7;
 
-/** Radians. */
-const CURL = 0.2;
+const REFRACTORY = 2.4;
 
-const CURL_NOISE = 0.5;
+/** Seconds for a cell's charge, and its glow, to fall to a third. */
+const LEAK = 1.8;
 
-const SPREAD = 0.6;
+const GLOW_DECAY = 0.55;
 
-const FUSE_REACH = 0.009;
+const POINTER_REACH_PX = 110;
 
-const FIBRE_ALPHA = 0.095;
+/** Charge per second at the pointer's centre: a cell under a resting pointer fires in about a second. */
+const POINTER_CHARGE = 1.3;
 
-const SIGNAL_ALPHA = 0.42;
+/** Per second: how fast the pointer's hold eases in when it arrives and out when it leaves. */
+const POINTER_RATE = 4;
 
-/** In view width units; deliberately separate from the hero tree's reach. */
-const TISSUE_REACH = 0.16;
+const CLICK_REACH_PX = 200;
 
-/** In view widths. */
-const TISSUE_BEND = 0.028;
+const DENDRITE_ALPHA = 0.28;
 
-/** Per second. */
-const POINTER_RATE = 7;
+const AXON_ALPHA = 0.09;
 
-/** View widths per second. */
-const BURST_SPEED = 0.4;
-
-/** Seconds. */
-const BURST_WINDOW = 0.25;
-
-const AMPLITUDE_LOW = 0.45;
-
-const AMPLITUDE_HIGH = 1;
-
-const ACTIVITY_FADE_RATE = 1.4;
+const SOMA_ALPHA = 0.48;
 
 const FLASH_ATTACK = 0.12;
 
 const FLASH_DECAY = 1.3;
 
-const FOCUS_SECONDS = 20;
-
-/** Keep-out reach in view width units: whole cover within KEEP_OUT_HOLD (exceeds sway plus blur/bloom), then fades over KEEP_OUT_FADE. */
-const KEEP_OUT_HOLD = 0.016;
+/** Keep-out reach in view widths: whole cover within KEEP_OUT_HOLD, fading over KEEP_OUT_FADE. */
+const KEEP_OUT_HOLD = 0.012;
 
 const KEEP_OUT_FADE = 0.02;
 
-const EDGE_SAMPLES = 4;
+const MAX_SPIKES = 64;
 
-/** View width units; the whole mesh sways together. */
-const SWAY = 0.0022;
-
-interface Look {
-  readonly period: number;
-  readonly glowBase: number;
-  readonly glowAmp: number;
-  /** Multiple of SIGNAL_ALPHA. */
-  readonly energy: number;
-  /** View widths per second. */
-  readonly speed: number;
-  /** Seconds, before the seeded jitter. */
-  readonly cadence: number;
-  readonly focus: number;
-}
-
-const IDLE: Look = { period: 10, glowBase: 0.16, glowAmp: 0.22, energy: 1, speed: 0.11, cadence: 0.02, focus: 0 };
-
-const WORKING: Look = { period: 5, glowBase: 0.24, glowAmp: 0.28, energy: 1.35, speed: 0.17, cadence: 0.008, focus: 1 };
-
-interface Node {
-  readonly tree: number;
-  readonly generation: number;
-  readonly root: boolean;
+interface Cell {
   /** View units. */
-  readonly hx: number;
-  readonly hy: number;
-  readonly rim: number;
-  readonly corner: number;
-  readonly cornerness: number;
-  readonly edges: number[];
-  x: number;
-  y: number;
-  /** 0 clear, 1 hidden. */
+  readonly x: number;
+  readonly y: number;
+  readonly radius: number;
+  readonly axons: number[];
+  potential: number;
+  glow: number;
+  sense: number;
+  quietUntil: number;
+  nextOwn: number;
+  pendingAt: number;
   cover: number;
-  hold: number;
 }
 
-interface Edge {
-  readonly a: number;
-  readonly b: number;
-  readonly generation: number;
+/** A dendrite piece: a quadratic from the soma's place, in view widths both ways. */
+interface Dendrite {
+  readonly cell: number;
+  readonly x0: number;
+  readonly y0: number;
+  readonly cx: number;
+  readonly cy: number;
+  readonly x1: number;
+  readonly y1: number;
+  readonly width: number;
+  /** 0 at the soma, 1 at a tip. */
+  readonly depth: number;
+  cover: number;
+}
+
+interface Axon {
+  readonly from: number;
+  readonly to: number;
   /** Share of its length; signed. */
   readonly bow: number;
-  readonly width: number;
-  readonly phase: number;
-  readonly rim: number;
-  tip: boolean;
-  readonly tipRate: number;
-  readonly tipPhase: number;
-  drawn: number;
-  x0: number;
-  y0: number;
-  cx: number;
-  cy: number;
-  x1: number;
-  y1: number;
-  /** 0 clear, 1 hidden. */
+  readonly weight: number;
   cover: number;
 }
 
-interface Shoot {
-  readonly from: number;
+interface Spike {
+  readonly axon: number;
+  head: number;
+}
+
+/** A curving run of dendrite pieces: where it starts, which way, how long, and its width and depth from end to end. */
+interface Run {
+  readonly cell: number;
+  readonly x: number;
+  readonly y: number;
   readonly heading: number;
   readonly length: number;
-  readonly generation: number;
-  readonly curl: number;
+  readonly segments: number;
+  readonly width: readonly [number, number];
+  readonly depth: readonly [number, number];
 }
 
-interface Signal extends Pulse {
-  /** -1 when it wanders. */
-  readonly toward: number;
-  hops: number;
-}
-
-interface Flash {
-  readonly corner: number;
-  age: number;
-}
-
-/** Table sine: tens of thousands of evaluations per frame, low precision is fine. */
-const SINE_STEPS = 4_096;
-
-const SINE = new Float32Array(new ArrayBuffer(4 * SINE_STEPS));
-
-for (let index = 0; index < SINE_STEPS; index += 1) SINE[index] = Math.sin((2 * Math.PI * index) / SINE_STEPS);
-
-const SINE_SCALE = SINE_STEPS / (2 * Math.PI);
-
-function sine(angle: number): number {
-  return SINE[(Math.floor(angle * SINE_SCALE) % SINE_STEPS + SINE_STEPS) % SINE_STEPS] ?? 0;
-}
-
-function branchChildren(roll: number, rim: number): number {
-  if (roll < 0.35 + 0.45 * rim) return 2;
-
-  if (roll < 0.95) return 1;
-
-  return 0;
+function between(random: () => number, [low, high]: readonly [number, number]): number {
+  return low + (high - low) * random();
 }
 
 function envelope(age: number): number {
@@ -206,99 +158,50 @@ function envelope(age: number): number {
   return clamp(1 - (age - FLASH_ATTACK) / FLASH_DECAY, 0, 1);
 }
 
-interface SignalLaunch {
-  from: number;
-  edgeId: number;
-  toward: number;
-  hops: number;
-  strength: number;
-}
-
-interface StrokeLook {
-  edge: Edge;
-  glow: number;
-  tone: number;
-  alpha: number;
-}
-
 export class Connectome {
   private readonly random: () => number;
 
-  private readonly budget: number;
+  /** View widths per CSS pixel. */
+  private readonly px: number;
 
-  private readonly nodes: Node[] = [];
+  private readonly cells: Cell[] = [];
 
-  private readonly edges: Edge[] = [];
+  private readonly dendrites: Dendrite[] = [];
 
-  private readonly roots: number[] = [];
+  private readonly axons: Axon[] = [];
 
-  private readonly signals: Signal[] = [];
-
-  private readonly signalCap: number;
-
-  private tipList: number[] = [];
+  private readonly spikes: Spike[] = [];
 
   private aspect: number;
 
   private elapsed = 0;
 
-  private nextSignalId = 1;
-
   private activity: ConnectomeActivity = { working: false, decisions: 0 };
 
-  private look: Look = IDLE;
-
-  private focusCorner = -1;
-
-  private focusUntil = 0;
-
-  private flash: Flash | null = null;
+  private flashAge: number | null = null;
 
   /** View units; null when absent, hoverless or reduced-motion. */
-  private pointerX: number | null = null;
+  private pointer: readonly [number, number] | null = null;
 
-  private pointerY: number | null = null;
-
-  private burstX = 0;
-
-  private burstY = 0;
-
-  private burstAt = 0;
-
-  private readonly burstFired: number[] = [];
-
-  private nextFire: number[] = [];
+  private hold = 0;
 
   private keepOut: readonly KeepOut[] = [];
 
-  private strokes: Float32Array<ArrayBuffer>;
+  private readonly strokes: Float32Array<ArrayBuffer>;
 
-  private readonly points = new Float32Array(new ArrayBuffer(0));
+  private readonly points: Float32Array<ArrayBuffer>;
 
-  private pulseData: Float32Array<ArrayBuffer>;
+  private readonly pulses = new Float32Array(new ArrayBuffer(4 * PULSE_STRIDE * MAX_SPIKES));
 
   constructor(options: ConnectomeOptions) {
-    this.aspect = options.aspect;
     this.random = seededRandom(options.seed);
-    this.budget = options.segments ?? MESH_SEGMENTS;
-    this.signalCap = Math.max(8, Math.round(this.budget * SIGNALS_PER_SEGMENT));
-    this.strokes = new Float32Array(new ArrayBuffer(4 * STROKE_STRIDE * (this.budget + 64)));
-    this.pulseData = new Float32Array(new ArrayBuffer(4 * PULSE_STRIDE * this.signalCap));
-    this.grow();
-    this.fuse();
+    this.aspect = options.aspect;
+    this.px = 1 / Math.max(1, options.width);
+    this.grow(options.width);
+    this.strokes = new Float32Array(new ArrayBuffer(4 * STROKE_STRIDE * (this.dendrites.length + this.axons.length)));
+    this.points = new Float32Array(new ArrayBuffer(4 * NODE_STRIDE * this.cells.length));
 
-    for (const id of this.roots) {
-      this.nextFire[id] = this.waitFor(IDLE.cadence * this.roots.length);
-    }
-
-    if (options.activity !== undefined) {
-      this.activity = options.activity;
-      this.look = options.activity.working ? WORKING : IDLE;
-
-      if (options.activity.working) this.refocus();
-    }
-
-    this.place();
+    if (options.activity !== undefined) this.activity = options.activity;
   }
 
   get time(): number {
@@ -316,784 +219,346 @@ export class Connectome {
     this.shade();
   }
 
-  /** A rise in the decision count flashes at once; everything else eases in. */
+  /** A rise in the decision count fires every cell at once; working only quickens the cells' own spikes. */
   setActivity(activity: ConnectomeActivity): void {
     const previous = this.activity;
     this.activity = activity;
 
-    if (activity.decisions > previous.decisions) this.startFlash();
+    if (activity.decisions <= previous.decisions) return;
+    this.flashAge = 0;
 
-    if (activity.working && !previous.working) this.refocus();
+    for (let index = 0; index < this.cells.length; index += 1) this.fire(index, true);
   }
 
   mode(): ConnectomeMode {
-    if (this.flash !== null && envelope(this.flash.age) > 0.02) return 'attention';
+    if (this.flashAge !== null && envelope(this.flashAge) > 0.02) return 'attention';
 
     return this.activity.working ? 'working' : 'idle';
   }
 
-  /** Strongest pointer hold, 0 with no pointer. */
+  /** How far the pointer's stimulus has eased in: 0 with no pointer. */
   pointerHold(): number {
-    let hold = 0;
-
-    for (const node of this.nodes) hold = Math.max(hold, node.hold);
-
-    return hold;
-  }
-
-  step(dt: number): void {
-    this.elapsed += dt;
-    this.settleLook(dt);
-    this.settlePointer(dt);
-    this.place();
-    this.stepFlash(dt);
-    this.emit();
-    this.stepSignals(dt);
+    return this.hold;
   }
 
   /** View units. Never feeds the random stream, so scripted paths replay identically. */
   setPointer(x: number, y: number): void {
-    if (this.pointerX === null) {
-      this.burstX = x;
-      this.burstY = y;
-      this.burstAt = this.elapsed;
-    }
-
-    this.pointerX = x;
-    this.pointerY = y;
+    this.pointer = [x, y];
   }
 
   clearPointer(): void {
-    this.pointerX = null;
-    this.pointerY = null;
+    this.pointer = null;
+  }
+
+  /** View units: fires the nearest cell in reach. */
+  click(x: number, y: number): void {
+    let nearest = -1;
+    let gap = CLICK_REACH_PX * this.px;
+
+    for (const [index, cell] of this.cells.entries()) {
+      const distance = this.distance(cell.x, cell.y, x, y);
+
+      if (distance < gap) {
+        nearest = index;
+        gap = distance;
+      }
+    }
+
+    if (nearest >= 0) this.fire(nearest, true);
+  }
+
+  step(dt: number): void {
+    this.elapsed += dt;
+    this.hold += ((this.pointer === null ? 0 : 1) - this.hold) * (1 - Math.exp(-dt * POINTER_RATE));
+
+    if (this.flashAge !== null) this.flashAge += dt;
+    const period = this.activity.working ? WORKING_PERIOD : IDLE_PERIOD;
+    const reach = POINTER_REACH_PX * this.px;
+
+    for (const [index, cell] of this.cells.entries()) {
+      cell.glow *= Math.exp(-dt / GLOW_DECAY);
+      cell.potential *= Math.exp(-dt / LEAK);
+      cell.sense = this.pointer === null ? 0 : this.hold * clamp(1 - this.distance(cell.x, cell.y, this.pointer[0], this.pointer[1]) / reach, 0, 1);
+      cell.potential += POINTER_CHARGE * cell.sense * cell.sense * dt;
+
+      // A charged cell fires a beat later, so a volley spreads instead of landing at once.
+      if (cell.potential >= 1 && cell.pendingAt === 0) cell.pendingAt = this.elapsed + 0.06 + 0.12 * this.random();
+
+      if (cell.pendingAt !== 0 && this.elapsed >= cell.pendingAt) {
+        cell.pendingAt = 0;
+        this.fire(index, false);
+      }
+
+      if (this.elapsed >= cell.nextOwn) {
+        cell.nextOwn = this.elapsed + period * (0.4 + 1.2 * this.random());
+        this.fire(index, false);
+      }
+    }
+
+    this.moveSpikes(dt);
   }
 
   frame(): ArtFrame {
-    const flashCorner = this.flash?.corner ?? -1;
-    const lift = this.flash === null ? 0 : envelope(this.flash.age);
-    const wave = (2 * Math.PI * this.elapsed) / this.look.period;
-    const focus = this.look.focus;
-    const focusCorner = this.focusCorner;
+    let count = 0;
+    const data = this.strokes;
+
+    for (const piece of this.dendrites) {
+      const cell = this.cells[piece.cell];
+
+      if (cell === undefined || piece.cover >= 0.995) continue;
+      const lit = cell.glow * (1 - 0.55 * piece.depth);
+      const at = count * STROKE_STRIDE;
+      data[at] = cell.x + piece.x0;
+      data[at + 1] = cell.y + piece.y0 / this.aspect;
+      data[at + 2] = cell.x + piece.cx;
+      data[at + 3] = cell.y + piece.cy / this.aspect;
+      data[at + 4] = cell.x + piece.x1;
+      data[at + 5] = cell.y + piece.y1 / this.aspect;
+      data[at + 6] = 1;
+      data[at + 7] = piece.width;
+      data[at + 8] = clamp(0.25 + lit + 0.3 * cell.sense, 0, 1);
+      data[at + 9] = lit > 0.3 ? TONE_BRIGHT : TONE_ACCENT;
+      data[at + 10] = DENDRITE_ALPHA * (1 - 0.45 * piece.depth) * (1 + 1.6 * lit + 0.6 * cell.sense) * (1 - piece.cover);
+      data[at + 11] = 0;
+      count += 1;
+    }
+
+    for (const [index, axon] of this.axons.entries()) {
+      if (axon.cover >= 0.995) continue;
+      const [x0, y0, cx, cy, x1, y1] = this.axonCurve(index);
+      const at = count * STROKE_STRIDE;
+      data[at] = x0;
+      data[at + 1] = y0;
+      data[at + 2] = cx;
+      data[at + 3] = cy;
+      data[at + 4] = x1;
+      data[at + 5] = y1;
+      data[at + 6] = 1;
+      data[at + 7] = 0.7;
+      data[at + 8] = 0.25;
+      data[at + 9] = TONE_ACCENT;
+      data[at + 10] = AXON_ALPHA * (1 - axon.cover);
+      data[at + 11] = 0;
+      count += 1;
+    }
+
+    let nodeCount = 0;
+
+    for (const cell of this.cells) {
+      if (cell.cover >= 0.995) continue;
+      const at = nodeCount * NODE_STRIDE;
+      this.points[at] = cell.x;
+      this.points[at + 1] = cell.y;
+      this.points[at + 2] = cell.radius * (1 + 0.3 * cell.glow);
+      this.points[at + 3] = clamp(0.2 + cell.glow + 0.4 * cell.sense, 0, 1);
+      this.points[at + 4] = cell.glow > 0.3 ? TONE_BRIGHT : TONE_ACCENT;
+      this.points[at + 5] = clamp(SOMA_ALPHA * (1 + 1.2 * cell.glow + 0.5 * cell.sense), 0, 1) * (1 - cell.cover);
+      this.points[at + 6] = 0;
+      this.points[at + 7] = 0;
+      nodeCount += 1;
+    }
+
+    return { strokes: data, count, nodes: this.points, nodeCount, pulses: this.pulses, pulseCount: this.framePulses(), time: this.elapsed };
+  }
+
+  /** In view widths. */
+  private distance(x0: number, y0: number, x1: number, y1: number): number {
+    return Math.hypot(x1 - x0, (y1 - y0) * this.aspect);
+  }
+
+  /** The axon's quadratic in view units, ending short of the soma it reaches. */
+  private axonCurve(index: number): readonly [number, number, number, number, number, number] {
+    const axon = this.axons[index];
+    const from = axon === undefined ? undefined : this.cells[axon.from];
+    const to = axon === undefined ? undefined : this.cells[axon.to];
+
+    if (axon === undefined || from === undefined || to === undefined) return [0, 0, 0, 0, 0, 0];
+    const dx = to.x - from.x;
+    const dy = (to.y - from.y) * this.aspect;
+    const end = 1 - SYNAPSE_GAP_PX * this.px / Math.max(1e-6, Math.hypot(dx, dy));
+
+    return [from.x, from.y, from.x + dx / 2 - dy * axon.bow, from.y + (dy / 2 + dx * axon.bow) / this.aspect, from.x + dx * end, from.y + dy * end / this.aspect];
+  }
+
+  private fire(index: number, forced: boolean): void {
+    const cell = this.cells[index];
+
+    if (cell === undefined || (!forced && this.elapsed < cell.quietUntil)) return;
+    cell.glow = 1;
+    cell.potential = 0;
+    cell.quietUntil = this.elapsed + REFRACTORY;
+
+    for (const axon of cell.axons) {
+      if (this.spikes.length < MAX_SPIKES) this.spikes.push({ axon, head: 0 });
+    }
+  }
+
+  private moveSpikes(dt: number): void {
+    const speed = SPIKE_SPEED_PX * this.px;
+
+    for (let index = this.spikes.length - 1; index >= 0; index -= 1) {
+      const spike = this.spikes[index];
+      const axon = spike === undefined ? undefined : this.axons[spike.axon];
+      const from = axon === undefined ? undefined : this.cells[axon.from];
+      const to = axon === undefined ? undefined : this.cells[axon.to];
+
+      if (spike === undefined || axon === undefined || from === undefined || to === undefined) continue;
+      spike.head += speed * dt / Math.max(1e-6, this.distance(from.x, from.y, to.x, to.y));
+
+      if (spike.head < 1) continue;
+      this.spikes.splice(index, 1);
+
+      if (this.elapsed >= to.quietUntil) to.potential += axon.weight;
+    }
+  }
+
+  private framePulses(): number {
     let count = 0;
 
-    for (let index = 0; index < this.edges.length; index += 1) {
-      const edge = this.edges[index];
+    for (const spike of this.spikes) {
+      const axon = this.axons[spike.axon];
+      const from = axon === undefined ? undefined : this.cells[axon.from];
+      const to = axon === undefined ? undefined : this.cells[axon.to];
 
-      if (edge === undefined || edge.cover >= 0.996) continue;
-      const a = this.nodes[edge.a];
-      const b = this.nodes[edge.b];
-
-      if (a === undefined || b === undefined) continue;
-      const flashedEnd = a.corner === flashCorner ? a : b;
-      const cornerness = flashedEnd.corner === flashCorner ? flashedEnd.cornerness : 0;
-      const flashed = lift * cornerness;
-      const focused = a.corner === focusCorner ? focus * a.cornerness * 0.3 : 0;
-      const held = Math.max(a.hold, b.hold);
-      const breath = 0.5 + 0.5 * sine(wave - edge.phase);
-      const glow = clamp(this.look.glowBase + this.look.glowAmp * breath + focused + 0.5 * flashed + 0.35 * held, 0, 0.5 + 0.5 * flashed + 0.35 * held);
-      const alpha = FIBRE_ALPHA * (0.35 + 0.65 * edge.rim) * (0.8 + 0.2 * breath) * (1 + 0.25 * focused / 0.3) * (1 + 1.2 * flashed) * (1 - edge.cover);
-
-      if (alpha <= 0.003) continue;
-      count = this.pushStroke(count, { edge, glow, tone: held > 0.02 ? TONE_BRIGHT : TONE_ACCENT, alpha });
+      if (axon === undefined || from === undefined || to === undefined) continue;
+      const [x0, y0, cx, cy, x1, y1] = this.axonCurve(spike.axon);
+      const head = clamp(spike.head, 0, 1);
+      const tail = clamp(spike.head - SPIKE_TAIL_PX * this.px / Math.max(1e-6, this.distance(from.x, from.y, to.x, to.y)), 0, 1);
+      const fade = (1 - axon.cover) * clamp((1 - spike.head) * 8, 0, 1);
+      this.pulses.set([x0, y0, cx, cy, x1, y1, tail, head, 1.5, 0.9, TONE_BRIGHT, 0.7 * fade, spike.axon, 0, 1, 0], count * PULSE_STRIDE);
+      count += 1;
     }
 
-    return {
-      strokes: this.strokes,
-      count,
-      nodes: this.points,
-      nodeCount: 0,
-      pulses: this.pulseData,
-      pulseCount: this.framePulses(),
-      time: this.elapsed,
-    };
+    return count;
   }
 
-  private distance(x0: number, y0: number, x1: number, y1: number): number {
-    return viewDistance({ aspect: this.aspect, x0, y0, x1, y1 });
-  }
-
-  private edgeGap(x: number, y: number): number {
-    return Math.max(0, Math.min(x, 1 - x, y * this.aspect, (1 - y) * this.aspect));
-  }
-
-  private nearestCorner(x: number, y: number): readonly [corner: number, gap: number] {
-    const right = x > 0.5;
-    const bottom = y > 0.5;
-    const gap = this.distance(x, y, right ? 1 : 0, bottom ? 1 : 0);
-
-    return [(right ? 1 : 0) + (bottom ? 2 : 0), gap];
-  }
-
-  private rimOf(x: number, y: number): number {
-    const [, cornerGap] = this.nearestCorner(x, y);
-
-    return clamp(Math.max(1 - this.edgeGap(x, y) / REACH, 1 - cornerGap / (REACH * CORNER_REACH)), 0, 1);
-  }
-
-  /** Grown breadth-first so the budget is spent evenly. */
-  private grow(): void {
-    const shoots: Shoot[] = [];
-    const inward = (x: number, y: number): number => Math.atan2((0.5 - y) * this.aspect, 0.5 - x);
-
-    const root = (x: number, y: number, wobble: number): void => {
-      const heading = inward(x, y) + (this.random() - 0.5) * wobble;
-      const id = this.plant(-1, 0, x, y);
-      this.roots.push(id);
-      shoots.push({ from: id, heading, length: SEGMENT * (0.8 + 0.4 * this.random()), generation: 0, curl: (this.random() < 0.5 ? -1 : 1) * CURL });
-    };
-
-    for (const [cx, cy] of [[0, 0], [1, 0], [0, 1], [1, 1]] as const) {
-      for (let index = 0; index < CORNER_ROOTS; index += 1) {
-        const along = 0.01 + this.random() * 0.08;
-        const onTop = this.random() < 0.5;
-        root(onTop ? Math.abs(cx - along) : cx, onTop ? cy : Math.abs(cy - along / this.aspect), 1.4);
-      }
-    }
-
-    for (let along = ROOT_SPACING * 2; along < 1 - ROOT_SPACING * 1.8; along += ROOT_SPACING * (0.7 + 0.6 * this.random())) {
-      root(along, 0, 1);
-      root(along, 1, 1);
-    }
-
-    for (let along = ROOT_SPACING * 2 / this.aspect; along < 1 - ROOT_SPACING * 1.8 / this.aspect; along += (ROOT_SPACING * (0.7 + 0.6 * this.random())) / this.aspect) {
-      root(0, along, 1);
-      root(1, along, 1);
-    }
-
-    // Early die-out on some seeds is re-sprouted from rim fibres so every seed grows the same amount.
-    let index = 0;
-    let sprouts = 0;
-
-    while (this.edges.length < this.budget && sprouts < this.budget) {
-      const shoot = shoots[index];
-
-      if (shoot !== undefined) {
-        this.branch(shoot, shoots);
-        index += 1;
-        continue;
-      }
-
-      const from = Math.floor(this.random() * this.nodes.length);
-      const node = this.nodes[from];
-      sprouts += 1;
-
-      if (node === undefined || node.rim < 0.4 || node.edges.length > 2) continue;
-      const generation = Math.min(node.generation + 1, MAX_GENERATION - 2);
-      shoots.push({ from, heading: inward(node.hx, node.hy) + (this.random() - 0.5) * 2.6, length: Math.max(SEGMENT_FLOOR, SEGMENT * RATIO ** generation), generation, curl: (this.random() < 0.5 ? -1 : 1) * CURL });
-    }
-  }
-
-  private branch(shoot: Shoot, shoots: Shoot[]): void {
-    let from = shoot.from;
-    let heading = shoot.heading;
-    let x = this.nodes[from]?.hx ?? 0;
-    let y = this.nodes[from]?.hy ?? 0;
-    const segments = 2 + Math.floor(this.random() * (SEGMENTS_PER_BRANCH - 1));
-
-    for (let segment = 0; segment < segments; segment += 1) {
-      heading += shoot.curl + (this.random() - 0.5) * CURL_NOISE;
-      const length = shoot.length * (0.75 + 0.5 * this.random());
-      const nx = x + Math.cos(heading) * length;
-      const ny = y + Math.sin(heading) * length / this.aspect;
-
-      if (nx < -0.015 || nx > 1.015 || ny < -0.015 || ny > 1.015 || this.edges.length >= this.budget) return;
-      const rimHere = this.rimOf(nx, ny);
-
-      if (rimHere < 0.03 || this.random() > 0.08 + 0.92 * rimHere * rimHere) return;
-      const id = this.plant(from, shoot.generation, nx, ny);
-      this.link(from, id, shoot.generation);
-
-      if (this.random() < 0.3 && shoot.generation + 2 <= MAX_GENERATION) {
-        shoots.push({ from: id, heading: heading + (this.random() < 0.5 ? -1 : 1) * (0.7 + this.random() * 0.6), length: Math.max(SEGMENT_FLOOR, shoot.length * 0.55), generation: shoot.generation + 2, curl: -shoot.curl });
-      }
-
-      from = id;
-      x = nx;
-      y = ny;
-    }
-
-    if (shoot.generation >= MAX_GENERATION) return;
-    const rim = this.rimOf(x, y);
-    const roll = this.random();
-    const children = branchChildren(roll, rim);
-
-    for (let child = 0; child < children; child += 1) {
-      // Draw order is what makes one seed one figure.
-      let side = child === 0 ? -1 : 1;
-
-      if (children !== 2) side = this.random() < 0.5 ? -1 : 1;
-      const turn = children === 2 ? SPREAD * (0.6 + 0.8 * this.random()) : SPREAD * 0.5 * this.random();
-      shoots.push({ from, heading: heading + side * turn, length: Math.max(SEGMENT_FLOOR, shoot.length * RATIO), generation: shoot.generation + 1, curl: -shoot.curl * (0.5 + this.random()) });
-    }
-  }
-
-  private plant(parent: number, generation: number, x: number, y: number): number {
-    const hx = clamp(x, -0.015, 1.015);
-    const hy = clamp(y, -0.015, 1.015);
-    const [corner, cornerGap] = this.nearestCorner(hx, hy);
-    const id = this.nodes.length;
-    const tree = parent < 0 ? id : this.nodes[parent]?.tree ?? id;
-
-    this.nodes.push({
-      tree,
-      generation,
-      root: parent < 0,
-      hx,
-      hy,
-      rim: this.rimOf(hx, hy),
-      corner,
-      cornerness: clamp(1 - cornerGap / (REACH * CORNER_REACH), 0, 1),
-      edges: [],
-      x: hx,
-      y: hy,
-      cover: 0,
-      hold: 0,
-    });
-
-    return id;
-  }
-
-  private adjacent(a: number, b: number): boolean {
-    return this.nodes[a]?.edges.some((id) => {
-      const edge = this.edges[id];
-
-      return edge !== undefined && (edge.a === b || edge.b === b);
-    }) === true;
-  }
-
-  private link(a: number, b: number, generation: number): void {
-    const first = this.nodes[a];
-    const second = this.nodes[b];
-
-    if (first === undefined || second === undefined || a === b || this.adjacent(a, b)) return;
-    const id = this.edges.length;
-    const mx = (first.hx + second.hx) / 2;
-    const my = (first.hy + second.hy) / 2;
-
-    this.edges.push({
-      a,
-      b,
-      generation,
-      bow: (this.random() - 0.5) * 0.24,
-      width: Math.max(0.42, 0.95 - 0.04 * generation),
-      phase: this.edgeGap(mx, my) * 2 * Math.PI * 2.2 + (mx + my) * 1.4,
-      rim: this.rimOf(mx, my),
-      tip: false,
-      tipRate: (2 * Math.PI) / (12 + this.random() * 22),
-      tipPhase: this.random() * 2 * Math.PI,
-      drawn: 1,
-      x0: 0,
-      y0: 0,
-      cx: 0,
-      cy: 0,
-      x1: 0,
-      y1: 0,
-      cover: 0,
-    });
-    first.edges.push(id);
-    second.edges.push(id);
-  }
-
-  /** Nearest node of another tree within FUSE_REACH, or -1; only the 3×3 cell neighbourhood is read. */
-  private nearestOfAnotherTree(origin: Node, grid: Map<number, number[]>, cell: number): number {
-    const column = Math.floor((origin.hx + 0.02) / cell);
-    const row = Math.floor((origin.hy * this.aspect + 0.02) / cell);
-    let nearest = -1;
-    let nearestGap = FUSE_REACH;
-
-    for (let dc = -1; dc <= 1; dc += 1) {
-      for (let dr = -1; dr <= 1; dr += 1) {
-        for (const b of grid.get((column + dc) * 4_096 + row + dr) ?? []) {
-          const other = this.nodes[b];
-
-          if (other === undefined || other.tree === origin.tree) continue;
-          const gap = this.distance(origin.hx, origin.hy, other.hx, other.hy);
-
-          if (gap < nearestGap) {
-            nearestGap = gap;
-            nearest = b;
-          }
-        }
-      }
-    }
-
-    return nearest;
-  }
-
-  private fuse(): void {
-    const cell = FUSE_REACH;
-    const grid = new Map<number, number[]>();
-    const key = (x: number, y: number): number => Math.floor((x + 0.02) / cell) * 4_096 + Math.floor((y * this.aspect + 0.02) / cell);
-
-    for (let id = 0; id < this.nodes.length; id += 1) {
-      const node = this.nodes[id];
-
-      if (node === undefined) continue;
-      const at = key(node.hx, node.hy);
-      const bucket = grid.get(at);
-
-      if (bucket === undefined) grid.set(at, [id]);
-      else bucket.push(id);
-    }
-
-    const tips = this.nodes.map((_node, id) => id).filter((id) => this.nodes[id]?.edges.length === 1 && this.nodes[id]?.root === false);
-
-    for (const a of tips) {
-      const origin = this.nodes[a];
-
-      if (origin === undefined) continue;
-      const nearest = this.nearestOfAnotherTree(origin, grid, cell);
-
-      if (nearest >= 0) this.link(a, nearest, MAX_GENERATION);
-    }
-
-    for (const edge of this.edges) {
-      const a = this.nodes[edge.a];
-      const b = this.nodes[edge.b];
-      edge.tip = (a?.edges.length === 1 && a.root === false) || (b?.edges.length === 1 && b.root === false);
-    }
-
-    this.tipList = this.nodes.map((_node, id) => id).filter((id) => this.nodes[id]?.edges.length === 1 && this.nodes[id]?.root === false);
-  }
-
+  /** 0 clear, 1 hidden; view units. */
   private coverAt(x: number, y: number): number {
     let cover = 0;
 
     for (const box of this.keepOut) {
       const dx = Math.max(box.left - x, 0, x - box.right);
       const dy = Math.max(box.top - y, 0, y - box.bottom) * this.aspect;
-      const spread = 1 - clamp((Math.sqrt(dx * dx + dy * dy) - KEEP_OUT_HOLD) / KEEP_OUT_FADE, 0, 1);
-
-      if (spread > cover) cover = spread;
-
-      if (cover >= 1) return 1;
+      cover = Math.max(cover, 1 - clamp((Math.hypot(dx, dy) - KEEP_OUT_HOLD) / KEEP_OUT_FADE, 0, 1));
     }
 
     return cover;
   }
 
-  /** Covers are computed from homes: sway is smaller than the hold, so they stand until the boxes change. */
+  /** A curve is hidden as far as the most covered of its ends and its control point. */
   private shade(): void {
-    const reach = KEEP_OUT_HOLD + KEEP_OUT_FADE;
-    const boxes = this.keepOut;
+    for (const cell of this.cells) cell.cover = this.coverAt(cell.x, cell.y);
 
-    for (const node of this.nodes) node.cover = boxes.length === 0 ? 0 : this.coverAt(node.hx, node.hy);
+    for (const piece of this.dendrites) {
+      const cell = this.cells[piece.cell];
 
-    for (const edge of this.edges) {
-      const a = this.nodes[edge.a];
-      const b = this.nodes[edge.b];
+      if (cell === undefined) continue;
+      const at = (x: number, y: number): number => this.coverAt(cell.x + x, cell.y + y / this.aspect);
+      piece.cover = Math.max(at(piece.x0, piece.y0), at(piece.cx, piece.cy), at(piece.x1, piece.y1));
+    }
 
-      if (a === undefined || b === undefined) continue;
-      let cover = Math.max(a.cover, b.cover);
-
-      if (boxes.length > 0 && cover < 1 && this.nearAnyBox(a, b, reach)) {
-        const dx = b.hx - a.hx;
-        const dy = (b.hy - a.hy) * this.aspect;
-        const cx = (a.hx + b.hx) / 2 - dy * edge.bow;
-        const cy = (a.hy + b.hy) / 2 + dx * edge.bow / this.aspect;
-
-        for (let sample = 1; sample < EDGE_SAMPLES; sample += 1) {
-          const t = sample / EDGE_SAMPLES;
-          const u = 1 - t;
-          cover = Math.max(cover, this.coverAt(u * u * a.hx + 2 * u * t * cx + t * t * b.hx, u * u * a.hy + 2 * u * t * cy + t * t * b.hy));
-        }
-      }
-
-      edge.cover = cover;
+    for (const [index, axon] of this.axons.entries()) {
+      const [x0, y0, cx, cy, x1, y1] = this.axonCurve(index);
+      axon.cover = Math.max(this.coverAt(x0, y0), this.coverAt(cx, cy), this.coverAt(x1, y1));
     }
   }
 
-  private nearAnyBox(a: Node, b: Node, reach: number): boolean {
-    const left = Math.min(a.hx, b.hx) - reach;
-    const right = Math.max(a.hx, b.hx) + reach;
-    const top = Math.min(a.hy, b.hy) - reach / this.aspect;
-    const bottom = Math.max(a.hy, b.hy) + reach / this.aspect;
-
-    for (const box of this.keepOut) {
-      if (box.left <= right && box.right >= left && box.top <= bottom && box.bottom >= top) return true;
-    }
-
-    return false;
-  }
-
-  private place(): void {
-    const t = this.elapsed;
-    const slow = t * 0.31;
-    const slower = t * 0.23;
-
-    const swayY = SWAY / this.aspect;
-    const pointerX = this.pointerX;
-    const pointerY = this.pointerY;
-
-    for (const node of this.nodes) {
-      node.x = node.hx + SWAY * sine(slow + node.hx * 9 + node.hy * 5);
-      node.y = node.hy + swayY * sine(slower + node.hx * 4 + node.hy * 11 + 1.5708);
-
-      if (pointerX !== null && pointerY !== null && node.hold > 0.001) {
-        const gap = this.distance(node.x, node.y, pointerX, pointerY);
-
-        if (gap > 1e-6) {
-          const pull = Math.min(TISSUE_BEND, gap) * node.hold;
-          node.x += (pointerX - node.x) / gap * pull;
-          node.y += (pointerY - node.y) / gap * pull / this.aspect;
-        }
-      }
-    }
-
-    for (const edge of this.edges) {
-      const a = this.nodes[edge.a];
-      const b = this.nodes[edge.b];
-
-      if (a === undefined || b === undefined) continue;
-      const dx = b.x - a.x;
-      const dy = (b.y - a.y) * this.aspect;
-      edge.x0 = a.x;
-      edge.y0 = a.y;
-      edge.x1 = b.x;
-      edge.y1 = b.y;
-      edge.cx = (a.x + b.x) / 2 - dy * edge.bow;
-      edge.cy = (a.y + b.y) / 2 + dx * edge.bow / this.aspect;
-
-      if (edge.tip) edge.drawn = 0.55 + 0.45 * (0.5 + 0.5 * sine(edge.tipRate * t + edge.tipPhase));
-    }
-  }
-
-  private settlePointer(dt: number): void {
-    const ease = 1 - Math.exp(-dt * POINTER_RATE);
-    const pointerX = this.pointerX;
-    const pointerY = this.pointerY;
-
-    if (pointerX === null || pointerY === null) {
-      for (const node of this.nodes) node.hold *= 1 - ease;
-
-      return;
-    }
-
-    for (const node of this.nodes) {
-      const gap = this.distance(node.hx, node.hy, pointerX, pointerY);
-      const target = gap >= TISSUE_REACH ? 0 : 1 - gap / TISSUE_REACH;
-      node.hold += (target - node.hold) * ease;
-    }
-
-    const moved = this.distance(this.burstX, this.burstY, pointerX, pointerY);
-    const window = this.elapsed - this.burstAt;
-
-    if (window >= 0.1) {
-      if (window > 0 && moved / window > BURST_SPEED) this.fireBurst(pointerX, pointerY);
-      this.burstX = pointerX;
-      this.burstY = pointerY;
-      this.burstAt = this.elapsed;
-    }
-  }
-
-  private fireBurst(x: number, y: number): void {
-    let nearest = -1;
-    let nearestGap = TISSUE_REACH;
-
-    for (const id of this.roots) {
-      const node = this.nodes[id];
-
-      if (node === undefined) continue;
-      const gap = this.distance(node.hx, node.hy, x, y);
-
-      if (gap < nearestGap) {
-        nearestGap = gap;
-        nearest = id;
-      }
-    }
-
-    if (nearest < 0) return;
-
-    while (this.burstFired.length <= nearest) this.burstFired.push(-BURST_WINDOW * 2);
-
-    if (this.elapsed - (this.burstFired[nearest] ?? -BURST_WINDOW * 2) < BURST_WINDOW) return;
-    this.burstFired[nearest] = this.elapsed;
-    const node = this.nodes[nearest];
-    const edge = node?.edges[0];
-
-    if (node !== undefined && edge !== undefined) {
-      this.launch({ from: nearest, edgeId: edge, toward: -1, hops: 10, strength: AMPLITUDE_LOW + this.random() * (AMPLITUDE_HIGH - AMPLITUDE_LOW) });
-    }
-  }
-
-  click(x: number, y: number): void {
-    const near: Array<{ id: number; gap: number }> = [];
-
-    for (let id = 0; id < this.nodes.length; id += 1) {
-      const node = this.nodes[id];
-
-      if (node === undefined) continue;
-      const gap = this.distance(node.hx, node.hy, x, y);
-
-      if (gap < TISSUE_REACH * 1.4) near.push({ id, gap });
-    }
-
-    near.sort((a, b) => a.gap - b.gap);
-
-    for (const { id } of near.slice(0, 14)) {
-      const node = this.nodes[id];
-
-      if (node === undefined) continue;
-
-      let best: number | null = null;
-      let farthest = 0;
-
-      for (const edgeId of node.edges) {
-        const edge = this.edges[edgeId];
-
-        if (edge === undefined) continue;
-        const far = this.nodes[edge.a === id ? edge.b : edge.a];
-
-        if (far === undefined) continue;
-        const gap = this.distance(far.hx, far.hy, x, y);
-
-        if (gap > farthest) {
-          farthest = gap;
-          best = edgeId;
-        }
-      }
-
-      if (best !== null) this.launch({ from: id, edgeId: best, toward: -1, hops: 14, strength: 1.5 });
-    }
-  }
-
-  private settleLook(dt: number): void {
-    const wanted = this.activity.working ? WORKING : IDLE;
-    const ease = 1 - Math.exp(-dt * ACTIVITY_FADE_RATE);
-    const current = this.look;
-
-    this.look = {
-      period: current.period + (wanted.period - current.period) * ease,
-      glowBase: current.glowBase + (wanted.glowBase - current.glowBase) * ease,
-      glowAmp: current.glowAmp + (wanted.glowAmp - current.glowAmp) * ease,
-      energy: current.energy + (wanted.energy - current.energy) * ease,
-      speed: current.speed + (wanted.speed - current.speed) * ease,
-      cadence: wanted.cadence,
-      focus: current.focus + (wanted.focus - current.focus) * ease,
-    };
-
-    if (this.activity.working && this.elapsed >= this.focusUntil) this.refocus();
-  }
-
-  private visibleCorner(except: number): number {
-    const corners = [0, 1, 2, 3].filter((corner) => corner !== except);
-
-    const clear = corners.filter((corner) => {
-      const own = this.roots.filter((id) => this.nodes[id]?.corner === corner);
-      const hidden = own.filter((id) => (this.nodes[id]?.cover ?? 1) >= 0.5).length;
-
-      return own.length > 0 && hidden * 2 < own.length;
-    });
-
-    const pool = clear.length > 0 ? clear : corners;
-
-    return pool[Math.floor(this.random() * pool.length)] ?? 0;
-  }
-
-  private refocus(): void {
-    this.focusCorner = this.visibleCorner(this.focusCorner);
-    this.focusUntil = this.elapsed + FOCUS_SECONDS * (0.8 + 0.4 * this.random());
-  }
-
-  private startFlash(): void {
-    const corner = this.activity.working && this.focusCorner >= 0 ? this.focusCorner : this.visibleCorner(-1);
-    this.flash = { corner, age: 0 };
-
-    for (const id of this.roots) {
-      const node = this.nodes[id];
-      const edge = node?.edges[0];
-
-      if (node !== undefined && node.corner === corner && node.cornerness > 0.2 && edge !== undefined) this.launch({ from: id, edgeId: edge, toward: -1, hops: 10, strength: 1.6 });
-    }
-  }
-
-  private stepFlash(dt: number): void {
-    if (this.flash === null) return;
-    this.flash.age += dt;
-
-    if (this.flash.age > FLASH_ATTACK + FLASH_DECAY) this.flash = null;
-  }
-
-  /** Capped at eight means. */
-  private waitFor(mean: number): number {
-    return Math.min(8 * mean, -Math.log(1 - this.random()) * mean);
-  }
-
-  private emit(): void {
-    const working = this.activity.working && this.focusCorner >= 0;
-    const mean = this.look.cadence * this.roots.length;
-
-    for (const id of this.roots) {
-      if (this.elapsed < (this.nextFire[id] ?? Number.POSITIVE_INFINITY)) continue;
-      this.nextFire[id] = this.elapsed + this.waitFor(mean);
-
-      let from: number;
-
-      if (working) {
-        from = Math.floor(this.random() * this.nodes.length);
-      } else if (this.random() < 0.6) {
-        from = id;
-      } else {
-        from = this.tipList[Math.floor(this.random() * this.tipList.length)] ?? 0;
-      }
-
-      const origin = this.nodes[from];
-
-      if (origin === undefined || (working && origin.corner === this.focusCorner && origin.cornerness > 0.5)) continue;
-      const edge = this.chooseEdge(from, -1, working ? this.focusCorner : -1);
-      const amplitude = AMPLITUDE_LOW + this.random() * (AMPLITUDE_HIGH - AMPLITUDE_LOW);
-
-      if (edge !== null) {
-        this.launch({ from, edgeId: edge, toward: working ? this.focusCorner : -1, hops: working ? 24 : 8 + Math.floor(this.random() * 8), strength: amplitude });
-      }
-    }
-  }
-
-  private chooseEdge(from: number, came: number, toward: number): number | null {
-    const node = this.nodes[from];
-
-    if (node === undefined) return null;
-    const ways = node.edges.filter((id) => id !== came);
-    const options = ways.length > 0 ? ways : node.edges;
-
-    if (options.length === 0) return null;
-
-    if (toward < 0 || this.random() < 0.2) return options[Math.floor(this.random() * options.length)] ?? null;
-    const targetX = toward % 2 === 1 ? 1 : 0;
-    const targetY = toward >= 2 ? 1 : 0;
-    let best: number | null = null;
-    let bestGap = Number.POSITIVE_INFINITY;
-
-    for (const id of options) {
-      const edge = this.edges[id];
-
-      if (edge === undefined) continue;
-      const far = this.nodes[edge.a === from ? edge.b : edge.a];
-
-      if (far === undefined) continue;
-      const gap = this.distance(far.hx, far.hy, targetX, targetY);
-
-      if (gap < bestGap) {
-        bestGap = gap;
-        best = id;
-      }
-    }
-
-    return best;
-  }
-
-  private launch(signal: SignalLaunch): void {
-    const { from, edgeId, toward, hops, strength } = signal;
-    const edge = this.edges[edgeId];
-
-    if (edge === undefined || this.signals.length >= this.signalCap) return;
-    const forward = edge.a === from;
-    this.signals.push({ id: this.nextSignalId++, layer: edge.generation, edge: edgeId, head: forward ? 0 : 1, direction: forward ? 1 : -1, strength, toward, hops });
-  }
-
-  private stepSignals(dt: number): void {
-    for (let index = this.signals.length - 1; index >= 0; index -= 1) {
-      const signal = this.signals[index];
-      const edge = this.edges[signal?.edge ?? -1];
-
-      if (signal === undefined || edge === undefined) continue;
-      const length = this.distance(edge.x0, edge.y0, edge.x1, edge.y1);
-      movePulse(signal, this.look.speed, dt, length);
-
-      if (edge.tip && signal.direction > 0 && signal.head >= edge.drawn) {
-        signal.head = Math.max(0, 2 * edge.drawn - signal.head);
-        signal.direction = -1;
-        signal.hops -= 1;
-
-        if (signal.hops <= 0) this.signals.splice(index, 1);
-        continue;
-      }
-
-      const past = signal.direction > 0 ? signal.head - 1 : -signal.head;
-
-      if (past < 0) continue;
-
-      if (!this.arrive(signal, edge, past * Math.max(1e-6, length))) this.signals.splice(index, 1);
-    }
-  }
-
-  private arrive(signal: Signal, edge: Edge, overshoot: number): boolean {
-    const at = signal.direction > 0 ? edge.b : edge.a;
-    const node = this.nodes[at];
-
-    if (node === undefined) return false;
-    const home = signal.toward >= 0 && node.corner === signal.toward && node.cornerness > 0.55;
-    signal.hops -= 1;
-
-    if (home || signal.hops <= 0) return false;
-    const next = this.chooseEdge(at, signal.edge, signal.toward);
-    const nextEdge = this.edges[next ?? -1];
-
-    if (next === null || nextEdge === undefined) return false;
-    const forward = nextEdge.a === at;
-    const length = Math.max(1e-6, this.distance(nextEdge.x0, nextEdge.y0, nextEdge.x1, nextEdge.y1));
-    signal.edge = next;
-    signal.layer = nextEdge.generation;
-    signal.direction = forward ? 1 : -1;
-    signal.head = forward ? overshoot / length : 1 - overshoot / length;
-
-    return true;
-  }
-
-  private pushStroke(count: number, look: StrokeLook): number {
-    const { edge, glow, tone, alpha } = look;
-    this.strokes = grown(this.strokes, (count + 1) * STROKE_STRIDE);
-    const at = count * STROKE_STRIDE;
-    const strokes = this.strokes;
-    strokes[at] = edge.x0;
-    strokes[at + 1] = edge.y0;
-    strokes[at + 2] = edge.cx;
-    strokes[at + 3] = edge.cy;
-    strokes[at + 4] = edge.x1;
-    strokes[at + 5] = edge.y1;
-    strokes[at + 6] = edge.drawn;
-    strokes[at + 7] = edge.width;
-    strokes[at + 8] = glow;
-    strokes[at + 9] = tone;
-    strokes[at + 10] = alpha;
-    strokes[at + 11] = edge.generation;
-
-    return count + 1;
-  }
-
-  private framePulses(): number {
-    let count = 0;
-
-    for (const signal of this.signals) {
-      const edge = this.edges[signal.edge];
-
-      if (edge === undefined) continue;
-      const tail = Math.min(pulseTail(signal, SIGNAL_TAIL, this.distance(edge.x0, edge.y0, edge.x1, edge.y1)), edge.drawn);
-      const head = clamp(signal.head, 0, edge.drawn);
-      const alpha = clamp(SIGNAL_ALPHA * this.look.energy * signal.strength, 0, 0.85) * (0.4 + 0.6 * edge.rim) * (1 - edge.cover);
-
-      if (tail === head || alpha <= 0.003) continue;
-
-      this.pulseData = writePulse(this.pulseData, count, {
-        x0: edge.x0,
-        y0: edge.y0,
-        cx: edge.cx,
-        cy: edge.cy,
-        x1: edge.x1,
-        y1: edge.y1,
-        tail,
-        head,
-        width: (edge.width * 0.8 + 0.5) * (0.6 + 0.4 * Math.min(1, signal.strength)),
-        glow: 0.9,
-        tone: TONE_BRIGHT,
-        alpha,
-        id: signal.id,
-        layer: signal.layer,
-        direction: signal.direction,
+  /** Margins first: the middle of the view holds the copy, so a cell there is kept only rarely. */
+  private place(width: number): void {
+    const target = clamp(Math.round(width * width * this.aspect / AREA_PER_CELL), MIN_CELLS, MAX_CELLS);
+    const spacing = SPACING_PX * this.px;
+
+    for (let attempt = 0; attempt < target * 60 && this.cells.length < target; attempt += 1) {
+      const x = 0.03 + 0.94 * this.random();
+      const y = 0.04 + 0.92 * this.random();
+      const rim = Math.hypot((x - 0.58) / 0.42, (y - 0.5) / 0.5);
+
+      if (this.random() > 0.15 + 0.85 * clamp((rim - 0.35) / 0.45, 0, 1)) continue;
+
+      if (this.cells.some((cell) => this.distance(cell.x, cell.y, x, y) < spacing)) continue;
+      this.cells.push({
+        x, y, radius: between(this.random, SOMA_PX), axons: [], potential: 0, glow: 0, sense: 0,
+        quietUntil: 0, nextOwn: IDLE_PERIOD * this.random(), pendingAt: 0, cover: 0,
       });
-      count += 1;
+    }
+  }
+
+  /** Returns where the run ends, relative to its soma, and its last heading. */
+  private branch({ cell, x, y, heading, length, segments, width, depth }: Run): readonly [number, number, number] {
+    let px = x;
+    let py = y;
+    let angle = heading;
+    const step = length / segments;
+
+    for (let index = 0; index < segments; index += 1) {
+      const bend = (this.random() - 0.5) * 0.5;
+      const nx = px + Math.cos(angle + bend) * step;
+      const ny = py + Math.sin(angle + bend) * step;
+      const normal = angle + bend / 2 + Math.PI / 2;
+      const share = index / segments;
+      this.dendrites.push({
+        cell, x0: px, y0: py,
+        cx: (px + nx) / 2 + Math.cos(normal) * step * 0.12 * (this.random() - 0.5),
+        cy: (py + ny) / 2 + Math.sin(normal) * step * 0.12 * (this.random() - 0.5),
+        x1: nx, y1: ny, width: width[0] + (width[1] - width[0]) * share, depth: depth[0] + (depth[1] - depth[0]) * share, cover: 0,
+      });
+      px = nx;
+      py = ny;
+      angle += bend;
     }
 
-    return count;
+    return [px, py, angle];
+  }
+
+  private grow(width: number): void {
+    this.place(width);
+    const px = this.px;
+
+    for (const index of this.cells.keys()) {
+      const up = -Math.PI / 2 + (this.random() - 0.5) * 0.7;
+      const apical = between(this.random, APICAL_PX) * px;
+      const [tx, ty, tipHeading] = this.branch({ cell: index, x: 0, y: 0, heading: up, length: apical, segments: 4, width: [1.5, 0.9], depth: [0, 0.6] });
+      const tuft = 2 + Math.floor(this.random() * 2);
+
+      for (let fork = 0; fork < tuft; fork += 1) {
+        const spread = (fork - (tuft - 1) / 2) * 0.75 + (this.random() - 0.5) * 0.3;
+        this.branch({ cell: index, x: tx, y: ty, heading: tipHeading + spread, length: apical * (0.22 + 0.15 * this.random()), segments: 2, width: [0.8, 0.5], depth: [0.6, 1] });
+      }
+
+      // Short basal dendrites, so a cell reads as a tree and never as legs.
+      const basal = 2 + Math.floor(this.random() * 2);
+
+      for (let root = 0; root < basal; root += 1) {
+        const angle = up + Math.PI + (root - (basal - 1) / 2) * 1.1 + (this.random() - 0.5) * 0.3;
+        const length = between(this.random, BASAL_PX) * px;
+        const [bx, by, heading] = this.branch({ cell: index, x: 0, y: 0, heading: angle, length, segments: 2, width: [1.2, 0.8], depth: [0, 0.6] });
+
+        for (const side of [-1, 1]) {
+          if (this.random() < 0.35) continue;
+          this.branch({ cell: index, x: bx, y: by, heading: heading + side * (0.35 + 0.3 * this.random()), length: length * (0.4 + 0.25 * this.random()), segments: 1, width: [0.7, 0.5], depth: [0.6, 1] });
+        }
+      }
+    }
+
+    this.wire();
+  }
+
+  /** Each cell's axon reaches two or three of its nearer neighbours, one axon a pair, bowed so no two runs overlap. */
+  private wire(): void {
+    for (const [index, cell] of this.cells.entries()) {
+      const near = this.cells
+        .map((other, id) => ({ id, gap: this.distance(cell.x, cell.y, other.x, other.y) }))
+        .filter(({ id, gap }) => id !== index && gap < AXON_REACH_PX * this.px)
+        .sort((a, b) => a.gap - b.gap)
+        .slice(0, 2 + Math.floor(this.random() * 2));
+
+      for (const { id } of near) {
+        const other = this.cells[id];
+
+        if (other === undefined || other.axons.some((axon) => this.axons[axon]?.to === index)) continue;
+        cell.axons.push(this.axons.length);
+        this.axons.push({ from: index, to: id, bow: (this.random() < 0.5 ? -1 : 1) * (0.12 + 0.14 * this.random()), weight: 0.5 + 0.6 * this.random(), cover: 0 });
+      }
+    }
   }
 }

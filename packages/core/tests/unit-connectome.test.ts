@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 
 import { STROKE_STRIDE } from '../src/web/art';
-import { CANVAS_SEGMENTS, Connectome } from '../src/web/connectome';
+import { Connectome } from '../src/web/connectome';
 
 const ASPECT = 900 / 1440;
+
+const WIDTH = 1440;
 
 const DT = 1 / 60;
 
@@ -15,14 +17,14 @@ function stepSeconds(connectome: Connectome, seconds: number): Connectome {
   return connectome;
 }
 
-function run(seed: number, seconds: number, connectome = new Connectome({ seed, aspect: ASPECT, segments: CANVAS_SEGMENTS })): Connectome {
+function run(seed: number, seconds: number, connectome = new Connectome({ seed, aspect: ASPECT, width: WIDTH })): Connectome {
   return stepSeconds(connectome, seconds);
 }
 
 
 describe('the tissue answers the roster', () => {
   test('mode follows activity, and only a decisions rise flashes', () => {
-    const connectome = new Connectome({ seed: 1729, aspect: ASPECT, segments: CANVAS_SEGMENTS });
+    const connectome = new Connectome({ seed: 1729, aspect: ASPECT, width: WIDTH });
     expect(connectome.mode()).toBe('idle');
 
     connectome.setActivity({ working: true, decisions: 0 });
@@ -54,7 +56,7 @@ describe('the tissue answers the roster', () => {
     stepSeconds(connectome, DT);
     expect(connectome.mode()).toBe('idle');
 
-    const informed = new Connectome({ seed: 1729, aspect: ASPECT, segments: CANVAS_SEGMENTS, activity: { working: false, decisions: 3 } });
+    const informed = new Connectome({ seed: 1729, aspect: ASPECT, width: WIDTH, activity: { working: false, decisions: 3 } });
     expect(informed.mode()).toBe('idle');
     stepSeconds(informed, 2);
     expect(informed.mode()).toBe('idle');
@@ -79,7 +81,8 @@ describe('the tissue keeps out of the copy', () => {
       const at = index * STROKE_STRIDE;
 
       for (const [x, y] of [[shaded.strokes[at] ?? 0, shaded.strokes[at + 1] ?? 0], [shaded.strokes[at + 4] ?? 0, shaded.strokes[at + 5] ?? 0]] as const) {
-        expect(x > 0.3 || y > 0.3).toBe(true);
+        // A dendrite may run off the view's edge; off the view is outside the box too.
+        expect(x > 0.3 || y > 0.3 || x < 0 || y < 0).toBe(true);
       }
     }
 
