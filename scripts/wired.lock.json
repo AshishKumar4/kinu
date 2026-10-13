@@ -19,8 +19,6 @@
   "packages/cli-backend/src/config-lock.ts#encodeLockOwner (unreached-export)",
   "packages/cli-backend/src/config-lock.ts#procStartTicks (unreached-export)",
   "packages/cli-backend/src/model-resolver.ts#LocalModelResolverConfig.fetch (unsupplied-field)",
-  "packages/cli/src/agent-create.ts#CreateCloudAgentFromMissionOptions.id (unsupplied-field)",
-  "packages/cli/src/agent-create.ts#createCloudAgentFromMission (unreached-export)",
   "packages/cli/src/local-agent-client.ts#LocalAgentClient (unreached-export)",
   "packages/cli/src/tui/streaming-buffer.ts#createStreamingBufferController (unreached-export)",
   "packages/compaction/src/codec.ts#kinuConventions (unreached-export)",

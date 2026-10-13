@@ -3,27 +3,8 @@ import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';
 
 import { join } from 'node:path';
-import { asFetchFunction, fallbackWorkspaceIdentity, workspaceSlug } from '@kinu.run/core';
-import { createCloudAgentFromMission } from '../src/agent-create';
-import type { CreateCloudAgentInput } from '../src/cloud-api';
+import { asFetchFunction, fallbackWorkspaceIdentity } from '@kinu.run/core';
 import * as v from 'valibot';
-
-interface RecordedCreate {
-  input?: CreateCloudAgentInput;
-}
-
-function recordingCreate(seen: RecordedCreate) {
-  return async (input: CreateCloudAgentInput) => {
-    seen.input = input;
-
-    return {
-      name: input.name ?? 'missing-name',
-      displayName: input.displayName ?? 'missing-display-name',
-      createdAt: 1,
-      lastVisited: 1,
-    };
-  };
-}
 
 describe('CLI mission workspace names', () => {
   test('a new workspace gets a neutral slug and the mission as its stand-in title, and no model is asked', () => {
@@ -34,49 +15,36 @@ describe('CLI mission workspace names', () => {
       nameOrigin: 'auto',
     });
   });
+});
 
-  test('creates an unnamed cloud workspace with the neutral slug and the stand-in title', async () => {
-    const seen: RecordedCreate = {};
+describe('a cloud create names the workspace only when the owner did', () => {
+  test('the home screen\'s unnamed create leaves the name to the server; `kinu create jarvis` sends jarvis', async () => {
+    // The server reads a sent name as the owner's (`nameOrigin: 'user'`), and a user-origin title is never replaced:
+    // a stand-in name sent for an unnamed create kept the mission's first line as the title for good.
+    const home = scratchDir('create-cloud-home');
 
-    const created = await createCloudAgentFromMission(
-      {
-        purpose: 'Build a benchmark for Rust web frameworks',
-        model: 'openai/gpt-5-mini',
-        reasoningEffort: 'high',
-      },
-      { id: 'abcdef123456', create: recordingCreate(seen) },
-    );
+    const result = await runToExit(['bun', '-e', `
+      import { createCliAgent } from './packages/cli/src/agent-create.ts';
+      const sent = [];
+      globalThis.fetch = async (input, init) => {
+        const body = JSON.parse(String(init?.body));
+        sent.push({ url: String(input), body });
 
-    expect(seen.input).toEqual({
-      name: workspaceSlug('abcdef123456'),
-      displayName: 'Build a benchmark for Rust web frameworks',
-      purpose: 'Build a benchmark for Rust web frameworks',
-      model: 'openai/gpt-5-mini',
-      reasoningEffort: 'high',
+        return Response.json({ name: body.name ?? 'ironwood-elm-1a2b3c4d', displayName: body.displayName ?? body.purpose, createdAt: 1, lastVisited: 1 });
+      };
+      await createCliAgent({ purpose: 'Build a benchmark for Rust web frameworks', mode: 'cloud', model: 'openai/gpt-5-mini' });
+      await createCliAgent({ name: 'jarvis', purpose: 'Manage my calendar', mode: 'cloud' });
+      console.log(JSON.stringify(sent));
+    `], {
+      cwd: join(import.meta.dir, '../../..'),
+      env: { ...process.env, HOME: home, KINU_HOME: home, KINU_TOKEN: 'ptc_test_fixture_token_not_real', KINU_ORIGIN: 'https://kinu.test' },
     });
-    expect(created).toMatchObject({
-      name: workspaceSlug('abcdef123456'),
-      displayName: 'Build a benchmark for Rust web frameworks',
-    });
-  });
 
-  test('preserves an explicit cloud workspace name', async () => {
-    const seen: RecordedCreate = {};
-    await createCloudAgentFromMission(
-      {
-        name: 'jarvis',
-        displayName: 'Jarvis',
-        nameOrigin: 'user',
-        purpose: 'Manage my calendar',
-      },
-      { create: recordingCreate(seen) },
-    );
-
-    expect(seen.input).toEqual({
-      name: 'jarvis',
-      displayName: 'Jarvis',
-      purpose: 'Manage my calendar',
-    });
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout.trim())).toEqual([
+      { url: 'https://kinu.test/api/cli/workspaces', body: { purpose: 'Build a benchmark for Rust web frameworks', model: 'openai/gpt-5-mini' } },
+      { url: 'https://kinu.test/api/cli/workspaces', body: { purpose: 'Manage my calendar', name: 'jarvis', displayName: 'jarvis' } },
+    ]);
   });
 });
 
