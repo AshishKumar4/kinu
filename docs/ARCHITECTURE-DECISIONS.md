@@ -1088,6 +1088,17 @@ the owner, built 2026-10-11 on `lane/main-isolate`.
   one isolate flush per remote step: about 25 to 45 ms, a quarter to a third
   of a zero-inference step and 1 to 4 percent of a real model's. Retried
   only with new measurements that move that balance.
+  Measured and closed the same day: making a file call that only reads
+  (`read`, `list`, `stat`, `search`) safe to run again, so the isolate does
+  not wait for its part to be durable before the call crosses and the
+  workspace keeps no receipt of it. Interleaved on deployed objects, 4 rounds
+  of 5 S2 turns an arm: a read step's crossing to the workspace took 55-57 ms
+  against 56, its answer 56-58 ms against 57, the step 184-185 ms against
+  181. Both gates stayed. The stream consumer writes the call's part before
+  the call leaves, awaited or not, and the workspace still writes during a
+  read (activity and turn state). Taking either flush off a read reorders
+  the stream writer or moves activity off the path, the change rejected
+  above.
 - Stop means stop for every agent and on the CLI: one commit cancels the
   agent's owed deliveries and marks its fence `cancelled_at`, then its isolate
   hands unread words back to their composer, cancels its queued turns (their
