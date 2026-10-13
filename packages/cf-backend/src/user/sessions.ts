@@ -261,34 +261,36 @@ export class UserSessions {
 
   /** Close every websocket that named this session at upgrade. Best-effort, like the CLI socket push. */
   private async pushSessionSocketRevocation(tokenHash: string): Promise<void> {
-    await this.pushToActiveWorkspaces((workspace) => workspace.closeRevokedSessionSockets(tokenHash), {
-      event: 'auth.session_socket_revocation_push_failed',
+    await this.pushToActiveWorkspaces({
+      push: (workspace) => workspace.closeRevokedSessionSockets(tokenHash),
       doing: 'closing a workspace websocket whose browser session was revoked',
-      fields: {},
+      failed: (workspace, failure) => { diagnostics.failure('auth.session_socket_revocation_push_failed', failure, { workspace }); },
     });
   }
 
   /**
    * Ask every live workspace to close the sockets a revocation ended. Best-effort: the revocation is durable before
-   * this runs, so a failed push only delays a close, and each failure is reported with its workspace.
+   * this runs, so a failed push only delays a close; each caller reports its own failures under its own event.
    */
-  private async pushToActiveWorkspaces(
-    push: (workspace: ReturnType<UserSessionsHost['env']['OrchestratorAgent']['get']>) => Promise<{ closed: number }>,
-    report: { readonly event: `${string}.${string}`; readonly doing: string; readonly fields: Readonly<Record<string, number>> },
-  ): Promise<void> {
+  private async pushToActiveWorkspaces(fanOut: {
+    readonly push: (workspace: ReturnType<UserSessionsHost['env']['OrchestratorAgent']['get']>) => Promise<{ closed: number }>;
+    readonly doing: string;
+    readonly failed: (workspace: string, failure: KinuError) => void;
+  }): Promise<void> {
     const workspaces = this.host.sqlx<{ name: string }>(
       `SELECT name FROM user_workspaces
        WHERE delete_pending = 0 AND create_pending = 0`,
     ).map((row) => row.name);
 
-    const settled = await Promise.allSettled(workspaces.map((name) => push(this.host.env.OrchestratorAgent
+    const settled = await Promise.allSettled(workspaces.map((name) => fanOut.push(this.host.env.OrchestratorAgent
       .get(this.host.env.OrchestratorAgent.idFromName(name)))));
 
     for (const [index, outcome] of settled.entries()) {
-      if (outcome.status === 'fulfilled') continue;
-      diagnostics.failure(report.event, toKinuError({ doing: report.doing, cause: outcome.reason, otherwise: 'unavailable' }), {
-        workspace: workspaces[index], ...report.fields,
-      });
+      const workspace = workspaces[index];
+
+      if (outcome.status === 'rejected' && workspace !== undefined) {
+        fanOut.failed(workspace, toKinuError({ doing: fanOut.doing, cause: outcome.reason, otherwise: 'unavailable' }));
+      }
     }
   }
 
@@ -448,10 +450,10 @@ export class UserSessions {
     );
     const generation = this.authGeneration();
 
-    await this.pushToActiveWorkspaces((workspace) => workspace.closeRevokedCliSockets(generation), {
-      event: 'auth.socket_revocation_push_failed',
+    await this.pushToActiveWorkspaces({
+      push: (workspace) => workspace.closeRevokedCliSockets(generation),
       doing: 'closing a workspace websocket whose CLI bearer was revoked',
-      fields: { generation },
+      failed: (workspace, failure) => { diagnostics.failure('auth.socket_revocation_push_failed', failure, { workspace, generation }); },
     });
   }
 
