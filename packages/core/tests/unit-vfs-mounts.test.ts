@@ -6,7 +6,7 @@ import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { fakeMossaic } from '@kinu.run/test-utils/mossaic';
-import { present } from '@kinu.run/test-utils';
+import { agentPlane, present, workspaceShell } from '@kinu.run/test-utils';
 
 import { isVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { removeTree, standardMounts, withMountTable, workspaceFilePlane, type VfsMount, type WorkspacePrincipal } from '../src/vfs/mounts';
@@ -619,7 +619,7 @@ describe('a write on the workspace\'s namespace', () => {
 		await files.writeFile('/slates/keeper/package.json', new TextEncoder().encode('{"main":"server.ts"}'));
 		await writeText(files, 'notes/2026/today.md', 'kept');
 
-		expect(await bundle.shell.exec('cat /slates/keeper/package.json /home/main/notes/2026/today.md')).toMatchObject({ stdout: '{"main":"server.ts"}kept', exitCode: 0 });
+		expect(await workspaceShell(bundle).exec('cat /slates/keeper/package.json /home/main/notes/2026/today.md')).toMatchObject({ stdout: '{"main":"server.ts"}kept', exitCode: 0 });
 		await expect(writeText(files, '/etc/kinu/probe.conf', 'x')).rejects.toMatchObject({ code: 'EACCES' });
 		expect(await exists(files, '/etc/kinu')).toBe(false);
 	});
@@ -658,7 +658,7 @@ describe('a watched file tool on the workspace\'s namespace', () => {
 
 		await writeText(files, '/home/main/by-tool.txt', 'tool');
 		await writeText(storeFiles(async () => (await bundle.session()).vfs, { home: WORKSPACE_ROOT }), '/home/main/by-store.txt', 'store');
-		expect(await bundle.shell.exec('echo shell > /home/main/by-shell.txt')).toMatchObject({ exitCode: 0 });
+		expect(await workspaceShell(bundle).exec('echo shell > /home/main/by-shell.txt')).toMatchObject({ exitCode: 0 });
 		await writeText(files, '/home/main/by-tool.txt', 'tool again');
 
 		expect(heard).toEqual(['/home/main/by-tool.txt', '/home/main/by-tool.txt']);
@@ -710,7 +710,7 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 			{ ...mountOf('context', fakeTree({ 'notes.md': 'history' })), storeView: true },
 		]);
 
-		return { shell: bundle.shell, drive, container };
+		return { shell: workspaceShell(bundle), drive, container };
 	}
 
 	test('ls / lists every live mount point, and cat reads a file through one', async () => {
@@ -768,7 +768,7 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 		const fleet = fakeTree({ '/laptop/notes.md': 'a', '/studio/notes.md': 'b' });
 		shared(bundle, [mountOf('pc', fleet)]);
 		shared(bundle, [mountOf('pc', fleet)], { cred: agentCred(cred) });
-		const agent = await bundle.asAgent({ cred: agentCred(cred), home: agentHome('agent-a'), tmp: agentTmpRoot('agent-a') });
+		const agent = await agentPlane(bundle, { cred: agentCred(cred), home: agentHome('agent-a'), tmp: agentTmpRoot('agent-a') });
 
 		for (const command of ['mount', 'df -a', 'cat /proc/mounts']) {
 			const listed = await agent.shell.exec(command);
@@ -792,7 +792,7 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 
 			// Walked a component at a time, this `cat` asked the backend 35 times (25 of them a stat of an ancestor); now
 			// `cat` asks only of the file it names, as it would of a local one.
-			expect(await bundle.shell.exec(`cat /${name}/home/me/a/b/c.txt`)).toMatchObject({ stdout: 'deep', exitCode: 0 });
+			expect(await workspaceShell(bundle).exec(`cat /${name}/home/me/a/b/c.txt`)).toMatchObject({ stdout: 'deep', exitCode: 0 });
 			expect(calls.filter((call) => !call.endsWith(' /home/me/a/b/c.txt'))).toEqual([]);
 			expect(calls.length).toBeLessThanOrEqual(5);
 
@@ -818,8 +818,8 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 
 		shared(bundle, [mountOf('pc', device)]);
 
-		expect(await bundle.shell.exec('cat /pc/home/me/project/notes.md')).toMatchObject({ stdout: 'consented', exitCode: 0 });
-		expect((await bundle.shell.exec('cat /pc/etc/passwd')).exitCode).not.toBe(0);
+		expect(await workspaceShell(bundle).exec('cat /pc/home/me/project/notes.md')).toMatchObject({ stdout: 'consented', exitCode: 0 });
+		expect((await workspaceShell(bundle).exec('cat /pc/etc/passwd')).exitCode).not.toBe(0);
 	});
 
 	test("from the shell, the device's consent refuses what lies outside its root, `..` included", async () => {
@@ -849,10 +849,10 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 		const view = deviceFiles(transport, { consentedRoot: async () => '/home/dev', deviceHome: async () => '/home/dev', scope: async () => 'root' });
 		shared(bundle, [mountOf('pc', view)]);
 
-		expect(await bundle.shell.exec('cat /pc/home/dev/notes.txt')).toMatchObject({ stdout: 'consented', exitCode: 0 });
+		expect(await workspaceShell(bundle).exec('cat /pc/home/dev/notes.txt')).toMatchObject({ stdout: 'consented', exitCode: 0 });
 
 		for (const path of ['/pc/etc/secrets.key', '/pc/home/dev/../../etc/secrets.key']) {
-			const read = await bundle.shell.exec(`cat ${path}`);
+			const read = await workspaceShell(bundle).exec(`cat ${path}`);
 			expect([read.exitCode, read.stdout]).toEqual([1, '']);
 		}
 	});
@@ -862,7 +862,7 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 		const skills = fakeTree({ '/kept.md': 'kept' });
 		const table = shared(bundle, [{ ...mountOf('skills', skills), readOnly: true }]);
 
-		expect((await bundle.shell.exec('echo changed > /skills/kept.md')).exitCode).not.toBe(0);
+		expect((await workspaceShell(bundle).exec('echo changed > /skills/kept.md')).exitCode).not.toBe(0);
 		await expect(writeText(table, '/skills/kept.md', 'changed')).rejects.toMatchObject({ code: 'EROFS' });
 		await expect(table.writeFileWithReport?.('/skills/kept.md', new TextEncoder().encode('changed'))).rejects.toMatchObject({ code: 'EROFS' });
 		await expect(table.rename('/skills/kept.md', '/skills/moved.md')).rejects.toMatchObject({ code: 'EROFS' });
@@ -871,7 +871,7 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 		await expect(table.removeRecursive('/skills/kept.md')).rejects.toMatchObject({ code: 'EROFS' });
 
 		for (const command of ['rm /skills/kept.md', 'mkdir /skills/new', 'rm -r /skills/kept.md']) {
-			expect([command, (await bundle.shell.exec(command)).exitCode]).not.toEqual([command, 0]);
+			expect([command, (await workspaceShell(bundle).exec(command)).exitCode]).not.toEqual([command, 0]);
 		}
 
 		expect(await readText(skills, '/kept.md')).toBe('kept');

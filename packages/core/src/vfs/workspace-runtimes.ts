@@ -1,12 +1,9 @@
 /**
- * The toolchain an embedded Nimbus workspace can reach: lifo's npm/npx, and the runtime packages the host supplies
- * (never imported here: they read `node:fs`), which NimbusWorkspace installs on the first use of one of their bins
- * and rehydrates when the workspace reopens.
+ * The toolchain a Nimbus workspace can reach: the runtime packages the host supplies (never imported here: they read
+ * `node:fs`), which NimbusWorkspace installs on the first use of one of their bins and rehydrates when the workspace
+ * reopens. npm and npx are the hosted runtime's own commands.
  */
 
-import { textSink } from '@nimbus-sh/core/_shared/bytes.js';
-import type { ShellExecuteFn } from '@nimbus-sh/core/substrate/lifo/commands/system/npm.js';
-import type { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import * as v from 'valibot';
 import { KinuError, refusalOf, renderCauseChain, toKinuError, type Refusal } from '../obs/index';
 import type { JsonValue } from '../utils/json';
@@ -78,23 +75,3 @@ export async function sessionRuntimeBins(list: () => Promise<JsonValue | undefin
     return { unreadable: toKinuError({ doing: 'reading the session box runtime catalog', cause, otherwise: 'io' }) };
   }
 }
-
-/** Registers npm and npx on the workspace's shell; nothing is fetched until a subcommand runs. */
-export async function registerNpm(workspace: NimbusWorkspace): Promise<void> {
-  // At first registration, not module eval: lifo's npm would otherwise join every consumer's static import graph.
-  const npm = await import('@nimbus-sh/core/substrate/lifo/commands/system/npm.js');
-  const registry = workspace.registry;
-
-  // Per-stream decoder so a multibyte character split across chunks lands whole.
-  const shellExecute: ShellExecuteFn = async (command, ctx) => (await workspace.shell.execute(command, {
-    cwd: ctx.cwd,
-    env: ctx.env,
-    onStdout: textSink((text) => ctx.stdout.write(text)),
-    onStderr: textSink((text) => ctx.stderr.write(text)),
-  })).exitCode;
-
-  registry.register('npm', npm.createNpmCommand(registry, shellExecute, workspace.kernel));
-  // npx's cache install fetches through the workspace's network, its egress, as npm's does.
-  registry.register('npx', npm.createNpxCommand(registry, shellExecute, workspace.kernel));
-}
-

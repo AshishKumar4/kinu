@@ -1,7 +1,7 @@
 import { exists, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { afterEach, describe, expect, setSystemTime, spyOn, test } from 'bun:test';
 import * as v from 'valibot';
-import { fakeMossaic, git, gitEnv, initRepo, runToExit, scratchDir } from '@kinu.run/test-utils';
+import { fakeMossaic, git, gitEnv, initRepo, runToExit, scratchDir, workspaceShell } from '@kinu.run/test-utils';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
@@ -378,7 +378,7 @@ describe('workspace diff lifecycle', () => {
     expect(await poll()).toEqual({ walked: false, listed: [] });
     await landed(() => writeText(rt.storage.vfs, 'notes.md', 'two\n'));
     expect(await poll()).toEqual({ walked: true, listed: ['changed notes.md'] });
-    await landed(async () => { await workspace.shell.exec('echo from the shell > shell.txt'); });
+    await landed(async () => { await workspaceShell(workspace).exec('echo from the shell > shell.txt'); });
     expect(await poll()).toEqual({ walked: true, listed: ['changed notes.md', 'added shell.txt'] });
     await landed(async () => workspace.vfs.rename(`${WORKSPACE_ROOT}/shell.txt`, '/tmp/shell.txt'));
     expect(await poll()).toEqual({ walked: true, listed: ['changed notes.md'] });
@@ -418,7 +418,7 @@ describe('workspace diff lifecycle', () => {
     await landed(() => writeText(rt.storage.vfs, 'more.md', 'two\n'));
     expect(told).toBe(1);
     await read();
-    await landed(async () => { await workspace.shell.exec('echo from the shell > shell.txt'); });
+    await landed(async () => { await workspaceShell(workspace).exec('echo from the shell > shell.txt'); });
     expect(told).toBe(2);
 
     // A write that lands during a walk is told when the walk settles, not beside it.

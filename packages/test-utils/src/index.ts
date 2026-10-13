@@ -71,3 +71,5 @@ export * from './deliveries';
 export * from './claims';
 
 export * from './command-call';
+
+export * from './workspace-shell';

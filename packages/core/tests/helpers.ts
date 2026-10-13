@@ -33,6 +33,7 @@ import { initAgentConfigTable } from '../src/config/store';
 import { initCodemodeStateTable } from '../src/identity/program-state';
 import { WORKSPACE_ROOT, workspacePath } from '../src/vfs/workspace-path';
 import { cloudPlanes } from '../src/vfs/resolve';
+import { workspaceShell } from '@kinu.run/test-utils';
 
 export function createTestActor(sql: SqlExecutor, execRaw: RawSqlExec, workspaceId: string, name: string) {
   if (tableExists(sql, 'workspace_identity') && sql`SELECT id FROM workspace_identity LIMIT 1`.length > 0) return openWorkspaceMainActor(sql);
@@ -272,7 +273,7 @@ export function createTestRuntime(opts?: {
     identity,
     craftStore,
     judgeModel: llm,
-    shell: workspace.shell,
+    shell: workspaceShell(workspace),
   };
 
   return { rt, db, workspace, stores: storesFor(rt) };

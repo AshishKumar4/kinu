@@ -31,6 +31,7 @@ import {
 } from './helpers/programmatic-host';
 import { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 import { inlineWorkspaceStorage } from '@kinu.run/core/identity';
+import { agentPlane, workspaceShell } from '@kinu.run/test-utils';
 
 const databases: Database[] = [];
 
@@ -531,13 +532,13 @@ describe('the in-isolate plane acts as the node on both surfaces', () => {
     const identity = await provision(actorHomeName({ origin: 'swarm', name: explorationActorKey('reset'), storageKey: node('reset').nodeId }));
 
     if (identity.isolation !== 'private-home') throw new Error('node needs its own home');
-    const child = await first.asAgent(identity);
-    expect(await first.shell.exec('echo main > /tmp/note; echo shared > /home/main/shared')).toMatchObject({ exitCode: 0 });
+    const child = await agentPlane(first, identity);
+    expect(await workspaceShell(first).exec('echo main > /tmp/note; echo shared > /home/main/shared')).toMatchObject({ exitCode: 0 });
     expect(await child.shell.exec('echo node > /tmp/note')).toMatchObject({ exitCode: 0 });
-    expect((await first.shell.exec('echo $HOME $TMPDIR')).stdout.trim()).toBe('/home/main /tmp/main');
+    expect((await workspaceShell(first).exec('echo $HOME $TMPDIR')).stdout.trim()).toBe('/home/main /tmp/main');
     const second = createWorkspace({ sql, transactions, generation: workspaceGenerationStorage(sql) });
-    const restored = await second.asAgent(identity);
-    expect((await second.shell.exec('cat /tmp/note')).stdout).toBe('main\n');
+    const restored = await agentPlane(second, identity);
+    expect((await workspaceShell(second).exec('cat /tmp/note')).stdout).toBe('main\n');
     expect((await restored.shell.exec('cat /tmp/note')).stdout).toBe('node\n');
     expect(await readText(restored.vfs, '/home/main/shared')).toBe('shared\n');
     const root = (await second.privileged()).root;
@@ -566,8 +567,8 @@ describe('the in-isolate plane acts as the node on both surfaces', () => {
       throw new Error('the in-isolate seam must provision credentials');
     }
 
-    const asA = await workspace.asAgent(a);
-    const asB = await workspace.asAgent(b);
+    const asA = await agentPlane(workspace, a);
+    const asB = await agentPlane(workspace, b);
 
     await writeText(asA.vfs, `${a.home}/candidate.md`, 'my answer\n');
     expect(await readText(asA.vfs, `${a.home}/candidate.md`)).toBe('my answer\n');
@@ -588,11 +589,9 @@ describe('the in-isolate plane acts as the node on both surfaces', () => {
     expect(await exists(workspace.vfs, '/tmp/pad.txt')).toBe(false);
     expect(await readText(asA.vfs, '/tmp/pad.txt')).toBe('scratch\n');
 
-    expect((await workspace.shell.exec('id -u')).stdout).toContain(String(SESSION_UID));
+    expect((await workspaceShell(workspace).exec('id -u')).stdout).toContain(String(SESSION_UID));
     expect(await readText(workspace.vfs, `${a.home}/candidate.md`)).toBe('my answer\n');
 
-    // One plane per uid: a shell holds cwd, so a second call must not forget the node's `cd`.
-    expect(await workspace.asAgent(a)).toBe(asA);
   });
 });
 

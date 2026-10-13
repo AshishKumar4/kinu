@@ -15,7 +15,7 @@ import { withMountTable, standardMounts } from '../src/vfs/mounts';
 import { setDiagnosticsSink } from '../src/obs/log';
 import { DefaultExecutionRouter } from '../src/execution/router';
 import { buildBuiltinTools } from '../src/tools/builtins';
-import { present, toolExecute } from '@kinu.run/test-utils';
+import { present, toolExecute, workspaceShell } from '@kinu.run/test-utils';
 import { renderThrownChain } from '../src/obs/index';
 import { createTestRuntime, createWorkspaceBundle, conversationsFor } from './helpers';
 import type { JsonValue } from '../src/utils/json';
@@ -500,7 +500,7 @@ describe('the workspace shell on a machine confined to one directory', () => {
 
     bundle.mountTable(standardMounts((name) => router.getProvider(name)));
 
-    return bundle.shell;
+    return workspaceShell(bundle);
   }
 
   // Nimbus resolves a mounted path one component at a time, so the shell stats each directory above the consented one.

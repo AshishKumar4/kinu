@@ -19,7 +19,7 @@ import { createShellSession } from '../src/execution/shell-session';
 import { withMountTable, workspaceFilePlane } from '../src/vfs/mounts';
 import { skillsMount } from '../src/skills/view';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
-import { fakeCommandMember, present, toolExecute } from '@kinu.run/test-utils';
+import { fakeCommandMember, present, toolExecute, workspaceShell } from '@kinu.run/test-utils';
 import { createMemoryVfs } from '@kinu.run/test-utils/vfs';
 import { createWorkspaceBundle } from './helpers';
 import { createFileTool } from '../src/tools/file-operations';
@@ -398,7 +398,7 @@ function workspaceOverDevice() {
 
   const shellSession = createShellSession({ home: WORKSPACE_ROOT, userRoots: () => mounted.userRoots() });
 
-  const shell = withApprovalGatedShell(workspace.shell, { filesOwner: 'agent', shellSession }, {
+  const shell = withApprovalGatedShell(workspaceShell(workspace), { filesOwner: 'agent', shellSession }, {
     mode: () => 'strict',
     requestApproval: async (request) => {
       asked.push(request.command);

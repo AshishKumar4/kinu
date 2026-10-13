@@ -11,7 +11,7 @@ import { createWorkspace } from '../src/workspace-birth';
 import { bootstrapScaffold } from '../src/scaffold/bootstrap';
 import { getCurrentScaffoldVersion, readScaffoldVersion } from '../src/scaffold/versions';
 import { makeSql, makeExecRaw, createWorkspaceBundle } from './helpers';
-import { createMemoryVfs } from '@kinu.run/test-utils';
+import { agentPlane, createMemoryVfs } from '@kinu.run/test-utils';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { workspaceSoul, writeWorkspaceSoul } from '../src/vfs/workspace-planes';
 
@@ -80,7 +80,7 @@ describe('the soul is a file', () => {
     const cred = { uid: 2_001, gid: 2_001 };
     provisionAgentHome(root, 'agent-a', cred);
     confineAgentTmp(confiner, 'agent-a', cred);
-    const agent = await bundle.asAgent({ cred: agentCred(cred), home: agentHome('agent-a'), tmp: agentTmpRoot('agent-a') });
+    const agent = await agentPlane(bundle, { cred: agentCred(cred), home: agentHome('agent-a'), tmp: agentTmpRoot('agent-a') });
 
     const edit = await agent.shell.exec(`printf '# Atlas\\n\\n## Mission\\n\\nShip the release.\\n' > ${SOUL_FILE}`);
 

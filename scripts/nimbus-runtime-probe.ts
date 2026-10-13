@@ -1,10 +1,9 @@
 /**
- * What the agent's own workspace can execute, measured through the shell the
- * agent actually gets.
+ * What a workspace can execute, measured through Nimbus's own exec over it.
  *
- * Opens the workspace exactly as `createCLIRuntime` does — `createWorkspace`
- * over a real `bun:sqlite` database — and runs one command per toolchain,
- * printing the exit code, the wall-clock, and the first output line verbatim.
+ * Opens a workspace with `createWorkspace` over a real `bun:sqlite` database
+ * and runs one command per toolchain, printing the exit code, the wall-clock,
+ * and the first output line verbatim.
  *
  * Exists because "the workspace has python" is a claim about a shell registry,
  * and the only way to read a shell registry is to ask the shell. The first
@@ -61,13 +60,13 @@ const workspace = createWorkspace({
 
 // `createWorkspace` returns over a workspace that is still opening; the first
 // call is what awaits the boot, so time it separately from the probes.
-await workspace.session();
+const { workspace: nimbus } = await workspace.session();
 
 console.log(`runtimes supplied: ${runtimes.length}   open: ${(performance.now() - opened).toFixed(0)}ms\n`);
 
 for (const command of PROBES) {
   const started = performance.now();
-  const result = await workspace.shell.exec(command);
+  const result = await nimbus.exec(command, { cwd: nimbus.fs.cwd });
   const elapsed = performance.now() - started;
   const out = (result.stdout || result.stderr).split('\n').find((l) => l.trim()) ?? '';
   console.log(

@@ -8,7 +8,7 @@ import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { createHostedWorkspace, type HostedWorkspace, type HostedWorkspaceEnv } from '../src/workspace-host';
 import { MemoryStore } from '@kinu.run/agent-utils/memory';
-import { fakeMossaic } from '@kinu.run/test-utils';
+import { agentPlane, fakeMossaic } from '@kinu.run/test-utils';
 import {
   agentCred, agentIdentity, mossaicVfs, provisionAgentHome, sharedDriveMount, workspaceSoul, workspaceFilePlane, WORKSPACE_ROOT,
   initWorkspaceActorTable, WORKSPACE_IDENTITY_DDL, writeWorkspaceSoul, type JsonValue,
@@ -203,7 +203,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const session = await workspace.bundle.session();
     const identity = agentIdentity(session.sql, 'subordinate-alpha');
     const home = provisionAgentHome(session.vfs.as(CRED_KERNEL), 'subordinate-alpha', identity);
-    const subordinate = await workspace.bundle.asAgent({ cred: agentCred(identity), home, tmp: `${home}/tmp` });
+    const subordinate = await agentPlane(workspace.bundle, { cred: agentCred(identity), home, tmp: `${home}/tmp` });
     const edit = await subordinate.shell.exec("printf '# a subordinate edited this\\n' > /home/main/SOUL.md");
 
     expect([edit.exitCode, edit.stderr]).toEqual([0, '']);
@@ -217,7 +217,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const session = await workspace.bundle.session();
     const identity = agentIdentity(session.sql, 'subordinate-alpha');
     const home = provisionAgentHome(session.vfs.as(CRED_KERNEL), 'subordinate-alpha', identity);
-    const subordinate = await workspace.bundle.asAgent({ cred: agentCred(identity), home, tmp: `${home}/tmp` });
+    const subordinate = await agentPlane(workspace.bundle, { cred: agentCred(identity), home, tmp: `${home}/tmp` });
 
     await expect(writeText(subordinate.vfs, '/home/main/AGENTS.md', 'forged')).rejects.toThrow();
     await subordinate.shell.exec('printf forged > /home/main/skills.md');
