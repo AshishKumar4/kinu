@@ -241,7 +241,6 @@ describe('the workspace plane mount table', () => {
 
 				if (method === 'listFiles') return Object.keys(machine).filter((p) => p.startsWith(`${path}/`));
 
-				if (method === 'exists') return content !== undefined;
 				throw new Error(`unexpected rpc ${method}`);
 			},
 		};
@@ -843,7 +842,6 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 					return { encoding: 'base64', content: Buffer.from(content).subarray(offset, offset + length).toString('base64') };
 				}
 
-				if (method === 'exists') return content !== undefined;
 				throw new Error(`ENOENT: ${path}`);
 			},
 		};

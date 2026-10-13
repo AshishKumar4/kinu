@@ -63,16 +63,16 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     harness.consentDecision = 'always';
 
     // Recorded on the base tier a card can record; an exec asks every time, deliberately.
-    await harness.userDO.deviceRpc(harness.workspace, 'readFile', ['/home/me/a.md'], {
+    await harness.userDO.deviceRpc(harness.workspace, 'readRange', ['/home/me/a.md', 0, 64], {
       agentName: WORKSPACE,
     });
     expect(harness.consentPrompts).toHaveLength(1);
 
-    await harness.userDO.deviceRpc(harness.workspace, 'readFile', ['/home/me/b.md'], {
+    await harness.userDO.deviceRpc(harness.workspace, 'readRange', ['/home/me/b.md', 0, 64], {
       agentName: WORKSPACE,
     });
     expect(harness.consentPrompts).toHaveLength(1);
-    expect(harness.deviceFrames.filter((f) => f.method === 'readFile').map((f) => f.params[0]))
+    expect(harness.deviceFrames.filter((f) => f.method === 'readRange').map((f) => f.params[0]))
       .toEqual(['/home/me/a.md', '/home/me/b.md']);
     await harness.closeDeviceHarness();
   });
@@ -83,7 +83,7 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     // own Sandbox switch.
     const harness = await deviceHarness();
     harness.consentDecision = 'always';
-    await harness.userDO.deviceRpc(harness.workspace, 'readFile', ['/tmp/a'], { agentName: WORKSPACE });
+    await harness.userDO.deviceRpc(harness.workspace, 'readRange', ['/tmp/a', 0, 64], { agentName: WORKSPACE });
     expect(harness.consentPrompts).toHaveLength(1);
 
     harness.consentDecision = 'deny';
@@ -99,16 +99,16 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     harness.consentDecision = 'deny';
 
     // The /pc mount reads through this same call, so an ungranted read is refused too.
-    await expect(harness.userDO.deviceRpc(harness.workspace, 'readFile', ['/home/me/.ssh/id_ed25519'], {
+    await expect(harness.userDO.deviceRpc(harness.workspace, 'readRange', ['/home/me/.ssh/id_ed25519', 0, 64], {
       agentName: WORKSPACE,
     })).rejects.toThrow(DEVICE_CONSENT_DENIED);
-    expect(harness.deviceFrames.filter((f) => f.method === 'readFile')).toEqual([]);
+    expect(harness.deviceFrames.filter((f) => f.method === 'readRange')).toEqual([]);
 
     harness.consentDecision = 'always';
-    await harness.userDO.deviceRpc(harness.workspace, 'readFile', ['/home/me/notes.md'], {
+    await harness.userDO.deviceRpc(harness.workspace, 'readRange', ['/home/me/notes.md', 0, 64], {
       agentName: WORKSPACE,
     });
-    expect(harness.deviceFrames.filter((f) => f.method === 'readFile').map((f) => f.params[0]))
+    expect(harness.deviceFrames.filter((f) => f.method === 'readRange').map((f) => f.params[0]))
       .toEqual(['/home/me/notes.md']);
     await harness.closeDeviceHarness();
   });
@@ -219,7 +219,7 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     const harness = await deviceHarness();
     const owner = await testOwner();
     harness.consentDecision = 'always';
-    await harness.userDO.deviceRpc(harness.workspace, 'readFile', ['/tmp/a'], { agentName: WORKSPACE });
+    await harness.userDO.deviceRpc(harness.workspace, 'readRange', ['/tmp/a', 0, 64], { agentName: WORKSPACE });
     expect((await harness.userDO.listDeviceConsents(owner)).map((row) => row.agentName)).toEqual([WORKSPACE]);
 
     await harness.userDO.removeWorkspace(owner, WORKSPACE, '0'.repeat(32));
@@ -232,7 +232,7 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
       agentName: WORKSPACE,
     })).rejects.toThrow(DEVICE_CONSENT_DENIED);
     // Asked, not remembered: the card is the proof the old row is gone.
-    expect(harness.consentPrompts.map((prompt) => prompt.method)).toEqual(['readFile', 'exec']);
+    expect(harness.consentPrompts.map((prompt) => prompt.method)).toEqual(['readRange', 'exec']);
     expect(harness.deviceFrames.filter((frame) => frame.method === 'exec')).toEqual([]);
     await harness.closeDeviceHarness();
   });
@@ -241,7 +241,7 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     const harness = await deviceHarness();
     const owner = await testOwner();
     harness.consentDecision = 'always';
-    await harness.userDO.deviceRpc(harness.workspace, 'readFile', ['/tmp/a'], { agentName: WORKSPACE });
+    await harness.userDO.deviceRpc(harness.workspace, 'readRange', ['/tmp/a', 0, 64], { agentName: WORKSPACE });
     expect(await harness.userDO.listDeviceConsents(owner)).toHaveLength(1);
 
     expect(await harness.userDO.revokeDevice(owner, harness.deviceId))
@@ -807,7 +807,7 @@ describe('a device is visible before it is usable', () => {
   test('the same read reports the binding once it exists', async () => {
     const harness = await deviceHarness();
     harness.consentDecision = 'always';
-    await harness.userDO.deviceRpc(harness.workspace, 'readFile', ['/tmp/a'], { agentName: WORKSPACE });
+    await harness.userDO.deviceRpc(harness.workspace, 'readRange', ['/tmp/a', 0, 64], { agentName: WORKSPACE });
 
     expect((await harness.userDO.deviceRuntimeStatus(harness.workspace)).workspaceGranted).toBe(true);
     expect((await harness.userDO.deviceRuntimeStatus(harness.sibling)).workspaceGranted).toBe(false);

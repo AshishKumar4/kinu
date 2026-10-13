@@ -21,9 +21,9 @@ describe('device consent prompt data', () => {
     },
     {
       name: 'helper consent shows the method and path as a local action',
-      method: 'readFile',
+      method: 'statPath',
       param: '/tmp/a; echo PWNED',
-      command: 'readFile(/tmp/a; echo PWNED)',
+      command: 'statPath(/tmp/a; echo PWNED)',
     },
   ] as const;
 
@@ -135,7 +135,7 @@ describe('the device Sandbox route', () => {
   test('a binding listing carries no tier of its own', async () => {
     const { harness, consents } = await deviceRoutesSetup();
     harness.consentDecision = 'always';
-    await harness.userDO.deviceRpc(harness.workspace, 'readFile', ['/home/me/a.md'], { agentName: WORKSPACE });
+    await harness.userDO.deviceRpc(harness.workspace, 'statPath', ['/home/me/a.md'], { agentName: WORKSPACE });
 
     const rows = await consents();
 

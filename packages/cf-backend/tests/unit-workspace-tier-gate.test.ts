@@ -684,7 +684,7 @@ describe('facets attenuate with their workspace', () => {
     const harness = await setupWorkspaces({ connectedDeviceId: 'dev-1' });
     const facetCaller: UserCaller = { workspaceToken: harness.token };
     harness.consentDecision = 'always';
-    await harness.userDO.deviceRpc(facetCaller, 'readFile', ['/tmp/a'], { agentName: WORKSPACE });
+    await harness.userDO.deviceRpc(facetCaller, 'statPath', ['/tmp/a'], { agentName: WORKSPACE });
     expect(await harness.userDO.setDeviceTier(await testOwner(), 'dev-1', 'raw')).toEqual({ ok: true });
 
     // A facet naming anything still gets workspace-a's answer: its identity is the token, not the argument.
@@ -702,7 +702,7 @@ describe('facets attenuate with their workspace', () => {
   test('a workspace cannot ride a sibling\'s remembered device grant', async () => {
     const harness = await setupWorkspaces({ connectedDeviceId: 'dev-1' });
     harness.consentDecision = 'always';
-    await harness.userDO.deviceRpc({ workspaceToken: harness.token }, 'readFile', ['/tmp/a'], { agentName: WORKSPACE });
+    await harness.userDO.deviceRpc({ workspaceToken: harness.token }, 'statPath', ['/tmp/a'], { agentName: WORKSPACE });
     harness.consentDecision = 'deny';
     const sibling: UserCaller = { workspaceToken: harness.otherToken };
 

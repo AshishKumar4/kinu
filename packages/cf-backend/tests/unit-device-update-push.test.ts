@@ -372,7 +372,7 @@ describe('the Devices read model carries the version and the served build', () =
     const workspace = { workspaceToken: await provisionTestWorkspace(harness, 'previous-daemon-workspace') };
     const sent = harness.deviceFrames.length;
 
-    for (const [method, params] of [['exec', ['echo hi']], ['readFile', ['/home/me/a.txt']], ['writeFile', ['/home/me/a.txt', 'x']]] as const) {
+    for (const [method, params] of [['exec', ['echo hi']], ['statPath', ['/home/me/a.txt']], ['writeFile', ['/home/me/a.txt', 'x']]] as const) {
       await expect(harness.userDO.deviceRpc(workspace, method, [...params], { agentName: 'previous-daemon-workspace' })).rejects.toMatchObject({ code: expect.any(String) });
     }
 

@@ -69,8 +69,6 @@ function fleetTransport(devices: readonly DeviceFleetEntry[]): DeviceTransport &
 
       if (method === 'listFiles') return { entries: [{ name: `entry-of-${opts?.deviceId}`, type: 'file' }], next: null };
 
-      if (method === 'exists') return true;
-
       if (method === 'statPath') return { size: 3, mtimeMs: 0, type: 'file' };
 
       if (method === 'writeFile') return { success: true };
