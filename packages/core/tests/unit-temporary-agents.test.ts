@@ -1,4 +1,4 @@
-import { type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 // `lifetime:'task'` hires through the public surfaces (native dispatch and sandbox namespace). A hire returns at once;
 // its answer is one `subordinate_report` on the hirer's rail, which wakes it, and the child retires after its turn.
 import { Database } from 'bun:sqlite';
@@ -7,7 +7,7 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { DELEGATION_MAX_DEPTH, ROOT_DELEGATION_BUDGET, delegationExhausted, SubordinateRosterStore, TEMPORARY_LIFETIME, EventLog, TASK_TURN_ENDINGS, agentsActionsFor, initEventsHubTables, terminalTaskReport, createAgentsCodemodeProvider, createTeamToolDeps, createTemporaryAgentPort, taskAnswerIsLater, delegationDepthRefusal, receiveSubordinateEvent, type SubordinateEventResult, type SubordinateReportHandoff, TOOL_REACH, type AgentsToolDeps, type AgentsProfileContext, type SubordinateHandoff, type SubordinateRuntime, type TemporaryAgentPort, type WorkMode, type AgentsOp, type CodemodeResult, callOperation, BUILTIN_PROFILE_CATALOG, profileCatalogDigest, DEFAULT_WORKERS_AI_MODEL_SPEC, recoverSubordinateLifecycles, codemodeFunction, failedToolOutcome, successfulToolOutcome, withCodemodeProgram } from '../src/index';
 import { createAgentsTool } from '../src/delegation/agents-operations';
-import { createMemoryVfs } from '@kinu.run/test-utils';
+import { createMemoryVfs, seedFiles } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw, makeSqlExec } from './helpers';
 import type { ActorReference } from '../src/identity/actor-handle';
 import { createTestActors, present, toolExecute } from '@kinu.run/test-utils';
@@ -749,7 +749,7 @@ describe('the two hire targets are decided by `role`', () => {
 describe('bulk material travels by path, not by field', () => {
   test('a path named in the mission reaches the child brief and the bytes never do', async () => {
     const scene = makeScene();
-    await writeText(scene.files, '/spill/tool-output.txt', 'x'.repeat(5000));
+    await seedFiles(scene.files, { '/spill/tool-output.txt': 'x'.repeat(5000) });
 
     await startRun(scene, {
       role: 'auditor',

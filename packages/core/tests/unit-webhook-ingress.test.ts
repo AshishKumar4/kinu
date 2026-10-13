@@ -1,5 +1,6 @@
 // Webhook ingress over a real hub. Every rejection asserts exact status and reason: operators
 // debug integrations against the reason, and one 401 has several.
+import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import {
@@ -9,7 +10,7 @@ import {
   type SqlExec, type WebhookDelivery,
 } from '../src/index';
 import type { WebhookTriggerSpec } from '../src/events/ingress/webhook';
-import { createMemoryVfs, createTestActors, present } from '@kinu.run/test-utils';
+import { createMemoryVfs, createTestActors, filesIn, present } from '@kinu.run/test-utils';
 import { makeSqlExec, makeSql as taggedSql, makeExecRaw } from './helpers';
 import type { ActorHandle } from '../src/identity/actor-handle';
 
@@ -33,7 +34,7 @@ function hub() {
   const log = new EventLog(sql, actor);
   const triggers = new TriggerRegistry(sql, actor, { scheduleAt: async () => {} });
   const secrets = createWebhookSecretStore(sql);
-  const { vfs, files } = createMemoryVfs();
+  const { vfs } = createMemoryVfs();
   let drains = 0;
 
   const deps = {
@@ -66,7 +67,7 @@ function hub() {
       'SELECT claim, event_id, expires_at FROM webhook_replay_claims ORDER BY expires_at',
     ).all();
 
-  return { deps, triggers, log, secrets, files, register, deliver, claims, drains: () => drains };
+  return { deps, triggers, log, secrets, vfs, register, deliver, claims, drains: () => drains };
 }
 
 describe('webhook ingress admits a verified delivery', () => {
@@ -150,7 +151,7 @@ describe('webhook ingress admits a verified delivery', () => {
     expect(path).toBeString();
 
     if (!path) throw new Error('large webhook body was not spilled');
-    expect(h.files.get(path)).toEqual(new TextEncoder().encode(JSON.stringify({ blob: 'x'.repeat(4000) })));
+    expect(await readText(h.vfs, path)).toBe(JSON.stringify({ blob: 'x'.repeat(4000) }));
   });
 
   test('the same signed request is admitted ONCE, across a dedupe-bucket boundary', async () => {
@@ -353,7 +354,7 @@ describe('webhook ingress refuses everything else', () => {
       .toMatchObject({ status: 'rejected' });
 
     expect(h.log.pending({})).toEqual([]);
-    expect(h.files.size).toBe(0);
+    expect(await filesIn(h.vfs)).toEqual([]);
     expect(h.drains()).toBe(0);
   });
 });

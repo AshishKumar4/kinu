@@ -1,7 +1,7 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 // A file is admitted on its size before its bytes are read, so these tests prove what was read, not only rendered.
 import { describe, test, expect } from 'bun:test';
-import { createMemoryVfs, createTestRuntime } from '@kinu.run/test-utils';
+import { createMemoryVfs, createTestRuntime, seedFiles } from '@kinu.run/test-utils';
 import { Database } from 'bun:sqlite';
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -144,10 +144,10 @@ interface FakeVfs {
   reads: string[];
 }
 
-function fakeVfs(files: Readonly<Record<string, string>>): FakeVfs {
+async function fakeVfs(files: Readonly<Record<string, string>>): Promise<FakeVfs> {
   const memory = createMemoryVfs();
 
-  for (const [path, content] of Object.entries(files)) memory.files.set(path, content);
+  await seedFiles(memory.vfs, files);
   const stats: string[] = [];
   const reads: string[] = [];
 
@@ -191,13 +191,13 @@ function fakeSandbox(opts: { active: boolean; files?: VFS }): ExecutorProvider {
 
 describe('collectWorkspaceAgentsMd — cloud discovery', () => {
   test('reads canonical and active sandbox instructions from their own file planes', async () => {
-    const workspace = fakeVfs({
+    const workspace = await fakeVfs({
       'AGENTS.md': 'workspace defaults',
       '/workspace/AGENTS.md': 'must not be treated as a parent mount',
       '/sandbox/workspace/AGENTS.md': 'must not be treated as sandbox bytes',
     });
 
-    const sandbox = fakeVfs({ '/workspace/AGENTS.md': 'sandbox project rules' });
+    const sandbox = await fakeVfs({ '/workspace/AGENTS.md': 'sandbox project rules' });
 
     const sources = await collectWorkspaceAgentsMd(
       workspace.vfs,
@@ -218,7 +218,7 @@ describe('collectWorkspaceAgentsMd — cloud discovery', () => {
 
   // The second size proves the bytes read are the ones sized.
   test('a file that fits is sized, read once, sized again, and renders whole', async () => {
-    const workspace = fakeVfs({ 'AGENTS.md': 'Use bun for everything.' });
+    const workspace = await fakeVfs({ 'AGENTS.md': 'Use bun for everything.' });
     const sources = await collectWorkspaceAgentsMd(workspace.vfs, WINDOW, APPROVED);
     expect(workspace.stats).toEqual(['AGENTS.md', 'AGENTS.md']);
     expect(workspace.reads).toEqual(['AGENTS.md']);
@@ -227,7 +227,7 @@ describe('collectWorkspaceAgentsMd — cloud discovery', () => {
 
   test('an oversized AGENTS.md is sized, never read, and rendered as a sized reference', async () => {
     const oversized = 'B'.repeat(BUDGET + 1);
-    const workspace = fakeVfs({ 'AGENTS.md': oversized });
+    const workspace = await fakeVfs({ 'AGENTS.md': oversized });
     const sources = await collectWorkspaceAgentsMd(workspace.vfs, WINDOW, APPROVED);
 
     expect(workspace.stats).toEqual(['AGENTS.md']);
@@ -244,8 +244,8 @@ describe('collectWorkspaceAgentsMd — cloud discovery', () => {
   });
 
   test('a giant workspace file is referenced while the nearer sandbox file is read', async () => {
-    const workspace = fakeVfs({ 'AGENTS.md': 'W'.repeat(BUDGET) });
-    const sandbox = fakeVfs({ '/workspace/AGENTS.md': 'sandbox project rules' });
+    const workspace = await fakeVfs({ 'AGENTS.md': 'W'.repeat(BUDGET) });
+    const sandbox = await fakeVfs({ '/workspace/AGENTS.md': 'sandbox project rules' });
 
     const sources = await collectWorkspaceAgentsMd(
       workspace.vfs,
@@ -261,8 +261,8 @@ describe('collectWorkspaceAgentsMd — cloud discovery', () => {
   });
 
   test('never touches an inactive sandbox file plane', async () => {
-    const workspace = fakeVfs({});
-    const sandbox = fakeVfs({ '/workspace/AGENTS.md': 'should be ignored' });
+    const workspace = await fakeVfs({});
+    const sandbox = await fakeVfs({ '/workspace/AGENTS.md': 'should be ignored' });
 
     const sources = await collectWorkspaceAgentsMd(
       workspace.vfs,
@@ -280,8 +280,8 @@ describe('collectWorkspaceAgentsMd — cloud discovery', () => {
   });
 
   test('a missing sandbox file falls back to defaults', async () => {
-    const workspace = fakeVfs({ 'AGENTS.md': 'defaults' });
-    const sandbox = fakeVfs({});
+    const workspace = await fakeVfs({ 'AGENTS.md': 'defaults' });
+    const sandbox = await fakeVfs({});
 
     const sources = await collectWorkspaceAgentsMd(
       workspace.vfs,
@@ -296,7 +296,7 @@ describe('collectWorkspaceAgentsMd — cloud discovery', () => {
 
   test('works with no sandbox provider at all', async () => {
     const sources = await collectWorkspaceAgentsMd(
-      fakeVfs({ 'AGENTS.md': 'defaults' }).vfs, WINDOW, APPROVED,
+      (await fakeVfs({ 'AGENTS.md': 'defaults' })).vfs, WINDOW, APPROVED,
     );
 
     expect(sources.admitted.map((f) => f.content)).toEqual(['defaults']);
@@ -304,7 +304,7 @@ describe('collectWorkspaceAgentsMd — cloud discovery', () => {
 
   test('the owner\'s answer rides with the bytes it was asked about', async () => {
     // Unapproved, the same read reaches the model as reference material only.
-    const workspace = fakeVfs({ 'AGENTS.md': 'Use bun for everything.' });
+    const workspace = await fakeVfs({ 'AGENTS.md': 'Use bun for everything.' });
     const sources = await collectWorkspaceAgentsMd(workspace.vfs, WINDOW, UNVERIFIED);
     expect(sources.admitted.map((f) => f.trust)).toEqual(['unverified']);
     expect(renderAgentsMdSection(sources, 'system')).toBe('');
