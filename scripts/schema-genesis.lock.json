@@ -422,7 +422,6 @@
     "start_turn INTEGER NOT NULL",
     "end_turn INTEGER NOT NULL",
     "user_turns INTEGER NOT NULL",
-    "assistant_turns INTEGER NOT NULL",
     "first_user_ask TEXT NOT NULL",
     "PRIMARY KEY (actor_id, session_key, range_hash)"
   ],
