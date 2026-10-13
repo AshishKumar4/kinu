@@ -355,6 +355,8 @@ export class FakeSandbox {
   /** Answers a port's fetch in place of the probe status, e.g. with an upgrade. */
   portAnswer: ((port: number, request: Request) => Response | Promise<Response>) | undefined;
   desktopStart: ExecResult = { stdout: '', stderr: '', exitCode: 0 };
+  /** What the box's terminal sessions read answers (D89): tab-separated `P`, `L` and `B` rows. */
+  sessionsRead: ExecResult = { stdout: '', stderr: '', exitCode: 0 };
   readonly fileOperations: FileOperation[] = [];
   readonly mountCalls: string[] = [];
   /** Mounts and execs share one chronological list: stop order is a property of the order
@@ -1036,6 +1038,18 @@ export class FakeSandbox {
       this.sequence.push('desktop');
 
       return processResult(Promise.resolve(this.desktopStart), pid);
+    }
+
+    if (args[3] === 'terminal-sessions') {
+      this.sequence.push('sessions');
+
+      return processResult(Promise.resolve(this.sessionsRead), pid);
+    }
+
+    if (args[3] === 'devbox-reset') {
+      this.sequence.push(`reset:${args[4] ?? ''}`);
+
+      return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }), pid);
     }
 
     if (args[3] === 'devbox-trust') {

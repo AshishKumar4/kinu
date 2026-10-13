@@ -2,6 +2,7 @@
  * Design-system gallery: the real components over mock data, so signed-in surfaces can be screenshotted without auth.
  * Served by gallery.vite.config.ts; `?frame=` selects a frame (full list: the dispatch in `mount()`). /api/user/* GETs are stubbed in-page.
  */
+import type { SessionRecord, TerminalSession } from "@kinu.run/devbox";
 import { Effect, Result } from 'effect';
 import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -1713,6 +1714,8 @@ const stubRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
   // A `SandboxSizeState`: the blanket `[]` below reads as a start refused for `undefined`.
   if (method === "getComputerSize") return rpcResult(v.parse(JsonValueSchema, AGENT_RPC.get(method))).json<T>();
 
+  if (method.endsWith("ComputerSession") || method === "listComputerSessions") return rpcResult(v.parse(JsonValueSchema, gallerySessions(method, args ?? []))).json<T>();
+
   // Read as `result.builtIn.map(...)`; three halves, as the orchestrator answers it.
   if (method === "getToolDescriptions") return rpcResult({ builtIn: [], executors: [], crafted: [] }).json<T>();
 
@@ -1720,6 +1723,32 @@ const stubRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
 
   return rpcResult({}).json<T>();
 };
+
+/** The computer's sessions (D89) as its box keeps them: a shell, a dev server listening, a test run that failed. */
+const GALLERY_SESSIONS: TerminalSession[] = [
+  { id: "shell", name: "shell", cwd: "/workspace/storefront", open: true, running: null, last: { exit: 0, at: Date.now() - 20_000, command: "git status" }, ports: [], branch: "main" },
+  { id: "s2", name: "dev server", cwd: "/workspace/storefront", open: true, running: "node", last: null, ports: [5173], branch: "main" },
+  { id: "s3", name: "tests", cwd: "/workspace/storefront", open: true, running: null, last: { exit: 1, at: Date.now() - 70_000, command: "npx vitest run src/checkout" }, ports: [], branch: "main" },
+];
+
+function gallerySessions(method: string, args: readonly unknown[]): readonly TerminalSession[] | SessionRecord | null {
+  if (method === "openComputerSession") {
+    const record = { id: `s${String(GALLERY_SESSIONS.length + 2)}`, name: `shell ${String(GALLERY_SESSIONS.length + 1)}`, cwd: "/workspace" };
+
+    GALLERY_SESSIONS.push({ ...record, open: false, running: null, last: null, ports: [], branch: null });
+
+    return record;
+  }
+
+  const at = GALLERY_SESSIONS.findIndex((session) => session.id === args[0]);
+  const found = GALLERY_SESSIONS[at];
+
+  if (method === "renameComputerSession" && typeof args[1] === "string" && found !== undefined) GALLERY_SESSIONS[at] = { ...found, name: args[1] };
+
+  if (method === "closeComputerSession" && found !== undefined) GALLERY_SESSIONS.splice(at, 1);
+
+  return method === "listComputerSessions" ? GALLERY_SESSIONS : null;
+}
 
 /* `?createFails=1`: the first create rejects with a two-frame cause chain; the second succeeds. */
 const CREATE_FAILS = new URLSearchParams(location.search).get("createFails") === "1";

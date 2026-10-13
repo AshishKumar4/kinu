@@ -4,11 +4,11 @@
  * screen, from one hairline to the column's foot. Capability doctrine stays model-facing
  * (core/src/prompting/volatile-context.ts); file browsing lives in Files.
  */
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useParams } from "react-router-dom";
 import {
   ArrowSquareOutIcon, DesktopIcon, DesktopTowerIcon, FolderOpenIcon, GitForkIcon, LockSimpleIcon, PlugIcon, PlusIcon,
-  SquaresFourIcon, type Icon,
+  SplitHorizontalIcon, SquaresFourIcon, XIcon, type Icon,
 } from "@phosphor-icons/react";
 import { EXECUTOR_MOUNTS, desktopClientUrl, type MountInfo } from "@kinu.run/core";
 import type { ExecutorCommandResult, Rpc } from "@kinu.run/core";
@@ -25,8 +25,12 @@ import { Loader } from "@cloudflare/kumo";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { ComputerSize, useComputerSize, type ComputerSizeState } from "@/components/SandboxSize";
-import { Segmented } from "@/components/ui/Segmented";
+import { detach } from "@kinu.run/core/obs";
+import type { TerminalSession } from "@kinu.run/devbox";
 import { DesktopScreen } from "./DesktopScreen";
+import {
+  ONE_SHELL, SessionDetails, SessionTabs, opening, sessionTone, since, useComputerSessions, type ComputerSessions, type SessionTone,
+} from "./EnvironmentSessions";
 
 /** The terminal (xterm, 333 KB of the workspace's first chunk on 2026-10-08) loads with a command lane's first view. */
 const TerminalPane = lazyRoute<TerminalPaneProps>(async () => {
@@ -103,8 +107,13 @@ function Dot({ tone }: { tone: Tone }) {
 export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
   const { rpc, executors, executorOutputs, lastActiveExecutor, onExecute, onOpenFiles, onConnectDevice } = props;
   const [selected, setSelected] = useState<string | null>(null);
+  // Each machine's open tab: a session's id, the desktop, or its one shell.
+  const [tabs, setTabs] = useState<Readonly<Record<string, string>>>({});
+  const [split, setSplit] = useState<string | null>(null);
   // The terminal socket is addressed by workspace name.
   const workspaceName = useParams().agentId ?? "";
+  const frame = useRef<HTMLDivElement>(null);
+  const wide = useWideColumn(frame);
 
   const load = useCallback(() => rpc<MountInfo[]>("listMounts"), [rpc]);
   const { resource, reload } = useAsyncResource(load);
@@ -134,60 +143,215 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
   }, [executors, lastActiveExecutor, environments]);
 
   const selectedMount = environments.find((m) => m.name === selected) ?? defaultMount;
-  const selectedExec = selectedMount ? execByName.get(selectedMount.name) : undefined;
+  const computerLive = environments.some((m) => m.name === "computer" && m.live);
+  // The computer's sessions are read while they are on screen: its tabs, or the wide column's list.
+  const sessions = useComputerSessions(rpc, computerLive && (wide || selectedMount?.name === "computer"));
+
+  const choose = (machine: string, tab?: string) => {
+    setSelected(machine);
+
+    if (tab !== undefined) setTabs((was) => ({ ...was, [machine]: tab }));
+
+    if (machine !== selectedMount?.name) setSplit(null);
+  };
+
+  const shown: Shown = {
+    tab: (machine) => tabs[machine] ?? (machine === "computer" ? sessions.sessions?.[0]?.id ?? FIRST_SESSION_ID : ONE_SHELL),
+    choose,
+    split,
+    setSplit,
+  };
+
+  const chosen = selectedMount === null ? <div className="min-h-0 flex-1" /> : (
+    <SelectedEnvironment
+      key={selectedMount.name}
+      rpc={rpc}
+      mount={selectedMount}
+      exec={execByName.get(selectedMount.name)}
+      workspace={workspaceName}
+      executorOutputs={executorOutputs}
+      onExecute={onExecute}
+      onOpenFiles={onOpenFiles}
+      sessions={sessions}
+      shown={shown}
+      wide={wide}
+    />
+  );
 
   return (
-    <div className="flex h-full flex-col">
-      <div role="group" aria-label="Environments" className="flex shrink-0 flex-wrap gap-1.5 px-4 pt-4">
-        {environments.map((m) => {
-          const exec = execByName.get(m.name);
-          const { Icon: KindIcon } = environmentOf(m.name);
-          const active = selectedMount?.name === m.name;
-
-          return (
-            <div key={m.name} data-env-card={m.name} className="min-w-0">
-              <button type="button" data-env-select onClick={() => setSelected(m.name)} aria-pressed={active} className="p-env-chip">
-                <KindIcon size={14} weight={active ? "fill" : "regular"} className="shrink-0" aria-hidden />
-                <span className="truncate">{exec?.label ?? executorLabel(m.name)}</span>
-                <Dot tone={statusOf(m, exec).tone} />
-              </button>
-            </div>
-          );
-        })}
-        {pcOffered && (
-          <button type="button" data-env-connect onClick={onConnectDevice} aria-label="Connect a PC" title="Connect a PC"
-            className="p-env-chip border-dashed p-text-3">
-            <PlusIcon size={13} className="shrink-0" aria-hidden /><span className="hidden @[30rem]:inline">Connect a PC</span>
-          </button>
-        )}
-        {mounts.length === 0 && loaded !== null && <span className="p-meta p-text-3">No environments available.</span>}
-        {mounts.length === 0 && resource.status === "loading" && <Loader size="sm" />}
-      </div>
-      {resource.status === "error" && (
-        <LoadFailure what="the environments" message={resource.message} onRetry={reload} className="mx-4 mt-3 p-card px-3 py-2" />
+    <div ref={frame} className="flex h-full flex-col">
+      {wide ? (
+        <div className="grid min-h-0 flex-1 grid-cols-[236px_minmax(0,1fr)]">
+          <SessionRail environments={environments} execByName={execByName} sessions={sessions} selected={selectedMount?.name ?? null}
+            shown={shown} pcOffered={pcOffered} onConnectDevice={onConnectDevice} />
+          <div className="flex min-h-0 min-w-0 flex-col">{chosen}</div>
+        </div>
+      ) : (
+        <>
+          <MachineChips environments={environments} execByName={execByName} selected={selectedMount?.name ?? null} onSelect={(machine) => choose(machine)}
+            pcOffered={pcOffered} onConnectDevice={onConnectDevice} empty={mounts.length === 0 && loaded !== null} loading={mounts.length === 0 && resource.status === "loading"} />
+          {chosen}
+        </>
       )}
-
-      {selectedMount === null ? <div className="min-h-0 flex-1" /> : (
-        <SelectedEnvironment
-          key={selectedMount.name}
-          rpc={rpc}
-          mount={selectedMount}
-          exec={selectedExec}
-          workspace={workspaceName}
-          executorOutputs={executorOutputs}
-          onExecute={onExecute}
-          onOpenFiles={onOpenFiles}
-        />
+      {resource.status === "error" && (
+        <LoadFailure what="the environments" message={resource.message} onRetry={reload} className="mx-4 mb-3 p-card px-3 py-2" />
       )}
     </div>
   );
 }
 
-type PaneView = "terminal" | "desktop";
+/** The column turns wide enough for every machine's sessions down one side, as cmux keeps its workspaces. */
+const WIDE_COLUMN_PX = 880;
 
-const PANE_VIEWS = [{ id: "terminal", label: "Terminal" }, { id: "desktop", label: "Desktop" }] as const;
+function useWideColumn(frame: RefObject<HTMLDivElement | null>): boolean {
+  const [wide, setWide] = useState(false);
 
-function SelectedEnvironment({ rpc, mount, exec, workspace, executorOutputs, onExecute, onOpenFiles }: {
+  useEffect(() => {
+    const element = frame.current;
+
+    if (element === null) return undefined;
+    const observer = new ResizeObserver(() => setWide(element.clientWidth >= WIDE_COLUMN_PX));
+
+    observer.observe(element);
+
+    return () => observer.disconnect();
+  }, [frame]);
+
+  return wide;
+}
+
+/** The first session the box keeps (`FIRST_SESSION` in the box's sessions). */
+const FIRST_SESSION_ID = "shell";
+
+/** Which tab each machine shows, and the wide column's second pane. */
+interface Shown {
+  readonly tab: (machine: string) => string;
+  readonly choose: (machine: string, tab?: string) => void;
+  /** The session the second pane shows, in the wide column; null for one pane. */
+  readonly split: string | null;
+  readonly setSplit: (session: string | null) => void;
+}
+
+function MachineChips({ environments, execByName, selected, onSelect, pcOffered, onConnectDevice, empty, loading }: {
+  environments: readonly MountInfo[];
+  execByName: ReadonlyMap<string, ExecutorInfo>;
+  selected: string | null;
+  onSelect: (machine: string) => void;
+  pcOffered: boolean;
+  onConnectDevice: () => void;
+  empty: boolean;
+  loading: boolean;
+}) {
+  return (
+    <div role="group" aria-label="Environments" className="flex shrink-0 flex-wrap gap-1.5 px-4 pt-4">
+      {environments.map((m) => {
+        const exec = execByName.get(m.name);
+        const { Icon: KindIcon } = environmentOf(m.name);
+        const active = selected === m.name;
+
+        return (
+          <div key={m.name} data-env-card={m.name} className="min-w-0">
+            <button type="button" data-env-select onClick={() => onSelect(m.name)} aria-pressed={active} className="p-env-chip">
+              <KindIcon size={14} weight={active ? "fill" : "regular"} className="shrink-0" aria-hidden />
+              <span className="truncate">{exec?.label ?? executorLabel(m.name)}</span>
+              <Dot tone={statusOf(m, exec).tone} />
+            </button>
+          </div>
+        );
+      })}
+      {pcOffered && (
+        <button type="button" data-env-connect onClick={onConnectDevice} aria-label="Connect a PC" title="Connect a PC"
+          className="p-env-chip border-dashed p-text-3">
+          <PlusIcon size={13} className="shrink-0" aria-hidden /><span className="hidden @[30rem]:inline">Connect a PC</span>
+        </button>
+      )}
+      {empty && <span className="p-meta p-text-3">No environments available.</span>}
+      {loading && <Loader size="sm" />}
+    </div>
+  );
+}
+
+/** The wide column's list: every machine, its sessions under it, the computer's screen and a new session. */
+function SessionRail({ environments, execByName, sessions, selected, shown, pcOffered, onConnectDevice }: {
+  environments: readonly MountInfo[];
+  execByName: ReadonlyMap<string, ExecutorInfo>;
+  sessions: ComputerSessions;
+  selected: string | null;
+  shown: Shown;
+  pcOffered: boolean;
+  onConnectDevice: () => void;
+}) {
+  const now = Date.now();
+
+  return (
+    <nav aria-label="Sessions" className="flex min-h-0 flex-col gap-5 overflow-y-auto border-r p-border px-2 pt-4 pb-4">
+      {environments.map((m) => {
+        const exec = execByName.get(m.name);
+        const name = exec?.label ?? executorLabel(m.name);
+        const computer = m.name === "computer";
+        const rows = computer ? sessions.sessions ?? [] : null;
+        const current = (tab: string) => selected === m.name && (shown.tab(m.name) === tab || shown.split === tab);
+
+        return (
+          <section key={m.name} data-env-card={m.name} aria-label={name} className="space-y-0.5">
+            <button type="button" data-env-select aria-pressed={selected === m.name} onClick={() => shown.choose(m.name)}
+              className="flex w-full items-center gap-2 px-2.5 pb-1 text-left">
+              <span className="p-eyebrow min-w-0 flex-1 truncate">{name}</span>
+              <Dot tone={statusOf(m, exec).tone} />
+            </button>
+            {rows === null && m.live && (
+              <RailRow tone="ready" name={ONE_SHELL} detail={null} ports={[]} current={current(ONE_SHELL)} onChoose={() => shown.choose(m.name, ONE_SHELL)} />
+            )}
+            {rows?.map((session) => (
+              <RailRow key={session.id} tone={sessionTone(session).tone} name={session.name} detail={railDetail(session, now)} ports={session.ports}
+                current={current(session.id)} onChoose={() => shown.choose(m.name, session.id)} />
+            ))}
+            {computer && m.live && <RailRow icon name="Desktop" detail={null} ports={[]} current={current("desktop")} onChoose={() => shown.choose(m.name, "desktop")} />}
+            {computer && m.live && (
+              <button type="button" onClick={() => opening(sessions, (id) => shown.choose("computer", id))}
+                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 p-meta p-text-3 hover:bg-[var(--c-neutral-tint)] hover:p-text">
+                <PlusIcon size={12} aria-hidden />New session
+              </button>
+            )}
+          </section>
+        );
+      })}
+      {pcOffered && (
+        <button type="button" data-env-connect onClick={onConnectDevice} aria-label="Connect a PC"
+          className="mx-1 flex items-center gap-2 rounded-lg border border-dashed p-border px-2.5 py-2 p-meta p-text-3 hover:p-text">
+          <PlusIcon size={12} aria-hidden />Connect a PC
+        </button>
+      )}
+    </nav>
+  );
+}
+
+function railDetail(session: TerminalSession, now: number): string {
+  if (session.running !== null) return session.running;
+
+  return session.last !== null && session.last.command !== "" ? `${session.last.command} · ${since(session.last.at, now)}` : session.cwd;
+}
+
+function RailRow({ tone, icon = false, name, detail, ports, current, onChoose }: {
+  tone?: SessionTone;
+  icon?: boolean;
+  name: string;
+  detail: string | null;
+  ports: readonly number[];
+  current: boolean;
+  onChoose: () => void;
+}) {
+  return (
+    <button type="button" aria-current={current ? "true" : undefined} onClick={onChoose} className="p-session-row">
+      {icon ? <DesktopIcon size={12} aria-hidden /> : <Dot tone={tone ?? "ready"} />}
+      <span className="truncate p-row-text font-medium">{name}</span>
+      <span className="p-annotation p-text-3">{ports.map((port) => `:${String(port)}`).join(" ")}</span>
+      {detail !== null && <><span /><span className="col-span-2 truncate p-meta p-text-3">{detail}</span></>}
+    </button>
+  );
+}
+
+function SelectedEnvironment({ rpc, mount, exec, workspace, executorOutputs, onExecute, onOpenFiles, sessions, shown, wide }: {
   rpc: Rpc;
   mount: MountInfo;
   exec: ExecutorInfo | undefined;
@@ -195,6 +359,9 @@ function SelectedEnvironment({ rpc, mount, exec, workspace, executorOutputs, onE
   executorOutputs: Map<string, ExecutorOutput[]>;
   onExecute: (id: string, cmd: string) => Promise<ExecutorCommandResult>;
   onOpenFiles: (root: string) => void;
+  sessions: ComputerSessions;
+  shown: Shown;
+  wide: boolean;
 }) {
   const computer = mount.name === "computer";
   // The computer's size, read once here: its control sits in the head, its restart covers the view.
@@ -208,8 +375,9 @@ function SelectedEnvironment({ rpc, mount, exec, workspace, executorOutputs, onE
       <Head mount={mount} name={name} status={status} specs={computer ? size.specs : null} onOpenFiles={onOpenFiles}
         size={computer ? <ComputerSize state={size} /> : null} />
       {computer && size.notice}
+      {computer && sessions.failure !== null && <p className="px-4 pb-1 p-meta p-danger">{sessions.failure}</p>}
       <EnvironmentView mount={mount} exec={exec} name={name} workspace={workspace} restartingTo={restarting ? size.restartingTo ?? "" : null}
-        executorOutputs={executorOutputs} onExecute={onExecute} />
+        executorOutputs={executorOutputs} onExecute={onExecute} sessions={computer ? sessions : null} shown={shown} wide={wide} />
     </section>
   );
 }
@@ -254,8 +422,8 @@ function Head({ mount, name, status, specs, size, onOpenFiles }: {
   );
 }
 
-/** Under the head: the machine's absence, its restart, or its terminal or screen. */
-function EnvironmentView({ mount, exec, name, workspace, restartingTo, executorOutputs, onExecute }: {
+/** Under the head: the machine's absence, its restart, or its tabs and its terminal or screen. */
+function EnvironmentView({ mount, exec, name, workspace, restartingTo, executorOutputs, onExecute, sessions, shown, wide }: {
   mount: MountInfo;
   exec: ExecutorInfo | undefined;
   name: string;
@@ -264,65 +432,114 @@ function EnvironmentView({ mount, exec, name, workspace, restartingTo, executorO
   restartingTo: string | null;
   executorOutputs: Map<string, ExecutorOutput[]>;
   onExecute: (id: string, cmd: string) => Promise<ExecutorCommandResult>;
+  /** The computer's sessions; null for a machine with one shell. */
+  sessions: ComputerSessions | null;
+  shown: Shown;
+  wide: boolean;
 }) {
-  const [view, setView] = useState<PaneView>("terminal");
-
   if (exec?.granted === false) return <NeedsApprovalMount exec={exec} />;
 
   if (!mount.live) return <UnavailableMount mount={mount} exec={exec} />;
 
-  // Only the computer has a screen.
-  const desktop = exec?.name === "computer" ? desktopClientUrl(location, workspace) : null;
-  const shown = desktop === null ? "terminal" : view;
-
-  const leading: ReactNode = desktop === null
-    ? <span className="p-row-text font-medium p-text">Terminal</span>
-    : <Segmented label={`${name}: terminal or desktop`} segments={PANE_VIEWS} value={shown} onChange={setView} />;
-
-  if (restartingTo !== null) return <ViewBar leading={leading}><Restarting to={restartingTo === "" ? null : restartingTo} /></ViewBar>;
-
-  if (shown === "desktop" && desktop !== null) return <DesktopView name={name} workspace={workspace} src={desktop} leading={leading} />;
-
   if (exec === undefined) return <Absence icon={PlugIcon} title="No command lane">This environment runs no commands.</Absence>;
 
+  const tab = shown.tab(mount.name);
+  // Only the computer has a screen.
+  const desktop = exec.name === "computer" ? desktopClientUrl(location, workspace) : null;
+
+  const tabs = wide ? null : (
+    <SessionTabs label={`${name} sessions`} sessions={sessions?.sessions ?? null} current={tab} desktop={desktop !== null}
+      onChoose={(id) => shown.choose(mount.name, id)} onDesktop={() => shown.choose(mount.name, "desktop")}
+      onOpen={sessions === null ? null : () => opening(sessions, (id) => shown.choose(mount.name, id))}
+      onRename={(id, next) => { if (sessions !== null) detach(sessions.rename(id, next)); }}
+      onClose={(id) => { if (sessions !== null) detach(sessions.close(id)); }} />
+  );
+
+  if (restartingTo !== null) return <>{tabs}<div className="p-terminal-ground flex min-h-0 flex-1 flex-col"><Restarting to={restartingTo === "" ? null : restartingTo} /></div></>;
+
+  if (tab === "desktop" && desktop !== null) return <>{tabs}<DesktopView name={name} workspace={workspace} src={desktop} ruled={wide} /></>;
+
+  const panes = [tab, ...(wide && shown.split !== null && shown.split !== tab ? [shown.split] : [])];
+
+  const pane = (session: string) => (
+    <SessionPane key={`${exec.name}:${session}`} workspace={workspace} exec={exec} session={session} sessions={sessions}
+      executorOutputs={executorOutputs} onExecute={onExecute} named={panes.length > 1} ruled={wide}
+      trailing={wide && sessions !== null ? <SplitToggle sessions={sessions} shown={shown} showing={session} /> : null} />
+  );
+
   return (
-    <div className="@container min-h-0 flex-1">
+    <>
+      {tabs}
+      <div className="flex min-h-0 flex-1">
+        {pane(panes[0] ?? tab)}
+        {panes[1] !== undefined && <div className="flex min-w-0 flex-1 border-l p-border">{pane(panes[1])}</div>}
+      </div>
+    </>
+  );
+}
+
+/** A session's terminal, its details in its bar. */
+function SessionPane({ workspace, exec, session, sessions, executorOutputs, onExecute, named, ruled, trailing }: {
+  workspace: string;
+  exec: ExecutorInfo;
+  session: string;
+  sessions: ComputerSessions | null;
+  executorOutputs: Map<string, ExecutorOutput[]>;
+  onExecute: (id: string, cmd: string) => Promise<ExecutorCommandResult>;
+  /** Two panes side by side name theirs. */
+  named: boolean;
+  /** The wide column draws no tabs, so the pane draws its own rule above. */
+  ruled: boolean;
+  trailing: ReactNode;
+}) {
+  const read = sessions?.sessions?.find((candidate) => candidate.id === session) ?? null;
+
+  return (
+    <div className={`@container flex min-h-0 min-w-0 flex-1 flex-col ${ruled ? "border-t p-border" : ""}`}>
       <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader size="sm" /></div>}>
         <TerminalPane workspace={workspace} executor={exec.name} outputs={executorOutputs.get(exec.name) ?? []}
-          onExecute={(cmd) => onExecute(exec.name, cmd)} leading={leading} />
+          onExecute={(cmd) => onExecute(exec.name, cmd)} session={sessions === null ? undefined : session} barOnGround
+          leading={<SessionDetails session={read} name={named ? read?.name ?? session : undefined} />} trailing={trailing} />
       </Suspense>
     </div>
   );
 }
 
-function DesktopView({ name, workspace, src, leading }: { name: string; workspace: string; src: string; leading: ReactNode }) {
+/** The wide column's split: a second pane with the next session, or one pane again. */
+function SplitToggle({ sessions, shown, showing }: { sessions: ComputerSessions; shown: Shown; showing: string }) {
+  const others = (sessions.sessions ?? []).filter((session) => session.id !== showing);
+
+  if (shown.split === showing) {
+    return <button type="button" aria-label="One pane" title="One pane" className="p-bar-icon" onClick={() => shown.setSplit(null)}><XIcon size={13} /></button>;
+  }
+
+  if (shown.split !== null || others[0] === undefined) return null;
+  const next = others[0].id;
+
+  return (
+    <button type="button" aria-label="Split" title={`Split: ${others[0].name} beside it`} className="p-bar-icon" onClick={() => shown.setSplit(next)}>
+      <SplitHorizontalIcon size={14} />
+    </button>
+  );
+}
+
+function DesktopView({ name, workspace, src, ruled }: { name: string; workspace: string; src: string; ruled: boolean }) {
   const title = `${name}'s desktop`;
 
   return (
-    <ViewBar leading={leading} trailing={
-      <a href={`/workspace/${encodeURIComponent(workspace)}/desktop`} target="_blank" rel="noreferrer" data-desktop-open
-        aria-label={`Open ${title} in a new tab`} className="inline-flex items-center gap-1.5 p-meta p-text-3 hover:p-text">
-        <ArrowSquareOutIcon size={13} aria-hidden />New tab
-      </a>
-    }>
+    <div className={`p-terminal-ground flex min-h-0 flex-1 flex-col ${ruled ? "border-t p-border" : ""}`}>
+      <div className="flex h-9 shrink-0 items-center gap-3 pr-3 pl-4 p-meta p-text-3">
+        <span>{String(DESKTOP_SIZE.width)} × {String(DESKTOP_SIZE.height)}</span>
+        <a href={`/workspace/${encodeURIComponent(workspace)}/desktop`} target="_blank" rel="noreferrer" data-desktop-open
+          aria-label={`Open ${title} in a new tab`} className="ml-auto inline-flex items-center gap-1.5 hover:p-text">
+          <ArrowSquareOutIcon size={13} aria-hidden />New tab
+        </a>
+      </div>
       {/* The screen at its own shape across the column, so the client draws it edge to edge. */}
       <div className="w-full" style={{ aspectRatio: `${String(DESKTOP_SIZE.width)} / ${String(DESKTOP_SIZE.height)}` }}>
         <DesktopScreen src={src} title={title} />
       </div>
-    </ViewBar>
-  );
-}
-
-/** The view's bar, the hairline, and the view on the terminal's ground to the column's foot. */
-function ViewBar({ leading, trailing, children }: { leading: ReactNode; trailing?: ReactNode; children: ReactNode }) {
-  return (
-    <>
-      <div className="flex h-11 shrink-0 items-center gap-3 pr-3 pl-4">
-        {leading}
-        {trailing !== undefined && <span className="ml-auto flex items-center gap-3">{trailing}</span>}
-      </div>
-      <div className="p-terminal-ground flex min-h-0 flex-1 flex-col border-t p-border">{children}</div>
-    </>
+    </div>
   );
 }
 
