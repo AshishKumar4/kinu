@@ -276,6 +276,7 @@ export function workspaceObject<Built extends Partial<CliAgentTarget>>(built: Bu
     accountSpend: refuse('accountSpend'),
     createDurableWebhook: refuse('createDurableWebhook'),
     requestOverviewPush: refuse('requestOverviewPush'),
+    previewAccess: refuse('previewAccess'),
     ...built,
   };
 }

@@ -158,6 +158,8 @@ export interface HostedWorkspace {
   readonly apps: DurableApps;
   /** The edge has verified the signed hostname; the full capability never leaves this object. */
   routePreview(port: number, handle: string, request: Request, pathname: string): Promise<Response>;
+  /** Whether `port`'s exposure is a slate's, as its durable record says. */
+  servesSlate(port: number): Promise<boolean>;
   /** Runs one of Nimbus's scheduled tasks, composing the runtime on a cold wake. */
   onScheduled(task: HostedRuntimeTask): Promise<void>;
   /** Leaves the actor's rows alone. */
@@ -408,6 +410,11 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
 
         return { removed: removed.removed, port: removed.port };
       },
+    },
+    async servesSlate(port) {
+      const exposure = await readPortReservation(deps.ctx, port);
+
+      return exposure !== null && exposure.owner !== null && exposure.kind === 'explicit';
     },
     async routePreview(port, handle, request, pathname) {
       const gates = await previewGates(port, handle);

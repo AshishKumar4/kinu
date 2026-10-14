@@ -918,6 +918,7 @@ export abstract class ActorAgent extends Agent<Env> {
     env: this.env,
     agentName: () => this.actorHandle().name,
     workspaceId: () => this.actorHandle().workspaceId,
+    workspaceName: () => this.workspaceName(),
     appTitle: 'Kinu',
     ownerRequired: true,
     getOwnerUserId: () => this.getOwnerUserId(),
@@ -2727,7 +2728,7 @@ export abstract class ActorAgent extends Agent<Env> {
           const authority = yield* Effect.promise(async () => this.slateAuthority(mode, this.slateNamespaces(mode)));
 
           return yield* Effect.promise(async () => this.callSlateTool({
-            rt: this.rt, actor: this.surfaceActor(mode), reach: slateToolReach(authority.reach), route, mode: authority.mode, context,
+            rt: this.rt, actor: this.surfaceActor(mode, context.viewer ? 'viewer' : 'owner'), reach: slateToolReach(authority.reach), route, mode: authority.mode, context,
           }));
         }
 
@@ -2870,11 +2871,14 @@ export abstract class ActorAgent extends Agent<Env> {
     });
   }
 
-  /** `actor` is whose browser sessions the program's egress reaches; null reaches only a new Kitesurf browser. */
-  protected codemodeLaunch(actor: string | null): (online: boolean) => ProgramLaunch {
+  /**
+   * `actor` is whose browser sessions the program's egress reaches; null reaches only a new Kitesurf browser. `as` is
+   * whose authority the program runs with: a share's viewer's program opens none of the owner's previews.
+   */
+  protected codemodeLaunch(actor: string | null, as: 'owner' | 'viewer'): (online: boolean) => ProgramLaunch {
     const workspace = this.workspaceName();
 
-    return (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace, actor } : null });
+    return (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace, actor, asOwner: as === 'owner' } : null });
   }
 
   /**
@@ -2891,7 +2895,7 @@ export abstract class ActorAgent extends Agent<Env> {
     let factory = this._slateToolFactories.get(launch);
 
     if (factory === undefined) {
-      factory = createCodemodeToolFactory({ launch: this.codemodeLaunch(launch), workspace: this.workspaceName() });
+      factory = createCodemodeToolFactory({ launch: this.codemodeLaunch(launch, context.viewer ? 'viewer' : 'owner'), workspace: this.workspaceName() });
       this._slateToolFactories.set(launch, factory);
     }
 
@@ -3003,15 +3007,18 @@ export abstract class ActorAgent extends Agent<Env> {
    * only the agent does. Read per call: executors attach and detach while this object lives.
    */
   protected slateNamespaces(mode: WorkMode, owner = false): CodemodeProvider[] {
-    return actorNamespaces(this.surfaceActor(mode), owner ? SURFACE_POLICY.ownerSlate : SURFACE_POLICY.slate);
+    return actorNamespaces(this.surfaceActor(mode, owner ? 'owner' : 'viewer'), owner ? SURFACE_POLICY.ownerSlate : SURFACE_POLICY.slate);
   }
 
-  /** This actor as every caller's namespaces are built over it (`actorNamespaces`); it delegates in `mode`. */
-  protected surfaceActor(mode: WorkMode): SurfaceActor {
+  /**
+   * This actor as every caller's namespaces are built over it (`actorNamespaces`); it delegates in `mode`. A share's
+   * viewer's calls reach the web without the pass the owner's carry to the workspace's own previews.
+   */
+  protected surfaceActor(mode: WorkMode, as: 'owner' | 'viewer' = 'owner'): SurfaceActor {
     return {
       executors: () => this.rt.executionRouter?.getProviders() ?? [],
       web: {
-        search: this.ownedModelServices.getWebSearchProvider(), files: this.rt.storage,
+        search: as === 'owner' ? this.ownedModelServices.getWebSearchProvider() : this.ownedModelServices.getViewerWebSearchProvider(), files: this.rt.storage,
         browser: { sessions: this.browserSessionsFor(this.rt.actor.actorId), prelude: BROWSER_PRELUDE },
       },
       memory: () => ({
@@ -3040,7 +3047,7 @@ export abstract class ActorAgent extends Agent<Env> {
   /** The workspace agent's eval programs: crafted tools saved mid-turn still work because craftStore is re-read per call. */
   protected workspaceCodemode(): CodemodeFactory {
     this._codemodeFactory ??= createCodemodeToolFactory({
-      launch: this.codemodeLaunch(this.rt.actor.actorId),
+      launch: this.codemodeLaunch(this.rt.actor.actorId, 'owner'),
       workspace: this.workspaceName(),
       // Drives the UI's default executor; one upsert per executor per turn (reset as its turn opens).
       onExecutorUsed: (name) => {

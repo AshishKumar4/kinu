@@ -2,7 +2,7 @@ import * as v from 'valibot';
 import { JsonValueSchema, projectJsonValue, type JsonValue, type RunEvent, type SubordinateInspectionRequest } from '@kinu.run/core';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { InspectionAnswer, PublicCraftedTool, PublicDirEntry, PublicExecutorResult, PublicSlateListing, PublicSwarmRun, WorkBoard } from './session';
-import type { WorkspaceWeb } from './workspace-roster';
+import { browserOwner, openPreviewAsOwner, type WorkspaceWeb } from './workspace-roster';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { INFRA_FAILURE_MARKER, TRANSIENT_PLATFORM_ERRORS } from '@kinu.run/test-utils';
 import { browsing, DRAW_MS, type WorkspaceBrowser } from './browser';
@@ -18,6 +18,7 @@ import { invokedInTurn } from '../tasks/crafted-reuse';
 const EVIDENCE_LIMIT = 2_000;
 
 const THREW = 'verifier.threw';
+
 
 /**
  * Whether a refused call never reached the slate: the host's `io` refusal naming the call and then
@@ -507,9 +508,9 @@ export class EvalVerifier {
     return answer.stdout ?? '';
   }
 
-  /** A preview opened the way a person's browser opens it: no credential, the status and the page. */
+  /** A preview opened the way its owner's browser opens it (`openPreviewAsOwner`): the status and the page. */
   async open(url: string): Promise<{ status: number; body: string }> {
-    const response = await fetch(url, { redirect: 'follow' });
+    const response = await openPreviewAsOwner(browserOwner(this.#session.web), url);
 
     return { status: response.status, body: await response.text() };
   }

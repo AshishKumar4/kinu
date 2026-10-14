@@ -204,7 +204,6 @@
   "packages/core/src/vfs/agent-home.ts#AGENT_TMP_MODE (unreached-export)",
   "packages/core/src/vfs/agent-home.ts#AGENT_UID_FLOOR (unreached-export)",
   "packages/core/src/vfs/agent-home.ts#SESSION_UID (unreached-export)",
-  "packages/core/src/web/provider.ts#DefaultWebSearchProviderDeps.htmlToMarkdown (unsupplied-field)",
   "packages/core/src/workspace-birth.ts#WorkspaceBirthConfig.scaffold (unsupplied-field)",
   "packages/devbox/src/incidents.ts#reapDeliveredIncidents (unreached-export)",
   "packages/devbox/src/lifecycle.ts#INCIDENT_STAGES (unreached-export)",
