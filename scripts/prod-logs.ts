@@ -1221,9 +1221,10 @@ async function perMinute(t: Telemetry, filters: readonly Filter[]): Promise<Obje
 
 /**
  * A read is settled when it has held still this long: every read across it agrees. Measured on staging 2026-10-14,
- * 03:14-04:34Z, a fixed window's per-minute counts read every minute across deploy 7591e6fec's wave: of 54,045 rows that
- * landed, 98.2% were in the first read after their minute ended, 99.93% within 3 min, and every one within 8.5 min.
- * Ten minutes covers every row that measurement saw land late.
+ * 03:15-04:34Z, a fixed window's per-minute counts read every minute across deploy 7591e6fec's wave: of 58,950 rows
+ * that landed after the first read, 98.4% were in the first read after their minute ended, 99.96% within 3 min and all
+ * but 2 within 8.5 min; those 2 landed 37 to 41 min late, past any hold a deploy waits out, as 2026-10-08's 22 to 151
+ * min rows did (see `SETTLE_CAP_MS`). Ten minutes covers every other row.
  */
 export const SETTLE_HOLD_MS = 10 * MINUTE_MS;
 
@@ -1248,7 +1249,8 @@ export type SettledRead<T> =
 /**
  * Reads every `pollMs` until the `fingerprint` has held still for `holdMs`, every read across it agreeing, or until
  * `capMs` has passed since the first. `rows` counts what the window held at each read, so the answer names how many
- * rows landed after the first read.
+ * rows landed after the first read. A read the API refuses says nothing of the window, so the next poll reads again:
+ * the 2026-10-14 measurement's API answered 500 to 12 of its 80 reads. Only a cap reached with no answer at all fails.
  */
 export async function settledRead<T>(at: {
   readonly read: () => Promise<T>; readonly fingerprint: (value: T) => string; readonly rows: (value: T) => number;
@@ -1256,21 +1258,39 @@ export async function settledRead<T>(at: {
   readonly pollMs: number; readonly holdMs: number; readonly capMs: number;
 }): Promise<SettledRead<T>> {
   const started = at.now();
-  let last = await at.read();
+  const capped = (): boolean => at.now() - started + at.pollMs > at.capMs;
+
+  const answer = async (): Promise<{ readonly value: T } | { readonly cause: unknown }> => {
+    const [read] = await Promise.allSettled([at.read()]);
+
+    return read?.status === 'fulfilled' ? { value: read.value } : { cause: read?.reason };
+  };
+
+  let first = await answer();
+
+  while (!('value' in first)) {
+    if (capped()) throw first.cause;
+    await at.sleep(at.pollMs);
+    first = await answer();
+  }
+
+  let last = first.value;
   const firstRows = at.rows(last);
   let reads = 1;
-  let stillSince = started;
+  let stillSince = at.now();
 
   for (;;) {
-    if (at.now() - started + at.pollMs > at.capMs) return { settled: false, last, reads, lateRows: at.rows(last) - firstRows };
+    if (capped()) return { settled: false, last, reads, lateRows: at.rows(last) - firstRows };
     await at.sleep(at.pollMs);
-    const next = await at.read();
+    const next = await answer();
+
+    if (!('value' in next)) continue;
     reads += 1;
 
-    if (at.fingerprint(next) !== at.fingerprint(last)) stillSince = at.now();
-    last = next;
+    if (at.fingerprint(next.value) !== at.fingerprint(last)) stillSince = at.now();
+    last = next.value;
 
-    if (at.now() - stillSince >= at.holdMs) return { settled: true, value: next, reads, lateRows: at.rows(next) - firstRows };
+    if (at.now() - stillSince >= at.holdMs) return { settled: true, value: last, reads, lateRows: at.rows(last) - firstRows };
   }
 }
 

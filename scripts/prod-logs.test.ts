@@ -175,12 +175,17 @@ describe('what one deployed version did, as a deploy reports it', () => {
 
 // Staging 2026-10-08: an 08:19:16Z row was absent from a read at 10:25Z and present at 10:50Z.
 describe('a read that issues a verdict', () => {
-  const reader = (counts: readonly number[]) => {
+  /** Answers each count in turn, its last forever; `refused` is a read the API answered 500. */
+  const reader = (counts: readonly (number | 'refused')[]) => {
     let clock = 0;
     let at = 0;
 
     return {
-      read: () => Promise.resolve(counts[Math.min(at++, counts.length - 1)] ?? 0),
+      read: () => {
+        const count = counts[Math.min(at++, counts.length - 1)] ?? 0;
+
+        return count === 'refused' ? Promise.reject(new Error('telemetry query answered 500')) : Promise.resolve(count);
+      },
       fingerprint: (count: number) => String(count), rows: (count: number) => count,
       now: () => clock,
       sleep: (ms: number) => {
@@ -199,6 +204,16 @@ describe('a read that issues a verdict', () => {
   // The hold starts again whenever the counts move: two agreeing reads with a change between them are not still.
   test('is not settled by two reads a hold apart that agree around a read that did not', async () => {
     expect(await settledRead(reader([5, 5, 5, 6, 5, 5, 5, 5, 5, 5, 5]))).toEqual({ settled: true, value: 5, reads: 10, lateRows: 0 });
+  });
+
+  // Staging 2026-10-14: the API answered 500 to 12 of 80 reads, which named nothing about the version.
+  test('reads again after a refused read, which neither moves nor holds the counts', async () => {
+    // Answered at 2, 4, 8, 10 and 12: held still from 2 to 12, the read refused at 6 between them.
+    expect(await settledRead(reader(['refused', 5, 5, 'refused', 5, 5, 5, 5]))).toEqual({ settled: true, value: 5, reads: 5, lateRows: 0 });
+  });
+
+  test('fails with the refusal when no read is answered before the cap', async () => {
+    await expect(settledRead(reader(['refused']))).rejects.toThrow('telemetry query answered 500');
   });
 
   test('is unsettled when its counts still move at the cap, however close they came', async () => {
