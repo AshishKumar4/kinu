@@ -1256,7 +1256,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   #startInputs(): StartInputs {
-    return { size: this.#size(), store: this.#bucket() !== undefined, internet: this.enableInternet, version: this.#version() };
+    return { size: this.#size(), store: this.#bucket() !== undefined, version: this.#version(), internet: this.enableInternet };
   }
 
   #version(): string | null {
