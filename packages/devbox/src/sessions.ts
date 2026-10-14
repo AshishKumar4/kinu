@@ -211,17 +211,15 @@ export type SessionsRead = ReadonlyMap<string, Omit<TerminalSession, 'name' | 'o
  * in a value, so any folder reads back whole; the last command's line is base64, as the rc stores it (D97). A tab
  * printed raw by a format comes out as `_` on the platform's tmux, which is why no field is tab-separated. Each session
  * whose foreground reads its terminal (`W`): a program waiting at a prompt is in `read(0)` on the pane's pts; a shell
- * at its own prompt is in `pselect` (D95, measured). `$1` is the box's listener probe (`port pid stamp command`).
+ * at its own prompt is in `pselect` (D95, measured). `$1` is the box's listener probe (`port pid ancestry stamp command`).
  */
 export const SESSIONS_READ = `${READS_TERMINAL}
 panes=$(tmux list-panes -a -F '#{pane_pid} #{session_name}' 2>/dev/null) || exit 0
 tmux list-panes -a -F 'P #{q:session_name} #{q:pane_current_path} #{q:pane_current_command} #{q:@kinu_exit} #{q:@kinu_at} #{q:@kinu_last}'
-sh -c "$1" port-listeners '' | while IFS='	' read -r port pid _; do
-  p=$pid
-  while [ -n "$p" ] && [ "$p" -gt 1 ]; do
+sh -c "$1" port-listeners '' | while IFS='	' read -r port _ chain _; do
+  for p in $chain; do
     name=$(printf '%s\\n' "$panes" | awk -v p="$p" '$1 == p { print $2; exit }')
     if [ -n "$name" ]; then printf 'L %s %s\\n' "$name" "$port"; break; fi
-    p=$(awk '/^PPid:/ { print $2 }' "/proc/$p/status" 2>/dev/null)
   done
 done
 tmux list-panes -a -F '#{pane_current_path}' | sort -u | while IFS= read -r dir; do

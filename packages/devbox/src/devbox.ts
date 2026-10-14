@@ -139,7 +139,12 @@ function launchUnknown(execId: string): DevboxError {
   return new DevboxError('indeterminate', `exec ${execId} was launched before, and its outcome cannot be read here; it was not launched again`);
 }
 
-/** `port-listeners STAMP [PORT...]`: `port pid stamp command` per socket holder; /proc, as the image has no `ss`. */
+/**
+ * `port-listeners STAMP [PORT...]`: `port pid ancestry stamp command` per socket holder, tab-separated; /proc, as the
+ * image has no `ss`. The ancestry is the holder's pid and each parent's up to init: the one answer to which command,
+ * session or job a listener is under, whatever process group it runs in. The stamp is the nearest one along it, and
+ * comes after the ancestry, never empty, because a shell's `read` merges empty tab-separated fields.
+ */
 const PORT_LISTENERS = `
 stamp=$1; shift
 socks=$(for f in /proc/net/tcp /proc/net/tcp6; do
@@ -152,17 +157,24 @@ socks=$(for f in /proc/net/tcp /proc/net/tcp6; do
 done)
 [ -n "$socks" ] || exit 0
 holders=$(ls -l /proc/[0-9]*/fd 2>/dev/null | awk '/^\\/proc\\/[0-9]+\\/fd:$/ { split($0, p, "/"); pid = p[3]; next } /-> socket:\\[/ { s = $NF; gsub(/socket:\\[|\\]/, "", s); print s, pid }')
-stampof() {
+ancestry() {
   p=$1
   while [ -n "$p" ] && [ "$p" -gt 1 ]; do
+    printf '%s ' "$p"
+    p=$(awk '/^PPid:/ { print $2 }' "/proc/$p/status" 2>/dev/null)
+  done
+}
+stampof() {
+  [ -n "$stamp" ] || return 0
+  for p in $1; do
     v=$(tr '\\000' '\\n' < "/proc/$p/environ" 2>/dev/null | grep -m1 "^$stamp=")
     [ -n "$v" ] && { printf '%s' "\${v#*=}"; return; }
-    p=$(awk '/^PPid:/ { print $2 }' "/proc/$p/status" 2>/dev/null)
   done
 }
 echo "$socks" | while read -r inode port; do
   echo "$holders" | awk -v i="$inode" '$1 == i { print $2 }' | sort -un | while read -r pid; do
-    printf '%s\\t%s\\t%s\\t%s\\n' "$port" "$pid" "$(stampof "$pid")" "$(tr '\\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null)"
+    chain=$(ancestry "$pid")
+    printf '%s\\t%s\\t%s\\t%s\\t%s\\n' "$port" "$pid" "$chain" "$(stampof "$chain")" "$(tr '\\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null)"
   done
 done
 `;
@@ -171,21 +183,26 @@ export interface PortListener {
   readonly port: number;
   readonly pid: number;
   readonly stamp: string | null;
+  /** The listener's pid, then each parent's, up to init. */
+  readonly ancestry: readonly number[];
   readonly command: string;
 }
 
+const Pid = v.pipe(v.string(), v.toNumber(), v.integer());
+
 const ListenerLineSchema = v.pipe(v.string(), v.transform((line) => line.split('\t')), v.tuple([
-  v.pipe(v.string(), v.toNumber(), v.integer()),
-  v.pipe(v.string(), v.toNumber(), v.integer()),
+  Pid,
+  Pid,
+  v.pipe(v.string(), v.transform((chain) => chain.trim().split(' ').filter((pid) => pid !== '')), v.array(Pid)),
   v.string(),
   v.string(),
 ]));
 
 function parsePortListeners(output: string): PortListener[] {
   return output.split('\n').filter((line) => line !== '').map((line) => {
-    const [port, pid, stamp, command] = v.parse(ListenerLineSchema, line);
+    const [port, pid, ancestry, stamp, command] = v.parse(ListenerLineSchema, line);
 
-    return { port, pid, stamp: stamp === '' ? null : stamp, command: command.trimEnd() };
+    return { port, pid, stamp: stamp === '' ? null : stamp, ancestry, command: command.trimEnd() };
   });
 }
 
@@ -2794,12 +2811,12 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     try {
       const listeners = await this.portListeners('') ?? [];
-      const read = await this.#execute(`ps -o pid=,pgid=,etimes= -p ${[...pids, ...listeners.map((row) => row.pid)].join(',')} || true`);
-      const groups = new Map(read.stdout.trim().split('\n').map((line) => line.trim().split(/\s+/).map(Number)).map(([pid = 0, pgid = 0, age = 0]) => [pid, { pgid, age }] as const));
+      const read = await this.#execute(`ps -o pid=,etimes= -p ${pids.join(',')} || true`);
+      const ages = new Map(read.stdout.trim().split('\n').map((line) => line.trim().split(/\s+/).map(Number)).map(([pid = 0, age = 0]) => [pid, age] as const));
 
       return new Map(pids.map((pid) => [pid, {
-        ageSeconds: groups.get(pid)?.age,
-        ports: [...new Set(listeners.filter((row) => row.pid === pid || groups.get(row.pid)?.pgid === pid).map((row) => row.port))],
+        ageSeconds: ages.get(pid),
+        ports: [...new Set(listeners.filter((row) => row.ancestry.includes(pid)).map((row) => row.port))],
       }]));
     } catch (error) {
       console.error(`[devbox] the rest ask lists processes without ages or ports: ${describe({ cause: error })}`);
