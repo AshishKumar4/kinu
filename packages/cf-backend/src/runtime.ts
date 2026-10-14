@@ -212,6 +212,8 @@ export function isCFRuntime(runtime: AgentRuntime): runtime is CFRuntime {
 
 export interface WorkspaceBoxUse {
   used: boolean;
+  /** The agents that drove the computer's desktop since the box last let them go (D89), whichever agent's runtime. */
+  readonly drivers: Set<string>;
 }
 
 export interface CFRuntimeHooks {
@@ -428,6 +430,7 @@ export function createCFRuntime(
           hooks.liveReadsMoved?.(['getExposedPorts']);
           await hooks.servingMoved();
         },
+        drivers: hooks.boxUse.drivers,
       });
 
       sandboxHandle = handle;

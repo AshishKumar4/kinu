@@ -29,8 +29,9 @@ const SHOWN = `data:image/png;base64,${PNG}`;
 /** The box's desktop: its screen, and its watch's layout, half-size frames two then four to a row. */
 const SCREEN: DesktopScreen = { width: 1280, height: 768, sheet: { percent: 50, columns: [1, 2, 2, 2, 4, 4, 4, 4] } };
 
-/** A computer whose box records each desktop request and answers as `answer` says; nothing else is reachable. */
-function desktopBox(answer: (action: DesktopAction) => DesktopAnswer | Promise<DesktopAnswer> = accepted) {
+/** A computer whose box records each desktop request and answers as `answer` says, given the call's stop; nothing else
+ *  is reachable. */
+function desktopBox(answer: (action: DesktopAction, signal: AbortSignal | undefined) => DesktopAnswer | Promise<DesktopAnswer> = accepted) {
   const sent: DesktopRequest[] = [];
 
   const unreachable = async (): Promise<never> => {
@@ -41,10 +42,10 @@ function desktopBox(answer: (action: DesktopAction) => DesktopAnswer | Promise<D
     exec: unreachable, readFile: unreachable, writeFile: unreachable, listFiles: unreachable, deleteFile: unreachable,
     exposePort: unreachable, unexposePort: unreachable, getExposedPorts: unreachable,
     ...sandboxHandleLifecycle,
-    desktop: async (request) => {
+    desktop: async (request, opts) => {
       sent.push(request);
 
-      return await answer(request.action);
+      return await answer(request.action, opts?.signal);
     },
   };
 
@@ -269,22 +270,36 @@ describe('a program driving the desktop', () => {
     expect(actions()).toEqual(expected);
   });
 
-  test('a stopped program sends nothing more: not the rest of its text, nor the calls waiting behind it', async () => {
-    const { box, actions, arrived, release } = holdingBox();
+  test('a stop reaches the box: the action on the screen is ended there, and nothing waiting behind it is sent', async () => {
+    const ended: string[] = [];
+    const asked = Promise.withResolvers<void>();
+
+    // As the box answers a held key: its run lasts until a stop ends it there, and the call settles once it has.
+    const { box, actions } = desktopBox((action, signal) => {
+      if (action.kind !== 'key') return accepted(action);
+      asked.resolve();
+
+      return new Promise((_, reject) => {
+        signal?.addEventListener('abort', () => {
+          ended.push(action.keys);
+          reject(new DOMException('its container process tree was ended', 'AbortError'));
+        }, { once: true });
+      });
+    });
+
     const computer = computerOf(box);
     const stop = new AbortController();
 
     const all = withCodemodeProgram(async () => ({
-      result: await Promise.all([call(computer, 'type', 'a'.repeat(120)), call(computer, 'click', [1, 2])]),
+      result: await Promise.all([call(computer, 'key', 'w', { hold: 10_000 }), call(computer, 'click', [1, 2])]),
     }), stop.signal);
 
-    await arrived(1);
+    await asked.promise;
     stop.abort();
-    release();
 
     const { result } = await all;
 
-    expect(actions()).toEqual([{ kind: 'type', text: 'a'.repeat(50) }]);
+    expect({ ended, sent: actions() }).toEqual({ ended: ['w'], sent: [{ kind: 'key', keys: 'w', holdMs: 10_000 }] });
     expect(result).toEqual([expect.objectContaining({ reason: 'cancelled' }), expect.objectContaining({ reason: 'cancelled' })]);
   });
 

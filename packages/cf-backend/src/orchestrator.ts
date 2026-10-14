@@ -968,6 +968,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // The workspace agent's missions are the workspace's: owner-declared here, and charged here as its turns spend.
       missions: (actorId) => (actorPolicy(this.agentOf(actorId)).workspaceAgent ? this.budget : null),
       advisor: (actor) => this.actorAdvisor(actor),
+      // The activation owns it, as its other detached work: a failure is logged as the release's own.
+      turnsEnded: (actorId) => {
+        const box = this.rt.sandboxHandle;
+
+        if (box !== null) this.detachOwned(logged('agent.desktop_release_failed', { doing: "letting go of the desktop an agent's turns held", otherwise: 'io' }, () => box.releaseDesktop(actorId), { actorId }));
+      },
     });
   }
 

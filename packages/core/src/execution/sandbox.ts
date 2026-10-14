@@ -102,8 +102,11 @@ export interface SandboxHandle {
   resize(size: string): Promise<SandboxResize>;
   answerRest(answer: 'now' | 'keep'): Promise<SandboxRestAnswer>;
   /** One action on the desktop the owner watches, starting it when it is not running; the box refuses what only it can
-   *  check (a point off the screen, another agent driving) before any input reaches the screen. */
-  desktop(request: DesktopRequest): Promise<DesktopAnswer>;
+   *  check (a point off the screen, another agent driving) before any input reaches the screen. `signal` stops it as it
+   *  stops an exec: settle only once its process is gone and what it held is let go (D89). */
+  desktop(request: DesktopRequest, opts?: { readonly signal?: AbortSignal }): Promise<DesktopAnswer>;
+  /** `driver`'s turns ended, or it was stopped: the desktop is free for another agent to take by looking (D89). */
+  releaseDesktop(driver: string): Promise<void>;
 }
 
 export type SandboxRestAnswer =
@@ -632,7 +635,11 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
   };
 
   if (desktop !== undefined) {
-    Object.assign(tools, desktopTools({ box: handle && ((request) => touch(() => handle.desktop(request))), driver: desktop.driver, frames: desktop.screen.sheet.columns.length, notConfigured }));
+    Object.assign(tools, desktopTools({
+      // The signal is added only when given, as exec's is.
+      box: handle && ((request, signal) => touch(() => handle.desktop(request, signal === undefined ? undefined : { signal }))),
+      driver: desktop.driver, frames: desktop.screen.sheet.columns.length, notConfigured,
+    }));
   }
 
   if (sizes !== undefined) {

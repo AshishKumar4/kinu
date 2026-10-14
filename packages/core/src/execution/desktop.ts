@@ -225,8 +225,8 @@ function answered(member: DesktopMember, answer: DesktopAnswer): ExecutorToolRes
 }
 
 export interface DesktopDeps {
-  /** The box's desktop; absent, no computer is configured. */
-  readonly box: ((request: DesktopRequest) => Promise<DesktopAnswer>) | undefined;
+  /** The box's desktop, which `signal` stops; absent, no computer is configured. */
+  readonly box: ((request: DesktopRequest, signal: AbortSignal | undefined) => Promise<DesktopAnswer>) | undefined;
   /** This agent, as the box tells drivers apart. */
   readonly driver: string;
   /** The most frames a watch takes: what the box's sheet holds. */
@@ -258,9 +258,12 @@ export function desktopTools(deps: DesktopDeps): Record<string, ExecutorTool> {
         return refusalOf(new KinuError('denied', `computer.${member}: this program was moved to the background; the screen is driven from the turn in the foreground.`));
       }
 
+      // The program's stop reaches the box, which ends the action's run and lets go of what it held before answering.
       answer = yield* Effect.tryPromise({
-        try: () => box({ driver: deps.driver, action }),
-        catch: (cause) => toKinuError({ doing: `computer.${member}`, cause, otherwise: 'unavailable' }),
+        try: () => box({ driver: deps.driver, action }, context.signal),
+        catch: (cause) => (context.signal?.aborted === true
+          ? new KinuError('cancelled', `computer.${member}: its program stopped, so its action on the screen was ended.`)
+          : toKinuError({ doing: `computer.${member}`, cause, otherwise: 'unavailable' })),
       });
 
       if (answer.kind === 'refused') break;
