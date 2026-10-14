@@ -13,14 +13,24 @@ test("an idle agent's turn opens on account reads its tile's write does not hold
   const token = await provisionTestWorkspace(user, 'opening', 'Opening');
   const gateway = stubAiBinding((run) => chatCompletion(run, 'Noted.'));
   const workspace = gatewayWorkspace(gateway, { userDO: user.userDO, workspace: 'opening', ownerUserId: OWNER });
+  const { userDO } = user;
+  const put = userDO.putWorkspaceOverview.bind(userDO);
+  const firstTile = Promise.withResolvers<void>();
 
+  Object.assign(userDO, {
+    putWorkspaceOverview: async (...args: Parameters<typeof put>) => {
+      await put(...args);
+      firstTile.resolve();
+    },
+  });
   workspace.agent.harnessHoldsCapability(token);
   await catalogTurn(workspace.agent, 'First.');
+  // The first turn's tile has landed: its fold loads the slate host, at the object's first slate read, so the turn
+  // below starts with nothing in flight, as an object past its first turn does.
+  await firstTile.promise;
 
   // The owner's object as deployed, from here: a call that arrives after a tile was asked is answered only once that
   // tile's write is durable, which here it never is.
-  const { userDO } = user;
-  const put = userDO.putWorkspaceOverview.bind(userDO);
   const unflushed = Promise.withResolvers<void>();
   const asked: string[] = [];
   let tileAsked = false;
