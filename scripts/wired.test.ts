@@ -217,8 +217,15 @@ describe('awaited dynamic import consumers', () => {
     expect(inspect('await import("./lazy"); const { highlightCode } = require("./lazy"); return highlightCode();')).toEqual([unused]);
   });
   // 2026-10-14: the daemon's supervisor module, reached from the daemon by `require` alone, named nothing live.
-  test('a CommonJS require alone makes the file it names live', () => {
-    expect(inspect('const { highlightCode } = require("./lazy"); return highlightCode();')).toEqual([unused]);
+  test('a file reached by a CommonJS require alone is live, so what it names is reached', () => {
+    const middle = `${BASE}middle.ts`;
+    const source = 'const { highlightCode } = require("./lazy"); export function render() { return highlightCode(); }';
+
+    expect(census(new Map([
+      [lazyFile, lazySource],
+      [middle, source],
+      [`${BASE}main.ts`, 'if (import.meta.main) void main(); async function main() { const { render } = require("./middle"); return render(); }'],
+    ]))).toEqual([unused]);
   });
   test('side effects and unused bindings reach no exports', () => {
     expect(inspect('await import("./lazy");')).toEqual([highlight, unused]);
