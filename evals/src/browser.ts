@@ -59,18 +59,23 @@ export async function signedInPage(browser: Browser, at: SignIn): Promise<Page> 
   return page;
 }
 
-/**
- * A context holding `at.identity`'s session on `at.origin`. Chrome makes the exchange itself, one navigation turned
- * into the `POST` carrying the header, so the cookie is stored as any sign-in's is and the header travels on that one
- * request to that one origin. A loopback identity needs none: the origin is the boundary, and sends no header.
- */
+/** A context holding `identity`'s session on `origin`, through the dev identity's exchange (`POST
+ *  /api/auth/dev-session`). A loopback identity needs none: the origin is the boundary, and sends no header. */
 async function signedInContext(browser: Browser, { origin, identity }: SignIn): Promise<BrowserContext> {
-  const context = await browser.createBrowserContext();
   const headers = webHeaders(identity);
 
-  if (Object.keys(headers).length === 0) return context;
+  return Object.keys(headers).length === 0
+    ? await browser.createBrowserContext()
+    : await contextSignedInAt(browser, `${origin}/api/auth/dev-session`, headers);
+}
 
-  const exchange = `${origin}/api/auth/dev-session`;
+/**
+ * A context signed in by one exchange, as a person signs in: Chrome navigates to `exchange` as the `POST` carrying
+ * `headers`, so the session cookie its answer sets is stored as any sign-in's is, and the headers travel on that one
+ * request to that one origin rather than on every request a page makes.
+ */
+export async function contextSignedInAt(browser: Browser, exchange: string, headers: Readonly<Record<string, string>>): Promise<BrowserContext> {
+  const context = await browser.createBrowserContext();
   const page = await context.newPage();
 
   try {
@@ -84,7 +89,7 @@ async function signedInContext(browser: Browser, { origin, identity }: SignIn): 
     const answer = await page.goto(exchange, { waitUntil: 'load' });
 
     if (answer === null || !answer.ok()) {
-      throw new Error(`signing in at ${origin} answered ${String(answer?.status() ?? 'nothing')}: ${(await answer?.text() ?? '').slice(0, 200)}`);
+      throw new Error(`signing in at ${exchange} answered ${String(answer?.status() ?? 'nothing')}: ${(await answer?.text() ?? '').slice(0, 200)}`);
     }
   } finally {
     await page.close();

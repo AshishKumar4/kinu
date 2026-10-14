@@ -23,6 +23,7 @@ import artifact from '../packages/devbox/block-lower/upstream.json';
 import { CONTAINER_CONTRACTS, DISK_CONTRACTS } from '../packages/devbox/bench/contract-types';
 import { shellQuote } from '../packages/core/src/utils/shell';
 import { withTestChrome } from './test-chrome';
+import { contextSignedInAt } from '../evals/src/browser';
 import { DESKTOP_COLOURS, DESKTOP_LOG, DESKTOP_PANEL, DESKTOP_SIZE } from '../packages/devbox/src/desktop';
 import { CHORD, DISTINCT_PY, DOWN_PY, GRID, GRID_POINTS, HOLD, RANGE, SCROLL, TEXT, TICKER, sizeOf } from './fixtures/devbox-e2e/desktop-pages';
 
@@ -542,9 +543,9 @@ async function main(): Promise<void> {
       const fresh = names[4] ?? '';
 
       return withTestChrome(async browser => {
-        const page = await browser.newPage();
+        // Signed in once on the fixture's origin, which the browser scopes the session to (`contextSignedInAt`).
+        const page = await (await contextSignedInAt(browser, `${origin}/sign-in`, { authorization: `Bearer ${identity}` })).newPage();
         page.setDefaultTimeout(0);
-        await page.setExtraHTTPHeaders({ authorization: `Bearer ${identity}` });
         await page.setViewport({ width: 1300, height: 820 });
         await page.goto(`${origin}/view?box=${fresh}`);
         const frame = await (await page.waitForSelector('iframe'))?.contentFrame();
