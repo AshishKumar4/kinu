@@ -1,10 +1,8 @@
 import { Effect, Cause, Data } from 'effect';
 import * as oauth from 'oauth4webapi';
 import { Hono } from 'hono';
-import {
-  AuthError, OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME, authenticateRequest, readCookie,
-  readSessionToken, setCookie,
-} from './session';
+import { AuthError, authenticateRequest, devIdentityEmail, readSessionToken } from './session';
+import { OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME, readCookie, sessionCookie, setCookie } from './cookies';
 import {
   consumeOAuthState, createOAuthState, createSession, revokeSession,
   type OAuthProfile, type SessionAuthority,
@@ -97,6 +95,25 @@ authApiRoutes.get('/api/auth/me', (c) => {
     }));
   }));
 });
+
+/**
+ * The dev identity's sign-in: the header it is accepted in, exchanged once on the app's origin for the session any
+ * sign-in mints, so a browser holds a cookie its origin scopes rather than a header it sends everywhere
+ * (`devIdentityEmail`). Gated by the same possession check every route applies, so it grants nothing the header did
+ * not: the same user (`deriveUserId` of the same email), now revocable as any session is.
+ */
+authApiRoutes.post('/api/auth/dev-session', (c) => settle(Effect.gen(function* () {
+  const email = yield* devIdentityEmail(c.req.raw, c.env);
+
+  if (email === null) return json({ body: { error: 'This request holds no dev identity.' } }, { status: 401 });
+
+  const session = yield* Effect.promise(async () => createSession(c.env, { provider: 'dev', providerSub: 'dev', email, emailVerified: true }));
+  const headers = new Headers({ 'cache-control': 'no-store' });
+
+  headers.append('set-cookie', sessionCookie(session));
+
+  return json({ body: { user: publicIdentity(session.identity) } }, { headers });
+})));
 
 /** Sign-in pages and OAuth legs. */
 type AuthPagesEnv = FamilyEnv<AuthRoutesEnv<unknown>, object>;
@@ -300,7 +317,7 @@ function completeOAuth<Id>(
 
       const destination = new URL(savedState.returnTo, url.origin).toString();
       const headers = new Headers({ 'cache-control': 'no-store' });
-      headers.append('set-cookie', setCookie(SESSION_COOKIE_NAME, session.token, session.expiresAt - session.issuedAt));
+      headers.append('set-cookie', sessionCookie(session));
 
       return redirect(destination, {
         headers,

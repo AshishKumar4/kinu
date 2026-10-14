@@ -6,7 +6,7 @@ import { builtinAccountRoutes, builtinAuthRoutes, type BuiltinAuthEnv } from '..
 import { authPageRoutes } from '../src/auth/routes';
 import type { AuthIdentity } from '../src/auth/session';
 import { deriveBuiltinUserId, verifySession } from '../src/auth/store';
-import { readCookie, SESSION_COOKIE_NAME } from '../src/auth/session';
+import { readCookie, SESSION_COOKIE_NAME } from '../src/auth/cookies';
 import { serveFamily } from './helpers/api';
 import { makeKv } from './helpers/kv';
 import { createTestUserDO, TEST_CREDENTIAL_ENCRYPTION_KEY, type TestUserDO } from './helpers/user-do';

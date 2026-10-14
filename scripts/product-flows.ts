@@ -251,7 +251,7 @@ export async function waitOn<Value>(page: Page, what: string, promise: Promise<V
 }
 
 export async function openWorkspacePage(target: FlowTarget, path: string): Promise<Page> {
-  const page = await signedInPage(target.browser, target.identity);
+  const page = await signedInPage(target.browser, target);
 
   // 'load', not 'networkidle0': the app holds its event socket open from
   // first paint, so there is never a zero-connection window to wait for.
@@ -975,7 +975,7 @@ export async function accountMemoryCrossesWorkspaces(target: FlowTarget): Promis
 
     await sendAndSettle(second, ACCOUNT_RECALL_ASK);
     const before = await lastReply(second, ACCOUNT_RECALL_REPLY, RECALL_ANSWERS);
-    const settings = await signedInPage(target.browser, target.identity);
+    const settings = await signedInPage(target.browser, target);
 
     await settings.goto(`${target.origin}/user/settings#memory`, { waitUntil: 'load' });
     await until(settings, 'Settings → Memory loaded', `document.querySelector('[data-account-memory]') !== null`);
@@ -1128,7 +1128,7 @@ export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentRet
     await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
     await page.close();
 
-    const back = await signedInPage(target.browser, target.identity);
+    const back = await signedInPage(target.browser, target);
     const ledger = await frameLedger(back);
 
     // Back to the workspace, the way a person returns: its own page, not the agent's.
@@ -1571,7 +1571,7 @@ export interface WelcomeVerdict {
  * this row runs first; an account that finished it long ago goes straight home.
  */
 export async function reachesHome(target: FlowTarget): Promise<WelcomeVerdict> {
-  const page = await signedInPage(target.browser, target.identity);
+  const page = await signedInPage(target.browser, target);
 
   try {
     await page.goto(`${target.origin}/`, { waitUntil: 'load' });
@@ -1629,7 +1629,7 @@ const SENT_MESSAGES = `[...document.querySelectorAll('#chat [data-revert-turn]')
  * starts, must end with a reply on screen.
  */
 export async function workspaceGetsFirstAnswer(target: FlowTarget): Promise<FirstAnswerVerdict> {
-  const page = await signedInPage(target.browser, target.identity);
+  const page = await signedInPage(target.browser, target);
   const ledger = await frameLedger(page);
   let workspace: string | null = null;
 
@@ -2269,7 +2269,7 @@ export async function driveKeepsWhatIsDone(target: FlowTarget): Promise<DriveVer
   const renamed = `${folder}-renamed`;
   const file = `${folder}.txt`;
   const upload = join(scratchDir('drive-upload'), file);
-  const page = await signedInPage(target.browser, target.identity);
+  const page = await signedInPage(target.browser, target);
 
   writeFileSync(upload, 'browser flow upload\n');
 
@@ -2352,7 +2352,7 @@ export interface DriveOpensVerdict {
  * one tile, and a Drive with nothing to show draws its empty state instead.
  */
 export async function driveOpens(target: FlowTarget): Promise<DriveOpensVerdict> {
-  const page = await signedInPage(target.browser, target.identity);
+  const page = await signedInPage(target.browser, target);
 
   try {
     await page.goto(`${target.origin}/drive`, { waitUntil: 'load' });
@@ -2407,7 +2407,7 @@ function slateTile(workspace: string): string {
 }
 
 async function driveWithSlate(target: FlowTarget, workspace: string): Promise<Page> {
-  const page = await signedInPage(target.browser, target.identity);
+  const page = await signedInPage(target.browser, target);
 
   // A first visit to the Drive lands on Slates when the owner has one.
   await page.goto(`${target.origin}/drive`, { waitUntil: 'load' });
@@ -2521,7 +2521,7 @@ export async function slateSharesReachingNothing(target: FlowTarget): Promise<Sl
 
     if (link !== null) {
       // Chrome's writeText asks for the sanitized-write grant, not clipboard-write (measured on Chrome 151).
-      await target.browser.defaultBrowserContext().overridePermissions(target.origin, ['clipboard-read', 'clipboard-sanitized-write']);
+      await page.browserContext().overridePermissions(target.origin, ['clipboard-read', 'clipboard-sanitized-write']);
       await page.bringToFront();
       copied = v.parse(v.string(), await waitOn(page, 'the share link on the clipboard', page.evaluate(`(async () => {
         await navigator.clipboard.writeText('');
@@ -2812,7 +2812,7 @@ export async function reopenedWorkspaceRunsTheDeployedBuild(target: FlowTarget):
   const workspace = await createFlowWorkspace(target, 'reopen');
 
   try {
-    const page = await signedInPage(target.browser, target.identity);
+    const page = await signedInPage(target.browser, target);
 
     await page.evaluateOnNewDocument(MARK_RESTORED);
     await page.goto(`${target.origin}/workspace/${workspace}`, { waitUntil: 'load' });

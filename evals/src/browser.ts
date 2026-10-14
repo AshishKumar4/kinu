@@ -1,16 +1,19 @@
 /**
  * Chrome for the rows and checks that read what a DEPLOYED page draws.
  *
- * THE HEADER IS THE SIGN-IN. The deployment accepts the synthetic identity in
- * core's `DEV_IDENTITY_HEADER` and nowhere else — never as a cookie, deliberately — so
- * `setExtraHTTPHeaders` is what makes a page the same user the socket half of a
- * row acts as. Everything else is the product: its own bundle, its own socket,
- * its own render.
+ * A PAGE SIGNS IN AS A PERSON DOES. The deployment accepts the synthetic identity in core's `DEV_IDENTITY_HEADER`
+ * and nowhere else, never as a cookie; a browser exchanges that header once, on the app's own origin, for the session
+ * cookie any sign-in mints (`POST /api/auth/dev-session`), and the browser scopes the cookie to that origin, socket
+ * handshakes included. So a page is the same user the socket half of a row acts as, and no other origin it reaches
+ * learns the secret: a header set on the whole page went to a slate's third-party subresources and to foreign
+ * sockets (2026-10-14). Everything else is the product: its own bundle, its own socket, its own render.
  */
 import { setTimeout as sleep } from 'node:timers/promises';
-import { ElementHandle, type Browser, type Frame, type Page } from 'puppeteer';
+import { ElementHandle, type Browser, type BrowserContext, type Frame, type HTTPRequest, type Page } from 'puppeteer';
 import * as v from 'valibot';
+import { Effect } from 'effect';
 import { SLATE_UI_ATTRIBUTE } from '@kinu.run/core';
+import { detach } from '@kinu.run/core/obs';
 
 import { declaredSettings } from '../../scripts/browser-declarations';
 import { DESKTOP, withBrowser } from '../../scripts/live-app-harness';
@@ -26,21 +29,68 @@ export async function openBrowser(): Promise<TestChrome> {
   return launchTestChrome({ args: [declaredSettings({ mouse: true })] });
 }
 
-/** A page signed in as `identity`, the same authority the row's sockets use, so the two halves cannot be two users
- *  looking at two workspaces: at the desktop viewport, recording its dead ends from its first document
- *  ({@link recordDeadEnds}). No default timeout: each wait on it states its own bound, or the case budget ends it. */
-export async function signedInPage(browser: Browser, identity: PublicWebIdentity): Promise<Page> {
-  const page = await browser.newPage();
-  const headers = webHeaders(identity);
+/** Where a page signs in, and as whom. */
+export interface SignIn {
+  readonly origin: string;
+  readonly identity: PublicWebIdentity;
+}
+
+/** Each browser's signed-in contexts, one per origin and identity: a cookie jar holds one session per origin, so two
+ *  identities in one context would sign each other out, and a page opened outside them stays signed out. */
+const signedInContexts = new WeakMap<Browser, Map<string, Promise<BrowserContext>>>();
+
+/** A page signed in as `at.identity` on `at.origin`, the same authority the row's sockets use, so the two halves
+ *  cannot be two users looking at two workspaces: at the desktop viewport, recording its dead ends from its first
+ *  document ({@link recordDeadEnds}). No default timeout: each wait on it states its own bound, or the case budget
+ *  ends it. */
+export async function signedInPage(browser: Browser, at: SignIn): Promise<Page> {
+  const contexts = signedInContexts.get(browser) ?? new Map<string, Promise<BrowserContext>>();
+  const key = JSON.stringify([at.origin, at.identity.kind === 'secret' ? at.identity.account : at.identity.kind]);
+  const context = contexts.get(key) ?? signedInContext(browser, at);
+
+  signedInContexts.set(browser, contexts.set(key, context));
+
+  const page = await (await context).newPage();
 
   page.setDefaultTimeout(0);
   await page.setViewport(DESKTOP);
-
-  if (Object.keys(headers).length > 0) await page.setExtraHTTPHeaders(headers);
-
   await recordDeadEnds(page);
 
   return page;
+}
+
+/**
+ * A context holding `at.identity`'s session on `at.origin`. Chrome makes the exchange itself, one navigation turned
+ * into the `POST` carrying the header, so the cookie is stored as any sign-in's is and the header travels on that one
+ * request to that one origin. A loopback identity needs none: the origin is the boundary, and sends no header.
+ */
+async function signedInContext(browser: Browser, { origin, identity }: SignIn): Promise<BrowserContext> {
+  const context = await browser.createBrowserContext();
+  const headers = webHeaders(identity);
+
+  if (Object.keys(headers).length === 0) return context;
+
+  const exchange = `${origin}/api/auth/dev-session`;
+  const page = await context.newPage();
+
+  try {
+    await page.setRequestInterception(true);
+    page.on('request', (request: HTTPRequest) => {
+      const signing = request.url() === exchange && request.isNavigationRequest();
+
+      detach(Effect.promise(async () => request.continue(signing ? { method: 'POST', headers: { ...request.headers(), ...headers } } : {})));
+    });
+
+    const answer = await page.goto(exchange, { waitUntil: 'load' });
+
+    if (answer === null || !answer.ok()) {
+      throw new Error(`signing in at ${origin} answered ${String(answer?.status() ?? 'nothing')}: ${(await answer?.text() ?? '').slice(0, 200)}`);
+    }
+  } finally {
+    await page.close();
+  }
+
+  return context;
 }
 
 /** Records, on `window`, every turn the workspace's socket reports ended in
@@ -216,7 +266,7 @@ export class WorkspaceBrowser {
   /** A fresh page of the workspace at `query`, in the owner's `mode` when one is named, recording what fails in each
    *  document it loads. */
   async open(query = '', mode?: 'light' | 'dark'): Promise<Page> {
-    const page = await signedInPage(this.browser, this.web.identity);
+    const page = await signedInPage(this.browser, this.web);
 
     if (mode !== undefined) await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: mode }]);
     await bounded('the workspace page', page.goto(`${this.web.origin}/workspace/${encodeURIComponent(this.web.workspace)}${query}`, { waitUntil: 'domcontentloaded' }));
@@ -233,7 +283,7 @@ export class WorkspaceBrowser {
 
   /** The page `view` draws, opened on its own in a window of `size`: as it is drawn on a phone. */
   async alone(view: SlateView, size: { readonly width: number; readonly height: number }): Promise<SlateView> {
-    const page = await signedInPage(this.browser, this.web.identity);
+    const page = await signedInPage(this.browser, this.web);
 
     await page.setViewport({ ...size, isMobile: true, hasTouch: true });
     await bounded('the slate page, opened alone', page.goto(view.frame.url(), { waitUntil: 'domcontentloaded' }));

@@ -20,7 +20,7 @@ import type { JsonValue } from '@kinu.run/core';
 // `cloudflare:*` modules that crash bun's loader.
 const { createSession, deriveUserId } = await import('../src/auth/store');
 
-const { SESSION_COOKIE_NAME } = await import('../src/auth/session');
+const { SESSION_COOKIE_NAME } = await import('../src/auth/cookies');
 
 const worker = (await import('../src/server')).default;
 

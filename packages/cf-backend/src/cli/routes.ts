@@ -3,10 +3,8 @@ import { Cause, Effect, Result } from 'effect';
 import {
   JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RELEASE_SIGNING_PUBLIC_KEY, timingSafeEqual,
 } from '@kinu.run/core';
-import {
-  AuthError, CLI_APPROVAL_CSRF_COOKIE_NAME, authenticateRequest, isFreshAuthTime, readCookie,
-  type AuthEnv,
-} from '../auth/session';
+import { AuthError, authenticateRequest, isFreshAuthTime, type AuthEnv } from '../auth/session';
+import { CLI_APPROVAL_CSRF_COOKIE_NAME, readCookie } from '../auth/cookies';
 import { CLI_PREVIEW_ENTRY_PATH, publicHtmlHeaders, type LabelSignerEnv, type PreviewSuffixEnv } from '@kinu.run/core';
 import { previewEntry } from '../nimbus-route';
 import { approvalDocument, installDocument } from '@kinu.run/core';

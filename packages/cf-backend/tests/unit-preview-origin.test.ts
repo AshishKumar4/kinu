@@ -21,9 +21,8 @@ import {
 import { publicHtmlHeaders, withAppSecurityHeaders } from '@kinu.run/core';
 import { PROVIDER_PROXY_PATH, USER_AI_PROXY_PATH, USER_AI_RUN_PATH } from '@kinu.run/core';
 import { DEPLOY_API } from '@kinu.run/core/deploy';
-import {
-  CLI_APPROVAL_CSRF_COOKIE_NAME, OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME, crossSiteRejection,
-} from '../src/auth/session';
+import { crossSiteRejection } from '../src/auth/session';
+import { CLI_APPROVAL_CSRF_COOKIE_NAME, OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME } from '../src/auth/cookies';
 import {
   handleNimbusPreviewHostRequest,
   nimbusPreviewConfigured,

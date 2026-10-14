@@ -1,4 +1,4 @@
-import { KINU_COOKIE_NAMES } from '../auth/session';
+import { KINU_COOKIE_NAMES } from '../auth/cookies';
 import { bearerOf, parseCliBearer } from '../cli/auth-store';
 
 /**
