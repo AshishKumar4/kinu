@@ -398,45 +398,6 @@ export class ActorSession {
     };
   }
 
-  /** Open a durable assignment. The lease's turn id is the delivery identity, so a re-drive admits a task once,
-   *  even beside an equal text. Birth context applies only before the first turn. */
-  async openDelegatedTurn(lease: ActorTurnLease, input: {
-    readonly messages: readonly ModelMessage[];
-    readonly birthContext: () => Promise<readonly ModelMessage[]>;
-  }): Promise<void> {
-    await this.restorations(async () => undefined);
-
-    const assertOwner = this.preparingTurnFence(lease, 'delegated input requires a preparing turn');
-    const active = this.requireTurn(lease);
-
-    // Answered by an execution of this run before: its branch already holds the input and the answer, which this one
-    // only closes over ({@link answeredBefore}); seeded again, it would lose the answer it closes.
-    if (active.reserved !== null && answeredBefore(active.reserved, lease)) {
-      const answered = await this.canonical.materialize();
-      active.context = answered;
-      this.messages.splice(0, this.messages.length, ...answered.messages);
-
-      return;
-    }
-
-    const selected = this.canonical.context.selected() ?? this.canonical.context.initialize();
-
-    if (selected.revision === 0 && this.canonical.context.conversationOf(this.canonical.context.entries(selected)).length === 0 && this.canonical.proposals.pending(selected.contextId).length === 0) {
-      const birth = await input.birthContext();
-
-      if (birth.length > 0) await this.canonical.replaceHistory(birth, { author: this.actorId, via: 'runtime', turnId: null, stage: false, assertOwner });
-    }
-
-    for (const [index, message] of input.messages.entries()) {
-      const reference = await this.canonical.admitInput({ id: index === 0 ? lease.turnId : `${lease.turnId}:input:${index}`, message, turnId: lease.turnId, assertOwner });
-      this.canonical.activateInput(reference, lease.turnId, assertOwner);
-    }
-
-    const opened = await this.canonical.materialize();
-    this.requireTurn(lease).context = opened;
-    this.messages.splice(0, this.messages.length, ...opened.messages);
-  }
-
   /** A delivery turn (`metadata.drainTurnId`) opens on the settled working revision; others append. */
   async openTurnInput(lease: ActorTurnLease, input: {
     readonly item: Pick<ChatTurnInput, 'metadata'>;
