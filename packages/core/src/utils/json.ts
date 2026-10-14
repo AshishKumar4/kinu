@@ -1,6 +1,7 @@
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import { classify, renderThrownChain, settleSync } from '../obs/index';
+import { headEnd } from './text';
 
 export type JsonPrimitive = string | number | boolean | null;
 
@@ -156,6 +157,9 @@ function projected(input: { value: unknown }): Effect.Effect<JsonValue> {
 /** One truncation limit so durable records of the same call agree. */
 const DIGEST_LIMIT = 800;
 
+/** The digest's first `DIGEST_LIMIT` units, short of a surrogate pair the limit would split. */
+const digestCut = (text: string): string => text.slice(0, headEnd(text, DIGEST_LIMIT));
+
 /** Bounded projection for durable records; oversized values degrade to a truncated JSON string ending in `…`. */
 export function digestJsonValue(input: { value: unknown }): JsonValue | undefined {
   const absent = v.safeParse(v.union([v.null(), UndefinedSchema]), input.value);
@@ -163,21 +167,19 @@ export function digestJsonValue(input: { value: unknown }): JsonValue | undefine
   if (absent.success) return absent.output;
   const text = v.safeParse(v.string(), input.value);
 
-  if (text.success) {
-    return text.output.length > DIGEST_LIMIT ? text.output.slice(0, DIGEST_LIMIT) + '...' : text.output;
-  }
+  if (text.success) return text.output.length > DIGEST_LIMIT ? digestCut(text.output) + '...' : text.output;
 
   return settleSync(Effect.try({
     try: (): JsonValue => {
       const json = projectJsonValue(input);
       const serialized = JSON.stringify(json);
 
-      return serialized.length <= DIGEST_LIMIT ? json : serialized.slice(0, DIGEST_LIMIT) + '...';
+      return serialized.length <= DIGEST_LIMIT ? json : digestCut(serialized) + '...';
     },
     catch: (cause) => ({ cause }),
   }).pipe(
     // `String()` would give "[object Object]"; the reason takes its place.
-    Effect.catch((failed) => Effect.succeed(`unserializable digest input: ${renderThrownChain(failed)}`.slice(0, DIGEST_LIMIT))),
+    Effect.catch((failed) => Effect.succeed(digestCut(`unserializable digest input: ${renderThrownChain(failed)}`))),
   ));
 }
 
