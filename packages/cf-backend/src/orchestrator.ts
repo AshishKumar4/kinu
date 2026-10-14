@@ -3779,7 +3779,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     if (!applied) return false;
     this._titleCache = { displayName, nameOrigin: origin };
     this._titleHydrated = true;
-    this.broadcast(JSON.stringify({ type: 'workspace_renamed', displayName }));
 
     return true;
   }

@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-10-13",
+  "measuredAt": "2026-10-14",
   "counts": {
     "packages/cf-backend/src/activation-gate.ts#throw": 1,
     "packages/cf-backend/src/actor-agent.ts#catch": 9,
@@ -35,11 +35,10 @@
     "packages/cf-backend/src/files-routes.ts#catch": 2,
     "packages/cf-backend/src/files-routes.ts#throw": 1,
     "packages/cf-backend/src/gallery-agent-stub.ts#promise-rejection": 1,
-    "packages/cf-backend/src/hooks/use-chat-owner.ts#catch": 10,
+    "packages/cf-backend/src/hooks/use-chat-owner.ts#catch": 9,
     "packages/cf-backend/src/hooks/use-chat-owner.ts#throw": 2,
     "packages/cf-backend/src/hooks/use-copy.ts#promise-rejection": 1,
     "packages/cf-backend/src/hooks/use-workspace-reads.ts#catch": 5,
-    "packages/cf-backend/src/hooks/use-workspace-reads.ts#throw": 1,
     "packages/cf-backend/src/index.tsx#throw": 1,
     "packages/cf-backend/src/landing.tsx#throw": 1,
     "packages/cf-backend/src/orchestrator.ts#catch": 2,
@@ -80,7 +79,7 @@
     "packages/cf-backend/src/user/user-do.ts#throw": 1,
     "packages/cf-backend/src/user/workspaces.ts#catch": 3,
     "packages/cf-backend/src/user/workspaces.ts#error-class": 1,
-    "packages/cf-backend/src/user/workspaces.ts#throw": 10,
+    "packages/cf-backend/src/user/workspaces.ts#throw": 9,
     "packages/cf-backend/src/workspace-host.ts#catch": 2,
     "packages/cf-backend/src/workspace-host.ts#throw": 4,
     "packages/cli-backend/src/agent-host/host.ts#catch": 7,

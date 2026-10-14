@@ -2009,12 +2009,7 @@ export class LocalAgentSession {
 
     if (planWorkspaceTitle(state) === null) return;
     await applyWorkspaceTitle(state, {
-      persist: (name) => {
-        if (!persistAutoTitle(this.config, name)) return false;
-        this.host.broadcast({ type: 'workspace_renamed', displayName: name });
-
-        return true;
-      },
+      persist: (name) => persistAutoTitle(this.config, name),
       suggest: (text) => this.suggestTitle(text),
     });
   }
