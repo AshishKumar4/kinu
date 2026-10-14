@@ -11,7 +11,6 @@
   "asymmetry SleepTimeLaneDeps.account#absent-in-cli",
   "movable packages/cf-backend/src/assets-hosts.ts",
   "movable packages/cf-backend/src/components/model-picker-options.ts",
-  "movable packages/cf-backend/src/components/ui/Status.tsx",
   "movable packages/cf-backend/src/egress/keyed-socket.ts",
   "movable packages/cf-backend/src/egress/model-relay-route.ts",
   "movable packages/cf-backend/src/slates/sources.ts",

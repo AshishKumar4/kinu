@@ -96,7 +96,7 @@ export default {
       const answer = tierModel(asked);
 
       if (answer.rateLimited !== undefined) {
-        const limited = rateLimitedAnswer(answer.rateLimited.retryAfterSeconds);
+        const limited = rateLimitedAnswer(answer.rateLimited);
 
         return new Response(limited.body, { status: limited.status, headers: limited.headers });
       }

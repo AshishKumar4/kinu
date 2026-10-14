@@ -93,7 +93,7 @@ export async function startScriptedModel(script: ScriptedModel): Promise<Scripte
         answers.push(answer);
 
         if (answer.rateLimited !== undefined) {
-          const limited = rateLimitedAnswer(answer.rateLimited.retryAfterSeconds);
+          const limited = rateLimitedAnswer(answer.rateLimited);
 
           response.writeHead(limited.status, limited.headers);
           response.end(limited.body);
@@ -271,7 +271,7 @@ export const TURN_WAIT_SECONDS = 4;
 /** Short, so the logo asks again soon after each refusal. */
 const LOGO_WAIT_SECONDS = 3;
 
-/** The ask whose calls are refused as a per-minute rate limit is, stating no wait, for a minute from the first. */
+/** The ask whose calls Workers AI's per-minute limit refuses, stating no wait header, for a minute from the first. */
 export const MINUTE_LIMITED_ASK = 'Minute limit probe: answer once the minute is up.';
 
 export const MINUTE_WAITED_OUT = 'Waited out the minute.';
@@ -318,7 +318,7 @@ export function providerWaitTurn(request: ScriptedRequest, probe: ProviderWaitPr
   if (request.streamed && (request.userTexts.at(-1) ?? '').includes(MINUTE_LIMITED_ASK)) {
     probe.minuteFrom ??= Date.now();
 
-    return Date.now() - probe.minuteFrom < MINUTE_MS ? { rateLimited: {} } : { text: MINUTE_WAITED_OUT };
+    return Date.now() - probe.minuteFrom < MINUTE_MS ? { rateLimited: { perMinute: true } } : { text: MINUTE_WAITED_OUT };
   }
 
   if (!request.streamed || !(request.userTexts.at(-1) ?? '').includes(WAITED_TURN_ASK)) return null;

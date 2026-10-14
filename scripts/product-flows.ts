@@ -2192,7 +2192,7 @@ export async function openMemoryFollowsItsWriter(target: FlowTarget): Promise<Li
 
 export interface SlatePreviewVerdict {
   readonly workspace: string;
-  /** Whether the strip drew a tab under the slate's title once the turn ended. */
+  /** Whether the bar held a page under the slate's title once the turn ended. */
   readonly slateTab: boolean;
   /** The slate's preview frame's page text once its React page drew; null when no frame drew. */
   readonly frameText: string | null;
@@ -2200,13 +2200,20 @@ export interface SlatePreviewVerdict {
   readonly bumped: string | null;
   /** Whether the page heard its host's context. */
   readonly hosted: boolean;
-  /** Every tab of the inspector's Pages strip, by the name it shows: a slate's is its title, never its preview's port
+  /** Every page of the inspector's bar, by the name it shows: a slate's is its title, never its preview's port
    *  ("workspace :20000", 1008-f). */
   readonly pageTabs: readonly string[];
 }
 
-/** The names the inspector's Pages strip shows, one per tab: its links, not the actions beside them ("Share Flow probe"). */
-export const PAGE_TABS = `[...document.querySelectorAll('#inspector nav[aria-label="Pages"] li button[aria-label]')].map((tab) => tab.getAttribute('aria-label') ?? '')`;
+/**
+ * Every page the inspector's bar holds, by the name it shows: its chips' links (not the actions beside them, "Share Flow
+ * probe"), then the pages behind its opener, as its tooltip names them, comma-separated. A page without room is still
+ * the bar's. The flows' slate titles hold no comma.
+ */
+export const PAGE_TABS = `[
+  ...[...document.querySelectorAll('#inspector nav[aria-label="Pages"] li button[aria-label]')].map((tab) => tab.getAttribute('aria-label') ?? ''),
+  ...(document.querySelector('#inspector nav[aria-label="Pages"] button[aria-haspopup="menu"]')?.getAttribute('title') ?? '').split(', '),
+].filter((name, index, names) => name !== '' && names.indexOf(name) === index)`;
 
 /**
  * Row: a slate the agent builds shows its running preview in its own tab.
@@ -2228,13 +2235,13 @@ export async function slateShowsItsPreview(target: FlowTarget): Promise<SlatePre
     await settledAfter(page, ledger);
     await openInspector(page);
 
-    const slateTab = v.parse(v.boolean(), await page.evaluate(stripHas(FLOW_SLATE.title)));
+    const slateTab = v.parse(v.boolean(), await page.evaluate(`${PAGE_TABS}.includes(${JSON.stringify(FLOW_SLATE.title)})`));
     let frameText: string | null = null;
     let bumped: string | null = null;
     let hosted = false;
 
     if (slateTab) {
-      await page.evaluate(stripTab(FLOW_SLATE.title));
+      await openInspectorPage(page, FLOW_SLATE.title);
 
       const frameSelector = `#inspector iframe[title="${FLOW_SLATE.id}"]`;
 

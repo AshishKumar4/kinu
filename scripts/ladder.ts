@@ -2279,14 +2279,14 @@ export const LADDER: readonly Gate[] = [
     label: 'Live app in a browser: a wait on the provider',
     tier: 'deploy',
     // Measured 2026-10-13 on armada by `bun scripts/gate-cost-measure.ts --only=<this row>` at 059486671: 218.8 s wall,
-    // the minute-limited turn's 60-120 s of waiting by design among them.
+    // when the minute-limited turn waited 60-120 s; it waits one stated minute now, so the measure is an upper bound.
     seconds: 220,
     catches: 'the shipped workspace page as it waits on a rate-limited provider, on `vite dev` (workerd with real Durable '
       + 'Objects) driven in Chrome against a scripted model that refuses with 429s. A wait shows over the composer only while '
       + 'it holds the chat\'s turn, counting down and never at 0s: the workspace\'s logo, drawn from Settings beside the open '
-      + 'chat and refused, shows nothing there (#88). A turn its provider limits for a minute, stating no wait as Workers AI '
-      + 'does, answers by itself instead of stopping, and the composer counts which retry it waits for.',
-    blind: 'one workspace per scenario, one viewport, one scripted model whose refusals carry no body Workers AI sends; '
+      + 'chat and refused, shows nothing there (#88). A turn Workers AI refuses for its per-minute limit, its `3021` body '
+      + 'and no wait header, waits out the minute once and answers by itself, the composer showing the wait and its retry.',
+    blind: 'one workspace per scenario, one viewport, one scripted model sending Workers AI\'s recorded refusal body; '
       + 'a real provider\'s limits, a header-stated wait, and a refusal that outlasts every retry are the unit rows\' '
       + '(`packages/core/tests/unit-model-retry.test.ts`). A LOCAL dev server, not production.',
     inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
