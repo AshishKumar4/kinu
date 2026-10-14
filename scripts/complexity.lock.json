@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-14",
-  "files": 3287,
-  "functions": 86076,
+  "files": 3295,
+  "functions": 86288,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -218,10 +218,6 @@
       "complexity": 28
     },
     {
-      "key": "packages/core/src/identity/workspace-actors.ts#WorkspaceActorDirectory.apply",
-      "complexity": 28
-    },
-    {
       "key": "packages/core/src/strategy/swarm-resume.ts#outcomeFacts",
       "complexity": 28
     },
@@ -375,6 +371,10 @@
     },
     {
       "key": "packages/core/src/identity/archive.ts#readWorkspaceArchivePage>gen",
+      "complexity": 26
+    },
+    {
+      "key": "packages/core/src/identity/workspace-actors.ts#WorkspaceActorDirectory.apply",
       "complexity": 26
     },
     {
