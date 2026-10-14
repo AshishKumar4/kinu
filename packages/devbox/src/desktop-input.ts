@@ -3,25 +3,12 @@
  * agent driving at a time. What runs on the box is decided here; the box runs it.
  */
 import * as v from 'valibot';
-
-/** How long a driver keeps the screen after its last call before another agent may take it by looking. */
-const DESKTOP_LEASE_MS = 30_000;
-
-/** The bound on one action's xdotool run: the longest, a 50-click scroll on each axis, takes about 2 s. An action that
- *  waits by design (a held key, a watch) is bounded at its wait and this. */
-export const DESKTOP_ACTION_MS = 5_000;
+import { WATCH_SHEET } from './desktop';
 
 /** The longest a key is held, and the longest a watch looks. */
 const KEY_HOLD_MAX_MS = 10_000;
 
 const WATCH_MAX_SECONDS = 10;
-
-/** The most frames one watch returns. */
-const WATCH_MAX_FRAMES = 8;
-
-/** The bound on the desktop check: a few times a fresh X's start, so a wedged X fails a call rather than holding every
- *  later one, and the box's rest, behind it. */
-export const DESKTOP_CHECK_MS = 60_000;
 
 const Coordinate = v.pipe(v.number(), v.integer(), v.minValue(0));
 
@@ -34,11 +21,13 @@ const Wheel = v.pipe(v.number(), v.integer(), v.minValue(-50), v.maxValue(50));
 
 export const DesktopRequestSchema = v.object({
   driver: v.pipe(v.string(), v.nonEmpty()),
+  /** The id `killExec` ends the action by, as an exec's (D69): its caller's stop ends its run. */
+  execId: v.optional(v.pipe(v.string(), v.nonEmpty())),
   action: v.variant('kind', [
     v.object({ kind: v.literal('screenshot') }),
     v.object({
       kind: v.literal('watch'), seconds: v.pipe(v.number(), v.minValue(0.5), v.maxValue(WATCH_MAX_SECONDS)),
-      frames: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(WATCH_MAX_FRAMES)),
+      frames: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(WATCH_SHEET.columns.length)),
     }),
     v.object({
       kind: v.literal('click'), at: Point, button: v.picklist(['left', 'right', 'middle']),
@@ -73,79 +62,37 @@ export interface DesktopScreen {
 const BUTTONS = { left: '1', middle: '2', right: '3' } as const;
 
 /**
- * A watch's sheet: each frame at half the screen's size, as scrot's own thumbnail, two to a row up to four frames and
- * four to a row past that, in reading order. Measured (D89): four half-size frames cost what one screenshot does and
- * read as well; eight at a third lost the screen's small text on both models.
+ * A watch: its frames taken evenly over its window, the last at its end, each by scrot with the pointer drawn in; then
+ * their thumbnails tiled into one PNG on stdout by Pillow, which the image carries (python3-pil, D89). Its arguments: a
+ * name for the run, the seconds, the frames, the thumbnail's percent and the columns.
  */
-const WATCH_PERCENT = 50;
-
-/** The sheet's columns for `frames` frames. */
-function watchColumns(frames: number): number {
-  if (frames <= 2) return frames;
-
-  return frames <= 4 ? 2 : 4;
-}
-
-/**
- * A watch, in Python because the image carries it and no image tool: its frames taken evenly over its window, the last
- * at its end, each by scrot with the pointer drawn in; then their thumbnails, which scrot writes as PPM, tiled into one
- * PNG on stdout. Its arguments: a name for the run, the seconds, the frames, the thumbnail's percent and the columns.
- */
-const WATCH_PY = String.raw`import os, shutil, struct, subprocess, sys, tempfile, time, zlib
+const WATCH_PY = String.raw`import os, shutil, subprocess, sys, tempfile, time
+from PIL import Image
 
 seconds, frames, percent, cols = float(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5])
-
-
-def ppm(path):
-    data = open(path, 'rb').read()
-    fields, at = [], 0
-    while len(fields) < 4:
-        while data[at:at + 1].isspace():
-            at += 1
-        if data[at:at + 1] == b'#':
-            at = data.index(b'\n', at) + 1
-            continue
-        end = at
-        while not data[end:end + 1].isspace():
-            end += 1
-        fields.append(data[at:end])
-        at = end
-    width, height = int(fields[1]), int(fields[2])
-    return width, height, data[at + 1:at + 1 + width * height * 3]
-
-
-def chunk(kind, body):
-    return struct.pack('>I', len(body)) + kind + body + struct.pack('>I', zlib.crc32(kind + body))
-
-
 folder = tempfile.mkdtemp()
 try:
     start, tiles = time.monotonic(), []
     for at in range(frames):
         due = seconds if frames == 1 else at * seconds / (frames - 1)
         time.sleep(max(0.0, start + due - time.monotonic()))
-        path = folder + '/f%d.ppm' % at
-        subprocess.run(['scrot', '-o', '-p', '-t', str(percent), path], check=True, env=dict(os.environ, DISPLAY=':0'))
-        tiles.append(ppm(folder + '/f%d-thumb.ppm' % at))
-    width, height = tiles[0][0], tiles[0][1]
-    rows = -(-len(tiles) // cols)
-    raw = bytearray()
-    for row in range(rows):
-        across = tiles[row * cols:(row + 1) * cols]
-        for line in range(height):
-            raw += b'\x00'
-            for tile in across:
-                raw += tile[2][line * width * 3:(line + 1) * width * 3]
-            raw += b'\xff' * (width * 3 * (cols - len(across)))
-    head = struct.pack('>IIBBBBB', width * min(cols, len(tiles)) if rows == 1 else width * cols, height * rows, 8, 2, 0, 0, 0)
-    sys.stdout.buffer.write(b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', head) + chunk(b'IDAT', zlib.compress(bytes(raw), 6)) + chunk(b'IEND', b''))
+        subprocess.run(['scrot', '-o', '-p', '-t', str(percent), '%s/f%d.ppm' % (folder, at)], check=True, env=dict(os.environ, DISPLAY=':0'))
+        tiles.append(Image.open('%s/f%d-thumb.ppm' % (folder, at)).convert('RGB'))
+    width, height = tiles[0].size
+    sheet = Image.new('RGB', (width * min(cols, len(tiles)), height * -(-len(tiles) // cols)), 'white')
+    for at, tile in enumerate(tiles):
+        sheet.paste(tile, ((at % cols) * width, (at // cols) * height))
+    sheet.save(sys.stdout.buffer, 'PNG')
 finally:
     shutil.rmtree(folder, ignore_errors=True)
 `;
 
 /** A watch's run: its program and arguments. */
 export function watchArgv(action: { readonly seconds: number; readonly frames: number }): string[] {
-  return ['python3', '-c', WATCH_PY, 'devbox-watch', String(action.seconds), String(action.frames), String(WATCH_PERCENT), String(watchColumns(action.frames))];
+  // The request's frames are within the layout's table (DesktopRequestSchema); past it would be its widest row.
+  const columns = WATCH_SHEET.columns[action.frames - 1] ?? Math.max(...WATCH_SHEET.columns);
+
+  return ['python3', '-c', WATCH_PY, 'devbox-watch', String(action.seconds), String(action.frames), String(WATCH_SHEET.percent), String(columns)];
 }
 
 /** Captured with the pointer drawn in, read back and removed in the same run. */
@@ -212,13 +159,6 @@ function pointsOf(action: DesktopAction): ReadonlyArray<readonly [number, number
   return 'at' in action ? [action.at] : [];
 }
 
-/** How long an action may take: the bound, and the wait it makes by design. */
-export function actionBoundMs(action: DesktopAction): number {
-  if (action.kind === 'watch') return DESKTOP_ACTION_MS + action.seconds * 1000;
-
-  return DESKTOP_ACTION_MS + (action.kind === 'key' ? action.holdMs ?? 0 : 0);
-}
-
 /** The action's points that fall outside `screen`, as the refusal names them. */
 export function offScreen(action: DesktopAction, screen: DesktopScreen): string | null {
   const points = pointsOf(action);
@@ -241,37 +181,38 @@ export function pngSize(png: Uint8Array): DesktopScreen | null {
 }
 
 /**
- * Who drives the screen. An agent takes it by looking when no other agent called in the last {@link DESKTOP_LEASE_MS};
- * input is accepted only from the agent that holds it, so every action lands on a screen its agent saw while it held it.
- * The owner is not a driver: they use their screen as they like.
+ * Who drives the screen (D89). An agent takes it by looking when nobody holds it, and holds it until its turns end, it
+ * is stopped, or X starts afresh: however long it thinks between looks. Input is accepted only from the agent that holds
+ * it, so every action lands on a screen its agent saw while it held it. The owner is not a driver: they use their screen
+ * as they like.
  */
 export class DesktopLease {
-  #driver: { readonly id: string; at: number } | null = null;
+  #driver: string | null = null;
 
   /** A screen X started afresh is nobody's: what any agent saw before it is gone. */
   clear(): void {
     this.#driver = null;
   }
 
-  /** Whether `driver` may act now; looking takes the screen when it is free, and every call it may make keeps it. */
-  admit(driver: string, looking: boolean, now: number): DesktopAnswer | null {
+  /** `driver`'s turns ended, or it was stopped: the screen is free, if it held it. */
+  release(driver: string): void {
+    if (this.#driver === driver) this.#driver = null;
+  }
+
+  /** Whether `driver` may act now; looking takes the screen when it is free. */
+  admit(driver: string, looking: boolean): DesktopAnswer | null {
     const held = this.#driver;
-    const free = held === null || held.id === driver || now - held.at > DESKTOP_LEASE_MS;
 
-    if (held !== null && held.id === driver) {
-      held.at = now;
-
-      return null;
-    }
+    if (held === driver) return null;
 
     if (looking) {
-      if (free) this.#driver = { id: driver, at: now };
+      if (held === null) this.#driver = driver;
 
       return null;
     }
 
-    return free
+    return held === null
       ? { kind: 'refused', reason: 'look_first', detail: 'take a screenshot first: input acts on the screen you last saw.' }
-      : { kind: 'refused', reason: 'driven', detail: `another agent of this workspace drives the desktop; it is free ${String(DESKTOP_LEASE_MS / 1000)} s after its last call.` };
+      : { kind: 'refused', reason: 'driven', detail: "another agent of this workspace drives the desktop; it is free once that agent's turn ends." };
   }
 }

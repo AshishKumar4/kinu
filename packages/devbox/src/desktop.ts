@@ -13,6 +13,13 @@ const SESSION = '/usr/local/share/devbox/desktop';
 export const DESKTOP_SIZE = { width: 1280, height: 768 } as const;
 
 /**
+ * How `computer.watch` tiles its frames (D89): each at `percent` of the screen's width and height, scrot's own thumbnail,
+ * `columns[n - 1]` to a row for `n` frames, in reading order; as many frames as `columns` has at most. Measured: four
+ * half-size frames read as well as four screenshots and cost what one does; eight at a third lost small text.
+ */
+export const WATCH_SHEET = { percent: 50, columns: [1, 2, 2, 2, 4, 4, 4, 4] } as const;
+
+/**
  * The desktop's look (D88): its ground falls from `background` at the top to `foot` and glows in `glow` from below the
  * panel; the panel and the windows' frames are the same warm darks, and the open window carries `glow` under its task.
  */

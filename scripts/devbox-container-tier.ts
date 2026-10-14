@@ -23,7 +23,7 @@ import { CONTAINER_CONTRACTS, DISK_CONTRACTS } from '../packages/devbox/bench/co
 import { shellQuote } from '../packages/core/src/utils/shell';
 import { withTestChrome } from './test-chrome';
 import { DESKTOP_COLOURS, DESKTOP_PANEL, DESKTOP_SIZE } from '../packages/devbox/src/desktop';
-import { GRID, GRID_POINTS, HOLD, RANGE, SCROLL, TEXT, TICKER, sheet } from './fixtures/devbox-e2e/desktop-pages';
+import { DISTINCT_PY, GRID, GRID_POINTS, HOLD, KEYS_DOWN_PY, RANGE, SCROLL, TEXT, TICKER, sizeOf } from './fixtures/devbox-e2e/desktop-pages';
 
 const REPO = join(import.meta.dir, '..');
 
@@ -517,8 +517,21 @@ async function main(): Promise<void> {
   const desktopAgent = async () => {
     await step('desktop-agent', async () => {
       const fresh = names[5] ?? '';
-      const desk = (member: string, args: readonly unknown[] = [], driver = 'agent') => call('/agent-desktop', AgentAnswer, { driver, member, args: JSON.stringify(args) }, fresh);
+      const desk = (member: string, args: readonly unknown[] = [], driver = 'agent', stop?: string) => call('/agent-desktop', AgentAnswer, { driver, member, args: JSON.stringify(args), ...(stop !== undefined && { stop }) }, fresh);
       const sh = (command: string) => shell(command, fresh);
+
+      /** How many of a PNG's `cols`×`rows` tiles differ from every other, read on the box by its own Pillow. */
+      const distinct = async (url: string, cols: number, rows: number): Promise<number> => {
+        const data = url.slice(url.indexOf(',') + 1);
+
+        await sh('mkdir -p /tmp/kinu-desk && rm -f /tmp/kinu-desk/sheet.b64');
+
+        // Base64 needs no quoting; in pieces, as one argument is held under the kernel's limit.
+        for (let at = 0; at < data.length; at += 60_000) await sh(`printf %s ${data.slice(at, at + 60_000)} >>/tmp/kinu-desk/sheet.b64`);
+
+        return Number(await sh(`base64 -d /tmp/kinu-desk/sheet.b64 >/tmp/kinu-desk/sheet.png && python3 -c ${shellQuote(DISTINCT_PY)} /tmp/kinu-desk/sheet.png ${String(cols)} ${String(rows)}`));
+      };
+
       const title = async () => (await sh('xdotool getactivewindow getwindowname 2>/dev/null || true')).replace(/ - Chromium$/u, '');
 
       const until = async (what: string, seen: (now: string) => boolean): Promise<string> => {
@@ -536,7 +549,7 @@ async function main(): Promise<void> {
       const one = 'Xkasmvnc=1 openbox=1 tint2=1 Xvfb=0';
 
       // A box whose desktop never opened: the first look starts it, at the screen's size; looks at once share it.
-      requireEqual(sheet(v.parse(Screen, await desk('screenshot'))).size, [1280, 768]);
+      requireEqual(sizeOf(v.parse(Screen, await desk('screenshot'))), [1280, 768]);
       await Promise.all([desk('screenshot'), desk('screenshot', [], 'other'), desk('screenshot')]);
       requireEqual(await sessions(), one);
       await sh('pkill -x tint2; pkill -x openbox; true');
@@ -613,17 +626,29 @@ async function main(): Promise<void> {
 
       if (!(held >= 700 && held <= 1_500)) throw new Error(`a key held for 800 ms was down ${String(held)} ms`);
 
+      // Stopped while its key is held: the run is ended there and the key let go at once, and the X server has no key down.
+      await open('hold');
+      const holding = desk('key', ['w', { hold: 10_000 }], 'agent', 'hold-stop');
+      await until('the held key pressed', (now) => now === 'down w');
+      requireEqual(await call('/agent-desktop-stop', v.object({ stopped: v.boolean() }), { stop: 'hold-stop' }, fresh), { stopped: true });
+      requireEqual(v.parse(Refused, await holding).reason, 'cancelled');
+      const stoppedAt = Number(/^held w (\d+)$/u.exec(await until('the stopped key let go', (now) => now.startsWith('held w ')))?.[1]);
+
+      if (!(stoppedAt < 10_000)) throw new Error(`a key stopped mid-hold was down ${String(stoppedAt)} ms, its whole hold`);
+      requireEqual(await sh(`DISPLAY=:0 python3 -c ${shellQuote(KEYS_DOWN_PY)}`), '');
+
       // A watch is one image of frames over its window: four by default, two to a row; eight, four to a row. Each frame
       // shows the page as it changed, so no two tiles are alike.
       await open('ticker');
-      const four = sheet(v.parse(Screen, await desk('watch', [2])));
-      const eight = sheet(v.parse(Screen, await desk('watch', [2, { fps: 4 }])));
-      requireEqual([four.size, four.distinct(2, 2), eight.size, eight.distinct(4, 2)], [[1280, 768], 4, [2560, 768], 8]);
+      const four = v.parse(Screen, await desk('watch', [2]));
+      const eight = v.parse(Screen, await desk('watch', [2, { fps: 4 }]));
+      requireEqual([sizeOf(four), await distinct(four, 2, 2), sizeOf(eight), await distinct(eight, 4, 2)], [[1280, 768], 4, [2560, 768], 8]);
 
       return 'a fresh box\'s desktop came up for an agent\'s look at 1280×768, once, and came back after its parts died; '
         + 'clicks of every kind, keys, text with breaks, both wheels and a drag landed where its screenshot put them; '
         + 'nothing stayed held; a point off the screen and a second agent\'s input were refused before reaching it; a key '
-        + 'was held as long as asked; a watch answered one sheet of frames that each showed the page changing';
+        + 'was held as long as asked, and let go at once when its program was stopped, with no key left down; a watch '
+        + 'answered one sheet of frames that each showed the page changing';
     });
   };
 

@@ -140,7 +140,7 @@ export async function hostedWorkspace(
     liveReadsMoved: () => undefined,
     // No box records serving here: the fixture's box exposes nothing.
     servingMoved: () => Promise.resolve(),
-    boxUse: { used: false },
+    boxUse: { used: false, drivers: new Set() },
     modelOperations: () => undefined,
     tracing: () => createAgentTracing({ tracer: createRecordingTracer(), isolateGen: 1, selfPath: [], actor: { id: main.actorId, kind: 'main' } }),
     slate: () => Promise.resolve({ ok: false, success: false, reason: 'unavailable', error: 'no slate host in this fixture' }),

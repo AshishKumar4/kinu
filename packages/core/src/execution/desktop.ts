@@ -71,14 +71,39 @@ export const TypedTextSchema = v.pipe(v.string(), v.nonEmpty(), v.maxLength(4_00
 /** How long `watch` looks: long enough for an animation or a page's load, short enough to stay one call. */
 export const WatchSecondsSchema = v.pipe(v.number(), v.minValue(0.5), v.maxValue(10));
 
-/** Frames a second `watch` samples; it never takes more than {@link WATCH_FRAMES} over its window. */
+/** Frames a second `watch` samples; it never takes more frames than its sheet's layout holds. */
 export const WatchFpsSchema = v.pipe(v.number(), v.minValue(0.1), v.maxValue(30));
 
-/** The most frames one `watch` returns, in one image. */
-export const WATCH_FRAMES = 8;
-
-/** The frames a `watch` takes when not asked: four half-size frames cost what one screenshot does (D89). */
+/** The frames a `watch` takes when not asked. */
 export const WATCH_DEFAULT_FRAMES = 4;
+
+/**
+ * The desktop as the box runs it, from the box's own constants: its size, and how a watch tiles its frames: each at
+ * `percent` of the screen's width and height, `columns[n - 1]` to a row for `n` frames, at most as many as `columns`.
+ */
+export interface DesktopScreen {
+  readonly width: number;
+  readonly height: number;
+  readonly sheet: { readonly percent: number; readonly columns: readonly number[] };
+}
+
+/** The image a watch answers: its size, and how many screenshots' worth of pixels that is, which is what it costs. */
+export interface WatchImage {
+  readonly width: number;
+  readonly height: number;
+  readonly screenshots: number;
+}
+
+/** The image a watch of `frames` frames answers on `screen`. */
+export function watchSheet(screen: DesktopScreen, frames: number): WatchImage {
+  const { percent, columns } = screen.sheet;
+  const across = Math.min(frames, columns[frames - 1] ?? Math.max(...columns));
+  const tile = { width: Math.floor(screen.width * percent / 100), height: Math.floor(screen.height * percent / 100) };
+  const width = tile.width * across;
+  const height = tile.height * Math.ceil(frames / across);
+
+  return { width, height, screenshots: (width * height) / (screen.width * screen.height) };
+}
 
 /** How long `key` holds its chord down, as a game reads a held key. */
 export const KeyHoldSchema = v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(10_000));
@@ -200,10 +225,12 @@ function answered(member: DesktopMember, answer: DesktopAnswer): ExecutorToolRes
 }
 
 export interface DesktopDeps {
-  /** The box's desktop; absent, no computer is configured. */
-  readonly box: ((request: DesktopRequest) => Promise<DesktopAnswer>) | undefined;
+  /** The box's desktop, which `signal` stops; absent, no computer is configured. */
+  readonly box: ((request: DesktopRequest, signal: AbortSignal | undefined) => Promise<DesktopAnswer>) | undefined;
   /** This agent, as the box tells drivers apart. */
   readonly driver: string;
+  /** The most frames a watch takes: what the box's sheet holds. */
+  readonly frames: number;
   readonly notConfigured: () => Refusal;
 }
 
@@ -231,9 +258,12 @@ export function desktopTools(deps: DesktopDeps): Record<string, ExecutorTool> {
         return refusalOf(new KinuError('denied', `computer.${member}: this program was moved to the background; the screen is driven from the turn in the foreground.`));
       }
 
+      // The program's stop reaches the box, which ends the action's run and lets go of what it held before answering.
       answer = yield* Effect.tryPromise({
-        try: () => box({ driver: deps.driver, action }),
-        catch: (cause) => toKinuError({ doing: `computer.${member}`, cause, otherwise: 'unavailable' }),
+        try: () => box({ driver: deps.driver, action }, context.signal),
+        catch: (cause) => (context.signal?.aborted === true
+          ? new KinuError('cancelled', `computer.${member}: its program stopped, so its action on the screen was ended.`)
+          : toKinuError({ doing: `computer.${member}`, cause, otherwise: 'unavailable' })),
       });
 
       if (answer.kind === 'refused') break;
@@ -259,7 +289,7 @@ export function desktopTools(deps: DesktopDeps): Record<string, ExecutorTool> {
   const members = {
     screenshot: member('screenshot', 'The desktop the owner watches, as a PNG data URL.', v.object({}), () => [{ kind: 'screenshot' }]),
     watch: member('watch', 'The desktop over a few seconds, as one PNG data URL of its frames.', v.object({ seconds: WatchSecondsSchema, fps: v.optional(WatchFpsSchema) }), ({ seconds, fps }) => [{
-      kind: 'watch', seconds, frames: fps === undefined ? WATCH_DEFAULT_FRAMES : Math.max(1, Math.min(WATCH_FRAMES, Math.round(seconds * fps))),
+      kind: 'watch', seconds, frames: fps === undefined ? Math.min(WATCH_DEFAULT_FRAMES, deps.frames) : Math.max(1, Math.min(deps.frames, Math.round(seconds * fps))),
     }]),
     click: member('click', 'Click at a point of the screen.', ClickSchema, ({ at, button = 'left', count = 1, hold }) => {
       const held = hold === undefined ? [] : desktopChord(hold, true);

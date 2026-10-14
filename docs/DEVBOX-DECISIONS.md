@@ -4654,30 +4654,35 @@ frames. The container tier's desktop check reads the glow above the panel as wel
 D89. An agent drives the desktop the owner watches, one action at a time (2026-10-14, issue #100). The owner asked an
 agent to use the computer while its desktop was open in the Env panel; the agent found no `DISPLAY`, installed Xvfb,
 started a second screen nobody could see, and could not read the PNG it took of it. Now the box answers
-`desktop({ driver, action })`, which `computer.screenshot()`, `click`, `type`, `key`, `scroll`, `move` and `drag`
-send one action at a time. Each call first runs the desktop check, the start script that the owner's socket route
+`desktop({ driver, action, execId })`, which `computer.screenshot()`, `watch`, `click`, `type`, `key`, `scroll`,
+`move` and `drag` send one action at a time. Each call first runs the desktop check, the start script that the owner's socket route
 also runs, single-flight, so a look and a pane opened at once share one session; the check brings back any part of
 the session that died and ends by printing X's own geometry. The session's files and its background are written only
-by a run that starts X, so a check on a running desktop costs a few `pgrep`s. It is bounded at 60 s, a few times a fresh X's start:
-an X that stays alive and never opens its port would otherwise hold every later desktop call, and the box's rest,
-behind it. A point off that screen is refused before any input.
-One agent drives at a time: an agent takes the screen by looking once no other agent has called in 30 s, input is
-taken only from the agent holding it, and a screen X started afresh is nobody's, so every action lands on a screen
-its agent saw. The owner is not a driver. Each action is one xdotool invocation bounded at 5 s, with no
-`mousemove --sync`, which waits about 15 s when the pointer is already at the point; what a click holds and a drag
-presses is released whether or not the run ends cleanly. It runs under a UTF-8 locale: on a real box, under the C
+by a run that starts X, so a check on a running desktop costs a few `pgrep`s. No clock bounds it or any action: a
+call whose program is stopped waits no longer, for the check or for its turn, and a check nobody waits on any more is
+ended by `killExec`, so an X that stays alive and never opens its port holds no call for good. A point off that screen
+is refused before any input.
+One agent drives at a time: an agent takes the screen by looking when nobody holds it, and holds it until its turns
+end, it is stopped, or X starts afresh, however long it thinks between looks. The workspace lets it go as the agent's
+last open turn closes, or as it is stopped; it asks the box only for an agent that drove there since the box last let
+it go, so a turn that never touched the desktop calls no box (D56). Input is taken only from the agent holding the
+screen, so every action lands on a screen its agent saw. The owner is not a driver. Each action is one run on D69's
+canonical exec path, in its own group under the caller's `execId`: the program's stop is the caller's `killExec`, which
+ends that group, and the call settles only once its process has gone and what a click holds, a drag presses or a key
+is held for has been let go, run after the process however it ended. No `mousemove --sync`, which waits about 15 s
+when the pointer is already at the point. It runs under a UTF-8 locale: on a real box, under the C
 locale the box starts in, `xdotool type -- "aüb"` typed "a" and stopped at an invalid multi-byte sequence. Under
 UTF-8 it typed "ab": Chromium dropped the ü, whose key xdotool binds for the moment of the press, at 12 ms a
 character, and took it at 150 ms. So a character past ASCII is never typed: core sends it as its own key,
 `key U00FC`, which reached Chromium every time. The capture is `scrot -p`, read back as bytes in the same
 run. A watch takes `scrot -p -t 50` at even times over its window, at most 10 s, and tiles the half-size
-thumbnails into one PNG, two to a row up to four frames and four to a row up to eight; a small Python program does
-it, as the image carries Python and no image tool. Measured on two vision models, four half-size frames in one sheet
+thumbnails into one PNG, two to a row up to four frames and four to a row up to eight; Pillow (python3-pil, which the
+tools tarball carries for the wallpaper too) does the tiling. Measured on two vision models, four half-size frames in one sheet
 cost what one screenshot does and read motion, a large word and 11 px text as well as four separate screenshots; eight
-at a third of the size lost 11 px text on both. A held key is `keydown`, a wait, `keyup` in one run, at most 10 s,
-with `keyup` again however the run ends; an action's bound is its own wait plus 5 s. Both run on the container runtime's exec directly rather than D87's `exec`: they are the box's own fixed
-commands, not a caller's; the capture is binary, which `exec` decodes as text; and xdotool's argv carries typed text
-without a shell to quote it. The screen is 1280×768, down from 1280×800: tile-based vision models resize a
+at a third of the size lost 11 px text on both. A held key is `keydown`, a wait, `keyup` in one run, at most 10 s;
+stopped mid-hold, its group is ended and `keyup` runs at once: on a real box the page saw the key let go and the X
+server reported no key down. The canonical path takes an argv as well as a command string, so xdotool's argv carries
+typed text without a shell to quote it, and it reads a capture's output as bytes. The screen is 1280×768, down from 1280×800: tile-based vision models resize a
 screenshot 800 high to 1228×768 at their default detail, and none Kinu serves resizes one 768 high, so an agent's
 points are the screen's own pixels. Every process the box starts gets `DISPLAY=:0`, so a window a program opens
 lands on that screen; the environment is `CONTAINER_ENV`, renamed from `CONTAINER_TRUST_ENV` because it no longer

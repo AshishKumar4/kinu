@@ -398,3 +398,66 @@ describe("a program awaiting a host call past a minute still gets its answer", (
       .toEqual({ result: "banana", logs: [] });
   });
 });
+
+/** A box whose desktop holds each action until its `killExec` ends it, as a held key's run does (D89). */
+function desktopBox() {
+  const sent: Array<{ readonly driver: string; readonly execId?: string }> = [];
+  const killed: string[] = [];
+  const released: string[] = [];
+  const asked = Promise.withResolvers<void>();
+  const running = new Map<string, (failure: DevboxError) => void>();
+
+  const box = {
+    resolveReadiness: async () => ({ kind: 'restored' as const }),
+    desktop: async (request: { readonly driver: string; readonly execId?: string }) => {
+      sent.push(request);
+      asked.resolve();
+
+      // The box answers once the run's process has gone and what it held is let go.
+      return await new Promise<never>((_, reject) => { running.set(request.execId ?? '', reject); });
+    },
+    killExec: async (execId: string) => {
+      killed.push(execId);
+      running.get(execId)?.(new DevboxError('cancelled', 'computer.key was stopped'));
+
+      return running.delete(execId);
+    },
+    releaseDesktop: async (driver: string) => { released.push(driver); },
+  };
+
+  const sdk: KinuDevbox = Object.create(box);
+
+  return { sent, killed, released, asked: asked.promise, handle: adaptCloudflareSandbox(sdk, async () => {}, null) };
+}
+
+describe("adaptCloudflareSandbox — the desktop", () => {
+  test("a stop ends the action on the box, by the id it was sent with, and the call settles once the box has answered", async () => {
+    const box = desktopBox();
+    const stop = new AbortController();
+    const holding = box.handle.desktop({ driver: 'main', action: { kind: 'key', keys: 'w', holdMs: 10_000 } }, { signal: stop.signal });
+
+    await box.asked;
+    stop.abort();
+
+    await expect(holding).rejects.toMatchObject({ code: 'cancelled' });
+    // One id, minted for the call: the one the box ran it under is the one the stop ended.
+    expect([box.killed.length, box.sent.map((request) => request.execId)]).toEqual([1, box.killed]);
+  });
+
+  test("an agent's end lets go of the desktop on the box once after it drove, and asks no box when it did not (D56)", async () => {
+    const box = desktopBox();
+
+    await box.handle.releaseDesktop('helper');
+
+    const stop = new AbortController();
+    const looking = box.handle.desktop({ driver: 'main', action: { kind: 'screenshot' } }, { signal: stop.signal });
+
+    await box.asked;
+    stop.abort();
+    await expect(looking).rejects.toMatchObject({ code: 'cancelled' });
+    await box.handle.releaseDesktop('main');
+    await box.handle.releaseDesktop('main');
+
+    expect(box.released).toEqual(['main']);
+  });
+});

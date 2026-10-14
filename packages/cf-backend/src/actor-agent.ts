@@ -2366,7 +2366,7 @@ export abstract class ActorAgent extends Agent<Env> {
       + unconfirmed.map((o) => `${o.requestId} (${o.detail ?? 'no detail'})`).join('; '));
   }
 
-  protected readonly boxUse: WorkspaceBoxUse = { used: false };
+  protected readonly boxUse: WorkspaceBoxUse = { used: false, drivers: new Set() };
 
   /**
    * Records which running job's command holds each exposed port, the workspace's or the box's, when that can move (a
