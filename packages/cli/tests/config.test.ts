@@ -5,7 +5,7 @@ import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, test } from "bun:test";
 import {
-  DEFAULT_WORKERS_AI_MODEL_ID, JsonObjectSchema, parseJsonValue,
+  DEFAULT_WORKERS_AI_MODEL_ID, JsonObjectSchema, OPENROUTER_DEFAULT_MODEL, parseJsonValue,
   type JsonObject, type JsonValue,
 } from "@kinu.run/core";
 import { createCLIRuntime } from '@kinu.run/cli-backend';
@@ -169,6 +169,15 @@ describe("CLI config safety", () => {
 const CLOUD_ORIGIN = "https://kinu.example.com";
 
 const CLOUD_TOKEN = ["ptc_", "0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz"].join("");
+
+describe("resolveLLMConfig — signed out, a provider's key alone", () => {
+  // The CLI named its own OpenRouter default beside the one the provider declares; the provider's is the one.
+  test("an OpenRouter key with no chosen model lands on OpenRouter's own default", async () => {
+    const out = await runResolveLLM({ providers: { openrouter: { apiKey: "or-test" } } });
+
+    expect(out).toMatchObject({ name: "openrouter", model: OPENROUTER_DEFAULT_MODEL });
+  });
+});
 
 describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
   test("derives the worker AI proxy endpoint with the platform default model", async () => {

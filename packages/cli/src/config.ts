@@ -11,6 +11,7 @@ import {
   OPENAI_BASE_URL,
   OPENAI_DEFAULT_MODEL,
   OPENROUTER_BASE_URL,
+  OPENROUTER_DEFAULT_MODEL,
   accountCredentialKey, credentialToHeaders, openWorkspaceMainActor, discoverOpenAICompatibleModels, specWithoutAccount,
   type LLMProviderConfig,
   type ModelInfo,
@@ -623,7 +624,7 @@ function preferredModelFromCredentials(file: KinuConfig): string | undefined {
 
   if (file.providers?.openai?.apiKey || process.env.OPENAI_API_KEY) return `openai/${OPENAI_DEFAULT_MODEL}`;
 
-  if (file.providers?.openrouter?.apiKey || process.env.OPENROUTER_API_KEY) return 'openrouter/openai/gpt-4o-mini';
+  if (file.providers?.openrouter?.apiKey || process.env.OPENROUTER_API_KEY) return `openrouter/${OPENROUTER_DEFAULT_MODEL}`;
 
   if (file.providers?.anthropic?.apiKey || process.env.ANTHROPIC_API_KEY) return `anthropic/${ANTHROPIC_DEFAULT_MODEL}`;
 
