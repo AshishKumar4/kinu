@@ -8,7 +8,7 @@ import {
   type PendingAction, type SlateSummary,
 } from "@kinu.run/core";
 import * as v from "valibot";
-import { explorationForkTree, OwedOwnerIntentSchema, type OwedOwnerIntent } from "@kinu.run/core";
+import { explorationForkTree, type OwedOwnerIntent } from "@kinu.run/core";
 import type {
   MemoryEntry, ForkNode, PendingConsent, AskingAgent, SubordinateActivityEvent, TabPresence,
 } from "@kinu.run/core";
@@ -43,24 +43,6 @@ export interface BranchRun {
 }
 
 export type ReadMoves = Readonly<Partial<Record<LiveRead, number>>>;
-
-const SubordinateRosterEntrySchema = v.object({
-  name: v.string(),
-  actorId: v.nullable(v.string()),
-  displayName: v.string(),
-  role: v.string(),
-  nameOrigin: v.picklist(["user", "auto"]),
-  origin: v.picklist(["user", "agent", "evolution"]),
-  lifetime: v.picklist(["durable", "task"]),
-  status: v.picklist(["idle", "working", "awaiting_input", "dismissed"]),
-  currentTask: v.nullable(v.string()),
-  createdAt: v.number(),
-  dismissedAt: v.nullable(v.number()),
-});
-
-const SubordinateMutationEnvelopeSchema = v.object({
-  subordinate: SubordinateRosterEntrySchema,
-});
 
 export interface UnavailableDevice { id: string; label: string; lastSeenAt: number | null }
 
@@ -273,7 +255,7 @@ export function useWorkspaceReads(link: ChatLink) {
   ), [refreshCurrentLiveResource, rpc]);
 
   const refreshOwedIntents = useCallback(() => refreshCurrentLiveResource(
-    "owedIntents", async () => v.parse(v.array(OwedOwnerIntentSchema), await rpc("listOwedIntents", [])), setOwedIntents,
+    "owedIntents", () => rpc("listOwedIntents", []), setOwedIntents,
   ), [refreshCurrentLiveResource, rpc]);
 
   const refreshTabPresence = useCallback(() => refreshCurrentLiveResource(
@@ -307,13 +289,7 @@ export function useWorkspaceReads(link: ChatLink) {
     "roster", async () => next, setSubordinates,
   ), [refreshCurrentLiveResource]);
 
-  const refreshRoster = useCallback(() => refreshCurrentLiveResource("roster", async () => {
-    const roster = parseSubordinateRoster({ value: await rpc("listSubordinates", []) });
-
-    if (!roster) throw new Error("Subordinate roster returned an invalid response");
-
-    return roster;
-  }, setSubordinates), [refreshCurrentLiveResource, rpc]);
+  const refreshRoster = useCallback(() => refreshCurrentLiveResource("roster", () => rpc("listSubordinates", []), setSubordinates), [refreshCurrentLiveResource, rpc]);
 
   // Stable, or the changelog hook's effect fires markChangelogSeen every render.
   const clearChangelogUnseen = useCallback(() => {
@@ -580,7 +556,7 @@ export function useWorkspaceReads(link: ChatLink) {
     try {
       await Promise.all([
         refreshExposedPorts(), refreshOwnerQuestions(), refreshOwedIntents(),
-        refreshCurrentLiveResource("roster", async () => v.parse(v.array(SubordinateRosterEntrySchema), await listedOn(snap.subordinates)), setSubordinates),
+        refreshCurrentLiveResource("roster", () => listedOn(snap.subordinates), setSubordinates),
         refreshCurrentLiveResource("consents", () => listedOn(snap.pendingConsents), setPendingConsents),
         refreshCurrentLiveResource("agents", () => listedOn(snap.workspaceAgents), setWorkspaceAgents),
       ]);
@@ -762,10 +738,7 @@ export function useWorkspaceReads(link: ChatLink) {
       },
       /** A user-chosen name permanently blocks auto-retitling (server-side). */
       renameSubordinate: async (name: string, displayName: string) => {
-        const result = v.parse(
-          SubordinateMutationEnvelopeSchema,
-          await rpc("renameSubordinateAgent", [name, displayName]),
-        );
+        const result = await rpc("renameSubordinateAgent", [name, displayName]);
 
         const entry = result.subordinate;
         await writeRoster((current) => current.map(
@@ -783,12 +756,6 @@ export function useWorkspaceReads(link: ChatLink) {
       },
     },
   };
-}
-
-function parseSubordinateRoster({ value }: { value: unknown }): SubordinateRosterEntry[] | null {
-  const parsed = v.safeParse(v.array(SubordinateRosterEntrySchema), value);
-
-  return parsed.success ? parsed.output : null;
 }
 
 function parseSubordinateActivityEvent({ value }: { value: unknown }): SubordinateActivityEvent | null {

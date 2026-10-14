@@ -10,9 +10,8 @@ import {
 import {
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_LABEL, DEFAULT_ADVISOR_MIN_SEVERITY,
   WORKSPACE_ARCHIVE_EXTENSION,
-  type ApprovalGrant, type ArchiveCursor, type ArchivePage, type EvolutionConfigView,
+  type ApprovalGrant, type ArchiveCursor, type EvolutionConfigView, type GepaRunSummary,
   type InstructionSourceRow, type InstructionSourceView, type SeekCursor,
-  ArchiveCursorSchema,
 } from "@kinu.run/core";
 import { executorLabel } from "@kinu.run/core";
 import type { ConnectionStatus } from "@/hooks/use-chat-owner";
@@ -25,24 +24,8 @@ import { Segmented } from "@/components/ui/Segmented";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { WorkspaceLogo } from "@/components/Marks";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
-import * as v from 'valibot';
 import { showing, detach, settle } from '@kinu.run/core/obs';
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
-
-const ArchivePageSchema = v.object({ lines: v.array(v.string()), next: v.nullable(ArchiveCursorSchema) });
-
-
-const GepaRunSchema = v.object({
-  runId: v.string(), target: v.string(), status: v.picklist(['running', 'completed', 'aborted']),
-  stopReason: v.nullable(v.string()), iterations: v.number(), metricCalls: v.number(), startedAt: v.number(),
-});
-
-const ProposerOutcomeSchema = v.variant('kind', [
-  v.object({ kind: v.literal('idle') }),
-  v.object({ kind: v.literal('searched'), artifactId: v.string(), version: v.nullable(v.number()), detail: v.string() }),
-]);
-
-const SkillNamesSchema = v.object({ names: v.array(v.string()) });
 
 type ApprovalMode = "strict" | "allow_all" | "deny_all";
 
@@ -622,7 +605,7 @@ function WorkspaceBackupCard({
       let records = 0;
 
       do {
-        const page: ArchivePage = v.parse(ArchivePageSchema, yield* Effect.promise(async () => rpc("exportWorkspaceArchive", [cursor])));
+        const page = yield* Effect.promise(async () => rpc("exportWorkspaceArchive", [cursor]));
         parts.push(page.lines.map((line) => `${line}\n`).join(""));
         records += page.lines.length;
         cursor = page.next;
@@ -670,7 +653,7 @@ function WorkspaceBackupCard({
 
 const GEPA_DOT = {
   completed: 'p-dot-success', running: 'p-dot-warning', aborted: 'p-dot-neutral',
-} satisfies Record<v.InferOutput<typeof GepaRunSchema>['status'], string>;
+} satisfies Record<GepaRunSummary['status'], string>;
 
 function GepaOptimizationCard({
   rpc,
@@ -682,7 +665,7 @@ function GepaOptimizationCard({
 
   // "No optimisation runs yet" may only be claimed about a listing that actually came back.
   const load = useCallback(
-    async () => v.parse(v.array(GepaRunSchema), await rpc('getGepaRuns', [10])),
+    () => rpc('getGepaRuns', [10]),
     [rpc],
   );
 
@@ -694,7 +677,7 @@ function GepaOptimizationCard({
     setMsg('Searching for a better agent loop. This can take a few minutes.');
 
     return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      const r = v.parse(ProposerOutcomeSchema, yield* Effect.promise(() => rpc('runOptimization', [])));
+      const r = yield* Effect.promise(() => rpc('runOptimization', []));
 
       if (r.kind === 'idle') setMsg('No low-rated turns in the last 14 days to learn from.');
       else if (r.version !== null) setMsg(`Proposed scaffold v${r.version} (${r.detail}). Promote it under Agent → Evolution.`);
@@ -753,8 +736,7 @@ function AlwaysActiveSkillsCard({
   // React owns the async transition so a malformed response reaches this card's visible error.
   const refresh = useCallback((): void => {
     startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
-      const raw = yield* Effect.promise(async () => rpc('getAlwaysActiveSkills', []));
-      setNames(v.parse(SkillNamesSchema, raw).names);
+      setNames((yield* Effect.promise(async () => rpc('getAlwaysActiveSkills', []))).names);
     }), showing(setErr))));
   }, [rpc]);
 
@@ -765,8 +747,7 @@ function AlwaysActiveSkillsCard({
     setErr(null);
 
     return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      const r = v.parse(SkillNamesSchema, yield* Effect.promise(async () => rpc('setAlwaysActiveSkills', [next])));
-      setNames(r.names);
+      setNames((yield* Effect.promise(async () => rpc('setAlwaysActiveSkills', [next]))).names);
     }), showing(setErr)), Effect.sync(() => { setBusy(false); }));
   })), [rpc]);
 

@@ -9,7 +9,6 @@ import {
   CaretDownIcon, CaretRightIcon,
 } from "@phosphor-icons/react";
 import type { ChangelogEntryKind } from "@kinu.run/core";
-import * as v from "valibot";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { diagnostics, showing, toKinuError, detach, settle } from "@kinu.run/core/obs";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
@@ -19,20 +18,10 @@ import {
   changelogFactKey, changelogToolName, withToolDetails,
   type ChangelogEntryView, type CraftedToolDetail,
 } from "./shared";
-import { timeAgo } from "@kinu.run/core";
+import { timeAgo, type StagedSkillView } from "@kinu.run/core";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 export interface ChangelogView { entries: ChangelogEntryView[]; unseenCount: number; seenAt: number }
-
-const CraftedToolListSchema = v.looseObject({
-  crafted: v.optional(v.array(v.looseObject({
-    name: v.string(),
-    description: v.optional(v.string()),
-    qualityScore: v.optional(v.number()),
-    usageCount: v.optional(v.number()),
-  }))),
-});
-
 
 const KIND_ICON = {
   scaffold: GitBranchIcon,
@@ -48,18 +37,13 @@ const KIND_ICON = {
 export function useChangelog(rpc: WorkspaceRpc, onSeen?: () => void, moved = 0) {
   const load = useCallback((): Promise<ChangelogView> => settle(Effect.gen(function* () {
     const view = yield* Effect.promise(async () => rpc("getEvolutionChangelog", [{ limit: 30 }]));
-    // Enrichment only: a failed or misshapen tool list leaves the entries as their rows hold them.
+    // Enrichment only: a failed tool list leaves the entries as their rows hold them.
     let tools: CraftedToolDetail[] = [];
 
     yield* Effect.catchCause(Effect.gen(function* () {
-      const parsed = v.safeParse(CraftedToolListSchema, yield* Effect.promise(async () => rpc("getToolDescriptions", [])));
+      const { crafted } = yield* Effect.promise(async () => rpc("getToolDescriptions", []));
 
-      if (parsed.success) {
-        tools = (parsed.output.crafted ?? []).map((tool) => ({
-          name: tool.name, description: tool.description ?? '',
-          qualityScore: tool.qualityScore ?? 0.5, usageCount: tool.usageCount ?? 0,
-        }));
-      }
+      tools = crafted.map(({ name, description, qualityScore, usageCount }) => ({ name, description, qualityScore, usageCount }));
     }), (failed) => Effect.sync(() => {
       const cause = Cause.squash(failed);
       diagnostics.failure('changelog.tool_list_unavailable', toKinuError({
@@ -311,11 +295,6 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
       <EntryScaffoldDiff rpc={rpc} version={entry.scaffoldVersion} shown={diffShown} />
     </div>
   );
-}
-
-interface StagedSkillView {
-  requestId: string; routeIndex: number; target: string;
-  digest: string; source: string; intact: boolean;
 }
 
 /**

@@ -5,13 +5,9 @@ import { scoreInterval, type QualityDay } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { EmptyState } from "./shared";
-import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import type { WorkspaceAnswer, WorkspaceRpc } from "@/lib/workspace-rpc";
 
-interface GepaRunRow { runId: string; target: string; startedAt: number; status: string; winnerId: string | null; iterations: number; metricCalls: number }
-
-interface GepaCandidate { id: string; parentId: string | null; aggregateScore: number; scores: Record<string, number>; createdAt: number }
-
-interface GepaRunDetail { run: GepaRunRow | null; candidates: GepaCandidate[]; pareto: Array<{ candidateId: string; instanceId: string; score: number }> }
+type GepaRunDetail = WorkspaceAnswer<"getGepaRun">;
 
 /** A running run is read again until it finishes. */
 const runningAgain = (detail: GepaRunDetail | null): number | null => (detail?.run?.status === "running" ? 5000 : null);
