@@ -23,7 +23,7 @@ import type { WorkMode } from '../types/turn';
 import { narrowestMode } from '../execution/work-mode';
 import { parseJsonObject, type JsonObject } from '../utils/json';
 import type { SessionPayload } from '../session/payload';
-import { stampTurnAuthor, TURN_AUTHOR_METADATA_KEY } from '../utils/ui-message';
+import { stampTurnAuthor, TURN_AUTHOR_METADATA_KEY } from '../types/turn-metadata';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import { diagnostics, KinuError, toKinuError } from '../obs/index';
 
@@ -369,10 +369,6 @@ export interface UserSteerDeps {
   readonly skills?: (text: string) => Promise<string | null>;
 }
 
-const SignalIdMetadataSchema = v.object({
-  [SIGNAL_ID_METADATA_KEY]: v.optional(v.string()),
-});
-
 /** A person's words as the chat sends them: what the Inbox alone admits (a delivery reaches it through {@link Inbox.landMidTurn}). */
 export interface UserWords extends AgentSignal {
   readonly user: UserSignalIdentity;
@@ -387,13 +383,6 @@ interface DeliveredUserSignal extends DeliveredSignal {
   readonly user: UserSignalIdentity;
 }
 
-/** Card id a turn carries when a signal started it; pairs with {@link Inbox.queue}. */
-export function readSignalId(metadata: JsonObject | undefined): string | undefined {
-  const parsed = v.safeParse(SignalIdMetadataSchema, metadata);
-  const id = parsed.success ? parsed.output[SIGNAL_ID_METADATA_KEY] : undefined;
-
-  return id === '' ? undefined : id;
-}
 
 const isUserSignal = (signal: DeliveredSignal): signal is DeliveredUserSignal =>
   signal.user !== undefined;

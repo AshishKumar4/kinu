@@ -73,8 +73,7 @@ import {
   browserSessions,
   type PromptIdentity,
   currentDateForPrompt,
-  turnReasonForMetadata,
-  workModeForTurnMetadata, authoredTurnMetadata,
+  turnTags, authoredTurnMetadata,
   type DynamicContext, type DynamicApproval, type DynamicContextInput, type MissingCapability,
   // Public extension seam — the SAME host contract runChat drives on the CLI
   ExtensionHost,
@@ -82,7 +81,7 @@ import {
   // Shared turn lifecycle and run_end classifier, so neither backend chooses the string
   // (see turn-failure.ts).
   type AgentOrchestrator, type AgentOrchestratorDeps, actorTerminalEffects, DynamicContextLedger, actorPolicy, actorReach, type ActorReach, type BackendHost,
-  EvolutionLanes, drainPendingEvents, ActorAdvisor, readMissionLabels, turnLedgers, type SeatedActor, type DynamicDelegate,
+  EvolutionLanes, drainPendingEvents, ActorAdvisor, turnLedgers, type SeatedActor, type DynamicDelegate,
   type ComposedRequest,
   type AgentsToolDeps,
   type AgentsSwarmDeps,
@@ -3758,7 +3757,7 @@ export abstract class ActorAgent extends Agent<Env> {
    *  turn's missions scope the workspace's spend. */
   protected workspaceTurnOpening(driving: JsonObject): void {
     this.engine.recoverInterruptedWork();
-    this.budget.activate(readMissionLabels(driving));
+    this.budget.activate([...turnTags({ metadata: driving }).missionLabels]);
   }
 
   /** A turn of the workspace agent's read here: its executors and folder are its own, its clock starts, and a fresh one's
@@ -3769,7 +3768,7 @@ export abstract class ActorAgent extends Agent<Env> {
     this._turnT0 = performance.now();
 
     if (fresh && surface.item.kind === 'user') {
-      this.lanes.observeUserTurn(surface.key.turnId, surface.item.text, surface.continuity, this.engine.enabled && workModeForTurnMetadata(driving) !== 'plan');
+      this.lanes.observeUserTurn(surface.key.turnId, surface.item.text, surface.continuity, this.engine.enabled && turnTags({ metadata: driving }).mode !== 'plan');
     }
   }
 
@@ -3909,7 +3908,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const held = this.heldDynamicOf(actor.reference);
     const extras = reach.lanes ? this.extraDynamicContext() : {};
     // The workspace's own agent is told why its turn runs and what its model holds; a hire, its model's name.
-    const turn = reach.lanes && step.surface !== null ? turnReasonForMetadata(step.surface.item.metadata) : undefined;
+    const turn = reach.lanes && step.surface !== null ? turnTags(step.surface.item).reason : undefined;
     const model = reach.lanes ? this.promptModelContextFor(step.profile.tier.model) : { id: step.profile.tier.model };
 
     return collectDynamicContext({
@@ -3955,7 +3954,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   protected workModeForMetadata(metadata: JsonObject | undefined): WorkMode {
-    return this.operationProfile()?.profile.workMode ?? workModeForTurnMetadata(metadata);
+    return this.operationProfile()?.profile.workMode ?? turnTags({ metadata }).mode;
   }
 
   protected async preparedWorkMode(): Promise<WorkMode> {
@@ -3966,7 +3965,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Read from the event alone, never from the work mode stamped beside it. */
   protected turnReason(): TurnReason {
-    return turnReasonForMetadata(this.turnDrivingMetadata());
+    return turnTags({ metadata: this.turnDrivingMetadata() }).reason;
   }
 
   /** Author-stamped, so the plan hold tells the owner's turn from the harness's. */

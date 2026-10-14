@@ -3,7 +3,7 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import { asSchema, jsonSchema, tool, type ToolSet } from 'ai';
-import { AGENTS_OPS, BUILTIN_SKILLS, buildSystemPromptSync, compilePromptSurface, BUILTIN_ROLE_DEFINITIONS, turnReasonForMetadata, workModeForTurnMetadata, buildBuiltinTools, permitInPlan, skillIndexLine, type SkillHeader } from '../src/index';
+import { AGENTS_OPS, BUILTIN_SKILLS, buildSystemPromptSync, compilePromptSurface, BUILTIN_ROLE_DEFINITIONS, turnTags, buildBuiltinTools, permitInPlan, skillIndexLine, type SkillHeader } from '../src/index';
 import { createAgentsTool } from '../src/delegation/agents-operations';
 import { swarmSeats } from './helpers-actor-host';
 import { createTestRuntime, scriptedTurnModel, unobservedSearchSeams, type ScriptedTurnResult } from '@kinu.run/test-utils';
@@ -61,14 +61,14 @@ describe('buildSystemPromptSync', () => {
   });
 
   test('the two axes are read from different metadata keys and neither can suppress the other', () => {
-    expect(turnReasonForMetadata(null)).toEqual({ provenance: 'chat' });
-    expect(turnReasonForMetadata({})).toEqual({ provenance: 'chat' });
-    expect(turnReasonForMetadata({ kinuEvent: 'timer_cron', kinuMode: 'plan' })).toEqual({ provenance: 'signal', event: 'timer_cron' });
+    expect(turnTags({ metadata: null }).reason).toEqual({ provenance: 'chat' });
+    expect(turnTags({ metadata: {} }).reason).toEqual({ provenance: 'chat' });
+    expect(turnTags({ metadata: { kinuEvent: 'timer_cron', kinuMode: 'plan' } }).reason).toEqual({ provenance: 'signal', event: 'timer_cron' });
 
-    expect(workModeForTurnMetadata({ kinuMode: 'plan' })).toBe('plan');
-    expect(workModeForTurnMetadata({ kinuMode: 'build' })).toBe('build');
-    expect(workModeForTurnMetadata({ kinuMode: 'invalid' })).toBe('build');
-    expect(workModeForTurnMetadata(null)).toBe('build');
+    expect(turnTags({ metadata: { kinuMode: 'plan' } }).mode).toBe('plan');
+    expect(turnTags({ metadata: { kinuMode: 'build' } }).mode).toBe('build');
+    expect(turnTags({ metadata: { kinuMode: 'invalid' } }).mode).toBe('build');
+    expect(turnTags({ metadata: null }).mode).toBe('build');
   });
 
   test('root and child sessions refuse Plan writes and allow an approved Build turn', async () => {

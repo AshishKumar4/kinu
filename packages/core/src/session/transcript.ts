@@ -9,7 +9,8 @@ import { KinuError } from '../obs/error';
 import { encodeModelMessage } from './message-codec';
 import { type SessionMessages, SessionMessageReader, type ActorReadAuthority, type MessagePartReference, type MessageReference, type StoredPart } from './messages';
 import { type SessionPayloads, SessionPayloadReader, type SessionPayload } from './payload';
-import { rowText, turnAuthor, UIMessageSchema } from '../utils/ui-message';
+import { rowText, UIMessageSchema } from '../utils/ui-message';
+import { turnTags } from '../types/turn-metadata';
 import type { Page, PositionCursor, PositionPageRequest } from './page';
 import type { ContextSelection } from './context';
 import { isServerCompaction } from '../providers/server-compaction';
@@ -446,7 +447,7 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
       const metadata = entry.metadata === null ? undefined : await this.payloads.read(entry.metadata);
       this.actor.assertCurrent();
 
-      if (turnAuthor({ metadata }) === 'operator') return true;
+      if (turnTags({ metadata }).author === 'operator') return true;
     }
 
     return false;

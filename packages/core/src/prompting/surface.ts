@@ -10,50 +10,8 @@ import {
   type PromptModelContext,
   type PromptModelProfile,
 } from './model-profile';
-import * as v from 'valibot';
-import { TurnReasonSchema, type TurnReason, type WorkMode } from '../types/turn';
-import { OWNER_ANSWER_SIGNAL } from '../types/owner-questions';
-import type { JsonObject } from '../utils/json';
 
 export type PromptBackend = 'cf' | 'cli-local';
-
-const TurnMetadataSchema = v.object({
-  kinuMode: v.optional(v.unknown()),
-  kinuEvent: v.optional(v.unknown()),
-});
-
-const KinuEventSchema = v.object({ kinuEvent: v.pipe(v.string(), v.nonEmpty()) });
-
-/** A background job's wake (jobs/runner.ts). */
-const JobWakeSchema = v.object({ jobId: v.string(), kind: v.string(), status: v.string() });
-
-/** From `kinuEvent` metadata alone: the `kinuMode` stamped beside it (never null for jobs) must not win. */
-export function turnReasonForMetadata(metadata: JsonObject | null | undefined): TurnReason {
-  const stamped = v.safeParse(KinuEventSchema, metadata);
-
-  if (!stamped.success) return { provenance: 'chat' };
-
-  // The turn an answer starts runs for the asking turn's reason: it continues that turn, from its call.
-  if (stamped.output.kinuEvent === OWNER_ANSWER_SIGNAL) {
-    const asked = v.safeParse(v.object({ askedReason: TurnReasonSchema }), metadata);
-
-    return asked.success ? asked.output.askedReason : { provenance: 'chat' };
-  }
-
-  if (stamped.output.kinuEvent !== 'background_job') return { provenance: 'signal', event: stamped.output.kinuEvent };
-  const job = v.safeParse(JobWakeSchema, metadata);
-
-  return { provenance: 'background_resume', job: job.success ? `job ${job.output.jobId}, ${job.output.kind}, ${job.output.status}` : null };
-}
-
-/** Only an explicit, recognized `kinuMode` raises the Plan bar; delegated children inherit it. */
-export function workModeForTurnMetadata(metadata: JsonObject | null | undefined): WorkMode {
-  const parsed = v.safeParse(TurnMetadataSchema, metadata);
-
-  if (!parsed.success) return 'build';
-
-  return parsed.output.kinuMode === 'plan' ? 'plan' : 'build';
-}
 
 /** The router's ExecutorInfo, loosened: the prompt also builds rows from bare names. */
 export type PromptExecutorInfo =

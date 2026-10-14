@@ -23,7 +23,7 @@ import { hostedSubordinateRuntime, type ActorSurface, type SurfaceTurn, type Too
 import type { CFSeat } from '../../src/actor-hosting';
 import type { ChatWireTransport } from '../../src/chat-transport';
 import type { AgentTurns } from '../../src/agent-turns';
-import { isWorkMode, workModeForTurnMetadata, type UserProfile } from '@kinu.run/core';
+import { isWorkMode, turnTags, type UserProfile } from '@kinu.run/core';
 import { ActorClaimStore, agentArtifactDirectory, agentHome, CHAT_SESSION_ID, createParentWorkspaceVfs, EventLog, SubordinateRosterStore, MAIN_AGENT, openWorkspaceMainActor, SessionHistory, TerminalTransitions, WorkspaceActorDirectory } from '@kinu.run/core';
 import { present, admitTestClaim } from '@kinu.run/test-utils';
 import {
@@ -624,7 +624,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   harnessSupplyTools(tools: ToolSet | undefined): void { this._suppliedTools = tools ?? null; }
   protected override actorTools(actor: CFSeat, reach: SurfaceReach, mode: WorkMode, scope: ToolScope): ActorToolsets {
     // The requested mode is the message's, never the operation a role bound over it.
-    if (this._suppliedTools !== null && reach.actor.lanes && mode === workModeForTurnMetadata(this.turnUserMetadata())) {
+    if (this._suppliedTools !== null && reach.actor.lanes && mode === turnTags({ metadata: this.turnUserMetadata() }).mode) {
       return { turn: this._suppliedTools, raw: this._suppliedTools };
     }
 

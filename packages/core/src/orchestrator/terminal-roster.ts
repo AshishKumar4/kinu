@@ -20,12 +20,11 @@ import { owesTurnLessons } from '../evolution/struggles';
 import type { ChatTurnInput } from './chat-session';
 import type { ActorIdentity } from '../identity/actor-handle';
 import type { KinuError } from '../obs/index';
-import { turnAuthorship } from './turn-authorship';
 import { reportReadsNarration, type TaskTurnEnding } from '../subordinates/temporary';
+import { turnTags } from '../types/turn-metadata';
 import { announcementOf } from '../utils/ui-message';
 import type { TurnReportFacts } from './terminal-effects';
 import { turnLane } from '../delegation/turn-reach';
-import { workModeForTurnMetadata } from '../prompting/surface';
 
 /** `completed` is the driver's verdict; rows keyed to the answer gate on the narrower `durablyAnswered`. */
 export interface TerminalTurnFacts {
@@ -246,7 +245,7 @@ export async function turnEndOf(
   ended: { readonly ending: TaskTurnEnding; readonly assistantText: string; readonly narration: () => Promise<readonly string[]> },
 ): Promise<TurnEnd | null> {
   if (actor.parentActorId === null) return null;
-  const authorship = turnAuthorship(item);
+  const { authorship } = turnTags(item);
 
   return {
     turnId, ending: ended.ending, assistantText: ended.assistantText,
@@ -262,13 +261,15 @@ export async function turnEndOf(
  * with no hirer, or a turn with no work to key it by.
  */
 export function unansweredReport(actor: Pick<ActorIdentity, 'name' | 'parentActorId'>, item: ChatTurnInput, failure: KinuError): OwedEffect | null {
-  if (turnLane({ hirer: actor.parentActorId }, turnAuthorship(item)) !== 'hirer' || item.idempotencyKey === undefined) return null;
+  const tags = turnTags(item);
+
+  if (turnLane({ hirer: actor.parentActorId }, tags.authorship) !== 'hirer' || item.idempotencyKey === undefined) return null;
 
   return {
     name: 'parent_report', scope: item.idempotencyKey, lane: 'detached',
     input: {
       text: `${actor.name} failed to run its assigned turn: ${failure.message}`,
-      status: 'blocked', mode: workModeForTurnMetadata(item.metadata), sequenceId: item.idempotencyKey, quiet: false,
+      status: 'blocked', mode: tags.mode, sequenceId: item.idempotencyKey, quiet: false,
     },
   };
 }

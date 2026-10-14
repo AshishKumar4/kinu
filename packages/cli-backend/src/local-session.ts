@@ -59,7 +59,7 @@ import { ActorSession, type ActorTurnLease,
   inheritedContextFromTranscript,
   ModelCatalogSession, resolveEffectiveModelSpec,
   TerminalTransitions, initTerminalEffectTable, chatTurnParts, declareTerminalRoster, missionOf, SleepTimeLane, initSleepTimeUpdatesTable,
-  assembleActorTurn, runHeadInference, preparedHeadRun, withCompactionTrigger, conversationKey, metadataTier, vfsTurnSkills, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources, type RunTurnSources,
+  assembleActorTurn, runHeadInference, preparedHeadRun, withCompactionTrigger, conversationKey, vfsTurnSkills, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources, type RunTurnSources,
   branchesTerminalEffect, chatTerminalEffects, actorTerminalEffects,
   type OwedReport, type SubordinateReportStatus, type TurnReportFacts,
   terminalEffect,
@@ -68,14 +68,14 @@ import { ActorSession, type ActorTurnLease,
   buildActorTools, buildMcpToolSet, currentDateForPrompt,
   type ActorToolsetDeps,
   turnArtifactBodies, artifactOverrides, currentArtifacts, openingCacheCold, type TurnOpeningAsk, type ClaimedRound,
-  turnReasonForMetadata, type TurnReason,
+  turnTags, type TurnReason,
   actorAffinity, bindRoute, routedLlm, type ModelAffinity,
   observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
   createDefaultWebSearchProvider, restBrowserRunAccess, REAL_CLOCK, type DefaultWebSearchProviderDeps, type Clock, type WebSearchProvider,
   actorNamespaces, SURFACE_POLICY, type SurfaceActor,
   type CodemodeProvider,
   agentRoleSwitch,
-  REPORT_TOOL, turnAuthorship, turnLane, turnReach, type ReportDeps, type TurnLane, type TurnReach,
+  REPORT_TOOL, turnLane, turnReach, type ReportDeps, type TurnLane, type TurnReach,
   type MissionGovernor,
   observeSystemPromptHash,
   type DynamicContext,
@@ -1598,7 +1598,7 @@ export class LocalAgentSession {
 
     this.turnArtifacts = artifactOverrides(artifacts.bodies);
     // Set before anything reads the tool surface: the report gate is a property of this turn.
-    this.turnLaneOf = turnLane({ hirer: this.rt.actor.parentActorId }, turnAuthorship(item));
+    this.turnLaneOf = turnLane({ hirer: this.rt.actor.parentActorId }, turnTags(item).authorship);
     this.turnLearns = this.engine.recordsTurns;
     this.turnDriving = authoredTurnMetadata(item);
 
@@ -1640,7 +1640,7 @@ export class LocalAgentSession {
   }
 
   private turnRequest(item: TurnAsked): TurnAssemblyRequest {
-    return { userText: item.text, workMode: this.turnWorkMode(item), explicitTier: metadataTier(item.metadata) };
+    return { userText: item.text, workMode: this.turnWorkMode(item), explicitTier: turnTags(item).tier };
   }
 
   private turnModels(): TurnModelSources {
@@ -1658,7 +1658,7 @@ export class LocalAgentSession {
 
   /** Where this session's turns are assembled from (core orchestrator/turn-assembly.ts). */
   private turnSources(item: TurnAsked, lease: Pick<ActorTurnLease, 'runId' | 'turnId'> | null): TurnAssemblySources {
-    const turn = turnReasonForMetadata(item.metadata);
+    const turn = turnTags(item).reason;
 
     return {
       rt: this.rt,

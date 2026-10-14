@@ -49,8 +49,7 @@ import { lostRemoteCall, lostToolCall } from '../tools/effect-claim';
 import { unpairedToolCalls } from '../prompting/interrupted-tool-calls';
 import type { ReceiptExecution, RemoteReceipt } from '../tools/effect-claim';
 import { OwnerQuestionStore } from '../plans/owner-questions';
-import { turnReasonForMetadata } from '../prompting/surface';
-import { metadataTier } from './turn-assembly';
+import { turnTags } from '../types/turn-metadata';
 import { OWNER_ANSWER_SIGNAL } from '../types/owner-questions';
 import { ASK_OWNER_TOOL } from '../tools/registry';
 import type { MessageReference, MessagePartReference, PreparedMessage } from '../session/messages';
@@ -409,14 +408,15 @@ export class ActorSession {
     const assertOwner = this.preparingTurnFence(lease, 'input must belong to a preparing turn');
 
     const selected = this.canonical.context.selected() ?? this.canonical.context.initialize();
-    const drainTurn = v.safeParse(v.string(), input.item.metadata?.drainTurnId);
+    const tags = turnTags(input.item);
+    const { drainTurnId } = tags;
 
-    if (selected.revision === 0 && drainTurn.success && this.canonical.context.conversationOf(this.canonical.context.entries(selected)).length === 0 && this.canonical.proposals.pending(selected.contextId).length === 0) {
-      for (const [index, message] of (await input.birthContext(drainTurn.output)).entries()) await this.canonical.append({ id: `${lease.turnId}:birth:${index}`, message, origin: 'input', turnId: lease.turnId, assertOwner });
+    if (selected.revision === 0 && drainTurnId !== undefined && this.canonical.context.conversationOf(this.canonical.context.entries(selected)).length === 0 && this.canonical.proposals.pending(selected.contextId).length === 0) {
+      for (const [index, message] of (await input.birthContext(drainTurnId)).entries()) await this.canonical.append({ id: `${lease.turnId}:birth:${index}`, message, origin: 'input', turnId: lease.turnId, assertOwner });
     }
 
     // An answer's turn continues from the answered call: its row is the transcript's, never the model's.
-    if (input.item.metadata?.kinuEvent !== OWNER_ANSWER_SIGNAL) {
+    if (tags.event !== OWNER_ANSWER_SIGNAL) {
       const acceptedInput = await this.canonical.admitInput({ id: lease.turnId, message: input.message, turnId: lease.turnId, assertOwner });
       this.canonical.activateInput(acceptedInput, lease.turnId, assertOwner);
     }
@@ -915,9 +915,9 @@ export class ActorSession {
           return stream.dispatched(call.toolCallId) ? lostRemoteCall({ status: 'indeterminate' }, call) : null;
         },
         onAsk: (calls) => {
-          const metadata = this.turnMetadata;
+          const { tier, reason } = turnTags({ metadata: this.turnMetadata });
 
-          this.questions.ask(calls, { turnId: lease.turnId, mode: this.mode, tier: metadataTier(metadata) ?? null, reason: turnReasonForMetadata(metadata) });
+          this.questions.ask(calls, { turnId: lease.turnId, mode: this.mode, tier: tier ?? null, reason });
           this.orchestrator.acc.askedOwner = true;
         },
         waitsOn: (call) => this.questions.waitsOn(call),

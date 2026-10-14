@@ -3,8 +3,8 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   CHAT_SESSION_ID, ChatSession, EventLog, PendingSendStore, RECOVERY_BACKOFF_CEILING_MS, TRANSCRIPT_WINDOW, TerminalTransitions,
   PlanReviewActions, assembleActorTurn, authoredTurnMetadata, chatTerminalEffects, chatTurnParts, declareTerminalRoster, inspectWork,
-  planHandoffStillOwed, planAwaitingReply, approvedTaskPlan, missionGate, workModeUnderReview, projectJsonValue, declareHandoffRoster, HandedOffTurnSchema, runSettleEffect, SettledRunSchema, terminalEffect, turnAuthorship, turnLane,
-  actorPolicy, metadataTier, actorTerminalEffects, withCompactionTrigger, type ActorPolicy,
+  planHandoffStillOwed, planAwaitingReply, approvedTaskPlan, missionGate, workModeUnderReview, projectJsonValue, declareHandoffRoster, HandedOffTurnSchema, runSettleEffect, SettledRunSchema, terminalEffect, turnTags, turnLane,
+  actorPolicy, actorTerminalEffects, withCompactionTrigger, type ActorPolicy,
   bindRoute, completeOnRoute, ownProfileChoices, planWorkspaceTitle, resolveAgentTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle,
   type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpeningAsk, type JsonObject, type PlanReview, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
   type InspectedWork, type PreparedAgentTurn, type PreparedTurn, type TerminalActor, type TerminalTurnFacts,
@@ -267,12 +267,14 @@ export class FacetChat {
     const activePlan = (): PlanReview | null => (active === undefined ? (active = plans.getActive(CHAT_SESSION_ID)) : active);
     // The one place a turn's lane is decided; the workspace rebuilds a turn from this, never from its id.
     // A hirer's turn runs in the hirer's lane, with `report`, only for an agent that has a hirer.
-    this.parentDriven = turnLane(this.policy, turnAuthorship(item)) === 'hirer';
+    const tags = turnTags(item);
+
+    this.parentDriven = turnLane(this.policy, tags.authorship) === 'hirer';
     this.driving = authoredTurnMetadata(item);
     // The owner's words while a plan awaits their decision are read as its review.
     const mode = workModeUnderReview(actor.session.workMode, this.driving, activePlan);
     // The workspace reads the turn's sources for the tier it runs on, and the turn is assembled on that same tier.
-    const explicitTier = metadataTier(item.metadata);
+    const explicitTier = tags.tier;
     const taskPlan = approvedTaskPlan(item, plans);
 
     // The turn's capability (design v2 §3): the epoch its claim was minted with, which the workspace's fence holds while

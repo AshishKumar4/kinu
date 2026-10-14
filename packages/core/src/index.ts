@@ -30,7 +30,7 @@ export {
 export { SleepTimeLane, initSleepTimeUpdatesTable, type SleepTimeLaneDeps } from './orchestrator/sleep-time-lane';
 
 export {
-  assembleActorTurn, withCompactionTrigger, conversationKey, vfsTurnSkills, materializeTurnSources, turnSourcesFromBundle, metadataTier,
+  assembleActorTurn, withCompactionTrigger, conversationKey, vfsTurnSkills, materializeTurnSources, turnSourcesFromBundle,
   type AssembledTurn, type RunTurnSources, type TurnSourcesBundle, type LocalTurnSources, type PinValues, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources,
 } from './orchestrator/turn-assembly';
 
@@ -473,8 +473,6 @@ export {
 export {
   MissionGovernor,
   MissionBudgetExhausted,
-  MISSION_LABELS_METADATA_KEY,
-  readMissionLabels,
   readMissionLimits,
   // A surface that prices a call must use this, exactly as the ledger debits it.
   priceCall,
@@ -786,8 +784,6 @@ export { isWorkMode, WorkModeSchema, type TurnReason, type WorkMode } from './ty
 
 export {
   compilePromptSurface,
-  turnReasonForMetadata,
-  workModeForTurnMetadata,
   type PromptBackend,
   type PromptExecutorInfo,
   type PromptIdentity,
@@ -932,7 +928,7 @@ export {
 export { TurnReplies } from './orchestrator/turn-replies';
 
 export {
-  Inbox, readSignalId, signalCardId, PromptFileSchema, turnInputMessage,
+  Inbox, signalCardId, PromptFileSchema, turnInputMessage,
   STEER_METADATA_KEY, STEER_STEP_METADATA_KEY,
   describeLandedSteers, initPendingSendTables, PendingSendStore,
   type UserSteerDeps, type AcceptedSteer,
@@ -1789,7 +1785,12 @@ export {
 
 export { ModelCatalogSession, resolveEffectiveModelSpec, type ModelCatalogRead } from './orchestrator/model-catalog';
 
-export { stampAuthorship, turnAuthorship, type TurnAuthorship } from './orchestrator/turn-authorship';
+export type { TurnAuthorship } from './types/turn';
+
+export {
+  turnTags, stampTurnAuthor, authoredTurnMetadata, stampAuthorship, TURN_AUTHOR_METADATA_KEY, MISSION_LABELS_METADATA_KEY,
+  type TurnTags, type TurnAuthor,
+} from './types/turn-metadata';
 
 export {
   AgentDeliveries, AgentStops, DeliveryInbox, DeliverySchema, wordsRefusal, initAgentDeliveriesTable, initAgentStopsTable, type OwedStop, pendingEventsDelivery, assignmentDelivery, deliveryMetadata, deliveredSignal, handBackCarried, type OwedDelivery, type DeliveredAssignment, type DeliveryPort, type OwedAdmission, type Delivery, type DeliveryAnswer, type DeliveryInput, type TurnDeliveryInput, type IntentInput, type IntentResult, type OwedIntent, type OwnerIntent, type OwedOwnerIntent, OwedIntentSchema, OwedOwnerIntentSchema,
@@ -2068,10 +2069,8 @@ export type { Page, PageRequest, PositionCursor, PositionPageRequest, SeekCursor
 
 export {
   restoredRows, rowText, transcriptRole, UIMessageSchema,
-  PROGRAMMATIC_MESSAGE_ID_PREFIX, announcementOf, TURN_AUTHOR_METADATA_KEY, authoredTurnMetadata, stampTurnAuthor, turnAuthor,
+  PROGRAMMATIC_MESSAGE_ID_PREFIX, announcementOf,
 } from './utils/ui-message';
-
-export type { TurnAuthor } from './utils/ui-message';
 
 export type { PendingAction, PendingActionKind, PendingActionInputs, PersonAsks } from './read-models/pending-actions';
 

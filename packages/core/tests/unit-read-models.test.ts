@@ -25,7 +25,7 @@ import { getRunTimeline } from '../src/read-models/timeline';
 import { getRunEvents, getRunSummaries, listRuns } from '../src/read-models/runs';
 import { getAgentStatus, getChatHistoryPage, getToolList, type ChatHistoryPage } from '../src/read-models/status';
 import { SessionHistory } from '../src/session/history';
-import { stampTurnAuthor } from '../src/utils/ui-message';
+import { stampTurnAuthor } from '../src/types/turn-metadata';
 import { readSessionTranscript, type SessionTranscriptReader } from '../src/session/transcript';
 import { PLATFORM_CATALOG } from '../src/platform-catalog';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
