@@ -29,6 +29,8 @@ export interface GalleryAgent {
 	removeEventListener(type: string, listener: EventListener): void;
 	close(): void;
 	reopen(): void;
+	/** Answers, as the room does, the resume probe the SDK sends as the socket opens. */
+	answerProbe(): void;
 	/** A forced redial: a fresh socket, so the calls a dead one would have failed are served again. */
 	reconnect(): void;
 	/** A server-initiated frame, delivered raw so `useKinu`'s own parse and gates run. */
@@ -143,14 +145,20 @@ export function useAgent(options: AgentHandlers): GalleryAgent {
 	const agent = useMemo<GalleryAgent>(() => {
 		const listeners = new Map<string, Set<EventListener>>();
 
+		/** The room's answer to the resume probe the SDK sends as a socket opens: here nothing is streaming. */
+		const answerProbe = (deliver: (raw: string) => void) => {
+			queueMicrotask(() => { deliver(JSON.stringify({ type: "cf_agent_stream_resume_none", reason: "idle", probeId: "gallery" })); });
+		};
+
 		const reopen = () => {
 			handlers.current.onClose?.(new CloseEvent("close", { code: 1006 }));
 			handlers.current.onOpen?.(new Event("open"));
 
 			for (const listener of listeners.get("open") ?? []) listener(new Event("open"));
+			answerProbe((raw) => { connection.deliver(raw); });
 		};
 
-		return {
+		const connection: GalleryAgent = {
 			path: options.path ?? "",
 			readyState: 1,
 			connectionError: terminalClose,
@@ -193,7 +201,10 @@ export function useAgent(options: AgentHandlers): GalleryAgent {
 
 				for (const listener of listeners.get("message") ?? []) listener(message);
 			},
+			answerProbe: () => { answerProbe((raw) => { connection.deliver(raw); }); },
 		};
+
+		return connection;
 	}, []);
 
 	useEffect(() => {
@@ -214,6 +225,7 @@ export function useAgent(options: AgentHandlers): GalleryAgent {
 		queueMicrotask(() => {
 			agent.deliver(JSON.stringify({ type: "cf_agent_chat_messages", messages: seededChats.get(agent.path) ?? [] }));
 		});
+		agent.answerProbe();
 
 		return () => {
 			live.delete(agent);

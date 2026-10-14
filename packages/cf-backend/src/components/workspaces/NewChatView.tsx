@@ -71,7 +71,8 @@ export function NewChatView({ workspace, title, createChat }: {
   );
 }
 
-/** Sends the new-chat view's message once this chat's socket is up, then drops it from history so a reload never resends. */
+/** Sends the new-chat view's message once this chat has settled on its socket, then drops it from history so a reload
+ *  never resends. */
 export function useOpeningMessage(ready: boolean, send: (text: string, files: readonly FileUIPart[]) => void): void {
   const location = useLocation();
   const navigate = useNavigate();
