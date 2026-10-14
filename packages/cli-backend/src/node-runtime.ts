@@ -1,34 +1,40 @@
-import { actorReferenceOf, actorScaffoldPath, bindLocalActorReference, createAgentStores, createScaffoldSurface, contextMount, localContextTree, withMountTable, requireLocalActorWorkspace } from '@kinu.run/core';
+import {
+  actorReferenceOf, actorScaffoldPath, bindLocalActorReference, createAgentStores, createScaffoldSurface, DefaultExecutionRouter,
+  requireLocalActorWorkspace,
+} from '@kinu.run/core';
 import type { ActorHandle, AgentRuntime } from '@kinu.run/core';
-import type { CLIRuntime, NodeSource } from './runtime';
-import { join } from 'node:path';
+import { actorFilePlane } from './actor-plane';
+import { hostWorkspaceExecutor } from './host-toolchain';
+import type { CLIRuntime } from './runtime';
 
 /**
- * A swarm node's runtime over `source`'s plane, without copying its live model getters. The node shares the
- * workspace SQL as its own actor and works in the same folder and own space; its `/context` is its own.
- * Its gates are the source's: a hire's own narrowing, never the workspace owner's.
+ * A swarm node's runtime beside `source`'s, without copying its live model getters. The node shares the workspace SQL
+ * as its own actor and works in the same folder and space over a plane of its own, whose `/context` is its own: its
+ * file tool and its programs read the same one. Its gates are the source's: a hire's own narrowing, never the
+ * workspace owner's.
  */
-export function localNodeRuntime(owner: CLIRuntime, actor: ActorHandle, source: NodeSource): AgentRuntime {
-  requireLocalActorWorkspace(owner.actor, actor);
-  requireLocalActorWorkspace(owner.actor, source.actor);
-  const binding = bindLocalActorReference(owner.actor, actorReferenceOf(actor));
+export function localNodeRuntime(source: CLIRuntime, actor: ActorHandle): AgentRuntime {
+  requireLocalActorWorkspace(source.actor, actor);
+  const binding = bindLocalActorReference(source.actor, actorReferenceOf(actor));
 
   // A node reading the parent's claim ledger would present the parent's turns as its own history.
-  const stores = createAgentStores(() => source.storage.sql, () => actor, (write) => source.storage.transactionSync(write), () => owner.filesForActor(actor));
+  const stores = createAgentStores(() => source.storage.sql, () => actor, (write) => source.storage.transactionSync(write), () => source.filesForActor(actor));
+  const { plane, toolFiles } = actorFilePlane({ source, actor, stores });
+  let ledger: Parameters<NonNullable<AgentRuntime['setTurnFileLedgerProvider']>>[0] = null;
 
-  const ownContext = contextMount({
-    actorId: actor.actorId,
-    own: () => localContextTree(() => ({ claims: stores.claims, events: stores.eventRecorder }), { author: actor.actorId, child: false }),
-  });
+  // The machine and its gates are the source's.
+  const executionRouter = new DefaultExecutionRouter(source.approvalPolicy);
 
-  // Over the source's plane, at the point `vfs://context` names in the workspace's space.
-  const context = { ...ownContext, at: join(owner.space, ownContext.name) };
+  executionRouter.register(hostWorkspaceExecutor({
+    vfs: toolFiles, files: plane, home: source.storage.home, planes: source.planes, memory: source.memory, craftStore: source.craftStore,
+    shell: source.shell, sql: source.storage.sql, actor, ledger: () => ledger?.(),
+  }));
 
   return {
     actor,
-    storage: { ...source.storage, vfs: withMountTable(source.storage.vfs, [context]) },
+    storage: { ...source.storage, vfs: plane },
     agentStateVfs: source.agentStateVfs,
-    toolFiles: withMountTable(source.toolFiles, [context]),
+    toolFiles,
     planes: source.planes,
     memory: source.memory,
     executor: source.executor,
@@ -40,10 +46,10 @@ export function localNodeRuntime(owner: CLIRuntime, actor: ActorHandle, source: 
     craftStore: source.craftStore,
     get judgeModel() { return source.judgeModel; },
     get fastLlm() { return source.fastLlm; },
-    executionRouter: source.executionRouter,
+    executionRouter,
     shell: source.shell,
     checkpoints: source.checkpoints,
     setShellApprovalChannel: source.setShellApprovalChannel,
-    setTurnFileLedgerProvider: source.setTurnFileLedgerProvider,
+    setTurnFileLedgerProvider: (provider) => { ledger = provider; },
   };
 }

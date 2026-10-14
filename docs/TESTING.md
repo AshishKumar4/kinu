@@ -7,19 +7,13 @@ Most tests run on Bun: core, cf-backend, cli-backend, cli. Durable Object tests 
 `bun install` can bootstrap with the machine's Bun. It installs the exact `bun` npm package this repo pins; hooks and shell entry points put `node_modules/.bin` first and refuse a missing local binary. GitHub workflows use it after installation too. For direct commands, source `scripts/repo-runtime.sh` first, or use `node_modules/.bin/bun run scripts/ladder.ts` so Bun also puts the local binary first for child commands. `bash scripts/setup-worktree.sh` prepares a fresh worktree with its own workspace links or its own locked install, without changing the machine's runtime.
 
 ```bash
-bash scripts/test.sh                     # core + cf-backend + cli-backend + cli
-bash scripts/test.sh --coverage          # + coverage report
-bash scripts/test.sh --bail              # exit on first failure
-bash scripts/test.sh packages/core/tests/contract-providers.test.ts   # one file
-bun run check                            # lint + type-check (every package)
+bun run test                                                   # core, agent-core, agent-utils, compaction
+bun scripts/ladder.ts --run bun test packages/cf-backend/tests/ # one directory, as its ladder row runs it
+bun test packages/core/tests/contract-providers.test.ts         # one file
+bun run check                                                  # lint + type-check (every package)
 ```
 
-Without a pattern, `scripts/test.sh` runs `packages/core/tests`, `packages/cf-backend/tests`, `packages/cli-backend/tests`, and `packages/cli/tests` in one `bun test` invocation (`scripts/test.sh:40-44`). It excludes `agent-utils`, `compaction`, and `pc-agent`. Root `bun run test` runs a partly disjoint set: `packages/core/`, then `agent-core`, `agent-utils` and `compaction`. The pc-agent suite runs only at the `ci` tier (`scripts/ladder.ts:1317`). Patterns and flags pass to `bun test`. To cover the omissions:
-
-```bash
-bash scripts/test.sh
-bun test packages/agent-utils/tests packages/compaction/tests
-```
+Every suite has a ladder row (`scripts/ladder.ts`), and the whole tier runs them all on armada (`bun scripts/ladder.ts --tier=ci`, or `armada run <sha>`). Patterns and flags pass to `bun test`.
 
 ### A bare package path is a substring filter
 
@@ -35,13 +29,13 @@ bun test packages/cli-backend/tests
 
 ### Each Bun suite keeps its own globals
 
-Multi-file ladder rows, the spine, the live tier and `scripts/test.sh` use Bun's native `--isolate`. The core, backend and CLI use `--parallel`, which implies the same isolation. On Bun 1.4.0, measured 2026-10-01, one fixture installed a module mock and a global; the second expected the real module and no global. The old devbox command ran 1 pass, 1 fail. With `--isolate`, both passed; the local shell entry point also passed both. Isolation changes no suite population.
+Multi-file ladder rows, the spine and the live tier use Bun's native `--isolate`. The core, backend and CLI use `--parallel`, which implies the same isolation. On Bun 1.4.0, measured 2026-10-01, one fixture installed a module mock and a global; the second expected the real module and no global. The old devbox command ran 1 pass, 1 fail. With `--isolate`, both passed; the local shell entry point also passed both. Isolation changes no suite population.
 
 Before merging, use `node_modules/.bin/bun run scripts/ladder.ts --changed=<base>`: Bun's `--changed` and Vitest's `--changed` select unchanged tests whose imported product changed. Worker pools also use their row's existing input closure as native `forceRerunTriggers`, because Vitest cannot follow `SELF` into the Worker. A changed run stores no complete-suite cache proof; CI remains unfiltered. Branch refs containing `/` survive glob expansion.
 
 ## The counts, measured 2026-08-19
 
-One `scripts/test.sh` run: 5,658 pass, 3 skip, 0 fail: 5,661 tests across 451 files in 175.49 s. Separate same-day runs:
+Separate runs of each directory:
 
 | Directory | Pass | Skip | Fail | Files |
 |---|---|---|---|---|
@@ -494,7 +488,6 @@ bun run coverage:check        # the merged lcov as per-package JSON
 bun scripts/coverage.ts --merge-only   # re-merge and re-render, no suites re-run
 ```
 `bun run coverage` runs each package's bun suites as one group, adds the cf-backend and devbox workerd pools, writes `coverage/<group>/lcov.info` per group, merges to `coverage/lcov.info`, renders `coverage/html/index.html`, and prints a per-package table plus the 25 least-covered files. The suite list comes from `trackedTestFiles()` and `isBunDiscoverableSuite`, the same predicates `scripts/ladder.ts` credits a bun gate with. A new package is measured without anyone editing a list.
-`bash scripts/test.sh --coverage` is not this. It runs four directories in one `bun test` and prints a text table to stdout. Measured 2026-09-01: 8,655 tests over 600 files, 339 s, `All files 79.97 % funcs / 81.46 % lines`, and no file written anywhere. agent-utils, compaction, devbox, test-utils, pc-agent, the scripts gates, root `tests/` and the workerd layer are absent from that number. Its table also carries ~20 rows for mutation-suite scratch copies under `$TMPDIR`, which drag the average. `bun run coverage` drops every record whose path leaves the repository.
 
 One `bun run coverage` at `7517f3c4b`, 12-core box under load ~98: 1,911.6 s wall for the suites. Re-merging the same per-group lcov files with `--merge-only` takes 2.3 s and reproduces the table below. The merged lcov holds 946 repository files.
 
@@ -539,9 +532,9 @@ Intentional low coverage stays intentional: `core/tests/e2e/ai-gateway-llm.ts`, 
 
 1. Create `packages/<your-pkg>/tests/`.
 2. Add `"@kinu.run/test-utils": "workspace:*"` to devDependencies.
-3. Add the directory to `scripts/test.sh`.
+3. Give the directory a ladder row in `scripts/ladder.ts`.
 4. Follow these conventions.
 
 ## CI
 
-`scripts/test.sh` serves local development and CI, exiting non-zero on failure. Add `--bail` to stop at the first error.
+CI is the ladder's `ci` tier on armada (`docs/DEPLOYMENT.md`): every row, each in a container of its own, against one commit.

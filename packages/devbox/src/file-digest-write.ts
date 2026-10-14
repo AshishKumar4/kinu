@@ -30,25 +30,30 @@ const OPERATION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
  * user may not write is refused. Writers of one name take turns on its directory and writers of one file under other
  * names (hard links) on the file, so a compare and its write are one step under every name.
  *
- * The guest keeps each `operation`'s answer, so a resend after a lost reply gets the first send's outcome rather than a
- * second compare; a send cut after its bytes landed is answered that its write stands, unless the file changed again
- * before the resend. `settled` names the operations whose answers the caller holds: no send of them is left, so their
- * answers go. What the caller never acknowledges goes with the container's `/tmp`.
+ * The guest keeps each `operation`'s answer in `journal`, so a resend after a lost reply gets the first send's outcome
+ * rather than a second compare; a send cut after its bytes landed is answered that its write stands, unless the file
+ * changed again before the resend. `settled` names the operations whose answers the caller holds: no send of them is
+ * left, so their answers go. The box keeps its journal in the container's `/tmp`, so what a caller never acknowledges
+ * goes with the container.
  */
 export function writeFileIfDigest(
   container: Pick<Container, 'exec'>,
-  { path, data, expected, operation, settled }: {
-    readonly path: string; readonly data: Uint8Array; readonly expected: string | null; readonly operation: string; readonly settled: readonly string[];
+  { journal, path, data, expected, operation, settled }: {
+    readonly journal: string; readonly path: string; readonly data: Uint8Array; readonly expected: string | null;
+    readonly operation: string; readonly settled: readonly string[];
   },
 ): Effect.Effect<DigestWrite, DevboxError> {
   return Effect.gen(function* () {
-    if (!path.startsWith('/') || path.includes('\0')) return yield* Effect.fail(new DevboxError('file', `a digest write needs an absolute path, not ${JSON.stringify(path)}`));
+    for (const absolute of [path, journal]) {
+      if (!absolute.startsWith('/') || absolute.includes('\0')) return yield* Effect.fail(new DevboxError('file', `a digest write needs an absolute path, not ${JSON.stringify(absolute)}`));
+    }
+
 
     for (const named of [operation, ...settled]) {
       if (!OPERATION.test(named)) return yield* Effect.fail(new DevboxError('file', `a digest write is named by a UUID, not ${JSON.stringify(named)}`));
     }
 
-    const writer = yield* attempt('io', () => container.exec(['python3', '-c', WRITE_IF_DIGEST, path, expected ?? '', operation, ...settled], { stdin: 'pipe' }));
+    const writer = yield* attempt('io', () => container.exec(['python3', '-c', WRITE_IF_DIGEST, path, journal, expected ?? '', operation, ...settled], { stdin: 'pipe' }));
     const stdin = writer.stdin;
 
     if (stdin === null) return yield* Effect.fail(new DevboxError('io', 'the digest write took no stdin'));
@@ -67,12 +72,11 @@ export function writeFileIfDigest(
 
 const WRITE_IF_DIGEST = `
 import fcntl, hashlib, json, os, secrets, sys
-path, expected, operation, settled = sys.argv[1], sys.argv[2] or None, sys.argv[3], sys.argv[4:]
+path, journal, expected, operation, settled = sys.argv[1], sys.argv[2], sys.argv[3] or None, sys.argv[4], sys.argv[5:]
 data = sys.stdin.buffer.read()
 digest = hashlib.sha256(data).hexdigest()
 # Each operation's answer, kept for its resends: a resend after a lost reply is answered what the first send did, and
 # one that arrives while the first still runs waits for it.
-journal = '/tmp/kinu-digest-writes'
 os.makedirs(journal, mode=0o700, exist_ok=True)
 for done in settled:
     for kept in (done + '.json', done + '.lock'):

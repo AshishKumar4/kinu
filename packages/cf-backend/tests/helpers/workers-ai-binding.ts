@@ -3,7 +3,7 @@ import * as v from 'valibot';
 import type { RemoteProxyConnectionString, Response as MiniflareResponse } from 'miniflare';
 import { startRemoteProxySession, unstable_readConfig } from 'wrangler';
 import { fileURLToPath } from 'node:url';
-import { restApiToken } from '../../../../scripts/cloudflare-rest';
+import { restApiToken } from '../../../../scripts/cloudflare-token';
 import { remoteSessionHolder } from './remote-session-holder';
 
 /** One `env.AI.run(model, inputs)` as the installed binding sends it: the model in a header, the inputs in the body. */

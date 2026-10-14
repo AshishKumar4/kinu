@@ -7,10 +7,9 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import * as v from 'valibot';
 
 import type { Node } from 'oxc-parser';
-import { parseJsonc } from './jsonc';
+import { boundContainerClasses } from './infra-manifest';
 import { posix } from 'node:path';
 import { readMatching, isProductSource, isParseable, isTestFile } from "./sources";
 import { assertMeasured } from "./gate-ratchet";
@@ -20,39 +19,11 @@ import {
 
 const root = new URL('..', import.meta.url).pathname;
 
-const WRANGLER = 'packages/cf-backend/wrangler.jsonc';
-
 const WORKER_ENTRY = 'packages/cf-backend/src/server.ts';
 
 export function readInterceptionSources(): Map<string, string> {
   return readMatching(file => isProductSource(file) || (file.startsWith("packages/devbox/")
     && isParseable(file) && !isTestFile(file) && !file.includes("/tests/")));
-}
-
-/** `containers[].class_name` — the shape this gate reads out of wrangler.jsonc,
- *  at the top level and under every named environment. Parsed where the file is
- *  required; Bun decodes JSONC natively, so a commented-out block never reaches
- *  the schema. */
-const ContainerList = v.optional(v.array(v.object({ class_name: v.string(), image: v.optional(v.string()) })));
-
-export const WranglerContainers = v.object({
-  containers: ContainerList,
-  env: v.optional(v.record(v.string(), v.object({ containers: ContainerList }))),
-});
-
-/** Classes bound to a container image by the deployment itself. Decoded
- *  structurally rather than by the regex this replaces, which stopped at the
- *  first `]` inside the block (an array-valued field on one entry silently
- *  dropped every class_name after it) and matched a commented-out block as if
- *  it were bound. */
-export function wranglerContainerClasses(declared: v.InferOutput<typeof WranglerContainers>): string[] {
-  const names = new Set<string>();
-
-  for (const scope of [declared, ...Object.values(declared.env ?? {})]) {
-    for (const { class_name } of scope.containers ?? []) names.add(class_name);
-  }
-
-  return [...names].sort();
 }
 
 /**
@@ -395,8 +366,8 @@ export function nativeRoutingReasons(sources: ReadonlyMap<string, string>, entry
 
 if (import.meta.main) {
   const sources = readInterceptionSources();
-  const bound = wranglerContainerClasses(parseJsonc(readFileSync(`${root}${WRANGLER}`, 'utf8'), WranglerContainers, WRANGLER));
-  const fromWrangler = bound;
+  // Classes bound to a container by the deployment itself, in every environment, read as Wrangler reads them.
+  const fromWrangler = boundContainerClasses();
   const fromSource = declaredSandboxClasses(sources);
   const classes = [...new Set([...fromWrangler, ...fromSource])].sort();
   const privateAudit = auditInterception(sources, classes, true);

@@ -19,7 +19,8 @@ import * as v from 'valibot';
 import { AwsClient } from 'aws4fetch';
 import { devboxTools } from '../armada/devbox-tools';
 import { deployedConfig } from './infra-manifest';
-import { r2ObjectSize, restApiToken } from './cloudflare-rest';
+import { r2ObjectSize } from './cloudflare-rest';
+import { restApiToken } from './cloudflare-token';
 import { requireCloudflareAccountId, wrangler } from './infra-cloudflare';
 
 const BLOCK_LOWER = join(import.meta.dir, '..', 'packages/devbox/block-lower');

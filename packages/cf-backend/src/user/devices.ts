@@ -1,7 +1,7 @@
 import { Effect } from 'effect';
-import { DeviceHelloSchema, DeviceUpdateHelloSchema } from '@kinu.run/core';
+import { DeviceHelloSchema, DeviceUpdateHelloSchema, DEVICE_FRAMES } from '@kinu.run/core';
 import {
-  DEVICE_PTY_OPEN_METHOD, type DeviceExecOutput, NO_DEVICE_CONNECTED, watchedOutput, SEVERAL_DEVICES_CONNECTED, codexEgressAllowed, chatgptEgressAllowed, type RelayedProvider, isWorkspaceName, nanoid, type DeviceCheckpointHint, type DeviceConsentRequest, type JsonObject, type JsonValue, CapabilityDeniedError, ownerCaller, type UserCaller, type ResolvedCaller, DeviceSocketHub, DeviceRequestLedger, type ClaimedDeviceRequest, type DeviceCancelOutcome, randomToken, sha256Hex, type DeviceChatGptStatus, DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED, DEVICE_TOKEN_ROTATION, DEVICE_UPDATE, cliArtifactPath, deviceUpdateState, readBuildStamp, BuildStampSchema, type BuildStamp, type DeviceUpdateFrame, type DeviceUpdateState, DEVICE_CANCEL_METHOD, DEVICE_EXEC_ACK_METHOD, parseDeviceCancelAnswer, nextDeviceRequestId, DEVICE_METHOD, DEVICE_ERRORS, deviceFailure, deviceMethodHas, type DeviceTunnel, DEVICE_TIERS, SANDBOX_UNAVAILABLE, effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix, sandboxCause, summarizeDeviceAction, type DeviceConsentDecision, type DeviceStatus, type DeviceFileScope, type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
+  type DeviceExecOutput, NO_DEVICE_CONNECTED, watchedOutput, SEVERAL_DEVICES_CONNECTED, codexEgressAllowed, chatgptEgressAllowed, type RelayedProvider, isWorkspaceName, nanoid, type DeviceCheckpointHint, type DeviceConsentRequest, type JsonObject, type JsonValue, CapabilityDeniedError, ownerCaller, type UserCaller, type ResolvedCaller, DeviceSocketHub, DeviceRequestLedger, type ClaimedDeviceRequest, type DeviceCancelOutcome, randomToken, sha256Hex, type DeviceChatGptStatus, DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED, DEVICE_UPDATE, cliArtifactPath, deviceUpdateState, readBuildStamp, BuildStampSchema, type BuildStamp, type DeviceUpdateFrame, type DeviceUpdateState, parseDeviceCancelAnswer, nextDeviceRequestId, DEVICE_METHOD, DEVICE_ERRORS, deviceFailure, deviceMethodHas, type DeviceTunnel, DEVICE_TIERS, effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix, sandboxCause, summarizeDeviceAction, type DeviceConsentDecision, type DeviceStatus, type DeviceFileScope, type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
 } from '@kinu.run/core';
 import { attemptInItsWords, diagnostics, KinuError, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -193,7 +193,7 @@ export class UserDevices {
     this.rotateDeviceToken(verified.deviceId, verified.tokenWasCurrent === true, tokenHash, now);
     this.rememberServedStamp(stamp);
     this._devices.accept(verified.deviceId, server);
-    server.send(JSON.stringify({ type: DEVICE_TOKEN_ROTATION, token }));
+    server.send(JSON.stringify({ type: DEVICE_FRAMES.rotate, token }));
     this.host.sqlx(`UPDATE user_devices SET last_seen_at = ? WHERE id = ?`, now, verified.deviceId);
 
     // Clear offline notices only on tracked workspaces; an unreachable one keeps its row for next accept.
@@ -649,7 +649,7 @@ export class UserDevices {
 
       // Cancellation is never consent-gated: it only ends a command already allowed, and
       // gating it could leave a live process waiting on an unanswered card.
-      const stopping = method === DEVICE_CANCEL_METHOD;
+      const stopping = method === DEVICE_METHOD.cancel;
       const ownerRead = opts?.agentName === undefined && deviceMethodHas(method, 'consentFree');
 
       const consentAgent = consentAgentFor(resolved, opts?.agentName, { stopping, ownerRead });
@@ -699,7 +699,7 @@ export class UserDevices {
     return Effect.gen({ self: this }, function* () {
       // Probe with a fresh id, never the command's own: ACKing a retry's id before replay
       // would delete its retained terminal result.
-      yield* attemptInItsWords('io', () => tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [nextDeviceRequestId()]));
+      yield* attemptInItsWords('io', () => tunnel.rpc(DEVICE_METHOD.execAck, [nextDeviceRequestId()]));
 
       // A revocation sweep can land during the probe await; recheck so no command runs
       // with nothing left to cancel or count it.
@@ -766,7 +766,7 @@ export class UserDevices {
       const sandbox = this.deviceSandboxFor(deviceId, workspace);
 
       // Neither end ever downgrades a sandboxed command to raw; files need no kernel.
-      if ((method === 'exec' || method === DEVICE_PTY_OPEN_METHOD) && effectiveDeviceMode(sandbox) === 'files_only') {
+      if ((method === 'exec' || method === DEVICE_METHOD.ptyOpen) && effectiveDeviceMode(sandbox) === 'files_only') {
         return yield* Effect.fail(deviceFailure(DEVICE_ERRORS.sandboxUnavailable, this.sandboxRefusal(deviceId, sandbox, sandboxCause(sandbox))));
       }
 
@@ -809,7 +809,7 @@ export class UserDevices {
       const tunnel = this._devices.tunnel(held.deviceId);
 
       if (!tunnel) return yield* Effect.fail(deviceFailure(DEVICE_ERRORS.disconnected, NO_DEVICE_CONNECTED));
-      yield* attemptInItsWords('io', () => tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [requestId]));
+      yield* attemptInItsWords('io', () => tunnel.rpc(DEVICE_METHOD.execAck, [requestId]));
       this._inflight.deleteAcknowledged({
         requestId, workspace: resolved.workspace, deviceId: held.deviceId,
       });
@@ -892,7 +892,7 @@ export class UserDevices {
 
       try {
         const answer = parseDeviceCancelAnswer(row.requestId, await tunnel.rpc(
-          DEVICE_CANCEL_METHOD, [row.requestId],
+          DEVICE_METHOD.cancel, [row.requestId],
         )).cancelled;
 
         // Persist before the ack, which can fail. No row updated means the terminal authority took
@@ -926,7 +926,7 @@ export class UserDevices {
 
     try {
       if (!tunnel) throw deviceFailure(DEVICE_ERRORS.disconnected, NO_DEVICE_CONNECTED);
-      await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [row.requestId]);
+      await tunnel.rpc(DEVICE_METHOD.execAck, [row.requestId]);
       this._inflight.deleteHeld(row.requestId, row.claim);
     } catch (err) {
       this._inflight.releaseClaim(row.requestId, row.claim);
@@ -960,7 +960,7 @@ export class UserDevices {
   }
 
   private sandboxRefusal(deviceId: string, sandbox: DeviceSandboxStatus, cause: string): string {
-    return `${SANDBOX_UNAVAILABLE}: ${this.deviceLabel(deviceId)} cannot run commands: `
+    return `${DEVICE_ERRORS.sandboxUnavailable}: ${this.deviceLabel(deviceId)} cannot run commands: `
       + `its Kinu daemon could not start a sandbox (${cause}), and Kinu never runs a command `
       + `unsandboxed unless the owner asked for that. ${sandboxReasonFix(sandbox.reason)} `
       + 'The owner can also turn Sandbox off for this device on the Devices page, '
@@ -1328,7 +1328,7 @@ export class UserDevices {
       try {
         if (settled === null) {
           const answer = parseDeviceCancelAnswer(row.requestId, await tunnel.rpc(
-            DEVICE_CANCEL_METHOD, [row.requestId],
+            DEVICE_METHOD.cancel, [row.requestId],
           )).cancelled;
 
           // Durable before the acknowledgement, so a dying activation leaves an answer, not
@@ -1337,7 +1337,7 @@ export class UserDevices {
         }
 
         try {
-          await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [row.requestId]);
+          await tunnel.rpc(DEVICE_METHOD.execAck, [row.requestId]);
         } catch (err) {
           // Kill confirmation is already truthful; this is local replay cleanup, recorded separately so a
           // failed ACK never reads as a possibly running process.

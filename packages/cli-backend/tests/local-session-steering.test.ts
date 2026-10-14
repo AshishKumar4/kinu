@@ -1158,7 +1158,6 @@ describe('LocalAgentSession — signed-in cloud proxy turn (zero BYO keys)', () 
           headers: { Authorization: `Bearer ${TOKEN}` },
           model: DEFAULT_WORKERS_AI_MODEL_ID,
         },
-        credentials: {},
         cloud: { origin, token: TOKEN },
       });
 

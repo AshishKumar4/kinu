@@ -1265,6 +1265,12 @@ function draftsFor(
   return drafts;
 }
 
+/** Every class a container is bound to, in production and in every named environment: a reader of the deployment's
+ *  containers asks this rather than parsing wrangler.jsonc itself. */
+export function boundContainerClasses(configPath = WRANGLER_CONFIG): string[] {
+  return [...new Set(INFRA_ENVIRONMENTS.flatMap((environment) => (deployedConfig(environment, configPath).containers ?? []).map((row) => row.class_name)))].sort();
+}
+
 /** The classes `exports` keeps: every entry but a `deleted` tombstone. */
 export function liveClasses(exports: DeployedConfig['exports']): readonly string[] {
   return Object.entries(exports ?? {}).flatMap(([name, entry]) => (entry.state === 'deleted' ? [] : [name]));

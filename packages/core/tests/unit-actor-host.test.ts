@@ -165,7 +165,7 @@ function build(donor?: Database, unreadableActor?: string, automatic = false, in
 
 /** Initialized on first use: a silent actor has no context row yet. */
 function contextOf(actor: BoundActor): ContextSelection {
-  return actor.stores.history.context.selected() ?? actor.stores.history.context.initialize();
+  return actor.stores.history.context.current();
 }
 
 /** The claim object a settle needs, for a turn this test admitted itself. */

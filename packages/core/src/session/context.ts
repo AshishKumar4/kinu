@@ -115,6 +115,11 @@ export class SessionContext {
     return this.sql`SELECT revision,author,cause,turn_id,proposal_id,recorded_at FROM context_revisions WHERE actor_id=${this.actor.actorId} AND context_id=${contextId} ORDER BY revision DESC`;
   }
 
+  /** The selected context, made on first use. */
+  current(): ContextSelection {
+    return this.selected() ?? this.initialize();
+  }
+
   initialize(contextId = crypto.randomUUID()): ContextSelection {
     this.actor.assertCurrent();
 

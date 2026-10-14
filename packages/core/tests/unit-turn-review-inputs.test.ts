@@ -7,6 +7,7 @@ import { isTrivialTurn } from '../src/evolution/ratings';
 import { SessionHistory } from '../src/session/history';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import type { ToolCallRecord } from '../src/evolution/types';
+import { claimFences } from '../src/orchestrator/actor-claims';
 
 /** The production schema. */
 function setup() {
@@ -18,6 +19,7 @@ function setup() {
   const history = new SessionHistory({
     sql: ws.sql, actor, transactionSync: write => ws.db.transaction(write)(),
     files: async () => ({ vfs: ws.vfs, artifactDirectory: '/actor/.kinu/context' }),
+    claims: claimFences(ws.sql, actor),
   });
 
   return { ...ws, actor, history, transcript: history.transcript(CHAT_SESSION_ID) };

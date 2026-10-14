@@ -8,8 +8,9 @@ import { JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json
 import { KinuError } from '../obs/error';
 import { encodeModelMessage } from './message-codec';
 import { type SessionMessages, SessionMessageReader, type ActorReadAuthority, type MessagePartReference, type MessageReference, type StoredPart } from './messages';
-import { type SessionPayloads, SessionPayloadReader, type SessionPayload } from './payload';
-import { rowText, turnAuthor, UIMessageSchema } from '../utils/ui-message';
+import { type SessionPayloads, SessionPayloadReader, payloadReference, type SessionPayload } from './payload';
+import { rowText, UIMessageSchema } from '../utils/ui-message';
+import { turnTags } from '../types/turn-metadata';
 import type { Page, PositionCursor, PositionPageRequest } from './page';
 import type { ContextSelection } from './context';
 import { isServerCompaction } from '../providers/server-compaction';
@@ -48,10 +49,7 @@ function withParts(rows: readonly EntryWithPartRow[]): ConversationEntry[] {
     let entry = entries.at(-1);
 
     if (entry?.id !== row.id) {
-      let metadata: SessionPayload | null = null;
-
-      if (row.metadata_json !== null) metadata = { json: row.metadata_json, path: null, digest: null };
-      else if (row.metadata_path !== null && row.metadata_digest !== null) metadata = { json: null, path: row.metadata_path, digest: row.metadata_digest };
+      const metadata = payloadReference(row.metadata_json, row.metadata_path, row.metadata_digest);
 
       entry = { id: row.id, position: row.position, role: row.role, turnId: row.turn_id, runId: row.run_id, recordedAt: row.recorded_at, metadata,
         context: row.context_id === null || row.context_revision === null ? null : { contextId: row.context_id, revision: row.context_revision },
@@ -446,7 +444,7 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
       const metadata = entry.metadata === null ? undefined : await this.payloads.read(entry.metadata);
       this.actor.assertCurrent();
 
-      if (turnAuthor({ metadata }) === 'operator') return true;
+      if (turnTags({ metadata }).author === 'operator') return true;
     }
 
     return false;
@@ -595,8 +593,9 @@ export class SessionTranscript extends SessionTranscriptReader<ActorHandle, Sess
     });
   }
 
-  /** The newest user row's turn, its empty failed answer dropped; null without one. */
-  reopenNewestTurn(): ConversationEntry | null {
+  /** The newest user row's turn: the row that opened it, and its answer where the transcript ends on one; null without
+   *  a turn. */
+  newestTurn(): { readonly opener: ConversationEntry; readonly answer: ConversationEntry | null } | null {
     const newest = this.newestUserId();
     const row = newest === null ? null : this.read(newest);
     const opener = row === null ? null : this.read(row.turnId ?? row.id);
@@ -604,9 +603,18 @@ export class SessionTranscript extends SessionTranscriptReader<ActorHandle, Sess
     if (opener?.role !== 'user') return null;
     const last = this.at(this.count() - 1);
 
-    if (last?.role === 'assistant' && last.parts.length === 0 && last.turnId === opener.id) this.truncate(last.position);
+    return { opener, answer: last?.role === 'assistant' && last.turnId === opener.id ? last : null };
+  }
 
-    return opener;
+  /** The newest user row's turn, its empty failed answer dropped; null without one. */
+  reopenNewestTurn(): ConversationEntry | null {
+    const newest = this.newestTurn();
+
+    if (newest === null) return null;
+
+    if (newest.answer !== null && newest.answer.parts.length === 0) this.truncate(newest.answer.position);
+
+    return newest.opener;
   }
 
   /** A rewind: `position` and everything after it is deleted, parts with it; the chat keeps no branch. */

@@ -9,10 +9,11 @@ import type { LanguageModel } from 'ai';
 import { AwaitedList, scriptedTurnModel } from '@kinu.run/test-utils';
 import { fleetEnvForTest } from './helpers/analytics-plane';
 import {
-  makeEnv, orchestratorHarness, reactivateOrchestratorHarness, storedChat, workspaceMainActor,
+  gatewayWorkspace, GATEWAY_CATALOG, makeEnv, orchestratorHarness, reactivateOrchestratorHarness, storedChat, workspaceMainActor,
   type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
-import { RunEventRecorder } from '@kinu.run/core';
+import { chatCompletion, GATEWAY_MODEL, requestOf, stubAiBinding } from './helpers/platform-gateway';
+import { RunEventRecorder, type SendMetadata } from '@kinu.run/core';
 import { socketConnection } from './helpers/bindings';
 import { wrapDatabase } from '@kinu.run/core/identity';
 
@@ -57,11 +58,11 @@ function connection(agent: { broadcast: (message: string, exclude?: string[]) =>
   return { wire, sent, frame: (holds) => frames.until(holds) };
 }
 
-function chatRequest(id: string, text: string): string {
+function chatRequest(id: string, text: string, metadata?: SendMetadata): string {
   return JSON.stringify({
     type: 'cf_agent_use_chat_request', id,
     init: { method: 'POST', body: JSON.stringify({
-      messages: [{ id: `input-${id}`, role: 'user', parts: [{ type: 'text', text }] }],
+      messages: [{ id: `input-${id}`, role: 'user', parts: [{ type: 'text', text }], ...(metadata !== undefined && { metadata }) }],
       trigger: 'submit-message',
     }) },
   });
@@ -114,6 +115,55 @@ describe('a chat request through the production gate', () => {
     expect((await userRows(harness))).toEqual(['input-req-idle']);
     expect(doneFrames(sent)).toEqual([{ id: 'req-idle' }]);
     // No submission ledger or input receipt table exists for the loop to write.
+  });
+
+  test("a send's tier and one-shot mark reach the turn it opens; the next send runs as the workspace sets", async () => {
+    const deep = 'ai-gateway/workers-ai/@cf/harness/deep';
+    const served: Array<{ readonly model: string; readonly asked: string }> = [];
+
+    const harness = gatewayWorkspace(stubAiBinding((run) => {
+      const { messages, tools } = requestOf(run);
+
+      // A turn's own requests offer its tools; a title or a review offers none.
+      const asked = messages.filter((message) => message.role === 'user' && !JSON.stringify(message.content).includes('<dynamic_context')).at(-1);
+
+      if (tools.length > 0) served.push({ model: v.parse(v.object({ model: v.string() }), run.query).model, asked: JSON.stringify(asked) });
+
+      return chatCompletion(run, 'Noted.');
+    }));
+
+    /** A gateway spec's model as Workers AI names it on the wire. */
+    const workersAiId = (spec: string): string => spec.slice(spec.indexOf('@'));
+
+    /** The model the turn asked `text` ran on. */
+    const servedFor = (text: string): string | undefined => served.find((request) => request.asked.includes(text))?.model;
+
+    const { agent } = harness;
+    const { wire, frame } = connection(agent);
+
+    agent.harnessInstallCatalog({
+      ...GATEWAY_CATALOG, tiers: { ...GATEWAY_CATALOG.tiers, default: { model: GATEWAY_MODEL }, deep: { model: deep } },
+      availableModels: [GATEWAY_MODEL, deep],
+    });
+    await agent.activateActor();
+    const gate = agent.harnessChatGate();
+
+    // As `kinu run` sends against the cloud: one task on the deep tier, run as an independent task.
+    await gate(wire, chatRequest('req-oneshot', 'Count the files.', { kinuTier: 'deep', kinuTurn: { oneShot: true } }));
+    await frame((frames) => doneFrames(frames).some((done) => done.id === 'req-oneshot'));
+    await gate(wire, chatRequest('req-next', 'And the folders?'));
+    await frame((frames) => doneFrames(frames).some((done) => done.id === 'req-next'));
+
+    const turns = (await storedChat(harness)).filter((message) => message.role === 'user').map((message) => message.metadata);
+
+    expect({
+      first: servedFor('Count the files.'),
+      next: servedFor('And the folders?'),
+      turns,
+    }).toEqual({
+      first: workersAiId(deep), next: workersAiId(GATEWAY_MODEL),
+      turns: [expect.objectContaining({ oneShot: true, profile_tier: 'deep' }), expect.not.objectContaining({ oneShot: true })],
+    });
   });
 
   test('a live turn records its fleet row at its own seal', async () => {

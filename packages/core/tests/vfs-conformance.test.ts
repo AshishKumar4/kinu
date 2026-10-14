@@ -13,13 +13,9 @@ import type { JsonValue } from '../src/utils/json';
 import { agentPlane, oneMachine, present, workspaceShell } from '@kinu.run/test-utils';
 import type { SessionBox } from '@kinu.run/test-utils/vfs';
 import type { NimbusSandboxFiles } from '@nimbus-sh/sdk/sandbox';
-import {
-  sandboxFiles,
-  nimbusSessionFiles,
-  deviceFiles,
-  type DeviceTransport,
-  type SandboxHandle,
-} from '../src/execution/index';
+import { sandboxFiles, type SandboxHandle } from '../src/execution/sandbox';
+import { nimbusSessionFiles } from '../src/execution/nimbus';
+import { deviceFiles, type DeviceTransport } from '../src/execution/device-tunnel-executor';
 import { createWorkspaceBundle } from './helpers';
 import { nativeFileRead, sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
 import { createParentWorkspaceVfs } from '../src/execution/parent';

@@ -120,7 +120,7 @@ tester.run("anti-slop/no-elapsed-work-deadline", noElapsedWorkDeadlineRule, {
     },
     {
       code: "setTimeout(() => reject(new Error('liveness capture timeout')), timeoutMs);",
-      filename: "scripts/liveness-capture.ts",
+      filename: "scripts/swarm-capture.ts",
     },
     // A silence bound, re-armed by every chunk: a stream that keeps sending is never cut.
     {

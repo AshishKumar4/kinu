@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import * as v from 'valibot';
-import { accountCredentialKey, asFetchFunction, CHATGPT_CRED_KEY, CHATGPT_PASTE_REDIRECT, DEVICE_CHATGPT, type JsonValue, type UserCaller } from '@kinu.run/core';
+import { accountCredentialKey, asFetchFunction, CHATGPT_CRED_KEY, CHATGPT_PASTE_REDIRECT, type JsonValue, type UserCaller, DEVICE_METHOD } from '@kinu.run/core';
 import { serveFamily } from './helpers/api';
 import { createTestUserDO, provisionTestWorkspace, testOwner, TEST_CREDENTIAL_ENCRYPTION_KEY, type TestUserDO } from './helpers/user-do';
 import { bootstrappedProfile, userAccount, workspaceObject } from './helpers/bindings';
@@ -276,7 +276,7 @@ describe('ChatGPT sign-in through a machine', () => {
     const authorizeUrl = 'https://auth.openai.com/api/accounts/authorize?client_id=dynamic_agent_client';
 
     const harness = createTestUserDO({
-      deviceResponder: (frame): JsonValue => (frame.method === DEVICE_CHATGPT.signIn
+      deviceResponder: (frame): JsonValue => (frame.method === DEVICE_METHOD.chatgptSignIn
         ? { authorizeUrl }
         : { signedIn: false, email: null, planEnabled: false, planDeclined: false, pending: false, lastFailure: null, firstSignIn: true }),
     });
@@ -291,7 +291,7 @@ describe('ChatGPT sign-in through a machine', () => {
     await harness.sendDeviceHello({ type: 'HELLO' });
     await harness.joinFibers();
 
-    expect(harness.deviceFrames.filter((frame) => frame.method === DEVICE_CHATGPT.signIn)).toHaveLength(1);
+    expect(harness.deviceFrames.filter((frame) => frame.method === DEVICE_METHOD.chatgptSignIn)).toHaveLength(1);
     expect((await harness.userDO.chatgptPlan(owner)).machineSignIn).toEqual({ state: 'open', authorizeUrl, device: { id: deviceId, label: 'studio' } });
     harness.close();
   });
@@ -303,7 +303,7 @@ describe('ChatGPT sign-in through a machine', () => {
 
     const harness = createTestUserDO({
       deviceResponder: async (frame): Promise<JsonValue> => {
-        if (frame.method !== DEVICE_CHATGPT.signIn) return NOT_SIGNED_IN;
+        if (frame.method !== DEVICE_METHOD.chatgptSignIn) return NOT_SIGNED_IN;
 
         // The studio's daemon answers only once the laptop has finished saying HELLO.
         if (frame.device === studio) await studioAnswers.promise;
@@ -324,7 +324,7 @@ describe('ChatGPT sign-in through a machine', () => {
     await studioHello;
     await harness.joinFibers();
 
-    const opened = harness.deviceFrames.filter((frame) => frame.method === DEVICE_CHATGPT.signIn);
+    const opened = harness.deviceFrames.filter((frame) => frame.method === DEVICE_METHOD.chatgptSignIn);
     expect(opened).toHaveLength(1);
     expect((await harness.userDO.chatgptPlan(owner)).machineSignIn).toMatchObject({ state: 'open', device: { id: opened[0]?.device } });
     harness.close();
@@ -335,7 +335,7 @@ describe('ChatGPT sign-in through a machine', () => {
 
     const harness: TestUserDO = createTestUserDO({
       deviceResponder: async (frame): Promise<JsonValue> => {
-        if (frame.method !== DEVICE_CHATGPT.signIn) return NOT_SIGNED_IN;
+        if (frame.method !== DEVICE_METHOD.chatgptSignIn) return NOT_SIGNED_IN;
         // The owner cancels while the machine is still answering.
         await harness.userDO.cancelChatGptSignIn(owner);
 
@@ -349,7 +349,7 @@ describe('ChatGPT sign-in through a machine', () => {
     await harness.sendDeviceHello({ type: 'HELLO' });
     await harness.joinFibers();
 
-    expect(harness.deviceFrames.filter((frame) => frame.method === DEVICE_CHATGPT.signIn)).toHaveLength(1);
+    expect(harness.deviceFrames.filter((frame) => frame.method === DEVICE_METHOD.chatgptSignIn)).toHaveLength(1);
 
     expect((await harness.userDO.chatgptPlan(owner)).machineSignIn).toBeNull();
     harness.close();
@@ -364,7 +364,7 @@ describe('ChatGPT sign-in through a machine', () => {
       deviceResponder: (frame): JsonValue => {
         const device = frame.device ?? '';
 
-        if (frame.method === DEVICE_CHATGPT.signOut) {
+        if (frame.method === DEVICE_METHOD.chatgptSignOut) {
           signedOut.add(device);
           asked.push(...frame.params);
 

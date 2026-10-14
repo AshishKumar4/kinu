@@ -12,11 +12,12 @@ import { requireEqual, tierIdentity } from './fixtures/devbox-e2e/oracle';
 import { completeTeardown } from './fixtures/devbox-e2e/teardown';
 import { CONTRACT_TEARDOWN_BUCKET, ContractTeardownSchema, contractLedger, contractOwner } from './fixtures/devbox-e2e/ledger';
 import type { ContractLedger } from './fixtures/devbox-e2e/ledger';
-import { r2 } from './infra-cloudflare';
+import { containerApplicationsNamed, deleteContainerApplication, r2 } from './infra-cloudflare';
 import { deployedConfig } from './infra-manifest';
 import { r2ResiduePlane, drainBucketResidue } from './bench-devbox-fixture';
-import { deleteR2Prefix, restApiToken } from './cloudflare-rest';
-import { runWrangler, wranglerProvesAbsence, deleteContainerApps, containerAppIds, publishTeardown, runTeardownOnce, delay } from './fixtures/r2-bench/deploy-substrate';
+import { deleteR2Prefix } from './cloudflare-rest';
+import { restApiToken } from './cloudflare-token';
+import { runWrangler, wranglerProvesAbsence, publishTeardown, runTeardownOnce, delay } from './ephemeral-deployment';
 import { snapshotRegistry } from '../packages/devbox/src/snapshot-registry';
 import artifact from '../packages/devbox/block-lower/upstream.json';
 import { CONTAINER_CONTRACTS, DISK_CONTRACTS } from '../packages/devbox/bench/contract-types';
@@ -428,7 +429,7 @@ async function main(): Promise<void> {
   const registry = snapshotRegistry({ account: ACCOUNT, token, fetch: (input, init) => fetch(input, init) });
   // The application's ids, learnt once it exists and again before anything is deleted: deleting the Worker or the
   // application leaves its snapshots, and only these ids find them after.
-  const learnApplication = () => { for (const found of containerAppIds(REPO, [app], () => undefined)) applicationIds.add(found.id); };
+  const learnApplication = () => { for (const found of containerApplicationsNamed([app])) applicationIds.add(found.id); };
 
   publishTeardown(async () => {
     let recorded = false;
@@ -469,10 +470,10 @@ async function main(): Promise<void> {
       learnApplication();
       await writeReport();
       const ids = [...applicationIds];
-      const removed = deleteContainerApps(REPO, [app], line => { process.stderr.write(`${line}\n`); });
 
-      if (removed.some(line => line.includes('FAILED'))) throw new Error(removed.join('; '));
-      requireEqual(containerAppIds(REPO, [app], () => undefined), []);
+      for (const found of containerApplicationsNamed([app])) await deleteContainerApplication(found);
+
+      requireEqual(containerApplicationsNamed([app]), []);
 
       // Deleting the application leaves every snapshot it made, the ones no box still names included.
       for (const applicationId of ids) {

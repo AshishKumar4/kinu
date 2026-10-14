@@ -1,4 +1,4 @@
-import { describeThrown } from '../r2-bench/deploy-substrate';
+import { describeThrown } from '../../ephemeral-deployment';
 
 export type TeardownHealth = { readonly status: number | null } | { readonly failure: string };
 

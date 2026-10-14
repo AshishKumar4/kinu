@@ -342,7 +342,7 @@ async function openDaemonAgent(
 
   const openConfig = {
     llm: llmConfig,
-    providerCredentials: resolveProviderCredentials(),
+    providerCredentials: resolveProviderCredentials,
     oauthStore: createOAuthStore(),
     ...(cloud !== null && { cloud }),
     // The ref's stored directory, never process.cwd(): a daemon serves every project.

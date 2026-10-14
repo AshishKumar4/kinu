@@ -12,8 +12,8 @@ import { TLSSocket } from 'node:tls';
 import { join } from 'node:path';
 import * as v from 'valibot';
 import {
-  CODEX_CRED_KEY, DEVICE_CHATGPT, DEVICE_CONNECT_PATH, DEVICE_RELAY,
-  chatgptEgressAllowed, codexEgressAllowed,
+  CODEX_CRED_KEY, DEVICE_CONNECT_PATH,
+  chatgptEgressAllowed, codexEgressAllowed, DEVICE_FRAMES, DEVICE_METHOD,
 } from '@kinu.run/core';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { createTestUserDO, testOwner, type AcceptedSocket, type TestUserDO } from './helpers/user-do';
@@ -457,8 +457,8 @@ describe('the daemon relays model calls from the owner\'s machine', () => {
 describe('the daemon carries only what core allows', () => {
   test('its frame and method names are core\'s', () => {
     expect([pcAgent.RELAY_METHOD, pcAgent.RELAY_HEAD_FRAME, pcAgent.RELAY_BODY_FRAME])
-      .toEqual([DEVICE_RELAY.method, DEVICE_RELAY.head, DEVICE_RELAY.body]);
-    expect(pcAgent.CHATGPT_METHODS).toEqual(DEVICE_CHATGPT);
+      .toEqual([DEVICE_METHOD.codexRelay, DEVICE_FRAMES.relayHead, DEVICE_FRAMES.relayBody]);
+    expect(pcAgent.CHATGPT_METHODS).toEqual({ status: DEVICE_METHOD.chatgptStatus, signIn: DEVICE_METHOD.chatgptSignIn, signOut: DEVICE_METHOD.chatgptSignOut });
     // Core keeps its copy unexported; its contract test reads this code as a missing sign-in.
     expect(pcAgent.CHATGPT_SIGNED_OUT).toBe('chatgpt_signed_out');
   });

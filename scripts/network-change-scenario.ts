@@ -11,7 +11,8 @@
  */
 import type { HTTPRequest } from 'puppeteer';
 import { withBrowser } from './live-app-harness';
-import { recordDeadEnds, until } from './product-flows';
+import { recordDeadEnds } from '../evals/src/browser';
+import { until } from './product-flows';
 
 const MODULES = 10;
 

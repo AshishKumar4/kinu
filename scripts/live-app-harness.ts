@@ -24,7 +24,6 @@ import { join } from 'node:path';
 import { git } from '@kinu.run/test-utils';
 import type { Subprocess } from 'bun';
 import type { Browser, Page } from 'puppeteer';
-import * as v from 'valibot';
 import { parseJsonValue, type JsonValue } from '@kinu.run/core';
 import { holdForRelease, releaseScratch, scratchDir } from '../packages/test-utils/src/scratch';
 import { declaredSettings } from './browser-declarations';
@@ -96,63 +95,6 @@ export async function apiJson(origin: string, path: string, init?: RequestInit):
   }
 
   return text ? parseJsonValue(text) : null;
-}
-
-const WorkspaceEntrySchema = v.object({ name: v.string() });
-
-/** What the app's workspace-create route takes: `name` is the URL name asked
- *  for, `displayName` the title the sidebar shows when it differs. */
-export interface WorkspaceRequest {
-  readonly name: string;
-  readonly purpose: string;
-  readonly model: string;
-  readonly displayName?: string;
-}
-
-/** Create a workspace through the app's own route; the name it answers with is
- *  the one the URL takes, which is not always the one asked for. */
-export async function createWorkspace(origin: string, request: WorkspaceRequest): Promise<string> {
-  const created = v.parse(
-    WorkspaceEntrySchema,
-    await apiJson(origin, '/api/user/workspaces', {
-      method: 'POST',
-      body: JSON.stringify({
-        name: request.name, purpose: request.purpose, model: request.model,
-        displayName: request.displayName,
-      }),
-    }),
-  );
-
-  return created.name;
-}
-
-const RosterPageSchema = v.object({
-  entries: v.array(WorkspaceEntrySchema), nextCursor: v.nullable(v.string()),
-});
-
-/** Every workspace name on the caller's own roster, paged through the
- *  route's own cursor. */
-export async function listWorkspaces(origin: string): Promise<string[]> {
-  const names: string[] = [];
-  let cursor: string | null = null;
-
-  do {
-    const page: v.InferOutput<typeof RosterPageSchema> = v.parse(
-      RosterPageSchema,
-      await apiJson(origin, `/api/user/workspaces${cursor === null ? '' : `?cursor=${encodeURIComponent(cursor)}`}`),
-    );
-
-    names.push(...page.entries.map((entry) => entry.name));
-    cursor = page.nextCursor;
-  } while (cursor !== null);
-
-  return names;
-}
-
-/** Remove a workspace through the app's own route — the same DELETE the
- *  sidebar's Remove control issues. */
-export async function deleteWorkspace(origin: string, name: string): Promise<void> {
-  await apiJson(origin, `/api/user/workspaces/${encodeURIComponent(name)}`, { method: 'DELETE' });
 }
 
 export interface LiveApp {

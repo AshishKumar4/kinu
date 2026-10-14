@@ -161,6 +161,20 @@ export function openTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
   }, { runId });
 }
 
+/**
+ * A run's close inside the commit that ends it, chat turn and delivered run alike: `close` writes the run's end beside
+ * whatever else that commit holds, and answers what moves once it holds. The events it wrote are heard only then, so a
+ * commit that rolls back leaves the run open everywhere. Run it inside the transaction; call what it answers after.
+ */
+export function closeRunIn(recorder: { collect<T>(write: () => T): { readonly value: T; readonly publish: () => void } }, close: () => () => void): () => void {
+  const closing = recorder.collect(close);
+
+  return () => {
+    closing.value();
+    closing.publish();
+  };
+}
+
 /** Seal the run: per-turn ledgers, then turn_end, then run_end with the failure text. Never throws. */
 export function closeTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
   turnIndex: number;

@@ -25,9 +25,13 @@ import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { evalSessionPath } from '@kinu.run/test-utils';
-import { deleteApplicationByRest, deleteR2Prefix, deletedByRest, restApiToken } from './cloudflare-rest';
+import { deleteR2Prefix, deletedByRest } from './cloudflare-rest';
+import { registryToken, restApiToken } from './cloudflare-token';
 import { snapshotRegistry } from '../packages/devbox/src/snapshot-registry';
-import { type ContainerApplication, type DeployedBinding, containerApplications, deployedVersion, deployment, why, wrangler } from './infra-cloudflare';
+import {
+  type ContainerApplication, type DeployedBinding, containerApplications, deleteContainerApplication, deployedVersion, deployment,
+  requireCloudflareAccountId, why, wrangler,
+} from './infra-cloudflare';
 import {
   type DeployedConfig, INFRA_ENVIRONMENTS, type InfraEnvironment, type Resource, deployedConfig, liveClasses,
 } from './infra-manifest';
@@ -117,7 +121,7 @@ export interface ResetTarget {
   latest: () => Reset | undefined;
   /** Uploads the placeholder that deletes `classes`, and answers its version. */
   deployPlaceholder: (classes: readonly string[], tag: string) => string;
-  deleteApplication: (application: Reset['applications'][number]) => void;
+  deleteApplication: (application: Reset['applications'][number]) => Promise<void>;
   /** Deletes every container snapshot the application made, which deleting it leaves, and answers how many. */
   deleteSnapshots: (application: Reset['applications'][number]) => Promise<number>;
   /** Deletes every object under the prefix, and answers how many. */
@@ -185,6 +189,7 @@ function cloudflareTarget(environment: InfraEnvironment, config: DeployedConfig,
   const worker = config.name ?? '';
   const releases = bucketOf(config, 'RELEASES_BUCKET') ?? '';
   const site = origin(config);
+  const account = requireCloudflareAccountId();
 
   return {
     serving: () => {
@@ -226,21 +231,9 @@ function cloudflareTarget(environment: InfraEnvironment, config: DeployedConfig,
 
       return /Version ID:\s*([0-9a-f-]{36})/u.exec(run(['deploy', '-c', placeholder, '--message', `kinu ${environment} ${tag}`]))?.[1] ?? '';
     },
-    deleteApplication: (application) => {
-      if (!deletedByRest(application.id)) {
-        run(['containers', 'delete', application.id]);
-
-        return;
-      }
-
-      const deleted = deleteApplicationByRest(config.account_id ?? '', application.id);
-
-      if (!deleted.ok) throw new Error(deleted.reason);
-    },
+    deleteApplication: deleteContainerApplication,
     deleteSnapshots: async (application) => {
-      const registry = process.env['DEVBOX_REGISTRY_TOKEN']?.trim();
-      const token = registry === undefined || registry === '' ? restApiToken() : registry;
-      const swept = await snapshotRegistry({ account: config.account_id ?? '', token, fetch: (input, init) => fetch(input, init) }).deleteApplication(application.id);
+      const swept = await snapshotRegistry({ account, token: registryToken(), fetch: (input, init) => fetch(input, init) }).deleteApplication(application.id);
 
       if (swept.kind === 'refused') throw new Error(`${application.name}'s snapshots were not deleted: ${swept.reason}`);
 
@@ -248,7 +241,7 @@ function cloudflareTarget(environment: InfraEnvironment, config: DeployedConfig,
 
       return swept.deleted;
     },
-    deleteChains: (chains) => deleteR2Prefix({ accountId: config.account_id ?? '', bucket: chains.bucket, prefix: chains.prefix }),
+    deleteChains: (chains) => deleteR2Prefix({ accountId: account, bucket: chains.bucket, prefix: chains.prefix }),
     putRecord: (key, file) => {
       run(['r2', 'object', 'put', `${releases}/${key}`, '--file', file, '--content-type', 'application/json', '--remote']);
     },
@@ -398,7 +391,7 @@ async function finish(input: WipeInput, reset: Reset): Promise<Reset> {
     if (refused !== undefined) throw new Error(refused);
 
     for (const application of left) {
-      target.deleteApplication(application);
+      await target.deleteApplication(application);
       console.log(`reset: deleted container application ${application.name} (${application.id})`);
     }
 

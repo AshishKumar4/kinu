@@ -12,7 +12,8 @@ import { join } from 'node:path';
 import * as v from 'valibot';
 import { spawnTest, runToExit } from '@kinu.run/test-utils'
 import { withBrowser } from '../../scripts/live-app-harness';
-import { frameLedger, HOST_NETWORK_CHANGED, hostNetworkChange, recordDeadEnds, settledAfter, until, waitOn } from '../../scripts/product-flows';
+import { recordDeadEnds } from '../../evals/src/browser';
+import { frameLedger, HOST_NETWORK_CHANGED, hostNetworkChange, settledAfter, until, waitOn } from '../../scripts/product-flows';
 
 const NETWORK_CHANGE_SCENARIO = join(import.meta.dir, '..', '..', 'scripts', 'network-change-scenario.ts');
 
