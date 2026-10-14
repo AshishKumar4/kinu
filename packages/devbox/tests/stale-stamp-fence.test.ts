@@ -51,7 +51,7 @@ describe('a stale attempt\'s boot-id stamp does not overwrite the successor\'s',
     // A stale attempt must not regress the live generation's boot id, nor count a replacement it no longer owns: the
     // heartbeat would read the mismatch and replace a healthy container.
     expect(v.parse(StampedBootIdSchema, rows.get(BOOT_ID_KEY))).toBe(successorBootId);
-    expect(successorBootId).toBe(container.bootId);
+    expect(container.bootId).toBe(successorBootId);
     expect((await box.devboxState()).replacedCount).toBe(counted);
     expect((await box.devboxState()).ready).toBe(true);
   });
