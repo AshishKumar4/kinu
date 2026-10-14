@@ -10,7 +10,8 @@
  */
 
 import { WorkerEntrypoint, exports } from 'cloudflare:workers';
-import { KITESURF_SESSION_ID, parseWorkspacePreviewLabel, previewHostSuffix, refusedHostname, type PreviewSuffixEnv } from '@kinu.run/core';
+import { KITESURF_SESSION_ID, parseWorkspacePreviewLabel, previewHostSuffix, refusedHostname, type LabelSignerEnv, type PreviewSuffixEnv } from '@kinu.run/core';
+import { selfPreviewPass } from './viewer-pass';
 import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 
 /** Loopback throws reach the caller as opaque `internal error`, so failures
@@ -21,6 +22,11 @@ export interface CodemodeEgressProps {
   readonly workspace: string | null;
   /** The actor whose program this is; null for slate code, which reaches only a new Kitesurf browser. */
   readonly actor: string | null;
+  /**
+   * The program acts with its workspace owner's authority (the agent's programs, the owner's own slates), so it opens
+   * the workspace's own previews. Never a share's viewer's: a preview's slate runs as the owner, unbounded by the grant.
+   */
+  readonly asOwner: boolean;
 }
 
 /** The host `connectBrowser` dials; the path's last segment is a session id or `kitesurf`. */
@@ -37,7 +43,7 @@ interface BrowserSockets {
   connectSession(sessionId: string): Promise<{ webSocket: { fetch(input: string, init: RequestInit): Promise<Response> } }>;
 }
 
-type EgressEnv = PreviewSuffixEnv & { readonly BROWSER: BrowserSockets; readonly OrchestratorAgent: BrowserOwners };
+type EgressEnv = PreviewSuffixEnv & LabelSignerEnv & { readonly BROWSER: BrowserSockets; readonly OrchestratorAgent: BrowserOwners };
 
 /** The path puppeteer asks for a Kitesurf browser, which Browser Run creates on connect. */
 const KITESURF_CONNECT = 'https://browser-run.invalid/v1/devtools/browser?browser=kitesurf';
@@ -72,6 +78,20 @@ function ownPreviewHost(url: URL, env: PreviewSuffixEnv, workspace: string): boo
   return parseWorkspacePreviewLabel(url.hostname.slice(0, -suffix.length - 1))?.workspace === workspace;
 }
 
+/**
+ * The workspace's own program fetching one of its previews: the preview opens only for its owner, and this is the owner's
+ * workspace asking (`nimbus-route.ts`). The pass goes first, so a cookie of the program's own by its name never shadows it.
+ */
+async function withSelfPass(request: Request, env: EgressEnv, workspace: string, url: URL): Promise<Request> {
+  const pass = await selfPreviewPass(env, workspace, url);
+
+  if (pass === null) return request;
+  const headers = new Headers(request.headers);
+  headers.set('cookie', [`${pass.name}=${pass.value}`, request.headers.get('cookie')].filter((part) => part !== null && part !== '').join('; '));
+
+  return new Request(request, { headers });
+}
+
 async function forwardCodemodeEgress(request: Request, env: EgressEnv, props: CodemodeEgressProps): Promise<Response> {
   const url = new URL(request.url);
   const self = exports.default;
@@ -79,7 +99,9 @@ async function forwardCodemodeEgress(request: Request, env: EgressEnv, props: Co
 
   if (url.hostname === BROWSER_GATE_HOST) return await browserGate(request, env, props);
 
-  if (self !== undefined && workspace !== null && ownPreviewHost(url, env, workspace)) return await self.fetch(request);
+  if (self !== undefined && workspace !== null && ownPreviewHost(url, env, workspace)) {
+    return await self.fetch(props.asOwner ? await withSelfPass(request, env, workspace, url) : request);
+  }
 
   const refusal = refusedHostname(url.hostname);
 

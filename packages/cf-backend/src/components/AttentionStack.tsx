@@ -4,7 +4,7 @@
  * tab shows, so the two never disagree; Work keeps the full list, and the chat keeps only events that ask nothing.
  */
 import { Cause, Effect } from "effect";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FocusEvent, type ReactNode } from "react";
 import { Button } from "@cloudflare/kumo";
 import { BrainIcon, ChatCircleTextIcon, CheckIcon, DesktopTowerIcon, NotePencilIcon, ShieldWarningIcon, SparkleIcon, XIcon, type Icon } from "@phosphor-icons/react";
 import { revealMisrepresenting, timeAgo, type AccountMemoryProposal, type OwedIntent, type OwedOwnerIntent, type OwnerAsk, type PendingAction, type PendingActionKind, type PendingConsent, type PlanPageRef } from "@kinu.run/core";
@@ -223,37 +223,62 @@ function useAnswered(asks: readonly OwnerAsk[]) {
   return { answered, mark: (key: string) => setAnswered((was) => new Set([...was, key])) };
 }
 
+/**
+ * The open card: the one chosen, else, while the pointer or focus is on the stack, the one the owner is on, else the
+ * newest. Held, a card that arrives meanwhile waits behind, so a press is never taken by a card that slid in under it;
+ * answered, the next held is the one that opens. `holding` goes on the stack.
+ */
+function useOpenCard(waiting: readonly OwnerAsk[], chosen: string | null) {
+  const [held, setHeld] = useState<string | null>(null);
+  const front = waiting.find((ask) => ask.key === chosen) ?? waiting.find((ask) => ask.key === held) ?? waiting[0];
+
+  if (held !== null && front !== undefined && held !== front.key) setHeld(front.key);
+  const hold = (): void => setHeld(front?.key ?? null);
+
+  return {
+    front,
+    holding: {
+      onPointerEnter: hold, onPointerLeave: () => setHeld(null), onFocus: hold,
+      onBlur: (event: FocusEvent<HTMLElement>) => {
+        if (!(event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget))) setHeld(null);
+      },
+    },
+  };
+}
+
+/** The parked commands' decision flow, the stack's own, so their boxes stand while another card is answered first. */
+function useParkedFlow(rpc: WorkspaceRpc, decided: (ids: readonly string[]) => Promise<void>): ParkedDecisionFlow {
+  const calls = useRef({ rpc, decided });
+
+  useEffect(() => { calls.current = { rpc, decided }; });
+
+  const [flow] = useState(() => new ParkedDecisionFlow({
+    decide: (ids, decision) => calls.current.rpc("decideDeferredApprovals", [ids, decision]),
+    onDecided: (ids) => calls.current.decided(ids),
+  }));
+
+  return flow;
+}
+
 export function AttentionStack(props: AttentionStackProps): ReactNode {
   const { asks, rpc, onDecided, owedIntents = [] } = props;
   const { answered, mark } = useAnswered(asks);
   const [ownChoice, setOwnChoice] = useState<string | null>(null);
   const chosen = props.focus?.chosen ?? ownChoice;
   const setChosen = props.focus?.choose ?? setOwnChoice;
-  // The parked commands' choice is the stack's, so it stands while another card is answered first.
-  const parkedCalls = useRef({ rpc, decided: async (_ids: readonly string[]): Promise<void> => {} });
 
-  useEffect(() => {
-    parkedCalls.current = {
-      rpc,
-      decided: async (ids) => {
-        for (const id of ids) mark(`action:${id}`);
-        setChosen(null);
-        await onDecided();
-      },
-    };
+  const parkedFlow = useParkedFlow(rpc, async (ids) => {
+    for (const id of ids) mark(`action:${id}`);
+    setChosen(null);
+    await onDecided();
   });
-
-  const [parkedFlow] = useState(() => new ParkedDecisionFlow({
-    decide: (ids, decision) => parkedCalls.current.rpc("decideDeferredApprovals", [ids, decision]),
-    onDecided: (ids) => parkedCalls.current.decided(ids),
-  }));
 
   // The card whose answer is in flight: its buttons wait for it, and the next card's are live as soon as it opens.
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<{ key: string; message: string } | null>(null);
 
   const waiting = asks.filter((ask) => !answered.has(ask.key));
-  const front = waiting.find((ask) => ask.key === chosen) ?? waiting[0];
+  const { front, holding } = useOpenCard(waiting, chosen);
 
   if (front === undefined) return null;
 
@@ -297,7 +322,8 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
   const FrontIcon = KIND_ICON[kindOf(front)];
 
   return (
-    <section aria-label="Waiting on you" data-attention-stack data-attention-count={waiting.length} className="p-attention">
+    <section aria-label="Waiting on you" data-attention-stack data-attention-count={waiting.length} className="p-attention"
+      {...holding}>
       {shown.map((ask, depth) => {
         const BehindIcon = KIND_ICON[kindOf(ask)];
 

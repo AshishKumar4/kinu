@@ -39,7 +39,7 @@ export const DELEGATING_PROGRAM = 'async function run({ task }) { await host.def
 
 /** Writes the program's version file, where promotion and a recovery's verification read it, and makes it current. */
 export async function installProgram(rt: AgentRuntime, version: number, code: string): Promise<void> {
-  await writeText(rt.agentStateVfs ?? rt.storage.vfs, `${rt.identity.scaffold.path}.v${version}`, code);
+  await writeText(rt.agentStateVfs, `${rt.identity.scaffold.path}.v${version}`, code);
   await rt.identity.scaffold.write(code);
   void rt.storage.sql`
     INSERT OR REPLACE INTO scaffold_versions (actor_id, version, written_at, rationale, status)

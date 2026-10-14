@@ -173,6 +173,7 @@ interface SealedOrchestratorRpc extends Rpc.DurableObjectBranded, DeniedRpc {
 interface DeviceUserProbeRpc extends Rpc.DurableObjectBranded {
   fetch(input: string, init?: RequestInit): Promise<Response>;
   pair(label: string): Promise<{ deviceId: string; ticket: string }>;
+  reconnecting(label: string): Promise<{ deviceId: string; tickets: [string, string] }>;
   bindWorkspace(workspace: string, deviceId: string): Promise<void>;
   admit(requestId: string, deviceId: string, workspace: string, actorId: string): Promise<void>;
   run(workspace: string, requestId: string, actorId: string, command: string): Promise<string | undefined>;
@@ -310,6 +311,10 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
   forgetActivation(workspace: string): Promise<void>;
   pendingNimbusTasks(workspace: string): Promise<{ tasks: Array<{ id: string; time: number }>; alarm: number | null }>;
   drivePreview(url: string): Promise<PreviewAnswer>;
+  visitPreview(url: string, headers: Record<string, string>): Promise<PreviewAnswer & { location: string | null }>;
+  visitPreviewAs(url: string, userId: string): Promise<PreviewAnswer & { entry: number }>;
+  visitPreviewWithCookieOf(url: string, userId: string): Promise<PreviewAnswer>;
+  refusalText(slate: boolean): Promise<{ text: string; html: string }>;
   rpcPreview(url: string, method: string, args?: JsonValue[]): Promise<RpcAnswer>;
   holdPreview(url: string): Promise<RpcAnswer>;
   callHeldPreview(method: string): Promise<RpcAnswer>;

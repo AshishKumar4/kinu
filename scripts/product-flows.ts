@@ -734,11 +734,11 @@ export async function spliceSitsWhereItWasRead(target: FlowTarget): Promise<Spli
 }
 
 export interface ApprovalStackVerdict {
-  /** The stack's cards once both commands parked: the open one first, then those behind it. */
+  /** The asks once both commands parked, newest first, as the parked card lists them. */
   readonly stacked: readonly string[];
-  /** What the open card showed before any answer. */
+  /** What the parked card showed before any answer. */
   readonly openWords: string;
-  /** The stack's cards once the open one was approved. */
+  /** The flow's asks once the newer was approved alone. */
   readonly afterFirst: readonly string[];
   /** What the chat showed once both answers reached the agent: each as its event, and the agent's reply to each. */
   readonly heard: { readonly approvedEvent: boolean; readonly deniedEvent: boolean; readonly approvedReply: boolean; readonly deniedReply: boolean };
@@ -753,22 +753,38 @@ const STACK_KEYS = `(() => {
   return [...open, ...behind];
 })()`;
 
-/** Presses the open card's answer named `words`. */
-function stackAnswer(words: string, key: string): string {
-  return `[...document.querySelectorAll(${JSON.stringify(`[data-attention-card=${JSON.stringify(key)}] button`)})].find((button) => button.textContent?.trim() === ${JSON.stringify(words)})?.click()`;
+/**
+ * Opens the flow's own card, then presses its answer named `words`, in one page task: the account's other runs raise
+ * cards too (account memory reaches every workspace), and one created meanwhile takes the front of a stack no pointer
+ * is on, so a card opened in one step can be behind by the next.
+ */
+function answerOwnCard(key: string, words: string): string {
+  return `(() => {
+    const open = () => document.querySelector(${JSON.stringify(`[data-attention-card=${JSON.stringify(key)}]`)});
+
+    if (open() === null) document.querySelector(${JSON.stringify(`[data-attention-behind=${JSON.stringify(key)}]`)})?.click();
+    const button = [...(open()?.querySelectorAll('button') ?? [])].find((each) => each.textContent?.trim() === ${JSON.stringify(words)});
+
+    button?.click();
+
+    return button !== undefined;
+  })()`;
 }
 
-async function openStackCard(page: Page, key: string): Promise<void> {
-  await page.evaluate(`document.querySelector(${JSON.stringify(`[data-attention-behind=${JSON.stringify(key)}]`)})?.click()`);
-  await until(page, 'the flow\'s own card open', `document.querySelector(${JSON.stringify(`[data-attention-card=${JSON.stringify(key)}]`)}) !== null`);
+/** Presses `words` on the flow's own card, opening it first if another took the front, until the press lands. */
+async function answerStackCard(page: Page, key: string, words: string): Promise<void> {
+  await until(page, `the flow's own card answered ${words}`, answerOwnCard(key, words));
 }
 
 const CHAT_TEXT = `(document.querySelector('#chat')?.textContent ?? '')`;
 
+/** The parked commands the flow's batch card lists, newest first, as their asks' keys. */
+const PARKED_ROWS = `[...document.querySelectorAll('[data-attention-card] [data-parked-command]')].map((row) => 'action:' + row.getAttribute('data-parked-command'))`;
+
 /**
- * Row: one turn parks two commands for its owner. They wait as a stack docked to the composer, the newer open;
- * approving it opens the other, denying that clears the stack, and each answer reaches the agent: its wake shows in
- * the chat as the event it is, and the agent answers each.
+ * Row: one turn parks two commands for its owner. They wait together on one card docked to the composer, the newer
+ * first; the newer approved alone, the other is its own card, and denying it clears the stack. Each answer reaches the
+ * agent: its wake shows in the chat as the event it is, and the agent answers each.
  */
 export async function approvalsStackAtTheComposer(target: FlowTarget): Promise<ApprovalStackVerdict> {
   const workspace = await createFlowWorkspace(target, 'approvals');
@@ -777,23 +793,26 @@ export async function approvalsStackAtTheComposer(target: FlowTarget): Promise<A
     const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
 
     await sendAndSettle(page, APPROVALS_ASK);
-    // Actions belong to this fresh workspace; account-memory cards belong to every workspace of the account.
-    const actions = `${STACK_KEYS}.filter((key) => key.startsWith('action:'))`;
+    // Actions belong to this fresh workspace; account-memory cards belong to every workspace of the account. The
+    // flow's card is opened first if another took the front.
+    await until(page, "both of the flow's parked commands on one card", `(() => {
+      if (${PARKED_ROWS}.length === 2) return true;
+      ${STACK_KEYS}.filter((key) => key.startsWith('action:')).forEach((key) => document.querySelector('[data-attention-behind="' + key + '"]')?.click());
 
-    await until(page, 'both of the flow\'s parked commands stacked', `${actions}.length === 2`);
-    const stacked = v.parse(v.tuple([v.string(), v.string()]), await page.evaluate(actions));
-
-    await openStackCard(page, stacked[0]);
-    const openWords = v.parse(v.string(), await page.evaluate(`document.querySelector(${JSON.stringify(`[data-attention-card=${JSON.stringify(stacked[0])}]`)})?.textContent ?? ''`));
+      return false;
+    })()`);
+    const stacked = v.parse(v.tuple([v.string(), v.string()]), await page.evaluate(PARKED_ROWS));
+    const openWords = v.parse(v.string(), await page.evaluate(`document.querySelector('[data-attention-card]')?.textContent ?? ''`));
     const remaining = `${STACK_KEYS}.filter((key) => ${JSON.stringify(stacked)}.includes(key))`;
 
-    await page.evaluate(stackAnswer('Approve', stacked[0]));
-    await until(page, 'the flow\'s other card remains', `${remaining}.length === 1`);
+    // The older unticked, the newer approved alone.
+    await page.click(`[data-attention-card] [data-parked-command="${stacked[1].slice('action:'.length)}"] input`);
+    await answerStackCard(page, stacked[0], 'Approve 1');
+    await until(page, "the flow's other card remains", `${remaining}.length === 1`);
     const afterFirst = v.parse(v.array(v.string()), await page.evaluate(remaining));
 
-    await openStackCard(page, stacked[1]);
-    await page.evaluate(stackAnswer('Deny', stacked[1]));
-    await until(page, 'the flow\'s own stack cleared', `${remaining}.length === 0`);
+    await answerStackCard(page, stacked[1], 'Deny');
+    await until(page, "the flow's own stack cleared", `${remaining}.length === 0`);
     await until(page, 'both answers in the chat and heard by the agent', `${CHAT_TEXT}.includes('You approved') && ${CHAT_TEXT}.includes('You denied')`
       + ` && /${DECISION_HEARD}[^]*approved/u.test(${CHAT_TEXT}) && /${DECISION_HEARD}[^]*denied/u.test(${CHAT_TEXT})`);
     const said = v.parse(v.string(), await page.evaluate(CHAT_TEXT));
@@ -2239,6 +2258,19 @@ async function relisted(page: Page, act: () => Promise<void>, loadsDocument = fa
   return v.parse(v.array(v.string()), await page.evaluate(DRIVE_LISTED));
 }
 
+/** The Drive place a person's files are in, chosen where it is drawn: the column, or below `lg` the switch. */
+const MY_STUFF_PLACE = `[...document.querySelectorAll('[data-drive-place="mine"], [data-drive-tab="mine"]')].find((place) => place.getClientRects().length > 0)`;
+
+/**
+ * Opens My stuff, where New is: a first visit to the Drive lands on Slates when the account has a slate, as the
+ * approved design does. With My stuff the only place there is no column or switch, and the page is already there.
+ */
+async function openMyStuff(page: Page): Promise<void> {
+  await until(page, 'My stuff or its place', `document.querySelector('[data-drive-new]') !== null || ${MY_STUFF_PLACE} !== undefined`);
+  await page.evaluate(`document.querySelector('[data-drive-new]') === null && ${MY_STUFF_PLACE}?.click()`);
+  await until(page, "My stuff's New", `document.querySelector('[data-drive-new]') !== null`);
+}
+
 /** Name a Drive entry through the page's name dialog: the field opens with
  *  its current value selected, so typing replaces it. */
 async function nameInDialog(page: Page, name: string): Promise<void> {
@@ -2280,6 +2312,7 @@ export async function driveKeepsWhatIsDone(target: FlowTarget): Promise<DriveVer
   try {
     await page.evaluateOnNewDocument(COUNT_DRIVE_LISTINGS);
     await relisted(page, async () => { await page.goto(`${target.origin}/drive`, { waitUntil: 'load' }); }, true);
+    await openMyStuff(page);
     await relisted(page, async () => {
       await page.click('[data-drive-new]');
       await page.click('[data-drive-new-folder]');
@@ -2298,7 +2331,11 @@ export async function driveKeepsWhatIsDone(target: FlowTarget): Promise<DriveVer
       await nameInDialog(page, renamed);
     });
 
-    const afterRename = await relisted(page, async () => { await page.reload({ waitUntil: 'load' }); }, true);
+    await relisted(page, async () => { await page.reload({ waitUntil: 'load' }); }, true);
+    await openMyStuff(page);
+    await painted(page);
+
+    const afterRename = v.parse(v.array(v.string()), await page.evaluate(DRIVE_LISTED));
 
     // Deleted through the page only where the page lists it; a missed rename is
     // the verdict's finding, and the `finally` below removes what is left.

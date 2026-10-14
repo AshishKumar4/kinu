@@ -62,7 +62,9 @@ export type {
   ExecutionKey, ExecutionLane, TurnCapability,
 } from './orchestrator/execution';
 
-export { inTurnSurface, scopedTurnSurface, turnLedgers, TurnSurface, type TurnLedgers, type TurnSurfaceOpening } from './orchestrator/main-turn-surface';
+export { inTurnSurface, scopedTurnSurface, TurnSurface, type TurnSurfaceOpening } from './orchestrator/main-turn-surface';
+
+export { turnLedgers, type TurnLedgers } from './orchestrator/turn-accumulator';
 
 // Records that keyed work happened, kept after its row is retired.
 export {
@@ -284,7 +286,7 @@ export { parseSlateProject, slateTitle, type SlateProject } from './slates/proje
 export { slateAuthority } from './slates/authority';
 
 export {
-  SHARE_VIEWER_REQUESTS_PER_MINUTE, SHARE_SPEND_CAP_USD_PER_DAY, shareSpendLabel, VIEWER_EXCHANGE_PATH,
+  SHARE_VIEWER_REQUESTS_PER_MINUTE, SHARE_SPEND_CAP_USD_PER_DAY, shareSpendLabel, VIEWER_EXCHANGE_PATH, PREVIEW_ENTRY_PATH, CLI_PREVIEW_ENTRY_PATH,
   formatBlueprintId, parseBlueprintId, blueprintPagePath, liveSharePagePath,
   BlueprintInspectionSchema, BlueprintViewSchema, BlueprintForkSchema, BlueprintBundleSchema, PublishedBlueprintSchema,
   SharedLibrarySchema, SlateShareRecordSchema,
@@ -2241,7 +2243,7 @@ export { ingressAdmission, ingressAdmitted, ingressDenied, peerIp, type IngressA
 
 export {
   CLI_DIST_PATHS, CLI_RUNTIME_PATH, CLI_VERSION_PATH,
-  fetchDeployedAsset, readBuildStamp, type AssetFetcher, type BuildStamp,
+  BuildStampSchema, fetchDeployedAsset, readBuildStamp, type AssetFetcher, type BuildStamp,
 } from './http/deployed-assets';
 
 export {

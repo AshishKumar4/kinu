@@ -13,7 +13,7 @@ import {
   containerEventResolver, GitHubEgressRecorder, handleContainerEgress, handleContainerEvent, handleEgressConnect, handleEgressTls,
   parseEgressParams, workspaceGrants, type KinuEgressParams,
 } from './egress/outbound';
-import { APP_ROUTES, ORCHESTRATOR_AGENT_SLUG } from "@kinu.run/core";
+import { APP_ROUTES, ORCHESTRATOR_AGENT_SLUG, PREVIEW_ENTRY_PATH } from "@kinu.run/core";
 import { diagnostics, settle, toKinuError, type ErrorCode, type KinuError, settleLogged } from "@kinu.run/core/obs";
 import {
   extractOrchestratorAgentName,
@@ -33,7 +33,7 @@ import { pcRoutes } from "./pc-routes";
 import { handleInboundEmail } from "./email/handler";
 import { MONITOR_SINGLETON } from "./monitor/monitor-do";
 import { handleSlateShareHostRequest } from "./slate-share-route";
-import { handleNimbusPreviewHostRequest } from "./nimbus-route";
+import { handleNimbusPreviewHostRequest, previewEntry } from "./nimbus-route";
 import {
   authenticateRequest, AuthError, crossSiteRejection,
   type AuthIdentity,
@@ -432,6 +432,9 @@ worker.use('*', (c, next) => settle(Effect.gen(function* () {
   c.set('request', routed);
   yield* Effect.promise(() => next());
 })));
+
+// Behind sign-in: a preview's owner is sent on to it with a ticket for its host, anyone else told it is not theirs.
+worker.get(PREVIEW_ENTRY_PATH, async (c) => await previewEntry(c.req.raw, c.env, c.get('identity').userId));
 
 worker.all('/agents/*', async (c, next) => {
   // Refuse any namespace/facet path outside the public actor grammar before SDK routing.

@@ -11,7 +11,7 @@ import type { VectorStore } from '../memory/vector-store';
 import type { AccountMemory } from '../memory/account';
 import type { ProgramStateStore } from '../identity/program-state';
 import type { SeatedActor } from '../state/actor-host';
-import type { TurnLedgers } from '../orchestrator/main-turn-surface';
+import type { TurnLedgers } from '../orchestrator/turn-accumulator';
 import type { Storage } from '../types/primitives';
 import type { CodemodeProvider } from '../types/codemode';
 import type { BrowserSessions, WebSearchProvider } from '../web/provider';

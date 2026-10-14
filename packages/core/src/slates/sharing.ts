@@ -121,6 +121,14 @@ export type ShareViewerClaim = v.InferOutput<typeof ShareViewerClaimSchema>;
 
 export const VIEWER_EXCHANGE_PATH = '/__kinu/viewer';
 
+/**
+ * The app's entry to a workspace preview, `?to=<the preview's URL>`: it knows its visitor, and sends the workspace's
+ * owner on to the preview with a ticket for its host. A browser is sent to the page; a CLI asks the route.
+ */
+export const PREVIEW_ENTRY_PATH = '/__kinu/preview';
+
+export const CLI_PREVIEW_ENTRY_PATH = '/api/cli/preview';
+
 /** Viewer bounds (docs/SLATE-SHARING.md §2): per-viewer request rate and a per-share spend bound renewing each UTC day. */
 export const SHARE_VIEWER_REQUESTS_PER_MINUTE = 120;
 

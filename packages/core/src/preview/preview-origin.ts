@@ -84,8 +84,10 @@ export function isPreviewHostRequest(url: URL, env: PreviewHostEnv): boolean {
   return host.endsWith(`.${suffix}`);
 }
 
-/** Drops `Domain=` cookies (they would reach other previews), replaces CSP, and suppresses Referer because
- *  the hostname carries the port token. 101 responses have immutable headers and pass through. */
+/** Drops `Domain=` cookies (they would reach other previews), replaces CSP, and keeps Referer to the page's own
+ *  origin because the hostname carries the port token: another origin is told nothing, and the page's own form posts
+ *  still name it in `Origin`, which the preview's owner check reads (`nimbus-route.ts`). 101 responses have immutable
+ *  headers and pass through. */
 export function containPreviewResponse(response: Response): Response {
   if (response.status === 101) return response;
   const keptCookies = response.headers.getSetCookie().filter(c => !/;\s*domain\s*=/i.test(c));
@@ -97,7 +99,7 @@ export function containPreviewResponse(response: Response): Response {
   headers.delete('content-security-policy');
   headers.delete('content-security-policy-report-only');
   headers.set('content-security-policy', `sandbox ${PREVIEW_SANDBOX}`);
-  headers.set('referrer-policy', 'no-referrer');
+  headers.set('referrer-policy', 'same-origin');
 
   return new Response(response.body, {
     status: response.status,

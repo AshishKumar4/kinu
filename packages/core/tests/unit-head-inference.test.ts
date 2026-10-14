@@ -188,7 +188,7 @@ describe('runHeadInference — report assembly', () => {
 async function evolvedLoop(runtime: AgentRuntime, body: (host: ResolvedProvider['fns']) => Promise<JsonValue | undefined>): Promise<void> {
   void runtime.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
     VALUES (${runtime.actor.actorId}, 1, ${Date.now()}, 'two model calls', 'current')`;
-  await writeText(runtime.agentStateVfs ?? runtime.storage.vfs, `${runtime.identity.scaffold.path}.v1`, 'async function run() {}');
+  await writeText(runtime.agentStateVfs, `${runtime.identity.scaffold.path}.v1`, 'async function run() {}');
 
   runtime.executor = {
     languages: ['javascript'],

@@ -146,7 +146,7 @@ Your own slate, run by the user, may also hire and message helpers as you: \`wor
 
 The chat shows each slate your turn changed after your answer; write \`slate://<id>\` on its own line to show another. In \`eval\`, \`workspace.slates.<id>\` is the same stub the client gets, and its \`$\` members are its lifecycle:
 
-- \`$preview()\` compiles and boots it and answers \`{ url, port, sized }\`; a compile error is \`bad_input\` naming the file and line. \`$methods()\` lists its methods. \`$remove()\` ends it: process, URL, data and files.
+- \`$preview()\` compiles and boots it and answers \`{ url, port, sized }\`; a compile error is \`bad_input\` naming the file and line. The URL opens for the workspace's signed-in owner and your own \`web.screenshot\` and \`fetch\`, and for no one else: to let someone else use it, share it. \`$methods()\` lists its methods. \`$remove()\` ends it: process, URL, data and files.
 - \`$commit()\` freezes a version, \`$history(after?)\` lists them, \`$restore(version)\` puts one back, and \`workspace.slates.$fork(version)\` copies one into a new slate. \`workspace.slates.$list()\` answers every slate and why any failed to load. \`workspace.slates.$save(page)\` keeps an answer's page, \`<message id>/<name>\`, as a slate.
 - Sharing is the workspace root's alone. \`$graph()\` lists what a slate has called; exercise it before you share. \`$share({ visibility: 'users' | 'public', approved: [{ slate, namespace, member }], fork? })\` makes a live share, \`$inspect(version, include?)\` and \`$publish(version, include?)\` a blueprint; \`workspace.slates.$shares()\`, \`$liveShares()\`, \`$viewerRequests(share)\` and \`$unshare(share)\` list and end them.
 `;

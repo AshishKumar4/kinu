@@ -10,6 +10,7 @@ import {
   type AuthStoreEnv, type SessionAuthority,
 } from './store';
 import type { KvStore } from '@kinu.run/agent-utils';
+import { VIEWER_COOKIE_NAME } from '../viewer-pass';
 import type { ObjectNamespace } from '@kinu.run/core';
 import type { OwnerCapabilityEnv } from '@kinu.run/core';
 import type { AccessTokenScope } from '@kinu.run/core';
@@ -27,8 +28,6 @@ export const DEPLOY_STATE_COOKIE_NAME = '__Host-kinu_deploy_state';
 /** CSRF cookie for the CLI approval page's POST (`cli/routes.ts`). */
 export const CLI_APPROVAL_CSRF_COOKIE_NAME = 'kinu_cli_auth_csrf';
 
-/** Share-origin viewer cookie, set after a ticket exchange. */
-export const VIEWER_COOKIE_NAME = '__Host-kinu_viewer';
 
 /** Every cookie this app sets. The preview edge (`lib/preview-request.ts`)
  *  strips exactly this set before guest code; register new cookies here only. */

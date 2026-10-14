@@ -170,7 +170,7 @@ test('a child keeps the inherited loop but edits only its own scaffold, never it
     if (parent === undefined) throw new Error('the owner runtime must be open');
     const inherited = 'export default async function main() { return "inherited parent loop"; }';
 
-    await writeText(parent.agentStateVfs ?? parent.storage.vfs, `${parent.identity.scaffold.path}.v0`, inherited);
+    await writeText(parent.agentStateVfs, `${parent.identity.scaffold.path}.v0`, inherited);
     await parent.identity.scaffold.write(inherited);
     const node = await owner.hostNode({ nodeId: 'program-node', rootId: 'program-work', depth: 1 });
 
@@ -178,7 +178,7 @@ test('a child keeps the inherited loop but edits only its own scaffold, never it
     const nodeEdit = 'export default async function main() { return "node edit"; }';
     const nodeVersion = await node.actor.runtime.identity.scaffold.version();
 
-    await writeText(node.actor.runtime.agentStateVfs ?? node.actor.runtime.storage.vfs, `${node.actor.runtime.identity.scaffold.path}.v${nodeVersion}`, nodeEdit);
+    await writeText(node.actor.runtime.agentStateVfs, `${node.actor.runtime.identity.scaffold.path}.v${nodeVersion}`, nodeEdit);
     await node.actor.runtime.identity.scaffold.write(nodeEdit);
     expect(await node.actor.runtime.identity.scaffold.read()).toBe(nodeEdit);
     expect(await parent.identity.scaffold.read()).toBe(inherited);
@@ -189,7 +189,7 @@ test('a child keeps the inherited loop but edits only its own scaffold, never it
     const headEdit = 'export default async function main() { return "head edit"; }';
     const headVersion = await branch.actor.runtime.identity.scaffold.version();
 
-    await writeText(branch.actor.runtime.agentStateVfs ?? branch.actor.runtime.storage.vfs, `${branch.actor.runtime.identity.scaffold.path}.v${headVersion}`, headEdit);
+    await writeText(branch.actor.runtime.agentStateVfs, `${branch.actor.runtime.identity.scaffold.path}.v${headVersion}`, headEdit);
     await branch.actor.runtime.identity.scaffold.write(headEdit);
     expect(await branch.actor.runtime.identity.scaffold.read()).toBe(headEdit);
     expect(await parent.identity.scaffold.read()).toBe(inherited);
@@ -206,7 +206,7 @@ test('a retained child without its owned program bytes names the required local 
   const node = await owner.hostNode({ nodeId: 'old-program', rootId: 'old-layout', depth: 1 });
   const program = node.actor.runtime.identity.scaffold;
   const version = await program.version();
-  const files = node.actor.runtime.agentStateVfs ?? node.actor.runtime.storage.vfs;
+  const files = node.actor.runtime.agentStateVfs;
   const parent = workspace.runtimes.get('root');
 
   if (parent === undefined) throw new Error('the owner runtime must be open');
@@ -236,7 +236,7 @@ test('refusing a head layout happens before it can leave an observer on the pare
   const actorId = branch.actor.reference.actorId;
   const program = branch.actor.runtime.identity.scaffold;
   const version = await program.version();
-  const state = branch.actor.runtime.agentStateVfs ?? branch.actor.runtime.storage.vfs;
+  const state = branch.actor.runtime.agentStateVfs;
 
   await state.unlink(`${program.path}.v${version}`);
   await state.unlink(program.path);
