@@ -95,10 +95,8 @@
 import { assertMeasured, reconcile, report, writeLock } from './gate-ratchet';
 import { exportedDeclarations, inScope } from './dead-code';
 import { declaredRpcs, invokedNames } from './reachability';
-import {
-  isManifest, isParseable, isTestFile, isTestScaffold, isTypescriptConfig, readMatching, readRepositoryFile, readTests,
-  trackedFiles,
-} from './sources';
+import { isManifest, isParseable, isTestFile, isTestScaffold, isTypescriptConfig, readMatching, readRepositoryFile, readTests, trackedFiles } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 import { readAliases, readWorkspace, resolveSpecifier } from './import-graph';
 import {
   classMembers, collapsePath, declarationOf, declaredName, identifierText,
@@ -109,7 +107,6 @@ import {
   type SyntaxNode, walk,
 } from './syntax';
 
-const root = new URL('..', import.meta.url).pathname;
 
 const LOCK = `${root}scripts/wired.lock.json`;
 

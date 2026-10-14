@@ -34,8 +34,8 @@ import {
   truncatedHistoryRefusal,
 } from './commit-hygiene';
 import { isParseable, readMatching } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 
-const root = resolve(import.meta.dir, '..');
 
 const RecordSchema = v.object({ sha: v.string(), why: v.string(), message: v.string() });
 

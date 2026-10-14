@@ -29,10 +29,8 @@ import {
   localDeployGates, reportCIVerdicts, runnableArgv, sharedBrowserModules, sharedOf, tierRun, tierSchedule, tierWave, trackedTestFiles, waveCaps, type WaveRow,
   HAMMER_PARTS, HAMMER_REPEATS, HAMMER_ROW_LABEL, ciUnits, changedTestGate, splitCIGate, type Gate, type ArmadaReport, armadaPhaseRows, armadaPhaseRun, armadaReport, armadaRowVerdicts, jobDrove, onArmada, secretGroup,
 } from './ladder';
-import {
-  ANTI_SLOP_ROOT, isAntiSlopRuleSuite, isAntiSlopSuite, isBunDiscoverableSuite, isParseable, isPythonSuite,
-  isVitestEvalSuite, readMatching,
-} from './sources';
+import { ANTI_SLOP_ROOT, isAntiSlopRuleSuite, isAntiSlopSuite, isBunDiscoverableSuite, isParseable, isPythonSuite, isVitestEvalSuite, readMatching } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 import { parseJUnit, SKIP_RATCHET_TARGETS } from './skip-ratchet';
 import { declaredName, parse, walk } from './syntax';
 import { auditClosure } from './ladder-audit';
@@ -45,7 +43,6 @@ import { costTableFaults } from './cost-table';
 import { PRODUCT_FLOW_ROWS } from './product-flow-rows';
 import { cliStages } from './test-cli';
 
-const root = resolve(import.meta.dir, '..');
 
 const tracked = trackedTestFiles();
 
@@ -1241,7 +1238,7 @@ describe('the deadline wrapper reads only what its closure holds', () => {
   test('a wrapped command, traced, opens no tracked file its closure lacks', () => {
     // The wrapped command is a module that reads nothing, so every tracked file the trace holds is the wrapper's.
     const run = 'bun scripts/ladder.ts --run bun scripts/jsonc.ts';
-    const closure = deriveClosure(run, { kind: 'derived' }, repoAt(`${root}/`, (command, files) => claims(command, files)));
+    const closure = deriveClosure(run, { kind: 'derived' }, repoAt(root, (command, files) => claims(command, files)));
 
     if (closure.kind !== 'derived') throw new Error(`${run} has no derived closure: ${closure.why}`);
 

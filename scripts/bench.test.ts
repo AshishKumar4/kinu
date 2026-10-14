@@ -54,8 +54,8 @@ import {
 import { parseAgentWorkerInput, parseWorkerOutput } from './bench-worker-protocol';
 import { buildPilotReport, validatePilotReport } from './bench-pilot';
 import { runToExit } from '../packages/test-utils/src/spawn';
+import { REPO_ROOT } from './repo-root';
 
-const REPO_ROOT = join(import.meta.dir, '..');
 
 function tempDir(prefix: string): string {
   const dir = scratchDir(prefix);

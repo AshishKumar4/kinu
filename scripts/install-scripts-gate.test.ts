@@ -3,8 +3,8 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { scratchDir } from '@kinu.run/test-utils';
 import { ALLOWED_INSTALL_SCRIPTS, declaredInstallScripts, judgeInstallScripts } from './install-scripts-gate';
+import { REPO_ROOT as REPO } from './repo-root';
 
-const REPO = new URL('..', import.meta.url).pathname;
 
 /** A synthetic `node_modules` holding every allowed package with a hook, plus
  *  whatever the case adds. The allowed set must be present for a clean verdict,

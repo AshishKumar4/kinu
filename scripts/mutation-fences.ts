@@ -57,12 +57,11 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import { childEnv } from '../packages/test-utils/src/ambient-env';
 import { trackedFiles, workspaceScope } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 
-const root = fileURLToPath(new URL('..', import.meta.url));
 
 /**
  * One concurrency fence, and the proof that it is load-bearing.

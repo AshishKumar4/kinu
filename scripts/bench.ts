@@ -61,8 +61,8 @@ import { runValidation, type RunValidationOptions, type WellFormedAttempt } from
 import {
   ARTIFACT_DIRNAME, openRunRetention, resolveArtifactRoot, type RunRetention,
 } from './bench-retention';
+import { REPO_ROOT } from './repo-root';
 
-const REPO_ROOT = join(import.meta.dir, '..');
 
 const SEAL_LEDGER = join(REPO_ROOT, 'bench', 'corpus', 'seal-ledger.jsonl');
 

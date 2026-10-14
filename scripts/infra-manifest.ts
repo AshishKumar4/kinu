@@ -43,8 +43,8 @@ import { readFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import * as v from 'valibot';
 import { parseJsonc } from './jsonc';
+import { REPO_ROOT as REPO } from './repo-root';
 
-const REPO = new URL('..', import.meta.url).pathname;
 
 /** The deployments one config describes: the top level, and the one named environment staging deploys. */
 export const INFRA_ENVIRONMENTS = ['production', 'staging'] as const;

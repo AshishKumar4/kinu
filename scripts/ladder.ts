@@ -50,6 +50,7 @@ import { driftFinding, installDrift } from './install-parity';
 import { deriveClosure, repoAt } from './ladder-closure';
 import type { Closure, Inputs, Repo } from './ladder-closure';
 import { isBunDiscoverableSuite, isParseable, isPythonSuite, isRunnableSuite, isVitestEvalSuite, readMatching, trackedFiles } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 import { discoverArgv } from './python-suites';
 import { CLI_TEST_ROOT } from './test-cli';
 import { modulesReaching } from './import-closure';
@@ -77,7 +78,6 @@ function antiSlopRuleCount(): number {
     ).rules,
   ).filter((rule) => rule.startsWith('anti-slop/')).length;
 }
-const root = new URL('..', import.meta.url).pathname;
 
 
 /** Where the tracked hooks live, RELATIVE so git resolves it against each

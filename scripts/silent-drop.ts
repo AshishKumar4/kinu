@@ -67,6 +67,7 @@ import {
   assertMeasured, finding, reconcile, report, writeLock, type Finding,
 } from './gate-ratchet';
 import { readSources } from './sources';
+import { REPO_ROOT as REPO } from './repo-root';
 import {
   blockBodyOf, declaredName, identifierCalleeName, identifierText, isAsync, memberCalleeName,
   parse, walk, type Parsed, type SyntaxNode,
@@ -97,7 +98,6 @@ function handlesAnError(fn: SyntaxNode): boolean {
   return unnarrowed || narrows;
 }
 
-const REPO = new URL('..', import.meta.url).pathname;
 
 const LOCK = join(REPO, 'scripts/silent-drop.lock.json');
 

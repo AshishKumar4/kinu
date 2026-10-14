@@ -19,8 +19,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { connect } from 'armada';
 import { drainArmadaProgress } from './armada-progress';
+import { REPO_ROOT as ROOT } from './repo-root';
 
-const ROOT = join(import.meta.dir, '..');
 
 /** The dedicated checkout the timer runs from, and no one edits. */
 export const WORKTREE = '/mnt/local/kinu/wt/nightly-sweeps';

@@ -47,10 +47,10 @@ import { join, resolve } from 'node:path';
 import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
 import { isBunDiscoverableSuite } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 import { elementsNamed, parseXml, textOf } from './xml';
 import { INFRA_FAILURE_MARKER } from '../packages/test-utils/src/live-model';
 
-const root = new URL('..', import.meta.url).pathname;
 
 /**
  * The bun suites this gate covers, as `bun test` argv. The leading `./` is

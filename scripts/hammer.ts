@@ -50,15 +50,14 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { cpus } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { stripVTControlCharacters } from 'node:util';
 
 import { runUnderDeadline, writeFully } from './deadline';
 import { assertMeasured, finding } from './gate-ratchet';
 import { claims, GATE_DEADLINE_SECONDS, HAMMER_REPEATS, HAMMER_ROW_LABEL, LADDER, runOverFiles } from './ladder';
 import { trackedFiles } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 
-const root = fileURLToPath(new URL('..', import.meta.url));
 
 /** The ladder row the hammer runs: the cf-backend suite, found by its label
  *  so the command is the row's own spelling and cannot drift from it. */

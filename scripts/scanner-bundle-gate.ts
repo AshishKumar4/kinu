@@ -25,8 +25,8 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { builtinModules } from 'node:module';
 import { join } from 'node:path';
 import { finding } from './gate-ratchet';
+import { REPO_ROOT } from './repo-root';
 
-const REPO_ROOT = join(import.meta.dir, '..');
 
 export const GATE = 'scanner-bundle';
 

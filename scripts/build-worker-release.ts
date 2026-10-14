@@ -33,8 +33,8 @@ import { assetDigest, buildReleaseManifest } from './release-manifest';
 import { ReleaseManifestSchema } from '../packages/core/src/deploy/manifest';
 import type { ReleaseFile } from '../packages/core/src/deploy/manifest';
 import * as v from 'valibot';
+import { REPO_ROOT as REPO } from './repo-root';
 
-const REPO = new URL('..', import.meta.url).pathname;
 
 const [version, sha, distArg, outArg] = process.argv.slice(2);
 

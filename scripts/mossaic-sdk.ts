@@ -39,8 +39,8 @@ import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 import { tolerate } from '@kinu.run/core/obs';
 import { MOSSAIC_MANIFEST, MOSSAIC_ROOT, MOSSAIC_SDK, isMossaicVendored, trackedFiles } from './sources';
+import { REPO_ROOT } from './repo-root';
 
-const REPO_ROOT = join(import.meta.dir, '..');
 
 const Manifest = v.object({
   repository: v.string(),

@@ -8,21 +8,11 @@
 // inspection keeps a removed credential from becoming a forgotten credential:
 // it walks every locally stored ref and scans each reachable text blob exactly
 // once. Neither report writes a matched value to stdout or stderr.
-import { join } from 'node:path';
-import {
-  bytesToText,
-  historyObjects,
-  isScannableBytes,
-  isTextSource,
-  listHistoryRefs,
-  readHistoryObjects,
-  readMatching,
-  type HistoryObject,
-} from './sources';
+import { bytesToText, historyObjects, isScannableBytes, isTextSource, listHistoryRefs, readHistoryObjects, readMatching, type HistoryObject } from './sources';
+import { REPO_ROOT } from './repo-root';
 
 export type { HistoryObject, HistoryRefClass } from './sources';
 
-const REPO_ROOT = join(import.meta.dir, '..');
 
 /**
  * The pattern list and the line scanners live in core

@@ -1,11 +1,10 @@
 #!/usr/bin/env bun
 
-import { join } from 'node:path';
 import { isRunnableSuite, trackedFiles } from './sources';
+import { REPO_ROOT } from './repo-root';
 
 export const CLI_TEST_ROOT = 'packages/cli/tests';
 
-const REPO_ROOT = join(import.meta.dir, '..');
 
 /** `--part=serial` runs the isolated and subprocess-heavy files, `--part=parallel` the rest: CI runs each as a task of
  *  its own (the ladder row's `ciParts`); with neither, both, in that order. */

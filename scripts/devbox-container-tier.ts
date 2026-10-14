@@ -26,8 +26,8 @@ import { withTestChrome } from './test-chrome';
 import { contextSignedInAt } from '../evals/src/browser';
 import { DESKTOP_COLOURS, DESKTOP_LOG, DESKTOP_PANEL, DESKTOP_SIZE } from '../packages/devbox/src/desktop';
 import { CHORD, DISTINCT_PY, DOWN_PY, GRID, GRID_POINTS, HOLD, RANGE, SCROLL, TEXT, TICKER, sizeOf } from './fixtures/devbox-e2e/desktop-pages';
+import { REPO_ROOT as REPO } from './repo-root';
 
-const REPO = join(import.meta.dir, '..');
 
 const ACCOUNT = 'f44999d1ddda7012e9a87729eba250f1';
 
