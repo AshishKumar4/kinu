@@ -1219,8 +1219,17 @@ async function perMinute(t: Telemetry, filters: readonly Filter[]): Promise<Obje
   return rows.map((row) => ({ object: row.groups[0] ?? '', minute: row.at, count: row.count }));
 }
 
-/** A read is settled when two reads this far apart agree. */
-export const SETTLE_GAP_MS = 10 * MINUTE_MS;
+/**
+ * A read is settled when it has held still this long: every read across it agrees. Measured on staging 2026-10-14,
+ * 03:14-04:34Z, a fixed window's per-minute counts read every minute across deploy 7591e6fec's wave: of 54,045 rows that
+ * landed, 98.2% were in the first read after their minute ended, 99.93% within 3 min, and every one within 8.5 min.
+ * Ten minutes covers every row that measurement saw land late.
+ */
+export const SETTLE_HOLD_MS = 10 * MINUTE_MS;
+
+/** How often a settling read is taken: the hold starts again at the first read after the counts stop moving, rather
+ *  than at the next ten-minute mark. */
+export const SETTLE_POLL_MS = 2 * MINUTE_MS;
 
 /**
  * How long a reader re-reads before it gives up and answers "unsettled": a bound on the measurement, not on what it
@@ -1237,27 +1246,31 @@ export type SettledRead<T> =
   | { readonly settled: false; readonly last: T; readonly reads: number; readonly lateRows: number };
 
 /**
- * Reads until two reads `gapMs` apart give the same `fingerprint`, or until `capMs` has passed since the first. `rows`
- * counts what the window held at each read, so the answer names how many rows landed after the first read.
+ * Reads every `pollMs` until the `fingerprint` has held still for `holdMs`, every read across it agreeing, or until
+ * `capMs` has passed since the first. `rows` counts what the window held at each read, so the answer names how many
+ * rows landed after the first read.
  */
 export async function settledRead<T>(at: {
   readonly read: () => Promise<T>; readonly fingerprint: (value: T) => string; readonly rows: (value: T) => number;
-  readonly now: () => number; readonly sleep: (ms: number) => Promise<void>; readonly gapMs: number; readonly capMs: number;
+  readonly now: () => number; readonly sleep: (ms: number) => Promise<void>;
+  readonly pollMs: number; readonly holdMs: number; readonly capMs: number;
 }): Promise<SettledRead<T>> {
   const started = at.now();
   let last = await at.read();
   const firstRows = at.rows(last);
   let reads = 1;
+  let stillSince = started;
 
   for (;;) {
-    if (at.now() - started + at.gapMs > at.capMs) return { settled: false, last, reads, lateRows: at.rows(last) - firstRows };
-    await at.sleep(at.gapMs);
+    if (at.now() - started + at.pollMs > at.capMs) return { settled: false, last, reads, lateRows: at.rows(last) - firstRows };
+    await at.sleep(at.pollMs);
     const next = await at.read();
     reads += 1;
-    const held = at.fingerprint(next) === at.fingerprint(last);
+
+    if (at.fingerprint(next) !== at.fingerprint(last)) stillSince = at.now();
     last = next;
 
-    if (held) return { settled: true, value: next, reads, lateRows: at.rows(next) - firstRows };
+    if (at.now() - stillSince >= at.holdMs) return { settled: true, value: next, reads, lateRows: at.rows(next) - firstRows };
   }
 }
 
@@ -1278,7 +1291,7 @@ async function versionCommand(args: Args): Promise<number> {
       read: async () => ({ read: await versionRead(t, subject), rows: await windowRows(t, subject) }),
       fingerprint: ({ read: value }) => JSON.stringify([versionFindings(value), value.effects.terminal]),
       rows: ({ rows }) => rows,
-      now: () => Date.now(), sleep: (ms) => Bun.sleep(ms), gapMs: SETTLE_GAP_MS, capMs: SETTLE_CAP_MS,
+      now: () => Date.now(), sleep: (ms) => Bun.sleep(ms), pollMs: SETTLE_POLL_MS, holdMs: SETTLE_HOLD_MS, capMs: SETTLE_CAP_MS,
     });
 
     sampling = t.sampling;
@@ -1290,7 +1303,8 @@ async function versionCommand(args: Args): Promise<number> {
       settledNote = `settled: ${late}`;
     } else {
       findings = [{ what: 'the telemetry', finding: `${args.worker}'s telemetry for version ${subject} is unsettled: its counts still moved after `
-        + `${String(SETTLE_CAP_MS / MINUTE_MS)} min of reads ${String(SETTLE_GAP_MS / MINUTE_MS)} min apart (${late}), so it gives no verdict` }];
+        + `${String(SETTLE_CAP_MS / MINUTE_MS)} min of reads ${String(SETTLE_POLL_MS / MINUTE_MS)} min apart, never still for `
+        + `${String(SETTLE_HOLD_MS / MINUTE_MS)} min (${late}), so it gives no verdict` }];
     }
   } catch (cause) {
     findings = [{ what: 'the telemetry', finding: `${args.worker}'s telemetry for version ${subject} could not be read: ${cause instanceof Error ? cause.message : String(cause)}` }];

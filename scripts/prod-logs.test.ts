@@ -188,16 +188,21 @@ describe('a read that issues a verdict', () => {
 
         return Promise.resolve();
       },
-      gapMs: 10, capMs: 60,
+      pollMs: 2, holdMs: 10, capMs: 60,
     };
   };
 
-  test('is settled once two reads a gap apart agree, and names what landed after the first', async () => {
-    expect(await settledRead(reader([5, 7, 7]))).toEqual({ settled: true, value: 7, reads: 3, lateRows: 2 });
+  test('is settled once every read across the hold agrees, and names what landed after the first', async () => {
+    expect(await settledRead(reader([5, 7, 7, 7, 7, 7, 7]))).toEqual({ settled: true, value: 7, reads: 7, lateRows: 2 });
+  });
+
+  // The hold starts again whenever the counts move: two agreeing reads with a change between them are not still.
+  test('is not settled by two reads a hold apart that agree around a read that did not', async () => {
+    expect(await settledRead(reader([5, 5, 5, 6, 5, 5, 5, 5, 5, 5, 5]))).toEqual({ settled: true, value: 5, reads: 10, lateRows: 0 });
   });
 
   test('is unsettled when its counts still move at the cap, however close they came', async () => {
-    expect(await settledRead(reader([1, 2, 3, 4, 5, 6, 7, 8]))).toEqual({ settled: false, last: 7, reads: 7, lateRows: 6 });
+    expect(await settledRead(reader(Array.from({ length: 40 }, (_, at) => at)))).toEqual({ settled: false, last: 30, reads: 31, lateRows: 30 });
   });
 });
 
