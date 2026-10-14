@@ -1135,7 +1135,6 @@ export class LocalAgentHost {
       rename: async (name, displayName, nameOrigin) => {
         const child = await this.openChildEntry(parentOf(), name);
         child.config.setDisplayNameOrigin(displayName, nameOrigin);
-        child.session.host.broadcast({ type: 'workspace_renamed', displayName });
       },
       dismiss: (name, dismissal, reference) => this.dismissChild(parentOf(), name, dismissal, reference),
     };

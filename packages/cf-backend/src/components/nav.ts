@@ -10,21 +10,21 @@ export const PRIMARY_NAV: readonly {
   readonly label: string;
   readonly Icon: typeof HouseIcon;
   readonly end: boolean;
-  readonly also?: string;
+  readonly also?: readonly string[];
 }[] = [
   { to: APP_ROUTES.home, label: "Home", Icon: HouseIcon, end: true },
   { to: APP_ROUTES.workspaces, label: "Workspaces", Icon: SquaresFourIcon, end: false },
-  { to: APP_ROUTES.drive, label: "Drive", Icon: HardDrivesIcon, end: false, also: APP_ROUTES.shared },
+  { to: APP_ROUTES.drive, label: "Drive", Icon: HardDrivesIcon, end: false, also: [APP_ROUTES.slates, APP_ROUTES.shared] },
   { to: APP_ROUTES.devices, label: "Devices", Icon: DesktopTowerIcon, end: false },
   { to: APP_ROUTES.plugins, label: "Plugins", Icon: PuzzlePieceIcon, end: false },
 ];
 
-export function navActive(item: { readonly to: string; readonly end: boolean; readonly also?: string }, pathname: string): boolean {
+export function navActive(item: { readonly to: string; readonly end: boolean; readonly also?: readonly string[] }, pathname: string): boolean {
   const under = (root: string): boolean => pathname === root || pathname.startsWith(root === "/" ? "/" : `${root}/`);
 
   if (item.end ? pathname === item.to : under(item.to)) return true;
 
-  return item.also !== undefined && under(item.also);
+  return item.also?.some(under) ?? false;
 }
 
 /** Neutral, so a row under the pointer never reads as the open row's accent. */

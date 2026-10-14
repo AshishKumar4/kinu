@@ -1,15 +1,15 @@
 /** The workspace's page: where things stand, its GitHub work, and every agent's tasks; each section reads a real
  *  source or says none exists yet. */
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useMemo } from "react";
 import { Link } from "react-router-dom";
-import type { AgentTaskTree, PanelAgent, Rpc, WorkspaceWork, WorkspaceWorkOwner } from "@kinu.run/core";
-import type { ForkLineage } from "@/hooks/use-chat-owner";
-import type { ReadMoves } from "@/hooks/use-workspace-reads";
-import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
+import type { AgentTaskTree, ForkLineageRow, PanelAgent, PlanReview, WorkspaceWork, WorkspaceWorkOwner } from "@kinu.run/core";
+import type { ReadMoves, WorkspacePlanArrival } from "@/hooks/use-workspace-reads";
+import { useWorkspaceWork } from "@/components/surfaces/use-workspace-work";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { AgentStatusMark } from "@/components/AgentStatus";
 import { GitHubSection } from "@/components/workspaces/GitHubSection";
 import { WorkspaceLogo } from "@/components/Marks";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 type Lane = "todo" | "doing" | "waiting" | "done";
 
@@ -76,27 +76,20 @@ function summaryOf(agents: readonly PanelAgent[], cards: readonly Card[]): strin
   ].join(" · ");
 }
 
-export function WorkspaceOverview({ workspace, title, logo, rpc, readMoves, lineage, agents, open }: {
+export function WorkspaceOverview({ workspace, title, logo, rpc, readMoves, plan, arrival, lineage, agents, open }: {
   workspace: string;
   title: string;
   logo: string | null | undefined;
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   readMoves: ReadMoves;
-  lineage: ForkLineage | null;
+  /** The workspace's pushed plan and an agent's plan arriving: each reads the work again, as the Work tab's does. */
+  plan: PlanReview | null;
+  arrival: WorkspacePlanArrival | null | undefined;
+  lineage: ForkLineageRow | null;
   agents: readonly PanelAgent[];
   open: (agent: PanelAgent) => void;
 }) {
-  const load = useCallback(() => rpc<WorkspaceWork>("listWorkspaceWork", []), [rpc]);
-  const { resource, reload } = useAsyncResource(load);
-  const work = lastValue(resource);
-  const moves = readMoves.listWorkspaceWork ?? 0;
-  const seen = useRef(moves);
-
-  useEffect(() => {
-    if (seen.current === moves) return;
-    seen.current = moves;
-    reload();
-  }, [moves, reload]);
+  const { work, resource, reload } = useWorkspaceWork({ rpc, readMoves, plan, arrival });
 
   const cards = useMemo(() => (work === null ? [] : cardsOf(work, agents)), [work, agents]);
 

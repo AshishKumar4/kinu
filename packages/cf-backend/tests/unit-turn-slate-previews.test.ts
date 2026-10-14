@@ -10,6 +10,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import type { UIMessage } from 'ai';
 import { mergePolicyProfile, toolExecute } from '@kinu.run/test-utils';
 import { captureOperationProfile, CHAT_SESSION_ID, runOperationProfile, slatesChanged, type JsonValue } from '@kinu.run/core';
+import { workspaceRpc } from '../src/lib/workspace-rpc';
 import { SlateInlineContext } from '../src/components/slates/context';
 import { MessageView } from '../src/components/MessageView';
 import {
@@ -145,7 +146,7 @@ test('a slate the turn wrote and then removed is not previewed', async () => {
   expect(slatesChanged({ metadata: answer?.metadata })).toEqual([]);
 });
 
-const noRpc = async (): Promise<never> => { throw new Error('no rpc in the static renderer'); };
+const noRpc = workspaceRpc(async (): Promise<never> => { throw new Error('no rpc in the static renderer'); });
 
 /** The slate previews an answer draws, however they came: its own `slate://` lines and the ones the product adds. */
 function previewsDrawn(answer: UIMessage | undefined): string[] {

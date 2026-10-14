@@ -114,7 +114,7 @@ import {
   invocationBackgroundPolicy,
   type BackgroundJobStore, type TaskListStore,
   resumeBackgroundJob, harvestBackgroundJob, type ActorToolsets,
-  cancelCurrentWork, getStoredModelSpec, setModel,
+  cancelCurrentWork, getStoredModelSpec,
   type CancelWorkOutcome, type ChatHistoryPage, type Page, type PageRequest, PositionPageRequestSchema, type PositionPageRequest,
   type MctsSearchStore, readSearchTree, isSteerBranchRunId,
   EventLog,
@@ -706,7 +706,8 @@ export abstract class ActorAgent extends Agent<Env> {
   /** The owner's answer: the asking call's result, and the turn that continues from it, in the agent that asked
    *  (`actor`; null for the workspace agent). */
   @callable()
-  async answerOwnerQuestions(id: string, answers: JsonValue, actor: JsonValue = null): Promise<OwedIntent | null> {
+  async answerOwnerQuestions(id: string, answers: readonly OwnerAnswer[], actor: string | null = null): Promise<OwedIntent | null> {
+    // Typed as a page sends them; read as the wire may carry anything.
     const parsed = v.safeParse(v.tuple([OwnerAnswersSchema, v.nullable(v.string())]), [answers, actor]);
 
     return settle(Effect.suspend(() => {
@@ -730,7 +731,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Closed unanswered; the agent reads that at its next turn, and what waited behind the questions runs. */
   @callable()
-  async dismissOwnerQuestions(id: string, actor: JsonValue = null): Promise<{ readonly closed: number }> {
+  async dismissOwnerQuestions(id: string, actor: string | null = null): Promise<{ readonly closed: number }> {
     const asker = v.safeParse(v.nullable(v.string()), actor);
 
     if (!asker.success) return settle(Effect.fail(new KinuError('bad_input', 'actor: an agent id, or null for the workspace agent')));
@@ -1577,7 +1578,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   protected get advisor(): ActorAdvisor {
     this._advisor ??= new ActorAdvisor({
-      actor: this.actorHandle(), vfs: () => this.rt.agentStateVfs ?? this.rt.storage.vfs, notes: () => this.engine,
+      actor: this.actorHandle(), vfs: () => this.rt.agentStateVfs, notes: () => this.engine,
       port: () => this.temporaryAgentPort(), reviewed: this.actorDirectoryStore().describe(this.actorHandle()).input,
       send: (signal) => this.workspaceAgentDeliveries().signals.send(signal),
       profile: () => this.operationProfile()?.profile ?? null, scoped: (turn) => this.lanes.scopedTurn(turn),
@@ -3322,16 +3323,6 @@ export abstract class ActorAgent extends Agent<Env> {
 
     return changed;
   }
-  @callable()
-  async setModel(spec: string) {
-    const set = setModel(this.modelSetting(this.config, () => {}), spec);
-
-    // Main's isolate measures its next request on the new model, as every agent's does.
-    await this.modelSettingsChanged();
-
-    return set;
-  }
-
   /** How a model pin is set on `config`: this workspace's registry normalizes the spec. */
   protected modelSetting(config: AgentConfigStore, onChanged: () => void): SetModelDeps {
     return { config, normalize: (s) => this.providerRegistry().normalizeSpecSync(s), onChanged };

@@ -66,6 +66,17 @@ export interface AsyncResourceControl<T> {
   set: (value: T) => void;
 }
 
+/** Reloads each time `moved` changes after the first render: the server said the read moved (`reads_changed`). */
+export function useReloadWhenMoved(moved: number, reload: () => void): void {
+  const seen = useRef(moved);
+
+  useEffect(() => {
+    if (seen.current === moved) return;
+    seen.current = moved;
+    reload();
+  }, [moved, reload]);
+}
+
 /** `load` and `revalidate` must be stable (useCallback): they are the effect keys. */
 export function useAsyncResource<T>(
   load: () => Promise<T>,

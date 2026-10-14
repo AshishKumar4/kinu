@@ -8,7 +8,8 @@ import { act, createElement } from 'react';
 import type { UIMessage } from 'ai';
 import { createRoot } from 'react-dom/client';
 import * as v from 'valibot';
-import { PositionCursorSchema, type ChatHistoryEntry, type ChatHistoryPage, type Rpc } from '@kinu.run/core';
+import { PositionCursorSchema, type ChatHistoryEntry, type ChatHistoryPage } from '@kinu.run/core';
+import { workspaceRpc, type WorkspaceRpc } from '../src/lib/workspace-rpc';
 
 import { useChatThread, type ChatThread } from '../src/hooks/use-chat-thread';
 
@@ -31,8 +32,8 @@ describe('a steer before an unloaded gap', () => {
   const Query = v.tuple([v.object({ cursor: v.optional(PositionCursorSchema), limit: v.number() })]);
 
   /** Answers position pages over `store`, sent as JSON, as the socket does. */
-  function storeOf(store: () => readonly ChatHistoryEntry[]): Rpc {
-    return async (_method, args) => {
+  function storeOf(store: () => readonly ChatHistoryEntry[]): WorkspaceRpc {
+    return workspaceRpc(async (_method, args) => {
       const [{ cursor, limit }] = v.parse(Query, args);
       const end = Math.min(cursor?.before ?? store().length, store().length);
       const start = Math.max(0, end - limit);
@@ -40,10 +41,10 @@ describe('a steer before an unloaded gap', () => {
       const page: ChatHistoryPage = start === 0 ? { status: 'end', items } : { status: 'more', items, next: { before: start } };
 
       return JSON.parse(JSON.stringify(page));
-    };
+    });
   }
 
-  function mountThread(stored: Rpc) {
+  function mountThread(stored: WorkspaceRpc) {
     const listens = { addEventListener() {}, removeEventListener() {} };
     const container: Element = Object.create(null, Object.getOwnPropertyDescriptors({ nodeType: 1, tagName: 'DIV', namespaceURI: null, ownerDocument: listens, ...listens }));
     const root = createRoot(container);

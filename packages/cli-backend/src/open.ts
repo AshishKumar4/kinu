@@ -63,13 +63,13 @@ export function openWorkspaceCLI(
 
     const rt = createCLIRuntime(db, { ...config, agentName: identity.name });
     yield* Effect.promise(() => localActorScaffoldSource({ actor: rt.actor, sql: rt.storage.sql,
-      source: { path: rt.identity.scaffold.path, vfs: rt.agentStateVfs ?? rt.storage.vfs } }));
+      source: { path: rt.identity.scaffold.path, vfs: rt.agentStateVfs } }));
 
     // The status fold every backend shares, scoped to `rt.actor` (a facet opens as its own actor), over the workspace's
     // SOUL.md in its own space: its agents edit it, and may have emptied it.
     const { purpose, soul, scaffoldVersion, searchNodeCount } = agentStatusFacts(sql, rt.actor, soulIn(rt.space), identity.name);
 
-    const memorySize = yield* Effect.promise(async () => memoryBytes(rt.agentStateVfs ?? rt.storage.vfs));
+    const memorySize = yield* Effect.promise(async () => memoryBytes(rt.agentStateVfs));
 
     return {
       rt,

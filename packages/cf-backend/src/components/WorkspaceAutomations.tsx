@@ -14,39 +14,21 @@ import { Modal } from "@/components/ui/Modal";
 import { inputCls } from "@/components/ui/form";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { createDurableWebhook, cancelTrigger, type CreateWebhookResult } from "@/lib/user-api";
-import type { Rpc } from "@kinu.run/core";
 import * as v from "valibot";
 import { showing, detach } from '@kinu.run/core/obs';
+import type { WorkspaceAnswer, WorkspaceRpc } from "@/lib/workspace-rpc";
 
-const TriggerRowSchema = v.object({
-  id: v.string(),
-  kind: v.string(),
-  /** Absent for non-webhook rows or when the deployment cannot sign. */
-  url: v.optional(v.string()),
-  spec: v.optional(v.object({ label: v.optional(v.string()), cron: v.optional(v.string()) })),
-  state: v.string(),
-  created_at: v.number(),
-  rate_limit_per_min: v.optional(v.number()),
-  next_fire_at: v.optional(v.nullable(v.number())),
-  last_fire_at: v.optional(v.nullable(v.number())),
-  fire_count: v.optional(v.number()),
-});
-
-type TriggerRow = v.InferOutput<typeof TriggerRowSchema>;
+type TriggerRow = WorkspaceAnswer<"listTriggers">["triggers"][number];
 
 const AuthModeSchema = v.picklist(["hmac", "bearer", "mtls"]);
 
 
 /** What wakes this workspace's agent from outside: its webhooks and timers. */
-export function WorkspaceAutomations({ rpc, workspace }: { rpc: Rpc; workspace: string }) {
+export function WorkspaceAutomations({ rpc, workspace }: { rpc: WorkspaceRpc; workspace: string }) {
   const [showCreate, setShowCreate] = useState(false);
   const [created, setCreated] = useState<CreateWebhookResult | null>(null);
 
-  const load = useCallback(async () => {
-    const result = await rpc("listTriggers", []);
-
-    return v.parse(v.object({ triggers: v.array(TriggerRowSchema) }), result).triggers;
-  }, [rpc]);
+  const load = useCallback(async () => (await rpc("listTriggers", [])).triggers, [rpc]);
 
   const { resource, reload } = useAsyncResource(load);
   const triggers = lastValue(resource);
@@ -109,16 +91,18 @@ function TriggerLine({ trigger, onRevoke }: {
 }) {
   const isWebhook = trigger.kind === "webhook_durable" || trigger.kind === "webhook_ephemeral";
   const url = trigger.url ? `${window.location.origin}${trigger.url}` : null;
-  const spec = trigger.spec ?? {};
+  // The spec is the trigger's own JSON: a label and a cron are read where they are strings.
+  const label = typeof trigger.spec.label === "string" ? trigger.spec.label : trigger.id;
+  const cron = typeof trigger.spec.cron === "string" ? trigger.spec.cron : null;
 
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 border-b p-border last:border-0">
       <span className={`size-1.5 rounded-full shrink-0 ${TRIGGER_DOT.get(trigger.state) ?? "p-dot-neutral"}`} />
-      <span className="font-medium p-text-2 truncate max-w-40" title={spec.label ?? trigger.id}>{spec.label ?? trigger.id}</span>
+      <span className="font-medium p-text-2 truncate max-w-40" title={label}>{label}</span>
       <span className="font-mono p-text-3 shrink-0">{trigger.kind}</span>
-      {spec.cron && <code className="p-fill px-1 rounded-sm p-text-3 shrink-0">{spec.cron}</code>}
+      {cron && <code className="p-fill px-1 rounded-sm p-text-3 shrink-0">{cron}</code>}
       <span className="flex-1" />
-      {trigger.fire_count !== undefined && trigger.fire_count > 0 && <span className="p-text-3 shrink-0 tabular-nums">{trigger.fire_count} fires</span>}
+      {trigger.fire_count > 0 && <span className="p-text-3 shrink-0 tabular-nums">{trigger.fire_count} fires</span>}
       <span className="p-text-3 shrink-0">{trigger.state}</span>
       {url !== null && (
         <CopyButton value={url} what="the webhook URL" size={11}

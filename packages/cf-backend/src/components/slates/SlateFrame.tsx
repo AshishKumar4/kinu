@@ -1,10 +1,10 @@
-import type { Rpc } from "@kinu.run/core";
 import { InlineSlate } from "./InlineSlate";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 /** The chat card's component in `pane` display, so both slate views stay in step. */
 export function SlateFrame({ id, rpc, reloadKey = 0, onReady }: {
   id: string;
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   reloadKey?: number;
   onReady?: () => void;
 }) {

@@ -62,7 +62,9 @@ export type {
   ExecutionKey, ExecutionLane, TurnCapability,
 } from './orchestrator/execution';
 
-export { inTurnSurface, scopedTurnSurface, turnLedgers, TurnSurface, type TurnLedgers, type TurnSurfaceOpening } from './orchestrator/main-turn-surface';
+export { inTurnSurface, scopedTurnSurface, TurnSurface, type TurnSurfaceOpening } from './orchestrator/main-turn-surface';
+
+export { turnLedgers, type TurnLedgers } from './orchestrator/turn-accumulator';
 
 // Records that keyed work happened, kept after its row is retired.
 export {
@@ -186,7 +188,7 @@ export {
 
 export { drawWorkspaceLogo, sanitizeWorkspaceLogoSvg, WORKSPACE_LOGO_SYSTEM_PROMPT } from './identity/logo';
 
-export { workspaceDisplayTitle, workspaceTitleDraft } from './read-models/workspace-title';
+export { WORKSPACE_TITLE_MAX, workspaceDisplayTitle, workspaceTitleDraft, workspaceTitleProblem } from './read-models/workspace-title';
 
 export { EvolutionEngine } from './evolution/engine';
 
@@ -1655,7 +1657,7 @@ export {
 
 export { readWorkspaceWork, hasWorkspaceWork, actorReadHandle, WorkspaceWorkSchema, WORK_TAB_JOBS } from './read-models/workspace-work';
 
-export { agentTitle, nestedAgent, type AgentLinkIds } from './subordinates/nested-agent';
+export { agentTitle, nestedAgent, type AgentLinkIds, type InspectSubordinate } from './subordinates/nested-agent';
 
 export { recognizeGitHubHttp, recognizeGitHubMcp, GitHubFactSchema, GITHUB_MCP_PRESET, type GitHubFact } from './github/recognize';
 
@@ -2077,7 +2079,7 @@ export type {
 } from './read-models/workspace-overview';
 
 export type {
-  AgentStatus, AgentStatusDeps, ChatHistoryEntry, ToolListEntry,
+  ActorSnapshot, AgentStatus, AgentStatusDeps, ChatHistoryEntry, ToolListEntry,
 } from './read-models/status';
 
 export {
@@ -2177,7 +2179,7 @@ export { inheritedDescriptor, type RpcSurfaceSubject } from './utils/prototype-m
 
 export {
   type ActivitySnapshot, type ExecutorCommandResult, type ForkNode, type ForkNodeLifecycle,
-  type MemoryEntry, type PendingConsent, type Rpc, type SubordinateActivityEvent,
+  type MemoryEntry, type PendingConsent, type SubordinateActivityEvent,
   type TabPresence, evolutionHelper, ownerFacingSubordinate,
 } from './protocol';
 
@@ -2241,7 +2243,7 @@ export { ingressAdmission, ingressAdmitted, ingressDenied, peerIp, type IngressA
 
 export {
   CLI_DIST_PATHS, CLI_RUNTIME_PATH, CLI_VERSION_PATH,
-  fetchDeployedAsset, readBuildStamp, type AssetFetcher, type BuildStamp,
+  BuildStampSchema, fetchDeployedAsset, readBuildStamp, type AssetFetcher, type BuildStamp,
 } from './http/deployed-assets';
 
 export {

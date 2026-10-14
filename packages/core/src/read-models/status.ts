@@ -10,6 +10,10 @@ import { BUILTIN_TOOLS } from '../tools/registry';
 import { CRAFT_NEUTRAL_PRIOR } from '../craft/in-episode';
 import type { SqlExecutor } from '../types/primitives';
 import type { ReasoningEffort } from '../providers/effort';
+import type { TierSource } from '../profiles/resolve';
+import type { RoleId } from '../types/profile';
+import type { PlanReview } from '../types/plans';
+import type { InlineSteer } from './transcript';
 import { transcriptRole } from '../utils/ui-message';
 import type { ChatHistoryEntry } from '../types/chat';
 import { mapPage, type Page, type PositionCursor, type PositionPageRequest } from '../session/page';
@@ -30,6 +34,27 @@ export interface AgentStatus {
   model: string;
   reasoningEffort: ReasoningEffort | null;
   forkLineage: ForkLineageRow | null;
+}
+
+/**
+ * What a chat's pane draws of its agent, the workspace's own or a hosted one alike (`getActorSnapshot`): who it is, the
+ * model and thinking its next turn runs and where the model came from, its plan, its length, and the sends it holds.
+ */
+export interface ActorSnapshot {
+  readonly name: string;
+  /** The id every frame broadcast for this agent is stamped with; a pane filters frames by it. */
+  readonly actorId: string;
+  readonly displayName: string;
+  readonly role: RoleId;
+  readonly mission: string;
+  /** The resolution the next turn makes, not the agent's own pin, which may be unset. */
+  readonly model: { readonly model: string; readonly source: TierSource };
+  readonly reasoningEffort: ReasoningEffort | null;
+  readonly activePlan: PlanReview | null;
+  /** Counted in the store: a pane holds only a window. */
+  readonly messageCount: number;
+  /** No live broadcast repeats the queue for a tab that was gone when the steer was taken. */
+  readonly pendingSteers: readonly InlineSteer[];
 }
 
 export interface ToolListEntry {

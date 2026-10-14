@@ -16,7 +16,7 @@ import { NodeTranscript, statusDot } from "@/components/NodeTranscript";
 import type { HeadDeltas } from "@kinu.run/core";
 import { cleanNodeLabel, type ExplorerSelection } from "@kinu.run/core/swarm-view";
 import { explorationForkTree, type MctsRow } from "@kinu.run/core";
-import type { ForkNode, Rpc } from "@kinu.run/core";
+import type { ForkNode } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { ScrollBoundary } from "@/components/ui/ScrollBoundary";
@@ -30,6 +30,7 @@ import {
   useExplorationCanvas, type ExplorationFrontier, type ForkParamRow,
 } from "./fork-runs";
 import { fanInVertices, formatEvidenceValue, nodeRationales, runLiveness, runRefusal, swarmAxisRows, swarmResolutionOf, type RunLevel, type RunLiveness, type RunRefusal, type SwarmAxis, type SwarmResolution } from "@kinu.run/core/swarm-view";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 export interface ExplorationSurfaceProps {
   /** Live trees from `mcts-progress`, keyed by search; they replace polled rows so a
@@ -38,7 +39,7 @@ export interface ExplorationSurfaceProps {
   isStreaming: boolean;
   /** Detached work can create or continue a fork without a streaming turn. */
   backgroundJobs: readonly BackgroundJob[];
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   /** Per-branch journal-write counter from the `head_activity` broadcast. */
   headActivity: ReadonlyMap<string, number>;
   headDeltas?: HeadDeltas;
@@ -224,10 +225,10 @@ function nodeTally(counted: NodeCounts): string {
  * Fetched for every run with `hasNodeTranscripts`; the journal is the only record of
  * fan-in and of the resolved preset.
  */
-function useForkRunDetail(run: ForkRunSummary, rpc: Rpc, hasActiveWork: boolean) {
+function useForkRunDetail(run: ForkRunSummary, rpc: WorkspaceRpc, hasActiveWork: boolean) {
   const load = useCallback(
     () => run.hasNodeTranscripts
-      ? rpc<HeadRunView | null>("getHeadRun", [run.id])
+      ? rpc("getHeadRun", [run.id])
       : Promise.resolve<HeadRunView | null>(null),
     [rpc, run.id, run.hasNodeTranscripts],
   );
@@ -249,13 +250,13 @@ function useForkRunDetail(run: ForkRunSummary, rpc: Rpc, hasActiveWork: boolean)
  * root's row lands at dispatch, so reading one half hides nodes still working.
  */
 export function useForkRunTree(
-  run: ForkRunSummary, rpc: Rpc, liveTree: ForkNode | null, hasActiveWork: boolean,
+  run: ForkRunSummary, rpc: WorkspaceRpc, liveTree: ForkNode | null, hasActiveWork: boolean,
 ) {
   const detail = useForkRunDetail(run, rpc, hasActiveWork);
 
   const load = useCallback(
     () => run.hasSearchTree
-      ? rpc<MctsRow[]>("getSearchTree", [run.id])
+      ? rpc("getSearchTree", [run.id])
       : Promise.resolve<MctsRow[]>([]),
     [rpc, run.id, run.hasSearchTree],
   );
@@ -302,7 +303,7 @@ function RunDetailView({
   frontier: ExplorationFrontier | null;
   branchId: string | null;
   trees: ReadonlyMap<string, ForkNode>;
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   headActivity: ReadonlyMap<string, number>;
   headDeltas?: HeadDeltas;
   onOpenBranch: (branchId: string | null) => void;
@@ -531,7 +532,7 @@ function ForkBranchView({
   branchId: string;
   /** Keyed by run; names a node the store has no record of. */
   trees: ReadonlyMap<string, ForkNode>;
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   headActivity: ReadonlyMap<string, number>;
   headDeltas?: HeadDeltas;
   /** The journal's count; `ForkRunSummary.branches` counts only settled search rows. */

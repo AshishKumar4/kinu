@@ -9,7 +9,6 @@ import {
 import type { AlternateTakeSet, TakePickOutcome } from "@kinu.run/core";
 import { branchHeadId, takeEvidence } from "@kinu.run/core";
 import type { BranchRun } from "@/hooks/use-workspace-reads";
-import type { Rpc } from "@kinu.run/core";
 import { Modal } from "@/components/ui/Modal";
 import { MarkdownContent } from "@/components/surfaces/shared";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -17,6 +16,7 @@ import { TranscriptBody, useNodeTranscript } from "@/components/NodeTranscript";
 import { NO_HEAD_DELTAS, type HeadDeltas } from "@kinu.run/core";
 import { currentTakeIndex, cycleTakeIndex, takeChipLabel } from "@kinu.run/core";
 import { showing, detach } from "@kinu.run/core/obs";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 export function TakesChip({ set, onPick }: {
   set: AlternateTakeSet;
@@ -155,7 +155,7 @@ function TakesComparison({ set, onPick, onClose }: {
 export function BranchRunChip({ run, takes, rpc, headActivity, headDeltas = NO_HEAD_DELTAS, onPick, onDismiss }: {
   run: BranchRun;
   takes?: AlternateTakeSet;
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   headActivity: ReadonlyMap<string, number>;
   headDeltas?: HeadDeltas;
   onPick: (takeId: string, nodeId: string) => Promise<TakePickOutcome>;

@@ -1901,21 +1901,15 @@ describe('LocalAgentHost', () => {
       { name: 'root', cwd: project, workspaceId: 'proj' },
     ]);
 
-    const titled = Promise.withResolvers<void>();
-    host.subscribe((agent, event) => {
-      if (agent === 'root/helper' && event.type === 'broadcast'
-        && event.event.type === 'workspace_renamed' && event.event.displayName === 'Coupon Audit') {
-        titled.resolve();
-      }
-    });
-
     try {
       const team = await host.team('root');
       await team.create({ name: 'helper' });
 
       const first = awaitTurns(host, 'root/helper', 1);
       await team.message({ name: 'helper', content: 'Audit the coupon checkout', mode: 'build' });
-      await Promise.all([first, titled.promise]);
+      await first;
+      // The title is the turn's terminal effect, written once its detached close settles.
+      await (await host.acquire('root/helper')).settleBackgroundWork();
 
       expect(childConfigValue(dbPath, 'helper', 'display_name')).toBe('Coupon Audit');
 

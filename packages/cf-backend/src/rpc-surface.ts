@@ -196,6 +196,8 @@ const USER_DO_METHODS = [
   'shareCards_withdraw',
   'sharesReceived_forget',
   'sharesReceived_list',
+  'sharesSeenAt',
+  'sharesSeen',
   'libraryTiles',
   'drive_list',
   'drive_mkdir',

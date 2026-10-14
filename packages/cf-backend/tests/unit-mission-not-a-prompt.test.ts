@@ -8,7 +8,7 @@ import { describe, expect, test } from 'bun:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { renderSoulMarkdown, summarizeSoul } from '@kinu.run/core';
-import { EmptyConversation } from '../src/pages/WorkspacePage';
+import { EmptyConversation } from '../src/components/ChatColumn';
 
 /** The empty conversation of a workspace created with `mission`, as the page renders it from the status. */
 function emptyConversation(mission?: string): string {

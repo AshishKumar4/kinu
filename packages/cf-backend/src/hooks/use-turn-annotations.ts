@@ -1,9 +1,10 @@
 /** What the owner and the branches added to a conversation's turns: a rating per answer, and the takes of a turn. */
 import { Cause, Effect } from "effect";
 import { startTransition, useCallback, useEffect, useState } from "react";
-import type { AlternateTakeSet, Rpc, TakePickOutcome } from "@kinu.run/core";
+import type { AlternateTakeSet, TakePickOutcome } from "@kinu.run/core";
 import { settle } from "@kinu.run/core/obs";
 import { describeError } from "@/hooks/use-async-resource";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 type Rating = "positive" | "negative";
 
@@ -20,7 +21,7 @@ export interface TurnAnnotations {
  * produced a fresh set. A failed read is reported under its source, and cleared by the next that lands.
  */
 export function useTurnAnnotations({ rpc, connected, live, settledBranches, report }: {
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   connected: boolean;
   live: boolean;
   settledBranches: number;
@@ -36,7 +37,7 @@ export function useTurnAnnotations({ rpc, connected, live, settledBranches, repo
   useEffect(() => {
     if (!connected) return;
     startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
-      setFeedback(yield* Effect.promise(async () => rpc<Record<string, Rating>>("listTurnFeedback")));
+      setFeedback(yield* Effect.promise(async () => rpc("listTurnFeedback", [])));
       report("feedback", null);
     }), failed("feedback"))));
   }, [connected, rpc, report, failed]);
@@ -44,7 +45,7 @@ export function useTurnAnnotations({ rpc, connected, live, settledBranches, repo
   useEffect(() => {
     if (!connected || live) return;
     startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
-      setTakes(yield* Effect.promise(async () => rpc<Record<string, AlternateTakeSet>>("listAlternateTakes")));
+      setTakes(yield* Effect.promise(async () => rpc("listAlternateTakes", [])));
       report("takes", null);
     }), failed("takes"))));
   }, [connected, live, rpc, settledBranches, report, failed]);
@@ -61,7 +62,7 @@ export function useTurnAnnotations({ rpc, connected, live, settledBranches, repo
   }, [rpc]);
 
   const pickTake = useCallback(async (takeId: string, nodeId: string): Promise<TakePickOutcome> => {
-    const result = await rpc<TakePickOutcome>("pickAlternateTake", [takeId, nodeId]);
+    const result = await rpc("pickAlternateTake", [takeId, nodeId]);
     const { turnId } = result.set;
 
     if (turnId) setTakes((prev) => ({ ...prev, [turnId]: result.set }));

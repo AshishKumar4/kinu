@@ -117,7 +117,7 @@ export function fixtureRunSources(actor: HostedActor, model: (spec: string) => L
     taskPlan: () => null,
     conversationKey: () => conversationKey('fixture', actor.record.actorId),
     scaffoldSpend: { source: 'scaffold', report: () => {} },
-    attachmentBudget: actor.session.orchestrator.acc.context,
+    attachmentBudget: actor.session.orchestrator.acc.ledgers.context,
     extensions: () => [],
     dynamic: () => () => ({}),
     operation: (profile, inputs) => captureOperationProfile({ actor: actor.handle, profile, inputs, runId: 'run-hosted-fixture', turnId: null }),

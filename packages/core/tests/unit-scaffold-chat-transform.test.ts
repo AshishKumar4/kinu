@@ -54,7 +54,7 @@ function runtime(): AgentRuntime {
 async function selected(version: number, scaffoldCode: string,
   callTool?: (name: string, args: JsonObject) => Promise<JsonValue | undefined>) {
   const rt = runtime();
-  const files = rt.agentStateVfs ?? rt.storage.vfs;
+  const files = rt.agentStateVfs;
   await files.mkdir('scaffold', { recursive: true });
   await writeText(files, rt.identity.scaffold.path + '.v' + version, scaffoldCode);
   const program = await prepareActorProgram({ runtime: rt, mode: 'build', version });

@@ -628,7 +628,7 @@ async function buildCLIHeadRuntime(
 
   const stores = createAgentStores(() => sql, () => actor, (write) => parent.storage.transactionSync(write), () => parent.filesForActor(actor));
 
-  const agentStateVfs = parent.agentStateVfs ?? parent.storage.vfs;
+  const agentStateVfs = parent.agentStateVfs;
   const { cwd: folder } = parent;
   const writeObserver = opts.writeObserver;
 

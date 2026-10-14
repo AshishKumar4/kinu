@@ -62,11 +62,6 @@ interface WorkspaceRosterValue extends RosterPages {
 
 const WorkspaceRosterContext = createContext<WorkspaceRosterValue | null>(null);
 
-const WorkspaceRenameSchema = v.object({
-  name: v.string(),
-  displayName: v.string(),
-});
-
 function matchesFilter(entry: RosterEntry, filter: RosterFilter): boolean {
   const bucket = rosterBucket(entry.overview?.activity ?? null, entry.decisions);
 
@@ -357,25 +352,6 @@ export function WorkspaceRosterProvider({ children, live = openRosterSocket }: {
   const remove = useCallback((name: string): void => {
     edit((entries) => entries.filter((entry) => entry.name !== name));
   }, [edit]);
-
-  useEffect(() => {
-    const handleRename = (event: Event): void => {
-      const parsed = v.safeParse(
-        WorkspaceRenameSchema,
-        event instanceof CustomEvent ? event.detail : null,
-      );
-
-      if (parsed.success && parsed.output.name && parsed.output.displayName) {
-        rename(parsed.output.name, parsed.output.displayName);
-      } else {
-        refresh();
-      }
-    };
-
-    window.addEventListener("kinu:workspace-renamed", handleRename);
-
-    return () => window.removeEventListener("kinu:workspace-renamed", handleRename);
-  }, [refresh, rename]);
 
   const value = useMemo<WorkspaceRosterValue>(() => ({
     ...pages, total: pages.counts.all, pending, refresh, upsert, rename, remove, subscribe, epoch, accountProposals,

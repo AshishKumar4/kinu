@@ -61,9 +61,14 @@ export async function readVersionedScaffoldSource(source: VersionedScaffoldSourc
   return v.parse(v.string(), await readText(source.vfs, versioned));
 }
 
+/** The source of a runtime's own scaffold at `version`, from its own state; null without that version's file. */
+export function scaffoldSource(rt: Pick<AgentRuntime, 'identity' | 'agentStateVfs'>, version: number): Promise<string | null> {
+  return readVersionedScaffoldSource({ path: rt.identity.scaffold.path, vfs: rt.agentStateVfs }, version);
+}
+
 /** Prefers the canonical `agent.js.v{N}` file; the live file holds the current version, not a pending one. */
 export async function readScaffoldVersion(rt: AgentRuntime, version: number): Promise<string | null> {
-  const versioned = await readVersionedScaffoldSource({ path: rt.identity.scaffold.path, vfs: rt.agentStateVfs ?? rt.storage.vfs }, version);
+  const versioned = await scaffoldSource(rt, version);
 
   if (versioned !== null) return versioned;
 

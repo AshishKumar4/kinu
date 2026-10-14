@@ -121,7 +121,6 @@ import {
   type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT, SLATES_CHANGED_METADATA_KEY, slatesToPreview,
   type SlateSurfaceCatalog, type LiveShareRecord,
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
-  type ScaffoldRunResult,
   applyScaffoldDecision, getEvolutionStatus, listScaffoldVersions,
   previewScaffoldLive, runOptimization,
   decideRefinementRoute, evolutionAnswerWake, listRefinements, nextEvolutionAnswerAt, refinementPass, requestOwnerRefinement, showRefinementRoute,
@@ -172,7 +171,7 @@ import {
   EmailInbox, planOwnerNotification, readEmailAllowlist, setEmailAllowlist,
   type EmailAdmission, type IncomingEmail,
   PeerHub, type PeerMessage, type ReceiveResult,
-  getAgentStatus, getToolList, readLatestSearchTree, readSearchTree,
+  getAgentStatus, getToolList, readLatestSearchTree, readSearchTree, type ActorSnapshot,
   readSearchNodeDetail, type SearchNodeDetail,
   listForkRuns, type ForkRunSummary,
   readNodeTranscript, type NodeTranscriptView,
@@ -191,7 +190,7 @@ import {
   type ExecutorDiffResult, type WorkspaceBaselines, type WorkspaceDiffResult, type WorkspaceReviewResult,
   initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes, deliverOwedChangeNotes, owesChangeNotes, type ChangeNotesChat,
   initTurnBranchesTable, TurnBranchesStore, branchHeadId, TurnSurface, authoredTurnMetadata, type ActorReach, type ChatTurnInput,
-  type ChangeNotesResult, type NotedChanges, type ReviewAnnotation,
+  type ChangeNote, type ChangeNotesResult, type NotedChanges,
   diffLines, type DiffLine,
   getExecutorFiles, readExecutorFile, listEnvironments,
   renameExecutorPathOp, deleteExecutorPathOp,
@@ -1518,12 +1517,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const parentId = actor.record.parentActorId;
 
     return new ActorAdvisor({
-      actor: actor.handle, vfs: () => actor.runtime.agentStateVfs ?? actor.runtime.storage.vfs,
+      actor: actor.handle, vfs: () => actor.runtime.agentStateVfs,
       notes: () => new EvolutionEngine(actor.runtime, historyTurnPairs(actor.stores.history), { transaction: (body) => { this.ctx.storage.transactionSync(body); } }),
       port: () => this.temporaryAgentPort(actor.reference), reviewed: actor.record.input,
       // A hire shares the workspace's priorities, and its notes reach its hirer.
       ...(parentId !== null && {
-        context: { config: this.config, workspace: async () => this.rt.agentStateVfs ?? this.rt.storage.vfs, parent: (signal) => this.agentDeliveries(parentId).signals.send(signal) },
+        context: { config: this.config, workspace: async () => this.rt.agentStateVfs, parent: (signal) => this.agentDeliveries(parentId).signals.send(signal) },
       }),
       send: (signal) => this.agentDeliveries(actor.handle.actorId).signals.send(signal),
       profile: () => null, scoped: (turn) => turn,
@@ -3787,7 +3786,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     if (!applied) return false;
     this._titleCache = { displayName, nameOrigin: origin };
     this._titleHydrated = true;
-    this.broadcast(JSON.stringify({ type: 'workspace_renamed', displayName }));
 
     return true;
   }
@@ -4961,8 +4959,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   async previewScaffoldLive(
     version: number,
     task: string,
-  ): Promise<ScaffoldRunResult> {
-    return previewScaffoldLive(this.scaffoldControl, version, task);
+  ): Promise<ScaffoldRunReport> {
+    // Its native chunks do not cross the socket; the report counts them.
+    return scaffoldRunReport(await previewScaffoldLive(this.scaffoldControl, version, task));
   }
 
   /**
@@ -5178,12 +5177,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   @callable()
-  async getChangeNotes(source: string): Promise<ReviewAnnotation[]> {
+  async getChangeNotes(source: string): Promise<ChangeNote[]> {
     return readChangeNotes(this.rt, source);
   }
 
   @callable()
-  async saveChangeNotes(source: string, notes: ReviewAnnotation[]): Promise<ChangeNotesResult> {
+  async saveChangeNotes(source: string, notes: readonly ChangeNote[]): Promise<ChangeNotesResult> {
     return saveChangeNotes(this.rt, source, { value: notes });
   }
 
@@ -5266,7 +5265,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Owner-scoped ('interactive'); workspace capability tiers do not gate it.
    */
   @callable()
-  exportWorkspaceArchive(cursor?: ArchiveCursor): Promise<ArchivePage> {
+  exportWorkspaceArchive(cursor: ArchiveCursor | null = null): Promise<ArchivePage> {
     return settle(Effect.gen({ self: this }, function* () {
       const ownerUserId = this.getOwnerUserId();
 
@@ -5428,9 +5427,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   @callable()
-  async getFacts(limit = 100): Promise<Array<{
-    key: string; value: unknown; confidence: number; source: string; lastObservedAt: number;
-  }>> {
+  async getFacts(limit = 100): Promise<Array<Pick<Fact, 'key' | 'value' | 'confidence' | 'source' | 'lastObservedAt'>>> {
     return this.facts.recentTopK(limit).map((f) => ({
       key: f.key, value: f.value, confidence: f.confidence, source: f.source, lastObservedAt: f.lastObservedAt,
     }));
@@ -5557,10 +5554,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
+  /** The pane's read of a chat, the workspace agent's or `actor`'s alike: one read for any pane. */
   @callable()
-  getActorSnapshot(name: string) {
+  getActorSnapshot(actor?: string): Promise<ActorSnapshot> {
     return settle(Effect.gen({ self: this }, function* () {
-      const { entry, child } = yield* this.hostedChild(name);
+      if (actor === undefined) return yield* Effect.promise(async () => this.mainSnapshot());
+      const { entry, child } = yield* this.hostedChild(actor);
+      const actorId = child.handle.actorId;
 
       // The effective model: the actor's own pin, else the workspace's, else its tier's, with its source.
       const { profile } = yield* Effect.promise(async () => this.actorProfile({
@@ -5569,21 +5569,39 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       return {
         name: entry.name,
-        // The id every frame broadcast for this actor is stamped with; the pane uses it to filter frames.
-        actorId: child.handle.actorId,
+        actorId,
         displayName: child.stores.config.getDisplayName() ?? entry.name,
         role: child.stores.config.getRoleSelection(),
         mission: entry.birth?.seed.mission ?? '',
         model: { model: profile.tier.model, source: profile.tier.source },
         reasoningEffort: profile.tier.reasoningEffort,
         // Its plans live in its own isolate (D9).
-        activePlan: yield* Effect.promise(async () => await (await this.agentCalls(child.handle.actorId)).activePlanReview(this.agentSnapshot(child.handle.actorId))),
-        // Counted in the store: the pane holds only a window.
-        messageCount: yield* Effect.promise(async () => this.agentStores(child.handle.actorId).messageCount()),
+        activePlan: yield* Effect.promise(async () => await (await this.agentCalls(actorId)).activePlanReview(this.agentSnapshot(actorId))),
+        messageCount: yield* Effect.promise(async () => this.agentStores(actorId).messageCount()),
         // Its own isolate's sends, as its conversation is.
-        pendingSteers: (yield* Effect.promise(async () => await (await this.agentCalls(child.handle.actorId)).standing(this.agentSnapshot(child.handle.actorId), null))).pendingSteers,
+        pendingSteers: (yield* Effect.promise(async () => await (await this.agentCalls(actorId)).standing(this.agentSnapshot(actorId), null))).pendingSteers,
       };
     }));
+  }
+
+  /** The workspace agent's chat, as {@link getActorSnapshot} reads a hosted one's: its profile the one its next turn runs. */
+  private async mainSnapshot(): Promise<ActorSnapshot> {
+    const [profile, activePlan, standing, displayName, mission] = await Promise.all([
+      this.currentProfile(), this.getActivePlanReview(), this.mainStanding({ fresh: true }), this.workspaceTitle(), this.ownMission(),
+    ]);
+
+    return {
+      name: this.name,
+      actorId: this.actorHandle().actorId,
+      displayName: displayName ?? '',
+      role: this.config.getRoleSelection(),
+      mission,
+      model: { model: this.effectiveModelSpec(), source: profile.tier.source },
+      reasoningEffort: profile.tier.reasoningEffort,
+      activePlan,
+      messageCount: standing.messageCount,
+      pendingSteers: standing.pendingSteers,
+    };
   }
 
   /**
@@ -6056,10 +6074,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return (await stub.setWorkspaceLogo(caller, this.name, svg)).drawn;
   }
 
+  /** The owner's title for the workspace, trimmed; the owner's object refuses one `workspaceTitleProblem` names. */
   @callable() async setDisplayName(displayName: string) {
-    await this.propagateDisplayName(displayName, 'user');
+    const title = displayName.trim();
 
-    return { displayName };
+    await this.propagateDisplayName(title, 'user');
+
+    return { displayName: title };
   }
 
   async setInitialDisplayName(displayName: string, nameOrigin: NameOrigin) {
@@ -6321,11 +6342,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private async snapshotOf(memoryContent: string, presence: Parameters<typeof hasWorkspaceWork>[0]) {
-    const [status, tools, executors, activePlan, tabPresence, { slates }] = await Promise.all([
+    const [status, chat, tools, executors, tabPresence, { slates }] = await Promise.all([
       this.getAgentStatus(),
+      this.mainSnapshot(),
       this.getToolDescriptions(),
       this.getExecutors(),
-      this.getActivePlanReview(),
       this.tabPresenceOf(presence),
       this.listSlates(),
     ]);
@@ -6346,9 +6367,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       .map((run) => ({ type: 'branch_status' as const, status: 'running' as const, branchId: run.rootId, task: run.task }));
 
     return {
-      status, tools, memoryContent, executors, executorOutputs, lastActiveExecutor, activePlan,
-      tabPresence, slates, pendingSteers: (await this.mainStanding()).pendingSteers, branchRuns,
-      turnClaim: this.turnClaimState(),
+      status, chat, tools, memoryContent, executors, executorOutputs, lastActiveExecutor,
+      tabPresence, slates, branchRuns, turnClaim: this.turnClaimState(),
     };
   }
 
@@ -6848,11 +6868,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }));
   }
 
-  /** A hosted actor's own model pin, over the workspace's for its turns. */
-  @callable() setActorModel(actor: string, spec: string) {
+  /** The workspace agent's model pin, or `actor`'s own over the workspace's for its turns. */
+  @callable() setModel(spec: string, actor?: string) {
     return settle(Effect.gen({ self: this }, function* () {
-      const set = setModel(this.modelSetting((yield* this.hostedChild(actor)).child.stores.config, () => {}), spec);
+      const set = setModel(this.modelSetting(yield* this.actorConfig(actor), () => {}), spec);
 
+      // That agent's isolate measures its next request on the new model, as every agent's does.
       yield* Effect.promise(async () => this.modelSettingsChanged());
 
       return set;
@@ -7363,7 +7384,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 reportSocketCallFailures(OrchestratorAgent, Agent);
 
 /** Cursor is client-supplied: anything malformed starts a fresh archive instead of reaching the query. */
-function parseArchiveCursor(value: ArchiveCursor | undefined): ArchiveCursor | null {
+function parseArchiveCursor(value: ArchiveCursor | null): ArchiveCursor | null {
   const parsed = v.safeParse(ArchiveCursorSchema, value);
 
   return parsed.success ? parsed.output : null;

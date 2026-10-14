@@ -1,7 +1,7 @@
 import { Effect } from 'effect';
 import { DeviceHelloSchema, DeviceUpdateHelloSchema, DEVICE_FRAMES } from '@kinu.run/core';
 import {
-  type DeviceExecOutput, NO_DEVICE_CONNECTED, watchedOutput, SEVERAL_DEVICES_CONNECTED, codexEgressAllowed, chatgptEgressAllowed, type RelayedProvider, isWorkspaceName, nanoid, type DeviceCheckpointHint, type DeviceConsentRequest, type JsonObject, type JsonValue, CapabilityDeniedError, ownerCaller, type UserCaller, type ResolvedCaller, DeviceSocketHub, DeviceRequestLedger, type ClaimedDeviceRequest, type DeviceCancelOutcome, randomToken, sha256Hex, type DeviceChatGptStatus, DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED, DEVICE_UPDATE, cliArtifactPath, deviceUpdateState, readBuildStamp, type BuildStamp, type DeviceUpdateFrame, type DeviceUpdateState, parseDeviceCancelAnswer, nextDeviceRequestId, DEVICE_METHOD, DEVICE_ERRORS, deviceFailure, deviceMethodHas, type DeviceTunnel, DEVICE_TIERS, effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix, sandboxCause, summarizeDeviceAction, type DeviceConsentDecision, type DeviceStatus, type DeviceFileScope, type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
+  type DeviceExecOutput, NO_DEVICE_CONNECTED, watchedOutput, SEVERAL_DEVICES_CONNECTED, codexEgressAllowed, chatgptEgressAllowed, type RelayedProvider, isWorkspaceName, nanoid, type DeviceCheckpointHint, type DeviceConsentRequest, type JsonObject, type JsonValue, CapabilityDeniedError, ownerCaller, type UserCaller, type ResolvedCaller, DeviceSocketHub, DeviceRequestLedger, type ClaimedDeviceRequest, type DeviceCancelOutcome, randomToken, sha256Hex, type DeviceChatGptStatus, DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED, DEVICE_UPDATE, cliArtifactPath, deviceUpdateState, readBuildStamp, BuildStampSchema, type BuildStamp, type DeviceUpdateFrame, type DeviceUpdateState, parseDeviceCancelAnswer, nextDeviceRequestId, DEVICE_METHOD, DEVICE_ERRORS, deviceFailure, deviceMethodHas, type DeviceTunnel, DEVICE_TIERS, effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix, sandboxCause, summarizeDeviceAction, type DeviceConsentDecision, type DeviceStatus, type DeviceFileScope, type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
 } from '@kinu.run/core';
 import { attemptInItsWords, diagnostics, KinuError, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -146,6 +146,9 @@ export interface UserDevicesHost extends Pick<UserObjectHost, 'ctx' | 'env' | 'r
 }
 
 /** The owner's machines: tunnels, tokens, consents, tiers and requests. */
+/** The served build as the connect that opened a device's socket read it. */
+const SERVED_STAMP_KEY = 'devices.served_stamp';
+
 export class UserDevices {
   // The reverse-WS tunnel from a user's machine terminates here, not on an agent, so every agent
   // can reach the device via `deviceRpc()`. A WebSocket cannot cross RPC; the worker forwards the upgrade.
@@ -173,14 +176,25 @@ export class UserDevices {
 
     if (!verified.ok || !verified.deviceId) return new Response('unauthorized', { status: 401 });
 
-    if (this._devices.isConnected(verified.deviceId)) {
-      this.host.sqlx(`UPDATE user_devices SET replaced_at = ? WHERE id = ?`, Date.now(), verified.deviceId);
-    }
-
+    // Read and minted before anything is taken: what follows, up to the token's send, runs in one turn. A connect
+    // another one replaces while it awaits would otherwise send on a socket already closed, or leave stored a token
+    // whose socket is gone (staging f9c17ac7b).
+    const stamp = await this.servedStamp();
+    const token = `pdt_${randomToken(32)}`;
+    const tokenHash = await sha256Hex(token);
     const pair = new WebSocketPair();
     const [client, server] = [pair[0], pair[1]];
-    this._devices.accept(verified.deviceId, server);
     const now = Date.now();
+
+    if (this._devices.isConnected(verified.deviceId)) {
+      this.host.sqlx(`UPDATE user_devices SET replaced_at = ? WHERE id = ?`, now, verified.deviceId);
+    }
+
+    this.rotateDeviceToken(verified.deviceId, verified.tokenWasCurrent === true, tokenHash, now);
+    this.rememberServedStamp(stamp);
+    this._devices.accept(verified.deviceId, server);
+    server.send(JSON.stringify({ type: DEVICE_FRAMES.rotate, token }));
+    this.host.sqlx(`UPDATE user_devices SET last_seen_at = ? WHERE id = ?`, now, verified.deviceId);
 
     // Clear offline notices only on tracked workspaces; an unreachable one keeps its row for next accept.
     const label = this.deviceLabel(verified.deviceId);
@@ -202,15 +216,7 @@ export class UserDevices {
       }
     }
 
-    this.host.sqlx(
-      `UPDATE user_devices SET last_seen_at = ? WHERE id = ?`,
-      now, verified.deviceId,
-    );
     await this.devicesMoved();
-    server.send(JSON.stringify({
-      type: DEVICE_FRAMES.rotate,
-      token: await this.rotateDeviceToken(verified.deviceId, verified.tokenWasCurrent === true),
-    }));
     const init: ResponseInit & { webSocket: WebSocket } = { status: 101, webSocket: client };
 
     return new Response(null, init);
@@ -218,11 +224,7 @@ export class UserDevices {
 
   /** A grace is kept only when the machine used the current secret, so two copies of `device.json`
    *  cannot alternate. The absolute window restarts either way. */
-  private async rotateDeviceToken(deviceId: string, keepGrace: boolean): Promise<string> {
-    const token = `pdt_${randomToken(32)}`;
-    const tokenHash = await sha256Hex(token);
-    const now = Date.now();
-
+  private rotateDeviceToken(deviceId: string, keepGrace: boolean, tokenHash: string, now: number): void {
     // Spending the grace retires the secret it replaced.
     if (!keepGrace) {
       const [dropped] = this.host.sqlx<{ token_hash: string }>(`SELECT token_hash FROM user_devices WHERE id = ?`, deviceId);
@@ -238,8 +240,6 @@ export class UserDevices {
         WHERE id = ?`,
       keepGrace ? 1 : 0, tokenHash, now + DEVICE_TOKEN_TTL_MS, deviceId,
     );
-
-    return token;
   }
 
   /** Kept for the token lifetime; an incident stays until the owner acknowledges it. */
@@ -303,8 +303,8 @@ export class UserDevices {
     this.host.sqlx(`DELETE FROM user_device_protocol_refusals WHERE device_id = ?`, deviceId);
   }
 
-  /** Null when the deploy published no stamp or names no public origin. Read per HELLO: the stamp
-   * changes with every deploy. */
+  /** Null when the deploy published no stamp or names no public origin. Read per call: the stamp changes with every
+   * deploy. */
   private async servedBuild(): Promise<string | null> {
     return (await this.servedStamp())?.version ?? null;
   }
@@ -318,11 +318,21 @@ export class UserDevices {
   }
 
   /**
-   * UPDATE frame for a daemon behind the served build, when its owner allows the push.
+   * Kept for the HELLO that follows, so its push is decided and sent in the turn it arrives, on its socket: a later
+   * connect may close that socket during any wait. A deploy ends every socket, so a socket's whole life sees this one.
+   */
+  private rememberServedStamp(stamp: BuildStamp | null): void {
+    if (stamp === null) this.host.ctx.storage.kv.delete(SERVED_STAMP_KEY);
+    else this.host.ctx.storage.kv.put(SERVED_STAMP_KEY, stamp);
+  }
+
+  /**
+   * UPDATE frame for a daemon behind the build its socket's connect read, when its owner allows the push.
    * Null for no reported build, unbuilt platform, opted-out owner, refused build, or no checksum.
    */
-  async deviceUpdateFrame(deviceId: string, hello: v.InferOutput<typeof DeviceUpdateHelloSchema>): Promise<DeviceUpdateFrame | null> {
-    const stamp = await this.servedStamp();
+  deviceUpdateFrame(deviceId: string, hello: v.InferOutput<typeof DeviceUpdateHelloSchema>): DeviceUpdateFrame | null {
+    const remembered = v.safeParse(BuildStampSchema, this.host.ctx.storage.kv.get(SERVED_STAMP_KEY));
+    const stamp = remembered.success ? remembered.output : null;
     const served = stamp?.version ?? null;
 
     const [refusal] = this.host.sqlx<{ version: string }>(

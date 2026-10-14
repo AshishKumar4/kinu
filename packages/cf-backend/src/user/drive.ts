@@ -3,7 +3,6 @@ import * as v from 'valibot';
 import {
   addSkill, ChunkedUpload, deleteDriveEntry, driveFailure, DriveUploadTargetSchema, FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES, listDrive, makeDriveFolder, markAsSkill, normalizeDrivePath, packDriveFolder, receiveDriveUpload, renameDriveEntry, SHARED_DRIVE_UNBOUND, SKILL_FOLDER_FILE, type DriveFailure, type DriveListing, type DriveUploadOutcome, type DriveUploadTarget, type MarkedSkill, type MossaicVfs, type UserCaller,
 } from '@kinu.run/core';
-import { deriveUserId } from '../auth/store';
 import type { UserObjectHost } from './user-host';
 
 export type DriveAnswer<Value> = { readonly ok: true; readonly value: Value } | ({ readonly ok: false } & DriveFailure);
@@ -22,6 +21,8 @@ export interface DriveChunkWrite {
 const DRIVE_PASTED_SKILL_MAX_BYTES = 256 * 1024;
 
 export interface UserDriveHost extends Pick<UserObjectHost, 'requireTier' | 'sqlx'> {
+  /** This account's own id, the name it is addressed by: the tenant its workspaces mount at `/shared`. */
+  accountId(): string;
   driveFor(tenant: string): MossaicVfs | null;
 }
 
@@ -29,11 +30,11 @@ export interface UserDriveHost extends Pick<UserObjectHost, 'requireTier' | 'sql
 export class UserDrive {
   constructor(private readonly host: UserDriveHost) {}
 
-  private async drive(): Promise<MossaicVfs> {
-    const row = this.host.sqlx<{ email: string }>(`SELECT email FROM user_profile WHERE id = 1`)[0];
+  private drive(): MossaicVfs {
+    const signedIn = this.host.sqlx(`SELECT 1 FROM user_profile WHERE id = 1`).length > 0;
 
-    if (!row) throw new KinuError('missing', 'the Drive opens once the account has signed in');
-    const files = this.host.driveFor(await deriveUserId(row.email));
+    if (!signedIn) throw new KinuError('missing', 'the Drive opens once the account has signed in');
+    const files = this.host.driveFor(this.host.accountId());
 
     if (files === null) throw new KinuError('unavailable', SHARED_DRIVE_UNBOUND);
 
@@ -44,7 +45,7 @@ export class UserDrive {
     await this.host.requireTier(caller, 'drive');
 
     try {
-      return { ok: true, value: await op(await this.drive()) };
+      return { ok: true, value: await op(this.drive()) };
     } catch (cause) {
       return { ok: false, ...driveFailure({ cause }) };
     }

@@ -831,7 +831,7 @@ export class CloudAgentClient implements AgentClient {
   async setModel(spec: string): Promise<{ spec: string }> {
     const name = this.subordinateName;
 
-    if (name !== null) return { spec: v.parse(SetModelResultSchema, await this.callRpc('setActorModel', [name, spec])).spec };
+    if (name !== null) return { spec: v.parse(SetModelResultSchema, await this.callRpc('setModel', [spec, name])).spec };
 
     return { spec: (await this.callHttp('setModel', SetModelResultSchema, [spec])).spec };
   }

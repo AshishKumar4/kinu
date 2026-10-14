@@ -1,8 +1,9 @@
 /** Which plans have a page tab, which one is shown, and every way a plan's page opens on its own. */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { planOfSurface, planSurface, type OwnedPlan, type PlanPageRef, type PlanReview, type PlanSurfaceKind, type Rpc, type SurfaceKind } from "@kinu.run/core";
+import { planOfSurface, planSurface, type OwnedPlan, type PlanPageRef, type PlanReview, type PlanSurfaceKind, type SurfaceKind } from "@kinu.run/core";
 import type { ReadMoves, WorkspacePlanArrival } from "@/hooks/use-workspace-reads";
 import { useWorkspaceWork, type WorkspaceWorkRead } from "./use-workspace-work";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 const keyOf = (item: OwnedPlan): PlanSurfaceKind => planSurface({ owner: item.owner.name, id: item.plan.id, revision: item.plan.revision });
 
@@ -48,7 +49,7 @@ export interface PlanPages {
 }
 
 export function usePlanPages({ rpc, readMoves, plan, planOwner, planFocus, arrival, surface, navigate }: {
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   readMoves: ReadMoves | undefined;
   /** The plan the pane reports, its owner's. */
   plan: PlanReview | null;

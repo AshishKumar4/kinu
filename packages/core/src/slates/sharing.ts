@@ -242,6 +242,8 @@ const SharedRowSchema = v.object({
   owner: v.optional(v.string()),
   /** A live share's fork switch: false when it is closed to forks. */
   fork: v.optional(v.boolean()),
+  /** A share given to this account since it last opened Shared. */
+  unseen: v.optional(v.literal(true)),
 });
 
 export type SharedRow = v.InferOutput<typeof SharedRowSchema>;

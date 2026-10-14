@@ -1,43 +1,21 @@
 // Cookies are opaque HttpOnly session handles; KV stores only their hashes.
 
 import { Cause, Data, Effect } from 'effect';
-import { settle, settleSync } from '@kinu.run/core/obs';
+import { settle } from '@kinu.run/core/obs';
 import {
   DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, EVAL_ACCOUNTS, EVAL_TRIAL_ACCOUNTS, parseEvalAccount, timingSafeEqual,
 } from '@kinu.run/core';
 import {
-  SessionAuthorityUnavailableError, deriveUserId, verifySession,
+  SessionAuthorityUnavailableError, accountIdFor, verifySession,
   type AuthStoreEnv, type SessionAuthority,
 } from './store';
+import { readCookie, SESSION_COOKIE_NAME } from './cookies';
 import type { KvStore } from '@kinu.run/agent-utils';
-import { VIEWER_COOKIE_NAME } from '../viewer-pass';
 import type { ObjectNamespace } from '@kinu.run/core';
 import type { OwnerCapabilityEnv } from '@kinu.run/core';
+import type { SignInDeclarationEnv } from '@kinu.run/core/identity';
 import type { AccessTokenScope } from '@kinu.run/core';
 
-export const SESSION_COOKIE_NAME = '__Host-kinu_session';
-
-/** Binds one OAuth sign-in to the browser that started it; without it a
- *  callback URL is bearer authority (login CSRF). */
-export const OAUTH_STATE_COOKIE_NAME = '__Host-kinu_oauth_state';
-
-/** Same binding for the deploy door (`deploy/routes.ts`): the digest of the
- *  OAuth `state`, so `/deploy/callback` proves it is the starting browser. */
-export const DEPLOY_STATE_COOKIE_NAME = '__Host-kinu_deploy_state';
-
-/** CSRF cookie for the CLI approval page's POST (`cli/routes.ts`). */
-export const CLI_APPROVAL_CSRF_COOKIE_NAME = 'kinu_cli_auth_csrf';
-
-
-/** Every cookie this app sets. The preview edge (`lib/preview-request.ts`)
- *  strips exactly this set before guest code; register new cookies here only. */
-export const KINU_COOKIE_NAMES: readonly string[] = [
-  SESSION_COOKIE_NAME,
-  OAUTH_STATE_COOKIE_NAME,
-  CLI_APPROVAL_CSRF_COOKIE_NAME,
-  DEPLOY_STATE_COOKIE_NAME,
-  VIEWER_COOKIE_NAME,
-];
 
 export interface AuthIdentity {
   /** Stable Kinu user id. */
@@ -79,38 +57,10 @@ export function readSessionToken(request: Request): string | null {
   return readCookie(request, SESSION_COOKIE_NAME);
 }
 
-export function readCookie(request: Request, name: string): string | null {
-  const cookie = request.headers.get('cookie');
 
-  if (!cookie) return null;
 
-  for (const part of cookie.split(';')) {
-    const [candidate, ...rest] = part.trim().split('=');
-
-    if (candidate !== name) continue;
-    const raw = rest.join('=');
-
-    if (!raw) return null;
-
-    // Invalid percent-encoding is not a cookie we wrote: treat as absent.
-    return settleSync(Effect.catchCause(
-      Effect.sync((): string | null => decodeURIComponent(raw)),
-      (failed) => (Cause.squash(failed) instanceof URIError ? Effect.succeed(null) : Effect.failCause(failed)),
-    ));
-  }
-
-  return null;
-}
-
-/** `Lax`, not `Strict`: the OAuth callback is a cross-site navigation that
- *  must carry the handoff cookie. A zero lifetime clears the cookie. */
-export function setCookie(name: string, value: string, lifetimeMs: number): string {
-  const maxAge = Math.max(0, Math.floor(lifetimeMs / 1000));
-
-  return `${name}=${encodeURIComponent(value)}; Path=/; Max-Age=${maxAge}; HttpOnly; Secure; SameSite=Lax`;
-}
-
-export interface AuthEnv<Id = DurableObjectId> extends OwnerCapabilityEnv {
+/** The sign-in declaration names which account the eval identity's address is. */
+export interface AuthEnv<Id = DurableObjectId> extends OwnerCapabilityEnv, SignInDeclarationEnv {
   AUTH_KV?: KvStore;
   UserDO?: ObjectNamespace<Id, SessionAuthority>;
   DEV_USER_EMAIL?: string;
@@ -145,21 +95,10 @@ export function authenticateRequest<Id>(request: Request, env: AuthEnv<Id>): Pro
       return yield* Effect.die(new AuthError(401, 'Kinu session expired. Sign in again.'));
     }
 
-    // The dev identity requires possession, never mere absence of a cookie:
-    // loopback, or the shared secret (none configured grants nothing).
-    if (env.DEV_USER_EMAIL) {
-      const presented = request.headers.get(DEV_IDENTITY_HEADER);
+    const devEmail = yield* devIdentityEmail(request, env);
 
-      const held = LOOPBACK_HOSTS.includes(new URL(request.url).hostname)
-        || (env.DEV_IDENTITY_SECRET !== undefined
-          && presented !== null
-          && timingSafeEqual(presented, env.DEV_IDENTITY_SECRET));
-
-      if (held) {
-        const email = yield* evalAccountEmail(env.DEV_USER_EMAIL, request.headers.get(DEV_IDENTITY_ACCOUNT_HEADER));
-
-        return { userId: yield* Effect.promise(() => deriveUserId(email)), email, sub: 'dev', provider: 'dev', authTime: Date.now() } satisfies AuthIdentity;
-      }
+    if (devEmail !== null) {
+      return { userId: yield* Effect.promise(() => accountIdFor(env, devEmail)), email: devEmail, sub: 'dev', provider: 'dev', authTime: Date.now() } satisfies AuthIdentity;
     }
 
     if (!env.AUTH_KV) {
@@ -168,6 +107,26 @@ export function authenticateRequest<Id>(request: Request, env: AuthEnv<Id>): Pro
 
     return yield* Effect.die(new AuthError(401, 'No Kinu session in request'));
   }));
+}
+
+/**
+ * The dev identity's email when `request` holds it, else null. It requires possession, never mere absence of a cookie:
+ * loopback, or the shared secret in DEV_IDENTITY_HEADER (none configured grants nothing), with DEV_IDENTITY_ACCOUNT_HEADER
+ * naming an eval account. The secret is accepted in that header and nowhere else, never as a cookie, deliberately. A
+ * browser holds the identity the way a person does: it exchanges the header once, on the app's origin, for a session
+ * cookie (`POST /api/auth/dev-session`, gated by this same check), which the browser scopes to that origin, socket
+ * handshakes included. A header set on a whole page goes to every origin the page reaches.
+ */
+export function devIdentityEmail(request: Request, env: Pick<AuthEnv, 'DEV_USER_EMAIL' | 'DEV_IDENTITY_SECRET'>): Effect.Effect<string | null> {
+  if (env.DEV_USER_EMAIL === undefined || env.DEV_USER_EMAIL === '') return Effect.succeed(null);
+  const presented = request.headers.get(DEV_IDENTITY_HEADER);
+
+  const held = LOOPBACK_HOSTS.includes(new URL(request.url).hostname)
+    || (env.DEV_IDENTITY_SECRET !== undefined
+      && presented !== null
+      && timingSafeEqual(presented, env.DEV_IDENTITY_SECRET));
+
+  return held ? evalAccountEmail(env.DEV_USER_EMAIL, request.headers.get(DEV_IDENTITY_ACCOUNT_HEADER)) : Effect.succeed(null);
 }
 
 /** `eval@x` → `eval+devices@x`: a separate user, so its machines reach no other eval account's workspaces. */

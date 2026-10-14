@@ -246,10 +246,6 @@
       "complexity": 27
     },
     {
-      "key": "packages/cf-backend/src/pages/DrivePage.tsx#DrivePage",
-      "complexity": 27
-    },
-    {
       "key": "packages/cf-backend/tests/workerd/deploy-fake.ts#api",
       "complexity": 27
     },

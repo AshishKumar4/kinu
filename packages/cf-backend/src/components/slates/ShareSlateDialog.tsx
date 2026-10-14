@@ -1,11 +1,11 @@
 /** Live: people use the running slate, as its owner. Blueprint: a copy to fork, which calls its forker's own surface. */
 import { useState } from "react";
 import { ShareNetworkIcon } from "@phosphor-icons/react";
-import type { Rpc } from "@kinu.run/core";
 import { Modal } from "@/components/ui/Modal";
 import { Segmented } from "@/components/ui/Segmented";
 import { BlueprintShareForm, type BlueprintFixture } from "./BlueprintShareForm";
 import { LiveShareForm, type LiveShareFixture } from "./LiveShareForm";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 type ShareMode = "live" | "blueprint";
 
@@ -13,7 +13,7 @@ export interface ShareSlateDialogProps {
   workspace: string;
   slate: string;
   title: string;
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   onClose: () => void;
   onListingPending?: () => void;
   fixture?: { mode?: ShareMode; live?: LiveShareFixture; blueprint?: BlueprintFixture };

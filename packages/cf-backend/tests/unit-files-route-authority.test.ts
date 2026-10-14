@@ -18,9 +18,12 @@ import type { JsonValue } from '@kinu.run/core';
 
 // Dynamic: the helpers above install the agents-SDK mock at load, and `agents` imports workerd-only
 // `cloudflare:*` modules that crash bun's loader.
-const { createSession, deriveUserId } = await import('../src/auth/store');
+const { accountIdFor, createSession } = await import('../src/auth/store');
 
-const { SESSION_COOKIE_NAME } = await import('../src/auth/session');
+const { SESSION_COOKIE_NAME } = await import('../src/auth/cookies');
+
+/** A deployment that signs in through OAuth: an address is the account its OAuth sign-in mints. */
+const OAUTH_DEPLOYMENT = { SIGN_IN_PROVIDERS: 'google' };
 
 const worker = (await import('../src/server')).default;
 
@@ -146,8 +149,8 @@ async function seam(options: {
   deviceFiles?: Record<string, string>;
 }): Promise<Seam> {
   const device = new Map<string, string>(Object.entries(options.deviceFiles ?? { [DEVICE_FILE]: 'hello' }));
-  const ownerUserId = await deriveUserId(OWNER_EMAIL);
-  const strangerUserId = await deriveUserId(STRANGER_EMAIL);
+  const ownerUserId = await accountIdFor(OAUTH_DEPLOYMENT, OWNER_EMAIL);
+  const strangerUserId = await accountIdFor(OAUTH_DEPLOYMENT, STRANGER_EMAIL);
   const user = createTestUserDO({ deviceResponder: daemon(device), durableObjectId: ownerUserId });
   const stranger = createTestUserDO({ durableObjectId: strangerUserId });
   const owner = await testOwner();
@@ -175,6 +178,7 @@ async function seam(options: {
   const kv = makeKv();
 
   const bindings = {
+    ...OAUTH_DEPLOYMENT,
     AUTH_KV: kv,
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     ASSETS: { fetch: async () => new Response('<!doctype html>the app', { status: 200 }) },

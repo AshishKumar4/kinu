@@ -4,7 +4,7 @@
  */
 import { present } from '@kinu.run/test-utils';
 import { sha256Hex, type UserCaller } from '@kinu.run/core';
-import { SESSION_COOKIE_NAME } from '../../src/auth/session';
+import { SESSION_COOKIE_NAME } from '../../src/auth/cookies';
 import { workerContext } from './bindings';
 import { makeKv } from './kv';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './user-do';
