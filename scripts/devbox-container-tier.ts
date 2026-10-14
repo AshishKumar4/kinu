@@ -35,6 +35,37 @@ const ASK_AGAIN_TIMES = 12;
 
 const ASK_AGAIN_MS = 5_000;
 
+/** The name the fixture's boxes answer to (its `hostname`, set through the Worker's vars). */
+const BOX_NAME = 'contract-box';
+
+/** Resolving the box's own name, as sudo and a server's bind do, answers at once or makes every one of them wait. */
+const NAME_LOOKUP_MS = 1_000;
+
+/**
+ * What the box answers to, read in the box: the kernel's name, /etc/hostname, whether /etc/hosts names it, whether
+ * either file takes a write, and how long resolving the name takes (`getaddrinfo`, as sudo and a server's bind do).
+ */
+const BOX_NAME_READ = String.raw`printf 'kernel=%s
+' "$(hostname)"
+printf 'etcHostname=%s
+' "$(cat /etc/hostname 2>/dev/null)"
+printf 'hostsNames=%s
+' "$(grep -cw "$(hostname)" /etc/hosts)"
+printf 'hostsWritable=%s
+' "$(test -w /etc/hosts && echo yes || echo no)"
+printf 'hostnameWritable=%s
+' "$(test -w /etc/hostname && echo yes || echo no)"
+printf 'mounts=%s
+' "$(grep -E ' /etc/(hosts|hostname|resolv.conf) ' /proc/mounts | awk '{print $2":"$4}' | tr '
+' ' ')"
+printf 'nss=%s
+' "$(grep '^hosts:' /etc/nsswitch.conf)"
+printf 'lookupMs=%s
+' "$(python3 -c 'import socket,time; t=time.time()
+try: socket.getaddrinfo(socket.gethostname(), None)
+except OSError: pass
+print(int((time.time()-t)*1000))')"`;
+
 /** How long after its first frame a fresh desktop must show its background and panel: a person waits seconds, not minutes. */
 const DESKTOP_SEEN_MS = 30_000;
 
@@ -113,7 +144,7 @@ function writeFixtureConfig(worker: string, scratch: string, priorDeclared?: str
     containers,
     r2_buckets: [{ binding: 'STORE', bucket_name: worker }],
     assets: { directory: join(REPO, 'packages/cf-backend/public'), binding: 'ASSETS', run_worker_first: true },
-    vars: { CLOUDFLARE_ACCOUNT_ID: ACCOUNT, PROBE_BUCKET: worker, PROBE_HTTP: process.argv.includes('--probe') ? '1' : '0' },
+    vars: { CLOUDFLARE_ACCOUNT_ID: ACCOUNT, PROBE_BUCKET: worker, PROBE_HTTP: process.argv.includes('--probe') ? '1' : '0', BOX_NAME },
   }));
 
   return { config, declared };
@@ -479,6 +510,22 @@ async function main(): Promise<void> {
 
   /** The container's contracts, the desktop through the product routes, and the product's own chain. */
   const productContracts = async () => {
+    /**
+     * The box answers to the name its class gives it, and a name does not cost a lookup (D91): staging 7e411119d's
+     * naming wrote /etc/hostname, which the platform mounts read-only, and refused every start.
+     */
+    await step('box-name', async () => {
+      const named = new Map((await shell(BOX_NAME_READ)).split('\n').map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]));
+
+      process.stdout.write(`[${run}] box name ${JSON.stringify(Object.fromEntries(named))}\n`);
+
+      if (named.get('kernel') !== BOX_NAME) throw new Error(`the box answers to ${named.get('kernel') ?? 'nothing'}, not ${BOX_NAME}`);
+
+      if (Number(named.get('lookupMs')) > NAME_LOOKUP_MS) throw new Error(`resolving its own name took ${named.get('lookupMs') ?? '?'} ms`);
+
+      return Object.fromEntries(named);
+    });
+
     await step('file-metadata', async () => {
       const measured = await call('/file-contract', Json, {}, names[1]);
       process.stdout.write(`[${run}] file metadata ${JSON.stringify(measured)}\n`);
