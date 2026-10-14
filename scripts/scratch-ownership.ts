@@ -44,7 +44,7 @@
  * mint site is where the name is chosen.
  */
 
-import { readMatching, isTestFile, isParseable } from './sources';
+import { readMatching, isTestFile, isTestScaffold, isParseable } from './sources';
 import { assertMeasured, finding } from './gate-ratchet';
 import { SCRATCH_PREFIXES, SCRATCH_ROOT_PREFIX } from '@kinu.run/test-utils';
 
@@ -55,8 +55,7 @@ import { SCRATCH_PREFIXES, SCRATCH_ROOT_PREFIX } from '@kinu.run/test-utils';
  * defect `gate-set-equality` exists to refuse, and it refused this gate's first
  * version for exactly that.
  */
-const isScannable = (file: string): boolean =>
-  isParseable(file) && !file.startsWith('external/') && !file.includes('/dist/');
+const isScannable = (file: string): boolean => isParseable(file) && !file.includes('/dist/');
 
 /**
  * Files held to the RELEASE rule: suites and the fixtures they call. A suite's
@@ -65,8 +64,7 @@ const isScannable = (file: string): boolean =>
  * is not the defect this gate is about. `isTestFile` is the same predicate
  * `no-ambient-git-in-tests` governs test code with — one spelling, imported.
  */
-const isSuiteFile = (file: string): boolean =>
-  isTestFile(file) || file.startsWith('packages/test-utils/src/');
+const isSuiteFile = (file: string): boolean => isTestFile(file) || isTestScaffold(file);
 
 /**
  * Files whose CONTENT is the defect on purpose.
