@@ -251,7 +251,7 @@ export async function waitOn<Value>(page: Page, what: string, promise: Promise<V
 }
 
 export async function openWorkspacePage(target: FlowTarget, path: string): Promise<Page> {
-  const page = await signedInPage(target.browser, target.identity);
+  const page = await signedInPage(target.browser, target);
 
   // 'load', not 'networkidle0': the app holds its event socket open from
   // first paint, so there is never a zero-connection window to wait for.
@@ -753,14 +753,39 @@ const STACK_KEYS = `(() => {
   return [...open, ...behind];
 })()`;
 
-/** Presses the open card's answer named `words`. */
-function stackAnswer(words: string, key: string): string {
-  return `[...document.querySelectorAll(${JSON.stringify(`[data-attention-card=${JSON.stringify(key)}] button`)})].find((button) => button.textContent?.trim() === ${JSON.stringify(words)})?.click()`;
+/**
+ * Opens the flow's own card, then presses its answer named `words`, in one page task: the account's other runs raise
+ * cards too (account memory reaches every workspace), and one created meanwhile takes the front of a stack no pointer
+ * is on, so a card opened in one step can be behind by the next.
+ */
+function answerOwnCard(key: string, words: string): string {
+  return `(() => {
+    const open = () => document.querySelector(${JSON.stringify(`[data-attention-card=${JSON.stringify(key)}]`)});
+
+    if (open() === null) document.querySelector(${JSON.stringify(`[data-attention-behind=${JSON.stringify(key)}]`)})?.click();
+    const button = [...(open()?.querySelectorAll('button') ?? [])].find((each) => each.textContent?.trim() === ${JSON.stringify(words)});
+
+    button?.click();
+
+    return button !== undefined;
+  })()`;
 }
 
-async function openStackCard(page: Page, key: string): Promise<void> {
-  await page.evaluate(`document.querySelector(${JSON.stringify(`[data-attention-behind=${JSON.stringify(key)}]`)})?.click()`);
-  await until(page, 'the flow\'s own card open', `document.querySelector(${JSON.stringify(`[data-attention-card=${JSON.stringify(key)}]`)}) !== null`);
+/** Presses `words` on the flow's own card, opening it first if another took the front, until the press lands. */
+async function answerStackCard(page: Page, key: string, words: string): Promise<void> {
+  await until(page, `the flow's own card answered ${words}`, answerOwnCard(key, words));
+}
+
+/** What the flow's own card shows, opening it first if another took the front. */
+async function ownCardWords(page: Page, key: string): Promise<string> {
+  await until(page, "the flow's own card open", `(() => {
+    if (document.querySelector(${JSON.stringify(`[data-attention-card=${JSON.stringify(key)}]`)}) !== null) return true;
+    document.querySelector(${JSON.stringify(`[data-attention-behind=${JSON.stringify(key)}]`)})?.click();
+
+    return false;
+  })()`);
+
+  return v.parse(v.string(), await page.evaluate(`document.querySelector(${JSON.stringify(`[data-attention-card=${JSON.stringify(key)}]`)})?.textContent ?? ''`));
 }
 
 const CHAT_TEXT = `(document.querySelector('#chat')?.textContent ?? '')`;
@@ -783,16 +808,14 @@ export async function approvalsStackAtTheComposer(target: FlowTarget): Promise<A
     await until(page, 'both of the flow\'s parked commands stacked', `${actions}.length === 2`);
     const stacked = v.parse(v.tuple([v.string(), v.string()]), await page.evaluate(actions));
 
-    await openStackCard(page, stacked[0]);
-    const openWords = v.parse(v.string(), await page.evaluate(`document.querySelector(${JSON.stringify(`[data-attention-card=${JSON.stringify(stacked[0])}]`)})?.textContent ?? ''`));
+    const openWords = await ownCardWords(page, stacked[0]);
     const remaining = `${STACK_KEYS}.filter((key) => ${JSON.stringify(stacked)}.includes(key))`;
 
-    await page.evaluate(stackAnswer('Approve', stacked[0]));
+    await answerStackCard(page, stacked[0], 'Approve');
     await until(page, 'the flow\'s other card remains', `${remaining}.length === 1`);
     const afterFirst = v.parse(v.array(v.string()), await page.evaluate(remaining));
 
-    await openStackCard(page, stacked[1]);
-    await page.evaluate(stackAnswer('Deny', stacked[1]));
+    await answerStackCard(page, stacked[1], 'Deny');
     await until(page, 'the flow\'s own stack cleared', `${remaining}.length === 0`);
     await until(page, 'both answers in the chat and heard by the agent', `${CHAT_TEXT}.includes('You approved') && ${CHAT_TEXT}.includes('You denied')`
       + ` && /${DECISION_HEARD}[^]*approved/u.test(${CHAT_TEXT}) && /${DECISION_HEARD}[^]*denied/u.test(${CHAT_TEXT})`);
@@ -975,7 +998,7 @@ export async function accountMemoryCrossesWorkspaces(target: FlowTarget): Promis
 
     await sendAndSettle(second, ACCOUNT_RECALL_ASK);
     const before = await lastReply(second, ACCOUNT_RECALL_REPLY, RECALL_ANSWERS);
-    const settings = await signedInPage(target.browser, target.identity);
+    const settings = await signedInPage(target.browser, target);
 
     await settings.goto(`${target.origin}/user/settings#memory`, { waitUntil: 'load' });
     await until(settings, 'Settings → Memory loaded', `document.querySelector('[data-account-memory]') !== null`);
@@ -1128,7 +1151,7 @@ export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentRet
     await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
     await page.close();
 
-    const back = await signedInPage(target.browser, target.identity);
+    const back = await signedInPage(target.browser, target);
     const ledger = await frameLedger(back);
 
     // Back to the workspace, the way a person returns: its own page, not the agent's.
@@ -1571,7 +1594,7 @@ export interface WelcomeVerdict {
  * this row runs first; an account that finished it long ago goes straight home.
  */
 export async function reachesHome(target: FlowTarget): Promise<WelcomeVerdict> {
-  const page = await signedInPage(target.browser, target.identity);
+  const page = await signedInPage(target.browser, target);
 
   try {
     await page.goto(`${target.origin}/`, { waitUntil: 'load' });
@@ -1629,7 +1652,7 @@ const SENT_MESSAGES = `[...document.querySelectorAll('#chat [data-revert-turn]')
  * starts, must end with a reply on screen.
  */
 export async function workspaceGetsFirstAnswer(target: FlowTarget): Promise<FirstAnswerVerdict> {
-  const page = await signedInPage(target.browser, target.identity);
+  const page = await signedInPage(target.browser, target);
   const ledger = await frameLedger(page);
   let workspace: string | null = null;
 
@@ -2235,6 +2258,19 @@ async function relisted(page: Page, act: () => Promise<void>, loadsDocument = fa
   return v.parse(v.array(v.string()), await page.evaluate(DRIVE_LISTED));
 }
 
+/** The Drive place a person's files are in, chosen where it is drawn: the column, or below `lg` the switch. */
+const MY_STUFF_PLACE = `[...document.querySelectorAll('[data-drive-place="mine"], [data-drive-tab="mine"]')].find((place) => place.getClientRects().length > 0)`;
+
+/**
+ * Opens My stuff, where New is: a first visit to the Drive lands on Slates when the account has a slate, as the
+ * approved design does. With My stuff the only place there is no column or switch, and the page is already there.
+ */
+async function openMyStuff(page: Page): Promise<void> {
+  await until(page, 'My stuff or its place', `document.querySelector('[data-drive-new]') !== null || ${MY_STUFF_PLACE} !== undefined`);
+  await page.evaluate(`document.querySelector('[data-drive-new]') === null && ${MY_STUFF_PLACE}?.click()`);
+  await until(page, "My stuff's New", `document.querySelector('[data-drive-new]') !== null`);
+}
+
 /** Name a Drive entry through the page's name dialog: the field opens with
  *  its current value selected, so typing replaces it. */
 async function nameInDialog(page: Page, name: string): Promise<void> {
@@ -2269,13 +2305,14 @@ export async function driveKeepsWhatIsDone(target: FlowTarget): Promise<DriveVer
   const renamed = `${folder}-renamed`;
   const file = `${folder}.txt`;
   const upload = join(scratchDir('drive-upload'), file);
-  const page = await signedInPage(target.browser, target.identity);
+  const page = await signedInPage(target.browser, target);
 
   writeFileSync(upload, 'browser flow upload\n');
 
   try {
     await page.evaluateOnNewDocument(COUNT_DRIVE_LISTINGS);
     await relisted(page, async () => { await page.goto(`${target.origin}/drive`, { waitUntil: 'load' }); }, true);
+    await openMyStuff(page);
     await relisted(page, async () => {
       await page.click('[data-drive-new]');
       await page.click('[data-drive-new-folder]');
@@ -2294,7 +2331,11 @@ export async function driveKeepsWhatIsDone(target: FlowTarget): Promise<DriveVer
       await nameInDialog(page, renamed);
     });
 
-    const afterRename = await relisted(page, async () => { await page.reload({ waitUntil: 'load' }); }, true);
+    await relisted(page, async () => { await page.reload({ waitUntil: 'load' }); }, true);
+    await openMyStuff(page);
+    await painted(page);
+
+    const afterRename = v.parse(v.array(v.string()), await page.evaluate(DRIVE_LISTED));
 
     // Deleted through the page only where the page lists it; a missed rename is
     // the verdict's finding, and the `finally` below removes what is left.
@@ -2352,7 +2393,7 @@ export interface DriveOpensVerdict {
  * one tile, and a Drive with nothing to show draws its empty state instead.
  */
 export async function driveOpens(target: FlowTarget): Promise<DriveOpensVerdict> {
-  const page = await signedInPage(target.browser, target.identity);
+  const page = await signedInPage(target.browser, target);
 
   try {
     await page.goto(`${target.origin}/drive`, { waitUntil: 'load' });
@@ -2401,16 +2442,17 @@ async function workspaceWithSlate(target: FlowTarget, subject: string): Promise<
   return workspace;
 }
 
-/** The slate's tile in My stuff, found by the slate and the workspace it lives in. */
+/** The slate's tile in the Drive's Slates, found by the slate and the workspace it lives in. */
 function slateTile(workspace: string): string {
   return `[data-drive-slate="${DRIVE_SLATE.id}"][data-drive-workspace="${workspace}"]`;
 }
 
 async function driveWithSlate(target: FlowTarget, workspace: string): Promise<Page> {
-  const page = await signedInPage(target.browser, target.identity);
+  const page = await signedInPage(target.browser, target);
 
+  // A first visit to the Drive lands on Slates when the owner has one.
   await page.goto(`${target.origin}/drive`, { waitUntil: 'load' });
-  await until(page, 'the slate\'s tile in My stuff', `document.querySelector(${JSON.stringify(slateTile(workspace))}) !== null`);
+  await until(page, 'the slate\'s tile in Slates', `document.querySelector(${JSON.stringify(slateTile(workspace))}) !== null`);
   await painted(page);
 
   return page;
@@ -2427,13 +2469,13 @@ export interface SlateOpensVerdict {
 }
 
 /**
- * Row: a slate opens from My stuff into its workspace, on its own tab.
+ * Row: a slate opens from the Drive's Slates into its workspace, on its own tab.
  *
  * A workspace gets a slate through the Files route; the Drive's tile for it is
  * pressed, and the workspace page it opens must have made the slate's tab the
  * current one. The preview frame is not read: `vite dev` serves no slate.
  */
-export async function slateOpensFromMyStuff(target: FlowTarget): Promise<SlateOpensVerdict> {
+export async function slateOpensFromSlates(target: FlowTarget): Promise<SlateOpensVerdict> {
   const workspace = await workspaceWithSlate(target, 'drive-open');
 
   try {
@@ -2520,7 +2562,7 @@ export async function slateSharesReachingNothing(target: FlowTarget): Promise<Sl
 
     if (link !== null) {
       // Chrome's writeText asks for the sanitized-write grant, not clipboard-write (measured on Chrome 151).
-      await target.browser.defaultBrowserContext().overridePermissions(target.origin, ['clipboard-read', 'clipboard-sanitized-write']);
+      await page.browserContext().overridePermissions(target.origin, ['clipboard-read', 'clipboard-sanitized-write']);
       await page.bringToFront();
       copied = v.parse(v.string(), await waitOn(page, 'the share link on the clipboard', page.evaluate(`(async () => {
         await navigator.clipboard.writeText('');
@@ -2534,8 +2576,9 @@ export async function slateSharesReachingNothing(target: FlowTarget): Promise<Sl
     }
 
     await page.evaluate(`[...document.querySelectorAll('[role="dialog"] button')].find((button) => (button.textContent ?? '').trim() === 'Done')?.click()`);
-    await until(page, 'the Shared tab', `document.querySelector('[data-drive-tab="shared"]') !== null`);
-    await page.click('[data-drive-tab="shared"]');
+    // At the desktop width the Drive's places are its column's.
+    await until(page, 'the Shared place', `document.querySelector('[data-drive-place="shared"]') !== null`);
+    await page.click('[data-drive-place="shared"]');
 
     const mine = `[data-drive-section="Shared by you"] [data-drive-share-kind="live"]`;
     await until(page, 'the share under Shared by you', `document.querySelector(${JSON.stringify(mine)}) !== null`);
@@ -2810,7 +2853,7 @@ export async function reopenedWorkspaceRunsTheDeployedBuild(target: FlowTarget):
   const workspace = await createFlowWorkspace(target, 'reopen');
 
   try {
-    const page = await signedInPage(target.browser, target.identity);
+    const page = await signedInPage(target.browser, target);
 
     await page.evaluateOnNewDocument(MARK_RESTORED);
     await page.goto(`${target.origin}/workspace/${workspace}`, { waitUntil: 'load' });

@@ -48,7 +48,7 @@ type ToolPart = ToolModelMessage['content'][number];
 type NativeHandle = ModelMessage | AssistantPart | UserPart | ToolPart;
 
 /** Call part plus its paired result, dropped or re-emitted together. */
-export interface ToolPairHandle {
+interface ToolPairHandle {
   call: ToolCallPart;
   inlineResult?: ToolResultPart;
   result?: ToolResultPart;

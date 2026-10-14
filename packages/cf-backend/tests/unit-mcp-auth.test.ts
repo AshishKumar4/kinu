@@ -6,6 +6,7 @@ import { mockAgentsSdk } from './helpers/agents-sdk';
 import { mcpAccount, unreachableKv } from './helpers/bindings';
 import type { McpAgentClient, McpEnv, McpResolver } from '../src/mcp-server';
 import { serveFamily } from './helpers/api';
+import { SESSION_COOKIE_NAME } from '../src/auth/cookies';
 
 mockAgentsSdk();
 
@@ -88,6 +89,21 @@ describe('MCP server auth gate', () => {
     expect(res?.status).toBe(200);
     expect(calls).toContain(`claim:${USER_ID}`);
     expect(await res?.text()).toContain('"serverInfo"');
+  });
+
+  // Every preview and share host is a sibling of the app under one site, so the session cookie goes along with a request
+  // a preview's guest code sends here.
+  test('a session cookie on a request another origin sends is refused before any session is read', async () => {
+    const { env, calls, resolveAgent } = mcpWorkspace();
+    const forged = initializeRequest('jarvis');
+
+    forged.headers.set('cookie', `${SESSION_COOKIE_NAME}=${'s'.repeat(40)}`);
+    forged.headers.set('origin', 'https://guest.previews.kinu.example.com');
+    const res = await serveMcp(forged, env, resolveAgent);
+
+    expect([res?.status, res?.headers.get('access-control-allow-origin')]).toEqual([403, '*']);
+    expect(await res?.json()).toMatchObject({ code: 'CROSS_SITE' });
+    expect(calls).toEqual([]);
   });
 
   test('no credentials at all → 401', async () => {

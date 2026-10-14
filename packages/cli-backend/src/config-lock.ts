@@ -80,6 +80,24 @@ export async function withConfigLock<T>(configPath: string, fn: () => T | Promis
   return await createConfigLock().with(configPath, fn);
 }
 
+/**
+ * One try at the lock at `path`, for a caller that skips work another live process is doing rather than wait for it:
+ * its release, or null while a live process holds it. A lock whose holder the kernel proves gone is taken over.
+ */
+export async function tryLock(path: string, boundary = hostProcessIdentity()): Promise<(() => void) | null> {
+  mkdirSync(dirname(path), { recursive: true });
+  const self = await boundary.self(process.pid);
+
+  // The second try follows a broken abandoned lock.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const held = await tryAcquire(path, self, boundary);
+
+    if (held !== null) return () => { release(held); };
+  }
+
+  return null;
+}
+
 function lockPathFor(configPath: string): string {
   mkdirSync(dirname(configPath), { recursive: true });
 

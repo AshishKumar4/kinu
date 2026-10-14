@@ -6,7 +6,7 @@ import {
   collectDynamicContext, createActorHost, defaultLoopOrigin, explorationActorKey,
   captureOperationProfile, initRunEventTables, conversationKey, runHeadInference, preparedHeadRun, vfsTurnSkills,
   type ActorHost, type AgentRuntime, type BroadcastEvent, type HostedActor, type HostedNodeSeat,
-  type ActorHandle, type HeadInput, type NodeIdentity, type ProfileAuthorityInputs, type RunTurnSources,
+  type ActorHandle, type AgentStores, type HeadInput, type NodeIdentity, type ProfileAuthorityInputs, type RunTurnSources,
   type SqlExec, type SqlValue, type WriteObserver,
   DEFAULT_WORKERS_AI_MODEL_SPEC, WORKSPACE_ROOT, actorHomeName, actorScaffoldPath } from '@kinu.run/core';
 import { bindLocalActor, localActorDirectory, registerLocalActor, retireLocalActor } from '@kinu.run/core';
@@ -63,7 +63,7 @@ export function fixtureRunSources(
     taskPlan: () => null,
     conversationKey: () => conversationKey('fixture', actor.record.actorId),
     scaffoldSpend: { source: 'scaffold', report: () => {} },
-    attachmentBudget: actor.session.orchestrator.acc.context,
+    attachmentBudget: actor.session.orchestrator.acc.ledgers.context,
     extensions: () => [],
     dynamic: () => (profile, tools) => collectDynamicContext({
       rt: actor.runtime,
@@ -85,13 +85,18 @@ function noModel(name: string): () => LanguageModel {
   return () => { throw new Error(`the fixture was given no model, so ${name} cannot run a turn`); };
 }
 
+/** The one store bundle an actor is bound with, as its host would bind it. */
+function actorStores(parent: CLIRuntime, handle: ActorHandle): AgentStores {
+  return createAgentStores(() => parent.storage.sql, () => handle, (write) => parent.storage.transactionSync(write), () => parent.filesForActor(handle));
+}
+
 /** A head's runtime over its parent's database; a head has no store of its own. */
 export async function createHeadRuntime(parent: CLIRuntime, id: string, observer?: WriteObserver) {
   const binding = registerLocalActor(parent.actor, { name: explorationActorKey(id), creationId: id, origin: 'swarm', lifetime: 'task' });
   // The per-kind runtime's release fence binds to the handle its binder issued, so bind once and pass it through.
   const handle = bindLocalActor(parent.storage.sql, binding);
 
-  return buildLocalActorRuntime(parent, { reference: binding.reference, handle }, 'head', observer);
+  return buildLocalActorRuntime(parent, { reference: binding.reference, handle, stores: actorStores(parent, handle) }, 'head', observer);
 }
 
 /**
@@ -114,7 +119,7 @@ export function localTestActorHost(
 
       return parent.filesForActor(bound.handle);
     },
-    scaffoldFor: async (bound) => ({ path: actorScaffoldPath(bound.record), vfs: parent.agentStateVfs ?? parent.storage.vfs }),
+    scaffoldFor: async (bound) => ({ path: actorScaffoldPath(bound.record), vfs: parent.agentStateVfs }),
     storage: {
       sql: parent.storage.sql,
       transactionSync: parent.storage.transactionSync,
@@ -284,7 +289,7 @@ export function nodeSeatFactory(
     const binding = registerLocalActor(rt.actor, { name: explorationActorKey(node.nodeId), creationId: node.nodeId, origin: 'swarm', lifetime: 'task' });
     const handle = bindLocalActor(rt.storage.sql, binding);
     // The host requires the runtime and binding to share one handle. Swarm mode keeps the node off the branching-head runtime.
-    const runtime = await buildLocalActorRuntime(rt, { reference: actorReferenceOf(handle), handle }, 'node');
+    const runtime = await buildLocalActorRuntime(rt, { reference: actorReferenceOf(handle), handle, stores: actorStores(rt, handle) }, 'node');
     const seams = headLoopSeams(rt, { runId, handle, runtime, model });
 
     return {

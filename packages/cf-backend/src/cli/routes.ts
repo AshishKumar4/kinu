@@ -3,11 +3,10 @@ import { Cause, Effect, Result } from 'effect';
 import {
   JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RELEASE_SIGNING_PUBLIC_KEY, timingSafeEqual,
 } from '@kinu.run/core';
-import {
-  AuthError, CLI_APPROVAL_CSRF_COOKIE_NAME, authenticateRequest, isFreshAuthTime, readCookie,
-  type AuthEnv,
-} from '../auth/session';
-import { publicHtmlHeaders } from '@kinu.run/core';
+import { isFreshAuthTime, sessionGate, type AuthEnv } from '../auth/session';
+import { CLI_APPROVAL_CSRF_COOKIE_NAME, readCookie } from '../auth/cookies';
+import { CLI_PREVIEW_ENTRY_PATH, publicHtmlHeaders, type LabelSignerEnv, type PreviewSuffixEnv } from '@kinu.run/core';
+import { previewEntry } from '../nimbus-route';
 import { approvalDocument, installDocument } from '@kinu.run/core';
 import {
   CLI_DIST_PATHS, CLI_RUNTIME_PATH, CLI_VERSION_PATH, fetchDeployedAsset, type AssetFetcher,
@@ -60,10 +59,10 @@ export type CliRoutesAuthority = CliAuthAuthority & SessionAuthority & CloudWork
 >;
 
 export type CliAgentTarget = CloudWorkspaceBirth & ModelSettingsFanoutTarget & AccountLedgerTarget
-  & Pick<OrchestratorAgent, 'createDurableWebhook' | 'requestOverviewPush'> & AgentRpcDispatch;
+  & Pick<OrchestratorAgent, 'createDurableWebhook' | 'requestOverviewPush' | 'previewAccess'> & AgentRpcDispatch;
 
 export interface CliRoutesEnv<Id>
-  extends CreateWorkspaceEnv<Id>, UserAIProxyEnv<Id>, AuthEnv<Id>, WebhookRouteEnv {
+  extends CreateWorkspaceEnv<Id>, UserAIProxyEnv<Id>, AuthEnv<Id>, WebhookRouteEnv, PreviewSuffixEnv, LabelSignerEnv {
   AUTH_KV: KvStore;
   ASSETS: AssetFetcher;
   UserDO: ObjectNamespace<Id, CliRoutesAuthority>;
@@ -167,6 +166,9 @@ cliRoutes.use('/api/cli/*', async (c, next) => {
   if (denied) return denied;
   await next();
 });
+
+// A preview opens only for its owner (`nimbus-route.ts`): the CLI's way in, as the app's page is a browser's.
+cliRoutes.get(CLI_PREVIEW_ENTRY_PATH, async (c) => await previewEntry(c.req.raw, c.env, c.get('cli').userId));
 
 cliRoutes.get('/api/cli/me', async (c) => {
   const cli = c.get('cli');
@@ -509,6 +511,9 @@ function accessTokenDenial(
 function requiredAccessScope(method: string, path: string): AccessTokenScope | null {
   if (method === 'GET' && (path === '/workspaces' || path === '/models' || path === '/usage')) return 'workspace.read';
 
+  // Opening a preview runs its slate as the owner, as an executor command does.
+  if (method === 'GET' && path === '/preview') return 'workspace.exec';
+
   if (method === 'POST' && /^\/workspaces\/[^/]+\/connect-ticket$/.test(path)) return 'workspace.exec';
 
   return null;
@@ -528,10 +533,7 @@ function clientKey(request: Request): string {
 
 function renderBrowserApproval<Id>(request: Request, env: CliRoutesEnv<Id>): Effect.Effect<Response, KinuError> {
   return Effect.gen(function* () {
-    const identity = yield* Effect.catchCause(
-      Effect.promise(() => authenticateRequest(request, env)),
-      (failed) => accessError(toError({ cause: Cause.squash(failed) }), request),
-    );
+    const identity = yield* sessionGate(request, env);
 
     if (identity instanceof Response) return identity;
     const url = new URL(request.url);
@@ -580,16 +582,10 @@ function renderBrowserApproval<Id>(request: Request, env: CliRoutesEnv<Id>): Eff
 
 function approveFromBrowser<Id>(request: Request, env: CliRoutesEnv<Id>): Effect.Effect<Response, KinuError> {
   return Effect.gen(function* () {
-    const identity = yield* Effect.catchCause(
-      Effect.promise(() => authenticateRequest(request, env)),
-      (failed) => accessError(toError({ cause: Cause.squash(failed) }), request),
-    );
+    // The Worker's own gate: this page answers ahead of it.
+    const identity = yield* sessionGate(request, env);
 
     if (identity instanceof Response) return identity;
-
-    if (!isSameOriginPost(request)) {
-      return html('Connect the Kinu CLI', '<p>This approval did not come from the approval page. Open the link from your terminal again.</p>', 403);
-    }
 
     const form = yield* Effect.catchCause(Effect.promise(() => request.formData()), (failed) => (classify({ cause: Cause.squash(failed) }) === 'malformed-input'
       ? Effect.succeed(html('Connect the Kinu CLI', '<p>The approval form was incomplete. Refresh the page and try again.</p>', 400))
@@ -1155,24 +1151,6 @@ function cliAuthError(e: Error): Effect.Effect<Response, KinuError> {
   return Effect.fail(toKinuError({ doing: 'answering a CLI sign-in request', cause: e, otherwise: 'io' }));
 }
 
-function accessError(e: Error, request?: Request): Effect.Effect<Response, KinuError> {
-  if (e instanceof AuthError) {
-    if (e.status === 401 && request?.method === 'GET') {
-      const url = new URL(request.url);
-      const login = new URL('/login', url.origin);
-      login.searchParams.set('return_to', url.pathname + url.search + url.hash);
-
-      return Effect.succeed(new Response(null, {
-        status: 302,
-        headers: { location: login.toString(), 'cache-control': 'no-store' },
-      }));
-    }
-
-    return Effect.succeed(err(e.status, e.message));
-  }
-
-  return Effect.fail(toKinuError({ doing: 'approving a CLI sign-in', cause: e, otherwise: 'io' }));
-}
 
 function html(title: string, body: string, status = 200, init: ResponseInit = {}): Response {
   const headers = new Headers(publicHtmlHeaders());
@@ -1201,12 +1179,3 @@ function clearCsrfCookie(): string {
   return `${CLI_APPROVAL_CSRF_COOKIE_NAME}=; Path=/cli/auth; Max-Age=0; HttpOnly; Secure; SameSite=Strict`;
 }
 
-function isSameOriginPost(request: Request): boolean {
-  const url = new URL(request.url);
-  const origin = request.headers.get('origin');
-
-  if (origin) return origin === url.origin;
-  const referer = request.headers.get('referer');
-
-  return !referer || referer.startsWith(`${url.origin}/`);
-}

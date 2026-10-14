@@ -2150,8 +2150,8 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived' },
   },
   {
-    run: 'bun test --timeout=0 --isolate scripts/hammer.test.ts scripts/mutation-fences.test.ts',
-    label: 'Hammer and fence gate self-tests',
+    run: 'bun test --timeout=0 --isolate scripts/hammer.test.ts scripts/mutation-fences.test.ts scripts/mutation-sweep.test.ts',
+    label: 'Hammer, fence gate and sweep catalogue self-tests',
     tier: 'push',
     seconds: 0.4,
     catches: 'the two adversarial gates\' own decision boundaries — the half that decides '
@@ -2163,7 +2163,10 @@ export const LADDER: readonly Gate[] = [
       + 'stale fixture, a mutant that PASSES fails naming the fence, a pristine baseline that '
       + 'fails is reported as a broken owner rather than as a proved fence, and a run that '
       + 'never settled is neither. Both gates are seeded with the shapes their own red proofs '
-      + 'used, so a refactor that quietly stopped either from failing is caught here.',
+      + 'used, so a refactor that quietly stopped either from failing is caught here. For the '
+      + 'sweep, which runs on request: a catalogue snippet that no longer sits exactly once in '
+      + 'its file, or a symbol that names nothing in the product sources, fails here rather than '
+      + 'in the next sweep.',
     blind: 'whether the fences and the suite are the RIGHT ones to hammer. That is a '
       + 'judgement in the declarations, which is why each fence carries a `why` and the '
       + 'hammer prints its blind spots on the green path.',

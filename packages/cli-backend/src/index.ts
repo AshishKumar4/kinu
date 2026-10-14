@@ -16,13 +16,22 @@ export {
   writeSecretFile, enforceOwnerOnly, ensureSecretDir,
 } from './secret-file';
 
-export { openWorkspaceCLI, type WorkspaceInfo } from './open';
+export { openWorkspaceCLI, readWorkspaceInfo, type WorkspaceInfo } from './open';
 
 export { requireSchemaGenesis, schemaGenesisOf, stampSchemaGenesis } from './schema-genesis';
 
 export { localArchiveSource, localArchiveTarget, moveIntoFolder, publishStoreFiles } from './local-archive';
 
-export { withConfigLock } from './config-lock';
+export { tryLock, withConfigLock } from './config-lock';
+
+export {
+  claimMachine, machineProcessAlive, readMachinePid, removeMachinePid, runningMachineDaemon, runsMachineDaemon,
+} from './machine-pidfile';
+
+export {
+  KinuAgentConfigSchema, OpenAiCompatConfigSchema, readConfigFile, updateConfigFile,
+  type KinuAgentConfig, type KinuConfig, type LocalApiKeyProvider, type LocalOAuthSession,
+} from './config-file';
 
 export { hostToolchainCapabilities } from './host-toolchain';
 
@@ -30,16 +39,16 @@ export { type ProfileEnvelopeSource } from './profile-authority';
 
 export {
   LocalAgentSession, LOCAL_MAX_INLINE_ATTACHMENT_BYTES,
-  type LocalAgentSessionOpts, type SessionEvent,
+  type LocalAgentSessionOpts,
   type ShellApprovalHandler,
 } from './local-session';
 
-export { LocalAgentHost, type LocalAgentHostOptions, type LocalHostedAgent, DriverLeaseHold } from './agent-host';
+export { LocalAgentHost, type LocalAgentHostOptions, type LocalHostedAgent } from './agent-host';
 
 export { OS_LEASE_PROCESS } from './agent-host/lease-process';
 
 export {
-  createLocalModelResolver, cloudProxyBaseURL, CLOUD_PROXY_PROVIDER_IDS,
+  createLocalModelResolver,
   defaultSpecForEndpoint, stripProvider,
   type LocalModelResolver, type LocalCloudSession,
   type LocalProviderCredentials,

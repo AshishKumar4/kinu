@@ -15,8 +15,10 @@ import {
   DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, createAgentsCodemodeProvider, CHAT_SESSION_ID, JsonObjectSchema, WORKSPACE_RUN_ID, usageTotal, profileCatalogDigest, STEER_METADATA_KEY, STEER_STEP_METADATA_KEY, type AgentsToolDeps, type JsonObject, type JsonValue, type ProfileCatalogEnvelope, defaultLoopOrigin, MergeOutputSchema,
 } from '@kinu.run/core';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
-import { LocalAgentSession, type SessionEvent } from '../src/local-session';
-import { cloudProxyBaseURL, createLocalModelResolver, type LocalModelResolver } from '../src/model-resolver';
+import type { SessionEvent } from '@kinu.run/core';
+import { LocalAgentSession } from '../src/local-session';
+import { cloudProxyBaseURL } from '@kinu.run/core';
+import { createLocalModelResolver, type LocalModelResolver } from '../src/model-resolver';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import { nodeSeatFactory } from './actor-fixture';
 import * as v from 'valibot';
@@ -2194,7 +2196,7 @@ test('an authorized Build turn queued behind Plan regains native file authority'
 test('the actual local turn executes its selected version instead of the mutable live alias', async () => {
   const model = scriptedTurnModel({ doGenerate: () => { throw new Error('the custom program must not start the default model'); } });
   const { db, rt, session, events } = setup('unused', model);
-  const files = rt.agentStateVfs ?? rt.storage.vfs;
+  const files = rt.agentStateVfs;
   const selected = 'async function run() { await host.emit({ type: "text_delta", text: "selected version one" }); }';
   const changed = 'async function run() { await host.emit({ type: "text_delta", text: "wrong live alias" }); }';
   await files.mkdir('scaffold', { recursive: true });

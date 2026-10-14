@@ -356,33 +356,17 @@ describe('kinu export / import', () => {
     }
   });
 
-  test('a bare workspace database file imports, not only an archive', async () => {
-    const home = scratch('kinu-export-bare-db-');
-    const out = scratch('kinu-export-bare-db-out-');
-    writeFileSync(join(home, 'config.json'), JSON.stringify({ agents: {} }));
-    const bareDatabase = join(out, 'oldbot.agent.db');
-    seedWorkspace(bareDatabase);
-
-    const imported = await result(runCli(home, ['import', bareDatabase]));
-    expect(imported.stderr).toBe('');
-    expect(imported.exitCode).toBe(0);
-
-    const db = restoredDb(home, 'oldbot');
-    expect(db.query(`SELECT COUNT(*) AS n FROM conversation_entries`).get()).toEqual({ n: 301 });
-    db.close();
-  });
-
   // 2026-10-04: a restored copy works in the folder it was imported from, so a name it cannot hold is refused first.
   test('an import under a name a cloud workspace holds is refused, and no workspace is written', async () => {
+    const { home: source } = placedWorkspace();
+    const archive = join(scratch('kinu-export-claimed-out-'), 'oldbot.kinu.jsonl');
+    expect((await result(runCli(source, ['export', 'scout', '-o', archive]))).exitCode).toBe(0);
     const home = scratch('kinu-export-claimed-');
-    const out = scratch('kinu-export-claimed-out-');
     writeFileSync(join(home, 'config.json'), JSON.stringify({ agents: {
       oldbot: { name: 'oldbot', mode: 'cloud', cloudName: 'oldbot', displayName: 'Oldbot', createdAt: '', updatedAt: '' },
     } }));
-    const bareDatabase = join(out, 'oldbot.agent.db');
-    seedWorkspace(bareDatabase);
 
-    const imported = await result(runCli(home, ['import', bareDatabase]));
+    const imported = await result(runCli(home, ['import', archive, '--name', 'oldbot']));
     expect(imported.exitCode).not.toBe(0);
     expect(imported.stderr).toContain('"oldbot" already names a cloud workspace');
     expect(existsSync(join(home, 'oldbot', 'agent.db'))).toBe(false);
@@ -405,7 +389,7 @@ describe('kinu export / import', () => {
     expect(v.parse(v.array(v.object({ path: v.string() })), JSON.parse(found.stdout)).map((hit) => hit.path)).toEqual(['memory/MEMORY.md']);
   });
 
-  test('a database or an archive an older Kinu made is refused by name, and no workspace is written', async () => {
+  test('an archive or a workspace an older Kinu made is refused by name, and no workspace is written', async () => {
     const { home } = placedWorkspace();
     const out = scratch('kinu-export-genesis-out-');
     const current = join(home, 'scout', 'agent.db');
@@ -417,17 +401,12 @@ describe('kinu export / import', () => {
     Reflect.deleteProperty(unstamped, 'schema_genesis');
     writeFileSync(archive, [JSON.stringify(unstamped), ...records].join('\n'));
 
-    const older = join(out, 'older.agent.db');
-    seedWorkspace(older);
-    const aged = workspaceDatabase(older);
-    aged.exec('PRAGMA user_version = 0');
-    aged.close();
     const agedHere = workspaceDatabase(current);
     agedHere.exec('PRAGMA user_version = 0');
     agedHere.close();
 
     const commands = [
-      ['import', archive, '--name', 'from-archive'], ['import', older], ['export', 'scout', '-o', join(out, 'again.kinu.jsonl')],
+      ['import', archive, '--name', 'from-archive'], ['export', 'scout', '-o', join(out, 'again.kinu.jsonl')],
       ['memory', 'scout', 'wrangler'],
     ];
 

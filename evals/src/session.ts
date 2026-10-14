@@ -95,8 +95,8 @@
  */
 import * as v from 'valibot';
 import {
-  createWorkspace, deleteWorkspace, readJson, resolveWebIdentity, settleCatalog, sweptAway, webHeaders, WORKSPACE_BEAT_MS,
-  type CatalogNeed, type CreateWorkspaceBody, type PublicWebIdentity, type WorkspaceWeb,
+  browserOwner, createWorkspace, deleteWorkspace, openPreviewAsOwner, readJson, resolveWebIdentity, settleCatalog, sweptAway, webHeaders,
+  WORKSPACE_BEAT_MS, type CatalogNeed, type CreateWorkspaceBody, type PublicWebIdentity, type WorkspaceWeb,
 } from './workspace-roster';
 import { Effect } from 'effect';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
@@ -1340,6 +1340,11 @@ export class KinuPublicSession {
     );
   }
 
+
+  /** One of this workspace's previews, opened as its owner's browser opens it (`openPreviewAsOwner`). */
+  openPreview(url: string | URL): Promise<Response> {
+    return openPreviewAsOwner(browserOwner(this.web), url);
+  }
 
   /** Read existing preview endpoints without starting the app under test. */
   async exposedPorts(executor: string): Promise<readonly { port: number; url: string }[]> {

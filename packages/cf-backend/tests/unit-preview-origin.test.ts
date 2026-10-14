@@ -16,27 +16,29 @@ import {
   previewHostSuffix,
   previewSuffixMetaName,
   buildWorkspacePreviewHost,
-  APP_FONTS_PATH, appFontFile, SLATE_FONTS_PATH,
+  APP_FONTS_PATH, appFontFile, SLATE_FONTS_PATH, escapeHtml, PREVIEW_ENTRY_PATH, CLI_PREVIEW_ENTRY_PATH,
 } from '@kinu.run/core';
 import { publicHtmlHeaders, withAppSecurityHeaders } from '@kinu.run/core';
 import { PROVIDER_PROXY_PATH, USER_AI_PROXY_PATH, USER_AI_RUN_PATH } from '@kinu.run/core';
 import { DEPLOY_API } from '@kinu.run/core/deploy';
-import {
-  CLI_APPROVAL_CSRF_COOKIE_NAME, OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME, crossSiteRejection,
-} from '../src/auth/session';
+import { crossSiteRejection } from '../src/auth/session';
+import { CLI_APPROVAL_CSRF_COOKIE_NAME, OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME } from '../src/auth/cookies';
 import {
   handleNimbusPreviewHostRequest,
   nimbusPreviewConfigured,
   nimbusPreviewUrl,
+  previewEntry,
+  previewRefusalText,
   WORKSPACE_PREVIEW_PATH,
 } from '../src/nimbus-route';
+import { PREVIEW_SELF, selfPreviewPass, viewerCookieResponse } from '../src/viewer-pass';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY, createTestUserDO, type TestUserDO } from './helpers/user-do';
 import { createSession } from '../src/auth/store';
 import { makeKv } from './helpers/kv';
 import { sandboxPreviewExposures } from '@kinu.run/core';
 import { unreachableNamespace, unreachableObjects, workerContext } from './helpers/bindings';
 import { appProbe, concretePath, PROBE_ORIGIN } from './helpers/app-probe';
-import type { NimbusPreviewEnv, WorkspacePreviewHost } from '../src/nimbus-route';
+import type { NimbusPreviewEnv, PreviewAccess, PreviewVisit, WorkspacePreviewHost } from '../src/nimbus-route';
 import type { SandboxPreviewEnv } from '../src/preview-proxy';
 import { PreviewFrame } from '../src/components/PreviewFrame';
 import type { KinuDevbox } from "../src/kinu-devbox";
@@ -105,6 +107,9 @@ function previewHost(built: Partial<WorkspacePreviewHost>): WorkspacePreviewHost
     routeWorkspacePreview: () => {
       throw new Error('OrchestratorAgent.routeWorkspacePreview: not reachable in this test');
     },
+    previewAccess: () => {
+      throw new Error('OrchestratorAgent.previewAccess: not reachable in this test');
+    },
     ...built,
   };
 }
@@ -153,7 +158,7 @@ function recordingOrchestrator(record: (request: Request) => void): NimbusTestEn
     idFromName(name: string) { return name; },
     get() {
       return previewHost({
-        async routeWorkspacePreview(_port: number, _handle: string, request: Request) {
+        async routeWorkspacePreview(_visit: PreviewVisit, request: Request) {
           record(request);
 
           return new Response(null, { status: 204 });
@@ -215,10 +220,10 @@ describe('preview sandbox policy', () => {
     expect(kept).toEqual(['sid=mine; Path=/; Secure; HttpOnly']);
   });
 
-  test('the port token lives in the hostname, so Referer is muzzled', () => {
-    // The default policy sends the origin cross-origin, and here the origin is the credential.
+  test('the port token lives in the hostname, so no other origin is told it', () => {
+    // The default policy sends the origin cross-origin, and here the origin is the credential; its own pages keep it.
     expect(containPreviewResponse(new Response('x')).headers.get('referrer-policy'))
-      .toBe('no-referrer');
+      .toBe('same-origin');
   });
 
   test('a WebSocket handshake passes through untouched', () => {
@@ -433,6 +438,7 @@ describe('serving a Nimbus preview host', () => {
     let routedPort = 0;
     let routedCapability = '';
     let routedPath = '';
+    let routedViewer: string | null = 'unset';
 
     const env = testEnv({
       ...ENV,
@@ -444,10 +450,11 @@ describe('serving a Nimbus preview host', () => {
         },
         get() {
           return previewHost({
-            async routeWorkspacePreview(port: number, handle: string, request: Request, pathname: string) {
+            async routeWorkspacePreview({ port, handle, pathname, viewer }: PreviewVisit, request: Request) {
               routedPort = port;
               routedCapability = handle;
               routedPath = pathname;
+              routedViewer = viewer;
               forwarded = request;
 
               return new Response(JSON.stringify({ ok: true }), {
@@ -483,6 +490,8 @@ describe('serving a Nimbus preview host', () => {
     expect(routedPort).toBe(4321);
     expect(routedCapability).toBe(NIMBUS_CAPABILITY.slice(0, 10));
     expect(routedPath).toBe('/api/items');
+    // No viewer cookie: the workspace decides what it answers someone it does not know.
+    expect(routedViewer).toBeNull();
     const routed: Request = forwarded;
     expect(new URL(routed.url).pathname + new URL(routed.url).search).toBe('/api/items?x=1');
     expect(routed.method).toBe('POST');
@@ -541,7 +550,7 @@ describe('serving a Nimbus preview host', () => {
       OrchestratorAgent: {
         idFromName(name: string) { return name; },
         get() {
-          return {
+          return previewHost({
             async fetch(request: Request) {
               forwarded = request;
 
@@ -552,7 +561,7 @@ describe('serving a Nimbus preview host', () => {
 
               return new Response(null, { status: 500 });
             },
-          };
+          });
         },
       },
     });
@@ -572,7 +581,7 @@ describe('serving a Nimbus preview host', () => {
     const routed: Request = forwarded;
     const routedUrl = new URL(routed.url);
     expect(routedUrl.pathname + routedUrl.search)
-      .toBe(`${WORKSPACE_PREVIEW_PATH}/4321/${NIMBUS_CAPABILITY.slice(0, 10)}/socket?channel=hmr`);
+      .toBe(`${WORKSPACE_PREVIEW_PATH}/4321/${NIMBUS_CAPABILITY.slice(0, 10)}//socket?channel=hmr`);
     expect(routed.headers.get('authorization')).toBe('Bearer guest-token');
     expect(routed.headers.get('cookie')).toBe('guest_session=guest');
   });
@@ -674,6 +683,194 @@ describe('serving a Nimbus preview host', () => {
     const dropped = untouchableEnv(rotated);
     expect((await handleNimbusPreviewHostRequest(new Request(NIMBUS_URL), dropped.env))?.status).toBe(404);
     expect(dropped.touched()).toBe(false);
+  });
+});
+
+// A preview opens only for its workspace's signed-in owner (the exposure review, 2026-10-14): the app's entry knows its
+// visitor, and its ticket becomes the preview host's own viewer cookie, which the edge reads for the workspace.
+describe("signing a preview's owner in on its own host", () => {
+  const OWNER_ID = 'a'.repeat(32);
+  const STRANGER_ID = 'b'.repeat(32);
+
+  /** A workspace owned by OWNER_ID whose preview records each visit's viewer. */
+  function ownedWorkspace(visits: Array<string | null>, slate = true): NimbusTestEnv {
+    return testEnv({
+      ...ENV,
+      OrchestratorAgent: {
+        idFromName(name: string) { return name; },
+        get() {
+          return previewHost({
+            async routeWorkspacePreview({ viewer }: PreviewVisit) {
+              visits.push(viewer);
+
+              return new Response('page');
+            },
+            // A socket's viewer is the segment the edge writes after the port and handle.
+            async fetch(request: Request) {
+              const viewer = decodeURIComponent(new URL(request.url).pathname.split('/')[5] ?? '');
+              visits.push(viewer === '' ? null : viewer);
+
+              return new Response(null, { status: 204 });
+            },
+            async previewAccess(userId: string): Promise<PreviewAccess> {
+              return { owned: userId === OWNER_ID, slate };
+            },
+          });
+        },
+      },
+    });
+  }
+
+  const entry = (preview: string) => new Request(`${APP}${PREVIEW_ENTRY_PATH}?to=${encodeURIComponent(preview)}`);
+
+  /** The owner's whole visit: the entry, the host's exchange and the page, carrying the cookie the exchange set. */
+  async function visitAs(env: NimbusTestEnv, userId: string, preview: string) {
+    const ticketed = await previewEntry(entry(preview), env, userId);
+    const exchange = present(await handleNimbusPreviewHostRequest(new Request(present(ticketed.headers.get('location'), 'the exchange')), env), 'the exchange');
+    const cookie = present(exchange.headers.get('set-cookie'), 'the viewer cookie');
+    const next = new URL(present(exchange.headers.get('location'), 'the page'), preview);
+
+    const load = { cookie: cookie.split(';')[0] ?? '', 'sec-fetch-mode': 'navigate', 'sec-fetch-site': 'same-site' };
+
+    return { exchange, cookie, next, page: await handleNimbusPreviewHostRequest(new Request(next, { headers: load }), env) };
+  }
+
+  test('its owner is sent to the page they asked for with a host-only cookie, which the edge reads as them', async () => {
+    const visits: Array<string | null> = [];
+    const env = ownedWorkspace(visits);
+    const { exchange, cookie, next, page } = await visitAs(env, OWNER_ID, `${NIMBUS_URL}board?tab=2`);
+
+    expect(exchange.status).toBe(303);
+    expect(next.toString()).toBe(`${NIMBUS_URL}board?tab=2`);
+    expect(cookie).toMatch(/^__Host-kinu_viewer=[^;]+; Path=\/; Secure; HttpOnly; SameSite=Lax; Max-Age=\d+$/);
+    expect(page?.status).toBe(200);
+    expect(visits).toEqual([OWNER_ID]);
+  });
+
+  test('anyone else is told the slate is not shared with them, and given no ticket', async () => {
+    const answer = await previewEntry(entry(NIMBUS_URL), ownedWorkspace([]), STRANGER_ID);
+    const port = await previewEntry(entry(NIMBUS_URL), ownedWorkspace([], false), STRANGER_ID);
+
+    expect([answer.status, answer.headers.get('location')]).toEqual([403, null]);
+    expect(await answer.text()).toContain(escapeHtml(previewRefusalText(true)));
+    expect(await port.text()).toContain(escapeHtml(previewRefusalText(false)));
+  });
+
+  test('the entry sends no one anywhere but a preview this deployment signed', async () => {
+    const labelEnd = NIMBUS_URL.indexOf(`.${SUFFIX}`);
+    const forged = `${NIMBUS_URL.slice(0, labelEnd - 1)}a${NIMBUS_URL.slice(labelEnd)}`;
+
+    for (const to of [forged, 'https://evil.example/', 'not a url']) {
+      expect((await previewEntry(entry(to), ownedWorkspace([]), OWNER_ID)).status).toBe(404);
+    }
+  });
+
+  test('a ticket opens only the preview it was minted for, and an exchange never sends its visitor off the host', async () => {
+    const env = ownedWorkspace([]);
+    const other = present((await nimbusPreviewUrl(ENV, 'hello', 4322, NIMBUS_CAPABILITY)).url, 'a second preview');
+    const ticketed = new URL(present((await previewEntry(entry(NIMBUS_URL), env, OWNER_ID)).headers.get('location'), 'the exchange'));
+    const elsewhere = new URL(ticketed.pathname + ticketed.search, other);
+    const offHost = new URL(ticketed);
+    offHost.searchParams.set('next', '//evil.example/');
+
+    expect((await handleNimbusPreviewHostRequest(new Request(elsewhere), env))?.status).toBe(404);
+    expect((await handleNimbusPreviewHostRequest(new Request(offHost), env))?.headers.get('location')).toBe(new URL('/', NIMBUS_URL).href);
+  });
+
+  // The security review: `/\t/evil` passed a prefix check, and a browser drops the tab as it reads the redirect.
+  test('every form of another host in the exchange\'s destination lands on the preview\'s own root', async () => {
+    const env = ownedWorkspace([]);
+
+    const exchange = async (next: string) => {
+      const ticketed = new URL(present((await previewEntry(entry(NIMBUS_URL), env, OWNER_ID)).headers.get('location'), 'the exchange'));
+
+      ticketed.searchParams.set('next', next);
+
+      return present(await handleNimbusPreviewHostRequest(new Request(ticketed), env), 'the exchange').headers.get('location');
+    };
+
+    for (const next of ['//evil.example/', '/\t/evil.example/', '/\\evil.example/', '/\n/evil.example', 'https://evil.example/', '/.//evil.example']) {
+      expect(new URL(present(await exchange(next), 'the destination')).origin).toBe(new URL(NIMBUS_URL).origin);
+    }
+
+    expect(await exchange('/board?tab=2#top')).toBe(new URL('/board?tab=2#top', NIMBUS_URL).href);
+  });
+
+  // The security review: every preview is a sibling under one site, so another preview's page sent the owner's cookie
+  // along with its own socket or script request, and was admitted as the owner.
+  test("another site's socket, script or form names no one, whatever cookie it carries; a page load still opens", async () => {
+    const visits: Array<string | null> = [];
+    const env = ownedWorkspace(visits);
+    const { cookie } = await visitAs(env, OWNER_ID, NIMBUS_URL);
+    const owned = cookie.split(';')[0] ?? '';
+    const sibling = 'https://8080-other-previews.previews.example';
+    const asked = async (init: RequestInit) => { await handleNimbusPreviewHostRequest(new Request(NIMBUS_URL, init), env); };
+
+    visits.length = 0;
+    await asked({ headers: { cookie: owned, upgrade: 'websocket', origin: sibling, 'sec-fetch-site': 'same-site', 'sec-fetch-mode': 'websocket' } });
+    await asked({ headers: { cookie: owned, origin: sibling, 'sec-fetch-site': 'same-site', 'sec-fetch-mode': 'cors' } });
+    await asked({ method: 'POST', body: 'x', headers: { cookie: owned, origin: sibling, 'sec-fetch-site': 'same-site', 'sec-fetch-mode': 'navigate' } });
+    await asked({ headers: { cookie: owned, origin: sibling } });
+    // A browser too old to send fetch metadata: its socket names its page's origin, and its form post must name this
+    // one; `null` is any page's.
+    await asked({ headers: { cookie: owned, upgrade: 'websocket', origin: sibling } });
+    await asked({ method: 'POST', body: 'x', headers: { cookie: owned } });
+    await asked({ method: 'POST', body: 'x', headers: { cookie: owned, origin: 'null' } });
+    await asked({ headers: { cookie: owned, 'sec-fetch-site': 'same-site', 'sec-fetch-mode': 'navigate' } });
+    await asked({ headers: { cookie: owned, origin: new URL(NIMBUS_URL).origin, 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'cors' } });
+    await asked({ method: 'POST', body: 'x', headers: { cookie: owned, origin: new URL(NIMBUS_URL).origin } });
+    // An old browser's script or image request a sibling's page makes, one its own page makes, then its page load.
+    await asked({ headers: { cookie: owned } });
+    await asked({ headers: { cookie: owned, referer: `${sibling}/` } });
+    await asked({ headers: { cookie: owned, referer: `${new URL(NIMBUS_URL).origin}/board` } });
+    await asked({ headers: { cookie: owned, 'upgrade-insecure-requests': '1' } });
+
+    // A sibling's socket, script and form name no one, nor does a form post that names no origin of this one, nor an
+    // old browser's script a sibling's page makes; a page load and the preview's own requests name the owner.
+    expect(visits).toEqual([null, null, null, null, null, null, null, OWNER_ID, OWNER_ID, OWNER_ID, null, null, OWNER_ID, OWNER_ID]);
+  });
+
+  test("a cookie the host did not set, or a live share's, names no one to the workspace", async () => {
+    const visits: Array<string | null> = [];
+    const env = ownedWorkspace(visits);
+    // What a live share of the same workspace sets on its own host, for its owner.
+    const issued = await viewerCookieResponse(ENV, { workspace: 'hello', handle: NIMBUS_CAPABILITY.slice(0, 10), subject: OWNER_ID }, '/');
+    const shared = present(issued.headers.get('set-cookie')?.split(';')[0], 'a share cookie');
+
+    for (const cookie of [`__Host-kinu_viewer=forged.${String(Date.now() + 60_000)}.sig`, shared]) {
+      await handleNimbusPreviewHostRequest(new Request(NIMBUS_URL, { headers: { cookie } }), env);
+    }
+
+    expect(visits).toEqual([null, null]);
+  });
+
+  // Staging b11719d71's live-app rows: under `vite dev` the preview zone is `*.preview.localhost` and the app is
+  // `http://localhost`, two sites, so no cookie the entry mints is kept in the app's frame, and the entry the preview
+  // sent its frame to was the deployed app's. A `.localhost` name is the machine's own, as the dev identity's loopback is.
+  test('on the local dev server, whose preview names only this machine resolves, every visit is the workspace\'s own', async () => {
+    const visits: Array<string | null> = [];
+    const local = { ...ENV, PREVIEW_HOST_SUFFIX: 'preview.localhost' };
+    const url = present((await nimbusPreviewUrl(local, 'hello', 4321, NIMBUS_CAPABILITY)).url, 'a local preview');
+    const env = { ...ownedWorkspace(visits), PREVIEW_HOST_SUFFIX: 'preview.localhost' };
+
+    await handleNimbusPreviewHostRequest(new Request(url, { headers: { 'sec-fetch-mode': 'navigate', 'sec-fetch-site': 'cross-site' } }), env);
+    await handleNimbusPreviewHostRequest(new Request(NIMBUS_URL, { headers: { 'sec-fetch-mode': 'navigate' } }), ownedWorkspace(visits));
+
+    expect(visits).toEqual([PREVIEW_SELF, null]);
+  });
+
+  test("the workspace's own pass reads as itself on its own previews, and is minted for no other workspace's", async () => {
+    const visits: Array<string | null> = [];
+    const pass = present(await selfPreviewPass(ENV, 'hello', new URL(NIMBUS_URL)), 'the pass');
+    const cookie = `${pass.name}=${pass.value}`;
+
+    // Its server-side fetch sends no metadata and no origin, a POST too; a browser carrying it is held to the rule.
+    await handleNimbusPreviewHostRequest(new Request(NIMBUS_URL, { headers: { cookie } }), ownedWorkspace(visits));
+    await handleNimbusPreviewHostRequest(new Request(NIMBUS_URL, { method: 'POST', body: 'x', headers: { cookie } }), ownedWorkspace(visits));
+    await handleNimbusPreviewHostRequest(new Request(NIMBUS_URL, { headers: { cookie, 'sec-fetch-site': 'same-site', 'sec-fetch-mode': 'cors' } }), ownedWorkspace(visits));
+
+    expect(visits).toEqual([PREVIEW_SELF, PREVIEW_SELF, null]);
+    expect(await selfPreviewPass(ENV, 'another', new URL(NIMBUS_URL))).toBeNull();
   });
 });
 
@@ -983,10 +1180,18 @@ describe('worker wiring', () => {
     // Every write route outside the listed public prefixes refuses an anonymous request, and a
     // cross-site one carrying the session cookie, before it runs.
     const { env, ctx, cookie } = await appProbe();
-    const signedIn = api.routes.filter(({ method, path }) => method !== 'GET' && !PUBLIC_API.some((prefix) => path.startsWith(prefix)));
-    expect(signedIn.length).toBeGreaterThan(20);
+    const signedIn = api.routes.filter(({ path }) => !PUBLIC_API.some((prefix) => path.startsWith(prefix)));
+    const writes = signedIn.filter(({ method }) => method !== 'GET');
+    expect(writes.length).toBeGreaterThan(20);
 
-    for (const route of signedIn) {
+    // A read refuses no one signed out, uncached; the cross-site rule is a write's.
+    for (const route of signedIn.filter(({ method }) => method === 'GET')) {
+      const anonymous = await api.fetch(new Request(`${PROBE_ORIGIN}${concretePath(route.path)}`), env, ctx);
+
+      expect([anonymous.status, anonymous.headers.get('cache-control')?.includes('no-store')], `GET ${route.path}`).toEqual([401, true]);
+    }
+
+    for (const route of writes) {
       const method = route.method === 'ALL' ? 'POST' : route.method;
       const url = `${PROBE_ORIGIN}${concretePath(route.path)}`;
       const anonymous = await api.fetch(new Request(url, { method }), env, ctx);
@@ -995,7 +1200,40 @@ describe('worker wiring', () => {
       const forged = await api.fetch(new Request(url, { method, headers: { cookie, origin: 'https://evil.example' } }), env, ctx);
       expect(forged.status, `${method} ${route.path}`).toBe(403);
       expect(v.parse(v.object({ code: v.string() }), await forged.json()).code).toBe('CROSS_SITE');
+
+      // A refusal is never cached: a shared cache must not answer the next person with it.
+      for (const refusal of [anonymous, forged]) expect(refusal.headers.get('cache-control'), `${method} ${route.path}`).toContain('no-store');
     }
+  });
+
+  // The preview entry is behind the one session gate; the CLI's entry behind its bearer, and the dev exchange behind
+  // possession of the dev identity. A session cookie is neither of the last two.
+  test('each preview and sign-in entry is behind its own rule, and every refusal is uncached', async () => {
+    const preview = `${PREVIEW_ENTRY_PATH}?to=${encodeURIComponent('https://not-signed.previews.example/board')}`;
+    const page = await served(`${APP}${preview}`, ZONE, { accept: 'text/html' });
+    const asked = await served(`${APP}${preview}`, ZONE, { accept: 'application/json' });
+    const browser = await signedInBrowser();
+
+    const reached = await browser.fetch(preview, { headers: { accept: 'text/html' } });
+    const cliEntry = await browser.fetch(`${CLI_PREVIEW_ENTRY_PATH}?to=${encodeURIComponent(NIMBUS_URL)}`);
+    const devExchange = await browser.fetch('/api/auth/dev-session', { method: 'POST', headers: { origin: APP } });
+
+    expect({
+      page: [page.status, page.headers.get('location')],
+      asked: asked.status,
+      reached: reached.status,
+      cliEntry: cliEntry.status,
+      devExchange: devExchange.status,
+    }).toEqual({
+      page: [302, `${APP}/login?return_to=${encodeURIComponent(preview)}`],
+      asked: 401,
+      // Signed in, the entry itself answers: this destination is no preview the deployment signed.
+      reached: 404,
+      cliEntry: 401,
+      devExchange: 401,
+    });
+
+    for (const refusal of [page, asked, reached, cliEntry, devExchange]) expect(refusal.headers.get('cache-control')).toContain('no-store');
   });
 
   test('an /api path no route answers is the app document, under its policy', async () => {
@@ -1082,7 +1320,7 @@ describe('worker wiring', () => {
     expect(await (await appDocument({})).text()).not.toContain(previewSuffixMetaName());
   });
 
-  test('a workspace preview is answered on its isolated host, with no sign-in asked', async () => {
+  test('a workspace preview is answered on its isolated host, never by the app\'s own sign-in', async () => {
     const host = present(buildWorkspacePreviewHost({
       port: 5173, workspace: 'ws-probe', handle: 'a'.repeat(10), token: 'b'.repeat(15), suffix: SUFFIX,
     }), 'the workspace preview host');

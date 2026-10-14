@@ -3,16 +3,15 @@ import { useState, useCallback, type ReactNode } from "react";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { PlayIcon, CheckCircleIcon, ArrowUUpLeftIcon } from "@phosphor-icons/react";
-import type { Rpc } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { DiffLines } from "./shared";
 import { renderThrownChain, showing, detach } from "@kinu.run/core/obs";
 import { Status, type StatusTone } from "@/components/ui/Status";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import type { OrchestratorAgent } from "@/orchestrator";
 
-interface ScaffoldVersion { version: number; written_at: number; rationale: string; status: string }
-
-interface ScaffoldDiff { version: number; previousVersion: number | null; added: number; removed: number; lines: Array<{ kind: "add" | "del" | "ctx"; text: string }> }
+type ScaffoldDiff = Awaited<ReturnType<OrchestratorAgent["getScaffoldDiff"]>>;
 
 /** A version's state in words, and its ink. */
 interface VersionStatus { readonly tone: StatusTone; readonly word: string }
@@ -41,8 +40,8 @@ function DiffView({ diff }: { diff: ScaffoldDiff }) {
 
 /** A scaffold version's diff, read for that version and again each time `readAgain` moves: a slower answer for a
  *  version no longer shown is never drawn. */
-export function ScaffoldVersionDiff({ rpc, version, readAgain }: { rpc: Rpc; version: number; readAgain: number }) {
-  const load = useCallback(() => rpc<ScaffoldDiff>("getScaffoldDiff", [version]), [rpc, version]);
+export function ScaffoldVersionDiff({ rpc, version, readAgain }: { rpc: WorkspaceRpc; version: number; readAgain: number }) {
+  const load = useCallback(() => rpc("getScaffoldDiff", [version]), [rpc, version]);
   const { resource: detail, reload } = useAsyncResource(load, undefined, `${String(version)}:${String(readAgain)}`);
 
   if (detail.status === "ready") return <DiffView diff={detail.value} />;
@@ -55,7 +54,7 @@ export function ScaffoldVersionDiff({ rpc, version, readAgain }: { rpc: Rpc; ver
 }
 
 export interface ScaffoldLineageProps {
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   currentVersion: number;
 }
 
@@ -69,7 +68,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
   const [previewOut, setPreviewOut] = useState<string | null>(null);
 
   // "no rewrites yet" may only be claimed about a listing that came back.
-  const loadVersions = useCallback(() => rpc<ScaffoldVersion[]>("listScaffoldVersions", [20]), [rpc]);
+  const loadVersions = useCallback(() => rpc("listScaffoldVersions", [20]), [rpc]);
   const { resource: lineage, reload } = useAsyncResource(loadVersions);
   const versions = lastValue(lineage) ?? [];
 
@@ -94,7 +93,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
     setBusy("preview"); setPreviewOut(null);
 
     return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      const r = yield* Effect.promise(async () => rpc<{ ok?: boolean; error?: string; events?: Array<{ type: string; text?: string }> }>("previewScaffoldLive", [selected, previewTask.trim()]));
+      const r = yield* Effect.promise(async () => rpc("previewScaffoldLive", [selected, previewTask.trim()]));
       const text = (r.events ?? []).filter((e) => e.type === "text_delta").map((e) => e.text ?? "").join("");
       setPreviewOut(r.error ? `Error: ${r.error}` : (text || "(no text output)"));
     }), showing((chain) => {

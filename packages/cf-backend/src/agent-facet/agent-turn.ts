@@ -448,7 +448,7 @@ export function facetTurnSources(turn: {
 
       return granted.ended;
     },
-    attachmentBudget: actor.session.orchestrator.acc.context,
+    attachmentBudget: actor.session.orchestrator.acc.ledgers.context,
     extensions: () => [compaction.extension],
     dynamic: () => () => turn.live.dynamic,
     // Bound and frozen by the driver as it resolved (`ClaimedRound.bind`); the workspace answers tools and the live block

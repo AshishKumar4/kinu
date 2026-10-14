@@ -1593,6 +1593,7 @@
     "workspace TEXT NOT NULL",
     "share_id TEXT NOT NULL",
     "card TEXT NOT NULL",
+    "received_at INTEGER NOT NULL",
     "PRIMARY KEY (owner_user_id, workspace, share_id)"
   ],
   "user_workspaces@packages/core/src/state/user-schema.ts": [

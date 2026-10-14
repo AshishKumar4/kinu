@@ -3,10 +3,7 @@ import { Effect } from 'effect';
 import { useCallback, useEffect, useState } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
 import * as v from "valibot";
-import {
-  BlueprintInspectionSchema, SlateShareRecordSchema, blueprintPagePath,
-  type BlueprintInspection, type Rpc, type SlateAnswer, type SlateShareRecord,
-} from "@kinu.run/core";
+import { BlueprintInspectionSchema, SlateShareRecordSchema, blueprintPagePath, type BlueprintInspection, type SlateAnswer, type SlateShareRecord } from "@kinu.run/core";
 import { settleSync, showing, detach } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { CopyButton } from "@/components/ui/CopyButton";
@@ -14,6 +11,7 @@ import { inputCls } from "@/components/ui/form";
 import { SecretWarning } from "@/pages/BlueprintPage";
 import { publishBlueprint, revokeShare, type Published } from "@/lib/shared-api";
 import { EmailsField, emailsOf, Failure, Lead, StopButton } from "./ShareParts";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 const HistorySchema = v.object({ versions: v.array(v.object({ id: v.string() })), next: v.nullable(v.string()) });
 
@@ -43,7 +41,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onListingPending, fixture }: {
   workspace: string;
   slate: string;
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   onClose: () => void;
   /** The dialog owns the busy state so its backdrop stops dismissing mid-write. */
   onBusy: (busy: boolean) => void;
@@ -66,18 +64,18 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
     let live = true;
 
     const versionIds = async (): Promise<string[]> => {
-      let page = answered(await rpc<SlateAnswer<unknown>>("slate", [{ op: "history", id: slate }]), HistorySchema);
+      let page = answered(await rpc("slate", [{ op: "history", id: slate }]), HistorySchema);
       const ids = page.versions.map((entry) => entry.id);
 
       for (let after = page.next; after !== null; after = page.next) {
-        page = answered(await rpc<SlateAnswer<unknown>>("slate", [{ op: "history", id: slate, after }]), HistorySchema);
+        page = answered(await rpc("slate", [{ op: "history", id: slate, after }]), HistorySchema);
         ids.push(...page.versions.map((entry) => entry.id));
       }
 
       return ids;
     };
 
-    detach(Effect.catchCause(Effect.map(Effect.promise(() => Promise.all([versionIds(), rpc<SlateAnswer<unknown>>("slate", [{ op: "shares" }])])), ([ids, rows]) => {
+    detach(Effect.catchCause(Effect.map(Effect.promise(() => Promise.all([versionIds(), rpc("slate", [{ op: "shares" }])])), ([ids, rows]) => {
       if (!live) return;
       setVersions(ids);
       setVersion(ids.at(-1) ?? null);
@@ -91,7 +89,7 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
   useEffect(() => {
     if (fixture !== undefined || version === null) return;
     let live = true;
-    detach(Effect.catchCause(Effect.map(Effect.promise(() => rpc<SlateAnswer<unknown>>("slate", [{ op: "inspect", id: slate, version, include: include === null ? undefined : [...include] }])), (result) => { if (live) setInspection(answered(result, BlueprintInspectionSchema)); }), showing((chain) => { if (live) setErr(chain); })));
+    detach(Effect.catchCause(Effect.map(Effect.promise(() => rpc("slate", [{ op: "inspect", id: slate, version, include: include === null ? undefined : [...include] }])), (result) => { if (live) setInspection(answered(result, BlueprintInspectionSchema)); }), showing((chain) => { if (live) setErr(chain); })));
 
     return () => { live = false; };
   }, [fixture, rpc, slate, version, include]);

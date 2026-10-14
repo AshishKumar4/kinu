@@ -1,7 +1,6 @@
 import { useCallback, useState, type ReactNode } from "react";
 import { DesktopIcon } from "@phosphor-icons/react";
 import { Effect } from "effect";
-import type { Rpc } from "@kinu.run/core";
 import { attempt, renderThrownChain, detach } from "@kinu.run/core/obs";
 import { BOX_SIZES, BOX_SIZE_ORDER, DEFAULT_BOX_SIZE, type BoxSize } from "@kinu.run/devbox/sizes";
 import { Card, Choice, Field } from "@/components/ui/form";
@@ -10,6 +9,7 @@ import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { getAccountSandboxSize, setAccountSandboxSize } from "../lib/user-api";
 import { ACCOUNT_DEFAULT, sandboxSizeText, sizeSpecs, startRefusedNote, workspaceSizeNote, workspaceSizeOptions } from "../lib/sandbox-size-text";
 import type { SandboxSizeState } from "../sandbox-size";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 const shownIn = (show: (message: string) => void) => (failure: { readonly cause?: unknown }) =>
   Effect.sync(() => { show(renderThrownChain({ cause: failure.cause ?? failure })); });
@@ -33,23 +33,23 @@ const startPending = (pending: "resize" | "start" | null) => (pending === "start
  * reads it again first: a computer its terminal woke since the page read it restarts, and the view says so (staging
  * f1f0b451b kept a terminal through the restart, then showed it closed).
  */
-export function useComputerSize(rpc: Rpc, enabled: boolean): ComputerSizeState {
-  const load = useCallback(() => (enabled ? rpc<SandboxSizeState | null>("getComputerSize") : Promise.resolve(null)), [rpc, enabled]);
+export function useComputerSize(rpc: WorkspaceRpc, enabled: boolean): ComputerSizeState {
+  const load = useCallback(() => (enabled ? rpc("getComputerSize", []) : Promise.resolve(null)), [rpc, enabled]);
   const { resource, set } = useAsyncResource(load);
   const [pending, setPending] = useState<"resize" | "start" | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [choosing, setChoosing] = useState<BoxSize | null>(null);
   const state = lastValue(resource);
 
-  const act = (action: "resize" | "start", doing: string, method: string, args: unknown[]) => {
+  const act = (action: "resize" | "start", doing: string, change: () => Promise<SandboxSizeState | null>) => {
     setPending(action);
     setFailure(null);
 
-    const call = (name: string, values: unknown[]) => attempt({ doing, otherwise: "io" }, () => rpc<SandboxSizeState | null>(name, values)).pipe(
+    const call = (read: () => Promise<SandboxSizeState | null>) => attempt({ doing, otherwise: "io" }, read).pipe(
       Effect.map((next) => { if (next !== null) set(next); }),
     );
 
-    return (action === "resize" ? call("getComputerSize", []).pipe(Effect.andThen(call(method, args))) : call(method, args)).pipe(
+    return (action === "resize" ? call(() => rpc("getComputerSize", [])).pipe(Effect.andThen(call(change))) : call(change)).pipe(
       Effect.catch(shownIn(setFailure)),
       Effect.ensuring(Effect.sync(() => { setPending(null); setChoosing(null); })),
     );
@@ -57,7 +57,7 @@ export function useComputerSize(rpc: Rpc, enabled: boolean): ComputerSizeState {
 
   const choose = (value: BoxSize | typeof ACCOUNT_DEFAULT) => Effect.sync(() => {
     setChoosing(value === ACCOUNT_DEFAULT ? state?.account ?? DEFAULT_BOX_SIZE : value);
-  }).pipe(Effect.andThen(act("resize", "resizing the computer", "resizeComputer", [value === ACCOUNT_DEFAULT ? null : value])));
+  }).pipe(Effect.andThen(act("resize", "resizing the computer", () => rpc("resizeComputer", [value === ACCOUNT_DEFAULT ? null : value]))));
 
   // A stopped computer only records the choice; a running one restarts at it.
   const restarting = pending === "resize" && state?.running !== null;
@@ -68,7 +68,7 @@ export function useComputerSize(rpc: Rpc, enabled: boolean): ComputerSizeState {
       {state.startRefused !== null && (
         <div data-env-start-refused className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 pb-1">
           <span className="p-meta p-danger">{startRefusedNote(state.startRefused)}</span>
-          <button type="button" data-env-start-again onClick={() => detach(act("start", "starting the computer", "startComputer", []))}
+          <button type="button" data-env-start-again onClick={() => detach(act("start", "starting the computer", () => rpc("startComputer", [])))}
             disabled={pending !== null} className="p-env-action">{pending === "start" ? "Starting…" : "Start again"}</button>
         </div>
       )}

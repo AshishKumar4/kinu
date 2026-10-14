@@ -48,7 +48,7 @@ async function runtime(source: string, version = 1) {
   initActorStateSchema(makeWorkspaceSchemaSql(testSql.db));
   rt.executor = createSandboxedExecutor();
   rt.identity.scaffold.version = async () => version;
-  const files = rt.agentStateVfs ?? rt.storage.vfs;
+  const files = rt.agentStateVfs;
   await files.mkdir('scaffold', { recursive: true });
   await writeText(files, rt.identity.scaffold.path + '.v' + version, source);
 

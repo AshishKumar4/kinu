@@ -38,6 +38,7 @@ export const PAGE_ROWS = {
   control: { unreachable: 'the operator console answers only an operator the admin gate admits (control-plane/admin-caller.ts), and the eval identity is not one' },
   drive: ['drive'],
   driveFolder: ['drive'],
+  slates: ['slate'],
   shared: ['blueprint-fork'],
   sharedBlueprint: ['blueprint-fork'],
   sharedLive: ['users-share'],

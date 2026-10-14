@@ -1,9 +1,11 @@
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, expect, test } from 'bun:test';
-import { Database, type SQLQueryBindings } from 'bun:sqlite';
-import { initWorkspaceSchema, type SqlExec, type SqlExecRow, type SqlExecutor, type SqlValue } from '@kinu.run/core';
-import { createTestActorsOver } from '@kinu.run/test-utils';
+import { Database } from 'bun:sqlite';
+import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { initWorkspaceSchema } from '@kinu.run/core';
+import { sqlStorageOver, wrapDatabase } from '@kinu.run/core/identity';
+import { createMemoryVfs, createTestActorsOver } from '@kinu.run/test-utils';
 import type { PlanSnapshot } from '@better-compact/core';
 import {
   compactionTranscriptPath,
@@ -12,60 +14,16 @@ import {
   type ArchiveRange,
 } from '../src/index';
 
-/** Uses core's workspace-schema entry point so the tables match production. */
-function initCompactionStateTable(db: Database): void {
-  const exec: SqlExec = {
-    exec(query, ...bindings) {
-      const bound = bindings.map(sqliteBinding);
-      const stmt = db.prepare<SqlExecRow, SQLQueryBindings[]>(query);
-
-      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) {
-        return { toArray: () => stmt.all(...bound) };
-      }
-
-      stmt.run(...bound);
-
-      return { toArray: () => [] };
-    },
-  };
-
-  initWorkspaceSchema({
-    execRaw: (ddl) => db.exec(ddl),
-    sql: sqliteSql(db),
-    exec,
-    transactionSync: (write) => db.transaction(write)(),
-  });
-}
-
-function sqliteSql(db: Database): SqlExecutor {
-  const sql: SqlExecutor = function <T = unknown>(
-    strings: TemplateStringsArray,
-    ...values: SqlValue[]
-  ): T[] {
-    const query = strings.reduce((acc, s, i) => acc + s + (i < values.length ? '?' : ''), '');
-    const bound = values.map(sqliteBinding);
-    const stmt = db.prepare<T, SQLQueryBindings[]>(query);
-
-    if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return stmt.all(...bound);
-    stmt.run(...bound);
-
-    return [];
-  };
-
-  return sql;
-}
-
-function sqliteBinding(value: SqlValue): SQLQueryBindings {
-  return value instanceof ArrayBuffer ? new Uint8Array(value) : value;
-}
-
 /** State store bound to an actor registered through the production directory; any other actor reads empty. */
 function stateRig() {
   const db = new Database(':memory:');
-  initCompactionStateTable(db);
+  // The product's SQL adapter over the database, and core's workspace schema, so the tables match production.
+  const storage = wrapDatabase(db);
+
+  initWorkspaceSchema({ ...storage, exec: sqlStorageOver(db) });
   const actor = createTestActorsOver(db).main;
 
-  return { db, actor, store: createCompactionStateStore(sqliteSql(db), actor) };
+  return { db, actor, store: createCompactionStateStore(storage.sql, actor) };
 }
 
 function snapshot(sessionId: string): PlanSnapshot {
@@ -85,47 +43,6 @@ function snapshot(sessionId: string): PlanSnapshot {
   };
 }
 
-/** Map-backed VFS that surfaces EEXIST on repeat mkdir, like real backends can. */
-interface MemoryVfs {
-  vfs: VFS;
-  files: Map<string, string>;
-}
-
-function memoryVfs(): MemoryVfs {
-  const files = new Map<string, string>();
-  const dirs = new Set<string>();
-
-  const vfs: VFS = {
-    readFile: async (path) => {
-      const content = files.get(path);
-
-      if (content === undefined) throw new Error(`ENOENT: ${path}`);
-
-      return new TextEncoder().encode(content);
-    },
-    writeFile: async (path, data) => {
-      files.set(path, data instanceof Uint8Array ? new TextDecoder().decode(data) : data);
-    },
-    readdir: async () => [],
-    stat: async (path) => {
-      const content = files.get(path);
-
-      if (content !== undefined) return { type: 'file', size: new TextEncoder().encode(content).byteLength, mtimeMs: 0 };
-
-      return dirs.has(path) ? { type: 'directory', size: 0, mtimeMs: 0 } : null;
-    },
-    unlink: async (path) => {
-      files.delete(path);
-    },
-    mkdir: async (path) => {
-      if (dirs.has(path)) throw new Error(`EEXIST: directory exists ${path}`);
-      dirs.add(path);
-    },
-  };
-
-  return { vfs, files };
-}
-
 describe('compactionTranscriptPath', () => {
   test('lives under the hidden /local compaction dir and sanitizes hostile segments', () => {
     expect(compactionTranscriptPath('my-agent', 'deadbeef')).toBe(
@@ -140,7 +57,17 @@ describe('compactionTranscriptPath', () => {
 describe('createVfsTranscriptStore', () => {
 
   test('a second write into the same directory tolerates mkdir EEXIST', async () => {
-    const { vfs } = memoryVfs();
+    const { vfs: plane } = createMemoryVfs();
+
+    // As a backend that answers a repeated mkdir with EEXIST, recursive or not.
+    const vfs: VFS = {
+      ...plane,
+      mkdir: async (path, options) => {
+        if ((await plane.stat(path))?.type === 'directory') throw new VfsError('EEXIST', 'the directory exists', path);
+        await plane.mkdir(path, options);
+      },
+    };
+
     const store = createVfsTranscriptStore(() => vfs);
     await store.write(store.citablePath('a', 'h1'), 'one');
     await store.write(store.citablePath('a', 'h2'), 'two');

@@ -10,8 +10,8 @@ import { createTestActors, createTestActorsOver, createTestSql, present } from '
 import { makeSqlExec } from '../../packages/core/tests/helpers';
 import { createMemoryVfs } from '../../packages/test-utils/src/vfs';
 import {
-  DELEGATION_TASK_ASK, DELEGATION_WORD, DEVICE_JOB_ASK, DEVICE_JOB_COMMAND, HELLO_SLATE_ASK, HELLO_SLATE_ID, RELAY_MISSION, TREE_ASK,
-  TREE_DEEP_WORD, sayWordMission,
+  DELEGATION_ROSTER_ASK, DELEGATION_TASK_ASK, DELEGATION_WORD, DEVICE_JOB_ASK, DEVICE_JOB_COMMAND, HELLO_SLATE_ASK, HELLO_SLATE_ID,
+  RELAY_MISSION, STANDBY_MISSION, TREE_ASK, TREE_DEEP_WORD, delegationDismissAsk, sayWordMission,
 } from './asks';
 import worker, { MAX_BODY_BYTES } from '../../scripts/scripted-model-worker';
 import { SCRIPTED_CREDENTIAL, startScriptedModel } from '../../scripts/scripted-model';
@@ -220,6 +220,11 @@ describe('the tier model behind background memory compression', () => {
 
 /** The message a helper's answer opens its hirer's next turn with, rendered by the product's own drain. */
 function answerArrives(agent: string, task: string, content: string): string {
+  return reported(agent, task, content, 'completed').text;
+}
+
+/** A helper's report as its hirer's drain renders it: `text` opens a turn of its own, `midTurnText` lands in one at work. */
+function reported(agent: string, task: string, content: string, status: 'completed' | 'progress'): NonNullable<ReturnType<typeof buildDrainBatch>> {
   const db = new Database(':memory:');
   const sql = makeSqlExec(db);
   initEventsHubTables(sql);
@@ -228,7 +233,7 @@ function answerArrives(agent: string, task: string, content: string): string {
   log.publish({
     descriptor: {
       ingress: 'subordinate', variant: 'subordinate_report',
-      payload: { from_subordinate: agent, status: 'completed', content, sequence_id: `settle:${agent}`, task, kinu_mode: 'build' },
+      payload: { from_subordinate: agent, status, content, sequence_id: `settle:${agent}`, task, kinu_mode: 'build' },
     },
     now: 1_000,
   });
@@ -237,7 +242,7 @@ function answerArrives(agent: string, task: string, content: string): string {
 
   if (batch === null) throw new Error('a published answer must drain');
 
-  return batch.text;
+  return batch;
 }
 
 const ReplySchema = v.object({ choices: v.tuple([v.object({ message: v.object({
@@ -395,6 +400,30 @@ describe("the agent-job row's job", () => {
     expect(await answered(JSON.stringify({ result: JSON.stringify({ processId: 'job-1', restartable: true }) }))).toBe(JOB_STARTED);
     expect(await answered(JSON.stringify({ success: false, reason: 'bad_input', error: 'refused' }))).not.toBe(JOB_STARTED);
   });
+
+  // Staging b11719d71: a fresh workspace's computer took longer to wake than the eval tool waits, so the program was
+  // backgrounded; the row read that as a refusal. The job is started when its wake says the program's value carried one.
+  test('started in the background, it is called started when the wake brings the started job, and not before', async () => {
+    const call = { id: 'call_job', type: 'function', function: { name: 'eval', arguments: JSON.stringify({ code: 'return 1;' }) } };
+    const handle = { background: true, jobId: 'bgjob-start01', kind: 'eval', message: 'Outran the 30s foreground window; backgrounded.' };
+
+    // The ask's turn, its eval backgrounded, then whatever came after it.
+    const conversation = (...after: JsonObject[]): JsonObject[] => [
+      { role: 'user', content: JOB_ASK },
+      { role: 'assistant', content: 'Calling eval.', tool_calls: [call] },
+      { role: 'tool', tool_call_id: 'call_job', content: JSON.stringify(handle) },
+      ...after,
+    ];
+
+    const woken = async (result: string) => (await reply(conversation(
+      { role: 'assistant', content: 'The job is starting in the background as bgjob-start01.' },
+      { role: 'user', content: `Background eval job bgjob-start01 completed.\n\nResult:\n${result}` },
+    ), ['eval'])).content;
+
+    expect(await reply(conversation(), ['eval']).then((said) => said.content)).not.toBe(JOB_STARTED);
+    expect(await woken(JSON.stringify({ processId: 'job-1', restartable: true }))).toBe(JOB_STARTED);
+    expect(await woken(JSON.stringify({ success: false, reason: 'unavailable', error: 'the computer did not start' }))).not.toBe(JOB_STARTED);
+  });
 });
 
 // A hire returns at once (cafab2bfc): each answer opens its hirer's next turn, and the cases' scripts answer that turn.
@@ -448,5 +477,47 @@ describe('the first-run scripts answer the turn a helper\'s answer opens', () =>
     ];
 
     expect((await reply(messages)).content).toBe(`TREE ${TREE_DEEP_WORD}`);
+  });
+});
+
+// Production f9c17ac7b (2026-10-14 17:59:54Z): the durable helper's progress report landed in the dismiss turn as it opened,
+// spliced after the ask, and the script read the splice as the ask: it answered the fallback, and nothing was dismissed.
+describe('a report that lands in a turn at work is not the ask that turn answers', () => {
+  const helper = 'stand-one-question';
+  const dismissAsk = delegationDismissAsk(helper);
+  const landed = reported(helper, STANDBY_MISSION, FALLBACK_ANSWER, 'progress').midTurnText;
+
+  const call = (id: string, args: JsonObject): JsonObject[] => [
+    { role: 'assistant', content: 'Calling agents.', tool_calls: [{ id, type: 'function', function: { name: 'agents', arguments: JSON.stringify(args) } }] },
+    { role: 'tool', tool_call_id: id, content: JSON.stringify({ ok: true }) },
+  ];
+
+  const rostered: JsonObject[] = [{ role: 'user', content: DELEGATION_ROSTER_ASK }, { role: 'assistant', content: `ROSTER ${helper}` }, { role: 'user', content: dismissAsk }];
+  const made = async (messages: readonly JsonObject[]) => (await reply(messages)).tool_calls?.map((toolCall) => JSON.parse(toolCall.function.arguments));
+
+  test('the dismiss, then the listing, then the answer, wherever the report lands', async () => {
+    expect(await made([...rostered, { role: 'user', content: landed }])).toEqual([{ op: 'dismiss', agent: helper }]);
+    expect(await made([...rostered, { role: 'user', content: landed }, ...call('d', { op: 'dismiss', agent: helper })])).toEqual([{ op: 'list' }]);
+    expect(await made([...rostered, ...call('d', { op: 'dismiss', agent: helper }), { role: 'user', content: landed }])).toEqual([{ op: 'list' }]);
+
+    const listed = [...rostered, ...call('d', { op: 'dismiss', agent: helper }), { role: 'user', content: landed }, ...call('l', { op: 'list' })];
+
+    expect((await reply(listed)).content).toBe('RETIRED');
+  });
+
+  test('a word that lands in the turn that hired its helper is relayed there', async () => {
+    const mission = sayWordMission(DELEGATION_WORD);
+    const hired = hiredAndWaiting(DELEGATION_TASK_ASK, { id: 'call_hire', agent: 'ask-task-ymhu3n', mission }).slice(0, -1);
+    const word = reported('ask-task-ymhu3n', mission, DELEGATION_WORD, 'completed').midTurnText;
+
+    expect((await reply([...hired, { role: 'user', content: word }])).content).toBe(`HIRED ${DELEGATION_WORD}`);
+  });
+
+  test('the relay relays the word that lands in the turn that hired its helper', async () => {
+    const mission = sayWordMission(TREE_DEEP_WORD);
+    const hired = hiredAndWaiting(RELAY_MISSION, { id: 'call_deep', agent: 'ask-task-deep01', mission }).slice(0, -1);
+    const word = reported('ask-task-deep01', mission, TREE_DEEP_WORD, 'completed').midTurnText;
+
+    expect((await reply([...hired, { role: 'user', content: word }])).content).toBe(TREE_DEEP_WORD);
   });
 });

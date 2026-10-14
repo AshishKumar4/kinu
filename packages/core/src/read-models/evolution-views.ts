@@ -2,8 +2,9 @@
 
 import type { AgentConfigStore } from '../config/store';
 import type { ActorHandle } from '../identity/actor-handle';
+import * as v from 'valibot';
 import {
-  buildChangelog, countUnseenChangelog, listUnseenChangelog, type ChangelogEntry,
+  buildChangelog, ChangelogEntrySchema, countUnseenChangelog, listUnseenChangelog, type ChangelogEntry,
 } from '../evolution/changelog';
 import { boundedInt } from '../utils/bounds';
 import type { EvolutionEngine } from '../evolution/engine';
@@ -24,6 +25,12 @@ export interface EvolutionChangelogView {
   unseenCount: number;
   seenAt: number;
 }
+
+export const EvolutionChangelogViewSchema: v.GenericSchema<EvolutionChangelogView> = v.object({
+  entries: v.array(ChangelogEntrySchema),
+  unseenCount: v.number(),
+  seenAt: v.number(),
+});
 
 const DEFAULT_CHANGELOG_LIMIT = 50;
 

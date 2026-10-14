@@ -10,9 +10,8 @@ import {
   SessionAuthorityUnavailableError, createSession, revokeSession, verifySession,
   type OAuthProfile,
 } from '../src/auth/store';
-import {
-  AuthError, SESSION_COOKIE_NAME, authenticateRequest, type AuthEnv,
-} from '../src/auth/session';
+import { AuthError, authenticateRequest, type AuthEnv } from '../src/auth/session';
+import { SESSION_COOKIE_NAME } from '../src/auth/cookies';
 import { authPageRoutes, type AuthRoutesAuthority, type AuthRoutesEnv } from '../src/auth/routes';
 import { unreachableNamespace, workerContext } from './helpers/bindings';
 import { serveFamily } from './helpers/api';

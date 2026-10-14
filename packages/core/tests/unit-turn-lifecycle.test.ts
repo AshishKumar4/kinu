@@ -70,8 +70,8 @@ describe('openTurnRun / closeTurnRun', () => {
     const rec = recorder();
     const acc = new TurnAccumulator();
     acc.reset(Date.now());
-    acc.context.admit(41_000);
-    acc.context.recordSpill({ producer: 'shell', omitted: 160_000, referenced: true });
+    acc.ledgers.context.admit(41_000);
+    acc.ledgers.context.recordSpill({ producer: 'shell', omitted: 160_000, referenced: true });
     acc.recordToolCall({
       toolCallId: 'fixture-1',
       toolName: 'eval',
@@ -82,7 +82,7 @@ describe('openTurnRun / closeTurnRun', () => {
 
     openTurnRun(rec, 'run-2', { agentId: 'ws', causedBy: 'chat', userMessage: 'm', turnIndex: 0 });
     closeTurnRun(rec, 'run-2', {
-      turnIndex: 0, usage: { input: 1, output: 1 }, reason: 'completed', context: acc.context,
+      turnIndex: 0, usage: { input: 1, output: 1 }, reason: 'completed', context: acc.ledgers.context,
     });
 
     const events = rec.read('run-2');
@@ -102,7 +102,7 @@ describe('openTurnRun / closeTurnRun', () => {
     const acc = new TurnAccumulator();
     acc.reset(Date.now());
     closeTurnRun(rec, 'run-3', {
-      turnIndex: 0, usage: { input: 1, output: 1 }, reason: 'completed', context: acc.context,
+      turnIndex: 0, usage: { input: 1, output: 1 }, reason: 'completed', context: acc.ledgers.context,
     });
     expect(rec.read('run-3').map((e) => e.type)).toEqual(['turn_end', 'run_end']);
   });
@@ -147,12 +147,12 @@ describe('openTurnRun / closeTurnRun', () => {
     const acc = new TurnAccumulator();
 
     // The episode, as the calls were observed where they ran: craft in one call, reach for it in the next.
-    acc.craft.note('create', { created: ['sum'], invoked: [], raised: [], returned: [], dropped: [] });
-    acc.craft.note('call', { created: [], invoked: ['sum'], raised: [], returned: ['sum'], dropped: [] });
+    acc.ledgers.craft.note('create', { created: ['sum'], invoked: [], raised: [], returned: [], dropped: [] });
+    acc.ledgers.craft.note('call', { created: [], invoked: ['sum'], raised: [], returned: ['sum'], dropped: [] });
 
     closeTurnRun(rec, 'run-c', {
       turnIndex: 0, usage: { input: 1, output: 1 }, reason: 'completed',
-      craft: acc.craft.snapshot(),
+      craft: acc.ledgers.craft.snapshot(),
     });
     const events = rec.read('run-c');
     expect(events.map((e) => e.type)).toEqual(['craft_cycle', 'turn_end', 'run_end']);
@@ -169,7 +169,7 @@ describe('openTurnRun / closeTurnRun', () => {
 
     closeTurnRun(rec, 'run-idle', {
       turnIndex: 0, usage: { input: 1, output: 1 }, reason: 'completed',
-      craft: new TurnAccumulator().craft.snapshot(),
+      craft: new TurnAccumulator().ledgers.craft.snapshot(),
     });
     expect(rec.read('run-idle').map((e) => e.type)).toEqual(['turn_end', 'run_end']);
   });

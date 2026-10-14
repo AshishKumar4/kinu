@@ -17,7 +17,8 @@ import type { LanguageModelV2CallOptions, LanguageModelV2StreamPart, LanguageMod
 import { createTestWorkspace } from '../../core/tests/helpers';
 import { streamFork } from '../../core/tests/helpers/fork-stream';
 import { createCLIRuntime, makeWorkspaceSchemaSql, type CLIRuntime } from '../src/runtime';
-import { LocalAgentSession, type SessionEvent } from '../src/local-session';
+import type { SessionEvent } from '@kinu.run/core';
+import { LocalAgentSession } from '../src/local-session';
 import { TestLanguageModelV2 } from './test-language-model';
 
 const DUMMY_LLM: LLMProviderConfig = {

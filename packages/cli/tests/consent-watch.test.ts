@@ -1,15 +1,15 @@
 // Shared device-consent watcher; each case awaits the poll it needs, so nothing sleeps for a number.
 import { describe, expect, test } from 'bun:test';
 
+import type { PendingDeviceConsent } from '@kinu.run/core';
 import type {
   DeviceConsentDecision,
   DeviceConsentSurface,
-  PendingDeviceConsent,
 } from '../src/agent-client';
 import { watchDeviceConsents, watchHeadlessConsents, watchTerminalConsents, type ConsentNoteKind } from '../src/consent-watch';
 
 function consent(id: string): PendingDeviceConsent {
-  return { consentId: id, deviceLabel: 'device', method: 'exec', command: 'ls' };
+  return { consentId: id, deviceId: 'device', deviceLabel: 'device', method: 'exec', command: 'ls', createdAt: 1 };
 }
 
 /** A pending list the test controls, with awaits for the Nth poll and resolution. */

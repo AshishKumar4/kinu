@@ -8,10 +8,10 @@ import type { ExecutorProvider, ExecutorCapability, ExecutorStatus, PortExposure
 import { commandTool, ExecutorPortSchema } from './types';
 import { shellCall } from './command-call';
 import { callJob, createShellSession, machineShellCall, machineShellCwd, reportsCwd, shellExecOptions, type MachineShells } from './shell-session';
-import { namedShellState, pinnedShellMoved } from '../safety/approval-gate';
+import { namedShellCall } from '../safety/approval-gate';
 import type { CheckpointFiles, OutputSink, VfsDigestWrite } from '../types/primitives';
 import { JOB_STAMP_ENV } from '../types/jobs';
-import { commandResult, commandResultAt, exposedPortText, type CommandResult, type ExecOutcome } from './exec-result';
+import { commandResultAt, exposedPortText, type CommandResult, type ExecOutcome } from './exec-result';
 import { classifyErrorCode, KinuError, refusalOf, renderThrownChain, settle, tolerateAsync, toKinuError, type Refusal } from '../obs/index';
 import { isVfsError, isVfsErrorCode, syscallError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { shellQuote } from '../utils/shell';
@@ -257,12 +257,6 @@ async function withSandboxRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<
   throw lastErr;
 }
 
-function normalize(res: { stdout: string; stderr: string; exitCode: number; cwd?: string }): CommandResult {
-  const outcome: ExecOutcome = { ...res };
-
-  return commandResult(outcome);
-}
-
 /** Worded distinctly from the adapter's own cancellation, which names the process it killed. */
 function cancelledWhileRunning(command: string): Error {
   return new DOMException(`computer.exec \`${command}\` cancelled while it ran`, 'AbortError');
@@ -357,25 +351,21 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
         const reportCwd = reportsCwd({ context: args[1] });
         const { name } = exec;
 
-        // What the named shell restores, read in the container; an approval binds it, and the run checks it again.
-        const state = name === undefined || shells === undefined ? undefined : () => namedShellState(async () => (await machineShellCwd({
+        // What the named shell restores, read in the container; an approval binds it, and the run checks it again. The
+        // container takes no stdin from a call.
+        const named = namedShellCall(shellCall(command, exec, { stdin: false }), name, shells === undefined ? undefined : async (shell) => (await machineShellCwd({
           exec: async (read) => {
             const r = await touch(() => handle.exec(read, { cwd: WORKSPACE_BACKUP_DIR }));
 
             return { stdout: r.stdout, stderr: r.stderr, exitCode: r.exitCode };
           },
-        }, name, shells))?.state ?? null, name);
+        }, shell, shells))?.state ?? null);
 
-        // The container takes no stdin from a call.
-        return { call: { ...shellCall(command, exec, { stdin: false }), ...(state !== undefined && { shellState: state }) }, run: async (pinned): Promise<CommandResult> => {
+        return { call: named.call, run: async (pinned): Promise<CommandResult> => {
           try {
             // No work deadline: see SandboxHandle.exec. The signal goes to the container; locally it only refuses to
             // dispatch. One call: the handle owns any re-call after a lost reply, under the call's one launch id.
-            return await names.hold(name, callJob(exec), async () => {
-              const moved = pinned === undefined ? null : await pinnedShellMoved(pinned, name ?? '', state);
-
-              if (moved !== null) return refusalOf(moved);
-
+            return await names.hold(name, callJob(exec), () => named.run(pinned, async () => {
               const res = await touch(() => {
                 if (signal?.aborted) throw notDispatched();
                 // The signal is added only when given, so an adapter can tell "none" from "already fired".
@@ -390,10 +380,11 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
                 return handle.exec(call.command, opts);
               });
 
-              const settled = call.settle(res);
+              // The container's answer, as every transport settles a command.
+              const outcome: ExecOutcome = { ...call.settle(res) };
 
-              return reportCwd ? commandResultAt(settled) : normalize(settled);
-            }, (message) => refusalOf(new KinuError('unavailable', message)));
+              return commandResultAt(outcome, reportCwd);
+            }, refusalOf), (message) => refusalOf(new KinuError('unavailable', message)));
           } catch (err) {
             const own = classifyErrorCode({ cause: err }) === 'cancelled';
 

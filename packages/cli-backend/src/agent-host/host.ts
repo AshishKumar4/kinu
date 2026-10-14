@@ -32,7 +32,6 @@ import {
   createTeamToolDeps,
   createTemporaryAgentPort,
   delegationBudgetOf,
-  delegationExhausted,
   describeSubordinateHandoff,
   inheritedContextFromTranscript,
   actorHomeName,
@@ -93,14 +92,14 @@ import {
 } from '@kinu.run/core';
 import { OS_LEASE_PROCESS } from './lease-process';
 import {
-  DriverLeaseHold, REAL_CLOCK,
-  type DriverKind, type DriverLeaseHolder,
+  BACKGROUND_POLICY, DriverLeaseHold, REAL_CLOCK,
+  type DriverKind, type DriverLeaseHolder, type InvocationSurface,
+  type SessionEvent,
 } from '@kinu.run/core';
 import {
   LocalAgentSession,
   type LocalAgentSessionOpts,
   type LocalParentRelay,
-  type SessionEvent,
 } from '../local-session';
 import { createLocalActorHost } from '../actor-host';
 import type { LocalOrchestration } from '../orchestration';
@@ -120,6 +119,8 @@ export interface LocalHostedAgent {
   profileAuthority?: ProfileEnvelopeSource;
   /** Provider-config revision, read live so a daemon sees providers connected elsewhere. */
   providerRevision?: () => number;
+  /** This root is the one task a one-shot run opened: its turns are independent tasks, each gated to completion. */
+  oneShot?: boolean;
 }
 
 export interface LocalAgentHostOptions {
@@ -136,6 +137,11 @@ export interface LocalAgentHostOptions {
    * Defaults to `interactive`; the daemon declares itself.
    */
   driverKind?: DriverKind;
+  /**
+   * How this process was invoked, which sets how long it lives: a one-shot run exits after its task, so its actors run
+   * long work inline and defer reviews as durable rows. Absent, a process that stays (interactive, daemon).
+   */
+  surface?: InvocationSurface;
   /** When a tick's `reads_changed` frame goes out: the next task unless a suite ends its ticks itself. */
   deferLiveReads?(flush: () => void): void;
 }
@@ -295,6 +301,19 @@ export class LocalAgentHost {
   /** One driver pass, gated on the driver lease; refused is a normal outcome, not a failure. */
   async tick(name: string, now = Date.now()): Promise<LocalTickResult> {
     return await this.tickEntry(await this.resolveEntry(name), now);
+  }
+
+  /** The runtime an opened agent works over, as its opener built it. */
+  async runtime(address: string): Promise<CLIRuntime> {
+    return (await this.resolveEntry(address)).ws.rt;
+  }
+
+  /**
+   * Takes the driver lease for `address`'s workspace now, as a client does before its person types; the refusal names
+   * who holds it. An interactive host keeps it until close.
+   */
+  async takeDriver(address: string): Promise<ReturnType<DriverLeaseHold['acquire']>> {
+    return (await this.resolveEntry(address)).tree.hold.acquire();
   }
 
   /** Subordinate operations for one agent, root or subordinate, down to the depth cap. */
@@ -480,6 +499,8 @@ export class LocalAgentHost {
       // Every hirer here, the root included, is an entry of this process.
       sayToParent: (child, signal) => this.sayToHirer(child, signal),
       actorRuntimeFor: (bound) => this.runtimeFor(runtimes, db, bound),
+      // The root's runtime is built before its host binds it, with the stores the host then binds it with.
+      storesFor: (bound) => runtimes.get(bound.reference.actorId)?.stores,
       parentRuntimeFor: (bound) => bound.reference.parentActorId === null
         ? ws.rt : this.requireActorEntry(bound.reference.parentActorId).ws.rt,
       loopFor: (bound) => {
@@ -505,7 +526,7 @@ export class LocalAgentHost {
           closed: () => this.byActor.get(clientId)?.session.closed() ?? true,
         };
       },
-      oneShot: false,
+      oneShot: this.opts.surface === 'one-shot',
       orchestrationCreated: (bound, orchestration) => {
         if (bound.record.origin !== 'swarm') {
           orchestrations.set(bound.reference.actorId, orchestration);
@@ -546,7 +567,7 @@ export class LocalAgentHost {
     const openConfig = this.childOpenConfig(parent, binding);
 
     const built = createCLIRuntime(db, {
-      ...openConfig, agentName: binding.name, actor: bound.handle,
+      ...openConfig, agentName: binding.name, actor: bound.handle, stores: bound.stores,
     });
 
     const shared = shareLocalWorkspacePlane(built, parent.ws.rt);
@@ -600,6 +621,8 @@ export class LocalAgentHost {
           : { approvals: this.rootEntry(input.parentKey).session.approvalQueue }),
       },
       cwd: input.ref.cwd,
+      backgroundPolicy: BACKGROUND_POLICY[this.opts.surface ?? 'interactive'],
+      oneShot: input.parentKey === null && input.ws.oneShot === true,
       onEvent: (event) => this.onSessionEvent(input.key, event),
       // Stop means stop: what the agent was owed and had not taken is cancelled with its queued turns.
       onStop: () => {
@@ -1086,13 +1109,8 @@ export class LocalAgentHost {
       )),
     };
 
-    // At the depth cap, drop the temporary port: a role-targeted `ask` births a child and would
-    // otherwise recurse past `DELEGATION_MAX_DEPTH`. `hire` is caught by core's dispatch refusal.
-    if (!delegationExhausted(delegation)) {
-      Object.assign(input, { temporary: parent.temporary });
-    }
-
-    return createTeamToolDeps(input);
+    // What a capped agent is offered is core's (`offered`): no team at all.
+    return createTeamToolDeps({ ...input, temporary: parent.temporary });
   }
 
   /**
@@ -1135,7 +1153,6 @@ export class LocalAgentHost {
       rename: async (name, displayName, nameOrigin) => {
         const child = await this.openChildEntry(parentOf(), name);
         child.config.setDisplayNameOrigin(displayName, nameOrigin);
-        child.session.host.broadcast({ type: 'workspace_renamed', displayName });
       },
       dismiss: (name, dismissal, reference) => this.dismissChild(parentOf(), name, dismissal, reference),
     };

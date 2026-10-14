@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-14",
-  "files": 3288,
-  "functions": 86079,
+  "files": 3298,
+  "functions": 86341,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -60,10 +60,6 @@
     {
       "key": "packages/core/src/bench/stats.ts#pairedBinaryComparison>gen",
       "complexity": 36
-    },
-    {
-      "key": "packages/cli/src/commands/run.ts#runCloudRpcCommand",
-      "complexity": 35
     },
     {
       "key": "scripts/bench-external.ts#readHarborTrial",
@@ -142,10 +138,6 @@
       "complexity": 30
     },
     {
-      "key": "packages/cli/src/commands/run.ts#runLocalRpcCommand",
-      "complexity": 30
-    },
-    {
       "key": "packages/core/src/evolution/refinement-lane.ts#settleRoutes",
       "complexity": 30
     },
@@ -218,10 +210,6 @@
       "complexity": 28
     },
     {
-      "key": "packages/core/src/identity/workspace-actors.ts#WorkspaceActorDirectory.apply",
-      "complexity": 28
-    },
-    {
       "key": "packages/core/src/strategy/swarm-resume.ts#outcomeFacts",
       "complexity": 28
     },
@@ -243,10 +231,6 @@
     },
     {
       "key": "packages/cf-backend/src/components/ui/BrandMark.tsx#providerBrand",
-      "complexity": 27
-    },
-    {
-      "key": "packages/cf-backend/src/pages/DrivePage.tsx#DrivePage",
       "complexity": 27
     },
     {
@@ -366,10 +350,6 @@
       "complexity": 26
     },
     {
-      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene>useCallback#30",
-      "complexity": 26
-    },
-    {
       "key": "packages/cli/src/tui/onboarding.tsx#GuidedOnboarding",
       "complexity": 26
     },
@@ -383,6 +363,10 @@
     },
     {
       "key": "packages/core/src/identity/archive.ts#readWorkspaceArchivePage>gen",
+      "complexity": 26
+    },
+    {
+      "key": "packages/core/src/identity/workspace-actors.ts#WorkspaceActorDirectory.apply",
       "complexity": 26
     },
     {

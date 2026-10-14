@@ -795,15 +795,15 @@
       "exit": 0,
       "machine": "linux x64, AMD EPYC (8 threads)"
     },
-    "bun test --timeout=0 --isolate scripts/hammer.test.ts scripts/mutation-fences.test.ts": {
-      "wallSeconds": 28.82,
-      "cpuSeconds": 7.86,
-      "peakRssMb": 263.29,
-      "peakRunnable": 8,
-      "peakCpuThreads": 2.19,
-      "meanThreads": 0.27,
-      "samples": 152,
-      "loadAtStart": 1.35,
+    "bun test --timeout=0 --isolate scripts/hammer.test.ts scripts/mutation-fences.test.ts scripts/mutation-sweep.test.ts": {
+      "wallSeconds": 29.59,
+      "cpuSeconds": 7.26,
+      "peakRssMb": 298.33,
+      "peakRunnable": 4,
+      "peakCpuThreads": 2.12,
+      "meanThreads": 0.25,
+      "samples": 159,
+      "loadAtStart": 0.15,
       "exit": 0,
       "machine": "linux x64, AMD EPYC (8 threads)"
     },

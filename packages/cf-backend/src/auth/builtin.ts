@@ -7,8 +7,8 @@ import { AssertionSchema, AttestationSchema, answeredChallenge, verifyNewPasskey
 import { base64Url, json, ownerCaller, randomToken, sha256Hex } from '@kinu.run/core';
 import { tolerateAsync } from '@kinu.run/core/obs';
 import * as v from 'valibot';
-import { SESSION_COOKIE_NAME, setCookie } from './session';
-import { createSession, deriveBuiltinUserId, type OAuthProfile } from './store';
+import { sessionCookie } from './cookies';
+import { accountIdFor, createSession, type OAuthProfile } from './store';
 import { sanitizeReturnTo } from '@kinu.run/core';
 import { builtinSignInOn } from '@kinu.run/core/identity';
 import type { AuthRoutesAuthority, AuthRoutesEnv } from './routes';
@@ -68,7 +68,7 @@ async function signedIn<Id>(env: BuiltinAuthEnv<Id>, request: Request, profile: 
   const session = await createSession(env, profile);
   const headers = new Headers({ 'cache-control': 'no-store' });
 
-  headers.append('set-cookie', setCookie(SESSION_COOKIE_NAME, session.token, session.expiresAt - session.issuedAt));
+  headers.append('set-cookie', sessionCookie(session));
 
   return json({ body: { returnTo: sanitizeReturnTo(returnTo, new URL(request.url).origin) } }, { headers });
 }
@@ -142,7 +142,7 @@ builtinAuthRoutes.post('/api/auth/builtin/password/register', async (c) => {
   const root = c.env.CREDENTIAL_ENCRYPTION_KEY;
 
   if (!root) return refuse(NO_ROOT_SECRET, 503);
-  const userId = await deriveBuiltinUserId(input.email);
+  const userId = await accountIdFor(c.env, input.email);
 
   const admission = await accounts(c.env).builtinRegister(
     await ownerCaller(c.env), { ...request, userId, password: await hashPassword(root, input.password) },
@@ -188,7 +188,7 @@ builtinAuthRoutes.post('/api/auth/builtin/passkey/register/options', async (c) =
   const request = await admitted(c.env, c.req.raw, parsed.output);
 
   if (request instanceof Response) return request;
-  const userId = await deriveBuiltinUserId(request.email);
+  const userId = await accountIdFor(c.env, request.email);
   const url = new URL(c.req.url);
 
   const options = await (await import('@simplewebauthn/server')).generateRegistrationOptions({

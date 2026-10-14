@@ -4,7 +4,7 @@ import type { UIMessage } from 'ai';
 import * as v from 'valibot';
 import { JsonValueSchema, SubordinateInspectionRequestSchema, type JsonValue, type PanelAgent, type PendingAction, type PlanReview, type SlateSummary, type TabPresence, type ModelMenuEntry, type RosterPage } from '@kinu.run/core';
 import type { UserProfile } from '@/lib/user-api';
-import type { Rpc } from '@kinu.run/core';
+import { workspaceRpc, type SocketCall, type WorkspaceRpc } from '@/lib/workspace-rpc';
 import type { BackgroundJob } from '@kinu.run/core/protocol';
 
 const NOW = Date.now();
@@ -133,7 +133,7 @@ const CHECKOUT_PENDING: PendingAction[] = [
 ];
 
 export interface WorkFixture {
-  readonly rpc: Rpc;
+  readonly rpc: WorkspaceRpc;
   readonly jobs: () => BackgroundJob[];
   readonly pending: () => PendingAction[];
 }
@@ -142,7 +142,7 @@ export function checkoutWorkFixture(onChange: () => void): WorkFixture {
   let jobs = CHECKOUT_JOBS;
   let pending = CHECKOUT_PENDING;
 
-  const rpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  const rpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promise<T> => {
     if (method === 'getExecutorDiff') return answer({ files: [], mode: 'vfs-baseline' });
 
     if (method === 'inspectSubordinate') {
@@ -182,7 +182,7 @@ export function checkoutWorkFixture(onChange: () => void): WorkFixture {
     return answer({ ok: true });
   };
 
-  return { rpc, jobs: () => jobs, pending: () => pending };
+  return { rpc: workspaceRpc(rpc), jobs: () => jobs, pending: () => pending };
 }
 
 
@@ -232,8 +232,8 @@ export const PLAN_FIXTURE: PlanReview = {
 
 /** `base` null means no plan submitted yet: the Plans read answers empty and annotations or
  *  decisions refuse rather than report a success. */
-export function planRpc(onDecide: (plan: PlanReview) => void, base: PlanReview | null = PLAN_FIXTURE): Rpc {
-  return async <T,>(method: string, args?: unknown[]): Promise<T> => {
+export function planRpc(onDecide: (plan: PlanReview) => void, base: PlanReview | null = PLAN_FIXTURE): WorkspaceRpc {
+  return workspaceRpc(async <T,>(method: string, args?: unknown[]): Promise<T> => {
     if (method === 'getExecutorDiff') return answer({ files: [], mode: 'vfs-baseline' });
 
     if (method === 'inspectSubordinate') {
@@ -291,7 +291,7 @@ export function planRpc(onDecide: (plan: PlanReview) => void, base: PlanReview |
     if (method.startsWith('list') || method.startsWith('get')) return answer([]);
 
     return answer({ ok: true });
-  };
+  });
 }
 
 export const SLATE_SUMMARY: SlateSummary = { id: 'support-queue', title: 'Support queue' };

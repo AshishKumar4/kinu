@@ -4,11 +4,12 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
 import {
-  consumeOAuthState, createOAuthState, createSession, revokeSession, verifySession,
+  accountIdFor, consumeOAuthState, createOAuthState, createSession, revokeSession, verifySession,
   type AuthStoreEnv, type OAuthProfile, type OAuthStateInput, type SessionAuthority,
 } from '../src/auth/store';
 import { bootstrappedProfile } from './helpers/bindings';
 import { AuthError, authenticateRequest, type AuthIdentity } from '../src/auth/session';
+import { authApiRoutes } from '../src/auth/routes';
 import { makeKv, type FakeKv } from './helpers/kv';
 import { DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER } from '@kinu.run/core';
 import type { BrowserSessionIdentity } from '../src/user/sessions';
@@ -50,10 +51,12 @@ function setupEnv() {
     kv,
     ensuredProfiles,
     liveSessions: () => [...rows.keys()],
+    // A deployment that signs in through OAuth, as these logins do.
     env: {
       AUTH_KV: kv,
       UserDO: { idFromName: (name) => name, get: () => userDO },
       CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+      SIGN_IN_PROVIDERS: 'google',
     } satisfies AuthStoreEnv<string>,
   };
 }
@@ -296,6 +299,41 @@ describe('the synthetic development identity', () => {
     for (const refused of ['trial-0', 'trial-513', 'trial-07', 'trial-x', 'trial-', 'Trial-7', 'trial-7-1']) {
       expect(await as(refused)).toEqual({ granted: false, status: 400 });
     }
+  });
+
+  // 2026-10-14: a browser page sent the header to every origin it reached, slate subresources and foreign sockets
+  // included. A browser now exchanges it once, on the app's origin, for the session any sign-in mints.
+  // A deployment offers built-in sign-in (staging) or OAuth, and mints every account id by that rule (`accountIdFor`).
+  test.each([
+    ['built-in', {}],
+    ['OAuth', { SIGN_IN_PROVIDERS: 'github' }],
+  ])('on a %s deployment the exchange mints the session any sign-in does, as the user the header is, and nothing without the secret', async (_kind, declared) => {
+    const store = setupEnv();
+    const env = { ...store.env, ...declared, DEV_USER_EMAIL: DEV_ENV.DEV_USER_EMAIL, DEV_IDENTITY_SECRET: DEV_ENV.DEV_IDENTITY_SECRET };
+    const exchange = (headers: HeadersInit) => authApiRoutes.request('https://kinu.run/api/auth/dev-session', { method: 'POST', headers }, env);
+    const held = { [DEV_IDENTITY_HEADER]: 'deployment-shared-secret', [DEV_IDENTITY_ACCOUNT_HEADER]: 'devices' };
+
+    const refused = await Promise.all([exchange({}), exchange({ [DEV_IDENTITY_HEADER]: 'guess', [DEV_IDENTITY_ACCOUNT_HEADER]: 'devices' })]);
+
+    expect({ refused: refused.map((answer) => answer.status), minted: store.liveSessions().length }).toEqual({ refused: [401, 401], minted: 0 });
+
+    const answer = await exchange(held);
+    const cookie = answer.headers.get('set-cookie') ?? '';
+    const token = /^__Host-kinu_session=([^;]+);/u.exec(cookie)?.[1] ?? '';
+    const bySession = await authenticateRequest(new Request('https://kinu.run/api/user/workspaces', { headers: { cookie: `__Host-kinu_session=${token}` } }), env);
+    const byHeader = await authenticateRequest(new Request('https://kinu.run/api/user/workspaces', { headers: held }), env);
+
+    expect({
+      status: answer.status,
+      attributes: cookie.slice(cookie.indexOf(';')),
+      users: [bySession.userId, byHeader.userId],
+      identity: { email: bySession.email, provider: bySession.provider },
+    }).toEqual({
+      status: 200,
+      attributes: `; Path=/; Max-Age=${String(30 * 24 * 60 * 60)}; HttpOnly; Secure; SameSite=Lax`,
+      users: [await accountIdFor(env, 'eval-service+devices@kinu.run'), await accountIdFor(env, 'eval-service+devices@kinu.run')],
+      identity: { email: 'eval-service+devices@kinu.run', provider: 'dev' },
+    });
   });
 
   test('an account name is no authority: without the secret it grants nothing, and an unknown one is refused', async () => {

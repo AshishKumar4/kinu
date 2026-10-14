@@ -69,7 +69,7 @@ export function desktopCommand(action: string | undefined, opts: { label?: strin
     }
 
     if (sub === 'status') {
-      const status = daemonStatus();
+      const status = yield* Effect.promise(() => daemonStatus());
       console.log(`${DIM('Device config:')} ${status.deviceConfigPresent ? OK('present') : 'missing'} ${DIM(DEVICE_CONFIG_PATH)}`);
       console.log(`${DIM('Daemon log:')} ${status.logPresent ? OK('present') : 'missing'} ${DIM(DAEMON_LOG_PATH)}`);
       console.log(`${DIM('Daemon process:')} ${status.daemonPid ? OK(`running (pid ${status.daemonPid})`) : 'not running'}`);

@@ -1,6 +1,6 @@
 /** The one cf-side construction of the shared web provider, so wiring cannot drift between actors. */
 
-import { createDefaultWebSearchProvider, type WebSearchProvider } from './provider';
+import { createDefaultWebSearchProvider, type BrowserCookie, type WebSearchProvider } from './provider';
 import { bindingQuickActions, type BrowserRunQuickActions } from './browser-run';
 import type { AuthResolver } from '../providers/types';
 import type { ModelCallSink } from '../events/model-call';
@@ -15,11 +15,13 @@ interface WebProviderEnv {
 /**
  * @param resolveAuth Resolved per call, not at construction: the provider is cached across turns and the
  *   first web call may precede owner claim.
+ * @param previewPass What Browser Run carries to the workspace's own previews, which open only for their owner.
  */
 export function buildCfWebSearchProvider(
   env: WebProviderEnv,
   resolveAuth: () => AuthResolver | undefined,
   reportModelCall: ModelCallSink,
+  previewPass?: (url: URL) => Promise<BrowserCookie | null>,
 ): WebSearchProvider {
   const options: Parameters<typeof createDefaultWebSearchProvider>[0] = {
     fetch: globalThis.fetch,
@@ -29,6 +31,7 @@ export function buildCfWebSearchProvider(
       return auth ? auth(key, opts) : null;
     },
     browser: { quickActions: bindingQuickActions(env.BROWSER) },
+    ...(previewPass !== undefined && { previewPass }),
   };
 
   const htmlToMarkdown = workersAiHtmlToMarkdown(env, reportModelCall);

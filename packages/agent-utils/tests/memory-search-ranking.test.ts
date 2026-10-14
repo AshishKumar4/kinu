@@ -3,11 +3,11 @@ import { describe, test, expect } from "bun:test";
 import { present } from "../../test-utils/src/present";
 import { MemoryStore } from "../src/memory/store";
 import { createTestSql } from "@kinu.run/test-utils";
-import { createMemoryVfs } from "./helpers";
+import { memoryPlane } from "./helpers";
 
-function createStore() {
+async function createStore() {
 	const { sql, transactionSync } = createTestSql()
-	const fs = createMemoryVfs();
+	const fs = await memoryPlane();
 	const store = new MemoryStore(fs, sql, transactionSync);
 	store.ensureSchema();
 
@@ -18,7 +18,7 @@ const PATH = "memory/MEMORY.md";
 
 describe("MemoryStore.search ranking", () => {
 	test("a document saturated with the query terms is still returned", async () => {
-		const { store } = createStore();
+		const { store } = await createStore();
 
 		// Dense repetition drives |bm25| high; an inverted score with a floor would drop this hit.
 		const dense = Array.from({ length: 120 }, () =>
@@ -33,7 +33,7 @@ describe("MemoryStore.search ranking", () => {
 	});
 
 	test("the score is monotone with relevance: best match first, highest score", async () => {
-		const { store } = createStore();
+		const { store } = await createStore();
 		const strong = Array.from({ length: 30 }, () => "quantum entanglement research").join("\n");
 		const weak = `one mention of quantum here\n${Array.from({ length: 30 }, (_, i) => `noise ${i}`).join("\n")}`;
 		await store.writeFile("memory/strong.md", strong);

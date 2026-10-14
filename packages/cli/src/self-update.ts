@@ -4,7 +4,7 @@
  */
 import { Cause, Effect } from 'effect';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { isolatedBunArgs } from '@kinu.run/core';
@@ -14,7 +14,8 @@ import {
   RELEASE_SIGNING_PUBLIC_KEY, RELEASE_SIGNING_PUBLIC_KEY_ENV, SignedReleaseSchema, verifyRelease, type SignedRelease,
 } from '@kinu.run/core';
 import * as v from 'valibot';
-import { KinuError, toKinuError, tolerate, settleSync, settle } from '@kinu.run/core/obs';
+import { KinuError, toKinuError, settleSync, settle } from '@kinu.run/core/obs';
+import { tryLock } from '@kinu.run/cli-backend';
 import { AGENT_HOME } from './config';
 
 const CLI_ROOT = join(AGENT_HOME, 'cli');
@@ -26,7 +27,8 @@ const CLI_PREV = join(CLI_ROOT, 'prev');
 const STAGED_PREFIX = 'next-';
 
 /** `mkdir`-atomic lock holding the pid, so a dead holder's lock is taken over. */
-const CLI_LOCK = join(CLI_ROOT, '.lock');
+/** The machine's resource lock (`tryLock`): one refresh lands a build at a time. */
+const CLI_LOCK = join(CLI_ROOT, '.refresh.lock');
 
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -185,48 +187,6 @@ function installedBuild(): Effect.Effect<string | null, KinuError> {
   });
 }
 
-function takeCliLock(): (() => void) | null {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const taken = tolerate(() => {
-      mkdirSync(CLI_LOCK);
-
-      return true;
-    }, 'eexist');
-
-    if (taken === true) {
-      writeFileSync(join(CLI_LOCK, 'pid'), `${String(process.pid)}\n`);
-
-      return () => { rmSync(CLI_LOCK, { recursive: true, force: true }); };
-    }
-
-    // A dead holder's lock is taken over.
-    const holder = readLockHolder();
-
-    if (holder !== null && processAlive(holder)) return null;
-    rmSync(CLI_LOCK, { recursive: true, force: true });
-  }
-
-  return null;
-}
-
-function readLockHolder(): number | null {
-  const text = tolerate(() => readFileSync(join(CLI_LOCK, 'pid'), 'utf-8'), 'enoent');
-
-  if (text === undefined) return null;
-  const pid = Number(text.trim());
-
-  return Number.isInteger(pid) && pid > 0 ? pid : null;
-}
-
-function processAlive(pid: number): boolean {
-  // ESRCH: no such pid. Any other refusal propagates.
-  return tolerate(() => {
-    process.kill(pid, 0);
-
-    return true;
-  }, 'esrch') === true;
-}
-
 function verifiedStagedBuild(served: string): Effect.Effect<string | null> {
   return Effect.gen(function* () {
     const next = stagedDirFor(served);
@@ -260,7 +220,7 @@ function sweepStagedBuilds(keep: string | null): void {
 export function refreshCliTree(origin: string, served: string, seams: RefreshSeams = {}): Promise<void> {
   return settle(Effect.gen(function* () {
     mkdirSync(CLI_ROOT, { recursive: true });
-    const release = takeCliLock();
+    const release = yield* Effect.promise(() => tryLock(CLI_LOCK));
 
     // Another live refresh holds `cli/` and lands the same or a newer build.
     if (release === null) return;

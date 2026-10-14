@@ -11,7 +11,6 @@ import {
   type PassageNote,
   type PlanReview,
   type ReviewAnnotation,
-  type PlanReviewResult,
 } from "@kinu.run/core";
 import { Effect, Cause } from "effect";
 import { Viewer } from "@/components/plan-review/Viewer";
@@ -20,12 +19,12 @@ import { CommentThread } from "@/components/plan-review/CommentThread";
 import { editorAnnotationOf } from "@/components/plan-review/notes";
 import type { Block, EditorMode } from "@plannotator/ui/types";
 import { extractFrontmatter, parseMarkdownToBlocks } from "@plannotator/ui/utils/parser";
-import type { Rpc } from "@kinu.run/core";
 import { createPlanAnnotationSaveQueue } from "@kinu.run/core";
 import { renderThrownChain, showing, detach } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { usePlanDecision } from "@/hooks/use-plan-decision";
 import { usePlanRepliesSeen } from "@/hooks/use-plan-replies-seen";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 type RootNote = PassageNote | GeneralNote;
 
@@ -165,7 +164,7 @@ function footerNote(
 
 export interface PlanReviewViewProps {
   plan: PlanReview | null;
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   readOnly?: boolean;
   /** The agent that wrote the plan, as its replies name it. */
   agentName?: string;
@@ -191,7 +190,7 @@ function DismissPlan({ plan, rpc, readOnly, deciding, saving, owed, onError }: {
     onError(null);
 
     return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      const result = yield* Effect.promise(async () => rpc<PlanReviewResult>("dismissPlanReview", [plan.id, plan.revision]));
+      const result = yield* Effect.promise(async () => rpc("dismissPlanReview", [plan.id, plan.revision]));
 
       if (!result.ok) onError(result.error);
     }), showing(onError)), Effect.sync(() => {
@@ -284,7 +283,7 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
     if (activePlanKey.current === planKey) setError(null);
 
     try {
-      const result = await rpc<PlanReviewResult>("savePlanReviewAnnotations", [planId, planRevision, freshNotes(next)]);
+      const result = await rpc("savePlanReviewAnnotations", [planId, planRevision, freshNotes(next)]);
 
       if (!result.ok) {
         if (activePlanKey.current === planKey) setError(result.error);

@@ -9,12 +9,12 @@ import { MemoryRouter } from 'react-router-dom';
 import * as v from 'valibot';
 import {
   actorConnectionTag, BUILTIN_TOOLS,
-  observedOpEnum, REPORT_TOOL, SubordinateInspectionRequestSchema, type JsonValue, type Rpc, TASK_TURN_ENDINGS, terminalTaskReport,
+  observedOpEnum, REPORT_TOOL, type JsonValue, TASK_TURN_ENDINGS, terminalTaskReport,
 } from '@kinu.run/core';
 import { gatedTools, present, TURN_REACH } from '@kinu.run/test-utils';
 import { KeptTranscript } from '../src/components/KeptTranscript';
 import { HelperChatBase, MessageView } from '../src/components/MessageView';
-import { nestedAgent } from '@kinu.run/core';
+import { nestedAgent, type InspectSubordinate } from '@kinu.run/core';
 import type { UIMessage } from 'ai';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import {
@@ -225,11 +225,7 @@ describe('a subordinate below a direct child is reached by its path', () => {
   }
 
   /** The page's own resolver over this object's RPCs, as its socket answers them. */
-  const pageRpc = (agent: Awaited<ReturnType<typeof grandchild>>['agent']): Rpc => async <T>(method: string, args: unknown[] = []): Promise<T> => {
-    if (method !== 'inspectSubordinate') throw new Error(`the page asked ${method}`);
-
-    return v.parse(v.custom<T>(() => true), await agent.inspectSubordinate(v.parse(SubordinateInspectionRequestSchema, args[0])));
-  };
+  const pageRpc = (agent: Awaited<ReturnType<typeof grandchild>>['agent']): InspectSubordinate => async (request) => await agent.inspectSubordinate(request);
 
   test('with its parent dismissed, a grandchild still opens kept, found from the id of the chat that asked it or its own', async () => {
     const { agent, name, parentId, path, id } = await grandchild();

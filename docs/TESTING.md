@@ -350,6 +350,8 @@ A green suite says the tests pass, not that they would notice a change. Three pr
 
 `gate:mutation-fences` re-proves the four declared fences. A fence whose owning test stays green once the fence is stripped is a guard nothing defends. Its green output states the hole it cannot close: a fence nobody declared.
 
+`sweep:mutation` runs on request, but its catalogue is checked on every push by `scripts/mutation-sweep.test.ts`: each snippet must sit in its file exactly once and each symbol must name something in the product sources. A snippet that has moved would otherwise surface only in the next sweep.
+
 `scripts/mutation-pilot.ts` searches for those. It generates mutants mechanically over `packages/core/src/{heads,events,mcts}`: negate a condition, flip a boundary, swap `&&` for `||`, drop a guard clause. It takes a stated budget (24 by default, spread round-robin over the four operators and then over files so one crowded file cannot take the whole sample), runs the suites that import the mutated file, and escalates anything that survives to every suite under `packages/core/` before reporting it. Measured 2026-09-01 on this scope: 865 mutants generated over 59 files, and a core-tier baseline of 93 s, which is what a survivor costs.
 
 The pilot searches. A human reads each survivor and decides whether it is an equivalent mutant or a missing assertion; a missing assertion gets pinned as a fence, and the gate re-proves it on every deploy. A survivor never fails a build. A mutation part is red only when the run could not be made (no worktree, no modules, or a baseline that was already red).

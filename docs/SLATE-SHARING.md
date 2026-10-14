@@ -25,8 +25,8 @@ with the caller stamped in its props (`packages/cf-backend/src/slates/host.ts`,
 `packages/cf-backend/src/actor-agent.ts` `slateCallDispatch`). The host records
 each member a slate's owner calls (`slate_usage`,
 `packages/core/src/slates/usage.ts`): that record is the slate's graph. The preview process runs as `ROOT_SLATE_CALLER`,
-the session user in Build mode, whoever opened it. Every visitor to the preview
-URL shares that one process.
+the session user in Build mode. Only the owner opens it (below), and every tab of
+theirs shares that one process.
 
 **What a capability is.** The owner holds all four:
 
@@ -49,18 +49,40 @@ Each member a slate calls carries agent-core's impact (`slateAddressImpact` in
 `execute`, `delegate` or `administer`. A share approves and shows each member by
 it.
 
-**Who can open a preview URL.** Anyone holding it. The hostname is
-`<port>-<handle>-<token>-<workspace>.<suffix>`
+**Who can open a preview URL.** Its workspace's signed-in owner, and the
+workspace itself. The hostname is `<port>-<handle>-<token>-<workspace>.<suffix>`
 (`packages/core/src/preview/nimbus-preview-host.ts`). The token is an HMAC over
-workspace, port and handle (`packages/cf-backend/src/nimbus-route.ts`). The
-preview host is routed before the auth gate (`packages/cf-backend/src/server.ts`
-`routePreviewHost`), and the route strips the Kinu session and every `x-kinu-*`
-header. The workspace object checks the capability handle and forwards
-(`packages/cf-backend/src/workspace-host.ts` `routePreview`). A preview URL is a
-bearer capability; to revoke it, unexpose the port. A shared slate sits behind
-more: the consent page for credentialed shares, the per-viewer request bound,
-the per-share daily spend bound and the audit row (§5). `unshare` revokes a
-share.
+workspace, port and handle (`packages/cf-backend/src/viewer-pass.ts`). The
+preview host is routed before the app's auth gate (`packages/cf-backend/src/server.ts`),
+because the app's session cookie is the app host's alone; the route strips it
+and every `x-kinu-*` header. The owner is signed in on the preview host as a
+users share's viewer is: a visitor the host does not know is sent to the app's
+`/__kinu/preview?to=<url>`, which signs them in, checks they own the workspace
+and mints a five-minute ticket. The host's `/__kinu/viewer` exchange turns it
+into its own host-only `__Host-kinu_viewer` cookie
+(`packages/cf-backend/src/nimbus-route.ts`). The edge reads the cookie and the
+workspace object compares its subject with its owner before anything of the
+slate starts (`packages/cf-backend/src/orchestrator.ts` `routeWorkspacePreview`).
+Anyone else is told "This slate isn't shared with you"; a script's request is
+refused outright. Every preview and share host is a sibling under one site, so
+the cookie rides another preview's requests too: the edge reads it only for a
+page load or a request the preview makes of itself (`Sec-Fetch-Site`, else an
+exact `Origin`), so another site's socket, script or form names no one. A
+preview answers `Referrer-Policy: same-origin`, so its own form posts keep their
+`Origin` and no other origin learns its hostname. The workspace's own
+browsers and fetches (the agent's `web.screenshot` and rendered fetch, its and
+the owner's slates' programs' `fetch` of their own preview, a slate picture's
+capture) carry a five-minute pass that names the workspace, not a person. A
+share's viewer's calls and programs never carry it: a preview's slate runs as
+the owner, past any grant. On the local dev server (`vite dev`) the preview zone is
+`*.preview.localhost`, a name only the machine resolves, and every visit there is
+the workspace's own, as the dev identity's loopback is; its app is
+`http://localhost`, another site, so no cookie would be kept in its frames.
+Holding the URL alone opens nothing, so a preview needs no
+revocation of its own; to stop it, unexpose the port. A shared slate is opened
+by others only through its share (§5): the consent page for credentialed shares,
+the per-viewer request bound, the per-share daily spend bound and the audit row.
+`unshare` revokes a share.
 
 **URL durability.** Routing is by Durable Object name (`nimbus-route.ts`). The
 two slate runtimes are routed differently:

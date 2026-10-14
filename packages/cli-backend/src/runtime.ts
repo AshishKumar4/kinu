@@ -1,14 +1,13 @@
 import type { ModelAttemptIdentity } from '@kinu.run/core';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
- * Local CLI runtime factory. Two file planes: agent state always lives in the
- * Nimbus filesystem over SQLite; the workspace plane (`file`, `shell`, `eval`,
- * AGENTS.md) binds to `config.cwd` when set, else shares the in-SQLite tree.
+ * Local CLI runtime factory: an agent's file plane is the workspace's folder and its space on this machine
+ * (`localFilePlane`), over the workspace's one SQLite database.
  */
 
 import type { Database } from 'bun:sqlite';
 import type {
-  AgentRuntime, ActorHandle, ActorReference, LLM, ModelRouteResolution,
+  AgentRuntime, ActorHandle, BoundActor, LLM, ModelRouteResolution,
   ResolvedTurnProfile, Shell, ShellExecOptions, ShellExecResult, OutputSpill, SpillOutcome, VfsMount,
 } from '@kinu.run/core';
 import type { Memory, Schedule, SqlExec, SqlExecutor, RawSqlExec, WorkspaceSchemaSql } from '@kinu.run/core';
@@ -47,9 +46,9 @@ import { sqlStorageOver, wrapDatabase } from '@kinu.run/core/identity';
 import { createSqlFiber, detectOrphanedFibers, localPlanes, SOUL_PATH } from '@kinu.run/core';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { createDecisionPort, restDecisionRun } from '@kinu.run/core';
-import { dotenvLoadedNames } from './dotenv-provenance';
+import { readLaunchDotenv } from './dotenv-provenance';
 import {
-  createLocalModelResolver, createLocalProviderLLM, PROVIDER_CREDENTIAL_ENV, SESSION_CREDENTIAL_ENV, workersAiRoute,
+  createLocalModelResolver, createLocalProviderLLM, workersAiRoute,
   type LocalCloudSession, type LocalModelResolver, type ProviderCredentialSource,
 } from './model-resolver';
 import {
@@ -64,8 +63,6 @@ import { adoptLocalActorHandle, localActorDirectory, bindLocalActor, bindLocalAc
 import * as v from 'valibot';
 import { stampSchemaGenesis } from './schema-genesis';
 
-const HARNESS_CREDENTIAL_ENV = [...Object.values(PROVIDER_CREDENTIAL_ENV), ...SESSION_CREDENTIAL_ENV];
-
 /** Where a local owner changes a tier's model, as a refusal notice names it. */
 const LOCAL_MODEL_SETTINGS = 'your model settings';
 
@@ -79,6 +76,8 @@ interface CLIRuntimeOptions {
   /** Default endpoint for bare ids; null when nothing derives one. The stored
    *  chat model (actor_config) drives the seams instead. */
   llm: LLMProviderConfig | null;
+  /** The stores the host bound this actor with, where it bound it before its runtime: one bundle per actor. */
+  stores?: AgentStores;
   agentName?: string;
   providerCredentials?: ProviderCredentialSource;
   oauthStore?: LocalOAuthStore;
@@ -355,7 +354,8 @@ function buildCLIRuntime(
   const checkpoints = createHostCheckpoints({ agent: agentName, keep: config.checkpointKeep });
   const { cwd, space } = place;
   const agentStateVfs = agentHomeFiles(space, MAIN_AGENT);
-  const stores = createAgentStores(() => sql, () => actor, (write) => writeTransaction(db, write), () => filesForActor(actor));
+  // The host's bundle where it bound this actor first; one actor has one.
+  const stores = config.stores ?? createAgentStores(() => sql, () => actor, (write) => writeTransaction(db, write), () => filesForActor(actor));
   let childContext: ChildContextResolver | null = null;
 
   const ownFiles = spaceFiles(space);
@@ -577,7 +577,7 @@ function ownSpaceOf(db: Database): Effect.Effect<string, KinuError> {
  */
 export async function buildLocalActorRuntime(
   parent: CLIRuntime,
-  bound: { readonly reference: ActorReference; readonly handle: ActorHandle },
+  bound: Pick<BoundActor, 'reference' | 'handle' | 'stores'>,
   seat: 'head' | 'node',
   writeObserver?: WriteObserver,
 ): Promise<AgentRuntime> {
@@ -588,11 +588,11 @@ export async function buildLocalActorRuntime(
 
   const run = binding.origin === 'swarm';
 
-  if (run && seat === 'node') return localNodeRuntime(parent, bound.handle);
+  if (run && seat === 'node') return localNodeRuntime(parent, bound.handle, bound.stores);
 
   if (run) {
     const opts: Parameters<typeof buildCLIHeadRuntime>[0] = {
-      parentRuntime: parent, actorBinding: binding, actor: bound.handle,
+      parentRuntime: parent, actorBinding: binding, actor: bound.handle, stores: bound.stores,
     };
 
     if (writeObserver) opts.writeObserver = writeObserver;
@@ -615,6 +615,8 @@ async function buildCLIHeadRuntime(
     /** The handle whoever bound this actor issued; re-binding would keep
      *  authorising statements after release. */
     actor: ActorHandle;
+    /** The stores its host bound it with: an actor has one bundle. */
+    stores: AgentStores;
     /** Watches writes to the parent workspace so the split can name changed files. */
     writeObserver?: WriteObserver;
   },
@@ -626,9 +628,8 @@ async function buildCLIHeadRuntime(
   const actor = opts.actor;
   const physicalName = actorHomeName({ origin: opts.actorBinding.origin, name: actor.name, storageKey: actor.storageKey });
 
-  const stores = createAgentStores(() => sql, () => actor, (write) => parent.storage.transactionSync(write), () => parent.filesForActor(actor));
-
-  const agentStateVfs = parent.agentStateVfs ?? parent.storage.vfs;
+  const { stores } = opts;
+  const agentStateVfs = parent.agentStateVfs;
   const { cwd: folder } = parent;
   const writeObserver = opts.writeObserver;
 
@@ -723,7 +724,7 @@ async function buildCLIHeadRuntime(
 const EXITED_COMMAND_DRAIN_MS = 250;
 
 export function createHostShell(cwd: string, source: NodeJS.ProcessEnv = process.env): Shell {
-  const env = unsandboxedCommandEnvironment(source, new Set([...HARNESS_CREDENTIAL_ENV, ...dotenvLoadedNames(process.cwd(), source)]));
+  const env = unsandboxedCommandEnvironment(source, readLaunchDotenv(process.cwd(), source.NODE_ENV));
 
   return {
     exec(command: string, stdinOrOptions?: string | ShellExecOptions) {

@@ -103,7 +103,7 @@ export function serveShell({ shell, router, files, budget, escalations, logger }
 
           const result = yield* Effect.promise(() => shell.exec(args.command, shellCallOptions(args, signal, job)));
 
-          return yield* clamp(commandResultAt(result));
+          return yield* clamp(commandResultAt(result, true));
         }
 
         // Past here is an escalation; every exit records it, including refusals.

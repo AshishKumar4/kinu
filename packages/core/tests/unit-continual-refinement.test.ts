@@ -369,7 +369,7 @@ const OTHER_OWNER_PROPOSAL = everyOwnerProposal(
 );
 
 async function readSkill(rt: AgentRuntime, path: string): Promise<string | null> {
-  const vfs = rt.agentStateVfs ?? rt.storage.vfs;
+  const vfs = rt.agentStateVfs;
 
   if (!await exists(vfs, path)) return null;
   const read = await readText(vfs, path);
@@ -378,14 +378,14 @@ async function readSkill(rt: AgentRuntime, path: string): Promise<string | null>
 }
 
 async function writeSkill(rt: AgentRuntime, path: string, source: string): Promise<void> {
-  const vfs = rt.agentStateVfs ?? rt.storage.vfs;
+  const vfs = rt.agentStateVfs;
   await vfs.mkdir(vfsDirname(path), { recursive: true });
   await writeText(vfs, path, source);
 }
 
 /** What the prompt would see: `discoverSkills` over the skill roots. */
 async function discoveredSkillNames(rt: AgentRuntime): Promise<string[]> {
-  const vfs = rt.agentStateVfs ?? rt.storage.vfs;
+  const vfs = rt.agentStateVfs;
   const discovery = await discoverSkills(vfs, { admissionTokens: 100_000 });
 
   return discovery.skills.filter((skill) => skill.bodyRef.kind === 'file').map((skill) => skill.name);
@@ -393,7 +393,7 @@ async function discoveredSkillNames(rt: AgentRuntime): Promise<string[]> {
 
 /** The owner's approval surface, the other reader a skills-root write would reach. */
 async function gatheredSkillPaths(rt: AgentRuntime): Promise<string[]> {
-  const vfs = rt.agentStateVfs ?? rt.storage.vfs;
+  const vfs = rt.agentStateVfs;
 
   const sources = await gatherApprovableInstructions({
     skillsVfs: vfs,
@@ -2004,7 +2004,7 @@ describe('promotion never half-lands — the read-back is what allows the unlink
     path: string,
     mode: 'throw' | 'tear',
   ): () => void {
-    const vfs = rt.agentStateVfs ?? rt.storage.vfs;
+    const vfs = rt.agentStateVfs;
     const real = vfs.writeFile.bind(vfs);
     vfs.writeFile = async (written: string, data: Uint8Array) => {
       if (written !== path) return real(written, data);

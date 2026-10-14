@@ -3,7 +3,7 @@
 import { useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { PencilSimpleIcon, PlusIcon, XIcon } from "@phosphor-icons/react";
-import type { PanelAgent } from "@kinu.run/core";
+import { WORKSPACE_TITLE_MAX, type PanelAgent } from "@kinu.run/core";
 import { useRename } from "@/hooks/use-rename";
 import { composing } from "@/components/ui/form";
 import { TabOutline, useTabOutline } from "@/components/ui/TabOutline";
@@ -116,20 +116,12 @@ function BarTab({ item, active, afterActive }: { item: BarItem; active: boolean;
 }
 
 function RenameField({ value, hint, subject, save, done }: { value: string; hint: string; subject: string; save: Rename; done: () => void }) {
-  const { draft, setDraft, saving, error, commit: commitName } = useRename(value, save, done);
-
-  const commit = (): void => {
-    const name = draft.trim();
-
-    if (saving) return;
-
-    if (name === "" || name === value) done();
-    else commitName(name);
-  };
+  const { draft, setDraft, error, commit: commitName } = useRename(value, save, done);
+  const commit = (): void => { commitName(draft); };
 
   return (
     <span className="p-bar-rename">
-      <input autoFocus value={draft} maxLength={60} aria-label={subject} placeholder={hint} size={Math.max(draft.length, hint.length, 6)}
+      <input autoFocus value={draft} maxLength={WORKSPACE_TITLE_MAX} aria-label={subject} placeholder={hint} size={Math.max(draft.length, hint.length, 6)}
         onFocus={(event) => event.currentTarget.select()}
         onChange={(event) => setDraft(event.target.value)}
         onBlur={commit}

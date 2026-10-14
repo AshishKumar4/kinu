@@ -6,17 +6,16 @@ import { Hono } from 'hono';
 import { Result } from 'effect';
 import * as v from 'valibot';
 import {
-  err, json, safeJson,
+  err, ERROR_STATUS, json, safeJson,
   formatBlueprintId, parseBlueprintId, PublishedBlueprintSchema, labelSigner,
   type BlueprintView, type SharedLibrary, type SharedRow, type OwnedSlate, type BlueprintFork, type UserCaller,
   LiveShareCreatedSchema,
 } from '@kinu.run/core';
 import { slateShareUrl, viewerEntryUrl } from '../slate-share-route';
 import type { AuthIdentity } from '../auth/session';
-import { deriveUserId } from '../auth/store';
+import { accountIdFor } from '../auth/store';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import { workspaceOwner } from '../workspace-owner-rpc';
-import type { ErrorCode } from '@kinu.run/core/obs';
 import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 import { ownerGate, rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
 
@@ -89,6 +88,15 @@ sharedRoutes.use('/api/shared/*', ownerGate());
 
 sharedRoutes.get('/api/shared', async (c) => json({ body: await library(c.env, c.get('identity'), c.get('owner')) }));
 
+/** Shared was opened: what it holds now is seen, on every device. */
+sharedRoutes.post('/api/shared/seen', async (c) => {
+  const identity = c.get('identity');
+
+  await c.env.UserDO.get(c.env.UserDO.idFromName(identity.userId)).sharesSeen(c.get('owner'), Date.now());
+
+  return json({ body: { seen: true } });
+});
+
 sharedRoutes.post('/api/shared/publish', async (c) => publish(c.req.raw, c.env, c.get('identity')));
 
 sharedRoutes.post('/api/shared/fork', async (c) => fork(c.req.raw, c.env, c.get('identity')));
@@ -133,11 +141,16 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
   }
 
   const received: SharedRow[] = [];
+  const seenAt = await userDO.sharesSeenAt(owner);
 
   // The cards their owners sent: listed without waking a single owner's workspace. A share revoked since is gone
-  // once its removal lands; one opened before then refuses at its owner's object.
-  for (const { workspace, shareId, card } of await userDO.sharesReceived_list(owner)) {
-    const row = { share: shareId, title: card.title, description: card.description, createdAt: card.createdAt, workspace, owner: card.owner };
+  // once its removal lands; one opened before then refuses at its owner's object. One that reached this account
+  // since Shared was last opened is unseen.
+  for (const { workspace, shareId, card, receivedAt } of await userDO.sharesReceived_list(owner)) {
+    const row = {
+      share: shareId, title: card.title, description: card.description, createdAt: card.createdAt, workspace, owner: card.owner,
+      ...((seenAt === null || receivedAt > seenAt) && { unseen: true as const }),
+    };
 
     if (card.kind === 'live') {
       received.push({
@@ -160,14 +173,6 @@ function listed(...writes: ReadonlyArray<{ readonly listing?: 'pending' }>): { l
   return writes.some((write) => write.listing === 'pending') ? { listing: 'pending' } : {};
 }
 
-function slateRefusalStatus(reason: ErrorCode): number {
-  if (reason === 'bad_input') return 400;
-
-  if (reason === 'missing') return 404;
-
-  return 409;
-}
-
 async function publish(request: Request, env: Env, identity: AuthIdentity): Promise<Response> {
   const body = await safeJson(request, PublishBody);
 
@@ -178,7 +183,7 @@ async function publish(request: Request, env: Env, identity: AuthIdentity): Prom
   const owned = workspaceOwner(env, body.workspace);
   const published = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'publish', id: body.slate, version: body.version, include: body.include });
 
-  if (!published.ok) return err(slateRefusalStatus(published.reason), published.error);
+  if (!published.ok) return err(ERROR_STATUS[published.reason], published.error);
 
   const { share } = v.parse(PublishedBlueprintSchema, published.value);
 
@@ -190,7 +195,7 @@ async function publish(request: Request, env: Env, identity: AuthIdentity): Prom
   let users: readonly string[] = share.users;
 
   if (emails.length > 0) {
-    const named = await Promise.all(emails.map(async (email) => ({ userId: await deriveUserId(email), email })));
+    const named = await Promise.all(emails.map(async (email) => ({ userId: await accountIdFor(env, email), email })));
     const recorded = await owned.shareBlueprintWith(share.id, named);
 
     if (!recorded.ok) return err(409, recorded.error);
@@ -219,7 +224,7 @@ async function fork(request: Request, env: Env, identity: AuthIdentity): Promise
   if (!bundle.ok) return err(404, NOT_FOUND);
   const admitted = await workspaceOwner(env, body.workspace).admitBlueprint(bundle.value);
 
-  if (!admitted.ok) return err(admitted.reason === 'bad_input' ? 400 : 409, admitted.error);
+  if (!admitted.ok) return err(ERROR_STATUS[admitted.reason], admitted.error);
   const result: BlueprintFork = admitted.value;
 
   return json({ body: result }, { status: 201 });
@@ -259,7 +264,7 @@ async function shareLive(request: Request, env: Env, identity: AuthIdentity): Pr
     op: 'share', id: body.slate, visibility: body.visibility, approved: body.approved ?? [], fork: body.fork,
   });
 
-  if (!created.ok) return err(slateRefusalStatus(created.reason), created.error);
+  if (!created.ok) return err(ERROR_STATUS[created.reason], created.error);
 
   const { share, url } = v.parse(LiveShareCreatedSchema, created.value);
   const emails = [...new Set((body.emails ?? []).map((email) => email.toLowerCase()).filter((email) => email !== identity.email.toLowerCase()))];
@@ -268,7 +273,7 @@ async function shareLive(request: Request, env: Env, identity: AuthIdentity): Pr
   let answered = share;
 
   if (share.visibility === 'users' && emails.length > 0) {
-    const named = await Promise.all(emails.map(async (email) => ({ userId: await deriveUserId(email), email })));
+    const named = await Promise.all(emails.map(async (email) => ({ userId: await accountIdFor(env, email), email })));
     const recorded = await owned.shareLiveWith(share.id, named);
 
     if (!recorded.ok) return err(409, recorded.error);
@@ -289,7 +294,7 @@ async function revoke(request: Request, env: Env, identity: AuthIdentity): Promi
   if (Result.isFailure(claim)) return err(claim.failure.status, claim.failure.error);
   const revoked = await workspaceOwner(env, body.workspace).slateAs(ROOT_SLATE_CALLER, { op: 'unshare', share: body.share });
 
-  if (!revoked.ok) return err(revoked.reason === 'missing' ? 404 : 409, revoked.error);
+  if (!revoked.ok) return err(ERROR_STATUS[revoked.reason], revoked.error);
 
   return json({ body: { ...v.parse(v.record(v.string(), v.unknown()), revoked.value), ...listed(revoked) } });
 }

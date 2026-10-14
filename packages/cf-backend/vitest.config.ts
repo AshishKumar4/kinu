@@ -332,6 +332,8 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           r2Buckets: ['SLATE_PICTURES'],
           bindings: {
             PREVIEW_HOST_SUFFIX: 'preview.test',
+            // Where a preview sends a visitor it does not know, to sign in.
+            CLI_PUBLIC_ORIGIN: 'https://app.test',
             DEV_USER_EMAIL: 'probe@local',
             CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=',
           },

@@ -12,7 +12,8 @@ import {
   INITIAL_SCAFFOLD_SOURCE,
 } from '@kinu.run/core';
 import { createCLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
-import { LocalAgentSession, type SessionEvent } from '../src/local-session';
+import type { SessionEvent } from '@kinu.run/core';
+import { LocalAgentSession } from '../src/local-session';
 import { readTranscriptRows, scratchPath, scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
 import { existsSync, readFileSync } from 'node:fs';
 import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
@@ -89,7 +90,7 @@ async function installScaffold(
   opts: { version: number; status: 'current' | 'pending'; code: string },
 ): Promise<void> {
   // Version files sit beside the live scaffold in the agent's own state, where promotion reads them.
-  await writeText(rt.agentStateVfs ?? rt.storage.vfs, `${rt.identity.scaffold.path}.v${opts.version}`, opts.code);
+  await writeText(rt.agentStateVfs, `${rt.identity.scaffold.path}.v${opts.version}`, opts.code);
 
   if (opts.status === 'current') await rt.identity.scaffold.write(opts.code);
   void rt.storage.sql`

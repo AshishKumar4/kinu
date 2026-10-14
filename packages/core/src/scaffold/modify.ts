@@ -96,7 +96,7 @@ export async function modifyScaffold(
   }
 
   // The archive file is canonical: seed it only when missing.
-  const scaffoldVfs = rt.agentStateVfs ?? rt.storage.vfs;
+  const scaffoldVfs = rt.agentStateVfs;
   const currentPath = `${rt.identity.scaffold.path}.v${currentVersion}`;
 
   if (!(await exists(scaffoldVfs, currentPath))) {

@@ -3,7 +3,7 @@
 
 import { Cause, Effect } from 'effect';
 import {
-  asFetchFunction, createWireModel, deferredModel, JsonObjectSchema, sdkWire,
+  asFetchFunction, createWireModel, deferredModel, sdkWire,
 } from '@kinu.run/core';
 import type { LanguageModel } from 'ai';
 import type { ModelProvider, ModelInfo } from '@kinu.run/core';
@@ -305,11 +305,12 @@ function openCodeModel(spec: OpenCodeModelSpec): Effect.Effect<ReturnType<typeof
 
   if (!route) return Effect.fail(new KinuError('unavailable', `Provider "${providerId}" is not available in your opencode configuration.`));
   const metadata = config.models.find((model) => model.id === modelId);
-  const protocol = sdkWire(metadata?.apiNpm);
-  const openaiChat = protocol === 'chat-completions' && providerId === 'openai';
+  const wire = sdkWire(metadata?.apiNpm);
+  // OpenAI's own route speaks its Chat Completions through OpenAI's client, as any OpenAI chat does.
+  const protocol = wire === 'chat-completions' && providerId === 'openai' ? 'openai-chat' : wire;
 
   const routed = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const response = await fetchImpl(input, { ...init, body: routeBody(init?.body, openaiChat) });
+    const response = await fetchImpl(input, init);
 
     // A refused login drops the cache, so the next request reads auth.json again.
     if (response.status === 401 || response.status === 403) invalidateCache();
@@ -321,16 +322,6 @@ function openCodeModel(spec: OpenCodeModelSpec): Effect.Effect<ReturnType<typeof
     name: OPENCODE_PROVIDER_ID, modelId: modelId.slice(slash + 1), baseURL: route.baseURL, headers: route.headers,
     fetch: routed, protocol, reasoning: metadata?.reasoning === true,
   }));
-}
-
-/** OpenAI's Chat Completions route takes `max_completion_tokens`, which the compatible SDK names `max_tokens`. */
-function routeBody(body: BodyInit | null | undefined, openaiChat: boolean): BodyInit | null | undefined {
-  const text = v.safeParse(v.string(), body);
-
-  if (!openaiChat || !text.success) return body;
-  const { max_tokens: maxTokens, ...rest } = v.parse(JsonObjectSchema, JSON.parse(text.output));
-
-  return JSON.stringify(maxTokens === undefined ? rest : { ...rest, max_completion_tokens: maxTokens });
 }
 
 function discoverModels(spawnFn: OpenCodeSpawn): Effect.Effect<OpenCodeModelInfo[]> {

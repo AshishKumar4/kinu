@@ -27,7 +27,7 @@ export interface BuildStamp {
   signature?: string;
 }
 
-const BuildStampSchema = v.object({
+export const BuildStampSchema = v.object({
   version: v.pipe(v.string(), v.trim(), v.minLength(1)),
   sha: v.pipe(v.string(), v.trim(), v.minLength(1)),
   builtAt: v.pipe(v.string(), v.trim(), v.minLength(1)),

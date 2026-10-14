@@ -10,7 +10,8 @@ import {
   renameDriveEntry, SKILL_FOLDER_FILE, type DriveUploadTarget,
   type MossaicVfs, type SharedLibrary,
 } from "@kinu.run/core";
-import { KinuError, renderThrownChain, type ErrorCode } from "@kinu.run/core/obs";
+import { Effect } from "effect";
+import { detach, KinuError, renderThrownChain, showing, type ErrorCode } from "@kinu.run/core/obs";
 import { fakeMossaic } from "@kinu.run/test-utils/mossaic";
 
 const DrivePage = lazy(() => import("@/pages/DrivePage"));
@@ -53,6 +54,23 @@ async function seededDrive(): Promise<MossaicVfs> {
   await write("/skills/standup.md", SKILL("standup", "Write the morning standup from yesterday's commits"));
 
   return drive;
+}
+
+/** Fifty folders at the root, one holding three of its own: a tree wide enough to count what it reads. */
+async function wideDrive(): Promise<MossaicVfs> {
+  const drive = mossaicVfs(fakeMossaic().tenant("gallery-owner"));
+
+  for (let folder = 1; folder <= 50; folder += 1) await writeText(drive, `/folder-${String(folder).padStart(2, "0")}/notes.md`, "# Notes\n");
+
+  for (const inner of ["a", "b", "c"]) await writeText(drive, `/folder-01/${inner}/notes.md`, "# Notes\n");
+
+  return drive;
+}
+
+function fixtureDrive(seeded: boolean | "wide"): Promise<MossaicVfs> {
+  if (seeded === "wide") return wideDrive();
+
+  return seeded ? seededDrive() : Promise.resolve(mossaicVfs(fakeMossaic().tenant("gallery-owner")));
 }
 
 const STATUS: Readonly<Record<ErrorCode, number>> = {
@@ -174,7 +192,7 @@ const LIBRARY: SharedLibrary = {
     { id: "live-board-1", kind: "live", share: "live-board-1", slate: "issue-triage", title: "Issue triage", description: DESCRIPTION, createdAt: NOW - 864e5, visibility: "users", workspace: "checkout-fixes", users: ["sam@example.com", "lee@example.com"], fork: true },
   ],
   received: [
-    { id: "live-mail-9", kind: "live", share: "live-mail-9", title: "Inbox digest", description: "Summarises unread mail into one morning note.", createdAt: NOW - 2 * 3600e3, visibility: "users", workspace: "sam-mail", owner: "sam@example.com", fork: true },
+    { id: "live-mail-9", kind: "live", share: "live-mail-9", title: "Inbox digest", description: "Summarises unread mail into one morning note.", createdAt: NOW - 2 * 3600e3, visibility: "users", workspace: "sam-mail", owner: "sam@example.com", fork: true, unseen: true },
     { id: "email-triage~z8Xc4vB2nM6qW3eR~a7bn3kd9pq2xw5ha", kind: "blueprint", share: "z8Xc4vB2nM6qW3eR", title: "Deploy status board", description: "Every service, its last deploy and who shipped it.", createdAt: NOW - 864e5, workspace: "sam-mail", owner: "sam@example.com" },
   ],
 };
@@ -183,18 +201,64 @@ const EMPTY_LIBRARY: SharedLibrary = { slates: [], mine: [], received: [] };
 
 const FIXTURES = {
   drive: { seeded: true, library: LIBRARY },
+  slates: { seeded: true, library: LIBRARY },
   shared: { seeded: true, library: LIBRARY },
   app: { seeded: true, library: LIBRARY },
   "drive-empty": { seeded: false, library: EMPTY_LIBRARY },
+  "drive-wide": { seeded: "wide", library: LIBRARY },
   "drive-recipient": { seeded: false, library: { ...EMPTY_LIBRARY, received: LIBRARY.received } },
-} satisfies Record<string, { seeded: boolean; library: SharedLibrary }>;
+} satisfies Record<string, { seeded: boolean | "wide"; library: SharedLibrary }>;
+
+/**
+ * An upload as the page sends it, through XMLHttpRequest for its progress, answered by the page's own fetch as every
+ * other Drive call is: the whole body has gone once it is handed over, then the answer comes. `abort` ends the fetch.
+ */
+class FixtureUpload extends EventTarget {
+  readonly upload = new EventTarget();
+  status = 0;
+  response: Blob | null = null;
+  responseType = "";
+  #method = "GET";
+  #url = "";
+  readonly #stop = new AbortController();
+
+  open(method: string, url: string): void {
+    this.#method = method;
+    this.#url = url;
+  }
+
+  send(body: Blob | null): void {
+    this.upload.dispatchEvent(new ProgressEvent("progress", { loaded: body?.size ?? 0, total: body?.size ?? 0 }));
+    // Answered after `send` returns, as XMLHttpRequest answers; a fetch that fails, stopped or dropped, is told to the
+    // page as XMLHttpRequest tells it: by its event.
+    setTimeout(() => detach(Effect.catchCause(Effect.promise(async () => {
+      const answer = await window.fetch(this.#url, { method: this.#method, body, signal: this.#stop.signal });
+
+      this.status = answer.status;
+      this.response = await answer.blob();
+      this.dispatchEvent(new Event("load"));
+    }), showing((chain) => {
+      this.dispatchEvent(this.#stop.signal.aborted ? new Event("abort") : new ErrorEvent("error", { message: chain }));
+    }))));
+  }
+
+  abort(): void {
+    this.#stop.abort();
+  }
+}
 
 export function installDriveFixture(frame: string): void {
   const fixture = Object.entries(FIXTURES).find(([name]) => name === frame)?.[1];
 
   if (fixture === undefined) return;
   const next = window.fetch.bind(window);
-  const drive = fixture.seeded ? seededDrive() : Promise.resolve(mossaicVfs(fakeMossaic().tenant("gallery-owner")));
+  const drive = fixtureDrive(fixture.seeded);
+  // `&libraryHold=1`: the library read answers only once `__releaseLibrary` is called, as a slow account's does.
+  const held = new URLSearchParams(location.search).get("libraryHold") === "1" ? Promise.withResolvers<void>() : null;
+
+  Object.assign(window, { __releaseLibrary: () => held?.resolve() });
+  // Opening Shared sees what it holds, as the account's stamp does.
+  let seen = false;
 
   window.fetch = Object.assign((input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
@@ -203,11 +267,20 @@ export function installDriveFixture(frame: string): void {
     if (path === "/api/drive" || path.startsWith("/api/drive/")) return drive.then((tenant) => serveDrive(tenant, request));
 
     if (path === "/api/shared" && request.method === "GET") {
-      return Promise.resolve(Response.json(fixture.library));
+      const received = seen ? fixture.library.received.map(({ unseen: _, ...row }) => row) : fixture.library.received;
+
+      return (held?.promise ?? Promise.resolve()).then(() => Response.json({ ...fixture.library, received }));
+    }
+
+    if (path === "/api/shared/seen" && request.method === "POST") {
+      seen = true;
+
+      return Promise.resolve(Response.json({ seen: true }));
     }
 
     return next(input, init);
   }, { preconnect: next.preconnect });
+  Object.defineProperty(window, "XMLHttpRequest", { value: FixtureUpload, configurable: true });
 }
 
 const FALLBACK = <div className="flex h-full items-center justify-center"><Loader size="base" /></div>;
@@ -221,6 +294,7 @@ export function DrivePageFrame() {
           <Routes>
             <Route path={APP_ROUTES.drive} element={<DrivePage tab="mine" />} />
             <Route path={APP_ROUTES.driveFolder} element={<DrivePage tab="mine" />} />
+            <Route path={APP_ROUTES.slates} element={<DrivePage tab="slates" />} />
             <Route path={APP_ROUTES.shared} element={<DrivePage tab="shared" />} />
           </Routes>
         </Suspense>
@@ -229,6 +303,6 @@ export function DrivePageFrame() {
   );
 }
 
-export function DriveRoute({ tab }: { tab: "mine" | "shared" }) {
+export function DriveRoute({ tab }: { tab: "slates" | "mine" | "shared" }) {
   return <Suspense fallback={FALLBACK}><DrivePage tab={tab} /></Suspense>;
 }

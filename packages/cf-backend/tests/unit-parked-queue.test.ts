@@ -7,14 +7,14 @@ import { describe, expect, test } from 'bun:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ParkedCommands, ParkedDecisionFlow, type ParkedDecision, type ParkedDecisionDeps } from '../src/components/surfaces/WorkTab';
-import type { Rpc } from '@kinu.run/core';
+import { workspaceRpc } from '../src/lib/workspace-rpc';
 import type { PendingAction } from '@kinu.run/core';
 
 /** One fixed queue timestamp, so "queued X ago" is stable across renders. */
 const AT = Date.UTC(2026, 8, 3, 12, 0, 0);
 
 /** The flow under test is injected, so the seam stays silent. */
-const SILENT_RPC: Rpc = () => Promise.withResolvers<never>().promise;
+const SILENT_RPC = workspaceRpc(() => Promise.withResolvers<never>().promise);
 
 function parked(id: string, detail = `run \`deploy --${id}\` on device`): PendingAction {
   return { id, kind: 'deferred_action', title: `device · ${id}`, detail, at: AT };

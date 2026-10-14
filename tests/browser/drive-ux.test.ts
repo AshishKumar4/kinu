@@ -52,6 +52,17 @@ async function freshPage(gallery: Gallery, query: string, theme: 'dark' | 'light
   return page;
 }
 
+/** The Drive at My stuff's root, chosen from the column: a first visit lands on Slates when there is a slate. */
+async function myStuff(gallery: Gallery, theme: 'dark' | 'light'): Promise<Page> {
+  const page = await freshPage(gallery, 'drive', theme, 'desktop');
+
+  await page.click('[data-drive-place="mine"]');
+  await page.waitForSelector('[data-drive-place="mine"][aria-current="page"]');
+  await page.waitForSelector('[data-drive-section="Folders"]');
+
+  return page;
+}
+
 async function shoot(page: Page, name: string): Promise<string> {
   const path = join(SHOTS, `${name}.png`);
   await page.screenshot({ path, fullPage: true });
@@ -124,6 +135,14 @@ async function tabTo(page: Page, label: string): Promise<{ disabled: string | nu
   return null;
 }
 
+/** The column's places: which, whether it is the page shown, and whether it holds something new. */
+const places = (page: Page) => page.$$eval('[data-drive-place]', (rows) => rows.map((row) => [
+  row.getAttribute('data-drive-place'), row.getAttribute('aria-current'), row.querySelector('[data-drive-unseen]') !== null,
+]));
+
+/** The folder tree's rows, as the paths they open. */
+const tree = (page: Page) => page.$$eval('[data-drive-tree]', (rows) => rows.map((row) => row.getAttribute('data-drive-tree')));
+
 /** Resolves once a frame has been drawn after everything before it. */
 /** Upload tiles still drawn, as state and name. */
 const transfers = (page: Page) => page.$$eval('[data-drive-transfer]', (tiles) => tiles.map((tile) => `${tile.getAttribute('data-drive-transfer') ?? ''} ${tile.querySelector('[data-drive-tile-name]')?.textContent?.trim() ?? ''}`));
@@ -138,35 +157,52 @@ async function pressNew(page: Page, item: string): Promise<void> {
   await page.click(`[${item}]`);
 }
 
+declare global {
+  interface Window {
+    /** The Drive folders the page listed, in order, counted by the read-count test. */
+    __driveListed?: string[];
+    /** Answers the gallery's held library read (`&libraryHold=1`). */
+    __releaseLibrary?: () => void;
+  }
+}
+
 describe('the Drive', () => {
-  test('My stuff tiles slates, blueprints, folders and files, and a folder link, an upload and New folder work', async () => {
+  test('Slates tiles every slate by its workspace; My stuff tiles folders and files, and a folder link, an upload and New folder work', async () => {
     await withGallery(async (gallery) => {
       const page = await freshPage(gallery, 'drive', 'dark', 'desktop');
 
       try {
-        // The owner's own things, in one grid, in this order; Skills leads the folders.
-        expect(await sections(page)).toEqual([
-          { title: 'Slates', tiles: ['Issue triage', 'Landing perf report', 'Standup notes'] },
-          { title: 'Blueprints', tiles: ['Issue triage'] },
-          { title: 'Folders', tiles: ['Skills', 'data', 'notes', 'projects'] },
-          { title: 'Files', tiles: ['README.md'] },
-        ]);
+        // A first visit lands on Slates: every slate across the workspaces, each labelled with its workspace.
+        await page.waitForSelector('[data-drive-place="slates"][aria-current="page"]');
+        expect(await sections(page)).toEqual([{ title: 'Slates', tiles: ['Issue triage', 'Landing perf report', 'Standup notes'] }]);
         // A slate opens in its workspace, on its own tab.
         expect(await page.$eval('[data-drive-slate="issue-triage"] a', (a) => a.getAttribute('href')))
           .toBe('/workspace/checkout-fixes?slate=issue-triage');
-        expect(await page.$$eval('[data-drive-tab]', (tabs) => tabs.map((tab) => [tab.getAttribute('data-drive-tab'), tab.getAttribute('aria-current')])))
-          .toEqual([['mine', 'page'], ['shared', null]]);
+        // The column places Slates, My stuff, then Shared with something new in it.
+        expect(await places(page)).toEqual([['slates', 'page', false], ['mine', null, false], ['shared', null, true]]);
+        await shoot(page, 'drive-slates-dark');
+
+        // My stuff holds files and folders; Skills leads the folders, and the tree lists them.
+        await page.click('[data-drive-place="mine"]');
+        await page.waitForSelector('[data-drive-section="Folders"]');
+        expect(await sections(page)).toEqual([
+          { title: 'Folders', tiles: ['Skills', 'data', 'notes', 'projects'] },
+          { title: 'Files', tiles: ['README.md'] },
+        ]);
+        expect(await tree(page)).toEqual(['/skills', '/data', '/notes', '/projects']);
         await shoot(page, 'drive-mine-dark');
 
         // A folder is a link: the breadcrumb follows it.
         await page.click('[data-drive-entry="projects"] a');
         await waitForEntry(page, 'ops');
         expect(await crumbs(page)).toEqual(['/drive', '/drive/projects']);
-        // Below the root the owner's slates and blueprints are not repeated.
         expect((await sections(page)).map((section) => section.title)).toEqual(['Folders']);
         await page.click('[data-drive-entry="ops"] a');
         await waitForEntry(page, 'deploy');
         expect(await crumbs(page)).toEqual(['/drive', '/drive/projects', '/drive/projects/ops']);
+        // The tree opens along the way to the folder shown, and marks it.
+        await page.waitForSelector('[data-drive-tree="/projects/ops"][aria-current="page"]');
+        expect(await tree(page)).toEqual(['/skills', '/data', '/notes', '/projects', '/projects/ops', '/projects/ops/deploy']);
 
         // Upload through the picker: the tile appears without a reload.
         const input = await page.$('input[data-drive-files-input]');
@@ -244,6 +280,65 @@ describe('the Drive', () => {
     });
   });
 
+  test('the folder tree reads only the folders on the way to the one shown, once, and nothing on a phone', async () => {
+    await withGallery(async (gallery) => {
+      // Fifty folders at the root: a tree that read each shown folder made fifty reads more.
+      const readsAt = async (viewport: keyof typeof VIEWPORTS, shown: string): Promise<string[]> => {
+        const page = await gallery.newPage();
+
+        try {
+          // The fixture answers the Drive through the page's own fetch, set after the page starts: each one set is
+          // counted as it is.
+          await page.evaluateOnNewDocument(() => {
+            window.__driveListed = [];
+
+            const wrap = (inner: typeof fetch): typeof fetch => Object.assign((input: RequestInfo | URL, init?: RequestInit) => {
+              const url = new URL(input instanceof Request ? input.url : String(input), location.href);
+
+              if (url.pathname === '/api/drive' && (init?.method ?? 'GET') === 'GET') window.__driveListed?.push(url.searchParams.get('path') ?? '');
+
+              return inner(input, init);
+            }, { preconnect: inner.preconnect });
+
+            let current = wrap(window.fetch);
+
+            Object.defineProperty(window, 'fetch', { configurable: true, get: () => current, set: (next: typeof fetch) => { current = wrap(next); } });
+          });
+          await page.setViewport(VIEWPORTS[viewport]);
+          await page.goto(`${gallery.origin}/gallery.html?frame=drive-wide&path=/folder-01/a`, { waitUntil: 'networkidle0' });
+          await page.waitForSelector(shown);
+
+          return [...new Set(await page.evaluate(() => window.__driveListed ?? []))].sort();
+        } finally {
+          await page.close();
+        }
+      };
+
+      expect(await readsAt('desktop', '[data-drive-tree="/folder-01/a"][aria-current="page"]')).toEqual(['/', '/folder-01', '/folder-01/a']);
+      expect(await readsAt('mobile', '[data-drive-tab="mine"][aria-current="page"]')).toEqual(['/folder-01/a']);
+    });
+  });
+
+  test('a first visit offers nothing to press until it knows where it lands, then lands on Slates', async () => {
+    await withGallery(async (gallery) => {
+      const page = await gallery.newPage();
+
+      try {
+        await page.setViewport(VIEWPORTS.desktop);
+        await page.goto(`${gallery.origin}/gallery.html?frame=drive&libraryHold=1`, { waitUntil: 'networkidle0' });
+        // The listing has answered; the library has not. Neither the files place nor its New is drawn yet.
+        await page.waitForFunction(() => document.querySelector('[data-drive-landing]') !== null || document.querySelector('[data-drive-new]') !== null);
+        expect(await page.$('[data-drive-new]')).toBeNull();
+
+        await page.evaluate(() => { window.__releaseLibrary?.(); });
+        await page.waitForSelector('[data-drive-place="slates"][aria-current="page"]');
+        expect(await page.$('[data-drive-landing]')).toBeNull();
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
   test("an upload's bar stands out on its tile, on both themes", async () => {
     await withGallery(async (gallery) => {
       for (const theme of ['dark', 'light'] as const) {
@@ -262,12 +357,13 @@ describe('the Drive', () => {
           await input.uploadFile(join(import.meta.dir, 'drive-ux.test.ts'));
           await page.waitForSelector('[data-drive-transfer="uploading"]');
 
-          const [sweep, ground] = await page.$eval('[data-drive-transfer="uploading"] [role="progressbar"]', (bar) => [
-            getComputedStyle(bar, '::after').backgroundColor,
+          // The share sent fills the bar; the fill is read against the tile's picture it sits on.
+          const [fill, ground] = await page.$eval('[data-drive-transfer="uploading"] [role="progressbar"]', (bar) => [
+            getComputedStyle(bar.firstElementChild ?? bar).backgroundColor,
             getComputedStyle(bar.parentElement ?? bar).backgroundColor,
           ]);
 
-          expect(contrast(rgba(sweep), rgba(ground))).toBeGreaterThanOrEqual(TEST_REQUIREMENTS.wcagNonTextContrast.values.minimum);
+          expect(contrast(rgba(fill), rgba(ground))).toBeGreaterThanOrEqual(TEST_REQUIREMENTS.wcagNonTextContrast.values.minimum);
         } finally {
           await page.close();
         }
@@ -277,7 +373,7 @@ describe('the Drive', () => {
 
   test('an upload is a tile in its folder until it lands; Cancel stops it, and a refusal stays with its reason', async () => {
     await withGallery(async (gallery) => {
-      const page = await freshPage(gallery, 'drive', 'dark', 'desktop');
+      const page = await myStuff(gallery, 'dark');
 
       try {
         // An empty folder to upload into.
@@ -390,7 +486,7 @@ describe('the Drive', () => {
 
   test("an IME's own Escape in a dialog's field leaves the dialog open; a plain Escape closes it", async () => {
     await withGallery(async (gallery) => {
-      const page = await freshPage(gallery, 'drive', 'dark', 'desktop');
+      const page = await myStuff(gallery, 'dark');
 
       try {
         await pressNew(page, 'data-drive-new-folder');
@@ -563,7 +659,7 @@ describe('the Drive', () => {
 
   test('a file opens in the viewer, and the Shared tab holds both directions', async () => {
     await withGallery(async (gallery) => {
-      const page = await freshPage(gallery, 'drive', 'dark', 'desktop');
+      const page = await myStuff(gallery, 'dark');
 
       try {
         await page.click('[data-drive-entry="README.md"] button');
@@ -584,6 +680,13 @@ describe('the Drive', () => {
           { title: 'Shared with you', tiles: ['Inbox digest', 'Deploy status board'] },
           { title: 'Shared by you', tiles: ['Issue triage', 'Issue triage'] },
         ]);
+        // Opening Shared sees what it holds: back on My stuff, Shared has nothing new.
+        await shared.click('[data-drive-place="mine"]');
+        await shared.waitForSelector('[data-drive-place="mine"][aria-current="page"]');
+        await shared.waitForFunction(() => document.querySelector('[data-drive-place="shared"] [data-drive-unseen]') === null);
+        await shared.click('[data-drive-place="shared"]');
+        await shared.waitForSelector('[data-drive-section="Shared by you"]');
+
         // Newest first, though the owner's rows arrive oldest first.
         expect(await shared.$$eval('[data-drive-section="Shared by you"] [data-drive-share-kind]',
           (tiles) => tiles.map((tile) => tile.getAttribute('data-drive-share-kind')))).toEqual(['live', 'blueprint']);

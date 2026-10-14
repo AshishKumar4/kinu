@@ -517,20 +517,36 @@ export const JOB_COMMAND = 'printf "Release to production? (y/N) "; read answer;
 
 export const JOB_STARTED = 'JOB STARTED';
 
+/** A background job's wake (core jobs/store.ts): its id, and what its program answered. */
+const JOB_WAKE = /^Background \w+ job (bgjob-[\w-]+) (?:completed|failed|cancelled)/u;
+
+/** The job is started once a program's value carries its id; anything else is said in its own words. */
+function jobOutcome(result: string): ScriptedAnswer {
+  return { text: result.includes('processId') ? JOB_STARTED : `The job did not start: ${result.slice(0, 300)}` };
+}
+
 /**
  * The agent-job row (D95): the job its turn starts on the computer, called as the computer's members take their required
  * fields (positionally), then the reply once it has. A refusal is said in its own words, so the row fails at the reply
- * with the cause rather than at a tab that never comes (staging f9c17ac7b).
+ * with the cause rather than at a tab that never comes (staging f9c17ac7b). A fresh workspace's computer can take longer
+ * to wake than a program's call is waited for: the call is then backgrounded, and its wake says how it ended (staging
+ * b11719d71).
  */
 function jobAnswer(request: ScriptedRequest): ScriptedAnswer | undefined {
-  if (!(request.userTexts.at(-1) ?? '').includes(JOB_ASK)) return undefined;
+  const latest = request.userTexts.at(-1) ?? '';
+
+  if (JOB_WAKE.test(latest) && request.userTexts.some((text) => text.includes(JOB_ASK))) return jobOutcome(latest);
+
+  if (!latest.includes(JOB_ASK)) return undefined;
   const ran = request.turn.at(-1);
 
   if (ran === undefined) {
     return { toolCall: { name: 'eval', arguments: { code: `return await computer.startProcess(${JSON.stringify(JOB_COMMAND)});` } } };
   }
 
-  return { text: ran.result.includes('processId') ? JOB_STARTED : `The job did not start: ${ran.result.slice(0, 300)}` };
+  const backgrounded = /"background":true/u.test(ran.result) ? /bgjob-[\w-]+/u.exec(ran.result)?.[0] : undefined;
+
+  return backgrounded === undefined ? jobOutcome(ran.result) : { text: `The job is starting in the background as ${backgrounded}.` };
 }
 
 /** The write-file row: the file written, then a shell writing beside it where the turn has one. */
