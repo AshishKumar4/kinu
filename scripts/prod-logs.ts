@@ -73,26 +73,29 @@
  *   bun scripts/prod-logs.ts kills [--since 24h] [--until ISO] [--json]
  * `--since` takes 30m / 6h / 7d or an ISO instant; `--worker` works everywhere.
  */
-import { readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import * as v from 'valibot';
 import { ALERT_THRESHOLDS, findWakeLoops, type StartupHour, type WakeLoop } from '@kinu.run/core/analytics';
-import { KinuError, classifyErrorCode } from '@kinu.run/core/obs';
-import { codeForStatus } from '../packages/core/src/providers/util';
+import { classifyErrorCode } from '@kinu.run/core/obs';
 import { PLATFORM_CATALOG } from '../packages/core/src/platform-catalog';
 import { recordStep } from './deploy-report';
-import { parseJsonc } from './jsonc';
+import { restAnswer } from './cloudflare-rest';
+import { requireCloudflareAccountId } from './infra-cloudflare';
+import { deployedConfig } from './infra-manifest';
 
 /** The account this queries and the default worker, read off the manifest this
  *  inspects rather than restated beside it: a second spelling of the id is how
  *  a query runs against one account while the deploy targets another. */
-const WRANGLER_CONFIG = new URL('../packages/cf-backend/wrangler.jsonc', import.meta.url).pathname;
+const ACCOUNT = requireCloudflareAccountId();
 
-const WranglerRef = v.object({ account_id: v.string(), name: v.string() });
+/** The Worker a query names when `--worker` does not: production's, as wrangler.jsonc declares it. */
+function productionWorker(): string {
+  const { name } = deployedConfig('production');
 
-const WRANGLER = parseJsonc(readFileSync(WRANGLER_CONFIG, 'utf8'), WranglerRef, 'wrangler.jsonc');
+  if (name === undefined) throw new Error('wrangler.jsonc names no production Worker');
 
-const ACCOUNT = WRANGLER.account_id;
+  return name;
+}
 
 const HOUR_MS = 3_600_000;
 
@@ -159,7 +162,7 @@ function parseArgs(argv: readonly string[]): Args {
   return {
     mode,
     target,
-    worker: opt('worker') ?? WRANGLER.name,
+    worker: opt('worker') ?? productionWorker(),
     seconds: Number(opt('seconds') ?? '120'),
     from,
     to,
@@ -367,30 +370,21 @@ export class Telemetry {
     private readonly args: Pick<Args, 'worker' | 'from' | 'to'>,
   ) {}
 
-  /** The answer's JSON text; `result` parses it. */
+  /** The answer's JSON text; `result` parses it. A refusal is classified by its status (`restAnswer`). */
   async raw(body: QueryBody): Promise<string> {
-    const response = await fetch(
-      `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT}/workers/observability/telemetry/query`,
-      {
-        method: 'POST',
-        headers: { authorization: `Bearer ${this.token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({
-          // REQUIRED: the endpoint rejects a body without it as `ZodError … path:
-          // ["queryId"]` under HTTP 400 (measured 2026-08-21). It names the saved
-          // query the run is filed under, so it is a constant rather than a flag.
-          queryId: 'kinu-prod-logs',
-          timeframe: { from: this.args.from, to: this.args.to },
-          ...body,
-        }),
+    return await restAnswer({
+      method: 'POST',
+      path: `/accounts/${ACCOUNT}/workers/observability/telemetry/query`,
+      token: this.token,
+      body: {
+        // REQUIRED: the endpoint rejects a body without it as `ZodError … path:
+        // ["queryId"]` under HTTP 400 (measured 2026-08-21). It names the saved
+        // query the run is filed under, so it is a constant rather than a flag.
+        queryId: 'kinu-prod-logs',
+        timeframe: { from: this.args.from, to: this.args.to },
+        ...body,
       },
-    );
-
-    const answer = await response.text();
-
-    // Classified as any HTTP answer is: a 5xx or a 429 is `unavailable`, the API refusing for its own reasons.
-    if (!response.ok) throw new KinuError(codeForStatus(response.status) ?? 'io', `telemetry query answered ${response.status}: ${answer.slice(0, 300)}`);
-
-    return answer;
+    });
   }
 
   private filters(filters: readonly Filter[]): Filter[] {

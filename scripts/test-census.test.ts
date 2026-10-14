@@ -1566,24 +1566,12 @@ describe('this repository', () => {
 });
 
 describe('the runner table is resolved, never listed', () => {
-  test('scripts/test.sh default set is claimed and matches its four directories', () => {
-    const claim = runnerClaims(tracked).find((row) => row.name === 'bash scripts/test.sh');
-    expect(claim).toBeDefined();
-    const roots = new Set((claim?.files ?? []).map((file) => file.split('/').slice(0, 3).join('/')));
-    expect([...roots].sort()).toEqual([
-      'packages/cf-backend/tests', 'packages/cli-backend/tests', 'packages/cli/tests',
-      'packages/core/tests',
-    ]);
-  });
-
-  test('the packages the default set omits are claimed by another runner', () => {
-    // docs/TESTING.md's own admission: the default run excludes agent-utils,
-    // compaction, pc-agent, devbox and the scripts gates. Each must be claimed
-    // somewhere, or it is never run — which is the whole point of the table.
+  test('every package\'s runnable suites are claimed by a runner', () => {
+    // A suite no runner claims is never run, which is the whole point of the table.
     const claims = runnerClaims(tracked);
 
-    const omitted = ['packages/agent-utils/', 'packages/compaction/', 'packages/pc-agent/',
-      'packages/devbox/', 'packages/test-utils/', 'scripts/', 'tests/'];
+    const omitted = ['packages/core/', 'packages/cf-backend/', 'packages/cli-backend/', 'packages/cli/', 'packages/agent-utils/',
+      'packages/compaction/', 'packages/pc-agent/', 'packages/devbox/', 'packages/test-utils/', 'scripts/', 'tests/'];
 
     const unclaimed: string[] = [];
 

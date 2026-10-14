@@ -14,7 +14,7 @@ function appPlatform(listed: string[][], sweeps: ('refuse' | 'ok')[]) {
 
       return now;
     },
-    remove: (name) => {
+    remove: async (name) => {
       asked.push(`remove ${name}`);
 
       return undefined;

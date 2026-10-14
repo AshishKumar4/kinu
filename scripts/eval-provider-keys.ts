@@ -19,10 +19,10 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import * as v from 'valibot';
-import { DEFAULT_WORKERS_AI_MODEL_SPEC, DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, ProfileCatalogEnvelopeSchema, type EvalAccount } from '@kinu.run/core';
+import { DEFAULT_WORKERS_AI_MODEL_SPEC, DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, type EvalAccount } from '@kinu.run/core';
 import { evalWebIdentityEnv } from '@kinu.run/test-utils';
 import { DEFAULT_MODELS, DEFAULT_TRIALS, evalMatrix, PASS_FIRST_SLOT } from '../evals/src/config';
-import { WORKSPACE_LEASE_MS } from '../evals/src/workspace-roster';
+import { listWorkspaces, settleCatalog, webHeaders, WORKSPACE_LEASE_MS, type CatalogNeed, type PublicWebIdentity } from '../evals/src/workspace-roster';
 import { trialAccounts, trialInheritedRows } from '../evals/src/slot';
 import { ARMS } from '../evals/src/target';
 import { recordStep } from './deploy-report';
@@ -100,8 +100,6 @@ export interface Provisioned {
   readonly notes?: readonly string[];
 }
 
-const WorkspacesSchema = v.looseObject({ entries: v.array(v.object({ name: v.string(), lastVisited: v.number() })) });
-
 const EmailSchema = v.looseObject({ email: v.string() });
 
 /** What one trial account came to: given a key, reset first, or why not. */
@@ -113,9 +111,10 @@ type TrialOutcome = { readonly given: boolean; readonly reset: boolean; readonly
  * deep-tier route with an independent provider fallback, through the same catalog settings API a user saves.
  */
 async function readyTrialAccount(input: Provisioning & { identity: string }, account: EvalAccount, keys: Readonly<Record<string, string>>): Promise<TrialOutcome> {
-  const headers = { [DEV_IDENTITY_HEADER]: input.identity, [DEV_IDENTITY_ACCOUNT_HEADER]: account };
+  const identity: PublicWebIdentity = { kind: 'secret', secret: input.identity, account };
+  const headers = webHeaders(identity);
   const read = async (path: string) => fetch(`${input.origin}${path}`, { headers, signal: AbortSignal.timeout(CALL_MS) });
-  const held = await trialInheritedRows({ origin: input.origin, identity: { kind: 'secret', secret: input.identity, account } });
+  const held = await trialInheritedRows({ origin: input.origin, identity });
 
   if ('why' in held) return { given: false, reset: false, finding: `${account}: ${held.why}` };
   const inherited = Object.entries(held.inherited);
@@ -123,8 +122,8 @@ async function readyTrialAccount(input: Provisioning & { identity: string }, acc
 
   if (inherited.length > 0) {
     const rows = inherited.map(([table, count]) => `${table} ${String(count)}`).join(', ');
-    const { entries } = v.parse(WorkspacesSchema, await (await read('/api/user/workspaces')).json());
-    const live = entries.find((workspace) => Date.now() - workspace.lastVisited < WORKSPACE_LEASE_MS);
+    // Every page: a run on a workspace past the first would otherwise be reset under it.
+    const live = (await listWorkspaces(input.origin, identity)).find((workspace) => Date.now() - workspace.lastVisited < WORKSPACE_LEASE_MS);
 
     if (live !== undefined) {
       return { given: false, reset: false, note: `${account} at ${input.origin} holds rows a trial would inherit (${rows}), and a run is on it (${live.name}): not reset` };
@@ -160,23 +159,16 @@ async function readyTrialAccount(input: Provisioning & { identity: string }, acc
 
   // A bare account inherits a single Workers AI model for its swarm judge. Its refusal ended every research swarm
   // in run 37880718948. Keys alone do not configure that route: keep the user's retry count, and cross providers.
-  const catalogResponse = await read('/api/user/profile-catalog');
-
-  if (!catalogResponse.ok) return { given, reset, finding: `reading ${account}'s profile catalog answered ${String(catalogResponse.status)}` };
-  const { version, catalog } = v.parse(ProfileCatalogEnvelopeSchema, await catalogResponse.json());
   const model = DEFAULT_WORKERS_AI_MODEL_SPEC;
 
-  if (catalog.tiers.deep?.model !== model || JSON.stringify(catalog.modelFallbacks?.[model]) !== JSON.stringify(DEFAULT_MODELS)) {
-    const answer = await fetch(`${input.origin}/api/user/profile-catalog`, {
-      method: 'PUT', headers: { ...headers, 'content-type': 'application/json' },
-      body: JSON.stringify({ expectedVersion: version, catalog: {
-        ...catalog, tiers: { ...catalog.tiers, deep: { ...catalog.tiers.deep, model } },
-        modelFallbacks: { ...catalog.modelFallbacks, [model]: DEFAULT_MODELS },
-      } }), signal: AbortSignal.timeout(CALL_MS),
-    });
+  const deepRoute: CatalogNeed = (catalog) => catalog.tiers.deep?.model === model && JSON.stringify(catalog.modelFallbacks?.[model]) === JSON.stringify(DEFAULT_MODELS)
+    ? null
+    : { ...catalog, tiers: { ...catalog.tiers, deep: { ...catalog.tiers.deep, model } }, modelFallbacks: { ...catalog.modelFallbacks, [model]: DEFAULT_MODELS } };
 
-    if (!answer.ok) return { given, reset, finding: `configuring ${account}'s deep tier and provider fallback answered ${String(answer.status)}` };
-    v.parse(ProfileCatalogEnvelopeSchema, await answer.json());
+  try {
+    await settleCatalog(input.origin, headers, [deepRoute]);
+  } catch (error) {
+    return { given, reset, finding: `configuring ${account}'s deep tier and provider fallback failed: ${error instanceof Error ? error.message : String(error)}` };
   }
 
   return { given, reset };

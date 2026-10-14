@@ -11,8 +11,9 @@ import {
 } from './flows-script';
 import {
   CHAT_IDLE, CHATS, createFlowWorkspace, frameLedger, openInspector, openInspectorPage, openWorkspacePage, PAGE_TABS, removeFlowWorkspace, sendAndSettle,
-  settled, settledAfter, signedInPage, startNewChat, until, waitOn, openSlateShareDialog, submitPublicSlateShare, type FlowTarget,
+  settled, settledAfter, startNewChat, until, waitOn, openSlateShareDialog, submitPublicSlateShare, type FlowTarget,
 } from './product-flows';
+import { signedInPage } from '../evals/src/browser';
 import { webHeaders } from '../evals/src/workspace-roster';
 
 const ChatTextSchema = v.string();

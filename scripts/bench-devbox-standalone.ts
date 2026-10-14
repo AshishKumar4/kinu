@@ -30,10 +30,8 @@ import {
   BENCH_ACCOUNT_ID, cleanupObservationProbes, orphanTeardownExecutor, r2CleanupKeyRefusal, r2ResiduePlane,
   recordApplicationIds, sourceRevision,
 } from './bench-devbox-fixture';
-import {
-  WRANGLER_FAILED, containerAppIds, delay, describeThrown, publishTeardown,
-  runTeardownOnce, runWrangler,
-} from './fixtures/r2-bench/deploy-substrate';
+import { WRANGLER_FAILED, delay, describeThrown, publishTeardown, runTeardownOnce, runWrangler } from './ephemeral-deployment';
+import { containerApplicationsNamed } from './infra-cloudflare';
 import { R2_OPERATION_NAMES as R2_OP_VOCABULARY } from '../packages/devbox/bench/r2-operations';
 import {
   checkCleanup, createManifest, recoverAbandonedRuns, replayTeardown, writeManifest, type CleanupReport,
@@ -262,7 +260,7 @@ async function main(): Promise<number> {
     try {
       closing.report = await checkCleanup(REPO, manifest, {
         ...cleanupObservationProbes({ wrangler: (args, options) => runWrangler(REPO, args, options), residue }),
-        containerAppAbsent: async (name) => containerAppIds(REPO, [name], log).length === 0,
+        containerAppAbsent: async (name) => containerApplicationsNamed([name]).length === 0,
         boxStateEmpty: undeclared('box state'),
         alarmAbsent: undeclared('alarm'),
         mountAbsent: undeclared('mount'),

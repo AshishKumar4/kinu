@@ -72,7 +72,7 @@ function account(failing?: keyof ResetTarget) {
 
       return state.serving.versionId;
     },
-    deleteApplication: (application) => {
+    deleteApplication: async (application) => {
       step('deleteApplication');
       state.applications = state.applications.filter((each) => each.id !== application.id);
     },

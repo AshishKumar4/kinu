@@ -16,7 +16,7 @@
 import { clientEntries, runtimeModules } from './client-graph';
 import { assertMeasured } from './gate-ratchet';
 import { moduleEdges } from './module-edges';
-import { parseJsonc } from './jsonc';
+import { deployedConfig } from './infra-manifest';
 import { isClientDocument, isManifest, readMatching, readRepositoryFile, readSources, trackedFiles } from './sources';
 import { collapsePath, parse, walk } from './syntax';
 import * as v from 'valibot';
@@ -26,10 +26,6 @@ const root = new URL('..', import.meta.url).pathname;
 const GATE = 'model-text';
 
 const WIDE = /[\u{100}-\u{fefe}\u{ff00}-\u{fffc}\u{fffe}-\u{10ffff}]/u;
-
-const WRANGLER = 'packages/cf-backend/wrangler.jsonc';
-
-const WranglerSchema = v.object({ main: v.string() });
 
 const BinManifestSchema = v.object({ bin: v.record(v.string(), v.string()) });
 
@@ -103,7 +99,10 @@ export const BLIND_SPOTS: readonly string[] = [
 
 if (import.meta.main) {
   const sources = readSources();
-  const worker = runtimeModules(sources, [`packages/cf-backend/${parseJsonc(readRepositoryFile(root, WRANGLER), WranglerSchema, WRANGLER).main}`]);
+  const { main } = deployedConfig('production');
+
+  if (main === undefined) throw new Error(`${GATE}: wrangler.jsonc names no Worker entry`);
+  const worker = runtimeModules(sources, [`packages/cf-backend/${main}`]);
   const web = new Set([...runtimeModules(sources, await clientEntries(readMatching(isClientDocument)))].filter((file) => !worker.has(file)));
   const terminal = terminalPackages(readMatching(isManifest));
   const tracked = new Set(trackedFiles());
