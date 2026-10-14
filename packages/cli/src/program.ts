@@ -2,6 +2,7 @@
 
 import { Effect } from 'effect';
 import { Command, Option } from 'commander';
+import { ACCESS_TOKEN_SCOPES } from '@kinu.run/core';
 import { settleSync } from '@kinu.run/core/obs';
 import { MODEL_OPTION_FLAG } from './options';
 import { createCommand } from './commands/create';
@@ -34,7 +35,7 @@ import {
 } from './commands/inspect';
 import { debugCommand } from './commands/debug';
 import { exportCommand, importCommand } from './commands/export-import';
-import { ACCESS_TOKEN_SCOPES, tokensCommand } from './commands/tokens';
+import { tokensCommand } from './commands/tokens';
 import { workspaceDeleteCommand } from './commands/workspace';
 import { setCommandExample, VERSION } from './display';
 

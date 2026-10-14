@@ -6,6 +6,7 @@ import { authCacheKey, createAuthedFetch } from './util';
 import { knownReasoningEfforts } from './reasoning-effort';
 import { heardFetch } from './middleware/attempt';
 import { lazyModel } from './wire-model';
+import { OPENAI_DEFAULT_MODEL } from './openai';
 
 export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
@@ -28,6 +29,9 @@ const OpenRouterCatalogSchema = v.object({
   }))),
 });
 
+/** OpenRouter names a model by its author; its default is OpenAI's own (models.dev's OpenRouter list holds it). */
+export const OPENROUTER_DEFAULT_MODEL = `openai/${OPENAI_DEFAULT_MODEL}`;
+
 export function createOpenRouterProvider(opts: OpenRouterOptions = {}): ModelProvider {
   const ttl = 5 * 60_000;
   // Keyed by credential so a key change invalidates the catalog.
@@ -37,6 +41,7 @@ export function createOpenRouterProvider(opts: OpenRouterOptions = {}): ModelPro
     id: 'openrouter',
     credentialKey: OPENROUTER_CRED_KEY,
     label: 'OpenRouter',
+    defaultModel: OPENROUTER_DEFAULT_MODEL,
     async isAvailable(deps) { return deps.hasCredential(OPENROUTER_CRED_KEY); },
     unavailableReason() { return 'No OpenRouter API key (cred key: `openrouter.bearer`).'; },
 
