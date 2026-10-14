@@ -468,7 +468,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
         className="p-workbench relative flex flex-col overflow-hidden rounded-b-2xl border p-border p-bg p-text text-left shadow-[0_40px_110px_-50px_rgba(0,0,0,.95)] md:flex-row"
       >
         {/* Below md the app summons a drawer from its header; the frame has no header, so no rail there. */}
-        <SidebarRail />
+        <SidebarRail folded={false} />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <WorkspaceHeader
           workspace={{ name: LANDING_WORKSPACE, title: frame.title, to: `/workspace/${LANDING_WORKSPACE}`, editValue: frame.title, rename: async () => {}, remove: () => {} }}
