@@ -115,21 +115,27 @@ export interface SettleState {
 
 /**
  * Waits for the object's own settle signals: no turn in flight, no detached task, terminal close, debounced drain or
- * keepAlive hold in this isolate, no durable fiber, no alarm due, and the same schedule rows on two reads in a row. 15 s is the failure bound only.
+ * keepAlive hold in this isolate, no durable fiber, no alarm due, and the same schedule rows on two reads in a row.
+ * No deadline of its own: a settled turn's close may still run a real model (the sleep-time lane's fact compression on
+ * Workers AI answered in 2.3 to 11.7 s in 12 runs on 2026-10-14, and once not within 15 s), and an elapsed bound on
+ * model work fails the object for the provider's latency (AGENTS.md). Each new state is printed, so a run the ladder
+ * ends names what was still running.
  */
 async function awaitSettled(target: { settleState(): Promise<SettleState> }): Promise<void> {
-  const started = Date.now();
   let previous: string | null = null;
+  let shown = '';
 
   for (;;) {
     const state = await target.settleState();
 
     if (state.busy.length === 0 && state.schedules === previous) return;
-    previous = state.busy.length === 0 ? state.schedules : null;
+    // Rows that keep changing are printed as they first change, not at every read.
+    const waiting = state.busy.join(', ') || (previous === null ? '' : 'its schedule rows are still changing');
 
-    if (Date.now() - started > 15000) {
-      throw new Error(`two-turn probe: the object never settled: ${state.busy.join(', ') || 'its schedule rows kept changing'}`);
-    }
+    if (waiting !== '' && waiting !== shown) console.log(`two-turn probe: waiting to settle: ${waiting}${state.busy.length === 0 ? ` (${state.schedules})` : ''}`);
+    shown = waiting;
+
+    previous = state.busy.length === 0 ? state.schedules : null;
 
     const tick = Promise.withResolvers<void>();
 
