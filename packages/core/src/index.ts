@@ -2182,7 +2182,7 @@ export {
 
 export { fmtPct, fmtSpan, fmtTokens, fmtUsd, formatBytes, shortAge, timeAgo } from './utils/format';
 
-export { relayedAnswer } from './utils/relayed-answer';
+export { ownedStream, relayedAnswer } from './utils/relayed-answer';
 
 export { inheritedDescriptor, type RpcSurfaceSubject } from './utils/prototype-members';
 
