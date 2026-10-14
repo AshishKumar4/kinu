@@ -2243,7 +2243,7 @@ export { ingressAdmission, ingressAdmitted, ingressDenied, peerIp, type IngressA
 
 export {
   CLI_DIST_PATHS, CLI_RUNTIME_PATH, CLI_VERSION_PATH,
-  fetchDeployedAsset, readBuildStamp, type AssetFetcher, type BuildStamp,
+  BuildStampSchema, fetchDeployedAsset, readBuildStamp, type AssetFetcher, type BuildStamp,
 } from './http/deployed-assets';
 
 export {
