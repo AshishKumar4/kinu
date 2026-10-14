@@ -22,7 +22,6 @@ import {
   type WorkspaceWork,
   createFactsStore,
   initEventsHubTables,
-  initAgentConfigTable,
   getChatHistoryPage, readSessionTranscript, CHAT_SESSION_ID,
   missingSubordinateHistory, inspectDescendant, readSubordinateInspection, SubordinateInspectionRequestSchema,
   type SubordinateInspectionRequest, type SubordinateInspectionResult,
@@ -34,7 +33,6 @@ import {
   listScaffoldVersions,
   loadGepaCandidates,
   createTimerTrigger,
-  tableExists as coreTableExists,
   workspaceSpend,
   type BackgroundJob,
   type ChatHistoryEntry,
@@ -92,7 +90,6 @@ import * as v from 'valibot';
 import { agentDbPath, resolveLocalAgent } from './config';
 import { createConfiguredLocalModelResolver, type LocalModelResolverOptions } from './local-model-resolver';
 import { createProfileAuthorityReader } from './profiles';
-import { KinuError } from '@kinu.run/core/obs';
 
 type SqliteDb = Database;
 
@@ -194,14 +191,12 @@ export function getLocalAgentInfo(name: string): LocalAgentInfoSnapshot {
       scaffoldVersion: status.scaffoldVersion,
       searchNodeCount: status.searchNodeCount,
       createdAt: status.createdAt ?? 0,
-      conversationCount: actor && tableExists(db, 'conversation_entries')
-        ? countOf(
-          db,
-          `SELECT COUNT(DISTINCT session_id) AS c FROM conversation_entries
-           WHERE actor_id = ?`,
-          actor.actorId,
-        )
-        : 0,
+      conversationCount: countOf(
+        db,
+        `SELECT COUNT(DISTINCT session_id) AS c FROM conversation_entries
+         WHERE actor_id = ?`,
+        actor.actorId,
+      ),
       model: status.model,
       reasoningEffort: status.reasoningEffort,
     };
@@ -239,8 +234,6 @@ export function searchLocalMemory(name: string, query: string, limit = 10): Prom
 export function listLocalEvents(name: string, opts: { variant?: string; since?: number; limit?: number } = {}): KinuEvent[] {
   return withLocalDb(name, (db) => {
     const actor = mainActor(db);
-
-    if (!actor || !tableExists(db, 'agent_log')) return [];
     const filter: QueryFilter = { limit: opts.limit ?? 50 };
 
     if (opts.variant) filter.variant = v.parse(EventVariantSchema, opts.variant);
@@ -252,14 +245,14 @@ export function listLocalEvents(name: string, opts: { variant?: string; since?: 
 }
 
 export function listLocalRuns(name: string, limit = 50): RunListEntry[] {
-  return readMainActorTable(name, 'run_events', [], (sql, actor) => [...listRuns(new RunEventRecorder(sql, actor), null, limit).items]);
+  return readMainActor(name, (sql, actor) => [...listRuns(new RunEventRecorder(sql, actor), null, limit).items]);
 }
 
 /** `since` is inclusive. */
 export function listLocalRunEvents(
   name: string, runId: string, opts: { since?: number; limit?: number } = {},
 ): RunEvent[] {
-  return readMainActorTable(name, 'run_events', [], (sql, actor) => new RunEventRecorder(sql, actor).read(runId, opts));
+  return readMainActor(name, (sql, actor) => new RunEventRecorder(sql, actor).read(runId, opts));
 }
 
 /** Core's `getRunTimeline` over the local database, as the cloud answers it; only the default of 100 is this surface's. */
@@ -269,8 +262,6 @@ export function listLocalTimeline(name: string, limit = 100): JsonObject[] {
 
 function localTimeline(db: SqliteDb, limit: number): JsonObject[] {
   const actor = mainActor(db);
-
-  if (actor === null || !tableExists(db, 'run_events')) return [];
   const sql = makeSql(db);
   const deps = { sql, actor, events: new RunEventRecorder(sql, actor), jobs: new BackgroundJobStore(sql, actor), currentRunId: null };
 
@@ -288,8 +279,6 @@ export function listLocalMcts(name: string): SearchNode[] {
 function localMcts(db: SqliteDb): SearchNode[] {
   const actor = mainActor(db);
 
-  if (!actor || !tableExists(db, 'search_nodes')) return [];
-
   return all<SearchNode>(
     db,
     `SELECT id, parent_id, root_id, task, action, observation, visits, value, depth,
@@ -302,26 +291,18 @@ function localMcts(db: SqliteDb): SearchNode[] {
 }
 
 export function listLocalMctsSearchRuns(name: string, limit = 20): MctsSearchRunSummary[] {
-  return readMainActorTable(name, 'mcts_search_runs', [], (sql, actor) => new MctsSearchStore(sql, actor).list(limit));
+  return readMainActor(name, (sql, actor) => new MctsSearchStore(sql, actor).list(limit));
 }
 
-/** Local peers of the three record RPCs. A workspace predating `exploration_records` has no table: an absence, not a failure. */
+/** Local peers of the three record RPCs. */
 export function listLocalRecordObjectives(name: string, limit = 20): RecordObjectiveSummary[] {
-  return withLocalDb(name, (db) => (
-    tableExists(db, 'exploration_records')
-      ? [...listRecordObjectives(makeSql(db), requireMainActor(db), null, limit).items]
-      : []
-  ));
+  return withLocalDb(name, (db) => [...listRecordObjectives(makeSql(db), mainActor(db), null, limit).items]);
 }
 
 export function listLocalRecordCells(
   name: string, handle: RecordObjectiveHandle, limit = 50,
 ): RecordCellSummary[] {
-  return withLocalDb(name, (db) => (
-    tableExists(db, 'exploration_records')
-      ? [...listRecordCells(makeSql(db), requireMainActor(db), handle, { limit }).items]
-      : []
-  ));
+  return withLocalDb(name, (db) => [...listRecordCells(makeSql(db), mainActor(db), handle, { limit }).items]);
 }
 
 /** Paged, because a cell's population is provably unbounded
@@ -330,30 +311,19 @@ export function listLocalRecordCells(
 export function readLocalRecordCell(
   name: string, handle: RecordCellHandle, cursor: SeekCursor | null, limit = 100,
 ): Page<ExplorationRecord> {
-  return withLocalDb(name, (db) => (
-    tableExists(db, 'exploration_records')
-      ? readRecordCell(makeSql(db), requireMainActor(db), handle, { cursor, limit })
-      : { status: 'end', items: [] }
-  ));
+  return withLocalDb(name, (db) => readRecordCell(makeSql(db), mainActor(db), handle, { cursor, limit }));
 }
 
 export function getLocalMctsNode(name: string, nodeId: string): SearchNodeDetail | null {
-  return withLocalDb(name, (db) => (
-    tableExists(db, 'search_nodes') ? readSearchNodeDetail(makeSql(db), requireMainActor(db), nodeId) : null
-  ));
+  return withLocalDb(name, (db) => readSearchNodeDetail(makeSql(db), mainActor(db), nodeId));
 }
 
 export function listLocalHeads(name: string, limit = 20): HeadRunView[] {
-  return readMainActorTable(name, 'head_journal', [], (sql, actor) => new HeadJournal(sql, actor).listRuns(limit));
+  return readMainActor(name, (sql, actor) => new HeadJournal(sql, actor).listRuns(limit));
 }
 
 export function listLocalGepaRuns(name: string, limit = 20): GepaRunSummary[] {
-  return withLocalDb(name, (db) => {
-    if (!tableExists(db, 'gepa_runs')) return [];
-    const actor = mainActor(db);
-
-    return actor ? listGepaRuns(makeSql(db), actor, limit) : [];
-  });
+  return readMainActor(name, (sql, actor) => listGepaRuns(sql, actor, limit));
 }
 
 export function getLocalChatHistory(name: string, limit = 100): Promise<ChatHistoryEntry[]> {
@@ -389,39 +359,23 @@ export function inspectLocalSubordinate(name: string, request: SubordinateInspec
 }
 
 export function getLocalChangelog(name: string, limit = 50): EvolutionChangelogView {
-  return withLocalDb(name, (db) => {
-    if (!tableExists(db, 'actor_config')) initAgentConfigTable((ddl) => { db.exec(ddl); });
-    const sql = makeSql(db);
-
-    return getEvolutionChangelog(sql, openWorkspaceMainActor(sql), limit);
-  });
+  return readMainActor(name, (sql, actor) => getEvolutionChangelog(sql, actor, limit));
 }
 
 export function getLocalScaffoldVersions(name: string, limit = 20): ScaffoldVersionView[] {
-  return withLocalDb(name, (db) => {
-    const actor = mainActor(db);
-
-    return actor && tableExists(db, 'scaffold_versions')
-      ? listScaffoldVersions(makeSql(db), actor, limit)
-      : [];
-  });
+  return readMainActor(name, (sql, actor) => listScaffoldVersions(sql, actor, limit));
 }
 
 export function getLocalFacts(name: string, limit = 100): Array<{
   key: string; value: unknown; confidence: number; source: string; lastObservedAt: number;
 }> {
-  return withLocalDb(name, (db) => {
-    if (!tableExists(db, 'agent_facts')) return [];
-    const sql = makeSql(db);
-
-    return createFactsStore(sql, openWorkspaceMainActor(sql)).recentTopK(limit).map((f) => ({
-      key: f.key, value: f.value, confidence: f.confidence, source: f.source, lastObservedAt: f.lastObservedAt,
-    }));
-  });
+  return readMainActor(name, (sql, actor) => createFactsStore(sql, actor).recentTopK(limit).map((f) => ({
+    key: f.key, value: f.value, confidence: f.confidence, source: f.source, lastObservedAt: f.lastObservedAt,
+  })));
 }
 
 export function getLocalQuality(name: string, days?: number): QualityDay[] {
-  return withLocalDb(name, (db) => qualitySeries(makeSql(db), requireMainActor(db), days === undefined ? {} : { days }));
+  return withLocalDb(name, (db) => qualitySeries(makeSql(db), mainActor(db), days === undefined ? {} : { days }));
 }
 
 export interface LocalGepaRunDetail {
@@ -430,12 +384,7 @@ export interface LocalGepaRunDetail {
 }
 
 export function getLocalGepaRun(name: string, runId: string): LocalGepaRunDetail | null {
-  return withLocalDb(name, (db) => {
-    if (!tableExists(db, 'gepa_runs')) return null;
-    const sql = makeSql(db);
-    const actor = mainActor(db);
-
-    if (!actor) return null;
+  return readMainActor(name, (sql, actor) => {
     const run = listGepaRuns(sql, actor, 250).find((candidate) => candidate.runId === runId) ?? null;
 
     return run ? { run, candidates: loadGepaCandidates(sql, actor, runId) } : null;
@@ -469,30 +418,20 @@ export function getLocalToolSurface(name: string): {
   }));
 }
 
-/** Core's tool inventory over a workspace's database, opened read-only here; one made before any craft has none. */
+/** Core's tool inventory over a workspace's database, opened read-only here. */
 function localCraftedTools(db: SqliteDb): Array<{ name: string; description: string }> {
-  if (!tableExists(db, 'crafted_tools')) return [];
-
   return getToolList(makeSql(db)).crafted.map(({ name, description }) => ({ name, description }));
 }
 
 export function listLocalTriggers(name: string): { triggers: TriggerRow[] } {
   return withLocalDb(name, (db) => {
-    const actor = mainActor(db);
-
-    if (!actor || !tableExists(db, 'triggers')) return { triggers: [] };
-
-    return { triggers: new TriggerRegistry(makeSqlExec(db), actor, NOOP_ALARM).list() };
+    return { triggers: new TriggerRegistry(makeSqlExec(db), mainActor(db), NOOP_ALARM).list() };
   });
 }
 
 export async function cancelLocalTrigger(name: string, id: string): Promise<{ changed: boolean }> {
   return withLocalDbAsync(name, (db) => {
-    const actor = mainActor(db);
-
-    if (!actor || !tableExists(db, 'triggers')) return { changed: false };
-
-    return { changed: new TriggerRegistry(makeSqlExec(db), actor, NOOP_ALARM).revoke(id, Date.now()) };
+    return { changed: new TriggerRegistry(makeSqlExec(db), mainActor(db), NOOP_ALARM).revoke(id, Date.now()) };
   }, 'write');
 }
 
@@ -528,12 +467,12 @@ export async function readLocalWorkspacePins(name: string): Promise<{ model: str
 }
 
 export function listLocalJobs(name: string, limit = 20): BackgroundJob[] {
-  return readMainActorTable(name, 'background_jobs', [], (sql, actor) => new BackgroundJobStore(sql, actor).list(limit));
+  return readMainActor(name, (sql, actor) => new BackgroundJobStore(sql, actor).list(limit));
 }
 
 /** Whichever actor owns it. */
 export function localJobRunning(name: string, id: string): boolean {
-  return readMainActorTable(name, 'background_jobs', false, (sql) => sql<{ status: string }>`
+  return readMainActor(name, (sql) => sql<{ status: string }>`
     SELECT status FROM background_jobs WHERE id = ${id}`.some((row) => row.status === 'running'));
 }
 
@@ -570,9 +509,9 @@ function openLocalDb(name: string, mode: DbMode): SqliteDb {
   return db;
 }
 
-function readMainActorTable<T>(name: string, table: string, absent: T, read: (sql: SqlExecutor, actor: ActorHandle) => T): T {
+/** A read of the main actor's own rows. */
+function readMainActor<T>(name: string, read: (sql: SqlExecutor, actor: ActorHandle) => T): T {
   return withLocalDb(name, (db) => {
-    if (!tableExists(db, table)) return absent;
     const sql = makeSql(db);
 
     return read(sql, openWorkspaceMainActor(sql));
@@ -608,25 +547,12 @@ function countOf(db: SqliteDb, sql: string, ...params: SQLQueryBindings[]): numb
   return all<{ c: number }>(db, sql, ...params).at(0)?.c ?? 0;
 }
 
-function tableExists(db: SqliteDb, name: string): boolean {
-  return coreTableExists(makeSql(db), name);
-}
-
 /**
- * The main actor, or null without a durable identity. Every store read here is actor-private; other actors are
- * reachable via {@link listLocalActors} and {@link getLocalActorInfo}.
+ * The main actor. Every store read here is actor-private; other actors are reachable via {@link listLocalActors} and
+ * {@link getLocalActorInfo}. A database this Kinu opens has its whole schema (`openLocalDb` holds it to its genesis).
  */
-function mainActor(db: SqliteDb): ActorHandle | null {
-  return tableExists(db, 'workspace_identity') ? openWorkspaceMainActor(makeSql(db)) : null;
-}
-
-/** Refuses a database with no identity row instead of returning another actor's rows or an empty set. */
-function requireMainActor(db: SqliteDb): ActorHandle {
-  const actor = mainActor(db);
-
-  if (!actor) throw new KinuError('missing', 'This workspace database has no durable identity to read as.');
-
-  return actor;
+function mainActor(db: SqliteDb): ActorHandle {
+  return openWorkspaceMainActor(makeSql(db));
 }
 
 export interface LocalActorRow {
@@ -644,8 +570,6 @@ export interface LocalActorRow {
 
 /** Null before the workspace has an identity. Issues no handle, so listing starts no actor. */
 function actorDirectory(db: SqliteDb): WorkspaceActorDirectory | null {
-  if (!tableExists(db, 'workspace_actors') || !tableExists(db, 'workspace_identity')) return null;
-
   const identity = all<{ id: string; owner_user_id: string | null }>(
     db, `SELECT id, owner_user_id FROM workspace_identity LIMIT 1`).at(0);
 
@@ -702,23 +626,19 @@ export function getLocalActorInfo(name: string, actorId: string): LocalAgentInfo
       if (!directory?.retained(actorId)) throw new Error(`actor ${actorId} is no longer retained in this workspace`);
     };
 
-    const config = tableExists(db, 'actor_config') ? createAgentConfigStore(makeSql(db), actorId, assertCurrent) : null;
+    const config = createAgentConfigStore(makeSql(db), actorId, assertCurrent);
 
     return {
       name: row.name,
       purpose: '',
-      scaffoldVersion: tableExists(db, 'scaffold_versions') ? getCurrentScaffoldVersion(makeSql(db), { actorId, assertCurrent }) ?? 0 : 0,
-      searchNodeCount: tableExists(db, 'search_nodes')
-        ? countOf(db, `SELECT COUNT(*) AS c FROM search_nodes WHERE actor_id = ?`, actorId)
-        : 0,
+      scaffoldVersion: getCurrentScaffoldVersion(makeSql(db), { actorId, assertCurrent }) ?? 0,
+      searchNodeCount: countOf(db, `SELECT COUNT(*) AS c FROM search_nodes WHERE actor_id = ?`, actorId),
       createdAt: row.createdAt,
-      conversationCount: tableExists(db, 'conversation_entries')
-        ? countOf(db,
-          `SELECT COUNT(DISTINCT session_id) AS c FROM conversation_entries
-           WHERE actor_id = ?`, actorId)
-        : 0,
-      model: config?.getModel() ?? null,
-      reasoningEffort: config?.getReasoningEffort() ?? null,
+      conversationCount: countOf(db,
+        `SELECT COUNT(DISTINCT session_id) AS c FROM conversation_entries
+         WHERE actor_id = ?`, actorId),
+      model: config.getModel(),
+      reasoningEffort: config.getReasoningEffort(),
     };
   });
 }
@@ -726,11 +646,6 @@ export function getLocalActorInfo(name: string, actorId: string): LocalAgentInfo
 /** The cloud's status fold (`agentStatusFacts`), over SOUL.md where it lies in the workspace's space. */
 function getLocalStatus(db: SqliteDb): LocalStatus {
   const actor = mainActor(db);
-
-  if (actor === null) {
-    return { name: null, purpose: '', createdAt: null, scaffoldVersion: 0, searchNodeCount: 0, messageCount: 0, model: null, reasoningEffort: null };
-  }
-
   const { name, purpose, createdAt, scaffoldVersion, searchNodeCount, messageCount } = agentStatusFacts(makeSql(db), actor, soulOf(db), actor.name);
 
   return {

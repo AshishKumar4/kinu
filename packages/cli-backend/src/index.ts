@@ -16,13 +16,22 @@ export {
   writeSecretFile, enforceOwnerOnly, ensureSecretDir,
 } from './secret-file';
 
-export { openWorkspaceCLI, type WorkspaceInfo } from './open';
+export { openWorkspaceCLI, readWorkspaceInfo, type WorkspaceInfo } from './open';
 
 export { requireSchemaGenesis, schemaGenesisOf, stampSchemaGenesis } from './schema-genesis';
 
 export { localArchiveSource, localArchiveTarget, moveIntoFolder, publishStoreFiles } from './local-archive';
 
-export { withConfigLock } from './config-lock';
+export { tryLock, withConfigLock } from './config-lock';
+
+export {
+  claimMachine, machineProcessAlive, readMachinePid, removeMachinePid, runningMachineDaemon, runsMachineDaemon,
+} from './machine-pidfile';
+
+export {
+  KinuAgentConfigSchema, OpenAiCompatConfigSchema, readConfigFile, updateConfigFile,
+  type KinuAgentConfig, type KinuConfig, type LocalApiKeyProvider, type LocalOAuthSession,
+} from './config-file';
 
 export { hostToolchainCapabilities } from './host-toolchain';
 

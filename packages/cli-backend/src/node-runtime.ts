@@ -1,8 +1,8 @@
 import {
-  actorReferenceOf, actorScaffoldPath, bindLocalActorReference, createAgentStores, createScaffoldSurface, DefaultExecutionRouter,
+  actorReferenceOf, actorScaffoldPath, bindLocalActorReference, createScaffoldSurface, DefaultExecutionRouter,
   requireLocalActorWorkspace,
 } from '@kinu.run/core';
-import type { ActorHandle, AgentRuntime } from '@kinu.run/core';
+import type { ActorHandle, AgentRuntime, AgentStores } from '@kinu.run/core';
 import { actorFilePlane } from './actor-plane';
 import { hostWorkspaceExecutor } from './host-toolchain';
 import type { CLIRuntime } from './runtime';
@@ -13,12 +13,12 @@ import type { CLIRuntime } from './runtime';
  * file tool and its programs read the same one. Its gates are the source's: a hire's own narrowing, never the
  * workspace owner's.
  */
-export function localNodeRuntime(source: CLIRuntime, actor: ActorHandle): AgentRuntime {
+export function localNodeRuntime(source: CLIRuntime, actor: ActorHandle, stores: AgentStores): AgentRuntime {
   requireLocalActorWorkspace(source.actor, actor);
   const binding = bindLocalActorReference(source.actor, actorReferenceOf(actor));
 
-  // A node reading the parent's claim ledger would present the parent's turns as its own history.
-  const stores = createAgentStores(() => source.storage.sql, () => actor, (write) => source.storage.transactionSync(write), () => source.filesForActor(actor));
+  // Its own stores, as its host bound it: a node reading the parent's claim ledger would present the parent's turns as
+  // its own history.
   const { plane, toolFiles } = actorFilePlane({ source, actor, stores });
   let ledger: Parameters<NonNullable<AgentRuntime['setTurnFileLedgerProvider']>>[0] = null;
 

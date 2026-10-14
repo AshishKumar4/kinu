@@ -2,28 +2,11 @@ import { Effect } from 'effect';
 import { closeSync, existsSync, openSync, readFileSync, unlinkSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { spawnKinuScript } from '../self-spawn';
-import type { Database } from 'bun:sqlite';
 import { renderThrownChain, tolerate, settle, settleSync, type KinuError } from '@kinu.run/core/obs';
-import type { HostedAgentRef, SessionEvent } from '@kinu.run/core';
-import {
-  LocalAgentHost,
-  openWorkspaceCLI,
-  writeSecretFile,
-  type LocalHostedAgent,
-} from '@kinu.run/cli-backend';
-import {
-  AGENT_HOME,
-  agentDbPath,
-  createOAuthStore,
-  ensureAgentHome,
-  listLocalRefsAllProjects,
-  readProviderRevision,
-  resolveCloudSession,
-  resolveMcpServers,
-  resolveProviderCredentials,
-} from '../config';
-import { createConfiguredLocalModelResolver } from '../local-model-resolver';
-import { createProfileAuthorityReader } from '../profiles';
+import type { SessionEvent } from '@kinu.run/core';
+import { writeSecretFile, type LocalAgentHost } from '@kinu.run/cli-backend';
+import { AGENT_HOME, ensureAgentHome, listLocalRefsAllProjects } from '../config';
+import { createLocalHost } from '../local-host';
 import { appendDaemonLog, readDaemonLogTail } from '../daemon-log';
 import { DIM, OK, WARN } from '../display';
 
@@ -317,48 +300,8 @@ async function runDaemonLoop(): Promise<void> {
 }
 
 function createDaemonHost(wakeAt?: (at: number) => void): LocalAgentHost {
-  const options = {
-    roster: listLocalRefsAllProjects,
-    dbPath: agentDbPath,
-    open: openDaemonAgent,
-    // Both callers are the daemon. As `interactive` the resident daemon would hold every lease forever and no
-    // foreground driver could preempt it.
-    driverKind: 'daemon' as const,
-  };
-
-  return new LocalAgentHost(wakeAt ? { ...options, wakeAt } : options);
-}
-
-/** Installs the same profile authority as interactive clients, so a role resolves identically in both. */
-async function openDaemonAgent(
-  ref: HostedAgentRef,
-  db: Database,
-  dbPath: string,
-): Promise<LocalHostedAgent> {
-  const { llmConfig, resolver: modelResolver } = createConfiguredLocalModelResolver();
-
-  const cloud = resolveCloudSession();
-
-  const openConfig = {
-    llm: llmConfig,
-    providerCredentials: resolveProviderCredentials,
-    oauthStore: createOAuthStore(),
-    ...(cloud !== null && { cloud }),
-    // The ref's stored directory, never process.cwd(): a daemon serves every project.
-    cwd: ref.cwd,
-  };
-
-  const { rt } = await openWorkspaceCLI(db, dbPath, openConfig);
-
-  return {
-    rt,
-    openConfig,
-    modelResolver,
-    mcpServers: resolveMcpServers(),
-    profileAuthority: createProfileAuthorityReader(),
-    // A resident daemon stays bound for days; `kinu provider connect` happens in processes it cannot see.
-    providerRevision: readProviderRevision,
-  };
+  // As `interactive` the resident daemon would hold every lease forever and no foreground driver could preempt it.
+  return createLocalHost({ driverKind: 'daemon', ...(wakeAt !== undefined && { wakeAt }) });
 }
 
 function logSessionEvent(agentName: string, event: SessionEvent): void {

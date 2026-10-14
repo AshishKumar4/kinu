@@ -1,4 +1,5 @@
 import { scratchDir } from '../../test-utils/src/scratch';
+import { HIRE_FORK_REQUEST, hireForkModel } from '../../test-utils/src/hire-fork';
 import { AwaitedList, present, readTranscriptRows, workspaceDatabase } from '@kinu.run/test-utils';
 import { existsSync } from 'node:fs';
 
@@ -9,11 +10,15 @@ import type { LanguageModel } from 'ai';
 import type { LanguageModelV2CallOptions, LanguageModelV2Prompt } from '@ai-sdk/provider';
 import * as v from 'valibot';
 import {
-  NO_COUNT_ENDPOINT, openWorkspaceMainActor, profileCatalogDigest, type LLMProviderConfig, type ProfileCatalog, type ProfileCatalogEnvelope,
+  NO_COUNT_ENDPOINT, openWorkspaceMainActor, profileCatalogDigest, type HostedAgentRef, type LLMProviderConfig, type ProfileCatalog,
+  type ProfileCatalogEnvelope,
 } from '@kinu.run/core';
-import { initWorkspaceSchema, WORKSPACE_RUN_ID } from '@kinu.run/core';
+import { WORKSPACE_RUN_ID } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { createCLIRuntime, makeSql, type LocalModelResolver , makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
+import {
+  LocalAgentHost, makeSql, openWorkspaceCLI, workspaceHome, type CLIRuntime, type LocalModelResolver,
+} from '@kinu.run/cli-backend';
+import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model';
 import { LocalAgentClient } from '../src/local-agent-client';
 import type { CliSessionOptions } from '../src/session';
@@ -207,75 +212,64 @@ function gateSizes(client: LocalAgentClient): number[] {
   return sizes;
 }
 
-function setup(model: LanguageModel, profileAuthority: CliProfileSource = async () => null) {
-  const home = scratchDir('client');
+/** A client over the workspace at `home` as this machine hosts it (`LocalAgentHost`), its model scripted; the
+ *  workspace is created on the first open, as `kinu create` makes it. */
+async function hostedClient(
+  home: string,
+  model: LanguageModel,
+  transcript: CliSessionOptions,
+  profileAuthority: CliProfileSource = async () => null,
+): Promise<{ client: LocalAgentClient; rt: CLIRuntime }> {
   const dbPath = join(home, 'agent.db');
-  const db = workspaceDatabase(dbPath, { create: true });
-  // The production initializer, not a copy of its DDL.
-  initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { llm: DUMMY_LLM, cwd: scratchDir('client-folder') });
-  rt.actor.config.setLearning(false);
-  // Its model calls would count as summaries here; the shared-backend suite covers it.
-  rt.actor.config.setSleepTimeComputeEnabled(false);
 
-  const info = {
-    id: 'agent-1', name: 'jarvis', purpose: 'test agent', soul: '', scaffoldVersion: 1,
-    searchNodeCount: 0, memorySize: 0, createdAt: Date.now(),
-  };
+  if (!existsSync(dbPath)) {
+    const db = workspaceDatabase(dbPath, { create: true });
 
-  const client = new LocalAgentClient({
-    agentName: 'jarvis',
-    rt,
-    db,
-    dbPath,
-    info,
-    refreshInfo: async () => info,
-    model,
-    modelResolver: fakeResolver(model),
-    profileAuthority,
-    mcpServers: {},
-    transcript: { transcriptDir: join(home, 'sessions') },
-    surface: 'interactive',
+    try {
+      await createWorkspace(db, { name: 'jarvis', purpose: 'test agent', llm: DUMMY_LLM, home: workspaceHome(db) });
+    } finally {
+      db.close();
+    }
+  }
+
+  const ref: HostedAgentRef = { name: 'jarvis', cwd: scratchDir('client-folder'), workspaceId: 'client' };
+
+  const host = new LocalAgentHost({
+    roster: () => [ref],
+    dbPath: () => dbPath,
+    open: async (at, db) => {
+      const openConfig = { llm: DUMMY_LLM, cwd: at.cwd };
+      const { rt } = await openWorkspaceCLI(db, dbPath, openConfig);
+
+      rt.actor.config.setLearning(false);
+      // Its model calls would count as summaries here; the shared-backend suite covers it.
+      rt.actor.config.setSleepTimeComputeEnabled(false);
+
+      return { rt, openConfig, staticModel: model, modelResolver: fakeResolver(model), profileAuthority };
+    },
   });
+
+  // As `openLocalAgentClient` opens it: the client owns the host.
+  const session = await host.acquire('jarvis');
+  const rt = await host.runtime('jarvis');
+
+  return { client: new LocalAgentClient({ agentName: 'jarvis', host, session, rt, dbPath, transcript }), rt };
+}
+
+async function setup(model: LanguageModel, profileAuthority: CliProfileSource = async () => null) {
+  const home = scratchDir('client');
+  const { client, rt } = await hostedClient(home, model, { transcriptDir: join(home, 'sessions') }, profileAuthority);
 
   return { client, home, rt };
 }
 
-function openPersistentClient(
-  home: string,
-  model: LanguageModel,
-  transcriptOptions: CliSessionOptions,
-): LocalAgentClient {
-  const dbPath = join(home, 'agent.db');
-  const db = workspaceDatabase(dbPath);
-  initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { llm: DUMMY_LLM, cwd: scratchDir('client-folder') });
-  rt.actor.config.setLearning(false);
-
-  const info = {
-    id: 'agent-1', name: 'jarvis', purpose: 'test agent', soul: '', scaffoldVersion: 1,
-    searchNodeCount: 0, memorySize: 0, createdAt: Date.now(),
-  };
-
-  return new LocalAgentClient({
-    agentName: 'jarvis',
-    rt,
-    db,
-    dbPath,
-    info,
-    refreshInfo: async () => info,
-    model,
-    modelResolver: fakeResolver(model),
-    profileAuthority: async () => null,
-    mcpServers: {},
-    transcript: transcriptOptions,
-    surface: 'interactive',
-  });
+async function openPersistentClient(home: string, model: LanguageModel, transcriptOptions: CliSessionOptions): Promise<LocalAgentClient> {
+  return (await hostedClient(home, model, transcriptOptions)).client;
 }
 
 describe('LocalAgentClient', () => {
   test('send streams events, returns the turn result, and records the JSONL log', async () => {
-    const { client } = setup(fakeModel('hello there'));
+    const { client } = await setup(fakeModel('hello there'));
     const events: AgentClientEvent[] = [];
     client.subscribe((event) => events.push(event));
     await client.connect();
@@ -307,7 +301,7 @@ describe('LocalAgentClient', () => {
     const home = scratchDir('client-persistent');
     const transcriptDir = join(home, 'sessions');
 
-    const unrecorded = openPersistentClient(home, fakeModel('first answer'), {
+    const unrecorded = await openPersistentClient(home, fakeModel('first answer'), {
       noTranscript: true,
       transcriptDir,
     });
@@ -319,7 +313,7 @@ describe('LocalAgentClient', () => {
 
     let prompt: LanguageModelV2Prompt = [];
 
-    const recorded = openPersistentClient(
+    const recorded = await openPersistentClient(
       home,
       fakeModel('second answer', (next) => { prompt = next; }),
       { transcriptDir },
@@ -349,7 +343,7 @@ describe('LocalAgentClient', () => {
   });
 
   test('stop() aborts the in-flight turn through LocalAgentSession', async () => {
-    const { client } = setup(stallingModel());
+    const { client } = await setup(stallingModel());
     const observed = new AwaitedList<AgentClientEvent>();
     const events = observed.items;
     client.subscribe((event) => observed.push(event));
@@ -412,7 +406,7 @@ describe('LocalAgentClient', () => {
       },
     });
 
-    const { client } = setup(model);
+    const { client } = await setup(model);
     const observed = new AwaitedList<AgentClientEvent>();
     const events = observed.items;
     client.subscribe((event) => observed.push(event));
@@ -481,7 +475,7 @@ describe('LocalAgentClient', () => {
       },
     });
 
-    const { client } = setup(model);
+    const { client } = await setup(model);
     const events: AgentClientEvent[] = [];
     client.subscribe((event) => events.push(event));
     await client.connect();
@@ -521,7 +515,7 @@ describe('LocalAgentClient', () => {
     const seenPrompts: string[] = [];
     const model = fakeModel('answer', (prompt) => { seenPrompts.push(JSON.stringify(prompt)); });
 
-    const { client } = setup(model);
+    const { client } = await setup(model);
     await client.connect();
     await client.send('first question');
     await client.send('second question');
@@ -546,7 +540,7 @@ describe('LocalAgentClient', () => {
     test(`a walked-back seed is durable before the fork's first turn, empty=${empty}`, async () => {
       const seenPrompts: string[] = [];
       const model = fakeModel('answer', (prompt) => { seenPrompts.push(JSON.stringify(prompt)); });
-      const { client, home, rt } = setup(model);
+      const { client, home, rt } = await setup(model);
       await client.connect();
       await client.send('first question');
       await client.send('second question');
@@ -566,7 +560,7 @@ describe('LocalAgentClient', () => {
       ]);
       await client.close();
 
-      const reopened = openPersistentClient(home, model, { transcriptDir: join(home, 'sessions') });
+      const reopened = await openPersistentClient(home, model, { transcriptDir: join(home, 'sessions') });
 
       try {
         await reopened.connect();
@@ -592,7 +586,7 @@ describe('LocalAgentClient', () => {
       authority: { kind: 'account', accountId: 'acct' }, version: 1, digest: profileCatalogDigest(catalog), catalog,
     };
 
-    const { client } = setup(fakeModel('ok'), async () => envelope);
+    const { client } = await setup(fakeModel('ok'), async () => envelope);
     await client.connect();
 
     expect(await client.status()).toMatchObject({ model: 'fake/big-model', reasoningEffort: 'max', tierId: 'default' });
@@ -602,7 +596,7 @@ describe('LocalAgentClient', () => {
   });
 
   test('a turn\'s reasoning reaches the client as it streams, apart from the answer', async () => {
-    const { client } = setup(reasoningModel('check the index first', 'done'));
+    const { client } = await setup(reasoningModel('check the index first', 'done'));
     const events: AgentClientEvent[] = [];
     client.subscribe((event) => events.push(event));
     await client.connect();
@@ -618,7 +612,7 @@ describe('LocalAgentClient', () => {
 
   test('/clear starts a new conversation: the transcript and the next prompt hold nothing earlier', async () => {
     const prompts: LanguageModelV2Prompt[] = [];
-    const { client } = setup(fakeModel('noted', (prompt) => prompts.push(prompt)));
+    const { client } = await setup(fakeModel('noted', (prompt) => prompts.push(prompt)));
     await client.connect();
     await client.send('remember the word heron', { cwd: '/work' });
 
@@ -634,7 +628,7 @@ describe('LocalAgentClient', () => {
     // Folded turns survive only inside the summary; as messages of their own, only the kept tail is sent.
     const turnsSentAsMessages = async (compact: boolean): Promise<string[]> => {
       const prompts: LanguageModelV2Prompt[] = [];
-      const { client } = setup(fakeModel('noted', (prompt) => prompts.push(prompt)));
+      const { client } = await setup(fakeModel('noted', (prompt) => prompts.push(prompt)));
       await client.connect();
 
       for (let turn = 0; turn < 5; turn++) await client.send(`turn ${String(turn)}: ${'context '.repeat(200)}`, { cwd: '/work' });
@@ -656,7 +650,7 @@ describe('LocalAgentClient', () => {
   test('/compact folds at once: the number is the folded request, and the next turn sends the fold without a second one', async () => {
     let summaries = 0;
     const prompts: LanguageModelV2Prompt[] = [];
-    const { client } = setup(fakeModel('findings '.repeat(600), (prompt) => prompts.push(prompt), { onCall: () => { summaries += 1; } }));
+    const { client } = await setup(fakeModel('findings '.repeat(600), (prompt) => prompts.push(prompt), { onCall: () => { summaries += 1; } }));
     await client.connect();
     const turns = gateSizes(client);
 
@@ -683,7 +677,7 @@ describe('LocalAgentClient', () => {
 
   test('a /compact whose summary fails says why, leaves the conversation as it was and arms nothing', async () => {
     const prompts: LanguageModelV2Prompt[] = [];
-    const { client } = setup(fakeModel('findings '.repeat(600), (prompt) => prompts.push(prompt), { fail: new Error('the summarizer is out of credit') }));
+    const { client } = await setup(fakeModel('findings '.repeat(600), (prompt) => prompts.push(prompt), { fail: new Error('the summarizer is out of credit') }));
     await client.connect();
 
     for (let turn = 0; turn < 5; turn++) await client.send(`look into part ${String(turn)}`, { cwd: '/work' });
@@ -712,7 +706,7 @@ describe('LocalAgentClient', () => {
     const compacted = async (asks: number) => {
       const triggers: (number | null)[] = [];
       // Long answers: a long ask is saved to a file instead.
-      const { client } = setup(providerOptionsModel('findings '.repeat(4_000), (options) => { triggers.push(compactionTrigger(options)); }));
+      const { client } = await setup(providerOptionsModel('findings '.repeat(4_000), (options) => { triggers.push(compactionTrigger(options)); }));
       const sizes = gateSizes(client);
       await client.connect();
       await client.setModel('anthropic/claude-opus-4-7');
@@ -754,7 +748,7 @@ describe('LocalAgentClient', () => {
       },
     });
 
-    const { client } = setup(model);
+    const { client } = await setup(model);
     await client.connect();
 
     for (let turn = 0; turn < 5; turn++) await client.send(`look into part ${String(turn)}`, { cwd: '/work' });
@@ -774,7 +768,7 @@ describe('LocalAgentClient', () => {
 
   test('a new session shows the gate\'s measure of its first request before any turn, measured once', async () => {
     let calls = 0;
-    const { client, home } = setup(fakeModel('noted', () => { calls += 1; }));
+    const { client, home } = await setup(fakeModel('noted', () => { calls += 1; }));
     const measured = nextContextFill(client);
     await client.connect();
     const tokens = await measured;
@@ -782,7 +776,7 @@ describe('LocalAgentClient', () => {
     expect((await client.status()).context).toMatchObject({ tokens, source: 'gate' });
     await client.close();
 
-    const reopened = openPersistentClient(home, fakeModel('noted', () => { calls += 1; }), { noTranscript: true });
+    const reopened = await openPersistentClient(home, fakeModel('noted', () => { calls += 1; }), { noTranscript: true });
     await reopened.connect();
     expect((await reopened.status()).context).toMatchObject({ tokens, source: 'gate' });
     await reopened.close();
@@ -792,7 +786,7 @@ describe('LocalAgentClient', () => {
   });
 
   test('after /clear, before any turn, the number is the gate\'s measure of the emptied request', async () => {
-    const { client } = setup(fakeModel('findings '.repeat(600)));
+    const { client } = await setup(fakeModel('findings '.repeat(600)));
     await client.connect();
     const turns = gateSizes(client);
 
@@ -810,7 +804,7 @@ describe('LocalAgentClient', () => {
   });
 
   test('/clear returns once the emptied request is measured, so the number is already the new one', async () => {
-    const { client } = setup(fakeModel('findings '.repeat(600)));
+    const { client } = await setup(fakeModel('findings '.repeat(600)));
     await client.connect();
     const turns = gateSizes(client);
 
@@ -829,7 +823,7 @@ describe('LocalAgentClient', () => {
   test('a /clear whose measure failed reads as unmeasured after a reload, not as the cleared conversation\'s number', async () => {
     let unreachable = false;
 
-    const { client, home } = setup(fakeModel('noted'), async () => {
+    const { client, home } = await setup(fakeModel('noted'), async () => {
       if (unreachable) throw new Error('the profile catalog is unreachable');
 
       return null;
@@ -841,7 +835,7 @@ describe('LocalAgentClient', () => {
     await client.localControls.clearConversation();
     await client.close();
 
-    const reopened = openPersistentClient(home, fakeModel('noted'), { noTranscript: true });
+    const reopened = await openPersistentClient(home, fakeModel('noted'), { noTranscript: true });
     await reopened.connect();
     const status = await reopened.status();
     await reopened.close();
@@ -852,7 +846,7 @@ describe('LocalAgentClient', () => {
   test('/clear whose measure fails still clears, and returns why no number exists', async () => {
     let unreachable = false;
 
-    const { client } = setup(fakeModel('noted'), async () => {
+    const { client } = await setup(fakeModel('noted'), async () => {
       if (unreachable) throw new Error('the profile catalog is unreachable');
 
       return null;
@@ -870,7 +864,7 @@ describe('LocalAgentClient', () => {
   });
 
   test('a model switch records the gate\'s measure of the next request against the new model', async () => {
-    const { client, home } = setup(fakeModel('noted'));
+    const { client, home } = await setup(fakeModel('noted'));
     await client.connect();
     await client.send('remember the word heron', { cwd: '/work' });
     const before = gateMeasures(home);
@@ -886,13 +880,13 @@ describe('LocalAgentClient', () => {
   });
 
   test('a reconnect shows the prompt size the last step reported, and asks no model for it', async () => {
-    const { client, home } = setup(fakeModel('noted'));
+    const { client, home } = await setup(fakeModel('noted'));
     await client.connect();
     await client.send('remember the word heron', { cwd: '/work' });
     await client.close();
 
     let calls = 0;
-    const reopened = openPersistentClient(home, fakeModel('noted', () => { calls += 1; }), { noTranscript: true });
+    const reopened = await openPersistentClient(home, fakeModel('noted', () => { calls += 1; }), { noTranscript: true });
     await reopened.connect();
     const status = await reopened.status();
     await reopened.close();
@@ -905,7 +899,7 @@ describe('LocalAgentClient', () => {
   test('each turn records the size the admission gate measured its request at, and /compact shrinks the next one', async () => {
     // Short asks and long answers, as a working session reads: the fold keeps each ask and summarizes the answers.
     const admittedSizes = async (compact: boolean): Promise<number[]> => {
-      const { client } = setup(fakeModel('findings '.repeat(600)));
+      const { client } = await setup(fakeModel('findings '.repeat(600)));
       const sizes = gateSizes(client);
       await client.connect();
 
@@ -926,8 +920,26 @@ describe('LocalAgentClient', () => {
     expect(folded.at(-1)).toBeLessThan(whole.at(-1) ?? 0);
   });
 
+  // The interactive and one-shot roots built their session apart from the host the daemon uses, without a team: their
+  // agents tool could not hire. One composition now, whichever process holds the root.
+  test('an interactive root hires through its agents tool, as the daemon root does', async () => {
+    const { model } = hireForkModel();
+    const { client } = await setup(model);
+
+    try {
+      await client.connect();
+      const turn = await client.send(HIRE_FORK_REQUEST);
+      const calls = turn.landed === 'turn' ? turn.toolCalls : [];
+
+      expect(calls.map((call) => ({ name: call.name, success: call.outcome?.success })))
+        .toEqual([{ name: 'agents', success: true }]);
+    } finally {
+      await client.close();
+    }
+  });
+
   test('status and tools reflect the live session', async () => {
-    const { client } = setup(fakeModel('ok'));
+    const { client } = await setup(fakeModel('ok'));
     await client.connect();
     const status = await client.status();
     expect(status.name).toBe('jarvis');
@@ -941,7 +953,7 @@ describe('LocalAgentClient', () => {
 
 describe('/changelog — the Evolution Changelog over a real local client', () => {
   test('lists self-changes, marks seen on view, and reverts by index', async () => {
-    const { client, rt } = setup(fakeModel('ok'));
+    const { client, rt } = await setup(fakeModel('ok'));
     await client.connect();
     const { executeSlashCommand } = await import('../src/slash-commands');
 
@@ -991,7 +1003,7 @@ describe('/changelog — the Evolution Changelog over a real local client', () =
 
 describe('/takes — Alternate Takes over a real local client', () => {
   test('latestTakes/pickTake round-trip: ledger write, repoint, and the /takes command surface', async () => {
-    const { client, rt } = setup(fakeModel('answered with A'));
+    const { client, rt } = await setup(fakeModel('answered with A'));
     const observed = new AwaitedList<AgentClientEvent>();
     client.subscribe((event) => observed.push(event));
     await client.connect();

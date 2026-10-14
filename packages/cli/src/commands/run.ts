@@ -322,7 +322,7 @@ async function runRpc(
 
     try {
       await serveRpc(client, {
-        command: (cmd) => runCloudRpcCommand(auth.origin, auth.token, target.cloudName, cmd),
+        command: (cmd) => runRpcCommand(cmd, cloudInspection(auth.origin, auth.token, target.cloudName)),
         prompt: async (id, message) => {
           output({ value: { type: 'turn_start', id } });
           const result = await client.send(message, { cwd: process.cwd() });
@@ -349,7 +349,7 @@ async function runRpc(
 
   try {
     await serveRpc(client, {
-      command: (cmd) => runLocalRpcCommand(target.localName, cmd, client),
+      command: (cmd) => runRpcCommand(cmd, localInspection(target.localName, client)),
       prompt: async (id, message) => {
         if (!connected) {
           connected = true;
@@ -371,164 +371,161 @@ async function runRpc(
 
 const commandType = (cmd: JsonObject): string => stringField(cmd, 'type') ?? '';
 
-async function runCloudRpcCommand(origin: string, token: string, name: string, cmd: JsonObject): Promise<JsonValue> {
+/** What an RPC command reads or does on one backend; each answers in that backend's own shape. */
+interface RpcInspection {
+  readonly state: () => Promise<JsonValue>;
+  readonly status: () => Promise<JsonValue>;
+  readonly tools: () => Promise<JsonValue>;
+  readonly triggers: () => Promise<JsonValue>;
+  readonly jobs: (limit: number) => Promise<JsonValue>;
+  readonly searchMemory: (query: string, limit: number) => Promise<JsonValue>;
+  readonly memory: () => Promise<string>;
+  readonly events: (filter: { readonly limit: number; readonly variant?: string; readonly since?: number }) => Promise<JsonValue>;
+  readonly timeline: (limit: number) => Promise<JsonValue>;
+  readonly searchNode: (nodeId: string) => Promise<JsonValue>;
+  readonly searchTree: () => Promise<JsonValue>;
+  readonly heads: (limit: number) => Promise<JsonValue>;
+  readonly gepaRun: (runId: string) => Promise<JsonValue>;
+  readonly gepaRuns: (limit: number) => Promise<JsonValue>;
+  readonly executors: () => Promise<JsonValue>;
+  readonly exec: (executor: string, command: string) => Promise<JsonValue>;
+  readonly stop: () => Promise<JsonValue>;
+  /** Only a cloud workspace takes a webhook. */
+  readonly webhook?: (input: ReturnType<typeof webhookTriggerInput>) => Promise<JsonValue>;
+}
+
+type RpcHandler = (cmd: JsonObject, on: RpcInspection) => Promise<JsonValue>;
+
+const limitOf = (cmd: JsonObject, fallback: number): number => numberField(cmd, 'limit') ?? fallback;
+
+/** Each RPC command, its fields and defaults read once for every backend. */
+const RPC_COMMANDS = {
+  get_state: (_cmd, on) => on.state(),
+  state: (_cmd, on) => on.state(),
+  status: (_cmd, on) => on.status(),
+  tools: (_cmd, on) => on.tools(),
+  triggers: (_cmd, on) => on.triggers(),
+  jobs: (cmd, on) => on.jobs(limitOf(cmd, 20)),
+  memory: async (cmd, on) => {
+    const query = stringField(cmd, 'query');
+
+    return query ? on.searchMemory(query, limitOf(cmd, 10)) : { content: await on.memory() };
+  },
+  events: (cmd, on) => {
+    const variant = stringField(cmd, 'variant');
+    const since = numberField(cmd, 'since');
+
+    return on.events({ limit: limitOf(cmd, 50), ...(variant && { variant }), ...(since !== undefined && { since }) });
+  },
+  timeline: (cmd, on) => on.timeline(limitOf(cmd, 100)),
+  swarm: (cmd, on) => {
+    const nodeId = stringField(cmd, 'nodeId') ?? stringField(cmd, 'id');
+
+    return nodeId ? on.searchNode(nodeId) : on.searchTree();
+  },
+  heads: (cmd, on) => on.heads(limitOf(cmd, 20)),
+  gepa: (cmd, on) => {
+    const runId = stringField(cmd, 'runId') ?? stringField(cmd, 'id');
+
+    return runId ? on.gepaRun(runId) : on.gepaRuns(limitOf(cmd, 20));
+  },
+  executors: (_cmd, on) => on.executors(),
+  exec: (cmd, on) => {
+    const executor = stringField(cmd, 'executor') ?? stringField(cmd, 'executorId');
+    const command = stringField(cmd, 'command');
+
+    if (!executor) throw new Error('executor required');
+
+    if (!command) throw new Error('command required');
+
+    return on.exec(executor, command);
+  },
+  stop: (_cmd, on) => on.stop(),
+  webhook: (cmd, on) => {
+    const label = stringField(cmd, 'label');
+
+    if (!label) throw new Error('label required');
+
+    if (on.webhook === undefined) throw new Error('Unsupported command');
+
+    return on.webhook(webhookTriggerInput(label, {
+      authMode: stringField(cmd, 'authMode') ?? stringField(cmd, 'auth_mode'),
+      secret: stringField(cmd, 'secret'),
+      contentType: stringField(cmd, 'contentType'),
+      rateLimit: numberField(cmd, 'rateLimit'),
+    }));
+  },
+} satisfies Record<string, RpcHandler>;
+
+type RpcCommand = keyof typeof RPC_COMMANDS;
+
+const isRpcCommand = (type: string): type is RpcCommand => Object.hasOwn(RPC_COMMANDS, type);
+
+/** One RPC command on one backend. */
+async function runRpcCommand(cmd: JsonObject, on: RpcInspection): Promise<JsonValue> {
+  const type = commandType(cmd);
+
+  if (!isRpcCommand(type)) throw new Error('Unsupported command');
+
+  return await RPC_COMMANDS[type](cmd, on);
+}
+
+/** A cloud workspace's answers, as its RPC gives them. */
+function cloudInspection(origin: string, token: string, name: string): RpcInspection {
   const rpc = async (method: AgentRpcMethod, args: JsonValue[] = []): Promise<JsonValue> =>
     callAgentRpc({ origin, token, name, method, schema: JsonValueSchema, args });
 
-  const type = commandType(cmd);
-
-  switch (type) {
-    case 'get_state':
-    case 'state':
-      return rpc('getWorkspaceSnapshot');
-    case 'status':
-      return rpc('getAgentStatus');
-    case 'tools':
-      return rpc('getToolDescriptions');
-    case 'triggers':
-      return rpc('listTriggers');
-    case 'jobs':
-      return rpc('listBackgroundJobs', [numberField(cmd, 'limit') ?? 20]);
-    case 'memory': {
-      const query = stringField(cmd, 'query');
-
-      return query
-        ? rpc('searchMemoryHybrid', [query, numberField(cmd, 'limit') ?? 10])
-        : { content: await rpc('getMemoryContent') };
-    }
-
-    case 'events':
-      {
-        const filter: JsonObject = { limit: numberField(cmd, 'limit') ?? 50 };
-        const variant = stringField(cmd, 'variant');
-        const since = numberField(cmd, 'since');
-
-        if (variant) filter.variant = variant;
-
-        if (since !== undefined) filter.since = since;
-
-        return rpc('listRecentEvents', [filter]);
-      }
-
-    case 'timeline':
-      return rpc('getRunTimeline', [{ limit: numberField(cmd, 'limit') ?? 100 }]);
-    case 'swarm': {
-      const nodeId = stringField(cmd, 'nodeId') ?? stringField(cmd, 'id');
-
-      return nodeId ? rpc('getMctsNodeDetail', [nodeId]) : rpc('getMctsTree');
-    }
-
-    case 'heads':
-      return rpc('getHeadRuns', [numberField(cmd, 'limit') ?? 20]);
-    case 'gepa': {
-      const runId = stringField(cmd, 'runId') ?? stringField(cmd, 'id');
-
-      return runId ? rpc('getGepaRun', [runId]) : rpc('getGepaRuns', [numberField(cmd, 'limit') ?? 20]);
-    }
-
-    case 'executors':
-      return rpc('getExecutors');
-    case 'exec': {
-      const executor = stringField(cmd, 'executor') ?? stringField(cmd, 'executorId');
-      const command = stringField(cmd, 'command');
-
-      if (!executor) throw new Error('executor required');
-
-      if (!command) throw new Error('command required');
-
-      return rpc('executeInExecutor', [executor, command]);
-    }
-
-    case 'stop':
-      return rpc('cancelCurrentWork');
-    case 'webhook': {
-      const label = stringField(cmd, 'label');
-
-      if (!label) throw new Error('label required');
-
-      const input = webhookTriggerInput(label, {
-        authMode: stringField(cmd, 'authMode') ?? stringField(cmd, 'auth_mode'),
-        secret: stringField(cmd, 'secret'),
-        contentType: stringField(cmd, 'contentType'),
-        rateLimit: numberField(cmd, 'rateLimit'),
-      });
-
-      return decodeJsonValue({ value: await createCloudWebhookTrigger(origin, token, name, input) });
-    }
-
-    default:
-      throw new Error('Unsupported command');
-  }
+  return {
+    state: () => rpc('getWorkspaceSnapshot'),
+    status: () => rpc('getAgentStatus'),
+    tools: () => rpc('getToolDescriptions'),
+    triggers: () => rpc('listTriggers'),
+    jobs: (limit) => rpc('listBackgroundJobs', [limit]),
+    searchMemory: (query, limit) => rpc('searchMemoryHybrid', [query, limit]),
+    memory: async () => v.parse(v.string(), await rpc('getMemoryContent')),
+    events: (filter) => rpc('listRecentEvents', [decodeJsonValue({ value: filter })]),
+    timeline: (limit) => rpc('getRunTimeline', [{ limit }]),
+    searchNode: (nodeId) => rpc('getMctsNodeDetail', [nodeId]),
+    searchTree: () => rpc('getMctsTree'),
+    heads: (limit) => rpc('getHeadRuns', [limit]),
+    gepaRun: (runId) => rpc('getGepaRun', [runId]),
+    gepaRuns: (limit) => rpc('getGepaRuns', [limit]),
+    executors: () => rpc('getExecutors'),
+    exec: (executor, command) => rpc('executeInExecutor', [executor, command]),
+    stop: () => rpc('cancelCurrentWork'),
+    webhook: async (input) => decodeJsonValue({ value: await createCloudWebhookTrigger(origin, token, name, input) }),
+  };
 }
 
-async function runLocalRpcCommand(name: string, cmd: JsonObject, client: AgentClient): Promise<JsonValue> {
-  const type = commandType(cmd);
+/** A local workspace's answers, read from its database and its client. */
+function localInspection(name: string, client: AgentClient): RpcInspection {
+  const json = (value: Parameters<typeof decodeJsonValue>[0]['value']): JsonValue => decodeJsonValue({ value });
 
-  switch (type) {
-    case 'get_state':
-    case 'state':
-      return decodeJsonValue({ value: {
-        ...await getLocalAgentState(name),
-        sessionId: client.cliSession.id,
-        tools: getLocalToolSurface(name),
-        model: await client.getModelSpec(),
-      } });
-    case 'status':
-      return decodeJsonValue({ value: await getLocalAgentState(name) });
-    case 'tools':
-      return decodeJsonValue({ value: await client.describeTools() });
-    case 'triggers':
-      return decodeJsonValue({ value: listLocalTriggers(name) });
-    case 'jobs':
-      return decodeJsonValue({ value: await client.listJobs(numberField(cmd, 'limit') ?? 20) });
-    case 'memory': {
-      const query = stringField(cmd, 'query');
-
-      return decodeJsonValue({ value: query ? await searchLocalMemory(name, query, numberField(cmd, 'limit') ?? 10) : { content: await readLocalMemory(name) } });
-    }
-
-    case 'events':
-      return decodeJsonValue({ value: listLocalEvents(name, {
-        variant: stringField(cmd, 'variant'),
-        since: numberField(cmd, 'since'),
-        limit: numberField(cmd, 'limit') ?? 50,
-      }) });
-    case 'timeline':
-      return listLocalTimeline(name, numberField(cmd, 'limit') ?? 100);
-    case 'swarm': {
-      const nodeId = stringField(cmd, 'nodeId') ?? stringField(cmd, 'id');
-
-      return decodeJsonValue({ value: nodeId ? getLocalMctsNode(name, nodeId) : listLocalMcts(name) });
-    }
-
-    case 'heads':
-      return decodeJsonValue({ value: listLocalHeads(name, numberField(cmd, 'limit') ?? 20) });
-    case 'gepa': {
-      const runId = stringField(cmd, 'runId') ?? stringField(cmd, 'id');
-
-      return decodeJsonValue({ value: runId ? getLocalGepaRun(name, runId) : listLocalGepaRuns(name, numberField(cmd, 'limit') ?? 20) });
-    }
-
-    case 'executors':
-      return decodeJsonValue({ value: listLocalExecutors() });
-    case 'exec': {
-      const executor = stringField(cmd, 'executor') ?? stringField(cmd, 'executorId');
-      const command = stringField(cmd, 'command');
-
-      if (!executor) throw new Error('executor required');
-
-      if (!command) throw new Error('command required');
-
-      return decodeJsonValue({ value: await executeLocalExecutor(name, executor, command) });
-    }
-
-    case 'stop':
+  return {
+    state: async () => json({
+      ...await getLocalAgentState(name), sessionId: client.cliSession.id, tools: getLocalToolSurface(name), model: await client.getModelSpec(),
+    }),
+    status: async () => json(await getLocalAgentState(name)),
+    tools: async () => json(await client.describeTools()),
+    triggers: async () => json(listLocalTriggers(name)),
+    jobs: async (limit) => json(await client.listJobs(limit)),
+    searchMemory: async (query, limit) => json(await searchLocalMemory(name, query, limit)),
+    memory: async () => await readLocalMemory(name),
+    events: async (filter) => json(listLocalEvents(name, filter)),
+    timeline: async (limit) => listLocalTimeline(name, limit),
+    searchNode: async (nodeId) => json(getLocalMctsNode(name, nodeId)),
+    searchTree: async () => json(listLocalMcts(name)),
+    heads: async (limit) => json(listLocalHeads(name, limit)),
+    gepaRun: async (runId) => json(getLocalGepaRun(name, runId)),
+    gepaRuns: async (limit) => json(listLocalGepaRuns(name, limit)),
+    executors: async () => json(listLocalExecutors()),
+    exec: async (executor, command) => json(await executeLocalExecutor(name, executor, command)),
+    stop: async () => {
       client.stop();
 
       return { interrupted: true };
-    default:
-      throw new Error('Unsupported command');
-  }
+    },
+  };
 }
 
 /** A run answers no question: it shows what the agent asked and where the owner answers it. */

@@ -115,7 +115,7 @@ export const DECLARED = byFile([
     reason: 'session events reach the frontend listener in order, synchronously when it answers synchronously; a promise '
       + 'chain keeps that order (settle\'s hops would reorder events), and a listener\'s failure is reported, never the loop\'s end',
   }],
-  ...['packages/agent-utils/src/core/utils.ts', 'packages/agent-utils/src/memory/store.ts', 'packages/agent-utils/src/vfs/addressing.ts'].map(file => [file, {
+  ...['packages/agent-utils/src/core/utils.ts', 'packages/agent-utils/src/memory/store.ts'].map(file => [file, {
     mechanisms: ['throw', 'catch'],
     reason: 'agent-utils sits below core and holds no runner: a leaf utility throws and catches as plain async code, '
       + 'and core brings each failure in with `attempt`',
@@ -125,6 +125,11 @@ export const DECLARED = byFile([
     reason: 'the checkpoint engine the device daemon runs as a generated copy holds no runner, so the daemon\'s '
       + 'dependency-free JavaScript runs it unchanged: it throws and catches as plain async code, and each host brings '
       + 'a failure in at its own edge',
+  }],
+  ['packages/cli-backend/src/machine-pidfile.ts', {
+    mechanisms: ['throw', 'catch'],
+    reason: 'the machine pidfile protocol the device daemon claims through as well: its CommonJS build carries this leaf, '
+      + 'which holds no runner, so it throws and catches as plain code, and each caller brings a failure in at its own edge',
   }],
   ['packages/compaction/src/codec.ts', {
     mechanisms: ['throw', 'catch'],

@@ -626,7 +626,7 @@ describe('a successor that dies before connecting is the old daemon\'s to undo',
     const proc = Bun.spawn({
       cmd: [process.execPath, '-e', `
         import { daemonStatus } from './packages/cli/src/device-connect.ts';
-        console.log(JSON.stringify(daemonStatus()));
+        console.log(JSON.stringify(await daemonStatus()));
       `],
       cwd: repoRoot,
       env: { ...process.env, KINU_HOME: home },
@@ -651,7 +651,7 @@ describe('a successor that dies before connecting is the old daemon\'s to undo',
     const proc = Bun.spawn({
       cmd: [process.execPath, '-e', `
         import { daemonStatus } from './packages/cli/src/device-connect.ts';
-        console.log(JSON.stringify(daemonStatus()));
+        console.log(JSON.stringify(await daemonStatus()));
       `],
       cwd: repoRoot,
       env: { ...process.env, KINU_HOME: home },

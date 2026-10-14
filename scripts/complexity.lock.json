@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-14",
-  "files": 3295,
-  "functions": 86288,
+  "files": 3298,
+  "functions": 86341,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -60,10 +60,6 @@
     {
       "key": "packages/core/src/bench/stats.ts#pairedBinaryComparison>gen",
       "complexity": 36
-    },
-    {
-      "key": "packages/cli/src/commands/run.ts#runCloudRpcCommand",
-      "complexity": 35
     },
     {
       "key": "scripts/bench-external.ts#readHarborTrial",
@@ -139,10 +135,6 @@
     },
     {
       "key": "packages/cf-backend/src/components/surfaces/FileViewer.tsx#FileViewer",
-      "complexity": 30
-    },
-    {
-      "key": "packages/cli/src/commands/run.ts#runLocalRpcCommand",
       "complexity": 30
     },
     {
