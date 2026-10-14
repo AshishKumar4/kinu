@@ -21,7 +21,6 @@ import {
 import * as v from 'valibot';
 
 export const resolverRest = {
-  judgeCandidates: async () => [],
   getAuth: async () => null,
   attemptFor: async () => null,
   countInputTokens: async () => ({
@@ -58,17 +57,14 @@ export function textStream(delta: string, usage: LanguageModelV2Usage): Readable
   });
 }
 
-/** A `fact` recall call that withholds its step boundary until `gate` settles: the window an interrupt lands in. */
-export function gatedFactCallStream(
+/** A file read that withholds its step boundary until `gate` settles: the window an interrupt lands in. */
+export function gatedToolCallStream(
   toolCallId: string, gate: Promise<void>, usage: LanguageModelV2Usage,
 ): ReadableStream<LanguageModelV2StreamPart> {
   return new ReadableStream({
     async start(controller) {
       controller.enqueue({ type: 'stream-start', warnings: [] });
-      controller.enqueue({
-        type: 'tool-call', toolCallId, toolName: 'fact',
-        input: JSON.stringify({ op: 'recall', key: 'probe' }),
-      });
+      controller.enqueue({ type: 'tool-call', toolCallId, toolName: 'file', input: JSON.stringify({ path: 'probe.txt' }) });
       await gate;
       controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
       controller.close();
