@@ -13,7 +13,7 @@ import {
 } from '@kinu.run/core';
 import { slateShareUrl, viewerEntryUrl } from '../slate-share-route';
 import type { AuthIdentity } from '../auth/session';
-import { deriveUserId } from '../auth/store';
+import { accountIdFor } from '../auth/store';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import { workspaceOwner } from '../workspace-owner-rpc';
 import type { ErrorCode } from '@kinu.run/core/obs';
@@ -204,7 +204,7 @@ async function publish(request: Request, env: Env, identity: AuthIdentity): Prom
   let users: readonly string[] = share.users;
 
   if (emails.length > 0) {
-    const named = await Promise.all(emails.map(async (email) => ({ userId: await deriveUserId(email), email })));
+    const named = await Promise.all(emails.map(async (email) => ({ userId: await accountIdFor(env, email), email })));
     const recorded = await owned.shareBlueprintWith(share.id, named);
 
     if (!recorded.ok) return err(409, recorded.error);
@@ -282,7 +282,7 @@ async function shareLive(request: Request, env: Env, identity: AuthIdentity): Pr
   let answered = share;
 
   if (share.visibility === 'users' && emails.length > 0) {
-    const named = await Promise.all(emails.map(async (email) => ({ userId: await deriveUserId(email), email })));
+    const named = await Promise.all(emails.map(async (email) => ({ userId: await accountIdFor(env, email), email })));
     const recorded = await owned.shareLiveWith(share.id, named);
 
     if (!recorded.ok) return err(409, recorded.error);

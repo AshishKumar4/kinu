@@ -100,7 +100,7 @@ authApiRoutes.get('/api/auth/me', (c) => {
  * The dev identity's sign-in: the header it is accepted in, exchanged once on the app's origin for the session any
  * sign-in mints, so a browser holds a cookie its origin scopes rather than a header it sends everywhere
  * (`devIdentityEmail`). Gated by the same possession check every route applies, so it grants nothing the header did
- * not: the same user (`deriveUserId` of the same email), now revocable as any session is.
+ * not: the same user (`accountIdFor` of the same email, as the header path mints it), now revocable as any session is.
  */
 authApiRoutes.post('/api/auth/dev-session', (c) => settle(Effect.gen(function* () {
   const email = yield* devIdentityEmail(c.req.raw, c.env);

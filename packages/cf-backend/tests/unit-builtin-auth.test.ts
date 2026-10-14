@@ -5,7 +5,7 @@ import * as v from 'valibot';
 import { builtinAccountRoutes, builtinAuthRoutes, type BuiltinAuthEnv } from '../src/auth/builtin';
 import { authPageRoutes } from '../src/auth/routes';
 import type { AuthIdentity } from '../src/auth/session';
-import { deriveBuiltinUserId, verifySession } from '../src/auth/store';
+import { accountIdFor, verifySession } from '../src/auth/store';
 import { readCookie, SESSION_COOKIE_NAME } from '../src/auth/cookies';
 import { serveFamily } from './helpers/api';
 import { makeKv } from './helpers/kv';
@@ -92,7 +92,8 @@ const InviteSchema = v.object({ url: v.string() });
 const ChallengeSchema = v.object({ challenge: v.string() });
 
 async function identityOf(email: string): Promise<AuthIdentity> {
-  return { userId: await deriveBuiltinUserId(email), email, sub: 'sub', provider: 'password', authTime: Date.now() };
+  // A built-in deployment declares no OAuth provider.
+  return { userId: await accountIdFor({}, email), email, sub: 'sub', provider: 'password', authTime: Date.now() };
 }
 
 describe('who may register', () => {
@@ -201,7 +202,7 @@ describe('a reset and the sessions it ends are one transition', () => {
   test("a reset whose session ending fails never leaves an old session beside the new password, and can be retried", async () => {
     const { env, post, registerOwner, unreachable } = deployment();
     const before = sessionOf(await registerOwner(OWNER));
-    const owner = await deriveBuiltinUserId(OWNER);
+    const owner = await accountIdFor(env, OWNER);
 
     unreachable.add(owner);
     const [failed] = await Promise.allSettled([reset(post, 'a brand new password')]);
@@ -219,7 +220,7 @@ describe('a reset and the sessions it ends are one transition', () => {
     const { env, objectFor, post, registerOwner } = deployment();
 
     await registerOwner(OWNER);
-    const target = objectFor(await deriveBuiltinUserId(OWNER)).userDO;
+    const target = objectFor(await accountIdFor(env, OWNER)).userDO;
     const register = target.registerBrowserSession.bind(target);
     let after: Response | null = null;
 

@@ -6,13 +6,14 @@ import {
   DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, EVAL_ACCOUNTS, EVAL_TRIAL_ACCOUNTS, parseEvalAccount, timingSafeEqual,
 } from '@kinu.run/core';
 import {
-  SessionAuthorityUnavailableError, deriveUserId, verifySession,
+  SessionAuthorityUnavailableError, accountIdFor, verifySession,
   type AuthStoreEnv, type SessionAuthority,
 } from './store';
 import { readCookie, SESSION_COOKIE_NAME } from './cookies';
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { ObjectNamespace } from '@kinu.run/core';
 import type { OwnerCapabilityEnv } from '@kinu.run/core';
+import type { SignInDeclarationEnv } from '@kinu.run/core/identity';
 import type { AccessTokenScope } from '@kinu.run/core';
 
 
@@ -58,7 +59,8 @@ export function readSessionToken(request: Request): string | null {
 
 
 
-export interface AuthEnv<Id = DurableObjectId> extends OwnerCapabilityEnv {
+/** The sign-in declaration names which account the eval identity's address is. */
+export interface AuthEnv<Id = DurableObjectId> extends OwnerCapabilityEnv, SignInDeclarationEnv {
   AUTH_KV?: KvStore;
   UserDO?: ObjectNamespace<Id, SessionAuthority>;
   DEV_USER_EMAIL?: string;
@@ -96,7 +98,7 @@ export function authenticateRequest<Id>(request: Request, env: AuthEnv<Id>): Pro
     const devEmail = yield* devIdentityEmail(request, env);
 
     if (devEmail !== null) {
-      return { userId: yield* Effect.promise(() => deriveUserId(devEmail)), email: devEmail, sub: 'dev', provider: 'dev', authTime: Date.now() } satisfies AuthIdentity;
+      return { userId: yield* Effect.promise(() => accountIdFor(env, devEmail)), email: devEmail, sub: 'dev', provider: 'dev', authTime: Date.now() } satisfies AuthIdentity;
     }
 
     if (!env.AUTH_KV) {

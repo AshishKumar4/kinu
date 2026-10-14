@@ -87,13 +87,21 @@ export type OAuthStateRecord = v.InferOutput<typeof OAuthStateSchema>;
 
 /** Truncated sha256 in the shape every userId-carrying format (UserDO name, `ptc_…` token) expects;
  *  the one derivation for dev and real sign-in. */
-export async function deriveUserId(email: string): Promise<string> {
+async function deriveUserId(email: string): Promise<string> {
   return (await sha256Hex(email.trim().toLowerCase())).slice(0, 32);
 }
 
 /** Never the userId an OAuth login of the address gets. */
-export async function deriveBuiltinUserId(email: string): Promise<string> {
+async function deriveBuiltinUserId(email: string): Promise<string> {
   return deriveUserId(`builtin:${email.trim().toLowerCase()}`);
+}
+
+/**
+ * The account an address is here, the one rule every sign-in mints by and every person named by address (a share's
+ * recipient) resolves by: a deployment offers built-in sign-in or OAuth, never both (`builtinSignInOn`).
+ */
+export async function accountIdFor(env: SignInDeclarationEnv, email: string): Promise<string> {
+  return builtinSignInOn(env) ? deriveBuiltinUserId(email) : deriveUserId(email);
 }
 
 const BUILTIN_METHODS: ReadonlySet<string> = new Set(['password', 'passkey']);
@@ -260,7 +268,7 @@ function resolveIdentity<Id>(env: AuthStoreEnv<Id>, profile: OAuthProfile, now: 
       return yield* Effect.die(new Error('OAuth provider did not report this email address as verified.'));
     }
 
-    const userId = builtin ? (yield* Effect.promise(async () => deriveBuiltinUserId(email))) : (yield* Effect.promise(async () => deriveUserId(email)));
+    const userId = yield* Effect.promise(async () => accountIdFor(env, email));
 
     const stored = yield* Effect.promise(async () => sessionAuthority(env, userId)
       .ensureProfile(await ownerCaller(env), email, profile.displayName ?? undefined));

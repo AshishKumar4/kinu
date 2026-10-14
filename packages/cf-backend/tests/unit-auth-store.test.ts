@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
 import {
-  consumeOAuthState, createOAuthState, createSession, revokeSession, verifySession,
+  accountIdFor, consumeOAuthState, createOAuthState, createSession, revokeSession, verifySession,
   type AuthStoreEnv, type OAuthProfile, type OAuthStateInput, type SessionAuthority,
 } from '../src/auth/store';
 import { bootstrappedProfile } from './helpers/bindings';
@@ -51,10 +51,12 @@ function setupEnv() {
     kv,
     ensuredProfiles,
     liveSessions: () => [...rows.keys()],
+    // A deployment that signs in through OAuth, as these logins do.
     env: {
       AUTH_KV: kv,
       UserDO: { idFromName: (name) => name, get: () => userDO },
       CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+      SIGN_IN_PROVIDERS: 'google',
     } satisfies AuthStoreEnv<string>,
   };
 }
@@ -301,9 +303,13 @@ describe('the synthetic development identity', () => {
 
   // 2026-10-14: a browser page sent the header to every origin it reached, slate subresources and foreign sockets
   // included. A browser now exchanges it once, on the app's origin, for the session any sign-in mints.
-  test('the exchange mints the session any sign-in does, as the user the header is, and nothing without the secret', async () => {
+  // A deployment offers built-in sign-in (staging) or OAuth, and mints every account id by that rule (`accountIdFor`).
+  test.each([
+    ['built-in', {}],
+    ['OAuth', { SIGN_IN_PROVIDERS: 'github' }],
+  ])('on a %s deployment the exchange mints the session any sign-in does, as the user the header is, and nothing without the secret', async (_kind, declared) => {
     const store = setupEnv();
-    const env = { ...store.env, DEV_USER_EMAIL: DEV_ENV.DEV_USER_EMAIL, DEV_IDENTITY_SECRET: DEV_ENV.DEV_IDENTITY_SECRET };
+    const env = { ...store.env, ...declared, DEV_USER_EMAIL: DEV_ENV.DEV_USER_EMAIL, DEV_IDENTITY_SECRET: DEV_ENV.DEV_IDENTITY_SECRET };
     const exchange = (headers: HeadersInit) => authApiRoutes.request('https://kinu.run/api/auth/dev-session', { method: 'POST', headers }, env);
     const held = { [DEV_IDENTITY_HEADER]: 'deployment-shared-secret', [DEV_IDENTITY_ACCOUNT_HEADER]: 'devices' };
 
@@ -320,12 +326,12 @@ describe('the synthetic development identity', () => {
     expect({
       status: answer.status,
       attributes: cookie.slice(cookie.indexOf(';')),
-      user: bySession.userId === byHeader.userId,
+      users: [bySession.userId, byHeader.userId],
       identity: { email: bySession.email, provider: bySession.provider },
     }).toEqual({
       status: 200,
       attributes: `; Path=/; Max-Age=${String(30 * 24 * 60 * 60)}; HttpOnly; Secure; SameSite=Lax`,
-      user: true,
+      users: [await accountIdFor(env, 'eval-service+devices@kinu.run'), await accountIdFor(env, 'eval-service+devices@kinu.run')],
       identity: { email: 'eval-service+devices@kinu.run', provider: 'dev' },
     });
   });

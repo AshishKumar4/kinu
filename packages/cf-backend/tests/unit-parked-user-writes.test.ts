@@ -12,7 +12,10 @@ import { CAPABLE_HELLO } from './helpers/device-harness';
 import { chatSessionTurns, hostedMainActor, orchestratorHarness } from './helpers/actor-harness';
 
 // Dynamic: the helpers above install the agents-SDK mock at load, and `agents` imports workerd-only modules.
-const { deriveUserId } = await import('../src/auth/store');
+const { accountIdFor } = await import('../src/auth/store');
+
+/** A deployment that signs in through OAuth: an address is the account its OAuth sign-in mints. */
+const OAUTH_DEPLOYMENT = { SIGN_IN_PROVIDERS: 'google' };
 
 const DEVICE_HOME = '/home/dev';
 
@@ -76,7 +79,7 @@ afterEach(async () => {
 /** The hosted main actor of a workspace whose owner's machine holds {@link NOTES}. */
 async function workspaceWithMachine() {
   const machine = new Map([[NOTES, OWNERS]]);
-  const ownerUserId = await deriveUserId('owner@kinu.example.com');
+  const ownerUserId = await accountIdFor(OAUTH_DEPLOYMENT, 'owner@kinu.example.com');
   const user = createTestUserDO({ deviceResponder: daemon(machine), durableObjectId: ownerUserId });
   opened.push(user);
   // The owner let this workspace use the machine: device consent is not what these tests are about.

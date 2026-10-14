@@ -44,6 +44,7 @@ import { UserCredentials, type CheckpointedCredential, type CredentialEndpoint, 
 import { UserWorkspaces, type WorkspaceRegistration, type WorkspaceRegistrationSource } from './workspaces';
 import { UserProfileStore, type ProfileCatalogWriteResult } from './profile';
 import { ShareCardJobs, type HeldShare, type ReceivedShare } from './share-cards';
+import { accountIdFor } from '../auth/store';
 import type { SqlRow, UserObjectHost } from './user-host';
 
 import {
@@ -107,6 +108,7 @@ export class UserDO extends Agent<Env> {
     sql: this.ctx.storage.sql,
     owner: () => ({ userId: this.name, email: this.sqlx<{ email: string }>(`SELECT email FROM user_profile WHERE id = 1`)[0]?.email ?? '' }),
     recipient: (userId) => this.env.UserDO.get(this.env.UserDO.idFromName(userId)),
+    accountOf: (email) => accountIdFor(this.env, email),
     caller: () => ownerCaller(this.env),
   });
 
@@ -122,7 +124,7 @@ export class UserDO extends Agent<Env> {
 
   private readonly terminals = new UserTerminals({ ...this.host, devices: this.devices });
 
-  private readonly userDrive = new UserDrive({ ...this.host, driveFor: (tenant) => this.driveFor(tenant) });
+  private readonly userDrive = new UserDrive({ ...this.host, accountId: () => this.name, driveFor: (tenant) => this.driveFor(tenant) });
 
   ensureProfile(caller: UserCaller, email: string, displayName?: string): Promise<UserProfile> {
     return this.profile.ensureProfile(caller, email, displayName);
@@ -962,8 +964,8 @@ export class UserDO extends Agent<Env> {
     if (!deviceIdFromSocket(ws) && !isRosterSocket(ws)) return this.lifecycle.webSocketError(...call);
   }
 
-  // The Mossaic tenant id is the owner's user id, derived from the profile row's email as the
-  // edge does, so no caller names a tenant. Every owner workspace mounts it at `/shared`.
+  // The Mossaic tenant id is this account's own id, the name it is addressed by, so no caller names a tenant. Every
+  // owner workspace mounts the same one at `/shared`: its recorded owner is that name too.
 
   /** Seam: the hosted deployment builds the SDK client from bindings; the bun:sqlite harness fakes it. */
   protected driveFor(tenant: string): MossaicVfs | null {
