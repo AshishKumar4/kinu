@@ -328,9 +328,9 @@ function teamOffered(deps: AgentsWiring): boolean {
   return deps.team !== undefined && !delegationExhausted(deps.team.delegation);
 }
 
-/** Whether an actor has an `agents` tool at all: a search, a team below the cap, or peer workspaces. */
+/** Whether an actor has an `agents` tool at all: whether it is offered any operation. */
 export function agentsWired(deps: AgentsToolDeps): boolean {
-  return deps.swarm !== undefined || teamOffered(deps) || deps.peers !== undefined;
+  return agentsActionsFor(offered(deps)).length > 0;
 }
 
 /** What wires each operation; a search needs exactly the exploration substrate, so it has no deps group of its own. */
@@ -1041,13 +1041,13 @@ export async function dispatchAgentsCall(
       }
 
       case 'assign':
-        return await assignWork(deps, call.fields, rosterCall);
+        return await assignWork(wired, call.fields, rosterCall);
 
       case 'hireWorkspace':
         return await hireWorkspace({ deps, fields: call.fields, mode, toolOptions, spawnDepthRefusal });
 
       case 'message':
-        return await messageAgent(deps, call.fields, rosterCall);
+        return await messageAgent(wired, call.fields, rosterCall);
 
       case 'reply': {
         if (!peers) throw new KinuError('denied', 'answering an event needs the peer transport, which this actor does not have');
@@ -1061,7 +1061,7 @@ export async function dispatchAgentsCall(
       }
 
       case 'list':
-        return await roster(deps, call.fields);
+        return await roster(wired, call.fields);
 
       case 'dismiss':
         if (!team) throw new KinuError('denied', 'dismiss applies to subordinates, which this actor does not have');

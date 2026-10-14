@@ -70,8 +70,8 @@ export const CATALOGUE: readonly Mutation[] = [
   {
     id: 'converse-capability-union',
     file: 'packages/core/src/delegation/agents-tool.ts',
-    find: '  list: (deps) => deps.team !== undefined || deps.peers !== undefined,',
-    replace: '  list: (deps) => deps.team !== undefined && deps.peers !== undefined,',
+    find: '  list: (deps) => teamOffered(deps) || deps.peers !== undefined,',
+    replace: '  list: (deps) => teamOffered(deps) && deps.peers !== undefined,',
     decision: 'the roster is offered when EITHER team or peers is wired',
     symbol: 'agentsActionsFor',
     control: 'unit-agents-tool.test.ts',

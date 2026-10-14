@@ -5,7 +5,7 @@ import { createTestRuntime, toolExecute, scriptedTurnModel, unobservedSearchSeam
 import { swarmSeats } from './helpers-actor-host';
 
 import * as v from 'valibot';
-import { delegationChoices } from '../src/delegation/agents-tool';
+import { agentsWired, delegationChoices } from '../src/delegation/agents-tool';
 import { AGENTS_OPS } from '../src/operations/agents';
 import { SWARM_PRESETS } from '../src/strategy/swarm';
 import {
@@ -293,6 +293,14 @@ describe('agents tool — delegation depth', () => {
   test('an agent at the cap is offered no team, on every backend: a wired team below it is offered whole', () => {
     expect({ below: agentsActionsFor(depthDeps(3).deps), atCap: agentsActionsFor(depthDeps(4).deps) })
       .toEqual({ below: ['hire', 'assign', 'message', 'list', 'dismiss'], atCap: [] });
+  });
+
+  // A tool with no operation to take is no tool: a capped agent with searches off has no `agents` at all.
+  test('a capped agent has the agents tool only while a search is offered to it', () => {
+    expect({
+      searchesOff: agentsWired(depthDeps(4, { swarm: swarmDeps(), swarms: false }).deps),
+      searchesOn: agentsWired(depthDeps(4, { swarm: swarmDeps() }).deps),
+    }).toEqual({ searchesOff: false, searchesOn: true });
   });
 
   // A toolset is cached across turns, and a facet's identity is seeded after it is built: one served below the cap

@@ -809,13 +809,12 @@ describe('the rung is structural, and so is its absence', () => {
   });
 
   test('the depth refusal suggests only calls the surface accepts', () => {
-    // Both advertised remedies must survive the model-facing parse, or the refusal teaches an unwinnable retry.
+    // The refusal teaches only a retry the capped surface can take, or it teaches an unwinnable one.
     const remedy = delegationDepthRefusal({ depth: DELEGATION_MAX_DEPTH, maxDepth: 0 }).error;
     expect(remedy).toContain('config:{context:"inherit"}');
-    expect(remedy).toContain('agents({op:"assign", agent, message})');
+    // An agent at the cap has no team, so the refusal names no call to one.
+    expect(remedy).not.toContain('op:"assign"');
     expect(remedy).not.toContain('ask by');
-    const scene = makeScene();
-    expect(nativeRefusal(scene.deps, { op: 'assign', agent: 'a', message: 'm' })).toBeNull();
   });
 
   test('a task child is a real agent: it can hire a role of its own until the cap', () => {
