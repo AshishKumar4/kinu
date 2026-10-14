@@ -4646,7 +4646,11 @@ One agent drives at a time: an agent takes the screen by looking once no other a
 taken only from the agent holding it, and a screen X started afresh is nobody's, so every action lands on a screen
 its agent saw. The owner is not a driver. Each action is one xdotool invocation bounded at 5 s, with no
 `mousemove --sync`, which waits about 15 s when the pointer is already at the point; what a click holds and a drag
-presses is released whether or not the run ends cleanly. The capture is `scrot -p`, read back as bytes in the same
+presses is released whether or not the run ends cleanly. It runs under a UTF-8 locale: on a real box, under the C
+locale the box starts in, `xdotool type -- "aüb"` typed "a" and stopped at an invalid multi-byte sequence. Under
+UTF-8 it typed "ab": Chromium dropped the ü, whose key xdotool binds for the moment of the press, at 12 ms a
+character, and took it at 150 ms. So a character past ASCII is never typed: core sends it as its own key,
+`key U00FC`, which reached Chromium every time. The capture is `scrot -p`, read back as bytes in the same
 run. Both run on the container runtime's exec directly rather than D87's `exec`: they are the box's own fixed
 commands, not a caller's; the capture is binary, which `exec` decodes as text; and xdotool's argv carries typed text
 without a shell to quote it. The screen is 1280×768, down from 1280×800: tile-based vision models resize a

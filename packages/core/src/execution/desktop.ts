@@ -135,13 +135,22 @@ function desktopChord(keys: string, modifiers = false): readonly string[] | Kinu
   return spelt;
 }
 
-/** `text` as the box types it: runs of at most {@link TYPED_CHUNK} characters, with Return where a line breaks and
- *  Tab where it tabs, which xdotool's `type` sends as neither. */
+/**
+ * `text` as the box types it: runs of at most {@link TYPED_CHUNK} ASCII characters, with Return where a line breaks and
+ * Tab where it tabs, which xdotool's `type` sends as neither. A character past ASCII is pressed as its own Unicode key:
+ * on a real box Chromium dropped `type`'s ü at xdotool's 12 ms a character, and took `key U00FC`.
+ */
 function typedActions(text: string): DesktopAction[] {
-  return text.split(/(\r\n|\r|\n|\t)/u).flatMap((part): DesktopAction[] => {
+  return text.split(/(\r\n|\r|\n|\t|[^\x20-\x7e])/u).flatMap((part): DesktopAction[] => {
     if (part === '\t') return [{ kind: 'key', keys: 'Tab' }];
 
     if (/^(?:\r\n|\r|\n)$/u.test(part)) return [{ kind: 'key', keys: 'Return' }];
+
+    const code = part.codePointAt(0);
+
+    if (code !== undefined && Array.from(part).length === 1 && (code < 0x20 || code > 0x7e)) {
+      return [{ kind: 'key', keys: `U${code.toString(16).toUpperCase().padStart(4, '0')}` }];
+    }
 
     const characters = Array.from(part);
 

@@ -3113,7 +3113,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         Effect.catchTag('DevboxError', (failure) => Effect.sync(() => { this.#trace('desktop.release_failed', { action: action.kind, reason: failure.message }); })),
       );
 
-      const ran = yield* attempt('io', async () => decoded(await (await launch(container, argv, { signal: AbortSignal.timeout(DESKTOP_ACTION_MS) })).output()))
+      // A UTF-8 locale: under the box's default C locale xdotool's `type` stops at the first character past ASCII.
+      const ran = yield* attempt('io', async () => decoded(await (await launch(container, argv, { env: UTF8, signal: AbortSignal.timeout(DESKTOP_ACTION_MS) })).output()))
         .pipe(Effect.ensuring(released));
 
       if (ran.exitCode !== 0) return yield* Effect.fail(new DevboxError('io', `xdotool ${action.kind} failed: ${ran.stderr.trim()}`));
@@ -3379,6 +3380,9 @@ async function firstExec(container: Container, signal: AbortSignal): Promise<voi
 
   if (failed !== undefined) throw failed;
 }
+
+/** A locale that reads text as UTF-8; the C one the box starts in reads a byte past ASCII as an invalid sequence. */
+const UTF8 = { LC_ALL: 'C.UTF-8' };
 
 function launch(container: Container, argv: readonly string[], options: DevboxExecOptions): Promise<ExecProcess> {
   return container.exec([...argv], {

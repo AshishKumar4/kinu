@@ -117,6 +117,20 @@ describe('the desktop members', () => {
     ]);
   });
 
+  // 2026-10-14, a real box: Chromium dropped the ü that xdotool's `type` sent at 12 ms a character, and took `key U00FC`.
+  test('a character past ASCII is pressed as its own Unicode key, between the runs typed around it', async () => {
+    const { box, actions } = desktopBox();
+
+    await call(computerOf(box), 'type', 'Grüße, 5 € 😀!');
+
+    const expected: DesktopAction[] = [
+      { kind: 'type', text: 'Gr' }, { kind: 'key', keys: 'U00FC' }, { kind: 'key', keys: 'U00DF' }, { kind: 'type', text: 'e, 5 ' },
+      { kind: 'key', keys: 'U20AC' }, { kind: 'type', text: ' ' }, { kind: 'key', keys: 'U1F600' }, { kind: 'type', text: '!' },
+    ];
+
+    expect(actions()).toEqual(expected);
+  });
+
   test('a key or modifier X does not know, or a chord that is not one, is refused before anything reaches the box', async () => {
     const { box, sent } = desktopBox();
     const computer = computerOf(box);

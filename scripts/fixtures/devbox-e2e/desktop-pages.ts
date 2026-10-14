@@ -20,9 +20,9 @@ g.addEventListener('dblclick',e=>say('double '+e.target.id));`);
 export const TEXT = PAGE('ready text', '<textarea id=t autofocus style="box-sizing:border-box;width:100vw;height:100vh"></textarea>',
   `const t=document.getElementById('t');t.addEventListener('input',()=>say('text '+JSON.stringify(t.value)));`);
 
-/** Content larger than the screen both ways: how far it scrolled. */
-export const SCROLL = PAGE('ready scroll', '<div style="width:5000px;height:5000px"></div>',
-  `document.documentElement.style.overflow='auto';document.body.style.overflow='auto';addEventListener('scroll',()=>say('scroll '+scrollX+' '+scrollY));`);
+/** Content larger than the screen both ways, scrolled by the window itself: how far it scrolled. */
+export const SCROLL = `<!doctype html><meta charset=utf-8><title>ready scroll</title><style>body{margin:0}</style>
+<div style="width:5000px;height:5000px"></div><script>addEventListener('scroll',()=>{document.title='scroll '+scrollX+' '+scrollY;});</script>`;
 
 /** A range control across the whole screen's width, tall enough to take a point near its top: its value. */
 export const RANGE = PAGE('ready range', '<input id=r type=range min=0 max=100 value=0 style="display:block;width:100vw;height:300px;margin:0">',

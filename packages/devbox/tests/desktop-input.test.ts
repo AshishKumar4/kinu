@@ -34,12 +34,12 @@ function ended(stdout: Uint8Array, exitCode = 0, stderr = ''): ExecProcess {
 
 /** A box whose container answers the desktop check, X's input and the capture; each run is recorded with its options. */
 async function desktopBox(answer: (argv: readonly string[]) => ExecProcess | undefined = () => undefined) {
-  const runs: Array<{ readonly argv: readonly string[]; readonly bounded: boolean }> = [];
+  const runs: Array<{ readonly argv: readonly string[]; readonly bounded: boolean; readonly locale: string | undefined }> = [];
   // The next check finds X gone and starts it: the screen is a new one.
   let restarted = false;
 
   const { box } = harness(DesktopBox, undefined, async (argv, options) => {
-    runs.push({ argv, bounded: options?.signal !== undefined });
+    runs.push({ argv, bounded: options?.signal !== undefined, locale: options?.env?.['LC_ALL'] });
 
     if (argv[3] === 'devbox-desktop') {
       const fresh = restarted;
@@ -87,6 +87,16 @@ describe("an agent's desktop action on the box", () => {
     ]);
     // Every run is bounded: none can hold the calls behind it, or the box's rest.
     expect(runs.filter((run) => !run.bounded)).toEqual([]);
+  });
+
+  // 2026-10-14, a real box: under the C locale `xdotool type -- "aüb"` typed "a", then "Invalid multi-byte sequence".
+  test('text is typed under a UTF-8 locale, so a character past ASCII reaches the screen', async () => {
+    const { box, runs } = await desktopBox();
+
+    await box.desktop(look('main'));
+    await box.desktop({ driver: 'main', action: { kind: 'type', text: 'aüb' } });
+
+    expect(runs.filter((run) => run.argv[1] === 'type').map((run) => [run.argv.at(-1), run.locale])).toEqual([['aüb', 'C.UTF-8']]);
   });
 
   test('a screenshot is the PNG the box captured, byte for byte, with the size its header names', async () => {
