@@ -15,13 +15,9 @@ export interface LivingArt<Frame extends ArtFrame = ArtFrame> {
   frame(): Frame;
 }
 
-/** Canvas2D strokes every curve one by one; the GPU path draws instanced geometry. */
-export type RendererKind = 'webgpu' | 'canvas';
-
 export interface LivingCanvasSpec<Frame extends ArtFrame, Art extends LivingArt<Frame>> {
-  readonly create: (aspect: number, renderer: RendererKind) => Art;
-  /** Absent, the same picture goes on; a picture too dense for Canvas2D hands back a sparser one. */
-  readonly rebind?: (art: Art, aspect: number) => Art;
+  /** One picture for either renderer: a GPU fault hands the same picture, clock and state to Canvas2D. */
+  readonly create: (aspect: number) => Art;
   readonly still: { readonly seconds: number; readonly step: number };
   /** Read on every start. */
   readonly holdStill?: () => boolean;
@@ -99,7 +95,7 @@ export function mountLivingCanvas<Frame extends ArtFrame, Art extends LivingArt<
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
   let disposed = false;
   let palette = readPalette();
-  let art = spec.create(1, 'canvas');
+  let art = spec.create(1);
   let renderer: ArtRenderer | null = null;
   let canvas: HTMLCanvasElement | null = null;
   let still = false;
@@ -153,7 +149,7 @@ export function mountLivingCanvas<Frame extends ArtFrame, Art extends LivingArt<
   const paintStill = (): void => {
     if (renderer === null) return;
     const box = boxOf(host);
-    const frozen = spec.create(box.height / box.width, 'canvas');
+    const frozen = spec.create(box.height / box.width);
     spec.fit?.(frozen, host);
     const steps = Math.round(spec.still.seconds / spec.still.step);
 
@@ -170,9 +166,6 @@ export function mountLivingCanvas<Frame extends ArtFrame, Art extends LivingArt<
       const fallback = canvasRenderer(next, palette);
       renderer = fallback;
       next.dataset.renderer = fallback.kind;
-      const box = boxOf(host);
-
-      if (spec.rebind !== undefined) art = spec.rebind(art, box.height / box.width);
       fit();
       playback.sync();
       diagnostics.event(spec.events.faulted, { reason: renderThrownChain({ cause: error }) });
@@ -196,7 +189,7 @@ export function mountLivingCanvas<Frame extends ArtFrame, Art extends LivingArt<
     const box = boxOf(host);
 
     if (still) {
-      art = spec.create(box.height / box.width, 'canvas');
+      art = spec.create(box.height / box.width);
       spec.fit?.(art, host);
       renderer = canvasRenderer(next, palette);
       next.dataset.renderer = 'static';
@@ -213,7 +206,7 @@ export function mountLivingCanvas<Frame extends ArtFrame, Art extends LivingArt<
         return;
       }
 
-      art = spec.create(box.height / box.width, picked.kind);
+      art = spec.create(box.height / box.width);
       renderer = picked;
       next.dataset.renderer = picked.kind;
       picked.onFault?.(onGpuFault);

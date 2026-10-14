@@ -4,11 +4,11 @@ import { useLocation } from 'react-router-dom';
 
 import { APP_ROUTES, routeTemplateOf, type ReportedRoute } from '@kinu.run/core';
 import type { ArtFrame, KeepOut } from '@kinu.run/core/web/art';
-import { CANVAS_SEGMENTS, Connectome, type ConnectomeActivity, type ConnectomeMode, MESH_SEGMENTS } from '@kinu.run/core/web/connectome';
+import { Connectome, type ConnectomeActivity, type ConnectomeMode } from '@kinu.run/core/web/connectome';
 import { groundTextElements } from '@kinu.run/core/web/ground-text';
 import { useMediaQuery } from '@/hooks/use-media-query';
 import { useRosterActivity } from '@/hooks/use-workspace-roster';
-import { mountLivingCanvas, type LivingCanvas, type RendererKind } from './landing/search-tree/living-canvas';
+import { mountLivingCanvas, type LivingCanvas } from './landing/search-tree/living-canvas';
 import { keepOutOf, type FrameTimes } from './landing/search-tree/stage';
 
 /** Seeded apart from the landing hero's on purpose: the two artworks never rhyme. */
@@ -95,16 +95,14 @@ function Tissue({ known }: { readonly known: { current: ConnectomeActivity } }):
       return boxes;
     };
 
-    // A GPU fault mid-run hands Canvas2D the sparser mat, not the full one.
-    const mat = (aspect: number, renderer: RendererKind): Connectome => {
-      picture = new Connectome({ seed: BACKGROUND_SEED, aspect, segments: renderer === 'webgpu' ? MESH_SEGMENTS : CANVAS_SEGMENTS, activity: known.current });
+    const tissue = (aspect: number): Connectome => {
+      picture = new Connectome({ seed: BACKGROUND_SEED, aspect, width: host.getBoundingClientRect().width, activity: known.current });
 
       return picture;
     };
 
     const mounted = mountLivingCanvas(host, {
-      create: mat,
-      rebind: (_art, aspect) => mat(aspect, 'canvas'),
+      create: tissue,
       still: { seconds: STILL_SECONDS, step: STILL_STEP },
       holdStill: () => !wide,
       startFrozen: () => window.__kinuGalleryStepping === true && window.__kinuGalleryFrozen === true,
@@ -209,7 +207,7 @@ function Tissue({ known }: { readonly known: { current: ConnectomeActivity } }):
       ref={hostRef}
       data-app-background
       aria-hidden="true"
-      className="pointer-events-none fixed inset-0 -z-10 [filter:blur(.6px)] [mask-image:radial-gradient(ellipse_55%_55%_at_58%_50%,rgba(0,0,0,.7),black_100%)]"
+      className="pointer-events-none fixed inset-0 -z-10 [filter:blur(.4px)] [mask-image:radial-gradient(ellipse_55%_55%_at_58%_50%,rgba(0,0,0,.7),black_100%)]"
     />
   );
 }
