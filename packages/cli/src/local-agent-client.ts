@@ -1,39 +1,22 @@
 import { existsSync, statSync } from 'node:fs';
-import { Database } from 'bun:sqlite';
-import type { LanguageModel } from 'ai';
-import { DriverLeaseHold, localFileLinks, type BranchStatusEvent, type FileLinks, type PathPlanes, type SessionEvent } from '@kinu.run/core';
+import { localFileLinks, type BranchStatusEvent, type FileLinks, type PathPlanes, type SessionEvent } from '@kinu.run/core';
 import type { AgentConfigStore, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementDecisionInput, RefinementDecisionResult, RefinementListing, RefinementRequestView, StagedSkillResult, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspaceSpend, WorkspaceWork, ModelTestResult } from '@kinu.run/core';
-import type { WorkspaceInfo } from '@kinu.run/cli-backend';
-import { getChatHistoryPage, getToolList, canonicalConversationId, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, REAL_CLOCK, ToolOutcomeSchema, usageReported, type ProposerOutcome } from '@kinu.run/core';
+import { getChatHistoryPage, getToolList, canonicalConversationId, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, ToolOutcomeSchema, usageReported, type ProposerOutcome } from '@kinu.run/core';
 import * as v from 'valibot';
 import { attempt, KinuError, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import {
-  OS_LEASE_PROCESS,
-  makeExecRaw,
-  makeSql,
   LOCAL_MAX_INLINE_ATTACHMENT_BYTES,
-  LocalAgentSession,
-  openWorkspaceCLI,
+  readWorkspaceInfo,
   type CLIRuntime,
-  type LocalModelResolver,
-  type McpServerConfig,
-  type LocalAgentSessionOpts,
+  type LocalAgentHost,
+  type LocalAgentSession,
 } from '@kinu.run/cli-backend';
-import {
-  agentDbPath,
-  createOAuthStore,
-  loadConfigFile,
-  readProviderRevision,
-  resolveCloudSession,
-  resolveLocalAgent,
-  resolveMcpServers,
-  resolveProviderCredentials,
-} from './config';
+import { agentDbPath } from './config';
 import { renameLocalAgent } from './agent-create';
 import { inspectLocalSubordinate, localJobRunning, readLocalWorkspaceWork } from './local-inspection';
-import { createConfiguredLocalModelResolver } from './local-model-resolver';
-import { createProfileAuthorityReader } from './profiles';
+import { createLocalHost } from './local-host';
+import type { LocalModelResolverOptions } from './local-model-resolver';
 import {
   createCliSession,
   type CliSession,
@@ -70,16 +53,14 @@ import type {
 } from './agent-client';
 
 
-interface LocalAgentClientOptions {
-  model?: string;
-  baseUrl?: string;
-  auth?: string;
+interface LocalAgentClientOptions extends LocalModelResolverOptions {
   transcript?: CliSessionOptions;
   surface?: InvocationSurface;
   /** The folder it works in; absent, the ref's recorded one. */
   cwd?: string;
 }
 
+/** A client over `name` as this machine hosts it (`createLocalHost`): the daemon's composition, its team included. */
 export async function openLocalAgentClient(name: string, opts: LocalAgentClientOptions = {}): Promise<LocalAgentClient> {
   const dbPath = agentDbPath(name);
 
@@ -87,35 +68,20 @@ export async function openLocalAgentClient(name: string, opts: LocalAgentClientO
     throw new Error(`Workspace "${name}" not found. Create it with: kinu create ${name}`);
   }
 
-  const { llmConfig, resolver } = createConfiguredLocalModelResolver(opts);
-  const oauthStore = createOAuthStore();
-  const db = new Database(dbPath);
+  const { transcript, surface, ...root } = opts;
+  const host = createLocalHost({ driverKind: 'interactive', surface: surface ?? 'interactive', root: { ...root, name } });
 
-  const cloud = resolveCloudSession();
+  return await hostedLocalAgentClient({ agentName: name, host, dbPath, transcript: transcript ?? {} });
+}
 
-  const openConfig = {
-    llm: llmConfig, providerCredentials: resolveProviderCredentials, oauthStore,
-    ...(cloud !== null && { cloud }),
-    checkpointKeep: loadConfigFile().checkpointKeep,
-    cwd: opts.cwd ?? resolveLocalAgent(name).cwd,
-  };
+/** A client over the agent `host` opens at `agentName`; the client owns the host and closes it. */
+function hostedLocalAgentClient(deps: Omit<LocalAgentClientDeps, 'session' | 'rt'>): Promise<LocalAgentClient> {
+  return settle(Effect.gen(function* () {
+    const session = yield* Effect.promise(() => deps.host.acquire(deps.agentName));
+    const rt = yield* Effect.promise(() => deps.host.runtime(deps.agentName));
 
-  const { rt, info } = await openWorkspaceCLI(db, dbPath, openConfig);
-
-  const client = new LocalAgentClient({
-    agentName: name,
-    rt,
-    db,
-    dbPath,
-    info,
-    refreshInfo: async () => (await openWorkspaceCLI(db, dbPath, openConfig)).info,
-    modelResolver: resolver,
-    mcpServers: resolveMcpServers(),
-    transcript: opts.transcript ?? {},
-    surface: opts.surface ?? 'interactive',
-  });
-
-  return client;
+    return new LocalAgentClient({ ...deps, session, rt });
+  }).pipe(Effect.onError(() => Effect.promise(() => deps.host.close()))));
 }
 
 /** Only the process running a job can end it, so another live driver's job is refused, naming that process. */
@@ -146,23 +112,16 @@ export async function runLocalOptimization(name: string, target?: string): Promi
   }
 }
 
-interface LocalAgentClientDeps {
+export interface LocalAgentClientDeps {
   agentName: string;
-  /** The session installs itself as this runtime's model-call ledger; `AgentRuntime` would hide that channel. */
+  /** Opens the agent, its team and its peers, holds its driver lease, and owns its database and sessions. */
+  host: LocalAgentHost;
+  /** The agent's session, as its host built it. */
+  session: LocalAgentSession;
+  /** The runtime its host opened it over. */
   rt: CLIRuntime;
-  db: Database;
   dbPath: string;
-  info: WorkspaceInfo;
-  refreshInfo: () => Promise<WorkspaceInfo>;
-  /** Unset for the interactive client, which always wires a resolver. */
-  model?: LanguageModel;
-  modelResolver: LocalModelResolver;
-  /** Override only at composition/test boundaries. */
-  profileAuthority?: LocalAgentSessionOpts['profileAuthority'];
-  mcpServers: Record<string, McpServerConfig>;
   transcript: CliSessionOptions;
-  /** 'one-shot' selects the background detach policy and marks turn continuity for the outcome ledger. */
-  surface: InvocationSurface;
 }
 
 interface PendingLocalTurn {
@@ -192,7 +151,8 @@ export class LocalAgentClient implements AgentClient {
   /** JSONL transcripts carry this id so an export ties back to its conversation. */
   private readonly canonicalConversation: string;
   private readonly listeners = new Set<(event: AgentClientEvent) => void>();
-  private session: LocalAgentSession;
+  private readonly session: LocalAgentSession;
+  private readonly unsubscribe: () => void;
   private activeCliSession: CliSession;
   /** The turn opening under a send's id answers it; a send the running turn read leaves at that landing. */
   private readonly awaiting = new Map<string, PendingLocalTurn>();
@@ -201,12 +161,6 @@ export class LocalAgentClient implements AgentClient {
   private turnCalls = new TurnCalls();
   private closed = false;
   private readonly recorder = new SessionRecorder('local');
-  /**
-     * Held for the client's lifetime: the auto-started daemon drives the same durable work over one SQLite file and
-     * `EventLog.markConsumed` has no compare-and-set, so two drivers turn one event into two turns. Interactive, so
-     * it takes the conversation from the daemon. Survives walk-back forks.
-     */
-  private readonly driverLease: DriverLeaseHold;
 
   constructor(deps: LocalAgentClientDeps) {
     this.deps = deps;
@@ -220,12 +174,10 @@ export class LocalAgentClient implements AgentClient {
       ...deps.transcript,
       conversationId: deps.transcript.conversationId ?? this.canonicalConversation,
     });
-    // Before the session: createAgentSession installs it as the driver gate.
-    this.driverLease = new DriverLeaseHold(
-      { sql: makeSql(deps.db), execRaw: makeExecRaw(deps.db), proc: OS_LEASE_PROCESS },
-      'interactive',
-    );
-    this.session = this.createAgentSession();
+    this.session = deps.session;
+    this.unsubscribe = deps.host.subscribe((agent, event) => {
+      if (agent === this.agentName) this.handleSessionEvent(event);
+    });
     this.localControls = {
       getAlwaysActiveSkills: () => this.session.getAlwaysActiveSkills(),
       setAlwaysActiveSkills: (names) => this.session.setAlwaysActiveSkills(names),
@@ -275,19 +227,19 @@ export class LocalAgentClient implements AgentClient {
     return this.activeCliSession;
   }
 
-  /** The lease is taken before any pump, so the person learns the conversation is taken before typing. */
+  /**
+   * The lease is taken before any pump, so the person learns the conversation is taken before typing: the auto-started
+   * daemon drives the same durable work over one SQLite file, and two drivers would turn one event into two turns.
+   * Interactive, so it takes the conversation from the daemon; the host holds it until close.
+   */
   async connect(): Promise<void> {
-    const refusal = this.driverLease.acquire();
+    const refusal = await this.deps.host.takeDriver(this.agentName);
 
     if (refusal) {
       throw new KinuError(
         refusal.refused.reason,
         `${refusal.refused.error}. Close that session, or continue the conversation there.`,
       );
-    }
-
-    if (Object.keys(this.deps.mcpServers).length > 0) {
-      await this.session.connectMcp(this.deps.mcpServers);
     }
   }
 
@@ -363,13 +315,10 @@ export class LocalAgentClient implements AgentClient {
 
     if (pivotRow === undefined) throw new Error('Could not locate that message in the durable conversation.');
     await this.session.revertConversation(pivotRow.id);
-    await this.session.end();
     this.activeCliSession = createCliSession(this.agentName, {
       ...this.deps.transcript,
       conversationId: this.canonicalConversation,
     });
-    this.session = this.createAgentSession();
-    await this.connect();
 
     return { client: this, label: `branch ${this.activeCliSession.id}` };
   }
@@ -388,18 +337,12 @@ export class LocalAgentClient implements AgentClient {
     return this.session.runOptimization(target);
   }
 
+  /** Ends its sessions, releases the lease so the daemon can drive again at once, and gives the handle back. */
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
-
-    try {
-      await this.session.end();
-    } finally {
-      // Released before the handle closes, even when settling threw, so the daemon can drive again at once.
-      this.driverLease.release();
-      // The handle goes back even when settling failed, or the next open finds the file locked.
-      this.deps.db.close();
-    }
+    this.unsubscribe();
+    await this.deps.host.close();
   }
 
   async history(): Promise<AgentTranscriptMessage[]> {
@@ -409,7 +352,7 @@ export class LocalAgentClient implements AgentClient {
   }
 
   async status(): Promise<AgentClientStatus> {
-    const info = await this.deps.refreshInfo();
+    const info = await readWorkspaceInfo(this.deps.rt);
     const tier = await this.session.nextTurnTier();
 
     return {
@@ -552,29 +495,6 @@ export class LocalAgentClient implements AgentClient {
 
   async testModel(spec: string, signal: AbortSignal): Promise<ModelTestResult> {
     return this.session.testModel(spec, signal);
-  }
-
-  private createAgentSession(): LocalAgentSession {
-    const options: LocalAgentSessionOpts = {
-      rt: this.deps.rt,
-      db: this.deps.db,
-      model: this.deps.model,
-      modelResolver: this.deps.modelResolver,
-      backgroundPolicy: BACKGROUND_POLICY[this.deps.surface],
-      oneShot: this.deps.surface === 'one-shot',
-      onEvent: (event) => this.handleSessionEvent(event),
-      clock: REAL_CLOCK,
-      // The daemon's reader, read per turn: `/model` and `/effort` write the authority.
-      profileAuthority: this.deps.profileAuthority ?? createProfileAuthorityReader(),
-      // A long-open session must see a provider connected in another process.
-      providerRevision: readProviderRevision,
-    };
-
-    const session = new LocalAgentSession(options);
-    // Re-checked every turn boundary: preemption can take the lease between turns. Installed on forked sessions too.
-    session.setDriverGate(() => this.driverLease.acquire()?.refused ?? null);
-
-    return session;
   }
 
   private handleSessionEvent(event: SessionEvent): void {

@@ -16,7 +16,7 @@ export {
   writeSecretFile, enforceOwnerOnly, ensureSecretDir,
 } from './secret-file';
 
-export { openWorkspaceCLI, type WorkspaceInfo } from './open';
+export { openWorkspaceCLI, readWorkspaceInfo, type WorkspaceInfo } from './open';
 
 export { requireSchemaGenesis, schemaGenesisOf, stampSchemaGenesis } from './schema-genesis';
 
