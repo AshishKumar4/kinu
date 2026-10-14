@@ -260,10 +260,6 @@ export const isTestFile = (file: string): boolean => TEST_FILE.test(file);
  *  path prefix living inside a gate. */
 export const isTestScaffold = (file: string): boolean => file.startsWith('packages/test-utils/');
 
-/** What `no-sync-spawn` governs: shipped source, every test and the suites' own helpers. A synchronous spawn in a
- *  suite wedges the run as surely as one in the daemon wedges the machine. */
-export const isSpawnGoverned = (file: string): boolean => isShippedSource(file) || isTestFile(file) || isTestScaffold(file);
-
 /** The strictly narrower set a test RUNNER selects: the basename arm alone. The
  *  ladder's denominator, because `bun test` executes suffixed files and never
  *  the helpers beside them — derived from `TEST_SUFFIX`, one named arm of the

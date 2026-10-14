@@ -23,8 +23,6 @@ test('a task file that did not load and a suite whose hook threw are named in th
     '});',
   ].join('\n'));
 
-  // Awaited, never `spawnSync`: the runner spun in it, state R, until the row's silence bound killed it (2026-10-08, on
-  // 78c0615783, f735c55efa and 3b005c2e2; oven-sh/bun#34069), as session.test.ts's did.
   const run = await runToExit(['bun', '--bun', join(REPO, 'node_modules/.bin/vitest'), 'run', '--root', dir,
     '--config', join(dir, 'vitest.config.mjs'), `--reporter=${join(REPO, 'evals/src/reporter.ts')}`], { env: process.env, cwd: REPO });
 

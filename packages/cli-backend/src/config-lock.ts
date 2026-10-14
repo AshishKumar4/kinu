@@ -59,8 +59,7 @@ interface ConfigLock {
   with<T>(configPath: string, fn: () => T | Promise<T>): Promise<T>;
 }
 
-/** Asynchronous throughout: a synchronous wait could only spawn `ps` synchronously on Darwin, and Bun can
- *  wedge a synchronous spawn for good when a collection lands inside it (oven-sh/bun#34069). */
+/** Asynchronous throughout: a synchronous wait could only spawn `ps` synchronously on Darwin. */
 export function createConfigLock(boundary = hostProcessIdentity()): ConfigLock {
   return {
     async with<T>(configPath: string, fn: () => T | Promise<T>): Promise<T> {

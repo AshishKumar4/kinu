@@ -42,7 +42,7 @@ const GIT_SPAWNERS: ReadonlySet<string> = new Set([
 	"execSync",
 	"spawn",
 	"spawnSync",
-	// `@kinu.run/test-utils`' own spawners, which `no-sync-spawn` sends every suite to: each hands the child the
+	// `@kinu.run/test-utils`' own spawners, which the suites run their children through: each hands the child the
 	// ambient environment unless the call names one.
 	"runOk",
 	"runToExit",

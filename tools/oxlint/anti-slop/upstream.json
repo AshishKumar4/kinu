@@ -25,7 +25,6 @@
     "no-near-duplicate-functions",
     "no-output-token-cap",
     "no-sentinel-catch",
-    "no-sync-spawn",
     "no-tui-colour-literal",
     "no-unaccounted-catch",
     "no-untyped-console",
@@ -39,9 +38,6 @@
     "no-module-scope-flight"
   ],
   "kinuRuleGates": {
-    "no-sync-spawn.gate.test.ts": [
-      "no-sync-spawn"
-    ],
     "no-vacuous-type-predicate.gate.test.ts": [
       "no-vacuous-type-predicate"
     ],
@@ -146,9 +142,6 @@
     "no-untyped-console.gate.test.ts": {
       "kinuOnly": true
     },
-    "no-sync-spawn.gate.test.ts": {
-      "kinuOnly": true
-    },
     "no-vacuous-type-predicate.gate.test.ts": {
       "kinuOnly": true
     },
@@ -174,12 +167,6 @@
       "kinuOnly": true
     },
     "rules/no-ambient-git-in-tests.test.ts": {
-      "kinuOnly": true
-    },
-    "rules/no-sync-spawn.test.ts": {
-      "kinuOnly": true
-    },
-    "rules/no-sync-spawn.ts": {
       "kinuOnly": true
     },
     "rules/no-ambient-git-in-tests.ts": {
