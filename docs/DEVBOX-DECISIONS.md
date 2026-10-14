@@ -4705,9 +4705,12 @@ leaves a fresh `shell`. Not measured: bash's `HISTCONTROL=ignoredups` numbers a 
 run leaves the earlier mark. The product flow `computer-sessions` reads it all on a deployment. Amended 2026-10-14 (P0): staging `7591e6fec` read every session closed, so the
 computer-sessions flow waited forever for its folder and port. On a platform box, tmux prints a tab in a format's output
 as `_` (`P_shell_/workspace_bash___`, read with `cat -A`), where the tmux the unit harness stood in for kept it; every
-`P` row was one field and no row was a session. The read now joins tmux's fields with a printable marker and turns it
-into a tab after tmux. The harness answers the read from fixtures, so it could not see this; the container tier's
-`terminal-sessions` step runs a server in a session's own folder on a real box and reads the session back.
+`P` row was one field and no row was a session. The read's fields are now space-separated and tmux writes each value
+with `#{q:…}`, which puts a backslash before every space, backslash and other special character, so any folder or
+command reads back whole (a reserved marker was tried first and dropped: a folder holding it lost its row). The
+harness answers the read from fixtures, so it could not see this; the container tier's `terminal-sessions` step runs
+a server in a session's own folder, named with a space, quotes, a backslash and a dollar, on a real box and reads the
+session back. A second cause hid behind the first: the server never started (D96).
 
 D91. The computer answers to its workspace's name, not to "computer" (2026-10-13; reverses D83's fixed name). The
 owner, on `root@computer`: "something nice and sensible, workspace related (maybe workspace name?)". `KinuDevbox`
@@ -4791,6 +4794,39 @@ answered "A startup is armed, so ask again", armed its startup 20 times and file
 `83313af6a` it answered "[unclassified -> refuse] ... nothing retries it", armed nothing and filed one incident, and
 every other contract and the cleanup passed. In the unit test on `7ce7f4a31`, a minute of alarms configured the box
 61 times and filed 61 incidents.
+
+D96. The box's kernel answers to its workspace's name again, and the box resolves that name itself (2026-10-14, P0;
+reverses D93's kernel half, which kept the platform's name). D93 measured a renamed kernel's own lookup at ~400 ms to
+fd00::119:1, which is not the box, and kept the platform's name. What D93 did not measure is that name itself: a
+64-character container id, one character over a DNS label's 63. Python's `socket.getfqdn()` raises on it ("encoding
+with 'idna' codec failed"), so `python3 -m http.server`, which calls it as it binds, died at once on every computer,
+production included; staging `7591e6fec`'s computer-sessions flow waited forever for its server's port. D93's
+measurement rerun under both shapes, then the candidates, on one platform box (Debian 13, addresses 10.0.0.1 and
+fd00::11), with `getent hosts`, Python's `getaddrinfo(gethostname())` and `getfqdn()`, `python3 -m http.server`, and
+node's `dns.lookup(os.hostname())`:
+
+| shape | self-lookup | getfqdn | http.server | node |
+|---|---|---|---|---|
+| D93: the platform's name | 4 ms, nothing / UnicodeEncodeError | UnicodeEncodeError | dies | ENOTFOUND |
+| renamed, nothing else (D91/D92) | 79 ms, nothing / gaierror | the name | serves | ENOTFOUND |
+| renamed, a hosts file bind-mounted over the read-only /etc/hosts | 4 ms, 127.0.1.1 | the name | serves | 127.0.1.1 |
+| renamed, `options no-tld-query` | fails at once | the name | serves | ENOTFOUND |
+| renamed, libnss-myhostname (`hosts: files myhostname dns`) | 3 ms, 10.0.0.1, 127.0.0.1, fd00::11, fe80 | the name | serves | the same four |
+
+External names (example.com) answered in 5-9 ms in every shape; the renamed lookup with nothing else answered 79 ms
+here against D93's ~400, as the platform's DNS varies. The last shape is the one: the name resolves on the box, at
+once, to the box's own addresses, with nothing written over a platform mount. The image carries libnss-myhostname,
+whose package adds `myhostname` to nsswitch.conf; `KinuDevbox` names the kernel with the workspace's label at each
+start, as D91 had it, and the box checks the name resolves (`getent ahosts`), adding `myhostname` to nsswitch.conf
+itself if an older image left it out. A name that does not resolve is traced (`devbox.name.unresolved`) and the start
+goes on, as D92 required. D93's shown-name file and its prompt rewrite are gone: the kernel is the one source of the
+name, and bash's own `\h` prints it. The container tier's `box-name` step reads, on a real box, the kernel's name, the
+prompt, how long a lookup of the name takes and what it answers, getfqdn, and whether `python3 -m http.server` serves.
+
+The same image adds python3-pil, librsvg2-bin and hsetroot (D88's wallpaper and the desktop's watch sheet): D88 wrote an
+X11 client and a PNG codec into the wallpaper to avoid a new tools tarball. Pillow now composes the picture,
+rsvg-convert draws the mark from its SVG, and hsetroot sets the root, which the server keeps. The wallpaper's Chromium,
+and its unmeasured 60-second bound, are gone.
 
 ## Open
 

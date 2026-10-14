@@ -3,7 +3,6 @@ import * as v from 'valibot';
 import { Effect, Result } from 'effect';
 import { DevboxError, attempt, attemptSync, settle } from './errors';
 import { TERM_GRACE_MS } from './lifecycle';
-import { SHOWN_NAME_FILE } from './shown-name';
 
 const CA_PATH = "/etc/cloudflare/certs/cloudflare-containers-ca.crt";
 
@@ -33,17 +32,32 @@ const IdSchema = v.pipe(v.string(), v.regex(/^[a-zA-Z0-9_-]+$/));
 
 const RecordSchema = v.object({ id: IdSchema, command: v.string(), cwd: v.string() });
 
-/** How showing the box's name went: shown, or why not. */
-export interface NameShown { readonly shown: boolean; readonly detail: string }
+/**
+ * `$1` as the kernel's name for this boot, and how a lookup of it answers (D96): the image resolves the box's own name
+ * to its own addresses (libnss-myhostname, `hosts: files myhostname dns`), so no lookup leaves the box. Prints
+ * `named=yes` with the addresses, or `named=no` and why; exits 0 whatever happened.
+ */
+const NAME_BOX = String.raw`hostname "$1" 2>/dev/null || { echo "named=no kernel refused"; exit 0; }
+grep -q myhostname /etc/nsswitch.conf 2>/dev/null || sed -i 's/^hosts:.*files/& myhostname/' /etc/nsswitch.conf 2>/dev/null
+found=$(timeout 1 getent ahosts "$1" | awk '{ print $1 }' | sort -u | paste -sd ' ')
+if [ -n "$found" ]; then echo "named=yes $found"; else echo "named=no unresolved"; fi`;
+
+/** How naming the box went: named, or what is off. */
+export interface BoxNaming { readonly named: boolean; readonly detail: string }
 
 /**
- * Keeps `name` where every shell the box's rc starts reads it (D93). A name the box cannot keep is a handled outcome,
- * never a refusal: the prompt names the platform's host, and the box starts.
+ * Names the box for this boot (D83, D92, D96): its prompt, its terminal titles, its desktop and its processes answer
+ * to `name`. A name that does not resolve at once is a handled outcome, never a refusal: the box keeps it, as a valid
+ * name, and starts.
  */
-export function showName(container: Container, name: string): Promise<NameShown> {
-  return settle(attempt('process', async () => await (await container.exec(['sh', '-c', `printf '%s\\n' "$1" > ${SHOWN_NAME_FILE}`, 'show-name', name])).output()).pipe(
-    Effect.map((ran): NameShown => ({ shown: ran.exitCode === 0, detail: new TextDecoder().decode(ran.stderr).trim() || `exit ${String(ran.exitCode)}` })),
-    Effect.catch((failure) => Effect.succeed<NameShown>({ shown: false, detail: causeChain(failure) })),
+export function nameBox(container: Container, name: string): Promise<BoxNaming> {
+  return settle(attempt('process', async () => await (await container.exec(['sh', '-c', NAME_BOX, 'name-box', name])).output()).pipe(
+    Effect.map((ran): BoxNaming => {
+      const said = new TextDecoder().decode(ran.stdout).trim();
+
+      return { named: said.startsWith('named=yes'), detail: said === '' ? `exit ${String(ran.exitCode)}` : said };
+    }),
+    Effect.catch((failure) => Effect.succeed<BoxNaming>({ named: false, detail: causeChain(failure) })),
   ));
 }
 

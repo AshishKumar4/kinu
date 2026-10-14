@@ -2,7 +2,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
 import { Files, SandboxFileError } from '@cloudflare/sandbox';
-import { Processes, isProcessLive, showName, CONTAINER_ENV, END_TREE } from "./processes";
+import { Processes, isProcessLive, nameBox, CONTAINER_ENV, END_TREE } from "./processes";
 import { nativeStartClock } from './native-clock';
 import type { DevboxExecOptions, ExecResult, ReadOptions, FileResult, ListFilesOptions, FileMetadata, GatewayBindings } from './contracts';
 import { listFiles as readDirectory } from './file-listing';
@@ -197,9 +197,6 @@ const DEFAULT_SIZE_KEY = 'devbox:default-size';
 const RUNNING_SIZE_KEY = 'devbox:running-size';
 
 const START_REFUSED_KEY = 'devbox:start-refused';
-
-/** How long the terminal sessions' read may take: it measured 150 ms from the workspace with eight sessions (D90). */
-const SESSIONS_READ_MS = 5_000;
 
 const DISK_STATE_KEY = 'devbox:disk-chain';
 
@@ -2983,9 +2980,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   protected async outboundPolicy(): Promise<OutboundPolicy> { return { routes: {} }; }
-  /** The name a person sees for the box in its prompts, its terminal titles and its desktop, read at each start (D93);
-   *  unset, the platform's host name. */
-  protected async shownName(): Promise<string | undefined> { return undefined; }
+  /** The name the box answers to, one DNS label of at most 63 characters, read at each start (D96); unset, the
+   *  platform's 64-character container id, which no DNS label holds. */
+  protected async hostname(): Promise<string | undefined> { return undefined; }
   /** The Worker version this object runs, read at construction and at each start: a start refused under another is asked
    *  again (D94). Unset, only a changed input or a caller's explicit ask lifts a refusal. */
   protected get workerVersion(): string | undefined { return undefined; }
@@ -2995,13 +2992,13 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   protected async configureContainer(reused = this.#adoptionPending || this.#restoration.phase === 'attached' || this.#restoration.phase === 'repair'): Promise<void> {
     await this.#routes().configure(await this.outboundPolicy(), this.store, reused);
     this.#renewContainer();
-    const name = await this.shownName();
+    const name = await this.hostname();
 
-    // Kept where the box's rc reads it, at each start; the kernel keeps the platform's name (D93).
+    // The kernel keeps a name for the boot alone, so each start names the box again (D83, D96).
     if (name === undefined) return;
-    const shown = await showName(this.#container(), name);
+    const naming = await nameBox(this.#container(), name);
 
-    if (!shown.shown) this.#trace('name.unshown', { name, detail: shown.detail });
+    if (!naming.named) this.#trace('name.unresolved', { name, detail: naming.detail });
   }
 
   getExposedPorts() {
@@ -3279,8 +3276,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       const container = this.ctx.container;
 
       if (container?.running !== true) return mergeSessions(records, null);
-      // Bounded: a pane in a folder git or /proc cannot answer for would otherwise hold every later read behind it.
-      const read = await (await container.exec(['bash', '-c', SESSIONS_READ, 'terminal-sessions', PORT_LISTENERS], { signal: AbortSignal.timeout(SESSIONS_READ_MS) })).output();
+      const read = await (await container.exec(['bash', '-c', SESSIONS_READ, 'terminal-sessions', PORT_LISTENERS])).output();
       const sessions = mergeSessions(records, parseSessionsRead(new TextDecoder().decode(read.stdout)));
       const moved = records.map((record) => ({ ...record, cwd: sessions.find((session) => session.id === record.id && session.open)?.cwd ?? record.cwd }));
 
