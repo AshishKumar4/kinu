@@ -171,6 +171,14 @@ describe("an agent's job", () => {
     expect((await box.listSupervised()).filter((listed) => listed.restartable)).toEqual([]);
   });
 
+  // devbox-e2e on c55bf8f34: the job's session, open on a real box, read back without its job.
+  test('its session stays marked with its job while it is open', () => {
+    const record = { id: jobSessionId('JOB-1'), name: 'npm run dev', cwd: '/workspace', job: 'JOB-1' };
+    const [open] = mergeSessions([record], parseSessionsRead(row('P', record.id, '/workspace/app', 'node', '', '', '')));
+
+    expect(open).toMatchObject({ id: record.id, name: 'npm run dev', job: 'JOB-1', open: true, cwd: '/workspace/app' });
+  });
+
   test("a job's session id is one tmux takes unquoted, and a long command names it in 40 characters", () => {
     expect(jobSessionId('4F0C9A2E-77D1-4F5B-9A63-0B2F6F0E1C55')).toMatch(/^[a-z0-9][a-z0-9-]{0,31}$/u);
     expect(jobSessionName(`node ${'a'.repeat(60)}`)).toHaveLength(40);
