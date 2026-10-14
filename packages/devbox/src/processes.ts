@@ -3,6 +3,7 @@ import * as v from 'valibot';
 import { Effect, Result } from 'effect';
 import { DevboxError, attempt, attemptSync, settle } from './errors';
 import { TERM_GRACE_MS } from './lifecycle';
+import { SHOWN_NAME_FILE } from './shown-name';
 
 const CA_PATH = "/etc/cloudflare/certs/cloudflare-containers-ca.crt";
 
@@ -31,16 +32,29 @@ const IdSchema = v.pipe(v.string(), v.regex(/^[a-zA-Z0-9_-]+$/));
 
 const RecordSchema = v.object({ id: IdSchema, command: v.string(), cwd: v.string() });
 
-/** `$1` as the kernel's, `/etc/hostname`'s and `/etc/hosts`' name for the box, which held a container id and a UUID. */
-const NAME_BOX = `hostname "$1" && printf '%s\\n' "$1" > /etc/hostname && { grep -qw "$1" /etc/hosts || printf '127.0.1.1 %s\\n' "$1" >> /etc/hosts; }`;
+/** How showing the box's name went: shown, or why not. */
+export interface NameShown { readonly shown: boolean; readonly detail: string }
 
-/** Names the box for this boot (D83): its prompt, its desktop and its processes answer to `name`. */
-export function nameBox(container: Container, name: string): Promise<void> {
-  return settle(Effect.gen(function* () {
-    const named = yield* attempt('process', async () => await (await container.exec(['sh', '-c', NAME_BOX, 'name-box', name])).output());
+/**
+ * Keeps `name` where every shell the box's rc starts reads it (D93). A name the box cannot keep is a handled outcome,
+ * never a refusal: the prompt names the platform's host, and the box starts.
+ */
+export function showName(container: Container, name: string): Promise<NameShown> {
+  return settle(attempt('process', async () => await (await container.exec(['sh', '-c', `printf '%s\\n' "$1" > ${SHOWN_NAME_FILE}`, 'show-name', name])).output()).pipe(
+    Effect.map((ran): NameShown => ({ shown: ran.exitCode === 0, detail: new TextDecoder().decode(ran.stderr).trim() || `exit ${String(ran.exitCode)}` })),
+    Effect.catch((failure) => Effect.succeed<NameShown>({ shown: false, detail: causeChain(failure) })),
+  ));
+}
 
-    if (named.exitCode !== 0) return yield* Effect.fail(new DevboxError('process', `naming the box ${name}: ${new TextDecoder().decode(named.stderr).trim()}`));
-  }));
+/** A failure's messages down its cause chain, outermost first, each once. */
+function causeChain(failure: Error): string {
+  const said: string[] = [];
+
+  for (let at: unknown = failure; at instanceof Error && said.length < 8; at = at.cause) {
+    if (said.at(-1) !== at.message) said.push(at.message);
+  }
+
+  return said.join(': ');
 }
 
 export interface ProcessRecord {

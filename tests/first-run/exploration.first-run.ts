@@ -58,19 +58,20 @@ interface OpenedWorker {
 async function openWorkerFromPanel(browser: TestChrome, plan: { origin: string; identity: Parameters<typeof signedInPage>[1] }, workspace: string, key: string): Promise<OpenedWorker> {
   const page = await signedInPage(browser.browser, plan.identity);
   await page.goto(`${plan.origin}/workspace/${encodeURIComponent(workspace)}`, { waitUntil: 'domcontentloaded' });
-  await page.waitForSelector('[data-agents-counter]');
-  await page.click('[data-agents-counter]');
-  // Swarm workers sit in their own group, folded until asked for. A folded group keeps its rows in the page, inert, and
-  // unfolds them over a transition: a row clicked before it settled took a click aimed where it no longer was, and the
-  // pane never came (staging, 2026-10-08, 3 of 4 runs). The group is waited open and still, as a person sees it.
-  await page.waitForSelector('section[aria-label="Swarms"] [aria-expanded="false"]');
-  await page.click('section[aria-label="Swarms"] [aria-expanded="false"]');
+  // Each click is a locator's: it waits until its target stands still. The Agents pane slides in over 280 ms, and a
+  // Swarms click 61 ms after the counter's landed on the page behind it, so the group stayed folded and the wait for it
+  // to open never ended (staging 7e411119d, 2026-10-14, 4 of 16 runs). Swarm workers sit in their own group, folded
+  // until asked for, and unfold over a transition the row's click waits out the same way. No wait here has a clock:
+  // a wait that never ends is ended by the runner, whose stop names the case.
+  await page.locator('[data-agents-counter]').click();
+  await page.locator('section[aria-label="Swarms"] [aria-expanded="false"]').click();
+  // A folded group keeps its rows in the page, inert: the row is clicked once the group is open and still.
   await page.waitForFunction(() => {
     const fold = document.querySelector('section[aria-label="Swarms"] .p-fold');
 
     return fold !== null && !fold.hasAttribute('data-folded') && fold.getAnimations({ subtree: true }).length === 0;
   });
-  await page.click(`section[aria-label="Swarms"] [data-agent-row="${key}"]`);
+  await page.locator(`section[aria-label="Swarms"] [data-agent-row="${key}"]`).click();
   const pane = `[data-agent-pane="node/${key}"]`;
   await page.waitForFunction((selector: string) => (document.querySelector(selector)?.textContent ?? '').includes('Task'), {}, pane);
 

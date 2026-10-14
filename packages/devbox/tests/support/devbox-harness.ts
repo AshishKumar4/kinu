@@ -355,6 +355,8 @@ export class FakeSandbox {
   /** Answers a port's fetch in place of the probe status, e.g. with an upgrade. */
   portAnswer: ((port: number, request: Request) => Response | Promise<Response>) | undefined;
   desktopStart: ExecResult = { stdout: '', stderr: '', exitCode: 0 };
+  /** What keeping the box's shown name answers (D93), or `gone` for an exec the container refuses. */
+  showName: ExecResult | 'gone' = { stdout: '', stderr: '', exitCode: 0 };
   readonly fileOperations: FileOperation[] = [];
   readonly mountCalls: string[] = [];
   /** Mounts and execs share one chronological list: stop order is a property of the order
@@ -1042,6 +1044,14 @@ export class FakeSandbox {
       this.sequence.push('trust');
 
       return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }), pid);
+    }
+
+    if (args[3] === 'show-name') {
+      this.sequence.push(`name:${args[4] ?? ''}`);
+
+      if (this.showName === 'gone') throw new Error('Container is not running');
+
+      return processResult(Promise.resolve(this.showName), pid);
     }
 
     // `[setsid -w] /bin/bash -c <command>` (D69): the command follows `-c`.

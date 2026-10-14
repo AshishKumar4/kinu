@@ -8,6 +8,7 @@ import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 import { copyPinnedTools, uploadPinnedTools } from './devbox-tools';
 import { requireEqual, tierIdentity } from './fixtures/devbox-e2e/oracle';
+import { SHELL_RC, SHELL_RC_FILE, SHOWN_NAME_FILE } from '../packages/devbox/src/shown-name';
 import { completeTeardown } from './fixtures/devbox-e2e/teardown';
 import { CONTRACT_TEARDOWN_BUCKET, ContractTeardownSchema, contractLedger, contractOwner } from './fixtures/devbox-e2e/ledger';
 import type { ContractLedger } from './fixtures/devbox-e2e/ledger';
@@ -34,6 +35,23 @@ const ASK_AGAIN = 'A startup is armed, so ask again';
 const ASK_AGAIN_TIMES = 12;
 
 const ASK_AGAIN_MS = 5_000;
+
+/** The name the fixture's boxes show (its `shownName`, set through the Worker's vars). */
+const BOX_NAME = 'contract-box';
+
+/**
+ * The box's names, read in the box (D93): the kernel's, the shown name the box keeps, and the prompt a person's shell
+ * shows when it starts from the box's rc over the image's own rc files. The rc is written here as the terminal and the
+ * desktop write it.
+ */
+const BOX_NAME_READ = [
+  'printf "kernel=%s\\n" "$(hostname)"',
+  `printf "shownName=%s\\n" "$(cat ${SHOWN_NAME_FILE} 2>/dev/null)"`,
+  `cat > ${SHELL_RC_FILE} <<'SHELLRC'`,
+  SHELL_RC,
+  'SHELLRC',
+  `printf "prompt=%s\\n" "$(cd /workspace 2>/dev/null; TERM=dumb bash --rcfile ${SHELL_RC_FILE} -i -c 'printf "%s" "\${PS1@P}"' 2>/dev/null)"`,
+].join('\n');
 
 /** How long after its first frame a fresh desktop must show its background and panel: a person waits seconds, not minutes. */
 const DESKTOP_SEEN_MS = 30_000;
@@ -113,7 +131,7 @@ function writeFixtureConfig(worker: string, scratch: string, priorDeclared?: str
     containers,
     r2_buckets: [{ binding: 'STORE', bucket_name: worker }],
     assets: { directory: join(REPO, 'packages/cf-backend/public'), binding: 'ASSETS', run_worker_first: true },
-    vars: { CLOUDFLARE_ACCOUNT_ID: ACCOUNT, PROBE_BUCKET: worker, PROBE_HTTP: process.argv.includes('--probe') ? '1' : '0' },
+    vars: { CLOUDFLARE_ACCOUNT_ID: ACCOUNT, PROBE_BUCKET: worker, PROBE_HTTP: process.argv.includes('--probe') ? '1' : '0', BOX_NAME },
   }));
 
   return { config, declared };
@@ -479,6 +497,25 @@ async function main(): Promise<void> {
 
   /** The container's contracts, the desktop through the product routes, and the product's own chain. */
   const productContracts = async () => {
+    /**
+     * A person sees the box by the name its class gives it, and the kernel keeps the platform's (D93): staging
+     * 7e411119d's renaming wrote /etc/hostname, which the platform mounts read-only, and refused every start (D92), and a
+     * renamed kernel's own name took ~400 ms to resolve to an address that is not the box.
+     */
+    await step('box-name', async () => {
+      const named = new Map((await shell(BOX_NAME_READ)).split('\n').map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]));
+
+      process.stdout.write(`[${run}] box name ${JSON.stringify(Object.fromEntries(named))}\n`);
+
+      if (named.get('kernel') === BOX_NAME) throw new Error(`the kernel was renamed ${BOX_NAME}; it keeps the platform's name`);
+
+      if (named.get('shownName') !== BOX_NAME) throw new Error(`the box keeps ${named.get('shownName') ?? 'no name'} to show, not ${BOX_NAME}`);
+
+      if (named.get('prompt')?.includes(`@${BOX_NAME}`) !== true) throw new Error(`a shell's prompt reads ${named.get('prompt') ?? 'nothing'}, not ${BOX_NAME}`);
+
+      return Object.fromEntries(named);
+    });
+
     await step('file-metadata', async () => {
       const measured = await call('/file-contract', Json, {}, names[1]);
       process.stdout.write(`[${run}] file metadata ${JSON.stringify(measured)}\n`);
