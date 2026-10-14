@@ -2623,8 +2623,9 @@ function readDeviceConfig(configPath = CONFIG_PATH) {
  * The one schema of device.json, which the CLI reads it by too: JSON naming
  * the user, token, origin and root this daemon runs on, each a nonempty
  * string; `origin` one this daemon will send its token to; `root`, the
- * directory `kinu connect` ran in, absolute. `device`, the registration the
- * hub issued, is the CLI's and never read here: a nonempty string where
+ * directory the owner linked (their home, or one the command named),
+ * absolute. `device`, the registration the hub issued, is the CLI's and
+ * never read here: a nonempty string where
  * `kinu connect` wrote one, absent where the previous release linked the
  * machine, which an update leaves as it is. Fields beyond these are kept, so
  * a rotated token is written back with them. `text` is the file's contents;
@@ -3178,7 +3179,7 @@ async function main() {
         // either way into a daemon that connects. A daemon still waiting on
         // its own successor leaves the marker for that successor to clear.
         if (!updater.pending()) update.clearPendingMarker(DEVICE_HOME);
-        // `root` is the directory `kinu connect` ran in, recorded in
+        // `root` is the directory the owner linked, recorded in
         // device.json at link time: the hub scopes every base-tier file call
         // to it, so the tier is one directory the owner named rather than a
         // default the hub computed. `home` is what the file view opens at

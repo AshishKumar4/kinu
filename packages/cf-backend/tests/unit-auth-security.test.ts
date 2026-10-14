@@ -213,7 +213,7 @@ describe('auth and desktop security invariants', () => {
     // Past the profile every signed-in request ensures, neither route asks the account anything.
     const account = userAccount({
       ensureProfile: async (_caller: UserCaller, email: string) => bootstrappedProfile(email),
-      issueDeviceJoin: async () => ({ deviceId: 'dev-issued' }),
+      issueDeviceJoin: async () => ({ deviceId: 'dev-issued', ticket: `pjt_${OWNER_IDENTITY.userId}_${'t'.repeat(43)}` }),
     });
 
     const env: UserRoutesEnv<string> = {
@@ -241,6 +241,8 @@ describe('auth and desktop security invariants', () => {
     expect(device.installCommand).toContain('Ashish');
     // The machine registers as the device the dashboard issued, so the dashboard knows which arrival is its.
     expect(device.installCommand).toContain("--device 'dev-issued'");
+    // It carries the ticket that registers it, single-use and minutes long, never a session.
+    expect(device.installCommand).toContain(`--join 'pjt_${OWNER_IDENTITY.userId}_`);
     expect([cli.installCommand, device.installCommand].filter((command) => command.includes('KINU_TOKEN'))).toEqual([]);
     expect([cli.setupCommand, cli.authCommand].filter((command) => command.includes('KINU_TOKEN'))).toEqual([]);
   });

@@ -7,6 +7,8 @@ export interface CliInstallCommandOptions {
   label?: string;
   /** The device the hub issued for this machine, which `kinu connect` registers as. */
   device?: string;
+  /** The ticket that registers it, so the machine needs no session of its own. */
+  join?: string;
 }
 
 export function normalizeCliOrigin(origin: string): string {
@@ -26,6 +28,8 @@ export function buildCliInstallCommand(options: CliInstallCommandOptions): strin
   if (options.label) args.push('--label', shellQuote(options.label));
 
   if (options.device) args.push('--device', shellQuote(options.device));
+
+  if (options.join) args.push('--join', shellQuote(options.join));
 
   const bashArgs = args.length > 0 ? ` -s -- ${args.join(' ')}` : '';
 
