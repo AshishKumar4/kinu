@@ -102,12 +102,9 @@ describe('the first-run corpus is the set this tier runs', () => {
       ['tests/first-run/indirect.first-run.ts', "import { attachMachine } from './helper';"],
       ['tests/first-run/tui.first-run.ts', "import { runTuiInPty } from '../../packages/cli/tests/helpers/pty-screen';"],
       ['tests/first-run/alone.first-run.ts', "import { firstRunCasePlan } from './first-run';"],
-    ]), ['reader']);
+    ]));
 
-    expect(fleet).toEqual([
-      'tests/first-run/direct.first-run.ts', 'tests/first-run/indirect.first-run.ts',
-      'tests/first-run/reader.first-run.ts', 'tests/first-run/tui.first-run.ts',
-    ]);
+    expect(fleet).toEqual(['tests/first-run/direct.first-run.ts', 'tests/first-run/indirect.first-run.ts', 'tests/first-run/tui.first-run.ts']);
   });
 
   test('every case loads under the tier\'s own runner', async () => {

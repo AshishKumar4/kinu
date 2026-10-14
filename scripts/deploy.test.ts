@@ -618,9 +618,12 @@ describe("deploy gate", () => {
     test('the version upload, then the reset, then the deploy of that build', async () => {
       const run = await runDeploy({ option: '--reset', account: resetAccount(), uploadRuns: [{ says: 'success', status: 0 }] });
       const validated = run.events.indexOf(VALIDATE);
+      // Beside the version upload, and in place before anything is deleted.
+      const artifact = run.events.findIndex((event) => event.startsWith('MUTATE npx wrangler r2 object put'));
 
       expect(validated, run.stdout).toBeGreaterThanOrEqual(0);
       expect(validated).toBeLessThan(wipe(run.events));
+      expect({ published: artifact >= 0, beforeTheWipe: artifact < wipe(run.events) }).toEqual({ published: true, beforeTheWipe: true });
       expect(wipe(run.events)).toBeLessThan(run.events.indexOf(DEPLOY));
       expect(run.report).toContain('startup validated 412');
     });
@@ -886,7 +889,7 @@ describe("deploy gate", () => {
 
     const normal = await runDeploy();
     expect(normal.infraPhase).toBe("full");
-    expect(normal.events).toEqual(bootstrap.events);
+    expect(besideTheBuild(normal.events, armadaBuild("staging"))).toEqual(besideTheBuild(bootstrap.events, armadaBuild("staging")));
     expect(normal.stdout).not.toContain("BOOTSTRAP");
   });
 

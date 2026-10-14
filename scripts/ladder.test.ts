@@ -728,8 +728,8 @@ describe('a deploy row with secrets of its own', () => {
     const rows = armadaPhaseRows(['post-publish', 'source']);
     const own = rows.filter((gate) => secretGroup(gate) !== '');
     const sha = 'a'.repeat(40);
-    const shared = armadaPhaseRun('post-publish,source', rows.filter((gate) => secretGroup(gate) === ''), sha, 'https://staging.kinu.run');
-    const devbox = armadaPhaseRun('post-publish,source', own, sha, 'https://staging.kinu.run');
+    const shared = armadaPhaseRun('post-publish', rows.filter((gate) => secretGroup(gate) === '' && gate.phase === 'post-publish'), sha, 'https://staging.kinu.run');
+    const devbox = armadaPhaseRun('source', own, sha, 'https://staging.kinu.run');
     const secretsOf = (argv: readonly string[]) => argv.find((arg) => arg.startsWith('--secrets='))?.slice('--secrets='.length).split(',').sort((a, b) => a.localeCompare(b));
 
     expect({ own: own.map((gate) => gate.run), shared: secretsOf(shared), devbox: secretsOf(devbox), json: devbox.indexOf('--json') !== -1 && devbox.indexOf('--json') < devbox.indexOf('--'), plan: devbox.slice(devbox.indexOf('--') + 1) }).toEqual({
@@ -738,11 +738,11 @@ describe('a deploy row with secrets of its own', () => {
       devbox: ['DEVBOX_REGISTRY_TOKEN', 'KINU_CLOUDFLARE_API_TOKEN', 'KINU_EVAL_STAGING_WEB_IDENTITY', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY'],
       json: devbox.indexOf('--json') !== -1 && devbox.indexOf('--json') < devbox.indexOf('--'),
       plan: [
-        '--deploy-phase=post-publish,source',
+        '--deploy-phase=source',
         '--deploy-secrets=DEVBOX_REGISTRY_TOKEN,KINU_CLOUDFLARE_API_TOKEN,KINU_EVAL_STAGING_WEB_IDENTITY,R2_ACCESS_KEY_ID,R2_SECRET_ACCESS_KEY',
       ],
     });
-    expect(() => armadaPhaseRun('post-publish,source', rows, sha, 'https://staging.kinu.run')).toThrow('different secrets');
+    expect(() => armadaPhaseRun('source', rows, sha, 'https://staging.kinu.run')).toThrow('different secrets');
   });
 });
 
