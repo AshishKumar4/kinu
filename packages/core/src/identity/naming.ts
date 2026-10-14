@@ -320,15 +320,19 @@ export function persistAutoTitle(
 
 /**
  * Title policy for actors with no chat `auto_title` effect. Admission calls without `suggest` (a model call would delay handoff);
- * the runner calls again with `suggest` once the turn ends. Returns whether the shown title changed.
+ * the runner calls again with `suggest` once the turn ends. Answers whether the shown title changed, and the mission a
+ * model should still name: null when the title is not the auto-titler's to set.
  */
 export async function titleActorFromMessage(
   actor: Pick<ActorHandle, 'name' | 'config'>,
   message: string,
   suggest?: (mission: string) => Promise<string | null>,
-): Promise<boolean> {
+): Promise<{ readonly changed: boolean; readonly mission: string | null }> {
   const config = actor.config;
-  const displayName = config.getDisplayName();
+  const state = { slug: actor.name, displayName: config.getDisplayName(), nameOrigin: config.getNameOrigin(), mission: message };
+  const plan = planWorkspaceTitle(state);
+
+  if (plan === null) return { changed: false, mission: null };
 
   const effects: Parameters<typeof applyWorkspaceTitle>[1] = {
     persist: (title) => persistAutoTitle(config, title),
@@ -336,14 +340,7 @@ export async function titleActorFromMessage(
 
   if (suggest) effects.suggest = suggest;
 
-  const titled = await applyWorkspaceTitle({
-    slug: actor.name,
-    displayName,
-    nameOrigin: config.getNameOrigin(),
-    mission: message,
-  }, effects);
-
-  return titled !== null;
+  return { changed: await applyWorkspaceTitle(state, effects) !== null, mission: plan.mission };
 }
 
 /**
