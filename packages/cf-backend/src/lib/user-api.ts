@@ -26,7 +26,9 @@ import { settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { ApiError, request } from './http';
 import type { BoxSize } from '@kinu.run/devbox/sizes';
+import type { ThemeName } from '@kinu.run/core';
 import { accountSandboxSize, SANDBOX_SIZE_CONFIG_KEY } from '../sandbox-size';
+import { THEME_CONFIG_KEY } from '../account-theme';
 
 export type UserProfile = NonNullable<v.InferOutput<typeof AccountProfileSchema>>;
 
@@ -289,6 +291,9 @@ export const getAccountSandboxSize = (): Promise<BoxSize | null> =>
   settle(Effect.map(api(v.object({ key: v.string(), value: v.nullable(v.string()) }), 'GET', SANDBOX_SIZE_PATH), (row) => accountSandboxSize(row.value)));
 
 export const setAccountSandboxSize = (size: BoxSize) => settle(api(OkSchema, 'PUT', SANDBOX_SIZE_PATH, { value: size }));
+
+/** The page already wears the account's theme (the server names it before paint); only a choice is sent. */
+export const setAccountTheme = (theme: ThemeName) => settle(api(OkSchema, 'PUT', `/config/${THEME_CONFIG_KEY}`, { value: theme }));
 
 /** What Settings → Memory shows of the account's view: a fact's confidence and source, and a revision's importance and
  *  veracity, stay server-side. */
