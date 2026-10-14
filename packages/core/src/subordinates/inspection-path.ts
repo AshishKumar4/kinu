@@ -9,7 +9,8 @@ import * as v from 'valibot';
 import { tableExists } from '../identity/schema';
 import type { SqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
-import { actorStanding, isSubordinateOrigin, type WorkspaceActorDirectory } from '../identity/workspace-actors';
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import { actorStanding, isSubordinateOrigin, type WorkspaceActor, type WorkspaceActorDirectory } from '../identity/workspace-actors';
 import { readSessionTranscript, type SessionTranscriptReader } from '../session/transcript';
 import { actorReadHandle } from '../read-models/workspace-work';
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
@@ -106,13 +107,35 @@ function retainedDescendant(access: SubordinateInspectionAccess, ancestor: Actor
 
   if (record === null) return null;
 
-  if (actorStanding(record) === 'live') {
-    const actor = access.directory.open(actorId);
+  // The owner holds none of a retired subordinate's files; its offloaded payloads are read where it ran (`ownRows`).
+  return readableActor(record, {
+    sql: access.sql,
+    open: () => {
+      const actor = access.directory.open(actorId);
 
-    return { actor, transcript: access.transcriptFor(actor) };
-  }
+      return { actor, transcript: access.transcriptFor(actor) };
+    },
+    payloads: null,
+  });
+}
 
+export interface ReadableActor {
+  readonly actor: ActorHandle;
+  readonly transcript: SessionTranscriptReader;
+}
+
+/**
+ * An actor's chat as its standing allows: a live one through its open stores, a retired one from its retained rows,
+ * with no actor reacquired. `payloads` opens the files the retired one's offloaded payloads are in; null where the
+ * reader holds none of them.
+ */
+export function readableActor(record: WorkspaceActor, access: {
+  readonly sql: SqlExecutor;
+  readonly open: () => ReadableActor;
+  readonly payloads: (() => Promise<Pick<VFS, 'readFile'>>) | null;
+}): ReadableActor {
+  if (actorStanding(record) === 'live') return access.open();
   const actor = actorReadHandle(access.sql, record);
 
-  return { actor, transcript: readSessionTranscript(access.sql, actor, CHAT_SESSION_ID, null) };
+  return { actor, transcript: readSessionTranscript(access.sql, actor, CHAT_SESSION_ID, access.payloads) };
 }

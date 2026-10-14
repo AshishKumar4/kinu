@@ -4,13 +4,13 @@ import type { ModelMessage, UIMessage } from 'ai';
 import {
   CHAT_SESSION_ID, EventLog, EvolutionEngine, WorkspaceActorDirectory, runEventSinks, historyTurnPairs, conversationTurnPair, type ConversationTurnPair,
   actorReferenceOf, actorScaffoldPath, createActorHost, createScaffoldSurface, defaultLoopOrigin,
-  initAgentIsolateSchema, nimbusSessionFiles, recoverActorTurns, MissionGovernor, actorReadHandle, readSessionTranscript, readSubordinateInspection,
+  initAgentIsolateSchema, nimbusSessionFiles, recoverActorTurns, MissionGovernor, readSubordinateInspection,
   drawnStep, getChatHistoryPage, inheritedContextFromTranscript, turnRequestIndex, turnRequestPage,
   type TurnRequestIndex, type TurnRequestPage, RunEventRecorder, spendLedger, type SpendLedger, type StepSpendSource,
   readAgentFigures, NO_FIGURES, type AgentFigures,
-  actorStanding, localContextTree, type ContextEditor, type ContextTree, type ConversationRecall,
-  type ActorHandle, type AgentOwnInspection, type ChatHistoryPage, type PositionPageRequest, type SerializedMessage,
-  type SessionTranscriptReader, type SubordinateInspectionResult, type SubordinateReportLedger, type ModelPricing, type SqlExecutor,
+  localContextTree, readableActor, type ReadableActor, type ContextEditor, type ContextTree, type ConversationRecall,
+  type AgentOwnInspection, type ChatHistoryPage, type PositionPageRequest, type SerializedMessage,
+  type SubordinateInspectionResult, type SubordinateReportLedger, type ModelPricing, type SqlExecutor,
   type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HeadReport, type HostedActor,
   type Executor, type JsonObject, type NimbusSandboxFiles, type SqlValue, WORKSPACE_ROOT, cloudPlanes, answersForDrainTurns,
   initPendingSendTables, initTerminalEffectTable, PendingSendStore, contextFill, announcementOf, TurnReports,
@@ -71,11 +71,6 @@ function holdsConfig(storage: DurableObjectStorage, actorId: SqlValue, config: r
   const wanted = config.filter((row) => row.actor_id === actorId);
 
   return stored.length === wanted.length && wanted.every((row) => holds(storage, 'actor_config', row));
-}
-
-interface AgentReadable {
-  readonly actor: ActorHandle;
-  readonly transcript: SessionTranscriptReader;
 }
 
 const IdentitySchema = v.object({
@@ -429,22 +424,21 @@ export class AgentDatabase {
     return this.actorHost().bindStores(this.reference()).stores.history.transcript(CHAT_SESSION_ID);
   }
 
-  readable(): AgentReadable {
+  readable(): ReadableActor {
     const record = this.actorHost().describe(this.reference().actorId);
 
     if (record === null) return settleSync(Effect.fail(new KinuError('missing', 'The agent is not in its own database.')));
 
-    if (actorStanding(record) === 'live') {
-      const bound = this.actorHost().bindStores(this.reference());
+    return readableActor(record, {
+      sql: this.sql,
+      open: () => {
+        const bound = this.actorHost().bindStores(this.reference());
 
-      return { actor: bound.handle, transcript: bound.stores.history.transcript(CHAT_SESSION_ID) };
-    }
-
-    const actor = actorReadHandle(this.sql, record);
-
-    // The workspace owner still holds this actor's retained home. Reading payloads needs no actor reacquisition.
-    return { actor, transcript: readSessionTranscript(this.sql, actor, CHAT_SESSION_ID,
-      async () => nimbusSessionFiles(this.workspace.agent(), { home: this.workspace.home })) };
+        return { actor: bound.handle, transcript: bound.stores.history.transcript(CHAT_SESSION_ID) };
+      },
+      // The workspace owner still holds this actor's retained home.
+      payloads: async () => nimbusSessionFiles(this.workspace.agent(), { home: this.workspace.home }),
+    });
   }
 
   async inspect(request: AgentOwnInspection): Promise<SubordinateInspectionResult> {

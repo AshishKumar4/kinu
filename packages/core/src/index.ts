@@ -19,7 +19,7 @@ export { TurnReports, type ReportedTurn } from './subordinates/turn-reports';
 
 export { runEventSinks } from './orchestrator/run-event-sinks';
 
-export { inspectDescendant, inspectSubordinateStorage, type AgentOwnInspection, type SubordinateInspectionAuthority, type SubordinateInspectionAccess } from './subordinates/inspection-path';
+export { inspectDescendant, inspectSubordinateStorage, readableActor, type AgentOwnInspection, type ReadableActor, type SubordinateInspectionAuthority, type SubordinateInspectionAccess } from './subordinates/inspection-path';
 
 // Backend-neutral terminal-turn state machine: the DO and the CLI supply only effect bodies and a wake.
 export {
