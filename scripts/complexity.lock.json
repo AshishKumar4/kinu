@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-14",
-  "files": 3291,
-  "functions": 86164,
+  "files": 3293,
+  "functions": 86308,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -210,10 +210,6 @@
       "complexity": 28
     },
     {
-      "key": "packages/cf-backend/src/components/surfaces/FilesSurface.tsx#FilesSurface",
-      "complexity": 28
-    },
-    {
       "key": "packages/cli/src/config.ts#resolveLLMConfig",
       "complexity": 28
     },
@@ -239,6 +235,10 @@
     },
     {
       "key": "packages/cf-backend/src/components/MessageView.tsx#MessageView",
+      "complexity": 27
+    },
+    {
+      "key": "packages/cf-backend/src/components/surfaces/FilesSurface.tsx#FilesSurface",
       "complexity": 27
     },
     {

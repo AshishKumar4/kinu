@@ -7,17 +7,18 @@ import {
 import { useParams } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
 import {
-  ArrowsClockwiseIcon, ArrowUpIcon, CaretDownIcon, CaretRightIcon, CheckIcon,
+  ArrowsClockwiseIcon, ArrowUpIcon, CaretDownIcon, CaretRightIcon,
   DownloadSimpleIcon, FileIcon, FolderIcon, FolderOpenIcon, HouseIcon,
   MagnifyingGlassIcon, PencilSimpleIcon, PlugIcon, TrashIcon, UploadSimpleIcon,
   WarningIcon, XIcon,
 } from "@phosphor-icons/react";
 import {
-  formatBytes, joinDir, parentDir, MOUNT_EXECUTORS, type DirEntry,
+  formatBytes, joinDir, parentDir, shortAge, MOUNT_EXECUTORS, type DirEntry, type MountInfo,
 } from "@kinu.run/core";
 import { renderThrownChain, showing, settle, detach } from "@kinu.run/core/obs";
-import { executorLabel, timeAgo, type ExecutorInfo } from "@kinu.run/core";
+import { executorLabel, type ExecutorInfo } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
+import { TileMenu, type MenuItem } from "@/components/drive/DriveTiles";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { useMounts } from "@/hooks/use-mounts";
 import { useToggledSet } from "@/hooks/use-toggled-set";
@@ -51,6 +52,48 @@ function ReplacePrompt({ name, onReplace, onKeep }: { name: string; onReplace: (
 const MOUNT_EXECUTOR: Record<string, string> = Object.fromEntries(
   Object.entries(MOUNT_EXECUTORS).map(([mount, executor]) => [mount.slice(1), executor]),
 );
+
+/** The list's columns at every width: icon, name, then size and age, one cell below 26rem and a column each from it. A
+ *  touch screen keeps a gutter for the row's menu, which a pointer finds on hover over the age. */
+const COLUMNS = "grid-cols-[1rem_minmax(0,1fr)_auto] @[26rem]:grid-cols-[1rem_minmax(0,1fr)_4.5rem_4rem] items-center gap-x-2.5 px-3 pointer-coarse:pr-11";
+
+/** What the menu covers under a pointer while it shows. */
+const UNDER_MENU = "pointer-fine:group-hover:invisible pointer-fine:group-has-[[data-drive-menu]:focus-visible]:invisible pointer-fine:group-has-[[aria-expanded=true]]:invisible";
+
+/** A row a finger can take on a touch screen; dense under a pointer. */
+const ROW_HEIGHT = "min-h-8 pointer-coarse:min-h-11";
+
+/** A machine that is not there, in the list where its folder would be. */
+interface OfflineRow { readonly mount: MountInfo; readonly name: string }
+
+type ListRow = { readonly entry: DirEntry; readonly index: number } | OfflineRow;
+
+/** Each offline machine among the folders, by name, as its folder would sort. */
+function placeOffline(entries: readonly DirEntry[], offline: readonly OfflineRow[]): ListRow[] {
+  const rows: ListRow[] = entries.map((entry, index) => ({ entry, index }));
+
+  for (const row of [...offline].sort((a, b) => a.name.localeCompare(b.name))) {
+    const at = rows.findIndex((other) => "entry" in other && (other.entry.type === "file" || other.entry.name.localeCompare(row.name) > 0));
+
+    rows.splice(at === -1 ? rows.length : at, 0, row);
+  }
+
+  return rows;
+}
+
+/** A machine's label as its folder wears it: none where it only repeats the folder's name. */
+function beside(label: string, folder: string): string | null {
+  return label.toLowerCase() === folder.toLowerCase() ? null : label;
+}
+
+/** The bytes as a download whatever the route answers: `download` keeps an error page from replacing the app. */
+function saveAs(href: string): void {
+  const link = document.createElement("a");
+
+  link.href = href;
+  link.download = "";
+  link.click();
+}
 
 
 
@@ -209,19 +252,26 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
   const atRoot = path === "/";
   const segments = path.split("/").filter(Boolean);
 
-  const offlineMounts = atRoot
-    ? mounts.filter((m) => !m.live && Object.values(MOUNT_EXECUTOR).includes(m.name))
-    : [];
+  const needle = filter.trim().toLowerCase();
 
-  const filtered = useMemo(() => {
-    const needle = filter.trim().toLowerCase();
+  // A machine that is not there keeps its place among the folders; a listed folder of its name would only refuse.
+  const offline = useMemo(() => (atRoot ? mounts : []).flatMap((mount): OfflineRow[] => {
+    const name = Object.keys(MOUNT_EXECUTOR).find((point) => MOUNT_EXECUTOR[point] === mount.name);
 
-    if (!needle) return entries;
+    return name !== undefined && !mount.live && name.includes(needle) ? [{ mount, name }] : [];
+  }), [atRoot, mounts, needle]);
 
-    return entries.filter((e) => e.name.toLowerCase().includes(needle));
-  }, [entries, filter]);
+  const filtered = useMemo(
+    () => entries.filter((e) => e.name.toLowerCase().includes(needle) && !offline.some((row) => row.name === e.name)),
+    [entries, needle, offline],
+  );
 
   const deviceLabel = executors.find((e) => e.name === "device")?.label;
+
+  const machineLabel = useCallback(
+    (executor: string) => (executor === "device" ? deviceLabel ?? executorLabel("device") : executorLabel(executor)),
+    [deviceLabel],
+  );
 
   const badgeFor = useCallback((entryName: string): string | null => {
     if (!atRoot) return null;
@@ -229,8 +279,8 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
 
     if (!executor || !mounts.some((m) => m.name === executor && m.live)) return null;
 
-    return executor === "device" ? deviceLabel ?? executorLabel("device") : executorLabel(executor);
-  }, [atRoot, deviceLabel, mounts]);
+    return beside(machineLabel(executor), entryName);
+  }, [atRoot, machineLabel, mounts]);
 
   const open = useCallback((entry: DirEntry) => {
     const full = joinDir(path, entry.name);
@@ -300,7 +350,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
       <div className="flex-1 min-w-0 flex flex-col relative">
         <div className="px-3 py-2 border-b p-border flex items-center gap-1 text-xs font-mono shrink-0 overflow-x-auto">
           <button data-files-crumb onClick={() => setPath("/")}
-            className="p-text-3 hover:p-text shrink-0" title="Drive root">/</button>
+            className="p-text-3 hover:p-text shrink-0" title="Workspace root">/</button>
           {segments.map((seg, i) => (
             <span key={i} className="flex items-center gap-1 min-w-0">
               <button
@@ -324,7 +374,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
               title="Parent directory" aria-label="Parent directory"><ArrowUpIcon size={12} /></button>
             <button onClick={() => setPath("/")} disabled={atRoot}
               className="p-text-3 hover:p-text p-1 disabled:opacity-30 disabled:hover:p-text-3"
-              title="Drive root" aria-label="Drive root"><HouseIcon size={12} /></button>
+              title="Workspace root" aria-label="Workspace root"><HouseIcon size={12} /></button>
             <button onClick={() => uploadInputRef.current?.click()}
               className="flex items-center gap-1 p-text-3 hover:p-text p-1"
               title={`Upload files to ${path}`}><UploadSimpleIcon size={11} />Upload</button>
@@ -368,111 +418,102 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
           </div>
         )}
 
-        <div
-          ref={listRef}
-          data-files-list
-          tabIndex={0}
-          onKeyDown={onKeyDown}
-          className={`flex-1 overflow-y-auto py-1 text-xs outline-hidden focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--c-accent)] ${dragOver ? "outline-dashed outline-2 -outline-offset-2 outline-[var(--c-accent)]" : ""}`}
-          {...listDrop}
-        >
-          {err && <div className="p-danger px-3 py-1.5 break-words">{err}</div>}
-          {uploads.map((u) => {
-            // Named by its folder too once the owner has browsed away from it.
-            const name = parentDir(u.target) === path ? u.target.slice(u.target.lastIndexOf("/") + 1) : u.target;
+        {/* The viewer covers the column below 64rem and stands beside the list from it. */}
+        <div className="flex-1 min-h-0 flex">
+          <div
+            ref={listRef}
+            data-files-list
+            tabIndex={0}
+            onKeyDown={onKeyDown}
+            className={`group/list flex-1 min-w-0 overflow-y-auto pb-1 text-xs outline-hidden focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--c-accent)] ${dragOver ? "outline-dashed outline-2 -outline-offset-2 outline-[var(--c-accent)]" : ""}`}
+            {...listDrop}
+          >
+            <div aria-hidden="true" className={`sticky top-0 z-[1] hidden @[26rem]:grid ${COLUMNS} h-7 border-b p-border p-sidebar p-meta p-text-3`}>
+              <span /><span>Name</span><span className="text-right">Size</span><span className="text-right">Modified</span>
+            </div>
+            {err && <div className="p-danger px-3 py-1.5 break-words">{err}</div>}
+            {uploads.map((u) => {
+              // Named by its folder too once the owner has browsed away from it.
+              const name = parentDir(u.target) === path ? u.target.slice(u.target.lastIndexOf("/") + 1) : u.target;
 
-            return (
-              <div key={u.target} className="flex items-center gap-1.5 font-mono px-3 py-1" data-upload={u.status} data-upload-target={u.target}>
-                {u.status === "uploading" && <><Loader size="sm" /><span className="p-text-2 truncate">{name}</span><span className="p-text-3">uploading…</span></>}
-                {u.status === "error" && <><WarningIcon size={12} className="p-danger shrink-0" /><span className="p-text-2 truncate">{name}</span><span className="p-danger truncate">{u.error}</span></>}
-                {u.status === "exists" && (
-                  <ReplacePrompt name={name} onReplace={() => detach(Effect.promise(() => replaceUpload(u)))} onKeep={() => keepExisting(u.target)} />
-                )}
-              </div>
-            );
-          })}
-          {loading && <div className="p-text-3 px-3 py-1.5">Loading…</div>}
-          {!loading && !atRoot && (
-            <button
-              data-files-up-row
-              onClick={() => setPath(parentDir(path))}
-              className="flex items-center gap-2 w-full text-left font-mono px-3 py-1 p-text-3 hover:p-text p-row-hover"
-            ><ArrowUpIcon size={12} className="shrink-0" /><span>..</span></button>
-          )}
-          {!loading && filtered.length > 0 && (
-            <div
-              data-files-grid
-              className="grid gap-1 px-2 py-1 grid-cols-2 @[30rem]:grid-cols-3 @[44rem]:grid-cols-4 @[64rem]:grid-cols-6"
-            >
-              {filtered.map((entry, i) => {
-                const full = joinDir(path, entry.name);
+              return (
+                <div key={u.target} className={`flex items-center gap-2.5 px-3 ${ROW_HEIGHT} p-row-text`} data-upload={u.status} data-upload-target={u.target}>
+                  {u.status === "uploading" && <><Loader size="sm" /><span className="p-text-2 truncate">{name}</span><span className="ml-auto p-meta p-text-3 shrink-0">uploading…</span></>}
+                  {u.status === "error" && <><WarningIcon size={16} className="p-danger shrink-0" /><span className="p-text-2 truncate">{name}</span><span className="p-meta p-danger truncate">{u.error}</span></>}
+                  {u.status === "exists" && (
+                    <ReplacePrompt name={name} onReplace={() => detach(Effect.promise(() => replaceUpload(u)))} onKeep={() => keepExisting(u.target)} />
+                  )}
+                </div>
+              );
+            })}
+            {loading && <div className="p-text-3 px-3 py-1.5">Loading…</div>}
+            {!loading && !atRoot && (
+              <button
+                data-files-up-row
+                onClick={() => setPath(parentDir(path))}
+                className={`grid ${COLUMNS} ${ROW_HEIGHT} w-full text-left p-text-3 hover:p-text p-row-hover`}
+              ><ArrowUpIcon size={16} /><span className="p-row-text">..</span></button>
+            )}
+            {!loading && placeOffline(filtered, offline).map((row) => {
+              if (!("entry" in row)) {
+                const { mount, name } = row;
 
                 return (
-                  <EntryTile
-                    key={entry.name}
-                    entry={entry} badge={badgeFor(entry.name)}
-                    selected={i === selected}
-                    previewing={preview === full}
-                    renaming={renaming?.path === full ? renaming.draft : null}
-                    confirming={confirmDelete === full}
-                    downloadHref={entry.type === "file" ? rawUrl(full, true) : null}
-                    onSelect={() => setSelected(i)}
-                    onOpen={() => open(entry)}
-                    onRenameDraft={(draft) => setRenaming({ path: full, draft })}
-                    onRenameCommit={(draft) => commitRename(full, draft)}
-                    onRenameCancel={() => setRenaming(null)}
-                    onAskDelete={() => setConfirmDelete(full)}
-                    onDelete={() => deletePath(full)}
-                    onCancelDelete={() => setConfirmDelete(null)}
-                  />
+                  <OfflineMountRow key={`offline-${name}`} name={name}
+                    label={beside(machineLabel(mount.name), name)}
+                    reason={mount.reason ?? "not available"}
+                    {...(mount.name === "device" && { onConnect: onConnectDevice })} />
                 );
-              })}
-            </div>
-          )}
-          {offlineMounts.map((m) => {
-            const mountName = Object.entries(MOUNT_EXECUTOR).find(([, executor]) => executor === m.name)?.[0] ?? m.name;
+              }
 
-            return (
-              <div key={`offline-${m.name}`} data-files-offline-mount
-                className="flex items-center gap-2 w-full font-mono px-3 py-1 p-text-4"
-                title={m.reason ?? "not available"}>
-                <PlugIcon size={12} className="shrink-0" />
-                <span>{mountName}</span>
-                <span data-mount-badge className="p-t-status px-1.5 py-px rounded-full border p-border border-dashed">
-                  {m.name === "device" ? deviceLabel ?? executorLabel("device") : executorLabel(m.name)}
-                </span>
-                <span className="p-text-4 truncate">{m.reason ?? "not available"}</span>
-                {m.name === "device" && (
-                  <button type="button" data-files-connect onClick={onConnectDevice}
-                    className="p-accent hover:underline shrink-0">Connect</button>
-                )}
+              const { entry, index } = row;
+              const full = joinDir(path, entry.name);
+
+              return (
+                <EntryRow
+                  key={entry.name}
+                  entry={entry} badge={badgeFor(entry.name)}
+                  selected={index === selected}
+                  previewing={preview === full}
+                  renaming={renaming?.path === full ? renaming.draft : null}
+                  confirming={confirmDelete === full}
+                  downloadHref={entry.type === "file" ? rawUrl(full, true) : null}
+                  onSelect={() => setSelected(index)}
+                  onOpen={() => open(entry)}
+                  onRenameDraft={(draft) => setRenaming({ path: full, draft })}
+                  onRenameCommit={(draft) => commitRename(full, draft)}
+                  onRenameCancel={() => setRenaming(null)}
+                  onAskDelete={() => setConfirmDelete(full)}
+                  onDelete={() => deletePath(full)}
+                  onCancelDelete={() => setConfirmDelete(null)}
+                />
+              );
+            })}
+            {!loading && filtered.length === 0 && offline.length === 0 && entries.length > 0 && (
+              <div className="p-text-3 italic px-3 py-1.5">Nothing here matches "{filter}".</div>
+            )}
+            {!loading && entries.length === 0 && offline.length === 0 && !err && (
+              <div className="p-text-3 italic px-3 py-1.5">This folder is empty. Drop files here to upload.</div>
+            )}
+            {!loading && filtered.length > 0 && (
+              <div className="px-3 pt-1.5 pb-1 p-text-3 p-meta border-t p-border mt-1">
+                {filter ? `${String(filtered.length)} of ${String(entries.length)} match` : folderCount(dirCount, filtered.length - dirCount)}
+                <span className="ml-2 hidden @[44rem]:inline p-text-4">↑↓ move · Enter open · Backspace up · F2 rename · Del delete</span>
               </div>
-            );
-          })}
-          {!loading && filtered.length === 0 && entries.length > 0 && (
-            <div className="p-text-3 italic px-3 py-1.5">Nothing here matches "{filter}".</div>
-          )}
-          {!loading && entries.length === 0 && offlineMounts.length === 0 && !err && (
-            <div className="p-text-3 italic px-3 py-1.5">This folder is empty. Drop files here to upload.</div>
-          )}
-          {!loading && filtered.length > 0 && (
-            <div className="px-3 pt-1.5 pb-1 p-text-3 p-meta tabular-nums border-t p-border mt-1">
-              {filter ? `${String(filtered.length)} of ${String(entries.length)} match` : folderCount(dirCount, filtered.length - dirCount)}
-              <span className="ml-2 hidden @[44rem]:inline p-text-4">↑↓ move · Enter open · Backspace up · F2 rename · Del delete</span>
-            </div>
+            )}
+          </div>
+
+          {preview && (
+            <FileViewer
+              path={preview} read={readPlaneFile}
+              revision={previewRevision}
+              rawHref={rawUrl(preview, false)}
+              downloadHref={rawUrl(preview, true)}
+              onSaved={() => { reloadListing(); }}
+              onClose={() => setPreview(null)}
+            />
           )}
         </div>
-
-        {preview && (
-          <FileViewer
-            path={preview} read={readPlaneFile}
-            revision={previewRevision}
-            rawHref={rawUrl(preview, false)}
-            downloadHref={rawUrl(preview, true)}
-            onSaved={() => { reloadListing(); }}
-            onClose={() => setPreview(null)}
-          />
-        )}
       </div>
     </div>
   );
@@ -518,9 +559,7 @@ function TreeNode({ dir, label, depth, path, previewPath, expanded, cache, badge
           : <FolderIcon size={13} className="p-info shrink-0" weight="fill" />}
         <span className="truncate">{label}</span>
         {depth === 1 && badgeFor(label) && (
-          <span data-mount-badge className="p-t-status px-1 py-px rounded-full p-fill p-text-3 shrink-0">
-            {badgeFor(label)}
-          </span>
+          <span data-mount-badge className="truncate p-meta p-text-3">{badgeFor(label)}</span>
         )}
       </div>
       {isOpen && children === undefined && (
@@ -555,7 +594,28 @@ function TreeNode({ dir, label, depth, path, previewPath, expanded, cache, badge
   );
 }
 
-function EntryTile({ entry, badge, selected, previewing, renaming, confirming, downloadHref, onSelect, onOpen, onRenameDraft, onRenameCommit, onRenameCancel, onAskDelete, onDelete, onCancelDelete }: {
+/** A machine that is not there, as a row of the list: its name where its folder would be, and the way to bring it. */
+function OfflineMountRow({ name, label, reason, onConnect }: { name: string; label: string | null; reason: string; onConnect?: () => void }) {
+  return (
+    <div data-files-offline-mount title={reason} className={`grid ${COLUMNS} ${ROW_HEIGHT}`}>
+      <PlugIcon size={16} className="p-text-4" />
+      <span className="flex min-w-0 items-baseline gap-2">
+        <span className="truncate p-row-text p-text-3">{name}</span>
+        <span data-mount-badge className="truncate p-meta p-text-4">
+          {label === null ? "offline" : `${label} · offline`}
+        </span>
+      </span>
+      <span className="text-right @[26rem]:col-span-2">
+        {onConnect && (
+          <button type="button" data-files-connect onClick={onConnect}
+            className="p-meta font-medium p-accent hover:underline">Connect</button>
+        )}
+      </span>
+    </div>
+  );
+}
+
+function EntryRow({ entry, badge, selected, previewing, renaming, confirming, downloadHref, onSelect, onOpen, onRenameDraft, onRenameCommit, onRenameCancel, onAskDelete, onDelete, onCancelDelete }: {
   entry: DirEntry;
   badge: string | null;
   selected: boolean;
@@ -572,84 +632,80 @@ function EntryTile({ entry, badge, selected, previewing, renaming, confirming, d
   onDelete: () => Promise<void>;
   onCancelDelete: () => void;
 }) {
-  const meta = [
-    entry.type === "file" && entry.size != null ? formatBytes(entry.size) : null,
-    // The app's one wording for an age, as Work and the stack say it.
-    entry.mtimeMs ? timeAgo(entry.mtimeMs) : null,
-  ].filter(Boolean).join(" · ");
+  const size = entry.type === "file" && entry.size != null ? formatBytes(entry.size) : null;
+  const age = entry.mtimeMs ? shortAge(entry.mtimeMs) : null;
+  const changed = entry.mtimeMs ? new Date(entry.mtimeMs).toLocaleString() : undefined;
+
+  const fetchItem: MenuItem[] = downloadHref === null ? [] : [{
+    label: "Download", icon: <DownloadSimpleIcon size={16} />, onSelect: () => saveAs(downloadHref), marker: "data-files-download",
+  }];
+
+  const menu: MenuItem[] = [
+    ...fetchItem,
+    { label: "Rename", icon: <PencilSimpleIcon size={16} />, onSelect: () => onRenameDraft(entry.name), marker: "data-files-rename" },
+    { label: "Delete", icon: <TrashIcon size={16} />, onSelect: onAskDelete, danger: true, apart: true, marker: "data-files-delete" },
+  ];
+
+  // The cursor shows only while the keys drive it; what is open in the viewer stays marked.
+  const tone = previewing ? "p-fill p-text" : `p-text ${selected ? "group-focus-visible/list:p-fill" : ""}`;
 
   return (
     <div
       data-files-entry
       aria-selected={selected || undefined}
       title={entry.name}
-      className={`group relative flex flex-col items-center gap-1.5 rounded-md border px-2 py-2.5 cursor-pointer ${
-        selected || previewing
-          ? "p-fill p-text border-[var(--c-accent)]"
-          : "p-text-2 border-transparent hover:p-text p-row-hover"}`}
+      className={`group relative grid ${COLUMNS} ${ROW_HEIGHT} cursor-pointer p-row-hover ${tone}`}
       onClick={() => { onSelect(); onOpen(); }}
     >
       {entry.type === "dir"
-        ? <FolderIcon size={26} className="p-info shrink-0" weight="fill" />
-        : <FileIcon size={26} className="p-text-3 shrink-0" />}
-      {renaming !== null ? (
-        <input
-          data-files-rename-input
-          autoFocus
-          value={renaming}
-          onClick={(e) => e.stopPropagation()}
-          onChange={(e) => onRenameDraft(e.currentTarget.value)}
-          onKeyDown={(e) => detach(Effect.promise(async () => {
-            e.stopPropagation();
+        ? <FolderIcon size={16} className="p-info" weight="fill" />
+        : <FileIcon size={16} className="p-text-3" />}
+      <span className="flex min-w-0 items-baseline gap-2">
+        {renaming !== null ? (
+          <input
+            data-files-rename-input
+            autoFocus
+            value={renaming}
+            onClick={(e) => e.stopPropagation()}
+            onChange={(e) => onRenameDraft(e.currentTarget.value)}
+            onKeyDown={(e) => detach(Effect.promise(async () => {
+              e.stopPropagation();
 
-            if (composing(e.nativeEvent)) return;
+              if (composing(e.nativeEvent)) return;
 
-            if (e.key === "Enter") return onRenameCommit(e.currentTarget.value);
+              if (e.key === "Enter") return onRenameCommit(e.currentTarget.value);
 
-            if (e.key === "Escape") onRenameCancel();
-          }))}
-          onBlur={onRenameCancel}
-          className="w-full min-w-0 bg-transparent border p-border rounded-xs px-1 py-0 text-center p-annotation p-text outline-hidden focus:border-[var(--c-accent)]"
-        />
-      ) : (
-        <span className="w-full text-center p-annotation line-clamp-2 break-all">
-          {entry.name}
-        </span>
-      )}
-      {badge && (
-        <span data-mount-badge className="p-t-status px-1.5 py-px rounded-full p-fill p-text-3 shrink-0">{badge}</span>
-      )}
-      {confirming ? (
-        <span className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
-          <span className="p-danger p-t-status">delete?</span>
-          <button data-files-delete-confirm onClick={(...args: Parameters<typeof onDelete>) => detach(Effect.promise(async () => onDelete(...args)))} className="p-danger hover:opacity-80 p-0.5" aria-label={`Delete ${entry.name}`}>
-            <CheckIcon size={12} />
-          </button>
-          <button onClick={onCancelDelete} className="p-text-3 hover:p-text p-0.5" aria-label="Keep it">
-            <XIcon size={12} />
-          </button>
-        </span>
-      ) : (
-        <span className="p-meta p-text-4 tabular-nums truncate max-w-full">{meta}</span>
-      )}
-      <span
-        className="absolute top-1 right-1 items-center gap-0.5 hidden group-hover:flex p-bg rounded-xs"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {downloadHref && (
-          <a data-files-download href={downloadHref} className="p-text-3 hover:p-text p-0.5"
-            title={`Download ${entry.name}`} aria-label={`Download ${entry.name}`}>
-            <DownloadSimpleIcon size={12} />
-          </a>
+              if (e.key === "Escape") onRenameCancel();
+            }))}
+            onBlur={onRenameCancel}
+            className="w-full min-w-0 bg-transparent border p-border rounded-xs px-1.5 py-0 p-row-text p-text"
+          />
+        ) : (
+          <span className={`truncate p-row-text ${previewing ? "font-medium" : ""}`}>{entry.name}</span>
         )}
-        <button data-files-rename onClick={() => onRenameDraft(entry.name)} className="p-text-3 hover:p-text p-0.5"
-          title={`Rename ${entry.name}`} aria-label={`Rename ${entry.name}`}>
-          <PencilSimpleIcon size={12} />
-        </button>
-        <button data-files-delete onClick={onAskDelete} className="p-text-3 hover:p-danger p-0.5"
-          title={`Delete ${entry.name}`} aria-label={`Delete ${entry.name}`}>
-          <TrashIcon size={12} />
-        </button>
+        {badge && <span data-mount-badge className="truncate p-meta p-text-3">{badge}</span>}
+      </span>
+      {confirming ? (
+        <span className="flex items-center justify-end gap-2.5 p-meta @[26rem]:col-span-2" onClick={(e) => e.stopPropagation()}>
+          <button data-files-delete-confirm onClick={(...args: Parameters<typeof onDelete>) => detach(Effect.promise(async () => onDelete(...args)))}
+            className="font-medium p-danger hover:underline" aria-label={`Delete ${entry.name}`}>Delete</button>
+          <button onClick={onCancelDelete} className="p-text-3 hover:p-text" aria-label="Keep it">Keep</button>
+        </span>
+      ) : (
+        <>
+          <span className="hidden truncate text-right p-meta p-text-3 @[26rem]:block">{size}</span>
+          <span className={`hidden text-right p-meta p-text-3 @[26rem]:block ${UNDER_MENU}`} title={changed}>{age}</span>
+          <span className={`whitespace-nowrap text-right p-meta p-text-3 @[26rem]:hidden ${UNDER_MENU}`} title={changed}>
+            {[size, age].filter((part) => part !== null).join(" · ")}
+          </span>
+        </>
+      )}
+      {/* No transform on the way: the menu is a fixed sheet on a phone. */}
+      <span className="absolute inset-y-0 right-1.5 flex items-center opacity-0 group-hover:opacity-100 focus-within:opacity-100 has-[[aria-expanded=true]]:opacity-100 pointer-coarse:opacity-100"
+        onClick={(e) => e.stopPropagation()}>
+        <span className="relative size-7">
+          <TileMenu name={entry.name} items={menu} className="inset-0" />
+        </span>
       </span>
     </div>
   );

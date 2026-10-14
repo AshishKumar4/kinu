@@ -113,7 +113,7 @@ interface Observed {
   /** Rows visible while the filter says "credo". */
   readonly filesFiltered: string[];
   /** The stated-absence row a disconnected device leaves on the drive. */
-  readonly filesOfflineRow: string;
+  readonly filesOfflineRow: { text: string; reason: string; connects: boolean };
   /** Each environment's name as its chip says it, and its files' root as its head says it once chosen. */
   readonly envNames: Record<string, string>;
   readonly envMounts: Record<string, string>;
@@ -503,8 +503,8 @@ async function run(): Promise<Observed> {
       () => document.querySelector('[data-files-preview]') === null,
     );
 
-    // Rename rides the real RPC against the frame's stateful fixture.
-    await files.hover(rowSelector('SOUL.md'));
+    // Rename rides the real RPC against the frame's stateful fixture, from the row's menu.
+    await files.click(`${rowSelector('SOUL.md')} [data-drive-menu]`);
     await files.click(`${rowSelector('SOUL.md')} [data-files-rename]`);
     await files.waitForSelector('[data-files-rename-input]');
     const renameInput = present(await files.$('[data-files-rename-input]'), 'the rename input');
@@ -516,7 +516,7 @@ async function run(): Promise<Observed> {
     const filesAfterRename = await rowNames();
 
     // Delete asks inline, then the row is gone.
-    await files.hover(rowSelector('AGENTS.md'));
+    await files.click(`${rowSelector('AGENTS.md')} [data-drive-menu]`);
     await files.click(`${rowSelector('AGENTS.md')} [data-files-delete]`);
     await files.click(`${rowSelector('AGENTS.md')} [data-files-delete-confirm]`);
     await waitForRowGone('AGENTS.md');
@@ -534,7 +534,11 @@ async function run(): Promise<Observed> {
     await offline.goto(`${origin}/gallery.html?frame=files&offline=device`, { waitUntil: 'networkidle0' });
     await offline.reload({ waitUntil: 'networkidle0' });
     await offline.waitForSelector('[data-files-offline-mount]');
-    const filesOfflineRow = await offline.$eval('[data-files-offline-mount]', (el) => el.textContent ?? '');
+
+    const filesOfflineRow = await offline.$eval('[data-files-offline-mount]', (el) => ({
+      text: el.textContent ?? '', reason: el.getAttribute('title') ?? '', connects: el.querySelector('[data-files-connect]') !== null,
+    }));
+
     await offline.close();
 
     // The Environment tab: each environment by its name, no capability
@@ -858,8 +862,9 @@ describe('the drive, browsing the one composite plane', () => {
     expect(observed.filesRoot.crumbs).toBe('/');
     expect(observed.filesRoot.entries).toEqual(expect.arrayContaining(['home', 'pc', 'computer']));
     // The origin badge names the machine, not the executor id: the device wears the user's own device name, per the
-    // consent naming contract, and the agent's computer wears its product label.
-    expect(observed.filesRoot.badges).toEqual(expect.arrayContaining(["Ashish's MacBook", executorLabel('computer')]));
+    // consent naming contract. The agent's computer has none, as its product label only repeats the folder's name.
+    expect(executorLabel('computer').toLowerCase()).toBe('computer');
+    expect(observed.filesRoot.badges).toEqual(["Ashish's MacBook"]);
   });
 
   test('crossing into /pc lists the machines; a machine lands inside its consented directory', () => {
@@ -903,8 +908,9 @@ describe('the drive, browsing the one composite plane', () => {
   });
 
   test('a disconnected device is a stated absence with its reason, not a missing row', () => {
-    expect(observed.filesOfflineRow).toContain('pc');
-    expect(observed.filesOfflineRow).toContain('no device connected');
+    expect(observed.filesOfflineRow.text).toContain('pc');
+    expect(observed.filesOfflineRow.reason).toBe('no device connected');
+    expect(observed.filesOfflineRow.connects).toBe(true);
   });
 });
 
@@ -1869,7 +1875,7 @@ describe('a rename while an IME composes', () => {
       await page.waitForSelector(row('main'));
       await page.click(row('main'));
       await page.waitForSelector(row('SOUL.md'));
-      await page.hover(row('SOUL.md'));
+      await page.click(`${row('SOUL.md')} [data-drive-menu]`);
       await page.click(`${row('SOUL.md')} [data-files-rename]`);
       await page.waitForSelector('[data-files-rename-input]');
       await page.$eval('[data-files-rename-input]', (el) => { if (el instanceof HTMLInputElement) el.value = ''; });
@@ -2274,6 +2280,57 @@ describe('linking a machine happens on the surface that asked for it', () => {
       // Still the drive underneath: the row it was opened from is right there.
       expect(await page.$('[data-files-offline-mount]')).not.toBeNull();
       await page.close();
+    });
+  });
+});
+
+describe('Files at every width it is drawn', () => {
+  /** Each entry's left edge and top, in the order drawn. */
+  const rowEdges = (page: Page) => page.$$eval('[data-files-entry], [data-files-offline-mount]', (rows) => rows.map((row) => {
+    const box = row.getBoundingClientRect();
+
+    return { left: Math.round(box.left), top: Math.round(box.top) };
+  }));
+
+  test('a folder is a list, one entry under another, in the inspector and beside the tree', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      for (const width of ['inspector=340', 'inspector=480', 'wide=1']) {
+        const page = await newPage();
+        await page.setViewport({ width: 1440, height: 900 });
+        await page.goto(`${origin}/gallery.html?frame=files&offline=device&${width}`, { waitUntil: 'networkidle0' });
+        await page.waitForSelector('[data-files-offline-mount]');
+
+        // The owner's report was a grid of tiles in a narrow column; the machine that is away is a row of the same list.
+        const edges = await rowEdges(page);
+
+        expect(new Set(edges.map((edge) => edge.left)).size).toBe(1);
+        expect(edges.every((edge, index) => index === 0 || edge.top > (edges[index - 1]?.top ?? 0))).toBe(true);
+        await page.close();
+      }
+    });
+  });
+
+  test("a row's menu waits for the pointer, and a touch screen shows it on every row", async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const menuShown = (page: Page, name: string) => page.$eval(
+        `[data-files-entry][title="${name}"] [data-drive-menu]`, (button) => button.checkVisibility({ opacityProperty: true }),
+      );
+
+      const pointer = await newPage();
+      await pointer.setViewport({ width: 1280, height: 900 });
+      await pointer.goto(`${origin}/gallery.html?frame=files&inspector=340`, { waitUntil: 'networkidle0' });
+      await pointer.waitForSelector('[data-files-entry][title="home"]');
+      expect(await menuShown(pointer, 'home')).toBe(false);
+      await pointer.hover('[data-files-entry][title="home"]');
+      expect(await menuShown(pointer, 'home')).toBe(true);
+      await pointer.close();
+
+      const touch = await newPage();
+      await touch.setViewport({ width: 390, height: 844, hasTouch: true, isMobile: true });
+      await touch.goto(`${origin}/gallery.html?frame=files&narrow=1`, { waitUntil: 'networkidle0' });
+      await touch.waitForSelector('[data-files-entry][title="home"]');
+      expect(await menuShown(touch, 'home')).toBe(true);
+      await touch.close();
     });
   });
 });

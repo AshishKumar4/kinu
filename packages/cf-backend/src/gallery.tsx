@@ -5818,11 +5818,27 @@ const ENVIRONMENT_EXECUTORS: ExecutorInfo[] = [
 /** Mutable so the gate can prove rename and delete; `binary-weights.bin` exercises the binary refusal. */
 function seedCompositeTree(offlineDevice: boolean): Map<string, DirEntry[]> {
   const tree = new Map<string, DirEntry[]>([
+    // The workspace's places, as `read-models/files.ts` lists `/`: home's, `/slates` and each mount point.
     ["/", [
+      { name: "computer", type: "dir", mtimeMs: NOW - 30 * 60e3 },
+      { name: "context", type: "dir" },
       { name: "home", type: "dir", mtimeMs: NOW - 4 * 36e5 },
       ...(offlineDevice ? [] : [{ name: "pc", type: "dir" as const, mtimeMs: NOW - 60e3 }]),
-      { name: "computer", type: "dir", mtimeMs: NOW - 30 * 60e3 },
+      { name: "shared", type: "dir" },
+      { name: "skills", type: "dir" },
+      { name: "slates", type: "dir", mtimeMs: NOW - 2 * 864e5 },
     ]],
+    ["/context", [{ name: "main", type: "dir" }]],
+    ["/context/main", [{ name: "transcript.md", type: "file", size: 48_310, mtimeMs: NOW - 60e3 }]],
+    ["/shared", [
+      { name: "Reports", type: "dir", mtimeMs: NOW - 5 * 864e5 },
+      { name: "brand-guidelines.pdf", type: "file", size: 2_401_118, mtimeMs: NOW - 12 * 864e5 },
+    ]],
+    ["/shared/Reports", [{ name: "q3-revenue.csv", type: "file", size: 12_904, mtimeMs: NOW - 5 * 864e5 }]],
+    ["/skills", [{ name: "sql-triage", type: "dir", mtimeMs: NOW - 20 * 864e5 }]],
+    ["/skills/sql-triage", [{ name: "SKILL.md", type: "file", size: 2_010, mtimeMs: NOW - 20 * 864e5 }]],
+    ["/slates", [{ name: "checkout-dashboard", type: "dir", mtimeMs: NOW - 2 * 864e5 }]],
+    ["/slates/checkout-dashboard", [{ name: "index.html", type: "file", size: 6_120, mtimeMs: NOW - 2 * 864e5 }]],
     ["/home", [{ name: "main", type: "dir", mtimeMs: NOW - 4 * 36e5 }]],
     ["/home/main", [
       { name: "memory", type: "dir", mtimeMs: NOW - 26e5 },
@@ -6034,7 +6050,7 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
 
   return (
     <div className="p-bg min-h-screen flex justify-center">
-      <div className={`${width} h-screen border-x p-border`}>
+      <div data-gallery-column className={`${width} h-screen border-x p-border`}>
         {deferPreview && (
           <div className="absolute z-20 flex gap-2 p-2">
             <button data-files-fixture-mutate type="button" onClick={() => {
@@ -7176,11 +7192,17 @@ async function updatesFrame(): Promise<{ node: React.ReactNode; entries: string[
 }
 
 /** Routed: FilesSurface reads `agentId` for the raw-bytes route. `&offline=device` shows the disconnected row, `&wide=1` the ≥64rem side-panel preview,
- *  `&narrow=1` the column at whatever width the viewport gives it, as a phone does. */
+ *  `&narrow=1` the column at whatever width the viewport gives it, as a phone does, `&inspector=340|480` the inspector's
+ *  default width and one dragged wider. */
 interface MountedFrame { node: React.ReactNode; entries: string[] }
+
+const INSPECTOR_COLUMNS = new Map([["340", "w-[340px]"], ["480", "w-[480px]"]]);
 
 function driveColumn(params: URLSearchParams, column: string): string {
   if (params.get("wide") !== null) return "w-[1240px]";
+  const inspector = INSPECTOR_COLUMNS.get(params.get("inspector") ?? "");
+
+  if (inspector !== undefined) return inspector;
 
   return params.get("narrow") === null ? column : "w-full";
 }
