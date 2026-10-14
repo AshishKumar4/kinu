@@ -3406,7 +3406,8 @@ export abstract class ActorAgent extends Agent<Env> {
     const window = this.addressedActor();
 
     if (window !== null) {
-      this.hostedChatWire(window)?.interrupt();
+      // In its window's order: what the window sent before this Stop is stopped, what it sends after is not.
+      await this.chatRooms.hostedRoom(window)?.interrupt();
 
       return { ok: true, abortedTools: 0, deviceCommands: [] };
     }
@@ -3416,7 +3417,8 @@ export abstract class ActorAgent extends Agent<Env> {
     this.stopSubtree(actorId);
 
     return await cancelCurrentWork({
-      cancelChats: () => this.stopAgent(actorId),
+      // In the room's order, as a window's Stop is; its subtree and devices are stopped here.
+      cancelChats: () => this.chatTransport.interrupt(() => this.stopAgent(actorId)),
       activeToolControllers: this.jobRunner.foreground,
       broadcast: (payload) => { this.broadcastToActor(null, payload); },
       stopDeviceCommands: () => settle(this.stopAgentDevices(actorId)),

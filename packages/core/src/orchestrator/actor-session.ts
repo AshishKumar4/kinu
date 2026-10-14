@@ -312,6 +312,8 @@ export class ActorSession {
   }
   get landedSteers(): readonly LandedSteerRow[] { return this.landed; }
   get inFlight(): boolean { return this.active !== null && this.active.phase !== 'settling'; }
+  /** In flight with its Stop asked: it reads no more input, so a send is the next turn's, not its steer. */
+  get stopping(): boolean { return this.inFlight && this.active?.abort.signal.aborted === true; }
   /** Until `finishTurn`, a settling turn owns its claim. */
   get turnOpen(): boolean { return this.active !== null; }
 

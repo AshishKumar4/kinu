@@ -2916,9 +2916,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /**
    * A person's words, delivered and answered where they landed when `land`: in the running turn or opening one. Refused
    * at the door as the agent would refuse them, before anything is written; refused too under an id the agent holds.
-   * View-only agents take none. A crossing that fails is the sender's to hear, and the words stay owed.
+   * View-only agents take none. A crossing that fails is the sender's to hear, and the words stay owed. `admitted` is
+   * told once they are the agent's input, before the wait for where they landed.
    */
-  private async deliverWords(actorId: string, delivery: Delivery, land: boolean): Promise<SendLanding | null> {
+  private async deliverWords(actorId: string, delivery: Delivery, land: boolean, admitted?: () => void): Promise<SendLanding | null> {
     const refused = wordsRefusal(delivery);
 
     const crossed: CrossedDelivery = refused === null
@@ -2931,6 +2932,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     await heard(crossed, () => null);
+    admitted?.();
 
     // Heard once a turn took them, off the crossing lane: what waits behind them crosses meanwhile.
     return land ? await (await this.agentCalls(actorId)).landing(this.agentSnapshot(actorId), delivery.id) : null;
@@ -3121,17 +3123,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       broadcast: (message, exclude) => { this.broadcastToActor(room, message, exclude); },
       history: (limit) => this.agentStores(actorId).history(limit),
       admitted: (id) => this.agentStores(actorId).admitted(id),
-      send: async (input) => await this.deliverWords(actorId, { id: input.id, input: { kind: 'words', text: input.text, files: [...input.files], mode: input.mode }, authorship: 'owner' }, true) ?? 'mid-turn',
+      send: async (input, admitted) => await this.deliverWords(actorId, { id: input.id, input: { kind: 'words', text: input.text, files: [...input.files], mode: input.mode }, authorship: 'owner' }, true, admitted) ?? 'mid-turn',
       retry: (messageId) => whenActorTakesInput(this.boundSql, actorId, async () => {
         const done = await this.ownerIntent(actorId, { id: `retry:${messageId}`, input: { kind: 'retry', messageId }, authorship: 'owner' });
 
         // Applied, the turn it reopened tells its own end.
         return 'owed' in done || done.kind !== 'retry' ? { owed: 'owed' in done ? done.owed : messageId } : { turnId: done.turnId };
       }),
-      interrupt: () => {
-        this.detachOwned(Effect.promise(() => this.stopAgent(actorId)));
+      interrupt: async () => {
         this.detachOwned(Effect.asVoid(this.stopAgentDevices(actorId)));
         this.stopSubtree(actorId);
+        await this.stopAgent(actorId);
       },
       sendState: async (id) => await (await facet()).sendState(snapshot(), id),
       awaitSend: async (id) => await (await facet()).awaitSend(snapshot(), id),

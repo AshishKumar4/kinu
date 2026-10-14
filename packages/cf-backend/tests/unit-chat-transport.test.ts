@@ -98,17 +98,18 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
     admitted: async (id) => history.some((row) => row.id === id) || reserved.has(id),
     sendState: async () => ({ status: 'none' }),
     awaitSend: async () => ({ status: 'none' }),
-    send: (input) => {
+    send: (input, admitted) => {
       if (isRefusal(landing)) return Promise.reject(landing.fault === true ? new Error(landing.refuse) : new KinuError('bad_input', landing.refuse));
       sent.push(input);
       reserved.add(input.id);
+      admitted();
 
       if (Array.isArray(landing)) return Promise.resolve(landing[sent.items.length - 1] ?? 'mid-turn');
 
       return landing instanceof Promise ? landing : Promise.resolve(landing);
     },
     retry: () => Promise.reject(new KinuError('unavailable', 'this fake does not retry')),
-    interrupt: () => { interrupts += 1; },
+    interrupt: async () => { interrupts += 1; },
   };
 
   const transport = new ChatWireTransport(wire);
