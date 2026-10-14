@@ -357,7 +357,7 @@ export class FakeSandbox {
   /** The desktop check's answer: it ends by printing the screen's size. */
   desktopStart: ExecResult = { stdout: '1280 768\n', stderr: '', exitCode: 0 };
   /** What the box's terminal sessions read answers (D90): space-separated `P`, `L`, `B` and `W` rows. */
-  sessionsRead: ExecResult = { stdout: '', stderr: '', exitCode: 0 };
+  sessionsRead: ExecResult | Promise<ExecResult> = { stdout: '', stderr: '', exitCode: 0 };
   /** What saving the sessions as the box stops answers (D97), or `gone` for an exec the container refuses. */
   sessionsSave: ExecResult | 'gone' = { stdout: '', stderr: '', exitCode: 0 };
   /** What naming the box answers (D96): its script's report, or `gone` for an exec the container refuses. */
@@ -437,6 +437,8 @@ export class FakeSandbox {
 
   /** Thrown by the next `snapshotContainer`, as a refused snapshot is. */
   snapshotFault: Error | undefined;
+  /** Holds the next `snapshotContainer` until `release` settles, telling `entered` it began: a snapshot under way. */
+  snapshotHold: { readonly entered: () => void; readonly release: Promise<void> } | undefined;
   readonly files = new Map<string, string>();
   /** Files whose bytes are not UTF-8 text, which `files` cannot hold; the SDK's file reads serve them as bytes. */
   readonly binaryFiles = new Map<string, Uint8Array>();
@@ -901,9 +903,17 @@ export class FakeSandbox {
       interceptOutboundHttps: async () => { this.sequence.push('intercept:https'); },
       snapshotContainer: async (options) => {
         const fault = this.snapshotFault;
+        const hold = this.snapshotHold;
         this.snapshotFault = undefined;
+        this.snapshotHold = undefined;
 
         if (fault !== undefined) throw fault;
+
+        if (hold !== undefined) {
+          hold.entered();
+          await hold.release;
+        }
+
         this.#snapshotsTaken += 1;
         const id = `snapshot-${String(this.#snapshotsTaken)}`;
         this.snapshots.set(id, 'ok');
