@@ -42,7 +42,7 @@ const DaemonFrameSchema = v.object({
   output: v.optional(v.boolean()),
 });
 
-/** A dropped socket calls into `inFlight` directly, so disconnect is exercised without a real WebSocket. */
+/** A dropped socket calls into `supervision` directly, so disconnect is exercised without a real WebSocket. */
 const SweepSchema = v.array(v.object({ requestId: v.string(), terminated: v.promise() }));
 
 const RecoveredSchema = v.array(v.object({ requestId: v.string(), terminal: v.boolean() }));
@@ -51,11 +51,10 @@ const ConfirmedCancellationSchema = v.object({ requestId: v.string(), cancelled:
 
 const PcAgentModuleSchema = v.object({
   handle: v.function(),
-  inFlight: v.object({
+  supervision: v.object({
     size: v.function(),
     terminateUnanswered: v.pipe(v.function(), v.returnsAsync(SweepSchema)),
   }),
-  createInFlight: v.function(),
   INFLIGHT_ROOT: v.string(),
   CANCEL_METHOD: v.string(),
   EXEC_ACK_METHOD: v.string(),
@@ -65,10 +64,14 @@ const PcAgentModuleSchema = v.object({
   PTY_RESIZE_FRAME: v.string(),
   PTY_OUTPUT_FRAME: v.string(),
   PTY_EXIT_FRAME: v.string(),
-  requestDirectory: v.function(),
-  supervisionSupported: v.function(),
-  processStartIdentity: v.pipe(v.function(), v.returnsAsync(v.string())),
   watchOutput: v.function(),
+});
+
+/** The daemon's command supervisor (`packages/pc-agent/src/daemon/supervisor.js`), whose records outlive the daemon. */
+const SupervisorModuleSchema = v.object({
+  createSupervision: v.function(),
+  requestDirectory: v.function(),
+  processStartIdentity: v.pipe(v.function(), v.returnsAsync(v.string())),
   waitForFile: v.function(),
   waitForSupervisorState: v.function(),
   stopSupervisor: v.pipe(v.function(), v.returnsAsync(v.void())),
@@ -87,6 +90,8 @@ const SupervisorRegistrySchema = v.object({
 });
 
 const pcAgent = v.parse(PcAgentModuleSchema, require_(join(import.meta.dir, '../../pc-agent/src/index.js')));
+
+const daemonSupervisor = v.parse(SupervisorModuleSchema, require_(join(import.meta.dir, '../../pc-agent/src/daemon/supervisor.js')));
 
 /** As the hub sends it: with the owner's Sandbox switch, here off. */
 function handle(message: DaemonMessage, socket: ReplySocket): void {
@@ -319,7 +324,7 @@ describe('a running command\'s output, for a hub that asked', () => {
 
     expect(await daemon.exited).toBe(0);
     // Its successor adopts the command while the gate holds it, so nothing races the command's end.
-    const restarted = v.parse(SupervisorRegistrySchema, pcAgent.createInFlight(pcAgent.INFLIGHT_ROOT));
+    const restarted = v.parse(SupervisorRegistrySchema, daemonSupervisor.createSupervision({ root: pcAgent.INFLIGHT_ROOT }));
     expect(await restarted.reconcile()).toContainEqual({ requestId: id, terminal: false });
     // Released only now, so every chunk the supervisor forwards meets a closed pipe.
     writeFileSync(gate, 'go\n');
@@ -464,7 +469,7 @@ function commandWithDescendant(dir: string, name: string) {
       };
 
       try {
-        const published: Promise<unknown> = Promise.resolve(pcAgent.waitForFile(pidFile, watching.signal));
+        const published: Promise<unknown> = Promise.resolve(daemonSupervisor.waitForFile(pidFile, watching.signal));
         await Promise.race([published, refused()]);
       } finally {
         // A lost race otherwise leaks an inotify instance from the per-user kernel cap.
@@ -520,21 +525,21 @@ describe('pc-agent command cancellation', () => {
     const ws = recorder();
     const runId = rpcId(210);
     const requestDir = join(pcAgent.INFLIGHT_ROOT, runId);
-    const sizeBefore = v.parse(v.number(), pcAgent.inFlight.size());
+    const sizeBefore = v.parse(v.number(), pcAgent.supervision.size());
 
     handle({ id: runId, method: 'exec', params: [`sleep 30 & echo $! > ${pidFile}; echo started`] }, ws.socket);
     const answer = await settled(() => ws.of(runId)[0], 'the exec answer');
     const { pid: supervisor } = await supervisorState(runId);
     expect(v.parse(ExecResultSchema, answer.result).stdout).toContain('started');
     expect(existsSync(join(requestDir, 'result'))).toBe(true);
-    expect(pcAgent.inFlight.size()).toBe(sizeBefore + 1);
+    expect(pcAgent.supervision.size()).toBe(sizeBefore + 1);
 
     const ackId = rpcId(211);
     acknowledge(ackId, runId, ws.socket);
     expect((await settled(() => ws.of(ackId)[0], 'the cloud ACK')).result)
       .toEqual({ requestId: runId, acknowledged: true });
     expect(await settled(() => (!existsSync(requestDir) ? true : undefined), 'supervisor cleanup')).toBe(true);
-    expect(pcAgent.inFlight.size()).toBe(sizeBefore);
+    expect(pcAgent.supervision.size()).toBe(sizeBefore);
     // The command's group leader has exited; the ACK must still reach the supervisor, which then ends.
     expect(await gone(supervisor)).toBe(true);
 
@@ -567,7 +572,7 @@ describe('pc-agent command cancellation', () => {
 
   test('never selects a command directory from a noncanonical request ID', async () => {
     for (const id of ['.', '..', 'rpc-short-1', 'rpc-testepoch0-0', 'rpc-testepoch0-1/child']) {
-      expect(() => pcAgent.requestDirectory(pcAgent.INFLIGHT_ROOT, id)).toThrow('request id');
+      expect(() => daemonSupervisor.requestDirectory(pcAgent.INFLIGHT_ROOT, id)).toThrow('request id');
     }
 
     const ws = recorder();
@@ -581,7 +586,7 @@ describe('pc-agent command cancellation', () => {
     const dir = scratchDir('pc-agent-unregistered');
     const waiting = commandWithDescendant(dir, 'unregistered');
     // Built over the empty root: the live window where the supervisor published but `register` hasn't run.
-    const detached = v.parse(SupervisorRegistrySchema2, pcAgent.createInFlight(pcAgent.INFLIGHT_ROOT));
+    const detached = v.parse(SupervisorRegistrySchema2, daemonSupervisor.createSupervision({ root: pcAgent.INFLIGHT_ROOT }));
     const ws = recorder();
     handle({ id: rpcId(260), method: 'exec', params: [waiting.command] }, ws.socket);
     const abandoned = await waiting.pidOf(ws.answerTo(rpcId(260)));
@@ -604,7 +609,7 @@ describe('pc-agent command cancellation', () => {
 
     handle({ id, method: 'exec', params: ['echo started'] }, ws.socket);
     await held.reached;
-    await pcAgent.inFlight.terminateUnanswered();
+    await pcAgent.supervision.terminateUnanswered();
     held.release();
 
     expect(await ws.answerTo(id)).toMatchObject({ result: { stdout: 'started\n', exitCode: 0 } });
@@ -622,7 +627,7 @@ describe('pc-agent command cancellation', () => {
     handle({ id, method: 'exec', params: ['sleep 60'] }, socket);
     await held.reached;
     readyState = WebSocket.CLOSED;
-    await pcAgent.inFlight.terminateUnanswered();
+    await pcAgent.supervision.terminateUnanswered();
     held.release();
 
     // Stopped as the drop's sweep stops one already running: its process group killed, not left to sleep out its minute.
@@ -677,7 +682,7 @@ async function holdingLife(dir: string, file: string, ...args: string[]): Promis
 
 /** The record a supervisor publishes, naming `pid` and the command group `group`, as the daemon reads identities. */
 async function recordSupervisor(dir: string, pid: number, group: number): Promise<void> {
-  const [start, groupStart] = await Promise.all([pcAgent.processStartIdentity(pid), pcAgent.processStartIdentity(group)]);
+  const [start, groupStart] = await Promise.all([daemonSupervisor.processStartIdentity(pid), daemonSupervisor.processStartIdentity(group)]);
   writeFileSync(join(dir, 'state'), `pid=${String(pid)}\nstart=${start}\ngroup=${String(group)}\ngroupStart=${groupStart}\n`, { mode: 0o600 });
 }
 
@@ -690,7 +695,7 @@ describe('pc-agent durable supervisor', () => {
     handle({ id, method: 'exec', params: [`cat ${gate} > /dev/null`] }, ws.socket);
     const { pid } = await supervisorState(id);
     // Built over the same root, as a restarted daemon builds its registry: it is not the supervisor's parent.
-    const restarted = v.parse(SupervisorRegistrySchema, pcAgent.createInFlight(pcAgent.INFLIGHT_ROOT));
+    const restarted = v.parse(SupervisorRegistrySchema, daemonSupervisor.createSupervision({ root: pcAgent.INFLIGHT_ROOT }));
     expect(await restarted.reconcile()).toContainEqual({ requestId: id, terminal: false });
 
     process.kill(pid, 'SIGKILL');
@@ -714,7 +719,7 @@ describe('pc-agent durable supervisor', () => {
     // SIGUSR1 ends `sleep` (its default action) before it does anything a supervisor does on it.
     const supervisor = await holdingLife(dir, 'sleep', '60');
     await recordSupervisor(dir, v.parse(PidSchema, supervisor.pid), v.parse(PidSchema, command.pid));
-    const registry = v.parse(SupervisorRegistrySchema, pcAgent.createInFlight(root));
+    const registry = v.parse(SupervisorRegistrySchema, daemonSupervisor.createSupervision({ root: root }));
 
     await expect(registry.cancel(id)).rejects.toThrow(`the supervisor of ${id} (pid ${String(supervisor.pid)}) exited without recording the command's result`);
     // Not a stop: the command did outlive its supervisor.
@@ -739,7 +744,7 @@ describe('pc-agent durable supervisor', () => {
       command.kill('SIGKILL');
       await command.exited;
 
-      const restarted = v.parse(SupervisorRegistrySchema, pcAgent.createInFlight(root));
+      const restarted = v.parse(SupervisorRegistrySchema, daemonSupervisor.createSupervision({ root: root }));
 
       expect(await restarted.reconcile()).toEqual([{ requestId: id, terminal: false }]);
       expect(existsSync(dir)).toBe(true);
@@ -762,7 +767,7 @@ describe('pc-agent durable supervisor', () => {
     const supervisorEnded = new Promise((resolve) => supervisor.once('exit', resolve));
 
     try {
-      const restarted = v.parse(SupervisorRegistrySchema, pcAgent.createInFlight(root));
+      const restarted = v.parse(SupervisorRegistrySchema, daemonSupervisor.createSupervision({ root: root }));
 
       expect(existsSync(dir)).toBe(true);
       // Published as a supervisor publishes it, by rename.
@@ -785,7 +790,7 @@ describe('pc-agent durable supervisor', () => {
     // A supervisor that exited before its state, and a start that never reached its spawn.
     await runOk(['mkfifo', join(released, 'life')]);
 
-    const restarted = v.parse(SupervisorRegistrySchema, pcAgent.createInFlight(root));
+    const restarted = v.parse(SupervisorRegistrySchema, daemonSupervisor.createSupervision({ root: root }));
 
     expect(v.parse(RecoveredSchema, await restarted.ready)).toEqual([]);
     expect([existsSync(released), existsSync(unstarted)]).toEqual([false, false]);
@@ -806,7 +811,7 @@ describe('pc-agent durable supervisor', () => {
 
     // The daemon's start has begun when the result appears, and finds the supervisor gone: to it, a supervisor that
     // recorded its result and exited between its two reads.
-    const restarted = v.parse(SupervisorRegistrySchema, pcAgent.createInFlight(root));
+    const restarted = v.parse(SupervisorRegistrySchema, daemonSupervisor.createSupervision({ root: root }));
     writeFileSync(join(dir, 'result'), 'kind=exited\nexitCode=0\n', { mode: 0o600 });
 
     expect(v.parse(RecoveredSchema, await restarted.ready)).toEqual([{ requestId: id, terminal: true }]);
@@ -822,7 +827,7 @@ describe('pc-agent durable supervisor', () => {
     const command = Bun.spawn(['true']);
     await Promise.all([supervisor.exited, command.exited]);
 
-    await expect(pcAgent.stopSupervisor({ dir, pid: supervisor.pid, group: command.pid }, id)).rejects.toThrow(Error);
+    await expect(daemonSupervisor.stopSupervisor({ dir, pid: supervisor.pid, group: command.pid }, id)).rejects.toThrow(Error);
   });
 
   test('a supervisor that dies on reading its ACK leaves its directory to the daemon, and the ACK answers', async () => {
@@ -836,7 +841,7 @@ describe('pc-agent durable supervisor', () => {
     const supervisor = await holdingLife(dir, 'cat', join(dir, 'ack'));
     const pid = v.parse(PidSchema, supervisor.pid);
     await recordSupervisor(dir, pid, pid);
-    const registry = v.parse(SupervisorRegistrySchema, pcAgent.createInFlight(root));
+    const registry = v.parse(SupervisorRegistrySchema, daemonSupervisor.createSupervision({ root: root }));
 
     expect(await registry.acknowledge(id)).toEqual({ requestId: id, acknowledged: true });
     expect(existsSync(dir)).toBe(false);
@@ -876,7 +881,7 @@ describe('pc-agent durable supervisor', () => {
     handle({ id, method: 'exec', params: ['sleep 30'] }, ws.socket);
     await settled(() => (existsSync(join(requestDir, 'state')) ? true : undefined), 'supervisor state');
 
-    const restarted = v.parse(SupervisorRegistrySchema, pcAgent.createInFlight(pcAgent.INFLIGHT_ROOT));
+    const restarted = v.parse(SupervisorRegistrySchema, daemonSupervisor.createSupervision({ root: pcAgent.INFLIGHT_ROOT }));
     expect(await restarted.reconcile()).toContainEqual({ requestId: id, terminal: false });
     await expect(restarted.cancel(id)).resolves.toEqual({ requestId: id, cancelled: 'terminated' });
     await settled(() => ws.of(id)[0], 'reconciled exec result');
@@ -891,7 +896,7 @@ describe('pc-agent durable supervisor', () => {
     await settled(() => ws.of(id)[0], 'the completed exec result');
     expect(existsSync(join(requestDir, 'result'))).toBe(true);
 
-    const restarted = v.parse(SupervisorRegistrySchema, pcAgent.createInFlight(pcAgent.INFLIGHT_ROOT));
+    const restarted = v.parse(SupervisorRegistrySchema, daemonSupervisor.createSupervision({ root: pcAgent.INFLIGHT_ROOT }));
     expect(await restarted.reconcile()).toContainEqual({ requestId: id, terminal: true });
     await expect(restarted.acknowledge(id)).resolves.toEqual({ requestId: id, acknowledged: true });
     expect(existsSync(requestDir)).toBe(false);
@@ -899,7 +904,7 @@ describe('pc-agent durable supervisor', () => {
 
   test('refuses a stale supervisor pid identity without signaling that pid', async () => {
     const root = scratchDir('pc-agent-pid-reuse');
-    const registry = v.parse(SupervisorRegistrySchema, pcAgent.createInFlight(root));
+    const registry = v.parse(SupervisorRegistrySchema, daemonSupervisor.createSupervision({ root: root }));
     const id = rpcId(320);
     const requestDir = join(root, id);
     mkdirSync(requestDir, { mode: 0o700 });
@@ -936,7 +941,7 @@ describe('pc-agent supervisor guards', () => {
         return watcher;
       };
 
-      await pcAgent.waitForFile(target);
+      await daemonSupervisor.waitForFile(target);
 
       agentFs.watch = () => {
         const watcher = Object.assign(new EventEmitter(), { close() {} });
@@ -945,7 +950,7 @@ describe('pc-agent supervisor guards', () => {
         return watcher;
       };
 
-      await expect(pcAgent.waitForFile(join(root, 'result'))).rejects.toThrow('watch failed');
+      await expect(daemonSupervisor.waitForFile(join(root, 'result'))).rejects.toThrow('watch failed');
     } finally {
       agentFs.watch = originalWatch;
     }
@@ -954,7 +959,7 @@ describe('pc-agent supervisor guards', () => {
   test('rejects supervisor startup when the child exits before state publication', async () => {
     const root = scratchDir('pc-agent-startup');
     const child = new EventEmitter();
-    const pending = pcAgent.waitForSupervisorState(root, child);
+    const pending = daemonSupervisor.waitForSupervisorState(root, child);
     child.emit('exit', 125, null);
     await expect(pending).rejects.toThrow('exited before publishing state');
   });
@@ -964,7 +969,7 @@ describe('pc-agent supervisor guards', () => {
   test('accepts a supervisor that published its state even when its exit is dispatched first', async () => {
     const root = scratchDir('pc-agent-startup-published');
     const child = new EventEmitter();
-    const pending = pcAgent.waitForSupervisorState(root, child);
+    const pending = daemonSupervisor.waitForSupervisorState(root, child);
     writeFileSync(join(root, 'state'), 'pid=1\n');
     child.emit('exit', null, 'SIGKILL');
     await expect(pending).resolves.toBeUndefined();
