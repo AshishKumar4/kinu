@@ -198,9 +198,6 @@ const RUNNING_SIZE_KEY = 'devbox:running-size';
 
 const START_REFUSED_KEY = 'devbox:start-refused';
 
-/** How long the terminal sessions' read may take: it measured 150 ms from the workspace with eight sessions (D90). */
-const SESSIONS_READ_MS = 5_000;
-
 const DISK_STATE_KEY = 'devbox:disk-chain';
 
 /** Where the box stamps the container's identity: on the disk a replacement does not keep (P1). */
@@ -3279,8 +3276,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       const container = this.ctx.container;
 
       if (container?.running !== true) return mergeSessions(records, null);
-      // Bounded: a pane in a folder git or /proc cannot answer for would otherwise hold every later read behind it.
-      const read = await (await container.exec(['bash', '-c', SESSIONS_READ, 'terminal-sessions', PORT_LISTENERS], { signal: AbortSignal.timeout(SESSIONS_READ_MS) })).output();
+      const read = await (await container.exec(['bash', '-c', SESSIONS_READ, 'terminal-sessions', PORT_LISTENERS])).output();
       const sessions = mergeSessions(records, parseSessionsRead(new TextDecoder().decode(read.stdout)));
       const moved = records.map((record) => ({ ...record, cwd: sessions.find((session) => session.id === record.id && session.open)?.cwd ?? record.cwd }));
 
