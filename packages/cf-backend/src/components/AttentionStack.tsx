@@ -4,13 +4,13 @@
  * tab shows, so the two never disagree; Work keeps the full list, and the chat keeps only events that ask nothing.
  */
 import { Cause, Effect } from "effect";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "@cloudflare/kumo";
 import { BrainIcon, ChatCircleTextIcon, CheckIcon, DesktopTowerIcon, NotePencilIcon, ShieldWarningIcon, SparkleIcon, XIcon, type Icon } from "@phosphor-icons/react";
 import { revealMisrepresenting, timeAgo, type AccountMemoryProposal, type OwedIntent, type OwedOwnerIntent, type OwnerAsk, type PendingAction, type PendingActionKind, type PendingConsent, type PlanPageRef } from "@kinu.run/core";
 import { detach, renderThrownChain } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
-import { ParkedCommands, ParkedWriteChange } from "@/components/ParkedCommands";
+import { ParkedCommands, ParkedDecisionFlow, ParkedWriteChange } from "@/components/ParkedCommands";
 import { QuestionCard } from "@/components/QuestionCard";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
@@ -229,6 +229,25 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
   const [ownChoice, setOwnChoice] = useState<string | null>(null);
   const chosen = props.focus?.chosen ?? ownChoice;
   const setChosen = props.focus?.choose ?? setOwnChoice;
+  // The parked commands' choice is the stack's, so it stands while another card is answered first.
+  const parkedCalls = useRef({ rpc, decided: (_ids: readonly string[]): void => {} });
+
+  useEffect(() => {
+    parkedCalls.current = {
+      rpc,
+      decided: (ids) => {
+        for (const id of ids) mark(`action:${id}`);
+        setChosen(null);
+        detach(Effect.promise(onDecided));
+      },
+    };
+  });
+
+  const [parkedFlow] = useState(() => new ParkedDecisionFlow({
+    decide: (ids, decision) => parkedCalls.current.rpc("decideDeferredApprovals", [ids, decision]),
+    onDecided: (ids) => parkedCalls.current.decided(ids),
+  }));
+
   // The card whose answer is in flight: its buttons wait for it, and the next card's are live as soon as it opens.
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<{ key: string; message: string } | null>(null);
@@ -303,11 +322,7 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
         {front.kind === "consent" && <ConsentBody consent={front.consent} />}
         {front.kind === "memory" && <MemoryBody memory={front.memory} />}
         {front.kind === "action" && (batched
-          ? <ParkedCommands actions={parked.map((ask) => ask.action)} rpc={rpc} onDecided={(decided) => {
-              for (const id of decided) mark(`action:${id}`);
-              setChosen(null);
-              detach(Effect.promise(onDecided));
-            }} />
+          ? <ParkedCommands actions={parked.map((ask) => ask.action)} rpc={rpc} flow={parkedFlow} />
           : <ActionBody action={front.action} rpc={rpc} />)}
         {front.kind === "question" && (
           <QuestionCard asking={front.question} busy={busy === front.key || answerOwed} owed={answerOwed}

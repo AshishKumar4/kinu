@@ -44,6 +44,7 @@ import { BranchRunChip } from "@/components/AlternateTakes";
 import { PreviewTabsGallery, CompactPreviewGallery } from "./gallery-preview-tabs";
 import { ACTIVITY_SURFACE, type SurfaceKind } from "@kinu.run/core";
 import { WorkSurface } from "@/components/surfaces/WorkSurface";
+import { AttentionStack } from "@/components/AttentionStack";
 import { SlateFallbackFrame, SLATE_GALLERY_URL } from "@/gallery-slate-fallback";
 import PlanReviewView from "@/components/surfaces/PlanReviewView";
 import { SlateFrame } from "@/components/slates/SlateFrame";
@@ -89,7 +90,7 @@ import {
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND, buildDrainBatch, CLEAR_NEEDS_IDLE, inspectWork, TURN_CLAIM_FRAME, workspaceGenesisSignal,
   BUILTIN_PROFILE_CATALOG, validateProfileCatalog,
   CHARS_PER_TOKEN, DEVICE_TIERS, JsonObjectSchema, JsonValueSchema,
-  missingSubordinateHistory,
+  missingSubordinateHistory, ownerAsks,
   parseDeviceTier, seekPage, sortDirEntries, SubordinateInspectionRequestSchema,
   type ActorSnapshot, type AdvisorSeverity, type AgentStatus, type KinuEvent, type JsonObject, type JsonValue, type PlanReview, type ReviewAnnotation,
   type ProfileCatalogEnvelope, type SubordinateInspectionRequest, type AccountUsage,
@@ -5732,10 +5733,15 @@ const approvalsRpc: SocketCall = async <T,>(method: string, args?: unknown[]): P
   return workRpc<T>(method, args);
 };
 
+/** Parked commands where they are decided, the attention stack, beside Work's rows that open it. */
 function ApprovalsFrame() {
+  const rpc = workspaceRpc(approvalsRpc);
+
   return (
     <div className="p-bg min-h-screen flex justify-center">
       <div className="w-[720px] min-h-screen border-x p-border p-5 space-y-5">
+        <AttentionStack asks={ownerAsks({ pendingActions: PARKED_ONLY, pendingConsents: [] })} rpc={rpc}
+          resolveConsent={async () => {}} onDecided={async () => {}} onReview={() => {}} decideMemory={async () => {}} />
         <WorkSurface
           surface="Work" onSurface={() => {}}
           pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} memory={[]} memoryContent=""
