@@ -8,7 +8,6 @@ import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 import { copyPinnedTools, uploadPinnedTools } from './devbox-tools';
 import { requireEqual, tierIdentity } from './fixtures/devbox-e2e/oracle';
-import { SHELL_RC, SHELL_RC_FILE, SHOWN_NAME_FILE } from '../packages/devbox/src/shown-name';
 import { completeTeardown } from './fixtures/devbox-e2e/teardown';
 import { CONTRACT_TEARDOWN_BUCKET, ContractTeardownSchema, contractLedger, contractOwner } from './fixtures/devbox-e2e/ledger';
 import type { ContractLedger } from './fixtures/devbox-e2e/ledger';
@@ -40,19 +39,31 @@ const ASK_AGAIN_MS = 5_000;
 /** The name the fixture's boxes show (its `shownName`, set through the Worker's vars). */
 const BOX_NAME = 'contract-box';
 
+/** The port the name step's server binds; no other step listens on it. */
+const NAME_HTTP_PORT = 8799;
+
 /**
- * The box's names, read in the box (D93): the kernel's, the shown name the box keeps, and the prompt a person's shell
- * shows when it starts from the box's rc over the image's own rc files. The rc is written here as the terminal and the
- * desktop write it.
+ * The box's name, read in the box (D96): the kernel's, the prompt a person's shell shows, how a lookup of the name
+ * answers (its time and addresses), what getfqdn makes of it, and whether `python3 -m http.server`, which calls it as it
+ * binds, serves. The platform's own 64-character name is no DNS label, and Python died on it.
  */
 const BOX_NAME_READ = [
   'printf "kernel=%s\\n" "$(hostname)"',
-  `printf "shownName=%s\\n" "$(cat ${SHOWN_NAME_FILE} 2>/dev/null)"`,
-  `cat > ${SHELL_RC_FILE} <<'SHELLRC'`,
-  SHELL_RC,
-  'SHELLRC',
-  `printf "prompt=%s\\n" "$(cd /workspace 2>/dev/null; TERM=dumb bash --rcfile ${SHELL_RC_FILE} -i -c 'printf "%s" "\${PS1@P}"' 2>/dev/null)"`,
+  `printf "prompt=%s\\n" "$(cd /workspace 2>/dev/null; TERM=dumb bash -i -c 'printf "%s" "\${PS1@P}"' 2>/dev/null)"`,
+  `printf "lookup=%s\\n" "$(python3 -c 'import socket,time
+t=time.time()
+try: a=sorted({r[4][0] for r in socket.getaddrinfo(socket.gethostname(), None)})
+except Exception as e: a=[type(e).__name__]
+print("%d %s" % ((time.time()-t)*1000, " ".join(a)))' 2>&1 | tail -1)"`,
+  `printf "fqdn=%s\\n" "$(python3 -c 'import socket; print(socket.getfqdn())' 2>&1 | tail -1)"`,
+  `printf "addresses=%s\\n" "$(ip -o addr show scope global 2>/dev/null | awk '{ sub("/.*", "", $4); print $4 }' | tr '\\n' ' ')"`,
+  `( cd /var/tmp && timeout 8 python3 -m http.server ${String(NAME_HTTP_PORT)} >/var/tmp/name-http.log 2>&1 & )`,
+  `for _ in $(seq 40); do python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${String(NAME_HTTP_PORT)}/', timeout=1)" 2>/dev/null && break; sleep 0.1; done`,
+  `printf "http=%s\\n" "$(python3 -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:${String(NAME_HTTP_PORT)}/', timeout=2).status)" 2>&1 | tail -1) $(tail -1 /var/tmp/name-http.log | cut -c1-80)"`,
 ].join('\n');
+
+/** A lookup of the box's own name answers locally: measured 3 ms with libnss-myhostname, against 79-430 ms at DNS. */
+const NAME_LOOKUP_MS = 50;
 
 /** How long the tier watches a refused box for another start: the box this contract caught re-armed every second. */
 const PARKED_WATCH_MS = 20_000;
@@ -642,6 +653,33 @@ async function main(): Promise<void> {
   /** The container's contracts, the desktop through the product routes, and the product's own chain. */
   const productContracts = async () => {
     /**
+     * The box answers to the name its class gives it, as one DNS label, and that name resolves at once to the box's own
+     * addresses (D96). The platform's 64-character name broke `python3 -m http.server` on every computer (staging
+     * 7591e6fec), and a renamed kernel with nothing to answer for it waited on DNS for an address that is not the box.
+     */
+    await step('box-name', async () => {
+      const named = new Map((await shell(BOX_NAME_READ)).split('\n').map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]));
+      const [lookupMs, ...looked] = (named.get('lookup') ?? '').split(' ');
+      const own = new Set((named.get('addresses') ?? '').split(' ').filter((address) => address !== ''));
+
+      process.stdout.write(`[${run}] box name ${JSON.stringify(Object.fromEntries(named))}\n`);
+
+      if (named.get('kernel') !== BOX_NAME) throw new Error(`the box answers to ${named.get('kernel') ?? 'nothing'}, not ${BOX_NAME}`);
+
+      if (named.get('prompt')?.includes(`@${BOX_NAME}`) !== true) throw new Error(`a shell's prompt reads ${named.get('prompt') ?? 'nothing'}, not ${BOX_NAME}`);
+
+      if (Number(lookupMs) > NAME_LOOKUP_MS || !looked.some((address) => own.has(address))) {
+        throw new Error(`its own name resolved in ${lookupMs ?? '?'} ms to ${looked.join(' ')}, not at once to one of its addresses ${[...own].join(' ')}`);
+      }
+
+      if (named.get('fqdn') !== BOX_NAME) throw new Error(`getfqdn answered ${named.get('fqdn') ?? 'nothing'}`);
+
+      if (named.get('http')?.startsWith('200') !== true) throw new Error(`python3 -m http.server answered ${named.get('http') ?? 'nothing'}`);
+
+      return Object.fromEntries(named);
+    });
+
+    /**
      * A person's terminal session reads as it is on a real box (D90): open, its folder, the port its server listens
      * on. Staging 7591e6fec read every session closed: tmux printed the read's tab separators as `_`.
      */
@@ -669,25 +707,6 @@ async function main(): Promise<void> {
       if (!read) throw new Error(`a session running a server in ${SESSION_FOLDER} on :${String(SESSION_PORT)} read ${JSON.stringify(shell$)}; the box: ${seen}`);
 
       return shell$;
-    });
-
-    /**
-     * A person sees the box by the name its class gives it, and the kernel keeps the platform's (D93): staging
-     * 7e411119d's renaming wrote /etc/hostname, which the platform mounts read-only, and refused every start (D92), and a
-     * renamed kernel's own name took ~400 ms to resolve to an address that is not the box.
-     */
-    await step('box-name', async () => {
-      const named = new Map((await shell(BOX_NAME_READ)).split('\n').map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]));
-
-      process.stdout.write(`[${run}] box name ${JSON.stringify(Object.fromEntries(named))}\n`);
-
-      if (named.get('kernel') === BOX_NAME) throw new Error(`the kernel was renamed ${BOX_NAME}; it keeps the platform's name`);
-
-      if (named.get('shownName') !== BOX_NAME) throw new Error(`the box keeps ${named.get('shownName') ?? 'no name'} to show, not ${BOX_NAME}`);
-
-      if (named.get('prompt')?.includes(`@${BOX_NAME}`) !== true) throw new Error(`a shell's prompt reads ${named.get('prompt') ?? 'nothing'}, not ${BOX_NAME}`);
-
-      return Object.fromEntries(named);
     });
 
     await step('file-metadata', async () => {
