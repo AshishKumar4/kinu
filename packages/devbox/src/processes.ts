@@ -3,7 +3,7 @@ import * as v from 'valibot';
 import { Effect, Result } from 'effect';
 import { DevboxError, attempt, attemptSync, settle } from './errors';
 import { TERM_GRACE_MS } from './lifecycle';
-import { SESSION_RC, TMUX_CONF } from './sessions';
+import { SAVED_SESSIONS, SESSION_RC, SESSION_RESUME, SESSION_RESUME_FILE, TMUX_CONF } from './sessions';
 
 const CA_PATH = "/etc/cloudflare/certs/cloudflare-containers-ca.crt";
 
@@ -101,9 +101,11 @@ function whileCurrent<A>(current: (() => boolean) | undefined, mutate: () => Eff
  * An agent's job in its terminal session (D95): the pane waits until its output is copied to the job's log, shows what
  * runs, runs it in the foreground of its terminal, so a prompt waits for whoever answers it there, records how it ended,
  * and leaves a shell under its output. `trap : INT` keeps the pane alive past a ^C its job takes with the default action.
+ * After a restart it first shows what the session had (D97); the job runs again from its spec, so no line is offered.
  */
 const JOB_PANE = `dir=$1
 trap : INT
+if [ -f "${SAVED_SESSIONS}/$2/screen" ]; then rm -f "${SAVED_SESSIONS}/$2/running"; sh ${SESSION_RESUME_FILE} "$2"; fi
 while [ ! -e "$dir/piped" ]; do sleep 0.05; done
 printf '\\033[2m$ %s\\033[0m\\n' "$(cat "$dir/command")"
 sh -c 'echo "$$ $(cat /proc/sys/kernel/random/boot_id)" >"$0/pid"; exec "$@"' "$dir" /bin/bash -c "$(cat "$dir/command")"
@@ -115,11 +117,12 @@ const RUN_IN_SESSION = `session=$DEVBOX_SESSION
 printf '%s\\n' "$DEVBOX_TMUX_CONF" >/etc/devbox-tmux.conf
 printf '%s\\n' "$DEVBOX_SESSION_RC" >/etc/devbox-session.bashrc
 printf '%s\\n' "$DEVBOX_JOB_PANE" >/etc/devbox-job-pane.sh
-unset DEVBOX_SESSION DEVBOX_TMUX_CONF DEVBOX_SESSION_RC DEVBOX_JOB_PANE
+printf '%s\\n' "$DEVBOX_SESSION_RESUME" >${SESSION_RESUME_FILE}
+unset DEVBOX_SESSION DEVBOX_TMUX_CONF DEVBOX_SESSION_RC DEVBOX_JOB_PANE DEVBOX_SESSION_RESUME
 printf '%s' "$3" >"$dir/command"
 : >"$dir/stdout.log"; : >"$dir/stderr.log"
 tmux kill-session -t "=$session" 2>/dev/null
-if ! tmux -f /etc/devbox-tmux.conf new-session -d -s "$session" -x 160 -y 48 -c "$cwd" "sh /etc/devbox-job-pane.sh $dir" 2>"$dir/stderr.log"; then
+if ! tmux -f /etc/devbox-tmux.conf new-session -d -s "$session" -x 160 -y 48 -c "$cwd" "sh /etc/devbox-job-pane.sh $dir $session" 2>"$dir/stderr.log"; then
   echo 1 >"$dir/exit.tmp" && mv "$dir/exit.tmp" "$dir/exit"
   exit 0
 fi
@@ -263,7 +266,12 @@ export class Processes {
       yield* whileCurrent(options.current, () => attempt('file', () => this.#files.writeFile(`${dir}/process.json`, JSON.stringify(record))));
 
       const env = options.session === undefined ? CONTAINER_ENV : {
-        ...CONTAINER_ENV, DEVBOX_SESSION: options.session, DEVBOX_TMUX_CONF: TMUX_CONF, DEVBOX_SESSION_RC: SESSION_RC, DEVBOX_JOB_PANE: JOB_PANE,
+        ...CONTAINER_ENV,
+        DEVBOX_SESSION: options.session,
+        DEVBOX_TMUX_CONF: TMUX_CONF,
+        DEVBOX_SESSION_RC: SESSION_RC,
+        DEVBOX_JOB_PANE: JOB_PANE,
+        DEVBOX_SESSION_RESUME: SESSION_RESUME,
       };
 
       const launched = yield* Effect.result(whileCurrent(options.current, () => attempt('process', () => this.container.exec(['/bin/sh', '-c', RUN, 'devbox-process', dir, record.cwd, '/bin/bash', '-c', command], {

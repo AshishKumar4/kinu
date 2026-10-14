@@ -296,7 +296,8 @@ const Body = v.object({
 
 async function desktopRoute(request: Request, env: Env, ctx: ExecutionContext, url: URL): Promise<Response | null> {
   if (url.pathname.startsWith('/kasmvnc/')) return withAppSecurityHeaders(await env.ASSETS.fetch(request), url, null);
-  const desktopName = /^\/api\/workspaces\/(eval-devbox-[\w-]+)\/desktop$/.exec(url.pathname)?.[1];
+  // The computer's desktop and its terminal sessions (D97), through the product's own routes.
+  const desktopName = /^\/api\/workspaces\/(eval-devbox-[\w-]+)\/(?:desktop|terminal)$/.exec(url.pathname)?.[1];
 
   if (desktopName !== undefined) {
     const box = env.Box.getByName(desktopName);

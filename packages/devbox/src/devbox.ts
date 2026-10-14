@@ -19,7 +19,7 @@ import artifact from '../block-lower/upstream.json';
 import { ContainerRoutes, type OutboundPolicy } from './gateway';
 import { terminalSocket, resetTerminal } from './terminal';
 import {
-  FIRST_SESSION, SESSIONS_KEY, SESSIONS_READ, SessionNameSchema, SessionRecordsSchema, jobSessionId, jobSessionName, mergeSessions, newSessionId, newSessionName,
+  FIRST_SESSION, SESSIONS_KEY, SESSIONS_READ, SESSIONS_SAVE, SessionNameSchema, SessionRecordsSchema, jobSessionId, jobSessionName, mergeSessions, newSessionId, newSessionName,
   parseSessionsRead, type SessionRecord, type TerminalSession,
 } from './sessions';
 import { bridgeSockets } from './socket-bridge';
@@ -2234,6 +2234,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       await this.#record('quiesce', warning);
     }
 
+    // The stop ends every terminal session; what each showed and ran goes into the checkpoint first (D97).
+    await this.#saveSessions();
+
     // The commit and the snapshot run beside the box's processes; the container's stop ends them.
     const committed = await this.#checkpoint('quiesce');
     const outcome = warning === undefined ? committed : { ...committed, reason: warning + (committed.reason === undefined ? '' : '; ' + committed.reason) };
@@ -3364,6 +3367,21 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     if (container?.running === true) await resetTerminal(container, id);
     this.ctx.storage.kv.put(SESSIONS_KEY, this.#sessionRecords().filter((record) => record.id !== id));
+  }
+
+  /**
+   * What each terminal session showed and was running, kept on the box's disk as it stops (D97). A save that fails is
+   * traced and the stop goes on: the sessions come back fresh in their folders, as before D97.
+   */
+  async #saveSessions(): Promise<void> {
+    const container = this.ctx.container;
+
+    if (container?.running !== true) return;
+    const ids = this.#sessionRecords().map((record) => record.id);
+    const [saved] = await Promise.allSettled([(async () => (await container.exec(['bash', '-c', SESSIONS_SAVE, 'sessions-save', ...ids])).output())()]);
+
+    if (saved.status === 'rejected') this.#trace('sessions.unsaved', { reason: describe({ cause: saved.reason }) });
+    else if (saved.value.exitCode !== 0) this.#trace('sessions.unsaved', { reason: new TextDecoder().decode(saved.value.stderr).trim() });
   }
 
   /** The recorded sessions, the first one when there is none. */

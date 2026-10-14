@@ -4858,6 +4858,36 @@ every image mode drew nothing while `-solid` worked; measured on a real box, `xw
 `feh --no-xinerama` both put the ground (16, 14, 12) and the glow (42, 33, 24) on the root. The wallpaper's Chromium,
 and its unmeasured 60-second bound, are gone.
 
+D97. A terminal session comes back from its box's restart as it was left: its screen, a rule saying it restarted, and
+the line it was running offered at the prompt (2026-10-14; the design approved with two changes: the line goes into
+readline, never into the terminal as text, and the proof is the container tier's). No process survives a stop. CRIU
+4.1.1 installs on a box (Debian 13, 9.1 s from apt) and cannot run on its kernel, 6.18.54-cloudflare-microvm: `criu
+check` stops at "sys/kernel/ns_last_pid sysctl is inaccessible", and `criu dump` of a counting shell at "kcmp failed:
+... Function not implemented". The kernel has neither, so what comes back is what a person needs to carry on.
+
+As a box stops, before its checkpoint commits, it saves each recorded session tmux has live under
+`/var/lib/devbox/sessions/<id>`: the last 2000 lines of its screen with their colours (`capture-pane -e -J`), the time,
+and the line it was running. The rootfs carries them (D55). The line comes from the session's rc: bash expands `PS0`
+after it reads a line and before it runs it, and `PS0` stores the line on the pane; the next prompt clears it. Lines
+ride base64 in tmux options, as `@kinu_last` now does too: tmux 3.6 reads an argument that ends in `;` as a command
+separator, measured. A save that fails is traced (`devbox.sessions.unsaved`) and the stop goes on; the sessions then
+open fresh in their folders, as before.
+
+The next attach of a session with a saved screen opens its pane with the screen, then the rule
+`── restarted HH:MM · files kept ──`, then `was running: <line>`. The pane sends the key chord C-x C-], which the rc
+binds (`bind -x`) to a function that sets `READLINE_LINE` from the saved line and deletes it. So the line is in the
+shell's edit buffer, whatever quotes, `$()`, `;` or newlines it holds, and runs only on the person's Enter, once. The
+chord waits in the terminal until readline reads it, and the terminal echoes what waits, so the pane turns `echoctl`
+off until the prefill turns it on again; no `^X` shows. An agent's job (D95) runs again from its spec in its session,
+whose pane shows the screen and the rule and offers no line. Environment variables, shell functions and anything a
+process held in memory do not come back. Session ids are now random: a session closed while its box is stopped keeps
+its saved screen until the next stop's save removes it, and a later session must not inherit it.
+
+Measured on tmux 3.6 locally with the shipped scripts: a line with quotes, `$(touch marker)`, `;` and a quoted newline,
+typed and left running; the save; the server killed; the resumed pane showed the screen, the rule and the line at the
+prompt, with no marker and no `^X`; one Enter ran it once. The container tier's `resurrect` step does the same on a
+real box through the product's terminal route, across a real stop and start.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean

@@ -1,10 +1,10 @@
 /**
  * The computer's terminal sessions (D90): named tmux sessions the page attaches to by id, each with the folder it was
  * last in. tmux keeps a session's shell and screen across reattaches; a restart of the container ends them all, so the
- * box keeps each session's id, name and folder, and the next attach opens a fresh shell there under the same name.
+ * box keeps each session's id, name and folder, and the next attach opens a fresh shell there under the same name, with
+ * what it showed and the line it was running (D97).
  */
 import * as v from 'valibot';
-
 
 /**
  * tmux keeps the shell and its screen across reattaches (DEVBOX-DECISIONS, the PTY proof); none of its own chrome shows.
@@ -20,29 +20,87 @@ export const TMUX_CONF = [
   "set -ga terminal-overrides ',xterm*:smcup@:rmcup@'",
 ].join('\n');
 
+/** Where a stopping box keeps each session's screen and the line it was running (D97); its checkpoint carries them. */
+export const SAVED_SESSIONS = '/var/lib/devbox/sessions';
+
+/** The key chord the attach sends to put a saved line in the shell's edit buffer: bound below, never typed text. */
+const PREFILL_KEYS = ['C-x', 'C-]'] as const;
+
 /**
- * A session's shell starts from the person's own rc, then records how its last command ended on its own pane, where
- * the sessions read finds it (D90): the exit status, the time, and the command line, once per command the history
- * numbers.
+ * A session's shell starts from the person's own rc, then records on its own pane, where the sessions read and a
+ * stopping box find them: how its last command ended (D90), and while one runs, the line the person typed for it, from
+ * PS0, which bash expands after it reads a line and before it runs it (D97). Lines ride base64: tmux reads an argument
+ * ending in `;` as a command separator (measured, tmux 3.6). At its first prompt after a restart the shell offers the
+ * line it was running in its edit buffer, through readline (`bind -x`), so nothing runs before the person's Enter.
  */
 export const SESSION_RC = [
   '[ -f /etc/bash.bashrc ] && . /etc/bash.bashrc',
   '[ -f ~/.bashrc ] && . ~/.bashrc',
   '__kinu_entry() { HISTTIMEFORMAT= fc -l -1 2>/dev/null; }',
+  '__kinu_line() { local entry; entry=$(__kinu_entry) || return 1; entry=${entry#*[[:space:]]}; printf %s "${entry#"${entry%%[![:space:]]*}"}"; }',
   '__kinu_seen=$(__kinu_entry); __kinu_seen=${__kinu_seen%%[[:space:]]*}',
   '__kinu_mark() {',
   '  local status=$? entry',
   '  entry=$(__kinu_entry) || return $status',
+  '  tmux set -pu -t "$TMUX_PANE" @kinu_running 2>/dev/null',
   '  if [ -n "$entry" ] && [ "${entry%%[[:space:]]*}" != "$__kinu_seen" ]; then',
   '    __kinu_seen=${entry%%[[:space:]]*}',
-  '    entry=${entry#*[[:space:]]}',
-  '    entry=${entry#"${entry%%[![:space:]]*}"}',
-  '    tmux set -p -t "$TMUX_PANE" @kinu_exit "$status" \\; set -p -t "$TMUX_PANE" @kinu_at "$(date +%s)" \\; set -p -t "$TMUX_PANE" @kinu_last "$entry" 2>/dev/null',
+  '    tmux set -p -t "$TMUX_PANE" @kinu_exit "$status" \\; set -p -t "$TMUX_PANE" @kinu_at "$(date +%s)" \\; set -p -t "$TMUX_PANE" @kinu_last "$(__kinu_line | base64 -w0)" 2>/dev/null',
   '  fi',
   '  return $status',
   '}',
+  '__kinu_start() { tmux set -p -t "$TMUX_PANE" @kinu_running "$(__kinu_line | base64 -w0)" 2>/dev/null; }',
+  '__kinu_prefill() {',
+  `  local saved=${SAVED_SESSIONS}/$(tmux display -p -t "$TMUX_PANE" '#{session_name}')/running`,
+  '  [ -f "$saved" ] || return',
+  '  READLINE_LINE=$(cat "$saved"); READLINE_POINT=${#READLINE_LINE}; rm -f "$saved"; stty echoctl 2>/dev/null',
+  '}',
+  'bind -x \'"\\C-x\\C-]": __kinu_prefill\' 2>/dev/null',
   'PROMPT_COMMAND="__kinu_mark${PROMPT_COMMAND:+;$PROMPT_COMMAND}"',
+  'PS0="${PS0}\\$(__kinu_start)"',
 ].join('\n');
+
+/**
+ * Run as a box stops (D97), `$@` the recorded session ids: each live session's screen (its last 2000 lines, colours
+ * kept) and the line it was running, beside the time; a recorded session not live keeps what it had; an unrecorded one
+ * goes.
+ */
+export const SESSIONS_SAVE = `d=${SAVED_SESSIONS}
+mkdir -p "$d"
+for kept in "$d"/*; do
+  [ -d "$kept" ] || continue
+  case " $* " in *" \${kept##*/} "*) ;; *) rm -rf "$kept" ;; esac
+done
+tmux list-sessions -F '#{session_name}' 2>/dev/null | while IFS= read -r id; do
+  case " $* " in *" $id "*) ;; *) continue ;; esac
+  rm -rf "\${d:?}/$id"; mkdir -p "$d/$id"
+  tmux capture-pane -p -e -J -S -2000 -t "=$id:" |
+    awk '{ line[NR] = $0 } END { n = NR; while (n > 0 && line[n] ~ /^[[:space:]]*$/) n--; for (i = 1; i <= n; i++) print line[i] }' > "$d/$id/screen"
+  running=$(tmux show -pv -t "=$id:" @kinu_running 2>/dev/null)
+  [ -n "$running" ] && printf %s "$running" | base64 -d > "$d/$id/running" 2>/dev/null
+  date +%s > "$d/$id/at"
+done`;
+
+/** Where the attach and a job's pane keep the resume script. */
+export const SESSION_RESUME_FILE = '/etc/devbox-session-resume.sh';
+
+/**
+ * A session's pane after a restart (D97), \`$1\` its id: the screen it had, a rule saying it restarted and its files
+ * stayed, and the line it was running, which it sends the prefill chord for; the shell that follows offers that line.
+ * The chord waits in the terminal until readline reads it; the terminal echoes what waits, so its control bytes echo
+ * raw (\`-echoctl\`), which a terminal draws as nothing, until the prefill turns echoctl back on. Shown once.
+ */
+export const SESSION_RESUME = `d=${SAVED_SESSIONS}/$1
+stty -echoctl 2>/dev/null
+cat "$d/screen" 2>/dev/null
+printf '\\033[2m── restarted %s · files kept ──\\033[0m\\n' "$(date -d "@$(cat "$d/at" 2>/dev/null || date +%s)" '+%H:%M')"
+if [ -f "$d/running" ]; then
+  printf '\\033[2mwas running:\\033[0m %s\\n' "$(tr -d '\\000-\\010\\013-\\037\\177' < "$d/running")"
+  tmux send-keys -t "=$1:" ${PREFILL_KEYS.join(' ')}
+else
+  stty echoctl 2>/dev/null
+fi
+rm -f "$d/screen" "$d/at"`;
 
 /** A tmux session name the attach and the read can pass unquoted: tmux reads `.` and `:` as targets. */
 const SessionIdSchema = v.pipe(v.string(), v.regex(/^[a-z0-9][a-z0-9-]{0,31}$/u));
@@ -104,10 +162,10 @@ export type SessionsRead = ReadonlyMap<string, Omit<TerminalSession, 'name' | 'o
  * The read, one exec, one record a line, its fields split at each unescaped space (D90): each session's pane (`P`),
  * each listening port under a session's shell (`L`), and the branch of each folder a pane is in (`B`). tmux writes the
  * pane's fields itself with `#{q:…}`, which puts a backslash before every space, backslash and other special character
- * in a value, so any folder or command reads back whole. A tab printed raw by a format comes out as `_` on the
- * platform's tmux, which is why no field is tab-separated. Each session whose foreground reads its terminal (`W`): a
- * program waiting at a prompt is in `read(0)` on the pane's pts; a shell at its own prompt is in `pselect` (D95,
- * measured). `$1` is the box's listener probe (`port pid stamp command`).
+ * in a value, so any folder reads back whole; the last command's line is base64, as the rc stores it (D97). A tab
+ * printed raw by a format comes out as `_` on the platform's tmux, which is why no field is tab-separated. Each session
+ * whose foreground reads its terminal (`W`): a program waiting at a prompt is in `read(0)` on the pane's pts; a shell
+ * at its own prompt is in `pselect` (D95, measured). `$1` is the box's listener probe (`port pid stamp command`).
  */
 export const SESSIONS_READ = `panes=$(tmux list-panes -a -F '#{pane_pid} #{session_name}' 2>/dev/null) || exit 0
 tmux list-panes -a -F 'P #{q:session_name} #{q:pane_current_path} #{q:pane_current_command} #{q:@kinu_exit} #{q:@kinu_at} #{q:@kinu_last}'
@@ -174,11 +232,18 @@ function paneState([, id, cwd, command, exit, at, last]: v.InferOutput<typeof Pa
     id,
     cwd,
     running: SHELLS.has(command) ? null : command,
-    last: ended.success ? { exit: ended.output[0], at: ended.output[1] * 1000, command: last } : null,
+    last: ended.success ? { exit: ended.output[0], at: ended.output[1] * 1000, command: decoded(last) } : null,
     ports: [],
     branch: null,
     needsInput: false,
   };
+}
+
+/** A line the session rc wrote base64 (D97); one that does not decode reads as nothing. */
+function decoded(base64: string): string {
+  const bytes = v.safeParse(v.pipe(v.string(), v.base64()), base64);
+
+  return bytes.success ? new TextDecoder().decode(Uint8Array.from(atob(bytes.output), (char) => char.charCodeAt(0))) : '';
 }
 
 /** The read's rows, one record a line, each validated by its kind's schema; a row no schema takes is no row. */
@@ -221,12 +286,15 @@ export function mergeSessions(records: readonly SessionRecord[], read: SessionsR
   });
 }
 
-/** A new session's id: unused, short, and what tmux and the attach take unquoted. */
+/**
+ * A new session's id: short, what tmux and the attach take unquoted, and not one a closed session had, whose saved
+ * screen (D97) may still be on the disk when it closed on a stopped box.
+ */
 export function newSessionId(records: readonly SessionRecord[]): string {
   const used = new Set(records.map((record) => record.id));
 
-  for (let n = records.length + 1; ; n++) {
-    const id = `s${String(n)}`;
+  for (;;) {
+    const id = `s${crypto.randomUUID().replaceAll('-', '').slice(0, 10)}`;
 
     if (!used.has(id)) return id;
   }
