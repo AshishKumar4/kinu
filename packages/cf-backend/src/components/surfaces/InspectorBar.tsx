@@ -5,20 +5,21 @@
  */
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import {
-  BrainIcon, CaretDownIcon, CheckIcon, FolderSimpleIcon, GaugeIcon, GitDiffIcon, ListChecksIcon, TerminalWindowIcon, TreeStructureIcon,
+  CaretDownIcon, CheckIcon, FolderSimpleIcon, GaugeIcon, GitDiffIcon, ListChecksIcon, TerminalWindowIcon, TreeStructureIcon,
   type Icon,
 } from "@phosphor-icons/react";
 import { Tooltip } from "@cloudflare/kumo";
 import { ACTIVITY_SURFACE, type SURFACES, type SurfaceKind } from "@kinu.run/core";
+import { AgentFaceIcon } from "@/components/Marks";
 
-interface ToolSpec { readonly name: string; readonly Icon: Icon; readonly about?: string }
+interface ToolSpec { readonly name: string; readonly Icon: Icon | typeof AgentFaceIcon; readonly about?: string }
 
 const TOOLS: Record<(typeof SURFACES)[number] | typeof ACTIVITY_SURFACE, ToolSpec> = {
   Work: { name: "Work", Icon: ListChecksIcon },
   Changes: { name: "Changes", Icon: GitDiffIcon },
   Files: { name: "Files", Icon: FolderSimpleIcon },
   Swarms: { name: "Swarms", Icon: TreeStructureIcon },
-  Agent: { name: "Agent", Icon: BrainIcon },
+  Agent: { name: "Agent", Icon: AgentFaceIcon },
   Environment: { name: "Environment", Icon: TerminalWindowIcon },
   [ACTIVITY_SURFACE]: { name: "Activity", Icon: GaugeIcon, about: "Context, cost, and cache" },
 };
