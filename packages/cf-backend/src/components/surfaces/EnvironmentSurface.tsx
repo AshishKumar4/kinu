@@ -4,10 +4,10 @@
  * screen, from one hairline to the column's foot. Capability doctrine stays model-facing
  * (core/src/prompting/volatile-context.ts); file browsing lives in Files.
  */
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { useParams } from "react-router-dom";
 import {
-  ArrowSquareOutIcon, DesktopIcon, DesktopTowerIcon, FolderOpenIcon, GitForkIcon, LockSimpleIcon, PlugIcon, PlusIcon,
+  ArrowsInIcon, ArrowsOutIcon, DesktopIcon, DesktopTowerIcon, FolderOpenIcon, GitForkIcon, LockSimpleIcon, PlugIcon, PlusIcon,
   SplitHorizontalIcon, SquaresFourIcon, XIcon, type Icon,
 } from "@phosphor-icons/react";
 import { EXECUTOR_MOUNTS, desktopClientUrl, type MountInfo } from "@kinu.run/core";
@@ -27,6 +27,7 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { ComputerSize, useComputerSize, type ComputerSizeState } from "@/components/SandboxSize";
 import { Effect } from "effect";
 import type { TerminalSession } from "@kinu.run/devbox";
+import { useWorkspaceArea, type WorkspaceArea } from "@/components/layout";
 import { DesktopScreen } from "./DesktopScreen";
 import {
   AgentMark, NewSessionRow, ONE_SHELL, SessionDetails, SessionTabs, openSession, sessionTone, since, useComputerSessions, type ComputerSessions,
@@ -466,26 +467,62 @@ function EnvironmentView({ mount, exec, name, workspace, restartingTo, executorO
       onClose={(id) => sessions?.close(id) ?? Effect.void} />
   );
 
+  // A resize restarts the computer, which ends its shells and its desktop's session: the panes open again after it.
   if (restartingTo !== null) return <>{tabs}<div className="p-terminal-ground flex min-h-0 flex-1 flex-col"><Restarting to={restartingTo === "" ? null : restartingTo} /></div></>;
 
-  if (tab === "desktop" && desktop !== null) return <>{tabs}<DesktopView name={name} workspace={workspace} src={desktop} ruled={wide} /></>;
+  const showing = tab === "desktop" && desktop !== null
+    ? [tab]
+    : [tab, ...(wide && shown.split !== null && shown.split !== tab ? [shown.split] : [])];
 
-  const panes = [tab, ...(wide && shown.split !== null && shown.split !== tab ? [shown.split] : [])];
+  const pane = (id: string, place: PanePlace) => (id === "desktop" && desktop !== null
+    ? <DesktopView name={name} src={desktop} ruled={wide} />
+    : <SessionPane workspace={workspace} exec={exec} session={id} sessions={sessions}
+      executorOutputs={executorOutputs} onExecute={onExecute} named={place !== "kept" && showing.length > 1} ruled={wide}
+      trailing={wide && sessions !== null ? <SplitToggle sessions={sessions} shown={shown} showing={id} /> : null} />);
 
-  const pane = (session: string) => (
-    <SessionPane key={`${exec.name}:${session}`} workspace={workspace} exec={exec} session={session} sessions={sessions}
-      executorOutputs={executorOutputs} onExecute={onExecute} named={panes.length > 1} ruled={wide}
-      trailing={wide && sessions !== null ? <SplitToggle sessions={sessions} shown={shown} showing={session} /> : null} />
-  );
+  return <>{tabs}<MachinePanes showing={showing} sessions={sessions} pane={pane} /></>;
+}
+
+/** Where a pane sits: the one shown or the split's first, the split's second, or kept open out of sight. */
+type PanePlace = "first" | "second" | "kept";
+
+/** The places of the panes shown, in the order shown. */
+const SHOWN_PLACES: readonly PanePlace[] = ["first", "second"];
+
+const PANE_PLACES: Record<PanePlace, string> = {
+  first: "order-first flex min-w-0 flex-1",
+  second: "order-last flex min-w-0 flex-1 border-l p-border",
+  // Laid out at the shown pane's size, so showing it again neither reconnects nor resizes it.
+  kept: "invisible absolute inset-0 flex",
+};
+
+/**
+ * A machine's panes: each one opened stays mounted, its terminal's socket or its desktop's client with it, and a
+ * switch only shows another. Production f9c17ac7b (the owner, 2026-10-14) unmounted the pane a switch left, so every
+ * switch between a terminal and the desktop opened its socket again behind a loading state. A closed session's pane
+ * goes with it; a restart, which ends them all, starts the list again.
+ */
+function MachinePanes({ showing, sessions, pane }: {
+  showing: readonly string[];
+  sessions: ComputerSessions | null;
+  pane: (id: string, place: PanePlace) => ReactNode;
+}) {
+  const [opened, setOpened] = useState<readonly string[]>(showing);
+  const unopened = showing.filter((id) => !opened.includes(id));
+
+  // Recorded while rendering, as React keeps what an earlier render saw: the pane mounts on this render, not the next.
+  if (unopened.length > 0) setOpened([...opened, ...unopened]);
+  const listed = sessions?.sessions ?? null;
+  const open = [...opened, ...unopened].filter((id) => listed === null || id === "desktop" || listed.some((session) => session.id === id));
 
   return (
-    <>
-      {tabs}
-      <div className="flex min-h-0 flex-1">
-        {pane(panes[0] ?? tab)}
-        {panes[1] !== undefined && <div className="flex min-w-0 flex-1 border-l p-border">{pane(panes[1])}</div>}
-      </div>
-    </>
+    <div className="relative flex min-h-0 flex-1">
+      {open.map((id) => {
+        const place = SHOWN_PLACES[showing.indexOf(id)] ?? "kept";
+
+        return <div key={id} className={PANE_PLACES[place]}>{pane(id, place)}</div>;
+      })}
+    </div>
   );
 }
 
@@ -534,24 +571,70 @@ function SplitToggle({ sessions, shown, showing }: { sessions: ComputerSessions;
   );
 }
 
-function DesktopView({ name, workspace, src, ruled }: { name: string; workspace: string; src: string; ruled: boolean }) {
+/**
+ * The computer's screen under its strip: in the column, or expanded over the workspace area with the rail folded. One
+ * frame either way, so expanding moves no client and reconnects nothing. Production f9c17ac7b opened a second client
+ * in a new tab instead, on a page that drew it as a thin strip (the owner, 2026-10-14).
+ */
+function DesktopView({ name, src, ruled }: { name: string; src: string; ruled: boolean }) {
   const title = `${name}'s desktop`;
+  const area = useWorkspaceArea();
+  const [expanded, setExpanded] = useState(false);
+  const cover = useCover(area, expanded);
+  const { width, height } = DESKTOP_SIZE;
 
   return (
-    <div className={`p-terminal-ground flex min-h-0 flex-1 flex-col ${ruled ? "border-t p-border" : ""}`}>
-      <div className="flex h-9 shrink-0 items-center gap-3 pr-3 pl-4 p-meta p-text-3">
-        <span>{String(DESKTOP_SIZE.width)} × {String(DESKTOP_SIZE.height)}</span>
-        <a href={`/workspace/${encodeURIComponent(workspace)}/desktop`} target="_blank" rel="noreferrer" data-desktop-open
-          aria-label={`Open ${title} in a new tab`} className="ml-auto inline-flex items-center gap-1.5 hover:p-text">
-          <ArrowSquareOutIcon size={13} aria-hidden />New tab
-        </a>
+    <div data-desktop-view={cover === null ? undefined : "expanded"} style={cover ?? undefined}
+      className={`p-terminal-ground flex min-h-0 flex-1 flex-col ${cover === null ? "" : "fixed z-40"} ${ruled && cover === null ? "border-t p-border" : ""}`}>
+      <div className={`flex shrink-0 items-center gap-3 pr-3 pl-4 p-meta p-text-3 ${cover === null ? "h-9" : "h-11 border-b p-border"}`}>
+        {cover !== null && <span className="inline-flex min-w-0 items-center gap-1.5 font-medium p-text-2"><DesktopIcon size={13} aria-hidden /><span className="truncate">{title}</span></span>}
+        <span className="shrink-0">{String(width)} × {String(height)}</span>
+        {area !== null && cover === null && (
+          <button type="button" data-desktop-expand onClick={() => setExpanded(true)} aria-label={`Expand ${title}`} title="Expand over the workspace"
+            className="ml-auto inline-flex items-center gap-1.5 hover:p-text">
+            <ArrowsOutIcon size={13} aria-hidden />Expand
+          </button>
+        )}
+        {cover !== null && (
+          <button type="button" data-desktop-return onClick={() => setExpanded(false)} aria-label="Back to the Environment panel"
+            className="p-env-action ml-auto">
+            <ArrowsInIcon size={13} aria-hidden />Back to panel
+          </button>
+        )}
       </div>
-      {/* The screen at its own shape across the column, so the client draws it edge to edge. */}
-      <div className="w-full" style={{ aspectRatio: `${String(DESKTOP_SIZE.width)} / ${String(DESKTOP_SIZE.height)}` }}>
-        <DesktopScreen src={src} title={title} />
+      {/* The screen at its own shape, as large as its place allows, so the client draws it edge to edge; expanded, on
+          the screen's own black, as a player letterboxes. */}
+      <div className={`flex min-h-0 flex-1 justify-center ${cover === null ? "items-start" : "items-center bg-black"}`} style={{ containerType: "size" }}>
+        <div style={{ aspectRatio: `${String(width)} / ${String(height)}`, width: `min(100cqw, 100cqh * ${String(width)} / ${String(height)})` }}>
+          <DesktopScreen src={src} title={title} />
+        </div>
       </div>
     </div>
   );
+}
+
+/** The workspace area's box while the desktop covers it, followed as the rail folds and the window resizes; the rail
+ *  folds while it does. Null in the column. */
+function useCover(area: WorkspaceArea | null, expanded: boolean): CSSProperties | null {
+  const [box, setBox] = useState<DOMRect | null>(null);
+  const main = area?.main ?? null;
+  const fill = area?.fill;
+
+  useEffect(() => {
+    if (!expanded || main === null || fill === undefined) return undefined;
+    const observer = new ResizeObserver(() => setBox(main.getBoundingClientRect()));
+
+    observer.observe(main);
+    fill(true);
+
+    return () => {
+      observer.disconnect();
+      fill(false);
+      setBox(null);
+    };
+  }, [expanded, main, fill]);
+
+  return box === null ? null : { left: box.left, top: box.top, width: box.width, height: box.height };
 }
 
 /** A resize restarts the container: files and supervised services come back, a shell does not (D50; staging 2026-10-13). */

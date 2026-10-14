@@ -1,6 +1,6 @@
 import { detach } from "@kinu.run/core/obs";
 import { Effect } from "effect";
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { Link, Outlet, useLocation, useMatch, useNavigate } from "react-router-dom";
 import { GithubLogoIcon, ListIcon, PlusIcon } from "@phosphor-icons/react";
 import Sidebar from "./Sidebar";
@@ -21,6 +21,19 @@ export function useLayoutDrawer(): (() => void) | null {
   return useContext(DrawerContext);
 }
 
+/** The workspace area, for a view that fills it: the element it covers, and the rail's fold while it does. */
+export interface WorkspaceArea {
+  readonly main: HTMLElement | null;
+  readonly fill: (filling: boolean) => void;
+}
+
+const WorkspaceAreaContext = createContext<WorkspaceArea | null>(null);
+
+/** Null outside the shell, where there is no area to fill. */
+export function useWorkspaceArea(): WorkspaceArea | null {
+  return useContext(WorkspaceAreaContext);
+}
+
 export default function Layout() {
   return <AgentsNavProvider><Shell /></AgentsNavProvider>;
 }
@@ -30,6 +43,9 @@ function Shell() {
   const navigate = useNavigate();
   const location = useLocation();
   const { entries } = useAgentsNav();
+  const [main, setMain] = useState<HTMLElement | null>(null);
+  const [filling, setFilling] = useState(false);
+  const area = useMemo(() => ({ main, fill: setFilling }), [main]);
 
   useEffect(() => { setDrawerOpen(false); }, [location]);
   // A workspace's bar carries the menu button itself: one bar on a phone, not two.
@@ -75,7 +91,7 @@ function Shell() {
         </div>
       </header>
 
-      <SidebarRail />
+      <SidebarRail folded={filling} />
 
       {drawerOpen && (
         <div className="fixed inset-0 z-50 animate-fade-in md:hidden">
@@ -86,9 +102,11 @@ function Shell() {
         </div>
       )}
 
-      <main className="min-h-0 flex-1 min-w-0 overflow-hidden">
+      <main ref={setMain} className="min-h-0 flex-1 min-w-0 overflow-hidden">
         <DrawerContext.Provider value={() => setDrawerOpen(true)}>
-          <Outlet />
+          <WorkspaceAreaContext.Provider value={area}>
+            <Outlet />
+          </WorkspaceAreaContext.Provider>
         </DrawerContext.Provider>
       </main>
 

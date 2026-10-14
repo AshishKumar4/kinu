@@ -331,31 +331,4 @@ describe('the Environment panel', () => {
       } finally { await page.close(); }
     });
   });
-
-  test('the computer\'s desktop shows in a frame, and opens in a tab of its own', async () => {
-    await withGallery(async ({ newPage, origin }) => {
-      const page = await newPage();
-
-      try {
-        await page.setViewport({ width: 1280, height: 1000 });
-        await page.goto(`${origin}/gallery.html?frame=environment`, { waitUntil: 'networkidle0' });
-        await page.waitForSelector('[data-env-card="computer"]', SOON);
-        await (await required(page, '[data-env-card="computer"]', 'button', COMPUTER)).click();
-        await (await required(page, 'body', 'tab', 'Desktop')).click();
-
-        const frame = await page.waitForSelector(`iframe[title="${COMPUTER}'s desktop"]`, SOON);
-        const link = await required(page, 'body', 'link', `Open ${COMPUTER}'s desktop in a new tab`);
-
-        if (frame === null) throw new Error('the desktop is not framed');
-
-        const [src, target] = await Promise.all([
-          frame.evaluate((element) => (element instanceof HTMLIFrameElement ? element.src : '')),
-          link.evaluate((element) => element.getAttribute('target')),
-        ]);
-
-        expect(src).toContain('/kasmvnc/vnc.html?');
-        expect(target).toBe('_blank');
-      } finally { await page.close(); }
-    });
-  });
 });
