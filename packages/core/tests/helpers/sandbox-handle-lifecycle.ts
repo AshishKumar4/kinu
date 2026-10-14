@@ -5,7 +5,7 @@ export const sandboxHandleLifecycle: Pick<
   SandboxHandle,
   | 'ensureReady' | 'startSupervisedProcess' | 'stopSupervisedProcess'
   | 'listSupervisedProcesses' | 'portToken' | 'probePort' | 'resize' | 'portListeners' | 'answerRest' | 'statFile'
-  | 'writeFileIfDigest'
+  | 'writeFileIfDigest' | 'desktop'
 > = {
   ensureReady: async () => {},
   statFile: async () => { throw new Error('this fixture does not read native metadata'); },
@@ -18,6 +18,7 @@ export const sandboxHandleLifecycle: Pick<
   resize: async (size) => ({ kind: 'recorded', size }),
   portListeners: async () => null,
   answerRest: async () => ({ kind: 'refused', reason: 'no rest ask is pending' }),
+  desktop: async () => { throw new Error('this fixture has no desktop'); },
 };
 
 /** A file read as the native `Devbox.readFile` answers it: the bytes only when asked for base64,

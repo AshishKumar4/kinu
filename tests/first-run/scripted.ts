@@ -12,7 +12,7 @@ import * as v from 'valibot';
 import type { JsonObject } from '@kinu.run/core';
 import type { ScriptedAnswer, ScriptedCall, ScriptedRequest } from '../../scripts/scripted-protocol';
 import {
-  CONSENT_ASK, CRAFT_ASK, CRAFT_INPUT, DELEGATION_ROSTER_ASK, DELEGATION_TASK_ASK, DELEGATION_WORD, DEVICE_JOB_ASK, DEVICE_JOB_COMMAND,
+  CONSENT_ASK, CRAFT_ASK, CRAFT_INPUT, DESKTOP_ASK, DESKTOP_PROGRAM, DELEGATION_ROSTER_ASK, DELEGATION_TASK_ASK, DELEGATION_WORD, DEVICE_JOB_ASK, DEVICE_JOB_COMMAND,
   FLEET_ALPHA,
   HELLO_SLATE_ASK, HELLO_SLATE_ID,
   EXEC_OUTPUT_ASK, EXEC_OUTPUT_PROGRAM, INTERNAL_FETCH_MISSION, INTERNAL_FETCH_PROGRAM, INTERNAL_URL, ISOLATION_ASK, MOUNT_ASK, MOUNT_BYTES,
@@ -205,6 +205,11 @@ const sandboxExecOutput: Script = (request) => latest(request) !== EXEC_OUTPUT_A
   call('eval', { code: EXEC_OUTPUT_PROGRAM }),
 ], ([ran]) => oneLine(ran?.result));
 
+/** computer-desktop: the program, then the size its screenshot answered. */
+const computerDesktop: Script = (request) => latest(request) !== DESKTOP_ASK ? null : steps(request, [
+  call('eval', { code: DESKTOP_PROGRAM }),
+], ([ran]) => oneLine(ran?.result).slice(0, 300));
+
 /** two-machines: an unnamed call, answered with what the executor said; then a call naming alpha. */
 const MACHINE_ASKS = new Map([[UNNAMED_MACHINE_ASK, 'device'], [NAMED_MACHINE_ASK, FLEET_ALPHA]]);
 
@@ -293,7 +298,7 @@ const nestedChat: Script = (request) => {
 /** The words every case sends its root agent: a conversation holding one is a case's, never a helper's. */
 const CASE_ASKS: readonly string[] = [
   STEER_TURN, SETTLE_ASK, WAKE_ASK, ISOLATION_ASK, DELEGATION_TASK_ASK, DELEGATION_ROSTER_ASK, TREE_ASK, SWARM_ASK,
-  CONSENT_ASK, DEVICE_JOB_ASK, MOUNT_ASK, EXEC_OUTPUT_ASK, UNNAMED_MACHINE_ASK, NAMED_MACHINE_ASK, SEARCH_ASK, PANES_ASK, TOOLS_LIST_ASK,
+  CONSENT_ASK, DEVICE_JOB_ASK, MOUNT_ASK, EXEC_OUTPUT_ASK, DESKTOP_ASK, UNNAMED_MACHINE_ASK, NAMED_MACHINE_ASK, SEARCH_ASK, PANES_ASK, TOOLS_LIST_ASK,
   TOOLS_USE_ASK,
   CRAFT_ASK, HELLO_SLATE_ASK,
 ];
@@ -335,7 +340,7 @@ const tabWorking: Script = (request) => latest(request) !== TAB_WORKING_ASK ? nu
 
 const SCRIPTS: readonly Script[] = [
   steerCorrection, backgroundSettle, backgroundWake, capabilityIsolation, delegation, delegationTree, exploration,
-  machineConsent, deviceJob, sandboxMountWrite, sandboxExecOutput, twoMachines, webSearch, workspacePanes, everyTool, codemodeCraft, helloSlate,
+  machineConsent, deviceJob, sandboxMountWrite, sandboxExecOutput, computerDesktop, twoMachines, webSearch, workspacePanes, everyTool, codemodeCraft, helloSlate,
   jobWake, tabWorking,
   nestedChat, helper,
 ];

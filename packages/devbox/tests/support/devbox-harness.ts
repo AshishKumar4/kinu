@@ -354,7 +354,8 @@ export class FakeSandbox {
   readonly listening = new Set<number>();
   /** Answers a port's fetch in place of the probe status, e.g. with an upgrade. */
   portAnswer: ((port: number, request: Request) => Response | Promise<Response>) | undefined;
-  desktopStart: ExecResult = { stdout: '', stderr: '', exitCode: 0 };
+  /** The desktop check's answer: it ends by printing the screen's size. */
+  desktopStart: ExecResult = { stdout: '1280 768\n', stderr: '', exitCode: 0 };
   /** What the box's terminal sessions read answers (D90): tab-separated `P`, `L` and `B` rows. */
   sessionsRead: ExecResult = { stdout: '', stderr: '', exitCode: 0 };
   /** What keeping the box's shown name answers (D93), or `gone` for an exec the container refuses. */
@@ -969,7 +970,8 @@ export class FakeSandbox {
     // A caller's command is `setsid -w /bin/bash -c` (D69); the box's own is `/bin/bash -c`. A digest write names its file
     // in argv (`file-digest-write.ts`).
     const onHost = options.cwd?.includes(DEVBOX_SCRATCH_PREFIX) === true || args[0] === 'setsid' || args[3] === "kill-tree" || args[3] === "port-listeners"
-      || args[3] === 'devbox-desktop' || (args[0] === 'python3' && args[3]?.includes(DEVBOX_SCRATCH_PREFIX) === true);
+      || args[3] === 'devbox-desktop' || (args[0] === 'python3' && args[3]?.includes(DEVBOX_SCRATCH_PREFIX) === true)
+      || args[0] === 'xdotool' || args[3] === 'devbox-screenshot' || args[3] === 'devbox-watch';
 
     if (this.nativeExec !== undefined && onHost) return this.nativeExec(args, options);
 

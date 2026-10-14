@@ -1,11 +1,11 @@
 import * as v from 'valibot';
 import { Effect } from 'effect';
 import { DevboxError, attempt, attemptSync, observe, settle } from './errors';
-import { CONTAINER_TRUST_ENV } from './processes';
+import { CONTAINER_ENV } from './processes';
 import type { SessionRecord } from './sessions';
 import { SHELL_RC } from './shown-name';
 
-const ENV = { ...CONTAINER_TRUST_ENV, TERM: 'xterm-256color' };
+const ENV = { ...CONTAINER_ENV, TERM: 'xterm-256color' };
 
 /**
  * tmux keeps the shell and its screen across reattaches (DEVBOX-DECISIONS, the PTY proof); none of its own chrome shows.

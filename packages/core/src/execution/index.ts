@@ -51,6 +51,8 @@ export {
   WORKSPACE_BACKUP_DIR, sandboxSizeLabel,
 } from './sandbox';
 
+export { DESKTOP_MEMBERS } from './desktop';
+
 export { createDeviceTunnelExecutor, type DeviceTransport } from './device-tunnel-executor';
 
 export {

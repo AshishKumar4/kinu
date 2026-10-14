@@ -4651,6 +4651,41 @@ staging `c6dc27da1`'s box, by hand, on two X servers started beside the real one
 picture filled the screen exactly, the mark sat at the centre above a full-width panel, and the theme drew the
 frames. The container tier's desktop check reads the glow above the panel as well as the ground and the panel.
 
+D89. An agent drives the desktop the owner watches, one action at a time (2026-10-14, issue #100). The owner asked an
+agent to use the computer while its desktop was open in the Env panel; the agent found no `DISPLAY`, installed Xvfb,
+started a second screen nobody could see, and could not read the PNG it took of it. Now the box answers
+`desktop({ driver, action })`, which `computer.screenshot()`, `click`, `type`, `key`, `scroll`, `move` and `drag`
+send one action at a time. Each call first runs the desktop check, the start script that the owner's socket route
+also runs, single-flight, so a look and a pane opened at once share one session; the check brings back any part of
+the session that died and ends by printing X's own geometry. The session's files and its background are written only
+by a run that starts X, so a check on a running desktop costs a few `pgrep`s. It is bounded at 60 s, a few times a fresh X's start:
+an X that stays alive and never opens its port would otherwise hold every later desktop call, and the box's rest,
+behind it. A point off that screen is refused before any input.
+One agent drives at a time: an agent takes the screen by looking once no other agent has called in 30 s, input is
+taken only from the agent holding it, and a screen X started afresh is nobody's, so every action lands on a screen
+its agent saw. The owner is not a driver. Each action is one xdotool invocation bounded at 5 s, with no
+`mousemove --sync`, which waits about 15 s when the pointer is already at the point; what a click holds and a drag
+presses is released whether or not the run ends cleanly. It runs under a UTF-8 locale: on a real box, under the C
+locale the box starts in, `xdotool type -- "aüb"` typed "a" and stopped at an invalid multi-byte sequence. Under
+UTF-8 it typed "ab": Chromium dropped the ü, whose key xdotool binds for the moment of the press, at 12 ms a
+character, and took it at 150 ms. So a character past ASCII is never typed: core sends it as its own key,
+`key U00FC`, which reached Chromium every time. The capture is `scrot -p`, read back as bytes in the same
+run. A watch takes `scrot -p -t 50` at even times over its window, at most 10 s, and tiles the half-size
+thumbnails into one PNG, two to a row up to four frames and four to a row up to eight; a small Python program does
+it, as the image carries Python and no image tool. Measured on two vision models, four half-size frames in one sheet
+cost what one screenshot does and read motion, a large word and 11 px text as well as four separate screenshots; eight
+at a third of the size lost 11 px text on both. A held key is `keydown`, a wait, `keyup` in one run, at most 10 s,
+with `keyup` again however the run ends; an action's bound is its own wait plus 5 s. Both run on the container runtime's exec directly rather than D87's `exec`: they are the box's own fixed
+commands, not a caller's; the capture is binary, which `exec` decodes as text; and xdotool's argv carries typed text
+without a shell to quote it. The screen is 1280×768, down from 1280×800: tile-based vision models resize a
+screenshot 800 high to 1228×768 at their default detail, and none Kinu serves resizes one 768 high, so an agent's
+points are the screen's own pixels. Every process the box starts gets `DISPLAY=:0`, so a window a program opens
+lands on that screen; the environment is `CONTAINER_ENV`, renamed from `CONTAINER_TRUST_ENV` because it no longer
+holds only the trust bundles. While no X runs, a program that needs a display fails as it did without `DISPLAY`
+(cannot open a display), and one that only checks the variable is told of a display that is not there; a headless
+browser ignores it. A tool that picks a dialog over a prompt because `DISPLAY` is set (a GUI pinentry, an askpass) now
+asks on the owner's screen, which is where the owner watches.
+
 D90. The computer's terminal sessions are named tmux sessions the box keeps by id, name and folder (2026-10-13, the
 owner: a cmux-like experience across the machines). One `devbox` session became any number: the page attaches with
 `session=<id>` (`terminalSocket`), and the box keeps `devbox:sessions`, each session's id, name and last folder,
