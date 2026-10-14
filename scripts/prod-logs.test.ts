@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { ALERT_THRESHOLDS } from '@kinu.run/core/analytics';
+import { KinuError } from '@kinu.run/core/obs';
 import { canaryActivations } from './durability-canary-telemetry';
 import { alarmsThatRan, idleWakeHours, ordinalHours, settledRead, terminalEffectStates, type VersionRead, versionFindings } from './prod-logs';
 
@@ -175,8 +176,9 @@ describe('what one deployed version did, as a deploy reports it', () => {
 
 // Staging 2026-10-08: an 08:19:16Z row was absent from a read at 10:25Z and present at 10:50Z.
 describe('a read that issues a verdict', () => {
-  /** Answers each count in turn, its last forever; `refused` is a read the API answered 500. */
-  const reader = (counts: readonly (number | 'refused')[]) => {
+  /** Answers each count in turn, its last forever; `refused` is a read the API answered 500, `rejected` one it answered
+   *  400, a query it will never take. */
+  const reader = (counts: readonly (number | 'refused' | 'rejected')[]) => {
     let clock = 0;
     let at = 0;
 
@@ -184,7 +186,9 @@ describe('a read that issues a verdict', () => {
       read: () => {
         const count = counts[Math.min(at++, counts.length - 1)] ?? 0;
 
-        return count === 'refused' ? Promise.reject(new Error('telemetry query answered 500')) : Promise.resolve(count);
+        if (count === 'refused') return Promise.reject(new KinuError('unavailable', 'telemetry query answered 500'));
+
+        return count === 'rejected' ? Promise.reject(new KinuError('bad_input', 'telemetry query answered 400')) : Promise.resolve(count);
       },
       fingerprint: (count: number) => String(count), rows: (count: number) => count,
       now: () => clock,
@@ -214,6 +218,15 @@ describe('a read that issues a verdict', () => {
 
   test('fails with the refusal when no read is answered before the cap', async () => {
     await expect(settledRead(reader(['refused']))).rejects.toThrow('telemetry query answered 500');
+  });
+
+  test('fails at once on any failure but the API\'s refusal, the first read or a later one', async () => {
+    const first = reader(['rejected', 5]);
+    const later = reader([5, 'refused', 5, 'rejected', 5]);
+
+    await expect(settledRead(first)).rejects.toThrow('telemetry query answered 400');
+    await expect(settledRead(later)).rejects.toThrow('telemetry query answered 400');
+    expect({ first: first.now(), later: later.now() }).toEqual({ first: 0, later: 6 });
   });
 
   test('is unsettled when its counts still move at the cap, however close they came', async () => {

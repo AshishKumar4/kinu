@@ -77,6 +77,8 @@ import { readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import * as v from 'valibot';
 import { ALERT_THRESHOLDS, findWakeLoops, type StartupHour, type WakeLoop } from '@kinu.run/core/analytics';
+import { KinuError, classifyErrorCode } from '@kinu.run/core/obs';
+import { codeForStatus } from '../packages/core/src/providers/util';
 import { PLATFORM_CATALOG } from '../packages/core/src/platform-catalog';
 import { recordStep } from './deploy-report';
 import { parseJsonc } from './jsonc';
@@ -385,7 +387,8 @@ export class Telemetry {
 
     const answer = await response.text();
 
-    if (!response.ok) throw new Error(`telemetry query answered ${response.status}: ${answer.slice(0, 300)}`);
+    // Classified as any HTTP answer is: a 5xx or a 429 is `unavailable`, the API refusing for its own reasons.
+    if (!response.ok) throw new KinuError(codeForStatus(response.status) ?? 'io', `telemetry query answered ${response.status}: ${answer.slice(0, 300)}`);
 
     return answer;
   }
@@ -1249,8 +1252,10 @@ export type SettledRead<T> =
 /**
  * Reads every `pollMs` until the `fingerprint` has held still for `holdMs`, every read across it agreeing, or until
  * `capMs` has passed since the first. `rows` counts what the window held at each read, so the answer names how many
- * rows landed after the first read. A read the API refuses says nothing of the window, so the next poll reads again:
- * the 2026-10-14 measurement's API answered 500 to 12 of its 80 reads. Only a cap reached with no answer at all fails.
+ * rows landed after the first read. A read the API refuses as `unavailable` says nothing of the window, so the next
+ * poll reads again: the 2026-10-14 measurement's API answered 500 to 12 of its 80 reads. Only a cap reached with no
+ * answer at all fails on it; any other failure, a refused token, a query the API rejects or an answer that does not
+ * parse, fails at once.
  */
 export async function settledRead<T>(at: {
   readonly read: () => Promise<T>; readonly fingerprint: (value: T) => string; readonly rows: (value: T) => number;
@@ -1261,9 +1266,13 @@ export async function settledRead<T>(at: {
   const capped = (): boolean => at.now() - started + at.pollMs > at.capMs;
 
   const answer = async (): Promise<{ readonly value: T } | { readonly cause: unknown }> => {
-    const [read] = await Promise.allSettled([at.read()]);
+    try {
+      return { value: await at.read() };
+    } catch (cause) {
+      if (classifyErrorCode({ cause }) !== 'unavailable') throw cause;
 
-    return read?.status === 'fulfilled' ? { value: read.value } : { cause: read?.reason };
+      return { cause };
+    }
   };
 
   let first = await answer();
