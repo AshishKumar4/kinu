@@ -275,14 +275,17 @@ export function parseSessionsRead(text: string): SessionsRead {
   return new Map([...sessions].map(([id, session]) => [id, { ...session, branch: branches.get(session.cwd) ?? null, needsInput: waiting.has(id) }]));
 }
 
-/** Every recorded session, as the read finds it running or as it was left; records the read moved keep its folder. */
+/**
+ * Every recorded session, as the read finds it running or as it was left: a running one takes the read's folder and
+ * state over its record's, and keeps its name and its job (D95).
+ */
 export function mergeSessions(records: readonly SessionRecord[], read: SessionsRead | null): TerminalSession[] {
   return records.map((record) => {
     const seen = read?.get(record.id);
 
     return seen === undefined
       ? { ...record, open: false, running: null, last: null, ports: [], branch: null, needsInput: false }
-      : { ...seen, name: record.name, open: true };
+      : { ...record, ...seen, open: true };
   });
 }
 
