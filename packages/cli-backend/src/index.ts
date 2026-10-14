@@ -45,7 +45,6 @@ export {
 
 export { LocalAgentHost, type LocalAgentHostOptions, type LocalHostedAgent } from './agent-host';
 
-export { OS_LEASE_PROCESS } from './agent-host/lease-process';
 
 export {
   createLocalModelResolver,

@@ -1,12 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 import { lstatSync, readFileSync, readlinkSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { scratchDir } from '@kinu.run/test-utils';
+import { present, scratchDir } from '@kinu.run/test-utils';
 import { tolerate } from '@kinu.run/core/obs';
 import {
-  createConfigLock, createProcessIdentityBoundary, darwinStartIdentity, decodeLockOwner, encodeLockOwner,
-  procStartTicks, withConfigLock, type LockOwner,
+  createConfigLock, createProcessIdentityBoundary, decodeLockOwner, encodeLockOwner, withConfigLock, type LockOwner,
 } from '../src/config-lock';
+import { hostGenerationReader } from '../src/process-generation';
 
 /**
  * Lock ownership rules in-process; cross-process proofs live in packages/cli/tests/config-lock.test.ts and
@@ -36,11 +36,11 @@ describe('the config lock is held by a process, not by a path', () => {
   }
 
   function selfStartTicks(): string {
-    const ticks = procStartTicks(readFileSync(`/proc/${String(process.pid)}/stat`, 'utf8'));
+    const probe = present(hostGenerationReader(), 'a generation reader on this host').read(process.pid);
 
-    if (ticks === null) throw new Error('this process has no readable start time');
+    if (probe.state !== 'read') throw new Error('this process has no readable start time');
 
-    return ticks;
+    return probe.identity;
   }
 
   /** A pid whose exit Bun has already reaped, so `/proc/<pid>` is gone. */
@@ -232,21 +232,30 @@ describe('the config lock is held by a process, not by a path', () => {
     expect(ran).toBe(true);
   });
 
-  test('the start time is read past the executable name, parentheses and all', () => {
-    const stat = readFileSync(`/proc/${String(process.pid)}/stat`, 'utf8');
-    expect(procStartTicks(stat)).toBe(stat.split(' ')[21]);
-    // Parse past the last `)`: field 2 is the executable name, which may contain spaces.
-    const nasty = `4242 (my prog (v2)) S ${Array.from({ length: 18 }, (_, i) => String(i)).join(' ')} 999 rest`;
-    expect(procStartTicks(nasty)).toBe('999');
-    expect(procStartTicks('4242 (prog) S 1 2 3')).toBeNull();
-    expect(procStartTicks('no parenthesis here')).toBeNull();
+  test('the start time is read past the executable name, parentheses and all', async () => {
+    // Field 2 is the executable name, which may hold spaces and parentheses: a shell run through a link so named,
+    // waiting on its input.
+    const named = join(scratchDir('nasty-comm'), 'my prog (v2)');
+    symlinkSync(present(Bun.which('sh'), 'a POSIX shell'), named);
+    const child = Bun.spawn({ cmd: [named, '-c', 'echo ready; read -r line'], env: {}, stdin: 'pipe', stdout: 'pipe', stderr: 'ignore' });
+
+    try {
+      // It speaks only once it runs under the link's name: before that, the pid still shows the program that spawned it.
+      await child.stdout.getReader().read();
+      const stat = readFileSync(`/proc/${String(child.pid)}/stat`, 'utf8');
+      expect(stat).toContain('(my prog (v2))');
+      // With the name made one plain word, the 22nd space-separated field is the start time.
+      const startTicks = stat.replace('(my prog (v2))', '(prog)').split(' ')[21];
+      expect(present(hostGenerationReader(), 'a generation reader on this host').read(child.pid))
+        .toEqual({ state: 'read', identity: startTicks });
+    } finally {
+      child.kill();
+      await child.exited;
+    }
   });
 
   test('Darwin identity distinguishes live, missing, reused and unreadable processes', async () => {
-    const initial = darwinStartIdentity('Mon Aug 27 12:34:56 2026');
-    const reused = darwinStartIdentity('Tue Aug 28 12:34:56 2026');
-
-    if (initial === null || reused === null) throw new Error('fixture lost Darwin lstart identities');
+    const [initial, reused] = ['first-lstart', 'later-lstart'];
 
     const owner: LockOwner = {
       version: 'v1',
@@ -282,9 +291,7 @@ describe('the config lock is held by a process, not by a path', () => {
   });
 
   test('versioned platform records round-trip without cross-platform confusion', async () => {
-    const identity = darwinStartIdentity('Mon Aug 27 12:34:56 2026');
-
-    if (identity === null) throw new Error('fixture lost Darwin lstart identity');
+    const identity = 'first-lstart';
 
     const owner: LockOwner = {
       version: 'v1',

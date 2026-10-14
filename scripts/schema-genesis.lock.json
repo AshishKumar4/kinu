@@ -292,7 +292,8 @@
   ],
   "background_job_holders@packages/core/src/jobs/process-holder.ts": [
     "job_id TEXT PRIMARY KEY",
-    "pid INTEGER NOT NULL"
+    "pid INTEGER NOT NULL",
+    "generation TEXT NOT NULL"
   ],
   "background_job_serves@packages/core/src/jobs/store.ts": [
     "actor_id TEXT NOT NULL",
@@ -654,6 +655,7 @@
   "driver_lease@packages/core/src/execution/driver-lease.ts": [
     "id TEXT PRIMARY KEY",
     "pid INTEGER NOT NULL",
+    "generation TEXT NOT NULL",
     "token TEXT NOT NULL",
     "kind TEXT NOT NULL CHECK(kind IN ('interactive', 'daemon'))"
   ],
