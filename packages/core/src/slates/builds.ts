@@ -12,6 +12,7 @@ import type { RawSqlExec, SqlExec } from '../types/primitives';
 import { KinuError } from '../obs/error';
 import { settle } from '../obs/effect';
 import { slateAuthority } from './authority';
+import { SLATES_ROOT } from '../vfs/workspace-path';
 
 /**
  * A workspace path outside the slate's own tree a compile looked at: a file it read, or a path it found missing (a
@@ -90,6 +91,8 @@ function below(path: string): readonly [string, string] {
 
   return [under, `${under.slice(0, -1)}0`];
 }
+
+const SLATE_FILE = new RegExp(`^${SLATES_ROOT}/([^/]+)(?:/|$)`);
 
 export class SlateBuilds {
   /** Read once per activation per authority, as every model step asks; each write below keeps it current. */
@@ -212,8 +215,22 @@ export class SlateBuilds {
     return failing;
   }
 
+  /**
+   * Which slates `paths` changed: their own files, or anything outside their trees a build of theirs looked at, another
+   * slate's files among them. Their builds are stale, and whether each builds is not yet known.
+   */
+  filesChanged(paths: readonly string[]): string[] {
+    const absolute = paths.map((path) => (path.startsWith('/') ? path : `/${path}`));
+    const own = [...new Set(absolute.flatMap((path) => SLATE_FILE.exec(path)?.[1] ?? []))];
+    const ids = new Set([...own, ...this.moved(absolute)]);
+
+    this.changed(own);
+
+    return [...ids];
+  }
+
   /** Its files changed since: whether it builds is not yet known. */
-  changed(slates: readonly string[]): void {
+  private changed(slates: readonly string[]): void {
     for (const slate of slates) this.db.exec(`UPDATE slate_images SET failed_key = NULL, failure = NULL WHERE slate = ?`, slate);
 
     if (slates.length > 0) this.#failing.clear();

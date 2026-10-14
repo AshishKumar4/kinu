@@ -9,7 +9,7 @@ import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import { supervisorEsbuildService } from '@nimbus-sh/worker/facet-host';
 import { probeDurableApps, probeFacetManager } from './facet-manager';
 import { SlateHost } from '../../src/slates/host';
-import { initSlateBuildTable } from '@kinu.run/core/slates';
+import { initSlateBuildTable, SlateBuilds } from '@kinu.run/core/slates';
 import { ROOT_SLATE_CALLER, slateCallerKey } from '@kinu.run/core/slates';
 import { initWorkspaceSchema, type SqlValue, type WorkMode } from '@kinu.run/core';
 import { ContentRef } from '@agent-core/core';
@@ -45,7 +45,7 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
   });
 
   private readonly host = new SlateHost({
-    ctx: this.ctx, workspace: this.ctx.id.toString(),
+    ctx: this.ctx, workspace: this.ctx.id.toString(), builds: new SlateBuilds(this.ctx.storage.sql),
     session: async () => ({ vfs: this.vfs, processes: this.processes, filesystem: this.filesystem }),
     facetManager: async () => this.facets,
     bundler: (vfs) => supervisorEsbuildService(this.ctx, this.env, vfs),

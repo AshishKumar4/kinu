@@ -19,7 +19,7 @@ import { bindActorHandle, createDefaultWebSearchProvider, initCodemodeStateTable
 import { CodemodeEgress as ProductionEgress } from '../../src/codemode-egress';
 import { codemodeLauncher } from '../../src/codemode-sandbox';
 import { SlateHost } from '../../src/slates/host';
-import { initSlateBuildTable } from '@kinu.run/core/slates';
+import { initSlateBuildTable, SlateBuilds } from '@kinu.run/core/slates';
 import { createMemoryVfs } from '@kinu.run/test-utils/vfs';
 import type { BrowserSessions } from '@kinu.run/core';
 import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
@@ -85,7 +85,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     const surface: CodemodeSurface = { cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => selectInjectableCraftedTools({ list: () => [crafted] }, sql) };
 
     const host = new SlateHost({
-      ctx: this.ctx, workspace: 'binding-probe',
+      ctx: this.ctx, workspace: 'binding-probe', builds: new SlateBuilds(this.ctx.storage.sql),
       session: async () => ({ vfs, processes: new SessionProcessSupervisor(), filesystem: new ProcessFiles(vfs) }),
       facetManager: async () => { throw new Error('binding probe does not boot a process'); },
       bundler: () => { throw new Error('binding probe does not bundle a slate'); },
