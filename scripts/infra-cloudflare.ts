@@ -32,7 +32,7 @@ import { classifyErrorCode, tolerate } from '@kinu.run/core/obs';
 import { deployedConfig, type InfraEnvironment } from './infra-manifest';
 import { deleteApplicationByRest, deletedByRest, restCall } from './cloudflare-rest';
 import { restApiToken } from './cloudflare-token';
-import { HealthSchema } from '../packages/test-utils/src/served-health';
+import { HealthSchema } from './served-health';
 
 /** The argv that points a Worker-scoped wrangler command at `environment`'s Worker; production is the top level. */
 export function environmentArgs(environment: InfraEnvironment): readonly string[] {

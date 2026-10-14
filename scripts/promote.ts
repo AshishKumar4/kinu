@@ -40,7 +40,7 @@ import { parsePlatformReport } from '../evals/src/platform';
 import { parseResults, trials } from '../evals/src/results';
 import { EvalRunSchema, readEvalRun } from './evals-artifacts';
 import { isEvalTask, trackedFiles } from './sources';
-import { servedHealth } from '../packages/test-utils/src/served-health';
+import { servedHealth } from './served-health';
 
 const REPO = new URL('..', import.meta.url).pathname;
 

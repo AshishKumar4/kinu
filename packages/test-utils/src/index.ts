@@ -75,5 +75,3 @@ export * from './command-call';
 export * from './workspace-shell';
 
 export * from './device-fleet';
-
-export * from './served-health';

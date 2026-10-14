@@ -28,7 +28,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { gitIn } from '../packages/test-utils/src/git-env';
-import { servedHealth } from '../packages/test-utils/src/served-health';
+import { servedHealth } from './served-health';
 
 /** The dedicated checkout continuous staging deploys from, and no one edits. */
 export const WORKTREE = '/mnt/local/kinu/wt/staging-loop';

@@ -35,7 +35,7 @@ import {
 import {
   type DeployedConfig, INFRA_ENVIRONMENTS, type InfraEnvironment, type Resource, deployedConfig, liveClasses,
 } from './infra-manifest';
-import { servedHealth } from '../packages/test-utils/src/served-health';
+import { servedHealth } from './served-health';
 
 /** What one reset deleted, or is deleting. */
 export const ResetSchema = v.object({

@@ -1,7 +1,8 @@
 import * as v from 'valibot';
 import { USER_AI_PROXY_PATH, type RunEvent } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
-import { DeploymentAnswer, evalTargetVerdict, evalWorkspaceName, infraBoundary, servedHealth } from '@kinu.run/test-utils';
+import { DeploymentAnswer, evalTargetVerdict, evalWorkspaceName, infraBoundary } from '@kinu.run/test-utils';
+import { servedHealth } from '../../scripts/served-health';
 import { openPublicSession, type KinuPublicSession } from './session';
 import type { CatalogNeed } from './workspace-roster';
 import { resolveWebIdentity, webHeaders, type EvalTarget } from './workspace-roster';

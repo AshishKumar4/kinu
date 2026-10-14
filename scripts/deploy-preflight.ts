@@ -29,7 +29,7 @@
 import { spawnSync } from 'node:child_process';
 
 import { evalTargetVerdict } from '../packages/test-utils/src/eval-identity';
-import { servedHealth, type ServedHealth } from '../packages/test-utils/src/served-health';
+import { servedHealth, type ServedHealth } from './served-health';
 
 /** `/api/health`'s build stamp ({@link servedHealth}): null for a Worker no full deploy has stamped. */
 export interface DeployedHealth {
