@@ -790,8 +790,6 @@ export class LocalAgentHost {
 
       if (parent.ws.staticModel) ws.staticModel = parent.ws.staticModel;
 
-      if (parent.ws.mcpServers) ws.mcpServers = parent.ws.mcpServers;
-
       // A child resolves role and tier against its root's (account) catalog.
       if (parent.ws.profileAuthority) ws.profileAuthority = parent.ws.profileAuthority;
 
@@ -1285,8 +1283,6 @@ export class LocalAgentHost {
       if (parent.ws.modelResolver) ws.modelResolver = parent.ws.modelResolver;
 
       if (parent.ws.staticModel) ws.staticModel = parent.ws.staticModel;
-
-      if (parent.ws.mcpServers) ws.mcpServers = parent.ws.mcpServers;
 
       if (parent.ws.profileAuthority) ws.profileAuthority = parent.ws.profileAuthority;
 
