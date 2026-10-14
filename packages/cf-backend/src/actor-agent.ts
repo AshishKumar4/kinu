@@ -430,8 +430,13 @@ async function reachedIn<A>(
 /** The evolution lane's `fibers` row name. */
 export const EVOLUTION_LANE_FIBER = 'evolution:settle';
 
+/** No one has claimed this workspace yet: every path only an owner can take refuses it in these words. */
+export function unownedWorkspace(): KinuError {
+  return new KinuError('unavailable', 'This workspace has no owner yet: open it from the app or the CLI first.');
+}
+
 /** One read held until dropped; a failed read is not held, so the next need asks again. */
-class HeldRead<A> {
+export class HeldRead<A> {
   #held: Promise<A> | null = null;
   #value: A | undefined = undefined;
 
@@ -446,7 +451,14 @@ class HeldRead<A> {
     ));
   }
 
-  /** What it holds once read; none while unread or still reading. */
+  /** Reads again, holding what it held until the new read answers; a failed read leaves that standing. */
+  again(read: () => Promise<A>): Promise<A> {
+    this.#held = null;
+
+    return this.get(read);
+  }
+
+  /** What it holds once read; none until a first read answers. */
   get current(): A | undefined {
     return this.#value;
   }
@@ -3069,12 +3081,26 @@ export abstract class ActorAgent extends Agent<Env> {
     return stub;
   }
 
+  /** The owner's user id; a workspace no one has claimed is refused (`unownedWorkspace`). */
+  protected requireOwner(): string {
+    const userId = this.getOwnerUserId();
+
+    if (!userId) throw unownedWorkspace();
+
+    return userId;
+  }
+
+  /** `requireOwner` as an effect, for the paths that refuse in one. */
+  protected owner(): Effect.Effect<string, KinuError> {
+    return Effect.suspend(() => {
+      const userId = this.getOwnerUserId();
+
+      return userId ? Effect.succeed(userId) : Effect.fail(unownedWorkspace());
+    });
+  }
+
   protected requireOwnerUserDO(): UserHubClient {
-    const stub = this.getOwnerUserDO();
-
-    if (!stub) throw new KinuError('unavailable', 'Agent has no owner yet. Open it through the authenticated app or CLI first.');
-
-    return stub;
+    return this.env.UserDO.get(this.env.UserDO.idFromName(this.requireOwner()));
   }
 
   /** Throws when no capability token exists; an unclaimed workspace reaches nothing. */
@@ -3543,7 +3569,10 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Every agent's turn surface (design v2 §2, §9), from the one factory. */
   protected abstract actorSurface(actor: CFSeat, turn: SurfaceTurn): Promise<ActorSurface>;
 
-  /** "Beta: swarms" as the workspace agent's tools last read it; null until read and after a catalog write. */
+  /**
+   * "Beta: swarms" as the workspace agent's tools last read it; null until read and after a catalog write. Not the held
+   * catalog's: a recovered turn's tools offer what its frozen catalog said, and a turn's stay as it opened them.
+   */
   private _accountSwarms: boolean | null = null;
 
   /** "Beta: swarms" as held, read once when nothing holds it. */

@@ -83,8 +83,8 @@ export interface AgentWorkspace {
   parentReport(report: {
     readonly text: string; readonly status: SubordinateReportStatus; readonly mode: WorkMode; readonly sequenceId: string; readonly quiet?: true;
   }): Promise<string>;
-  /** Persists the title the agent suggested itself; null lands the stand-in alone. */
-  autoTitle(subject: string, title: string | null): Promise<void>;
+  /** With no `title`, lands the stand-in and answers the mission to name, or null; with one, lands the agent's own. */
+  autoTitle(subject: string, title: string | null): Promise<string | null>;
   /** The workspace's own agent hands its settled turn to the workspace, which owes that turn's lanes. Repeatable: the
    *  workspace keys what it owes on the turn. */
   turnSettled(settled: HandedOffTurn): Promise<void>;
