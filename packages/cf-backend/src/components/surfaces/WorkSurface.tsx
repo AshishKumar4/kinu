@@ -17,6 +17,7 @@ import { ChangesSurface, type ChangesFocus } from "./ChangesSurface";
 import type { PinnedPreviewPort as PinnedPort } from "@kinu.run/core";
 import { PreviewFrame } from "@/components/PreviewFrame";
 import { LoadFailure } from "@/components/ui/LoadFailure";
+import { StatusDot } from "@/components/ui/Status";
 import type { AgentSurfaceProps } from "./AgentSurface";
 import type { ExplorationSurfaceProps } from "./ExplorationSurface";
 import { WorkTab } from "./WorkTab";
@@ -277,7 +278,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
             aria-label={`Preview ready: ${chip.title}`}
             className="inline-flex shrink-0 items-center gap-1.5 rounded-full border p-border p-accent-subtle px-2 py-1 text-[11px] font-medium p-accent transition-colors hover:p-elevated @[28rem]:px-2.5"
           >
-            <span className="size-1.5 rounded-full p-dot-accent p-dot-pulse" aria-hidden="true" />
+            <StatusDot tone="live" />
             {/* A narrow column keeps the pulse and gives its words to the pages; the name is the control's either way. */}
             <span className="hidden @[28rem]:inline">Preview ready</span>
           </button>

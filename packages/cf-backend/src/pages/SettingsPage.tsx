@@ -10,10 +10,12 @@ import {
 import {
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_LABEL, DEFAULT_ADVISOR_MIN_SEVERITY,
   WORKSPACE_ARCHIVE_EXTENSION,
-  type ApprovalGrant, type ArchiveCursor, type EvolutionConfigView, type GepaRunSummary,
+  type ApprovalGrant, type ArchiveCursor, type EvolutionConfigView,
   type InstructionSourceRow, type InstructionSourceView, type SeekCursor, WORKSPACE_TITLE_MAX,
 } from "@kinu.run/core";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
+import { StatusDot } from "@/components/ui/Status";
+import { GEPA_TONE } from "@/components/surfaces/evolution-panels";
 import { executorLabel } from "@kinu.run/core";
 import type { ConnectionStatus } from "@/hooks/use-chat-owner";
 import type { AgentStatus, WorkspaceNotice } from "@kinu.run/core";
@@ -660,10 +662,6 @@ function WorkspaceBackupCard({
   );
 }
 
-const GEPA_DOT = {
-  completed: 'p-dot-success', running: 'p-dot-warning', aborted: 'p-dot-neutral',
-} satisfies Record<GepaRunSummary['status'], string>;
-
 function GepaOptimizationCard({
   rpc,
 }: {
@@ -720,7 +718,7 @@ function GepaOptimizationCard({
         <div className="mt-2 space-y-1">
           {runs.slice(0, 5).map(r => (
             <div key={r.runId} className="p-meta p-text-3 flex items-center gap-2">
-              <span className={`size-1.5 rounded-full ${GEPA_DOT[r.status]}`} />
+              <StatusDot tone={GEPA_TONE[r.status]} />
               <span className="font-mono">{r.iterations} iters</span>
               <span>· {r.metricCalls} evals</span>
               <span className="ml-auto">{r.stopReason ?? r.status}</span>

@@ -38,6 +38,7 @@ import { redactPayload, redactSecrets, segmentBySteers, splicesSeenOn, type Sign
 import { classifyProgrammaticTurn, endedMidWork, isSteeredMessage, turnFailure, turnFailureFacts } from "@kinu.run/core";
 import { EventRow, foldRepeats, ProgrammaticTurnCard, type CardState } from "@/components/ProgrammaticTurnCard";
 import { useToggledSet } from "@/hooks/use-toggled-set";
+import { StatusDot } from "@/components/ui/Status";
 import type { UnavailableDevice } from "@/hooks/use-workspace-reads";
 
 const MessageCreatedAtSchema = v.looseObject({
@@ -338,7 +339,7 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
   if (isRunning) {
     stateName = "running";
     stateTone = "p-accent-subtle p-accent";
-    stateBadge = <><span className="size-1.5 rounded-full p-dot-accent p-dot-pulse" />Running</>;
+    stateBadge = <><StatusDot tone="live" />Running</>;
   } else if (failed) {
     stateName = "failed";
     stateTone = "p-fill p-text-4";

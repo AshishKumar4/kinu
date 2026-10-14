@@ -12,7 +12,7 @@ import { useWorkspaceRoster } from "../hooks/use-workspace-roster";
 import { lastValue } from "../hooks/use-async-resource";
 import { ModeToggle, ThemeToggle } from "./theme-toggle";
 import { FeedbackButton } from "./FeedbackButton";
-import { isPlaceholderWorkspaceTitle, shortAge, workspaceDisplayTitle, WORKSPACE_TITLE_MAX, type PanelAgent, type RosterEntry, type WorkspaceEntry } from "@kinu.run/core";
+import { isPlaceholderWorkspaceTitle, rosterHeadline, shortAge, workspaceDisplayTitle, WORKSPACE_TITLE_MAX, type PanelAgent, type RosterEntry, type WorkspaceEntry } from "@kinu.run/core";
 import { useRename } from "@/hooks/use-rename";
 import { SidebarAgents } from "./SidebarAgents";
 import { ChatMascot, WorkspaceLogo, mascotColour, mascotSeed } from "./Marks";
@@ -21,6 +21,8 @@ import { RemoveWorkspaceDialog } from "./RemoveWorkspaceDialog";
 import { useAgentsNav, useOpenAgentsPanel, type WorkspaceAgentsPanel } from "@/hooks/use-agents-nav";
 import { navActive, navRowCls, PRIMARY_NAV } from "./nav";
 import { composing } from "@/components/ui/form";
+import { StatusDot } from "@/components/ui/Status";
+import { workspaceStatusTone } from "@/components/workspaces/WorkspaceOverviewCard";
 
 function PrimaryNavRow(item: (typeof PRIMARY_NAV)[number]) {
   const { to, label, Icon } = item;
@@ -128,12 +130,13 @@ function WorkspaceRenameEditor({ workspace, onSaved, onDone }: {
 }
 
 /** A workspace at work pulses; one with news, or the open one, wears the accent. */
-function WorkspaceDot({ overview, open }: { overview: RosterEntry["overview"]; open: boolean }) {
-  if (overview?.activity === "working") return <span className="block size-1.5 rounded-full p-dot-success p-dot-pulse" title="Working now" />;
+/** The workspace's headline as a dot on its logo, as the Workspaces card says it; an idle one has none. */
+function WorkspaceDot({ entry }: { entry: RosterEntry }) {
+  const { label, status } = rosterHeadline(entry.overview, entry.decisions);
 
-  if (overview?.hasUpdates === true) return <span className="block size-1.5 rounded-full p-dot-accent" title="Updated" />;
+  if (status === "idle" || status === "unreported") return null;
 
-  return open ? <span className="block size-1.5 rounded-full p-dot-accent" /> : null;
+  return <StatusDot className="block" tone={workspaceStatusTone(status)} title={label} />;
 }
 
 export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}) {
@@ -221,7 +224,6 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
         <ul className="space-y-1" aria-busy={listLoading && !listError}>
           {workspaces.map((a) => {
             const age = shortAge(a.lastVisited);
-            const overview = a.overview;
             const editing = editingWorkspace === a.name;
             const isActive = a.name === agentId;
             const shown = workspaceDisplayTitle(a);
@@ -243,7 +245,7 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
                       >
                         <span className="relative flex shrink-0">
                           <WorkspaceLogo title={shown} logo={a.logo} />
-                          <span className="p-logo-badge"><WorkspaceDot overview={overview} open={false} /></span>
+                          <span className="p-logo-badge"><WorkspaceDot entry={a} /></span>
                         </span>
                         <span className={`min-w-0 flex-1 truncate p-row-text font-semibold ${isPlaceholderWorkspaceTitle(a.displayName, a.name) ? `italic ${isActive ? '' : 'p-text-3'}` : ''}`}>{shown}</span>
                         {age && <span className="w-[30px] shrink-0 text-right p-meta tabular-nums p-text-4 opacity-0 transition-opacity lg:opacity-100 lg:group-hover:opacity-0 lg:group-focus-within:opacity-0">{age}</span>}

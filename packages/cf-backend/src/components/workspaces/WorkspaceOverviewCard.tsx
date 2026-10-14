@@ -5,7 +5,8 @@ import { WorkspaceLogo } from "@/components/Marks";
 import { SlatePicture } from "@/components/slates/SlatePicture";
 import { Status, type StatusTone } from "@/components/ui/Status";
 
-function workspaceStatusTone(status: WorkspaceStatus): StatusTone {
+/** How a workspace stands, by core's one headline: the Workspaces card and the sidebar's dot read it alike. */
+export function workspaceStatusTone(status: WorkspaceStatus): StatusTone {
   switch (status) {
     case "needs":
       return "warning";
