@@ -6,7 +6,7 @@ import {
   hostedActorSocketPath,
   isForeignAgentNamespacePath,
 } from '@kinu.run/core';
-import { deriveUserId } from '../src/auth/store';
+import { accountIdFor } from '../src/auth/store';
 import { unreachableNamespace, workerContext } from './helpers/bindings';
 import { makeKv } from './helpers/kv';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
@@ -20,9 +20,12 @@ import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 // Dynamic: the entry's graph reaches `cloudflare:email` and `cloudflare:workers` through `agents`.
 const { default: worker } = await import('../src/server');
 
+/** A deployment that signs in through OAuth: an address is the account its OAuth sign-in mints. */
+const OAUTH_DEPLOYMENT = { SIGN_IN_PROVIDERS: 'google' };
+
 describe('F1 defense 1 — the /agents/* transport is pinned to the orchestrator', () => {
   test('the concrete exploit path is a foreign-namespace request (→ rejected)', async () => {
-    const victimId = await deriveUserId('victim@example.com');
+    const victimId = await accountIdFor(OAUTH_DEPLOYMENT, 'victim@example.com');
     expect(isForeignAgentNamespacePath(`/agents/user-d-o/${victimId}`)).toBe(true);
   });
 
@@ -106,7 +109,7 @@ describe('F1 defense 1 — the /agents/* transport is pinned to the orchestrator
       OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
     });
 
-    for (const path of ['/agents/user-d-o/victim', `/agents/user-d-o/${await deriveUserId('victim@example.com')}`]) {
+    for (const path of ['/agents/user-d-o/victim', `/agents/user-d-o/${await accountIdFor(OAUTH_DEPLOYMENT, 'victim@example.com')}`]) {
       // SAFETY: every member the foreign-namespace refusal reads is constructed above; the loopback host is
       // where the dev identity signs the request in.
       const answer = await worker.fetch(new Request(`http://localhost${path}`), env as Env, workerContext());

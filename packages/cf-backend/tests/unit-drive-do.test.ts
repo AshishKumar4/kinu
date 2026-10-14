@@ -1,6 +1,7 @@
 /**
- * The Drive on the user's own Durable Object via RPC: the tenant derives from the signed-in profile, never a caller;
- * a workspace token is refused before any tenant is touched; an out-of-order chunk is refused, not appended.
+ * The Drive on the user's own Durable Object via RPC: the tenant is the account's own id, never a caller's word, and
+ * the one its workspaces mount at `/shared`; a workspace token is refused before any tenant is touched; an
+ * out-of-order chunk is refused, not appended.
  */
 import { describe, expect, test } from 'bun:test';
 import {
@@ -12,6 +13,7 @@ import { fakeMossaic, type FakeMossaic } from '@kinu.run/test-utils';
 import { USER_DO_RPC_SURFACE } from '../src/rpc-surface';
 import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do';
 import { driveBound, tenantDrive, type MossaicObject } from '../src/drive/tenant';
+import { accountIdFor, deriveBuiltinUserId } from '../src/auth/store';
 
 /** The account ids the edge derives from these addresses (SHA-256 of the lowercased address, first 32 hex), stated. */
 const ALICE_ID = 'ff8d9819fc0e12bf0d24892e45987e24';
@@ -73,8 +75,8 @@ describe('the Drive on the UserDO', () => {
   test('the tenant is the profile\'s own; the other user\'s object reaches none of it', async () => {
     const mossaic = fakeMossaic();
     const owner = await testOwner();
-    const alice = await signedIn(mossaic, 'alice@example.com', 'do-alice');
-    const bob = await signedIn(mossaic, 'bob@example.com', 'do-bob');
+    const alice = await signedIn(mossaic, 'alice@example.com', ALICE_ID);
+    const bob = await signedIn(mossaic, 'bob@example.com', BOB_ID);
 
     expect(await upload(alice, owner, '/notes.txt', [bytes('alice '), bytes('only')])).toEqual({ ok: true, value: { ok: true } });
     expect(await alice.userDO.drive_mkdir(owner, '/projects')).toEqual({ ok: true, value: undefined });
@@ -83,7 +85,7 @@ describe('the Drive on the UserDO', () => {
 
     expect(written(await alice.userDO.drive_list(owner, '/'))).toEqual(mine);
 
-    // Keyed by the id the edge derives from the email, so the workspace mount reads the same store.
+    // Keyed by the account's own id, the one its workspaces record as their owner, so `/shared` reads the same store.
     expect([...mossaic.stores.keys()]).toEqual([ALICE_ID]);
     expect(mossaic.stores.get(ALICE_ID)?.size).toBe(1);
 
@@ -100,6 +102,22 @@ describe('the Drive on the UserDO', () => {
     expect(written(await alice.userDO.drive_list(owner, '/'))).toEqual(mine);
     alice.close();
     bob.close();
+  });
+
+  test('a password or passkey account\'s Drive is the tenant its workspaces mount, not the one its address hashes to', async () => {
+    const mossaic = fakeMossaic();
+    const owner = await testOwner();
+    const email = 'carol@example.com';
+    // The id password and passkey sign-in mint: the account's object is addressed by it, and every workspace the
+    // account claims records it as the owner whose tenant `/shared` opens.
+    const account = await deriveBuiltinUserId(email);
+    const carol = await signedIn(mossaic, email, account);
+
+    expect(await upload(carol, owner, '/plan.txt', [bytes('one tenant')])).toEqual({ ok: true, value: { ok: true } });
+    expect([...mossaic.stores.keys()]).toEqual([account]);
+    // Not the tenant an OAuth deployment gives the same address.
+    expect(mossaic.stores.has(await accountIdFor({ SIGN_IN_PROVIDERS: 'google' }, email))).toBe(false);
+    carol.close();
   });
 
   test('a workspace token is refused at the boundary; the surface lists every Drive method', async () => {
