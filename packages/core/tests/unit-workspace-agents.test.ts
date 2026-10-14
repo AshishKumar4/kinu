@@ -203,8 +203,8 @@ describe('the Agents panel lists every agent in the workspace', () => {
     const { db, read } = workspace();
     const main = async () => (await read()).find((agent) => agent.key === 'main')?.activity;
 
-    db.query(`INSERT INTO device_consent_asks (consent_id, actor_id, device_id, device_label, method, command, workspace_name, created_at)
-      VALUES ('c1', NULL, 'd1', 'laptop', 'exec', 'bun test', 'kiln', ?)`).run(Date.now());
+    db.query(`INSERT INTO device_consent_asks (consent_id, actor_id, device_id, device_label, method, command, workspace_name, created_at, epoch)
+      VALUES ('c1', NULL, 'd1', 'laptop', 'exec', 'bun test', 'kiln', ?, 0)`).run(Date.now());
 
     expect(await main()).toBe('waiting');
 

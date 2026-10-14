@@ -150,6 +150,9 @@ export interface UserDevicesHost extends Pick<UserObjectHost, 'ctx' | 'env' | 'r
 /** The served build as the connect that opened a device's socket read it. */
 const SERVED_STAMP_KEY = 'devices.served_stamp';
 
+/** The account's device grant epoch: every revocation advances it, so no approval given before it answers a call. */
+const CONSENT_EPOCH_KEY = 'devices.consent_epoch';
+
 /** The owner's machines: tunnels, tokens, consents, tiers and requests. */
 export class UserDevices {
   // The reverse-WS tunnel from a user's machine terminates here, not on an agent, so every agent
@@ -1004,6 +1007,15 @@ export class UserDevices {
     );
   }
 
+  private consentEpoch(): number {
+    return v.parse(v.optional(v.number(), 0), this.host.ctx.storage.kv.get(CONSENT_EPOCH_KEY));
+  }
+
+  /** A binding gone: every approval given before now is void, so none restores what the owner revoked. */
+  private grantsRevoked(): void {
+    this.host.ctx.storage.kv.put(CONSENT_EPOCH_KEY, this.consentEpoch() + 1);
+  }
+
   /** Is this workspace bound to this device? Core's rule decides (`deviceConsentOutcome`): a standing binding, else the
    *  workspace's ask, which an unreachable workspace leaves unanswered rather than refused. */
   private checkDeviceConsent(check: DeviceConsentCheck): Effect.Effect<DeviceConsentOutcome, KinuError> {
@@ -1012,7 +1024,7 @@ export class UserDevices {
     const deviceLabel = this.deviceLabel(deviceId);
 
     const request: DeviceConsentRequest = {
-      deviceId, deviceLabel, method: action.method, command: action.command,
+      deviceId, deviceLabel, method: action.method, command: action.command, epoch: this.consentEpoch(),
       ...(workspaceName !== undefined && { workspaceName }), ...(actorId !== undefined && { actorId }),
     };
 
@@ -1058,6 +1070,7 @@ export class UserDevices {
 
     if (!agentName || !deviceId) return { ok: false };
     this.host.sqlx(`DELETE FROM device_consent WHERE agent_name = ? AND device_id = ?`, agentName, deviceId);
+    this.grantsRevoked();
     await this.devicesMoved();
 
     return { ok: true };
@@ -1326,6 +1339,7 @@ export class UserDevices {
     // A revoked device is unreachable; drop its grants so the owner's audited roster shows only live
     // permissions.
     this.host.sqlx(`DELETE FROM device_consent WHERE device_id = ?`, deviceId);
+    this.grantsRevoked();
     this._devices.close(deviceId, 'device revoked');
     this.deleteRevokedDeviceWithoutIncident(deviceId);
 

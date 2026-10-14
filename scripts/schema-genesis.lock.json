@@ -623,6 +623,7 @@
     "command TEXT NOT NULL",
     "workspace_name TEXT",
     "created_at INTEGER NOT NULL",
+    "epoch INTEGER NOT NULL",
     "status TEXT NOT NULL DEFAULT 'queued'",
     "decided_at INTEGER"
   ],

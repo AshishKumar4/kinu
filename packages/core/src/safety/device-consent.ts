@@ -84,10 +84,13 @@ export interface DeviceConsentRequest {
   readonly command: string;
   readonly workspaceName?: string;
   readonly actorId?: string;
+  /** The hub's grant epoch the call is made under, which every revocation advances: an approval given under an
+   *  earlier one answers none of the calls made under a later one. */
+  readonly epoch: number;
 }
 
 /** Carries the id the answer addresses, so a reloaded client can re-render its cards. */
-export interface PendingDeviceConsent extends DeviceConsentRequest {
+export interface PendingDeviceConsent extends Omit<DeviceConsentRequest, 'actorId' | 'epoch'> {
   readonly consentId: string;
   readonly createdAt: number;
 }
@@ -132,6 +135,8 @@ type DeviceConsentStatus = 'queued' | DeviceConsentAnswer;
 
 /** One ask: the card while it waits, then the owner's answer until the call it answers spends it. */
 export interface DeviceConsentAsk extends PendingDeviceConsent {
+  readonly actorId?: string;
+  readonly epoch: number;
   readonly status: DeviceConsentStatus;
   readonly decidedAt: number | null;
 }
@@ -146,6 +151,7 @@ export function initDeviceConsentAsksTable(execRaw: RawSqlExec): void {
     command         TEXT NOT NULL,
     workspace_name  TEXT,
     created_at      INTEGER NOT NULL,
+    epoch           INTEGER NOT NULL,
     status          TEXT NOT NULL DEFAULT 'queued',
     decided_at      INTEGER
   )`);
@@ -160,6 +166,7 @@ interface AskRow {
   command: string;
   workspace_name: string | null;
   created_at: number;
+  epoch: number;
   status: string;
   decided_at: number | null;
 }
@@ -174,6 +181,7 @@ function toAsk(r: AskRow): DeviceConsentAsk {
     method: r.method,
     command: r.command,
     createdAt: r.created_at,
+    epoch: r.epoch,
     status: v.parse(StatusSchema, r.status),
     decidedAt: r.decided_at,
     ...(r.workspace_name !== null && { workspaceName: r.workspace_name }),
@@ -183,7 +191,7 @@ function toAsk(r: AskRow): DeviceConsentAsk {
 
 /** The card a client renders: the ask without its answer. */
 function pendingOf(ask: DeviceConsentAsk): PendingDeviceConsent {
-  const { status: _status, decidedAt: _decidedAt, actorId: _actorId, ...pending } = ask;
+  const { status: _status, decidedAt: _decidedAt, actorId: _actorId, epoch: _epoch, ...pending } = ask;
 
   return pending;
 }
@@ -193,18 +201,23 @@ function pendingOf(ask: DeviceConsentAsk): PendingDeviceConsent {
 export class DeviceConsentStore {
   constructor(private readonly sql: SqlExecutor) {}
 
-  /** Waiting asks, oldest first, in raise order, so asks within one clock tick keep their order. */
+  /** Waiting asks, oldest first, in raise order, so asks within one clock tick keep their order. A retired agent's
+   *  would answer nobody: it can neither be told nor re-issue; the owner's own stand. */
   queued(): DeviceConsentAsk[] {
     return this.sql<AskRow>`
-      SELECT * FROM device_consent_asks WHERE status = 'queued' ORDER BY created_at ASC, rowid ASC`.map(toAsk);
+      SELECT c.* FROM device_consent_asks c LEFT JOIN workspace_actors a ON a.actor_id = c.actor_id
+      WHERE c.status = 'queued' AND (c.actor_id IS NULL OR (a.retiring_at IS NULL AND a.deleted_at IS NULL AND a.actor_id IS NOT NULL))
+      ORDER BY c.created_at ASC, c.rowid ASC`.map(toAsk);
   }
 
-  /** The newest ask of exactly this request; a changed device label is presentation metadata, not a new question. */
+  /** The newest ask of exactly this request, an approval only from its own epoch; a changed device label is
+   *  presentation metadata, not a new question. */
   standing(req: DeviceConsentRequest): DeviceConsentAsk | null {
     const [row] = this.sql<AskRow>`
       SELECT * FROM device_consent_asks
       WHERE device_id = ${req.deviceId} AND workspace_name IS ${req.workspaceName ?? null} AND actor_id IS ${req.actorId ?? null}
         AND method = ${req.method} AND command = ${req.command}
+        AND (status IN ('queued', 'deny') OR epoch = ${req.epoch})
       ORDER BY created_at DESC, rowid DESC LIMIT 1`;
 
     return row === undefined ? null : toAsk(row);
@@ -212,9 +225,9 @@ export class DeviceConsentStore {
 
   insert(ask: DeviceConsentAsk): void {
     void this.sql`INSERT INTO device_consent_asks
-      (consent_id, actor_id, device_id, device_label, method, command, workspace_name, created_at, status, decided_at)
+      (consent_id, actor_id, device_id, device_label, method, command, workspace_name, created_at, epoch, status, decided_at)
       VALUES (${ask.consentId}, ${ask.actorId ?? null}, ${ask.deviceId}, ${ask.deviceLabel}, ${ask.method},
-        ${ask.command}, ${ask.workspaceName ?? null}, ${ask.createdAt}, ${ask.status}, ${ask.decidedAt})`;
+        ${ask.command}, ${ask.workspaceName ?? null}, ${ask.createdAt}, ${ask.epoch}, ${ask.status}, ${ask.decidedAt})`;
     markStoreChanged(this.sql);
   }
 
@@ -229,19 +242,21 @@ export class DeviceConsentStore {
     return row === undefined ? null : toAsk(row);
   }
 
-  /** The call an approval answers spends it: whether this call won the row. */
-  spend(consentId: string): boolean {
+  /** The call an approval answers spends it, under the epoch it was given in: whether this call won the row. */
+  spend(consentId: string, epoch: number): boolean {
     const spent = this.sql<{ consent_id: string }>`
-      DELETE FROM device_consent_asks WHERE consent_id = ${consentId} AND status IN ('once', 'always') RETURNING consent_id`;
+      DELETE FROM device_consent_asks WHERE consent_id = ${consentId} AND status IN ('once', 'always') AND epoch = ${epoch}
+      RETURNING consent_id`;
 
     if (spent.length > 0) markStoreChanged(this.sql);
 
     return spent.length > 0;
   }
 
-  /** Denials that have stood their time; nothing else sweeps them. */
-  sweepDenials(now: number): void {
-    void this.sql`DELETE FROM device_consent_asks WHERE status = 'deny' AND decided_at <= ${now - DENIAL_STANDING_MS}`;
+  /** Denials that have stood their time, and approvals a revocation since made void; nothing else sweeps them. */
+  sweep(now: number, epoch: number): void {
+    void this.sql`DELETE FROM device_consent_asks
+      WHERE (status = 'deny' AND decided_at <= ${now - DENIAL_STANDING_MS}) OR (status IN ('once', 'always') AND epoch < ${epoch})`;
   }
 }
 
@@ -274,7 +289,7 @@ export class DeviceConsentRegistry {
    */
   ask(req: DeviceConsentRequest): DeviceConsentVerdict {
     const now = this.now();
-    this.deps.store.sweepDenials(now);
+    this.deps.store.sweep(now, req.epoch);
     const standing = this.deps.store.standing(req);
 
     if (standing?.status === 'queued') return 'queued';
@@ -282,7 +297,7 @@ export class DeviceConsentRegistry {
     if (standing?.status === 'deny') return 'denied';
 
     // A concurrent re-issue may win the row; this one then asks afresh.
-    if (standing !== null && this.deps.store.spend(standing.consentId)) return standing.status === 'always' ? 'always' : 'once';
+    if (standing !== null && this.deps.store.spend(standing.consentId, req.epoch)) return standing.status === 'always' ? 'always' : 'once';
     const ask: DeviceConsentAsk = { ...req, consentId: this.deps.newId(), createdAt: now, status: 'queued', decidedAt: null };
     // Row before announce: the id a surface hears about must be answerable when the notice lands.
     this.deps.store.insert(ask);

@@ -508,7 +508,8 @@ describe('durable device request ownership', () => {
 
   test('an exec issued inside a detached scope is the job\'s from the insert, not the turn\'s', async () => {
     const harness = await deviceHarness();
-    harness.consentDecision = 'always';
+    // Granted before the test: an agent's re-issue is a new call under a new request id, and this test names one.
+    harness.grantDevice(WORKSPACE, harness.deviceId);
     const requestId = nextDeviceRequestId();
 
     await harness.deviceCall(harness.workspace, 'exec', ['sleep 30'], {

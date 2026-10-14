@@ -63,7 +63,7 @@ describe('the orchestrator dynamic context reads its own planes', () => {
 
   test('a raised device consent waits on the user in the block, until they answer', async () => {
     const { agent } = orchestratorHarness();
-    const ask = { deviceId: 'dev-1', deviceLabel: 'device', method: 'shell', command: 'git push origin main' };
+    const ask = { deviceId: 'dev-1', deviceLabel: 'device', method: 'shell', command: 'git push origin main', epoch: 0 };
 
     expect(await agent.askDeviceConsent(ask)).toBe('queued');
     expect(await modelContext(agent)).toContain('git push origin main');

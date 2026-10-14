@@ -11,6 +11,7 @@ import type { WorkspaceRegistration } from '../../src/user/workspaces';
 import {
   DeviceConsentRegistry,
   DeviceConsentStore,
+  initWorkspaceActorTable,
   JsonValueSchema,
   type DeviceConsentRequest,
   type DeviceConsentVerdict,
@@ -453,6 +454,8 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     if (existing) return existing;
 
     const storage = new Database(':memory:');
+    // The workspace's own actors, which an ask's live-agent read joins: the harness's asks name none of them.
+    initWorkspaceActorTable(makeExecRaw(storage));
     initDeviceConsentAsksTable(makeExecRaw(storage));
     const store = new DeviceConsentStore(makeSql(storage));
     consentStores.set(name, store);
@@ -664,11 +667,17 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
         return await userDO.deviceRpc(...call);
       } catch (parked) {
         if (!(parked instanceof Error) || !parked.message.startsWith('NOT RUN')) throw parked;
-        // The answer, then the agent it woke re-issuing the call: the wake is the only way the agent learns of it.
+        // The answer, then the agent it woke re-issuing the call: the wake is the only way an agent learns of it, so an
+        // agent's call is re-issued only once a wake reached that agent. The owner's own call (no agent) is re-issued
+        // as the owner re-clicks it.
         const answered = answering.splice(0);
+        const wakesBefore = consentWakes.length;
 
         if (answered.length === 0) throw parked;
         await Promise.all(answered);
+        const asker = call[3]?.actorId;
+
+        if (asker !== undefined && !consentWakes.slice(wakesBefore).some((wake) => wake.actorId === asker)) throw parked;
 
         return await userDO.deviceRpc(...call);
       }

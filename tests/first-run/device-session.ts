@@ -35,7 +35,7 @@ import { tolerate } from '../../packages/core/src/obs/index';
 import { infraBoundary } from '@kinu.run/test-utils';
 import { AGENT_HOME } from '../../packages/cli/src/config';
 import { DAEMON_LOG_PATH, DEVICE_CONFIG_PATH } from '../../packages/cli/src/device-connect';
-import { type PublicExecutorResult, type PublicSessionResolution } from '../../evals/src/session';
+import { ExecutorCommandSchema, type PublicExecutorResult, type PublicSessionResolution } from '../../evals/src/session';
 import { webHeaders, type PublicWebIdentity } from '../../evals/src/workspace-roster';
 
 /** How much of a deployment's answer a finding carries. Enough to name the SQL
@@ -283,11 +283,12 @@ export async function grantDeviceAccess(
     return text;
   });
 
+  // Read as every device case reads a command: a refusal or a nonzero exit is not a run, whatever stdout says.
   const deviceCall = async (): Promise<{ ok: boolean; detail: string }> => {
-    const answer = v.parse(v.object({ result: v.object({ error: v.optional(v.string()), stdout: v.optional(v.string()) }) }),
-      JSON.parse(await call('executeInExecutor', deviceName === undefined ? ['device', 'true'] : ['device', 'true', deviceName]))).result;
+    const answer = readDeviceCommand(v.parse(v.object({ result: ExecutorCommandSchema }),
+      JSON.parse(await call('executeInExecutor', deviceName === undefined ? ['device', 'true'] : ['device', 'true', deviceName]))).result);
 
-    return { ok: answer.error === undefined, detail: answer.error ?? answer.stdout ?? '' };
+    return answer.kind === 'output' ? { ok: true, detail: answer.stdout } : { ok: false, detail: answer.text };
   };
 
   // The workspace's device transport serves a TTL-cached snapshot and its
