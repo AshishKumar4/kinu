@@ -23,9 +23,7 @@ describe('noteTerminalActivity refuses before it stamps', () => {
   test('a box the platform admitted nothing to stamps no interaction', async () => {
     const { box, container } = harness(TestBox);
     await container.stop();
-    container.containerUnavailable = new Error(
-      'there is no container instance that can be provided to this durable object',
-    );
+    container.containerUnavailable = new Error('There is no container instance that can be provided to this Durable Object, try again later');
 
     // The value is the refusal that survives the RPC boundary; the throw is the strict gate's.
     // Both shapes must name unreadiness, not some other failure.
