@@ -6,7 +6,7 @@ import { DROPPED_FILE_ARRIVED, PACED_SILENCE_MS, RECONNECT_STEPS } from '../../s
 import { liveRows } from '../../scripts/live-app-rows';
 
 const { observed, verdictOf, boot } = liveRows('live-app-turns', [
-  'live-indicator', 'opened-mid-turn', 'reconnect', 'answered', 'unsent-answer', 'dropped-file', 'cleared', 'provider-wait', 'state',
+  'live-indicator', 'opened-mid-turn', 'reconnect', 'answered', 'unsent-answer', 'dropped-file', 'cleared', 'state',
 ]);
 
 /** An answer keeps each step's text where it streamed: its steps drawn while it waits, the same blocks and then the
@@ -121,23 +121,5 @@ describe('Main clears only once the server has', () => {
     const cleared = verdictOf(observed.cleared, 'cleared');
 
     expect([cleared.closedWhenIdle, cleared.emptiedWhenIdle, cleared.emptyAfterReload]).toEqual([true, true, true]);
-  });
-});
-
-describe('a wait on the provider shows over the composer only while it holds a turn (#88)', () => {
-  test("a background call's wait, the workspace's logo drawn from Settings, shows nothing in its chat", () => {
-    expect(verdictOf(observed.providerWait, 'provider-wait').whileLogoWaited).toEqual([]);
-  });
-
-  test("a turn's own wait shows while it waits", () => {
-    expect(verdictOf(observed.providerWait, 'provider-wait').duringTurn.length).toBeGreaterThan(0);
-  });
-
-  test('its countdown never reads 0s', () => {
-    expect(verdictOf(observed.providerWait, 'provider-wait').duringTurn.filter((text) => /\b0s\b/u.test(text))).toEqual([]);
-  });
-
-  test('it is gone once the turn has answered', () => {
-    expect(verdictOf(observed.providerWait, 'provider-wait').afterTurn).toEqual([]);
   });
 });

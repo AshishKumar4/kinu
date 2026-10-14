@@ -12,6 +12,7 @@ import { appFontFile, SLATE_FONTS_PATH, SLATE_PAGE_PREAMBLE } from '@kinu.run/co
 import { SLATE_CLIENT_MODULE } from '@kinu.run/core/slates';
 import { detach } from '@kinu.run/core/obs';
 import { contrast, rgba, withGallery, type Rgba } from '../../scripts/gallery-harness';
+import { inspectorPageListed } from '../../scripts/product-flows';
 import { TEST_REQUIREMENTS } from '../../scripts/test-requirements';
 
 /** The answer's page as its author wrote it: a title, a heading, rows, and a paragraph that sets no colour. */
@@ -181,7 +182,8 @@ describe('an answer\'s page in the chat', () => {
         await page.hover(CARD);
         await page.click(`${CARD} button[aria-label="Save redemptions as a slate"]`);
         await page.waitForSelector(`${CARD} [data-slate-saved="coupon-redemptions"]`);
-        await page.waitForSelector('nav[aria-label="Pages"] button[aria-label="Coupon redemptions"]');
+        // The saved slate is among the bar's pages: its tab, or the bar's opener of the pages without room.
+        await page.waitForSelector(inspectorPageListed('Coupon redemptions'));
 
         await page.hover(CARD);
         await page.click(`${CARD} [data-slate-saved="coupon-redemptions"]`);

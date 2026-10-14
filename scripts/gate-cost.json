@@ -1106,6 +1106,18 @@
       "exit": 0,
       "machine": "linux x64, AMD EPYC (8 threads)"
     },
+    "bun test --timeout=0 tests/browser/live-app-provider-wait.test.ts": {
+      "wallSeconds": 218.77,
+      "cpuSeconds": 343.98,
+      "peakRssMb": 4735.29,
+      "peakRunnable": 19,
+      "peakCpuThreads": 4.61,
+      "meanThreads": 1.57,
+      "samples": 725,
+      "loadAtStart": 0.23,
+      "exit": 0,
+      "machine": "linux x64, AMD EPYC (8 threads)"
+    },
     "bun run test:workerd:cf-wide": {
       "wallSeconds": 249.51,
       "cpuSeconds": 248.38,

@@ -6,7 +6,7 @@
  *
  * `--font-ui` and `--font-display` are the same Schibsted Grotesk stack: hierarchy is set with weight, not typeface
  * swaps, and they stay two tokens so the roles can diverge without touching call sites. `--font-serif` is Newsreader,
- * read only by the brand mark. `--font-mono` also sets every eyebrow and section label.
+ * which no app page sets and a slate may. `--font-mono` also sets every eyebrow and section label.
  */
 
 /** Where the app's own pages read the faces, and where a preview host serves them to a slate's page. */

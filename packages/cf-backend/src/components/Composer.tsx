@@ -4,16 +4,17 @@
  */
 import { detach } from "@kinu.run/core/obs";
 import { Effect } from "effect";
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { InputArea, Loader } from "@cloudflare/kumo";
 import {
-  StopIcon, GitBranchIcon, ArrowBendUpRightIcon, ArrowsClockwiseIcon, ArrowUpIcon,
-  WarningCircleIcon, InfoIcon, CheckCircleIcon,
+  StopIcon, GitBranchIcon, ArrowBendUpRightIcon, ArrowsClockwiseIcon, ArrowUpIcon, CaretDownIcon, CaretRightIcon, CaretUpIcon,
+  CheckIcon, CopyIcon, WarningCircleIcon, InfoIcon, CheckCircleIcon, XIcon, type Icon,
 } from "@phosphor-icons/react";
-import { fmtSpan, type TurnLiveness, type WorkMode } from "@kinu.run/core";
+import { fmtSpan, providerName, type TurnLiveness, type WorkMode } from "@kinu.run/core";
 import { AttachButton, AttachmentTray, pasteAttachments, type AttachmentsControl } from "@/components/Attachments";
 import type { WorkspaceNotice } from "@kinu.run/core";
 import { composing } from "@/components/ui/form";
+import type { ProviderWaitShown } from "@/hooks/use-chat-owner";
 
 const CHAT_MODES: readonly WorkMode[] = ["build", "plan"];
 
@@ -22,78 +23,167 @@ const RECOVER_LABEL = { idle: "Recover", busy: "Recovering…" } as const;
 /** `progress` is `neutral` plus a spinner, with no tint of its own. */
 type NoticeTone = "danger" | "warning" | "info" | "success" | "neutral" | "progress";
 
+/**
+ * One thing above the prompt box that is true now: what failed, waits or changed, with its one action. One line; a
+ * notice with more to say opens into a card of the same edge.
+ */
 export interface ComposerNotice {
   id: string;
   tone: NoticeTone;
+  /** Who or what it is about, in its own weight: a provider, a model, a load. */
   title?: string;
   text?: string;
-  /** Raw technical string, shown only inside the "Technical details" disclosure. */
-  detail?: string;
-  action?: { label: string; icon?: ReactNode; onClick: () => void };
+  /** A count or time beside the words, in the quiet ink: "retrying in 8s · 2 of 5". */
+  dim?: string;
+  /** What it says once opened: one line of what happened, the facts it rests on, and the raw words behind them. */
+  detail?: { summary?: string; facts?: readonly (readonly [string, string])[]; raw?: string };
+  action?: { label: string; icon?: ReactNode; onClick: () => void; disabled?: boolean };
   onDismiss?: () => void;
+  /** Data attributes the flows find it by. */
+  hooks?: Readonly<Record<`data-${string}`, string>>;
 }
 
-const NOTICE_TONE = {
-  danger:   { cls: "p-notice-danger",  icon: <WarningCircleIcon size={13} className="shrink-0" /> },
-  warning:  { cls: "p-notice-warning", icon: <WarningCircleIcon size={13} className="shrink-0" /> },
-  info:     { cls: "p-notice-info",    icon: <InfoIcon size={13} className="shrink-0" /> },
-  success:  { cls: "p-notice-success", icon: <CheckCircleIcon size={13} className="shrink-0" /> },
-  neutral:  { cls: "p-notice-neutral", icon: <InfoIcon size={13} className="shrink-0" /> },
-  progress: { cls: "p-notice-neutral", icon: <Loader size="sm" /> },
-} satisfies Record<NoticeTone, { cls: string; icon: ReactNode }>;
+const NOTICE_MARK = {
+  danger: { tone: "danger", icon: WarningCircleIcon },
+  warning: { tone: "warning", icon: WarningCircleIcon },
+  info: { tone: "info", icon: InfoIcon },
+  success: { tone: "success", icon: CheckCircleIcon },
+  neutral: { tone: "quiet", icon: InfoIcon },
+  progress: { tone: "quiet", icon: null },
+} satisfies Record<NoticeTone, { tone: string; icon: Icon | null }>;
 
-function Notice({ notice }: { notice: ComposerNotice }) {
-  const { tone, title, text, detail, action, onDismiss } = notice;
-  const { cls, icon } = NOTICE_TONE[tone];
-  const [expanded, setExpanded] = useState(false);
-  // SSR has no layout: guess by length, then measure on the client.
-  const [overflows, setOverflows] = useState(() => (text?.length ?? 0) > 2 * 60);
-  const textRef = useRef<HTMLSpanElement>(null);
+/** Past this many, the oldest fold into one count. */
+const SHOWN_NOTICES = 3;
 
-  useLayoutEffect(() => {
-    const el = textRef.current;
-
-    if (el) setOverflows(el.scrollHeight > el.clientHeight);
-  }, [text]);
+function NoticeMark({ tone }: { tone: NoticeTone }) {
+  const { tone: ink, icon: Glyph } = NOTICE_MARK[tone];
 
   return (
-    <div className={`flex items-start gap-2 px-2.5 py-1.5 p-meta ${cls}`}
-      role={tone === "danger" ? "alert" : "status"}>
-      <span className="mt-px shrink-0">{icon}</span>
-      <span className="min-w-0 flex-1">
-        {title && <span className="block font-medium">{title}</span>}
-        {text && <span ref={textRef} className={`block ${expanded ? "" : "line-clamp-2"}`} title={text}>{text}</span>}
-        {text && overflows && (
-          <button type="button" onClick={() => setExpanded((v) => !v)} aria-expanded={expanded}
-            className="mt-0.5 cursor-pointer p-meta p-text-3 underline decoration-dotted underline-offset-2 hover:p-text-2 focus-visible:ring-1 focus-visible:ring-[var(--c-accent)] focus-visible:outline-none">
-            {expanded ? "Show less" : "Expand"}
-          </button>
+    <span className="p-pill-mark" data-tone={ink}>
+      {Glyph === null ? <Loader size="sm" /> : <Glyph size={15} weight="fill" aria-hidden />}
+    </span>
+  );
+}
+
+function Notice({ notice }: { notice: ComposerNotice }) {
+  const { tone, title, text, dim, detail, action, onDismiss, hooks } = notice;
+  const [open, setOpen] = useState(false);
+  // A line cut short opens like a notice with details: its words wrap in the card.
+  const [cut, setCut] = useState(false);
+  const words = useRef<HTMLSpanElement>(null);
+
+  useLayoutEffect(() => {
+    const line = words.current;
+
+    if (line !== null) setCut([...line.children].some((part) => part.scrollWidth > part.clientWidth));
+  }, [text, dim, open]);
+
+  const opens = detail !== undefined || cut;
+  const role = tone === "danger" ? "alert" : "status";
+
+  const actionButton = action && (
+    <button type="button" onClick={action.onClick} disabled={action.disabled} className="p-pill-action disabled:opacity-50">
+      {action.icon}{action.label}
+    </button>
+  );
+
+  const dismiss = onDismiss && (
+    <button type="button" onClick={onDismiss} aria-label="Dismiss" className="p-pill-icon"><XIcon size={13} weight="bold" /></button>
+  );
+
+  if (open) {
+    return (
+      <div className="p-pill" data-tone={tone} data-notice={tone} data-open role={role} {...hooks}>
+        <div className="p-pill-head">
+          <NoticeMark tone={tone} />
+          <span className="p-pill-body">
+            {title && <span className="p-pill-source">{title}</span>}
+            {text && <span className="p-pill-text">{text}</span>}
+            {dim && <span className="p-pill-dim">{dim}</span>}
+          </span>
+          <span className="p-pill-controls">
+            <button type="button" className="p-pill-icon" aria-label="Show less" aria-expanded onClick={() => setOpen(false)}>
+              <CaretUpIcon size={13} weight="bold" />
+            </button>
+            {dismiss}
+          </span>
+        </div>
+        {detail?.summary && <p className="mt-1 ml-6 p-row-text p-text-3">{detail.summary}</p>}
+        {detail?.facts && detail.facts.length > 0 && (
+          <dl className="p-pill-facts">
+            {detail.facts.map(([label, value]) => <Fragment key={label}><dt>{label}</dt><dd>{value}</dd></Fragment>)}
+          </dl>
         )}
-        {detail && (
-          <details className="mt-0.5">
-            <summary className="cursor-pointer underline decoration-dotted underline-offset-2 transition-colors hover:p-text hover:decoration-solid">Technical details</summary>
-            <pre className="mt-1 max-h-32 overflow-auto font-mono whitespace-pre-wrap break-all">{detail}</pre>
+        {detail?.raw && (
+          <details className="p-pill-raw">
+            <summary><CaretRightIcon size={10} weight="bold" />Raw response</summary>
+            <pre className="p-pill-detail">{detail.raw}</pre>
           </details>
         )}
+        {(detail?.raw !== undefined || action !== undefined) && (
+          <div className="p-pill-foot">
+            {detail?.raw && <CopyButton text={detail.raw} />}
+            {actionButton}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-pill" data-tone={tone} data-notice={tone} role={role} {...hooks}>
+      <NoticeMark tone={tone} />
+      <span ref={words} className="p-pill-body">
+        {title && <span className="p-pill-source">{title}</span>}
+        {text && <span className="p-pill-text">{text}</span>}
+        {dim && <span className="p-pill-dim">{dim}</span>}
       </span>
-      {action && (
-        <button type="button" onClick={action.onClick}
-          className="p-btn-quiet inline-flex shrink-0 cursor-pointer items-center gap-1 px-2 py-0.5">
-          {action.icon}{action.label}
+      {opens && (
+        <button type="button" className="p-pill-icon" aria-label="Show more" aria-expanded={false} onClick={() => setOpen(true)}>
+          <CaretDownIcon size={13} weight="bold" />
         </button>
       )}
-      {onDismiss && (
-        <button type="button" onClick={onDismiss} aria-label="Dismiss"
-          className="p-btn-ghost inline-flex shrink-0 cursor-pointer items-center p-1">
-          <span aria-hidden className="text-[13px] leading-none">×</span>
-        </button>
-      )}
+      {actionButton}
+      {dismiss}
     </div>
   );
 }
 
-/** Who a provider's wait is on, and for how long, until the wait ends. `untilMs` is this browser's clock. */
-export function useProviderWaitNotice(wait: { provider: string; untilMs: number } | null): ComposerNotice[] {
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+
+  return (
+    <button type="button" className="p-pill-action !bg-transparent p-text-3"
+      onClick={() => detach(Effect.promise(async () => {
+        await navigator.clipboard.writeText(text);
+        setCopied(true);
+      }))}>
+      {copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}{copied ? "Copied" : "Copy"}
+    </button>
+  );
+}
+
+/** The notices, newest nearest the prompt box; past {@link SHOWN_NOTICES}, the oldest wait behind one count. */
+function Notices({ notices }: { notices: readonly ComposerNotice[] }) {
+  const [all, setAll] = useState(false);
+  const folded = all ? 0 : Math.max(0, notices.length - SHOWN_NOTICES);
+
+  if (notices.length === 0) return null;
+
+  return (
+    <div className="p-pills" aria-label="Notices">
+      {folded > 0 && (
+        <button type="button" className="p-pill-more" onClick={() => setAll(true)}>
+          <CaretUpIcon size={11} weight="bold" />{folded} more
+        </button>
+      )}
+      {notices.slice(folded).map((n) => <Notice key={n.id} notice={n} />)}
+    </div>
+  );
+}
+
+/** Who a provider's wait is on, and for how long, until the wait ends. */
+export function useProviderWaitNotice(wait: ProviderWaitShown | null): ComposerNotice[] {
   const [now, setNow] = useState(Date.now);
 
   useEffect(() => {
@@ -107,7 +197,9 @@ export function useProviderWaitNotice(wait: { provider: string; untilMs: number 
 
       setNow(at);
 
-      if (left > 0) tick = window.setTimeout(count, left % 1_000 || 1_000);
+      const partial = left % 1_000;
+
+      if (left > 0) tick = window.setTimeout(count, partial === 0 ? 1_000 : partial);
     };
 
     count();
@@ -119,10 +211,18 @@ export function useProviderWaitNotice(wait: { provider: string; untilMs: number 
 
   if (wait === null || left <= 0) return [];
 
-  return [{ id: "provider-wait", tone: "progress", text: `Waiting on ${wait.provider} · retrying in ${fmtSpan(Math.ceil(left / 1_000) * 1_000)}` }];
+  const of = wait.retry === undefined || wait.retries === undefined ? "" : ` · ${String(wait.retry)} of ${String(wait.retries)}`;
+
+  return [{
+    id: "provider-wait", tone: "progress", title: providerName(wait.provider), text: "asked to wait",
+    dim: `retrying in ${fmtSpan(Math.ceil(left / 1_000) * 1_000)}${of}`,
+  }];
 }
 
-/** Neither tone disables the composer; that belongs to the socket. */
+/**
+ * What failed to load, why in the reasons' own words, and what still works in the quiet ink: one line, which opens
+ * when it is cut. Neither tone disables the composer; that belongs to the socket.
+ */
 export function workspaceLoadNotice(notice: WorkspaceNotice, onRetry: () => void): ComposerNotice {
   const mapped: ComposerNotice = {
     id: "load",
@@ -130,9 +230,9 @@ export function workspaceLoadNotice(notice: WorkspaceNotice, onRetry: () => void
     title: notice.title,
   };
 
-  if (notice.scope !== "") mapped.text = notice.scope;
+  if (notice.detail !== "") mapped.text = notice.detail;
 
-  if (notice.detail !== "") mapped.detail = notice.detail;
+  if (notice.scope !== "") mapped.dim = notice.scope;
 
   if (notice.retry !== null) mapped.action = { label: notice.retry, onClick: onRetry };
 
@@ -222,11 +322,7 @@ export function Composer({
       onPaste={(e) => {
         if (attachments) pasteAttachments(e, attachments, (text) => onValueChange(value === "" ? text : `${value}\n${text}`));
       }}>
-      {notices && notices.length > 0 && (
-        <div className="mb-2 space-y-1.5">
-          {notices.map((n) => <Notice key={n.id} notice={n} />)}
-        </div>
-      )}
+      {notices && <Notices notices={notices} />}
 
       {attention}
 

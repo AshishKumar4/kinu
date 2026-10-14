@@ -20,6 +20,8 @@ export const ProviderWaitSchema = v.object({
   modelId: v.optional(v.string()),
   waitMs: v.number(),
   attempt: v.number(),
+  retry: v.optional(v.number()),
+  retries: v.optional(v.number()),
   status: v.optional(v.number()),
   source: v.picklist(PROVIDER_WAIT_SOURCES),
 });

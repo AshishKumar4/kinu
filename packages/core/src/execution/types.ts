@@ -126,6 +126,8 @@ export interface ExecutorStatus {
   sandbox?: DeviceSandboxStatus;
   /** The sizes `computer.resize` offers; absent for every other environment. */
   sizes?: SandboxSizes;
+  /** The size of the desktop `computer.screenshot` shows; absent for every other environment, and a computer without one. */
+  screen?: { readonly width: number; readonly height: number };
   /** Each live machine's segment under `/pc`, the name its `<name>://` references take; the device fleet only. */
   mounts?: string[];
 }

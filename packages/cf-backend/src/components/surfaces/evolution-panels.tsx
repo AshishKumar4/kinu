@@ -1,11 +1,11 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { Loader } from "@cloudflare/kumo";
-import { DatabaseIcon, GaugeIcon } from "@phosphor-icons/react";
-import { scoreInterval, type QualityDay } from "@kinu.run/core";
+import { DatabaseIcon } from "@phosphor-icons/react";
+import { scoreInterval, type QualityDay, type QualityWindow } from "@kinu.run/core";
 import type { Rpc } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
-import { EmptyState, Metric } from "./shared";
+import { EmptyState } from "./shared";
 
 interface GepaRunRow { runId: string; target: string; startedAt: number; status: string; winnerId: string | null; iterations: number; metricCalls: number }
 
@@ -101,12 +101,20 @@ function GepaRunCandidates({ rpc, runId, pick }: { rpc: Rpc; runId: string; pick
 }
 
 
-// Satisfaction per day (`getQuality`, evolution/ratings.ts): the mean rating 1-5 with its 95% interval. `moved`: its
-// `reads_changed` count.
+/** A trend needs this many rated days to say anything. */
+const TREND_DAYS = 3;
+
+/** How it is doing: the last seven UTC days summed as core answers them (`getQualityWindow`), and the last thirty, one
+ *  column a day, once enough of them were rated. `moved`: `getQuality`'s `reads_changed` count, which both reads track. */
 export function QualityView({ rpc, moved }: { rpc: Rpc; moved: number }) {
-  const load = useCallback(() => rpc<QualityDay[]>("getQuality", [30]), [rpc]);
+  const load = useCallback(async () => {
+    const [week, days] = await Promise.all([rpc<QualityWindow>("getQualityWindow", [7]), rpc<QualityDay[]>("getQuality", [30])]);
+
+    return { week, days };
+  }, [rpc]);
+
   const { resource, reload } = useAsyncResource(load);
-  const days = lastValue(resource);
+  const read = lastValue(resource);
   const readMoved = useRef(moved);
 
   useEffect(() => {
@@ -115,56 +123,39 @@ export function QualityView({ rpc, moved }: { rpc: Rpc; moved: number }) {
     reload();
   }, [moved, reload]);
 
-  if (days === null) {
-    if (resource.status === "error") return <LoadFailure what="the quality history" message={resource.message} onRetry={reload} />;
+  if (read === null) {
+    if (resource.status === "error") return <LoadFailure what="how it's doing" message={resource.message} onRetry={reload} />;
 
-    return <div className="flex justify-center py-8" role="status"><Loader size="sm" /><span className="sr-only">Loading quality history</span></div>;
+    return <div className="flex justify-center py-8" role="status"><Loader size="sm" /><span className="sr-only">Loading how it's doing</span></div>;
   }
 
-  const rated = days.filter((day) => day.rated > 0);
+  const { week, days } = read;
+  const ratedDays = days.filter((day) => day.rated > 0).length;
 
-  if (rated.length === 0) {
-    return <EmptyState icon={<GaugeIcon size={28} />} title="No rated turns yet" hint="A turn is rated from your reply to it, or by your thumbs." />;
-  }
+  if (ratedDays === 0) return <p className="p-row-text p-text-3">No rated turns yet. Your reply to a turn rates it, and so does a thumb.</p>;
 
-  const week = days.slice(-7);
-  const weekScores = week.reduce((sum, day) => sum + day.satisfaction.mean * day.rated, 0);
-  const weekRated = week.reduce((sum, day) => sum + day.rated, 0);
-  const weekTurns = week.reduce((sum, day) => sum + day.turns, 0);
-  const weekThumbs = week.reduce((sum, day) => sum + day.thumbs, 0);
-  const weekCorrected = week.reduce((sum, day) => sum + day.corrected.mean * day.rated, 0);
+  const corrected = Math.round(week.corrected.mean * week.rated);
+  const thumbs = week.thumbs > 0 ? `, ${String(week.thumbs)} by your thumbs` : "";
 
   return (
-    <div className="space-y-4 animate-fade-in overflow-y-auto h-full">
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-        <Metric label="Satisfaction, 7 days" value={weekRated === 0 ? "—" : `${(weekScores / weekRated).toFixed(2)} / 5`} />
-        <Metric label="Corrected" value={weekRated === 0 ? "—" : `${Math.round((weekCorrected / weekRated) * 100)}%`} />
-        <Metric label="Turns rated" value={`${weekRated} of ${weekTurns}`} />
-        <Metric label="By your thumbs" value={`${weekThumbs}`} />
-      </div>
-
-      <section className="space-y-1.5">
-        <div className="p-eyebrow">Satisfaction per day</div>
-        <SatisfactionSparkline days={rated} />
-      </section>
-
-      <section className="space-y-1">
-        {[...rated].reverse().map((day) => (
-          <div key={day.day} className="flex items-center gap-2 p-meta"
-            title={`95% CI ${day.satisfaction.lo.toFixed(2)}–${day.satisfaction.hi.toFixed(2)} over ${day.rated} rated turns`}>
-            <span className="p-text-3 shrink-0 w-20 tabular-nums">{day.day}</span>
-            <div className="flex-1 h-2 rounded-full p-fill relative overflow-hidden">
-              <div className="absolute inset-y-0 p-dot-info opacity-40" style={{
-                left: `${toUnit(day.satisfaction.lo) * 100}%`,
-                width: `${Math.max(1, (toUnit(day.satisfaction.hi) - toUnit(day.satisfaction.lo)) * 100)}%`,
-              }} />
-              <div className={`absolute inset-y-0 w-0.5 ${toneOf(day.satisfaction.mean)}`} style={{ left: `${toUnit(day.satisfaction.mean) * 100}%` }} />
-            </div>
-            <span className="font-mono p-text-3 tabular-nums shrink-0 w-10 text-right">{day.satisfaction.mean.toFixed(2)}</span>
-            <span className="hidden sm:inline p-text-3 tabular-nums shrink-0 w-24 text-right">{day.rated}/{day.turns} rated · {Math.round(day.corrected.mean * 100)}% corrected</span>
-          </div>
-        ))}
-      </section>
+    <div className="space-y-3 animate-fade-in" data-quality-verdict>
+      {week.rated === 0 ? (
+        <p className="p-row-text p-text-3">No rated turns in the last 7 days.</p>
+      ) : (
+        <div className="flex items-baseline gap-2.5" title={`95% interval ${week.satisfaction.lo.toFixed(2)}–${week.satisfaction.hi.toFixed(2)}, ${week.from} to ${week.to} (UTC)`}>
+          <span className={`size-2 shrink-0 self-center rounded-full ${toneOf(week.satisfaction.mean)}`} aria-hidden />
+          <span className="shrink-0 whitespace-nowrap text-[20px] font-semibold leading-none tabular-nums p-text">
+            {week.satisfaction.mean.toFixed(1)}<span className="text-[13px] font-normal p-text-3"> / 5</span>
+          </span>
+          <span className="min-w-0 p-meta p-text-3">
+            over the last 7 days · {week.rated} of {week.turns} {week.turns === 1 ? "turn" : "turns"} rated{thumbs}
+            {corrected > 0 ? ` · corrected ${String(corrected)} ${corrected === 1 ? "time" : "times"}` : ""}
+          </span>
+        </div>
+      )}
+      {ratedDays < TREND_DAYS
+        ? <p className="p-meta p-text-4">A trend shows once three days have ratings.</p>
+        : <SatisfactionDays days={days} />}
     </div>
   );
 }
@@ -182,30 +173,46 @@ function toneOf(score: number): string {
   return "p-dot-danger";
 }
 
-// Non-scaling stroke keeps the path crisp under preserveAspectRatio="none".
-function SatisfactionSparkline({ days }: { days: QualityDay[] }) {
-  const W = 100, H = 32, pad = 2;
-  const n = days.length;
-  const x = (i: number) => n <= 1 ? W / 2 : pad + (i / (n - 1)) * (W - 2 * pad);
-  const y = (score: number) => pad + (1 - toUnit(score)) * (H - 2 * pad);
-  const line = days.map((day, i) => `${x(i).toFixed(2)},${y(day.satisfaction.mean).toFixed(2)}`).join(" ");
+const TONE_INK = new Map([["p-dot-success", "var(--c-success)"], ["p-dot-warning", "var(--c-warning)"], ["p-dot-danger", "var(--c-danger)"]]);
 
-  const band = [
-    ...days.map((day, i) => `${x(i).toFixed(2)},${y(day.satisfaction.hi).toFixed(2)}`),
-    ...[...days].reverse().map((day, i) => `${x(n - 1 - i).toFixed(2)},${y(day.satisfaction.lo).toFixed(2)}`),
-  ].join(" ");
+/** The window's UTC days, one column each: a rated day's mean as a dot over its interval, an unrated day as a tick. */
+function SatisfactionDays({ days }: { days: readonly QualityDay[] }) {
+  const at = (score: number): string => `${String((1 - toUnit(score)) * 100)}%`;
+  const label = (day: string): string => new Date(`${day}T12:00:00Z`).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
 
   return (
-    <div className="rounded-lg border p-border p-surface p-2">
-      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="w-full h-24">
-        {n > 1 && <polygon points={band} fill="var(--c-accent)" opacity={0.14} />}
-        {n > 1 && <polyline points={line} fill="none" stroke="var(--c-accent)" strokeWidth={1} vectorEffect="non-scaling-stroke" />}
-        {days.map((day, i) => (
-          <circle key={day.day} cx={x(i)} cy={y(day.satisfaction.mean)} r={1.4} fill="var(--c-accent)" vectorEffect="non-scaling-stroke">
-            <title>{`${day.day} · ${day.satisfaction.mean.toFixed(2)} / 5 (95% CI ${day.satisfaction.lo.toFixed(2)}–${day.satisfaction.hi.toFixed(2)}) · ${day.rated} rated`}</title>
-          </circle>
-        ))}
-      </svg>
+    <div className="p-card px-3 pt-3 pb-2">
+      <div className="grid grid-cols-[14px_minmax(0,1fr)] gap-2">
+        <div className="relative h-24 p-annotation p-text-4" aria-hidden>
+          <span className="absolute top-0 -translate-y-1/2">5</span>
+          <span className="absolute top-1/2 -translate-y-1/2">3</span>
+          <span className="absolute bottom-0 translate-y-1/2">1</span>
+        </div>
+        <div className="relative h-24">
+          <div className="absolute inset-x-0 top-1/2 border-t border-dashed border-[var(--c-dash)]" />
+          <div className="absolute inset-x-0 bottom-0 border-t p-border" />
+          <div className="absolute inset-0 grid" style={{ gridTemplateColumns: `repeat(${String(days.length)}, minmax(0, 1fr))` }}>
+            {days.map((day) => (
+              <div key={day.day} className="relative"
+                title={day.rated === 0 ? `${day.day}: no rated turns` : `${day.day}: ${day.satisfaction.mean.toFixed(2)} / 5 (95% interval ${day.satisfaction.lo.toFixed(2)}–${day.satisfaction.hi.toFixed(2)}) · ${String(day.rated)} of ${String(day.turns)} rated`}>
+                {day.rated === 0 ? (
+                  <span className="absolute bottom-0 left-1/2 h-1 w-px -translate-x-1/2 bg-[var(--c-border-strong)]" />
+                ) : (
+                  <>
+                    <span className="absolute left-1/2 w-px -translate-x-1/2 opacity-50"
+                      style={{ top: at(day.satisfaction.hi), bottom: `calc(100% - ${at(day.satisfaction.lo)})`, background: TONE_INK.get(toneOf(day.satisfaction.mean)) }} />
+                    <span className="absolute left-1/2 size-[7px] -translate-x-1/2 -translate-y-1/2 rounded-full"
+                      style={{ top: at(day.satisfaction.mean), background: TONE_INK.get(toneOf(day.satisfaction.mean)) }} />
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className="mt-1.5 flex justify-between pl-[22px] p-annotation p-text-4">
+        <span>{label(days[0]?.day ?? "")}</span><span>{label(days.at(-1)?.day ?? "")}</span>
+      </div>
     </div>
   );
 }

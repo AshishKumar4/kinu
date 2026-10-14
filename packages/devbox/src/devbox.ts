@@ -2,7 +2,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
 import { Files, SandboxFileError } from '@cloudflare/sandbox';
-import { Processes, isProcessLive, showName, CONTAINER_TRUST_ENV, END_TREE } from "./processes";
+import { Processes, isProcessLive, showName, CONTAINER_ENV, END_TREE } from "./processes";
 import { nativeStartClock } from './native-clock';
 import type { DevboxExecOptions, ExecResult, ReadOptions, FileResult, ListFilesOptions, FileMetadata, GatewayBindings } from './contracts';
 import { listFiles as readDirectory } from './file-listing';
@@ -18,10 +18,18 @@ import {
 import artifact from '../block-lower/upstream.json';
 import { ContainerRoutes, type OutboundPolicy } from './gateway';
 import { terminalSocket, resetTerminal } from './terminal';
+import {
+  FIRST_SESSION, SESSIONS_KEY, SESSIONS_READ, SessionNameSchema, SessionRecordsSchema, mergeSessions, newSessionId, newSessionName,
+  parseSessionsRead, type SessionRecord, type TerminalSession,
+} from './sessions';
 import { bridgeSockets } from './socket-bridge';
-import { DESKTOP_PORT, DESKTOP_START } from './desktop';
+import { DESKTOP_CHECK, DESKTOP_PORT } from './desktop';
+import {
+  DESKTOP_ACTION_MS, DESKTOP_CHECK_MS, DesktopLease, DesktopRequestSchema, SCREENSHOT, actionBoundMs, offScreen, pngSize, watchArgv, xdotoolOf,
+  type DesktopAnswer, type DesktopRequest, type DesktopScreen,
+} from './desktop-input';
 import { LABEL_LIMIT, LABEL_NAME, ZoneSchema, previewAddress, type PreviewAddress } from './preview';
-import { Deferred, Effect, Result } from 'effect';
+import { Deferred, Effect, Result, Semaphore } from 'effect';
 
 import {
   DEFAULT_DEVBOX_POLICY,
@@ -35,11 +43,11 @@ import {
   admissionStep,
   classifyRecovery,
   isCapacityRefusal,
-  isTerminalRecovery,
   parseRecoveryRow,
   quiesceStep,
   recoveryStep,
   restartPlan,
+  waitingCanChange,
   type DevboxIncident,
   type DevboxPolicy,
   type IncidentDisposition,
@@ -189,6 +197,9 @@ const DEFAULT_SIZE_KEY = 'devbox:default-size';
 const RUNNING_SIZE_KEY = 'devbox:running-size';
 
 const START_REFUSED_KEY = 'devbox:start-refused';
+
+/** How long the terminal sessions' read may take: it measured 150 ms from the workspace with eight sessions (D90). */
+const SESSIONS_READ_MS = 5_000;
 
 const DISK_STATE_KEY = 'devbox:disk-chain';
 
@@ -356,6 +367,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   /** Set by `destroy`, cleared by a caller or a host (D36). */
   #closed = false;
   #teardowns = 0;
+  /** The desktop check in progress, which the owner's pane and every agent action await (D89): one run at a time. */
+  #desktopCheck: Deferred.Deferred<DesktopScreen, DevboxError> | undefined;
+  /** Agents' desktop actions run one at a time, in arrival order. */
+  readonly #desktopTurns = Semaphore.makeUnsafe(1);
+  readonly #desktopLease = new DesktopLease();
   /** Opened by the attempt on its hook; every phase stamp reads it until the attempt settles.
    *  Memory only: a witness needing stamps past a reset keeps them via `onRestorePhase`. */
   #phaseClock: RestoreClock | undefined;
@@ -402,10 +418,14 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     this.#activate();
   }
 
-  /** Constructor work is two synchronous storage reads, so no event waits on it; it does not yet
+  /** Constructor work is synchronous storage, so no event waits on it; it does not yet
    *  have control-port proof. */
   #activate(): void {
     if (this.ctx.container?.running !== true) return;
+    const parked = this.ctx.storage.kv.get<SettledRestoration>(SETTLED_KEY);
+
+    // A park made under another deploy is lifted: that deploy may be the change its refusal waits on (D94).
+    if (parked?.phase === 'unattached' && !parked.retry && parked.version !== this.#version()) this.ctx.storage.kv.delete(SETTLED_KEY);
     this.#adoptionPending = this.#durableClaim() !== undefined;
     const settled = this.ctx.storage.kv.get<SettledRestoration>(SETTLED_KEY);
 
@@ -952,7 +972,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     const generation = this.#generation;
 
     if (restoration.phase !== 'unstarted') {
-      await this.ctx.storage.put(SETTLED_KEY, restoration);
+      // A park keeps the deploy it was made under (D94).
+      await this.ctx.storage.put(SETTLED_KEY, restoration.phase === 'unattached' && !restoration.retry ? { ...restoration, version: this.#version() } : restoration);
     } else {
       await this.ctx.storage.delete(SETTLED_KEY);
     }
@@ -1251,7 +1272,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   #startInputs(): StartInputs {
-    return { size: this.#size(), store: this.#bucket() !== undefined, internet: this.enableInternet };
+    return { size: this.#size(), store: this.#bucket() !== undefined, version: this.#version(), internet: this.enableInternet };
+  }
+
+  #version(): string | null {
+    return this.workerVersion ?? null;
   }
 
   #refusedStart(): string | undefined {
@@ -1295,7 +1320,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }
   }
 
-  /** An admission that did not start: refused once if it would fail the same way again (D47), else retried. */
+  /** An admission that did not start: retried only where waiting can change the answer, else parked once (D94, amending
+   *  D47's terminal classes). */
   async #refuseAdmission(
     { generation, since, startsContainer, inputs }: { readonly generation: number; readonly since: number; readonly startsContainer: boolean; readonly inputs: StartInputs },
     failed: { readonly cause: unknown },
@@ -1314,8 +1340,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     const failure = classifyRecovery(failed);
 
-    // A start that fails the same way every time is refused once, not re-armed each second (D47).
-    if (isTerminalRecovery(failure)) {
+    // A start that fails the same way every time is refused once, not re-armed each second: staging 7e411119d's box
+    // named itself into a read-only /etc/hostname, an unclassified failure, and took 1,873 alarms in 30 minutes (D94).
+    if (!waitingCanChange(failed)) {
       const refusal = `[${failure} -> refuse] ${reason}`;
       this.#adoptionPending = false;
 
@@ -1524,7 +1551,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     // The tag leads: `recordIncident` truncates at INCIDENT_REASON_MAX_CHARS, and a long cause
     // chain would cut a trailing tag that the host's prose tells the agent to read.
     const reason = `[${failure} -> ${decision.action}] ${describe(thrown)}`;
-    const restoration = { phase: 'unattached', reason, retry: decision.action !== 'refuse' } as const;
+
+    // A refusal is a park, kept with the deploy it was made under, as `#settle` keeps one (D94).
+    const restoration = decision.action === 'refuse'
+      ? { phase: 'unattached', reason, retry: false, version: this.#version() } as const
+      : { phase: 'unattached', reason, retry: true } as const;
 
     if (!await this.#settleRecovery(claim, generation, decision, restoration)) return;
 
@@ -2955,6 +2986,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   /** The name a person sees for the box in its prompts, its terminal titles and its desktop, read at each start (D93);
    *  unset, the platform's host name. */
   protected async shownName(): Promise<string | undefined> { return undefined; }
+  /** The Worker version this object runs, read at construction and at each start: a start refused under another is asked
+   *  again (D94). Unset, only a changed input or a caller's explicit ask lifts a refusal. */
+  protected get workerVersion(): string | undefined { return undefined; }
   /** The mark at the centre of the desktop's wallpaper, an SVG document drawn in its own colour (D88); unset, none. */
   protected get desktopMark(): string | undefined { return undefined; }
 
@@ -3023,12 +3057,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     return this.#withActiveCaller(Effect.gen({ self: this }, function* () {
       const { container } = yield* attempt('io', () => this.#ensureReady(this.#teardowns));
-      const started = yield* attempt('io', async () => await (await container.exec(['/bin/bash', '-c', DESKTOP_START, 'devbox-desktop', this.desktopMark ?? ''], { env: CONTAINER_TRUST_ENV })).output());
 
-      if (started.exitCode !== 0) {
-        return yield* Effect.fail(new DevboxError('io', `the desktop did not start: ${new TextDecoder().decode(started.stderr).trim()}`));
-      }
-
+      yield* this.#desktopUp(container);
       const server = `http://127.0.0.1:${String(DESKTOP_PORT)}`;
       const headers = new Headers(request.headers);
       headers.set('origin', server);
@@ -3036,6 +3066,98 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
       return answer.webSocket ? this.#bridge(answer.webSocket, answer.headers) : answer;
     }));
+  }
+
+  /** The desktop running, as the check finds it once it brought back what had died; callers during a check share it. */
+  #desktopUp(container: Container): Effect.Effect<DesktopScreen, DevboxError> {
+    return Effect.suspend(() => {
+      const running = this.#desktopCheck;
+
+      if (running !== undefined) return Deferred.await(running);
+      const checked = Deferred.makeUnsafe<DesktopScreen, DevboxError>();
+      this.#desktopCheck = checked;
+
+      return this.#checkDesktop(container).pipe(
+        Effect.exit,
+        Effect.tap((exit) => Deferred.done(checked, exit)),
+        Effect.flatten,
+        Effect.ensuring(Effect.sync(() => {
+          if (this.#desktopCheck === checked) this.#desktopCheck = undefined;
+        })),
+      );
+    });
+  }
+
+  #checkDesktop(container: Container): Effect.Effect<DesktopScreen, DevboxError> {
+    return Effect.gen({ self: this }, function* () {
+      // Bounded: an X that stays alive and never opens its port would hold every desktop call, and the box's rest, behind it.
+      const checked = yield* attempt('io', async () => decoded(await (await launch(container, ['/bin/bash', '-c', DESKTOP_CHECK, 'devbox-desktop', this.desktopMark ?? ''], {
+        signal: AbortSignal.timeout(DESKTOP_CHECK_MS),
+      })).output()), `starting the desktop, bounded at ${String(DESKTOP_CHECK_MS / 1000)} s`);
+
+      const [size = '', fresh] = checked.stdout.trim().split('\n');
+      const [width = Number.NaN, height = Number.NaN] = size.split(/\s+/u).map(Number);
+
+      if (checked.exitCode !== 0 || !Number.isInteger(width) || !Number.isInteger(height)) {
+        return yield* Effect.fail(new DevboxError('io', `the desktop did not start: ${checked.stderr.trim() || checked.stdout.trim()}`));
+      }
+
+      if (fresh === 'fresh') this.#desktopLease.clear();
+
+      return { width, height };
+    });
+  }
+
+  /**
+   * One action on the desktop the owner watches, for the agent `request.driver` (D89). The desktop is checked first,
+   * under the box's own readiness; then the action's points against the screen and the driver against the lease, before
+   * any input. Actions run one at a time; each run is bounded at its own wait and a margin, and what it holds down is
+   * released however it ends.
+   */
+  async desktop(request: DesktopRequest): Promise<DesktopAnswer> {
+    return await settle(this.#withActiveCaller(Effect.gen({ self: this }, function* () {
+      const asked = v.safeParse(DesktopRequestSchema, request);
+
+      if (!asked.success) return yield* Effect.fail(new DevboxError('invalid-input', `desktop: ${v.summarize(asked.issues)}`));
+      const { driver, action } = asked.output;
+      const { container } = yield* attempt('io', () => this.#ensureReady(this.#teardowns));
+      const screen = yield* this.#desktopUp(container);
+      const outside = offScreen(action, screen);
+
+      if (outside !== null) return { kind: 'refused', reason: 'off_screen', detail: outside } satisfies DesktopAnswer;
+      const refused = this.#desktopLease.admit(driver, action.kind === 'screenshot' || action.kind === 'watch', Date.now());
+
+      if (refused !== null) return refused;
+      const bound = AbortSignal.timeout(actionBoundMs(action));
+
+      if (action.kind === 'screenshot' || action.kind === 'watch') {
+        const argv = action.kind === 'watch' ? watchArgv(action) : ['/bin/bash', '-c', SCREENSHOT, 'devbox-screenshot'];
+        const shot = yield* attempt('io', async () => await (await launch(container, argv, { signal: bound })).output());
+        const png = new Uint8Array(shot.stdout);
+        const size = pngSize(png);
+
+        if (shot.exitCode !== 0 || size === null) return yield* Effect.fail(new DevboxError('io', `the ${action.kind} failed: ${new TextDecoder().decode(shot.stderr).trim()}`));
+
+        return { kind: 'screen', png: Buffer.from(png).toString('base64'), ...size } satisfies DesktopAnswer;
+      }
+
+      const { argv, release } = xdotoolOf(action);
+
+      // A release that fails is recorded; the action's own outcome is what the agent hears.
+      const released = release === null ? Effect.void : attempt('io', async () => {
+        await (await launch(container, release, { signal: AbortSignal.timeout(DESKTOP_ACTION_MS) })).output();
+      }).pipe(
+        Effect.catchTag('DevboxError', (failure) => Effect.sync(() => { this.#trace('desktop.release_failed', { action: action.kind, reason: failure.message }); })),
+      );
+
+      // A UTF-8 locale: under the box's default C locale xdotool's `type` stops at the first character past ASCII.
+      const ran = yield* attempt('io', async () => decoded(await (await launch(container, argv, { env: UTF8, signal: bound })).output()))
+        .pipe(Effect.ensuring(released));
+
+      if (ran.exitCode !== 0) return yield* Effect.fail(new DevboxError('io', `xdotool ${action.kind} failed: ${ran.stderr.trim()}`));
+
+      return { kind: 'done' } satisfies DesktopAnswer;
+    }).pipe(this.#desktopTurns.withPermits(1))));
   }
 
   /** The SDK's `bridge()`: an open preview socket is the box's use. */
@@ -3110,20 +3232,96 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
       if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return new Response('WebSocket required', { status: 426 });
 
+      const session = yield* this.#session(url.searchParams.get('session') ?? FIRST_SESSION.id);
+
       return yield* this.#withActiveCaller(attempt('io', async () => {
         const { container } = await this.#ensureReady(this.#teardowns);
 
-        return terminalSocket(container, url.searchParams);
+        return terminalSocket(container, url.searchParams, session);
       }));
     }));
   }
 
-  async resetShell(): Promise<void> {
-    return settle(this.#withActiveCaller(attempt("io", async () => {
-      const { container } = await this.#ensureReady(this.#teardowns);
+  /** A session's shell and screen end; its next attach opens a fresh one under the same name, in its folder. */
+  async resetShell(id: string = FIRST_SESSION.id): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const session = yield* this.#session(id);
 
-      return resetTerminal(container);
-    })));
+      yield* this.#withActiveCaller(attempt("io", async () => {
+        const { container } = await this.#ensureReady(this.#teardowns);
+
+        return resetTerminal(container, session.id);
+      }));
+    }));
+  }
+
+  /** The recorded sessions, the first one when there is none. */
+  #sessionRecords(): SessionRecord[] {
+    const records = parsedOrNull(SessionRecordsSchema, this.ctx.storage.kv.get<StoredValue>(SESSIONS_KEY));
+
+    return records === null || records.length === 0 ? [FIRST_SESSION] : records;
+  }
+
+  #session(id: string): Effect.Effect<SessionRecord, DevboxError> {
+    const record = this.#sessionRecords().find((session) => session.id === id);
+
+    return record === undefined ? Effect.fail(new DevboxError('invalid-input', `no terminal session ${id}`)) : Effect.succeed(record);
+  }
+
+  /**
+   * Every terminal session, as one read of the running box finds it (D90): its folder, the command in its foreground,
+   * how its last command ended, the ports under it, its folder's branch. A box that is not running is not woken: its
+   * sessions read as they were left. A session's folder, read, is kept for the next start.
+   */
+  terminalSessions(): Promise<readonly TerminalSession[]> {
+    return settle(attempt('io', async () => {
+      const records = this.#sessionRecords();
+      const container = this.ctx.container;
+
+      if (container?.running !== true) return mergeSessions(records, null);
+      // Bounded: a pane in a folder git or /proc cannot answer for would otherwise hold every later read behind it.
+      const read = await (await container.exec(['bash', '-c', SESSIONS_READ, 'terminal-sessions', PORT_LISTENERS], { signal: AbortSignal.timeout(SESSIONS_READ_MS) })).output();
+      const sessions = mergeSessions(records, parseSessionsRead(new TextDecoder().decode(read.stdout)));
+      const moved = records.map((record) => ({ ...record, cwd: sessions.find((session) => session.id === record.id && session.open)?.cwd ?? record.cwd }));
+
+      if (moved.some((record, at) => record.cwd !== records[at]?.cwd)) this.ctx.storage.kv.put(SESSIONS_KEY, moved);
+
+      return sessions;
+    }));
+  }
+
+  /** A new session, named; its first attach opens its shell in the workspace. */
+  openTerminalSession(name?: string): Promise<SessionRecord> {
+    return settle(attemptSync('invalid-input', () => {
+      const records = this.#sessionRecords();
+      const record = { id: newSessionId(records), name: v.parse(SessionNameSchema, name ?? newSessionName(records)), cwd: FIRST_SESSION.cwd };
+
+      this.ctx.storage.kv.put(SESSIONS_KEY, [...records, record]);
+
+      return record;
+    }));
+  }
+
+  renameTerminalSession(id: string, name: string): Promise<SessionRecord> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const session = yield* this.#session(id);
+      const renamed = { ...session, name: yield* attemptSync('invalid-input', () => v.parse(SessionNameSchema, name)) };
+
+      this.ctx.storage.kv.put(SESSIONS_KEY, this.#sessionRecords().map((record) => (record.id === id ? renamed : record)));
+
+      return renamed;
+    }));
+  }
+
+  /** Ends a session and forgets it; the box keeps one, so closing the last leaves a fresh first session. */
+  closeTerminalSession(id: string): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* this.#session(id);
+      const container = this.ctx.container;
+
+      if (container?.running === true) yield* attempt('io', () => resetTerminal(container, id));
+      this.ctx.storage.kv.put(SESSIONS_KEY, this.#sessionRecords().filter((record) => record.id !== id));
+    }));
   }
 
 
@@ -3296,9 +3494,12 @@ async function firstExec(container: Container, signal: AbortSignal): Promise<voi
   if (failed !== undefined) throw failed;
 }
 
+/** A locale that reads text as UTF-8; the C one the box starts in reads a byte past ASCII as an invalid sequence. */
+const UTF8 = { LC_ALL: 'C.UTF-8' };
+
 function launch(container: Container, argv: readonly string[], options: DevboxExecOptions): Promise<ExecProcess> {
   return container.exec([...argv], {
-    cwd: options.cwd ?? DEVBOX_WORKDIR, env: { ...CONTAINER_TRUST_ENV, ...options.env }, signal: options.signal,
+    cwd: options.cwd ?? DEVBOX_WORKDIR, env: { ...CONTAINER_ENV, ...options.env }, signal: options.signal,
   });
 }
 

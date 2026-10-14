@@ -23,6 +23,7 @@ import { CONTAINER_CONTRACTS, DISK_CONTRACTS } from '../packages/devbox/bench/co
 import { shellQuote } from '../packages/core/src/utils/shell';
 import { withTestChrome } from './test-chrome';
 import { DESKTOP_COLOURS, DESKTOP_PANEL, DESKTOP_SIZE } from '../packages/devbox/src/desktop';
+import { GRID, GRID_POINTS, HOLD, RANGE, SCROLL, TEXT, TICKER, sheet } from './fixtures/devbox-e2e/desktop-pages';
 
 const REPO = join(import.meta.dir, '..');
 
@@ -53,12 +54,24 @@ const BOX_NAME_READ = [
   `printf "prompt=%s\\n" "$(cd /workspace 2>/dev/null; TERM=dumb bash --rcfile ${SHELL_RC_FILE} -i -c 'printf "%s" "\${PS1@P}"' 2>/dev/null)"`,
 ].join('\n');
 
+/** How long the tier watches a refused box for another start: the box this contract caught re-armed every second. */
+const PARKED_WATCH_MS = 20_000;
+
 /** How long after its first frame a fresh desktop must show its background and panel: a person waits seconds, not minutes. */
 const DESKTOP_SEEN_MS = 30_000;
 
 const Json = v.looseObject({ error: v.optional(v.string()) });
 
 const Exec = v.object({ exitCode: v.number(), stdout: v.string(), stderr: v.string() });
+
+/** What `computer.screenshot()` and `computer.watch()` answer a program: a PNG data URL. */
+const Screen = v.pipe(v.string(), v.startsWith('data:image/png;base64,'));
+
+/** A refusal a program branches on. */
+const Refused = v.object({ success: v.literal(false), reason: v.string(), error: v.string() });
+
+/** A desktop member's value: the screen, null for an action, or a refusal. */
+const AgentAnswer = v.union([Screen, v.null(), Refused]);
 
 const Commit = v.looseObject({ kind: v.string(), reason: v.optional(v.string()), movedBytes: v.optional(v.number()) });
 
@@ -165,8 +178,9 @@ function fixturePlan(recovering: ReturnType<typeof recoveryReport>) {
   const worker = recovering?.worker ?? `kinu-${run}`;
   const bucket = recovering?.bucket ?? worker;
   const box = `eval-devbox-${run}`;
-  // The last is a box only the desktop's check opens, so it opens on a fresh box.
-  const names = recovering?.boxes ?? [box, `${box}-native`, `${box}-disk`, 'devbox-golden', `${box}-desktop`];
+  // The fifth is a box only the desktop's check opens, so it opens on a fresh box; the sixth is the agent's desktop box;
+  // the seventh fails every start (D94).
+  const names = recovering?.boxes ?? [box, `${box}-native`, `${box}-disk`, 'devbox-golden', `${box}-desktop`, `${box}-agent`, `${box}-parked`];
   const app = recovering?.app ?? `${worker}-contractbox`;
   const owner = recovering?.owner ?? contractOwner(process.env);
   const { job, index, attempt, vessel, statusUrl } = owner;
@@ -495,6 +509,124 @@ async function main(): Promise<void> {
     });
   };
 
+  /**
+   * An agent's desktop on a fresh box (D89), through the product's own `computer.*` members and adapter: it looks at the
+   * screen the owner watches, at its own size; its clicks, keys, text, wheel and drags land where its screenshot put
+   * them; nothing stays pressed after a call; a program a shell starts opens there; and a second agent waits its turn.
+   */
+  const desktopAgent = async () => {
+    await step('desktop-agent', async () => {
+      const fresh = names[5] ?? '';
+      const desk = (member: string, args: readonly unknown[] = [], driver = 'agent') => call('/agent-desktop', AgentAnswer, { driver, member, args: JSON.stringify(args) }, fresh);
+      const sh = (command: string) => shell(command, fresh);
+      const title = async () => (await sh('xdotool getactivewindow getwindowname 2>/dev/null || true')).replace(/ - Chromium$/u, '');
+
+      const until = async (what: string, seen: (now: string) => boolean): Promise<string> => {
+        const by = Date.now() + DESKTOP_SEEN_MS;
+
+        for (let now = await title(); ; now = await title()) {
+          if (seen(now)) return now;
+
+          if (Date.now() > by) throw new Error(`${what}: the screen still said ${JSON.stringify(now)} after ${String(DESKTOP_SEEN_MS / 1000)} s`);
+          await delay(200);
+        }
+      };
+
+      const sessions = () => sh('for p in Xkasmvnc openbox tint2 Xvfb; do printf "%s=%s " "$p" "$(pgrep -c -x "$p")"; done');
+      const one = 'Xkasmvnc=1 openbox=1 tint2=1 Xvfb=0';
+
+      // A box whose desktop never opened: the first look starts it, at the screen's size; looks at once share it.
+      requireEqual(sheet(v.parse(Screen, await desk('screenshot'))).size, [1280, 768]);
+      await Promise.all([desk('screenshot'), desk('screenshot', [], 'other'), desk('screenshot')]);
+      requireEqual(await sessions(), one);
+      await sh('pkill -x tint2; pkill -x openbox; true');
+      await desk('screenshot');
+      requireEqual(await sessions(), one);
+
+      // The agent's shell runs on that screen.
+      requireEqual(await sh('echo "$DISPLAY"'), ':0');
+      const pages = Object.entries({ grid: GRID, text: TEXT, scroll: SCROLL, range: RANGE, hold: HOLD, ticker: TICKER });
+      await sh(`mkdir -p /tmp/kinu-desk && ${pages.map(([name, html]) => `printf %s ${shellQuote(html)} >/tmp/kinu-desk/${name}.html`).join(' && ')}`);
+      await sh('setsid -f python3 -m http.server 8765 --bind 127.0.0.1 --directory /tmp/kinu-desk >/dev/null 2>&1');
+
+      const open = async (page: string) => {
+        await sh('pkill -x chromium; while pgrep -x chromium >/dev/null; do sleep 0.1; done; true');
+        // A profile of its own per page: one killed and started again would show its restore bubble over the page.
+        await sh(`setsid -f chromium --kiosk --no-first-run --no-default-browser-check --user-data-dir=/tmp/kinu-desk/profile-${page} http://127.0.0.1:8765/${page}.html >/dev/null 2>&1`);
+        await until(`the ${page} page opened`, (now) => now === `ready ${page}`);
+        await desk('screenshot');
+      };
+
+      await open('grid');
+      requireEqual(await desk('move', [GRID_POINTS[0]]), null);
+      await until('hovering the first cell', (now) => now === 'over c0');
+
+      for (const [at, point] of GRID_POINTS.entries()) {
+        requireEqual(await desk('click', [point]), null);
+        await until(`a click on cell ${String(at)}`, (now) => now === `click c${String(at)} 1`);
+      }
+
+      const centre = GRID_POINTS[4] ?? [640, 395];
+      const again = Date.now();
+      await desk('click', [centre]);
+      await desk('click', [centre]);
+      const twice = Date.now() - again;
+
+      if (twice > 3_000) throw new Error(`two clicks at one point took ${String(twice)} ms: the second waited on the pointer to move`);
+      await desk('click', [GRID_POINTS[0], { button: 'right' }]);
+      await until('a right-click', (now) => now === 'right c0');
+      await desk('click', [GRID_POINTS[8], { count: 2 }]);
+      await until('a double-click', (now) => now === 'double c8');
+      await desk('click', [GRID_POINTS[2], { hold: 'shift' }]);
+      await until('a shift-click', (now) => now === 'click c2 1 shift');
+      // Nothing it held stays down.
+      await desk('click', [GRID_POINTS[6]]);
+      await until('a plain click after it', (now) => now === 'click c6 1');
+
+      // The box's own refusals, before any input: a point off the screen, another agent's input.
+      requireEqual(v.parse(Refused, await desk('click', [[1280, 10]])).reason, 'bad_input');
+      requireEqual(v.parse(Refused, await desk('click', [centre], 'other')).reason, 'unavailable');
+
+      await open('text');
+      await desk('click', [[640, 400]]);
+      const typed = `${'y'.repeat(49)}\n${'z'.repeat(70)} echo "$DISPLAY ü"`;
+      await desk('type', [typed]);
+      await until('the typed text', (now) => now === `text ${JSON.stringify(typed)}`);
+      await desk('key', ['ctrl+a']);
+      await desk('type', ['x']);
+      await until('the text replaced', (now) => now === 'text "x"');
+
+      await open('scroll');
+      await desk('scroll', [[640, 400], 5, { dx: 3 }]);
+      await until('the page scrolled both ways', (now) => /^scroll [1-9]\d* [1-9]\d*$/u.test(now));
+      requireEqual(await desk('scroll', [[640, 400], -50, { dx: -50 }]), null);
+      await until('the page scrolled back', (now) => now === 'scroll 0 0');
+
+      await open('range');
+      await desk('drag', [[4, 150], [1276, 150]]);
+      await until('the range dragged to its end', (now) => /^range (?:9\d|100)$/u.test(now));
+
+      // A held key is held as long as asked, and let go.
+      await open('hold');
+      requireEqual(await desk('key', ['w', { hold: 800 }]), null);
+      const held = Number(/^held w (\d+)$/u.exec(await until('the key let go', (now) => now.startsWith('held w ')))?.[1]);
+
+      if (!(held >= 700 && held <= 1_500)) throw new Error(`a key held for 800 ms was down ${String(held)} ms`);
+
+      // A watch is one image of frames over its window: four by default, two to a row; eight, four to a row. Each frame
+      // shows the page as it changed, so no two tiles are alike.
+      await open('ticker');
+      const four = sheet(v.parse(Screen, await desk('watch', [2])));
+      const eight = sheet(v.parse(Screen, await desk('watch', [2, { fps: 4 }])));
+      requireEqual([four.size, four.distinct(2, 2), eight.size, eight.distinct(4, 2)], [[1280, 768], 4, [2560, 768], 8]);
+
+      return 'a fresh box\'s desktop came up for an agent\'s look at 1280×768, once, and came back after its parts died; '
+        + 'clicks of every kind, keys, text with breaks, both wheels and a drag landed where its screenshot put them; '
+        + 'nothing stayed held; a point off the screen and a second agent\'s input were refused before reaching it; a key '
+        + 'was held as long as asked; a watch answered one sheet of frames that each showed the page changing';
+    });
+  };
+
   /** The container's contracts, the desktop through the product routes, and the product's own chain. */
   const productContracts = async () => {
     /**
@@ -526,7 +658,33 @@ async function main(): Promise<void> {
     for (const kind of CONTAINER_CONTRACTS) await step(kind, () => call(`/contract?kind=${kind}`, Json, {}, names[1]));
 
     // `--headless`: everything but the desktop's client, which drives a browser on this host.
+    /**
+     * A start that fails the same way every time is refused once and arms nothing (D94): staging 7e411119d's box named
+     * itself into the read-only /etc/hostname, an uncoded failure, and re-armed its startup every second, 1,873 alarms
+     * in 30 minutes with no caller. The fixture's `-parked` box fails every start that way, on the platform's container.
+     */
+    await step('parked-start', async () => {
+      const parked = names[6] ?? '';
+      const url = new URL('/exec', origin);
+      url.searchParams.set('box', parked);
+      const asked = await fixtureFetch(url, { method: 'POST', headers: { authorization: `Bearer ${identity}`, 'content-type': 'application/json' }, body: JSON.stringify({ command: 'true' }) });
+      const said = JSON.stringify(await asked.json());
+      await delay(PARKED_WATCH_MS);
+      const armed = await call('/armed', v.record(v.string(), v.number()), undefined, parked);
+      const state = await call('/state', v.looseObject({ incidents: v.looseObject({ total: v.number() }) }), undefined, parked);
+      const seen = { status: asked.status, said: said.slice(-400), startupArms: armed['devboxStartup'] ?? 0, incidents: state.incidents.total, watchedMs: PARKED_WATCH_MS };
+
+      process.stdout.write(`[${run}] parked start ${JSON.stringify(seen)}\n`);
+
+      if (asked.ok || !said.includes('nothing retries it')) throw new Error(`the parked box was not refused: ${JSON.stringify(seen)}`);
+
+      if (seen.startupArms > 1 || seen.incidents !== 1) throw new Error(`a start refused the same way kept asking: ${JSON.stringify(seen)}`);
+
+      return seen;
+    });
+
     if (!process.argv.includes('--headless')) await desktopClient();
+    await desktopAgent();
 
     await step('disk-chain', async () => {
       await shell('set -e; cd /workspace; mkdir -p private gone/sub src empty node_modules/pkg; chmod 700 private; '

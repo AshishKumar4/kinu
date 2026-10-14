@@ -2280,9 +2280,7 @@ export const LADDER: readonly Gate[] = [
     // 2026-10-01, interleaved twice at load 9-29: 204 s median without the #30 rows, 289 s with them as two rows of
     // their own, 220 s with the watched turn run in the answered row's workspace (as now), all 14 green.
     // One of the four files the live-app rows split into when one file outran its 480 s deadline alone.
-    // 2026-10-13: the provider-wait row alone took 142 s with the dev server's boot on armada (job 20261013214907-8e6a82ec);
-    // the file with it is unmeasured.
-    seconds: 300,
+    seconds: 220,
     catches: 'the shipped workspace page as it runs: this row boots the product itself — `vite dev` in cf-backend, which is workerd with real Durable Objects behind the real client — and drives it in Chrome at 1440x900, where the inspector column, its separator and the rail lane exist. No gallery row can: the gallery serves a FROZEN pre-built bundle with fixtures answering `/api/*`. '
       + 'Its rows: a running turn draws exactly one live state through the paced turn\'s four silences, and '
       + 'Stop never stands over a pane drawing nothing; a page opened mid-turn offers Stop while it runs and stops '
@@ -2290,9 +2288,7 @@ export const LADDER: readonly Gate[] = [
       + 'replays the answer as it stood; an answer keeps each step\'s text where it streamed after the turn ends and '
       + 'after a reload, the model\'s next request carrying it, and so does a turn another tab sent, on the page that '
       + 'watched it, and the workspace\'s own first turn, which no page sent; and a marker sent in each pane stays out of the '
-      + 'other, the transcript leak a shared store shows as green. A wait on the provider shows over the composer only '
-      + 'while it holds the chat\'s turn, counting down and never at 0s: the workspace\'s logo, drawn from Settings beside '
-      + 'the open chat and refused as a rate limit, shows nothing there (#88).',
+      + 'other, the transcript leak a shared store shows as green.',
     blind: 'one workspace, one viewport, one model. The rows drive 1440x900 in two themes on '
       + 'the workspace route: every other route, width and theme is the gallery rows\' subject '
       + 'and unmeasured here. The model is a local scripted SSE server, so the content is '
@@ -2303,6 +2299,23 @@ export const LADDER: readonly Gate[] = [
       + 'regression passes, and the geometry rows read boxes rather than whether the layout is '
       + 'the right one. The deployed build\'s browser rows are the product flows\' '
       + '(`scripts/product-flows.ts`), which run against the deployment alone.',
+    inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
+  },
+  {
+    run: 'bun test --timeout=0 tests/browser/live-app-provider-wait.test.ts',
+    label: 'Live app in a browser: a wait on the provider',
+    tier: 'deploy',
+    // Measured 2026-10-13 on armada by `bun scripts/gate-cost-measure.ts --only=<this row>` at 059486671: 218.8 s wall,
+    // the minute-limited turn's 60-120 s of waiting by design among them.
+    seconds: 220,
+    catches: 'the shipped workspace page as it waits on a rate-limited provider, on `vite dev` (workerd with real Durable '
+      + 'Objects) driven in Chrome against a scripted model that refuses with 429s. A wait shows over the composer only while '
+      + 'it holds the chat\'s turn, counting down and never at 0s: the workspace\'s logo, drawn from Settings beside the open '
+      + 'chat and refused, shows nothing there (#88). A turn its provider limits for a minute, stating no wait as Workers AI '
+      + 'does, answers by itself instead of stopping, and the composer counts which retry it waits for.',
+    blind: 'one workspace per scenario, one viewport, one scripted model whose refusals carry no body Workers AI sends; '
+      + 'a real provider\'s limits, a header-stated wait, and a refusal that outlasts every retry are the unit rows\' '
+      + '(`packages/core/tests/unit-model-retry.test.ts`). A LOCAL dev server, not production.',
     inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
   },
   {
@@ -3019,6 +3032,7 @@ export const CI_EXEMPT = {
     'has nothing to run against at CI: its subject is the deployment that just went up, as eval-service, '
     + 'whose secret no pull request holds.',
   'bun test --timeout=0 tests/browser/live-app-turns.test.ts': LIVE_APP_AT_CI,
+  'bun test --timeout=0 tests/browser/live-app-provider-wait.test.ts': LIVE_APP_AT_CI,
   'bun test --timeout=0 tests/browser/live-app-sleep.test.ts': LIVE_APP_AT_CI,
   'bun test --timeout=0 tests/browser/live-app-plans.test.ts': LIVE_APP_AT_CI,
   'bun test --timeout=0 tests/browser/live-app-layout.test.ts': LIVE_APP_AT_CI,

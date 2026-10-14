@@ -8,7 +8,7 @@ import { describe, expect, test } from 'bun:test';
 import { EvolutionEngine } from '../src/evolution/engine';
 import type { CompletedTurn } from '../src/evolution/types';
 import {
-  listThumbs, listTurnRatings, qualitySeries, ratingOf, recordTurnRating, retractThumbs,
+  listThumbs, listTurnRatings, qualitySeries, qualityWindow, ratingOf, recordTurnRating, retractThumbs,
 } from '../src/evolution/ratings';
 import {
   createDecisionPort, restDecisionRun, type DecisionAnswers, type DecisionPort, type DecisionQuestion,
@@ -138,6 +138,28 @@ describe('the rating ledger', () => {
       ['2026-10-01', 2, 0, 3], ['2026-10-02', 1, 1, 5],
     ]);
     expect(series[0]?.corrected.mean).toBe(0.5);
+  });
+
+  // #107: "Satisfaction, 7 days" read the last seven days that had ratings, so a rating weeks old counted as this week's.
+  test('the last seven days are seven UTC days, however far apart the ratings are', () => {
+    const { rt } = createTestRuntime();
+    const today = Date.UTC(2026, 9, 30, 12);
+    const DAY = 86_400_000;
+
+    const rate = (turnId: string, score: number, daysAgo: number) => recordTurnRating(
+      rt.storage.sql, rt.actor, { turnId, score, corrected: 0, wrong: null, source: 'thumbs', request: 'r', answer: 'a', now: today - daysAgo * DAY },
+    );
+
+    rate('weeks-ago', 1, 20);
+    rate('last-month', 1, 13);
+    rate('this-week', 5, 2);
+
+    const week = qualityWindow(rt.storage.sql, rt.actor, { days: 7, now: today });
+    const series = qualitySeries(rt.storage.sql, rt.actor, { days: 30, now: today });
+
+    expect({ from: week.from, to: week.to, rated: week.rated, mean: week.satisfaction.mean }).toEqual({ from: '2026-10-24', to: '2026-10-30', rated: 1, mean: 5 });
+    expect(series.length).toBe(30);
+    expect(series.filter((entry) => entry.rated > 0).map((entry) => entry.day)).toEqual(['2026-10-10', '2026-10-17', '2026-10-28']);
   });
 
   test('retracting a thumb touches no other source', () => {

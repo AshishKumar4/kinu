@@ -1,20 +1,20 @@
 import type { McpServerSummary } from "@kinu.run/core";
 import type { PluginStatus } from "./PluginRow";
 
-/** An MCP server's state as every view of it words and colours it. */
+/** An MCP server's state as every view of it words and colours it: in sentence case, as every status reads. */
 export function mcpServerStatus(status: McpServerSummary["status"]): PluginStatus {
   switch (status) {
     case "ready":
     case "connected":
-      return { label: "connected", tone: "success" };
+      return { label: "Connected", tone: "success" };
     case "authenticating":
-      return { label: "auth needed", tone: "warning" };
+      return { label: "Needs sign-in", tone: "warning" };
     case "connecting":
     case "discovering":
-      return { label: status, tone: "warning" };
+      return { label: "Connecting", tone: "warning" };
     case "failed":
-      return { label: "failed", tone: "danger" };
+      return { label: "Failed", tone: "danger" };
     case "unknown":
-      return { label: status, tone: "neutral" };
+      return { label: "Unknown", tone: "neutral" };
   }
 }

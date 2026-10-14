@@ -88,9 +88,17 @@ export default function WorkspacesPage() {
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-4xl space-y-6 px-6 py-8">
-        <header className="flex items-center gap-3">
+        <header className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <SquaresFourIcon size={22} className="shrink-0 p-text-3" />
           <h1 className="p-display text-2xl">Workspaces</h1>
+          <div className="ml-auto flex items-center gap-1">
+            <Button variant="ghost" size="sm" aria-label="List view" aria-pressed={view === "list"}
+              icon={<ListIcon size={14} />} onClick={() => setView("list")} />
+            <Button variant="ghost" size="sm" aria-label="Tiled view" aria-pressed={view === "tiled"}
+              icon={<SquaresFourIcon size={14} />} onClick={() => setView("tiled")} />
+            {/* Beside the sidebar's own, the page's would say it twice; on a phone the sidebar is folded away. */}
+            <NewWorkspaceButton className="ml-2 h-8 px-3 text-sm md:hidden" />
+          </div>
         </header>
 
         <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
@@ -102,21 +110,14 @@ export default function WorkspacesPage() {
             className={`${inputCls} w-full sm:w-auto sm:max-w-xs`}
           />
           <Segmented label="Workspace state" value={filter} onChange={setFilter} segments={SEGMENTS} />
-          <div className="ml-auto flex items-center gap-3">
-            {total > 0 && (
-              <span className="p-meta p-text-4 tabular-nums">
-                {matching} of {total}
-                {roster.counts.unreported > 0 && ` · ${String(roster.counts.unreported)} not yet reported`}
-              </span>
-            )}
-            <div className="flex items-center gap-1">
-              <Button variant="ghost" size="sm" aria-label="List view" aria-pressed={view === "list"}
-                icon={<ListIcon size={14} />} onClick={() => setView("list")} />
-              <Button variant="ghost" size="sm" aria-label="Tiled view" aria-pressed={view === "tiled"}
-                icon={<SquaresFourIcon size={14} />} onClick={() => setView("tiled")} />
-            </div>
-            <NewWorkspaceButton className="h-8 px-3 text-sm" />
-          </div>
+          {/* The count says what a filter or search left out; with nothing left out it has nothing to say. */}
+          {total > 0 && (matching < total || roster.counts.unreported > 0) && (
+            <span className="p-meta p-text-4 tabular-nums sm:ml-auto">
+              {matching < total ? `${String(matching)} of ${String(total)}` : ""}
+              {matching < total && roster.counts.unreported > 0 ? " · " : ""}
+              {roster.counts.unreported > 0 && `${String(roster.counts.unreported)} not yet reported`}
+            </span>
+          )}
         </div>
 
         {error !== null && (

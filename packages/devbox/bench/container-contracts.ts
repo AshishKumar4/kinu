@@ -4,10 +4,10 @@ import * as v from 'valibot';
 import { settle } from '../src/errors';
 import { describeThrown } from '../src/lifecycle';
 import { listFiles } from '../src/file-listing';
-import { Processes, CONTAINER_TRUST_ENV, TRUST } from '../src/processes';
+import { Processes, CONTAINER_ENV, TRUST } from '../src/processes';
 import { readExec } from '../src/exec-stream';
 import { TOOLS_STAMP, toolsInstallCommand } from '../src/tools';
-import { DESKTOP_START, DESKTOP_PORT } from '../src/desktop';
+import { DESKTOP_CHECK, DESKTOP_PORT } from '../src/desktop';
 import type { Devbox } from '../src/devbox';
 
 import type { ContainerContract } from './contract-types';
@@ -38,8 +38,8 @@ async function tools(container: Container, pin: string): Promise<void> {
   equal(await native(container, `set -e; d=${SCRATCH}/fuse; mkdir -p $d/src $d/m $d/u $d/w $d/o; echo fuse-ok >$d/src/f; `
     + 'mksquashfs $d/src $d/l.sqsh -noappend -quiet >/dev/null; devbox-squashfuse $d/l.sqsh $d/m; '
     + 'fuse-overlayfs -o lowerdir=$d/m,upperdir=$d/u,workdir=$d/w $d/o; cat $d/o/f; fusermount3 -u $d/o; fusermount3 -u $d/m'), 'fuse-ok');
-  await native(container, DESKTOP_START);
-  await native(container, DESKTOP_START);
+  await native(container, DESKTOP_CHECK);
+  await native(container, DESKTOP_CHECK);
   equal(await native(container, 'pgrep -cx Xkasmvnc; pgrep -cx openbox; pgrep -cx tint2'), '1\n1\n1');
 
   const rfb = await native(container, `exec 3<>/dev/tcp/127.0.0.1/${String(DESKTOP_PORT)}; printf 'GET /websockify HTTP/1.1\\r\\nHost: box\\r\\n`
@@ -61,7 +61,7 @@ async function tools(container: Container, pin: string): Promise<void> {
 async function exec(box: Devbox<unknown>): Promise<void> {
   const command = String.raw`pwd; printf '%s\n' "$REQUESTS_CA_BUNDLE" "$NODE_EXTRA_CA_CERTS"; printf '\377\000x'; printf 'err\n' >&2; exit 3`;
   const options = { cwd: SCRATCH, env: { REQUESTS_CA_BUNDLE: '/own-bundle.pem' } };
-  const bytes = new Uint8Array([...new TextEncoder().encode(`${SCRATCH}\n/own-bundle.pem\n${CONTAINER_TRUST_ENV.NODE_EXTRA_CA_CERTS}\n`), 255, 0, 120]);
+  const bytes = new Uint8Array([...new TextEncoder().encode(`${SCRATCH}\n/own-bundle.pem\n${CONTAINER_ENV.NODE_EXTRA_CA_CERTS}\n`), 255, 0, 120]);
   const expected = { stdout: new TextDecoder().decode(bytes), stderr: 'err\n', exitCode: 3 };
   equal(await box.exec(command, options), expected);
   equal(await box.exec(command, { ...options, execId: 'contract-once' }), expected);
@@ -242,7 +242,7 @@ async function trust(container: Container): Promise<void> {
       + 'for port in 9443 8443 7443; do until (exec 3<>/dev/tcp/127.0.0.1/$port) 2>/dev/null; do sleep 0.05; done; done');
     await native(container, `cp ${SCRATCH}/tls/intercept.crt ${ca}`);
     await (await container.exec([...TRUST])).output();
-    const env = Object.entries(CONTAINER_TRUST_ENV).map(([key, value]) => `${key}=${value}`).join(' ');
+    const env = Object.entries(CONTAINER_ENV).map(([key, value]) => `${key}=${value}`).join(' ');
 
     for (const port of [9443, 8443]) {
       const url = `https://localhost:${String(port)}/`;

@@ -52,6 +52,8 @@ const ModelsDevModelSchema = v.object({
     values: v.optional(v.array(v.nullable(v.string()))),
   }))),
   status: v.optional(v.string()),
+  /** The same model as its lab publishes it, `<provider>/<id>`, on a reseller's entry: the name the menu shows. */
+  canonical_model_id: v.optional(v.string()),
   limit: v.optional(v.object({
     context: v.optional(v.number()),
     output: v.optional(v.number()),
@@ -150,7 +152,8 @@ export async function listModelsDevProviderModels(
 
     for (const [key, model] of Object.entries(models)) {
       const audioOrImage = model.modalities?.output?.some((modality) => modality !== 'text') ?? false;
-      const info = opts.textOnly === true && audioOrImage ? null : modelInfoFromModelsDev(key, model, opts.toolCallOnly ?? true);
+      const named = { ...model, name: canonicalName(data, model) ?? model.name };
+      const info = opts.textOnly === true && audioOrImage ? null : modelInfoFromModelsDev(key, named, opts.toolCallOnly ?? true);
 
       if (info) out.push(info);
     }
@@ -163,6 +166,26 @@ export async function listModelsDevProviderModels(
 
     return orderModels(out, opts.preferredIds);
   }));
+}
+
+/** A name with case and punctuation set aside: "Glm 5.3" and "GLM-5.3" spell one name. */
+const spelled = (name: string): string => name.toLowerCase().replace(/[^a-z0-9]/gu, '');
+
+/**
+ * The name the model's own lab gives it, through a reseller entry's `canonical_model_id`: models.dev's Workers AI rows
+ * title-case their slugs ("Glm 5.3") where Z.AI's own row says "GLM-5.3", so one model reads one way in every menu.
+ * Only the spelling is the lab's: a reseller's variant ("… fp8 Fast") keeps the words that tell it from the lab's.
+ */
+function canonicalName(data: Record<string, ModelsDevProvider>, model: ModelsDevModel): string | undefined {
+  const canonical = model.canonical_model_id;
+  const slash = canonical?.indexOf('/') ?? -1;
+
+  const own = model.name;
+
+  if (canonical === undefined || slash <= 0 || own === undefined) return undefined;
+  const lab = nonEmptyString({ value: data[canonical.slice(0, slash)]?.models?.[canonical.slice(slash + 1)]?.name });
+
+  return lab !== undefined && spelled(lab) === spelled(own) ? lab : undefined;
 }
 
 /** Provider metadata, or null when not in the catalog; an unreadable catalog throws rather than returning null. */

@@ -6,6 +6,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { ElementHandle, Page } from 'puppeteer';
 import { withGallery } from '../../scripts/gallery-harness';
+import { openInspectorPage } from '../../scripts/product-flows';
 
 declare global {
   interface Window {
@@ -49,18 +50,18 @@ async function required(page: Page, scope: string, role: string, name: string): 
 
 /**
  * Each of the bar's tools by name: `reachable` when its centre is on screen and a press there lands on it, `hidden`
- * when it is drawn but clipped or covered. The bar is found from a page tab (`Tally`), as whatever holds both it and
- * the Activity tool, so the reading does not depend on how the bar is built.
+ * when it is drawn but clipped or covered. The bar is found from its pages, as whatever holds both them and the
+ * Activity tool, so the reading does not depend on how the bar is built.
  */
 function toolsInReach(page: Page): Promise<Record<string, string>> {
   return page.evaluate((names) => {
-    let bar = document.querySelector('button[aria-label="Tally"]');
+    let bar = document.querySelector('nav[aria-label="Pages"]');
 
     while (bar !== null && bar.querySelector('button[aria-label="Activity"]') === null) bar = bar.parentElement;
 
     const found = bar;
 
-    if (found === null) throw new Error('no bar holds both a page tab and Activity');
+    if (found === null) throw new Error('no bar holds both the pages and Activity');
 
     return Object.fromEntries(names.flatMap((name) => {
       const tool = found.querySelector(`button[aria-label="${name}"]`);
@@ -87,7 +88,8 @@ describe('the inspector bar keeps the workspace in reach', () => {
         await page.evaluate(() => { document.documentElement.dataset.previewArrived = '1'; });
         await page.waitForSelector('button[aria-label="Show workspace"]', SOON);
         await page.tap('button[aria-label="Show workspace"]');
-        await page.waitForSelector('button[aria-label="Arrived app"]', SOON);
+        // The app that arrived is reachable from the bar, by its tab or the bar's menu of the pages without room.
+        await openInspectorPage(page, 'Arrived app', SOON);
 
         const reach = await toolsInReach(page);
 
@@ -115,7 +117,7 @@ describe('the inspector bar keeps the workspace in reach', () => {
       try {
         await page.setViewport({ width: 1440, height: 900 });
         await page.goto(`${origin}/gallery.html?frame=workspacepage&slates=3`, { waitUntil: 'networkidle0' });
-        await page.waitForSelector('button[aria-label="Tally"]', SOON);
+        await page.waitForSelector('nav[aria-label="Pages"]', SOON);
 
         const tool = await required(page, 'body', 'button', 'Environment');
 
@@ -143,9 +145,7 @@ describe('sharing the open Slate', () => {
       try {
         await page.setViewport({ width: 1440, height: 900 });
         await page.goto(`${origin}/gallery.html?frame=workspacepage&slates=3`, { waitUntil: 'networkidle0' });
-        await page.waitForSelector('button[aria-label="Board"]', SOON);
-        await page.click('button[aria-label="Board"]');
-        await page.waitForSelector('button[aria-label="Board"][aria-current="true"]', SOON);
+        await openInspectorPage(page, 'Board', SOON);
 
         const share = await required(page, 'body', 'button', 'Share Board');
 
@@ -158,7 +158,7 @@ describe('sharing the open Slate', () => {
 });
 
 describe('the Environment panel', () => {
-  test('the Linux container is the agent\'s computer: its card is a control named by its label that opens its terminal', async () => {
+  test('the Linux container is the agent\'s computer: its chip is a control named by its label that opens its sessions and its screen', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
 
@@ -169,12 +169,13 @@ describe('the Environment panel', () => {
 
         const card = await required(page, '[data-env-card="computer"]', 'button', COMPUTER);
 
-        // From the keyboard: the control takes focus and Enter selects it, so its pane offers its terminal and screen.
+        // From the keyboard: the control takes focus and Enter selects it, so its pane offers its sessions and its screen.
         await card.focus();
         await page.keyboard.press('Enter');
         await page.waitForSelector('[data-env-card="computer"] [aria-pressed="true"]', SOON);
-        expect(await control(page, 'body', 'tab', 'Terminal')).not.toBeNull();
+        await page.waitForSelector('[role="tab"][aria-selected="true"]', SOON);
         expect(await control(page, 'body', 'tab', 'Desktop')).not.toBeNull();
+        expect(await page.$$eval('[role="tablist"] [role="tab"]', (tabs) => tabs.length)).toBeGreaterThan(1);
       } finally { await page.close(); }
     });
   });

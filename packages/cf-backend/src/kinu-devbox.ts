@@ -69,6 +69,9 @@ export class KinuDevbox extends Devbox<Env> {
     return workspaceHostLabel(title, workspaceName);
   }
 
+  /** The deploy this box runs, so a start refused under an older one is asked again (D94). */
+  protected override get workerVersion(): string | undefined { return this.env.CF_VERSION_METADATA?.id; }
+
   /** The logo's own mark, so the desktop follows it when the mark changes. */
   protected override get desktopMark(): string { return markDocument(); }
 

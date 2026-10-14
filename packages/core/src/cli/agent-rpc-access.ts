@@ -27,6 +27,7 @@ export const AGENT_RPC_ACCESS = {
   getMctsTree: 'workspace.read',
   getMemoryContent: 'workspace.read',
   getQuality: 'workspace.read',
+  getQualityWindow: 'workspace.read',
   getRunTimeline: 'workspace.read',
   getSearchTree: 'workspace.read',
   getActivePlanReview: 'workspace.read',
@@ -72,6 +73,11 @@ export const AGENT_RPC_ACCESS = {
   resizeComputer: 'interactive',
   // A start refused for good retries only at the owner's word: the same start fails the same way.
   startComputer: 'interactive',
+  // The computer's terminal sessions are the owner's: their shells run as the box's root.
+  listComputerSessions: 'interactive',
+  openComputerSession: 'interactive',
+  renameComputerSession: 'interactive',
+  closeComputerSession: 'interactive',
   planFileRestore: 'interactive',
   clearBackgroundJobs: 'interactive',
   createTimerTrigger: 'interactive',

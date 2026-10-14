@@ -6,7 +6,7 @@
 import * as v from 'valibot';
 import { createCodeTool } from "@cloudflare/codemode/ai";
 import { type Tool, type ToolSet } from 'ai';
-import { execCallArgs, readDeviceRequestChannel, type CodemodeSurface, type DeviceRequestChannel, type ExecutorProviderSurface } from "@kinu.run/core";
+import { DESKTOP_MEMBERS, execCallArgs, execContext, readDeviceRequestChannel, type CodemodeSurface, type DeviceRequestChannel, type ExecutorProviderSurface } from "@kinu.run/core";
 import { renderCodemodeDescription, programDeclarations, describeProgramSource, nativeToolFunctions, toolsNamespace, CRAFTED_TOOL_NAMESPACE, type CodemodeProvider, type WorkMode, currentWorkMode, permitInPlan, toolsInWorkMode, providersInWorkMode, withCraftedToolDeclarations, codemodeInputSchema, withCodemodeProgram, craftedFailureFunctions, codemodeFunction, JsonValueSchema, type JsonObject, type JsonValue, type ToolSurfaceNarrowing } from "@kinu.run/core";
 import { KinuError } from '@kinu.run/core/obs';
 import {
@@ -53,6 +53,8 @@ function guarded(provider: CodemodeProvider, nested: (namespace: string, member:
 export function createCodemodeToolFactory(options: CodemodeFactoryOptions): CodemodeFactory {
   // The running program's channel, read per provider call: a detach changes the owning job mid-program.
   let deviceRequests: DeviceRequestChannel | undefined;
+  // The running program's stop signal: a program's calls arrive over RPC, outside its async context.
+  let programStop: AbortSignal | undefined;
 
   // Each executor as this factory's programs call it: `exec` carries the running program's device-request channel.
   const programExecutor = (p: ExecutorProviderSurface): ExecutorProviderSurface => {
@@ -61,10 +63,19 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
     for (const [name, entry] of Object.entries(p.tools)) {
       // Only `exec` mints a durable device-request identity, and it reads context from the second positional arg.
       const carriesOwnership = name === 'exec' && p.positionalArgs === true;
+      // A desktop call, named input then context, stops with its program and is refused once it was moved away.
+      const drivesDesktop = p.name === 'computer' && DESKTOP_MEMBERS.some((member) => member === name);
+
+      const called = (args: unknown[]): unknown[] => {
+        if (drivesDesktop) return [args[0], { ...v.parse(v.optional(v.looseObject({}), {}), args[1]), ...execContext({ signal: programStop, channel: deviceRequests }) }];
+
+        return carriesOwnership ? execCallArgs(args, { channel: deviceRequests }) : args;
+      };
+
       wrapped[name] = {
         ...entry,
         execute: async (...args) => {
-          const result = await entry.execute(...(carriesOwnership ? execCallArgs(args, { channel: deviceRequests }) : args));
+          const result = await entry.execute(...called(args));
 
           options.onExecutorUsed?.(p.name);
 
@@ -169,13 +180,16 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
 
           return withCodemodeProgram(async () => {
             const outer = deviceRequests;
+            const outerStop = programStop;
 
             if (channel !== undefined) deviceRequests = channel;
+            programStop = context.abortSignal;
 
             try {
               return v.parse(v.object({ result: v.optional(v.unknown()), logs: v.optional(v.array(v.string())) }), await execute(input, context));
             } finally {
               deviceRequests = outer;
+              programStop = outerStop;
             }
           }, context.abortSignal);
         },

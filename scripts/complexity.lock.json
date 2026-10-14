@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-10-13",
-  "files": 3256,
-  "functions": 85000,
+  "measuredAt": "2026-10-14",
+  "files": 3290,
+  "functions": 85731,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -114,10 +114,6 @@
       "complexity": 32
     },
     {
-      "key": "packages/cf-backend/src/components/surfaces/FilesSurface.tsx#FilesSurface",
-      "complexity": 31
-    },
-    {
       "key": "packages/cf-backend/src/drive-design/DriveDesignPage.tsx#DriveDesignPage",
       "complexity": 31
     },
@@ -211,6 +207,10 @@
     },
     {
       "key": "packages/cf-backend/src/components/surfaces/changelog-entries.tsx#ChangelogEntryCard",
+      "complexity": 28
+    },
+    {
+      "key": "packages/cf-backend/src/components/surfaces/FilesSurface.tsx#FilesSurface",
       "complexity": 28
     },
     {

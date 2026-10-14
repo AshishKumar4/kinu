@@ -39,20 +39,21 @@ export interface ScriptedAnswer {
   readonly text?: string;
   readonly toolCall?: { readonly name: string; readonly arguments: unknown };
   readonly pace?: ScriptedPace;
-  readonly rateLimited?: { readonly retryAfterSeconds: number };
+  readonly rateLimited?: { readonly retryAfterSeconds?: number };
 }
 
-/** A 429 the way an OpenAI-compatible provider sends one: its error body, and the seconds to wait in `retry-after`. */
+/** A 429 the way an OpenAI-compatible provider sends one: its error body, and the seconds to wait in `retry-after` when
+ *  it states any. Workers AI states none. */
 export interface RateLimitedResponse {
   readonly status: 429;
   readonly headers: Readonly<Record<string, string>>;
   readonly body: string;
 }
 
-export function rateLimitedAnswer(retryAfterSeconds: number): RateLimitedResponse {
+export function rateLimitedAnswer(retryAfterSeconds: number | undefined): RateLimitedResponse {
   return {
     status: 429,
-    headers: { 'content-type': 'application/json', 'retry-after': String(retryAfterSeconds) },
+    headers: { 'content-type': 'application/json', ...(retryAfterSeconds !== undefined && { 'retry-after': String(retryAfterSeconds) }) },
     body: JSON.stringify({ error: { message: 'Rate limit reached for requests', type: 'rate_limit_error', code: 'rate_limit_exceeded' } }),
   };
 }

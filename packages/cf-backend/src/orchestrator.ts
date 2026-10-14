@@ -139,7 +139,7 @@ import {
   type ReasoningEffort, type ShellApprovalMode,
   type AlarmScheduler,
   listGepaRuns, loadGepaCandidates, loadGepaParetoFront, type GepaRunSummary,
-  qualitySeries, type QualityDay, ratingQuality, thumbsRating, listThumbs,
+  qualitySeries, qualityWindow, type QualityDay, type QualityWindow, ratingQuality, thumbsRating, listThumbs,
   revertChangelogEntryById,
   type ChangelogEntry, type ChangelogRevertResult,
   listAlternateTakeSets, latestAlternateTakeSet,
@@ -261,7 +261,7 @@ import {
   type SandboxLifecycleIncidentResult,
 } from "./sandbox-lifecycle";
 
-import type { RestoreStatus } from "@kinu.run/devbox";
+import type { RestoreStatus, SessionRecord, TerminalSession } from "@kinu.run/devbox";
 import type { BoxSize } from "@kinu.run/devbox/sizes";
 import { accountSandboxSize, SANDBOX_SIZE_CONFIG_KEY, type SandboxSizeState } from "./sandbox-size";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
@@ -5084,6 +5084,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return qualitySeries(this.boundSql, this.actorHandle(), { days });
   }
 
+  /** The last `days` UTC days summed over every rating in them: the Agent tab's verdict. It moves with `getQuality`. */
+  @callable()
+  async getQualityWindow(days = 7): Promise<QualityWindow> {
+    return qualityWindow(this.boundSql, this.actorHandle(), { days });
+  }
+
   /** One GEPA run with candidates and Pareto-front membership; Maps flattened to objects for RPC. */
   @callable()
   getGepaRun(runId: string): Promise<{
@@ -6061,6 +6067,27 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   @callable() async resizeComputer(size: string | null): Promise<SandboxSizeState | null> {
     return await this.withSizedBox(async (box) => { await box.resize(size); });
+  }
+
+  /** The computer's terminal sessions (D90), read without waking it; null where the deployment has no computer. */
+  @callable() async listComputerSessions(): Promise<readonly TerminalSession[] | null> {
+    return await this.computerBox()?.terminalSessions() ?? null;
+  }
+
+  @callable() async openComputerSession(name?: string): Promise<SessionRecord | null> {
+    return await this.computerBox()?.openTerminalSession(name) ?? null;
+  }
+
+  @callable() async renameComputerSession(id: string, name: string): Promise<SessionRecord | null> {
+    return await this.computerBox()?.renameTerminalSession(id, name) ?? null;
+  }
+
+  @callable() async closeComputerSession(id: string): Promise<void> {
+    await this.computerBox()?.closeTerminalSession(id);
+  }
+
+  private computerBox(): SandboxBox | undefined {
+    return this.env.KinuDevbox?.getByName(sandboxIdForWorkspace(this.name));
   }
 
   /** The box keeps the account default its next start uses, so every read and change pushes the owner's current one. */

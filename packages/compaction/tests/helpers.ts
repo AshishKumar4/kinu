@@ -183,14 +183,24 @@ function screenshotResult(n: number): ToolResultPart {
   };
 }
 
-/** One task whose turn took 20 screenshots, then two short exchanges: the tail the ladder protects. */
-export function screenshotRun(): ModelMessage[] {
+/** One turn's first `steps` steps, each a screenshot's call and its result, as the turn's step `steps + 1` sees them. */
+export function screenshotSteps(steps: number): ModelMessage[] {
   return [
-    user('Check each of the 20 settings screens and tell me which shows an error.'),
-    ...Array.from({ length: 20 }, (_, n) => [
+    user('Watch the settings screens and tell me which shows an error.'),
+    ...Array.from({ length: steps }, (_, n) => [
       assistant([toolCall(`shot_${n}`, 'browser', { action: 'screenshot', screen: String(n) })]),
       toolMessage([screenshotResult(n)]),
     ]).flat(),
+  ];
+}
+
+/** One task whose turn took 20 screenshots, then two short exchanges: the tail the ladder protects. */
+export function screenshotRun(): ModelMessage[] {
+  const [, ...steps] = screenshotSteps(20);
+
+  return [
+    user('Check each of the 20 settings screens and tell me which shows an error.'),
+    ...steps,
     assistant([{ type: 'text', text: 'Screen 7 shows the error.' }]),
     user('Thanks.'),
     assistant([{ type: 'text', text: 'Glad to help.' }]),

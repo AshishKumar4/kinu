@@ -9,7 +9,10 @@ export interface AttachmentDeps {
   readonly files: () => { readonly storage: Pick<Storage, 'vfs' | 'home'>; readonly planes: PathPlanes };
 }
 
-const KEEP_RECENT_IMAGES = 2;
+export const KEEP_RECENT_IMAGES = 2;
+
+/** Where an attachment moves to and what is left in its place: the turn's ladder and a turn's steps share it. */
+export type AttachmentStore = Pick<AttachmentPolicy, 'list' | 'replace' | 'store'>;
 
 /**
  * Priced for the model serving the request. The key names the policy alone: a plan belongs to the history, so any
@@ -19,16 +22,22 @@ export function kinuAttachments(deps: AttachmentDeps, model: string): Attachment
   return {
     key: `recent:${KEEP_RECENT_IMAGES}`,
     keepRecentImages: KEEP_RECENT_IMAGES,
-    list: (item) => carriedMedia(item).flatMap((media) => {
-      const attachment = attachmentOf(media);
-
-      return attachment === null ? [] : [attachment];
-    }),
+    ...attachmentStore(deps),
     estimateTokens: (attachment, item) => {
       const media = carriedMedia(item).find((carried) => carried.id === attachment.id);
 
       return media === undefined ? undefined : mediaTokens(model, media);
     },
+  };
+}
+
+export function attachmentStore(deps: AttachmentDeps): AttachmentStore {
+  return {
+    list: (item) => carriedMedia(item).flatMap((media) => {
+      const attachment = attachmentOf(media);
+
+      return attachment === null ? [] : [attachment];
+    }),
     replace: (item, attachment, text) => withoutMedia(item, attachment.id, text),
     store: async (attachment, item) => {
       const media = carriedMedia(item).find((carried) => carried.id === attachment.id);

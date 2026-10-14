@@ -4,6 +4,7 @@ import { detach } from '@kinu.run/core/obs';
 import { executorLabel } from '@kinu.run/core';
 import * as v from 'valibot';
 import { withGallery } from '../../scripts/gallery-harness';
+import { inspectorPageListed, openInspectorPage } from '../../scripts/product-flows';
 import type { Frame, Page } from 'puppeteer';
 
 async function serveSlate(page: Page): Promise<void> {
@@ -161,29 +162,18 @@ test('preview tabs lead the fixed surfaces and their URL can be copied and opene
       for (const width of [1100, 390]) {
         await page.setViewport({ width, height: 850 });
         await page.goto(`${origin}/gallery.html?frame=previewtabs`, { waitUntil: 'networkidle0' });
-        await page.waitForSelector('[aria-label="Dashboard"]');
+        await page.waitForSelector(inspectorPageListed('Dashboard'));
 
-        // The bar is whatever holds both the first preview and Activity; its tabs are read in the order it draws them.
-        const previews = ['Dashboard', 'Sandbox app', 'Device app'];
-        const surfaces = ['Work', 'Changes', 'Files', 'Swarms', 'Agent', 'Environment', 'Activity'];
+        // Every preview is among the bar's pages, by its tab or its opener's list, and the pages lead the tools.
+        for (const preview of ['Dashboard', 'Sandbox app', 'Device app']) expect(await page.$(inspectorPageListed(preview))).not.toBeNull();
 
-        const tabs = await page.$eval('[aria-label="Dashboard"]', (first, known) => {
-          let bar = first.parentElement;
+        expect(await page.evaluate(() => {
+          const [pages, tools] = [document.querySelector('nav[aria-label="Pages"]'), document.querySelector('nav[aria-label="Workspace"]')];
 
-          while (bar !== null && bar.querySelector('[aria-label="Activity"]') === null) bar = bar.parentElement;
+          return pages !== null && tools !== null && (pages.compareDocumentPosition(tools) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+        })).toBe(true);
 
-          if (bar === null) throw new Error('no bar holds both the preview and Activity');
-
-          return [...bar.querySelectorAll('button')].map((tab) => tab.getAttribute('aria-label') ?? '').filter((name) => known.includes(name));
-        }, [...previews, ...surfaces]);
-
-        expect(tabs[0]).toBe('Dashboard');
-        const lastPreview = Math.max(...tabs.flatMap((name, index) => previews.includes(name) ? [index] : []));
-        const firstSurface = tabs.findIndex((name) => surfaces.includes(name));
-        expect(firstSurface).toBeGreaterThan(-1);
-        expect(lastPreview).toBeLessThan(firstSurface);
-
-        await page.click('[aria-label="Dashboard"]');
+        await openInspectorPage(page, 'Dashboard');
         await page.waitForSelector('iframe');
 
         const chrome = await page.$eval('iframe', (frame) => {
@@ -234,7 +224,7 @@ test('preview tabs deduplicate live slates, fill the surface, and give each open
       for (const width of [1100, 390]) {
         await page.setViewport({ width, height: 850 });
         await page.goto(`${origin}/gallery.html?frame=previewtabs`, { waitUntil: 'networkidle0' });
-        await page.waitForSelector('[aria-label="Dashboard"]');
+        await page.waitForSelector('nav[aria-label="Pages"]');
         expect(await page.$('[aria-label="Output"]')).toBeNull();
         expect(await page.$('[aria-label="Duplicate dashboard port"]')).toBeNull();
         // The workspace-wide read lands once and lists the whole roster —
@@ -244,7 +234,7 @@ test('preview tabs deduplicate live slates, fill the surface, and give each open
 
         // Each tab frames its own origin, so the wait names the tab's iframe, not whichever the last tab left.
         for (const [title, host] of [['Dashboard', 'gallery.preview'], ['Sandbox app', '8080-sandbox'], ['Device app', '3000-device']]) {
-          await page.click(`[aria-label="${title}"]`);
+          await openInspectorPage(page, title ?? '');
           const iframe = await page.waitForSelector(`iframe[src*="${host}"]`);
 
           if (!iframe) throw new Error('Preview missing');
@@ -285,15 +275,15 @@ test('preview tabs deduplicate live slates, fill the surface, and give each open
         // stays where it was and the strip raises the "Preview ready" chip —
         // only the reader's click on it navigates.
         await page.waitForSelector('[data-preview-ready]');
-        expect(await page.$eval('[aria-label="Report"]', el => el.getAttribute('aria-current'))).not.toBe('true');
+        expect(await currentPage(page)).not.toBe('Report');
         await page.click('[data-preview-ready]');
-        await page.waitForSelector('[aria-label="Report"][aria-current="true"]');
+        await page.waitForSelector('nav[aria-label="Pages"] [aria-label="Report"][aria-current="true"]');
         await page.click('[aria-label="Work"]');
         await page.click('[data-refresh-preview]');
         expect(await page.$eval('[aria-label="Work"]', el => el.getAttribute('aria-current'))).toBe('true');
         await page.click('[data-add-diff]');
         await page.waitForSelector('[aria-label="Changes"]');
-        await page.click('[aria-label="Sandbox app"]');
+        await openInspectorPage(page, 'Sandbox app');
         await page.click('[aria-label="Work"]');
         // The roster is always in the read: the dismissed actor's card says
         // retained beside its name, and its plan opens read-only like the
@@ -320,8 +310,7 @@ test('preview tabs deduplicate live slates, fill the surface, and give each open
         // list while the reader is off on a preview tab.
         await page.click('[data-new-plan]');
         await page.waitForFunction(() => document.querySelector('[data-work-plans]')?.textContent?.includes('Dashboard delivery'));
-        await page.click('[aria-label="Device app"]');
-        await page.waitForSelector('[aria-label="Device app"][aria-current="true"]');
+        await openInspectorPage(page, 'Device app');
         // Neither a malformed reference nor one the workspace never issued may
         // move the user: the malformed one never becomes a reference at all,
         // and the stale one names a revision the read does not hold, so the
@@ -330,7 +319,7 @@ test('preview tabs deduplicate live slates, fill the surface, and give each open
         await page.click('[data-notify-stale]');
         await readCycleElapsed(page);
         expect(await page.$(':not([hidden]) > [data-plan-page] [data-plan-review-root]')).toBeNull();
-        expect(await page.$eval('[aria-label="Device app"]', el => el.getAttribute('aria-current'))).toBe('true');
+        expect(await currentPage(page)).toBe('Device app');
         // The real reference: the exact plan opens on its own page — foreign, so read-only with the way to its
         // owner's conversation.
         await page.click('[data-notify-plan]');
@@ -352,10 +341,10 @@ test('preview tabs deduplicate live slates, fill the surface, and give each open
         await page.click('[data-notify-plan]');
         await readCycleElapsed(page);
         expect(await page.$eval(':not([hidden]) > [data-plan-page] [data-plan-title]', el => el.textContent)).toContain('Nested');
-        await page.click('[aria-label="Sandbox app"]');
+        await openInspectorPage(page, 'Sandbox app');
         await page.click('[data-worker-plan]');
-        // Another conversation's pending plan takes nobody anywhere: it waits as a page tab of its own.
-        await page.waitForSelector('nav[aria-label="Pages"] button[aria-label*="Worker revision two"]');
+        // Another conversation's pending plan takes nobody anywhere: it waits as a page of its own in the bar.
+        await page.waitForSelector(inspectorPageListed('Worker revision two'));
         expect(await currentPage(page)).toBe('Sandbox app');
         await openWork(page);
         await page.waitForFunction(() => document.querySelector('[data-work-plans]')?.textContent?.includes('Worker revision two'));
@@ -396,7 +385,7 @@ test('a change-set read that fails raises the Changes tab, which says what faile
     try {
       await page.setViewport({ width: 1100, height: 850 });
       await page.goto(`${origin}/gallery.html?frame=previewtabs`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('[aria-label="Dashboard"]');
+      await page.waitForSelector(inspectorPageListed('Dashboard'));
       expect(await page.$('[aria-label="Changes"]')).toBeNull();
       // Nothing changed anywhere, so only the failure can raise the tab. Unseen, Changes reads only on an event it
       // listens to; the window taking focus is one.
@@ -417,7 +406,7 @@ async function openChanges(newPage: () => Promise<Page>, origin: string, machine
 
   await page.setViewport({ width: 1280, height: 850 });
   await page.goto(`${origin}/gallery.html?frame=previewtabs`, { waitUntil: 'networkidle0' });
-  await page.waitForSelector('[aria-label="Dashboard"]');
+  await page.waitForSelector(inspectorPageListed('Dashboard'));
   await page.click('[data-add-diff]');
 
   if (machine) await page.click('[data-add-machine]');
@@ -574,7 +563,7 @@ test('a workspace switch clears the sandbox-starting line of the workspace left 
       await page.waitForSelector('[data-composer-root]');
       // The sandbox lists a port the page pins, then its next listing answers as starting: the pin stays, the line shows.
       await page.evaluate(() => { document.documentElement.dataset.previewArrived = '1'; });
-      await page.waitForSelector('[aria-label="Arrived app"]');
+      await page.waitForSelector(inspectorPageListed('Arrived app'));
       await page.evaluate(() => { document.documentElement.dataset.sandboxStarting = '1'; });
       await page.waitForSelector('[data-preview-starting]');
       // The next workspace's listing never lands, so only the switch itself can clear the line.
@@ -583,7 +572,7 @@ test('a workspace switch clears the sandbox-starting line of the workspace left 
         await window.galleryNavigate?.('/workspace/billing-cleanup');
       });
       // The switch's reset drops the pin and the line in one render, so once the pin has gone the line must be gone.
-      await page.waitForFunction(() => document.querySelector('[aria-label="Arrived app"]') === null);
+      await page.waitForFunction((listed) => document.querySelector(listed) === null, {}, inspectorPageListed('Arrived app'));
       expect(await page.$('[data-preview-starting]')).toBeNull();
     } finally { await page.close(); }
   });
@@ -662,32 +651,28 @@ test('a note on a changed line stands in for Mark reviewed, leaves the diff when
   });
 });
 
-test('a mouse wheel over the inspector strip scrolls it sideways, so a tab past its edge is reachable', async () => {
+test('a page with no room in the inspector bar is reachable from the bar, and opens', async () => {
   await withGallery(async ({ newPage, origin }) => {
     const page = await newPage();
 
     try {
-      // The default inspector width, with three slates' tabs in the pages' share of the bar.
-      await page.setViewport({ width: 1440, height: 900 });
+      // The column at its opening width, with three slates' pages in the pages' share of the bar.
+      await page.setViewport({ width: 1100, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage&slates=3`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('nav[aria-label="Pages"] button[aria-label="Tally"]');
-      const strip = await page.$('nav[aria-label="Pages"] ul');
-      const box = await strip?.boundingBox();
+      await page.waitForSelector('nav[aria-label="Pages"]');
 
-      if (strip === null || strip === undefined || box === null || box === undefined) throw new Error('the inspector strip is not drawn');
+      const shown = (): Promise<string[]> => page.$$eval('nav[aria-label="Pages"] button[aria-label]',
+        (buttons) => buttons.map((button) => button.getAttribute('aria-label') ?? ''));
 
-      // Whether the strip's last tab ends inside the strip's visible edge.
-      const lastTabShown = (): Promise<boolean> => strip.evaluate((element) => {
-        const last = [...element.querySelectorAll('button[aria-label]')].at(-1)?.getBoundingClientRect();
+      // Not every page fits beside the tools: the rest wait behind the bar's own opener.
+      expect(await shown()).not.toContain('Tally');
+      await page.click('nav[aria-label="Pages"] button[aria-haspopup="menu"]');
 
-        return last !== undefined && last.right <= element.getBoundingClientRect().right + 1;
-      });
+      const tally = await page.waitForFunction(() => [...document.querySelectorAll('nav[aria-label="Pages"] [role="menuitem"]')]
+        .find((item) => item.textContent?.includes('Tally') === true) ?? null);
 
-      expect(await lastTabShown()).toBe(false);
-      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-      await page.mouse.wheel({ deltaY: 2000 });
-
-      expect(await lastTabShown()).toBe(true);
+      await tally.asElement()?.evaluate((item) => { if (item instanceof HTMLElement) item.click(); });
+      await page.waitForFunction(() => document.querySelector('nav[aria-label="Pages"] [aria-current="true"]')?.textContent?.includes('Tally') === true);
     } finally { await page.close(); }
   });
 });

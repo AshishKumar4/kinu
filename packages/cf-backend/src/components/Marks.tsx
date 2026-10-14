@@ -1,3 +1,4 @@
+import type { IconWeight } from "@phosphor-icons/react";
 import { useId, type CSSProperties } from "react";
 import { Tooltip } from "@cloudflare/kumo";
 import { hueStops, rankHue, type AgentActivity } from "@kinu.run/core";
@@ -216,5 +217,22 @@ export function WorkspaceLogo({ title, logo, size = 16 }: { title: string; logo:
       style={{ width: size, height: size, borderRadius: radius, fontSize: Math.round(size * 0.56) }}>
       {(title.trim()[0] ?? "?").toUpperCase()}
     </span>
+  );
+}
+
+/**
+ * The agent drawn as the tools are drawn: its mascot's tile and two eyes in a line glyph, for the inspector's Agent
+ * tool. Takes an icon's props, so it sits in an icon row; `fill` washes the tile, as a filled icon is the open one.
+ */
+export function AgentFaceIcon({ size = 16, weight, className }: { size?: number | string; weight?: IconWeight; className?: string }) {
+  const filled = weight === "fill";
+
+  return (
+    <svg viewBox="0 0 16 16" width={size} height={size} aria-hidden className={className}>
+      <rect x="2.25" y="2.75" width="11.5" height="10.5" rx="3.6" fill="currentColor" fillOpacity={filled ? 0.2 : 0}
+        stroke="currentColor" strokeWidth="1.25" />
+      <rect x="5.35" y="5.6" width="1.5" height="3.7" rx="0.75" fill="currentColor" />
+      <rect x="9.15" y="5.6" width="1.5" height="3.7" rx="0.75" fill="currentColor" />
+    </svg>
   );
 }

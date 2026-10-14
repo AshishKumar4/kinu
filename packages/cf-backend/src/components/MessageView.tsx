@@ -1,6 +1,7 @@
 import { Effect, Cause } from 'effect';
 import { createContext, Fragment, memo, useContext, useState, useRef, useEffect, useLayoutEffect, useCallback, type ReactNode } from "react";
 import {
+  ArrowClockwiseIcon,
   WrenchIcon, CaretRightIcon,
   GitBranchIcon, CheckCircleIcon,
   WarningCircleIcon,
@@ -25,6 +26,7 @@ import { diagnostics, renderThrownChain, detach } from "@kinu.run/core/obs";
 import { PreviewFrame } from "@/components/PreviewFrame";
 import { AnswerText, MarkdownContent, CodeBlock, SlateLink, type AnswerChat } from "@/components/surfaces/shared";
 import { AttachmentChip } from "@/components/AttachmentChip";
+import { AnswerPicturesContext, PartPictures, useAnswerPictures } from "@/components/ChatImages";
 import { extractPreviewUrl } from "@kinu.run/core";
 import {
   groupMessageParts,
@@ -33,7 +35,7 @@ import {
 } from "@kinu.run/core";
 import { drawnText, toolCallRunning, type LiveTail } from "@kinu.run/core";
 import { redactPayload, redactSecrets, segmentBySteers, splicesSeenOn, type SignalCard } from "@kinu.run/core";
-import { classifyProgrammaticTurn, endedMidWork, isSteeredMessage, turnFailure } from "@kinu.run/core";
+import { classifyProgrammaticTurn, endedMidWork, isSteeredMessage, turnFailure, turnFailureFacts } from "@kinu.run/core";
 import { EventRow, foldRepeats, ProgrammaticTurnCard, type CardState } from "@/components/ProgrammaticTurnCard";
 import { useToggledSet } from "@/hooks/use-toggled-set";
 import type { UnavailableDevice } from "@/hooks/use-workspace-reads";
@@ -168,32 +170,42 @@ function ReasoningBlock({ text, live = false }: { text: string; live?: boolean }
   );
 }
 
-/** A settled answer's failure as its turn recorded it, a provider's refusal in the provider's words. */
+/** Where a turn stopped on a failure: one quiet line in the provider's own words, the raw response a click away. The
+ *  notice above the prompt box acts on the newest; dismissed, this line keeps its Retry. */
 function FailedTurnRow({ message, live, onRetry }: { message: UIMessage; live: boolean; onRetry: (() => void) | undefined }) {
   const failure = live ? null : turnFailure({ metadata: message.metadata });
+  const [open, setOpen] = useState(false);
 
   if (failure === null) return null;
+  const { provider, words, raw } = turnFailureFacts(failure);
+  const said = provider === null ? words : `${provider}: ${words}`;
 
   return (
-    <div className="flex items-start gap-2 p-row-text p-text-2" role="status" data-turn-failure>
-      <WarningCircleIcon size={14} className="shrink-0 mt-0.5 p-danger" weight="fill" />
-      <code className="min-w-0 flex-1 p-t-code break-all">{failure}</code>
-      {onRetry !== undefined && (
-        <button onClick={onRetry} className="shrink-0 p-t-control p-accent hover:opacity-90 cursor-pointer">Retry this turn</button>
-      )}
+    <div className="py-0.5" role="status" data-turn-failure>
+      <div className="p-turn-mark">
+        <WarningCircleIcon size={14} weight="fill" className="p-danger" aria-hidden />
+        <span className="min-w-0 truncate" title={said}><span className="p-text-2">This turn stopped.</span> {said}</span>
+        <button type="button" className="p-turn-mark-link" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? "Hide" : "Details"}</button>
+        {onRetry !== undefined && (
+          <button type="button" onClick={onRetry} className="p-turn-mark-link inline-flex items-center gap-1">
+            <ArrowClockwiseIcon size={11} aria-hidden />Retry
+          </button>
+        )}
+      </div>
+      {open && <pre className="p-pill-detail !ml-[21px]">{raw}</pre>}
     </div>
   );
 }
 
+/** A turn its owner stopped before its work was done: the failure line's quiet shape, with nothing to act on. */
 function StoppedMidWorkRow() {
   return (
-    <div className="flex items-center gap-2 p-row-text p-text-3" role="status">
-      <span className="size-1.5 rounded-full p-dot-danger" aria-hidden />
+    <div className="p-turn-mark py-0.5" role="status">
+      <span className="ml-1 mr-0.5 size-1.5 shrink-0 self-center rounded-full p-dot-danger" aria-hidden />
       <span>Stopped before the work was finished</span>
     </div>
   );
 }
-
 
 function jsonString(input: JsonObject | undefined, key: string): string | null {
   const value = input?.[key];
@@ -258,6 +270,20 @@ function HelperChatLink({ output }: { output?: JsonValue }) {
   return (
     <Link to={`${base.base}${encodeURIComponent(name)}${base.parent === null ? "" : `?parent=${encodeURIComponent(base.parent)}`}`} aria-label={`Open ${name}'s conversation`}
       className="ml-10 inline-block p-annotation p-accent hover:underline">{name}</Link>
+  );
+}
+
+/** What a tool printed, as it printed it; a tool that printed nothing says so instead of drawing an empty box. */
+function ToolOutput({ output }: { output: JsonValue }) {
+  const printed = displayToolValue(redactPayload(output));
+
+  return (
+    <div>
+      <div className="p-eyebrow mb-1">Output</div>
+      {printed.trim() === ""
+        ? <p className="p-meta p-text-3">Nothing printed.</p>
+        : <pre className="p-t-code p-text-2 max-h-40 overflow-auto whitespace-pre-wrap break-words m-0">{printed}</pre>}
+    </div>
   );
 }
 
@@ -373,15 +399,10 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
           {codePreview === null && input != null && (
             <div>
               <div className="p-eyebrow mb-1">Input</div>
-              <div className="max-h-40 overflow-auto"><CodeBlock className="language-json">{JSON.stringify(redactPayload(input), null, 2)}</CodeBlock></div>
+              <div className="max-h-40 overflow-auto"><CodeBlock wrap className="language-json">{JSON.stringify(redactPayload(input), null, 2)}</CodeBlock></div>
             </div>
           )}
-          {output != null && (
-            <div>
-              <div className="p-eyebrow mb-1">Output</div>
-              <pre className="p-t-code p-text-2 max-h-40 overflow-auto whitespace-pre-wrap m-0">{displayToolValue(redactPayload(output))}</pre>
-            </div>
-          )}
+          {output != null && <ToolOutput output={output} />}
         </div>
       )}
     </div>
@@ -445,6 +466,7 @@ function ToolCallPart({ part, expanded, onToggleExpand }: { part: AnyToolPart; e
           <PreviewFrame url={previewUrl} />
         </div>
       )}
+      <PartPictures part={part} size="thumb" />
     </div>
   );
 }
@@ -578,6 +600,7 @@ export const MessageView = memo(function MessageView({
 }) {
   const isUser = message.role === "user";
   const isLive = tail !== null;
+  const { pictures: answerPictures, lightbox } = useAnswerPictures(message, tail);
   // The mid-stream last assistant message is not persisted yet, so it cannot be forked.
   const canFork = !isLive && onFork !== undefined && message.id !== "";
   const { set: callToggles, toggle: toggleCall } = useToggledSet();
@@ -668,10 +691,13 @@ export const MessageView = memo(function MessageView({
 
       // `p-streaming` draws the caret inside the last markdown block; a sibling element would land on its own line.
       return (
-        <div key={key} {...(isTailPart ? { "data-live-indicator": "text" } : {})}
-          className={`prose-chat p-text${isTailPart ? " p-streaming" : ""}`}>
-          <AnswerText text={t} place={{ messageId: message.id, stored: tail === null, chat: answerSlates }} />
-        </div>
+        <Fragment key={key}>
+          <div {...(isTailPart ? { "data-live-indicator": "text" } : {})}
+            className={`prose-chat p-text${isTailPart ? " p-streaming" : ""}`}>
+            <AnswerText text={t} place={{ messageId: message.id, stored: tail === null, chat: answerSlates }} />
+          </div>
+          <PartPictures part={part} size="full" />
+        </Fragment>
       );
     }
 
@@ -684,7 +710,9 @@ export const MessageView = memo(function MessageView({
   );
 
   return (
+    <AnswerPicturesContext.Provider value={answerPictures}>
     <div className="group/msg space-y-1 animate-fade-in">
+      {lightbox}
       {segments.map((segment, s) => (
         <Fragment key={s}>
           {segment.steer && <SteerBubble steer={segment.steer} onFork={onFork} />}
@@ -743,6 +771,7 @@ export const MessageView = memo(function MessageView({
         </div>
       )}
     </div>
+    </AnswerPicturesContext.Provider>
   );
 });
 
