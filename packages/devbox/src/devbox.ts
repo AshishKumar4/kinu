@@ -19,7 +19,7 @@ import artifact from '../block-lower/upstream.json';
 import { ContainerRoutes, type OutboundPolicy } from './gateway';
 import { terminalSocket, resetTerminal } from './terminal';
 import {
-  FIRST_SESSION, SESSIONS_KEY, SESSIONS_READ, SessionNameSchema, SessionRecordsSchema, mergeSessions, newSessionId, newSessionName,
+  FIRST_SESSION, SESSIONS_CLOSED_KEY, SESSIONS_FORGET, SESSIONS_KEY, SESSIONS_READ, SESSIONS_SAVE, SessionNameSchema, SessionRecordsSchema, jobSessionId, jobSessionName, mergeSessions, newSessionId, newSessionName,
   parseSessionsRead, type SessionRecord, type TerminalSession,
 } from './sessions';
 import { bridgeSockets } from './socket-bridge';
@@ -2234,6 +2234,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       await this.#record('quiesce', warning);
     }
 
+    // The stop ends every terminal session; what each showed and ran goes into the checkpoint first (D97).
+    await this.#saveSessions();
+
     // The commit and the snapshot run beside the box's processes; the container's stop ends them.
     const committed = await this.#checkpoint('quiesce');
     const outcome = warning === undefined ? committed : { ...committed, reason: warning + (committed.reason === undefined ? '' : '; ' + committed.reason) };
@@ -2314,8 +2317,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       yield* attempt('io', () => this.ensureReady());
       const result = yield* attempt('process', () => this.#supervised().run({ kind: 'start', command, cwd: cwd ?? DEVBOX_WORKDIR }));
 
-      return result.kind === 'started' ? { processId: result.process.id }
-        : yield* Effect.fail(new DevboxError('cancelled', 'supervised start was superseded'));
+      if (result.kind !== 'started') return yield* Effect.fail(new DevboxError('cancelled', 'supervised start was superseded'));
+      // Its session is listed beside the person's own, by what it runs (D95).
+      this.#recordJobSession(result.process.id, command, cwd ?? DEVBOX_WORKDIR);
+
+      return { processId: result.process.id };
     })));
   }
 
@@ -2325,10 +2331,14 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       const arrived = this.#teardowns;
       await this.#ensureReady(arrived);
       const result = await this.#supervised().run({ kind: 'stop', processId });
+      const ended = result.kind === 'stopped' && result.stopped;
 
       this.stampInteraction();
 
-      return { stopped: result.kind === 'stopped' && result.stopped };
+      // A stopped job's session goes with it: the shell under its output, and its tab (D95).
+      if (ended) await this.#forgetJobSession(processId);
+
+      return { stopped: ended };
     }));
   }
 
@@ -2347,6 +2357,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
           status: 'starting',
           command: spec.command,
           restartable: true,
+          waiting: undefined,
+          session: jobSessionId(spec.processId),
         });
       }
 
@@ -2356,9 +2368,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         rows.set(live.id, {
           processId: live.id,
           pid: live.pid,
-          status: live.status,
+          status: live.waiting === undefined ? live.status : 'waiting for input',
           command: rows.get(live.id)?.command ?? live.command,
           restartable: specIds.has(live.id),
+          waiting: live.waiting,
+          session: specIds.has(live.id) ? jobSessionId(live.id) : undefined,
         });
       }
 
@@ -3022,6 +3036,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   protected async configureContainer(reused = this.#adoptionPending || this.#restoration.phase === 'attached' || this.#restoration.phase === 'repair'): Promise<void> {
     await this.#routes().configure(await this.outboundPolicy(), this.store, reused);
     this.#renewContainer();
+    await this.#forgetClosedSessions();
     const name = await this.hostname();
 
     // The kernel keeps a name for the boot alone, so each start names the box again (D83, D96).
@@ -3340,6 +3355,56 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }));
   }
 
+  #recordJobSession(processId: string, command: string, cwd: string): void {
+    const id = jobSessionId(processId);
+    const records = this.#sessionRecords();
+
+    if (!records.some((record) => record.id === id)) this.ctx.storage.kv.put(SESSIONS_KEY, [...records, { id, name: jobSessionName(command), cwd, job: processId }]);
+  }
+
+  async #forgetJobSession(processId: string): Promise<void> {
+    const id = jobSessionId(processId);
+    const container = this.ctx.container;
+
+    if (container?.running === true) await resetTerminal(container, id);
+    this.ctx.storage.kv.put(SESSIONS_KEY, this.#sessionRecords().filter((record) => record.id !== id));
+  }
+
+  /**
+   * What each terminal session showed and was running, kept on the box's disk as it stops (D97). A save that fails is
+   * traced and the stop goes on: the sessions come back fresh in their folders, as before D97.
+   */
+  async #saveSessions(): Promise<void> {
+    const container = this.ctx.container;
+
+    if (container?.running !== true) return;
+    const ids = this.#sessionRecords().map((record) => record.id);
+    const [saved] = await Promise.allSettled([(async () => (await container.exec(['bash', '-c', SESSIONS_SAVE, 'sessions-save', ...ids])).output())()]);
+
+    if (saved.status === 'rejected') this.#trace('sessions.unsaved', { reason: describe({ cause: saved.reason }) });
+    else if (saved.value.exitCode !== 0) this.#trace('sessions.unsaved', { reason: new TextDecoder().decode(saved.value.stderr).trim() });
+  }
+
+  /** The sessions closed while the box was stopped, whose saves its next start removes (D97). */
+  #closedSessions(): string[] {
+    return parsedOrNull(v.array(v.string()), this.ctx.storage.kv.get<StoredValue>(SESSIONS_CLOSED_KEY)) ?? [];
+  }
+
+  /**
+   * Removes what the box saved of sessions closed while it was stopped, before any attach could show one: the first
+   * session comes back under its own id when the last is closed. A removal that fails is traced and asked again at the
+   * next start.
+   */
+  async #forgetClosedSessions(): Promise<void> {
+    const ids = this.#closedSessions();
+
+    if (ids.length === 0) return;
+    const [forgot] = await Promise.allSettled([(async () => (await this.#container().exec(['sh', '-c', SESSIONS_FORGET, 'sessions-forget', ...ids])).output())()]);
+
+    if (forgot.status === 'fulfilled' && forgot.value.exitCode === 0) this.ctx.storage.kv.delete(SESSIONS_CLOSED_KEY);
+    else this.#trace('sessions.unforgotten', { ids: ids.join(' '), reason: forgot.status === 'rejected' ? describe({ cause: forgot.reason }) : new TextDecoder().decode(forgot.value.stderr).trim() });
+  }
+
   /** The recorded sessions, the first one when there is none. */
   #sessionRecords(): SessionRecord[] {
     const records = parsedOrNull(SessionRecordsSchema, this.ctx.storage.kv.get<StoredValue>(SESSIONS_KEY));
@@ -3397,13 +3462,25 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }));
   }
 
-  /** Ends a session and forgets it; the box keeps one, so closing the last leaves a fresh first session. */
+  /** Ends a session and forgets it; the box keeps one, so closing the last leaves a fresh first session. Closing an
+   *  agent's job's session stops the job, so a restart does not bring it back (D95). */
   closeTerminalSession(id: string): Promise<void> {
     return settle(Effect.gen({ self: this }, function* () {
-      yield* this.#session(id);
+      const session = yield* this.#session(id);
+
+      if (session.job !== undefined) {
+        const job = session.job;
+
+        yield* attempt('io', () => this.stopSupervised(job));
+
+        return;
+      }
+
       const container = this.ctx.container;
 
       if (container?.running === true) yield* attempt('io', () => resetTerminal(container, id));
+      // A stopped box cannot remove what it saved of the session; its next start does, before any attach (D97).
+      else this.ctx.storage.kv.put(SESSIONS_CLOSED_KEY, [...this.#closedSessions(), id]);
       this.ctx.storage.kv.put(SESSIONS_KEY, this.#sessionRecords().filter((record) => record.id !== id));
     }));
   }

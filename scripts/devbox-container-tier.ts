@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { stripVTControlCharacters } from 'node:util';
 import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 import { copyPinnedTools, uploadPinnedTools } from './devbox-tools';
@@ -77,6 +78,14 @@ const NAME_LOOKUP_MS = 50;
 /** How long the tier watches a refused box for another start: the box this contract caught re-armed every second. */
 const PARKED_WATCH_MS = 20_000;
 
+/** A job that stops at a prompt, then answers with what it was told (D95). */
+const JOB_PROMPT = 'printf "Your name? "; read name; echo "hi $name"';
+
+/** How many times, and how far apart, a job's status is read while it starts and finishes: a person waits seconds. */
+const JOB_READS = 40;
+
+const JOB_READ_MS = 500;
+
 /**
  * A server a session runs in a folder of its own, as the computer-sessions flow does on a deployment. The folder's name
  * holds a space, quotes, a dollar and the marker f588b0bed reserved: any folder reads back whole. A tab and a
@@ -95,6 +104,34 @@ const SESSION_SERVER = `mkdir -p ${SESSION_FOLDER_WORD} && cd ${SESSION_FOLDER_W
 const SESSION_READS = 20;
 
 const SESSION_READ_MS = 500;
+
+/**
+ * Bun's WebSocket, which takes the handshake's headers (bun-types `Bun.WebSocketOptions`); the ambient type here is
+ * undici's, which takes protocols only (as evals/src/session-protocol.ts measured). The fixture admits a bearer header.
+ */
+const HeaderSocket = v.parse(
+  v.custom<new (url: URL, options: Bun.WebSocketOptions) => WebSocket>((value) => value === globalThis.WebSocket, 'the global WebSocket constructor'),
+  globalThis.WebSocket,
+);
+
+const RESURRECT_MARKER = '/var/tmp/kinu-resurrect-marker';
+
+const RESURRECT_COUNT = '/var/tmp/kinu-resurrect-count';
+
+/**
+ * What a person was running when the box stopped (D97): quotes, a `$()` that touches a marker, `;`, and a newline inside
+ * a quoted string, ending in a long sleep so it runs as the box stops. Typed into the session as a person types it.
+ */
+const RESURRECT_LINE = `echo "it's $(touch ${RESURRECT_MARKER}; echo ok)"; printf 'a;b\\n'; echo 1 >> ${RESURRECT_COUNT}; echo "two
+lines"; sleep 600`;
+
+/** After the prompt shows, how long the step waits before reading the files: long enough for a line to have run. */
+const RESURRECT_SETTLE_MS = 2_000;
+
+/** How many times, and how far apart, the session's screen and files are read across the stop: a person waits seconds. */
+const RESURRECT_READS = 120;
+
+const RESURRECT_READ_MS = 500;
 
 /** How long after its first frame a fresh desktop must show its background and panel: a person waits seconds, not minutes. */
 const DESKTOP_SEEN_MS = 30_000;
@@ -218,8 +255,8 @@ function fixturePlan(recovering: ReturnType<typeof recoveryReport>) {
   const bucket = recovering?.bucket ?? worker;
   const box = `eval-devbox-${run}`;
   // The fifth is a box only the desktop's check opens, so it opens on a fresh box; the sixth is the agent's desktop box;
-  // the seventh fails every start (D94).
-  const names = recovering?.boxes ?? [box, `${box}-native`, `${box}-disk`, 'devbox-golden', `${box}-desktop`, `${box}-agent`, `${box}-parked`];
+  // the seventh fails every start (D94); the eighth stops and starts under an open terminal session (D97).
+  const names = recovering?.boxes ?? [box, `${box}-native`, `${box}-disk`, 'devbox-golden', `${box}-desktop`, `${box}-agent`, `${box}-parked`, `${box}-sessions`];
   const app = recovering?.app ?? `${worker}-contractbox`;
   const owner = recovering?.owner ?? contractOwner(process.env);
   const { job, index, attempt, vessel, statusUrl } = owner;
@@ -336,6 +373,43 @@ async function main(): Promise<void> {
     steps.push({ contract, ms: Date.now() - at, detail });
     await writeReport();
     process.stdout.write(`[${run}] ${contract}: ${String(Date.now() - at)} ms\n`);
+  };
+
+  /** A person at a computer's terminal session (`shell`), through the product's own attach: what it shows, and keys. */
+  const openSession = async (name: string) => {
+    if (origin === undefined) throw new Error('the fixture has not deployed');
+    const url = new URL(`/api/workspaces/${name}/terminal`, origin.replace(/^http/u, 'ws'));
+    url.searchParams.set('executor', 'computer');
+    url.searchParams.set('session', 'shell');
+    url.searchParams.set('cols', '160');
+    url.searchParams.set('rows', '40');
+    const socket = new HeaderSocket(url, { headers: { authorization: `Bearer ${identity}` } });
+    const decoder = new TextDecoder();
+    let shown = '';
+
+    socket.binaryType = 'arraybuffer';
+    socket.addEventListener('message', (event) => { if (event.data instanceof ArrayBuffer) shown += decoder.decode(event.data, { stream: true }); });
+    await new Promise<void>((resolve, reject) => {
+      socket.addEventListener('open', () => { resolve(); }, { once: true });
+      socket.addEventListener('error', () => { reject(new Error(`the terminal of ${name} refused the socket`)); }, { once: true });
+    });
+
+    return {
+      // The screen's text, its escape sequences left out.
+      screen: () => stripVTControlCharacters(shown).replaceAll('\r', ''),
+      type: (keys: string) => { socket.send(new TextEncoder().encode(keys)); },
+      close: () => { socket.close(); },
+    };
+  };
+
+  /** Asks again until `holds`, as a person watching would, up to RESURRECT_READS times. */
+  const waitFor = async (holds: () => boolean | Promise<boolean>, what: string) => {
+    for (let asked = 0; asked < RESURRECT_READS; asked++) {
+      if (await holds()) return;
+      await delay(RESURRECT_READ_MS);
+    }
+
+    throw new Error(`waited ${String(RESURRECT_READS * RESURRECT_READ_MS / 1000)} s for ${what}`);
   };
 
   const shell = async (command: string, name = box) => {
@@ -698,6 +772,55 @@ async function main(): Promise<void> {
   /** The container's contracts, the desktop through the product routes, and the product's own chain. */
   const productContracts = async () => {
     /**
+     * A session comes back from the box's stop as it was (D97): its screen, a rule that it restarted, and the line it
+     * was running offered at the prompt, which runs only on the person's Enter, once. CRIU cannot run here (no kcmp,
+     * no ns_last_pid on this kernel, measured), so no process survives; the line is the person's to run again.
+     */
+    await step('resurrect', async () => {
+      const name = names[7] ?? '';
+      // What the line's whole run leaves: the marker its `$()` touched, then one count.
+      const files = () => shell(`test -e ${RESURRECT_MARKER} && echo marker; cat ${RESURRECT_COUNT} 2>/dev/null | wc -l`, name);
+      const ranOnce = async () => (await files()) === 'marker\n1';
+      // Only the screen saved before the stop can show this on the new socket.
+      const seen = `kinu-screen-${crypto.randomUUID().slice(0, 8)}`;
+      const before = await openSession(name);
+
+      await waitFor(() => /[#$]\s*$/u.test(before.screen()), "the shell's prompt");
+      before.type(`echo ${seen}\r`);
+      await waitFor(() => before.screen().includes(seen), 'the screen to show what the stop must keep');
+      before.type(`${RESURRECT_LINE}\r`);
+      await waitFor(ranOnce, 'the typed line to run once');
+      await shell(`rm -f ${RESURRECT_MARKER} ${RESURRECT_COUNT}`, name);
+      before.close();
+      requireEqual((await call('/stop', Commit, undefined, name)).kind, 'committed');
+
+      const after = await openSession(name);
+
+      // The saved screen, then the restart's rule, and under it the line twice: as what was running, and at the prompt.
+      const offered = () => {
+        const shown = after.screen();
+        const rule = shown.indexOf('restarted');
+
+        return rule > shown.indexOf(seen) && shown.includes(seen) && shown.slice(rule).split(`echo "it's`).length > 2;
+      };
+
+      await waitFor(offered, 'the saved screen, the rule, and the line at the prompt');
+      await delay(RESURRECT_SETTLE_MS);
+      const waiting = await files();
+
+      if (waiting !== '0') throw new Error(`before Enter the box held ${JSON.stringify(waiting)}: the offered line ran on its own`);
+      after.type('\r');
+      await waitFor(ranOnce, 'the line to run on Enter');
+      await delay(RESURRECT_SETTLE_MS);
+      const ran = await files();
+      after.close();
+
+      if (ran !== 'marker\n1') throw new Error(`after one Enter the box held ${JSON.stringify(ran)}, not the line's one run`);
+
+      return { beforeEnter: waiting, afterEnter: ran, screen: after.screen().slice(-400) };
+    });
+
+    /**
      * The box answers to the name its class gives it, as one DNS label, and that name resolves at once to the box's own
      * addresses (D96). The platform's 64-character name broke `python3 -m http.server` on every computer (staging
      * 7591e6fec), and a renamed kernel with nothing to answer for it waited on DNS for an address that is not the box.
@@ -722,6 +845,45 @@ async function main(): Promise<void> {
       if (named.get('http')?.startsWith('200') !== true) throw new Error(`python3 -m http.server answered ${named.get('http') ?? 'nothing'}`);
 
       return Object.fromEntries(named);
+    });
+
+    /**
+     * An agent's job runs in a terminal session of its own (D95): stopped at a prompt, the job reads "waiting for input"
+     * with its last line, its session reads needs input, an answer typed into the session reaches it, and its log has
+     * what it wrote. Stopping it takes its session.
+     */
+    await step('agent-job', async () => {
+      const Row = v.looseObject({ processId: v.string(), status: v.string(), waiting: v.optional(v.string()), session: v.optional(v.string()) });
+      const Session = v.looseObject({ id: v.string(), name: v.string(), needsInput: v.boolean(), job: v.optional(v.string()) });
+      const { processId } = await call('/job-start', v.object({ processId: v.string() }), { command: JOB_PROMPT }, names[1]);
+      const rowOf = async () => (await call('/job-list', v.array(Row), {}, names[1])).find((row) => row.processId === processId);
+      let row = await rowOf();
+
+      for (let asked = 0; row?.status !== 'waiting for input' && asked < JOB_READS; asked++) { await delay(JOB_READ_MS); row = await rowOf(); }
+
+      if (row?.status !== 'waiting for input' || row.waiting?.trim() !== 'Your name?' || row.session === undefined) {
+        throw new Error(`a job at its prompt read ${JSON.stringify(row)}, not waiting for input at "Your name?"`);
+      }
+
+      const session = row.session;
+      const listed = (await call('/sessions', v.array(Session), {}, names[1])).find((candidate) => candidate.id === session);
+
+      if (listed?.needsInput !== true || listed.job !== processId) throw new Error(`its session read ${JSON.stringify(listed)}, not the job's, needing input`);
+
+      await shell(`tmux send-keys -t '=${session}:' Ada Enter`, names[1]);
+
+      for (let asked = 0; row?.status !== 'completed' && asked < JOB_READS; asked++) { await delay(JOB_READ_MS); row = await rowOf(); }
+
+      if (row?.status !== 'completed') throw new Error(`the answered job read ${JSON.stringify(row)}, not completed`);
+      const log = await shell(`cat /var/tmp/devbox/processes/${processId}/stdout.log`, names[1]);
+
+      if (!log.includes('hi Ada')) throw new Error(`the job's log holds ${JSON.stringify(log.slice(-300))}, not its answer`);
+      await call(`/job-stop?id=${processId}`, v.object({ stopped: v.boolean() }), {}, names[1]);
+      const after = await call('/sessions', v.array(Session), {}, names[1]);
+
+      if (after.some((candidate) => candidate.id === session)) throw new Error('a stopped job left its session listed');
+
+      return { processId, session, waiting: listed.needsInput, log: log.slice(-120) };
     });
 
     /**

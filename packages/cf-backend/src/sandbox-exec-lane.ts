@@ -341,6 +341,7 @@ export function adaptCloudflareSandbox(
       (await handle.listSupervised()).map(row => ({
         processId: row.processId, pid: row.pid, status: row.status,
         command: row.command, restartable: row.restartable,
+        waiting: row.waiting, session: row.session,
       })))),
     resize: (size) => settle(callDevbox(async () => {
       await configured();

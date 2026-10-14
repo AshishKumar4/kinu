@@ -38,6 +38,10 @@ export interface SupervisedProcessRow {
   readonly status: string;
   readonly command: string;
   readonly restartable: boolean;
+  /** The last line a job wrote, while it waits at a prompt for an answer (D95). */
+  readonly waiting: string | undefined;
+  /** The terminal session a supervised job runs in, which a person can open and answer (D95). */
+  readonly session: string | undefined;
 }
 
 /** Everything a caller can ask about a box without touching the container. */

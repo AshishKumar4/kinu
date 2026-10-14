@@ -296,7 +296,8 @@ const Body = v.object({
 
 async function desktopRoute(request: Request, env: Env, ctx: ExecutionContext, url: URL): Promise<Response | null> {
   if (url.pathname.startsWith('/kasmvnc/')) return withAppSecurityHeaders(await env.ASSETS.fetch(request), url, null);
-  const desktopName = /^\/api\/workspaces\/(eval-devbox-[\w-]+)\/desktop$/.exec(url.pathname)?.[1];
+  // The computer's desktop and its terminal sessions (D97), through the product's own routes.
+  const desktopName = /^\/api\/workspaces\/(eval-devbox-[\w-]+)\/(?:desktop|terminal)$/.exec(url.pathname)?.[1];
 
   if (desktopName !== undefined) {
     const box = env.Box.getByName(desktopName);
@@ -319,7 +320,22 @@ async function desktopRoute(request: Request, env: Env, ctx: ExecutionContext, u
   return null;
 }
 
+/** An agent's job and the terminal sessions it runs in (D95); null for any other path. */
+async function jobRoute(url: URL, box: DurableObjectStub<ContractBox>, body: v.InferOutput<typeof Body>): Promise<Response | null> {
+  switch (url.pathname) {
+    case '/job-start': return Response.json(await box.startSupervised(body.command ?? ''));
+    case '/job-list': return Response.json(await box.listSupervised());
+    case '/job-stop': return Response.json(await box.stopSupervised(url.searchParams.get('id') ?? ''));
+    case '/sessions': return Response.json(await box.terminalSessions());
+    default: return null;
+  }
+}
+
 async function contractRoute(url: URL, name: string, box: DurableObjectStub<ContractBox>, body: v.InferOutput<typeof Body>): Promise<Response> {
+  const job = await jobRoute(url, box, body);
+
+  if (job !== null) return job;
+
   switch (url.pathname) {
     case '/view': return new Response(`<iframe src="${desktopClientUrl(url, name)}" style="width:1280px;height:800px;border:0"></iframe>`, { headers: { 'content-type': 'text/html' } });
     case '/golden': return Response.json({ id: await box.ensureGolden() });
@@ -335,6 +351,13 @@ async function contractRoute(url: URL, name: string, box: DurableObjectStub<Cont
     case '/agent-desktop': return Response.json(await box.agentDesktop(body.driver ?? 'agent', body.member ?? '', v.parse(v.array(JsonValueSchema), JSON.parse(body.args ?? '[]')), body.stop));
     case '/agent-desktop-stop': return Response.json({ stopped: await box.stopAgentDesktop(body.stop ?? '') });
     case '/storage-probe': return Response.json(await box.storageProbe(body.command ?? ''));
+    default: return await lifecycleRoute(url, box) ?? new Response('no route', { status: 404 });
+  }
+}
+
+/** The box's state, its saves and its stop; null for any other path. */
+async function lifecycleRoute(url: URL, box: DurableObjectStub<ContractBox>): Promise<Response | null> {
+  switch (url.pathname) {
     case '/state': return Response.json(await box.devboxState());
     case '/armed': return Response.json(await box.armed());
     case '/checkpoint': return Response.json(await box.checkpointNow(url.searchParams.get('kind') === 'tick' ? 'tick' : 'quiesce'));
@@ -344,7 +367,7 @@ async function contractRoute(url: URL, name: string, box: DurableObjectStub<Cont
     case '/cleanup': await box.clear();
 
       return Response.json({ ok: true });
-    default: return new Response('no route', { status: 404 });
+    default: return null;
   }
 }
 

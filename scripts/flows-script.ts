@@ -510,18 +510,39 @@ function accountMemoryAnswer(latest: string, request: ScriptedRequest): Scripted
   return { text: `${recalling.reply} ${recalled.result.includes(recalling.fact.value) ? recalling.fact.value : 'nowhere I know of'}` };
 }
 
+/** The agent-job row (D95): the ask, the job its turn starts on the computer, and the reply once it has. */
+export const JOB_ASK = 'Flow job: start the release job.';
+
+export const JOB_COMMAND = 'printf "Release to production? (y/N) "; read answer; echo "release answered $answer"';
+
+export const JOB_STARTED = 'JOB STARTED';
+
+/** The agent-job row (D95): the job its turn starts on the computer, then the reply once it has. */
+function jobAnswer(request: ScriptedRequest): ScriptedAnswer | undefined {
+  if (!(request.userTexts.at(-1) ?? '').includes(JOB_ASK)) return undefined;
+
+  return request.turn.length > 0 ? { text: JOB_STARTED }
+    : { toolCall: { name: 'eval', arguments: { code: `return await computer.startProcess({ command: ${JSON.stringify(JOB_COMMAND)} });` } } };
+}
+
+/** The write-file row: the file written, then a shell writing beside it where the turn has one. */
+function writeFileAnswer(request: ScriptedRequest, asked: (ask: string) => boolean): ScriptedAnswer | undefined {
+  if (!asked(WRITE_FILE_ASK) || !request.available.includes('file')) return undefined;
+
+  if (!request.called.includes('file')) {
+    return { text: 'Writing the file.', toolCall: { name: 'file', arguments: { op: 'write', path: workspacePath(FLOW_PROBE, WORKSPACE_ROOT), content: 'browser flow probe' } } };
+  }
+
+  return request.called.includes('shell') || !request.available.includes('shell')
+    ? { text: 'DONE' }
+    : { toolCall: { name: 'shell', arguments: { runtime: 'workspace', command: `echo from the shell > ${workspacePath(FLOW_SHELL_PROBE, WORKSPACE_ROOT)}` } } };
+}
+
 export function flowsScript(request: ScriptedRequest): ScriptedAnswer | null {
   const asked = (ask: string): boolean => request.userTexts.some((text) => text.includes(ask));
+  const first = jobAnswer(request) ?? writeFileAnswer(request, asked);
 
-  if (asked(WRITE_FILE_ASK) && request.available.includes('file')) {
-    if (!request.called.includes('file')) {
-      return { text: 'Writing the file.', toolCall: { name: 'file', arguments: { op: 'write', path: workspacePath(FLOW_PROBE, WORKSPACE_ROOT), content: 'browser flow probe' } } };
-    }
-
-    return request.called.includes('shell') || !request.available.includes('shell')
-      ? { text: 'DONE' }
-      : { toolCall: { name: 'shell', arguments: { runtime: 'workspace', command: `echo from the shell > ${workspacePath(FLOW_SHELL_PROBE, WORKSPACE_ROOT)}` } } };
-  }
+  if (first !== undefined) return first;
 
   const latest = request.userTexts.at(-1) ?? '';
 
