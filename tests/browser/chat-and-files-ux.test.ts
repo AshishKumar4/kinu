@@ -31,7 +31,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Page } from 'puppeteer';
 
-import { withGallery } from '../../scripts/gallery-harness';
+import { rgba, withGallery } from '../../scripts/gallery-harness';
 import { executorLabel, parseJsonValue, redactPayload, type JsonObject } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
 
@@ -3576,6 +3576,49 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       const state = await readInspectorState(page);
 
       expect(state.width).toBe(Number(state.stored['kinu.inspector.ashish@example.com']));
+
+      await page.close();
+    });
+  });
+
+  test("a drag's end leaves no rule down the inspector's edge; reaching the handle by keyboard shows it", async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.evaluateOnNewDocument(() => {
+        localStorage.setItem('kinu.inspector.account', 'ashish@example.com');
+        localStorage.setItem('kinu.inspector.ashish@example.com', '340');
+        localStorage.setItem('kinu.inspector.open.ashish@example.com.checkout-fixes', '1');
+      });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('[aria-label="Work"]');
+      await waitForInspectorWidth(page, 340);
+
+      // The rule's colour once its transition has run.
+      const ruleAlpha = async (): Promise<number> => {
+        await page.waitForFunction(() => document.querySelector('[data-separator] > span')?.getAnimations().length === 0);
+
+        return rgba(await page.$eval('[data-separator] > span', (rule) => getComputedStyle(rule).backgroundColor)).a;
+      };
+
+      const { x, y } = await separatorCentre(page);
+      await page.mouse.move(x, y);
+      await page.mouse.down();
+      await page.mouse.move(x - 40, y, { steps: 4 });
+      await page.mouse.up();
+      await page.mouse.move(200, 450);
+
+      // The handle keeps the focus the press gave it; the owner saw that as an accent line standing down the column.
+      expect(await page.evaluate(() => document.activeElement?.hasAttribute('data-separator'))).toBe(true);
+      expect(await ruleAlpha()).toBe(0);
+
+      await page.keyboard.press('Tab');
+      await page.keyboard.down('Shift');
+      await page.keyboard.press('Tab');
+      await page.keyboard.up('Shift');
+      expect(await page.evaluate(() => document.activeElement?.hasAttribute('data-separator'))).toBe(true);
+      expect(await ruleAlpha()).toBeGreaterThan(0);
 
       await page.close();
     });
