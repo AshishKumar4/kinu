@@ -108,7 +108,7 @@ export class SessionHistory {
 
       if (parts === null) continue;
       const content = await this.messages.prepareContent(parts);
-      const selected = this.context.selected() ?? this.context.initialize();
+      const selected = this.context.current();
       this.dependencies.transactionSync(() => {
         if (!abandoned().some(candidate => candidate.message_id === row.message_id)) return;
         this.context.commit(selected, { cause: 'output', turnId: null, assertEpoch: () => Effect.sync(() => this.dependencies.actor.assertCurrent()), mutate: entries => {
@@ -126,7 +126,7 @@ export class SessionHistory {
   async retract(outputs: readonly string[], assertOwner: () => void): Promise<void> {
     const cut = new Set(outputs);
     const empty = await this.messages.prepareContent([]);
-    const selected = this.context.selected() ?? this.context.initialize();
+    const selected = this.context.current();
 
     this.context.commit(selected, { cause: 'edit', turnId: null, assertEpoch: () => Effect.sync(assertOwner), mutate: (entries) => {
       for (const id of outputs) this.messages.seal(id, empty);
@@ -165,9 +165,9 @@ export class SessionHistory {
     return this.dependencies.transactionSync(() => settleSync(Effect.gen({ self: this }, function* () {
       this.dependencies.actor.assertCurrent();
       yield* assertIdle();
-      const selected = this.context.selected() ?? this.context.initialize();
+      const selected = this.context.current();
 
-      for (const proposal of this.proposals.pending(selected.contextId)) this.proposals.close(proposal.proposal_id, 'history_rewritten');
+      this.proposals.closeAll(selected.contextId, 'history_rewritten');
       const cleared = this.context.commit(selected, { cause: 'edit', turnId: null, mutate: () => [], assertEpoch: assertIdle });
       this.transcript(sessionId).clear();
 
@@ -203,9 +203,9 @@ export class SessionHistory {
 
       if (entry === null) throw new KinuError('missing', 'conversation entry does not exist');
       const base = baseOf(transcript, entry);
-      const selected = this.context.selected() ?? this.context.initialize();
+      const selected = this.context.current();
 
-      for (const proposal of this.proposals.pending(selected.contextId)) this.proposals.close(proposal.proposal_id, 'history_rewritten');
+      this.proposals.closeAll(selected.contextId, 'history_rewritten');
       const target = this.context.fork(base);
       this.context.select(selected, target, assertIdle);
       transcript.truncate(entry.position);
@@ -215,6 +215,12 @@ export class SessionHistory {
 
       return target;
     })));
+  }
+
+  /** Whether `selection` is still as its context opened: never revised, no conversation in it, nothing proposed. A
+   *  caller that materialized it passes its conversation, read once. */
+  isUntouched(selection: ContextSelection, conversation: readonly ContextEntry[] = this.context.conversationOf(this.context.entries(selection))): boolean {
+    return selection.revision === 0 && conversation.length === 0 && this.proposals.pending(selection.contextId).length === 0;
   }
 
   async materialize(kept: MaterializedHistory | null = null): Promise<MaterializedHistory> {
@@ -277,7 +283,7 @@ export class SessionHistory {
 
   async replaceHistory(messages: readonly ModelMessage[], options: { readonly author: string; readonly via: string; readonly turnId: string | null; readonly stage: boolean; readonly assertOwner: () => void; readonly events?: ContextEventRecorder | null }): Promise<{ readonly selection: ContextSelection; readonly proposalId: string | null }> {
     options.assertOwner();
-    const selected = this.context.selected() ?? this.context.initialize();
+    const selected = this.context.current();
     const pending = this.proposals.pending(selected.contextId).at(-1)?.proposal_id ?? null;
     const prepared: PreparedMessage[] = [];
     const calls = new Map<string, { messageId: string; part: number }>();
@@ -306,7 +312,7 @@ export class SessionHistory {
           publication: this.editEvent({ proposalId, selection: selected, status: 'staged', turnId: options.turnId, events: options.events ?? null }) };
       }
 
-      for (const proposal of this.proposals.pending(selected.contextId)) this.proposals.close(proposal.proposal_id, 'history_rewritten');
+      this.proposals.closeAll(selected.contextId, 'history_rewritten');
 
       return { result: { selection: this.context.commit(selected, { cause: 'edit', turnId: options.turnId, mutate: () => entries, assertEpoch: () => Effect.sync(options.assertOwner) }), proposalId: null }, publication: null };
     });
@@ -331,16 +337,16 @@ export class SessionHistory {
     const pending = this.proposals.pending(current.selection.contextId).at(-1);
 
     if (pending === undefined) return { ...current, changed: false };
-    let candidate: readonly ContextEntry[];
+    const preview = this.proposals.preview(pending.proposal_id);
 
-    try { candidate = this.proposals.preview(pending.proposal_id); } catch (cause) {
-      if (!(cause instanceof KinuError) || cause.code !== 'denied') throw cause;
+    if ('blocked' in preview) {
       assertOwner();
-      this.proposals.close(pending.proposal_id, 'history_rewritten');
+      this.proposals.close(pending.proposal_id, preview.blocked);
 
       return { ...current, changed: false };
     }
 
+    const candidate = preview.entries;
     const staged = await this.partition(candidate);
     const before = toolPairingGaps(current.messages);
     const after = toolPairingGaps(staged.messages);
@@ -459,7 +465,7 @@ export class SessionHistory {
     readonly turnId: string | null; readonly ingressId?: string;
     readonly assertOwner: () => void;
   }): Promise<MessageReference> {
-    const selected = this.context.selected() ?? this.context.initialize();
+    const selected = this.context.current();
     const prepared = await this.messages.prepare(input.message, input.id);
     let reference: MessageReference | null = null;
     this.context.commit(selected, { cause: input.origin, turnId: input.turnId, assertEpoch: () => Effect.sync(input.assertOwner), mutate: entries => {

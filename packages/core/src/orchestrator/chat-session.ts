@@ -40,7 +40,7 @@ import type {
   BroadcastEvent, EnqueueTurnResult, OperatorSend, ProgrammaticTurn, PromptFile,
 } from '../types/backend-host';
 import type { TierId } from '../types/profile';
-import type { SendLanding, SettledSignals } from '../types/signals';
+import type { SendLanding } from '../types/signals';
 import type { WorkMode } from '../types/turn';
 import { JsonObjectSchema, parseJsonObject, type JsonObject } from '../utils/json';
 import type { SessionPayload } from '../session/payload';
@@ -867,8 +867,7 @@ export class ChatSession {
     }
 
     if (this.pendingSends.hasTurn(run.id) || this.announcementInFlight(run.id)) return 'duplicate';
-    this.pendingSends.reserveTurn({ id: run.id, text: run.task.body, metadata: runMetadata(run.task) });
-    this.queue.push(runItem(run));
+    this.queue.push(this.heldRun(run));
     this.pump();
 
     return 'taken';
@@ -888,10 +887,16 @@ export class ChatSession {
     }
 
     this.pendingSends.retireTurn(run.id);
-    this.pendingSends.reserveTurn({ id: run.id, text: run.task.body, metadata: runMetadata(run.task) });
-    this.queue[queued] = runItem(run);
+    this.queue[queued] = this.heldRun(run);
 
     return 'taken';
+  }
+
+  /** `run` held as its producer's turn is, under its id, and the queue item that runs it. */
+  private heldRun(run: DeliveredRun): QueueItem {
+    this.pendingSends.reserveTurn({ id: run.id, text: run.task.body, metadata: runMetadata(run.task) });
+
+    return runItem(run);
   }
 
   /** Stops one run: unrun, its end is the Stop; running, it is aborted and ends as its host records. */
@@ -1036,29 +1041,25 @@ export class ChatSession {
       return fate;
     }
 
-    for (;;) {
-      const moved = Promise.withResolvers<void>();
-      const unobserve = this.actorSession.claims.observe(moved.resolve);
+    const landed = await this.untilSend(id, (state) => {
+      if (state.status === 'running' || state.status === 'settled') return state.landed;
 
-      this.sendsMoved.add(moved.resolve);
+      return state.status === 'none' ? 'handed-back' : undefined;
+    });
 
-      try {
-        const state = await this.sendState(id);
+    if (landed === 'handed-back') return settleSync(Effect.fail(new KinuError('cancelled', `message ${id} was handed back before a turn took it`)));
 
-        if (state.status === 'running' || state.status === 'settled') return state.landed;
-
-        if (state.status === 'none') return settleSync(Effect.fail(new KinuError('cancelled', `message ${id} was handed back before a turn took it`)));
-        await moved.promise;
-      } finally {
-        unobserve();
-        this.sendsMoved.delete(moved.resolve);
-      }
-    }
+    return landed;
   }
 
   /** Its state once settled or none. A change here wakes a fresh read; the wake is never the answer, so a client
    *  that lost its connection asks again (`reacquire` is this call, repeated). */
   async awaitSend(id: string): Promise<SendState> {
+    return await this.untilSend(id, (state) => (state.status === 'settled' || state.status === 'none' ? state : undefined));
+  }
+
+  /** The first answer `decide` gives `id`'s send state, read afresh each time a claim or a send moves. */
+  private async untilSend<T>(id: string, decide: (state: SendState) => T | undefined): Promise<T> {
     for (;;) {
       const moved = Promise.withResolvers<void>();
       const unobserve = this.actorSession.claims.observe(moved.resolve);
@@ -1066,9 +1067,9 @@ export class ChatSession {
       this.sendsMoved.add(moved.resolve);
 
       try {
-        const state = await this.sendState(id);
+        const decided = decide(await this.sendState(id));
 
-        if (state.status === 'settled' || state.status === 'none') return state;
+        if (decided !== undefined) return decided;
         await moved.promise;
       } finally {
         unobserve();
@@ -1321,14 +1322,12 @@ export class ChatSession {
 
   /** The newest turn's answer, when the turn answered (its claim settled `completed`) and the answer is the last entry. */
   private newestAnswer(): { readonly turnId: string; readonly entryId: string } | null {
-    const newest = this.transcript.newestUserId();
-    const opener = newest === null ? null : this.transcript.read(newest);
-    const turnId = opener?.turnId ?? opener?.id ?? null;
-    const last = this.transcript.at(this.transcript.count() - 1);
+    const newest = this.transcript.newestTurn();
 
-    if (turnId === null || last?.role !== 'assistant' || last.turnId !== turnId) return null;
+    if (newest === null || newest.answer === null) return null;
+    const turnId = newest.opener.id;
 
-    return this.actorSession.claims.read(turnId)?.outcome === 'completed' ? { turnId, entryId: last.id } : null;
+    return this.actorSession.claims.read(turnId)?.outcome === 'completed' ? { turnId, entryId: newest.answer.id } : null;
   }
 
   /** Withdraws the answer (`ActorSession.withdrawAnswer`). Claimed against any other turn from here until the Retry is
@@ -1346,6 +1345,15 @@ export class ChatSession {
 
   /** Held until the turn is queued, which then holds it: no tick between the two leaves the session idle. `held`: the row
    *  an intent's Retry holds it under, committed before it is queued, which its opening retires. */
+  /** A retried turn, run as that turn again under its own id: its end answers the opener's words too, should they still
+   *  be owed. `heldAs` is the Retry's held input, retired as it runs. */
+  private retriedItem(turnId: string, text: string, metadata: JsonObject | undefined, heldAs: string | undefined): QueueItem {
+    return tagged({
+      text, kind: 'user', turnId, pendingSendId: turnId, ...(metadata !== undefined && { metadata }), ...(heldAs !== undefined && { heldAs }),
+      settle: (failure) => { this.settleLandings([turnId], failure ?? 'turn'); },
+    });
+  }
+
   private queueRetried(turnId: string, held?: { readonly id: string; readonly commit: (text: string, metadata: JsonObject | undefined) => void }): Effect.Effect<void, KinuError> {
     this.reopening = true;
 
@@ -1355,11 +1363,7 @@ export class ChatSession {
       const text = message?.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('') ?? '';
 
       if (held !== undefined) yield* inItsWords('io', Effect.sync(() => { held.commit(text, metadata); }));
-      // Its end answers the opener's words too, should they still be owed.
-      this.queue.push(tagged({
-        text, kind: 'user', turnId, pendingSendId: turnId, ...(metadata !== undefined && { metadata }), ...(held !== undefined && { heldAs: held.id }),
-        settle: (failure) => { this.settleLandings([turnId], failure ?? 'turn'); },
-      }));
+      this.queue.push(this.retriedItem(turnId, text, metadata, held?.id));
       this.pump();
     }).pipe(
       // A read that failed queued nothing: its landing goes with it, so no caller waits on a turn that never runs.
@@ -1821,25 +1825,23 @@ export class ChatSession {
       failed: async ({ lease, failure }) => {
         const message = renderThrownChain({ cause: failure });
         const interrupted = lease.signal.aborted || item.cut !== undefined;
-
-        if (!interrupted) this.actorSession.orchestrator.acc.hadError = true;
-        const end = classifyRunEnd({ completed: false, interrupted, errorText: message.slice(0, 500) });
         // Its caller's report rides its end's commit: a turn cut off by a Stop owes none.
         const told = interrupted ? null : this.callerReport(item, message);
 
-        await this.endFailed(item, lease, end, told);
-        this.emit({ type: 'error', message });
-        this.emit({ type: 'turn-end', turn: this.snapshotTurn(item, ''), turnId: lease.turnId, runId: lease.runId, epoch: this.actorSession.closeEpoch(lease) });
+        const reason = await this.failTurn(lease, message, {
+          interrupted, turn: () => this.snapshotTurn(item, ''), close: (end) => this.endFailed(item, lease, end, told),
+        });
+
         unanswered = interrupted ? null : message;
 
-        return end.reason;
+        return reason;
       },
     });
 
     return unanswered;
   }
 
-  /** Closes the lease, keeping the binding that stops re-delivery. Reads both `drainTurnId` and `replyTurnId`. */
+  /** The delivery turns this turn answered: every absorbed signal's reply turn, and the drained delivery it ran for. */
   private answeredDeliveries(item: QueueItem): ReadonlySet<string> {
     const answered = new Set(this.actorSession.orchestrator.inbox.answeredDeliveries);
     const queued = item.tags.drainTurnId;
@@ -1849,17 +1851,9 @@ export class ChatSession {
     return answered;
   }
 
-  private closeEventDeliveryLeases(item: QueueItem, absorbed: SettledSignals['absorbed']): void {
-    const drainTurns = new Set<string>();
-    const queued = item.tags.drainTurnId;
-
-    if (queued !== undefined) drainTurns.add(queued);
-
-    for (const signal of absorbed) {
-      if (signal.replyTurnId) drainTurns.add(signal.replyTurnId);
-    }
-
-    for (const turnId of drainTurns) this.eventLog.markTurnCompleted(turnId);
+  /** Closes each answered delivery's lease, keeping the binding that stops its re-delivery. */
+  private closeEventDeliveryLeases(answered: ReadonlySet<string>): void {
+    for (const turnId of answered) this.eventLog.markTurnCompleted(turnId);
   }
 
   private snapshotTurn(item: QueueItem, assistantResponse: string, turnId?: string | null): CompletedTurn {
@@ -1964,7 +1958,7 @@ export class ChatSession {
     const streamed = round?.streamed ?? { output: false };
     const fullText = execution.text;
     const interrupted = execution.interrupted;
-    const runError = runErrorOf(execution.failure);
+    const runError = execution.failure === null ? null : runErrorOf(renderThrownChain({ cause: execution.failure }));
     // A turn that ran nothing measured no context to settle.
     const overflowRetry = prepared !== null && this.settleContext(item, prepared, execution.failure);
 
@@ -2000,9 +1994,14 @@ export class ChatSession {
     // A turn that is the reminder never owes another.
     const openWork = eventName === TASK_REMINDER_EVENT ? null : await this.ports.openWork();
 
+    // Read once, before the settle that decides what re-delivers: the commit records them answered, and once it is durable
+    // their leases close.
+    const answeredDeliveries = this.answeredDeliveries(item);
+
     // One commit — see {@link commitTurn}.
     const commit = this.commitTurn({
       item,
+      answeredDeliveries,
       lease,
       turnId: lease.turnId,
       event: eventName,
@@ -2020,23 +2019,20 @@ export class ChatSession {
     // Once per turn, after settling begins, outside every failure path; an answer that never reached disk
     // reports `completed: false`, so its events re-queue.
     const durable = runError === null && 'committed' in commit;
-    const settled = this.actorSession.orchestrator.inbox.settle({ completed: durable });
+    this.actorSession.orchestrator.inbox.settle({ completed: durable });
 
-    if (durable) this.closeEventDeliveryLeases(item, settled.absorbed);
+    if (durable) this.closeEventDeliveryLeases(answeredDeliveries);
 
     if (!('committed' in commit)) {
-      const message = renderThrownChain({ cause: commit.failure });
-      this.actorSession.orchestrator.acc.hadError = true;
-      const failed = classifyRunEnd({ completed: false, interrupted: false, errorText: runError ?? message.slice(0, 500) });
-
       diagnostics.failure('turn.persist_failed', commit.failure);
-      // Its caller waits on the work: told it failed, by the commit that closes it, as any failed turn's caller is.
-      await this.endFailed(item, lease, failed, this.callerReport(item, message));
-      // Not durable, so the terminal event carries no final answer.
-      this.emit({ type: 'error', message });
-      this.emit({ type: 'turn-end', turn: this.snapshotTurn(item, ''), turnId: lease.turnId, runId: lease.runId, epoch: this.actorSession.closeEpoch(lease) });
+      // Its caller waits on the work: told it failed, by the commit that closes it, as any failed turn's caller is. Not
+      // durable, so the terminal event carries no final answer.
+      const message = renderThrownChain({ cause: commit.failure });
+      const told = this.callerReport(item, message);
 
-      return failed.reason;
+      return await this.failTurn(lease, message, {
+        runError, turn: () => this.snapshotTurn(item, ''), close: (failed) => this.endFailed(item, lease, failed, told),
+      });
     }
 
     const { turn, owed, transition } = commit.committed;
@@ -2065,21 +2061,14 @@ export class ChatSession {
 
       return end.reason;
     } catch (err) {
-      const message = renderThrownChain({ cause: err });
-      this.actorSession.orchestrator.acc.hadError = true;
-
-      // Its claim and run closed with its answer; the failure is the bookkeeping's.
-      const failed = classifyRunEnd({ completed: false, interrupted: false, errorText: runError ?? message.slice(0, 500) });
-
       diagnostics.failure(
         'turn.finalization_failed',
         toKinuError({ doing: 'finalizing the turn', cause: err, otherwise: 'io' }),
       );
-      // The answer is durable; only bookkeeping failed. The intent row stays: the transition may never have been claimed.
-      this.emit({ type: 'error', message });
-      this.emit({ type: 'turn-end', turn, turnId: lease.turnId, runId: lease.runId, epoch: this.actorSession.closeEpoch(lease) });
 
-      return failed.reason;
+      // Its claim and run closed with its answer; the failure is the bookkeeping's. The intent row stays: the transition
+      // may never have been claimed.
+      return await this.failTurn(lease, renderThrownChain({ cause: err }), { runError, turn: () => turn, close: null });
     }
   }
 
@@ -2102,6 +2091,7 @@ export class ChatSession {
    *  finds the turn answered and closed, never one to run again. Never throws. */
   private commitTurn(input: {
     readonly item: QueueItem;
+    readonly answeredDeliveries: ReadonlySet<string>;
     readonly lease: ActorTurnLease;
     readonly turnId: string;
     readonly event: string | undefined;
@@ -2176,7 +2166,7 @@ export class ChatSession {
         completed: runError === null,
         taskReminder,
         trialContext: input.trialContext,
-        answeredDeliveries: this.answeredDeliveries(item),
+        answeredDeliveries: input.answeredDeliveries,
         outputContinuation,
         reachableTools: input.reachableTools,
         overflowRetry: input.overflowRetry,
@@ -2240,6 +2230,32 @@ export class ChatSession {
    * reload reads it. One whose answer cannot be written still closes, without it: its room was told. A close that fails
    * even so is logged, and the turn stays open, as a death there would leave it.
    */
+  /**
+   * A turn that ended on a failure, `message` its rendered chain: the session's accumulator marks it failed unless a
+   * Stop cut it, its run's end is classified from its run's own error or else the failure, `close` closes what the turn
+   * still owes under that end (nothing once its answer committed), and the stream hears the error, then the turn's end,
+   * `turn`, read once the failure is marked and closed.
+   */
+  private async failTurn(
+    lease: ActorTurnLease,
+    message: string,
+    { interrupted = false, runError = null, turn, close }: {
+      readonly interrupted?: boolean;
+      readonly runError?: string | null;
+      readonly turn: () => CompletedTurn;
+      readonly close: ((end: RunEndClassification) => Promise<void>) | null;
+    },
+  ): Promise<RunEndReason> {
+    if (!interrupted) this.actorSession.orchestrator.acc.hadError = true;
+    const end = classifyRunEnd({ completed: false, interrupted, errorText: runError ?? runErrorOf(message) });
+
+    await close?.(end);
+    this.emit({ type: 'error', message });
+    this.emit({ type: 'turn-end', turn: turn(), turnId: lease.turnId, runId: lease.runId, epoch: this.actorSession.closeEpoch(lease) });
+
+    return end.reason;
+  }
+
   private async endFailed(item: QueueItem, lease: ActorTurnLease, end: RunEndClassification, owed: OwedEffect | null = null): Promise<void> {
     let answer: PreparedConversationEntry | null = null;
     let closed = false;
@@ -2387,10 +2403,7 @@ export class ChatSession {
       if (retried?.success === true) {
         const { retryOf, retried: metadata } = retried.output;
 
-        this.queue.push(tagged({
-          text: row.text, kind: 'user', turnId: retryOf, pendingSendId: retryOf, heldAs: row.id, ...(metadata !== null && { metadata }),
-          settle: (failure) => { this.settleLandings([retryOf], failure ?? 'turn'); },
-        }));
+        this.queue.push(this.retriedItem(retryOf, row.text, metadata ?? undefined, row.id));
         queued += 1;
         continue;
       }
@@ -2549,7 +2562,7 @@ function settledAnnouncement(failure: KinuError | null, yielded: boolean | undef
   return abandoned === undefined ? { status: 'queued' } : { status: 'failed', reason: abandoned };
 }
 
-/** A failed turn's error as its run records it. */
-function runErrorOf(cause: Error | null): string | null {
-  return cause === null ? null : renderThrownChain({ cause }).slice(0, 500);
+/** A failed turn's error, `message`, as its run records it. */
+function runErrorOf(message: string): string {
+  return message.slice(0, 500);
 }

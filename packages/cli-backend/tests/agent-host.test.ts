@@ -2625,7 +2625,7 @@ describe('LocalAgentHost — the driver lease', () => {
 
     const claim = await admitTestClaim(rt.stores.claims, {
       runId: 'live-run', turnId: 'live-turn', workMode: 'build',
-      context: rt.stores.history.context.selected() ?? rt.stores.history.context.initialize(),
+      context: rt.stores.history.context.current(),
       program: { kind: 'builtin', version: 0, digest: null, build: null },
     });
 

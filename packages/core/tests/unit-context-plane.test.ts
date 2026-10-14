@@ -130,7 +130,7 @@ async function committed(bound: Bound): Promise<readonly ModelMessage[]> {
 }
 
 function selectionOf(bound: Bound): ContextSelection {
-  return bound.history.context.selected() ?? bound.history.context.initialize();
+  return bound.history.context.current();
 }
 
 function staged(bound: Bound): PendingContextProposal | null {
@@ -145,7 +145,11 @@ async function stagedMessages(bound: Bound): Promise<readonly ModelMessage[]> {
   if (pending === null) throw new Error('no context edit is staged');
   const messages: ModelMessage[] = [];
 
-  for (const entry of bound.history.proposals.preview(pending.proposal_id)) {
+  const preview = bound.history.proposals.preview(pending.proposal_id);
+
+  if ('blocked' in preview) throw new Error(`the pending proposal is blocked: ${preview.blocked}`);
+
+  for (const entry of preview.entries) {
     messages.push(await bound.history.messages.materialize(entry));
   }
 
