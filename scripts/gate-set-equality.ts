@@ -204,11 +204,6 @@ export const NON_REPOSITORY_SCANS = new Map<string, string>([
     + 'set whose members are live Cloudflare Workers and buckets nobody else will ever delete.',
   ],
   [
-    'scripts/gallery-harness.ts',
-    'reads the OS temp directory for gallery builds left by processes that are gone. Not a '
-    + 'repository path, and the whole point is to see what git never will.',
-  ],
-  [
     'scripts/vendor-schema.ts',
     'reads the installed Agents SDK dist for its CREATE TABLE DDL — the vendor\'s own '
     + 'shape is the corpus, `git ls-files` has never '
