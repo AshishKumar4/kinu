@@ -221,10 +221,10 @@ describe('preview sandbox policy', () => {
     expect(kept).toEqual(['sid=mine; Path=/; Secure; HttpOnly']);
   });
 
-  test('the port token lives in the hostname, so Referer is muzzled', () => {
-    // The default policy sends the origin cross-origin, and here the origin is the credential.
+  test('the port token lives in the hostname, so no other origin is told it', () => {
+    // The default policy sends the origin cross-origin, and here the origin is the credential; its own pages keep it.
     expect(containPreviewResponse(new Response('x')).headers.get('referrer-policy'))
-      .toBe('no-referrer');
+      .toBe('same-origin');
   });
 
   test('a WebSocket handshake passes through untouched', () => {
@@ -810,12 +810,19 @@ describe("signing a preview's owner in on its own host", () => {
     await asked({ headers: { cookie: owned, origin: sibling, 'sec-fetch-site': 'same-site', 'sec-fetch-mode': 'cors' } });
     await asked({ method: 'POST', body: 'x', headers: { cookie: owned, origin: sibling, 'sec-fetch-site': 'same-site', 'sec-fetch-mode': 'navigate' } });
     await asked({ headers: { cookie: owned, origin: sibling } });
+    // A browser too old to send fetch metadata: its socket names its page's origin, and its form post must name this
+    // one; `null` is any page's.
+    await asked({ headers: { cookie: owned, upgrade: 'websocket', origin: sibling } });
+    await asked({ method: 'POST', body: 'x', headers: { cookie: owned } });
+    await asked({ method: 'POST', body: 'x', headers: { cookie: owned, origin: 'null' } });
     await asked({ headers: { cookie: owned, 'sec-fetch-site': 'same-site', 'sec-fetch-mode': 'navigate' } });
     await asked({ headers: { cookie: owned, origin: new URL(NIMBUS_URL).origin, 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'cors' } });
+    await asked({ method: 'POST', body: 'x', headers: { cookie: owned, origin: new URL(NIMBUS_URL).origin } });
+    await asked({ headers: { cookie: owned } });
 
-    // A sibling's socket, script and form name no one; an Origin alone is enough to tell another site; a page load and
-    // the preview's own script name the owner.
-    expect(visits).toEqual([null, null, null, null, OWNER_ID, OWNER_ID]);
+    // A sibling's socket, script and form name no one, nor does a form post that names no origin of this one; a page
+    // load, the preview's own requests and a bare GET (no more than a page load) name the owner.
+    expect(visits).toEqual([null, null, null, null, null, null, null, OWNER_ID, OWNER_ID, OWNER_ID, OWNER_ID]);
   });
 
   test("a cookie the host did not set, or a live share's, names no one to the workspace", async () => {
@@ -835,10 +842,14 @@ describe("signing a preview's owner in on its own host", () => {
   test("the workspace's own pass reads as itself on its own previews, and is minted for no other workspace's", async () => {
     const visits: Array<string | null> = [];
     const pass = present(await selfPreviewPass(ENV, 'hello', new URL(NIMBUS_URL)), 'the pass');
+    const cookie = `${pass.name}=${pass.value}`;
 
-    await handleNimbusPreviewHostRequest(new Request(NIMBUS_URL, { headers: { cookie: `${pass.name}=${pass.value}` } }), ownedWorkspace(visits));
+    // Its server-side fetch sends no metadata and no origin, a POST too; a browser carrying it is held to the rule.
+    await handleNimbusPreviewHostRequest(new Request(NIMBUS_URL, { headers: { cookie } }), ownedWorkspace(visits));
+    await handleNimbusPreviewHostRequest(new Request(NIMBUS_URL, { method: 'POST', body: 'x', headers: { cookie } }), ownedWorkspace(visits));
+    await handleNimbusPreviewHostRequest(new Request(NIMBUS_URL, { headers: { cookie, 'sec-fetch-site': 'same-site', 'sec-fetch-mode': 'cors' } }), ownedWorkspace(visits));
 
-    expect(visits).toEqual([PREVIEW_SELF]);
+    expect(visits).toEqual([PREVIEW_SELF, PREVIEW_SELF, null]);
     expect(await selfPreviewPass(ENV, 'another', new URL(NIMBUS_URL))).toBeNull();
   });
 });

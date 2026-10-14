@@ -148,7 +148,7 @@ describe('the preview route still runs before app auth', () => {
     // depends on file order; every branch returns through containPreviewResponse.
     expect(response.headers.get('content-security-policy')).toStartWith('sandbox ');
     expect(response.headers.get('strict-transport-security')).toBe('max-age=31536000; includeSubDomains');
-    expect(response.headers.get('referrer-policy')).toBe('no-referrer');
+    expect(response.headers.get('referrer-policy')).toBe('same-origin');
     // Never the SPA: the preview host must not reach app auth or app assets.
     expect(assetRequests).toEqual([]);
   });

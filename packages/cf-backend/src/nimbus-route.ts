@@ -24,7 +24,7 @@ import type { KvStore } from '@kinu.run/agent-utils';
 import type { ObjectNamespace } from '@kinu.run/core';
 import { PREVIEW_CAPABILITY_HANDLE_LENGTH } from './workspace-host';
 import {
-  mintViewerTicket, previewMessage, previewSigner, previewViewerKey, ticketUser, verifiedPreview, viewerCookie, viewerCookieResponse,
+  mintViewerTicket, PREVIEW_SELF, previewMessage, previewSigner, previewViewerKey, ticketUser, verifiedPreview, viewerCookie, viewerCookieResponse,
 } from './viewer-pass';
 
 export interface WorkspacePreviewHost {
@@ -132,19 +132,21 @@ function sameHostTarget(next: string | null, origin: string): string {
  * A request the preview's own page or its owner's address bar makes, never one another site's page sends with the
  * owner's cookie. Every preview and share host is a sibling under one site, and a same-site request carries the cookie,
  * so the cookie alone cannot tell them apart; the browser's fetch metadata can. A page load opens the page, as any link
- * opens any site's; a socket, a script's request or a form post must come from the preview itself. A client that is
- * no browser sends neither header, and holds no owner's cookie.
+ * opens any site's, and a GET a browser too old to say what it is sends with no other origin named opens no more than
+ * a page load; a socket, a script's request or a form post must come from the preview itself, by its metadata or else
+ * its exact `Origin`. Only the workspace's own server-side fetch (`self`) may send neither.
  */
-function ownRequest(request: Request, origin: string): boolean {
+function ownRequest(request: Request, origin: string, self: boolean): boolean {
   const mode = request.headers.get('sec-fetch-mode');
   const site = request.headers.get('sec-fetch-site');
+  const stated = request.headers.get('origin');
+  const read = request.method === 'GET' || request.method === 'HEAD';
 
-  if ((request.method === 'GET' || request.method === 'HEAD') && mode === 'navigate') return true;
+  if (read && (mode === 'navigate' || (site === null && (stated === null || stated === origin)))) return true;
 
   if (site !== null) return site === 'same-origin' || site === 'none';
-  const stated = request.headers.get('origin');
 
-  return stated === null || stated === origin;
+  return stated === origin || (self && stated === null);
 }
 
 /** The preview host's ticket exchange: the owner's ticket becomes the host's viewer cookie, then their page. */
@@ -238,8 +240,8 @@ export async function handleNimbusPreviewHostRequest<Id>(
   if (url.pathname === VIEWER_EXCHANGE_PATH) return await exchangePreviewTicket(request, env, workspace, key);
   // Read before the sanitizer strips the cookie. A consent cookie is a live share's, never a preview's, and another
   // site's request names no one, whatever cookie it carries.
-  const cookie = ownRequest(request, url.origin) ? await viewerCookie(env, workspace, key, request.headers.get('cookie')) : null;
-  const viewer = cookie === null || cookie.consented ? null : cookie.subject;
+  const cookie = await viewerCookie(env, workspace, key, request.headers.get('cookie'));
+  const viewer = cookie === null || cookie.consented || !ownRequest(request, url.origin, cookie.subject === PREVIEW_SELF) ? null : cookie.subject;
   const headers = sanitizePreviewRequestHeaders(request.headers);
   headers.delete('x-nimbus-base');
 

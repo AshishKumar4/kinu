@@ -66,8 +66,10 @@ slate starts (`packages/cf-backend/src/orchestrator.ts` `routeWorkspacePreview`)
 Anyone else is told "This slate isn't shared with you"; a script's request is
 refused outright. Every preview and share host is a sibling under one site, so
 the cookie rides another preview's requests too: the edge reads it only for a
-page load or a request the preview makes of itself (`Sec-Fetch-Site`, `Origin`),
-so another site's socket, script or form names no one. The workspace's own
+page load or a request the preview makes of itself (`Sec-Fetch-Site`, else an
+exact `Origin`), so another site's socket, script or form names no one. A
+preview answers `Referrer-Policy: same-origin`, so its own form posts keep their
+`Origin` and no other origin learns its hostname. The workspace's own
 browsers and fetches (the agent's `web.screenshot` and rendered fetch, its and
 the owner's slates' programs' `fetch` of their own preview, a slate picture's
 capture) carry a five-minute pass that names the workspace, not a person. A
