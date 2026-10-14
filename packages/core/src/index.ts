@@ -1007,65 +1007,110 @@ export { upsertCraftedTool } from './craft/conflict';
 
 export {
   DefaultExecutionRouter, runOnExecutor, type ExecutorRun,
+} from './execution/router';
+
+export {
   withApprovalGatedShell, withApprovalGatedFiles, gateProviderExec, type FileReach, type ShellReach,
-  busyShell, callJob, createBashShell, createShellSession, machineShellCall, shellExecOptions, type MachineShellCall, type MachineShellPlace,
-  type MachineShells, type ShellSession,
-  createSandboxExecutor, type SandboxHandle, type SandboxResize, isSandboxTransientError, SandboxPending, sandboxSizeLabel,
+} from './execution/approval';
+
+export {
+  busyShell, callJob, createBashShell, createShellSession, machineShellCall, shellExecOptions, type MachineShellCall,
+  type MachineShellPlace, type MachineShells, type ShellSession,
+} from './execution/shell-session';
+
+export {
+  createSandboxExecutor, type SandboxHandle, type SandboxResize, isSandboxTransientError, SandboxPending,
+  sandboxSizeLabel, WORKSPACE_BACKUP_DIR, sandboxFiles,
+} from './execution/sandbox';
+
+export {
   DESKTOP_MEMBERS,
-  WORKSPACE_BACKUP_DIR,
-  createDeviceTunnelExecutor, type DeviceTransport,
-  deviceToolchainAnswer, freshDeviceToolchain,
-  connectedDevices, deviceByName, deviceFleetAsk, sameDeviceStatus, soleLiveDevice,
-  effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason,
-  sandboxReasonFix, sandboxCause, describeGpuNodes,
-  DEVICE_TOOLCHAIN_TTL_MS,
-  DEVICE_TIERS, DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS,
-  type DeviceStatus,
-  type DeviceToolchain, type DeviceFleet, type DeviceFleetEntry,
-  type DeviceTier, type DeviceMode, type DeviceSandboxStatus,
-  type DeviceSandboxCapability, type DeviceSandboxReason,
-  TOOLCHAIN_PROBE_BINARIES, TOOLCHAIN_PROBED_CAPABILITIES,
-  TOOLCHAIN_UNPROBEABLE, toolchainCapabilities,
+} from './execution/desktop';
+
+export {
+  createDeviceTunnelExecutor, type DeviceTransport, deviceFiles, type DeviceFileConsent, type DeviceFileScope,
+} from './execution/device-tunnel-executor';
+
+export {
+  deviceToolchainAnswer, freshDeviceToolchain, connectedDevices, deviceByName, deviceFleetAsk, sameDeviceStatus,
+  soleLiveDevice, effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix,
+  sandboxCause, describeGpuNodes, DEVICE_TOOLCHAIN_TTL_MS, DEVICE_TIERS, DEVICE_SANDBOX_CAPABILITIES,
+  DEVICE_SANDBOX_REASONS, type DeviceStatus, type DeviceToolchain, type DeviceFleet, type DeviceFleetEntry,
+  type DeviceTier, type DeviceMode, type DeviceSandboxStatus, type DeviceSandboxCapability, type DeviceSandboxReason,
+} from './execution/device-status';
+
+export {
+  TOOLCHAIN_PROBE_BINARIES, TOOLCHAIN_PROBED_CAPABILITIES, TOOLCHAIN_UNPROBEABLE, toolchainCapabilities,
+} from './execution/toolchain';
+
+export {
   DeviceTunnel, type TunnelSocket, TUNNEL_DISCONNECTED, NO_DEVICE_CONNECTED, isDeviceNotConnectedError,
-  WORKSPACE_HAS_NO_OWNER, isWorkspaceUnattachedError,
-  SEVERAL_DEVICES_CONNECTED, isDeviceAmbiguityError,
-  SANDBOX_UNAVAILABLE, isSandboxUnavailableError,
-  DEVICE_UNKNOWN_METHOD, DEVICE_TOKEN_ROTATION, DEVICE_TOKEN_ROTATION_ACK,
-  DEVICE_CANCEL_METHOD, DEVICE_EXEC_ACK_METHOD,
-  DEVICE_DUPLICATE_REQUEST, DeviceCancelResultSchema, nextDeviceRequestId,
-  DEVICE_CANCEL_MISPAIRED, parseDeviceCancelAnswer,
-  DEVICE_PTY_OPEN_METHOD, DEVICE_PTY_INPUT, DEVICE_PTY_RESIZE,
-  DEVICE_PTY_OUTPUT, DEVICE_PTY_EXIT,
+  WORKSPACE_HAS_NO_OWNER, isWorkspaceUnattachedError, SEVERAL_DEVICES_CONNECTED, isDeviceAmbiguityError, isSandboxUnavailableError, DEVICE_DUPLICATE_REQUEST,
+  DeviceCancelResultSchema, nextDeviceRequestId, DEVICE_CANCEL_MISPAIRED, parseDeviceCancelAnswer,
   type DeviceCancelResult, type DeviceExecOutput, watchedOutput,
-  DeviceHelloHeadSchema, DeviceUpdateHelloSchema, DeviceHelloSchema, DEVICE_METHOD, DEVICE_FRAMES, DEVICE_ERRORS, DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION, DEVICE_UPDATE_REQUIRED, DEVICE_PTY_MAX_AXIS, deviceMethodHas, deviceFailure, type DeviceMethod,
-  DeviceSocketHub, deviceIdFromSocket, WS_OPEN,
-  DEVICE_CHATGPT, DEVICE_RELAY, DeviceChatGptStatusSchema, EGRESS_ROUTE_HEADER,
-  type DeviceChatGptMethod, type DeviceChatGptStatus, type DeviceRelayRequest, type RelayedProvider,
-  DEVICE_KEEPALIVE_PING, DEVICE_KEEPALIVE_PONG,
-  type DeviceSocket, type DeviceSocketCtx,
-  DeviceRequestLedger, initDeviceInflightTable,
-  type ClaimedDeviceRequest, type SweptDeviceRequest,
+} from './execution/device-tunnel';
+
+export {
+  DeviceHelloHeadSchema, DeviceUpdateHelloSchema, DeviceHelloSchema, DEVICE_METHOD, DEVICE_FRAMES, DEVICE_ERRORS,
+  DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION, DEVICE_UPDATE_REQUIRED, DEVICE_PTY_MAX_AXIS, deviceMethodHas,
+  deviceFailure, type DeviceMethod,
+} from './execution/device-protocol';
+
+export {
+  DeviceSocketHub, deviceIdFromSocket, WS_OPEN, type DeviceSocket,
+  type DeviceSocketCtx,
+} from './execution/device-hub';
+
+export { DeviceChatGptStatusSchema, EGRESS_ROUTE_HEADER,
+  type DeviceChatGptStatus, type DeviceRelayRequest, type RelayedProvider,
+} from './execution/device-relay';
+
+export {
+  DeviceRequestLedger, initDeviceInflightTable, type ClaimedDeviceRequest, type SweptDeviceRequest,
   type DeviceCancelOutcome, type DeviceTransferOutcome,
-  DeviceTerminalHub, terminalFromSocket,
-  type TerminalHolder,
-  nimbusSessionShell,
-  type NimbusSandboxHandle, type NimbusSandboxFiles,
-  type NimbusStartResult, type NimbusExecResult, type NimbusPortInfo,
-  EXECUTOR_CAPABILITIES, NO_TIMER_DEADLINE_MS, commandTool, wordsOnly,
-  type ExecutorTool, type ExecutorToolResult, type CommandTool,
-  type ExecutorCapability, type ExecutorKind, type ExecutorProvider, type ExecutorProviderSurface,
-  type ExecutorLifecycleStatus, type ExecutorStatus,
-  type ExecutorInfo, type ExecutionRouter, type ResourceLimits, type PreviewRouteCheck,
-  type SandboxSize, type SandboxSizes,
+} from './execution/device-inflight';
+
+export {
+  DeviceTerminalHub, terminalFromSocket, type TerminalHolder,
+} from './execution/device-terminal';
+
+export {
+  nimbusSessionShell, type NimbusSandboxHandle, type NimbusSandboxFiles, type NimbusStartResult,
+  type NimbusExecResult, type NimbusPortInfo, nimbusSessionFiles,
+} from './execution/nimbus';
+
+export {
+  EXECUTOR_CAPABILITIES, NO_TIMER_DEADLINE_MS, commandTool, type ExecutorTool, type ExecutorToolResult,
+  type CommandTool, type ExecutorCapability, type ExecutorKind, type ExecutorProvider, type ExecutorProviderSurface,
+  type ExecutorLifecycleStatus, type ExecutorStatus, type ExecutorInfo, type ExecutionRouter, type ResourceLimits,
+  type PreviewRouteCheck, type SandboxSize, type SandboxSizes,
+} from './execution/types';
+
+export {
+  wordsOnly,
+} from './execution/command-call';
+
+export {
   commandResult, CommandResultSchema, type CommandResult, formatExecResult, answeredRefusal, type ExecOutcome,
+} from './execution/exec-result';
+
+export {
   BoundedOutput, COMMAND_OUTPUT_LIMITS, type OutputSpill, type SpillOutcome,
+} from './execution/bounded-output';
+
+export {
   unsandboxedCommandEnvironment,
-  TurnEscalationLedger, ESCALATION_OUTCOMES,
-  type EscalationDecision, type EscalationOutcome, type EscalationSnapshot,
-  answerParentRpc, createParentExecutor, createParentWorkspaceVfs, sandboxFiles, nimbusSessionFiles, deviceFiles,
-  type ParentWorkspaceHandle, type ParentExecResult, type DeviceFileConsent, type DeviceFileScope,
+} from './execution/command-env';
+
+export {
+  TurnEscalationLedger, ESCALATION_OUTCOMES, type EscalationDecision, type EscalationOutcome,
+  type EscalationSnapshot,
+} from './execution/escalation';
+
+export {
+  answerParentRpc, createParentExecutor, createParentWorkspaceVfs, type ParentWorkspaceHandle, type ParentExecResult,
   type ParentRpcWrite,
-} from './execution/index';
+} from './execution/parent';
 
 export {
   createInlineExecutor, createNimbusWorkspaceExecutor,
@@ -1432,142 +1477,82 @@ export {
 
 // Safety
 export {
-  reviewCommand,
-  formatApproval,
-  gatedGrants,
-  formatApprovalGrant, holdsGrant,
-  parseApprovalGrant,
-  gateExec,
-  grantsAreSubset,
-  resolveInheritedGrants,
-  createInheritedApprovalPolicy,
-  STRICT_NO_CHANNEL_POLICY,
-  describeExecutionContext,
-  type ExecutionContext,
-  type CommandCall,
-  type PreparedCall,
-  type ApprovalDecision,
-  type ApprovalRuleHit,
-  type ApprovalResult,
-  type ApprovalHarm,
-  type FilesOwner,
-  type GatedExecutor,
-  type ApprovalGrant,
-  type ShellApprovalRequest,
-  type ShellApprovalOutcome,
-  type ShellApprovalPolicy,
-  type InheritedApprovalSource,
-  type DeferredApprovalChannel,
+  reviewCommand, type ApprovalDecision, type ApprovalRuleHit, type ApprovalResult, type ApprovalHarm,
+  type FilesOwner, type GatedExecutor,
+} from './safety/command-review';
+
+export {
+  formatApproval, gatedGrants, formatApprovalGrant, holdsGrant, parseApprovalGrant, gateExec, grantsAreSubset,
+  resolveInheritedGrants, createInheritedApprovalPolicy, STRICT_NO_CHANNEL_POLICY, describeExecutionContext,
+  type ExecutionContext, type CommandCall, type PreparedCall, type ApprovalGrant, type ShellApprovalRequest,
+  type ShellApprovalOutcome, type ShellApprovalPolicy, type InheritedApprovalSource, type DeferredApprovalChannel,
   type ApprovalSpend,
-  EGRESS_PLACEHOLDER_PREFIX,
-  PLACEHOLDER_BODY_LENGTH,
-  isEgressPlaceholder,
-  egressPlaceholdersIn,
-  egressGrants,
-  grantedEgressBindings,
-  findEgressPlaceholders,
-  egressHostMatches,
-  planEgress,
-  scrubBytes,
-  closeReason,
-  scrubText,
-  createScrubStream,
-  type EgressSecretBinding,
-  type EgressRequestFacts,
-  type EgressSubstitution,
-  type EgressPlan,
+} from './safety/approval-gate';
+
+export {
+  EGRESS_PLACEHOLDER_PREFIX, PLACEHOLDER_BODY_LENGTH, isEgressPlaceholder, egressPlaceholdersIn, egressGrants,
+  grantedEgressBindings, findEgressPlaceholders, egressHostMatches, planEgress, scrubBytes, closeReason, scrubText,
+  createScrubStream, type EgressSecretBinding, type EgressRequestFacts, type EgressSubstitution, type EgressPlan,
   type ScrubReplacement,
-  DeferredApprovalQueue,
-  decideDeferredApprovals,
-  DeferredApprovalStore,
-  initDeferredApprovalsTable,
-  DEFERRED_APPROVAL_SIGNAL,
-  DENIAL_STANDING_MS,
-  DeferredApprovalSchema,
-  type DeferredApproval,
-  type DeferredApprovalStatus,
-  type DeferredApprovalAnswer,
-  type DeferredApprovalVerdict,
-  type DeferredApprovalNotice,
-  initEgressVaultTables,
-  listEgressSecrets,
-  putEgressSecret,
-  revokeEgressSecret,
-  resolveEgressInjection,
-  type EgressSecretSummary,
-  type PutEgressSecretInput,
-  type EgressInjection,
-  type EgressInjectionResult,
+} from './safety/egress-gate';
+
+export {
+  DeferredApprovalQueue, decideDeferredApprovals, DeferredApprovalStore, initDeferredApprovalsTable,
+  DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, DeferredApprovalSchema, type DeferredApproval,
+  type DeferredApprovalStatus, type DeferredApprovalAnswer, type DeferredApprovalVerdict,
+  type DeferredApprovalNotice, type ParkedWrites,
+} from './safety/deferred-approval';
+
+export {
+  initEgressVaultTables, listEgressSecrets, putEgressSecret, revokeEgressSecret, resolveEgressInjection,
+  type EgressSecretSummary, type PutEgressSecretInput, type EgressInjection, type EgressInjectionResult,
   type EgressVaultDeps,
-  ownerCaller,
-  OwnerCapabilityUnavailableError,
-  CapabilityDeniedError,
-  initWorkspaceCapabilityTables,
-  workspaceCapabilityHash,
-  freshWorkspaceCapability,
-  commitWorkspaceCapability,
-  revokeWorkspaceCapability,
-  requireTier,
-  type CapabilityFloor,
-  type WorkspaceCapability,
-  type UserCaller,
-  type ResolvedCaller,
-  type OwnerCapabilityEnv,
-  type CapabilityDenialReason,
-  argumentDigest,
-  sha256Hex,
-  stableStringify,
-  InstructionApprovalStore,
-  initInstructionApprovalsTable,
-  instructionDigest,
-  trustOfInstructionApprovals,
-  admitInstructionDecision,
-  type InstructionTrust,
-  type InstructionDecision,
-  type InstructionApproval,
-  type InstructionTrustResolver,
-  type VerifiedInstructionTrust,
-  type AdmittedInstructionDecision,
-  DeviceConsentRegistry,
-  DeviceConsentStore,
-  initDeviceConsentRequestsTable,
-  DEVICE_CONSENT_DENIED,
-  DEVICE_CONSENT_UNANSWERED,
-  DEVICE_CONNECT_DISCLOSURE,
-  issuedDeviceConnected,
-  summarizeDeviceAction,
-  type DeviceConsentDecision,
-  type DeviceConsentAnswer,
-  type DeviceActionSummary,
-  type DeviceConsentRequest,
-  type PendingDeviceConsent,
-  type PendingConsentRow,
-  type DeviceConsentNotice,
-  WorkspaceProposals,
-  WorkspaceProposalStore,
-  initWorkspaceProposalsTable,
-  proposedSoul,
-  type WorkspaceProposal,
-  type WorkspaceProposalAnswer,
-  type WorkspaceProposalInput,
-  type WorkspaceProposalReceipt,
-  SECRET_PATTERNS,
-  scanText,
-  countDetections,
-  secretSightings,
-  redactSecrets,
-  type SecretPattern,
-  type SecretFinding,
-  type SecretSighting,
-  boundWriteOf,
-  performBoundWrite,
-  ParkedWriteFiles,
-  type ParkedWriteFileOps,
-  type ApprovalContent,
-  type BoundFileWrite,
-  type WriteSubject,
-  type ParkedWrites,
-} from './safety/index';
+} from './safety/egress-vault';
+
+export {
+  ownerCaller, OwnerCapabilityUnavailableError, CapabilityDeniedError, initWorkspaceCapabilityTables,
+  workspaceCapabilityHash, freshWorkspaceCapability, commitWorkspaceCapability, revokeWorkspaceCapability,
+  requireTier, type CapabilityFloor, type WorkspaceCapability, type UserCaller, type ResolvedCaller,
+  type OwnerCapabilityEnv, type CapabilityDenialReason,
+} from './safety/workspace-capability';
+
+export {
+  argumentDigest, sha256Hex, stableStringify,
+} from './safety/argument-digest';
+
+export {
+  InstructionApprovalStore, initInstructionApprovalsTable, instructionDigest, trustOfInstructionApprovals,
+  admitInstructionDecision, type InstructionTrust, type InstructionDecision, type InstructionApproval,
+  type InstructionTrustResolver, type VerifiedInstructionTrust, type AdmittedInstructionDecision,
+} from './safety/instruction-trust';
+
+export {
+  DeviceConsentRegistry, DeviceConsentStore, initDeviceConsentRequestsTable, DEVICE_CONSENT_DENIED,
+  DEVICE_CONSENT_UNANSWERED, DEVICE_CONNECT_DISCLOSURE, issuedDeviceConnected, summarizeDeviceAction,
+  type DeviceConsentDecision, type DeviceConsentAnswer, type DeviceActionSummary, type DeviceConsentRequest,
+  type PendingDeviceConsent, type PendingConsentRow, type DeviceConsentNotice,
+} from './safety/device-consent';
+
+export {
+  WorkspaceProposals, WorkspaceProposalStore, initWorkspaceProposalsTable, proposedSoul, type WorkspaceProposal,
+  type WorkspaceProposalAnswer, type WorkspaceProposalInput, type WorkspaceProposalReceipt,
+} from './safety/workspace-proposals';
+
+export {
+  SECRET_PATTERNS, redactSecrets, type SecretPattern,
+} from './safety/secret-patterns';
+
+export {
+  scanText, countDetections, secretSightings, type SecretFinding, type SecretSighting,
+} from './safety/secret-scan';
+
+export {
+  boundWriteOf, performBoundWrite, type ApprovalContent, type BoundFileWrite, type WriteSubject,
+} from './safety/bound-write';
+
+export {
+  ParkedWriteFiles, type ParkedWriteFileOps,
+} from './safety/parked-write-files';
 
 export {
   egressHost,
