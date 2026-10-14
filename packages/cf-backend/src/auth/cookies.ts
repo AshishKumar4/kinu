@@ -1,5 +1,6 @@
 // The cookies this app sets, their names and attributes, and how one is read back: a leaf, so the preview edge and
-// a browser test read the product's own cookie without the auth graph behind it.
+// a browser test read the product's own cookie without the auth graph behind it. Hosted only, so locked in
+// `capability-parity.lock.json`: each cookie is set by a cf route, and the local CLI's loopback origin has no session.
 
 import { Cause, Effect } from 'effect';
 import { settleSync } from '@kinu.run/core/obs';
