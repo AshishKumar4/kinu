@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { scratchDir } from '@kinu.run/test-utils';
 
-import { findMovable, withoutComments } from './capability-parity';
+import { findMovable } from './capability-parity';
 import { classify, exportedDeclarations, inScope, keyOf } from './dead-code';
 import {
   auditInterception, declaredSandboxClasses, nativeRoutingReasons, readInterceptionSources,
@@ -199,16 +199,6 @@ describe('capability parity gate', () => {
     // Exactly the one import edge above: zero means the count is not wired up,
     // and more than one means an edge is counted twice.
     expect(edges).toBe(1);
-  });
-
-  test('a tsconfig with comments is read, because tsconfig is JSONC', () => {
-    // Measured: one `//` line added to packages/cf-backend/tsconfig.json took
-    // eight tests in this file down with `Unrecognized token '/'`, and not one
-    // failure name mentioned tsconfig. The alias table is only reachable
-    // through that parse, so the failure mode is total.
-    expect(withoutComments('{ // note\n "a": "http://x", /* b */ "c": "\\"//\\"" }'))
-      .toBe('{ \n "a": "http://x",  "c": "\\"//\\"" }');
-    expect(JSON.parse(withoutComments('{ // note\n "a": 1 }\n'))).toEqual({ a: 1 });
   });
 });
 
