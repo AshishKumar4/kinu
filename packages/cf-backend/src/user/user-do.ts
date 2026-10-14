@@ -678,6 +678,10 @@ export class UserDO extends Agent<Env> {
     return this.devices.listDeviceConsents(caller);
   }
 
+  grantDeviceConsent(caller: UserCaller, agentName: string, deviceId: string): ReturnType<UserDevices['grantDeviceConsent']> {
+    return this.devices.grantDeviceConsent(caller, agentName, deviceId);
+  }
+
   revokeDeviceConsent(caller: UserCaller, agentName: string, deviceId: string): ReturnType<UserDevices['revokeDeviceConsent']> {
     return this.devices.revokeDeviceConsent(caller, agentName, deviceId);
   }

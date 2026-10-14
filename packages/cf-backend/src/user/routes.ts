@@ -37,7 +37,7 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   'ensureProfile' | 'userMcp_warmConnections' | 'getProfile' | 'setDisplayName' | 'getProfileCatalog' | 'putProfileCatalog'
   | 'fetch' | 'listWorkspaces' | 'touchWorkspace' | 'removeWorkspace' | 'hasWorkspace'
   | 'listDevices' | 'issueDeviceJoin' | 'acknowledgeUnstoppedDevice' | 'revokeDevice' | 'renameDevice' | 'listDeviceConsents'
-  | 'setDeviceTier' | 'revokeDeviceConsent'
+  | 'setDeviceTier' | 'grantDeviceConsent' | 'revokeDeviceConsent'
   | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'checkpointCredentials' | 'restoreCredentials' | 'listActiveWorkspaces' | 'getAuthHeaders'
   | 'getCodexStatus' | 'disconnectCodex' | 'startClaudeSignIn' | 'finishClaudeSignIn'
   | 'chatgptPlan' | 'startChatGptSignIn' | 'cancelChatGptSignIn' | 'startChatGptPasteSignIn' | 'finishChatGptPasteSignIn' | 'signOutChatGpt'
@@ -332,6 +332,22 @@ userRoutes.put('/api/user/devices/:id/sandbox', async (c) => {
 
   return json({ body: { ok: true } });
 });
+
+// The owner gives this workspace this machine from the workspace's Env tab.
+userRoutes.put('/api/user/devices/:id/consent', (c) => settle(Effect.tryPromise({
+  try: async () => {
+    const agentName = new URL(c.req.url).searchParams.get('agentName')?.trim();
+
+    if (!agentName) return err(400, 'Query must carry ?agentName=');
+
+    const result = await c.get('stub').grantDeviceConsent(c.get('owner'), agentName, decodeURIComponent(rawParam(c, 'id')));
+
+    if (!result.ok) return err(404, 'no such machine or workspace');
+
+    return json({ body: { ok: true } });
+  },
+  catch: (cause) => authoredRefusal({ doing: 'giving this workspace the machine', cause }),
+})));
 
 userRoutes.delete('/api/user/devices/:id/consent', async (c) => {
   const agentName = new URL(c.req.url).searchParams.get('agentName')?.trim();

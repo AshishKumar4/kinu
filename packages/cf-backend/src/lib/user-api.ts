@@ -176,8 +176,9 @@ const RegisteredDeviceSchema = v.object({ origin: v.string(), installCommand: v.
 
 export const listDevices    = () => settle(api(v.array(UserDeviceSchema), 'GET', '/devices'));
 
-export const registerDevice = (label?: string) =>
-  settle(api(RegisteredDeviceSchema, 'POST', '/devices', { label }));
+/** `workspace`: the connect was issued from that workspace's Env tab, so the machine's first connection grants it. */
+export const registerDevice = (asked: { readonly label?: string; readonly workspace?: string } = {}) =>
+  settle(api(RegisteredDeviceSchema, 'POST', '/devices', { label: asked.label, workspace: asked.workspace }));
 
 export const renameDevice   = (id: string, name: string) =>
   settle(api(OkSchema, 'PATCH', `/devices/${encodeURIComponent(id)}`, { name }));
@@ -201,6 +202,10 @@ const DeviceConsentSchema = v.object({
 export type DeviceConsent = v.InferOutput<typeof DeviceConsentSchema>;
 
 export const listDeviceConsents = () => settle(api(v.array(DeviceConsentSchema), 'GET', '/devices/consents'));
+
+/** The owner gives one workspace one machine: the grant the consent card's "always" records. */
+export const grantDeviceConsent = (deviceId: string, agentName: string) =>
+  settle(api(OkSchema, 'PUT', `/devices/${encodeURIComponent(deviceId)}/consent?agentName=${encodeURIComponent(agentName)}`));
 
 /** The row is deleted, so the next device call asks again instead of reading as a standing refusal. */
 export const revokeDeviceConsent = (deviceId: string, agentName: string) =>

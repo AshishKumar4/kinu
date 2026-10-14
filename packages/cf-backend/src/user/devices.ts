@@ -1075,6 +1075,26 @@ export class UserDevices {
     }));
   }
 
+  /**
+   * The owner gives one workspace one machine, from that workspace's Env tab: the grant the consent card's "always"
+   * records, decided by the owner in person rather than asked of them by an agent. Owner session only, so a workspace
+   * cannot grant itself a machine; a machine it does not hold, or a workspace that is not the owner's, grants nothing.
+   */
+  async grantDeviceConsent(caller: UserCaller, agentName: string, deviceId: string): Promise<{ ok: boolean }> {
+    const resolved = await this.host.requireTier(caller, 'device.consent');
+
+    if (resolved.kind !== 'owner_session') throw new CapabilityDeniedError('Only the account owner can give a workspace a machine.');
+
+    const device = this.host.sqlx<{ id: string }>(`SELECT id FROM user_devices WHERE id = ? AND revoked_at IS NULL LIMIT 1`, deviceId)[0];
+    const workspace = this.host.sqlx<{ name: string }>(`SELECT name FROM user_workspaces WHERE name = ? LIMIT 1`, agentName)[0];
+
+    if (!device || !workspace) return { ok: false };
+    this.setDeviceBinding(agentName, deviceId, 'allow');
+    await this.devicesMoved();
+
+    return { ok: true };
+  }
+
   /** Deletes the row (not 'deny') so the next call asks again; takes effect on that next call.
    *  Not a stop: running commands continue. `revokeDevice` ends live commands. */
   async revokeDeviceConsent(caller: UserCaller, agentName: string, deviceId: string): Promise<{ ok: boolean }> {
