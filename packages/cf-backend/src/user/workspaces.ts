@@ -453,7 +453,8 @@ export class UserWorkspaces {
    */
   async tearDownWorkspace(name: string, ownerUserId: string): Promise<void> {
     this.host.sqlx(`UPDATE user_workspaces SET delete_pending = 1 WHERE name = ?`, name);
-    const stub = this.host.env.OrchestratorAgent.get(this.host.env.OrchestratorAgent.idFromName(name));
+    const object = this.host.env.OrchestratorAgent.idFromName(name);
+    const stub = this.host.env.OrchestratorAgent.get(object);
 
     // A call the revoke cuts hangs its relay; a quiet that fails leaves the deletion to go on without it.
     await settleLogged('workspace.quiet_failed', { doing: 'quieting the workspace\'s agents before its deletion', otherwise: 'unavailable' },
@@ -472,6 +473,11 @@ export class UserWorkspaces {
       // agents-SDK destroy aborts its own isolate after the wipe; the 'destroyed' error means success.
       if (!(err instanceof Error) || err.message !== 'destroyed') throw err;
     }
+
+    // Written here, where the destroy landed: the destroyed object's own rows of it can be missing from telemetry
+    // (staging f9c17ac7b, 2026-10-14: none of 7d3e6921's quiet, destroy or abort rows were stored), and a deploy's
+    // report reads what a deleted workspace still owed as ended by this.
+    diagnostics.event('workspace.destroyed', { workspace: name, object: object.toString() });
 
     if (this.host.env.SLATE_PICTURES !== undefined) await deletePictures(this.host.env.SLATE_PICTURES, picturePrefix(name));
     this.deleteWorkspaceRows(name, 'after-destroy');
