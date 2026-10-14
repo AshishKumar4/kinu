@@ -625,63 +625,81 @@ for file in kinu-version.json release.json "$KINU_WORKER_ARTIFACT.sha256" \
 done
 echo -e "${GREEN}✅ CLI and worker release assets staged in $KINU_ASSETS_DIR/downloads${NC}"
 
-# The worker artifact is larger than Cloudflare's 25 MiB per-file asset limit,
-# so it is published into R2 and streamed by the Worker instead. BEFORE the
-# deploy, never after: the release.json this deploy publishes names this
-# artifact, and a manifest that names an object nobody uploaded yet sends every
-# self-deploy run at a 404. Into this build's own releases bucket; a promotion
-# copied staging's there above.
-if [ "$KINU_PROMOTE" != "1" ]; then
-  if [ ! -s "$KINU_WORKER_ARTIFACT_PATH" ]; then
-    publish_red "Missing build output: $KINU_WORKER_ARTIFACT_PATH"
-    return 1
+# THE RELEASE ARTIFACT, THE DEVBOX TOOLS AND THE RUNTIME CATALOG, beside the validated upload below (Step 2a): none
+# reads another or the version, and all three are joined before the reset and the deploy, so each is still in place
+# before anything is deleted or served. Its own process, so a red says why through a file.
+KINU_ALONGSIDE_FINDING="$KINU_DEPLOY_REPORT/logs/alongside.finding"
+: > "$KINU_ALONGSIDE_FINDING"
+alongside_red() {
+  printf '%s' "$1" > "$KINU_ALONGSIDE_FINDING"
+}
+publish_alongside() {
+  # The worker artifact is larger than Cloudflare's 25 MiB per-file asset limit,
+  # so it is published into R2 and streamed by the Worker instead. BEFORE the
+  # deploy, never after: the release.json this deploy publishes names this
+  # artifact, and a manifest that names an object nobody uploaded yet sends every
+  # self-deploy run at a 404. Into this build's own releases bucket; a promotion
+  # copied staging's there above.
+  if [ "$KINU_PROMOTE" != "1" ]; then
+    if [ ! -s "$KINU_WORKER_ARTIFACT_PATH" ]; then
+      alongside_red "Missing build output: $KINU_WORKER_ARTIFACT_PATH"
+      return 1
+    fi
+    KINU_RELEASES_BUCKET="$(bun -e '
+      const config = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+      process.stdout.write(config.r2_buckets?.find((bucket) => bucket.binding === "RELEASES_BUCKET")?.bucket_name ?? "");
+    ' "$KINU_BUILT_CONFIG")"
+    if [ -z "$KINU_RELEASES_BUCKET" ]; then
+      alongside_red "$KINU_BUILT_CONFIG binds no RELEASES_BUCKET"
+      return 1
+    fi
+    echo "Publishing $KINU_WORKER_ARTIFACT to r2://$KINU_RELEASES_BUCKET"
+    npx wrangler r2 object put "$KINU_RELEASES_BUCKET/$KINU_WORKER_ARTIFACT" \
+      --file "$KINU_WORKER_ARTIFACT_PATH" --content-type application/gzip --remote \
+      || { alongside_red "uploading the worker release artifact failed"; return 1; }
+    npx wrangler r2 object put "$KINU_RELEASES_BUCKET/$KINU_WORKER_ARTIFACT.sha256" \
+      --file "$KINU_ASSETS_DIR/downloads/$KINU_WORKER_ARTIFACT.sha256" --content-type text/plain --remote \
+      || { alongside_red "uploading the worker release checksum failed"; return 1; }
+    echo -e "${GREEN}✅ Worker release artifact published to R2${NC}"
   fi
-  KINU_RELEASES_BUCKET="$(bun -e '
+
+  # The devbox tools tarball the image's golden snapshot installs (D65) must be in the
+  # store bucket before a box can start: refused by name, never built here.
+  KINU_BACKUP_BUCKET="$(bun -e '
     const config = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-    process.stdout.write(config.r2_buckets?.find((bucket) => bucket.binding === "RELEASES_BUCKET")?.bucket_name ?? "");
+    process.stdout.write(config.r2_buckets?.find((bucket) => bucket.binding === "BACKUP_BUCKET")?.bucket_name ?? "");
   ' "$KINU_BUILT_CONFIG")"
-  if [ -z "$KINU_RELEASES_BUCKET" ]; then
-    publish_red "$KINU_BUILT_CONFIG binds no RELEASES_BUCKET"
+  if [ -z "$KINU_BACKUP_BUCKET" ]; then
+    alongside_red "$KINU_BUILT_CONFIG binds no BACKUP_BUCKET"
     return 1
   fi
-  echo "Publishing $KINU_WORKER_ARTIFACT to r2://$KINU_RELEASES_BUCKET"
-  npx wrangler r2 object put "$KINU_RELEASES_BUCKET/$KINU_WORKER_ARTIFACT" \
-    --file "$KINU_WORKER_ARTIFACT_PATH" --content-type application/gzip --remote \
-    || { publish_red "uploading the worker release artifact failed"; return 1; }
-  npx wrangler r2 object put "$KINU_RELEASES_BUCKET/$KINU_WORKER_ARTIFACT.sha256" \
-    --file "$KINU_ASSETS_DIR/downloads/$KINU_WORKER_ARTIFACT.sha256" --content-type text/plain --remote \
-    || { publish_red "uploading the worker release checksum failed"; return 1; }
-  echo -e "${GREEN}✅ Worker release artifact published to R2${NC}"
-fi
+  bun "$KINU_ROOT/scripts/devbox-tools.ts" check "$KINU_BACKUP_BUCKET" \
+    || { alongside_red "the devbox tools tarball is missing from $KINU_BACKUP_BUCKET; publish it as the line above says"; return 1; }
 
-# The devbox tools tarball the image's golden snapshot installs (D65) must be in the
-# store bucket before a box can start: refused by name, never built here.
-KINU_BACKUP_BUCKET="$(bun -e '
-  const config = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-  process.stdout.write(config.r2_buckets?.find((bucket) => bucket.binding === "BACKUP_BUCKET")?.bucket_name ?? "");
-' "$KINU_BUILT_CONFIG")"
-if [ -z "$KINU_BACKUP_BUCKET" ]; then
-  publish_red "$KINU_BUILT_CONFIG binds no BACKUP_BUCKET"
+  # The runtime catalog this build pins (NIMBUS_RUNTIME_CATALOG_SHA256), read by a hosted `nimbus install` from
+  # `catalog/sha256/<sha256>.json` in its NIMBUS_RUNTIME_CACHE bucket: put there from the bucket's `catalog/v1.json` when
+  # that is the pinned catalog, else refused by name, before the Worker that reads it is uploaded.
+  KINU_RUNTIME_CATALOG="$(bun -e '
+    const config = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    const bucket = config.r2_buckets?.find((entry) => entry.binding === "NIMBUS_RUNTIME_CACHE")?.bucket_name ?? "";
+    process.stdout.write(bucket + " " + (config.vars?.NIMBUS_RUNTIME_CATALOG_SHA256 ?? ""));
+  ' "$KINU_BUILT_CONFIG")"
+  read -r KINU_RUNTIME_BUCKET KINU_RUNTIME_CATALOG_SHA256 <<< "$KINU_RUNTIME_CATALOG"
+  if [ -z "$KINU_RUNTIME_BUCKET" ] || [ -z "$KINU_RUNTIME_CATALOG_SHA256" ]; then
+    alongside_red "$KINU_BUILT_CONFIG binds no NIMBUS_RUNTIME_CACHE or pins no NIMBUS_RUNTIME_CATALOG_SHA256"
+    return 1
+  fi
+  bun "$KINU_ROOT/scripts/runtime-catalog.ts" ensure "$KINU_RUNTIME_BUCKET" "$KINU_RUNTIME_CATALOG_SHA256" \
+    || { alongside_red "the pinned runtime catalog is not in $KINU_RUNTIME_BUCKET, as the line above says"; return 1; }
+}
+publish_alongside &
+KINU_ALONGSIDE_PID=$!
+# Joined before anything is deleted or served: answers its red as this deploy's.
+join_alongside() {
+  wait "$KINU_ALONGSIDE_PID" && return 0
+  publish_red "$(cat "$KINU_ALONGSIDE_FINDING")"
   return 1
-fi
-bun "$KINU_ROOT/scripts/devbox-tools.ts" check "$KINU_BACKUP_BUCKET" \
-  || { publish_red "the devbox tools tarball is missing from $KINU_BACKUP_BUCKET; publish it as the line above says"; return 1; }
-
-# The runtime catalog this build pins (NIMBUS_RUNTIME_CATALOG_SHA256), read by a hosted `nimbus install` from
-# `catalog/sha256/<sha256>.json` in its NIMBUS_RUNTIME_CACHE bucket: put there from the bucket's `catalog/v1.json` when
-# that is the pinned catalog, else refused by name, before the Worker that reads it is uploaded.
-KINU_RUNTIME_CATALOG="$(bun -e '
-  const config = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-  const bucket = config.r2_buckets?.find((entry) => entry.binding === "NIMBUS_RUNTIME_CACHE")?.bucket_name ?? "";
-  process.stdout.write(bucket + " " + (config.vars?.NIMBUS_RUNTIME_CATALOG_SHA256 ?? ""));
-' "$KINU_BUILT_CONFIG")"
-read -r KINU_RUNTIME_BUCKET KINU_RUNTIME_CATALOG_SHA256 <<< "$KINU_RUNTIME_CATALOG"
-if [ -z "$KINU_RUNTIME_BUCKET" ] || [ -z "$KINU_RUNTIME_CATALOG_SHA256" ]; then
-  publish_red "$KINU_BUILT_CONFIG binds no NIMBUS_RUNTIME_CACHE or pins no NIMBUS_RUNTIME_CATALOG_SHA256"
-  return 1
-fi
-bun "$KINU_ROOT/scripts/runtime-catalog.ts" ensure "$KINU_RUNTIME_BUCKET" "$KINU_RUNTIME_CATALOG_SHA256" \
-  || { publish_red "the pinned runtime catalog is not in $KINU_RUNTIME_BUCKET, as the line above says"; return 1; }
+}
 
 # ── Step 2a: The Worker's startup ────────────────────────────
 # Cloudflare refuses a version whose startup exceeds its CPU limit (code 10021).
@@ -702,10 +720,12 @@ if [ "$KINU_RESET" = "1" ] && [ "${KINU_PENDING_RESET:-none}" = "none" ]; then
   KINU_VALIDATED=$?
   report startup validated "$(startup_reading "$KINU_VALIDATE_LOG")"
   if [ "$KINU_VALIDATED" -ne 0 ]; then
+    wait "$KINU_ALONGSIDE_PID"
     publish_red "$KINU_WORKER refused this build's version before the reset, so nothing was deleted and it still serves what it did; the log is $KINU_VALIDATE_LOG"
     return 1
   fi
 fi
+join_alongside || return 1
 
 # ── Step 2b: The reset ────────────────────────────────────────
 # After the build and its validated version, so a red gate, a failed build or

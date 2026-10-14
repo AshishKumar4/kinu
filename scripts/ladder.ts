@@ -3834,15 +3834,21 @@ function recordArmadaRow(report: string, gate: Gate, verdict: ArmadaRow | undefi
 }
 
 /**
- * A deploy phase's armada rows, as one armada job at this exact SHA (`armadaPlan`), each row's verdict into the
- * deploy's report as one run here would put it. Answers the rows that are not green: red, or never graded because
- * the run could not grade them.
+ * A deploy wave's armada rows, one armada job at this exact SHA (`armadaPlan`) per phase and secret group, each row's
+ * verdict into the deploy's report as one run here would put it. The rows that drive the deployment are a job apart from
+ * the source rows, so the job's end is when the deployment's traffic ended. Answers the rows that are not green: red,
+ * or never graded because the run could not grade them.
  */
-async function armadaPhase(phases: readonly DeployPhase[], rows: readonly Gate[], report: string): Promise<PhaseJob> {
+async function armadaPhase(rows: readonly Gate[], report: string): Promise<PhaseJob> {
   const groups = new Map<string, Gate[]>();
 
-  for (const gate of rows) groups.set(secretGroup(gate), [...groups.get(secretGroup(gate)) ?? [], gate]);
-  const jobs = await Promise.all([...groups.values()].map(async (group) => armadaPhaseJob(phases, group, report)));
+  for (const gate of rows) {
+    const key = `${gate.phase ?? 'source'} ${secretGroup(gate)}`;
+
+    groups.set(key, [...groups.get(key) ?? [], gate]);
+  }
+
+  const jobs = await Promise.all([...groups.values()].map(async (group) => armadaPhaseJob([group[0]?.phase ?? 'source'], group, report)));
   const drove = jobs.flatMap((job) => (job.drove === undefined ? [] : [job.drove]));
 
   return { failed: jobs.flatMap((job) => job.failed), drove: drove.length === 0 ? undefined : Math.max(...drove) };
@@ -4523,7 +4529,7 @@ if (import.meta.main) {
   };
 
   // The phase's armada job runs beside the rows here, and its reds join theirs before the phase ends.
-  const armadaJob = armadaRows.length === 0 ? undefined : armadaPhase(deployPhase ?? [], armadaRows, report);
+  const armadaJob = armadaRows.length === 0 ? undefined : armadaPhase(armadaRows, report);
 
   if (phaseRows !== undefined) {
     // A deploy phase is one wave of its plan rows: the phase's barrier is this process ending.

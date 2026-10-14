@@ -80,8 +80,11 @@ const DEVBOX_STORE_BINDING = 'BACKUP_BUCKET';
 /** Where every box's chain lives in that bucket: `boxes/<box>/…` (devbox `chainStoreRoot`). */
 const CHAIN_PREFIX = 'boxes/';
 
-/** Edge rollout takes about two minutes, as in the deploy's smoke test. */
-const HEALTH_ATTEMPTS = 8;
+/** Edge rollout takes about two minutes, as in the deploy's smoke test, which asks every two seconds too: each ask
+ *  that missed slept 15 s until 2026-10-14, after a placeholder that answered seconds after its upload. */
+const HEALTH_MS = 120_000;
+
+const HEALTH_POLL_MS = 2_000;
 
 const StamplessSchema = v.pipe(v.string(), v.parseJson(), v.object({ build: v.null() }));
 
@@ -404,12 +407,12 @@ async function finish(input: WipeInput, reset: Reset): Promise<Reset> {
     writeFileSync(input.recordFile, JSON.stringify(done));
   }
 
-  let answered = false;
+  const until = Date.now() + HEALTH_MS;
+  let answered = await target.stampless(1);
 
-  for (let attempt = 1; attempt <= HEALTH_ATTEMPTS && !answered; attempt += 1) {
+  for (let attempt = 2; !answered && Date.now() < until; attempt += 1) {
+    await Bun.sleep(HEALTH_POLL_MS);
     answered = await target.stampless(attempt);
-
-    if (!answered && attempt < HEALTH_ATTEMPTS) await Bun.sleep(15_000);
   }
 
   if (!answered) throw new Error(`${origin(input.config)}/api/health never answered 200 { build: null }`);

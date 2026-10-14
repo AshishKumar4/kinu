@@ -42,7 +42,7 @@ source "$ROOT/scripts/repo-runtime.sh"
 # dist/kinu/assets/ is NOT an asset dir — it is the worker bundle's
 # code-split chunk output, uploaded as worker modules. See scripts/deploy.sh.
 # --unsigned stops before signing and leaves the version and sha it would have signed in
-# dist/release-unsigned.json: the deploy builds on armada and signs here, where the key is.
+# release-unsigned.json beside the artifacts: the deploy builds on armada and signs here, where the key is.
 UNSIGNED=""
 if [ "${1:-}" = "--unsigned" ]; then UNSIGNED=1; shift; fi
 OUT_DIR="${1:-$ROOT/packages/cf-backend/dist/client/downloads}"
@@ -245,7 +245,7 @@ publish "$CPYTHON_ARTIFACT"
 # reaches a live path. Written from the SAME stamp the bundle carries — one
 # stamping site, one source. A build without the signing key is refused.
 if [ -n "$UNSIGNED" ]; then
-  printf '{"version":"%s","sha":"%s"}\n' "$version" "$sha" > "$ROOT/packages/cf-backend/dist/release-unsigned.json"
+  printf '{"version":"%s","sha":"%s"}\n' "$version" "$sha" > "$OUT_DIR/release-unsigned.json"
   exit 0
 fi
 "$BUN" "$ROOT/scripts/sign-release.ts" "$OUT_DIR" "$version" "$sha" || {
