@@ -7,13 +7,14 @@ import { expect, test } from 'bun:test';
 import { resolvePath } from '@kinu.run/core';
 import { createTestRuntime } from '@kinu.run/test-utils';
 import { compactedScreenshots, screenshot } from './helpers';
+import { KEEP_RECENT_IMAGES } from '../src/attachments';
 
 test('20 screenshots compact by the rung alone, each moved-out image a link to its stored bytes', async () => {
   const { rt } = createTestRuntime();
   const { screens, links } = await compactedScreenshots(rt);
 
   expect({ kept: screens.filter((entries) => entries.includes('image')).length, links: links.length })
-    .toEqual({ kept: 2, links: 18 });
+    .toEqual({ kept: KEEP_RECENT_IMAGES, links: 20 - KEEP_RECENT_IMAGES });
 
   expect(Buffer.from(await rt.storage.vfs.readFile(resolvePath(links[0] ?? '', rt.planes).absolute)).toString('base64')).toBe(screenshot(0));
 });

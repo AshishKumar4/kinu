@@ -1,7 +1,7 @@
 /**
  * Every compaction path on cf (the workspace's chat, an added agent's chat and a search node, each in its own
  * isolate, and a search's inherited prefix) moves older screenshots out to links the file tool opens again, keeps the
- * newest two, and prices images for the model serving the request. The turns run on Claude, which prices a 1280x800 screenshot at
+ * newest few (KEEP_RECENT_IMAGES), and prices images for the model serving the request. The turns run on Claude, which prices a 1280x800 screenshot at
  * 1,334 tokens; its fallback, gpt-4o-mini, at 36,835 (tile pricing). Twenty fit Claude's window, so only a request the
  * fallback serves, or a search node on gpt-4o-mini, compacts them.
  */
@@ -10,6 +10,7 @@ import * as v from 'valibot';
 import { actorConnectionTag, buildBuiltinTools, type JsonValue } from '@kinu.run/core';
 import { present, toolExecute } from '@kinu.run/test-utils';
 import { screenshot } from '../../compaction/tests/helpers';
+import { KEEP_RECENT_IMAGES } from '../../compaction/src/attachments';
 import { conversationsFor } from '../../core/tests/helpers';
 import { asPane } from './helpers/agents-sdk';
 import { catalogTurn, driveUntil, hostedMainActor, orchestratorHarness, workspaceFiles, type HarnessOrchestratorAgent } from './helpers/actor-harness';
@@ -61,7 +62,10 @@ async function reopened(workspace: Parameters<typeof hostedMainActor>[0], links:
   return numbers.sort((a, b) => a - b);
 }
 
-const EARLIER = Array.from({ length: SHOTS - 2 }, (_, n) => n);
+const EARLIER = Array.from({ length: SHOTS - KEEP_RECENT_IMAGES }, (_, n) => n);
+
+/** The newest few, which stay in the request. */
+const NEWEST = Array.from({ length: KEEP_RECENT_IMAGES }, (_, n) => SHOTS - KEEP_RECENT_IMAGES + n);
 
 const ALL = Array.from({ length: SHOTS }, (_, n) => n);
 
@@ -170,7 +174,7 @@ async function addedAgent(agent: HarnessOrchestratorAgent) {
 }
 
 describe('older screenshots leave as links, priced for the model serving the request', () => {
-  test('a workspace turn its Claude model is refused falls back to gpt-4o-mini, sent the newest two and links to the rest', async () => {
+  test('a workspace turn its Claude model is refused falls back to gpt-4o-mini, sent the newest few and links to the rest', async () => {
     const asked = { primary: new Array<string>(), fallback: new Array<string>() };
     const workspace = await screenshotWorkspace(fallingBack(asked));
 
@@ -179,11 +183,11 @@ describe('older screenshots leave as links, priced for the model serving the req
     const served = carried(present(asked.fallback[0], 'the request gpt-4o-mini served'));
 
     expect(carried(present(asked.primary[0], 'the request Claude refused'))).toEqual({ inline: ALL, links: [] });
-    expect(served.inline).toEqual([SHOTS - 2, SHOTS - 1]);
+    expect(served.inline).toEqual(NEWEST);
     expect(await reopened(workspace, served.links)).toEqual(EARLIER);
   });
 
-  test("an added agent's turn its Claude model is refused falls back to gpt-4o-mini, sent the newest two and links to the rest", async () => {
+  test("an added agent's turn its Claude model is refused falls back to gpt-4o-mini, sent the newest few and links to the rest", async () => {
     const asked = { primary: new Array<string>(), fallback: new Array<string>() };
     const workspace = await screenshotWorkspace(fallingBack(asked));
 
@@ -195,11 +199,11 @@ describe('older screenshots leave as links, priced for the model serving the req
     const served = carried(present(asked.fallback[0], 'the request gpt-4o-mini served'));
 
     expect(carried(present(asked.primary[0], 'the request Claude refused'))).toEqual({ inline: ALL, links: [] });
-    expect(served.inline).toEqual([SHOTS - 2, SHOTS - 1]);
+    expect(served.inline).toEqual(NEWEST);
     expect(await reopened(workspace, served.links)).toEqual(EARLIER);
   });
 
-  test('a search node its Claude model refuses falls back to gpt-4o-mini, sent the newest two and links to the rest', async () => {
+  test('a search node its Claude model refuses falls back to gpt-4o-mini, sent the newest few and links to the rest', async () => {
     const asked = { primary: new Array<string>(), fallback: new Array<string>() };
 
     const workspace = await screenshotWorkspace((run) => {
@@ -220,7 +224,7 @@ describe('older screenshots leave as links, priced for the model serving the req
     const served = carried(present(asked.fallback[0], 'the node request gpt-4o-mini served'));
 
     expect(carried(present(asked.primary[0], 'the node request Claude refused'))).toEqual({ inline: ALL, links: [] });
-    expect(served.inline).toEqual([SHOTS - 2, SHOTS - 1]);
+    expect(served.inline).toEqual(NEWEST);
     expect(await reopened(workspace, served.links)).toEqual(EARLIER);
   });
 
@@ -233,7 +237,7 @@ describe('older screenshots leave as links, priced for the model serving the req
 
     const node = carried(present(nodes[0], 'the search node\'s request'));
 
-    expect(node.inline).toEqual([SHOTS - 2, SHOTS - 1]);
+    expect(node.inline).toEqual(NEWEST);
     expect(await reopened(workspace, node.links)).toEqual(EARLIER);
   });
 });

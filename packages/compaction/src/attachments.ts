@@ -9,7 +9,7 @@ export interface AttachmentDeps {
   readonly files: () => { readonly storage: Pick<Storage, 'vfs' | 'home'>; readonly planes: PathPlanes };
 }
 
-export const KEEP_RECENT_IMAGES = 2;
+export const KEEP_RECENT_IMAGES = 3;
 
 /** Where an attachment moves to and what is left in its place: the turn's ladder and a turn's steps share it. */
 export type AttachmentStore = Pick<AttachmentPolicy, 'list' | 'replace' | 'store'>;
