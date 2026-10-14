@@ -771,7 +771,7 @@
       "exit": 0,
       "machine": "linux x64, AMD EPYC (8 threads)"
     },
-    "bun test --timeout=0 --isolate scripts/bench*.test.ts scripts/storage-matrix-cleanup.test.ts scripts/ephemeral-deployment.test.ts scripts/devbox-container-tier.test.ts": {
+    "bun test --timeout=0 --isolate scripts/bench*.test.ts scripts/bench-teardown.test.ts scripts/ephemeral-deployment.test.ts scripts/devbox-container-tier.test.ts": {
       "wallSeconds": 35.14,
       "cpuSeconds": 48,
       "peakRssMb": 370.06,

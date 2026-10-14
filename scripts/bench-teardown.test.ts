@@ -8,7 +8,7 @@ import {
   checkCleanup, createManifest, loadManifest, manifestPath, reconcileCounters,
   recoverAbandonedRuns, replayTeardown, scanUnfinishedManifests, writeManifest,
   type CleanupProbes, type TeardownEntry, type TeardownManifest,
-} from './fixtures/storage-matrix/cleanup';
+} from './bench-teardown';
 import type { ProcessOwner } from './process-owner';
 import { R2_OPERATION_NAMES as R2_OP_VOCABULARY } from '../packages/devbox/bench/r2-operations';
 
@@ -268,7 +268,7 @@ describe('a fresh driver finishes what a killed one started', () => {
 
 /** A bench holding run `runId` from its own process until released, as a measuring driver does. */
 async function holdRun(root: string, runId: string): Promise<() => Promise<void>> {
-  const cleanup = join(import.meta.dir, 'fixtures/storage-matrix/cleanup.ts');
+  const cleanup = join(import.meta.dir, 'bench-teardown.ts');
 
   const child = spawnTest([process.execPath, '-e', `
     const { createManifest, writeManifest } = await import(${JSON.stringify(cleanup)});
