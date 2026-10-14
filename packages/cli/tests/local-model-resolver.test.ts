@@ -190,3 +190,63 @@ describe("createConfiguredLocalModelResolver — registry-only providers", () =>
     });
   });
 });
+
+describe("createConfiguredLocalModelResolver — keys as the machine holds them", () => {
+  test("a key another process connects or replaces reaches an open resolver at its next request, with no restart", async () => {
+    const kinuHome = scratchDir("cli-resolver-live-keys");
+    const config = join(kinuHome, "config.json");
+    writeFileSync(config, JSON.stringify({ providers: { anthropic: { apiKey: "sk-ant-first" } } }), { mode: 0o600 });
+
+    const script = `
+      (globalThis).AI_SDK_LOG_WARNINGS = false;
+      import { writeFileSync } from 'node:fs';
+      import { generateText } from 'ai';
+      import { createConfiguredLocalModelResolver } from './packages/cli/src/local-model-resolver.ts';
+
+      // Anthropic's side of each turn; every other host answers nothing.
+      const sent = [];
+      globalThis.fetch = async (input, init) => {
+        const url = String(input);
+        if (!url.startsWith('https://api.anthropic.com/')) return new Response('{}');
+        const headers = new Headers(init.headers);
+        sent.push(headers.get('x-api-key') ?? headers.get('authorization'));
+        return Response.json({
+          id: 'msg_1', type: 'message', role: 'assistant', model: 'claude-opus-4-7', stop_reason: 'end_turn',
+          content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 3, output_tokens: 1 },
+        });
+      };
+
+      const { resolver } = createConfiguredLocalModelResolver({ model: 'anthropic/claude-opus-4-7' });
+      const model = resolver.resolveModel('anthropic/claude-opus-4-7', { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' });
+      const openrouter = async () => (await resolver.listProviders()).find((p) => p.id === 'openrouter')?.available === true;
+      const before = await openrouter();
+      await generateText({ model, prompt: 'ping' });
+
+      // As \`kinu provider connect\` in another terminal writes the machine's config.
+      writeFileSync(process.env.KINU_HOME + '/config.json', JSON.stringify({ providers: {
+        anthropic: { apiKey: 'sk-ant-second' }, openrouter: { apiKey: 'sk-or-new' },
+      } }));
+      await generateText({ model, prompt: 'ping' });
+      console.log(JSON.stringify({ openrouter: [before, await openrouter()], sent }));
+    `;
+
+    const env: NodeJS.ProcessEnv = { ...process.env, KINU_HOME: kinuHome };
+
+    for (const name of [
+      "KINU_TOKEN", "KINU_ORIGIN", "KINU_MODEL", "KINU_BASE_URL", "KINU_AUTH",
+      "AI_GATEWAY_BASE_URL", "AI_GATEWAY_AUTH", "AI_GATEWAY_MODEL",
+      "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY",
+    ]) delete env[name];
+
+    const proc = Bun.spawn({ cmd: [process.execPath, "-e", script], cwd: resolve(__dirname, "../../.."), env, stdout: "pipe", stderr: "pipe" });
+
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+
+    expect({ stderr, exitCode }).toEqual({ stderr: "", exitCode: 0 });
+    expect(JSON.parse(stdout)).toEqual({ openrouter: [false, true], sent: ["sk-ant-first", "sk-ant-second"] });
+  });
+});

@@ -59,7 +59,7 @@ export function createConfiguredLocalModelResolver(opts: LocalModelResolverOptio
 
   const resolver = createLocalModelResolver({
     llm: llmConfig,
-    credentials: resolveProviderCredentials(),
+    credentials: resolveProviderCredentials,
     oauthStore: createOAuthStore(),
     cloud: cloud ?? undefined,
   });

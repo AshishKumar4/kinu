@@ -139,7 +139,7 @@ describe('web-UI-connected providers reach local agents', () => {
 
     const resolver = resolverWith(
       networkFetch({ credentials: [{ key: 'openrouter.bearer' }], recorded }),
-      { openrouterApiKey: 'sk-local' },
+      () => ({ openrouterApiKey: 'sk-local' }),
     );
 
     const result = await generateText({ model: resolver.resolveModel('openrouter/anthropic/claude-x', { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' }), prompt: 'hello' });

@@ -251,7 +251,7 @@ const NO_ENDPOINT: LLMProviderConfig = {
 /** The real resolver, so specs normalise as they do for an owner, answering every call with the
  *  backend's turn model: a turn a case causes runs offline. */
 function scriptedResolver(model: LanguageModel): LocalModelResolver {
-  const real = createLocalModelResolver({ llm: NO_ENDPOINT, credentials: {} });
+  const real = createLocalModelResolver({ llm: NO_ENDPOINT, });
 
   return {
     normalizeSpecSync: (spec) => real.normalizeSpecSync(spec),

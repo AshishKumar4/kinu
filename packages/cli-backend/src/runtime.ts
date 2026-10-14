@@ -50,7 +50,7 @@ import { createDecisionPort, restDecisionRun } from '@kinu.run/core';
 import { dotenvLoadedNames } from './dotenv-provenance';
 import {
   createLocalModelResolver, createLocalProviderLLM, PROVIDER_CREDENTIAL_ENV, SESSION_CREDENTIAL_ENV, workersAiRoute,
-  type LocalCloudSession, type LocalModelResolver, type LocalProviderCredentials,
+  type LocalCloudSession, type LocalModelResolver, type ProviderCredentialSource,
 } from './model-resolver';
 import {
   createLocalProfileAuthority,
@@ -80,7 +80,7 @@ interface CLIRuntimeOptions {
    *  chat model (actor_config) drives the seams instead. */
   llm: LLMProviderConfig | null;
   agentName?: string;
-  providerCredentials?: LocalProviderCredentials;
+  providerCredentials?: ProviderCredentialSource;
   oauthStore?: LocalOAuthStore;
   /** The signed-in Kinu session: the decision model's route when `llm` serves no Workers AI (`workersAiRoute`). */
   cloud?: LocalCloudSession;

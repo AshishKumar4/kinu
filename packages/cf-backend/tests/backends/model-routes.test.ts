@@ -51,7 +51,7 @@ function gatewayRoutes(upstream: typeof fetch, menu: readonly string[]) {
     ASSETS: unreachableAssets(),
   };
 
-  const local = createLocalModelResolver({ llm: null, credentials: {}, cloud: { origin: ORIGIN, token: CLI_TOKEN }, fetch: asFetchFunction(async (input, init) => {
+  const local = createLocalModelResolver({ llm: null, cloud: { origin: ORIGIN, token: CLI_TOKEN }, fetch: asFetchFunction(async (input, init) => {
     const url = requestUrl(input);
 
     if (url === `${ORIGIN}/api/cli/models`) return Response.json({ models: menu.map((spec) => ({ spec, label: spec, provider: 'my-gateway' })), failures: [] });
