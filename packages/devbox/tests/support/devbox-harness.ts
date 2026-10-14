@@ -83,13 +83,6 @@ export interface StartFault {
   readonly created: boolean;
 }
 
-export interface FileOperation {
-  readonly operation: 'rename' | 'move';
-  readonly from: string;
-  readonly to: string;
-  readonly sessionId: string | undefined;
-}
-
 
 const alarmTimes = new WeakMap<DurableObjectStorage, { at: number | null; scheduled: string[] }>();
 
@@ -342,7 +335,6 @@ export class FakeSandbox {
   /** Same object the Durable Object state hands the class as `ctx.container`, so a test that
    *  stops the container and the class reading `running` cannot disagree. */
   readonly running = { running: true };
-  defaultPort = 3000;
   readonly processes = new Map<string, FakeProcessRow>();
   readonly starts: StartRecord[] = [];
   readonly kills: string[] = [];
@@ -362,7 +354,6 @@ export class FakeSandbox {
   sessionsSave: ExecResult | 'gone' = { stdout: '', stderr: '', exitCode: 0 };
   /** What naming the box answers (D96): its script's report, or `gone` for an exec the container refuses. */
   nameBox: ExecResult | 'gone' = { stdout: 'named=yes 10.0.0.1 fd00::11\n', stderr: '', exitCode: 0 };
-  readonly fileOperations: FileOperation[] = [];
   readonly mountCalls: string[] = [];
   /** Mounts and execs share one chronological list: stop order is a property of the order
    *  across both channels and cannot be reconstructed from two separate lists. */
@@ -378,10 +369,6 @@ export class FakeSandbox {
   readonly directories = new Set<string>(IMAGE_DIRECTORIES);
   /** What every container this fake starts holds before anything runs: the image's own files. */
   readonly imageFiles = new Map<string, string>();
-  readonly fileOperationFailures = {
-    rename: Array<Error>(),
-    move: Array<Error>(),
-  } satisfies Record<FileOperation['operation'], Error[]>;
   readonly startFaults: StartFault[] = [];
   startFaultBeforeRunning: Error | undefined;
   startFaultAfterRunning: Error | undefined;
@@ -689,10 +676,6 @@ export class FakeSandbox {
     }
 
     this.files.set(path, content);
-
-    if (path.startsWith('/workspace/')) {
-      this.files.set(`/var/tmp/devbox/upper/${path.slice('/workspace/'.length)}`, content);
-    }
 
     return { success: true, path, timestamp: new Date().toISOString() };
   }
@@ -1384,14 +1367,8 @@ export function seedGolden(container: FakeSandbox): void {
   container.addSnapshot(HARNESS_GOLDEN, new Map([[TOOLS_STAMP, artifact.tools.sha256]]));
 }
 
-/** Also the box prefix the strategy scopes the store to (`boxes/<id>`). */
+/** Also the box prefix the store is scoped to (`boxes/<id>`). */
 export const TEST_BOX_ID = 'devbox-under-test';
-
-/** Hashes the same input production passes to `binding.idFromName(`${strategy}:${name}`)`;
- *  equal inputs share one box and its storage, any difference gives another box. */
-export function deriveBoxId(strategy: string, name: string): string {
-  return createHash('sha256').update(`${strategy}:${name}`).digest('hex');
-}
 
 export interface Harness<Box> {
   readonly box: Box;
@@ -1405,7 +1382,7 @@ export interface Harness<Box> {
   readonly state: BoxState;
 }
 
-/** `id` defaults to `TEST_BOX_ID`; pass `deriveBoxId` output to model production identity.
+/** `id` defaults to `TEST_BOX_ID`.
  *  Starts stopped; a running-but-unsettled fixture is refused by readiness until the hook runs. */
 /** What the fake platform calls on the object it built. */
 interface PlatformServed {

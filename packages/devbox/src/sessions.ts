@@ -183,7 +183,7 @@ export function jobSessionName(command: string): string {
 export const FIRST_SESSION: SessionRecord = { id: 'shell', name: 'shell', cwd: '/workspace' };
 
 /** How a session's last command ended, as its shell's prompt recorded it. */
-export interface SessionLast { readonly exit: number; readonly at: number; readonly command: string }
+interface SessionLast { readonly exit: number; readonly at: number; readonly command: string }
 
 export interface TerminalSession extends SessionRecord {
   /** Its tmux session runs now; false after a restart, until the next attach opens it again. */
