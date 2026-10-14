@@ -34,7 +34,7 @@ import {
 import Sidebar from "@/components/Sidebar";
 import Layout from "@/components/layout";
 import { ModelPicker } from "@/components/ModelPicker";
-import { Composer, useProviderWaitNotice, type ComposerNotice } from "@/components/Composer";
+import { Composer, useProviderWaitNotice, workspaceLoadNotice, type ComposerNotice } from "@/components/Composer";
 import type { WorkMode } from "@kinu.run/core";
 import { WorkspaceHeader, type ChatTab } from "@/components/WorkspaceHeader";
 import { NodeTranscript } from "@/components/NodeTranscript";
@@ -6451,12 +6451,7 @@ function AgentPanel(
   return (
     <section data-gallery-panel={label} className="space-y-3 border-t p-border pt-6 first:border-0 first:pt-0">
       <div className="p-eyebrow">{label}</div>
-      <GalleryComposer notices={banner
-        ? [{ id: "load", tone: banner.severity === "blocking" ? "danger" : "warning",
-             title: banner.title, text: banner.scope === "" ? undefined : banner.scope,
-             detail: banner.detail === "" ? undefined : { raw: banner.detail },
-             action: banner.retry === null ? undefined : { label: banner.retry, onClick: () => {} } }]
-        : []} />
+      <GalleryComposer notices={banner ? [workspaceLoadNotice(banner, () => {})] : []} />
       <AgentSurface
         snapshot={snapshot} memory={WORK_MEMORIES} memoryContent={memoryContent}
         onSearchMemory={() => {}} onRetryLoad={() => {}} rpc={evolutionRpc} workspace={WORKSPACE_PAGE_NAME}

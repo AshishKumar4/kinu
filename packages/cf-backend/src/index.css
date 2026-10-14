@@ -860,7 +860,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-pill-body { display: flex; min-width: 0; flex: 1 1 auto; align-items: baseline; gap: 6px; }
 .p-pill-source { flex-shrink: 0; color: var(--c-text); font-weight: 600; white-space: nowrap; }
 .p-pill-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.p-pill-dim { flex-shrink: 0; color: var(--c-text-3); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.p-pill-dim { min-width: 0; overflow: hidden; color: var(--c-text-3); text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .p-pill-action {
   display: inline-flex;
   flex-shrink: 0;
@@ -902,7 +902,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   padding: 10px 12px 10px 14px;
   border-radius: 16px;
 }
-.p-pill[data-open] .p-pill-text { overflow: visible; white-space: normal; }
+.p-pill[data-open] :is(.p-pill-text, .p-pill-dim) { overflow: visible; white-space: normal; }
 .p-pill[data-open] .p-pill-body { flex-wrap: wrap; row-gap: 2px; }
 /* The title row: the mark and both controls sit on its first line, however its words wrap. */
 .p-pill-head { display: flex; min-width: 0; align-items: flex-start; gap: 8px; }

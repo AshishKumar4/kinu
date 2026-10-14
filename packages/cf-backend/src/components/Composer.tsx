@@ -75,8 +75,8 @@ function Notice({ notice }: { notice: ComposerNotice }) {
   useLayoutEffect(() => {
     const line = words.current;
 
-    if (line !== null) setCut(line.scrollWidth > line.clientWidth);
-  }, [text, open]);
+    if (line !== null) setCut([...line.children].some((part) => part.scrollWidth > part.clientWidth));
+  }, [text, dim, open]);
 
   const opens = detail !== undefined || cut;
   const role = tone === "danger" ? "alert" : "status";
@@ -133,9 +133,9 @@ function Notice({ notice }: { notice: ComposerNotice }) {
   return (
     <div className="p-pill" data-tone={tone} data-notice={tone} role={role} {...hooks}>
       <NoticeMark tone={tone} />
-      <span className="p-pill-body">
+      <span ref={words} className="p-pill-body">
         {title && <span className="p-pill-source">{title}</span>}
-        {text && <span ref={words} className="p-pill-text">{text}</span>}
+        {text && <span className="p-pill-text">{text}</span>}
         {dim && <span className="p-pill-dim">{dim}</span>}
       </span>
       {opens && (
@@ -219,7 +219,10 @@ export function useProviderWaitNotice(wait: ProviderWaitShown | null): ComposerN
   }];
 }
 
-/** Neither tone disables the composer; that belongs to the socket. */
+/**
+ * What failed to load, why in the reasons' own words, and what still works in the quiet ink: one line, which opens
+ * when it is cut. Neither tone disables the composer; that belongs to the socket.
+ */
 export function workspaceLoadNotice(notice: WorkspaceNotice, onRetry: () => void): ComposerNotice {
   const mapped: ComposerNotice = {
     id: "load",
@@ -227,9 +230,9 @@ export function workspaceLoadNotice(notice: WorkspaceNotice, onRetry: () => void
     title: notice.title,
   };
 
-  if (notice.scope !== "") mapped.text = notice.scope;
+  if (notice.detail !== "") mapped.text = notice.detail;
 
-  if (notice.detail !== "") mapped.detail = { raw: notice.detail };
+  if (notice.scope !== "") mapped.dim = notice.scope;
 
   if (notice.retry !== null) mapped.action = { label: notice.retry, onClick: onRetry };
 
