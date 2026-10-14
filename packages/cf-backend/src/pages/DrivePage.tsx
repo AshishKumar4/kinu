@@ -23,7 +23,7 @@ import {
   downloadUrl, inlineUrl, listDrive, markAsSkill, readDriveText, uploadFile, uploadFolder, uploadZip, type PickedFile, type UploadWatch,
 } from "@/lib/drive-api";
 import { getSharedLibrary, markSharedSeen } from "@/lib/shared-api";
-import { useAsyncResource, lastValue, type AsyncResource } from "@/hooks/use-async-resource";
+import { useAsyncResource, lastValue, type AsyncResource, type AsyncResourceControl } from "@/hooks/use-async-resource";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { useCopy } from "@/hooks/use-copy";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -708,6 +708,45 @@ function BuiltinSkillDrawer({ name, onClose }: { name: string; onClose: () => vo
   );
 }
 
+/** The uploads this visit sent, and the tiles of those still to land in `path`. */
+function useTransfers(path: string, listing: AsyncResourceControl<DriveListing>) {
+  const [transfers, setTransfers] = useState<Transfer[]>([]);
+  // The listing last pruned against: its value, which keeps its identity, not the resource, a new object per render
+  // while a path loads.
+  const [prunedFor, setPrunedFor] = useState<DriveListing | null>(null);
+  const nextTransfer = useRef(0);
+  const { reload } = listing;
+
+  const transfer = useCallback((sending: Sending, work: (watch: UploadWatch) => Promise<void>): void => {
+    const id = ++nextTransfer.current;
+    const abort = new AbortController();
+    const change = (patch: Partial<Transfer>): void => setTransfers((rows) => rows.map((row) => row.id === id ? { ...row, ...patch } : row));
+    const drop = (): void => setTransfers((rows) => rows.filter((row) => row.id !== id));
+
+    setTransfers((rows) => [...rows, { ...sending, id, status: "uploading", progress: 0, stop: () => abort.abort() }]);
+    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
+      yield* Effect.promise(async () => work({ signal: abort.signal, progress: (share) => change({ progress: share }) }));
+      change({ status: "landed" });
+      reload();
+    }), showing((chain) => {
+      if (abort.signal.aborted) drop();
+      else change({ status: "failed", error: chain, stop: drop });
+    }))));
+  }, [reload]);
+
+  // Landed: leaves once the listing holds what it landed as, and is forgotten then, so a later delete cannot bring it back.
+  const shownListing = lastValue(listing.resource);
+  const listed = new Set((shownListing?.entries ?? []).map((entry) => entry.name));
+  const arrived = (row: Transfer): boolean => row.status === "landed" && row.folder === path && listed.has(row.lands);
+
+  if (prunedFor !== shownListing) {
+    setPrunedFor(shownListing);
+    setTransfers((rows) => rows.some(arrived) ? rows.filter((row) => !arrived(row)) : rows);
+  }
+
+  return { transfer, uploads: transfers.filter((row) => row.folder === path && !arrived(row)) };
+}
+
 export default function DrivePage({ tab }: { tab: DriveTab }) {
   const splat = useParams()["*"] ?? "";
   const path = tab !== "mine" || splat === "" ? "/" : `/${splat.replace(/\/+$/u, "")}`;
@@ -724,12 +763,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
   const [dialog, setDialog] = useState<DriveDialogState | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [listingPending, setListingPending] = useState(false);
-  const [transfers, setTransfers] = useState<Transfer[]>([]);
-  // The listing last pruned against: its value, which keeps its identity, not the resource, a new object per render
-  // while a path loads.
-  const [prunedFor, setPrunedFor] = useState<DriveListing | null>(null);
   const [query, setQuery] = useState("");
-  const nextTransfer = useRef(0);
 
   const titleOf = (workspace: string): string => {
     const entry = roster.find((each) => each.name === workspace);
@@ -737,22 +771,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
     return entry === undefined ? workspace : workspaceDisplayTitle(entry);
   };
 
-  const transfer = useCallback((sending: Sending, work: (watch: UploadWatch) => Promise<void>): void => {
-    const id = ++nextTransfer.current;
-    const abort = new AbortController();
-    const drop = (): void => setTransfers((rows) => rows.filter((row) => row.id !== id));
-    const progress = (share: number): void => setTransfers((rows) => rows.map((row) => row.id === id ? { ...row, progress: share } : row));
-
-    setTransfers((rows) => [...rows, { ...sending, id, status: "uploading", progress: 0, stop: () => abort.abort() }]);
-    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
-      yield* Effect.promise(async () => work({ signal: abort.signal, progress }));
-      setTransfers((rows) => rows.map((row) => row.id === id ? { ...row, status: "landed" } : row));
-      listing.reload();
-    }), showing((chain) => {
-      if (abort.signal.aborted) drop();
-      else setTransfers((rows) => rows.map((row) => row.id === id ? { ...row, status: "failed", error: chain, stop: drop } : row));
-    }))));
-  }, [listing]);
+  const { transfer, uploads } = useTransfers(path, listing);
 
   const uploadFiles = (files: File[]): void => {
     for (const file of files) {
@@ -929,18 +948,6 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
         attributes={{ "data-drive-entry": entry.name, "data-drive-kind": entry.kind, "data-drive-skill": "false" }} />
     );
   };
-
-  // Landed: leaves once the listing holds what it landed as, and is forgotten then, so a later delete cannot bring it back.
-  const shownListing = lastValue(listing.resource);
-  const listed = new Set((shownListing?.entries ?? []).map((entry) => entry.name));
-  const arrived = (row: Transfer): boolean => row.status === "landed" && row.folder === path && listed.has(row.lands);
-
-  if (prunedFor !== shownListing) {
-    setPrunedFor(shownListing);
-    setTransfers((rows) => rows.some(arrived) ? rows.filter((row) => !arrived(row)) : rows);
-  }
-
-  const uploads = transfers.filter((row) => row.folder === path && !arrived(row));
 
   const uploadTile = (row: Transfer): ReactNode => (
     <Tile key={`upload:${String(row.id)}`} title={row.name} icon={fileIcon(row.name)} picture={<TransferPicture status={row.status} progress={row.progress} />}
