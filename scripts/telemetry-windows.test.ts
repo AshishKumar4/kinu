@@ -5,7 +5,7 @@ import * as v from 'valibot';
 import { KinuError } from '@kinu.run/core/obs';
 import {
   LATE_HORIZON_MS, LOGS_RETENTION_MS, TelemetryWindowSchema, type KeptWindow, type Reread, type TelemetryWindow, type WindowSignal,
-  type WindowStore, afterRereads, keepWindows, rereadWindows, windowKey,
+  type WindowStore, afterRereads, isWindowKey, keepWindows, rereadWindows, windowKey,
 } from './telemetry-windows';
 
 const END = Date.parse('2026-10-14T21:26:15.524Z');
@@ -103,6 +103,13 @@ describe('a kept window read again', () => {
     const { late, puts, removes } = afterRereads(await rereadWindows(listed, async () => [], () => END + 60_000));
 
     expect({ what: late.map((each) => each.what), puts, removes }).toEqual({ what: ['a kept telemetry window'], puts: [], removes: [] });
+  });
+});
+
+describe('the kept windows\' listing', () => {
+  test('holds every window object and not the single file the first version of this kept', () => {
+    expect([windowKey(window('9d317781', null)), 'telemetry/windows.json', 'telemetry/windows/', 'resets/latest.json'].map(isWindowKey))
+      .toEqual([true, false, false, false]);
   });
 });
 

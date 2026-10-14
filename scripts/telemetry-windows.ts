@@ -25,6 +25,10 @@ import { type InfraEnvironment, bucketOf, deployedConfig } from './infra-manifes
 /** Beside the reset records, in the deployment's releases bucket, which a reset keeps. */
 export const WINDOWS_PREFIX = 'telemetry/windows/';
 
+/** A kept window's object: one under `WINDOWS_PREFIX`. The single `telemetry/windows.json` that 76e10e84b's deploys
+ *  wrote held findings by their words, which nothing compares now, so it is not a window and no reader lists it. */
+export const isWindowKey = (key: string): boolean => key.startsWith(WINDOWS_PREFIX) && key.endsWith('.json');
+
 /** Past the latest row measured: an `actor.startup` 126-151 min after its event (staging 2026-10-08, prod-logs.ts
  *  `SETTLE_CAP_MS`). */
 export const LATE_HORIZON_MS = 3 * 60 * 60_000;
@@ -106,7 +110,7 @@ export function windowStore(environment: InfraEnvironment): WindowStore {
 
       if (page.result_info?.is_truncated === true) throw new Error(`${bucket} keeps more than 1000 telemetry windows; none is past ${String(LATE_HORIZON_MS / 3_600_000)} h`);
 
-      return page.result.map((object) => object.key).filter((key) => key.startsWith(WINDOWS_PREFIX));
+      return page.result.map((object) => object.key).filter(isWindowKey);
     },
     get: async (key) => restAnswer({ method: 'GET', path: `${objects}/${key}`, token }),
     put: async ({ key, window }) => {
