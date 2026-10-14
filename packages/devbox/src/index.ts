@@ -1,8 +1,8 @@
 /** Export a type only when a caller must write its name. */
 
-export { Devbox, type DevboxState, type PortListener } from './devbox';
+export { Devbox, type DevboxState } from './devbox';
 
-export { type SessionLast, type SessionRecord, type TerminalSession } from './sessions';
+export { type SessionRecord, type TerminalSession } from './sessions';
 
 export { GOLDEN_NAME } from './golden';
 
@@ -14,17 +14,11 @@ export { DevboxGateway, type OutboundPolicy } from './gateway';
 
 export { previewBox } from './preview';
 
-
 export type { RestoreClockPhase, RestoreStatus } from './restoration';
 
-export { BOX_SIZES, BOX_SIZE_ORDER, BoxSizeSchema, DEFAULT_BOX_SIZE, type BoxSize, type ResizeOutcome } from './sizes';
+export { BoxSizeSchema, type BoxSize } from './sizes';
 
-export type {
-  AttachOutcome,
-  CheckpointKind,
-  CheckpointOutcome,
-  DevboxStorage,
-} from './storage';
+export type { CheckpointKind, CheckpointOutcome } from './storage';
 
 export { describeThrown } from './lifecycle';
 

@@ -4,12 +4,9 @@
  *  `quiesce` declines only when nothing changed: the interval is efficiency, not correctness. */
 export type CheckpointKind = 'tick' | 'quiesce';
 
-/** `empty` is the normal first start, not a failure; `already-attached` makes attach re-callable.
- *  A runtime array so a suite asserts every kind is exercised; a new kind turns it red. */
-const ATTACH_OUTCOME_KINDS = ['empty', 'attached', 'already-attached'] as const;
-
+/** `empty` is the normal first start, not a failure. */
 export interface AttachOutcome {
-  readonly kind: (typeof ATTACH_OUTCOME_KINDS)[number];
+  readonly kind: 'empty' | 'attached';
   /** One line, ids and counts only, for the event line and the bench driver.
    *  Never a key, a URL, or a credential. */
   readonly detail: string;
@@ -35,11 +32,7 @@ export interface DevboxStorage {
   /** Does not throw for an ordinary failure, including a refused failure stamp: recording is
    *  best effort, the classification stays the operation's own. */
   checkpoint(kind: CheckpointKind): Promise<CheckpointOutcome>;
-  /** Releases SDK-tracked live mounts before the container stops. A property, not a method:
-   *  the metered wrapper and conformance suite call it through a receiver of their choosing. */
-  detach?: () => Promise<void>;
-  /** Drop the durable bytes and the record pointing at them. Called when the
-   *  box itself is deleted. A property for the same reason as `detach`. */
+  /** Drop the durable bytes and the record pointing at them. Called when the box itself is deleted. */
   discard: () => Promise<void>;
 }
 

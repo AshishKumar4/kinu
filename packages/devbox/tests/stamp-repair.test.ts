@@ -1,8 +1,8 @@
 // D67: a final boot stamp that fails leaves the box in `repair`, and changes nothing a user or agent
-// can see. The early stamp wrote this container's id to the file and the row; the final one only
-// re-reads it, so its failure leaves the identity whole: `ready` says so, and nothing else does. No
-// incident (the agent has nothing to act on); operations, saves and the heartbeat run as usual. A pid
-// from an earlier boot is fenced by the kernel's boot id, not by this stamp (processes-image.test.ts).
+// can see. The early stamp recorded this container's kernel boot id in the row; the final one only
+// re-reads the kernel's, so its failure leaves the identity whole: `ready` says so, and nothing else
+// does. No incident (the agent has nothing to act on); operations, saves and the heartbeat run as
+// usual. The process fences use the same kernel id (processes-image.test.ts).
 import { expect, test } from 'bun:test';
 import { ChainTestBox, chainBox } from './support/chain-box';
 import { settledRestoration } from '../src/restoration';
@@ -29,19 +29,26 @@ test('same-container repair writes an outstanding stamp and becomes ready indepe
   await repaired.attachNow();
   const after = await repaired.devboxState();
 
+  // The same container keeps its identity: the repair records the kernel's id again, and starts nothing.
   expect(after.ready).toBe(true);
   expect(after.restoration).toBe('attached');
-  expect(after.bootId).toBeDefined();
-  expect(after.bootId).not.toBe(before.bootId);
+  expect(after.bootId).toBe(before.bootId);
   expect(container.bootId).toBe(after.bootId);
   expect(rows.get('devbox:boot-id')).toBe(after.bootId);
   expect(container.startOptions.length).toBe(starts);
 });
 
 test('a final boot stamp that fails changes nothing a user or agent can see', async () => {
-  const { box, container, rows } = chainBox();
+  const { box, container, rows, storage } = chainBox();
   rows.set('devbox:proc:p1', { processId: 'p1', command: 'bun run server.ts', cwd: '/workspace', createdAt: 1 });
-  container.bootReadFaults.push(new Error('the read of the boot id was dropped'));
+  let reads = 0;
+
+  // The final stamp reads the row, then the kernel: that kernel read is the one dropped.
+  storage.beforeGet('devbox:boot-id', async () => {
+    reads += 1;
+
+    if (reads === 2) container.bootReadFaults.push(new Error('the read of the boot id was dropped'));
+  });
   await box.devboxStartup();
   const settled = await box.devboxState();
   const ran = await box.exec('echo still here');

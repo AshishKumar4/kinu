@@ -139,7 +139,12 @@ function launchUnknown(execId: string): DevboxError {
   return new DevboxError('indeterminate', `exec ${execId} was launched before, and its outcome cannot be read here; it was not launched again`);
 }
 
-/** `port-listeners STAMP [PORT...]`: `port pid stamp command` per socket holder; /proc, as the image has no `ss`. */
+/**
+ * `port-listeners STAMP [PORT...]`: `port pid ancestry stamp command` per socket holder, tab-separated; /proc, as the
+ * image has no `ss`. The ancestry is the holder's pid and each parent's up to init: the one answer to which command,
+ * session or job a listener is under, whatever process group it runs in. The stamp is the nearest one along it, and
+ * comes after the ancestry, never empty, because a shell's `read` merges empty tab-separated fields.
+ */
 const PORT_LISTENERS = `
 stamp=$1; shift
 socks=$(for f in /proc/net/tcp /proc/net/tcp6; do
@@ -152,17 +157,24 @@ socks=$(for f in /proc/net/tcp /proc/net/tcp6; do
 done)
 [ -n "$socks" ] || exit 0
 holders=$(ls -l /proc/[0-9]*/fd 2>/dev/null | awk '/^\\/proc\\/[0-9]+\\/fd:$/ { split($0, p, "/"); pid = p[3]; next } /-> socket:\\[/ { s = $NF; gsub(/socket:\\[|\\]/, "", s); print s, pid }')
-stampof() {
+ancestry() {
   p=$1
   while [ -n "$p" ] && [ "$p" -gt 1 ]; do
+    printf '%s ' "$p"
+    p=$(awk '/^PPid:/ { print $2 }' "/proc/$p/status" 2>/dev/null)
+  done
+}
+stampof() {
+  [ -n "$stamp" ] || return 0
+  for p in $1; do
     v=$(tr '\\000' '\\n' < "/proc/$p/environ" 2>/dev/null | grep -m1 "^$stamp=")
     [ -n "$v" ] && { printf '%s' "\${v#*=}"; return; }
-    p=$(awk '/^PPid:/ { print $2 }' "/proc/$p/status" 2>/dev/null)
   done
 }
 echo "$socks" | while read -r inode port; do
   echo "$holders" | awk -v i="$inode" '$1 == i { print $2 }' | sort -un | while read -r pid; do
-    printf '%s\\t%s\\t%s\\t%s\\n' "$port" "$pid" "$(stampof "$pid")" "$(tr '\\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null)"
+    chain=$(ancestry "$pid")
+    printf '%s\\t%s\\t%s\\t%s\\t%s\\n' "$port" "$pid" "$chain" "$(stampof "$chain")" "$(tr '\\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null)"
   done
 done
 `;
@@ -171,21 +183,26 @@ export interface PortListener {
   readonly port: number;
   readonly pid: number;
   readonly stamp: string | null;
+  /** The listener's pid, then each parent's, up to init. */
+  readonly ancestry: readonly number[];
   readonly command: string;
 }
 
+const Pid = v.pipe(v.string(), v.toNumber(), v.integer());
+
 const ListenerLineSchema = v.pipe(v.string(), v.transform((line) => line.split('\t')), v.tuple([
-  v.pipe(v.string(), v.toNumber(), v.integer()),
-  v.pipe(v.string(), v.toNumber(), v.integer()),
+  Pid,
+  Pid,
+  v.pipe(v.string(), v.transform((chain) => chain.trim().split(' ').filter((pid) => pid !== '')), v.array(Pid)),
   v.string(),
   v.string(),
 ]));
 
 function parsePortListeners(output: string): PortListener[] {
   return output.split('\n').filter((line) => line !== '').map((line) => {
-    const [port, pid, stamp, command] = v.parse(ListenerLineSchema, line);
+    const [port, pid, ancestry, stamp, command] = v.parse(ListenerLineSchema, line);
 
-    return { port, pid, stamp: stamp === '' ? null : stamp, command: command.trimEnd() };
+    return { port, pid, stamp: stamp === '' ? null : stamp, ancestry, command: command.trimEnd() };
   });
 }
 
@@ -226,9 +243,6 @@ const RUNNING_SIZE_KEY = 'devbox:running-size';
 const START_REFUSED_KEY = 'devbox:start-refused';
 
 const DISK_STATE_KEY = 'devbox:disk-chain';
-
-/** Where the box stamps the container's identity: on the disk a replacement does not keep (P1). */
-const BOOT_ID_PATH = '/tmp/devbox-boot-id';
 
 /** A loopback Durable Object namespace's tag in `ctx.exports`; an entrypoint's stub answers any property as an RPC (D85). */
 const NAMESPACE_TAG = '[object LoopbackDurableObjectNamespace]';
@@ -328,6 +342,12 @@ interface Flight {
   readonly since: number;
 }
 
+/** The start hook's restore, and the box's own start or repair: one attempt each at a time. */
+interface Flights {
+  hook?: Flight;
+  startup?: Flight;
+}
+
 function unawaited(work: Promise<unknown>, lost: string): void {
   void work.catch((cause: LateStartFailure['cause']) => {
     console.error(`[devbox] ${lost}: ${describe({ cause })}`);
@@ -378,13 +398,14 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   #started: StartSource | undefined;
   #siblings: Siblings | undefined;
   #snapshotOwner: Snapshots | undefined;
-  #gateRestore: Flight | undefined;
   /** Fences every write below: an abandoned startup continuation keeps running, and must
    *  re-check this token after every await or it can clear its successor's single-flight entry. */
   #generation = 0;
-  /** A caller joins the attempt only while its generation still matches: a superseded
-   *  attempt's result is already discarded. */
-  #startup: Flight | undefined;
+  /**
+   * The attempts run one at a time per generation (`#fly`): the start hook's restore, and the box's own start or repair.
+   * A caller joins one only while its generation still matches: a superseded attempt's result is already discarded.
+   */
+  readonly #flights: Flights = {};
   /** `destroy` cancels and awaits these. */
   readonly #admissions = new Set<{ readonly abort: () => void; readonly settled: Promise<void> }>();
   #refused: { readonly generation: number; readonly reason: string } | undefined;
@@ -470,7 +491,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   /** Memory can name `attached` for a replaced container, so every reader settles adoption first. */
   async #resolveAdoption(): Promise<void> {
-    if (this.#gateRestore !== undefined) return;
+    if (this.#flights.hook !== undefined) return;
 
     if (this.#adoptionPending) await this.#startContainer();
   }
@@ -896,27 +917,34 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       return;
     }
 
-    const pending = this.#gateRestore;
+    await this.#fly('hook', this.#generation, () => this.#runStartHook());
+  }
 
-    if (pending?.generation === this.#generation) {
-      this.#trace('startup.hook.join', { generation: pending.generation, sinceMs: Date.now() - pending.since });
+  /**
+   * The run under way in `slot` for `generation`, joined; or `open`'s, held there until it ends, unless another has taken
+   * its place by then.
+   */
+  async #fly(slot: keyof Flights, generation: number, open: () => Promise<void>): Promise<void> {
+    const pending = this.#flights[slot];
+
+    if (pending?.generation === generation) {
+      this.#trace(`startup.${slot}.join`, { generation, sinceMs: Date.now() - pending.since });
 
       return await pending.run;
     }
 
     const since = Date.now();
-    const generation = this.#generation;
-    this.#trace('startup.hook.enter', { generation, phase: this.#restoration.phase });
-    const run = this.#runStartHook();
-    this.#gateRestore = { generation, run, since };
+    this.#trace(`startup.${slot}.open`, { generation, running: this.ctx.container?.running === true, phase: this.#restoration.phase });
+    const run = open();
+    this.#flights[slot] = { generation, run, since };
     let settled = false;
 
     try {
       await run;
       settled = true;
     } finally {
-      if (this.#gateRestore?.run === run) this.#gateRestore = undefined;
-      this.#trace('startup.hook.exit', { generation, ms: Date.now() - since, settled, phase: this.#restoration.phase });
+      if (this.#flights[slot]?.run === run) this.#flights[slot] = undefined;
+      this.#trace(`startup.${slot}.exit`, { generation, ms: Date.now() - since, settled, phase: this.#restoration.phase });
     }
   }
 
@@ -1018,54 +1046,32 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
 
-  /** A boot-id mismatch is the only replacement signal: fence every read, count and write. */
+  /**
+   * Records the container the box restores as the kernel's boot id: the container's own identity, new at every start,
+   * wake and replacement, and the one the process fences use. A boot-id mismatch is the only replacement signal, so
+   * every read, count and write is fenced. The box's own stop clears the row, so a start or wake after it is not
+   * counted as a replacement (D67).
+   */
   async #stampBootId(generation: number): Promise<void> {
-    // Count replacements here: every restoration passes through this method, whatever drove it.
-    // Counting only in the heartbeat misses replacements handled by startup or readiness paths.
     const previous = await this.ctx.storage.get<string>(BOOT_ID_KEY);
+    const actual = await this.#readBootId();
+    const replaced = previous === undefined || previous === actual ? undefined : (await this.ctx.storage.get<number>(REPLACED_COUNT_KEY) ?? 0) + 1;
 
-    if (previous !== undefined && await this.#readBootId() === previous) {
-      if (this.#owns(generation)) this.#stampPhase('bootId');
-
-      return;
-    }
-
-    if (this.#owns(generation) && previous !== undefined && (await this.#readBootId()) !== previous) {
-      const replaced = (await this.ctx.storage.get<number>(REPLACED_COUNT_KEY) ?? 0) + 1;
-
-      if (!this.#owns(generation)) return;
-      await this.ctx.storage.put(REPLACED_COUNT_KEY, replaced);
-
-      if (this.#owns(generation)) {
-        console.error(`[devbox] the container instance was replaced (${replaced} so far)`);
-      }
-    }
-
-    // Ownership is re-checked before writing: a stale boot-id write makes a healthy container
-    // read as replaced until repaired, so a heartbeat re-drives restoration and miscounts it.
+    // A stale attempt writes nothing: the row names the container of record.
     if (!this.#owns(generation)) return;
-    const bootId = crypto.randomUUID();
-    await this.#rawExec(`printf %s ${bootId} > ${BOOT_ID_PATH}`);
 
-    // A stale attempt can park inside the exec and overwrite a successor's stamp, so re-check
-    // ownership after it and rewrite the file to the durable row's id, the identity of record.
-    if (!this.#owns(generation)) {
-      const settled = await this.ctx.storage.get<string>(BOOT_ID_KEY);
-
-      if (settled !== undefined && settled !== bootId) {
-        await this.#rawExec(`printf %s ${settled} > ${BOOT_ID_PATH}`);
-      }
-
-      return;
+    if (replaced !== undefined) {
+      await this.ctx.storage.put(REPLACED_COUNT_KEY, replaced);
+      console.error(`[devbox] the container instance was replaced (${replaced} so far)`);
     }
 
-    await this.ctx.storage.put(BOOT_ID_KEY, bootId);
+    if (actual !== previous) await this.ctx.storage.put(BOOT_ID_KEY, actual);
     this.#stampPhase('bootId');
   }
 
   /** The heartbeat re-drives a stale restoration; commit paths must not commit to a gone container.
    *  No stamp means no claim about any instance, so the answer is `false`, not replaced. */
-  async #containerWasReplaced(observed?: { readonly bootId: string | undefined }): Promise<boolean> {
+  async #containerWasReplaced(observed?: { readonly bootId: string }): Promise<boolean> {
     const expected = await this.ctx.storage.get<string>(BOOT_ID_KEY);
 
     if (expected === undefined) return false;
@@ -1093,13 +1099,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     throw new DevboxError("io", 'this devbox is not ready: the restored container was replaced; a startup is armed');
   }
 
-  /** Undefined when the boot-id file is gone, which is what a replaced container instance
-   *  looks like. */
-  async #readBootId(): Promise<string | undefined> {
-    const read = await this.#rawExec(`cat ${BOOT_ID_PATH} 2>/dev/null || true`, DEVBOX_RUNTIME_DIR);
-    const value = read.stdout.trim();
-
-    return value.length > 0 ? value : undefined;
+  /** The kernel's boot id, through the reader the process fences use: one identity per container. */
+  async #readBootId(): Promise<string> {
+    return await this.#processes().incarnation();
   }
 
 
@@ -1235,32 +1237,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }
 
     if (this.ctx.container?.running !== true
-      && (this.#restoration.phase !== 'unstarted' || this.#gateRestore !== undefined)) {
+      && (this.#restoration.phase !== 'unstarted' || this.#flights.hook !== undefined)) {
       this.#invalidateGeneration();
     }
 
-    const pending = this.#startup;
-
-    if (pending?.generation === this.#generation) {
-      this.#trace('startup.flight.join', { generation: pending.generation, sinceMs: Date.now() - pending.since });
-
-      return await pending.run;
-    }
-
-    const since = Date.now();
-    const generation = this.#generation;
-    this.#trace('startup.flight.open', { generation, running: this.ctx.container?.running === true, phase: this.#restoration.phase });
-    const run = this.#recoverAndStart();
-    this.#startup = { generation, run, since };
-    let settled = false;
-
-    try {
-      await run;
-      settled = true;
-    } finally {
-      if (this.#startup?.run === run) this.#startup = undefined;
-      this.#trace('startup.flight.exit', { generation, ms: Date.now() - since, settled, phase: this.#restoration.phase });
-    }
+    await this.#fly('startup', this.#generation, () => this.#recoverAndStart());
   }
 
   async #recoverAndStart(): Promise<void> {
@@ -1278,7 +1259,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
           this.#deleteSchedule(STARTUP_CALLBACK);
           await this.#replaceContainer(recovery.reason);
         } else {
-          this.#invalidateGeneration(this.#startup);
+          this.#invalidateGeneration(this.#flights.startup);
           await this.stop('SIGTERM');
           await this.#awaitContainerStopped();
         }
@@ -1388,20 +1369,17 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   /** Re-runs only the service half of a restoration that settled in `repair`, on the startup
    *  flight so two repairs cannot race process reservations, port exposures or the boot marker. */
   async #repairAttached(generation: number): Promise<void> {
-    const pending = this.#startup;
+    const pending = this.#flights.startup;
 
     if (pending !== undefined && pending.generation === generation) return await pending.run;
 
     return await this.#withStorageMutation(async () => {
       if (!this.#owns(generation)) return;
-      const active = this.#startup;
-
-      if (active !== undefined && active.generation === generation) return await active.run;
 
       const retryBootStamp = this.#restoration.phase === 'repair'
         && this.#restoration.bootStamp !== 'done';
 
-      const run = (async () => {
+      await this.#fly('startup', generation, async () => {
         const claim = await this.#claimRecovery();
 
         if (!claim.admit || !this.#owns(generation)) {
@@ -1416,15 +1394,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
           await this.#recover(generation, claim, { cause: error });
           throw error;
         }
-      })();
-
-      this.#startup = { generation, run, since: Date.now() };
-
-      try {
-        await run;
-      } finally {
-        if (this.#owns(generation) && this.#startup?.run === run) this.#startup = undefined;
-      }
+      });
     });
   }
 
@@ -1471,7 +1441,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
    *  in-flight attempt state-inert: no readiness, attach failure, release or destroy. */
   #invalidateGeneration(recoveryFlight?: Flight): void {
     this.#generation += 1;
-    this.#startup = recoveryFlight === undefined
+    this.#flights.startup = recoveryFlight === undefined
       ? undefined
       : { generation: this.#generation, run: recoveryFlight.run, since: recoveryFlight.since };
     this.#restoration = { phase: 'unstarted' };
@@ -1603,7 +1573,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   /** Cancels exec work abandoned at the attach deadline; `destroy` acks before `running` flips.
    *  `super`: a replaced identity is restarted, not closed. */
   async #replaceContainer(reason: string): Promise<void> {
-    this.#invalidateGeneration(this.#startup);
+    this.#invalidateGeneration(this.#flights.startup);
     const replacing = this.#generation;
 
     try {
@@ -1630,7 +1600,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   /** `stop`/`destroy` ack before `container.running` flips; returning early lets a wake reuse
-   *  the old mount. Count-bounded: a stop that never flips must refuse, not pin `#startup`. */
+   *  the old mount. Count-bounded: a stop that never flips must refuse, not pin the startup flight. */
   async #awaitContainerStopped(): Promise<void> {
     for (let poll = 0; poll < CONTAINER_STOP_ATTEMPTS; poll += 1) {
       if (this.ctx.container?.running !== true) return;
@@ -1774,7 +1744,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   async #armStartup(): Promise<void> {
     // A retryable unattach re-arms a lost row; a terminal one stays unarmed, or refused work
     // would storm the incident ledger.
-    if (this.#quiescing !== undefined || this.#startup !== undefined || this.#gateRestore !== undefined) return;
+    if (this.#quiescing !== undefined || this.#flights.startup !== undefined || this.#flights.hook !== undefined) return;
     const held = this.#restoration;
 
     // An attempt in flight settles into a phase on its own.
@@ -2136,7 +2106,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   /** Every checkpoint runs through here, so none interleave in storage (`createCheckpointLane`). */
   #checkpoint(kind: CheckpointKind): Promise<CheckpointOutcome> {
     return this.#lane.run(kind, async () => await this.#withStorageMutation(async () => {
-      const pending = this.#startup;
+      const pending = this.#flights.startup;
 
       // Waits for the startup to settle rather than racing it against a timer: a timer set here
       // would outlive into the start block and hold every timer its hook sets (D26).
@@ -2179,7 +2149,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   async #quiesceAdmitted(ending: boolean): Promise<CheckpointOutcome> {
-    const starting = this.#startup;
+    const starting = this.#flights.startup;
 
     if (starting !== undefined) await Promise.allSettled([starting.run]);
 
@@ -2336,7 +2306,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       this.stampInteraction();
 
       // A stopped job's session goes with it: the shell under its output, and its tab (D95).
-      if (ended) await this.#forgetJobSession(processId);
+      if (ended) await this.#endSession(jobSessionId(processId));
 
       return { stopped: ended };
     }));
@@ -2420,7 +2390,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       return `the platform refused this box a container: ${refused.reason}`;
     }
 
-    return unreadyOf(this.#restoration, this.#gateRestore !== undefined);
+    return unreadyOf(this.#restoration, this.#flights.hook !== undefined);
   }
 
   /** A read: it starts, arms and wakes nothing. A running container an object reset left is adopted first,
@@ -2438,7 +2408,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       return {
         running: this.ctx.container?.running === true,
         restoration: this.#restoration.phase,
-        ready: this.#quiescing === undefined && this.#restoration.phase === 'attached' && this.#gateRestore === undefined,
+        ready: this.#quiescing === undefined && this.#restoration.phase === 'attached' && this.#flights.hook === undefined,
         unready: this.#quiescing === undefined ? this.#unready() : QUIESCING,
         lastInteractionAt: this.#lastInteraction
           ?? await this.ctx.storage.get<number>(LAST_INTERACTION_KEY),
@@ -2455,8 +2425,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         ports,
         incidents: incidentTotals(incidents.values()),
         flights: {
-          startupMs: this.#startup === undefined ? null : Date.now() - this.#startup.since,
-          hookMs: this.#gateRestore === undefined ? null : Date.now() - this.#gateRestore.since,
+          startupMs: this.#flights.startup === undefined ? null : Date.now() - this.#flights.startup.since,
+          hookMs: this.#flights.hook === undefined ? null : Date.now() - this.#flights.hook.since,
         },
         wire: { ...this.#containerCommandBytes },
       };
@@ -2691,7 +2661,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
           return beat;
         }
 
-        let observed: string | undefined;
+        let observed: string;
 
         try {
           // The boot-id read is the liveness ping too: one container call, not two (D28).
@@ -2719,8 +2689,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         const backgroundWork = this.#quiescing !== undefined || this.#activeCallers !== 0 || this.#openSockets !== 0
           || this.#resources.busy()
           || this.#lane.busy()
-          || this.#startup !== undefined
-          || this.#gateRestore !== undefined;
+          || this.#flights.startup !== undefined
+          || this.#flights.hook !== undefined;
 
         const decision = quiesceStep({
           now,
@@ -2794,12 +2764,12 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     try {
       const listeners = await this.portListeners('') ?? [];
-      const read = await this.#execute(`ps -o pid=,pgid=,etimes= -p ${[...pids, ...listeners.map((row) => row.pid)].join(',')} || true`);
-      const groups = new Map(read.stdout.trim().split('\n').map((line) => line.trim().split(/\s+/).map(Number)).map(([pid = 0, pgid = 0, age = 0]) => [pid, { pgid, age }] as const));
+      const read = await this.#execute(`ps -o pid=,etimes= -p ${pids.join(',')} || true`);
+      const ages = new Map(read.stdout.trim().split('\n').map((line) => line.trim().split(/\s+/).map(Number)).map(([pid = 0, age = 0]) => [pid, age] as const));
 
       return new Map(pids.map((pid) => [pid, {
-        ageSeconds: groups.get(pid)?.age,
-        ports: [...new Set(listeners.filter((row) => row.pid === pid || groups.get(row.pid)?.pgid === pid).map((row) => row.port))],
+        ageSeconds: ages.get(pid),
+        ports: [...new Set(listeners.filter((row) => row.ancestry.includes(pid)).map((row) => row.port))],
       }]));
     } catch (error) {
       console.error(`[devbox] the rest ask lists processes without ages or ports: ${describe({ cause: error })}`);
@@ -3317,6 +3287,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     try { await ending; }
     catch (cause) { if (container.running) throw cause; }
 
+    // The box ended this container itself: the next one is a start, not a replacement.
+    await this.ctx.storage.delete(BOOT_ID_KEY);
     await this.onStop();
   }
   override fetch(request: Request): Promise<Response> {
@@ -3362,13 +3334,6 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     if (!records.some((record) => record.id === id)) this.ctx.storage.kv.put(SESSIONS_KEY, [...records, { id, name: jobSessionName(command), cwd, job: processId }]);
   }
 
-  async #forgetJobSession(processId: string): Promise<void> {
-    const id = jobSessionId(processId);
-    const container = this.ctx.container;
-
-    if (container?.running === true) await resetTerminal(container, id);
-    this.ctx.storage.kv.put(SESSIONS_KEY, this.#sessionRecords().filter((record) => record.id !== id));
-  }
 
   /**
    * What each terminal session showed and was running, kept on the box's disk as it stops (D97). A save that fails is
@@ -3423,19 +3388,22 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
    * how its last command ended, the ports under it, its folder's branch. A box that is not running is not woken: its
    * sessions read as they were left. A session's folder, read, is kept for the next start.
    */
+  /**
+   * The records as they are when the read answers, not as they were when it began: an open, rename or close made while
+   * the exec ran stays, and a session still recorded keeps the folder the read found it in.
+   */
   terminalSessions(): Promise<readonly TerminalSession[]> {
     return settle(attempt('io', async () => {
-      const records = this.#sessionRecords();
       const container = this.ctx.container;
 
-      if (container?.running !== true) return mergeSessions(records, null);
-      const read = await (await container.exec(['bash', '-c', SESSIONS_READ, 'terminal-sessions', PORT_LISTENERS])).output();
-      const sessions = mergeSessions(records, parseSessionsRead(new TextDecoder().decode(read.stdout)));
-      const moved = records.map((record) => ({ ...record, cwd: sessions.find((session) => session.id === record.id && session.open)?.cwd ?? record.cwd }));
+      if (container?.running !== true) return mergeSessions(this.#sessionRecords(), null);
+      const read = parseSessionsRead(decoded(await (await container.exec(['bash', '-c', SESSIONS_READ, 'terminal-sessions', PORT_LISTENERS])).output()).stdout);
+      const records = this.#sessionRecords();
+      const moved = records.map((record) => ({ ...record, cwd: read.get(record.id)?.cwd ?? record.cwd }));
 
       if (moved.some((record, at) => record.cwd !== records[at]?.cwd)) this.ctx.storage.kv.put(SESSIONS_KEY, moved);
 
-      return sessions;
+      return mergeSessions(moved, read);
     }));
   }
 
@@ -3468,21 +3436,31 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return settle(Effect.gen({ self: this }, function* () {
       const session = yield* this.#session(id);
 
-      if (session.job !== undefined) {
-        const job = session.job;
+      const job = session.job;
 
+      // A job on a computer that is running or starting is stopped there; a stopped computer is not started to stop
+      // it: its spec goes, so no start brings it back.
+      if (job !== undefined && (this.ctx.container?.running === true || this.#flights.startup !== undefined)) {
         yield* attempt('io', () => this.stopSupervised(job));
 
         return;
       }
 
-      const container = this.ctx.container;
-
-      if (container?.running === true) yield* attempt('io', () => resetTerminal(container, id));
-      // A stopped box cannot remove what it saved of the session; its next start does, before any attach (D97).
-      else this.ctx.storage.kv.put(SESSIONS_CLOSED_KEY, [...this.#closedSessions(), id]);
-      this.ctx.storage.kv.put(SESSIONS_KEY, this.#sessionRecords().filter((record) => record.id !== id));
+      if (job !== undefined) yield* attempt('io', () => this.#supervised().forget(job));
+      yield* attempt('io', () => this.#endSession(id));
     }));
+  }
+
+  /**
+   * A session's shell and screen end, and its record goes. A stopped box cannot remove what it saved of the session;
+   * its next start does, before any attach (D97).
+   */
+  async #endSession(id: string): Promise<void> {
+    const container = this.ctx.container;
+
+    if (container?.running === true) await resetTerminal(container, id);
+    else this.ctx.storage.kv.put(SESSIONS_CLOSED_KEY, [...this.#closedSessions(), id]);
+    this.ctx.storage.kv.put(SESSIONS_KEY, this.#sessionRecords().filter((record) => record.id !== id));
   }
 
 

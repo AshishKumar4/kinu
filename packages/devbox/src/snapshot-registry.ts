@@ -6,6 +6,51 @@ import { Effect, Result } from 'effect';
 import * as v from 'valibot';
 import { DevboxError, attempt, settle } from './errors';
 
+/** A box's own lineage wakes for this long from its root, a golden for this long from its last renewal. */
+export const SNAPSHOT_LIFE_MS = 29 * 24 * 60 * 60 * 1000;
+
+/** A snapshot owed a deletion, from when: a box's dead lineage at once, a retired golden once nothing can wake on it. */
+export const OwedSchema = v.object({ ref: v.string(), at: v.number() });
+
+export type Owed = v.InferOutput<typeof OwedSchema>;
+
+/** One owner's deletion debt, as it keeps it. */
+export interface Debt {
+  readonly read: () => readonly Owed[];
+  readonly write: (owed: readonly Owed[]) => void;
+  /** Deletes `ref`, telling `owe` the manifest's digest before any tag goes; undefined with no authority to delete. */
+  readonly delete: (ref: string, owe: (digest: string) => void) => Promise<SnapshotDeletion> | undefined;
+  readonly now: () => number;
+  /** What the log calls an entry: the dead snapshot, the retired golden. */
+  readonly called: string;
+}
+
+/**
+ * Every entry whose time has come, deleted or kept owed. Once its tags go a manifest is found by its digest alone, so
+ * the debt becomes the digest before the first tag goes: a delete cut off midway still owes what is left. A refusal is
+ * logged in the registry's words and waits for the next payment.
+ */
+export async function payDebt(debt: Debt): Promise<void> {
+  const now = debt.now();
+
+  for (const due of debt.read().filter((owed) => owed.at <= now)) {
+    let owing = due.ref;
+
+    const pending = debt.delete(due.ref, (digest) => {
+      debt.write(debt.read().map((owed) => owed.ref === owing ? { ...owed, ref: digest } : owed));
+      owing = digest;
+    });
+
+    if (pending === undefined) return;
+    const outcome = await pending;
+
+    if (outcome.kind === 'refused') console.error(`[devbox] ${debt.called} ${due.ref} was not deleted: ${outcome.reason}`);
+    const kept = outcome.kind === 'refused' ? [{ ...due, ref: outcome.left ?? owing }] : [];
+
+    debt.write(debt.read().flatMap((owed) => owed.ref === owing ? kept : [owed]));
+  }
+}
+
 /** `left`: the manifest's digest, once its tags are gone and its own delete was refused; delete that next time. */
 export type SnapshotDeletion = { readonly kind: 'deleted' | 'absent' } | { readonly kind: 'refused'; readonly reason: string; readonly left?: string };
 
