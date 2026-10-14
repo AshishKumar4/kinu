@@ -8,7 +8,7 @@ import { readFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { WRANGLER_FAILED, runWrangler } from './ephemeral-deployment';
 import { snapshotRegistry, type ApplicationSweep } from '../packages/devbox/src/snapshot-registry';
-import { registryToken } from './cloudflare-rest';
+import { registryToken } from './cloudflare-token';
 import { containerApplicationsNamed, deleteContainerApplication } from './infra-cloudflare';
 import { AwsClient } from 'aws4fetch';
 import {

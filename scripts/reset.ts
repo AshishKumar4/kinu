@@ -25,7 +25,8 @@ import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { evalSessionPath } from '@kinu.run/test-utils';
-import { deleteR2Prefix, deletedByRest, registryToken, restApiToken } from './cloudflare-rest';
+import { deleteR2Prefix, deletedByRest } from './cloudflare-rest';
+import { registryToken, restApiToken } from './cloudflare-token';
 import { snapshotRegistry } from '../packages/devbox/src/snapshot-registry';
 import {
   type ContainerApplication, type DeployedBinding, containerApplications, deleteContainerApplication, deployedVersion, deployment,

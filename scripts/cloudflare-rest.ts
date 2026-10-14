@@ -17,6 +17,7 @@
 import * as v from 'valibot';
 import { KinuError } from '@kinu.run/core/obs';
 import { codeForStatus } from '../packages/core/src/providers/util';
+import { restApiToken } from './cloudflare-token';
 
 const API = 'https://api.cloudflare.com/client/v4';
 
@@ -33,24 +34,6 @@ const KeysDeletedSchema = v.object({ success: v.literal(true), result: v.array(v
 
 /** The keys one list call and one delete call carry. */
 const PAGE = 1_000;
-
-/**
- * The deploy's Cloudflare REST token. KINU_CLOUDFLARE_API_TOKEN first, ON PURPOSE: wrangler honours both generic
- * names (CLOUDFLARE_API_TOKEN and CF_API_TOKEN), so a REST token exported under either hijacks every wrangler
- * subcommand the deploy also runs (measured: `wrangler vectorize list` refusing under an Access-only token). A name
- * wrangler never reads keeps the deploy's OAuth login serving wrangler.
- */
-export function restApiToken(): string {
-  return (process.env['KINU_CLOUDFLARE_API_TOKEN'] ?? process.env['CLOUDFLARE_API_TOKEN'] ?? process.env['CF_API_TOKEN'] ?? '').trim();
-}
-
-/** The token the container registry's snapshots are deleted with: DEVBOX_REGISTRY_TOKEN, scoped to the registry,
- *  else the deploy's REST token. */
-export function registryToken(): string {
-  const registry = process.env['DEVBOX_REGISTRY_TOKEN']?.trim();
-
-  return registry === undefined || registry === '' ? restApiToken() : registry;
-}
 
 /** Only the REST API deletes an application whose id has this shape. */
 export function deletedByRest(applicationId: string): boolean {

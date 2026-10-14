@@ -30,7 +30,8 @@ import * as v from 'valibot';
 import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
 import { classifyErrorCode, tolerate } from '@kinu.run/core/obs';
 import { deployedConfig, type InfraEnvironment } from './infra-manifest';
-import { deleteApplicationByRest, deletedByRest, restApiToken, restCall } from './cloudflare-rest';
+import { deleteApplicationByRest, deletedByRest, restCall } from './cloudflare-rest';
+import { restApiToken } from './cloudflare-token';
 
 /** The argv that points a Worker-scoped wrangler command at `environment`'s Worker; production is the top level. */
 export function environmentArgs(environment: InfraEnvironment): readonly string[] {

@@ -30,7 +30,8 @@ import {
   type Audit, type AuditRequest, type Phase, type Row, PHASES, audit, environmentOf, observe, observedRow, phaseFrom, recordedResetIds,
   supplyDrift, supplyRows, supplySummary, unobservableDrift,
 } from './infra-verify';
-import { deleteR2Prefix, deletedByRest, restAnswer, restApiToken, restCall } from './cloudflare-rest';
+import { deleteR2Prefix, deletedByRest, restAnswer, restCall } from './cloudflare-rest';
+import { restApiToken } from './cloudflare-token';
 import { confirmationPhrase, partition } from './infra-teardown';
 import { POLL_SECONDS, settle, type SettleClock } from './edge-settled';
 import { plan, provisionSecrets, putSecret, type SecretIo } from './infra-provision';
