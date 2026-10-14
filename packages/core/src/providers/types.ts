@@ -151,7 +151,7 @@ export interface ProviderWaitInfo {
   readonly source: (typeof PROVIDER_WAIT_SOURCES)[number];
 }
 
-export const PROVIDER_WAIT_SOURCES = ['header', 'backoff', 'cooldown', 'stall'] as const;
+export const PROVIDER_WAIT_SOURCES = ['header', 'stated', 'backoff', 'cooldown', 'stall'] as const;
 
 export interface ProviderDeps {
 

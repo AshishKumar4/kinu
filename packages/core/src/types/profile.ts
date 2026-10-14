@@ -98,7 +98,7 @@ export function betaSwarms(catalog: Pick<ProfileCatalog, 'betaSwarms'>): boolean
 }
 
 /** The owner's retry count when the catalog names none. */
-export const DEFAULT_PROVIDER_RETRIES = 5;
+export const DEFAULT_PROVIDER_RETRIES = 3;
 
 export type ProfileAuthority =
   | { readonly kind: 'account'; readonly accountId: string }

@@ -25,17 +25,23 @@ import { abortableSleep, providerPacer, type ProviderPacer } from '../pacing';
 import type { ProviderWaitInfo } from '../types';
 import { recordAttemptFailure, withAttemptIdentity, type AttemptIdentityCapture } from '../attempt-identity';
 
-/** Full-jitter backoff for a failure that is not a rate limit; unmeasured. */
+/** Full-jitter backoff; unmeasured. */
 const BASE_DELAY_MS = 2_000;
 
 const BACKOFF_FACTOR = 2;
 
 const MAX_DELAY_MS = 60_000;
 
-/** A rate limit that states no wait is waited out with half of each doubling ceiling fixed, from 4 s, so the default
- *  budget's waits add up to at least a minute: Workers AI's limits are per minute, its 429s carried no wait header in
- *  623 of 623 recorded, and calls answered again 63 s after the first 429 (prod-glm-1 evals, 2026-09-30). */
-const RATE_LIMIT_BASE_MS = 4_000;
+/**
+ * Workers AI's refusal of a model's per-minute allowance, `3021: rate limiting: inference request per min rate
+ * reached`, states its wait in its words rather than a header: the allowance is requests per minute
+ * (developers.cloudflare.com/workers-ai/platform/limits, read 2026-10-13), and its 429s carried no wait header in 623
+ * of 623 recorded, answering again 63 s after the first (prod-glm-1 evals, 2026-09-30). The page names no window's
+ * alignment; a whole minute from the refusal outlasts a fixed window and a sliding one alike.
+ */
+const WORKERS_AI_MINUTE_LIMIT = 3021;
+
+const MINUTE_MS = 60_000;
 
 /** OMP's `maxRetryDelayMs` (oh-my-pi ai/src/types.ts:499); a longer Retry-After means the account is spent. */
 const MAX_RETRY_DELAY_MS = 60_000;
@@ -192,7 +198,8 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
       if (!APICallError.isInstance(failure) || !failure.isRetryable) return yield* Effect.die(failure);
       const limit = rateLimitOf(failure);
 
-      const retryAfter = retryAfterOf(new Headers(failure.responseHeaders ?? {}), now());
+      const header = retryAfterOf(new Headers(failure.responseHeaders ?? {}), now());
+      const retryAfter = header ?? statedInWords(failure);
 
       if (limit === null) {
         yield* spendRetry(() => final(failure));
@@ -214,13 +221,13 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
         }));
       }
 
-      const waitMs = retryAfter ?? rateLimitWait(waits + 1, random());
+      const waitMs = retryAfter ?? Math.floor(random() * backoffCeiling(attemptNumber));
       const declared = pacer.declareWait(yield* lane.billed(), waitMs);
 
       yield* spendRetry(() => handedOver(policy.provider, waitMs, failure));
       owned = declared;
       warn(`[kinu] ${policy.provider} rate-limited: waiting ${fmtSpan(waitMs)} (retry ${String(waits)} of ${String(retries)})`);
-      yield* reportWait({ waitMs, attempt: attemptNumber, source: retryAfter !== null ? 'header' : 'backoff', status: limit.status, retry: waits });
+      yield* reportWait({ waitMs, attempt: attemptNumber, source: waitSource(header, retryAfter), status: limit.status, retry: waits });
       yield* Effect.promise(() => sleep(waitMs, signal));
     }
   }).pipe(Effect.onError((cause) => Effect.sync(() => recordAttemptFailure(capture, cause))));
@@ -291,11 +298,16 @@ function backoffCeiling(attempt: number): number {
   return Math.min(MAX_DELAY_MS, BASE_DELAY_MS * BACKOFF_FACTOR ** Math.min(attempt - 1, 32));
 }
 
-/** The `retry`th wait on a rate limit that stated none: half its ceiling fixed, half drawn ({@link RATE_LIMIT_BASE_MS}). */
-function rateLimitWait(retry: number, drawn: number): number {
-  const ceiling = Math.min(MAX_DELAY_MS, RATE_LIMIT_BASE_MS * BACKOFF_FACTOR ** Math.min(retry - 1, 32));
+function waitSource(header: number | null, stated: number | null): ProviderWaitInfo['source'] {
+  if (header !== null) return 'header';
 
-  return Math.floor(ceiling / 2 + drawn * (ceiling / 2));
+  return stated === null ? 'backoff' : 'stated';
+}
+
+/** A wait a refusal states in its body rather than a header: Workers AI's per-minute limit, a minute. Null for any
+ *  other, whose wait is the backoff's. */
+function statedInWords(failure: APICallError): number | null {
+  return failure.statusCode === 429 && workersAiCode(failure.responseBody ?? '') === WORKERS_AI_MINUTE_LIMIT ? MINUTE_MS : null;
 }
 
 interface StreamAttempt {
@@ -654,6 +666,19 @@ const QuotaFailureSchema = v.looseObject({
 interface ExhaustedAllowance {
   readonly marker: string;
   readonly message: string | undefined;
+}
+
+/** Workers AI's own code for a refusal, as the binding wraps it (`errors[].code`) or the REST API sends it
+ *  (`internalCode`); null for any other body. */
+function workersAiCode(body: string): number | null {
+  const decoded = tolerate<unknown>(() => JSON.parse(body), 'malformed-input');
+  const rest = v.safeParse(v.looseObject({ internalCode: v.number() }), decoded);
+
+  if (rest.success) return rest.output.internalCode;
+  const envelope = v.safeParse(ErrorEnvelopeSchema, decoded);
+  const code = envelope.success ? Number(envelope.output.errors?.[0]?.code ?? Number.NaN) : Number.NaN;
+
+  return Number.isInteger(code) ? code : null;
 }
 
 function exhaustedAllowance(body: string): ExhaustedAllowance | null {
