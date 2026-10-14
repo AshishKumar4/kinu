@@ -80,7 +80,7 @@ export function executorNamespace(provider: ExecutorProviderSurface): CodemodePr
 
   if (declared === undefined) return settleSync(Effect.die(new Error(`executor ${provider.name} has no declared members`)));
   // Only a computer with sizes has `resize`, declared over them; only one with a desktop has its members, over its screen.
-  const status = provider.getStatus?.();
+  const status = provider.tools.resize === undefined && provider.tools.screenshot === undefined ? undefined : provider.getStatus?.();
   const sizes = provider.tools.resize === undefined ? undefined : status?.sizes;
 
   const ops = [

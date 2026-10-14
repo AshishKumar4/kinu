@@ -10,23 +10,30 @@ import { createTestRuntime } from '@kinu.run/test-utils';
 import { createCompactionExtension } from '../src/extension';
 import { memoryArchive, memoryPorts, screenshot, screenshotSteps, sentScreens, type compactedScreenshots } from './helpers';
 
-/** The compaction extension over `rt`'s files, and its step pass. */
-function stepsOver(rt: Parameters<typeof compactedScreenshots>[0]) {
+/** The compaction extension over `rt`'s files, and its step pass over a turn that made `calls` screenshot calls. */
+function stepsOver(rt: Parameters<typeof compactedScreenshots>[0], calls = 20) {
   const extension = createCompactionExtension({
     ports: memoryPorts(), archive: memoryArchive(), ephemeral: { dropSuperseded: () => 0 },
     summarize: () => { throw new Error('a step summarizes nothing'); },
     attachments: { files: () => rt },
   });
 
+  const turn = async (): Promise<void> => {
+    await extension.onTurnStart?.({ system: 'system prompt', history: [] });
+
+    for (let n = 0; n < calls; n += 1) await extension.onToolCall?.({ toolName: 'browser', toolCallId: `shot_${String(n)}`, args: {} });
+  };
+
   const step = async (messages: ModelMessage[]): Promise<ModelMessage[]> => (await extension.prepareStep?.({ stepNumber: 1, messages })) ?? messages;
 
-  return { extension, step };
+  return { extension, turn, step };
 }
 
 test('a step keeps the latest two screenshots and moves the older ones out in fours, each a link to its stored bytes', async () => {
   const { rt } = createTestRuntime();
-  const { step } = stepsOver(rt);
+  const { turn, step } = stepsOver(rt);
 
+  await turn();
   const moved = async (steps: number): Promise<number> => (await step(screenshotSteps(steps)).then(sentScreens)).filter((entries) => !entries.includes('image')).length;
 
   expect(await Promise.all([1, 5, 6, 9, 10, 13].map(moved))).toEqual([0, 0, 4, 4, 8, 8]);
@@ -40,13 +47,28 @@ test('a step keeps the latest two screenshots and moves the older ones out in fo
 
 test('between batches a step\'s request extends the last: what moved is the same bytes, and nothing is stored again', async () => {
   const { rt } = createTestRuntime();
-  const { extension, step } = stepsOver(rt);
+  const { extension, turn, step } = stepsOver(rt);
 
-  await extension.onTurnStart?.({ system: 'system prompt', history: [] });
+  await turn();
   const first = await step(screenshotSteps(6));
   const again = extension.prepareStep?.({ stepNumber: 2, messages: screenshotSteps(7) });
 
   // Stored already: the pass answers at once, with the moved prefix exactly as the last request sent it.
   if (again === undefined || again instanceof Promise) throw new Error('a stored batch answered later, or not at all');
   expect(JSON.stringify(again.slice(0, first.length))).toBe(JSON.stringify(first));
+});
+
+test('only what this turn\'s calls returned moves: an earlier turn\'s screenshots stay the ladder\'s to move', async () => {
+  const { rt } = createTestRuntime();
+  const earlier = stepsOver(rt, 0);
+  const later = stepsOver(rt, 13);
+
+  await earlier.turn();
+  await later.turn();
+
+  // The same 13 screenshots: none from this turn's calls, then all of them.
+  expect([
+    (await earlier.step(screenshotSteps(13)).then(sentScreens)).filter((entries) => entries.includes('image')).length,
+    (await later.step(screenshotSteps(13)).then(sentScreens)).filter((entries) => entries.includes('image')).length,
+  ]).toEqual([13, 5]);
 });

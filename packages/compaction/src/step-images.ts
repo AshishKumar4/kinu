@@ -1,8 +1,9 @@
 /**
  * Images within one turn (D89). The turn's ladder moves older images out only as the turn starts; a turn that looks at
  * the screen step after step would otherwise carry every screenshot until the step budget overflows. So each step
- * moves the images past the latest {@link KEEP_RECENT_IMAGES} to the agent's home through the same store the ladder
- * uses, each left as the link the ladder leaves, which the agent can open again.
+ * moves the images its own turn's calls returned, past the latest {@link KEEP_RECENT_IMAGES}, to the agent's home
+ * through the same store the ladder uses, each left as a link the agent can open again. Earlier turns' images, and
+ * what the owner attached, stay the ladder's to move.
  *
  * The cutoff moves in batches of {@link STEP_IMAGE_BATCH}: between moves each request extends the last, so the
  * provider's cache holds. Measured on two models over a 24-step turn of screenshots, batches of four cost 35% (Claude)
@@ -32,10 +33,10 @@ interface Placed {
   readonly payload: unknown;
 }
 
-/** Each image of `turns`, oldest first. */
-function imagesOf(turns: readonly Turn[], store: AttachmentStore): Placed[] {
+/** Each image the calls `ours` returned in `turns`, oldest first. */
+function imagesOf(turns: readonly Turn[], store: AttachmentStore, ours: ReadonlySet<string>): Placed[] {
   return turns.flatMap((turn, at) => turn.items.flatMap((item, index) => store.list(item).flatMap((attachment): Placed[] => {
-    if (attachment.kind !== 'image') return [];
+    if (attachment.kind !== 'image' || item.kind !== 'tool' || !ours.has(item.callId)) return [];
     const media = carriedMedia(item).find((carried) => carried.id === attachment.id);
     // A step knows no session; the store keeps an image by its bytes alone.
     const location = { sessionKey: '', turnKey: turn.key, itemKey: item.key };
@@ -44,15 +45,19 @@ function imagesOf(turns: readonly Turn[], store: AttachmentStore): Placed[] {
   })));
 }
 
-/**
- * A step's pass over `messages`: undefined when no image moves; synchronous when every moving image is stored already.
- * `links` holds what was stored, by payload, for the turn's later steps; its owner clears it as a turn starts.
- */
+/** What a turn's steps share: the calls it made, and what its steps stored, by payload. Its owner renews it per turn. */
+export interface TurnImages {
+  readonly calls: Set<string>;
+  readonly links: Map<unknown, string | null>;
+}
+
+/** A step's pass over `messages`: undefined when no image moves; synchronous when every moving image is stored already. */
 export function moveStepImages(
-  messages: readonly ModelMessage[], store: AttachmentStore, links: Map<unknown, string | null>,
+  messages: readonly ModelMessage[], store: AttachmentStore, turn: TurnImages,
 ): ModelMessage[] | undefined | Promise<ModelMessage[] | undefined> {
+  const { links } = turn;
   const turns = kinuCodec.encode([...messages]);
-  const images = imagesOf(turns, store);
+  const images = imagesOf(turns, store, turn.calls);
   const moving = images.slice(0, Math.floor(Math.max(0, images.length - KEEP_RECENT_IMAGES) / STEP_IMAGE_BATCH) * STEP_IMAGE_BATCH);
 
   if (moving.length === 0) return undefined;
@@ -62,11 +67,11 @@ export function moveStepImages(
 
     for (const image of moving) {
       const link = links.get(image.payload);
-      const turn = turns[image.turn];
-      const item = turn?.items[image.item];
+      const held = turns[image.turn];
+      const item = held?.items[image.item];
 
-      if (link === null || link === undefined || turn === undefined || item === undefined) continue;
-      turn.items[image.item] = store.replace(item, image.attachment, stub(image.attachment, link));
+      if (link === null || link === undefined || held === undefined || item === undefined) continue;
+      held.items[image.item] = store.replace(item, image.attachment, stub(image.attachment, link));
       moved = true;
     }
 

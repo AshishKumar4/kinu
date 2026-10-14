@@ -41,7 +41,7 @@ import {
   type Turn,
 } from '@better-compact/core';
 import { attachmentStore, kinuAttachments, type AttachmentDeps } from './attachments';
-import { moveStepImages } from './step-images';
+import { moveStepImages, type TurnImages } from './step-images';
 import { kinuCodec, kinuSpec } from './codec';
 import {
   deriveArchiveRange,
@@ -324,18 +324,22 @@ function compactionExtension(deps: CompactionExtensionDeps): KinuExtension {
     return replayed === null ? cut : kinuCodec.decode(withArchiveManifest(replayed, renderArchiveManifest(deps.archive.list(ctx.sessionKey))), messages);
   }
 
-  // A turn's steps move older images out (step-images.ts); what they stored, by payload, for the turn's later steps.
-  const stepLinks = new Map<unknown, string | null>();
+  // A turn's steps move older images its calls returned (step-images.ts): the calls, and what its steps stored.
+  let turnImages: TurnImages = { calls: new Set(), links: new Map() };
   const stepStore = attachmentStore(deps.attachments);
 
   return {
     name: 'compaction',
 
     onTurnStart() {
-      stepLinks.clear();
+      turnImages = { calls: new Set(), links: new Map() };
     },
 
-    prepareStep: (ctx) => moveStepImages(ctx.messages, stepStore, stepLinks),
+    onToolCall(ctx) {
+      if (ctx.toolCallId !== undefined) turnImages.calls.add(ctx.toolCallId);
+    },
+
+    prepareStep: (ctx) => moveStepImages(ctx.messages, stepStore, turnImages),
 
     async transformContext(unsized: TransformContext): Promise<ModelMessage[] | undefined> {
       unsized.abortSignal?.throwIfAborted();
