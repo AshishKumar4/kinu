@@ -16,8 +16,8 @@ import {
   ArchiveCursorSchema,
 } from "@kinu.run/core";
 import { executorLabel } from "@kinu.run/core";
-import type { AgentStatus, ConnectionStatus } from "@/hooks/use-chat-owner";
-import type { WorkspaceNotice } from "@kinu.run/core";
+import type { ConnectionStatus } from "@/hooks/use-chat-owner";
+import type { AgentStatus, WorkspaceNotice } from "@kinu.run/core";
 import { WorkspaceAutomations } from "@/components/WorkspaceAutomations";
 import { Card, Field, composing, inputCls } from "@/components/ui/form";
 import { CopyButton } from "@/components/ui/CopyButton";
@@ -119,7 +119,8 @@ function saveLabel(saving: boolean, saved: boolean): string {
 export interface SettingsSource {
   readonly rpc: Rpc;
   readonly connectionStatus: ConnectionStatus;
-  readonly agentStatus: AgentStatus | null;
+  /** The workspace as a whole, from its opening. */
+  readonly status: AgentStatus | null;
   readonly error: WorkspaceNotice | null;
   readonly retryLoad: () => void;
 }
@@ -156,7 +157,7 @@ export function WorkspaceSettings({ workspace: agentId, title, logo, state, clea
   workspace: string; title: string; logo: string | null | undefined; state: SettingsSource; clearMain: () => void;
 }) {
   // Stable pieces only: `state` is a fresh object every render, and depending on it loops refetches that clobber edits.
-  const { rpc, connectionStatus, agentStatus, error: snapshotError, retryLoad } = state;
+  const { rpc, connectionStatus, status, error: snapshotError, retryLoad } = state;
 
   const displayName = useSettingField<string>();
   const soul = useSettingField<string>();
@@ -171,14 +172,14 @@ export function WorkspaceSettings({ workspace: agentId, title, logo, state, clea
   const { hydrate: hydrateDisplayName, fail: failDisplayName } = displayName;
   const { hydrate: hydrateSoul, fail: failSoul } = soul;
   useEffect(() => {
-    if (agentStatus) {
-      hydrateDisplayName(agentStatus.displayName || "");
-      hydrateSoul(agentStatus.soul || "");
+    if (status) {
+      hydrateDisplayName(status.displayName || "");
+      hydrateSoul(status.soul || "");
     } else if (snapshotError) {
       failDisplayName({ cause: snapshotError });
       failSoul({ cause: snapshotError });
     }
-  }, [agentStatus, snapshotError, hydrateDisplayName, hydrateSoul, failDisplayName, failSoul]);
+  }, [status, snapshotError, hydrateDisplayName, hydrateSoul, failDisplayName, failSoul]);
 
   const { hydrate: hydrateApproval, fail: failApproval } = approval;
   const { hydrate: hydrateAdvisor, fail: failAdvisor } = advisor;

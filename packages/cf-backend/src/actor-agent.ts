@@ -116,7 +116,7 @@ import {
   invocationBackgroundPolicy,
   type BackgroundJobStore, type TaskListStore,
   resumeBackgroundJob, harvestBackgroundJob, type ActorToolsets,
-  cancelCurrentWork, getStoredModelSpec, setModel,
+  cancelCurrentWork, getStoredModelSpec,
   type CancelWorkOutcome, type ChatHistoryPage, type Page, type PageRequest, PositionPageRequestSchema, type PositionPageRequest,
   type MctsSearchStore, readSearchTree, isSteerBranchRunId,
   EventLog,
@@ -3348,16 +3348,6 @@ export abstract class ActorAgent extends Agent<Env> {
 
     return changed;
   }
-  @callable()
-  async setModel(spec: string) {
-    const set = setModel(this.modelSetting(this.config, () => {}), spec);
-
-    // Main's isolate measures its next request on the new model, as every agent's does.
-    await this.modelSettingsChanged();
-
-    return set;
-  }
-
   /** How a model pin is set on `config`: this workspace's registry normalizes the spec. */
   protected modelSetting(config: AgentConfigStore, onChanged: () => void): SetModelDeps {
     return { config, normalize: (s) => this.providerRegistry().normalizeSpecSync(s), onChanged };

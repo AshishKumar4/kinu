@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { Link } from "react-router-dom";
 import type { AgentTaskTree, PanelAgent, Rpc, WorkspaceWork, WorkspaceWorkOwner } from "@kinu.run/core";
-import type { ForkLineage } from "@/hooks/use-chat-owner";
+import type { ForkLineageRow } from "@kinu.run/core";
 import type { ReadMoves } from "@/hooks/use-workspace-reads";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -82,7 +82,7 @@ export function WorkspaceOverview({ workspace, title, logo, rpc, readMoves, line
   logo: string | null | undefined;
   rpc: Rpc;
   readMoves: ReadMoves;
-  lineage: ForkLineage | null;
+  lineage: ForkLineageRow | null;
   agents: readonly PanelAgent[];
   open: (agent: PanelAgent) => void;
 }) {

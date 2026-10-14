@@ -7,7 +7,7 @@ import { Badge, Loader } from "@cloudflare/kumo";
 import {
   BrainIcon, ChartLineUpIcon, GitBranchIcon, GlobeHemisphereWestIcon, IdentificationCardIcon, MagnifyingGlassIcon,
 } from "@phosphor-icons/react";
-import type { AgentStatus } from "@/hooks/use-chat-owner";
+import type { AgentStatus } from "@kinu.run/core";
 import type { ReadMoves } from "@/hooks/use-workspace-reads";
 import type { JsonValue, MemoryEntry, Rpc } from "@kinu.run/core";
 import { Effect } from "effect";

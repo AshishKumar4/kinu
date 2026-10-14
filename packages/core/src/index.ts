@@ -2089,7 +2089,7 @@ export type {
 } from './read-models/workspace-overview';
 
 export type {
-  AgentStatus, AgentStatusDeps, ChatHistoryEntry, ToolListEntry,
+  ActorSnapshot, AgentStatus, AgentStatusDeps, ChatHistoryEntry, ToolListEntry,
 } from './read-models/status';
 
 export {

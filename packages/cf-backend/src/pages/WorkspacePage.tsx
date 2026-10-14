@@ -464,11 +464,11 @@ function SubordinateChatColumn({
 
   useOpeningMessage(state.connectionStatus === "connected", (text, files) => { state.sendChat(text, [...files], ui.mode); });
 
-  if (state.terminalClose && !state.agentStatus) {
+  if (state.terminalClose && !state.actorSnapshot) {
     return <TerminalCloseBoundary close={state.terminalClose} onRetry={state.retryLoad} />;
   }
 
-  if (state.connectionStatus === "connecting" && !state.agentStatus) {
+  if (state.connectionStatus === "connecting" && !state.actorSnapshot) {
     return (
       <div className="flex flex-1 items-center justify-center">
         <div className="flex items-center gap-2 text-sm p-text-2"><Loader size="sm" /><span>Connecting…</span></div>
@@ -582,7 +582,7 @@ function WorkspaceView({ view, workspace, title, state, agents, open, clearMain 
   }
 
   return <WorkspaceOverview workspace={workspace} title={title} logo={logo} rpc={state.rpc} readMoves={state.readMoves}
-    lineage={state.agentStatus?.forkLineage ?? null} agents={agents} open={open} />;
+    lineage={state.status?.forkLineage ?? null} agents={agents} open={open} />;
 }
 
 function GoneWorkspace() {
@@ -706,7 +706,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
   // `state.messages` is the SDK's newest window with streamed messages; older history pages from storage.
   const chat = useChatThread({
     rpc: state.rpc, live: state.messages, seeded: state.transcriptSeeded, steerRuns: state.steerRuns,
-    total: state.agentStatus?.messageCount,
+    total: state.actorSnapshot?.messageCount,
   });
 
   const { history, thread, positions, transcript } = chat;
@@ -804,7 +804,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
 
   if (!agentId) return null;
 
-  const as = state.agentStatus;
+  const as = state.actorSnapshot;
   const rosterTitle = workspaceEntries.find((entry) => entry.name === agentId)?.displayName;
   // No fallback to `agentId`: it is the URL slug, not a title.
   const statusTitle = as?.displayName;
@@ -821,14 +821,14 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
   );
 
   // Never unmount on transient WS errors.
-  if (state.connectionStatus === "connecting" && !state.agentStatus) return (
+  if (state.connectionStatus === "connecting" && !state.actorSnapshot) return (
     <div className="h-full flex flex-col">
       {bar}
       <div className="flex flex-1 items-center justify-center"><div className="flex items-center gap-2 text-sm p-text-2"><Loader size="sm" /><span>Connecting...</span></div></div>
     </div>
   );
 
-  if (state.terminalClose && !state.agentStatus) {
+  if (state.terminalClose && !state.actorSnapshot) {
     return <div className="h-full flex flex-col">{bar}<div className="min-h-0 flex-1"><TerminalCloseBoundary close={state.terminalClose} onRetry={state.retryLoad} /></div></div>;
   }
 
@@ -881,7 +881,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
             <ChatColumn pane={mainPane} label="Chat" state={state} ui={ui} chat={chat} retryOwed={retryOwed} input
               placeholder={live ? "Steer the running turn…" : "Send a message..."}
               attention={<AttentionStack asks={ownerAsks({ ...state, accountProposals, questions: state.ownerQuestions })} {...attentionCalls} />}
-              empty={<EmptyConversation mission={as?.purpose ?? ""} />}
+              empty={<EmptyConversation mission={as?.mission ?? ""} />}
               asked={asked} answerSlates={WORKSPACE_CHAT} layout={{ startFirst: true, padClass: "pt-7 pb-12" }}
               extras={{
                 before: (i) => placed.before.get(i),
@@ -999,7 +999,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
       {forkFor && (
         <ForkModal
           sourceName={shownTitle}
-          messagesUpToHere={messagesUpTo(transcript, forkFor, state.agentStatus?.messageCount, { positions, inFlight: turnRows(transcript, live) })}
+          messagesUpToHere={messagesUpTo(transcript, forkFor, state.actorSnapshot?.messageCount, { positions, inFlight: turnRows(transcript, live) })}
           onCancel={() => setForkFor(null)}
           onSubmit={(name) => settle(Effect.catchCause(Effect.gen(function* () {
             const result = yield* Effect.promise(async () => state.forkAgent(forkFor, name ? { name } : undefined));

@@ -191,7 +191,7 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
 }) {
   const live = state.liveness.kind === "live";
   const { thread } = chat;
-  const as = state.agentStatus;
+  const as = state.actorSnapshot;
   // The answer whose failure notice was dismissed: its line in the thread keeps the Retry.
   const [dismissedFailure, setDismissedFailure] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -262,7 +262,7 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
           attention={attention}
           mode={{ value: ui.mode, onChange: ui.setMode }}
           {...(attachments !== undefined && { attachments: { parts: [...attachments.parts], onAdd: attachments.add, onRemove: attachments.remove } })}
-          modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={pickModel} size="xs"
+          modelPicker={<ConnectedModelPicker value={as?.model.model ?? ""} onChange={pickModel} size="xs"
             effort={{ value: as?.reasoningEffort ?? null, onChange: pickEffort }} />}
           notices={[
             ...loadNotices(state.error, state.retryLoad),

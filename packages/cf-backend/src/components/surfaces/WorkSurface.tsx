@@ -5,7 +5,8 @@ import type { SlateSummary, PendingAction, PlanReview, OwedOwnerIntent } from "@
 import type { WorkspacePlanArrival } from "@/hooks/use-workspace-reads";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import type { FilesFocus, HeadDeltas } from "@kinu.run/core";
-import type { AgentStatus, ExecutorOutput } from "@/hooks/use-chat-owner";
+import type { ExecutorOutput } from "@/hooks/use-chat-owner";
+import type { AgentStatus } from "@kinu.run/core";
 import type { ReadMoves } from "@/hooks/use-workspace-reads";
 import type { AsyncResource } from "@/hooks/use-async-resource";
 import { executorLabel, previewPortTitle, type ExecutorInfo, type InspectedWork } from "@kinu.run/core";

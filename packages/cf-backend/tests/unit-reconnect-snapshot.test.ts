@@ -19,11 +19,11 @@ const BRANCH_TASK = 'try the coupon path';
 
 /** Projected, not compared whole, so unrelated planes do not rewrite this file. */
 function chips(snapshot: {
-  pendingSteers: readonly { text: string }[];
+  chat: { pendingSteers: readonly { text: string }[] };
   branchRuns: readonly { branchId: string; task: string; status: string }[];
 }) {
   return {
-    steers: snapshot.pendingSteers.map((steer) => steer.text),
+    steers: snapshot.chat.pendingSteers.map((steer) => steer.text),
     branches: snapshot.branchRuns.map((run) => `${run.branchId}:${run.status}:${run.task}`),
   };
 }

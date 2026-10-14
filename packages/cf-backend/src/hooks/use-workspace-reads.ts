@@ -30,6 +30,8 @@ import {
 import { pruneSlateReloads } from "@kinu.run/core";
 import type { WorkspacePlanReference } from "@kinu.run/core";
 import type { ChatLink, ExecutorOutput, WorkspaceExtension, WorkspaceOpening } from "./use-chat-owner";
+import type { AsyncResource } from "./use-async-resource";
+import type { AgentStatus } from "@kinu.run/core";
 
 export interface BranchRun {
   branchId: string;
@@ -96,10 +98,21 @@ export interface WorkspacePlanArrival {
 }
 
 /** The reads only the workspace's pane draws. */
+/** The workspace's status as a read: failed with the last one kept, loading until the first, else ready. */
+function statusResource(status: AgentStatus | null, failed: string | undefined): AsyncResource<AgentStatus> {
+  if (failed !== undefined) return { status: "error", message: failed, last: status };
+
+  return status === null ? { status: "loading" } : { status: "ready", value: status };
+}
+
 export function useWorkspaceReads(link: ChatLink) {
   const {
     agent, rpc, actorKey, liveRefreshAdmission, refreshCurrentLiveResource, setSourceError, errors, loaded, streaming, rereadPlan,
   } = link;
+
+  // The workspace as a whole, set by each completed opening: a surface may only say "none" of a read that came back.
+  const [workspaceStatus, setWorkspaceStatus] = useState<AgentStatus | null>(null);
+  const snapshot = statusResource(workspaceStatus, errors.snapshot);
 
   const [memory, setMemory] = useState<MemoryEntry[]>([]);
   const [mctsTrees, setMctsTrees] = useState<ReadonlyMap<string, ForkNode>>(new Map());
@@ -533,6 +546,8 @@ export function useWorkspaceReads(link: ChatLink) {
   }, [streaming, refreshLiveData]);
 
   async function applySnapshot(snap: WorkspaceOpening, isSourceCurrent: (source: LiveRefreshSource) => boolean): Promise<void> {
+    setWorkspaceStatus(snap.status);
+
     if (isSourceCurrent("memoryContent")) {
       setMemoryContent(snap.memoryContent);
 
@@ -686,6 +701,8 @@ export function useWorkspaceReads(link: ChatLink) {
     extension,
     error,
     reads: {
+      status: workspaceStatus,
+      snapshot,
       memory,
       memoryContent,
       mctsTrees,

@@ -171,7 +171,7 @@ import {
   EmailInbox, planOwnerNotification, readEmailAllowlist, setEmailAllowlist,
   type EmailAdmission, type IncomingEmail,
   PeerHub, type PeerMessage, type ReceiveResult,
-  getAgentStatus, getToolList, readLatestSearchTree, readSearchTree,
+  getAgentStatus, getToolList, readLatestSearchTree, readSearchTree, type ActorSnapshot,
   readSearchNodeDetail, type SearchNodeDetail,
   listForkRuns, type ForkRunSummary,
   readNodeTranscript, type NodeTranscriptView,
@@ -5550,10 +5550,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
+  /** The pane's read of a chat, the workspace agent's or `actor`'s alike: one read for any pane. */
   @callable()
-  getActorSnapshot(name: string) {
+  getActorSnapshot(actor?: string): Promise<ActorSnapshot> {
     return settle(Effect.gen({ self: this }, function* () {
-      const { entry, child } = yield* this.hostedChild(name);
+      if (actor === undefined) return yield* Effect.promise(async () => this.mainSnapshot());
+      const { entry, child } = yield* this.hostedChild(actor);
+      const actorId = child.handle.actorId;
 
       // The effective model: the actor's own pin, else the workspace's, else its tier's, with its source.
       const { profile } = yield* Effect.promise(async () => this.actorProfile({
@@ -5562,21 +5565,39 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       return {
         name: entry.name,
-        // The id every frame broadcast for this actor is stamped with; the pane uses it to filter frames.
-        actorId: child.handle.actorId,
+        actorId,
         displayName: child.stores.config.getDisplayName() ?? entry.name,
         role: child.stores.config.getRoleSelection(),
         mission: entry.birth?.seed.mission ?? '',
         model: { model: profile.tier.model, source: profile.tier.source },
         reasoningEffort: profile.tier.reasoningEffort,
         // Its plans live in its own isolate (D9).
-        activePlan: yield* Effect.promise(async () => await (await this.agentCalls(child.handle.actorId)).activePlanReview(this.agentSnapshot(child.handle.actorId))),
-        // Counted in the store: the pane holds only a window.
-        messageCount: yield* Effect.promise(async () => this.agentStores(child.handle.actorId).messageCount()),
+        activePlan: yield* Effect.promise(async () => await (await this.agentCalls(actorId)).activePlanReview(this.agentSnapshot(actorId))),
+        messageCount: yield* Effect.promise(async () => this.agentStores(actorId).messageCount()),
         // Its own isolate's sends, as its conversation is.
-        pendingSteers: (yield* Effect.promise(async () => await (await this.agentCalls(child.handle.actorId)).standing(this.agentSnapshot(child.handle.actorId), null))).pendingSteers,
+        pendingSteers: (yield* Effect.promise(async () => await (await this.agentCalls(actorId)).standing(this.agentSnapshot(actorId), null))).pendingSteers,
       };
     }));
+  }
+
+  /** The workspace agent's chat, as {@link getActorSnapshot} reads a hosted one's: its profile the one its next turn runs. */
+  private async mainSnapshot(): Promise<ActorSnapshot> {
+    const [profile, activePlan, standing, displayName, mission] = await Promise.all([
+      this.currentProfile(), this.getActivePlanReview(), this.mainStanding({ fresh: true }), this.workspaceTitle(), this.ownMission(),
+    ]);
+
+    return {
+      name: this.name,
+      actorId: this.actorHandle().actorId,
+      displayName: displayName ?? '',
+      role: this.config.getRoleSelection(),
+      mission,
+      model: { model: this.effectiveModelSpec(), source: profile.tier.source },
+      reasoningEffort: profile.tier.reasoningEffort,
+      activePlan,
+      messageCount: standing.messageCount,
+      pendingSteers: standing.pendingSteers,
+    };
   }
 
   /**
@@ -6314,11 +6335,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private async snapshotOf(memoryContent: string, presence: Parameters<typeof hasWorkspaceWork>[0]) {
-    const [status, tools, executors, activePlan, tabPresence, { slates }] = await Promise.all([
+    const [status, chat, tools, executors, tabPresence, { slates }] = await Promise.all([
       this.getAgentStatus(),
+      this.mainSnapshot(),
       this.getToolDescriptions(),
       this.getExecutors(),
-      this.getActivePlanReview(),
       this.tabPresenceOf(presence),
       this.listSlates(),
     ]);
@@ -6339,9 +6360,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       .map((run) => ({ type: 'branch_status' as const, status: 'running' as const, branchId: run.rootId, task: run.task }));
 
     return {
-      status, tools, memoryContent, executors, executorOutputs, lastActiveExecutor, activePlan,
-      tabPresence, slates, pendingSteers: (await this.mainStanding()).pendingSteers, branchRuns,
-      turnClaim: this.turnClaimState(),
+      status, chat, tools, memoryContent, executors, executorOutputs, lastActiveExecutor,
+      tabPresence, slates, branchRuns, turnClaim: this.turnClaimState(),
     };
   }
 
@@ -6841,11 +6861,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }));
   }
 
-  /** A hosted actor's own model pin, over the workspace's for its turns. */
-  @callable() setActorModel(actor: string, spec: string) {
+  /** The workspace agent's model pin, or `actor`'s own over the workspace's for its turns. */
+  @callable() setModel(spec: string, actor?: string) {
     return settle(Effect.gen({ self: this }, function* () {
-      const set = setModel(this.modelSetting((yield* this.hostedChild(actor)).child.stores.config, () => {}), spec);
+      const set = setModel(this.modelSetting(yield* this.actorConfig(actor), () => {}), spec);
 
+      // That agent's isolate measures its next request on the new model, as every agent's does.
       yield* Effect.promise(async () => this.modelSettingsChanged());
 
       return set;

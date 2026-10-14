@@ -62,7 +62,6 @@ import { AgentsNavProvider } from "@/hooks/use-agents-nav";
 import { APP_ROUTES, rosterBucket, rosterMatches, WorkspaceOverviewSchema, type AgentTaskTree, type WorkspaceOverview } from "@kinu.run/core";
 import { CHUNK_FIXED_KEY, lazyRoute } from "@/lazy-route";
 import { useKinu } from "@/hooks/use-kinu";
-import type { SubordinateSnapshot } from "@/hooks/use-chat-owner";
 import { ChatLiveTail, DeviceOfflineRow, MessageView, SteerBubble } from "@/components/MessageView";
 import { buildTranscript, profileCatalogCanonical } from "@kinu.run/core";
 import WorkspacePage from "@/pages/WorkspacePage";
@@ -92,13 +91,13 @@ import {
   CHARS_PER_TOKEN, DEVICE_TIERS, JsonObjectSchema, JsonValueSchema,
   missingSubordinateHistory,
   parseDeviceTier, seekPage, sortDirEntries, SubordinateInspectionRequestSchema,
-  type AdvisorSeverity, type KinuEvent, type JsonObject, type JsonValue, type PlanReview, type ReviewAnnotation,
+  type ActorSnapshot, type AdvisorSeverity, type AgentStatus, type KinuEvent, type JsonObject, type JsonValue, type PlanReview, type ReviewAnnotation,
   type ProfileCatalogEnvelope, type SubordinateInspectionRequest, type AccountUsage,
 } from "@kinu.run/core";
 import type { ActivitySnapshot, ExecutorCommandResult, ForkNode, MemoryEntry, Rpc } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { buildTree, type MctsRow } from "@kinu.run/core";
-import type { AgentStatus, ExecutorOutput } from "@/hooks/use-chat-owner";
+import type { ExecutorOutput } from "@/hooks/use-chat-owner";
 import { formatWorkspaceError, type WorkspaceErrors } from "@kinu.run/core";
 import { lastValue, type AsyncResource } from "@/hooks/use-async-resource";
 import type { ExecutorInfo } from "@kinu.run/core";
@@ -1509,10 +1508,15 @@ const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
     // The full-screen explorer reads its tree off the snapshot.
     mcts: MCTS_ROWS,
     timeline: [], executors: [], executorOutputs: [], lastActiveExecutor: null,
-    // Mirrors the server snapshot: `loadAllData` replaces state wholesale, so an omitted field is `undefined`.
-    pendingSteers: [], branchRuns: [],
+    // Mirrors the server snapshot: the load replaces state wholesale, so an omitted field is `undefined`.
+    chat: {
+      name: "checkout-coupon-bug-9935d3", actorId: "agent_01j9x7q2m4checkoutfixes", displayName: "Storefront", role: "default",
+      mission: "The store's checkout, cart and payments: keep them fast and correct.",
+      model: { model: "anthropic/claude-opus-4", source: "workspace" }, reasoningEffort: "medium",
+      activePlan: null, messageCount: 48, pendingSteers: [],
+    },
+    branchRuns: [],
     tabPresence: { explorations: true, work: true },
-    activePlan: null,
     slates: [],
     turnClaim: { kind: "settled" },
   },
@@ -1523,16 +1527,21 @@ const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
 
 const AGENT_RPC = new Map(Object.entries(AGENT_RPC_DATA));
 
+/** `snapshot` with its workspace agent's chat changed by `patch`, as the server's snapshot carries it. */
+function withChat(snapshot: JsonObject, patch: JsonObject): JsonObject {
+  return { ...snapshot, chat: { ...v.parse(JsonObjectSchema, snapshot.chat), ...patch } };
+}
+
 const WORKSPACE_PAGE_NAME = new URLSearchParams(location.search).get("ws") ?? "checkout-fixes";
 
 // `&ws=handwrought-walnut-4166c321` is the untitled row: its snapshot answers a blank displayName.
 if (WORKSPACE_PAGE_NAME === "handwrought-walnut-4166c321") {
   const snapshot = v.parse(JsonObjectSchema, AGENT_RPC_DATA.getWorkspaceSnapshot);
 
-  AGENT_RPC.set("getWorkspaceSnapshot", {
+  AGENT_RPC.set("getWorkspaceSnapshot", withChat({
     ...snapshot,
     status: { ...v.parse(JsonObjectSchema, snapshot.status), name: "handwrought-walnut-4166c321", displayName: "", soul: "" },
-  });
+  }, { name: "handwrought-walnut-4166c321", displayName: "", mission: "" }));
 }
 
 class GalleryAgentSocket extends EventTarget implements WebSocket {
@@ -2417,12 +2426,12 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   getWorkspaceSnapshot: () => {
     const snapshot = v.parse(JsonObjectSchema, AGENT_RPC.get("getWorkspaceSnapshot"));
 
-    const status = v.parse(JsonObjectSchema, snapshot.status);
+    const chat = v.parse(JsonObjectSchema, snapshot.chat);
 
-    return {
-      ...snapshot, activePlan: galleryAgentPlan, slates: gallerySlates().slates,
-      status: HISTORY_ROWS > 0 ? { ...status, messageCount: seededGalleryChatRows() + HISTORY_ROWS } : status,
-    };
+    return withChat({ ...snapshot, slates: gallerySlates().slates }, {
+      activePlan: v.parse(JsonValueSchema, galleryAgentPlan),
+      messageCount: HISTORY_ROWS > 0 ? seededGalleryChatRows() + HISTORY_ROWS : v.parse(v.number(), chat.messageCount),
+    });
   },
   listSlates: gallerySlates,
   getActivePlanReview: () => galleryAgentPlan,
@@ -2569,14 +2578,14 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
   if (method === "listSubordinates") return { value: [...GALLERY_SUBS] };
 
   // Recorded so a gate can read which actor a pick wrote.
-  if (method === "setActorModel" || method === "setReasoningEffort") {
+  if (method === "setModel" || method === "setReasoningEffort") {
     const root = document.documentElement;
     const calls: unknown[] = JSON.parse(root.dataset.galleryModelCalls ?? "[]");
 
     calls.push({ method, args });
     root.dataset.galleryModelCalls = JSON.stringify(calls);
 
-    return { value: method === "setActorModel" ? { ok: true, spec: args?.[1] } : { ok: true, effort: args?.[0] ?? null } };
+    return { value: method === "setModel" ? { ok: true, spec: args?.[0] } : { ok: true, effort: args?.[0] ?? null } };
   }
 
   if (method === "createSubordinateAgent") {
@@ -2645,7 +2654,7 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
       activePlan: galleryAgentPlan,
       messageCount: 0,
       pendingSteers: [],
-    } satisfies SubordinateSnapshot,
+    } satisfies ActorSnapshot,
   };
 }
 
@@ -3145,7 +3154,7 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
     if (method === "getWorkspaceSnapshot") {
       const snapshot = v.parse(JsonObjectSchema, AGENT_RPC.get(method));
 
-      return rpcResult(v.parse(JsonValueSchema, { ...snapshot, memoryContent: memory, activePlan: galleryAgentPlan })).json<T>();
+      return rpcResult(withChat({ ...snapshot, memoryContent: memory }, { activePlan: v.parse(JsonValueSchema, galleryAgentPlan) })).json<T>();
     }
   }
 
@@ -7356,7 +7365,7 @@ function SnapshotRaceFrame() {
       reads: ["getMemoryContent", "getExecutors", "getWorkspaceTabPresence", "getActivePlanReview", "listSlates"],
     }))}>Refresh</button>
     <output data-snapshot-race-state>{JSON.stringify({
-      snapshot: state.agentStatus?.displayName,
+      snapshot: state.actorSnapshot?.displayName,
       memory: state.memoryContent,
       executors: state.executors.map((executor) => executor.name),
       plan: state.activePlan?.id ?? null,
@@ -7373,16 +7382,17 @@ const snapshotRaceRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promi
   const activePlan = current ? v.parse(JsonValueSchema, { ...galleryAgentPlan, id: "current-plan" }) : null;
   const tabPresence = { work: current, explorations: false };
   const slates = current ? [{ id: "current-slate", title: "Current slate" }] : [];
-  const seeded = { memoryContent, executors, activePlan, tabPresence, slates };
+  const seeded = { memoryContent, executors, tabPresence, slates };
 
   if (method === "getWorkspaceSnapshot") {
     const snapshot = v.parse(JsonObjectSchema, AGENT_RPC.get(method));
     const held = document.documentElement.dataset.snapshotRaceHold === "1";
+    const displayName = held ? "held snapshot" : "initial snapshot";
 
-    const answer = v.parse(JsonValueSchema, {
+    const answer = withChat({
       ...snapshot, ...seeded,
-      status: { ...v.parse(JsonObjectSchema, snapshot.status), displayName: held ? "held snapshot" : "initial snapshot" },
-    });
+      status: { ...v.parse(JsonObjectSchema, snapshot.status), displayName },
+    }, { displayName, activePlan });
 
     if (held) {
       document.documentElement.dataset.snapshotRaceWaiting = "1";

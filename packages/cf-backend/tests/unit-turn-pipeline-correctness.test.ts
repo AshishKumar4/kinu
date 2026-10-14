@@ -341,6 +341,31 @@ describe('turn-pipeline correctness wiring', () => {
     expect(unpinned.model).toEqual({ model: 'workers-ai/account-default', source: 'role' });
   });
 
+  test("the workspace agent's chat reads and pins as a hosted agent's does, through the same two calls", async () => {
+    const workspace = orchestratorHarness();
+
+    workspace.agent.harnessInstallCatalog({
+      tiers: { default: { model: 'workers-ai/account-default' } },
+      availableModels: ['workers-ai/account-default', 'workers-ai/pinned-model'],
+    });
+    await workspace.agent.setSoul('# Purpose\n\nShip the deploy gates.');
+    const added = await workspace.agent.createSubordinateAgent();
+
+    // Pinned on the agent alone: the workspace's own chat keeps its tier's model.
+    await workspace.agent.setModel('workers-ai/pinned-model', added.name);
+    expect((await workspace.agent.getActorSnapshot(added.name)).model).toEqual({ model: 'workers-ai/pinned-model', source: 'actor' });
+    expect((await workspace.agent.getActorSnapshot()).model.model).toBe('workers-ai/account-default');
+
+    await workspace.agent.setModel('workers-ai/pinned-model');
+    const main = await workspace.agent.getActorSnapshot();
+
+    expect({ actorId: main.actorId, model: main.model }).toEqual({
+      actorId: workspaceMainActor(workspace.db).actorId, model: { model: 'workers-ai/pinned-model', source: 'workspace' },
+    });
+    // The tab's opening carries the same read.
+    expect((await workspace.agent.getWorkspaceOpening()).chat).toEqual(main);
+  });
+
   test("an unpinned workspace reports the account's default before its first turn, and its next turn runs on it", async () => {
     const workspace = orchestratorHarness();
     workspace.agent.harnessInstallCatalog({
