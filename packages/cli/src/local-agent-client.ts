@@ -77,7 +77,6 @@ interface LocalAgentClientOptions {
   model?: string;
   baseUrl?: string;
   auth?: string;
-  oneShot?: boolean;
   transcript?: CliSessionOptions;
   surface?: InvocationSurface;
   /** The folder it works in; absent, the ref's recorded one. */

@@ -14,7 +14,7 @@ import {
   type WSMessage,
 } from "agents";
 import {
-  TierIdSchema, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice, recordServingJobs, REAL_CLOCK,
+  metadataTier, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice, recordServingJobs, REAL_CLOCK,
   type BackgroundJob, type BackgroundJobRunnerDeps, type Clock, type WorkspaceJobPorts, WorkspaceJobAuthorities, type JobAuthority,
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle,
   resetGuardedExec, StoragePredatesResetError, ERROR_STATUS, LiveWorkers,
@@ -79,7 +79,7 @@ import {
   type DynamicContext, type DynamicApproval, type DynamicContextInput, type MissingCapability,
   // Public extension seam — the SAME host contract runChat drives on the CLI
   ExtensionHost,
-  type PromptFile, PromptFileSchema,
+  type PromptFile, PromptFileSchema, type SentWords,
   // Shared turn lifecycle and run_end classifier, so neither backend chooses the string
   // (see turn-failure.ts).
   type AgentOrchestrator, type AgentOrchestratorDeps, improvementLanesOpen, evolutionPassOpen, DynamicContextLedger, actorPolicy, actorReach, type ActorReach, type BackendHost,
@@ -160,7 +160,7 @@ import {
   OwnerAnswersSchema, REPORT_TOOL,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ProfileCatalogEnvelope,
   toolsInWorkMode, type TaskPlan, withTaskPlan, providersInWorkMode, currentWorkMode, requireWorkModePermission, McpProtocolFailureSchema, McpToolError,
-  type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing,
+  type ResolvedTurnProfile, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing,
   type AgentInbox,
   childContextResolver,
 } from "@kinu.run/core";
@@ -289,12 +289,6 @@ function readCliCwd(body?: JsonObject): string | null {
  * task, not a verdict on the previous turn. Everything else is a conversation. */
 export function readTurnContinuity(body?: JsonObject): TurnContinuity {
   return body?.oneShot === true ? 'independent_task' : 'conversation';
-}
-
-export function readTurnTier(body?: JsonObject): TierId | undefined {
-  const parsed = v.safeParse(TierIdSchema, body?.tier);
-
-  return parsed.success ? parsed.output : undefined;
 }
 
 const CompactionDetailSchema = v.optional(JsonValueSchema);
@@ -1718,7 +1712,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected abstract hostedQuestions(): HostedOwnerQuestions;
 
   /** An owner's words to an agent, resolved once its chat has reserved them, as the root's `admit` is. */
-  protected abstract hostedAdmit(actorId: string, input: { readonly text: string; readonly files: readonly PromptFile[]; readonly id: string; readonly mode: WorkMode }): Promise<void>;
+  protected abstract hostedAdmit(actorId: string, input: SentWords & { readonly id: string }): Promise<void>;
 
   protected abstract hostedWindowName(actorId: string): string | null;
 
@@ -3853,7 +3847,7 @@ export abstract class ActorAgent extends Agent<Env> {
       text: '',
     });
 
-    const explicitTier = readTurnTier(this.turnDrivingMetadata());
+    const explicitTier = metadataTier(this.turnDrivingMetadata());
 
     const assembled = await assembleActorTurn(
       { ...surface.sources, toolset: () => surface.tools, externalTools: async () => surface.surface.external },

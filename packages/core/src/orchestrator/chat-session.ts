@@ -89,6 +89,11 @@ interface CommittedTurn {
 /** Reported rather than thrown, because the signal settle after it must run either way. */
 type TurnCommit = { readonly committed: CommittedTurn } | { readonly failure: KinuError };
 
+/** A `step-cut` as a chat stream carries it to a client, one that watches the turn from another process. */
+export const STEP_CUT_CHUNK = 'data-kinu-step-cut';
+
+export const StepCutDataSchema = v.object({ stepIndex: v.number() });
+
 export type SessionEvent =
   | { type: 'turn-start'; kind: 'user' | 'programmatic'; text: string; event?: string; workMode: WorkMode;
       /** Whom it answers, as its admission stored it (`turn-authorship.ts`). */
