@@ -105,7 +105,7 @@ import type { ExecutorInfo } from "@kinu.run/core";
 import type { DeploySnapshot } from "@kinu.run/core/deploy";
 import type {
   ChatHistoryEntry, ContextComposition, DirEntry, ExplorationCanvasRun,
-  FileCheckpointEntry, FileCheckpointListing, ForkRunParams,
+  FileCheckpointEntry, FileCheckpointListing, ForkRunParams, GepaRunSummary,
   ForkRunSummary, HeadRunView, MountInfo, NodeTranscriptView, Page, PageRequest,
   AccountSpend, PendingAction, ProducerSpend, SearchTreeRow, Usage, WorkspaceSpend,
 } from "@kinu.run/core";
@@ -3860,10 +3860,17 @@ const QUALITY_WINDOW = {
   rated: 26, thumbs: 6, turns: 35,
 };
 
+/** Typed so the fixtures track `GepaRunSummary`, its stop reasons included. */
 const GEPA_RUNS = [
-  { runId: "gepa_2", target: "scaffold", startedAt: NOW - 3 * 864e5, status: "completed", winnerId: "cand_2b", iterations: 6, metricCalls: 48 },
-  { runId: "gepa_1", target: "scaffold", startedAt: NOW - 12 * 864e5, status: "completed", winnerId: "cand_1c", iterations: 4, metricCalls: 32 },
-];
+  {
+    runId: "gepa_2", target: "scaffold", targetRef: null, startedAt: NOW - 3 * 864e5, endedAt: NOW - 3 * 864e5 + 6e5,
+    status: "completed", stopReason: "no_improvement_possible", winnerId: "cand_2b", iterations: 6, metricCalls: 48,
+  },
+  {
+    runId: "gepa_1", target: "scaffold", targetRef: null, startedAt: NOW - 12 * 864e5, endedAt: NOW - 12 * 864e5 + 9e5,
+    status: "completed", stopReason: "iterations_exhausted", winnerId: "cand_1c", iterations: 4, metricCalls: 32,
+  },
+] satisfies GepaRunSummary[];
 
 const GEPA_DETAIL = {
   run: GEPA_RUNS[0],
@@ -3890,6 +3897,9 @@ const evolutionRpc: SocketCall = async <T,>(method: string, args?: unknown[]): P
   if (method === "getQualityWindow") return rpcResult(QUALITY_WINDOW).json<T>();
 
   if (method === "getGepaRuns") return rpcResult(GEPA_RUNS).json<T>();
+
+  // A record: the blanket `[]` reads as a changelog that failed to load.
+  if (method === "getEvolutionChangelog") return rpcResult(v.parse(JsonValueSchema, CHANGELOG)).json<T>();
 
   if (method === "getGepaRun") {
     const [runId] = v.parse(v.tuple([v.string()]), args);

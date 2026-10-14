@@ -1,7 +1,7 @@
 import { useState, useCallback } from "react";
 import { Loader } from "@cloudflare/kumo";
 import { DatabaseIcon } from "@phosphor-icons/react";
-import { scoreInterval, type GepaRunSummary, type QualityDay } from "@kinu.run/core";
+import { scoreInterval, type GepaRunSummary, type GepaStopReason, type QualityDay } from "@kinu.run/core";
 import { StatusDot, toneFill, type StatusTone } from "@/components/ui/Status";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource, useReloadWhenMoved } from "@/hooks/use-async-resource";
@@ -13,10 +13,18 @@ type GepaRunDetail = WorkspaceAnswer<"getGepaRun">;
 /** A running run is read again until it finishes. */
 const runningAgain = (detail: GepaRunDetail | null): number | null => (detail?.run?.status === "running" ? 5000 : null);
 
-/** How a GEPA run stands, here and in Settings. */
-export const GEPA_TONE = {
+/** How a self-tuning run stands. */
+const GEPA_TONE = {
   completed: "success", running: "live", aborted: "neutral",
 } satisfies Record<GepaRunSummary["status"], StatusTone>;
+
+/** Why a run ended, as the owner reads it. */
+const RUN_ENDED = {
+  iterations_exhausted: "Ran every round it had",
+  metric_budget_exhausted: "Used its whole scoring budget",
+  no_improvement_possible: "Found nothing new to try",
+  aborted: "Stopped before it finished",
+} satisfies Record<GepaStopReason, string>;
 
 export function GepaView({ rpc }: { rpc: WorkspaceRpc }) {
   const [sel, setSel] = useState<string | null>(null);
@@ -41,7 +49,7 @@ export function GepaView({ rpc }: { rpc: WorkspaceRpc }) {
           <button key={r.runId} data-gepa-run={r.runId} aria-pressed={sel === r.runId} onClick={() => { setSel(r.runId); setPicks((made) => made + 1); }}
             className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left transition-colors ${sel === r.runId ? "p-fill" : "p-card-hover"}`}>
             <StatusDot tone={GEPA_TONE[r.status]} />
-            <span className="p-row-text p-text-2 flex-1 truncate">{r.target} · {r.iterations} iters · {r.metricCalls} evals</span>
+            <span className="p-row-text p-text-2 flex-1 truncate">{r.target} · {r.stopReason === null ? "Running" : RUN_ENDED[r.stopReason]}</span>
             <span className="p-meta p-text-3 shrink-0">{new Date(r.startedAt).toLocaleDateString()}</span>
           </button>
         ))}

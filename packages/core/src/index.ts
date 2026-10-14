@@ -1871,7 +1871,7 @@ export type {
   EvalInstance, MetricOutcome, GepaMetric, ReflectionLM,
   GepaCandidate, GepaConstraints, GepaBudget, GepaConfig,
   GepaIterationState, GepaProgressHooks, GepaResult,
-  GepaRunSummary,
+  GepaRunSummary, GepaStopReason,
   GepaParetoEntry,
 } from './evolution/gepa/index';
 

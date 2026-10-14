@@ -10,10 +10,15 @@ import {
   computeParetoFront,
 } from './pareto';
 import type {
-  GepaCandidate, GepaResult, GepaProgressHooks,
+  GepaCandidate, GepaProgressHooks,
 } from './types';
 
 const GepaRunStatusSchema = v.picklist(['running', 'completed', 'aborted']);
+
+/** Why a run ended: the engine's reasons (`GepaResult['stopReason']`, which a finish is typed against), and `aborted`. */
+const GepaStopReasonSchema = v.picklist(['iterations_exhausted', 'metric_budget_exhausted', 'no_improvement_possible', 'aborted']);
+
+export type GepaStopReason = v.InferOutput<typeof GepaStopReasonSchema>;
 
 const ScoreMapSchema = v.record(v.string(), v.number());
 
@@ -122,7 +127,7 @@ export function finishGepaRun(
   args: {
     runId: string;
     status: 'completed' | 'aborted';
-    stopReason: GepaResult['stopReason'] | 'aborted';
+    stopReason: GepaStopReason;
     winnerId: string | null;
     metricCalls: number;
     iterations: number;
@@ -147,7 +152,8 @@ export interface GepaRunSummary {
   startedAt: number;
   endedAt: number | null;
   status: 'running' | 'completed' | 'aborted';
-  stopReason: string | null;
+  /** Null while it runs. */
+  stopReason: GepaStopReason | null;
   winnerId: string | null;
   metricCalls: number;
   iterations: number;
@@ -177,7 +183,7 @@ export function listGepaRuns(sql: SqlExecutor, actor: ActorHandle, limit = 20): 
     startedAt: r.started_at,
     endedAt: r.ended_at,
     status: v.parse(GepaRunStatusSchema, r.status),
-    stopReason: r.stop_reason,
+    stopReason: r.stop_reason === null ? null : v.parse(GepaStopReasonSchema, r.stop_reason),
     winnerId: r.winner_id,
     metricCalls: r.metric_calls,
     iterations: r.iterations,
