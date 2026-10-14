@@ -501,6 +501,8 @@ const SHARED_PACKAGE = new RegExp(
 const TsconfigSchema = v.object({
   compilerOptions: v.optional(v.object({
     paths: v.optional(v.record(v.string(), v.array(v.string()))),
+    jsx: v.optional(v.string()),
+    jsxImportSource: v.optional(v.string()),
   })),
 });
 
@@ -558,11 +560,16 @@ export function withoutComments(text: string): string {
  * names mentioned tsconfig. Comments are stripped first, string-aware so a `//`
  * inside a path is not mistaken for one.
  */
-function aliasesOf(pkg: string): readonly (readonly [string, string])[] {
+function compilerOptionsOf(pkg: string): v.InferOutput<typeof TsconfigSchema>['compilerOptions'] {
   const path = `${root}${pkg}/tsconfig.json`;
 
-  if (!existsSync(path)) return [];
-  const { compilerOptions } = v.parse(TsconfigSchema, JSON.parse(withoutComments(readFileSync(path, 'utf8'))));
+  if (!existsSync(path)) return undefined;
+
+  return v.parse(TsconfigSchema, JSON.parse(withoutComments(readFileSync(path, 'utf8')))).compilerOptions;
+}
+
+function aliasesOf(pkg: string): readonly (readonly [string, string])[] {
+  const compilerOptions = compilerOptionsOf(pkg);
 
   return Object.entries(compilerOptions?.paths ?? {}).flatMap(([pattern, targets]) => {
     const target = targets[0];
@@ -650,12 +657,41 @@ interface Graph {
   readonly edges: number;
 }
 
+/**
+ * The module the compiler imports for a file's JSX, or none: under an automatic runtime (`react-jsx`,
+ * `react-jsxdev`) every element compiles to a call into `<jsxImportSource>/jsx-runtime`, `react` by default, which
+ * the source never names. A component therefore depends on React as surely as one that imports it, and a shared
+ * package whose own tsconfig compiles no JSX cannot hold it.
+ */
+function jsxRuntimeOf(pkg: string): string | null {
+  const options = compilerOptionsOf(pkg);
+
+  if (options?.jsx !== 'react-jsx' && options?.jsx !== 'react-jsxdev') return null;
+
+  return `${options.jsxImportSource ?? 'react'}/${options.jsx === 'react-jsxdev' ? 'jsx-dev-runtime' : 'jsx-runtime'}`;
+}
+
+function writesJsx(tree: SyntaxNode): boolean {
+  let found = false;
+
+  walk(tree, (node) => { found ||= node.raw.type === 'JSXElement' || node.raw.type === 'JSXFragment'; });
+
+  return found;
+}
+
 function buildGraph(sources: ReadonlyMap<string, string>): Graph {
   const known = new Set(sources.keys());
   const specifiers = new Map<string, readonly string[]>();
+  const runtimes = new Map<string, string | null>();
 
   for (const [file, text] of sources) {
-    specifiers.set(file, moduleSpecifiers(parse(file, text).root));
+    const tree = parse(file, text).root;
+    const pkg = file.split('/').slice(0, 2).join('/');
+
+    if (!runtimes.has(pkg)) runtimes.set(pkg, jsxRuntimeOf(pkg));
+    const runtime = runtimes.get(pkg) ?? null;
+
+    specifiers.set(file, [...moduleSpecifiers(tree), ...(runtime !== null && writesJsx(tree) ? [runtime] : [])]);
   }
 
   const importable = new Set<string>();

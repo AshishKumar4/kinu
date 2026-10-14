@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { findAsymmetries, keyOf } from './capability-parity';
+import { findAsymmetries, findMovable, keyOf } from './capability-parity';
 
 const contracts = `
 export interface WorkspaceAuthority { workspaceId: string; ownerUserId: string }
@@ -145,5 +145,27 @@ describe('inherited required members', () => {
   test('a complete derived turn still reports the behaviour it omits', () => {
     expect(surveyDerived(`const options = { model: m, system: s, history: h, tools: t, meter: gauge };`))
       .toEqual(['asymmetry DerivedChatOptions.extensions#absent-in-cf']);
+  });
+});
+
+/*
+ * A component imports nothing a shared package could not, yet compiles to calls into `react/jsx-runtime`: the web
+ * app's tsconfig sets `"jsx": "react-jsx"`, and no shared package compiles JSX. Before the scan knew the compiler's
+ * import, `Status.tsx` read as movable and was locked as an exemption.
+ */
+describe('a module that writes JSX depends on the runtime its package compiles it with', () => {
+  const movable = (file: string, text: string) => findMovable(new Map([[file, text]])).movable.map((entry) => entry.file);
+
+  test('a component in the web app is pinned there by its JSX alone', () => {
+    expect(movable('packages/cf-backend/src/components/ui/Dot.tsx', 'export const Dot = () => <span className="dot" />;\n')).toEqual([]);
+  });
+
+  test('so is a fragment', () => {
+    expect(movable('packages/cf-backend/src/components/ui/Pair.tsx', 'export const Pair = () => <><b /><i /></>;\n')).toEqual([]);
+  });
+
+  test('the same file writing no JSX is still movable', () => {
+    expect(movable('packages/cf-backend/src/components/ui/tone.ts', 'export const tone = (ok: boolean): string => (ok ? "success" : "danger");\n'))
+      .toEqual(['packages/cf-backend/src/components/ui/tone.ts']);
   });
 });
