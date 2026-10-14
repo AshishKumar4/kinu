@@ -61,23 +61,18 @@ describe('the orchestrator dynamic context reads its own planes', () => {
     expect(await modelContext(workspace.agent)).toContain('the build needs node 22');
   });
 
-  test('a raised device consent waits on the user in the block', async () => {
+  test('a raised device consent waits on the user in the block, until they answer', async () => {
     const { agent } = orchestratorHarness();
+    const ask = { deviceId: 'dev-1', deviceLabel: 'device', method: 'shell', command: 'git push origin main' };
 
-    // Settle the caller's promise afterward so this fixture leaves no work detached.
-    const consent = agent.awaitDeviceConsent({
-      deviceId: 'dev-1',
-      deviceLabel: 'device',
-      method: 'shell',
-      command: 'git push origin main',
-    });
-
+    expect(await agent.askDeviceConsent(ask)).toBe('queued');
     expect(await modelContext(agent)).toContain('git push origin main');
 
     const [pendingConsent] = await agent.listPendingConsents();
 
     if (!pendingConsent) throw new Error('expected a pending device consent');
     expect(await agent.resolveDeviceConsent(pendingConsent.consentId, 'deny')).toEqual({ ok: true });
-    await expect(consent).resolves.toBe('deny');
+    expect(await modelContext(agent)).not.toContain('git push origin main');
+    expect(await agent.askDeviceConsent(ask)).toBe('denied');
   });
 });

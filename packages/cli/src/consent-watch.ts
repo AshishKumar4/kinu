@@ -1,6 +1,7 @@
 /**
  * The one device-consent poll/present/resolve loop for every CLI surface. Each consent is presented at most once while pending;
- * stopping aborts an in-flight question and best-effort denies it so the blocked device RPC unblocks.
+ * stopping aborts an in-flight question and leaves its ask waiting: no device call blocks on it, and an unanswered ask is
+ * no answer, so another surface can still give one.
  */
 
 import type { PendingDeviceConsent } from '@kinu.run/core';
@@ -57,18 +58,7 @@ export function watchDeviceConsents(
       const outcome = await opts.present(consent, abort.signal);
       handled.add(consent.consentId);
 
-      if (outcome === 'cancelled') {
-        // Deny so the blocked device RPC unblocks; reported here because the outer guard drops 'cancelled' failures.
-        try {
-          await consents.resolve(consent.consentId, 'deny');
-        } catch (err) {
-          opts.note('error', `Could not withdraw the request to use ${consent.deviceLabel}. It expires on its own: ${renderThrownChain({ cause: err })}`);
-        }
-
-        return;
-      }
-
-      if (outcome === null) return;
+      if (outcome === 'cancelled' || outcome === null) return;
       const result = await consents.resolve(consent.consentId, outcome);
 
       if (abort.signal.aborted) return;

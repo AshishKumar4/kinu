@@ -176,8 +176,8 @@ describe('watchDeviceConsents', () => {
     expect(notes).toEqual([]);
   });
 
-  test('stop() mid-question cancels the prompt and best-effort denies, silently', async () => {
-    const { surface, resolved, settled } = makeSurface([consent('c1')]);
+  test('stop() mid-question cancels the prompt and leaves the ask waiting, silently', async () => {
+    const { surface, resolved } = makeSurface([consent('c1')]);
     const { notes, note } = collectNotes();
     const asked = Promise.withResolvers<void>();
 
@@ -195,10 +195,9 @@ describe('watchDeviceConsents', () => {
 
     await asked.promise;
     watcher.stop();
-    await settled(1);
     await watcher.done;
 
-    expect(resolved).toEqual([{ consentId: 'c1', decision: 'deny' }]);
+    expect(resolved).toEqual([]);
     expect(notes).toEqual([]);
   });
 

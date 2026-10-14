@@ -719,9 +719,9 @@ describe('the daemon keepalive, answered by the hub', () => {
   test('a pasted "ping" on a terminal pane is keystrokes, never an answered probe', async () => {
     const harness = createTestUserDO();
     const workspace = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
-    const { device } = await connectDevice(harness);
+    const { deviceId, device } = await connectDevice(harness);
     await harness.userDO.webSocketMessage(device.ws, JSON.stringify(CAPABLE_HELLO));
-    harness.consentDecision = 'always';
+    harness.grantDevice(WORKSPACE, deviceId);
 
     // The open frame is answered by hand: this socket pair has no far end.
     const opening = harness.userDO.openDeviceTerminal({ workspaceToken: workspace }, WORKSPACE, { cols: 80, rows: 24 });

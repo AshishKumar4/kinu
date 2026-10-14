@@ -158,7 +158,7 @@ async function cloudflare(opens: BackendOpening): Promise<SharedBackend> {
   const daemon = pcAgentDaemon(opens.gitBin === undefined ? {} : { gitBin: opens.gitBin });
   const device = await deviceHarness('ashish@studio', async (frame) => await daemon.answer(frame) ?? null);
   await device.userDO.setDeviceTier(await testOwner(), device.deviceId, 'raw');
-  device.consentDecision = 'always';
+  device.grantDevice(WORKSPACE, device.deviceId);
   const harness = orchestratorHarness(undefined, { userDO: device.userDO, workspace: WORKSPACE, ownerUserId: 'test-user-do' });
   harness.agent.harnessHoldsCapability(device.workspace.workspaceToken);
   const { agent, db } = harness;

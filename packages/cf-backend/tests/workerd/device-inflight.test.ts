@@ -313,10 +313,10 @@ describe('withdrawing a workspace\'s consent while its command runs', () => {
     at.release();
     expect(answered(await running)).toMatchObject({ exitCode: 0 });
 
-    const next = settling(account(owner).run('ws-consent', nextDeviceRequestId(), AGENT, 'bun run deploy'));
-
-    await account(owner).answerConsent('ws-consent', 'deny');
-    expect(await next).toMatchObject({ ok: false });
+    // Asked again: the next command parks NOT RUN on a card of its own, so nothing reaches the machine.
+    expect(await settling(account(owner).run('ws-consent', nextDeviceRequestId(), AGENT, 'bun run deploy')))
+      .toMatchObject({ ok: false, error: expect.stringContaining("waits on the owner's consent") });
+    expect(await account(owner).pendingConsents('ws-consent')).toBe(1);
     expect(asked(at, 'exec')).toEqual(['bun run build']);
     at.close();
   });

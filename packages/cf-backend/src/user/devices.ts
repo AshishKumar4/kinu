@@ -1,7 +1,7 @@
 import { Effect } from 'effect';
 import { DeviceHelloSchema, DeviceUpdateHelloSchema, DEVICE_FRAMES } from '@kinu.run/core';
 import {
-  type DeviceExecOutput, NO_DEVICE_CONNECTED, watchedOutput, SEVERAL_DEVICES_CONNECTED, codexEgressAllowed, chatgptEgressAllowed, type RelayedProvider, isWorkspaceName, nanoid, type DeviceCheckpointHint, type DeviceConsentRequest, type JsonObject, type JsonValue, CapabilityDeniedError, ownerCaller, type UserCaller, type ResolvedCaller, DeviceSocketHub, DeviceRequestLedger, type ClaimedDeviceRequest, type DeviceCancelOutcome, randomToken, sha256Hex, type DeviceChatGptStatus, DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED, DEVICE_UPDATE, cliArtifactPath, deviceUpdateState, readBuildStamp, BuildStampSchema, type BuildStamp, type DeviceUpdateFrame, type DeviceUpdateState, parseDeviceCancelAnswer, nextDeviceRequestId, DEVICE_METHOD, DEVICE_ERRORS, deviceFailure, deviceMethodHas, type DeviceTunnel, DEVICE_TIERS, effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix, sandboxCause, summarizeDeviceAction, type DeviceConsentDecision, type DeviceStatus, type DeviceFileScope, type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
+  type DeviceExecOutput, NO_DEVICE_CONNECTED, watchedOutput, SEVERAL_DEVICES_CONNECTED, codexEgressAllowed, chatgptEgressAllowed, type RelayedProvider, isWorkspaceName, nanoid, type DeviceCheckpointHint, type DeviceConsentRequest, type JsonObject, type JsonValue, CapabilityDeniedError, ownerCaller, type UserCaller, type ResolvedCaller, DeviceSocketHub, DeviceRequestLedger, type ClaimedDeviceRequest, type DeviceCancelOutcome, randomToken, sha256Hex, type DeviceChatGptStatus, deviceConsentOutcome, type DeviceConsentOutcome, DEVICE_UPDATE, cliArtifactPath, deviceUpdateState, readBuildStamp, BuildStampSchema, type BuildStamp, type DeviceUpdateFrame, type DeviceUpdateState, parseDeviceCancelAnswer, nextDeviceRequestId, DEVICE_METHOD, DEVICE_ERRORS, deviceFailure, deviceMethodHas, type DeviceTunnel, DEVICE_TIERS, effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix, sandboxCause, summarizeDeviceAction, type DeviceStatus, type DeviceFileScope, type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
 } from '@kinu.run/core';
 import { attemptInItsWords, diagnostics, KinuError, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -14,7 +14,9 @@ interface DeviceConsentCheck {
   params: JsonValue[];
   /** Present when the caller is the named workspace itself; the card then asks for the
    *  workspace's binding, which is what "always" records. */
-  workspaceName?: string;
+  workspaceName?: string | undefined;
+  /** The agent that made the call, whom the owner's answer wakes; absent for the owner's own. */
+  actorId?: string | undefined;
 }
 
 /** Measured from the last rotation (every accepted connect), so a copy of `device.json`
@@ -661,12 +663,13 @@ export class UserDevices {
       if (consentAgent !== undefined) {
         // Consent is keyed on the proven workspace, never the claimed name, so an agent cannot
         // ride a sibling workspace's grant.
-        const consent = yield* attemptInItsWords('io', () => this.checkDeviceConsent({
+        const consent = yield* this.checkDeviceConsent({
           agentName: consentAgent, deviceId, method, params,
           workspaceName: resolved.kind === 'workspace' ? resolved.workspace : undefined,
-        }));
+          actorId: opts?.actorId,
+        });
 
-        if (!consent.allowed) return yield* Effect.fail(new KinuError('denied', consent.reason));
+        if (!consent.allowed) return yield* Effect.fail(new KinuError(consent.code, consent.reason));
       }
 
       const frameSandbox = deviceMethodHas(method, 'deviceView') ? yield* this.frameSandboxFor(method, deviceId, proven) : null;
@@ -1020,54 +1023,27 @@ export class UserDevices {
     );
   }
 
-  /**
-   * Is this workspace bound to this device? Fails closed, but `reason` distinguishes a refusal from
-   * an unanswered prompt, so an unattended agent does not read an expiry as a revoked capability.
-   */
-  private async checkDeviceConsent(check: DeviceConsentCheck): Promise<{ allowed: true } | { allowed: false; reason: string }> {
-    const { agentName, deviceId, method, params, workspaceName } = check;
-
-    const bound = this.getDeviceBinding(agentName, deviceId);
-
-    if (bound === 'allow') return { allowed: true };
-
-    if (bound === 'deny') return { allowed: false, reason: DEVICE_CONSENT_DENIED };
+  /** Is this workspace bound to this device? Core's rule decides (`deviceConsentOutcome`): a standing binding, else the
+   *  workspace's ask, which an unreachable workspace leaves unanswered rather than refused. */
+  private checkDeviceConsent(check: DeviceConsentCheck): Effect.Effect<DeviceConsentOutcome, KinuError> {
+    const { agentName, deviceId, method, params, workspaceName, actorId } = check;
     const action = summarizeDeviceAction(method, params);
-    let decision: DeviceConsentDecision;
+    const deviceLabel = this.deviceLabel(deviceId);
 
-    try {
-      const stub = this.host.env.OrchestratorAgent.get(this.host.env.OrchestratorAgent.idFromName(agentName));
+    const request: DeviceConsentRequest = {
+      deviceId, deviceLabel, method: action.method, command: action.command,
+      ...(workspaceName !== undefined && { workspaceName }), ...(actorId !== undefined && { actorId }),
+    };
 
-      const base: DeviceConsentRequest = {
-        deviceId,
-        deviceLabel: this.deviceLabel(deviceId),
-        method: action.method,
-        command: action.command,
-      };
-
-      const request: DeviceConsentRequest = workspaceName
-        ? { ...base, workspaceName }
-        : base;
-
-      decision = await stub.awaitDeviceConsent(request);
-    } catch (error) {
-      // Nobody was asked, so this is the unanswered case, not a refusal.
-      diagnostics.event('device.consent_unreachable', { error: renderThrownChain({ cause: error }) });
-
-      return { allowed: false, reason: DEVICE_CONSENT_UNANSWERED };
-    }
-
-    // Only "always" is remembered; "once", "deny" and "timeout" are per-call.
-    if (decision === 'deny') return { allowed: false, reason: DEVICE_CONSENT_DENIED };
-
-    if (decision === 'timeout') return { allowed: false, reason: DEVICE_CONSENT_UNANSWERED };
-
-    if (decision === 'always') {
-      this.setDeviceBinding(agentName, deviceId, 'allow', action);
-      await this.devicesMoved();
-    }
-
-    return { allowed: true };
+    return deviceConsentOutcome({
+      bound: this.getDeviceBinding(agentName, deviceId),
+      deviceLabel,
+      ask: attemptInItsWords('unavailable', () => this.host.env.OrchestratorAgent.get(this.host.env.OrchestratorAgent.idFromName(agentName)).askDeviceConsent(request)),
+      bind: attemptInItsWords('io', async () => {
+        this.setDeviceBinding(agentName, deviceId, 'allow', action);
+        await this.devicesMoved();
+      }),
+    });
   }
 
   async listDeviceConsents(caller: UserCaller): Promise<Array<{

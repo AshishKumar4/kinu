@@ -8,14 +8,14 @@ import {
   createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO,
 } from './helpers/user-do';
 import {
-  CAPABLE_HELLO, OTHER_WORKSPACE, WORKSPACE, daemon, deviceHarness,
+  CAPABLE_HELLO, CONSENT_REFUSED, OTHER_WORKSPACE, WORKSPACE, daemon, deviceHarness,
 } from './helpers/device-harness';
 import type { UserCaller } from '@kinu.run/core';
 import { connectedDevices, DeviceSocketHub, soleLiveDevice, DEVICE_FRAMES, DEVICE_METHOD } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { appProbe, concretePath, PROBE_ORIGIN } from './helpers/app-probe';
 import {
-  DEVICE_CONNECT_PATH, DEVICE_CONSENT_DENIED, DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES, JsonValueSchema, nextDeviceRequestId,
+  DEVICE_CONNECT_PATH, DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES, JsonValueSchema, nextDeviceRequestId,
   NO_DEVICE_CONNECTED, type JsonValue,
 } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
@@ -41,9 +41,9 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     // An unanswered prompt is not a refusal, but it is not a grant either.
     harness.consentDecision = 'deny';
 
-    await expect(harness.userDO.deviceRpc(harness.workspace, 'exec', ['rm -rf ~/work'], {
+    await expect(harness.deviceCall(harness.workspace, 'exec', ['rm -rf ~/work'], {
       agentName: WORKSPACE,
-    })).rejects.toThrow(DEVICE_CONSENT_DENIED);
+    })).rejects.toThrow(CONSENT_REFUSED);
 
     // Refused before the device: at the executor boundary, not a message the daemon ignores.
     expect(harness.deviceFrames.filter((f) => f.method === 'exec')).toEqual([]);
@@ -61,12 +61,12 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     harness.consentDecision = 'always';
 
     // Recorded on the base tier a card can record; an exec asks every time, deliberately.
-    await harness.userDO.deviceRpc(harness.workspace, 'readRange', ['/home/me/a.md', 0, 64], {
+    await harness.deviceCall(harness.workspace, 'readRange', ['/home/me/a.md', 0, 64], {
       agentName: WORKSPACE,
     });
     expect(harness.consentPrompts).toHaveLength(1);
 
-    await harness.userDO.deviceRpc(harness.workspace, 'readRange', ['/home/me/b.md', 0, 64], {
+    await harness.deviceCall(harness.workspace, 'readRange', ['/home/me/b.md', 0, 64], {
       agentName: WORKSPACE,
     });
     expect(harness.consentPrompts).toHaveLength(1);
@@ -81,11 +81,11 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     // own Sandbox switch.
     const harness = await deviceHarness();
     harness.consentDecision = 'always';
-    await harness.userDO.deviceRpc(harness.workspace, 'readRange', ['/tmp/a', 0, 64], { agentName: WORKSPACE });
+    await harness.deviceCall(harness.workspace, 'readRange', ['/tmp/a', 0, 64], { agentName: WORKSPACE });
     expect(harness.consentPrompts).toHaveLength(1);
 
     harness.consentDecision = 'deny';
-    await harness.userDO.deviceRpc(harness.workspace, 'exec', ['cat /etc/passwd'], { agentName: WORKSPACE });
+    await harness.deviceCall(harness.workspace, 'exec', ['cat /etc/passwd'], { agentName: WORKSPACE });
 
     expect(harness.consentPrompts).toHaveLength(1);
     expect(harness.deviceFrames.filter((f) => f.method === 'exec').map((f) => f.params[0]))
@@ -97,13 +97,13 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     harness.consentDecision = 'deny';
 
     // The /pc mount reads through this same call, so an ungranted read is refused too.
-    await expect(harness.userDO.deviceRpc(harness.workspace, 'readRange', ['/home/me/.ssh/id_ed25519', 0, 64], {
+    await expect(harness.deviceCall(harness.workspace, 'readRange', ['/home/me/.ssh/id_ed25519', 0, 64], {
       agentName: WORKSPACE,
-    })).rejects.toThrow(DEVICE_CONSENT_DENIED);
+    })).rejects.toThrow(CONSENT_REFUSED);
     expect(harness.deviceFrames.filter((f) => f.method === 'readRange')).toEqual([]);
 
     harness.consentDecision = 'always';
-    await harness.userDO.deviceRpc(harness.workspace, 'readRange', ['/home/me/notes.md', 0, 64], {
+    await harness.deviceCall(harness.workspace, 'readRange', ['/home/me/notes.md', 0, 64], {
       agentName: WORKSPACE,
     });
     expect(harness.deviceFrames.filter((f) => f.method === 'readRange').map((f) => f.params[0]))
@@ -114,7 +114,7 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
   test('revoking the grant stops the next call — no restart, no cache to wait out', async () => {
     const harness = await deviceHarness();
     harness.consentDecision = 'always';
-    await harness.userDO.deviceRpc(harness.workspace, 'exec', ['ls'], { agentName: WORKSPACE });
+    await harness.deviceCall(harness.workspace, 'exec', ['ls'], { agentName: WORKSPACE });
     expect(harness.deviceFrames.filter((f) => f.method === 'exec')).toHaveLength(1);
 
     expect(await harness.userDO.revokeDeviceConsent(await testOwner(), WORKSPACE, harness.deviceId))
@@ -123,8 +123,8 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     // Revocation deletes the remembered policy rather than storing a refusal, so the workspace is
     // asked again.
     harness.consentDecision = 'deny';
-    await expect(harness.userDO.deviceRpc(harness.workspace, 'exec', ['ls'], { agentName: WORKSPACE }))
-      .rejects.toThrow(DEVICE_CONSENT_DENIED);
+    await expect(harness.deviceCall(harness.workspace, 'exec', ['ls'], { agentName: WORKSPACE }))
+      .rejects.toThrow(CONSENT_REFUSED);
     expect(harness.deviceFrames.filter((f) => f.method === 'exec')).toHaveLength(1);
     await harness.closeDeviceHarness();
   });
@@ -132,12 +132,12 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
   test('a grant belongs to one workspace: the sibling is still asked', async () => {
     const harness = await deviceHarness();
     harness.consentDecision = 'always';
-    await harness.userDO.deviceRpc(harness.workspace, 'exec', ['ls'], { agentName: WORKSPACE });
+    await harness.deviceCall(harness.workspace, 'exec', ['ls'], { agentName: WORKSPACE });
     harness.consentPrompts.length = 0;
 
     harness.consentDecision = 'deny';
-    await expect(harness.userDO.deviceRpc(harness.sibling, 'exec', ['ls'], { agentName: OTHER_WORKSPACE }))
-      .rejects.toThrow(DEVICE_CONSENT_DENIED);
+    await expect(harness.deviceCall(harness.sibling, 'exec', ['ls'], { agentName: OTHER_WORKSPACE }))
+      .rejects.toThrow(CONSENT_REFUSED);
     expect(harness.consentPrompts.map((p) => p.workspace)).toEqual([OTHER_WORKSPACE]);
     await harness.closeDeviceHarness();
   });
@@ -146,13 +146,13 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     const harness = await deviceHarness();
     harness.consentDecision = 'deny';
 
-    await expect(harness.userDO.deviceRpc(harness.workspace, 'exec', ['cat /etc/passwd']))
-      .rejects.toThrow(DEVICE_CONSENT_DENIED);
-    await expect(harness.userDO.deviceRpc(
+    await expect(harness.deviceCall(harness.workspace, 'exec', ['cat /etc/passwd']))
+      .rejects.toThrow(CONSENT_REFUSED);
+    await expect(harness.deviceCall(
       harness.workspace,
       'checkpointRestore',
       [WORKSPACE, '/home/me/project', 'cp-1'],
-    )).rejects.toThrow(DEVICE_CONSENT_DENIED);
+    )).rejects.toThrow(CONSENT_REFUSED);
 
     expect(harness.deviceFrames).toEqual([]);
     expect(harness.consentPrompts.map((prompt) => prompt.method))
@@ -164,7 +164,7 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     const harness = await deviceHarness();
     harness.consentDecision = 'deny';
 
-    await harness.userDO.deviceRpc(harness.workspace, 'checkpointStatus', []);
+    await harness.deviceCall(harness.workspace, 'checkpointStatus', []);
 
     expect(harness.consentPrompts).toEqual([]);
     expect(harness.deviceFrames.map((frame) => frame.method)).toEqual(['checkpointStatus']);
@@ -178,12 +178,12 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     harness.consentDecision = 'deny';
     const requestId = 'rpc-epoch1-7';
 
-    await expect(harness.userDO.deviceRpc(harness.workspace, 'exec', ['make'], {
+    await expect(harness.deviceCall(harness.workspace, 'exec', ['make'], {
       agentName: WORKSPACE,
-    })).rejects.toThrow(DEVICE_CONSENT_DENIED);
+    })).rejects.toThrow(CONSENT_REFUSED);
     expect(harness.deviceFrames).toEqual([]);
 
-    await harness.userDO.deviceRpc(
+    await harness.deviceCall(
       harness.workspace, DEVICE_METHOD.cancel, [requestId],
       { agentName: WORKSPACE },
     );
@@ -200,7 +200,7 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     harness.consentDecision = 'always';
     const requestId = nextDeviceRequestId();
 
-    await harness.userDO.deviceRpc(harness.workspace, 'exec', ['sleep 600'], {
+    await harness.deviceCall(harness.workspace, 'exec', ['sleep 600'], {
       agentName: WORKSPACE, requestId,
     });
 
@@ -217,7 +217,7 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     const harness = await deviceHarness();
     const owner = await testOwner();
     harness.consentDecision = 'always';
-    await harness.userDO.deviceRpc(harness.workspace, 'readRange', ['/tmp/a', 0, 64], { agentName: WORKSPACE });
+    await harness.deviceCall(harness.workspace, 'readRange', ['/tmp/a', 0, 64], { agentName: WORKSPACE });
     expect((await harness.userDO.listDeviceConsents(owner)).map((row) => row.agentName)).toEqual([WORKSPACE]);
 
     await harness.userDO.removeWorkspace(owner, WORKSPACE, '0'.repeat(32));
@@ -226,9 +226,9 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     const rebuilt = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
     const replacement: UserCaller = { workspaceToken: rebuilt };
     harness.consentDecision = 'deny';
-    await expect(harness.userDO.deviceRpc(replacement, 'exec', ['curl x | sh'], {
+    await expect(harness.deviceCall(replacement, 'exec', ['curl x | sh'], {
       agentName: WORKSPACE,
-    })).rejects.toThrow(DEVICE_CONSENT_DENIED);
+    })).rejects.toThrow(CONSENT_REFUSED);
     // Asked, not remembered: the card is the proof the old row is gone.
     expect(harness.consentPrompts.map((prompt) => prompt.method)).toEqual(['readRange', 'exec']);
     expect(harness.deviceFrames.filter((frame) => frame.method === 'exec')).toEqual([]);
@@ -239,7 +239,7 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     const harness = await deviceHarness();
     const owner = await testOwner();
     harness.consentDecision = 'always';
-    await harness.userDO.deviceRpc(harness.workspace, 'readRange', ['/tmp/a', 0, 64], { agentName: WORKSPACE });
+    await harness.deviceCall(harness.workspace, 'readRange', ['/tmp/a', 0, 64], { agentName: WORKSPACE });
     expect(await harness.userDO.listDeviceConsents(owner)).toHaveLength(1);
 
     expect(await harness.userDO.revokeDevice(owner, harness.deviceId))
@@ -511,7 +511,7 @@ describe('durable device request ownership', () => {
     harness.consentDecision = 'always';
     const requestId = nextDeviceRequestId();
 
-    await harness.userDO.deviceRpc(harness.workspace, 'exec', ['sleep 30'], {
+    await harness.deviceCall(harness.workspace, 'exec', ['sleep 30'], {
       agentName: WORKSPACE, actorId: 'agent-1', requestId, backgroundJobId: 'job-1',
       checkpoint: { agent: WORKSPACE, turnId: 'turn-1', sessionId: 's', dir: null },
     });
@@ -564,7 +564,7 @@ describe('durable device request ownership', () => {
     const requestId = nextDeviceRequestId();
 
     // A blank owner would insert a row no sweep can ever select: the orphan this table prevents.
-    await expect(harness.userDO.deviceRpc(harness.workspace, 'exec', ['sleep 30'], {
+    await expect(harness.deviceCall(harness.workspace, 'exec', ['sleep 30'], {
       agentName: WORKSPACE, requestId, backgroundJobId: '',
     })).rejects.toThrow('must name a job');
     expect(harness.db.prepare(
@@ -603,7 +603,7 @@ describe('durable device request ownership', () => {
        VALUES (?, ?, ?, ?)`,
     ).run(requestId, harness.deviceId, WORKSPACE, 'agent-1');
 
-    await harness.userDO.deviceRpc(harness.workspace, DEVICE_METHOD.cancel, [requestId], {
+    await harness.deviceCall(harness.workspace, DEVICE_METHOD.cancel, [requestId], {
       agentName: WORKSPACE,
     });
 
@@ -638,7 +638,7 @@ describe('durable device request ownership', () => {
 
     const requestId = nextDeviceRequestId();
 
-    await expect(harness.userDO.deviceRpc(harness.workspace, 'exec', ['sleep 30'], {
+    await expect(harness.deviceCall(harness.workspace, 'exec', ['sleep 30'], {
       agentName: WORKSPACE, requestId,
     })).rejects.toThrow(NO_DEVICE_CONNECTED);
     expect(harness.db.prepare(
@@ -773,7 +773,7 @@ describe('device revocation admission', () => {
 
     const revocation = harness.userDO.revokeDevice(await testOwner(), harness.deviceId);
     const cancellation = await cancellationSent.promise;
-    await expect(harness.userDO.deviceRpc(harness.workspace, 'exec', ['true'], {
+    await expect(harness.deviceCall(harness.workspace, 'exec', ['true'], {
       agentName: WORKSPACE,
     })).rejects.toThrow(NO_DEVICE_CONNECTED);
     expect(cancellation.params).toEqual([requestId]);
@@ -804,7 +804,7 @@ describe('a device is visible before it is usable', () => {
   test('the same read reports the binding once it exists', async () => {
     const harness = await deviceHarness();
     harness.consentDecision = 'always';
-    await harness.userDO.deviceRpc(harness.workspace, 'readRange', ['/tmp/a', 0, 64], { agentName: WORKSPACE });
+    await harness.deviceCall(harness.workspace, 'readRange', ['/tmp/a', 0, 64], { agentName: WORKSPACE });
 
     expect(soleLiveDevice((await harness.userDO.deviceRuntimeStatus(harness.workspace)).devices)?.granted).toBe(true);
     expect(soleLiveDevice((await harness.userDO.deviceRuntimeStatus(harness.sibling)).devices)?.granted).toBe(false);
@@ -834,7 +834,7 @@ describe('asking for a machine when there is none', () => {
     const workspace = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
     const { deviceId } = await harness.userDO.registerDevice(await testOwner(), 'studio tower');
 
-    await expect(harness.userDO.deviceRpc({ workspaceToken: workspace }, 'exec', ['make build'], {
+    await expect(harness.deviceCall({ workspaceToken: workspace }, 'exec', ['make build'], {
       agentName: WORKSPACE,
     })).rejects.toThrow(NO_DEVICE_CONNECTED);
 
@@ -851,7 +851,7 @@ describe('asking for a machine when there is none', () => {
     const harness = createTestUserDO();
     const workspace = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
 
-    await expect(harness.userDO.deviceRpc({ workspaceToken: workspace }, 'exec', ['make build'], {
+    await expect(harness.deviceCall({ workspaceToken: workspace }, 'exec', ['make build'], {
       agentName: WORKSPACE,
     })).rejects.toThrow(NO_DEVICE_CONNECTED);
 
@@ -865,11 +865,11 @@ describe('asking for a machine when there is none', () => {
     const harness = createTestUserDO();
     const workspace = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
 
-    const first = harness.userDO.deviceRpc({ workspaceToken: workspace }, 'exec', ['make build'], {
+    const first = harness.deviceCall({ workspaceToken: workspace }, 'exec', ['make build'], {
       agentName: WORKSPACE,
     });
 
-    const retry = harness.userDO.deviceRpc({ workspaceToken: workspace }, 'exec', ['make build'], {
+    const retry = harness.deviceCall({ workspaceToken: workspace }, 'exec', ['make build'], {
       agentName: WORKSPACE,
     });
 
@@ -895,7 +895,7 @@ describe('asking for a machine when there is none', () => {
     const token = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
     const caller: UserCaller = { workspaceToken: token };
 
-    await expect(harness.userDO.deviceRpc(caller, 'exec', ['make build'], { agentName: WORKSPACE }))
+    await expect(harness.deviceCall(caller, 'exec', ['make build'], { agentName: WORKSPACE }))
       .rejects.toThrow(NO_DEVICE_CONNECTED);
     expect(harness.consentPrompts).toEqual([]);
     expect(harness.unavailableNotices).toEqual([{ workspace: WORKSPACE, devices: [] }]);
@@ -910,7 +910,7 @@ describe('asking for a machine when there is none', () => {
     expect(soleLiveDevice(seen.devices)?.granted).toBe(false);
 
     harness.consentDecision = 'always';
-    const result = await harness.userDO.deviceRpc(caller, 'exec', ['make build'], { agentName: WORKSPACE });
+    const result = await harness.deviceCall(caller, 'exec', ['make build'], { agentName: WORKSPACE });
 
     expect(result).toContain('"exitCode":0');
     expect(harness.deviceFrames.filter((f) => f.method === 'exec').map((f) => f.params[0]))
@@ -927,7 +927,7 @@ describe('asking for a machine when there is none', () => {
     const harness = createTestUserDO();
     const token = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
 
-    await expect(harness.userDO.deviceRpc({ workspaceToken: token }, 'exec', ['make build'], {
+    await expect(harness.deviceCall({ workspaceToken: token }, 'exec', ['make build'], {
       agentName: WORKSPACE,
     })).rejects.toThrow(NO_DEVICE_CONNECTED);
 
@@ -962,7 +962,7 @@ describe('asking for a machine when there is none', () => {
     const owner = await testOwner();
     await harness.userDO.registerDevice(owner, 'studio-tower');
 
-    await expect(harness.userDO.deviceRpc({ workspaceToken: first }, 'exec', ['make build'], {
+    await expect(harness.deviceCall({ workspaceToken: first }, 'exec', ['make build'], {
       agentName: WORKSPACE,
     })).rejects.toThrow(NO_DEVICE_CONNECTED);
     expect(harness.unavailableNotices.map((n) => n.workspace)).toEqual([WORKSPACE]);
@@ -995,9 +995,9 @@ describe('the owner\'s sequence: a live machine, an ungranted workspace, one ask
     const harness = await deviceHarness();
     harness.consentDecision = 'deny';
 
-    await expect(harness.userDO.deviceRpc(harness.workspace, 'exec', ['ls'], {
+    await expect(harness.deviceCall(harness.workspace, 'exec', ['ls'], {
       agentName: WORKSPACE,
-    })).rejects.toThrow(DEVICE_CONSENT_DENIED);
+    })).rejects.toThrow(CONSENT_REFUSED);
 
     expect(harness.consentPrompts).toEqual([{
       workspace: WORKSPACE,
@@ -1018,7 +1018,7 @@ describe('the machine the agent asked for, as the owner reads it', () => {
     const harness = createTestUserDO();
     const workspace = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
 
-    await expect(harness.userDO.deviceRpc({ workspaceToken: workspace }, 'exec', ['make'], {
+    await expect(harness.deviceCall({ workspaceToken: workspace }, 'exec', ['make'], {
       agentName: WORKSPACE,
     })).rejects.toThrow(NO_DEVICE_CONNECTED);
     expect(harness.unavailableNotices).toEqual([{ workspace: WORKSPACE, devices: [] }]);
@@ -1034,7 +1034,7 @@ describe('the machine the agent asked for, as the owner reads it', () => {
     const harness = await deviceHarness();
     harness.attachDevice(null);
 
-    await expect(harness.userDO.deviceRpc(harness.workspace, 'exec', ['make'], {
+    await expect(harness.deviceCall(harness.workspace, 'exec', ['make'], {
       agentName: WORKSPACE,
     })).rejects.toThrow(NO_DEVICE_CONNECTED);
     expect(harness.unavailableNotices).toHaveLength(1);
@@ -1052,9 +1052,9 @@ describe('the machine the agent asked for, as the owner reads it', () => {
     const harness = await deviceHarness();
     harness.consentDecision = 'deny';
 
-    await expect(harness.userDO.deviceRpc(harness.workspace, 'exec', ['make'], {
+    await expect(harness.deviceCall(harness.workspace, 'exec', ['make'], {
       agentName: WORKSPACE,
-    })).rejects.toThrow(DEVICE_CONSENT_DENIED);
+    })).rejects.toThrow(CONSENT_REFUSED);
     expect(harness.consentPrompts).toEqual([{
       workspace: WORKSPACE,
       method: 'exec',
@@ -1070,7 +1070,7 @@ describe('the machine the agent asked for, as the owner reads it', () => {
     const harness = await deviceHarness();
     harness.consentDecision = 'always';
 
-    await harness.userDO.deviceRpc(harness.workspace, 'exec', ['make'], {
+    await harness.deviceCall(harness.workspace, 'exec', ['make'], {
       agentName: WORKSPACE,
     });
     expect(harness.consentPrompts).toHaveLength(1);
@@ -1441,12 +1441,12 @@ describe('a workspace\'s device checkpoints are its own', () => {
       ['checkpointPlan', [OTHER_WORKSPACE, '/home/ashish/work', 'c0ffee1']],
       ['checkpointRestore', [OTHER_WORKSPACE, '/home/ashish/work', 'c0ffee1']],
     ] satisfies Array<[string, JsonValue[]]>) {
-      await expect(harness.userDO.deviceRpc(harness.workspace, method, params))
+      await expect(harness.deviceCall(harness.workspace, method, params))
         .rejects.toThrow('reads and restores only its own device checkpoints');
     }
 
     expect(harness.deviceFrames).toEqual([]);
-    await harness.userDO.deviceRpc(harness.workspace, 'checkpointList', [WORKSPACE, 50, null]);
+    await harness.deviceCall(harness.workspace, 'checkpointList', [WORKSPACE, 50, null]);
     expect(harness.deviceFrames.map((frame) => frame.method)).toEqual(['checkpointList']);
     await harness.closeDeviceHarness();
   });
@@ -1455,7 +1455,7 @@ describe('a workspace\'s device checkpoints are its own', () => {
     const harness = await deviceHarness();
     harness.consentDecision = 'always';
 
-    await harness.userDO.deviceRpc(harness.workspace, 'writeFile', ['/home/ashish/work/a.txt', 'x'], {
+    await harness.deviceCall(harness.workspace, 'writeFile', ['/home/ashish/work/a.txt', 'x'], {
       agentName: WORKSPACE, checkpoint: { agent: OTHER_WORKSPACE, turnId: 'turn-1', sessionId: 's', dir: null },
     });
 

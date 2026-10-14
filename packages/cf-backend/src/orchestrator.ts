@@ -234,7 +234,7 @@ import {
   agentSelfHost, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost,
   WorkspaceProposals, WorkspaceProposalStore, type WorkspaceProposalAnswer,
   DeviceConsentRegistry, DeviceConsentStore,
-  type DeviceConsentAnswer, type DeviceConsentDecision,
+  type DeviceConsentAnswer, type DeviceConsentVerdict, type AgentSignal,
   type DeviceConsentRequest, type PendingDeviceConsent,
   DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals, performBoundWrite, ParkedWriteFiles,
   reviewParkedWrite, type ParkedWriteReview,
@@ -2374,12 +2374,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Parked commands, held: DeferredApprovalStore's create, decide, spend and settle run over `sql`, which drops them. */
   private readonly queuedApprovals = this.held.hold(['deferred_approvals'], () => this.deferrals.approvals());
 
-  /** Approvals combine consent prompts and parked commands; a parked command's effect has not happened. Consents expire
-   *  with time, so they are read each time. */
+  private readonly consentApprovals = this.held.hold(['device_consent_asks'], () => this.consents.approvals());
+
+  /** Approvals combine device consent asks and parked commands; a parked command's effect has not happened. */
   protected override extraDynamicContext(): ActorDynamicContextExtras {
     return {
       approvals: () => {
-        const items = [...this.consents.approvals(), ...this.queuedApprovals()];
+        const items = [...this.consentApprovals(), ...this.queuedApprovals()];
 
         return { items, total: items.length };
       },
@@ -4049,6 +4050,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this._consents ??= new DeviceConsentRegistry({
       store: new DeviceConsentStore(this.boundSql),
       newId: () => `cons-${nanoid(10)}`,
+      wake: this.ownerAnswerWake('device consent'),
       // Wire shapes stay inline: the broadcast-wiring gate reads `broadcast({ type: … })` off source.
       announce: (notice) => {
         this.overviewChanged();
@@ -4101,10 +4103,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return settle(Effect.map(this.proposals.decide(asked.id, asked.answer), (decided) => ({ decided: decided !== null, workspace: decided?.workspace ?? null })));
   }
 
-  /** Called by the UserDO over DO RPC. Resolves on decision or `timeout`; `timeout` is not
-   *  `deny`, since an unanswered prompt means the owner was away. */
-  async awaitDeviceConsent(req: DeviceConsentRequest): Promise<DeviceConsentDecision> {
-    return this.consents.request(req);
+  /** Called by the UserDO over DO RPC: what a device call may do now. A call that raises or re-issues a waiting ask is
+   *  NOT RUN, and the owner's answer wakes its asker. */
+  async askDeviceConsent(req: DeviceConsentRequest): Promise<DeviceConsentVerdict> {
+    return this.consents.ask(req);
   }
 
   async announceDeviceUnavailable(
@@ -4123,7 +4125,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   @callable()
   async resolveDeviceConsent(consentId: string, decision: DeviceConsentAnswer): Promise<{ ok: boolean }> {
-    return { ok: this.consents.resolve(consentId, decision) };
+    return { ok: await this.consents.resolve(consentId, decision) };
   }
 
   /** Lets the chat re-render cards after a reload. */
@@ -4132,14 +4134,19 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.consents.list();
   }
 
+  /** Wakes the actor an owner's answer is for. Read through `this.orch` at delivery time, never captured: the queues
+   *  that wake are reachable from the runtime's own construction path. A hire is woken on its own durable queue, as its
+   *  jobs wake it. */
+  private ownerAnswerWake(answered: string): (actorId: string, signal: AgentSignal) => Effect.Effect<void, KinuError> {
+    return (actorId, signal) => Effect.asVoid(attempt({ doing: `waking ${actorId} with the owner's ${answered}`, otherwise: 'io' }, () => this.agentDeliveries(actorId).signals.send(signal)));
+  }
+
   // Deferred approval (core safety/deferred-approval.ts): only a parked write runs on approval.
   protected _deferrals: DeferredApprovalQueue | null = null;
   protected get deferrals(): DeferredApprovalQueue {
     this._deferrals ??= new DeferredApprovalQueue({
       store: new DeferredApprovalStore(this.boundSql, this.actorHandle()),
-      // Read through `this.orch` at delivery time, never captured: this getter is reachable
-      // from the runtime's own construction path. A hire is woken on its own durable queue, as its jobs wake it.
-      wake: (actorId, signal) => Effect.asVoid(attempt({ doing: `waking ${actorId} with the owner's decision`, otherwise: 'io' }, () => this.agentDeliveries(actorId).signals.send(signal))),
+      wake: this.ownerAnswerWake('decision'),
       // Same actor_config as the approval mode, read live by the gate on the next command.
       remember: (grants) => { this.config.grantShellApproval(grants); },
       // A spent grant's row is deleted, so this event is the only durable record of consumption, naming whose it
@@ -6420,7 +6427,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private slowOverview: {
     readonly sqlRevision: number;
     readonly slateRevision: number;
-    readonly expiresAt: number;
     readonly inputs: Omit<WorkspaceOverviewInputs, 'working' | 'unfinished' | 'latestRun' | 'awaitsSettings'>;
   } | null = null;
 
@@ -6429,11 +6435,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const slateRevision = storeRevision(this.ctx.storage.sql);
     const held = this.slowOverview;
 
-    if (held !== null && held.sqlRevision === sqlRevision && held.slateRevision === slateRevision && Date.now() < held.expiresAt) {
-      return held.inputs;
-    }
-
-    const pendingConsents = new DeviceConsentStore(this.boundSql).live(Date.now());
+    if (held !== null && held.sqlRevision === sqlRevision && held.slateRevision === slateRevision) return held.inputs;
+    const pendingConsents = this.consents.list();
 
     const [activePlan, listing, hostedPlans, questions] = await Promise.all([
       this.getActivePlanReview(),
@@ -6461,10 +6464,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       return this.overviewInputs();
     }
 
-    this.slowOverview = {
-      sqlRevision, slateRevision, inputs,
-      expiresAt: pendingConsents.reduce((at, consent) => Math.min(at, consent.expiresAt), Infinity),
-    };
+    this.slowOverview = { sqlRevision, slateRevision, inputs };
 
     return inputs;
   }

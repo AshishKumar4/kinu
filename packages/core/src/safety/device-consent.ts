@@ -1,26 +1,35 @@
 import { markStoreChanged } from '@kinu.run/agent-utils';
 /**
- * Device binding, asked once per (workspace, device), plus the registry of prompts awaiting an answer.
- * Consent answers who; the device's Sandbox switch answers what. An unanswered prompt is neither answer.
- * The pending ask is a durable row; only resolvers and timers are per-activation.
+ * Device binding, asked once per (workspace, device), and the asks parked on the owner meanwhile. Consent answers who;
+ * the device's Sandbox switch answers what. An ask parks as a deferred approval does (deferred-approval.ts): the call
+ * that raised it is NOT RUN at once, the owner's answer wakes the actor that asked, and its re-issue runs on that
+ * answer. No ask lapses: nothing measured says how long an owner takes, and an unanswered ask is no answer.
  */
 
 import type { DynamicApproval } from '../types/dynamic-context';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import type { AgentSignal } from '../types/signals';
+import { diagnostics, renderThrownChain, settle, type ErrorCode, type KinuError } from '../obs/index';
+import { DENIAL_STANDING_MS } from './deferred-approval';
+import { Effect, Result } from 'effect';
 import * as v from 'valibot';
 
-/** `timeout` is not a decision: never remembered, never stored as policy. */
-export type DeviceConsentDecision = 'once' | 'always' | 'deny' | 'timeout';
+/** What the owner can answer. Only `always` is remembered, as the workspace's binding to the device. */
+export type DeviceConsentAnswer = 'once' | 'always' | 'deny';
 
-export type DeviceConsentAnswer = Exclude<DeviceConsentDecision, 'timeout'>;
-
-export const DEVICE_CONSENT_DENIED =
+const DEVICE_CONSENT_DENIED =
   'device use was not approved: the owner declined';
 
-/** Worded so a model cannot mistake expiry for refusal: the capability is intact. */
-export const DEVICE_CONSENT_UNANSWERED =
-  'device use is still unapproved: the consent prompt expired with no answer, so nobody decided. '
+/** Worded so a model cannot mistake an unasked owner for a refusal: the capability is intact. */
+const DEVICE_CONSENT_UNANSWERED =
+  'device use is still unapproved: the consent prompt could not be raised, so nobody decided. '
   + 'Continue without the device and ask again later.';
+
+/** The call that raised an ask, or re-issued one still waiting: nothing ran, and the owner's answer wakes the asker. */
+function deviceConsentQueued(deviceLabel: string): string {
+  return `NOT RUN: using ${deviceLabel} from this workspace waits on the owner's consent. `
+    + 'You are woken when they answer; do not re-issue it before then.';
+}
 
 /** A connect is done when the device the hub issued for it is connected: the one rule the browser's panel and
  *  `kinu connect` both read, never "some device arrived". */
@@ -66,13 +75,15 @@ function summarizeParam(input: { value: unknown }): string {
 }
 
 /** `method`/`command` are context on the card; the answer binds the workspace to the device, not the command.
- *  `workspaceName` is absent for non-workspace callers. */
+ *  `workspaceName` is absent for non-workspace callers; `actorId`, for a call no agent made (the owner's own), which
+ *  an answer wakes nobody for. */
 export interface DeviceConsentRequest {
   readonly deviceId: string;
   readonly deviceLabel: string;
   readonly method: string;
   readonly command: string;
   readonly workspaceName?: string;
+  readonly actorId?: string;
 }
 
 /** Carries the id the answer addresses, so a reloaded client can re-render its cards. */
@@ -99,228 +110,232 @@ export type DeviceConsentNotice =
   | { readonly kind: 'raised'; readonly consent: PendingDeviceConsent }
   | { readonly kind: 'settled'; readonly consentId: string };
 
+/** What an ask answers its call: run on an answer the call spends (`always` is also bound by the caller), refused on a
+ *  standing denial, or NOT RUN while the owner has yet to answer. */
+export type DeviceConsentVerdict = 'once' | 'always' | 'denied' | 'queued';
+
 export interface DeviceConsentRegistryDeps {
   announce(notice: DeviceConsentNotice): void;
   /** Injected so hosts keep their own id vocabulary and tests are deterministic. */
   newId(): string;
-  /** The request itself lives here, durable across host evictions. */
+  /** The asks themselves live here, durable across host evictions. */
   store: DeviceConsentStore;
-  timeoutMs?: number;
+  /** Wakes the actor an answer is for, as a deferred approval's decision does. */
+  wake(actorId: string, signal: AgentSignal): Effect.Effect<void, KinuError>;
   now?: () => number;
 }
 
-const DEVICE_CONSENT_TIMEOUT_MS = 5 * 60_000;
+/** The `kinuEvent` kind an answer wakes its asker under. */
+const DEVICE_CONSENT_SIGNAL = 'device_consent';
 
-/** The row is the card, so an activation that never saw the raise still owes the owner this. */
-export interface PendingConsentRow extends PendingDeviceConsent {
-  readonly expiresAt: number;
+type DeviceConsentStatus = 'queued' | DeviceConsentAnswer;
+
+/** One ask: the card while it waits, then the owner's answer until the call it answers spends it. */
+export interface DeviceConsentAsk extends PendingDeviceConsent {
+  readonly status: DeviceConsentStatus;
+  readonly decidedAt: number | null;
 }
 
-export function initDeviceConsentRequestsTable(execRaw: RawSqlExec): void {
-  execRaw(`CREATE TABLE IF NOT EXISTS device_consent_requests (
+export function initDeviceConsentAsksTable(execRaw: RawSqlExec): void {
+  execRaw(`CREATE TABLE IF NOT EXISTS device_consent_asks (
     consent_id      TEXT PRIMARY KEY,
+    actor_id        TEXT,
     device_id       TEXT NOT NULL,
     device_label    TEXT NOT NULL,
     method          TEXT NOT NULL,
     command         TEXT NOT NULL,
     workspace_name  TEXT,
     created_at      INTEGER NOT NULL,
-    expires_at      INTEGER NOT NULL
+    status          TEXT NOT NULL DEFAULT 'queued',
+    decided_at      INTEGER
   )`);
 }
 
-interface ConsentRow {
+interface AskRow {
   consent_id: string;
+  actor_id: string | null;
   device_id: string;
   device_label: string;
   method: string;
   command: string;
   workspace_name: string | null;
   created_at: number;
-  expires_at: number;
+  status: string;
+  decided_at: number | null;
 }
 
-function toPending(r: ConsentRow): PendingConsentRow {
-  const pending: PendingConsentRow = {
+const StatusSchema = v.picklist(['queued', 'once', 'always', 'deny']);
+
+function toAsk(r: AskRow): DeviceConsentAsk {
+  return {
     consentId: r.consent_id,
     deviceId: r.device_id,
     deviceLabel: r.device_label,
     method: r.method,
     command: r.command,
     createdAt: r.created_at,
-    expiresAt: r.expires_at,
+    status: v.parse(StatusSchema, r.status),
+    decidedAt: r.decided_at,
+    ...(r.workspace_name !== null && { workspaceName: r.workspace_name }),
+    ...(r.actor_id !== null && { actorId: r.actor_id }),
   };
+}
 
-  if (r.workspace_name !== null) return { ...pending, workspaceName: r.workspace_name };
+/** The card a client renders: the ask without its answer. */
+function pendingOf(ask: DeviceConsentAsk): PendingDeviceConsent {
+  const { status: _status, decidedAt: _decidedAt, actorId: _actorId, ...pending } = ask;
 
   return pending;
 }
 
-/** Rows in `device_consent_requests`. A read skips lapsed rows, so a dead activation's prompt reads expired;
- *  `insert` sweeps them, so the table holds at most the asks raised since the last lapse. */
+/** Rows in `device_consent_asks`: one per ask, kept until the call it answers spends it, or a denial has stood its
+ *  {@link DENIAL_STANDING_MS}. */
 export class DeviceConsentStore {
   constructor(private readonly sql: SqlExecutor) {}
-  /** Oldest first, in raise order, so asks within one clock tick keep their order. */
-  live(now: number): PendingConsentRow[] {
-    return this.sql<ConsentRow>`
-      SELECT consent_id, device_id, device_label, method, command,
-             workspace_name, created_at, expires_at
-      FROM device_consent_requests WHERE expires_at > ${now} ORDER BY created_at ASC, rowid ASC`.map(toPending);
+
+  /** Waiting asks, oldest first, in raise order, so asks within one clock tick keep their order. */
+  queued(): DeviceConsentAsk[] {
+    return this.sql<AskRow>`
+      SELECT * FROM device_consent_asks WHERE status = 'queued' ORDER BY created_at ASC, rowid ASC`.map(toAsk);
   }
 
-  /** Only caller is the card's own timer; a same-tick answer already won the row through `take`. */
-  remove(consentId: string): void {
-    void this.sql`DELETE FROM device_consent_requests WHERE consent_id = ${consentId}`;
+  /** The newest ask of exactly this request; a changed device label is presentation metadata, not a new question. */
+  standing(req: DeviceConsentRequest): DeviceConsentAsk | null {
+    const [row] = this.sql<AskRow>`
+      SELECT * FROM device_consent_asks
+      WHERE device_id = ${req.deviceId} AND workspace_name IS ${req.workspaceName ?? null} AND actor_id IS ${req.actorId ?? null}
+        AND method = ${req.method} AND command = ${req.command}
+      ORDER BY created_at DESC, rowid DESC LIMIT 1`;
+
+    return row === undefined ? null : toAsk(row);
+  }
+
+  insert(ask: DeviceConsentAsk): void {
+    void this.sql`INSERT INTO device_consent_asks
+      (consent_id, actor_id, device_id, device_label, method, command, workspace_name, created_at, status, decided_at)
+      VALUES (${ask.consentId}, ${ask.actorId ?? null}, ${ask.deviceId}, ${ask.deviceLabel}, ${ask.method},
+        ${ask.command}, ${ask.workspaceName ?? null}, ${ask.createdAt}, ${ask.status}, ${ask.decidedAt})`;
     markStoreChanged(this.sql);
   }
 
-  /** Callers mint the id first, so the row exists under the key the announce names. */
-  insert(row: PendingConsentRow): void {
-    void this.sql`DELETE FROM device_consent_requests WHERE expires_at <= ${row.createdAt}`;
-    void this.sql`INSERT INTO device_consent_requests
-      (consent_id, device_id, device_label, method, command, workspace_name, created_at, expires_at)
-      VALUES (${row.consentId}, ${row.deviceId}, ${row.deviceLabel}, ${row.method},
-        ${row.command}, ${row.workspaceName ?? null}, ${row.createdAt}, ${row.expiresAt})`;
-    markStoreChanged(this.sql);
+  /** The owner's answer on a waiting ask; null when nothing by that id waits. One row means one answer. */
+  decide(consentId: string, answer: DeviceConsentAnswer, now: number): DeviceConsentAsk | null {
+    const [row] = this.sql<AskRow>`
+      UPDATE device_consent_asks SET status = ${answer}, decided_at = ${now}
+      WHERE consent_id = ${consentId} AND status = 'queued' RETURNING *`;
+
+    if (row !== undefined) markStoreChanged(this.sql);
+
+    return row === undefined ? null : toAsk(row);
   }
 
-  /** Null when nothing by that id is waiting. One row means one settle. */
-  take(consentId: string, now: number): PendingConsentRow | null {
-    const rows = this.sql<ConsentRow>`
-      DELETE FROM device_consent_requests
-      WHERE consent_id = ${consentId} AND expires_at > ${now}
-      RETURNING consent_id, device_id, device_label, method, command,
-                workspace_name, created_at, expires_at`;
+  /** The call an approval answers spends it: whether this call won the row. */
+  spend(consentId: string): boolean {
+    const spent = this.sql<{ consent_id: string }>`
+      DELETE FROM device_consent_asks WHERE consent_id = ${consentId} AND status IN ('once', 'always') RETURNING consent_id`;
 
-    if (rows.length > 0) markStoreChanged(this.sql);
+    if (spent.length > 0) markStoreChanged(this.sql);
 
-    return rows[0] ? toPending(rows[0]) : null;
+    return spent.length > 0;
+  }
+
+  /** Denials that have stood their time; nothing else sweeps them. */
+  sweepDenials(now: number): void {
+    void this.sql`DELETE FROM device_consent_asks WHERE status = 'deny' AND decided_at <= ${now - DENIAL_STANDING_MS}`;
   }
 }
 
-/** Per-activation half of a waiting card; neither resolvers nor timers survive eviction. */
-interface Inflight {
-  /** An identical re-ask joins the list rather than raising a second card. */
-  readonly awaiting: ((decision: DeviceConsentDecision) => void)[];
-  readonly settle: (decision: DeviceConsentDecision) => void;
+/** The message on the turn an answer wakes: one for the asks answered together. */
+function answerWakeMessage(answered: readonly DeviceConsentAsk[]): string {
+  const lines: string[] = [];
+
+  const section = (title: string, asks: readonly DeviceConsentAsk[]): void => {
+    if (asks.length > 0) lines.push(title, ...asks.map((ask) => `  ${ask.deviceLabel}: ${ask.command}`));
+  };
+
+  // Repeat "still not run": the exact mistake an agent makes on waking.
+  section('Device use APPROVED, still not run: re-issue once:', answered.filter((ask) => ask.status !== 'deny'));
+  section('Device use DENIED: do not re-issue:', answered.filter((ask) => ask.status === 'deny'));
+
+  return lines.join('\n');
 }
 
-/** A changed device label is presentation metadata, not a new question. */
-function sameRequest(pending: DeviceConsentRequest, request: DeviceConsentRequest): boolean {
-  if (
-    pending.deviceId !== request.deviceId
-    || pending.workspaceName !== request.workspaceName
-  ) return false;
-
-  return pending.method === request.method && pending.command === request.command;
-}
-
-/** `request` resolves on an answer, or as `timeout` when nobody answers. */
+/** The asks parked on the owner for a workspace's device calls, and the answers waiting on the calls they answer. */
 export class DeviceConsentRegistry {
-  /** Subscribers only: a fresh instance re-parks callers onto rows it never raised. */
-  private readonly inflight = new Map<string, Inflight>();
-  private readonly timeoutMs: number;
   private readonly now: () => number;
 
   constructor(private readonly deps: DeviceConsentRegistryDeps) {
-    this.timeoutMs = deps.timeoutMs ?? DEVICE_CONSENT_TIMEOUT_MS;
     this.now = deps.now ?? Date.now;
   }
 
-  /** An identical waiting prompt, including one a previous activation left, is joined, not raised again. */
-  request(req: DeviceConsentRequest): Promise<DeviceConsentDecision> {
-    const { promise, resolve } = Promise.withResolvers<DeviceConsentDecision>();
-    const already = this.deps.store.live(this.now()).find((pending) => sameRequest(pending, req));
+  /**
+   * What `req` may do now: spend an answer its ask holds, stand refused on a denial, or park, joining the identical
+   * ask already waiting (one card, one answer) or raising its own. A re-issue before the answer is the same ask.
+   */
+  ask(req: DeviceConsentRequest): DeviceConsentVerdict {
+    const now = this.now();
+    this.deps.store.sweepDenials(now);
+    const standing = this.deps.store.standing(req);
 
-    if (already) {
-      this.parked(already).awaiting.push(resolve);
+    if (standing?.status === 'queued') return 'queued';
 
-      return promise;
-    }
+    if (standing?.status === 'deny') return 'denied';
 
-    const consentId = this.deps.newId();
-    const createdAt = this.now();
-    const view: PendingDeviceConsent = { ...req, consentId, createdAt };
+    // A concurrent re-issue may win the row; this one then asks afresh.
+    if (standing !== null && this.deps.store.spend(standing.consentId)) return standing.status === 'always' ? 'always' : 'once';
+    const ask: DeviceConsentAsk = { ...req, consentId: this.deps.newId(), createdAt: now, status: 'queued', decidedAt: null };
     // Row before announce: the id a surface hears about must be answerable when the notice lands.
-    const row: PendingConsentRow = { ...view, expiresAt: createdAt + this.timeoutMs };
-    this.deps.store.insert(row);
-    this.parked(row).awaiting.push(resolve);
-    this.deps.announce({ kind: 'raised', consent: view });
+    this.deps.store.insert(ask);
+    this.deps.announce({ kind: 'raised', consent: pendingOf(ask) });
 
-    return promise;
+    return 'queued';
   }
 
-  /** The lapse timer arms off the row's deadline, so a restored prompt keeps its original expiry. */
-  private parked(pending: PendingConsentRow): Inflight {
-    const parked = this.inflight.get(pending.consentId);
-
-    if (parked) return parked;
-
-    const awaiting: Inflight['awaiting'] = [];
-
-    const timer = setTimeout(
-      () => this.expire(pending.consentId),
-      Math.max(0, pending.expiresAt - this.now()),
-    );
-
-    const entry: Inflight = {
-      awaiting,
-      settle: (decision) => {
-        clearTimeout(timer);
-
-        for (const resolve of awaiting) resolve(decision);
-      },
-    };
-
-    this.inflight.set(pending.consentId, entry);
-
-    return entry;
-  }
-
-  /** Reachable only through a parked entry's own timer; surfaces hear `settled` as for an answer. */
-  private expire(consentId: string): void {
-    const entry = this.inflight.get(consentId);
-    this.inflight.delete(consentId);
-    this.deps.store.remove(consentId);
-    this.deps.announce({ kind: 'settled', consentId });
-    entry?.settle('timeout');
-  }
-
-  /** False when the id is unknown: already settled, or never raised on this storage. */
-  resolve(consentId: string, decision: DeviceConsentAnswer): boolean {
-    const pending = this.deps.store.take(consentId, this.now());
-
-    if (!pending) return false;
-    this.deps.announce({ kind: 'settled', consentId });
+  /**
+   * The owner's answer; false when nothing by that id waits. An `always` also answers every other ask waiting on that
+   * device for that workspace (bindings are per workspace and device). Each asker is woken once, with its own.
+   */
+  resolve(consentId: string, answer: DeviceConsentAnswer): Promise<boolean> {
+    const now = this.now();
     // Anything unrecognised is the weakest grant, never a stronger one.
-    const effective = decision === 'always' || decision === 'deny' ? decision : 'once';
-    const entry = this.inflight.get(consentId);
-    this.inflight.delete(consentId);
-    entry?.settle(effective);
+    const effective = answer === 'always' || answer === 'deny' ? answer : 'once';
+    const decided = this.deps.store.decide(consentId, effective, now);
 
-    if (effective === 'always') this.settleBoundByGrant(pending);
+    if (decided === null) return Promise.resolve(false);
 
-    return true;
+    const covered = effective !== 'always' ? [] : this.deps.store.queued()
+      .filter((ask) => ask.deviceId === decided.deviceId && ask.workspaceName === decided.workspaceName)
+      .flatMap((ask) => this.deps.store.decide(ask.consentId, 'always', now) ?? []);
+
+    const answered = [decided, ...covered];
+
+    for (const ask of answered) this.deps.announce({ kind: 'settled', consentId: ask.consentId });
+
+    return settle(Effect.flatMap(this.wake(answered), (results) => {
+      const [failed] = results.flatMap((result) => (Result.isFailure(result) ? [result.failure] : []));
+
+      return failed === undefined ? Effect.succeed(true) : Effect.fail(failed);
+    }));
   }
 
-  /** An "always" settles every other waiting prompt for the same device and workspace as `once`.
-   *  The workspace must match: bindings are per (workspace, device). */
-  private settleBoundByGrant(granted: PendingDeviceConsent): void {
-    for (const pending of this.deps.store.live(this.now())) {
-      if (pending.deviceId !== granted.deviceId) continue;
+  /** Each asker once, every one tried: the answers are already durable, and one asker's failed wake is no reason
+   *  another goes untold. The failures are the answer's, after. */
+  private wake(answered: readonly DeviceConsentAsk[]) {
+    const askers = new Set(answered.flatMap((ask) => ask.actorId ?? []));
 
-      if (pending.workspaceName !== granted.workspaceName) continue;
+    return Effect.forEach(askers, (actorId) => {
+      const own = answered.filter((ask) => ask.actorId === actorId);
 
-      if (this.deps.store.take(pending.consentId, this.now()) === null) continue;
-      const entry = this.inflight.get(pending.consentId);
-      this.inflight.delete(pending.consentId);
-      this.deps.announce({ kind: 'settled', consentId: pending.consentId });
-      entry?.settle('once');
-    }
+      return Effect.result(this.deps.wake(actorId, {
+        kind: DEVICE_CONSENT_SIGNAL,
+        text: answerWakeMessage(own),
+        metadata: { ids: own.map((ask) => ask.consentId) },
+      }));
+    });
   }
 
   list(): PendingDeviceConsent[] {
-    return this.deps.store.live(this.now()).map(({ expiresAt: _expiresAt, ...view }) => view);
+    return this.deps.store.queued().map(pendingOf);
   }
 
   /** Lets the agent tell a gated action stuck on the human from one that failed. */
@@ -331,4 +346,46 @@ export class DeviceConsentRegistry {
       detail: `${c.deviceLabel}: ${c.command}`,
     }));
   }
+}
+
+/** A workspace's standing binding to a device: allowed, refused, or none, so an ask decides. */
+export type DeviceBinding = 'allow' | 'deny' | null;
+
+/** A device call's consent: run, or the refusal its caller answers with, in its code and words. */
+export type DeviceConsentOutcome =
+  | { readonly allowed: true }
+  | { readonly allowed: false; readonly code: Extract<ErrorCode, 'denied' | 'unavailable'>; readonly reason: string };
+
+const REFUSED: DeviceConsentOutcome = { allowed: false, code: 'denied', reason: DEVICE_CONSENT_DENIED };
+
+/**
+ * The binding rule, both halves: a standing binding decides without asking; otherwise the ask does. An `always` its
+ * call spends is bound (`bind`), so later calls run on the binding; `once` runs this call alone. A parked ask is NOT
+ * RUN, a did-not-start code, as is an ask that could not be raised: nobody was asked, so it is no refusal.
+ */
+export function deviceConsentOutcome(input: {
+  readonly bound: DeviceBinding;
+  readonly deviceLabel: string;
+  readonly ask: Effect.Effect<DeviceConsentVerdict, KinuError>;
+  readonly bind: Effect.Effect<void, KinuError>;
+}): Effect.Effect<DeviceConsentOutcome, KinuError> {
+  if (input.bound === 'allow') return Effect.succeed({ allowed: true });
+
+  if (input.bound === 'deny') return Effect.succeed(REFUSED);
+
+  return Effect.flatMap(Effect.result(input.ask), (asked): Effect.Effect<DeviceConsentOutcome, KinuError> => {
+    if (Result.isFailure(asked)) {
+      diagnostics.event('device.consent_unreachable', { error: renderThrownChain({ cause: asked.failure }) });
+
+      return Effect.succeed({ allowed: false, code: 'unavailable', reason: DEVICE_CONSENT_UNANSWERED });
+    }
+
+    const verdict = asked.success;
+
+    if (verdict === 'denied') return Effect.succeed(REFUSED);
+
+    if (verdict === 'queued') return Effect.succeed({ allowed: false, code: 'unavailable', reason: deviceConsentQueued(input.deviceLabel) });
+
+    return verdict === 'always' ? Effect.as(input.bind, { allowed: true }) : Effect.succeed({ allowed: true });
+  });
 }

@@ -17,7 +17,7 @@ import { initRunEventTables, RunEventRecorder } from '../src/events/recorder';
 import { initAgentFiguresTable, readAgentFigures } from '../src/read-models/agent-figures';
 import { EventLog, initEventsHubTables, type EmailPayload } from '../src/events/hub/index';
 import { initDeferredApprovalsTable } from '../src/safety/deferred-approval';
-import { initDeviceConsentRequestsTable } from '../src/safety/device-consent';
+import { initDeviceConsentAsksTable } from '../src/safety/device-consent';
 
 const EMAIL: EmailPayload = {
   from: 'owner@example.com', to: 'kinu@agents.example.com', subject: 'Status?', body_text: 'Is staging green?',
@@ -38,7 +38,7 @@ function workspace() {
   initAgentFiguresTable(execRaw);
   // The read model's tables, as the workspace's genesis creates them.
   initDeferredApprovalsTable(execRaw);
-  initDeviceConsentRequestsTable(execRaw);
+  initDeviceConsentAsksTable(execRaw);
   const actors = createTestActors(sql, execRaw);
   new SubordinateRosterStore(exec, actors.main).ensureSchema();
 
@@ -199,16 +199,16 @@ describe('the Agents panel lists every agent in the workspace', () => {
     expect((await activity()).scout).toBe('idle');
   });
 
-  test('a device asking the person to approve a command makes Main need them, until the request lapses', async () => {
+  test('a device asking the person to approve a command makes Main need them, until they answer', async () => {
     const { db, read } = workspace();
     const main = async () => (await read()).find((agent) => agent.key === 'main')?.activity;
 
-    db.query(`INSERT INTO device_consent_requests (consent_id, device_id, device_label, method, command, workspace_name, created_at, expires_at)
-      VALUES ('c1', 'd1', 'laptop', 'exec', 'bun test', 'kiln', ?, ?)`).run(Date.now(), Date.now() + 60_000);
+    db.query(`INSERT INTO device_consent_asks (consent_id, actor_id, device_id, device_label, method, command, workspace_name, created_at)
+      VALUES ('c1', NULL, 'd1', 'laptop', 'exec', 'bun test', 'kiln', ?)`).run(Date.now());
 
     expect(await main()).toBe('waiting');
 
-    db.query(`UPDATE device_consent_requests SET expires_at = ?`).run(Date.now() - 1);
+    db.query(`UPDATE device_consent_asks SET status = 'once', decided_at = ?`).run(Date.now());
     expect(await main()).toBe('idle');
   });
 
