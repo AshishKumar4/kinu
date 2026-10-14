@@ -221,12 +221,18 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
   const { asks, rpc, onDecided, owedIntents = [] } = props;
   const { answered, mark } = useAnswered(asks);
   const [chosen, setChosen] = useState<string | null>(null);
+  // The card the owner is on: the open one, while the pointer or focus is inside the stack.
+  const [held, setHeld] = useState<string | null>(null);
   // The card whose answer is in flight: its buttons wait for it, and the next card's are live as soon as it opens.
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<{ key: string; message: string } | null>(null);
 
   const waiting = asks.filter((ask) => !answered.has(ask.key));
-  const front = waiting.find((ask) => ask.key === chosen) ?? waiting[0];
+  const front = waiting.find((ask) => ask.key === chosen) ?? waiting.find((ask) => ask.key === held) ?? waiting[0];
+
+  // While the pointer or focus is on the stack, the open card is held: one that arrives meanwhile waits behind, so a
+  // press is never taken by a card that slid in under it. Answered, the next held is the one that opens.
+  if (held !== null && front !== undefined && held !== front.key) setHeld(front.key);
 
   if (front === undefined) return null;
   const behind = waiting.filter((ask) => ask !== front);
@@ -264,7 +270,10 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
   const FrontIcon = KIND_ICON[kindOf(front)];
 
   return (
-    <section aria-label="Waiting on you" data-attention-stack data-attention-count={waiting.length} className="p-attention">
+    <section aria-label="Waiting on you" data-attention-stack data-attention-count={waiting.length} className="p-attention"
+      onPointerEnter={() => setHeld(front.key)} onPointerLeave={() => setHeld(null)}
+      onFocus={() => setHeld(front.key)}
+      onBlur={(event) => { if (!(event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget))) setHeld(null); }}>
       {shown.map((ask, depth) => {
         const BehindIcon = KIND_ICON[kindOf(ask)];
 

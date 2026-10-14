@@ -161,6 +161,8 @@ declare global {
   interface Window {
     /** The Drive folders the page listed, in order, counted by the read-count test. */
     __driveListed?: string[];
+    /** Answers the gallery's held library read (`&libraryHold=1`). */
+    __releaseLibrary?: () => void;
   }
 }
 
@@ -314,6 +316,26 @@ describe('the Drive', () => {
 
       expect(await readsAt('desktop', '[data-drive-tree="/folder-01/a"][aria-current="page"]')).toEqual(['/', '/folder-01', '/folder-01/a']);
       expect(await readsAt('mobile', '[data-drive-tab="mine"][aria-current="page"]')).toEqual(['/folder-01/a']);
+    });
+  });
+
+  test('a first visit offers nothing to press until it knows where it lands, then lands on Slates', async () => {
+    await withGallery(async (gallery) => {
+      const page = await gallery.newPage();
+
+      try {
+        await page.setViewport(VIEWPORTS.desktop);
+        await page.goto(`${gallery.origin}/gallery.html?frame=drive&libraryHold=1`, { waitUntil: 'networkidle0' });
+        // The listing has answered; the library has not. Neither the files place nor its New is drawn yet.
+        await page.waitForFunction(() => document.querySelector('[data-drive-landing]') !== null || document.querySelector('[data-drive-new]') !== null);
+        expect(await page.$('[data-drive-new]')).toBeNull();
+
+        await page.evaluate(() => { window.__releaseLibrary?.(); });
+        await page.waitForSelector('[data-drive-place="slates"][aria-current="page"]');
+        expect(await page.$('[data-drive-landing]')).toBeNull();
+      } finally {
+        await page.close();
+      }
     });
   });
 

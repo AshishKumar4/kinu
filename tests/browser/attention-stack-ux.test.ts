@@ -215,3 +215,23 @@ test('an agent\'s own pane stacks the asks that agent raised, and none of the wo
     await page.close();
   });
 });
+
+test("a card that arrives while the owner is on the open one waits behind it, so the press lands where they aimed", async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await opened(page, origin, '&asks=two');
+    await page.waitForSelector('[data-attention-stack]');
+    expect(await stacked(page)).toEqual(['action:park-publish', 'action:park-push']);
+
+    // Newer than both, it would take the front of a stack nobody is on; the pointer is on this one.
+    await page.hover('[data-attention-card] button');
+    await page.evaluate(() => { window.dispatchEvent(new Event('gallery:arrive-ask')); });
+    await page.waitForFunction(() => document.querySelector('[data-attention-stack]')?.getAttribute('data-attention-count') === '3');
+    expect((await stacked(page))[0]).toBe('action:park-publish');
+
+    // Answered, the next opens: the newest that waits.
+    await answer(page, 'Approve');
+    await page.waitForFunction(() => document.querySelector('[data-attention-card]')?.getAttribute('data-attention-card') === 'action:park-late');
+    await page.close();
+  });
+});
