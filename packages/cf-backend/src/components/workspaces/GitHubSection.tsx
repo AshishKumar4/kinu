@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef } from "react";
 import { GitBranchIcon, GitMergeIcon, GitPullRequestIcon, CircleDashedIcon, CheckCircleIcon, XCircleIcon, RecordIcon } from "@phosphor-icons/react";
 import type { ReactNode } from "react";
-import { shortAge, type PanelAgent, type Rpc, type WorkspaceGitHubView } from "@kinu.run/core";
+import { shortAge, type PanelAgent, type WorkspaceGitHubView } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import type { ReadMoves } from "@/hooks/use-workspace-reads";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 type Repo = WorkspaceGitHubView["repos"][number];
 
@@ -18,14 +19,14 @@ const CI = {
 
 const STATE_TONE = new Map([["open", "p-success"], ["merged", "p-accent"], ["closed", "p-text-3"]]);
 
-export function GitHubSection({ rpc, readMoves, agents }: { rpc: Rpc; readMoves: ReadMoves; agents: readonly PanelAgent[] }) {
+export function GitHubSection({ rpc, readMoves, agents }: { rpc: WorkspaceRpc; readMoves: ReadMoves; agents: readonly PanelAgent[] }) {
   const asked = useRef(false);
 
   const load = useCallback(() => {
     const refresh = !asked.current;
     asked.current = true;
 
-    return rpc<WorkspaceGitHubView>("getWorkspaceGitHub", [refresh]);
+    return rpc("getWorkspaceGitHub", [refresh]);
   }, [rpc]);
 
   const { resource, reload } = useAsyncResource(load);

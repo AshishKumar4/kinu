@@ -1,11 +1,11 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { Loader } from "@cloudflare/kumo";
 import { DatabaseIcon } from "@phosphor-icons/react";
-import { scoreInterval, type QualityDay, type QualityWindow } from "@kinu.run/core";
-import type { Rpc } from "@kinu.run/core";
+import { scoreInterval, type QualityDay } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { EmptyState } from "./shared";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 interface GepaRunRow { runId: string; target: string; startedAt: number; status: string; winnerId: string | null; iterations: number; metricCalls: number }
 
@@ -24,11 +24,11 @@ function runDot(status: string): string {
   return "p-dot-neutral";
 }
 
-export function GepaView({ rpc }: { rpc: Rpc }) {
+export function GepaView({ rpc }: { rpc: WorkspaceRpc }) {
   const [sel, setSel] = useState<string | null>(null);
   // Each pick reads the run again: a running run's candidates and winner change under the same id.
   const [picks, setPicks] = useState(0);
-  const load = useCallback(() => rpc<GepaRunRow[]>("getGepaRuns", [20]), [rpc]);
+  const load = useCallback(() => rpc("getGepaRuns", [20]), [rpc]);
   const { resource, reload } = useAsyncResource(load);
   const runs = lastValue(resource);
 
@@ -59,8 +59,8 @@ export function GepaView({ rpc }: { rpc: Rpc }) {
 
 /** The selected run's candidates, read for that pick of it and again while it runs: a slower answer for a run no
  *  longer selected is never shown. */
-function GepaRunCandidates({ rpc, runId, pick }: { rpc: Rpc; runId: string; pick: number }) {
-  const load = useCallback(() => rpc<GepaRunDetail>("getGepaRun", [runId]), [rpc, runId]);
+function GepaRunCandidates({ rpc, runId, pick }: { rpc: WorkspaceRpc; runId: string; pick: number }) {
+  const load = useCallback(() => rpc("getGepaRun", [runId]), [rpc, runId]);
   const { resource, reload } = useAsyncResource(load, runningAgain, `${runId}:${String(pick)}`);
   const detail = lastValue(resource);
 
@@ -106,9 +106,9 @@ const TREND_DAYS = 3;
 
 /** How it is doing: the last seven UTC days summed as core answers them (`getQualityWindow`), and the last thirty, one
  *  column a day, once enough of them were rated. `moved`: `getQuality`'s `reads_changed` count, which both reads track. */
-export function QualityView({ rpc, moved }: { rpc: Rpc; moved: number }) {
+export function QualityView({ rpc, moved }: { rpc: WorkspaceRpc; moved: number }) {
   const load = useCallback(async () => {
-    const [week, days] = await Promise.all([rpc<QualityWindow>("getQualityWindow", [7]), rpc<QualityDay[]>("getQuality", [30])]);
+    const [week, days] = await Promise.all([rpc("getQualityWindow", [7]), rpc("getQuality", [30])]);
 
     return { week, days };
   }, [rpc]);

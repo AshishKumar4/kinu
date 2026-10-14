@@ -123,7 +123,7 @@ function WorkspaceRenameEditor({ workspace, onSaved, onDone }: {
   return (
     <RowRenameEditor value={workspace.displayName} label={`Rename ${workspaceDisplayTitle(workspace)}`} saveLabel="Save workspace name"
       waiting={connectionStatus === "connected" ? null : { text: connectionWait(connectionStatus), failed: connectionStatus === "error" }}
-      save={async (name) => { onSaved((await rpc<{ displayName: string }>("setDisplayName", [name])).displayName); }}
+      save={async (name) => { onSaved((await rpc("setDisplayName", [name])).displayName); }}
       onDone={onDone} />
   );
 }

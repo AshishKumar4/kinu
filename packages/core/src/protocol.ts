@@ -92,9 +92,6 @@ export interface SubordinateActivityEvent {
 	timestamp: number;
 }
 
-/** Typed agent RPC; the one unknown → T cast lives in the hook's wrapper. */
-export type Rpc = <T = unknown>(method: string, args?: unknown[]) => Promise<T>;
-
 /** A background job (auto-detached >30s tool call), from listBackgroundJobs. */
 export interface BackgroundJob {
 	id: string;

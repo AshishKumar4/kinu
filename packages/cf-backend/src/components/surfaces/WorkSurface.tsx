@@ -11,7 +11,7 @@ import type { ReadMoves } from "@/hooks/use-workspace-reads";
 import type { AsyncResource } from "@/hooks/use-async-resource";
 import { executorLabel, previewPortTitle, type ExecutorInfo, type InspectedWork } from "@kinu.run/core";
 import { Loader } from "@cloudflare/kumo";
-import type { MemoryEntry, ForkNode, ExecutorCommandResult, Rpc, TabPresence } from "@kinu.run/core";
+import type { MemoryEntry, ForkNode, ExecutorCommandResult, TabPresence } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { ChangesSurface, type ChangesFocus } from "./ChangesSurface";
 import type { PinnedPreviewPort as PinnedPort } from "@kinu.run/core";
@@ -36,6 +36,7 @@ import { InspectorBar, type PageTab, type ToolTab } from "./InspectorBar";
 import { PlanPageList } from "./PlanPage";
 import { usePlanPages } from "./use-plan-pages";
 import { ConnectDeviceDialog } from "@/components/ConnectDevicePanel";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 // A surface drawn only once it is chosen loads with its first view, outside the workspace's first chunk.
 const FilesSurface = lazyRoute<FilesSurfaceProps>(async () => {
@@ -91,7 +92,7 @@ export interface WorkSurfaceProps {
   onRefreshPorts: () => void;
   plan: PlanReview | null;
   owedIntents?: readonly OwedOwnerIntent[];
-  planRpc?: Rpc;
+  planRpc?: WorkspaceRpc;
   snapshot: AsyncResource<AgentStatus>;
   memory: MemoryEntry[];
   memoryContent: string;
@@ -121,7 +122,7 @@ export interface WorkSurfaceProps {
   tabPresence?: TabPresence;
   /** Presence unread: no tab is marked until it answers or the reader picks. */
   presencePending?: boolean;
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   slateBody?: (slate: SlateSummary) => ReactNode;
   workspace?: string;
   /** A fork's landing opens on what it reaches, not the preview. */

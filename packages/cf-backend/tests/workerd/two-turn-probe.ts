@@ -92,7 +92,7 @@ import {
   type WakeDriveResult,
   type WakeRows,
 } from './two-turn-shapes';
-import { changeNotesCard, ownerCaller, turnAuthor, type NotedChanges, type PeerMessage, type ReviewAnnotation, type WorkMode } from '@kinu.run/core';
+import { changeNotesCard, ownerCaller, turnAuthor, type ChangeNote, type NotedChanges, type PeerMessage, type WorkMode } from '@kinu.run/core';
 import type { ChatWire, ChatWireTransport } from '../../src/chat-transport';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import type { ToolSet } from 'ai';
@@ -857,7 +857,7 @@ function drawsLogoCall(call: HttpCall): boolean {
 }
 
 /** The one note the Changes-tab journeys send, anchored to a line of a changed file. */
-const NOTE: ReviewAnnotation = {
+const NOTE: ChangeNote = {
   id: 'clamp', type: 'COMMENT', blockId: 'src/apply.ts', startOffset: 0, endOffset: 0, originalText: 'const rule = rules[kind];', createdA: 1,
   text: 'Clamp it, but log it too.',
   anchor: { scope: 'lines', path: 'src/apply.ts', side: 'new', lineStart: 1, lineEnd: 1, baseline: 'gen-4f1c9a' },

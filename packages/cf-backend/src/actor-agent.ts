@@ -716,7 +716,8 @@ export abstract class ActorAgent extends Agent<Env> {
   /** The owner's answer: the asking call's result, and the turn that continues from it, in the agent that asked
    *  (`actor`; null for the workspace agent). */
   @callable()
-  async answerOwnerQuestions(id: string, answers: JsonValue, actor: JsonValue = null): Promise<OwedIntent | null> {
+  async answerOwnerQuestions(id: string, answers: readonly OwnerAnswer[], actor: string | null = null): Promise<OwedIntent | null> {
+    // Typed as a page sends them; read as the wire may carry anything.
     const parsed = v.safeParse(v.tuple([OwnerAnswersSchema, v.nullable(v.string())]), [answers, actor]);
 
     return settle(Effect.suspend(() => {
@@ -740,7 +741,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Closed unanswered; the agent reads that at its next turn, and what waited behind the questions runs. */
   @callable()
-  async dismissOwnerQuestions(id: string, actor: JsonValue = null): Promise<{ readonly closed: number }> {
+  async dismissOwnerQuestions(id: string, actor: string | null = null): Promise<{ readonly closed: number }> {
     const asker = v.safeParse(v.nullable(v.string()), actor);
 
     if (!asker.success) return settle(Effect.fail(new KinuError('bad_input', 'actor: an agent id, or null for the workspace agent')));

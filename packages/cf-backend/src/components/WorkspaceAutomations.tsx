@@ -14,9 +14,9 @@ import { Modal } from "@/components/ui/Modal";
 import { inputCls } from "@/components/ui/form";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { createDurableWebhook, cancelTrigger, type CreateWebhookResult } from "@/lib/user-api";
-import type { Rpc } from "@kinu.run/core";
 import * as v from "valibot";
 import { showing, detach } from '@kinu.run/core/obs';
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 const TriggerRowSchema = v.object({
   id: v.string(),
@@ -38,7 +38,7 @@ const AuthModeSchema = v.picklist(["hmac", "bearer", "mtls"]);
 
 
 /** What wakes this workspace's agent from outside: its webhooks and timers. */
-export function WorkspaceAutomations({ rpc, workspace }: { rpc: Rpc; workspace: string }) {
+export function WorkspaceAutomations({ rpc, workspace }: { rpc: WorkspaceRpc; workspace: string }) {
   const [showCreate, setShowCreate] = useState(false);
   const [created, setCreated] = useState<CreateWebhookResult | null>(null);
 

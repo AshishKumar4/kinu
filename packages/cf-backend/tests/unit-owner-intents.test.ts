@@ -6,7 +6,7 @@
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
-import { JsonValueSchema, type OwnerAnswer } from '@kinu.run/core';
+import type { OwnerAnswer } from '@kinu.run/core';
 import { driveUntil, gatewayWorkspace, storedChat, workspaceMainActor, type HarnessOrchestratorAgent, type StartedHarness } from './helpers/actor-harness';
 import { cutNextDelivery, loseNextOpeningAnswer } from './helpers/agent-facets';
 import { socketConnection } from './helpers/bindings';
@@ -163,7 +163,7 @@ for (const at of CUTS) {
     if (asking === undefined) throw new Error('the agent never asked');
     cutNextDelivery(mainKey(workspace), at);
 
-    expect(await workspace.agent.answerOwnerQuestions(asking.asked.id, v.parse(JsonValueSchema, ANSWER))).toEqual({ owed: `answers:${asking.asked.id}` });
+    expect(await workspace.agent.answerOwnerQuestions(asking.asked.id, ANSWER)).toEqual({ owed: `answers:${asking.asked.id}` });
     expect(await workspace.agent.listOwedIntents()).toEqual([{ id: `answers:${asking.asked.id}`, kind: 'answers', target: asking.asked.id, actor: null }]);
 
     await driveUntil(workspace, 'the owed answer was never delivered', () => ran.resumed > 0 && owed(workspace) === 0);

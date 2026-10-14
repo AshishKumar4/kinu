@@ -1,8 +1,9 @@
 /** The workspace's plans and tasks, one read for the column: Work's lists and each plan's page draw from the same rows. */
 import { useCallback, useEffect, useRef } from "react";
-import type { PlanReview, Rpc, WorkspaceWork } from "@kinu.run/core";
+import type { PlanReview, WorkspaceWork } from "@kinu.run/core";
 import type { ReadMoves, WorkspacePlanArrival } from "@/hooks/use-workspace-reads";
 import { lastValue, useAsyncResource, type AsyncResource } from "@/hooks/use-async-resource";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 export interface WorkspaceWorkRead {
   readonly work: WorkspaceWork | null;
@@ -11,13 +12,13 @@ export interface WorkspaceWorkRead {
 }
 
 export function useWorkspaceWork({ rpc, readMoves, plan, arrival }: {
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   readMoves: ReadMoves;
   /** The pushed plan: the read has no push of its own, so each `plan_updated` frame reads it again. */
   plan: PlanReview | null;
   arrival: WorkspacePlanArrival | null | undefined;
 }): WorkspaceWorkRead {
-  const load = useCallback(() => rpc<WorkspaceWork>("listWorkspaceWork", []), [rpc]);
+  const load = useCallback(() => rpc("listWorkspaceWork", []), [rpc]);
   const { resource, reload } = useAsyncResource(load);
   const moves = readMoves.listWorkspaceWork ?? 0;
   const moved = useRef(moves);

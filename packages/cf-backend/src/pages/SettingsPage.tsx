@@ -11,8 +11,7 @@ import {
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_LABEL, DEFAULT_ADVISOR_MIN_SEVERITY,
   WORKSPACE_ARCHIVE_EXTENSION,
   type ApprovalGrant, type ArchiveCursor, type ArchivePage, type EvolutionConfigView,
-  type JsonValue, type InstructionSourceRow, type InstructionSourceView,
-  type Page, type SeekCursor,
+  type InstructionSourceRow, type InstructionSourceView, type SeekCursor,
   ArchiveCursorSchema,
 } from "@kinu.run/core";
 import { executorLabel } from "@kinu.run/core";
@@ -26,9 +25,9 @@ import { Segmented } from "@/components/ui/Segmented";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { WorkspaceLogo } from "@/components/Marks";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
-import type { Rpc } from '@kinu.run/core';
 import * as v from 'valibot';
 import { showing, detach, settle } from '@kinu.run/core/obs';
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 const ArchivePageSchema = v.object({ lines: v.array(v.string()), next: v.nullable(ArchiveCursorSchema) });
 
@@ -117,7 +116,7 @@ function saveLabel(saving: boolean, saved: boolean): string {
 
 /** The workspace socket's pieces settings read; the page shares the chat's socket rather than opening its own. */
 export interface SettingsSource {
-  readonly rpc: Rpc;
+  readonly rpc: WorkspaceRpc;
   readonly connectionStatus: ConnectionStatus;
   /** The workspace as a whole, from its opening. */
   readonly status: AgentStatus | null;
@@ -125,7 +124,7 @@ export interface SettingsSource {
   readonly retryLoad: () => void;
 }
 
-function LogoField({ title, logo, rpc }: { title: string; logo: string | null | undefined; rpc: Rpc }) {
+function LogoField({ title, logo, rpc }: { title: string; logo: string | null | undefined; rpc: WorkspaceRpc }) {
   const [drawing, setDrawing] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 
@@ -133,7 +132,7 @@ function LogoField({ title, logo, rpc }: { title: string; logo: string | null | 
     setDrawing(true);
     setNote(null);
     detach(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      const { drawn, refusal } = yield* Effect.promise(() => rpc<{ drawn: boolean; refusal: string | null }>("regenerateWorkspaceLogo", []));
+      const { drawn, refusal } = yield* Effect.promise(() => rpc("regenerateWorkspaceLogo", []));
 
       if (!drawn) setNote(refusal ?? "The model's drawing could not be used; the monogram stays. Try again.");
     }), showing(setNote)), Effect.sync(() => setDrawing(false))));
@@ -188,8 +187,8 @@ export function WorkspaceSettings({ workspace: agentId, title, logo, state, clea
   const loadRpcFields = useCallback((): void => {
     startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
       const [mode, evolution] = yield* Effect.promise(async () => Promise.allSettled([
-        rpc<{ mode: ApprovalMode }>("getShellApprovalMode", []),
-        rpc<EvolutionConfigView>("getEvolutionConfig", []),
+        rpc("getShellApprovalMode", []),
+        rpc("getEvolutionConfig", []),
       ]));
 
       if (mode.status === "rejected") failApproval({ cause: mode.reason });
@@ -220,10 +219,10 @@ export function WorkspaceSettings({ workspace: agentId, title, logo, state, clea
 
   const save = useCallback(() => detach(Effect.gen(function* () {
     // Only edited fields are written; the form has no authority over fields still loading or failed.
-    const writes: Array<Promise<JsonValue | undefined | void>> = [];
+    const writes: Array<Promise<object>> = [];
     const commits: Array<() => void> = [];
 
-    const write = <T,>(field: SettingField<T>, put: (value: T) => Promise<JsonValue | undefined | void>) => {
+    const write = <T,>(field: SettingField<T>, put: (value: T) => Promise<object>) => {
       const { value } = field;
 
       if (!field.dirty || value === null) return;
@@ -386,12 +385,12 @@ export function WorkspaceSettings({ workspace: agentId, title, logo, state, clea
 }
 
 /** A grant is scoped to one rule on one executor: it stops the asking, never widens reach, and cannot soften a refused rule. */
-export function StandingApprovalsCard({ rpc }: { rpc: Rpc }) {
+export function StandingApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   const load = useCallback(
-    async () => (await rpc<{ grants: ApprovalGrant[] }>("getShellApprovalGrants", [])).grants,
+    async () => (await rpc("getShellApprovalGrants", [])).grants,
     [rpc],
   );
 
@@ -452,14 +451,14 @@ const DECISION_WORD: Record<InstructionSourceRow["decision"], string> = {
 };
 
 /** Approval binds the exact bytes: any later edit stops matching the digest and drops the file back to reference material. */
-function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
+function InstructionApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState<InstructionSourceView | null>(null);
   const [cursor, setCursor] = useState<SeekCursor | undefined>(undefined);
 
   const load = useCallback(
-    async () => await rpc<Page<InstructionSourceRow>>(
+    async () => await rpc(
       "listInstructionApprovals", [cursor ? { cursor } : {}],
     ),
     [rpc, cursor],
@@ -480,7 +479,7 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
     setErr(null);
 
     return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      setOpen(yield* Effect.promise(async () => rpc<InstructionSourceView | null>("readInstructionApproval", [row.path])));
+      setOpen(yield* Effect.promise(async () => rpc("readInstructionApproval", [row.path])));
     }), showing(setErr)), Effect.sync(() => {
       setBusy(null);
     }));
@@ -495,7 +494,7 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
         // Approval binds the digest the owner was just shown; if the file moved on, nothing is granted.
         const opened = open?.path === row.path
           ? open
-          : (yield* Effect.promise(async () => rpc<InstructionSourceView | null>("readInstructionApproval", [row.path])));
+          : (yield* Effect.promise(async () => rpc("readInstructionApproval", [row.path])));
 
         if (!opened) {
           setErr("Kinu could not read that file, so nothing was approved. Try again.");
@@ -605,7 +604,7 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
 function WorkspaceBackupCard({
   rpc, workspace,
 }: {
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   workspace: string;
 }) {
   const [busy, setBusy] = useState(false);
@@ -676,7 +675,7 @@ const GEPA_DOT = {
 function GepaOptimizationCard({
   rpc,
 }: {
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
 }) {
   const [running, setRunning] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -744,7 +743,7 @@ function GepaOptimizationCard({
 function AlwaysActiveSkillsCard({
   rpc,
 }: {
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
 }) {
   const [names, setNames] = useState<string[]>([]);
   const [input, setInput] = useState('');

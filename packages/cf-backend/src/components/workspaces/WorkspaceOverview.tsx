@@ -2,7 +2,7 @@
  *  source or says none exists yet. */
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { Link } from "react-router-dom";
-import type { AgentTaskTree, PanelAgent, Rpc, WorkspaceWork, WorkspaceWorkOwner } from "@kinu.run/core";
+import type { AgentTaskTree, PanelAgent, WorkspaceWork, WorkspaceWorkOwner } from "@kinu.run/core";
 import type { ForkLineageRow } from "@kinu.run/core";
 import type { ReadMoves } from "@/hooks/use-workspace-reads";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
@@ -10,6 +10,7 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { AgentStatusMark } from "@/components/AgentStatus";
 import { GitHubSection } from "@/components/workspaces/GitHubSection";
 import { WorkspaceLogo } from "@/components/Marks";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 type Lane = "todo" | "doing" | "waiting" | "done";
 
@@ -80,13 +81,13 @@ export function WorkspaceOverview({ workspace, title, logo, rpc, readMoves, line
   workspace: string;
   title: string;
   logo: string | null | undefined;
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   readMoves: ReadMoves;
   lineage: ForkLineageRow | null;
   agents: readonly PanelAgent[];
   open: (agent: PanelAgent) => void;
 }) {
-  const load = useCallback(() => rpc<WorkspaceWork>("listWorkspaceWork", []), [rpc]);
+  const load = useCallback(() => rpc("listWorkspaceWork", []), [rpc]);
   const { resource, reload } = useAsyncResource(load);
   const work = lastValue(resource);
   const moves = readMoves.listWorkspaceWork ?? 0;

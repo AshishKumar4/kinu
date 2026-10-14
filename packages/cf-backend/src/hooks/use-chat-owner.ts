@@ -3,16 +3,16 @@ import { useState, useCallback, useEffect, useRef, useMemo, type RefObject } fro
 import { useAgent } from "agents/react";
 import { Effect } from "effect";
 import {
-  ORCHESTRATOR_AGENT_SLUG, PAGE_KEEPALIVE, hostedActorSocketPath, type ActorSnapshot, type AgentStatus, type InlineSteer,
-  type OpeningList, type PendingAction, type PlanReview, type ReasoningEffort, type SlateSummary,
+  ORCHESTRATOR_AGENT_SLUG, PAGE_KEEPALIVE, hostedActorSocketPath, type ActorSnapshot, type InlineSteer, type PlanReview,
+  type ReasoningEffort,
 } from "@kinu.run/core";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import type { FileUIPart, UIMessage } from "ai";
 import * as v from "valibot";
-import type { PendingConsent, Rpc, TabPresence, SendLanding, SendState } from "@kinu.run/core";
+import type { SendLanding, SendState } from "@kinu.run/core";
+import { workspaceRpc } from "@/lib/workspace-rpc";
+import type { OrchestratorAgent } from "@/orchestrator";
 import { sendLanding } from "@kinu.run/core";
-import type { BackgroundJob } from "@kinu.run/core/protocol";
-import type { ExecutorInfo, PanelAgent } from "@kinu.run/core";
 import { detach, diagnostics, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
 import {
   createSessionRecovery, fetchDeployedBuildSha, isNewerDeployedBuild, pageDeployedBuildSha, reportChatStreamFailure,
@@ -21,7 +21,6 @@ import {
 import { abandonTurn, abandonTurnIfOwner, admitTurn, newSendLatch } from "@kinu.run/core";
 import { terminalChatError, turnFailure, type ChatTurnError } from "@kinu.run/core";
 import { turnLiveness, TURN_CLAIM_FRAME, type TurnClaimState } from "@kinu.run/core";
-import type { InspectedWork } from "@kinu.run/core";
 import { useSocketFrames, type SocketFrame } from "./socket-frames";
 import {
   createLiveRefreshAdmission, formatWorkspaceError, loadWorkspaceSnapshot, readFailureText, refreshLiveResource,
@@ -57,46 +56,13 @@ export type SendAdmission =
   | { readonly landed: "mid-turn"; readonly settled: Promise<SendLanding> }
   | null;
 
-interface WorkspaceSnapshot {
-  /** The workspace as a whole: who it is, since when, from which fork. */
-  status: AgentStatus;
-  /** Its own agent's chat, as `getActorSnapshot` reads any agent's. */
-  chat: ActorSnapshot;
-  memoryContent: string;
-  slates: SlateSummary[];
-  executors: ExecutorInfo[];
-  executorOutputs: Array<{ name: string; outputs: ExecutorOutput[] }>;
-  lastActiveExecutor: string | null;
-  /** On the snapshot so the strip is right from first paint. */
-  tabPresence: TabPresence;
-  /** A branch that started or settled while this tab was gone. */
-  branchRuns: Array<{ branchId: string; task: string; status: "running" }>;
-  /** A turn with no tokens seen yet is still live; a claim nobody executes reads as stuck. */
-  turnClaim: TurnClaimState;
-}
-
-/** The snapshot and the lists the first screen draws, in the one read a workspace tab opens with (`getWorkspaceOpening`). */
-export interface WorkspaceOpening extends WorkspaceSnapshot {
-  pendingActions: PendingAction[];
-  backgroundJobs: BackgroundJob[];
-  inspectedWork: InspectedWork[];
-  subordinates: OpeningList<unknown>;
-  pendingConsents: OpeningList<PendingConsent[]>;
-  workspaceAgents: OpeningList<PanelAgent[]>;
-}
+/** The snapshot and the lists the first screen draws, in the one read a workspace tab opens with: as the server answers it. */
+export type WorkspaceOpening = Awaited<ReturnType<OrchestratorAgent["getWorkspaceOpening"]>>;
 
 /** Doubling from 1s, capped so a long outage keeps a slow heartbeat instead of hammering the DO. */
 const RETRY_BASE_MS = 1_000;
 
 const RETRY_MAX_MS = 30_000;
-
-interface CallableAgent {
-  call<T>(method: string, args: unknown[]): Promise<T>;
-}
-
-function bindRpc(agent: CallableAgent): Rpc {
-  return <T = unknown>(method: string, args: unknown[] = []) => agent.call<T>(method, args);
-}
 
 export function useWorkspaceRpc(agentId: string) {
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("connecting");
@@ -110,9 +76,7 @@ export function useWorkspaceRpc(agentId: string) {
     onError: useCallback(() => setConnectionStatus("error"), []),
   });
 
-  const rpc = useMemo(() => bindRpc(agent), [agent]);
-
-  return { rpc, connectionStatus };
+  return { rpc: useMemo(() => workspaceRpc(agent.call), [agent]), connectionStatus };
 }
 
 export interface WorkspaceExtension {
@@ -457,21 +421,18 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
   }, [agent, refreshDeployedBuild, sessionRecovery]);
 
   // A reconnect or manual retry changes the transport identity so mounted readers reload too.
-  const rpc = useMemo(() => {
-    const call = bindRpc(agent);
+  const rpc = useMemo(() => workspaceRpc(async <T,>(method: string, args?: unknown[]): Promise<T> => {
+    try {
+      const value = await agent.call<T>(method, args);
 
-    return async <T,>(method: string, args: unknown[] = []): Promise<T> => {
-      try {
-        const value = await call<T>(method, args);
-        sessionRecovery.rpcSucceeded();
+      sessionRecovery.rpcSucceeded();
 
-        return value;
-      } catch (cause) {
-        sessionRecovery.rpcFailed({ cause }, agent.readyState === WebSocket.OPEN);
-        throw cause;
-      }
-    };
-  }, [agent, sessionRecovery, loadGeneration]);
+      return value;
+    } catch (cause) {
+      sessionRecovery.rpcFailed({ cause }, agent.readyState === WebSocket.OPEN);
+      throw cause;
+    }
+  }), [agent, sessionRecovery, loadGeneration]);
 
   // Answered by the socket's auto-response, never the object: an idle page wakes nothing (2026-09-26, 180 RPCs a
   // minute to none). A silently dead socket shows in the next calls' timeouts, the workspace's and an agent's alike.
@@ -635,9 +596,9 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
     isCurrent: () => boolean,
     isSourceCurrent: (source: LiveRefreshSource) => boolean,
   ): Promise<void> {
-    const opening = isSubordinate ? null : await rpc<WorkspaceOpening>("getWorkspaceOpening", []);
+    const opening = isSubordinate ? null : await rpc("getWorkspaceOpening", []);
     // The root resolves the name through its directory, so a tab cannot ask about a non-child actor.
-    const chat = opening?.chat ?? await rpc<ActorSnapshot>("getActorSnapshot", [subordinate]);
+    const chat = opening?.chat ?? await rpc("getActorSnapshot", [subordinate]);
 
     if (!isCurrent()) return;
     // Decoded before anything is published: a chat whose plan does not decode fails whole, never half-loaded nor read
@@ -724,7 +685,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
       awaitSend: (sent: string) => agent.call<SendState>("awaitSend", [sent], { timeout: 0 }),
     };
 
-    return { landed: "mid-turn", settled: sendLanding(record, rpc<void>("send", [content, id, attachments, mode]), id) };
+    return { landed: "mid-turn", settled: sendLanding(record, rpc("send", [content, id, attachments, mode]), id) };
   }, [startTurn, sendMessage, isStreaming, rpc, agent]);
 
   /** `regenerate`, not `sendMessage`, which appended a duplicate user message per press. Under the
@@ -740,7 +701,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
   }, [startTurn, messages.length, regenerate]);
 
   /** Every per-chat call names a hosted chat's agent last; the workspace's names none. */
-  const actorArgs = useMemo(() => (subordinate === undefined ? [] : [subordinate]), [subordinate]);
+  const actorArgs = useMemo((): [] | [string] => (subordinate === undefined ? [] : [subordinate]), [subordinate]);
 
   /** Resolves null on success or the failure reason, which is also recorded on `error` after the
    *  picker is rolled back. Callers reporting "Saved" must check the result; it never rejects. */
@@ -751,7 +712,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
 
     try {
       // The server may have normalized the spec.
-      const { spec } = await rpc<{ spec?: string }>("setModel", [modelId, ...actorArgs]);
+      const { spec } = await rpc("setModel", [modelId, ...actorArgs]);
 
       if (spec) showing(spec);
       setSourceError("model", null);
@@ -762,7 +723,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
       let reason = `Could not switch model: ${readFailureText({ cause: err })}`;
 
       try {
-        showing((await rpc<ActorSnapshot>("getActorSnapshot", actorArgs)).model.model);
+        showing((await rpc("getActorSnapshot", actorArgs)).model.model);
       } catch (rollbackErr) {
         reason += `. Could not re-read the saved model either (${readFailureText({ cause: rollbackErr })}), so the picker may not show the saved model`;
       }
@@ -789,7 +750,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
   }, [rpc, setSourceError, actorArgs, actorSnapshot?.reasoningEffort]);
 
   const setDisplayName = useCallback(async (displayName: string): Promise<string> => {
-    const result = await rpc<{ displayName: string }>("setDisplayName", [displayName]);
+    const result = await rpc("setDisplayName", [displayName]);
     const saved = result.displayName;
     setActorSnapshot((prev) => prev ? { ...prev, displayName: saved } : prev);
 
@@ -798,7 +759,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
 
   const rereadPlan = useCallback(() => refreshCurrentLiveResource(
     "plan",
-    () => rpc<unknown>("getActivePlanReview", []),
+    () => rpc("getActivePlanReview", []),
     (plan) => setActivePlan(parseActivePlanReview({ value: plan })),
   ), [refreshCurrentLiveResource, rpc]);
 
@@ -830,7 +791,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
       sendChat,
       abortChat,
       /** Answered, and refused while a turn runs; the clear frame the server sends ahead of the answer empties every window. */
-      clearConversation: () => rpc<void>("clearConversation", []),
+      clearConversation: () => rpc("clearConversation", []),
       setModel,
       setReasoningEffort,
       setDisplayName,

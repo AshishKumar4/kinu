@@ -21,7 +21,8 @@ import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import type { SeekCursor } from "@kinu.run/core";
 import { fmtTokens, timeAgo } from "@kinu.run/core";
-import type { ForkNode, Rpc } from "@kinu.run/core";
+import type { ForkNode } from "@kinu.run/core";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 
 /** Shared by this panel and the run pane's node list; covers head-journal and search-node statuses. An unknown status gets the quiet dot. */
@@ -279,10 +280,12 @@ export function TranscriptBody({ view, onSelect, older, onLoadOlder, pending }: 
 
 const TRANSCRIPT_FALLBACK_MS = 4_000;
 
-export function useNodeTranscript({ runId, nodeId, rpc, headActivity, headDeltas, running }: {
+export function useNodeTranscript({ runId, nodeId, ownerPath = null, rpc, headActivity, headDeltas, running }: {
   runId: string | null;
   nodeId: string | null;
-  rpc: Rpc;
+  /** The path of the agent whose swarm it is; null for the workspace agent's own. */
+  ownerPath?: string | null;
+  rpc: WorkspaceRpc;
   headActivity: ReadonlyMap<string, number>;
   headDeltas: HeadDeltas;
   /** Seed only: once loaded, the journal's own status decides the cadence. Required, so every reader arms the
@@ -292,8 +295,8 @@ export function useNodeTranscript({ runId, nodeId, rpc, headActivity, headDeltas
   const load = useCallback(
     () => runId === null || nodeId === null
       ? Promise.resolve<NodeTranscriptView | null>(null)
-      : rpc<NodeTranscriptView | null>("getNodeTranscript", [runId, nodeId]),
-    [rpc, runId, nodeId],
+      : rpc("getNodeTranscript", ownerPath === null ? [runId, nodeId] : [runId, nodeId, {}, ownerPath]),
+    [rpc, runId, nodeId, ownerPath],
   );
 
   const subject = `${runId}:${nodeId}`;
@@ -349,13 +352,14 @@ export function useNodeTranscript({ runId, nodeId, rpc, headActivity, headDeltas
   const loadOlder = useCallback(() => {
     const at = walkRef.current;
 
-    if (inFlight.current !== null || below === null) return;
+    if (inFlight.current !== null || below === null || runId === null || nodeId === null) return;
     setWalk((prev) => ({ ...prev, loading: true, error: null }));
     const owner = Symbol('older page');
     // Install the owner before a synchronous RPC fake can settle the page load.
     inFlight.current = owner;
     detach(Effect.ensuring(Effect.catchCause(Effect.catchCause(Effect.gen(function* () {
-      const next = yield* Effect.promise(() => rpc<NodeTranscriptView | null>('getNodeTranscript', [runId, nodeId, { cursor: below }]));
+      const page = { cursor: below };
+      const next = yield* Effect.promise(() => rpc('getNodeTranscript', ownerPath === null ? [runId, nodeId, page] : [runId, nodeId, page, ownerPath]));
 
       if (walkRef.current !== at) return;
 
@@ -386,7 +390,7 @@ export function useNodeTranscript({ runId, nodeId, rpc, headActivity, headDeltas
     })), Effect.sync(() => {
       if (inFlight.current === owner) inFlight.current = null;
     })));
-  }, [rpc, runId, nodeId, below]);
+  }, [rpc, runId, nodeId, ownerPath, below]);
 
   return {
     view,
@@ -398,11 +402,13 @@ export function useNodeTranscript({ runId, nodeId, rpc, headActivity, headDeltas
   };
 }
 
-export function NodeTranscript({ selection, trees, rpc, headActivity, headDeltas = NO_HEAD_DELTAS, onSelect }: {
+export function NodeTranscript({ selection, ownerPath = null, trees, rpc, headActivity, headDeltas = NO_HEAD_DELTAS, onSelect }: {
   /** Structural: a transcript panel must not depend on the canvas module that owns `ExplorerSelection`. */
   selection: { runId: string; nodeId: string } | null;
+  /** The path of the agent whose swarm it is; null for the workspace agent's own. */
+  ownerPath?: string | null;
   trees: ReadonlyMap<string, ForkNode>;
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   headActivity: ReadonlyMap<string, number>;
   headDeltas?: HeadDeltas;
   onSelect: (nodeId: string) => void;
@@ -413,7 +419,7 @@ export function NodeTranscript({ selection, trees, rpc, headActivity, headDeltas
   const drawn = drawnRoot && nodeId !== null ? findForkNode(drawnRoot, nodeId) : null;
 
   const { view, resource, reload, older, loadOlder, pending } = useNodeTranscript({
-    runId, nodeId, rpc, headActivity, headDeltas, running: drawn?.status === "running",
+    runId, nodeId, ownerPath, rpc, headActivity, headDeltas, running: drawn?.status === "running",
   });
 
   const drawnLabel = cleanNodeLabel(drawn?.action, nodeId ?? "this branch");

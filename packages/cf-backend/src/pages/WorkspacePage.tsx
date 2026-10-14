@@ -12,7 +12,7 @@ import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   desktopClientUrl, executorLabel, ownerAsks, planSurface,
 } from "@kinu.run/core";
-import type { OwedOwnerIntent, PlanReview, Rpc, SignalCard } from "@kinu.run/core";
+import type { OwedOwnerIntent, PlanReview, SignalCard } from "@kinu.run/core";
 import type { UIMessage } from "ai";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { useActorChat, useKinu } from "@/hooks/use-kinu";
@@ -59,6 +59,7 @@ import { workspaceDisplayTitle, workspaceTitleDraft } from "@kinu.run/core";
 import { settleLogged, showing, detach, settle } from "@kinu.run/core/obs";
 import { InspectorToggle, WorkbenchPanels, type InspectorControl, type WorkbenchHandle } from "@/components/WorkbenchPanels";
 import { useCarriedAttachments, useOpeningMessage } from "@/components/workspaces/NewChatView";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 /** The mission is shown as the standing brief, not sent as an opening message
  *  the agent would then try to carry out. */
@@ -166,8 +167,8 @@ function ForkModal({
   );
 }
 
-function NestedAgentColumn({ workspace, path, rpc, ids, input }: { workspace: string; path: string; rpc: Rpc; ids: AgentLinkIds; input: boolean }) {
-  const load = useCallback(() => nestedAgent(rpc, path, ids), [rpc, path, ids]);
+function NestedAgentColumn({ workspace, path, rpc, ids, input }: { workspace: string; path: string; rpc: WorkspaceRpc; ids: AgentLinkIds; input: boolean }) {
+  const load = useCallback(() => nestedAgent((request) => rpc("inspectSubordinate", [request]), path, ids), [rpc, path, ids]);
   const { resource, reload } = useAsyncResource(load, undefined, `${path}|${ids.actor ?? ""}|${ids.parent ?? ""}`);
 
   if (resource.status === "loading") return <div className="flex flex-1 items-center justify-center"><Loader size="sm" /></div>;
@@ -195,11 +196,6 @@ function SwarmNodeColumn({ main, ownerPath, runId, nodeId, agent }: {
 }) {
   const working = agent.activity === "working";
 
-  // Main's socket reads every journal and carries every head's stream.
-  const rpc = useCallback<Rpc>(<T,>(method: string, args?: unknown[]) => main.rpc<T>(
-    method, method === "getNodeTranscript" && ownerPath !== null ? [...(args ?? []).slice(0, 2), (args ?? [])[2] ?? {}, ownerPath] : args,
-  ), [main, ownerPath]);
-
   const trees = useMemo(() => new Map<string, ForkNode>([[runId, {
     id: nodeId, parentId: null, depth: 0, value: null, visits: null, status: working ? "running" : "terminal",
     action: agent.label, children: [],
@@ -209,7 +205,8 @@ function SwarmNodeColumn({ main, ownerPath, runId, nodeId, agent }: {
     <div className="@container relative flex flex-col flex-1 min-h-0" data-agent-pane={`node/${runId}/${nodeId}`}>
       <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-4 py-4">
         {agent.parent !== null && <p className="p-meta p-text-3">Swarm worker from {agent.parent}</p>}
-        <NodeTranscript selection={{ runId, nodeId }} trees={trees} rpc={rpc} headActivity={main.headActivity}
+        {/* Main's socket reads every journal and carries every head's stream. */}
+        <NodeTranscript selection={{ runId, nodeId }} ownerPath={ownerPath} trees={trees} rpc={main.rpc} headActivity={main.headActivity}
           headDeltas={main.headDeltas} onSelect={() => undefined} />
       </div>
       {/* The workspace holds every running worker, whoever started the swarm; its siblings run on. */}
@@ -380,7 +377,7 @@ function routedAgentPath({ subName, "*": below }: Readonly<Record<string, string
  *  surface takes both from the agent's pane, never from the workspace's socket. */
 interface AgentPlanWindow {
   readonly plan: PlanReview | null;
-  readonly rpc: Rpc;
+  readonly rpc: WorkspaceRpc;
 }
 
 const AgentPlanWindowContext = createContext<(window: AgentPlanWindow | null) => void>(() => {});
@@ -411,7 +408,7 @@ function AgentChatColumn({ workspace, subName, subordinates, rpc, ids, input }: 
   workspace: string;
   subName: string;
   subordinates: readonly SubordinateRosterEntry[];
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   ids: AgentLinkIds;
   input: boolean;
 }) {
@@ -741,7 +738,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
     setBranchNotice(null);
     // Clear the draft only once the branch is accepted, and only if it was not edited meanwhile.
     startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
-      const result = yield* Effect.promise(async () => state.rpc<{ accepted: boolean; reason?: string }>("branchTurn", [t]));
+      const result = yield* Effect.promise(async () => state.rpc("branchTurn", [t]));
 
       if (result.accepted) ui.updateDraft((current) => current.trim() === t ? "" : current);
       else setBranchNotice(result.reason ?? "Branching is unavailable right now.");

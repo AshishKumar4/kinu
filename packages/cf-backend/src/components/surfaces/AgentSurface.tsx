@@ -9,7 +9,7 @@ import {
 } from "@phosphor-icons/react";
 import type { AgentStatus } from "@kinu.run/core";
 import type { ReadMoves } from "@/hooks/use-workspace-reads";
-import type { JsonValue, MemoryEntry, Rpc } from "@kinu.run/core";
+import type { MemoryEntry } from "@kinu.run/core";
 import { Effect } from "effect";
 import { attempt, detach, renderThrownChain } from "@kinu.run/core/obs";
 import { putAccountFact } from "../../lib/user-api";
@@ -22,8 +22,10 @@ import { ChatMascot, mascotSeed } from "@/components/Marks";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource, type AsyncResource } from "@/hooks/use-async-resource";
 import * as v from "valibot";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import type { OrchestratorAgent } from "@/orchestrator";
 
-interface Fact { key: string; value: JsonValue; confidence: number; source: string; lastObservedAt: number }
+type Fact = Awaited<ReturnType<OrchestratorAgent["getFacts"]>>[number];
 
 type PromoteState = "idle" | "saving" | "kept" | { readonly failed: string };
 
@@ -63,7 +65,7 @@ export interface AgentSurfaceProps {
   onRetryLoad: () => void;
   /** The changelog was read: what the agent changed in itself stops counting as unseen. */
   onChangelogSeen?: (() => void) | undefined;
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   /** `reads_changed` frames per live read, as WorkTab takes them. */
   readMoves?: ReadMoves;
   /** The workspace's name, which the agent's mascot is drawn from. */
@@ -199,7 +201,7 @@ function readOf(loaded: boolean, failed: boolean, retry: () => void): Read {
 }
 
 function Changing({ rpc, readMoves, onChangelogSeen, version }: {
-  rpc: Rpc; readMoves: ReadMoves; onChangelogSeen: (() => void) | undefined; version: number | null;
+  rpc: WorkspaceRpc; readMoves: ReadMoves; onChangelogSeen: (() => void) | undefined; version: number | null;
 }) {
   const { view, seenAt, seenError, resource, reload } = useChangelog(rpc, onChangelogSeen, readMoves.getEvolutionChangelog ?? 0);
   const entries = view?.entries ?? [];
@@ -238,7 +240,7 @@ export function AgentSurface(
   { snapshot, memory, memoryContent, onSearchMemory, onRetryLoad, onChangelogSeen, rpc, readMoves = {}, workspace }: AgentSurfaceProps,
 ) {
   // "Nothing noticed" may only be claimed about a listing that came back.
-  const loadFacts = useCallback(() => rpc<Fact[]>("getFacts", [100]), [rpc]);
+  const loadFacts = useCallback(() => rpc("getFacts", [100]), [rpc]);
   const { resource: factsResource, reload: reloadFacts } = useAsyncResource(loadFacts);
   const facts = lastValue(factsResource) ?? [];
   const as = lastValue(snapshot);

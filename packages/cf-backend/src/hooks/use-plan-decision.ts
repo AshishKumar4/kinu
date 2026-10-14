@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Cause, Effect } from "effect";
-import { OwedIntentSchema, PlanDecisionOutcomeSchema, planHandoffShortfall, type PlanReview, type Rpc } from "@kinu.run/core";
+import { OwedIntentSchema, PlanDecisionOutcomeSchema, planHandoffShortfall, type PlanReview } from "@kinu.run/core";
 import * as v from "valibot";
 import { attempt, KinuError, renderThrownChain, settle } from "@kinu.run/core/obs";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 type PlanDecisionKind = "request_changes" | "approve";
 
@@ -15,7 +16,7 @@ export interface PlanDecisionInput {
   readonly handoffPending: boolean;
   /** A decision on its way to the agent's wake (`owedIntents`): none is made again until the agent takes it. */
   readonly owed?: boolean;
-  readonly rpc: Rpc;
+  readonly rpc: WorkspaceRpc;
   /** False prevents the decision. */
   readonly save: () => Promise<boolean>;
   readonly onError: (message: string | null) => void;
@@ -48,7 +49,7 @@ export function usePlanDecision({ plan, editable, handoffPending, owed = false, 
       if (editable && !(yield* attempt({ doing: "saving plan annotations", otherwise: "io" }, save))) return;
 
       const result = v.parse(v.union([OwedIntentSchema, PlanDecisionOutcomeSchema]), yield* attempt({ doing: "deciding a plan review", otherwise: "io" }, () =>
-        rpc<unknown>("decidePlanReview", [plan.id, plan.revision, decision])));
+        rpc("decidePlanReview", [plan.id, plan.revision, decision])));
 
       // On its way to the agent's wake: the review shows it so (`owedIntents`) until the agent takes it.
       if ("owed" in result) return;

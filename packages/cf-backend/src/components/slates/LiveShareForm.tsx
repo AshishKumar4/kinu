@@ -4,17 +4,14 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { Button, Loader } from "@cloudflare/kumo";
 import { CaretDownIcon, CaretRightIcon, GlobeIcon, UsersIcon } from "@phosphor-icons/react";
 import * as v from "valibot";
-import {
-  LiveShareRecordSchema, SlateCapabilityGraphSchema,
-  SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE,
-  type LiveShareCreated, type LiveShareRecord, type LiveShareVisibility, type Rpc, type SlateAnswer, type SlateCapabilityGraph, type SlateGraphNamespace, type SlateGraphMember,
-} from "@kinu.run/core";
+import { LiveShareRecordSchema, SlateCapabilityGraphSchema, SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, type LiveShareCreated, type LiveShareRecord, type LiveShareVisibility, type SlateCapabilityGraph, type SlateGraphNamespace, type SlateGraphMember } from "@kinu.run/core";
 import { showing, detach } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { revokeShare, shareLive } from "@/lib/shared-api";
 import { answered } from "./BlueprintShareForm";
 import { AccessPicker, EmailsField, emailsOf, Failure, Lead, StopButton, type AccessOption } from "./ShareParts";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 export interface LiveShareFixture {
   graph: SlateCapabilityGraph;
@@ -193,7 +190,7 @@ function SharedNow({ shares, onStop, disabled }: { shares: readonly LiveShareRec
 export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListingPending, fixture }: {
   workspace: string;
   slate: string;
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   onClose: () => void;
   onBusy: (busy: boolean) => void;
   onListingPending?: () => void;
@@ -214,8 +211,8 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
     if (fixture !== undefined) return;
     let live = true;
     detach(Effect.catchCause(Effect.map(Effect.promise(() => Promise.all([
-      rpc<SlateAnswer<unknown>>("slate", [{ op: "graph", id: slate }]),
-      rpc<SlateAnswer<unknown>>("slate", [{ op: "liveShares" }]),
+      rpc("slate", [{ op: "graph", id: slate }]),
+      rpc("slate", [{ op: "liveShares" }]),
     ])), ([drawn, rows]) => {
       if (!live) return;
       setGraph(answered(drawn, SlateCapabilityGraphSchema));

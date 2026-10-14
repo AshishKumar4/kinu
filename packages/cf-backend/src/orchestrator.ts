@@ -120,7 +120,6 @@ import {
   type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT, SLATES_CHANGED_METADATA_KEY, slatesToPreview,
   type SlateSurfaceCatalog, type LiveShareRecord,
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
-  type ScaffoldRunResult,
   applyScaffoldDecision, getEvolutionStatus, listScaffoldVersions,
   previewScaffoldLive, runOptimization,
   decideRefinementRoute, evolutionAnswerWake, listRefinements, nextEvolutionAnswerAt, refinementPass, requestOwnerRefinement, showRefinementRoute,
@@ -190,7 +189,7 @@ import {
   type ExecutorDiffResult, type WorkspaceBaselines, type WorkspaceDiffResult, type WorkspaceReviewResult,
   initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes, deliverOwedChangeNotes, owesChangeNotes, type ChangeNotesChat,
   initTurnBranchesTable, TurnBranchesStore, branchHeadId, TurnSurface, turnAuthor, authoredTurnMetadata, workModeForTurnMetadata, type ActorReach, type ChatTurnInput,
-  type ChangeNotesResult, type NotedChanges, type ReviewAnnotation,
+  type ChangeNote, type ChangeNotesResult, type NotedChanges,
   diffLines, type DiffLine,
   getExecutorFiles, readExecutorFile, listEnvironments,
   renameExecutorPathOp, deleteExecutorPathOp,
@@ -4954,8 +4953,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   async previewScaffoldLive(
     version: number,
     task: string,
-  ): Promise<ScaffoldRunResult> {
-    return previewScaffoldLive(this.scaffoldControl, version, task);
+  ): Promise<ScaffoldRunReport> {
+    // Its native chunks do not cross the socket; the report counts them.
+    return scaffoldRunReport(await previewScaffoldLive(this.scaffoldControl, version, task));
   }
 
   /**
@@ -5171,12 +5171,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   @callable()
-  async getChangeNotes(source: string): Promise<ReviewAnnotation[]> {
+  async getChangeNotes(source: string): Promise<ChangeNote[]> {
     return readChangeNotes(this.rt, source);
   }
 
   @callable()
-  async saveChangeNotes(source: string, notes: ReviewAnnotation[]): Promise<ChangeNotesResult> {
+  async saveChangeNotes(source: string, notes: readonly ChangeNote[]): Promise<ChangeNotesResult> {
     return saveChangeNotes(this.rt, source, { value: notes });
   }
 
@@ -5259,7 +5259,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Owner-scoped ('interactive'); workspace capability tiers do not gate it.
    */
   @callable()
-  exportWorkspaceArchive(cursor?: ArchiveCursor): Promise<ArchivePage> {
+  exportWorkspaceArchive(cursor: ArchiveCursor | null = null): Promise<ArchivePage> {
     return settle(Effect.gen({ self: this }, function* () {
       const ownerUserId = this.getOwnerUserId();
 
@@ -5421,9 +5421,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   @callable()
-  async getFacts(limit = 100): Promise<Array<{
-    key: string; value: unknown; confidence: number; source: string; lastObservedAt: number;
-  }>> {
+  async getFacts(limit = 100): Promise<Array<Pick<Fact, 'key' | 'value' | 'confidence' | 'source' | 'lastObservedAt'>>> {
     return this.facts.recentTopK(limit).map((f) => ({
       key: f.key, value: f.value, confidence: f.confidence, source: f.source, lastObservedAt: f.lastObservedAt,
     }));
@@ -7377,7 +7375,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 reportSocketCallFailures(OrchestratorAgent, Agent);
 
 /** Cursor is client-supplied: anything malformed starts a fresh archive instead of reaching the query. */
-function parseArchiveCursor(value: ArchiveCursor | undefined): ArchiveCursor | null {
+function parseArchiveCursor(value: ArchiveCursor | null): ArchiveCursor | null {
   const parsed = v.safeParse(ArchiveCursorSchema, value);
 
   return parsed.success ? parsed.output : null;

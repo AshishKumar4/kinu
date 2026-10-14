@@ -94,7 +94,8 @@ import {
   type ActorSnapshot, type AdvisorSeverity, type AgentStatus, type KinuEvent, type JsonObject, type JsonValue, type PlanReview, type ReviewAnnotation,
   type ProfileCatalogEnvelope, type SubordinateInspectionRequest, type AccountUsage,
 } from "@kinu.run/core";
-import type { ActivitySnapshot, ExecutorCommandResult, ForkNode, MemoryEntry, Rpc } from "@kinu.run/core";
+import type { ActivitySnapshot, ExecutorCommandResult, ForkNode, MemoryEntry } from "@kinu.run/core";
+import { workspaceRpc, type SocketCall } from "@/lib/workspace-rpc";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { buildTree, type MctsRow } from "@kinu.run/core";
 import type { ExecutorOutput } from "@/hooks/use-chat-owner";
@@ -1800,7 +1801,7 @@ function galleryPlanInspection(request: SubordinateInspectionRequest, plans: rea
   throw new Error('Unexpected gallery plan inspection');
 }
 
-const stubRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+const stubRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === 'inspectSubordinate') {
     const request = v.parse(SubordinateInspectionRequestSchema, args?.[0]);
 
@@ -3124,7 +3125,7 @@ async function snapshotGate(): Promise<void> {
   });
 }
 
-const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+const workspacePageRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   const waited = ASYNC_PAGE_RPC.get(method);
 
   if (waited !== undefined) return rpcResult(await waited(args)).json<T>();
@@ -3864,7 +3865,7 @@ const GEPA_OLDER_DETAIL = {
   pareto: [{ candidateId: "cand_1c", instanceId: "i1", score: 0.7 }],
 };
 
-const evolutionRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+const evolutionRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "getQuality") return rpcResult(QUALITY_DAYS).json<T>();
 
   if (method === "getQualityWindow") return rpcResult(QUALITY_WINDOW).json<T>();
@@ -4020,21 +4021,21 @@ function explorationRead(
   return TRANSCRIPT_BY_NODE.get(String(args[1])) ?? null;
 }
 
-const forkRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+const forkRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (EXPLORATION_READS.has(method)) return rpcResult(v.parse(JsonValueSchema, explorationRead(method, args ?? []))).json<T>();
 
   return stubRpc<T>(method, args);
 };
 
 /** The surface focuses `runs[0]`, so each frame puts its subject first, selected by root id rather than index. */
-function forkRpcOver(rows: readonly ExplorationCanvasRun[]): Rpc {
+function forkRpcOver(rows: readonly ExplorationCanvasRun[]): SocketCall {
   return async <T,>(method: string, args?: unknown[]): Promise<T> =>
     EXPLORATION_READS.has(method)
       ? rpcResult(v.parse(JsonValueSchema, explorationRead(method, args ?? [], rows))).json<T>()
       : stubRpc<T>(method, args);
 }
 
-function focusRun(rootId: string, rows: readonly ExplorationCanvasRun[] = CANVAS_ROWS): Rpc {
+function focusRun(rootId: string, rows: readonly ExplorationCanvasRun[] = CANVAS_ROWS): SocketCall {
   const wanted = rows.filter((entry) => entry.run.id === rootId);
 
   return forkRpcOver([...wanted, ...rows.filter((entry) => entry.run.id !== rootId)]);
@@ -4116,7 +4117,7 @@ function liveActivity(stage: number): ReadonlyMap<string, number> {
 }
 
 /** Stable: `useAsyncResource` keys its load on the `rpc` identity, so the stage is read from a ref at call time. */
-function liveRpcOver(stageRef: { readonly current: number }): Rpc {
+function liveRpcOver(stageRef: { readonly current: number }): SocketCall {
   return async <T,>(method: string, args?: unknown[]): Promise<T> => {
     const rows = liveCanvasRows(stageRef.current);
 
@@ -4260,7 +4261,7 @@ function Shell(
     headActivity = NO_HEAD_ACTIVITY, backgroundJobs = BACKGROUND_JOBS, notices = [], providerWait = null,
   }:
   {
-    surface?: SurfaceKind; mctsTrees?: ReadonlyMap<string, ForkNode>; rpc?: Rpc;
+    surface?: SurfaceKind; mctsTrees?: ReadonlyMap<string, ForkNode>; rpc?: SocketCall;
     pendingActions?: PendingAction[];
     headActivity?: ReadonlyMap<string, number>;
     /** Empty is the liveness case: with no running job or streaming turn the fork list drops to its idle cadence. */
@@ -4292,7 +4293,7 @@ function Shell(
                 memory={[]} memoryContent="" onSearchMemory={() => {}} mctsTrees={mctsTrees} headActivity={headActivity} isStreaming={false}
                 executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
                 backgroundJobs={backgroundJobs} inspectedWork={[]} onRefreshJobs={() => {}} pendingActions={pendingActions}
-                rpc={rpc}
+                rpc={workspaceRpc(rpc)}
               />
             </div>
           </div>
@@ -4650,7 +4651,7 @@ function ChatHistoryFrame() {
   const requests = useRef(0);
   const [calls, setCalls] = useState<string[]>([]);
 
-  const rpc: Rpc = useCallback(<T,>(_method: string, args?: unknown[]): Promise<T> => settle(Effect.gen(function* () {
+  const rpc: SocketCall = useCallback(<T,>(_method: string, args?: unknown[]): Promise<T> => settle(Effect.gen(function* () {
     const [{ cursor }] = v.parse(v.tuple([v.object({ cursor: v.optional(PositionCursorSchema) })]), args);
     const request = ++requests.current;
     setCalls((prev) => [...prev, cursor === undefined ? "newest" : String(cursor.before)]);
@@ -4671,7 +4672,7 @@ function ChatHistoryFrame() {
     return yield* Effect.promise(() => rpcResult(start === 0 ? { status: "end", items } : { status: "more", items, next: { before: start } }).json<T>());
   })), []);
 
-  const { history, transcript } = useChatThread({ rpc, live, seeded: true });
+  const { history, transcript } = useChatThread({ rpc: workspaceRpc(rpc), live, seeded: true });
 
   const messagesRef = useGrowingScroll({
     grows: "up", content: transcript, fetched: history.entries, loading: history.loading,
@@ -4737,7 +4738,7 @@ function HistoryAuthorityFrame() {
   const failFirst = useRef(true);
   const requests = useRef(0);
 
-  const rpc: Rpc = useCallback(<T,>(): Promise<T> => settle(Effect.gen(function* () {
+  const rpc: SocketCall = useCallback(<T,>(): Promise<T> => settle(Effect.gen(function* () {
     const request = ++requests.current;
     yield* Effect.promise(async () => hold.promise);
 
@@ -4751,7 +4752,7 @@ function HistoryAuthorityFrame() {
     return yield* Effect.promise(() => rpcResult({ status: "end", items: [] }).json<T>());
   })), [hold]);
 
-  const { history } = useChatThread({ rpc, live: NO_HISTORY_LIVE, seeded: true });
+  const { history } = useChatThread({ rpc: workspaceRpc(rpc), live: NO_HISTORY_LIVE, seeded: true });
 
   const loadMore = history.loadMore;
   useEffect(() => { loadMore(); }, [loadMore]);
@@ -4893,7 +4894,7 @@ function QualityRetryFrame() {
     return () => window.removeEventListener("gallery:quality-heal", heal);
   }, []);
 
-  const rpc = useMemo<Rpc>(() => async <T,>(method: string): Promise<T> => {
+  const rpc = useMemo<SocketCall>(() => async <T,>(method: string): Promise<T> => {
     if (method === "getQuality") {
       if (!healthy.current) throw new Error("quality fixture failed");
 
@@ -4908,7 +4909,7 @@ function QualityRetryFrame() {
   return (
     <div data-quality-retry className="p-bg p-text min-h-screen p-6">
       <div className="mx-auto max-w-[760px]">
-        <QualityView rpc={rpc} moved={0} />
+        <QualityView rpc={workspaceRpc(rpc)} moved={0} />
       </div>
     </div>
   );
@@ -5239,7 +5240,7 @@ const BRAIN_STATUS = {
 const GALLERY_SLATE_ID = "sandbox-probe";
 
 /** Gallery-only previewSlate fixture. It exercises SlateFrame, not a deployed preview origin. */
-const slateRpc: Rpc = async <T,>(method: string, args?: Parameters<Rpc>[1]): Promise<T> => {
+const slateRpc: SocketCall = async <T,>(method: string, args?: Parameters<SocketCall>[1]): Promise<T> => {
   if (method === "previewSlate") {
     return rpcResult({ ok: true, value: { url: SLATE_GALLERY_URL, port: 8789, sized: false } }).json<T>();
   }
@@ -5251,7 +5252,7 @@ function SlatePreviewFrame() {
   return (
     <div className="p-bg min-h-screen flex justify-center">
       <div className="w-[720px] min-h-screen border-x p-border p-5">
-        <SlateFrame id={GALLERY_SLATE_ID} rpc={slateRpc} />
+        <SlateFrame id={GALLERY_SLATE_ID} rpc={workspaceRpc(slateRpc)} />
       </div>
     </div>
   );
@@ -5271,7 +5272,7 @@ const SLATE_THREAD: UIMessage[] = [
 
 function ChatSlateFrame() {
   const thread = buildTranscript(SLATE_THREAD, []);
-  const inline = { rpc: slateRpc, openSlate: () => {} };
+  const inline = { rpc: workspaceRpc(slateRpc), openSlate: () => {} };
 
   return (
     <SlateInlineContext.Provider value={inline}>
@@ -5518,7 +5519,7 @@ function ShareDialogFrame({ mode }: { mode: "live" | "blueprint" }) {
 
   return (
     <div className="h-screen p-bg p-text">
-      <ShareSlateDialog workspace="checkout-fixes" slate="issue-triage" title="Issue triage" rpc={workRpc} onClose={() => {}}
+      <ShareSlateDialog workspace="checkout-fixes" slate="issue-triage" title="Issue triage" rpc={workspaceRpc(workRpc)} onClose={() => {}}
         fixture={{
           mode,
           live: { graph: SHARE_GRAPH, liveShares: [LIVE_SHARE] },
@@ -5541,7 +5542,7 @@ function BlueprintFrame() {
   );
 }
 
-const workRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+const workRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "listWorkspaceWork") return rpcResult(WORKSPACE_WORK).json<T>();
 
   if (method === "getEvolutionChangelog") return rpcResult(v.parse(JsonValueSchema, CHANGELOG)).json<T>();
@@ -5561,14 +5562,14 @@ const workRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
 function PlanReviewFrame() {
   return (
     <div data-gallery-plan-review className="p-bg p-text h-screen">
-      <PlanReviewView plan={galleryAgentPlan} rpc={workspacePageRpc} owedIntents={galleryOwedIntents()} />
+      <PlanReviewView plan={galleryAgentPlan} rpc={workspaceRpc(workspacePageRpc)} owedIntents={galleryOwedIntents()} />
     </div>
   );
 }
 
 
 /** One decision waiting, no background work: the plan read has only a closed task and no job has ever run. */
-const settledOnlyRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+const settledOnlyRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "listWorkspaceWork") return rpcResult({
     plans: [],
     tasks: [{
@@ -5582,7 +5583,7 @@ const settledOnlyRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promis
 
 /** Both reads refuse: Now owes the plan read's retry, and the changelog's is the Agent tab's. The running job is a prop,
  *  so Now still shows it. */
-const failedReadsRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+const failedReadsRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "listWorkspaceWork") throw new Error("plan fixture failed");
 
   if (method === "getEvolutionChangelog") throw new Error("journal fixture failed");
@@ -5679,7 +5680,7 @@ function WorkFrame() {
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
           backgroundJobs={jobs} inspectedWork={[]} onRefreshJobs={() => {}} pendingActions={lane.queue}
           tabPresence={{ explorations: true, work: true }}
-          rpc={lane.rpc}
+          rpc={workspaceRpc(lane.rpc)}
         />
       </div>
     </div>
@@ -5708,7 +5709,7 @@ const SHELL_GRANTS = [
   { rule: "docker-destructive", executor: "computer" },
 ];
 
-const approvalsRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+const approvalsRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "getShellApprovalGrants") return rpcResult({ grants: SHELL_GRANTS }).json<T>();
 
   if (method === "revokeShellApprovalGrants") return rpcResult({ ok: true, grants: SHELL_GRANTS }).json<T>();
@@ -5734,9 +5735,9 @@ function ApprovalsFrame() {
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
           backgroundJobs={[]} inspectedWork={[]} onRefreshJobs={() => {}} pendingActions={PARKED_ONLY}
-          rpc={approvalsRpc}
+          rpc={workspaceRpc(approvalsRpc)}
         />
-        <StandingApprovalsCard rpc={approvalsRpc} />
+        <StandingApprovalsCard rpc={workspaceRpc(approvalsRpc)} />
       </div>
     </div>
   );
@@ -5744,7 +5745,7 @@ function ApprovalsFrame() {
 
 const PARKED_ONLY: PendingAction[] = PENDING_ACTIONS.filter((a) => a.kind === "deferred_action");
 
-const settledEmptyRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+const settledEmptyRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "listWorkspaceWork") return rpcResult({ plans: [], tasks: [] }).json<T>();
 
   if (method === "getEvolutionChangelog") return rpcResult({ entries: [], unseenCount: 0, seenAt: 0 }).json<T>();
@@ -5763,7 +5764,7 @@ function WorkEmptyFrame() {
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
           backgroundJobs={[]} inspectedWork={[]} onRefreshJobs={() => {}} pendingActions={[]}
           tabPresence={{ explorations: false, work: false }}
-          rpc={settledEmptyRpc}
+          rpc={workspaceRpc(settledEmptyRpc)}
         />
       </div>
     </div>
@@ -5886,7 +5887,7 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
     { name: "computer", prefix: "computer.*", live: true, policy: { readOnly: false, consistency: "ephemeral" }, reason: null },
   ];
 
-  const filesRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  const filesRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promise<T> => {
     const dirOf = (p: string) => p.slice(0, p.lastIndexOf("/")) || "/";
     const nameOf = (p: string) => p.slice(p.lastIndexOf("/") + 1);
 
@@ -6031,7 +6032,7 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
           executors={executors} executorOutputs={executorOutputs}
           onExecute={runCommand} lastActiveExecutor="workspace"
           backgroundJobs={[]} inspectedWork={[]} onRefreshJobs={() => {}} pendingActions={[]}
-          rpc={filesRpc}
+          rpc={workspaceRpc(filesRpc)}
         />
       </div>
     </div>
@@ -6287,7 +6288,7 @@ const ACTIVITY_FRESH: ActivitySnapshot = {
   log: [],
 };
 
-const activityRpc = (snapshot: ActivitySnapshot): Rpc =>
+const activityRpc = (snapshot: ActivitySnapshot): SocketCall =>
   async <T,>(method: string, args?: unknown[]): Promise<T> => (
     method === "getActivitySnapshot" ? rpcResult(v.parse(JsonValueSchema, snapshot)).json<T>() : stubRpc<T>(method, args)
   );
@@ -6610,7 +6611,7 @@ function AgentPanel(
       <GalleryComposer notices={banner ? [workspaceLoadNotice(banner, () => {})] : []} />
       <AgentSurface
         snapshot={snapshot} memory={WORK_MEMORIES} memoryContent={memoryContent}
-        onSearchMemory={() => {}} onRetryLoad={() => {}} rpc={evolutionRpc} workspace={WORKSPACE_PAGE_NAME}
+        onSearchMemory={() => {}} onRetryLoad={() => {}} rpc={workspaceRpc(evolutionRpc)} workspace={WORKSPACE_PAGE_NAME}
       />
     </section>
   );
@@ -6662,7 +6663,7 @@ function TranscriptFrame() {
           <div className="h-[34rem] w-[44rem] flex flex-col">
             <NodeTranscript
               selection={{ runId: nodeId.startsWith("n") ? "n000" : "root-merge-1", nodeId }}
-              trees={MCTS_TREES} rpc={forkRpc} headActivity={NO_HEAD_ACTIVITY}
+              trees={MCTS_TREES} rpc={workspaceRpc(forkRpc)} headActivity={NO_HEAD_ACTIVITY}
               onSelect={() => {}} />
           </div>
         </div>
@@ -6679,7 +6680,7 @@ function TranscriptFrame() {
               task: "Actually, check the staging snapshot first — I don't think the migration ran there.",
               takeSetId: undefined, turnId: undefined, message: undefined,
             }}
-            rpc={forkRpc} headActivity={NO_HEAD_ACTIVITY}
+            rpc={workspaceRpc(forkRpc)} headActivity={NO_HEAD_ACTIVITY}
             // Unreachable here: picking needs a hydrated take set.
             onPick={() => Promise.reject(new Error("no take set in this frame"))}
             onDismiss={() => {}} />
@@ -7375,7 +7376,7 @@ function SnapshotRaceFrame() {
   </>;
 }
 
-const snapshotRaceRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+const snapshotRaceRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   const current = document.documentElement.dataset.snapshotRaceRevision === "current";
   const memoryContent = current ? "current memory" : "snapshot memory";
   const executors = current ? [{ name: "current-executor", type: "workspace", cwd: "/workspace" }] : [];
@@ -7421,7 +7422,7 @@ let qualityLiveRatings = 0;
 function QualityLiveFrame() {
   const state = useKinu(WORKSPACE_PAGE_NAME);
 
-  const rpc = useMemo<Rpc>(() => async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  const rpc = useMemo<SocketCall>(() => async <T,>(method: string, args?: unknown[]): Promise<T> => {
     if (method === "getQualityWindow") {
       return rpcResult({ ...QUALITY_WINDOW, rated: QUALITY_WINDOW.rated + qualityLiveRatings, turns: QUALITY_WINDOW.turns + qualityLiveRatings }).json<T>();
     }
@@ -7441,7 +7442,7 @@ function QualityLiveFrame() {
         qualityLiveRatings += 1;
         galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["getQuality"] }));
       }}>Rate a turn</button>
-      <div className="mx-auto max-w-[760px]"><QualityView rpc={rpc} moved={state.readMoves.getQuality ?? 0} /></div>
+      <div className="mx-auto max-w-[760px]"><QualityView rpc={workspaceRpc(rpc)} moved={state.readMoves.getQuality ?? 0} /></div>
     </div>
   );
 }
