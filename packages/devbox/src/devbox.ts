@@ -2336,7 +2336,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       this.stampInteraction();
 
       // A stopped job's session goes with it: the shell under its output, and its tab (D95).
-      if (ended) await this.#forgetJobSession(processId);
+      if (ended) await this.#endSession(jobSessionId(processId));
 
       return { stopped: ended };
     }));
@@ -3362,13 +3362,6 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     if (!records.some((record) => record.id === id)) this.ctx.storage.kv.put(SESSIONS_KEY, [...records, { id, name: jobSessionName(command), cwd, job: processId }]);
   }
 
-  async #forgetJobSession(processId: string): Promise<void> {
-    const id = jobSessionId(processId);
-    const container = this.ctx.container;
-
-    if (container?.running === true) await resetTerminal(container, id);
-    this.ctx.storage.kv.put(SESSIONS_KEY, this.#sessionRecords().filter((record) => record.id !== id));
-  }
 
   /**
    * What each terminal session showed and was running, kept on the box's disk as it stops (D97). A save that fails is
@@ -3423,19 +3416,22 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
    * how its last command ended, the ports under it, its folder's branch. A box that is not running is not woken: its
    * sessions read as they were left. A session's folder, read, is kept for the next start.
    */
+  /**
+   * The records as they are when the read answers, not as they were when it began: an open, rename or close made while
+   * the exec ran stays, and a session still recorded keeps the folder the read found it in.
+   */
   terminalSessions(): Promise<readonly TerminalSession[]> {
     return settle(attempt('io', async () => {
-      const records = this.#sessionRecords();
       const container = this.ctx.container;
 
-      if (container?.running !== true) return mergeSessions(records, null);
-      const read = await (await container.exec(['bash', '-c', SESSIONS_READ, 'terminal-sessions', PORT_LISTENERS])).output();
-      const sessions = mergeSessions(records, parseSessionsRead(new TextDecoder().decode(read.stdout)));
-      const moved = records.map((record) => ({ ...record, cwd: sessions.find((session) => session.id === record.id && session.open)?.cwd ?? record.cwd }));
+      if (container?.running !== true) return mergeSessions(this.#sessionRecords(), null);
+      const read = parseSessionsRead(decoded(await (await container.exec(['bash', '-c', SESSIONS_READ, 'terminal-sessions', PORT_LISTENERS])).output()).stdout);
+      const records = this.#sessionRecords();
+      const moved = records.map((record) => ({ ...record, cwd: read.get(record.id)?.cwd ?? record.cwd }));
 
       if (moved.some((record, at) => record.cwd !== records[at]?.cwd)) this.ctx.storage.kv.put(SESSIONS_KEY, moved);
 
-      return sessions;
+      return mergeSessions(moved, read);
     }));
   }
 
@@ -3468,21 +3464,31 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return settle(Effect.gen({ self: this }, function* () {
       const session = yield* this.#session(id);
 
-      if (session.job !== undefined) {
-        const job = session.job;
+      const job = session.job;
 
+      // A job on a computer that is running or starting is stopped there; a stopped computer is not started to stop
+      // it: its spec goes, so no start brings it back.
+      if (job !== undefined && (this.ctx.container?.running === true || this.#startup !== undefined)) {
         yield* attempt('io', () => this.stopSupervised(job));
 
         return;
       }
 
-      const container = this.ctx.container;
-
-      if (container?.running === true) yield* attempt('io', () => resetTerminal(container, id));
-      // A stopped box cannot remove what it saved of the session; its next start does, before any attach (D97).
-      else this.ctx.storage.kv.put(SESSIONS_CLOSED_KEY, [...this.#closedSessions(), id]);
-      this.ctx.storage.kv.put(SESSIONS_KEY, this.#sessionRecords().filter((record) => record.id !== id));
+      if (job !== undefined) yield* attempt('io', () => this.#supervised().forget(job));
+      yield* attempt('io', () => this.#endSession(id));
     }));
+  }
+
+  /**
+   * A session's shell and screen end, and its record goes. A stopped box cannot remove what it saved of the session;
+   * its next start does, before any attach (D97).
+   */
+  async #endSession(id: string): Promise<void> {
+    const container = this.ctx.container;
+
+    if (container?.running === true) await resetTerminal(container, id);
+    else this.ctx.storage.kv.put(SESSIONS_CLOSED_KEY, [...this.#closedSessions(), id]);
+    this.ctx.storage.kv.put(SESSIONS_KEY, this.#sessionRecords().filter((record) => record.id !== id));
   }
 
 

@@ -26,6 +26,8 @@ interface Ports {
 
 export class Snapshots {
   #sweeping: Promise<void> | undefined;
+  /** Moves at each supersede: a save whose take began before one was superseded with what it read. */
+  #lineage = 0;
   constructor(readonly ports: Ports) {}
 
   get record(): v.InferOutput<typeof Record> | null {
@@ -47,13 +49,24 @@ export class Snapshots {
 
   started(own?: string): void { this.ports.kv.put(WOKE_FROM_KEY, own ?? ''); }
 
-  /** An image or golden start ends the old lineage; a wake from its own save extends it. */
+  /**
+   * An image or golden start ends the old lineage; a wake from its own save extends it. A lineage superseded while the
+   * take ran (a discard, a cutover) makes the snapshot owed for deletion, never the next wake: it holds what was
+   * discarded.
+   */
   async save(): Promise<void> {
     const rev = this.ports.chainRev();
     const held = this.record;
     const parent = held !== null && held.id === this.ports.kv.get(WOKE_FROM_KEY) ? held : undefined;
+    const lineage = this.#lineage;
     const snapshot = await this.ports.take();
     const takenAt = Date.now();
+
+    if (lineage !== this.#lineage) {
+      this.ports.kv.put(DEAD_SNAPSHOTS_KEY, [...new Set([...this.#dead(), snapshot.id])]);
+
+      return;
+    }
 
     if (parent === undefined) this.supersede();
     this.ports.kv.put(SNAPSHOT_KEY, {
@@ -64,6 +77,8 @@ export class Snapshots {
 
   supersede(): void {
     const held = this.record;
+
+    this.#lineage += 1;
 
     if (held === null) return;
     this.ports.kv.put(DEAD_SNAPSHOTS_KEY, [...new Set([...this.#dead(), ...held.lineage, held.id])]);

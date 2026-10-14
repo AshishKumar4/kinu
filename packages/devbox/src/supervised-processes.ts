@@ -62,6 +62,11 @@ export class SupervisedProcesses {
     return [...(await this.ports.storage.list<SupervisedProcessSpec>({ prefix: SUPERVISED_SPEC_PREFIX })).values()];
   }
 
+  /** A stopped computer's job, ended without starting it: its spec goes, so no restore runs it again. */
+  async forget(processId: string): Promise<void> {
+    await this.ports.storage.delete(`${SUPERVISED_SPEC_PREFIX}${processId}`);
+  }
+
   run(request: SupervisedStart, context?: ReservationContext): Promise<Started | typeof STALE>;
   run(request: SupervisedStop, context?: ReservationContext): Promise<Stopped | typeof STALE>;
   run(request: Request, context?: ReservationContext): Promise<Outcome> {
