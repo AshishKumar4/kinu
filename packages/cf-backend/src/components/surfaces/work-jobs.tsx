@@ -10,18 +10,27 @@ import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { jobName, jobPhase, lastOutputLines, shortJobId, timeAgo, type InspectedWork } from "@kinu.run/core";
 import { showing, detach } from "@kinu.run/core/obs";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { toneInk, type StatusTone } from "@/components/ui/Status";
+
+/** How a background job stands, here and on the operator's drilldown: running is live; serving is healthy. */
+export const JOB_TONE = {
+  running: "live", serving: "success", completed: "success", failed: "danger", cancelled: "neutral",
+} satisfies Record<BackgroundJob["status"], StatusTone>;
 
 function statusMeta(status: BackgroundJob["status"]) {
+  const tone = toneInk(JOB_TONE[status]);
+
   switch (status) {
-    case "running": return { icon: SpinnerGapIcon, tone: "p-warning", spin: true, label: "Running" };
-    case "serving": return { icon: BroadcastIcon, tone: "p-success", spin: false, label: "Serving" };
-    case "completed": return { icon: CheckCircleIcon, tone: "p-success", spin: false, label: "Completed" };
-    case "failed": return { icon: WarningCircleIcon, tone: "p-danger", spin: false, label: "Failed" };
-    case "cancelled": return { icon: ProhibitIcon, tone: "p-text-3", spin: false, label: "Cancelled" };
+    case "running": return { icon: SpinnerGapIcon, tone, spin: true, label: "Running" };
+    case "serving": return { icon: BroadcastIcon, tone, spin: false, label: "Serving" };
+    case "completed": return { icon: CheckCircleIcon, tone, spin: false, label: "Completed" };
+    case "failed": return { icon: WarningCircleIcon, tone, spin: false, label: "Failed" };
+    case "cancelled": return { icon: ProhibitIcon, tone, spin: false, label: "Cancelled" };
   }
 }
 
-/** The durable resume count, shown nowhere else. Null when there is nothing to say. */
+/** The durable resume count, in the owner's words (the operator's drilldown keeps its own terse count). Null when there
+ *  is nothing to say. */
 function interruptionNote(job: BackgroundJob, now: number): string | null {
   const attempts = job.resumeAttempts ?? 0;
 
@@ -66,7 +75,7 @@ export function InspectedRow({ work, now }: { work: InspectedWork; now: number }
   );
 }
 
-export interface JobCardProps {
+interface JobCardProps {
   job: BackgroundJob;
   grouped?: boolean;
   /** Re-fetch after a mutation; the hook also polls on its own cadence. */

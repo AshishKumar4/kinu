@@ -41,7 +41,7 @@ const NO_IDS: ReadonlySet<string> = new Set();
 /** Hoisted: a `= []` default mints a new array per render and breaks the thread memo. */
 const NO_STEER_RUNS: readonly InlineSteer[] = [];
 
-export interface ChatThreadInput {
+interface ChatThreadInput {
   readonly rpc: WorkspaceRpc;
   readonly live: readonly UIMessage[];
   /** A delivered empty list still starts the walk; only the store can say the conversation is empty. */

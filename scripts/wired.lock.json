@@ -1,6 +1,4 @@
 [
-  "packages/cf-backend/src/components/surfaces/WorkTab.tsx#ParkedCommands (unreached-export)",
-  "packages/cf-backend/src/components/surfaces/WorkTab.tsx#ParkedDecisionFlow (unreached-export)",
   "packages/cf-backend/src/components/surfaces/fork-runs.ts#hasLiveForkRun (unreached-export)",
   "packages/cf-backend/src/components/surfaces/fork-runs.ts#unexplainedForkRoots (unreached-export)",
   "packages/cf-backend/src/gallery-agent-stub.ts#useAgent (unreached-export)",

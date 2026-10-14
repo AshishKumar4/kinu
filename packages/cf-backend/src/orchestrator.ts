@@ -6319,7 +6319,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       return {
         ...snapshot,
-        pendingActions: reads.pendingActions, backgroundJobs: reads.backgroundJobs, workspaceWork: reads.workspaceWork,
+        // The work rows decide the tab's presence here; the page's one work read draws them.
+        pendingActions: reads.pendingActions, backgroundJobs: reads.backgroundJobs,
         inspectedWork: reads.inspectedWork, subordinates, pendingConsents, workspaceAgents,
       };
     }));

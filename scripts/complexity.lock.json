@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-14",
-  "files": 3298,
-  "functions": 86341,
+  "files": 3301,
+  "functions": 86381,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -315,10 +315,6 @@
     },
     {
       "key": "evals/src/sight.ts#look",
-      "complexity": 26
-    },
-    {
-      "key": "packages/cf-backend/src/components/ProfileCatalogSettings.tsx#ProfileCatalogSettings",
       "complexity": 26
     },
     {

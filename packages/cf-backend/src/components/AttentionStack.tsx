@@ -4,13 +4,13 @@
  * tab shows, so the two never disagree; Work keeps the full list, and the chat keeps only events that ask nothing.
  */
 import { Cause, Effect } from "effect";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FocusEvent, type ReactNode } from "react";
 import { Button } from "@cloudflare/kumo";
 import { BrainIcon, ChatCircleTextIcon, CheckIcon, DesktopTowerIcon, NotePencilIcon, ShieldWarningIcon, SparkleIcon, XIcon, type Icon } from "@phosphor-icons/react";
 import { revealMisrepresenting, timeAgo, type AccountMemoryProposal, type OwedIntent, type OwedOwnerIntent, type OwnerAsk, type PendingAction, type PendingActionKind, type PendingConsent, type PlanPageRef } from "@kinu.run/core";
 import { detach, renderThrownChain } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
-import { ParkedWriteChange } from "@/components/surfaces/WorkTab";
+import { ParkedCommands, ParkedDecisionFlow, ParkedWriteChange } from "@/components/ParkedCommands";
 import { QuestionCard } from "@/components/QuestionCard";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
@@ -28,6 +28,12 @@ export interface AttentionStackProps {
   readonly onReview: (plan: PlanPageRef) => void;
   /** The owner's answer to an account-memory proposal; the user object then sends what still waits. */
   readonly decideMemory: (id: string, decision: "accept" | "decline") => Promise<void>;
+  /** The card shown first, when the page chooses it (a Work row opens its ask here); else the stack's own choice. */
+  readonly focus?: { readonly chosen: string | null; readonly choose: (key: string | null) => void };
+}
+
+function isParked(ask: OwnerAsk): ask is OwnerAsk & { kind: "action" } {
+  return ask.kind === "action" && ask.action.kind === "deferred_action";
 }
 
 /** Collapsed cards drawn behind the open one; the rest are counted on the last. */
@@ -217,25 +223,71 @@ function useAnswered(asks: readonly OwnerAsk[]) {
   return { answered, mark: (key: string) => setAnswered((was) => new Set([...was, key])) };
 }
 
+/**
+ * The open card: the one chosen, else, while the pointer or focus is on the stack, the one the owner is on, else the
+ * newest. Held, a card that arrives meanwhile waits behind, so a press is never taken by a card that slid in under it;
+ * answered, the next held is the one that opens. `holding` goes on the stack.
+ */
+function useOpenCard(waiting: readonly OwnerAsk[], chosen: string | null) {
+  const [held, setHeld] = useState<string | null>(null);
+  const front = waiting.find((ask) => ask.key === chosen) ?? waiting.find((ask) => ask.key === held) ?? waiting[0];
+
+  if (held !== null && front !== undefined && held !== front.key) setHeld(front.key);
+  const hold = (): void => setHeld(front?.key ?? null);
+
+  return {
+    front,
+    holding: {
+      onPointerEnter: hold, onPointerLeave: () => setHeld(null), onFocus: hold,
+      onBlur: (event: FocusEvent<HTMLElement>) => {
+        if (!(event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget))) setHeld(null);
+      },
+    },
+  };
+}
+
+/** The parked commands' decision flow, the stack's own, so their boxes stand while another card is answered first. */
+function useParkedFlow(rpc: WorkspaceRpc, decided: (ids: readonly string[]) => Promise<void>): ParkedDecisionFlow {
+  const calls = useRef({ rpc, decided });
+
+  useEffect(() => { calls.current = { rpc, decided }; });
+
+  const [flow] = useState(() => new ParkedDecisionFlow({
+    decide: (ids, decision) => calls.current.rpc("decideDeferredApprovals", [ids, decision]),
+    onDecided: (ids) => calls.current.decided(ids),
+  }));
+
+  return flow;
+}
+
 export function AttentionStack(props: AttentionStackProps): ReactNode {
   const { asks, rpc, onDecided, owedIntents = [] } = props;
   const { answered, mark } = useAnswered(asks);
-  const [chosen, setChosen] = useState<string | null>(null);
-  // The card the owner is on: the open one, while the pointer or focus is inside the stack.
-  const [held, setHeld] = useState<string | null>(null);
+  const [ownChoice, setOwnChoice] = useState<string | null>(null);
+  const chosen = props.focus?.chosen ?? ownChoice;
+  const setChosen = props.focus?.choose ?? setOwnChoice;
+
+  const parkedFlow = useParkedFlow(rpc, async (ids) => {
+    for (const id of ids) mark(`action:${id}`);
+    setChosen(null);
+    await onDecided();
+  });
+
   // The card whose answer is in flight: its buttons wait for it, and the next card's are live as soon as it opens.
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<{ key: string; message: string } | null>(null);
 
   const waiting = asks.filter((ask) => !answered.has(ask.key));
-  const front = waiting.find((ask) => ask.key === chosen) ?? waiting.find((ask) => ask.key === held) ?? waiting[0];
-
-  // While the pointer or focus is on the stack, the open card is held: one that arrives meanwhile waits behind, so a
-  // press is never taken by a card that slid in under it. Answered, the next held is the one that opens.
-  if (held !== null && front !== undefined && held !== front.key) setHeld(front.key);
+  const { front, holding } = useOpenCard(waiting, chosen);
 
   if (front === undefined) return null;
-  const behind = waiting.filter((ask) => ask !== front);
+
+  // Two or more parked commands are one card: chosen by their boxes and decided together.
+  const parked = isParked(front) ? waiting.filter(isParked) : [];
+  const batched = parked.length > 1;
+  const behind = waiting.filter((ask) => ask !== front && !(batched && isParked(ask)));
+  // The cards there are: the open one and those behind it.
+  const cards = behind.length + 1;
   const shown = behind.slice(0, SHOWN_BEHIND).reverse();
   const unshown = behind.length - shown.length;
 
@@ -271,9 +323,7 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
 
   return (
     <section aria-label="Waiting on you" data-attention-stack data-attention-count={waiting.length} className="p-attention"
-      onPointerEnter={() => setHeld(front.key)} onPointerLeave={() => setHeld(null)}
-      onFocus={() => setHeld(front.key)}
-      onBlur={(event) => { if (!(event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget))) setHeld(null); }}>
+      {...holding}>
       {shown.map((ask, depth) => {
         const BehindIcon = KIND_ICON[kindOf(ask)];
 
@@ -293,20 +343,24 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
         <div className="mb-1 flex items-center gap-1.5 p-meta p-text-3">
           <FrontIcon size={12} className="shrink-0 p-warning" weight="fill" aria-hidden />
           <span>{answerOwed ? "Answer sent" : "Waiting on you"}</span>
-          {waiting.length > 1 && <span className="tabular-nums" data-attention-position>· 1 of {waiting.length}</span>}
+          {cards > 1 && <span className="tabular-nums" data-attention-position>· 1 of {cards}</span>}
         </div>
         {front.kind === "consent" && <ConsentBody consent={front.consent} />}
         {front.kind === "memory" && <MemoryBody memory={front.memory} />}
-        {front.kind === "action" && <ActionBody action={front.action} rpc={rpc} />}
+        {front.kind === "action" && (batched
+          ? <ParkedCommands actions={parked.map((ask) => ask.action)} rpc={rpc} flow={parkedFlow} />
+          : <ActionBody action={front.action} rpc={rpc} />)}
         {front.kind === "question" && (
           <QuestionCard asking={front.question} busy={busy === front.key || answerOwed} owed={answerOwed}
             onAnswer={(answers) => detach(answer({ label: "Answer", weight: "primary", run: async () => rpc("answerOwnerQuestions", [front.question.asked.id, answers, front.question.actor]) }))}
             onDismiss={() => detach(answer({ label: "Dismiss", weight: "quiet", run: async () => { await rpc("dismissOwnerQuestions", [front.question.asked.id, front.question.actor]); } }))} />
         )}
         {error?.key === front.key && <div className="mt-1.5 p-t-status p-danger" role="alert">{error.message}</div>}
-        <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
-          {[...answersOf(front, props)].reverse().map((choice) => <AnswerButton key={choice.label} answer={choice} busy={busy === front.key} onAnswer={answer} />)}
-        </div>
+        {!batched && (
+          <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
+            {[...answersOf(front, props)].reverse().map((choice) => <AnswerButton key={choice.label} answer={choice} busy={busy === front.key} onAnswer={answer} />)}
+          </div>
+        )}
       </div>
     </section>
   );

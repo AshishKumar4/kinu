@@ -19,6 +19,7 @@ import { FilledButton } from "@/components/ui/FilledButton";
 import { inputCls } from "@/components/ui/form";
 import { ForkDialog } from "@/components/shared/ForkDialog";
 import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
+import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 
 function relativePathOf(file: File): string {
   return file.webkitRelativePath === "" ? file.name : file.webkitRelativePath;
@@ -247,6 +248,8 @@ export function DriveDialog({ dialog, folder, onClose, onListingChanged, onShare
   onSharesChanged: (listing?: "pending") => void;
   onSkillAdded: () => void;
 }) {
+  const { create } = useWorkspaceRoster();
+
   const act = async (work: () => Promise<void>): Promise<void> => {
     await work();
     onListingChanged();
@@ -290,7 +293,7 @@ export function DriveDialog({ dialog, folder, onClose, onListingChanged, onShare
       );
     case "fork":
       return dialog.row.kind === "live"
-        ? <ForkDialog live={{ share: dialog.row.share, workspace: dialog.row.workspace ?? "" }} title={dialog.row.title} onClose={onClose} />
-        : <ForkDialog blueprint={dialog.row.id} title={dialog.row.title} onClose={onClose} />;
+        ? <ForkDialog live={{ share: dialog.row.share, workspace: dialog.row.workspace ?? "" }} title={dialog.row.title} onClose={onClose} create={create} />
+        : <ForkDialog blueprint={dialog.row.id} title={dialog.row.title} onClose={onClose} create={create} />;
   }
 }

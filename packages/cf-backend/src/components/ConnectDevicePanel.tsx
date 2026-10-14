@@ -13,7 +13,7 @@ import { useDeviceRoster } from "@/hooks/use-device-roster";
 import { lastValue } from "@/hooks/use-async-resource";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 
-export type ConnectState =
+type ConnectState =
   | { readonly kind: "ready" }
   | { readonly kind: "registering" }
   /** `deviceId` is the device the hub issued for this connect: the machine registers as it. */
@@ -21,7 +21,7 @@ export type ConnectState =
   | { readonly kind: "connected"; readonly device: UserDevice }
   | { readonly kind: "failed"; readonly message: string };
 
-export interface ConnectFlowDeps {
+interface ConnectFlowDeps {
   /** The server issues the device and composes the one-liner that registers as it. */
   register: (label?: string) => Promise<{ installCommand: string; deviceId: string }>;
   onConnected: (device: UserDevice) => void;
@@ -73,7 +73,7 @@ export class DeviceConnectFlow {
   }
 }
 
-export interface ConnectDevicePanelProps {
+interface ConnectDevicePanelProps {
   flow: DeviceConnectFlow;
   devices: readonly UserDevice[] | null;
   rosterError?: string | null;

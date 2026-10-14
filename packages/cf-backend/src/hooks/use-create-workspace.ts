@@ -2,7 +2,6 @@
 import { useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { FileUIPart } from "ai";
-import { createWorkspaceFromMission } from "@/lib/create-workspace";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { Cause, Effect } from 'effect';
 import { renderThrownChain, settle } from '@kinu.run/core/obs';
@@ -26,8 +25,7 @@ export function useCreateWorkspace() {
     setErr(null);
 
     return settle(Effect.catchCause(Effect.gen(function* () {
-      const created = yield* Effect.promise(() => createWorkspaceFromMission(m));
-      roster.upsert(created);
+      const created = yield* Effect.promise(() => roster.create(m));
       onBeforeNavigate?.();
       yield* Effect.promise(async () => navigate(`/workspace/${created.name}`, attachments.length === 0 ? undefined : { state: { attachments } }));
     }), (failed) => Effect.sync(() => {

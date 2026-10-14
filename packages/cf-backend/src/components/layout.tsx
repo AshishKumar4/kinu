@@ -10,6 +10,7 @@ import { KinuLogo } from "./ui/KinuLogo";
 import { composing } from "./ui/form";
 import { WorkspaceRosterProvider } from "@/hooks/use-workspace-roster";
 import { AgentsNavProvider, useAgentsNav } from "@/hooks/use-agents-nav";
+import { DESKTOP_QUERY } from "@/hooks/use-media-query";
 import { AppBackground } from "./AppBackground";
 
 /** The root isolates its stacking so the negative-z canvas paints above its ground and under in-flow children. */
@@ -34,7 +35,7 @@ function Shell() {
   useEffect(() => { setDrawerOpen(false); }, [location]);
   // A workspace's bar carries the menu button itself: one bar on a phone, not two.
   const ownBar = useMatch({ path: "/workspace/:agentId", end: false }) !== null;
-  useEffect(() => { if (entries > 0 && !window.matchMedia("(min-width: 768px)").matches) setDrawerOpen(true); }, [entries]);
+  useEffect(() => { if (entries > 0 && !window.matchMedia(DESKTOP_QUERY).matches) setDrawerOpen(true); }, [entries]);
 
   // Dismissed as a dialog is: an Escape a field inside it took for itself stays the field's.
   useEffect(() => {

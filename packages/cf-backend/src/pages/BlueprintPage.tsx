@@ -14,6 +14,7 @@ import { KinuLogo } from "@/components/ui/KinuLogo";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { ForkDialog } from "@/components/shared/ForkDialog";
 import { reachConnection } from "@/components/slates/ForkReachPanel";
+import { registerWorkspace } from "@/lib/user-api";
 import { getBlueprint, signedInEmail } from "@/lib/shared-api";
 
 export function SecretWarning({ warnings, children }: { warnings: BlueprintView["warnings"]; children: ReactNode }) {
@@ -142,7 +143,9 @@ export default function BlueprintPage({ fixture, viewer, workspaces }: {
           </>
         )}
       </main>
-      {forking && view !== null && <ForkDialog blueprint={view.id} title={view.title} onClose={() => setForking(false)} workspaces={workspaces} />}
+      {/* Outside the shell: no sidebar lists the new workspace, so it is only registered. */}
+      {forking && view !== null && <ForkDialog blueprint={view.id} title={view.title} onClose={() => setForking(false)} workspaces={workspaces}
+        create={(mission) => registerWorkspace(undefined, mission.trim())} />}
     </div>
   );
 }

@@ -10,7 +10,6 @@ import { Modal } from "@/components/ui/Modal";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { inputCls } from "@/components/ui/form";
 import { listWorkspaces } from "@/lib/user-api";
-import { createWorkspaceFromMission } from "@/lib/create-workspace";
 import { forkBlueprint, forkLiveShare } from "@/lib/shared-api";
 
 const NEW_WORKSPACE = "\u0000new";
@@ -22,7 +21,7 @@ function forkedSlatePath(fork: BlueprintFork): string {
   return `/workspace/${encodeURIComponent(fork.workspace)}?slate=${encodeURIComponent(fork.slate)}&reaches=${encodeURIComponent(reaches)}`;
 }
 
-export function ForkDialog({ blueprint, live, title, onClose, workspaces }: {
+export function ForkDialog({ blueprint, live, title, onClose, workspaces, create }: {
   /** A blueprint id, OR a live share's `{ share, workspace }` — never both. */
   blueprint?: string;
   live?: { share: string; workspace: string };
@@ -30,6 +29,8 @@ export function ForkDialog({ blueprint, live, title, onClose, workspaces }: {
   onClose: () => void;
   /** A fixture roster; absent, the dialog reads the account's own. */
   workspaces?: readonly WorkspaceEntry[];
+  /** Makes the new workspace a fork lands in: in the app's shell the roster's, so the sidebar lists it at once. */
+  create: (mission: string) => Promise<WorkspaceEntry>;
 }) {
   const navigate = useNavigate();
   const [roster, setRoster] = useState<readonly WorkspaceEntry[] | null>(workspaces ?? null);
@@ -56,7 +57,7 @@ export function ForkDialog({ blueprint, live, title, onClose, workspaces }: {
     setErr(null);
 
     return yield* Effect.catchCause(Effect.gen(function* () {
-      const workspace = target === NEW_WORKSPACE ? (yield* Effect.promise(async () => createWorkspaceFromMission(mission))).name : target;
+      const workspace = target === NEW_WORKSPACE ? (yield* Effect.promise(async () => create(mission))).name : target;
 
       const fork = blueprint !== undefined
         ? (yield* Effect.promise(async () => forkBlueprint({ blueprint, workspace })))
@@ -67,7 +68,7 @@ export function ForkDialog({ blueprint, live, title, onClose, workspaces }: {
       setErr(chain);
       setBusy(false);
     }));
-  })), [busy, target, mission, blueprint, live, navigate]);
+  })), [busy, target, mission, blueprint, live, navigate, create]);
 
   return (
     <Modal

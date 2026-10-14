@@ -2,12 +2,13 @@
 import { Badge } from "@cloudflare/kumo";
 import { CircleIcon, CircleDashedIcon, CheckCircleIcon, ProhibitIcon, SparkleIcon } from "@phosphor-icons/react";
 import { taskSettled, type AgentTask, type AgentTaskTree, type PanelAgent, type TaskStatus, type WorkspaceWorkOwner } from "@kinu.run/core";
+import { toneInk } from "@/components/ui/Status";
 
 const STATUS_META = {
-  open: { icon: CircleDashedIcon, tone: "p-text-3", label: "Open", weight: "regular", text: "p-text-2" },
-  active: { icon: CircleIcon, tone: "p-accent", label: "Active", weight: "fill", text: "p-text font-medium" },
-  done: { icon: CheckCircleIcon, tone: "p-success", label: "Done", weight: "fill", text: "p-text-3 line-through" },
-  dropped: { icon: ProhibitIcon, tone: "p-text-3", label: "Dropped", weight: "regular", text: "p-text-3 line-through" },
+  open: { icon: CircleDashedIcon, tone: toneInk("neutral"), label: "Open", weight: "regular", text: "p-text-2" },
+  active: { icon: CircleIcon, tone: toneInk("live"), label: "Active", weight: "fill", text: "p-text font-medium" },
+  done: { icon: CheckCircleIcon, tone: toneInk("success"), label: "Done", weight: "fill", text: "p-text-3 line-through" },
+  dropped: { icon: ProhibitIcon, tone: toneInk("neutral"), label: "Dropped", weight: "regular", text: "p-text-3 line-through" },
 } satisfies Record<TaskStatus, { icon: typeof CircleIcon; tone: string; label: string; weight: "fill" | "regular"; text: string }>;
 
 interface TaskOwnership {

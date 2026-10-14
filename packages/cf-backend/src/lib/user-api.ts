@@ -390,7 +390,7 @@ export const addMcpServer   = (input: McpServerInput) =>
 export const removeMcpServer = (id: string) =>
   settle(api(OkSchema, 'DELETE', `/mcp/servers/${encodeURIComponent(id)}`));
 
-export interface CreateWebhookOpts {
+interface CreateWebhookOpts {
   label: string;
   auth_mode: 'hmac' | 'bearer' | 'mtls';
   secret?: string;

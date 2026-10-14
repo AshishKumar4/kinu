@@ -2,7 +2,7 @@ import type { ReactElement } from 'react';
 
 import { mark } from '@kinu.run/core';
 
-export interface KinuMarkProps {
+interface KinuMarkProps {
   className?: string;
   size?: number;
 }
@@ -18,7 +18,7 @@ export function KinuMark({ className, size = 20 }: KinuMarkProps): ReactElement 
   );
 }
 
-export interface KinuLogoProps {
+interface KinuLogoProps {
   className?: string;
   compact?: boolean;
 }

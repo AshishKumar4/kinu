@@ -816,7 +816,7 @@ describe('the control plane in a browser', () => {
       expect(text).toContain('note only');
       // The byte count of the one that has an image, so the two rows are
       // distinguishable at a glance.
-      expect(text).toContain('500.0 KB');
+      expect(text).toContain('500 KB');
       await browserPage.close();
     });
   });

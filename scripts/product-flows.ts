@@ -734,11 +734,11 @@ export async function spliceSitsWhereItWasRead(target: FlowTarget): Promise<Spli
 }
 
 export interface ApprovalStackVerdict {
-  /** The stack's cards once both commands parked: the open one first, then those behind it. */
+  /** The asks once both commands parked, newest first, as the parked card lists them. */
   readonly stacked: readonly string[];
-  /** What the open card showed before any answer. */
+  /** What the parked card showed before any answer. */
   readonly openWords: string;
-  /** The stack's cards once the open one was approved. */
+  /** The flow's asks once the newer was approved alone. */
   readonly afterFirst: readonly string[];
   /** What the chat showed once both answers reached the agent: each as its event, and the agent's reply to each. */
   readonly heard: { readonly approvedEvent: boolean; readonly deniedEvent: boolean; readonly approvedReply: boolean; readonly deniedReply: boolean };
@@ -776,24 +776,15 @@ async function answerStackCard(page: Page, key: string, words: string): Promise<
   await until(page, `the flow's own card answered ${words}`, answerOwnCard(key, words));
 }
 
-/** What the flow's own card shows, opening it first if another took the front. */
-async function ownCardWords(page: Page, key: string): Promise<string> {
-  await until(page, "the flow's own card open", `(() => {
-    if (document.querySelector(${JSON.stringify(`[data-attention-card=${JSON.stringify(key)}]`)}) !== null) return true;
-    document.querySelector(${JSON.stringify(`[data-attention-behind=${JSON.stringify(key)}]`)})?.click();
-
-    return false;
-  })()`);
-
-  return v.parse(v.string(), await page.evaluate(`document.querySelector(${JSON.stringify(`[data-attention-card=${JSON.stringify(key)}]`)})?.textContent ?? ''`));
-}
-
 const CHAT_TEXT = `(document.querySelector('#chat')?.textContent ?? '')`;
 
+/** The parked commands the flow's batch card lists, newest first, as their asks' keys. */
+const PARKED_ROWS = `[...document.querySelectorAll('[data-attention-card] [data-parked-command]')].map((row) => 'action:' + row.getAttribute('data-parked-command'))`;
+
 /**
- * Row: one turn parks two commands for its owner. They wait as a stack docked to the composer, the newer open;
- * approving it opens the other, denying that clears the stack, and each answer reaches the agent: its wake shows in
- * the chat as the event it is, and the agent answers each.
+ * Row: one turn parks two commands for its owner. They wait together on one card docked to the composer, the newer
+ * first; the newer approved alone, the other is its own card, and denying it clears the stack. Each answer reaches the
+ * agent: its wake shows in the chat as the event it is, and the agent answers each.
  */
 export async function approvalsStackAtTheComposer(target: FlowTarget): Promise<ApprovalStackVerdict> {
   const workspace = await createFlowWorkspace(target, 'approvals');
@@ -802,21 +793,26 @@ export async function approvalsStackAtTheComposer(target: FlowTarget): Promise<A
     const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
 
     await sendAndSettle(page, APPROVALS_ASK);
-    // Actions belong to this fresh workspace; account-memory cards belong to every workspace of the account.
-    const actions = `${STACK_KEYS}.filter((key) => key.startsWith('action:'))`;
+    // Actions belong to this fresh workspace; account-memory cards belong to every workspace of the account. The
+    // flow's card is opened first if another took the front.
+    await until(page, "both of the flow's parked commands on one card", `(() => {
+      if (${PARKED_ROWS}.length === 2) return true;
+      ${STACK_KEYS}.filter((key) => key.startsWith('action:')).forEach((key) => document.querySelector('[data-attention-behind="' + key + '"]')?.click());
 
-    await until(page, 'both of the flow\'s parked commands stacked', `${actions}.length === 2`);
-    const stacked = v.parse(v.tuple([v.string(), v.string()]), await page.evaluate(actions));
-
-    const openWords = await ownCardWords(page, stacked[0]);
+      return false;
+    })()`);
+    const stacked = v.parse(v.tuple([v.string(), v.string()]), await page.evaluate(PARKED_ROWS));
+    const openWords = v.parse(v.string(), await page.evaluate(`document.querySelector('[data-attention-card]')?.textContent ?? ''`));
     const remaining = `${STACK_KEYS}.filter((key) => ${JSON.stringify(stacked)}.includes(key))`;
 
-    await answerStackCard(page, stacked[0], 'Approve');
-    await until(page, 'the flow\'s other card remains', `${remaining}.length === 1`);
+    // The older unticked, the newer approved alone.
+    await page.click(`[data-attention-card] [data-parked-command="${stacked[1].slice('action:'.length)}"] input`);
+    await answerStackCard(page, stacked[0], 'Approve 1');
+    await until(page, "the flow's other card remains", `${remaining}.length === 1`);
     const afterFirst = v.parse(v.array(v.string()), await page.evaluate(remaining));
 
     await answerStackCard(page, stacked[1], 'Deny');
-    await until(page, 'the flow\'s own stack cleared', `${remaining}.length === 0`);
+    await until(page, "the flow's own stack cleared", `${remaining}.length === 0`);
     await until(page, 'both answers in the chat and heard by the agent', `${CHAT_TEXT}.includes('You approved') && ${CHAT_TEXT}.includes('You denied')`
       + ` && /${DECISION_HEARD}[^]*approved/u.test(${CHAT_TEXT}) && /${DECISION_HEARD}[^]*denied/u.test(${CHAT_TEXT})`);
     const said = v.parse(v.string(), await page.evaluate(CHAT_TEXT));
@@ -885,7 +881,8 @@ export interface WorkspaceProposalVerdict {
   readonly created: { readonly name: string; readonly displayName: string } | null;
 }
 
-const PROPOSAL_CARD = '#inspector [data-workspace-proposal]';
+/** The proposal's card in the chat's attention stack, where Work's row for it opens it. */
+const PROPOSAL_CARD = '#chat [data-workspace-proposal]';
 
 /** A button in the proposal card, by its words. */
 function proposalButton(words: string): string {
@@ -893,8 +890,9 @@ function proposalButton(words: string): string {
 }
 
 /**
- * Row: the workspace's main agent proposes a new workspace, the owner approves it once in Work → Needs you, and it
- * exists under the owner's account with the proposed name, while the agent that asked is woken with its link.
+ * Row: the workspace's main agent proposes a new workspace, Work → Needs you lists it, its row opens its card in the
+ * chat's attention stack, the owner approves it there once, and it exists under the owner's account with the proposed
+ * name, while the agent that asked is woken with its link.
  */
 export async function agentProposesAWorkspace(target: FlowTarget): Promise<WorkspaceProposalVerdict> {
   const workspace = await createFlowWorkspace(target, 'proposal');
@@ -906,7 +904,9 @@ export async function agentProposesAWorkspace(target: FlowTarget): Promise<Works
     await sendAndSettle(page, WORKSPACE_PROPOSAL_ASK);
     await openInspector(page);
     await page.evaluate(stripTab('Work'));
-    await until(page, 'the proposal in Work → Needs you', `document.querySelector(${JSON.stringify(PROPOSAL_CARD)}) !== null`);
+    await until(page, 'the proposal in Work → Needs you', `document.querySelector('#inspector [data-section="work-needs-you"] [data-pending-action]') !== null`);
+    await page.click('#inspector [data-section="work-needs-you"] [data-pending-action]');
+    await until(page, "the proposal's card in the chat", `document.querySelector(${JSON.stringify(PROPOSAL_CARD)}) !== null`);
     const cardTitle = v.parse(v.string(), await page.evaluate(`document.querySelector(${JSON.stringify(PROPOSAL_CARD)})?.textContent ?? ''`));
 
     await page.evaluate(proposalButton('/show its soul/iu'));
