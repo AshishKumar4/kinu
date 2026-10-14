@@ -64,10 +64,15 @@ into its own host-only `__Host-kinu_viewer` cookie
 workspace object compares its subject with its owner before anything of the
 slate starts (`packages/cf-backend/src/orchestrator.ts` `routeWorkspacePreview`).
 Anyone else is told "This slate isn't shared with you"; a script's request is
-refused outright. The workspace's own browsers and fetches (the agent's
-`web.screenshot` and rendered fetch, its programs' `fetch` of their own preview,
-a slate picture's capture) carry a five-minute pass that names the workspace,
-not a person. Holding the URL alone opens nothing, so a preview needs no
+refused outright. Every preview and share host is a sibling under one site, so
+the cookie rides another preview's requests too: the edge reads it only for a
+page load or a request the preview makes of itself (`Sec-Fetch-Site`, `Origin`),
+so another site's socket, script or form names no one. The workspace's own
+browsers and fetches (the agent's `web.screenshot` and rendered fetch, its and
+the owner's slates' programs' `fetch` of their own preview, a slate picture's
+capture) carry a five-minute pass that names the workspace, not a person. A
+share's viewer's calls and programs never carry it: a preview's slate runs as
+the owner, past any grant. Holding the URL alone opens nothing, so a preview needs no
 revocation of its own; to stop it, unexpose the port. A shared slate is opened
 by others only through its share (§5): the consent page for credentialed shares,
 the per-viewer request bound, the per-share daily spend bound and the audit row.

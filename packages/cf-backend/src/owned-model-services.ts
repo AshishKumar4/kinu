@@ -59,6 +59,8 @@ export interface OwnedModelServicesOptions<Id> {
 export class OwnedModelServices<Id = DurableObjectId> {
   private providerRegistryCache: AgentProviderRegistry | null = null;
   private webSearchProviderCache: WebSearchProvider | null = null;
+
+  private viewerWebSearchProviderCache: WebSearchProvider | null = null;
   private modelCache: { spec: string; model: LanguageModel } | null = null;
   /** Revision the listing was swept under; a differing live revision invalidates it without a clock. */
   private cachedCredentialsRevision: number | null = null;
@@ -186,6 +188,17 @@ export class OwnedModelServices<Id = DurableObjectId> {
     );
 
     return this.webSearchProviderCache;
+  }
+
+  /** The same web for a share's viewer, whose calls carry no pass to the workspace's own previews. */
+  getViewerWebSearchProvider(): WebSearchProvider {
+    this.viewerWebSearchProviderCache ??= buildCfWebSearchProvider(
+      this.options.env,
+      () => this.options.getOwnerUserId() ? this.providerRegistry().deps.getAuth : undefined,
+      this.options.reportModelCall,
+    );
+
+    return this.viewerWebSearchProviderCache;
   }
 
   /** Drop owner-bound provider/auth state; the provider listing's only expiry (in-flight sweep included, per core). */

@@ -706,6 +706,13 @@ describe("signing a preview's owner in on its own host", () => {
 
               return new Response('page');
             },
+            // A socket's viewer is the segment the edge writes after the port and handle.
+            async fetch(request: Request) {
+              const viewer = decodeURIComponent(new URL(request.url).pathname.split('/')[5] ?? '');
+              visits.push(viewer === '' ? null : viewer);
+
+              return new Response(null, { status: 204 });
+            },
             async previewAccess(userId: string): Promise<PreviewAccess> {
               return { owned: userId === OWNER_ID, slate };
             },
@@ -766,7 +773,49 @@ describe("signing a preview's owner in on its own host", () => {
     offHost.searchParams.set('next', '//evil.example/');
 
     expect((await handleNimbusPreviewHostRequest(new Request(elsewhere), env))?.status).toBe(404);
-    expect((await handleNimbusPreviewHostRequest(new Request(offHost), env))?.headers.get('location')).toBe('/');
+    expect((await handleNimbusPreviewHostRequest(new Request(offHost), env))?.headers.get('location')).toBe(new URL('/', NIMBUS_URL).href);
+  });
+
+  // The security review: `/\t/evil` passed a prefix check, and a browser drops the tab as it reads the redirect.
+  test('every form of another host in the exchange\'s destination lands on the preview\'s own root', async () => {
+    const env = ownedWorkspace([]);
+
+    const exchange = async (next: string) => {
+      const ticketed = new URL(present((await previewEntry(entry(NIMBUS_URL), env, OWNER_ID)).headers.get('location'), 'the exchange'));
+
+      ticketed.searchParams.set('next', next);
+
+      return present(await handleNimbusPreviewHostRequest(new Request(ticketed), env), 'the exchange').headers.get('location');
+    };
+
+    for (const next of ['//evil.example/', '/\t/evil.example/', '/\\evil.example/', '/\n/evil.example', 'https://evil.example/', '/.//evil.example']) {
+      expect(new URL(present(await exchange(next), 'the destination')).origin).toBe(new URL(NIMBUS_URL).origin);
+    }
+
+    expect(await exchange('/board?tab=2#top')).toBe(new URL('/board?tab=2#top', NIMBUS_URL).href);
+  });
+
+  // The security review: every preview is a sibling under one site, so another preview's page sent the owner's cookie
+  // along with its own socket or script request, and was admitted as the owner.
+  test("another site's socket, script or form names no one, whatever cookie it carries; a page load still opens", async () => {
+    const visits: Array<string | null> = [];
+    const env = ownedWorkspace(visits);
+    const { cookie } = await visitAs(env, OWNER_ID, NIMBUS_URL);
+    const owned = cookie.split(';')[0] ?? '';
+    const sibling = 'https://8080-other-previews.previews.example';
+    const asked = async (init: RequestInit) => { await handleNimbusPreviewHostRequest(new Request(NIMBUS_URL, init), env); };
+
+    visits.length = 0;
+    await asked({ headers: { cookie: owned, upgrade: 'websocket', origin: sibling, 'sec-fetch-site': 'same-site', 'sec-fetch-mode': 'websocket' } });
+    await asked({ headers: { cookie: owned, origin: sibling, 'sec-fetch-site': 'same-site', 'sec-fetch-mode': 'cors' } });
+    await asked({ method: 'POST', body: 'x', headers: { cookie: owned, origin: sibling, 'sec-fetch-site': 'same-site', 'sec-fetch-mode': 'navigate' } });
+    await asked({ headers: { cookie: owned, origin: sibling } });
+    await asked({ headers: { cookie: owned, 'sec-fetch-site': 'same-site', 'sec-fetch-mode': 'navigate' } });
+    await asked({ headers: { cookie: owned, origin: new URL(NIMBUS_URL).origin, 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'cors' } });
+
+    // A sibling's socket, script and form name no one; an Origin alone is enough to tell another site; a page load and
+    // the preview's own script name the owner.
+    expect(visits).toEqual([null, null, null, null, OWNER_ID, OWNER_ID]);
   });
 
   test("a cookie the host did not set, or a live share's, names no one to the workspace", async () => {

@@ -1482,7 +1482,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         const ledgers = turnLedgers();
 
         return (surface, reach) => createCodemodeToolFactory({
-          launch: this.codemodeLaunch(runtime.actor.actorId), workspace: this.workspaceName(),
+          launch: this.codemodeLaunch(runtime.actor.actorId, 'owner'), workspace: this.workspaceName(),
         }).toolFor(surface, {
           reach, namespaces: (executor) => actorNamespaces(this.confinedActor(actor, runtime, webSearch, ledgers), SURFACE_POLICY.confined, { executor }),
         });
@@ -1675,7 +1675,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     const codemode = (finished: CodemodeSurface) => {
       const operation = scope.profile();
-      const factory = reach.actor.lanes ? this.workspaceCodemode() : createCodemodeToolFactory({ launch: this.codemodeLaunch(actor.handle.actorId), workspace: this.workspaceName() });
+      const factory = reach.actor.lanes ? this.workspaceCodemode() : createCodemodeToolFactory({ launch: this.codemodeLaunch(actor.handle.actorId, 'owner'), workspace: this.workspaceName() });
       const confined = reach.actor.surface === 'confined' ? this.confinedActor(actor, runtime, webSearch, scope.ledgers) : null;
 
       return factory.toolFor(finished, {

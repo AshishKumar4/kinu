@@ -16,5 +16,6 @@
   "movable packages/cf-backend/src/slates/sources.ts",
   "movable packages/cf-backend/src/user/binding-completions.ts",
   "movable packages/cf-backend/src/user/workspace-fork.ts",
+  "movable packages/cf-backend/src/viewer-pass.ts",
   "movable packages/cf-backend/src/workspace-owner-rpc.ts"
 ]

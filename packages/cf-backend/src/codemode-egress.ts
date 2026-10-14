@@ -22,6 +22,11 @@ export interface CodemodeEgressProps {
   readonly workspace: string | null;
   /** The actor whose program this is; null for slate code, which reaches only a new Kitesurf browser. */
   readonly actor: string | null;
+  /**
+   * The program acts with its workspace owner's authority (the agent's programs, the owner's own slates), so it opens
+   * the workspace's own previews. Never a share's viewer's: a preview's slate runs as the owner, unbounded by the grant.
+   */
+  readonly asOwner: boolean;
 }
 
 /** The host `connectBrowser` dials; the path's last segment is a session id or `kitesurf`. */
@@ -94,7 +99,9 @@ async function forwardCodemodeEgress(request: Request, env: EgressEnv, props: Co
 
   if (url.hostname === BROWSER_GATE_HOST) return await browserGate(request, env, props);
 
-  if (self !== undefined && workspace !== null && ownPreviewHost(url, env, workspace)) return await self.fetch(await withSelfPass(request, env, workspace, url));
+  if (self !== undefined && workspace !== null && ownPreviewHost(url, env, workspace)) {
+    return await self.fetch(props.asOwner ? await withSelfPass(request, env, workspace, url) : request);
+  }
 
   const refusal = refusedHostname(url.hostname);
 

@@ -1,4 +1,7 @@
-import { createTestUserDO } from './helpers/user-do';
+import { createTestUserDO, TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
+import { nimbusPreviewUrl } from '../src/nimbus-route';
+import { VIEWER_COOKIE_NAME } from '../src/viewer-pass';
+import { present } from '@kinu.run/test-utils';
 import { afterEach, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { testOwner } from './helpers/user-do';
@@ -233,6 +236,36 @@ describe('OwnedModelServices', () => {
     expect(services.providerRegistry()).not.toBe(beforeRegistry);
     expect(services.getWebSearchProvider()).toBe(web);
     expect((await web.search('after claim')).source).toBe('tavily');
+  });
+
+  // The security review of the owner-only preview: a share's viewer's `web.screenshot` reached the owner's private
+  // preview as the owner. The owner's screenshot of its own preview carries the workspace's pass; a viewer's carries none.
+  test("the owner's browser carries a pass to the workspace's own preview, and a share viewer's carries none", async () => {
+    const sent: Array<readonly string[]> = [];
+
+    const env: OwnedModelEnv<string> = {
+      ...fakeEnv(),
+      PREVIEW_HOST_SUFFIX: 'previews.example',
+      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+      BROWSER: { quickAction: async (_action, options) => {
+        sent.push(v.parse(v.optional(v.array(v.object({ name: v.string() })), []), options.cookies).map((cookie) => cookie.name));
+
+        return new Response(new Uint8Array([1]));
+      } },
+    };
+
+    const services = new OwnedModelServices({
+      env, agentName: () => 'actor', workspaceId: () => 'workspace', workspaceName: () => 'hello', appTitle: 'Kinu', ownerRequired: false,
+      getOwnerUserId: () => null, getUserCaller: testOwner, getCredentialsRevision: async () => 0, reportModelCall: unobservedSpend,
+    });
+
+    const preview = present((await nimbusPreviewUrl(env, 'hello', 4321, '0123456789abcdef01234567')).url, 'the preview');
+
+    await services.getWebSearchProvider().screenshot(preview);
+    await services.getViewerWebSearchProvider().screenshot(preview);
+    await services.getWebSearchProvider().screenshot('https://example.test/');
+
+    expect(sent).toEqual([[VIEWER_COOKIE_NAME], [], []]);
   });
 
   test('a page the web provider converts through Workers AI lands in the workspace ledger as platform spend', async () => {

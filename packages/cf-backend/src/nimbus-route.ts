@@ -117,9 +117,34 @@ export async function previewEntry<Id>(
   return new Response(null, { status: 303, headers: { location: exchange.toString(), 'cache-control': 'no-store' } });
 }
 
-/** A path on this host to go on to after the exchange: never another origin's. */
-function sameHostPath(next: string | null): string {
-  return next !== null && next.startsWith('/') && !next.startsWith('//') && !next.startsWith('/\\') ? next : '/';
+/**
+ * Where on this host to go on to after the exchange, as the browser will read it: `next` resolved against the host,
+ * kept only when it stays there, and answered absolute so no form of it (`//`, `/\\`, a tab or newline the parser drops)
+ * can name another host.
+ */
+function sameHostTarget(next: string | null, origin: string): string {
+  const resolved = next !== null && URL.canParse(next, origin) ? new URL(next, origin) : null;
+
+  return resolved !== null && resolved.origin === origin ? resolved.href : `${origin}/`;
+}
+
+/**
+ * A request the preview's own page or its owner's address bar makes, never one another site's page sends with the
+ * owner's cookie. Every preview and share host is a sibling under one site, and a same-site request carries the cookie,
+ * so the cookie alone cannot tell them apart; the browser's fetch metadata can. A page load opens the page, as any link
+ * opens any site's; a socket, a script's request or a form post must come from the preview itself. A client that is
+ * no browser sends neither header, and holds no owner's cookie.
+ */
+function ownRequest(request: Request, origin: string): boolean {
+  const mode = request.headers.get('sec-fetch-mode');
+  const site = request.headers.get('sec-fetch-site');
+
+  if ((request.method === 'GET' || request.method === 'HEAD') && mode === 'navigate') return true;
+
+  if (site !== null) return site === 'same-origin' || site === 'none';
+  const stated = request.headers.get('origin');
+
+  return stated === null || stated === origin;
 }
 
 /** The preview host's ticket exchange: the owner's ticket becomes the host's viewer cookie, then their page. */
@@ -135,7 +160,7 @@ async function exchangePreviewTicket(
     return new Response('Too many requests', { status: 429, headers: { 'cache-control': 'no-store' } });
   }
 
-  return await viewerCookieResponse(env, { workspace, handle: key, subject: ticket.userId }, sameHostPath(url.searchParams.get('next')));
+  return await viewerCookieResponse(env, { workspace, handle: key, subject: ticket.userId }, sameHostTarget(url.searchParams.get('next'), url.origin));
 }
 
 export function nimbusPreviewConfigured(env: PreviewSuffixEnv & LabelSignerEnv): boolean {
@@ -211,8 +236,9 @@ export async function handleNimbusPreviewHostRequest<Id>(
   const key = previewViewerKey(port, handle);
 
   if (url.pathname === VIEWER_EXCHANGE_PATH) return await exchangePreviewTicket(request, env, workspace, key);
-  // Read before the sanitizer strips the cookie. A consent cookie is a live share's, never a preview's.
-  const cookie = await viewerCookie(env, workspace, key, request.headers.get('cookie'));
+  // Read before the sanitizer strips the cookie. A consent cookie is a live share's, never a preview's, and another
+  // site's request names no one, whatever cookie it carries.
+  const cookie = ownRequest(request, url.origin) ? await viewerCookie(env, workspace, key, request.headers.get('cookie')) : null;
   const viewer = cookie === null || cookie.consented ? null : cookie.subject;
   const headers = sanitizePreviewRequestHeaders(request.headers);
   headers.delete('x-nimbus-base');
