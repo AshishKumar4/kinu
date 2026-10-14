@@ -182,15 +182,16 @@ const PREVIEWS_NOT_CONFIGURED =
   'hostnames on. Turning them on takes a proxied wildcard DNS record and a matching route on a zone; ' +
   'the PREVIEW_HOST_SUFFIX note in wrangler.jsonc has both steps. Exec and files still work.';
 
-/** Lower-cased markers for transient sandbox/RPC errors, retried with backoff (STABILITY-AUDIT §B2/§B3). */
+/** Lower-cased markers for transient sandbox/RPC errors, retried with backoff. Each is a failure the platform was seen
+ *  to raise; an unmeasured marker is not retried. */
 const TRANSIENT_MARKERS = [
   // First call after a stop/eviction can land while the RPC session tears down (measured 2026-09-05, DECISIVE-2026-09-05.md).
   'while the runtime connection was closing',
-  'stopped while the operation was pending',
+  // The container runtime's dropped connection, from a call to a container that went away: Workers telemetry
+  // 2026-10-07..14 records it on Cloudflare Containers under this runtime (armada's ArmadaVessel, a devbox ContractBox).
   'network connection lost',
-  'container suddenly disconnected',
+  // A Durable Object storage reset, from the same telemetry (armada-dew2's ArmadaVessel, 2026-10-10 20:31:58Z).
   'internal error in durable object storage caused object to be reset',
-  'http error! status: 500',
 ];
 
 const StringSchema = v.string();
