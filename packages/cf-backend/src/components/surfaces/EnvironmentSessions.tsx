@@ -201,8 +201,9 @@ export function SessionDetails({ session, name }: { session: TerminalSession | n
   return (
     <span className="flex min-w-0 items-center gap-3 p-meta p-text-3">
       {name !== undefined && <span className="inline-flex shrink-0 items-center gap-2 p-row-text font-medium p-text"><Dot tone={sessionTone(session).tone} />{name}</span>}
-      {/* A narrow pane keeps its ports and state: the branch goes first, then the folder shows its last part. */}
-      <span data-session-cwd title={session.cwd} className="inline-flex min-w-0 items-center gap-1.5">
+      {/* A narrow pane keeps its ports and state: the branch goes first, then the folder shows its last part. The text
+          holds both forms, so the folder itself is named on the element. */}
+      <span data-session-cwd={session.cwd} title={session.cwd} className="inline-flex min-w-0 items-center gap-1.5">
         <FolderOpenIcon size={12} className="shrink-0" aria-hidden />
         <span className="hidden truncate @[34rem]:inline">{session.cwd}</span>
         <span className="truncate @[34rem]:hidden">{folderTail(session.cwd)}</span>

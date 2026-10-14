@@ -2735,9 +2735,12 @@ export interface SessionsVerdict {
   readonly folderAfter: string;
 }
 
-/** The open session's details line under `scope`: its folder and the ports under it. */
+/**
+ * The open session's details line under `scope`: its folder and the ports under it. The folder is the one its element
+ * names: its text holds the whole path for a wide pane and the last part for a narrow one (staging f1f0b451b).
+ */
 export const sessionLine = (scope: string) => `(() => ({
-  folder: (document.querySelector('${scope} [data-session-cwd]')?.textContent ?? '').trim(),
+  folder: document.querySelector('${scope} [data-session-cwd]')?.getAttribute('data-session-cwd') ?? '',
   ports: [...document.querySelectorAll('${scope} [data-session-port]')].map((port) => (port.textContent ?? '').trim()),
 }))()`;
 
