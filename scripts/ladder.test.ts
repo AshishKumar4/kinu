@@ -709,6 +709,16 @@ describe('a deploy\'s armada rows', () => {
     });
   });
 
+  // armada 651930f4 packs a job's tasks into shared containers by their measured use unless the job names `fast`
+  // (protocol.ts `ModeSchema`, default `efficient`); the client before it named no mode and got one task a container.
+  // Packed, staging 0e094da7d's 30 post-publish tasks ran on 3 containers for 521 s, against 11 containers and 450 s
+  // for f9c17ac7b's: a deploy row's wall is the deploy's, and a row packed beside others is a row that fails beside them.
+  test('run one task a container, as every deploy measured its rows', () => {
+    const config = v.parse(v.object({ task: v.object({ mode: v.optional(v.string()) }) }), JSON.parse(readFileSync(resolve(root, '.armada.json'), 'utf8')));
+
+    expect(config.task.mode).toBe('fast');
+  });
+
   // 2026-10-08 to 2026-10-14: the first-run row's 1800 s bound equalled armada's, which killed 10 of its 21 runs first,
   // so the tier's own report of the hung case never ran.
   test('end a silent run themselves, before armada ends its task', () => {
