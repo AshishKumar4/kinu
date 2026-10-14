@@ -243,8 +243,9 @@ function ChatScene({
   const [turnPhase, setTurnPhase] = useState<string | null>(null);
   const [commandPhase, setCommandPhase] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
+  // The workspace's configuration as one snapshot (model, effort, role): each operation updates it once.
   const [status, setStatus] = useState<AgentClientStatus | null>(null);
-  const [modelSpec, setModelSpec] = useState<string>('');
+  const modelSpec = status?.model ?? '';
   const [nextTier, setNextTier] = useState<TierId | null>(null);
   const [liveContext, setLiveContext] = useState<ContextNumber | null>(null);
   const [modelCatalog, setModelCatalog] = useState<AgentModelEntry[]>([]);
@@ -599,7 +600,6 @@ function ChatScene({
       if (result.client !== client) {
         setReady(false);
         setStatus(null);
-        setModelSpec('');
         clientGenerationRef.current += 1;
         setModelCatalog([]);
         setBranchTasks({});
@@ -702,7 +702,6 @@ function ChatScene({
       forgetSessionTurn();
       setTurnPhase(null);
       setStatus(null);
-      setModelSpec('');
       setModelCatalog([]);
       setBranchTasks({});
       // A pending next-turn tier does not survive a switch.
@@ -855,7 +854,7 @@ function ChatScene({
 
     try {
       const result = await client.setModel(spec);
-      setModelSpec(result.spec);
+      setStatus((current) => current === null ? current : { ...current, model: result.spec });
       addMessage({ role: 'system', content: `Model: ${result.spec}` });
     } catch (err) {
       addError({ cause: err });
@@ -953,7 +952,7 @@ function ChatScene({
 
         return;
       case 'model-set':
-        setModelSpec(outcome.spec);
+        setStatus((current) => current === null ? current : { ...current, model: outcome.spec });
         addMessage({ role: 'system', content: `Model: ${outcome.spec}` });
 
         return;
@@ -969,7 +968,6 @@ function ChatScene({
         return;
       case 'status':
         setStatus(outcome.status);
-        setModelSpec(outcome.status.model ?? '');
         const note: Omit<DisplayMessage, 'id'> = { role: 'system', content: '', status: outcome.status };
         addMessage(note);
 
@@ -1535,7 +1533,6 @@ function ChatScene({
 
             if (abort.signal.aborted) return;
             setStatus(next);
-            setModelSpec((current) => current || (next.model ?? ''));
           } catch (cause) {
             if (!abort.signal.aborted) {
               addMessage({
