@@ -179,6 +179,13 @@ function requireTotalScope(): void {
 
 /* ── The mutation, applied and taken back ─────────────────────────────────── */
 
+/** The mutation's file as it stands, and how many times its snippet occurs there. */
+export function locate(mutation: Mutation) {
+  const source = readFileSync(join(root, mutation.file), 'utf8');
+
+  return { source, occurrences: source.split(mutation.find).length - 1 };
+}
+
 /**
  * The pristine text of the mutation's file, once it is certain the snippet lands.
  *
@@ -189,8 +196,7 @@ function requireTotalScope(): void {
  * fix the snippet, never the assertion.
  */
 function readAndLocate(mutation: Mutation): string {
-  const source = readFileSync(join(root, mutation.file), 'utf8');
-  const occurrences = source.split(mutation.find).length - 1;
+  const { source, occurrences } = locate(mutation);
 
   if (occurrences !== 1) {
     throw new Error(
