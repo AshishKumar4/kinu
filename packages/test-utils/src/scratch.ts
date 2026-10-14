@@ -9,6 +9,9 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+/** The temporary directory of the session that loaded this module, before any test home replaced TMPDIR. */
+const SESSION_TMPDIR = tmpdir();
+
 /**
  * Temp-dir prefixes owned by this project, counted and `--reclaim`ed by `scripts/preflight.ts`; checked by
  * `scripts/scratch-ownership.ts`. Invariant: evidence is never minted under these (`resolveArtifactRoot` refuses tmpdir).
@@ -120,9 +123,9 @@ export function releaseScratch(): number {
     }
 
     if (held.length > 0) {
-      // bun's reporter drops each held error's cause, so leftovers go to the OS tmpdir
-      // (process.env.TMPDIR may be inside a root just removed).
-      const report = join('/tmp', 'kinu-scratch-held.json');
+      // bun's reporter drops each held error's cause, so leftovers go to the session's temporary directory, as it was
+      // when this module loaded: the TMPDIR a test home sets later may be inside a root just removed.
+      const report = join(SESSION_TMPDIR, 'kinu-scratch-held.json');
 
       writeFileSync(
         report,
