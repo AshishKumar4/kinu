@@ -134,7 +134,7 @@ import {
   // One minting rule for every subordinate, on either backend
   agentNamer,
   // Subordinate tree depth cap: derived per child, never stated by one
-  delegationExhausted, type DelegationBudget,
+  type DelegationBudget,
   readSoul, bootstrapScaffold,
   applyWorkspaceTitle, suggestWorkspaceTitle, type NameOrigin,
   parseModelSpec, specModelInfo, assembleActorTurn,
@@ -764,14 +764,6 @@ export abstract class ActorAgent extends Agent<Env> {
    * Each actor's home is provisioned in this isolate by the host (`actor-hosting.ts` →
    * `hostedHomeName`); its identity is its `workspace_actors` row, so there is no facet port.
    */
-
-  /**
-   * At the depth cap the team deps are absent, so the tools cannot be attempted. Core's classified
-   * refusal covers a cached ToolSet built before a facet's identity was seeded.
-   */
-  protected teamProfile(): { readonly team?: TeamToolDeps } {
-    return delegationExhausted(this.delegationBudget()) ? {} : { team: this.getTeamToolDeps() };
-  }
 
   private _subordinateRoster: SubordinateRosterStore | null = null;
 

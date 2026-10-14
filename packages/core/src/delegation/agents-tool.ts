@@ -322,23 +322,34 @@ interface UnifiedRosterResult {
   note?: string;
 }
 
+/** Whether an agent has a team to delegate to: one wired, and room below it for one more level (`DELEGATION_MAX_DEPTH`).
+ *  At the cap an agent is offered no team at all, on every backend. */
+function teamOffered(deps: AgentsWiring): boolean {
+  return deps.team !== undefined && !delegationExhausted(deps.team.delegation);
+}
+
+/** Whether an actor has an `agents` tool at all: a search, a team below the cap, or peer workspaces. */
+export function agentsWired(deps: AgentsToolDeps): boolean {
+  return deps.swarm !== undefined || teamOffered(deps) || deps.peers !== undefined;
+}
+
 /** What wires each operation; a search needs exactly the exploration substrate, so it has no deps group of its own. */
 const OFFERED_WHEN = {
   swarm: (deps) => deps.swarm !== undefined && deps.swarms,
-  hire: (deps) => deps.team !== undefined,
-  assign: (deps) => deps.team !== undefined || deps.peers !== undefined,
+  hire: (deps) => teamOffered(deps),
+  assign: (deps) => teamOffered(deps) || deps.peers !== undefined,
   hireWorkspace: (deps) => deps.peers !== undefined,
-  message: (deps) => deps.team !== undefined || deps.peers !== undefined,
+  message: (deps) => teamOffered(deps) || deps.peers !== undefined,
   reply: (deps) => deps.peers !== undefined,
-  list: (deps) => deps.team !== undefined || deps.peers !== undefined,
-  dismiss: (deps) => deps.team !== undefined,
+  list: (deps) => teamOffered(deps) || deps.peers !== undefined,
+  dismiss: (deps) => teamOffered(deps),
 } as const satisfies Record<AgentsOp, (deps: AgentsWiring) => boolean>;
 
 /** The deps an operation's presence reads, presence-typed so prompt assembly need not build the substrate. */
 interface AgentsWiring {
   readonly swarm?: object;
   readonly swarms: boolean;
-  readonly team?: object;
+  readonly team?: Pick<TeamToolDeps, 'delegation'>;
   readonly peers?: object;
 }
 
@@ -348,9 +359,10 @@ export function agentsActionsFor(deps: AgentsWiring): AgentsOp[] {
   return AGENTS_OPS.filter((op) => OFFERED_WHEN[op](deps));
 }
 
-/** The deps with the substrate withheld while the account's swarms are off, so every rendering omits `swarm`. */
+/** The deps with what is not offered withheld, so every rendering omits it: the substrate while the account's swarms
+ *  are off, the team at the depth cap. */
 export function offered(deps: AgentsToolDeps): AgentsToolDeps {
-  return deps.swarms ? deps : { ...deps, swarm: undefined };
+  return { ...deps, ...(!deps.swarms && { swarm: undefined }), ...(!teamOffered(deps) && { team: undefined }) };
 }
 
 /** A search's fields, as `agents.swarm` admits them. */
@@ -973,9 +985,10 @@ export async function dispatchAgentsCall(
   toolOptions?: AgentsToolCallOptions,
 ): Promise<object> {
   // A withheld swarm is refused at admission, so its arm never reads the substrate.
-  const offeredOps = agentsActionsFor(offered(deps));
+  const wired = offered(deps);
+  const offeredOps = agentsActionsFor(wired);
   const mode = inWorkMode(deps.mode, currentWorkMode);
-  const { team, peers } = deps;
+  const { team, peers } = wired;
 
   // No catch: a roster read failure must reach the caller, not route the assignment to the peer path.
   const isSubordinate = async (name: string): Promise<boolean> => {
@@ -983,6 +996,15 @@ export async function dispatchAgentsCall(
 
     return (await team.list()).some((entry) => entry.name === name);
   };
+
+  // Depth seam: at the cap a spawn is refused as the cap, pointing to a search, though a toolset cached before the
+  // identity was seeded still offers a hire. An assignment to an existing agent is not a spawn.
+  const spawnDepthRefusal = () =>
+    deps.team && delegationExhausted(deps.team.delegation) ? delegationDepthRefusal(deps.team.delegation) : null;
+
+  const hireDepth = call.op === 'hire' ? spawnDepthRefusal() : null;
+
+  if (hireDepth) throw new KinuError(hireDepth.reason, hireDepth.error);
 
   // An operation this actor does not wire: `unsupported` (obs/error.ts), classified so it counts as refused.
   const admission = opAdmission(offeredOps, mode, call.op, withheldBeta(deps, call.op));
@@ -998,11 +1020,6 @@ export async function dispatchAgentsCall(
 
   if (SPAWNING.has(call.op)) spawnGuard();
 
-  // Depth seam: covers a toolset cached before the identity was seeded. An assignment to an existing agent is not a
-  // spawn and stays available.
-  const spawnDepthRefusal = () =>
-    team && delegationExhausted(team.delegation) ? delegationDepthRefusal(team.delegation) : null;
-
   const rosterCall: RosterCall = { mode, toolOptions, spawnGuard, isSubordinate };
 
   try {
@@ -1016,9 +1033,6 @@ export async function dispatchAgentsCall(
         const planBar = workModeRefusal(mode, lifetime === 'task', 'agents.hire');
 
         if (planBar) throw new KinuError(planBar.reason, planBar.error);
-        const createDepth = spawnDepthRefusal();
-
-        if (createDepth) throw new KinuError(createDepth.reason, createDepth.error);
 
         // Capability absence is `denied`; admission already holds `hire` to a wired team.
         if (!team) throw new KinuError('denied', 'hiring subordinates is not available on this actor');

@@ -1852,8 +1852,7 @@ describe('LocalAgentHost', () => {
     const events: SessionEvent[] = [];
     reopened.subscribe((agent, event) => { if (agent === address) events.push(event); });
     await (await reopened.acquire(address)).send('Hire another researcher.', { id: crypto.randomUUID() });
-    expect(events.filter((event) => event.type === 'tool-result' && event.toolName === 'agents'))
-      .toMatchObject([{ success: false, reason: 'denied' }]);
+    expect(events.filter((event) => event.type === 'tool-result' && event.toolName === 'agents' && event.success)).toEqual([]);
     expect(await capped.list()).toEqual([]);
     await reopened.close();
   });

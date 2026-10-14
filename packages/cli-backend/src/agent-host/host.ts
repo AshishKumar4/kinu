@@ -33,7 +33,6 @@ import {
   createTeamToolDeps,
   createTemporaryAgentPort,
   delegationBudgetOf,
-  delegationExhausted,
   describeSubordinateHandoff,
   inheritedContextFromTranscript,
   actorHomeName,
@@ -1086,13 +1085,8 @@ export class LocalAgentHost {
       )),
     };
 
-    // At the depth cap, drop the temporary port: a role-targeted `ask` births a child and would
-    // otherwise recurse past `DELEGATION_MAX_DEPTH`. `hire` is caught by core's dispatch refusal.
-    if (!delegationExhausted(delegation)) {
-      Object.assign(input, { temporary: parent.temporary });
-    }
-
-    return createTeamToolDeps(input);
+    // What a capped agent is offered is core's (`offered`): no team at all.
+    return createTeamToolDeps({ ...input, temporary: parent.temporary });
   }
 
   /**
