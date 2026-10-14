@@ -26,7 +26,7 @@ interface Env {
   readonly PROBE_ACCESS_KEY_ID?: string;
   readonly PROBE_SECRET_ACCESS_KEY?: string;
   readonly PROBE_BUCKET: string;
-  /** The name every contract box answers to; the tier that deploys this fixture sets it and reads it back. */
+  /** The name every contract box shows; the tier that deploys this fixture sets it and reads it back. */
   readonly BOX_NAME: string;
 }
 
@@ -54,8 +54,8 @@ export class ContractBox extends Devbox<Env> {
   protected override get store(): string { return 'STORE'; }
   protected override get policy() { return { ...DEFAULT_DEVBOX_POLICY, checkpointIntervalMs: 2_000 }; }
   protected override get ambientCheckpoints(): boolean { return false; }
-  // As KinuDevbox's (D91), so every start here names the box on the platform's real container.
-  protected override async hostname(): Promise<string> { return this.env.BOX_NAME; }
+  // As KinuDevbox's (D93), so every start here shows the box's name on the platform's real container.
+  protected override async shownName(): Promise<string> { return this.env.BOX_NAME; }
 
   /** 2026-10-09, D81: the native exec counter saw 73 calls for a 72-entry listing on df51186a7. */
   async fileContract() {

@@ -1,8 +1,8 @@
-// D92: naming the box never refuses it. Staging 7e411119d wrote /etc/hostname, which the platform mounts read-only,
-// and every start failed; the real platform is the container tier's `box-name` step.
+// D93: a person sees the box by its workspace's name; the kernel keeps the platform's. Keeping the name never refuses a
+// start (D92: staging 7e411119d wrote /etc/hostname, read-only on the platform, and every start failed). The real
+// platform is the container tier's `box-name` step.
 import { TestDevbox } from './support/test-devbox';
 import { afterEach, expect, spyOn, test } from 'bun:test';
-
 import * as v from 'valibot';
 
 import { harness } from './support/devbox-harness';
@@ -12,12 +12,12 @@ class NamedBox extends TestDevbox<unknown> {
     return false;
   }
 
-  protected override async hostname(): Promise<string> {
+  protected override async shownName(): Promise<string> {
     return 'storefront';
   }
 }
 
-const Kept = v.object({ event: v.literal('devbox.name.kept'), name: v.string(), detail: v.string() });
+const Unshown = v.object({ event: v.literal('devbox.name.unshown'), name: v.string(), detail: v.string() });
 
 const traced: string[] = [];
 
@@ -27,39 +27,39 @@ afterEach(() => { traced.length = 0; });
 
 process.on('exit', () => console$.mockRestore());
 
-/** The box's `devbox.name.kept` lines, as its trace prints them. */
-const kept = () => traced.flatMap((line) => {
-  const parsed = v.safeParse(v.pipe(v.string(), v.parseJson(), Kept), line);
+/** The box's `devbox.name.unshown` lines, as its trace prints them. */
+const unshown = () => traced.flatMap((line) => {
+  const parsed = v.safeParse(v.pipe(v.string(), v.parseJson(), Unshown), line);
 
   return parsed.success ? [parsed.output] : [];
 });
 
-test('a box names itself as it starts, and says nothing when the name took', async () => {
+test('a box keeps its shown name as it starts, and says nothing when it took', async () => {
   const { box, container } = harness(NamedBox);
 
   await box.devboxStartup();
 
   expect(container.sequence).toContain('name:storefront');
   expect((await box.exec('true')).exitCode).toBe(0);
-  expect(kept()).toEqual([]);
+  expect(unshown()).toEqual([]);
 });
 
-test('a name the platform will not take leaves the box its own name, starts it, and says why', async () => {
+test('a name the box cannot keep leaves its prompts the platform host, starts it, and says why', async () => {
   const { box, container } = harness(NamedBox);
-  container.nameBox = { stdout: 'named=no unresolved hosts=read-only\n', stderr: '', exitCode: 0 };
+  container.showName = { stdout: '', stderr: 'sh: 1: cannot create /etc/devbox-shown-name: Read-only file system', exitCode: 2 };
 
   await box.devboxStartup();
 
   expect((await box.exec('true')).exitCode).toBe(0);
-  expect(kept()).toEqual([expect.objectContaining({ name: 'storefront', detail: 'named=no unresolved hosts=read-only' })]);
+  expect(unshown()).toEqual([expect.objectContaining({ name: 'storefront', detail: expect.stringContaining('Read-only') })]);
 });
 
-test('a naming the container refuses outright still starts the box', async () => {
+test('a container that refuses the write outright still starts the box', async () => {
   const { box, container } = harness(NamedBox);
-  container.nameBox = 'gone';
+  container.showName = 'gone';
 
   await box.devboxStartup();
 
   expect((await box.exec('true')).exitCode).toBe(0);
-  expect(kept()).toHaveLength(1);
+  expect(unshown()).toHaveLength(1);
 });

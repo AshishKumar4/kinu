@@ -1,4 +1,5 @@
 import { WALLPAPER_PY } from './desktop-wallpaper';
+import { SHELL_RC, SHELL_RC_FILE } from './shown-name';
 
 export const DESKTOP_PORT = 6080;
 
@@ -167,7 +168,10 @@ export const DESKTOP_START = `cd /
 printf '%s\\n' 'export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox --disable-gpu --disable-dev-shm-usage --disable-component-update --no-first-run --no-default-browser-check"' > /etc/chromium.d/devbox
 mkdir -p /etc/chromium/policies/managed ${SESSION} /usr/local/share/themes/Kinu/openbox-3
 printf '%s\\n' '{"CommandLineFlagSecurityWarningsEnabled": false}' > /etc/chromium/policies/managed/devbox.json
-printf '%s\\n' ${launcher('Terminal', 'sh -c "cd /workspace 2>/dev/null; exec xterm"', '/usr/share/pixmaps/xterm-color_48x48.xpm')} > ${SESSION}/terminal.desktop
+printf '%s\\n' ${launcher('Terminal', `sh -c "cd /workspace 2>/dev/null; exec xterm -e bash --rcfile ${SHELL_RC_FILE} -i"`, '/usr/share/pixmaps/xterm-color_48x48.xpm')} > ${SESSION}/terminal.desktop
+cat > ${SHELL_RC_FILE} <<'SHELLRC'
+${SHELL_RC}
+SHELLRC
 printf '%s\\n' ${launcher('Browser', 'chromium', '/usr/share/icons/hicolor/48x48/apps/chromium.png')} > ${SESSION}/browser.desktop
 cat > ${SESSION}/tint2rc <<'PANEL'
 ${PANEL}
