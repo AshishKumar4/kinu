@@ -4662,6 +4662,21 @@ running box again. A name that cannot be read is logged (`computer.name_unread`)
 mechanism stands: the kernel's name, `/etc/hostname` and `/etc/hosts`, set at every start. The executor's label in the
 product and the prompt stays "computer".
 
+D92. Naming the box never refuses it, and nothing writes /etc/hostname (2026-10-13, P0). Staging `7e411119d`, the
+first deployment with D83's naming, refused every computer start: "the platform refused this box a container: naming
+the box computer: name-box: 1: cannot create /etc/hostname: Read-only file system". The kernel's name had taken; the
+platform mounts /etc/hostname read-only, and the naming's failure was the start's. D83 measured `hostname computer` and
+the files' contents, never a write to either file, and no check ran a named box on the platform: the container tier's
+fixture named nothing and the unit harness answers every exec. Now the box sets the kernel's name, adds a
+`127.0.1.1` line to /etc/hosts where the platform lets it be written, and keeps the name only if it resolves within a
+second (`getent hosts`), since a name that resolves slowly or not at all makes sudo and every lookup of the box's own
+name wait or warn; otherwise the platform's name comes back. Whatever happens, the start goes on: a name not taken is
+a handled outcome, traced as `devbox.name.kept` with what was found. The container tier's fixture names its boxes as
+`KinuDevbox` does, and its first box step reads, in the real container, the kernel's name, /etc/hostname, whether
+/etc/hosts names the box and takes a write, the mounts of those files, the hosts line of nsswitch.conf, and how long
+`getaddrinfo` of the box's own name takes; it fails a box that does not answer to its name or takes over a second to
+resolve it.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean
