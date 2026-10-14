@@ -15,15 +15,8 @@ import { resolveWebIdentity } from '../../evals/src/workspace-roster';
 import { withBrowser, withDevServer } from '../../scripts/live-app-harness';
 import { defaultToScriptedModel, registerScriptedModel, startScriptedModel } from '../../scripts/scripted-model';
 import { tierModel } from '../../scripts/tier-model';
-import {
-  DRIVE_SLATE, INSPECTOR_SHUT_PX,
-  agentIsThereOnReturn, agentPlanIsReviewedInItsPane, agentProposesAWorkspace, accountMemoryCrossesWorkspaces, accountMemoryInTheStack, approvalsStackAtTheComposer, spliceSitsWhereItWasRead, hireParksAndRunsOnApproval, driveKeepsWhatIsDone, driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState,
-  openWaitsNamed, slateOpensFromSlates, slateSharesReachingNothing, slateShowsItsPreview, workspaceGetsFirstAnswer,
-  writtenFileShowsInFilesAndChanges, changesStormStaysBounded, openMemoryFollowsItsWriter, computerDesktopSurvivesAResize, reopenedWorkspaceRunsTheDeployedBuild, computerSessionsComeBackByName, agentJobIsAnsweredInItsSession,
-  type AgentPlanVerdict, type AgentReturnVerdict, type ApprovalStackVerdict, type HireApprovalVerdict, type WorkspaceProposalVerdict, type AccountMemoryVerdict, type StackMemoryVerdict, type SpliceVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict,
-  type FlowTarget, type PanelVerdict, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict,
-  type StampedCardVerdict, type WrittenFileVerdict, type DesktopResizeVerdict, type ReopenVerdict, type SessionsVerdict, type AgentJobVerdict,
-} from '../../scripts/product-flows';
+import { DRIVE_SLATE, agentIsThereOnReturn, agentPlanIsReviewedInItsPane, agentProposesAWorkspace, accountMemoryCrossesWorkspaces, accountMemoryInTheStack, approvalsStackAtTheComposer, spliceSitsWhereItWasRead, hireParksAndRunsOnApproval, driveKeepsWhatIsDone, driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState, openWaitsNamed, slateOpensFromSlates, slateSharesReachingNothing, slateShowsItsPreview, workspaceGetsFirstAnswer, writtenFileShowsInFilesAndChanges, changesStormStaysBounded, openMemoryFollowsItsWriter, computerDesktopSurvivesAResize, reopenedWorkspaceRunsTheDeployedBuild, computerSessionsComeBackByName, agentJobIsAnsweredInItsSession, type AgentPlanVerdict, type AgentReturnVerdict, type ApprovalStackVerdict, type HireApprovalVerdict, type WorkspaceProposalVerdict, type AccountMemoryVerdict, type StackMemoryVerdict, type SpliceVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict, type PanelVerdict, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict, type StampedCardVerdict, type WrittenFileVerdict, type DesktopResizeVerdict, type ReopenVerdict, type SessionsVerdict, type AgentJobVerdict } from '../../scripts/product-flows';
+import { INSPECTOR_SHUT_PX, type FlowTarget } from '../../scripts/browser-page';
 import {
   ACCOUNT_FACT, ACCOUNT_RECALL_REPLY, CONTINUE, FLOW_MEMORY_NOTE, FLOW_PROBE, FLOW_SHELL_PROBE, FLOW_SLATE, HIRE_PARKED_COMMAND, INTERRUPTED_BRIEF,
   INTERRUPTED_TITLE, PARKED_COMMANDS, PIN_PAGE, PLAN_COMMENT, PROPOSED_WORKSPACE, REACH_REPLY, REACH_STREAM, STACK_FACT, STACK_RECALL_REPLY, STORM_FILES,

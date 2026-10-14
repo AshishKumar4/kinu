@@ -21,11 +21,7 @@ import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-s
 import { DESKTOP, withLiveApp, type LiveApp } from './live-app-harness';
 import { recordDeadEnds } from '../evals/src/browser';
 import { createWorkspace, listWorkspaces, LOOPBACK_IDENTITY } from '../evals/src/workspace-roster';
-import {
-  CHAT_COMPOSER_LIVE, INSPECTOR_PANEL, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, OPEN_NAMES,
-  countRpc, frameLedger, named, openInspector, PAGE_TABS, painted, pressSend, pressUntil, recordRenderTasks, rendered, sendInChat, settled, settledAfter,
-  until, waitOn, type ControlAttempt, type RpcCounter,
-} from './product-flows';
+import { CHAT_COMPOSER_LIVE, INSPECTOR_PANEL, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, OPEN_NAMES, countRpc, frameLedger, named, openInspector, PAGE_TABS, painted, pressSend, pressUntil, recordRenderTasks, rendered, sendInChat, settled, settledAfter, until, waitOn, type ControlAttempt, type RpcCounter } from './browser-page';
 import { rowVerdicts, type RowVerdicts } from './row-verdicts';
 import {
   KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_FIRST_TURN_MISSION, PACED_TURN_ANSWER,

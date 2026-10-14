@@ -6,7 +6,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { ElementHandle, Page } from 'puppeteer';
 import { withGallery } from '../../scripts/gallery-harness';
-import { openInspectorPage, sessionLine } from '../../scripts/product-flows';
+import { openInspectorPage, sessionLine } from '../../scripts/browser-page';
 
 declare global {
   interface Window {

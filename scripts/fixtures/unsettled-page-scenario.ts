@@ -5,7 +5,7 @@
  */
 import { releaseOnSignals } from '../../packages/test-utils/src/scratch';
 import { withBrowser } from '../live-app-harness';
-import { frameLedger, settledAfter, waitOn } from '../product-flows';
+import { frameLedger, settledAfter, waitOn } from '../browser-page';
 
 // As the test preload does for a row: the signal releases the holds, which print the open waits.
 releaseOnSignals();

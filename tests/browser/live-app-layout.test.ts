@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SCRATCH_ROOT_PREFIX } from '../../packages/test-utils/src/scratch';
-import { INSPECTOR_SHUT_PX } from '../../scripts/product-flows';
+import { INSPECTOR_SHUT_PX } from '../../scripts/browser-page';
 import { RAIL_SHUT_PX, liveRows } from '../../scripts/live-app-rows';
 
 const { observed, verdictOf, boot } = liveRows('live-app-layout', ['controls', 'state']);
