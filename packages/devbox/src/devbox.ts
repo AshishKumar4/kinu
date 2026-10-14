@@ -345,6 +345,12 @@ interface Flight {
   readonly since: number;
 }
 
+/** The start hook's restore, and the box's own start or repair: one attempt each at a time. */
+interface Flights {
+  hook?: Flight;
+  startup?: Flight;
+}
+
 function unawaited(work: Promise<unknown>, lost: string): void {
   void work.catch((cause: LateStartFailure['cause']) => {
     console.error(`[devbox] ${lost}: ${describe({ cause })}`);
@@ -395,13 +401,14 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   #started: StartSource | undefined;
   #siblings: Siblings | undefined;
   #snapshotOwner: Snapshots | undefined;
-  #gateRestore: Flight | undefined;
   /** Fences every write below: an abandoned startup continuation keeps running, and must
    *  re-check this token after every await or it can clear its successor's single-flight entry. */
   #generation = 0;
-  /** A caller joins the attempt only while its generation still matches: a superseded
-   *  attempt's result is already discarded. */
-  #startup: Flight | undefined;
+  /**
+   * The attempts run one at a time per generation (`#fly`): the start hook's restore, and the box's own start or repair.
+   * A caller joins one only while its generation still matches: a superseded attempt's result is already discarded.
+   */
+  readonly #flights: Flights = {};
   /** `destroy` cancels and awaits these. */
   readonly #admissions = new Set<{ readonly abort: () => void; readonly settled: Promise<void> }>();
   #refused: { readonly generation: number; readonly reason: string } | undefined;
@@ -487,7 +494,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   /** Memory can name `attached` for a replaced container, so every reader settles adoption first. */
   async #resolveAdoption(): Promise<void> {
-    if (this.#gateRestore !== undefined) return;
+    if (this.#flights.hook !== undefined) return;
 
     if (this.#adoptionPending) await this.#startContainer();
   }
@@ -913,27 +920,34 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       return;
     }
 
-    const pending = this.#gateRestore;
+    await this.#fly('hook', this.#generation, () => this.#runStartHook());
+  }
 
-    if (pending?.generation === this.#generation) {
-      this.#trace('startup.hook.join', { generation: pending.generation, sinceMs: Date.now() - pending.since });
+  /**
+   * The run under way in `slot` for `generation`, joined; or `open`'s, held there until it ends, unless another has taken
+   * its place by then.
+   */
+  async #fly(slot: keyof Flights, generation: number, open: () => Promise<void>): Promise<void> {
+    const pending = this.#flights[slot];
+
+    if (pending?.generation === generation) {
+      this.#trace(`startup.${slot}.join`, { generation, sinceMs: Date.now() - pending.since });
 
       return await pending.run;
     }
 
     const since = Date.now();
-    const generation = this.#generation;
-    this.#trace('startup.hook.enter', { generation, phase: this.#restoration.phase });
-    const run = this.#runStartHook();
-    this.#gateRestore = { generation, run, since };
+    this.#trace(`startup.${slot}.open`, { generation, running: this.ctx.container?.running === true, phase: this.#restoration.phase });
+    const run = open();
+    this.#flights[slot] = { generation, run, since };
     let settled = false;
 
     try {
       await run;
       settled = true;
     } finally {
-      if (this.#gateRestore?.run === run) this.#gateRestore = undefined;
-      this.#trace('startup.hook.exit', { generation, ms: Date.now() - since, settled, phase: this.#restoration.phase });
+      if (this.#flights[slot]?.run === run) this.#flights[slot] = undefined;
+      this.#trace(`startup.${slot}.exit`, { generation, ms: Date.now() - since, settled, phase: this.#restoration.phase });
     }
   }
 
@@ -1252,32 +1266,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }
 
     if (this.ctx.container?.running !== true
-      && (this.#restoration.phase !== 'unstarted' || this.#gateRestore !== undefined)) {
+      && (this.#restoration.phase !== 'unstarted' || this.#flights.hook !== undefined)) {
       this.#invalidateGeneration();
     }
 
-    const pending = this.#startup;
-
-    if (pending?.generation === this.#generation) {
-      this.#trace('startup.flight.join', { generation: pending.generation, sinceMs: Date.now() - pending.since });
-
-      return await pending.run;
-    }
-
-    const since = Date.now();
-    const generation = this.#generation;
-    this.#trace('startup.flight.open', { generation, running: this.ctx.container?.running === true, phase: this.#restoration.phase });
-    const run = this.#recoverAndStart();
-    this.#startup = { generation, run, since };
-    let settled = false;
-
-    try {
-      await run;
-      settled = true;
-    } finally {
-      if (this.#startup?.run === run) this.#startup = undefined;
-      this.#trace('startup.flight.exit', { generation, ms: Date.now() - since, settled, phase: this.#restoration.phase });
-    }
+    await this.#fly('startup', this.#generation, () => this.#recoverAndStart());
   }
 
   async #recoverAndStart(): Promise<void> {
@@ -1295,7 +1288,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
           this.#deleteSchedule(STARTUP_CALLBACK);
           await this.#replaceContainer(recovery.reason);
         } else {
-          this.#invalidateGeneration(this.#startup);
+          this.#invalidateGeneration(this.#flights.startup);
           await this.stop('SIGTERM');
           await this.#awaitContainerStopped();
         }
@@ -1405,20 +1398,17 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   /** Re-runs only the service half of a restoration that settled in `repair`, on the startup
    *  flight so two repairs cannot race process reservations, port exposures or the boot marker. */
   async #repairAttached(generation: number): Promise<void> {
-    const pending = this.#startup;
+    const pending = this.#flights.startup;
 
     if (pending !== undefined && pending.generation === generation) return await pending.run;
 
     return await this.#withStorageMutation(async () => {
       if (!this.#owns(generation)) return;
-      const active = this.#startup;
-
-      if (active !== undefined && active.generation === generation) return await active.run;
 
       const retryBootStamp = this.#restoration.phase === 'repair'
         && this.#restoration.bootStamp !== 'done';
 
-      const run = (async () => {
+      await this.#fly('startup', generation, async () => {
         const claim = await this.#claimRecovery();
 
         if (!claim.admit || !this.#owns(generation)) {
@@ -1433,15 +1423,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
           await this.#recover(generation, claim, { cause: error });
           throw error;
         }
-      })();
-
-      this.#startup = { generation, run, since: Date.now() };
-
-      try {
-        await run;
-      } finally {
-        if (this.#owns(generation) && this.#startup?.run === run) this.#startup = undefined;
-      }
+      });
     });
   }
 
@@ -1488,7 +1470,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
    *  in-flight attempt state-inert: no readiness, attach failure, release or destroy. */
   #invalidateGeneration(recoveryFlight?: Flight): void {
     this.#generation += 1;
-    this.#startup = recoveryFlight === undefined
+    this.#flights.startup = recoveryFlight === undefined
       ? undefined
       : { generation: this.#generation, run: recoveryFlight.run, since: recoveryFlight.since };
     this.#restoration = { phase: 'unstarted' };
@@ -1620,7 +1602,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   /** Cancels exec work abandoned at the attach deadline; `destroy` acks before `running` flips.
    *  `super`: a replaced identity is restarted, not closed. */
   async #replaceContainer(reason: string): Promise<void> {
-    this.#invalidateGeneration(this.#startup);
+    this.#invalidateGeneration(this.#flights.startup);
     const replacing = this.#generation;
 
     try {
@@ -1647,7 +1629,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   /** `stop`/`destroy` ack before `container.running` flips; returning early lets a wake reuse
-   *  the old mount. Count-bounded: a stop that never flips must refuse, not pin `#startup`. */
+   *  the old mount. Count-bounded: a stop that never flips must refuse, not pin the startup flight. */
   async #awaitContainerStopped(): Promise<void> {
     for (let poll = 0; poll < CONTAINER_STOP_ATTEMPTS; poll += 1) {
       if (this.ctx.container?.running !== true) return;
@@ -1791,7 +1773,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   async #armStartup(): Promise<void> {
     // A retryable unattach re-arms a lost row; a terminal one stays unarmed, or refused work
     // would storm the incident ledger.
-    if (this.#quiescing !== undefined || this.#startup !== undefined || this.#gateRestore !== undefined) return;
+    if (this.#quiescing !== undefined || this.#flights.startup !== undefined || this.#flights.hook !== undefined) return;
     const held = this.#restoration;
 
     // An attempt in flight settles into a phase on its own.
@@ -2153,7 +2135,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   /** Every checkpoint runs through here, so none interleave in storage (`createCheckpointLane`). */
   #checkpoint(kind: CheckpointKind): Promise<CheckpointOutcome> {
     return this.#lane.run(kind, async () => await this.#withStorageMutation(async () => {
-      const pending = this.#startup;
+      const pending = this.#flights.startup;
 
       // Waits for the startup to settle rather than racing it against a timer: a timer set here
       // would outlive into the start block and hold every timer its hook sets (D26).
@@ -2196,7 +2178,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   async #quiesceAdmitted(ending: boolean): Promise<CheckpointOutcome> {
-    const starting = this.#startup;
+    const starting = this.#flights.startup;
 
     if (starting !== undefined) await Promise.allSettled([starting.run]);
 
@@ -2437,7 +2419,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       return `the platform refused this box a container: ${refused.reason}`;
     }
 
-    return unreadyOf(this.#restoration, this.#gateRestore !== undefined);
+    return unreadyOf(this.#restoration, this.#flights.hook !== undefined);
   }
 
   /** A read: it starts, arms and wakes nothing. A running container an object reset left is adopted first,
@@ -2455,7 +2437,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       return {
         running: this.ctx.container?.running === true,
         restoration: this.#restoration.phase,
-        ready: this.#quiescing === undefined && this.#restoration.phase === 'attached' && this.#gateRestore === undefined,
+        ready: this.#quiescing === undefined && this.#restoration.phase === 'attached' && this.#flights.hook === undefined,
         unready: this.#quiescing === undefined ? this.#unready() : QUIESCING,
         lastInteractionAt: this.#lastInteraction
           ?? await this.ctx.storage.get<number>(LAST_INTERACTION_KEY),
@@ -2472,8 +2454,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         ports,
         incidents: incidentTotals(incidents.values()),
         flights: {
-          startupMs: this.#startup === undefined ? null : Date.now() - this.#startup.since,
-          hookMs: this.#gateRestore === undefined ? null : Date.now() - this.#gateRestore.since,
+          startupMs: this.#flights.startup === undefined ? null : Date.now() - this.#flights.startup.since,
+          hookMs: this.#flights.hook === undefined ? null : Date.now() - this.#flights.hook.since,
         },
         wire: { ...this.#containerCommandBytes },
       };
@@ -2736,8 +2718,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         const backgroundWork = this.#quiescing !== undefined || this.#activeCallers !== 0 || this.#openSockets !== 0
           || this.#resources.busy()
           || this.#lane.busy()
-          || this.#startup !== undefined
-          || this.#gateRestore !== undefined;
+          || this.#flights.startup !== undefined
+          || this.#flights.hook !== undefined;
 
         const decision = quiesceStep({
           now,
@@ -3485,7 +3467,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
       // A job on a computer that is running or starting is stopped there; a stopped computer is not started to stop
       // it: its spec goes, so no start brings it back.
-      if (job !== undefined && (this.ctx.container?.running === true || this.#startup !== undefined)) {
+      if (job !== undefined && (this.ctx.container?.running === true || this.#flights.startup !== undefined)) {
         yield* attempt('io', () => this.stopSupervised(job));
 
         return;
