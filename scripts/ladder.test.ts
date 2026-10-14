@@ -568,7 +568,7 @@ describe('the ladder measures something', () => {
 
     // The five rows partition the script's set: no workerd file is in two
     // rows or in none.
-    const rows = ['bun run test:workerd:cf', 'bun run test:workerd:cf-wide', 'bun run test:workerd:cf-long', 'bun run test:workerd:devbox', 'bun run test:workerd:cf-complexity']
+    const rows = ['bun run test:workerd:cf-main', 'bun run test:workerd:cf-wide', 'bun run test:workerd:cf-long', 'bun run test:workerd:devbox', 'bun run test:workerd:cf-complexity']
       .map((run) => claims(run, tracked));
 
     expect(rows.every((files) => files.length > 0)).toBe(true);

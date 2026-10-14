@@ -1900,7 +1900,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived' },
   },
   {
-    run: 'bun run test:workerd:cf',
+    run: 'bun run test:workerd:cf-main',
     label: 'Durable Object semantics under workerd',
     tier: 'ci',
     // Measured 2026-09-16 on the 24-thread workstation beside `bun test
@@ -1927,7 +1927,8 @@ export const LADDER: readonly Gate[] = [
     // slate-durability) live under `tests/workerd/wide/`, in the row below this one.
     // Armada 2026-10-14: this row with wide/ in it took 532 s median and 613 s p90 in CI, the second-longest row;
     // 354 s main then 234 s wide, run apart. Of main's 253 s of tests n-kill took 135 s, so it lives in
-    // `tests/workerd/long/` now; this row then measured 256 s alone on armada (`gate-cost.json`).
+    // `tests/workerd/long/` now; this row then measured 256 s alone on armada (`gate-cost.json`). Its script took a
+    // name of its own then, so armada's timings for the old one, which still held wide/, weigh no plan of this one.
     seconds: 45,
     catches: 'Durable Object semantics no bun test can express, executed inside real '
       + 'workerd (1.20260811.1 — the pool\'s own nested copy, not the 1.20260601.1 the '

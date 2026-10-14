@@ -495,7 +495,7 @@
       "exit": 0,
       "machine": "linux x64, AMD EPYC (8 threads)"
     },
-    "bun run test:workerd:cf": {
+    "bun run test:workerd:cf-main": {
       "wallSeconds": 256.02,
       "cpuSeconds": 323.9,
       "peakRssMb": 8569.16,
