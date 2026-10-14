@@ -56,6 +56,23 @@ async function seededDrive(): Promise<MossaicVfs> {
   return drive;
 }
 
+/** Fifty folders at the root, one holding three of its own: a tree wide enough to count what it reads. */
+async function wideDrive(): Promise<MossaicVfs> {
+  const drive = mossaicVfs(fakeMossaic().tenant("gallery-owner"));
+
+  for (let folder = 1; folder <= 50; folder += 1) await writeText(drive, `/folder-${String(folder).padStart(2, "0")}/notes.md`, "# Notes\n");
+
+  for (const inner of ["a", "b", "c"]) await writeText(drive, `/folder-01/${inner}/notes.md`, "# Notes\n");
+
+  return drive;
+}
+
+function fixtureDrive(seeded: boolean | "wide"): Promise<MossaicVfs> {
+  if (seeded === "wide") return wideDrive();
+
+  return seeded ? seededDrive() : Promise.resolve(mossaicVfs(fakeMossaic().tenant("gallery-owner")));
+}
+
 const STATUS: Readonly<Record<ErrorCode, number>> = {
   bad_input: 400, denied: 403, missing: 404, unsupported: 415, budget: 413, unavailable: 503, timeout: 504, cancelled: 400, oom: 507, io: 500,
 };
@@ -188,8 +205,9 @@ const FIXTURES = {
   shared: { seeded: true, library: LIBRARY },
   app: { seeded: true, library: LIBRARY },
   "drive-empty": { seeded: false, library: EMPTY_LIBRARY },
+  "drive-wide": { seeded: "wide", library: LIBRARY },
   "drive-recipient": { seeded: false, library: { ...EMPTY_LIBRARY, received: LIBRARY.received } },
-} satisfies Record<string, { seeded: boolean; library: SharedLibrary }>;
+} satisfies Record<string, { seeded: boolean | "wide"; library: SharedLibrary }>;
 
 /**
  * An upload as the page sends it, through XMLHttpRequest for its progress, answered by the page's own fetch as every
@@ -234,7 +252,7 @@ export function installDriveFixture(frame: string): void {
 
   if (fixture === undefined) return;
   const next = window.fetch.bind(window);
-  const drive = fixture.seeded ? seededDrive() : Promise.resolve(mossaicVfs(fakeMossaic().tenant("gallery-owner")));
+  const drive = fixtureDrive(fixture.seeded);
   // Opening Shared sees what it holds, as the account's stamp does.
   let seen = false;
 

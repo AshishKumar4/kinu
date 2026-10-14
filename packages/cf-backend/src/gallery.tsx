@@ -7474,6 +7474,9 @@ async function mount() {
   let node: React.ReactNode;
   let entries = ["/"];
 
+  // `&path=` opens a Drive frame at that folder.
+  const drivePathAsked = `${APP_ROUTES.drive}${new URLSearchParams(location.search).get("path") ?? ""}`;
+
   // Frames fully fixed by name; `entries` is the MemoryRouter location for frames that read a route param.
   const fixtureFrames = new Map<string, { node: React.ReactNode; entries: string[] }>([
     ["activity", { node: <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_SNAPSHOT)} />, entries: ["/"] }],
@@ -7484,10 +7487,11 @@ async function mount() {
     ["chat-slate", { node: <ChatSlateFrame />, entries: ["/"] }],
     ["jobstreaming", { node: <JobStreamingFrame />, entries: ["/"] }],
     // `&path=/projects/ops` opens a folder; `shared` is the other tab; `drive-recipient` holds only what others shared.
-    ["drive", { node: <DrivePageFrame />, entries: [`${APP_ROUTES.drive}${new URLSearchParams(location.search).get("path") ?? ""}`] }],
+    ["drive", { node: <DrivePageFrame />, entries: [drivePathAsked] }],
     ["slates", { node: <DrivePageFrame />, entries: [APP_ROUTES.slates] }],
     ["shared", { node: <DrivePageFrame />, entries: [APP_ROUTES.shared] }],
     ["drive-empty", { node: <DrivePageFrame />, entries: [APP_ROUTES.drive] }],
+    ["drive-wide", { node: <DrivePageFrame />, entries: [drivePathAsked] }],
     ["drive-recipient", { node: <DrivePageFrame />, entries: [APP_ROUTES.drive] }],
     ["providerwait", { node: <ProviderWaitFrame />, entries: ["/"] }],
     ["sharedialog", { node: <ShareDialogFrame mode="live" />, entries: ["/"] }],

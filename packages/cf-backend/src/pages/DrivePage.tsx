@@ -18,7 +18,8 @@ import {
   type DriveEntry, type DriveListing, type FileText, type LiveShareVisibility, type OwnedSlate, type SharedLibrary, type SharedRow,
   type SkillFileRefusal,
 } from "@kinu.run/core";
-import { diagnostics, showing, toKinuError, settle } from "@kinu.run/core/obs";
+import { detach, diagnostics, showing, toKinuError, settle } from "@kinu.run/core/obs";
+import { useMediaQuery } from "@/hooks/use-media-query";
 import {
   downloadUrl, inlineUrl, listDrive, markAsSkill, readDriveText, uploadFile, uploadFolder, uploadZip, type PickedFile, type UploadWatch,
 } from "@/lib/drive-api";
@@ -97,7 +98,10 @@ function subfolders(entries: readonly DriveEntry[] | undefined, parent: string):
   return (entries ?? []).filter((entry) => entry.kind === "folder").sort((a, b) => Number(isSkills(b)) - Number(isSkills(a)));
 }
 
-/** My stuff's folders, opened along the way to `current`; a folder that holds folders has a caret. */
+/**
+ * My stuff's folders, opened along the way to `current`. A folder read on the way shows a caret only when it holds
+ * folders; one not yet opened is not read, and its caret says it can be.
+ */
 function FolderTree({ listings, parent, current, depth }: {
   listings: ReadonlyMap<string, readonly DriveEntry[]>; parent: string; current: string; depth: number;
 }) {
@@ -110,11 +114,12 @@ function FolderTree({ listings, parent, current, depth }: {
       {children.map((child) => {
         const path = joinDir(parent, child.name);
         const open = current === path || current.startsWith(`${path}/`);
-        const inner = subfolders(listings.get(path), path);
+        const read = listings.get(path);
         const skills = path === DRIVE_SKILLS_DIR || child.skill;
-        let caret: ReactNode = null;
+        let caret: ReactNode = <CaretRightIcon size={10} weight="bold" />;
 
-        if (inner.length > 0) caret = open ? <CaretDownIcon size={10} weight="bold" /> : <CaretRightIcon size={10} weight="bold" />;
+        if (read !== undefined && subfolders(read, path).length === 0) caret = null;
+        else if (open) caret = <CaretDownIcon size={10} weight="bold" />;
 
         return (
           <li key={path}>
@@ -136,10 +141,14 @@ function FolderTree({ listings, parent, current, depth }: {
 }
 
 /** From `lg`, the Drive's places in a column: Slates, My stuff with its folder tree, then Shared. */
-function DriveColumn({ tab, path, listings, places, unseen }: {
-  tab: DriveTab; path: string; listings: ReadonlyMap<string, readonly DriveEntry[]>; places: readonly DriveTab[]; unseen: boolean;
+function DriveColumn({ tab, path, shown, places, unseen }: {
+  tab: DriveTab; path: string; shown: DriveListing | null; places: readonly DriveTab[]; unseen: boolean;
 }) {
-  if (places.length < 2) return null;
+  // Drawn only from `lg`, and only with a second place; the tree in it reads nothing while it is not drawn.
+  const drawn = useMediaQuery("(min-width: 1024px)") && places.length > 1;
+  const listings = useFolderWay(drawn && tab === "mine", path, shown);
+
+  if (!drawn) return null;
 
   return (
     <aside aria-label="Drive" className="hidden w-52 shrink-0 flex-col overflow-y-auto border-r p-border px-3 pb-6 pt-8 lg:flex">
@@ -222,26 +231,27 @@ function useSeeingShared(seeing: boolean, reread: () => void, fail: (chain: stri
 }
 
 /**
- * What the folder tree draws, read once per visit: each folder on the way to `path` above it, and each folder those
- * and `path` hold, so the tree knows which have folders of their own. `path` itself is the page's own listing.
+ * What the folder tree draws: each folder on the way to `path`, read once a visit and kept, the page's own listings
+ * among them. Nothing is read while the tree is not drawn, and a folder off the way is not read until it is opened.
  */
-function useFolderWay(tab: DriveTab, path: string, here: DriveListing | null): ReadonlyMap<string, readonly DriveEntry[]> {
-  const load = useCallback(async () => {
-    if (tab !== "mine") return [];
+function useFolderWay(drawn: boolean, path: string, here: DriveListing | null): ReadonlyMap<string, readonly DriveEntry[]> {
+  const [kept, setKept] = useState<ReadonlyMap<string, readonly DriveEntry[]>>(() => new Map());
+  const parts = path.split("/").filter(Boolean);
+  const missing = drawn ? parts.map((_, index) => `/${parts.slice(0, index).join("/")}`).filter((folder) => !kept.has(folder)) : [];
+  const asked = missing.join("\n");
 
-    const parts = path.split("/").filter(Boolean);
-    const above = await Promise.all(parts.map((_, index) => listDrive(`/${parts.slice(0, index).join("/")}`)));
-    const opened = [...above.map((listing) => listing.path), path];
+  if (here !== null && kept.get(here.path) !== here.entries) setKept(new Map(kept).set(here.path, here.entries));
 
-    const shown = [...above, ...(here === null ? [] : [here])].flatMap((listing) => subfolders(listing.entries, listing.path)
-      .map((entry) => joinDir(listing.path, entry.name)).filter((child) => !opened.includes(child)));
+  useEffect(() => {
+    if (asked === "") return;
+    detach(Effect.gen(function* () {
+      const read = yield* Effect.promise(() => Promise.all(asked.split("\n").map(listDrive)));
 
-    return [...above, ...await Promise.all(shown.map(listDrive))];
-  }, [tab, path, here]);
+      setKept((held) => new Map([...held, ...read.map((listing): [string, readonly DriveEntry[]] => [listing.path, listing.entries])]));
+    }));
+  }, [asked]);
 
-  const way = lastValue(useAsyncResource(load, undefined, `${tab}:${path}`).resource) ?? [];
-
-  return new Map([...way, ...(here === null ? [] : [here])].map((listing) => [listing.path, listing.entries]));
+  return kept;
 }
 
 function Crumbs({ path }: { path: string }) {
@@ -813,7 +823,6 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
   const shared = lastValue(library.resource);
   const places = placesOf(shared);
   const unseen = shared?.received.some((row) => row.unseen === true) ?? false;
-  const listings = useFolderWay(tab, path, lastValue(listing.resource));
 
   useSeeingShared(tab === "shared" && unseen, library.reload, setNotice);
   const contents = mineContents(path, lastValue(listing.resource)?.entries ?? []);
@@ -966,7 +975,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
 
   return (
     <div className="flex h-full min-h-0">
-      <DriveColumn tab={tab} path={path} listings={listings} places={places} unseen={unseen} />
+      <DriveColumn tab={tab} path={path} shown={lastValue(listing.resource)} places={places} unseen={unseen} />
       <div className="min-w-0 flex-1 overflow-y-auto">
       <div className="max-w-5xl px-5 pb-20 pt-6 sm:px-8 lg:pt-8">
         <DriveHead tab={tab} path={path} subtitle={subtitle} places={places} unseen={unseen} search={{ query, set: setQuery }}

@@ -157,6 +157,13 @@ async function pressNew(page: Page, item: string): Promise<void> {
   await page.click(`[${item}]`);
 }
 
+declare global {
+  interface Window {
+    /** The Drive folders the page listed, in order, counted by the read-count test. */
+    __driveListed?: string[];
+  }
+}
+
 describe('the Drive', () => {
   test('Slates tiles every slate by its workspace; My stuff tiles folders and files, and a folder link, an upload and New folder work', async () => {
     await withGallery(async (gallery) => {
@@ -268,6 +275,45 @@ describe('the Drive', () => {
       // Only a live share of yours has a slate of yours to show; the others, two blueprints and a live share someone
       // gave you, keep their covers.
       expect(tiles.filter(([, how]) => how === 'picture').map(([id]) => id)).toEqual(['live-board-1']);
+    });
+  });
+
+  test('the folder tree reads only the folders on the way to the one shown, once, and nothing on a phone', async () => {
+    await withGallery(async (gallery) => {
+      // Fifty folders at the root: a tree that read each shown folder made fifty reads more.
+      const readsAt = async (viewport: keyof typeof VIEWPORTS, shown: string): Promise<string[]> => {
+        const page = await gallery.newPage();
+
+        try {
+          // The fixture answers the Drive through the page's own fetch, set after the page starts: each one set is
+          // counted as it is.
+          await page.evaluateOnNewDocument(() => {
+            window.__driveListed = [];
+
+            const wrap = (inner: typeof fetch): typeof fetch => Object.assign((input: RequestInfo | URL, init?: RequestInit) => {
+              const url = new URL(input instanceof Request ? input.url : String(input), location.href);
+
+              if (url.pathname === '/api/drive' && (init?.method ?? 'GET') === 'GET') window.__driveListed?.push(url.searchParams.get('path') ?? '');
+
+              return inner(input, init);
+            }, { preconnect: inner.preconnect });
+
+            let current = wrap(window.fetch);
+
+            Object.defineProperty(window, 'fetch', { configurable: true, get: () => current, set: (next: typeof fetch) => { current = wrap(next); } });
+          });
+          await page.setViewport(VIEWPORTS[viewport]);
+          await page.goto(`${gallery.origin}/gallery.html?frame=drive-wide&path=/folder-01/a`, { waitUntil: 'networkidle0' });
+          await page.waitForSelector(shown);
+
+          return [...new Set(await page.evaluate(() => window.__driveListed ?? []))].sort();
+        } finally {
+          await page.close();
+        }
+      };
+
+      expect(await readsAt('desktop', '[data-drive-tree="/folder-01/a"][aria-current="page"]')).toEqual(['/', '/folder-01', '/folder-01/a']);
+      expect(await readsAt('mobile', '[data-drive-tab="mine"][aria-current="page"]')).toEqual(['/folder-01/a']);
     });
   });
 
