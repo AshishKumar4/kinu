@@ -66,6 +66,9 @@ try: socket.getaddrinfo(socket.gethostname(), None)
 except OSError: pass
 print(int((time.time()-t)*1000))')"`;
 
+/** How long the tier watches a refused box for another start: the box this contract caught re-armed every second. */
+const PARKED_WATCH_MS = 20_000;
+
 /** How long after its first frame a fresh desktop must show its background and panel: a person waits seconds, not minutes. */
 const DESKTOP_SEEN_MS = 30_000;
 
@@ -178,8 +181,8 @@ function fixturePlan(recovering: ReturnType<typeof recoveryReport>) {
   const worker = recovering?.worker ?? `kinu-${run}`;
   const bucket = recovering?.bucket ?? worker;
   const box = `eval-devbox-${run}`;
-  // The last is a box only the desktop's check opens, so it opens on a fresh box.
-  const names = recovering?.boxes ?? [box, `${box}-native`, `${box}-disk`, 'devbox-golden', `${box}-desktop`];
+  // The fifth is a box only the desktop's check opens, so it opens on a fresh box; the sixth fails every start (D94).
+  const names = recovering?.boxes ?? [box, `${box}-native`, `${box}-disk`, 'devbox-golden', `${box}-desktop`, `${box}-parked`];
   const app = recovering?.app ?? `${worker}-contractbox`;
   const owner = recovering?.owner ?? contractOwner(process.env);
   const { job, index, attempt, vessel, statusUrl } = owner;
@@ -536,6 +539,31 @@ async function main(): Promise<void> {
     for (const kind of CONTAINER_CONTRACTS) await step(kind, () => call(`/contract?kind=${kind}`, Json, {}, names[1]));
 
     // `--headless`: everything but the desktop's client, which drives a browser on this host.
+    /**
+     * A start that fails the same way every time is refused once and arms nothing (D94): staging 7e411119d's box named
+     * itself into the read-only /etc/hostname, an uncoded failure, and re-armed its startup every second, 1,873 alarms
+     * in 30 minutes with no caller. The fixture's `-parked` box fails every start that way, on the platform's container.
+     */
+    await step('parked-start', async () => {
+      const parked = names[5] ?? '';
+      const url = new URL('/exec', origin);
+      url.searchParams.set('box', parked);
+      const asked = await fixtureFetch(url, { method: 'POST', headers: { authorization: `Bearer ${identity}`, 'content-type': 'application/json' }, body: JSON.stringify({ command: 'true' }) });
+      const said = JSON.stringify(await asked.json());
+      await delay(PARKED_WATCH_MS);
+      const armed = await call('/armed', v.record(v.string(), v.number()), undefined, parked);
+      const state = await call('/state', v.looseObject({ incidents: v.looseObject({ total: v.number() }) }), undefined, parked);
+      const seen = { status: asked.status, said: said.slice(-400), startupArms: armed['devboxStartup'] ?? 0, incidents: state.incidents.total, watchedMs: PARKED_WATCH_MS };
+
+      process.stdout.write(`[${run}] parked start ${JSON.stringify(seen)}\n`);
+
+      if (asked.ok || !said.includes('nothing retries it')) throw new Error(`the parked box was not refused: ${JSON.stringify(seen)}`);
+
+      if (seen.startupArms > 1 || seen.incidents !== 1) throw new Error(`a start refused the same way kept asking: ${JSON.stringify(seen)}`);
+
+      return seen;
+    });
+
     if (!process.argv.includes('--headless')) await desktopClient();
 
     await step('disk-chain', async () => {
