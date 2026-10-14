@@ -5,7 +5,7 @@
 
 import { lookup } from 'node:dns/promises';
 import { realpathSync } from 'node:fs';
-import { ASKED, historyTurnPairs, testModel, toolDescription, workModeForTurnMetadata, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
+import { ASKED, historyTurnPairs, testModel, toolDescription, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
 import type { ActorHandle, DeliveryAnswer, InProcessDeliveries, JsonObject, OwedDelivery, ReceiptExecution } from '@kinu.run/core';
 import { Effect } from 'effect';
 import { resolve } from 'node:path';
@@ -60,11 +60,11 @@ import { ActorSession, type ActorTurnLease,
   ModelCatalogSession, resolveEffectiveModelSpec,
   TerminalTransitions, initTerminalEffectTable, chatTurnParts, declareTerminalRoster, missionOf, SleepTimeLane, initSleepTimeUpdatesTable,
   assembleActorTurn, runHeadInference, preparedHeadRun, withCompactionTrigger, conversationKey, metadataTier, vfsTurnSkills, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources, type RunTurnSources,
-  branchesTerminalEffect, chatTerminalEffects, subordinateTerminalEffects,
+  branchesTerminalEffect, chatTerminalEffects, actorTerminalEffects,
   type OwedReport, type SubordinateReportStatus, type TaskTurnEnding,
-  terminalEffect, evolutionPassOpen, RunEndReasonSchema, WorkModeSchema, JsonValueSchema,
+  terminalEffect,
   type TerminalEffectTable, type TerminalEffectFault,
-  type TerminalTurnFacts, type TerminalTurnParts, type OwedEffect,
+  type TerminalActor, type TerminalTurnFacts, type TerminalTurnParts, type OwedEffect,
   buildActorTools, buildMcpToolSet, currentDateForPrompt,
   type ActorToolsetDeps,
   turnArtifactBodies, artifactOverrides, currentArtifacts, openingCacheCold, type TurnOpeningAsk, type ClaimedRound,
@@ -534,19 +534,6 @@ export class LocalAgentSession {
         owedTerminalEffects: (input) => this.owedTerminalEffects(input),
         // Only the host knows the child's lifetime and whether the parent drove the turn.
         owedReport: async (ending, assistantText, narration) => await this.parentRelay?.owed(ending, assistantText, narration) ?? null,
-        // Its hirer waits on the work, not on a turn: one that ended without an answer is answered to it as blocked, keyed by
-        // the work, by a report its end owes as its roster's are.
-        unanswered: (item, failure) => {
-          if (this.parentRelay === null || turnAuthorship(item) !== 'hirer' || item.idempotencyKey === undefined) return null;
-
-          return {
-            name: 'parent_report', scope: item.idempotencyKey, lane: 'detached',
-            input: {
-              text: `${this.rt.actor.name} failed to run its assigned turn: ${failure.message}`,
-              status: 'blocked', mode: workModeForTurnMetadata(item.metadata), sequenceId: item.idempotencyKey, quiet: false,
-            },
-          };
-        },
         // A running job's settle wakes the session; a reminder would race it.
         openWork: async () => ({ tasks: this.taskList.listOpen(), asyncWakePending: this.jobs.listRunning(1).total > 0 }),
         terminal: () => this.terminal,
@@ -1774,18 +1761,6 @@ export class LocalAgentSession {
 
     if (gated) parts.completionGate = { text: this.chat.completionGate.task };
 
-    // Recorded, not re-read on replay: the tool surface can change. Owed only when the actor reviews turns.
-    if (this.actorSession.advisor.reviewsTurns) {
-      parts.advisor = projectJsonValue({ value: this.actorSession.advisor.snapshot(scoped, input.reachableTools) });
-    }
-
-    // The workspace mission names the root. A child is named once, from its brief (the turn that opened its
-    // conversation), however that turn ended: a later turn's words ("Continue") are no name for it.
-    if (root) parts.autoTitle = { mission: missionOf(soulIn(this.rt.space)) };
-    else if (input.opensConversation()) parts.autoTitle = { mission: input.userText, standIn: true };
-    // The workspace's own conversation compresses into its facts; a hire's does not, as on cf.
-    parts.sleepTime = root;
-
     // One claimed effect; the sequence id is the parent's dedupe key, so a replay is recognised.
     if (input.owedReport !== null && relay !== null) {
       parts.parentReport = {
@@ -1796,9 +1771,13 @@ export class LocalAgentSession {
       };
     }
 
+    const role: TerminalActor['role'] = root
+      ? { kind: 'workspace', mission: missionOf(soulIn(this.rt.space)), event: input.event ?? null }
+      : { kind: 'agent', opensConversation: input.opensConversation };
+
     // No `turnEndExtensions` (runChat fires them in-stream), no `eventReplies` (startup's
     // `reclaimStrandedEventDeliveries` covers them), no `craftedToolsUsed`/`autoGepa` lanes here.
-    return declareTerminalRoster(facts, parts);
+    return declareTerminalRoster(facts, { role, advisor: this.actorSession.advisor, turn: scoped, reachableTools: input.reachableTools }, parts);
   }
 
   /** This backend's terminal effect bodies; each is replayable at its own boundary (keyed ids, unbound-row selection). */
@@ -1865,21 +1844,17 @@ export class LocalAgentSession {
         },
       }),
       ...chatTerminalEffects({ chat: () => this.chat, orchestrator: () => this.actorSession.orchestrator, engine: this.engine }),
-      ...subordinateTerminalEffects({
+      ...actorTerminalEffects({
         hireAdvisor: (advisor) => this.actorSession.advisor.hire(advisor),
         // Awaited so a one-shot close joins it.
-        applyTitle: (subject) => this.applyAutoTitle(subject),
-        ...(relay !== null && { sendReport: (report) => relay.send(report) }),
-      }),
-      // The turn's evolution pass, after its review, as the workspace object runs main's. Not joined at exit: the window
-      // it would close carries to the next session or the daemon.
-      improvement_lanes: terminalEffect({
-        input: v.object({ status: RunEndReasonSchema, turn: JsonValueSchema, workMode: WorkModeSchema, autoEvolve: v.boolean() }),
-        runSync: ({ status, workMode, autoEvolve }) => {
-          if (evolutionPassOpen(status, workMode, autoEvolve)) this.actorSession.orchestrator.startEvolution();
+        applyTitle: async (subject) => {
+          await this.applyAutoTitle(subject);
 
-          return { status: 'completed' };
+          return null;
         },
+        // As the workspace object runs main's.
+        startEvolution: () => { this.actorSession.orchestrator.startEvolution(); },
+        ...(relay !== null && { sendReport: (report) => relay.send(report) }),
       }),
     };
   }

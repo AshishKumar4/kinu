@@ -54,6 +54,7 @@ import type { ClaimOutcome } from './actor-claims';
 import { CompletionGate, COMPLETION_GATE_EVENT } from './completion-gate';
 import { turnInputMessage, type InputProducer, type LandedSteerRow, type PendingSendRow, type PendingSendStore, type UserSteer } from './inbox';
 import type { OwedEffect } from './terminal-effects';
+import { unansweredReport } from './terminal-roster';
 import type { TerminalTransition, TerminalTransitions } from './terminal-transition';
 import {
   classifyRunEnd, closeTurnRun, creditedTurnId, openTurnRun, recordExecutionEvent, settleExecutionContext,
@@ -313,10 +314,6 @@ export interface ChatSessionPorts {
   failedAnswerSlates?(lease: ActorTurnLease): Promise<JsonObject | null>;
   /** The report this ending owes its caller; narration is read only if the report carries it. */
   owedReport?(ending: TaskTurnEnding, assistantText: string, narration: () => Promise<readonly string[]>): Promise<OwedReport | null>;
-  /** A turn that never opened, or ended on its failure before an answer existed, and why: the report its caller is owed,
-   *  as it waits on the work, not on a turn; none where it has no such caller. Owed by the commit that ends the turn, or
-   *  by one of its own for a turn that never opened, and driven as a roster is, so a death loses none of it. */
-  unanswered?(item: ChatTurnInput, failure: KinuError): OwedEffect | null;
   /** Asked per call: the bodies close over stores built after this session. */
   terminal(): TerminalTransitions;
   /** Asked per item at dequeue and before a drain binds rows; a refusal settles the item to its producer. */
@@ -688,7 +685,7 @@ export class ChatSession {
 
   /** The report a turn that ended without its answer owes its caller, why in its own words; none where it has no caller. */
   private callerReport(item: QueueItem, why: string): OwedEffect | null {
-    return this.ports.unanswered?.(item, new KinuError('io', why)) ?? null;
+    return unansweredReport(this.actorSession.runtime.actor, item, new KinuError('io', why));
   }
 
   /** A report owed its caller, recorded with `transition` (by the turn's end, where it closed one) and driven. */
@@ -700,7 +697,7 @@ export class ChatSession {
 
   /**
    * `tellCaller`: the item never opened, and its caller waits on the work, not on a turn, so it is owed a report of why
-   * ({@link ChatSessionPorts.unanswered}): recorded in the commit that retires the item's held row, so no state has the
+   * ({@link unansweredReport}): recorded in the commit that retires the item's held row, so no state has the
    * item gone and its report unowed, and driven as a roster is (#76). A refusal at dequeue owes none: the item was not
    * this process's to run.
    */
@@ -726,7 +723,7 @@ export class ChatSession {
 
     if (item.idempotencyKey === undefined) return;
     const key = item.idempotencyKey;
-    const told = tellCaller && failure !== null && item.run === undefined && !this.ended ? this.ports.unanswered?.(item, failure) ?? null : null;
+    const told = tellCaller && failure !== null && item.run === undefined && !this.ended ? unansweredReport(this.actorSession.runtime.actor, item, failure) : null;
     const transition: TerminalTransition = { turnId: key, messageId: `unanswered:${key}` };
 
     let owed = false;
@@ -2235,7 +2232,7 @@ export class ChatSession {
     readonly answer: PreparedConversationEntry | null;
     /** Only an answered turn's: the effects its answer owes, and the deliveries its steps read, answered by it. */
     readonly roster: { readonly transition: TerminalTransition; readonly owed: readonly OwedEffect[] } | null;
-    /** Only a failed turn's: the report its caller is owed ({@link ChatSessionPorts.unanswered}). */
+    /** Only a failed turn's: the report its caller is owed ({@link unansweredReport}). */
     readonly told?: { readonly transition: TerminalTransition; readonly owed: OwedEffect };
   }): void {
     const { item, roster, told } = ending;

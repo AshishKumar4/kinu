@@ -4,6 +4,7 @@
  * that holds the start. Vendor half: `tests/workerd/do-eviction-recovery.test.ts`.
  */
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
+import * as v from 'valibot';
 import {
   ActorAdvisor, ADVISOR_HEADER, BACKGROUND_FIBER_PREFIX, PROGRAMMATIC_MESSAGE_ID_PREFIX,
   TERMINAL_EFFECT_RETRY_CEILING_MS,
@@ -181,6 +182,14 @@ describe('the post-turn lanes', () => {
 
   const advisorsWorking = (harness: Harness): number =>
     count(harness, "SELECT COUNT(*) AS n FROM actor_subordinates WHERE (name = 'ask-advisor' OR name LIKE 'ask-advisor-%') AND status = 'working'");
+
+  // The workspace agent's review was the one recorded without its model: its snapshot was cf's own, not its advisor's.
+  test("the workspace agent's owed review names the advisor's model, as every agent's does", async () => {
+    const { harness } = await cutReview();
+    const owed = harness.db.query<{ input_json: string }, []>("SELECT input_json FROM terminal_effects WHERE effect_name = 'advisor_review'").get();
+
+    expect(v.parse(v.object({ advisor: v.object({ model: v.string() }) }), JSON.parse(owed?.input_json ?? '{}')).advisor.model).not.toBe('');
+  });
 
   test('a hire cut before it ran is replayed by the next activation and lands exactly one note', async () => {
     const { harness, calls, restart } = await cutReview();
