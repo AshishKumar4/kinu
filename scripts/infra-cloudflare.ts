@@ -334,6 +334,13 @@ export interface ContainerApplication {
   readonly namespace: string | undefined;
 }
 
+/** How an application is deleted by hand. Wrangler 4.145's `containers delete` takes only a UUID and refuses a 32-hex
+ *  application id ("Expected a container ID but got …", staging, 2026-10-14), which the REST API deletes, as a reset
+ *  does (`deleteApplicationByRest`). A reset whose record names the application deletes it itself. */
+export const APPLICATION_DELETE = 'a 32-hex id through the REST API, `DELETE /client/v4/accounts/<account>/containers/applications/<id>`, '
+  + 'a UUID with `npx wrangler containers delete <id>`; when a reset record names it, `bun run deploy --reset` finishes '
+  + 'that reset, which deletes it';
+
 /**
  * Whether a container class's Durable Object namespace and `application`, the one the deploy names, are bound to
  * each other or to nothing else. `namespace` undefined is a class with no namespace yet: the Worker was never
@@ -367,8 +374,7 @@ export function namespaceBinding(
     return {
       state: 'absent',
       detail: `${blocking.join('; ')}: \`wrangler deploy\` uploads the Worker, then refuses the application. Delete `
-        + 'each one named here (`npx wrangler containers delete <id>`) and deploy again; a namespace and its storage stay '
-        + 'with their Worker.',
+        + `each one named here and deploy again: ${APPLICATION_DELETE}. A namespace and its storage stay with their Worker.`,
     };
   }
 

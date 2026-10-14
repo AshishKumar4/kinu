@@ -296,18 +296,23 @@ export function pendingReset(worker: string, live: Serving, latest: Reset | unde
 }
 
 /**
- * The infrastructure rows `reset` deleted and a deploy recreates, by the ids every infra report keys resources on:
- * the namespace of each class it deleted and each container application it deleted, and — while `live` is still its
- * placeholder — every binding the placeholder does not carry, out of `resources`. Only the pre-upload gate of a
- * `--reset` deploy asks; a version that is not the placeholder carries its own bindings, so the record then answers
- * for its classes and applications alone.
+ * The infrastructure rows `reset` deleted, or deletes when it is finished, and a deploy recreates, by the ids every
+ * infra report keys resources on: the namespace of each class it deleted, each container application it names and
+ * that application's hold on its class's namespace, and — while `live` is still its placeholder — every binding the
+ * placeholder does not carry, out of `resources`. Only the pre-upload gate of a `--reset` deploy asks; a version that
+ * is not the placeholder carries its own bindings, so the record then answers for its classes and applications alone.
+ *
+ * The hold is the reset's because a reset stopped after its placeholder leaves the application bound to a namespace
+ * the placeholder deleted, and only finishing the reset deletes it: staging, 2026-10-14, the reset of 56377b387
+ * stopped there, and the gate refused the `--reset` deploy that would have finished it.
  */
 export function resetResourceIds(reset: Reset, live: Serving | undefined, resources: readonly Resource[]): readonly string[] {
-  const placeholder = live !== undefined && live.versionId === reset.placeholderVersion;
+  // A reset stopped before its record named its placeholder still serves it: the one `pendingReset` resumes.
+  const placeholder = live !== undefined && pendingReset(reset.worker, live, reset) !== undefined;
 
   return [
     ...reset.classes.map((entry) => `durable-object.${reset.worker}:${entry.className}`),
-    ...reset.applications.map((application) => `container.${application.name}`),
+    ...reset.applications.flatMap((application) => [`container.${application.name}`, `container-namespace.${application.name}`]),
     ...placeholder
       ? resources.filter((resource) => resource.kind === 'binding' && resource.binding !== PLACEHOLDER_BINDING).map((resource) => resource.id)
       : [],
