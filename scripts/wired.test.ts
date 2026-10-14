@@ -216,6 +216,10 @@ describe('awaited dynamic import consumers', () => {
   test('a CommonJS require reaches what it destructures', () => {
     expect(inspect('await import("./lazy"); const { highlightCode } = require("./lazy"); return highlightCode();')).toEqual([unused]);
   });
+  // 2026-10-14: the daemon's supervisor module, reached from the daemon by `require` alone, named nothing live.
+  test('a CommonJS require alone makes the file it names live', () => {
+    expect(inspect('const { highlightCode } = require("./lazy"); return highlightCode();')).toEqual([unused]);
+  });
   test('side effects and unused bindings reach no exports', () => {
     expect(inspect('await import("./lazy");')).toEqual([highlight, unused]);
     expect(inspect('const { highlightCode } = await import("./lazy");')).toEqual([highlight, unused]);
