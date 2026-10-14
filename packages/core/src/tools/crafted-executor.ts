@@ -5,6 +5,7 @@ import type { CraftStore } from '../types/agent-runtime';
 import type { SqlExecutor } from '../types/primitives';
 import { filterByEffectiveScore } from '../craft/ema';
 import { isReservedCraftToolName } from '../craft/in-episode';
+import { holdsNoCode } from '../craft/source';
 import { diagnostics, KinuError } from '../obs/index';
 import { craftedToolDescription } from './sandbox-contract';
 
@@ -15,13 +16,14 @@ export interface CraftedToolSource {
 }
 
 /**
- * Filters null/comment-only code. Uses `??`, not the `||` of {@link craftedToolDescription}: this is a codec,
- * so `''` round-trips (pinned by unit-crafted-executor.test.ts).
+ * Filters a row that holds no code, comments aside; a tool whose source opens with a comment is still a tool. Uses
+ * `??`, not the `||` of {@link craftedToolDescription}: this is a codec, so `''` round-trips (pinned by
+ * unit-crafted-executor.test.ts).
  */
 export function toCraftedToolSource(t: CraftedTool): CraftedToolSource | null {
   const code = t.code?.trim();
 
-  if (!code || code.startsWith('//')) return null;
+  if (!code || holdsNoCode(code)) return null;
 
   return { name: t.name, description: t.description ?? `Crafted tool: ${t.name}`, code };
 }
