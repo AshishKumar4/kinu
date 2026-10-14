@@ -15,6 +15,7 @@ import type { MediaModality } from '../src/prompting/attachment-sanitizer';
 import { createMemoryVfs } from '@kinu.run/test-utils/vfs';
 import { ProviderPacer, providerPacer } from '../src/providers/pacing';
 import { attemptKey } from '../src/providers/attempt-identity';
+import type { ProviderWaitInfo } from '../src/providers/types';
 
 const SSE_HEADERS = { 'content-type': 'text/event-stream' };
 
@@ -369,6 +370,7 @@ async function accountTurn(
 ) {
   const primary = opts.primary ?? 'openai-compat@work/m';
   const served: { key: string; handover: boolean; model: string }[] = [];
+  const waits: ProviderWaitInfo[] = [];
 
   const server = Bun.serve({
     port: 0,
@@ -396,6 +398,7 @@ async function accountTurn(
     async hasCredential(key) { return stored.has(key); },
     async listCredentialKeys() { return [...stored.keys()]; },
     accountFor: () => opts.defaultAccount,
+    onProviderWait: (info) => { waits.push(info); },
   };
 
   const registry = createProviderRegistry();
@@ -424,7 +427,7 @@ async function accountTurn(
     await server.stop(true);
   }
 
-  return { events, served, threw };
+  return { events, served, threw, waits };
 }
 
 const rateLimited = (retryAfterSeconds: number): Response => Response.json(
@@ -565,15 +568,17 @@ describe('an account that hits its limit hands the turn to the next account of i
   test('a model Workers AI refuses for its per-minute limit hands over, and the next model on the account answers at once', async () => {
     const minute = Response.json({ errors: [{ code: 3021, message: 'rate limiting: inference request per min rate reached' }] }, { status: 429 });
 
-    const { events, served } = await accountTurn(
+    const { events, served, waits } = await accountTurn(
       (_key, _seen, model) => (model === 'minute-limited' ? minute.clone() : answer('from the next model')),
       ['openai-compat@work/free-model'],
       { primary: 'openai-compat@work/minute-limited' },
     );
 
+    // The next model waited for nothing: no sibling's cooldown stood before its call.
+    expect(waits.map((wait) => `${wait.modelId ?? ''} ${wait.source}`)).toEqual([]);
     expect(served.map((entry) => entry.model)).toEqual(['minute-limited', 'free-model']);
     expect(events.find((event) => event.type === 'done')).toMatchObject({ text: 'from the next model' });
-  }, 5_000);
+  });
 
   test('a lone model keeps waiting out its limit, and nothing hands over', async () => {
     const { events, served } = await accountTurn(

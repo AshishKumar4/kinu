@@ -222,15 +222,13 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
       }
 
       const waitMs = retryAfter ?? Math.floor(random() * backoffCeiling(attemptNumber));
-      // A limit the refusal states in its words is its model's (Workers AI's per-minute limit): another model on the
-      // lane, a fallback's among them, still answers. A header's or a backoff's wait holds the whole lane.
-      const billed = yield* lane.billed();
-      const declared = pacer.declareWait(header === null && retryAfter !== null ? lane.ownModel(billed) : billed, waitMs);
+      const source = waitSource(header, retryAfter);
+      const declared = pacer.declareWait(yield* lane.holding(source), waitMs);
 
       yield* spendRetry(() => handedOver(policy.provider, waitMs, failure));
       owned = declared;
       warn(`[kinu] ${policy.provider} rate-limited: waiting ${fmtSpan(waitMs)} (retry ${String(waits)} of ${String(retries)})`);
-      yield* reportWait({ waitMs, attempt: attemptNumber, source: waitSource(header, retryAfter), status: limit.status, retry: waits });
+      yield* reportWait({ waitMs, attempt: attemptNumber, source, status: limit.status, retry: waits });
       yield* Effect.promise(() => sleep(waitMs, signal));
     }
   }).pipe(Effect.onError((cause) => Effect.sync(() => recordAttemptFailure(capture, cause))));
@@ -253,6 +251,14 @@ class CallLane {
   /** This call's model on `billed`: the fallback route's parking key, so a model's own limit also parks its selection. */
   ownModel(billed: string): string {
     return this.modelId === undefined ? billed : attemptKey({ lane: billed, modelId: this.modelId });
+  }
+
+  /**
+   * What a rate limit's wait holds. A limit the refusal states in its words is its model's (Workers AI's per-minute
+   * limit): another model on the lane, a fallback's among them, still answers. A header's or a backoff's holds the lane.
+   */
+  holding(source: ProviderWaitInfo['source']): Effect.Effect<string> {
+    return this.billed().pipe(Effect.map((billed) => (source === 'stated' ? this.ownModel(billed) : billed)));
   }
 
   /** The lane and this call's model on it, to check before an attempt; null while nothing under its route is cooling. */
