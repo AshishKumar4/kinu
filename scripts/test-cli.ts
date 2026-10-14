@@ -7,7 +7,11 @@ export const CLI_TEST_ROOT = 'packages/cli/tests';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 
-const TEST_FLAGS = process.argv.slice(2);
+/** `--part=serial` runs the isolated and subprocess-heavy files, `--part=parallel` the rest: CI runs each as a task of
+ *  its own (the ladder row's `ciParts`); with neither, both, in that order. */
+const PART = process.argv.find((argument) => argument.startsWith('--part='))?.slice('--part='.length);
+
+const TEST_FLAGS = process.argv.slice(2).filter((argument) => !argument.startsWith('--part='));
 
 const ISOLATED = [
   'behavior.test.ts',
@@ -36,8 +40,9 @@ function run(files: readonly string[], parallel: number): void {
   if (result.exitCode !== 0) process.exit(result.exitCode ?? 1);
 }
 
-function main(): void {
-  const files = trackedFiles()
+/** The suite's files as it runs them: each isolated file alone, the subprocess-heavy ones at parallel=2, the rest at 4. */
+export function cliStages(tracked: readonly string[]) {
+  const files = tracked
     .filter((file) => file.startsWith(`${CLI_TEST_ROOT}/`) && isRunnableSuite(file))
     .map((file) => file.slice(CLI_TEST_ROOT.length + 1))
     .sort();
@@ -48,9 +53,6 @@ function main(): void {
     }
   }
 
-  const isolated = ISOLATED.map((name) => `${CLI_TEST_ROOT}/${name}`);
-  const subprocessHeavy = SUBPROCESS_HEAVY.map((name) => `${CLI_TEST_ROOT}/${name}`);
-
   const parallel = files
     .filter((name) => !ISOLATED.some((isolatedName) => isolatedName === name))
     .filter((name) => !SUBPROCESS_HEAVY.some((heavy) => heavy === name))
@@ -58,15 +60,29 @@ function main(): void {
 
   if (parallel.length === 0) throw new Error(`No parallel CLI tests found under ${CLI_TEST_ROOT}`);
 
+  return {
+    isolated: ISOLATED.map((name) => `${CLI_TEST_ROOT}/${name}`),
+    subprocessHeavy: SUBPROCESS_HEAVY.map((name) => `${CLI_TEST_ROOT}/${name}`),
+    parallel,
+  };
+}
+
+function main(): void {
+  if (PART !== undefined && PART !== 'serial' && PART !== 'parallel') throw new Error(`--part=${PART}: the parts are serial and parallel`);
+  const { isolated, subprocessHeavy, parallel } = cliStages(trackedFiles());
+
   console.log(
     `CLI tests: isolated ${ISOLATED.join(', ')}, `
     + `${SUBPROCESS_HEAVY.length} subprocess-heavy files at parallel=2, `
-    + `${String(parallel.length)} other files at parallel=4`,
+    + `${String(parallel.length)} other files at parallel=4${PART === undefined ? '' : `; this run: the ${PART} part`}`,
   );
 
-  for (const file of isolated) run([file], 1);
-  run(subprocessHeavy, 2);
-  run(parallel, 4);
+  if (PART !== 'parallel') {
+    for (const file of isolated) run([file], 1);
+    run(subprocessHeavy, 2);
+  }
+
+  if (PART !== 'serial') run(parallel, 4);
 }
 
 if (import.meta.main) main();

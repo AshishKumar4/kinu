@@ -42,6 +42,9 @@ export interface AgentTurnsDeps {
   missions(actorId: string): MissionGovernor | null;
   /** The agent's advisor, hired through the workspace as every hire is. */
   advisor(actor: SeatedActor): ActorAdvisor;
+  /** The agent has no turn open here any more, or it was stopped: what it held for its turns lets go, the computer's
+   *  desktop among it (D89). Its owner runs it detached: nothing of the turn waits on it. */
+  turnsEnded(actorId: string): void;
 }
 
 export interface ChatTurnRequest {
@@ -278,6 +281,8 @@ export class AgentTurns {
     this.open.delete(actorId, turnId);
     this.cuts.delete(actorId, turnId);
 
+    if (turn !== undefined && this.open.of(actorId).size === 0) this.deps.turnsEnded(actorId);
+
     if (turn === undefined || this.inFlight(actorId)) return;
     this.waiting.get(actorId)?.resolve();
     this.waiting.delete(actorId);
@@ -349,6 +354,7 @@ export class AgentTurns {
     const chat = this.chats.get(actorId);
 
     for (const turnId of [run, chat]) if (turnId !== null && turnId !== undefined) this.cancelled(actorId, turnId);
+    this.deps.turnsEnded(actorId);
 
     if (run !== null) await this.deps.interrupt(reference, run, null);
     await this.deps.interrupt(reference, null, cutoff);

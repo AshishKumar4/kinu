@@ -23,13 +23,13 @@ const box: SandboxHandle = {
   listFiles: unreachable, statFile: unreachable, deleteFile: unreachable, exposePort: unreachable, unexposePort: unreachable,
   getExposedPorts: unreachable, startSupervisedProcess: unreachable, stopSupervisedProcess: unreachable,
   listSupervisedProcesses: unreachable, portToken: unreachable, probePort: unreachable, portListeners: unreachable,
-  resize: unreachable, answerRest: unreachable,
+  resize: unreachable, answerRest: unreachable, releaseDesktop: unreachable,
   desktop: async () => ({ kind: 'screen', png: PNG, width: 1280, height: 768 }),
 };
 
 test('a program that returns the screenshot hands the model the screen as an image part', async () => {
   const { rt } = createTestRuntime();
-  const computer = executorNamespace(gateProviderExec(createSandboxExecutor(box, { desktop: { driver: 'main', screen: { width: 1280, height: 768 } } }), { mode: () => 'strict' }));
+  const computer = executorNamespace(gateProviderExec(createSandboxExecutor(box, { desktop: { driver: 'main', screen: { width: 1280, height: 768, sheet: { percent: 50, columns: [1, 2, 2, 2, 4, 4, 4, 4] } } } }), { mode: () => 'strict' }));
 
   // As an actor's eval is built: the program runner, its result clamped with images (delegation/actor-tools.ts).
   const evalTool = withClampedToolResult(createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), namespaces: [computer] })({

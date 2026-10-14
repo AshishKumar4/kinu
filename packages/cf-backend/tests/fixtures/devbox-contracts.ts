@@ -3,14 +3,14 @@ import * as v from 'valibot';
 import { Devbox, GOLDEN_NAME, type DevboxState } from '../../../devbox/src/index';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace/nimbus-workspace.js';
 import { GOLDEN_BASE, GoldenStateSchema, pipeParts } from '../../../devbox/src/golden';
-import { DESKTOP_SIZE } from '../../../devbox/src/desktop';
+import { DESKTOP_SIZE, WATCH_SHEET } from '../../../devbox/src/desktop';
 import { DevboxError, settle } from '../../../devbox/src/errors';
 import { DEFAULT_DEVBOX_POLICY, describeThrown } from '../../../devbox/src/lifecycle';
 import { fileErrorContract, runContainerContract } from '../../../devbox/bench/container-contracts';
 import { CONTAINER_CONTRACTS, DISK_CONTRACTS } from '../../../devbox/bench/contract-types';
 import { diskContract } from '../../../devbox/bench/disk-contracts';
 import {
-  JsonValueSchema, createSandboxExecutor, desktopClientUrl, executorNamespace, gateProviderExec, projectJsonValue, sandboxFiles, withAppSecurityHeaders,
+  JsonValueSchema, createSandboxExecutor, withCodemodeProgram, desktopClientUrl, executorNamespace, gateProviderExec, projectJsonValue, sandboxFiles, withAppSecurityHeaders,
   type JsonValue, type ShellApprovalPolicy,
 } from '@kinu.run/core';
 import { adaptCloudflareSandbox } from '../../src/sandbox-exec-lane';
@@ -241,18 +241,40 @@ export class ContractBox extends Devbox<Env> {
     ])];
   }
 
+  /** The programs a tier may stop, by the key it named them with. */
+  readonly #programs = new Map<string, AbortController>();
+
   /**
    * A program's call of `computer.<member>(...args)` as agent `driver` makes it (D89): the product's own members, gated as
-   * the router gates them under a standing consent, over the product's adapter onto this box and its real desktop.
+   * the router gates them, over the product's adapter onto this box and its real desktop. Named `stop`, the program is
+   * stopped by `stopAgentDesktop(stop)`, as the owner's Stop stops one.
    */
-  async agentDesktop(driver: string, member: string, args: readonly JsonValue[]): Promise<JsonValue> {
-    const consented: ShellApprovalPolicy = { mode: () => 'strict', granted: (grant) => grant.rule === 'desktop-input' };
-    const computer = executorNamespace(gateProviderExec(createSandboxExecutor(adaptCloudflareSandbox(this, async () => {}, null), { desktop: { driver, screen: DESKTOP_SIZE } }), consented));
+  async agentDesktop(driver: string, member: string, args: readonly JsonValue[], stop?: string): Promise<JsonValue> {
+    const policy: ShellApprovalPolicy = { mode: () => 'strict' };
+    const computer = executorNamespace(gateProviderExec(createSandboxExecutor(adaptCloudflareSandbox(this, async () => {}, null), { desktop: { driver, screen: { ...DESKTOP_SIZE, sheet: WATCH_SHEET } } }), policy));
     const tool = computer.tools[member];
 
     if (tool === undefined) throw new Error(`computer has no ${member}`);
+    const program = new AbortController();
 
-    return projectJsonValue({ value: await tool.execute(...args) });
+    if (stop !== undefined) this.#programs.set(stop, program);
+
+    try {
+      const ran = await withCodemodeProgram(async () => ({ result: await tool.execute(...args) }), program.signal);
+
+      return projectJsonValue({ value: ran.result });
+    } finally {
+      if (stop !== undefined) this.#programs.delete(stop);
+    }
+  }
+
+  /** Stops the program named `stop`, as the owner's Stop does: whether one was running. */
+  stopAgentDesktop(stop: string): boolean {
+    const program = this.#programs.get(stop);
+
+    program?.abort();
+
+    return program !== undefined;
   }
 
   async clear(): Promise<void> {
@@ -268,7 +290,9 @@ export class ContractBox extends Devbox<Env> {
   }
 }
 
-const Body = v.object({ command: v.optional(v.string()), driver: v.optional(v.string()), member: v.optional(v.string()), args: v.optional(v.string()) });
+const Body = v.object({
+  command: v.optional(v.string()), driver: v.optional(v.string()), member: v.optional(v.string()), args: v.optional(v.string()), stop: v.optional(v.string()),
+});
 
 async function desktopRoute(request: Request, env: Env, ctx: ExecutionContext, url: URL): Promise<Response | null> {
   if (url.pathname.startsWith('/kasmvnc/')) return withAppSecurityHeaders(await env.ASSETS.fetch(request), url, null);
@@ -309,7 +333,8 @@ async function contractRoute(url: URL, name: string, box: DurableObjectStub<Cont
       return Response.json({ ok: true });
     case '/exec': return Response.json(await box.exec(body.command ?? ''));
     case '/sessions': return Response.json(await box.terminalSessions());
-    case '/agent-desktop': return Response.json(await box.agentDesktop(body.driver ?? 'agent', body.member ?? '', v.parse(v.array(JsonValueSchema), JSON.parse(body.args ?? '[]'))));
+    case '/agent-desktop': return Response.json(await box.agentDesktop(body.driver ?? 'agent', body.member ?? '', v.parse(v.array(JsonValueSchema), JSON.parse(body.args ?? '[]')), body.stop));
+    case '/agent-desktop-stop': return Response.json({ stopped: await box.stopAgentDesktop(body.stop ?? '') });
     case '/storage-probe': return Response.json(await box.storageProbe(body.command ?? ''));
     case '/state': return Response.json(await box.devboxState());
     case '/armed': return Response.json(await box.armed());

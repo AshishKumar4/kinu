@@ -22,7 +22,7 @@ import { CONTAINER_CONTRACTS, DISK_CONTRACTS } from '../packages/devbox/bench/co
 import { shellQuote } from '../packages/core/src/utils/shell';
 import { withTestChrome } from './test-chrome';
 import { DESKTOP_COLOURS, DESKTOP_PANEL, DESKTOP_SIZE } from '../packages/devbox/src/desktop';
-import { GRID, GRID_POINTS, HOLD, RANGE, SCROLL, TEXT, TICKER, sheet } from './fixtures/devbox-e2e/desktop-pages';
+import { CHORD, DISTINCT_PY, DOWN_PY, GRID, GRID_POINTS, HOLD, RANGE, SCROLL, TEXT, TICKER, sizeOf } from './fixtures/devbox-e2e/desktop-pages';
 
 const REPO = join(import.meta.dir, '..');
 
@@ -546,8 +546,21 @@ async function main(): Promise<void> {
   const desktopAgent = async () => {
     await step('desktop-agent', async () => {
       const fresh = names[5] ?? '';
-      const desk = (member: string, args: readonly unknown[] = [], driver = 'agent') => call('/agent-desktop', AgentAnswer, { driver, member, args: JSON.stringify(args) }, fresh);
+      const desk = (member: string, args: readonly unknown[] = [], driver = 'agent', stop?: string) => call('/agent-desktop', AgentAnswer, { driver, member, args: JSON.stringify(args), ...(stop !== undefined && { stop }) }, fresh);
       const sh = (command: string) => shell(command, fresh);
+
+      /** How many of a PNG's `cols`×`rows` tiles differ from every other, read on the box by its own Pillow. */
+      const distinct = async (url: string, cols: number, rows: number): Promise<number> => {
+        const data = url.slice(url.indexOf(',') + 1);
+
+        await sh('mkdir -p /tmp/kinu-desk && rm -f /tmp/kinu-desk/sheet.b64');
+
+        // Base64 needs no quoting; in pieces, as one argument is held under the kernel's limit.
+        for (let at = 0; at < data.length; at += 60_000) await sh(`printf %s ${data.slice(at, at + 60_000)} >>/tmp/kinu-desk/sheet.b64`);
+
+        return Number(await sh(`base64 -d /tmp/kinu-desk/sheet.b64 >/tmp/kinu-desk/sheet.png && python3 -c ${shellQuote(DISTINCT_PY)} /tmp/kinu-desk/sheet.png ${String(cols)} ${String(rows)}`));
+      };
+
       const title = async () => (await sh('xdotool getactivewindow getwindowname 2>/dev/null || true')).replace(/ - Chromium$/u, '');
 
       const until = async (what: string, seen: (now: string) => boolean): Promise<string> => {
@@ -565,7 +578,7 @@ async function main(): Promise<void> {
       const one = 'Xkasmvnc=1 openbox=1 tint2=1 Xvfb=0';
 
       // A box whose desktop never opened: the first look starts it, at the screen's size; looks at once share it.
-      requireEqual(sheet(v.parse(Screen, await desk('screenshot'))).size, [1280, 768]);
+      requireEqual(sizeOf(v.parse(Screen, await desk('screenshot'))), [1280, 768]);
       await Promise.all([desk('screenshot'), desk('screenshot', [], 'other'), desk('screenshot')]);
       requireEqual(await sessions(), one);
       await sh('pkill -x tint2; pkill -x openbox; true');
@@ -574,7 +587,7 @@ async function main(): Promise<void> {
 
       // The agent's shell runs on that screen.
       requireEqual(await sh('echo "$DISPLAY"'), ':0');
-      const pages = Object.entries({ grid: GRID, text: TEXT, scroll: SCROLL, range: RANGE, hold: HOLD, ticker: TICKER });
+      const pages = Object.entries({ grid: GRID, text: TEXT, scroll: SCROLL, range: RANGE, hold: HOLD, chord: CHORD, ticker: TICKER });
       await sh(`mkdir -p /tmp/kinu-desk && ${pages.map(([name, html]) => `printf %s ${shellQuote(html)} >/tmp/kinu-desk/${name}.html`).join(' && ')}`);
       await sh('setsid -f python3 -m http.server 8765 --bind 127.0.0.1 --directory /tmp/kinu-desk >/dev/null 2>&1');
 
@@ -642,17 +655,30 @@ async function main(): Promise<void> {
 
       if (!(held >= 700 && held <= 1_500)) throw new Error(`a key held for 800 ms was down ${String(held)} ms`);
 
+      // Stopped mid-chord, with a button a run cut short left down: the run is ended there, and whatever X holds is let up
+      // at once, read from X itself; the X server then has no key and no button down.
+      await open('chord');
+      await sh('DISPLAY=:0 xdotool mousedown 1');
+      const chording = desk('key', ['alt+shift+k', { hold: 10_000 }], 'agent', 'chord-stop');
+      await until('the chord held', (now) => now === 'held AltLeft KeyK ShiftLeft');
+      requireEqual(await call('/agent-desktop-stop', v.object({ stopped: v.boolean() }), { stop: 'chord-stop' }, fresh), { stopped: true });
+      requireEqual(v.parse(Refused, await chording).reason, 'cancelled');
+      await until('the stopped chord let up', (now) => now === 'released');
+      requireEqual(await sh(`python3 -c ${shellQuote(DOWN_PY)}`), 'keys buttons');
+
       // A watch is one image of frames over its window: four by default, two to a row; eight, four to a row. Each frame
       // shows the page as it changed, so no two tiles are alike.
       await open('ticker');
-      const four = sheet(v.parse(Screen, await desk('watch', [2])));
-      const eight = sheet(v.parse(Screen, await desk('watch', [2, { fps: 4 }])));
-      requireEqual([four.size, four.distinct(2, 2), eight.size, eight.distinct(4, 2)], [[1280, 768], 4, [2560, 768], 8]);
+      const four = v.parse(Screen, await desk('watch', [2]));
+      const eight = v.parse(Screen, await desk('watch', [2, { fps: 4 }]));
+      requireEqual([sizeOf(four), await distinct(four, 2, 2), sizeOf(eight), await distinct(eight, 4, 2)], [[1280, 768], 4, [2560, 768], 8]);
 
       return 'a fresh box\'s desktop came up for an agent\'s look at 1280×768, once, and came back after its parts died; '
         + 'clicks of every kind, keys, text with breaks, both wheels and a drag landed where its screenshot put them; '
         + 'nothing stayed held; a point off the screen and a second agent\'s input were refused before reaching it; a key '
-        + 'was held as long as asked; a watch answered one sheet of frames that each showed the page changing';
+        + 'was held as long as asked; a chord stopped mid-hold was let up at once, a button left down with it, and X held '
+        + 'nothing down after; a watch '
+        + 'answered one sheet of frames that each showed the page changing';
     });
   };
 
@@ -854,10 +880,18 @@ async function main(): Promise<void> {
       });
 
     } else {
-    // `--disk`: only the disk chain's contracts, with no desktop and so no browser on this host.
-    if (!process.argv.includes('--disk')) await productContracts();
+      const diskContracts = async () => {
+        for (const kind of DISK_CONTRACTS) await step(`disk-${kind}`, () => call(`/disk-contract?kind=${kind}`, Json, {}, `${box}-disk`));
+      };
 
-    for (const kind of DISK_CONTRACTS) await step(`disk-${kind}`, () => call(`/disk-contract?kind=${kind}`, Json, {}, `${box}-disk`));
+      // At once, on boxes of their own, each store prefix its box's: on armada 2026-10-13 the product's took about
+      // 110 s and the disk chain's 131 s, one after the other. Both end before a failure is reported, so the
+      // teardown never meets a contract still calling the fixture. `--disk`: the disk chain's alone, with no desktop
+      // and so no browser on this host.
+      const ended = await Promise.allSettled([process.argv.includes('--disk') ? Promise.resolve() : productContracts(), diskContracts()]);
+      const failed = ended.find((outcome) => outcome.status === 'rejected');
+
+      if (failed !== undefined) throw failed.reason;
     }
   } catch (cause) {
     steps.push({ contract: 'failure', ms: 0, detail: String(cause) });

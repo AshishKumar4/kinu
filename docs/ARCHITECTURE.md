@@ -617,7 +617,7 @@ Two policies apply to every provider:
   `withRateLimitRetry` (`rate-limit-retry.ts`) wraps all four fetch paths: the
   shared `createAuthedFetch`, Workers AI, AI Gateway, and codex. A rate-limited
   request follows the provider's `Retry-After` at most the owner's retry count
-  (`ProfileCatalog.retries`, default 5), and none while a fallback chain entry
+  (`ProfileCatalog.retries`, default 3), and none while a fallback chain entry
   is left: that model hands over at once and cools down (`fallback-cooldown.ts`,
   oh-my-pi's `cooldown-expiry`). A `Retry-After`
   (seconds or HTTP date) above 60 s (`maxRetryDelayMs`, after oh-my-pi) ends the
@@ -626,11 +626,12 @@ Two policies apply to every provider:
   turn's model fallback decides what follows. It treats 429
   and 529 as rate limits always, and a 503 only when the status text,
   `x-error-code`, or body reads as overload, capacity, or too many requests. An
-  unreadable 503 propagates. Without `Retry-After` a rate limit waits half of a
-  ceiling doubling from 4 s to a 60 s cap plus a draw under the other half, so the
-  default five waits add up to at least a minute: Workers AI limits per minute, and
-  its 429s stated no wait (623 recorded, 2026-09-30). Any other retryable failure
-  draws full jitter under a ceiling doubling from 2 s (unmeasured). Bodies that
+  unreadable 503 propagates. Workers AI's `3021` per-minute refusal states its wait
+  in words, not a header (623 of 623 recorded 429s, 2026-09-30): it is a stated
+  minute that parks the refused model, not the lane, as Workers AI limits the
+  models Kinu runs per account, per model; the next model of a chain on the same
+  account answers at once. Otherwise it draws full-jitter
+  waits under a ceiling doubling from 2 s to a 60 s cap (both unmeasured). Bodies that
   cannot be replayed pass untouched. Beside the retry, `ProviderPacer`
   (`pacing.ts`) holds each request to a host behind the cooldown a sibling
   declared. Waits are declared before they are taken, so siblings join one

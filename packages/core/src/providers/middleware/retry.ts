@@ -23,19 +23,25 @@ import { inAttempt, type Attempt } from './attempt';
 import { generateFromStream } from './stream-generate';
 import { abortableSleep, providerPacer, type ProviderPacer } from '../pacing';
 import type { ProviderWaitInfo } from '../types';
-import { recordAttemptFailure, withAttemptIdentity, type AttemptIdentityCapture } from '../attempt-identity';
+import { attemptKey, recordAttemptFailure, withAttemptIdentity, type AttemptIdentityCapture } from '../attempt-identity';
 
-/** Full-jitter backoff for a failure that is not a rate limit; unmeasured. */
+/** Full-jitter backoff; unmeasured. */
 const BASE_DELAY_MS = 2_000;
 
 const BACKOFF_FACTOR = 2;
 
 const MAX_DELAY_MS = 60_000;
 
-/** A rate limit that states no wait is waited out with half of each doubling ceiling fixed, from 4 s, so the default
- *  budget's waits add up to at least a minute: Workers AI's limits are per minute, its 429s carried no wait header in
- *  623 of 623 recorded, and calls answered again 63 s after the first 429 (prod-glm-1 evals, 2026-09-30). */
-const RATE_LIMIT_BASE_MS = 4_000;
+/**
+ * Workers AI's refusal of a model's per-minute allowance, `3021: rate limiting: inference request per min rate
+ * reached`, states its wait in its words rather than a header: the allowance is requests per minute
+ * (developers.cloudflare.com/workers-ai/platform/limits, read 2026-10-13), and its 429s carried no wait header in 623
+ * of 623 recorded, answering again 63 s after the first (prod-glm-1 evals, 2026-09-30). The page names no window's
+ * alignment; a whole minute from the refusal outlasts a fixed window and a sliding one alike.
+ */
+const WORKERS_AI_MINUTE_LIMIT = 3021;
+
+const MINUTE_MS = 60_000;
 
 /** OMP's `maxRetryDelayMs` (oh-my-pi ai/src/types.ts:499); a longer Retry-After means the account is spent. */
 const MAX_RETRY_DELAY_MS = 60_000;
@@ -137,7 +143,7 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
   const pacer = policy.pacer ?? providerPacer;
   const signal = params.abortSignal;
   const { retries } = kinuOptions(params);
-  const lane = new CallLane(policy.lane, capture);
+  const lane = new CallLane(policy.lane, capture, policy.modelId);
 
   const warn = policy.warn ?? ((message: string) => diagnostics.failure('provider.rate_limited', new KinuError('unavailable', message)));
 
@@ -168,7 +174,7 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
     for (let attemptNumber = 1; ; attemptNumber++) {
       const checked = yield* lane.toCheck(pacer);
 
-      if (checked !== null) yield* cooledDown({ policy, pacer, lane: checked, owned, retries, now, signal, reportWait });
+      if (checked !== null) yield* cooledDown({ policy, pacer, keys: checked, owned, retries, now, signal, reportWait });
 
       capture.identity = null;
       const [opened] = yield* Effect.promise(() => Promise.allSettled([withAttemptIdentity(capture, () => open(waits >= retries))]));
@@ -192,7 +198,8 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
       if (!APICallError.isInstance(failure) || !failure.isRetryable) return yield* Effect.die(failure);
       const limit = rateLimitOf(failure);
 
-      const retryAfter = retryAfterOf(new Headers(failure.responseHeaders ?? {}), now());
+      const header = retryAfterOf(new Headers(failure.responseHeaders ?? {}), now());
+      const retryAfter = header ?? statedInWords(failure);
 
       if (limit === null) {
         yield* spendRetry(() => final(failure));
@@ -214,13 +221,14 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
         }));
       }
 
-      const waitMs = retryAfter ?? rateLimitWait(waits + 1, random());
-      const declared = pacer.declareWait(yield* lane.billed(), waitMs);
+      const waitMs = retryAfter ?? Math.floor(random() * backoffCeiling(attemptNumber));
+      const source = waitSource(header, retryAfter);
+      const declared = pacer.declareWait(yield* lane.holding(source), waitMs);
 
       yield* spendRetry(() => handedOver(policy.provider, waitMs, failure));
       owned = declared;
       warn(`[kinu] ${policy.provider} rate-limited: waiting ${fmtSpan(waitMs)} (retry ${String(waits)} of ${String(retries)})`);
-      yield* reportWait({ waitMs, attempt: attemptNumber, source: retryAfter !== null ? 'header' : 'backoff', status: limit.status, retry: waits });
+      yield* reportWait({ waitMs, attempt: attemptNumber, source, status: limit.status, retry: waits });
       yield* Effect.promise(() => sleep(waitMs, signal));
     }
   }).pipe(Effect.onError((cause) => Effect.sync(() => recordAttemptFailure(capture, cause))));
@@ -228,7 +236,11 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
 
 /** The answering attempt owns a refusal; a new send checks its prospective lane afresh. */
 class CallLane {
-  constructor(private readonly lane: string | LaneLookup, private readonly capture: AttemptIdentityCapture) {}
+  constructor(
+    private readonly lane: string | LaneLookup,
+    private readonly capture: AttemptIdentityCapture,
+    private readonly modelId: string | undefined,
+  ) {}
 
   billed(): Effect.Effect<string> {
     if (this.capture.identity !== null) return Effect.succeed(this.capture.identity.lane);
@@ -236,18 +248,43 @@ class CallLane {
     return typeof this.lane === 'string' ? Effect.succeed(this.lane) : Effect.promise(this.lane.billed);
   }
 
-  /** The lane to check before an attempt, or null while nothing under its route is cooling. */
-  toCheck(pacer: ProviderPacer): Effect.Effect<string | null> {
-    if (typeof this.lane === 'string') return Effect.succeed(this.lane);
-
-    return pacer.coolingUnder(this.lane.route) ? Effect.promise(this.lane.billed) : Effect.succeed(null);
+  /** This call's model on `billed`: the fallback route's parking key, so a model's own limit also parks its selection. */
+  ownModel(billed: string): string {
+    return this.modelId === undefined ? billed : attemptKey({ lane: billed, modelId: this.modelId });
   }
+
+  /**
+   * What a rate limit's wait holds. A limit the refusal states in its words is its model's (Workers AI's per-minute
+   * limit): another model on the lane, a fallback's among them, still answers. A header's or a backoff's holds the lane.
+   */
+  holding(source: ProviderWaitInfo['source']): Effect.Effect<string> {
+    return this.billed().pipe(Effect.map((billed) => (source === 'stated' ? this.ownModel(billed) : billed)));
+  }
+
+  /** The lane and this call's model on it, to check before an attempt; null while nothing under its route is cooling. */
+  toCheck(pacer: ProviderPacer): Effect.Effect<readonly string[] | null> {
+    const keys = (billed: string) => [...new Set([billed, this.ownModel(billed)])];
+
+    if (typeof this.lane === 'string') return Effect.succeed(keys(this.lane));
+
+    return pacer.coolingUnder(this.lane.route) ? Effect.promise(this.lane.billed).pipe(Effect.map(keys)) : Effect.succeed(null);
+  }
+}
+
+/** The longest cooldown among `keys`, or null. */
+function longestCooling(pacer: ProviderPacer, keys: readonly string[]): ReturnType<ProviderPacer['cooling']> {
+  return keys.map((key) => pacer.cooling(key)).reduce((longest, cooling) => {
+    if (cooling === null) return longest;
+
+    return longest === null || cooling.untilMs > longest.untilMs ? cooling : longest;
+  }, null);
 }
 
 interface CooldownCheck {
   readonly policy: RetryPolicy;
   readonly pacer: ProviderPacer;
-  readonly lane: string;
+  /** The lane and the call's model on it. */
+  readonly keys: readonly string[];
   /** The deadline this call declared itself, which it waits out without announcing. */
   readonly owned: number | null;
   readonly retries: number;
@@ -259,10 +296,10 @@ interface CooldownCheck {
 /** The lane's cooldown waited out, re-read after each wait since a sibling may extend it; one past the longest wait, or
  *  any for a call with no retries, ends the call instead. */
 function cooledDown(check: CooldownCheck): Effect.Effect<void> {
-  const { pacer, lane, policy, signal } = check;
+  const { pacer, keys, policy, signal } = check;
 
   return Effect.gen(function* () {
-    for (let cooling = pacer.cooling(lane); cooling !== null; cooling = pacer.cooling(lane)) {
+    for (let cooling = longestCooling(pacer, keys); cooling !== null; cooling = longestCooling(pacer, keys)) {
       if (signal?.aborted === true) return yield* Effect.die(signal.reason);
       const { waitMs, untilMs, reason } = cooling;
 
@@ -291,11 +328,16 @@ function backoffCeiling(attempt: number): number {
   return Math.min(MAX_DELAY_MS, BASE_DELAY_MS * BACKOFF_FACTOR ** Math.min(attempt - 1, 32));
 }
 
-/** The `retry`th wait on a rate limit that stated none: half its ceiling fixed, half drawn ({@link RATE_LIMIT_BASE_MS}). */
-function rateLimitWait(retry: number, drawn: number): number {
-  const ceiling = Math.min(MAX_DELAY_MS, RATE_LIMIT_BASE_MS * BACKOFF_FACTOR ** Math.min(retry - 1, 32));
+function waitSource(header: number | null, stated: number | null): ProviderWaitInfo['source'] {
+  if (header !== null) return 'header';
 
-  return Math.floor(ceiling / 2 + drawn * (ceiling / 2));
+  return stated === null ? 'backoff' : 'stated';
+}
+
+/** A wait a refusal states in its body rather than a header: Workers AI's per-minute limit, a minute, which is its
+ *  model's ("per account, per model" for the models Kinu runs, ibid.). Null for any other, whose wait is the backoff's. */
+function statedInWords(failure: APICallError): number | null {
+  return failure.statusCode === 429 && workersAiCode(failure.responseBody ?? '') === WORKERS_AI_MINUTE_LIMIT ? MINUTE_MS : null;
 }
 
 interface StreamAttempt {
@@ -654,6 +696,19 @@ const QuotaFailureSchema = v.looseObject({
 interface ExhaustedAllowance {
   readonly marker: string;
   readonly message: string | undefined;
+}
+
+/** Workers AI's own code for a refusal, as the binding wraps it (`errors[].code`) or the REST API sends it
+ *  (`internalCode`); null for any other body. */
+function workersAiCode(body: string): number | null {
+  const decoded = tolerate<unknown>(() => JSON.parse(body), 'malformed-input');
+  const rest = v.safeParse(v.looseObject({ internalCode: v.number() }), decoded);
+
+  if (rest.success) return rest.output.internalCode;
+  const envelope = v.safeParse(ErrorEnvelopeSchema, decoded);
+  const code = envelope.success ? Number(envelope.output.errors?.[0]?.code ?? Number.NaN) : Number.NaN;
+
+  return Number.isInteger(code) ? code : null;
 }
 
 function exhaustedAllowance(body: string): ExhaustedAllowance | null {

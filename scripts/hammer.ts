@@ -55,15 +55,13 @@ import { stripVTControlCharacters } from 'node:util';
 
 import { runUnderDeadline, writeFully } from './deadline';
 import { assertMeasured, finding } from './gate-ratchet';
-import { claims, GATE_DEADLINE_SECONDS, HAMMER_REPEATS, LADDER } from './ladder';
+import { claims, GATE_DEADLINE_SECONDS, HAMMER_REPEATS, HAMMER_ROW_LABEL, LADDER, runOverFiles } from './ladder';
 import { trackedFiles } from './sources';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 
 /** The ladder row the hammer runs: the cf-backend suite, found by its label
  *  so the command is the row's own spelling and cannot drift from it. */
-export const HAMMER_ROW_LABEL = 'Cloudflare backend and conformance suite';
-
 const hammerRow = LADDER.find((gate) => gate.label === HAMMER_ROW_LABEL);
 
 if (hammerRow === undefined) throw new Error(`hammer: no ladder row is labelled ${JSON.stringify(HAMMER_ROW_LABEL)}`);
@@ -344,7 +342,19 @@ if (import.meta.main) {
   }
 
   const workers = Math.max(1, Math.floor(cpus().length / 2));
-  const governed = claims(HAMMER_SUITE, trackedFiles());
+  const tracked = trackedFiles();
+  const suite = claims(HAMMER_SUITE, tracked);
+  // CI names one part of the suite's files (`ciUnits`), each on a container of its own; with none named, the whole suite.
+  const part = process.argv.slice(2).filter((argument) => !argument.startsWith('--'));
+  const outside = part.filter((file) => !suite.includes(file));
+
+  if (outside.length > 0) {
+    console.error(`hammer: ${String(outside.length)} named file(s) are not in \`${HAMMER_SUITE}\`, e.g. ${outside[0] ?? ''}`);
+    process.exit(2);
+  }
+
+  const governed = part.length === 0 ? suite : part;
+  const command = part.length === 0 ? SUITE_RUN : { ...SUITE_RUN, argv: runOverFiles(HAMMER_SUITE, part, tracked) };
 
   const measured = assertMeasured('hammer', [
     ['runs', runs],
@@ -352,11 +362,11 @@ if (import.meta.main) {
     ['governed suite files', governed.length],
   ]);
 
-  console.log(`hammer: ${String(runs)} run(s) of \`${HAMMER_SUITE}\` under ${String(workers)} CPU burner(s)`);
+  console.log(`hammer: ${String(runs)} run(s) of \`${HAMMER_SUITE}\`${part.length === 0 ? '' : `, ${String(part.length)} of its ${String(suite.length)} files`} under ${String(workers)} CPU burner(s)`);
 
   if (selected !== undefined) console.log('hammer: independent CI run ' + selected + '/' + String(HAMMER_REPEATS));
   const started = performance.now();
-  const results = await hammer(runs, workers);
+  const results = await hammer(runs, workers, command);
   const elapsed = (performance.now() - started) / 1000;
 
   const governedSet = new Set(governed);

@@ -1,7 +1,7 @@
 /** Per-user MCP: UserDO + MCPClientManager need the Worker runtime, so this covers the pure helpers and the orchestrator adapter. */
 import { describe, test, expect } from 'bun:test';
 import { KinuError } from '@kinu.run/core/obs';
-import { mapConnectionStatus, mcpCredentialTransport } from '../src/user/mcp';
+import { mapConnectionStatus, mcpCredentialTransport } from '@kinu.run/core';
 import {
   validateMcpServerInput, parseMcpHeaders,
   mcpToolKey, stepContextLimit,

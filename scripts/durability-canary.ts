@@ -8,7 +8,7 @@ import { BACKGROUND_POLICY } from '../packages/core/src/index';
 import { CANARY_PREFIX, canaryAsk, type CanaryLoad } from './canary-script';
 import { ledgerFindings, measureCanaryLedger, readCanaryLedger, withInterruptedSteps, type CanaryFinding, type CanaryMeasurement } from './durability-canary-ledger';
 import { measureCanaryTelemetry, telemetryFindings, type CanaryActivation, type CanaryTelemetryMeasurement, type CanaryTouch, type CanaryWindow } from './durability-canary-telemetry';
-import { SETTLE_CAP_MS, SETTLE_GAP_MS, settledRead } from './prod-logs';
+import { SETTLE_CAP_MS, SETTLE_HOLD_MS, SETTLE_POLL_MS, settledRead } from './prod-logs';
 
 const MINUTE = 60_000;
 
@@ -89,7 +89,7 @@ const plan = {
     firstWorkspaceTouch: (plannedMs + marginMs) / MINUTE, recheckEvery: RECHECK / MINUTE,
     maxRecheckAfterFirstTouch: recheckCapMs / MINUTE, idleTail: tailMs / MINUTE,
     idleMeasurementStartsAfterLastTouch: TELEMETRY_LAG / MINUTE, telemetryLagAfterTail: TELEMETRY_LAG / MINUTE,
-    earliestReport: (plannedMs + marginMs + tailMs + TELEMETRY_LAG + SETTLE_GAP_MS) / MINUTE },
+    earliestReport: (plannedMs + marginMs + tailMs + TELEMETRY_LAG + SETTLE_HOLD_MS) / MINUTE },
   noWorkspaceTraffic: 'Disconnect after the first tool output; inspect only at the planned work end plus margin, then at most every 15 minutes up to the cap. Disconnect again for the entire idle tail.',
   accountLeaseHeartbeat: 'Every 60 s, POST /api/user/workspaces/:name/touch updates UserDO.last_visited only; no workspace RPC. Idle object telemetry includes any invocation it might unexpectedly cause.',
   assumptions: ['The ideate swarm has five parallel nodes, each using helper steps.',
@@ -221,7 +221,8 @@ if (session !== null) {
     // Rows land late, so the read is repeated until what it counts holds still, as every verdict reader does.
     const settled = await settledRead({
       read, fingerprint: telemetryCounts, rows: (counted) => counted.active.rows.length + (counted.idle?.invocations ?? 0),
-      now: () => Date.now(), sleep: (ms) => waitUntil(Date.now() + ms, 'telemetry settling'), gapMs: SETTLE_GAP_MS, capMs: SETTLE_CAP_MS,
+      now: () => Date.now(), sleep: (ms) => waitUntil(Date.now() + ms, 'telemetry settling'),
+      pollMs: SETTLE_POLL_MS, holdMs: SETTLE_HOLD_MS, capMs: SETTLE_CAP_MS,
     });
 
     telemetry = settled.settled ? settled.value : settled.last;

@@ -25,11 +25,11 @@ import {
 import { bridgeSockets } from './socket-bridge';
 import { DESKTOP_CHECK, DESKTOP_PORT } from './desktop';
 import {
-  DESKTOP_ACTION_MS, DESKTOP_CHECK_MS, DesktopLease, DesktopRequestSchema, SCREENSHOT, actionBoundMs, offScreen, pngSize, watchArgv, xdotoolOf,
-  type DesktopAnswer, type DesktopRequest, type DesktopScreen,
+  DesktopLease, DesktopRequestSchema, LET_UP_PY, SCREENSHOT, offScreen, pngSize, watchArgv, xdotoolOf,
+  type DesktopAction, type DesktopAnswer, type DesktopRequest, type DesktopScreen,
 } from './desktop-input';
 import { LABEL_LIMIT, LABEL_NAME, ZoneSchema, previewAddress, type PreviewAddress } from './preview';
-import { Deferred, Effect, Result, Semaphore } from 'effect';
+import { Deferred, Effect, Exit, Result, Semaphore } from 'effect';
 
 import {
   DEFAULT_DEVBOX_POLICY,
@@ -99,6 +99,33 @@ const CONTAINER_STOP_ATTEMPTS = 50;
 interface RunningExec {
   cancelled: boolean;
   started?: Promise<ExecProcess>;
+  /** Aborted with `killExec`, for a call that waits before its process starts. */
+  readonly cancel?: AbortController;
+}
+
+/** The desktop check in flight: its run's id, which `killExec` ends, and its outcome, which its waiters share. */
+interface DesktopCheck {
+  readonly id: string;
+  readonly done: Deferred.Deferred<DesktopScreen, DevboxError>;
+}
+
+/** A stopped call's failure: its process ended, or it never started. */
+function stopped(doing: string): DevboxError {
+  return new DevboxError('cancelled', `${doing} was stopped`);
+}
+
+/** `work`, which a stop of `signal` ends where it waits: an uninterruptible part of it runs to its end first. */
+function untilStopped<A>(work: Effect.Effect<A, DevboxError>, signal: AbortSignal | undefined, doing: string): Effect.Effect<A, DevboxError> {
+  if (signal === undefined) return work;
+
+  return Effect.raceFirst(work, Effect.callback<never, DevboxError>((resume) => {
+    const stop = (): void => { resume(Effect.fail(stopped(doing))); };
+
+    if (signal.aborted) stop();
+    else signal.addEventListener('abort', stop, { once: true });
+
+    return Effect.sync(() => { signal.removeEventListener('abort', stop); });
+  }));
 }
 
 /** An `execId` makes a command once per id (D48). */
@@ -365,7 +392,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   #closed = false;
   #teardowns = 0;
   /** The desktop check in progress, which the owner's pane and every agent action await (D89): one run at a time. */
-  #desktopCheck: Deferred.Deferred<DesktopScreen, DevboxError> | undefined;
+  #desktopCheck: DesktopCheck | undefined;
   /** Agents' desktop actions run one at a time, in arrival order. */
   readonly #desktopTurns = Semaphore.makeUnsafe(1);
   readonly #desktopLease = new DesktopLease();
@@ -2006,13 +2033,15 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     ));
   }
 
-  #spawn(command: string, { cwd, env }: ExecOptions, running: RunningExec): Effect.Effect<ExecProcess, DevboxError> {
+  /** A command string runs in bash; an argv runs as given, so its words need no quoting (the desktop's, D89). */
+  #spawn(command: string | readonly string[], { cwd, env }: ExecOptions, running: RunningExec): Effect.Effect<ExecProcess, DevboxError> {
     return Effect.gen({ self: this }, function* () {
       const { container } = yield* attempt('not-ready', () => this.#ensureReady(this.#teardowns));
 
       if (running.cancelled) return yield* Effect.fail(new DevboxError('cancelled', 'computer exec cancelled before admission'));
+      const argv = typeof command === 'string' ? ['/bin/bash', '-c', command] : command;
       // Its own group, which its kill ends (D69).
-      const started = yield* attemptSync('process', () => launch(container, ['setsid', '-w', '/bin/bash', '-c', command], { cwd, env }));
+      const started = yield* attemptSync('process', () => launch(container, ['setsid', '-w', ...argv], { cwd, env }));
       running.started = started;
 
       return yield* attempt('process', () => started);
@@ -2039,6 +2068,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
       if (running === undefined) return false;
       running.cancelled = true;
+      running.cancel?.abort();
       const started = running.started;
 
       if (started === undefined) return true;
@@ -3055,7 +3085,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return this.#withActiveCaller(Effect.gen({ self: this }, function* () {
       const { container } = yield* attempt('io', () => this.#ensureReady(this.#teardowns));
 
-      yield* this.#desktopUp(container);
+      yield* this.#desktopUp(request.signal);
       const server = `http://127.0.0.1:${String(DESKTOP_PORT)}`;
       const headers = new Headers(request.headers);
       headers.set('origin', server);
@@ -3065,33 +3095,56 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }));
   }
 
-  /** The desktop running, as the check finds it once it brought back what had died; callers during a check share it. */
-  #desktopUp(container: Container): Effect.Effect<DesktopScreen, DevboxError> {
-    return Effect.suspend(() => {
-      const running = this.#desktopCheck;
+  /**
+   * The desktop running, as the check finds it once it brought back what had died (D89). The first caller runs the check;
+   * callers during it share its outcome. One whose `signal` stops waits no longer; the check's runner, stopped, ends its
+   * run with `killExec` and settles once it has gone, so a check nobody waits on is ended and an X that stays alive and
+   * never opens its port holds no call for good. From taking the check to letting it go nothing interrupts the runner:
+   * a runner interrupted in between left the check owned by nobody, and every later call waited on it (a real box,
+   * 2026-10-14, 270 s until the edge cancelled the call).
+   */
+  #desktopUp(signal: AbortSignal | undefined): Effect.Effect<DesktopScreen, DevboxError> {
+    return Effect.uninterruptibleMask((restore) => Effect.suspend(() => {
+      const shared = this.#desktopCheck;
 
-      if (running !== undefined) return Deferred.await(running);
-      const checked = Deferred.makeUnsafe<DesktopScreen, DevboxError>();
-      this.#desktopCheck = checked;
+      // A check its own caller stopped answers that caller; one still waiting starts the next.
+      if (shared !== undefined) {
+        return restore(untilStopped(Deferred.await(shared.done), signal, 'waiting for the desktop')).pipe(
+          Effect.catchIf((failure) => failure.code === 'cancelled' && signal?.aborted !== true, () => this.#desktopUp(signal)),
+        );
+      }
 
-      return this.#checkDesktop(container).pipe(
+      if (signal?.aborted === true) return Effect.fail(stopped('waiting for the desktop'));
+      const check: DesktopCheck = { id: `desktop-check-${crypto.randomUUID()}`, done: Deferred.makeUnsafe() };
+      const running: RunningExec = { cancelled: false };
+      const stop = (): void => { unawaited(this.killExec(check.id), 'ending a desktop check its caller stopped'); };
+
+      this.#desktopCheck = check;
+      this.#running.set(check.id, running);
+      signal?.addEventListener('abort', stop, { once: true });
+
+      // A stop ends its process, and the check answers once it has gone. Forgotten before its waiters wake, so a later
+      // stop ends no process.
+      return this.#checkDesktop(running).pipe(
         Effect.exit,
-        Effect.tap((exit) => Deferred.done(checked, exit)),
-        Effect.flatten,
-        Effect.ensuring(Effect.sync(() => {
-          if (this.#desktopCheck === checked) this.#desktopCheck = undefined;
+        Effect.tap(() => Effect.sync(() => {
+          signal?.removeEventListener('abort', stop);
+          this.#running.delete(check.id);
+
+          if (this.#desktopCheck === check) this.#desktopCheck = undefined;
         })),
+        Effect.tap((exit) => Deferred.done(check.done, exit)),
+        Effect.flatten,
       );
-    });
+    }));
   }
 
-  #checkDesktop(container: Container): Effect.Effect<DesktopScreen, DevboxError> {
+  #checkDesktop(running: RunningExec): Effect.Effect<DesktopScreen, DevboxError> {
     return Effect.gen({ self: this }, function* () {
-      // Bounded: an X that stays alive and never opens its port would hold every desktop call, and the box's rest, behind it.
-      const checked = yield* attempt('io', async () => decoded(await (await launch(container, ['/bin/bash', '-c', DESKTOP_CHECK, 'devbox-desktop', this.desktopMark ?? ''], {
-        signal: AbortSignal.timeout(DESKTOP_CHECK_MS),
-      })).output()), `starting the desktop, bounded at ${String(DESKTOP_CHECK_MS / 1000)} s`);
+      const process = yield* this.#spawn(['/bin/bash', '-c', DESKTOP_CHECK, 'devbox-desktop', this.desktopMark ?? ''], {}, running);
+      const checked = decoded(yield* attempt('process', () => process.output()));
 
+      if (running.cancelled) return yield* Effect.fail(new DevboxError('cancelled', 'the desktop check was stopped by its caller'));
       const [size = '', fresh] = checked.stdout.trim().split('\n');
       const [width = Number.NaN, height = Number.NaN] = size.split(/\s+/u).map(Number);
 
@@ -3108,53 +3161,88 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   /**
    * One action on the desktop the owner watches, for the agent `request.driver` (D89). The desktop is checked first,
    * under the box's own readiness; then the action's points against the screen and the driver against the lease, before
-   * any input. Actions run one at a time; each run is bounded at its own wait and a margin, and what it holds down is
-   * released however it ends.
+   * any input. Actions run one at a time, each on the canonical exec path under `request.execId`: `killExec` ends its
+   * process, and what it holds down is released once that process has gone, however it ended. A stopped call waits no
+   * longer, for the check or for its turn.
    */
   async desktop(request: DesktopRequest): Promise<DesktopAnswer> {
-    return await settle(this.#withActiveCaller(Effect.gen({ self: this }, function* () {
-      const asked = v.safeParse(DesktopRequestSchema, request);
+    const asked = v.safeParse(DesktopRequestSchema, request);
 
-      if (!asked.success) return yield* Effect.fail(new DevboxError('invalid-input', `desktop: ${v.summarize(asked.issues)}`));
-      const { driver, action } = asked.output;
-      const { container } = yield* attempt('io', () => this.#ensureReady(this.#teardowns));
-      const screen = yield* this.#desktopUp(container);
+    if (!asked.success) return await settle(Effect.fail(new DevboxError('invalid-input', `desktop: ${v.summarize(asked.issues)}`)));
+    const { driver, action, execId } = asked.output;
+    const id = execId ?? crypto.randomUUID();
+    const running: RunningExec = { cancelled: false, cancel: new AbortController() };
+    const stop = running.cancel?.signal;
+
+    this.#running.set(id, running);
+
+    return await settle(this.#withActiveCaller(untilStopped(Effect.gen({ self: this }, function* () {
+      // Under the box's own readiness: the check's run is admitted as any exec is.
+      const screen = yield* this.#desktopUp(stop);
       const outside = offScreen(action, screen);
 
       if (outside !== null) return { kind: 'refused', reason: 'off_screen', detail: outside } satisfies DesktopAnswer;
-      const refused = this.#desktopLease.admit(driver, action.kind === 'screenshot' || action.kind === 'watch', Date.now());
 
-      if (refused !== null) return refused;
-      const bound = AbortSignal.timeout(actionBoundMs(action));
+      return yield* Effect.gen({ self: this }, function* () {
+        const refused = this.#desktopLease.admit(driver, action.kind === 'screenshot' || action.kind === 'watch');
 
+        if (refused !== null) return refused;
+
+        // Run whole: a stop ends its process, and this waits for it to go and for what it held to be let go.
+        return yield* Effect.uninterruptible(this.#act(action, running));
+      }).pipe(this.#desktopTurns.withPermits(1));
+    }), stop, `computer.${action.kind}`)).pipe(Effect.ensuring(Effect.sync(() => { this.#running.delete(id); }))));
+  }
+
+  /** The action's run, and its release after it. */
+  #act(action: DesktopAction, running: RunningExec): Effect.Effect<DesktopAnswer, DevboxError> {
+    return Effect.gen({ self: this }, function* () {
       if (action.kind === 'screenshot' || action.kind === 'watch') {
         const argv = action.kind === 'watch' ? watchArgv(action) : ['/bin/bash', '-c', SCREENSHOT, 'devbox-screenshot'];
-        const shot = yield* attempt('io', async () => await (await launch(container, argv, { signal: bound })).output());
+        const process = yield* this.#spawn(argv, {}, running);
+        const shot = yield* attempt('process', () => process.output());
         const png = new Uint8Array(shot.stdout);
         const size = pngSize(png);
+
+        if (running.cancelled) return yield* Effect.fail(stopped(`computer.${action.kind}`));
 
         if (shot.exitCode !== 0 || size === null) return yield* Effect.fail(new DevboxError('io', `the ${action.kind} failed: ${new TextDecoder().decode(shot.stderr).trim()}`));
 
         return { kind: 'screen', png: Buffer.from(png).toString('base64'), ...size } satisfies DesktopAnswer;
       }
 
-      const { argv, release } = xdotoolOf(action);
-
-      // A release that fails is recorded; the action's own outcome is what the agent hears.
-      const released = release === null ? Effect.void : attempt('io', async () => {
-        await (await launch(container, release, { signal: AbortSignal.timeout(DESKTOP_ACTION_MS) })).output();
-      }).pipe(
-        Effect.catchTag('DevboxError', (failure) => Effect.sync(() => { this.#trace('desktop.release_failed', { action: action.kind, reason: failure.message }); })),
+      // A UTF-8 locale: under the box's default C locale xdotool's `type` stops at the first character past ASCII. A run
+      // that did not end cleanly, killed by its caller's stop or failed, may have left a key or a button down between
+      // its press and its release: once its process has gone, whatever X holds down is let up.
+      const ran = yield* this.#spawn(xdotoolOf(action), { env: UTF8 }, running).pipe(
+        Effect.flatMap((process) => attempt('process', async () => decoded(await process.output())).pipe(
+          Effect.onExit((exit) => (Exit.isSuccess(exit) && exit.value.exitCode === 0 && !running.cancelled ? Effect.void : this.#letUp(action.kind))),
+        )),
       );
 
-      // A UTF-8 locale: under the box's default C locale xdotool's `type` stops at the first character past ASCII.
-      const ran = yield* attempt('io', async () => decoded(await (await launch(container, argv, { env: UTF8, signal: bound })).output()))
-        .pipe(Effect.ensuring(released));
+      if (running.cancelled) return yield* Effect.fail(stopped(`computer.${action.kind}`));
 
       if (ran.exitCode !== 0) return yield* Effect.fail(new DevboxError('io', `xdotool ${action.kind} failed: ${ran.stderr.trim()}`));
 
       return { kind: 'done' } satisfies DesktopAnswer;
-    }).pipe(this.#desktopTurns.withPermits(1))));
+    });
+  }
+
+  /** The box's own cleanup, after a run's process has gone: no caller's to stop. One that fails is recorded; the
+   *  action's own outcome is what the agent hears. */
+  #letUp(kind: DesktopAction['kind']): Effect.Effect<void> {
+    return Effect.gen({ self: this }, function* () {
+      const { container } = yield* attempt('io', () => this.#ensureReady(this.#teardowns));
+      const letUp = decoded(yield* attempt('io', async () => await (await launch(container, ['python3', '-c', LET_UP_PY, 'devbox-let-up'], {})).output()));
+
+      if (letUp.exitCode !== 0) return yield* Effect.fail(new DevboxError('io', `letting up what was down failed: ${letUp.stderr.trim()}`));
+      this.#trace('desktop.let_up', { action: kind, released: letUp.stdout.trim() });
+    }).pipe(Effect.catchTag('DevboxError', (failure) => Effect.sync(() => { this.#trace('desktop.let_up_failed', { action: kind, reason: failure.message }); })));
+  }
+
+  /** `driver`'s turns ended, or it was stopped: the desktop is free for another agent to take by looking (D89). */
+  releaseDesktop(driver: string): Promise<void> {
+    return settle(Effect.sync(() => { this.#desktopLease.release(driver); }));
   }
 
   /** The SDK's `bridge()`: an open preview socket is the box's use. */

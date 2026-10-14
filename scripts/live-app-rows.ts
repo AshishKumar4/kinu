@@ -20,8 +20,8 @@ import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-s
 
 import { DESKTOP, withLiveApp, createWorkspace, listWorkspaces, type LiveApp } from './live-app-harness';
 import {
-  CHAT_COMPOSER_LIVE, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, OPEN_NAMES, recordDeadEnds,
-  countRpc, frameLedger, named, openInspector, painted, pressUntil, recordRenderTasks, rendered, sendInChat, settled, settledAfter,
+  CHAT_COMPOSER_LIVE, INSPECTOR_PANEL, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, OPEN_NAMES, recordDeadEnds,
+  countRpc, frameLedger, named, openInspector, PAGE_TABS, painted, pressUntil, recordRenderTasks, rendered, sendInChat, settled, settledAfter,
   until, waitOn, type ControlAttempt, type RpcCounter,
 } from './product-flows';
 import { rowVerdicts, type RowVerdicts } from './row-verdicts';
@@ -184,8 +184,10 @@ export interface TierVerdicts {
  *  a zero-width holder, or by any third shape, and what the reader sees either
  *  way is how much of the window sits left of the content. -1 when the shell
  *  has no content column at all. */
+const CONTENT_COLUMN = `document.querySelector('main')`;
+
 const RAIL_LANE = `(() => {
-  const content = document.querySelector('main');
+  const content = ${CONTENT_COLUMN};
   return content === null ? -1 : Math.round(content.getBoundingClientRect().left);
 })()`;
 
@@ -328,7 +330,7 @@ async function measureControls(newPage: LiveApp['newPage'], origin: string): Pro
   // Opened first, from whatever state the product chose: a fresh workspace
   // holds nothing worth showing, so the column arrives shut.
   const opened = await pressUntil(page, {
-    names: OPEN_NAMES, read: INSPECTOR_WIDTH, reached: (width) => width > INSPECTOR_SHUT_PX,
+    names: OPEN_NAMES, read: INSPECTOR_WIDTH, box: INSPECTOR_PANEL, reached: (width) => width > INSPECTOR_SHUT_PX,
   });
 
   await shoot(page, 'b8-opened');
@@ -339,12 +341,12 @@ async function measureControls(newPage: LiveApp['newPage'], origin: string): Pro
   // tab strip instead of a handle on the column's edge (2026-09-18), so this
   // probe presses it wherever it is, and only the effect is pinned.
   const shut = await pressUntil(page, {
-    names: SHUT_NAMES, read: INSPECTOR_WIDTH, outside: '#inspector',
+    names: SHUT_NAMES, read: INSPECTOR_WIDTH, box: INSPECTOR_PANEL, outside: '#inspector',
     reached: (width) => width <= INSPECTOR_SHUT_PX,
   });
 
   const reopened = await pressUntil(page, {
-    names: OPEN_NAMES, read: INSPECTOR_WIDTH, reached: (width) => width > INSPECTOR_SHUT_PX,
+    names: OPEN_NAMES, read: INSPECTOR_WIDTH, box: INSPECTOR_PANEL, reached: (width) => width > INSPECTOR_SHUT_PX,
   });
 
   await shoot(page, 'b8-reopened');
@@ -352,7 +354,7 @@ async function measureControls(newPage: LiveApp['newPage'], origin: string): Pro
   // The left rail: every visible control outside the column whose name offers
   // collapsing, hiding or closing, or names the rail, the sidebar or the menu.
   const rail = await pressUntil(page, {
-    names: `${SHUT_NAMES}|sidebar|rail|menu`, read: RAIL_LANE, outside: '#inspector',
+    names: `${SHUT_NAMES}|sidebar|rail|menu`, read: RAIL_LANE, box: CONTENT_COLUMN, outside: '#inspector',
     reached: (lane) => lane >= 0 && lane <= RAIL_SHUT_PX,
   });
 
@@ -1163,7 +1165,7 @@ async function pagesUntilSettled(page: Page, counter: RpcCounter): Promise<numbe
   const before = counter.counts().sent[HISTORY_PAGE_METHOD] ?? 0;
 
   await painted(page);
-  await settled(page, SCROLL_METRICS);
+  await settled(page, SCROLL_METRICS, { scroller: CHAT_SCROLLER });
 
   return (counter.counts().sent[HISTORY_PAGE_METHOD] ?? 0) - before;
 }
@@ -1207,7 +1209,7 @@ async function measureChatScroll(newPage: LiveApp['newPage'], origin: string): P
 
     await waitOn(page, 'the history page response', settledAfter(page, reads, HISTORY_PAGE_METHOD));
     await until(page, 'the older messages to render', `${CHAT_ROWS} > ${String(rows)}`);
-    await settled(page, SCROLL_METRICS);
+    await settled(page, SCROLL_METRICS, { scroller: CHAT_SCROLLER });
 
     return true;
   };
@@ -1217,7 +1219,7 @@ async function measureChatScroll(newPage: LiveApp['newPage'], origin: string): P
 
     // Counted from the socket's first frame: an eager page the pane asks for on its own is the defect.
     await painted(page);
-    await settled(page, SCROLL_METRICS);
+    await settled(page, SCROLL_METRICS, { scroller: CHAT_SCROLLER });
 
     const pagesIdleAfterOpen = counter.counts().sent[HISTORY_PAGE_METHOD] ?? 0;
     const openFromBottom = v.parse(v.number(), await page.evaluate(FROM_BOTTOM));
@@ -1504,11 +1506,11 @@ async function previewsListed(page: Page): Promise<() => Promise<void>> {
   };
 }
 
-/** The work surface's page tabs. */
+/** Every page the work surface's bar holds, those behind its opener among them. */
 async function pageTabs(page: Page): Promise<readonly string[]> {
   await painted(page);
 
-  return v.parse(v.array(v.string()), await page.$$eval('#inspector nav[aria-label="Pages"] button[aria-label]', (tabs) => tabs.map((tab) => tab.getAttribute('aria-label') ?? '')));
+  return v.parse(v.array(v.string()), await page.evaluate(PAGE_TABS));
 }
 
 async function openedInWorkSurface(page: Page): Promise<string> {

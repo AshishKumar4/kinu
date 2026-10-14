@@ -5,7 +5,7 @@ import * as v from 'valibot';
 import type { AgentContext, Connection, ConnectionContext, FiberRecoveryContext, WSMessage } from 'agents';
 import { Lifecycle } from 'agents/lifecycle';
 import { parseJsonValue, type JsonObject, type JsonValue, type SqlValue } from '@kinu.run/core';
-import type { McpCredentialTransport } from '../../src/user/mcp';
+import type { McpCredentialTransport } from '@kinu.run/core';
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { SdkError, SdkErrorCode } from '@modelcontextprotocol/client';
 

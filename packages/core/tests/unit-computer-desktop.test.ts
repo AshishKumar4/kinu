@@ -6,7 +6,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { ShellApprovalPolicy } from '../src/index';
 import { createSandboxExecutor, type SandboxHandle } from '../src/execution/sandbox';
-import { DESKTOP_MEMBERS, WATCH_DEFAULT_FRAMES, WATCH_FRAMES, type DesktopAction, type DesktopAnswer, type DesktopRequest } from '../src/execution/desktop';
+import { DESKTOP_MEMBERS, WATCH_DEFAULT_FRAMES, type DesktopAction, type DesktopScreen, type DesktopAnswer, type DesktopRequest } from '../src/execution/desktop';
 import { gateProviderExec } from '../src/execution/approval';
 import { providersInWorkMode } from '../src/execution/work-mode';
 import { executorNamespace } from '../src/tools/executor-operations';
@@ -26,8 +26,12 @@ function accepted(action: DesktopAction): DesktopAnswer {
 
 const SHOWN = `data:image/png;base64,${PNG}`;
 
-/** A computer whose box records each desktop request and answers as `answer` says; nothing else is reachable. */
-function desktopBox(answer: (action: DesktopAction) => DesktopAnswer | Promise<DesktopAnswer> = accepted) {
+/** The box's desktop: its screen, and its watch's layout, half-size frames two then four to a row. */
+const SCREEN: DesktopScreen = { width: 1280, height: 768, sheet: { percent: 50, columns: [1, 2, 2, 2, 4, 4, 4, 4] } };
+
+/** A computer whose box records each desktop request and answers as `answer` says, given the call's stop; nothing else
+ *  is reachable. */
+function desktopBox(answer: (action: DesktopAction, signal: AbortSignal | undefined) => DesktopAnswer | Promise<DesktopAnswer> = accepted) {
   const sent: DesktopRequest[] = [];
 
   const unreachable = async (): Promise<never> => {
@@ -38,10 +42,10 @@ function desktopBox(answer: (action: DesktopAction) => DesktopAnswer | Promise<D
     exec: unreachable, readFile: unreachable, writeFile: unreachable, listFiles: unreachable, deleteFile: unreachable,
     exposePort: unreachable, unexposePort: unreachable, getExposedPorts: unreachable,
     ...sandboxHandleLifecycle,
-    desktop: async (request) => {
+    desktop: async (request, opts) => {
       sent.push(request);
 
-      return await answer(request.action);
+      return await answer(request.action, opts?.signal);
     },
   };
 
@@ -66,7 +70,7 @@ function strictOwner() {
 
 /** The computer's namespace as a program reaches it: the executor, gated at registration as the router gates it. */
 function computerOf(box: SandboxHandle, policy: ShellApprovalPolicy = strictOwner().policy): CodemodeProvider {
-  return executorNamespace(gateProviderExec(createSandboxExecutor(box, { desktop: { driver: 'main', screen: { width: 1280, height: 768 } } }), policy));
+  return executorNamespace(gateProviderExec(createSandboxExecutor(box, { desktop: { driver: 'main', screen: SCREEN } }), policy));
 }
 
 /** A program's call of `member` with positional arguments, as `computer.<member>(...)` makes it: its value, or the
@@ -128,7 +132,7 @@ describe('the desktop members', () => {
     expect(await call(computer, 'watch', 11)).toMatchObject({ success: false, reason: 'bad_input' });
 
     const expected: DesktopAction[] = [
-      { kind: 'watch', seconds: 3, frames: WATCH_DEFAULT_FRAMES }, { kind: 'watch', seconds: 2, frames: 2 }, { kind: 'watch', seconds: 10, frames: WATCH_FRAMES },
+      { kind: 'watch', seconds: 3, frames: WATCH_DEFAULT_FRAMES }, { kind: 'watch', seconds: 2, frames: 2 }, { kind: 'watch', seconds: 10, frames: SCREEN.sheet.columns.length },
     ];
 
     expect(actions()).toEqual(expected);
@@ -266,22 +270,36 @@ describe('a program driving the desktop', () => {
     expect(actions()).toEqual(expected);
   });
 
-  test('a stopped program sends nothing more: not the rest of its text, nor the calls waiting behind it', async () => {
-    const { box, actions, arrived, release } = holdingBox();
+  test('a stop reaches the box: the action on the screen is ended there, and nothing waiting behind it is sent', async () => {
+    const ended: string[] = [];
+    const asked = Promise.withResolvers<void>();
+
+    // As the box answers a held key: its run lasts until a stop ends it there, and the call settles once it has.
+    const { box, actions } = desktopBox((action, signal) => {
+      if (action.kind !== 'key') return accepted(action);
+      asked.resolve();
+
+      return new Promise((_, reject) => {
+        signal?.addEventListener('abort', () => {
+          ended.push(action.keys);
+          reject(new DOMException('its container process tree was ended', 'AbortError'));
+        }, { once: true });
+      });
+    });
+
     const computer = computerOf(box);
     const stop = new AbortController();
 
     const all = withCodemodeProgram(async () => ({
-      result: await Promise.all([call(computer, 'type', 'a'.repeat(120)), call(computer, 'click', [1, 2])]),
+      result: await Promise.all([call(computer, 'key', 'w', { hold: 10_000 }), call(computer, 'click', [1, 2])]),
     }), stop.signal);
 
-    await arrived(1);
+    await asked.promise;
     stop.abort();
-    release();
 
     const { result } = await all;
 
-    expect(actions()).toEqual([{ kind: 'type', text: 'a'.repeat(50) }]);
+    expect({ ended, sent: actions() }).toEqual({ ended: ['w'], sent: [{ kind: 'key', keys: 'w', holdMs: 10_000 }] });
     expect(result).toEqual([expect.objectContaining({ reason: 'cancelled' }), expect.objectContaining({ reason: 'cancelled' })]);
   });
 

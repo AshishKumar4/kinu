@@ -68,10 +68,10 @@ import { contextFill, type AgentStanding, type AgentStandingReport } from '@kinu
 import type { ChatWire } from './chat-transport';
 import { SLATE_SHARE_PATH, liveShareEntryPage, slateShareUrl, viewerEntryUrl } from './slate-share-route';
 import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
-import { SlateHost } from "./slates/host";
+import type { SlateHost } from "./slates/host";
 import { initBrowserSessionTable, ownsBrowserSession } from "@kinu.run/core";
 import { browserCamera, initSlatePictureTable, SlatePictures, type PictureCapture } from "./slates/pictures";
-import { initSlateBuildTable } from "@kinu.run/core/slates";
+import { initSlateBuildTable, SlateBuilds } from "@kinu.run/core/slates";
 import type { BlueprintReading, ShareUser } from "@kinu.run/core/slates";
 import type { MessageBlock } from "./slates/sources";
 import {
@@ -95,7 +95,7 @@ import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contr
 import type { SupervisorOpResult } from '@kinu.run/core/workspace';
 import { openingList, TURN_CLAIM_FRAME, type AccountSpend, type ActivitySnapshot, type TabPresence, type TurnClaimState } from "@kinu.run/core";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
-import { nextAlarmTime } from '@kinu.run/core';
+import { markStoreChanged, nextAlarmTime } from '@kinu.run/core';
 import { accountDeps, armedWarms, CacheWarmingLane, CacheWarmStore } from '@kinu.run/core';
 import {
   EvolutionEngine, initWorkspaceActorTable, WorkspaceActorDirectory, ChildActorOperationSchema, type ActorHandle, type ActorReference, type ChildActorOperation, type ActorDirectoryResult,
@@ -598,9 +598,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         if (this.deleting.signal.aborted) return;
         this.changes.touched(paths);
         this.liveReadsMoved(readsMovedByFiles(paths));
-        const ids = this.slates.filesChanged(paths);
+        // With no slate host loaded, no slate process or build runs here: the change moves only the build records.
+        const ids = this._slates?.controller.filesChanged(paths) ?? this.slateBuilds.filesChanged(paths);
 
         if (ids.length === 0) return;
+        markStoreChanged(this.ctx.storage.sql);
 
         this.noteTurnSlates('changed', ids);
         this.broadcastToActor(null, JSON.stringify({ type: SLATES_CHANGED_EVENT, ids }));
@@ -610,8 +612,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         this.liveReadsMoved(['getExposedPorts', 'listSlates']);
         this.detachOwned(Effect.promise(() => this.servingMoved()));
       },
-      ensureSlate: (owner) => this.slates.controller.ensureDurable(owner),
-      slateInvocation: (port, socket) => this.slates.slateInvocation(port, socket),
+      ensureSlate: async (owner) => (await this.slates()).controller.ensureDurable(owner),
+      // A process holds a port only once the host that runs it is loaded.
+      slateInvocation: (port, socket) => this._slates?.slateInvocation(port, socket) ?? null,
       ...(this.pictureCapture() !== null && {
         pictures: {
           captures: (port, handle) => this.pictures.captures(port, handle, Date.now()),
@@ -643,7 +646,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       workspace: this.name, bucket,
       url: async (port, token) => (await nimbusPreviewUrl(this.env, this.name, port, token)).url ?? null,
       slates: async () => {
-        const listing = await this.slates.controller.list(ROOT_SLATE_CALLER);
+        const listing = await (await this.slates()).controller.list(ROOT_SLATE_CALLER);
 
         return new Set([...listing.slates, ...listing.problems].map((slate) => slate.id));
       },
@@ -968,6 +971,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // The workspace agent's missions are the workspace's: owner-declared here, and charged here as its turns spend.
       missions: (actorId) => (actorPolicy(this.agentOf(actorId)).workspaceAgent ? this.budget : null),
       advisor: (actor) => this.actorAdvisor(actor),
+      // The activation owns it, as its other detached work: a failure is logged as the release's own.
+      turnsEnded: (actorId) => {
+        const box = this.rt.sandboxHandle;
+
+        if (box !== null) this.detachOwned(logged('agent.desktop_release_failed', { doing: "letting go of the desktop an agent's turns held", otherwise: 'io' }, () => box.releaseDesktop(actorId), { actorId }));
+      },
     });
   }
 
@@ -2360,7 +2369,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         return deafInbox ? [deafInbox] : [];
       },
-      failingSlates: () => this.slates.controller.failingBuilds().map(({ slate, failure }) => `${slate}: ${failure}`),
+      failingSlates: () => this.slateBuilds.failing(ROOT_SLATE_CALLER.cred).map(({ slate, failure }) => `${slate}: ${failure}`),
     };
   }
 
@@ -5745,21 +5754,21 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** The owner's browser acting on its own workspace, as the root caller. */
   @callable() async slate(operation: SlateOperation): Promise<SlateCallResult> {
-    return this.slates.controller.operation(this.slateCaller(), operation);
+    return (await this.slates()).controller.operation(this.slateCaller(), operation);
   }
 
   /** An actor of this workspace acting as itself; DO-only, like `workspaceBoxOp`. */
   async slateAs(caller: SlateCaller, operation: SlateOperation): Promise<SlateCallResult> {
-    return this.slates.controller.operation(caller, operation);
+    return (await this.slates()).controller.operation(caller, operation);
   }
 
   override async slateBuild(slate: string): Promise<SlateCallResult> {
-    return this.slates.controller.build(this.slateCaller(), slate);
+    return (await this.slates()).controller.build(this.slateCaller(), slate);
   }
 
   /** Whether a slate still builds, for an actor of this workspace acting as itself; DO-only, like `slateAs`. */
   async slateBuildAs(caller: SlateCaller, slate: string): Promise<SlateCallResult> {
-    return this.slates.controller.build(caller, slate);
+    return (await this.slates()).controller.build(caller, slate);
   }
 
   /** Names only, never surfaces: the graph shows what a slate has reached; each call is still decided as it comes. */
@@ -5776,15 +5785,36 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     return {
       mcp: [...mcpServers.entries()].map(([server, group]) => ({ server, title: group.title, tools: group.tools })),
-      slates: Object.keys(await this.slates.controller.projects(ROOT_SLATE_CALLER)),
+      slates: Object.keys(await (await this.slates()).controller.projects(ROOT_SLATE_CALLER)),
     };
   }
 
   private _slates: SlateHost | undefined;
 
-  protected get slates(): SlateHost {
-    this._slates ??= new SlateHost({
-      ctx: this.ctx, workspace: this.name,
+  private _slatesLoad: Promise<SlateHost> | undefined;
+
+  private _slateBuilds: SlateBuilds | undefined;
+
+  /** The slates' build records: a turn's every step reads them and a file change moves them, host loaded or not. */
+  private get slateBuilds(): SlateBuilds {
+    this._slateBuilds ??= new SlateBuilds(this.ctx.storage.sql);
+
+    return this._slateBuilds;
+  }
+
+  /**
+   * The slate host, loaded at its first use: it and the agent-core runtime its stores run on were most of the startup
+   * every isolate of the Worker paid, a workspace's own or not (L27).
+   */
+  protected slates(): Promise<SlateHost> {
+    this._slatesLoad ??= import("./slates/host").then(({ SlateHost }) => this.slateHost(SlateHost));
+
+    return this._slatesLoad;
+  }
+
+  private slateHost(Host: typeof SlateHost): SlateHost {
+    this._slates = new Host({
+      ctx: this.ctx, workspace: this.name, builds: this.slateBuilds,
       session: () => this.hostedWorkspace().bundle.session(),
       facetManager: () => this.hostedWorkspace().facetManager(),
       bundler: (vfs) => supervisorEsbuildService(this.ctx, this.env, vfs),
@@ -5841,7 +5871,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   async slateCallAs(caller: SlateCaller, id: string, name: string, request: SlateCallRequest): Promise<SlateSurfaceResult> {
-    return this.slates.surfaceCall(caller, id, name, request);
+    return (await this.slates()).surfaceCall(caller, id, name, request);
   }
 
   async callOperation(caller: OperationCaller, id: string, input: JsonValue, call: { readonly callId: string }): Promise<OperationResult> {
@@ -5884,7 +5914,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     request: Request,
     pathname: string,
   ): Promise<Response> {
-    return this.slates.routeShare(handle, claim, request, pathname);
+    return (await this.slates()).routeShare(handle, claim, request, pathname);
   }
 
   /** The URL a live share answers at, or null where this deployment cannot mint one. */
@@ -5899,7 +5929,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** The share row re-read through the S6 gate, plus title and description from the slate's package.json. */
   async readLiveShare(share: string): Promise<SlateAnswer<{ record: LiveShareRecord; title: string; description: string }>> {
-    return this.slates.controller.readLiveShareRecord(share);
+    return (await this.slates()).controller.readLiveShareRecord(share);
   }
 
   /**
@@ -5907,12 +5937,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * `public` for anyone signed in. Skeleton is the running slate's tree.
    */
   async liveShareBundle(share: string, userId: string): Promise<SlateAnswer<BlueprintBundle>> {
-    const record = await this.slates.controller.readLiveShareRecord(share);
+    const record = await (await this.slates()).controller.readLiveShareRecord(share);
 
     if (!record.ok) return { ok: false, success: false, reason: record.reason, error: record.error };
     const { record: row } = record.value;
 
-    if (row.visibility === 'users' && !this.slates.controller.liveShareAdmitsUser(row.id, userId)) {
+    if (row.visibility === 'users' && !(await this.slates()).controller.liveShareAdmitsUser(row.id, userId)) {
       return { ok: false, success: false, reason: 'missing', error: 'No such share' };
     }
 
@@ -5920,40 +5950,40 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       return { ok: false, success: false, reason: 'denied', error: 'This share does not allow forking' };
     }
 
-    return this.slates.controller.liveShareBundle(row);
+    return (await this.slates()).controller.liveShareBundle(row);
   }
 
   /** DO-only, like the blueprint twin, for the same reason. */
   async shareLiveWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<LiveShareRecord>> {
-    return this.slates.controller.shareLiveWith(share, users);
+    return (await this.slates()).controller.shareLiveWith(share, users);
   }
 
   @callable() async listSlates() {
-    return this.slates.controller.list(ROOT_SLATE_CALLER);
+    return (await this.slates()).controller.list(ROOT_SLATE_CALLER);
   }
 
   // Blueprints cross workspaces, so these four are DO-only: the app host verifies viewer, address and
   // forker ownership before calling, and no browser stub reaches them.
 
   async readBlueprint(share: string): Promise<SlateAnswer<BlueprintReading>> {
-    return this.slates.controller.readBlueprint(share);
+    return (await this.slates()).controller.readBlueprint(share);
   }
 
   async blueprintBundle(share: string): Promise<SlateAnswer<BlueprintBundle>> {
-    return this.slates.controller.blueprintBundle(share);
+    return (await this.slates()).controller.blueprintBundle(share);
   }
 
   async shareBlueprintWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<SlateShareRecord>> {
-    return this.slates.controller.shareBlueprintWith(share, users);
+    return (await this.slates()).controller.shareBlueprintWith(share, users);
   }
 
   /** Admits into this workspace as a new slate that calls this workspace's own surface; nothing runs. */
   async admitBlueprint(bundle: BlueprintBundle): Promise<SlateAnswer<BlueprintFork>> {
-    return this.slates.controller.admitBlueprint(bundle);
+    return (await this.slates()).controller.admitBlueprint(bundle);
   }
 
   @callable() async previewSlate(id: string): Promise<SlateCallResult> {
-    return this.slates.controller.preview(ROOT_SLATE_CALLER, id);
+    return (await this.slates()).controller.preview(ROOT_SLATE_CALLER, id);
   }
 
   @callable() async getToolDescriptions() {
@@ -6395,13 +6425,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     const [activePlan, listing, hostedPlans, questions] = await Promise.all([
       this.getActivePlanReview(),
-      this.slates.controller.list(ROOT_SLATE_CALLER),
+      this.slates().then((slates) => slates.controller.list(ROOT_SLATE_CALLER)),
       this.hostedPlans(),
       this.questionsAsked(),
     ]);
 
     const pictures = this.pictures.digests();
-    const shares = await this.slates.controller.shareCards(new Map(listing.slates.map((slate) => [slate.id, slate.title])));
+    const shares = await (await this.slates()).controller.shareCards(new Map(listing.slates.map((slate) => [slate.id, slate.title])));
 
     const inputs = {
       pendingActions: this.pendingActions(hostedPlans),
@@ -6764,7 +6794,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const listing = provider.listExposedPorts;
     // A port a slate's application holds is called by the slate's title, never by its number; an answer's page is the
     // chat's until it is saved.
-    const held = executorId === 'workspace' ? this.slates.controller.heldPorts() : Promise.resolve(null);
+    const held = executorId === 'workspace' ? this.slates().then((slates) => slates.controller.heldPorts()) : Promise.resolve(null);
 
     return settle(Effect.matchCause(Effect.promise(async () => Promise.all([listing.call(provider), held])), {
       onSuccess: ([ports, slates]) => ({
