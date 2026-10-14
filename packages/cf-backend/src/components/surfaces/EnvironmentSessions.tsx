@@ -69,8 +69,16 @@ export function useComputerSessions(rpc: Rpc, watching: boolean): ComputerSessio
     Effect.catch((cause) => Effect.sync(() => { if (live.current) setFailure(renderThrownChain({ cause })); })),
   ), [rpc]);
 
-  // Only a page someone can see reads.
-  const readSeen = useCallback(() => Effect.suspend(() => (document.visibilityState === "visible" ? read() : Effect.void)), [read]);
+  // Only a page someone can see reads, and one read at a time: a slow box never stacks them.
+  const reading = useRef(false);
+
+  const readSeen = useCallback(() => Effect.suspend(() => {
+    if (document.visibilityState !== "visible" || reading.current) return Effect.void;
+
+    reading.current = true;
+
+    return read().pipe(Effect.ensuring(Effect.sync(() => { reading.current = false; })));
+  }), [read]);
 
   useEffect(() => {
     live.current = true;
