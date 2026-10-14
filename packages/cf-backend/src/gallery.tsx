@@ -1631,7 +1631,7 @@ window.WebSocket = new Proxy(RealWebSocket, {
 
 /** A frame the gate makes the server send: cards and steers carry an actor stamp, which no fixture read can produce; `reads_changed` names reads to redo; `turn_claim` is the root's claim as it changes; `head_stream` and `head_activity` are a swarm head's live paint and landed step. */
 const GalleryPushFrameSchema = v.object({
-  type: v.picklist(["signal_card", "steer_status", READS_CHANGED_EVENT, TURN_CLAIM_FRAME, "head_stream", "head_activity", "subordinate_event", "model_fallback"]),
+  type: v.picklist(["signal_card", "steer_status", READS_CHANGED_EVENT, TURN_CLAIM_FRAME, "head_stream", "head_activity", "subordinate_event", "model_fallback", "provider_wait"]),
   reads: v.optional(v.array(v.string())),
   claim: v.optional(JsonObjectSchema),
   headId: v.optional(v.string()),
@@ -1652,6 +1652,9 @@ const GalleryPushFrameSchema = v.object({
   timestamp: v.optional(v.number()),
   // Another model taking over a turn (`model_fallback`).
   message: v.optional(v.string()),
+  // A provider asking the turn to wait (`provider_wait`).
+  provider: v.optional(v.string()),
+  waitMs: v.optional(v.number()),
 });
 
 window.addEventListener("gallery:push-frame", (event: Event) => {
@@ -7298,11 +7301,13 @@ function workspacePageFrame(): MountedFrame {
   };
 }
 
+/** `&agent=<name>` opens on that agent's chat. */
 function workspaceShellFrame(): MountedFrame {
   serveGalleryRpc(workspacePageRpc);
+  const agent = new URLSearchParams(location.search).get("agent");
 
   return {
-    entries: [`/workspace/${WORKSPACE_PAGE_NAME}`],
+    entries: [agent === null ? `/workspace/${WORKSPACE_PAGE_NAME}` : `/workspace/${WORKSPACE_PAGE_NAME}/agents/${agent}`],
     node: (
       <Routes>
         <Route element={<Layout />}>
