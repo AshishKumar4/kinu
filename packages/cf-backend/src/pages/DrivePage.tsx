@@ -1,11 +1,14 @@
-/** The Drive: My stuff (`/drive`, `/drive/<path>`) and Shared (`/shared`). Nothing empty is drawn. */
+/**
+ * The Drive: My stuff (`/drive`, `/drive/<path>`) and Shared (`/shared`), placed in a column with My stuff's folder
+ * tree, or below `lg` in a switch at the top. Nothing empty is drawn: Shared is placed once it holds something.
+ */
 import { Effect, Result } from 'effect';
 import { startTransition, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
 import {
-  ArrowSquareOutIcon, BookOpenIcon, CaretRightIcon, CopyIcon, DownloadSimpleIcon, FolderSimpleIcon, GitForkIcon, GlobeIcon, HardDrivesIcon,
-  PencilSimpleIcon, ProhibitIcon, ShareNetworkIcon, SquaresFourIcon, TrashIcon, UploadSimpleIcon, UsersIcon, WarningIcon, XIcon,
+  ArrowSquareOutIcon, BookOpenIcon, CaretDownIcon, CaretRightIcon, CopyIcon, DownloadSimpleIcon, FolderSimpleIcon, GitForkIcon, GlobeIcon, HardDrivesIcon,
+  PencilSimpleIcon, ProhibitIcon, ShareNetworkIcon, SquaresFourIcon, TrashIcon, UploadSimpleIcon, UsersIcon, UsersThreeIcon, WarningIcon, XIcon,
 } from "@phosphor-icons/react";
 import * as v from "valibot";
 import {
@@ -18,7 +21,7 @@ import { diagnostics, showing, toKinuError, settle } from "@kinu.run/core/obs";
 import {
   downloadUrl, inlineUrl, listDrive, markAsSkill, readDriveText, uploadFile, uploadFolder, uploadZip,
 } from "@/lib/drive-api";
-import { getSharedLibrary } from "@/lib/shared-api";
+import { getSharedLibrary, markSharedSeen } from "@/lib/shared-api";
 import { useAsyncResource, lastValue, type AsyncResource } from "@/hooks/use-async-resource";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { useCopy } from "@/hooks/use-copy";
@@ -46,22 +49,178 @@ const IMAGE = /\.(?:png|jpe?g|gif|webp|svg)$/iu;
 /** A tab or crumb press chose My stuff; a first visit lands on what holds something. */
 const ChosenState = v.object({ chosen: v.literal(true) });
 
-function TabStrip({ tab }: { tab: DriveTab }) {
-  const tabs: readonly { id: DriveTab; label: string; to: string }[] = [
-    { id: "mine", label: "My stuff", to: APP_ROUTES.drive },
-    { id: "shared", label: "Shared", to: APP_ROUTES.shared },
-  ];
+const PLACES: readonly { id: DriveTab; label: string; to: string; icon: ReactNode }[] = [
+  { id: "mine", label: "My stuff", to: APP_ROUTES.drive, icon: <FolderSimpleIcon size={16} /> },
+  { id: "shared", label: "Shared", to: APP_ROUTES.shared, icon: <UsersThreeIcon size={16} /> },
+];
 
+function NewDot() {
+  return <span data-drive-unseen className="size-1.5 shrink-0 rounded-full p-dot-accent" title="Something new" />;
+}
+
+/** Below `lg`, the places as a switch at the top. */
+function PlaceSwitch({ tab, unseen }: { tab: DriveTab; unseen: boolean }) {
   return (
     <nav aria-label="Drive" className="flex w-fit items-center gap-0.5 rounded-lg p-recessed p-0.5">
-      {tabs.map((each) => (
+      {PLACES.map((each) => (
         <Link key={each.id} to={each.to} state={{ chosen: true }} aria-current={each.id === tab ? "page" : undefined} data-drive-tab={each.id}
-          className={`whitespace-nowrap rounded-md px-3.5 py-1.5 p-t-control ${each.id === tab ? "p-surface p-text shadow-[0_1px_2px_var(--c-shadow-drop)]" : "p-text-3 hover:p-text"}`}>
+          className={`flex items-center gap-1.5 whitespace-nowrap rounded-md px-3.5 py-1.5 p-t-control ${each.id === tab ? "p-surface p-text shadow-[0_1px_2px_var(--c-shadow-drop)]" : "p-text-3 hover:p-text"}`}>
           {each.label}
+          {each.id === "shared" && unseen && each.id !== tab && <NewDot />}
         </Link>
       ))}
     </nav>
   );
+}
+
+const PLACE_ROW = "flex items-center gap-2.5 rounded-lg py-[7px] pl-2.5 pr-2 p-t-control transition-colors";
+
+const ROW_ON = "bg-[color-mix(in_srgb,var(--c-text)_8%,transparent)]";
+
+const ROW_HOVER = "hover:bg-[color-mix(in_srgb,var(--c-text)_5%,transparent)]";
+
+/** A folder's own folders, Skills first: the tree draws only what can be walked into. */
+function subfolders(entries: readonly DriveEntry[] | undefined, parent: string): DriveEntry[] {
+  const isSkills = (entry: DriveEntry): boolean => joinDir(parent, entry.name) === DRIVE_SKILLS_DIR;
+
+  return (entries ?? []).filter((entry) => entry.kind === "folder").sort((a, b) => Number(isSkills(b)) - Number(isSkills(a)));
+}
+
+/**
+ * My stuff's folders, opened along the way to `current`. A folder off that way shows it can be opened, since its
+ * listing is not read until it is; one on the way shows whether it holds more.
+ */
+function FolderTree({ listings, parent, current, depth }: {
+  listings: ReadonlyMap<string, readonly DriveEntry[]>; parent: string; current: string; depth: number;
+}) {
+  const children = subfolders(listings.get(parent), parent);
+
+  if (children.length === 0) return null;
+
+  return (
+    <ul>
+      {children.map((child) => {
+        const path = joinDir(parent, child.name);
+        const open = current === path || current.startsWith(`${path}/`);
+        const inner = subfolders(listings.get(path), path);
+        const skills = path === DRIVE_SKILLS_DIR || child.skill;
+        let caret: ReactNode = <CaretRightIcon size={10} weight="bold" />;
+
+        if (open) caret = inner.length > 0 ? <CaretDownIcon size={10} weight="bold" /> : null;
+
+        return (
+          <li key={path}>
+            <Link to={folderHref(path)} aria-current={path === current ? "page" : undefined} data-drive-tree={path}
+              style={{ paddingLeft: `${String(10 + depth * 14)}px` }}
+              className={`flex items-center gap-1.5 rounded-lg py-[5px] pr-2 p-row-text transition-colors ${path === current ? `${ROW_ON} font-medium p-text` : `p-text-2 ${ROW_HOVER}`}`}>
+              <span className="flex w-3 shrink-0 justify-center p-text-4">{caret}</span>
+              {skills
+                ? <BookOpenIcon size={15} weight="fill" className="shrink-0 p-success" />
+                : <FolderSimpleIcon size={15} weight="fill" className="shrink-0 p-info" />}
+              <span className="truncate">{path === DRIVE_SKILLS_DIR ? "Skills" : child.name}</span>
+            </Link>
+            {open && <FolderTree listings={listings} parent={path} current={current} depth={depth + 1} />}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/** From `lg`, the Drive's places in a column: My stuff with its folder tree, then Shared once it holds something. */
+function DriveColumn({ tab, path, listings, shares, unseen }: {
+  tab: DriveTab; path: string; listings: ReadonlyMap<string, readonly DriveEntry[]>; shares: boolean; unseen: boolean;
+}) {
+  return (
+    <aside aria-label="Drive" className="hidden w-52 shrink-0 flex-col overflow-y-auto border-r p-border px-3 pb-6 pt-8 lg:flex">
+      <div className="flex h-8 items-center gap-2.5 px-2.5">
+        <HardDrivesIcon size={22} className="shrink-0 p-text-3" />
+        <h1 className="p-display text-2xl">Drive</h1>
+      </div>
+      <nav aria-label="Drive places" className="mt-6 space-y-0.5">
+        {PLACES.filter((each) => each.id === "mine" || shares).map((each) => {
+          const active = each.id === tab;
+          const here = active && path === "/";
+          let tone = `p-text-2 ${ROW_HOVER}`;
+
+          if (here) tone = `${ROW_ON} p-text`;
+          else if (active) tone = `p-text ${ROW_HOVER}`;
+
+          return (
+            <div key={each.id}>
+              <Link to={each.to} state={{ chosen: true }} aria-current={here ? "page" : undefined} data-drive-place={each.id}
+                className={`${PLACE_ROW} ${tone}`}>
+                <span className={`flex shrink-0 ${active ? "p-accent" : "p-text-3"}`}>{each.icon}</span>
+                <span className="flex-1">{each.label}</span>
+                {each.id === "shared" && unseen && !active && <NewDot />}
+              </Link>
+              {each.id === "mine" && active && (
+                <div className="mt-0.5 pl-3"><FolderTree listings={listings} parent="/" current={path} depth={0} /></div>
+              )}
+            </div>
+          );
+        })}
+      </nav>
+    </aside>
+  );
+}
+
+/**
+ * The page's head, one tree laid out twice: below `lg` the title, the switch, the search and the crumbs stack; from
+ * `lg` the title and the places are the column's, and the crumbs share a row with New or the search.
+ */
+function DriveHead({ tab, path, subtitle, shares, unseen, search, action }: {
+  tab: DriveTab; path: string; subtitle: ReactNode; shares: boolean; unseen: boolean;
+  search: { readonly query: string; readonly set: (query: string) => void }; action: ReactNode;
+}) {
+  const isRoot = path === "/";
+  const areas = "[grid-template-areas:'title_action'_'places_places'_'search_search'_'crumbs_crumbs'] lg:[grid-template-areas:'crumbs_action_search']";
+
+  return (
+    <div className={`grid grid-cols-[minmax(0,1fr)_auto] items-center lg:grid-cols-[minmax(0,1fr)_auto_auto] ${areas}`}>
+      <header className="flex items-center gap-3 [grid-area:title] lg:hidden">
+        <HardDrivesIcon size={22} className="shrink-0 p-text-3" />
+        <h1 className="p-display text-2xl">Drive</h1>
+      </header>
+      {action && <div className="ml-3 [grid-area:action]">{action}</div>}
+      {shares && <div className="mt-5 [grid-area:places] lg:hidden"><PlaceSwitch tab={tab} unseen={unseen} /></div>}
+      {tab === "shared" && (
+        <input value={search.query} onChange={(event) => search.set(event.target.value)} placeholder="Search shared" aria-label="Search shared"
+          data-drive-search className={`${inputCls} mt-3 w-full [grid-area:search] sm:w-60 lg:mt-0`} />
+      )}
+      {(!isRoot || subtitle !== null) && (
+        <div className={`min-w-0 [grid-area:crumbs] lg:mt-0 ${isRoot ? "mt-4" : "mt-6"}`}>
+          {tab === "mine" && !isRoot && <Crumbs path={path} />}
+          {subtitle !== null && <p className={`p-meta p-text-3 lg:leading-8 ${isRoot ? "" : "mt-1"}`}>{subtitle}</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Opening Shared with something new in it sees it, on every device; the library is read again so the dot goes. */
+function useSeeingShared(seeing: boolean, reread: () => void, fail: (chain: string) => void): void {
+  useEffect(() => {
+    if (!seeing) return;
+    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
+      yield* Effect.promise(markSharedSeen);
+      reread();
+    }), showing(fail))));
+  }, [seeing, reread, fail]);
+}
+
+/** The folders on the way to `path` above it, each read once per visit; `path` itself is the page's own listing. */
+function useFolderWay(tab: DriveTab, path: string, here: DriveListing | null): ReadonlyMap<string, readonly DriveEntry[]> {
+  const load = useCallback(async () => {
+    const parts = path.split("/").filter(Boolean);
+    const above = tab === "mine" ? parts.map((_, index) => `/${parts.slice(0, index).join("/")}`) : [];
+
+    return await Promise.all(above.map(listDrive));
+  }, [tab, path]);
+
+  const way = lastValue(useAsyncResource(load, undefined, `${tab}:${path}`).resource) ?? [];
+
+  return new Map([...way, ...(here === null ? [] : [here])].map((listing) => [listing.path, listing.entries]));
 }
 
 function Crumbs({ path }: { path: string }) {
@@ -568,6 +727,10 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
 
   const shared = lastValue(library.resource);
   const sharesAnything = shared !== null && !isEmptyLibrary(shared);
+  const unseen = shared?.received.some((row) => row.unseen === true) ?? false;
+  const listings = useFolderWay(tab, path, lastValue(listing.resource));
+
+  useSeeingShared(tab === "shared" && unseen, library.reload, setNotice);
   const contents = mineContents(path, lastValue(listing.resource)?.entries ?? [], shared);
   const settled = [listing.resource, library.resource].every((resource) => resource.status !== "loading");
   const inSkills = path === DRIVE_SKILLS_DIR;
@@ -727,32 +890,17 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
   const subtitle = subtitleOf(tab, path);
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-5xl px-5 pb-20 pt-6 sm:px-8 lg:pt-8">
-        <header className="flex items-center gap-3">
-          <HardDrivesIcon size={22} className="shrink-0 p-text-3" />
-          <h1 className="p-display text-2xl">Drive</h1>
-          {tab === "mine" && (
-            <div className="ml-auto">
-              <PrimaryAction inSkills={inSkills} onFiles={uploadFiles}
-                onFolder={(picks) => { if (picks.length > 0) transfer(path, pickedFolderName(picks) ?? "folder", picks.reduce((sum, pick) => sum + pick.file.size, 0), (signal) => uploadFolder(path, picks, signal)); }}
-                onZip={(file) => transfer(path, file.name, file.size, (signal) => uploadZip(joinDir(path, file.name.replace(/\.zip$/iu, "")), file, signal))}
-                onNewFolder={() => setDialog({ kind: "new-folder" })} onNewSkill={() => setDialog({ kind: "add-skill" })} />
-            </div>
-          )}
-        </header>
-
-        {sharesAnything && (
-          <div className="mt-5 flex flex-wrap items-center gap-3">
-            <TabStrip tab={tab} />
-            {tab === "shared" && (
-              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search shared" aria-label="Search shared"
-                data-drive-search className={`${inputCls} w-full sm:ml-auto sm:w-60`} />
-            )}
-          </div>
-        )}
-        {tab === "mine" && !isRoot && <div className="mt-6"><Crumbs path={path} /></div>}
-        {subtitle !== null && <p className={`p-meta p-text-3 ${isRoot ? "mt-4" : "mt-1"}`}>{subtitle}</p>}
+    <div className="flex h-full min-h-0">
+      <DriveColumn tab={tab} path={path} listings={listings} shares={sharesAnything} unseen={unseen} />
+      <div className="min-w-0 flex-1 overflow-y-auto">
+      <div className="max-w-5xl px-5 pb-20 pt-6 sm:px-8 lg:pt-8">
+        <DriveHead tab={tab} path={path} subtitle={subtitle} shares={sharesAnything} unseen={unseen} search={{ query, set: setQuery }}
+          action={tab === "mine" && (
+            <PrimaryAction inSkills={inSkills} onFiles={uploadFiles}
+              onFolder={(picks) => { if (picks.length > 0) transfer(path, pickedFolderName(picks) ?? "folder", picks.reduce((sum, pick) => sum + pick.file.size, 0), (signal) => uploadFolder(path, picks, signal)); }}
+              onZip={(file) => transfer(path, file.name, file.size, (signal) => uploadZip(joinDir(path, file.name.replace(/\.zip$/iu, "")), file, signal))}
+              onNewFolder={() => setDialog({ kind: "new-folder" })} onNewSkill={() => setDialog({ kind: "add-skill" })} />
+          )} />
 
         <DriveNotices notice={notice} onDismissNotice={() => setNotice(null)} listingPending={listingPending} libraryResource={library.resource} onRetryLibrary={library.reload}
           copyStatus={copier.status} />
@@ -771,6 +919,8 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
         ) : (
           <div className="mt-6"><SharedBody shared={shared} query={query} tile={shareTile} /></div>
         )}
+      </div>
+
       </div>
 
       {opened !== undefined && <FileDrawer path={joinDir(path, opened.name)} entry={opened} onClose={() => show("file", null)} />}

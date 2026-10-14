@@ -2614,8 +2614,9 @@ export async function slateSharesReachingNothing(target: FlowTarget): Promise<Sl
     }
 
     await page.evaluate(`[...document.querySelectorAll('[role="dialog"] button')].find((button) => (button.textContent ?? '').trim() === 'Done')?.click()`);
-    await until(page, 'the Shared tab', `document.querySelector('[data-drive-tab="shared"]') !== null`);
-    await page.click('[data-drive-tab="shared"]');
+    // At the desktop width the Drive's places are its column's.
+    await until(page, 'the Shared place', `document.querySelector('[data-drive-place="shared"]') !== null`);
+    await page.click('[data-drive-place="shared"]');
 
     const mine = `[data-drive-section="Shared by you"] [data-drive-share-kind="live"]`;
     await until(page, 'the share under Shared by you', `document.querySelector(${JSON.stringify(mine)}) !== null`);

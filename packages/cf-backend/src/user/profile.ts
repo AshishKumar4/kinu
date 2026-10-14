@@ -8,6 +8,9 @@ import { singletonValue, type UserObjectHost } from './user-host';
 import type { UserWorkspaces } from './workspaces';
 import { ReceivedShareSchema, type ReceivedShare } from './share-cards';
 
+/** `user_config`'s key for when this account last opened Shared. */
+const SHARES_SEEN_CONFIG_KEY = 'shares_seen_at';
+
 /** A typed result, not an exception: error classes do not survive the DO RPC boundary. */
 export type ProfileCatalogWriteResult =
   | { readonly ok: true; readonly envelope: ProfileCatalogEnvelope }
@@ -342,6 +345,22 @@ export class UserProfileStore {
       `SELECT owner_user_id, workspace, share_id, card FROM user_share_cards`,
     ).map((row) => v.parse(ReceivedShareSchema, { ownerUserId: row.owner_user_id, workspace: row.workspace, shareId: row.share_id, card: JSON.parse(row.card) }))
       .sort((a, b) => b.card.createdAt - a.card.createdAt || a.shareId.localeCompare(b.shareId));
+  }
+
+  /** When this account last opened Shared, one stamp for every device; null before it ever has. */
+  async sharesSeenAt(caller: UserCaller): Promise<number | null> {
+    await this.host.requireTier(caller, 'shares');
+    const row = this.host.sqlx<{ value: string }>(`SELECT value FROM user_config WHERE key = ?`, SHARES_SEEN_CONFIG_KEY)[0];
+
+    return row === undefined ? null : Number(row.value);
+  }
+
+  async sharesSeen(caller: UserCaller, at: number): Promise<void> {
+    await this.host.requireTier(caller, 'shares');
+    this.host.sqlx(
+      `INSERT INTO user_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      SHARES_SEEN_CONFIG_KEY, String(at),
+    );
   }
 
   /**

@@ -89,6 +89,15 @@ sharedRoutes.use('/api/shared/*', ownerGate());
 
 sharedRoutes.get('/api/shared', async (c) => json({ body: await library(c.env, c.get('identity'), c.get('owner')) }));
 
+/** Shared was opened: what it holds now is seen, on every device. */
+sharedRoutes.post('/api/shared/seen', async (c) => {
+  const identity = c.get('identity');
+
+  await c.env.UserDO.get(c.env.UserDO.idFromName(identity.userId)).sharesSeen(c.get('owner'), Date.now());
+
+  return json({ body: { seen: true } });
+});
+
 sharedRoutes.post('/api/shared/publish', async (c) => publish(c.req.raw, c.env, c.get('identity')));
 
 sharedRoutes.post('/api/shared/fork', async (c) => fork(c.req.raw, c.env, c.get('identity')));
@@ -133,11 +142,16 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
   }
 
   const received: SharedRow[] = [];
+  const seenAt = await userDO.sharesSeenAt(owner);
 
   // The cards their owners sent: listed without waking a single owner's workspace. A share revoked since is gone
-  // once its removal lands; one opened before then refuses at its owner's object.
+  // once its removal lands; one opened before then refuses at its owner's object. One made since Shared was last
+  // opened is unseen.
   for (const { workspace, shareId, card } of await userDO.sharesReceived_list(owner)) {
-    const row = { share: shareId, title: card.title, description: card.description, createdAt: card.createdAt, workspace, owner: card.owner };
+    const row = {
+      share: shareId, title: card.title, description: card.description, createdAt: card.createdAt, workspace, owner: card.owner,
+      ...((seenAt === null || card.createdAt > seenAt) && { unseen: true as const }),
+    };
 
     if (card.kind === 'live') {
       received.push({

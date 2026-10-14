@@ -188,6 +188,14 @@ export class UserDO extends Agent<Env> {
     return this.profile.sharesReceived_list(caller);
   }
 
+  sharesSeenAt(caller: UserCaller): Promise<number | null> {
+    return this.profile.sharesSeenAt(caller);
+  }
+
+  sharesSeen(caller: UserCaller, at: number): Promise<void> {
+    return this.profile.sharesSeen(caller, at);
+  }
+
   sharesReceived_forget(caller: UserCaller, ownerUserId: string): Promise<void> {
     return this.profile.sharesReceived_forget(caller, ownerUserId);
   }

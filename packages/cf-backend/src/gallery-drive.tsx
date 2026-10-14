@@ -174,7 +174,7 @@ const LIBRARY: SharedLibrary = {
     { id: "live-board-1", kind: "live", share: "live-board-1", slate: "issue-triage", title: "Issue triage", description: DESCRIPTION, createdAt: NOW - 864e5, visibility: "users", workspace: "checkout-fixes", users: ["sam@example.com", "lee@example.com"], fork: true },
   ],
   received: [
-    { id: "live-mail-9", kind: "live", share: "live-mail-9", title: "Inbox digest", description: "Summarises unread mail into one morning note.", createdAt: NOW - 2 * 3600e3, visibility: "users", workspace: "sam-mail", owner: "sam@example.com", fork: true },
+    { id: "live-mail-9", kind: "live", share: "live-mail-9", title: "Inbox digest", description: "Summarises unread mail into one morning note.", createdAt: NOW - 2 * 3600e3, visibility: "users", workspace: "sam-mail", owner: "sam@example.com", fork: true, unseen: true },
     { id: "email-triage~z8Xc4vB2nM6qW3eR~a7bn3kd9pq2xw5ha", kind: "blueprint", share: "z8Xc4vB2nM6qW3eR", title: "Deploy status board", description: "Every service, its last deploy and who shipped it.", createdAt: NOW - 864e5, workspace: "sam-mail", owner: "sam@example.com" },
   ],
 };
@@ -195,6 +195,8 @@ export function installDriveFixture(frame: string): void {
   if (fixture === undefined) return;
   const next = window.fetch.bind(window);
   const drive = fixture.seeded ? seededDrive() : Promise.resolve(mossaicVfs(fakeMossaic().tenant("gallery-owner")));
+  // Opening Shared sees what it holds, as the account's stamp does.
+  let seen = false;
 
   window.fetch = Object.assign((input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
@@ -203,7 +205,15 @@ export function installDriveFixture(frame: string): void {
     if (path === "/api/drive" || path.startsWith("/api/drive/")) return drive.then((tenant) => serveDrive(tenant, request));
 
     if (path === "/api/shared" && request.method === "GET") {
-      return Promise.resolve(Response.json(fixture.library));
+      const received = seen ? fixture.library.received.map(({ unseen: _, ...row }) => row) : fixture.library.received;
+
+      return Promise.resolve(Response.json({ ...fixture.library, received }));
+    }
+
+    if (path === "/api/shared/seen" && request.method === "POST") {
+      seen = true;
+
+      return Promise.resolve(Response.json({ seen: true }));
     }
 
     return next(input, init);
