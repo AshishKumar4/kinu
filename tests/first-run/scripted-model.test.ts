@@ -402,19 +402,20 @@ describe("the agent-job row's job", () => {
     const call = { id: 'call_job', type: 'function', function: { name: 'eval', arguments: JSON.stringify({ code: 'return 1;' }) } };
     const handle = { background: true, jobId: 'bgjob-start01', kind: 'eval', message: 'Outran the 30s foreground window; backgrounded.' };
 
-    const turn = [
+    // The ask's turn, its eval backgrounded, then whatever came after it.
+    const conversation = (...after: JsonObject[]): JsonObject[] => [
       { role: 'user', content: JOB_ASK },
       { role: 'assistant', content: 'Calling eval.', tool_calls: [call] },
       { role: 'tool', tool_call_id: 'call_job', content: JSON.stringify(handle) },
+      ...after,
     ];
 
-    const woken = async (result: string) => (await reply([
-      ...turn,
+    const woken = async (result: string) => (await reply(conversation(
       { role: 'assistant', content: 'The job is starting in the background as bgjob-start01.' },
       { role: 'user', content: `Background eval job bgjob-start01 completed.\n\nResult:\n${result}` },
-    ], ['eval'])).content;
+    ), ['eval'])).content;
 
-    expect(await reply(turn, ['eval']).then((said) => said.content)).not.toBe(JOB_STARTED);
+    expect(await reply(conversation(), ['eval']).then((said) => said.content)).not.toBe(JOB_STARTED);
     expect(await woken(JSON.stringify({ processId: 'job-1', restartable: true }))).toBe(JOB_STARTED);
     expect(await woken(JSON.stringify({ success: false, reason: 'unavailable', error: 'the computer did not start' }))).not.toBe(JOB_STARTED);
   });
