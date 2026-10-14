@@ -1977,6 +1977,7 @@ body > .annotation-toolbar {
 .p-session-row:hover { background: var(--c-neutral-tint); }
 /* The open session, both panes' in a split, as the Work list marks its open row: the accent's wash and ink. */
 .p-session-row[aria-current="true"] { background: var(--c-accent-subtle); color: var(--c-accent-fg); }
+.p-session-row[data-attention] { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--c-warning) 55%, transparent); }
 .p-session-row[aria-current="true"] .p-text-3 { color: color-mix(in srgb, var(--c-accent-fg) 70%, transparent); }
 .p-term-port { display: inline-flex; align-items: center; gap: 3px; color: var(--c-accent-fg); font-family: var(--font-mono); font-size: 11.5px; }
 /* The terminal's own ground, under its padding as under its text. */

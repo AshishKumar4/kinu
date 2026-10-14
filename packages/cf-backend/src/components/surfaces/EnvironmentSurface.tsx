@@ -29,7 +29,7 @@ import { Effect } from "effect";
 import type { TerminalSession } from "@kinu.run/devbox";
 import { DesktopScreen } from "./DesktopScreen";
 import {
-  NewSessionRow, ONE_SHELL, SessionDetails, SessionTabs, openSession, sessionTone, since, useComputerSessions, type ComputerSessions,
+  AgentMark, NewSessionRow, ONE_SHELL, SessionDetails, SessionTabs, openSession, sessionTone, since, useComputerSessions, type ComputerSessions,
   type SessionTone,
 } from "./EnvironmentSessions";
 
@@ -93,8 +93,10 @@ function statusOf(mount: MountInfo, exec: ExecutorInfo | undefined): StatusReadi
 }
 
 /** The computer's state: restarting under a resize, asleep while stopped (it wakes when used), else as any machine. */
-function computerStatus(mount: MountInfo, exec: ExecutorInfo | undefined, size: ComputerSizeState): StatusReading {
+function computerStatus(mount: MountInfo, exec: ExecutorInfo | undefined, size: ComputerSizeState, waiting: boolean): StatusReading {
   if (size.pending === "resize") return { word: "Restarting", tone: "working" };
+
+  if (waiting) return { word: "Needs input", tone: "attention" };
 
   if (mount.live && size.state !== null && size.state.running === null) return { word: "Asleep", tone: "off" };
 
@@ -147,6 +149,7 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
   const computerLive = environments.some((m) => m.name === "computer" && m.live);
   // The computer's sessions are read while they are on screen: its tabs, or the wide column's list.
   const sessions = useComputerSessions(rpc, computerLive && (wide || selectedMount?.name === "computer"));
+  const waiting = new Set(sessions.sessions?.some((session) => session.needsInput) === true ? ["computer"] : []);
 
   const choose = (machine: string, tab?: string) => {
     setSelected(machine);
@@ -189,7 +192,7 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
         </div>
       ) : (
         <>
-          <MachineChips environments={environments} execByName={execByName} selected={selectedMount?.name ?? null} onSelect={(machine) => choose(machine)}
+          <MachineChips environments={environments} execByName={execByName} selected={selectedMount?.name ?? null} onSelect={(machine) => choose(machine)} waiting={waiting}
             pcOffered={pcOffered} onConnectDevice={onConnectDevice} empty={mounts.length === 0 && loaded !== null} loading={mounts.length === 0 && resource.status === "loading"} />
           {chosen}
         </>
@@ -233,7 +236,9 @@ interface Shown {
   readonly setSplit: (session: string | null) => void;
 }
 
-function MachineChips({ environments, execByName, selected, onSelect, pcOffered, onConnectDevice, empty, loading }: {
+function MachineChips({ environments, execByName, selected, onSelect, pcOffered, onConnectDevice, empty, loading, waiting }: {
+  /** Machines a session of which waits at a prompt (D95). */
+  waiting: ReadonlySet<string>;
   environments: readonly MountInfo[];
   execByName: ReadonlyMap<string, ExecutorInfo>;
   selected: string | null;
@@ -255,7 +260,7 @@ function MachineChips({ environments, execByName, selected, onSelect, pcOffered,
             <button type="button" data-env-select onClick={() => onSelect(m.name)} aria-pressed={active} className="p-env-chip">
               <KindIcon size={14} weight={active ? "fill" : "regular"} className="shrink-0" aria-hidden />
               <span className="truncate">{exec?.label ?? executorLabel(m.name)}</span>
-              <Dot tone={statusOf(m, exec).tone} />
+              <Dot tone={waiting.has(m.name) ? "attention" : statusOf(m, exec).tone} />
             </button>
           </div>
         );
@@ -304,7 +309,7 @@ function SessionRail({ environments, execByName, sessions, selected, shown, pcOf
               <RailRow tone="ready" name={ONE_SHELL} detail={null} ports={[]} current={current(ONE_SHELL)} onChoose={() => shown.choose(m.name, ONE_SHELL)} />
             )}
             {rows?.map((session) => (
-              <RailRow key={session.id} tone={sessionTone(session).tone} name={session.name} detail={railDetail(session, now)} ports={session.ports}
+              <RailRow key={session.id} tone={sessionTone(session).tone} agent={session.job !== undefined} name={session.name} detail={railDetail(session, now)} ports={session.ports}
                 current={current(session.id)} onChoose={() => shown.choose(m.name, session.id)} />
             ))}
             {computer && m.live && <RailRow icon name="Desktop" detail={null} ports={[]} current={current("desktop")} onChoose={() => shown.choose(m.name, "desktop")} />}
@@ -323,14 +328,18 @@ function SessionRail({ environments, execByName, sessions, selected, shown, pcOf
 }
 
 function railDetail(session: TerminalSession, now: number): string {
+  if (session.needsInput) return "Waiting for input";
+
   if (session.running !== null) return session.running;
 
   return session.last !== null && session.last.command !== "" ? `${session.last.command} · ${since(session.last.at, now)}` : session.cwd;
 }
 
-function RailRow({ tone, icon = false, name, detail, ports, current, onChoose }: {
+function RailRow({ tone, icon = false, agent = false, name, detail, ports, current, onChoose }: {
   tone?: SessionTone;
   icon?: boolean;
+  /** An agent's job runs in it (D95). */
+  agent?: boolean;
   name: string;
   detail: string | null;
   ports: readonly number[];
@@ -338,9 +347,9 @@ function RailRow({ tone, icon = false, name, detail, ports, current, onChoose }:
   onChoose: () => void;
 }) {
   return (
-    <button type="button" aria-current={current ? "true" : undefined} onClick={onChoose} className="p-session-row">
+    <button type="button" aria-current={current ? "true" : undefined} data-attention={tone === "attention" ? "" : undefined} onClick={onChoose} className="p-session-row">
       {icon ? <DesktopIcon size={12} aria-hidden /> : <Dot tone={tone ?? "ready"} />}
-      <span className="truncate p-row-text font-medium">{name}</span>
+      <span className="inline-flex min-w-0 items-center gap-1.5">{agent && <AgentMark />}<span className="truncate p-row-text font-medium">{name}</span></span>
       <span className="p-annotation p-text-3">{ports.map((port) => `:${String(port)}`).join(" ")}</span>
       {detail !== null && <><span /><span className="col-span-2 truncate p-meta p-text-3">{detail}</span></>}
     </button>
@@ -364,7 +373,7 @@ function SelectedEnvironment({ rpc, mount, exec, workspace, executorOutputs, onE
   const size = useComputerSize(rpc, computer && mount.live);
   const name = exec?.label ?? executorLabel(mount.name);
   const restarting = computer && size.pending === "resize";
-  const status = computer ? computerStatus(mount, exec, size) : statusOf(mount, exec);
+  const status = computer ? computerStatus(mount, exec, size, sessions.sessions?.some((session) => session.needsInput) === true) : statusOf(mount, exec);
 
   return (
     <section aria-label={name} className="flex min-h-0 flex-1 flex-col">

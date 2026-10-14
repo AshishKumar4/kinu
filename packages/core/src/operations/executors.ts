@@ -108,11 +108,11 @@ export const COMPUTER = {
   deleteFile: sb({ name: 'deleteFile', help: 'Delete a file on your computer.', impact: 'mutate', input: v.strictObject({ path: Path }), output: Text }),
   exists: sb({ name: 'exists', help: '"true" or "false".', impact: 'observe', input: v.strictObject({ path: Path }), output: Text }),
   startProcess: sb({
-    name: 'startProcess', help: 'A supervised background process; answers JSON {processId, restartable: true}.', impact: 'administer',
+    name: 'startProcess', help: 'A supervised background job in a terminal session the person can open; answers JSON {processId, restartable: true}.', impact: 'administer',
     input: v.strictObject({ command: Command, cwd: v.optional(v.string()) }), output: Text,
   }),
   stopProcess: sb({ name: 'stopProcess', help: 'Stop a supervised process.', impact: 'administer', input: v.strictObject({ processId: v.pipe(v.string(), v.nonEmpty()) }), output: Text }),
-  listProcesses: sb({ name: 'listProcesses', help: 'JSON rows {processId, pid, status, restartable, command}.', impact: 'observe', input: v.strictObject({}), output: Text }),
+  listProcesses: sb({ name: 'listProcesses', help: 'JSON rows {processId, pid, status, restartable, command, session?, waiting?}; status "waiting for input" with `waiting`, its last line, when a job stopped at a prompt.', impact: 'observe', input: v.strictObject({}), output: Text }),
   rest: sb({
     name: 'rest', help: '"now" saves and stops the computer, ending what runs; "keep" runs on until it asks again.', impact: 'administer',
     input: v.strictObject({ answer: v.picklist(['now', 'keep']) }), output: Text,

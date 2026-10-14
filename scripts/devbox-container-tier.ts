@@ -57,6 +57,14 @@ const BOX_NAME_READ = [
 /** How long the tier watches a refused box for another start: the box this contract caught re-armed every second. */
 const PARKED_WATCH_MS = 20_000;
 
+/** A job that stops at a prompt, then answers with what it was told (D95). */
+const JOB_PROMPT = 'printf "Your name? "; read name; echo "hi $name"';
+
+/** How many times, and how far apart, a job's status is read while it starts and finishes: a person waits seconds. */
+const JOB_READS = 40;
+
+const JOB_READ_MS = 500;
+
 /** How long after its first frame a fresh desktop must show its background and panel: a person waits seconds, not minutes. */
 const DESKTOP_SEEN_MS = 30_000;
 
@@ -646,6 +654,44 @@ async function main(): Promise<void> {
       if (named.get('prompt')?.includes(`@${BOX_NAME}`) !== true) throw new Error(`a shell's prompt reads ${named.get('prompt') ?? 'nothing'}, not ${BOX_NAME}`);
 
       return Object.fromEntries(named);
+    });
+
+    /**
+     * An agent's job runs in a terminal session of its own (D95): stopped at a prompt, the job reads "waiting for input"
+     * with its last line, its session reads needs input, an answer typed into the session reaches it, and its log has
+     * what it wrote. Stopping it takes its session.
+     */
+    await step('agent-job', async () => {
+      const Row = v.looseObject({ processId: v.string(), status: v.string(), waiting: v.optional(v.string()), session: v.optional(v.string()) });
+      const Session = v.looseObject({ id: v.string(), name: v.string(), needsInput: v.boolean(), job: v.optional(v.string()) });
+      const { processId } = await call('/job-start', v.object({ processId: v.string() }), { command: JOB_PROMPT }, names[1]);
+      const rowOf = async () => (await call('/job-list', v.array(Row), {}, names[1])).find((row) => row.processId === processId);
+      let row = await rowOf();
+
+      for (let asked = 0; row?.status !== 'waiting for input' && asked < JOB_READS; asked++) { await delay(JOB_READ_MS); row = await rowOf(); }
+
+      if (row?.status !== 'waiting for input' || row.waiting?.trim() !== 'Your name?' || row.session === undefined) {
+        throw new Error(`a job at its prompt read ${JSON.stringify(row)}, not waiting for input at "Your name?"`);
+      }
+
+      const session = row.session;
+      const listed = (await call('/sessions', v.array(Session), {}, names[1])).find((candidate) => candidate.id === session);
+
+      if (listed?.needsInput !== true || listed.job !== processId) throw new Error(`its session read ${JSON.stringify(listed)}, not the job's, needing input`);
+      await shell(`tmux send-keys -t '=${session}:' Ada Enter`, names[1]);
+
+      for (let asked = 0; row?.status !== 'completed' && asked < JOB_READS; asked++) { await delay(JOB_READ_MS); row = await rowOf(); }
+
+      if (row?.status !== 'completed') throw new Error(`the answered job read ${JSON.stringify(row)}, not completed`);
+      const log = await shell(`cat /var/tmp/devbox/processes/${processId}/stdout.log`, names[1]);
+
+      if (!log.includes('hi Ada')) throw new Error(`the job's log holds ${JSON.stringify(log.slice(-300))}, not its answer`);
+      await call(`/job-stop?id=${processId}`, v.object({ stopped: v.boolean() }), {}, names[1]);
+      const after = await call('/sessions', v.array(Session), {}, names[1]);
+
+      if (after.some((candidate) => candidate.id === session)) throw new Error('a stopped job left its session listed');
+
+      return { processId, session, waiting: listed.needsInput, log: log.slice(-120) };
     });
 
     await step('file-metadata', async () => {

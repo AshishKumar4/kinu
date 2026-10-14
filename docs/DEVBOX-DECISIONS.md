@@ -4787,6 +4787,24 @@ answered "A startup is armed, so ask again", armed its startup 20 times and file
 every other contract and the cleanup passed. In the unit test on `7ce7f4a31`, a minute of alarms configured the box
 61 times and filed 61 incidents.
 
+D95. An agent's long-running job runs in a terminal session a person can open and answer (2026-10-14; the owner
+approved the Environments design's question 1). `computer.startProcess` keeps its tool and its answer; its job now
+starts in a recorded tmux session of its own (`j-` and its process id), named by what it runs and marked as the
+agent's. The launch keeps Processes' contract (the pid with its boot id, the exit marker, the kill tree, restore's
+replay into the same session) and changes where the job's terminal is: tmux opens a pane that waits until
+`pipe-pane` copies it to the job's one log (stdout and stderr together, as a terminal shows them), shows the
+command, runs it in the foreground of the pane's terminal, records how it ended, and leaves the session's shell under
+its output. Measured on a real platform box, in a tmux pane: a program at a prompt is in `read(0)` on the pane's pts
+(`/proc/<pid>/syscall` `0 0x0`, wchan `wait_woken`); the shell at its own prompt is in `pselect` (270) and `sleep` in
+`nanosleep` (230). So the sessions read marks a session needs input when a process in its pane's foreground group
+reads fd 0 from a pts, and the job's status reads `waiting for input` with the last line it wrote, colours stripped,
+when a process in its tree does the same. A typed answer reaches it: `tmux send-keys` was read by the waiting program,
+which ended 0. Its stdin stays open, as the owner chose: the agent sees the wait in `computer.listProcesses` and is
+told to ask the person, or to answer through the session with `exec` when the answer is its to give. Stopping the job
+ends its session; closing its session stops the job, so a restart does not bring it back. The container tier's
+`agent-job` step runs it on a real box: the prompt read, the session needing input, the answer typed through tmux, the
+job completed and its log holding what it wrote.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean

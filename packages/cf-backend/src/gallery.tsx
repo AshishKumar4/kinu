@@ -1232,6 +1232,18 @@ const PTY_SCREENS = {
     "",
     `${COMPUTER_PROMPT}`,
   ].join("\r\n"),
+  "j-4f0c9a2e": [
+    "\x1b[2m$ npm run deploy\x1b[0m",
+    "",
+    "> storefront@0.4.0 deploy",
+    "> wrangler deploy --env production",
+    "",
+    " \x1b[33m⛅️ wrangler\x1b[39m 3.80.0",
+    "\x1b[2m-------------------\x1b[22m",
+    "Total Upload: 412.38 KiB / gzip: 96.12 KiB",
+    "",
+    "\x1b[33m?\x1b[39m \x1b[1mYou are about to deploy to production. Continue?\x1b[22m \x1b[2m(y/N)\x1b[22m ",
+  ].join("\r\n"),
   device: "\x1b[1mashish@Ashishs-MacBook\x1b[0m storefront % git pull\r\nAlready up to date.\r\n\x1b[1mashish@Ashishs-MacBook\x1b[0m storefront % ",
 } satisfies Record<string, string>;
 
@@ -1794,16 +1806,18 @@ const stubRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
 
 /** The computer's sessions (D90) as its box keeps them: a shell, a dev server listening, a test run that failed. */
 const GALLERY_SESSIONS: TerminalSession[] = [
-  { id: "shell", name: "shell", cwd: "/workspace/storefront", open: true, running: null, last: { exit: 0, at: Date.now() - 20_000, command: "git status" }, ports: [], branch: "main" },
-  { id: "s2", name: "dev server", cwd: "/workspace/storefront", open: true, running: "node", last: null, ports: [5173], branch: "main" },
-  { id: "s3", name: "tests", cwd: "/workspace/storefront", open: true, running: null, last: { exit: 1, at: Date.now() - 70_000, command: "npx vitest run src/checkout" }, ports: [], branch: "main" },
+  { id: "shell", name: "shell", cwd: "/workspace/storefront", open: true, running: null, last: { exit: 0, at: Date.now() - 20_000, command: "git status" }, ports: [], branch: "main", needsInput: false },
+  { id: "s2", name: "dev server", cwd: "/workspace/storefront", open: true, running: "node", last: null, ports: [5173], branch: "main", needsInput: false },
+  { id: "s3", name: "tests", cwd: "/workspace/storefront", open: true, running: null, last: { exit: 1, at: Date.now() - 70_000, command: "npx vitest run src/checkout" }, ports: [], branch: "main", needsInput: false },
+  // An agent's job (D95) at a prompt: it waits for the person, or for its agent, to answer.
+  { id: "j-4f0c9a2e", name: "npm run deploy", cwd: "/workspace/storefront", open: true, running: "node", last: null, ports: [], branch: "main", needsInput: true, job: "4f0c9a2e-77d1-4f5b-9a63-0b2f6f0e1c55" },
 ];
 
 function gallerySessions(method: string, args: readonly unknown[]): readonly TerminalSession[] | SessionRecord | null {
   if (method === "openComputerSession") {
     const record = { id: `s${String(GALLERY_SESSIONS.length + 2)}`, name: `shell ${String(GALLERY_SESSIONS.length + 1)}`, cwd: "/workspace" };
 
-    GALLERY_SESSIONS.push({ ...record, open: false, running: null, last: null, ports: [], branch: null });
+    GALLERY_SESSIONS.push({ ...record, open: false, running: null, last: null, ports: [], branch: null, needsInput: false });
 
     return record;
   }

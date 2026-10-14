@@ -4,6 +4,7 @@ import { Effect, Result } from 'effect';
 import { DevboxError, attempt, attemptSync, settle } from './errors';
 import { TERM_GRACE_MS } from './lifecycle';
 import { SHOWN_NAME_FILE } from './shown-name';
+import { SESSION_RC, TMUX_CONF } from './sessions';
 
 const CA_PATH = "/etc/cloudflare/certs/cloudflare-containers-ca.crt";
 
@@ -65,6 +66,8 @@ export interface ProcessRecord {
   readonly pid: number | undefined;
   readonly status: 'starting' | 'running' | 'completed' | 'failed';
   readonly exitCode: number | undefined;
+  /** While it runs: the last line it wrote, when it waits at a prompt for an answer (D95). */
+  readonly waiting: string | undefined;
 }
 
 export function isProcessLive(status: string): boolean {
@@ -80,11 +83,44 @@ function whileCurrent<A>(current: (() => boolean) | undefined, mutate: () => Eff
 // File-backed identities survive a DO eviction; a process group carries signals. A launch whose exec
 // answer was lost is decided by one symlink: `launched` before anything runs, or `unlaunched` set by
 // a caller finding no pid and no exit (D48). A missing cwd is the launch's own recorded failure.
+/**
+ * An agent's job in its terminal session (D95): the pane waits until its output is copied to the job's log, shows what
+ * runs, runs it in the foreground of its terminal, so a prompt waits for whoever answers it there, records how it ended,
+ * and leaves a shell under its output. `trap : INT` keeps the pane alive past a ^C its job takes with the default action.
+ */
+const JOB_PANE = `dir=$1
+trap : INT
+while [ ! -e "$dir/piped" ]; do sleep 0.05; done
+printf '\\033[2m$ %s\\033[0m\\n' "$(cat "$dir/command")"
+sh -c 'echo "$$ $(cat /proc/sys/kernel/random/boot_id)" >"$0/pid"; exec "$@"' "$dir" /bin/bash -c "$(cat "$dir/command")"
+echo "$?" >"$dir/exit.tmp" && mv "$dir/exit.tmp" "$dir/exit"
+exec /bin/bash --rcfile /etc/devbox-session.bashrc -i`;
+
+/** In a session (D95): the session's files, then the session, its pane copied to the job's one log. */
+const RUN_IN_SESSION = `session=$DEVBOX_SESSION
+printf '%s\\n' "$DEVBOX_TMUX_CONF" >/etc/devbox-tmux.conf
+printf '%s\\n' "$DEVBOX_SESSION_RC" >/etc/devbox-session.bashrc
+printf '%s\\n' "$DEVBOX_JOB_PANE" >/etc/devbox-job-pane.sh
+unset DEVBOX_SESSION DEVBOX_TMUX_CONF DEVBOX_SESSION_RC DEVBOX_JOB_PANE
+printf '%s' "$3" >"$dir/command"
+: >"$dir/stdout.log"; : >"$dir/stderr.log"
+tmux kill-session -t "=$session" 2>/dev/null
+if ! tmux -f /etc/devbox-tmux.conf new-session -d -s "$session" -x 160 -y 48 -c "$cwd" "sh /etc/devbox-job-pane.sh $dir" 2>"$dir/stderr.log"; then
+  echo 1 >"$dir/exit.tmp" && mv "$dir/exit.tmp" "$dir/exit"
+  exit 0
+fi
+tmux pipe-pane -t "=$session:" -o "cat >>$dir/stdout.log"
+touch "$dir/piped"`;
+
 const RUN = `dir=$1; cwd=$2; shift 2
 ln -s launched "$dir/launch" 2>/dev/null || exit 0
 if ! cd -- "$cwd" 2>/dev/null; then
   printf "Failed to change directory to '%s'\\n" "$cwd" >"$dir/stderr.log"
   echo 1 >"$dir/exit.tmp" && mv "$dir/exit.tmp" "$dir/exit"
+  exit 0
+fi
+if [ -n "\${DEVBOX_SESSION:-}" ]; then
+${RUN_IN_SESSION}
   exit 0
 fi
 setsid sh -c 'echo "$$ $(cat /proc/sys/kernel/random/boot_id)" >"$0/pid"; exec "$@"' "$dir" "$@" >"$dir/stdout.log" 2>"$dir/stderr.log"
@@ -102,13 +138,30 @@ const LIVE = `live() {
 const UNLAUNCH = `[ -f "$1/pid" ] || [ -f "$1/exit" ] || ln -s unlaunched "$1/launch" 2>/dev/null
 [ "$(readlink "$1/launch")" = unlaunched ]`;
 
+/**
+ * \`waiting PID\`: a process in PID's tree reads its terminal, as a prompt does (D95). \`last_line DIR\`: the last line
+ * the job wrote, its colours stripped, base64 so it rides one status line.
+ */
+const WAITING = `waiting() {
+  for c in $(cat /proc/$1/task/$1/children 2>/dev/null); do waiting "$c" && return 0; done
+  [ "$(cut -d' ' -f1-2 "/proc/$1/syscall" 2>/dev/null)" = '0 0x0' ] || return 1
+  case "$(readlink "/proc/$1/fd/0")" in /dev/pts/*) return 0 ;; esac
+  return 1
+}
+last_line() {
+  tail -c 4096 "$1/stdout.log" 2>/dev/null | tr -d '\\r' | sed 's/\\x1b\\[[0-9;?]*[a-zA-Z]//g' | awk 'NF { l = $0 } END { print l }' | base64 -w0
+}`;
+
 const STATUS = `${LIVE}
+${WAITING}
 for dir in "$@"; do
   [ -f "$dir/process.json" ] || continue
   if [ -f "$dir/exit" ]; then state="exit $(cat "$dir/exit")"
   elif [ "$(readlink "$dir/launch")" = unlaunched ]; then state=unlaunched
   elif [ ! -f "$dir/pid" ]; then state=starting
-  elif p=$(live "$dir"); then state="running $p"
+  elif p=$(live "$dir"); then
+    state="running $p"
+    if waiting "$p"; then state="waiting $p $(last_line "$dir")"; fi
   else state=lost
   fi
   printf '%s\\n' "$state"
@@ -165,7 +218,8 @@ export class Processes {
     }, kernel);
   }
 
-  start(command: string, options: { readonly cwd?: string; readonly processId: string; readonly current?: () => boolean }): Promise<ProcessRecord> {
+  /** With `session`, the job runs in that terminal session, where a person can watch and answer it (D95). */
+  start(command: string, options: { readonly cwd?: string; readonly processId: string; readonly current?: () => boolean; readonly session?: string }): Promise<ProcessRecord> {
     if (this.kernel === undefined) return settle(attempt('process', async () => {
       const kernel = await this.incarnation();
 
@@ -194,8 +248,12 @@ export class Processes {
       const record = { id: options.processId, command, cwd: options.cwd ?? '/workspace' };
       yield* whileCurrent(options.current, () => attempt('file', () => this.#files.writeFile(`${dir}/process.json`, JSON.stringify(record))));
 
+      const env = options.session === undefined ? CONTAINER_ENV : {
+        ...CONTAINER_ENV, DEVBOX_SESSION: options.session, DEVBOX_TMUX_CONF: TMUX_CONF, DEVBOX_SESSION_RC: SESSION_RC, DEVBOX_JOB_PANE: JOB_PANE,
+      };
+
       const launched = yield* Effect.result(whileCurrent(options.current, () => attempt('process', () => this.container.exec(['/bin/sh', '-c', RUN, 'devbox-process', dir, record.cwd, '/bin/bash', '-c', command], {
-        env: CONTAINER_ENV, stdout: 'ignore', stderr: 'ignore',
+        env, stdout: 'ignore', stderr: 'ignore',
       }))));
 
       if (Result.isFailure(launched)) {
@@ -206,7 +264,7 @@ export class Processes {
           `${launched.failure.message}; whether it ran is left to the next start or kill: ${decided.failure.message}`, { cause: launched.failure }));
       }
 
-      return { ...record, pid: undefined, status: 'starting' as const, exitCode: undefined };
+      return { ...record, pid: undefined, status: 'starting' as const, exitCode: undefined, waiting: undefined };
     }));
   }
 
@@ -301,12 +359,16 @@ function readProcessRows(output: string): ProcessRecord[] {
 
   for (let at = 0; at + 1 < lines.length; at += 2) {
     const record = v.parse(RecordSchema, JSON.parse(lines[at + 1] ?? ''));
-    const [state, value] = (lines[at] ?? '').split(' ');
+    const [state, value, line] = (lines[at] ?? '').split(' ');
     const exitCode = state === 'exit' ? Number(value) : undefined;
     let status: ProcessRecord['status'] = exitCode === 0 ? 'completed' : 'failed';
 
     if (state === 'running' || state === 'starting') status = state;
-    found.push({ ...record, pid: state === 'running' ? Number(value) : undefined, status, exitCode });
+
+    if (state === 'waiting') status = 'running';
+    const waiting = state === 'waiting' ? new TextDecoder().decode(Uint8Array.from(atob(line ?? ''), (char) => char.charCodeAt(0))) : undefined;
+
+    found.push({ ...record, pid: state === 'running' || state === 'waiting' ? Number(value) : undefined, status, exitCode, waiting });
   }
 
   return found;

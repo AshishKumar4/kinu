@@ -19,7 +19,7 @@ import artifact from '../block-lower/upstream.json';
 import { ContainerRoutes, type OutboundPolicy } from './gateway';
 import { terminalSocket, resetTerminal } from './terminal';
 import {
-  FIRST_SESSION, SESSIONS_KEY, SESSIONS_READ, SessionNameSchema, SessionRecordsSchema, mergeSessions, newSessionId, newSessionName,
+  FIRST_SESSION, SESSIONS_KEY, SESSIONS_READ, SessionNameSchema, SessionRecordsSchema, jobSessionId, jobSessionName, mergeSessions, newSessionId, newSessionName,
   parseSessionsRead, type SessionRecord, type TerminalSession,
 } from './sessions';
 import { bridgeSockets } from './socket-bridge';
@@ -2284,8 +2284,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       yield* attempt('io', () => this.ensureReady());
       const result = yield* attempt('process', () => this.#supervised().run({ kind: 'start', command, cwd: cwd ?? DEVBOX_WORKDIR }));
 
-      return result.kind === 'started' ? { processId: result.process.id }
-        : yield* Effect.fail(new DevboxError('cancelled', 'supervised start was superseded'));
+      if (result.kind !== 'started') return yield* Effect.fail(new DevboxError('cancelled', 'supervised start was superseded'));
+      // Its session is listed beside the person's own, by what it runs (D95).
+      this.#recordJobSession(result.process.id, command, cwd ?? DEVBOX_WORKDIR);
+
+      return { processId: result.process.id };
     })));
   }
 
@@ -2295,10 +2298,14 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       const arrived = this.#teardowns;
       await this.#ensureReady(arrived);
       const result = await this.#supervised().run({ kind: 'stop', processId });
+      const stopped = result.kind === 'stopped' && result.stopped;
 
       this.stampInteraction();
 
-      return { stopped: result.kind === 'stopped' && result.stopped };
+      // A stopped job's session goes with it: the shell under its output, and its tab (D95).
+      if (stopped) await this.#forgetJobSession(processId);
+
+      return { stopped };
     }));
   }
 
@@ -2317,6 +2324,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
           status: 'starting',
           command: spec.command,
           restartable: true,
+          waiting: undefined,
+          session: jobSessionId(spec.processId),
         });
       }
 
@@ -2326,9 +2335,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         rows.set(live.id, {
           processId: live.id,
           pid: live.pid,
-          status: live.status,
+          status: live.waiting === undefined ? live.status : 'waiting for input',
           command: rows.get(live.id)?.command ?? live.command,
           restartable: specIds.has(live.id),
+          waiting: live.waiting,
+          session: specIds.has(live.id) ? jobSessionId(live.id) : undefined,
         });
       }
 
@@ -3252,6 +3263,21 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }));
   }
 
+  #recordJobSession(processId: string, command: string, cwd: string): void {
+    const id = jobSessionId(processId);
+    const records = this.#sessionRecords();
+
+    if (!records.some((record) => record.id === id)) this.ctx.storage.kv.put(SESSIONS_KEY, [...records, { id, name: jobSessionName(command), cwd, job: processId }]);
+  }
+
+  async #forgetJobSession(processId: string): Promise<void> {
+    const id = jobSessionId(processId);
+    const container = this.ctx.container;
+
+    if (container?.running === true) await resetTerminal(container, id);
+    this.ctx.storage.kv.put(SESSIONS_KEY, this.#sessionRecords().filter((record) => record.id !== id));
+  }
+
   /** The recorded sessions, the first one when there is none. */
   #sessionRecords(): SessionRecord[] {
     const records = parsedOrNull(SessionRecordsSchema, this.ctx.storage.kv.get<StoredValue>(SESSIONS_KEY));
@@ -3309,10 +3335,20 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }));
   }
 
-  /** Ends a session and forgets it; the box keeps one, so closing the last leaves a fresh first session. */
+  /** Ends a session and forgets it; the box keeps one, so closing the last leaves a fresh first session. Closing an
+   *  agent's job's session stops the job, so a restart does not bring it back (D95). */
   closeTerminalSession(id: string): Promise<void> {
     return settle(Effect.gen({ self: this }, function* () {
-      yield* this.#session(id);
+      const session = yield* this.#session(id);
+
+      if (session.job !== undefined) {
+        const job = session.job;
+
+        yield* attempt('io', () => this.stopSupervised(job));
+
+        return;
+      }
+
       const container = this.ctx.container;
 
       if (container?.running === true) yield* attempt('io', () => resetTerminal(container, id));

@@ -2,6 +2,7 @@ import { processScope, supervisedScope, type ResourceLane, type ResourceScope } 
 import type { SupervisedProcessSpec } from './lifecycle';
 import { isProcessLive, type ProcessRecord, type Processes } from './processes';
 import { DEVBOX_WORKDIR } from './storage';
+import { jobSessionId } from './sessions';
 import { Effect, Result } from 'effect';
 import { attempt, settle, type DevboxError } from './errors';
 
@@ -156,7 +157,9 @@ export class SupervisedProcesses {
       if (existing !== null && isProcessLive(existing.status)) return { kind: 'started', process: existing };
       const command = request.kind === 'restore' ? request.spec.command : request.command;
       const cwd = request.kind === 'restore' ? request.spec.cwd ?? DEVBOX_WORKDIR : request.cwd;
-      const started = yield* Effect.result(attempt('process', () => native.start(command, { cwd, processId, current })));
+      // An agent's job runs in a terminal session of its own, where a person can watch and answer it (D95).
+      const session = request.kind === 'native-start' ? undefined : jobSessionId(processId);
+      const started = yield* Effect.result(attempt('process', () => native.start(command, { cwd, processId, current, session })));
 
       if (Result.isFailure(started)) {
         if (!current()) return STALE;

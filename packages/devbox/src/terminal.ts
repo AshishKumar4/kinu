@@ -2,47 +2,9 @@ import * as v from 'valibot';
 import { Effect } from 'effect';
 import { DevboxError, attempt, attemptSync, observe, settle } from './errors';
 import { CONTAINER_ENV } from './processes';
-import type { SessionRecord } from './sessions';
-import { SHELL_RC } from './shown-name';
+import { SESSION_RC, TMUX_CONF, type SessionRecord } from './sessions';
 
 const ENV = { ...CONTAINER_ENV, TERM: 'xterm-256color' };
-
-/**
- * tmux keeps the shell and its screen across reattaches (DEVBOX-DECISIONS, the PTY proof); none of its own chrome shows.
- * No status line, no prefix key, and the page's terminal keeps its own screen, so what scrolls by lands in its scrollback.
- * A server already running takes the settings at the next attach.
- */
-const TMUX_CONF = [
-  'set -g status off',
-  'set -g prefix None',
-  'unbind C-b',
-  'set -g escape-time 0',
-  'set -g history-limit 50000',
-  "set -ga terminal-overrides ',xterm*:smcup@:rmcup@'",
-].join('\n');
-
-/**
- * A session's shell starts from the box's rc, the person's own first and the box's shown name in their prompt (D93),
- * then records how its last command ended on its own pane, where the sessions read finds it (D90): the exit status,
- * the time, and the command line, once per command the history numbers.
- */
-const SESSION_RC = [
-  SHELL_RC,
-  '__kinu_entry() { HISTTIMEFORMAT= fc -l -1 2>/dev/null; }',
-  '__kinu_seen=$(__kinu_entry); __kinu_seen=${__kinu_seen%%[[:space:]]*}',
-  '__kinu_mark() {',
-  '  local status=$? entry',
-  '  entry=$(__kinu_entry) || return $status',
-  '  if [ -n "$entry" ] && [ "${entry%%[[:space:]]*}" != "$__kinu_seen" ]; then',
-  '    __kinu_seen=${entry%%[[:space:]]*}',
-  '    entry=${entry#*[[:space:]]}',
-  '    entry=${entry#"${entry%%[![:space:]]*}"}',
-  '    tmux set -p -t "$TMUX_PANE" @kinu_exit "$status" \\; set -p -t "$TMUX_PANE" @kinu_at "$(date +%s)" \\; set -p -t "$TMUX_PANE" @kinu_last "$entry" 2>/dev/null',
-  '  fi',
-  '  return $status',
-  '}',
-  'PROMPT_COMMAND="__kinu_mark${PROMPT_COMMAND:+;$PROMPT_COMMAND}"',
-].join('\n');
 
 /** `$1` the config, `$2` the session's id, `$3` its folder, `$4` the shell's rc: joins the session, or opens it there. */
 const ATTACH = `printf '%s\\n' "$1" > /etc/devbox-tmux.conf

@@ -3,7 +3,7 @@
 import { TestDevbox } from './support/test-devbox';
 import { describe, expect, test } from 'bun:test';
 
-import { FIRST_SESSION, mergeSessions, newSessionId, newSessionName, parseSessionsRead } from '../src/sessions';
+import { FIRST_SESSION, jobSessionId, jobSessionName, mergeSessions, newSessionId, newSessionName, parseSessionsRead } from '../src/sessions';
 import { harness } from './support/devbox-harness';
 
 class SessionBox extends TestDevbox<unknown> {
@@ -43,6 +43,13 @@ describe('a read of the running sessions', () => {
     expect(read.get('s2')).toMatchObject({ running: 'node', last: null });
   });
 
+  test('a session whose foreground reads its terminal needs input; one at its own prompt does not', () => {
+    const waiting = parseSessionsRead([READ, row('W', 's2')].join('\n'));
+
+    expect(waiting.get('s2')?.needsInput).toBe(true);
+    expect(waiting.get('shell')?.needsInput).toBe(false);
+  });
+
   test('a row naming no session the box keeps, or no session at all, is no session', () => {
     expect(parseSessionsRead(row('P', 'Bad.Name', '/', 'bash', '', '', '')).size).toBe(0);
     expect(mergeSessions([FIRST_SESSION], read).map((session) => session.id)).toEqual(['shell']);
@@ -69,7 +76,7 @@ describe("the box's sessions", () => {
   test('a box that is not running is not woken to list them: the first session reads as left', async () => {
     const { box, container } = harness(SessionBox);
 
-    expect(await box.terminalSessions()).toEqual([{ ...FIRST_SESSION, open: false, running: null, last: null, ports: [], branch: null }]);
+    expect(await box.terminalSessions()).toEqual([{ ...FIRST_SESSION, open: false, running: null, last: null, ports: [], branch: null, needsInput: false }]);
     expect(container.sequence.includes('sessions')).toBe(false);
   });
 
@@ -109,5 +116,38 @@ describe("the box's sessions", () => {
     await expect(box.openTerminalSession('   ')).rejects.toMatchObject({ code: 'invalid-input' });
     await expect(box.renameTerminalSession(FIRST_SESSION.id, 'x'.repeat(41))).rejects.toMatchObject({ code: 'invalid-input' });
     await expect(box.closeTerminalSession('s9')).rejects.toMatchObject({ code: 'invalid-input' });
+  });
+});
+
+// D95: an agent's job runs in a session of its own, listed beside the person's and marked as the agent's.
+describe("an agent's job", () => {
+  test('is listed as a session named by what it runs, marked with its job, and the job names its session', async () => {
+    const { box } = harness(SessionBox);
+    await box.devboxStartup();
+
+    const { processId } = await box.startSupervised('npm run dev -- --port 5173', '/workspace');
+    const sessions = await box.terminalSessions();
+
+    expect(sessions.find((session) => session.job === processId)).toMatchObject({ id: jobSessionId(processId), name: 'npm run dev -- --port 5173' });
+    expect((await box.listSupervised()).find((listed) => listed.processId === processId)?.session).toBe(jobSessionId(processId));
+  });
+
+  test('its session goes when the job is stopped, and closing its session stops the job', async () => {
+    const { box } = harness(SessionBox);
+    await box.devboxStartup();
+
+    const first = await box.startSupervised('npm run dev', '/workspace');
+    const second = await box.startSupervised('npx vitest --watch', '/workspace');
+
+    await box.stopSupervised(first.processId);
+    await box.closeTerminalSession(jobSessionId(second.processId));
+
+    expect((await box.terminalSessions()).map((session) => session.id)).toEqual([FIRST_SESSION.id]);
+    expect((await box.listSupervised()).map((listed) => listed.processId)).toEqual([]);
+  });
+
+  test("a job's session id is one tmux takes unquoted, and a long command names it in 40 characters", () => {
+    expect(jobSessionId('4F0C9A2E-77D1-4F5B-9A63-0B2F6F0E1C55')).toMatch(/^[a-z0-9][a-z0-9-]{0,31}$/u);
+    expect(jobSessionName(`node ${'a'.repeat(60)}`)).toHaveLength(40);
   });
 });

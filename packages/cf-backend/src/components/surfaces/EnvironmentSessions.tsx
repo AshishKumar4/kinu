@@ -5,7 +5,7 @@
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Effect } from "effect";
-import { DesktopIcon, FolderOpenIcon, GitBranchIcon, PlusIcon, XIcon } from "@phosphor-icons/react";
+import { DesktopIcon, FolderOpenIcon, GitBranchIcon, PlusIcon, SparkleIcon, XIcon } from "@phosphor-icons/react";
 import type { Rpc } from "@kinu.run/core";
 import { attempt, detach, renderThrownChain } from "@kinu.run/core/obs";
 import type { SessionRecord, TerminalSession } from "@kinu.run/devbox";
@@ -14,14 +14,16 @@ import type { SessionRecord, TerminalSession } from "@kinu.run/devbox";
  *  marks current while the tab is open, and nothing reads while it is closed or hidden. */
 const SESSIONS_EVERY_MS = 3_000;
 
-export type SessionTone = "working" | "ready" | "danger" | "off";
+export type SessionTone = "working" | "ready" | "danger" | "off" | "attention";
 
 /** A session's state: its dot's tone and its word. */
 export interface SessionReading { readonly tone: SessionTone; readonly word: string }
 
-/** Running, done, failed, or not open. */
+/** Waiting for an answer, running, done, failed, or not open. */
 export function sessionTone(session: TerminalSession): SessionReading {
   if (!session.open) return { tone: "off", word: "Not open" };
+
+  if (session.needsInput) return { tone: "attention", word: "Needs input" };
 
   if (session.running !== null) return { tone: "working", word: "Running" };
 
@@ -120,6 +122,11 @@ function Dot({ tone }: { tone: SessionTone }) {
   return <span aria-hidden className="p-env-dot" data-tone={tone} />;
 }
 
+/** A session an agent's job runs in (D95), beside the person's own. */
+export function AgentMark() {
+  return <span title="Started by the agent" className="inline-flex shrink-0"><SparkleIcon size={11} weight="fill" className="p-accent-mark" aria-label="Started by the agent" /></span>;
+}
+
 /** A machine's one shell, where it keeps no sessions of its own: the workspace's, a PC's. */
 export const ONE_SHELL = "shell";
 
@@ -166,7 +173,7 @@ export function SessionTabs({ label, sessions, current, desktop, onChoose, onDes
               <button type="button" role="tab" aria-selected={current === session.id} className="p-session-tab" data-session={session.id}
                 title={`${session.name}: ${word}. Double-click to rename.`} onClick={() => onChoose(session.id)}
                 onDoubleClick={() => setRenaming(session.id)}>
-                <Dot tone={tone} />{session.name}
+                <Dot tone={tone} />{session.job !== undefined && <AgentMark />}{session.name}
               </button>
               {sessions.length > 1 && (
                 <button type="button" aria-label={`Close ${session.name}`} title={`Close ${session.name}: its shell ends`} className="p-session-close"
@@ -209,6 +216,7 @@ export function SessionDetails({ session, name }: { session: TerminalSession | n
       </span>
       {session.branch !== null && <span className="hidden min-w-0 items-center gap-1.5 @[38rem]:inline-flex"><GitBranchIcon size={12} className="shrink-0" aria-hidden /><span className="truncate">{session.branch}</span></span>}
       {session.ports.map((port) => <span key={port} data-session-port className="p-term-port shrink-0">:{port}</span>)}
+      {session.needsInput && <span data-session-waiting className="shrink-0 font-medium p-warning">Waiting for input</span>}
       {detail !== null && <span className={`hidden min-w-0 truncate @[42rem]:inline ${failed ? "p-danger" : ""}`}>{detail}</span>}
     </span>
   );

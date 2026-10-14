@@ -91,6 +91,10 @@ export interface SandboxHandle {
   stopSupervisedProcess(processId: string): Promise<{ stopped: boolean }>;
   listSupervisedProcesses(): Promise<Array<{
     processId: string; pid?: number; status: string; command: string; restartable: boolean;
+    /** The last line a job wrote, while it waits at a prompt (D95). */
+    waiting?: string | undefined;
+    /** The terminal session it runs in (D95). */
+    session?: string | undefined;
   }>>;
   /** Asked before the first exposure: restarts re-expose with the stored token, so the first URL must use it too. */
   portToken(port: number, name?: string): Promise<{ urlToken: string }>;
@@ -611,8 +615,11 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
     },
     listProcesses: {
       description:
-        'List sandbox processes as JSON rows {processId,pid,status,restartable,command}. ' +
-        '`restartable:true` rows come back after a container restart.',
+        'List sandbox processes as JSON rows {processId,pid,status,restartable,command,session?,waiting?}. ' +
+        '`restartable:true` rows come back after a container restart. Each one runs in a terminal `session` the person ' +
+        'can open and type into. Status "waiting for input" means it stopped at a prompt; `waiting` is its last line. ' +
+        'Ask the person, or answer it yourself when the answer is yours to give, with exec: ' +
+        '`tmux send-keys -t \'=<session>:\' \'<answer>\' Enter`.',
       execute: async (): Promise<string | Refusal> => {
         if (!handle) return notConfigured();
 
