@@ -317,6 +317,9 @@ const READ_CHUNK_BYTES = 1024 * 1024;
  */
 const PTY_OPEN_METHOD = METHODS.ptyOpen;
 
+/** The descriptor a command's supervisor holds open for bwrap's `--json-status-fd` (the supervisor script's fd 3). */
+const SUPERVISOR_STATUS_FD = 3;
+
 const PTY_INPUT_FRAME = FRAMES.ptyInput;
 
 const PTY_RESIZE_FRAME = FRAMES.ptyResize;
@@ -1797,9 +1800,13 @@ function rawWorkingDirectory(msg, roots) {
  *
  * `source` is the environment the tier's own allow-list filters. A command
  * takes this daemon's; a terminal session takes the same with `TERM` set to
- * the terminal it was just given, which is the only difference between them.
+ * the terminal it was just given. `statusFd` is the descriptor bwrap reports
+ * its sandbox's pid on: a command's supervisor holds fd 3 open for it, and a
+ * terminal has no supervisor, so it asks for none. Asked of a terminal, bwrap
+ * wrote to a closed fd and exited 1 before the shell started (production
+ * f9c17ac7b, 2026-10-14).
  */
-async function planFromFrame(msg, command, source = process.env) {
+async function planFromFrame(msg, command, source = process.env, statusFd) {
   const frame = frameSandbox(msg);
 
   if (frame.tier === 'raw') {
@@ -1834,7 +1841,7 @@ async function planFromFrame(msg, command, source = process.env) {
     command,
     source,
     dotenv: LAUNCH_DOTENV,
-    statusFd: 3,
+    statusFd,
   });
 }
 
@@ -2279,7 +2286,7 @@ function startCommand(msg, cmd, ws, ctx) {
   const { id } = msg;
 
   const published = (async () => {
-    const plan = await planFromFrame(msg, cmd);
+    const plan = await planFromFrame(msg, cmd, process.env, SUPERVISOR_STATUS_FD);
     const checkpoints = ctx && ctx.checkpoints;
     // A command's checkpoint covers its working tree.
     const tree = checkpoints && msg.checkpoint ? plan.view.workingTree(hintedDir(msg.checkpoint) ?? plan.cwd) : null;

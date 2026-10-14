@@ -323,6 +323,7 @@ describe('DeviceTerminalHub socket ownership', () => {
     terminals.register('session-b', 'dev-a', 'workspace-b');
     terminals.attach('session-a', first.socket);
     terminals.attach('session-b', second.socket);
+    expect([await first.receive(), await second.receive()].map((frame) => JSON.parse(v.parse(v.string(), frame)))).toMatchObject([{ type: 'ready' }, { type: 'ready' }]);
 
     serving = new DeviceTerminalHub(ctx, hub);
     await expect(Promise.resolve().then(() => serving.attach('session-a', socketPeer().socket))).rejects.toMatchObject({ code: 'missing' });
