@@ -1791,6 +1791,40 @@ describe('daemon process under Bun against a local hub', () => {
     });
   });
 
+  // Production f9c17ac7b (the owner, 2026-10-14): every sandboxed terminal ended as it opened. Its plan asked bwrap
+  // to report on fd 3, which only a command's supervisor provides, so bwrap printed "Write to info_fd: Bad file
+  // descriptor" and exited 1 before the shell started.
+  test('a sandboxed terminal starts its shell, which answers what is typed into it', async () => {
+    if (process.platform !== 'linux' && process.platform !== 'darwin') return;
+    const sandbox = require('../src/sandbox.js');
+
+    if ((await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
+    const { frames } = require('../src/device-protocol.json');
+
+    await withDaemon(undefined, async ({ hub, root, reply, daemonLog }) => {
+      const session = 'rpc-sandboxpty-1';
+      const agentHome = path.join(root, 'agents', 'ws-1', 'home');
+
+      hub.socket().send(JSON.stringify({
+        id: session, method: 'ptyOpen', params: [80, 24], sandbox: { tier: 'sandboxed', agentHome, roots: [scratchDir('daemon-pty-root')] },
+      }));
+      expect((await reply(session)).error).toBeUndefined();
+      hub.socket().send(JSON.stringify({ type: frames.ptyInput, session, data: Buffer.from('echo $((19 + 23))\r').toString('base64') }));
+
+      const output = () => Buffer.concat(hub.frames.filter((f) => f.type === frames.ptyOutput && f.session === session)
+        .map((f) => Buffer.from(f.data, 'base64'))).toString('utf8');
+
+      const exited = () => hub.frames.some((f) => f.type === frames.ptyExit && f.session === session);
+      const answered = await untilHub(() => /(^|[^)+\s])42\b/m.test(output()) || exited());
+
+      expect({ output: output().slice(0, 300), exited: exited() })
+        .toMatchObject({ exited: false });
+      expect(answered).toBe(true);
+      hub.socket().send(JSON.stringify({ id: 'rpc-sandboxpty-2', method: 'cancel', params: [session] }));
+      expect((await reply('rpc-sandboxpty-2')).error, daemonLog()).toBeUndefined();
+    });
+  });
+
   /** A machine whose owner ran `kinu connect` from ~, consenting the home that holds Kinu's own directory. */
   function homeRootedMachine() {
     const machine = fs.realpathSync(scratchDir('daemon-machine'));

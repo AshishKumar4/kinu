@@ -345,6 +345,37 @@ describe('DeviceTerminalHub socket ownership', () => {
   });
 });
 
+// Production f9c17ac7b (2026-10-14): the shell's first bytes and its exit reached the hub before its pane attached
+// and were dropped (`device.terminal_output_unclaimed`), so the pane opened blank, or closed without saying why.
+describe('a device terminal before its pane attaches', () => {
+  /** What a pane was sent, in order: a frame as its parsed type, bytes as text. */
+  function pane() {
+    const seen: string[] = [];
+    const peer = socketPeer((data) => { seen.push(typeof data === 'string' ? v.parse(v.object({ type: v.string() }), JSON.parse(data)).type : Buffer.from(v.parse(v.instance(Uint8Array), data)).toString()); });
+
+    return { ...peer, seen };
+  }
+
+  test('the pane gets what the shell drew first, then its end', async () => {
+    const ctx = peerContext();
+    const terminals = new DeviceTerminalHub(ctx, new DeviceSocketHub(ctx));
+    const ended = pane();
+    const drawn = pane();
+
+    terminals.register('session-ended', 'dev-a', 'workspace-a');
+    terminals.toPane('session-ended', new Uint8Array(Buffer.from('bwrap: it could not start')));
+    terminals.paneExit('session-ended', 1);
+    terminals.attach('session-ended', ended.socket);
+    expect(ended.seen).toEqual(['ready', 'bwrap: it could not start', 'exit']);
+    expect(await ended.closed).toBe(1000);
+
+    terminals.register('session-drawn', 'dev-a', 'workspace-a');
+    terminals.toPane('session-drawn', new Uint8Array(Buffer.from('user@machine:~$ ')));
+    terminals.attach('session-drawn', drawn.socket);
+    expect(drawn.seen).toEqual(['ready', 'user@machine:~$ ']);
+  });
+});
+
 /** The hub owns the toolchain probe: its answer describes one machine over one connection, the socket attachment's lifetime. */
 describe('DeviceSocketHub toolchain probe', () => {
   const NOW = 1_700_000_000_000;
