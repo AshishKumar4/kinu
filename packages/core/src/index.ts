@@ -2636,6 +2636,11 @@ export {
 export { MCP_PRESETS, mcpPresetById, type McpPreset, type McpPresetId } from './mcp/presets';
 
 export {
+  CALLABLE_MCP_STATES, mapConnectionStatus, mcpCredentialTransport, mcpListingRefusals, McpTransitionLog, observedMcpState,
+  type McpCredentialTransport, type McpFailureKind, type McpObservedConnection, type McpObservedState, type McpToolListing,
+} from './mcp/client';
+
+export {
   validateMcpServerInput, validateMcpServerName, readAllowedTools, parseMcpHeaders, McpPresetAvailabilitySchema,
   McpServerSummarySchema, type McpConnectionStatus, type McpPresetAvailability, type McpServerInput, type McpServerSummary,
   type McpTransport,

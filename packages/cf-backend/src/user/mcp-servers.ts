@@ -1,18 +1,67 @@
 import { Cause, Effect, Exit } from 'effect';
 import {
-  nanoid, type JsonObject, type JsonValue, JsonObjectSchema, decodeJsonValue, McpProtocolFailureSchema, type UserCaller, compareCodeUnits, type McpPresetId, mcpPresetById, describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor, validateMcpServerInput, readAllowedTools, parseMcpHeaders, type McpTransport, GITHUB_MCP_PRESET, GitHubRefreshAskSchema, refreshGitHub, type GitHubRefreshAnswer, type GitHubRefreshAsk, type McpPresetAvailability, type McpServerInput, type McpServerSummary,
+  nanoid, type JsonObject, type JsonValue, JsonObjectSchema, decodeJsonValue, McpProtocolFailureSchema, type UserCaller, compareCodeUnits, type McpPresetId, mcpPresetById, describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor, validateMcpServerInput, readAllowedTools, parseMcpHeaders, type McpTransport, GITHUB_MCP_PRESET, GitHubRefreshAskSchema, refreshGitHub, type GitHubRefreshAnswer, type GitHubRefreshAsk, type McpPresetAvailability, type McpServerInput, type McpServerSummary, MCP_PRESETS, type McpPreset, CALLABLE_MCP_STATES, mapConnectionStatus, mcpCredentialTransport, mcpListingRefusals, McpTransitionLog, observedMcpState, type McpObservedState, type McpToolListing,
 } from '@kinu.run/core';
 import type { MCPClientManager } from 'agents/mcp/client';
 import type { CallToolResult } from '@modelcontextprotocol/client';
 import { DurableObjectOAuthClientProvider } from 'agents/mcp/do-oauth-client-provider';
 import { diagnostics, hold, KinuError, recording, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
-import {
-  mapConnectionStatus, mcpCredentialTransport, mcpAppCredentials, mcpAppEnvNames, listMcpPresetAvailability, mcpListingRefusals, observedMcpState, CALLABLE_MCP_STATES, McpTransitionLog, type McpObservedState, type McpToolListing,
-} from './mcp';
 import { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
 import type { UserCredentials } from './credentials';
 import type { SqlRow, UserObjectHost } from './user-host';
+
+/** The only place these `Env` names exist; messages and the deploy doc take their wording from here. */
+const MCP_APP_ENV = {
+  github: { id: 'MCP_GITHUB_CLIENT_ID', secret: 'MCP_GITHUB_CLIENT_SECRET' },
+  google: { id: 'MCP_GOOGLE_CLIENT_ID', secret: 'MCP_GOOGLE_CLIENT_SECRET' },
+} as const satisfies Partial<Record<McpPresetId, {
+  readonly id: keyof Env;
+  readonly secret: keyof Env;
+}>>;
+
+/** Literal keys so `env[k]` resolves via the optional Env fields, not the index signature. */
+type McpAppEnvKey =
+  (typeof MCP_APP_ENV)[keyof typeof MCP_APP_ENV][keyof (typeof MCP_APP_ENV)['github']];
+
+function mcpAppEnvNames(
+  preset: McpPreset,
+): { readonly clientIdEnv: McpAppEnvKey; readonly clientSecretEnv: McpAppEnvKey } | undefined {
+  if (preset.auth !== 'oauth-app') return undefined;
+
+  if (preset.id === 'github' || preset.id === 'google') {
+    const names = MCP_APP_ENV[preset.id];
+
+    return { clientIdEnv: names.id, clientSecretEnv: names.secret };
+  }
+
+  return undefined;
+}
+
+function mcpAppCredentials(
+  env: Env,
+  preset: McpPreset,
+): { clientId: string; clientSecret: string } | null {
+  const names = mcpAppEnvNames(preset);
+
+  if (!names) return null;
+
+  const clientId = env[names.clientIdEnv];
+  const clientSecret = env[names.clientSecretEnv];
+
+  // An empty string fails the same check a missing binding does.
+  if (!clientId || !clientSecret) return null;
+
+  return { clientId, clientSecret };
+}
+
+/** Non-`oauth-app` presets report `appConfigured: true`; there is nothing to configure. */
+function listMcpPresetAvailability(env: Env): McpPresetAvailability[] {
+  return MCP_PRESETS.map((preset) => ({
+    id: preset.id,
+    appConfigured: preset.auth !== 'oauth-app' || mcpAppCredentials(env, preset) !== null,
+  }));
+}
 
 /** Single per-user OAuth callback path (not the SDK's per-agent default); the full URL is
  *  built from the request origin at add-time. */
@@ -508,7 +557,8 @@ export class UserMcpServers {
     }
 
     const name = this.host.sqlx<{ name: string }>(`SELECT name FROM user_mcp_servers WHERE id = ?`, id)[0]?.name ?? id;
-    const listing = await (await import('./mcp-wire')).readUndiscoveredToolList({ name }, conn.client);
+    const { readUndiscoveredToolList } = await import('./mcp');
+    const listing = await readUndiscoveredToolList({ name }, conn.client);
     this._mcpToolLists.set(id, listing);
 
     for (const refusal of 'listed' in listing ? mcpListingRefusals({ id, name }, listing.listed) : []) {
@@ -659,7 +709,8 @@ export class UserMcpServers {
       Effect.onError((failed) => Effect.promise(async () => {
         const facts = observed();
         const cause = Cause.squash(failed);
-        const kind = Cause.hasInterruptsOnly(failed) ? 'cancelled' : (await import('./mcp-wire')).classifyMcpFailure({ cause, state: facts.state });
+        const { classifyMcpFailure } = await import('./mcp');
+        const kind = Cause.hasInterruptsOnly(failed) ? 'cancelled' : classifyMcpFailure({ cause, state: facts.state });
 
         diagnostics.failure('mcp.call_failed', toKinuError({ doing: `calling ${name} on MCP server ${serverId}`, cause, otherwise: 'unavailable' }), { ...facts, kind });
       })),
@@ -711,7 +762,9 @@ export class UserMcpServers {
     );
 
     try {
-      return await (await import('./mcp-wire')).callRenewingExpiredSession(manager, serverId, () => manager.callTool({ serverId, name, arguments: callArgs }, { signal }));
+      const { callRenewingExpiredSession } = await import('./mcp');
+
+      return await callRenewingExpiredSession(manager, serverId, () => manager.callTool({ serverId, name, arguments: callArgs }, { signal }));
     } catch (err) {
       await this.convergeMcpAuthState({ serverId, cause: err });
       throw err;
@@ -756,7 +809,9 @@ export class UserMcpServers {
    * moves to authenticating with a reconnect URL. Which failures qualify is `isMcpTransportUnauthorized`'s.
    */
   private async convergeMcpAuthState(input: { serverId: string; cause: unknown }): Promise<void> {
-    if (!(await import('./mcp-wire')).isMcpTransportUnauthorized(input)) return;
+    const { isMcpTransportUnauthorized } = await import('./mcp');
+
+    if (!isMcpTransportUnauthorized(input)) return;
     const { serverId } = input;
 
     try { await this.host.mcp.discoverIfConnected(serverId); }
