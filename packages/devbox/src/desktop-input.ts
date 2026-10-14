@@ -3,6 +3,7 @@
  * agent driving at a time. What runs on the box is decided here; the box runs it.
  */
 import * as v from 'valibot';
+import { WATCH_SHEET } from './desktop';
 
 /** How long a driver keeps the screen after its last call before another agent may take it by looking. */
 const DESKTOP_LEASE_MS = 30_000;
@@ -15,9 +16,6 @@ export const DESKTOP_ACTION_MS = 5_000;
 const KEY_HOLD_MAX_MS = 10_000;
 
 const WATCH_MAX_SECONDS = 10;
-
-/** The most frames one watch returns. */
-const WATCH_MAX_FRAMES = 8;
 
 /** The bound on the desktop check: a few times a fresh X's start, so a wedged X fails a call rather than holding every
  *  later one, and the box's rest, behind it. */
@@ -38,7 +36,7 @@ export const DesktopRequestSchema = v.object({
     v.object({ kind: v.literal('screenshot') }),
     v.object({
       kind: v.literal('watch'), seconds: v.pipe(v.number(), v.minValue(0.5), v.maxValue(WATCH_MAX_SECONDS)),
-      frames: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(WATCH_MAX_FRAMES)),
+      frames: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(WATCH_SHEET.columns.length)),
     }),
     v.object({
       kind: v.literal('click'), at: Point, button: v.picklist(['left', 'right', 'middle']),
@@ -71,20 +69,6 @@ export interface DesktopScreen {
 }
 
 const BUTTONS = { left: '1', middle: '2', right: '3' } as const;
-
-/**
- * A watch's sheet: each frame at half the screen's size, as scrot's own thumbnail, two to a row up to four frames and
- * four to a row past that, in reading order. Measured (D89): four half-size frames cost what one screenshot does and
- * read as well; eight at a third lost the screen's small text on both models.
- */
-const WATCH_PERCENT = 50;
-
-/** The sheet's columns for `frames` frames. */
-function watchColumns(frames: number): number {
-  if (frames <= 2) return frames;
-
-  return frames <= 4 ? 2 : 4;
-}
 
 /**
  * A watch, in Python because the image carries it and no image tool: its frames taken evenly over its window, the last
@@ -145,7 +129,10 @@ finally:
 
 /** A watch's run: its program and arguments. */
 export function watchArgv(action: { readonly seconds: number; readonly frames: number }): string[] {
-  return ['python3', '-c', WATCH_PY, 'devbox-watch', String(action.seconds), String(action.frames), String(WATCH_PERCENT), String(watchColumns(action.frames))];
+  // The request's frames are within the layout's table (DesktopRequestSchema); past it would be its widest row.
+  const columns = WATCH_SHEET.columns[action.frames - 1] ?? Math.max(...WATCH_SHEET.columns);
+
+  return ['python3', '-c', WATCH_PY, 'devbox-watch', String(action.seconds), String(action.frames), String(WATCH_SHEET.percent), String(columns)];
 }
 
 /** Captured with the pointer drawn in, read back and removed in the same run. */

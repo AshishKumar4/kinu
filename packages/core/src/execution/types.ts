@@ -12,6 +12,7 @@ import type { DeviceSandboxStatus } from './device-status';
 import type { FilesOwner } from '../safety/command-review';
 import type { PreparedCall } from '../safety/approval-gate';
 import type { ShellSession } from './shell-session';
+import type { DesktopScreen } from './desktop';
 
 /**
  * "No work deadline" for a mechanism that insists on a timer: the largest `setTimeout` delay; larger values
@@ -126,8 +127,9 @@ export interface ExecutorStatus {
   sandbox?: DeviceSandboxStatus;
   /** The sizes `computer.resize` offers; absent for every other environment. */
   sizes?: SandboxSizes;
-  /** The size of the desktop `computer.screenshot` shows; absent for every other environment, and a computer without one. */
-  screen?: { readonly width: number; readonly height: number };
+  /** The desktop `computer.screenshot` shows and `computer.watch` tiles; absent for every other environment, and a
+   *  computer without one. */
+  screen?: DesktopScreen;
   /** Each live machine's segment under `/pc`, the name its `<name>://` references take; the device fleet only. */
   mounts?: string[];
 }

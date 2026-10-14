@@ -18,7 +18,7 @@ import { shellQuote } from '../utils/shell';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { parseInput, type JsonValue } from '../utils/json';
 import { direntType } from '../vfs/dirent';
-import { desktopTools, type DesktopAnswer, type DesktopRequest } from './desktop';
+import { desktopTools, type DesktopAnswer, type DesktopRequest, type DesktopScreen } from './desktop';
 
 /** The container's working directory and default cwd; declared here because core must not depend on @kinu.run/devbox. */
 export const WORKSPACE_BACKUP_DIR = '/workspace';
@@ -273,9 +273,9 @@ export interface SandboxExecutorOptions {
   readonly sizes?: SandboxSizes;
   /** Where this agent's named shells keep their state; without it a name is refused. */
   readonly shells?: MachineShells;
-  /** The desktop: this agent, as the box tells its drivers apart, and the screen's size, which the box's own constant
-   *  sets; without it the computer offers no desktop. */
-  readonly desktop?: { readonly driver: string; readonly screen: { readonly width: number; readonly height: number } };
+  /** The desktop: this agent, as the box tells its drivers apart, and the screen as the box's own constants set it;
+   *  without it the computer offers no desktop. */
+  readonly desktop?: { readonly driver: string; readonly screen: DesktopScreen };
 }
 
 /** Pass no handle for a "not configured" stub. */
@@ -632,7 +632,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
   };
 
   if (desktop !== undefined) {
-    Object.assign(tools, desktopTools({ box: handle && ((request) => touch(() => handle.desktop(request))), driver: desktop.driver, notConfigured }));
+    Object.assign(tools, desktopTools({ box: handle && ((request) => touch(() => handle.desktop(request))), driver: desktop.driver, frames: desktop.screen.sheet.columns.length, notConfigured }));
   }
 
   if (sizes !== undefined) {
