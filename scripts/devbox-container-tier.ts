@@ -787,10 +787,18 @@ async function main(): Promise<void> {
       });
 
     } else {
-    // `--disk`: only the disk chain's contracts, with no desktop and so no browser on this host.
-    if (!process.argv.includes('--disk')) await productContracts();
+      const diskContracts = async () => {
+        for (const kind of DISK_CONTRACTS) await step(`disk-${kind}`, () => call(`/disk-contract?kind=${kind}`, Json, {}, `${box}-disk`));
+      };
 
-    for (const kind of DISK_CONTRACTS) await step(`disk-${kind}`, () => call(`/disk-contract?kind=${kind}`, Json, {}, `${box}-disk`));
+      // At once, on boxes of their own, each store prefix its box's: on armada 2026-10-13 the product's took about
+      // 110 s and the disk chain's 131 s, one after the other. Both end before a failure is reported, so the
+      // teardown never meets a contract still calling the fixture. `--disk`: the disk chain's alone, with no desktop
+      // and so no browser on this host.
+      const ended = await Promise.allSettled([process.argv.includes('--disk') ? Promise.resolve() : productContracts(), diskContracts()]);
+      const failed = ended.find((outcome) => outcome.status === 'rejected');
+
+      if (failed !== undefined) throw failed.reason;
     }
   } catch (cause) {
     steps.push({ contract: 'failure', ms: 0, detail: String(cause) });

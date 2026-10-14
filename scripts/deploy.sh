@@ -1109,8 +1109,8 @@ fi
 # often as the product calls a wake loop, an alarm with nothing to watch. Each
 # is a red of this deploy whatever its tests said, in the report under
 # `telemetry` (L18); so is telemetry it cannot read, and telemetry whose counts
-# still move after an hour of re-reads (it re-reads every ten minutes until
-# two reads agree, since rows land late).
+# still move after an hour of re-reads (it re-reads every two minutes until
+# its findings have held still for ten, since rows land late: `SETTLE_HOLD_MS`).
 if [ "$KINU_ENV" = "staging" ] && [ "${DEPLOY_PUBLISHED:-0}" = "1" ] && [ -n "$KINU_VERSION" ]; then
   echo ""
   echo -e "${BOLD}Step 5b: What version $KINU_VERSION did on staging${NC}"

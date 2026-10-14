@@ -185,6 +185,9 @@ export interface Gate {
   readonly seconds: number;
   /** A hosted-measured broad suite's file partitions; the canonical local row still governs the whole suite. */
   readonly ciShards?: number;
+  /** The commands CI runs in place of `run`, one task each, which between them run what `run` runs, for a row whose
+   *  own runner owns its file order; the canonical local row still governs the whole suite. */
+  readonly ciParts?: readonly string[];
   /** The defect class this makes impossible. Not what it "checks". */
   readonly catches: string;
   /** What it does NOT catch. A gate whose blind spot nobody wrote down gets
@@ -1432,6 +1435,9 @@ export const LADDER: readonly Gate[] = [
     run: 'bun run test:cli',
     label: 'Full production CLI suite',
     tier: 'ci',
+    // Armada 2026-10-13/14, 209 CI runs: 257 s median, 494 s p95. Its stages on armada 2026-10-14: the eight isolated
+    // files 83 s, the subprocess-heavy four 47 s, the other 66 at parallel=4 127 s; so two CI tasks of about 130 s.
+    ciParts: ['bun scripts/test-cli.ts --part=serial', 'bun scripts/test-cli.ts --part=parallel'],
     seconds: 41,
     catches: 'the production CLI end to end, including the PTY and subprocess paths. Every '
       + 'file it claims runs in no other tier. The runner derives all files in the directory, '
@@ -1682,6 +1688,9 @@ export const LADDER: readonly Gate[] = [
     // Measured alone 2026-09-27: 131.47 s wall, 47.64 s CPU, 2836 MiB peak Pss, start load 1.88.
     // The glob admits new suites; the exclusions keep the other two UI rows disjoint.
     // The unsplit family ran 487 s under load on 2026-09-26 against its 480 s deadline.
+    // Armada 2026-10-13/14, 127 green CI runs: 605 s median, 752 s p90, the longest row of the tier in most of them;
+    // its 28 files' timings sum to 700 s, so four timed shards of about 175 s each.
+    ciShards: 4,
     seconds: 131.47,
     catches: 'the six UI gates\' own decision logic, including the one that would have '
       + 'caught `--radius` being undefined at `:root` while 191 `rounded-*` sites '
@@ -1891,7 +1900,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived' },
   },
   {
-    run: 'bun run test:workerd:cf',
+    run: 'bun run test:workerd:cf-main',
     label: 'Durable Object semantics under workerd',
     tier: 'ci',
     // Measured 2026-09-16 on the 24-thread workstation beside `bun test
@@ -1914,9 +1923,12 @@ export const LADDER: readonly Gate[] = [
     // on 2026-10-09 (armada medium, 12 GiB) the 49 files peaked at 7.2 GiB of
     // workerd and 10.9 GiB in all, and with the workspace agent in its own
     // isolate 9.3 GiB of workerd by the 28th file, past the container. So the
-    // row is two runs, two Miniflares: the four suites that grew workerd most
-    // (public-surface, two-turn, hire, slate-durability) live under
-    // `tests/workerd/wide/` and run second.
+    // four suites that grew workerd most (public-surface, two-turn, hire,
+    // slate-durability) live under `tests/workerd/wide/`, in the row below this one.
+    // Armada 2026-10-14: this row with wide/ in it took 532 s median and 613 s p90 in CI, the second-longest row;
+    // 354 s main then 234 s wide, run apart. Of main's 253 s of tests n-kill took 135 s, so it lives in
+    // `tests/workerd/long/` now; this row then measured 256 s alone on armada (`gate-cost.json`). Its script took a
+    // name of its own then, so armada's timings for the old one, which still held wide/, weigh no plan of this one.
     seconds: 45,
     catches: 'Durable Object semantics no bun test can express, executed inside real '
       + 'workerd (1.20260811.1 — the pool\'s own nested copy, not the 1.20260601.1 the '
@@ -1955,6 +1967,18 @@ export const LADDER: readonly Gate[] = [
     inputs: workersPool('packages/cf-backend'),
   },
   {
+    run: 'bun run test:workerd:cf-wide',
+    label: 'Durable Object semantics under workerd, the wide suites',
+    tier: 'ci',
+    // The `tests/workerd/wide/` suites, in a Miniflare of their own (see the row above): armada 2026-10-14, 195 to
+    // 234 s, five files, 83 tests, two-turn 63 s and hire 47 s of it.
+    seconds: 234,
+    catches: 'the same defect classes as the cf-backend workerd row, on the suites that load the most into one '
+      + 'workerd: the public surface, two turns, a hire and slate durability.',
+    blind: 'the same as the cf-backend workerd row.',
+    inputs: workersPool('packages/cf-backend'),
+  },
+  {
     run: 'bun run test:workerd:cf-long',
     label: 'Durable Object semantics under workerd, the long suites',
     tier: 'ci',
@@ -1966,7 +1990,8 @@ export const LADDER: readonly Gate[] = [
     // measured 178 s on 2026-09-18 at load 6-8. Same runner, same config, same `include`; the split is by path
     // filter so no file can be in both halves or in neither — `bun run
     // test:workerd` still runs every workerd row in sequence for a hand
-    // run, and ladder.test.ts holds the rows to a partition of it.
+    // run, and ladder.test.ts holds the rows to a partition of it. n-kill (135 s of tests on armada, 2026-10-14)
+    // joined it from the first row; this row took 90 to 109 s in CI before it, and 261 s alone on armada after.
     seconds: 183,
     catches: 'the same defect classes as the row above, on the suites that hold a Durable '
       + 'Object across a real wake, a retention sweep, a spend aggregate over 20,000 rows, '
@@ -2144,8 +2169,9 @@ export const LADDER: readonly Gate[] = [
       + 'purpose, so every gate beside it would be measured on a machine this one is '
       + 'deliberately starving: the five-suite UI batch is 198.5s solo against a 480s '
       + 'per-gate deadline, and a browser gate that times out under someone else\'s load '
-      + 'fails for a reason unrelated to the change under test. CI on armada gives each of its six runs '
-      + 'a container of its own, beside the source rows; its exact-SHA verdict is part of what a '
+      + 'fails for a reason unrelated to the change under test. CI on armada splits each of its six runs '
+      + 'into timed parts of the suite (`HAMMER_PARTS`), each part on a container of its own beside its own '
+      + 'burners and the source rows; its exact-SHA verdict is part of what a '
       + 'deploy and a promotion need (L25).',
     tier: 'ci',
     // 403.96 s measured 2026-09-30 (24 threads, 12 burners): six runs of 61.9 to
@@ -2173,7 +2199,8 @@ export const LADDER: readonly Gate[] = [
       + 'Which four files bun schedules together is bun\'s decision, so an interleaving it '
       + 'never picks is unmeasured — measured, a deliberately race-prone fixture PAIR passed '
       + 'because the two files were never co-scheduled, while an intermittently failing '
-      + 'single file was caught on run 2 of 2.',
+      + 'single file was caught on run 2 of 2. In CI two files in different parts of a run are never '
+      + 'co-scheduled at all; `bun run gate:hammer` contends the whole suite in one process.',
     inputs: { kind: 'live', why: 'measures the Cloudflare suite under deliberate CPU contention; its subject is the box\'s load at the moment it runs.' },
   },
   {
@@ -2437,11 +2464,12 @@ export const LADDER: readonly Gate[] = [
     evidence: 'first-run',
     phase: 'post-publish',
     deadline: {
-      seconds: 1_800,
-      why: 'covers the deployed episodes, on the scripted model over a socket. '
-        + 'Two attach real daemons; one drives Chrome against the deployed app. '
-        + 'The six-case deployed wall is unmeasured. This configured bound stays unchanged '
-        + 'until a deployed run measures it and the cost in LADDER.',
+      seconds: 720,
+      why: 'must end a hang before armada does. Armada kills a task at 1800 s (`.armada.json`), so a silence bound '
+        + 'of 1800 s never fired: in 10 of the 21 deploy waves from 2026-10-08 to 2026-10-14 armada killed this row '
+        + 'at about 1805 s, "exited 124 and reported no row", the tier\'s `stopped` trap never ran, and nothing named '
+        + 'the case that hung. Every deployed run that ended took 243 to 644 s in all (green 276 to 321 s), so none '
+        + 'was silent for 720 s; a hang is now ended about 16 minutes in, with the case files that never reported.',
     },
     alone: 'runs AFTER the upload, in the wave of the deployment\'s tiers and the local source gates '
       + '(L18): its subject is the DEPLOYED build rather than this tree. It attaches real machines to '
@@ -2455,8 +2483,7 @@ export const LADDER: readonly Gate[] = [
     // 3.84s and took 4.07s wall time on the 24-thread box.
     // `bun test tests/first-run/wiring.test.ts` passed 14 tests in 253ms
     // and took 0.33s wall time. These runs measure collection and predicates.
-    // The deployed six-case wall is unmeasured. Its deadline remains 1800s.
-    // The declared deployed cost below remains unchanged.
+    // Deployed on armada 2026-10-08 to 2026-10-14: 276 to 321 s green; the declared cost below is unchanged.
     seconds: 197,
     catches: 'a product defect a USER meets on the build that just deployed, which every other '
       + 'gate in this ladder is structurally unable to see: they all run BEFORE the upload, on '
@@ -3028,16 +3055,17 @@ export function tierRun(tier: Tier): Gate[] {
 /** Six independent contended runs: each runner keeps the same suite and its own burners. */
 export const HAMMER_REPEATS = 6;
 
-/** A broad slow Bun row can be distributed by its declared files, with one source of targets for proof and execution. */
-export function splitCIGate(gate: Gate, tracked: readonly string[], timings: Readonly<Record<string, number>>): Gate[] {
-  if (gate.ciShards === undefined) return [gate];
-  const files = claims(gate.run, tracked);
-  const first = files[0];
-  const narrowed = first === undefined ? undefined : narrowedTo(gate.run, first, tracked);
+/** The parts each contended run is split into, each on a container of its own beside its own burners. Armada
+ *  2026-10-13/14, 209 CI runs: the slowest of the six whole runs took 384 s median and 620 s p90, past the tier's
+ *  8-minute wall in a quarter of them. */
+export const HAMMER_PARTS = 2;
 
-  if (narrowed === undefined || narrowed[0] !== 'bun' || narrowed[1] !== 'test') throw new Error('CI file splitting requires a populated Bun row: ' + gate.run);
+/** The suite the hammer contends, by its row's label. */
+export const HAMMER_ROW_LABEL = 'Cloudflare backend and conformance suite';
 
-  const bins: { files: string[]; weight: number }[] = Array.from({ length: gate.ciShards }, () => ({ files: [], weight: 0 }));
+/** A Bun row's files dealt into `count` bins, heaviest file first into the lightest bin, by their measured timings. */
+function timedBins(files: readonly string[], timings: Readonly<Record<string, number>>, count: number): string[][] {
+  const bins: { files: string[]; weight: number }[] = Array.from({ length: count }, () => ({ files: [], weight: 0 }));
 
   for (const file of [...files].sort((left, right) => (timings[right] ?? 1) - (timings[left] ?? 1) || left.localeCompare(right))) {
     const bin = bins.reduce((least, candidate) => candidate.weight < least.weight ? candidate : least);
@@ -3046,27 +3074,87 @@ export function splitCIGate(gate: Gate, tracked: readonly string[], timings: Rea
     bin.weight += timings[file] ?? 1;
   }
 
-  return bins.filter((bin) => bin.files.length > 0).map((bin, index) => ({
-    ...gate, run: [...narrowed.slice(0, -1), ...bin.files].join(' '), label: gate.label + ' (' + String(index + 1) + '/' + String(bins.length) + ')',
+  return bins.filter((bin) => bin.files.length > 0).map((bin) => bin.files);
+}
+
+/** A Bun row's own command over `files` in place of its selectors: its flags kept, the files named. */
+export function runOverFiles(run: string, files: readonly string[], tracked: readonly string[]): string[] {
+  const first = files[0];
+  const narrowed = first === undefined ? undefined : narrowedTo(run, first, tracked);
+
+  if (narrowed === undefined || narrowed[0] !== 'bun' || narrowed[1] !== 'test') throw new Error('CI file splitting requires a populated Bun row: ' + run);
+
+  return [...narrowed.slice(0, -1), ...files];
+}
+
+/** A broad slow Bun row can be distributed by its declared files, with one source of targets for proof and execution. */
+export function splitCIGate(gate: Gate, tracked: readonly string[], timings: Readonly<Record<string, number>>): Gate[] {
+  if (gate.ciShards === undefined) return [gate];
+  const bins = timedBins(claims(gate.run, tracked), timings, gate.ciShards);
+
+  return bins.map((files, index) => ({
+    ...gate, run: runOverFiles(gate.run, files, tracked).join(' '), label: gate.label + ' (' + String(index + 1) + '/' + String(bins.length) + ')',
   }));
 }
 
-/** The executable CI population: split file suites and all six independent hammer runs. */
+/** The contended runs as CI units: each of the six runs split into timed parts of the suite, each part naming its
+ *  files, so the parts of one run cover the suite once. */
+function hammerUnits(gate: Gate, seconds: number, tracked: readonly string[], costs: HostedCosts): { readonly gate: Gate; readonly seconds: number }[] {
+  const suite = LADDER.find((row) => row.label === HAMMER_ROW_LABEL);
+
+  if (suite === undefined) throw new Error('hammer: no ladder row is labelled ' + JSON.stringify(HAMMER_ROW_LABEL));
+  const parts = timedBins(claims(suite.run, tracked), costs.files, HAMMER_PARTS);
+  const weights = parts.map((files) => files.reduce((sum, file) => sum + (costs.files[file] ?? 1), 0));
+  const total = weights.reduce((sum, weight) => sum + weight, 0);
+
+  return Array.from({ length: HAMMER_REPEATS }, (_, index) => parts.map((files, part) => {
+    const label = gate.label + ' run ' + String(index + 1) + ' (' + String(part + 1) + '/' + String(parts.length) + ')';
+
+    return {
+      gate: { ...gate, run: ['bun', 'scripts/hammer.ts', '--run=' + String(index + 1), ...files].join(' '), label },
+      seconds: costs.seconds[label] ?? seconds / HAMMER_REPEATS * ((weights[part] ?? 0) / total),
+    };
+  })).flat();
+}
+
+/** The executable CI population: split file suites and the parts of all six independent hammer runs. */
 export function ciUnits(costs: HostedCosts = readHostedCosts()): { readonly gate: Gate; readonly seconds: number }[] {
   const tracked = trackedTestFiles();
 
   return tierRun('ci').flatMap((gate) => {
     const seconds = costs.seconds[gate.label] ?? gate.seconds;
 
-    if (gate.phase === 'hammer') return Array.from({ length: HAMMER_REPEATS }, (_, index) => ({
-      gate: { ...gate, run: 'bun scripts/hammer.ts --run=' + String(index + 1), label: gate.label + ' run ' + String(index + 1) }, seconds: costs.seconds[gate.label + ' run ' + String(index + 1)] ?? seconds / HAMMER_REPEATS,
-    }));
+    if (gate.phase === 'hammer') return hammerUnits(gate, seconds, tracked, costs);
+
+    if (gate.ciParts !== undefined) {
+      const parts = gate.ciParts;
+
+      return parts.map((run, index) => {
+        const label = gate.label + ' (' + String(index + 1) + '/' + String(parts.length) + ')';
+
+        return { gate: { ...gate, run, label }, seconds: costs.seconds[label] ?? seconds / parts.length };
+      });
+    }
+
     const split = splitCIGate(gate, tracked, costs.files);
-    const weights = split.map((part) => claims(part.run, tracked).reduce((sum, file) => sum + (costs.files[file] ?? 1), 0));
+    const files = split.map((part) => claims(part.run, tracked));
+    const weights = files.map((each) => each.reduce((sum, file) => sum + (costs.files[file] ?? 1), 0));
     const total = weights.reduce((sum, weight) => sum + weight, 0);
 
-    return split.map((part, index) => ({ gate: part, seconds: costs.seconds[part.label] ?? seconds * (split.length === 1 ? 1 : (weights[index] ?? 0) / total) }));
+    // A shard whose command no run has measured yet, as after a file moves between bins, is weighed by its files'
+    // own times (Bun's timings, in ms), which outlast the reshuffle; the row's share of its seconds is the last resort.
+    return split.map((part, index) => ({
+      gate: part,
+      seconds: costs.seconds[part.label]
+        ?? (split.length > 1 ? timedSeconds(files[index] ?? [], costs.files) : undefined)
+        ?? seconds * (split.length === 1 ? 1 : (weights[index] ?? 0) / total),
+    }));
   });
+}
+
+/** The seconds a sequential run of `files` takes by their measured timings, or undefined while any is unmeasured. */
+function timedSeconds(files: readonly string[], timings: Readonly<Record<string, number>>): number | undefined {
+  return files.every((file) => timings[file] !== undefined) ? files.reduce((sum, file) => sum + (timings[file] ?? 0), 0) / 1000 : undefined;
 }
 
 /** A row a task must report, with the files a split suite must time, which armada holds each task to. */

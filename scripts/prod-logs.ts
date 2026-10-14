@@ -77,6 +77,8 @@ import { readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import * as v from 'valibot';
 import { ALERT_THRESHOLDS, findWakeLoops, type StartupHour, type WakeLoop } from '@kinu.run/core/analytics';
+import { KinuError, classifyErrorCode } from '@kinu.run/core/obs';
+import { codeForStatus } from '../packages/core/src/providers/util';
 import { PLATFORM_CATALOG } from '../packages/core/src/platform-catalog';
 import { recordStep } from './deploy-report';
 import { parseJsonc } from './jsonc';
@@ -385,7 +387,8 @@ export class Telemetry {
 
     const answer = await response.text();
 
-    if (!response.ok) throw new Error(`telemetry query answered ${response.status}: ${answer.slice(0, 300)}`);
+    // Classified as any HTTP answer is: a 5xx or a 429 is `unavailable`, the API refusing for its own reasons.
+    if (!response.ok) throw new KinuError(codeForStatus(response.status) ?? 'io', `telemetry query answered ${response.status}: ${answer.slice(0, 300)}`);
 
     return answer;
   }
@@ -1219,8 +1222,18 @@ async function perMinute(t: Telemetry, filters: readonly Filter[]): Promise<Obje
   return rows.map((row) => ({ object: row.groups[0] ?? '', minute: row.at, count: row.count }));
 }
 
-/** A read is settled when two reads this far apart agree. */
-export const SETTLE_GAP_MS = 10 * MINUTE_MS;
+/**
+ * A read is settled when it has held still this long: every read across it agrees. Measured on staging 2026-10-14,
+ * 03:15-04:34Z, a fixed window's per-minute counts read every minute across deploy 7591e6fec's wave: of 58,950 rows
+ * that landed after the first read, 98.4% were in the first read after their minute ended, 99.96% within 3 min and all
+ * but 2 within 8.5 min; those 2 landed 37 to 41 min late, past any hold a deploy waits out, as 2026-10-08's 22 to 151
+ * min rows did (see `SETTLE_CAP_MS`). Ten minutes covers every other row.
+ */
+export const SETTLE_HOLD_MS = 10 * MINUTE_MS;
+
+/** How often a settling read is taken: the hold starts again at the first read after the counts stop moving, rather
+ *  than at the next ten-minute mark. */
+export const SETTLE_POLL_MS = 2 * MINUTE_MS;
 
 /**
  * How long a reader re-reads before it gives up and answers "unsettled": a bound on the measurement, not on what it
@@ -1237,27 +1250,56 @@ export type SettledRead<T> =
   | { readonly settled: false; readonly last: T; readonly reads: number; readonly lateRows: number };
 
 /**
- * Reads until two reads `gapMs` apart give the same `fingerprint`, or until `capMs` has passed since the first. `rows`
- * counts what the window held at each read, so the answer names how many rows landed after the first read.
+ * Reads every `pollMs` until the `fingerprint` has held still for `holdMs`, every read across it agreeing, or until
+ * `capMs` has passed since the first. `rows` counts what the window held at each read, so the answer names how many
+ * rows landed after the first read. A read the API refuses as `unavailable` says nothing of the window, so the next
+ * poll reads again: the 2026-10-14 measurement's API answered 500 to 12 of its 80 reads. Only a cap reached with no
+ * answer at all fails on it; any other failure, a refused token, a query the API rejects or an answer that does not
+ * parse, fails at once.
  */
 export async function settledRead<T>(at: {
   readonly read: () => Promise<T>; readonly fingerprint: (value: T) => string; readonly rows: (value: T) => number;
-  readonly now: () => number; readonly sleep: (ms: number) => Promise<void>; readonly gapMs: number; readonly capMs: number;
+  readonly now: () => number; readonly sleep: (ms: number) => Promise<void>;
+  readonly pollMs: number; readonly holdMs: number; readonly capMs: number;
 }): Promise<SettledRead<T>> {
   const started = at.now();
-  let last = await at.read();
+  const capped = (): boolean => at.now() - started + at.pollMs > at.capMs;
+
+  const answer = async (): Promise<{ readonly value: T } | { readonly cause: unknown }> => {
+    try {
+      return { value: await at.read() };
+    } catch (cause) {
+      if (classifyErrorCode({ cause }) !== 'unavailable') throw cause;
+
+      return { cause };
+    }
+  };
+
+  let first = await answer();
+
+  while (!('value' in first)) {
+    if (capped()) throw first.cause;
+    await at.sleep(at.pollMs);
+    first = await answer();
+  }
+
+  let last = first.value;
   const firstRows = at.rows(last);
   let reads = 1;
+  let stillSince = at.now();
 
   for (;;) {
-    if (at.now() - started + at.gapMs > at.capMs) return { settled: false, last, reads, lateRows: at.rows(last) - firstRows };
-    await at.sleep(at.gapMs);
-    const next = await at.read();
-    reads += 1;
-    const held = at.fingerprint(next) === at.fingerprint(last);
-    last = next;
+    if (capped()) return { settled: false, last, reads, lateRows: at.rows(last) - firstRows };
+    await at.sleep(at.pollMs);
+    const next = await answer();
 
-    if (held) return { settled: true, value: next, reads, lateRows: at.rows(next) - firstRows };
+    if (!('value' in next)) continue;
+    reads += 1;
+
+    if (at.fingerprint(next.value) !== at.fingerprint(last)) stillSince = at.now();
+    last = next.value;
+
+    if (at.now() - stillSince >= at.holdMs) return { settled: true, value: last, reads, lateRows: at.rows(last) - firstRows };
   }
 }
 
@@ -1278,7 +1320,7 @@ async function versionCommand(args: Args): Promise<number> {
       read: async () => ({ read: await versionRead(t, subject), rows: await windowRows(t, subject) }),
       fingerprint: ({ read: value }) => JSON.stringify([versionFindings(value), value.effects.terminal]),
       rows: ({ rows }) => rows,
-      now: () => Date.now(), sleep: (ms) => Bun.sleep(ms), gapMs: SETTLE_GAP_MS, capMs: SETTLE_CAP_MS,
+      now: () => Date.now(), sleep: (ms) => Bun.sleep(ms), pollMs: SETTLE_POLL_MS, holdMs: SETTLE_HOLD_MS, capMs: SETTLE_CAP_MS,
     });
 
     sampling = t.sampling;
@@ -1290,7 +1332,8 @@ async function versionCommand(args: Args): Promise<number> {
       settledNote = `settled: ${late}`;
     } else {
       findings = [{ what: 'the telemetry', finding: `${args.worker}'s telemetry for version ${subject} is unsettled: its counts still moved after `
-        + `${String(SETTLE_CAP_MS / MINUTE_MS)} min of reads ${String(SETTLE_GAP_MS / MINUTE_MS)} min apart (${late}), so it gives no verdict` }];
+        + `${String(SETTLE_CAP_MS / MINUTE_MS)} min of reads ${String(SETTLE_POLL_MS / MINUTE_MS)} min apart, never still for `
+        + `${String(SETTLE_HOLD_MS / MINUTE_MS)} min (${late}), so it gives no verdict` }];
     }
   } catch (cause) {
     findings = [{ what: 'the telemetry', finding: `${args.worker}'s telemetry for version ${subject} could not be read: ${cause instanceof Error ? cause.message : String(cause)}` }];
