@@ -4832,9 +4832,12 @@ goes on, as D92 required. D93's shown-name file and its prompt rewrite are gone:
 name, and bash's own `\h` prints it. The container tier's `box-name` step reads, on a real box, the kernel's name, the
 prompt, how long a lookup of the name takes and what it answers, getfqdn, and whether `python3 -m http.server` serves.
 
-The same image adds python3-pil, librsvg2-bin and hsetroot (D88's wallpaper and the desktop's watch sheet): D88 wrote an
-X11 client and a PNG codec into the wallpaper to avoid a new tools tarball. Pillow now composes the picture,
-rsvg-convert draws the mark from its SVG, and hsetroot sets the root, which the server keeps. The wallpaper's Chromium,
+The same image adds python3-pil, librsvg2-bin and xwallpaper (D88's wallpaper and the desktop's watch sheet): D88 wrote
+an X11 client and a PNG codec into the wallpaper to avoid a new tools tarball. Pillow now composes the picture,
+rsvg-convert draws the mark from its SVG, and xwallpaper sets the root, which the server keeps. hsetroot was tried
+first and painted black: it finds the screen through Xinerama, which KasmVNC lacks (and `+xinerama` is refused), so
+every image mode drew nothing while `-solid` worked; measured on a real box, `xwallpaper --zoom` (RandR) and
+`feh --no-xinerama` both put the ground (16, 14, 12) and the glow (42, 33, 24) on the root. The wallpaper's Chromium,
 and its unmeasured 60-second bound, are gone.
 
 ## Open

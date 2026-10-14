@@ -1,7 +1,8 @@
 /**
  * The desktop's wallpaper (D88, D96): a Python program the desktop's start writes into the box and runs once per X
  * server. Pillow composes the picture at the screen's own size, rsvg-convert draws the mark from the SVG the box's
- * class passes, and hsetroot sets it on the root, where the server keeps it.
+ * class passes, and xwallpaper sets it on the root, where the server keeps it. KasmVNC has RandR and no Xinerama:
+ * hsetroot, which finds the screen through Xinerama, painted black.
  */
 export const WALLPAPER_PY = String.raw`"""The desktop's wallpaper: the ground, the accent's glow from the foot, the mark.
 
@@ -59,7 +60,7 @@ def main():
     width, height = (int(n) for n in subprocess.run(['xdotool', 'getdisplaygeometry'], check=True, capture_output=True, text=True).stdout.split())
     out = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), 'wallpaper.png')
     picture(width, height, top, foot, glow, panel, svg).save(out)
-    subprocess.run(['hsetroot', '-cover', out], check=True)
+    subprocess.run(['xwallpaper', '--zoom', out], check=True)
 
 
 if __name__ == '__main__':
