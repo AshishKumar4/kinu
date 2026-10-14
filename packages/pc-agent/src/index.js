@@ -865,8 +865,25 @@ function readRangeBytes(file, offset, length) {
   }
 }
 
-function listEntry(entry) {
-  return { name: entry.name, type: entry.isDirectory() ? 'dir' : 'file' };
+/**
+ * One entry as a listing names it, with the size and modification time a `statPath` of it answers (links followed),
+ * so a reader of a large directory needs no stat per entry. An entry gone since the read, a broken or looping link, or
+ * one in a directory this user may list but not search carries its name alone.
+ */
+function listEntry(dir, entry) {
+  const named = { name: entry.name, type: entry.isDirectory() ? 'dir' : 'file' };
+  const stat = entryStat(path.join(dir, entry.name));
+
+  return stat === undefined ? named : { ...named, size: stat.size, mtimeMs: stat.mtimeMs };
+}
+
+function entryStat(file) {
+  try {
+    return fs.statSync(file, { throwIfNoEntry: false });
+  } catch (err) {
+    if (err && (err.code === 'EACCES' || err.code === 'ELOOP')) return undefined;
+    throw err;
+  }
 }
 
 /**
@@ -882,7 +899,7 @@ function listFilesAnswer(msg) {
   const dir = confinedDeviceViewPath(viewFromFrame(msg), requested, 'read');
   const page = parseRecord(params[1] ?? {}, 'listFiles options must be an object');
 
-  if (page.limit === undefined) return fs.readdirSync(dir, { withFileTypes: true }).map(listEntry);
+  if (page.limit === undefined) return fs.readdirSync(dir, { withFileTypes: true }).map((entry) => listEntry(dir, entry));
   const offset = page.offset ?? 0;
 
   if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(page.limit) || page.limit <= 0) {
@@ -908,7 +925,7 @@ function listPage(dir, offset, limit) {
       if (index < offset) continue;
 
       if (entries.length === limit) return { entries, next: index };
-      entries.push(listEntry(entry));
+      entries.push(listEntry(dir, entry));
     }
   } finally {
     opened.closeSync();
