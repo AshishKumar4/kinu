@@ -28,9 +28,9 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { evalWorkspaceName, scratchDir } from '@kinu.run/test-utils';
 import { beatWorkspace } from '../evals/src/session';
+import { signedInPage } from '../evals/src/browser';
 import { createWorkspace, deleteWorkspace, listWorkspaces, webHeaders, type PublicWebIdentity } from '../evals/src/workspace-roster';
 import { holdForRelease } from '../packages/test-utils/src/scratch';
-import { DESKTOP } from './live-app-harness';
 import { DESKTOP_COLOURS, DESKTOP_PANEL, DESKTOP_SIZE } from '../packages/devbox/src/desktop';
 import {
   AGENT_PLAN_ASK, FLOW_MEMORY_NOTE, FLOW_SHELL_PROBE, FLOW_SLATE, MEMORY_ASK, SLATE_ASK, STORM_ASK, STORM_DIR, STORM_FILES, STORM_SEED_ASK, WRITE_FILE_ASK,
@@ -41,60 +41,13 @@ import {
 } from './flows-script';
 import { FALLBACK_ANSWER } from './scripted-protocol';
 import {
-  documentScriptFailures, explained, FAILED_APP_SCRIPT, recordScriptFailures, SCRIPT_FAILED, type ScriptFailure,
+  documentScriptFailures, explained, FAILED_APP_SCRIPT, SCRIPT_FAILED, type ScriptFailure,
 } from './script-failures';
 
 export interface FlowTarget {
   readonly browser: Browser;
   readonly origin: string;
   readonly identity: PublicWebIdentity;
-}
-
-/** A page at the desktop viewport with no clock of its own, acting as
- *  `identity` on every request it makes, the socket upgrades included. */
-export async function signedInPage(browser: Browser, identity: PublicWebIdentity): Promise<Page> {
-  const page = await browser.newPage();
-  const headers = webHeaders(identity);
-
-  page.setDefaultTimeout(0);
-  page.setDefaultNavigationTimeout(0);
-  await page.setViewport(DESKTOP);
-
-  if (Object.keys(headers).length > 0) await page.setExtraHTTPHeaders(headers);
-
-  await recordDeadEnds(page);
-
-  return page;
-}
-
-/** Records, on `window`, every turn the workspace's socket reports ended in
- *  error (the frame the chat renders its error from), which ends a page's
- *  chances for good. Installed before each document's scripts run, so the
- *  socket the app opens is the recorded one. Each socket is a plain WebSocket:
- *  the desktop's client refuses one whose prototype is not WebSocket's
- *  ("Raw channel missing property: send", staging 2026-10-13). */
-const RECORD_TURN_ERRORS = `(() => {
-  window.__turnErrors = [];
-  window.WebSocket = new Proxy(window.WebSocket, {
-    construct(Socket, args) {
-      const socket = Reflect.construct(Socket, args);
-      socket.addEventListener('message', (event) => {
-        if (typeof event.data !== 'string' || !event.data.includes('"error":true')) return;
-        try {
-          const frame = JSON.parse(event.data);
-          if (frame.type === 'cf_agent_use_chat_response' && frame.error === true) window.__turnErrors.push(String(frame.body).slice(0, 300));
-        } catch {}
-      });
-      return socket;
-    },
-  });
-})()`;
-
-/** Records what ends `page`'s chances for good on every document it loads: each app script that failed to load
- *  (script-failures.ts), and each turn its socket reports ended in error. */
-export async function recordDeadEnds(page: Page): Promise<void> {
-  await recordScriptFailures(page);
-  await page.evaluateOnNewDocument(RECORD_TURN_ERRORS);
 }
 
 /** The error text Chrome fails the requests in flight with when a host network interface comes or goes: not the

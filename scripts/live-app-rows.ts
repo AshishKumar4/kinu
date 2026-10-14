@@ -19,9 +19,10 @@ import { renderThrownChain, tolerate, detach } from '@kinu.run/core/obs';
 import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-spec';
 
 import { DESKTOP, withLiveApp, type LiveApp } from './live-app-harness';
+import { recordDeadEnds } from '../evals/src/browser';
 import { createWorkspace, listWorkspaces, LOOPBACK_IDENTITY } from '../evals/src/workspace-roster';
 import {
-  CHAT_COMPOSER_LIVE, INSPECTOR_PANEL, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, OPEN_NAMES, recordDeadEnds,
+  CHAT_COMPOSER_LIVE, INSPECTOR_PANEL, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, OPEN_NAMES,
   countRpc, frameLedger, named, openInspector, PAGE_TABS, painted, pressSend, pressUntil, recordRenderTasks, rendered, sendInChat, settled, settledAfter,
   until, waitOn, type ControlAttempt, type RpcCounter,
 } from './product-flows';
