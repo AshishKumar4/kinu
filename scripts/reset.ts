@@ -27,7 +27,7 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 import { evalSessionPath } from '@kinu.run/test-utils';
 import { deleteApplicationByRest, deleteR2Prefix, deletedByRest, restApiToken } from './cloudflare-rest';
 import { snapshotRegistry } from '../packages/devbox/src/snapshot-registry';
-import { type ContainerApplication, type DeployedBinding, containerApplications, deployment, why, wrangler } from './infra-cloudflare';
+import { type ContainerApplication, type DeployedBinding, containerApplications, deployedVersion, deployment, why, wrangler } from './infra-cloudflare';
 import {
   type DeployedConfig, INFRA_ENVIRONMENTS, type InfraEnvironment, type Resource, deployedConfig, liveClasses,
 } from './infra-manifest';
@@ -110,6 +110,8 @@ export function servingOf(versionId: string, bindings: readonly DeployedBinding[
  */
 export interface ResetTarget {
   serving: () => Serving;
+  /** The version the deployment serves, read from the deployment alone ({@link deployedVersion}). */
+  servedVersion: () => string;
   applications: () => readonly ContainerApplication[];
   /** The newest reset record of the releases bucket, or none. */
   latest: () => Reset | undefined;
@@ -192,6 +194,13 @@ function cloudflareTarget(environment: InfraEnvironment, config: DeployedConfig,
 
       return servingOf(live.versionId, live.bindings);
     },
+    servedVersion: () => {
+      const served = deployedVersion(environment);
+
+      if (served.state !== 'deployed') throw new Error(`${worker} serves no version: ${served.state === 'unknown' ? served.reason : 'it has no deployment'}`);
+
+      return served.versionId;
+    },
     applications: () => {
       const listed = containerApplications();
 
@@ -229,7 +238,8 @@ function cloudflareTarget(environment: InfraEnvironment, config: DeployedConfig,
       if (!deleted.ok) throw new Error(deleted.reason);
     },
     deleteSnapshots: async (application) => {
-      const token = (process.env['DEVBOX_REGISTRY_TOKEN'] ?? '').trim() || restApiToken();
+      const registry = process.env['DEVBOX_REGISTRY_TOKEN']?.trim();
+      const token = registry === undefined || registry === '' ? restApiToken() : registry;
       const swept = await snapshotRegistry({ account: config.account_id ?? '', token, fetch: (input, init) => fetch(input, init) }).deleteApplication(application.id);
 
       if (swept.kind === 'refused') throw new Error(`${application.name}'s snapshots were not deleted: ${swept.reason}`);
@@ -347,12 +357,12 @@ function begin(input: WipeInput, live: Serving): Reset {
 
   // Before the first deletion: from the placeholder on, the storage is gone, and no rollback may cross that.
   record(target, input.recordFile, started);
+  // The placeholder binds no class by construction (`deployPlaceholder` writes its config), so what is read back is
+  // only that the deployment serves it: the version's own view may not exist yet (`deployedVersion`).
   const placeholderVersion = target.deployPlaceholder([...live.bound.keys()], tag);
-  const after = target.serving();
+  const served = target.servedVersion();
 
-  if (after.versionId !== placeholderVersion || after.bound.size > 0) {
-    throw new Error(`the placeholder uploaded as '${placeholderVersion}', and ${worker} does not serve it without Durable Objects`);
-  }
+  if (served !== placeholderVersion) throw new Error(`the placeholder uploaded as '${placeholderVersion}', and ${worker} serves '${served}'`);
 
   const retired = [...live.bound.keys()].filter((name) => !classes.includes(name));
   const added = classes.filter((name) => !live.bound.has(name));
