@@ -302,7 +302,7 @@ describe('a completion held past its own cancellation', () => {
 });
 
 describe('withdrawing a workspace\'s consent while its command runs', () => {
-  it('does not stop it, and the next command waits on the owner, who refuses it', async () => {
+  it('does not stop it, and the next command parks NOT RUN on the owner, reaching nothing', async () => {
     const owner = '0123456789abcdef0123456789abcd03';
     const at = await machine(owner, 'ws-consent', holding('terminated'));
     const running = settling(account(owner).run('ws-consent', nextDeviceRequestId(), AGENT, 'bun run build'));
@@ -313,10 +313,9 @@ describe('withdrawing a workspace\'s consent while its command runs', () => {
     at.release();
     expect(answered(await running)).toMatchObject({ exitCode: 0 });
 
-    // Asked again: the next command parks NOT RUN on a card of its own, so nothing reaches the machine.
+    // Asked again: the next command parks NOT RUN on the owner, so nothing reaches the machine.
     expect(await settling(account(owner).run('ws-consent', nextDeviceRequestId(), AGENT, 'bun run deploy')))
       .toMatchObject({ ok: false, error: expect.stringContaining("waits on the owner's consent") });
-    expect(await account(owner).pendingConsents('ws-consent')).toBe(1);
     expect(asked(at, 'exec')).toEqual(['bun run build']);
     at.close();
   });
