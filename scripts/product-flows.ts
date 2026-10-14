@@ -2702,8 +2702,9 @@ export interface DesktopSwitchVerdict {
   /** Whether the desktop came back in the client it was left in, and the terminal in its own: nothing reopened. */
   readonly keptDesktop: boolean;
   readonly keptTerminal: boolean;
-  /** Expanded: the desktop covered this share of the page's workspace area, the sidebar folded, and the client stayed. */
-  readonly expandedCover: number | null;
+  /** Expanded: the share of the workspace area the desktop spans on the axis it fills (its shape letterboxes the other),
+   *  the sidebar folded, and the client stayed. */
+  readonly expandedFill: number | null;
   readonly expandedRailFolded: boolean;
   readonly keptExpanded: boolean;
   /** Back from expanded: the desktop in the column again, in the client it was left in. */
@@ -2766,7 +2767,7 @@ export async function computerSwitchKeepsItsScreens(target: FlowTarget): Promise
     await until(page, 'the desktop to show', DESKTOP_DRAWN);
     const expand = `document.querySelector('#inspector [data-desktop-expand]')`;
     const expandable = v.parse(v.boolean(), await page.evaluate(`${expand} !== null`));
-    let expandedCover: number | null = null;
+    let expandedFill: number | null = null;
     let expandedRailFolded = false;
     let keptExpanded = false;
     let keptReturned = false;
@@ -2774,24 +2775,24 @@ export async function computerSwitchKeepsItsScreens(target: FlowTarget): Promise
     if (expandable) {
       await page.evaluate(`${expand}.click()`);
 
-      const cover = `(() => {
+      const fill = `(() => {
         const screen = document.querySelector('#inspector [data-desktop-frame]')?.getBoundingClientRect();
         const area = document.querySelector('main')?.getBoundingClientRect();
-        return screen === undefined || area === undefined ? 0 : (screen.width * screen.height) / (area.width * area.height);
+        return screen === undefined || area === undefined ? 0 : Math.max(screen.width / area.width, screen.height / area.height);
       })()`;
 
-      await until(page, 'the desktop to fill the workspace', `${cover} > 0.8`);
-      expandedCover = Math.round(v.parse(v.number(), await page.evaluate(cover)) * 100) / 100;
+      await until(page, 'the desktop to fill the workspace', `${fill} > 0.9`);
+      expandedFill = Math.round(v.parse(v.number(), await page.evaluate(fill)) * 100) / 100;
       expandedRailFolded = v.parse(v.boolean(), await page.evaluate(`document.querySelector('[data-rail-collapsed]') !== null`));
       keptExpanded = v.parse(v.boolean(), await page.evaluate(`${DESKTOP_WINDOW}?.__kinuLeft === true`));
       await page.evaluate(`document.querySelector('[data-desktop-return]').click()`);
-      await until(page, 'the desktop back in the column', `${cover} < 0.8`);
+      await until(page, 'the desktop back in the column', `${fill} < 0.9`);
       keptReturned = v.parse(v.boolean(), await page.evaluate(`${DESKTOP_WINDOW}?.__kinuLeft === true`));
     }
 
     await page.close();
 
-    return { workspace, terminalAfterMs, desktopAfterMs, keptDesktop, keptTerminal, expandedCover, expandedRailFolded, keptExpanded, keptReturned };
+    return { workspace, terminalAfterMs, desktopAfterMs, keptDesktop, keptTerminal, expandedFill, expandedRailFolded, keptExpanded, keptReturned };
   } finally {
     await removeFlowWorkspace(target, workspace);
   }

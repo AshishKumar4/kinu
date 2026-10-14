@@ -43,11 +43,11 @@ const DESKTOP_UP = `(() => {
   return screen !== null && screen.checkVisibility({ visibilityProperty: true }) && screen.querySelector('[role="status"]') === null;
 })()`;
 
-/** The share of the workspace area the desktop's screen covers. */
-const DESKTOP_COVER = `(() => {
+/** The share of the workspace area the desktop's screen spans on the axis it fills; its shape letterboxes the other. */
+const DESKTOP_FILL = `(() => {
   const screen = document.querySelector('#inspector [data-desktop-frame]').getBoundingClientRect();
   const area = document.querySelector('main').getBoundingClientRect();
-  return (screen.width * screen.height) / (area.width * area.height);
+  return Math.max(screen.width / area.width, screen.height / area.height);
 })()`;
 
 /** A desktop client that says its session is up, as KasmVNC's own says it to the screen that frames it (DesktopScreen). */
@@ -322,11 +322,11 @@ describe('the Environment panel', () => {
         expect(await page.evaluate(`[${DESKTOP_UP}, ${DESKTOP_WINDOW}.__left === true]`)).toEqual([true, true]);
 
         await page.click('[data-desktop-expand]');
-        await page.waitForFunction(`${DESKTOP_COVER} > 0.8 && document.querySelector('[data-rail-collapsed]') !== null`, SOON);
+        await page.waitForFunction(`${DESKTOP_FILL} > 0.9 && document.querySelector('[data-rail-collapsed]') !== null`, SOON);
         expect(await page.evaluate(`${DESKTOP_WINDOW}.__left === true`)).toBe(true);
 
         await page.click('[data-desktop-return]');
-        await page.waitForFunction(`${DESKTOP_COVER} < 0.5 && document.querySelector('[data-rail]') !== null`, SOON);
+        await page.waitForFunction(`${DESKTOP_FILL} < 0.9 && document.querySelector('[data-rail]') !== null`, SOON);
         expect(await page.evaluate(`${DESKTOP_WINDOW}.__left === true`)).toBe(true);
       } finally { await page.close(); }
     });

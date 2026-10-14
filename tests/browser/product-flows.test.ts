@@ -641,7 +641,7 @@ describe(productFlowTestName('desktop-switch', "a computer's terminal and deskto
 
     console.log(`desktop-switch: terminal back after ${String(switched.terminalAfterMs)} ms, desktop after ${String(switched.desktopAfterMs)} ms`);
     expect(switched).toMatchObject({ keptDesktop: true, keptTerminal: true, expandedRailFolded: true, keptExpanded: true, keptReturned: true });
-    expect(switched.expandedCover).toBeGreaterThan(0.8);
+    expect(switched.expandedFill).toBeGreaterThan(0.9);
   });
 });
 
