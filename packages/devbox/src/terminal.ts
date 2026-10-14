@@ -3,6 +3,7 @@ import { Effect } from 'effect';
 import { DevboxError, attempt, attemptSync, observe, settle } from './errors';
 import { CONTAINER_TRUST_ENV } from './processes';
 import type { SessionRecord } from './sessions';
+import { SHELL_RC } from './shown-name';
 
 const ENV = { ...CONTAINER_TRUST_ENV, TERM: 'xterm-256color' };
 
@@ -21,12 +22,12 @@ const TMUX_CONF = [
 ].join('\n');
 
 /**
- * Each session's shell records how its last command ended on its own pane, where the sessions read finds it (D90): the
- * exit status, the time, and the command line, once per command the history numbers. The person's own rc runs first.
+ * A session's shell starts from the box's rc, the person's own first and the box's shown name in their prompt (D93),
+ * then records how its last command ended on its own pane, where the sessions read finds it (D90): the exit status,
+ * the time, and the command line, once per command the history numbers.
  */
 const SESSION_RC = [
-  '[ -f /etc/bash.bashrc ] && . /etc/bash.bashrc',
-  '[ -f ~/.bashrc ] && . ~/.bashrc',
+  SHELL_RC,
   '__kinu_entry() { HISTTIMEFORMAT= fc -l -1 2>/dev/null; }',
   '__kinu_seen=$(__kinu_entry); __kinu_seen=${__kinu_seen%%[[:space:]]*}',
   '__kinu_mark() {',
